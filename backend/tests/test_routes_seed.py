@@ -22,7 +22,6 @@ from app.models.release_batch import ReleaseBatch, ReleaseBatchPosition
 from app.models.rework_task import ReworkTask
 from app.models.route import RouteRuleProfile, RouteSelectionRule
 from app.models.section import Section
-from app.models.techcard import Techcard, TechcardLine
 from app.models.transfer import Transfer
 from app.models.work_task import WorkTask
 from app.services.route_selection import select_route_for_payload
@@ -65,14 +64,8 @@ async def _make_releasable_position(session, route_name: str = "Универса
     )
     assert route is not None, f"Route not found: {route_name!r} / universal_rp"
     product = Product(sku=f"ЮП-TEST-{datetime.now(UTC).timestamp()}", name="Микроплинтус тест", type=ProductType.finished_good, unit="pcs")
-    component = Product(sku=f"RAW-{datetime.now(UTC).timestamp()}", name="Сырьё тест", type=ProductType.component, unit="pcs")
-    session.add_all([product, component])
+    session.add(product)
     await session.flush()
-
-    techcard = Techcard(product_id=product.id, version="v1", is_active=True)
-    session.add(techcard)
-    await session.flush()
-    session.add(TechcardLine(techcard_id=techcard.id, component_product_id=component.id, quantity=1, unit="pcs"))
 
     plan = ProductionPlan(
         plan_no=f"PLAN-SEED-{product.id}",

@@ -14,7 +14,6 @@ from app.core.database import get_db
 from app.api.deps import REFERENCES_READER_ROLES, REFERENCES_WRITER_ROLES, require_role
 from app.models.product import Product, ProductType, DimensionState, ProductLength, ProcessingFlag, ProductProcessingFlag, ProductComposition, ProductPair, _length_key
 from app.models.dimension import ProductDimension, DimensionType
-from app.models.techcard import Techcard, TechcardLine
 from app.models.production_plan import PlanPosition
 from app.models.work_task import WorkTask
 from app.models.internal_plan import SectionPlanLine
@@ -204,8 +203,6 @@ class ProductOut(BaseModel):
     lengths_mm: List[float]
     processing_flags: List[ProcessingFlagInfo]
     is_laminated: bool
-    has_standard_techcard: bool = False
-    has_paired_techcard: bool = False
     dimensions: dict[str, float] | None = None
 
 
@@ -518,7 +515,7 @@ async def _sync_boolean_flag(db: AsyncSession, product_id: int, code: str, value
         await db.delete(existing)
 
 
-def _to_product_out(product: Product, has_std: bool = False, has_paired: bool = False, dimensions: dict[str, float] | None = None) -> ProductOut:
+def _to_product_out(product: Product, dimensions: dict[str, float] | None = None) -> ProductOut:
     lengths = sorted([l.length_mm for l in product.lengths]) if product.lengths else []
     flags = [
         ProcessingFlagInfo(code=f.code, name=f.name, section_scope=f.section_scope)
@@ -572,8 +569,6 @@ def _to_product_out(product: Product, has_std: bool = False, has_paired: bool = 
         lengths_mm=lengths,
         processing_flags=flags,
         is_laminated="is_laminated" in flag_codes,
-        has_standard_techcard=has_std,
-        has_paired_techcard=has_paired,
         dimensions=dimensions,
     )
 
@@ -750,34 +745,6 @@ async def list_products(
     items = (await db.execute(stmt)).scalars().unique().all()
     response.headers["X-Total-Count"] = str(total)
 
-    # Query active standard techcard product IDs (direct reference)
-    std_direct_stmt = select(Techcard.product_id).where(
-        Techcard.is_active == True,
-        Techcard.processing_type == "standart_processing",
-        Techcard.product_id.is_not(None)
-    )
-    std_direct_ids = set((await db.execute(std_direct_stmt)).scalars().all())
-
-    # Query active standard techcard component IDs (from lines)
-    std_line_stmt = select(TechcardLine.component_product_id).join(
-        Techcard, Techcard.id == TechcardLine.techcard_id
-    ).where(
-        Techcard.is_active == True,
-        Techcard.processing_type == "standart_processing"
-    )
-    std_line_ids = set((await db.execute(std_line_stmt)).scalars().all())
-
-    has_std_ids = std_direct_ids | std_line_ids
-
-    # Query active paired techcard component IDs (from lines)
-    paired_line_stmt = select(TechcardLine.component_product_id).join(
-        Techcard, Techcard.id == TechcardLine.techcard_id
-    ).where(
-        Techcard.is_active == True,
-        Techcard.processing_type == "paired_processing"
-    )
-    has_paired_ids = set((await db.execute(paired_line_stmt)).scalars().all())
-
     # Batch-load product dimensions for listed items
     product_ids = [i.id for i in items]
     dims_by_product: dict[int, dict[str, float]] = {}
@@ -792,7 +759,7 @@ async def list_products(
                 dims_by_product.setdefault(link.product_id, {})[link.dimension_type.code] = link.default_value
 
     return ProductsListResponse(
-        items=[_to_product_out(i, i.id in has_std_ids, i.id in has_paired_ids, dims_by_product.get(i.id) or None) for i in items],
+        items=[_to_product_out(i, dims_by_product.get(i.id) or None) for i in items],
         total=total,
     )
 
@@ -954,31 +921,6 @@ async def _product_pair_count(db: AsyncSession, product_id: int) -> int:
     ) or 0
 
 
-async def _check_product_techcards(db: AsyncSession, product_id: int) -> tuple[bool, bool]:
-    has_std = await db.scalar(
-        select(Techcard.id).where(
-            Techcard.is_active == True,
-            Techcard.processing_type == "standart_processing",
-            or_(
-                Techcard.product_id == product_id,
-                Techcard.id.in_(
-                    select(TechcardLine.techcard_id).where(TechcardLine.component_product_id == product_id)
-                )
-            )
-        ).limit(1)
-    ) is not None
-
-    has_paired = await db.scalar(
-        select(TechcardLine.id).join(Techcard, Techcard.id == TechcardLine.techcard_id).where(
-            Techcard.is_active == True,
-            Techcard.processing_type == "paired_processing",
-            TechcardLine.component_product_id == product_id
-        ).limit(1)
-    ) is not None
-
-    return has_std, has_paired
-
-
 @router.get("/{product_id}", response_model=ProductOut)
 async def get_product(product_id: int, db: AsyncSession = Depends(get_db)) -> ProductOut:
     stmt = select(Product).options(
@@ -988,11 +930,10 @@ async def get_product(product_id: int, db: AsyncSession = Depends(get_db)) -> Pr
     item = (await db.execute(stmt)).scalar_one_or_none()
     if item is None:
         raise HTTPException(status_code=404, detail="Product not found")
-    has_std, has_paired = await _check_product_techcards(db, product_id)
     dimensions = None
     if item.dimension_state in (DimensionState.area, DimensionState.volume):
         dimensions = await _sheet_dimension_values(db, product_id) or None
-    return _to_product_out(item, has_std, has_paired, dimensions)
+    return _to_product_out(item, dimensions)
 
 
 @router.patch("/{product_id}", response_model=ProductOut)
@@ -1103,8 +1044,7 @@ async def patch_product(
         await db.flush()
 
     await db.refresh(item, attribute_names=["lengths", "processing_flags", "is_paired_profile"])
-    has_std, has_paired = await _check_product_techcards(db, product_id)
-    return _to_product_out(item, has_std, has_paired, sheet_dims)
+    return _to_product_out(item, sheet_dims)
 
 
 @router.delete("/{product_id}", status_code=status.HTTP_204_NO_CONTENT)
@@ -1153,25 +1093,6 @@ async def delete_product(product_id: int, db: AsyncSession = Depends(get_db)):
 
     if relations:
         raise HTTPException(status_code=409, detail=f"Нельзя удалить: используется в ({', '.join(relations)})")
-
-    # Cascade delete techcards referencing this product
-    tc_ids_to_delete = set()
-    
-    # 1. Standard techcards for this product
-    std_tcs = (await db.execute(select(Techcard.id).where(Techcard.product_id == product_id))).scalars().all()
-    for tc_id in std_tcs:
-        tc_ids_to_delete.add(tc_id)
-        
-    # 2. Techcards where this product is a component
-    comp_tcs = (await db.execute(select(TechcardLine.techcard_id).where(TechcardLine.component_product_id == product_id))).scalars().all()
-    for tc_id in comp_tcs:
-        tc_ids_to_delete.add(tc_id)
-
-    if tc_ids_to_delete:
-        # Delete all lines for these techcards
-        await db.execute(delete(TechcardLine).where(TechcardLine.techcard_id.in_(list(tc_ids_to_delete))))
-        # Delete the techcards themselves
-        await db.execute(delete(Techcard).where(Techcard.id.in_(list(tc_ids_to_delete))))
 
     # Состав этого продукта как владельца (#147) — нормативная часть карточки,
     # удаляется вместе с продуктом (FK product_id каскадит на уровне БД).

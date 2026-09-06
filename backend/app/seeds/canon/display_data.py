@@ -34,15 +34,13 @@ OUTPUT_KIND_LABELS = {
 
 WARNING_LABELS = {
     "paired_profile_product_unmapped": "Парный профиль не сопоставлен",
-    "techcard_pair_not_resolved": "Не выбран парный профиль техкарты",
     "product_name_missing": "Отсутствует наименование",
     "period_not_detected": "не определен",
     "route_auto_fallback": "Маршрут скорректирован автоматически — проверьте корректность",
     "row_selection_applied": "Применён фильтр строк",
     "row_selection_auto_included": "Автодобавлены парные строки",
     "paired_row_auto_included": "Автодобавлена парная строка",
-    "paired_hanger_adjusted": "Округлено для компонента парной техкарты",
-    "paired_hanger_mismatch": "Разное кол-во на подвес у компонентов парной техкарты",
+    "paired_hanger_adjusted": "Округлено для компонента пары",
     "hanger_quantity_not_set": "quantity_per_hanger не задан — количество не округлено",
 }
 
@@ -438,13 +436,7 @@ ERROR_PHRASE_TRANSLATIONS = {
     "SKU must not be empty": "Артикул не может быть пустым",
     "No route found for this product":
         "Для этого продукта не найден маршрут",
-    "Techcard not found": "Техкарта не найдена",
     "Component product not found": "Продукт-компонент не найден",
-    "Techcard has no product_id": "У техкарты не указан product_id",
-    "Techcard product not found": "Продукт техкарты не найден",
-    "Techcard is inactive": "Техкарта не активна",
-    "Techcard has no linked product":
-        "У техкарты нет привязанного продукта",
     "template_id is required": "Требуется template_id",
     "Template not found": "Шаблон не найден",
     "Template is inactive": "Шаблон не активен",

@@ -82,37 +82,11 @@ export async function ensureProductViaUI(
   }
 }
 
-/** Массовое создание стандартных техкарт через UI (backend добавляет default line). */
-export async function ensureStandardTechcardsViaUI(page: Page, skus: readonly string[]) {
-  await page.goto("/references/techcards");
-  await page.getByRole("button", { name: "Массовое создание" }).click();
-  const dialog = page.getByRole("dialog");
-  await expect(dialog).toBeVisible({ timeout: 10_000 });
-
-  for (const sku of skus) {
-    const row = dialog.locator("tr", { hasText: sku });
-    if ((await row.count()) > 0) {
-      await row.locator('input[type="checkbox"]').check();
-    }
-  }
-
-  const applyBtn = dialog.getByRole("button", { name: "Применить" });
-  if (await applyBtn.isEnabled()) {
-    await applyBtn.click();
-    await expect(dialog).not.toBeVisible({ timeout: 30_000 });
-  } else {
-    await dialog.getByRole("button", { name: "Отмена" }).click();
-  }
-}
 
 export async function ensureE2ECatalogViaUI(page: Page) {
   for (const item of E2E_CATALOG_SKUS) {
     await ensureProductViaUI(page, item.sku, item.name, item.lengthMm);
   }
-  await ensureStandardTechcardsViaUI(
-    page,
-    E2E_CATALOG_SKUS.map((item) => item.sku),
-  );
 }
 
 /** Seed routes/templates via Dev Settings UI — no direct fetch. */

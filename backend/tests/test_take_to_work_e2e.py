@@ -26,7 +26,6 @@ from app.models.production_plan import (
 from app.models.release_batch import ReleaseBatch, ReleaseBatchPosition
 from app.models.route import ProductionRoute, RouteStage, RouteOperation
 from app.models.section import Section
-from app.models.techcard import Techcard, TechcardLine
 from app.services.plan_generation import create_release_batch
 
 
@@ -38,21 +37,10 @@ async def test_take_position_to_work_with_dynamic_route(session) -> None:
     session.add(product)
     await session.flush()
 
-    # Create techcard
-    techcard = Techcard(product_id=product.id, version="v1", is_active=True)
-    session.add(techcard)
-    await session.flush()
-
     component = Product(sku="RAW-TW", name="Raw Material", type=ProductType.component, unit="pcs")
     session.add(component)
     await session.flush()
 
-    session.add(TechcardLine(
-        techcard_id=techcard.id,
-        component_product_id=component.id,
-        quantity=1,
-        unit="pcs",
-    ))
     await session.commit()
 
     # Create route with steps

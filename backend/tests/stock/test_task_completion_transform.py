@@ -33,7 +33,6 @@ from app.models.production_plan import (
 )
 from app.models.route import ProductionRoute, RouteOperation, RouteStage
 from app.models.spg import SpgSection, StorageProductionGroup
-from app.models.techcard import Techcard, TechcardLine
 from app.models.work_task import WorkTask, WorkTaskStatus
 from app.services.shopfloor.operations_tasks import complete_task
 from tests.stock.helpers import canon_scrap_section_id
@@ -129,10 +128,7 @@ async def _make_transform_setup(
     await session.flush()
     session.add(RouteOperation(route_stage_id=stage.id, sequence=1, operation_code="SAW", operation_name="Saw"))
 
-    tech = Techcard(product_id=product.id, version="v1", is_active=True)
-    session.add(tech)
     await session.flush()
-    session.add(TechcardLine(techcard_id=tech.id, component_product_id=product.id, quantity=Decimal("1"), unit="pcs"))
 
     plan = ProductionPlan(
         plan_no=f"P-{sku}", name="p", status=ProductionPlanStatus.approved,

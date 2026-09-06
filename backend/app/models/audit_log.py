@@ -26,7 +26,6 @@ class AuditEntityType(str, Enum):
     PRODUCT = "product"
     SECTION = "section"
     ROUTE = "route"
-    TECHCARD = "techcard"
     PRODUCTION_PLAN = "production_plan"
     PLAN_POSITION = "plan_position"
     WORK_TASK = "work_task"

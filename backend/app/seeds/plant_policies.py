@@ -42,7 +42,7 @@ VALIDATION_ERROR_MESSAGES: dict[str, str] = {
     "route_not_matching_import_signature": "Маршрут не совпадает с ожидаемым",
     "route_missing_required_step": "В маршруте отсутствует обязательный этап",
     "route_missing_pack_additional_operation": "В маршруте нет дополнительной операции упаковки",
-    "route_primary_operation_mismatch": "Основная операция маршрута не совпадает с импортированной. Проверьте соответствие техкарты и маршрута.",
+    "route_primary_operation_mismatch": "Основная операция маршрута не совпадает с импортированной. Проверьте соответствие профиля и маршрута.",
     "active_route_not_found": "Не найден активный маршрут",
     "manual_route_not_found": "Ручной маршрут не найден",
     "manual_route_inactive": "Ручной маршрут неактивен",

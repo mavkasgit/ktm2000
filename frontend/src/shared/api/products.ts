@@ -56,8 +56,6 @@ export type Product = {
   lengths_mm: number[];
   processing_flags: ProcessingFlag[];
   is_laminated: boolean;
-  has_standard_techcard?: boolean;
-  has_paired_techcard?: boolean;
   dimensions?: Record<string, number> | null;
 };
 

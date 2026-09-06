@@ -27,7 +27,6 @@ from app.models.production_plan import (
 )
 from app.models.route import ProductionRoute, RouteRuleProfile, RouteSelectionRule, RouteStage, RouteOperation, SectionOperation
 from app.models.section import Section
-from app.models.techcard import Techcard, TechcardLine
 from app.services.plan_import_service import _make_change_items
 
 
@@ -98,7 +97,7 @@ async def _seed_sections(session) -> None:
     await session.commit()
 
 
-async def _make_product_with_techcard(session, sku: str = "FG-TEST") -> Product:
+async def _make_product(session, sku: str = "FG-TEST") -> Product:
     product = Product(
         sku=sku,
         name=f"Test Product {sku}",
@@ -106,22 +105,6 @@ async def _make_product_with_techcard(session, sku: str = "FG-TEST") -> Product:
         unit="pcs",
     )
     session.add(product)
-    await session.flush()
-
-    techcard = Techcard(product_id=product.id, version="v1", is_active=True)
-    session.add(techcard)
-    await session.flush()
-
-    component = Product(sku=f"{sku}-RAW", name=f"Raw {sku}", type=ProductType.component, unit="pcs")
-    session.add(component)
-    await session.flush()
-
-    session.add(TechcardLine(
-        techcard_id=techcard.id,
-        component_product_id=component.id,
-        quantity=1,
-        unit="pcs",
-    ))
     await session.commit()
     return product
 
@@ -227,7 +210,7 @@ class ParsedRow:
 async def test_dynamic_route_creates_real_production_route(session) -> None:
     """Verify that dynamic route import creates a real ProductionRoute with steps."""
     await _seed_sections(session)
-    product = await _make_product_with_techcard(session, sku="FG-ROUTE-TEST")
+    product = await _make_product(session, sku="FG-ROUTE-TEST")
     template = await _make_template(session)
     profile_id = await _make_profile_with_rules(session, template_id=template.id)
 
@@ -290,7 +273,7 @@ async def test_dynamic_route_creates_real_production_route(session) -> None:
 async def test_dynamic_route_reuses_same_route_within_import(session) -> None:
     """Verify that identical routes are reused within same import."""
     await _seed_sections(session)
-    product = await _make_product_with_techcard(session, sku="FG-REUSE-TEST")
+    product = await _make_product(session, sku="FG-REUSE-TEST")
     template = await _make_template(session)
     profile_id = await _make_profile_with_rules(session, template_id=template.id)
 
@@ -342,7 +325,7 @@ async def test_dynamic_route_reuses_same_route_within_import(session) -> None:
 async def test_different_routes_created_for_different_signatures(session) -> None:
     """Verify that different route signatures create separate ProductionRoute entities."""
     await _seed_sections(session)
-    product = await _make_product_with_techcard(session, sku="FG-DIFF-TEST")
+    product = await _make_product(session, sku="FG-DIFF-TEST")
     template = await _make_template(session)
     profile_id = await _make_profile_with_rules(session, template_id=template.id)
 
@@ -393,7 +376,7 @@ async def test_different_routes_created_for_different_signatures(session) -> Non
 async def test_preview_does_not_create_routes(session) -> None:
     """Verify that preview (change_set_id=0) does not persist routes to DB."""
     await _seed_sections(session)
-    product = await _make_product_with_techcard(session, sku="FG-PREVIEW-TEST")
+    product = await _make_product(session, sku="FG-PREVIEW-TEST")
     template = await _make_template(session)
     profile_id = await _make_profile_with_rules(session, template_id=template.id)
 

@@ -27,7 +27,6 @@ from app.models.production_plan import (
 )
 from app.models.route import ProductionRoute, RouteOperation, RouteStage
 from app.models.spg import SpgSection, StorageProductionGroup
-from app.models.techcard import Techcard, TechcardLine
 from app.models.work_task import WorkTask, WorkTaskStatus
 from app.stock import Reason, StockCommand, StockCommandService
 from app.services.shopfloor.operations_tasks import complete_task
@@ -76,10 +75,7 @@ async def _make_single_stage_setup(
     await session.flush()
     session.add(RouteOperation(route_stage_id=stage.id, sequence=1, operation_code="OP1", operation_name="Op1"))
 
-    tech = Techcard(product_id=product.id, version="v1", is_active=True)
-    session.add(tech)
     await session.flush()
-    session.add(TechcardLine(techcard_id=tech.id, component_product_id=product.id, quantity=Decimal("1"), unit="pcs"))
 
     plan = ProductionPlan(
         plan_no=f"P-{sku}", name="p", status=ProductionPlanStatus.approved,
@@ -168,10 +164,7 @@ async def _make_two_ghp_setup(
         session.add(RouteOperation(route_stage_id=stage.id, sequence=1, operation_code=code, operation_name=code))
         stages.append(stage)
 
-    tech = Techcard(product_id=product.id, version="v1", is_active=True)
-    session.add(tech)
     await session.flush()
-    session.add(TechcardLine(techcard_id=tech.id, component_product_id=product.id, quantity=Decimal("1"), unit="pcs"))
 
     plan = ProductionPlan(
         plan_no=f"P-{sku}", name="p", status=ProductionPlanStatus.approved,

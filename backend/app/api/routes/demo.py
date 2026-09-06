@@ -28,7 +28,6 @@ from app.models.production_plan import (
 )
 from app.models.route import ProductionRoute, RouteStage
 from app.models.section import Section
-from app.models.techcard import Techcard
 from app.models.user import User
 from app.models.work_task import WorkTask
 from app.seeds.canon.dependencies import get_plant_config
@@ -57,7 +56,7 @@ class FullRouteRunRequest(BaseModel):
     initial_quantity: Decimal = Decimal("100")
     route_name: str = "Типовой: полный (все участки)"
     route_id: int | None = None
-    techcard_id: int
+    product_id: int
     production_plan_id: int | None = None
     run_id: str | None = None
     start_performed_at: datetime | None = None
@@ -275,16 +274,11 @@ async def run_full_route_test(
     if not route.is_active:
         raise HTTPException(status_code=400, detail="Route is inactive")
 
-    techcard = await db.get(Techcard, payload.techcard_id)
-    if techcard is None:
-        raise HTTPException(status_code=404, detail="Techcard not found")
-    if not techcard.is_active:
-        raise HTTPException(status_code=400, detail="Techcard is inactive")
-    if techcard.product_id is None:
-        raise HTTPException(status_code=400, detail="Techcard has no linked product")
-    product = await db.get(Product, techcard.product_id)
+    product = await db.get(Product, payload.product_id)
     if product is None:
-        raise HTTPException(status_code=404, detail="Techcard product not found")
+        raise HTTPException(status_code=404, detail="Product not found")
+    if not product.is_active:
+        raise HTTPException(status_code=400, detail="Product is inactive")
 
     comments = f"TEST_RUN:{run_id}"
     scenario = None
@@ -346,7 +340,7 @@ async def run_full_route_test(
     payload_json = dict(position.source_payload or {})
     payload_json["test_run_id"] = run_id
     payload_json["test_route_id"] = route.id
-    payload_json["test_techcard_id"] = techcard.id
+    payload_json["test_product_id"] = product.id
     position.source_payload = payload_json
     if position.source_name:
         if f"[TEST {run_id}]" not in position.source_name:

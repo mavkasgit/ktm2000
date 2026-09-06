@@ -202,7 +202,6 @@ export function SectionsPage() {
     void queryClient.invalidateQueries({ queryKey: queryKeys.transfers.historyAll() });
     void queryClient.invalidateQueries({ queryKey: queryKeys.spg.snapshotAll() });
     void queryClient.invalidateQueries({ queryKey: queryKeys.routes.all() });
-    void queryClient.invalidateQueries({ queryKey: queryKeys.techcards.all() });
   }, [queryClient]);
 
   const loadOpGroups = useCallback(async (sectionId: number, sectionName: string) => {

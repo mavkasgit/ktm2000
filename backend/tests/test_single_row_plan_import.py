@@ -8,7 +8,6 @@ from app.models.import_template import ImportTemplate
 from app.models.product import Product, ProductType
 from app.models.route import ProductionRoute, RouteStage, RouteOperation
 from app.models.section import Section
-from app.models.techcard import Techcard, TechcardLine
 
 
 def _single_row_workbook() -> bytes:
@@ -65,7 +64,7 @@ def _single_row_workbook() -> bytes:
 
 
 @pytest.mark.asyncio
-async def test_single_row_import_yup_2630_passes_when_product_techcard_and_route_exist(client, session) -> None:
+async def test_single_row_import_yup_2630_passes_when_product_and_route_exist(client, session) -> None:
     product = await session.scalar(select(Product).where(Product.sku == "ЮП-2630"))
     if product is None:
         product = Product(
@@ -76,18 +75,6 @@ async def test_single_row_import_yup_2630_passes_when_product_techcard_and_route
             is_active=True,
         )
         session.add(product)
-        await session.flush()
-
-    component = await session.scalar(select(Product).where(Product.sku == "ЮП-2630-RAW"))
-    if component is None:
-        component = Product(
-            sku="ЮП-2630-RAW",
-            name="Сырье ЮП-2630",
-            type=ProductType.component,
-            unit="pcs",
-            is_active=True,
-        )
-        session.add(component)
         await session.flush()
 
     section_specs = [
@@ -103,22 +90,6 @@ async def test_single_row_import_yup_2630_passes_when_product_techcard_and_route
             session.add(section)
             await session.flush()
         sections.append(section)
-
-    techcard = await session.scalar(select(Techcard).where(Techcard.product_id == product.id, Techcard.is_active.is_(True)))
-    if techcard is None:
-        techcard = Techcard(product_id=product.id, version="v1", is_active=True, processing_type="standart_processing")
-        session.add(techcard)
-        await session.flush()
-
-    # Critical rule: one line is enough for non-empty techcard.
-    existing_line = await session.scalar(
-        select(TechcardLine).where(
-            TechcardLine.techcard_id == techcard.id,
-            TechcardLine.component_product_id == component.id,
-        )
-    )
-    if existing_line is None:
-        session.add(TechcardLine(techcard_id=techcard.id, component_product_id=component.id, quantity=1, unit="pcs"))
 
     route = await session.scalar(select(ProductionRoute).where(ProductionRoute.name == "Route ЮП-2630"))
     if route is None:

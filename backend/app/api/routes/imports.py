@@ -17,7 +17,6 @@ from app.models.imports import ImportBatch, ImportBatchMode, ImportBatchStatus, 
 from app.models.production_plan import PlanChangeSet, PlanPosition, ProductionPlan
 from app.models.product import Product
 from app.models.route import ProductionRoute, RouteRuleProfile
-from app.models.techcard import Techcard
 from app.services.plan_import_service import create_excel_import_change_set
 from app.services.route_matcher import resolve_position_route, make_position_route_cache_key
 
@@ -242,7 +241,7 @@ def _test_workbook(
 @router.post("/excel/test", response_model=ImportPreviewOut, status_code=status.HTTP_201_CREATED)
 async def import_test_excel(
     production_plan_id: int | None = Query(None),
-    techcard_id: int | None = Query(None),
+    product_id: int | None = Query(None),
     run_id: str | None = Query(None),
     quantity: Decimal = Query(Decimal("100")),
     row_selection: str | None = Query(None),
@@ -254,15 +253,10 @@ async def import_test_excel(
 
     sku = "ЮП-2630"
     name = "Стык с дюбелем 40мм 2,7 анод.серебро матовый"
-    if techcard_id is not None:
-        techcard = await db.get(Techcard, techcard_id)
-        if techcard is None:
-            raise HTTPException(status_code=404, detail="Techcard not found")
-        if techcard.product_id is None:
-            raise HTTPException(status_code=400, detail="Techcard has no product_id")
-        product = await db.get(Product, techcard.product_id)
+    if product_id is not None:
+        product = await db.get(Product, product_id)
         if product is None:
-            raise HTTPException(status_code=404, detail="Techcard product not found")
+            raise HTTPException(status_code=404, detail="Product not found")
         sku = product.sku
         name = product.name
 

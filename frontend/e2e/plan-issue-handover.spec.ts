@@ -6,7 +6,7 @@ import path from "path";
  * плана и разбивка «Сдачи» по выходам трансформирующего задания.
  *
  * Сценарий:
- * 1. API-setup: seed, продукты, техкарты, импорт «Упаковочный план.xlsx», release.
+ * 1. API-setup: seed, продукты, импорт «Упаковочный план.xlsx», release.
  * 2. UI: страница участка → кнопка «План» → модалка плана.
  * 3. UI: в таблицах «Выдача» и «Сдача» присутствует колонка «Размер»;
  *    если на участке есть трансформирующее задание (резка), строка «Сдачи»
@@ -26,7 +26,6 @@ import {
   apiResetAll,
   apiSeedData,
   apiEnsureTestProducts,
-  apiEnsureTestTechcards,
   E2E_SECTION,
 } from "./api-helpers";
 
@@ -35,7 +34,6 @@ test.describe("@smoke План выдачи/сдачи — колонка «Ра
     await apiResetAll();
     await apiSeedData();
     await apiEnsureTestProducts();
-    await apiEnsureTestTechcards();
   });
 
   test("модалка плана показывает «Размер» в Выдаче и Сдаче", async ({

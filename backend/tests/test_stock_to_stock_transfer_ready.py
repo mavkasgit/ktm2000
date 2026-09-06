@@ -42,7 +42,6 @@ async def _make_finished_stock_to_shipment_fixture(
     """FINISHED_STOCK → SHIPMENT в одной ГХП FG (как сид)."""
     from datetime import date
     from app.models.route import ProductionRoute, RouteStage, RouteOperation
-    from app.models.techcard import Techcard, TechcardLine
     from app.models.production_plan import (
         PlanPosition,
         PlanPositionStatus,
@@ -92,17 +91,7 @@ async def _make_finished_stock_to_shipment_fixture(
             RouteOperation(route_stage_id=st.id, sequence=1, operation_code=code, operation_name=code)
         )
 
-    tech = Techcard(product_id=product.id, version="v1", is_active=True)
-    session.add(tech)
     await session.flush()
-    session.add(
-        TechcardLine(
-            techcard_id=tech.id,
-            component_product_id=product.id,
-            quantity=Decimal("1"),
-            unit="pcs",
-        )
-    )
 
     plan = ProductionPlan(
         plan_no=f"P-{sku}",

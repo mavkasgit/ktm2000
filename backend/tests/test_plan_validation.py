@@ -246,22 +246,6 @@ async def test_validate_position_detects_product_not_found(session) -> None:
     assert "product_inactive" not in errors
 
 
-@pytest.mark.asyncio
-async def test_validate_position_passes_without_techcard(session) -> None:
-    """Gate «активная техкарта» упразднён (#148): одиночная позиция
-    валидируется без каких-либо проверок техкарт."""
-    product = Product(sku="FG-NO-TECHCARD", name="No Techcard", type=ProductType.finished_good, unit="pcs")
-    session.add(product)
-    await session.flush()
-
-    plan, position = await _make_plan_position(session, product)
-    await session.flush()
-
-    errors = await validate_plan_position(session, position)
-    assert "active_techcard_not_found" not in errors
-    assert "active_techcard_has_no_lines" not in errors
-
-
 async def _make_raw_pair(session, sku_a: str = "ЮП-2616", sku_b: str = "ЮП-2604", *, manual_n: int | None = None) -> None:
     """Пара сырьевых артикулов в product_pairs с длиной 2700 у обоих."""
     from app.models.product import ProductLength, ProductPair
@@ -330,7 +314,6 @@ async def test_validate_paired_position_without_pair_reports_error(session) -> N
 
     errors = await validate_plan_position(session, position)
     assert "product_pair_not_found" in errors
-    assert "active_techcard_not_found" not in errors
 
 
 @pytest.mark.asyncio

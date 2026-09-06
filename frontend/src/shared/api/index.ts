@@ -3,7 +3,6 @@ export * from "./errorMessages";
 export * from "./hangerCalc";
 export * from "./products";
 export * from "./sections";
-export * from "./techcards";
 export * from "./routes";
 export * from "./imports";
 export * from "./importTemplates";

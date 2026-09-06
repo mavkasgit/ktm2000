@@ -44,7 +44,7 @@ export const errorLabels: Record<string, string> = {
   "route_missing_required_step": "В маршруте отсутствует обязательный этап",
   "route_not_found": "Не найден маршрут для позиции",
   "route_not_matching_import_signature": "Маршрут не совпадает с ожидаемым",
-  "route_primary_operation_mismatch": "Основная операция маршрута не совпадает с импортированной. Проверьте соответствие техкарты и маршрута.",
+  "route_primary_operation_mismatch": "Основная операция маршрута не совпадает с импортированной. Проверьте соответствие профиля и маршрута.",
   "route_rule_conflict": "Правила выбора маршрута конфликтуют",
   "route_sequence_invalid": "Неверная последовательность этапов в маршруте",
   "route_signature_incomplete": "Сигнатура маршрута позиции неполная",
@@ -54,8 +54,7 @@ export const errorLabels: Record<string, string> = {
 // Лейблы предупреждений (warning codes)
 export const warningLabels: Record<string, string> = {
   "hanger_quantity_not_set": "quantity_per_hanger не задан — количество не округлено",
-  "paired_hanger_adjusted": "Округлено для компонента парной техкарты",
-  "paired_hanger_mismatch": "Разное кол-во на подвес у компонентов парной техкарты",
+  "paired_hanger_adjusted": "Округлено для компонента пары",
   "paired_profile_product_unmapped": "Парный профиль не сопоставлен",
   "paired_row_auto_included": "Автодобавлена парная строка",
   "period_not_detected": "не определен",
@@ -63,7 +62,6 @@ export const warningLabels: Record<string, string> = {
   "route_auto_fallback": "Маршрут скорректирован автоматически — проверьте корректность",
   "row_selection_applied": "Применён фильтр строк",
   "row_selection_auto_included": "Автодобавлены парные строки",
-  "techcard_pair_not_resolved": "Не выбран парный профиль техкарты",
 }
 
 // Лейблы статуса валидации позиции
@@ -266,11 +264,6 @@ export const errorPhraseTranslations: Record<string, string> = {
   "Task must be in progress": "Задача должна быть в работе",
   "Task must be ready/in_progress/partially_completed": "Задача должна быть в статусе «готова», «в работе» или «частично завершена»",
   "Task not found": "Задача не найдена",
-  "Techcard has no linked product": "У техкарты нет привязанного продукта",
-  "Techcard has no product_id": "У техкарты не указан product_id",
-  "Techcard is inactive": "Техкарта не активна",
-  "Techcard not found": "Техкарта не найдена",
-  "Techcard product not found": "Продукт техкарты не найден",
   "Template is inactive": "Шаблон не активен",
   "Template name is required": "Требуется название шаблона",
   "Template not found": "Шаблон не найден",

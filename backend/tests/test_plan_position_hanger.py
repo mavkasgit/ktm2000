@@ -22,7 +22,6 @@ from app.models.production_plan import (
 from app.models.product import Product, ProductType
 from app.models.route import ProductionRoute, RouteOperation, RouteStage
 from app.models.section import Section
-from app.models.techcard import Techcard, TechcardLine
 from app.services.plan_validation import validate_plan_position
 
 
@@ -40,10 +39,7 @@ async def _make_ready_product(session, sku: str, *, auto: bool = False) -> Produ
     session.add_all([product, component, *sections])
     await session.flush()
 
-    techcard = Techcard(product_id=product.id, version="v1", is_active=True)
-    session.add(techcard)
     await session.flush()
-    session.add(TechcardLine(techcard_id=techcard.id, component_product_id=component.id, quantity=1, unit="pcs"))
 
     route = ProductionRoute(name="Main", is_active=True)
     session.add(route)

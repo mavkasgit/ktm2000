@@ -4,7 +4,6 @@ from .user import User, UserRole
 from .user_session import UserSession
 from .product import Product, ProductType, ProductLength, ProcessingFlag, ProductProcessingFlag, ProductComposition, ProductPair
 from .dimension import DimensionType, ProductDimension
-from .techcard import Techcard, TechcardLine
 from .route import ProductionRoute, RouteOperation, RouteRuleProfile, RouteSelectionRule, RouteStage
 from .imports import ImportBatch, ImportBatchMode, ImportBatchStatus, ImportFile
 from .production_plan import (
@@ -67,8 +66,6 @@ __all__ = [
     "ProductComposition",
     "DimensionType",
     "ProductDimension",
-    "Techcard",
-    "TechcardLine",
     "ProductionRoute",
     "RouteRuleProfile",
     "RouteSelectionRule",

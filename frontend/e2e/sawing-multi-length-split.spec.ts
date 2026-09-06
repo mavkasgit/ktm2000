@@ -27,7 +27,6 @@ import {
   apiCreateBareProduct,
   apiCreateRoute,
   apiGetActiveTemplate,
-  apiGetOrCreateTechcard,
   apiGetPlanPositions,
   apiGetProductBySku,
   apiGetSectionByCode,
@@ -120,7 +119,6 @@ test.describe("@ui Пила: распил одной задачи на неск�
 
     // ─── 1. API-setup: план с группой раскроя до состояния «сырьё у пилы» ────
     const product = await apiEnsureBareProduct(SAW_SKU);
-    await apiGetOrCreateTechcard(product);
 
     const template = await apiGetActiveTemplate();
     const xlsPath = path.resolve(process.cwd(), "../Упаковочный план.xlsx");

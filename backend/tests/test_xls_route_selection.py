@@ -21,7 +21,6 @@ from app.models.import_template import ImportTemplate
 from app.models.product import Product, ProductType
 from app.models.route import RouteRuleProfile, RouteSelectionRule
 from app.models.section import Section
-from app.models.techcard import Techcard, TechcardLine
 from app.services.excel_import import parse_factory_plan_workbook
 from app.services.route_selection import select_route_for_payload
 

@@ -23,7 +23,6 @@ from app.models.production_plan import (
 )
 from app.models.route import ProductionRoute, RouteOperation, RouteStage, SectionOperation
 from app.models.section import Section
-from app.models.techcard import Techcard, TechcardLine
 from app.models.work_task import WorkTask
 from app.services.route_transform import (
     build_transform_spec,
@@ -59,10 +58,7 @@ async def _make_product_with_route(
     session.add_all([product, component, *sections])
     await session.flush()
 
-    techcard = Techcard(product_id=product.id, version="v1", is_active=True)
-    session.add(techcard)
     await session.flush()
-    session.add(TechcardLine(techcard_id=techcard.id, component_product_id=component.id, quantity=1, unit="pcs"))
 
     route = ProductionRoute(name=f"Route {sku}", is_active=True)
     session.add(route)

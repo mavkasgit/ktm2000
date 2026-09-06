@@ -6,7 +6,6 @@ import {
   E2E_SKU,
   approvePositionViaUI,
   completeAllSectionTasksViaUI,
-  ensureStandardTechcardsViaUI,
   expectShippedViaUI,
   findApprovablePositionViaUI,
   importCatalogViaUI,
@@ -48,15 +47,11 @@ test.describe("@ui Полный цикл производства (ЮП-009)", (
     await importCatalogViaUI(page, E2E_CATALOG_XLS_PATH);
     console.log("[step1] каталог импортирован");
 
-    // ── ШАГ 2. Массовое создание техкарты ─────────────────────────────
-    await ensureStandardTechcardsViaUI(page, [E2E_SKU]);
-    console.log("[step2] техкарта создана");
-
-    // ── ШАГ 3. Импорт остатков на «Склад сырья» ───────────────────────
+    // ── ШАГ 2. Импорт остатков на «Склад сырья» ───────────────────────
     await importRemaindersViaUI(page, E2E_REMAINDERS_XLS_PATH);
     console.log("[step3] остатки импортированы");
 
-    // ── ШАГ 4. Импорт плана из двух позиций ───────────────────────────
+    // ── ШАГ 3. Импорт плана из двух позиций ───────────────────────────
     await page.goto("/planning");
     await expect(page.getByRole("heading", { name: "План", exact: true })).toBeVisible({
       timeout: 10_000,

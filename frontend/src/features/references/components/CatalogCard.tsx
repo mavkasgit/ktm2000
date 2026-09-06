@@ -1,5 +1,5 @@
 import React from "react";
-import { Image, Check, CheckCheck } from "lucide-react";
+import { Image } from "lucide-react";
 import { Card, CardContent } from "@/shared/ui/card";
 import { Badge } from "@/shared/ui/badge";
 import { getPhotoUrl } from "./getPhotoUrl";
@@ -53,20 +53,6 @@ export function CatalogCard({
           {product.code && (
             <span className="text-xs text-muted-foreground bg-muted rounded px-1.5 py-0.5 shrink-0" title="Уникальный код">
               {product.code}
-            </span>
-          )}
-          {product.has_standard_techcard && (
-            <span title="Есть стандартная техкарта">
-              <Check
-                className="h-3.5 w-3.5 text-emerald-600 flex-shrink-0"
-              />
-            </span>
-          )}
-          {product.has_paired_techcard && (
-            <span title="Есть парная техкарта">
-              <CheckCheck
-                className="h-3.5 w-3.5 text-violet-600 flex-shrink-0"
-              />
             </span>
           )}
         </div>

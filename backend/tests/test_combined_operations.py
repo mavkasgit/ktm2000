@@ -27,7 +27,6 @@ from app.models.production_plan import (
 from app.models.release_batch import ReleaseBatch, ReleaseBatchPosition, ReleaseBatchStatus
 from app.models.route import ProductionRoute, RouteStage, RouteOperation
 from app.models.section import Section
-from app.models.techcard import Techcard, TechcardLine
 from app.models.work_task import WorkTask, WorkTaskStatus
 
 
@@ -45,10 +44,7 @@ async def _make_combined_route_product(session, sku: str = "COMBO-1") -> tuple[P
     session.add_all([product, component, *sections])
     await session.flush()
 
-    techcard = Techcard(product_id=product.id, version="v1", is_active=True)
-    session.add(techcard)
     await session.flush()
-    session.add(TechcardLine(techcard_id=techcard.id, component_product_id=component.id, quantity=1, unit="pcs"))
 
     route = ProductionRoute(name=f"Route {sku}", is_active=True)
     session.add(route)
@@ -260,10 +256,7 @@ async def test_no_combined_op_group_creates_separate_tasks(client, session) -> N
     session.add_all([product, component, *sections])
     await session.flush()
 
-    techcard = Techcard(product_id=product.id, version="v1", is_active=True)
-    session.add(techcard)
     await session.flush()
-    session.add(TechcardLine(techcard_id=techcard.id, component_product_id=component.id, quantity=1, unit="pcs"))
 
     route = ProductionRoute(name="No Combo Route", is_active=True)
     session.add(route)
@@ -329,10 +322,7 @@ async def test_different_cog_same_section_creates_separate_tasks(client, session
     session.add_all([product, component, *sections])
     await session.flush()
 
-    techcard = Techcard(product_id=product.id, version="v1", is_active=True)
-    session.add(techcard)
     await session.flush()
-    session.add(TechcardLine(techcard_id=techcard.id, component_product_id=component.id, quantity=1, unit="pcs"))
 
     route = ProductionRoute(name="Diff COG Route", is_active=True)
     session.add(route)

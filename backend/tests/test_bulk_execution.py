@@ -27,7 +27,6 @@ from app.models.product import Product, ProductType
 from app.models.route import ProductionRoute, RouteOperation, RouteStage
 from app.models.section import Section
 from app.stock.models import Reason, StockTransaction
-from app.models.techcard import Techcard, TechcardLine
 from app.models.transfer import Transfer
 from app.models.user import User, UserRole
 from app.models.work_task import WorkTask
@@ -88,17 +87,7 @@ async def _make_route(session, sku: str) -> tuple[Product, ProductionRoute, list
     session.add(route)
     await session.flush()
 
-    techcard = Techcard(product_id=product.id, version="v1", is_active=True)
-    session.add(techcard)
     await session.flush()
-    session.add(
-        TechcardLine(
-            techcard_id=techcard.id,
-            component_product_id=product.id,
-            quantity=Decimal("1"),
-            unit="pcs",
-        )
-    )
 
     step_ops = ["ISSUE_RAW", "PROD", "ACCEPT_FINISHED"]
     stages: list[RouteStage] = []

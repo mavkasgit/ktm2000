@@ -1,6 +1,6 @@
 import React, { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { useQuery } from "@tanstack/react-query";
-import { Search, Image, X, Grid, List, Plus, Filter, FileUp, FileSpreadsheet, Check, CheckCheck, ChevronDown } from "lucide-react";
+import { Search, Image, X, Grid, List, Plus, Filter, FileUp, FileSpreadsheet, Check, ChevronDown } from "lucide-react";
 import * as API from "@/shared/api/products";
 import type { ProductFilters } from "@/shared/api/products";
 import { listRouteSelectionRules } from "@/shared/api/routes";
@@ -794,20 +794,6 @@ export function RawMaterialsPage() {
                     <div className="flex flex-col gap-1">
                       <div className="flex items-center gap-1.5">
                         <PositionSkuCell sku={product.sku} onClick={setStatsSku} />
-                        {product.has_standard_techcard && (
-                          <span title="Есть стандартная техкарта">
-                            <Check
-                              className="h-3.5 w-3.5 text-emerald-600 flex-shrink-0"
-                            />
-                          </span>
-                        )}
-                        {product.has_paired_techcard && (
-                          <span title="Есть парная техкарта">
-                            <CheckCheck
-                              className="h-3.5 w-3.5 text-violet-600 flex-shrink-0"
-                            />
-                          </span>
-                        )}
                       </div>
                       {product.aliases?.length > 0 && (
                         <div className="flex flex-wrap gap-1">

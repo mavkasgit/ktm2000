@@ -52,26 +52,6 @@ async function apiEnsureDimProduct(): Promise<{ id: number; sku: string }> {
   return { id: created.id, sku: created.sku };
 }
 
-async function apiEnsureTechcard(productId: number) {
-  const res = await fetch(`${BACKEND_URL}/api/techcards`);
-  if (res.ok) {
-    const techcards = unwrapItems<{ id: number; product_id: number; is_active: boolean }>(
-      await res.json(),
-    );
-    if (techcards.some((t) => t.product_id === productId && t.is_active)) return;
-  }
-  await fetch(`${BACKEND_URL}/api/techcards`, {
-    method: "POST",
-    headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({
-      product_id: productId,
-      version: "v1",
-      processing_type: "standart_processing",
-      is_active: true,
-    }),
-  });
-}
-
 async function apiImportRemainders(locationId: number, sku: string, qty: number, lengthM: string) {
   // Create xlsx-like import via the remainders API (JSON mode not available, use form)
   // For smoke, we use StockCommand via a dev endpoint or direct DB seed.
@@ -130,9 +110,8 @@ test.describe("@smoke Dimensions sawing E2E", () => {
   }) => {
     test.slow();
 
-    // 1. Setup: product + techcard
+    // 1. Setup: product
     const product = await apiEnsureDimProduct();
-    await apiEnsureTechcard(product.id);
 
     // 2. Get SAWING section
     const sections = await apiGetSections() as Array<{ id: number; code: string; name: string }>;

@@ -1,7 +1,6 @@
 import pytest
 from sqlalchemy.exc import IntegrityError
 
-from app.models.techcard import Techcard, TechcardLine
 from app.models.product import Product, ProductPair, ProductType
 from app.models.route import ProductionRoute, RouteStage, RouteOperation
 from app.models.section import Section
@@ -14,24 +13,6 @@ async def test_unique_sku(session) -> None:
     await session.commit()
 
     session.add(Product(sku="SKU-1", name="Duplicate", type=ProductType.finished_good, unit="pcs"))
-    with pytest.raises(IntegrityError):
-        await session.commit()
-
-
-@pytest.mark.asyncio
-async def test_one_active_techcard_per_product(session) -> None:
-    product = Product(sku="SKU-TECHCARD", name="With Techcard", type=ProductType.finished_good, unit="pcs")
-    component = Product(sku="CMP-1", name="Component", type=ProductType.component, unit="pcs")
-    session.add_all([product, component])
-    await session.flush()
-
-    techcard1 = Techcard(product_id=product.id, version="v1", is_active=True)
-    session.add(techcard1)
-    await session.flush()
-    session.add(TechcardLine(techcard_id=techcard1.id, component_product_id=component.id, quantity=1, unit="pcs"))
-    await session.commit()
-
-    session.add(Techcard(product_id=product.id, version="v2", is_active=True))
     with pytest.raises(IntegrityError):
         await session.commit()
 
@@ -208,47 +189,6 @@ async def test_search_products_includes_is_paired_profile(client, session) -> No
 
 
 @pytest.mark.asyncio
-async def test_product_includes_techcard_flags(client, session) -> None:
-    # 1. Create components and finished products
-    comp1 = Product(sku="COMP-STDT", name="Component with standard techcard", type=ProductType.component, unit="pcs")
-    comp2 = Product(sku="COMP-PAIRDT", name="Component with paired techcard", type=ProductType.component, unit="pcs")
-    comp3 = Product(sku="COMP-NOTC", name="Component with no techcard", type=ProductType.component, unit="pcs")
-    session.add_all([comp1, comp2, comp3])
-    await session.commit()
-
-    # 2. Create standard techcard directly for comp1
-    tc_std = Techcard(product_id=comp1.id, version="v1", processing_type="standart_processing", is_active=True)
-    # Create paired techcard and add comp2 to its lines
-    tc_paired = Techcard(product_id=None, version="v1", processing_type="paired_processing", is_active=True)
-    session.add_all([tc_std, tc_paired])
-    await session.commit()
-
-    line = TechcardLine(techcard_id=tc_paired.id, component_product_id=comp2.id, quantity=1, unit="pcs")
-    session.add(line)
-    await session.commit()
-
-    # 3. Call list products API
-    resp = await client.get("/api/products", params={"type": "component"})
-    assert resp.status_code == 200
-    data = resp.json()["items"]
-
-    # Verify standard techcard flag
-    item1 = next(item for item in data if item["id"] == comp1.id)
-    assert item1["has_standard_techcard"] is True
-    assert item1["has_paired_techcard"] is False
-
-    # Verify paired techcard flag
-    item2 = next(item for item in data if item["id"] == comp2.id)
-    assert item2["has_standard_techcard"] is False
-    assert item2["has_paired_techcard"] is True
-
-    # Verify no techcard flags
-    item3 = next(item for item in data if item["id"] == comp3.id)
-    assert item3["has_standard_techcard"] is False
-    assert item3["has_paired_techcard"] is False
-
-
-@pytest.mark.asyncio
 async def test_patch_product_sku(client, session) -> None:
     """PATCH /products/{id} позволяет переименовать артикул."""
     product = Product(
@@ -277,58 +217,5 @@ async def test_patch_product_sku(client, session) -> None:
 
     await session.refresh(alias_holder)
     assert alias_holder.aliases == ["NEW-SKU-001"]
-
-
-@pytest.mark.asyncio
-async def test_delete_product_cascade_techcards(client, session) -> None:
-    # 1. Create a product with a standard techcard and a component
-    prod = Product(sku="DEL-PROD", name="Product to delete", type=ProductType.finished_good, unit="pcs")
-    comp = Product(sku="DEL-COMP", name="Component to delete", type=ProductType.component, unit="pcs")
-    session.add_all([prod, comp])
-    await session.commit()
-
-    # Create a techcard for prod
-    tc = Techcard(product_id=prod.id, version="v1", processing_type="standart_processing", is_active=True)
-    session.add(tc)
-    await session.commit()
-
-    # Create a techcard line referencing comp
-    line = TechcardLine(techcard_id=tc.id, component_product_id=comp.id, quantity=5.0, unit="pcs")
-    session.add(line)
-    await session.commit()
-
-    # 2. Try to delete the product (should delete standard techcard cascade-wise)
-    resp = await client.delete(f"/api/products/{prod.id}")
-    assert resp.status_code == 204
-
-    # Verify that the techcard and the product are deleted
-    assert (await session.get(Product, prod.id)) is None
-    assert (await session.get(Techcard, tc.id)) is None
-    assert (await session.get(TechcardLine, line.id)) is None
-
-    # 3. Now try to delete the component (should delete any techcard referencing it)
-    prod2 = Product(sku="DEL-PROD2", name="Another product", type=ProductType.finished_good, unit="pcs")
-    session.add(prod2)
-    await session.commit()
-
-    tc2 = Techcard(product_id=prod2.id, version="v1", processing_type="standart_processing", is_active=True)
-    session.add(tc2)
-    await session.commit()
-
-    line2 = TechcardLine(techcard_id=tc2.id, component_product_id=comp.id, quantity=3.0, unit="pcs")
-    session.add(line2)
-    await session.commit()
-
-    # Delete comp -> should delete tc2 and line2 cascade-wise
-    resp = await client.delete(f"/api/products/{comp.id}")
-    assert resp.status_code == 204
-
-    # Verify that comp, tc2, line2 are deleted
-    assert (await session.get(Product, comp.id)) is None
-    assert (await session.get(Techcard, tc2.id)) is None
-    assert (await session.get(TechcardLine, line2.id)) is None
-
-
-
 
 

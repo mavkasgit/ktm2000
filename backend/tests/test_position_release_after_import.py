@@ -23,31 +23,22 @@ from app.models.production_plan import (
 )
 from app.models.route import ProductionRoute, RouteStage, RouteOperation
 from app.models.section import Section
-from app.models.techcard import Techcard, TechcardLine
 
 
 @pytest.mark.asyncio
 async def test_plan_position_can_be_released_after_import(session) -> None:
     """Verify that a plan position with dynamic route can be released."""
-    # Setup: Create product with techcard
+    # Setup: create the product
     product = Product(sku="FG-RELEASE-TEST", name="Test Product", type=ProductType.finished_good, unit="pcs")
     session.add(product)
     await session.flush()
 
-    techcard = Techcard(product_id=product.id, version="v1", is_active=True)
-    session.add(techcard)
     await session.flush()
 
     component = Product(sku="RAW-TEST", name="Raw Material", type=ProductType.component, unit="pcs")
     session.add(component)
     await session.flush()
 
-    session.add(TechcardLine(
-        techcard_id=techcard.id,
-        component_product_id=component.id,
-        quantity=1,
-        unit="pcs",
-    ))
     await session.commit()
 
     # Create a production route with steps

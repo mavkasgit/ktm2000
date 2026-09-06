@@ -9,7 +9,6 @@ import {
   apiResetAll,
   apiRunDemoFullRoute,
   apiSeedData,
-  apiGetOrCreateTechcard,
 } from "./api-helpers";
 
 /**
@@ -41,10 +40,9 @@ test.describe("@smoke Финальный выпуск кнопкой «Отпр�
     const token = await apiAccessTokenFromPage(authenticatedPage);
     expect(token).toBeTruthy();
 
-    // 1. Свежий продукт без lengths (как в demo-фикстурах) + техкарта.
+    // 1. Свежий продукт без lengths (как в demo-фикстурах).
     const sku = `E2E-FINAL-${Date.now()}`;
     const product = await apiCreateBareProduct(sku);
-    const techcard = await apiGetOrCreateTechcard(product);
 
     // 2. Кастомный роут: RAW_STOCK (транзит) → PACKING (production, final).
     const raw = await apiGetSectionByCode("RAW_STOCK");
@@ -80,7 +78,7 @@ test.describe("@smoke Финальный выпуск кнопкой «Отпр�
     const run = await apiRunDemoFullRoute(token, {
       initial_quantity: "40",
       route_id: route.id,
-      techcard_id: techcard.id,
+      product_id: product.id,
       run_id: `e2e-final-release-${Date.now()}`,
     });
     expect(run.stopped_at_stage).toBe("completed");

@@ -27,7 +27,6 @@ from app.models.production_plan import (
 from app.models.route import ProductionRoute, RouteOperation, RouteStage
 from app.models.section import Section
 from app.models.spg import SpgSection, StorageProductionGroup
-from app.models.techcard import Techcard, TechcardLine
 from app.models.work_task import WorkTask, WorkTaskStatus
 from app.stock import Reason, StockCommand, StockCommandService
 
@@ -66,12 +65,7 @@ async def _make_fixture(session: AsyncSession, sku: str) -> dict:
         )
         stages.append(stage)
 
-    techcard = Techcard(product_id=product.id, version="v1", is_active=True)
-    session.add(techcard)
     await session.flush()
-    session.add(
-        TechcardLine(techcard_id=techcard.id, component_product_id=product.id, quantity=Decimal("1"), unit="pcs")
-    )
 
     plan = ProductionPlan(
         plan_no=f"PLAN-{sku}",

@@ -9,7 +9,6 @@ from app.models.production_plan import PlanPosition, ProductionPlan, ProductionP
 from app.models.route import ProductionRoute, RouteStage, RouteOperation
 
 from app.models.section import Section
-from app.models.techcard import Techcard, TechcardLine
 from app.models.user import User, UserRole
 
 
@@ -95,17 +94,6 @@ async def test_demo_full_route_run_and_replay(client, session) -> None:
     session.add(product)
     await session.flush()
 
-    techcard = Techcard(product_id=product.id, version="v1", is_active=True)
-    session.add(techcard)
-    await session.flush()
-    session.add(
-        TechcardLine(
-            techcard_id=techcard.id,
-            component_product_id=product.id,
-            quantity=Decimal("1"),
-            unit="pcs",
-        )
-    )
 
     route_steps_def = [
         ("ISSUE", "ISSUE_RAW", "Выдача сырья", False),
@@ -130,7 +118,7 @@ async def test_demo_full_route_run_and_replay(client, session) -> None:
         "/api/demo/test-runs/full-route",
         json={
             "initial_quantity": "100",
-            "techcard_id": techcard.id,
+            "product_id": product.id,
             "route_id": route.id,
             "run_id": run_id,
             "stage_preset": "full_route",
@@ -154,7 +142,7 @@ async def test_demo_full_route_run_and_replay(client, session) -> None:
         "/api/demo/test-runs/full-route",
         json={
             "initial_quantity": "100",
-            "techcard_id": techcard.id,
+            "product_id": product.id,
             "route_id": route.id,
             "run_id": run_id,
             "stage_preset": "full_route",
@@ -180,17 +168,6 @@ async def test_demo_full_route_forks_when_target_plan_released(client, session) 
     session.add(product)
     await session.flush()
 
-    techcard = Techcard(product_id=product.id, version="v1", is_active=True)
-    session.add(techcard)
-    await session.flush()
-    session.add(
-        TechcardLine(
-            techcard_id=techcard.id,
-            component_product_id=product.id,
-            quantity=Decimal("1"),
-            unit="pcs",
-        )
-    )
 
     route_steps_def = [
         ("ISSUE", "ISSUE_RAW", "Выдача сырья", False),
@@ -214,7 +191,7 @@ async def test_demo_full_route_forks_when_target_plan_released(client, session) 
         "/api/demo/test-runs/full-route",
         json={
             "initial_quantity": "100",
-            "techcard_id": techcard.id,
+            "product_id": product.id,
             "route_id": route.id,
             "production_plan_id": released_plan.id,
             "stage_preset": "full_route",
@@ -236,17 +213,6 @@ async def test_demo_stage_preset_before_approve(client, session) -> None:
     session.add(product)
     await session.flush()
 
-    techcard = Techcard(product_id=product.id, version="v1", is_active=True)
-    session.add(techcard)
-    await session.flush()
-    session.add(
-        TechcardLine(
-            techcard_id=techcard.id,
-            component_product_id=product.id,
-            quantity=Decimal("1"),
-            unit="pcs",
-        )
-    )
 
     sections = [
         Section(code="DEMO-BA-A", name="Demo BA A", type="production", is_active=True),
@@ -279,7 +245,7 @@ async def test_demo_stage_preset_before_approve(client, session) -> None:
         "/api/demo/test-runs/full-route",
         json={
             "initial_quantity": "100",
-            "techcard_id": techcard.id,
+            "product_id": product.id,
             "route_id": route.id,
             "run_id": "demo-ba-001",
             "stage_preset": "before_approve",
@@ -303,17 +269,6 @@ async def test_demo_stage_preset_after_approve(client, session) -> None:
     session.add(product)
     await session.flush()
 
-    techcard = Techcard(product_id=product.id, version="v1", is_active=True)
-    session.add(techcard)
-    await session.flush()
-    session.add(
-        TechcardLine(
-            techcard_id=techcard.id,
-            component_product_id=product.id,
-            quantity=Decimal("1"),
-            unit="pcs",
-        )
-    )
 
     sections = [
         Section(code="DEMO-AA-A", name="Demo AA A", type="production", is_active=True),
@@ -346,7 +301,7 @@ async def test_demo_stage_preset_after_approve(client, session) -> None:
         "/api/demo/test-runs/full-route",
         json={
             "initial_quantity": "100",
-            "techcard_id": techcard.id,
+            "product_id": product.id,
             "route_id": route.id,
             "run_id": "demo-aa-001",
             "stage_preset": "after_approve",
@@ -370,17 +325,6 @@ async def test_demo_stage_preset_after_release(client, session) -> None:
     session.add(product)
     await session.flush()
 
-    techcard = Techcard(product_id=product.id, version="v1", is_active=True)
-    session.add(techcard)
-    await session.flush()
-    session.add(
-        TechcardLine(
-            techcard_id=techcard.id,
-            component_product_id=product.id,
-            quantity=Decimal("1"),
-            unit="pcs",
-        )
-    )
 
     route_steps_def = [
         ("ISSUE", "ISSUE_RAW", "Выдача сырья", False),
@@ -397,7 +341,7 @@ async def test_demo_stage_preset_after_release(client, session) -> None:
         "/api/demo/test-runs/full-route",
         json={
             "initial_quantity": "100",
-            "techcard_id": techcard.id,
+            "product_id": product.id,
             "route_id": route.id,
             "run_id": "demo-ar-001",
             "stage_preset": "after_release",
@@ -421,17 +365,6 @@ async def test_demo_stage_preset_to_step_ready_first_step(client, session) -> No
     session.add(product)
     await session.flush()
 
-    techcard = Techcard(product_id=product.id, version="v1", is_active=True)
-    session.add(techcard)
-    await session.flush()
-    session.add(
-        TechcardLine(
-            techcard_id=techcard.id,
-            component_product_id=product.id,
-            quantity=Decimal("1"),
-            unit="pcs",
-        )
-    )
 
     route_steps_def = [
         ("ISSUE", "ISSUE_RAW", "Выдача сырья", False),
@@ -459,7 +392,7 @@ async def test_demo_stage_preset_to_step_ready_first_step(client, session) -> No
         "/api/demo/test-runs/full-route",
         json={
             "initial_quantity": "100",
-            "techcard_id": techcard.id,
+            "product_id": product.id,
             "route_id": route.id,
             "run_id": "demo-tsr-001",
             "stage_preset": "to_step_ready",
@@ -484,17 +417,6 @@ async def test_demo_stage_preset_to_step_ready_middle_step(client, session) -> N
     session.add(product)
     await session.flush()
 
-    techcard = Techcard(product_id=product.id, version="v1", is_active=True)
-    session.add(techcard)
-    await session.flush()
-    session.add(
-        TechcardLine(
-            techcard_id=techcard.id,
-            component_product_id=product.id,
-            quantity=Decimal("1"),
-            unit="pcs",
-        )
-    )
 
     route_steps_def = [
         ("ISSUE", "ISSUE_RAW", "Выдача сырья", False),
@@ -530,7 +452,7 @@ async def test_demo_stage_preset_to_step_ready_middle_step(client, session) -> N
         "/api/demo/test-runs/full-route",
         json={
             "initial_quantity": "100",
-            "techcard_id": techcard.id,
+            "product_id": product.id,
             "route_id": route.id,
             "run_id": "demo-tsrm-001",
             "stage_preset": "to_step_ready",
@@ -562,17 +484,6 @@ async def test_demo_paired_profile_scenario_imports_as_paired_row(client, sessio
     session.add(product)
     await session.flush()
 
-    techcard = Techcard(product_id=product.id, version="v1", is_active=True, processing_type="paired_processing")
-    session.add(techcard)
-    await session.flush()
-    session.add(
-        TechcardLine(
-            techcard_id=techcard.id,
-            component_product_id=product.id,
-            quantity=Decimal("1"),
-            unit="pcs",
-        )
-    )
 
     # Пара резолвится из product_pairs (#148): сырьевые артикулы сценария
     # + ручная N на общей длине 2700 мм.
@@ -621,7 +532,7 @@ async def test_demo_paired_profile_scenario_imports_as_paired_row(client, sessio
         "/api/demo/test-runs/full-route",
         json={
             "initial_quantity": "100",
-            "techcard_id": techcard.id,
+            "product_id": product.id,
             "route_id": route.id,
             "run_id": "demo-pair-001",
             "stage_preset": "before_approve",

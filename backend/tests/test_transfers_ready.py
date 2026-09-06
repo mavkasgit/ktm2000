@@ -15,7 +15,6 @@ from app.models.production_plan import (
     PlanPositionValidationStatus,
     PlanSourceType,
 )
-from app.models.techcard import Techcard, TechcardLine
 from app.models.section import Section
 from app.models.work_task import WorkTask
 from app.stock import Reason, StockCommand, StockCommandService
@@ -102,17 +101,7 @@ async def _seed_many_ready_tasks(session, client, count: int) -> dict:
         )
         session.add(product)
         await session.flush()
-        tech = Techcard(product_id=product.id, version="v1", is_active=True)
-        session.add(tech)
         await session.flush()
-        session.add(
-            TechcardLine(
-                techcard_id=tech.id,
-                component_product_id=product.id,
-                quantity=Decimal("1"),
-                unit="pcs",
-            )
-        )
         session.add(
             PlanPosition(
                 production_plan_id=plan.id,
@@ -334,15 +323,7 @@ async def _seed_dimensioned_ready_tasks(session, client, dims_list: list[dict | 
         )
         session.add(product)
         await session.flush()
-        tech = Techcard(product_id=product.id, version="v1", is_active=True)
-        session.add(tech)
         await session.flush()
-        session.add(
-            TechcardLine(
-                techcard_id=tech.id, component_product_id=product.id,
-                quantity=Decimal("1"), unit="pcs",
-            )
-        )
         session.add(
             PlanPosition(
                 production_plan_id=plan.id,

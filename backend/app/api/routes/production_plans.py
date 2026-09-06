@@ -1061,7 +1061,7 @@ async def _compute_available_remainder_for_positions(
     if not positions:
         return {}
 
-    # Резолвим effective_product_id для каждой позиции (включая paired_techcard).
+    # Резолвим effective_product_id для каждой позиции (включая парные).
     effective_product_by_id: dict[int, int | None] = {}
     for p in positions:
         effective_product_by_id[p.id] = await _resolve_effective_product_id(db, p)

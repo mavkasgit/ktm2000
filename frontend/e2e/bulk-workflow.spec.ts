@@ -7,14 +7,12 @@ import {
   apiBatchAssignRoute,
   apiGetActiveRoutes,
   apiGetActiveTemplate,
-  apiGetOrCreateTechcard,
   apiGetPlanPositions,
   apiGetProductBySku,
   apiGetSections,
   apiGetSpgs,
   apiImportExcel,
   apiEnsureTestProducts,
-  apiEnsureTestTechcards,
   apiSeedData,
   E2E_SECTION,
 } from "./api-helpers";
@@ -27,7 +25,6 @@ test.describe("@smoke Bulk operations workflow E2E", () => {
     // 1. Вызвать API-эндпоинт /api/routes-seed?force=true для сброса и наполнения справочников
     await apiSeedData();
     await apiEnsureTestProducts();
-    await apiEnsureTestTechcards();
   });
 
   test("should complete workflow using bulk operations on the shopfloor", async ({ authenticatedPage }) => {
@@ -52,9 +49,6 @@ test.describe("@smoke Bulk operations workflow E2E", () => {
     const product2083 = await apiGetProductBySku("ЮП-2083");
     console.log(`Found products: ЮП-3270 = ${productYu.id}, ЮП-2083 = ${product2083.id}`);
 
-    // Убеждаемся, что у них есть техкарта
-    await apiGetOrCreateTechcard(productYu);
-    await apiGetOrCreateTechcard(product2083);
 
     const spgs = await apiGetSpgs();
     const sections = await apiGetSections();

@@ -45,7 +45,6 @@ from app.models.production_plan import (
 from app.models.route import ProductionRoute, RouteOperation, RouteStage
 from app.models.section import Section
 from app.models.spg import SpgSection, StorageProductionGroup
-from app.models.techcard import Techcard, TechcardLine
 from app.models.transfer import Transfer
 from app.models.user import User, UserRole
 from app.models.work_task import WorkTask
@@ -354,10 +353,7 @@ async def _make_two_ghp_route(
         await session.flush()
         session.add(RouteOperation(route_stage_id=st.id, sequence=1, operation_code=code, operation_name=code))
 
-    tech = Techcard(product_id=product.id, version="v1", is_active=True)
-    session.add(tech)
     await session.flush()
-    session.add(TechcardLine(techcard_id=tech.id, component_product_id=product.id, quantity=Decimal("1"), unit="pcs"))
 
     plan = ProductionPlan(
         plan_no=f"P-{sku}",

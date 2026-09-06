@@ -27,7 +27,6 @@ from app.models.production_plan import (
 )
 from app.models.route import ProductionRoute, RouteOperation, RouteStage
 from app.models.spg import SpgSection, StorageProductionGroup
-from app.models.techcard import Techcard, TechcardLine
 from app.models.work_task import WorkTask, WorkTaskStatus
 from app.stock import (
     QualityState,
@@ -122,10 +121,7 @@ async def _setup_minimal_route(session: AsyncSession, *, sku: str = "DEF5", qty:
     session.add(stage2)
     await session.flush()
 
-    tech = Techcard(product_id=product.id, version="v1", is_active=True)
-    session.add(tech)
     await session.flush()
-    session.add(TechcardLine(techcard_id=tech.id, component_product_id=product.id, quantity=Decimal("1"), unit="pcs"))
 
     plan = ProductionPlan(
         plan_no=f"P-{sku}", name="p", status=ProductionPlanStatus.approved,

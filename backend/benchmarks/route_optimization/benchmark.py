@@ -28,7 +28,6 @@ from app.models.production_plan import (
 )
 from app.models.route import ProductionRoute, RouteRuleProfile, RouteSelectionRule, RouteStage, SectionOperation
 from app.models.section import Section
-from app.models.techcard import Techcard, TechcardLine
 from app.services.plan_import_service import _make_change_items
 from app.services.excel_import import ParsedPlanRow
 from app.api.routes.production_plans import section_totals
@@ -157,35 +156,6 @@ async def seed_data(session: AsyncSession):
             quantity_per_hanger=10,
         )
         session.add(product)
-        await session.flush()
-
-    techcard = await session.scalar(select(Techcard).where(Techcard.product_id == product.id))
-    if not techcard:
-        techcard = Techcard(
-            product_id=product.id,
-            version="v_bench",
-            is_active=True,
-        )
-        session.add(techcard)
-        await session.flush()
-
-        # Компонент для техкарты
-        comp = Product(
-            sku="BENCH-PROD-RAW",
-            name="Сырье для бенчмарка",
-            type=ProductType.component,
-            unit="pcs",
-        )
-        session.add(comp)
-        await session.flush()
-
-        line = TechcardLine(
-            techcard_id=techcard.id,
-            component_product_id=comp.id,
-            quantity=1,
-            unit="pcs",
-        )
-        session.add(line)
         await session.flush()
 
     # 6. Создаем ProductionRoute, который совпадает с секциями

@@ -22,7 +22,6 @@ from app.models.production_plan import (
 )
 from app.models.route import ProductionRoute, RouteRuleProfile, RouteSelectionRule, RouteStage, RouteOperation, SectionOperation
 from app.models.section import Section
-from app.models.techcard import Techcard, TechcardLine
 from app.services.plan_import_service import create_excel_import_change_set
 
 
@@ -85,8 +84,7 @@ async def _seed_sections(session) -> None:
     await session.commit()
 
 
-async def _make_product_with_techcard(session, sku: str = "FG-TEST") -> Product:
-    """Create a product with an active techcard."""
+async def _make_product(session, sku: str = "FG-TEST") -> Product:
     product = Product(
         sku=sku,
         name=f"Test Product {sku}",
@@ -94,22 +92,6 @@ async def _make_product_with_techcard(session, sku: str = "FG-TEST") -> Product:
         unit="pcs",
     )
     session.add(product)
-    await session.flush()
-
-    techcard = Techcard(product_id=product.id, version="v1", is_active=True)
-    session.add(techcard)
-    await session.flush()
-
-    component = Product(sku=f"{sku}-RAW", name=f"Raw {sku}", type=ProductType.component, unit="pcs")
-    session.add(component)
-    await session.flush()
-
-    session.add(TechcardLine(
-        techcard_id=techcard.id,
-        component_product_id=component.id,
-        quantity=1,
-        unit="pcs",
-    ))
     await session.commit()
     return product
 
@@ -197,7 +179,7 @@ async def test_e2e_excel_import_creates_routes_with_steps(session) -> None:
     """E2E test: Full Excel import creates dynamic routes with steps in database."""
     # Setup
     await _seed_sections(session)
-    product = await _make_product_with_techcard(session, sku="FG-E2E-TEST")
+    product = await _make_product(session, sku="FG-E2E-TEST")
     template = await _make_template(session)
     profile_id = await _make_profile_with_rules(session, template_id=template.id)
 
@@ -359,7 +341,7 @@ async def test_e2e_excel_import_multiple_rows_reuse_routes(session) -> None:
     """E2E test: Multiple identical rows reuse same route with steps."""
     # Setup
     await _seed_sections(session)
-    product = await _make_product_with_techcard(session, sku="FG-E2E-REUSE")
+    product = await _make_product(session, sku="FG-E2E-REUSE")
     template = await _make_template(session)
     profile_id = await _make_profile_with_rules(session, template_id=template.id)
 

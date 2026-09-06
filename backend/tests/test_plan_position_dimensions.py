@@ -232,7 +232,6 @@ async def _seed_product_with_route(session, sku: str):
     from app.models.product import Product, ProductType
     from app.models.route import ProductionRoute, RouteOperation, RouteStage
     from app.models.section import Section
-    from app.models.techcard import Techcard, TechcardLine
 
     product = Product(sku=sku, name=f"Product {sku}", type=ProductType.finished_good, unit="pcs")
     component = Product(sku=f"{sku}-RAW", name=f"Raw {sku}", type=ProductType.component, unit="pcs")
@@ -240,10 +239,7 @@ async def _seed_product_with_route(session, sku: str):
     session.add_all([product, component, *sections])
     await session.flush()
 
-    techcard = Techcard(product_id=product.id, version="v1", is_active=True)
-    session.add(techcard)
     await session.flush()
-    session.add(TechcardLine(techcard_id=techcard.id, component_product_id=component.id, quantity=1, unit="pcs"))
 
     route = ProductionRoute(name=f"Route {sku}", is_active=True)
     session.add(route)

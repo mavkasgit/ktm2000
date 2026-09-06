@@ -256,9 +256,6 @@ export const queryKeys = {
     selectionRules: () => ["route-selection-rules"] as const,
     seedPreview: () => ["seed-preview"] as const,
   },
-  techcards: {
-    all: () => ["techcards"] as const,
-  },
   products: {
     all: () => ["products"] as const,
     pairs: (productId: number) => ["products", "pairs", productId] as const,

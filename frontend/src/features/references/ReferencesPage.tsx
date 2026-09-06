@@ -2,7 +2,6 @@ import { NavLink, Outlet } from "react-router-dom"
 
 const tabs = [
   { to: "/references/raw-materials", label: "Сырьё" },
-  { to: "/references/techcards", label: "Техкарты" },
   { to: "/references/spg", label: "ГХП" },
   { to: "/references/routes", label: "Маршруты" },
   { to: "/references/products", label: "Продукты" },
@@ -14,7 +13,7 @@ export function ReferencesPage() {
       <header className="page-header">
         <div>
           <h1 className="page-title">Справочники</h1>
-          <p className="page-subtitle">Минимальная настройка изделий, участков, техкарт и маршрутов для запуска плана.</p>
+          <p className="page-subtitle">Минимальная настройка изделий, участков и маршрутов для запуска плана.</p>
         </div>
       </header>
       <div className="tab-row">

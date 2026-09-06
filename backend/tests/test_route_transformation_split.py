@@ -37,7 +37,6 @@ from app.models.production_plan import (
 )
 from app.models.route import ProductionRoute, RouteStage, RouteOperation, SectionOperation
 from app.models.section import Section
-from app.models.techcard import Techcard, TechcardLine
 from app.models.work_task import WorkTask, WorkTaskStatus
 from app.services.shopfloor.queries_sections import get_section_board
 
@@ -80,10 +79,7 @@ async def _make_transformation_route(session, sku: str = "SPLIT-1") -> tuple[Pro
     ])
     await session.flush()
 
-    techcard = Techcard(product_id=product.id, version="v1", is_active=True)
-    session.add(techcard)
     await session.flush()
-    session.add(TechcardLine(techcard_id=techcard.id, component_product_id=component.id, quantity=Decimal("1"), unit="pcs"))
 
     route = ProductionRoute(name=f"Route {sku}", is_active=True)
     session.add(route)

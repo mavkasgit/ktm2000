@@ -22,7 +22,6 @@ from app.models.production_plan import (
 from app.models.product import Product, ProductType
 from app.models.route import ProductionRoute, RouteOperation, RouteStage
 from app.models.section import Section
-from app.models.techcard import Techcard, TechcardLine
 from app.models.user import User, UserRole
 
 
@@ -56,17 +55,7 @@ async def _make_route(session, sku: str) -> tuple[Product, ProductionRoute]:
     session.add(route)
     await session.flush()
 
-    techcard = Techcard(product_id=product.id, version="v1", is_active=True)
-    session.add(techcard)
     await session.flush()
-    session.add(
-        TechcardLine(
-            techcard_id=techcard.id,
-            component_product_id=product.id,
-            quantity=Decimal("1"),
-            unit="pcs",
-        )
-    )
 
     step_ops = ["ISSUE_RAW", "ACCEPT_FINISHED"]
     for idx, (section, op_code) in enumerate(zip(sections, step_ops, strict=True), start=1):

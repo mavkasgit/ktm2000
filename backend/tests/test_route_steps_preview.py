@@ -11,7 +11,6 @@ from app.models.import_template import ImportTemplate
 from app.models.product import Product, ProductType
 from app.models.route import ProductionRoute, RouteRuleProfile, RouteStage, RouteOperation, SectionOperation
 from app.models.section import Section
-from app.models.techcard import Techcard, TechcardLine
 from app.seeds.selection_rules import SELECTION_RULES
 from app.seeds.seeders.selection_rules_seeder import seed_selection_rules
 from app.seeds.canon.models import SelectionRuleDef
@@ -159,7 +158,7 @@ async def _seed_infrastructure(session, profile: RouteRuleProfile):
         session, [SelectionRuleDef.model_validate(d) for d in SELECTION_RULES], profile, section_map
     )
     
-    # Create product + techcard + route so route resolution works
+    # Create product + route so route resolution works
     product = Product(sku="TEST-001", name="Test Product", type=ProductType.finished_good, unit="pcs")
     session.add(product)
     await session.flush()
@@ -168,10 +167,6 @@ async def _seed_infrastructure(session, profile: RouteRuleProfile):
     session.add(route)
     await session.flush()
     
-    techcard = Techcard(product_id=product.id, version="v1", is_active=True)
-    session.add(techcard)
-    await session.flush()
-    session.add(TechcardLine(techcard_id=techcard.id, component_product_id=product.id, quantity=Decimal("1"), unit="pcs"))
     
     # Create route stages and operations for each section in profile's route_sections
     stage_ops = ["ISSUE_RAW", "SHOT_BLAST", "MOVE_TO_PREP_STOCK", "ANOD", "MOVE_TO_FG", "SHIPMENT", "SENT"]

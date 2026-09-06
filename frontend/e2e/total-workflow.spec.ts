@@ -5,7 +5,6 @@ import {
   apiBatchAssignRoute,
   apiGetActiveRoutes,
   apiGetActiveTemplate,
-  apiGetOrCreateTechcard,
   apiGetPlanPositions,
   apiGetProductBySku,
   apiGetSections,
@@ -14,7 +13,6 @@ import {
   apiResetAll,
   apiAddRemainder,
   apiEnsureTestProducts,
-  apiEnsureTestTechcards,
   apiSeedData,
   BACKEND_URL,
   E2E_SECTION,
@@ -30,10 +28,9 @@ test.describe("@smoke Total workflow E2E - Step 2: Seed & Verify Remainders", ()
     // Seed reference data via API before the test
     await apiSeedData();
     await apiEnsureTestProducts();
-    await apiEnsureTestTechcards();
   });
 
-  test("should seed, get existing product, ensure techcard, add remainders, and verify in SPG UI", async ({ authenticatedPage }) => {
+  test("should seed, get existing product, add remainders, and verify in SPG UI", async ({ authenticatedPage }) => {
     test.skip(true, "Устарел: завершает складской этап с доски, но в текущей модели сырьё идёт передачей со склада (см. transfers-auto-accept.spec.ts)");
     test.slow();
 
@@ -55,10 +52,6 @@ test.describe("@smoke Total workflow E2E - Step 2: Seed & Verify Remainders", ()
     const product2083 = await apiGetProductBySku("ЮП-2083");
     console.log("Found products: ЮП-3270 =", productYu.id, ", ЮП-2083 =", product2083.id);
 
-    // 2. Убеждаемся, что у них есть техкарта
-    const techcardYu = await apiGetOrCreateTechcard(productYu);
-    const techcard2083 = await apiGetOrCreateTechcard(product2083);
-    console.log("Techcards ensured");
 
     // 3. Получаем SPG и секции
     const spgs = await apiGetSpgs();
@@ -287,9 +280,8 @@ test.describe("@smoke Total workflow E2E - Step 2: Seed & Verify Remainders", ()
       }
     });
 
-    // 1. Получаем продукты и настраиваем техкарты/маршруты
+    // 1. Получаем продукты и настраиваем маршруты
     const productYu = await apiGetProductBySku("ЮП-3270");
-    const techcardYu = await apiGetOrCreateTechcard(productYu);
 
     const spgs = await apiGetSpgs();
     const sections = await apiGetSections();
@@ -544,7 +536,7 @@ test.describe("@smoke Total workflow E2E - Step 2: Seed & Verify Remainders", ()
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({
         initial_quantity: 10,
-        techcard_id: techcardYu.id,
+        product_id: productYu.id,
         production_plan_id: importRes.production_plan_id,
         stage_preset: "before_approve",
         route_id: activeRoutesForYu[0].id,

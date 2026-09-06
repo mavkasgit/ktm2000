@@ -26,14 +26,12 @@ import {
   apiBatchAssignRoute,
   apiGetActiveRoutes,
   apiGetActiveTemplate,
-  apiGetOrCreateTechcard,
   apiGetPlanPositions,
   apiGetProductBySku,
   apiGetSectionByCode,
   apiImportExcel,
   apiResetAll,
   apiEnsureTestProducts,
-  apiEnsureTestTechcards,
   apiSeedData,
   BACKEND_URL,
   E2E_SECTION,
@@ -49,7 +47,6 @@ test.describe("@smoke Explicit transfer — 2-step ritual (Send + Issue)", () =>
     await apiResetAll();
     await apiSeedData();
     await apiEnsureTestProducts();
-    await apiEnsureTestTechcards();
   });
 
   test("send auto-accepts, then operator issues on destination", async ({
@@ -58,9 +55,8 @@ test.describe("@smoke Explicit transfer — 2-step ritual (Send + Issue)", () =>
   }) => {
     test.slow();
 
-    // 1. Подготовка данных: продукт, техкарта, импорт Excel, применение, маршрут
+    // 1. Подготовка данных: продукт, импорт Excel, применение, маршрут
     const product2083 = await apiGetProductBySku("ЮП-2083");
-    const techcard = await apiGetOrCreateTechcard(product2083);
 
     const template = await apiGetActiveTemplate();
     const xlsPath = path.resolve(process.cwd(), "../Упаковочный план.xlsx");
@@ -77,7 +73,6 @@ test.describe("@smoke Explicit transfer — 2-step ritual (Send + Issue)", () =>
 
     const activeRoutes = await apiGetActiveRoutes();
     expect(activeRoutes.length).toBeGreaterThan(0);
-    void techcard;
 
     // 1a. Пополняем остатки на STOCK (Склад сырья) — иначе диалог
     //     «Запуск в производство» покажет пустое обеспечение сырьём.

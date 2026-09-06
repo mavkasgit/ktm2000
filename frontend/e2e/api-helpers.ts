@@ -141,14 +141,6 @@ export async function apiEnsureTestProducts() {
   }
 }
 
-/** @smoke only — active techcard with default line (backend _ensure_default_line). */
-export async function apiEnsureTestTechcards() {
-  for (const product of E2E_TEST_PRODUCTS) {
-    const fg = await apiGetProductBySku(product.sku);
-    await apiGetOrCreateTechcard(fg);
-  }
-}
-
 export async function apiGetProductBySku(sku: string) {
   const res = await fetch(`${BACKEND_URL}/api/products?q=${encodeURIComponent(sku)}`);
   if (!res.ok) {
@@ -181,39 +173,6 @@ export async function apiCreateBareProduct(sku: string) {
   return res.json();
 }
 
-async function apiCreateTechcard(productId: number) {
-  const res = await fetch(`${BACKEND_URL}/api/techcards`, {
-    method: "POST",
-    headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({
-      product_id: productId,
-      version: "v1",
-      processing_type: "standart_processing",
-      is_active: true,
-    }),
-  });
-  if (!res.ok) {
-    throw new Error(`Create techcard failed: ${res.statusText} (${res.status})`);
-  }
-  return res.json();
-}
-
-export async function apiGetOrCreateTechcard(product: { id: number; sku: string }) {
-  const res = await fetch(
-    `${BACKEND_URL}/api/techcards?sku=${encodeURIComponent(product.sku)}&limit=50&is_active=true`,
-  );
-  if (!res.ok) {
-    throw new Error(`Get techcards failed: ${res.statusText} (${res.status})`);
-  }
-  const techcards = unwrapItems<{ id: number; product_id: number; is_active: boolean }>(
-    await res.json(),
-  );
-  const existing = techcards.find((t) => t.product_id === product.id && t.is_active);
-  if (existing) {
-    return existing;
-  }
-  return apiCreateTechcard(product.id);
-}
 
 export async function apiGetSpgs() {
   const res = await fetch(`${BACKEND_URL}/api/spg`);
@@ -436,7 +395,7 @@ export async function apiRunDemoFullRoute(
   payload: {
     initial_quantity: string;
     route_id: number;
-    techcard_id: number;
+    product_id: number;
     run_id: string;
   },
 ) {
@@ -449,7 +408,7 @@ export async function apiRunDemoFullRoute(
     body: JSON.stringify({
       initial_quantity: payload.initial_quantity,
       route_id: payload.route_id,
-      techcard_id: payload.techcard_id,
+      product_id: payload.product_id,
       run_id: payload.run_id,
       stage_preset: "full_route",
     }),

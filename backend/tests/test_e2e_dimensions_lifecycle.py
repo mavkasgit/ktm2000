@@ -36,7 +36,6 @@ from app.models.production_plan import (
 from app.models.route import ProductionRoute, RouteOperation, RouteStage
 from app.models.section import Section
 from app.models.spg import SpgSection, StorageProductionGroup
-from app.models.techcard import Techcard, TechcardLine
 from app.models.user import User, UserRole
 from app.models.work_task import WorkTask, WorkTaskStatus
 from app.stock import QualityState, Reason, StockCommand, StockCommandService
@@ -144,10 +143,7 @@ async def _make_dimensions_route(
         session.add(SpgSection(spg_id=spg.id, section_id=sec.id, sort_order=i))
     await session.flush()
 
-    techcard = Techcard(product_id=product.id, version="v1", is_active=True)
-    session.add(techcard)
     await session.flush()
-    session.add(TechcardLine(techcard_id=techcard.id, component_product_id=product.id, quantity=Decimal("1"), unit="pcs"))
 
     route = ProductionRoute(name=f"Route {sku}", is_active=True)
     session.add(route)
