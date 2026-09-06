@@ -201,6 +201,43 @@ _TRIGGERS_SQL = [
     FOR EACH ROW
     EXECUTE FUNCTION fn_check_route_stage_transit_invariants();
     """,
+    # Состав ГП (#147): компонент — только сырьё, не более 2 на продукт —
+    # зеркало миграции 053.
+    """
+    CREATE OR REPLACE FUNCTION fn_check_product_composition_invariants()
+    RETURNS TRIGGER AS $fn$
+    DECLARE
+        v_type text;
+    BEGIN
+        IF NEW.component_product_id = NEW.product_id THEN
+            RAISE EXCEPTION 'product_compositions: product cannot be its own component (product_id=%)', NEW.product_id
+                USING ERRCODE = 'check_violation';
+        END IF;
+        SELECT type INTO v_type FROM products WHERE id = NEW.component_product_id;
+        IF v_type IS NULL OR v_type <> 'component' THEN
+            RAISE EXCEPTION 'product_compositions: component must be raw material type=component (product_id=% component_id=%)', NEW.product_id, NEW.component_product_id
+                USING ERRCODE = 'check_violation';
+        END IF;
+        IF (
+            SELECT count(*)
+            FROM product_compositions
+            WHERE product_id = NEW.product_id
+              AND (TG_OP = 'INSERT' OR id <> NEW.id)
+        ) >= 2 THEN
+            RAISE EXCEPTION 'product_compositions: at most 2 components per product (product_id=%)', NEW.product_id
+                USING ERRCODE = 'check_violation';
+        END IF;
+        RETURN NEW;
+    END;
+    $fn$ LANGUAGE plpgsql;
+    """,
+    "DROP TRIGGER IF EXISTS trg_product_composition_invariants ON product_compositions;",
+    """
+    CREATE TRIGGER trg_product_composition_invariants
+    BEFORE INSERT OR UPDATE OF product_id, component_product_id ON product_compositions
+    FOR EACH ROW
+    EXECUTE FUNCTION fn_check_product_composition_invariants();
+    """,
 ]
 
 

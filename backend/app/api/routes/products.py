@@ -11,7 +11,8 @@ from sqlalchemy.orm import selectinload
 
 from app.core.config import settings
 from app.core.database import get_db
-from app.models.product import Product, ProductType, DimensionState, ProductLength, ProcessingFlag, ProductProcessingFlag, _length_key
+from app.api.deps import REFERENCES_READER_ROLES, REFERENCES_WRITER_ROLES, require_role
+from app.models.product import Product, ProductType, DimensionState, ProductLength, ProcessingFlag, ProductProcessingFlag, ProductComposition, _length_key
 from app.models.dimension import ProductDimension, DimensionType
 from app.models.techcard import Techcard, TechcardLine
 from app.models.production_plan import PlanPosition
@@ -1120,6 +1121,12 @@ async def delete_product(product_id: int, db: AsyncSession = Depends(get_db)):
     if rework_count:
         relations.append("задачи доработки")
 
+    composition_usage_count = await db.scalar(
+        select(func.count()).select_from(ProductComposition).where(ProductComposition.component_product_id == product_id)
+    )
+    if composition_usage_count:
+        relations.append("состав ГП")
+
     if relations:
         raise HTTPException(status_code=409, detail=f"Нельзя удалить: используется в ({', '.join(relations)})")
 
@@ -1142,6 +1149,10 @@ async def delete_product(product_id: int, db: AsyncSession = Depends(get_db)):
         # Delete the techcards themselves
         await db.execute(delete(Techcard).where(Techcard.id.in_(list(tc_ids_to_delete))))
 
+    # Состав этого продукта как владельца (#147) — нормативная часть карточки,
+    # удаляется вместе с продуктом (FK product_id каскадит на уровне БД).
+    await db.execute(delete(ProductComposition).where(ProductComposition.product_id == product_id))
+
     # Remove this product from other products' aliases
     all_products = (await db.execute(select(Product))).scalars().all()
     for p in all_products:
@@ -1150,6 +1161,125 @@ async def delete_product(product_id: int, db: AsyncSession = Depends(get_db)):
 
     await db.delete(item)
     await db.flush()
+
+
+# ─── Состав ГП (#147): нормативные компоненты продукта ─────────────────────
+# Связь «компонент (сырьё type=component) + количество», 1–2 компонента,
+# по образцу BoM. Норматив/справочник — без факта и остатков (ADR-0001).
+# Права (спека #145): чтение — все роли раздела /references, запись — editReferences.
+
+class CompositionItemIn(BaseModel):
+    component_product_id: int
+    quantity: float = Field(gt=0, description="Количество компонента на единицу продукта")
+    unit: str | None = Field(default=None, max_length=50, description="Единица измерения; по умолчанию — единица компонента")
+
+
+class CompositionReplaceIn(BaseModel):
+    items: list[CompositionItemIn] = Field(default_factory=list, max_length=2)
+
+
+class CompositionItemOut(BaseModel):
+    component_product_id: int
+    sku: str
+    name: str
+    is_active: bool
+    quantity: float
+    unit: str
+
+
+class CompositionOut(BaseModel):
+    items: list[CompositionItemOut]
+
+
+async def _load_composition(db: AsyncSession, product_id: int) -> list[CompositionItemOut]:
+    rows = (
+        await db.execute(
+            select(ProductComposition)
+            .options(selectinload(ProductComposition.component))
+            .where(ProductComposition.product_id == product_id)
+            .order_by(ProductComposition.id)
+        )
+    ).scalars().all()
+    return [
+        CompositionItemOut(
+            component_product_id=row.component_product_id,
+            sku=row.component.sku,
+            name=row.component.name,
+            is_active=row.component.is_active,
+            quantity=float(row.quantity),
+            unit=row.unit,
+        )
+        for row in rows
+    ]
+
+
+@router.get(
+    "/{product_id}/composition",
+    response_model=CompositionOut,
+    dependencies=[Depends(require_role(list(REFERENCES_READER_ROLES)))],
+)
+async def get_product_composition(
+    product_id: int,
+    db: AsyncSession = Depends(get_db),
+) -> CompositionOut:
+    product = await db.get(Product, product_id)
+    if product is None:
+        raise HTTPException(status_code=404, detail="Product not found")
+    return CompositionOut(items=await _load_composition(db, product_id))
+
+
+@router.put(
+    "/{product_id}/composition",
+    response_model=CompositionOut,
+    dependencies=[Depends(require_role(list(REFERENCES_WRITER_ROLES)))],
+)
+async def replace_product_composition(
+    product_id: int,
+    payload: CompositionReplaceIn,
+    db: AsyncSession = Depends(get_db),
+) -> CompositionOut:
+    """Заменить состав продукта целиком (нормативная связь, #147)."""
+    product = await db.get(Product, product_id)
+    if product is None:
+        raise HTTPException(status_code=404, detail="Product not found")
+
+    items = payload.items
+    components_by_id: dict[int, Product] = {}
+    component_ids = [item.component_product_id for item in items]
+    if component_ids:
+        if len(set(component_ids)) != len(component_ids):
+            raise HTTPException(status_code=422, detail="Duplicate component in composition")
+        components = (
+            await db.execute(select(Product).where(Product.id.in_(component_ids)))
+        ).scalars().all()
+        components_by_id = {c.id: c for c in components}
+        for item in items:
+            if item.component_product_id == product_id:
+                raise HTTPException(status_code=422, detail="Product cannot be its own component")
+            component = components_by_id.get(item.component_product_id)
+            if component is None:
+                raise HTTPException(
+                    status_code=422,
+                    detail=f"Component {item.component_product_id} not found",
+                )
+            if component.type != ProductType.component:
+                raise HTTPException(
+                    status_code=422,
+                    detail=f"Product {component.sku} must be raw material (type=component)",
+                )
+
+    await db.execute(delete(ProductComposition).where(ProductComposition.product_id == product_id))
+    for item in items:
+        component = components_by_id[item.component_product_id]
+        db.add(ProductComposition(
+            product_id=product_id,
+            component_product_id=item.component_product_id,
+            quantity=item.quantity,
+            unit=item.unit or component.unit,
+        ))
+    await db.flush()
+
+    return CompositionOut(items=await _load_composition(db, product_id))
 
 
 @router.post("/{product_id}/photo", response_model=ProductOut)

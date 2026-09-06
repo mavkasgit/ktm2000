@@ -2,7 +2,7 @@ import enum
 import re
 from typing import Any
 
-from sqlalchemy import Boolean, Enum, Float, Integer, String, text, BigInteger, Identity, ARRAY, ForeignKey, CheckConstraint, Index
+from sqlalchemy import Boolean, Enum, Float, Integer, String, text, BigInteger, Identity, ARRAY, ForeignKey, CheckConstraint, Index, Numeric, UniqueConstraint
 from sqlalchemy.dialects.postgresql import JSONB
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 from sqlalchemy.orm.attributes import instance_state
@@ -326,6 +326,14 @@ class Product(Base):
         secondary="product_processing_flags",
         back_populates="products",
     )
+    # Состав ГП (#147): нормативные компоненты этого продукта.
+    composition: Mapped[list["ProductComposition"]] = relationship(
+        "ProductComposition",
+        back_populates="product",
+        cascade="all, delete-orphan",
+        foreign_keys="ProductComposition.product_id",
+        order_by="ProductComposition.id",
+    )
 
 
 class ProductLength(Base):
@@ -371,3 +379,33 @@ class ProductProcessingFlag(Base):
 
     product_id: Mapped[int] = mapped_column(BigInteger, ForeignKey("products.id"), primary_key=True)
     flag_id: Mapped[int] = mapped_column(BigInteger, ForeignKey("processing_flags.id"), primary_key=True)
+
+
+class ProductComposition(Base):
+    """Состав ГП (#147): нормативная связь «продукт → компонент + количество».
+
+    По образцу BoM (component_id + qty + unit), без факта и остатков.
+    Компонент — только сырьё (``type=component``), 1–2 компонента на продукт:
+    лимит держит триггер БД (миграция 053), валидация — на products API.
+    """
+
+    __tablename__ = "product_compositions"
+    __table_args__ = (
+        CheckConstraint("quantity > 0", name="ck_product_compositions_quantity_positive"),
+        UniqueConstraint("product_id", "component_product_id", name="uq_product_compositions_component"),
+    )
+
+    id: Mapped[int] = mapped_column(BigInteger, Identity(always=True), primary_key=True)
+    product_id: Mapped[int] = mapped_column(
+        BigInteger, ForeignKey("products.id", ondelete="CASCADE"), nullable=False, index=True
+    )
+    component_product_id: Mapped[int] = mapped_column(
+        BigInteger, ForeignKey("products.id"), nullable=False, index=True
+    )
+    quantity: Mapped[float] = mapped_column(Numeric(14, 3), nullable=False)
+    unit: Mapped[str] = mapped_column(String(50), nullable=False, server_default=text("'pcs'"), default="pcs")
+
+    product: Mapped["Product"] = relationship(
+        "Product", back_populates="composition", foreign_keys=[product_id]
+    )
+    component: Mapped["Product"] = relationship("Product", foreign_keys=[component_product_id])

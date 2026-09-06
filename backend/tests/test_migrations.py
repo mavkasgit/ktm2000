@@ -656,3 +656,146 @@ async def test_migration_048_product_hanger_mode_backfill():
         async with admin_engine.connect() as conn:
             await conn.execute(text(f'DROP DATABASE IF EXISTS "{db_name}" WITH (FORCE)'))
         await admin_engine.dispose()
+
+
+@pytest.mark.asyncio
+async def test_migration_053_product_composition_schema():
+    """#147: таблица состава ГП — констрейнты и триггер-инварианты.
+
+    Покрывает: (1) таблица product_compositions с CHECK quantity > 0 и
+    UNIQUE (product_id, component_product_id); (2) BEFORE-триггер
+    fn_check_product_composition_invariants: компонент — только сырьё
+    (type=component), самоссылка запрещена, третья строка владельца
+    (INSERT) и перенос строки владельцу, у которого уже два компонента
+    (UPDATE product_id), отклоняются; (3) unique отвергает дубликат
+    компонента; (4) CHECK отвергает quantity = 0; (5) FK product_id
+    каскадит удаление владельца; (6) повторный прогон 053 безопасен.
+    """
+    db_name = f"ktm_mig_{uuid.uuid4().hex[:10]}"
+    admin_url = _test_db_url().rsplit("/", 1)[0] + "/postgres"
+    target_url = _test_db_url().rsplit("/", 1)[0] + f"/{db_name}"
+
+    admin_engine = create_async_engine(admin_url, isolation_level="AUTOCOMMIT")
+    async with admin_engine.connect() as conn:
+        await conn.execute(text(f'CREATE DATABASE "{db_name}"'))
+    await admin_engine.dispose()
+
+    env = {**os.environ, "DATABASE_URL": target_url}
+
+    def _run(*args: str) -> None:
+        result = subprocess.run(
+            ["alembic", *args],
+            cwd=BACKEND_DIR,
+            env=env,
+            capture_output=True,
+            text=True,
+            check=False,
+        )
+        assert result.returncode == 0, result.stderr or result.stdout
+
+    engine = create_async_engine(target_url)
+    try:
+        _run("upgrade", "head")
+
+        # Фикстуры: два владельца ГП + три компонента.
+        async with engine.begin() as conn:
+            await conn.execute(text(
+                "INSERT INTO products (sku, name, type, unit, is_active) VALUES "
+                "('MIG053-FG', 'Готовый профиль', 'finished_good', 'pcs', true), "
+                "('MIG053-FG2', 'Второй профиль', 'finished_good', 'pcs', true), "
+                "('MIG053-C1', 'Сырьё 1', 'component', 'm', true), "
+                "('MIG053-C2', 'Сырьё 2', 'component', 'pcs', true), "
+                "('MIG053-C3', 'Сырьё 3', 'component', 'pcs', true)"
+            ))
+
+        async with engine.connect() as conn:
+            rows = (await conn.execute(text(
+                "SELECT sku, id FROM products WHERE sku LIKE 'MIG053-%'"
+            ))).all()
+        ids = {r.sku: r.id for r in rows}
+        fg, fg2 = ids["MIG053-FG"], ids["MIG053-FG2"]
+        c1, c2, c3 = ids["MIG053-C1"], ids["MIG053-C2"], ids["MIG053-C3"]
+
+        async def _exec(sql: str, **params):
+            async with engine.begin() as conn:
+                await conn.execute(text(sql), params)
+
+        # Два компонента на владельца — разрешено.
+        await _exec(
+            "INSERT INTO product_compositions (product_id, component_product_id, quantity) "
+            "VALUES (:pid, :cid, 2), (:pid, :cid2, 1)",
+            pid=fg, cid=c1, cid2=c2,
+        )
+
+        # Компонент — только сырьё: finished_good компонентом быть не может.
+        with pytest.raises(Exception, match="type=component"):
+            await _exec(
+                "INSERT INTO product_compositions (product_id, component_product_id, quantity) "
+                "VALUES (:pid, :cid, 1)",
+                pid=fg2, cid=fg,
+            )
+
+        # Самоссылка запрещена.
+        with pytest.raises(Exception, match="own component"):
+            await _exec(
+                "INSERT INTO product_compositions (product_id, component_product_id, quantity) "
+                "VALUES (:pid, :cid, 1)",
+                pid=fg, cid=fg,
+            )
+
+        # Третий компонент — триггер check_violation.
+        with pytest.raises(Exception, match="at most 2 components"):
+            await _exec(
+                "INSERT INTO product_compositions (product_id, component_product_id, quantity) "
+                "VALUES (:pid, :cid, 1)",
+                pid=fg, cid=c3,
+            )
+
+        # UPDATE product_id не переводит строку владельцу, у которого уже 2.
+        await _exec(
+            "INSERT INTO product_compositions (product_id, component_product_id, quantity) "
+            "VALUES (:pid, :cid, 1)",
+            pid=fg2, cid=c3,
+        )
+        with pytest.raises(Exception, match="at most 2 components"):
+            await _exec(
+                "UPDATE product_compositions SET product_id = :target "
+                "WHERE product_id = :src AND component_product_id = :cid",
+                target=fg, src=fg2, cid=c3,
+            )
+
+        # Дубликат компонента в составе одного владельца — unique
+        # (у fg2 один компонент, триггер пропускает, unique отклоняет).
+        with pytest.raises(Exception, match="uq_product_compositions_component"):
+            await _exec(
+                "INSERT INTO product_compositions (product_id, component_product_id, quantity) "
+                "VALUES (:pid, :cid, 1)",
+                pid=fg2, cid=c3,
+            )
+
+        # quantity = 0 — CHECK.
+        with pytest.raises(Exception, match="ck_product_compositions_quantity_positive"):
+            await _exec(
+                "INSERT INTO product_compositions (product_id, component_product_id, quantity) "
+                "VALUES (:pid, :cid, 0)",
+                pid=c1, cid=c3,
+            )
+
+        # Каскад: удаление владельца уносит его строки состава.
+        await _exec("DELETE FROM products WHERE id = :pid", pid=fg)
+        async with engine.connect() as conn:
+            left = (await conn.execute(text(
+                "SELECT count(*) FROM product_compositions WHERE product_id = :pid"
+            ), {"pid": fg})).scalar()
+        assert left == 0
+
+        # 6. Повторный прогон 053 безопасен (конвенция 052, проверка как в 048):
+        # stamp назад + upgrade head не спотыкается о create_table.
+        _run("stamp", "052_idempotency_backstops")
+        _run("upgrade", "head")
+    finally:
+        await engine.dispose()
+        admin_engine = create_async_engine(admin_url, isolation_level="AUTOCOMMIT")
+        async with admin_engine.connect() as conn:
+            await conn.execute(text(f'DROP DATABASE IF EXISTS "{db_name}" WITH (FORCE)'))
+        await admin_engine.dispose()

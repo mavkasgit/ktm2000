@@ -43,6 +43,17 @@ TRANSFER_WRITER_ROLES: frozenset[UserRole] = frozenset(
     WRITER_ROLES | {UserRole.transporter}
 )
 
+# Справочники /references (спека #145) — зеркала frontend/src/features/auth/policies.ts.
+# READER: «просмотр — все роли с разделом /references» (admin, planner,
+# section_manager, operator; viewer/transporter раздела не имеют).
+# WRITER: «правка — POLICIES.editReferences» (admin, planner, section_manager).
+REFERENCES_READER_ROLES: frozenset[UserRole] = frozenset(
+    {UserRole.admin, UserRole.planner, UserRole.section_manager, UserRole.operator}
+)
+REFERENCES_WRITER_ROLES: frozenset[UserRole] = frozenset(
+    {UserRole.admin, UserRole.planner, UserRole.section_manager}
+)
+
 
 def require_role(allowed_roles: Sequence[UserRole]) -> Callable:
     """Create a FastAPI dependency that checks the current user has one of the allowed roles."""
