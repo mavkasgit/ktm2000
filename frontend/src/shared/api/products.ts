@@ -82,7 +82,6 @@ export type CreateProductInput = {
   cross_section?: string | null;
   source?: string | null;
   is_catalog_item?: boolean;
-  is_paired_profile?: boolean;
   skip_shot_blast?: boolean;
   dimension_state?: DimensionState;
   primary_length_mm?: number | null;
@@ -201,6 +200,59 @@ export async function patchProduct(productId: number, payload: PatchProductInput
 
 export async function deleteProduct(productId: number) {
   await apiClient.delete(`/products/${productId}`);
+}
+
+/** Пара сырьевых артикулов (ADR-0023, #146): A+B, ручная N по длинам пересечения. */
+export type ProductPairPartner = {
+  id: number;
+  sku: string;
+  name: string;
+  is_paired_profile: boolean;
+};
+
+export type ProductPair = {
+  id: number;
+  product_a_id: number;
+  product_b_id: number;
+  partner: ProductPairPartner;
+  /** Длины пары — пересечение длин A и B, по возрастанию. */
+  lengths: number[];
+  /** Ключ — длина в мм ("2500"); auto считается сервером, вводится только manual. */
+  quantity_per_hanger: Record<string, HangerQuantityValue>;
+};
+
+export type PairHangerManual = { manual: number | null };
+
+export type CreateProductPairInput = {
+  partner_product_id: number;
+  quantity_per_hanger?: Record<string, PairHangerManual>;
+};
+
+export type PatchProductPairInput = {
+  quantity_per_hanger: Record<string, PairHangerManual>;
+};
+
+export async function listProductPairs(productId: number) {
+  const { data } = await apiClient.get<ProductPair[]>(`/products/${productId}/pairs`);
+  return data;
+}
+
+export async function createProductPair(productId: number, payload: CreateProductPairInput) {
+  const { data } = await apiClient.post<ProductPair>(`/products/${productId}/pairs`, payload);
+  return data;
+}
+
+export async function patchProductPair(
+  productId: number,
+  pairId: number,
+  payload: PatchProductPairInput,
+) {
+  const { data } = await apiClient.patch<ProductPair>(`/products/${productId}/pairs/${pairId}`, payload);
+  return data;
+}
+
+export async function deleteProductPair(productId: number, pairId: number) {
+  await apiClient.delete(`/products/${productId}/pairs/${pairId}`);
 }
 
 export async function uploadProductPhoto(productId: number, file: File, kind: "full" | "thumb" = "full") {

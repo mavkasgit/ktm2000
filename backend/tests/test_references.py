@@ -2,7 +2,7 @@ import pytest
 from sqlalchemy.exc import IntegrityError
 
 from app.models.techcard import Techcard, TechcardLine
-from app.models.product import Product, ProductType
+from app.models.product import Product, ProductPair, ProductType
 from app.models.route import ProductionRoute, RouteStage, RouteOperation
 from app.models.section import Section
 from app.models.spg import StorageProductionGroup
@@ -186,19 +186,21 @@ async def test_create_patch_section_with_spg(client, session) -> None:
 
 @pytest.mark.asyncio
 async def test_search_products_includes_is_paired_profile(client, session) -> None:
-    # 1. Create a product with is_paired_profile=True
-    prod1 = Product(sku="SKU-PAIR-Y", name="Paired Prod Y", type=ProductType.finished_good, unit="pcs", is_paired_profile=True)
-    # 2. Create a product with is_paired_profile=False
-    prod2 = Product(sku="SKU-PAIR-N", name="Non-paired Prod N", type=ProductType.finished_good, unit="pcs", is_paired_profile=False)
-    session.add_all([prod1, prod2])
+    # 1. Create a pair — флаг выведенный (ADR-0023, #146): есть пара → True.
+    prod1 = Product(sku="SKU-PAIR-Y", name="Paired Prod Y", type=ProductType.finished_good, unit="pcs")
+    prod2 = Product(sku="SKU-PAIR-P", name="Paired Partner", type=ProductType.finished_good, unit="pcs")
+    prod3 = Product(sku="SKU-PAIR-N", name="Non-paired Prod N", type=ProductType.finished_good, unit="pcs")
+    session.add_all([prod1, prod2, prod3])
+    await session.flush()
+    session.add(ProductPair(product_a_id=min(prod1.id, prod2.id), product_b_id=max(prod1.id, prod2.id)))
     await session.commit()
 
-    # 3. Call search API
+    # 2. Call search API
     resp = await client.get("/api/products/search/products", params={"q": "SKU-PAIR"})
     assert resp.status_code == 200
     data = resp.json()
-    
-    # 4. Verify fields
+
+    # 3. Verify fields
     item1 = next(item for item in data if item["sku"] == "SKU-PAIR-Y")
     item2 = next(item for item in data if item["sku"] == "SKU-PAIR-N")
     assert item1["is_paired_profile"] is True

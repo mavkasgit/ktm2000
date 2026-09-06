@@ -12,7 +12,7 @@ from sqlalchemy.orm import selectinload
 from app.core.config import settings
 from app.core.database import get_db
 from app.api.deps import REFERENCES_READER_ROLES, REFERENCES_WRITER_ROLES, require_role
-from app.models.product import Product, ProductType, DimensionState, ProductLength, ProcessingFlag, ProductProcessingFlag, ProductComposition, _length_key
+from app.models.product import Product, ProductType, DimensionState, ProductLength, ProcessingFlag, ProductProcessingFlag, ProductComposition, ProductPair, _length_key
 from app.models.dimension import ProductDimension, DimensionType
 from app.models.techcard import Techcard, TechcardLine
 from app.models.production_plan import PlanPosition
@@ -130,7 +130,6 @@ class ProductIn(BaseModel):
     photo_full: str | None = None
     source: str | None = None
     is_catalog_item: bool = False
-    is_paired_profile: bool = False
     skip_shot_blast: bool = False
     dimension_state: DimensionState = DimensionState.length
     primary_length_mm: float | None = None
@@ -163,7 +162,6 @@ class ProductPatch(BaseModel):
     photo_full: str | None = None
     source: str | None = None
     is_catalog_item: bool | None = None
-    is_paired_profile: bool | None = None
     skip_shot_blast: bool | None = None
     dimension_state: DimensionState | None = None
     primary_length_mm: float | None = None
@@ -197,6 +195,7 @@ class ProductOut(BaseModel):
     photo_full: str | None
     source: str | None
     is_catalog_item: bool
+    # Выведенный флаг (ADR-0023, #146): у артикула есть пары в product_pairs.
     is_paired_profile: bool
     skip_shot_blast: bool
     dimension_state: DimensionState
@@ -935,7 +934,7 @@ async def create_product(
             response.headers["X-Activated-Aliases"] = encoded
 
     await db.flush()
-    await db.refresh(item, attribute_names=["lengths", "processing_flags"])
+    await db.refresh(item, attribute_names=["lengths", "processing_flags", "is_paired_profile"])
     return _to_product_out(item)
 
 
@@ -944,6 +943,15 @@ async def list_processing_flags(db: AsyncSession = Depends(get_db)) -> list[Proc
     stmt = select(ProcessingFlag).where(ProcessingFlag.is_active == True).order_by(ProcessingFlag.code)
     items = (await db.execute(stmt)).scalars().all()
     return [ProcessingFlagOut(code=f.code, name=f.name, section_scope=f.section_scope) for f in items]
+
+
+async def _product_pair_count(db: AsyncSession, product_id: int) -> int:
+    """Сколько пар артикула в product_pairs (#146) — для целостности удаления/деактивации."""
+    return await db.scalar(
+        select(func.count()).select_from(ProductPair).where(
+            (ProductPair.product_a_id == product_id) | (ProductPair.product_b_id == product_id)
+        )
+    ) or 0
 
 
 async def _check_product_techcards(db: AsyncSession, product_id: int) -> tuple[bool, bool]:
@@ -997,6 +1005,16 @@ async def patch_product(
     item = await db.get(Product, product_id)
     if item is None:
         raise HTTPException(status_code=404, detail="Product not found")
+
+    # Целостность пар (ADR-0023, #146): артикул в паре нельзя деактивировать
+    # до разрыва пары — явная ошибка, не каскад.
+    if payload.is_active is False and item.is_active:
+        pair_count = await _product_pair_count(db, product_id)
+        if pair_count:
+            raise HTTPException(
+                status_code=409,
+                detail="Нельзя деактивировать: артикул состоит в паре (разорвите пару в карточке артикула)",
+            )
 
     old_aliases = item.aliases if payload.aliases is not None else None
 
@@ -1084,7 +1102,7 @@ async def patch_product(
             response.headers["X-Activated-Aliases"] = encoded
         await db.flush()
 
-    await db.refresh(item, attribute_names=["lengths", "processing_flags"])
+    await db.refresh(item, attribute_names=["lengths", "processing_flags", "is_paired_profile"])
     has_std, has_paired = await _check_product_techcards(db, product_id)
     return _to_product_out(item, has_std, has_paired, sheet_dims)
 
@@ -1126,6 +1144,12 @@ async def delete_product(product_id: int, db: AsyncSession = Depends(get_db)):
     )
     if composition_usage_count:
         relations.append("состав ГП")
+
+    # Целостность пар (ADR-0023, #146): артикул в паре нельзя удалить —
+    # явная ошибка, не каскад; пара разрывается отдельно из карточки артикула.
+    pair_count = await _product_pair_count(db, product_id)
+    if pair_count:
+        relations.append("пары артикула")
 
     if relations:
         raise HTTPException(status_code=409, detail=f"Нельзя удалить: используется в ({', '.join(relations)})")
@@ -1312,7 +1336,7 @@ async def upload_product_photo(
         item.photo_thumb = str(thumb_path.relative_to(storage_dir.parent))
 
     await db.flush()
-    await db.refresh(item, attribute_names=["lengths", "processing_flags"])
+    await db.refresh(item, attribute_names=["lengths", "processing_flags", "is_paired_profile"])
     return _to_product_out(item)
 
 

@@ -348,7 +348,6 @@ async def _create_product_from_row(db: AsyncSession, row: ParsedCatalogRow) -> N
         unit="шт",
         is_active=True,
         notes=fields.get("notes"),
-        is_paired_profile=bool(fields.get("is_paired_profile")),
         aliases=list(fields.get("aliases") or []),
         source="excel_catalog_import",
     )
@@ -403,7 +402,9 @@ async def _update_product_from_row(db: AsyncSession, product: Product, row: Pars
     if not changes:
         return False
 
-    for key in ("name", "notes", "is_paired_profile"):
+    # is_paired_profile не пишется: флаг выведенный (ADR-0023, #146) —
+    # пары заводятся из карточки артикула (pairs-API), не из Excel-импорта.
+    for key in ("name", "notes"):
         if key in changes:
             setattr(product, key, changes[key])
     if "type" in changes:

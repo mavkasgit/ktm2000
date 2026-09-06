@@ -31,15 +31,16 @@ def _xlsx_bytes(rows: list[list], headers: list[str] | None = None) -> bytes:
 
 def _row(**kwargs) -> list:
     """Строка файла по именованным полям (остальные колонки пустые)."""
+    # «Парный профиль» удалён из шаблона: флаг выведенный (ADR-0023, #146).
     values: dict[str, object] = {field: "" for field in (
         "sku", "name", "notes", "lengths", "perimeter", "mount_width",
-        "quantities", "paired", "skip_shot", "laminated", "aliases",
+        "quantities", "skip_shot", "laminated", "aliases",
     )}
     values.update(kwargs)
     return [
         values["sku"], values["name"], values["notes"], values["lengths"],
         values["perimeter"], values["mount_width"], values["quantities"],
-        values["paired"], values["skip_shot"], values["laminated"], values["aliases"],
+        values["skip_shot"], values["laminated"], values["aliases"],
     ]
 
 
@@ -148,7 +149,7 @@ async def test_preview_excel_row_errors_reported_and_rows_skipped(
         _row(sku="BAD-MOUNT", mount_width="-5"),
         _row(sku="BAD-COUNT", lengths="2780, 3000", quantities="72"),
         _row(sku="BAD-QTY", lengths="2780", quantities="12,5"),
-        _row(sku="BAD-BOOL", paired="может быть"),
+        _row(sku="BAD-BOOL", skip_shot="может быть"),
         _row(sku="OK", perimeter="10"),
     ])
     resp = await _upload(client, PREVIEW_URL, content)
@@ -268,7 +269,6 @@ async def test_apply_excel_creates_component_active(
             perimeter="64,2",
             mount_width="19,35",
             quantities="72, 65",
-            paired="да",
             skip_shot="нет",
             laminated="да",
             aliases="ЭВ-1; ЭВ-2",
@@ -286,7 +286,6 @@ async def test_apply_excel_creates_component_active(
     assert product.type == ProductType.component
     assert product.is_active is True
     assert product.name == "Профиль 900"
-    assert product.is_paired_profile is True
     assert product.perimeter_mm == pytest.approx(64.2)
     assert product.mount_width_mm == pytest.approx(19.35)
     assert await _product_lengths(session, product.id) == [2780.0, 3000.0]

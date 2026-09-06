@@ -8,6 +8,7 @@ import { FullscreenPhoto } from "./FullscreenPhoto";
 import { ImageUploadModal } from "./ImageUploadModal";
 import { ProductSearchMulti } from "./ProductSearchMulti";
 import { ProductDimensionsSection, type ProductDimensionsSectionHandle } from "./ProductDimensionsSection";
+import { ProductPairsSection } from "./ProductPairsSection";
 import { getPhotoUrl } from "./getPhotoUrl";
 import { uploadProductPhoto, getErrorMessage } from "@/shared/api/products";
 import { listDimensionTypes } from "../api";
@@ -112,7 +113,6 @@ function buildInitialForm(product: Product | null, mode: DialogMode): CreateProd
     quantity_per_hanger: manualDictFromProduct(product),
     hanger_mode: product?.hanger_mode ?? "auto",
     cross_section: product?.cross_section ?? null,
-    is_paired_profile: product?.is_paired_profile ?? false,
     skip_shot_blast: product?.skip_shot_blast ?? false,
     dimension_state: product?.dimension_state ?? "length",
     aliases: product?.aliases ?? [],
@@ -152,7 +152,6 @@ function getChanges(form: CreateProductInput, product: Product | null, isCreate:
     });
   }
   if (!eq(form.cross_section, product.cross_section)) changes.push({ field: "cross_section", label: "Сечение", from: product.cross_section ?? "—", to: form.cross_section ?? "—" });
-  if (!eq(form.is_paired_profile, product.is_paired_profile)) changes.push({ field: "is_paired_profile", label: "Парный профиль", from: product.is_paired_profile ? "Да" : "Нет", to: form.is_paired_profile ? "Да" : "Нет" });
   if (!eq(form.skip_shot_blast, product.skip_shot_blast)) changes.push({ field: "skip_shot_blast", label: "Не дробеструится", from: product.skip_shot_blast ? "Да" : "Нет", to: form.skip_shot_blast ? "Да" : "Нет" });
   if (!eq(form.aliases ?? [], product.aliases ?? [])) changes.push({ field: "aliases", label: "Эквиваленты", from: (product.aliases ?? []).join(", ") || "—", to: (form.aliases ?? []).join(", ") || "—" });
   if (!eq(formLengths, productLens)) changes.push({ field: "lengths_mm", label: "Длины", from: productLens.join(", ") || "—", to: formLengths.join(", ") || "—" });
@@ -408,7 +407,6 @@ export const CatalogForm = forwardRef<CatalogFormRef, {
       patch.quantity_per_hanger = buildManualPayloadDict(payloadLengths, merged);
     }
     if (!eq(form.cross_section, product.cross_section)) patch.cross_section = form.cross_section;
-    if (!eq(form.is_paired_profile, product.is_paired_profile)) patch.is_paired_profile = form.is_paired_profile;
     if (!eq(form.skip_shot_blast, product.skip_shot_blast)) patch.skip_shot_blast = form.skip_shot_blast;
     if (!eq(form.aliases ?? [], product.aliases ?? [])) patch.aliases = form.aliases;
     if (!eq(formLengths, productLens)) patch.lengths_mm = formLengths;
@@ -629,16 +627,19 @@ export const CatalogForm = forwardRef<CatalogFormRef, {
               />
             </div>
             <div className="space-y-2 self-start pt-[22px]">
-              <div className="flex items-center gap-2">
-                <Checkbox
-                  id="is_paired_profile"
-                  checked={form.is_paired_profile ?? false}
-                  onCheckedChange={(checked) => update("is_paired_profile", checked === true)}
-                  disabled={readOnly}
-                />
-                <label htmlFor="is_paired_profile" className="text-sm font-medium leading-none cursor-pointer">
-                  Парный профиль
-                </label>
+              {/* Флаг выведенный (ADR-0023, #146): есть пары в секции «Пары» ниже. */}
+              <div className="flex items-center gap-2 h-5">
+                <span className="text-sm font-medium leading-none">Парный профиль:</span>
+                <span
+                  className={cn(
+                    "text-xs px-1.5 py-0.5 rounded",
+                    (product?.is_paired_profile ?? false)
+                      ? "bg-purple-100 text-purple-800 font-medium"
+                      : "bg-muted text-muted-foreground",
+                  )}
+                >
+                  {product?.is_paired_profile ? "Да" : isCreate ? "— нет" : "Нет"}
+                </span>
               </div>
               <div className="flex items-center gap-2">
                 <Checkbox
@@ -952,6 +953,15 @@ export const CatalogForm = forwardRef<CatalogFormRef, {
               </div>
             )}
           </div>
+
+          {!isCreate && product?.id != null && (
+            <ProductPairsSection productId={product.id} sku={product.sku} readOnly={readOnly} />
+          )}
+          {isCreate && (
+            <p className="text-xs text-muted-foreground">
+              Пары добавляются после создания артикула — в секции «Пары».
+            </p>
+          )}
 
           <div className="space-y-1">
             <label className="text-sm font-medium">Примечания</label>

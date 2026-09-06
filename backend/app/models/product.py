@@ -2,9 +2,12 @@ import enum
 import re
 from typing import Any
 
-from sqlalchemy import Boolean, Enum, Float, Integer, String, text, BigInteger, Identity, ARRAY, ForeignKey, CheckConstraint, Index, Numeric, UniqueConstraint
+from sqlalchemy import (
+    Boolean, Enum, Float, Integer, String, text, BigInteger, Identity, ARRAY,
+    ForeignKey, CheckConstraint, Index, Numeric, UniqueConstraint, select, or_,
+)
 from sqlalchemy.dialects.postgresql import JSONB
-from sqlalchemy.orm import Mapped, mapped_column, relationship
+from sqlalchemy.orm import Mapped, column_property, declared_attr, mapped_column, relationship
 from sqlalchemy.orm.attributes import instance_state
 
 from app.models.base import Base
@@ -52,6 +55,31 @@ class DimensionState(str, enum.Enum):
     volume = "volume"
 
 
+class ProductPair(Base):
+    """Пара сырьевых артикулов (ADR-0023, #146): связь «A + B, ручная N по длинам».
+
+    Канонический порядок ``product_a_id < product_b_id`` — уникальность
+    неупорядоченной пары держит unique-констрейнт, симметричное редактирование
+    без «владельца» записи. Ручная N — словарь по длинам (ключ ``_length_key``),
+    зеркально одиночным нормам на ``Product.attributes.quantity_per_hanger``;
+    ``auto`` не хранится — считается движком живьём. Длины пары = пересечение
+    длин A и B (фильтруется на чтение); вне пересечения пара не существует.
+    """
+
+    __tablename__ = "product_pairs"
+    __table_args__ = (
+        CheckConstraint("product_a_id < product_b_id", name="ck_product_pairs_canonical_order"),
+        UniqueConstraint("product_a_id", "product_b_id", name="uq_product_pairs_unordered"),
+    )
+
+    id: Mapped[int] = mapped_column(BigInteger, Identity(always=True), primary_key=True)
+    product_a_id: Mapped[int] = mapped_column(BigInteger, ForeignKey("products.id"), nullable=False, index=True)
+    product_b_id: Mapped[int] = mapped_column(BigInteger, ForeignKey("products.id"), nullable=False, index=True)
+    quantity_per_hanger: Mapped[dict[str, Any]] = mapped_column(
+        JSONB, nullable=False, server_default=text("'{}'::jsonb"), default=dict
+    )
+
+
 class Product(Base):
     __tablename__ = "products"
 
@@ -73,7 +101,6 @@ class Product(Base):
     photo_full: Mapped[str | None] = mapped_column(String(500), nullable=True)
     source: Mapped[str | None] = mapped_column(String(50), nullable=True, index=True)
     is_catalog_item: Mapped[bool] = mapped_column(Boolean, nullable=False, server_default=text("false"), default=False)
-    is_paired_profile: Mapped[bool] = mapped_column(Boolean, nullable=False, server_default=text("false"), default=False)
     dimension_state: Mapped[DimensionState] = mapped_column(
         Enum(DimensionState, name="product_dimension_state"),
         nullable=False,
@@ -318,6 +345,22 @@ class Product(Base):
 
     # Equivalent SKU aliases
     aliases: Mapped[list[str]] = mapped_column(ARRAY(String), nullable=False, server_default=text("'{}'"), default=list)
+
+    # Флаг выведенный (ADR-0023, #146): у артикула есть пары в product_pairs.
+    # column_property вместо колонки — читается во всех SELECT'ах Product
+    # (фильтры, сортировка, search, route_selection) без ленивой загрузки.
+    @declared_attr
+    def is_paired_profile(cls) -> Any:
+        return column_property(
+            select(ProductPair.id)
+            .where(
+                or_(
+                    ProductPair.product_a_id == cls.id,
+                    ProductPair.product_b_id == cls.id,
+                )
+            )
+            .exists()
+        )
 
     # Relationships
     lengths: Mapped[list["ProductLength"]] = relationship("ProductLength", back_populates="product", cascade="all, delete-orphan")

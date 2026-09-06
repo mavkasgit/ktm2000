@@ -819,6 +819,20 @@ def _product_flag_codes(product: Product) -> set[str]:
     return {f.code for f in product.processing_flags}
 
 
+def _product_is_paired(product: Product) -> bool:
+    """Выведенный флаг пар (ADR-0023, #146) без обращения к лоадеру.
+
+    ``is_paired_profile`` — column_property (EXISTS по product_pairs): у
+    только что созданного (flush без refresh) объекта значения нет, а его
+    чтение в async подняло бы лоадер (MissingGreenlet). Читаем из
+    загруженного состояния; отсутствует → False — новый артикул не может
+    уже состоять в паре.
+    """
+    from sqlalchemy import inspect as sa_inspect
+
+    return bool(sa_inspect(product).dict.get("is_paired_profile", False))
+
+
 def _product_context(product: Product | None) -> dict[str, Any]:
     if product is None:
         return {}
@@ -836,5 +850,5 @@ def _product_context(product: Product | None) -> dict[str, Any]:
         "skip_shot_blast": "skip_shot_blast" in flag_codes,
         "is_laminated": "is_laminated" in flag_codes,
         "is_catalog_item": product.is_catalog_item,
-        "is_paired_profile": product.is_paired_profile,
+        "is_paired_profile": _product_is_paired(product),
     }

@@ -9,6 +9,7 @@ from app.api.health import router as health_router
 from app.api.routes.auth import router as auth_router
 from app.api.routes.sessions import router as sessions_router
 from app.api.routes.products import router as products_router
+from app.api.routes.product_pairs import router as product_pairs_router
 from app.api.routes.dimensions import router as dimensions_router
 from app.api.routes.sections import router as sections_router
 from app.api.routes.techcards import router as techcards_router
@@ -91,6 +92,7 @@ app.include_router(health_router, prefix="/api")
 app.include_router(auth_router, prefix="/api")
 app.include_router(sessions_router, prefix="/api")
 app.include_router(products_router, prefix="/api")
+app.include_router(product_pairs_router, prefix="/api")
 app.include_router(dimensions_router, prefix="/api")
 app.include_router(sections_router, prefix="/api")
 app.include_router(techcards_router, prefix="/api")

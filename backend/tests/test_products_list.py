@@ -4,7 +4,7 @@ from __future__ import annotations
 import pytest
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.models.product import Product, ProductLength, ProcessingFlag, ProductProcessingFlag, ProductType
+from app.models.product import Product, ProductLength, ProcessingFlag, ProductProcessingFlag, ProductPair, ProductType
 
 # Курируемый набор полей сортировки справочника сырья (#76)
 CURATED_SORT_FIELDS = [
@@ -22,17 +22,17 @@ async def _make_product(
     sku: str,
     name: str,
     lengths_mm: list[float] | None = None,
-    is_paired_profile: bool = False,
+    paired_with: "Product | None" = None,
     aliases: list[str] | None = None,
     attributes: dict | None = None,
 ) -> Product:
+    """Артикул; ``paired_with`` — создать пару (флаг выведенный, ADR-0023)."""
     product = Product(
         sku=sku,
         name=name,
         type=ProductType.component,
         unit="pcs",
         is_active=True,
-        is_paired_profile=is_paired_profile,
         aliases=aliases or [],
         attributes=attributes or {},
     )
@@ -40,6 +40,11 @@ async def _make_product(
     await session.flush()
     for length_mm in lengths_mm or []:
         session.add(ProductLength(product_id=product.id, length_mm=length_mm))
+    if paired_with is not None:
+        session.add(ProductPair(
+            product_a_id=min(product.id, paired_with.id),
+            product_b_id=max(product.id, paired_with.id),
+        ))
     await session.flush()
     return product
 
@@ -101,7 +106,8 @@ async def test_products_sort_curated_fields_accepted(client, session: AsyncSessi
 
 @pytest.mark.asyncio
 async def test_products_sort_paired_profile_desc(client, session: AsyncSession) -> None:
-    await _make_product(session, sku="RM-PAIR-A", name="Paired A", is_paired_profile=True)
+    paired_a = await _make_product(session, sku="RM-PARTNER-P", name="Paired A Partner")
+    await _make_product(session, sku="RM-PAIR-A", name="Paired A", paired_with=paired_a)
     await _make_product(session, sku="RM-PAIR-B", name="Plain B")
     await _make_product(session, sku="RM-PAIR-C", name="Plain C")
     await session.commit()

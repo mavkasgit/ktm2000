@@ -23,7 +23,6 @@ TEMPLATE_HEADERS = [
     "Периметр, мм",
     "Габарит, мм",
     "Кол-во на подвесе",
-    "Парный профиль",
     "Не дробеструится",
     "Ламируется",
     "Эквиваленты",
@@ -37,7 +36,8 @@ _HEADER_FIELDS = {
     "периметр, мм": "perimeter_mm",
     "габарит, мм": "mount_width_mm",
     "кол-во на подвесе": "quantities",
-    "парный профиль": "is_paired_profile",
+    # «Парный профиль» не импортируется: флаг выведенный (ADR-0023, #146) —
+    # пары заводятся из карточки артикула (pairs-API); колонка игнорируется.
     "не дробеструится": "skip_shot_blast",
     "ламируется": "is_laminated",
     "эквиваленты": "aliases",
@@ -45,8 +45,8 @@ _HEADER_FIELDS = {
 
 _TEXT_FIELDS = ("name", "notes")
 _NUMBER_FIELDS = ("perimeter_mm", "mount_width_mm")
-_BOOL_FIELDS = ("is_paired_profile", "skip_shot_blast", "is_laminated")
-_BOOL_HEADERS = {"is_paired_profile": "Парный профиль", "skip_shot_blast": "Не дробеструится", "is_laminated": "Ламируется"}
+_BOOL_FIELDS = ("skip_shot_blast", "is_laminated")
+_BOOL_HEADERS = {"skip_shot_blast": "Не дробеструится", "is_laminated": "Ламируется"}
 
 
 @dataclass(slots=True)
@@ -332,9 +332,6 @@ def diff_catalog_row(product: Product, row: ParsedCatalogRow) -> dict[str, Any]:
                 entry["auto"] = prev.get("auto")
         if new_dict != current:
             changes["quantity_per_hanger"] = new_dict
-
-    if fields.get("is_paired_profile") is not None and bool(fields["is_paired_profile"]) != product.is_paired_profile:
-        changes["is_paired_profile"] = fields["is_paired_profile"]
 
     flag_codes = {flag.code for flag in product.processing_flags}
     for key, code in (("skip_shot_blast", "skip_shot_blast"), ("is_laminated", "is_laminated")):

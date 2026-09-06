@@ -50,7 +50,6 @@ async def test_create_paired_techcard_no_auto_line(client, session) -> None:
         type=ProductType.finished_good,
         unit="pcs",
         is_active=True,
-        is_paired_profile=True,
     )
     comp_b = Product(
         sku="TEST-PAIR-B",
@@ -58,7 +57,6 @@ async def test_create_paired_techcard_no_auto_line(client, session) -> None:
         type=ProductType.finished_good,
         unit="pcs",
         is_active=True,
-        is_paired_profile=True,
     )
     session.add_all([comp_a, comp_b])
     await session.commit()

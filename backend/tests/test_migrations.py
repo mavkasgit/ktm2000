@@ -106,6 +106,99 @@ async def test_alembic_upgrade_head_creates_full_schema():
 
 
 @pytest.mark.asyncio
+async def test_migration_054_product_pairs_and_flag_drop():
+    """#146 (ADR-0023): таблица product_pairs, флаг is_paired_profile дропнут (поверх 053).
+
+    Миграция — чистый лист: данных из парных техкарт нет. Проверяем схему
+    после upgrade head: колонки is_paired_profile на products нет, в
+    product_pairs работают канонический порядок и уникальность неупорядоченной
+    пары, ручная N по умолчанию — пустой словарь.
+    """
+    db_name = f"ktm_mig_{uuid.uuid4().hex[:10]}"
+    admin_url = _test_db_url().rsplit("/", 1)[0] + "/postgres"
+    target_url = _test_db_url().rsplit("/", 1)[0] + f"/{db_name}"
+
+    admin_engine = create_async_engine(admin_url, isolation_level="AUTOCOMMIT")
+    async with admin_engine.connect() as conn:
+        await conn.execute(text(f'CREATE DATABASE "{db_name}"'))
+    await admin_engine.dispose()
+
+    env = {**os.environ, "DATABASE_URL": target_url}
+    try:
+        result = subprocess.run(
+            ["alembic", "upgrade", "head"],
+            cwd=BACKEND_DIR,
+            env=env,
+            capture_output=True,
+            text=True,
+            check=False,
+        )
+        assert result.returncode == 0, result.stderr or result.stdout
+
+        engine = create_async_engine(target_url)
+        async with engine.begin() as conn:
+            columns = await conn.run_sync(
+                lambda sync_conn: {
+                    c["name"]
+                    for c in inspect(sync_conn).get_columns("products")
+                }
+            )
+            assert "is_paired_profile" not in columns
+
+            a_id, b_id = (
+                await conn.execute(
+                    text(
+                        "INSERT INTO products (sku, name, type, unit, is_active) "
+                        "VALUES ('PAIR-MIG-A', 'A', 'component', 'pcs', true), "
+                        "('PAIR-MIG-B', 'B', 'component', 'pcs', true) "
+                        "RETURNING id"
+                    )
+                )
+            ).scalars().all()
+            pair_id = (
+                await conn.execute(
+                    text(
+                        "INSERT INTO product_pairs (product_a_id, product_b_id) "
+                        "VALUES (:a, :b) RETURNING id"
+                    ),
+                    {"a": min(a_id, b_id), "b": max(a_id, b_id)},
+                )
+            ).scalar_one()
+
+            row = (
+                await conn.execute(
+                    text("SELECT quantity_per_hanger FROM product_pairs WHERE id = :id"),
+                    {"id": pair_id},
+                )
+            ).one()
+            assert row.quantity_per_hanger == {}
+
+        # Обратный (не канонический) порядок и дубликат отклоняются схемой —
+        # каждый в своей транзакции: после IntegrityError транзакция прервана.
+        from sqlalchemy.exc import IntegrityError
+
+        for bad_params in (
+            {"a": max(a_id, b_id), "b": min(a_id, b_id)},
+            {"a": min(a_id, b_id), "b": max(a_id, b_id)},
+        ):
+            async with engine.begin() as conn:
+                with pytest.raises(IntegrityError):
+                    await conn.execute(
+                        text(
+                            "INSERT INTO product_pairs (product_a_id, product_b_id) "
+                            "VALUES (:a, :b)"
+                        ),
+                        bad_params,
+                    )
+        await engine.dispose()
+    finally:
+        admin_engine = create_async_engine(admin_url, isolation_level="AUTOCOMMIT")
+        async with admin_engine.connect() as conn:
+            await conn.execute(text(f'DROP DATABASE IF EXISTS "{db_name}" WITH (FORCE)'))
+        await admin_engine.dispose()
+
+
+@pytest.mark.asyncio
 async def test_migration_032_scalar_quantity_per_hanger_to_per_length():
     """#60: скаляр quantity_per_hanger в attributes → {первая_длина: {auto, manual}}."""
     db_name = f"ktm_mig_{uuid.uuid4().hex[:10]}"
