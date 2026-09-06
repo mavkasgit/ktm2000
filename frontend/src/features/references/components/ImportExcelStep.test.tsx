@@ -6,11 +6,12 @@ describe("ImportExcelStep", () => {
   it("renders the description, the template structure table and the download button", () => {
     render(<ImportExcelStep onFileSelected={vi.fn()} onDownloadTemplate={vi.fn()} />);
 
-    expect(screen.getByText(/Импортируйте справочник сырья из Excel/)).toBeTruthy();
+    expect(screen.getByText(/Импортируйте справочник из Excel/)).toBeTruthy();
     expect(screen.getByText("Структура шаблона")).toBeTruthy();
     expect(screen.getByRole("button", { name: "Скачать шаблон" })).toBeTruthy();
 
-    // Колонки шаблона справочника сырья
+    // Колонки шаблона справочника (#154: состав ГП; «Парный профиль» удалён —
+    // флаг выведенный, ADR-0023)
     for (const col of [
       "Артикул",
       "Наименование",
@@ -18,7 +19,8 @@ describe("ImportExcelStep", () => {
       "Периметр, мм",
       "Габарит, мм",
       "Кол-во на подвесе",
-      "Парный профиль",
+      "Компонент (SKU)",
+      "Количество",
       "Не дробеструится",
       "Ламируется",
       "Эквиваленты",

@@ -1,6 +1,7 @@
 import shutil
 import sqlite3
 import zipfile
+from dataclasses import dataclass
 from io import BytesIO
 from pathlib import Path
 from tempfile import TemporaryDirectory
@@ -8,11 +9,12 @@ from tempfile import TemporaryDirectory
 from fastapi import APIRouter, Depends, File, HTTPException, UploadFile
 from fastapi.responses import Response
 from openpyxl import Workbook
-from sqlalchemy import String, cast, select
+from sqlalchemy import String, cast, delete, select
 from sqlalchemy.dialects.postgresql import ARRAY as pg_ARRAY
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import selectinload
 
+from app.api.deps import REFERENCES_WRITER_ROLES, require_role
 from app.api.routes.products import (
     _enforce_bidirectional_aliases,
     _sync_boolean_flag,
@@ -20,7 +22,7 @@ from app.api.routes.products import (
 )
 from app.core.config import settings
 from app.core.database import get_db
-from app.models.product import Product, ProductLength, ProductType, _length_key
+from app.models.product import Product, ProductComposition, ProductLength, ProductType, _length_key
 from app.services.catalog_excel_import import (
     TEMPLATE_HEADERS,
     ParsedCatalogRow,
@@ -337,14 +339,103 @@ def _row_count_errors(row: ParsedCatalogRow, existing_lengths: list[float] | Non
     ]
 
 
-async def _create_product_from_row(db: AsyncSession, row: ParsedCatalogRow) -> None:
+@dataclass(slots=True)
+class _ImportBatch:
+    """Общий контекст preview/apply: строки файла + загруженные артикулы."""
+
+    rows: list[ParsedCatalogRow]
+    errors: list[dict]
+    products: dict[str, Product]
+    components_by_sku: dict[str, Product]
+    current_composition: dict[int, list[tuple[int, float]]]
+    total_data_rows: int
+
+
+async def _load_composition_map(
+    db: AsyncSession, product_ids: list[int]
+) -> dict[int, list[tuple[int, float]]]:
+    if not product_ids:
+        return {}
+    rows = (
+        await db.execute(
+            select(ProductComposition).where(ProductComposition.product_id.in_(product_ids))
+        )
+    ).scalars().all()
+    result: dict[int, list[tuple[int, float]]] = {}
+    for row in rows:
+        result.setdefault(row.product_id, []).append((row.component_product_id, float(row.quantity)))
+    return result
+
+
+def _composition_plan(row: ParsedCatalogRow, batch: _ImportBatch) -> tuple[list[dict] | None, list[dict]]:
+    """План состава строки для записи и ошибки валидации против справочника.
+
+    ``None`` — колонки состава в строке не заполнены (частичное обновление,
+    состав не трогаем). Ошибки (не найден / не сырьё / сам себе компонент)
+    возвращают пустой план — строка пропускается целиком.
+    """
+    skus = row.fields.get("components")
+    if not skus:
+        return None, []
+    errors: list[dict] = []
+    plan: list[dict] = []
+    for sku, quantity in zip(skus, row.fields.get("component_quantities", [])):
+        if sku == row.sku:
+            errors.append({
+                "row": row.row,
+                "sku": row.sku,
+                "message": f"Компонент {sku} не может быть самим артикулом строки",
+            })
+            continue
+        component = batch.components_by_sku.get(sku)
+        if component is None:
+            errors.append({
+                "row": row.row,
+                "sku": row.sku,
+                "message": f"Компонент {sku} не найден в справочнике",
+            })
+        elif component.type != ProductType.component:
+            errors.append({
+                "row": row.row,
+                "sku": row.sku,
+                "message": f"Компонент {sku} должен быть сырьём (тип «компонент»)",
+            })
+        else:
+            plan.append({"component": component, "quantity": quantity})
+    if errors:
+        return None, errors
+    return plan, []
+
+
+def _composition_changed(plan: list[dict], current: list[tuple[int, float]] | None) -> bool:
+    planned = sorted((item["component"].id, float(item["quantity"])) for item in plan)
+    return planned != sorted(current or [])
+
+
+async def _write_composition(db: AsyncSession, product_id: int, plan: list[dict]) -> None:
+    await db.execute(delete(ProductComposition).where(ProductComposition.product_id == product_id))
+    for item in plan:
+        component: Product = item["component"]
+        db.add(ProductComposition(
+            product_id=product_id,
+            component_product_id=component.id,
+            quantity=item["quantity"],
+            unit=component.unit,
+        ))
+    await db.flush()
+
+
+async def _create_product_from_row(
+    db: AsyncSession, row: ParsedCatalogRow, plan: list[dict] | None
+) -> None:
     fields = row.fields
     lengths = fields.get("lengths_mm") or []
     quantities = fields.get("quantities")
     product = Product(
         sku=row.sku,
         name=fields.get("name") or row.sku,
-        type=ProductType.component,
+        # Состав в строке означает ГП (#154); без состава импорт создаёт сырьё.
+        type=ProductType.finished_good if plan else ProductType.component,
         unit="шт",
         is_active=True,
         notes=fields.get("notes"),
@@ -388,6 +479,8 @@ async def _create_product_from_row(db: AsyncSession, row: ParsedCatalogRow) -> N
 
     for length in lengths:
         db.add(ProductLength(product_id=product.id, length_mm=length))
+    if plan:
+        await _write_composition(db, product.id, plan)
     if fields.get("skip_shot_blast") is not None:
         await _sync_boolean_flag(db, product.id, "skip_shot_blast", fields["skip_shot_blast"])
     if fields.get("is_laminated") is not None:
@@ -397,9 +490,15 @@ async def _create_product_from_row(db: AsyncSession, row: ParsedCatalogRow) -> N
     await db.flush()
 
 
-async def _update_product_from_row(db: AsyncSession, product: Product, row: ParsedCatalogRow) -> bool:
+async def _update_product_from_row(
+    db: AsyncSession,
+    product: Product,
+    row: ParsedCatalogRow,
+    plan: list[dict] | None,
+    composition_changed: bool,
+) -> bool:
     changes = diff_catalog_row(product, row)
-    if not changes:
+    if not changes and not composition_changed:
         return False
 
     # is_paired_profile не пишется: флаг выведенный (ADR-0023, #146) —
@@ -426,21 +525,33 @@ async def _update_product_from_row(db: AsyncSession, product: Product, row: Pars
         old_aliases = list(product.aliases or [])
         product.aliases = changes["aliases"]
         await _enforce_bidirectional_aliases(db, product.id, changes["aliases"], old_aliases=old_aliases)
+    # Состав заменяется целиком только когда колонки состава заполнены (#154);
+    # частичное обновление без них состав не трогает.
+    if composition_changed and plan is not None:
+        await _write_composition(db, product.id, plan)
     await db.flush()
     return True
 
 
-async def _prepare_excel_import(
-    file: UploadFile, db: AsyncSession
-) -> tuple[list[ParsedCatalogRow], list[dict], dict[str, Product], int]:
-    """Общая часть preview/apply: парсинг файла + загрузка артикулов по SKU."""
+async def _prepare_excel_import(file: UploadFile, db: AsyncSession) -> _ImportBatch:
+    """Общая часть preview/apply: парсинг файла + загрузка артикулов."""
     content = await file.read()
     try:
         rows, errors, total_data_rows = parse_catalog_excel(content, file.filename or "")
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc))
     products = await _load_products_by_sku(db, [row.sku for row in rows])
-    return rows, errors, products, total_data_rows
+    component_skus = sorted({sku for row in rows for sku in row.fields.get("components", [])})
+    components_by_sku = await _load_products_by_sku(db, component_skus)
+    current_composition = await _load_composition_map(db, [p.id for p in products.values()])
+    return _ImportBatch(
+        rows=rows,
+        errors=errors,
+        products=products,
+        components_by_sku=components_by_sku,
+        current_composition=current_composition,
+        total_data_rows=total_data_rows,
+    )
 
 
 @router.post("/preview-excel")
@@ -449,13 +560,20 @@ async def preview_catalog_from_excel(
     db: AsyncSession = Depends(get_db),
 ) -> dict:
     """Предпросмотр импорта справочника сырья из Excel без записи в БД (#63)."""
-    rows, errors, products, total_data_rows = await _prepare_excel_import(file, db)
+    batch = await _prepare_excel_import(file, db)
+    rows, errors = batch.rows, batch.errors
     items = []
-    stats = {"total": total_data_rows, "create": 0, "update": 0, "skip": 0}
+    stats = {"total": batch.total_data_rows, "create": 0, "update": 0, "skip": 0}
     error_rows: set[int] = {err["row"] for err in errors}
 
     for row in rows:
-        product = products.get(row.sku)
+        product = batch.products.get(row.sku)
+        plan, composition_errors = _composition_plan(row, batch)
+        if composition_errors:
+            errors.extend(composition_errors)
+            error_rows.add(row.row)
+            continue
+
         existing_lengths = sorted(length.length_mm for length in product.lengths) if product else None
         count_errors = _row_count_errors(row, existing_lengths)
         if count_errors:
@@ -466,7 +584,15 @@ async def preview_catalog_from_excel(
         if product is None:
             action = "create"
         else:
-            action = "update" if diff_catalog_row(product, row) else "skip"
+            composition_changed = (
+                plan is not None
+                and _composition_changed(plan, batch.current_composition.get(product.id))
+            )
+            action = (
+                "update"
+                if diff_catalog_row(product, row) or composition_changed
+                else "skip"
+            )
         stats[action] += 1
 
         lengths = effective_lengths(row, existing_lengths)
@@ -479,6 +605,12 @@ async def preview_catalog_from_excel(
             "lengths_mm": lengths or [],
             "quantity_per_hanger": quantities[0] if quantities else (product.quantity_per_hanger if product else None),
             "quantities_per_hanger": quantities,
+            # Состав, который будет записан (#154): null — колонки не заполнены.
+            "composition": (
+                [{"sku": item["component"].sku, "quantity": item["quantity"]} for item in plan]
+                if plan is not None
+                else None
+            ),
             "has_photo": False,
             "action": action,
             "warnings": row.warnings,
@@ -488,19 +620,31 @@ async def preview_catalog_from_excel(
     return {"items": items, "errors": errors, "stats": stats}
 
 
-@router.post("/apply-excel")
+@router.post(
+    "/apply-excel",
+    dependencies=[Depends(require_role(list(REFERENCES_WRITER_ROLES)))],
+)
 async def apply_catalog_from_excel(
     file: UploadFile = File(...),
     db: AsyncSession = Depends(get_db),
 ) -> dict:
-    """Применение импорта справочника сырья из Excel (#63). Файл загружается повторно."""
-    rows, errors, products, _total = await _prepare_excel_import(file, db)
+    """Применение импорта справочника сырья из Excel (#63). Файл загружается повторно.
+
+    Запись — по правам editReferences (#154).
+    """
+    batch = await _prepare_excel_import(file, db)
+    rows, errors = batch.rows, batch.errors
     imported = 0
     updated = 0
     skipped = 0
 
     for row in rows:
-        product = products.get(row.sku)
+        product = batch.products.get(row.sku)
+        plan, composition_errors = _composition_plan(row, batch)
+        if composition_errors:
+            errors.extend(composition_errors)
+            continue
+
         existing_lengths = sorted(length.length_mm for length in product.lengths) if product else None
         count_errors = _row_count_errors(row, existing_lengths)
         if count_errors:
@@ -508,12 +652,17 @@ async def apply_catalog_from_excel(
             continue
 
         if product is None:
-            await _create_product_from_row(db, row)
+            await _create_product_from_row(db, row, plan)
             imported += 1
-        elif await _update_product_from_row(db, product, row):
-            updated += 1
         else:
-            skipped += 1
+            composition_changed = (
+                plan is not None
+                and _composition_changed(plan, batch.current_composition.get(product.id))
+            )
+            if await _update_product_from_row(db, product, row, plan, composition_changed):
+                updated += 1
+            else:
+                skipped += 1
 
     await db.commit()
     return {"imported": imported, "updated": updated, "skipped": skipped, "errors": errors}

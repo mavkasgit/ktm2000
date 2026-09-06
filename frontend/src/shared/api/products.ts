@@ -305,6 +305,8 @@ export type CatalogPreviewItem = {
   row?: number;
   lengths_mm?: number[];
   quantities_per_hanger?: number[] | null;
+  /** Состав ГП, который будет записан (#154); null — колонки состава пусты. */
+  composition?: { sku: string; quantity: number }[] | null;
   warnings?: string[];
 };
 

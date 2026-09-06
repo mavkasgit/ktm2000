@@ -8,7 +8,16 @@ from openpyxl import Workbook, load_workbook
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.models.product import Product, ProductLength, ProductProcessingFlag, ProductType
+from app.api.deps import get_current_user
+from app.main import app
+from app.models.product import (
+    Product,
+    ProductComposition,
+    ProductLength,
+    ProductProcessingFlag,
+    ProductType,
+)
+from app.models.user import User, UserRole
 from app.services.catalog_excel_import import TEMPLATE_HEADERS
 
 PREVIEW_URL = "/api/catalog-import/preview-excel"
@@ -34,12 +43,14 @@ def _row(**kwargs) -> list:
     # «Парный профиль» удалён из шаблона: флаг выведенный (ADR-0023, #146).
     values: dict[str, object] = {field: "" for field in (
         "sku", "name", "notes", "lengths", "perimeter", "mount_width",
-        "quantities", "skip_shot", "laminated", "aliases",
+        "quantities", "components", "component_qty", "skip_shot", "laminated",
+        "aliases",
     )}
     values.update(kwargs)
     return [
         values["sku"], values["name"], values["notes"], values["lengths"],
         values["perimeter"], values["mount_width"], values["quantities"],
+        values["components"], values["component_qty"],
         values["skip_shot"], values["laminated"], values["aliases"],
     ]
 
@@ -375,3 +386,177 @@ async def test_apply_excel_empty_row_creates_with_warning(
     assert product is not None
     assert product.type == ProductType.component
     assert product.is_active is True
+
+
+# ─── Состав ГП (#154) ────────────────────────────────────────────────────────
+
+
+async def _composition_rows(session: AsyncSession, product_id: int) -> list[tuple[int, float, str]]:
+    rows = (
+        await session.execute(
+            select(ProductComposition)
+            .where(ProductComposition.product_id == product_id)
+            .order_by(ProductComposition.id)
+        )
+    ).scalars().all()
+    return [(row.component_product_id, float(row.quantity), row.unit) for row in rows]
+
+
+async def test_apply_excel_composition_creates_finished_good(
+    client: AsyncClient, session: AsyncSession
+) -> None:
+    await _make_product(session, sku="ЮП-100", unit="м")
+    await _make_product(session, sku="ЮП-200")
+    content = _xlsx_bytes([
+        _row(sku="СВ-500", name="Светильник 500", components="ЮП-100; ЮП-200", component_qty="2; 3"),
+    ])
+    resp = await _upload(client, APPLY_URL, content)
+    assert resp.status_code == 200, resp.text
+    body = resp.json()
+    assert body["imported"] == 1
+    assert body["errors"] == []
+
+    product = await session.scalar(select(Product).where(Product.sku == "СВ-500"))
+    assert product is not None
+    assert product.type == ProductType.finished_good
+    comp_100 = await session.scalar(select(Product).where(Product.sku == "ЮП-100"))
+    comp_200 = await session.scalar(select(Product).where(Product.sku == "ЮП-200"))
+    # unit берётся от компонента
+    assert await _composition_rows(session, product.id) == [
+        (comp_100.id, 2.0, "м"),
+        (comp_200.id, 3.0, "шт"),
+    ]
+
+
+async def test_apply_excel_composition_fractional_quantity(
+    client: AsyncClient, session: AsyncSession
+) -> None:
+    await _make_product(session, sku="ЮП-100")
+    content = _xlsx_bytes([
+        _row(sku="СВ-500", components="ЮП-100", component_qty="2,5"),
+    ])
+    resp = await _upload(client, APPLY_URL, content)
+    assert resp.status_code == 200, resp.text
+    product = await session.scalar(select(Product).where(Product.sku == "СВ-500"))
+    rows = await _composition_rows(session, product.id)
+    assert rows[0][1] == pytest.approx(2.5)
+
+
+async def test_preview_excel_composition_shown_in_item(
+    client: AsyncClient, session: AsyncSession
+) -> None:
+    await _make_product(session, sku="ЮП-100")
+    content = _xlsx_bytes([
+        _row(sku="СВ-500", components="ЮП-100", component_qty="2"),
+    ])
+    resp = await _upload(client, PREVIEW_URL, content)
+    assert resp.status_code == 200, resp.text
+    item = resp.json()["items"][0]
+    assert item["action"] == "create"
+    assert item["composition"] == [{"sku": "ЮП-100", "quantity": 2.0}]
+
+
+async def test_apply_excel_composition_replaces_existing(
+    client: AsyncClient, session: AsyncSession
+) -> None:
+    old = await _make_product(session, sku="ЮП-СТАРЫЙ")
+    gp = await _make_product(session, sku="СВ-500")
+    gp.type = ProductType.finished_good
+    session.add(ProductComposition(
+        product_id=gp.id, component_product_id=old.id, quantity=5, unit="шт"
+    ))
+    await _make_product(session, sku="ЮП-200")
+    await session.flush()
+
+    content = _xlsx_bytes([
+        _row(sku="СВ-500", components="ЮП-200", component_qty="1"),
+    ])
+    resp = await _upload(client, APPLY_URL, content)
+    assert resp.status_code == 200, resp.text
+    assert resp.json()["updated"] == 1
+
+    comp_200 = await session.scalar(select(Product).where(Product.sku == "ЮП-200"))
+    rows = await _composition_rows(session, gp.id)
+    assert rows == [(comp_200.id, 1.0, "шт")]
+
+
+async def test_apply_excel_update_without_components_keeps_type_and_composition(
+    client: AsyncClient, session: AsyncSession
+) -> None:
+    comp = await _make_product(session, sku="ЮП-100")
+    gp = await _make_product(session, sku="СВ-500")
+    gp.type = ProductType.finished_good
+    session.add(ProductComposition(
+        product_id=gp.id, component_product_id=comp.id, quantity=5, unit="шт"
+    ))
+    await session.flush()
+
+    content = _xlsx_bytes([_row(sku="СВ-500", name="Новое имя")])
+    resp = await _upload(client, APPLY_URL, content)
+    assert resp.status_code == 200, resp.text
+    assert resp.json()["updated"] == 1
+
+    await session.refresh(gp)
+    # Частичное обновление без колонок состава не трогает тип и состав
+    assert gp.type == ProductType.finished_good
+    assert gp.name == "Новое имя"
+    assert await _composition_rows(session, gp.id) == [(comp.id, 5.0, "шт")]
+
+
+async def test_preview_excel_composition_errors(
+    client: AsyncClient, session: AsyncSession
+) -> None:
+    await _make_product(session, sku="ЮП-100")
+    fg = await _make_product(session, sku="ГП-1")
+    fg.type = ProductType.finished_good
+    await session.flush()
+
+    content = _xlsx_bytes([
+        _row(sku="Б1", components="НЕТ-ТАКОГО", component_qty="1"),  # не найден
+        _row(sku="Б2", components="ГП-1", component_qty="1"),  # не component
+        _row(sku="Б3", components="ЮП-100; ЮП-100; ЮП-100", component_qty="1; 1; 1"),  # >2 и дубликат
+        _row(sku="Б4", components="ЮП-100", component_qty="1; 2"),  # числа не совпадают
+        _row(sku="Б5", components="ЮП-100", component_qty="0"),  # количество ≤ 0
+        _row(sku="Б6", components="Б6", component_qty="1"),  # сам себе компонент
+        _row(sku="Б7", components="ЮП-100", component_qty=""),  # кол-во без SKU-количеств
+        _row(sku="ОК", components="ЮП-100", component_qty="1"),
+    ])
+    resp = await _upload(client, PREVIEW_URL, content)
+    assert resp.status_code == 200, resp.text
+    body = resp.json()
+    error_skus = {err["sku"] for err in body["errors"]}
+    assert error_skus == {"Б1", "Б2", "Б3", "Б4", "Б5", "Б6", "Б7"}
+    assert {item["sku"] for item in body["items"]} == {"ОК"}
+
+
+async def test_apply_excel_composition_error_skips_row(
+    client: AsyncClient, session: AsyncSession
+) -> None:
+    content = _xlsx_bytes([
+        _row(sku="СВ-500", components="НЕТ-ТАКОГО", component_qty="1"),
+    ])
+    resp = await _upload(client, APPLY_URL, content)
+    assert resp.status_code == 200, resp.text
+    body = resp.json()
+    assert body["imported"] == 0
+    assert len(body["errors"]) == 1
+    assert body["errors"][0]["message"]
+    assert await session.scalar(select(Product).where(Product.sku == "СВ-500")) is None
+
+
+async def test_apply_excel_requires_edit_references_role(
+    client: AsyncClient, session: AsyncSession
+) -> None:
+    """Запись — по правам editReferences (#154): operator — 403, preview — пускают."""
+    content = _xlsx_bytes([_row(sku="ЮП-РОЛИ", perimeter="10")])
+    user = User(username="catalog_operator", full_name="operator", role=UserRole.operator, is_active=True)
+    session.add(user)
+    await session.flush()
+    app.dependency_overrides[get_current_user] = lambda: user
+    try:
+        forbidden = await _upload(client, APPLY_URL, content)
+        assert forbidden.status_code == 403
+        allowed = await _upload(client, PREVIEW_URL, content)
+        assert allowed.status_code == 200
+    finally:
+        app.dependency_overrides.pop(get_current_user, None)
