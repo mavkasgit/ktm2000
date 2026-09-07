@@ -7,6 +7,7 @@ vi.mock("@/shared/api/products", async (importOriginal) => ({
   ...(await importOriginal<typeof import("@/shared/api/products")>()),
   fetchAllProducts: vi.fn(),
   replaceProductComposition: vi.fn(),
+  getProductRouteStages: vi.fn(),
 }));
 
 vi.mock("@/features/auth/hooks/usePermission", () => ({
@@ -17,11 +18,14 @@ vi.mock("@/shared/ui/use-toast", () => ({
   toast: vi.fn(),
 }));
 
+import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import {
   fetchAllProducts,
+  getProductRouteStages,
   replaceProductComposition,
   type CompositionItem,
   type Product,
+  type ProductRouteStageOut,
 } from "@/shared/api/products";
 import { usePermission } from "@/features/auth/hooks/usePermission";
 import { toast } from "@/shared/ui/use-toast";
@@ -73,6 +77,19 @@ const makeComposition = (overrides: Partial<CompositionItem> = {}): CompositionI
   ...overrides,
 });
 
+const makeStage = (overrides: Partial<ProductRouteStageOut> = {}): ProductRouteStageOut => ({
+  id: 1,
+  sequence: 1,
+  section_id: 5,
+  section_code: "SGP",
+  section_name: "Сварка",
+  is_significant: true,
+  requires_acceptance: false,
+  is_final: false,
+  operations: [{ id: 11, operation_code: "010", operation_name: "Сварка каркаса" }],
+  ...overrides,
+});
+
 beforeEach(() => {
   vi.clearAllMocks();
   vi.mocked(usePermission).mockReturnValue({
@@ -90,11 +107,43 @@ beforeEach(() => {
       composition: [],
     }),
   ]);
+  vi.mocked(getProductRouteStages).mockResolvedValue([
+    makeStage(),
+    makeStage({
+      id: 2,
+      sequence: 2,
+      section_code: "SLG",
+      section_name: "Слесарка",
+      operations: [
+        { id: 21, operation_code: "020", operation_name: "Зачистка" },
+        { id: 22, operation_code: "030", operation_name: "Контроль" },
+      ],
+    }),
+    makeStage({
+      id: 3,
+      sequence: 3,
+      section_code: "PKG",
+      section_name: "Упаковка",
+      is_significant: false,
+      operations: [],
+    }),
+  ]);
 });
+
+const renderPage = () => {
+  const client = new QueryClient({
+    defaultOptions: { queries: { retry: false } },
+  });
+  return render(
+    <QueryClientProvider client={client}>
+      <ProductsPage />
+    </QueryClientProvider>,
+  );
+};
 
 describe("ProductsPage", () => {
   it("загружает только ГП с составом и рисует чипы «SKU ×N»", async () => {
-    render(<ProductsPage />);
+    renderPage();
 
     await screen.findByTestId("product-row-FG-001");
     expect(fetchAllProducts).toHaveBeenCalledWith(
@@ -106,7 +155,7 @@ describe("ProductsPage", () => {
   });
 
   it("открывает карточку по клику на строку: состав и характеристики", async () => {
-    render(<ProductsPage />);
+    renderPage();
 
     fireEvent.click(await screen.findByTestId("product-row-FG-001"));
 
@@ -120,7 +169,7 @@ describe("ProductsPage", () => {
       canEditReferences: false,
       canEditSettings: false,
     });
-    render(<ProductsPage />);
+    renderPage();
 
     fireEvent.click(await screen.findByTestId("product-row-FG-001"));
 
@@ -131,7 +180,7 @@ describe("ProductsPage", () => {
   it("сохраняет изменённый состав и обновляет чипы в таблице", async () => {
     const updated = [makeComposition({ quantity: 4 })];
     vi.mocked(replaceProductComposition).mockResolvedValue(updated);
-    render(<ProductsPage />);
+    renderPage();
 
     fireEvent.click(await screen.findByTestId("product-row-FG-001"));
     fireEvent.click(await screen.findByRole("button", { name: /Изменить/ }));
@@ -152,7 +201,7 @@ describe("ProductsPage", () => {
 
   it("фильтрует по поисковому запросу (q с debounce)", async () => {
     vi.mocked(fetchAllProducts).mockClear();
-    render(<ProductsPage />);
+    renderPage();
 
     await screen.findByTestId("product-row-FG-001");
     fireEvent.change(screen.getByTestId("products-search"), { target: { value: "ручка" } });
@@ -163,6 +212,45 @@ describe("ProductsPage", () => {
           expect.objectContaining({ q: "ручка", type: "finished_good", include_composition: true }),
         ),
       { timeout: 1500 },
+    );
+  });
+
+  it("показывает маршрут как главный блок: все секции, бейдж «N операций»", async () => {
+    renderPage();
+
+    fireEvent.click(await screen.findByTestId("product-row-FG-001"));
+
+    expect(await screen.findByRole("region", { name: "Маршрут" })).toBeTruthy();
+    // Счётчик — операции: транзитная секция без операций не считается
+    expect(await screen.findByText("3 операции")).toBeTruthy();
+    // Полный маршрут: обе секции и все операции, включая транзитную
+    expect(await screen.findByText("Сварка каркаса")).toBeTruthy();
+    expect(await screen.findByText("Зачистка")).toBeTruthy();
+    expect(await screen.findByText("Контроль")).toBeTruthy();
+    expect(screen.getByText(/Слесарка/)).toBeTruthy();
+    expect(screen.getAllByText(/Упаковка/).length).toBeGreaterThan(0);
+    // Счётчик — плоские шаги, без запроса состава/остатков
+    expect(getProductRouteStages).toHaveBeenCalledWith(1);
+  });
+
+  it("без маршрута показывает «Маршрут не назначен» без бейджа", async () => {
+    vi.mocked(getProductRouteStages).mockResolvedValue([]);
+    renderPage();
+
+    fireEvent.click(await screen.findByTestId("product-row-FG-001"));
+
+    await waitFor(() => expect(screen.getByText("Маршрут не назначен")).toBeTruthy());
+    expect(screen.queryByText(/^0 /)).toBeNull();
+  });
+
+  it("ошибка загрузки маршрута видна в карточке", async () => {
+    vi.mocked(getProductRouteStages).mockRejectedValue(new Error("boom"));
+    renderPage();
+
+    fireEvent.click(await screen.findByTestId("product-row-FG-001"));
+
+    await waitFor(() =>
+      expect(screen.getByText(/Не удалось загрузить маршрут/)).toBeTruthy(),
     );
   });
 });

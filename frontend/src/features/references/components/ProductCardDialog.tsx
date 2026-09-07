@@ -1,15 +1,21 @@
-// Карточка продукта (#152, вариант A прототипа #143): состав ГП (просмотр +
-// правка по editReferences), размеры/длины/цвета. Только норматив (ADR-0001):
-// ни остатков, ни факт-трассировки; блок операций маршрута — следующий тикет.
+// Карточка продукта (#152, #153, вариант A прототипа #143): состав ГП
+// (просмотр + правка по editReferences), маршрут операций — главный блок
+// карточки, размеры/длины/цвета. Только норматив (ADR-0001): ни остатков,
+// ни факт-трассировки.
 import { useMemo, useState } from "react";
-import { Pencil, Plus, Search, X } from "lucide-react";
+import { useQuery } from "@tanstack/react-query";
+import { Pencil, Plus, Route, Search, X } from "lucide-react";
 import { Badge } from "@/shared/ui/badge";
 import { Button } from "@/shared/ui/button";
 import { Dialog, DialogContent, DialogHeader, DialogTitle } from "@/shared/ui/dialog";
 import { Input } from "@/shared/ui/input";
+import { RouteStepsDisplay } from "@/shared/ui/RouteStepsDisplay";
 import { toast } from "@/shared/ui/use-toast";
+import { queryKeys } from "@/shared/api/queryKeys";
+import { stagesToSteps } from "@/shared/lib/routeSteps";
 import {
   getErrorMessage,
+  getProductRouteStages,
   listProducts,
   replaceProductComposition,
   type CompositionItem,
@@ -20,6 +26,19 @@ import { formatQuantity } from "../lib/formatQuantity";
 import { cn } from "@/shared/utils/cn";
 
 const MAX_COMPONENTS = 2;
+
+/** Русская плюрализация для бейджа «N операций» (#153). */
+function operationsLabel(count: number): string {
+  const mod10 = count % 10;
+  const mod100 = count % 100;
+  const word =
+    mod10 === 1 && mod100 !== 11
+      ? "операция"
+      : mod10 >= 2 && mod10 <= 4 && (mod100 < 12 || mod100 > 14)
+        ? "операции"
+        : "операций";
+  return `${count} ${word}`;
+}
 
 /** Черновик строки состава в режиме правки: количество вводится текстом. */
 type DraftItem = {
@@ -192,6 +211,21 @@ export function ProductCardDialog({
     setDraft([]);
     setPickerOpen(false);
   }
+
+  // Маршрут — главный блок карточки (#153): полный список секций и операций
+  // через существующий route-stages API, только чтение.
+  const routeQuery = useQuery({
+    queryKey: queryKeys.products.routeStages(key ?? 0),
+    queryFn: () => getProductRouteStages(key!),
+    enabled: key != null,
+  });
+  const routeSteps = useMemo(() => stagesToSteps(routeQuery.data ?? []), [routeQuery.data]);
+  // Счётчик — только операции; транзитные секции без операций шагом
+  // маршрута остаются, но «операцией» не считаются (#153).
+  const operationCount = useMemo(
+    () => routeSteps.filter((step) => step.operation_name).length,
+    [routeSteps],
+  );
 
   const startEdit = () => {
     setDraft(toDraftItems(composition));
@@ -386,10 +420,36 @@ export function ProductCardDialog({
             </section>
           </div>
 
-          <section>
-            <h4 className="text-sm font-semibold mb-2">Характеристики</h4>
-            <Characteristics product={product} />
-          </section>
+          {/* Маршрут — главный блок карточки (#153, вариант A прототипа #143). */}
+          <div className="space-y-6">
+            <section aria-label="Маршрут">
+              <div className="flex items-center gap-2 mb-2">
+                <Route className="h-4 w-4" />
+                <h4 className="text-sm font-semibold">Маршрут (операции)</h4>
+                {!routeQuery.isLoading && routeSteps.length > 0 && (
+                  <Badge variant="secondary" className="text-xs">
+                    {operationsLabel(operationCount)}
+                  </Badge>
+                )}
+              </div>
+              {routeQuery.isLoading ? (
+                <p className="text-sm text-muted-foreground">Загрузка маршрута…</p>
+              ) : routeQuery.isError ? (
+                <p className="text-sm text-destructive">
+                  Не удалось загрузить маршрут: {getErrorMessage(routeQuery.error)}
+                </p>
+              ) : routeSteps.length === 0 ? (
+                <p className="text-sm text-muted-foreground">Маршрут не назначен</p>
+              ) : (
+                <RouteStepsDisplay steps={routeSteps} compact={false} size="md" />
+              )}
+            </section>
+
+            <section>
+              <h4 className="text-sm font-semibold mb-2">Характеристики</h4>
+              <Characteristics product={product} />
+            </section>
+          </div>
         </div>
       </DialogContent>
     </Dialog>

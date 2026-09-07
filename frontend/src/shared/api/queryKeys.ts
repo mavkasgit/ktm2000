@@ -259,6 +259,7 @@ export const queryKeys = {
   products: {
     all: () => ["products"] as const,
     pairs: (productId: number) => ["products", "pairs", productId] as const,
+    routeStages: (productId: number) => ["products", "route-stages", productId] as const,
   },
   dimensions: {
     types: () => ["dimension-types"] as const,
