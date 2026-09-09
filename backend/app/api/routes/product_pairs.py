@@ -253,11 +253,13 @@ async def create_product_pair(
 
     product = await _load_with_lengths(db, product.id)
     partner = await _load_with_lengths(db, partner.id)
+    # Пересечение может быть пустым: пара создаётся как намерение («нет общих
+    # длин» — предупреждение в UI, а не запрет); оживает сама, когда у обоих
+    # артикулов появятся общие длины. Ниже по стеку пустое пересечение уже
+    # первоклассно: каталог отдаёт lengths: [], резолвер N — calc_error.
     lengths = _intersection_lengths(
         {l.length_mm for l in product.lengths}, {l.length_mm for l in partner.lengths}
     )
-    if not lengths:
-        raise HTTPException(status_code=422, detail="Нет общих длин — пара невозможна")
 
     pair = ProductPair(
         product_a_id=min(product.id, partner.id),

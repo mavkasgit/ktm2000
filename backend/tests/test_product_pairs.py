@@ -145,14 +145,21 @@ async def test_create_pair_rejects_self_and_missing_partner(client, session: Asy
 
 
 @pytest.mark.asyncio
-async def test_create_pair_without_common_lengths_422(client, session: AsyncSession) -> None:
-    """Вне пересечения длин пара не существует — пустое пересечение → 422."""
+async def test_create_pair_without_common_lengths_allowed_empty(client, session: AsyncSession) -> None:
+    """Без общих длин пара создаётся как намерение: 201, lengths == []."""
     a = await _make_product(session, sku="PAIR-NOV-A", lengths_mm=[2780.0])
     b = await _make_product(session, sku="PAIR-NOV-B", lengths_mm=[3000.0])
     await session.commit()
 
     resp = await client.post(f"/api/products/{a.id}/pairs", json={"partner_product_id": b.id})
-    assert resp.status_code == 422
+    assert resp.status_code == 201, resp.text
+    body = resp.json()
+    assert body["lengths"] == []
+    assert body["quantity_per_hanger"] == {}
+
+    listed = await client.get(f"/api/products/{a.id}/pairs")
+    assert listed.status_code == 200
+    assert len(listed.json()) == 1
 
 
 @pytest.mark.asyncio
