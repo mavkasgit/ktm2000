@@ -41,8 +41,9 @@ function buildRouteMetaLabel(params: {
 }
 
 function translateLabel(code: string, labels: Record<string, string>): string {
-  const [base] = String(code).split(":")
-  return labels[base] ?? code
+  const [base, ...rest] = String(code).split(":")
+  const label = labels[base] ?? base
+  return rest.length > 0 ? `${label}: ${rest.join(":")}` : label
 }
 
 function translateLabels(codes: string[], labels: Record<string, string>): string[] {

@@ -5,7 +5,11 @@ type UnknownRecord = Record<string, unknown>;
 function translateCodes(codes: string[] | unknown, labels: Record<string, string>): string {
   if (!Array.isArray(codes)) return String(codes ?? "");
   if (codes.length === 0) return "—";
-  return codes.map((c) => labels[String(c)] ?? String(c)).join(", ");
+  return codes.map((c) => {
+    const [code, ...rest] = String(c).split(":");
+    const label = labels[String(code)] ?? String(code);
+    return rest.length > 0 ? `${label}: ${rest.join(":")}` : label;
+  }).join(", ");
 }
 
 function formatRouteAssignedAt(value: unknown): string {

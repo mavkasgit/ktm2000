@@ -47,6 +47,12 @@ from app.services.plan_position_hanger import position_length_mm
 from app.services.route_builder import build_route_from_profile
 
 
+#: Допуск silent-подстановки сырья, мм (#156, поправка к ADR-0024 п.7):
+#: разница ГП→сырьё в пределах допуска — штатная логика торцовки,
+#: warning raw_length_substituted ставится только при большем расхождении,
+#: иначе предпросмотр реального плана тонет в предупреждениях.
+RAW_LENGTH_SILENT_TOLERANCE_MM = 100
+
 def _row_gp_length_mm(row: ParsedPlanRow) -> float | None:
     """Единственная длина ГП по выходам строки (ADR-0024).
 
@@ -109,9 +115,10 @@ def _materialize_raw_length_mm(
     """Подобрать сырьё и материализовать во вход позиции (ADR-0024).
 
     Успех — ``None`` (вход переписан на сырьевую длину либо точное совпадение,
-    ничего делать не надо); подстановка сопровождается warning
-    ``raw_length_substituted`` и сбросом флага ``inferred`` (вход перестаёт
-    быть равен выходу). Нет кандидата — код ошибки ``raw_length_not_found``.
+    ничего делать не надо); сброс флага ``inferred`` (вход перестаёт быть
+    равен выходу). Warning ``raw_length_substituted`` — только при разнице
+    больше ``RAW_LENGTH_SILENT_TOLERANCE_MM``; в пределах допуска подстановка
+    считается штатной и молчаливой. Нет кандидата — ``raw_length_not_found``.
     """
     picked = _pick_raw_length_mm(candidates, gp_length_mm)
     if picked is None:
@@ -124,10 +131,11 @@ def _materialize_raw_length_mm(
     input_info["dimensions"] = new_dims
     input_info["inferred"] = False
     row.payload["input"] = input_info
-    warnings.append(
-        f"raw_length_substituted:длина ГП {_mm_as_meters(gp_length_mm)} м"
-        f" → сырьё {_mm_as_meters(picked)} м"
-    )
+    if picked - gp_length_mm > RAW_LENGTH_SILENT_TOLERANCE_MM:
+        warnings.append(
+            f"raw_length_substituted:ГП {_mm_as_meters(gp_length_mm)} м"
+            f" → сырьё {_mm_as_meters(picked)} м"
+        )
     return None
 
 
@@ -697,9 +705,9 @@ async def _make_change_items(
                     if adjusted is not None:
                         adjusted_quantities[comp_product.sku] = adjusted
                         warnings.append(
-                            f"paired_hanger_adjusted:{comp_product.sku} "
-                            f"{row.quantity}->{adjusted} "
-                            f"(per_hanger={per_hanger})"
+                            f"paired_hanger_adjusted:{comp_product.sku}: "
+                            f"{row.quantity} → {adjusted} шт "
+                            f"(на подвесе {per_hanger})"
                         )
 
                 if adjusted_quantities:

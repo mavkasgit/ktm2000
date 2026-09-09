@@ -40,9 +40,9 @@ WARNING_LABELS = {
     "row_selection_applied": "Применён фильтр строк",
     "row_selection_auto_included": "Автодобавлены парные строки",
     "paired_row_auto_included": "Автодобавлена парная строка",
-    "paired_hanger_adjusted": "Округлено для компонента пары",
+    "paired_hanger_adjusted": "Округлено до кратности подвеса",
     "hanger_quantity_not_set": "quantity_per_hanger не задан — количество не округлено",
-    "raw_length_substituted": "Длина ГП заменена ближайшей сырьевой сверху",
+    "raw_length_substituted": "Подобрана длина сырья",
 }
 
 VALIDATION_LABELS = {

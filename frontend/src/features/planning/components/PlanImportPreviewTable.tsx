@@ -39,7 +39,9 @@ function translateLabels(
           }
         }
       }
-      return labels[code] ?? String(c);
+      const label = labels[code] ?? code;
+      const [, ...rest] = String(c).split(":");
+      return rest.length > 0 ? `${label}: ${rest.join(":")}` : label;
     })
     .join(", ");
 }

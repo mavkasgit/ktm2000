@@ -55,12 +55,12 @@ export const errorLabels: Record<string, string> = {
 // Лейблы предупреждений (warning codes)
 export const warningLabels: Record<string, string> = {
   "hanger_quantity_not_set": "quantity_per_hanger не задан — количество не округлено",
-  "paired_hanger_adjusted": "Округлено для компонента пары",
+  "paired_hanger_adjusted": "Округлено до кратности подвеса",
   "paired_profile_product_unmapped": "Парный профиль не сопоставлен",
   "paired_row_auto_included": "Автодобавлена парная строка",
   "period_not_detected": "не определен",
   "product_name_missing": "Отсутствует наименование",
-  "raw_length_substituted": "Длина ГП заменена ближайшей сырьевой сверху",
+  "raw_length_substituted": "Подобрана длина сырья",
   "route_auto_fallback": "Маршрут скорректирован автоматически — проверьте корректность",
   "row_selection_applied": "Применён фильтр строк",
   "row_selection_auto_included": "Автодобавлены парные строки",

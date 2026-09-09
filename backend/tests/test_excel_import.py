@@ -1191,15 +1191,15 @@ async def test_import_paired_profile_substitutes_raw_length_nearest_above(
         data={"normalize_hanger_quantity": "true"},
         files={"file": ("paired.xlsx", wb, "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet")},
     )
-
     assert response.status_code == 200
     body = response.json()
     paired_item = body["items"][0]
 
-    # Подстановка вместо расчётной ошибки: hanger_calc_zero нет
+    # Подстановка вместо расчётной ошибки: hanger_calc_zero нет.
+    # Разница 50 мм в пределах допуска — штатная, без предупреждения.
     assert "hanger_calc_zero" not in paired_item["errors"]
     assert "raw_length_not_found" not in paired_item["errors"]
-    assert any(w.startswith("raw_length_substituted:") for w in paired_item["warnings"])
+    assert not any(w.startswith("raw_length_substituted:") for w in paired_item["warnings"])
 
     after_data = paired_item["after_data"]
     # Вход — сырьё 2750, выход — ГП 2700 (семантика вход→выход ADR-0002)
@@ -1306,6 +1306,37 @@ async def test_import_single_profile_substitutes_raw_length_nearest_above(
     item = body["items"][0]
 
     assert "raw_length_not_found" not in item["errors"]
-    assert any(w.startswith("raw_length_substituted:") for w in item["warnings"])
+    assert not any(w.startswith("raw_length_substituted:") for w in item["warnings"])
     assert item["after_data"]["input_dimensions"] == {"length_mm": 2750}
     assert item["after_data"]["outputs"][0]["dimensions"] == {"length_mm": 2700}
+
+
+@pytest.mark.asyncio
+async def test_import_paired_profile_large_substitution_warns(
+    client, session, tmp_path, monkeypatch
+) -> None:
+    """Разница ГП→сырьё больше допуска (2700 → 2900): подстановка с warning."""
+    monkeypatch.setattr(settings, "IMPORT_STORAGE_DIR", str(tmp_path))
+
+    await _make_product_pair(session, "ЮП-PAIR-A", "ЮП-PAIR-B", manual_n=8, length_mm=2900)
+    await session.commit()
+
+    template = await _create_template(session, name="Paired Large Sub Template", code="paired-large-sub-template")
+    await session.commit()
+
+    wb = _workbook_paired()
+    response = await client.post(
+        f"/api/imports/excel/preview?template_id={template.id}",
+        data={"normalize_hanger_quantity": "true"},
+        files={"file": ("paired.xlsx", wb, "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet")},
+    )
+
+    assert response.status_code == 200
+    body = response.json()
+    paired_item = body["items"][0]
+
+    assert "hanger_calc_zero" not in paired_item["errors"]
+    assert "raw_length_not_found" not in paired_item["errors"]
+    assert any(w.startswith("raw_length_substituted:") for w in paired_item["warnings"])
+    assert paired_item["after_data"]["input_dimensions"] == {"length_mm": 2900}
+    assert paired_item["after_data"]["outputs"][0]["dimensions"] == {"length_mm": 2700}
