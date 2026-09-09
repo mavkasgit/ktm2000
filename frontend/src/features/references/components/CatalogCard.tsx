@@ -1,14 +1,13 @@
-import React from "react";
 import { Image } from "lucide-react";
 import { Card, CardContent } from "@/shared/ui/card";
 import { Badge } from "@/shared/ui/badge";
+import { normalizeLengths } from "@/shared/lib/hangerQuantity";
 import { getPhotoUrl } from "./getPhotoUrl";
 import type { Product } from "@/shared/api/products";
 import { productTypeLabels } from "@/shared/lib/generated-labels";
 
 function getProductLengths(product: Product): number[] {
-  return [...new Set([...(product.lengths_mm ?? []), product.length_mm ?? undefined].filter((v): v is number => typeof v === "number" && Number.isFinite(v) && v > 0))]
-    .sort((a, b) => a - b);
+  return normalizeLengths(product.lengths_mm ?? []);
 }
 
 export function CatalogCard({
@@ -66,7 +65,6 @@ export function CatalogCard({
           })()}
           {product.is_catalog_item && <Badge variant="secondary" className="text-xs bg-blue-100">Сырье (каталог)</Badge>}
           {product.is_paired_profile && <Badge variant="secondary" className="text-xs bg-purple-100">Парный</Badge>}
-          {product.is_laminated && <Badge variant="secondary" className="text-xs bg-green-100">Ламинируется</Badge>}
           {product.skip_shot_blast && <Badge variant="secondary" className="text-xs bg-amber-100">Без дробеструйки</Badge>}
         </div>
       </CardContent>

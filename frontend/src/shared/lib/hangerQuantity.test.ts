@@ -58,10 +58,10 @@ describe("normalizeLengths", () => {
 });
 
 describe("productLengths", () => {
-  it("мержит lengths_mm и legacy length_mm, сортирует по возрастанию, убирает дубли и мусор", () => {
+  it("берёт только канон lengths_mm (product_lengths): legacy length_mm не подмешивается", () => {
     expect(
       productLengths({ lengths_mm: [3000, 2780, 3000, -5, NaN], length_mm: 2500 }),
-    ).toEqual([2500, 2780, 3000]);
+    ).toEqual([2780, 3000]);
   });
 
   it("пусто — пустой список", () => {
@@ -98,9 +98,9 @@ describe("primaryLength", () => {
     expect(primaryLength({ primary_length_mm: 3500, lengths_mm: [2780, 3500] })).toBe(3500);
   });
 
-  it("без явного — первая по возрастанию", () => {
+  it("без явного — первая по возрастанию из канона; legacy length_mm не подмешивается", () => {
     expect(primaryLength({ primary_length_mm: null, lengths_mm: [3500, 2780] })).toBe(2780);
-    expect(primaryLength({ primary_length_mm: null, lengths_mm: [], length_mm: 2780 })).toBe(2780);
+    expect(primaryLength({ primary_length_mm: null, lengths_mm: [], length_mm: 2780 })).toBeNull();
   });
 
   it("без длин — null", () => {

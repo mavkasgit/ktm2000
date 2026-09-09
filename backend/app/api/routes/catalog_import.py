@@ -122,12 +122,17 @@ async def import_catalog_from_zip(
         updated = 0
         skipped = 0
         errors = []
+        # Новые продукты + их длина — строки product_lengths заводятся
+        # после flush, когда известен product.id.
+        new_products: list[tuple[Product, float | None]] = []
 
         for row in rows:
             sku, qty, length, notes, photo_thumb, photo_full = row
 
             existing = await db.scalar(
-                select(Product).where(
+                select(Product)
+                .options(selectinload(Product.lengths))
+                .where(
                     (Product.sku == sku) | (Product.aliases.op("@>")(cast([sku], pg_ARRAY(String))))
                 )
             )
@@ -167,9 +172,24 @@ async def import_catalog_from_zip(
                 if existing.quantity_per_hanger != qty:
                     existing.quantity_per_hanger = qty
                     changed = True
-                if existing.length_mm != length:
+                if length is not None and not existing.lengths:
+                    # Канон длин — product_lengths: историческая дыра этого
+                    # импорта — длина писалась только скаляром. Строку заводим
+                    # даже при совпадающем скаляре: реимпорт лечит ранее
+                    # импортированные артикулы без ручных SQL-правок.
+                    existing.length_mm = length
+                    db.add(ProductLength(product_id=existing.id, length_mm=length, is_primary=True))
+                    changed = True
+                elif length is not None and existing.length_mm != length:
+                    old_length = existing.length_mm
                     existing.length_mm = length
                     changed = True
+                    # Зеркалим в строку, совпадающую со старым скаляром;
+                    # остальные строки не трогаем, дубли не плодим.
+                    if not any(row.length_mm == length for row in existing.lengths):
+                        for row in existing.lengths:
+                            if row.length_mm == old_length:
+                                row.length_mm = length
                 if new_thumb and existing.photo_thumb != new_thumb:
                     existing.photo_thumb = new_thumb
                     changed = True
@@ -201,8 +221,14 @@ async def import_catalog_from_zip(
                     is_catalog_item=True,
                 )
                 db.add(product)
+                new_products.append((product, length))
                 imported += 1
 
+        # id новых продуктов нужен для строк длин — flush после цикла.
+        await db.flush()
+        for product, length in new_products:
+            if length is not None:
+                db.add(ProductLength(product_id=product.id, length_mm=length, is_primary=True))
         await db.commit()
 
     return {

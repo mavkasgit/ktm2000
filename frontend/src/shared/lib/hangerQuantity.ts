@@ -84,12 +84,14 @@ export function normalizeLengths(values: Array<number | null | undefined>): numb
     .sort((a, b) => a - b);
 }
 
-/** Длины артикула по возрастанию (lengths_mm + legacy length_mm); первая — основная по умолчанию. */
+/** Длины артикула по возрастанию — канон product_lengths (API lengths_mm); первая — основная по умолчанию.
+ * Legacy-скаляр length_mm не подмешивается: он мог протухнуть относительно строк, а пары
+ * и витрина должны видеть один источник правды. */
 export function productLengths(product: {
   lengths_mm?: number[] | null;
   length_mm?: number | null;
 }): number[] {
-  return normalizeLengths([...(product.lengths_mm ?? []), product.length_mm ?? undefined]);
+  return normalizeLengths(product.lengths_mm ?? []);
 }
 
 /** Основная длина артикула (#81): явный выбор или первая по возрастанию. */
