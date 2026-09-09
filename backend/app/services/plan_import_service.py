@@ -13,7 +13,7 @@ from sqlalchemy.orm import selectinload
 
 from app.core.config import settings
 from app.models.imports import ImportBatch, ImportBatchMode, ImportFile
-from app.models.product import Product, _length_key
+from app.models.product import Product, ProductLength, _length_key
 from app.services import product_pair_resolver
 from app.services.product_pair_resolver import PairHangerValue, ResolvedPair
 from app.models.production_plan import (
@@ -39,12 +39,110 @@ from app.services.excel_import import (
     validate_excel_extension,
 )
 from app.services.route_selection import load_selection_rules_for_profile, select_route_for_payload
-from app.domain.dimensions import DimensionsValidationError, canonicalize_dimensions
+from app.domain.dimensions import LENGTH_MM, DimensionsValidationError, canonicalize_dimensions
 from app.services.dimension_validation import MissingDimensionsError, resolve_product_dimensions
 from app.services.hanger_quantity import adjust_quantity_to_hanger
 from app.services.import_normalization import normalize_sku as _normalize_sku
 from app.services.plan_position_hanger import position_length_mm
 from app.services.route_builder import build_route_from_profile
+
+
+def _row_gp_length_mm(row: ParsedPlanRow) -> float | None:
+    """Единственная длина ГП по выходам строки (ADR-0024).
+
+    ``None`` — выходов с длиной нет или их длины различаются (подбор сырья
+    неоднозначен, строку не трогаем).
+    """
+    lengths: set[float] = set()
+    for entry in row.outputs or []:
+        dims = entry.get("dimensions") if isinstance(entry, dict) else None
+        length = dims.get(LENGTH_MM) if isinstance(dims, dict) else None
+        if isinstance(length, bool):
+            continue
+        if isinstance(length, (int, float)) and length > 0:
+            lengths.add(float(length))
+    if len(lengths) == 1:
+        return next(iter(lengths))
+    return None
+
+
+def _gp_length_for_raw_materialization(row: ParsedPlanRow) -> float | None:
+    """Длина ГП для подбора сырья — только «вход без резки» (ADR-0024).
+
+    Вход равен единственной длине выходов: вход несёт коммерческую длину ГП
+    (унаследованную или явно совпадающую) и требует материализации в сырьевую.
+    Настоящая резка (вход уже сырьевой, длины различаются) — ``None``.
+    """
+    gp_length_mm = _row_gp_length_mm(row)
+    if gp_length_mm is None:
+        return None
+    input_dims = row.input_dimensions or {}
+    input_length = input_dims.get(LENGTH_MM)
+    if isinstance(input_length, bool) or not isinstance(input_length, (int, float)):
+        return None
+    if float(input_length) != gp_length_mm:
+        return None
+    return gp_length_mm
+
+
+def _pick_raw_length_mm(candidates: Iterable[float], gp_length_mm: float) -> float | None:
+    """ADR-0024 «ближайшая сверху»: минимальная зарегистрированная сырьевая
+    длина ≥ длины ГП. Точное совпадение — частный случай (возвращается сам ГП).
+    """
+    suitable = [float(length) for length in candidates if float(length) >= gp_length_mm]
+    return min(suitable) if suitable else None
+
+
+def _mm_as_meters(length_mm: float) -> str:
+    """Миллиметры → строка в метрах с запятой для операторских текстов: 2750 → «2,75»."""
+    meters = (Decimal(str(length_mm)) / Decimal(1000)).normalize()
+    return format(meters, "f").replace(".", ",")
+
+
+def _materialize_raw_length_mm(
+    row: ParsedPlanRow,
+    warnings: list[str],
+    *,
+    gp_length_mm: float,
+    candidates: Iterable[float],
+) -> str | None:
+    """Подобрать сырьё и материализовать во вход позиции (ADR-0024).
+
+    Успех — ``None`` (вход переписан на сырьевую длину либо точное совпадение,
+    ничего делать не надо); подстановка сопровождается warning
+    ``raw_length_substituted`` и сбросом флага ``inferred`` (вход перестаёт
+    быть равен выходу). Нет кандидата — код ошибки ``raw_length_not_found``.
+    """
+    picked = _pick_raw_length_mm(candidates, gp_length_mm)
+    if picked is None:
+        return "raw_length_not_found"
+    if picked == gp_length_mm:
+        return None
+    new_dims = canonicalize_dimensions({**(row.input_dimensions or {}), LENGTH_MM: picked})
+    row.input_dimensions = new_dims
+    input_info = dict(row.payload.get("input") or {})
+    input_info["dimensions"] = new_dims
+    input_info["inferred"] = False
+    row.payload["input"] = input_info
+    warnings.append(
+        f"raw_length_substituted:длина ГП {_mm_as_meters(gp_length_mm)} м"
+        f" → сырьё {_mm_as_meters(picked)} м"
+    )
+    return None
+
+
+async def _load_raw_lengths_mm(
+    db: AsyncSession, product_id: int, cache: dict[int, list[float]]
+) -> list[float]:
+    """Зарегистрированные длины артикула (``ProductLength``) по возрастанию."""
+    if product_id not in cache:
+        rows = (
+            await db.scalars(
+                select(ProductLength.length_mm).where(ProductLength.product_id == product_id)
+            )
+        ).all()
+        cache[product_id] = sorted({float(length) for length in rows})
+    return cache[product_id]
 
 
 async def preview_excel_sheet(
@@ -393,6 +491,8 @@ async def _make_change_items(
     # Локальные кэши для устранения N+1 запросов при сопоставлении маршрутов и пар
     pair_cache = {}                   # tuple(component_skus) -> ResolvedPair | None
     pair_n_cache = {}                 # (pair.id, length_key) -> PairHangerValue
+    pair_candidates_cache: dict[int, list[float]] = {}  # pair.id -> пересечение длин A∩B (ADR-0024)
+    raw_lengths_cache: dict[int, list[float]] = {}  # product.id -> длины ProductLength (ADR-0024)
     profile_cache = {}                # "profile_{id}" -> RouteRuleProfile
     select_route_cache = {}           # tuple_key -> RouteSelectionResult
     route_stages_cache = {}           # route.id -> list[RouteStage]
@@ -460,18 +560,41 @@ async def _make_change_items(
                 if "paired_profile_product_unmapped" not in warnings:
                     warnings.append("paired_profile_product_unmapped")
             else:
-                # N пары — единая механика с одиночными: ручная из словаря
-                # пары / авто-расчёт; невозможна → hanger_calc_zero.
-                length_mm = position_length_mm(row)
-                length_key = _length_key(length_mm) if length_mm is not None else None
-                n_cache_key = (resolved_pair.pair.id, length_key)
-                if n_cache_key in pair_n_cache:
-                    pair_n = pair_n_cache[n_cache_key]
+                # ADR-0024: подбор сырьевой длины «ближайшая сверху» по
+                # пересечению длин A∩B и материализация ГП→сырьё во входе —
+                # до резолва N. Нет кандидата → raw_length_not_found
+                # (ошибка справочника, не расчёта), N не резолвим.
+                raw_failed = False
+                gp_length_mm = _gp_length_for_raw_materialization(row)
+                if gp_length_mm is not None:
+                    pair_id = resolved_pair.pair.id
+                    if pair_id not in pair_candidates_cache:
+                        pair_candidates_cache[pair_id] = (
+                            await product_pair_resolver.pair_length_candidates_mm(db, resolved_pair)
+                        )
+                    raw_error = _materialize_raw_length_mm(
+                        row, warnings,
+                        gp_length_mm=gp_length_mm,
+                        candidates=pair_candidates_cache[pair_id],
+                    )
+                    if raw_error is not None:
+                        errors.append(raw_error)
+                        raw_failed = True
+                if raw_failed:
+                    pair_n = PairHangerValue(None, None)
                 else:
-                    pair_n = await product_pair_resolver.resolve_pair_n(db, resolved_pair, length_mm=length_mm)
-                    pair_n_cache[n_cache_key] = pair_n
-                if pair_n.calc_error:
-                    errors.append("hanger_calc_zero")
+                    # N пары — единая механика с одиночными: ручная из словаря
+                    # пары / авто-расчёт; невозможна → hanger_calc_zero.
+                    length_mm = position_length_mm(row)
+                    length_key = _length_key(length_mm) if length_mm is not None else None
+                    n_cache_key = (resolved_pair.pair.id, length_key)
+                    if n_cache_key in pair_n_cache:
+                        pair_n = pair_n_cache[n_cache_key]
+                    else:
+                        pair_n = await product_pair_resolver.resolve_pair_n(db, resolved_pair, length_mm=length_mm)
+                        pair_n_cache[n_cache_key] = pair_n
+                    if pair_n.calc_error:
+                        errors.append("hanger_calc_zero")
 
                 inputs = []
                 for comp_product in (resolved_pair.product_a, resolved_pair.product_b):
@@ -614,6 +737,23 @@ async def _make_change_items(
                     warnings.append(
                         "hanger_quantity_not_set:продукт не найден"
                     )
+
+        # ADR-0024: та же механика «ближайшая сверху» для одиночных позиций —
+        # вход без резки несёт длину ГП, материализуем в сырьевую из длин
+        # самого артикула. Без зарегистрированных длин — как раньше, без
+        # новой ошибки (негабаритные штучные товары).
+        if not row.payload.get("paired_profile") and product is not None:
+            single_gp_length_mm = _gp_length_for_raw_materialization(row)
+            if single_gp_length_mm is not None:
+                single_candidates = await _load_raw_lengths_mm(db, product.id, raw_lengths_cache)
+                if single_candidates:
+                    single_raw_error = _materialize_raw_length_mm(
+                        row, warnings,
+                        gp_length_mm=single_gp_length_mm,
+                        candidates=single_candidates,
+                    )
+                    if single_raw_error is not None:
+                        errors.append(single_raw_error)
 
         # Габариты операции (ADR-0003): вход без длины при габаритных выходах —
         # подставляем типовой размер продукта из справочника измерений.

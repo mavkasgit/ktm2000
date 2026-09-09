@@ -42,6 +42,7 @@ WARNING_LABELS = {
     "paired_row_auto_included": "Автодобавлена парная строка",
     "paired_hanger_adjusted": "Округлено для компонента пары",
     "hanger_quantity_not_set": "quantity_per_hanger не задан — количество не округлено",
+    "raw_length_substituted": "Длина ГП заменена ближайшей сырьевой сверху",
 }
 
 VALIDATION_LABELS = {

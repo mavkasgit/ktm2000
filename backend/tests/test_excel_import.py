@@ -1025,7 +1025,7 @@ async def test_import_already_multiple_no_warning(
     assert not any("hanger_quantity_not_set" in w for w in item["warnings"])
 
 
-def _workbook_paired() -> bytes:
+def _workbook_paired(length_m: float = 2.7) -> bytes:
     """Создаёт Excel с парой профилей."""
     wb = Workbook()
     ws = wb.active
@@ -1059,8 +1059,8 @@ def _workbook_paired() -> bytes:
         ]
     )
     # Парная строка 1 и 2 — вторая с пустым name как в оригинале
-    ws.append(["ЮП-PAIR-A", "ТЗ", "Paired Profile", 100, "black", 10, 2.7, "", "", "", 2.7, 10, "", 10, "П/ф"])
-    ws.append(["ЮП-PAIR-B", "ТЗ", "", 100, "black", 10, 2.7, "", "", "", 2.7, 10, "", 10, "П/ф"])
+    ws.append(["ЮП-PAIR-A", "ТЗ", "Paired Profile", 100, "black", 10, length_m, "", "", "", length_m, 10, "", 10, "П/ф"])
+    ws.append(["ЮП-PAIR-B", "ТЗ", "", 100, "black", 10, length_m, "", "", "", length_m, 10, "", 10, "П/ф"])
     out = BytesIO()
     wb.save(out)
     return out.getvalue()
@@ -1073,6 +1073,7 @@ async def _make_product_pair(
     *,
     manual_n: int | None = None,
     length_mm: float = 2700,
+    length_b_mm: float | None = None,
 ) -> None:
     """Пара сырьевых артикулов в product_pairs с общей длиной."""
     from app.models.product import Product, ProductLength, ProductPair, ProductType
@@ -1083,7 +1084,7 @@ async def _make_product_pair(
     await session.flush()
     session.add_all([
         ProductLength(product_id=comp_a.id, length_mm=length_mm),
-        ProductLength(product_id=comp_b.id, length_mm=length_mm),
+        ProductLength(product_id=comp_b.id, length_mm=length_b_mm if length_b_mm is not None else length_mm),
     ])
     quantity = {f"{int(length_mm)}": {"auto": None, "manual": manual_n}} if manual_n is not None else {}
     session.add(ProductPair(
@@ -1169,3 +1170,142 @@ async def test_import_paired_profile_without_pair_n_reports_hanger_calc_zero(
     # Пара резолвится, но N невозможна → блокирующая ошибка
     assert "hanger_calc_zero" in paired_item["errors"]
     assert paired_item["after_data"]["source_payload"]["techcard_pair"]["resolved"] is True
+
+
+@pytest.mark.asyncio
+async def test_import_paired_profile_substitutes_raw_length_nearest_above(
+    client, session, tmp_path, monkeypatch
+) -> None:
+    """ГП 2,7 м при сырье 2750: вход материализуется в 2750, N резолвится (#156, ADR-0024)."""
+    monkeypatch.setattr(settings, "IMPORT_STORAGE_DIR", str(tmp_path))
+
+    await _make_product_pair(session, "ЮП-PAIR-A", "ЮП-PAIR-B", manual_n=8, length_mm=2750)
+    await session.commit()
+
+    template = await _create_template(session, name="Paired Raw Sub Template", code="paired-raw-sub-template")
+    await session.commit()
+
+    wb = _workbook_paired()
+    response = await client.post(
+        f"/api/imports/excel/preview?template_id={template.id}",
+        data={"normalize_hanger_quantity": "true"},
+        files={"file": ("paired.xlsx", wb, "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet")},
+    )
+
+    assert response.status_code == 200
+    body = response.json()
+    paired_item = body["items"][0]
+
+    # Подстановка вместо расчётной ошибки: hanger_calc_zero нет
+    assert "hanger_calc_zero" not in paired_item["errors"]
+    assert "raw_length_not_found" not in paired_item["errors"]
+    assert any(w.startswith("raw_length_substituted:") for w in paired_item["warnings"])
+
+    after_data = paired_item["after_data"]
+    # Вход — сырьё 2750, выход — ГП 2700 (семантика вход→выход ADR-0002)
+    assert after_data["input_dimensions"] == {"length_mm": 2750}
+    assert after_data["outputs"][0]["dimensions"] == {"length_mm": 2700}
+    assert after_data["source_payload"]["input"]["inferred"] is False
+
+    # N пары резолвится по сырьевой длине и округляет оба компонента
+    snapshot = after_data["source_payload"]["techcard_pair"]
+    assert snapshot["resolved"] is True
+    assert snapshot["inputs"][0]["techcard_quantity"] == "8"
+    adjusted = after_data.get("adjusted_quantities_by_component", {})
+    assert adjusted["ЮП-PAIR-A"] == adjusted["ЮП-PAIR-B"] == "16"
+
+
+@pytest.mark.asyncio
+async def test_import_paired_profile_without_raw_length_reports_raw_length_not_found(
+    client, session, tmp_path, monkeypatch
+) -> None:
+    """ГП 3,0 м при сырье максимум 2750 → raw_length_not_found, не hanger_calc_zero."""
+    monkeypatch.setattr(settings, "IMPORT_STORAGE_DIR", str(tmp_path))
+
+    await _make_product_pair(session, "ЮП-PAIR-A", "ЮП-PAIR-B", manual_n=8, length_mm=2750)
+    await session.commit()
+
+    template = await _create_template(session, name="Paired No Raw Template", code="paired-no-raw-template")
+    await session.commit()
+
+    wb = _workbook_paired(length_m=3.0)
+    response = await client.post(
+        f"/api/imports/excel/preview?template_id={template.id}",
+        data={"normalize_hanger_quantity": "true"},
+        files={"file": ("paired.xlsx", wb, "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet")},
+    )
+
+    assert response.status_code == 200
+    body = response.json()
+    paired_item = body["items"][0]
+
+    # Ошибка справочника, а не расчёта: вход остаётся длиной ГП
+    assert "raw_length_not_found" in paired_item["errors"]
+    assert "hanger_calc_zero" not in paired_item["errors"]
+    assert paired_item["after_data"]["input_dimensions"] == {"length_mm": 3000}
+    assert paired_item["after_data"]["source_payload"]["techcard_pair"]["resolved"] is True
+
+
+@pytest.mark.asyncio
+async def test_import_paired_profile_empty_intersection_reports_raw_length_not_found(
+    client, session, tmp_path, monkeypatch
+) -> None:
+    """Пустое пересечение длин A∩B — тоже raw_length_not_found (ADR-0024 п.6)."""
+    monkeypatch.setattr(settings, "IMPORT_STORAGE_DIR", str(tmp_path))
+
+    await _make_product_pair(
+        session, "ЮП-PAIR-A", "ЮП-PAIR-B", manual_n=8, length_mm=2750, length_b_mm=2600
+    )
+    await session.commit()
+
+    template = await _create_template(session, name="Paired Empty X Template", code="paired-empty-x-template")
+    await session.commit()
+
+    wb = _workbook_paired()
+    response = await client.post(
+        f"/api/imports/excel/preview?template_id={template.id}",
+        data={"normalize_hanger_quantity": "true"},
+        files={"file": ("paired.xlsx", wb, "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet")},
+    )
+
+    assert response.status_code == 200
+    body = response.json()
+    paired_item = body["items"][0]
+
+    assert "raw_length_not_found" in paired_item["errors"]
+    assert "hanger_calc_zero" not in paired_item["errors"]
+
+
+@pytest.mark.asyncio
+async def test_import_single_profile_substitutes_raw_length_nearest_above(
+    client, session, tmp_path, monkeypatch
+) -> None:
+    """Одиночная позиция: та же механика «ближайшая сверху» по длинам артикула."""
+    monkeypatch.setattr(settings, "IMPORT_STORAGE_DIR", str(tmp_path))
+
+    from app.models.product import Product, ProductLength, ProductType
+
+    product = Product(sku="ЮП-SINGLE-RAW", name="Single Raw", type=ProductType.component, unit="pcs")
+    session.add(product)
+    await session.flush()
+    session.add(ProductLength(product_id=product.id, length_mm=2750))
+    await session.commit()
+
+    template = await _create_template(session, name="Single Raw Sub Template", code="single-raw-sub-template")
+    await session.commit()
+
+    wb = _workbook_with_quantity("ЮП-SINGLE-RAW", "Single Raw", 10)
+    response = await client.post(
+        f"/api/imports/excel/preview?template_id={template.id}",
+        data={"normalize_hanger_quantity": "true"},
+        files={"file": ("single.xlsx", wb, "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet")},
+    )
+
+    assert response.status_code == 200
+    body = response.json()
+    item = body["items"][0]
+
+    assert "raw_length_not_found" not in item["errors"]
+    assert any(w.startswith("raw_length_substituted:") for w in item["warnings"])
+    assert item["after_data"]["input_dimensions"] == {"length_mm": 2750}
+    assert item["after_data"]["outputs"][0]["dimensions"] == {"length_mm": 2700}

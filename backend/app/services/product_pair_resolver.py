@@ -12,11 +12,13 @@
 
 N пары — единая механика с одиночными нормами (#127/#142): ручная из
 словаря пары по длине позиции, авто — совместный расчёт движка
-(``min(by_area, by_size)``). Расчёт невозможен (нет длины, длина вне
-пересечения длин A и B, ручной нет и авто не считается) —
-``calc_error=True``, вызывающий ставит ``hanger_calc_zero``. Пара с
-пустым пересечением длин существует в справочнике (#146: видна в списке
-с ``lengths: []``), но валидной N не даёт.
+(``min(by_area, by_size)``). Длина позиции — всегда сырьевая (ADR-0024:
+план несёт длину ГП, импорт материализует её в сырьевую до резолва).
+Расчёт невозможен (нет длины, длина вне пересечения длин A и B,
+ручной нет и авто не считается) — ``calc_error=True``, вызывающий ставит
+``hanger_calc_zero``. Пара с пустым пересечением длин существует
+в справочнике (#146: видна в списке с ``lengths: []``), но валидной N
+не даёт.
 
 Снапшот-принцип (#142): позиция с записанным снапшотом
 (``source_payload["techcard_pair"]`` с ``resolved=True``) — норматив
@@ -139,8 +141,14 @@ async def resolve_effective_product_id(
     return resolved.pair.product_a_id if resolved is not None else None
 
 
-async def _pair_length_keys(db: AsyncSession, resolved: ResolvedPair) -> set[str]:
-    """Канонические ключи длин пары — пересечение длин A и B (#141)."""
+async def pair_length_candidates_mm(db: AsyncSession, resolved: ResolvedPair) -> list[float]:
+    """Отсортированные длины-кандидаты пары — пересечение длин A и B (#141).
+
+    Каноническое множество для правила ADR-0024 «ближайшая сверху»: пара
+    нормируется одной общей длиной, обе компоненты встают на подвес одной
+    длиной. Пустое пересечение → [] (пара существует по #146, но валидной
+    длины не даёт — вызывающий ставит ``raw_length_not_found``).
+    """
     rows = (
         await db.execute(
             select(ProductLength.product_id, ProductLength.length_mm).where(
@@ -154,7 +162,12 @@ async def _pair_length_keys(db: AsyncSession, resolved: ResolvedPair) -> set[str
     intersection = lengths_by_id.get(resolved.product_a.id, set()) & lengths_by_id.get(
         resolved.product_b.id, set()
     )
-    return {_length_key(length) for length in intersection}
+    return sorted(intersection)
+
+
+async def _pair_length_keys(db: AsyncSession, resolved: ResolvedPair) -> set[str]:
+    """Канонические ключи длин пары — пересечение длин A и B (#141)."""
+    return {_length_key(length) for length in await pair_length_candidates_mm(db, resolved)}
 
 
 async def resolve_pair_n(
