@@ -52,6 +52,81 @@ from app.services.route_builder import build_route_from_profile
 #: warning raw_length_substituted ставится только при большем расхождении,
 #: иначе предпросмотр реального плана тонет в предупреждениях.
 RAW_LENGTH_SILENT_TOLERANCE_MM = 100
+#: Каталог кодов строк импорта плана (спека docs/plan-import-spec.md §3, карта #157).
+#: Статус строки (правило ниже, plan_import_row_status): есть errors → invalid,
+#: иначе warnings → warning, иначе pending.
+#: Новый код — только с явной классификацией error/warning в этом списке:
+#: сторож-тест tests/test_plan_import_codes.py сканирует errors.append /
+#: warnings.append в plan_import_service.py и excel_import.py и падает на
+#: неклассифицированном коде. При добавлении кода обновить список + тест.
+PLAN_IMPORT_ERROR_CODES: frozenset[str] = frozenset(
+    {
+#: Блокируют (invalid).
+        "product_not_found",
+        "product_inactive",
+        "product_pair_not_found",
+        "hanger_calc_zero",
+#: Подбор маршрута: no_route_candidate и остальные значения selection.error
+#: (route_selection.py: error="no_route_candidate" / "route_rule_conflict").
+        "no_route_candidate",
+        "route_rule_conflict",
+        "active_route_has_no_steps",
+        "route_contains_inactive_section",
+        "duplicate_sku_due_date",
+#: Сырьё: нет зарегистрированной длины ≥ длины ГП (возврат
+#: _materialize_raw_length_mm; «и т.п.» спеки — новые raw-коды добавлять сюда).
+        "raw_length_not_found",
+    }
+)
+#: Точные warning-коды без параметров.
+PLAN_IMPORT_WARNING_CODES: frozenset[str] = frozenset(
+    {
+        "product_name_missing",
+        "input_dimensions_unresolved",
+        "paired_profile_product_unmapped",
+    }
+)
+#: Warning-коды с параметрами после «:» (префикс до первого «:»).
+PLAN_IMPORT_WARNING_PREFIXES: tuple[str, ...] = (
+    "raw_length_substituted",
+    "paired_hanger_adjusted",
+    "hanger_quantity_not_set",
+    "invalid_input_length",
+    "invalid_output_length",
+    "paired_row_auto_included",
+    "row_selection_applied",
+    "row_selection_auto_included",
+#: Баланс группы вход×длина = Σ(выход×длина) (excel_import._check_group_balances):
+#: фактический row-warning вне списка спеки §3, зафиксирован здесь же,
+#: чтобы сторож ловил действительно новые коды, а не этот известный.
+    "plan_group_balance_mismatch",
+)
+
+
+def _plan_import_code_base(code: str) -> str:
+#: База кода без параметров: «invalid_output_length:row=5» → «invalid_output_length».
+    return code.split(":", 1)[0]
+
+
+def classify_plan_import_code(code: str) -> str | None:
+#: Классификация кода спеки §3: «error» / «warning» / None (неизвестен).
+    base = _plan_import_code_base(code)
+    if base in PLAN_IMPORT_ERROR_CODES:
+        return "error"
+    if base in PLAN_IMPORT_WARNING_CODES or base in PLAN_IMPORT_WARNING_PREFIXES:
+        return "warning"
+    return None
+
+
+def plan_import_row_status(errors: list[str], warnings: list[str]) -> PlanChangeItemStatus:
+#: Правило статуса строки (спека §3): errors → invalid, иначе warnings → warning,
+#: иначе pending. Вынесено рядом с каталогом, чтобы изменение правила
+#: ревьюилось вместе с классификацией.
+    if errors:
+        return PlanChangeItemStatus.invalid
+    if warnings:
+        return PlanChangeItemStatus.warning
+    return PlanChangeItemStatus.pending
 
 def _row_gp_length_mm(row: ParsedPlanRow) -> float | None:
     """Единственная длина ГП по выходам строки (ADR-0024).
@@ -1142,7 +1217,7 @@ async def _make_change_items(
             if "duplicate_sku_due_date" not in errors:
                 errors.append("duplicate_sku_due_date")
 
-        status = PlanChangeItemStatus.invalid if errors else PlanChangeItemStatus.warning if warnings else PlanChangeItemStatus.pending
+        status = plan_import_row_status(errors, warnings)
         if change_action == PlanChangeAction.mark_possible_duplicate and status == PlanChangeItemStatus.pending:
             status = PlanChangeItemStatus.warning
 
