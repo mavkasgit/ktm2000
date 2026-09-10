@@ -98,10 +98,11 @@ async def _resolve_route_id_for_dynamic_name(
     *,
     built_name: str,
     stored_route_id: int | None,
+    route_cache: dict | None = None,
 ) -> int | None:
     """Prefer stored route_id when its name matches; otherwise lookup by dynamic name."""
     if stored_route_id is not None:
-        route = await db.get(ProductionRoute, stored_route_id)
+        route = await _cached_route(db, stored_route_id, route_cache)
         if route is not None and route.name == built_name:
             return route.id
     return await db.scalar(
@@ -110,6 +111,16 @@ async def _resolve_route_id_for_dynamic_name(
         .order_by(ProductionRoute.id.desc())
         .limit(1)
     )
+
+async def _cached_route(db: AsyncSession, route_id: int, route_cache: dict | None) -> ProductionRoute | None:
+    """Fetch ProductionRoute by id, reusing the batch-level cache when provided."""
+    if route_cache is not None and route_id in route_cache:
+        return route_cache[route_id]
+    route = await db.get(ProductionRoute, route_id)
+    if route_cache is not None:
+        route_cache[route_id] = route
+    return route
+
 
 
 def make_position_route_cache_key(position: PlanPosition) -> tuple:
@@ -140,6 +151,8 @@ def make_position_route_cache_key(position: PlanPosition) -> tuple:
 async def resolve_position_route(
     db: AsyncSession,
     position: PlanPosition,
+    *,
+    route_cache: dict | None = None,
 ) -> ResolvedRouteInfo:
     """Resolve route strictly from manual override + canonical position fields."""
     route_id = position.route_id
@@ -154,7 +167,7 @@ async def resolve_position_route(
         route_id is not None
         and origin == PlanPositionRouteOrigin.manual_confirmed.value
     ):
-        route = await db.get(ProductionRoute, route_id)
+        route = await _cached_route(db, route_id, route_cache)
         source = _compat_source_from_origin(origin, route_id)
         if route is None:
             return ResolvedRouteInfo(
@@ -193,6 +206,7 @@ async def resolve_position_route(
                         db,
                         built_name=built_route.name,
                         stored_route_id=route_id,
+                        route_cache=route_cache,
                     )
                     return ResolvedRouteInfo(
                         route_id=resolved_route_id,
@@ -210,7 +224,7 @@ async def resolve_position_route(
 
     # Stored route_id without dynamic profile (legacy/static assignment).
     if route_id is not None:
-        route = await db.get(ProductionRoute, route_id)
+        route = await _cached_route(db, route_id, route_cache)
         source = _compat_source_from_origin(origin, route_id)
         if route is None:
             return ResolvedRouteInfo(

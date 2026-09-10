@@ -39,6 +39,7 @@ async def validate_route_match(
     select_route_cache: dict | None = None,
     route_stages_cache: dict | None = None,
     sections_cache: dict | None = None,
+    route_cache: dict | None = None,
 ) -> list[str]:
     if position.product_id is None:
         return []
@@ -49,10 +50,10 @@ async def validate_route_match(
         if cache_key in route_resolve_cache:
             route_info = route_resolve_cache[cache_key]
         else:
-            route_info = await resolve_position_route(db, position)
+            route_info = await resolve_position_route(db, position, route_cache=route_cache)
             route_resolve_cache[cache_key] = route_info
     else:
-        route_info = await resolve_position_route(db, position)
+        route_info = await resolve_position_route(db, position, route_cache=route_cache)
 
     if route_info.route_id is None:
         return []

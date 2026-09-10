@@ -48,6 +48,8 @@ async def validate_plan_position(
     sections_cache: dict | None = None,
     existing_fingerprints: set[str] | None = None,
     existing_row_hashes: set[str] | None = None,
+    product_cache: dict | None = None,
+    route_cache: dict | None = None,
 ) -> list[str]:
     errors: list[str] = []
     payload = position.source_payload or {}
@@ -60,7 +62,14 @@ async def validate_plan_position(
 
     # Gate «активная техкарта» упразднён (ADR-0023, #148): валидация
     # одиночной позиции = SKU найден, активен, маршрут разрешён и валиден.
-    product = await db.get(Product, position.product_id) if position.product_id else None
+    if position.product_id is None:
+        product = None
+    elif product_cache is not None and position.product_id in product_cache:
+        product = product_cache[position.product_id]
+    else:
+        product = await db.get(Product, position.product_id)
+        if product_cache is not None:
+            product_cache[position.product_id] = product
     if position.product_id is not None:
         if product is None or not product.is_active:
             errors.append("product_inactive")
@@ -106,10 +115,10 @@ async def validate_plan_position(
         if cache_key in route_resolve_cache:
             route_info = route_resolve_cache[cache_key]
         else:
-            route_info = await resolve_position_route(db, position)
+            route_info = await resolve_position_route(db, position, route_cache=route_cache)
             route_resolve_cache[cache_key] = route_info
     else:
-        route_info = await resolve_position_route(db, position)
+        route_info = await resolve_position_route(db, position, route_cache=route_cache)
 
     if route_info.route_id is None:
         errors.append(route_info.error or "route_not_found")
@@ -191,6 +200,7 @@ async def validate_plan_position(
         select_route_cache=select_route_cache,
         route_stages_cache=route_stages_cache,
         sections_cache=sections_cache,
+        route_cache=route_cache,
     )
     errors.extend(route_errors)
 

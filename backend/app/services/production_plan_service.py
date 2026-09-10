@@ -62,14 +62,16 @@ async def apply_change_set(db: AsyncSession, change_set_id: int, *, skip_invalid
         await db.execute(select(PlanChangeItem).where(PlanChangeItem.change_set_id == change_set_id).order_by(PlanChangeItem.id))
     ).scalars().all()
 
-    # Кэши для устранения N+1 запросов при массовой валидации позиций
+    # Кэши для устранения N+1 запросов при массовой валидации позиций.
+    # Сущности Product/ProductionRoute кэшируются по id на время батча (§4.2).
     route_resolve_cache = {}
     select_route_cache = {}
     route_stages_cache = {}
     sections_cache = {}
+    product_cache: dict = {}
+    route_cache: dict = {}
     existing_fingerprints = set()
     existing_row_hashes = set()
-
     # Загружаем существующие fingerprints и row_hashes одним запросом
     existing_pos_data = (
         await db.execute(
@@ -86,12 +88,13 @@ async def apply_change_set(db: AsyncSession, change_set_id: int, *, skip_invalid
             existing_fingerprints.add(fp)
         if rh:
             existing_row_hashes.add(rh)
-
     created = 0
     updated = 0
     ignored = 0
     cancelled = 0
     skipped_invalid = 0
+    duplicates = 0
+    pending_position_links: list = []
     for item in items:
         if item.status == PlanChangeItemStatus.applied:
             continue
@@ -109,8 +112,8 @@ async def apply_change_set(db: AsyncSession, change_set_id: int, *, skip_invalid
 
         if item.change_action == PlanChangeAction.mark_possible_duplicate:
             item.status = PlanChangeItemStatus.applied
+            duplicates += 1
             continue
-
         if item.change_action == PlanChangeAction.cancel_draft_position:
             if item.plan_position_id:
                 position = await db.get(PlanPosition, item.plan_position_id)
@@ -158,6 +161,8 @@ async def apply_change_set(db: AsyncSession, change_set_id: int, *, skip_invalid
                         sections_cache=sections_cache,
                         existing_fingerprints=existing_fingerprints,
                         existing_row_hashes=existing_row_hashes,
+                        product_cache=product_cache,
+                        route_cache=route_cache,
                     )
 
                     position.validation_errors = validation_errors
@@ -165,7 +170,6 @@ async def apply_change_set(db: AsyncSession, change_set_id: int, *, skip_invalid
                         PlanPositionValidationStatus.invalid if validation_errors else PlanPositionValidationStatus.valid
                     )
                     position.status = PlanPositionStatus.invalid if validation_errors else PlanPositionStatus.draft
-                    await db.flush()
             item.status = PlanChangeItemStatus.applied
             updated += 1
             continue
@@ -212,12 +216,17 @@ async def apply_change_set(db: AsyncSession, change_set_id: int, *, skip_invalid
                 validation_errors=validation_errors,
             )
             db.add(position)
-            await db.flush()
-            item.plan_position_id = position.id
+            pending_position_links.append((item, position))
             item.status = PlanChangeItemStatus.applied
             created += 1
             continue
 
+    # Один flush на весь батч (§4.2): все INSERT/UPDATE выше копятся в сессии.
+    # Связки item → новая позиция разрешаются после flush по выданным PK;
+    # их UPDATE увозят flush внутри log_action ниже и финальный commit.
+    await db.flush()
+    for linked_item, linked_position in pending_position_links:
+        linked_item.plan_position_id = linked_position.id
     change_set.status = PlanChangeSetStatus.applied
     if change_set.import_batch_id:
         from app.models.imports import ImportBatch
@@ -232,12 +241,12 @@ async def apply_change_set(db: AsyncSession, change_set_id: int, *, skip_invalid
         db,
         status="success",
         title="Импорт плана (применен)",
-        message=f"Пакет изменений импорта #{change_set_id} успешно применен. Создано: {created}, обновлено: {updated}, отменено черновиков: {cancelled}, пропущено: {ignored}.",
+        message=f"Пакет изменений импорта #{change_set_id} успешно применен. Создано: {created}, обновлено: {updated}, отменено черновиков: {cancelled}, пропущено: {ignored}, пропущено невалидных: {skipped_invalid}, дублей: {duplicates}.",
         user=user,
         action=AuditAction.IMPORT,
         entity_type=AuditEntityType.IMPORT_BATCH,
         entity_id=change_set.import_batch_id,
-        changes={"created": created, "updated": updated, "cancelled": cancelled, "ignored": ignored},
+        changes={"created": created, "updated": updated, "cancelled": cancelled, "ignored": ignored, "skipped_invalid": skipped_invalid, "duplicates": duplicates},
     )
 
     extra = {
@@ -246,6 +255,9 @@ async def apply_change_set(db: AsyncSession, change_set_id: int, *, skip_invalid
         "ignored_positions": ignored,
         "cancelled_positions": cancelled,
         "skipped_invalid_positions": skipped_invalid,
+        # `duplicates` — буква спеки §4.2; `duplicates_positions` — алиас под конвенцию *_positions.
+        "duplicates": duplicates,
+        "duplicates_positions": duplicates,
     }
     return await get_plan_preview(db, change_set.production_plan_id, extra=extra)
 
