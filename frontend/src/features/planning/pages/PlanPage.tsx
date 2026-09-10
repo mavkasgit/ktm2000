@@ -11,7 +11,7 @@ import { formatDimensionsFilterValue, formatDimensionsLabel } from "@/shared/api
 import { PLAN_POSITIONS_GRID } from "../lib/gridTemplates"
 import { toast } from "@/shared/ui"
 import { useQuery, useQueryClient } from "@tanstack/react-query"
-import { allPlanFiles, allPlanPositions, PlanPositionOut, listPlans, batchAssignRouteGlobal, deleteImportBatch, approveProductionPlanPosition, getPlanDuplicates, bulkApprovePositions, bulkDeletePositions } from "@/shared/api/productionPlans"
+import { allPlanFiles, allPlanPositions, PlanPositionOut, listPlans, batchAssignRouteGlobal, deleteImportBatch, approveProductionPlanPosition, getPlanDuplicates, bulkApprovePositions, bulkDeletePositions, type BatchDeleteConflict } from "@/shared/api/productionPlans"
 import { listRoutes } from "@/shared/api/routes"
 import { listAllImportTemplates } from "@/shared/api/importTemplates"
 import { apiClient, getErrorMessage } from "@/shared/api/client"
@@ -26,6 +26,8 @@ import {
   type BulkRunnerProgress,
 } from "@/shared/bulk"
 import { FileRow } from "../components/PlanFileRow"
+import { BatchDeleteBlockersDialog } from "../components/BatchDeleteBlockersDialog"
+import { parseBatchDeleteConflict } from "../lib/batchDeleteConflict"
 import { PositionRow } from "../components/PlanPositionRow"
 import {
   DuplicateConflict,
@@ -50,6 +52,8 @@ export function PlanPage() {
   const [detailPosition, setDetailPosition] = useState<PlanPositionOut | null>(null)
   const [detailOpen, setDetailOpen] = useState(false)
   const [wipStatsSku, setWipStatsSku] = useState<string | null>(null)
+  const [deleteConflict, setDeleteConflict] = useState<{ batchId: number; filename: string; conflict: BatchDeleteConflict } | null>(null)
+  const [deletingDrafts, setDeletingDrafts] = useState(false)
   const tableScrollRef = useRef<HTMLDivElement>(null)
 
   const openDetail = (pos: PlanPositionOut) => {
@@ -181,7 +185,33 @@ export function PlanPage() {
       queryClient.invalidateQueries({ queryKey: queryKeys.plan.allPositions() })
       toast({ title: "Импорт удалён", variant: "success" })
     } catch (e) {
+      const conflict = parseBatchDeleteConflict(e)
+      if (conflict) {
+        const filename = files?.find(f => f.batch_id === batchId)?.filename ?? `батч #${batchId}`
+        setDeleteConflict({ batchId, filename, conflict })
+        return
+      }
       toast({ title: "Ошибка", description: e instanceof Error ? e.message : "Не удалось удалить импорт", variant: "destructive" })
+    }
+  }
+
+  const handleConfirmDeleteDrafts = async () => {
+    if (!activePlan || !deleteConflict) return
+    setDeletingDrafts(true)
+    try {
+      const result = await deleteImportBatch(activePlan.id, deleteConflict.batchId, { deleteDraftsOnly: true })
+      queryClient.invalidateQueries({ queryKey: queryKeys.plan.allFiles() })
+      queryClient.invalidateQueries({ queryKey: queryKeys.plan.allPositions() })
+      toast({
+        title: result.deleted ? "Импорт удалён" : `Черновики удалены (${result.deleted_drafts ?? 0})`,
+        description: result.deleted ? undefined : "Запущенные позиции, задачи и передачи не тронуты",
+        variant: "success",
+      })
+      setDeleteConflict(null)
+    } catch (e) {
+      toast({ title: "Ошибка", description: e instanceof Error ? e.message : "Не удалось удалить черновики", variant: "destructive" })
+    } finally {
+      setDeletingDrafts(false)
     }
   }
 
@@ -1021,6 +1051,16 @@ export function PlanPage() {
           if (!open) setWipStatsSku(null)
         }}
       />
+      {deleteConflict && (
+        <BatchDeleteBlockersDialog
+          open
+          onOpenChange={(open) => { if (!open) setDeleteConflict(null) }}
+          filename={deleteConflict.filename}
+          conflict={deleteConflict.conflict}
+          deleting={deletingDrafts}
+          onConfirmDrafts={handleConfirmDeleteDrafts}
+        />
+      )}
     </>
   )
 }

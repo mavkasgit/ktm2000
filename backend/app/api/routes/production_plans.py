@@ -3,6 +3,7 @@ from decimal import Decimal
 from typing import Literal
 
 from fastapi import APIRouter, Depends, HTTPException, Query, status
+from fastapi.responses import JSONResponse
 from pydantic import BaseModel, ConfigDict
 from sqlalchemy import String, cast, exists, or_, select, text
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -32,9 +33,13 @@ from app.models.section import Section
 from app.models.user import User
 from app.services.plan_generation import create_release_batch
 from app.services.production_plan_service import (
+    BATCH_DELETE_SAFE_ACTION,
+    BatchDeleteBlocked,
+    _delete_batch_and_orphan_file,
     apply_change_set,
     approve_plan_position,
     cancel_plan_position,
+    delete_import_batch as delete_import_batch_service,
     get_plan_preview,
     restore_plan_position,
     rollback_change_set,
@@ -47,32 +52,6 @@ from app.services.plan_validation import format_validation_error
 from app.services.plan_position_hanger import resolve_positions_hanger
 
 router = APIRouter(prefix="/production-plans", tags=["production-plans"])
-
-
-async def _delete_batch_and_orphan_file(db: AsyncSession, batch_id: int) -> bool:
-    """Delete import batch and remove source file only when no other batch references it."""
-    from app.models.imports import ImportBatch, ImportFile
-
-    batch = await db.get(ImportBatch, batch_id)
-    if batch is None:
-        return False
-
-    source_file_id = batch.source_file_id
-    await db.delete(batch)
-    await db.flush()
-
-    if source_file_id:
-        refs_count = (
-            await db.execute(
-                select(sa_func.count(ImportBatch.id)).where(ImportBatch.source_file_id == source_file_id)
-            )
-        ).scalar() or 0
-        if refs_count == 0:
-            import_file = await db.get(ImportFile, source_file_id)
-            if import_file is not None:
-                await db.delete(import_file)
-                await db.flush()
-    return True
 
 
 class PlanSummaryOut(BaseModel):
@@ -268,142 +247,37 @@ async def discard_plan_change_set(
     return {"deleted": True, "change_set_id": change_set_id}
 
 
-@router.delete("/{production_plan_id}/batches/{batch_id}")
+@router.delete("/{production_plan_id}/batches/{batch_id}", response_model=None)
 async def delete_import_batch(
     production_plan_id: int,
     batch_id: int,
+    delete_drafts_only: bool = False,
     db: AsyncSession = Depends(get_db),
     current_user: User = Depends(get_current_user),
-) -> dict:
-    """Rollback and delete an import batch along with all its positions, change sets, section plan lines, and work tasks."""
-    from app.models.imports import ImportBatch
-    from app.models.internal_plan import SectionPlanLine
-    from app.models.work_task import WorkTask
-    from sqlalchemy import delete
+) -> dict | JSONResponse:
+#: Удаление батча импорта (спека docs/plan-import-spec.md §4.4, тикет #167):
+#: при живых downstream-данных — 409 {code, blockers, safe_action, drafts};
+#: иначе полное удаление либо частичное (delete_drafts_only: только черновики,
+#: released-позиции, задачи и передачи не тронуты). «Удалить всё» при блокерах
+#: запрещено — флага обхода нет.
 
     batch = await db.get(ImportBatch, batch_id)
     if batch is None:
         raise HTTPException(status_code=404, detail="Import batch not found")
-
-    # Rollback and delete all change sets for this batch
-    change_sets = (
-        await db.execute(select(PlanChangeSet).where(PlanChangeSet.import_batch_id == batch_id))
-    ).scalars().all()
-
-    for cs in change_sets:
-        if cs.status.value == "applied":
-            try:
-                await rollback_change_set(db, cs.id)
-            except ValueError:
-                pass  # Ignore rollback errors, continue with deletion
-
-        # Delete all change items
-        await db.execute(delete(PlanChangeItem).where(PlanChangeItem.change_set_id == cs.id))
-        # Delete the change set
-        await db.delete(cs)
-
-    # Find all plan positions for this batch to cascade delete related entities
-    positions = (
-        await db.execute(select(PlanPosition.id).where(PlanPosition.import_batch_id == batch_id))
-    ).scalars().all()
-
-    if positions:
-        # Find all section plan lines for these positions
-        section_plan_lines = (
-            await db.execute(
-                select(SectionPlanLine.id).where(SectionPlanLine.plan_position_id.in_(positions))
-            )
-        ).scalars().all()
-
-        if section_plan_lines:
-            from app.models.defect import Defect, DefectDecision, DefectItem, TransferDiscrepancyDefectItem
-            from app.models.transfer import Transfer, TransferDiscrepancy
-
-            # Find all work task IDs for these section plan lines
-            task_ids = (
-                await db.execute(
-                    select(WorkTask.id).where(WorkTask.section_plan_line_id.in_(section_plan_lines))
-                )
-            ).scalars().all()
-
-            if task_ids:
-                # SpgRemainder/Movement cleanup removed — tables no longer exist.
-                # Defects with movement_id/spg_remainder_id FK were cleaned up on migration.
-
-                # Find affected transfers
-                affected_transfer_ids = (
-                    await db.execute(
-                        select(Transfer.id).where(
-                            (Transfer.from_task_id.in_(task_ids)) | (Transfer.to_task_id.in_(task_ids))
-                        )
-                    )
-                ).scalars().all() or []
-
-                # Handle transfers
-                if affected_transfer_ids:
-                    # Find discrepancies for these transfers
-                    discrepancy_ids = (
-                        await db.execute(
-                            select(TransferDiscrepancy.id).where(
-                                TransferDiscrepancy.transfer_id.in_(affected_transfer_ids)
-                            )
-                        )
-                    ).scalars().all()
-
-                    if discrepancy_ids:
-                        # Delete defect items linked to discrepancies
-                        await db.execute(
-                            delete(TransferDiscrepancyDefectItem).where(
-                                TransferDiscrepancyDefectItem.transfer_discrepancy_id.in_(discrepancy_ids)
-                            )
-                        )
-                        # Delete the discrepancies
-                        await db.execute(
-                            delete(TransferDiscrepancy).where(
-                                TransferDiscrepancy.id.in_(discrepancy_ids)
-                            )
-                        )
-
-                    # Delete the transfers themselves
-                    await db.execute(
-                        delete(Transfer).where(
-                            (Transfer.from_task_id.in_(task_ids)) | (Transfer.to_task_id.in_(task_ids))
-                        )
-                    )
-
-                # Delete all work tasks linked via section plan lines for these positions
-                await db.execute(delete(WorkTask).where(WorkTask.section_plan_line_id.in_(section_plan_lines)))
-
-        # Delete all section plan lines for these positions
-        await db.execute(delete(SectionPlanLine).where(SectionPlanLine.plan_position_id.in_(positions)))
-
-    # Delete all plan positions created by this batch
-    # Delete release batch positions linked to these plan positions
-    if positions:
-        from app.models.release_batch import ReleaseBatchPosition
-        await db.execute(delete(ReleaseBatchPosition).where(ReleaseBatchPosition.plan_position_id.in_(positions)))
-    await db.execute(delete(PlanPosition).where(PlanPosition.import_batch_id == batch_id))
-
-    # Delete the batch and source file only when it is no longer referenced.
-    await _delete_batch_and_orphan_file(db, batch_id)
-
-    # Запись лога аудита
-    from app.services.audit_log_service import log_action
-    from app.models.audit_log import AuditAction, AuditEntityType
-    await log_action(
-        db,
-        status="success",
-        title="Удаление пакета импорта",
-        message=f"Пакет импорта плана #{batch_id} успешно удален со всеми связанными позициями, задачами и движениями.",
-        user=current_user,
-        action=AuditAction.DELETE,
-        entity_type=AuditEntityType.IMPORT_BATCH,
-        entity_id=batch_id,
-    )
-
-    await db.commit()
-
-    return {"deleted": True, "batch_id": batch_id}
+    try:
+        return await delete_import_batch_service(
+            db, batch_id, delete_drafts_only=delete_drafts_only, changed_by=current_user.id
+        )
+    except BatchDeleteBlocked as exc:
+        return JSONResponse(
+            status_code=409,
+            content={
+                "code": exc.code,
+                "blockers": exc.blockers,
+                "safe_action": BATCH_DELETE_SAFE_ACTION,
+                "drafts": exc.drafts,
+            },
+        )
 
 
 @router.post("/{production_plan_id}/positions/{position_id}/approve")

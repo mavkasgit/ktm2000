@@ -333,9 +333,30 @@ export async function batchAssignRoute(planId: number, positionIds: number[], ro
   return data as { updated_count: number; route_id: number | null; route_name: string | null };
 }
 
-export async function deleteImportBatch(planId: number, batchId: number) {
-  const { data } = await apiClient.delete(`/production-plans/${planId}/batches/${batchId}`);
-  return data as { deleted: boolean; batch_id: number };
+export type BatchDeleteBlocker = {
+  position_id: number;
+  reason: string;
+};
+
+export type BatchDeleteConflict = {
+  code: "batch_has_released_positions" | "downstream_transfers_exist";
+  blockers: BatchDeleteBlocker[];
+  safe_action: "delete_drafts_only";
+  drafts: number;
+};
+
+export type BatchDeleteResult = {
+  deleted: boolean;
+  batch_id: number;
+  mode?: "delete_drafts_only";
+  deleted_drafts?: number;
+  blockers?: BatchDeleteBlocker[];
+};
+
+export async function deleteImportBatch(planId: number, batchId: number, opts?: { deleteDraftsOnly?: boolean }) {
+  const params = opts?.deleteDraftsOnly ? { delete_drafts_only: true } : undefined;
+  const { data } = await apiClient.delete(`/production-plans/${planId}/batches/${batchId}`, { params });
+  return data as BatchDeleteResult;
 }
 
 export async function batchAssignRouteGlobal(positionIds: number[], routeId: number | null) {

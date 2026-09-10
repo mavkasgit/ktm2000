@@ -3,7 +3,8 @@ from __future__ import annotations
 from collections import Counter
 from decimal import Decimal
 
-from sqlalchemy import select
+from sqlalchemy import delete, or_, select, update
+from sqlalchemy import func as sa_func
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.models.imports import ImportBatchStatus
@@ -315,6 +316,326 @@ async def rollback_change_set(db: AsyncSession, change_set_id: int, changed_by: 
 
     await db.flush()
     return await get_plan_preview(db, change_set.production_plan_id)
+
+
+async def _delete_batch_and_orphan_file(db: AsyncSession, batch_id: int) -> bool:
+#: Удалить батч импорта и файл-источник, если на него больше никто не ссылается.
+    from app.models.imports import ImportBatch, ImportFile
+
+    batch = await db.get(ImportBatch, batch_id)
+    if batch is None:
+        return False
+    source_file_id = batch.source_file_id
+    await db.delete(batch)
+    await db.flush()
+    if source_file_id:
+        refs_count = (
+            await db.execute(
+                select(sa_func.count(ImportBatch.id)).where(ImportBatch.source_file_id == source_file_id)
+            )
+        ).scalar() or 0
+        if refs_count == 0:
+            import_file = await db.get(ImportFile, source_file_id)
+            if import_file is not None:
+                await db.delete(import_file)
+                await db.flush()
+    return True
+
+
+#: Удаление батча импорта (спека docs/plan-import-spec.md §4.4, тикет #167):
+#: при живых downstream-данных полное удаление запрещено — 409 с blockers.
+BATCH_DELETE_SAFE_ACTION = "delete_drafts_only"
+BATCH_DELETE_BLOCK_RELEASED = "batch_has_released_positions"
+BATCH_DELETE_BLOCK_TRANSFERS = "downstream_transfers_exist"
+
+
+class BatchDeleteBlocked(Exception):
+#: Полное удаление батча заблокировано живыми данными. Маршрут маппит в 409
+#: {code, blockers, safe_action, drafts}; «Удалить всё» при блокерах запрещён.
+    def __init__(self, code: str, blockers: list[dict], drafts: int) -> None:
+        super().__init__(code)
+        self.code = code
+        self.blockers = blockers
+        self.drafts = drafts
+
+
+async def get_batch_delete_blockers(db: AsyncSession, batch_id: int) -> dict:
+#: Блокеры удаления батча: released-позиции и позиции с передачами вниз по
+#: цепочке (линии → задачи → передачи). drafts — число черновиков для кнопки
+#: «Удалить только черновики (n)».
+    from app.models.internal_plan import SectionPlanLine
+    from app.models.transfer import Transfer
+    from app.models.work_task import WorkTask
+
+    positions = (
+        await db.execute(
+            select(PlanPosition.id, PlanPosition.status).where(PlanPosition.import_batch_id == batch_id)
+        )
+    ).all()
+    pos_status = {position_id: st for position_id, st in positions}
+    blockers = [
+        {"position_id": position_id, "reason": "released"}
+        for position_id, st in sorted(pos_status.items())
+        if st == PlanPositionStatus.released
+    ]
+    position_ids = list(pos_status)
+    if position_ids:
+        line_rows = (
+            await db.execute(
+                select(SectionPlanLine.id, SectionPlanLine.plan_position_id).where(
+                    SectionPlanLine.plan_position_id.in_(position_ids)
+                )
+            )
+        ).all()
+        line_pos = {line_id: pid for line_id, pid in line_rows}
+        task_to_pos: dict[int, int] = {}
+        transfer_rows = []
+        if line_pos:
+            task_rows = (
+                await db.execute(
+                    select(WorkTask.id, WorkTask.section_plan_line_id).where(
+                        WorkTask.section_plan_line_id.in_(list(line_pos))
+                    )
+                )
+            ).all()
+            task_to_pos = {task_id: line_pos[line_id] for task_id, line_id in task_rows}
+            if task_to_pos:
+                transfer_rows = (
+                    await db.execute(
+                        select(
+                            Transfer.transfer_no, Transfer.from_task_id, Transfer.to_task_id
+                        )
+                        .where(
+                            or_(
+                                Transfer.from_task_id.in_(list(task_to_pos)),
+                                Transfer.to_task_id.in_(list(task_to_pos)),
+                            )
+                        )
+                        .order_by(Transfer.id)
+                    )
+                ).all()
+        seen: set[tuple[int, str]] = set()
+        for transfer_no, from_task_id, to_task_id in transfer_rows:
+            for task_id in (from_task_id, to_task_id):
+                pid = task_to_pos.get(task_id)
+                if pid is not None and (pid, transfer_no) not in seen:
+                    seen.add((pid, transfer_no))
+                    blockers.append({"position_id": pid, "reason": f"transfer №{transfer_no}"})
+    blockers.sort(key=lambda b: (b["position_id"], b["reason"]))
+    has_released = any(b["reason"] == "released" for b in blockers)
+    code = (
+        BATCH_DELETE_BLOCK_RELEASED
+        if has_released
+        else BATCH_DELETE_BLOCK_TRANSFERS if blockers else None
+    )
+    drafts = sum(1 for st in pos_status.values() if st == PlanPositionStatus.draft)
+    return {"code": code, "blockers": blockers, "safe_action": BATCH_DELETE_SAFE_ACTION, "drafts": drafts}
+
+
+async def _delete_change_set_records(db: AsyncSession, change_set_id: int) -> None:
+#: Удалить записи чендж-сета (items + set) без отката — для черновиков и
+#: уже откаченных сетов.
+    await db.execute(delete(PlanChangeItem).where(PlanChangeItem.change_set_id == change_set_id))
+    change_set = await db.get(PlanChangeSet, change_set_id)
+    if change_set is not None:
+        await db.delete(change_set)
+
+
+async def _cascade_delete_positions(db: AsyncSession, position_ids: list[int]) -> None:
+#: Каскад позиций батча: задачи/передачи (только своих позиций), линии,
+#: позиции релиз-батчей, сами позиции. Вызывать только для позиций без живых
+#: данных вне удаляемого множества (проверено вызывающим через blockers).
+    from app.models.defect import TransferDiscrepancyDefectItem
+    from app.models.internal_plan import SectionPlanLine
+    from app.models.release_batch import ReleaseBatchPosition
+    from app.models.transfer import Transfer, TransferDiscrepancy
+    from app.models.work_task import WorkTask
+
+    if not position_ids:
+        return
+    section_plan_lines = (
+        await db.execute(
+            select(SectionPlanLine.id).where(SectionPlanLine.plan_position_id.in_(position_ids))
+        )
+    ).scalars().all()
+    if section_plan_lines:
+        task_ids = (
+            await db.execute(
+                select(WorkTask.id).where(WorkTask.section_plan_line_id.in_(section_plan_lines))
+            )
+        ).scalars().all()
+        if task_ids:
+            discrepancy_ids = (
+                await db.execute(
+                    select(TransferDiscrepancy.id).where(
+                        or_(
+                            TransferDiscrepancy.transfer_id.in_(
+                                select(Transfer.id).where(
+                                    or_(
+                                        Transfer.from_task_id.in_(task_ids),
+                                        Transfer.to_task_id.in_(task_ids),
+                                    )
+                                )
+                            ),
+                        )
+                    )
+                )
+            ).scalars().all() or []
+            if discrepancy_ids:
+                await db.execute(
+                    delete(TransferDiscrepancyDefectItem).where(
+                        TransferDiscrepancyDefectItem.transfer_discrepancy_id.in_(discrepancy_ids)
+                    )
+                )
+                await db.execute(
+                    delete(TransferDiscrepancy).where(TransferDiscrepancy.id.in_(discrepancy_ids))
+                )
+            await db.execute(
+                delete(Transfer).where(
+                    or_(Transfer.from_task_id.in_(task_ids), Transfer.to_task_id.in_(task_ids))
+                )
+            )
+            await db.execute(delete(WorkTask).where(WorkTask.section_plan_line_id.in_(section_plan_lines)))
+        await db.execute(delete(SectionPlanLine).where(SectionPlanLine.plan_position_id.in_(position_ids)))
+    await db.execute(delete(ReleaseBatchPosition).where(ReleaseBatchPosition.plan_position_id.in_(position_ids)))
+    await db.execute(delete(PlanPosition).where(PlanPosition.id.in_(position_ids)))
+
+
+async def delete_import_batch(
+    db: AsyncSession, batch_id: int, *, delete_drafts_only: bool = False, changed_by: int | None = None
+) -> dict:
+    from app.models.imports import ImportBatch
+
+    info = await get_batch_delete_blockers(db, batch_id)
+    user = await db.get(User, changed_by) if changed_by else None
+    blocked_ids = {b["position_id"] for b in info["blockers"]}
+    if info["code"] is not None and not delete_drafts_only:
+        raise BatchDeleteBlocked(info["code"], info["blockers"], info["drafts"])
+#: Без блокеров safe-режим эквивалентен полному — идём полным путём ради
+#: единого контракта ответа {deleted, batch_id}.
+    if delete_drafts_only and info["code"] is None:
+        delete_drafts_only = False
+    if not delete_drafts_only:
+        change_sets = (
+            await db.execute(select(PlanChangeSet).where(PlanChangeSet.import_batch_id == batch_id))
+        ).scalars().all()
+        for cs in change_sets:
+            if cs.status == PlanChangeSetStatus.applied:
+                await rollback_change_set(db, cs.id, changed_by=changed_by)
+            await _delete_change_set_records(db, cs.id)
+        position_ids = (
+            await db.execute(select(PlanPosition.id).where(PlanPosition.import_batch_id == batch_id))
+        ).scalars().all()
+        await _cascade_delete_positions(db, list(position_ids))
+        await _delete_batch_and_orphan_file(db, batch_id)
+        await log_action(
+            db,
+            status="success",
+            title="Удаление пакета импорта",
+            message=f"Пакет импорта плана #{batch_id} успешно удален со всеми связанными позициями, задачами и движениями.",
+            user=user,
+            action=AuditAction.DELETE,
+            entity_type=AuditEntityType.IMPORT_BATCH,
+            entity_id=batch_id,
+        )
+        await db.commit()
+        return {"deleted": True, "batch_id": batch_id}
+    kept_set_ids: set[int] = set()
+    created_to_delete: set[int] = set()
+    change_sets = (
+        await db.execute(select(PlanChangeSet).where(PlanChangeSet.import_batch_id == batch_id))
+    ).scalars().all()
+    for cs in change_sets:
+        if cs.status == PlanChangeSetStatus.applied:
+            touched = list(
+                (
+                    await db.execute(
+                        select(PlanChangeItem.change_action, PlanChangeItem.plan_position_id).where(
+                            PlanChangeItem.change_set_id == cs.id,
+                            PlanChangeItem.plan_position_id.is_not(None),
+                        )
+                    )
+                ).all()
+            )
+            touched_ids = {pid for _, pid in touched}
+#: Сет пропускается целиком, если задевает блокеры — не только созданными,
+#: но и обновлёнными позициями: откат update_draft_position мутировал бы живые данные.
+            if touched_ids & blocked_ids:
+                kept_set_ids.add(cs.id)
+                continue
+            await rollback_change_set(db, cs.id, changed_by=changed_by)
+            created_to_delete |= {pid for action, pid in touched if action == PlanChangeAction.create_position}
+        await _delete_change_set_records(db, cs.id)
+    draft_rows = (
+        await db.execute(
+            select(PlanPosition.id).where(
+                PlanPosition.import_batch_id == batch_id,
+                PlanPosition.status == PlanPositionStatus.draft,
+            )
+        )
+    ).scalars().all()
+    from app.models.internal_plan import SectionPlanLine
+
+    draft_ids_with_lines: set[int] = set()
+    if draft_rows:
+        draft_ids_with_lines = set(
+            (
+                await db.execute(
+                    select(SectionPlanLine.plan_position_id).where(
+                        SectionPlanLine.plan_position_id.in_(list(draft_rows))
+                    )
+                )
+            ).scalars().all()
+        )
+    deletable_ids = set(created_to_delete) | {pid for pid in draft_rows if pid not in draft_ids_with_lines}
+    if kept_set_ids and deletable_ids:
+#: Пропущенный applied-сет остаётся (откат невозможен из-за блокеров), но его
+#: items отвязываются от сносимых черновиков: after_data хранит историю,
+#: FK на удаляемые позиции быть не должно. Откат такого сета и так невозможен
+#: (rollback_change_set падает на released), история не теряет смысла.
+
+        await db.execute(
+            update(PlanChangeItem)
+            .where(
+                PlanChangeItem.change_set_id.in_(list(kept_set_ids)),
+                PlanChangeItem.plan_position_id.in_(sorted(deletable_ids)),
+            )
+            .values(plan_position_id=None)
+        )
+    await _cascade_delete_positions(db, sorted(deletable_ids))
+    remaining_sets = (
+        await db.execute(
+            select(PlanChangeSet.id).where(PlanChangeSet.import_batch_id == batch_id)
+        )
+    ).scalars().all()
+    remaining_positions = (
+        await db.execute(select(PlanPosition.id).where(PlanPosition.import_batch_id == batch_id))
+    ).scalars().all()
+    deleted_batch = False
+    if not remaining_sets and not remaining_positions:
+        await _delete_batch_and_orphan_file(db, batch_id)
+        deleted_batch = True
+    await log_action(
+        db,
+        status="success",
+        title="Удаление черновиков пакета импорта",
+        message=(
+            f"Из пакета импорта плана #{batch_id} удалено черновиков: {len(deletable_ids)}. "
+            f"Released-позиции, задачи и передачи не тронуты."
+        ),
+        user=user,
+        action=AuditAction.DELETE,
+        entity_type=AuditEntityType.IMPORT_BATCH,
+        entity_id=batch_id,
+    )
+    await db.commit()
+    return {
+        "deleted": deleted_batch,
+        "batch_id": batch_id,
+        "mode": BATCH_DELETE_SAFE_ACTION,
+        "deleted_drafts": len(deletable_ids),
+        "blockers": info["blockers"],
+    }
 
 
 async def approve_plan_position(
