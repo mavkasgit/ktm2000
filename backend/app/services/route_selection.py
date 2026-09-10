@@ -46,6 +46,32 @@ class RouteSelectionResult:
     ctx_snapshot: dict[str, Any] = field(default_factory=dict)
     route_select_matched_rule_ids: list[int] = field(default_factory=list)
     resolved_operations: dict[tuple[str, str], str] = field(default_factory=dict)  # (section_code, group_code) -> operation_code
+@dataclass(slots=True)
+class RouteSelectionBatchCache:
+    """Межстрочный кэш подбора маршрута (спека §4.1, #163).
+    Снимок справочников на время батча: правила профиля, активные маршруты,
+    join этапов и участки. Семантика подбора не меняется — только чтение,
+    один коммит в конце как раньше. Кэш привязан к сессии батча.
+    """
+    profile_id: int | None
+    rules: list[RouteSelectionRule] = field(default_factory=list)
+    active_routes: list[ProductionRoute] = field(default_factory=list)
+    route_sections: dict[int, list[tuple[int, str]]] = field(default_factory=dict)
+    sections_by_id: dict[int, Section] = field(default_factory=dict)
+    section_id_by_code: dict[str, int] = field(default_factory=dict)
+    controlled_section_ids: frozenset[int] = frozenset()
+
+    def register_created_route(
+        self, route: ProductionRoute, section_rows: list[tuple[int, str]]
+    ) -> None:
+        """Учесть маршрут, созданный внутри батча (динамическая сборка):
+        построчные селекты видят его так же, как при живых запросах
+        (порядок снимка — как в запросе: по sort_order, id).
+        """
+        self.route_sections[route.id] = list(section_rows)
+        self.active_routes.append(route)
+        self.active_routes.sort(key=lambda item: (item.sort_order, item.id))
+
 
 
 def build_route_rule_context(source_payload: dict[str, Any] | None, product: Product | None = None) -> dict[str, Any]:
@@ -213,11 +239,12 @@ async def apply_normalize_to_payload(
     profile_id: int | None,
     source_payload: dict[str, Any] | None,
     product: Product | None = None,
+    cached_rules: list[RouteSelectionRule] | None = None,
 ) -> list[dict[str, Any]]:
     """Run normalize rules against payload (mutates source_payload in place)."""
     if not source_payload:
         return []
-    all_rules = await load_selection_rules_for_profile(db, profile_id=profile_id)
+    all_rules = cached_rules if cached_rules is not None else await load_selection_rules_for_profile(db, profile_id=profile_id)
     normalize_rules = _load_rules_by_phase(all_rules, "normalize")
     context = build_route_rule_context(source_payload, product)
     return apply_normalize_phase(context, normalize_rules)
@@ -229,12 +256,15 @@ async def select_route_for_payload(
     product: Product | None = None,
     profile_id: int | None = None,
     template_column_mapping: dict[str, Any] | None = None,
+    batch_cache: RouteSelectionBatchCache | None = None,
 ) -> RouteSelectionResult:
+    cache = batch_cache if batch_cache is not None and batch_cache.profile_id == profile_id else None
+    section_code_map = cache.section_id_by_code if cache is not None else None
     context = build_route_rule_context(source_payload, product)
     normalized_mapping = _normalize_template_mapping(template_column_mapping)
     if normalized_mapping:
         context["template_mapping"] = normalized_mapping
-    all_rules = await load_selection_rules_for_profile(db, profile_id=profile_id)
+    all_rules = cache.rules if cache is not None else await load_selection_rules_for_profile(db, profile_id=profile_id)
 
     # Phase 1: normalize — apply set/add/remove actions to ctx
     normalize_rules = _load_rules_by_phase(all_rules, "normalize")
@@ -252,11 +282,14 @@ async def select_route_for_payload(
     condition_diagnostics: list[dict[str, Any]] = []
 
     # Collect controlled sections from all rules (for scoring)
-    for rule in all_rules:
-        for action in rule.actions or []:
-            section_id = _int_or_none(action.get("section_id"))
-            if section_id is not None:
-                controlled.add(section_id)
+    if cache is not None:
+        controlled = set(cache.controlled_section_ids)
+    else:
+        for rule in all_rules:
+            for action in rule.actions or []:
+                section_id = _int_or_none(action.get("section_id"))
+                if section_id is not None:
+                    controlled.add(section_id)
 
     for rule in select_rules:
         actions = list(rule.actions or [])
@@ -286,10 +319,10 @@ async def select_route_for_payload(
             action_kind = str(action.get("action") or "")
             section_id = _int_or_none(action.get("section_id"))
             section_code = action.get("section_code")
-            
+
             # Resolve section_code to ID if needed
             if section_id is None and section_code is not None:
-                section_id = await _section_id_by_code(db, section_code)
+                section_id = await _section_id_by_code(db, section_code, section_id_by_code=section_code_map)
             
             if action_kind == "require_section" and section_id is not None:
                 required.add(section_id)
@@ -358,16 +391,21 @@ async def select_route_for_payload(
 
     # Resolve section codes from resolve_operations phase to IDs
     for code in resolve_required_codes:
-        sid = await _section_id_by_code(db, code)
+        sid = await _section_id_by_code(db, code, section_id_by_code=section_code_map)
         if sid is not None:
             required.add(sid)
     for code in resolve_excluded_codes:
-        sid = await _section_id_by_code(db, code)
+        sid = await _section_id_by_code(db, code, section_id_by_code=section_code_map)
         if sid is not None:
             excluded.add(sid)
 
     conflict = required & excluded
-    sections_by_id = await _sections_by_id(db, required | excluded)
+    if cache is not None:
+        wanted = required | excluded
+        sections_by_id = {sid: section for sid, section in cache.sections_by_id.items() if sid in wanted}
+    else:
+        sections_by_id = await _sections_by_id(db, required | excluded)
+
     if conflict:
         return RouteSelectionResult(
             route=None,
@@ -386,10 +424,14 @@ async def select_route_for_payload(
             resolved_operations=resolved_operations,
         )
 
-    routes = (
-        await db.execute(select(ProductionRoute).where(ProductionRoute.is_active.is_(True)).order_by(ProductionRoute.sort_order, ProductionRoute.id))
-    ).scalars().all()
-    route_sections = await _route_sections(db, [route.id for route in routes])
+    if cache is not None:
+        routes = cache.active_routes
+        route_sections = cache.route_sections
+    else:
+        routes = (
+            await db.execute(select(ProductionRoute).where(ProductionRoute.is_active.is_(True)).order_by(ProductionRoute.sort_order, ProductionRoute.id))
+        ).scalars().all()
+        route_sections = await load_route_sections(db, [route.id for route in routes])
 
     candidates: list[tuple[int, int, int, ProductionRoute, RouteCandidateDiagnostic]] = []
     diagnostics: list[RouteCandidateDiagnostic] = []
@@ -486,12 +528,50 @@ async def _sections_by_id(db: AsyncSession, ids: set[int]) -> dict[int, Section]
     return {section.id: section for section in rows}
 
 
-async def _section_id_by_code(db: AsyncSession, code: str) -> int | None:
+async def _section_id_by_code(
+    db: AsyncSession, code: str, section_id_by_code: dict[str, int] | None = None
+) -> int | None:
+    if section_id_by_code is not None:
+        return section_id_by_code.get(code)
     section = await db.scalar(select(Section).where(Section.code == code))
     return section.id if section else None
 
 
-async def _route_sections(db: AsyncSession, route_ids: list[int]) -> dict[int, list[tuple[int, str]]]:
+async def load_route_selection_batch_cache(
+    db: AsyncSession, profile_id: int | None
+) -> RouteSelectionBatchCache:
+    """Однократная загрузка снимка подбора на батч (спека §4.1, #163):
+    правила, активные маршруты, join этапов, все участки. 4 запроса вместо
+    ~4 на каждую из N строк.
+    """
+    rules = await load_selection_rules_for_profile(db, profile_id=profile_id)
+    routes = (
+        await db.execute(select(ProductionRoute).where(ProductionRoute.is_active.is_(True)).order_by(ProductionRoute.sort_order, ProductionRoute.id))
+    ).scalars().all()
+    route_sections = await load_route_sections(db, [route.id for route in routes])
+    sections = (await db.execute(select(Section))).scalars().all()
+    sections_by_id = {section.id: section for section in sections}
+    controlled = {
+        section_id
+        for rule in rules
+        for action in rule.actions or []
+        if (section_id := _int_or_none(action.get("section_id"))) is not None
+    }
+    return RouteSelectionBatchCache(
+        profile_id=profile_id,
+        rules=list(rules),
+        active_routes=list(routes),
+        route_sections=route_sections,
+        sections_by_id=sections_by_id,
+        section_id_by_code={section.code: section.id for section in sections},
+        controlled_section_ids=frozenset(controlled),
+    )
+
+
+async def load_route_sections(
+    db: AsyncSession, route_ids: list[int]
+) -> dict[int, list[tuple[int, str]]]:
+    """Join этапов маршрутов: route_id -> [(section_id, section_code)]."""
     if not route_ids:
         return {}
     rows = (

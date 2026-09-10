@@ -171,7 +171,8 @@ async def _pair_length_keys(db: AsyncSession, resolved: ResolvedPair) -> set[str
 
 
 async def resolve_pair_n(
-    db: AsyncSession, resolved: ResolvedPair, *, length_mm: float | None
+    db: AsyncSession, resolved: ResolvedPair, *, length_mm: float | None,
+    length_candidates_mm: list[float] | None = None,
 ) -> PairHangerValue:
     """Разрешить N пары для длины позиции.
 
@@ -179,8 +180,16 @@ async def resolve_pair_n(
     авто-расчёт (оба артикула в режиме auto) → иначе расчёт невозможен
     (``calc_error=True``). Длина позиции вне пересечения длин A и B (в том
     числе пустое пересечение, #146) — пара для этой длины не существует.
+
+    ``length_candidates_mm`` — предзагруженное пересечение длин A∩B
+    (межстрочный кэш батча, #163): избавляет от перезапроса мимо
+    внешнего ``pair_n_cache``. Без него поведение прежнее (запрос в БД).
     """
-    if length_mm is None or _length_key(length_mm) not in await _pair_length_keys(db, resolved):
+    if length_candidates_mm is None:
+        length_keys = await _pair_length_keys(db, resolved)
+    else:
+        length_keys = {_length_key(length) for length in length_candidates_mm}
+    if length_mm is None or _length_key(length_mm) not in length_keys:
         return PairHangerValue(None, None, calc_error=True)
 
     stored = resolved.pair.quantity_per_hanger if isinstance(resolved.pair.quantity_per_hanger, dict) else {}

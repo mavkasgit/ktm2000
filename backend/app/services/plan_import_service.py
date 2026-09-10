@@ -38,13 +38,13 @@ from app.services.excel_import import (
     sha256_bytes,
     validate_excel_extension,
 )
-from app.services.route_selection import load_selection_rules_for_profile, select_route_for_payload
+from app.services.route_selection import load_route_sections, load_selection_rules_for_profile, load_route_selection_batch_cache, select_route_for_payload
 from app.domain.dimensions import LENGTH_MM, DimensionsValidationError, canonicalize_dimensions
 from app.services.dimension_validation import MissingDimensionsError, resolve_product_dimensions
 from app.services.hanger_quantity import adjust_quantity_to_hanger
 from app.services.import_normalization import normalize_sku as _normalize_sku
 from app.services.plan_position_hanger import position_length_mm
-from app.services.route_builder import build_route_from_profile
+from app.services.route_builder import build_route_from_profile, load_route_build_batch_cache
 
 
 #: Допуск silent-подстановки сырья, мм (#156, поправка к ADR-0024 п.7):
@@ -576,14 +576,23 @@ async def _make_change_items(
     pair_n_cache = {}                 # (pair.id, length_key) -> PairHangerValue
     pair_candidates_cache: dict[int, list[float]] = {}  # pair.id -> пересечение длин A∩B (ADR-0024)
     raw_lengths_cache: dict[int, list[float]] = {}  # product.id -> длины ProductLength (ADR-0024)
-    profile_cache = {}                # "profile_{id}" -> RouteRuleProfile
     select_route_cache = {}           # tuple_key -> RouteSelectionResult
     route_stages_cache = {}           # route.id -> list[RouteStage]
     sections_by_id_cache = {}         # section_id -> Section
     sections_by_code_cache = {}       # section_code -> Section
-    built_route_cache = {}            # (profile.id, make_hashable(payload)) -> built_route
     existing_route_by_name_cache = {} # built_route.name -> ProductionRoute
     typical_dimensions_cache: dict[int, dict | None] = {}  # product.id -> типовой размер либо None
+
+    # Межстрочные кэши подбора/сборки маршрута (спека §4.1, #163): снимок
+    # справочников на батч — правила, активные маршруты, join этапов,
+    # участки, группы операций. Семантика не меняется, только чтение.
+    batch_profile = await db.get(RouteRuleProfile, rule_profile_id) if rule_profile_id is not None else None
+    selection_batch = await load_route_selection_batch_cache(db, rule_profile_id)
+    build_batch = (
+        await load_route_build_batch_cache(db, batch_profile, selection_cache=selection_batch)
+        if batch_profile is not None
+        else None
+    )
 
     def make_hashable(val):
         if isinstance(val, dict):
@@ -647,14 +656,16 @@ async def _make_change_items(
                 # пересечению длин A∩B и материализация ГП→сырьё во входе —
                 # до резолва N. Нет кандидата → raw_length_not_found
                 # (ошибка справочника, не расчёта), N не резолвим.
+                # Кандидаты кэшируются по паре (#163): ими же пользуется
+                # resolve_pair_n без перезапроса мимо pair_n_cache.
                 raw_failed = False
+                pair_id = resolved_pair.pair.id
+                if pair_id not in pair_candidates_cache:
+                    pair_candidates_cache[pair_id] = (
+                        await product_pair_resolver.pair_length_candidates_mm(db, resolved_pair)
+                    )
                 gp_length_mm = _gp_length_for_raw_materialization(row)
                 if gp_length_mm is not None:
-                    pair_id = resolved_pair.pair.id
-                    if pair_id not in pair_candidates_cache:
-                        pair_candidates_cache[pair_id] = (
-                            await product_pair_resolver.pair_length_candidates_mm(db, resolved_pair)
-                        )
                     raw_error = _materialize_raw_length_mm(
                         row, warnings,
                         gp_length_mm=gp_length_mm,
@@ -674,7 +685,10 @@ async def _make_change_items(
                     if n_cache_key in pair_n_cache:
                         pair_n = pair_n_cache[n_cache_key]
                     else:
-                        pair_n = await product_pair_resolver.resolve_pair_n(db, resolved_pair, length_mm=length_mm)
+                        pair_n = await product_pair_resolver.resolve_pair_n(
+                            db, resolved_pair, length_mm=length_mm,
+                            length_candidates_mm=pair_candidates_cache[pair_id],
+                        )
                         pair_n_cache[n_cache_key] = pair_n
                     if pair_n.calc_error:
                         errors.append("hanger_calc_zero")
@@ -713,6 +727,7 @@ async def _make_change_items(
             selection = await select_route_for_payload(
                 db, row.payload, product, profile_id=rule_profile_id,
                 template_column_mapping=template_column_mapping,
+                batch_cache=selection_batch,
             )
             select_route_cache[route_sel_key] = selection
 
@@ -908,53 +923,36 @@ async def _make_change_items(
         }
         
         # Build dynamic route steps for preview
-        if rule_profile_id is not None:
+        if batch_profile is not None:
             try:
-                # Получаем профиль из кэша, если он там есть
-                profile_key = f"profile_{rule_profile_id}"
-                if profile_key in profile_cache:
-                    profile = profile_cache[profile_key]
-                else:
-                    profile = await db.get(
-                        __import__("app.models.route", fromlist=["RouteRuleProfile"]).RouteRuleProfile,
-                        rule_profile_id,
-                    )
-                    profile_cache[profile_key] = profile
+                # Include product_id in payload for preview so product-based rules work
+                preview_payload = row.payload
+                if product is not None:
+                    preview_payload = {**row.payload, "product_id": product.id}
 
-                if profile is not None:
-                    # Include product_id in payload for preview so product-based rules work
-                    preview_payload = row.payload
-                    if product is not None:
-                        preview_payload = {**row.payload, "product_id": product.id}
-                    
-                    preview_payload_key = make_hashable(preview_payload)
-                    build_key = (rule_profile_id, preview_payload_key)
-                    if build_key in built_route_cache:
-                        built_route = built_route_cache[build_key]
-                    else:
-                        built_route = await build_route_from_profile(
-                            db, profile, preview_payload, None
-                        )
-                        built_route_cache[build_key] = built_route
+                built_route = await build_route_from_profile(
+                    db, batch_profile, preview_payload, None,
+                    product=product, batch=build_batch,
+                )
 
-                    if not built_route.error:
-                        after_data["route_steps"] = [
-                            {
-                                "sequence": step.sequence,
-                                "section_code": step.section_code,
-                                "section_name": step.section_name,
-                                "operation_code": step.operation_code,
-                                "operation_name": step.operation_name,
-                                "is_significant": step.is_significant,
-                            }
-                            for step in built_route.steps
-                        ]
-                        # Use built route name and assign dynamic route
-                        if built_route.name:
-                            after_data["route_name"] = built_route.name
-                            after_data["route_source"] = "dynamic_build"
-                            after_data["route_assigned_at"] = datetime.now(UTC).isoformat()
-                            after_data["route_match_quality"] = PlanPositionRouteMatchQuality.exact.value
+                if not built_route.error:
+                    after_data["route_steps"] = [
+                        {
+                            "sequence": step.sequence,
+                            "section_code": step.section_code,
+                            "section_name": step.section_name,
+                            "operation_code": step.operation_code,
+                            "operation_name": step.operation_name,
+                            "is_significant": step.is_significant,
+                        }
+                        for step in built_route.steps
+                    ]
+                    # Use built route name and assign dynamic route
+                    if built_route.name:
+                        after_data["route_name"] = built_route.name
+                        after_data["route_source"] = "dynamic_build"
+                        after_data["route_assigned_at"] = datetime.now(UTC).isoformat()
+                        after_data["route_match_quality"] = PlanPositionRouteMatchQuality.exact.value
             except Exception:
                 pass  # Silently ignore route building errors for preview
         
@@ -963,29 +961,17 @@ async def _make_change_items(
         logger = logging.getLogger(__name__)
         logger.info(f"Route persistence check: rule_profile_id={rule_profile_id}, change_set_id={change_set_id}")
         
-        if rule_profile_id is not None and change_set_id != 0:
+        if batch_profile is not None and change_set_id != 0:
             try:
                 logger.info(f"Building dynamic route for product {product.id if product else 'None'}")
-                profile_key = f"profile_{rule_profile_id}"
-                if profile_key in profile_cache:
-                    profile = profile_cache[profile_key]
-                else:
-                    profile = await db.get(RouteRuleProfile, rule_profile_id)
-                    profile_cache[profile_key] = profile
-
-                logger.info(f"Profile found: {profile is not None}")
-                if profile is not None:
+                logger.info(f"Profile found: {batch_profile is not None}")
+                if batch_profile is not None:
                     payload_for_route = {**row.payload, "product_id": product.id} if product else row.payload
-                    
-                    payload_for_route_key = make_hashable(payload_for_route)
-                    build_key = (rule_profile_id, payload_for_route_key)
-                    if build_key in built_route_cache:
-                        built_route = built_route_cache[build_key]
-                    else:
-                        built_route = await build_route_from_profile(
-                            db, profile, payload_for_route, None
-                        )
-                        built_route_cache[build_key] = built_route
+
+                    built_route = await build_route_from_profile(
+                        db, batch_profile, payload_for_route, None,
+                        product=product, batch=build_batch,
+                    )
                     
                     # Log route building result
                     import logging
@@ -1137,12 +1123,20 @@ async def _make_change_items(
                                         logger = logging.getLogger(__name__)
                                         logger.error(f"Failed to create stages for route {built_route.name}: {step_error}", exc_info=True)
                                         raise
-                                
+
                                 if steps_created_successfully:
                                     created_route_id = created_route.id
                                     route_cache[cache_key] = created_route_id
-                                else:
-                                    raise ValueError(f"Route {built_route.name} created without stages")
+                                    # Видимость для построчных селектов (#163):
+                                    # живые запросы видели бы созданный маршрут.
+                                    # Фактические строки этапов (группы могут
+                                    # пропускать шаги без участка) — одним
+                                    # запросом на созданный маршрут.
+                                    created_section_rows = await load_route_sections(db, [created_route.id])
+                                    selection_batch.register_created_route(
+                                        created_route,
+                                        created_section_rows.get(created_route.id, []),
+                                    )
                         
                         # Update after_data with the created route
                         after_data["route_id"] = created_route_id

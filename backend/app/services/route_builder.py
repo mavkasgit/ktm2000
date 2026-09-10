@@ -62,12 +62,123 @@ class BuiltRoute:
     error: str | None = None
     name: str = ""
 
+@dataclass(slots=True)
+class RouteBuildBatchCache:
+    """Межстрочный кэш динамической сборки маршрута (спека §4.1, #163).
+    Статика профиля на время батча: правила, участки, группы операций,
+    имена операций, поля сигнатуры имени. Плюс мемоизация ``BuiltRoute``
+    по сигнатуре входа сборки (derived-вход, не полный payload).
+    Привязан к сессии батча.
+
+    ``built_routes`` хранит разделяемые экземпляры ``BuiltRoute`` —
+    только чтение, не мутировать (один объект на несколько строк батча).
+    """
+    profile_id: int | None
+    rules: list = field(default_factory=list)
+    sections_by_code: dict[str, Section] = field(default_factory=dict)
+    ops_by_section_group: dict[tuple[int, str | None], list[SectionOperation]] = field(default_factory=dict)
+    operation_name_by_code: dict[str, str] = field(default_factory=dict)
+    section_id_by_code: dict[str, int] = field(default_factory=dict)
+    sections_by_id: dict[int, Section] = field(default_factory=dict)
+    payload_signature_fields: tuple[str, ...] = ()
+    built_routes: dict[tuple, BuiltRoute] = field(default_factory=dict)
+
+def _freeze_signature_value(value: Any) -> Any:
+    """Хэшируемая проекция значения payload для ключа мемоизации."""
+    if isinstance(value, dict):
+        return tuple((key, _freeze_signature_value(value[key])) for key in sorted(value, key=str))
+    if isinstance(value, (list, tuple)):
+        return tuple(_freeze_signature_value(item) for item in value)
+    if isinstance(value, (set, frozenset)):
+        return tuple(sorted((_freeze_signature_value(item) for item in value), key=repr))
+    try:
+        hash(value)
+    except TypeError:
+        return repr(value)
+    return value
+
+
+def collect_payload_signature_fields(rules: list) -> tuple[str, ...]:
+    """Поля payload, читаемые сборкой имени после derive-фазы.
+    ``output_kind``/``shot_op`` читает ``_assemble_name_values`` напрямую,
+    остальные — цели записи фаз (normalize color-extraction, signatures
+    set_field): их пост-значения входят в ключ мемоизации.
+    """
+    fields = {"output_kind", "shot_op"}
+    for rule in rules or []:
+        phase = rule.phase if hasattr(rule, "phase") else "route_select"
+        for action in rule.actions or []:
+            kind = str(action.get("action") or "")
+            if phase == "normalize" and kind == "set_field_from_color_extraction":
+                fields.add(str(action.get("target_field") or "color"))
+            elif phase == "resolve_signatures" and kind == "set_field":
+                path = str(action.get("path") or "")
+                if path.startswith("payload."):
+                    fields.add(path[len("payload."):])
+    return tuple(sorted(fields))
+
+
+async def load_route_build_batch_cache(
+    db: AsyncSession,
+    profile: RouteRuleProfile,
+    *,
+    rules: list | None = None,
+    selection_cache=None,
+) -> RouteBuildBatchCache:
+    """Однократная загрузка статики сборки на батч (спека §4.1, #163):
+    правила, участки профиля, группы операций, имена операций.
+    """
+    profile_id = profile.id if profile is not None else None
+    if rules is None:
+        if selection_cache is not None and selection_cache.profile_id == profile_id:
+            rules = selection_cache.rules
+        else:
+            rules = await load_selection_rules_for_profile(db, profile_id=profile_id)
+    if selection_cache is not None and selection_cache.profile_id == profile_id:
+        section_id_by_code = dict(selection_cache.section_id_by_code)
+        sections_by_id = dict(selection_cache.sections_by_id)
+    else:
+        sections = (await db.execute(select(Section))).scalars().all()
+        sections_by_id = {section.id: section for section in sections}
+        section_id_by_code = {section.code: section.id for section in sections}
+    section_codes = list(profile.route_sections or []) if profile is not None else []
+    sections_by_code = {
+        code: sections_by_id[sid]
+        for code in section_codes
+        if (sid := section_id_by_code.get(code)) is not None and sid in sections_by_id
+    }
+    profile_section_ids = {section.id for section in sections_by_code.values()}
+    all_section_ops = (await db.execute(
+        select(SectionOperation).order_by(
+            SectionOperation.section_id, SectionOperation.sort_order, SectionOperation.operation_code
+        )
+    )).scalars().all()
+    ops_by_section_group: dict = {}
+    operation_name_by_code: dict[str, str] = {}
+    for op in all_section_ops:
+        operation_name_by_code[op.operation_code] = op.operation_name
+        if op.section_id in profile_section_ids and op.group_code is not None:
+            ops_by_section_group.setdefault((op.section_id, op.group_code), []).append(op)
+    return RouteBuildBatchCache(
+        profile_id=profile_id,
+        rules=list(rules),
+        sections_by_code=sections_by_code,
+        ops_by_section_group=ops_by_section_group,
+        operation_name_by_code=operation_name_by_code,
+        section_id_by_code=section_id_by_code,
+        sections_by_id=sections_by_id,
+        payload_signature_fields=collect_payload_signature_fields(rules),
+    )
+
 
 async def build_route_from_profile(
     db: AsyncSession,
     profile: RouteRuleProfile,
     source_payload: dict[str, Any] | None = None,
     position: PlanPosition | None = None,
+    *,
+    product: Product | None = None,
+    batch: RouteBuildBatchCache | None = None,
 ) -> BuiltRoute:
     """Собрать маршрут динамически из профиля.
 
@@ -76,73 +187,126 @@ async def build_route_from_profile(
     3. Для каждого оставшегося участка: загрузить все группы из SectionOperation
     4. Все группы участка получают одинаковый sequence (combined)
     5. Вернуть BuiltRoute со шагами
+
+    С ``batch`` (межстрочный кэш, #163): правила/участки/операции/имена
+    читаются из снимка батча без SQL, а готовый ``BuiltRoute`` мемоизируется
+    по сигнатуре входа сборки (derived-вход, не полный payload).
     """
     route_section_codes = profile.route_sections or []
     if not route_section_codes:
         return BuiltRoute(error="profile_has_no_route_sections")
 
-    # Получить product для правил (например global_product_skip_shot)
-    product: Product | None = None
-    if position and position.product_id:
-        product = (await db.execute(
-            select(Product).options(selectinload(Product.processing_flags)).where(Product.id == position.product_id)
-        )).scalar_one_or_none()
-    elif source_payload:
-        # Try to resolve product from source_payload product_id (preview path)
-        payload_product_id = source_payload.get("product_id")
-        if payload_product_id:
-            product = (await db.execute(
-                select(Product).options(selectinload(Product.processing_flags)).where(Product.id == int(payload_product_id))
-            )).scalar_one_or_none()
+    batch = batch if batch is not None and batch.profile_id == profile.id else None
+    if batch is not None:
+        rules = batch.rules
+    else:
+        rules = await load_selection_rules_for_profile(db, profile_id=profile.id)
 
-    await apply_normalize_to_payload(db, profile.id, source_payload, product)
+    # Получить product для правил (например global_product_skip_shot).
+    # Переданный product (уже загружен вызывателем) экономит перезапрос.
+    if product is None:
+        if position and position.product_id:
+            product = (await db.execute(
+                select(Product).options(selectinload(Product.processing_flags)).where(Product.id == position.product_id)
+            )).scalar_one_or_none()
+        elif source_payload:
+            # Try to resolve product from source_payload product_id (preview path)
+            payload_product_id = source_payload.get("product_id")
+            if payload_product_id:
+                product = (await db.execute(
+                    select(Product).options(selectinload(Product.processing_flags)).where(Product.id == int(payload_product_id))
+                )).scalar_one_or_none()
+
+    # Derive-фаза (чистая при batch: только CPU, без SQL): нормализация,
+    # исключаемые участки, операции, производные поля имени.
+    await apply_normalize_to_payload(db, profile.id, source_payload, product, cached_rules=rules)
 
     # Вычислить excluded sections из route_select правил
-    excluded_codes = await _compute_excluded_sections(db, profile.id, source_payload, product)
+    excluded_codes = await _compute_excluded_sections(
+        db, profile.id, source_payload, product, cached_rules=rules, batch=batch
+    )
 
     # Разрешить конкретные операции из resolve_operations правил
-    resolved_ops = await _resolve_operations(db, profile.id, source_payload, product)
+    resolved_ops = await _resolve_operations(db, profile.id, source_payload, product, cached_rules=rules)
 
-    # Отфильтровать route_sections
+    # Отфильтровать route_sections (до материализации — часть ключа мемоизации)
     filtered_section_codes = [c for c in route_section_codes if c not in excluded_codes]
+
+    # Phase: resolve_signatures — compute derived values (output_kind, shot_op) in payload.
+    await _resolve_signatures(
+        db, profile.id, source_payload, product,
+        filtered_section_codes, excluded_codes, cached_rules=rules,
+    )
+
+    memo_key = None
+    if batch is not None:
+        memo_key = (
+            profile.id,
+            product.id if product is not None else None,
+            frozenset(excluded_codes),
+            tuple(sorted(resolved_ops.items())),
+            tuple(
+                _freeze_signature_value(source_payload.get(field_name))
+                if source_payload is not None else None
+                for field_name in batch.payload_signature_fields
+            ),
+        )
+        hit = batch.built_routes.get(memo_key)
+        if hit is not None:
+            return hit  # разделяемый экземпляр — только чтение (контракт кэша)
+
     if not filtered_section_codes:
-        return BuiltRoute(
+        result = BuiltRoute(
             route_sections=route_section_codes,
             excluded_sections=sorted(excluded_codes),
             error="all_sections_excluded",
         )
+        if batch is not None:
+            batch.built_routes[memo_key] = result
+        return result
 
-    # Загрузить все участки из filtered route_sections
-    sections = (await db.execute(
-        select(Section)
-        .where(Section.code.in_(filtered_section_codes))
-        .order_by(Section.sort_order)
-    )).scalars().all()
-    sections_by_code = {s.code: s for s in sections}
+    if batch is not None:
+        sections_by_code = {
+            code: batch.sections_by_code[code]
+            for code in filtered_section_codes
+            if code in batch.sections_by_code
+        }
+        ops_by_section_group = batch.ops_by_section_group
+    else:
+        # Загрузить все участки из filtered route_sections
+        sections = (await db.execute(
+            select(Section)
+            .where(Section.code.in_(filtered_section_codes))
+            .order_by(Section.sort_order)
+        )).scalars().all()
+        sections_by_code = {s.code: s for s in sections}
+
+        # Загрузить все SectionOperation для этих участков
+        section_ids = [s.id for s in sections]
+        all_ops = (await db.execute(
+            select(SectionOperation)
+            .where(SectionOperation.section_id.in_(section_ids))
+            .where(SectionOperation.group_code.isnot(None))  # только операции в группах
+            .order_by(SectionOperation.section_id, SectionOperation.sort_order, SectionOperation.operation_code)
+        )).scalars().all()
+
+        # Сгруппировать операции по (section_id, group_code)
+        ops_by_section_group = {}
+        for op in all_ops:
+            key = (op.section_id, op.group_code)
+            ops_by_section_group.setdefault(key, []).append(op)
 
     # Проверить что все участки существуют
     missing = [c for c in filtered_section_codes if c not in sections_by_code]
     if missing:
-        return BuiltRoute(
+        result = BuiltRoute(
             route_sections=route_section_codes,
             excluded_sections=sorted(excluded_codes),
             error=f"missing_sections: {', '.join(missing)}",
         )
-
-    # Загрузить все SectionOperation для этих участков
-    section_ids = [s.id for s in sections]
-    all_ops = (await db.execute(
-        select(SectionOperation)
-        .where(SectionOperation.section_id.in_(section_ids))
-        .where(SectionOperation.group_code.isnot(None))  # только операции в группах
-        .order_by(SectionOperation.section_id, SectionOperation.sort_order, SectionOperation.operation_code)
-    )).scalars().all()
-
-    # Сгруппировать операции по (section_id, group_code)
-    ops_by_section_group: dict[tuple[int, str | None], list[SectionOperation]] = {}
-    for op in all_ops:
-        key = (op.section_id, op.group_code)
-        ops_by_section_group.setdefault(key, []).append(op)
+        if batch is not None:
+            batch.built_routes[memo_key] = result
+        return result
 
     # Строим шаги маршрута
     steps: list[BuiltRouteStep] = []
@@ -254,11 +418,9 @@ async def build_route_from_profile(
     if steps:
         steps[-1].is_final = True
 
-    # Phase: resolve_signatures — compute derived values (output_kind, shot_op)
-    await _resolve_signatures(db, profile.id, source_payload, product, filtered_section_codes, excluded_codes)
-
     # Resolve operation names from SectionOperation reference
-    resolved_names = await _resolve_operation_names(db, resolved_ops, filtered_section_codes)
+    name_by_code = batch.operation_name_by_code if batch is not None else None
+    resolved_names = await _resolve_operation_names(db, resolved_ops, filtered_section_codes, name_by_code=name_by_code)
 
     # Assemble template values from resolved names and payload
     name_values = _assemble_name_values(
@@ -269,29 +431,33 @@ async def build_route_from_profile(
     pattern = profile.route_name_pattern or "{output_kind} - {operations}"
     route_name = build_route_name(pattern, name_values, fallback="Универсальный")
 
-    return BuiltRoute(
+    result = BuiltRoute(
         route_sections=route_section_codes,
         excluded_sections=sorted(excluded_codes),
         steps=steps,
         name=route_name,
     )
-
+    if batch is not None:
+        batch.built_routes[memo_key] = result
+    return result
 
 async def _compute_excluded_sections(
     db: AsyncSession,
     profile_id: int | None,
     source_payload: dict[str, Any] | None,
     product: Product | None,
+    cached_rules: list | None = None,
+    batch: RouteBuildBatchCache | None = None,
 ) -> set[str]:
     """Вычислить коды участков которые нужно исключить на основе route_select правил.
 
     Загружает правила route_select фазы, evaluates conditions,
     и возвращает set[section_code] для exclude_section actions.
-    
+
     Note: Actions store section_id (int), not section_code (string).
     We need to lookup the Section to get its code.
     """
-    all_rules = await load_selection_rules_for_profile(db, profile_id=profile_id)
+    all_rules = cached_rules if cached_rules is not None else await load_selection_rules_for_profile(db, profile_id=profile_id)
     select_rules = _load_rules_by_phase(all_rules, "route_select")
     context = build_route_rule_context(source_payload, product)
 
@@ -316,14 +482,17 @@ async def _compute_excluded_sections(
                 section_id = action.get("section_id")
                 section_code = action.get("section_code")
                 resolved_section_id = section_id
-                
+
                 # Resolve section_code to ID if needed
                 if resolved_section_id is None and section_code is not None:
-                    from sqlalchemy import select as sa_select
-                    resolved_section_id = await db.scalar(
-                        sa_select(Section.id).where(Section.code == section_code).limit(1)
-                    )
-                
+                    if batch is not None:
+                        resolved_section_id = batch.section_id_by_code.get(section_code)
+                    else:
+                        from sqlalchemy import select as sa_select
+                        resolved_section_id = await db.scalar(
+                            sa_select(Section.id).where(Section.code == section_code).limit(1)
+                        )
+
                 if resolved_section_id is not None:
                     if action_kind == "exclude_section":
                         excluded_ids.add(int(resolved_section_id))
@@ -333,10 +502,12 @@ async def _compute_excluded_sections(
         return set()
 
     # Lookup section codes by ID
+    if batch is not None:
+        return {batch.sections_by_id[sid].code for sid in excluded_ids if sid in batch.sections_by_id}
     sections = (await db.execute(
         select(Section).where(Section.id.in_(excluded_ids))
     )).scalars().all()
-    
+
     return {s.code for s in sections}
 
 
@@ -345,12 +516,13 @@ async def _resolve_operations(
     profile_id: int | None,
     source_payload: dict[str, Any] | None,
     product: Product | None,
+    cached_rules: list | None = None,
 ) -> dict[tuple[str, str], str]:
     """Вычислить конкретные операции для групп на основе resolve_operations правил.
 
     Возвращает dict {(section_code, group_code): operation_code}
     """
-    all_rules = await load_selection_rules_for_profile(db, profile_id=profile_id)
+    all_rules = cached_rules if cached_rules is not None else await load_selection_rules_for_profile(db, profile_id=profile_id)
     resolve_rules = _load_rules_by_phase(all_rules, "resolve_operations")
     context = build_route_rule_context(source_payload, product)
 
@@ -414,11 +586,12 @@ async def _resolve_signatures(
     product: Product | None,
     included_sections: list[str],
     excluded_sections: set[str],
+    cached_rules: list | None = None,
 ) -> None:
     """Apply resolve_signatures rules to set derived values (output_kind, shot_op) in payload."""
     if source_payload is None:
         return
-    all_rules = await load_selection_rules_for_profile(db, profile_id=profile_id)
+    all_rules = cached_rules if cached_rules is not None else await load_selection_rules_for_profile(db, profile_id=profile_id)
     signature_rules = _load_rules_by_phase(all_rules, "resolve_signatures")
     if not signature_rules:
         return
@@ -447,11 +620,11 @@ async def _resolve_signatures(
                     field = path[len("payload."):]
                     source_payload[field] = value
 
-
 async def _resolve_operation_names(
     db: AsyncSession,
     resolved_ops: dict[tuple[str, str], str],
     included_section_codes: list[str],
+    name_by_code: dict[str, str] | None = None,
 ) -> dict[tuple[str, str], str]:
     """Look up operation names from SectionOperation for resolved ops.
 
@@ -462,11 +635,12 @@ async def _resolve_operation_names(
     if not op_codes:
         return {}
 
-    rows = (await db.execute(
-        select(SectionOperation)
-        .where(SectionOperation.operation_code.in_(op_codes))
-    )).scalars().all()
-    name_by_code = {r.operation_code: r.operation_name for r in rows}
+    if name_by_code is None:
+        rows = (await db.execute(
+            select(SectionOperation)
+            .where(SectionOperation.operation_code.in_(op_codes))
+        )).scalars().all()
+        name_by_code = {r.operation_code: r.operation_name for r in rows}
 
     result: dict[tuple[str, str], str] = {}
     for (section_code, group_code), op_code in resolved_ops.items():
