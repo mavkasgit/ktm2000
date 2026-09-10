@@ -1,0 +1,172 @@
+<!DOCTYPE html>
+<!-- PROTOTYPE — throwaway. Вопрос: как выглядят preview/ошибки/блокировки ускоренного импорта плана (тикет #161).
+     Три варианта: ?variant=a | b | c. Открыть дабл-кликом. Данные canned (по профилю #158: 289 строк).
+     В main не вливать; переносить только validated decision, переписав нормально. -->
+<html lang="ru">
+<head>
+<meta charset="utf-8">
+<title>PROTOTYPE: импорт плана — preview/ошибки/блокировки</title>
+<style>
+  body { font-family: system-ui, sans-serif; margin: 0; background: #f4f4f5; color: #18181b; }
+  .wrap { max-width: 1100px; margin: 24px auto; padding: 0 16px 96px; }
+  .cards { display: grid; grid-template-columns: repeat(5, 1fr); gap: 8px; margin: 12px 0; }
+  .card { background: #fff; border: 1px solid #e4e4e7; border-radius: 8px; padding: 10px 12px; }
+  .card .t { font-size: 12px; color: #71717a; }
+  .card .v { font-size: 22px; font-weight: 700; }
+  .green { color: #15803d; } .amber { color: #b45309; } .red { color: #b91c1c; } .violet { color: #6d28d9; }
+  table { width: 100%; border-collapse: collapse; background: #fff; font-size: 13px; }
+  th, td { border: 1px solid #e4e4e7; padding: 6px 8px; text-align: left; }
+  th { background: #fafafa; font-size: 12px; color: #52525b; }
+  .pill { display: inline-block; padding: 1px 8px; border-radius: 999px; font-size: 12px; }
+  .p-ok { background: #dcfce7; color: #166534; } .p-warn { background: #fef3c7; color: #92400e; }
+  .p-err { background: #fee2e2; color: #991b1b; } .p-dup { background: #ede9fe; color: #5b21b6; }
+  .btn { padding: 8px 16px; border-radius: 6px; border: 1px solid #d4d4d8; background: #fff; cursor: pointer; font-size: 14px; }
+  .btn.primary { background: #18181b; color: #fff; border-color: #18181b; }
+  .btn.danger { background: #b91c1c; color: #fff; border-color: #b91c1c; }
+  .bar { display: flex; gap: 8px; margin: 16px 0; flex-wrap: wrap; }
+  .steps { display: flex; gap: 0; margin: 16px 0; }
+  .step { flex: 1; padding: 10px; background: #fff; border: 1px solid #e4e4e7; font-size: 13px; }
+  .step.done { background: #f0fdf4; } .step.cur { border: 2px solid #18181b; font-weight: 700; }
+  .errbox { background: #fef2f2; border: 1px solid #fecaca; border-radius: 8px; padding: 12px; margin: 12px 0; font-size: 13px; }
+  .blockbox { background: #fffbeb; border: 1px solid #fcd34d; border-radius: 8px; padding: 12px; margin: 12px 0; font-size: 13px; }
+  .sticky { position: sticky; bottom: 64px; background: #18181b; color: #fff; border-radius: 8px; padding: 10px 16px; display: flex; gap: 12px; align-items: center; margin-top: 12px; font-size: 14px; }
+  .sticky .btn.primary { background: #fff; color: #18181b; }
+  #switcher { position: fixed; bottom: 12px; left: 50%; transform: translateX(-50%); background: #18181b; color: #fff;
+    border-radius: 999px; padding: 6px 8px; display: flex; gap: 12px; align-items: center; box-shadow: 0 4px 16px rgba(0,0,0,.35); font-size: 14px; }
+  #switcher button { background: none; border: none; color: #fff; font-size: 18px; cursor: pointer; padding: 2px 10px; }
+  pre.contract { background: #18181b; color: #e4e4e7; padding: 12px; border-radius: 8px; font-size: 12px; overflow: auto; }
+  h2 { margin-top: 28px; } .fileline { font-size: 13px; color: #52525b; }
+</style>
+</head>
+<body>
+<div class="wrap">
+  <div class="fileline">Файл: Упаковочный план.xlsx · Лист: РП · Строки: все · <b>PROTOTYPE</b>, данные canned</div>
+  <h1 id="title"></h1>
+
+  <!-- ============ VARIANT A: диалог как сейчас + дубли + пагинация ============ -->
+  <div id="v-a" class="variant">
+    <div class="cards">
+      <div class="card"><div class="t">Всего строк</div><div class="v">289</div></div>
+      <div class="card"><div class="t">Новые</div><div class="v green">271</div></div>
+      <div class="card"><div class="t">С предупреждениями</div><div class="v amber">6</div></div>
+      <div class="card"><div class="t">С ошибками</div><div class="v red">5</div></div>
+      <div class="card"><div class="t">Дубли (new, Q2)</div><div class="v violet">7</div></div>
+    </div>
+    <div class="errbox"><b>Ошибки в 5 строках:</b><br>
+      • product_not_found — 3 строки<br>• hanger_calc_zero — 2 строки
+      <div style="margin-top:6px">Режим «Пропустить ошибки» загрузит только строки без ошибок (277 строк).</div>
+    </div>
+    <p class="fileline">Таблица диффа — стр. 1 из 6 (пагинация, Q1): строки 1–50. Полный after_data грузится по клику на строку.</p>
+    <table>
+      <tr><th>Строка</th><th>Артикул</th><th>Кол-во</th><th>Статус</th></tr>
+      <tr><td>12</td><td>КТМ-1042 · 2,7 м</td><td>150</td><td><span class="pill p-ok">ok</span></td></tr>
+      <tr><td>13</td><td>КТМ-1042 · 1,8 м</td><td>150</td><td><span class="pill p-warn">warning · raw_length_substituted</span></td></tr>
+      <tr><td>14</td><td>??? · 0,9 м</td><td>40</td><td><span class="pill p-err">invalid · product_not_found</span></td></tr>
+      <tr><td>15</td><td>КТМ-1042 · 2,7 м</td><td>150</td><td><span class="pill p-dup">дубль</span></td></tr>
+    </table>
+    <div class="bar">
+      <button class="btn">Отмена</button>
+      <button class="btn primary">Загрузить с ошибками (282 строки)</button>
+      <button class="btn">Загрузить (277 строк)</button>
+    </div>
+  </div>
+
+  <!-- ============ VARIANT B: мастер-шаги + экран блокировки удаления ============ -->
+  <div id="v-b" class="variant">
+    <div class="steps">
+      <div class="step done">1. Файл ✓</div>
+      <div class="step cur">2. Сверка</div>
+      <div class="step">3. Применение</div>
+      <div class="step">4. Результат</div>
+    </div>
+    <h2>Шаг 2 — Сверка: 289 строк, применять можно 277 + 7 дублей пропустить</h2>
+    <table>
+      <tr><th>Группа</th><th>Строк</th><th>Действие</th></tr>
+      <tr><td><span class="pill p-ok">чистые</span></td><td>271</td><td>создать позиции</td></tr>
+      <tr><td><span class="pill p-warn">предупреждения</span></td><td>6</td><td>создать, показать в плане</td></tr>
+      <tr><td><span class="pill p-dup">дубли</span></td><td>7</td><td>пропустить (счётчик в отчёте)</td></tr>
+      <tr><td><span class="pill p-err">ошибки</span></td><td>5</td><td>не создавать / вернуть на доработку</td></tr>
+    </table>
+    <h2>Удаление батча заблокировано (409) — Q3</h2>
+    <div class="blockbox"><b>Удалить нельзя, пока в работе:</b>
+      <ul>
+        <li>позиция #481 (КТМ-1042 · 2,7 м) — статус <b>released</b>, задачи на участке</li>
+        <li>позиция #482 — передача #Т-118 (принята участком ГХП)</li>
+      </ul>
+      <b>Последствия вариантов:</b>
+      <ul>
+        <li><b>Удалить только черновики</b> — снесутся 282 draft-позиции и change-set; released и передачи не тронуты. Безопасно.</li>
+        <li><b>Удалить всё</b> — разорвёт учёт: задачи и ledger-движения повиснут без позиций. Запрещено именно поэтому.</li>
+      </ul>
+    </div>
+    <div class="bar">
+      <button class="btn">Отмена</button>
+      <button class="btn primary">Удалить только черновики (282)</button>
+      <button class="btn danger" disabled title="запрещено: есть released/передачи">Удалить всё (запрещено)</button>
+    </div>
+  </div>
+
+  <!-- ============ VARIANT C: таблица-first + липкая панель ============ -->
+  <div id="v-c" class="variant">
+    <div class="bar">
+      <button class="btn">фильтр: все 289</button>
+      <button class="btn">только ошибки 5</button>
+      <button class="btn">только дубли 7</button>
+      <span class="fileline">summary посчитал сервер (Q1), строки — страницы по 50</span>
+    </div>
+    <table>
+      <tr><th>☐</th><th>Строка</th><th>Артикул · размер</th><th>Кол-во</th><th>Статус / код</th></tr>
+      <tr><td>☐</td><td>12</td><td>КТМ-1042 · 2,7 м</td><td>150</td><td><span class="pill p-ok">ok</span></td></tr>
+      <tr><td>☐</td><td>13</td><td>КТМ-1042 · 1,8 м</td><td>150</td><td><span class="pill p-warn">raw_length_substituted</span></td></tr>
+      <tr><td>☑</td><td>14</td><td>??? · 0,9 м</td><td>40</td><td><span class="pill p-err">product_not_found</span></td></tr>
+      <tr><td>☐</td><td>15</td><td>КТМ-1042 · 2,7 м</td><td>150</td><td><span class="pill p-dup">possible_duplicate</span></td></tr>
+    </table>
+    <div class="sticky">
+      <span>Выбрано: <b>277 строк</b> (без 5 ошибок и 7 дублей)</span>
+      <button class="btn primary">Применить выбранное</button>
+      <button class="btn" style="color:#fff;border-color:#52525b">Отмена</button>
+    </div>
+  </div>
+
+  <h2>Контракт (Q1, rough)</h2>
+  <pre class="contract">POST /imports/excel → 201
+{ summary: { total:289, valid:271, warning:6, invalid:5, duplicates:7,
+             errors: {"product_not_found":3, "hanger_calc_zero":2} },
+  items: [ …стр. 1/6, без after_data… ], page: {n:1, of:6, next:"cursor…"} }
+GET /imports/batches/{id}/items?cursor=…       → страница items
+GET /imports/items/{id}?full=1                 → after_data одной строки
+DELETE /production-plans/{p}/batches/{b} → 409
+{ code:"batch_has_released_positions",
+  blockers:[{position_id:481, reason:"released"},
+            {position_id:482, reason:"transfer Т-118"}],
+  safe_action:"delete_drafts_only", drafts:282 }</pre>
+</div>
+
+<div id="switcher">
+  <button id="prev">←</button>
+  <span id="label"></span>
+  <button id="next">→</button>
+</div>
+<script>
+  const Vs = { a: "A — диалог как сейчас + дубли/пагинация", b: "B — мастер-шаги + экран блокировки", c: "C — таблица-first + липкая панель" };
+  const keys = Object.keys(Vs);
+  function cur() { return new URLSearchParams(location.search).get("variant") || "a"; }
+  function show(k) {
+    document.querySelectorAll(".variant").forEach(el => el.style.display = "none");
+    document.getElementById("v-" + k).style.display = "block";
+    document.getElementById("label").textContent = Vs[k];
+    document.getElementById("title").textContent = "Импорт плана — " + Vs[k];
+    history.replaceState(null, "", "?variant=" + k);
+  }
+  let i = Math.max(0, keys.indexOf(cur()));
+  document.getElementById("prev").onclick = () => { i = (i + keys.length - 1) % keys.length; show(keys[i]); };
+  document.getElementById("next").onclick = () => { i = (i + 1) % keys.length; show(keys[i]); };
+  document.addEventListener("keydown", e => {
+    if (/INPUT|TEXTAREA/.test(document.activeElement.tagName)) return;
+    if (e.key === "ArrowLeft") document.getElementById("prev").click();
+    if (e.key === "ArrowRight") document.getElementById("next").click();
+  });
+  show(keys[i]);
+</script>
+</body>
+</html>
