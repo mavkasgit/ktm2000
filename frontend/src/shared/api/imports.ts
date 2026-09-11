@@ -17,6 +17,115 @@ export type ExcelImportResponse = {
   items: Record<string, unknown>[];
 };
 
+export type ImportCreateSummary = {
+  total: number;
+  valid: number;
+  warning: number;
+  invalid: number;
+  duplicates: number;
+  errors: Record<string, number>;
+};
+
+export type ImportLightItem = {
+  item_id: number;
+  source_row_numbers: number[];
+  source_sku: string | null;
+  source_name: string | null;
+  quantity: string | number | null;
+  status: string;
+  change_action: string;
+  codes: string[];
+};
+
+export type ImportFullItem = {
+  id: number;
+  source_row_number: number | null;
+  source_ref: string | null;
+  source_sku: string | null;
+  change_action: string;
+  status: string;
+  warnings: string[];
+  errors: string[];
+  after_data: Record<string, unknown> | null;
+  plan_position_id: number | null;
+};
+
+export type ImportBatchItemsResponse = {
+  batch_id: number;
+  change_set_id: number;
+  items: ImportLightItem[];
+  next_cursor: number | null;
+  total: number;
+};
+
+export type ImportApplyStats = {
+  total: number;
+  valid: number;
+  warning: number;
+  invalid: number;
+  duplicates: number;
+  normal: number;
+  uploadAll: number;
+  uploadSkipInvalid: number;
+  errors: Record<string, number>;
+};
+
+function toNumber(value: unknown): number {
+  const n = Number(value ?? 0);
+  return Number.isFinite(n) && n > 0 ? Math.trunc(n) : 0;
+}
+
+/** Диалог применения работает от серверного summary (§4.3), не от строк. */
+export function buildImportApplyStats(summary: Record<string, unknown>): ImportApplyStats {
+  const total = toNumber(summary.total);
+  const warning = toNumber(summary.warning);
+  const invalid = toNumber(summary.invalid);
+  const duplicates = toNumber(summary.duplicates);
+  const valid = toNumber(summary.valid ?? Math.max(total - warning - invalid, 0));
+  const errors = (summary.errors as Record<string, number> | undefined) ?? {};
+  return {
+    total,
+    valid,
+    warning,
+    invalid,
+    duplicates,
+    normal: Math.max(total - invalid - warning, 0),
+    uploadAll: total,
+    uploadSkipInvalid: Math.max(total - invalid, 0),
+    errors,
+  };
+}
+
+export async function fetchImportBatchItems(
+  batchId: number,
+  cursor = 0,
+  limit = 200,
+): Promise<ImportBatchItemsResponse> {
+  const { data } = await apiClient.get<ImportBatchItemsResponse>(`/imports/batches/${batchId}/items`, {
+    params: { cursor, limit },
+  });
+  return data;
+}
+
+/** Все лёгкие строки батча сразу (UI-пагинации нет): идёт курсором до конца. */
+export async function fetchAllImportBatchItems(batchId: number): Promise<ImportLightItem[]> {
+  const all: ImportLightItem[] = [];
+  let cursor = 0;
+  for (;;) {
+    const page = await fetchImportBatchItems(batchId, cursor);
+    all.push(...page.items);
+    if (page.next_cursor == null) return all;
+    cursor = page.next_cursor;
+  }
+}
+
+export async function fetchImportItem(itemId: number, full = false): Promise<ImportLightItem | ImportFullItem> {
+  const { data } = await apiClient.get<ImportLightItem | ImportFullItem>(`/imports/items/${itemId}`, {
+    params: full ? { full: 1 } : {},
+  });
+  return data;
+}
+
 export type ImportExcelInput = {
   file: File;
   sheet_index?: number;

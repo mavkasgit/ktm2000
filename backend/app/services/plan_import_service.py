@@ -128,6 +128,15 @@ def plan_import_row_status(errors: list[str], warnings: list[str]) -> PlanChange
         return PlanChangeItemStatus.warning
     return PlanChangeItemStatus.pending
 
+
+def plan_import_item_is_duplicate(item: PlanChangeItem) -> bool:
+    """Единый предикат дубля (спека §4.3): действие mark_possible_duplicate
+    либо код duplicate_sku_due_date. Держит серверный счётчик `duplicates`
+    и чип «Дубли» на фронте на одном определении."""
+    if item.change_action == PlanChangeAction.mark_possible_duplicate:
+        return True
+    return "duplicate_sku_due_date" in (item.errors or ())
+
 def _row_gp_length_mm(row: ParsedPlanRow) -> float | None:
     """Единственная длина ГП по выходам строки (ADR-0024).
 
@@ -299,7 +308,7 @@ async def preview_excel_sheet(
         "header_row_number": parsed.header_row_number,
         "total_rows": parsed.total_rows,
         "summary": summary,
-        "items": [_serialize_item(item) for item in item_payloads],
+        "items": [serialize_item(item) for item in item_payloads],
     }
 
 
@@ -455,8 +464,8 @@ async def create_excel_import_change_set(
         "route_selection_diagnostics": import_batch.route_selection_diagnostics,
         "sheet_name": parsed.sheet_name,
         "header_row_number": parsed.header_row_number,
-        "summary": summary,
-        "items": [_serialize_item(item) for item in item_payloads],
+        "summary": _item_aggregates(item_payloads, summary),
+        "items": [serialize_light_item(item) for item in item_payloads],
         "quantity_adjusted_total": str(sum(
             (Decimal(item.after_data.get("quantity", "0")) for item in item_payloads),
             start=Decimal("0"),
@@ -1337,7 +1346,7 @@ async def _make_change_items(
     return items, route_selection_diagnostics
 
 
-def _serialize_item(item: PlanChangeItem) -> dict:
+def serialize_item(item: PlanChangeItem) -> dict:
     return {
         "id": item.id,
         "source_row_number": item.source_row_number,
@@ -1350,6 +1359,43 @@ def _serialize_item(item: PlanChangeItem) -> dict:
         "after_data": item.after_data,
         "plan_position_id": item.plan_position_id,
     }
+
+def serialize_light_item(item: PlanChangeItem) -> dict:
+    """Лёгкая строка create-ответа (спека §4.3): без after_data целиком."""
+    after = item.after_data or {}
+    row_numbers = after.get("source_row_numbers") or (
+        [item.source_row_number] if item.source_row_number is not None else []
+    )
+    return {
+        "item_id": item.id,
+        "source_row_numbers": row_numbers,
+        "source_sku": after.get("source_sku"),
+        "source_name": after.get("source_name"),
+        "quantity": after.get("quantity"),
+        "status": item.status.value,
+        "change_action": item.change_action.value,
+        "codes": list(item.errors or []) + list(item.warnings or []),
+    }
+
+
+def _item_aggregates(items: list[PlanChangeItem], summary: dict) -> dict:
+    """Агрегаты уровня строк поверх parse-summary (спека §4.3).
+
+    `errors` пересчитывается по строкам: включает коды, добавленные после
+    парсинга (дубли, автовключения), — именно их показывает диалог.
+    `duplicates` считает все дубли, включая внутриимпортные (код
+    duplicate_sku_due_date без смены change_action): серверный чип «Дубли»
+    в диалоге должен совпадать с таблицей.
+    """
+    error_counter = Counter(code for item in items for code in (item.errors or []))
+    enriched = dict(summary)
+    enriched["total"] = len(items)
+    enriched["valid"] = sum(1 for item in items if item.status == PlanChangeItemStatus.pending)
+    enriched["warning"] = sum(1 for item in items if item.status == PlanChangeItemStatus.warning)
+    enriched["invalid"] = sum(1 for item in items if item.status == PlanChangeItemStatus.invalid)
+    enriched["duplicates"] = sum(1 for item in items if plan_import_item_is_duplicate(item))
+    enriched["errors"] = dict(error_counter)
+    return enriched
 
 
 def _summary(

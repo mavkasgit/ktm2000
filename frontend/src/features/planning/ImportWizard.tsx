@@ -2,11 +2,12 @@ import { useCallback, useEffect, useMemo, useRef, useState } from "react"
 import { Check, ExternalLink } from "lucide-react"
 import { useNavigate } from "react-router-dom"
 import { uploadExcel, applyChangeSet, discardImport } from "./api"
-import { getExcelSheetNames, previewExcelSheet, type SheetPreviewResponse } from "shared/api/imports"
+import { getExcelSheetNames, previewExcelSheet, buildImportApplyStats, type SheetPreviewResponse } from "shared/api/imports"
 import { Button, Input, AlertDialog, AlertDialogContent, AlertDialogHeader, AlertDialogTitle, AlertDialogDescription, AlertDialogFooter, AlertDialogAction, AlertDialogCancel, FiltersPanel, Select, SelectContent, SelectItem, SelectTrigger, SelectValue, type FiltersPanelField } from "shared/ui"
 import { useImportRowExpansion, ImportRawRows, ImportUpload, ImportPreview, getImportDialogContentClass } from "@/shared/ui/import-utils"
 import { PlanImportPreviewTable, PLAN_IMPORT_ERROR_LABELS } from "./components/PlanImportPreviewTable"
 import { buildActiveFilterSummary } from "shared/ui/buildActiveFilterSummary"
+import { isDuplicateRow, type DuplicateRowSignal } from "./lib/duplicateRows"
 import { useQuery, useQueryClient } from "@tanstack/react-query"
 import { listAllImportTemplates, type ImportTemplate } from "@/shared/api/importTemplates"
 import { getErrorMessage } from "@/shared/api/client"
@@ -52,6 +53,7 @@ export function ImportWizard(props: {
   const [searchQuery, setSearchQuery] = useState("")
   const [rowSelection, setRowSelection] = useState("")
   const [pendingChangeSet, setPendingChangeSet] = useState<{ planId: string; changeSetId: string } | null>(null)
+  const [uploadSummary, setUploadSummary] = useState<Record<string, unknown> | null>(null)
   const [showApplyConfirm, setShowApplyConfirm] = useState(false)
   const [showCloseConfirm, setShowCloseConfirm] = useState(false)
   const expansion = useImportRowExpansion()
@@ -247,21 +249,23 @@ export function ImportWizard(props: {
     [filterStatus, searchQuery],
   )
 
-  const applyStats = useMemo(() => {
-    const total = summary.total
-    const invalid = summary.invalid
-    const warning = summary.warning
-    return {
-      total,
-      invalid,
-      warning,
-      normal: Math.max(total - invalid - warning, 0),
-      uploadAll: total,
-      uploadSkipInvalid: Math.max(total - invalid, 0),
-    }
-  }, [summary])
+  const duplicateCount = useMemo(() => {
+    return allRows.filter((r) => isDuplicateRow(r as DuplicateRowSignal)).length
+  }, [allRows])
 
-  const errorBreakdown = useMemo(() => {
+  // Клиентские подсчёты — запасной вариант, когда нет серверного summary (§4.3).
+  const clientApplyStats = useMemo(
+    () =>
+      buildImportApplyStats({
+        total: summary.total,
+        warning: summary.warning,
+        invalid: summary.invalid,
+        duplicates: duplicateCount,
+      }),
+    [summary, duplicateCount],
+  )
+
+  const clientErrorBreakdown = useMemo(() => {
     const counts: Record<string, number> = {}
     for (const row of allRows) {
       const errs = row.errors as string[] | undefined
@@ -273,6 +277,14 @@ export function ImportWizard(props: {
     }
     return counts
   }, [allRows])
+
+  // Диалог применения работает от серверного summary (§4.3), клиентские подсчёты — запасной вариант.
+  const serverApplyStats = useMemo(
+    () => (uploadSummary ? buildImportApplyStats(uploadSummary) : null),
+    [uploadSummary],
+  )
+  const applyStats = serverApplyStats ?? clientApplyStats
+  const errorBreakdown = serverApplyStats ? serverApplyStats.errors : clientErrorBreakdown
 
   const errorBreakdownEntries = useMemo(() => {
     return Object.entries(errorBreakdown).sort((a, b) => b[1] - a[1])
@@ -341,39 +353,16 @@ export function ImportWizard(props: {
   }
 
   async function handleApplyConfirmed(skipInvalid: boolean) {
-    if (!file) return
-    if (!activeTemplateId) {
-      setError("Выберите шаблон импорта перед применением")
-      return
-    }
-
+    const changeSet = pendingChangeSet
+    if (!changeSet) return
     setShowApplyConfirm(false)
     setLoading(true)
     setError(null)
-    let changeSet = pendingChangeSet
-    let createdNow = false
     try {
-      if (!changeSet) {
-        const uploaded = await uploadExcel(file, {
-          templateId: activeTemplateId,
-          productionPlanId: props.productionPlanId,
-          rowSelection: rowSelection || undefined,
-          sheetIndex: selectedSheet,
-          normalizeHangerQuantity: normalizeHangerQuantity,
-        })
-        const planId = String(uploaded.planId ?? uploaded.production_plan_id ?? "")
-        const changeSetId = String(uploaded.changeSetId ?? uploaded.change_set_id ?? "")
-        if (!planId || !changeSetId) {
-          throw new Error("Не найден planId или changeSetId")
-        }
-        changeSet = { planId, changeSetId }
-        createdNow = true
-        setPendingChangeSet(changeSet)
-      }
-
       const data = await applyChangeSet(changeSet.planId, changeSet.changeSetId, { skipInvalid })
       setResult(data)
       setPendingChangeSet(null)
+      setUploadSummary(null)
       setStep("result")
       // Инвалидируем все домены, которые зависят от плана
       void queryClient.invalidateQueries({ queryKey: queryKeys.plan.allPositions() });
@@ -386,23 +375,55 @@ export function ImportWizard(props: {
       props.onSuccess(changeSet.planId, changeSet.changeSetId)
     } catch (e) {
       // If apply failed right after creating a change set, cleanup immediately.
-      if (createdNow && changeSet) {
-        discardImport(changeSet.planId, changeSet.changeSetId).catch(() => {})
-        setPendingChangeSet(null)
-      }
+      discardImport(changeSet.planId, changeSet.changeSetId).catch(() => {})
+      setPendingChangeSet(null)
+      setUploadSummary(null)
       setError(getErrorMessage(e))
     } finally {
       setLoading(false)
     }
   }
 
-  function handleApply() {
+  async function handleApplyCancel() {
+    const changeSet = pendingChangeSet
+    setShowApplyConfirm(false)
+    if (changeSet) {
+      discardImport(changeSet.planId, changeSet.changeSetId).catch(() => {})
+      setPendingChangeSet(null)
+      setUploadSummary(null)
+    }
+  }
+
+  // Диалог подтверждения работает от серверного summary: сначала upload (§4.3).
+  async function handleApply() {
     if (!file) return
     if (!activeTemplateId) {
       setError("Выберите шаблон импорта перед применением")
       return
     }
-    setShowApplyConfirm(true)
+    setLoading(true)
+    setError(null)
+    try {
+      const uploaded = await uploadExcel(file, {
+        templateId: activeTemplateId,
+        productionPlanId: props.productionPlanId,
+        rowSelection: rowSelection || undefined,
+        sheetIndex: selectedSheet,
+        normalizeHangerQuantity: normalizeHangerQuantity,
+      })
+      const planId = String(uploaded?.planId ?? uploaded?.production_plan_id ?? "")
+      const changeSetId = String(uploaded?.changeSetId ?? uploaded?.change_set_id ?? "")
+      if (!planId || !changeSetId) {
+        throw new Error("Не найден planId или changeSetId")
+      }
+      setPendingChangeSet({ planId, changeSetId })
+      setUploadSummary((uploaded?.summary as Record<string, unknown> | undefined) ?? null)
+      setShowApplyConfirm(true)
+    } catch (e) {
+      setError(getErrorMessage(e))
+    } finally {
+      setLoading(false)
+    }
   }
 
   function toggleSort(key: string) {
@@ -433,6 +454,7 @@ export function ImportWizard(props: {
     setSearchQuery("")
     setRowSelection("")
     setPendingChangeSet(null)
+    setUploadSummary(null)
     expansion.resetExpansion()
     if (fileInputRef.current) {
       fileInputRef.current.value = ""
@@ -672,6 +694,7 @@ export function ImportWizard(props: {
                   {summary.invalid > 0 && <span className="text-red-600"><strong>Ошибок:</strong> {summary.invalid}</span>}
                   {summary.warning > 0 && <span className="text-amber-600"><strong>Предупр.:</strong> {summary.warning}</span>}
                   {summary.invalid === 0 && summary.warning === 0 && <span className="text-green-600 text-xs">Без ошибок</span>}
+                  {duplicateCount > 0 && <span className="text-violet-600"><strong>Дубли:</strong> {duplicateCount}</span>}
                   {errorBreakdown["product_not_found"] > 0 && (
                     <Button
                       variant="outline"
@@ -832,6 +855,12 @@ export function ImportWizard(props: {
                 <div className="text-muted-foreground">С ошибками</div>
                 <div className="font-semibold text-red-700">{applyStats.invalid}</div>
               </div>
+              {applyStats.duplicates > 0 && (
+                <div className="rounded border border-violet-200 bg-violet-50 p-2">
+                  <div className="text-muted-foreground">Дубли</div>
+                  <div className="font-semibold text-violet-700">{applyStats.duplicates}</div>
+                </div>
+              )}
             </div>
             <div className="rounded border p-2">
               <div className="text-muted-foreground">Файл</div>
@@ -864,7 +893,7 @@ export function ImportWizard(props: {
           </div>
         </AlertDialogHeader>
         <AlertDialogFooter>
-          <AlertDialogCancel onClick={() => setShowApplyConfirm(false)}>Отмена</AlertDialogCancel>
+          <AlertDialogCancel onClick={() => void handleApplyCancel()}>Отмена</AlertDialogCancel>
           <AlertDialogAction onClick={() => void handleApplyConfirmed(false)} disabled={loading}>
             {applyStats.invalid > 0
               ? `Загрузить с ошибками (${applyStats.uploadAll} строк)`

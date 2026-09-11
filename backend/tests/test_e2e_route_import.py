@@ -16,6 +16,7 @@ from sqlalchemy import select
 from app.models.import_template import ImportTemplate
 from app.models.product import Product, ProductType
 from app.models.production_plan import (
+    PlanChangeItem,
     PlanChangeSet,
     PlanPositionRouteOrigin,
     ProductionPlan,
@@ -210,17 +211,22 @@ async def test_e2e_excel_import_creates_routes_with_steps(session) -> None:
 
     # Verify change set was created
     assert result["change_set_id"] is not None
-    
     # Verify items were created (real Excel file has 31 rows)
     assert len(result["items"]) > 0, "Should have at least one item"
-    
+    # Create-ответ лёгкий (§4.3): полные данные читаем из persisted items.
+    db_items = (
+        await session.execute(
+            select(PlanChangeItem)
+            .where(PlanChangeItem.change_set_id == result["change_set_id"])
+            .order_by(PlanChangeItem.id)
+        )
+    ).scalars().all()
+    result_items = [item.after_data or {} for item in db_items]
     # Collect unique routes
     route_ids_seen = set()
     items_with_details = []
-    
-    for item in result["items"]:
-        route_id = item["after_data"].get("route_id")
-        row_data = item["after_data"]
+    for row_data in result_items:
+        route_id = row_data.get("route_id")
         
         if route_id and route_id not in route_ids_seen:
             route_ids_seen.add(route_id)
@@ -268,27 +274,23 @@ async def test_e2e_excel_import_creates_routes_with_steps(session) -> None:
             section_code = section.code if section else "?"
             ops_str = ", ".join(f"{op.operation_code or 'None'}:{op.operation_name}" for op in step.operations)
             print(f"    {step.sequence}: section={section_code}, ops=[{ops_str}], significant={step.is_significant}")
-        
         # Count how many items use this route
         items_using_route = sum(
-            1 for item in result["items"]
-            if item["after_data"].get("route_id") == detail["route_id"]
+            1 for row_data in result_items
+            if row_data.get("route_id") == detail["route_id"]
         )
         print(f"  Used by {items_using_route} item(s)")
     
     # Show per-row mapping with payload details
     print(f"\n{'='*80}")
-    print("Per-row route mapping:")
-    print(f"{'='*80}")
-    for item in result["items"]:
-        row_num = item.get("source_row_number", "?")
-        sku = item["after_data"].get("source_sku", "?")
-        route_id = item["after_data"].get("route_id")
-        route_name = item["after_data"].get("route_name", "no route")
-        payload = item["after_data"].get("source_payload", {})
+    for row_data in result_items:
+        row_num = (row_data.get("source_row_numbers") or ["?"])[0]
+        sku = row_data.get("source_sku", "?")
+        route_id = row_data.get("route_id")
+        route_name = row_data.get("route_name", "no route")
+        payload = row_data.get("source_payload", {})
         color = payload.get("color", "")
         output_kind = payload.get("output_kind", "")
-        
         if route_id:
             print(f"  Row {row_num}: SKU={sku}, color='{color}', output='{output_kind}' => Route {route_id}")
         else:
@@ -299,10 +301,10 @@ async def test_e2e_excel_import_creates_routes_with_steps(session) -> None:
     print("Unique route configurations:")
     print(f"{'='*80}")
     route_configs = {}
-    for item in result["items"]:
-        route_id = item["after_data"].get("route_id")
+    for row_data in result_items:
+        route_id = row_data.get("route_id")
         if route_id:
-            payload = item["after_data"].get("source_payload", {})
+            payload = row_data.get("source_payload", {})
             color = payload.get("color", "")
             output_kind = payload.get("output_kind", "")
             # Show raw bytes for encoding debug
@@ -326,14 +328,13 @@ async def test_e2e_excel_import_creates_routes_with_steps(session) -> None:
         
         # Verify route assignment metadata
         first_item_with_route = next(
-            item for item in result["items"]
-            if item["after_data"].get("route_id") == first_route_id
+            row_data for row_data in result_items
+            if row_data.get("route_id") == first_route_id
         )
-        
-        assert first_item_with_route["after_data"].get("route_assigned_at") is not None
-        assert first_item_with_route["after_data"].get("route_source") == "dynamic_build"
-        assert first_item_with_route["after_data"].get("route_match_quality") == "exact"
-        assert first_item_with_route["after_data"].get("route_origin") == PlanPositionRouteOrigin.auto.value
+        assert first_item_with_route.get("route_assigned_at") is not None
+        assert first_item_with_route.get("route_source") == "dynamic_build"
+        assert first_item_with_route.get("route_match_quality") == "exact"
+        assert first_item_with_route.get("route_origin") == PlanPositionRouteOrigin.auto.value
 
 
 @pytest.mark.asyncio
@@ -374,11 +375,13 @@ async def test_e2e_excel_import_multiple_rows_reuse_routes(session) -> None:
     assert len(result["items"]) > 0, "Should have at least one item"
     
     # Check how many items have routes assigned
-    items_with_routes = [item for item in result["items"] if item["after_data"].get("route_id")]
-    
+    db_rows = await session.execute(
+        select(PlanChangeItem).where(PlanChangeItem.change_set_id == result["change_set_id"])
+    )
+    items_with_routes = [row.after_data or {} for row in db_rows.scalars().all() if (row.after_data or {}).get("route_id")]
     # If we have items with routes, verify they have steps
     if items_with_routes:
-        route_id = items_with_routes[0]["after_data"].get("route_id")
+        route_id = items_with_routes[0].get("route_id")
         
         # Verify route has stages
         steps_result = await session.execute(

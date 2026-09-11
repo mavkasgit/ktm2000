@@ -25,6 +25,9 @@ apply ≤ 1 с ✓ (факт ≤ 0.35 с).
 Ответ create в этом прогоне ~160 КБ (сид беднее диагностиками, чем в #162) —
 цель ≤ 300 КБ держать за тикетом #165 (лёгкие строки): без него на богатых
 диагностиках ответ возвращается к мегабайтам.
+Замер #165 (изолированная БД, тот же эталон, лёгкие строки): create-ответ
+**99 КБ** (101 728 Б) на 289 строках против **1.65 МБ** прежней формы с
+`after_data` — цель ≤ 300 КБ ✓, сокращение ~17×.
 Индексы: давления на запись нет (apply ~12 SQL) — `ix_plan_positions_import_hash/row`
 не трогаем, вопрос закрыт. Фоновый импорт не нужен — синхронный путь уложился.
 
@@ -69,12 +72,19 @@ Warnings (не блокируют): `raw_length_substituted`, `paired_hanger_adj
 ### 4.3. Ответ create — лёгкие строки (вместо пагинации; пагинация отклонена)
 - `POST /imports/excel` → 201:
   `summary { total, valid, warning, invalid, duplicates, errors: {код: n} }` (считает сервер),
-  `items[]` — лёгкие строки `{ item_id, source_row_numbers, source_sku, quantity, status, change_action, codes[] }`,
-  без `after_data` целиком.
-- `GET /imports/batches/{id}/items?cursor=…` — постраничное дочитывание лёгких строк (для больших файлов).
+  `items[]` — лёгкие строки `{ item_id, source_row_numbers, source_sku, source_name, quantity, status, change_action, codes[] }`,
+  без `after_data` целиком. `source_name` — для колонки «Наименование» в таблице файла.
+- `duplicates` (сервер) считает оба вида дубля: конфликт с released-позицией
+  (`change_action = mark_possible_duplicate`) и внутриимпортный дубль (код
+  `duplicate_sku_due_date` в `errors`) — то же определение, что у чипа «Дубли»
+  в таблице (`features/planning/lib/duplicateRows.ts`).
+- `GET /imports/batches/{id}/items?cursor=…` — постраничное дочитывание лёгких строк
+  (для больших файлов); `total` — размер change set целиком, курсор на него не влияет.
 - `GET /imports/items/{item_id}?full=1` — полный `after_data` одной строки (раскрытие в диффе).
 - Фронт (`ImportWizard`, дифф): диалог работает от `summary`; таблица — все лёгкие строки сразу,
-  детали по клику. Отдельный тикет — chip «Дубли» в диалог (`applyStats`) и таблица.
+  детали по клику. Chip «Дубли» — в диалоге (`applyStats`) и таблице.
+  Change set создаётся по кнопке «Применить изменения» — иначе серверного summary для
+  диалога нет; «Отмена» созданный change set удаляет.
 - Объём цели: ≤ 300 КБ на эталоне.
 
 ### 4.4. Удаление батча — 409 + выбор (§5 контракта #159 Q3)

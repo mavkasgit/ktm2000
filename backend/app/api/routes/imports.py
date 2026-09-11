@@ -6,7 +6,7 @@ from pathlib import Path
 from fastapi import APIRouter, Depends, File, Form, HTTPException, Query, UploadFile, status
 from openpyxl import Workbook
 from pydantic import BaseModel, Field
-from sqlalchemy import desc, select
+from sqlalchemy import desc, func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.database import get_db
@@ -289,6 +289,104 @@ async def import_test_excel(
         logger.exception("import_test_excel unexpected error: %s", exc)
         raise HTTPException(status_code=500, detail=f"{type(exc).__name__}: {exc}") from exc
     return ImportPreviewOut(**result)
+
+
+class ImportLightItemOut(BaseModel):
+    """Лёгкая строка импорта (спека §4.3): без after_data."""
+
+    item_id: int
+    source_row_numbers: list[int]
+    source_sku: str | None
+    source_name: str | None
+    quantity: str | int | float | None
+    status: str
+    change_action: str
+    codes: list[str]
+
+
+class ImportFullItemOut(BaseModel):
+    """Полная строка импорта для раскрытия в диффе (`?full=1`)."""
+
+    id: int
+    source_row_number: int | None
+    source_ref: str | None
+    source_sku: str | None
+    change_action: str
+    status: str
+    warnings: list[str]
+    errors: list[str]
+    after_data: dict | None
+    plan_position_id: int | None
+
+
+class ImportBatchItemsOut(BaseModel):
+    batch_id: int
+    change_set_id: int
+    items: list[ImportLightItemOut]
+    next_cursor: int | None
+    total: int
+
+
+@router.get("/batches/{batch_id}/items", response_model=ImportBatchItemsOut)
+async def list_import_batch_items(
+    batch_id: int,
+    cursor: int = Query(0, ge=0),
+    limit: int = Query(100, ge=1, le=500),
+    db: AsyncSession = Depends(get_db),
+) -> ImportBatchItemsOut:
+    """Постраничные лёгкие строки батча (спека §4.3). UI пагинации нет:
+    таблица читает все страницы курсором и показывает строки сразу.
+    `total` — размер change set целиком, курсор на него не влияет."""
+    from app.models.production_plan import PlanChangeItem
+    from app.services.plan_import_service import serialize_light_item
+
+    change_set_id = await db.scalar(
+        select(PlanChangeSet.id)
+        .where(PlanChangeSet.import_batch_id == batch_id)
+        .order_by(desc(PlanChangeSet.id))
+        .limit(1)
+    )
+    if change_set_id is None:
+        raise HTTPException(status_code=404, detail="Change set for batch not found")
+    rows = (
+        await db.execute(
+            select(PlanChangeItem)
+            .where(PlanChangeItem.change_set_id == change_set_id, PlanChangeItem.id > cursor)
+            .order_by(PlanChangeItem.id)
+            .limit(limit + 1)
+        )
+    ).scalars().all()
+    page, has_more = rows[:limit], len(rows) > limit
+    total = await db.scalar(
+        select(func.count())
+        .select_from(PlanChangeItem)
+        .where(PlanChangeItem.change_set_id == change_set_id)
+    )
+    return {
+        "batch_id": batch_id,
+        "change_set_id": change_set_id,
+        "items": [serialize_light_item(item) for item in page],
+        "next_cursor": page[-1].id if has_more and page else None,
+        "total": total or 0,
+    }
+
+
+@router.get("/items/{item_id}")
+async def get_import_item(
+    item_id: int,
+    full: bool = Query(False),
+    db: AsyncSession = Depends(get_db),
+) -> ImportLightItemOut | ImportFullItemOut:
+    """Одна строка импорта: лёгкая по умолчанию, `?full=1` — с after_data
+    (раскрытие в диффе). Возврат — union двух моделей, поэтому response_model
+    выключен: FastAPI не строит поле ответа из union-аннотации."""
+    from app.models.production_plan import PlanChangeItem
+    from app.services.plan_import_service import serialize_item, serialize_light_item
+
+    item = await db.get(PlanChangeItem, item_id)
+    if item is None:
+        raise HTTPException(status_code=404, detail="Import item not found")
+    return serialize_item(item) if full else serialize_light_item(item)
 
 
 class ImportRecentOut(BaseModel):

@@ -9,6 +9,7 @@ from app.models.imports import ImportBatch, ImportFile
 from app.models.production_plan import PlanChangeItem, PlanChangeSet, ProductionPlan
 from app.models.route import RouteRuleProfile
 from app.services.excel_import import parse_factory_plan_workbook, parse_row_selection
+from tests.test_integrity_invariants import assert_no_invariants_violations
 
 
 def _workbook_bytes() -> bytes:
@@ -189,13 +190,17 @@ async def test_import_excel_creates_batch_and_change_set(client, session, tmp_pa
     assert body["summary"]["total_positions"] == 2
     assert body["summary"]["paired_profile_positions"] == 1
     assert len(body["items"]) == 2
-    assert body["items"][0]["after_data"]["source_sku"] == "ЮП-2616+ЮП-2604"
-    assert body["items"][0]["after_data"]["has_pack_ops"] is False
-    assert body["items"][0]["warnings"] == ["paired_profile_product_unmapped"]
+    assert body["items"][0]["source_sku"] == "ЮП-2616+ЮП-2604"
+    assert "paired_profile_product_unmapped" in body["items"][0]["codes"]
     # Пара ЮП-2616+ЮП-2604 не создана в справочнике сырья
-    assert "product_pair_not_found" in body["items"][0]["errors"]
+    assert "product_pair_not_found" in body["items"][0]["codes"]
     # ЮП-2083 not seeded in tests, so product_not_found is expected
-    assert "product_not_found" in body["items"][1]["errors"]
+    assert "product_not_found" in body["items"][1]["codes"]
+    # Полный after_data — лениво, одной строкой (§4.3)
+    full = (await client.get(f"/api/imports/items/{body['items'][0]['item_id']}?full=1")).json()
+    assert full["after_data"]["source_sku"] == "ЮП-2616+ЮП-2604"
+    assert full["after_data"]["has_pack_ops"] is False
+    assert full["warnings"] == ["paired_profile_product_unmapped"]
 
     assert await session.get(ImportFile, body["import_file_id"]) is not None
     assert await session.get(ImportBatch, body["import_batch_id"]) is not None
@@ -203,7 +208,111 @@ async def test_import_excel_creates_batch_and_change_set(client, session, tmp_pa
     assert await session.get(PlanChangeSet, body["change_set_id"]) is not None
 
     change_items = body["items"]
-    assert await session.get(PlanChangeItem, change_items[0]["id"]) is not None
+    assert await session.get(PlanChangeItem, change_items[0]["item_id"]) is not None
+
+@pytest.mark.asyncio
+async def test_import_excel_returns_light_items_and_summary(client, session, tmp_path, monkeypatch) -> None:
+    monkeypatch.setattr(settings, "IMPORT_STORAGE_DIR", str(tmp_path))
+    template = await _create_template(session, name="Light Template", code="light-template")
+    await session.commit()
+
+    response = await client.post(
+        f"/api/imports/excel?template_id={template.id}",
+        files={
+            "file": (
+                "plan.xlsx",
+                _workbook_bytes(),
+                "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+            )
+        },
+    )
+    assert response.status_code == 201
+    body = response.json()
+
+    summary = body["summary"]
+    assert summary["total"] == len(body["items"]) == 2
+    assert summary["valid"] + summary["warning"] + summary["invalid"] == summary["total"]
+    assert summary["invalid"] == 2
+    assert summary["duplicates"] == 0
+    assert summary["errors"]["product_not_found"] == 1
+
+    for item in body["items"]:
+        assert "after_data" not in item
+        assert set(item) >= {
+            "item_id",
+            "source_row_numbers",
+            "source_sku",
+            "quantity",
+            "status",
+            "change_action",
+            "codes",
+        }
+    by_sku = {item["source_sku"]: item for item in body["items"]}
+    assert by_sku["ЮП-2616+ЮП-2604"]["codes"] == [
+        "product_pair_not_found",
+        "no_route_candidate",
+        "paired_profile_product_unmapped",
+    ]
+
+
+@pytest.mark.asyncio
+async def test_import_summary_counts_intra_import_duplicates(client, session, tmp_path, monkeypatch) -> None:
+    """Две одинаковые строки — внутриимпортный дубль: summary.duplicates считает их
+    (спека §4.3), иначе серверный чип «Дубли» в диалоге расходится с таблицей."""
+    monkeypatch.setattr(settings, "IMPORT_STORAGE_DIR", str(tmp_path))
+    template = await _create_template(session, name="Dup Template", code="dup-template")
+    await session.commit()
+
+    wb = Workbook()
+    ws = wb.active
+    ws.title = "План"
+    ws.append(
+        [
+            "Артикул",
+            "пополнение",
+            "Наименование",
+            "остатки сырья на КТМ",
+            "Цвет",
+            "кол-во шт. в 2,7",
+            "Длина, м",
+            "Пробивка/сверловка",
+            "Упаковка",
+            "Примечание ",
+            "Длина после упак, м",
+            "кол-во штук готовой продукции",
+            "Запад",
+            "Восток",
+            "Вид конечного продукта",
+            "Комментарии",
+            "",
+            "",
+            "Упаковка в 1,8",
+            "добавить",
+        ]
+    )
+    for _ in range(2):
+        ws.append(["FG-DUP", "ТЗ", "Дубль", 0, "", 100, 2.7, "", "", "", 2.7, 100, "", 100, "ГП"])
+    out = BytesIO()
+    wb.save(out)
+
+    response = await client.post(
+        f"/api/imports/excel?template_id={template.id}",
+        files={
+            "file": (
+                "dup.xlsx",
+                out.getvalue(),
+                "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+            )
+        },
+    )
+    assert response.status_code == 201
+    body = response.json()
+
+    assert body["summary"]["duplicates"] == 2
+    assert body["summary"]["errors"]["duplicate_sku_due_date"] == 2
+    for item in body["items"]:
+        assert "duplicate_sku_due_date" in item["codes"]
+        assert item["status"] == "invalid"
 
 
 @pytest.mark.asyncio
@@ -266,8 +375,8 @@ async def test_import_excel_with_row_selection_filters_rows_and_reports_pair_aut
     assert body["summary"]["row_selection"] == "6"
     assert body["summary"]["selected_row_numbers"] == [6]
     assert body["summary"]["auto_included_row_numbers"] == [7]
-    assert body["items"][0]["after_data"]["source_sku"] == "ЮП-2616+ЮП-2604"
-    assert any(w.startswith("paired_row_auto_included:") for w in body["items"][0]["warnings"])
+    assert body["items"][0]["source_sku"] == "ЮП-2616+ЮП-2604"
+    assert any(w.startswith("paired_row_auto_included:") for w in body["items"][0]["codes"])
 
 
 @pytest.mark.asyncio
@@ -579,6 +688,8 @@ async def test_replace_draft_mode_creates_cancel_for_missing_rows(client, sessio
     actions = [item["change_action"] for item in body2["items"]]
     assert "cancel_draft_position" in actions
 
+    await assert_no_invariants_violations(session, context="import replace-draft apply")
+
 
 @pytest.mark.asyncio
 async def test_import_excel_resolves_profile_by_template_priority(client, session, tmp_path, monkeypatch) -> None:
@@ -820,7 +931,7 @@ async def test_import_with_normalize_hanger_quantity_rounds_up(
 
     assert response.status_code == 201
     body = response.json()
-    item = body["items"][0]
+    item = (await client.get(f"/api/imports/items/{body['items'][0]['item_id']}?full=1")).json()
 
     # Проверяем что количество округлено (Decimal строки)
     assert item["after_data"]["quantity"] == "15"
@@ -891,7 +1002,7 @@ async def test_import_without_normalize_hanger_quantity_keeps_original(
 
     assert response.status_code == 201
     body = response.json()
-    item = body["items"][0]
+    item = (await client.get(f"/api/imports/items/{body['items'][0]['item_id']}?full=1")).json()
 
     # Количество не округлено (Decimal строки)
     assert item["after_data"]["quantity"] in ("12", "12.0")
@@ -954,7 +1065,7 @@ async def test_import_product_without_quantity_per_hanger_shows_warning(
 
     assert response.status_code == 201
     body = response.json()
-    item = body["items"][0]
+    item = (await client.get(f"/api/imports/items/{body['items'][0]['item_id']}?full=1")).json()
 
     # Количество не изменилось (Decimal строки)
     assert item["after_data"]["quantity"] in ("12", "12.0")
@@ -1017,7 +1128,7 @@ async def test_import_already_multiple_no_warning(
 
     assert response.status_code == 201
     body = response.json()
-    item = body["items"][0]
+    item = (await client.get(f"/api/imports/items/{body['items'][0]['item_id']}?full=1")).json()
 
     assert item["after_data"]["quantity"] in ("15", "15.0")
     # Нет warning о округлении так как уже кратно
@@ -1340,3 +1451,67 @@ async def test_import_paired_profile_large_substitution_warns(
     assert any(w.startswith("raw_length_substituted:") for w in paired_item["warnings"])
     assert paired_item["after_data"]["input_dimensions"] == {"length_mm": 2900}
     assert paired_item["after_data"]["outputs"][0]["dimensions"] == {"length_mm": 2700}
+
+@pytest.mark.asyncio
+async def test_batch_items_cursor_paging_returns_light_rows(client, session, tmp_path, monkeypatch) -> None:
+    monkeypatch.setattr(settings, "IMPORT_STORAGE_DIR", str(tmp_path))
+    template = await _create_template(session, name="Paging Template", code="paging-template")
+    await session.commit()
+
+    created = await client.post(
+        f"/api/imports/excel?template_id={template.id}",
+        files={
+            "file": (
+                "plan.xlsx",
+                _workbook_bytes(),
+                "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+            )
+        },
+    )
+    assert created.status_code == 201
+    batch_id = created.json()["import_batch_id"]
+
+    first = (await client.get(f"/api/imports/batches/{batch_id}/items?limit=1")).json()
+    assert first["total"] == 2
+    assert len(first["items"]) == 1
+    assert "after_data" not in first["items"][0]
+    assert first["next_cursor"] is not None
+
+    second = (await client.get(f"/api/imports/batches/{batch_id}/items?cursor={first['next_cursor']}")).json()
+    assert len(second["items"]) == 1
+    assert second["total"] == 2  # total — размер change set, курсор на него не влияет
+    assert second["next_cursor"] is None
+    assert second["items"][0]["item_id"] != first["items"][0]["item_id"]
+
+    missing = await client.get("/api/imports/batches/999999999/items")
+    assert missing.status_code == 404
+
+
+@pytest.mark.asyncio
+async def test_import_item_full_returns_after_data(client, session, tmp_path, monkeypatch) -> None:
+    monkeypatch.setattr(settings, "IMPORT_STORAGE_DIR", str(tmp_path))
+    template = await _create_template(session, name="Item Template", code="item-template")
+    await session.commit()
+
+    created = await client.post(
+        f"/api/imports/excel?template_id={template.id}",
+        files={
+            "file": (
+                "plan.xlsx",
+                _workbook_bytes(),
+                "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+            )
+        },
+    )
+    assert created.status_code == 201
+    item_id = created.json()["items"][0]["item_id"]
+
+    light = (await client.get(f"/api/imports/items/{item_id}")).json()
+    assert "after_data" not in light
+    assert light["item_id"] == item_id
+
+    full = (await client.get(f"/api/imports/items/{item_id}?full=1")).json()
+    assert full["after_data"]["source_sku"] == "ЮП-2616+ЮП-2604"
+
+    missing = await client.get("/api/imports/items/999999999?full=1")
+    assert missing.status_code == 404

@@ -14,6 +14,7 @@ from app.core.config import settings
 from app.models.import_template import ImportTemplate
 from app.models.production_plan import PlanPosition
 from app.services.excel_import import parse_factory_plan_workbook
+from tests.test_integrity_invariants import assert_no_invariants_violations
 
 PLAN_HEADERS = [
     "Артикул",
@@ -286,7 +287,7 @@ async def test_group_import_apply_and_reimport_idempotency(client, session, tmp_
     assert response.status_code == 201
     body = response.json()
     assert body["summary"]["total_positions"] == 1
-    after = body["items"][0]["after_data"]
+    after = (await client.get(f"/api/imports/items/{body['items'][0]['item_id']}?full=1")).json()["after_data"]
     assert after["input_quantity"] == "150"
     assert after["input_dimensions"] == {"length_mm": 2700}
     assert [(o["quantity"], o["dimensions"]) for o in after["outputs"]] == [
@@ -343,6 +344,8 @@ async def test_group_import_apply_and_reimport_idempotency(client, session, tmp_
     ).scalars().all()
     assert len(count) == 1
 
+    await assert_no_invariants_violations(session, context="group import apply + reimport")
+
 
 @pytest.mark.asyncio
 async def test_typical_size_fallback_from_product_dimensions(client, session, tmp_path, monkeypatch) -> None:
@@ -379,5 +382,5 @@ async def test_typical_size_fallback_from_product_dimensions(client, session, tm
         },
     )
     assert response.status_code == 201
-    after = response.json()["items"][0]["after_data"]
+    after = (await client.get(f"/api/imports/items/{response.json()['items'][0]['item_id']}?full=1")).json()["after_data"]
     assert after["input_dimensions"] == {"length_mm": 2700}

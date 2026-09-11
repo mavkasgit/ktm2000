@@ -141,5 +141,8 @@ async def test_single_row_import_yup_2630_passes_when_product_and_route_exist(cl
     assert body["summary"]["total_positions"] == 1
     assert len(body["items"]) == 1
     item = body["items"][0]
-    assert item["after_data"]["source_sku"] == "ЮП-2630"
-    assert item["errors"] == []
+    assert item["source_sku"] == "ЮП-2630"
+    assert any(c.startswith("hanger_quantity_not_set") for c in item["codes"])
+    full = (await client.get(f"/api/imports/items/{item['item_id']}?full=1")).json()
+    assert full["after_data"]["source_sku"] == "ЮП-2630"
+    assert full["errors"] == []
