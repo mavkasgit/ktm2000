@@ -128,28 +128,40 @@ async def resolve_pair_by_component_skus(
     return None
 
 
-async def resolve_effective_product_id(
+async def resolve_effective_product_ids(
     db: AsyncSession, position
-) -> int | None:
-    """Эффективный продукт позиции плана (#148).
+) -> list[int]:
+    """Все продукты позиции плана (#148): одиночная — один, парная — оба.
 
-    Одиночная позиция — ``position.product_id``. Парная: позиция со
-    снапшотом берёт продукт из снапшота (``inputs[0]`` — product_a, порядок
-    записи резолвером), пару справочник не переинтерпретирует (#142);
-    без снапшота — резолв пары из ``product_pairs`` → ``product_a_id``.
-    Возвращает None, если продукт не резолвится.
+    Одиночная позиция — ``[position.product_id]``. Парная: позиция со
+    снапшотом берёт продукты из снапшота (``inputs[]``, порядок записи
+    резолвером — product_a, product_b), пару справочник не переинтерпретирует
+    (#142); без снапшота — резолв пары из ``product_pairs`` →
+    ``[product_a_id, product_b_id]``. Пустой список — продукт не резолвится.
     """
     if position.product_id is not None:
-        return position.product_id
+        return [position.product_id]
 
     if has_pair_snapshot(position):
         inputs = (pair_snapshot(position.source_payload) or {}).get("inputs") or []
-        first = inputs[0] if inputs else None
-        product_id = first.get("product_id") if isinstance(first, dict) else None
-        return int(product_id) if product_id else None
+        return [
+            int(item["product_id"])
+            for item in inputs
+            if isinstance(item, dict) and item.get("product_id")
+        ]
 
     resolved = await resolve_pair_by_component_skus(db, paired_component_skus(position))
-    return resolved.pair.product_a_id if resolved is not None else None
+    if resolved is None:
+        return []
+    return [resolved.pair.product_a_id, resolved.pair.product_b_id]
+
+
+async def resolve_effective_product_id(
+    db: AsyncSession, position
+) -> int | None:
+    """Первый из :func:`resolve_effective_product_ids` (исторический контракт)."""
+    product_ids = await resolve_effective_product_ids(db, position)
+    return product_ids[0] if product_ids else None
 
 
 async def pair_length_candidates_mm(db: AsyncSession, resolved: ResolvedPair) -> list[float]:

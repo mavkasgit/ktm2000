@@ -1813,35 +1813,40 @@ class ProductWipTaskOut(BaseModel):
     issued_qty: float
     active_tasks_count: int
 
+class ProductWipComponentOut(BaseModel):
+    """Компонент пары в сводке: остатки одного артикула (склад ведётся поштучно)."""
+
+    sku: str
+    product_id: int | None = None
+    product_name: str
+    remainders: list[ProductWipRemainderOut]
+
+
 class ProductWipStatsOut(BaseModel):
     sku: str
     product_name: str
     product_id: int | None = None
     remainders: list[ProductWipRemainderOut]
     in_work: list[ProductWipTaskOut]
+    # Пара — единый артикул плана (ADR-0023), но сырьё хранится поштучно:
+    # остатки раскрываются покомпонентно, общей «складской пары» не бывает.
+    is_pair: bool = False
+    components: list[ProductWipComponentOut] = []
+    # Код деградации: product_pair_not_found — строки нет в product_pairs,
+    # показываем то, что нашлось по SKU-компонентам.
+    warning: str | None = None
 
 
-@router.get("/product-wip-stats/{sku}", response_model=ProductWipStatsOut)
-async def get_product_wip_stats(
-    sku: str,
-    db: AsyncSession = Depends(get_db),
-):
-    # 1. Поиск продукта по артикулу
-    product = (
-        await db.execute(select(Product).where(Product.sku == sku))
-    ).scalar_one_or_none()
-    
-    if not product:
-        raise HTTPException(status_code=404, detail="Product not found")
-
-    # 2. Поиск остатков на складах через StockBalance
+async def _product_remainders(db: AsyncSession, product_id: int) -> list[ProductWipRemainderOut]:
+    """Остатки артикула на складах подготовки, разбитые по СПГ и размерам."""
     from app.stock.models import QualityState, StockBalance
     from app.stock.services import _dimensions_hash_key
+
     balances = (await db.execute(
         select(StockBalance, Section)
         .join(Section, Section.id == StockBalance.location_id)
         .where(
-            StockBalance.product_id == product.id,
+            StockBalance.product_id == product_id,
             StockBalance.balance_qty > 0,
             StockBalance.quality_state == QualityState.GOOD,
         )
@@ -1882,7 +1887,7 @@ async def get_product_wip_stats(
             }
         rem_grouped[key]["quantity"] += float(bal.balance_qty or 0)
 
-    remainders = sorted(
+    return sorted(
         [
             ProductWipRemainderOut(
                 spg_id=val["spg_id"],
@@ -1904,7 +1909,14 @@ async def get_product_wip_stats(
         reverse=True,
     )
 
-    # 3. Поиск активных задач в работе (ready, in_progress)
+
+async def _work_rows(
+    db: AsyncSession,
+    *,
+    product_id: int | None = None,
+    position_skus: set[str] | None = None,
+) -> list:
+    """Активные задачи (ready/in_progress): по продукту либо по артикулам позиций."""
     from sqlalchemy.orm import selectinload
 
     work_q = (
@@ -1912,15 +1924,26 @@ async def get_product_wip_stats(
         .join(Section, WorkTask.section_id == Section.id)
         .join(RouteStage, WorkTask.route_stage_id == RouteStage.id)
         .options(selectinload(RouteStage.operations))
-        .where(WorkTask.product_id == product.id)
         .where(WorkTask.status.in_([WorkTaskStatus.ready, WorkTaskStatus.in_progress]))
         .order_by(RouteStage.sequence)
     )
-    work_rows = (await db.execute(work_q)).all()
+    if product_id is not None:
+        work_q = work_q.where(WorkTask.product_id == product_id)
+    if position_skus is not None:
+        # У парной задачи product_id = product_a — это внутренняя деталь
+        # резолва; «в работе» пары берём по её же позициям, а не по продукту.
+        work_q = (
+            work_q.join(SectionPlanLine, WorkTask.section_plan_line_id == SectionPlanLine.id)
+            .join(PlanPosition, SectionPlanLine.plan_position_id == PlanPosition.id)
+            .where(PlanPosition.source_sku.in_(position_skus))
+        )
+    return (await db.execute(work_q)).all()
 
-    # Группируем задачи по секциям, операциям и размерам в Python-коде
-    # (ADR-0001): задания одного артикула разных размеров — разные строки.
-    from app.stock.services import StockProjectionManager
+
+async def _group_work_tasks(db: AsyncSession, work_rows: list) -> list[ProductWipTaskOut]:
+    """Группировка задач по секциям, операциям и размерам (ADR-0001)."""
+    from app.stock.services import StockProjectionManager, _dimensions_hash_key
+
     pm = StockProjectionManager()
     all_wt_ids = [wt.id for wt, _, _ in work_rows]
     tasks_cache_bulk = await pm.get_tasks_cache_bulk(db, all_wt_ids)
@@ -1962,7 +1985,7 @@ async def get_product_wip_stats(
         grouped[key]["issued_qty"] += float(wt_cache.get("issued_quantity", 0) or 0)
         grouped[key]["active_tasks_count"] += 1
 
-    in_work = [
+    return [
         ProductWipTaskOut(
             section_id=val["section_id"],
             section_code=val["section_code"],
@@ -1980,10 +2003,98 @@ async def get_product_wip_stats(
         for val in grouped.values()
     ]
 
+
+async def _pair_component_entries(
+    db: AsyncSession, sku: str
+) -> tuple[list[tuple[str, Product | None]], str | None]:
+    """Компоненты парной строки: канонический резолв → SKU-фолбэк.
+
+    Возвращает список ``(sku, product|None)`` и код деградации
+    (``None`` — пара найдена в справочнике).
+    """
+    from app.services import product_pair_resolver
+
+    component_skus = [part.strip() for part in sku.split("+") if part.strip()]
+    resolved = await product_pair_resolver.resolve_pair_by_component_skus(db, component_skus)
+    if resolved is not None:
+        return [
+            (resolved.product_a.sku, resolved.product_a),
+            (resolved.product_b.sku, resolved.product_b),
+        ], None
+
+    products = (
+        (await db.execute(select(Product).where(Product.sku.in_(component_skus)))).scalars().all()
+        if component_skus
+        else []
+    )
+    by_sku = {product.sku: product for product in products}
+    return [(component_sku, by_sku.get(component_sku)) for component_sku in component_skus], (
+        "product_pair_not_found"
+    )
+
+
+async def _pair_wip_stats(db: AsyncSession, sku: str) -> ProductWipStatsOut:
+    """Сводка пары: покомпонентные остатки + задачи парных позиций."""
+    entries, warning = await _pair_component_entries(db, sku)
+    if not entries or all(product is None for _, product in entries):
+        raise HTTPException(status_code=404, detail="Product not found")
+
+    components = [
+        ProductWipComponentOut(
+            sku=component_sku,
+            product_id=product.id if product is not None else None,
+            product_name=product.name if product is not None else "",
+            remainders=(
+                await _product_remainders(db, product.id) if product is not None else []
+            ),
+        )
+        for component_sku, product in entries
+    ]
+    names = [product.name for _, product in entries if product is not None]
+    component_skus = [component_sku for component_sku, _ in entries]
+    # Позиции пишут компоненты в порядке строки Excel — проверяем оба порядка.
+    position_skus = {
+        sku,
+        "+".join(component_skus),
+        "+".join(reversed(component_skus)),
+    }
+    work_rows = await _work_rows(db, position_skus=position_skus)
+    return ProductWipStatsOut(
+        sku=sku,
+        product_name=" + ".join(names) if names else sku,
+        is_pair=True,
+        remainders=[],
+        components=components,
+        in_work=await _group_work_tasks(db, work_rows),
+        warning=warning,
+    )
+
+
+@router.get("/product-wip-stats/{sku}", response_model=ProductWipStatsOut)
+async def get_product_wip_stats(
+    sku: str,
+    db: AsyncSession = Depends(get_db),
+):
+    """Сводка артикула: остатки на складах подготовки + активные задачи.
+
+    Парная строка (составной ``A+B``, ADR-0023) раскрывается покомпонентно:
+    склад ведёт сырьё поштучно, общего «остатка пары» не существует.
+    """
+    if "+" in sku:
+        return await _pair_wip_stats(db, sku)
+
+    # 1. Поиск продукта по артикулу
+    product = (
+        await db.execute(select(Product).where(Product.sku == sku))
+    ).scalar_one_or_none()
+
+    if not product:
+        raise HTTPException(status_code=404, detail="Product not found")
+
     return ProductWipStatsOut(
         sku=product.sku,
         product_name=product.name,
         product_id=product.id,
-        remainders=remainders,
-        in_work=in_work
+        remainders=await _product_remainders(db, product.id),
+        in_work=await _group_work_tasks(db, await _work_rows(db, product_id=product.id)),
     )

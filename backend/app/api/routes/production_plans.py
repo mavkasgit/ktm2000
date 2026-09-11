@@ -957,15 +957,15 @@ async def _compute_available_remainder_for_positions(
     from sqlalchemy.orm import selectinload
 
     from app.services.position_remainders import compute_available_remainder_quantities
-    from app.services.production_planning_rows import _resolve_effective_product_id
+    from app.services.production_planning_rows import _resolve_effective_product_ids
 
     if not positions:
         return {}
 
-    # Резолвим effective_product_id для каждой позиции (включая парные).
-    effective_product_by_id: dict[int, int | None] = {}
+    # Резолвим продукты для каждой позиции (включая оба компонента пары).
+    effective_products_by_id: dict[int, list[int]] = {}
     for p in positions:
-        effective_product_by_id[p.id] = await _resolve_effective_product_id(db, p)
+        effective_products_by_id[p.id] = await _resolve_effective_product_ids(db, p)
 
     # Собираем уникальные route_id'ы.
     unique_route_ids = {
@@ -1001,9 +1001,9 @@ async def _compute_available_remainder_for_positions(
             continue
         if not route_remainder_steps_by_route_id.get(info.route_id):
             continue
-        effective_id = effective_product_by_id.get(p.id)
-        if effective_id is not None:
-            product_ids_for_remainders.add(effective_id)
+        effective_ids = effective_products_by_id.get(p.id)
+        if effective_ids:
+            product_ids_for_remainders.update(effective_ids)
 
     available_by_product = await compute_available_remainder_quantities(
         db,
@@ -1020,8 +1020,12 @@ async def _compute_available_remainder_for_positions(
         if not steps:
             result[p.id] = 0.0
             continue
-        effective_id = effective_product_by_id.get(p.id)
-        result[p.id] = available_by_product.get(effective_id, 0.0) if effective_id is not None else 0.0
+        effective_ids = effective_products_by_id.get(p.id) or []
+        # Пара заходит на маршрут как единая загрузка — минимум по компонентам.
+        result[p.id] = min(
+            (available_by_product.get(product_id, 0.0) for product_id in effective_ids),
+            default=0.0,
+        )
     return result
 
 

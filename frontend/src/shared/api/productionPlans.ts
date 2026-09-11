@@ -894,6 +894,19 @@ export type ProductWipStats = {
   product_id: number | null;
   remainders: ProductWipRemainder[];
   in_work: ProductWipTask[];
+  /** Парная строка A+B: остатки раскрыты покомпонентно (склад ведётся поштучно). */
+  is_pair: boolean;
+  components: ProductWipComponent[];
+  /** Код деградации: product_pair_not_found — пары нет в справочнике. */
+  warning: string | null;
+};
+
+/** Компонент пары в сводке: остатки одного артикула. */
+export type ProductWipComponent = {
+  sku: string;
+  product_id: number | null;
+  product_name: string;
+  remainders: ProductWipRemainder[];
 };
 
 export async function getProductWipStats(sku: string) {
