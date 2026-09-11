@@ -145,7 +145,7 @@ async def seed_data(session: AsyncSession):
         session.add(rule)
         await session.flush()
 
-    # 5. Продукт и техкарта
+    # 5. Продукт
     product = await session.scalar(select(Product).where(Product.sku == "BENCH-PROD"))
     if not product:
         product = Product(

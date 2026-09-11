@@ -393,3 +393,7 @@ async def test_pair_n_manual_override_wins_163(session) -> None:
     # Без override словарь пары даёт своё значение.
     plain = await resolve_pair_n(session, resolved, length_mm=2700.0)
     assert _key(plain) == (8, "manual", False)
+
+    # Неположительный override override'ом не считается — словарь снова решает.
+    zero = await resolve_pair_n(session, resolved, length_mm=2700.0, manual_override=0)
+    assert _key(zero) == (8, "manual", False)

@@ -97,7 +97,9 @@ export function RowDetailsContent({
   const hangerSourceHint = data.quantityPerHangerOverridden
     ? "переопределено для позиции"
     : data.quantityPerHanger != null
-      ? `из справочника: ${data.quantityPerHanger}`
+      ? data.quantityPerHangerSource === "auto"
+        ? `из справочника (авто): ${data.quantityPerHanger}`
+        : `из справочника: ${data.quantityPerHanger}`
       : null
 
   const handleSave = () => {

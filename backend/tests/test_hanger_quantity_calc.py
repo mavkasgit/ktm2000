@@ -247,7 +247,7 @@ class TestConstantValidation:
 
 
 class TestComputePairedHangerQuantity:
-    """Совместный расчёт парной техкарты (#58/#67).
+    """Совместный расчёт для пары артикулов (#58/#67).
 
     by_area = floor(13 / ((perimeter_A + perimeter_B) × длина / 10⁶)),
     by_size = floor(2900 / (габарит_A + габарит_B + 40)), итог = min.

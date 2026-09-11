@@ -260,9 +260,13 @@ def _snapshot_pair_hanger(position) -> PositionHangerValue | None:
 
 
 async def _resolve_paired_position_hanger(db: AsyncSession, position) -> PositionHangerValue:
-    """N и source парной позиции: override → снапшот → резолв пары."""
+    """N и source парной позиции: override → снапшот → резолв пары.
+
+    Неположительный override (0/отрицательный) override'ом не считается — то
+    же правило, что у ``resolve_pair_n`` и ручных норм одиночных (``manual > 0``).
+    """
     override = payload_quantity_per_hanger(position)
-    if override is not None:
+    if override is not None and override > 0:
         return PositionHangerValue(override, "manual")
 
     snapshot_value = _snapshot_pair_hanger(position)

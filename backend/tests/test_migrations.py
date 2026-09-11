@@ -109,7 +109,7 @@ async def test_alembic_upgrade_head_creates_full_schema():
 async def test_migration_054_product_pairs_and_flag_drop():
     """#146 (ADR-0023): таблица product_pairs, флаг is_paired_profile дропнут (поверх 053).
 
-    Миграция — чистый лист: данных из парных техкарт нет. Проверяем схему
+    Миграция — чистый лист: парных данных прошлой модели нет. Проверяем схему
     после upgrade head: колонки is_paired_profile на products нет, в
     product_pairs работают канонический порядок и уникальность неупорядоченной
     пары, ручная N по умолчанию — пустой словарь.

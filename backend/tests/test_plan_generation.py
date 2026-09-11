@@ -39,7 +39,7 @@ async def _make_ready_product(session, sku: str = "FG-1") -> tuple[Product, list
     session.add_all([product, *sections])
     await session.flush()
 
-    # Техкарты не создаются: gate упразднён (#148), релиз живёт без них.
+    # Норматив не создаётся: gate упразднён (#148), релиз живёт без него.
     route = ProductionRoute(name="Main", is_active=True)
     session.add(route)
     await session.flush()

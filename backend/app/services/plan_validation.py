@@ -60,7 +60,7 @@ async def validate_plan_position(
     if position.quantity <= 0:
         errors.append("quantity_must_be_positive")
 
-    # Gate «активная техкарта» упразднён (ADR-0023, #148): валидация
+    # Gate активного норматива упразднён (ADR-0023, #148): валидация
     # одиночной позиции = SKU найден, активен, маршрут разрешён и валиден.
     if position.product_id is None:
         product = None

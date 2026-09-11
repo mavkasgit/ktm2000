@@ -27,7 +27,7 @@ from app.services.plan_validation import validate_plan_position
 
 
 async def _make_ready_product(session, sku: str, *, auto: bool = False) -> Product:
-    """Продукт с техкартой и маршрутом. `auto` — авто-поля периметр/габарит."""
+    """Продукт с маршрутом. `auto` — авто-поля периметр/габарит."""
     product = Product(sku=sku, name=f"Finished {sku}", type=ProductType.finished_good, unit="pcs")
     component = Product(sku=f"{sku}-RAW", name=f"Raw {sku}", type=ProductType.component, unit="pcs")
     if auto:
@@ -577,6 +577,21 @@ async def test_serialize_paired_position_override_wins_and_null_clears(client, s
     assert absent.status_code == 200, absent.text
     assert absent.json()["quantity_per_hanger"] == 4
     assert position.source_payload["quantity_per_hanger"] == 4
+
+
+@pytest.mark.asyncio
+async def test_serialize_paired_position_nonpositive_override_is_ignored(client, session) -> None:
+    """override <= 0 не считается override: читается снапшот (симметрия с resolve_pair_n)."""
+    plan, _ = await _make_pair_position(
+        session, _pair_payload(snapshot=True, override=0), plan_no="PLAN-PAIR-ZERO",
+    )
+    await session.flush()
+
+    resp = await client.get(f"/api/production-plans/{plan.id}/all-positions")
+    assert resp.status_code == 200, resp.text
+    position = resp.json()[0]
+    assert position["quantity_per_hanger"] == 8
+    assert position["quantity_per_hanger_source"] == "manual"
 
 
 @pytest.mark.asyncio
