@@ -28,6 +28,10 @@ export function buildActiveFilterSummary(
   }
 
   for (const [key, value] of Object.entries(filters)) {
+    if (value === true) {
+      labels.push(filterShortLabels[key] ?? key);
+      continue;
+    }
     if (typeof value === "string" && value !== "all") {
       const shortLabel = filterShortLabels[key] ?? key;
       labels.push(shortLabel);

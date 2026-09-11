@@ -46,7 +46,9 @@ export function ImportWizard(props: {
   const [sheetPreviews, setSheetPreviews] = useState<SheetPreviewCache>({})
   const [previewLoading, setPreviewLoading] = useState<Record<string, boolean>>({})
   const [sortConfig, setSortConfig] = useState<SortConfig>(null)
-  const [filterStatus, setFilterStatus] = useState<"all" | "invalid" | "warning">("all")
+  const [filterErrors, setFilterErrors] = useState(false)
+  const [filterWarnings, setFilterWarnings] = useState(false)
+  const [filterDuplicates, setFilterDuplicates] = useState(false)
   const [loading, setLoading] = useState(false)
   const [error, setError] = useState<string | null>(null)
   const [result, setResult] = useState<Record<string, unknown> | null>(null)
@@ -171,8 +173,14 @@ export function ImportWizard(props: {
         // ignore invalid rowSelection
       }
     }
-    if (filterStatus !== "all") {
-      rows = rows.filter((r) => r.status === filterStatus)
+    // Категорийные тоглы: включён хотя бы один — показываем объединение выбранных категорий.
+    if (filterErrors || filterWarnings || filterDuplicates) {
+      rows = rows.filter(
+        (r) =>
+          (filterErrors && r.status === "invalid") ||
+          (filterWarnings && r.status === "warning") ||
+          (filterDuplicates && isDuplicateRow(r as DuplicateRowSignal)),
+      )
     }
     if (searchQuery.trim()) {
       const q = searchQuery.trim().toLowerCase()
@@ -202,7 +210,7 @@ export function ImportWizard(props: {
       if (aVal > bVal) return sortConfig.dir === "asc" ? 1 : -1
       return 0
     })
-  }, [allRows, filterStatus, sortConfig, rowSelection, searchQuery])
+  }, [allRows, filterErrors, filterWarnings, filterDuplicates, sortConfig, rowSelection, searchQuery])
 
   const summary = useMemo(() => {
     const total = allRows.length
@@ -210,48 +218,119 @@ export function ImportWizard(props: {
     const warning = allRows.filter((r) => r.status === "warning").length
     return { total, invalid, warning }
   }, [allRows])
+  const duplicateCount = useMemo(() => {
+    return allRows.filter((r) => isDuplicateRow(r as DuplicateRowSignal)).length
+  }, [allRows])
+
+  // Ни одна категория не выбрана = чипы «включены» все, фильтра по категориям нет.
+  const allCategoriesVisible = !filterErrors && !filterWarnings && !filterDuplicates
+
   const previewActiveFilterSummary = useMemo(
     () =>
       buildActiveFilterSummary(
-        { status: filterStatus },
+        {
+          has_errors: filterErrors,
+          has_warnings: filterWarnings,
+          has_duplicates: filterDuplicates,
+        },
         searchQuery,
         sortConfig ? 1 : 0,
       ),
-    [filterStatus, searchQuery, sortConfig],
+    [filterErrors, filterWarnings, filterDuplicates, searchQuery, sortConfig],
   )
   const resetPreviewFilters = useCallback(() => {
     setSearchQuery("")
-    setFilterStatus("all")
+    setFilterErrors(false)
+    setFilterWarnings(false)
+    setFilterDuplicates(false)
     setSortConfig(null)
   }, [])
-  const previewFilterFields = useMemo<FiltersPanelField[]>(
-    () => [
+  // Категорийные чипы-переключатели: изначально включены все (без фильтра),
+  // клик изолирует одну категорию, повторный клик по ней — снова все.
+  const previewFilterFields = useMemo<FiltersPanelField[]>(() => {
+    const fields: FiltersPanelField[] = [
       {
-        kind: "search" as const,
+        kind: "search",
         key: "search",
         value: searchQuery,
         onChange: setSearchQuery,
         placeholder: "Поиск: строка, ID, артикул...",
       },
-      {
-        kind: "select" as const,
-        key: "status",
-        value: filterStatus,
-        onChange: (value: string) => setFilterStatus(value as "all" | "invalid" | "warning"),
-        placeholder: "Статус строк",
-        options: [
-          { value: "all", label: "Все" },
-          { value: "invalid", label: "Ошибки" },
-          { value: "warning", label: "Предупр." },
-        ],
-      },
-    ],
-    [filterStatus, searchQuery],
-  )
-
-  const duplicateCount = useMemo(() => {
-    return allRows.filter((r) => isDuplicateRow(r as DuplicateRowSignal)).length
-  }, [allRows])
+    ]
+    if (summary.invalid > 0 || filterErrors) {
+      fields.push({
+        kind: "toggle",
+        key: "filter-errors",
+        label: "Ошибки",
+        tone: "red",
+        hideIcon: true,
+        checked: filterErrors || allCategoriesVisible,
+        onChange: () => {
+          if (filterErrors) {
+            setFilterErrors(false)
+          } else {
+            setFilterErrors(true)
+            setFilterWarnings(false)
+            setFilterDuplicates(false)
+          }
+        },
+        badgeCount: summary.invalid,
+        layoutSpan: "min-w-[0px]",
+      })
+    }
+    if (summary.warning > 0 || filterWarnings) {
+      fields.push({
+        kind: "toggle",
+        key: "filter-warnings",
+        label: "Предупр.",
+        tone: "amber",
+        hideIcon: true,
+        checked: filterWarnings || allCategoriesVisible,
+        onChange: () => {
+          if (filterWarnings) {
+            setFilterWarnings(false)
+          } else {
+            setFilterErrors(false)
+            setFilterWarnings(true)
+            setFilterDuplicates(false)
+          }
+        },
+        badgeCount: summary.warning,
+        layoutSpan: "min-w-[0px]",
+      })
+    }
+    if (duplicateCount > 0 || filterDuplicates) {
+      fields.push({
+        kind: "toggle",
+        key: "filter-duplicates",
+        label: "Дубли",
+        tone: "violet",
+        hideIcon: true,
+        checked: filterDuplicates || allCategoriesVisible,
+        onChange: () => {
+          if (filterDuplicates) {
+            setFilterDuplicates(false)
+          } else {
+            setFilterErrors(false)
+            setFilterWarnings(false)
+            setFilterDuplicates(true)
+          }
+        },
+        badgeCount: duplicateCount,
+        layoutSpan: "min-w-[0px]",
+      })
+    }
+    return fields
+  }, [
+    allCategoriesVisible,
+    duplicateCount,
+    filterDuplicates,
+    filterErrors,
+    filterWarnings,
+    searchQuery,
+    summary.invalid,
+    summary.warning,
+  ])
 
   // Клиентские подсчёты — запасной вариант, когда нет серверного summary (§4.3).
   const clientApplyStats = useMemo(
@@ -450,7 +529,9 @@ export function ImportWizard(props: {
     setResult(null)
     setError(null)
     setSortConfig(null)
-    setFilterStatus("all")
+    setFilterErrors(false)
+    setFilterWarnings(false)
+    setFilterDuplicates(false)
     setSearchQuery("")
     setRowSelection("")
     setPendingChangeSet(null)
@@ -691,10 +772,7 @@ export function ImportWizard(props: {
                     }
                     return null;
                   })()}
-                  {summary.invalid > 0 && <span className="text-red-600"><strong>Ошибок:</strong> {summary.invalid}</span>}
-                  {summary.warning > 0 && <span className="text-amber-600"><strong>Предупр.:</strong> {summary.warning}</span>}
                   {summary.invalid === 0 && summary.warning === 0 && <span className="text-green-600 text-xs">Без ошибок</span>}
-                  {duplicateCount > 0 && <span className="text-violet-600"><strong>Дубли:</strong> {duplicateCount}</span>}
                   {errorBreakdown["product_not_found"] > 0 && (
                     <Button
                       variant="outline"
@@ -732,6 +810,8 @@ export function ImportWizard(props: {
                   compact
                   fields={previewFilterFields}
                   activeSummary={previewActiveFilterSummary}
+                  onReset={resetPreviewFilters}
+                  hasActiveFilters={previewActiveFilterSummary.count > 0}
                   className="p-3"
                   actions={(
                     <ImportRawRows.Toggle

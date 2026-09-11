@@ -5,26 +5,61 @@ import { Input } from "./input";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "./select";
 import { cn } from "@/shared/utils/cn";
 
+export type ToggleTone = "neutral" | "red" | "amber" | "violet";
+
+const TOGGLE_TONE_CLASS: Record<
+  ToggleTone,
+  { checked: string; unchecked: string; badgeChecked: string; badgeUnchecked: string }
+> = {
+  neutral: {
+    checked: "",
+    unchecked: "",
+    badgeChecked: "bg-white/25 text-white",
+    badgeUnchecked: "bg-primary/20 text-primary",
+  },
+  red: {
+    checked: "border-red-600 bg-red-600 text-white hover:bg-red-700 hover:text-white",
+    unchecked: "border-red-200 bg-red-50 text-red-700 hover:bg-red-100 hover:text-red-700",
+    badgeChecked: "bg-white/25 text-white",
+    badgeUnchecked: "bg-white/80 text-red-700",
+  },
+  amber: {
+    checked: "border-amber-500 bg-amber-500 text-white hover:bg-amber-600 hover:text-white",
+    unchecked: "border-amber-200 bg-amber-50 text-amber-700 hover:bg-amber-100 hover:text-amber-700",
+    badgeChecked: "bg-white/30 text-white",
+    badgeUnchecked: "bg-white/80 text-amber-700",
+  },
+  violet: {
+    checked: "border-violet-600 bg-violet-600 text-white hover:bg-violet-700 hover:text-white",
+    unchecked: "border-violet-200 bg-violet-50 text-violet-700 hover:bg-violet-100 hover:text-violet-700",
+    badgeChecked: "bg-white/25 text-white",
+    badgeUnchecked: "bg-white/80 text-violet-700",
+  },
+};
+
 function renderToggleField(field: Extract<FiltersPanelField, { kind: "toggle" }>) {
+  const tone = TOGGLE_TONE_CLASS[field.tone ?? "neutral"];
   return (
     <Button
       variant={field.checked ? "default" : "outline"}
       size="sm"
-      className="h-9 text-xs whitespace-nowrap"
+      className={cn("h-9 text-xs whitespace-nowrap", field.checked ? tone.checked : tone.unchecked)}
       onClick={() => field.onChange(!field.checked)}
     >
-      {field.checked ? (
-        <Eye className="h-3.5 w-3.5 mr-1" />
-      ) : (
-        <EyeOff className="h-3.5 w-3.5 mr-1" />
-      )}
+      {!field.hideIcon &&
+        (field.checked ? (
+          <Eye className="h-3.5 w-3.5 mr-1" />
+        ) : (
+          <EyeOff className="h-3.5 w-3.5 mr-1" />
+        ))}
       {field.label}
       {field.badgeCount != null && field.badgeCount > 0 && (
-        <span className={`ml-1.5 inline-flex items-center justify-center min-w-[18px] h-[18px] rounded-full text-[10px] font-semibold px-1 ${
-          field.checked
-            ? "bg-white/25 text-white"
-            : "bg-primary/20 text-primary"
-        }`}>
+        <span
+          className={cn(
+            "ml-1.5 inline-flex items-center justify-center min-w-[18px] h-[18px] rounded-full text-[10px] font-semibold px-1",
+            field.checked ? tone.badgeChecked : tone.badgeUnchecked,
+          )}
+        >
           {field.badgeCount}
         </span>
       )}
@@ -106,6 +141,10 @@ export type FiltersPanelField =
       checked: boolean;
       onChange: (checked: boolean) => void;
       badgeCount?: number;
+      /** Цветовая схема чипа; по умолчанию — нейтральная (primary). */
+      tone?: ToggleTone;
+      /** Скрыть иконку глаза (для цветных чипов-переключателей). */
+      hideIcon?: boolean;
       layoutSpan?: string;
     }
   | {
@@ -187,6 +226,18 @@ export function FiltersPanel({
             </div>
           ))}
 
+          {showReset && (
+            <Button
+              variant={hasActiveFilters ? "default" : "ghost"}
+              size="sm"
+              className="h-8 text-sm flex-shrink-0"
+              onClick={onReset}
+            >
+              <X className="mr-1 h-3.5 w-3.5" />
+              Сбросить
+            </Button>
+          )}
+
           <div className="ml-auto flex items-center gap-2 flex-wrap">
             {actions}
           </div>
@@ -201,18 +252,6 @@ export function FiltersPanel({
                   </span>
                 ))}
             </div>
-          )}
-
-          {showReset && (
-            <Button
-              variant={hasActiveFilters ? "default" : "ghost"}
-              size="sm"
-              className="h-8 text-sm flex-shrink-0"
-              onClick={onReset}
-            >
-              <X className="mr-1 h-3.5 w-3.5" />
-              Сбросить
-            </Button>
           )}
         </div>
       ) : (
