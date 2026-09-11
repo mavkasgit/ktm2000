@@ -331,6 +331,27 @@ class Product(Base):
         return self.quantity_per_hanger
 
     @property
+    def hanger_quantity_source(self) -> str | None:
+        """Источник эффективного значения :attr:`quantity_per_hanger`: 'auto' | 'manual' | None.
+
+        Зеркало ``PairHangerValue.source`` для одиночного артикула. None —
+        значения нет. Legacy-скаляр (int или bare-словарь) хранился в
+        ``manual`` и отдаётся из него — источник manual независимо от
+        ``hanger_mode`` (значение auto-слота не участвует).
+        """
+        d = self._hanger_dict()
+        if d is None:
+            raw = (self.attributes or {}).get("quantity_per_hanger")
+            return HANGER_MODE_MANUAL if isinstance(raw, int) else None
+        key = self._primary_hanger_length_key()
+        if key is None:
+            return HANGER_MODE_MANUAL if d.get("manual") is not None else None
+        entry = d.get(key)
+        if not isinstance(entry, dict):
+            return None
+        return self.hanger_mode if self._value_for_mode(entry) is not None else None
+
+    @property
     def cross_section(self) -> str | None:
         return (self.attributes or {}).get("cross_section")
 

@@ -12,6 +12,14 @@ import {
 import { errorLabels as PLAN_IMPORT_ERROR_LABELS, warningLabels } from "@/shared/lib/generated-labels";
 export { PLAN_IMPORT_ERROR_LABELS };
 
+/** Подсветка артикула по источнику количества на подвес (after_data.hanger_source): цвет текста + обводка. */
+const HANGER_SOURCE_CELL_CLASS: Record<string, string> = {
+  missing_product: "text-red-700 border-red-300",
+  auto: "text-green-700 border-green-300",
+  manual: "text-yellow-700 border-yellow-300",
+  none: "text-orange-700 border-orange-300",
+};
+
 function translateLabels(
   codes: string[] | unknown,
   labels: Record<string, string>,
@@ -184,6 +192,9 @@ export function PlanImportPreviewTable({
           const { segments, hasRawData } = extractPlanImportRawRows(row);
           const routeMeta = buildRouteMetaLabel({ ...(row as Record<string, unknown>), ...afterData });
           const displaySku = String(afterData.source_sku ?? row.source_sku ?? "");
+          const hangerTone = displaySku
+            ? HANGER_SOURCE_CELL_CLASS[String(afterData.hanger_source ?? "")]
+            : undefined;
           const rawQty = afterData.quantity ?? row.quantity ?? "";
           const originalQty = afterData.original_quantity;
           const numQty = Number(rawQty);
@@ -255,7 +266,13 @@ export function PlanImportPreviewTable({
                 </td>
                 <td className="p-2 font-semibold whitespace-nowrap">{idDisplayWithDuplicate}</td>
                 <td className="p-2 font-semibold whitespace-nowrap">{rowNumDisplay}</td>
-                <td className="p-2">{displaySku}</td>
+                <td className="p-2">
+                  {hangerTone ? (
+                    <span className={`inline-block rounded border px-1 font-semibold ${hangerTone}`}>{displaySku}</span>
+                  ) : (
+                    displaySku
+                  )}
+                </td>
                 <td className="p-2 whitespace-nowrap">
                   {qtyAdjusted ? (
                     <span>

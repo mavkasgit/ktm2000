@@ -770,6 +770,11 @@ async def _make_change_items(
         original_quantity = row.quantity
         quantity_per_hanger: int | None = None
         hanger_count: int | None = None
+        # Источник количества на подвес для подсветки артикула в предпросмотре:
+        # missing_product — артикула (пары) нет в справочнике сырья,
+        # auto — авторасчёт, manual — указано ручное значение,
+        # none — артикул есть, количества нет.
+        hanger_source: str | None = None
 
         if row.payload.get("paired_profile"):
             # N пары (#148): единая механика с одиночными — ручная из
@@ -778,6 +783,13 @@ async def _make_change_items(
             # и количество позиции — то же число: округляем его, как у
             # одиночных, молча (отдельного warning на пару не заводим).
             per_hanger = pair_n.quantity_per_hanger if pair_n is not None else None
+
+            if resolved_pair is None:
+                hanger_source = "missing_product"
+            elif per_hanger and per_hanger > 0 and pair_n is not None and pair_n.source:
+                hanger_source = pair_n.source
+            else:
+                hanger_source = "none"
 
             if per_hanger and per_hanger > 0:
                 if normalize_hanger_quantity:
@@ -793,6 +805,14 @@ async def _make_change_items(
             # Стандартная техкарта — берём quantity_per_hanger из каталога продукта.
             # Per-length dict (#60): используем значение для основной длины.
             product_hanger_qty = product.main_quantity_per_hanger() if product else None
+
+            if product is None:
+                hanger_source = "missing_product"
+            elif product_hanger_qty is not None and product_hanger_qty > 0:
+                hanger_source = product.hanger_quantity_source or "none"
+            else:
+                hanger_source = "none"
+
             if product_hanger_qty is not None and product_hanger_qty > 0:
                 quantity_per_hanger = product_hanger_qty
 
@@ -866,6 +886,7 @@ async def _make_change_items(
             "original_quantity": str(original_quantity),
             "quantity_per_hanger": quantity_per_hanger,
             "hanger_count": hanger_count,
+            "hanger_source": hanger_source,
             "input_quantity": (
                 format(row.input_quantity.normalize(), "f") if row.input_quantity is not None else None
             ),

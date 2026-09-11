@@ -1636,3 +1636,146 @@ async def test_import_item_full_returns_after_data(client, session, tmp_path, mo
 
     missing = await client.get("/api/imports/items/999999999?full=1")
     assert missing.status_code == 404
+
+
+# ─────────────────────────────────────────────────────────────
+# Источник количества на подвес в предпросмотре (after_data.hanger_source)
+# ─────────────────────────────────────────────────────────────
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("attributes", "expected_source", "expected_quantity_per_hanger"),
+    [
+        (
+            {"hanger_mode": "auto", "quantity_per_hanger": {"2700": {"auto": 6, "manual": None}}},
+            "auto",
+            6,
+        ),
+        (
+            {"hanger_mode": "manual", "quantity_per_hanger": {"2700": {"auto": None, "manual": 9}}},
+            "manual",
+            9,
+        ),
+        ({"hanger_mode": "auto"}, "none", None),
+    ],
+    ids=["auto", "manual", "none"],
+)
+async def test_preview_single_hanger_source_matches_product_mode(
+    client, session, tmp_path, monkeypatch, attributes, expected_source, expected_quantity_per_hanger
+) -> None:
+    """Одиночная строка: источник и значение количества на подвес — из режима артикула.
+
+    product есть → режим auto/manual с заполненным значением даёт одноимённый
+    источник, отсутствие значения — ``none`` (а не режим артикула).
+    """
+    monkeypatch.setattr(settings, "IMPORT_STORAGE_DIR", str(tmp_path))
+
+    from app.models.product import Product, ProductType
+
+    product = Product(
+        sku="HS-SINGLE",
+        name="Hanger Source Single",
+        type=ProductType.finished_good,
+        unit="pcs",
+        attributes=attributes,
+    )
+    session.add(product)
+    await session.commit()
+
+    template = await _create_template(
+        session, name="Hanger Source Single Template", code="hanger-source-single-template"
+    )
+    await session.commit()
+
+    wb = _workbook_with_quantity("HS-SINGLE", "Hanger Source Single", 10)
+    response = await client.post(
+        f"/api/imports/excel/preview?template_id={template.id}",
+        data={"normalize_hanger_quantity": "true"},
+        files={"file": ("single.xlsx", wb, "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet")},
+    )
+
+    assert response.status_code == 200
+    after_data = response.json()["items"][0]["after_data"]
+    assert after_data["hanger_source"] == expected_source
+    # Источник не врёт о значении: auto/manual отдают своё число, none — пусто.
+    assert after_data["quantity_per_hanger"] == expected_quantity_per_hanger
+
+
+@pytest.mark.asyncio
+async def test_preview_single_hanger_source_missing_product(
+    client, session, tmp_path, monkeypatch
+) -> None:
+    """Одиночная строка: артикула нет в справочнике → missing_product + product_not_found."""
+    monkeypatch.setattr(settings, "IMPORT_STORAGE_DIR", str(tmp_path))
+
+    template = await _create_template(
+        session, name="Hanger Source Missing Template", code="hanger-source-missing-template"
+    )
+    await session.commit()
+
+    wb = _workbook_with_quantity("HS-ABSENT", "Absent Product", 10)
+    response = await client.post(
+        f"/api/imports/excel/preview?template_id={template.id}",
+        data={"normalize_hanger_quantity": "true"},
+        files={"file": ("single.xlsx", wb, "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet")},
+    )
+
+    assert response.status_code == 200
+    item = response.json()["items"][0]
+    assert item["after_data"]["hanger_source"] == "missing_product"
+    assert "product_not_found" in item["errors"]
+    assert item["after_data"]["quantity_per_hanger"] is None
+
+
+@pytest.mark.asyncio
+async def test_preview_paired_hanger_source_missing_pair(
+    client, session, tmp_path, monkeypatch
+) -> None:
+    """Парная строка без записи product_pairs → missing_product + product_pair_not_found."""
+    monkeypatch.setattr(settings, "IMPORT_STORAGE_DIR", str(tmp_path))
+
+    template = await _create_template(
+        session, name="Hanger Source Missing Pair Template", code="hanger-source-missing-pair-template"
+    )
+    await session.commit()
+
+    wb = _workbook_paired()
+    response = await client.post(
+        f"/api/imports/excel/preview?template_id={template.id}",
+        data={"normalize_hanger_quantity": "true"},
+        files={"file": ("paired.xlsx", wb, "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet")},
+    )
+
+    assert response.status_code == 200
+    item = response.json()["items"][0]
+    assert item["after_data"]["hanger_source"] == "missing_product"
+    assert "product_pair_not_found" in item["errors"]
+
+
+@pytest.mark.asyncio
+async def test_preview_paired_hanger_source_manual_n(
+    client, session, tmp_path, monkeypatch
+) -> None:
+    """Парная строка с ручной N пары → источник manual (source из PairHangerValue)."""
+    monkeypatch.setattr(settings, "IMPORT_STORAGE_DIR", str(tmp_path))
+
+    await _make_product_pair(session, "ЮП-PAIR-A", "ЮП-PAIR-B", manual_n=8)
+    await session.commit()
+
+    template = await _create_template(
+        session, name="Hanger Source Paired Manual Template", code="hanger-source-paired-manual-template"
+    )
+    await session.commit()
+
+    wb = _workbook_paired()
+    response = await client.post(
+        f"/api/imports/excel/preview?template_id={template.id}",
+        data={"normalize_hanger_quantity": "true"},
+        files={"file": ("paired.xlsx", wb, "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet")},
+    )
+
+    assert response.status_code == 200
+    item = response.json()["items"][0]
+    assert item["after_data"]["hanger_source"] == "manual"
+    assert item["after_data"]["hanger_count"] == 2
