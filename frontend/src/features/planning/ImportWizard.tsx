@@ -61,7 +61,6 @@ export function ImportWizard(props: {
     planId: string
     changeSetId: string
     batchId: number | null
-    parsedAt: string
   } | null>(null)
   const [uploadSummary, setUploadSummary] = useState<Record<string, unknown> | null>(null)
   const [showApplyConfirm, setShowApplyConfirm] = useState(false)
@@ -478,9 +477,6 @@ export function ImportWizard(props: {
         planId,
         changeSetId,
         batchId: Number.isFinite(batchId) && batchId > 0 ? batchId : null,
-        // Момент распознавания: сервер парсит внутри этого запроса, batch.created_at
-        // в ответе нет — предупреждение о свежести (§4.4) считаем от завершения upload.
-        parsedAt: new Date().toISOString(),
       })
       setUploadSummary((uploaded?.summary as Record<string, unknown> | undefined) ?? null)
       setShowApplyConfirm(true)
@@ -908,7 +904,6 @@ export function ImportWizard(props: {
       rowsLabel={`Строки: ${rowSelection.trim() || "все"}`}
       planId={pendingChangeSet ? Number(pendingChangeSet.planId) : null}
       batchId={pendingChangeSet?.batchId ?? null}
-      parsedAt={pendingChangeSet?.parsedAt ?? null}
       loading={loading}
       onConfirm={(skipInvalid) => void handleApplyConfirmed(skipInvalid)}
       onCancel={() => void handleApplyCancel()}

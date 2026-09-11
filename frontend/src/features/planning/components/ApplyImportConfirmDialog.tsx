@@ -34,19 +34,20 @@ export function ApplyImportConfirmDialog(props: {
   rowsLabel?: string
   planId: number | null
   batchId: number | null
-  /** Момент парсинга батча — база для предупреждения о свежести (§4.4). */
-  parsedAt: string | null
   loading?: boolean
   onConfirm: (skipInvalid: boolean) => void
   onCancel: () => void
 }) {
-  const { stats, filename, sheetName, rowsLabel, planId, batchId, parsedAt, loading } = props
+  const { stats, filename, sheetName, rowsLabel, planId, batchId, loading } = props
 
+  // Момент парсинга батча — серверный `created_at` из того же списка, что и
+  // `applied_at`: сравнение идёт по одной шкале (клиентские часы не участвуют).
   const { data: files } = useQuery({
     queryKey: queryKeys.plan.allFiles(),
     queryFn: () => allPlanFiles(),
-    enabled: props.open && planId != null && batchId != null && parsedAt != null,
+    enabled: props.open && planId != null && batchId != null,
   })
+  const parsedAt = batchId == null ? null : ((files ?? []).find((f) => f.batch_id === batchId)?.created_at ?? null)
 
   // Свежесть не блокирует: предупреждаем, если после парсинга этого батча
   // применялся другой батч того же плана.

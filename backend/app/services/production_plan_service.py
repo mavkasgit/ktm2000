@@ -57,6 +57,18 @@ ALLOWED_TRANSITIONS = {
 }
 
 
+def restore_item_applicable_status(item: PlanChangeItem) -> None:
+    """Вернуть строку сета в состояние парсинга (спека §3): errors → invalid,
+    warnings → warning, иначе pending; `mark_possible_duplicate` без ошибок —
+    warning. Без этого повторный apply пропускает строки, оставшиеся `applied`.
+    """
+    from app.services.plan_import_service import plan_import_row_status
+
+    item.status = plan_import_row_status(item.errors or [], item.warnings or [])
+    if item.change_action == PlanChangeAction.mark_possible_duplicate and item.status == PlanChangeItemStatus.pending:
+        item.status = PlanChangeItemStatus.warning
+
+
 async def _cancelled_position_for_reapply(
     db: AsyncSession,
     item: PlanChangeItem,
@@ -93,6 +105,13 @@ async def apply_change_set(db: AsyncSession, change_set_id: int, *, skip_invalid
     items = (
         await db.execute(select(PlanChangeItem).where(PlanChangeItem.change_set_id == change_set_id).order_by(PlanChangeItem.id))
     ).scalars().all()
+
+    if change_set.status == PlanChangeSetStatus.cancelled:
+        # Сеты, откаченные до #172, держат строки в `applied` (прежний откат их
+        # не сбрасывал), и первое же условие цикла пропустило бы всё: пересчёт
+        # возвращает строки в состояние парсинга, включая правило дублей.
+        for item in items:
+            restore_item_applicable_status(item)
 
     # Кэши для устранения N+1 запросов при массовой валидации позиций.
     # Сущности Product/ProductionRoute кэшируются по id на время батча (§4.2).
@@ -323,9 +342,6 @@ async def rollback_change_set(db: AsyncSession, change_set_id: int, changed_by: 
     items = (
         await db.execute(select(PlanChangeItem).where(PlanChangeItem.change_set_id == change_set_id))
     ).scalars().all()
-    # Строки возвращаются в применимое состояние тем же правилом, что и при
-    # парсинге, иначе повторный apply молча пропустит всё (`applied` → continue).
-    from app.services.plan_import_service import plan_import_row_status
 
     for item in items:
         if item.change_action == PlanChangeAction.create_position and item.plan_position_id:
@@ -347,12 +363,7 @@ async def rollback_change_set(db: AsyncSession, change_set_id: int, changed_by: 
             if position:
                 position.status = PlanPositionStatus.draft
 
-        item.status = plan_import_row_status(item.errors or [], item.warnings or [])
-        if (
-            item.change_action == PlanChangeAction.mark_possible_duplicate
-            and item.status == PlanChangeItemStatus.pending
-        ):
-            item.status = PlanChangeItemStatus.warning
+        restore_item_applicable_status(item)
 
     change_set.status = PlanChangeSetStatus.cancelled
     change_set.applied_at = None

@@ -805,38 +805,55 @@ class PlanFileInfo(BaseModel):
     applied_at: str | None
 
 
+def _plan_files_query():
+    """Батч + файл + его сет: список файлов плана (`/{id}/files` и `/all-files`).
+
+    Сет на батч ровно один, поэтому outerjoin не размножает строки, а
+    неоткаченный/неприменённый батч даёт `change_set_id`/`applied_at` = NULL.
+    """
+    from app.models.imports import ImportFile
+
+    return (
+        select(ImportBatch, ImportFile, PlanChangeSet.id, PlanChangeSet.applied_at)
+        .join(ImportFile, ImportBatch.source_file_id == ImportFile.id)
+        .outerjoin(PlanChangeSet, PlanChangeSet.import_batch_id == ImportBatch.id)
+    )
+
+
+def _plan_file_info(
+    batch: ImportBatch,
+    file: "ImportFile",
+    change_set_id: int | None,
+    applied_at: datetime | None,
+) -> PlanFileInfo:
+    """Строка списка файлов: единственная точка сборки ответа обоих роутов."""
+    return PlanFileInfo(
+        batch_id=batch.id,
+        file_id=file.id,
+        production_plan_id=batch.production_plan_id,
+        change_set_id=change_set_id,
+        filename=file.original_filename,
+        extension=file.file_extension,
+        size_bytes=file.size_bytes,
+        sheet_name=batch.sheet_name,
+        total_rows=batch.total_rows,
+        parsed_rows=batch.parsed_rows,
+        status=batch.status.value,
+        created_at=batch.created_at.isoformat(),
+        applied_at=applied_at.isoformat() if applied_at else None,
+    )
+
+
 @router.get("/{production_plan_id}/files")
 async def plan_files(production_plan_id: int, db: AsyncSession = Depends(get_db)) -> list[PlanFileInfo]:
-    from app.models.imports import ImportBatch, ImportFile
-    from app.models.production_plan import PlanChangeSet
-
     batches = (
         await db.execute(
-            select(ImportBatch, ImportFile, PlanChangeSet.id, PlanChangeSet.applied_at)
-            .join(ImportFile, ImportBatch.source_file_id == ImportFile.id)
-            .outerjoin(PlanChangeSet, PlanChangeSet.import_batch_id == ImportBatch.id)
+            _plan_files_query()
             .where(ImportBatch.production_plan_id == production_plan_id)
             .order_by(ImportBatch.created_at)
         )
     ).all()
-    return [
-        PlanFileInfo(
-            batch_id=batch.id,
-            file_id=file.id,
-            production_plan_id=batch.production_plan_id,
-            change_set_id=change_set_id,
-            filename=file.original_filename,
-            extension=file.file_extension,
-            size_bytes=file.size_bytes,
-            sheet_name=batch.sheet_name,
-            total_rows=batch.total_rows,
-            parsed_rows=batch.parsed_rows,
-            status=batch.status.value,
-            created_at=batch.created_at.isoformat(),
-            applied_at=applied_at.isoformat() if applied_at else None,
-        )
-        for batch, file, change_set_id, applied_at in batches
-    ]
+    return [_plan_file_info(batch, file, change_set_id, applied_at) for batch, file, change_set_id, applied_at in batches]
 
 
 class PlanPositionOut(BaseModel):
@@ -1245,35 +1262,10 @@ async def _serialize_plan_positions(
 @router.get("/all-files", response_model=list[PlanFileInfo])
 async def all_plan_files(db: AsyncSession = Depends(get_db)) -> list[PlanFileInfo]:
     """Return files from all production plans."""
-    from app.models.imports import ImportBatch, ImportFile
-    from app.models.production_plan import PlanChangeSet
-
     batches = (
-        await db.execute(
-            select(ImportBatch, ImportFile, PlanChangeSet.id, PlanChangeSet.applied_at)
-            .join(ImportFile, ImportBatch.source_file_id == ImportFile.id)
-            .outerjoin(PlanChangeSet, PlanChangeSet.import_batch_id == ImportBatch.id)
-            .order_by(ImportBatch.created_at.desc())
-        )
+        await db.execute(_plan_files_query().order_by(ImportBatch.created_at.desc()))
     ).all()
-    return [
-        PlanFileInfo(
-            batch_id=batch.id,
-            file_id=file.id,
-            production_plan_id=batch.production_plan_id,
-            change_set_id=change_set_id,
-            filename=file.original_filename,
-            extension=file.file_extension,
-            size_bytes=file.size_bytes,
-            sheet_name=batch.sheet_name,
-            total_rows=batch.total_rows,
-            parsed_rows=batch.parsed_rows,
-            status=batch.status.value,
-            created_at=batch.created_at.isoformat(),
-            applied_at=applied_at.isoformat() if applied_at else None,
-        )
-        for batch, file, change_set_id, applied_at in batches
-    ]
+    return [_plan_file_info(batch, file, change_set_id, applied_at) for batch, file, change_set_id, applied_at in batches]
 
 
 @router.get("/all-positions", response_model=AllPlanPositionsListResponse)

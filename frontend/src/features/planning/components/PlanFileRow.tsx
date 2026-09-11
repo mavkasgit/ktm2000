@@ -152,7 +152,6 @@ export function FileRow({
         sheetName={file.sheet_name}
         planId={activePlan.id}
         batchId={file.batch_id}
-        parsedAt={file.created_at}
         loading={applying || rowsLoading}
         onConfirm={(skipInvalid) => void handleApply(skipInvalid)}
         onCancel={() => setApplyDialogOpen(false)}

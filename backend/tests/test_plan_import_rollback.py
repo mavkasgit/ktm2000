@@ -20,7 +20,7 @@ import pytest
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.models.imports import ImportBatch, ImportBatchMode, ImportFile
+from app.models.imports import ImportBatch, ImportBatchMode, ImportBatchStatus, ImportFile
 from app.models.product import Product, ProductType
 from app.models.production_plan import (
     PlanChangeAction,
@@ -224,6 +224,41 @@ async def test_reapply_after_rollback_reuses_position_without_duplicate_row(clie
     assert len(active) == 1
     assert active[0].import_batch_id == batch.id
     assert active[0].source_row_number == 6
+
+    info = (await _files_by_batch(client, plan.id))[batch.id]
+    assert info["status"] == "applied"
+    assert info["applied_at"] is not None
+
+
+@pytest.mark.asyncio
+async def test_reapply_after_legacy_rollback_recovers_items_left_applied(client, session) -> None:
+    """Сет, откаченный до #172 (строки остались applied), применяется повторно, а не молчит."""
+    product = await _make_product(session, "ROLL-LEGACY")
+    plan = await _make_plan(session, "ROLL-LEGACY")
+    batch = await _make_batch(session, plan, "ROLL-LEGACY")
+    change_set, item = await _make_change_set(session, plan, batch, product, row=6)
+    await session.commit()
+
+    body = await _apply(client, plan.id, change_set.id)
+    assert body["created_positions"] == 1
+    position = await session.get(PlanPosition, body["positions"][0]["id"])
+
+    # Легаси-состояние: сет/батч/позиция отменены, но строку сета прежний откат
+    # оставлял `applied` — её и должен вернуть в применимое состояние apply.
+    change_set.status = PlanChangeSetStatus.cancelled
+    change_set.applied_at = None
+    batch.status = ImportBatchStatus.cancelled
+    position.status = PlanPositionStatus.cancelled
+    await session.commit()
+    await session.refresh(item)
+    assert item.status == PlanChangeItemStatus.applied
+
+    second = await _apply(client, plan.id, change_set.id)
+    assert second["created_positions"] == 1
+
+    preview = await _preview(client, plan.id)
+    assert preview["positions_total"] == 1
+    assert preview["positions"][0]["id"] == position.id
 
     info = (await _files_by_batch(client, plan.id))[batch.id]
     assert info["status"] == "applied"
