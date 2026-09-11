@@ -1220,7 +1220,7 @@ async def _make_product_pair(
 async def test_import_paired_profile_rounds_by_pair_manual_n(
     client, session, tmp_path, monkeypatch
 ) -> None:
-    """N пары из ручной нормы product_pairs округляет оба компонента (#67: инвариант равенства)."""
+    """N пары из ручной нормы product_pairs округляет количество позиции (#67: инвариант равенства)."""
     monkeypatch.setattr(settings, "IMPORT_STORAGE_DIR", str(tmp_path))
 
     await _make_product_pair(session, "ЮП-PAIR-A", "ЮП-PAIR-B", manual_n=8)
@@ -1240,21 +1240,12 @@ async def test_import_paired_profile_rounds_by_pair_manual_n(
     body = response.json()
     paired_item = body["items"][0]
 
-    # Основной quantity остался 10 (Decimal строка)
-    assert paired_item["after_data"]["quantity"] in ("10", "10.0")
-
-    # Проверяем warnings чтобы понять что произошло
-    warnings = paired_item.get("warnings", [])
-
-    # Проверяем adjusted_quantities_by_component
-    adjusted = paired_item["after_data"].get("adjusted_quantities_by_component", {})
-    # 10 → округляем по N=8 = 16 для обоих компонентов пары
-    assert "ЮП-PAIR-A" in adjusted
-    assert "ЮП-PAIR-B" in adjusted
-    assert adjusted["ЮП-PAIR-A"] == adjusted["ЮП-PAIR-B"] == "16"
-
-    # Проверяем warnings
-    assert any("paired_hanger_adjusted" in w for w in paired_item["warnings"])
+    # 10 → кратно N=8: количество позиции пары, как у одиночных подвесных позиций
+    assert paired_item["after_data"]["quantity"] == "16"
+    assert paired_item["after_data"]["original_quantity"] in ("10", "10.0")
+    assert paired_item["after_data"]["hanger_count"] == 2
+    # Округление молчаливое — текстового предупреждения нет
+    assert not any("paired_hanger_adjusted" in w for w in paired_item["warnings"])
 
 
 @pytest.mark.asyncio
@@ -1284,9 +1275,6 @@ async def test_import_paired_profile_without_pair_n_reports_hanger_calc_zero(
     # Quantity не изменился (Decimal строка)
     assert paired_item["after_data"]["quantity"] in ("10", "10.0")
     assert paired_item["after_data"]["original_quantity"] in ("10", "10.0")
-
-    # Нет adjusted_quantities_by_component
-    assert "adjusted_quantities_by_component" not in paired_item["after_data"]
 
     # Пара резолвится, но N невозможна → блокирующая ошибка
     assert "hanger_calc_zero" in paired_item["errors"]
@@ -1328,12 +1316,14 @@ async def test_import_paired_profile_substitutes_raw_length_nearest_above(
     assert after_data["outputs"][0]["dimensions"] == {"length_mm": 2700}
     assert after_data["source_payload"]["input"]["inferred"] is False
 
-    # N пары резолвится по сырьевой длине и округляет оба компонента
+    # N пары резолвится по сырьевой длине, количество позиции округляется до N
     snapshot = after_data["source_payload"]["techcard_pair"]
     assert snapshot["resolved"] is True
     assert snapshot["inputs"][0]["techcard_quantity"] == "8"
-    adjusted = after_data.get("adjusted_quantities_by_component", {})
-    assert adjusted["ЮП-PAIR-A"] == adjusted["ЮП-PAIR-B"] == "16"
+    # 10 → 16 (кратно N=8), как у одиночных; округление молчаливое
+    assert after_data["quantity"] == "16"
+    assert after_data["hanger_count"] == 2
+    assert not any(w.startswith("paired_hanger_adjusted") for w in paired_item["warnings"])
 
 
 @pytest.mark.asyncio
@@ -1374,8 +1364,10 @@ async def test_import_paired_profile_300mm_length_resolves_with_raw_substitution
 
     snapshot = after_data["source_payload"]["techcard_pair"]
     assert snapshot["inputs"][0]["techcard_quantity"] == "8"
-    adjusted = after_data.get("adjusted_quantities_by_component", {})
-    assert adjusted["ЮП-PAIR-A"] == adjusted["ЮП-PAIR-B"] == "16"
+    # 10 → 16 (кратно N=8), как у одиночных; округление молчаливое
+    assert after_data["quantity"] == "16"
+    assert after_data["hanger_count"] == 2
+    assert not any(w.startswith("paired_hanger_adjusted") for w in paired_item["warnings"])
 
 
 @pytest.mark.asyncio
@@ -1416,8 +1408,10 @@ async def test_import_paired_profile_with_cut_materializes_raw_length_for_n(
     snapshot = after_data["source_payload"]["techcard_pair"]
     assert snapshot["resolved"] is True
     assert snapshot["inputs"][0]["techcard_quantity"] == "8"
-    adjusted = after_data.get("adjusted_quantities_by_component", {})
-    assert adjusted["ЮП-PAIR-A"] == adjusted["ЮП-PAIR-B"] == "16"
+    # 10 → 16 (кратно N=8), как у одиночных; округление молчаливое
+    assert after_data["quantity"] == "16"
+    assert after_data["hanger_count"] == 2
+    assert not any(w.startswith("paired_hanger_adjusted") for w in paired_item["warnings"])
 
 
 @pytest.mark.asyncio

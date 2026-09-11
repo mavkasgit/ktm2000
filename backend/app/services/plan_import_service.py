@@ -768,39 +768,27 @@ async def _make_change_items(
         # Округление количества до кратности подвесам
         effective_quantity = row.quantity
         original_quantity = row.quantity
-        adjusted_quantities_by_component: dict[str, str] | None = None
         quantity_per_hanger: int | None = None
         hanger_count: int | None = None
 
         if row.payload.get("paired_profile"):
             # N пары (#148): единая механика с одиночными — ручная из
             # словаря пары / авто-расчёт. Инвариант равенства N (#67):
-            # пара — единая загрузка N×A + N×B, поэтому quantity_a == quantity_b.
+            # пара — единая загрузка N×A + N×B, поэтому quantity_a == quantity_b
+            # и количество позиции — то же число: округляем его, как у
+            # одиночных, молча (отдельного warning на пару не заводим).
             per_hanger = pair_n.quantity_per_hanger if pair_n is not None else None
 
             if per_hanger and per_hanger > 0:
-                hanger_count = math.ceil(row.quantity / per_hanger) if normalize_hanger_quantity else float(row.quantity / per_hanger)
-
-            if normalize_hanger_quantity and resolved_pair is not None and per_hanger and per_hanger > 0:
-                adjusted_quantities = {}
-                for comp_product in (resolved_pair.product_a, resolved_pair.product_b):
+                if normalize_hanger_quantity:
                     adjusted = adjust_quantity_to_hanger(row.quantity, per_hanger)
                     if adjusted is not None:
-                        adjusted_quantities[comp_product.sku] = adjusted
-                        warnings.append(
-                            f"paired_hanger_adjusted:{comp_product.sku}: "
-                            f"{row.quantity} → {adjusted} шт "
-                            f"(на подвесе {per_hanger})"
-                        )
-
-                if adjusted_quantities:
-                    # Строки, а не Decimal: payload уходит в JSONB
-                    # (source_payload / after_data позиций).
-                    adjusted_quantities = {
-                        sku: str(qty) for sku, qty in adjusted_quantities.items()
-                    }
-                    row.payload["adjusted_quantities_by_component"] = adjusted_quantities
-                    adjusted_quantities_by_component = adjusted_quantities
+                        effective_quantity = adjusted
+                hanger_count = (
+                    math.ceil(effective_quantity / per_hanger)
+                    if normalize_hanger_quantity
+                    else float(effective_quantity / per_hanger)
+                )
         else:
             # Стандартная техкарта — берём quantity_per_hanger из каталога продукта.
             # Per-length dict (#60): используем значение для основной длины.
@@ -1147,8 +1135,6 @@ async def _make_change_items(
         # Log final route_id
         import logging
         logging.getLogger(__name__).info(f"Final route_id for row {row.source_sku}: {after_data.get('route_id')}")
-        if adjusted_quantities_by_component:
-            after_data["adjusted_quantities_by_component"] = adjusted_quantities_by_component
 
         # Detect duplicate within this import using fingerprint (full row match)
         fp = row.source_fingerprint
