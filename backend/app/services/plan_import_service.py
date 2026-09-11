@@ -809,13 +809,9 @@ async def _make_change_items(
             elif normalize_hanger_quantity:
                 # Warning если quantity_per_hanger не задан
                 if product:
-                    warnings.append(
-                        f"hanger_quantity_not_set:quantity_per_hanger не задан для {product.sku}"
-                    )
+                    warnings.append(f"hanger_quantity_not_set:{product.sku}")
                 else:
-                    warnings.append(
-                        "hanger_quantity_not_set:продукт не найден"
-                    )
+                    warnings.append("hanger_quantity_not_set")
 
         # ADR-0024: та же механика «ближайшая сверху» для одиночных позиций —
         # вход без резки несёт длину ГП, материализуем в сырьевую из длин

@@ -54,7 +54,7 @@ export const errorLabels: Record<string, string> = {
 
 // Лейблы предупреждений (warning codes)
 export const warningLabels: Record<string, string> = {
-  "hanger_quantity_not_set": "quantity_per_hanger не задан — количество не округлено",
+  "hanger_quantity_not_set": "Не задано количество на подвес — количество не округлено",
   "paired_hanger_adjusted": "Округлено до кратности подвеса",
   "paired_profile_product_unmapped": "Парный профиль не сопоставлен",
   "paired_row_auto_included": "Автодобавлена парная строка",

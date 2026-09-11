@@ -82,7 +82,7 @@ def test_classify_warnings_with_params():
         "paired_profile_product_unmapped",
         "raw_length_substituted:ГП 2,7 м → сырьё 3 м",
         "paired_hanger_adjusted:SKU1: 10 → 12 шт (на подвесе 6)",
-        "hanger_quantity_not_set:quantity_per_hanger не задан для SKU1",
+        "hanger_quantity_not_set:SKU1",
         "invalid_input_length:row=3",
         "invalid_output_length:row=5",
         "paired_row_auto_included:7",
