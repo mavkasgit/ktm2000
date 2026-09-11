@@ -137,42 +137,26 @@ def plan_import_item_is_duplicate(item: PlanChangeItem) -> bool:
         return True
     return "duplicate_sku_due_date" in (item.errors or ())
 
-def _row_gp_length_mm(row: ParsedPlanRow) -> float | None:
-    """Единственная длина ГП по выходам строки (ADR-0024).
-
-    ``None`` — выходов с длиной нет или их длины различаются (подбор сырья
-    неоднозначен, строку не трогаем).
-    """
-    lengths: set[float] = set()
-    for entry in row.outputs or []:
-        dims = entry.get("dimensions") if isinstance(entry, dict) else None
-        length = dims.get(LENGTH_MM) if isinstance(dims, dict) else None
-        if isinstance(length, bool):
-            continue
-        if isinstance(length, (int, float)) and length > 0:
-            lengths.add(float(length))
-    if len(lengths) == 1:
-        return next(iter(lengths))
-    return None
-
-
 def _gp_length_for_raw_materialization(row: ParsedPlanRow) -> float | None:
-    """Длина ГП для подбора сырья — только «вход без резки» (ADR-0024).
+    """Длина ГП, которую несёт строка, — кандидат на материализацию в сырьё.
 
-    Вход равен единственной длине выходов: вход несёт коммерческую длину ГП
-    (унаследованную или явно совпадающую) и требует материализации в сырьевую.
-    Настоящая резка (вход уже сырьевой, длины различаются) — ``None``.
+    План всегда несёт коммерческую длину ГП (ADR-0024 п.1), и её источник —
+    вход позиции: «Длина, м» из Excel; при пустой колонке парсер наследует
+    длину единственного выхода (ADR-0003, «вход без резки»). Настоящая резка
+    (вход 2,7 м → выход 0,9 м) длину ГП не отменяет: на подвес профиль встаёт
+    сырьевой длиной, резка — позже (ADR-0024 п.2), поэтому материализуется
+    именно вход. Если вход уже сырьевой, «ближайшая сверху» вернёт его же
+    (no-op) — отдельного признака «вход без резки» не требуется.
+
+    ``None`` — вход без длины (безразмерные штуки), подбор невозможен.
     """
-    gp_length_mm = _row_gp_length_mm(row)
-    if gp_length_mm is None:
-        return None
     input_dims = row.input_dimensions or {}
     input_length = input_dims.get(LENGTH_MM)
     if isinstance(input_length, bool) or not isinstance(input_length, (int, float)):
         return None
-    if float(input_length) != gp_length_mm:
+    if float(input_length) <= 0:
         return None
-    return gp_length_mm
+    return float(input_length)
 
 
 def _pick_raw_length_mm(candidates: Iterable[float], gp_length_mm: float) -> float | None:
