@@ -188,8 +188,8 @@ async def test_scalar_migrates_to_primary_length(client, session) -> None:
 
 
 @pytest.mark.asyncio
-async def test_main_quantity_per_hanger_legacy(client, session) -> None:
-    """main_quantity_per_hanger() для обратной совместимости (план-импорт)."""
+async def test_quantity_per_hanger_legacy_scalar(client, session) -> None:
+    """Legacy-скаляр отдаётся скаляром для основной длины (обратная совместимость)."""
     product = Product(
         sku="RAW-MAIN-001",
         name="Main",
@@ -203,7 +203,7 @@ async def test_main_quantity_per_hanger_legacy(client, session) -> None:
     await session.commit()
 
     await session.refresh(product)
-    assert product.main_quantity_per_hanger() == 40
+    assert product.quantity_per_hanger == 40
     assert product.quantity_per_hanger_for_length(2780) == 40
 
 
@@ -307,7 +307,7 @@ async def test_mode_switch_changes_effective_value(client, session) -> None:
         product = (await session.execute(
             select(Product).options(selectinload(Product.lengths)).where(Product.id == pid)
         )).scalar_one()
-        return product.main_quantity_per_hanger()
+        return product.quantity_per_hanger
 
     # Режим auto → авто-значение (72), ручное 55 хранится отдельно.
     assert await _scalar() == 72
@@ -410,7 +410,7 @@ async def test_patch_switch_primary(client, session) -> None:
     product = (await session.execute(
         select(Product).options(selectinload(Product.lengths)).where(Product.id == pid)
     )).scalar_one()
-    assert product.main_quantity_per_hanger() == 20
+    assert product.quantity_per_hanger == 20
 
 
 @pytest.mark.asyncio
@@ -481,7 +481,7 @@ async def test_legacy_scalar_preserved_with_loaded_lengths(client, session) -> N
     """Legacy bare-словарь не теряется, когда lengths загружены (#81 регрессия).
 
     _primary_hanger_length_key для bare {auto, manual} должен вернуть None,
-    чтобы quantity_per_hanger/main_quantity_per_hanger отдали скаляр.
+    чтобы quantity_per_hanger отдал скаляр.
     """
     product = Product(
         sku="RAW-LEGACY-LEN",
@@ -501,7 +501,6 @@ async def test_legacy_scalar_preserved_with_loaded_lengths(client, session) -> N
     loaded = (await session.execute(
         select(Product).options(selectinload(Product.lengths)).where(Product.id == product.id)
     )).scalar_one()
-    assert loaded.main_quantity_per_hanger() == 40
     assert loaded.quantity_per_hanger == 40
 
 

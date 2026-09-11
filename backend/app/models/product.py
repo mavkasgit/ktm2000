@@ -320,37 +320,6 @@ class Product(Base):
             return None
         return self._value_for_mode(entry)
 
-    def main_quantity_per_hanger(self) -> int | None:
-        """Скаляр для обратной совместимости: значение для основной длины.
-
-        Основная длина — выбранная пользователем (#81, is_primary), либо
-        первая длина из ProductLength по возрастанию. Без обязательного
-        обращения к relationship (для уже загруженных lengths). Используется
-        потребителями, которым нужен один скаляр (например, план-импорт).
-        """
-        return self.quantity_per_hanger
-
-    @property
-    def hanger_quantity_source(self) -> str | None:
-        """Источник эффективного значения :attr:`quantity_per_hanger`: 'auto' | 'manual' | None.
-
-        Зеркало ``PairHangerValue.source`` для одиночного артикула. None —
-        значения нет. Legacy-скаляр (int или bare-словарь) хранился в
-        ``manual`` и отдаётся из него — источник manual независимо от
-        ``hanger_mode`` (значение auto-слота не участвует).
-        """
-        d = self._hanger_dict()
-        if d is None:
-            raw = (self.attributes or {}).get("quantity_per_hanger")
-            return HANGER_MODE_MANUAL if isinstance(raw, int) else None
-        key = self._primary_hanger_length_key()
-        if key is None:
-            return HANGER_MODE_MANUAL if d.get("manual") is not None else None
-        entry = d.get(key)
-        if not isinstance(entry, dict):
-            return None
-        return self.hanger_mode if self._value_for_mode(entry) is not None else None
-
     @property
     def cross_section(self) -> str | None:
         return (self.attributes or {}).get("cross_section")
