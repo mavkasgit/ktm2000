@@ -165,6 +165,41 @@ async def test_apply_sets_applied_at_and_change_set_link_in_files(client, sessio
 
 
 @pytest.mark.asyncio
+async def test_second_apply_of_applied_change_set_adds_nothing_and_keeps_applied_at(client, session) -> None:
+    """Повторный apply уже применённого сета не создаёт позиций и не переписывает applied_at."""
+    product = await _make_product(session, "ROLL-IDEMPOTENT")
+    plan = await _make_plan(session, "ROLL-IDEMPOTENT")
+    batch = await _make_batch(session, plan, "ROLL-IDEMPOTENT")
+    change_set, _ = await _make_change_set(session, plan, batch, product, row=6)
+    await session.commit()
+
+    first = await _apply(client, plan.id, change_set.id)
+    assert first["created_positions"] == 1
+    applied_at_before = (await _files_by_batch(client, plan.id))[batch.id]["applied_at"]
+    assert applied_at_before is not None
+
+    # Сет уже applied: раннее возвращение отдаёт превью без агрегатов применения.
+    second = await _apply(client, plan.id, change_set.id)
+    assert "created_positions" not in second
+    assert second["positions_total"] == 1
+
+    active = (
+        await session.execute(
+            select(PlanPosition).where(
+                PlanPosition.import_batch_id == batch.id,
+                PlanPosition.source_row_number == 6,
+                PlanPosition.status != PlanPositionStatus.cancelled,
+            )
+        )
+    ).scalars().all()
+    assert len(active) == 1
+
+    await session.refresh(change_set)
+    assert change_set.status == PlanChangeSetStatus.applied
+    assert (await _files_by_batch(client, plan.id))[batch.id]["applied_at"] == applied_at_before
+
+
+@pytest.mark.asyncio
 async def test_rollback_clears_applied_at_and_restores_applicable_state(client, session) -> None:
     """rollback снимает applied_at, отменяет сет/батч и возвращает строку в pending."""
     product = await _make_product(session, "ROLL-CLEAR")
