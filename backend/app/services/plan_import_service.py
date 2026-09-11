@@ -43,7 +43,7 @@ from app.domain.dimensions import LENGTH_MM, DimensionsValidationError, canonica
 from app.services.dimension_validation import MissingDimensionsError, resolve_product_dimensions
 from app.services.hanger_quantity import adjust_quantity_to_hanger
 from app.services.import_normalization import normalize_sku as _normalize_sku
-from app.services.plan_position_hanger import position_length_mm
+from app.services.plan_position_hanger import PositionHangerValue, position_length_mm, resolve_position_hanger
 from app.services.route_builder import build_route_from_profile, load_route_build_batch_cache
 
 
@@ -765,6 +765,24 @@ async def _make_change_items(
             route_match_quality = selection.route_match_quality or PlanPositionRouteMatchQuality.exact.value
             route_match_reason = PlanPositionRouteMatchReason.selection_rules.value
 
+        # ADR-0024: та же механика «ближайшая сверху» для одиночных позиций —
+        # вход без резки несёт длину ГП, материализуем в сырьевую из длин
+        # самого артикула. Без зарегистрированных длин — как раньше, без
+        # новой ошибки (негабаритные штучные товары). Порядок «материализация →
+        # N», как у пары: норма берётся по сырьевой длине позиции (#170).
+        if not row.payload.get("paired_profile") and product is not None:
+            single_gp_length_mm = _gp_length_for_raw_materialization(row)
+            if single_gp_length_mm is not None:
+                single_candidates = await _load_raw_lengths_mm(db, product.id, raw_lengths_cache)
+                if single_candidates:
+                    single_raw_error = _materialize_raw_length_mm(
+                        row, warnings,
+                        gp_length_mm=single_gp_length_mm,
+                        candidates=single_candidates,
+                    )
+                    if single_raw_error is not None:
+                        errors.append(single_raw_error)
+
         # Округление количества до кратности подвесам
         effective_quantity = row.quantity
         original_quantity = row.quantity
@@ -790,9 +808,17 @@ async def _make_change_items(
                     else float(effective_quantity / per_hanger)
                 )
         else:
-            # Стандартная техкарта — берём quantity_per_hanger из каталога продукта.
-            # Per-length dict (#60): используем значение для основной длины.
-            product_hanger_qty = product.main_quantity_per_hanger() if product else None
+            # Норма — тем же резолвером, что чтение и валидация плана (#170):
+            # по сырьевой длине позиции, строго по режиму артикула.
+            length_mm = (row.input_dimensions or {}).get(LENGTH_MM)
+            hanger_value = (
+                resolve_position_hanger(
+                    product, length_mm=length_mm, payload_quantity_per_hanger=None
+                )
+                if product is not None
+                else PositionHangerValue(None, None)
+            )
+            product_hanger_qty = hanger_value.quantity_per_hanger
             if product_hanger_qty is not None and product_hanger_qty > 0:
                 quantity_per_hanger = product_hanger_qty
 
@@ -807,32 +833,15 @@ async def _make_change_items(
                     # Округление отключено — считаем подвесы как дробное число
                     hanger_count = float(effective_quantity / product_hanger_qty)
             elif normalize_hanger_quantity:
-                # Warning если quantity_per_hanger не задан
-                if product:
+                # Нормы для сырьевой длины позиции нет — не округляем (Q2=а).
+                if product is None:
+                    warnings.append("hanger_quantity_not_set:продукт не найден")
+                elif length_mm is not None:
+                    warnings.append(f"hanger_quantity_not_set:{_mm_as_meters(length_mm)}")
+                else:
                     warnings.append(
                         f"hanger_quantity_not_set:quantity_per_hanger не задан для {product.sku}"
                     )
-                else:
-                    warnings.append(
-                        "hanger_quantity_not_set:продукт не найден"
-                    )
-
-        # ADR-0024: та же механика «ближайшая сверху» для одиночных позиций —
-        # вход без резки несёт длину ГП, материализуем в сырьевую из длин
-        # самого артикула. Без зарегистрированных длин — как раньше, без
-        # новой ошибки (негабаритные штучные товары).
-        if not row.payload.get("paired_profile") and product is not None:
-            single_gp_length_mm = _gp_length_for_raw_materialization(row)
-            if single_gp_length_mm is not None:
-                single_candidates = await _load_raw_lengths_mm(db, product.id, raw_lengths_cache)
-                if single_candidates:
-                    single_raw_error = _materialize_raw_length_mm(
-                        row, warnings,
-                        gp_length_mm=single_gp_length_mm,
-                        candidates=single_candidates,
-                    )
-                    if single_raw_error is not None:
-                        errors.append(single_raw_error)
 
         # Габариты операции (ADR-0003): вход без длины при габаритных выходах —
         # подставляем типовой размер продукта из справочника измерений.

@@ -31,7 +31,7 @@ from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.domain.dimensions import LENGTH_MM
-from app.models.product import HANGER_MODE_MANUAL, Product, _length_key
+from app.models.product import HANGER_MODE_MANUAL, Product
 from app.services.hanger_quantity_calc import (
     HangerConfigError,
     compute_hanger_quantity,
@@ -138,14 +138,12 @@ class PositionHangerValue:
 
 
 def _manual_value_for_length(product: Product, length_mm: float) -> int | None:
-    """Ручное значение per-length dict для длины (bare-словарь раскрывается
-    по основной длине, как в :attr:`Product.quantity_per_hanger_by_length`)."""
-    by_length = product.quantity_per_hanger_by_length or {}
-    entry = by_length.get(_length_key(length_mm))
-    if not isinstance(entry, dict):
-        return None
-    manual = entry.get("manual")
-    return int(manual) if manual is not None else None
+    """Ручное значение нормы для длины: канонический #127-доступ модели.
+
+    Bare-норма (legacy-скаляр) длина-независима, per-length-словарь строг по
+    ключу длины; ключа нет → None (fallback на основную норму не делаем).
+    """
+    return product.quantity_per_hanger_for_length(length_mm)
 
 
 def resolve_position_hanger(

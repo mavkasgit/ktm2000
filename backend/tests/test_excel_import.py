@@ -895,7 +895,7 @@ async def test_import_with_normalize_hanger_quantity_rounds_up(
     
     from app.models.section import Section
 
-    product = Product(sku="FG-TEST", name="Test Product", type=ProductType.finished_good, unit="pcs", quantity_per_hanger=5)
+    product = Product(sku="FG-TEST", name="Test Product", type=ProductType.finished_good, unit="pcs", quantity_per_hanger=5, hanger_mode="manual")
     component = Product(sku="FG-TEST-RAW", name="Test Raw", type=ProductType.component, unit="pcs")
     sections = [Section(code="CUT", name="Cut"), Section(code="PACKING", name="Pack")]
     session.add_all([product, component, *sections])
@@ -967,7 +967,7 @@ async def test_import_without_normalize_hanger_quantity_keeps_original(
     
     from app.models.section import Section
 
-    product = Product(sku="FG-TEST", name="Test Product", type=ProductType.finished_good, unit="pcs", quantity_per_hanger=5)
+    product = Product(sku="FG-TEST", name="Test Product", type=ProductType.finished_good, unit="pcs", quantity_per_hanger=5, hanger_mode="manual")
     component = Product(sku="FG-TEST-RAW", name="Test Raw", type=ProductType.component, unit="pcs")
     sections = [Section(code="CUT", name="Cut"), Section(code="PACKING", name="Pack")]
     session.add_all([product, component, *sections])
@@ -1092,7 +1092,7 @@ async def test_import_already_multiple_no_warning(
     
     from app.models.section import Section
 
-    product = Product(sku="FG-TEST", name="Test Product", type=ProductType.finished_good, unit="pcs", quantity_per_hanger=5)
+    product = Product(sku="FG-TEST", name="Test Product", type=ProductType.finished_good, unit="pcs", quantity_per_hanger=5, hanger_mode="manual")
     component = Product(sku="FG-TEST-RAW", name="Test Raw", type=ProductType.component, unit="pcs")
     sections = [Section(code="CUT", name="Cut"), Section(code="PACKING", name="Pack")]
     session.add_all([product, component, *sections])
@@ -1139,6 +1139,214 @@ async def test_import_already_multiple_no_warning(
     # Нет warning о округлении так как уже кратно
     assert not any("hanger_quantity_adjusted" in w for w in item["warnings"])
     assert not any("hanger_quantity_not_set" in w for w in item["warnings"])
+
+
+async def _add_single_hanger_product(
+    session,
+    sku: str,
+    *,
+    lengths: list[float] | None = None,
+    primary_length_mm: float | None = None,
+    quantity_per_hanger: dict | int | None = None,
+    hanger_mode: str = "manual",
+    perimeter_mm: float | None = None,
+    mount_width_mm: float | None = None,
+) -> None:
+    """Одиночный артикул: длины ProductLength и норма на подвес (#170)."""
+    from app.models.product import Product, ProductLength, ProductType
+
+    product = Product(sku=sku, name=f"Single {sku}", type=ProductType.component, unit="pcs")
+    product.hanger_mode = hanger_mode
+    if quantity_per_hanger is not None:
+        product.quantity_per_hanger = quantity_per_hanger
+    if perimeter_mm is not None:
+        product.perimeter_mm = perimeter_mm
+    if mount_width_mm is not None:
+        product.mount_width_mm = mount_width_mm
+    session.add(product)
+    await session.flush()
+    for length in lengths or []:
+        session.add(
+            ProductLength(
+                product_id=product.id,
+                length_mm=length,
+                is_primary=(length == primary_length_mm),
+            )
+        )
+    await session.commit()
+
+
+@pytest.mark.asyncio
+async def test_import_single_manual_norm_uses_raw_length_not_primary(
+    client, session, tmp_path, monkeypatch
+) -> None:
+    """Норма одиночной позиции — по сырьевой длине, а не по основной (#170)."""
+    monkeypatch.setattr(settings, "IMPORT_STORAGE_DIR", str(tmp_path))
+
+    await _add_single_hanger_product(
+        session,
+        "ЮП-NORM-LEN",
+        lengths=[2750, 3000],
+        primary_length_mm=3000,
+        hanger_mode="manual",
+        quantity_per_hanger={
+            "2750": {"auto": None, "manual": 5},
+            "3000": {"auto": None, "manual": 7},
+        },
+    )
+    template = await _create_template(session, name="Norm Length Template", code="norm-length-template")
+    await session.commit()
+
+    # Строка несёт ГП 2,7 м; сырьё артикула 2750 (норма 5), основная длина 3000 (норма 7).
+    wb = _workbook_with_quantity("ЮП-NORM-LEN", "Norm Length", 11)
+    response = await client.post(
+        f"/api/imports/excel/preview?template_id={template.id}",
+        data={"normalize_hanger_quantity": "true"},
+        files={"file": ("single.xlsx", wb, "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet")},
+    )
+
+    assert response.status_code == 200
+    item = response.json()["items"][0]
+    assert item["after_data"]["input_dimensions"] == {"length_mm": 2750}
+    assert item["after_data"]["quantity_per_hanger"] == 5
+    # ceil(11/5)*5 = 15; по основной длине было бы ceil(11/7)*7 = 14.
+    assert item["after_data"]["quantity"] == "15"
+    assert item["after_data"]["hanger_count"] == 3
+
+
+@pytest.mark.asyncio
+async def test_import_single_manual_norm_missing_for_length_warns(
+    client, session, tmp_path, monkeypatch
+) -> None:
+    """Нет нормы для сырьевой длины → не округляем, warning с длиной (#170, Q2=а)."""
+    monkeypatch.setattr(settings, "IMPORT_STORAGE_DIR", str(tmp_path))
+
+    await _add_single_hanger_product(
+        session,
+        "ЮП-NORM-GAP",
+        lengths=[2750, 3000],
+        primary_length_mm=3000,
+        hanger_mode="manual",
+        quantity_per_hanger={"3000": {"auto": None, "manual": 7}},
+    )
+    template = await _create_template(session, name="Norm Gap Template", code="norm-gap-template")
+    await session.commit()
+
+    wb = _workbook_with_quantity("ЮП-NORM-GAP", "Norm Gap", 11)
+    response = await client.post(
+        f"/api/imports/excel/preview?template_id={template.id}",
+        data={"normalize_hanger_quantity": "true"},
+        files={"file": ("single.xlsx", wb, "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet")},
+    )
+
+    assert response.status_code == 200
+    item = response.json()["items"][0]
+    assert item["after_data"]["input_dimensions"] == {"length_mm": 2750}
+    assert item["after_data"]["quantity_per_hanger"] is None
+    assert item["after_data"]["quantity"] == item["after_data"]["original_quantity"]
+    assert item["after_data"]["quantity"] in ("11", "11.0")
+    assert "hanger_quantity_not_set:2,75" in item["warnings"]
+
+
+@pytest.mark.asyncio
+async def test_import_single_auto_norm_computed_by_raw_length(
+    client, session, tmp_path, monkeypatch
+) -> None:
+    """auto-артикул: N считается по сырьевой длине, хранимый manual-скаляр игнорируется."""
+    monkeypatch.setattr(settings, "IMPORT_STORAGE_DIR", str(tmp_path))
+
+    await _add_single_hanger_product(
+        session,
+        "ЮП-NORM-AUTO",
+        lengths=[3000],
+        hanger_mode="auto",
+        quantity_per_hanger={"auto": None, "manual": 71},
+        perimeter_mm=60,
+        mount_width_mm=15,
+    )
+    template = await _create_template(session, name="Norm Auto Template", code="norm-auto-template")
+    await session.commit()
+
+    wb = _workbook_with_quantity("ЮП-NORM-AUTO", "Norm Auto", 500)
+    response = await client.post(
+        f"/api/imports/excel/preview?template_id={template.id}",
+        data={"normalize_hanger_quantity": "true"},
+        files={"file": ("single.xlsx", wb, "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet")},
+    )
+
+    assert response.status_code == 200
+    item = response.json()["items"][0]
+    assert item["after_data"]["input_dimensions"] == {"length_mm": 3000}
+    # Авторасчёт по 3000: floor(13/(60*3000/1e6)) = 72, скаляр 71 не используется.
+    assert item["after_data"]["quantity_per_hanger"] == 72
+    assert item["after_data"]["quantity"] == "504"  # ceil(500/72)*72 = 7*72
+    assert item["after_data"]["hanger_count"] == 7
+
+
+@pytest.mark.asyncio
+async def test_import_single_auto_norm_per_length_uses_mode(
+    client, session, tmp_path, monkeypatch
+) -> None:
+    """auto + per-length: режим решает — авторасчёт по длине, а не хранимое значение."""
+    monkeypatch.setattr(settings, "IMPORT_STORAGE_DIR", str(tmp_path))
+
+    await _add_single_hanger_product(
+        session,
+        "ЮП-NORM-AUTO-PL",
+        lengths=[3000],
+        hanger_mode="auto",
+        quantity_per_hanger={"3000": {"auto": 72, "manual": 71}},
+        perimeter_mm=60,
+        mount_width_mm=15,
+    )
+    template = await _create_template(session, name="Norm Auto Pl Template", code="norm-auto-pl-template")
+    await session.commit()
+
+    wb = _workbook_with_quantity("ЮП-NORM-AUTO-PL", "Norm Auto Pl", 500)
+    response = await client.post(
+        f"/api/imports/excel/preview?template_id={template.id}",
+        data={"normalize_hanger_quantity": "true"},
+        files={"file": ("single.xlsx", wb, "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet")},
+    )
+
+    assert response.status_code == 200
+    item = response.json()["items"][0]
+    assert item["after_data"]["quantity_per_hanger"] == 72
+    assert item["after_data"]["quantity"] == "504"
+    assert item["after_data"]["hanger_count"] == 7
+
+
+@pytest.mark.asyncio
+async def test_import_single_auto_norm_without_geometry_warns(
+    client, session, tmp_path, monkeypatch
+) -> None:
+    """auto без периметра/габарита: N не резолвится → не округляем, warning с длиной."""
+    monkeypatch.setattr(settings, "IMPORT_STORAGE_DIR", str(tmp_path))
+
+    await _add_single_hanger_product(
+        session,
+        "ЮП-NORM-NOGEO",
+        lengths=[3000],
+        hanger_mode="auto",
+        quantity_per_hanger={"auto": None, "manual": 71},
+    )
+    template = await _create_template(session, name="Norm No Geo Template", code="norm-no-geo-template")
+    await session.commit()
+
+    wb = _workbook_with_quantity("ЮП-NORM-NOGEO", "Norm No Geo", 500)
+    response = await client.post(
+        f"/api/imports/excel/preview?template_id={template.id}",
+        data={"normalize_hanger_quantity": "true"},
+        files={"file": ("single.xlsx", wb, "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet")},
+    )
+
+    assert response.status_code == 200
+    item = response.json()["items"][0]
+    assert item["after_data"]["input_dimensions"] == {"length_mm": 3000}
+    assert item["after_data"]["quantity_per_hanger"] is None
+    assert item["after_data"]["quantity"] == item["after_data"]["original_quantity"]
+    assert item["after_data"]["quantity"] in ("500", "500.0")
+    assert "hanger_quantity_not_set:3" in item["warnings"]
 
 
 def _workbook_paired(length_m: float = 2.7, output_length_m: float | None = None) -> bytes:
