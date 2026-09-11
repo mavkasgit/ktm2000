@@ -354,6 +354,40 @@ async def test_preview_excel_resolves_paired_profile_when_pair_exists(
 
 
 @pytest.mark.asyncio
+async def test_apply_paired_import_does_not_cache_hanger_override(
+    client, session, tmp_path, monkeypatch
+) -> None:
+    """Импортная N пары не кэшируется как override: позиция читает снапшот."""
+    monkeypatch.setattr(settings, "IMPORT_STORAGE_DIR", str(tmp_path))
+
+    await _make_product_pair(session, "ЮП-PAIR-A", "ЮП-PAIR-B", manual_n=8, length_mm=2700)
+    template = await _create_template(session, name="Paired Apply Template", code="paired-apply-template")
+    await session.commit()
+
+    response = await client.post(
+        f"/api/imports/excel?template_id={template.id}",
+        data={"normalize_hanger_quantity": "true"},
+        files={"file": ("paired.xlsx", _workbook_paired(), "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet")},
+    )
+    assert response.status_code == 201, response.text
+    body = response.json()
+
+    applied = await client.post(
+        f"/api/production-plans/{body['production_plan_id']}/change-sets/{body['change_set_id']}/apply"
+    )
+    assert applied.status_code == 200, applied.text
+
+    positions = (
+        await client.get(f"/api/production-plans/{body['production_plan_id']}/all-positions")
+    ).json()
+    paired_position = positions[0]
+    # В payload нет импортной N — она не override; норма приходит из снапшота пары.
+    assert "quantity_per_hanger" not in (paired_position["payload"] or {})
+    assert paired_position["quantity_per_hanger"] == 8
+    assert paired_position["quantity_per_hanger_source"] == "manual"
+
+
+@pytest.mark.asyncio
 async def test_import_excel_with_row_selection_filters_rows_and_reports_pair_autoinclude(
     client, session, tmp_path, monkeypatch
 ) -> None:

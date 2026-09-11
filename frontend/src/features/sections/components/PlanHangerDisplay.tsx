@@ -24,30 +24,27 @@ function getPairSnapshot(payload: Record<string, unknown>): PairSnapshot | null 
   return pair && typeof pair === "object" ? (pair as PairSnapshot) : null;
 }
 
-/** N пары: ручной override позиции приоритетнее снапшота; null — N нет. */
-function getPairQuantity(payload: Record<string, unknown>): number | null {
+/** N пары из снапшота (resolved + положительная N); null — снапшота/нормы нет. */
+function getSnapshotPairQuantity(payload: Record<string, unknown>): number | null {
   const pair = getPairSnapshot(payload);
   if (pair?.resolved !== true) return null;
-  const override = payload.quantity_per_hanger;
-  const raw = typeof override === "number" ? override : pair.quantity_per_hanger;
-  const value = Number(raw);
+  const value = Number(pair.quantity_per_hanger);
   return Number.isFinite(value) && value > 0 ? value : null;
 }
 
 /** Извлекает количество на подвес из source_payload задачи.
- * Для парных профилей — N пары (override → снапшот ``product_pair``).
- * Для обычных — ``quantity_per_hanger``.
+ * Приоритет как у бэкенда: ручной override позиции (> 0) → снапшот
+ * ``product_pair`` (> 0); неположительный override не считается override.
+ * Для обычных профилей источник — ``quantity_per_hanger``.
  */
 export function getQtyPerHanger(task: SectionBoardTask): number | null {
   const payload = task.source_payload as Record<string, unknown> | null;
   if (!payload) return null;
 
-  const pairQuantity = getPairQuantity(payload);
-  if (pairQuantity !== null) return pairQuantity;
+  const override = payload.quantity_per_hanger;
+  if (typeof override === "number" && override > 0) return override;
 
-  // Standard profile
-  const val = payload.quantity_per_hanger;
-  return typeof val === "number" ? val : null;
+  return getSnapshotPairQuantity(payload);
 }
 
 /** Для парных профилей возвращает одно N, для обычных — null */
@@ -56,7 +53,7 @@ export function getPairedHangerLabel(task: SectionBoardTask): string | null {
   if (!payload) return null;
 
   if (getPairSnapshot(payload)?.resolved !== true) return null;
-  const quantity = getPairQuantity(payload);
+  const quantity = getQtyPerHanger(task);
   return quantity !== null ? String(Math.round(quantity)) : null;
 }
 

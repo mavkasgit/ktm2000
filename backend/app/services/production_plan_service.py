@@ -34,12 +34,17 @@ def _enrich_source_payload(
     source_payload: dict | None,
     after_data: dict,
 ) -> dict:
-    """Copy original_quantity and quantity_per_hanger from after_data into source_payload."""
+    """Copy original_quantity from after_data into source_payload.
+
+    N на подвес в позиции не кэшируется: у одиночных он считается на лету по
+    длине позиции, у пары — из снапшота ``product_pair``; в payload живёт
+    только ручной override из PATCH (``quantity_per_hanger``). Импортная
+    ``after_data.quantity_per_hanger`` (в т.ч. авторасчётная) сюда не
+    копируется — иначе авто-норма читалась бы как manual-override.
+    """
     payload = dict(source_payload) if source_payload else {}
     if "original_quantity" in after_data:
         payload["original_quantity"] = after_data["original_quantity"]
-    if "quantity_per_hanger" in after_data:
-        payload["quantity_per_hanger"] = after_data["quantity_per_hanger"]
     return payload
 
 

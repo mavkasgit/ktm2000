@@ -108,9 +108,14 @@ export function RowDetailsContent({
       toast({ title: "Ошибка", description: "Количество должно быть > 0", variant: "destructive" })
       return
     }
+    const parsedPerHanger = Number(editQuantityPerHanger)
+    const perHangerOverride =
+      editQuantityPerHanger.trim() !== "" && Number.isFinite(parsedPerHanger) && parsedPerHanger > 0
+        ? parsedPerHanger
+        : null
     updateMutation.mutate({
       quantity: qty,
-      quantity_per_hanger: editQuantityPerHanger ? Number(editQuantityPerHanger) : null,
+      quantity_per_hanger: perHangerOverride,
     })
   }
 

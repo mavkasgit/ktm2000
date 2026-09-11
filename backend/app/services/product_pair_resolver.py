@@ -77,10 +77,22 @@ def paired_component_skus(position) -> list[str]:
     ]
 
 
+def pair_snapshot(payload: dict | None) -> dict | None:
+    """Снапшот пары из payload (``product_pair``), если он разрешён."""
+    snapshot = (payload or {}).get("product_pair")
+    if isinstance(snapshot, dict) and snapshot.get("resolved") is True:
+        return snapshot
+    return None
+
+
 def has_pair_snapshot(position) -> bool:
     """Непустой снапшот пары в payload (``product_pair.resolved=True``)."""
-    snapshot = (position.source_payload or {}).get("product_pair")
-    return isinstance(snapshot, dict) and snapshot.get("resolved") is True
+    return pair_snapshot(position.source_payload) is not None
+
+
+def pair_component_key(component_skus: list[str]) -> tuple[str, ...]:
+    """Нормализованный ключ компонентов пары (для кэша одного вызова)."""
+    return tuple(sorted(s for s in (_normalize_sku(sku) for sku in component_skus) if s))
 
 
 async def resolve_pair_by_component_skus(
@@ -131,7 +143,7 @@ async def resolve_effective_product_id(
         return position.product_id
 
     if has_pair_snapshot(position):
-        inputs = (position.source_payload or {}).get("product_pair", {}).get("inputs") or []
+        inputs = (pair_snapshot(position.source_payload) or {}).get("inputs") or []
         first = inputs[0] if inputs else None
         product_id = first.get("product_id") if isinstance(first, dict) else None
         return int(product_id) if product_id else None

@@ -49,4 +49,25 @@ describe("getQtyPerHanger / getPairedHangerLabel — парные профили
     expect(getQtyPerHanger(task)).toBeNull();
     expect(getPairedHangerLabel(task)).toBeNull();
   });
+
+  it("неположительный override не считается override — берётся снапшот", () => {
+    for (const override of [0, -3]) {
+      const task = taskWithPayload({
+        product_pair: { resolved: true, quantity_per_hanger: 8, source: "manual" },
+        quantity_per_hanger: override,
+      });
+
+      expect(getQtyPerHanger(task)).toBe(8);
+      expect(getPairedHangerLabel(task)).toBe("8");
+    }
+  });
+
+  it("одиночная позиция: неположительный override не отдаётся", () => {
+    for (const override of [0, -3]) {
+      const task = taskWithPayload({ quantity_per_hanger: override });
+
+      expect(getQtyPerHanger(task)).toBeNull();
+      expect(getPairedHangerLabel(task)).toBeNull();
+    }
+  });
 });

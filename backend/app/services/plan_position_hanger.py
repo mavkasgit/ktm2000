@@ -120,8 +120,8 @@ def payload_quantity_per_hanger(position) -> int | None:
     """Ручное override-значение позиции из source_payload (скаляр).
 
     Позиция хранит только ручное значение — авто никогда не пишется в
-    payload (кэша в позиции нет). Терпимо к legacy-строкам из старых
-    импортов.
+    payload (кэша в позиции нет; импортная N из ``after_data`` сюда не
+    копируется). Терпимо к legacy-строкам из старых импортов.
     """
     raw = (position.source_payload or {}).get("quantity_per_hanger")
     if isinstance(raw, int):
@@ -160,7 +160,9 @@ def resolve_position_hanger(
     Приоритет (#127): ручной override из payload > режим артикула
     (``hanger_mode``). source соответствует режиму, а не наличию данных.
 
-    - Ручной override (payload-скаляр) → source="manual", всегда побеждает;
+    - Ручной override (payload-скаляр > 0) → source="manual", всегда побеждает;
+      неположительный (0/отрицательный) override'ом не считается — падаем
+      на режим артикула (то же правило у пары: ``resolve_pair_n``);
     - режим manual + конкретная длина → ручное значение этой длины,
       source="manual" (авто-расчёт не запускается даже при заполненных
       периметре/габарите);
@@ -170,7 +172,7 @@ def resolve_position_hanger(
       (значение null, вызывающий ставит ``hanger_calc_zero``);
     - иначе (нет длины / нет значения выбранного режима) → null.
     """
-    if payload_quantity_per_hanger is not None:
+    if payload_quantity_per_hanger is not None and payload_quantity_per_hanger > 0:
         return PositionHangerValue(payload_quantity_per_hanger, "manual")
 
     if product is None:
@@ -209,13 +211,15 @@ async def resolve_positions_hanger(
     db: AsyncSession,
     positions,
 ) -> dict[int, PositionHangerValue]:
-    """Batch-резолв значений для списка позиций: один запрос продуктов.
+    """Batch-резолв значений для списка позиций.
 
-    Возвращает ``{position_id: PositionHangerValue}`` — ровно по одной
-    записи на позицию. Парная позиция (payload ``paired_profile``) —
-    приоритет: override из payload → снапшот ``product_pair`` → резолв пары
-    одним владельцем-модулем (``product_pair_resolver``); остальные — тем же
-    резолвером, что чтение и валидация.
+    Одиночные позиции: один запрос продуктов на весь вызов. Парные
+    (payload ``paired_profile``): приоритет override из payload → снапшот
+    ``product_pair`` → резолв пары владельцем-модулем
+    (``product_pair_resolver``); пара по компонентам и её длины-кандидаты
+    резолвятся не более одного раза на вызов (кэш по нормализованному
+    кортежу компонентов / по id пары). Возвращает ровно по одной записи
+    на позицию.
     """
     product_ids = {p.product_id for p in positions if p.product_id is not None}
     products: dict[int, Product] = {}
@@ -225,10 +229,14 @@ async def resolve_positions_hanger(
         ).scalars().all()
         products = {p.id: p for p in rows}
 
+    pair_cache: dict[tuple[str, ...], product_pair_resolver.ResolvedPair | None] = {}
+    candidates_cache: dict[int, list[float]] = {}
     result: dict[int, PositionHangerValue] = {}
     for p in positions:
         if (p.source_payload or {}).get("paired_profile"):
-            result[p.id] = await _resolve_paired_position_hanger(db, p)
+            result[p.id] = await _resolve_paired_position_hanger(
+                db, p, pair_cache=pair_cache, candidates_cache=candidates_cache
+            )
             continue
         product = products.get(p.product_id) if p.product_id is not None else None
         result[p.id] = resolve_position_hanger(
@@ -241,8 +249,8 @@ async def resolve_positions_hanger(
 
 def _snapshot_pair_hanger(position) -> PositionHangerValue | None:
     """N и source из снапшота ``product_pair`` позиции (``resolved=True``)."""
-    snapshot = (position.source_payload or {}).get("product_pair")
-    if not isinstance(snapshot, dict) or snapshot.get("resolved") is not True:
+    snapshot = product_pair_resolver.pair_snapshot(position.source_payload)
+    if snapshot is None:
         return None
     raw = snapshot.get("quantity_per_hanger")
     if raw is None or isinstance(raw, bool):
@@ -259,11 +267,20 @@ def _snapshot_pair_hanger(position) -> PositionHangerValue | None:
     return PositionHangerValue(value, source)
 
 
-async def _resolve_paired_position_hanger(db: AsyncSession, position) -> PositionHangerValue:
+async def _resolve_paired_position_hanger(
+    db: AsyncSession,
+    position,
+    *,
+    pair_cache: dict[tuple[str, ...], product_pair_resolver.ResolvedPair | None] | None = None,
+    candidates_cache: dict[int, list[float]] | None = None,
+) -> PositionHangerValue:
     """N и source парной позиции: override → снапшот → резолв пары.
 
     Неположительный override (0/отрицательный) override'ом не считается — то
     же правило, что у ``resolve_pair_n`` и ручных норм одиночных (``manual > 0``).
+    Кэши (необязательные) ограничены одним вызовом батча: ``pair_cache`` — по
+    нормализованному кортежу компонентов, ``candidates_cache`` — длины пары по
+    её id.
     """
     override = payload_quantity_per_hanger(position)
     if override is not None and override > 0:
@@ -273,13 +290,26 @@ async def _resolve_paired_position_hanger(db: AsyncSession, position) -> Positio
     if snapshot_value is not None:
         return snapshot_value
 
-    resolved = await product_pair_resolver.resolve_pair_by_component_skus(
-        db, product_pair_resolver.paired_component_skus(position)
-    )
+    component_skus = product_pair_resolver.paired_component_skus(position)
+    key = product_pair_resolver.pair_component_key(component_skus)
+    if pair_cache is not None and key in pair_cache:
+        resolved = pair_cache[key]
+    else:
+        resolved = await product_pair_resolver.resolve_pair_by_component_skus(db, component_skus)
+        if pair_cache is not None:
+            pair_cache[key] = resolved
     if resolved is None:
         return PositionHangerValue(None, None)
+
+    length_candidates = None
+    if candidates_cache is not None:
+        pair_id = resolved.pair.id
+        if pair_id not in candidates_cache:
+            candidates_cache[pair_id] = await product_pair_resolver.pair_length_candidates_mm(db, resolved)
+        length_candidates = candidates_cache[pair_id]
     pair_n = await product_pair_resolver.resolve_pair_n(
-        db, resolved, length_mm=position_length_mm(position)
+        db, resolved, length_mm=position_length_mm(position),
+        length_candidates_mm=length_candidates,
     )
     if pair_n.calc_error:
         return PositionHangerValue(None, None)

@@ -373,6 +373,33 @@ def test_resolve_payload_override_wins_in_both_modes() -> None:
         assert resolved.source == "manual"
 
 
+def test_resolve_nonpositive_payload_override_is_ignored() -> None:
+    """Неположительный payload-override не считается override (симметрия с парой)."""
+    manual = _resolver_product("RES-OVR-ZERO-M", hanger_mode="manual", quantity_per_hanger=5)
+    auto = _resolver_product("RES-OVR-ZERO-A", hanger_mode="auto", perimeter_mm=60, mount_width_mm=15)
+
+    for override in (0, -3):
+        manual_resolved = resolve_position_hanger(manual, length_mm=3000, payload_quantity_per_hanger=override)
+        assert manual_resolved.quantity_per_hanger == 5
+        assert manual_resolved.source == "manual"
+
+        auto_resolved = resolve_position_hanger(auto, length_mm=3000, payload_quantity_per_hanger=override)
+        assert auto_resolved.quantity_per_hanger == 72
+        assert auto_resolved.source == "auto"
+
+
+def test_enrich_source_payload_does_not_cache_hanger_n() -> None:
+    """Импортная N не копируется в payload позиции: в payload только override из PATCH."""
+    from app.services.production_plan_service import _enrich_source_payload
+
+    payload = _enrich_source_payload(
+        {"paired_profile": True},
+        {"original_quantity": "10", "quantity_per_hanger": 35},
+    )
+    assert payload["original_quantity"] == "10"
+    assert "quantity_per_hanger" not in payload
+
+
 @pytest.mark.asyncio
 async def test_serialize_manual_per_length_uses_position_length(client, session) -> None:
     """Чтение плана даёт тот же N по длине позиции, что и импорт (#170)."""
@@ -540,6 +567,21 @@ async def test_serialize_paired_position_n_from_snapshot(client, session) -> Non
     position = resp.json()[0]
     assert position["quantity_per_hanger"] == 8
     assert position["quantity_per_hanger_source"] == "manual"
+
+
+@pytest.mark.asyncio
+async def test_serialize_paired_position_auto_snapshot_source(client, session) -> None:
+    """Снапшот с source="auto" отдаётся как auto, не подменяется на manual."""
+    payload = _pair_payload(snapshot=True)
+    payload["product_pair"]["source"] = "auto"
+    plan, _ = await _make_pair_position(session, payload, plan_no="PLAN-PAIR-AUTO")
+    await session.flush()
+
+    resp = await client.get(f"/api/production-plans/{plan.id}/all-positions")
+    assert resp.status_code == 200, resp.text
+    position = resp.json()[0]
+    assert position["quantity_per_hanger"] == 8
+    assert position["quantity_per_hanger_source"] == "auto"
 
 
 @pytest.mark.asyncio
