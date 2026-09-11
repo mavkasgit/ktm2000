@@ -22,6 +22,7 @@ from app.models.production_plan import (
 from app.models.product import Product, ProductType
 from app.models.route import ProductionRoute, RouteOperation, RouteStage
 from app.models.section import Section
+from app.services.plan_position_hanger import resolve_position_hanger
 from app.services.plan_validation import validate_plan_position
 
 
@@ -282,6 +283,113 @@ async def test_validate_manual_mode_skips_auto_calc(session) -> None:
 
     errors = await validate_plan_position(session, position)
     assert "hanger_calc_zero" not in errors
+
+
+# ─── #170: норма по конкретной длине — тот же резолвер, что и импорт ───────
+
+
+def _resolver_product(
+    sku: str,
+    *,
+    hanger_mode: str,
+    quantity_per_hanger: dict | int | None = None,
+    perimeter_mm: float | None = None,
+    mount_width_mm: float | None = None,
+) -> Product:
+    product = Product(sku=sku, name=f"Resolver {sku}", type=ProductType.finished_good, unit="pcs")
+    product.hanger_mode = hanger_mode
+    if quantity_per_hanger is not None:
+        product.quantity_per_hanger = quantity_per_hanger
+    if perimeter_mm is not None:
+        product.perimeter_mm = perimeter_mm
+    if mount_width_mm is not None:
+        product.mount_width_mm = mount_width_mm
+    return product
+
+
+def test_resolve_manual_per_length_by_length_not_primary() -> None:
+    """manual + per-length: значение строго по длине; нет ключа → None (не основная)."""
+    product = _resolver_product(
+        "RES-PER-LEN",
+        hanger_mode="manual",
+        quantity_per_hanger={
+            "2750": {"auto": None, "manual": 5},
+            "3000": {"auto": None, "manual": 7},
+        },
+    )
+
+    assert resolve_position_hanger(product, length_mm=2750, payload_quantity_per_hanger=None).quantity_per_hanger == 5
+    assert resolve_position_hanger(product, length_mm=3000, payload_quantity_per_hanger=None).quantity_per_hanger == 7
+
+    missing = resolve_position_hanger(product, length_mm=2600, payload_quantity_per_hanger=None)
+    assert missing.quantity_per_hanger is None
+    assert missing.source is None
+
+
+def test_resolve_manual_bare_norm_is_length_independent() -> None:
+    """manual + legacy-скаляр: bare-норма длина-независима (#170)."""
+    product = _resolver_product("RES-BARE", hanger_mode="manual", quantity_per_hanger=5)
+
+    for length_mm in (2700, 3000, 1234):
+        resolved = resolve_position_hanger(product, length_mm=length_mm, payload_quantity_per_hanger=None)
+        assert resolved.quantity_per_hanger == 5
+        assert resolved.source == "manual"
+
+
+def test_resolve_auto_norm_computed_by_length_ignores_stored_value() -> None:
+    """auto + геометрия: авторасчёт по длине, хранимое manual-значение не используется."""
+    product = _resolver_product(
+        "RES-AUTO",
+        hanger_mode="auto",
+        quantity_per_hanger={"auto": None, "manual": 71},
+        perimeter_mm=60,
+        mount_width_mm=15,
+    )
+
+    resolved = resolve_position_hanger(product, length_mm=3000, payload_quantity_per_hanger=None)
+    assert resolved.quantity_per_hanger == 72
+    assert resolved.source == "auto"
+
+
+def test_resolve_auto_without_geometry_is_none() -> None:
+    """auto без периметра/габарита: N не резолвится, даже при хранимом значении."""
+    product = _resolver_product("RES-AUTO-NOGEO", hanger_mode="auto", quantity_per_hanger=71)
+
+    resolved = resolve_position_hanger(product, length_mm=3000, payload_quantity_per_hanger=None)
+    assert resolved.quantity_per_hanger is None
+    assert resolved.source is None
+
+
+def test_resolve_payload_override_wins_in_both_modes() -> None:
+    """payload-override побеждает и в manual, и в auto."""
+    manual = _resolver_product("RES-OVR-MAN", hanger_mode="manual", quantity_per_hanger=5)
+    auto = _resolver_product(
+        "RES-OVR-AUTO", hanger_mode="auto", perimeter_mm=60, mount_width_mm=15
+    )
+
+    for product in (manual, auto):
+        resolved = resolve_position_hanger(product, length_mm=3000, payload_quantity_per_hanger=9)
+        assert resolved.quantity_per_hanger == 9
+        assert resolved.source == "manual"
+
+
+@pytest.mark.asyncio
+async def test_serialize_manual_per_length_uses_position_length(client, session) -> None:
+    """Чтение плана даёт тот же N по длине позиции, что и импорт (#170)."""
+    product = await _make_ready_product(session, "FG-PER-LEN")
+    product.hanger_mode = "manual"
+    product.quantity_per_hanger = {
+        "2750": {"auto": None, "manual": 5},
+        "3000": {"auto": None, "manual": 7},
+    }
+    plan, _ = await _make_plan_position(session, product, length_mm=2750)
+    await session.flush()
+
+    resp = await client.get(f"/api/production-plans/{plan.id}/all-positions")
+    assert resp.status_code == 200, resp.text
+    position = resp.json()[0]
+    assert position["quantity_per_hanger"] == 5
+    assert position["quantity_per_hanger_source"] == "manual"
 
 
 def test_position_dimensions_for_task_edges() -> None:
