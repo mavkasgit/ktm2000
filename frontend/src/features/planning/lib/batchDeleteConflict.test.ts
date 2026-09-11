@@ -18,6 +18,7 @@ describe("parseBatchDeleteConflict", () => {
     expect(conflict?.code).toBe("batch_has_released_positions");
     expect(conflict?.blockers).toHaveLength(1);
     expect(conflict?.drafts).toBe(2);
+    expect(conflict?.safe_action).toBe("delete_drafts_only");
   });
 
   it("разбирает 409 с передачами", () => {
@@ -30,6 +31,42 @@ describe("parseBatchDeleteConflict", () => {
       }),
     );
     expect(conflict?.code).toBe("downstream_transfers_exist");
+    expect(conflict?.safe_action).toBe("delete_drafts_only");
+  });
+
+  it("отсекает неизвестный code", () => {
+    expect(
+      parseBatchDeleteConflict(
+        axiosError(409, {
+          code: "some_future_blocker",
+          blockers: [{ position_id: 1, reason: "released" }],
+          safe_action: "delete_drafts_only",
+          drafts: 0,
+        }),
+      ),
+    ).toBeNull();
+  });
+
+  it("отсекает отсутствующий или неожиданный safe_action", () => {
+    expect(
+      parseBatchDeleteConflict(
+        axiosError(409, {
+          code: "batch_has_released_positions",
+          blockers: [{ position_id: 1, reason: "released" }],
+          drafts: 0,
+        }),
+      ),
+    ).toBeNull();
+    expect(
+      parseBatchDeleteConflict(
+        axiosError(409, {
+          code: "batch_has_released_positions",
+          blockers: [{ position_id: 1, reason: "released" }],
+          safe_action: "delete_everything",
+          drafts: 0,
+        }),
+      ),
+    ).toBeNull();
   });
 
   it("игнорирует не-409 и чужую форму", () => {

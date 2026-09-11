@@ -262,7 +262,9 @@ async def delete_import_batch(
 #: запрещено — флага обхода нет.
 
     batch = await db.get(ImportBatch, batch_id)
-    if batch is None:
+#: Сверка с планом из URL: чужой батч — как отсутствующий (404), иначе можно
+#: снести данные другого плана по произвольному batch_id.
+    if batch is None or batch.production_plan_id != production_plan_id:
         raise HTTPException(status_code=404, detail="Import batch not found")
     try:
         return await delete_import_batch_service(

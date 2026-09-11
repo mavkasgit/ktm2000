@@ -186,7 +186,9 @@ export function PlanPage() {
       toast({ title: "Импорт удалён", variant: "success" })
     } catch (e) {
       const conflict = parseBatchDeleteConflict(e)
-      if (conflict) {
+      // Действие берём из ответа (safe_action), не хардкодим: неизвестное/отсутствующее
+      // поле парсер уже отсекает в null — экран блокировок тогда не открываем.
+      if (conflict && conflict.safe_action === "delete_drafts_only") {
         const filename = files?.find(f => f.batch_id === batchId)?.filename ?? `батч #${batchId}`
         setDeleteConflict({ batchId, filename, conflict })
         return

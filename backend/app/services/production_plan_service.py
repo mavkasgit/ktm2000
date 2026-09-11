@@ -359,9 +359,39 @@ class BatchDeleteBlocked(Exception):
         self.drafts = drafts
 
 
+async def _safely_deletable_position_ids(db: AsyncSession, batch_id: int) -> set[int]:
+#: Единственный источник правды «что safe-режим реально удалит»: позиции батча
+#: с ТЕКУЩИМ статусом draft и без SectionPlanLine (линия = попадание в
+#: производство, живой downstream). Используется и для drafts в 409, и для
+#: deletable_ids в delete_import_batch — число на кнопке равно deleted_drafts.
+    from app.models.internal_plan import SectionPlanLine
+
+    draft_rows = (
+        await db.execute(
+            select(PlanPosition.id).where(
+                PlanPosition.import_batch_id == batch_id,
+                PlanPosition.status == PlanPositionStatus.draft,
+            )
+        )
+    ).scalars().all()
+    if not draft_rows:
+        return set()
+    ids_with_lines = set(
+        (
+            await db.execute(
+                select(SectionPlanLine.plan_position_id).where(
+                    SectionPlanLine.plan_position_id.in_(list(draft_rows))
+                )
+            )
+        ).scalars().all()
+    )
+    return set(draft_rows) - ids_with_lines
+
+
 async def get_batch_delete_blockers(db: AsyncSession, batch_id: int) -> dict:
 #: Блокеры удаления батча: released-позиции и позиции с передачами вниз по
-#: цепочке (линии → задачи → передачи). drafts — число черновиков для кнопки
+#: цепочке (линии → задачи → передачи). drafts — число безопасно-удаляемых
+#: черновиков (см. _safely_deletable_position_ids) для кнопки
 #: «Удалить только черновики (n)».
     from app.models.internal_plan import SectionPlanLine
     from app.models.transfer import Transfer
@@ -428,7 +458,7 @@ async def get_batch_delete_blockers(db: AsyncSession, batch_id: int) -> dict:
         if has_released
         else BATCH_DELETE_BLOCK_TRANSFERS if blockers else None
     )
-    drafts = sum(1 for st in pos_status.values() if st == PlanPositionStatus.draft)
+    drafts = len(await _safely_deletable_position_ids(db, batch_id))
     return {"code": code, "blockers": blockers, "safe_action": BATCH_DELETE_SAFE_ACTION, "drafts": drafts}
 
 
@@ -447,6 +477,7 @@ async def _cascade_delete_positions(db: AsyncSession, position_ids: list[int]) -
 #: данных вне удаляемого множества (проверено вызывающим через blockers).
     from app.models.defect import TransferDiscrepancyDefectItem
     from app.models.internal_plan import SectionPlanLine
+    from app.models.production_plan import PositionStatusHistory
     from app.models.release_batch import ReleaseBatchPosition
     from app.models.transfer import Transfer, TransferDiscrepancy
     from app.models.work_task import WorkTask
@@ -498,6 +529,11 @@ async def _cascade_delete_positions(db: AsyncSession, position_ids: list[int]) -
             await db.execute(delete(WorkTask).where(WorkTask.section_plan_line_id.in_(section_plan_lines)))
         await db.execute(delete(SectionPlanLine).where(SectionPlanLine.plan_position_id.in_(position_ids)))
     await db.execute(delete(ReleaseBatchPosition).where(ReleaseBatchPosition.plan_position_id.in_(position_ids)))
+#: FK position_status_history.plan_position_id — без ondelete (миграция 005): чистим
+#: историю до удаления позиций, иначе будущие писатели истории сломают удаление.
+    await db.execute(
+        delete(PositionStatusHistory).where(PositionStatusHistory.plan_position_id.in_(position_ids))
+    )
     await db.execute(delete(PlanPosition).where(PlanPosition.id.in_(position_ids)))
 
 
@@ -508,13 +544,11 @@ async def delete_import_batch(
 
     info = await get_batch_delete_blockers(db, batch_id)
     user = await db.get(User, changed_by) if changed_by else None
-    blocked_ids = {b["position_id"] for b in info["blockers"]}
     if info["code"] is not None and not delete_drafts_only:
         raise BatchDeleteBlocked(info["code"], info["blockers"], info["drafts"])
-#: Без блокеров safe-режим эквивалентен полному — идём полным путём ради
-#: единого контракта ответа {deleted, batch_id}.
-    if delete_drafts_only and info["code"] is None:
-        delete_drafts_only = False
+#: Явный safe-флаг НЕ сводим к полному удалению даже без блокеров: у батча без
+#: released/передач могут быть approved/valid-позиции, и safe обязан их сохранить.
+#: Полное удаление — только явный DELETE без флага.
     if not delete_drafts_only:
         change_sets = (
             await db.execute(select(PlanChangeSet).where(PlanChangeSet.import_batch_id == batch_id))
@@ -540,54 +574,35 @@ async def delete_import_batch(
         )
         await db.commit()
         return {"deleted": True, "batch_id": batch_id}
+#: Множество безопасно-удаляемых позиций — тот же источник, что дал drafts в
+#: 409: кнопка «Удалить только черновики (n)» обещает ровно это множество.
+    deletable_ids = await _safely_deletable_position_ids(db, batch_id)
     kept_set_ids: set[int] = set()
-    created_to_delete: set[int] = set()
     change_sets = (
         await db.execute(select(PlanChangeSet).where(PlanChangeSet.import_batch_id == batch_id))
     ).scalars().all()
     for cs in change_sets:
         if cs.status == PlanChangeSetStatus.applied:
-            touched = list(
+            touched_ids = set(
                 (
                     await db.execute(
-                        select(PlanChangeItem.change_action, PlanChangeItem.plan_position_id).where(
+                        select(PlanChangeItem.plan_position_id).where(
                             PlanChangeItem.change_set_id == cs.id,
                             PlanChangeItem.plan_position_id.is_not(None),
                         )
                     )
-                ).all()
+                ).scalars().all()
             )
-            touched_ids = {pid for _, pid in touched}
-#: Сет пропускается целиком, если задевает блокеры — не только созданными,
-#: но и обновлёнными позициями: откат update_draft_position мутировал бы живые данные.
-            if touched_ids & blocked_ids:
+#: Сет откатывается и удаляется, только если ВСЕ затронутые им позиции
+#: безопасно-удаляемы (draft без линии). Иначе сет неприкосновенен: откат
+#: create_position перевёл бы approved/valid в cancelled, а удаление снесло бы
+#: живые данные под кнопкой «только черновики». Часть его items всё же может
+#: указывать на удаляемые черновики — их отвяжем ниже.
+            if not touched_ids <= deletable_ids:
                 kept_set_ids.add(cs.id)
                 continue
             await rollback_change_set(db, cs.id, changed_by=changed_by)
-            created_to_delete |= {pid for action, pid in touched if action == PlanChangeAction.create_position}
         await _delete_change_set_records(db, cs.id)
-    draft_rows = (
-        await db.execute(
-            select(PlanPosition.id).where(
-                PlanPosition.import_batch_id == batch_id,
-                PlanPosition.status == PlanPositionStatus.draft,
-            )
-        )
-    ).scalars().all()
-    from app.models.internal_plan import SectionPlanLine
-
-    draft_ids_with_lines: set[int] = set()
-    if draft_rows:
-        draft_ids_with_lines = set(
-            (
-                await db.execute(
-                    select(SectionPlanLine.plan_position_id).where(
-                        SectionPlanLine.plan_position_id.in_(list(draft_rows))
-                    )
-                )
-            ).scalars().all()
-        )
-    deletable_ids = set(created_to_delete) | {pid for pid in draft_rows if pid not in draft_ids_with_lines}
     if kept_set_ids and deletable_ids:
 #: Пропущенный applied-сет остаётся (откат невозможен из-за блокеров), но его
 #: items отвязываются от сносимых черновиков: after_data хранит историю,

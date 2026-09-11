@@ -6,6 +6,7 @@ from datetime import date
 from decimal import Decimal
 
 import pytest
+from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.models.imports import ImportBatch, ImportBatchMode, ImportFile
@@ -21,6 +22,7 @@ from app.models.production_plan import (
     PlanPositionStatus,
     PlanPositionValidationStatus,
     PlanSourceType,
+    PositionStatusHistory,
     ProductionPlan,
     ProductionPlanStatus,
 )
@@ -249,6 +251,137 @@ async def test_delete_batch_transfer_blocker_409(session: AsyncSession, client) 
 
     safe = await client.delete(f"/api/production-plans/{plan_id}/batches/{batch_id}?delete_drafts_only=true")
     assert safe.status_code == 200, safe.text
+    safe_body = safe.json()
+    assert safe_body["deleted"] is False
+    assert safe_body["deleted_drafts"] == 0
     assert await session.get(PlanPosition, pos_id) is not None
     assert await session.get(Transfer, transfer_id) is not None
     await assert_no_invariants_violations(session, context="batch-delete-transfer")
+
+
+async def _make_position_line(
+    session: AsyncSession, plan: ProductionPlan, product: Product, pos: PlanPosition, *, tag: str,
+) -> None:
+#: Минимальная линия участка без задач и передач: помечает позицию как «живой
+#: downstream» для проверки, что safe-режим не трогает черновик с линией.
+    section = Section(code=f"{tag}-S", name="S", type="laser", is_active=True, sort_order=1)
+    session.add(section)
+    await session.flush()
+    route = ProductionRoute(name=f"R-{tag}", is_active=True)
+    session.add(route)
+    await session.flush()
+    stage = RouteStage(route_id=route.id, sequence=1, section_id=section.id, is_final=True)
+    session.add(stage)
+    await session.flush()
+    internal = InternalPlan(production_plan_id=plan.id, status=InternalPlanStatus.active)
+    session.add(internal)
+    await session.flush()
+    session.add(
+        SectionPlanLine(
+            internal_plan_id=internal.id, plan_position_id=pos.id, section_id=section.id,
+            product_id=product.id, route_id=route.id, route_stage_id=stage.id,
+            sequence=1, planned_quantity=Decimal("10"),
+        )
+    )
+    await session.flush()
+
+
+async def test_delete_batch_wrong_plan_404(session: AsyncSession, client) -> None:
+    product = await _make_product(session, "DELB-P1")
+    plan, batch = await _make_plan_file_batch(session, "DELB-P1")
+    other_plan, _ = await _make_plan_file_batch(session, "DELB-P2")
+    pos = _make_position(session, plan, product, batch, status=PlanPositionStatus.draft, row=2)
+    await session.flush()
+    await _make_change_set(session, plan, batch, [pos], applied=True)
+    await session.commit()
+    batch_id, other_plan_id, pos_id = batch.id, other_plan.id, pos.id
+
+#: Чужой production_plan_id в URL — тот же 404, что и несуществующий батч:
+#: иначе DELETE по произвольному batch_id снёс бы данные другого плана.
+    resp = await client.delete(f"/api/production-plans/{other_plan_id}/batches/{batch_id}")
+    assert resp.status_code == 404, resp.text
+    assert resp.json()["detail"] == "Import batch not found"
+
+    session.expire_all()
+    assert await session.get(ImportBatch, batch_id) is not None
+    assert await session.get(PlanPosition, pos_id) is not None
+    await assert_no_invariants_violations(session, context="batch-delete-wrong-plan")
+
+
+async def test_delete_batch_safe_keeps_approved_position(session: AsyncSession, client) -> None:
+    product = await _make_product(session, "DELB-A1")
+    plan, batch = await _make_plan_file_batch(session, "DELB-A1")
+    draft_pos = _make_position(session, plan, product, batch, status=PlanPositionStatus.draft, row=2)
+    approved_pos = _make_position(session, plan, product, batch, status=PlanPositionStatus.draft, row=3)
+    await session.flush()
+    cs = await _make_change_set(session, plan, batch, [draft_pos, approved_pos], applied=True)
+    await session.commit()
+    plan_id, batch_id = plan.id, batch.id
+    draft_id, approved_id, cs_id = draft_pos.id, approved_pos.id, cs.id
+
+#: Симулируем «apply, затем approve»: без блокеров (released/передач) safe-флаг
+#: обязан сохранить approved-позицию, а не свести вызов к полному удалению.
+    approved_pos.status = PlanPositionStatus.approved
+    await session.commit()
+
+    safe = await client.delete(f"/api/production-plans/{plan_id}/batches/{batch_id}?delete_drafts_only=true")
+    assert safe.status_code == 200, safe.text
+    body = safe.json()
+    assert body["mode"] == "delete_drafts_only"
+    assert body["deleted"] is False
+    assert body["deleted_drafts"] == 1
+
+    session.expire_all()
+    assert await session.get(PlanPosition, draft_id) is None
+    kept = await session.get(PlanPosition, approved_id)
+    assert kept is not None
+    assert kept.status == PlanPositionStatus.approved
+    assert await session.get(PlanChangeSet, cs_id) is not None
+    await assert_no_invariants_violations(session, context="batch-delete-approved-kept")
+
+
+async def test_delete_batch_drafts_count_matches_deleted(session: AsyncSession, client) -> None:
+    product = await _make_product(session, "DELB-C1")
+    plan, batch = await _make_plan_file_batch(session, "DELB-C1")
+    free_draft = _make_position(session, plan, product, batch, status=PlanPositionStatus.draft, row=2)
+    lined_draft = _make_position(session, plan, product, batch, status=PlanPositionStatus.draft, row=3)
+    rel_pos = _make_position(session, plan, product, batch, status=PlanPositionStatus.released, row=4)
+    await session.flush()
+    await _make_position_line(session, plan, product, lined_draft, tag="DELB-C1")
+#: История статусов с FK без ondelete должна сноситься каскадом вместе с позицией.
+    session.add(
+        PositionStatusHistory(
+            plan_position_id=free_draft.id, from_status="draft", to_status="valid",
+        )
+    )
+    cs = await _make_change_set(session, plan, batch, [free_draft, lined_draft, rel_pos], applied=True)
+    await session.commit()
+    plan_id, batch_id = plan.id, batch.id
+    free_id, lined_id, rel_id, cs_id = free_draft.id, lined_draft.id, rel_pos.id, cs.id
+
+    resp = await client.delete(f"/api/production-plans/{plan_id}/batches/{batch_id}")
+    assert resp.status_code == 409, resp.text
+    body = resp.json()
+    assert body["code"] == "batch_has_released_positions"
+    assert body["blockers"] == [{"position_id": rel_id, "reason": "released"}]
+#: drafts считает безопасно-удаляемые позиции: черновик с линией исключён.
+    assert body["drafts"] == 1
+
+    safe = await client.delete(f"/api/production-plans/{plan_id}/batches/{batch_id}?delete_drafts_only=true")
+    assert safe.status_code == 200, safe.text
+    safe_body = safe.json()
+#: Число на кнопке из 409 равно фактически удалённому в safe-режиме.
+    assert safe_body["deleted_drafts"] == body["drafts"] == 1
+
+    session.expire_all()
+    assert await session.get(PlanPosition, free_id) is None
+    assert await session.get(PlanPosition, lined_id) is not None
+    assert await session.get(PlanPosition, rel_id) is not None
+    assert await session.get(PlanChangeSet, cs_id) is not None
+    history = (
+        await session.execute(
+            select(PositionStatusHistory).where(PositionStatusHistory.plan_position_id == free_id)
+        )
+    ).scalars().all()
+    assert history == []
+    await assert_no_invariants_violations(session, context="batch-delete-drafts-count")
