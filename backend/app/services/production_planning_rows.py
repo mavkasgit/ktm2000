@@ -394,6 +394,21 @@ async def _resolve_effective_product_ids(
     return await product_pair_resolver.resolve_effective_product_ids(db, position)
 
 
+def min_available_remainder(
+    available_by_product: dict[int, float], product_ids: list[int]
+) -> float:
+    """Свободный остаток позиции по её продуктам.
+
+    Пара заходит на маршрут как единая загрузка ``N×A + N×B``: нужны равные
+    количества обоих, поэтому берётся минимум по компонентам. Одиночная
+    позиция — единственное значение; продуктов нет — 0.
+    """
+    return min(
+        (available_by_product.get(product_id, 0.0) for product_id in product_ids),
+        default=0.0,
+    )
+
+
 async def _fetch_paginated_positions(
     db: AsyncSession,
     params: PlanningRowsQueryParams,
@@ -672,14 +687,11 @@ async def _build_planning_rows_for_positions(db: AsyncSession, positions: list[P
         if not remainder_steps:
             position_remainder_steps[pos.id] = 0.0
             continue
-        # Пара заходит на маршрут как единая загрузка: свободный остаток —
-        # минимум по компонентам (нужны равные количества обоих).
-        effective_ids = position_effective_product_ids.get(pos.id) or []
-        available = min(
-            (available_by_product.get(product_id, 0.0) for product_id in effective_ids),
-            default=0.0,
+        # Пара идёт как единая загрузка: свободный остаток — минимум по её
+        # продуктам (см. min_available_remainder).
+        position_remainder_steps[pos.id] = min_available_remainder(
+            available_by_product, position_effective_product_ids.get(pos.id) or []
         )
-        position_remainder_steps[pos.id] = available
 
     result: list[dict] = []
     for pos in positions:
@@ -1341,17 +1353,16 @@ async def get_production_planning_row_detail(db: AsyncSession, position_id: int)
         ]
         effective_product_ids = await _resolve_effective_product_ids(db, pos)
         from app.services.position_remainders import compute_available_remainder_quantity
-        per_component = [
-            await compute_available_remainder_quantity(
+        per_component = {
+            product_id: await compute_available_remainder_quantity(
                 db,
                 effective_product_id=product_id,
                 route_steps=route_remainder_steps,
                 position_id=pos.id,
             )
             for product_id in effective_product_ids
-        ]
-        # Пара заходит на маршрут как единая загрузка — минимум по компонентам.
-        available_remainder_quantity = min(per_component, default=0.0)
+        }
+        available_remainder_quantity = min_available_remainder(per_component, effective_product_ids)
 
     return {
         "plan_position_id": pos.id,

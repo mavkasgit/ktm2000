@@ -41,7 +41,12 @@ async def _committed_demand_by_product_ids(
     db: AsyncSession,
     product_ids: set[int],
 ) -> dict[int, float]:
-    """Сумма плановых количеств позиций, уже запущенных в работу (есть задачи), но не завершённых."""
+    """Сумма плановых количеств позиций, уже запущенных в работу (есть задачи), но не завершённых.
+
+    Позиция пары расходует равные количества ОБОИХ компонентов (``N×A + N×B``),
+    хотя её строки и задачи несут только ``product_a``: одиночные позиции
+    агрегируются в SQL, парные раскрываются по их эффективным продуктам.
+    """
     if not product_ids:
         return {}
 
@@ -64,6 +69,9 @@ async def _committed_demand_by_product_ids(
         .join(SectionPlanLine, SectionPlanLine.plan_position_id == PlanPosition.id)
         .where(
             SectionPlanLine.product_id.in_(product_ids),
+            # Парные позиции (product_id IS NULL) разбираем ниже: их строки
+            # несут один компонент, агрегат по строкам потерял бы второй.
+            PlanPosition.product_id.isnot(None),
             PlanPosition.status == PlanPositionStatus.released,
             open_task_on_position,
         )
@@ -76,7 +84,48 @@ async def _committed_demand_by_product_ids(
             func.coalesce(func.sum(position_rows.c.quantity), 0),
         ).group_by(position_rows.c.product_id)
     )
-    return {int(product_id): float(total or 0) for product_id, total in rows.all()}
+    demand = {int(product_id): float(total or 0) for product_id, total in rows.all()}
+
+    from app.services import product_pair_resolver
+
+    pair_positions = (
+        await db.execute(
+            select(PlanPosition).where(
+                PlanPosition.product_id.is_(None),
+                PlanPosition.status == PlanPositionStatus.released,
+                open_task_on_position,
+            )
+        )
+    ).scalars().all()
+    resolved_cache: dict[tuple[str, ...], list[int]] = {}
+    for position in pair_positions:
+        resolved_key = product_pair_resolver.pair_component_key(
+            product_pair_resolver.paired_component_skus(position)
+        )
+        if resolved_key not in resolved_cache:
+            resolved_cache[resolved_key] = await product_pair_resolver.resolve_effective_product_ids(
+                db, position
+            )
+        component_ids = resolved_cache[resolved_key]
+        if not component_ids:
+            # Пара не резолвится (нет снапшота и строки в справочнике): списываем
+            # с того, что записано в строках позиции, — иначе её запуск не
+            # уменьшил бы остаток ни одного компонента.
+            component_ids = [
+                int(line_product_id)
+                for line_product_id in (
+                    await db.execute(
+                        select(SectionPlanLine.product_id)
+                        .where(SectionPlanLine.plan_position_id == position.id)
+                        .distinct()
+                    )
+                ).scalars().all()
+                if line_product_id is not None
+            ]
+        for product_id in component_ids:
+            if product_id in product_ids:
+                demand[product_id] = demand.get(product_id, 0.0) + float(position.quantity or 0)
+    return demand
 
 
 async def compute_available_remainder_quantities(

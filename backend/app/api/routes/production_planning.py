@@ -1107,10 +1107,11 @@ async def get_remainders_preview(
     effective_product_id = pos.product_id
 
     if effective_product_id is None:
-        # Эффективный продукт парной позиции (#148): снапшот → пара → product_a.
+        # Эффективный продукт парной позиции (#148): снапшот → пара → первый.
         from app.services import product_pair_resolver
 
-        effective_product_id = await product_pair_resolver.resolve_effective_product_id(db, pos)
+        effective_ids = await product_pair_resolver.resolve_effective_product_ids(db, pos)
+        effective_product_id = effective_ids[0] if effective_ids else None
 
     available_remainders = []
     if effective_product_id is not None:
@@ -2004,54 +2005,31 @@ async def _group_work_tasks(db: AsyncSession, work_rows: list) -> list[ProductWi
     ]
 
 
-async def _pair_component_entries(
-    db: AsyncSession, sku: str
-) -> tuple[list[tuple[str, Product | None]], str | None]:
-    """Компоненты парной строки: канонический резолв → SKU-фолбэк.
-
-    Возвращает список ``(sku, product|None)`` и код деградации
-    (``None`` — пара найдена в справочнике).
-    """
-    from app.services import product_pair_resolver
-
-    component_skus = [part.strip() for part in sku.split("+") if part.strip()]
-    resolved = await product_pair_resolver.resolve_pair_by_component_skus(db, component_skus)
-    if resolved is not None:
-        return [
-            (resolved.product_a.sku, resolved.product_a),
-            (resolved.product_b.sku, resolved.product_b),
-        ], None
-
-    products = (
-        (await db.execute(select(Product).where(Product.sku.in_(component_skus)))).scalars().all()
-        if component_skus
-        else []
-    )
-    by_sku = {product.sku: product for product in products}
-    return [(component_sku, by_sku.get(component_sku)) for component_sku in component_skus], (
-        "product_pair_not_found"
-    )
-
-
 async def _pair_wip_stats(db: AsyncSession, sku: str) -> ProductWipStatsOut:
     """Сводка пары: покомпонентные остатки + задачи парных позиций."""
-    entries, warning = await _pair_component_entries(db, sku)
-    if not entries or all(product is None for _, product in entries):
+    from app.services import product_pair_resolver
+
+    resolved_components, warning = await product_pair_resolver.resolve_pair_components_for_sku(db, sku)
+    if not resolved_components or all(component.product is None for component in resolved_components):
         raise HTTPException(status_code=404, detail="Product not found")
 
     components = [
         ProductWipComponentOut(
-            sku=component_sku,
-            product_id=product.id if product is not None else None,
-            product_name=product.name if product is not None else "",
+            sku=component.sku,
+            product_id=component.product.id if component.product is not None else None,
+            product_name=component.product.name if component.product is not None else "",
             remainders=(
-                await _product_remainders(db, product.id) if product is not None else []
+                await _product_remainders(db, component.product.id) if component.product is not None else []
             ),
         )
-        for component_sku, product in entries
+        for component in resolved_components
     ]
-    names = [product.name for _, product in entries if product is not None]
-    component_skus = [component_sku for component_sku, _ in entries]
+    # Заголовок несёт оба артикула: ненайденный показываем его SKU, не теряем.
+    names = [
+        component.product.name if component.product is not None else component.sku
+        for component in resolved_components
+    ]
+    component_skus = [component.sku for component in resolved_components]
     # Позиции пишут компоненты в порядке строки Excel — проверяем оба порядка.
     position_skus = {
         sku,

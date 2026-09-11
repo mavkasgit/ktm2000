@@ -142,10 +142,11 @@ async def release_batch(
             raise ValueError(f"Position #{position.id} has no route assigned")
 
         # Resolve product_id for paired profile positions (#148): снапшот —
-        # норматив позиции, иначе пара из product_pairs → product_a.
-        effective_product_id = await product_pair_resolver.resolve_effective_product_id(db, position)
-        if effective_product_id is None:
+        # норматив позиции, иначе пара из product_pairs → первый компонент.
+        effective_ids = await product_pair_resolver.resolve_effective_product_ids(db, position)
+        if not effective_ids:
             raise ValueError(f"Position #{position.id}: product pair not found in product_pairs")
+        effective_product_id = effective_ids[0]
 
         steps = sorted(batch_position.route_snapshot.get("steps", []), key=lambda step: step["sequence"])
 

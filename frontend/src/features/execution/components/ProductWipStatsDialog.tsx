@@ -3,7 +3,7 @@ import { Dialog, DialogContent, DialogHeader, DialogTitle, Badge, renderIcon, So
 import { getProductWipStats, ProductWipStats, type ProductWipRemainder, type ProductWipTask } from "@/shared/api/productionPlans";
 import { getErrorMessage } from "@/shared/api/client";
 import { formatDimensionsLabel } from "@/shared/api/stock";
-import { errorLabels, warningLabels } from "@/shared/lib/generated-labels";
+import { errorLabels } from "@/shared/lib/generated-labels";
 import { Loader2, Layers, Package, ClipboardList, AlertCircle } from "lucide-react";
 import type { SortConfig } from "@/shared/hooks/useTableQueryEngine";
 import { useFilterableTable } from "@/shared/hooks/useFilterableTable";
@@ -194,7 +194,8 @@ function PairWarning({ code }: { code: string }) {
   return (
     <div className="flex items-center gap-3 p-3 rounded-lg bg-amber-50 text-amber-800 border border-amber-200 dark:bg-amber-950/30 dark:text-amber-300 dark:border-amber-900">
       <AlertCircle className="h-4 w-4 shrink-0" />
-      <div className="text-sm font-medium">{warningLabels[code] ?? errorLabels[code] ?? code}</div>
+      {/* Код из error-канона (product_pair_not_found) — показываем как предупреждение. */}
+      <div className="text-sm font-medium">{errorLabels[code] ?? code}</div>
     </div>
   );
 }

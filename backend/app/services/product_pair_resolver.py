@@ -56,6 +56,14 @@ class ResolvedPair:
 
 
 @dataclass(frozen=True)
+class PairComponent:
+    """Компонент парного артикула: SKU из строки и продукт справочника (если найден)."""
+
+    sku: str
+    product: Product | None
+
+
+@dataclass(frozen=True)
 class PairHangerValue:
     """Разрешённое N пары для длины позиции (аналог ``PositionHangerValue``)."""
 
@@ -156,12 +164,38 @@ async def resolve_effective_product_ids(
     return [resolved.pair.product_a_id, resolved.pair.product_b_id]
 
 
-async def resolve_effective_product_id(
-    db: AsyncSession, position
-) -> int | None:
-    """Первый из :func:`resolve_effective_product_ids` (исторический контракт)."""
-    product_ids = await resolve_effective_product_ids(db, position)
-    return product_ids[0] if product_ids else None
+async def resolve_pair_components_for_sku(
+    db: AsyncSession, sku: str
+) -> tuple[list["PairComponent"], str | None]:
+    """Раскрыть составной SKU пары ``A+B`` на компоненты.
+
+    Сначала канонический резолв ``product_pairs`` (неупорядоченное совпадение
+    SKU-компонентов, порядок — product_a, product_b), иначе SKU-фолбэк по
+    справочнику: компоненты в порядке запроса, ``product=None`` — артикула нет.
+    Возвращает ``(компоненты, код деградации)``: ``None`` — пара найдена,
+    ``product_pair_not_found`` — строки пары в справочнике нет.
+    """
+    component_skus = [part.strip() for part in sku.split("+") if part.strip()]
+    resolved = await resolve_pair_by_component_skus(db, component_skus)
+    if resolved is not None:
+        return (
+            [
+                PairComponent(sku=resolved.product_a.sku, product=resolved.product_a),
+                PairComponent(sku=resolved.product_b.sku, product=resolved.product_b),
+            ],
+            None,
+        )
+
+    products = (
+        (await db.execute(select(Product).where(Product.sku.in_(component_skus)))).scalars().all()
+        if component_skus
+        else []
+    )
+    by_sku = {product.sku: product for product in products}
+    return (
+        [PairComponent(sku=component_sku, product=by_sku.get(component_sku)) for component_sku in component_skus],
+        "product_pair_not_found",
+    )
 
 
 async def pair_length_candidates_mm(db: AsyncSession, resolved: ResolvedPair) -> list[float]:

@@ -126,11 +126,15 @@ async def _add_position_with_task(
     dimensions: dict | None = None,
     task_status: WorkTaskStatus = WorkTaskStatus.ready,
     with_task: bool = True,
+    status: PlanPositionStatus = PlanPositionStatus.approved,
+    quantity: Decimal = Decimal("100"),
 ) -> PlanPosition:
     """Позиция плана и её активная задача.
 
     ``position_product_id=None`` — парная строка; ``effective_product_id`` —
     продукт, который позиция пишет в строку/задачу (у пары это product_a).
+    ``status=released`` + ``with_task`` — позиция запущена в работу и занимает
+    свободный остаток своих продуктов.
     """
     position = PlanPosition(
         production_plan_id=plan.id,
@@ -138,9 +142,9 @@ async def _add_position_with_task(
         source_type=PlanSourceType.excel_import,
         source_sku=source_sku,
         source_name=source_sku,
-        quantity=Decimal("100"),
+        quantity=quantity,
         source_payload=source_payload or {},
-        status=PlanPositionStatus.approved,
+        status=status,
         validation_status=PlanPositionValidationStatus.valid,
         validation_errors=[],
         route_id=route.id,
@@ -163,7 +167,7 @@ async def _add_position_with_task(
         route_id=route.id,
         route_stage_id=stages[1].id,
         sequence=1,
-        planned_quantity=Decimal("100"),
+        planned_quantity=quantity,
     )
     session.add(line)
     await session.flush()
@@ -175,7 +179,7 @@ async def _add_position_with_task(
                 section_id=prod_section.id,
                 product_id=effective_product_id,
                 route_stage_id=stages[1].id,
-                planned_quantity=Decimal("100"),
+                planned_quantity=quantity,
                 dimensions=dimensions,
                 status=task_status,
             )
@@ -380,3 +384,139 @@ async def test_wip_stats_pair_rows_available_remainder_is_min_of_components(
     single_detail = await client.get(f"/api/production-planning/rows/{single_position.id}")
     assert single_detail.status_code == 200, single_detail.text
     assert single_detail.json()["available_remainder_quantity"] == 5.0
+
+
+async def test_available_remainder_pair_launch_reduces_both_components(
+    client, session: AsyncSession
+) -> None:
+    """Запуск пары вычитает её количество у ОБОИХ компонентов, а не только у product_a.
+
+    A=100, B=10; парная позиция released, quantity=5, задача не завершена.
+    Свободный остаток пары = ``min(100−5, 10−5) = 5``. До фикса строки и задачи
+    пары несут только product_a, поэтому из B вычитался 0 и индикатор показывал
+    ``min(95, 10) = 10``.
+
+    Одиночная released-позиция B=2 делит с парой общий свободный остаток B:
+    показатель = ``10−5−2 = 3`` — парная и собственная заявки учтены по одному
+    разу, повторного парного вычета нет.
+    """
+    product_a, product_b = await _make_pair_products(
+        session, sku_a="WPSL-A", sku_b="WPSL-B", with_pair=True
+    )
+    stock, prod, route, stages = await _make_route(session, prefix="WPSL")
+    await _seed_good_balance(session, location_id=stock.id, product_id=product_a.id, qty=100)
+    await _seed_good_balance(session, location_id=stock.id, product_id=product_b.id, qty=10)
+    plan = await _make_plan(session, prefix="WPSL")
+
+    pair_position = await _add_position_with_task(
+        session,
+        plan=plan, route=route, stages=stages, prod_section=prod,
+        source_sku="WPSL-A+WPSL-B",
+        position_product_id=None,
+        effective_product_id=product_a.id,
+        source_payload=_pair_payload("WPSL-A", "WPSL-B"),
+        status=PlanPositionStatus.released,
+        quantity=Decimal("5"),
+    )
+
+    rows_resp = await client.get("/api/production-planning/rows?limit=500")
+    assert rows_resp.status_code == 200, rows_resp.text
+    rows_by_id = {row["plan_position_id"]: row for row in rows_resp.json()["rows"]}
+    assert rows_by_id[pair_position.id]["available_remainder_quantity"] == 5.0
+
+    pair_detail = await client.get(f"/api/production-planning/rows/{pair_position.id}")
+    assert pair_detail.status_code == 200, pair_detail.text
+    assert pair_detail.json()["available_remainder_quantity"] == 5.0
+
+    single_position = await _add_position_with_task(
+        session,
+        plan=plan, route=route, stages=stages, prod_section=prod,
+        source_sku="WPSL-B",
+        position_product_id=product_b.id,
+        effective_product_id=product_b.id,
+        status=PlanPositionStatus.released,
+        quantity=Decimal("2"),
+    )
+
+    rows_after = await client.get("/api/production-planning/rows?limit=500")
+    assert rows_after.status_code == 200, rows_after.text
+    after_by_id = {row["plan_position_id"]: row for row in rows_after.json()["rows"]}
+    assert after_by_id[single_position.id]["available_remainder_quantity"] == 3.0
+    assert after_by_id[pair_position.id]["available_remainder_quantity"] == 3.0
+
+
+async def test_wip_stats_pair_header_keeps_missing_component_sku(
+    client, session: AsyncSession
+) -> None:
+    """Заголовок парной сводки несёт оба компонента, ненайденный — своим SKU.
+
+    Пара не создана в ``product_pairs`` (``warning="product_pair_not_found"``),
+    второй компонент отсутствует в ``products``: до фикса заголовок собирался
+    только из найденных продуктов и терял ``GHOST``, показывая один ``A``.
+    """
+    session.add(Product(sku="WPSH-REAL", name="Raw WPSH-REAL", type=ProductType.component, unit="pcs"))
+    await session.flush()
+
+    resp = await client.get("/api/production-planning/product-wip-stats/WPSH-REAL+WPSH-GHOST")
+    assert resp.status_code == 200, resp.text
+    data = resp.json()
+
+    assert data["warning"] == "product_pair_not_found"
+    assert data["product_name"] == "Raw WPSH-REAL + WPSH-GHOST"
+    assert [component["sku"] for component in data["components"]] == ["WPSH-REAL", "WPSH-GHOST"]
+    assert data["components"][1]["product_id"] is None
+
+
+async def test_available_remainder_unresolvable_pair_still_consumes_line_product(
+    client, session: AsyncSession
+) -> None:
+    """Запуск нерезолвящейся пары списывает quantity с продукта её строки.
+
+    Пара без снапшота и без строки в ``product_pairs`` не раскрывается по
+    компонентам, но её строки несут product_a: A=100, B=100, пара released,
+    quantity=5, задача не завершена → у A свободно ``100−5 = 95``, у B — 100
+    (на второй компонент заявка нерезолвящейся пары не распространяется).
+    Одиночная released-позиция A=2 даёт ``95−2 = 93``; без списания запуска
+    пары было бы 98 — то есть остаток A завышался у всех позиций артикула.
+    """
+    product_a, product_b = await _make_pair_products(
+        session, sku_a="WPSU-A", sku_b="WPSU-B", with_pair=False
+    )
+    stock, prod, route, stages = await _make_route(session, prefix="WPSU")
+    await _seed_good_balance(session, location_id=stock.id, product_id=product_a.id, qty=100)
+    await _seed_good_balance(session, location_id=stock.id, product_id=product_b.id, qty=100)
+    plan = await _make_plan(session, prefix="WPSU")
+
+    await _add_position_with_task(
+        session,
+        plan=plan, route=route, stages=stages, prod_section=prod,
+        source_sku="WPSU-A+WPSU-B",
+        position_product_id=None,
+        effective_product_id=product_a.id,
+        status=PlanPositionStatus.released,
+        quantity=Decimal("5"),
+    )
+    single_a = await _add_position_with_task(
+        session,
+        plan=plan, route=route, stages=stages, prod_section=prod,
+        source_sku="WPSU-A",
+        position_product_id=product_a.id,
+        effective_product_id=product_a.id,
+        status=PlanPositionStatus.released,
+        quantity=Decimal("2"),
+    )
+    # Не запущена: только читает свободный остаток B.
+    single_b = await _add_position_with_task(
+        session,
+        plan=plan, route=route, stages=stages, prod_section=prod,
+        source_sku="WPSU-B",
+        position_product_id=product_b.id,
+        effective_product_id=product_b.id,
+        with_task=False,
+    )
+
+    rows_resp = await client.get("/api/production-planning/rows?limit=500")
+    assert rows_resp.status_code == 200, rows_resp.text
+    rows_by_id = {row["plan_position_id"]: row for row in rows_resp.json()["rows"]}
+    assert rows_by_id[single_a.id]["available_remainder_quantity"] == 93.0
+    assert rows_by_id[single_b.id]["available_remainder_quantity"] == 100.0

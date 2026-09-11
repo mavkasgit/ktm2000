@@ -957,7 +957,10 @@ async def _compute_available_remainder_for_positions(
     from sqlalchemy.orm import selectinload
 
     from app.services.position_remainders import compute_available_remainder_quantities
-    from app.services.production_planning_rows import _resolve_effective_product_ids
+    from app.services.production_planning_rows import (
+        _resolve_effective_product_ids,
+        min_available_remainder,
+    )
 
     if not positions:
         return {}
@@ -1021,11 +1024,7 @@ async def _compute_available_remainder_for_positions(
             result[p.id] = 0.0
             continue
         effective_ids = effective_products_by_id.get(p.id) or []
-        # Пара заходит на маршрут как единая загрузка — минимум по компонентам.
-        result[p.id] = min(
-            (available_by_product.get(product_id, 0.0) for product_id in effective_ids),
-            default=0.0,
-        )
+        result[p.id] = min_available_remainder(available_by_product, effective_ids)
     return result
 
 
