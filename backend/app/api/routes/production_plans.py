@@ -792,6 +792,8 @@ async def section_totals(
 class PlanFileInfo(BaseModel):
     batch_id: int
     file_id: int
+    production_plan_id: int
+    change_set_id: int | None
     filename: str
     extension: str
     size_bytes: int
@@ -800,16 +802,19 @@ class PlanFileInfo(BaseModel):
     parsed_rows: int
     status: str
     created_at: str
+    applied_at: str | None
 
 
 @router.get("/{production_plan_id}/files")
 async def plan_files(production_plan_id: int, db: AsyncSession = Depends(get_db)) -> list[PlanFileInfo]:
     from app.models.imports import ImportBatch, ImportFile
+    from app.models.production_plan import PlanChangeSet
 
     batches = (
         await db.execute(
-            select(ImportBatch, ImportFile)
+            select(ImportBatch, ImportFile, PlanChangeSet.id, PlanChangeSet.applied_at)
             .join(ImportFile, ImportBatch.source_file_id == ImportFile.id)
+            .outerjoin(PlanChangeSet, PlanChangeSet.import_batch_id == ImportBatch.id)
             .where(ImportBatch.production_plan_id == production_plan_id)
             .order_by(ImportBatch.created_at)
         )
@@ -818,6 +823,8 @@ async def plan_files(production_plan_id: int, db: AsyncSession = Depends(get_db)
         PlanFileInfo(
             batch_id=batch.id,
             file_id=file.id,
+            production_plan_id=batch.production_plan_id,
+            change_set_id=change_set_id,
             filename=file.original_filename,
             extension=file.file_extension,
             size_bytes=file.size_bytes,
@@ -826,8 +833,9 @@ async def plan_files(production_plan_id: int, db: AsyncSession = Depends(get_db)
             parsed_rows=batch.parsed_rows,
             status=batch.status.value,
             created_at=batch.created_at.isoformat(),
+            applied_at=applied_at.isoformat() if applied_at else None,
         )
-        for batch, file in batches
+        for batch, file, change_set_id, applied_at in batches
     ]
 
 
@@ -1238,11 +1246,13 @@ async def _serialize_plan_positions(
 async def all_plan_files(db: AsyncSession = Depends(get_db)) -> list[PlanFileInfo]:
     """Return files from all production plans."""
     from app.models.imports import ImportBatch, ImportFile
+    from app.models.production_plan import PlanChangeSet
 
     batches = (
         await db.execute(
-            select(ImportBatch, ImportFile)
+            select(ImportBatch, ImportFile, PlanChangeSet.id, PlanChangeSet.applied_at)
             .join(ImportFile, ImportBatch.source_file_id == ImportFile.id)
+            .outerjoin(PlanChangeSet, PlanChangeSet.import_batch_id == ImportBatch.id)
             .order_by(ImportBatch.created_at.desc())
         )
     ).all()
@@ -1250,6 +1260,8 @@ async def all_plan_files(db: AsyncSession = Depends(get_db)) -> list[PlanFileInf
         PlanFileInfo(
             batch_id=batch.id,
             file_id=file.id,
+            production_plan_id=batch.production_plan_id,
+            change_set_id=change_set_id,
             filename=file.original_filename,
             extension=file.file_extension,
             size_bytes=file.size_bytes,
@@ -1258,8 +1270,9 @@ async def all_plan_files(db: AsyncSession = Depends(get_db)) -> list[PlanFileInf
             parsed_rows=batch.parsed_rows,
             status=batch.status.value,
             created_at=batch.created_at.isoformat(),
+            applied_at=applied_at.isoformat() if applied_at else None,
         )
-        for batch, file in batches
+        for batch, file, change_set_id, applied_at in batches
     ]
 
 

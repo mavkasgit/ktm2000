@@ -10,6 +10,16 @@ export type ProductionPlanPreview = Record<string, unknown> & {
   positions?: Record<string, unknown>[];
 };
 
+/** Ответ apply: превью плана плюс отчётность по строкам сета (#172). */
+export type PlanChangeSetApplyResult = ProductionPlanPreview & {
+  created_positions?: number;
+  updated_positions?: number;
+  ignored_positions?: number;
+  cancelled_positions?: number;
+  skipped_invalid_positions?: number;
+  duplicates?: number;
+};
+
 export type ApprovePositionResponse = {
   id: number;
   production_plan_id: number;
@@ -58,7 +68,7 @@ export async function applyProductionPlanChangeSet(
   changeSetId: number,
   options?: { skipInvalid?: boolean },
 ) {
-  const { data } = await apiClient.post<ProductionPlanPreview>(
+  const { data } = await apiClient.post<PlanChangeSetApplyResult>(
     `/production-plans/${productionPlanId}/change-sets/${changeSetId}/apply`,
     undefined,
     {
@@ -107,6 +117,8 @@ export async function createPlanReleaseBatch(productionPlanId: number, payload: 
 export type PlanFileInfo = {
   batch_id: number;
   file_id: number;
+  production_plan_id: number;
+  change_set_id: number | null;
   filename: string;
   extension: string;
   size_bytes: number;
@@ -115,6 +127,7 @@ export type PlanFileInfo = {
   parsed_rows: number;
   status: string;
   created_at: string;
+  applied_at: string | null;
 };
 
 export type PlanPositionOut = {

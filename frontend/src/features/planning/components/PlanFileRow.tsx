@@ -1,8 +1,10 @@
-import { Fragment, useState } from "react"
-import { Download, Eye, FileSpreadsheet, Trash2 } from "lucide-react"
-import { useQuery } from "@tanstack/react-query"
-import { Button, Badge, Dialog, DialogContent, DialogDescription, DialogHeader, DialogTitle, AlertDialog, AlertDialogContent, AlertDialogHeader, AlertDialogTitle, AlertDialogDescription, AlertDialogFooter, AlertDialogAction, AlertDialogCancel } from "@/shared/ui"
+import { Fragment, useMemo, useState } from "react"
+import { Download, Eye, FileSpreadsheet, Play, Trash2, Undo2 } from "lucide-react"
+import { useQuery, useQueryClient } from "@tanstack/react-query"
+import { Button, Badge, Dialog, DialogContent, DialogDescription, DialogHeader, DialogTitle, AlertDialog, AlertDialogContent, AlertDialogHeader, AlertDialogTitle, AlertDialogDescription, AlertDialogFooter, AlertDialogAction, AlertDialogCancel, toast } from "@/shared/ui"
+import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from "@/shared/ui/tooltip"
 import { PlanFileInfo, PlanSummary } from "@/shared/api/productionPlans"
+import { getErrorMessage } from "@/shared/api/client"
 import {
   fetchAllImportBatchItems,
   fetchImportItem,
@@ -11,26 +13,85 @@ import {
 } from "@/shared/api/imports"
 import { statusLabels, statusVariant } from "../lib/plan-labels"
 import { isDuplicateRow } from "../lib/duplicateRows"
+import { buildImportRowStats } from "../lib/importRowStats"
+import { invalidatePlanImportCaches } from "../lib/planImportCaches"
 import { queryKeys } from "@/shared/api/queryKeys"
+import { applyChangeSet, rollbackChangeSet } from "../api"
+import { ApplyImportConfirmDialog } from "./ApplyImportConfirmDialog"
 
-export function FileRow({ file, activePlan, onDelete }: { file: PlanFileInfo; activePlan: PlanSummary; onDelete: (batchId: number) => void }) {
+export function FileRow({
+  file,
+  activePlan,
+  isLastApplied,
+  onDelete,
+}: {
+  file: PlanFileInfo
+  activePlan: PlanSummary
+  /** Батч — последний применённый в плане (по `applied_at`): только его можно откатить. */
+  isLastApplied: boolean
+  onDelete: (batchId: number) => void
+}) {
+  const queryClient = useQueryClient()
   const [previewOpen, setPreviewOpen] = useState(false)
   const [deleteDialogOpen, setDeleteDialogOpen] = useState(false)
+  const [applyDialogOpen, setApplyDialogOpen] = useState(false)
+  const [rollbackDialogOpen, setRollbackDialogOpen] = useState(false)
+  const [applying, setApplying] = useState(false)
+  const [rollingBack, setRollingBack] = useState(false)
   const [selectedItemId, setSelectedItemId] = useState<number | null>(null)
   const downloadUrl = getImportFileDownloadUrl(file.file_id)
+  const changeSetId = file.change_set_id
+  const canApply = (file.status === "parsed" || file.status === "cancelled") && changeSetId != null
+  const canRollback = file.status === "applied" && changeSetId != null
 
   const { data: lightRows, isLoading: rowsLoading } = useQuery({
     queryKey: [...queryKeys.plan.batchPreview(file.batch_id), "light"],
     queryFn: () => fetchAllImportBatchItems(file.batch_id),
-    enabled: previewOpen && !!activePlan,
+    enabled: (previewOpen || applyDialogOpen) && !!activePlan,
   })
   const previewItems = lightRows ?? []
+  // Цифры диалога применения считаются на клиенте по лёгким строкам батча (§4.3).
+  const applyStats = useMemo(() => buildImportRowStats(previewItems), [previewItems])
 
   const { data: fullItem, isLoading: fullLoading } = useQuery({
     queryKey: [...queryKeys.plan.batchPreview(file.batch_id), "item", selectedItemId],
     queryFn: () => fetchImportItem(selectedItemId as number, true) as Promise<ImportFullItem>,
     enabled: previewOpen && selectedItemId != null,
   })
+
+  async function handleApply(skipInvalid: boolean) {
+    if (!changeSetId) return
+    setApplying(true)
+    try {
+      const result = await applyChangeSet(String(activePlan.id), String(changeSetId), { skipInvalid })
+      toast({
+        title: "Импорт применён",
+        description: `Создано: ${result.created_positions ?? 0}, обновлено: ${result.updated_positions ?? 0}`,
+        variant: "success",
+      })
+      invalidatePlanImportCaches(queryClient, { planId: activePlan.id, batchId: file.batch_id })
+      setApplyDialogOpen(false)
+    } catch (e) {
+      toast({ title: "Ошибка применения", description: getErrorMessage(e), variant: "destructive" })
+    } finally {
+      setApplying(false)
+    }
+  }
+
+  async function handleRollback() {
+    if (!changeSetId) return
+    setRollingBack(true)
+    try {
+      await rollbackChangeSet(String(activePlan.id), String(changeSetId))
+      toast({ title: "Импорт откачен", description: `Файл «${file.filename}» и его позиции отменены`, variant: "success" })
+      invalidatePlanImportCaches(queryClient, { planId: activePlan.id, batchId: file.batch_id })
+      setRollbackDialogOpen(false)
+    } catch (e) {
+      toast({ title: "Ошибка отката", description: getErrorMessage(e), variant: "destructive" })
+    } finally {
+      setRollingBack(false)
+    }
+  }
 
   return (
     <>
@@ -50,7 +111,7 @@ export function FileRow({ file, activePlan, onDelete }: { file: PlanFileInfo; ac
           {(file.size_bytes / 1024).toFixed(1)} KB
         </td>
         <td className="p-3">
-          <Badge variant={statusVariant[file.status] as any || "secondary"}>
+          <Badge variant={statusVariant[file.status] ?? "secondary"}>
             {statusLabels[file.status] || file.status}
           </Badge>
         </td>
@@ -64,12 +125,59 @@ export function FileRow({ file, activePlan, onDelete }: { file: PlanFileInfo; ac
                 <Download className="h-3 w-3 mr-1" /> Скачать
               </a>
             </Button>
+            {canApply && (
+              <Button variant="ghost" size="sm" className="h-7 text-xs" onClick={() => setApplyDialogOpen(true)}>
+                <Play className="h-3 w-3 mr-1" /> Применить
+              </Button>
+            )}
+            {canRollback && (
+              <RollbackButton
+                disabled={!isLastApplied}
+                loading={rollingBack}
+                onRollback={() => setRollbackDialogOpen(true)}
+              />
+            )}
             <Button variant="ghost" size="sm" className="h-7 text-xs text-red-600 hover:text-red-700" onClick={() => setDeleteDialogOpen(true)}>
               <Trash2 className="h-3 w-3 mr-1" /> Удалить
             </Button>
           </div>
         </td>
       </tr>
+
+      <ApplyImportConfirmDialog
+        open={applyDialogOpen}
+        onOpenChange={setApplyDialogOpen}
+        stats={applyStats}
+        filename={file.filename}
+        sheetName={file.sheet_name}
+        planId={activePlan.id}
+        batchId={file.batch_id}
+        parsedAt={file.created_at}
+        loading={applying || rowsLoading}
+        onConfirm={(skipInvalid) => void handleApply(skipInvalid)}
+        onCancel={() => setApplyDialogOpen(false)}
+      />
+
+      <AlertDialog open={rollbackDialogOpen} onOpenChange={setRollbackDialogOpen}>
+        <AlertDialogContent>
+          <AlertDialogHeader>
+            <AlertDialogTitle>Откатить импорт?</AlertDialogTitle>
+            <AlertDialogDescription>
+              Файл «{file.filename}» перейдёт в статус «Отменён»: созданные им позиции будут отменены, обновлённые —
+              восстановлены. Утверждённые позиции этого импорта тоже будут отменены. Батч можно будет применить заново.
+            </AlertDialogDescription>
+          </AlertDialogHeader>
+          <AlertDialogFooter>
+            <AlertDialogCancel disabled={rollingBack}>Отмена</AlertDialogCancel>
+            <AlertDialogAction
+              onClick={(event) => { event.preventDefault(); void handleRollback() }}
+              disabled={rollingBack}
+            >
+              Откатить
+            </AlertDialogAction>
+          </AlertDialogFooter>
+        </AlertDialogContent>
+      </AlertDialog>
 
       <Dialog open={previewOpen} onOpenChange={setPreviewOpen}>
         <DialogContent className="max-w-[90vw] max-h-[80vh] overflow-hidden flex flex-col">
@@ -152,6 +260,34 @@ export function FileRow({ file, activePlan, onDelete }: { file: PlanFileInfo; ac
         </AlertDialogContent>
       </AlertDialog>
     </>
+  )
+}
+
+/** Откат — LIFO: у не-последнего батча кнопка disabled с объяснением. */
+function RollbackButton({
+  disabled,
+  loading,
+  onRollback,
+}: {
+  disabled: boolean
+  loading: boolean
+  onRollback: () => void
+}) {
+  const button = (
+    <Button variant="ghost" size="sm" className="h-7 text-xs" disabled={disabled || loading} onClick={onRollback}>
+      <Undo2 className="h-3 w-3 mr-1" /> Откатить
+    </Button>
+  )
+  if (!disabled) return button
+  return (
+    <TooltipProvider>
+      <Tooltip>
+        <TooltipTrigger asChild>
+          <span className="inline-flex">{button}</span>
+        </TooltipTrigger>
+        <TooltipContent>Откатить можно только последний применённый импорт плана</TooltipContent>
+      </Tooltip>
+    </TooltipProvider>
   )
 }
 

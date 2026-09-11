@@ -35,6 +35,9 @@ export type ImportLightItem = {
   status: string;
   change_action: string;
   codes: string[];
+  /** Раздельные списки: агрегаты диалога считают «Ошибки» только по errors. */
+  errors: string[];
+  warnings: string[];
 };
 
 export type ImportFullItem = {

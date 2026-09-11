@@ -6,8 +6,11 @@ import { getExcelSheetNames, previewExcelSheet, buildImportApplyStats, type Shee
 import { Button, Input, AlertDialog, AlertDialogContent, AlertDialogHeader, AlertDialogTitle, AlertDialogDescription, AlertDialogFooter, AlertDialogAction, AlertDialogCancel, FiltersPanel, Select, SelectContent, SelectItem, SelectTrigger, SelectValue, type FiltersPanelField } from "shared/ui"
 import { useImportRowExpansion, ImportRawRows, ImportUpload, ImportPreview, getImportDialogContentClass } from "@/shared/ui/import-utils"
 import { PlanImportPreviewTable, PLAN_IMPORT_ERROR_LABELS } from "./components/PlanImportPreviewTable"
+import { ApplyImportConfirmDialog } from "./components/ApplyImportConfirmDialog"
 import { buildActiveFilterSummary } from "shared/ui/buildActiveFilterSummary"
 import { isDuplicateRow, type DuplicateRowSignal } from "./lib/duplicateRows"
+import { buildImportRowStats } from "./lib/importRowStats"
+import { invalidatePlanImportCaches } from "./lib/planImportCaches"
 import { useQuery, useQueryClient } from "@tanstack/react-query"
 import { listAllImportTemplates, type ImportTemplate } from "@/shared/api/importTemplates"
 import { getErrorMessage } from "@/shared/api/client"
@@ -54,7 +57,12 @@ export function ImportWizard(props: {
   const [result, setResult] = useState<Record<string, unknown> | null>(null)
   const [searchQuery, setSearchQuery] = useState("")
   const [rowSelection, setRowSelection] = useState("")
-  const [pendingChangeSet, setPendingChangeSet] = useState<{ planId: string; changeSetId: string } | null>(null)
+  const [pendingChangeSet, setPendingChangeSet] = useState<{
+    planId: string
+    changeSetId: string
+    batchId: number | null
+    parsedAt: string
+  } | null>(null)
   const [uploadSummary, setUploadSummary] = useState<Record<string, unknown> | null>(null)
   const [showApplyConfirm, setShowApplyConfirm] = useState(false)
   const [showCloseConfirm, setShowCloseConfirm] = useState(false)
@@ -303,7 +311,7 @@ export function ImportWizard(props: {
       fields.push({
         kind: "toggle",
         key: "filter-duplicates",
-        label: "Дубли",
+        label: "Дубликаты",
         tone: "violet",
         hideIcon: true,
         checked: filterDuplicates || allCategoriesVisible,
@@ -332,30 +340,9 @@ export function ImportWizard(props: {
     summary.warning,
   ])
 
-  // Клиентские подсчёты — запасной вариант, когда нет серверного summary (§4.3).
-  const clientApplyStats = useMemo(
-    () =>
-      buildImportApplyStats({
-        total: summary.total,
-        warning: summary.warning,
-        invalid: summary.invalid,
-        duplicates: duplicateCount,
-      }),
-    [summary, duplicateCount],
-  )
-
-  const clientErrorBreakdown = useMemo(() => {
-    const counts: Record<string, number> = {}
-    for (const row of allRows) {
-      const errs = row.errors as string[] | undefined
-      if (Array.isArray(errs)) {
-        for (const e of errs) {
-          counts[e] = (counts[e] || 0) + 1
-        }
-      }
-    }
-    return counts
-  }, [allRows])
+  // Клиентские подсчёты — зеркало серверных агрегатов (§4.3), запасной
+  // вариант, когда серверного summary нет.
+  const clientApplyStats = useMemo(() => buildImportRowStats(allRows), [allRows])
 
   // Диалог применения работает от серверного summary (§4.3), клиентские подсчёты — запасной вариант.
   const serverApplyStats = useMemo(
@@ -363,11 +350,7 @@ export function ImportWizard(props: {
     [uploadSummary],
   )
   const applyStats = serverApplyStats ?? clientApplyStats
-  const errorBreakdown = serverApplyStats ? serverApplyStats.errors : clientErrorBreakdown
-
-  const errorBreakdownEntries = useMemo(() => {
-    return Object.entries(errorBreakdown).sort((a, b) => b[1] - a[1])
-  }, [errorBreakdown])
+  const errorBreakdown = applyStats.errors
 
   async function handleFileSelect(e: React.ChangeEvent<HTMLInputElement>) {
     const f = e.target.files?.[0]
@@ -444,13 +427,8 @@ export function ImportWizard(props: {
       setUploadSummary(null)
       setStep("result")
       // Инвалидируем все домены, которые зависят от плана
-      void queryClient.invalidateQueries({ queryKey: queryKeys.plan.allPositions() });
-      void queryClient.invalidateQueries({ queryKey: queryKeys.plan.preview(changeSet.planId) });
-      void queryClient.invalidateQueries({ queryKey: queryKeys.shopfloor.boardAll() });
-      void queryClient.invalidateQueries({ queryKey: queryKeys.sections.all() });
-      void queryClient.invalidateQueries({ queryKey: queryKeys.spg.snapshotAll() });
-      void queryClient.invalidateQueries({ queryKey: queryKeys.plan.batchPreview(changeSet.changeSetId) });
-      void queryClient.invalidateQueries({ queryKey: queryKeys.importTemplates.all() });
+      invalidatePlanImportCaches(queryClient, { planId: changeSet.planId, batchId: changeSet.batchId })
+      void queryClient.invalidateQueries({ queryKey: queryKeys.importTemplates.all() })
       props.onSuccess(changeSet.planId, changeSet.changeSetId)
     } catch (e) {
       // If apply failed right after creating a change set, cleanup immediately.
@@ -495,7 +473,15 @@ export function ImportWizard(props: {
       if (!planId || !changeSetId) {
         throw new Error("Не найден planId или changeSetId")
       }
-      setPendingChangeSet({ planId, changeSetId })
+      const batchId = Number(uploaded?.importId ?? uploaded?.import_batch_id)
+      setPendingChangeSet({
+        planId,
+        changeSetId,
+        batchId: Number.isFinite(batchId) && batchId > 0 ? batchId : null,
+        // Момент распознавания: сервер парсит внутри этого запроса, batch.created_at
+        // в ответе нет — предупреждение о свежести (§4.4) считаем от завершения upload.
+        parsedAt: new Date().toISOString(),
+      })
       setUploadSummary((uploaded?.summary as Record<string, unknown> | undefined) ?? null)
       setShowApplyConfirm(true)
     } catch (e) {
@@ -913,80 +899,20 @@ export function ImportWizard(props: {
       </AlertDialogContent>
     </AlertDialog>
 
-    <AlertDialog open={showApplyConfirm} onOpenChange={setShowApplyConfirm}>
-      <AlertDialogContent className="max-w-2xl">
-        <AlertDialogHeader>
-          <AlertDialogTitle>Подтвердите применение</AlertDialogTitle>
-          <div className="mt-2 space-y-3 text-sm">
-            <div className="grid grid-cols-2 gap-2">
-              <div className="rounded border p-2">
-                <div className="text-muted-foreground">Всего строк</div>
-                <div className="font-semibold">{applyStats.total}</div>
-              </div>
-              <div className="rounded border p-2">
-                <div className="text-muted-foreground">Новые</div>
-                <div className="font-semibold text-green-700">{applyStats.normal}</div>
-              </div>
-              <div className="rounded border p-2">
-                <div className="text-muted-foreground">С предупреждениями</div>
-                <div className="font-semibold text-amber-700">{applyStats.warning}</div>
-              </div>
-              <div className="rounded border p-2">
-                <div className="text-muted-foreground">С ошибками</div>
-                <div className="font-semibold text-red-700">{applyStats.invalid}</div>
-              </div>
-              {applyStats.duplicates > 0 && (
-                <div className="rounded border border-violet-200 bg-violet-50 p-2">
-                  <div className="text-muted-foreground">Дубли</div>
-                  <div className="font-semibold text-violet-700">{applyStats.duplicates}</div>
-                </div>
-              )}
-            </div>
-            <div className="rounded border p-2">
-              <div className="text-muted-foreground">Файл</div>
-              <div className="font-medium break-all">{file?.name || "—"}</div>
-              <div className="mt-1 text-xs text-muted-foreground">
-                Лист: {sheets[selectedSheet] ?? currentPreview?.sheet_name ?? "—"}; Строки: {rowSelection.trim() || "все"}
-              </div>
-            </div>
-            {applyStats.invalid > 0 && (
-              <div className="rounded border border-red-200 bg-red-50 p-3">
-                <div className="font-medium text-red-900 mb-2">
-                  Ошибки в {applyStats.invalid} строках:
-                </div>
-                <div className="space-y-1 max-h-40 overflow-y-auto text-xs">
-                  {errorBreakdownEntries.map(([error, count]) => (
-                    <div key={error} className="flex items-start gap-2 text-red-800">
-                      <span className="text-red-600 mt-0.5">•</span>
-                      <span className="font-medium">{error}</span>
-                      <span className="text-red-600 ml-auto">{count} строк</span>
-                    </div>
-                  ))}
-                </div>
-                <div className="mt-2 pt-2 border-t border-red-200">
-                  <AlertDialogDescription className="text-red-700">
-                    Режим "Пропустить ошибки" загрузит только строки без ошибок.
-                  </AlertDialogDescription>
-                </div>
-              </div>
-            )}
-          </div>
-        </AlertDialogHeader>
-        <AlertDialogFooter>
-          <AlertDialogCancel onClick={() => void handleApplyCancel()}>Отмена</AlertDialogCancel>
-          <AlertDialogAction onClick={() => void handleApplyConfirmed(false)} disabled={loading}>
-            {applyStats.invalid > 0
-              ? `Загрузить с ошибками (${applyStats.uploadAll} строк)`
-              : `Загрузить (${applyStats.uploadAll} строк)`}
-          </AlertDialogAction>
-          {applyStats.invalid > 0 && (
-            <Button onClick={() => void handleApplyConfirmed(true)} disabled={loading}>
-              Загрузить ({applyStats.uploadSkipInvalid} строк)
-            </Button>
-          )}
-        </AlertDialogFooter>
-      </AlertDialogContent>
-    </AlertDialog>
+    <ApplyImportConfirmDialog
+      open={showApplyConfirm}
+      onOpenChange={setShowApplyConfirm}
+      stats={applyStats}
+      filename={file?.name ?? ""}
+      sheetName={sheets[selectedSheet] ?? currentPreview?.sheet_name ?? ""}
+      rowsLabel={`Строки: ${rowSelection.trim() || "все"}`}
+      planId={pendingChangeSet ? Number(pendingChangeSet.planId) : null}
+      batchId={pendingChangeSet?.batchId ?? null}
+      parsedAt={pendingChangeSet?.parsedAt ?? null}
+      loading={loading}
+      onConfirm={(skipInvalid) => void handleApplyConfirmed(skipInvalid)}
+      onCancel={() => void handleApplyCancel()}
+    />
     </>
   )
 }

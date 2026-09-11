@@ -179,6 +179,9 @@ class PlanChangeSet(Base):
     )
     summary: Mapped[dict] = mapped_column(JSONB, nullable=False, server_default=text("'{}'::jsonb"), default=dict)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False, server_default=func.now())
+    #: Момент последнего применения сета; NULL у не применённых и откаченных.
+    #: Определяет «последний применённый батч плана» для LIFO-отката (#172).
+    applied_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
 
 
 class PlanChangeItem(Base):

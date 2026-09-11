@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from collections import Counter
+from datetime import datetime, timezone
 from decimal import Decimal
 
 from sqlalchemy import delete, or_, select, update
@@ -54,6 +55,31 @@ ALLOWED_TRANSITIONS = {
     (PlanPositionStatus.cancelled, PlanPositionStatus.approved),
     (PlanPositionStatus.cancelled, PlanPositionStatus.released),
 }
+
+
+async def _cancelled_position_for_reapply(
+    db: AsyncSession,
+    item: PlanChangeItem,
+    change_set: PlanChangeSet,
+) -> PlanPosition | None:
+    """Отменённая позиция этого же сета для повторного применения (#172).
+
+    Уникальные ``(import_batch_id, source_row_number)`` и
+    ``(import_batch_id, source_row_hash)`` держит в том числе отменённая строка,
+    поэтому повторный apply после отката переиспользует её, а не вставляет
+    дубль. Чужая позиция (другой батч) не переиспользуется: тогда поможет
+    только явная ошибка уникальности.
+    """
+    if item.plan_position_id is None:
+        return None
+    position = await db.get(PlanPosition, item.plan_position_id)
+    if position is None:
+        return None
+    if position.status != PlanPositionStatus.cancelled:
+        return None
+    if change_set.import_batch_id is not None and position.import_batch_id != change_set.import_batch_id:
+        return None
+    return position
 
 
 
@@ -190,39 +216,57 @@ async def apply_change_set(db: AsyncSession, change_set_id: int, *, skip_invalid
             qty = after["quantity"]
             qty_decimal = Decimal(str(qty)) if not isinstance(qty, Decimal) else qty
 
-            position = PlanPosition(
-                production_plan_id=change_set.production_plan_id,
-                product_id=after.get("product_id"),
-                route_id=after.get("route_id"),
-                route_profile_id=after.get("route_profile_id"),
-                source_type=PlanSourceType.excel_import,
-                source_system="excel",
-                source_ref=after.get("source_ref"),
-                source_fingerprint=after.get("source_fingerprint"),
-                source_row_hash=after.get("source_row_hash"),
-                import_batch_id=change_set.import_batch_id,
-                source_sku=after["source_sku"],
-                source_name=after.get("source_name"),
-                quantity=qty_decimal,
-                input_quantity=_decimal_from_after(after.get("input_quantity")),
-                input_dimensions=after.get("input_dimensions"),
-                outputs=after.get("outputs") or [],
-                source_payload=_enrich_source_payload(after.get("source_payload"), after),
-                period_start=_date_from_payload(after, "period_start"),
-                period_end=_date_from_payload(after, "period_end"),
-                source_row_number=(after.get("source_row_numbers") or [item.source_row_number])[0],
-                has_pack_ops=_bool_or_none(after.get("has_pack_ops")),
-                route_origin=_route_origin_from_after(after),
-                route_match_quality=_route_match_quality_from_after(after),
-                route_match_reason=_route_match_reason_from_after(after),
-                route_assigned_at=_datetime_from_after(after, "route_assigned_at"),
-                route_manual_confirmed_at=_datetime_from_after(after, "route_manual_confirmed_at"),
-                status=PlanPositionStatus.invalid if validation_errors else PlanPositionStatus.draft,
-                validation_status=PlanPositionValidationStatus.invalid if validation_errors else PlanPositionValidationStatus.valid,
-                validation_errors=validation_errors,
-            )
-            db.add(position)
-            pending_position_links.append((item, position))
+            position_fields = {
+                "production_plan_id": change_set.production_plan_id,
+                "product_id": after.get("product_id"),
+                "route_id": after.get("route_id"),
+                "route_profile_id": after.get("route_profile_id"),
+                "source_type": PlanSourceType.excel_import,
+                "source_system": "excel",
+                "source_ref": after.get("source_ref"),
+                "source_fingerprint": after.get("source_fingerprint"),
+                "source_row_hash": after.get("source_row_hash"),
+                "import_batch_id": change_set.import_batch_id,
+                "source_sku": after["source_sku"],
+                "source_name": after.get("source_name"),
+                "quantity": qty_decimal,
+                "input_quantity": _decimal_from_after(after.get("input_quantity")),
+                "input_dimensions": after.get("input_dimensions"),
+                "outputs": after.get("outputs") or [],
+                "source_payload": _enrich_source_payload(after.get("source_payload"), after),
+                "period_start": _date_from_payload(after, "period_start"),
+                "period_end": _date_from_payload(after, "period_end"),
+                "source_row_number": (after.get("source_row_numbers") or [item.source_row_number])[0],
+                "has_pack_ops": _bool_or_none(after.get("has_pack_ops")),
+                "route_origin": _route_origin_from_after(after),
+                "route_match_quality": _route_match_quality_from_after(after),
+                "route_match_reason": _route_match_reason_from_after(after),
+                "route_assigned_at": _datetime_from_after(after, "route_assigned_at"),
+                "route_manual_confirmed_at": _datetime_from_after(after, "route_manual_confirmed_at"),
+                "status": PlanPositionStatus.invalid if validation_errors else PlanPositionStatus.draft,
+                "validation_status": PlanPositionValidationStatus.invalid if validation_errors else PlanPositionValidationStatus.valid,
+                "validation_errors": validation_errors,
+            }
+            # Повторный apply откаченного сета (#172): своя отменённая строка
+            # переиспользуется, а не вставляется второй раз — пара
+            # (import_batch_id, source_row_number) уникальна, и отменённая
+            # позиция продолжает её занимать.
+            position = await _cancelled_position_for_reapply(db, item, change_set)
+            if position is None:
+                position = PlanPosition(**position_fields)
+                db.add(position)
+                pending_position_links.append((item, position))
+            else:
+                for field, value in position_fields.items():
+                    setattr(position, field, value)
+                # Позиция возвращается в план как новая строка импорта:
+                # снимаем следы отмены/скрытия и прежнего утверждения.
+                position.approved_by = None
+                position.approved_at = None
+                position.released_at = None
+                position.deleted_at = None
+                position.deleted_by = None
+                position.delete_reason = None
             item.status = PlanChangeItemStatus.applied
             created += 1
             continue
@@ -234,6 +278,7 @@ async def apply_change_set(db: AsyncSession, change_set_id: int, *, skip_invalid
     for linked_item, linked_position in pending_position_links:
         linked_item.plan_position_id = linked_position.id
     change_set.status = PlanChangeSetStatus.applied
+    change_set.applied_at = datetime.now(timezone.utc)
     if change_set.import_batch_id:
         from app.models.imports import ImportBatch
 
@@ -278,6 +323,10 @@ async def rollback_change_set(db: AsyncSession, change_set_id: int, changed_by: 
     items = (
         await db.execute(select(PlanChangeItem).where(PlanChangeItem.change_set_id == change_set_id))
     ).scalars().all()
+    # Строки возвращаются в применимое состояние тем же правилом, что и при
+    # парсинге, иначе повторный apply молча пропустит всё (`applied` → continue).
+    from app.services.plan_import_service import plan_import_row_status
+
     for item in items:
         if item.change_action == PlanChangeAction.create_position and item.plan_position_id:
             position = await db.get(PlanPosition, item.plan_position_id)
@@ -298,7 +347,15 @@ async def rollback_change_set(db: AsyncSession, change_set_id: int, changed_by: 
             if position:
                 position.status = PlanPositionStatus.draft
 
+        item.status = plan_import_row_status(item.errors or [], item.warnings or [])
+        if (
+            item.change_action == PlanChangeAction.mark_possible_duplicate
+            and item.status == PlanChangeItemStatus.pending
+        ):
+            item.status = PlanChangeItemStatus.warning
+
     change_set.status = PlanChangeSetStatus.cancelled
+    change_set.applied_at = None
     if change_set.import_batch_id:
         from app.models.imports import ImportBatch
 

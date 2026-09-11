@@ -1381,6 +1381,11 @@ def serialize_light_item(item: PlanChangeItem) -> dict:
         "status": item.status.value,
         "change_action": item.change_action.value,
         "codes": list(item.errors or []) + list(item.warnings or []),
+        # Раздельные списки: агрегаты диалога применения (в т.ч. переприменение
+        # батча из списка файлов) считают «Ошибки» только по errors, а `codes`
+        # склеивает ошибки с предупреждениями.
+        "errors": list(item.errors or []),
+        "warnings": list(item.warnings or []),
     }
 
 

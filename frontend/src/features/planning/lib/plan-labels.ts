@@ -1,4 +1,5 @@
 import { PlanPositionOut } from "@/shared/api/productionPlans"
+import type { BadgeProps } from "@/shared/ui/badge"
 import { errorLabels, errorPhraseTranslations, statusLabels, validationLabels, warningLabels } from "@/shared/lib/generated-labels"
 
 export { errorLabels, statusLabels, validationLabels, warningLabels }
@@ -7,7 +8,7 @@ export { errorLabels as routeErrorLabels } from "@/shared/lib/generated-labels"
 export const planStatusLabels = statusLabels
 export const planValidationLabels = validationLabels
 
-export const statusVariant: Record<string, string> = {
+export const statusVariant: Record<string, NonNullable<BadgeProps["variant"]>> = {
   parsed: "secondary",
   failed: "destructive",
   applied: "default",

@@ -302,6 +302,10 @@ class ImportLightItemOut(BaseModel):
     status: str
     change_action: str
     codes: list[str]
+    # Раздельно от `codes`: агрегаты диалога применения считают «С ошибками»
+    # только по errors, а `codes` склеивает ошибки с предупреждениями (#172).
+    errors: list[str]
+    warnings: list[str]
 
 
 class ImportFullItemOut(BaseModel):

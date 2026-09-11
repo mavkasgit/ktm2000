@@ -26,6 +26,7 @@ import {
   type BulkRunnerProgress,
 } from "@/shared/bulk"
 import { FileRow } from "../components/PlanFileRow"
+import { findLastAppliedBatchId } from "../lib/appliedBatches"
 import { BatchDeleteBlockersDialog } from "../components/BatchDeleteBlockersDialog"
 import { parseBatchDeleteConflict } from "../lib/batchDeleteConflict"
 import { PositionRow } from "../components/PlanPositionRow"
@@ -425,6 +426,12 @@ export function PlanPage() {
     queryFn: () => allPlanFiles(),
   })
 
+  // Откат — LIFO: кнопка доступна только у последнего применённого батча плана (#172).
+  const lastAppliedBatchId = useMemo(
+    () => findLastAppliedBatchId(files ?? [], activePlan?.id),
+    [files, activePlan],
+  )
+
   const activeSort = sortConfigs[0]
   const positionsQueryParams = useMemo(
     () => ({
@@ -738,7 +745,7 @@ export function PlanPage() {
                       </tr>
                     </thead>
                     <tbody>
-                      {files.slice(0, showAllFiles ? undefined : 5).map(f => <FileRow key={f.batch_id} file={f} activePlan={activePlan} onDelete={handleDeleteFile} />)}
+                      {files.slice(0, showAllFiles ? undefined : 5).map(f => <FileRow key={f.batch_id} file={f} activePlan={activePlan} isLastApplied={f.batch_id === lastAppliedBatchId} onDelete={handleDeleteFile} />)}
                     </tbody>
                   </table>
                   {files.length > 5 && (
