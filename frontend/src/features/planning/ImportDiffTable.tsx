@@ -142,7 +142,7 @@ export function ImportDiffTable({ rows, sortConfig, onSort }: ImportDiffTablePro
             const routeColor = routeSource === "missing" ? "#dc2626" : routeName ? "#16a34a" : "#6b7280";
             const errors = translateCodes(row.errors, errorLabels);
             const warnings = translateCodes(row.warnings, warningLabels);
-            const variantObj = (getAfter(row, "source_payload") as UnknownRecord | undefined)?.techcard_pair as UnknownRecord | undefined;
+            const variantObj = (getAfter(row, "source_payload") as UnknownRecord | undefined)?.product_pair as UnknownRecord | undefined;
             const variantLabel = variantObj
               ? (variantObj.resolved ? `${variantObj.pair_name ?? "пара"} (#${variantObj.pair_id ?? "?"})` : "не определен")
               : "—";

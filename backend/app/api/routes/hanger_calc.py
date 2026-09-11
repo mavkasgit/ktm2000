@@ -130,7 +130,7 @@ async def hanger_calc(payload: HangerCalcRequest) -> HangerCalcResponse:
 
 @router.post("/paired", response_model=HangerCalcResponse)
 async def hanger_calc_paired(payload: PairedHangerCalcRequest) -> HangerCalcResponse:
-    """Совместный batch-расчёт для парных техкарт (#58/#67).
+    """Совместный batch-расчёт для пары артикулов (#58/#67).
 
     Вход — числа, не id: {items: [{perimeter_a_mm, mount_width_a_mm,
     perimeter_b_mm, mount_width_b_mm, length_mm}], hanger}. Выход {results,

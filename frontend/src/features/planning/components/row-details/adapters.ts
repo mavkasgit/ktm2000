@@ -98,6 +98,8 @@ export function adaptPlanPositionOut(pos: PlanPositionOut): RowDetailsData {
     routeCheckIssues: [],
     rawExcelRows: buildRawExcelRows(pos.raw_excel_row, pos.payload),
     quantityPerHanger: pos.quantity_per_hanger ?? null,
+    quantityPerHangerSource: pos.quantity_per_hanger_source ?? null,
+    quantityPerHangerOverridden: payload.quantity_per_hanger != null,
     productId: pos.product_id,
     originalQuantity: (payload.original_quantity as string | undefined) ?? null,
   }

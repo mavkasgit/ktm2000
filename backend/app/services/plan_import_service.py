@@ -637,10 +637,12 @@ async def _make_change_items(
 
             if resolved_pair is None:
                 errors.append("product_pair_not_found")
-                row.payload["techcard_pair"] = {
+                row.payload["product_pair"] = {
                     "resolved": False,
                     "reason": "product_pair_not_found",
                     "inputs": [],
+                    "quantity_per_hanger": None,
+                    "source": None,
                 }
                 if "paired_profile_product_unmapped" not in warnings:
                     warnings.append("paired_profile_product_unmapped")
@@ -693,19 +695,21 @@ async def _make_change_items(
                     inputs.append({
                         "product_id": comp_product.id,
                         "sku": comp_product.sku,
-                        "techcard_quantity": (
+                        "quantity_per_hanger": (
                             str(pair_n.quantity_per_hanger) if pair_n.quantity_per_hanger is not None else "0"
                         ),
                         "available_quantity": str(available),
                         "unit": comp_product.unit,
                     })
-                # Снапшот пары (payload-ключ legacy, структура сохранена —
-                # фронтовые читатели ImportDiffTable/PlanHangerDisplay не меняются).
-                row.payload["techcard_pair"] = {
+                # Снапшот пары (payload-ключ product_pair, структура сохранена —
+                # читатели ImportDiffTable/PlanHangerDisplay читают его же).
+                row.payload["product_pair"] = {
                     "resolved": True,
                     "reason": None,
                     "pair_id": resolved_pair.pair.id,
                     "pair_name": f"{resolved_pair.product_a.sku}+{resolved_pair.product_b.sku}",
+                    "quantity_per_hanger": pair_n.quantity_per_hanger,
+                    "source": pair_n.source,
                     "inputs": inputs,
                 }
                 warnings = [w for w in warnings if w != "paired_profile_product_unmapped"]
@@ -801,6 +805,7 @@ async def _make_change_items(
             # и количество позиции — то же число: округляем его, как у
             # одиночных, молча (отдельного warning на пару не заводим).
             per_hanger = pair_n.quantity_per_hanger if pair_n is not None else None
+            quantity_per_hanger = per_hanger
 
             if resolved_pair is None:
                 hanger_source = "missing_product"

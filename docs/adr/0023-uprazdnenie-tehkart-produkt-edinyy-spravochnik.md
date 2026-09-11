@@ -41,8 +41,10 @@ ADR-0012, парные оставались). Решение: техкарты �
    (`min(by_area, by_size)`); эффективный продукт парной позиции — `product_a`.
 6. **Снапшот = норматив позиции**: позиция с записанным снапшотом пары не ревалидирует пару
    и нормы; справочник меняется — импортированный план не переинтерпретируется (прецедент —
-   копия BOM+routing в production order в SAP). Payload-ключ `techcard_pair` и структура
-   `inputs[]` сохраняются (фронтовые читатели `ImportDiffTable`, `PlanHangerDisplay`).
+   копия BOM+routing в production order в SAP). Payload-ключ — `product_pair` (поправка T2,
+   #171): верхнеуровневые `quantity_per_hanger`/`source`, структура `inputs[]` сохранена
+   (в элементе — `quantity_per_hanger` вместо `techcard_quantity`; читатели
+   `ImportDiffTable`, `PlanHangerDisplay`).
 7. **Чистый лист**: реальных данных в системе нет — миграции данных не проводятся.
 
 ## Consequences

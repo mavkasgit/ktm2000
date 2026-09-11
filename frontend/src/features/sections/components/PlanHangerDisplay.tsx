@@ -13,44 +13,51 @@ import type { SectionBoardTask } from "@/shared/api/shopfloor";
 // Helpers
 // ---------------------------------------------------------------------------
 
-/** Извлекает quantity_per_hanger из source_payload задачи.
- * Для парных профилей — из techcard_pair.inputs как '30+30'.
- * Для обычных — quantity_per_hanger.
+type PairSnapshot = {
+  resolved?: boolean;
+  quantity_per_hanger?: string | number | null;
+};
+
+/** Снапшот пары из payload задачи (``product_pair``). */
+function getPairSnapshot(payload: Record<string, unknown>): PairSnapshot | null {
+  const pair = payload.product_pair;
+  return pair && typeof pair === "object" ? (pair as PairSnapshot) : null;
+}
+
+/** N пары: ручной override позиции приоритетнее снапшота; null — N нет. */
+function getPairQuantity(payload: Record<string, unknown>): number | null {
+  const pair = getPairSnapshot(payload);
+  if (pair?.resolved !== true) return null;
+  const override = payload.quantity_per_hanger;
+  const raw = typeof override === "number" ? override : pair.quantity_per_hanger;
+  const value = Number(raw);
+  return Number.isFinite(value) && value > 0 ? value : null;
+}
+
+/** Извлекает количество на подвес из source_payload задачи.
+ * Для парных профилей — N пары (override → снапшот ``product_pair``).
+ * Для обычных — ``quantity_per_hanger``.
  */
 export function getQtyPerHanger(task: SectionBoardTask): number | null {
   const payload = task.source_payload as Record<string, unknown> | null;
   if (!payload) return null;
 
-  // Paired profile: techcard_pair.inputs содержит techcard_quantity для каждого компонента
-  const techcardPair = payload.techcard_pair as { inputs?: { techcard_quantity?: string }[] } | undefined;
-  if (techcardPair?.inputs && techcardPair.inputs.length >= 2) {
-    const qa = Number(techcardPair.inputs[0].techcard_quantity);
-    const qb = Number(techcardPair.inputs[1].techcard_quantity);
-    if (qa > 0 && qb > 0) {
-      // Возвращаем первое значение для расчёта подвесов
-      return qa;
-    }
-  }
+  const pairQuantity = getPairQuantity(payload);
+  if (pairQuantity !== null) return pairQuantity;
 
   // Standard profile
   const val = payload.quantity_per_hanger;
   return typeof val === "number" ? val : null;
 }
 
-/** Для парных профилей возвращает строку '30+30', для обычных — null */
+/** Для парных профилей возвращает одно N, для обычных — null */
 export function getPairedHangerLabel(task: SectionBoardTask): string | null {
   const payload = task.source_payload as Record<string, unknown> | null;
   if (!payload) return null;
 
-  const techcardPair = payload.techcard_pair as { inputs?: { techcard_quantity?: string }[] } | undefined;
-  if (techcardPair?.inputs && techcardPair.inputs.length >= 2) {
-    const qa = Number(techcardPair.inputs[0].techcard_quantity);
-    const qb = Number(techcardPair.inputs[1].techcard_quantity);
-    if (qa > 0 && qb > 0) {
-      return `${Math.round(qa)}+${Math.round(qb)}`;
-    }
-  }
-  return null;
+  if (getPairSnapshot(payload)?.resolved !== true) return null;
+  const quantity = getPairQuantity(payload);
+  return quantity !== null ? String(Math.round(quantity)) : null;
 }
 
 /** Считает количество подвесов по логике backend (hanger_quantity.py) */

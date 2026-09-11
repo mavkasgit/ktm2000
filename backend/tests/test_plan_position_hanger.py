@@ -19,7 +19,7 @@ from app.models.production_plan import (
     PlanSourceType,
     ProductionPlan,
 )
-from app.models.product import Product, ProductType
+from app.models.product import Product, ProductLength, ProductPair, ProductType
 from app.models.route import ProductionRoute, RouteOperation, RouteStage
 from app.models.section import Section
 from app.services.plan_position_hanger import resolve_position_hanger
@@ -434,3 +434,180 @@ def test_position_dimensions_for_task_edges() -> None:
     ) is None
     # Без размеров — безразмерные штуки.
     assert position_dimensions_for_task(make_pos()) is None
+
+
+# ─── #171: парная позиция — снапшот product_pair и ручной override ─────────────
+
+
+async def _make_pair_components(
+    session,
+    sku_a: str,
+    sku_b: str,
+    *,
+    manual_n: int | None = None,
+    length_mm: int = 2700,
+) -> ProductPair:
+    """Пара сырьевых артикулов с общей длиной; manual_n=None — без ручной нормы."""
+    comp_a = Product(sku=sku_a, name=f"Pair {sku_a}", type=ProductType.component, unit="pcs")
+    comp_b = Product(sku=sku_b, name=f"Pair {sku_b}", type=ProductType.component, unit="pcs")
+    session.add_all([comp_a, comp_b])
+    await session.flush()
+    session.add_all([
+        ProductLength(product_id=comp_a.id, length_mm=length_mm),
+        ProductLength(product_id=comp_b.id, length_mm=length_mm),
+    ])
+    quantity = {str(length_mm): {"auto": None, "manual": manual_n}} if manual_n is not None else {}
+    pair = ProductPair(
+        product_a_id=min(comp_a.id, comp_b.id),
+        product_b_id=max(comp_a.id, comp_b.id),
+        quantity_per_hanger=quantity,
+    )
+    session.add(pair)
+    await session.flush()
+    return pair
+
+
+async def _make_pair_position(
+    session,
+    payload: dict,
+    *,
+    length_mm: int = 2700,
+    plan_no: str,
+) -> tuple[ProductionPlan, PlanPosition]:
+    """Парная позиция плана: product_id=None, payload с paired_profile."""
+    plan = ProductionPlan(
+        plan_no=plan_no,
+        name=plan_no,
+        period_start=date(2026, 5, 1),
+        period_end=date(2026, 5, 31),
+    )
+    session.add(plan)
+    await session.flush()
+    position = PlanPosition(
+        production_plan_id=plan.id,
+        product_id=None,
+        source_type=PlanSourceType.excel_import,
+        source_sku="PAIR-POS",
+        source_name="Pair position",
+        quantity=Decimal("100"),
+        input_dimensions={"length_mm": length_mm},
+        source_payload=payload,
+        period_start=plan.period_start,
+        period_end=plan.period_end,
+        status=PlanPositionStatus.draft,
+        validation_status=PlanPositionValidationStatus.pending,
+        validation_errors=[],
+    )
+    session.add(position)
+    await session.flush()
+    return plan, position
+
+
+def _pair_payload(
+    *,
+    snapshot: bool,
+    override: int | None = None,
+    sku_a: str = "PAIR-A",
+    sku_b: str = "PAIR-B",
+) -> dict:
+    """Payload парной позиции: компоненты + опционально снапшот и override."""
+    payload: dict = {
+        "paired_profile": True,
+        "components": [{"sku": sku_a}, {"sku": sku_b}],
+    }
+    if snapshot:
+        payload["product_pair"] = {
+            "resolved": True,
+            "quantity_per_hanger": 8,
+            "source": "manual",
+            "inputs": [{"sku": sku_a}, {"sku": sku_b}],
+        }
+    if override is not None:
+        payload["quantity_per_hanger"] = override
+    return payload
+
+
+@pytest.mark.asyncio
+async def test_serialize_paired_position_n_from_snapshot(client, session) -> None:
+    """Парная позиция без override берёт N и source из снапшота product_pair."""
+    plan, _ = await _make_pair_position(
+        session, _pair_payload(snapshot=True), plan_no="PLAN-PAIR-SNAP",
+    )
+    await session.flush()
+
+    resp = await client.get(f"/api/production-plans/{plan.id}/all-positions")
+    assert resp.status_code == 200, resp.text
+    position = resp.json()[0]
+    assert position["quantity_per_hanger"] == 8
+    assert position["quantity_per_hanger_source"] == "manual"
+
+
+@pytest.mark.asyncio
+async def test_serialize_paired_position_override_wins_and_null_clears(client, session) -> None:
+    """Override побеждает снапшот; явный null снимает override, отсутствие поля — нет."""
+    plan, position = await _make_pair_position(
+        session, _pair_payload(snapshot=True, override=5), plan_no="PLAN-PAIR-OVR",
+    )
+    await session.flush()
+
+    resp = await client.get(f"/api/production-plans/{plan.id}/all-positions")
+    assert resp.status_code == 200, resp.text
+    paired = resp.json()[0]
+    assert paired["quantity_per_hanger"] == 5
+    assert paired["quantity_per_hanger_source"] == "manual"
+
+    url = f"/api/production-plans/{plan.id}/positions/{position.id}/quantity"
+
+    # Явный null — ручной override снят, норма снова из снапшота.
+    cleared = await client.patch(url, json={"quantity": 20, "quantity_per_hanger": None})
+    assert cleared.status_code == 200, cleared.text
+    assert cleared.json()["quantity_per_hanger"] == 8
+    assert cleared.json()["quantity_per_hanger_source"] == "manual"
+    assert "quantity_per_hanger" not in position.source_payload
+
+    # Новое число — override записан и побеждает снапшот.
+    written = await client.patch(url, json={"quantity": 20, "quantity_per_hanger": 4})
+    assert written.status_code == 200, written.text
+    assert written.json()["quantity_per_hanger"] == 4
+    assert written.json()["quantity_per_hanger_source"] == "manual"
+    assert position.source_payload["quantity_per_hanger"] == 4
+
+    # Поле отсутствует в теле — существующий override не трогаем.
+    absent = await client.patch(url, json={"quantity": 20})
+    assert absent.status_code == 200, absent.text
+    assert absent.json()["quantity_per_hanger"] == 4
+    assert position.source_payload["quantity_per_hanger"] == 4
+
+
+@pytest.mark.asyncio
+async def test_serialize_paired_position_n_from_dictionary(client, session) -> None:
+    """Без снапшота N пары резолвится из product_pairs по SKU-компонентам."""
+    await _make_pair_components(session, "PAIR-DICT-A", "PAIR-DICT-B", manual_n=8)
+    plan, _ = await _make_pair_position(
+        session,
+        _pair_payload(snapshot=False, sku_a="PAIR-DICT-A", sku_b="PAIR-DICT-B"),
+        plan_no="PLAN-PAIR-DICT",
+    )
+    await session.flush()
+
+    resp = await client.get(f"/api/production-plans/{plan.id}/all-positions")
+    assert resp.status_code == 200, resp.text
+    position = resp.json()[0]
+    assert position["quantity_per_hanger"] == 8
+    assert position["quantity_per_hanger_source"] == "manual"
+
+
+@pytest.mark.asyncio
+async def test_validate_paired_position_override_suppresses_calc_error(session) -> None:
+    """Override подавляет hanger_calc_zero пары без ручной и авто-нормы."""
+    await _make_pair_components(session, "PAIR-NON-A", "PAIR-NON-B", manual_n=None)
+    _, position = await _make_pair_position(
+        session,
+        _pair_payload(snapshot=False, override=5, sku_a="PAIR-NON-A", sku_b="PAIR-NON-B"),
+        plan_no="PLAN-PAIR-NON",
+    )
+    await session.flush()
+
+    errors = await validate_plan_position(session, position)
+    assert "hanger_calc_zero" not in errors
+    assert "product_pair_not_found" not in errors

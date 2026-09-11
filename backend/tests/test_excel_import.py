@@ -343,10 +343,14 @@ async def test_preview_excel_resolves_paired_profile_when_pair_exists(
     paired_item = body["items"][0]
     assert paired_item["source_sku"] == "ЮП-2616+ЮП-2604"
     assert "paired_profile_product_unmapped" not in paired_item["warnings"]
-    snapshot = paired_item["after_data"]["source_payload"]["techcard_pair"]
+    snapshot = paired_item["after_data"]["source_payload"]["product_pair"]
     assert snapshot["resolved"] is True
     assert [entry["sku"] for entry in snapshot["inputs"]] == ["ЮП-2616", "ЮП-2604"]
-    assert snapshot["inputs"][0]["techcard_quantity"] == "8"
+    assert snapshot["inputs"][0]["quantity_per_hanger"] == "8"
+    assert snapshot["quantity_per_hanger"] == 8
+    assert snapshot["source"] == "manual"
+    assert paired_item["after_data"]["quantity_per_hanger"] == 8
+    assert paired_item["after_data"]["hanger_source"] == "manual"
 
 
 @pytest.mark.asyncio
@@ -1486,7 +1490,7 @@ async def test_import_paired_profile_without_pair_n_reports_hanger_calc_zero(
 
     # Пара резолвится, но N невозможна → блокирующая ошибка
     assert "hanger_calc_zero" in paired_item["errors"]
-    assert paired_item["after_data"]["source_payload"]["techcard_pair"]["resolved"] is True
+    assert paired_item["after_data"]["source_payload"]["product_pair"]["resolved"] is True
 
 
 @pytest.mark.asyncio
@@ -1525,9 +1529,9 @@ async def test_import_paired_profile_substitutes_raw_length_nearest_above(
     assert after_data["source_payload"]["input"]["inferred"] is False
 
     # N пары резолвится по сырьевой длине, количество позиции округляется до N
-    snapshot = after_data["source_payload"]["techcard_pair"]
+    snapshot = after_data["source_payload"]["product_pair"]
     assert snapshot["resolved"] is True
-    assert snapshot["inputs"][0]["techcard_quantity"] == "8"
+    assert snapshot["inputs"][0]["quantity_per_hanger"] == "8"
     # 10 → 16 (кратно N=8), как у одиночных; округление молчаливое
     assert after_data["quantity"] == "16"
     assert after_data["hanger_count"] == 2
@@ -1570,8 +1574,8 @@ async def test_import_paired_profile_300mm_length_resolves_with_raw_substitution
     # Подстановка 2450 мм — далеко за допуском, оператор обязан её увидеть
     assert any(w.startswith("raw_length_substituted:") for w in paired_item["warnings"])
 
-    snapshot = after_data["source_payload"]["techcard_pair"]
-    assert snapshot["inputs"][0]["techcard_quantity"] == "8"
+    snapshot = after_data["source_payload"]["product_pair"]
+    assert snapshot["inputs"][0]["quantity_per_hanger"] == "8"
     # 10 → 16 (кратно N=8), как у одиночных; округление молчаливое
     assert after_data["quantity"] == "16"
     assert after_data["hanger_count"] == 2
@@ -1613,9 +1617,9 @@ async def test_import_paired_profile_with_cut_materializes_raw_length_for_n(
     assert after_data["input_dimensions"] == {"length_mm": 2750}
     assert after_data["outputs"][0]["dimensions"] == {"length_mm": 900}
 
-    snapshot = after_data["source_payload"]["techcard_pair"]
+    snapshot = after_data["source_payload"]["product_pair"]
     assert snapshot["resolved"] is True
-    assert snapshot["inputs"][0]["techcard_quantity"] == "8"
+    assert snapshot["inputs"][0]["quantity_per_hanger"] == "8"
     # 10 → 16 (кратно N=8), как у одиночных; округление молчаливое
     assert after_data["quantity"] == "16"
     assert after_data["hanger_count"] == 2
@@ -1650,7 +1654,7 @@ async def test_import_paired_profile_without_raw_length_reports_raw_length_not_f
     assert "raw_length_not_found" in paired_item["errors"]
     assert "hanger_calc_zero" not in paired_item["errors"]
     assert paired_item["after_data"]["input_dimensions"] == {"length_mm": 3000}
-    assert paired_item["after_data"]["source_payload"]["techcard_pair"]["resolved"] is True
+    assert paired_item["after_data"]["source_payload"]["product_pair"]["resolved"] is True
 
 
 @pytest.mark.asyncio

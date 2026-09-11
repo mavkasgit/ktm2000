@@ -27,6 +27,8 @@ export type RowDetailsData = {
   currentStageOperation?: string | null
   currentStageTaskStatus?: string | null
   quantityPerHanger?: number | null
+  quantityPerHangerSource?: "auto" | "manual" | null
+  quantityPerHangerOverridden?: boolean
   productId?: number | null
   originalQuantity?: string | number | null
 }

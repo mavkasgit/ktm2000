@@ -65,6 +65,8 @@ export function RowDetailsContent({
       if (!Number.isNaN(newQty)) {
         setCurrentQuantity(newQty)
       }
+      const newPerHanger = updatedPosition.quantity_per_hanger
+      setEditQuantityPerHanger(newPerHanger != null ? String(newPerHanger) : "")
       void queryClient.invalidateQueries({ queryKey: queryKeys.plan.allPositions() })
       void queryClient.invalidateQueries({ queryKey: queryKeys.plan.positionDetail(Number(data.id)) })
       void queryClient.invalidateQueries({ queryKey: queryKeys.sections.all() })
@@ -91,6 +93,12 @@ export function RowDetailsContent({
     }
     return null
   }, [editQuantity, editQuantityPerHanger])
+
+  const hangerSourceHint = data.quantityPerHangerOverridden
+    ? "переопределено для позиции"
+    : data.quantityPerHanger != null
+      ? `из справочника: ${data.quantityPerHanger}`
+      : null
 
   const handleSave = () => {
     const qty = Number(editQuantity)
@@ -210,7 +218,7 @@ export function RowDetailsContent({
               </div>
               <div>
                 <label className="text-xs text-muted-foreground">
-                  Кол-во на подвес{data.quantityPerHanger ? ` (из справочника: ${data.quantityPerHanger})` : ""}
+                  Кол-во на подвес{hangerSourceHint ? ` (${hangerSourceHint})` : ""}
                 </label>
                 <Input
                   type="number"

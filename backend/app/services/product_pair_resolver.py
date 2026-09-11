@@ -2,8 +2,7 @@
 
 Единственный владелец поиска пары для плана: импорт, валидация, генерация
 и planning rows не читают ``product_pairs`` напрямую — дубликаты поиска
-(«парная техкарта» в plan_validation / plan_import_service) упразднены
-вместе с техкартным gate.
+(парная ветка в plan_validation / plan_import_service) упразднены.
 
 Поиск — точное неупорядоченное совпадение двух SKU-компонентов:
 уникальность неупорядоченной пары (#141) даёт однозначный ответ даже при
@@ -21,7 +20,7 @@ N пары — единая механика с одиночными норма�
 не даёт.
 
 Снапшот-принцип (#142): позиция с записанным снапшотом
-(``source_payload["techcard_pair"]`` с ``resolved=True``) — норматив
+(``source_payload["product_pair"]`` с ``resolved=True``) — норматив
 позиции; пару и нормы она не ревалидирует.
 """
 
@@ -79,8 +78,8 @@ def paired_component_skus(position) -> list[str]:
 
 
 def has_pair_snapshot(position) -> bool:
-    """Непустой снапшот пары в payload (``techcard_pair.resolved=True``)."""
-    snapshot = (position.source_payload or {}).get("techcard_pair")
+    """Непустой снапшот пары в payload (``product_pair.resolved=True``)."""
+    snapshot = (position.source_payload or {}).get("product_pair")
     return isinstance(snapshot, dict) and snapshot.get("resolved") is True
 
 
@@ -132,7 +131,7 @@ async def resolve_effective_product_id(
         return position.product_id
 
     if has_pair_snapshot(position):
-        inputs = (position.source_payload or {}).get("techcard_pair", {}).get("inputs") or []
+        inputs = (position.source_payload or {}).get("product_pair", {}).get("inputs") or []
         first = inputs[0] if inputs else None
         product_id = first.get("product_id") if isinstance(first, dict) else None
         return int(product_id) if product_id else None
@@ -173,18 +172,25 @@ async def _pair_length_keys(db: AsyncSession, resolved: ResolvedPair) -> set[str
 async def resolve_pair_n(
     db: AsyncSession, resolved: ResolvedPair, *, length_mm: float | None,
     length_candidates_mm: list[float] | None = None,
+    manual_override: int | None = None,
 ) -> PairHangerValue:
     """Разрешить N пары для длины позиции.
 
-    Приоритет: ручное значение из словаря пары для этой длины → совместный
-    авто-расчёт (оба артикула в режиме auto) → иначе расчёт невозможен
-    (``calc_error=True``). Длина позиции вне пересечения длин A и B (в том
-    числе пустое пересечение, #146) — пара для этой длины не существует.
+    Приоритет: ручной override из payload позиции (``manual_override``) →
+    ручное значение из словаря пары для этой длины → совместный авто-расчёт
+    (оба артикула в режиме auto) → иначе расчёт невозможен
+    (``calc_error=True``). Оверрайд побеждает всегда — до проверки длины
+    (как payload-override у одиночных позиций, #127). Длина позиции вне
+    пересечения длин A и B (в том числе пустое пересечение, #146) — пара для
+    этой длины не существует.
 
     ``length_candidates_mm`` — предзагруженное пересечение длин A∩B
     (межстрочный кэш батча, #163): избавляет от перезапроса мимо
     внешнего ``pair_n_cache``. Без него поведение прежнее (запрос в БД).
     """
+    if manual_override is not None and int(manual_override) > 0:
+        return PairHangerValue(int(manual_override), "manual")
+
     if length_candidates_mm is None:
         length_keys = await _pair_length_keys(db, resolved)
     else:

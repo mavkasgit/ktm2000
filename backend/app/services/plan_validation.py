@@ -75,7 +75,7 @@ async def validate_plan_position(
             errors.append("product_inactive")
 
     # Парная позиция резолвится из product_pairs (#148). Позиция с непустым
-    # снапшотом (techcard_pair.resolved) — норматив позиции: пара и нормы
+    # снапшотом (product_pair.resolved) — норматив позиции: пара и нормы
     # не ревалидируются (#142).
     from app.services.plan_position_hanger import (
         payload_quantity_per_hanger,
@@ -92,7 +92,8 @@ async def validate_plan_position(
                 errors.append("product_pair_not_found")
             else:
                 n_value = await product_pair_resolver.resolve_pair_n(
-                    db, resolved_pair, length_mm=position_length_mm(position)
+                    db, resolved_pair, length_mm=position_length_mm(position),
+                    manual_override=payload_quantity_per_hanger(position),
                 )
                 if n_value.calc_error:
                     errors.append("hanger_calc_zero")

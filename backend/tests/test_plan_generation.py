@@ -533,12 +533,12 @@ async def test_release_uses_pair_snapshot_without_revalidating_pair(client, sess
         source_payload={
             "paired_profile": True,
             "components": [{"sku": "PAIR-SNAP-A"}, {"sku": "PAIR-SNAP-B"}],
-            "techcard_pair": {
+            "product_pair": {
                 "resolved": True,
                 "reason": None,
                 "inputs": [
-                    {"product_id": None, "sku": "PAIR-SNAP-A", "techcard_quantity": "8", "available_quantity": "100", "unit": "pcs"},
-                    {"product_id": None, "sku": "PAIR-SNAP-B", "techcard_quantity": "8", "available_quantity": "100", "unit": "pcs"},
+                    {"product_id": None, "sku": "PAIR-SNAP-A", "quantity_per_hanger": "8", "available_quantity": "100", "unit": "pcs"},
+                    {"product_id": None, "sku": "PAIR-SNAP-B", "quantity_per_hanger": "8", "available_quantity": "100", "unit": "pcs"},
                 ],
             },
         },
@@ -554,7 +554,7 @@ async def test_release_uses_pair_snapshot_without_revalidating_pair(client, sess
     await session.commit()
     # Продукты в снапшоте «пустые» (чистый лист — снапшот без id): записываем
     # реальные id после flush, как это делает импорт.
-    snapshot = position.source_payload["techcard_pair"]
+    snapshot = position.source_payload["product_pair"]
     snapshot["inputs"][0]["product_id"] = min(raw_a.id, raw_b.id)
     snapshot["inputs"][1]["product_id"] = max(raw_a.id, raw_b.id)
     from sqlalchemy.orm.attributes import flag_modified

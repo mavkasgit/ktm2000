@@ -348,3 +348,48 @@ async def test_foreign_profile_batch_cache_ignored_163(session) -> None:
         session, dict(payload), product=seed.product,
         profile_id=seed.profile.id, batch_cache=foreign_batch)
     assert _sel_key(with_foreign) == _sel_key(plain)
+
+
+# ─── g. pair_n: ручной override позиции побеждает словарь и длину ─────────────
+
+
+@pytest.mark.asyncio
+async def test_pair_n_manual_override_wins_163(session) -> None:
+    """Ручной override позиции побеждает и словарь пары, и проверку длины.
+
+    Override применяется до проверки пересечения длин A∩B (manual_override
+    побеждает всегда, как payload-override одиночных позиций #127): для 2800
+    (есть только у A) без override был бы calc_error, с override — валидное
+    manual-значение.
+    """
+    prod_a = Product(sku="B163-OVR-A", name="A override 163", type=ProductType.component, unit="шт")
+    prod_b = Product(sku="B163-OVR-B", name="B override 163", type=ProductType.component, unit="шт")
+    session.add_all([prod_a, prod_b])
+    await session.flush()
+    session.add_all([
+        ProductLength(product_id=prod_a.id, length_mm=2700),
+        ProductLength(product_id=prod_a.id, length_mm=2800),
+        ProductLength(product_id=prod_b.id, length_mm=2700),
+    ])
+    pair = ProductPair(
+        product_a_id=min(prod_a.id, prod_b.id), product_b_id=max(prod_a.id, prod_b.id),
+        quantity_per_hanger={"2700": {"auto": None, "manual": 8}},
+    )
+    session.add(pair)
+    await session.flush()
+    resolved = ResolvedPair(pair=pair, product_a=prod_a, product_b=prod_b)
+
+    def _key(value) -> tuple:
+        return (value.quantity_per_hanger, value.source, value.calc_error)
+
+    # Override побеждает словарное 8 для той же длины.
+    overridden = await resolve_pair_n(session, resolved, length_mm=2700.0, manual_override=5)
+    assert _key(overridden) == (5, "manual", False)
+
+    # Override побеждает и вне пересечения A∩B, где словарь/авто недоступны.
+    outside = await resolve_pair_n(session, resolved, length_mm=2800.0, manual_override=5)
+    assert _key(outside) == (5, "manual", False)
+
+    # Без override словарь пары даёт своё значение.
+    plain = await resolve_pair_n(session, resolved, length_mm=2700.0)
+    assert _key(plain) == (8, "manual", False)

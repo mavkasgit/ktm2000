@@ -1810,14 +1810,20 @@ async def update_position_quantity(
     old_qty = position.quantity
     position.quantity = payload.quantity
 
-    source_payload = position.source_payload or {}
+    # Копия: JSONB не отслеживает in-place мутации, а переприсваивание того же
+    # объекта SQLAlchemy считает отсутствием изменения — override не сохранился бы.
+    source_payload = dict(position.source_payload or {})
 
     # Store original_quantity on first edit
     if "original_quantity" not in source_payload:
         source_payload["original_quantity"] = str(old_qty)
 
-    if payload.quantity_per_hanger is not None:
-        source_payload["quantity_per_hanger"] = payload.quantity_per_hanger
+    if "quantity_per_hanger" in payload.model_fields_set:
+        if payload.quantity_per_hanger is None:
+            # Явный null — снятие ручного override позиции.
+            source_payload.pop("quantity_per_hanger", None)
+        else:
+            source_payload["quantity_per_hanger"] = payload.quantity_per_hanger
     position.source_payload = source_payload
 
     position.validation_errors = await validate_plan_position(db, position)

@@ -92,13 +92,6 @@ const product = products.find((p) => p.sku === sku);  // TypeError
 - `frontend/e2e/total-workflow.spec.ts` — строки ~22–33
 - `frontend/e2e/transfers-auto-accept.spec.ts` — строки ~41–52
 
-**Уже правильный паттерн** в том же `bulk-workflow.spec.ts` для techcards:
-
-```typescript
-const body = await res.json();
-const techcards = Array.isArray(body) ? body : body.items ?? [];
-```
-
 ### Рекомендуемый фикс
 
 1. Вынести общие API-хелперы в `frontend/e2e/api-helpers.ts`.
@@ -206,6 +199,5 @@ cd frontend && npx playwright test
 
 ## Заметил, не тронул
 
-- `apiGetOrCreateTechcard` в `transfers-auto-accept.spec.ts` уже обрабатывает `body.items` — образец для products.
 - `route-workflow.spec.ts` использует `apiGetPlans` / `apiGetPositions` — проверить, не paginated ли они тоже.
 - Root `package.json` имеет `@playwright/test`; зависимости фронта — в `frontend/package.json` (playwright как devDep там тоже может быть).

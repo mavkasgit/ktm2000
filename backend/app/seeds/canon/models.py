@@ -137,7 +137,7 @@ class HangerRoundingRule(BaseModel):
 
 
 class ProcessingFlags(BaseModel):
-    """Значения признаков обработки техкарт."""
+    """Значения признаков обработки."""
 
     paired: str = Field(min_length=1)
     standart: str = Field(min_length=1)

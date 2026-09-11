@@ -273,12 +273,12 @@ def _paired_payload(*, with_snapshot: bool = False) -> dict:
         "components": [{"sku": "ЮП-2616"}, {"sku": "ЮП-2604"}],
     }
     if with_snapshot:
-        payload["techcard_pair"] = {
+        payload["product_pair"] = {
             "resolved": True,
             "reason": None,
             "inputs": [
-                {"product_id": 1, "sku": "ЮП-2616", "techcard_quantity": "8", "available_quantity": "100", "unit": "pcs"},
-                {"product_id": 2, "sku": "ЮП-2604", "techcard_quantity": "8", "available_quantity": "100", "unit": "pcs"},
+                {"product_id": 1, "sku": "ЮП-2616", "quantity_per_hanger": "8", "available_quantity": "100", "unit": "pcs"},
+                {"product_id": 2, "sku": "ЮП-2604", "quantity_per_hanger": "8", "available_quantity": "100", "unit": "pcs"},
             ],
         }
     return payload
@@ -342,7 +342,7 @@ async def test_validate_paired_position_without_n_reports_hanger_calc_zero(sessi
 
 @pytest.mark.asyncio
 async def test_validate_paired_position_with_snapshot_skips_revalidation(session) -> None:
-    """Позиция с непустым снапшотом (techcard_pair.resolved) не ревалидирует пару и нормы (#142)."""
+    """Позиция с непустым снапшотом (product_pair.resolved) не ревалидирует пару и нормы (#142)."""
     plan, position = await _make_paired_position(session, "ЮП-2616+ЮП-2604", _paired_payload(with_snapshot=True))
     await session.flush()
 

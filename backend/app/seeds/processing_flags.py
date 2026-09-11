@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-# Справочник флагов обработки техкарт (данные, а не код — ADR-0010).
+# Справочник флагов обработки (данные, а не код — ADR-0010).
 
 # code, name, section_scope
 PROCESSING_FLAGS_DATA: list[dict[str, str | None]] = [
