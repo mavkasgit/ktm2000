@@ -11,11 +11,9 @@ os.environ.setdefault("DEV_BYPASS_AUTH", "true")
 # Тесты пишут только во временный каталог: не зависеть от env-переменных
 # окружения (в т.ч. линуксовых /app/* путей) и дефолтов конфига.
 # Должно быть ДО импорта app.main / app.core.config — иначе import-time
-# mkdir(settings.PRODUCT_PHOTO_DIR.parent) на runner-е упрётся в /app.
+# mkdir на runner-е упрётся в контейнерный /app (ADR-0026).
 _TEST_STORAGE_ROOT = os.path.join(tempfile.gettempdir(), "ktm2000_pytest_storage")
-os.environ["IMPORT_STORAGE_DIR"] = os.path.join(_TEST_STORAGE_ROOT, "imports")
-os.environ["PRODUCT_PHOTO_DIR"] = os.path.join(_TEST_STORAGE_ROOT, "products")
-os.environ["BACKUPS_PATH"] = os.path.join(_TEST_STORAGE_ROOT, "backups")
+os.environ["STORAGE_ROOT"] = _TEST_STORAGE_ROOT
 
 import pytest
 import pytest_asyncio

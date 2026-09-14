@@ -39,10 +39,10 @@
     "test:e2e:ui": "npm --prefix frontend run test:e2e:ui",
     "test:e2e:smoke": "npm --prefix frontend run test:e2e:smoke",
     "test:tunnel:up": "docker compose --env-file .env.test -f infra/compose/docker-compose.test.yml --profile tunnel up -d --build",
-    "prod:up": "docker compose -f infra/compose/docker-compose.prod.yml up -d --build",
-    "prod:down": "docker compose -f infra/compose/docker-compose.prod.yml down",
-    "prod:logs": "docker compose -f infra/compose/docker-compose.prod.yml logs -f",
-    "prod:tunnel:up": "docker compose -f infra/compose/docker-compose.prod.yml --profile tunnel up -d --build"
+    "prod:up": "docker compose --env-file .env.prod -f infra/compose/docker-compose.prod.yml up -d --build",
+    "prod:down": "docker compose --env-file .env.prod -f infra/compose/docker-compose.prod.yml down",
+    "prod:logs": "docker compose --env-file .env.prod -f infra/compose/docker-compose.prod.yml logs -f",
+    "prod:tunnel:up": "docker compose --env-file .env.prod -f infra/compose/docker-compose.prod.yml --profile tunnel up -d --build"
   },
   "devDependencies": {
     "concurrently": "^9.1.2",

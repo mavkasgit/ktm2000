@@ -11,7 +11,9 @@ services:
     ports:
       - "127.0.0.1:${DEV_POSTGRES_PORT:-5440}:5432"
     volumes:
-      - ${POSTGRES_DATA_PATH:-../../data/postgres-dev}:/var/lib/postgresql/data
+      # Путь задан здесь, а не в .env (ADR-0026): он резолвится от каталога
+      # compose-файла, и переменная из .env.dev давала другую базу отсчёта.
+      - ../../data/postgres-dev:/var/lib/postgresql/data
     healthcheck:
       test: ["CMD-SHELL", "pg_isready -U $${POSTGRES_USER} -d $${POSTGRES_DB}"]
       interval: 10s

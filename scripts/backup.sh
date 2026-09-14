@@ -24,7 +24,8 @@ DB_USER=${POSTGRES_USER:-ktm2000_user}
 DB_NAME=${POSTGRES_DB:-ktm2000_prod}
 DB_PASS=${POSTGRES_PASSWORD:-ktm2000_prod_pass}
 CONTAINER_NAME=${POSTGRES_CONTAINER_NAME:-ktm2000-postgres-prod}
-STORAGE_DIR="$PROJECT_ROOT/storage"
+# Корень файлов prod-стенда (ADR-0026): совпадает с bind в docker-compose.prod.yml.
+STORAGE_DIR="$PROJECT_ROOT/data/storage-prod"
 
 echo "Резервное копирование базы данных из контейнера $CONTAINER_NAME..."
 docker exec -e PGPASSWORD="$DB_PASS" "$CONTAINER_NAME" pg_dump -U "$DB_USER" "$DB_NAME" > "$TEMP_DIR/ktm2000_db.sql"

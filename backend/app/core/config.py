@@ -10,6 +10,11 @@ BASE_DIR = Path(__file__).resolve().parent.parent.parent
 _env_file = os.getenv("ENV_FILE") or str(BASE_DIR.parent / ".env.dev")
 
 
+def _running_in_container() -> bool:
+    """Docker/OCI-маркер: ``/.dockerenv`` (на Windows-хосте такого файла нет)."""
+    return os.path.exists("/.dockerenv")
+
+
 class Settings(BaseSettings):
     DATABASE_URL: str = "postgresql+asyncpg://ktm2000_user:ktm2000_pass@localhost:5432/ktm2000_dev"
     ENV: str = "dev"
@@ -25,9 +30,18 @@ class Settings(BaseSettings):
     SQL_ECHO: bool = False
 
     CORS_ORIGINS: str = "*"
-    IMPORT_STORAGE_DIR: str = "/app/storage/imports"
-    PRODUCT_PHOTO_DIR: str = "/app/storage/products"
-    BACKUPS_PATH: str = "/app/storage/backups"
+
+    # Корень хранения файлов (ADR-0026): корень один, подкаталоги производные.
+    # В образе — /app/storage; при запуске на хосте — путь от каталога backend
+    # (CWD), например ../data/storage-dev для dev.
+    STORAGE_ROOT: str = "/app/storage"
+    # Производные значения (products/ | imports/ | backups/), заполняются
+    # _derive_storage_paths. Остаются полями, а не свойствами, чтобы тесты могли
+    # точечно подменять каталог (conftest, monkeypatch).
+    PRODUCT_PHOTO_DIR: str = ""
+    IMPORT_STORAGE_DIR: str = ""
+    BACKUPS_PATH: str = ""
+
     POSTGRES_CONTAINER_NAME: str = "ktm2000-postgres"
 
     # HRMS integration — employee sync
@@ -108,6 +122,32 @@ class Settings(BaseSettings):
             if new_val != raw:
                 setattr(self, name, new_val)
                 resolved[name] = new_val
+        return self
+
+    @model_validator(mode="after")
+    def _derive_storage_paths(self) -> "Settings":
+        """Пути хранения выводятся из единственного корня (ADR-0026).
+
+        Отдельных настроек ``PRODUCT_PHOTO_DIR`` / ``IMPORT_STORAGE_DIR`` /
+        ``BACKUPS_PATH`` нет: их значения считаются из ``STORAGE_ROOT``, чтобы
+        корень и подкаталог нельзя было рассогласовать. Контейнерный путь
+        ``/app/...`` вне контейнера — ошибка старта: на хосте он резолвится в
+        каталог диска (``C:\\app\\...``) и файлы уходят мимо репозитория.
+        """
+        root = self.STORAGE_ROOT
+        if not _running_in_container() and root.replace("\\", "/").startswith("/app/"):
+            raise ValueError(
+                f"STORAGE_ROOT={root!r} — путь внутри контейнера, но процесс запущен "
+                "вне его: на хосте он превращается в каталог диска (C:\\app\\...), и "
+                "файлы уходят мимо репозитория (ADR-0026). Для запуска на хосте задай "
+                "путь от каталога backend, например STORAGE_ROOT=../data/storage-dev."
+            )
+        for field, subdir in (
+            ("PRODUCT_PHOTO_DIR", "products"),
+            ("IMPORT_STORAGE_DIR", "imports"),
+            ("BACKUPS_PATH", "backups"),
+        ):
+            setattr(self, field, str(Path(root) / subdir))
         return self
 
     model_config = {"env_file": _env_file, "env_file_encoding": "utf-8", "extra": "ignore"}

@@ -1,4 +1,5 @@
 from pathlib import Path
+import logging
 
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
@@ -45,6 +46,11 @@ from app.core.exceptions import KTMException
 from app.api.exception_handlers import ktm_exception_handler
 
 backup_scheduler_task = None
+# Под uvicorn root-логгер не настроен, и INFO от app-логгеров (в т.ч. строка про
+# корень хранилища, ADR-0026) молча терялся. basicConfig — no-op, если root уже
+# с handlers, и не трогает логгеры uvicorn.
+logging.basicConfig(level=logging.INFO)
+logger = logging.getLogger(__name__)
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
@@ -54,6 +60,9 @@ async def lifespan(app: FastAPI):
 
     # Fail-fast: приложение не стартует с битыми seed-данными (ADR-0004)
     app.state.plant_config = build_plant_config()
+
+    # Одна строка диагностики: где реально лежит хранилище (ADR-0026)
+    logger.info("storage root: %s", settings.STORAGE_ROOT)
 
     backup_scheduler_task = asyncio.create_task(start_backup_scheduler())
     yield
@@ -84,7 +93,7 @@ app.add_middleware(
 app.add_exception_handler(KTMException, cast(Any, ktm_exception_handler))
 
 # Serve static files (product photos, imports)
-storage_dir = Path(settings.PRODUCT_PHOTO_DIR).parent
+storage_dir = Path(settings.STORAGE_ROOT)
 storage_dir.mkdir(parents=True, exist_ok=True)
 app.mount("/static", StaticFiles(directory=str(storage_dir)), name="static")
 

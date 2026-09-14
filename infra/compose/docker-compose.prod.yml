@@ -37,8 +37,8 @@ services:
       ENV: prod
       SECRET_KEY: ${SECRET_KEY:-ktm2000-prod-secret-key-change-in-production}
       CORS_ORIGINS: ${CORS_ORIGINS:-http://localhost:8082}
-      PRODUCT_PHOTO_DIR: /app/storage/products
-      IMPORT_STORAGE_DIR: /app/storage/imports
+      # Корень хранения файлов (ADR-0026); products/imports/backups — производные.
+      STORAGE_ROOT: /app/storage
       # OIDC / Authentik SSO — vars with ${OPS_PUBLIC_IP} ARE resolved here
       AUTH_OIDC_ENABLED: 'true'
       AUTH_OIDC_CLIENT_ID: ktm2000
@@ -55,7 +55,7 @@ services:
     expose:
       - "8000"
     volumes:
-      - ${STORAGE_PATH:-../../storage}:/app/storage
+      - ../../data/storage-prod:/app/storage
     depends_on:
       postgres:
         condition: service_healthy
