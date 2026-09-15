@@ -88,6 +88,9 @@ htmlcov/
 *.xlsb
 *.ods
 
+# Local Excel working area (sources, builds, archive) — not part of repo
+/excel/
+
 # AI tools
 .qwen/
 .qoder/
