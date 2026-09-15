@@ -23,6 +23,7 @@ from app.services.route_storage_classifier import (
     SECTION_TYPE_FINISHED_STOCK,
     STAGE_KIND_TRANSIT,
     is_storage_section,
+    is_terminal_section,
 )
 from app.stock import QualityState, Reason, StockCommand, StockCommandService
 from app.stock.models import StockBalance, StockTransaction
@@ -843,6 +844,13 @@ async def final_release(
     stage = await _get_route_stage(db, task.route_stage_id)
     if not stage.is_final:
         raise ValueError("Final release allowed only for final route stage")
+
+    # Терминальная секция (#136) — конец движения материала: за «Отправлено»
+    # нет участка-адресата, поэтому каскад #137 ушёл бы в фолбэк «склад
+    # выпуска» и вернул продукцию на склад ГП. Материал доезжает до терминала
+    # обычной передачей (#176) — отказ по секции, до стражей количества.
+    if is_terminal_section(await db.get(Section, task.section_id)):
+        raise ValueError("Final release is not allowed from a terminal section")
 
     quantity = _to_decimal(quantity)
     _ensure_positive(quantity, "quantity")

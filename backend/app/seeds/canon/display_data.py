@@ -262,6 +262,8 @@ ERROR_PHRASE_TRANSLATIONS = {
         "Финальный выпуск разрешён только на финальном этапе маршрута",
     "Final release exceeds releasable quantity":
         "Финальный выпуск превышает доступный к выпуску объём",
+    "Final release is not allowed from a terminal section":
+        "С терминальной секции отправка невозможна: за «Отправлено» нет участка-адресата",
     "Plan position not found": "Позиция плана не найдена",
     "Plan position must be released": "Позиция плана должна быть выпущена",
     "No route step found for this section in the plan position":

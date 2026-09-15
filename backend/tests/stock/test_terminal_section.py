@@ -13,16 +13,18 @@ Customer-локацией Odoo (виртуальная, вне оценки) и 
 - Сиды: SHIPPED имеет тип ``terminal``.
 - DB-триггер: transport-операция на терминале допустима.
 - Импорт остатков: терминал отклоняется как целевая секция.
+- Финальный выпуск с терминала (#176): отказ, следов в ledger/журнале нет.
 """
 from __future__ import annotations
 
 from decimal import Decimal
 
 import pytest
-from sqlalchemy import select
+from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.models import Product, ProductType, Section, User, UserRole
+from app.models.action_journal import Action
 from app.models.route import SectionOperation
 from app.seeds.sections import SECTIONS_DATA
 from app.services.route_storage_classifier import (
@@ -45,6 +47,7 @@ from app.stock import (
     StockTransaction,
 )
 from app.stock.import_service import resolve_target_section
+from tests.stock.test_shopfloor_stage3 import _setup_minimal_route
 from tests.test_integrity_invariants import assert_no_invariants_violations
 
 
@@ -270,3 +273,137 @@ async def test_remainder_import_rejects_terminal(session: AsyncSession) -> None:
     assert section_id is None
     assert section_name is None
     assert errors and "terminal" in errors[0]
+
+
+# ─── финальный выпуск (#176) ────────────────────────────────────────────────
+
+
+async def _terminal_task_with_shipped_material(
+    session: AsyncSession, *, sku: str,
+) -> tuple[dict, Section]:
+    """Задание финального этапа, материал которого передан на «Отправлено».
+
+    #176: терминал — конец движения, задание доезжает туда передачей, а сам
+    этап остаётся ``is_final=True``. 8 шт. произведено на участке и передано
+    на терминал, поэтому бюджет выпуска положителен, а адресат #137
+    (глобальный «склад выпуска» с ``is_output_default``) доступен.
+    """
+    fx = await _setup_minimal_route(session, sku=sku)
+    task = fx["task"]
+    shipped = await _make_location(
+        session, code=f"{sku}-SHIPPED", name="Отправлено", loc_type="terminal",
+    )
+
+    svc = StockCommandService()
+    await svc.record(session, StockCommand(
+        product_id=fx["product"].id,
+        from_location_id=None,
+        to_location_id=fx["prod"].id,
+        quantity=Decimal("8"),
+        reason=Reason.COMPLETE,
+        task_id=task.id,
+        created_by=fx["user"].id,
+    ))
+    await svc.record(session, StockCommand(
+        product_id=fx["product"].id,
+        from_location_id=fx["prod"].id,
+        to_location_id=shipped.id,
+        quantity=Decimal("8"),
+        reason=Reason.TRANSFER_SEND,
+        task_id=task.id,
+        created_by=fx["user"].id,
+    ))
+    task.section_id = shipped.id
+    await session.commit()
+    return fx, shipped
+
+
+@pytest.mark.asyncio
+async def test_final_release_from_terminal_section_rejected(
+    session: AsyncSession,
+) -> None:
+    """Отказ по секции, а не «нехватка остатка»: задание не выпускается.
+
+    Материал уже на «Отправлено», и выпуск ушёл бы в фолбэк #137 — на склад
+    ГП; отказ обязан случиться раньше стражей количества и проводок, иначе
+    оператор увидит неправду про остаток («Insufficient stock»), а в журнале
+    действий останется сирота ``final_release``.
+    """
+    fx, shipped = await _terminal_task_with_shipped_material(session, sku="TSG1")
+    task = fx["task"]
+
+    from app.services.shopfloor.operations_tasks import final_release
+    with pytest.raises(ValueError, match="terminal section"):
+        await final_release(
+            session,
+            task_id=task.id,
+            quantity=Decimal("8"),
+            actor_id=fx["user"].id,
+        )
+
+    # В ledger только состоявшиеся производство и отправка — ни одной строки
+    # от отказавшего выпуска.
+    assert (await session.execute(
+        select(StockTransaction.reason)
+        .where(StockTransaction.task_id == task.id)
+        .order_by(StockTransaction.id)
+    )).scalars().all() == [Reason.COMPLETE, Reason.TRANSFER_SEND]
+
+    # ...и ни сироты в журнале действий.
+    action_count = await session.scalar(
+        select(func.count(Action.id)).where(
+            Action.action_type == "final_release",
+            Action.ref_id == task.id,
+        )
+    )
+    assert action_count == 0, "Action final_release не должен оставаться в журнале"
+
+    # Терминал вне балансов: строки остатка у него нет, склад ГП пуст.
+    assert (await session.execute(
+        select(StockBalance).where(StockBalance.location_id == shipped.id)
+    )).scalar_one_or_none() is None
+    assert (await _balance(session, fx["product"].id, fx["fg"].id)) == Decimal("0")
+
+    await assert_no_invariants_violations(session, context="terminal-final-release")
+
+
+@pytest.mark.asyncio
+async def test_final_release_from_terminal_with_legacy_balance_rejected(
+    session: AsyncSession,
+) -> None:
+    """Даже с материализованным остатком терминала выпуск не проходит.
+
+    Строка баланса терминала — форс-мажор: её выметает
+    ``rebuild_all_balances``, но до пересчёта именно в этом состоянии
+    проводка выпуска состоялась бы и вернула продукцию на склад ГП.
+    """
+    fx, shipped = await _terminal_task_with_shipped_material(session, sku="TSG2")
+    task = fx["task"]
+    session.add(StockBalance(
+        product_id=fx["product"].id,
+        location_id=shipped.id,
+        quality_state=QualityState.GOOD,
+        balance_qty=Decimal("8"),
+    ))
+    await session.commit()
+
+    from app.services.shopfloor.operations_tasks import final_release
+    with pytest.raises(ValueError, match="terminal section"):
+        await final_release(
+            session,
+            task_id=task.id,
+            quantity=Decimal("8"),
+            actor_id=fx["user"].id,
+        )
+
+    # Материал остался на терминале и НЕ всплыл на складе ГП.
+    assert (await _balance(session, fx["product"].id, shipped.id)) == Decimal("8")
+    assert (await _balance(session, fx["product"].id, fx["fg"].id)) == Decimal("0")
+    assert (await session.execute(
+        select(func.count(StockTransaction.id)).where(
+            StockTransaction.task_id == task.id,
+            StockTransaction.reason == Reason.FINAL_RELEASE,
+        )
+    )).scalar_one() == 0
+
+    await assert_no_invariants_violations(session, context="terminal-final-release-legacy")
