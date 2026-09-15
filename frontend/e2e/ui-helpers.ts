@@ -116,13 +116,13 @@ export async function importCatalogViaUI(page: Page, filePath = E2E_CATALOG_XLS_
     timeout: 10_000,
   });
 
-  const importBtn = page.getByRole("button", { name: "Импорт", exact: true });
-  await expect(importBtn).toBeVisible({ timeout: 10_000 });
-  await importBtn.click();
+  // Тулбар справочника (#177): единая точка входа — меню «Операции»
+  // (импорт справочника Excel, импорт фото ZIP, выгрузка справочника Excel).
+  const operationsBtn = page.getByRole("button", { name: "Операции", exact: true });
+  await expect(operationsBtn).toBeVisible({ timeout: 10_000 });
+  await operationsBtn.click();
 
-  // «Импорт» — выпадающее меню: Excel-справочник открывает визард,
-  // «Фотографии (ZIP)» — отдельный путь.
-  await page.getByRole("menuitem", { name: /Excel.*справочник/i }).click();
+  await page.getByRole("menuitem", { name: "Импорт: справочник сырья (Excel)" }).click();
 
   const wizard = page.getByRole("dialog");
   await expect(wizard).toBeVisible({ timeout: 10_000 });
@@ -333,7 +333,12 @@ async function clickFirstRowAndWaitGone(
   return true;
 }
 
-/** Отправить все готовые передачи для SKU на /transfers (каждый шаг маршрута). Возвращает кол-во отправленных. */
+/**
+ * Провести все готовые строки SKU на /transfers: обычные передачи («Передать»)
+ * на следующий участок и финальные выпуски («Отправить», #96) на финальной
+ * стадии. Возвращает суммарное количество проведённых строк (передачи +
+ * выпуски) — вызывающий читает `0` как «на маршруте больше нечего делать».
+ */
 export async function sendReadyTransfersViaUI(page: Page, sku: string): Promise<number> {
   await page.goto("/transfers");
   await expect(page.getByRole("heading", { name: "Передачи между ГХП" })).toBeVisible({
