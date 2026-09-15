@@ -21,12 +21,15 @@ interface ToastState {
 
 const toastTimeouts = new Map<string, ReturnType<typeof setTimeout>>();
 
+/** Держим тост в DOM на время exit-анимации (`data-[state=closed]:duration-200`), затем убираем из стека. */
+const TOAST_REMOVE_DELAY = 300;
+
 const addToRemoveQueue = (toastId: string) => {
   if (toastTimeouts.has(toastId)) return;
   const timeout = setTimeout(() => {
     toastTimeouts.delete(toastId);
-    dispatch({ type: "DISMISS_TOAST", toastId });
-  }, 2500);
+    dispatch({ type: "REMOVE_TOAST", toastId });
+  }, TOAST_REMOVE_DELAY);
   toastTimeouts.set(toastId, timeout);
 };
 

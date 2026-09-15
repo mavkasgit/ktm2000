@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState, useMemo } from "react"
-import { Download, RotateCcw, Eye, Database, Upload, AlertTriangle, Loader2, CheckCircle2, Trash2, X, ArrowLeft, Clock, Save } from "lucide-react"
+import { Download, RotateCcw, Eye, Database, Upload, AlertTriangle, Loader2, CheckCircle2, Trash2, ArrowLeft, Clock, Save } from "lucide-react"
 import { Button } from "@/shared/ui/button"
 import { Input } from "@/shared/ui/input"
 import { cn } from "@/shared/utils/cn"
@@ -301,8 +301,6 @@ export function BackupsPage() {
   const [olderThanDays, setOlderThanDays] = useState("")
   const [olderThanPreview, setOlderThanPreview] = useState<string[]>([])
 
-  const [createToast, setCreateToast] = useState<{ filename: string; size: number; created_at: string } | null>(null)
-
   const commentInputRef = useRef<HTMLInputElement>(null)
   const fileInputRef = useRef<HTMLInputElement>(null)
 
@@ -310,13 +308,12 @@ export function BackupsPage() {
     if (!activeBackupJob || activeBackupJob.job_id === handledBackupJobId) return
     if (activeBackupJob.status === "completed" && activeBackupJob.result) {
       setHandledBackupJobId(activeBackupJob.job_id)
-      setCreateToast({
-        filename: activeBackupJob.result.filename,
-        size: activeBackupJob.result.size,
-        created_at: activeBackupJob.result.created_at,
+      toast({
+        title: "Бэкап создан",
+        description: `${activeBackupJob.result.filename} · ${formatBytes(activeBackupJob.result.size)} · ${formatDate(activeBackupJob.result.created_at)}`,
+        variant: "success",
       })
       refetchBackups()
-      setTimeout(() => setCreateToast(null), 5000)
       setTimeout(() => setActiveBackupJobId(null), 1200)
     }
     if (activeBackupJob.status === "failed") {
@@ -1294,35 +1291,6 @@ export function BackupsPage() {
           </DialogFooter>
         </DialogContent>
       </Dialog>
-
-      {/* Create Backup Toast */}
-      <div
-        className={cn(
-          "fixed bottom-6 right-6 z-50 max-w-sm transition-all duration-300",
-          createToast ? "translate-y-0 opacity-100" : "translate-y-4 opacity-0 pointer-events-none"
-        )}
-      >
-        {createToast && (
-          <div className="rounded-lg border bg-white p-4 shadow-lg">
-            <div className="flex items-start gap-3">
-              <div className="rounded-full bg-green-100 p-2">
-                <CheckCircle2 className="h-5 w-5 text-green-600" />
-              </div>
-              <div className="flex-1 space-y-1">
-                <p className="text-sm font-medium">Бэкап создан</p>
-                <p className="text-xs text-muted-foreground break-all">{createToast.filename}</p>
-                <p className="text-xs text-muted-foreground">{formatBytes(createToast.size)} · {formatDate(createToast.created_at)}</p>
-              </div>
-              <button
-                onClick={() => setCreateToast(null)}
-                className="text-muted-foreground hover:text-foreground"
-              >
-                <X className="h-4 w-4" />
-              </button>
-            </div>
-          </div>
-        )}
-      </div>
 
       {/* Модальное окно настройки автоматического резервного копирования */}
       <Dialog open={configModalOpen} onOpenChange={setConfigModalOpen}>

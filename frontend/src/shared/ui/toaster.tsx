@@ -11,7 +11,7 @@ function ToastIcon({ variant }: { variant: ToastData["variant"] }) {
 
 function toastClasses(variant: ToastData["variant"]) {
   const base =
-    "group pointer-events-auto relative flex w-full items-center gap-3 overflow-hidden rounded-md border p-4 pr-8 shadow-sm transition-all data-[state=open]:animate-slide-in-from-right data-[state=closed]:animate-fade-out data-[swipe=cancel]:translate-x-0 data-[swipe=end]:translate-x-[var(--radix-toast-swipe-end-x)] data-[swipe=move]:translate-x-[var(--radix-toast-swipe-move-x)] data-[state=open]:duration-300 data-[state=closed]:duration-200 data-[state=open]:slide-in-from-right-full md:max-w-sm";
+    "group pointer-events-auto relative flex w-full items-center gap-3 overflow-hidden rounded-md border p-4 pr-8 shadow-sm transition-all data-[state=open]:animate-in data-[state=open]:slide-in-from-right-full data-[state=closed]:animate-out data-[state=closed]:fade-out data-[swipe=cancel]:translate-x-0 data-[swipe=end]:translate-x-[var(--radix-toast-swipe-end-x)] data-[swipe=move]:translate-x-[var(--radix-toast-swipe-move-x)] data-[state=open]:duration-300 data-[state=closed]:duration-200 md:max-w-sm";
   if (variant === "success") return `${base} border-green-200 bg-green-50 text-green-900`;
   if (variant === "destructive") return `${base} border-red-200 bg-red-50 text-red-900`;
   return `${base} border bg-background text-foreground`;
@@ -65,7 +65,7 @@ export function Toaster() {
 
   return (
     <ToastPrimitives.Provider>
-      <div className="fixed top-4 right-4 z-[9999] flex max-h-screen w-full flex-col gap-2 p-4 md:max-w-[420px] pointer-events-none">
+      <div className="fixed bottom-4 left-4 right-4 z-[9999] flex max-h-screen flex-col gap-2 p-4 pointer-events-none md:left-auto md:w-full md:max-w-[420px]">
         {activeToasts.length > 1 && (
           <button
             onClick={() => dismissToast()}
