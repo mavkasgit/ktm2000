@@ -1040,7 +1040,7 @@ async def generate_remainders_template_for_location(
 
     ws.append(["Артикул", "Кол-во", "Статус качества", "Операции", "Участок", "Коммент.", "Длина"])
     ws.append(["361", 200, "Годный", "", raw_name, "", ""])
-    ws.append(["ALS-1289", 150, "Годный", "Дробеструй", prep_name, "Партия A", "2,7"])
+    ws.append(["ALS1289", 150, "Годный", "Дробеструй", prep_name, "Партия A", "2,7"])
     ws.append(["ЮП-2630", 80, "Окончательный брак", row3_ops, wip_name, "Срочный заказ", "1,8"])
 
     ws.column_dimensions["A"].width = 25

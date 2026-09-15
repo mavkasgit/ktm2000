@@ -440,5 +440,5 @@ async def test_remainders_template_contains_length_column(
     # Шаблон парсится обратно нашим же парсером: длина распознаётся.
     _sheet, _total, items, _summary = await parse_remainders_excel(template_bytes)
     parsed = {it.sku: it.dimensions for it in items}
-    assert parsed["ALS-1289"] == {"length_mm": 2700}
+    assert parsed["ALS1289"] == {"length_mm": 2700}
     assert parsed["361"] is None

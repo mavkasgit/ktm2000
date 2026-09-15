@@ -742,7 +742,7 @@ async def test_download_remainders_template(
     assert ws.cell(1, 4).value == "Операции"
     assert ws.cell(1, 5).value == "Участок"
     assert ws.cell(2, 1).value == "361"
-    assert ws.cell(3, 1).value == "ALS-1289"
+    assert ws.cell(3, 1).value == "ALS1289"
     assert ws.cell(4, 1).value == "ЮП-2630"
 
 

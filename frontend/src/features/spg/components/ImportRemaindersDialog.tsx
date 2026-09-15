@@ -795,7 +795,7 @@ export function ImportRemaindersDialog({
                             </td>
                           </tr>
                           <tr className="border-b border-border bg-muted/20">
-                            <td className="px-1.5 py-1.5 font-mono border-r border-border text-foreground">ALS-1289</td>
+                            <td className="px-1.5 py-1.5 font-mono border-r border-border text-foreground">ALS1289</td>
                             <td className="px-1.5 py-1.5 border-r border-border text-foreground">150</td>
                             <td className="px-1.5 py-1.5 border-r border-border font-medium text-emerald-700 whitespace-nowrap">Годный</td>
                             <td className="px-1.5 py-1.5 border-r border-border text-muted-foreground">{exampleRow2Operations}</td>

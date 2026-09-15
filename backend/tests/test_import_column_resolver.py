@@ -134,7 +134,7 @@ def test_detect_header_row_concatenated_header_fallback() -> None:
 
 
 def test_detect_header_row_none_when_no_headers() -> None:
-    rows = [["361", "200", "Годный"], ["ALS-1289", "150", "Годный"]]
+    rows = [["361", "200", "Годный"], ["ALS1289", "150", "Годный"]]
     assert detect_header_row(rows, OSTAKI_MAPPING) is None
 
 
