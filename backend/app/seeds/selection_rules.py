@@ -93,6 +93,25 @@ SELECTION_RULES = [
         ],
     },
     {
+        "code": "drill_types",
+        "name": "Сверловка: определение типа",
+        "profile_code": "packaging_map_rp",
+        "priority": 100,
+        "is_active": True,
+        "phase": "resolve_operations",
+        "conditions": [
+            {"source": "payload", "field_path": "operation", "operator": "contains", "value": "сверл"},
+        ],
+        "actions": [
+            {
+                "action": "set_operation",
+                "section_code": "DRILLING",
+                "group_code": "DRILLING",
+                "operation_code": "DRILL",
+            },
+        ],
+    },
+    {
         "code": "empty_primary",
         "name": "Без первичной операции",
         "profile_code": "packaging_map_rp",

@@ -11,6 +11,11 @@ export const PACKAGING_PLAN_XLS_PATH = path.resolve(__dirname, "../../Упако
 export const E2E_CATALOG_XLS_PATH = path.resolve(__dirname, "../../Каталог E2E.xlsx");
 export const E2E_REMAINDERS_XLS_PATH = path.resolve(__dirname, "../../Склад импорта остатков E2E.xlsx");
 export const E2E_PLAN_XLS_PATH = path.resolve(__dirname, "../../Упаковочный план E2E.xlsx");
+/** Одна строка плана (ЮП-009, 2,05 м × 300): позиция для сценария запуск → передачи. */
+export const E2E_PLAN_1LINE_XLS_PATH = path.resolve(
+  __dirname,
+  "../../Упаковочный план 1 строка E2E.xlsx",
+);
 export const BULK_REMAINDERS_XLS_PATH = path.resolve(__dirname, "../../Склад импорта остатков Bulk E2E.xlsx");
 export const E2E_SKU = "ЮП-009";
 
@@ -462,6 +467,66 @@ export async function sendReadyTransfersViaUI(page: Page, sku: string): Promise<
 
   console.log(`[sendReadyTransfers] SKU=${sku} sent=${sent}`);
   return sent;
+}
+
+/**
+ * Полная цепочка адресатов («Куда») передач позиции из «Журнала передач» —
+ * маршрут материала, прочитанный из UI, а не из хардкода.
+ *
+ * Журнал отсортирован по времени создания (свежие сверху), поэтому цепочку
+ * возвращаем в порядке отправки. Читаем **все** передачи позиции, а не только
+ * последнюю: между производственными участками маршрут проходит и складские
+ * секции (Склад подготовки, Склад готовой продукции, К отгрузке), и их тоже
+ * видно в журнале. Счётчик отправленных строк (`sendReadyTransfersViaUI`) для
+ * этого не годится — он считает клики, а не передачи.
+ *
+ * Журнал показывает человекочитаемые имена участков (`to_section_name`), в
+ * отличие от ready-таблицы, где виден только код. Таблица журнала отличается от
+ * «Готово к передаче» колонкой получателя — по ней её и находим.
+ */
+export async function transferRouteChainViaUI(
+  page: Page,
+  sku: string,
+  positionId: number,
+  maxSteps = 100,
+): Promise<string[]> {
+  await page.goto("/transfers");
+  await expect(page.getByRole("heading", { name: "Передачи между ГХП" })).toBeVisible({
+    timeout: 10_000,
+  });
+
+  // «Журнал передач» — боковая панель: без неё таблицы истории нет в DOM.
+  const journalOpener = page.locator('button[title="Открыть журнал передач"]');
+  if ((await journalOpener.count()) > 0) {
+    await journalOpener.click();
+  }
+
+  const historyTable = page
+    .locator("table")
+    .filter({ has: page.getByText("Получатель (Куда)", { exact: true }) });
+
+  const search = page.getByPlaceholder("Поиск по ID, артикулу, участкам, № передачи…");
+  await expect(search).toBeVisible({ timeout: 10_000 });
+  await search.fill(sku);
+  await search.press("Enter");
+
+  const rows = historyTable.locator("tr", { hasText: sku });
+  await expect(rows.first()).toBeVisible({ timeout: 20_000 });
+
+  const destinations: string[] = [];
+  const count = await rows.count();
+  for (let i = 0; i < count && destinations.length < maxSteps; i++) {
+    const cells = rows.nth(i).locator("td");
+    const rowPositionId = ((await cells.first().textContent()) ?? "").trim().replace(/^#/, "");
+    if (rowPositionId !== String(positionId)) continue;
+    // Колонки: ID, Отправитель (Откуда), Получатель (Куда), Артикул, …
+    // Ячейка участка — имя участка, под ним имя операции: берём первую строку.
+    const cell = ((await cells.nth(2).innerText()) ?? "").trim();
+    const to = cell.split("\n")[0]?.trim() ?? "";
+    if (to) destinations.push(to);
+  }
+  // DOM отдаёт свежие сверху — разворачиваем в порядок отправки.
+  return destinations.reverse();
 }
 
 /** Экранирование имени участка для имени-регекспа кнопки-плитки. */

@@ -56,11 +56,6 @@ import {
  */
 
 const SAW_SECTION_NAME = "Пила";
-/**
- * Производственные участки маршрута ЮП-2083 по профилю `packaging_map_rp`
- * (остальные плитки — чужие для этого маршрута, их обход только тратит время).
- */
-const ROUTE_SECTIONS = ["Дробеструй", "Анодирование", "Пила", "Упаковка"];
 /** Вход позиции-раскроя (заготовки 2,75 м) — кратен норме подвеса (3 подвеса). */
 const INPUT_QTY = 150;
 /** Сырьевая длина входа (ADR-0024: 2,7 м в плане → 2,75 м у позиции). */
@@ -295,7 +290,8 @@ test.describe("@ui Пила: раскрой 2,75 м на четыре длины
       if (!sawSplitDone) {
         sawSplitDone = await splitSawIntoLengthsViaUI(page, sawSectionId);
       }
-      const completed = await completeAllSectionTasksViaUI(page, SAW4_SKU, ROUTE_SECTIONS);
+      // Маршрут назначает система — участки не перечисляем, обходим доски как есть.
+      const completed = await completeAllSectionTasksViaUI(page, SAW4_SKU);
       console.log(`[step6] раунд ${round}: sent=${sent} completed=${completed} saw=${sawSplitDone}`);
       if (sent === 0 && completed === 0 && sawSplitDone) break;
     }

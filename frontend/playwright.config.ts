@@ -43,6 +43,18 @@ export default defineConfig({
       grep: /@smoke/,
       use: { ...devices["Desktop Chrome"] },
     },
+    // Разовые (временные) спеки с тегом `@tmp`: в регулярных прогонах не
+    // участвуют — проекта нет, пока не задан `E2E_TMP`.
+    // Запуск: E2E_TMP=1 npx playwright test --project=tmp e2e/<file>.tmp.spec.ts
+    ...(process.env.E2E_TMP
+      ? [
+          {
+            name: "tmp",
+            grep: /@tmp/,
+            use: { ...devices["Desktop Chrome"] },
+          },
+        ]
+      : []),
   ],
   // webServer: [
   //   {

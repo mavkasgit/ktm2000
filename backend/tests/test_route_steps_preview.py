@@ -95,7 +95,13 @@ async def _make_profile(session, template_id: int) -> RouteRuleProfile:
         code="packaging_map_rp",  # Use the actual profile code from seeds
         import_template_id=template_id,
         is_active=True,
-        route_sections=["RAW_STOCK", "SHOT_BLAST", "PREP_STOCK", "ANODIZING", "FINISHED_STOCK", "SHIPMENT", "SHIPPED"],
+        # Реальный паттерн имени профиля: {drill_op} заполняется операцией
+        # участка DRILLING, поэтому участок обязан быть в route_sections.
+        route_name_pattern="{output_kind} - {press_op} - {drill_op} - {shot_op} - {color} - {pack_op}",
+        route_sections=[
+            "RAW_STOCK", "DRILLING", "SHOT_BLAST", "PREP_STOCK",
+            "ANODIZING", "FINISHED_STOCK", "SHIPMENT", "SHIPPED",
+        ],
     )
     session.add(profile)
     await session.flush()
@@ -133,6 +139,14 @@ async def _seed_infrastructure(session, profile: RouteRuleProfile):
         sort_order=1, is_significant=False,
     )
 
+    # Create DRILLING section operation (DRILLING group) — «сверловка»
+    await _make_section_operation(
+        session, section_map["DRILLING"].id,
+        "DRILL", "Сверловка",
+        group_code="DRILLING", group_name="Сверловка",
+        sort_order=1, is_significant=True,
+    )
+
     # Create ANOD section operations (ANOD group)
     await _make_section_operation(
         session, section_map["ANODIZING"].id,
@@ -168,16 +182,27 @@ async def _seed_infrastructure(session, profile: RouteRuleProfile):
     await session.flush()
     
     
-    # Create route stages and operations for each section in profile's route_sections
-    stage_ops = ["ISSUE_RAW", "SHOT_BLAST", "MOVE_TO_PREP_STOCK", "ANOD", "MOVE_TO_FG", "SHIPMENT", "SENT"]
-    for idx, (section_code, op_code) in enumerate(zip(profile.route_sections, stage_ops, strict=True), start=1):
+    # Статичный «уже существующий» маршрут для селектора: без DRILLING/PRESSING,
+    # чтобы строки с пустой операцией матчились на него (эти участки исключаются
+    # правилом empty_primary). Динамическая сборка использует route_sections профиля,
+    # он здесь намеренно шире.
+    existing_route_stage_ops = [
+        ("RAW_STOCK", "ISSUE_RAW"),
+        ("SHOT_BLAST", "SHOT_BLAST"),
+        ("PREP_STOCK", "MOVE_TO_PREP_STOCK"),
+        ("ANODIZING", "ANOD"),
+        ("FINISHED_STOCK", "MOVE_TO_FG"),
+        ("SHIPMENT", "SHIPMENT"),
+        ("SHIPPED", "SENT"),
+    ]
+    for idx, (section_code, op_code) in enumerate(existing_route_stage_ops, start=1):
         section = section_map[section_code]
         session.add(
             RouteStage(
                 route_id=route.id,
                 sequence=idx,
                 section_id=section.id,
-                is_final=idx == len(profile.route_sections),
+                is_final=idx == len(existing_route_stage_ops),
                 operations=[
                     RouteOperation(
                         sequence=1,
@@ -340,3 +365,53 @@ async def test_preview_no_route_stages_when_route_not_found(
 
     # route stages should not be present
     assert "route_steps" not in after_data
+
+
+@pytest.mark.asyncio
+async def test_preview_route_name_carries_drill_operation_per_row(
+    client, session, tmp_path, monkeypatch
+) -> None:
+    """Строка со «сверло» даёт этап DRILLING и имя маршрута с «Сверловка»; строка без
+    операции — ни того, ни другого.
+
+    Регрессия KTM-2000: без правила drill_types (phase resolve_operations) операция
+    группы (DRILLING, DRILLING) не разрешалась, {drill_op} оставался пустым и обе
+    строки получали ОДНО имя маршрута — маршрут переиспользовался по имени и терял
+    обязательный этап DRILLING.
+    """
+    monkeypatch.setattr(settings, "IMPORT_STORAGE_DIR", str(tmp_path))
+
+    template = await _make_template(session)
+    profile = await _make_profile(session, template.id)
+    await _seed_infrastructure(session, profile)
+
+    async def preview_after_data(operation: str) -> dict:
+        response = await client.post(
+            f"/api/imports/excel/preview?template_id={template.id}",
+            files={
+                "file": (
+                    "plan.xlsx",
+                    _workbook_with_row(operation=operation),
+                    "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+                )
+            },
+        )
+        assert response.status_code == 200
+        body = response.json()
+        assert len(body["items"]) == 1
+        return body["items"][0]["after_data"]
+
+    with_drill = await preview_after_data("сверло")
+    without_drill = await preview_after_data("")
+
+    # Строка со сверловкой несёт этап DRILLING ...
+    assert "DRILLING" in [step["section_code"] for step in with_drill["route_steps"]]
+    # ... и имя маршрута с отображаемым именем операции DRILLING.
+    assert "Сверловка" in with_drill["route_name"]
+
+    # Строка без операции не содержит ни этапа, ни имени операции сверловки.
+    assert "DRILLING" not in [step["section_code"] for step in without_drill["route_steps"]]
+    assert "Сверловка" not in without_drill["route_name"]
+
+    # Ключевая гарантия: строки больше не схлопываются в одно имя маршрута.
+    assert with_drill["route_name"] != without_drill["route_name"]
