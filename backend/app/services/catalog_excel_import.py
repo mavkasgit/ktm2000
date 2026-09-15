@@ -277,26 +277,25 @@ def _header_of(field_name: str) -> str:
 def validate_row_counts(
     row: ParsedCatalogRow,
     existing_lengths: list[float] | None,
-    *,
-    is_new: bool = False,
 ) -> list[str]:
     """Число значений «Кол-во на подвесе» строго равно числу длин.
 
     Длины берутся из строки; если колонка длин пуста — из существующих
-    длин артикула (partial update по длинам справочника). Новый артикул
-    с одним значением и без длин — черновик (норматив допишется с длинами,
-    в БД не хранится).
+    длин артикула (partial update по длинам справочника). Длин нет нигде:
+    одно значение — норма без длин (#177, Q2: хранится legacy-скаляром,
+    раскрывается в per-length, когда длины появятся); несколько — привязать
+    к длинам нечем.
     """
     quantities = row.fields.get("quantities")
     lengths = row.fields.get("lengths_mm")
     if quantities is None:
         return []
     if lengths is None:
-        if not existing_lengths:
-            if is_new and len(quantities) == 1:
-                return []
-            return ["Кол-во на подвесе: заполните «Длины, мм» — количества привязываются к длинам по индексу"]
-        lengths = existing_lengths
+        lengths = existing_lengths or None
+    if lengths is None:
+        if len(quantities) == 1:
+            return []
+        return ["Кол-во на подвесе: заполните «Длины, мм» — количества привязываются к длинам по индексу"]
     if len(quantities) != len(lengths):
         return [
             f"Кол-во на подвесе: число значений ({len(quantities)}) не совпадает с числом длин ({len(lengths)})"
@@ -311,6 +310,42 @@ def build_quantity_dict(lengths: list[float], quantities: list[int | None]) -> d
     }
 
 
+def format_lengths_cell(lengths: list[float]) -> float | str | None:
+    """«Длины, мм» для выгрузки: одиночная длина — числом, несколько — «2500, 2700».
+
+    Формат читается :func:`parse_catalog_excel` без ручной правки файла.
+    """
+    if not lengths:
+        return None
+    if len(lengths) == 1:
+        return float(lengths[0])
+    return ", ".join(_format_number(length) for length in lengths)
+
+
+def format_quantities_cell(
+    lengths: list[float], quantities: dict[str, dict[str, int | None]] | None
+) -> int | str | None:
+    """«Кол-во на подвесе» для выгрузки: ручная норма позиционно по длинам.
+
+    Норма, которой нет, выгружается пустым сегментом («48, , 48») — парсер
+    читает его как None, не подставляя чужое значение. Норм нет ни по одной
+    длине — ячейка пуста: иначе re-import материализовал бы пустые записи
+    и round-trip перестал бы быть неотличимым от исходного справочника.
+    """
+    if not lengths:
+        return None
+    values = [((quantities or {}).get(_length_key(length)) or {}).get("manual") for length in lengths]
+    if all(value is None for value in values):
+        return None
+    if len(values) == 1:
+        return int(values[0])
+    return ", ".join("" if value is None else str(int(value)) for value in values)
+
+
+def _format_number(value: float) -> str:
+    return str(int(value)) if float(value).is_integer() else repr(float(value))
+
+
 def effective_lengths(row: ParsedCatalogRow, existing_lengths: list[float] | None) -> list[float] | None:
     if row.fields.get("lengths_mm") is not None:
         return row.fields["lengths_mm"]
@@ -322,7 +357,10 @@ def diff_catalog_row(product: Product, row: ParsedCatalogRow) -> dict[str, Any]:
     changes: dict[str, Any] = {}
     fields = row.fields
 
-    if not product.is_active:
+    # Черновик без длин импорт не активирует (#177, Q3): активация — признак
+    # доведённого до рабочего состояния артикула, а строка без длин его не даёт.
+    row_lengths = fields.get("lengths_mm")
+    if not product.is_active and (row_lengths or product.lengths):
         changes["is_active"] = True
 
     for key in _TEXT_FIELDS:
@@ -338,7 +376,7 @@ def diff_catalog_row(product: Product, row: ParsedCatalogRow) -> dict[str, Any]:
         if current is None or float(value) != float(current):
             changes[key] = value
 
-    lengths = fields.get("lengths_mm")
+    lengths = row_lengths
     if lengths is not None:
         current_lengths = sorted(length.length_mm for length in product.lengths)
         if sorted(lengths) != current_lengths:
@@ -347,16 +385,22 @@ def diff_catalog_row(product: Product, row: ParsedCatalogRow) -> dict[str, Any]:
     quantities = fields.get("quantities")
     if quantities is not None:
         base = lengths if lengths is not None else sorted(length.length_mm for length in product.lengths)
-        new_dict = build_quantity_dict(base, quantities)
-        current = product.quantity_per_hanger_by_length or {}
-        # Импорт пишет только ручные значения (#127): вычисленное авто
-        # сохраняем по совпадающим длинам, чтобы не обнулять его режимом.
-        for key, entry in new_dict.items():
-            prev = current.get(key)
-            if isinstance(prev, dict):
-                entry["auto"] = prev.get("auto")
-        if new_dict != current:
-            changes["quantity_per_hanger"] = new_dict
+        if not base:
+            # Нормы без длин (#177, Q2/Q11): хранится legacy-скаляром —
+            # setter принимает int и пишет bare {auto: null, manual: N}.
+            if product.quantity_per_hanger_by_length is None and quantities[0] != product.quantity_per_hanger:
+                changes["quantity_per_hanger"] = quantities[0]
+        else:
+            new_dict = build_quantity_dict(base, quantities)
+            current = product.quantity_per_hanger_by_length or {}
+            # Импорт пишет только ручные значения (#127): вычисленное авто
+            # сохраняем по совпадающим длинам, чтобы не обнулять его режимом.
+            for key, entry in new_dict.items():
+                prev = current.get(key)
+                if isinstance(prev, dict):
+                    entry["auto"] = prev.get("auto")
+            if new_dict != current:
+                changes["quantity_per_hanger"] = new_dict
 
     flag_codes = {flag.code for flag in product.processing_flags}
     for key, code in (("skip_shot_blast", "skip_shot_blast"), ("is_laminated", "is_laminated")):

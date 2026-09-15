@@ -1,4 +1,4 @@
-"""Импорт справочника сырья из Excel (#63): preview-excel / apply-excel / template-excel."""
+"""Импорт/выгрузка справочника сырья из Excel (#63): preview/apply/template/export-excel."""
 
 from io import BytesIO
 
@@ -12,6 +12,7 @@ from app.api.deps import get_current_user
 from app.main import app
 from app.models.product import (
     DimensionState,
+    ProcessingFlag,
     Product,
     ProductLength,
     ProductPair,
@@ -19,11 +20,15 @@ from app.models.product import (
     ProductType,
 )
 from app.models.user import User, UserRole
-from app.services.catalog_excel_import import TEMPLATE_HEADERS
+from app.services.catalog_excel_import import (
+    TEMPLATE_HEADERS,
+    parse_catalog_excel,
+)
 
 PREVIEW_URL = "/api/catalog-import/preview-excel"
 APPLY_URL = "/api/catalog-import/apply-excel"
 TEMPLATE_URL = "/api/catalog-import/template-excel"
+EXPORT_URL = "/api/catalog-import/export-excel"
 
 XLSX_MIME = "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
 
@@ -318,8 +323,6 @@ async def test_apply_excel_creates_component_active(
 async def test_apply_excel_booleans_sync_flags(
     client: AsyncClient, session: AsyncSession
 ) -> None:
-    from app.models.product import ProcessingFlag
-
     flag_shot = ProcessingFlag(code="skip_shot_blast", name="Не дробеструится")
     flag_lam = ProcessingFlag(code="is_laminated", name="Ламируется")
     session.add_all([flag_shot, flag_lam])
@@ -409,7 +412,7 @@ async def test_apply_excel_requires_edit_references_role(
         app.dependency_overrides.pop(get_current_user, None)
 
 
-# ─── Черновики без длин ────────────────────────────────────────────────────────
+# ─── Черновики и нормы без длин (#177 Q2/Q3) ──────────────────────────────────
 
 
 async def test_preview_draft_single_qty_no_lengths(
@@ -422,9 +425,11 @@ async def test_preview_draft_single_qty_no_lengths(
     assert item["action"] == "create"
     assert item["draft"] is True
 
-async def test_apply_draft_creates_inactive_without_norm(
+
+async def test_apply_draft_creates_inactive_with_legacy_norm(
     client: AsyncClient, session: AsyncSession
 ) -> None:
+    """Q3: норма без длин черновик не активирует. Q2: сама норма — legacy-скаляр."""
     content = _xlsx_bytes([_row(sku="ЮП-ЧЕРН", quantities="35", name="Черновик")])
     resp = await _upload(client, APPLY_URL, content)
     assert resp.status_code == 200, resp.text
@@ -433,21 +438,74 @@ async def test_apply_draft_creates_inactive_without_norm(
     assert product is not None
     assert product.is_active is False
     assert await _product_lengths(session, product.id) == []
-    # Норматив в БД не хранится — допишется с длинами.
-    assert product.quantity_per_hanger is None
+    # Норма хранится скаляром и раскроется в per-length, когда появятся длины.
+    assert product.attributes["quantity_per_hanger"] == {"auto": None, "manual": 35}
+    assert product.quantity_per_hanger == 35
     assert product.quantity_per_hanger_by_length is None
+
+
+async def test_apply_norm_without_lengths_keeps_draft_inactive_and_round_trips(
+    client: AsyncClient, session: AsyncSession
+) -> None:
+    """Q3/Q2/Q11: строка с нормой без длин не активирует черновик и не теряет норму."""
+    product = await _make_product(session, sku="ЮП-ЧЕРНОВИК", is_active=False)
+    content = _xlsx_bytes([_row(sku="ЮП-ЧЕРНОВИК", quantities="22")])
+
+    body = (await _upload(client, APPLY_URL, content)).json()
+
+    assert body["errors"] == []
+    assert body["updated"] == 1
+    await session.refresh(product)
+    assert product.is_active is False
+    assert product.attributes["quantity_per_hanger"] == {"auto": None, "manual": 22}
+    assert product.quantity_per_hanger == 22
+
+    # Round-trip: норма без длин возвращается в файл числом при пустых «Длинах».
+    _, by_sku = await _export(client)
+    assert by_sku["ЮП-ЧЕРНОВИК"]["Длины, мм"] is None
+    assert by_sku["ЮП-ЧЕРНОВИК"]["Кол-во на подвесе"] == 22
+
+
+async def test_apply_row_with_length_activates_draft(
+    client: AsyncClient, session: AsyncSession
+) -> None:
+    """Q3 положительный контроль: строка с длиной активирует артикул как раньше."""
+    product = await _make_product(session, sku="ЮП-ЧЕРНОВИК-ДЛИНА", is_active=False)
+    content = _xlsx_bytes([_row(sku="ЮП-ЧЕРНОВИК-ДЛИНА", lengths="2750")])
+
+    body = (await _upload(client, APPLY_URL, content)).json()
+
+    assert body["errors"] == []
+    assert body["updated"] == 1
+    await session.refresh(product)
+    assert product.is_active is True
+    assert await _product_lengths(session, product.id) == [2750.0]
 
 
 async def test_apply_multi_qty_no_lengths_is_error(
     client: AsyncClient, session: AsyncSession
 ) -> None:
-    content = _xlsx_bytes([_row(sku="ЮП-ЧЕРН2", quantities="35, 36")])
+    """Q2 граница: две нормы при пустых «Длинах» — ошибка строки для нового и существующего артикула."""
+    await _make_product(session, sku="ЮП-ЧЕРН3")
+    content = _xlsx_bytes([
+        _row(sku="ЮП-ЧЕРН2", quantities="35, 36"),  # нет в БД
+        _row(sku="ЮП-ЧЕРН3", quantities="35, 36"),  # есть в БД, длин нет
+    ])
     body = (await _upload(client, PREVIEW_URL, content)).json()
-    assert len(body["errors"]) == 1
-    assert "Длины" in body["errors"][0]["message"]
+    assert len(body["errors"]) == 2
+    assert sorted(err["sku"] for err in body["errors"]) == ["ЮП-ЧЕРН2", "ЮП-ЧЕРН3"]
+    for err in body["errors"]:
+        assert "Кол-во на подвесе" in err["message"] and "Длины, мм" in err["message"]
+    assert body["items"] == []
+
     resp = await _upload(client, APPLY_URL, content)
     assert resp.json()["imported"] == 0
+    assert resp.json()["updated"] == 0
     assert await session.scalar(select(Product).where(Product.sku == "ЮП-ЧЕРН2")) is None
+    existing = await session.scalar(select(Product).where(Product.sku == "ЮП-ЧЕРН3"))
+    assert (existing.attributes or {}).get("quantity_per_hanger") is None
+
+
 # ─── Композит «45+10» не поддерживается ───────────────────────────────────────
 
 
@@ -579,3 +637,265 @@ async def test_legacy_dimension_photo_columns_ignored(
     product = await session.scalar(select(Product).where(Product.sku == "ЮП-ЛГ"))
     assert product.dimension_state == DimensionState.length
     assert product.photo_full is None
+
+
+# ─── export-excel ────────────────────────────────────────────────────────────
+
+
+async def _seed_export_catalog(session: AsyncSession) -> None:
+    """Справочник, покрывающий границы формата выгрузки.
+
+    Артикул с одной длиной и ручной нормой (числовые ячейки), артикул с
+    тремя длинами и пропущенной средней нормой (пустой сегмент), артикул
+    без данных, артикул с флагом/алиасами/фото и пара из двух артикулов,
+    артикул с нормой без длин (legacy-скаляр, #177 Q2/Q11) и артикул с
+    длинами и без единой нормы (#177 Q11).
+    """
+    await _make_product(
+        session,
+        sku="ЮП-ОДИН",
+        name="Перила 2780",
+        perimeter_mm=64.2,
+        mount_width_mm=19.35,
+        lengths=[2780.0],
+        quantity_per_hanger={"2780": {"auto": None, "manual": 72}},
+    )
+    await _make_product(
+        session,
+        sku="ЮП-МНОГО",
+        name="Перила 2500/2700/3000",
+        lengths=[2500.0, 2700.0, 3000.0],
+        quantity_per_hanger={
+            "2500": {"auto": None, "manual": 48},
+            "2700": {"auto": None, "manual": None},
+            "3000": {"auto": None, "manual": 48},
+        },
+    )
+    await _make_product(session, sku="ЮП-БЕЗ-ДАННЫХ")
+    # Норма без длин: скаляром, а не dict — setter модели пишет legacy-скаляр
+    # {auto: null, manual: 22} именно из int.
+    await _make_product(session, sku="ЮП-НОРМА-БЕЗ-ДЛИН", quantity_per_hanger=22)
+    await _make_product(session, sku="ЮП-БЕЗ-НОРМ", lengths=[2500.0, 2700.0])
+    flagged = await _make_product(
+        session,
+        sku="ЮП-ФЛАГ",
+        name="Перила 2750",
+        lengths=[2750.0],
+        notes="прим",
+        aliases=["ЭВ-2", "ЭВ-1"],
+        photo_full="products/ЮП-ФЛАГ_full.jpg",
+        quantity_per_hanger={"2750": {"auto": None, "manual": 30}},
+    )
+    partner = await _make_product(
+        session, sku="ЮП-ПАРТНЁР", name="Парный 2750", lengths=[2750.0]
+    )
+
+    flag = ProcessingFlag(code="skip_shot_blast", name="Не дробеструится")
+    session.add(flag)
+    await session.flush()
+    session.add(ProductProcessingFlag(product_id=flagged.id, flag_id=flag.id))
+    session.add(ProductPair(
+        product_a_id=min(flagged.id, partner.id),
+        product_b_id=max(flagged.id, partner.id),
+        quantity_per_hanger={},
+    ))
+    await session.flush()
+
+
+async def _export(client: AsyncClient):
+    """GET export-excel → (ответ, строки листа по артикулу)."""
+    resp = await client.get(EXPORT_URL)
+    assert resp.status_code == 200, resp.text
+    sheet = load_workbook(BytesIO(resp.content)).active
+    header = [cell.value for cell in sheet[1]]
+    by_sku = {
+        row[0]: dict(zip(header, row))
+        for row in sheet.iter_rows(min_row=2, values_only=True)
+    }
+    return resp, by_sku
+
+
+async def test_export_excel_headers_mime_and_filename(client: AsyncClient) -> None:
+    resp, _ = await _export(client)
+    assert resp.headers["content-type"].startswith(XLSX_MIME)
+    assert "final_catalog.xlsx" in resp.headers["content-disposition"]
+    sheet = load_workbook(BytesIO(resp.content)).active
+    header = [cell.value for cell in sheet[1]]
+    # Выгрузка — ровно колонки импорта; «Фото» остаётся только в рабочем файле (#177 Q4/Q12).
+    assert header == list(TEMPLATE_HEADERS)
+    assert len(header) == 11
+    assert "Фото" not in header
+
+
+async def test_export_excel_single_length_and_norm_are_numbers(
+    client: AsyncClient, session: AsyncSession
+) -> None:
+    await _seed_export_catalog(session)
+    _, by_sku = await _export(client)
+    row = by_sku["ЮП-ОДИН"]
+    assert row["Наименование"] == "Перила 2780"
+    # Одиночные значения — числа, а не строки: строка «2780» не равна 2780.
+    assert row["Длины, мм"] == 2780
+    assert row["Кол-во на подвесе"] == 72
+    assert row["Периметр, мм"] == pytest.approx(64.2)
+    assert row["Габарит, мм"] == pytest.approx(19.35)
+
+
+async def test_export_excel_multi_lengths_keep_positional_empty_segment(
+    client: AsyncClient, session: AsyncSession
+) -> None:
+    await _seed_export_catalog(session)
+    _, by_sku = await _export(client)
+    row = by_sku["ЮП-МНОГО"]
+    assert row["Длины, мм"] == "2500, 2700, 3000"
+    # Норма без значения — пустой сегмент; соседние нормы не сдвигаются.
+    assert row["Кол-во на подвесе"] == "48, , 48"
+
+
+async def test_export_excel_product_without_data_has_blank_cells(
+    client: AsyncClient, session: AsyncSession
+) -> None:
+    await _seed_export_catalog(session)
+    _, by_sku = await _export(client)
+    row = by_sku["ЮП-БЕЗ-ДАННЫХ"]
+    assert row["Наименование"] == "ЮП-БЕЗ-ДАННЫХ"
+    assert row["Длины, мм"] is None
+    assert row["Кол-во на подвесе"] is None
+    assert not row["Не дробеструится"]
+    assert not row["Ламируется"]
+    assert not row["Эквиваленты"]
+    assert not row["Парный профиль"]
+    assert "Фото" not in row
+
+
+async def test_export_excel_flags_aliases_and_pair_without_photo(
+    client: AsyncClient, session: AsyncSession
+) -> None:
+    await _seed_export_catalog(session)
+    resp, by_sku = await _export(client)
+    row = by_sku["ЮП-ФЛАГ"]
+    assert row["Не дробеструится"] == "да"
+    assert not row["Ламируется"]
+    assert row["Примечания"] == "прим"
+    assert set(row["Эквиваленты"].split("; ")) == {"ЭВ-1", "ЭВ-2"}
+    # Пара выгружается в обе стороны.
+    assert row["Парный профиль"] == "ЮП-ПАРТНЁР"
+    assert by_sku["ЮП-ПАРТНЁР"]["Парный профиль"] == "ЮП-ФЛАГ"
+    # Фото в БД заполнено, но в выгрузку не уезжает ни колонкой, ни значением (#177 Q4).
+    sheet = load_workbook(BytesIO(resp.content)).active
+    values = [value for sheet_row in sheet.iter_rows(values_only=True) for value in sheet_row]
+    assert "products/ЮП-ФЛАГ_full.jpg" not in values
+
+
+async def test_export_excel_norm_without_lengths_round_trips_as_number(
+    client: AsyncClient, session: AsyncSession
+) -> None:
+    """Q2/Q11: норма без длин выгружается числом в пустых «Длинах» и не теряется."""
+    await _seed_export_catalog(session)
+    resp, by_sku = await _export(client)
+    row = by_sku["ЮП-НОРМА-БЕЗ-ДЛИН"]
+    assert row["Длины, мм"] is None
+    assert row["Кол-во на подвесе"] == 22  # число: строка «22» не равна 22
+
+    rows, errors, _ = parse_catalog_excel(resp.content, "final_catalog.xlsx")
+
+    assert errors == []
+    fields = {parsed.sku: parsed.fields for parsed in rows}["ЮП-НОРМА-БЕЗ-ДЛИН"]
+    assert "lengths_mm" not in fields
+    assert fields["quantities"] == [22]
+
+    preview = await _upload(client, PREVIEW_URL, resp.content, filename="final_catalog.xlsx")
+
+    body = preview.json()
+    assert body["errors"] == []
+    item = next(item for item in body["items"] if item["sku"] == "ЮП-НОРМА-БЕЗ-ДЛИН")
+    assert item["action"] == "skip"  # норма доехала до файла и не переписывается
+
+
+async def test_export_excel_lengths_without_norms_leave_cell_empty(
+    client: AsyncClient, session: AsyncSession
+) -> None:
+    """Q11: длин без норм — пустая ячейка, а не «, »: пустые сегменты материализуют записи."""
+    await _seed_export_catalog(session)
+    resp, by_sku = await _export(client)
+    row = by_sku["ЮП-БЕЗ-НОРМ"]
+    assert row["Длины, мм"] == "2500, 2700"
+    assert row["Кол-во на подвесе"] is None
+
+    rows, errors, _ = parse_catalog_excel(resp.content, "final_catalog.xlsx")
+
+    assert errors == []
+    fields = {parsed.sku: parsed.fields for parsed in rows}["ЮП-БЕЗ-НОРМ"]
+    assert fields["lengths_mm"] == [2500.0, 2700.0]
+    assert "quantities" not in fields
+
+    preview = await _upload(client, PREVIEW_URL, resp.content, filename="final_catalog.xlsx")
+
+    body = preview.json()
+    assert body["errors"] == []
+    item = next(item for item in body["items"] if item["sku"] == "ЮП-БЕЗ-НОРМ")
+    assert item["action"] == "skip"  # «, » здесь дал бы update — правку норм на пустые
+
+
+async def test_export_excel_rows_round_trip_through_parser(
+    client: AsyncClient, session: AsyncSession
+) -> None:
+    await _seed_export_catalog(session)
+    resp, _ = await _export(client)
+
+    rows, errors, total = parse_catalog_excel(resp.content, "final_catalog.xlsx")
+
+    assert errors == []
+    assert total == 7
+    fields = {row.sku: row.fields for row in rows}
+    assert set(fields) == {
+        "ЮП-ОДИН",
+        "ЮП-МНОГО",
+        "ЮП-БЕЗ-ДАННЫХ",
+        "ЮП-НОРМА-БЕЗ-ДЛИН",
+        "ЮП-БЕЗ-НОРМ",
+        "ЮП-ФЛАГ",
+        "ЮП-ПАРТНЁР",
+    }
+
+    single = fields["ЮП-ОДИН"]
+    assert single["name"] == "Перила 2780"
+    assert single["perimeter_mm"] == pytest.approx(64.2)
+    assert single["mount_width_mm"] == pytest.approx(19.35)
+    assert single["lengths_mm"] == [2780.0]
+    assert single["quantities"] == [72]
+
+    # Несколько длин: норма привязана к длине позиционно, а не «по порядку
+    # значений» — пропуск читается как None и не подхватывает чужую норму.
+    multi = fields["ЮП-МНОГО"]
+    assert dict(zip(multi["lengths_mm"], multi["quantities"])) == {
+        2500.0: 48,
+        2700.0: None,
+        3000.0: 48,
+    }
+
+    empty = fields["ЮП-БЕЗ-ДАННЫХ"]
+    assert "lengths_mm" not in empty and "quantities" not in empty
+
+    flagged = fields["ЮП-ФЛАГ"]
+    assert flagged["skip_shot_blast"] is True
+    assert "is_laminated" not in flagged
+    assert flagged["notes"] == "прим"
+    assert set(flagged["aliases"]) == {"ЭВ-1", "ЭВ-2"}
+    assert flagged["pair_partners"] == ["ЮП-ПАРТНЁР"]
+    assert fields["ЮП-ПАРТНЁР"]["pair_partners"] == ["ЮП-ФЛАГ"]
+
+
+async def test_export_excel_preview_is_idempotent(
+    client: AsyncClient, session: AsyncSession
+) -> None:
+    await _seed_export_catalog(session)
+    resp, _ = await _export(client)
+
+    preview = await _upload(client, PREVIEW_URL, resp.content, filename="final_catalog.xlsx")
+
+    assert preview.status_code == 200, preview.text
+    body = preview.json()
+    assert body["errors"] == []
+    assert body["stats"] == {"total": 7, "create": 0, "update": 0, "skip": 7, "errors": 0}
+    assert {item["action"] for item in body["items"]} == {"skip"}

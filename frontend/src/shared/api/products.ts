@@ -415,6 +415,21 @@ export async function downloadCatalogTemplate() {
   URL.revokeObjectURL(url);
 }
 
+/** Выгрузка текущего справочника сырья в том же формате, что читает импорт. */
+export async function exportCatalogExcel() {
+  const { data } = await apiClient.get<Blob>("/catalog-import/export-excel", {
+    responseType: "blob",
+  });
+  const url = URL.createObjectURL(data);
+  const link = document.createElement("a");
+  link.href = url;
+  link.download = "final_catalog.xlsx";
+  document.body.appendChild(link);
+  link.click();
+  link.remove();
+  URL.revokeObjectURL(url);
+}
+
 export type AliasSuggestion = {
   id: number;
   sku: string;

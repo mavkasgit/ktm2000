@@ -19,4 +19,5 @@
 | `agent-registry.md` | ИИ-агенты | Субагенты, порты, MCP-матрица скаутов |
 | `bulk-operations-core-v1.md` | Пакетные операции | Bulk approve/delete |
 | `excel-import-10-unique-scenarios.md` | Импорт Excel | Сценарии и валидация |
+| [`catalog-excel-format.md`](catalog-excel-format.md) | **Справочник сырья (Excel)** | Формат импорта/выгрузки, round-trip, нормы, «Фото» |
 | `excel-import-route-passport.md` | Импорт плана | Парсинг маршрутов из Excel |

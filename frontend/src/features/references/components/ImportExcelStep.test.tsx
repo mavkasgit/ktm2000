@@ -3,7 +3,7 @@ import { describe, expect, it, vi } from "vitest";
 import { ImportExcelStep } from "./ImportExcelStep";
 
 describe("ImportExcelStep", () => {
-  it("renders the description, the template structure table and the download button", () => {
+  it("renders the description, the template structure table and the template button", () => {
     render(<ImportExcelStep onFileSelected={vi.fn()} onDownloadTemplate={vi.fn()} />);
 
     expect(screen.getByText(/Импортируйте справочник из Excel/)).toBeTruthy();

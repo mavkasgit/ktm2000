@@ -1,6 +1,6 @@
 import React, { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { useQuery } from "@tanstack/react-query";
-import { Search, Image, X, Grid, List, Plus, Filter, FileUp, FileSpreadsheet, Check, ChevronDown } from "lucide-react";
+import { Search, Image, X, Grid, List, Plus, Filter, Wrench, FileDown, FileSpreadsheet, Check, ChevronDown } from "lucide-react";
 import * as API from "@/shared/api/products";
 import type { ProductFilters } from "@/shared/api/products";
 import { listRouteSelectionRules } from "@/shared/api/routes";
@@ -447,6 +447,18 @@ export function RawMaterialsPage() {
     }
   };
 
+  const handleExportCatalog = async () => {
+    try {
+      await API.exportCatalogExcel();
+    } catch (err) {
+      toast({
+        variant: "destructive",
+        title: "Ошибка выгрузки справочника",
+        description: API.getErrorMessage(err),
+      });
+    }
+  };
+
   const handleConfirmImport = async () => {
     if (!pendingImportFile) return;
     const file = pendingImportFile;
@@ -608,19 +620,23 @@ export function RawMaterialsPage() {
               <DropdownMenu>
                 <DropdownMenuTrigger asChild>
                   <Button variant="outline" size="sm">
-                    <FileUp className="h-4 w-4 mr-1" />
-                    Импорт
+                    <Wrench className="h-4 w-4 mr-1" />
+                    Операции
                     <ChevronDown className="h-4 w-4 ml-1" />
                   </Button>
                 </DropdownMenuTrigger>
                 <DropdownMenuContent align="end">
                   <DropdownMenuItem onSelect={() => setWizardOpen(true)}>
                     <FileSpreadsheet />
-                    Excel — справочник сырья
+                    Импорт: справочник сырья (Excel)
                   </DropdownMenuItem>
                   <DropdownMenuItem onSelect={() => zipInputRef.current?.click()}>
                     <Image />
-                    Фотографии (ZIP)
+                    Импорт: фотографии (ZIP)
+                  </DropdownMenuItem>
+                  <DropdownMenuItem onSelect={handleExportCatalog}>
+                    <FileDown />
+                    Экспорт: скачать справочник (Excel)
                   </DropdownMenuItem>
                 </DropdownMenuContent>
               </DropdownMenu>

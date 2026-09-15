@@ -29,6 +29,8 @@ from app.services.catalog_excel_import import (
     build_quantity_dict,
     diff_catalog_row,
     effective_lengths,
+    format_lengths_cell,
+    format_quantities_cell,
     parse_catalog_excel,
     validate_row_counts,
 )
@@ -359,11 +361,11 @@ async def _load_products_by_sku(db: AsyncSession, skus: list[str]) -> dict[str, 
 
 
 def _row_count_errors(
-    row: ParsedCatalogRow, existing_lengths: list[float] | None, is_new: bool
+    row: ParsedCatalogRow, existing_lengths: list[float] | None
 ) -> list[dict]:
     return [
         {"row": row.row, "sku": row.sku, "message": message}
-        for message in validate_row_counts(row, existing_lengths, is_new=is_new)
+        for message in validate_row_counts(row, existing_lengths)
     ]
 
 
@@ -409,25 +411,31 @@ async def _create_product_from_row(db: AsyncSession, row: ParsedCatalogRow) -> N
         if fields.get("perimeter_mm") is not None and fields.get("mount_width_mm") is not None
         else "manual"
     )
-    if lengths and quantities is not None:
-        qph = build_quantity_dict(lengths, quantities)
-        if product.hanger_mode == "auto":
-            # В авто-режиме значение должно существовать сразу — считаем
-            # движком, как в products API. Несовместимые габариты — auto
-            # остаётся null (ошибку покажет валидация планирования).
-            for length in lengths:
-                try:
-                    calc = compute_hanger_quantity(
-                        perimeter_mm=fields["perimeter_mm"],
-                        mount_width_mm=fields["mount_width_mm"],
-                        length_mm=length,
-                        hanger=DEFAULT_HANGER_SETTINGS,
-                    )
-                except HangerConfigError:
-                    continue
-                if calc.is_calculable:
-                    qph[_length_key(length)]["auto"] = calc.total
-        product.quantity_per_hanger = qph
+    if quantities is not None:
+        if not lengths:
+            # Норма без длин (#177, Q2): legacy-скаляр. Setter принимает int и
+            # пишет bare {auto: null, manual: N}; раскрытие в per-length — когда
+            # у артикула появятся длины.
+            product.quantity_per_hanger = quantities[0]
+        else:
+            qph = build_quantity_dict(lengths, quantities)
+            if product.hanger_mode == "auto":
+                # В авто-режиме значение должно существовать сразу — считаем
+                # движком, как в products API. Несовместимые габариты — auto
+                # остаётся null (ошибку покажет валидация планирования).
+                for length in lengths:
+                    try:
+                        calc = compute_hanger_quantity(
+                            perimeter_mm=fields["perimeter_mm"],
+                            mount_width_mm=fields["mount_width_mm"],
+                            length_mm=length,
+                            hanger=DEFAULT_HANGER_SETTINGS,
+                        )
+                    except HangerConfigError:
+                        continue
+                    if calc.is_calculable:
+                        qph[_length_key(length)]["auto"] = calc.total
+            product.quantity_per_hanger = qph
     db.add(product)
     await db.flush()
 
@@ -599,7 +607,7 @@ async def preview_catalog_from_excel(
         is_new = product is None
 
         existing_lengths = sorted(length.length_mm for length in product.lengths) if product else None
-        count_errors = _row_count_errors(row, existing_lengths, is_new)
+        count_errors = _row_count_errors(row, existing_lengths)
         if count_errors:
             errors.extend(count_errors)
             error_rows.add(row.row)
@@ -659,10 +667,9 @@ async def apply_catalog_from_excel(
     failed_rows: set[int] = set()
     for row in rows:
         product = batch.products.get(row.sku)
-        is_new = product is None
 
         existing_lengths = sorted(length.length_mm for length in product.lengths) if product else None
-        count_errors = _row_count_errors(row, existing_lengths, is_new)
+        count_errors = _row_count_errors(row, existing_lengths)
         if count_errors:
             errors.extend(count_errors)
             failed_rows.add(row.row)
@@ -742,4 +749,75 @@ async def catalog_template_excel() -> Response:
         content=buffer.getvalue(),
         media_type="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
         headers={"Content-Disposition": 'attachment; filename="catalog_template.xlsx"'},
+    )
+
+
+async def _pair_partners_by_id(db: AsyncSession) -> dict[int, list[str]]:
+    """Партнёры по парам (#146): id артикула → отсортированные SKU партнёров."""
+    pairs = (await db.execute(select(ProductPair))).scalars().all()
+    skus = dict((await db.execute(select(Product.id, Product.sku))).all())
+    partners: dict[int, list[str]] = {}
+    for pair in pairs:
+        left, right = skus.get(pair.product_a_id), skus.get(pair.product_b_id)
+        if left is None or right is None:
+            continue
+        partners.setdefault(pair.product_a_id, []).append(right)
+        partners.setdefault(pair.product_b_id, []).append(left)
+    for values in partners.values():
+        values.sort()
+    return partners
+
+
+@router.get("/export-excel")
+async def export_catalog_excel(db: AsyncSession = Depends(get_db)) -> Response:
+    """Выгрузка справочника сырья в Excel в формате импорта (#63).
+
+    Обратная операция к ``/apply-excel``: колонки ровно ``TEMPLATE_HEADERS``
+    (11) — «Фото» в выгрузке нет (#177, Q4): фото ведётся отдельным потоком
+    (ZIP-импорт / карточка), в рабочем файле колонка остаётся. Выгруженный
+    файл правится в Excel и загружается назад без перенастройки колонок.
+    """
+    products = (
+        await db.execute(
+            select(Product)
+            .options(selectinload(Product.lengths), selectinload(Product.processing_flags))
+            .order_by(Product.sku)
+        )
+    ).scalars().all()
+    partners = await _pair_partners_by_id(db)
+
+    workbook = Workbook()
+    sheet = workbook.active
+    sheet.title = "Справочник сырья"
+    sheet.append(list(TEMPLATE_HEADERS))
+    for product in products:
+        lengths = sorted(length.length_mm for length in product.lengths)
+        flag_codes = {flag.code for flag in product.processing_flags}
+        # Норма без длин (#177, Q2/Q11) хранится legacy-скаляром — при пустых
+        # «Длинах» выгружаем её числом, иначе round-trip потерял бы значение.
+        quantities_cell = (
+            format_quantities_cell(lengths, product.quantity_per_hanger_by_length)
+            if lengths
+            else product.quantity_per_hanger
+        )
+        sheet.append([
+            product.sku,
+            product.name,
+            product.perimeter_mm,
+            product.mount_width_mm,
+            format_lengths_cell(lengths),
+            quantities_cell,
+            product.notes,
+            "да" if "skip_shot_blast" in flag_codes else "",
+            "да" if "is_laminated" in flag_codes else "",
+            "; ".join(product.aliases or []),
+            "; ".join(partners.get(product.id, [])),
+        ])
+
+    buffer = BytesIO()
+    workbook.save(buffer)
+    return Response(
+        content=buffer.getvalue(),
+        media_type="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+        headers={"Content-Disposition": 'attachment; filename="final_catalog.xlsx"'},
     )

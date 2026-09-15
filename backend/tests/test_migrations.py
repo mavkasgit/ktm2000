@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import json
 import os
 import socket
 import subprocess
@@ -790,6 +791,233 @@ async def test_migration_053_product_composition_schema():
         # stamp назад + upgrade head не спотыкается о create_table.
         _run("stamp", "052_idempotency_backstops")
         _run("upgrade", "head")
+    finally:
+        await engine.dispose()
+        admin_engine = create_async_engine(admin_url, isolation_level="AUTOCOMMIT")
+        async with admin_engine.connect() as conn:
+            await conn.execute(text(f'DROP DATABASE IF EXISTS "{db_name}" WITH (FORCE)'))
+        await admin_engine.dispose()
+
+
+@pytest.mark.asyncio
+async def test_migration_058_product_pair_quantity_norms():
+    """#177 (Q13): нормы парных профилей из файла справочника → product_pairs.
+
+    Миграция — разовый перенос значений, которых в БД не было (импорт формат
+    «ЮП-2616, 30» не читает, #177 Q1), поэтому проверяется поведение в БД:
+    (1) все пять пар тикета получают ``{"2750": {"manual": N}}``, и ``manual``
+    в JSONB — ЧИСЛО, а не строка (bind-параметр int; строка не прошла бы
+    сравнение с int); пары связываются по каноническому порядку LEAST/GREATEST,
+    а не по порядку id: ЮП-3158 получает id меньше ЮП-2616, поэтому у пары
+    ЮП-2616↔ЮП-3158 порядок колонок обратен порядку SKU в списке норм;
+    (2) 2750 мм обязан быть у ОБОИХ артикулов пары: у одного длины нет вовсе
+    (ЮП-2878), у другого есть только другая длина (ЮП-2604: 3000) → норма не
+    пишется; покрыты обе стороны EXISTS-проверки — в паре ЮП-2604↔ЮП-2616
+    длины нет у первого SKU списка норм, в паре ЮП-2695↔ЮП-2878 — у второго;
+    (3) пара с уже проставленной нормой (99) не перезаписывается, а повторный
+    прогон 058 (stamp назад + upgrade head) ничего не меняет;
+    (4) пары ЮП-3452↔ЮП-3453 нет в БД вовсе (SKU не заведены) — upgrade не
+    падает и остальные пары обрабатывает;
+    (5) downgrade очищает словарь ровно тех пар, где стоит записанная
+    миграцией норма; чужая норма 99 и пара вне миграции (7) остаются.
+    """
+    db_name = f"ktm_mig_{uuid.uuid4().hex[:10]}"
+    admin_url = _test_db_url().rsplit("/", 1)[0] + "/postgres"
+    target_url = _test_db_url().rsplit("/", 1)[0] + f"/{db_name}"
+
+    admin_engine = create_async_engine(admin_url, isolation_level="AUTOCOMMIT")
+    async with admin_engine.connect() as conn:
+        await conn.execute(text(f'CREATE DATABASE "{db_name}"'))
+    await admin_engine.dispose()
+
+    env = {**os.environ, "DATABASE_URL": target_url}
+
+    # (SKU A, SKU B, ручная N на 2750 мм) — значения из файла справочника (#177).
+    norms: list[tuple[str, str, int]] = [
+        ("ЮП-2604", "ЮП-2616", 30),
+        ("ЮП-2616", "ЮП-3158", 32),
+        ("ЮП-2616", "ЮП-3098", 35),
+        ("ЮП-2695", "ЮП-2878", 24),
+        ("ЮП-3452", "ЮП-3453", 26),
+    ]
+    foreign_pair = ("MIG058-OTHER-A", "MIG058-OTHER-B")
+    foreign_norm = {"2750": {"manual": 7}}
+    # Порядок вставки задаёт id. ЮП-3158 получает id меньше ЮП-2616: у пары
+    # ЮП-2616↔ЮП-3158 канонический порядок колонок обратен порядку SKU в списке
+    # норм — такая пара связывается только через LEAST/GREATEST.
+    skus = [
+        "ЮП-3158", "ЮП-2616", "ЮП-2604", "ЮП-3098", "ЮП-2695",
+        "ЮП-2878", "ЮП-3452", "ЮП-3453", foreign_pair[0], foreign_pair[1],
+    ]
+
+    def _key(sku_a: str, sku_b: str) -> tuple[str, str]:
+        """Ключ пары, не зависящий от того, кто из артикулов product_a."""
+        return tuple(sorted((sku_a, sku_b)))
+
+    def _run(*args: str) -> None:
+        result = subprocess.run(
+            ["alembic", *args],
+            cwd=BACKEND_DIR,
+            env=env,
+            capture_output=True,
+            text=True,
+            check=False,
+        )
+        assert result.returncode == 0, result.stderr or result.stdout
+
+    engine = create_async_engine(target_url)
+
+    async def _pair_row(sku_a: str, sku_b: str):
+        """Норма пары по двум её SKU (порядок SKU не важен), или None."""
+        async with engine.connect() as conn:
+            return (
+                await conn.execute(
+                    text(
+                        "SELECT pp.quantity_per_hanger AS qph "
+                        "FROM product_pairs pp "
+                        "JOIN products a ON a.id = pp.product_a_id "
+                        "JOIN products b ON b.id = pp.product_b_id "
+                        "WHERE (a.sku, b.sku) IN ((:a, :b), (:b, :a))"
+                    ),
+                    {"a": sku_a, "b": sku_b},
+                )
+            ).one_or_none()
+
+    async def _norms_snapshot() -> dict:
+        """Все нормы пар в БД: {пара SKU: quantity_per_hanger}."""
+        async with engine.connect() as conn:
+            rows = (
+                await conn.execute(
+                    text(
+                        "SELECT a.sku AS sku_a, b.sku AS sku_b, "
+                        "pp.quantity_per_hanger AS qph "
+                        "FROM product_pairs pp "
+                        "JOIN products a ON a.id = pp.product_a_id "
+                        "JOIN products b ON b.id = pp.product_b_id"
+                    )
+                )
+            ).all()
+        return {_key(r.sku_a, r.sku_b): r.qph for r in rows}
+
+    async def _set_norm(sku_a: str, sku_b: str, norm: dict) -> None:
+        """Проставить паре норму вручную (фикстура «норма уже есть»)."""
+        async with engine.begin() as conn:
+            result = await conn.execute(
+                text(
+                    "UPDATE product_pairs pp SET quantity_per_hanger = CAST(:norm AS jsonb) "
+                    "FROM products a, products b "
+                    "WHERE a.sku = :a AND b.sku = :b "
+                    "  AND pp.product_a_id = LEAST(a.id, b.id) "
+                    "  AND pp.product_b_id = GREATEST(a.id, b.id)"
+                ),
+                {"a": sku_a, "b": sku_b, "norm": json.dumps(norm)},
+            )
+        assert result.rowcount == 1, f"фикстура: пара {sku_a}↔{sku_b} не найдена"
+
+    try:
+        # 1. Состояние до 058: пары есть, норм нет (переносить их было неоткуда).
+        _run("upgrade", "057_plan_change_set_applied_at")
+
+        async with engine.begin() as conn:
+            await conn.execute(text(
+                "INSERT INTO products (sku, name, type, unit, is_active) VALUES "
+                + ", ".join(f"('{sku}', '{sku}', 'component', 'pcs', true)" for sku in skus)
+            ))
+            # 2750 мм у обоих артикулов каждой пары — пересечение длин A∩B.
+            await conn.execute(text(
+                "INSERT INTO product_lengths (product_id, length_mm) "
+                "SELECT p.id, 2750.0 FROM products p "
+                "WHERE p.sku = ANY (ARRAY["
+                + ", ".join(f"'{sku}'" for sku in skus) + "])"
+            ))
+            await conn.execute(text(
+                "INSERT INTO product_pairs (product_a_id, product_b_id) "
+                "SELECT LEAST(a.id, b.id), GREATEST(a.id, b.id) "
+                "FROM (VALUES "
+                + ", ".join(f"('{a}', '{b}')" for a, b, _manual in norms) + ") AS v(sku_a, sku_b) "
+                "JOIN products a ON a.sku = v.sku_a "
+                "JOIN products b ON b.sku = v.sku_b"
+            ))
+            # Пара вне миграции: чужая норма — её не должен трогать ни upgrade, ни downgrade.
+            await conn.execute(text(
+                "INSERT INTO product_pairs (product_a_id, product_b_id, quantity_per_hanger) "
+                "SELECT LEAST(a.id, b.id), GREATEST(a.id, b.id), '{\"2750\": {\"manual\": 7}}'::jsonb "
+                "FROM products a, products b WHERE a.sku = :a AND b.sku = :b"
+            ), {"a": foreign_pair[0], "b": foreign_pair[1]})
+
+        # 2. upgrade head → 058 переносит нормы файла в БД.
+        _run("upgrade", "head")
+
+        for sku_a, sku_b, manual in norms:
+            row = await _pair_row(sku_a, sku_b)
+            assert row is not None, f"{sku_a}↔{sku_b}: пара не найдена"
+            # manual — число: строка «30» в JSONB декодируется как str и здесь не равна int.
+            assert row.qph == {"2750": {"manual": manual}}, f"{sku_a}↔{sku_b}"
+
+        assert (await _pair_row(*foreign_pair)).qph == foreign_norm
+
+        # 3. Пара с уже проставленной нормой + повторный прогон 058 (stamp назад).
+        await _set_norm("ЮП-2616", "ЮП-3098", {"2750": {"manual": 99}})
+        expected_filled = {_key(a, b): {"2750": {"manual": n}} for a, b, n in norms}
+        expected_filled[_key("ЮП-2616", "ЮП-3098")] = {"2750": {"manual": 99}}
+        expected_filled[_key(*foreign_pair)] = foreign_norm
+
+        _run("stamp", "057_plan_change_set_applied_at")
+        _run("upgrade", "head")
+        # Повторный прогон: значения те же, 99 не перезаписана.
+        assert await _norms_snapshot() == expected_filled
+
+        # 4. downgrade чистит ровно записанные миграцией нормы: 99 и 7 остаются.
+        _run("downgrade", "057_plan_change_set_applied_at")
+
+        expected_cleared = {_key(a, b): {} for a, b, _n in norms}
+        expected_cleared[_key("ЮП-2616", "ЮП-3098")] = {"2750": {"manual": 99}}
+        expected_cleared[_key(*foreign_pair)] = foreign_norm
+        assert await _norms_snapshot() == expected_cleared
+
+        # 5. Грязные кейсы на 057 (после downgrade все нормы миграции снова пусты).
+        async with engine.begin() as conn:
+            # (а) длина есть, но не 2750: EXISTS по product_lengths не срабатывает.
+            result = await conn.execute(text(
+                "UPDATE product_lengths l SET length_mm = 3000.0 FROM products p "
+                "WHERE p.id = l.product_id AND p.sku = :sku AND l.length_mm = 2750.0"
+            ), {"sku": "ЮП-2604"})
+            assert result.rowcount == 1, "фикстура: у ЮП-2604 не нашлась длина 2750"
+            # (б) строк длин нет вовсе у второго артикула пары.
+            result = await conn.execute(text(
+                "DELETE FROM product_lengths l USING products p "
+                "WHERE p.id = l.product_id AND p.sku = :sku"
+            ), {"sku": "ЮП-2878"})
+            assert result.rowcount == 1, "фикстура: у ЮП-2878 не нашлась длина 2750"
+            # (в) пары нет в БД вовсе — её SKU не заведены.
+            result = await conn.execute(text(
+                "DELETE FROM product_pairs pp USING products a, products b "
+                "WHERE pp.product_a_id = LEAST(a.id, b.id) "
+                "  AND pp.product_b_id = GREATEST(a.id, b.id) "
+                "  AND (a.sku, b.sku) IN (('ЮП-3452', 'ЮП-3453'), ('ЮП-3453', 'ЮП-3452'))"
+            ))
+            assert result.rowcount == 1, "фикстура: пара ЮП-3452↔ЮП-3453 не нашлась"
+            await conn.execute(text(
+                "DELETE FROM product_lengths l USING products p "
+                "WHERE p.id = l.product_id AND p.sku IN ('ЮП-3452', 'ЮП-3453')"
+            ))
+            result = await conn.execute(text(
+                "DELETE FROM products WHERE sku IN ('ЮП-3452', 'ЮП-3453')"
+            ))
+            assert result.rowcount == 2, "фикстура: артикулы ЮП-3452/ЮП-3453 не удалились"
+
+        # upgrade head не падает на отсутствующих SKU и пишет только пару, у
+        # которой 2750 есть у обоих артикулов.
+        _run("upgrade", "head")
+
+        expected_dirty = {
+            _key("ЮП-2616", "ЮП-3158"): {"2750": {"manual": 32}},
+            _key("ЮП-2604", "ЮП-2616"): {},
+            _key("ЮП-2695", "ЮП-2878"): {},
+            _key("ЮП-2616", "ЮП-3098"): {"2750": {"manual": 99}},
+            _key(*foreign_pair): foreign_norm,
+        }
+        assert await _norms_snapshot() == expected_dirty
     finally:
         await engine.dispose()
         admin_engine = create_async_engine(admin_url, isolation_level="AUTOCOMMIT")
