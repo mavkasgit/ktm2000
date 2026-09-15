@@ -17,7 +17,8 @@ npm --prefix frontend run test:e2e         # оба проекта
 
 ### @ui (канон)
 
-- Спеки: `full-cycle.spec.ts` (канонический полный цикл ЮП-009), `route-workflow.spec.ts`
+- Спеки: `full-cycle.spec.ts` (канонический полный цикл ЮП-009), `route-workflow.spec.ts`,
+  `sawing-four-lengths-cycle.spec.ts` (пила в полном цикле: раскрой 2,75 м на четыре длины)
 - Хелперы: [`ui-helpers.ts`](ui-helpers.ts) — seed через `/settings/dev`, импорт wizard, approve, take-to-work
 - **Запрещено:** прямые `fetch` к бизнес-API (approve, import, products, …)
 - Допустимо: только Playwright `page` / locators
@@ -95,6 +96,7 @@ set PLAYWRIGHT_TEST_BASE_URL=http://localhost:5172
 | `full-cycle.spec.ts` | `@ui` | Полный цикл ЮП-009: каталог → остатки → план → approve → запуск → маршрут → отгрузка | ✅ канон |
 | `route-workflow.spec.ts` | `@ui` | Инфо о маршруте в таблице плана; диалог import-wizard | ✅ |
 | `sawing-multi-length-split.spec.ts` | `@ui` | Пила: распил одной задачи на несколько разных длин (2,7 м → 0,9 м + 1,8 м) порциями через доску; ledger + остатки по длинам. Сетап — API (быстро), в кадре только действие участка | ✅ |
+| `sawing-four-lengths-cycle.spec.ts` | `@ui` | Пила в полном цикле (ЮП-2083): каталог → остатки (2,75 м) → план из 4 позиций (ГП-раскрой 2,7 м → 0,9 + 1,35 + 1,8 + 2,7, П/ф 2,7, ГП одиночный 1,35, ГП без резки) → approve → запуск → маршрут с двумя порциями на пиле → отгрузка. Сетап: сброс планов (dev-API) + визарды, дальше только UI | ✅ |
 | `transfers-auto-accept.spec.ts` | `@smoke` | Передача: Send со склада → auto-accept → `in_progress` (`received==issued`) | ✅ |
 | `final-release.spec.ts` | `@smoke` | Финальный выпуск кнопкой «Отправить» (#96) | ✅ |
 | `catalog-dimensions.spec.ts` | `@smoke` | Сохранение 2D/3D размеров в каталоге | ✅ |

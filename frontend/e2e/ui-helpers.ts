@@ -13,6 +13,24 @@ export const E2E_REMAINDERS_XLS_PATH = path.resolve(__dirname, "../../Склад
 export const E2E_PLAN_XLS_PATH = path.resolve(__dirname, "../../Упаковочный план E2E.xlsx");
 export const BULK_REMAINDERS_XLS_PATH = path.resolve(__dirname, "../../Склад импорта остатков Bulk E2E.xlsx");
 export const E2E_SKU = "ЮП-009";
+
+/**
+ * Пила в полном цикле: ЮП-2083 с сырьевой длиной 2,75 м и раскроем на четыре
+ * длины (0,9 / 1,35 / 1,8 / 2,7 м). Каталог повторяет прод-значения артикула
+ * (`excel/final_catalog.xlsx`: длины 2750, периметр 81,5, габарит 36,9, 50 шт
+ * на подвесе).
+ */
+export const SAW4_SKU = "ЮП-2083";
+export const SAW4_CATALOG_XLS_PATH = path.resolve(__dirname, "../../Каталог пила 4 длины E2E.xlsx");
+export const SAW4_REMAINDERS_XLS_PATH = path.resolve(
+  __dirname,
+  "../../Склад импорта остатков пила 4 длины E2E.xlsx",
+);
+export const SAW4_PLAN_XLS_PATH = path.resolve(
+  __dirname,
+  "../../Упаковочный план пила 4 длины E2E.xlsx",
+);
+
 export const E2E_SECTION = {
   RAW_STOCK: "RAW_STOCK",
   SHOT_BLAST: "SHOT_BLAST",
@@ -224,6 +242,9 @@ export async function findApprovablePositionViaUI(page: Page): Promise<Approvabl
   const rows = page.locator('[id^="plan-position-"]').filter({
     has: page.getByRole("button", { name: "Утвердить" }),
   });
+  // Таблица плана грузится асинхронно: после reload/refetch даём ей отрисоваться,
+  // иначе «нет строк» — это ещё не «нет утверждаемых позиций».
+  await rows.first().waitFor({ state: "visible", timeout: 10_000 }).catch(() => {});
   const count = await rows.count();
   if (count === 0) {
     return null;
@@ -267,7 +288,17 @@ export async function approvePositionViaUI(page: Page, position: ApprovablePosit
     // no risk dialog — ok
   }
 
-  await expect(approveBtn).not.toBeVisible({ timeout: 15_000 });
+  await expect(approveBtn).not.toBeVisible({ timeout: 8_000 }).catch(async () => {
+    // Таблица плана иногда не перерисовывается после approve (refetch успевает
+    // раньше коммита). Перезагружаем и проверяем статус строки на свежих данных:
+    // если утверждение реально прошло — строки с кнопкой больше нет.
+    await page.reload();
+    await expect(page.getByPlaceholder("Поиск")).toBeVisible({ timeout: 15_000 });
+    if (position.sku) {
+      await page.getByPlaceholder("Поиск").fill(singleSku(position.sku));
+    }
+    await expect(approveBtn).not.toBeVisible({ timeout: 15_000 });
+  });
 }
 
 export async function takeToWorkViaUI(page: Page, position: ApprovablePosition) {
@@ -283,6 +314,16 @@ export async function takeToWorkViaUI(page: Page, position: ApprovablePosition) 
   await expect(execRow).toBeVisible({ timeout: 15_000 });
 
   const launchBtn = execRow.getByRole("button", { name: "Взять в работу" });
+  const launchVisible = await launchBtn
+    .waitFor({ state: "visible", timeout: 5_000 })
+    .then(() => true, () => false);
+  if (!launchVisible) {
+    const text = ((await execRow.innerText()) ?? "").replace(/\s+/g, " ").trim();
+    console.log(
+      `[takeToWork] позиция #${position.id}: кнопки «Взять в работу» нет; ` +
+        `кнопка рендерится при status=approved && !has_tasks && !is_released && route_id. Строка: ${text}`,
+    );
+  }
   await expect(launchBtn).toBeVisible({ timeout: 5_000 });
   await launchBtn.click();
   await confirmProductionLaunchViaUI(page);
@@ -303,33 +344,42 @@ export async function takeToWorkViaUI(page: Page, position: ApprovablePosition) 
  *
  * Строка исчезает после refetch (auto-accept), поэтому индекс по заранее снятому
  * count ненадёжен — каждый раз берём первую живую строку. Ждём исчезновения
- * именно её: `rows.first()` ре-резолвится на следующую строку после refetch,
- * поэтому «первая живая» — не тот признак. Возвращает `false`, когда строк
- * больше нет; `prepare` — шаг до клика (например, заполнить количество).
+ * именно её: адресуем строку её `data-row-key` из разметки. Ключ текстом или
+ * «первой живой» строкой не годится: локатор ре-резолвится на каждом действии,
+ * и при refetch клик уходит по соседней строке, а ожидание — за строкой,
+ * которую никто не передавал. Возвращает `false`, когда строк больше нет;
+ * `prepare` — шаг до клика (например, заполнить количество). `prepare`,
+ * вернувший `false`, отменяет клик (строку сейчас передавать нельзя).
  */
 async function clickFirstRowAndWaitGone(
   rows: Locator,
   buttonName: string,
-  prepare?: (row: Locator) => Promise<void>,
+  prepare?: (row: Locator) => Promise<boolean | void>,
 ): Promise<boolean> {
   const row = rows.first();
   if ((await row.count()) === 0) return false;
 
-  // Идентификатор строки — id позиции плана (первая ячейка). Исторические
-  // передачи тоже содержат id, но у них нет кнопки действия — фильтр `rows`
-  // остаётся.
-  const rowPosId = (await row.locator("td").first().textContent())?.trim();
-  if (prepare) await prepare(row);
+  const rowKey = await row.getAttribute("data-row-key");
+  if (!rowKey) {
+    throw new Error(`строка «${buttonName}» без data-row-key: нечем её адресовать`);
+  }
+  const rowLabel = ((await row.innerText()) ?? "").replace(/\s+/g, " ").trim();
+  const target = rows.page().locator(`tr[data-row-key="${rowKey}"]`);
 
-  const button = row.getByRole("button", { name: buttonName });
+  if (prepare && (await prepare(target)) === false) return false;
+
+  const button = target.getByRole("button", { name: buttonName });
   await expect(button).toBeEnabled({ timeout: 5_000 });
   await button.click();
 
-  if (rowPosId) {
-    await expect(rows.filter({ hasText: rowPosId })).not.toBeVisible({ timeout: 30_000 });
-  } else {
-    await expect(row).not.toBeVisible({ timeout: 30_000 });
-  }
+  // Текст строки как признак не подходит: кнопка сразу меняется на «Отправка…»,
+  // и сравнение текстов даёт ложное «строка исчезла» до прихода refetch.
+  await expect
+    .poll(() => target.count(), {
+      timeout: 30_000,
+      message: `строка «${rowLabel}» осталась в списке после «${buttonName}»`,
+    })
+    .toBe(0);
   return true;
 }
 
@@ -348,17 +398,21 @@ export async function sendReadyTransfersViaUI(page: Page, sku: string): Promise<
   // Ready-строки — в таблице «Готово к передаче»:
   //  • «Передать» — обычная передача на следующий участок;
   //  • «Отправить» — финальный выпуск финальной стадии (#96).
+  // Только строки заданий (`data-row-kind="ready-task"`): заголовок свёрнутой
+  // группы тоже несёт артикул и кнопку, но его клик отправляет всю группу
+  // разом — тогда и счётчик `sent`, и ожидание исчезновения строки врут.
   // Таблица грузится асинхронно (VirtualizedTableBody): ждём либо строки, либо пустое
   // состояние «Нет заданий…» (валидный результат между операциями маршрута).
   const sendRows = page
-    .locator("tr", { hasText: sku })
+    .locator('tr[data-row-kind="ready-task"]', { hasText: sku })
     .filter({ has: page.getByRole("button", { name: "Передать" }) });
   const releaseRows = page
-    .locator("tr", { hasText: sku })
+    .locator('tr[data-row-kind="ready-task"]', { hasText: sku })
     .filter({ has: page.getByRole("button", { name: "Отправить" }) });
   const emptyState = page.getByText(/Нет заданий, готовых к передаче/);
   let present = false;
   for (let attempt = 0; attempt < 40; attempt++) {
+    await expandBoardGroupsViaUI(page);
     if ((await sendRows.count()) > 0 || (await releaseRows.count()) > 0) {
       present = true;
       break;
@@ -379,9 +433,15 @@ export async function sendReadyTransfersViaUI(page: Page, sku: string): Promise<
       const qtyInput = row.locator('input[type="number"]').first();
       await expect(qtyInput).toBeVisible({ timeout: 5_000 });
       // Инпут предзаполнен значением «К передаче» — не перетираем его.
-      // Ячейка используется только если инпут пустой/нулевой.
+      // «0» — материал к передаче ещё не поступил: строка в ready-списке по
+      // плану, отправлять нечего (POST вернёт «exceeds transferable amount»).
+      // Пустой инпут — значение UI не выставил: подставляем из ячейки.
       const currentQty = (await qtyInput.inputValue()).trim();
-      if (!currentQty || Number(currentQty) <= 0) {
+      if (Number(currentQty) === 0) {
+        console.log(`[sendReadyTransfers] SKU=${sku} строка без к передаче — пропуск`);
+        return false;
+      }
+      if (!currentQty) {
         const cell = row.locator("td", { hasText: "шт." }).first();
         const match = (await cell.textContent())?.match(/(\d+)\s*шт/);
         if (match) await qtyInput.fill(match[1]);
@@ -389,6 +449,7 @@ export async function sendReadyTransfersViaUI(page: Page, sku: string): Promise<
     })
   ) {
     sent++;
+    await expandBoardGroupsViaUI(page);
   }
 
   // Финальный выпуск (#96): финальная стадия отдаёт готовое в «Отправлено»
@@ -396,15 +457,37 @@ export async function sendReadyTransfersViaUI(page: Page, sku: string): Promise<
   // последней стадии. Возможно несколько финальных строк одного SKU.
   while (await clickFirstRowAndWaitGone(releaseRows, "Отправить")) {
     sent++;
+    await expandBoardGroupsViaUI(page);
   }
 
   console.log(`[sendReadyTransfers] SKU=${sku} sent=${sent}`);
   return sent;
 }
 
+/** Экранирование имени участка для имени-регекспа кнопки-плитки. */
+function escapeRegExp(value: string): string {
+  return value.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+}
+
+/**
+ * Раскрыть свёрнутые группы задач на доске участка.
+ *
+ * Доска прячет задачи одного артикула/размера/операции в строку-группу
+ * (`title="Раскрыть"`): пока группа свёрнута, строк задач с кнопкой
+ * «Завершить» в DOM нет, и обход участков их не видит.
+ */
+export async function expandBoardGroupsViaUI(page: Page, limit = 10): Promise<void> {
+  for (let attempt = 0; attempt < limit; attempt++) {
+    const expander = page.locator('button[title="Раскрыть"]').first();
+    if (!(await expander.isVisible().catch(() => false))) return;
+    await expander.click();
+  }
+}
+
 /** Завершить задачу на участке (доска /section-tasks/:id): «Завершить» → факт = плановое → сохранить. */
 export async function completeSectionTaskViaUI(page: Page, sectionId: number, sku: string) {
   await page.goto(`/section-tasks/${sectionId}`);
+  await expandBoardGroupsViaUI(page);
   const taskRow = page.locator("tr", { hasText: sku }).first();
   await expect(taskRow).toBeVisible({ timeout: 15_000 });
 
@@ -427,42 +510,73 @@ export async function completeSectionTaskViaUI(page: Page, sectionId: number, sk
   await expect(drawer).not.toBeVisible({ timeout: 15_000 });
 }
 
-/** Завершить завершаемые задачи SKU на всех производственных участках. Возвращает кол-во завершённых. */
-export async function completeAllSectionTasksViaUI(page: Page, sku: string): Promise<number> {
+/** Завершить завершаемые задачи SKU на производственных участках.
+ *
+ * `sections` — необязательный список имён участков (маршрут конкретного теста):
+ * обход только по ним экономит круги по заведомо пустым доскам.
+ * Возвращает кол-во завершённых задач.
+ */
+export async function completeAllSectionTasksViaUI(
+  page: Page,
+  sku: string,
+  sections?: string[],
+): Promise<number> {
   await page.goto("/section-tasks");
   await expect(page.getByRole("heading", { name: "Участки" })).toBeVisible({ timeout: 10_000 });
 
   // Плитки производственных участков (SectionSwitcherTiles) — кнопки с бейджами
-  // «ОЖ: N» / «ВР: N». Таблица и плитки грузятся асинхронно — ждём появления.
+  // «ОЖ: N» / «ВР: N». Порядок обхода — с ненулевым бейджем вперёд, но САМ
+  // БЕЙДЖ НЕ ФИЛЬТР: счётчики приходят отдельным summary-запросом и отстают от
+  // доски (наблюдали 0/0 при живых задачах «В работе»), из-за чего участок
+  // молча пропускался и проход завершался ни с чем.
   const tiles = page.getByRole("button").filter({ hasText: /ОЖ:|ВР:/ });
   await expect(tiles.first()).toBeVisible({ timeout: 20_000 });
 
-  // Обходим участки, где есть задачи (бейдж ОЖ/ВР ненулевой), и завершаем те,
-  // у которых кнопка «Завершить» доступна. Строка доски — только та, что содержит
-  // кнопку (на странице есть и таблица «Остатки» с теми же SKU без кнопки).
+  // Снимок плиток: поштучный `nth(i).textContent()` висит, когда список
+  // перерисовывается.
+  const tileTexts = (await tiles.allInnerTexts()).map((text) => text.replace(/\s+/g, " ").trim());
+  const sectionNames: string[] = [];
+  for (const text of tileTexts) {
+    const name = text.split(/\s+ОЖ:/)[0].trim();
+    if (name && !sectionNames.includes(name)) sectionNames.push(name);
+  }
+  const isBusy = (name: string) => {
+    const text = tileTexts[sectionNames.indexOf(name)] ?? "";
+    return /(?:ОЖ|ВР):\s*[1-9]/.test(text);
+  };
+  const walkOrder = [
+    ...sectionNames.filter(isBusy),
+    ...sectionNames.filter((name) => !isBusy(name)),
+  ].filter((name) => !sections || sections.includes(name));
+
   let completed = 0;
-  for (;;) {
-    const tileCount = await tiles.count();
-    let didComplete = false;
+  for (const sectionName of walkOrder) {
+    // Кириллица: `\b` не работает (граница слова — только вокруг [A-Za-z0-9_]),
+    // поэтому имя участка закрываем lookahead'ом «дальше не буква/цифра».
+    const tile = page
+      .getByRole("button", { name: new RegExp(`^${escapeRegExp(sectionName)}(?!\\S)`) })
+      .first();
+    if (!(await tile.isVisible().catch(() => false))) continue;
 
-    for (let i = 0; i < tileCount; i++) {
-      const tile = tiles.nth(i);
-      const tileText = (await tile.textContent()) ?? "";
-      // Скипаем участки без задач в работе/ожидании (уже завершены или пусты).
-      if (!/(?:ОЖ|ВР):\s*[1-9]/.test(tileText)) continue;
+    await tile.click();
+    await expect(page).toHaveURL(/\/section-tasks\/\d+/, { timeout: 15_000 }).catch(() => {});
+    const sectionUrl = page.url();
+    await expandBoardGroupsViaUI(page);
 
-      await tile.click();
-
+    // Внутри участка завершаем столько задач, сколько доступно за один заход:
+    // после каждой мутации доска не рефетчится — перезагружаем страницу участка.
+    const rowWaitMs = isBusy(sectionName) ? 6_000 : 2_500;
+    for (let guard = 0; guard < 20; guard++) {
       const taskRow = page
         .locator("tr", { hasText: sku })
         .filter({ has: page.getByRole("button", { name: "Завершить" }) })
         .first();
       const found = await taskRow
-        .waitFor({ state: "visible", timeout: 10_000 })
+        .waitFor({ state: "visible", timeout: rowWaitMs })
         .then(() => true, () => false);
-      if (!found) continue;
+      if (!found) break;
       const completeBtn = taskRow.getByRole("button", { name: "Завершить" }).first();
-      if (!(await completeBtn.isEnabled().catch(() => false))) continue;
+      if (!(await completeBtn.isEnabled().catch(() => false))) break;
 
       await completeBtn.click();
       const drawer = page.getByRole("dialog");
@@ -470,26 +584,27 @@ export async function completeAllSectionTasksViaUI(page: Page, sku: string): Pro
 
       // «В работе: N» — выданное на участок количество. Если 0, материал ещё не
       // пришёл (передача в пути): завершать рано — бэкенд вернёт «Complete quantity
-      // exceeds issued quantity». Закрываем «Отмена» и пробуем в следующем раунде.
+      // exceeds issued quantity». Закрываем «Отмена» и идём дальше.
       const inWorkMatch = (await drawer.textContent())?.match(/В работе:\s*(\d+)/);
       const inWork = inWorkMatch ? Number(inWorkMatch[1]) : 0;
       if (inWork <= 0) {
         await drawer.getByRole("button", { name: "Отмена" }).click().catch(() => {});
         await expect(drawer).not.toBeVisible({ timeout: 8_000 }).catch(() => {});
-        continue;
+        break;
       }
 
       const plannedBtn = drawer.getByRole("button", { name: /Плановое \(\d+\)/ });
       if ((await plannedBtn.count()) > 0) {
         await plannedBtn.click();
       } else {
+        // Нет кнопки «Плановое» — берём выданное на участок количество.
         const goodInput = drawer.locator('input[type="number"]').first();
-        await goodInput.fill(String(await taskRow.locator("td").nth(1).textContent() ?? "0"));
+        await goodInput.fill(String(inWork));
       }
 
       await drawer.getByRole("button", { name: "Сохранить" }).click();
-      // Страховка: если сохранение всё же упало по валидации — закрываем «Отмена»
-      // и пробуем снова в следующем раунде, не роняя весь проход.
+      // Страховка: сохранение могло упасть по валидации — закрываем «Отмена» и
+      // не роняем весь проход.
       const saveOk = await expect(drawer).not.toBeVisible({ timeout: 8_000 }).then(
         () => true,
         () => false,
@@ -497,18 +612,16 @@ export async function completeAllSectionTasksViaUI(page: Page, sku: string): Pro
       if (!saveOk) {
         await drawer.getByRole("button", { name: "Отмена" }).click().catch(() => {});
         await expect(drawer).not.toBeVisible({ timeout: 8_000 }).catch(() => {});
-        continue;
+        break;
       }
       completed++;
-      didComplete = true;
-      // Возвращаемся на список участков, чтобы продолжить обход.
-      await page.goto("/section-tasks");
-      await expect(page.getByRole("heading", { name: "Участки" })).toBeVisible({ timeout: 10_000 });
-      await expect(tiles.first()).toBeVisible({ timeout: 20_000 });
-      break;
+      await page.goto(sectionUrl);
+      await expandBoardGroupsViaUI(page);
     }
 
-    if (!didComplete) break;
+    await page.goto("/section-tasks");
+    await expect(page.getByRole("heading", { name: "Участки" })).toBeVisible({ timeout: 10_000 });
+    await expect(tiles.first()).toBeVisible({ timeout: 20_000 });
   }
 
   console.log(`[completeAllSectionTasks] SKU=${sku} completed=${completed}`);
@@ -530,6 +643,12 @@ export async function expectShippedViaUI(page: Page, sku: string, positionIds: n
   await expect(page.getByRole("heading", { name: "Передачи между ГХП" })).toBeVisible({
     timeout: 10_000,
   });
+
+  // «Журнал передач» — боковая панель: открываем её, иначе таблицы в DOM нет.
+  const journalOpener = page.locator('button[title="Открыть журнал передач"]');
+  if ((await journalOpener.count()) > 0) {
+    await journalOpener.click();
+  }
 
   // «Журнал передач» — вторая таблица страницы («Готово к передаче» — первая):
   // различаем по колонке получателя. По умолчанию выбрано «Все ГХП», поэтому

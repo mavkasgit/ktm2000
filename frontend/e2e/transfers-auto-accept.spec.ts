@@ -179,6 +179,8 @@ test.describe("@smoke Explicit transfer — 2-step ritual (Send + Issue)", () =>
 
     // 5. Проверяем, что в «Журнале передач» появилась запись со статусом «Принята»
     //    — auto-accept произошёл inline внутри transfer_send.
+    //    Журнал живёт в боковой панели и в DOM появляется только когда открыт.
+    await authenticatedPage.locator('button[title="Открыть журнал передач"]').click();
     const historyRow = journalTable.locator("tr", { hasText: "ЮП-2083" }).first();
     await expect(historyRow).toBeVisible({ timeout: 15_000 });
     await expect(historyRow.locator("td").filter({ hasText: "Принята" })).toBeVisible({
