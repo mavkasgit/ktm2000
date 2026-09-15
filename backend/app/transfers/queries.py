@@ -30,8 +30,8 @@ from app.models.spg import SpgSection
 from app.services.route_storage_classifier import (
     SECTION_TYPE_PRODUCTION,
     STOCK_TYPES,
+    accepts_ordinary_transfer,
     is_stock_section,
-    is_terminal_section,
 )
 from app.models.transfer import (
     Transfer,
@@ -808,7 +808,7 @@ async def _fetch_stock_ready_items(
             # (StockProjectionManager пропускает терминал). Задача на терминале
             # появляется лениво — при первой передаче, как на складах (#176),
             # поэтому её отсутствие до передачи строку не скрывает.
-            destination_accepts_transfer = is_stock_section(next_sec) or is_terminal_section(next_sec)
+            destination_accepts_transfer = accepts_ordinary_transfer(next_sec)
 
             if await sections_share_spg(db, spl.section_id, next_line.section_id):
                 if not destination_accepts_transfer:

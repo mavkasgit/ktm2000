@@ -123,6 +123,17 @@ def is_terminal_section(section: Section | None) -> bool:
     return section.type in TERMINAL_TYPES
 
 
+def accepts_ordinary_transfer(section: Section | None) -> bool:
+    """``True`` если секция принимает обычную передачу (``Transfer``) по маршруту.
+
+    Оборачиваемый склад или терминал: «Отправлено» (#136) принимает материал
+    обычной передачей и остатков не создаёт (#176) — задачу-приёмник ему, как
+    и складу, создаёт лениво ``transfer_send``. Брак и цеха адресатом передачи
+    не являются.
+    """
+    return is_stock_section(section) or is_terminal_section(section)
+
+
 def classify_section_role(section: Section | None) -> str:
     """Возвращает роль секции: ``'production'`` или ``'storage'``."""
     if is_storage_section(section):
@@ -226,6 +237,7 @@ __all__ = [
     "is_stock_section",
     "is_production_section",
     "is_terminal_section",
+    "accepts_ordinary_transfer",
     "classify_section_role",
     "is_transit_stage",
     "is_production_stage",
