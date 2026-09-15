@@ -93,6 +93,23 @@ def build_transform_spec(position: PlanPosition, task_quantity: Decimal) -> dict
     }
 
 
+def raw_input_quantity_for(position: PlanPosition, task_quantity: Decimal) -> Decimal | None:
+    """Количество СЫРЬЯ (штук входа) на порцию ``task_quantity`` позиции.
+
+    До трансформирующего этапа материал — сырьё: длины появляются только на
+    пиле (ADR-0002), поэтому этапы перед ней идут одним заданием в штуках
+    входа (заготовки сырьевой длины), а не в штуках выходов. ``None`` —
+    позиция без входа (``input_quantity`` NULL, резки нет): поток везде в
+    штуках позиции.
+    """
+    if position.input_quantity is None:
+        return None
+    position_quantity = Decimal(str(position.quantity or 0))
+    if position_quantity <= 0:
+        return None
+    return _scale(Decimal(str(position.input_quantity)), task_quantity / position_quantity)
+
+
 async def transform_fields_for_task(
     db: AsyncSession,
     *,

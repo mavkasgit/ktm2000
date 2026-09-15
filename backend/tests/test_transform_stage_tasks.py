@@ -263,6 +263,122 @@ async def test_partial_release_scales_input_and_outputs(client, session) -> None
     ]
 
 
+@pytest.mark.asyncio
+async def test_stages_before_transform_planned_in_raw_input_units(client, session) -> None:
+    """До пилы группа идёт одним заданием в штуках входа (сырьё), с пилы — в штуках позиции."""
+    product, _, route, stages = await _make_product_with_route(session, "FG-TR-RAW", transform_stage_sequence=3)
+    plan, position = await _make_position(
+        session,
+        product,
+        route,
+        quantity=Decimal("300"),
+        input_quantity=Decimal("150"),
+        input_dimensions={"length_mm": 2700},
+        outputs=MULTI_OUTPUTS,
+    )
+    await session.commit()
+
+    await _release(client, plan, position, "300")
+
+    tasks = await _tasks_by_sequence(session, position)
+    assert len(tasks) == 6
+
+    transform_stage = next(stage for stage in stages if stage.transforms_dimensions)
+    pre_stage_ids = {stage.id for stage in stages if stage.sequence < transform_stage.sequence}
+    pre_tasks = [task for task in tasks if task.route_stage_id in pre_stage_ids]
+    assert len(pre_stage_ids) >= 2, "маршрут-хелпер: перед пилой есть этапы"
+    assert len(pre_tasks) == len(pre_stage_ids), "каждый этап до пилы получает задание"
+    for task in pre_tasks:
+        # Сырьё: 150 штук входа, а не 300 штук выходов.
+        assert task.planned_quantity == Decimal("150")
+        assert task.input_quantity is None
+
+    transform_task = next(task for task in tasks if task.route_stage_id == transform_stage.id)
+    assert transform_task.planned_quantity == Decimal("300")
+    assert transform_task.input_quantity == Decimal("150")
+
+    post_tasks = [
+        task for task in tasks if task.route_stage_id not in (pre_stage_ids | {transform_stage.id})
+    ]
+    assert len(post_tasks) == 3, "этапы после пилы получают задания"
+    for task in post_tasks:
+        # Пила и далее — штуки позиции (выходы).
+        assert task.planned_quantity == Decimal("300")
+
+
+@pytest.mark.asyncio
+async def test_partial_release_scales_stages_before_transform(client, session) -> None:
+    """Частичный релиз: до пилы план — доля входа, с пилы — доля выхода."""
+    product, _, route, stages = await _make_product_with_route(session, "FG-TR-RAW-PART", transform_stage_sequence=3)
+    plan, position = await _make_position(
+        session,
+        product,
+        route,
+        quantity=Decimal("300"),
+        input_quantity=Decimal("150"),
+        input_dimensions={"length_mm": 2700},
+        outputs=MULTI_OUTPUTS,
+    )
+    await session.commit()
+
+    await _release(client, plan, position, "150")
+
+    tasks = await _tasks_by_sequence(session, position)
+    transform_stage = next(stage for stage in stages if stage.transforms_dimensions)
+    pre_stage_ids = {stage.id for stage in stages if stage.sequence < transform_stage.sequence}
+    assert len(pre_stage_ids) >= 2, "маршрут-хелпер: перед пилой есть этапы"
+
+    for task in tasks:
+        if task.route_stage_id in pre_stage_ids:
+            # 150 штук входа × (150 / 300) — половина сырья.
+            assert task.planned_quantity == Decimal("75")
+        else:
+            # Пила и далее — половина штук позиции.
+            assert task.planned_quantity == Decimal("150")
+
+    transform_task = next(task for task in tasks if task.route_stage_id == transform_stage.id)
+    assert transform_task.input_quantity == Decimal("75")
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("sku", "transform_stage_sequence", "input_quantity"),
+    [
+        ("FG-TR-NOINPUT", 3, None),
+        ("FG-TR-NOSAW", None, Decimal("150")),
+    ],
+    ids=["no_input_quantity", "no_transform_stage"],
+)
+async def test_without_raw_basis_all_stages_planned_in_position_units(
+    client,
+    session,
+    sku: str,
+    transform_stage_sequence: int | None,
+    input_quantity: Decimal | None,
+) -> None:
+    """Нет сырьевого базиса (нет входа у позиции или нет пилы в маршруте) → везде штуки позиции."""
+    product, _, route, _ = await _make_product_with_route(
+        session, sku, transform_stage_sequence=transform_stage_sequence
+    )
+    plan, position = await _make_position(
+        session,
+        product,
+        route,
+        quantity=Decimal("300"),
+        input_quantity=input_quantity,
+        input_dimensions={"length_mm": 2700} if input_quantity is not None else None,
+        outputs=MULTI_OUTPUTS,
+    )
+    await session.commit()
+
+    await _release(client, plan, position, "300")
+
+    tasks = await _tasks_by_sequence(session, position)
+    assert len(tasks) == 6
+    for task in tasks:
+        assert task.planned_quantity == Decimal("300")
+
+
 # --- доска участка ---
 
 

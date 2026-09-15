@@ -7,7 +7,7 @@ from sqlalchemy import String, and_, case, cast, exists, func, or_, select
 from sqlalchemy.orm import selectinload
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.domain.dimensions import format_dimensions, parse_dimensions_filter
+from app.domain.dimensions import format_dimension_flow, format_dimensions, parse_dimensions_filter
 from app.models.internal_plan import SectionPlanLine
 from app.models.product import Product
 from app.models.production_plan import PlanPosition, PlanPositionStatus, PositionStatusHistory
@@ -711,8 +711,14 @@ async def _build_planning_rows_for_positions(db: AsyncSession, positions: list[P
                 "source_sku": pos.source_sku,
                 "source_name": pos.source_name,
                 "quantity": _to_float(pos.quantity),
+                # Сырьё позиции (штуки входа): до пилы материал считается
+                # заготовками сырьевой длины, длины даёт только трансформация.
+                "input_quantity": _to_float(pos.input_quantity) if pos.input_quantity is not None else None,
                 "dimensions": task_dims,
                 "dimensions_label": format_dimensions(task_dims),
+                # Колонка «Размер»: вход → выходы без количеств; совпадающие
+                # размеры не дублируются (вход == единственный выход).
+                "sizes_label": format_dimension_flow(pos.input_dimensions, pos.outputs),
                 "position_status": pos.status.value if hasattr(pos.status, "value") else str(pos.status),
                 "validation_status": pos.validation_status.value
                 if hasattr(pos.validation_status, "value")

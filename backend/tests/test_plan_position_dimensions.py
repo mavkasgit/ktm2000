@@ -11,6 +11,7 @@ import pytest
 from openpyxl import Workbook
 
 from app.core.config import settings
+from app.domain.dimensions import format_dimension_flow
 from app.models.import_template import ImportTemplate
 from app.models.production_plan import PlanPosition
 from app.services.excel_import import parse_factory_plan_workbook
@@ -215,6 +216,72 @@ def test_group_fingerprint_is_idempotent_and_output_sensitive() -> None:
     ]
     changed = parse_factory_plan_workbook(_plan_workbook(changed_rows), "plan.xlsx")
     assert changed.parsed_rows[0].source_fingerprint != first.parsed_rows[0].source_fingerprint
+
+
+# ---------------------------------------------------------------------------
+# format_dimension_flow — колонка «Размер»: «вход → выходы» без количеств
+# ---------------------------------------------------------------------------
+
+
+def _flow_output(length_mm: int | None) -> dict:
+    """Строка выхода операции: габарит или безразмерный выход."""
+    return {"dimensions": None if length_mm is None else {"length_mm": length_mm}}
+
+
+@pytest.mark.parametrize(
+    ("input_dimensions", "outputs", "expected"),
+    [
+        pytest.param(
+            {"length_mm": 2750},
+            [_flow_output(900), _flow_output(1350), _flow_output(1800), _flow_output(2700)],
+            "2,75 м → 0,9 м + 1,35 м + 1,8 м + 2,7 м",
+            id="cut-into-four-lengths",
+        ),
+        pytest.param(
+            {"length_mm": 2750},
+            [_flow_output(2700)],
+            "2,75 м → 2,7 м",
+            id="single-other-output-length",
+        ),
+        pytest.param(
+            {"length_mm": 2700},
+            [_flow_output(2700)],
+            "2,7 м",
+            id="output-equals-input-not-duplicated",
+        ),
+        pytest.param(
+            {"length_mm": 2700},
+            [_flow_output(2700), _flow_output(900)],
+            "2,7 м → 0,9 м",
+            id="one-of-two-outputs-equals-input",
+        ),
+        pytest.param(
+            None,
+            [_flow_output(900)],
+            "0,9 м",
+            id="no-input-only-outputs",
+        ),
+        pytest.param(
+            None,
+            [_flow_output(None)],
+            None,
+            id="dimensionless-output-no-input",
+        ),
+        pytest.param(
+            {"length_mm": 2750},
+            [_flow_output(900), _flow_output(900)],
+            "2,75 м → 0,9 м",
+            id="duplicate-outputs-once",
+        ),
+    ],
+)
+def test_format_dimension_flow(
+    input_dimensions: dict | None, outputs: list[dict], expected: str | None
+) -> None:
+    """Подпись «вход → выходы» без количеств (ADR-0002/0003): выход той же
+    размерности, что и вход, не дублируется, как и повторяющиеся выходы;
+    если размеров нет вовсе — None."""
+    assert format_dimension_flow(input_dimensions, outputs) == expected
 
 
 async def _create_template(session, *, name: str, code: str) -> ImportTemplate:

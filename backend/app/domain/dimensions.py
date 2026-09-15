@@ -216,6 +216,35 @@ def format_operation_summary(
     return f"{' × '.join(input_parts)} → {outputs_text}"
 
 
+def format_dimension_flow(
+    input_dimensions: Mapping[str, Any] | None,
+    outputs: list[Mapping[str, Any]] | None,
+) -> str | None:
+    """«Вход → выходы» без количеств для колонки «Размер» (ADR-0002/0003):
+    «2,75 м → 0,9 м + 1,35 м + 1,8 м + 2,7 м».
+
+    Совпадающие размеры не дублируются: если выход той же размерности, что и
+    вход (операция без резки), он не повторяется — остаётся один размер.
+    ``None`` — размеров нет вовсе (безразмерная позиция).
+    """
+    input_label = format_dimensions(input_dimensions) if input_dimensions else None
+    output_labels: list[str] = []
+    for entry in outputs or []:
+        dims = entry.get("dimensions")
+        if not dims:
+            continue
+        if input_dimensions is not None and dimensions_equal(input_dimensions, dims):
+            continue
+        label = format_dimensions(dims)
+        if label not in output_labels:
+            output_labels.append(label)
+    if not input_label:
+        return " + ".join(output_labels) or None
+    if not output_labels:
+        return input_label
+    return f"{input_label} → {' + '.join(output_labels)}"
+
+
 def _canonicalize_value(key: str, value: Any) -> Any:
     """Нормализовать одно значение габарита (bool — не число!)."""
     if isinstance(value, bool) or value is None:

@@ -168,6 +168,11 @@ export type PlanPositionOut = {
   // Габарит задания позиции (тикет #95): колонка «Размер» на странице плана.
   dimensions?: Record<string, unknown> | null;
   dimensions_label?: string | null;
+  /**
+   * Колонка «Размер»: «2,75 м → 0,9 м + 1,35 м» (вход → выходы без количеств);
+   * совпадающие размеры не дублируются.
+   */
+  sizes_label?: string | null;
 };
 
 export async function planFiles(planId: number) {
@@ -387,10 +392,20 @@ export type ProductionPlanningRow = {
   source_sku: string;
   source_name: string | null;
   quantity: number;
+  /**
+   * Полноразмерное сырьё позиции (штуки входа, ADR-0003): до пилы материал
+   * считается заготовками сырьевой длины. `null` — позиция без резки.
+   */
+  input_quantity?: number | null;
   /** Габарит задания позиции (ADR-0001), например `{"length_mm": 2700}`; null — безразмерные. */
   dimensions?: Record<string, unknown> | null;
   /** Готовая подпись размера («2,7 м» / «—»). */
   dimensions_label?: string | null;
+  /**
+   * Колонка «Размер»: «2,75 м → 0,9 м + 1,35 м» (вход → выходы без количеств);
+   * совпадающие размеры не дублируются.
+   */
+  sizes_label?: string | null;
   position_status: string;
   validation_status: string;
   route_id: number | null;

@@ -176,8 +176,15 @@ class PlanningRowOut(BaseModel):
     source_sku: str
     source_name: str | None
     quantity: float
+    # Полноразмерное сырьё позиции (штуки входа, ADR-0003): до пилы материал
+    # считается в заготовках сырьевой длины — длины появляются только на
+    # трансформирующем этапе, поэтому это первое число строки.
+    input_quantity: float | None = None
     dimensions: dict | None = None
     dimensions_label: str | None = None
+    # Колонка «Размер»: «2,75 м → 0,9 м + 1,35 м» (вход → выходы без количеств);
+    # совпадающие размеры не дублируются.
+    sizes_label: str | None = None
     position_status: str
     validation_status: str
     route_id: int | None

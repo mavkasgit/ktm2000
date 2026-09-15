@@ -18,7 +18,7 @@ from app.services import product_pair_resolver
 from app.services.action_journal_service import action_journal_service
 from app.services.plan_position_hanger import position_dimensions_for_task
 from app.services.production_plan_service import refresh_plan_status
-from app.services.route_transform import build_transform_spec
+from app.services.route_transform import build_transform_spec, raw_input_quantity_for
 
 
 async def create_release_batch(
@@ -156,6 +156,23 @@ async def release_batch(
         release_quantity = batch_position.release_quantity
         remainder_max_seq: list[tuple[int, int, Decimal]] = []
 
+        # ── Сырьё до трансформирующего этапа ─────────────────────────────────
+        # До пилы длины как таковой нет: позиция идёт одним заданием на группу
+        # в штуках входа (заготовки сырьевой длины). Штуки выходов действуют
+        # только с трансформирующего этапа и дальше (ADR-0002), поэтому этапы
+        # перед ним планируются по входу позиции, а не по сумме выходов.
+        raw_quantity = raw_input_quantity_for(position, release_quantity)
+        transform_seq: int | None = None
+        if raw_quantity is not None:
+            for step in steps:
+                stage_id = step.get("route_stage_id")
+                if stage_id is None:
+                    continue
+                stage_model = await db.get(RouteStage, stage_id)
+                if stage_model is not None and stage_model.transforms_dimensions:
+                    transform_seq = step["sequence"]
+                    break
+
         # ── Create SectionPlanLines + WorkTasks ───────────────────────────────
         seen_keys: set[tuple[str, int]] = set()
         # Track the first step index with quantity > 0 for status assignment
@@ -178,7 +195,12 @@ async def release_batch(
                 for rem, max_seq, allocated_qty in remainder_max_seq
                 if max_seq >= step_seq
             )
-            planned_qty = max(Decimal("0"), release_quantity - covered_qty)
+            basis_qty = (
+                raw_quantity
+                if transform_seq is not None and step_seq < transform_seq
+                else release_quantity
+            )
+            planned_qty = max(Decimal("0"), basis_qty - covered_qty)
             step_planned_quantities.append((step, planned_qty))
             if planned_qty > 0 and first_nonzero_index is None:
                 first_nonzero_index = len(step_planned_quantities) - 1

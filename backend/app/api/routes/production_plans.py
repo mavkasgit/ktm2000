@@ -13,7 +13,7 @@ from sqlalchemy import func as sa_func
 
 from app.api.deps import WRITER_ROLES, require_role, get_current_user
 from app.core.database import get_db
-from app.domain.dimensions import format_operation_summary
+from app.domain.dimensions import format_dimension_flow, format_operation_summary
 from app.models.production_plan import (
     PlanChangeItem,
     PlanChangeSet,
@@ -895,6 +895,9 @@ class PlanPositionOut(BaseModel):
     # Габарит задания позиции (тикет #95): колонка «Размер» на странице плана.
     dimensions: dict | None = None
     dimensions_label: str | None = None
+    # Колонка «Размер»: «2,75 м → 0,9 м + 1,35 м» (вход → выходы без количеств);
+    # совпадающие размеры не дублируются.
+    sizes_label: str | None = None
 
 
 def _format_position_quantity(value) -> str:
@@ -923,6 +926,8 @@ def _position_operation_fields(position: PlanPosition) -> dict:
         "input_dimensions": position.input_dimensions,
         "outputs": outputs or None,
         "operation_summary": summary,
+        # Колонка «Размер»: вход → выходы без количеств, без дублей.
+        "sizes_label": format_dimension_flow(position.input_dimensions, outputs),
     }
 
 
