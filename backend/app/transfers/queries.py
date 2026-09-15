@@ -31,6 +31,7 @@ from app.services.route_storage_classifier import (
     SECTION_TYPE_PRODUCTION,
     STOCK_TYPES,
     is_stock_section,
+    is_terminal_section,
 )
 from app.models.transfer import (
     Transfer,
@@ -801,8 +802,16 @@ async def _fetch_stock_ready_items(
 
             from app.services.shopfloor.common import sections_share_spg
 
+            # Адресат передачи со склада — склад оборачиваемого запаса или
+            # терминальная секция (#136): «Отправлено» принимает материал
+            # обычной передачей («Передать»), остатков там не возникает
+            # (StockProjectionManager пропускает терминал). Задача на терминале
+            # появляется лениво — при первой передаче, как на складах (#176),
+            # поэтому её отсутствие до передачи строку не скрывает.
+            destination_accepts_transfer = is_stock_section(next_sec) or is_terminal_section(next_sec)
+
             if await sections_share_spg(db, spl.section_id, next_line.section_id):
-                if not is_stock_section(next_sec):
+                if not destination_accepts_transfer:
                     continue
 
             next_task = await db.scalar(
@@ -811,7 +820,7 @@ async def _fetch_stock_ready_items(
                     WorkTask.status.notin_([WorkTaskStatus.completed, WorkTaskStatus.cancelled]),
                 )
             )
-            if next_task is None and not is_stock_section(next_sec):
+            if next_task is None and not destination_accepts_transfer:
                 continue
 
             fake_task = await db.scalar(

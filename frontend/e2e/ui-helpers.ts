@@ -1,4 +1,4 @@
-import { expect, type Page } from "@playwright/test";
+import { expect, type Locator, type Page } from "@playwright/test";
 import path from "path";
 import { fileURLToPath } from "url";
 
@@ -119,6 +119,10 @@ export async function importCatalogViaUI(page: Page, filePath = E2E_CATALOG_XLS_
   const importBtn = page.getByRole("button", { name: "Импорт", exact: true });
   await expect(importBtn).toBeVisible({ timeout: 10_000 });
   await importBtn.click();
+
+  // «Импорт» — выпадающее меню: Excel-справочник открывает визард,
+  // «Фотографии (ZIP)» — отдельный путь.
+  await page.getByRole("menuitem", { name: /Excel.*справочник/i }).click();
 
   const wizard = page.getByRole("dialog");
   await expect(wizard).toBeVisible({ timeout: 10_000 });
@@ -295,6 +299,40 @@ export async function takeToWorkViaUI(page: Page, position: ApprovablePosition) 
   });
 }
 
+/** Кликнуть кнопку в первой живой строке таблицы и дождаться её исчезновения.
+ *
+ * Строка исчезает после refetch (auto-accept), поэтому индекс по заранее снятому
+ * count ненадёжен — каждый раз берём первую живую строку. Ждём исчезновения
+ * именно её: `rows.first()` ре-резолвится на следующую строку после refetch,
+ * поэтому «первая живая» — не тот признак. Возвращает `false`, когда строк
+ * больше нет; `prepare` — шаг до клика (например, заполнить количество).
+ */
+async function clickFirstRowAndWaitGone(
+  rows: Locator,
+  buttonName: string,
+  prepare?: (row: Locator) => Promise<void>,
+): Promise<boolean> {
+  const row = rows.first();
+  if ((await row.count()) === 0) return false;
+
+  // Идентификатор строки — id позиции плана (первая ячейка). Исторические
+  // передачи тоже содержат id, но у них нет кнопки действия — фильтр `rows`
+  // остаётся.
+  const rowPosId = (await row.locator("td").first().textContent())?.trim();
+  if (prepare) await prepare(row);
+
+  const button = row.getByRole("button", { name: buttonName });
+  await expect(button).toBeEnabled({ timeout: 5_000 });
+  await button.click();
+
+  if (rowPosId) {
+    await expect(rows.filter({ hasText: rowPosId })).not.toBeVisible({ timeout: 30_000 });
+  } else {
+    await expect(row).not.toBeVisible({ timeout: 30_000 });
+  }
+  return true;
+}
+
 /** Отправить все готовые передачи для SKU на /transfers (каждый шаг маршрута). Возвращает кол-во отправленных. */
 export async function sendReadyTransfersViaUI(page: Page, sku: string): Promise<number> {
   await page.goto("/transfers");
@@ -302,16 +340,21 @@ export async function sendReadyTransfersViaUI(page: Page, sku: string): Promise<
     timeout: 10_000,
   });
 
-  // Ready-строки — в таблице «Готово к передаче», у каждой есть кнопка «Передать».
+  // Ready-строки — в таблице «Готово к передаче»:
+  //  • «Передать» — обычная передача на следующий участок;
+  //  • «Отправить» — финальный выпуск финальной стадии (#96).
   // Таблица грузится асинхронно (VirtualizedTableBody): ждём либо строки, либо пустое
   // состояние «Нет заданий…» (валидный результат между операциями маршрута).
-  const rows = page
+  const sendRows = page
     .locator("tr", { hasText: sku })
     .filter({ has: page.getByRole("button", { name: "Передать" }) });
+  const releaseRows = page
+    .locator("tr", { hasText: sku })
+    .filter({ has: page.getByRole("button", { name: "Отправить" }) });
   const emptyState = page.getByText(/Нет заданий, готовых к передаче/);
   let present = false;
   for (let attempt = 0; attempt < 40; attempt++) {
-    if ((await rows.count()) > 0) {
+    if ((await sendRows.count()) > 0 || (await releaseRows.count()) > 0) {
       present = true;
       break;
     }
@@ -326,40 +369,28 @@ export async function sendReadyTransfersViaUI(page: Page, sku: string): Promise<
   // После отправки строка исчезает (auto-accept + refetch), поэтому индекс по
   // заранее снятому count ненадёжен — каждый раз берём первую живую строку.
   let sent = 0;
-  for (;;) {
-    const row = rows.first();
-    if ((await row.count()) === 0) break;
-
-    // Идентификатор конкретной строки (id позиции плана) — чтобы после отправки
-    // ждать исчезновения именно её, а не «первой живой» (rows.first() ре-резолвится
-    // на следующую строку после refetch).
-    const rowPosId = (await row.locator("td").first().textContent())?.trim();
-
-    const qtyInput = row.locator('input[type="number"]').first();
-    await expect(qtyInput).toBeVisible({ timeout: 5_000 });
-    // Инпут предзаполнен значением «К передаче» — не перетираем его.
-    // Ячейка используется только если инпут пустой/нулевой.
-    const currentQty = (await qtyInput.inputValue()).trim();
-    if (!currentQty || Number(currentQty) <= 0) {
-      const cell = row.locator("td", { hasText: "шт." }).first();
-      const match = (await cell.textContent())?.match(/(\d+)\s*шт/);
-      if (match) await qtyInput.fill(match[1]);
-    }
-
-    const sendBtn = row.getByRole("button", { name: "Передать" });
-    await expect(sendBtn).toBeEnabled({ timeout: 5_000 });
-    await sendBtn.click();
+  while (
+    await clickFirstRowAndWaitGone(sendRows, "Передать", async (row) => {
+      const qtyInput = row.locator('input[type="number"]').first();
+      await expect(qtyInput).toBeVisible({ timeout: 5_000 });
+      // Инпут предзаполнен значением «К передаче» — не перетираем его.
+      // Ячейка используется только если инпут пустой/нулевой.
+      const currentQty = (await qtyInput.inputValue()).trim();
+      if (!currentQty || Number(currentQty) <= 0) {
+        const cell = row.locator("td", { hasText: "шт." }).first();
+        const match = (await cell.textContent())?.match(/(\d+)\s*шт/);
+        if (match) await qtyInput.fill(match[1]);
+      }
+    })
+  ) {
     sent++;
+  }
 
-    // Ожидание исчезновения отправленной строки по её id позиции. Исторические
-    // передачи тоже содержат id, но у них нет кнопки «Передать» — фильтр остаётся.
-    if (rowPosId) {
-      await expect(
-        rows.filter({ hasText: rowPosId }),
-      ).not.toBeVisible({ timeout: 30_000 });
-    } else {
-      await expect(row).not.toBeVisible({ timeout: 30_000 });
-    }
+  // Финальный выпуск (#96): финальная стадия отдаёт готовое в «Отправлено»
+  // кнопкой «Отправить» (а не «Передать»). Без него материал застревает на
+  // последней стадии. Возможно несколько финальных строк одного SKU.
+  while (await clickFirstRowAndWaitGone(releaseRows, "Отправить")) {
+    sent++;
   }
 
   console.log(`[sendReadyTransfers] SKU=${sku} sent=${sent}`);
@@ -479,28 +510,41 @@ export async function completeAllSectionTasksViaUI(page: Page, sku: string): Pro
   return completed;
 }
 
-/** Тикет #88: финальный контроль — материал доехал до «Отправлено» (SHIPPED). */
+/** Тикеты #88/#176: финальный контроль — материал доехал до «Отправлено» (SHIPPED).
+ *
+ * Терминальная секция (#136) вне оперативных остатков: ledger хранит полный
+ * след, но баланс там не материализуется, поэтому остаток на «Отправлено»
+ * проверить нечем. Доезд подтверждаем журналом передач: строкой, где
+ * получатель — «Отправлено» (обычная передача «К отгрузке» → «Отправлено»).
+ */
 export async function expectShippedViaUI(page: Page, sku: string) {
-  await page.goto("/spg");
-  await expect(page.getByRole("heading", { name: "Группы хранения и производства" })).toBeVisible({
+  await page.goto("/transfers");
+  await expect(page.getByRole("heading", { name: "Передачи между ГХП" })).toBeVisible({
     timeout: 10_000,
   });
 
-  const search = page.getByPlaceholder("Глобальный поиск по артикулу или названию...");
+  // «Журнал передач» — вторая таблица страницы («Готово к передаче» — первая):
+  // различаем по колонке получателя. По умолчанию выбрано «Все ГХП», поэтому
+  // журнал не режется по группе хранения.
+  const historyTable = page
+    .locator("table")
+    .filter({ has: page.getByText("Получатель (Куда)", { exact: true }) });
+
+  const search = page.getByPlaceholder("Поиск по ID, артикулу, участкам, № передачи…");
   await expect(search).toBeVisible({ timeout: 10_000 });
   await search.fill(sku);
+  await search.press("Enter");
 
-  // Строка остатков на участке «Отправлено» (SHIPPED). Таблица остатков
-  // грузится асинхронно — ждём появления строки с артикулом и участком.
-  const shippedRow = page
+  // Строка журнала: получатель — «Отправлено» (именно он, не статус «Отправлена»).
+  const shippedRow = historyTable
     .locator("tr", { hasText: sku })
     .filter({ has: page.getByText("Отправлено", { exact: true }) })
     .first();
   await expect(shippedRow).toBeVisible({ timeout: 20_000 });
 
-  // Кол-во в колонке «Количество» (2-я ячейка) > 0.
-  const qtyText = (await shippedRow.locator("td").nth(1).textContent())?.trim() ?? "0";
+  // Кол-во — колонка «Кол-во» (6-я ячейка: ID, Откуда, Куда, Артикул, Размер, Кол-во).
+  const qtyText = (await shippedRow.locator("td").nth(5).textContent())?.trim() ?? "0";
   const qty = Number.parseFloat(qtyText.replace(/\s/g, ""));
   expect(qty).toBeGreaterThan(0);
-  console.log(`[expectShipped] SKU=${sku} на участке «Отправлено»: ${qty} шт`);
+  console.log(`[expectShipped] SKU=${sku} передан на «Отправлено»: ${qty} шт`);
 }

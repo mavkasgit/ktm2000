@@ -39,6 +39,13 @@ import {
 } from "./api-helpers";
 import { confirmProductionLaunchViaUI } from "./ui-helpers";
 
+/** Строка позиции плана, нужная этому спеку (api-helpers отдаёт сырой JSON). */
+type PlanPositionRow = {
+  source_sku: string;
+  validation_status: string;
+  input_dimensions?: { length_mm?: number } | null;
+};
+
 // --- Test -----------------------------------------------------------------
 
 /** @smoke — API-assisted setup; не канон E2E. См. @ui в route-workflow.spec.ts */
@@ -65,7 +72,7 @@ test.describe("@smoke Explicit transfer — 2-step ritual (Send + Issue)", () =>
 
     const positions = await apiGetPlanPositions(importRes.production_plan_id);
     const pos2083 = positions.find(
-      (p: { source_sku: string; validation_status: string }) =>
+      (p: PlanPositionRow) =>
         p.source_sku === "ЮП-2083" && p.validation_status === "valid",
     );
     expect(pos2083).toBeDefined();
@@ -77,17 +84,22 @@ test.describe("@smoke Explicit transfer — 2-step ritual (Send + Issue)", () =>
     // 1a. Пополняем остатки на STOCK (Склад сырья) — иначе диалог
     //     «Запуск в производство» покажет пустое обеспечение сырьём.
     //     Габарит обязателен: складская ready-строка (`compute_stock_section_transferable`)
-    //     фильтрует StockBalance по размеру плана ({length_mm:2700} для ЮП-2083),
-    //     безразмерный остаток (dimensions=None) дал бы physical_stock=0 и строку бы
-    //     скрыл — передача «не сработала бы» (сырьё не видно к отправке).
+    //     фильтрует StockBalance по размеру плана, поэтому берём его из самой позиции
+    //     (`input_dimensions`). Хардкод расходится с планом по длине, physical_stock=0,
+    //     и строку «к передаче» скрывает.
     const sectionWh = await apiGetSectionByCode(E2E_SECTION.RAW_STOCK);
     const planQty = Math.round(parseFloat(pos2083.quantity));
+    const planDims = pos2083.input_dimensions;
+    // Габарит обязателен и берётся из позиции: безразмерный остаток даёт
+    // physical_stock=0 и прячет строку «к передаче» — падать надо здесь, а не
+    // на загадочном «нет готовых передач» (ср. sawing-multi-length-split.spec.ts:140).
+    expect(planDims?.length_mm).toBeTruthy();
     await apiAddRemainder(
       product2083.id,
       sectionWh.id,
       planQty,
       "E2E: начальный остаток сырья для transfers-auto-accept",
-      { length_mm: 2700 },
+      planDims,
     );
 
     // 2. Утверждаем позицию на странице /planning (с обработкой диалога «Утвердить всё равно»)
