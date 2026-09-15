@@ -702,7 +702,7 @@ async def _make_change_items(
                         "unit": comp_product.unit,
                     })
                 # Снапшот пары (payload-ключ product_pair, структура сохранена —
-                # читатели ImportDiffTable/PlanHangerDisplay читают его же).
+                # читатель PlanHangerDisplay читает его же).
                 row.payload["product_pair"] = {
                     "resolved": True,
                     "reason": None,
