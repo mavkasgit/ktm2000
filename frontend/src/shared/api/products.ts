@@ -401,33 +401,26 @@ export async function applyCatalogExcel(file: File) {
   return data;
 }
 
-export async function downloadCatalogTemplate() {
-  const { data } = await apiClient.get<Blob>("/catalog-import/template-excel", {
-    responseType: "blob",
-  });
+/** Скачать xlsx-эндпоинт как файл с заданным именем. */
+async function downloadCatalogFile(path: string, filename: string) {
+  const { data } = await apiClient.get<Blob>(path, { responseType: "blob" });
   const url = URL.createObjectURL(data);
   const link = document.createElement("a");
   link.href = url;
-  link.download = "catalog_template.xlsx";
+  link.download = filename;
   document.body.appendChild(link);
   link.click();
   link.remove();
   URL.revokeObjectURL(url);
 }
 
+export async function downloadCatalogTemplate() {
+  await downloadCatalogFile("/catalog-import/template-excel", "catalog_template.xlsx");
+}
+
 /** Выгрузка текущего справочника сырья в том же формате, что читает импорт. */
 export async function exportCatalogExcel() {
-  const { data } = await apiClient.get<Blob>("/catalog-import/export-excel", {
-    responseType: "blob",
-  });
-  const url = URL.createObjectURL(data);
-  const link = document.createElement("a");
-  link.href = url;
-  link.download = "final_catalog.xlsx";
-  document.body.appendChild(link);
-  link.click();
-  link.remove();
-  URL.revokeObjectURL(url);
+  await downloadCatalogFile("/catalog-import/export-excel", "final_catalog.xlsx");
 }
 
 export type AliasSuggestion = {

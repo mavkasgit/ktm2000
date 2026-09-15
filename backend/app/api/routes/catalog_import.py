@@ -385,8 +385,9 @@ async def _create_product_from_row(db: AsyncSession, row: ParsedCatalogRow) -> N
     fields = row.fields
     lengths = fields.get("lengths_mm") or []
     quantities = fields.get("quantities")
-    # Черновик: длин нет — артикул создаётся неактивным, норматив в БД не
-    # хранится и допишется с длинами. Размерность всегда 1D (length).
+    # Черновик: длин нет — артикул создаётся неактивным (Q3: активация только
+    # вместе с длинами); норма из строки при этом хранится legacy-скаляром
+    # (#177, Q2). Размерность всегда 1D (length).
     draft = not lengths
     product = Product(
         sku=row.sku,
