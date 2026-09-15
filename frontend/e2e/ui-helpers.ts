@@ -516,8 +516,11 @@ export async function completeAllSectionTasksViaUI(page: Page, sku: string): Pro
  * след, но баланс там не материализуется, поэтому остаток на «Отправлено»
  * проверить нечем. Доезд подтверждаем журналом передач: строкой, где
  * получатель — «Отправлено» (обычная передача «К отгрузке» → «Отправлено»).
+ *
+ * Строку привязываем к позициям **этого** прогона (`positionIds`), иначе шаг
+ * зеленел бы на данных прошлых прогонов в накопительной dev-БД.
  */
-export async function expectShippedViaUI(page: Page, sku: string) {
+export async function expectShippedViaUI(page: Page, sku: string, positionIds: number[]) {
   await page.goto("/transfers");
   await expect(page.getByRole("heading", { name: "Передачи между ГХП" })).toBeVisible({
     timeout: 10_000,
@@ -536,15 +539,29 @@ export async function expectShippedViaUI(page: Page, sku: string) {
   await search.press("Enter");
 
   // Строка журнала: получатель — «Отправлено» (именно он, не статус «Отправлена»).
-  const shippedRow = historyTable
+  const shippedRows = historyTable
     .locator("tr", { hasText: sku })
-    .filter({ has: page.getByText("Отправлено", { exact: true }) })
-    .first();
-  await expect(shippedRow).toBeVisible({ timeout: 20_000 });
+    .filter({ has: page.getByText("Отправлено", { exact: true }) });
+  await expect(shippedRows.first()).toBeVisible({ timeout: 20_000 });
 
-  // Кол-во — колонка «Кол-во» (6-я ячейка: ID, Откуда, Куда, Артикул, Размер, Кол-во).
-  const qtyText = (await shippedRow.locator("td").nth(5).textContent())?.trim() ?? "0";
-  const qty = Number.parseFloat(qtyText.replace(/\s/g, ""));
-  expect(qty).toBeGreaterThan(0);
-  console.log(`[expectShipped] SKU=${sku} передан на «Отправлено»: ${qty} шт`);
+  // Журнал отсортирован по времени создания (свежие сверху), поэтому строки
+  // текущего прогона попадают в отрисованное окно виртуализированной таблицы.
+  const ownPositionIds = positionIds.map(String);
+  const rows = await shippedRows.count();
+  let shipped = 0;
+  for (let i = 0; i < rows; i++) {
+    const cells = shippedRows.nth(i).locator("td");
+    const posId = ((await cells.first().textContent()) ?? "").trim().replace(/^#/, "");
+    if (!ownPositionIds.includes(posId)) continue;
+    // Кол-во — колонка «Кол-во» (6-я ячейка: ID, Откуда, Куда, Артикул, Размер, Кол-во).
+    const qty = Number.parseFloat(((await cells.nth(5).textContent()) ?? "").replace(/\s/g, ""));
+    expect(Number.isFinite(qty), `позиция #${posId}: кол-во в журнале не читается`).toBe(true);
+    expect(qty, `позиция #${posId}: передано на «Отправлено» ${qty} шт`).toBeGreaterThan(0);
+    shipped += qty;
+  }
+  expect(
+    shipped,
+    `ни одна позиция этого прогона (${positionIds.join(", ")}) не доехала до «Отправлено»`,
+  ).toBeGreaterThan(0);
+  console.log(`[expectShipped] SKU=${sku} на «Отправлено»: ${shipped} шт`);
 }

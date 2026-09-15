@@ -92,7 +92,9 @@ test.describe("@ui Полный цикл производства (ЮП-009)", (
     console.log("[step7] маршрут пройден");
 
     // ── ШАГ 8. Финальный контроль: материал доехал до «Отправлено» ─────────
-    await expectShippedViaUI(page, E2E_SKU);
+    // Проверка привязана к позициям этого прогона — в накопительной dev-БД
+    // строки прошлых прогонов иначе давали бы ложный зелёный.
+    await expectShippedViaUI(page, E2E_SKU, positions.map((position) => position.id));
     console.log("[step8] отгрузка подтверждена");
   });
 });
