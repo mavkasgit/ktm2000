@@ -155,6 +155,7 @@ export const errorPhraseTranslations: Record<string, string> = {
   "File not found on disk": "Файл не найден на диске",
   "Final release allowed only for final route stage": "Финальный выпуск разрешён только на финальном этапе маршрута",
   "Final release exceeds releasable quantity": "Финальный выпуск превышает доступный к выпуску объём",
+  "Final release is not allowed from a terminal section": "С терминальной секции отправка невозможна: за «Отправлено» нет участка-адресата",
   "Group code already exists for this section": "Код группы уже используется для этого участка",
   "Import batch not found": "Пакет импорта не найден",
   "Import template not found": "Шаблон импорта не найден",
