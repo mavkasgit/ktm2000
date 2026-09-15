@@ -7,6 +7,7 @@ const makeResult = (overrides: Partial<CatalogExcelApplyResult> = {}): CatalogEx
   imported: 2,
   updated: 1,
   skipped: 3,
+  pairs_created: 0,
   errors: [],
   ...overrides,
 });
@@ -19,8 +20,14 @@ describe("ImportResultStep", () => {
     expect(screen.getByText("Обновлено: 1")).toBeTruthy();
     expect(screen.getByText("Пропущено: 3")).toBeTruthy();
     expect(screen.queryByText("Ошибки строк (строки пропущены):")).toBeNull();
+    expect(screen.queryByText(/Пар связано/)).toBeNull();
   });
 
+  it("renders the pairs counter when pairs were linked", () => {
+    render(<ImportResultStep result={makeResult({ pairs_created: 2 })} />);
+
+    expect(screen.getByText("Пар связано: 2")).toBeTruthy();
+  });
   it("renders the row errors report on partial failure", () => {
     const result = makeResult({
       imported: 1,

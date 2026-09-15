@@ -94,6 +94,7 @@ describe("ImportWizardDialog", () => {
       imported: 1,
       updated: 0,
       skipped: 0,
+      pairs_created: 0,
       errors: [],
     });
     const onOpenChange = vi.fn();
@@ -126,6 +127,7 @@ describe("ImportWizardDialog", () => {
       imported: 1,
       updated: 0,
       skipped: 0,
+      pairs_created: 0,
       errors: [{ row: 7, sku: "SKU-BAD", message: "нет длины" }],
     });
     const { container } = render(
@@ -148,6 +150,7 @@ describe("ImportWizardDialog", () => {
       imported: 1,
       updated: 0,
       skipped: 0,
+      pairs_created: 0,
       errors: [],
     });
     const onOpenChange = vi.fn();

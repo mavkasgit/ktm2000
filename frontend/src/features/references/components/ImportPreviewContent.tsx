@@ -2,7 +2,6 @@ import { useState, type ReactNode } from "react";
 import { CheckCircle, AlertCircle, SkipForward, Image } from "lucide-react";
 import { Button } from "@/shared/ui/button";
 import type { CatalogPreview } from "@/shared/api/products";
-import { compositionLabel } from "../lib/compositionLabel";
 
 type ActionFilter = "all" | "create" | "update" | "skip";
 
@@ -105,7 +104,6 @@ export function ImportPreviewContent({ preview }: { preview: CatalogPreview }) {
               <th className="px-4 py-3 text-left font-medium">Артикул</th>
               <th className="px-4 py-3 text-left font-medium">Длины, мм</th>
               <th className="px-4 py-3 text-left font-medium">Кол-во на подвесе</th>
-              <th className="px-4 py-3 text-left font-medium">Состав</th>
               <th className="px-4 py-3 text-left font-medium">Фото</th>
               <th className="px-4 py-3 text-left font-medium">Действие</th>
             </tr>
@@ -128,7 +126,6 @@ export function ImportPreviewContent({ preview }: { preview: CatalogPreview }) {
                   <td className="px-4 py-2 font-medium">{item.sku}</td>
                   <td className="px-4 py-2">{lengthsText ?? "—"}</td>
                   <td className="px-4 py-2">{quantitiesText ?? "—"}</td>
-                  <td className="px-4 py-2">{compositionLabel(item.composition) ?? "—"}</td>
                   <td className="px-4 py-2">
                     {item.has_photo ? (
                       <span className="text-green-600 flex items-center gap-1">

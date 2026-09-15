@@ -341,8 +341,10 @@ export type CatalogPreviewItem = {
   row?: number;
   lengths_mm?: number[];
   quantities_per_hanger?: number[] | null;
-  /** Состав ГП, который будет записан (#154); null — колонки состава пусты. */
-  composition?: { sku: string; quantity: number }[] | null;
+  /** Симметричные пары (#175): связь без нормы, норма — через pairs-API. */
+  pairs?: { sku: string; create: boolean }[];
+  /** Черновик без длин (#175): создан неактивным, норматив допишется с длинами. */
+  draft?: boolean;
   warnings?: string[];
 };
 
@@ -384,6 +386,7 @@ export type CatalogExcelApplyResult = {
   imported: number;
   updated: number;
   skipped: number;
+  pairs_created: number;
   errors: CatalogImportError[];
 };
 

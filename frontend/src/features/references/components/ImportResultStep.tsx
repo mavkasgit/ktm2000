@@ -2,7 +2,7 @@ import { AlertCircle, CheckCircle, SkipForward } from "lucide-react";
 import type { CatalogExcelApplyResult } from "@/shared/api/products";
 
 export function ImportResultStep({ result }: { result: CatalogExcelApplyResult }) {
-  const { imported, updated, skipped, errors } = result;
+  const { imported, updated, skipped, pairs_created, errors } = result;
 
   return (
     <>
@@ -16,6 +16,11 @@ export function ImportResultStep({ result }: { result: CatalogExcelApplyResult }
         <span className="text-muted-foreground flex items-center gap-1">
           <SkipForward className="h-4 w-4" /> Пропущено: {skipped}
         </span>
+        {pairs_created > 0 && (
+          <span className="text-purple-700 font-medium flex items-center gap-1">
+            <CheckCircle className="h-4 w-4" /> Пар связано: {pairs_created}
+          </span>
+        )}
       </div>
 
       {errors.length > 0 && (
