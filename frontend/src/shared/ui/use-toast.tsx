@@ -67,12 +67,19 @@ const reducer = (state: ToastState, action: ToastAction): ToastState => {
   }
 };
 
-const listeners: Array<(state: ToastState) => void> = [];
+const listeners = new Set<() => void>();
 let memoryState: ToastState = { toasts: [] };
 
 function dispatch(action: ToastAction) {
   memoryState = reducer(memoryState, action);
-  listeners.forEach((fn) => fn(memoryState));
+  listeners.forEach((notify) => notify());
+}
+
+function subscribe(listener: () => void) {
+  listeners.add(listener);
+  return () => {
+    listeners.delete(listener);
+  };
 }
 
 let toastCount = 0;
@@ -87,15 +94,7 @@ export function dismissToast(toastId?: string) {
 }
 
 export function useToast() {
-  const [state, setState] = React.useState<ToastState>(memoryState);
-
-  React.useEffect(() => {
-    listeners.push(setState);
-    return () => {
-      const index = listeners.indexOf(setState);
-      if (index > -1) listeners.splice(index, 1);
-    };
-  }, [state]);
+  const state = React.useSyncExternalStore(subscribe, () => memoryState);
 
   return {
     toasts: state.toasts,
