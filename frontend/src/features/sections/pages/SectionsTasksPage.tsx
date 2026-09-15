@@ -572,8 +572,16 @@ export function SectionsTasksPage() {
       ? tasks.reduce((sum, t) => sum + Math.max(0, Math.round(parseFloat(t.cache.available_quantity) || 0)), 0)
       : (task ? Math.round(parseFloat(task.cache.available_quantity) || 0) : 0);
 
-    const isShortage = good + defect > inWork + available;
-    const isConflict = inWork > 0 && good + defect > inWork;
+    // Трансформация габаритов (ADR-0002, раскрой): факт считается в заготовках
+    // ВХОДА, а `cache.completed_quantity` — выходные штуки другой размерности.
+    // Поэтому «в работе» = issued − completed для неё бессмысленно, и стратегия
+    // дефицита не применяется вовсе: лимит — остаток входа, его показывает
+    // панель факта (`TaskActionDrawer.maxQty`) и проверяет бэкенд.
+    const isTransformTask =
+      !isGroup && !!task?.transforms_dimensions && (task?.outputs?.length ?? 0) > 0;
+
+    const isShortage = !isTransformTask && good + defect > inWork + available;
+    const isConflict = !isTransformTask && inWork > 0 && good + defect > inWork;
 
     if (isConflict) {
       if (isShortage) {
