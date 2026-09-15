@@ -17,8 +17,6 @@ export { Toaster } from "./toaster";
 export { toast, type ToastVariant, type ToastData } from "./use-toast";
 export { DatePicker } from "./date-picker";
 export type { DatePickerProps } from "./date-picker";
-export { DateTimePicker } from "./DateTimePicker";
-export type { DateTimePickerProps } from "./DateTimePicker";
 export {
   DateRangePicker,
   defaultDateRangePresets,
@@ -35,8 +33,6 @@ export { SortableHeader } from "./SortableHeader";
 export type { SortableHeaderProps } from "./SortableHeader";
 export { SortableFilterHeader } from "./SortableFilterHeader";
 export type { SortableFilterHeaderProps } from "./SortableFilterHeader";
-export { TableToolbar } from "./TableToolbar";
-export type { TableToolbarProps } from "./TableToolbar";
 export { TablePanelHeader } from "./TablePanelHeader";
 export type { TablePanelHeaderProps } from "./TablePanelHeader";
 export { TableHeaderResetCell } from "./TableHeaderResetCell";
