@@ -9,7 +9,7 @@ from tempfile import TemporaryDirectory
 from fastapi import APIRouter, Depends, File, HTTPException, UploadFile
 from fastapi.responses import Response
 from openpyxl import Workbook
-from sqlalchemy import String, cast, delete, select
+from sqlalchemy import String, cast, select
 from sqlalchemy.dialects.postgresql import ARRAY as pg_ARRAY
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import selectinload
@@ -22,7 +22,7 @@ from app.api.routes.products import (
 )
 from app.core.config import settings
 from app.core.database import get_db
-from app.models.product import Product, ProductComposition, ProductLength, ProductType, _length_key
+from app.models.product import Product, ProductLength, ProductPair, ProductType, _length_key
 from app.services.catalog_excel_import import (
     TEMPLATE_HEADERS,
     ParsedCatalogRow,
@@ -358,10 +358,12 @@ async def _load_products_by_sku(db: AsyncSession, skus: list[str]) -> dict[str, 
     return {product.sku: product for product in items}
 
 
-def _row_count_errors(row: ParsedCatalogRow, existing_lengths: list[float] | None) -> list[dict]:
+def _row_count_errors(
+    row: ParsedCatalogRow, existing_lengths: list[float] | None, is_new: bool
+) -> list[dict]:
     return [
         {"row": row.row, "sku": row.sku, "message": message}
-        for message in validate_row_counts(row, existing_lengths)
+        for message in validate_row_counts(row, existing_lengths, is_new=is_new)
     ]
 
 
@@ -372,98 +374,24 @@ class _ImportBatch:
     rows: list[ParsedCatalogRow]
     errors: list[dict]
     products: dict[str, Product]
-    components_by_sku: dict[str, Product]
-    current_composition: dict[int, list[tuple[int, float]]]
+    partners_by_sku: dict[str, Product]
+    existing_pairs: set[tuple[int, int]]
     total_data_rows: int
 
 
-async def _load_composition_map(
-    db: AsyncSession, product_ids: list[int]
-) -> dict[int, list[tuple[int, float]]]:
-    if not product_ids:
-        return {}
-    rows = (
-        await db.execute(
-            select(ProductComposition).where(ProductComposition.product_id.in_(product_ids))
-        )
-    ).scalars().all()
-    result: dict[int, list[tuple[int, float]]] = {}
-    for row in rows:
-        result.setdefault(row.product_id, []).append((row.component_product_id, float(row.quantity)))
-    return result
-
-
-def _composition_plan(row: ParsedCatalogRow, batch: _ImportBatch) -> tuple[list[dict] | None, list[dict]]:
-    """План состава строки для записи и ошибки валидации против справочника.
-
-    ``None`` — колонки состава в строке не заполнены (частичное обновление,
-    состав не трогаем). Ошибки (не найден / не сырьё / сам себе компонент)
-    возвращают пустой план — строка пропускается целиком.
-    """
-    skus = row.fields.get("components")
-    if not skus:
-        return None, []
-    errors: list[dict] = []
-    plan: list[dict] = []
-    for sku, quantity in zip(skus, row.fields.get("component_quantities", [])):
-        if sku == row.sku:
-            errors.append({
-                "row": row.row,
-                "sku": row.sku,
-                "message": f"Компонент {sku} не может быть самим артикулом строки",
-            })
-            continue
-        component = batch.components_by_sku.get(sku)
-        if component is None:
-            errors.append({
-                "row": row.row,
-                "sku": row.sku,
-                "message": f"Компонент {sku} не найден в справочнике",
-            })
-        elif component.type != ProductType.component:
-            errors.append({
-                "row": row.row,
-                "sku": row.sku,
-                "message": f"Компонент {sku} должен быть сырьём (тип «компонент»)",
-            })
-        else:
-            plan.append({"component": component, "quantity": quantity})
-    if errors:
-        return None, errors
-    return plan, []
-
-
-def _composition_changed(plan: list[dict], current: list[tuple[int, float]] | None) -> bool:
-    planned = sorted((item["component"].id, float(item["quantity"])) for item in plan)
-    return planned != sorted(current or [])
-
-
-async def _write_composition(db: AsyncSession, product_id: int, plan: list[dict]) -> None:
-    await db.execute(delete(ProductComposition).where(ProductComposition.product_id == product_id))
-    for item in plan:
-        component: Product = item["component"]
-        db.add(ProductComposition(
-            product_id=product_id,
-            component_product_id=component.id,
-            quantity=item["quantity"],
-            unit=component.unit,
-        ))
-    await db.flush()
-
-
-async def _create_product_from_row(
-    db: AsyncSession, row: ParsedCatalogRow, plan: list[dict] | None
-) -> None:
+async def _create_product_from_row(db: AsyncSession, row: ParsedCatalogRow) -> None:
     fields = row.fields
     lengths = fields.get("lengths_mm") or []
     quantities = fields.get("quantities")
+    # Черновик: длин нет — артикул создаётся неактивным, норматив в БД не
+    # хранится и допишется с длинами. Размерность всегда 1D (length).
+    draft = not lengths
     product = Product(
         sku=row.sku,
         name=fields.get("name") or row.sku,
-        # Состав в строке означает ГП (#154); без состава импорт создаёт сырьё.
-        type=ProductType.finished_good if plan else ProductType.component,
+        type=ProductType.component,
         unit="шт",
-        is_active=True,
+        is_active=not draft,
         notes=fields.get("notes"),
         aliases=list(fields.get("aliases") or []),
         source="excel_catalog_import",
@@ -505,8 +433,6 @@ async def _create_product_from_row(
 
     for length in lengths:
         db.add(ProductLength(product_id=product.id, length_mm=length))
-    if plan:
-        await _write_composition(db, product.id, plan)
     if fields.get("skip_shot_blast") is not None:
         await _sync_boolean_flag(db, product.id, "skip_shot_blast", fields["skip_shot_blast"])
     if fields.get("is_laminated") is not None:
@@ -520,20 +446,16 @@ async def _update_product_from_row(
     db: AsyncSession,
     product: Product,
     row: ParsedCatalogRow,
-    plan: list[dict] | None,
-    composition_changed: bool,
 ) -> bool:
     changes = diff_catalog_row(product, row)
-    if not changes and not composition_changed:
+    if not changes:
         return False
 
-    # is_paired_profile не пишется: флаг выведенный (ADR-0023, #146) —
-    # пары заводятся из карточки артикула (pairs-API), не из Excel-импорта.
+    # Пары заводятся фазой 2 apply (колонка «Парный профиль»); флаг
+    # is_paired_profile по-прежнему выведенный (ADR-0023, #146).
     for key in ("name", "notes"):
         if key in changes:
             setattr(product, key, changes[key])
-    if "type" in changes:
-        product.type = changes["type"]
     if "is_active" in changes:
         product.is_active = changes["is_active"]
     for key in ("perimeter_mm", "mount_width_mm"):
@@ -551,12 +473,91 @@ async def _update_product_from_row(
         old_aliases = list(product.aliases or [])
         product.aliases = changes["aliases"]
         await _enforce_bidirectional_aliases(db, product.id, changes["aliases"], old_aliases=old_aliases)
-    # Состав заменяется целиком только когда колонки состава заполнены (#154);
-    # частичное обновление без них состав не трогает.
-    if composition_changed and plan is not None:
-        await _write_composition(db, product.id, plan)
     await db.flush()
     return True
+
+
+def _pair_plan(
+    row: ParsedCatalogRow, batch: _ImportBatch
+) -> tuple[list[str], list[dict], list[str]]:
+    """Партнёры строки: резолв против БД и того же файла, строгое наличие.
+
+    Возвращает (wanted, errors, new_links): new_links — партнёры без
+    существующей пары (кандидаты на создание). Пара симметричная, без нормы
+    в импорте: N считает движок, правится вручную через pairs-API.
+    """
+    wanted = row.fields.get("pair_partners")
+    if not wanted:
+        return [], [], []
+    batch_skus = {r.sku for r in batch.rows}
+    errors: list[dict] = []
+    partner_ids: dict[str, int | None] = {}
+    for sku in wanted:
+        partner = batch.partners_by_sku.get(sku)
+        if partner is not None:
+            partner_ids[sku] = partner.id
+        elif sku in batch_skus and sku != row.sku:
+            same = batch.products.get(sku)
+            partner_ids[sku] = same.id if same is not None else None
+        else:
+            errors.append({
+                "row": row.row,
+                "sku": row.sku,
+                "message": f"Парный профиль {sku} не найден в справочнике",
+            })
+    if errors:
+        return [], errors, []
+    product = batch.products.get(row.sku)
+    new_links = []
+    for sku in wanted:
+        partner_id = partner_ids[sku]
+        if product is not None and partner_id is not None:
+            key = (min(product.id, partner_id), max(product.id, partner_id))
+            if key not in batch.existing_pairs:
+                new_links.append(sku)
+        else:
+            new_links.append(sku)
+    for sku in new_links:
+        if not _pair_lengths(row, batch, sku):
+            row.warnings.append(f"Пара с {sku}: нет общих длин — расчёт невозможен")
+    return wanted, [], new_links
+
+
+def _pair_lengths(
+    row: ParsedCatalogRow, batch: _ImportBatch, partner_sku: str
+) -> set[float]:
+    """Пересечение длин строки и партнёра (БД или тот же файл)."""
+    if row.fields.get("lengths_mm"):
+        own = set(row.fields["lengths_mm"])
+    elif batch.products.get(row.sku) is not None:
+        own = {length.length_mm for length in batch.products[row.sku].lengths}
+    else:
+        own = set()
+    partner = batch.partners_by_sku.get(partner_sku)
+    if partner is not None:
+        other = {length.length_mm for length in partner.lengths}
+    else:
+        other = set()
+        for other_row in batch.rows:
+            if other_row.sku == partner_sku and other_row.fields.get("lengths_mm"):
+                other = set(other_row.fields["lengths_mm"])
+    return own & other
+
+
+async def _existing_pair_keys(db: AsyncSession, product_ids: list[int]) -> set[tuple[int, int]]:
+    """Канонические ключи (min, max) всех пар с участием артикулов."""
+    if not product_ids:
+        return set()
+    pair_rows = (
+        await db.execute(
+            select(ProductPair).where(
+                ProductPair.product_a_id.in_(product_ids)
+                | ProductPair.product_b_id.in_(product_ids)
+            )
+        )
+    ).scalars().all()
+    return {(p.product_a_id, p.product_b_id) for p in pair_rows}
+
 
 
 async def _prepare_excel_import(file: UploadFile, db: AsyncSession) -> _ImportBatch:
@@ -567,15 +568,16 @@ async def _prepare_excel_import(file: UploadFile, db: AsyncSession) -> _ImportBa
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc))
     products = await _load_products_by_sku(db, [row.sku for row in rows])
-    component_skus = sorted({sku for row in rows for sku in row.fields.get("components", [])})
-    components_by_sku = await _load_products_by_sku(db, component_skus)
-    current_composition = await _load_composition_map(db, [p.id for p in products.values()])
+    partner_skus = sorted({sku for row in rows for sku in row.fields.get("pair_partners", [])})
+    partners_by_sku = await _load_products_by_sku(db, partner_skus)
+    involved_ids = sorted({p.id for p in list(products.values()) + list(partners_by_sku.values())})
+    existing_pairs = await _existing_pair_keys(db, involved_ids)
     return _ImportBatch(
         rows=rows,
         errors=errors,
         products=products,
-        components_by_sku=components_by_sku,
-        current_composition=current_composition,
+        partners_by_sku=partners_by_sku,
+        existing_pairs=existing_pairs,
         total_data_rows=total_data_rows,
     )
 
@@ -594,35 +596,29 @@ async def preview_catalog_from_excel(
 
     for row in rows:
         product = batch.products.get(row.sku)
-        plan, composition_errors = _composition_plan(row, batch)
-        if composition_errors:
-            errors.extend(composition_errors)
-            error_rows.add(row.row)
-            continue
+        is_new = product is None
 
         existing_lengths = sorted(length.length_mm for length in product.lengths) if product else None
-        count_errors = _row_count_errors(row, existing_lengths)
+        count_errors = _row_count_errors(row, existing_lengths, is_new)
         if count_errors:
             errors.extend(count_errors)
             error_rows.add(row.row)
             continue
-
+        wanted_partners, pair_errors, new_links = _pair_plan(row, batch)
+        if pair_errors:
+            errors.extend(pair_errors)
+            error_rows.add(row.row)
+            if product is None:
+                continue
+            wanted_partners, new_links = [], []
         if product is None:
             action = "create"
         else:
-            composition_changed = (
-                plan is not None
-                and _composition_changed(plan, batch.current_composition.get(product.id))
-            )
-            action = (
-                "update"
-                if diff_catalog_row(product, row) or composition_changed
-                else "skip"
-            )
+            action = "update" if diff_catalog_row(product, row) else "skip"
         stats[action] += 1
-
         lengths = effective_lengths(row, existing_lengths)
         quantities = row.fields.get("quantities")
+        new_set = set(new_links)
         items.append({
             "row": row.row,
             "sku": row.sku,
@@ -631,12 +627,8 @@ async def preview_catalog_from_excel(
             "lengths_mm": lengths or [],
             "quantity_per_hanger": quantities[0] if quantities else (product.quantity_per_hanger if product else None),
             "quantities_per_hanger": quantities,
-            # Состав, который будет записан (#154): null — колонки не заполнены.
-            "composition": (
-                [{"sku": item["component"].sku, "quantity": item["quantity"]} for item in plan]
-                if plan is not None
-                else None
-            ),
+            "draft": is_new and not lengths,
+            "pairs": [{"sku": sku, "create": sku in new_set} for sku in wanted_partners],
             "has_photo": False,
             "action": action,
             "warnings": row.warnings,
@@ -664,34 +656,77 @@ async def apply_catalog_from_excel(
     updated = 0
     skipped = 0
 
+    failed_rows: set[int] = set()
     for row in rows:
         product = batch.products.get(row.sku)
-        plan, composition_errors = _composition_plan(row, batch)
-        if composition_errors:
-            errors.extend(composition_errors)
-            continue
+        is_new = product is None
 
         existing_lengths = sorted(length.length_mm for length in product.lengths) if product else None
-        count_errors = _row_count_errors(row, existing_lengths)
+        count_errors = _row_count_errors(row, existing_lengths, is_new)
         if count_errors:
             errors.extend(count_errors)
+            failed_rows.add(row.row)
             continue
 
+        _, pair_errors, _ = _pair_plan(row, batch)
+        if pair_errors:
+            errors.extend(pair_errors)
+            failed_rows.add(row.row)
+            if product is None:
+                continue
+
         if product is None:
-            await _create_product_from_row(db, row, plan)
+            await _create_product_from_row(db, row)
             imported += 1
         else:
-            composition_changed = (
-                plan is not None
-                and _composition_changed(plan, batch.current_composition.get(product.id))
-            )
-            if await _update_product_from_row(db, product, row, plan, composition_changed):
+            if await _update_product_from_row(db, product, row):
                 updated += 1
             else:
                 skipped += 1
 
+    # Фаза 2: пары — продукты уже записаны и видны в сессии.
+    products_by_sku = await _load_products_by_sku(
+        db,
+        [row.sku for row in rows]
+        + [sku for row in rows for sku in row.fields.get("pair_partners", [])],
+    )
+    known_pairs = await _existing_pair_keys(
+        db, [p.id for p in products_by_sku.values()]
+    )
+    pairs_created = 0
+    for row in rows:
+        if row.row in failed_rows:
+            continue
+        wanted = row.fields.get("pair_partners")
+        if not wanted:
+            continue
+        product = products_by_sku.get(row.sku)
+        if product is None:
+            continue
+        for sku in wanted:
+            partner = products_by_sku.get(sku)
+            if partner is None or partner.id == product.id:
+                continue
+            key = (min(product.id, partner.id), max(product.id, partner.id))
+            if key in known_pairs:
+                continue
+            db.add(ProductPair(
+                product_a_id=key[0],
+                product_b_id=key[1],
+                quantity_per_hanger={},
+            ))
+            known_pairs.add(key)
+            pairs_created += 1
+    await db.flush()
+
     await db.commit()
-    return {"imported": imported, "updated": updated, "skipped": skipped, "errors": errors}
+    return {
+        "imported": imported,
+        "updated": updated,
+        "skipped": skipped,
+        "pairs_created": pairs_created,
+        "errors": errors,
+    }
 
 
 @router.get("/template-excel")

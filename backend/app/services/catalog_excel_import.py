@@ -12,22 +12,21 @@ from decimal import Decimal, InvalidOperation
 from io import BytesIO
 from typing import Any
 
-from app.models.product import Product, ProductType, _length_key
+from app.models.product import Product, _length_key
 from app.services.excel_import import validate_excel_extension
 
 TEMPLATE_HEADERS = [
     "Артикул",
     "Наименование",
-    "Примечания",
-    "Длины, мм",
     "Периметр, мм",
     "Габарит, мм",
+    "Длины, мм",
     "Кол-во на подвесе",
-    "Компонент (SKU)",
-    "Количество",
+    "Примечания",
     "Не дробеструится",
     "Ламируется",
     "Эквиваленты",
+    "Парный профиль",
 ]
 
 _HEADER_FIELDS = {
@@ -38,14 +37,10 @@ _HEADER_FIELDS = {
     "периметр, мм": "perimeter_mm",
     "габарит, мм": "mount_width_mm",
     "кол-во на подвесе": "quantities",
-    # Состав ГП (#154): параллельные списки через «;» — компонент + количество.
-    "компонент (sku)": "components",
-    "количество": "component_quantities",
-    # «Парный профиль» не импортируется: флаг выведенный (ADR-0023, #146) —
-    # пары заводятся из карточки артикула (pairs-API); колонка игнорируется.
     "не дробеструится": "skip_shot_blast",
     "ламируется": "is_laminated",
     "эквиваленты": "aliases",
+    "парный профиль": "pair_partners",
 }
 
 _TEXT_FIELDS = ("name", "notes")
@@ -212,21 +207,39 @@ def parse_catalog_excel(content: bytes, filename: str) -> tuple[list[ParsedCatal
 
         quantities_text = _cell_text(cells.get("quantities"))
         if quantities_text:
-            quantities: list[int | None] = []
-            bad = False
-            for segment in quantities_text.split(","):
-                segment = segment.strip()
-                if not segment:
-                    quantities.append(None)
-                    continue
-                quantity = _parse_int(segment)
-                if quantity is None:
-                    row_errors.append(f"Кол-во на подвесе: ожидается целое число > 0, получено «{segment}»")
-                    bad = True
-                    break
-                quantities.append(quantity)
-            if not bad:
-                fields["quantities"] = quantities
+            if "+" in quantities_text:
+                row_errors.append(
+                    "Кол-во на подвесе: композит «45+10» не поддерживается — только симметричные пары")
+            else:
+                segments = [s.strip() for s in quantities_text.split(",")]
+                quantities: list[int | None] = []
+                bad = False
+                for segment in segments:
+                    if not segment:
+                        quantities.append(None)
+                        continue
+                    quantity = _parse_int(segment)
+                    if quantity is None:
+                        row_errors.append(f"Кол-во на подвесе: ожидается целое число > 0, получено «{segment}»")
+                        bad = True
+                        break
+                    quantities.append(quantity)
+                if not bad:
+                    fields["quantities"] = quantities
+
+        partners_text = _cell_text(cells.get("pair_partners"))
+        if partners_text:
+            partner_skus = [item.strip() for item in partners_text.split(";")]
+            partner_skus = [item for item in partner_skus if item]
+            if any("," in item for item in partner_skus):
+                row_errors.append(
+                    "Парный профиль: норма пары правится через pairs-API — укажите только «SKU»")
+            elif sku in partner_skus:
+                row_errors.append("Парный профиль: нельзя указать сам артикул строки")
+            elif len(set(partner_skus)) != len(partner_skus):
+                row_errors.append("Парный профиль: дубликат партнёра в строке")
+            elif partner_skus:
+                fields["pair_partners"] = partner_skus
 
         for key in _BOOL_FIELDS:
             try:
@@ -243,32 +256,6 @@ def parse_catalog_excel(content: bytes, filename: str) -> tuple[list[ParsedCatal
         if aliases_text:
             aliases = [part.strip() for part in aliases_text.split(";")]
             fields["aliases"] = [part for part in aliases if part]
-
-        components_text = _cell_text(cells.get("components"))
-        if components_text:
-            components = [part.strip() for part in components_text.split(";")]
-            components = [part for part in components if part]
-            if components:
-                fields["components"] = components
-
-        component_qty_text = _cell_text(cells.get("component_quantities"))
-        if component_qty_text:
-            component_quantities: list[float] = []
-            bad = False
-            for segment in component_qty_text.split(";"):
-                segment = segment.strip()
-                if not segment:
-                    continue
-                number = _parse_number(segment)
-                if number is None or number <= 0:
-                    row_errors.append(f"Количество: ожидается число > 0, получено «{segment}»")
-                    bad = True
-                    break
-                component_quantities.append(number)
-            if not bad and component_quantities:
-                fields["component_quantities"] = component_quantities
-
-        row_errors.extend(_validate_composition_shape(fields))
 
         if row_errors:
             for message in row_errors:
@@ -287,42 +274,27 @@ def _header_of(field_name: str) -> str:
     return _FIELD_HEADERS.get(field_name, field_name)
 
 
-def _validate_composition_shape(fields: dict[str, Any]) -> list[str]:
-    """Перекрёстная валидация колонок состава (#154): 1–2 компонента,
-    количество на каждый, без дубликатов. Ошибки БД (не найден / не сырьё)
-    проверяются на эндпоинте, где загружены артикулы."""
-    components = fields.get("components")
-    component_quantities = fields.get("component_quantities")
-    if components is None and component_quantities is None:
-        return []
-    if components is None:
-        return ["Компонент (SKU): укажите артикулы компонентов через «;»"]
-    if component_quantities is None:
-        return ["Количество: укажите количество для каждого компонента через «;»"]
-    if len(components) > 2:
-        return [f"Компонент (SKU): максимум 2 компонента на ГП, получено {len(components)}"]
-    if len(components) != len(component_quantities):
-        return [
-            f"Количество: число значений ({len(component_quantities)}) не совпадает "
-            f"с числом компонентов ({len(components)})"
-        ]
-    if len(set(components)) != len(components):
-        return ["Компонент (SKU): дубликат компонента в строке"]
-    return []
-
-
-def validate_row_counts(row: ParsedCatalogRow, existing_lengths: list[float] | None) -> list[str]:
+def validate_row_counts(
+    row: ParsedCatalogRow,
+    existing_lengths: list[float] | None,
+    *,
+    is_new: bool = False,
+) -> list[str]:
     """Число значений «Кол-во на подвесе» строго равно числу длин.
 
     Длины берутся из строки; если колонка длин пуста — из существующих
-    длин артикула (partial update по длинам справочника).
+    длин артикула (partial update по длинам справочника). Новый артикул
+    с одним значением и без длин — черновик (норматив допишется с длинами,
+    в БД не хранится).
     """
     quantities = row.fields.get("quantities")
+    lengths = row.fields.get("lengths_mm")
     if quantities is None:
         return []
-    lengths = row.fields.get("lengths_mm")
     if lengths is None:
         if not existing_lengths:
+            if is_new and len(quantities) == 1:
+                return []
             return ["Кол-во на подвесе: заполните «Длины, мм» — количества привязываются к длинам по индексу"]
         lengths = existing_lengths
     if len(quantities) != len(lengths):
@@ -346,17 +318,10 @@ def effective_lengths(row: ParsedCatalogRow, existing_lengths: list[float] | Non
 
 
 def diff_catalog_row(product: Product, row: ParsedCatalogRow) -> dict[str, Any]:
-    """Какие поля изменились бы применением строки (для preview/счётчиков).
-
-    Тип: строка с составом означает ГП (норматив состава живёт только на
-    ГП, #154); без состава тип не трогаем — частичное обновление не должно
-    превращать ГП обратно в сырьё.
-    """
+    """Какие поля изменились бы применением строки (для preview/счётчиков)."""
     changes: dict[str, Any] = {}
     fields = row.fields
 
-    if fields.get("components") and product.type != ProductType.finished_good:
-        changes["type"] = ProductType.finished_good
     if not product.is_active:
         changes["is_active"] = True
 

@@ -11,9 +11,10 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app.api.deps import get_current_user
 from app.main import app
 from app.models.product import (
+    DimensionState,
     Product,
-    ProductComposition,
     ProductLength,
+    ProductPair,
     ProductProcessingFlag,
     ProductType,
 )
@@ -40,18 +41,18 @@ def _xlsx_bytes(rows: list[list], headers: list[str] | None = None) -> bytes:
 
 def _row(**kwargs) -> list:
     """Строка файла по именованным полям (остальные колонки пустые)."""
-    # «Парный профиль» удалён из шаблона: флаг выведенный (ADR-0023, #146).
+    # Колонки шаблона = TEMPLATE_HEADERS (Парный профиль импортируется;
+    # размерность всегда 1D, фото заполняется руками).
     values: dict[str, object] = {field: "" for field in (
         "sku", "name", "notes", "lengths", "perimeter", "mount_width",
-        "quantities", "components", "component_qty", "skip_shot", "laminated",
-        "aliases",
+        "quantities", "skip_shot", "laminated", "aliases", "partners",
     )}
     values.update(kwargs)
     return [
-        values["sku"], values["name"], values["notes"], values["lengths"],
-        values["perimeter"], values["mount_width"], values["quantities"],
-        values["components"], values["component_qty"],
+        values["sku"], values["name"], values["perimeter"], values["mount_width"],
+        values["lengths"], values["quantities"], values["notes"],
         values["skip_shot"], values["laminated"], values["aliases"],
+        values["partners"],
     ]
 
 
@@ -103,7 +104,7 @@ async def test_template_excel_returns_full_reference_headers(client: AsyncClient
     ws = wb.active
     headers = [cell.value for cell in ws[1]]
     assert headers == list(TEMPLATE_HEADERS)
-    assert "Активен" not in headers and "Тип" not in headers
+    assert "Активен" not in headers and "Статус" not in headers
 
 
 # ─── preview-excel ───────────────────────────────────────────────────────────
@@ -378,6 +379,7 @@ async def test_apply_excel_empty_row_creates_with_warning(
     item = preview.json()["items"][0]
     assert item["action"] == "create"
     assert item["warnings"]
+    assert item["draft"] is True
 
     resp = await _upload(client, APPLY_URL, content)
     assert resp.status_code == 200
@@ -385,163 +387,8 @@ async def test_apply_excel_empty_row_creates_with_warning(
     product = await session.scalar(select(Product).where(Product.sku == "ЮП-ПУСТО"))
     assert product is not None
     assert product.type == ProductType.component
-    assert product.is_active is True
-
-
-# ─── Состав ГП (#154) ────────────────────────────────────────────────────────
-
-
-async def _composition_rows(session: AsyncSession, product_id: int) -> list[tuple[int, float, str]]:
-    rows = (
-        await session.execute(
-            select(ProductComposition)
-            .where(ProductComposition.product_id == product_id)
-            .order_by(ProductComposition.id)
-        )
-    ).scalars().all()
-    return [(row.component_product_id, float(row.quantity), row.unit) for row in rows]
-
-
-async def test_apply_excel_composition_creates_finished_good(
-    client: AsyncClient, session: AsyncSession
-) -> None:
-    await _make_product(session, sku="ЮП-100", unit="м")
-    await _make_product(session, sku="ЮП-200")
-    content = _xlsx_bytes([
-        _row(sku="СВ-500", name="Светильник 500", components="ЮП-100; ЮП-200", component_qty="2; 3"),
-    ])
-    resp = await _upload(client, APPLY_URL, content)
-    assert resp.status_code == 200, resp.text
-    body = resp.json()
-    assert body["imported"] == 1
-    assert body["errors"] == []
-
-    product = await session.scalar(select(Product).where(Product.sku == "СВ-500"))
-    assert product is not None
-    assert product.type == ProductType.finished_good
-    comp_100 = await session.scalar(select(Product).where(Product.sku == "ЮП-100"))
-    comp_200 = await session.scalar(select(Product).where(Product.sku == "ЮП-200"))
-    # unit берётся от компонента
-    assert await _composition_rows(session, product.id) == [
-        (comp_100.id, 2.0, "м"),
-        (comp_200.id, 3.0, "шт"),
-    ]
-
-
-async def test_apply_excel_composition_fractional_quantity(
-    client: AsyncClient, session: AsyncSession
-) -> None:
-    await _make_product(session, sku="ЮП-100")
-    content = _xlsx_bytes([
-        _row(sku="СВ-500", components="ЮП-100", component_qty="2,5"),
-    ])
-    resp = await _upload(client, APPLY_URL, content)
-    assert resp.status_code == 200, resp.text
-    product = await session.scalar(select(Product).where(Product.sku == "СВ-500"))
-    rows = await _composition_rows(session, product.id)
-    assert rows[0][1] == pytest.approx(2.5)
-
-
-async def test_preview_excel_composition_shown_in_item(
-    client: AsyncClient, session: AsyncSession
-) -> None:
-    await _make_product(session, sku="ЮП-100")
-    content = _xlsx_bytes([
-        _row(sku="СВ-500", components="ЮП-100", component_qty="2"),
-    ])
-    resp = await _upload(client, PREVIEW_URL, content)
-    assert resp.status_code == 200, resp.text
-    item = resp.json()["items"][0]
-    assert item["action"] == "create"
-    assert item["composition"] == [{"sku": "ЮП-100", "quantity": 2.0}]
-
-
-async def test_apply_excel_composition_replaces_existing(
-    client: AsyncClient, session: AsyncSession
-) -> None:
-    old = await _make_product(session, sku="ЮП-СТАРЫЙ")
-    gp = await _make_product(session, sku="СВ-500")
-    gp.type = ProductType.finished_good
-    session.add(ProductComposition(
-        product_id=gp.id, component_product_id=old.id, quantity=5, unit="шт"
-    ))
-    await _make_product(session, sku="ЮП-200")
-    await session.flush()
-
-    content = _xlsx_bytes([
-        _row(sku="СВ-500", components="ЮП-200", component_qty="1"),
-    ])
-    resp = await _upload(client, APPLY_URL, content)
-    assert resp.status_code == 200, resp.text
-    assert resp.json()["updated"] == 1
-
-    comp_200 = await session.scalar(select(Product).where(Product.sku == "ЮП-200"))
-    rows = await _composition_rows(session, gp.id)
-    assert rows == [(comp_200.id, 1.0, "шт")]
-
-
-async def test_apply_excel_update_without_components_keeps_type_and_composition(
-    client: AsyncClient, session: AsyncSession
-) -> None:
-    comp = await _make_product(session, sku="ЮП-100")
-    gp = await _make_product(session, sku="СВ-500")
-    gp.type = ProductType.finished_good
-    session.add(ProductComposition(
-        product_id=gp.id, component_product_id=comp.id, quantity=5, unit="шт"
-    ))
-    await session.flush()
-
-    content = _xlsx_bytes([_row(sku="СВ-500", name="Новое имя")])
-    resp = await _upload(client, APPLY_URL, content)
-    assert resp.status_code == 200, resp.text
-    assert resp.json()["updated"] == 1
-
-    await session.refresh(gp)
-    # Частичное обновление без колонок состава не трогает тип и состав
-    assert gp.type == ProductType.finished_good
-    assert gp.name == "Новое имя"
-    assert await _composition_rows(session, gp.id) == [(comp.id, 5.0, "шт")]
-
-
-async def test_preview_excel_composition_errors(
-    client: AsyncClient, session: AsyncSession
-) -> None:
-    await _make_product(session, sku="ЮП-100")
-    fg = await _make_product(session, sku="ГП-1")
-    fg.type = ProductType.finished_good
-    await session.flush()
-
-    content = _xlsx_bytes([
-        _row(sku="Б1", components="НЕТ-ТАКОГО", component_qty="1"),  # не найден
-        _row(sku="Б2", components="ГП-1", component_qty="1"),  # не component
-        _row(sku="Б3", components="ЮП-100; ЮП-100; ЮП-100", component_qty="1; 1; 1"),  # >2 и дубликат
-        _row(sku="Б4", components="ЮП-100", component_qty="1; 2"),  # числа не совпадают
-        _row(sku="Б5", components="ЮП-100", component_qty="0"),  # количество ≤ 0
-        _row(sku="Б6", components="Б6", component_qty="1"),  # сам себе компонент
-        _row(sku="Б7", components="ЮП-100", component_qty=""),  # кол-во без SKU-количеств
-        _row(sku="ОК", components="ЮП-100", component_qty="1"),
-    ])
-    resp = await _upload(client, PREVIEW_URL, content)
-    assert resp.status_code == 200, resp.text
-    body = resp.json()
-    error_skus = {err["sku"] for err in body["errors"]}
-    assert error_skus == {"Б1", "Б2", "Б3", "Б4", "Б5", "Б6", "Б7"}
-    assert {item["sku"] for item in body["items"]} == {"ОК"}
-
-
-async def test_apply_excel_composition_error_skips_row(
-    client: AsyncClient, session: AsyncSession
-) -> None:
-    content = _xlsx_bytes([
-        _row(sku="СВ-500", components="НЕТ-ТАКОГО", component_qty="1"),
-    ])
-    resp = await _upload(client, APPLY_URL, content)
-    assert resp.status_code == 200, resp.text
-    body = resp.json()
-    assert body["imported"] == 0
-    assert len(body["errors"]) == 1
-    assert body["errors"][0]["message"]
-    assert await session.scalar(select(Product).where(Product.sku == "СВ-500")) is None
+    # Черновик без длин — неактивен, пока не допишут длины.
+    assert product.is_active is False
 
 
 async def test_apply_excel_requires_edit_references_role(
@@ -560,3 +407,175 @@ async def test_apply_excel_requires_edit_references_role(
         assert allowed.status_code == 200
     finally:
         app.dependency_overrides.pop(get_current_user, None)
+
+
+# ─── Черновики без длин ────────────────────────────────────────────────────────
+
+
+async def test_preview_draft_single_qty_no_lengths(
+    client: AsyncClient, session: AsyncSession
+) -> None:
+    content = _xlsx_bytes([_row(sku="ЮП-ЧЕРН", quantities="35")])
+    body = (await _upload(client, PREVIEW_URL, content)).json()
+    assert body["errors"] == []
+    item = body["items"][0]
+    assert item["action"] == "create"
+    assert item["draft"] is True
+
+async def test_apply_draft_creates_inactive_without_norm(
+    client: AsyncClient, session: AsyncSession
+) -> None:
+    content = _xlsx_bytes([_row(sku="ЮП-ЧЕРН", quantities="35", name="Черновик")])
+    resp = await _upload(client, APPLY_URL, content)
+    assert resp.status_code == 200, resp.text
+    assert resp.json()["imported"] == 1
+    product = await session.scalar(select(Product).where(Product.sku == "ЮП-ЧЕРН"))
+    assert product is not None
+    assert product.is_active is False
+    assert await _product_lengths(session, product.id) == []
+    # Норматив в БД не хранится — допишется с длинами.
+    assert product.quantity_per_hanger is None
+    assert product.quantity_per_hanger_by_length is None
+
+
+async def test_apply_multi_qty_no_lengths_is_error(
+    client: AsyncClient, session: AsyncSession
+) -> None:
+    content = _xlsx_bytes([_row(sku="ЮП-ЧЕРН2", quantities="35, 36")])
+    body = (await _upload(client, PREVIEW_URL, content)).json()
+    assert len(body["errors"]) == 1
+    assert "Длины" in body["errors"][0]["message"]
+    resp = await _upload(client, APPLY_URL, content)
+    assert resp.json()["imported"] == 0
+    assert await session.scalar(select(Product).where(Product.sku == "ЮП-ЧЕРН2")) is None
+# ─── Композит «45+10» не поддерживается ───────────────────────────────────────
+
+
+async def test_composite_without_partner_is_error(
+    client: AsyncClient, session: AsyncSession
+) -> None:
+    content = _xlsx_bytes([_row(sku="ЮП-К1", quantities="45+10")])
+    body = (await _upload(client, PREVIEW_URL, content)).json()
+    assert len(body["errors"]) == 1
+    assert "не поддерживается" in body["errors"][0]["message"]
+    resp = await _upload(client, APPLY_URL, content)
+    assert resp.json()["imported"] == 0
+    assert await session.scalar(select(Product).where(Product.sku == "ЮП-К1")) is None
+
+
+async def test_composite_with_partner_is_error(
+    client: AsyncClient, session: AsyncSession
+) -> None:
+    await _make_product(session, sku="ЮП-П1", lengths=[2750.0])
+    content = _xlsx_bytes([_row(sku="ЮП-К4", quantities="45+10", partners="ЮП-П1")])
+    body = (await _upload(client, PREVIEW_URL, content)).json()
+    assert len(body["errors"]) == 1
+    assert "не поддерживается" in body["errors"][0]["message"]
+
+
+# ─── Пары ──────────────────────────────────────────────────────────────────────
+
+
+async def test_unknown_partner_blocks_row(
+    client: AsyncClient, session: AsyncSession
+) -> None:
+    content = _xlsx_bytes([_row(sku="ЮП-ПАР", quantities="30", partners="ЮП-НЕТ")])
+    body = (await _upload(client, PREVIEW_URL, content)).json()
+    assert len(body["errors"]) == 1
+    assert "не найден" in body["errors"][0]["message"]
+    resp = await _upload(client, APPLY_URL, content)
+    assert resp.json()["imported"] == 0
+    assert await session.scalar(select(Product).where(Product.sku == "ЮП-ПАР")) is None
+
+
+async def test_pair_qty_suffix_is_error(
+    client: AsyncClient, session: AsyncSession
+) -> None:
+    await _make_product(session, sku="ЮП-П1", lengths=[2750.0])
+    content = _xlsx_bytes([_row(
+        sku="ЮП-ПАР2", name="Парный", lengths="2750",
+        quantities="30", partners="ЮП-П1, 24",
+    )])
+    body = (await _upload(client, PREVIEW_URL, content)).json()
+    assert len(body["errors"]) == 1
+    assert "pairs-API" in body["errors"][0]["message"]
+    resp = await _upload(client, APPLY_URL, content)
+    assert resp.json()["imported"] == 0
+    assert await session.scalar(select(Product).where(Product.sku == "ЮП-ПАР2")) is None
+
+
+async def test_pair_created_without_norm(
+    client: AsyncClient, session: AsyncSession
+) -> None:
+    await _make_product(session, sku="ЮП-П1", lengths=[2750.0])
+    content = _xlsx_bytes([_row(
+        sku="ЮП-ПАР2", name="Парный", lengths="2750",
+        quantities="30", partners="ЮП-П1",
+    )])
+    body = (await _upload(client, PREVIEW_URL, content)).json()
+    assert body["errors"] == [], body["errors"]
+    assert body["items"][0]["pairs"] == [{"sku": "ЮП-П1", "create": True}]
+    resp = await _upload(client, APPLY_URL, content)
+    assert resp.json()["pairs_created"] == 1
+    product = await session.scalar(select(Product).where(Product.sku == "ЮП-ПАР2"))
+    partner = await session.scalar(select(Product).where(Product.sku == "ЮП-П1"))
+    pair = await session.scalar(
+        select(ProductPair).where(
+            ProductPair.product_a_id == min(product.id, partner.id),
+            ProductPair.product_b_id == max(product.id, partner.id),
+        )
+    )
+    assert pair is not None
+    assert pair.quantity_per_hanger == {}
+
+
+async def test_existing_pair_not_duplicated(
+    client: AsyncClient, session: AsyncSession
+) -> None:
+    p1 = await _make_product(session, sku="ЮП-П1", lengths=[2750.0])
+    p2 = await _make_product(session, sku="ЮП-П2", lengths=[2750.0])
+    session.add(ProductPair(
+        product_a_id=min(p1.id, p2.id),
+        product_b_id=max(p1.id, p2.id),
+        quantity_per_hanger={},
+    ))
+    await session.flush()
+    content = _xlsx_bytes([_row(sku="ЮП-П1", partners="ЮП-П2")])
+    body = (await _upload(client, PREVIEW_URL, content)).json()
+    assert body["errors"] == []
+    assert body["items"][0]["pairs"] == [{"sku": "ЮП-П2", "create": False}]
+    resp = await _upload(client, APPLY_URL, content)
+    assert resp.json()["pairs_created"] == 0
+
+
+async def test_update_pair_error_defers_only_pair(
+    client: AsyncClient, session: AsyncSession
+) -> None:
+    await _make_product(session, sku="ЮП-СУЩ", lengths=[2750.0])
+    content = _xlsx_bytes([_row(sku="ЮП-СУЩ", name="Новое имя", partners="ЮП-НЕТ")])
+    body = (await _upload(client, PREVIEW_URL, content)).json()
+    assert len(body["errors"]) == 1
+    assert "не найден" in body["errors"][0]["message"]
+    assert body["items"][0]["action"] == "update"
+    assert body["items"][0]["pairs"] == []
+    resp = await _upload(client, APPLY_URL, content)
+    assert resp.json()["updated"] == 1
+    assert resp.json()["pairs_created"] == 0
+    product = await session.scalar(select(Product).where(Product.sku == "ЮП-СУЩ"))
+    assert product.name == "Новое имя"
+
+
+async def test_legacy_dimension_photo_columns_ignored(
+    client: AsyncClient, session: AsyncSession
+) -> None:
+    headers = list(TEMPLATE_HEADERS) + ["Размерность", "Фото"]
+    content = _xlsx_bytes(
+        [_row(sku="ЮП-ЛГ") + ["2D", "products/ЮП-ЛГ_full.jpg"]],
+        headers=headers,
+    )
+    body = (await _upload(client, PREVIEW_URL, content)).json()
+    assert body["errors"] == []
+    assert (await _upload(client, APPLY_URL, content)).json()["imported"] == 1
+    product = await session.scalar(select(Product).where(Product.sku == "ЮП-ЛГ"))
+    assert product.dimension_state == DimensionState.length
+    assert product.photo_full is None
