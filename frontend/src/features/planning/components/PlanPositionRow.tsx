@@ -49,6 +49,19 @@ export function PositionRow({ pos, onApprove, onDelete, selected, routes, onAssi
   // Авторасчёт (#66): значение и источник приходят контрактом с бэкенда,
   // движок расчёта фронту не нужен.
   const quantityPerHanger = pos.quantity_per_hanger ?? null
+  // Сырьё позиции (полноразмерные заготовки сырьевой длины): до пилы материал
+  // считается в штуках входа, длины появляются только на трансформирующем этапе.
+  // Поэтому сырьё — первое число строки, итог по длинам — второе.
+  const inputQtyNum = pos.input_quantity != null && pos.input_quantity !== "" ? Number(pos.input_quantity) : null
+  const inputQtyStr = inputQtyNum != null && Number.isFinite(inputQtyNum) ? fmtQty(inputQtyNum) : null
+  const inputHangerCount =
+    inputQtyNum != null && quantityPerHanger && quantityPerHanger > 0 ? inputQtyNum / quantityPerHanger : null
+  const inputHangerDisplay =
+    inputHangerCount != null
+      ? Number.isInteger(inputHangerCount)
+        ? String(inputHangerCount)
+        : inputHangerCount.toFixed(1)
+      : null
   const hangerCount = quantityPerHanger && quantityPerHanger > 0
     ? qty / quantityPerHanger
     : null
@@ -233,7 +246,30 @@ export function PositionRow({ pos, onApprove, onDelete, selected, routes, onAssi
         />
       </div>
       <div className="p-2 text-sm whitespace-nowrap">
-        {qtyAdjusted ? (
+        {inputQtyStr ? (
+          <span>
+            <span className="font-medium" title="Сырьё 2,75 м (полноразмерные)">
+              {inputQtyStr}
+              {inputHangerDisplay ? ` (${inputHangerDisplay}П)` : ''}
+            </span>
+            <span
+              className="ml-2 text-xs text-muted-foreground"
+              title="Итог по длинам (после пилы)"
+            >
+              →{" "}
+              {qtyAdjusted ? (
+                <>
+                  <span className="text-muted-foreground">{originalQtyDisplay}</span>
+                  <span className="mx-1 text-muted-foreground">→</span>
+                  <span className="font-medium text-amber-600">{qtyStr}</span>
+                </>
+              ) : (
+                qtyStr
+              )}{" "}
+              ГП
+            </span>
+          </span>
+        ) : qtyAdjusted ? (
           <span>
             <span className="text-muted-foreground">{originalQtyDisplay}</span>
             <span className="mx-1 text-muted-foreground">→</span>
@@ -247,13 +283,19 @@ export function PositionRow({ pos, onApprove, onDelete, selected, routes, onAssi
           </span>
         )}
         {pos.operation_summary && (
-          <span className="block text-xs text-muted-foreground" title={pos.operation_summary}>
+          <span
+            className="block whitespace-normal break-words text-xs text-muted-foreground"
+            title={pos.operation_summary}
+          >
             {pos.operation_summary}
           </span>
         )}
       </div>
-      <div className="p-2 text-sm whitespace-nowrap text-muted-foreground" title={pos.dimensions_label ?? undefined}>
-        {pos.dimensions_label ?? formatDimensionsLabel(pos.dimensions)}
+      <div
+        className="p-2 text-sm whitespace-normal break-words leading-tight text-muted-foreground"
+        title={pos.sizes_label ?? pos.dimensions_label ?? undefined}
+      >
+        {pos.sizes_label ?? pos.dimensions_label ?? formatDimensionsLabel(pos.dimensions)}
       </div>
       <div className="p-2 text-sm truncate whitespace-nowrap" title={pos.source_name ?? undefined}>{pos.source_name ?? "—"}</div>
       <div className="p-2 text-sm truncate overflow-hidden">

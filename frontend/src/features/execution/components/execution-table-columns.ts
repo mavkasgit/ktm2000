@@ -57,13 +57,13 @@ export const executionTableColumns: ExecutionTableColumn[] = [
   {
     id: "qty",
     label: "Кол-во",
-    width: "80px",
+    width: "150px",
     sortField: "qty",
   },
   {
     id: "dimensions",
     label: "Размер",
-    width: "88px",
+    width: "240px",
     sortField: "dimensions",
     colClassName: "hidden min-[600px]:table-column",
     headerClassName: "hidden min-[600px]:table-cell",

@@ -104,11 +104,28 @@ export function ExecutionRow({
           </span>
         );
       case "qty":
-        return fmtQty(row.quantity);
+        return row.input_quantity != null ? (
+          // Сырья (полноразмерных заготовок) требуется первым числом: до пилы
+          // материал считается в штуках входа, итог по длинам — вторым.
+          <span className="whitespace-nowrap">
+            <span className="font-medium" title="Сырьё 2,75 м (полноразмерные)">
+              {fmtQty(row.input_quantity)}
+            </span>
+            <span className="text-muted-foreground" title="Итог по длинам (после пилы)">
+              {" → "}
+              {fmtQty(row.quantity)} ГП
+            </span>
+          </span>
+        ) : (
+          fmtQty(row.quantity)
+        );
       case "dimensions":
         return (
-          <span className="block truncate whitespace-nowrap text-xs text-muted-foreground" title={row.dimensions_label ?? undefined}>
-            {row.dimensions_label ?? formatDimensionsLabel(row.dimensions)}
+          <span
+            className="block whitespace-normal break-words text-xs text-muted-foreground"
+            title={row.sizes_label ?? row.dimensions_label ?? undefined}
+          >
+            {row.sizes_label ?? row.dimensions_label ?? formatDimensionsLabel(row.dimensions)}
           </span>
         );
       case "route":
