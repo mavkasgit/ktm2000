@@ -15,10 +15,10 @@
 | Backend | Python + FastAPI | 3.12+ |
 | ORM | SQLAlchemy + Alembic | async `asyncpg` |
 | Database | PostgreSQL | 15 (Docker) |
-| Frontend | React + TypeScript | 19+ (Vite) |
+| Frontend | React + TypeScript | 18.3 (Vite) |
 | Styling | Tailwind CSS + shadcn/ui | — |
 | Backend tests | pytest + xdist + testmon | — |
-| E2E | Playwright | ^1.59.1 |
+| E2E | Playwright | ^1.60.0 |
 
 ## UI-модули
 
@@ -32,7 +32,11 @@
 | `/transfers` | Передачи между участками |
 | `/spg` | ГХП (снимок) |
 | `/audit-logs` | Журнал действий |
+| `/reversal` | Журнал действий (реверс) |
 | `/settings/*` | Настройки, бэкапы, пользователи |
+| `/settings/users` | Пользователи (только admin) |
+| `/settings/employees` | Сотрудники (только admin) |
+| `/settings/dev` | Dev-настройки (только admin) |
 
 ## Дерево каталогов
 
@@ -47,10 +51,11 @@ ktm2000/
 │   │   ├── stock/         # Stock Ledger
 │   │   ├── transfers/     # Передачи
 │   │   └── seeds/         # Демо-данные
-│   ├── migrations/        # Alembic
+│   ├── alembic/           # Alembic (миграции в versions/)
 │   └── tests/             # pytest (канон → tests/AGENTS.md)
 ├── frontend/
 │   ├── src/               # FSD: app, features, entities, shared
+│   │   └── modules/       # Переносимые модули (notifications, user-settings); host-адаптеры из features через alias `@/modules/*`
 │   └── e2e/               # Playwright
 ├── infra/compose/         # docker-compose (dev, test, prod)
 ├── scripts/               # Вспомогательные скрипты
@@ -63,7 +68,7 @@ ktm2000/
 
 | Сущность | Таблица | Назначение |
 |----------|---------|------------|
-| `Location` (= `Section`) | `sections` | Локация материала; `type`: `production`, `raw_stock`, `wip_stock`, `finished_stock`, `scrap`, `quarantine` |
+| `Location` (= `Section`) | `sections` | Локация материала; `type`: `production`, `raw_stock`, `wip_stock`, `finished_stock`, `scrap`, `terminal` |
 | `StockTransaction` | `stock_transactions` | Ledger: from/to location, quantity, reason, quality_state |
 | `StockBalance` | `stock_balances` | Кэш баланса по (product, location, quality_state) |
 | `WorkTask` | `work_tasks` | План в `planned_quantity`; выполнение — из транзакций |
@@ -91,14 +96,13 @@ ktm2000/
 
 | Окружение | Frontend | Postgres | Backend |
 |-----------|----------|----------|---------|
-| dev | `5172` | `5202` | `8010` |
-| test | `8100` | `5212` | `8010` |
-| prod | `8020` | `5432` (внутри Docker) | `8010` |
-| E2E CDP | — | — | `9222` |
+| dev | `5172` | `5440` | `8012` |
+| test | `8100` | `5441` | `8000` (внутри контейнера) |
+| prod | `8082` (nginx, наружу) | `5432` (внутри Docker) | `8000` (внутри Docker) |
 
 ## Архитектурные решения
 
 1. **FSD на фронтенде** — слои `app` → `features` → `entities` → `shared`; без cross-imports между features.
 2. **Async backend** — все операции БД через `AsyncSession`.
 3. **Docker только для БД в dev** — backend/frontend на хосте для hot reload.
-4. **Playwright CDP** — E2E через Chrome `--remote-debugging-port=9222`.
+4. **Playwright (bundled Chromium)** — E2E-проекты `ui-e2e` (`@ui`) и `smoke` (`@smoke`) на штатном Chromium из Playwright; `webServer` в конфиге отключён, dev-окружение поднимается вручную.

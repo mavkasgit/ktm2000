@@ -9,7 +9,7 @@
 [![TypeScript](https://img.shields.io/badge/TypeScript-blue?style=flat-square&logo=typescript&logoColor=white)](https://www.typescriptlang.org)
 [![Python](https://img.shields.io/badge/Python-3.12+-blue?style=flat-square&logo=python&logoColor=white)](https://www.python.org)
 [![FastAPI](https://img.shields.io/badge/FastAPI-v0.100+-green?style=flat-square&logo=fastapi&logoColor=white)](https://fastapi.tiangolo.com)
-[![React](https://img.shields.io/badge/React-19-blue?style=flat-square&logo=react&logoColor=white)](https://react.dev)
+[![React](https://img.shields.io/badge/React-18-blue?style=flat-square&logo=react&logoColor=white)](https://react.dev)
 
 [Обзор](#обзор) • [Возможности](#возможности) • [Быстрый старт](#быстрый-старт) • [Команды](#команды-разработки) • [Документация](#документация)
 
@@ -45,7 +45,7 @@ npm run dev
 ```
 
 - Frontend: [http://localhost:5172](http://localhost:5172)
-- API (Swagger): [http://localhost:8010/docs](http://localhost:8010/docs)
+- API (Swagger): [http://localhost:8012/docs](http://localhost:8012/docs)
 
 > [!NOTE]
 > Пошаговая установка, seed и troubleshooting — [docs/GETTING_STARTED.md](docs/GETTING_STARTED.md).
@@ -55,7 +55,7 @@ npm run dev
 | Команда | Назначение |
 |---------|------------|
 | `npm run dev` | Postgres + миграции + backend + frontend |
-| `npm run devkill` | Остановить dev-серверы (8010, 5172) |
+| `npm run devkill` | Остановить dev-серверы (8012, 5172) |
 | `npm run devrestart` | Перезапустить dev-окружение |
 | `npm run db:makemigrate -- "описание"` | Создать миграцию |
 | `npm run db:migrate` | Применить миграции |

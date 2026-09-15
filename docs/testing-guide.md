@@ -4,10 +4,10 @@
 
 ## Уровни тестирования
 
-| Уровень | Инструмент | Канон |
+| Уровень | Инструмент | Канон / команды |
 |---------|------------|-------|
 | Backend | pytest | [`backend/tests/AGENTS.md`](../backend/tests/AGENTS.md) |
-| Frontend unit | Vitest | [`frontend/AGENTS.md`](../frontend/AGENTS.md) |
+| Frontend unit | Vitest | [`frontend/AGENTS.md`](../frontend/AGENTS.md) — команды |
 | E2E | Playwright | [`frontend/e2e/AGENTS.md`](../frontend/e2e/AGENTS.md) |
 
 ## Быстрый старт

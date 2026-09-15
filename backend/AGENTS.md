@@ -21,7 +21,7 @@ backend/app/
 - Все операции с БД — через `AsyncSession` (async).
 - Миграции: `npm run db:makemigrate -- "описание"` → `npm run db:migrate` (из корня).
 - Seed: `npm run db:seed`.
-- API docs: `http://localhost:8010/docs` (dev).
+- API docs: `http://localhost:8012/docs` (dev).
 
 ## Stock Ledger
 

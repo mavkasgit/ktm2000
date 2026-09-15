@@ -1,10 +1,12 @@
 # Frontend — KTM-2000
 
-React 19 + TypeScript + Vite + Tailwind CSS + shadcn/ui + TanStack Table/Query.
+React 18.3 + TypeScript + Vite + Tailwind CSS + shadcn/ui + TanStack Query/Virtual.
 
 ## FSD (Feature-Sliced Design)
 
 Слои: `app` → `features` → `entities` → `shared`.
+
+Слой `src/modules/` — переносимые модули (`notifications`, `user-settings`), потребляемые host-адаптерами из `features` через alias `@/modules/*`.
 
 - **Запрещены** cross-imports между features одного слоя.
 - Общее — спускать в `entities` или `shared`.

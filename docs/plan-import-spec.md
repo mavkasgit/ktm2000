@@ -2,8 +2,6 @@
 
 Источник решений: карта [Wayfinder #157](https://github.com/mavkasgit/ktm2000/issues/157),
 тикеты #158 (профиль), #159 (стабильность), #160 (стратегия), #161 (прототип), #162 (замер).
-Артефакты: `research/plan-import-profile` (`docs/research/plan-import-profile.md`),
-`prototype/import-preview-ux` (`frontend/prototype/import-preview.prototype.html`).
 
 ## 1. Базисы
 
@@ -96,7 +94,7 @@ Warnings (не блокируют): `raw_length_substituted`, `paired_hanger_adj
 - UI: экран блокировки — ЧТО мешает (список), ПОСЛЕДСТВИЯ вариантов, ВЫБОР:
   «Отмена» / «Удалить только черновики (n)» (позиции `released`, задачи, передачи не тронуты) /
   «Удалить всё» — disabled с объяснением запрета.
-- Прототип экрана: вариант B (`prototype/import-preview-ux`, `?variant=b`).
+- Прототип экрана: вариант B.
 
 ### 4.5. Применение и откат батча из списка файлов (#172)
 - Кнопки в строке файла: «Применить» у `parsed` и `cancelled` (откаченный батч

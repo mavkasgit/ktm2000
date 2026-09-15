@@ -1,6 +1,6 @@
 # Auth & OIDC (Authentik) — KTM-2000
 
-Канон: [`.opencode/plans/authentik-unified-auth-contract.md`](../.opencode/plans/authentik-unified-auth-contract.md) (R1–R14, env §8).
+Канон: единый контракт аутентификации Authentik (R1–R14, env §8).
 
 ## Режимы
 

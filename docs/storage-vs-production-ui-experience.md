@@ -1,10 +1,11 @@
 # UI-опыт: «цех vs. склад» в маршрутах
 
 Документ описывает, как конечный пользователь и фронтенд-разработчик видят
-новое разделение «цех / склад / транзит» в маршрутах после миграции 020.
+новое разделение «цех / склад / транзит» в маршрутах, появившееся в миграции 004
+(колонки `route_stages.stage_kind`/`storage_section_id`).
 
-Источник истины: [app/services/route_storage_classifier.py](file:///c:/Users/user/VibeCoding/ktm2000/backend/app/services/route_storage_classifier.py)
-на бэкенде и зеркало [routeStageClassifier.ts](file:///c:/Users/user/VibeCoding/ktm2000/frontend/src/shared/lib/routeStageClassifier.ts)
+Источник истины: [app/services/route_storage_classifier.py](../backend/app/services/route_storage_classifier.py)
+на бэкенде и зеркало [routeStageClassifier.ts](../frontend/src/shared/lib/routeStageClassifier.ts)
 на фронте.
 
 ---
@@ -13,8 +14,8 @@
 
 | Сущность | Где живёт | Что значит для пользователя |
 |---|---|---|
-| **Цех (production)** | `Section.kind = 'production'`, `SectionOperation.operation_type = 'production'`, `RouteStage.stage_kind = 'production'` | Здесь делают реальную работу (сверлят, прессуют, упаковывают). На цехе есть конкретные операции, по ним создаются задания (`WorkTask`). |
-| **Склад (storage)** | `Section.kind ∈ {raw_stock, wip_stock, finished_stock}` | Это **место хранения**, а не работы. На нём нечего выполнять — материал лежит, ожидает следующего цеха. |
+| **Цех (production)** | `Section.type = 'production'`, `SectionOperation.operation_type = 'production'`, `RouteStage.stage_kind = 'production'` | Здесь делают реальную работу (сверлят, прессуют, упаковывают). На цехе есть конкретные операции, по ним создаются задания (`WorkTask`). |
+| **Склад (storage)** | `Section.type ∈ {raw_stock, wip_stock, finished_stock}` | Это **место хранения**, а не работы. На нём нечего выполнять — материал лежит, ожидает следующего цеха. |
 | **Транзит (transit)** | `RouteStage.stage_kind = 'transit'`, `storage_section_id` указывает на склад | Узел в маршруте между двумя цехами. Не задание, не работа — просто факт, что материал проходит через склад. |
 
 **Ключевая мысль для UI**: цех — это блок, склад — иконка-ромб между блоками, транзит — это сам «пунктирный мост» через склад.
@@ -50,7 +51,7 @@
   - фон сплошной, цвет = `section.icon_color`
   - внутри — название цеха и список операций
 - `stage_kind === 'transit'` → `<TransitNode storageSection={…}>`
-  - контур пунктирный, иконка `Warehouse`/`Boxes`/`Container` (в зависимости от `kind`)
+  - контур пунктирный, иконка `Warehouse`/`Boxes`/`Container` (в зависимости от `type`)
   - внутри — `Хранение: {storageSection.name}`
   - тултип: «Транзитный узел. Не требует выполнения работы.»
 
@@ -137,7 +138,7 @@ UI вызывает `GET /api/sections/storage-points` и получает го�
   "id": 5,
   "code": "WIP_WH",
   "name": "Склад полуфабриката",
-  "kind": "wip_stock",
+  "type": "wip_stock",
   "role": "storage",
   "has_real_operations": true,
   "icon": "Boxes",
@@ -205,7 +206,7 @@ UI получает `route_snapshot` со снимком маршрута. В н
 **Раньше**:
 - Использовалась функция `_significant_section_ids` с двумя ad-hoc правилами
 - Если у секции есть `SectionOperation` — смотрим `is_significant`
-- Если нет — фолбэк на `Section.kind`
+- Если нет — фолбэк на `Section.type`
 - В историю попадали `WH`/`WIP_WH`/`FG_WH` если у них случайно была `is_significant=True` операция
 
 **Теперь**:
@@ -250,17 +251,17 @@ UI истории работы по позиции (timeline) теперь чи�
 
 ### Хелпер для классификации на фронте
 
-[routeStageClassifier.ts](file:///c:/Users/user/VibeCoding/ktm2000/frontend/src/shared/lib/routeStageClassifier.ts):
+[routeStageClassifier.ts](../frontend/src/shared/lib/routeStageClassifier.ts):
 
 ```ts
 import { isTransitStage, isProductionStage, classifySectionRole } from "@/shared/lib";
 
 isTransitStage({ stage_kind: "transit" })  // true
 isProductionStage({ stage_kind: "production", section_id: 5 })  // true
-classifySectionRole({ kind: "wip_stock" })  // "storage"
+classifySectionRole({ type: "wip_stock" })  // "storage"
 ```
 
-Все решения «как отрисовать» должны идти через эти функции, а не через собственные проверки `kind === 'raw_stock'` и т.п.
+Все решения «как отрисовать» должны идти через эти функции, а не через собственные проверки `type === 'raw_stock'` и т.п.
 
 ### Не нужно
 

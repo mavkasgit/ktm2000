@@ -1,6 +1,6 @@
 # Agent Registry — KTM-2000
 
-Субагенты, порты и MCP-матрица для ИИ-ассистентов. Bootstrap → [AGENTS.md](../AGENTS.md).
+MCP-матрица и порты для ИИ-ассистентов. Bootstrap → [AGENTS.md](../AGENTS.md).
 
 ## Навигация по документации
 
@@ -31,24 +31,10 @@
 | Порт | Назначение |
 |------|------------|
 | `5172` | Frontend (dev) |
-| `8010` | Backend API |
+| `8012` | Backend API |
 | `5440` | Postgres (dev) |
 | `5441` | Postgres (test) |
-| `8020` | Frontend (prod) |
 | `8082` | Nginx KTM-2000 (автономный) |
-| `9222` | Chrome CDP (E2E) |
-
-## Субагенты
-
-| Субагент | Назначение |
-|----------|------------|
-| `browser-checker` | Браузерные проверки |
-| `docs-maintainer` | Актуализация `docs/` после задач |
-| `test-runner` | Запуск pytest / Playwright |
-| `test-fixer` | Починка падающих тестов |
-| `server-operator` | Shell на сервере (SSH MCP) |
-| `sftp-operator` | Передача файлов (SFTP MCP) |
-| `server-deployer` | Координация деплоя |
 
 ## Правила
 

@@ -2,8 +2,6 @@
 
 Каноническое руководство по E2E в KTM-2000. Каталог: `frontend/e2e/`.
 
-> Handoff для исполнителя (статус прогона, баги, DoD): [`docs/e2e-handoff.md`](../../docs/e2e-handoff.md)
-
 ## Два слоя тестов
 
 | Слой | Тег | Playwright project | Назначение |
@@ -26,7 +24,7 @@ npm --prefix frontend run test:e2e         # оба проекта
 
 ### @smoke
 
-- Спеки: `bulk-workflow`, `total-workflow`, `transfers-auto-accept`, `final-release`, `catalog-dimensions`, `dimensions-sawing`, `plan-issue-handover`
+- Спеки: `transfers-auto-accept`, `final-release`, `catalog-dimensions`, `dimensions-sawing`, `reversal-journal`
 - Хелперы: [`api-helpers.ts`](api-helpers.ts) — ускоренный setup через API
 - Основные проверки — через UI; setup может идти через API
 
@@ -95,22 +93,19 @@ set PLAYWRIGHT_TEST_BASE_URL=http://localhost:5172
 | Файл | Тег | Сценарий | Статус |
 |------|-----|----------|--------|
 | `full-cycle.spec.ts` | `@ui` | Полный цикл ЮП-009: каталог → остатки → план → approve → запуск → маршрут → отгрузка | ✅ канон |
-| `route-workflow.spec.ts` | `@ui` | Импорт-wizard диалог; legacy-кейсы полного цикла | ⚠️ частично skip (#88) |
+| `route-workflow.spec.ts` | `@ui` | Инфо о маршруте в таблице плана; диалог import-wizard | ✅ |
 | `sawing-multi-length-split.spec.ts` | `@ui` | Пила: распил одной задачи на несколько разных длин (2,7 м → 0,9 м + 1,8 м) порциями через доску; ledger + остатки по длинам. Сетап — API (быстро), в кадре только действие участка | ✅ |
 | `transfers-auto-accept.spec.ts` | `@smoke` | Передача: Send со склада → auto-accept → `in_progress` (`received==issued`) | ✅ |
 | `final-release.spec.ts` | `@smoke` | Финальный выпуск кнопкой «Отправить» (#96) | ✅ |
 | `catalog-dimensions.spec.ts` | `@smoke` | Сохранение 2D/3D размеров в каталоге | ✅ |
 | `dimensions-sawing.spec.ts` | `@smoke` | Доска пилы, трансформация, остатки по длинам | ⚠️ мягкие ассерции |
-| `bulk-workflow.spec.ts` | `@smoke` | Bulk-операции shopfloor | ⚠️ skip (устарел, #96) |
-| `total-workflow.spec.ts` | `@smoke` | Остатки, shortage strategies | ⚠️ skip (завершал складской этап с доски — переработать на передачу со склада) |
-| `plan-issue-handover.spec.ts` | `@smoke` | Колонка «Размер» в плане выдачи/сдачи | ⚠️ skip (setup устарел) |
 | `reversal-journal.spec.ts` | `@smoke` | Отмена действий (#117): страница `/reversal`, журнал и дерево цепочки | ✅ |
 
 ## Отладка
 
 ```bash
 npx playwright test --project=ui-e2e -g "import wizard" --debug
-npx playwright test --project=smoke e2e/bulk-workflow.spec.ts --headed
+npx playwright test --project=smoke e2e/reversal-journal.spec.ts --headed
 ```
 
 Отчёт: `frontend/playwright-report/` после прогона с failures.
