@@ -23,7 +23,8 @@ export type ReadyToTransferTask = {
   section_code: string | null;
   section_name: string | null;
   plan_position_id: number;
-  route_step_id: number;
+  /** ID этапа маршрута (`route_stage_id` в ответе `/transfers/ready`). */
+  route_stage_id: number;
   sequence: number;
   operation_code: string | null;
   operation_name: string | null;

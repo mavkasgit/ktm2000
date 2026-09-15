@@ -1,6 +1,14 @@
 import { useState, useCallback, useEffect, useMemo, useRef } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
-import { Send, Inbox, RefreshCw, AlertCircle, ChevronRight, Search } from "lucide-react";
+import {
+  Send,
+  Inbox,
+  RefreshCw,
+  AlertCircle,
+  ChevronRight,
+  ChevronDown,
+  Search,
+} from "lucide-react";
 
 import {
   Badge,
@@ -63,7 +71,6 @@ import { cn } from "@/shared/utils/cn";
 import {
   useBulkSelection,
   BulkResultsDialog,
-  summarizeBulkResults,
   type BulkActionResultItem,
   type BulkActionSummary,
   type BulkRunnerProgress,
@@ -72,6 +79,13 @@ import {
   BulkTransferFooter,
   type BulkTransferSubmitData,
 } from "../components/BulkTransferFooter";
+import {
+  dimensionsKey,
+  groupReadyTransfers,
+  isFinalReadyRow,
+  type ReadyTransferGroup,
+} from "../lib/groupReadyTransfers";
+import { makeIdempotencyKey, runTransferBatch } from "../lib/runTransferBatch";
 
 function fmtQty(value: string | number | null | undefined): string {
   if (value == null) return "0";
@@ -106,14 +120,12 @@ function conflictHintFromTransferError(message: string): string | null {
   return null;
 }
 
-function makeIdempotencyKey(prefix: string): string {
-  if (typeof crypto !== "undefined" && "randomUUID" in crypto) {
-    return `${prefix}-${crypto.randomUUID()}`;
-  }
-  return `${prefix}-${Date.now()}-${Math.floor(Math.random() * 1_000_000)}`;
-}
-
 type StatusBadgeVariant = "default" | "destructive" | "outline" | "secondary";
+
+/** Строка таблицы «Готово к передаче»: задание либо заголовок группы заданий. */
+type ReadyTableRow =
+  | { kind: "task"; task: ReadyToTransferTask; groupKey: string | null }
+  | { kind: "group"; group: ReadyTransferGroup };
 
 function statusBadgeLabel(status: string): string {
   // Under the explicit-transfer model, transfer_send auto-accepts the
@@ -412,7 +424,7 @@ function ReadyTransferRow({
     },
   });
 
-  const isFinalRow = task.is_final === true || !task.has_next_step;
+  const isFinalRow = isFinalReadyRow(task);
   const releaseMutation = useMutation({
     mutationFn: (idempotencyKey: string) =>
       finalReleaseTask(task.task_id, {
@@ -448,6 +460,13 @@ function ReadyTransferRow({
 
   return (
     <TableRow
+      data-row-kind="ready-task"
+      // Стабильный идентификатор строки ready-таблицы: единица передачи —
+      // пара «задание × размер» (см. `groupReadyTransfers`), поэтому одного
+      // `task_id` мало. E2E-хелперы адресуют строку по нему: динамический
+      // `rows.first()` уводит клик в соседнюю строку при refetch, а текст
+      // строки меняется на «Отправка…» прямо во время ожидания.
+      data-row-key={`${task.task_id}:${dimensionsKey(task.dimensions)}`}
       className={bulkMode ? "cursor-pointer hover:bg-muted/50" : undefined}
       onClick={bulkMode ? onSelect : undefined}
     >
@@ -455,9 +474,9 @@ function ReadyTransferRow({
         <TableCell className="w-[40px] p-2" onClick={(e) => e.stopPropagation()}>
           <Checkbox
             checked={isSelected}
-            disabled={task.is_final === true}
+            disabled={isFinalRow}
             onCheckedChange={onSelect}
-            title={task.is_final === true ? "Финальный выпуск недоступен в групповой передаче" : undefined}
+            title={isFinalRow ? "Финальный выпуск недоступен в групповой передаче" : undefined}
           />
         </TableCell>
       )}
@@ -571,6 +590,150 @@ function ReadyTransferRow({
   );
 }
 
+/**
+ * Ряд-заголовок группы ready-строк — строк, неразличимых для передачи: тот же
+ * артикул, участок, размер и адресат (см. `groupReadyTransfers`). Группа свёрнута
+ * по умолчанию; введённое общее количество распределяется по строкам
+ * последовательно (`runTransferBatch`). В чекбокс-режиме группы раскрыты
+ * принудительно и групповой кнопки не имеют.
+ */
+function ReadyTransferGroupRow({
+  group,
+  bulkMode,
+  isCollapsed,
+  isSubmitting,
+  hasInFlightRow,
+  onToggleCollapse,
+  onTransferGroup,
+}: {
+  group: ReadyTransferGroup;
+  bulkMode: boolean;
+  isCollapsed: boolean;
+  isSubmitting: boolean;
+  hasInFlightRow: boolean;
+  onToggleCollapse: () => void;
+  onTransferGroup: (group: ReadyTransferGroup, quantity: string) => void;
+}) {
+  const [quantity, setQuantity] = useState(() => fmtQty(group.totalTransferable));
+
+  useEffect(() => {
+    setQuantity(fmtQty(group.totalTransferable));
+  }, [group.totalTransferable]);
+
+  const { common } = group;
+  const qtyNum = parseFloat(quantity || "0");
+  const overLimit = Math.round(qtyNum * 1000) > Math.round(group.totalTransferable * 1000);
+
+  return (
+    <TableRow
+      data-row-kind="ready-group"
+      className={`border-y border-border/60 bg-muted/50 font-semibold hover:bg-muted ${
+        bulkMode ? "" : "cursor-pointer"
+      }`}
+      onClick={bulkMode ? undefined : onToggleCollapse}
+    >
+      {bulkMode && <TableCell className="w-[40px] p-2" />}
+      <TableCell className="p-2 text-center">
+        <button
+          className="p-1 hover:bg-muted rounded transition-colors text-muted-foreground"
+          title={bulkMode ? "Группа раскрыта для ручного выбора" : isCollapsed ? "Раскрыть" : "Скрыть"}
+          disabled={bulkMode}
+          onClick={(e) => {
+            e.stopPropagation();
+            onToggleCollapse();
+          }}
+        >
+          {isCollapsed ? (
+            <ChevronRight className="h-4 w-4 shrink-0" />
+          ) : (
+            <ChevronDown className="h-4 w-4 shrink-0" />
+          )}
+        </button>
+      </TableCell>
+      <TableCell>
+        <div className="flex items-center gap-2">
+          <span>{group.productSku ?? "—"}</span>
+          <Badge variant="secondary" className="font-bold">
+            &times;{group.rows.length}
+          </Badge>
+        </div>
+      </TableCell>
+      <TableCell className="text-xs text-muted-foreground whitespace-nowrap">
+        {common.dimensionsLabel ?? "—"}
+      </TableCell>
+      <TableCell>
+        <div className="text-xs">
+          <div className="font-medium">{common.operationName ?? "—"}</div>
+          <div className="text-muted-foreground">
+            {common.sequence == null ? "—" : `#${common.sequence}`}
+          </div>
+        </div>
+      </TableCell>
+      <TableCell className="text-right tabular-nums">
+        {/* Как у одиночной строки: в «К передаче» — текст, редактируемое поле —
+            в «Действиях». Сумма по группе, распределяется по строкам. */}
+        <div className="whitespace-nowrap">
+          <span className="font-medium">{fmtQty(group.totalTransferable)} шт.</span>{" "}
+          <span className="text-[11px] text-muted-foreground">
+            ({group.rows.length} поз.)
+          </span>
+        </div>
+      </TableCell>
+      <TableCell className="text-xs">
+        {group.hasNextStep ? (
+          <>
+            <div>{common.nextOperationName ?? "—"}</div>
+            <div className="text-muted-foreground">
+              {common.nextSectionCode ?? "—"} #{common.nextStepSequence ?? "—"}
+            </div>
+          </>
+        ) : (
+          <Badge variant="outline">Финальный</Badge>
+        )}
+      </TableCell>
+      {!bulkMode && (
+        <TableCell onClick={(e) => e.stopPropagation()}>
+          <div className="flex items-center justify-end gap-2">
+            <div className="flex items-center gap-1">
+              <Input
+                type="number"
+                step="1"
+                min="0"
+                value={quantity}
+                disabled={isSubmitting}
+                className={`w-20 h-8 text-right px-2 ${
+                  overLimit ? "border-amber-400 focus-visible:ring-amber-400" : ""
+                }`}
+                title={
+                  overLimit
+                    ? `Больше доступного (${fmtQty(group.totalTransferable)} шт.) — излишек не передастся`
+                    : "Общее количество группы: распределится по строкам по порядку"
+                }
+                onChange={(e) => setQuantity(e.target.value)}
+              />
+            </div>
+            <Button
+              size="sm"
+              disabled={isSubmitting || hasInFlightRow || qtyNum <= 0}
+              title={
+                hasInFlightRow
+                  ? "Строка группы уже отправляется"
+                  : group.allFinal
+                    ? "Финальный выпуск всех заданий группы"
+                    : "Передать на следующий этап все задания группы"
+              }
+              onClick={() => onTransferGroup(group, quantity)}
+            >
+              {isSubmitting ? "Отправка..." : group.allFinal ? "Отправить" : "Передать"}
+            </Button>
+          </div>
+        </TableCell>
+      )}
+      <TableCornerResetCell />
+    </TableRow>
+  );
+}
+
 const headerCellClass = `${DATA_TABLE_STYLES.headerRow} ${DATA_TABLE_STYLES.headerCell}`;
 
 export function TransfersPage() {
@@ -582,6 +745,8 @@ export function TransfersPage() {
   const [debouncedHistorySearch, setDebouncedHistorySearch] = useState("");
   const [readySearch, setReadySearch] = useState("");
   const [debouncedReadySearch, setDebouncedReadySearch] = useState("");
+  // Журнал передач — боковая панель: не отнимает ширину у «Готово к передаче».
+  const [historyOpen, setHistoryOpen] = useState(false);
   const historyScrollRef = useRef<HTMLDivElement>(null);
   const readyScrollRef = useRef<HTMLDivElement>(null);
 
@@ -623,6 +788,10 @@ export function TransfersPage() {
   const [bulkSummary, setBulkSummary] = useState<BulkActionSummary | null>(null);
   const [bulkResultsOpen, setBulkResultsOpen] = useState(false);
   const [bulkSubmitting, setBulkSubmitting] = useState(false);
+
+  // Группы свёрнуты по умолчанию: в наборе — раскрытые оператором, в рамках сессии.
+  const [expandedGroupKeys, setExpandedGroupKeys] = useState<Set<string>>(new Set());
+  const [groupSubmittingKey, setGroupSubmittingKey] = useState<string | null>(null);
 
   const { data: spgs } = useQuery({
     queryKey: queryKeys.spg.list(),
@@ -769,6 +938,28 @@ export function TransfersPage() {
 
   const readyItems = readyData?.items ?? [];
   const readyTotal = readyData?.total ?? 0;
+
+  const readyGroupItems = useMemo(() => groupReadyTransfers(readyItems), [readyItems]);
+
+  // Строки таблицы «Готово к передаче» = свёрнутые группы (только заголовки) +
+  // дети раскрытых + одиночные строки. В чекбокс-режиме группы раскрыты
+  // принудительно: там оператор выбирает строки точечно, а групповую отправку
+  // делает футер.
+  const readyTableRows = useMemo<ReadyTableRow[]>(() => {
+    const rows: ReadyTableRow[] = [];
+    for (const item of readyGroupItems) {
+      if (item.kind === "single") {
+        rows.push({ kind: "task", task: item.row, groupKey: null });
+        continue;
+      }
+      rows.push({ kind: "group", group: item });
+      if (bulkMode || expandedGroupKeys.has(item.key)) {
+        for (const task of item.rows) rows.push({ kind: "task", task, groupKey: item.key });
+      }
+    }
+    return rows;
+  }, [bulkMode, readyGroupItems, expandedGroupKeys]);
+
   const historyItems = historyData?.transfers ?? [];
   const historyTotal = historyData?.total ?? 0;
   const {
@@ -928,76 +1119,94 @@ export function TransfersPage() {
   const selectedReadyTasks = useMemo(
     // Финальные строки (тикет #96) исключаются из групповой передачи:
     // для них действие — «Отправить» (final release), не createTransfer.
-    () => readyItems.filter((t) => !t.is_final && bulkSelection.isSelected(t.task_id)),
+    () => readyItems.filter((t) => !isFinalReadyRow(t) && bulkSelection.isSelected(t.task_id)),
     [readyItems, bulkSelection],
   );
 
+  const toggleGroupCollapse = useCallback((key: string) => {
+    setExpandedGroupKeys((prev) => {
+      const next = new Set(prev);
+      if (next.has(key)) next.delete(key);
+      else next.add(key);
+      return next;
+    });
+  }, []);
+
+  /** Инвалидировать кэши участков-источников и получателей отправленных строк. */
+  const invalidateBatchSections = useCallback(
+    (rows: ReadyToTransferTask[]) => {
+      const sectionPairs = new Set<string>();
+      rows.forEach((task) => {
+        sectionPairs.add(`${task.section_id}-${task.next_section_id}`);
+      });
+      sectionPairs.forEach((pair) => {
+        const [fromId, toId] = pair.split("-").map(Number);
+        invalidateShopfloorCaches(fromId, toId);
+      });
+    },
+    [invalidateShopfloorCaches],
+  );
+
+  async function handleGroupTransfer(group: ReadyTransferGroup, quantity: string) {
+    if (groupSubmittingKey != null) return;
+    setGroupSubmittingKey(group.key);
+
+    // Диалог подтверждения не нужен: введённое количество распределяется по
+    // строкам последовательно, габариты берутся из строк как есть.
+    const { results, summary, undistributed } = await runTransferBatch({
+      rows: group.rows,
+      idempotencyPrefix: "transfer-send-group",
+      totalQuantity: parseFloat(quantity || "0"),
+    });
+
+    setGroupSubmittingKey(null);
+    setBulkResults(results);
+    setBulkSummary(summary);
+
+    invalidateBatchSections(group.rows);
+    invalidateTransfersCaches();
+
+    const description = [`Отправлено ${summary.success} из ${summary.total} позиций`];
+    if (undistributed > 0) {
+      description.push(`не передано ${fmtQty(undistributed)} шт. — ждёт завершения`);
+    }
+
+    toast({
+      title: summary.failed > 0 ? "Частичный успех" : "Передача выполнена",
+      description: description.join("; "),
+      variant: summary.failed > 0 ? "destructive" : "success",
+    });
+
+    if (summary.failed > 0 || summary.skipped > 0) {
+      setBulkResultsOpen(true);
+    }
+  }
+
   const handleBulkTransferSubmit = useCallback(async (data: BulkTransferSubmitData) => {
-    const selectedTasks = readyItems.filter(t => !t.is_final && bulkSelection.isSelected(t.task_id));
+    const selectedTasks = readyItems.filter(t => !isFinalReadyRow(t) && bulkSelection.isSelected(t.task_id));
     if (selectedTasks.length === 0) return;
 
     setBulkSubmitting(true);
     setBulkProgress({ total: selectedTasks.length, completed: 0, running: true });
 
-    const results: BulkActionResultItem<number>[] = [];
-    let completedCount = 0;
-
-    const actionResults = [];
-    for (const task of selectedTasks) {
-      try {
-        await createTransfer({
-          from_task_id: task.task_id,
-          to_task_id: undefined,
-          quantity: task.transferable_quantity,
-          comment: data.comment.trim() || undefined,
-          idempotency_key: makeIdempotencyKey(`transfer-send-bulk-${task.task_id}`),
-          executor_user_id: data.executorUserId,
-          performed_at: data.performedAt,
-          physical_handover_at: data.physicalHandoverAt,
-          post_factum: data.postFactum,
-          dimensions: task.dimensions ?? undefined,
-        });
-
-        completedCount++;
-        setBulkProgress(prev => prev ? { ...prev, completed: completedCount } : null);
-
-        actionResults.push({
-          id: task.task_id,
-          status: "success" as const,
-          label: `Позиция #${task.plan_position_id} (${task.product_sku ?? "—"})`,
-        });
-      } catch (err) {
-        completedCount++;
-        setBulkProgress(prev => prev ? { ...prev, completed: completedCount } : null);
-
-        actionResults.push({
-          id: task.task_id,
-          status: "failed" as const,
-          reason: getErrorMessage(err),
-          label: `Позиция #${task.plan_position_id} (${task.product_sku ?? "—"})`,
-        });
-      }
-    }
-
-    results.push(...actionResults);
+    const { results, summary } = await runTransferBatch({
+      rows: selectedTasks,
+      idempotencyPrefix: "transfer-send-bulk",
+      comment: data.comment.trim() || undefined,
+      executorUserId: data.executorUserId,
+      performedAt: data.performedAt,
+      physicalHandoverAt: data.physicalHandoverAt,
+      postFactum: data.postFactum,
+      onProgress: setBulkProgress,
+    });
 
     setBulkProgress(null);
     setBulkSubmitting(false);
 
-    const summary = summarizeBulkResults(results);
     setBulkResults(results);
     setBulkSummary(summary);
 
-    const sectionPairs = new Set<string>();
-    selectedTasks.forEach(task => {
-      sectionPairs.add(`${task.section_id}-${task.next_section_id}`);
-    });
-
-    sectionPairs.forEach(pair => {
-      const [fromId, toId] = pair.split("-").map(Number);
-      invalidateShopfloorCaches(fromId, toId);
-    });
-
+    invalidateBatchSections(selectedTasks);
     invalidateTransfersCaches();
 
     toast({
@@ -1012,7 +1221,7 @@ export function TransfersPage() {
 
     bulkSelection.clear();
     setBulkMode(false);
-  }, [readyItems, bulkSelection, invalidateShopfloorCaches, invalidateTransfersCaches]);
+  }, [readyItems, bulkSelection, invalidateBatchSections, invalidateTransfersCaches]);
 
   if (spgs !== undefined && spgs.length === 0) {
     return (
@@ -1058,222 +1267,247 @@ export function TransfersPage() {
             }}
             className="w-[260px] bg-background h-10 border text-sm"
           />
+          <Button
+            variant="outline"
+            size="sm"
+            title="Открыть журнал передач"
+            onClick={() => setHistoryOpen(true)}
+          >
+            <Inbox className="h-4 w-4 mr-1" /> Журнал передач
+          </Button>
           <Button variant="outline" size="sm" onClick={handleRefresh}>
             <RefreshCw className="h-4 w-4 mr-1" /> Обновить
           </Button>
         </div>
       </header>
 
-      <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
-        <Card>
-          <CardHeader className="flex flex-row items-center justify-between gap-4 space-y-0 pb-3">
-            <CardTitle className="flex items-center gap-2 shrink-0">
-              <Send className="h-4 w-4" />
-              Готово к передаче
-              {readyTotal > 0 && <Badge variant="secondary">{readyTotal}</Badge>}
-            </CardTitle>
-            <div className="relative w-full max-w-sm">
-              <Search className="absolute left-3 top-1/2 -translate-y-1/2 h-4 w-4 text-muted-foreground pointer-events-none" />
-              <Input
-                type="text"
-                placeholder="Поиск по ID, артикулу, этапу…"
-                value={readySearch}
-                onChange={(e) => setReadySearch(e.target.value)}
-                onKeyDown={(e) => {
-                  if (e.key === "Enter") {
-                    setDebouncedReadySearch(readySearch);
-                    resetReadyPage();
-                  }
-                }}
-                className="pl-9"
-              />
+      <Card>
+        <CardHeader className="flex flex-row items-center justify-between gap-4 space-y-0 pb-3">
+          <CardTitle className="flex items-center gap-2 shrink-0">
+            <Send className="h-4 w-4" />
+            Готово к передаче
+            {readyTotal > 0 && <Badge variant="secondary">{readyTotal}</Badge>}
+          </CardTitle>
+          <div className="relative w-full max-w-sm">
+            <Search className="absolute left-3 top-1/2 -translate-y-1/2 h-4 w-4 text-muted-foreground pointer-events-none" />
+            <Input
+              type="text"
+              placeholder="Поиск по ID, артикулу, этапу…"
+              value={readySearch}
+              onChange={(e) => setReadySearch(e.target.value)}
+              onKeyDown={(e) => {
+                if (e.key === "Enter") {
+                  setDebouncedReadySearch(readySearch);
+                  resetReadyPage();
+                }
+              }}
+              className="pl-9"
+            />
+          </div>
+          {readyTotal > 0 && (
+            <Button
+              variant={bulkMode ? "default" : "outline"}
+              size="sm"
+              onClick={() => {
+                if (bulkMode) {
+                  exitBulkMode();
+                } else {
+                  setBulkMode(true);
+                }
+              }}
+            >
+              Групповые операции
+            </Button>
+          )}
+        </CardHeader>
+        <CardContent>
+          {readyLoading ? (
+            <div className="text-sm text-muted-foreground py-4 text-center">Загрузка…</div>
+          ) : readyTotal === 0 && !debouncedReadySearch.trim() && !hasReadyFiltersActive ? (
+            <div className="text-sm text-muted-foreground py-6 text-center">
+              Нет заданий, готовых к передаче на участках выбранной ГХП. Завершите работу на этапе, чтобы появились задания
+              с доступным к передаче количеством.
             </div>
-            {readyTotal > 0 && (
-              <Button
-                variant={bulkMode ? "default" : "outline"}
-                size="sm"
-                onClick={() => {
-                  if (bulkMode) {
-                    exitBulkMode();
-                  } else {
-                    setBulkMode(true);
-                  }
-                }}
-              >
-                Групповые операции
-              </Button>
-            )}
-          </CardHeader>
-          <CardContent>
-            {readyLoading ? (
-              <div className="text-sm text-muted-foreground py-4 text-center">Загрузка…</div>
-            ) : readyTotal === 0 && !debouncedReadySearch.trim() && !hasReadyFiltersActive ? (
-              <div className="text-sm text-muted-foreground py-6 text-center">
-                Нет заданий, готовых к передаче на участках выбранной ГХП. Завершите работу на этапе, чтобы появились задания
-                с доступным к передаче количеством.
-              </div>
-            ) : (
-              <>
-              <div
-                ref={readyScrollRef}
-                className={DATA_TABLE_STYLES.container}
-                style={{ maxHeight: "70vh", overflow: "auto" }}
-              >
-              <table className="w-full caption-bottom text-sm">
-                <TableHeader>
-                  <TableRow>
-                    {bulkMode && (
-                      <TableHead className={`${headerCellClass} w-[40px]`}>
-                        <Checkbox
-                          checked={bulkSelection.isAllSelected(
-                            readyItems.filter((t) => !t.is_final).map((t) => t.task_id),
-                          )}
-                          onCheckedChange={(checked) => {
-                            if (checked) {
-                              bulkSelection.selectAll(
-                                readyItems.filter((t) => !t.is_final).map((t) => t.task_id),
-                              );
-                            } else {
-                              bulkSelection.clear();
-                            }
-                          }}
-                        />
-                      </TableHead>
-                    )}
-                    <TableHead className={`${headerCellClass} p-0`}>
-                      <SortableFilterHeader
-                        field="positionId"
-                        label="ID"
-                        currentSorts={readySortConfigs}
-                        onSortChange={handleReadySort}
-                        values={readyUniqueValues.positionId}
-                        {...bindReadyColumn("positionId")}
-                        valueLabel={(v) => `#${v}`}
+          ) : (
+            <>
+            <div
+              ref={readyScrollRef}
+              className={DATA_TABLE_STYLES.container}
+              style={{ maxHeight: "70vh", overflow: "auto" }}
+            >
+            <table className="w-full caption-bottom text-sm">
+              <TableHeader>
+                <TableRow>
+                  {bulkMode && (
+                    <TableHead className={`${headerCellClass} w-[40px]`}>
+                      <Checkbox
+                        checked={bulkSelection.isAllSelected(
+                          readyItems.filter((t) => !isFinalReadyRow(t)).map((t) => t.task_id),
+                        )}
+                        onCheckedChange={(checked) => {
+                          if (checked) {
+                            bulkSelection.selectAll(
+                              readyItems.filter((t) => !isFinalReadyRow(t)).map((t) => t.task_id),
+                            );
+                          } else {
+                            bulkSelection.clear();
+                          }
+                        }}
                       />
                     </TableHead>
-                    <TableHead className={`${headerCellClass} p-0`}>
-                      <SortableFilterHeader
-                        field="sku"
-                        label="Артикул"
-                        currentSorts={readySortConfigs}
-                        onSortChange={handleReadySort}
-                        values={readyUniqueValues.sku}
-                        {...bindReadyColumn("sku")}
-                      />
-                    </TableHead>
-                    <TableHead className={`${headerCellClass} p-0`}>
-                      <SortableFilterHeader
-                        field="dimensions"
-                        label="Размер"
-                        currentSorts={readySortConfigs}
-                        onSortChange={handleReadySort}
-                        values={readyUniqueValues.dimensions}
-                        selectedValues={bindReadyColumn("dimensions").selectedValues}
-                        onFilterChange={bindReadyColumn("dimensions").onFilterChange}
-                        valueLabel={formatDimensionsFilterValue}
-                      />
-                    </TableHead>
-                    <TableHead className={`${headerCellClass} p-0`}>
-                      <SortableFilterHeader
-                        field="stage"
-                        label="Этап"
-                        currentSorts={readySortConfigs}
-                        onSortChange={handleReadySort}
-                        values={readyUniqueValues.stage}
-                        {...bindReadyColumn("stage")}
-                      />
-                    </TableHead>
-                    <TableHead className={`${headerCellClass} p-0 text-right`}>
-                      <SortableFilterHeader
-                        field="transferableQty"
-                        label="К передаче"
-                        currentSorts={readySortConfigs}
-                        onSortChange={handleReadySort}
-                        values={readyUniqueValues.transferableQty}
-                        {...bindReadyColumn("transferableQty")}
-                        valueLabel={(v) => `${v} шт.`}
-                      />
-                    </TableHead>
-                    <TableHead className={`${headerCellClass} p-0`}>
-                      <SortableFilterHeader
-                        field="next"
-                        label="Следующий"
-                        currentSorts={readySortConfigs}
-                        onSortChange={handleReadySort}
-                        values={readyUniqueValues.next}
-                        {...bindReadyColumn("next")}
-                      />
-                    </TableHead>
-                    {!bulkMode && (
-                      <TableHead className={headerCellClass}>
-                        Действия
-                      </TableHead>
-                    )}
-                    <TableCornerResetHeader
-                      hasActiveFilters={hasReadyFiltersActive}
-                      onReset={resetReadyFilters}
-                      dataTableHeader
+                  )}
+                  <TableHead className={`${headerCellClass} p-0`}>
+                    <SortableFilterHeader
+                      field="positionId"
+                      label="ID"
+                      currentSorts={readySortConfigs}
+                      onSortChange={handleReadySort}
+                      values={readyUniqueValues.positionId}
+                      {...bindReadyColumn("positionId")}
+                      valueLabel={(v) => `#${v}`}
                     />
+                  </TableHead>
+                  <TableHead className={`${headerCellClass} p-0`}>
+                    <SortableFilterHeader
+                      field="sku"
+                      label="Артикул"
+                      currentSorts={readySortConfigs}
+                      onSortChange={handleReadySort}
+                      values={readyUniqueValues.sku}
+                      {...bindReadyColumn("sku")}
+                    />
+                  </TableHead>
+                  <TableHead className={`${headerCellClass} p-0`}>
+                    <SortableFilterHeader
+                      field="dimensions"
+                      label="Размер"
+                      currentSorts={readySortConfigs}
+                      onSortChange={handleReadySort}
+                      values={readyUniqueValues.dimensions}
+                      selectedValues={bindReadyColumn("dimensions").selectedValues}
+                      onFilterChange={bindReadyColumn("dimensions").onFilterChange}
+                      valueLabel={formatDimensionsFilterValue}
+                    />
+                  </TableHead>
+                  <TableHead className={`${headerCellClass} p-0`}>
+                    <SortableFilterHeader
+                      field="stage"
+                      label="Этап"
+                      currentSorts={readySortConfigs}
+                      onSortChange={handleReadySort}
+                      values={readyUniqueValues.stage}
+                      {...bindReadyColumn("stage")}
+                    />
+                  </TableHead>
+                  <TableHead className={`${headerCellClass} p-0 text-right`}>
+                    <SortableFilterHeader
+                      field="transferableQty"
+                      label="К передаче"
+                      currentSorts={readySortConfigs}
+                      onSortChange={handleReadySort}
+                      values={readyUniqueValues.transferableQty}
+                      {...bindReadyColumn("transferableQty")}
+                      valueLabel={(v) => `${v} шт.`}
+                    />
+                  </TableHead>
+                  <TableHead className={`${headerCellClass} p-0`}>
+                    <SortableFilterHeader
+                      field="next"
+                      label="Следующий"
+                      currentSorts={readySortConfigs}
+                      onSortChange={handleReadySort}
+                      values={readyUniqueValues.next}
+                      {...bindReadyColumn("next")}
+                    />
+                  </TableHead>
+                  {!bulkMode && (
+                    <TableHead className={headerCellClass}>
+                      Действия
+                    </TableHead>
+                  )}
+                  <TableCornerResetHeader
+                    hasActiveFilters={hasReadyFiltersActive}
+                    onReset={resetReadyFilters}
+                    dataTableHeader
+                  />
+                </TableRow>
+              </TableHeader>
+              {readyItems.length === 0 ? (
+                <TableBody>
+                  <TableRow>
+                    <TableCell
+                      colSpan={bulkMode ? 8 : 8}
+                      className="py-6 text-center text-sm text-muted-foreground"
+                    >
+                      Нет заданий, соответствующих фильтру
+                    </TableCell>
                   </TableRow>
-                </TableHeader>
-                {readyItems.length === 0 ? (
-                  <TableBody>
-                    <TableRow>
-                      <TableCell
-                        colSpan={bulkMode ? 8 : 8}
-                        className="py-6 text-center text-sm text-muted-foreground"
-                      >
-                        Нет заданий, соответствующих фильтру
-                      </TableCell>
-                    </TableRow>
-                  </TableBody>
-                ) : (
-                  <VirtualizedTableBody
-                    rows={readyItems}
-                    rowHeight={56}
-                    colSpan={bulkMode ? 8 : 8}
-                    scrollContainerRef={readyScrollRef}
-                    renderRow={(t) => (
-                      <ReadyTransferRow
-                        key={t.task_id}
-                        task={t}
+                </TableBody>
+              ) : (
+                <VirtualizedTableBody
+                  rows={readyTableRows}
+                  rowHeight={56}
+                  colSpan={bulkMode ? 8 : 8}
+                  scrollContainerRef={readyScrollRef}
+                  renderRow={(row) =>
+                    row.kind === "group" ? (
+                      <ReadyTransferGroupRow
+                        key={row.group.key}
+                        group={row.group}
                         bulkMode={bulkMode}
-                        isSelected={bulkSelection.isSelected(t.task_id)}
-                        onSelect={() => bulkSelection.selectOne(t.task_id)}
-                        isSubmitting={isTransferInFlight(t.task_id)}
-                        tryAcquire={() => tryAcquireTransferLock(t.task_id)}
-                        release={() => releaseTransferLock(t.task_id)}
+                        isCollapsed={!bulkMode && !expandedGroupKeys.has(row.group.key)}
+                        isSubmitting={groupSubmittingKey === row.group.key}
+                        hasInFlightRow={row.group.rows.some((task) =>
+                          isTransferInFlight(task.task_id),
+                        )}
+                        onToggleCollapse={() => toggleGroupCollapse(row.group.key)}
+                        onTransferGroup={handleGroupTransfer}
+                      />
+                    ) : (
+                      <ReadyTransferRow
+                        key={row.task.task_id}
+                        task={row.task}
+                        bulkMode={bulkMode}
+                        isSelected={bulkSelection.isSelected(row.task.task_id)}
+                        onSelect={() => bulkSelection.selectOne(row.task.task_id)}
+                        isSubmitting={
+                          isTransferInFlight(row.task.task_id) ||
+                          (row.groupKey != null && groupSubmittingKey === row.groupKey)
+                        }
+                        tryAcquire={() => tryAcquireTransferLock(row.task.task_id)}
+                        release={() => releaseTransferLock(row.task.task_id)}
                         invalidateShopfloorCaches={invalidateShopfloorCaches}
                         invalidateTransfersCaches={invalidateTransfersCaches}
                       />
-                    )}
-                  />
-                )}
-              </table>
-              </div>
-              <TablePaginationFooter
-                page={readyPage}
-                totalPages={readyTotalPages}
-                total={readyTotal}
-                shownCount={readyItems.length}
-                limit={readyLimit}
-                onPageChange={setReadyPage}
-                onLimitChange={setReadyLimit}
-                rangeLabel={readyRangeLabel(readyItems.length, readyTotal)}
-              />
-              </>
-            )}
-          </CardContent>
-        </Card>
+                    )
+                  }
+                />
+              )}
+            </table>
+            </div>
+            <TablePaginationFooter
+              page={readyPage}
+              totalPages={readyTotalPages}
+              total={readyTotal}
+              shownCount={readyItems.length}
+              limit={readyLimit}
+              onPageChange={setReadyPage}
+              onLimitChange={setReadyLimit}
+              rangeLabel={readyRangeLabel(readyItems.length, readyTotal)}
+            />
+            </>
+          )}
+        </CardContent>
+      </Card>
 
-        <Card>
-          <CardHeader className="flex flex-row items-center justify-between gap-4">
-            <CardTitle className="flex items-center gap-2 shrink-0">
+      <Dialog open={historyOpen} onOpenChange={setHistoryOpen}>
+        <DialogContent className="!left-auto !right-0 !top-0 !translate-x-0 !translate-y-0 h-screen max-h-screen w-[min(100vw,760px)] max-w-none rounded-none border-l p-0 flex flex-col gap-0">
+          <div className="shrink-0 border-b bg-background px-6 py-3 space-y-2">
+            <DialogTitle className="flex items-center gap-2 text-lg font-semibold">
               <Inbox className="h-4 w-4" />
               Журнал передач
-              {historyTotal > 0 && <Badge variant="secondary">{historyTotal}</Badge>}
-            </CardTitle>
-            <div className="relative w-full max-w-sm">
+            </DialogTitle>
+            <div className="relative">
               <Search className="absolute left-3 top-1/2 -translate-y-1/2 h-4 w-4 text-muted-foreground pointer-events-none" />
               <Input
                 type="text"
@@ -1289,8 +1523,8 @@ export function TransfersPage() {
                 className="pl-9"
               />
             </div>
-          </CardHeader>
-          <CardContent>
+          </div>
+          <div className="flex-1 overflow-auto p-4">
             {historyLoading ? (
               <div className="text-sm text-muted-foreground py-4 text-center">Загрузка…</div>
             ) : historyTotal === 0 && !hasHistoryFiltersActive ? (
@@ -1472,9 +1706,9 @@ export function TransfersPage() {
                 />
               </>
             )}
-          </CardContent>
-        </Card>
-      </div>
+          </div>
+        </DialogContent>
+      </Dialog>
 
       {editTransferRecord && (
         <EditTransferDialog
