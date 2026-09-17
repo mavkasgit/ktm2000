@@ -1,7 +1,7 @@
 import { Fragment } from "react";
 
 import { RouteStepsDisplay } from "@/shared/ui/RouteStepsDisplay";
-import { TableCornerResetCell, TableCornerResetHeader } from "@/shared/ui";
+import { QuantityRangeCell, TableCornerResetCell, TableCornerResetHeader } from "@/shared/ui";
 
 import {
   ImportRawRows,
@@ -52,41 +52,6 @@ function translateLabels(
       return rest.length > 0 ? `${label}: ${rest.join(":")}` : label;
     })
     .join(", ");
-}
-
-function formatRouteAssignedAt(value: unknown): string {
-  if (!value || typeof value !== "string") return "дата неизвестна";
-  const dt = new Date(value);
-  if (Number.isNaN(dt.getTime())) return "дата неизвестна";
-  return dt.toLocaleString("ru-RU", {
-    day: "2-digit",
-    month: "2-digit",
-    year: "numeric",
-    hour: "2-digit",
-    minute: "2-digit",
-  });
-}
-
-function buildRouteMetaLabel(row: Record<string, unknown>): string {
-  const routeSource = String(row.route_source ?? "");
-  const routeOrigin = String(row.route_origin ?? "");
-  const matchQuality = String(row.route_match_quality ?? "");
-  const assignedAt = formatRouteAssignedAt(row.route_assigned_at);
-
-  if (routeOrigin === "manual_confirmed" || routeSource === "manual") {
-    return `вручную • ${assignedAt}`;
-  }
-  if (routeOrigin === "auto" || routeSource === "auto") {
-    const quality = matchQuality === "exact" ? "полное" : "скорректирован";
-    return `автомаппинг (${quality}) • ${assignedAt}`;
-  }
-  if (routeOrigin === "legacy" || routeSource === "legacy") {
-    return `legacy • ${assignedAt}`;
-  }
-  if (routeSource === "missing") {
-    return "не найден";
-  }
-  return "";
 }
 
 export type PlanImportPreviewTableProps = {
@@ -190,30 +155,14 @@ export function PlanImportPreviewTable({
               : `#${row.source_row_number ?? uniqueRowNumbers[0] ?? "—"}`;
 
           const { segments, hasRawData } = extractPlanImportRawRows(row);
-          const routeMeta = buildRouteMetaLabel({ ...(row as Record<string, unknown>), ...afterData });
           const displaySku = String(afterData.source_sku ?? row.source_sku ?? "");
           const hangerTone = displaySku
             ? HANGER_SOURCE_CELL_CLASS[String(afterData.hanger_source ?? "")]
             : undefined;
-          const rawQty = afterData.quantity ?? row.quantity ?? "";
-          const originalQty = afterData.original_quantity;
-          const numQty = Number(rawQty);
-          const displayQty = Number.isFinite(numQty)
-            ? numQty % 1 === 0
-              ? String(Math.trunc(numQty))
-              : String(numQty)
-            : String(rawQty);
-          const normalizedOriginal = originalQty
-            ? (() => {
-                const n = Number(originalQty);
-                return Number.isFinite(n)
-                  ? n % 1 === 0
-                    ? String(Math.trunc(n))
-                    : String(n)
-                  : String(originalQty);
-              })()
-            : null;
-          const qtyAdjusted = normalizedOriginal && normalizedOriginal !== displayQty;
+          const quantity = (afterData.quantity ?? row.quantity ?? "") as string | number;
+          const inputQuantity = (afterData.input_quantity ?? null) as string | number | null;
+          const originalQuantity = (afterData.original_quantity ?? null) as string | number | null;
+          const quantityPerHanger = afterData.quantity_per_hanger as number | null | undefined;
 
           const routeSteps = afterData.route_steps as
             | Array<{
@@ -227,13 +176,6 @@ export function PlanImportPreviewTable({
               }>
             | undefined;
 
-          const hangerCountRaw = afterData.hanger_count as number | null | undefined;
-          const hangerCountDisplay =
-            hangerCountRaw != null
-              ? Number.isInteger(hangerCountRaw)
-                ? String(hangerCountRaw)
-                : hangerCountRaw.toFixed(1)
-              : null;
           const displayName = String(afterData.source_name ?? row.source_name ?? "");
           const displayRouteName = String(afterData.route_name ?? row.route_name ?? "");
           const expectedId = afterData.expected_id as number | undefined;
@@ -273,34 +215,21 @@ export function PlanImportPreviewTable({
                     displaySku
                   )}
                 </td>
-                <td className="p-2 whitespace-nowrap">
-                  {qtyAdjusted ? (
-                    <span>
-                      <span className="text-muted-foreground">{normalizedOriginal}</span>
-                      <span className="mx-1 text-muted-foreground">→</span>
-                      <span className="font-medium text-amber-600">
-                        {displayQty}
-                        {hangerCountDisplay != null ? ` (${hangerCountDisplay}П)` : ""}
-                      </span>
-                    </span>
-                  ) : (
-                    <span>
-                      {displayQty}
-                      {hangerCountDisplay != null ? ` (${hangerCountDisplay}П)` : ""}
-                    </span>
-                  )}
+                <td className="p-2">
+                  <QuantityRangeCell
+                    quantity={quantity}
+                    inputQuantity={inputQuantity}
+                    originalQuantity={originalQuantity}
+                    quantityPerHanger={quantityPerHanger}
+                  />
                 </td>
                 <td className="p-2 max-w-[350px] truncate whitespace-nowrap" title={displayName}>
                   {displayName}
                 </td>
                 <td className="p-2 text-xs whitespace-nowrap" colSpan={routeColSpan}>
                   {displayRouteName ? (
-                    <div
-                      className="truncate"
-                      title={`${displayRouteName} ${routeMeta ? `(${routeMeta})` : ""}`}
-                    >
+                    <div className="truncate" title={displayRouteName}>
                       <span className="font-medium">{displayRouteName}</span>
-                      {routeMeta ? <span className="text-muted-foreground ml-1">({routeMeta})</span> : null}
                     </div>
                   ) : routeSteps && routeSteps.length > 0 ? (
                     <RouteStepsDisplay steps={routeSteps} compact size="sm" />

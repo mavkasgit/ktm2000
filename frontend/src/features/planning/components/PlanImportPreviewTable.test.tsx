@@ -93,3 +93,63 @@ describe("PlanImportPreviewTable", () => {
     }
   });
 });
+
+/** Текст строки превью без разметки: теги и SSR-разделители выражений. */
+function rowText(overrides: Record<string, unknown>): string {
+  const row = {
+    source_row_number: 5,
+    status: "valid",
+    errors: [],
+    warnings: [],
+    payload: {},
+    after_data: {
+      source_sku: "ЮП-460",
+      source_name: "Профиль ЮП-460",
+      route_name: "ГП - Серебро - Стрейч",
+      route_source: "dynamic_build",
+      route_origin: "auto",
+      route_match_quality: "exact",
+      quantity: "144",
+      ...overrides,
+    },
+  };
+
+  const html = renderToStaticMarkup(
+    <PlanImportPreviewTable
+      rows={[row]}
+      expansion={expansionStub}
+      hasActiveFilters={false}
+      onReset={() => {}}
+    />,
+  );
+  return html.replace(/<!-- -->/g, "").replace(/<[^>]*>/g, "");
+}
+
+describe("PlanImportPreviewTable — колонка «Кол-во» и маршрут", () => {
+  it("показывает сырьё, итог и подвесы итога так же, как страница плана", () => {
+    const text = rowText({
+      quantity: "144",
+      original_quantity: "100",
+      input_quantity: "100",
+      quantity_per_hanger: 72,
+    });
+
+    expect(text).toContain("100-144 (2П)");
+  });
+
+  it("без нормы на подвес диапазон остаётся, подвесы не пишутся", () => {
+    const text = rowText({ quantity: "250", input_quantity: "150", quantity_per_hanger: null });
+
+    expect(text).toContain("150-250");
+    expect(text).not.toContain("П)");
+  });
+
+  it("пишет только название маршрута, без источника и даты", () => {
+    const text = rowText({});
+
+    expect(text).toContain("ГП - Серебро - Стрейч");
+    expect(text).not.toContain("динамический");
+    expect(text).not.toContain("автомаппинг");
+    expect(text).not.toContain("15.09.2026");
+  });
+});
