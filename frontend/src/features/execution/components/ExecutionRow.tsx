@@ -1,7 +1,6 @@
 import { ProductionPlanningRow } from "@/shared/api/productionPlans";
 import { formatDimensionsLabel } from "@/shared/api/stock";
-import { Badge, Button, PositionSkuCell, TableCornerResetCell } from "@/shared/ui";
-import { fmtQty } from "@/shared/utils/fmtQty";
+import { Badge, Button, CutLayoutCell, PositionSkuCell, QuantityRangeCell, TableCornerResetCell } from "@/shared/ui";
 import { ArrowRight, RotateCcw, Trash2, XCircle } from "lucide-react";
 import { positionStatusLabels, positionStatusColor, routeMetaLabel, planPreviewUrl, getLaunchBlockReason } from "./execution-utils";
 import { StepIndicator } from "../components/StepIndicator";
@@ -104,28 +103,21 @@ export function ExecutionRow({
           </span>
         );
       case "qty":
-        return row.input_quantity != null ? (
-          // Сырья (полноразмерных заготовок) требуется первым числом: до пилы
-          // материал считается в штуках входа, итог по длинам — вторым.
-          <span className="whitespace-nowrap">
-            <span className="font-medium" title="Сырьё 2,75 м (полноразмерные)">
-              {fmtQty(row.input_quantity)}
-            </span>
-            <span className="text-muted-foreground" title="Итог по длинам (после пилы)">
-              {" → "}
-              {fmtQty(row.quantity)} ГП
-            </span>
-          </span>
-        ) : (
-          fmtQty(row.quantity)
+        return (
+          <QuantityRangeCell
+            quantity={row.quantity}
+            inputQuantity={row.input_quantity}
+            originalQuantity={row.original_quantity}
+            quantityPerHanger={row.quantity_per_hanger}
+          />
         );
       case "dimensions":
         return (
-          <span
-            className="block whitespace-normal break-words text-xs text-muted-foreground"
-            title={row.sizes_label ?? row.dimensions_label ?? undefined}
-          >
-            {row.sizes_label ?? row.dimensions_label ?? formatDimensionsLabel(row.dimensions)}
+          <span className="block whitespace-normal break-words text-xs text-muted-foreground">
+            <CutLayoutCell
+              layout={row.cut_layout}
+              fallback={row.dimensions_label ?? formatDimensionsLabel(row.dimensions)}
+            />
           </span>
         );
       case "route":

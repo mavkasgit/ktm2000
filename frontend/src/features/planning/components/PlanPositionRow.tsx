@@ -1,8 +1,7 @@
-import { fmtQty } from "@/shared/utils/fmtQty"
 import { useMemo, useState } from "react"
 import { AlertTriangle, Route } from "lucide-react"
 import { useQuery, useQueryClient } from "@tanstack/react-query"
-import { Button, AlertDialog, AlertDialogContent, AlertDialogHeader, AlertDialogTitle, AlertDialogDescription, AlertDialogFooter, AlertDialogAction, AlertDialogCancel, Combobox, PositionSkuCell } from "@/shared/ui"
+import { Button, AlertDialog, AlertDialogContent, AlertDialogHeader, AlertDialogTitle, AlertDialogDescription, AlertDialogFooter, AlertDialogAction, AlertDialogCancel, Combobox, PositionSkuCell, QuantityRangeCell, CutLayoutCell } from "@/shared/ui"
 import { formatDimensionsLabel } from "@/shared/api/stock"
 import { cn } from "@/shared/utils/cn"
 import { TABLE_ROW_STYLES } from "@/shared/lib/tableRowStyles"
@@ -13,7 +12,6 @@ import { queryKeys } from "@/shared/api/queryKeys"
 import { PLAN_POSITIONS_GRID } from "../lib/gridTemplates"
 import {
   translateLabel,
-  routeMetaLabel,
   routeErrorLabels,
   errorLabels,
   warningLabels,
@@ -38,36 +36,7 @@ export function PositionRow({ pos, onApprove, onDelete, selected, routes, onAssi
   const hasWarnings = pos.warnings && pos.warnings.length > 0
   const noErrors = !hasErrors && !duplicateConflict
   const noWarnings = !hasWarnings
-  const qty = Number(pos.quantity || 0)
-  const qtyStr = fmtQty(qty)
-  const originalQtyRaw = (pos.payload?.original_quantity as string | number | null | undefined) ?? null
-  const originalQtyNum = originalQtyRaw != null ? Number(originalQtyRaw) : null
-  const originalQtyDisplay = originalQtyNum != null && Number.isFinite(originalQtyNum)
-    ? (Number.isInteger(originalQtyNum) ? String(originalQtyNum) : String(originalQtyNum))
-    : null
-  const qtyAdjusted = originalQtyDisplay != null && originalQtyDisplay !== qtyStr
-  // Авторасчёт (#66): значение и источник приходят контрактом с бэкенда,
-  // движок расчёта фронту не нужен.
-  const quantityPerHanger = pos.quantity_per_hanger ?? null
-  // Сырьё позиции (полноразмерные заготовки сырьевой длины): до пилы материал
-  // считается в штуках входа, длины появляются только на трансформирующем этапе.
-  // Поэтому сырьё — первое число строки, итог по длинам — второе.
-  const inputQtyNum = pos.input_quantity != null && pos.input_quantity !== "" ? Number(pos.input_quantity) : null
-  const inputQtyStr = inputQtyNum != null && Number.isFinite(inputQtyNum) ? fmtQty(inputQtyNum) : null
-  const inputHangerCount =
-    inputQtyNum != null && quantityPerHanger && quantityPerHanger > 0 ? inputQtyNum / quantityPerHanger : null
-  const inputHangerDisplay =
-    inputHangerCount != null
-      ? Number.isInteger(inputHangerCount)
-        ? String(inputHangerCount)
-        : inputHangerCount.toFixed(1)
-      : null
-  const hangerCount = quantityPerHanger && quantityPerHanger > 0
-    ? qty / quantityPerHanger
-    : null
-  const hangerDisplay = hangerCount != null
-    ? (Number.isInteger(hangerCount) ? String(hangerCount) : hangerCount.toFixed(1))
-    : null
+  const originalQuantity = (pos.payload?.original_quantity ?? null) as string | number | null
   const translatedErrors = hasErrors ? pos.errors.map((e) => translateLabel(e, errorLabels)) : []
   const translatedWarnings = hasWarnings ? pos.warnings.map((w) => translateLabel(w, warningLabels)) : []
   const rowNum = (() => {
@@ -77,7 +46,6 @@ export function PositionRow({ pos, onApprove, onDelete, selected, routes, onAssi
     if (numbers.length > 0) return numbers.join(",")
     return pos.source_row_number ?? "—"
   })()
-  const routeSourceLabel = routeMetaLabel(pos)
   const routeError = pos.route_error ? translateLabel(pos.route_error, routeErrorLabels) : null
   const hasDuplicateConflict = Boolean(duplicateConflict && duplicateConflict.conflictIds.length > 0)
   const canApprove =
@@ -245,57 +213,20 @@ export function PositionRow({ pos, onApprove, onDelete, selected, routes, onAssi
           onClick={onSkuClick}
         />
       </div>
-      <div className="p-2 text-sm whitespace-nowrap">
-        {inputQtyStr ? (
-          <span>
-            <span className="font-medium" title="Сырьё 2,75 м (полноразмерные)">
-              {inputQtyStr}
-              {inputHangerDisplay ? ` (${inputHangerDisplay}П)` : ''}
-            </span>
-            <span
-              className="ml-2 text-xs text-muted-foreground"
-              title="Итог по длинам (после пилы)"
-            >
-              →{" "}
-              {qtyAdjusted ? (
-                <>
-                  <span className="text-muted-foreground">{originalQtyDisplay}</span>
-                  <span className="mx-1 text-muted-foreground">→</span>
-                  <span className="font-medium text-amber-600">{qtyStr}</span>
-                </>
-              ) : (
-                qtyStr
-              )}{" "}
-              ГП
-            </span>
-          </span>
-        ) : qtyAdjusted ? (
-          <span>
-            <span className="text-muted-foreground">{originalQtyDisplay}</span>
-            <span className="mx-1 text-muted-foreground">→</span>
-            <span className="font-medium text-amber-600">
-              {qtyStr}{hangerDisplay ? ` (${hangerDisplay}П)` : ''}
-            </span>
-          </span>
-        ) : (
-          <span>
-            {qtyStr}{hangerDisplay ? ` (${hangerDisplay}П)` : ''}
-          </span>
-        )}
-        {pos.operation_summary && (
-          <span
-            className="block whitespace-normal break-words text-xs text-muted-foreground"
-            title={pos.operation_summary}
-          >
-            {pos.operation_summary}
-          </span>
-        )}
+      <div className="p-2 text-sm">
+        {/* Авторасчёт подвесов (#66): значение и источник приходят контрактом. */}
+        <QuantityRangeCell
+          quantity={pos.quantity}
+          inputQuantity={pos.input_quantity}
+          originalQuantity={originalQuantity}
+          quantityPerHanger={pos.quantity_per_hanger}
+        />
       </div>
-      <div
-        className="p-2 text-sm whitespace-normal break-words leading-tight text-muted-foreground"
-        title={pos.sizes_label ?? pos.dimensions_label ?? undefined}
-      >
-        {pos.sizes_label ?? pos.dimensions_label ?? formatDimensionsLabel(pos.dimensions)}
+      <div className="p-2 text-sm whitespace-normal break-words leading-tight text-muted-foreground">
+        <CutLayoutCell
+          layout={pos.cut_layout}
+          fallback={pos.dimensions_label ?? formatDimensionsLabel(pos.dimensions)}
+        />
       </div>
       <div className="p-2 text-sm truncate whitespace-nowrap" title={pos.source_name ?? undefined}>{pos.source_name ?? "—"}</div>
       <div className="p-2 text-sm truncate overflow-hidden">
@@ -315,9 +246,8 @@ export function PositionRow({ pos, onApprove, onDelete, selected, routes, onAssi
               <span className="inline-flex items-center gap-1.5 w-full min-w-0">
                 <Route className={cn("h-3.5 w-3.5 shrink-0", pos.route_id ? "text-blue-600" : "text-muted-foreground group-hover:text-primary")} />
                 {pos.route_name ? (
-                  <span className="text-blue-700 truncate" title={`${pos.route_name}${routeSourceLabel ? ` (${routeSourceLabel})` : ''}`}>
+                  <span className="text-blue-700 truncate" title={pos.route_name}>
                     {pos.route_name}
-                    {routeSourceLabel && <span className="text-xs text-muted-foreground ml-1">({routeSourceLabel})</span>}
                   </span>
                 ) : (
                   <span className={cn("text-xs truncate", routeError ? "text-red-600" : "text-muted-foreground group-hover:text-foreground")} title={routeError || undefined}>
@@ -329,10 +259,9 @@ export function PositionRow({ pos, onApprove, onDelete, selected, routes, onAssi
           />
           </div>
         ) : pos.route_name ? (
-          <span className="inline-flex items-center gap-1 text-blue-700 truncate" title={`Маршрут #${pos.route_id} ${routeSourceLabel}`}>
+          <span className="inline-flex items-center gap-1 text-blue-700 truncate" title={`Маршрут #${pos.route_id}`}>
             <Route className="h-3 w-3 shrink-0" />
             {pos.route_name}
-            {routeSourceLabel && <span className="text-xs text-muted-foreground">({routeSourceLabel})</span>}
           </span>
         ) : (
           <span className={routeError ? "text-red-600 text-xs truncate" : "text-muted-foreground text-xs truncate"} title={routeError || undefined}>

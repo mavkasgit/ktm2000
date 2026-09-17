@@ -58,6 +58,10 @@ export type { StockBalancesPanelProps } from "./StockBalancesPanel";
 export * from "./import-utils";
 export { PositionSkuCell } from "./PositionSkuCell";
 export type { PositionSkuCellProps } from "./PositionSkuCell";
+export { QuantityRangeCell } from "./QuantityRangeCell";
+export type { QuantityRangeCellProps } from "./QuantityRangeCell";
+export { CutLayoutCell } from "./CutLayoutCell";
+export type { CutLayoutCellProps } from "./CutLayoutCell";
 export {
   DropdownMenu,
   DropdownMenuTrigger,

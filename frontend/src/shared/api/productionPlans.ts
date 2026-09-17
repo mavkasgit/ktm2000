@@ -1,4 +1,5 @@
 import { apiClient } from "./client";
+import type { CutLayout } from "./cutLayout";
 
 export type PlanStatus = "draft" | "validated" | "approved" | "partially_released" | "released" | "cancelled";
 export type PlanPositionStatus = "draft" | "invalid" | "valid" | "approved" | "released" | "cancelled";
@@ -164,15 +165,14 @@ export type PlanPositionOut = {
   input_quantity?: string | null;
   input_dimensions?: Record<string, unknown> | null;
   outputs?: { row_number?: number; quantity: string; dimensions: Record<string, unknown> | null }[] | null;
-  operation_summary?: string | null;
   // Габарит задания позиции (тикет #95): колонка «Размер» на странице плана.
   dimensions?: Record<string, unknown> | null;
   dimensions_label?: string | null;
   /**
-   * Колонка «Размер»: «2,75 м → 0,9 м + 1,35 м» (вход → выходы без количеств);
-   * совпадающие размеры не дублируются.
+   * Колонка «Размер»: раскрой частями — вход и распилы; `null` без габаритов,
+   * тогда показывается `dimensions_label`.
    */
-  sizes_label?: string | null;
+  cut_layout?: CutLayout | null;
 };
 
 export async function planFiles(planId: number) {
@@ -401,11 +401,12 @@ export type ProductionPlanningRow = {
   dimensions?: Record<string, unknown> | null;
   /** Готовая подпись размера («2,7 м» / «—»). */
   dimensions_label?: string | null;
-  /**
-   * Колонка «Размер»: «2,75 м → 0,9 м + 1,35 м» (вход → выходы без количеств);
-   * совпадающие размеры не дублируются.
-   */
-  sizes_label?: string | null;
+  /** Колонка «Размер»: раскрой частями — вход и распилы (без раскроя — `null`). */
+  cut_layout?: CutLayout | null;
+  /** Норма «количество на подвес» (штук), как на странице плана. */
+  quantity_per_hanger?: number | null;
+  /** Количество из плана (Excel) — левое число ячейки «Кол-во», показывается без сырья. */
+  original_quantity?: string | null;
   position_status: string;
   validation_status: string;
   route_id: number | null;

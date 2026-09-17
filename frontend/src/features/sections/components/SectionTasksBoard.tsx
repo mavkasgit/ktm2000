@@ -14,6 +14,7 @@ import { formatDimensionsFilterValue, formatDimensionsLabel } from "@/shared/api
 import {
   Badge,
   Button,
+  CutLayoutCell,
   SortableFilterHeader,
   FiltersPanel,
   TableCornerResetCell,
@@ -252,9 +253,9 @@ function renderTaskRow(
         ) : (
           <span className="text-xs">{task.operation_name || "—"}</span>
         )}
-        {task.operation_summary && (
-          <span className="block text-xs text-muted-foreground" title={task.operation_summary}>
-            {task.operation_summary}
+        {task.cut_layout && (
+          <span className="block text-xs text-muted-foreground">
+            <CutLayoutCell layout={task.cut_layout} />
           </span>
         )}
         {renderOutputsProgress(task, "block text-xs text-muted-foreground tabular-nums")}
@@ -342,9 +343,9 @@ function renderMobileCard(
         <div><span className="text-muted-foreground">Остаток:</span> {fmtQty(task.cache.remaining_quantity)}</div>
       </div>
 
-      {task.operation_summary ? (
-        <div className="text-xs text-muted-foreground border-t pt-2" title={task.operation_summary}>
-          {task.operation_summary}
+      {task.cut_layout ? (
+        <div className="text-xs text-muted-foreground border-t pt-2">
+          <CutLayoutCell layout={task.cut_layout} />
         </div>
       ) : null}
 

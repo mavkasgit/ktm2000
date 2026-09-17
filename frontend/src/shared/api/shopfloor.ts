@@ -1,4 +1,5 @@
 import { apiClient } from "./client";
+import type { CutLayout } from "./cutLayout";
 
 export type ShopfloorRequestOptions = {
   singleSectionLockId?: number | null;
@@ -101,7 +102,11 @@ export type SectionBoardTask = {
   input_quantity?: string | null;
   input_dimensions?: Record<string, unknown> | null;
   outputs?: TaskOutputSpec[];
-  operation_summary?: string | null;
+  /**
+   * Раскрой этапа: вход и распилы; только у трансформирующих этапов
+   * (`transforms_dimensions`), иначе `null`.
+   */
+  cut_layout?: CutLayout | null;
   // Размер нетрансформирующего этапа (ADR-0001): габарит задания из плана.
   dimensions?: Record<string, unknown> | null;
   // Прогресс трансформации: оприходовано по каждому выходу + списано входа
