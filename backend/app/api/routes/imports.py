@@ -39,31 +39,23 @@ class ImportPreviewOut(BaseModel):
     quantity_adjusted_total: str | None = None
 
 
-@router.post("/excel", response_model=ImportPreviewOut, status_code=status.HTTP_201_CREATED)
-async def import_excel_plan(
-    file: UploadFile = File(...),
-    sheet_index: int = Form(0),
-    mode: ImportBatchMode = Form(ImportBatchMode.create_plan),
-    production_plan_id: int | None = Form(None),
-    row_selection: str | None = Form(None),
-    template_id: int | None = Query(None),
-    column_mapping: str | None = Query(None),
-    normalize_hanger_quantity: bool = Form(True),
-    db: AsyncSession = Depends(get_db),
-    current_user: User = Depends(get_current_user),
-) -> ImportPreviewOut:
-    if template_id is None:
-        raise HTTPException(status_code=400, detail="template_id is required")
+async def _resolve_template_context(
+    db: AsyncSession,
+    template_id: int,
+    column_mapping: str | None,
+) -> tuple[dict | None, int | None]:
+    """Резолв шаблона импорта: маппинг колонок + профиль правил маршрута.
 
-    resolved_mapping = None
-    rule_profile_id = None
+    Общий шаг upload-импорта (`/excel`) и бесфайловой симуляции
+    (`/excel/simulate`) — иначе конвенция разъехалась бы на две.
+    """
     template = await db.get(ImportTemplate, template_id)
     if template is None:
         raise HTTPException(status_code=404, detail="Template not found")
     if not template.is_active:
         raise HTTPException(status_code=400, detail="Template is inactive")
 
-    resolved_mapping = dict(template.column_mapping)
+    resolved_mapping: dict | None = dict(template.column_mapping)
     rule_profile_id = (
         await db.execute(
             select(RouteRuleProfile.id)
@@ -80,6 +72,27 @@ async def import_excel_plan(
         if not isinstance(parsed_mapping, dict):
             raise HTTPException(status_code=400, detail="column_mapping must be a JSON object")
         resolved_mapping = {**(resolved_mapping or {}), **parsed_mapping}
+    return resolved_mapping, rule_profile_id
+
+
+@router.post("/excel", response_model=ImportPreviewOut, status_code=status.HTTP_201_CREATED)
+async def import_excel_plan(
+    file: UploadFile = File(...),
+    sheet_index: int = Form(0),
+    mode: ImportBatchMode = Form(ImportBatchMode.create_plan),
+    production_plan_id: int | None = Form(None),
+    row_selection: str | None = Form(None),
+    template_id: int | None = Query(None),
+    column_mapping: str | None = Query(None),
+    normalize_hanger_quantity: bool = Form(True),
+    db: AsyncSession = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+) -> ImportPreviewOut:
+    if template_id is None:
+        raise HTTPException(status_code=400, detail="template_id is required")
+    resolved_mapping, rule_profile_id = await _resolve_template_context(
+        db, template_id, column_mapping
+    )
 
     content = await file.read()
     try:
@@ -178,116 +191,134 @@ async def preview_excel_sheet_endpoint(
     return SheetPreviewOut(**result)
 
 
-def _test_workbook(
-    *,
-    sku: str = "ЮП-2630",
-    product_name: str = "Стык с дюбелем 40мм 2,7 анод.серебро матовый",
-    quantity: Decimal = Decimal("100"),
-    comments: str | None = None,
-) -> bytes:
+_SIMULATED_PLAN_HEADERS = [
+    "Артикул",
+    "пополнение",
+    "Наименование",
+    "остатки сырья на КТМ",
+    "Цвет",
+    "кол-во шт. в 2,7",
+    "Длина, м",
+    "Пробивка/сверловка",
+    "Упаковка",
+    "Примечание ",
+    "Длина после упак, м",
+    "кол-во штук готовой продукции",
+    "Запад",
+    "Восток",
+    "Вид конечного продукта",
+]
+
+
+class SimulatedPlanRow(BaseModel):
+    """Строка «Упаковочного плана» для бесфайлового импорта.
+
+    Поля повторяют колонки шаблона в их порядке; `None` — пустая ячейка
+    (строка-продолжение группы раскроя несёт только `output_length_m`
+    и `output_qty`).
+    """
+
+    sku: str
+    replenishment: str | None = "ТЗ"
+    name: str | None = None
+    raw_stock: float | None = None
+    color: str | None = None
+    qty_per_27: float | None = None
+    length_m: float | None = None
+    operation: str | None = None
+    packaging: str | None = None
+    note: str | None = None
+    output_length_m: float | None = None
+    output_qty: float | None = None
+    west: float | None = None
+    east: float | None = None
+    kind: str | None = None
+
+    def as_cells(self) -> list[object]:
+        return [
+            self.sku,
+            self.replenishment,
+            self.name,
+            self.raw_stock,
+            self.color,
+            self.qty_per_27,
+            self.length_m,
+            self.operation,
+            self.packaging,
+            self.note,
+            self.output_length_m,
+            self.output_qty,
+            self.west,
+            self.east,
+            self.kind,
+        ]
+
+
+class SimulatedPlanImportIn(BaseModel):
+    rows: list[SimulatedPlanRow] = Field(min_length=1)
+    sheet_name: str = "totalplan"
+    mode: ImportBatchMode = ImportBatchMode.create_plan
+    production_plan_id: int | None = None
+    template_id: int | None = None
+    row_selection: str | None = None
+    normalize_hanger_quantity: bool = True
+
+
+def _simulated_plan_workbook(rows: list[SimulatedPlanRow], sheet_name: str) -> bytes:
+    """Собрать «Упаковочный план» в памяти из строк (файл на диске не нужен)."""
     wb = Workbook()
     ws = wb.active
-    ws.title = "План май 26 05"
-    ws.append(["", "", "Комментарий"])
-    ws.append(["Заявка № 05", "май"])
-    ws.append([])
-    ws.append(["", "", "", "", "", "", "", "", "", "", "", "", "Формирование ящиков"])
-    ws.append(
-        [
-            "Артикул",
-            "пополнение",
-            "Наименование",
-            "остатки сырья на КТМ",
-            "Цвет",
-            "кол-во шт. в 2,7",
-            "Длина, м",
-            "Пробивка/сверловка",
-            "Упаковка",
-            "Примечание ",
-            "Длина после упак, м",
-            "кол-во штук готовой продукции",
-            "Запад",
-            "Восток",
-            "Вид конечного продукта",
-            "Комментарии",
-        ]
-    )
-    qty = float(quantity)
-    ws.append(
-        [
-            sku,
-            "ТЗ",
-            product_name,
-            3400,
-            "серебро",
-            qty,
-            2.7,
-            "",
-            "поф, красная этикетка РП 23*150 на каждый профиль и белая этикетка 58*30 на пачку из 10 шт",
-            "",
-            2.7,
-            qty,
-            qty,
-            qty,
-            "ГП",
-            comments or "",
-        ]
-    )
+    assert ws is not None
+    ws.title = sheet_name
+    for _ in range(3):
+        ws.append([])
+    ws.append(list(_SIMULATED_PLAN_HEADERS))
+    for row in rows:
+        ws.append(row.as_cells())
     out = BytesIO()
     wb.save(out)
     return out.getvalue()
 
 
-@router.post("/excel/test", response_model=ImportPreviewOut, status_code=status.HTTP_201_CREATED)
-async def import_test_excel(
-    production_plan_id: int | None = Query(None),
-    product_id: int | None = Query(None),
-    run_id: str | None = Query(None),
-    quantity: Decimal = Query(Decimal("100")),
-    row_selection: str | None = Query(None),
+@router.post("/excel/simulate", response_model=ImportPreviewOut, status_code=status.HTTP_201_CREATED)
+async def import_simulated_excel(
+    payload: SimulatedPlanImportIn,
     db: AsyncSession = Depends(get_db),
     current_user: User = Depends(get_current_user),
 ) -> ImportPreviewOut:
-    import logging
-    logger = logging.getLogger(__name__)
+    """Импорт плана без файла: строки приходят в теле запроса, xlsx
+    собирается в памяти и проходит тот же change-set, что и upload.
 
-    sku = "ЮП-2630"
-    name = "Стык с дюбелем 40мм 2,7 анод.серебро матовый"
-    if product_id is not None:
-        product = await db.get(Product, product_id)
-        if product is None:
-            raise HTTPException(status_code=404, detail="Product not found")
-        sku = product.sku
-        name = product.name
+    Заменяет хранимые e2e-фикстуры: сетапу теста не нужен xlsx в репозитории.
+    """
+    resolved_mapping = None
+    rule_profile_id = None
+    if payload.template_id is not None:
+        resolved_mapping, rule_profile_id = await _resolve_template_context(
+            db, payload.template_id, None
+        )
 
-    comments = f"TEST_RUN:{run_id}" if run_id else None
-    content = _test_workbook(
-        sku=sku,
-        product_name=name,
-        quantity=quantity,
-        comments=comments,
-    )
+    content = _simulated_plan_workbook(payload.rows, payload.sheet_name)
     try:
         result = await create_excel_import_change_set(
             db,
-            filename=f"test-{sku}.xlsx",
+            filename=f"simulated-{payload.sheet_name}.xlsx",
             content=content,
             content_type="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
             sheet_index=0,
-            mode=ImportBatchMode.append_to_plan if production_plan_id else ImportBatchMode.create_plan,
-            production_plan_id=production_plan_id,
-            column_mapping=None,
-            row_selection=row_selection,
+            mode=payload.mode,
+            production_plan_id=payload.production_plan_id,
+            column_mapping=resolved_mapping,
+            row_selection=payload.row_selection,
+            template_id=payload.template_id,
+            rule_profile_id=rule_profile_id,
+            normalize_hanger_quantity=payload.normalize_hanger_quantity,
             user=current_user,
         )
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
     except RuntimeError as exc:
-        logger.exception("import_test_excel RuntimeError: %s", exc)
         raise HTTPException(status_code=500, detail=str(exc)) from exc
-    except Exception as exc:
-        logger.exception("import_test_excel unexpected error: %s", exc)
-        raise HTTPException(status_code=500, detail=f"{type(exc).__name__}: {exc}") from exc
     return ImportPreviewOut(**result)
 
 
