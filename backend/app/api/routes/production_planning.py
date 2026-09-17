@@ -182,9 +182,13 @@ class PlanningRowOut(BaseModel):
     input_quantity: float | None = None
     dimensions: dict | None = None
     dimensions_label: str | None = None
-    # Колонка «Размер»: «2,75 м → 0,9 м + 1,35 м» (вход → выходы без количеств);
-    # совпадающие размеры не дублируются.
-    sizes_label: str | None = None
+    # Раскрой для колонки «Размер»: {"input": "2,75", "outputs": ["0,9×50", …]}.
+    cut_layout: dict | None = None
+    # Количество из Excel до округления до подвесов — фронт показывает
+    # «план − итог» и подсвечивает округление.
+    original_quantity: str | None = None
+    # N на подвес (#127): тем же резолвером, что и страница плана.
+    quantity_per_hanger: int | None = None
     position_status: str
     validation_status: str
     route_id: int | None

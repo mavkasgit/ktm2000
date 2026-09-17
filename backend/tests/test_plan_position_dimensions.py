@@ -11,7 +11,7 @@ import pytest
 from openpyxl import Workbook
 
 from app.core.config import settings
-from app.domain.dimensions import format_dimension_flow
+from app.domain.dimensions import format_cut_layout
 from app.models.import_template import ImportTemplate
 from app.models.production_plan import PlanPosition
 from app.services.excel_import import parse_factory_plan_workbook
@@ -219,13 +219,16 @@ def test_group_fingerprint_is_idempotent_and_output_sensitive() -> None:
 
 
 # ---------------------------------------------------------------------------
-# format_dimension_flow — колонка «Размер»: «вход → выходы» без количеств
+# format_cut_layout — раскрой частями: вход + распилы
 # ---------------------------------------------------------------------------
 
 
-def _flow_output(length_mm: int | None) -> dict:
+def _cut_output(length_mm: int | None, quantity: str) -> dict:
     """Строка выхода операции: габарит или безразмерный выход."""
-    return {"dimensions": None if length_mm is None else {"length_mm": length_mm}}
+    return {
+        "quantity": quantity,
+        "dimensions": None if length_mm is None else {"length_mm": length_mm},
+    }
 
 
 @pytest.mark.parametrize(
@@ -233,55 +236,61 @@ def _flow_output(length_mm: int | None) -> dict:
     [
         pytest.param(
             {"length_mm": 2750},
-            [_flow_output(900), _flow_output(1350), _flow_output(1800), _flow_output(2700)],
-            "2,75 м → 0,9 м + 1,35 м + 1,8 м + 2,7 м",
+            [
+                _cut_output(900, "50"),
+                _cut_output(1350, "100"),
+                _cut_output(1800, "50"),
+                _cut_output(2700, "50"),
+            ],
+            {"input": "2,75", "outputs": ["0,9×50", "1,35×100", "1,8×50", "2,7×50"]},
             id="cut-into-four-lengths",
         ),
         pytest.param(
             {"length_mm": 2750},
-            [_flow_output(2700)],
-            "2,75 м → 2,7 м",
+            [_cut_output(2700, "150")],
+            {"input": "2,75", "outputs": ["2,7×150"]},
             id="single-other-output-length",
         ),
         pytest.param(
             {"length_mm": 2700},
-            [_flow_output(2700)],
-            "2,7 м",
-            id="output-equals-input-not-duplicated",
+            [_cut_output(2700, "150")],
+            {"input": "2,7 м", "outputs": []},
+            id="output-equals-input-single-is-input-label",
         ),
         pytest.param(
             {"length_mm": 2700},
-            [_flow_output(2700), _flow_output(900)],
-            "2,7 м → 0,9 м",
-            id="one-of-two-outputs-equals-input",
+            [_cut_output(2700, "150"), _cut_output(900, "50")],
+            {"input": "2,7", "outputs": ["0,9×50", "2,7×150"]},
+            id="output-equals-input-kept",
         ),
         pytest.param(
             None,
-            [_flow_output(900)],
-            "0,9 м",
+            [_cut_output(900, "50")],
+            {"input": None, "outputs": ["0,9×50"]},
             id="no-input-only-outputs",
         ),
         pytest.param(
             None,
-            [_flow_output(None)],
+            [_cut_output(None, "150")],
             None,
             id="dimensionless-output-no-input",
         ),
         pytest.param(
             {"length_mm": 2750},
-            [_flow_output(900), _flow_output(900)],
-            "2,75 м → 0,9 м",
-            id="duplicate-outputs-once",
+            [_cut_output(900, "50"), _cut_output(900, "30")],
+            {"input": "2,75", "outputs": ["0,9×80"]},
+            id="duplicate-outputs-merged",
         ),
     ],
 )
-def test_format_dimension_flow(
-    input_dimensions: dict | None, outputs: list[dict], expected: str | None
+def test_format_cut_layout(
+    input_dimensions: dict | None, outputs: list[dict], expected: dict | None
 ) -> None:
-    """Подпись «вход → выходы» без количеств (ADR-0002/0003): выход той же
-    размерности, что и вход, не дублируется, как и повторяющиеся выходы;
-    если размеров нет вовсе — None."""
-    assert format_dimension_flow(input_dimensions, outputs) == expected
+    """Раскрой частями (ADR-0002/0003): ``input`` — габарит входа без единицы
+    (одиночная подпись с единицей, когда трансформации нет), ``outputs`` —
+    распилы по возрастанию длины; одинаковые длины сливаются; безразмерных
+    габаритов вовсе — None."""
+    assert format_cut_layout(input_dimensions, outputs) == expected
 
 
 async def _create_template(session, *, name: str, code: str) -> ImportTemplate:
@@ -388,7 +397,7 @@ async def test_group_import_apply_and_reimport_idempotency(client, session, tmp_
     assert api_position["input_quantity"] == "150"
     assert api_position["input_dimensions"] == {"length_mm": 2700}
     assert len(api_position["outputs"]) == 2
-    assert api_position["operation_summary"] == "150 шт × 2,7 м → 350 × 0,9 м + 50 × 1,8 м"
+    assert api_position["cut_layout"] == {"input": "2,7", "outputs": ["0,9×350", "1,8×50"]}
 
     # Повторный импорт того же файла — группа опознана по fingerprint.
     reimport = await client.post(

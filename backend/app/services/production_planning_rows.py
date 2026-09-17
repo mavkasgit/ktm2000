@@ -7,7 +7,7 @@ from sqlalchemy import String, and_, case, cast, exists, func, or_, select
 from sqlalchemy.orm import selectinload
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.domain.dimensions import format_dimension_flow, format_dimensions, parse_dimensions_filter
+from app.domain.dimensions import format_cut_layout, format_dimensions, parse_dimensions_filter
 from app.models.internal_plan import SectionPlanLine
 from app.models.product import Product
 from app.models.production_plan import PlanPosition, PlanPositionStatus, PositionStatusHistory
@@ -18,7 +18,7 @@ from app.models.transfer import Transfer
 from app.models.work_task import WorkTask, WorkTaskStatus
 from app.stock.ledger import net_quantity_expr
 from app.stock.models import Reason, StockTransaction
-from app.services.plan_position_hanger import position_dimensions_for_task
+from app.services.plan_position_hanger import position_dimensions_for_task, resolve_positions_hanger
 from app.services.route_matcher import ResolvedRouteInfo, resolve_position_route, make_position_route_cache_key
 
 MANUAL_ROUTE_PASS_PREFIX = "manual_route_pass:"
@@ -693,10 +693,19 @@ async def _build_planning_rows_for_positions(db: AsyncSession, positions: list[P
             available_by_product, position_effective_product_ids.get(pos.id) or []
         )
 
+    # N на подвес — тем же батч-резолвером, что и страница плана (#127):
+    # число подвесов на «Контроле выполнения» совпадает с планом.
+    hanger_values = await resolve_positions_hanger(db, positions)
+
     result: list[dict] = []
     for pos in positions:
         route_info = route_cache[make_position_route_cache_key(pos)]
         task_dims = position_dimensions_for_task(pos)
+        hanger_value = hanger_values[pos.id]
+        source_payload = pos.source_payload or {}
+        original_quantity = source_payload.get("original_quantity")
+        if original_quantity is not None and not isinstance(original_quantity, str):
+            original_quantity = str(original_quantity)
 
         has_tasks = pos.id in has_tasks_set
         is_completed = pos.id in completed_set
@@ -716,9 +725,13 @@ async def _build_planning_rows_for_positions(db: AsyncSession, positions: list[P
                 "input_quantity": _to_float(pos.input_quantity) if pos.input_quantity is not None else None,
                 "dimensions": task_dims,
                 "dimensions_label": format_dimensions(task_dims),
-                # Колонка «Размер»: вход → выходы без количеств; совпадающие
-                # размеры не дублируются (вход == единственный выход).
-                "sizes_label": format_dimension_flow(pos.input_dimensions, pos.outputs),
+                # Единая строка раскроя: «2,75 → 0,9×50 + 1,35×100 + 1,8×50».
+                "cut_layout": format_cut_layout(pos.input_dimensions, pos.outputs),
+                # Количество из Excel (до округления до подвесов) — фронт
+                # показывает «план − итог» и подсвечивает округление.
+                "original_quantity": original_quantity,
+                # N на подвес (#127) — тем же резолвером, что и страница плана.
+                "quantity_per_hanger": hanger_value.quantity_per_hanger,
                 "position_status": pos.status.value if hasattr(pos.status, "value") else str(pos.status),
                 "validation_status": pos.validation_status.value
                 if hasattr(pos.validation_status, "value")

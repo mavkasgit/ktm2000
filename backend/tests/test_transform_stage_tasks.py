@@ -405,13 +405,13 @@ async def test_section_board_shows_single_card_with_summary(client, session) -> 
     assert card["input_quantity"] == "150"
     assert card["input_dimensions"] == {"length_mm": 2700}
     assert card["outputs"] == MULTI_OUTPUTS
-    assert card["operation_summary"] == "150 шт × 2,7 м → 150 × 0,9 м + 150 × 1,8 м"
+    assert card["cut_layout"] == {"input": "2,7", "outputs": ["0,9×150", "1,8×150"]}
 
     plain_board = await get_section_board(session, section_id=sections[1].id)
     assert len(plain_board["tasks"]) == 1
     plain_card = plain_board["tasks"][0]
     assert plain_card["transforms_dimensions"] is False
-    assert plain_card["operation_summary"] is None
+    assert plain_card["cut_layout"] is None
     assert plain_card["outputs"] == []
 
 

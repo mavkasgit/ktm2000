@@ -12,8 +12,8 @@ from app.domain.dimensions import (
     DimensionsValidationError,
     canonicalize_dimensions,
     dimensions_equal,
+    format_cut_layout,
     format_dimensions,
-    format_operation_summary,
     parse_length_m_to_mm,
 )
 
@@ -198,56 +198,80 @@ class TestFormatDimensions:
 
 
 # ---------------------------------------------------------------------------
-# format_operation_summary
+# format_cut_layout
 # ---------------------------------------------------------------------------
 
 
-class TestFormatOperationSummary:
-    def test_no_outputs_is_none(self):
-        assert format_operation_summary(150, {"length_mm": 2700}, []) is None
+class TestFormatCutLayout:
+    def test_no_outputs_is_single_input_label(self):
+        assert format_cut_layout({"length_mm": 2700}, []) == {"input": "2,7 м", "outputs": []}
 
     def test_fully_dimensionless_is_none(self):
-        assert format_operation_summary(None, None, [{"quantity": "150"}]) is None
+        assert format_cut_layout(None, [{"quantity": "150"}]) is None
 
-    def test_transform_shows_input_and_outputs(self):
-        result = format_operation_summary(
-            150,
-            {"length_mm": 2700},
-            [
-                {"quantity": "150", "dimensions": {"length_mm": 900}},
-                {"quantity": "150", "dimensions": {"length_mm": 1800}},
-            ],
-        )
-        assert result == "150 шт × 2,7 м → 150 × 0,9 м + 150 × 1,8 м"
-
-    def test_same_length_is_none(self):
-        assert format_operation_summary(
-            150,
+    def test_single_output_equal_to_input_is_input_label(self):
+        assert format_cut_layout(
             {"length_mm": 2700},
             [{"quantity": "150", "dimensions": {"length_mm": 2700}}],
-        ) is None
-
-    def test_same_length_multiple_outputs_is_none(self):
-        assert format_operation_summary(
-            300,
-            {"length_mm": 2700},
-            [
-                {"quantity": "150", "dimensions": {"length_mm": 2700}},
-                {"quantity": "150", "dimensions": {"length_mm": 2700}},
-            ],
-        ) is None
+        ) == {"input": "2,7 м", "outputs": []}
 
     def test_float_length_normalized_still_equal(self):
-        assert format_operation_summary(
-            150,
+        assert format_cut_layout(
             {"length_mm": 2700.0},
             [{"quantity": "150", "dimensions": {"length_mm": 2700}}],
-        ) is None
+        ) == {"input": "2,7 м", "outputs": []}
 
-    def test_dimensionless_input_to_dimensioned_output_shows(self):
-        result = format_operation_summary(
-            150,
-            None,
-            [{"quantity": "150", "dimensions": {"length_mm": 2700}}],
+    def test_outputs_sorted_by_length_ascending(self):
+        result = format_cut_layout(
+            {"length_mm": 2750},
+            [
+                {"quantity": "50", "dimensions": {"length_mm": 1800}},
+                {"quantity": "50", "dimensions": {"length_mm": 900}},
+                {"quantity": "100", "dimensions": {"length_mm": 1350}},
+                {"quantity": "50", "dimensions": {"length_mm": 2700}},
+            ],
         )
-        assert result == "150 шт → 150 × 2,7 м"
+        assert result == {
+            "input": "2,75",
+            "outputs": ["0,9×50", "1,35×100", "1,8×50", "2,7×50"],
+        }
+
+    def test_same_lengths_merged(self):
+        result = format_cut_layout(
+            {"length_mm": 2750},
+            [
+                {"quantity": "50", "dimensions": {"length_mm": 900}},
+                {"quantity": "30", "dimensions": {"length_mm": 900}},
+            ],
+        )
+        assert result == {"input": "2,75", "outputs": ["0,9×80"]}
+
+    def test_output_equal_to_input_kept(self):
+        result = format_cut_layout(
+            {"length_mm": 2700},
+            [
+                {"quantity": "300", "dimensions": {"length_mm": 2700}},
+                {"quantity": "50", "dimensions": {"length_mm": 900}},
+            ],
+        )
+        assert result == {"input": "2,7", "outputs": ["0,9×50", "2,7×300"]}
+
+    def test_dimensionless_output_after_dimensioned(self):
+        result = format_cut_layout(
+            {"length_mm": 2700},
+            [
+                {"quantity": "30"},
+                {"quantity": "50", "dimensions": {"length_mm": 900}},
+            ],
+        )
+        assert result == {"input": "2,7", "outputs": ["0,9×50", "30 шт"]}
+
+    def test_dimensionless_input_with_dimensioned_outputs(self):
+        result = format_cut_layout(
+            None,
+            [
+                {"quantity": "50", "dimensions": {"length_mm": 1800}},
+                {"quantity": "50", "dimensions": {"length_mm": 2700}},
+            ],
+        )
+        assert result == {"input": None, "outputs": ["1,8×50", "2,7×50"]}

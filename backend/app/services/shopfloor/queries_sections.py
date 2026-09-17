@@ -10,7 +10,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import aliased
 
 from app.domain.dimensions import (
-    format_operation_summary,
+    format_cut_layout,
     format_quantity,
     parse_dimensions_filter,
 )
@@ -487,10 +487,10 @@ async def get_section_board(
                 operation_names.append(op_name)
 
         # Трансформирующий этап (ADR-0002): одна позиция плана = одна
-        # карточка «вход → все выходы»: «150 шт × 2,7 м → 150 × 0,9 м + …».
+        # карточка «вход → все выходы»: «2,75 → 0,9×50 + 1,35×100».
         task_outputs = list(task.outputs or [])
-        operation_summary = (
-            format_operation_summary(task.input_quantity, task.input_dimensions, task_outputs)
+        cut_layout = (
+            format_cut_layout(task.input_dimensions, task_outputs)
             if stage.transforms_dimensions
             else None
         )
@@ -572,7 +572,7 @@ async def get_section_board(
             "input_quantity": format_quantity(task.input_quantity) if task.input_quantity is not None else None,
             "input_dimensions": task.input_dimensions,
             "outputs": task_outputs,
-            "operation_summary": operation_summary,
+            "cut_layout": cut_layout,
             "outputs_progress": outputs_progress,
             "input_consumed_quantity": input_consumed_quantity,
         })

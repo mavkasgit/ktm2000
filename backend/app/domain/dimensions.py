@@ -16,7 +16,7 @@ import json
 import math
 import re
 from collections.abc import Mapping
-from decimal import Decimal
+from decimal import Decimal, InvalidOperation
 from typing import Any
 
 # Каноничный ключ длины (справочник dimension_types, ADR-0001).
@@ -175,74 +175,93 @@ def format_quantity(value: Any) -> str:
     return text
 
 
-def format_operation_summary(
-    input_quantity: Any | None,
+def _quantity_decimal(value: Any) -> Decimal:
+    """Количество выхода в Decimal для слияния; мусор/None → 0."""
+    if value is None:
+        return Decimal(0)
+    try:
+        return Decimal(str(value))
+    except (InvalidOperation, ValueError):
+        return Decimal(0)
+
+
+def format_cut_layout(
     input_dimensions: Mapping[str, Any] | None,
     outputs: list[Mapping[str, Any]] | None,
-) -> str | None:
-    """Сводка операции «вход → все выходы» для UI (ADR-0002/0003):
-    «150 шт × 2,7 м → 150 × 0,9 м + 150 × 1,8 м».
+) -> dict[str, Any] | None:
+    """Раскрой позиции частями для двухколоночного показа (ADR-0002/0003):
+    ``{"input": "2,75", "outputs": ["0,9×50", "1,35×100"]}`` — UI рисует вход
+    со стрелкой слева, распилы столбиком справа.
 
-    ``None``, если выходов нет или операция полностью безразмерная —
-    показывать нечего.
+    ``input`` — габарит входа без единицы; когда реальной трансформации нет,
+    в ``input`` уходит одиночная подпись с единицей («2,75 м»), а ``outputs``
+    пуст. Габаритные выходы сливаются по длине (количества суммируются) и идут
+    по возрастанию длины; выход той же длины, что и вход, не выбрасывается.
+    Безразмерные выходы печатаются как «<кол-во> шт» после габаритных в
+    исходном порядке. Количества входа здесь нет — оно показывается отдельной
+    колонкой UI.
+
+    ``None``, когда габаритов нет вовсе (вход без габаритов и все выходы
+    без габаритов).
     """
     entries = list(outputs or [])
-    has_dimensions = bool(input_dimensions) or any(
-        entry.get("dimensions") for entry in entries
-    )
-    if not entries or not has_dimensions:
+    dimensioned = [
+        entry for entry in entries
+        if canonicalize_dimensions(entry.get("dimensions")) is not None
+    ]
+    dimensionless = [
+        entry for entry in entries
+        if canonicalize_dimensions(entry.get("dimensions")) is None
+    ]
+    input_has_dims = canonicalize_dimensions(input_dimensions) is not None
+
+    if not input_has_dims and not dimensioned:
         return None
-    # Сводка нужна только при реальном изменении размеров (ADR-0002):
-    # если вход и все выходы одной размерности — «150 шт × 2,7 м → 150 × 2,7 м»
-    # ничего не говорит о трансформации, писать нечего.
-    if input_dimensions is not None and all(
-        dimensions_equal(input_dimensions, entry.get("dimensions"))
-        for entry in entries
+
+    # Реальной трансформации нет — показываем только вход одной подписью:
+    # либо выходов нет, либо все габаритные выходы совпадают с входом и
+    # безразмерных выходов тоже нет.
+    if input_has_dims and not dimensionless and (
+        not dimensioned
+        or all(
+            dimensions_equal(input_dimensions, entry.get("dimensions"))
+            for entry in dimensioned
+        )
     ):
-        return None
-    input_parts: list[str] = []
-    if input_quantity is not None:
-        input_parts.append(f"{format_quantity(input_quantity)} шт")
-    if input_dimensions:
-        input_parts.append(format_dimensions(input_dimensions))
-    output_parts: list[str] = []
-    for entry in entries:
-        qty = format_quantity(entry.get("quantity") or "0")
-        dims = entry.get("dimensions")
-        output_parts.append(f"{qty} × {format_dimensions(dims)}" if dims else f"{qty} шт")
-    outputs_text = " + ".join(output_parts)
-    if not input_parts:
-        return outputs_text
-    return f"{' × '.join(input_parts)} → {outputs_text}"
+        return {"input": format_dimensions(input_dimensions), "outputs": []}
 
-
-def format_dimension_flow(
-    input_dimensions: Mapping[str, Any] | None,
-    outputs: list[Mapping[str, Any]] | None,
-) -> str | None:
-    """«Вход → выходы» без количеств для колонки «Размер» (ADR-0002/0003):
-    «2,75 м → 0,9 м + 1,35 м + 1,8 м + 2,7 м».
-
-    Совпадающие размеры не дублируются: если выход той же размерности, что и
-    вход (операция без резки), он не повторяется — остаётся один размер.
-    ``None`` — размеров нет вовсе (безразмерная позиция).
-    """
-    input_label = format_dimensions(input_dimensions) if input_dimensions else None
-    output_labels: list[str] = []
-    for entry in outputs or []:
-        dims = entry.get("dimensions")
-        if not dims:
+    # Габаритные выходы: слияние по длине, сортировка по возрастанию.
+    merged: dict[Decimal, Decimal] = {}
+    other_parts: list[str] = []
+    for entry in dimensioned:
+        length = _entry_length_mm(entry.get("dimensions"))
+        if length is None:
+            # Нестандартный (не длинномерный) габарит — печатаем без слияния.
+            other_parts.append(
+                f"{_format_dimensions_without_unit(entry.get('dimensions'))}"
+                f"×{format_quantity(_quantity_decimal(entry.get('quantity')))}"
+            )
             continue
-        if input_dimensions is not None and dimensions_equal(input_dimensions, dims):
-            continue
-        label = format_dimensions(dims)
-        if label not in output_labels:
-            output_labels.append(label)
-    if not input_label:
-        return " + ".join(output_labels) or None
-    if not output_labels:
-        return input_label
-    return f"{input_label} → {' + '.join(output_labels)}"
+        merged[length] = merged.get(length, Decimal(0)) + _quantity_decimal(
+            entry.get("quantity")
+        )
+
+    output_parts = [
+        f"{_format_mm_as_meters(length)}×{format_quantity(merged[length])}"
+        for length in sorted(merged)
+    ]
+    output_parts.extend(other_parts)
+    output_parts.extend(
+        f"{format_quantity(_quantity_decimal(entry.get('quantity')))} шт"
+        for entry in dimensionless
+    )
+
+    return {
+        "input": (
+            _format_dimensions_without_unit(input_dimensions) if input_has_dims else None
+        ),
+        "outputs": output_parts,
+    }
 
 
 def _canonicalize_value(key: str, value: Any) -> Any:
@@ -267,7 +286,30 @@ def _canonicalize_value(key: str, value: Any) -> Any:
     return value
 
 
-def _format_mm_as_meters(mm: int | float) -> str:
+def _format_mm_as_meters(mm: int | float | Decimal) -> str:
     """Миллиметры → строка в метрах без хвостовых нулей, с запятой: 2750 → «2,75»."""
     meters = (Decimal(str(mm)) / Decimal(1000)).normalize()
     return format(meters, "f").replace(".", ",")
+
+
+def _format_dimensions_without_unit(dims: Mapping[str, Any] | None) -> str:
+    """Как :func:`format_dimensions`, но без суффикса единицы: 2750 → «2,75».
+
+    Используется внутри строки раскроя, где единица не нужна: подписи входа
+    и габаритных выходов соседствуют, а единицы разных позиций могут быть
+    разными.
+    """
+    canonical = canonicalize_dimensions(dims)
+    if canonical is None:
+        return DIMENSIONLESS_LABEL
+    if set(canonical) == {LENGTH_MM}:
+        return _format_mm_as_meters(canonical[LENGTH_MM])
+    return ", ".join(f"{key}: {value}" for key, value in canonical.items())
+
+
+def _entry_length_mm(dims: Mapping[str, Any] | None) -> Decimal | None:
+    """Длина габарита в мм для сортировки/слияния, либо ``None``."""
+    canonical = canonicalize_dimensions(dims)
+    if canonical is None or LENGTH_MM not in canonical:
+        return None
+    return Decimal(str(canonical[LENGTH_MM]))

@@ -13,7 +13,7 @@ from sqlalchemy import func as sa_func
 
 from app.api.deps import WRITER_ROLES, require_role, get_current_user
 from app.core.database import get_db
-from app.domain.dimensions import format_dimension_flow, format_operation_summary
+from app.domain.dimensions import format_cut_layout
 from app.models.production_plan import (
     PlanChangeItem,
     PlanChangeSet,
@@ -891,13 +891,12 @@ class PlanPositionOut(BaseModel):
     input_quantity: str | None = None
     input_dimensions: dict | None = None
     outputs: list | None = None
-    operation_summary: str | None = None
     # Габарит задания позиции (тикет #95): колонка «Размер» на странице плана.
     dimensions: dict | None = None
     dimensions_label: str | None = None
-    # Колонка «Размер»: «2,75 м → 0,9 м + 1,35 м» (вход → выходы без количеств);
-    # совпадающие размеры не дублируются.
-    sizes_label: str | None = None
+    # Раскрой для колонки «Размер»: {"input": "2,75", "outputs": ["0,9×50", …]} —
+    # вход со стрелкой слева, распилы столбиком справа.
+    cut_layout: dict | None = None
 
 
 def _format_position_quantity(value) -> str:
@@ -910,24 +909,19 @@ def _format_position_quantity(value) -> str:
 
 
 def _position_operation_fields(position: PlanPosition) -> dict:
-    """Поля операции группы для PlanPositionOut, включая сводку вида
-    «150 шт × 2,7 м → 150 × 0,9 м + 150 × 1,8 м» (ADR-0003)."""
+    """Поля операции группы для PlanPositionOut, включая единую строку раскроя
+    «2,75 → 0,9×50 + 1,35×100» (ADR-0003)."""
     outputs = list(position.outputs or [])
     input_quantity = (
         _format_position_quantity(position.input_quantity)
         if position.input_quantity is not None
         else None
     )
-    summary = format_operation_summary(
-        position.input_quantity, position.input_dimensions, outputs
-    )
     return {
         "input_quantity": input_quantity,
         "input_dimensions": position.input_dimensions,
         "outputs": outputs or None,
-        "operation_summary": summary,
-        # Колонка «Размер»: вход → выходы без количеств, без дублей.
-        "sizes_label": format_dimension_flow(position.input_dimensions, outputs),
+        "cut_layout": format_cut_layout(position.input_dimensions, outputs),
     }
 
 

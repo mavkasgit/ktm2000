@@ -321,3 +321,76 @@ async def test_rows_filter_by_dimensions_exact(client, session: AsyncSession):
     assert body["total"] == 1
     assert body["rows"][0]["source_sku"] == "DIMFILT-001"
     assert body["rows"][0]["dimensions"] == {"length_mm": 2000}
+
+
+@pytest.mark.asyncio
+async def test_rows_expose_cut_layout_hanger_and_original_quantity(
+    client, session: AsyncSession
+):
+    """Строка плана несёт раскрой, норму на подвес и количество из Excel.
+
+    case 1 — позиция с трансформацией: ``cut_layout`` = {"input": "2,7",
+    "outputs": [...]} — распилы по возрастанию длины (в payload они намеренно
+    в обратном порядке), без единиц и «шт» внутри; ``quantity_per_hanger`` —
+    ручной override из payload; ``original_quantity`` — значение из payload.
+    case 2 — позиция без габаритов: ``cut_layout is None``.
+    """
+    product, route = await _make_route(session, "EXEC-CUT")
+    plan = ProductionPlan(
+        plan_no="PLAN-EXEC-CUT",
+        name="Plan EXEC CUT",
+        status=ProductionPlanStatus.approved,
+        period_start=date(2026, 5, 1),
+        period_end=date(2026, 5, 31),
+    )
+    session.add(plan)
+    await session.flush()
+
+    def _position(row_no: int, sku: str, **overrides) -> PlanPosition:
+        fields = dict(
+            production_plan_id=plan.id,
+            product_id=product.id,
+            source_type=PlanSourceType.manual,
+            source_sku=sku,
+            source_name=f"Product {sku}",
+            quantity=Decimal("150"),
+            source_payload={},
+            status=PlanPositionStatus.approved,
+            validation_status=PlanPositionValidationStatus.valid,
+            validation_errors=[],
+            period_start=plan.period_start,
+            period_end=plan.period_end,
+            has_pack_ops=False,
+            route_id=route.id,
+            source_row_number=row_no,
+        )
+        fields.update(overrides)
+        return PlanPosition(**fields)
+
+    session.add_all(
+        [
+            _position(
+                1,
+                "CUT-TRANSFORM",
+                input_dimensions={"length_mm": 2700},
+                outputs=[
+                    {"row_number": 1, "quantity": "50", "dimensions": {"length_mm": 1800}},
+                    {"row_number": 2, "quantity": "350", "dimensions": {"length_mm": 900}},
+                ],
+                source_payload={"quantity_per_hanger": 40, "original_quantity": "120"},
+            ),
+            _position(2, "CUT-NODIMS", input_dimensions=None, outputs=[]),
+        ]
+    )
+    await session.commit()
+
+    resp = await client.get("/api/production-planning/rows?limit=50")
+    assert resp.status_code == 200, resp.text
+    rows = {row["source_sku"]: row for row in resp.json()["rows"]}
+
+    transform = rows["CUT-TRANSFORM"]
+    assert transform["cut_layout"] == {"input": "2,7", "outputs": ["0,9×350", "1,8×50"]}
+    assert transform["quantity_per_hanger"] == 40
+    assert transform["original_quantity"] == "120"
+
+    assert rows["CUT-NODIMS"]["cut_layout"] is None
