@@ -1,21 +1,16 @@
 import { test, expect } from "./fixtures";
-import { execFileSync } from "child_process";
-import fs from "fs";
-import os from "os";
-import path from "path";
 import {
   BACKEND_URL,
   apiAccessTokenFromPage,
   apiAddRemainder,
+  apiApplyChangeSet,
+  apiGetActiveTemplate,
   apiGetSectionByCode,
   apiResetAll,
+  apiSimulatePlanImport,
   unwrapItems,
 } from "./api-helpers";
-import {
-  seedReferenceDataViaUI,
-  uploadTestFileViaUI,
-  waitForPlanningTableViaUI,
-} from "./ui-helpers";
+import { seedReferenceDataViaUI, waitForPlanningTableViaUI } from "./ui-helpers";
 
 /**
  * @ui — ЮП-460 в трёх вариантах делят одну кучу чистого сырья.
@@ -97,60 +92,6 @@ async function apiGetProductLengthsMm(token: string, productId: number): Promise
   return lengths.length > 0 ? lengths : [2050];
 }
 
-/** Python из backend-окружения (там гарантированно есть openpyxl). */
-function findBackendPython(): string {
-  const backendDir = path.resolve(process.cwd(), "../backend");
-  const candidates = [
-    process.env.BACKEND_PYTHON,
-    path.join(backendDir, ".venv/Scripts/python.exe"),
-    path.join(backendDir, ".venv/bin/python"),
-    "python",
-  ].filter((p): p is string => Boolean(p));
-  for (const py of candidates) {
-    try {
-      execFileSync(py, ["-c", "import openpyxl"], { stdio: "ignore" });
-      return py;
-    } catch {
-      // пробуем следующий кандидат
-    }
-  }
-  throw new Error("Не найден python с openpyxl для генерации плана-xlsx");
-}
-
-/**
- * План-xlsx «Упаковочный план»: шапка как в «Упаковочный план 1 строка E2E.xlsx»
- * (3 пустые строки + заголовок), три строки ЮП-460 — окно / гребенка / без
- * пресса. Файл — только в tmp, в репозиторий ничего не коммитится.
- */
-function makePlanXlsx(lengthM: number): string {
-  const dir = fs.mkdtempSync(path.join(os.tmpdir(), "yup460-plan-"));
-  const out = path.join(dir, "plan.xlsx");
-  const script = `
-import sys
-from openpyxl import Workbook
-out, length_m = sys.argv[1], float(sys.argv[2])
-wb = Workbook()
-ws = wb.active
-ws.title = "totalplan"
-headers = ["Артикул", "пополнение", "Наименование", "остатки сырья на КТМ",
-  "Цвет", "кол-во шт. в 2,7", "Длина, м", "Пробивка/сверловка", "Упаковка",
-  "Примечание ", "Длина после упак, м", "кол-во штук готовой продукции",
-  "Запад", "Восток", "Вид конечного продукта"]
-for _ in range(3):
-    ws.append([None] * 15)
-ws.append(headers)
-pack = "смотка спанбондом поштучно в пачке 10 штук"
-for op in ["окно", "гребенка", None]:
-    ws.append(["ЮП-460", "ТЗ", "Профиль ЮП-460", 1000, "серебро", 100,
-      length_m, op, pack, None, length_m, 100, 100, 0, "П/ф"])
-wb.save(out)
-`.trim();
-  execFileSync(findBackendPython(), ["-X", "utf8", "-c", script, out, String(lengthM)], {
-    stdio: "pipe",
-  });
-  return out;
-}
-
 /** Свободный остаток из текста строки плана («[ЮП-460] · 1000 …»). */
 function parseRemainder(rowText: string): number | null {
   const match = rowText.match(/·\s*(\d+)/);
@@ -206,75 +147,92 @@ test.describe("@ui ЮП-460: окно / гребенка / без пресса �
       { length_mm: pileLengthMm },
     );
     console.log(`[setup] продукт #${product.id}, куча ${PILE_QTY} × ${pileLengthMm}мм`);
-    const planPath = makePlanXlsx(pileLengthM);
 
-    try {
-      // ── ШАГ 1. Каталог в UI: ЮП-460 на месте ──────────────────────────
-      await page.goto("/references/raw-materials");
-      await expect(page.getByRole("heading", { name: "Справочник сырья" })).toBeVisible({
-        timeout: 10_000,
-      });
-      await page.getByPlaceholder("Поиск").fill(SKU);
-      await page.waitForTimeout(800);
-      const catalogRow = page.locator("tr", { hasText: SKU }).first();
-      await expect(catalogRow, "ЮП-460 не найден в справочнике сырья").toBeVisible({
-        timeout: 10_000,
-      });
-      console.log("[step1] каталог в UI корректен");
+    // ── ШАГ 1. Каталог в UI: ЮП-460 на месте ──────────────────────────
+    await page.goto("/references/raw-materials");
+    await expect(page.getByRole("heading", { name: "Справочник сырья" })).toBeVisible({
+      timeout: 10_000,
+    });
+    await page.getByPlaceholder("Поиск").fill(SKU);
+    await page.waitForTimeout(800);
+    const catalogRow = page.locator("tr", { hasText: SKU }).first();
+    await expect(catalogRow, "ЮП-460 не найден в справочнике сырья").toBeVisible({
+      timeout: 10_000,
+    });
+    console.log("[step1] каталог в UI корректен");
 
-      // ── ШАГ 2. Склад в UI: одна куча 1000, Годный ─────────────────────
-      await page.goto("/spg");
-      await expect(page.getByRole("button", { name: "Импорт из Excel" })).toBeVisible({
-        timeout: 10_000,
-      });
-      await page.getByPlaceholder("Глобальный поиск по артикулу или названию...").fill(SKU);
-      const pileRow = page.locator("tr", { hasText: SKU }).first();
-      await expect(pileRow, "куча ЮП-460 не видна на складе").toBeVisible({ timeout: 15_000 });
-      const pileText = ((await pileRow.innerText()) ?? "").replace(/\s+/g, " ").trim();
-      expect(pileText, `куча должна быть ${PILE_QTY} шт: ${pileText}`).toContain(String(PILE_QTY));
-      expect(pileText, `куча должна быть годной: ${pileText}`).toContain("Годный");
-      console.log(`[step2] склад в UI корректен: ${pileText}`);
+    // ── ШАГ 2. Склад в UI: одна куча 1000, Годный ─────────────────────
+    await page.goto("/spg");
+    await expect(page.getByRole("button", { name: "Импорт из Excel" })).toBeVisible({
+      timeout: 10_000,
+    });
+    await page.getByPlaceholder("Глобальный поиск по артикулу или названию...").fill(SKU);
+    const pileRow = page.locator("tr", { hasText: SKU }).first();
+    await expect(pileRow, "куча ЮП-460 не видна на складе").toBeVisible({ timeout: 15_000 });
+    const pileText = ((await pileRow.innerText()) ?? "").replace(/\s+/g, " ").trim();
+    expect(pileText, `куча должна быть ${PILE_QTY} шт: ${pileText}`).toContain(String(PILE_QTY));
+    expect(pileText, `куча должна быть годной: ${pileText}`).toContain("Годный");
+    console.log(`[step2] склад в UI корректен: ${pileText}`);
 
-      // ── ШАГ 3. План в UI: импорт 3 строк ───────────────────────────────
-      await page.goto("/planning");
-      await expect(page.getByRole("heading", { name: "План", exact: true })).toBeVisible({
-        timeout: 10_000,
-      });
-      await uploadTestFileViaUI(page, planPath);
-      await waitForPlanningTableViaUI(page);
-      const rows = page.locator('[id^="plan-position-"]');
-      await expect(rows, "в плане должно быть ровно 3 позиции ЮП-460").toHaveCount(3);
-      console.log("[step3] план импортирован (3 строки)");
+    // ── ШАГ 3. План: бесфайловый импорт 3 строк ────────────────────────
+    // Три строки одного артикула, различающихся «Пробивкой/сверловкой»:
+    // окно / гребенка / пусто. xlsx не храним — строки уходят в API.
+    const template = await apiGetActiveTemplate();
+    const importRes = await apiSimulatePlanImport(
+      (["окно", "гребенка", null] as const).map((operation) => ({
+        sku: SKU,
+        name: PRODUCT_NAME,
+        raw_stock: PILE_QTY,
+        color: "серебро",
+        qty_per_27: 100,
+        length_m: pileLengthM,
+        operation,
+        packaging: "смотка спанбондом поштучно в пачке 10 штук",
+        output_length_m: pileLengthM,
+        output_qty: 100,
+        west: 100,
+        east: 0,
+        kind: "П/ф",
+      })),
+      { templateId: template.id },
+    );
+    await apiApplyChangeSet(importRes.production_plan_id, importRes.change_set_id);
 
-      // ── ШАГ 4. Общая куча: у всех трёх остаток 1000 ───────────────────
-      const remainders: number[] = [];
-      const rowTexts: string[] = [];
-      for (let i = 0; i < 3; i++) {
-        const text = ((await rows.nth(i).innerText()) ?? "").replace(/\s+/g, " ").trim();
-        rowTexts.push(text);
-        expect(text, `строка ${i}: неожиданный артикул`).toContain(SKU);
-        expect(text, `строка ${i}: маршрут не назначен`).not.toContain("Не назначен");
-        const remainder = parseRemainder(text);
-        expect(remainder, `строка ${i}: индикатор остатка не читается: ${text}`).not.toBeNull();
-        remainders.push(remainder!);
-      }
-      for (const [i, value] of remainders.entries()) {
-        expect(
-          value,
-          `позиция ${i} видит ${value}, а не общую кучу ${PILE_QTY}: ${rowTexts[i]}`,
-        ).toBe(PILE_QTY);
-      }
-      console.log(`[step4] остатки всех позиций: ${remainders.join(" / ")}`);
+    await page.goto("/planning");
+    await expect(page.getByRole("heading", { name: "План", exact: true })).toBeVisible({
+      timeout: 10_000,
+    });
+    await waitForPlanningTableViaUI(page);
+    const rows = page.locator('[id^="plan-position-"]');
+    await expect(rows, "в плане должно быть ровно 3 позиции ЮП-460").toHaveCount(3);
+    console.log("[step3] план импортирован (3 строки)");
 
-      // ── ШАГ 5. Три разных варианта, а не три копии ─────────────────────
-      const joined = rowTexts.join("\n");
-      expect(joined, "нет варианта «окно»").toMatch(/окн/i);
-      expect(joined, "нет варианта «гребенка»").toMatch(/греб/i);
-      const withoutPress = rowTexts.filter((t) => !/окн/i.test(t) && !/греб/i.test(t));
-      expect(withoutPress.length, "нет варианта без пресса").toBe(1);
-      console.log("[step5] варианты: окно + гребенка + без пресса");
-    } finally {
-      fs.rmSync(path.dirname(planPath), { recursive: true, force: true });
+    // ── ШАГ 4. Общая куча: у всех трёх остаток 1000 ───────────────────
+    const remainders: number[] = [];
+    const rowTexts: string[] = [];
+    for (let i = 0; i < 3; i++) {
+      const text = ((await rows.nth(i).innerText()) ?? "").replace(/\s+/g, " ").trim();
+      rowTexts.push(text);
+      expect(text, `строка ${i}: неожиданный артикул`).toContain(SKU);
+      expect(text, `строка ${i}: маршрут не назначен`).not.toContain("Не назначен");
+      const remainder = parseRemainder(text);
+      expect(remainder, `строка ${i}: индикатор остатка не читается: ${text}`).not.toBeNull();
+      remainders.push(remainder!);
     }
+    for (const [i, value] of remainders.entries()) {
+      expect(
+        value,
+        `позиция ${i} видит ${value}, а не общую кучу ${PILE_QTY}: ${rowTexts[i]}`,
+      ).toBe(PILE_QTY);
+    }
+    console.log(`[step4] остатки всех позиций: ${remainders.join(" / ")}`);
+
+    // ── ШАГ 5. Три разных варианта, а не три копии ─────────────────────
+    const joined = rowTexts.join("\n");
+    expect(joined, "нет варианта «окно»").toMatch(/окн/i);
+    expect(joined, "нет варианта «гребенка»").toMatch(/греб/i);
+    const withoutPress = rowTexts.filter((t) => !/окн/i.test(t) && !/греб/i.test(t));
+    expect(withoutPress.length, "нет варианта без пресса").toBe(1);
+    console.log("[step5] варианты: окно + гребенка + без пресса");
   });
 });

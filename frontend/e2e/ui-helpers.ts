@@ -4,37 +4,32 @@ import { fileURLToPath } from "url";
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 
-export const TEST_XLS_PATH = path.resolve(__dirname, "../../test.xls");
-export const PACKAGING_PLAN_XLS_PATH = path.resolve(__dirname, "../../Упаковочный план.xlsx");
-
-/** Тикет #88: фикстуры полного цикла для ЮП-009 (каталог/остатки/план). */
-export const E2E_CATALOG_XLS_PATH = path.resolve(__dirname, "../../Каталог E2E.xlsx");
-export const E2E_REMAINDERS_XLS_PATH = path.resolve(__dirname, "../../Склад импорта остатков E2E.xlsx");
-export const E2E_PLAN_XLS_PATH = path.resolve(__dirname, "../../Упаковочный план E2E.xlsx");
-/** Одна строка плана (ЮП-009, 2,05 м × 300): позиция для сценария запуск → передачи. */
-export const E2E_PLAN_1LINE_XLS_PATH = path.resolve(
+/**
+ * Хранимые xlsx-фикстуры — по одному основному варианту на вид импорта
+ * (всё в `testdata/`):
+ *  - «Упаковочный план.xlsx» — главный план (~318 строк, десятки артикулов),
+ *    живой импорт через UI-визард (`route-workflow.spec.ts`);
+ *  - «Каталог E2E.xlsx» — справочник сырья ЮП-009, живой импорт через
+ *    визард (`full-cycle.spec.ts`);
+ *  - «Склад импорта остатков E2E.xlsx» — остатки ЮП-009, живой импорт через
+ *    диалог (`full-cycle.spec.ts`).
+ *
+ * Остальные сценарии сетапятся бесфайлово (`POST /api/imports/excel/simulate`
+ * и прямые вызовы API) и отдельных xlsx не хранят.
+ */
+export const PACKAGING_PLAN_XLS_PATH = path.resolve(
   __dirname,
-  "../../Упаковочный план 1 строка E2E.xlsx",
+  "testdata/Упаковочный план.xlsx",
 );
-export const BULK_REMAINDERS_XLS_PATH = path.resolve(__dirname, "../../Склад импорта остатков Bulk E2E.xlsx");
+export const E2E_CATALOG_XLS_PATH = path.resolve(__dirname, "testdata/Каталог E2E.xlsx");
+export const E2E_REMAINDERS_XLS_PATH = path.resolve(
+  __dirname,
+  "testdata/Склад импорта остатков E2E.xlsx",
+);
 export const E2E_SKU = "ЮП-009";
 
-/**
- * Пила в полном цикле: ЮП-2083 с сырьевой длиной 2,75 м и раскроем на четыре
- * длины (0,9 / 1,35 / 1,8 / 2,7 м). Каталог повторяет прод-значения артикула
- * (`excel/final_catalog.xlsx`: длины 2750, периметр 81,5, габарит 36,9, 50 шт
- * на подвесе).
- */
+/** Пила в полном цикле (ЮП-2083, сырьевая длина 2,75 м, раскрой на 4 длины). */
 export const SAW4_SKU = "ЮП-2083";
-export const SAW4_CATALOG_XLS_PATH = path.resolve(__dirname, "../../Каталог пила 4 длины E2E.xlsx");
-export const SAW4_REMAINDERS_XLS_PATH = path.resolve(
-  __dirname,
-  "../../Склад импорта остатков пила 4 длины E2E.xlsx",
-);
-export const SAW4_PLAN_XLS_PATH = path.resolve(
-  __dirname,
-  "../../Упаковочный план пила 4 длины E2E.xlsx",
-);
 
 export const E2E_SECTION = {
   RAW_STOCK: "RAW_STOCK",
@@ -190,7 +185,7 @@ export async function importRemaindersViaUI(page: Page, filePath = E2E_REMAINDER
 }
 
 /** Upload Excel plan via the planning import wizard. */
-export async function uploadTestFileViaUI(page: Page, filePath = TEST_XLS_PATH) {
+export async function uploadTestFileViaUI(page: Page, filePath: string) {
   const templateBtn = page.getByRole("button", { name: /Упаковочная карта РП/i });
   if ((await templateBtn.count()) > 0) {
     await templateBtn.click();

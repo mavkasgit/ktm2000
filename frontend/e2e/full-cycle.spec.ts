@@ -1,7 +1,11 @@
 import { test, expect } from "./fixtures";
 import {
+  apiApplyChangeSet,
+  apiGetActiveTemplate,
+  apiSimulatePlanImport,
+} from "./api-helpers";
+import {
   E2E_CATALOG_XLS_PATH,
-  E2E_PLAN_XLS_PATH,
   E2E_REMAINDERS_XLS_PATH,
   E2E_SKU,
   approvePositionViaUI,
@@ -13,14 +17,17 @@ import {
   seedReferenceDataViaUI,
   sendReadyTransfersViaUI,
   takeToWorkViaUI,
-  uploadTestFileViaUI,
   waitForPlanningTableViaUI,
+  type ApprovablePosition,
 } from "./ui-helpers";
 
 /**
  * @ui — канонический E2E (тикет #88): полный производственный цикл для ЮП-009.
- * Каталог через Excel → остатки → план → утверждение → запуск → маршрут → отгрузка.
- * Только UI, без прямых fetch к бизнес-API.
+ * Каталог и остатки — живой импорт через UI-визарды; план — бесфайловый сетап
+ * через API; дальше approve → запуск → маршрут → отгрузка (UI).
+ *
+ * Живой импорт главного xlsx-плана через визард проверяет
+ * `route-workflow.spec.ts` (фикстура `testdata/Упаковочный план.xlsx`).
  */
 test.describe("@ui Полный цикл производства (ЮП-009)", () => {
   test.beforeEach(async ({ page, loginAsAdmin }) => {
@@ -49,23 +56,59 @@ test.describe("@ui Полный цикл производства (ЮП-009)", (
 
     // ── ШАГ 2. Импорт остатков на «Склад сырья» ───────────────────────
     await importRemaindersViaUI(page, E2E_REMAINDERS_XLS_PATH);
-    console.log("[step3] остатки импортированы");
+    console.log("[step2] остатки импортированы");
 
-    // ── ШАГ 3. Импорт плана из двух позиций ───────────────────────────
+    // ── ШАГ 3. План из двух позиций ───────────────────────────────────
+    const template = await apiGetActiveTemplate();
+    const importRes = await apiSimulatePlanImport(
+      [
+        {
+          sku: E2E_SKU,
+          name: "Уголок 15*15",
+          raw_stock: 400,
+          color: "серебро",
+          qty_per_27: 300,
+          length_m: 2.05,
+          packaging: "смотка спанбондом поштучно в пачке 10 штук",
+          output_length_m: 2.05,
+          output_qty: 300,
+          west: 300,
+          east: 0,
+          kind: "П/ф",
+        },
+        {
+          sku: E2E_SKU,
+          name: "Уголок 15*15",
+          raw_stock: 300,
+          color: "серебро",
+          qty_per_27: 200,
+          length_m: 3.05,
+          packaging: "смотка спанбондом поштучно в пачке 10 штук",
+          output_length_m: 3.05,
+          output_qty: 200,
+          west: 200,
+          east: 0,
+          kind: "П/ф",
+        },
+      ],
+      { templateId: template.id },
+    );
+    await apiApplyChangeSet(importRes.production_plan_id, importRes.change_set_id);
+
     await page.goto("/planning");
     await expect(page.getByRole("heading", { name: "План", exact: true })).toBeVisible({
       timeout: 10_000,
     });
-    await uploadTestFileViaUI(page, E2E_PLAN_XLS_PATH);
     await waitForPlanningTableViaUI(page);
-    console.log("[step4] план импортирован");
+    console.log("[step3] план импортирован");
 
     // ── ШАГ 5. Утверждение обеих позиций (без force-диалога) ──────────
-    const positions = [];
+    const positions: ApprovablePosition[] = [];
     for (let attempt = 0; attempt < 2; attempt++) {
       const position = await findApprovablePositionViaUI(page);
       if (!position) {
         test.skip(true, "Нет утверждаемых позиций после импорта плана ЮП-009");
+        break;
       }
       positions.push(position);
       await approvePositionViaUI(page, position);

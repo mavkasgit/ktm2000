@@ -203,26 +203,113 @@ export async function apiGetActiveTemplate() {
   return template;
 }
 
-export async function apiImportExcel(templateId: number, filePath: string) {
-  const fileBuffer = fs.readFileSync(filePath);
-  const blob = new Blob([fileBuffer], { type: "application/vnd.ms-excel" });
+/** Строка «Упаковочного плана» для бесфайлового импорта (см. `/imports/excel/simulate`). */
+export type SimulatedPlanRow = {
+  sku: string;
+  replenishment?: string | null;
+  name?: string | null;
+  raw_stock?: number | null;
+  color?: string | null;
+  qty_per_27?: number | null;
+  length_m?: number | null;
+  operation?: string | null;
+  packaging?: string | null;
+  note?: string | null;
+  output_length_m?: number | null;
+  output_qty?: number | null;
+  west?: number | null;
+  east?: number | null;
+  kind?: string | null;
+};
 
-  const formData = new FormData();
-  formData.append("file", blob, path.basename(filePath));
-  formData.append("sheet_index", "0");
-  formData.append("mode", "create_plan");
-  formData.append("normalize_hanger_quantity", "true");
-
-  const res = await fetch(`${BACKEND_URL}/api/imports/excel?template_id=${templateId}`, {
+/**
+ * Импорт плана без xlsx: строки уходят в теле запроса, бэкенд собирает
+ * workbook в памяти и прогоняет тот же change-set, что и загрузка файла.
+ * Заменяет хранимые e2e-фикстуры плана.
+ */
+export async function apiSimulatePlanImport(
+  rows: SimulatedPlanRow[],
+  opts: {
+    templateId?: number;
+    productionPlanId?: number;
+    mode?: "create_plan" | "append_to_plan";
+    sheetName?: string;
+  } = {},
+) {
+  const res = await fetch(`${BACKEND_URL}/api/imports/excel/simulate`, {
     method: "POST",
-    body: formData,
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({
+      rows,
+      template_id: opts.templateId ?? null,
+      production_plan_id: opts.productionPlanId ?? null,
+      mode: opts.mode ?? "create_plan",
+      sheet_name: opts.sheetName ?? "totalplan",
+    }),
   });
-
   if (!res.ok) {
-    const errText = await res.text();
-    throw new Error(`Import excel failed: ${res.statusText} (${res.status}) - ${errText}`);
+    throw new Error(`Simulate plan import failed: ${res.statusText} (${res.status}) - ${await res.text()}`);
   }
-  return res.json();
+  return res.json() as Promise<{
+    import_file_id: number;
+    import_batch_id: number;
+    production_plan_id: number;
+    change_set_id: number;
+  }>;
+}
+
+/** Создать/дотянуть артикул справочника сырья через API (idempotent, upsert). */
+export async function apiEnsureCatalogProduct(spec: {
+  sku: string;
+  name: string;
+  lengthsMm: number[];
+  perimeterMm?: number;
+  mountWidthMm?: number;
+  quantityPerHanger?: number;
+  type?: string;
+}) {
+  const primary = spec.lengthsMm[0];
+  const hanger =
+    spec.quantityPerHanger !== undefined
+      ? Object.fromEntries(
+          spec.lengthsMm.map((l) => [String(l), { auto: spec.quantityPerHanger, manual: null }]),
+        )
+      : null;
+  const fields = {
+    sku: spec.sku,
+    name: spec.name,
+    is_catalog_item: true,
+    lengths_mm: spec.lengthsMm,
+    primary_length_mm: primary,
+    length_mm: primary,
+    perimeter_mm: spec.perimeterMm ?? null,
+    mount_width_mm: spec.mountWidthMm ?? null,
+    quantity_per_hanger: hanger,
+  };
+  const search = unwrapItems<{ id: number; sku: string }>(
+    await (await fetch(`${BACKEND_URL}/api/products?q=${encodeURIComponent(spec.sku)}`)).json(),
+  );
+  const existing = search.find((p) => p.sku === spec.sku);
+  const res = existing
+    ? await fetch(`${BACKEND_URL}/api/products/${existing.id}`, {
+        method: "PATCH",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(fields),
+      })
+    : await fetch(`${BACKEND_URL}/api/products`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          ...fields,
+          type: spec.type ?? "component",
+          unit: "pcs",
+          is_active: true,
+        }),
+      });
+  if (!res.ok) {
+    throw new Error(`Upsert product ${spec.sku} failed: ${res.status} ${await res.text()}`);
+  }
+  return (await res.json()) as { id: number; sku: string };
 }
 
 export async function apiApplyChangeSet(planId: number, changeSetId: number) {

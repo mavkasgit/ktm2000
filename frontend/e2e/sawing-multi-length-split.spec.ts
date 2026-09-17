@@ -1,13 +1,13 @@
 import { test, expect } from "./fixtures";
-import path from "path";
 
 /**
  * @ui — Участок пилы: распил одной заготовки на несколько РАЗНЫХ
  * длин (ADR-0002/0003), видимый оператору сценарий на доске участка.
  *
- * Сетап ускорен через API/пресеты (сид, план из «Упаковочный план.xlsx»:
- * группа раскроя АТ-7121 — вход 150×2,7 м → выходы 0,9 м×350 + 1,8 м×50,
- * утверждение, запуск, передача сырья). В UI проверяется живое действие:
+ * Сетап ускорен через API/пресеты (сид, бесфайловый импорт плана
+ * `/imports/excel/simulate`: группа раскроя АТ-7121 — вход 150×2,7 м →
+ * выходы 0,9 м×350 + 1,8 м×50, утверждение, запуск, передача сырья).
+ * В UI проверяется живое действие:
  *
  * 1. Доска пилы (/section-tasks/{SAWING}): карточка трансформации
  *    «150 шт × 2,7 м → 350 × 0,9 м + 50 × 1,8 м».
@@ -30,9 +30,9 @@ import {
   apiGetPlanPositions,
   apiGetProductBySku,
   apiGetSectionByCode,
-  apiImportExcel,
   apiResetAll,
   apiSeedData,
+  apiSimulatePlanImport,
   BACKEND_URL,
   unwrapItems,
 } from "./api-helpers";
@@ -121,8 +121,34 @@ test.describe("@ui Пила: распил одной задачи на неск�
     const product = await apiEnsureBareProduct(SAW_SKU);
 
     const template = await apiGetActiveTemplate();
-    const xlsPath = path.resolve(process.cwd(), "../Упаковочный план.xlsx");
-    const importRes = await apiImportExcel(template.id, xlsPath);
+    const importRes = await apiSimulatePlanImport(
+      [
+        {
+          sku: SAW_SKU,
+          name: "Стык с дюбелем 30 мм 2,7 анод. серебро матовы",
+          raw_stock: 3250,
+          color: "серебро",
+          qty_per_27: 150,
+          length_m: 2.7,
+          packaging: "поф, красная этикетка РП 23*150",
+          output_length_m: 0.9,
+          output_qty: 350,
+          west: 350,
+          east: 0,
+          kind: "ГП",
+        },
+        {
+          sku: SAW_SKU,
+          color: "серебро",
+          output_length_m: 1.8,
+          output_qty: 50,
+          west: 50,
+          east: 0,
+          kind: "ГП",
+        },
+      ],
+      { templateId: template.id },
+    );
     await apiApplyChangeSet(importRes.production_plan_id, importRes.change_set_id);
 
     const positions = (await apiGetPlanPositions(importRes.production_plan_id)) as PlanPositionDto[];

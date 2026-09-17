@@ -1,5 +1,4 @@
 import { test, expect } from "./fixtures";
-import path from "path";
 
 /**
  * E2E test for the explicit-transfer ritual under the auto-issue model:
@@ -17,22 +16,23 @@ import path from "path";
  *
  * Reject/partial-accept were removed from the model — see
  * ``docs/superpowers/plans/2026-07-01-explicit-transfers-mandatory.md``.
+ *
+ * План сетапится бесфайлово (`/imports/excel/simulate`) — xlsx не храним.
  */
 
 import {
   apiAccessTokenFromPage,
   apiAddRemainder,
   apiApplyChangeSet,
-  apiBatchAssignRoute,
   apiGetActiveRoutes,
   apiGetActiveTemplate,
   apiGetPlanPositions,
   apiGetProductBySku,
   apiGetSectionByCode,
-  apiImportExcel,
   apiResetAll,
   apiEnsureTestProducts,
   apiSeedData,
+  apiSimulatePlanImport,
   BACKEND_URL,
   E2E_SECTION,
   unwrapItems,
@@ -62,12 +62,29 @@ test.describe("@smoke Explicit transfer — 2-step ritual (Send + Issue)", () =>
   }) => {
     test.slow();
 
-    // 1. Подготовка данных: продукт, импорт Excel, применение, маршрут
+    // 1. Подготовка данных: продукт, бесфайловый импорт плана, маршрут
     const product2083 = await apiGetProductBySku("ЮП-2083");
 
     const template = await apiGetActiveTemplate();
-    const xlsPath = path.resolve(process.cwd(), "../Упаковочный план.xlsx");
-    const importRes = await apiImportExcel(template.id, xlsPath);
+    const importRes = await apiSimulatePlanImport(
+      [
+        {
+          sku: "ЮП-2083",
+          name: "Стык 38 мм 2,7 анод.серебро, матовый",
+          raw_stock: 2958,
+          color: "серебро",
+          qty_per_27: 200,
+          length_m: 2.7,
+          packaging: "смотка спанбондом поштучно в пачке 10 штук",
+          output_length_m: 2.7,
+          output_qty: 200,
+          west: 200,
+          east: 0,
+          kind: "ГП",
+        },
+      ],
+      { templateId: template.id },
+    );
     await apiApplyChangeSet(importRes.production_plan_id, importRes.change_set_id);
 
     const positions = await apiGetPlanPositions(importRes.production_plan_id);

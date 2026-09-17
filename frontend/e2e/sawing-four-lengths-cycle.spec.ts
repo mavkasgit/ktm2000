@@ -1,22 +1,25 @@
 import { test, expect } from "./fixtures";
 import type { Locator, Page } from "@playwright/test";
-import { apiResetAll } from "./api-helpers";
 import {
-  SAW4_CATALOG_XLS_PATH,
-  SAW4_PLAN_XLS_PATH,
-  SAW4_REMAINDERS_XLS_PATH,
+  apiAddRemainder,
+  apiApplyChangeSet,
+  apiEnsureCatalogProduct,
+  apiGetActiveTemplate,
+  apiGetProductBySku,
+  apiGetSectionByCode,
+  apiResetAll,
+  apiSimulatePlanImport,
+} from "./api-helpers";
+import {
   SAW4_SKU,
   approvePositionViaUI,
   completeAllSectionTasksViaUI,
   expandBoardGroupsViaUI,
   expectShippedViaUI,
   findApprovablePositionViaUI,
-  importCatalogViaUI,
-  importRemaindersViaUI,
   seedReferenceDataViaUI,
   sendReadyTransfersViaUI,
   takeToWorkViaUI,
-  uploadTestFileViaUI,
   waitForPlanningTableViaUI,
   type ApprovablePosition,
 } from "./ui-helpers";
@@ -24,17 +27,17 @@ import {
 /**
  * @ui — Пила внутри ПОЛНОГО цикла: раскрой сырья 2,75 м на ЧЕТЫРЕ длины.
  *
- * Фикстуры (корень репо, генератор — разовый скрипт):
- *  - «Каталог пила 4 длины E2E.xlsx» — ЮП-2083, сырьевая длина 2750 мм
- *    (ADR-0024: импорт материализует вход позиции «ближайшей сверху» сырьевой
- *    длиной, поэтому план пишет 2,7 м, а позиция получает 2,75 м);
- *  - «Склад импорта остатков пила 4 длины E2E.xlsx» — 700 заготовок 2,75 м
- *    на «Склад сырья». Потребность по входам — 400 (150 + 50 + 150 + 50),
- *    сумма штук ГП по позициям — 650 (250 + 50 + 300 + 50): запас покрывает
- *    оба чтения плана. Все количества кратны норме подвеса (50): вход P1 —
- *    3 подвеса, его выходы — 5. До пилы материал считается в штуках входа
- *    (заготовки сырьевой длины) — длины появляются только на пиле (ADR-0002);
- *  - «Упаковочный план пила 4 длины E2E.xlsx» — четыре позиции артикула:
+ * Сетап — бесфайловый (API, xlsx-фикстуры не храним):
+ *  - каталог ЮП-2083, сырьевая длина 2750 мм (ADR-0024: импорт материализует
+ *    вход позиции «ближайшей сверху» сырьевой длиной, поэтому план пишет 2,7 м,
+ *    а позиция получает 2,75 м);
+ *  - остаток: 700 заготовок 2,75 м на «Склад сырья». Потребность по входам —
+ *    400 (150 + 50 + 150 + 50), сумма штук ГП по позициям — 650
+ *    (250 + 50 + 300 + 50): запас покрывает оба чтения плана. Все количества
+ *    кратны норме подвеса (50): вход P1 — 3 подвеса, его выходы — 5. До пилы
+ *    материал считается в штуках входа (заготовки сырьевой длины) — длины
+ *    появляются только на пиле (ADR-0002);
+ *  - план (`/imports/excel/simulate`) — четыре позиции артикула:
  *      P1 ГП: вход 150 × 2,7 м → 0,9 × 50 + 1,35 × 100 + 1,8 × 50 + 2,7 × 50
  *             (вход 3 подвеса, выходы 5 подвесов = 250 шт; импорт количество
  *             не подтягивает; баланс группы:
@@ -49,8 +52,7 @@ import {
  * маршрут → отгрузка) с дополнением по пиле: сводка трансформации в четырёх
  * длинах, две порции факта с промежуточным и полным прогрессом по каждой длине.
  *
- * Сетап — сброс планов dev-API (`reset-all`, как в `sawing-multi-length-split`)
- * плюс импорт каталога/остатков/плана через визарды; все бизнес-шаги — из UI.
+ * Все бизнес-шаги — из UI.
  *
  * Требует запущенного dev-окружения: `npm run dev` из корня проекта.
  */
@@ -70,6 +72,9 @@ const OUTPUTS = [
 /** Порции ввода факта на пиле: 75 + 75 заготовок (ровно половина входа). */
 const PORTIONS = [75, 75] as const;
 const POSITIONS = 4;
+const PACK_GP =
+  "поф, красная этикетка РП 23*150 на каждый профиль и белая этикетка 58*30 на пачку из 10 шт";
+const PACK_SPUN = "смотка спанбондом поштучно в пачке 10 штук";
 
 /** Метка длины как в UI: мм → «1,35 м». */
 function lengthLabel(mm: number): string {
@@ -247,19 +252,128 @@ test.describe("@ui Пила: раскрой 2,75 м на четыре длины
     });
 
     // ── ШАГ 1. Каталог: ЮП-2083 с сырьевой длиной 2750 мм ──────────────────
-    await importCatalogViaUI(page, SAW4_CATALOG_XLS_PATH);
-    console.log("[step1] каталог импортирован");
+    await apiEnsureCatalogProduct({
+      sku: SAW4_SKU,
+      name: "Стык 38мм",
+      lengthsMm: [2750],
+      perimeterMm: 81.5,
+      mountWidthMm: 36.9,
+      quantityPerHanger: 50,
+    });
+    const product = await apiGetProductBySku(SAW4_SKU);
+    console.log("[step1] каталог готов");
 
-    // ── ШАГ 2. Остатки: 400 заготовок 2,75 м на «Склад сырья» ──────────────
-    await importRemaindersViaUI(page, SAW4_REMAINDERS_XLS_PATH);
-    console.log("[step2] остатки импортированы");
+    // ── ШАГ 2. Остатки: 700 заготовок 2,75 м на «Склад сырья» ──────────────
+    const rawStock = await apiGetSectionByCode("RAW_STOCK");
+    await apiAddRemainder(product.id, rawStock.id, 700, "E2E остаток сырья 2750 мм", {
+      length_mm: INPUT_LENGTH_MM,
+    });
+    console.log("[step2] остатки готовы");
 
     // ── ШАГ 3. План из четырёх позиций артикула ────────────────────────────
+    const template = await apiGetActiveTemplate();
+    const importRes = await apiSimulatePlanImport(
+      [
+        // P1 ГП: группа раскроя 150 × 2,7 м → 0,9 + 1,35 + 1,8 + 2,7 м
+        {
+          sku: SAW4_SKU,
+          name: "Стык 38 мм 2,7 анод.серебро, матовый",
+          raw_stock: 2958,
+          color: "серебро",
+          qty_per_27: INPUT_QTY,
+          length_m: 2.7,
+          packaging: PACK_GP,
+          output_length_m: 0.9,
+          output_qty: 50,
+          west: 50,
+          east: 0,
+          kind: "ГП",
+        },
+        {
+          sku: SAW4_SKU,
+          color: "серебро",
+          packaging: PACK_GP,
+          output_length_m: 1.35,
+          output_qty: 100,
+          west: 100,
+          east: 0,
+          kind: "ГП",
+        },
+        {
+          sku: SAW4_SKU,
+          color: "серебро",
+          packaging: PACK_GP,
+          output_length_m: 1.8,
+          output_qty: 50,
+          west: 50,
+          east: 0,
+          kind: "ГП",
+        },
+        {
+          sku: SAW4_SKU,
+          color: "серебро",
+          packaging: PACK_GP,
+          output_length_m: 2.7,
+          output_qty: 50,
+          west: 50,
+          east: 0,
+          kind: "ГП",
+        },
+        // P2 П/ф: 2,7 м × 50 — пила исключена из маршрута
+        {
+          sku: SAW4_SKU,
+          name: "Стык 38 мм 2,7 анод.серебро, матовый",
+          raw_stock: 2958,
+          color: "серебро",
+          qty_per_27: 50,
+          length_m: 2.7,
+          packaging: PACK_SPUN,
+          output_length_m: 2.7,
+          output_qty: 50,
+          west: null,
+          east: 50,
+          kind: "П/ф",
+        },
+        // P3 ГП: 150 × 2,7 м → 1,35 × 300 (одиночный выход раскроя, «сверло»)
+        {
+          sku: SAW4_SKU,
+          name: "Стык 38 мм 2,7 анод.серебро, матовый",
+          raw_stock: 2958,
+          color: "серебро",
+          qty_per_27: INPUT_QTY,
+          length_m: 2.7,
+          operation: "сверло",
+          packaging: PACK_GP,
+          output_length_m: 1.35,
+          output_qty: 300,
+          west: 300,
+          east: 0,
+          kind: "ГП",
+        },
+        // P4 ГП: 50 × 2,7 м → 2,7 × 50 (только торцевание)
+        {
+          sku: SAW4_SKU,
+          name: "Стык 38 мм 2,7 анод.серебро, матовый",
+          raw_stock: 2958,
+          color: "серебро",
+          qty_per_27: 50,
+          length_m: 2.7,
+          packaging: PACK_GP,
+          output_length_m: 2.7,
+          output_qty: 50,
+          west: 50,
+          east: 0,
+          kind: "ГП",
+        },
+      ],
+      { templateId: template.id },
+    );
+    await apiApplyChangeSet(importRes.production_plan_id, importRes.change_set_id);
+
     await page.goto("/planning");
     await expect(page.getByRole("heading", { name: "План", exact: true })).toBeVisible({
       timeout: 10_000,
     });
-    await uploadTestFileViaUI(page, SAW4_PLAN_XLS_PATH);
     await waitForPlanningTableViaUI(page);
     console.log("[step3] план импортирован");
 

@@ -1,21 +1,24 @@
 import { test, expect } from "./fixtures";
-import { apiResetAll } from "./api-helpers";
 import {
-  E2E_CATALOG_XLS_PATH,
-  E2E_PLAN_1LINE_XLS_PATH,
-  E2E_REMAINDERS_XLS_PATH,
+  apiAddRemainder,
+  apiApplyChangeSet,
+  apiEnsureCatalogProduct,
+  apiGetActiveTemplate,
+  apiGetProductBySku,
+  apiGetSectionByCode,
+  apiResetAll,
+  apiSimulatePlanImport,
+} from "./api-helpers";
+import {
   E2E_SKU,
   approvePositionViaUI,
   completeAllSectionTasksViaUI,
   expectShippedViaUI,
   findApprovablePositionViaUI,
-  importCatalogViaUI,
-  importRemaindersViaUI,
   seedReferenceDataViaUI,
   sendReadyTransfersViaUI,
   takeToWorkViaUI,
   transferRouteChainViaUI,
-  uploadTestFileViaUI,
   waitForPlanningTableViaUI,
 } from "./ui-helpers";
 
@@ -28,11 +31,8 @@ import {
  * каждом из них и снова возвращается на передачи. Цикл идёт, пока есть что
  * отправлять; последний шаг — финальный выпуск в «Отправлено».
  *
- * Фикстуры (корень репо): «Каталог E2E.xlsx», «Склад импорта остатков E2E.xlsx»
- * и «Упаковочный план 1 строка E2E.xlsx» (одна строка ЮП-009, 2,05 м × 300).
- *
- * Сетап — сброс планов dev-API (`reset-all`, как в `sawing-four-lengths-cycle`)
- * плюс сид справочников и импорт через визарды; все бизнес-шаги — из UI.
+ * Позиция плана (ЮП-009, 2,05 м × 300) сетапится бесфайлово через API —
+ * xlsx-фикстуры не храним. Все бизнес-шаги — из UI.
  *
  * Требует запущенного dev-окружения: `npm run dev` из корня проекта.
  */
@@ -57,19 +57,48 @@ test.describe("@ui Одна строка плана: сквозной маршр
     });
 
     // ── ШАГ 1. Каталог ─────────────────────────────────────────────────────
-    await importCatalogViaUI(page, E2E_CATALOG_XLS_PATH);
-    console.log("[step1] каталог импортирован");
+    await apiEnsureCatalogProduct({
+      sku: E2E_SKU,
+      name: "Уголок 15*15",
+      lengthsMm: [2050, 3050],
+      perimeterMm: 60,
+      mountWidthMm: 15,
+    });
+    const product = await apiGetProductBySku(E2E_SKU);
+    console.log("[step1] каталог готов");
 
     // ── ШАГ 2. Остатки на «Склад сырья» ────────────────────────────────────
-    await importRemaindersViaUI(page, E2E_REMAINDERS_XLS_PATH);
-    console.log("[step2] остатки импортированы");
+    const rawStock = await apiGetSectionByCode("RAW_STOCK");
+    await apiAddRemainder(product.id, rawStock.id, 400, "E2E остаток 2050мм", { length_mm: 2050 });
+    console.log("[step2] остатки готовы");
 
     // ── ШАГ 3. План из ОДНОЙ строки ────────────────────────────────────────
+    const template = await apiGetActiveTemplate();
+    const importRes = await apiSimulatePlanImport(
+      [
+        {
+          sku: E2E_SKU,
+          name: "Уголок 15*15",
+          raw_stock: 400,
+          color: "серебро",
+          qty_per_27: 300,
+          length_m: 2.05,
+          packaging: "смотка спанбондом поштучно в пачке 10 штук",
+          output_length_m: 2.05,
+          output_qty: 300,
+          west: 300,
+          east: 0,
+          kind: "П/ф",
+        },
+      ],
+      { templateId: template.id },
+    );
+    await apiApplyChangeSet(importRes.production_plan_id, importRes.change_set_id);
+
     await page.goto("/planning");
     await expect(page.getByRole("heading", { name: "План", exact: true })).toBeVisible({
       timeout: 10_000,
     });
-    await uploadTestFileViaUI(page, E2E_PLAN_1LINE_XLS_PATH);
     await waitForPlanningTableViaUI(page);
     await expect(page.locator('[id^="plan-position-"]')).toHaveCount(1);
     console.log("[step3] план импортирован (1 строка)");
