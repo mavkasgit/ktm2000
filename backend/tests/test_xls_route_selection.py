@@ -1,6 +1,7 @@
-"""Test that verifies route selection for all rows in test.xls.
+"""Test that verifies route selection for all rows of the plan sample.
 
-test.xls contains 33 data rows with various combinations of:
+Сэмпл собирается в памяти (`tests/plan_sample.py`): матрица
+цвет × пробивка/сверловка × вид продукта (6 × 4 × 2 = 48 строк):
 - colors: черный, серебро, золото, шампань, медь, титан
 - operations: окно, гребенка, сверло, (empty)
 - packaging: поф (ГП), смотка спанбондом (П/ф)
@@ -10,9 +11,11 @@ Each row should produce a unique route signature combining:
 - Required sections (WH, DRILL/PRESS, SHOT, ANOD, WIP_WH, SAW, PACK, FG_WH, etc.)
 - Resolved operations (PRESS_WINDOW/PRESS_COMB, ANOD_01/02/..., PACK_STRETCH/PACK_SPUNBOND)
 - Excluded sections based on conditions
+
+Историческая фикстура `test.xls` в репозитории не хранилась — тесты падали
+в чистом клоне; теперь сэмпл генерируется на лету.
 """
 import json
-from pathlib import Path
 
 import pytest
 from sqlalchemy import select
@@ -24,24 +27,15 @@ from app.models.section import Section
 from app.services.excel_import import parse_factory_plan_workbook
 from app.services.route_selection import select_route_for_payload
 
+from tests.plan_sample import build_sample_plan_workbook
 from tests.test_routes_seed import _seed_default_sections
 
 
-TEST_XLS_PATH = Path(__file__).resolve().parent.parent.parent / "test.xls"
-
-
 def _load_test_rows() -> list[dict]:
-    """Load and return parsed rows from test.xls."""
-    raw_bytes = TEST_XLS_PATH.read_bytes()
-    
-    from python_calamine import load_workbook
-    from io import BytesIO
-    wb = load_workbook(BytesIO(raw_bytes))
-    sheet_index = 0
-    if "test" in wb.sheet_names:
-        sheet_index = wb.sheet_names.index("test")
-        
-    parsed = parse_factory_plan_workbook(raw_bytes, "test.xls", sheet_index=sheet_index)
+    """Parse the in-memory plan sample into row payloads."""
+    parsed = parse_factory_plan_workbook(
+        build_sample_plan_workbook(), "sample-plan.xlsx", sheet_index=0
+    )
     rows = []
     for prow in parsed.parsed_rows:
         rows.append({
@@ -291,11 +285,11 @@ def _route_signature(result) -> dict:
 
 @pytest.mark.asyncio
 async def test_test_xls_rows_produce_diverse_routes(client, session) -> None:
-    """Parse test.xls and verify each row produces a route with correct sections and operations."""
+    """Parse the plan sample and verify each row produces a correct route."""
     profile_id = await _seed_full_environment(session)
 
     rows = _load_test_rows()
-    assert len(rows) >= 29, f"Expected at least 29 rows in test.xls, got {len(rows)}"
+    assert len(rows) >= 29, f"Expected at least 29 rows in the plan sample, got {len(rows)}"
 
     results = []
     for row_data in rows:
@@ -442,11 +436,11 @@ async def test_test_xls_rows_produce_diverse_routes(client, session) -> None:
 
 @pytest.mark.asyncio
 async def test_test_xls_unique_route_combinations(client, session) -> None:
-    """Verify that test.xls rows produce all expected unique route combinations.
+    """Verify that the plan sample rows produce all expected unique route combinations.
 
-    Expected unique combos from the data:
-    - 4 colors (черный, серебро, золото, шампань, медь, титан) x
-    - 3 operation types (empty, окно, гребенка, сверло) x
+    Expected unique combos from the sample:
+    - 6 colors (черный, серебро, золото, шампань, медь, титан) x
+    - 4 operation types (empty, окно, гребенка, сверло) x
     - 2 packaging types (ГП, П/Ф)
     = many unique combinations
     """
@@ -471,16 +465,16 @@ async def test_test_xls_unique_route_combinations(client, session) -> None:
         )
         combo_set.add(combo)
 
-    # There should be at least 10 unique combinations given the diversity of test.xls
+    # There should be at least 10 unique combinations given the sample diversity
     assert len(combo_set) >= 10, (
-        f"Expected at least 10 unique route combinations from test.xls, got {len(combo_set)}:\n"
+        f"Expected at least 10 unique route combinations, got {len(combo_set)}:\n"
         + "\n".join([f"  {c}" for c in sorted(combo_set)])
     )
 
 
 @pytest.mark.asyncio
 async def test_test_xls_row_2256_with_skip_shot_blast_excludes_shot(client, session) -> None:
-    """ЮП-2256 (row 7 in test.xls) — черный, без операции, ГП.
+    """ЮП-2256 (первая строка сэмпла) — черный, без операции, ГП.
 
     В CRM для этого продукта установлен пропуск дробеструя (skip_shot_blast=True).
     Проверяем что SHOT исключается из маршрута.
@@ -509,7 +503,7 @@ async def test_test_xls_row_2256_with_skip_shot_blast_excludes_shot(client, sess
     await session.flush()
     await session.refresh(product, attribute_names=["processing_flags"])
 
-    # Payload from test.xls row 7: color=черный, operation="", output_kind=ГП
+    # Payload как в первой строке сэмпла: color=черный, operation="", output_kind=ГП
     payload = {
         "operation": "",
         "output_kind": "ГП",

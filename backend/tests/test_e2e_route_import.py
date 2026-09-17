@@ -25,6 +25,8 @@ from app.models.route import ProductionRoute, RouteRuleProfile, RouteSelectionRu
 from app.models.section import Section
 from app.services.plan_import_service import create_excel_import_change_set
 
+from tests.plan_sample import build_sample_plan_workbook
+
 
 DEFAULT_SECTIONS = [
     {"code": "RAW_STOCK", "name": "Склад сырья", "sort_order": 10, "type": "raw_stock"},
@@ -192,18 +194,15 @@ async def test_e2e_excel_import_creates_routes_with_steps(session) -> None:
     session.add(plan)
     await session.flush()
 
-    # Load real test.xls file
-    import os
-    test_file_path = os.path.join(os.path.dirname(__file__), "..", "..", "test.xls")
-    with open(test_file_path, "rb") as f:
-        file_content = f.read()
+    # Сэмпл плана собирается в памяти — внешняя фикстура `test.xls` не хранится.
+    file_content = build_sample_plan_workbook()
 
-    # Simulate Excel import using real file
+    # Simulate Excel import using the sample workbook
     result = await create_excel_import_change_set(
         session,
-        filename="test.xls",
+        filename="sample-plan.xlsx",
         content=file_content,
-        content_type="application/vnd.ms-excel",
+        content_type="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
         production_plan_id=plan.id,
         template_id=template.id,
         rule_profile_id=profile_id,
@@ -354,18 +353,15 @@ async def test_e2e_excel_import_multiple_rows_reuse_routes(session) -> None:
     session.add(plan)
     await session.flush()
 
-    # Load real test.xls file
-    import os
-    test_file_path = os.path.join(os.path.dirname(__file__), "..", "..", "test.xls")
-    with open(test_file_path, "rb") as f:
-        file_content = f.read()
+    # Сэмпл плана собирается в памяти — внешняя фикстура `test.xls` не хранится.
+    file_content = build_sample_plan_workbook()
 
-    # Simulate Excel import using real file
+    # Simulate Excel import using the sample workbook
     result = await create_excel_import_change_set(
         session,
-        filename="test.xls",
+        filename="sample-plan.xlsx",
         content=file_content,
-        content_type="application/vnd.ms-excel",
+        content_type="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
         production_plan_id=plan.id,
         template_id=template.id,
         rule_profile_id=profile_id,
