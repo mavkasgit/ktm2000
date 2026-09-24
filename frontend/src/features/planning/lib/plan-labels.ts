@@ -1,12 +1,11 @@
 import { PlanPositionOut } from "@/shared/api/productionPlans"
 import type { BadgeProps } from "@/shared/ui/badge"
-import { errorLabels, errorPhraseTranslations, statusLabels, validationLabels, warningLabels } from "@/shared/lib/generated-labels"
+import { errorLabels, errorPhraseTranslations, statusLabels, warningLabels } from "@/shared/lib/generated-labels"
 
-export { errorLabels, statusLabels, validationLabels, warningLabels }
+export { errorLabels, statusLabels, warningLabels }
 export { errorLabels as routeErrorLabels } from "@/shared/lib/generated-labels"
 
 export const planStatusLabels = statusLabels
-export const planValidationLabels = validationLabels
 
 export const statusVariant: Record<string, NonNullable<BadgeProps["variant"]>> = {
   parsed: "secondary",
@@ -24,37 +23,6 @@ export function translateLabel(code: string, labels: Record<string, string>): st
   const [base, ...rest] = String(code).split(":")
   const label = labels[base] ?? base
   return rest.length > 0 ? `${label}: ${rest.join(":")}` : label
-}
-
-export function formatRouteAssignedAt(value: string | null | undefined): string {
-  if (!value) return "дата неизвестна"
-  const dt = new Date(value)
-  if (Number.isNaN(dt.getTime())) return "дата неизвестна"
-  return dt.toLocaleString("ru-RU", {
-    day: "2-digit",
-    month: "2-digit",
-    year: "numeric",
-    hour: "2-digit",
-    minute: "2-digit",
-  })
-}
-
-export function routeMetaLabel(pos: PlanPositionOut): string {
-  const assignedAt = formatRouteAssignedAt(pos.route_assigned_at)
-  if (pos.route_source === "dynamic_build") {
-    return `динамический • ${assignedAt}`
-  }
-  if (pos.route_origin === "manual_confirmed" || pos.route_source === "manual") {
-    return `вручную • ${assignedAt}`
-  }
-  if (pos.route_origin === "auto" || pos.route_source === "auto") {
-    const quality = pos.route_match_quality === "exact" ? "полное" : "скорректирован"
-    return `автомаппинг (${quality}) • ${assignedAt}`
-  }
-  if (pos.route_origin === "legacy" || pos.route_source === "legacy") {
-    return "legacy • дата неизвестна"
-  }
-  return ""
 }
 
 export type DuplicateConflict = {
