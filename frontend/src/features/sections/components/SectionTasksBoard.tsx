@@ -223,6 +223,8 @@ function renderTaskRow(
   bulkMode: boolean | undefined,
   bulkSelection: BulkSelectionController | undefined,
   onAction: (type: TaskActionDialogType, task: SectionBoardTask) => void,
+  onRevokeItem: ((taskId: number) => void) | undefined,
+  isRevoking: boolean,
   readOnly: boolean,
   isLastInGroup = false,
   isInGroup = false,
@@ -273,7 +275,22 @@ function renderTaskRow(
         </Badge>
       </td>
       <td className="p-2">
-        {readOnly ? (
+        {onRevokeItem ? (
+          <Button
+            size="sm"
+            variant={isSelected ? "default" : "outline"}
+            className={`${buttonBase} ${buttonDefault}`}
+            aria-pressed={isSelected}
+            disabled={isRevoking}
+            onClick={(event) => {
+              event.stopPropagation();
+              onRevokeItem(task.id);
+            }}
+            title="Выбрать задание для отзыва из дневного плана"
+          >
+            <span>Отозвать</span>
+          </Button>
+        ) : readOnly ? (
           <span className="text-xs text-muted-foreground">Просмотр</span>
         ) : (
           <Button
@@ -299,6 +316,8 @@ function renderMobileCard(
   bulkMode: boolean | undefined,
   bulkSelection: BulkSelectionController | undefined,
   onAction: (type: TaskActionDialogType, task: SectionBoardTask) => void,
+  onRevokeItem: ((taskId: number) => void) | undefined,
+  isRevoking: boolean,
   isLastInGroup = false,
   readOnly: boolean,
 ) {
@@ -348,8 +367,22 @@ function renderMobileCard(
       {renderOutputsProgress(task, "block text-xs text-muted-foreground tabular-nums border-t pt-2")}
 
 
-      <div className="flex gap-2 pt-1">
-        {readOnly ? (
+        {onRevokeItem ? (
+          <Button
+            size="sm"
+            variant={isSelected ? "default" : "outline"}
+            className={`${buttonBase} ${buttonDefault}`}
+            aria-pressed={isSelected}
+            disabled={isRevoking}
+            onClick={(event) => {
+              event.stopPropagation();
+              onRevokeItem(task.id);
+            }}
+            title="Выбрать задание для отзыва из дневного плана"
+          >
+            <span>Отозвать</span>
+          </Button>
+        ) : readOnly ? (
           <span className="text-xs text-muted-foreground">Режим просмотра</span>
         ) : (
           <Button
@@ -363,7 +396,6 @@ function renderMobileCard(
             <span>Завершить</span>
           </Button>
         )}
-      </div>
     </div>
   );
 }
@@ -486,6 +518,10 @@ type SectionTasksBoardProps = {
   bulkSelection?: BulkSelectionController;
   profile: GroupingProfile;
   onSelectAllVisible?: (ids: number[]) => void;
+  revokeSelection?: BulkSelectionController;
+  onRevokeItem?: (taskId: number) => void;
+  onConfirmRevoke?: () => void;
+  isRevoking?: boolean;
   onCompleteGroup?: (group: TaskGroup) => void;
   page: number;
   setPage: (page: number) => void;
@@ -530,6 +566,10 @@ export function SectionTasksBoard({
   bulkSelection,
   profile,
   onSelectAllVisible,
+  revokeSelection,
+  onRevokeItem,
+  onConfirmRevoke,
+  isRevoking = false,
   onCompleteGroup,
   page,
   setPage,
@@ -704,12 +744,12 @@ export function SectionTasksBoard({
         placeholder: "Поиск",
         layoutSpan: "min-w-[250px]",
       },
-      {
-        kind: "bulk",
+      ...(readOnly ? [] : [{
+        kind: "bulk" as const,
         key: "bulk-mode",
         enabled: bulkMode ?? false,
         onChange: (enabled: boolean) => onBulkModeChange?.(enabled),
-      },
+      }]),
     ];
     if (showStatusFilters) {
       fields.push(
@@ -749,7 +789,7 @@ export function SectionTasksBoard({
       }
     }
     return fields;
-  }, [mode, onModeChange, searchQuery, bulkMode, onBulkModeChange, modeCounts, showCompletedStatus, showStatusFilters]);
+  }, [mode, onModeChange, searchQuery, bulkMode, onBulkModeChange, modeCounts, readOnly, showCompletedStatus, showStatusFilters]);
 
   const handleResetAllFilters = useCallback(() => {
     setSearchQuery("");
@@ -828,19 +868,23 @@ export function SectionTasksBoard({
         );
       }
 
-      const isSelected = bulkMode && bulkSelection?.isSelected(row.task.id);
+      const isSelected = revokeSelection
+        ? revokeSelection.isSelected(row.task.id)
+        : bulkMode && bulkSelection?.isSelected(row.task.id);
       return renderTaskRow(
         row.task,
         isSelected,
         bulkMode,
         bulkSelection,
         onAction,
+        onRevokeItem,
+        isRevoking,
+        readOnly,
         row.isLastInGroup,
         row.isInGroup,
-        readOnly,
       );
     },
-    [bulkMode, bulkSelection, onAction, onCompleteGroup, readOnly, toggleGroup],
+    [bulkMode, bulkSelection, onAction, onCompleteGroup, onRevokeItem, readOnly, revokeSelection, toggleGroup],
   );
 
   const headerCellClass = `${DATA_TABLE_STYLES.headerRow} ${DATA_TABLE_STYLES.headerCell}`;
@@ -871,11 +915,27 @@ export function SectionTasksBoard({
         compact
         fields={modeFields}
         activeSummary={activeFilterSummary}
-        onSelectAll={() => {
+        onSelectAll={onSelectAllVisible ? () => {
           onBulkModeChange?.(true);
-          onSelectAllVisible?.(visibleTasks.filter((t) => t.status !== "waiting_previous").map((t) => t.id));
-        }}
+          onSelectAllVisible(visibleTasks.filter((t) => t.status !== "waiting_previous").map((t) => t.id));
+        } : undefined}
         totalRowCount={total}
+        actions={
+          revokeSelection && revokeSelection.selectedCount > 0 ? (
+            <div className="flex items-center gap-2">
+              <span className="text-xs text-slate-600">
+                Выбрано для отзыва: {revokeSelection.selectedCount}
+              </span>
+              <Button
+                size="sm"
+                onClick={onConfirmRevoke}
+                disabled={!onConfirmRevoke || isRevoking}
+              >
+                {isRevoking ? "Отзыв…" : "Подтвердить отзыв"}
+              </Button>
+            </div>
+          ) : null
+        }
       />
 
       {isLoading && <div className="rounded-lg border p-4 text-sm text-muted-foreground">Загрузка задач...</div>}
@@ -1040,8 +1100,10 @@ export function SectionTasksBoard({
               // Одна задача — рендерим напрямую без шапки группы
               if (isSingleTask) {
                 const task = group.tasks[0];
-                const isSelected = bulkMode && bulkSelection?.isSelected(task.id);
-                return renderMobileCard(task, isSelected, bulkMode, bulkSelection, onAction, true, readOnly);
+                const isSelected = revokeSelection
+                  ? revokeSelection.isSelected(task.id)
+                  : bulkMode && bulkSelection?.isSelected(task.id);
+                return renderMobileCard(task, isSelected, bulkMode, bulkSelection, onAction, onRevokeItem, isRevoking, true, readOnly);
               }
 
               return (
@@ -1115,8 +1177,10 @@ export function SectionTasksBoard({
                   </div>
                   {!isCollapsed && <div className="divide-y divide-muted">{group.tasks.map((task, idx) => {
                     const isLast = idx === group.tasks.length - 1;
-                    const isSelected = bulkMode && bulkSelection?.isSelected(task.id);
-                    return renderMobileCard(task, isSelected, bulkMode, bulkSelection, onAction, isLast, readOnly);
+                    const isSelected = revokeSelection
+                      ? revokeSelection.isSelected(task.id)
+                      : bulkMode && bulkSelection?.isSelected(task.id);
+                    return renderMobileCard(task, isSelected, bulkMode, bulkSelection, onAction, onRevokeItem, isRevoking, isLast, readOnly);
                   })}</div>}
                 </div>
               );

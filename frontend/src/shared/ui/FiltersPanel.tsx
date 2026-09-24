@@ -104,6 +104,8 @@ function renderBulkWithSelectAll(
           size="sm"
           className="h-9 text-xs whitespace-nowrap"
           onClick={() => onSelectAll(true)}
+          disabled={totalRowCount === 0}
+          title={totalRowCount === 0 ? "Нет заданий для выбора" : undefined}
         >
           Выделить все{totalRowCount != null && totalRowCount > 0 ? ` (${totalRowCount})` : ""}
         </Button>

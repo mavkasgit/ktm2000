@@ -21,6 +21,7 @@ import {
   type SectionBoardTask,
   type TaskGroup,
   type ShortageStrategy,
+  type DailyPlanCompositionItem,
 } from "@/shared/api/shopfloor";
 import { queryKeys } from "@/shared/api/queryKeys";
 import { usePaginatedTableQuery } from "@/shared/hooks/usePaginatedTableQuery";
@@ -120,6 +121,7 @@ export function SectionsTasksPage() {
 
   const [viewMode, setViewMode] = useState<TaskBoardViewMode>({ active: true, waiting: false, completed: false });
   const [sectionContentMode, setSectionContentMode] = useState<SectionContentMode>("tasks");
+  const [creatingDailyPlan, setCreatingDailyPlan] = useState(false);
   const [dateRange, setDateRange] = useState<DateRangeValue>({ from: "", to: "" });
   const dateFrom = dateRange.from;
   const dateTo = dateRange.to;
@@ -156,8 +158,11 @@ export function SectionsTasksPage() {
   // Bulk mode state. Mass operations stay in the current page and do not
   // activate single-window/fullscreen navigation.
   const [bulkMode, setBulkMode] = useState(searchParams.get("bulk") === "1");
+  const revokeSelection = useBulkSelection<number>();
   useEffect(() => {
     setSelectedPlanIds(new Set());
+    setCreatingDailyPlan(false);
+    revokeSelection.clear();
   }, [sectionId]);
   const bulkSelection = useBulkSelection<number>();
   const locationRef = useRef(location);
@@ -174,6 +179,9 @@ export function SectionsTasksPage() {
       return nextBulk;
     });
   }, [bulkSelection]);
+  const handleDailyPlanModeChange = useCallback((creating: boolean) => {
+    setCreatingDailyPlan(creating);
+  }, []);
   const [bulkProgress, setBulkProgress] = useState<BulkRunnerProgress | null>(null);
   const [bulkResults, setBulkResults] = useState<BulkActionResultItem<number>[]>([]);
   const [bulkResultsOpen, setBulkResultsOpen] = useState(false);
@@ -324,27 +332,45 @@ export function SectionsTasksPage() {
     })),
   });
   const selectedCompositionsLoading = selectedPlanQueries.some((query) => query.isLoading);
+  const selectedCompositionItems = useMemo(
+    () => selectedPlanQueries.flatMap((query) => query.data?.items ?? []),
+    [selectedPlanQueries],
+  );
   const createPlanMutation = useMutation({
     mutationFn: (payload: CreateDailyPlanInput) => createDailyPlan(payload, requestOptions),
     onSuccess: async (plan) => {
       await queryClient.invalidateQueries({ queryKey: queryKeys.dailyPlans.list(plan.section_id) });
       setSelectedPlanIds(new Set([plan.id]));
+      bulkSelection.clear();
+      revokeSelection.clear();
+      setBulkMode(false);
     },
     onError: (error) => {
       toast({ title: "Не удалось создать план", description: getErrorMessage(error), variant: "destructive" });
     },
   });
-  const revokePlanItemMutation = useMutation({
-    mutationFn: ({ planId, workTaskId }: { planId: number; workTaskId: number }) =>
-      revokeDailyPlanItem(planId, workTaskId, requestOptions),
-    onSuccess: async ({ plan_id }) => {
-      await queryClient.invalidateQueries({ queryKey: queryKeys.dailyPlans.composition(plan_id) });
+  const revokePlanItemsMutation = useMutation({
+    mutationFn: async (items: DailyPlanCompositionItem[]) => {
+      const results = await Promise.allSettled(
+        items.map((item) => revokeDailyPlanItem(item.daily_plan_id, item.work_task_id, requestOptions)),
+      );
+      const failed = results.filter((result) => result.status === "rejected").length;
+      if (failed > 0) {
+        throw new Error(`Не удалось отозвать задания: ${failed} из ${items.length}`);
+      }
+    },
+    onSuccess: async (_, items) => {
+      const planIds = [...new Set(items.map((item) => item.daily_plan_id))];
+      await Promise.all(
+        planIds.map((planId) => queryClient.invalidateQueries({ queryKey: queryKeys.dailyPlans.composition(planId) })),
+      );
       if (sectionId !== null) {
         await queryClient.invalidateQueries({ queryKey: queryKeys.dailyPlans.list(sectionId) });
       }
+      revokeSelection.clear();
     },
     onError: (error) => {
-      toast({ title: "Не удалось отозвать задание", description: getErrorMessage(error), variant: "destructive" });
+      toast({ title: "Не удалось отозвать задания", description: getErrorMessage(error), variant: "destructive" });
     },
   });
 
@@ -894,15 +920,43 @@ export function SectionsTasksPage() {
     () => tasks.filter((t) => bulkSelection.selectedIds.has(t.id)),
     [tasks, bulkSelection.selectedIds],
   );
+  const handleToggleRevokeItem = useCallback(
+    (workTaskId: number) => {
+      if (selectedCompositionItems.some((item) => item.work_task_id === workTaskId)) {
+        revokeSelection.selectOne(workTaskId);
+      }
+    },
+    [revokeSelection, selectedCompositionItems],
+  );
+  const handleConfirmRevoke = useCallback(() => {
+    const items = selectedCompositionItems.filter((item) => revokeSelection.isSelected(item.work_task_id));
+    if (items.length > 0) revokePlanItemsMutation.mutate(items);
+  }, [revokeSelection, revokePlanItemsMutation, selectedCompositionItems]);
+  const handleCreatePlan = useCallback(
+    (planDate: string) => {
+      if (sectionId === null || selectedTasks.length === 0) return;
+      createPlanMutation.mutate({
+        section_id: sectionId,
+        plan_date: planDate,
+        work_task_ids: selectedTasks.map((task) => task.id),
+      });
+    },
+    [createPlanMutation, sectionId, selectedTasks],
+  );
+
   const togglePlanSelection = useCallback((planId: number) => {
+    revokeSelection.clear();
     setSelectedPlanIds((current) => {
       const next = new Set(current);
       if (next.has(planId)) next.delete(planId);
       else next.add(planId);
       return next;
     });
-  }, []);
-  const clearPlanSelection = useCallback(() => setSelectedPlanIds(new Set()), []);
+  }, [revokeSelection]);
+  const clearPlanSelection = useCallback(() => {
+    revokeSelection.clear();
+    setSelectedPlanIds(new Set());
+  }, [revokeSelection]);
 
   const handleSelectAll = useCallback((ids: number[]) => {
     bulkSelection.selectAll(ids);
@@ -1070,9 +1124,9 @@ export function SectionsTasksPage() {
                     onModeChange={setViewMode}
                     onAction={openActionDialog}
                     showStatusFilters
-                    bulkMode={bulkMode}
+                    bulkMode={bulkMode || creatingDailyPlan}
                     onBulkModeChange={toggleBulkMode}
-                    bulkSelection={bulkMode ? bulkSelection : undefined}
+                    bulkSelection={bulkMode || creatingDailyPlan ? bulkSelection : undefined}
                     profile={profile}
                     onSelectAllVisible={handleSelectAll}
                     onCompleteGroup={handleCompleteGroup}
@@ -1089,9 +1143,11 @@ export function SectionsTasksPage() {
                     selectedPlanIds={selectedPlanIds}
                     onTogglePlan={togglePlanSelection}
                     onClearPlans={clearPlanSelection}
+                    onCreatePlan={handleCreatePlan}
+                    selectedTaskCount={selectedTasks.length}
+                    onCreateModeChange={handleDailyPlanModeChange}
                     onOpenPlans={() => setSectionContentMode("plan")}
                     isLoading={dailyPlansLoading}
-                    readOnly
                   />
                 </div>
 
@@ -1163,8 +1219,16 @@ export function SectionsTasksPage() {
                     showStatusFilters={selectedPlanIds.size > 0}
                     showCompletedStatus={selectedPlanIds.size > 0}
                     onAction={openActionDialog}
-                    readOnly
+                    readOnly={!creatingDailyPlan}
                     profile={profile}
+                    bulkMode={creatingDailyPlan ? bulkMode || creatingDailyPlan : false}
+                    onBulkModeChange={toggleBulkMode}
+                    bulkSelection={creatingDailyPlan ? bulkSelection : undefined}
+                    onSelectAllVisible={creatingDailyPlan ? handleSelectAll : undefined}
+                    revokeSelection={!creatingDailyPlan && selectedPlanIds.size > 0 ? revokeSelection : undefined}
+                    onRevokeItem={!creatingDailyPlan && selectedPlanIds.size > 0 ? handleToggleRevokeItem : undefined}
+                    onConfirmRevoke={!creatingDailyPlan && selectedPlanIds.size > 0 ? handleConfirmRevoke : undefined}
+                    isRevoking={revokePlanItemsMutation.isPending}
                     page={1}
                     setPage={() => {}}
                     limit={boardLimit}
@@ -1176,20 +1240,16 @@ export function SectionsTasksPage() {
                 </div>
                 <DailyPlansPanel
                   plans={dailyPlans ?? []}
-                  onCreatePlan={(planDate) => {
-                    if (sectionId === null) return;
-                    createPlanMutation.mutate({ section_id: sectionId, plan_date: planDate, work_task_ids: [] });
-                  }}
+                  onCreatePlan={handleCreatePlan}
+                  selectedTaskCount={selectedTasks.length}
                   selectedPlanIds={selectedPlanIds}
+                  onCreateModeChange={handleDailyPlanModeChange}
                   onTogglePlan={togglePlanSelection}
                   onClearPlans={clearPlanSelection}
                   onOpenPlans={() => setSectionContentMode("tasks")}
-                  compositionItems={selectedPlanQueries.flatMap((query) => query.data?.items ?? [])}
                   isLoading={dailyPlansLoading}
                   isCreating={createPlanMutation.isPending}
                   createErrorMessage={createPlanMutation.error ? getErrorMessage(createPlanMutation.error) : null}
-                  onRevokeItem={(planId, workTaskId) => revokePlanItemMutation.mutate({ planId, workTaskId })}
-                  isRevoking={revokePlanItemMutation.isPending}
                 />
               </div>
             )}

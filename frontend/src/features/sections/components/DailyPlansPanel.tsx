@@ -1,7 +1,7 @@
 import { useEffect, useMemo, useState } from "react";
 
-import type { DailyPlanCompositionItem, DailyPlanSummary } from "@/shared/api/shopfloor";
-import { Button, DatePicker } from "@/shared/ui";
+import type { DailyPlanSummary } from "@/shared/api/shopfloor";
+import { Button, DatePicker, formatDateRu } from "@/shared/ui";
 
 type DailyPlansPanelProps = {
   plans: DailyPlanSummary[];
@@ -12,11 +12,10 @@ type DailyPlansPanelProps = {
   onOpenPlans?: () => void;
   readOnly?: boolean;
   isLoading?: boolean;
-  compositionItems?: DailyPlanCompositionItem[];
-  onRevokeItem?: (planId: number, workTaskId: number) => void;
-  isRevoking?: boolean;
   isCreating?: boolean;
   createErrorMessage?: string | null;
+  selectedTaskCount?: number;
+  onCreateModeChange?: (creating: boolean) => void;
 };
 
 function localToday(): string {
@@ -33,11 +32,10 @@ export function DailyPlansPanel({
   onOpenPlans,
   readOnly = false,
   isLoading = false,
-  compositionItems = [],
-  onRevokeItem,
-  isRevoking = false,
   isCreating = false,
   createErrorMessage = null,
+  selectedTaskCount = 0,
+  onCreateModeChange,
 }: DailyPlansPanelProps) {
   const [creating, setCreating] = useState(false);
   const [planDate, setPlanDate] = useState(localToday);
@@ -58,10 +56,15 @@ export function DailyPlansPanel({
   useEffect(() => {
     if (!isCreating && !createErrorMessage) setCreating(false);
   }, [createErrorMessage, isCreating]);
+  useEffect(() => {
+    onCreateModeChange?.(creating);
+  }, [creating, onCreateModeChange]);
   const cancelCreating = () => {
     setCreating(false);
     setPlanDate(localToday());
   };
+  const hasSelectedTasks = selectedTaskCount > 0;
+
 
   return (
     <aside className="space-y-3 rounded-lg border border-slate-200 bg-white p-3 shadow-sm">
@@ -70,7 +73,7 @@ export function DailyPlansPanel({
           type="button"
           className="group min-w-0 flex-1 justify-center rounded-md px-1 py-0.5 text-center transition-colors hover:bg-blue-50 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-blue-500"
           onClick={onOpenPlans}
-          disabled={!onOpenPlans}
+          disabled={!onOpenPlans || creating}
           aria-label={readOnly ? "Открыть дневные планы" : "Вернуться к заданиям"}
         >
           <h2 className="flex items-center justify-center gap-1.5 whitespace-nowrap text-sm font-semibold text-blue-700 underline decoration-blue-300 underline-offset-4 group-hover:decoration-blue-600">
@@ -84,7 +87,9 @@ export function DailyPlansPanel({
           </h2>
         </button>
         {!readOnly && onCreatePlan && !creating && (
-          <Button size="sm" onClick={startCreating}>Создать план</Button>
+          <Button size="sm" onClick={startCreating}>
+            Создать план
+          </Button>
         )}
         {!readOnly && creating && (
           <Button size="sm" variant="outline" onClick={cancelCreating} disabled={isCreating}>
@@ -106,8 +111,17 @@ export function DailyPlansPanel({
             <span>Номер плана на дату</span>
             <span className="font-semibold tabular-nums">№{planNumber}</span>
           </div>
+          <div className="text-xs text-slate-700">
+            {hasSelectedTasks ? `Выбрано заданий: ${selectedTaskCount}` : "Теперь выделите задания в таблице"}
+          </div>
           {createErrorMessage && <p className="text-xs text-destructive">{createErrorMessage}</p>}
-          <Button size="sm" className="w-full" disabled={isCreating} onClick={() => onCreatePlan?.(planDate)}>
+          <Button
+            size="sm"
+            className="w-full"
+            disabled={isCreating || !hasSelectedTasks}
+            title={hasSelectedTasks ? "Создать дневной план" : "Сначала выделите задания"}
+            onClick={() => onCreatePlan?.(planDate)}
+          >
             {isCreating ? "Создание…" : "Подтвердить"}
           </Button>
         </div>
@@ -149,7 +163,7 @@ export function DailyPlansPanel({
               onClick={() => onTogglePlan(plan.id)}
             >
               <div className="flex items-center justify-between gap-2">
-                <span className="text-sm font-medium">План №{number} · {plan.plan_date}</span>
+                <span className="text-sm font-medium">План №{number} · {formatDateRu(plan.plan_date)}</span>
                 <span className="text-xs font-semibold tabular-nums">{plan.progress_percent}%</span>
               </div>
               <div className="mt-1 text-xs text-slate-500">
@@ -159,38 +173,6 @@ export function DailyPlansPanel({
           );
         })}
       </div>
-      {!readOnly && selectedPlanIds.size > 0 && (
-        <div className="space-y-2 border-t border-slate-100 pt-3">
-          <div className="px-1 text-[11px] font-semibold uppercase tracking-wide text-slate-500">
-            Состав выбранных планов
-          </div>
-          {compositionItems.length === 0 ? (
-            <p className="px-1 text-xs text-slate-500">В выбранных планах нет заданий.</p>
-          ) : (
-            <div className="max-h-64 space-y-1 overflow-y-auto">
-              {compositionItems.map((item) => (
-                <div key={`${item.daily_plan_id}-${item.work_task_id}`} className="flex items-center gap-2 rounded border px-2 py-1.5">
-                  <span className="min-w-0 flex-1 truncate text-xs" title={item.task.display_sku || item.task.product_sku}>
-                    {item.task.display_sku || item.task.product_sku} · план {item.daily_plan_id}
-                  </span>
-                  {onRevokeItem && (
-                    <Button
-                      type="button"
-                      variant="ghost"
-                      size="sm"
-                      className="h-7 px-2 text-xs text-red-700 hover:text-red-800"
-                      disabled={isRevoking}
-                      onClick={() => onRevokeItem(item.daily_plan_id, item.work_task_id)}
-                    >
-                      Отозвать
-                    </Button>
-                  )}
-                </div>
-              ))}
-            </div>
-          )}
-        </div>
-      )}
     </aside>
   );
 }
