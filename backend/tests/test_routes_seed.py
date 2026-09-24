@@ -111,9 +111,9 @@ async def test_seed_routes_creates_characteristic_routes(client, session) -> Non
     response = await client.post("/api/routes-seed")
     assert response.status_code == 201
     data = response.json()
-    assert data == {"import_templates": 1, "route_rule_profiles": 1, "routes": 2, "selection_rules": 17, "sections": 12, "section_operations": 21, "defect_types": 6}
+    assert data == {"import_templates": 1, "route_rule_profiles": 1, "routes": 2, "selection_rules": 18, "sections": 12, "section_operations": 21, "defect_types": 6}
     first_rules_count = len((await session.execute(select(RouteSelectionRule))).scalars().all())
-    assert first_rules_count == 17
+    assert first_rules_count == 18
 
     # idempotency/update behavior
     response2 = await client.post("/api/routes-seed")
@@ -238,7 +238,7 @@ async def test_force_seed_clears_generated_production_data(client, session) -> N
 
     force_response = await client.post("/api/routes-seed?force=true")
     assert force_response.status_code == 201
-    assert force_response.json() == {"import_templates": 1, "route_rule_profiles": 1, "routes": 2, "selection_rules": 17, "sections": 12, "section_operations": 21, "defect_types": 6}
+    assert force_response.json() == {"import_templates": 1, "route_rule_profiles": 1, "routes": 2, "selection_rules": 18, "sections": 12, "section_operations": 21, "defect_types": 6}
 
     for model in (
         ReleaseBatchPosition,
@@ -256,7 +256,7 @@ async def test_force_seed_clears_generated_production_data(client, session) -> N
     ):
         assert await _count(session, model) == 0
 
-    assert len((await session.execute(select(RouteSelectionRule))).scalars().all()) == 17
+    assert len((await session.execute(select(RouteSelectionRule))).scalars().all()) == 18
 
 
 @pytest.mark.asyncio

@@ -12,7 +12,7 @@
  * что автоматически убирает браузерные колонтитулы.
  */
 
-import { useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
+import { useEffect, useLayoutEffect, useRef, useState } from "react";
 import * as RadixDialog from "@radix-ui/react-dialog";
 import type { SectionBoardTask } from "@/shared/api/shopfloor";
 import { PlanTaskTable } from "./PlanTaskTable";
@@ -54,143 +54,27 @@ export const ALL_PRINT_COLUMNS: PrintColumn[] = [
 
 export { printColumnLabels as PRINT_COLUMN_LABELS } from "@/shared/lib/generated-labels";
 
-// ---------------------------------------------------------------------------
-// PrintPreviewTable
-// ---------------------------------------------------------------------------
-
-interface PrintPreviewTableProps {
-  title: string;
-  tasks: SectionBoardTask[];
-  profile: GroupingProfile;
-  mode: PlanTableMode;
-  settings: PrintSettings;
-  hiddenGroupKeys: Set<string>;
-}
-
-function PrintPreviewTable({
-  title,
-  tasks,
-  profile,
-  mode,
-  settings,
-  hiddenGroupKeys,
-}: PrintPreviewTableProps) {
-  const allGroups = useMemo(
-    () => groupTasksByProfile(tasks, profile),
-    [tasks, profile],
-  );
-
-  const rows = useMemo(() => {
-    const groups = allGroups.filter((g) => !hiddenGroupKeys.has(g.key));
-    return buildPlanRows(groups, mode).filter((row) => {
-      if (row.planQty - row.doneQty <= 0) return false;
-      if (settings.minQty !== null && row.planQty < settings.minQty) return false;
-      if (settings.maxQty !== null && row.planQty > settings.maxQty) return false;
-      return true;
-    });
-  }, [allGroups, mode, settings.minQty, settings.maxQty, hiddenGroupKeys]);
-
-  if (rows.length === 0) return null;
-
-  const hasCol = (col: PrintColumn) => settings.columns.includes(col);
-  const showHanger = settings.showQtyPerHanger;
-
-  const getOpNames = (task: SectionBoardTask) => {
-    const ops = profile.criteria.includes("routeHistoryAfter")
-      ? (task.route_history_after ?? [])
-      : (task.route_history ?? []).filter((op) => op.is_significant);
-    const unique = new Set<string>();
-    for (const op of ops) {
-      if (op.is_significant) unique.add(op.operation_name ?? "—");
-    }
-    return unique.size > 0 ? Array.from(unique).join(" / ") : "—";
-  };
-
-  return (
-    <div className="mb-4">
-      <h3 className="text-xs font-semibold mb-1">{title}</h3>
-      <div className="print-lines text-[14px] space-y-0.5">
-        {rows.map((row) => {
-          const task = row.task;
-          const qtyPerHanger = getQtyPerHanger(task);
-          const pairedLabel = getPairedHangerLabel(task);
-          const { hangers } = adjustQtyToHanger(
-            row.planQty,
-            qtyPerHanger,
-          );
-
-          const parts: string[] = [];
-          if (hasCol("productSku")) parts.push(task.product_sku);
-          if (hasCol("operationName") && profile.criteria.includes("operationCode"))
-            parts.push(getOpNames(task));
-          if (hasCol("dimensions"))
-            parts.push(formatDimensionsLabel(row.dimensions));
-
-          const qtyParts: string[] = [];
-          if (hasCol("qtyPlan"))
-            qtyParts.push(`План: ${row.planQty.toFixed(0)}`);
-          if (showHanger) {
-            const hangerQty =
-              pairedLabel ??
-              (qtyPerHanger != null ? String(qtyPerHanger) : "—");
-            qtyParts.push(`Подвесов: ${hangers}П (${hangerQty}шт/п)`);
-          }
-          if (hasCol("qtyRemaining"))
-            qtyParts.push(
-              mode === "issue"
-                ? `Ост. выдать: ${(row.planQty - row.issuedQty >= 0 ? row.planQty - row.issuedQty : 0).toFixed(0)}`
-                : `Сделано: ${row.doneQty.toFixed(0)}`,
-            );
-          if (hasCol("qtyTransferred"))
-            qtyParts.push(`Передано: ${row.transferredQty.toFixed(0)}`);
-          if (hasCol("qtyBalance"))
-            qtyParts.push(`Остаток: ${row.balanceQty.toFixed(0)}`);
-
-          if (qtyParts.length > 0) parts.push(qtyParts.join(" | "));
-
-          return (
-            <div key={row.key} className="border-b border-gray-200 pb-0.5">
-              {parts.join(" | ")}
-            </div>
-          );
-        })}
-      </div>
-    </div>
-  );
-}
 
 // ---------------------------------------------------------------------------
 // PlanPrintPreviewModal (Radix Dialog)
 // ---------------------------------------------------------------------------
 
 interface PlanPrintPreviewModalProps {
-  sectionId: number;
   sectionName: string;
   onClose: () => void;
-  hasBefore: boolean;
-  hasAfter: boolean;
   tasks: SectionBoardTask[];
-  beforeProfile: GroupingProfile;
-  afterProfile: GroupingProfile;
-  singleProfile: GroupingProfile | null;
-  showSingleTable: boolean;
   settings: PrintSettings;
   groupingMode: PlanTaskGroupingMode;
+  hiddenGroupKeys: Set<string>;
 }
 
 export function PlanPrintPreviewModal({
-  sectionId,
   sectionName,
   onClose,
-  hasBefore,
-  hasAfter,
   tasks,
-  beforeProfile,
-  afterProfile,
-  singleProfile,
-  showSingleTable,
   settings,
   groupingMode,
+  hiddenGroupKeys,
 }: PlanPrintPreviewModalProps) {
   const contentRef = useRef<HTMLDivElement>(null);
 

@@ -276,19 +276,12 @@ export function PlanModal({
 
       {printSettingsOpen && (
         <PlanPrintPreviewModal
-          sectionId={sectionId}
           sectionName={sectionName}
           onClose={() => setPrintSettingsOpen(false)}
-          hasBefore={false}
-          hasAfter={false}
           tasks={filteredTasks}
-          beforeProfile={{ id: "article", name: "По артикулу", criteria: ["productSku"] }}
-          afterProfile={{ id: "color", name: "По цвету анодирования", criteria: ["productSku", "outputKind"] }}
-          singleProfile={{ id: "article", name: "По артикулу", criteria: ["productSku"] }}
-          showSingleTable
           settings={printSettings}
-          hiddenGroupKeys={hiddenGroupKeys}
           groupingMode={groupingMode}
+          hiddenGroupKeys={hiddenGroupKeys}
         />
       )}
 
