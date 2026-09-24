@@ -20,10 +20,14 @@ pytestmark = pytest.mark.asyncio
 PLAN_DATE = date(2026, 9, 24)
 
 
-async def _create_plan(auth_client, task_id: int) -> dict:
+async def _create_plan(auth_client, task_id: int, section_id: int) -> dict:
     response = await auth_client.post(
         "/api/daily-plans",
-        json={"plan_date": PLAN_DATE.isoformat(), "work_task_ids": [task_id]},
+        json={
+            "section_id": section_id,
+            "plan_date": PLAN_DATE.isoformat(),
+            "work_task_ids": [task_id],
+        },
     )
     assert response.status_code == 201, response.text
     return response.json()
@@ -38,6 +42,7 @@ async def test_same_date_plans_are_allowed(
     first_response = await auth_client.post(
         "/api/daily-plans",
         json={
+            "section_id": first["task"].section_id,
             "plan_date": PLAN_DATE.isoformat(),
             "work_task_ids": [first["task"].id],
         },
@@ -45,6 +50,7 @@ async def test_same_date_plans_are_allowed(
     second_response = await auth_client.post(
         "/api/daily-plans",
         json={
+            "section_id": second["task"].section_id,
             "plan_date": PLAN_DATE.isoformat(),
             "work_task_ids": [second["task"].id],
         },
@@ -58,6 +64,24 @@ async def test_same_date_plans_are_allowed(
     assert first_plan["plan_date"] == PLAN_DATE.isoformat()
     assert second_plan["plan_date"] == PLAN_DATE.isoformat()
 
+async def test_create_empty_daily_plan(auth_client, session: AsyncSession) -> None:
+    fixture = await _setup_minimal_route(session, sku="DP-EMPTY")
+    response = await auth_client.post(
+        "/api/daily-plans",
+        json={
+            "section_id": fixture["task"].section_id,
+            "plan_date": PLAN_DATE.isoformat(),
+            "work_task_ids": [],
+        },
+    )
+    assert response.status_code == 201, response.text
+    plan = response.json()
+    assert plan["item_count"] == 0
+    assert plan["progress_percent"] == 0
+    items = await auth_client.get(f"/api/daily-plans/{plan['id']}/items")
+    assert items.status_code == 200, items.text
+    assert items.json()["items"] == []
+
 
 async def test_create_rejects_completed_task(
     auth_client, session: AsyncSession
@@ -69,6 +93,7 @@ async def test_create_rejects_completed_task(
     response = await auth_client.post(
         "/api/daily-plans",
         json={
+            "section_id": fixture["task"].section_id,
             "plan_date": PLAN_DATE.isoformat(),
             "work_task_ids": [fixture["task"].id],
         },
@@ -77,16 +102,16 @@ async def test_create_rejects_completed_task(
     assert response.status_code == 422, response.text
     assert "terminal" in response.json()["detail"].lower()
 
-
 async def test_create_rejects_task_in_another_active_plan(
     auth_client, session: AsyncSession
 ) -> None:
     fixture = await _setup_minimal_route(session, sku="DP-CONFLICT")
-    first_plan = await _create_plan(auth_client, fixture["task"].id)
+    first_plan = await _create_plan(auth_client, fixture["task"].id, fixture["task"].section_id)
 
     response = await auth_client.post(
         "/api/daily-plans",
         json={
+            "section_id": fixture["task"].section_id,
             "plan_date": PLAN_DATE.isoformat(),
             "work_task_ids": [fixture["task"].id],
         },
@@ -106,7 +131,7 @@ async def test_composition_keeps_completed_work_task(
     auth_client, session: AsyncSession
 ) -> None:
     fixture = await _setup_minimal_route(session, sku="DP-COMPOSITION")
-    plan = await _create_plan(auth_client, fixture["task"].id)
+    plan = await _create_plan(auth_client, fixture["task"].id, fixture["task"].section_id)
     fixture["task"].status = WorkTaskStatus.completed
     await session.commit()
 
@@ -123,7 +148,7 @@ async def test_revoke_removes_membership_preserves_task_and_audits(
     auth_client, session: AsyncSession
 ) -> None:
     fixture = await _setup_minimal_route(session, sku="DP-REVOKE")
-    plan = await _create_plan(auth_client, fixture["task"].id)
+    plan = await _create_plan(auth_client, fixture["task"].id, fixture["task"].section_id)
     task_id = fixture["task"].id
     before = await session.get(WorkTask, task_id)
     assert before is not None

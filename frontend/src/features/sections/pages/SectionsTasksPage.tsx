@@ -10,7 +10,6 @@ import {
   bulkCompleteTasks,
   completeTask,
   createDailyPlan,
-  getDailyPlanCandidates,
   getDailyPlanComposition,
   getSectionBoard,
   getSectionDailyStats,
@@ -35,7 +34,6 @@ import { SectionTasksBoard, type TaskActionDialogType, type TaskBoardViewMode } 
 import { TaskActionDrawer } from "../components/TaskActionDrawer";
 import { BulkOperationsPanel } from "../components/BulkOperationsPanel";
 import { DailyPlansPanel } from "../components/DailyPlansPanel";
-import { DailyPlanCreateDialog } from "../components/DailyPlanCreateDialog";
 import { mergeDailyPlanTasks } from "../lib/dailyPlans";
 import { PlanModal } from "../components/PlanModal";
 import { SectionStockBalances } from "../components/SectionStockBalances";
@@ -120,7 +118,7 @@ export function SectionsTasksPage() {
   );
   const profile = PRESET_PROFILES.find((p) => p.id === "sku+routeHistoryAfter") || PRESET_PROFILES[2];
 
-  const [viewMode, setViewMode] = useState<TaskBoardViewMode>({ active: true, waiting: true, completed: false });
+  const [viewMode, setViewMode] = useState<TaskBoardViewMode>({ active: true, waiting: false, completed: false });
   const [sectionContentMode, setSectionContentMode] = useState<SectionContentMode>("tasks");
   const [dateRange, setDateRange] = useState<DateRangeValue>({ from: "", to: "" });
   const dateFrom = dateRange.from;
@@ -154,7 +152,6 @@ export function SectionsTasksPage() {
   const [autoTransferNext, setAutoTransferNext] = useState(false);
   const [planModalOpen, setPlanModalOpen] = useState(false);
   const [selectedPlanIds, setSelectedPlanIds] = useState<Set<number>>(new Set());
-  const [createPlanDialogOpen, setCreatePlanDialogOpen] = useState(false);
 
   // Bulk mode state
   const [bulkMode, setBulkMode] = useState(searchParams.get("bulk") === "1" || searchParams.get("singleWindow") === "1");
@@ -337,22 +334,6 @@ export function SectionsTasksPage() {
     retry: false,
   });
 
-  const {
-    data: dailyPlanCandidates,
-    error: dailyPlanCandidatesError,
-    isLoading: dailyPlanCandidatesLoading,
-  } = useQuery({
-    queryKey: [
-      ...queryKeys.dailyPlans.all(),
-      "candidates",
-      sectionId,
-      requestOptions?.singleSectionLockId ?? null,
-    ],
-    queryFn: () => getDailyPlanCandidates(sectionId as number, requestOptions),
-    enabled: createPlanDialogOpen && sectionId !== null && !!me?.id && !isSingleWindowBlocked,
-    retry: false,
-  });
-
   const selectedPlanIdList = useMemo(
     () => [...selectedPlanIds].sort((left, right) => left - right),
     [selectedPlanIds],
@@ -370,11 +351,7 @@ export function SectionsTasksPage() {
     mutationFn: (payload: CreateDailyPlanInput) => createDailyPlan(payload, requestOptions),
     onSuccess: async (plan) => {
       await queryClient.invalidateQueries({ queryKey: queryKeys.dailyPlans.list(plan.section_id) });
-      await queryClient.invalidateQueries({
-        queryKey: [...queryKeys.dailyPlans.all(), "candidates", plan.section_id],
-      });
       setSelectedPlanIds(new Set([plan.id]));
-      setCreatePlanDialogOpen(false);
     },
     onError: (error) => {
       toast({ title: "Не удалось создать план", description: getErrorMessage(error), variant: "destructive" });
@@ -387,9 +364,6 @@ export function SectionsTasksPage() {
       await queryClient.invalidateQueries({ queryKey: queryKeys.dailyPlans.composition(plan_id) });
       if (sectionId !== null) {
         await queryClient.invalidateQueries({ queryKey: queryKeys.dailyPlans.list(sectionId) });
-        await queryClient.invalidateQueries({
-          queryKey: [...queryKeys.dailyPlans.all(), "candidates", sectionId],
-        });
       }
     },
     onError: (error) => {
@@ -1142,6 +1116,7 @@ export function SectionsTasksPage() {
                     mode={viewMode}
                     onModeChange={setViewMode}
                     onAction={openActionDialog}
+                    showStatusFilters
                     bulkMode={bulkMode}
                     onBulkModeChange={toggleBulkMode}
                     bulkSelection={bulkMode ? bulkSelection : undefined}
@@ -1161,6 +1136,7 @@ export function SectionsTasksPage() {
                     selectedPlanIds={selectedPlanIds}
                     onTogglePlan={togglePlanSelection}
                     onClearPlans={clearPlanSelection}
+                    onOpenPlans={() => setSectionContentMode("plan")}
                     isLoading={dailyPlansLoading}
                     readOnly
                   />
@@ -1231,6 +1207,8 @@ export function SectionsTasksPage() {
                     isLoading={boardLoading || selectedCompositionsLoading}
                     mode={sectionContentMode === "plan" ? { active: true, waiting: true, completed: true } : viewMode}
                     onModeChange={setViewMode}
+                    showStatusFilters={selectedPlanIds.size > 0}
+                    showCompletedStatus={selectedPlanIds.size > 0}
                     onAction={openActionDialog}
                     readOnly
                     profile={profile}
@@ -1245,12 +1223,18 @@ export function SectionsTasksPage() {
                 </div>
                 <DailyPlansPanel
                   plans={dailyPlans ?? []}
-                  onCreatePlan={() => setCreatePlanDialogOpen(true)}
+                  onCreatePlan={(planDate) => {
+                    if (sectionId === null) return;
+                    createPlanMutation.mutate({ section_id: sectionId, plan_date: planDate, work_task_ids: [] });
+                  }}
                   selectedPlanIds={selectedPlanIds}
                   onTogglePlan={togglePlanSelection}
                   onClearPlans={clearPlanSelection}
+                  onOpenPlans={() => setSectionContentMode("tasks")}
                   compositionItems={selectedPlanQueries.flatMap((query) => query.data?.items ?? [])}
                   isLoading={dailyPlansLoading}
+                  isCreating={createPlanMutation.isPending}
+                  createErrorMessage={createPlanMutation.error ? getErrorMessage(createPlanMutation.error) : null}
                   onRevokeItem={(planId, workTaskId) => revokePlanItemMutation.mutate({ planId, workTaskId })}
                   isRevoking={revokePlanItemMutation.isPending}
                 />
@@ -1309,21 +1293,7 @@ export function SectionsTasksPage() {
         tasks={displayedTasks}
         availableOperations={board?.available_operations || []}
       />
-      <DailyPlanCreateDialog
-        open={createPlanDialogOpen}
-        onOpenChange={(open) => {
-          setCreatePlanDialogOpen(open);
-          if (!open) createPlanMutation.reset();
-        }}
-        candidates={dailyPlanCandidates ?? []}
-        isLoadingCandidates={dailyPlanCandidatesLoading}
-        candidatesErrorMessage={
-          dailyPlanCandidatesError ? getErrorMessage(dailyPlanCandidatesError) : null
-        }
-        isSaving={createPlanMutation.isPending}
-        errorMessage={createPlanMutation.error ? getErrorMessage(createPlanMutation.error) : null}
-        onCreate={(payload) => createPlanMutation.mutate(payload)}
-      />
+      {/* Daily plans are created inline in the plans panel. */}
 
 
 

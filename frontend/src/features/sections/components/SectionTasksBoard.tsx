@@ -495,6 +495,8 @@ type SectionTasksBoardProps = {
   onModeChange: (next: TaskBoardViewMode) => void;
   onAction: (type: TaskActionDialogType, task: SectionBoardTask) => void;
   readOnly?: boolean;
+  showStatusFilters?: boolean;
+  showCompletedStatus?: boolean;
   bulkMode?: boolean;
   onBulkModeChange?: (enabled: boolean) => void;
   bulkSelection?: BulkSelectionController;
@@ -529,8 +531,6 @@ type VirtualBoardRow =
 
 // ---------------------------------------------------------------------------
 // Компонент
-// ---------------------------------------------------------------------------
-
 export function SectionTasksBoard({
   tasks,
   total,
@@ -539,6 +539,8 @@ export function SectionTasksBoard({
   onModeChange,
   onAction,
   readOnly = false,
+  showStatusFilters = true,
+  showCompletedStatus = false,
   bulkMode,
   onBulkModeChange,
   bulkSelection,
@@ -708,49 +710,62 @@ export function SectionTasksBoard({
     completed: tasks.filter((t) => getTaskViewCategory(t) === "completed").length,
   }), [tasks]);
 
-  const modeFields = useMemo((): FiltersPanelField[] => [
-    {
-      kind: "search",
-      key: "search",
-      value: searchQuery,
-      onChange: setSearchQuery,
-      placeholder: "Поиск",
-      layoutSpan: "min-w-[250px]",
-    },
-    {
-      kind: "bulk",
-      key: "bulk-mode",
-      enabled: bulkMode ?? false,
-      onChange: (enabled: boolean) => onBulkModeChange?.(enabled),
-    },
-    {
-      kind: "toggle",
-      key: "mode-active",
-      label: "Активные",
-      badgeCount: modeCounts.active,
-      checked: mode.active,
-      onChange: () => onModeChange({ ...mode, active: !mode.active }),
-      layoutSpan: "min-w-[0px]",
-    },
-    {
-      kind: "toggle",
-      key: "mode-waiting",
-      label: "Ожидают",
-      badgeCount: modeCounts.waiting,
-      checked: mode.waiting,
-      onChange: () => onModeChange({ ...mode, waiting: !mode.waiting }),
-      layoutSpan: "min-w-[0px]",
-    },
-    {
-      kind: "toggle",
-      key: "mode-completed",
-      label: "Завершенные",
-      badgeCount: modeCounts.completed,
-      checked: mode.completed,
-      onChange: () => onModeChange({ ...mode, completed: !mode.completed }),
-      layoutSpan: "min-w-[0px]",
-    },
-  ], [mode, onModeChange, searchQuery, bulkMode, onBulkModeChange, modeCounts]);
+  const modeFields = useMemo((): FiltersPanelField[] => {
+    const fields: FiltersPanelField[] = [
+      {
+        kind: "search",
+        key: "search",
+        value: searchQuery,
+        onChange: setSearchQuery,
+        placeholder: "Поиск",
+        layoutSpan: "min-w-[250px]",
+      },
+      {
+        kind: "bulk",
+        key: "bulk-mode",
+        enabled: bulkMode ?? false,
+        onChange: (enabled: boolean) => onBulkModeChange?.(enabled),
+      },
+    ];
+    if (showStatusFilters) {
+      fields.push(
+        {
+          kind: "toggle",
+          key: "mode-active",
+          label: "Активные",
+          badgeCount: modeCounts.active,
+          checked: mode.active,
+          onChange: () => onModeChange({ ...mode, active: !mode.active }),
+          hideIcon: true,
+          layoutSpan: "min-w-[0px]",
+        },
+        {
+          kind: "toggle",
+          key: "mode-waiting",
+          label: "Ожидают",
+          badgeCount: modeCounts.waiting,
+          checked: mode.waiting,
+          onChange: () => onModeChange({ ...mode, waiting: !mode.waiting }),
+          hideIcon: true,
+          disabled: true,
+          layoutSpan: "min-w-[0px]",
+        },
+      );
+      if (showCompletedStatus) {
+        fields.push({
+          kind: "toggle",
+          key: "mode-completed",
+          label: "Завершенные",
+          badgeCount: modeCounts.completed,
+          checked: mode.completed,
+          onChange: () => onModeChange({ ...mode, completed: !mode.completed }),
+          hideIcon: true,
+          layoutSpan: "min-w-[0px]",
+        });
+      }
+    }
+    return fields;
+  }, [mode, onModeChange, searchQuery, bulkMode, onBulkModeChange, modeCounts, showCompletedStatus, showStatusFilters]);
 
   const handleResetAllFilters = useCallback(() => {
     setSearchQuery("");

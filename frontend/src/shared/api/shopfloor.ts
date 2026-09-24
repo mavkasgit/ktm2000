@@ -165,6 +165,7 @@ export type DailyPlanCompositionResponse = {
 };
 
 export type CreateDailyPlanInput = {
+  section_id: number;
   plan_date: string;
   work_task_ids: number[];
 };
@@ -304,16 +305,6 @@ export async function listDailyPlans(
   return data;
 }
 
-export async function getDailyPlanCandidates(
-  sectionId: number,
-  options?: ShopfloorRequestOptions,
-): Promise<SectionBoardTask[]> {
-  const { data } = await apiClient.get<SectionBoardTask[]>(
-    `/daily-plans/sections/${sectionId}/candidates`,
-    makeRequestConfig(options),
-  );
-  return data;
-}
 
 export async function getDailyPlanComposition(
   planId: number,

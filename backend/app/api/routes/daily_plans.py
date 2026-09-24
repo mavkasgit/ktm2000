@@ -12,7 +12,6 @@ from app.services.daily_plan_service import (
     DailyPlanConflict,
     DailyPlanNotFound,
     create_plan,
-    list_candidates,
     list_items,
     list_plans_for_section,
     revoke_item,
@@ -22,9 +21,9 @@ router = APIRouter(prefix="/daily-plans", tags=["daily-plans"])
 
 
 class DailyPlanCreate(BaseModel):
+    section_id: int
     plan_date: date
-    work_task_ids: list[int] = Field(min_length=1)
-
+    work_task_ids: list[int] = Field(default_factory=list)
 
 class DailyPlanOut(BaseModel):
     id: int
@@ -54,14 +53,6 @@ async def get_section_daily_plans(
     return await list_plans_for_section(db, section_id)
 
 
-@router.get("/sections/{section_id}/candidates", response_model=list[dict[str, Any]])
-async def get_daily_plan_candidates(
-    section_id: int,
-    db: AsyncSession = Depends(get_db),
-    _: User = Depends(require_role(READER_ROLES)),
-) -> list[dict[str, Any]]:
-    return await list_candidates(db, section_id)
-
 
 @router.post("", response_model=DailyPlanOut, status_code=status.HTTP_201_CREATED)
 async def post_daily_plan(
@@ -71,7 +62,11 @@ async def post_daily_plan(
 ) -> dict[str, Any]:
     try:
         return await create_plan(
-            db, plan_date=payload.plan_date, work_task_ids=payload.work_task_ids, created_by=current_user.id
+            db,
+            section_id=payload.section_id,
+            plan_date=payload.plan_date,
+            work_task_ids=payload.work_task_ids,
+            created_by=current_user.id,
         )
     except DailyPlanConflict as exc:
         raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail=str(exc)) from exc

@@ -43,8 +43,9 @@ function renderToggleField(field: Extract<FiltersPanelField, { kind: "toggle" }>
     <Button
       variant={field.checked ? "default" : "outline"}
       size="sm"
-      className={cn("h-9 text-xs whitespace-nowrap", field.checked ? tone.checked : tone.unchecked)}
+      className={cn("h-9 text-xs whitespace-nowrap", field.checked ? tone.checked : tone.unchecked, field.disabled && "cursor-not-allowed opacity-50")}
       onClick={() => field.onChange(!field.checked)}
+      disabled={field.disabled}
     >
       {!field.hideIcon &&
         (field.checked ? (
@@ -138,6 +139,7 @@ export type FiltersPanelField =
       kind: "toggle";
       key: string;
       label: string;
+      disabled?: boolean;
       checked: boolean;
       onChange: (checked: boolean) => void;
       badgeCount?: number;

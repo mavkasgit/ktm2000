@@ -4,7 +4,7 @@ from datetime import date
 from decimal import Decimal
 from typing import Any
 
-from sqlalchemy import exists, select
+from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.models.daily_plan import DailyPlan, DailyPlanItem
@@ -105,29 +105,6 @@ async def _composition(db: AsyncSession, plan: DailyPlan) -> list[dict[str, Any]
     return items
 
 
-async def list_candidates(db: AsyncSession, section_id: int) -> list[dict[str, Any]]:
-    from app.services.shopfloor.queries_sections import get_section_board
-
-    board = await get_section_board(
-        db,
-        section_id=section_id,
-        limit=500,
-        offset=0,
-    )
-    candidate_ids = set((await db.execute(
-        select(WorkTask.id)
-        .where(
-            WorkTask.section_id == section_id,
-            WorkTask.status.notin_(TERMINAL_TASK_STATUSES),
-            ~exists(
-                select(DailyPlanItem.work_task_id).where(
-                    DailyPlanItem.work_task_id == WorkTask.id
-                )
-            ),
-        )
-    )).scalars().all())
-    return [task for task in board["tasks"] if task["id"] in candidate_ids]
-
 
 async def list_plans_for_section(db: AsyncSession, section_id: int) -> list[dict[str, Any]]:
     plans = (await db.execute(
@@ -161,22 +138,29 @@ async def list_plans_for_section(db: AsyncSession, section_id: int) -> list[dict
     ]
 
 
-async def create_plan(db: AsyncSession, *, plan_date: date, work_task_ids: list[int], created_by: int) -> dict[str, Any]:
+async def create_plan(
+    db: AsyncSession,
+    *,
+    section_id: int,
+    plan_date: date,
+    work_task_ids: list[int],
+    created_by: int,
+) -> dict[str, Any]:
     task_ids = list(dict.fromkeys(work_task_ids))
-    if not task_ids:
-        raise ValueError("work_task_ids must not be empty")
-    tasks = (await db.execute(select(WorkTask).where(WorkTask.id.in_(task_ids)))).scalars().all()
+    tasks = (await db.execute(select(WorkTask).where(WorkTask.id.in_(task_ids)))).scalars().all() if task_ids else []
     if len(tasks) != len(task_ids):
         raise ValueError("one or more work tasks do not exist")
-    section_ids = {task.section_id for task in tasks}
-    if len(section_ids) != 1:
-        raise ValueError("all work tasks must belong to one section")
+    if tasks and {task.section_id for task in tasks} != {section_id}:
+        raise ValueError("all work tasks must belong to the selected section")
     if any(task.status in TERMINAL_TASK_STATUSES for task in tasks):
         raise ValueError("terminal work tasks cannot be added")
-    existing = (await db.execute(select(DailyPlanItem.work_task_id).where(DailyPlanItem.work_task_id.in_(task_ids)))).scalars().all()
-    if existing:
-        raise DailyPlanConflict("one or more work tasks already belong to a daily plan")
-    plan = DailyPlan(section_id=next(iter(section_ids)), plan_date=plan_date, created_by=created_by)
+    if task_ids:
+        existing = (await db.execute(
+            select(DailyPlanItem.work_task_id).where(DailyPlanItem.work_task_id.in_(task_ids))
+        )).scalars().all()
+        if existing:
+            raise DailyPlanConflict("one or more work tasks already belong to a daily plan")
+    plan = DailyPlan(section_id=section_id, plan_date=plan_date, created_by=created_by)
     db.add(plan)
     await db.flush()
     for task_id in task_ids:
