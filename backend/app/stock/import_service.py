@@ -10,15 +10,14 @@ from __future__ import annotations
 
 import json
 import re
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from decimal import Decimal, InvalidOperation
 from functools import lru_cache
 from io import BytesIO
 from pathlib import Path
 from typing import Literal
 
-from sqlalchemy import select
-from sqlalchemy.ext.asyncio import AsyncSession
+from sqlalchemy import func, or_, select
 
 from app.domain.dimensions import (
     DIMENSIONLESS_LABEL,
@@ -88,7 +87,8 @@ class RemainderItem:
     status: Literal["valid", "invalid"]
     errors: list[str]
     raw_values: list[str]
-    # NEW: колонка «Выполненные операции» (сырая строка из Excel)
+    warnings: list[str] = field(default_factory=list)
+    matched_sku: str | None = None
     completed_operations_raw: str | None = None
     # NEW: резолвнутые пройденные этапы (поднабор ops_dict)
     completed_stages: list[dict] | None = None
@@ -573,28 +573,69 @@ async def parse_remainders_excel(
     return sheet.name, len(rows), items, summary
 
 
-async def _lookup_products(db: AsyncSession, items: list[RemainderItem]) -> None:
-    """Batch-lookup products by SKU and update items in-place.
+def _product_sku_contained_in_input(input_sku: str) -> object:
+    """SQL condition matching a product SKU anywhere inside an input cell."""
+    return func.strpos(func.lower(input_sku), func.lower(Product.sku)) > 0
 
-    Sets ``product_id``, ``product_name`` for found products.
-    Marks valid items as ``invalid`` if their SKU is not found.
+
+async def _lookup_products(db: AsyncSession, items: list[RemainderItem]) -> None:
+    """Batch-lookup products by full SKU, then by SKU contained in the input text.
+
+    Exact matches always win. If no exact SKU exists, the first product by id
+    whose full SKU is contained in the source text is selected and a warning is
+    attached to the row.
     """
-    skus = [it.sku for it in items if it.status == "valid" and it.sku]
+    skus = list(dict.fromkeys(
+        it.sku for it in items if it.status == "valid" and it.sku
+    ))
     if not skus:
         return
 
-    result = await db.execute(select(Product).where(Product.sku.in_(skus)))
-    products = {p.sku: p for p in result.scalars().all()}
+    result = await db.execute(
+        select(Product)
+        .where(or_(*(_product_sku_contained_in_input(sku) for sku in skus)))
+        .order_by(Product.id)
+    )
+    products = list(result.scalars().all())
 
     for item in items:
-        prod = products.get(item.sku)
-        if prod is not None:
-            item.product_id = prod.id
-            item.product_name = prod.name
-        elif item.status == "valid":
+        if item.status != "valid" or not item.sku:
+            continue
+        input_sku = item.sku.casefold()
+        exact_product = next(
+            (p for p in products if p.sku and p.sku.casefold() == input_sku),
+            None,
+        )
+        product = exact_product
+        is_partial = False
+        if product is None:
+            candidates = [
+                p for p in products
+                if p.sku and p.sku.casefold() in input_sku
+            ]
+            if candidates:
+                product = min(
+                    candidates,
+                    key=lambda p: (
+                        input_sku.find(p.sku.casefold()),
+                        -len(p.sku),
+                        p.id,
+                    ),
+                )
+                is_partial = True
+
+        if product is not None:
+            item.product_id = product.id
+            item.product_name = product.name
+            item.matched_sku = product.sku
+            if is_partial:
+                item.warnings.append(
+                    "Артикул сопоставлен частично: "
+                    f"в строке '{item.sku}' найден SKU '{product.sku}'"
+                )
+        else:
             item.status = "invalid"
             item.errors.append(f"SKU '{item.sku}' not found in database")
-
 
 def _missing_dimensions_message(missing_codes: list[str]) -> str:
     """Понятная ошибка предпросмотра для обязательных измерений без значения."""

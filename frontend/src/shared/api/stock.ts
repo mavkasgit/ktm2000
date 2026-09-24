@@ -325,6 +325,10 @@ export type RemainderImportItem = {
   comment: string | null;
   status: "valid" | "invalid";
   errors: string[];
+  /** Полный SKU, найденный в исходной строке, если это было частичное совпадение. */
+  matched_sku: string | null;
+  /** Предупреждения, не блокирующие импорт строки. */
+  warnings: string[];
   raw_values: string[];
   completed_operations_raw: string | null;
   completed_stages: ImportOperationStep[];

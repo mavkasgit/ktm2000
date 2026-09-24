@@ -345,6 +345,122 @@ async def test_preview_remainders_excel_unknown_sku(
     assert any("not found" in e for e in items[0]["errors"])
 
 
+async def test_partial_sku_preview_and_import_create_manual_in(
+    client: AsyncClient,
+    session: AsyncSession,
+) -> None:
+    """Частичный SKU остаётся валидным, сопоставляется и импортируется на Product."""
+    product = await _make_product(session, "PART-001")
+    location = await _make_location(session, "PARTIAL-SKU-LOC")
+    await session.commit()
+
+    excel_buf = _make_excel([("PART-001, поставка", 12, "поставка")])
+    preview_resp = await client.post(
+        "/api/stock/import/remainders/preview",
+        files={
+            "file": (
+                "test.xlsx",
+                excel_buf,
+                "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+            )
+        },
+        data={"location_id": str(location.id), "sheet_index": "0"},
+    )
+
+    assert preview_resp.status_code == 200, preview_resp.text
+    item = preview_resp.json()["items"][0]
+    assert item["status"] == "valid"
+    assert item["product_id"] == product.id
+    assert item["matched_sku"] == "PART-001"
+    assert any("частично" in warning.lower() for warning in item["warnings"])
+    assert item["errors"] == []
+
+    import_buf = _make_excel([("PART-001, поставка", 12, "поставка")])
+    import_resp = await client.post(
+        "/api/stock/import/remainders",
+        files={
+            "file": (
+                "test.xlsx",
+                import_buf,
+                "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+            )
+        },
+        data={"location_id": str(location.id), "skip_invalid": "true"},
+    )
+
+    assert import_resp.status_code == 200, import_resp.text
+    body = import_resp.json()
+    assert body["success"] is True
+    assert body["imported_count"] == 1
+    assert len(body["transaction_ids"]) == 1
+    transaction = await session.get(StockTransaction, body["transaction_ids"][0])
+    assert transaction is not None
+    assert transaction.product_id == product.id
+    assert transaction.reason == Reason.MANUAL_IN
+
+
+async def test_partial_sku_prefers_longest_candidate_at_same_position(
+    client: AsyncClient,
+    session: AsyncSession,
+) -> None:
+    """При одинаковой стартовой позиции выбирается самый длинный SKU."""
+    short_product = await _make_product(session, "PART-001")
+    long_product = await _make_product(session, "PART-001-LONG")
+    await session.commit()
+
+    excel_buf = _make_excel([("PART-001-LONG, поставка", 7, None)])
+    resp = await client.post(
+        "/api/stock/import/remainders/preview",
+        files={
+            "file": (
+                "test.xlsx",
+                excel_buf,
+                "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+            )
+        },
+        data={"sheet_index": "0"},
+    )
+
+    assert resp.status_code == 200, resp.text
+    item = resp.json()["items"][0]
+    assert item["status"] == "valid"
+    assert item["product_id"] == long_product.id
+    assert item["product_id"] != short_product.id
+    assert item["matched_sku"] == "PART-001-LONG"
+
+
+async def test_exact_sku_has_no_partial_match_warning(
+    client: AsyncClient,
+    session: AsyncSession,
+) -> None:
+    """Точное совпадение не сопровождается warning из-за вложенного короткого SKU."""
+    short_product = await _make_product(session, "PART-001")
+    exact_product = await _make_product(session, "PART-001-LONG")
+    await session.commit()
+
+    excel_buf = _make_excel([("PART-001-LONG", 9, None)])
+    resp = await client.post(
+        "/api/stock/import/remainders/preview",
+        files={
+            "file": (
+                "test.xlsx",
+                excel_buf,
+                "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+            )
+        },
+        data={"sheet_index": "0"},
+    )
+
+    assert resp.status_code == 200, resp.text
+    item = resp.json()["items"][0]
+    assert item["status"] == "valid"
+    assert item["product_id"] == exact_product.id
+    assert item["product_id"] != short_product.id
+    assert item["matched_sku"] == "PART-001-LONG"
+    assert item["warnings"] == []
+    assert item["errors"] == []
+
+
 # ─── Tests: Import ─────────────────────────────────────────────────────────────
 
 

@@ -156,10 +156,11 @@ function getImportItemSectionLabel(
 }
 
 function getImportItemErrorsLabel(item: RemainderImportItem): string {
-  if (item.errors.length === 0) {
+  const messages = [...item.warnings, ...item.errors];
+  if (messages.length === 0) {
     return item.status === "valid" ? "—" : "Ошибка";
   }
-  return item.errors.map(translateImportError).join(", ");
+  return messages.map(translateImportError).join(", ");
 }
 
 function getImportItemCellValue(
@@ -1147,7 +1148,15 @@ export function ImportRemaindersDialog({
                               <td className="px-1.5 py-0.5 text-left font-bold text-muted-foreground tabular-nums">
                                 {item.source_row_number}
                               </td>
-                              <td className="px-1.5 py-0.5 font-mono font-semibold">{item.sku}</td>
+                              <td
+                                className="px-1.5 py-0.5 font-mono font-semibold"
+                                title={item.matched_sku && item.matched_sku !== item.sku ? `Найден SKU: ${item.matched_sku}` : undefined}
+                              >
+                                {item.sku}
+                                {item.matched_sku && item.matched_sku !== item.sku ? (
+                                  <span className="ml-1 font-sans font-normal text-amber-700">→ {item.matched_sku}</span>
+                                ) : null}
+                              </td>
                               <td className="px-1.5 py-0.5 font-semibold text-foreground tabular-nums">
                                 {item.quantity != null ? item.quantity : "—"}
                               </td>
