@@ -1,7 +1,8 @@
 from __future__ import annotations
 
-from sqlalchemy import select
+from sqlalchemy import inspect, select
 from sqlalchemy.ext.asyncio import AsyncSession
+from sqlalchemy.orm import selectinload
 
 from app.models.product import Product
 from app.models.production_plan import PlanPosition, PlanPositionStatus
@@ -67,9 +68,15 @@ async def validate_plan_position(
     elif product_cache is not None and position.product_id in product_cache:
         product = product_cache[position.product_id]
     else:
-        product = await db.get(Product, position.product_id)
+        product = await db.get(
+            Product,
+            position.product_id,
+            options=[selectinload(Product.lengths)],
+        )
         if product_cache is not None:
             product_cache[position.product_id] = product
+    if product is not None and "lengths" in inspect(product).unloaded:
+        await db.refresh(product, attribute_names=["lengths"])
     if position.product_id is not None:
         if product is None or not product.is_active:
             errors.append("product_inactive")

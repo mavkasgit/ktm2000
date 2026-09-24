@@ -5,7 +5,7 @@ from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import selectinload
 
-from app.models.product import Product, ProductType
+from app.models.product import Product, ProductLength, ProductType
 from app.models.action_journal import Action
 from app.models.spg import SpgSection, StorageProductionGroup
 from app.models.route import ProductionRoute, RouteStage, RouteOperation, RouteRuleProfile
@@ -32,7 +32,8 @@ async def seed_demo_production(db: AsyncSession) -> dict:
     """
     stats = {"products": 0, "remainders": 0, "defects": 0}
 
-    # 1. Ensure demo products exist
+    # 1. Ensure demo products exist and their canonical length registry is
+    # populated. Product.length_mm is intentionally not a runtime field.
     demo_skus = ["ЮП-100-2700-BL", "АТ-200-2700-AN"]
     products_by_sku = {}
     for sku in demo_skus:
@@ -47,12 +48,25 @@ async def seed_demo_production(db: AsyncSession) -> dict:
                 profile_type="universal" if "ЮП" in sku else "tube",
                 alloy="6063",
                 color="Blue" if "BL" in sku else "Silver",
-                length_mm=2700.0,
                 is_catalog_item=True,
             )
             db.add(prod)
             await db.flush()
             stats["products"] += 1
+
+        has_length = await db.scalar(
+            select(ProductLength.id).where(ProductLength.product_id == prod.id).limit(1)
+        )
+        if not has_length:
+            db.add(
+                ProductLength(
+                    product_id=prod.id,
+                    length_mm=2700.0,
+                    raw_length_mm=None,
+                    is_primary=True,
+                )
+            )
+            await db.flush()
         products_by_sku[sku] = prod
 
     # 2. Resolve SPGs (in priority order):

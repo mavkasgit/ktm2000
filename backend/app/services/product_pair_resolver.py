@@ -10,9 +10,11 @@
 ``product_pair_not_found``.
 
 N пары — единая механика с одиночными нормами (#127/#142): ручная из
-словаря пары по длине позиции, авто — совместный расчёт движка
-(``min(by_area, by_size)``). Длина позиции — всегда сырьевая (ADR-0024:
-план несёт длину ГП, импорт материализует её в сырьевую до резолва).
+словаря пары по нормальной длине позиции, авто — совместный расчёт движка
+(``min(by_area, by_size)``). Пара имеет кандидатов только на пересечении
+нормальных длин A и B. Если эффективные сырьевые длины компонентов равны,
+это значение используется в auto-формуле; несовпадение запрещает auto только
+для этой длины и не затрагивает ручное значение.
 Расчёт невозможен (нет длины, длина вне пересечения длин A и B,
 ручной нет и авто не считается) — ``calc_error=True``, вызывающий ставит
 ``hanger_calc_zero``. Пара с пустым пересечением длин существует
@@ -61,6 +63,14 @@ class PairComponent:
 
     sku: str
     product: Product | None
+
+@dataclass(frozen=True)
+class PairLengthCandidate:
+    """Общая нормальная длина пары и effective raw каждого компонента."""
+
+    length_mm: float
+    raw_length_a_mm: float
+    raw_length_b_mm: float
 
 
 @dataclass(frozen=True)
@@ -198,62 +208,71 @@ async def resolve_pair_components_for_sku(
     )
 
 
-async def pair_length_candidates_mm(db: AsyncSession, resolved: ResolvedPair) -> list[float]:
-    """Отсортированные длины-кандидаты пары — пересечение длин A и B (#141).
+async def pair_length_candidates(
+    db: AsyncSession, resolved: ResolvedPair
+) -> list[PairLengthCandidate]:
+    """Кандидаты пары по пересечению нормальных длин A и B (ADR-0028).
 
-    Каноническое множество для правила ADR-0024 «ближайшая сверху»: пара
-    нормируется одной общей длиной, обе компоненты встают на подвес одной
-    длиной. Пустое пересечение → [] (пара существует по #146, но валидной
-    длины не даёт — вызывающий ставит ``raw_length_not_found``).
+    Идентичность кандидата и ключ ручного N определяет ``length_mm``.
+    Сырьевые длины нужны только для auto: неравенство A/B блокирует
+    автоматический расчёт этой длины, но не ручной режим.
     """
     rows = (
         await db.execute(
-            select(ProductLength.product_id, ProductLength.length_mm).where(
+            select(
+                ProductLength.product_id,
+                ProductLength.length_mm,
+                ProductLength.raw_length_mm,
+            ).where(
                 ProductLength.product_id.in_((resolved.product_a.id, resolved.product_b.id))
             )
         )
     ).all()
-    lengths_by_id: dict[int, set[float]] = {}
-    for pid, length in rows:
-        lengths_by_id.setdefault(pid, set()).add(float(length))
-    intersection = lengths_by_id.get(resolved.product_a.id, set()) & lengths_by_id.get(
-        resolved.product_b.id, set()
-    )
-    return sorted(intersection)
+    raw_by_product: dict[int, dict[float, float]] = {}
+    for pid, normal, raw in rows:
+        normal_mm = float(normal)
+        effective_raw_mm = float(normal if raw is None else raw)
+        raw_by_product.setdefault(pid, {})[normal_mm] = effective_raw_mm
+    raw_a = raw_by_product.get(resolved.product_a.id, {})
+    raw_b = raw_by_product.get(resolved.product_b.id, {})
+    return [
+        PairLengthCandidate(
+            length_mm=normal_mm,
+            raw_length_a_mm=raw_a[normal_mm],
+            raw_length_b_mm=raw_b[normal_mm],
+        )
+        for normal_mm in sorted(raw_a.keys() & raw_b.keys())
+    ]
 
-
-async def _pair_length_keys(db: AsyncSession, resolved: ResolvedPair) -> set[str]:
-    """Канонические ключи длин пары — пересечение длин A и B (#141)."""
-    return {_length_key(length) for length in await pair_length_candidates_mm(db, resolved)}
 
 
 async def resolve_pair_n(
-    db: AsyncSession, resolved: ResolvedPair, *, length_mm: float | None,
-    length_candidates_mm: list[float] | None = None,
+    db: AsyncSession,
+    resolved: ResolvedPair,
+    *,
+    length_mm: float | None,
+    length_candidates: list[PairLengthCandidate] | None = None,
     manual_override: int | None = None,
 ) -> PairHangerValue:
-    """Разрешить N пары для длины позиции.
+    """Разрешить N пары для нормальной длины позиции.
 
-    Приоритет: ручной override из payload позиции (``manual_override``) →
-    ручное значение из словаря пары для этой длины → совместный авто-расчёт
-    (оба артикула в режиме auto) → иначе расчёт невозможен
-    (``calc_error=True``). Оверрайд побеждает всегда — до проверки длины
-    (как payload-override у одиночных позиций, #127). Длина позиции вне
-    пересечения длин A и B (в том числе пустое пересечение, #146) — пара для
-    этой длины не существует.
+    Приоритет: положительный ручной override → положительное ручное значение
+    пары по нормальной длине → совместный auto-расчёт. Auto использует общую
+    эффективную сырьевую длину только при равенстве сырьевых длин A/B;
+    несовпадение блокирует auto лишь для текущей длины.
 
-    ``length_candidates_mm`` — предзагруженное пересечение длин A∩B
-    (межстрочный кэш батча, #163): избавляет от перезапроса мимо
-    внешнего ``pair_n_cache``. Без него поведение прежнее (запрос в БД).
+    ``length_candidates`` — предзагруженное пересечение для межстрочного
+    кэша батча.
     """
     if manual_override is not None and int(manual_override) > 0:
         return PairHangerValue(int(manual_override), "manual")
 
-    if length_candidates_mm is None:
-        length_keys = await _pair_length_keys(db, resolved)
-    else:
-        length_keys = {_length_key(length) for length in length_candidates_mm}
-    if length_mm is None or _length_key(length_mm) not in length_keys:
+    if length_candidates is None:
+        length_candidates = await pair_length_candidates(db, resolved)
+    candidates_by_key = {
+        _length_key(candidate.length_mm): candidate for candidate in length_candidates
+    }
+    if length_mm is None or _length_key(length_mm) not in candidates_by_key:
         return PairHangerValue(None, None, calc_error=True)
 
     stored = resolved.pair.quantity_per_hanger if isinstance(resolved.pair.quantity_per_hanger, dict) else {}
@@ -264,13 +283,16 @@ async def resolve_pair_n(
 
     a, b = resolved.product_a, resolved.product_b
     if a.hanger_mode == HANGER_MODE_AUTO and b.hanger_mode == HANGER_MODE_AUTO:
+        candidate = candidates_by_key[_length_key(length_mm)]
+        if candidate.raw_length_a_mm != candidate.raw_length_b_mm:
+            return PairHangerValue(None, None, calc_error=True)
         try:
             calc = compute_paired_hanger_quantity(
                 perimeter_a_mm=a.perimeter_mm,
                 mount_width_a_mm=a.mount_width_mm,
                 perimeter_b_mm=b.perimeter_mm,
                 mount_width_b_mm=b.mount_width_mm,
-                length_mm=length_mm,
+                length_mm=candidate.raw_length_a_mm,
             )
         except HangerConfigError:
             return PairHangerValue(None, None, calc_error=True)

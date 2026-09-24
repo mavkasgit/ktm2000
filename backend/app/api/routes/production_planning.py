@@ -11,7 +11,13 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app.api.deps import WRITER_ROLES, get_current_user, require_role
 from app.core.database import get_db
 from app.models.internal_plan import SectionPlanLine
-from app.models.production_plan import PlanPosition, PlanPositionStatus, ProductionPlan, ProductionPlanStatus
+from app.models.production_plan import (
+    PlanPosition,
+    PlanPositionStatus,
+    ProductionPlan,
+    ProductionPlanStatus,
+    require_current_length_model,
+)
 from app.models.transfer import Transfer
 from app.models.work_task import WorkTask, WorkTaskStatus
 from app.models.route import ProductionRoute, RouteStage, SectionOperation
@@ -1707,6 +1713,14 @@ async def _process_position_take_to_work(
     # positions are released yet), self-heal by re-deriving the status from the
     # positions before failing.
     plan = await db.get(ProductionPlan, pos.production_plan_id)
+    try:
+        require_current_length_model(plan)
+    except ValueError as exc:
+        return TakeToWorkResult(
+            position_id=position_id,
+            status="failed",
+            reason=str(exc),
+        )
     if plan is not None and plan.status not in {
         ProductionPlanStatus.approved,
         ProductionPlanStatus.partially_released,

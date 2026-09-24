@@ -1,13 +1,13 @@
 import { Image } from "lucide-react";
 import { Card, CardContent } from "@/shared/ui/card";
 import { Badge } from "@/shared/ui/badge";
-import { normalizeLengths } from "@/shared/lib/hangerQuantity";
-import { getPhotoUrl } from "./getPhotoUrl";
-import type { Product } from "@/shared/api/products";
-import { productTypeLabels } from "@/shared/lib/generated-labels";
 
-function getProductLengths(product: Product): number[] {
-  return normalizeLengths(product.lengths_mm ?? []);
+import { productTypeLabels } from "@/shared/lib/generated-labels";
+import type { Product, ProductLength } from "@/shared/api/products";
+import { getPhotoUrl } from "./getPhotoUrl";
+
+function getProductLengths(product: Product): ProductLength[] {
+  return product.lengths ?? [];
 }
 
 export function CatalogCard({
@@ -59,10 +59,11 @@ export function CatalogCard({
           <Badge variant="outline" className="text-xs">{productTypeLabels[product.type]}</Badge>
           {product.profile_type && <Badge variant="secondary" className="text-xs">{product.profile_type}</Badge>}
           {product.color && <Badge variant="secondary" className="text-xs">{product.color}</Badge>}
-          {(() => {
-            const lengths = getProductLengths(product);
-            return lengths.length ? <Badge variant="outline" className="text-xs">{lengths.join(", ")} мм</Badge> : null;
-          })()}
+          {getProductLengths(product).map((length) => (
+            <Badge key={length.length_mm} variant="outline" className="text-xs">
+              {length.length_mm} мм{length.raw_length_mm != null ? ` (сырьё ${length.raw_length_mm})` : ""}
+            </Badge>
+          ))}
           {product.is_catalog_item && <Badge variant="secondary" className="text-xs bg-blue-100">Сырье (каталог)</Badge>}
           {product.is_paired_profile && <Badge variant="secondary" className="text-xs bg-purple-100">Парный</Badge>}
           {product.skip_shot_blast && <Badge variant="secondary" className="text-xs bg-amber-100">Без дробеструйки</Badge>}

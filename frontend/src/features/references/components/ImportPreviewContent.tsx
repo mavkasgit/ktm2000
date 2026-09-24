@@ -111,12 +111,9 @@ export function ImportPreviewContent({ preview }: { preview: CatalogPreview }) {
           <tbody className="divide-y">
             {filteredItems.map((item) => {
               const cfg = ACTION_CONFIG[item.action as keyof typeof ACTION_CONFIG];
-              const lengthsText =
-                item.lengths_mm && item.lengths_mm.length > 0
-                  ? item.lengths_mm.join(", ")
-                  : item.length_mm
-                    ? `${item.length_mm}`
-                    : null;
+              const lengthsText = item.lengths && item.lengths.length > 0
+                ? item.lengths.map((length) => `${length.length_mm}${length.raw_length_mm != null ? ` (сырьё ${length.raw_length_mm})` : ""}`).join(", ")
+                : null;
               const quantitiesText =
                 item.quantities_per_hanger && item.quantities_per_hanger.length > 0
                   ? item.quantities_per_hanger.map((q) => q ?? "—").join(", ")

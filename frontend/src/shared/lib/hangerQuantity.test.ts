@@ -1,9 +1,10 @@
 import { describe, expect, it } from "vitest";
 
-import type { QuantityPerHangerDict } from "@/shared/api/products";
+import type { ProductLength, QuantityPerHangerDict } from "@/shared/api/products";
 import {
   effectiveForLength,
   effectiveForMode,
+  effectiveRawLength,
   entryForLength,
   isHangerAutoMode,
   isSheetState,
@@ -17,6 +18,12 @@ import {
   sheetHangerEntry,
   sheetLengths,
 } from "./hangerQuantity";
+
+const length = (
+  length_mm: number,
+  raw_length_mm: number | null = null,
+  is_primary = false,
+): ProductLength => ({ length_mm, raw_length_mm, is_primary });
 
 describe("lengthKey", () => {
   it("целые длины — без десятичной части (зеркало backend _length_key)", () => {
@@ -47,7 +54,7 @@ describe("isHangerAutoMode", () => {
 });
 
 describe("normalizeLengths", () => {
-  it("фильтрует мусор, дедуп и сортировка", () => {
+  it("фильтрует мусор, дедуп и сортирует", () => {
     expect(normalizeLengths([3000, 2780, 3000, -5, NaN, null, undefined])).toEqual([2780, 3000]);
   });
 
@@ -58,14 +65,36 @@ describe("normalizeLengths", () => {
 });
 
 describe("productLengths", () => {
-  it("берёт только канон lengths_mm (product_lengths): legacy length_mm не подмешивается", () => {
+  it("возвращает нормальные длины из канонического реестра по возрастанию", () => {
     expect(
-      productLengths({ lengths_mm: [3000, 2780, 3000, -5, NaN], length_mm: 2500 }),
+      productLengths({
+        lengths: [length(3000), length(2780), length(2780, 2830)],
+      }),
     ).toEqual([2780, 3000]);
   });
+});
 
-  it("пусто — пустой список", () => {
-    expect(productLengths({ lengths_mm: [], length_mm: null })).toEqual([]);
+describe("primaryLength", () => {
+  it("явный флаг записи реестра задаёт основную длину", () => {
+    expect(primaryLength({ lengths: [length(2780), length(3500, null, true)] })).toBe(3500);
+  });
+
+  it("без явного флага берёт первую нормальную длину по возрастанию", () => {
+    expect(primaryLength({ lengths: [length(3500), length(2780)] })).toBe(2780);
+  });
+
+  it("пустой реестр не создаёт основную длину", () => {
+    expect(primaryLength({ lengths: [] })).toBeNull();
+  });
+});
+
+describe("effectiveRawLength", () => {
+  it("без явной сырьевой длины использует нормальную", () => {
+    expect(effectiveRawLength(length(2700))).toBe(2700);
+  });
+
+  it("явная сырьевая длина имеет приоритет", () => {
+    expect(effectiveRawLength(length(2700, 2750))).toBe(2750);
   });
 });
 
@@ -76,44 +105,27 @@ describe("entryForLength / effectiveForLength", () => {
     "3500": { auto: null, manual: null },
   };
 
-  it("режим auto — авто-значение записи (#127)", () => {
+  it("режим auto — авто-значение записи", () => {
     expect(effectiveForLength(dict, 2780, "auto")).toEqual({ value: 72, source: "auto" });
     expect(effectiveForLength(dict, 3000, "auto")).toEqual({ value: null, source: "auto" });
   });
 
-  it("режим manual — ручное значение записи (#127)", () => {
+  it("режим manual — ручное значение записи", () => {
     expect(effectiveForLength(dict, 2780, "manual")).toEqual({ value: 60, source: "manual" });
     expect(effectiveForLength(dict, 3000, "manual")).toEqual({ value: 55, source: "manual" });
   });
 
-  it("нет записи — значения нет, источник всё равно режим", () => {
+  it("нет записи — значения нет, источник остаётся выбранным режимом", () => {
     expect(effectiveForLength(dict, 9999, "auto")).toEqual({ value: null, source: "auto" });
     expect(effectiveForLength(null, 2780, "manual")).toEqual({ value: null, source: "manual" });
     expect(entryForLength(null, 2780)).toBeNull();
   });
 });
 
-describe("primaryLength", () => {
-  it("явный primary_length_mm имеет приоритет", () => {
-    expect(primaryLength({ primary_length_mm: 3500, lengths_mm: [2780, 3500] })).toBe(3500);
-  });
-
-  it("без явного — первая по возрастанию из канона; legacy length_mm не подмешивается", () => {
-    expect(primaryLength({ primary_length_mm: null, lengths_mm: [3500, 2780] })).toBe(2780);
-    expect(primaryLength({ primary_length_mm: null, lengths_mm: [], length_mm: 2780 })).toBeNull();
-  });
-
-  it("без длин — null", () => {
-    expect(primaryLength({ primary_length_mm: null, lengths_mm: [] })).toBeNull();
-  });
-});
-
 describe("primaryHangerValue", () => {
-  it("режим auto — авто-значение основной длины (#127)", () => {
+  it("в auto-режиме возвращает авто-значение основной нормальной длины", () => {
     const product = {
-      primary_length_mm: 2780,
-      lengths_mm: [2780, 3000],
-      length_mm: null,
+      lengths: [length(2780, null, true), length(3000)],
       hanger_mode: "auto" as const,
       quantity_per_hanger: {
         "2780": { auto: 72, manual: 60 },
@@ -123,11 +135,9 @@ describe("primaryHangerValue", () => {
     expect(primaryHangerValue(product)).toEqual({ lengthMm: 2780, value: 72, source: "auto" });
   });
 
-  it("режим manual — ручное значение, без fallback на авто (#127)", () => {
+  it("в manual-режиме возвращает ручное N по основной нормальной длине", () => {
     const product = {
-      primary_length_mm: 2780,
-      lengths_mm: [2780],
-      length_mm: null,
+      lengths: [length(2780, null, true)],
       hanger_mode: "manual" as const,
       quantity_per_hanger: {
         "2780": { auto: 72, manual: 40 },
@@ -136,35 +146,27 @@ describe("primaryHangerValue", () => {
     expect(primaryHangerValue(product)).toEqual({ lengthMm: 2780, value: 40, source: "manual" });
   });
 
-  it("режим manual, ручное null — значения нет (авто не подменяет)", () => {
+  it("ручное значение null не заменяется устаревшим auto", () => {
     const product = {
-      lengths_mm: [2780],
-      length_mm: null,
+      lengths: [length(2780)],
       hanger_mode: "manual" as const,
-      quantity_per_hanger: { "2780": { auto: 72, manual: null } } as QuantityPerHangerDict,
+      quantity_per_hanger: {
+        "2780": { auto: 72, manual: null },
+      } as QuantityPerHangerDict,
     };
     expect(primaryHangerValue(product)).toBeNull();
   });
 
-  it("нет режима — авто по умолчанию", () => {
-    const product = {
-      lengths_mm: [2780],
-      length_mm: null,
-      quantity_per_hanger: { "2780": { auto: 72, manual: 40 } } as QuantityPerHangerDict,
-    };
-    expect(primaryHangerValue(product)).toEqual({ lengthMm: 2780, value: 72, source: "auto" });
-  });
-
-  it("нет длин или словаря — null", () => {
-    expect(primaryHangerValue({ lengths_mm: [], length_mm: null, quantity_per_hanger: null })).toBeNull();
+  it("пустой реестр или словарь не создаёт значение", () => {
+    expect(primaryHangerValue({ lengths: [], quantity_per_hanger: null })).toBeNull();
     expect(
-      primaryHangerValue({ lengths_mm: [2780], length_mm: null, quantity_per_hanger: null }),
+      primaryHangerValue({ lengths: [length(2780)], quantity_per_hanger: null }),
     ).toBeNull();
   });
 });
 
 describe("manualByLength", () => {
-  it("только non-null ручные значения", () => {
+  it("оставляет только непустые ручные значения", () => {
     expect(
       manualByLength({
         "2780": { auto: 72, manual: 60 },
@@ -183,7 +185,7 @@ describe("isSheetState", () => {
     expect(isSheetState("volume")).toBe(true);
   });
 
-  it("length и пусто — не листы", () => {
+  it("length и отсутствующее состояние — не листы", () => {
     expect(isSheetState("length")).toBe(false);
     expect(isSheetState(null)).toBe(false);
     expect(isSheetState(undefined)).toBe(false);
@@ -219,13 +221,7 @@ describe("effectiveForMode", () => {
     expect(effectiveForMode(entry, "manual")).toEqual({ value: 5, source: "manual" });
   });
 
-  it("режим auto или пустой — авто-значение, источник всегда auto", () => {
-    expect(effectiveForMode(entry, "auto")).toEqual({ value: 2, source: "auto" });
-    expect(effectiveForMode(entry, null)).toEqual({ value: 2, source: "auto" });
-    expect(effectiveForMode(entry, undefined)).toEqual({ value: 2, source: "auto" });
-  });
-
-  it("выбранное значение null — источник всё равно режим", () => {
+  it("выбранный null остаётся отсутствующим значением", () => {
     expect(effectiveForMode({ auto: null, manual: 5 }, "auto")).toEqual({ value: null, source: "auto" });
     expect(effectiveForMode({ auto: 2, manual: null }, "manual")).toEqual({ value: null, source: "manual" });
     expect(effectiveForMode(null, "manual")).toEqual({ value: null, source: "manual" });
@@ -233,11 +229,11 @@ describe("effectiveForMode", () => {
 });
 
 describe("sheetHangerEntry", () => {
-  it("первая (единственная) запись словаря листа", () => {
+  it("возвращает единственную запись словаря листа", () => {
     expect(sheetHangerEntry({ "3000": { auto: 2, manual: null } })).toEqual({ auto: 2, manual: null });
   });
 
-  it("пусто или нет словаря — null", () => {
+  it("пустой или отсутствующий словарь не создаёт запись", () => {
     expect(sheetHangerEntry({})).toBeNull();
     expect(sheetHangerEntry(null)).toBeNull();
     expect(sheetHangerEntry(undefined)).toBeNull();

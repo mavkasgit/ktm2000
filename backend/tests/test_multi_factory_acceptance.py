@@ -10,7 +10,7 @@ from __future__ import annotations
 import pytest
 from sqlalchemy import select
 
-from app.models.product import Product, ProductType
+from app.models.product import Product, ProductLength, ProductType
 from app.models.route import RouteRuleProfile, RouteSelectionRule, SectionOperation
 from app.models.section import Section
 from app.services.route_selection import select_route_for_payload
@@ -177,10 +177,11 @@ async def test_factory_b_product_without_flags_works(client, session) -> None:
         name="Завод Б продукт",
         type=ProductType.finished_good,
         unit="pcs",
-        length_mm=3000.0,
         quantity_per_hanger=20,
     )
     session.add(product)
+    await session.flush()
+    session.add(ProductLength(product_id=product.id, length_mm=3000.0, is_primary=True))
     await session.flush()
     await session.refresh(product, attribute_names=["processing_flags"])
 
@@ -201,7 +202,4 @@ async def test_factory_b_product_without_flags_works(client, session) -> None:
     assert "ANODIZING" not in required_codes
     assert "SAWING" not in required_codes
 
-    # Verify attributes JSONB works
-    assert product.length_mm == 3000.0
     assert product.quantity_per_hanger == 20
-    assert product.attributes["length_mm"] == 3000.0

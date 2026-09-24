@@ -2,11 +2,24 @@ import enum
 from datetime import date, datetime
 from decimal import Decimal
 
-from sqlalchemy import BigInteger, Boolean, Date, DateTime, Enum, ForeignKey, Identity, Index, Numeric, String, Text, func, text
+from sqlalchemy import BigInteger, Boolean, Date, DateTime, Enum, ForeignKey, Identity, Index, Integer, Numeric, String, Text, func, text
 from sqlalchemy.dialects.postgresql import JSONB
 from sqlalchemy.orm import Mapped, mapped_column
 
 from app.models.base import Base
+
+
+LENGTH_MODEL_VERSION_CURRENT = 2
+LENGTH_MODEL_VERSION_LEGACY = 1
+
+LEGACY_PLAN_READ_ONLY_ERROR = "legacy_plan_read_only"
+
+
+def require_current_length_model(plan: "ProductionPlan | None") -> None:
+    if plan is None:
+        return
+    if plan.length_model_version != LENGTH_MODEL_VERSION_CURRENT:
+        raise ValueError(LEGACY_PLAN_READ_ONLY_ERROR)
 
 
 class ProductionPlanStatus(str, enum.Enum):
@@ -96,6 +109,12 @@ class ProductionPlan(Base):
     )
     period_start: Mapped[date | None] = mapped_column(Date, nullable=True)
     period_end: Mapped[date | None] = mapped_column(Date, nullable=True)
+    length_model_version: Mapped[int] = mapped_column(
+        Integer,
+        nullable=False,
+        server_default=text("2"),
+        default=LENGTH_MODEL_VERSION_CURRENT,
+    )
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False, server_default=func.now())
 
 

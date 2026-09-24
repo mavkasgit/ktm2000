@@ -4,8 +4,8 @@ import math
 from collections import Counter
 from datetime import UTC, datetime
 from decimal import Decimal
+
 from pathlib import Path
-from typing import Iterable
 
 from sqlalchemy import select, func
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -13,10 +13,11 @@ from sqlalchemy.orm import selectinload
 
 from app.core.config import settings
 from app.models.imports import ImportBatch, ImportBatchMode, ImportFile
-from app.models.product import Product, ProductLength, _length_key
+from app.models.product import Product, _length_key
 from app.services import product_pair_resolver
 from app.services.product_pair_resolver import PairHangerValue, ResolvedPair
 from app.models.production_plan import (
+    LENGTH_MODEL_VERSION_CURRENT,
     PlanChangeAction,
     PlanChangeItem,
     PlanChangeItemStatus,
@@ -27,6 +28,7 @@ from app.models.production_plan import (
     PlanPosition,
     PlanPositionStatus,
     ProductionPlan,
+    require_current_length_model,
 )
 from app.models.route import ProductionRoute, RouteStage, RouteOperation, RouteRuleProfile
 from app.models.section import Section
@@ -47,11 +49,6 @@ from app.services.plan_position_hanger import PositionHangerValue, position_leng
 from app.services.route_builder import build_route_from_profile, load_route_build_batch_cache
 
 
-#: Допуск silent-подстановки сырья, мм (#156, поправка к ADR-0024 п.7):
-#: разница ГП→сырьё в пределах допуска — штатная логика торцовки,
-#: warning raw_length_substituted ставится только при большем расхождении,
-#: иначе предпросмотр реального плана тонет в предупреждениях.
-RAW_LENGTH_SILENT_TOLERANCE_MM = 100
 #: Каталог кодов строк импорта плана (спека docs/plan-import-spec.md §3, карта #157).
 #: Статус строки (правило ниже, plan_import_row_status): есть errors → invalid,
 #: иначе warnings → warning, иначе pending.
@@ -61,21 +58,16 @@ RAW_LENGTH_SILENT_TOLERANCE_MM = 100
 #: неклассифицированном коде. При добавлении кода обновить список + тест.
 PLAN_IMPORT_ERROR_CODES: frozenset[str] = frozenset(
     {
-#: Блокируют (invalid).
         "product_not_found",
         "product_inactive",
         "product_pair_not_found",
         "hanger_calc_zero",
-#: Подбор маршрута: no_route_candidate и остальные значения selection.error
-#: (route_selection.py: error="no_route_candidate" / "route_rule_conflict").
         "no_route_candidate",
         "route_rule_conflict",
         "active_route_has_no_steps",
         "route_contains_inactive_section",
         "duplicate_sku_due_date",
-#: Сырьё: нет зарегистрированной длины ≥ длины ГП (возврат
-#: _materialize_raw_length_mm; «и т.п.» спеки — новые raw-коды добавлять сюда).
-        "raw_length_not_found",
+        "normal_length_not_found",
     }
 )
 #: Точные warning-коды без параметров.
@@ -88,8 +80,6 @@ PLAN_IMPORT_WARNING_CODES: frozenset[str] = frozenset(
 )
 #: Warning-коды с параметрами после «:» (префикс до первого «:»).
 PLAN_IMPORT_WARNING_PREFIXES: tuple[str, ...] = (
-    "raw_length_substituted",
-    "paired_hanger_adjusted",
     "hanger_quantity_not_set",
     "invalid_input_length",
     "invalid_output_length",
@@ -102,6 +92,10 @@ PLAN_IMPORT_WARNING_PREFIXES: tuple[str, ...] = (
     "plan_group_balance_mismatch",
 )
 
+
+def _mm_as_meters(length_mm: float) -> str:
+    """Формат длины для warning: 2750 → «2,75»."""
+    return f"{(Decimal(str(length_mm)) / Decimal(1000)).normalize():f}".replace(".", ",")
 
 def _plan_import_code_base(code: str) -> str:
 #: База кода без параметров: «invalid_output_length:row=5» → «invalid_output_length».
@@ -137,88 +131,7 @@ def plan_import_item_is_duplicate(item: PlanChangeItem) -> bool:
         return True
     return "duplicate_sku_due_date" in (item.errors or ())
 
-def _gp_length_for_raw_materialization(row: ParsedPlanRow) -> float | None:
-    """Длина ГП, которую несёт строка, — кандидат на материализацию в сырьё.
 
-    План всегда несёт коммерческую длину ГП (ADR-0024 п.1), и её источник —
-    вход позиции: «Длина, м» из Excel; при пустой колонке парсер наследует
-    длину единственного выхода (ADR-0003, «вход без резки»). Настоящая резка
-    (вход 2,7 м → выход 0,9 м) длину ГП не отменяет: на подвес профиль встаёт
-    сырьевой длиной, резка — позже (ADR-0024 п.2), поэтому материализуется
-    именно вход. Если вход уже сырьевой, «ближайшая сверху» вернёт его же
-    (no-op) — отдельного признака «вход без резки» не требуется.
-
-    ``None`` — вход без длины (безразмерные штуки), подбор невозможен.
-    """
-    input_dims = row.input_dimensions or {}
-    input_length = input_dims.get(LENGTH_MM)
-    if isinstance(input_length, bool) or not isinstance(input_length, (int, float)):
-        return None
-    if float(input_length) <= 0:
-        return None
-    return float(input_length)
-
-
-def _pick_raw_length_mm(candidates: Iterable[float], gp_length_mm: float) -> float | None:
-    """ADR-0024 «ближайшая сверху»: минимальная зарегистрированная сырьевая
-    длина ≥ длины ГП. Точное совпадение — частный случай (возвращается сам ГП).
-    """
-    suitable = [float(length) for length in candidates if float(length) >= gp_length_mm]
-    return min(suitable) if suitable else None
-
-
-def _mm_as_meters(length_mm: float) -> str:
-    """Миллиметры → строка в метрах с запятой для операторских текстов: 2750 → «2,75»."""
-    meters = (Decimal(str(length_mm)) / Decimal(1000)).normalize()
-    return format(meters, "f").replace(".", ",")
-
-
-def _materialize_raw_length_mm(
-    row: ParsedPlanRow,
-    warnings: list[str],
-    *,
-    gp_length_mm: float,
-    candidates: Iterable[float],
-) -> str | None:
-    """Подобрать сырьё и материализовать во вход позиции (ADR-0024).
-
-    Успех — ``None`` (вход переписан на сырьевую длину либо точное совпадение,
-    ничего делать не надо); сброс флага ``inferred`` (вход перестаёт быть
-    равен выходу). Warning ``raw_length_substituted`` — только при разнице
-    больше ``RAW_LENGTH_SILENT_TOLERANCE_MM``; в пределах допуска подстановка
-    считается штатной и молчаливой. Нет кандидата — ``raw_length_not_found``.
-    """
-    picked = _pick_raw_length_mm(candidates, gp_length_mm)
-    if picked is None:
-        return "raw_length_not_found"
-    if picked == gp_length_mm:
-        return None
-    new_dims = canonicalize_dimensions({**(row.input_dimensions or {}), LENGTH_MM: picked})
-    row.input_dimensions = new_dims
-    input_info = dict(row.payload.get("input") or {})
-    input_info["dimensions"] = new_dims
-    input_info["inferred"] = False
-    row.payload["input"] = input_info
-    if picked - gp_length_mm > RAW_LENGTH_SILENT_TOLERANCE_MM:
-        warnings.append(
-            f"raw_length_substituted:ГП {_mm_as_meters(gp_length_mm)} м"
-            f" → сырьё {_mm_as_meters(picked)} м"
-        )
-    return None
-
-
-async def _load_raw_lengths_mm(
-    db: AsyncSession, product_id: int, cache: dict[int, list[float]]
-) -> list[float]:
-    """Зарегистрированные длины артикула (``ProductLength``) по возрастанию."""
-    if product_id not in cache:
-        rows = (
-            await db.scalars(
-                select(ProductLength.length_mm).where(ProductLength.product_id == product_id)
-            )
-        ).all()
-        cache[product_id] = sorted({float(length) for length in rows})
-    return cache[product_id]
 
 
 async def preview_excel_sheet(
@@ -338,11 +251,15 @@ async def create_excel_import_change_set(
         production_plan = await db.get(ProductionPlan, production_plan_id)
         if production_plan is None:
             raise ValueError("Production plan not found")
+        require_current_length_model(production_plan)
     elif mode == ImportBatchMode.append_to_plan:
         # Find latest non-released/cancelled plan, or create one
         production_plan = await db.scalar(
             select(ProductionPlan)
-            .where(ProductionPlan.status.notin_(["released", "cancelled"]))
+            .where(
+                ProductionPlan.status.notin_(["released", "cancelled"]),
+                ProductionPlan.length_model_version == LENGTH_MODEL_VERSION_CURRENT,
+            )
             .order_by(ProductionPlan.created_at.desc())
             .limit(1)
         )
@@ -567,8 +484,7 @@ async def _make_change_items(
     # Локальные кэши для устранения N+1 запросов при сопоставлении маршрутов и пар
     pair_cache = {}                   # tuple(component_skus) -> ResolvedPair | None
     pair_n_cache = {}                 # (pair.id, length_key) -> PairHangerValue
-    pair_candidates_cache: dict[int, list[float]] = {}  # pair.id -> пересечение длин A∩B (ADR-0024)
-    raw_lengths_cache: dict[int, list[float]] = {}  # product.id -> длины ProductLength (ADR-0024)
+    pair_candidates_cache: dict[int, list[product_pair_resolver.PairLengthCandidate]] = {}
     select_route_cache = {}           # tuple_key -> RouteSelectionResult
     route_stages_cache = {}           # route.id -> list[RouteStage]
     sections_by_id_cache = {}         # section_id -> Section
@@ -647,42 +563,33 @@ async def _make_change_items(
                 if "paired_profile_product_unmapped" not in warnings:
                     warnings.append("paired_profile_product_unmapped")
             else:
-                # ADR-0024: подбор сырьевой длины «ближайшая сверху» по
-                # пересечению длин A∩B и материализация ГП→сырьё во входе —
-                # до резолва N. Нет кандидата → raw_length_not_found
-                # (ошибка справочника, не расчёта), N не резолвим.
-                # Кандидаты кэшируются по паре (#163): ими же пользуется
-                # resolve_pair_n без перезапроса мимо pair_n_cache.
-                raw_failed = False
+                # Пара существует только на пересечении нормальных длин.
+                # Вход из Excel остаётся нормальным; сырьевая длина нужна
+                # исключительно для снимка N и не материализуется в план.
                 pair_id = resolved_pair.pair.id
                 if pair_id not in pair_candidates_cache:
                     pair_candidates_cache[pair_id] = (
-                        await product_pair_resolver.pair_length_candidates_mm(db, resolved_pair)
+                        await product_pair_resolver.pair_length_candidates(db, resolved_pair)
                     )
-                gp_length_mm = _gp_length_for_raw_materialization(row)
-                if gp_length_mm is not None:
-                    raw_error = _materialize_raw_length_mm(
-                        row, warnings,
-                        gp_length_mm=gp_length_mm,
-                        candidates=pair_candidates_cache[pair_id],
-                    )
-                    if raw_error is not None:
-                        errors.append(raw_error)
-                        raw_failed = True
-                if raw_failed:
+                length_mm = position_length_mm(row)
+                length_key = _length_key(length_mm) if length_mm is not None else None
+                normal_registered = length_key is None or any(
+                    _length_key(candidate.length_mm) == length_key
+                    for candidate in pair_candidates_cache[pair_id]
+                )
+                if not normal_registered:
+                    errors.append("normal_length_not_found")
                     pair_n = PairHangerValue(None, None)
                 else:
-                    # N пары — единая механика с одиночными: ручная из словаря
-                    # пары / авто-расчёт; невозможна → hanger_calc_zero.
-                    length_mm = position_length_mm(row)
-                    length_key = _length_key(length_mm) if length_mm is not None else None
-                    n_cache_key = (resolved_pair.pair.id, length_key)
+                    n_cache_key = (pair_id, length_key)
                     if n_cache_key in pair_n_cache:
                         pair_n = pair_n_cache[n_cache_key]
                     else:
                         pair_n = await product_pair_resolver.resolve_pair_n(
-                            db, resolved_pair, length_mm=length_mm,
-                            length_candidates_mm=pair_candidates_cache[pair_id],
+                            db,
+                            resolved_pair,
+                            length_mm=length_mm,
+                            length_candidates=pair_candidates_cache[pair_id],
                         )
                         pair_n_cache[n_cache_key] = pair_n
                     if pair_n.calc_error:
@@ -769,23 +676,16 @@ async def _make_change_items(
             route_match_quality = selection.route_match_quality or PlanPositionRouteMatchQuality.exact.value
             route_match_reason = PlanPositionRouteMatchReason.selection_rules.value
 
-        # ADR-0024: та же механика «ближайшая сверху» для одиночных позиций —
-        # вход без резки несёт длину ГП, материализуем в сырьевую из длин
-        # самого артикула. Без зарегистрированных длин — как раньше, без
-        # новой ошибки (негабаритные штучные товары). Порядок «материализация →
-        # N», как у пары: норма берётся по сырьевой длине позиции (#170).
+        # Сырьевая длина не материализуется. Для линейного артикула длина
+        # входа из Excel должна точно совпадать с нормальной длиной реестра;
+        # неизвестное значение блокирует только эту позицию.
         if not row.payload.get("paired_profile") and product is not None:
-            single_gp_length_mm = _gp_length_for_raw_materialization(row)
-            if single_gp_length_mm is not None:
-                single_candidates = await _load_raw_lengths_mm(db, product.id, raw_lengths_cache)
-                if single_candidates:
-                    single_raw_error = _materialize_raw_length_mm(
-                        row, warnings,
-                        gp_length_mm=single_gp_length_mm,
-                        candidates=single_candidates,
-                    )
-                    if single_raw_error is not None:
-                        errors.append(single_raw_error)
+            length_mm = position_length_mm(row)
+            dimension_state = getattr(product.dimension_state, "value", product.dimension_state)
+            if dimension_state == "length" and length_mm is not None:
+                length_key = _length_key(length_mm)
+                if not any(_length_key(length.length_mm) == length_key for length in product.lengths):
+                    errors.append("normal_length_not_found")
 
         # Округление количества до кратности подвесам
         effective_quantity = row.quantity
@@ -825,8 +725,8 @@ async def _make_change_items(
                     else float(effective_quantity / per_hanger)
                 )
         else:
-            # Норма — тем же резолвером, что чтение и валидация плана (#170):
-            # по сырьевой длине позиции, строго по режиму артикула.
+            # N вычисляется по нормальной длине позиции; effective raw внутри
+            # резолвера влияет только на формулу и не меняет dimensions.
             length_mm = (row.input_dimensions or {}).get(LENGTH_MM)
             hanger_value = (
                 resolve_position_hanger(
@@ -897,6 +797,7 @@ async def _make_change_items(
                 input_info["inferred"] = True
                 row.payload["input"] = input_info
 
+        # Неизменяемый снимок N импорта; последующая правка карточки его не меняет.
         after_data = {
             "product_id": product.id if product else None,
             "source_sku": row.source_sku,
@@ -1463,7 +1364,11 @@ async def _create_import_plan(db: AsyncSession, sheet_name: str) -> ProductionPl
     """Новый план импорта: имя всегда «Import {лист}»."""
     plan_no = _make_plan_no(sheet_name)
     plan_name = f"Import {sheet_name}"
-    production_plan = ProductionPlan(plan_no=plan_no, name=plan_name)
+    production_plan = ProductionPlan(
+        plan_no=plan_no,
+        name=plan_name,
+        length_model_version=LENGTH_MODEL_VERSION_CURRENT,
+    )
     db.add(production_plan)
     await db.flush()
     return production_plan

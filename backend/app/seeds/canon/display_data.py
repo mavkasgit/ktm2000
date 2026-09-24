@@ -42,7 +42,6 @@ WARNING_LABELS = {
     "paired_row_auto_included": "Автодобавлена парная строка",
     "paired_hanger_adjusted": "Округлено до кратности подвеса",
     "hanger_quantity_not_set": "Не задано количество на подвес — количество не округлено",
-    "raw_length_substituted": "Подобрана длина сырья",
 }
 
 VALIDATION_LABELS = {
@@ -252,6 +251,7 @@ FILTER_SHORT_LABELS = {
 # Ключи — точные английские строки бэкенда; фронт сохраняет логику
 # нормализации (toTemplate) и подстановки значений.
 ERROR_PHRASE_TRANSLATIONS = {
+    "legacy_plan_read_only": "План создан по старой модели длин и доступен только для чтения — переимпортируйте его",
     "Task must be in progress": "Задача должна быть в работе",
     "Task must be ready/in_progress/partially_completed":
         "Задача должна быть в статусе «готова», «в работе» или «частично завершена»",

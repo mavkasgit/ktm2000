@@ -45,21 +45,39 @@ def _xlsx_bytes(rows: list[list], headers: list[str] | None = None) -> bytes:
 
 
 def _row(**kwargs) -> list:
-    """Строка файла по именованным полям (остальные колонки пустые)."""
-    # Колонки шаблона = TEMPLATE_HEADERS (Парный профиль импортируется;
-    # размерность всегда 1D, фото заполняется руками).
-    values: dict[str, object] = {field: "" for field in (
-        "sku", "name", "notes", "lengths", "perimeter", "mount_width",
-        "quantities", "skip_shot", "laminated", "aliases", "partners",
-    )}
-    values.update(kwargs)
-    return [
-        values["sku"], values["name"], values["perimeter"], values["mount_width"],
-        values["lengths"], values["quantities"], values["notes"],
-        values["skip_shot"], values["laminated"], values["aliases"],
-        values["partners"],
-    ]
-
+    """Строка файла по именам полей; порядок берётся из шаблона."""
+    values: dict[str, object] = {
+        "sku": "", "name": "", "notes": "", "lengths_mm": "",
+        "perimeter_mm": "", "mount_width_mm": "", "quantities": "",
+        "skip_shot_blast": "", "is_laminated": "", "aliases": "",
+        "pair_partners": "", "raw_lengths_mm": "",
+    }
+    aliases = {
+        "lengths": "lengths_mm",
+        "perimeter": "perimeter_mm",
+        "mount_width": "mount_width_mm",
+        "skip_shot": "skip_shot_blast",
+        "laminated": "is_laminated",
+        "partners": "pair_partners",
+        "raw_lengths": "raw_lengths_mm",
+    }
+    for key, value in kwargs.items():
+        values[aliases.get(key, key)] = value
+    by_header = {
+        "Артикул": values["sku"],
+        "Наименование": values["name"],
+        "Периметр, мм": values["perimeter_mm"],
+        "Габарит, мм": values["mount_width_mm"],
+        "Длины, мм": values["lengths_mm"],
+        "Сырьевые длины, мм": values["raw_lengths_mm"],
+        "Кол-во на подвесе": values["quantities"],
+        "Примечания": values["notes"],
+        "Не дробеструится": values["skip_shot_blast"],
+        "Ламируется": values["is_laminated"],
+        "Эквиваленты": values["aliases"],
+        "Парный профиль": values["pair_partners"],
+    }
+    return [by_header.get(header, "") for header in TEMPLATE_HEADERS]
 
 async def _make_product(
     session: AsyncSession,
@@ -67,6 +85,7 @@ async def _make_product(
     sku: str,
     name: str | None = None,
     lengths: list[float] | None = None,
+    raw_lengths: list[float | None] | None = None,
     aliases: list[str] | None = None,
     **attrs,
 ) -> Product:
@@ -82,8 +101,9 @@ async def _make_product(
         setattr(product, key, value)
     session.add(product)
     await session.flush()
-    for length in lengths or []:
-        session.add(ProductLength(product_id=product.id, length_mm=length))
+    for index, length in enumerate(lengths or []):
+        raw = raw_lengths[index] if raw_lengths is not None and index < len(raw_lengths) else None
+        session.add(ProductLength(product_id=product.id, length_mm=length, raw_length_mm=raw))
     await session.flush()
     return product
 
@@ -394,6 +414,215 @@ async def test_apply_excel_empty_row_creates_with_warning(
     assert product.is_active is False
 
 
+
+async def test_catalog_excel_raw_lengths_round_trip_with_blank_fallback(
+    client: AsyncClient,
+) -> None:
+    """Экспорт сохраняет явную сырьевую длину и пустой сегмент как fallback."""
+    content = _xlsx_bytes([
+        _row(sku="ЮП-RAW-ROUND", lengths="2700, 3000", raw_lengths="2750, "),
+    ])
+
+    applied = await _upload(client, APPLY_URL, content)
+
+    assert applied.status_code == 200, applied.text
+    assert applied.json()["errors"] == []
+    assert applied.json()["imported"] == 1
+    products = await client.get("/api/products", params={"sku": "ЮП-RAW-ROUND"})
+    assert products.status_code == 200, products.text
+    items = products.json()["items"]
+    assert len(items) == 1
+    assert items[0]["lengths"] == [
+        {"length_mm": 2700, "raw_length_mm": 2750, "is_primary": True},
+        {"length_mm": 3000, "raw_length_mm": None, "is_primary": False},
+    ]
+    exported, rows = await _export(client)
+    assert rows["ЮП-RAW-ROUND"]["Длины, мм"] == "2700, 3000"
+    assert rows["ЮП-RAW-ROUND"]["Сырьевые длины, мм"] == "2750, "
+
+    preview = await _upload(client, PREVIEW_URL, exported.content)
+    assert preview.status_code == 200, preview.text
+    assert preview.json()["errors"] == []
+    item = preview.json()["items"][0]
+    assert item["action"] == "skip"
+    assert item["lengths"] == [
+        {"length_mm": 2700, "raw_length_mm": 2750, "is_primary": True},
+        {"length_mm": 3000, "raw_length_mm": None, "is_primary": False},
+    ]
+    assert {"length_mm", "lengths_mm", "raw_lengths_mm"}.isdisjoint(item)
+
+
+async def test_catalog_excel_auto_hanger_quantity_uses_raw_length(client: AsyncClient) -> None:
+    """Excel apply сохраняет публичную auto-норму, рассчитанную по сырьевой длине."""
+    content = _xlsx_bytes([
+        _row(
+            sku="ЮП-RAW-HANGER-AUTO",
+            lengths="3000",
+            raw_lengths="3050",
+            perimeter="60",
+            mount_width="15",
+        ),
+    ])
+
+    applied = await _upload(client, APPLY_URL, content)
+
+    assert applied.status_code == 200, applied.text
+    assert applied.json()["errors"] == []
+    assert applied.json()["imported"] == 1
+    products = await client.get("/api/products", params={"sku": "ЮП-RAW-HANGER-AUTO"})
+    assert products.status_code == 200, products.text
+    items = products.json()["items"]
+    assert len(items) == 1
+    assert items[0]["quantity_per_hanger"] == {
+        "3000": {"auto": 71, "manual": None}
+    }
+
+
+async def test_catalog_excel_explicit_raw_equal_to_normal_is_not_blank(
+    client: AsyncClient,
+) -> None:
+    """Явное значение 2700 отличается от пустого сегмента с fallback."""
+    content = _xlsx_bytes([
+        _row(sku="ЮП-RAW-EQUAL", lengths="2700, 3000", raw_lengths="2700, "),
+    ])
+
+    applied = await _upload(client, APPLY_URL, content)
+
+    assert applied.status_code == 200, applied.text
+    assert applied.json()["errors"] == []
+    _, rows = await _export(client)
+    assert rows["ЮП-RAW-EQUAL"]["Сырьевые длины, мм"] == "2700, "
+
+
+async def test_catalog_excel_wrong_raw_segment_count_is_row_error(
+    client: AsyncClient,
+) -> None:
+    """Позиционное число raw-сегментов обязано совпадать с числом нормальных длин."""
+    content = _xlsx_bytes([
+        _row(sku="ЮП-RAW-COUNT", lengths="2700, 3000", raw_lengths="2750"),
+    ])
+
+    response = await _upload(client, PREVIEW_URL, content)
+
+    assert response.status_code == 200, response.text
+    body = response.json()
+    assert body["items"] == []
+    assert len(body["errors"]) == 1
+    assert body["errors"][0]["sku"] == "ЮП-RAW-COUNT"
+    assert "Сырьевые длины" in body["errors"][0]["message"]
+    assert "не совпадает" in body["errors"][0]["message"]
+
+
+async def test_catalog_excel_absent_raw_column_preserves_existing_values(
+    client: AsyncClient,
+) -> None:
+    """Частичное обновление без raw-колонки не затирает сохранённые значения."""
+    initial = _xlsx_bytes([
+        _row(sku="ЮП-RAW-KEEP", lengths="2700, 3000", raw_lengths="2750, 3050"),
+    ])
+    first = await _upload(client, APPLY_URL, initial)
+    assert first.status_code == 200, first.text
+    assert first.json()["errors"] == []
+
+    headers_without_raw = [
+        header for header in TEMPLATE_HEADERS if header != "Сырьевые длины, мм"
+    ]
+    full_row = _row(sku="ЮП-RAW-KEEP", name="Обновлённый профиль")
+    row_without_raw = [
+        value for header, value in zip(TEMPLATE_HEADERS, full_row)
+        if header != "Сырьевые длины, мм"
+    ]
+    update = _xlsx_bytes([row_without_raw], headers=headers_without_raw)
+    applied = await _upload(client, APPLY_URL, update)
+
+    assert applied.status_code == 200, applied.text
+    assert applied.json()["errors"] == []
+    assert applied.json()["updated"] == 1
+    _, rows = await _export(client)
+    assert rows["ЮП-RAW-KEEP"]["Сырьевые длины, мм"] == "2750, 3050"
+
+
+async def test_catalog_excel_blank_raw_column_clears_existing_values(
+    client: AsyncClient,
+) -> None:
+    """Пустая raw-ячейка при отсутствии длин очищает все существующие значения."""
+    initial = _xlsx_bytes([
+        _row(sku="ЮП-RAW-CLEAR", lengths="2700, 3000", raw_lengths="2750, 3050"),
+    ])
+    first = await _upload(client, APPLY_URL, initial)
+    assert first.status_code == 200, first.text
+    assert first.json()["errors"] == []
+    _, initial_rows = await _export(client)
+    assert initial_rows["ЮП-RAW-CLEAR"]["Сырьевые длины, мм"] == "2750, 3050"
+
+    headers_without_lengths = [
+        header for header in TEMPLATE_HEADERS if header != "Длины, мм"
+    ]
+    full_row = _row(sku="ЮП-RAW-CLEAR", name="Обновлённый профиль")
+    row_without_lengths = [
+        value for header, value in zip(TEMPLATE_HEADERS, full_row)
+        if header != "Длины, мм"
+    ]
+    update = _xlsx_bytes([row_without_lengths], headers=headers_without_lengths)
+    applied = await _upload(client, APPLY_URL, update)
+
+    assert applied.status_code == 200, applied.text
+    assert applied.json()["errors"] == []
+    assert applied.json()["updated"] == 1
+    _, rows = await _export(client)
+    assert rows["ЮП-RAW-CLEAR"]["Длины, мм"] == "2700, 3000"
+    assert rows["ЮП-RAW-CLEAR"]["Сырьевые длины, мм"] is None
+
+
+async def test_catalog_excel_present_raw_column_replaces_complete_mapping(
+    client: AsyncClient,
+) -> None:
+    """Присутствующий список заменяет все значения, включая длины без raw."""
+    initial = _xlsx_bytes([
+        _row(sku="ЮП-RAW-REPLACE", lengths="2700, 3000", raw_lengths="2750, 3050"),
+    ])
+    first = await _upload(client, APPLY_URL, initial)
+    assert first.status_code == 200, first.text
+    assert first.json()["errors"] == []
+
+    replacement = _xlsx_bytes([
+        _row(sku="ЮП-RAW-REPLACE", lengths="2700, 3000", raw_lengths="2800, "),
+    ])
+    applied = await _upload(client, APPLY_URL, replacement)
+
+    assert applied.status_code == 200, applied.text
+    assert applied.json()["errors"] == []
+    _, rows = await _export(client)
+    assert rows["ЮП-RAW-REPLACE"]["Сырьевые длины, мм"] == "2800, "
+
+
+@pytest.mark.parametrize("dimension_state", [DimensionState.area, DimensionState.volume])
+async def test_catalog_excel_rejects_raw_lengths_for_non_linear_products(
+    client: AsyncClient,
+    session: AsyncSession,
+    dimension_state: DimensionState,
+) -> None:
+    """Сырьевые длины допустимы только для линейных карточек."""
+    await _make_product(
+        session,
+        sku="ЮП-ЛИСТ",
+        lengths=[2700.0],
+        dimension_state=dimension_state,
+    )
+    content = _xlsx_bytes([
+        _row(sku="ЮП-ЛИСТ", lengths="2700", raw_lengths="2750"),
+    ])
+
+    preview = await _upload(client, PREVIEW_URL, content)
+    assert preview.status_code == 200, preview.text
+    assert len(preview.json()["errors"]) == 1
+    assert "Сырьевые длины" in preview.json()["errors"][0]["message"]
+
+    applied = await _upload(client, APPLY_URL, content)
+    assert applied.status_code == 200, applied.text
+    assert len(applied.json()["errors"]) == 1
+    assert "Сырьевые длины" in applied.json()["errors"][0]["message"]
+
 async def test_apply_excel_requires_edit_references_role(
     client: AsyncClient, session: AsyncSession
 ) -> None:
@@ -426,10 +655,10 @@ async def test_preview_draft_single_qty_no_lengths(
     assert item["draft"] is True
 
 
-async def test_apply_draft_creates_inactive_with_legacy_norm(
+async def test_apply_draft_creates_inactive_without_scalar_norm(
     client: AsyncClient, session: AsyncSession
 ) -> None:
-    """Q3: норма без длин черновик не активирует. Q2: сама норма — legacy-скаляр."""
+    """Количество без normal length не сохраняется, а черновик остаётся неактивным."""
     content = _xlsx_bytes([_row(sku="ЮП-ЧЕРН", quantities="35", name="Черновик")])
     resp = await _upload(client, APPLY_URL, content)
     assert resp.status_code == 200, resp.text
@@ -438,32 +667,31 @@ async def test_apply_draft_creates_inactive_with_legacy_norm(
     assert product is not None
     assert product.is_active is False
     assert await _product_lengths(session, product.id) == []
-    # Норма хранится скаляром и раскроется в per-length, когда появятся длины.
-    assert product.attributes["quantity_per_hanger"] == {"auto": None, "manual": 35}
-    assert product.quantity_per_hanger == 35
+    assert (product.attributes or {}).get("quantity_per_hanger") is None
+    assert product.quantity_per_hanger is None
     assert product.quantity_per_hanger_by_length is None
 
 
-async def test_apply_norm_without_lengths_keeps_draft_inactive_and_round_trips(
+async def test_apply_norm_without_lengths_is_skipped_and_not_exported(
     client: AsyncClient, session: AsyncSession
 ) -> None:
-    """Q3/Q2/Q11: строка с нормой без длин не активирует черновик и не теряет норму."""
+    """Importer не привязывает quantity без реестра длин и может пропустить неизменимую строку."""
     product = await _make_product(session, sku="ЮП-ЧЕРНОВИК", is_active=False)
     content = _xlsx_bytes([_row(sku="ЮП-ЧЕРНОВИК", quantities="22")])
 
     body = (await _upload(client, APPLY_URL, content)).json()
 
     assert body["errors"] == []
-    assert body["updated"] == 1
+    assert body["updated"] == 0
     await session.refresh(product)
     assert product.is_active is False
-    assert product.attributes["quantity_per_hanger"] == {"auto": None, "manual": 22}
-    assert product.quantity_per_hanger == 22
+    assert (product.attributes or {}).get("quantity_per_hanger") is None
+    assert product.quantity_per_hanger is None
+    assert product.quantity_per_hanger_by_length is None
 
-    # Round-trip: норма без длин возвращается в файл числом при пустых «Длинах».
     _, by_sku = await _export(client)
     assert by_sku["ЮП-ЧЕРНОВИК"]["Длины, мм"] is None
-    assert by_sku["ЮП-ЧЕРНОВИК"]["Кол-во на подвесе"] == 22
+    assert by_sku["ЮП-ЧЕРНОВИК"]["Кол-во на подвесе"] is None
 
 
 async def test_apply_row_with_length_activates_draft(
@@ -723,7 +951,7 @@ async def test_export_excel_headers_mime_and_filename(client: AsyncClient) -> No
     header = [cell.value for cell in sheet[1]]
     # Выгрузка — ровно колонки импорта; «Фото» остаётся только в рабочем файле (#177 Q4/Q12).
     assert header == list(TEMPLATE_HEADERS)
-    assert len(header) == 11
+    assert "Сырьевые длины, мм" in header
     assert "Фото" not in header
 
 

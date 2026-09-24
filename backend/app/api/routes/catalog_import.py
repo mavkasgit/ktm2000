@@ -9,8 +9,8 @@ from tempfile import TemporaryDirectory
 from fastapi import APIRouter, Depends, File, HTTPException, UploadFile
 from fastapi.responses import Response
 from openpyxl import Workbook
-from sqlalchemy import String, cast, select
-from sqlalchemy.dialects.postgresql import ARRAY as pg_ARRAY
+from sqlalchemy import String, cast, select, update
+from sqlalchemy.types import ARRAY
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import selectinload
 
@@ -25,14 +25,16 @@ from app.core.database import get_db
 from app.models.product import Product, ProductLength, ProductPair, ProductType, _length_key
 from app.services.catalog_excel_import import (
     TEMPLATE_HEADERS,
+    parse_catalog_excel,
     ParsedCatalogRow,
+    validate_row_counts,
     build_quantity_dict,
     diff_catalog_row,
     effective_lengths,
     format_lengths_cell,
     format_quantities_cell,
-    parse_catalog_excel,
-    validate_row_counts,
+    format_raw_lengths_cell,
+    resolve_raw_lengths,
 )
 from app.services.hanger_quantity_calc import (
     DEFAULT_HANGER_SETTINGS,
@@ -63,6 +65,20 @@ def _normalize_photo_path(path: str | None) -> str | None:
         return None
     normalized = path.replace("\\", "/")
     return normalized
+
+
+def _zip_should_update_length(product: Product, length: float | None) -> bool:
+    """ZIP heals empty registries and owns only its single imported length."""
+    if length is None:
+        return False
+    if not product.lengths:
+        return True
+    return (
+        product.source == "ekranchik_catalog"
+        and product.is_catalog_item
+        and len(product.lengths) == 1
+        and _length_key(product.lengths[0].length_mm) != _length_key(length)
+    )
 
 
 @router.post("/upload-zip")
@@ -135,7 +151,7 @@ async def import_catalog_from_zip(
                 select(Product)
                 .options(selectinload(Product.lengths))
                 .where(
-                    (Product.sku == sku) | (Product.aliases.op("@>")(cast([sku], pg_ARRAY(String))))
+                    (Product.sku == sku) | (Product.aliases.op("@>")(cast([sku], ARRAY(String))))
                 )
             )
 
@@ -174,24 +190,19 @@ async def import_catalog_from_zip(
                 if existing.quantity_per_hanger != qty:
                     existing.quantity_per_hanger = qty
                     changed = True
-                if length is not None and not existing.lengths:
-                    # Канон длин — product_lengths: историческая дыра этого
-                    # импорта — длина писалась только скаляром. Строку заводим
-                    # даже при совпадающем скаляре: реимпорт лечит ранее
-                    # импортированные артикулы без ручных SQL-правок.
-                    existing.length_mm = length
-                    db.add(ProductLength(product_id=existing.id, length_mm=length, is_primary=True))
+                if _zip_should_update_length(existing, length):
+                    # Пустой реестр heals; единственная длина импортёра
+                    # обновляется, ручной реестр остаётся авторитетным.
+                    if existing.lengths:
+                        existing.lengths[0].length_mm = length
+                    else:
+                        existing.lengths.append(
+                            ProductLength(
+                                length_mm=length,
+                                is_primary=True,
+                            )
+                        )
                     changed = True
-                elif length is not None and existing.length_mm != length:
-                    old_length = existing.length_mm
-                    existing.length_mm = length
-                    changed = True
-                    # Зеркалим в строку, совпадающую со старым скаляром;
-                    # остальные строки не трогаем, дубли не плодим.
-                    if not any(row.length_mm == length for row in existing.lengths):
-                        for row in existing.lengths:
-                            if row.length_mm == old_length:
-                                row.length_mm = length
                 if new_thumb and existing.photo_thumb != new_thumb:
                     existing.photo_thumb = new_thumb
                     changed = True
@@ -215,7 +226,6 @@ async def import_catalog_from_zip(
                     is_active=True,
                     notes=notes or None,
                     profile_type=_parse_profile_type(sku),
-                    length_mm=length,
                     quantity_per_hanger=qty,
                     photo_thumb=new_thumb,
                     photo_full=new_full,
@@ -301,8 +311,10 @@ async def preview_catalog_from_zip(
             stats["total"] += 1
 
             existing = await db.scalar(
-                select(Product).where(
-                    (Product.sku == sku) | (Product.aliases.op("@>")(cast([sku], pg_ARRAY(String))))
+                select(Product)
+                .options(selectinload(Product.lengths))
+                .where(
+                    (Product.sku == sku) | (Product.aliases.op("@>")(cast([sku], ARRAY(String))))
                 )
             )
 
@@ -320,7 +332,7 @@ async def preview_catalog_from_zip(
                     existing.type != ProductType.component
                     or existing.name != sku
                     or existing.quantity_per_hanger != qty
-                    or existing.length_mm != length
+                    or _zip_should_update_length(existing, length)
                     or existing.profile_type != _parse_profile_type(sku)
                 )
                 action = "update" if would_change else "skip"
@@ -361,12 +373,36 @@ async def _load_products_by_sku(db: AsyncSession, skus: list[str]) -> dict[str, 
 
 
 def _row_count_errors(
-    row: ParsedCatalogRow, existing_lengths: list[float] | None
+    row: ParsedCatalogRow,
+    existing_lengths: list[float] | None,
+    dimension_state: str | None = None,
 ) -> list[dict]:
     return [
         {"row": row.row, "sku": row.sku, "message": message}
-        for message in validate_row_counts(row, existing_lengths)
+        for message in validate_row_counts(row, existing_lengths, dimension_state)
     ]
+
+
+async def _sync_raw_lengths(
+    db: AsyncSession,
+    product_id: int,
+    raw_by_normal: dict[float, float | None],
+) -> None:
+    """Replace the complete raw mapping, including explicit NULL segments."""
+    await db.execute(
+        update(ProductLength)
+        .where(ProductLength.product_id == product_id)
+        .values(raw_length_mm=None)
+    )
+    for normal, raw in raw_by_normal.items():
+        await db.execute(
+            update(ProductLength)
+            .where(
+                ProductLength.product_id == product_id,
+                ProductLength.length_mm == normal,
+            )
+            .values(raw_length_mm=raw)
+        )
 
 
 @dataclass(slots=True)
@@ -381,13 +417,62 @@ class _ImportBatch:
     total_data_rows: int
 
 
+def _effective_raw_lengths(
+    row: ParsedCatalogRow, product: Product | None, lengths: list[float] | None
+) -> list[float | None] | None:
+    if "raw_lengths_mm" in row.fields:
+        return resolve_raw_lengths(row, lengths)
+    if product is None or not lengths:
+        return None
+    raw_by_normal = {length.length_mm: length.raw_length_mm for length in product.lengths}
+    return [raw_by_normal.get(length) for length in lengths]
+
+
+def _preview_length_records(
+    product: Product | None,
+    lengths: list[float] | None,
+    raw_lengths: list[float | None] | None,
+) -> list[dict[str, float | bool | None]]:
+    """Публичный preview-контракт пар normal/raw с сохранением primary."""
+    existing = {
+        float(length.length_mm): length
+        for length in (product.lengths if product is not None else [])
+    }
+    normal_values = [float(length) for length in lengths or []]
+    previous_primary = next(
+        (
+            float(length.length_mm)
+            for length in existing.values()
+            if length.is_primary
+        ),
+        None,
+    )
+    primary = (
+        previous_primary
+        if previous_primary in normal_values
+        else normal_values[0] if normal_values else None
+    )
+    return [
+        {
+            "length_mm": length,
+            "raw_length_mm": (
+                raw_lengths[index]
+                if raw_lengths is not None and index < len(raw_lengths)
+                else None
+            ),
+            "is_primary": length == primary,
+        }
+        for index, length in enumerate(normal_values)
+    ]
+
+
 async def _create_product_from_row(db: AsyncSession, row: ParsedCatalogRow) -> None:
     fields = row.fields
     lengths = fields.get("lengths_mm") or []
     quantities = fields.get("quantities")
-    # Черновик: длин нет — артикул создаётся неактивным (Q3: активация только
-    # вместе с длинами); норма из строки при этом хранится legacy-скаляром
-    # (#177, Q2). Размерность всегда 1D (length).
+    raw_lengths = fields.get("raw_lengths_mm") or []
+    # Черновик без нормальных длин остаётся неактивным и без ProductLength;
+    # Excel-размерность нового артикула всегда 1D (length).
     draft = not lengths
     product = Product(
         sku=row.sku,
@@ -412,24 +497,31 @@ async def _create_product_from_row(db: AsyncSession, row: ParsedCatalogRow) -> N
         if fields.get("perimeter_mm") is not None and fields.get("mount_width_mm") is not None
         else "manual"
     )
-    if quantities is not None:
+    if quantities is not None or product.hanger_mode == "auto":
         if not lengths:
-            # Норма без длин (#177, Q2): legacy-скаляр. Setter принимает int и
-            # пишет bare {auto: null, manual: N}; раскрытие в per-length — когда
-            # у артикула появятся длины.
-            product.quantity_per_hanger = quantities[0]
+            row.warnings.append(
+                "Кол-во на подвесе: не сохранено — добавьте нормальную длину"
+            )
         else:
-            qph = build_quantity_dict(lengths, quantities)
+            qph = build_quantity_dict(
+                lengths,
+                quantities if quantities is not None else [None] * len(lengths),
+            )
             if product.hanger_mode == "auto":
                 # В авто-режиме значение должно существовать сразу — считаем
-                # движком, как в products API. Несовместимые габариты — auto
-                # остаётся null (ошибку покажет валидация планирования).
-                for length in lengths:
+                # движком по effective raw, как в products API. Несовместимые
+                # габариты — auto остаётся null (ошибку покажет валидация).
+                for index, length in enumerate(lengths):
+                    effective_raw_length = (
+                        raw_lengths[index]
+                        if index < len(raw_lengths) and raw_lengths[index] is not None
+                        else length
+                    )
                     try:
                         calc = compute_hanger_quantity(
                             perimeter_mm=fields["perimeter_mm"],
                             mount_width_mm=fields["mount_width_mm"],
-                            length_mm=length,
+                            length_mm=effective_raw_length,
                             hanger=DEFAULT_HANGER_SETTINGS,
                         )
                     except HangerConfigError:
@@ -440,8 +532,13 @@ async def _create_product_from_row(db: AsyncSession, row: ParsedCatalogRow) -> N
     db.add(product)
     await db.flush()
 
-    for length in lengths:
-        db.add(ProductLength(product_id=product.id, length_mm=length))
+    for index, length in enumerate(lengths):
+        db.add(ProductLength(
+            product_id=product.id,
+            length_mm=length,
+            raw_length_mm=raw_lengths[index] if index < len(raw_lengths) else None,
+            is_primary=index == 0,
+        ))
     if fields.get("skip_shot_blast") is not None:
         await _sync_boolean_flag(db, product.id, "skip_shot_blast", fields["skip_shot_blast"])
     if fields.get("is_laminated") is not None:
@@ -470,8 +567,26 @@ async def _update_product_from_row(
     for key in ("perimeter_mm", "mount_width_mm"):
         if key in changes:
             setattr(product, key, changes[key])
+    previous_raw = {
+        length.length_mm: length.raw_length_mm
+        for length in product.lengths
+    }
     if "lengths_mm" in changes:
         await _sync_lengths(db, product.id, changes["lengths_mm"])
+        await db.flush()
+    if "raw_lengths_mm" in changes:
+        raw_by_normal = dict(zip(
+            changes["lengths_mm"] if "lengths_mm" in changes else [length.length_mm for length in product.lengths],
+            changes["raw_lengths_mm"],
+            strict=True,
+        ))
+        await _sync_raw_lengths(db, product.id, raw_by_normal)
+    elif "lengths_mm" in changes:
+        await _sync_raw_lengths(
+            db,
+            product.id,
+            {length: previous_raw.get(length) for length in changes["lengths_mm"]},
+        )
     if "quantity_per_hanger" in changes:
         product.quantity_per_hanger = changes["quantity_per_hanger"]
     if "skip_shot_blast" in changes:
@@ -568,7 +683,6 @@ async def _existing_pair_keys(db: AsyncSession, product_ids: list[int]) -> set[t
     return {(p.product_a_id, p.product_b_id) for p in pair_rows}
 
 
-
 async def _prepare_excel_import(file: UploadFile, db: AsyncSession) -> _ImportBatch:
     """Общая часть preview/apply: парсинг файла + загрузка артикулов."""
     content = await file.read()
@@ -606,9 +720,12 @@ async def preview_catalog_from_excel(
     for row in rows:
         product = batch.products.get(row.sku)
         is_new = product is None
-
         existing_lengths = sorted(length.length_mm for length in product.lengths) if product else None
-        count_errors = _row_count_errors(row, existing_lengths)
+        count_errors = _row_count_errors(
+            row,
+            existing_lengths,
+            product.dimension_state.value if product else "length",
+        )
         if count_errors:
             errors.extend(count_errors)
             error_rows.add(row.row)
@@ -626,14 +743,14 @@ async def preview_catalog_from_excel(
             action = "update" if diff_catalog_row(product, row) else "skip"
         stats[action] += 1
         lengths = effective_lengths(row, existing_lengths)
+        raw_lengths = _effective_raw_lengths(row, product, lengths)
         quantities = row.fields.get("quantities")
         new_set = set(new_links)
         items.append({
             "row": row.row,
             "sku": row.sku,
             "name": row.fields.get("name") or (product.name if product else row.sku),
-            "length_mm": lengths[0] if lengths else None,
-            "lengths_mm": lengths or [],
+            "lengths": _preview_length_records(product, lengths, raw_lengths),
             "quantity_per_hanger": quantities[0] if quantities else (product.quantity_per_hanger if product else None),
             "quantities_per_hanger": quantities,
             "draft": is_new and not lengths,
@@ -670,7 +787,11 @@ async def apply_catalog_from_excel(
         product = batch.products.get(row.sku)
 
         existing_lengths = sorted(length.length_mm for length in product.lengths) if product else None
-        count_errors = _row_count_errors(row, existing_lengths)
+        count_errors = _row_count_errors(
+            row,
+            existing_lengths,
+            product.dimension_state.value if product else "length",
+        )
         if count_errors:
             errors.extend(count_errors)
             failed_rows.add(row.row)
@@ -792,7 +913,9 @@ async def export_catalog_excel(db: AsyncSession = Depends(get_db)) -> Response:
     sheet.title = "Справочник сырья"
     sheet.append(list(TEMPLATE_HEADERS))
     for product in products:
-        lengths = sorted(length.length_mm for length in product.lengths)
+        length_rows = sorted(product.lengths, key=lambda length: length.length_mm)
+        lengths = [length.length_mm for length in length_rows]
+        raw_lengths = [length.raw_length_mm for length in length_rows]
         flag_codes = {flag.code for flag in product.processing_flags}
         # Норма без длин (#177, Q2/Q11) хранится legacy-скаляром — при пустых
         # «Длинах» выгружаем её числом, иначе round-trip потерял бы значение.
@@ -807,6 +930,7 @@ async def export_catalog_excel(db: AsyncSession = Depends(get_db)) -> Response:
             product.perimeter_mm,
             product.mount_width_mm,
             format_lengths_cell(lengths),
+            format_raw_lengths_cell(lengths, raw_lengths),
             quantities_cell,
             product.notes,
             "да" if "skip_shot_blast" in flag_codes else "",

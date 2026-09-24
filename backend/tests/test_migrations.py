@@ -1024,3 +1024,257 @@ async def test_migration_058_product_pair_quantity_norms():
         async with admin_engine.connect() as conn:
             await conn.execute(text(f'DROP DATABASE IF EXISTS "{db_name}" WITH (FORCE)'))
         await admin_engine.dispose()
+
+
+@pytest.mark.asyncio
+async def test_migration_059_backfills_legacy_linear_length_without_raw():
+    """Скаляр 2700 переносится один раз; совпадающий линейный default очищается."""
+    db_name = f"ktm_mig_{uuid.uuid4().hex[:10]}"
+    admin_url = _test_db_url().rsplit("/", 1)[0] + "/postgres"
+    target_url = _test_db_url().rsplit("/", 1)[0] + f"/{db_name}"
+
+    admin_engine = create_async_engine(admin_url, isolation_level="AUTOCOMMIT")
+    async with admin_engine.connect() as conn:
+        await conn.execute(text(f'CREATE DATABASE "{db_name}"'))
+    await admin_engine.dispose()
+
+    env = {**os.environ, "DATABASE_URL": target_url}
+    engine = create_async_engine(target_url)
+    try:
+        upgraded = subprocess.run(
+            ["alembic", "upgrade", "058_product_pair_quantity_norms"],
+            cwd=BACKEND_DIR,
+            env=env,
+            capture_output=True,
+            text=True,
+            check=False,
+        )
+        assert upgraded.returncode == 0, upgraded.stderr or upgraded.stdout
+
+        async with engine.begin() as conn:
+            product_id = (
+                await conn.execute(
+                    text(
+                        "INSERT INTO products "
+                        "(sku, name, type, unit, is_active, dimension_state, attributes) "
+                        "VALUES ('MIG059-CLEAN', 'Legacy 2700', 'component', 'pcs', true, "
+                        "'length', '{\"length_mm\": 2700}'::jsonb) RETURNING id"
+                    )
+                )
+            ).scalar_one()
+            await conn.execute(
+                text(
+                    "INSERT INTO dimension_types (code, name, unit) "
+                    "VALUES ('length_mm', 'Длина, мм', 'мм')"
+                )
+            )
+            await conn.execute(
+                text(
+                    "INSERT INTO product_dimensions "
+                    "(product_id, dimension_type_id, is_required, default_value) "
+                    "SELECT :product_id, id, false, 2700.0 "
+                    "FROM dimension_types WHERE code = 'length_mm'"
+                ),
+                {"product_id": product_id},
+            )
+
+        upgraded = subprocess.run(
+            ["alembic", "upgrade", "head"],
+            cwd=BACKEND_DIR,
+            env=env,
+            capture_output=True,
+            text=True,
+            check=False,
+        )
+        assert upgraded.returncode == 0, upgraded.stderr or upgraded.stdout
+
+        async with engine.connect() as conn:
+            lengths = (
+                await conn.execute(
+                    text(
+                        "SELECT length_mm, raw_length_mm, is_primary "
+                        "FROM product_lengths WHERE product_id = :product_id"
+                    ),
+                    {"product_id": product_id},
+                )
+            ).all()
+            linear_default_count = (
+                await conn.execute(
+                    text(
+                        "SELECT count(*) "
+                        "FROM product_dimensions pd "
+                        "JOIN dimension_types dt ON dt.id = pd.dimension_type_id "
+                        "WHERE pd.product_id = :product_id "
+                        "  AND dt.code = 'length_mm' "
+                        "  AND pd.default_value IS NOT NULL"
+                    ),
+                    {"product_id": product_id},
+                )
+            ).scalar_one()
+
+        assert [(row.length_mm, row.raw_length_mm, row.is_primary) for row in lengths] == [
+            (2700.0, None, True)
+        ]
+        assert linear_default_count == 0
+
+        from sqlalchemy.exc import IntegrityError
+
+        async with engine.begin() as conn:
+            with pytest.raises(IntegrityError):
+                await conn.execute(
+                    text(
+                        "UPDATE product_lengths SET raw_length_mm = 2699 "
+                        "WHERE product_id = :product_id"
+                    ),
+                    {"product_id": product_id},
+                )
+    finally:
+        await engine.dispose()
+        admin_engine = create_async_engine(admin_url, isolation_level="AUTOCOMMIT")
+        async with admin_engine.connect() as conn:
+            await conn.execute(text(f'DROP DATABASE IF EXISTS "{db_name}" WITH (FORCE)'))
+        await admin_engine.dispose()
+
+
+@pytest.mark.asyncio
+async def test_migration_059_stops_on_conflicting_linear_default_until_manual_resolution():
+    """Конфликт 2750/2700 откатывается и повторяется только после решения оператора."""
+    db_name = f"ktm_mig_{uuid.uuid4().hex[:10]}"
+    admin_url = _test_db_url().rsplit("/", 1)[0] + "/postgres"
+    target_url = _test_db_url().rsplit("/", 1)[0] + f"/{db_name}"
+
+    admin_engine = create_async_engine(admin_url, isolation_level="AUTOCOMMIT")
+    async with admin_engine.connect() as conn:
+        await conn.execute(text(f'CREATE DATABASE "{db_name}"'))
+    await admin_engine.dispose()
+
+    env = {**os.environ, "DATABASE_URL": target_url}
+    engine = create_async_engine(target_url)
+    try:
+        upgraded = subprocess.run(
+            ["alembic", "upgrade", "058_product_pair_quantity_norms"],
+            cwd=BACKEND_DIR,
+            env=env,
+            capture_output=True,
+            text=True,
+            check=False,
+        )
+        assert upgraded.returncode == 0, upgraded.stderr or upgraded.stdout
+
+        async with engine.begin() as conn:
+            product_id = (
+                await conn.execute(
+                    text(
+                        "INSERT INTO products "
+                        "(sku, name, type, unit, is_active, dimension_state, attributes) "
+                        "VALUES ('MIG059-CONFLICT', 'Legacy 2700', 'component', 'pcs', true, "
+                        "'length', '{\"length_mm\": 2700}'::jsonb) RETURNING id"
+                    )
+                )
+            ).scalar_one()
+            await conn.execute(
+                text(
+                    "INSERT INTO dimension_types (code, name, unit) "
+                    "VALUES ('length_mm', 'Длина, мм', 'мм')"
+                )
+            )
+            await conn.execute(
+                text(
+                    "INSERT INTO product_dimensions "
+                    "(product_id, dimension_type_id, is_required, default_value) "
+                    "SELECT :product_id, id, false, 2750.0 "
+                    "FROM dimension_types WHERE code = 'length_mm'"
+                ),
+                {"product_id": product_id},
+            )
+
+        failed = subprocess.run(
+            ["alembic", "upgrade", "head"],
+            cwd=BACKEND_DIR,
+            env=env,
+            capture_output=True,
+            text=True,
+            check=False,
+        )
+        assert failed.returncode != 0
+        failure_output = failed.stdout + failed.stderr
+        assert "MIG059-CONFLICT" in failure_output
+        assert "2750" in failure_output
+        assert "2700" in failure_output
+        assert "product_dimensions.default_value" in failure_output
+
+        async with engine.connect() as conn:
+            current_revision = (
+                await conn.execute(text("SELECT version_num FROM alembic_version"))
+            ).scalar_one()
+            product_snapshot = (
+                await conn.execute(
+                    text(
+                        "SELECT p.attributes, pd.default_value, "
+                        "(SELECT count(*) FROM product_lengths pl WHERE pl.product_id = p.id) "
+                        "AS length_count "
+                        "FROM products p "
+                        "JOIN product_dimensions pd ON pd.product_id = p.id "
+                        "WHERE p.id = :product_id"
+                    ),
+                    {"product_id": product_id},
+                )
+            ).one()
+            raw_column_count = (
+                await conn.execute(
+                    text(
+                        "SELECT count(*) FROM information_schema.columns "
+                        "WHERE table_schema = 'public' AND table_name = 'product_lengths' "
+                        "  AND column_name = 'raw_length_mm'"
+                    )
+                )
+            ).scalar_one()
+
+        assert current_revision == "058_product_pair_quantity_norms"
+        assert product_snapshot.attributes == {"length_mm": 2700}
+        assert product_snapshot.default_value == 2750.0
+        assert product_snapshot.length_count == 0
+        assert raw_column_count == 0
+
+        async with engine.begin() as conn:
+            resolved = await conn.execute(
+                text(
+                    "UPDATE product_dimensions SET default_value = 2700.0 "
+                    "WHERE product_id = :product_id"
+                ),
+                {"product_id": product_id},
+            )
+            assert resolved.rowcount == 1
+
+        upgraded = subprocess.run(
+            ["alembic", "upgrade", "head"],
+            cwd=BACKEND_DIR,
+            env=env,
+            capture_output=True,
+            text=True,
+            check=False,
+        )
+        assert upgraded.returncode == 0, upgraded.stderr or upgraded.stdout
+
+        async with engine.connect() as conn:
+            lengths = (
+                await conn.execute(
+                    text(
+                        "SELECT length_mm, raw_length_mm, is_primary "
+                        "FROM product_lengths WHERE product_id = :product_id "
+                        "ORDER BY length_mm"
+                    ),
+                    {"product_id": product_id},
+                )
+            ).all()
+
+        assert [(row.length_mm, row.raw_length_mm, row.is_primary) for row in lengths] == [
+            (2700.0, None, True)
+        ]
+        assert all(row.length_mm != 2750.0 for row in lengths)
+    finally:
+        await engine.dispose()
+        admin_engine = create_async_engine(admin_url, isolation_level="AUTOCOMMIT")
+        async with admin_engine.connect() as conn:
+            await conn.execute(text(f'DROP DATABASE IF EXISTS "{db_name}" WITH (FORCE)'))
+        await admin_engine.dispose()

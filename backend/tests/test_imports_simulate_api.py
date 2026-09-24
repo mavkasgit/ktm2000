@@ -14,7 +14,7 @@ import pytest
 from sqlalchemy import select
 
 from app.models.import_template import ImportTemplate
-from app.models.product import Product, ProductType
+from app.models.product import Product, ProductLength, ProductType
 from app.models.route import ProductionRoute, RouteOperation, RouteStage
 from app.models.section import Section
 
@@ -54,6 +54,9 @@ async def _seed_product_with_route(session, sku: str) -> Product:
             unit="pcs",
         )
         session.add(product)
+        product.lengths.append(
+            ProductLength(length_mm=2700, is_primary=True)
+        )
 
     sections: list[Section] = []
     for code, name in (("CUT", "Cut"), ("PACKING", "Pack")):

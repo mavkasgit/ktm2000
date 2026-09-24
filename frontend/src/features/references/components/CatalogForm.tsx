@@ -14,12 +14,12 @@ import { uploadProductPhoto, getErrorMessage } from "@/shared/api/products";
 import { listDimensionTypes } from "../api";
 import { queryKeys } from "@/shared/api/queryKeys";
 import { calcHanger, type HangerCalcResult } from "@/shared/api/hangerCalc";
-import { isHangerAutoMode, isSheetState, lengthKey, manualByLength, normalizeLengths, primaryLength, productLengths } from "@/shared/lib/hangerQuantity";
+import { isHangerAutoMode, isSheetState, lengthKey, manualByLength, normalizeLengths, primaryLength, productLengths, effectiveRawLength } from "@/shared/lib/hangerQuantity";
 import { parseNumericInput } from "@/shared/lib/parseNumericInput";
 import { isLengthState } from "@/shared/lib/dimensionState";
 import { RadioGroup, RadioGroupItem } from "@/shared/ui/radio-group";
 import { cn } from "@/shared/utils/cn";
-import type { Product, CreateProductInput, PatchProductInput, QuantityPerHangerDict, DimensionState, HangerMode } from "@/shared/api/products";
+import type { Product, ProductLength, CreateProductInput, PatchProductInput, QuantityPerHangerDict, DimensionState, HangerMode } from "@/shared/api/products";
 
 export type DialogMode = "create" | "edit";
 
@@ -74,15 +74,19 @@ function manualChangeTexts(
 
 /** Payload-словарь {length: {auto: null, manual}} для всех длин формы. */
 function buildManualPayloadDict(
-  lengths: number[],
+  lengths: Array<number | ProductLength>,
   merged: Record<string, number | null>,
 ): QuantityPerHangerDict {
   const dict: QuantityPerHangerDict = {};
   for (const length of lengths) {
-    const key = lengthKey(length);
+    const key = lengthKey(typeof length === "number" ? length : length.length_mm);
     dict[key] = { auto: null, manual: merged[key] ?? null };
   }
   return dict;
+}
+
+function lengthsFromProduct(product: Product | null): ProductLength[] {
+  return (product?.lengths ?? []).map((length) => ({ ...length }));
 }
 
 /** Подписи режима подвеса (#126) для списка изменений. */
@@ -92,7 +96,6 @@ const HANGER_MODE_LABELS: Record<HangerMode, string> = {
 };
 
 function buildInitialForm(product: Product | null, mode: DialogMode): CreateProductInput {
-  const lengths = productLengths(product ?? {});
   return {
     sku: product?.sku ?? "",
     code: product?.code ?? null,
@@ -105,8 +108,6 @@ function buildInitialForm(product: Product | null, mode: DialogMode): CreateProd
     alloy: product?.alloy ?? null,
     color: product?.color ?? null,
     anod_type: product?.anod_type ?? null,
-    length_mm: lengths[0] ?? product?.length_mm ?? null,
-    primary_length_mm: product?.primary_length_mm ?? lengths[0] ?? null,
     weight_per_meter: product?.weight_per_meter ?? null,
     perimeter_mm: product?.perimeter_mm ?? null,
     mount_width_mm: product?.mount_width_mm ?? null,
@@ -116,7 +117,7 @@ function buildInitialForm(product: Product | null, mode: DialogMode): CreateProd
     skip_shot_blast: product?.skip_shot_blast ?? false,
     dimension_state: product?.dimension_state ?? "length",
     aliases: product?.aliases ?? [],
-    lengths_mm: lengths,
+    lengths: lengthsFromProduct(product),
     is_laminated: product?.is_laminated ?? false,
   };
 }
@@ -124,7 +125,7 @@ function buildInitialForm(product: Product | null, mode: DialogMode): CreateProd
 function getChanges(form: CreateProductInput, product: Product | null, isCreate: boolean): FieldChange[] {
   if (isCreate || !product) return [];
   const changes: FieldChange[] = [];
-  const formLengths = normalizeLengths(form.lengths_mm ?? []);
+  const formLengths = productLengths(form);
   const productLens = productLengths(product);
 
   if (!eq(form.sku, product.sku)) changes.push({ field: "sku", label: "Артикул", from: product.sku, to: form.sku ?? "" });
@@ -154,12 +155,12 @@ function getChanges(form: CreateProductInput, product: Product | null, isCreate:
   if (!eq(form.cross_section, product.cross_section)) changes.push({ field: "cross_section", label: "Сечение", from: product.cross_section ?? "—", to: form.cross_section ?? "—" });
   if (!eq(form.skip_shot_blast, product.skip_shot_blast)) changes.push({ field: "skip_shot_blast", label: "Не дробеструится", from: product.skip_shot_blast ? "Да" : "Нет", to: form.skip_shot_blast ? "Да" : "Нет" });
   if (!eq(form.aliases ?? [], product.aliases ?? [])) changes.push({ field: "aliases", label: "Эквиваленты", from: (product.aliases ?? []).join(", ") || "—", to: (form.aliases ?? []).join(", ") || "—" });
-  if (!eq(formLengths, productLens)) changes.push({ field: "lengths_mm", label: "Длины", from: productLens.join(", ") || "—", to: formLengths.join(", ") || "—" });
-  const formPrimary = form.primary_length_mm ?? null;
-  const productPrimary = product.primary_length_mm ?? productLengths(product)[0] ?? null;
+  if (!eq(form.lengths ?? [], product.lengths ?? [])) changes.push({ field: "lengths", label: "Длины", from: productLens.join(", ") || "—", to: formLengths.join(", ") || "—" });
+  const formPrimary = form.lengths?.find((length) => length.is_primary)?.length_mm ?? null;
+  const productPrimary = primaryLength(product);
   if (!eq(formPrimary, productPrimary)) {
     changes.push({
-      field: "primary_length_mm",
+      field: "lengths",
       label: "Основная длина",
       from: productPrimary != null ? `${productPrimary} мм` : "—",
       to: formPrimary != null ? `${formPrimary} мм` : "—",
@@ -254,8 +255,7 @@ export const CatalogForm = forwardRef<CatalogFormRef, {
     setDimValues({});
     setChangesOpen(false);
   }, [product?.id, mode]);
-
-  const formLengths = useMemo(() => normalizeLengths(form.lengths_mm ?? []), [form.lengths_mm]);
+  const formLengths = useMemo(() => productLengths(form), [form.lengths]);
   // Явный режим подвеса (#127): единый для 1D/2D/3D, без data-driven вывода.
   const autoMode = (form.hanger_mode ?? "auto") === "auto";
   const sheetMode: HangerMode = form.hanger_mode ?? "auto"; // подпись режима для радио
@@ -313,10 +313,10 @@ export const CatalogForm = forwardRef<CatalogFormRef, {
     const timer = window.setTimeout(() => {
       setHangerPreview({ status: "loading" });
       calcHanger(
-        formLengths.map((length) => ({
+        (form.lengths ?? []).map((length) => ({
           perimeter_mm: perimeter,
           mount_width_mm: mountWidth,
-          length_mm: length,
+          length_mm: effectiveRawLength(length),
         })),
       )
         .then((resp) => {
@@ -334,7 +334,7 @@ export const CatalogForm = forwardRef<CatalogFormRef, {
 
   const autoQuantityFor = (length: number): number | null => {
     if (hangerPreview.status !== "ready" || !hangerPreview.results) return null;
-    const idx = formLengths.indexOf(length);
+    const idx = (form.lengths ?? []).findIndex((record) => record.length_mm === length);
     const result = idx >= 0 ? hangerPreview.results[idx] : null;
     return result?.is_calculable ? result.total : null;
   };
@@ -351,40 +351,35 @@ export const CatalogForm = forwardRef<CatalogFormRef, {
       },
     }));
   };
-
-  const setLengths = useCallback((values: number[]) => {
-    const normalized = normalizeLengths(values);
+  const setLengths = useCallback((values: Array<number | ProductLength>) => {
+    const normalized = normalizeLengths(values.map((value) => typeof value === "number" ? value : value.length_mm));
     setForm((f) => {
-      const currentPrimary = f.primary_length_mm;
-      const primary =
-        currentPrimary != null && normalized.includes(currentPrimary)
-          ? currentPrimary
-          : normalized[0] ?? null;
+      const previous = new Map((f.lengths ?? []).map((length) => [length.length_mm, length]));
+      const currentPrimary = f.lengths?.find((length) => length.is_primary)?.length_mm;
+      const primary = currentPrimary != null && normalized.includes(currentPrimary) ? currentPrimary : normalized[0] ?? null;
       return {
         ...f,
-        lengths_mm: normalized,
-        primary_length_mm: primary,
-        // Keep legacy scalar field in sync with the first length.
-        length_mm: normalized[0] ?? null,
+        lengths: normalized.map((length) => {
+          const old = previous.get(length);
+          return { length_mm: length, raw_length_mm: old?.raw_length_mm ?? null, is_primary: length === primary };
+        }),
       };
     });
   }, []);
-
   const commitLength = () => {
     const val = parseFloat(newLength);
     if (isNaN(val) || val <= 0) return;
-    setLengths([...(form.lengths_mm ?? []), val]);
+    setLengths([...(form.lengths ?? []), { length_mm: val, raw_length_mm: null, is_primary: false }]);
     setNewLength("");
   };
 
   const buildPatch = useCallback((): PatchProductInput => {
     if (!product) return {};
     const patch: PatchProductInput = {};
-    const formLengths = normalizeLengths(form.lengths_mm ?? []);
+    const formLengths = productLengths(form);
     const productLens = productLengths(product);
-    const formPrimaryLength = formLengths[0] ?? null;
-    const productPrimaryLength = productLens[0] ?? (product.length_mm ?? null);
-
+    const formPrimaryLength = primaryLength(form);
+    const productPrimaryLength = primaryLength(product);
     if (!eq(form.sku, product.sku)) patch.sku = form.sku.trim();
     if (!eq(form.code, product.code)) patch.code = form.code?.trim() || null;
     if (!eq(form.name, product.name)) patch.name = form.name;
@@ -396,7 +391,7 @@ export const CatalogForm = forwardRef<CatalogFormRef, {
     if (!eq(form.alloy, product.alloy)) patch.alloy = form.alloy;
     if (!eq(form.color, product.color)) patch.color = form.color;
     if (!eq(form.anod_type, product.anod_type)) patch.anod_type = form.anod_type;
-    if (!eq(formPrimaryLength, productPrimaryLength)) patch.length_mm = formPrimaryLength;
+    if (!eq(formPrimaryLength, productPrimaryLength)) patch.lengths = form.lengths ?? [];
     if (!eq(form.weight_per_meter, product.weight_per_meter)) patch.weight_per_meter = form.weight_per_meter;
     if (!eq(form.perimeter_mm ?? null, product.perimeter_mm ?? null)) patch.perimeter_mm = form.perimeter_mm ?? null;
     if (!eq(form.mount_width_mm ?? null, product.mount_width_mm ?? null)) patch.mount_width_mm = form.mount_width_mm ?? null;
@@ -409,10 +404,8 @@ export const CatalogForm = forwardRef<CatalogFormRef, {
     if (!eq(form.cross_section, product.cross_section)) patch.cross_section = form.cross_section;
     if (!eq(form.skip_shot_blast, product.skip_shot_blast)) patch.skip_shot_blast = form.skip_shot_blast;
     if (!eq(form.aliases ?? [], product.aliases ?? [])) patch.aliases = form.aliases;
-    if (!eq(formLengths, productLens)) patch.lengths_mm = formLengths;
-    const formPrimary = form.primary_length_mm ?? null;
-    const productPrimary = product.primary_length_mm ?? productLengths(product)[0] ?? null;
-    if (!eq(formPrimary, productPrimary)) patch.primary_length_mm = formPrimary;
+    if (!eq(form.lengths ?? [], product.lengths ?? [])) patch.lengths = form.lengths ?? [];
+    if (!eq(primaryLength(form), primaryLength(product))) patch.lengths = form.lengths ?? [];
     if (!eq(form.is_laminated ?? false, product.is_laminated)) patch.is_laminated = form.is_laminated;
     if (!eq(form.dimension_state ?? "length", product.dimension_state ?? "length")) patch.dimension_state = form.dimension_state;
     if (!eq(form.hanger_mode ?? "auto", product.hanger_mode ?? "auto")) patch.hanger_mode = form.hanger_mode ?? "auto";
@@ -779,7 +772,8 @@ export const CatalogForm = forwardRef<CatalogFormRef, {
                             {readOnly ? "Основная" : "Основная (радио)"}
                           </th>
                           <th className="text-left font-medium px-3 py-2">Кол-во на подвесе, шт</th>
-                          <th className="text-left font-medium px-3 py-2">Длина, мм</th>
+                          <th className="text-left font-medium px-3 py-2">Нормальная, мм</th>
+                          <th className="text-left font-medium px-3 py-2">Сырьевая длина, мм</th>
                           {!readOnly && <th className="px-2 py-2" aria-label="Действия" />}
                         </tr>
                       </thead>
@@ -788,8 +782,11 @@ export const CatalogForm = forwardRef<CatalogFormRef, {
                       <RadioGroup
                         asChild
                         className="table-row-group"
-                        value={form.primary_length_mm != null ? String(form.primary_length_mm) : undefined}
-                        onValueChange={(val) => update("primary_length_mm", Number(val))}
+                        value={primaryLength(form) != null ? String(primaryLength(form)) : undefined}
+                        onValueChange={(val) => {
+                          const primary = Number(val);
+                          setForm((f) => ({ ...f, lengths: (f.lengths ?? []).map((length) => ({ ...length, is_primary: length.length_mm === primary })) }));
+                        }}
                         disabled={readOnly}
                       >
                         <tbody>
@@ -827,18 +824,28 @@ export const CatalogForm = forwardRef<CatalogFormRef, {
                                   </div>
                                 </td>
                                 <td className="px-3 py-1.5">
-                                  <div className="flex items-center gap-2">
-                                    <label htmlFor={`primary-${len}`} className={cn("cursor-pointer", form.primary_length_mm === len && "font-semibold")}>
-                                      {len}
-                                    </label>
-                                  </div>
+                                  <label htmlFor={`primary-${len}`} className={cn("cursor-pointer", primaryLength(form) === len && "font-semibold")}>{len}</label>
+                                </td>
+                                <td className="px-3 py-1.5">
+                                  <Input
+                                    type="number"
+                                    className="h-9 w-28"
+                                    value={(form.lengths ?? []).find((length) => length.length_mm === len)?.raw_length_mm ?? ""}
+                                    placeholder="как нормальная"
+                                    onChange={(e) => {
+                                      const parsed = parseNumericInput(e.target.value);
+                                      setForm((f) => ({ ...f, lengths: (f.lengths ?? []).map((length) => length.length_mm === len ? { ...length, raw_length_mm: parsed } : length) }));
+                                    }}
+                                    disabled={readOnly}
+                                    aria-label={`Сырьевая длина для ${len} мм`}
+                                  />
                                 </td>
                                 {!readOnly && (
                                   <td className="px-2 py-1.5 text-right">
                                     <button
                                       type="button"
                                       onClick={() => {
-                                        const vals = (form.lengths_mm ?? []).filter((_, i) => i !== idx);
+                                        const vals = (form.lengths ?? []).filter((_, i) => i !== idx);
                                         setLengths(vals);
                                       }}
                                       className="text-muted-foreground hover:text-destructive"
@@ -867,7 +874,7 @@ export const CatalogForm = forwardRef<CatalogFormRef, {
                 ) : autoMode && hangerPreview.status === "ready" ? (
                   <p className="text-xs text-muted-foreground">
                     Значения рассчитаны из периметра и габарита.
-                    {formLengths.length > 0 && ` Основная длина ${form.primary_length_mm ?? formLengths[0]} мм → ${autoQuantityFor(form.primary_length_mm ?? formLengths[0]) ?? "—"} шт.`}
+                    {formLengths.length > 0 && ` Основная длина ${primaryLength(form) ?? formLengths[0]} мм → ${autoQuantityFor(primaryLength(form) ?? formLengths[0]) ?? "—"} шт.`}
                   </p>
                 ) : autoMode ? (
                   <p className="text-xs text-muted-foreground">

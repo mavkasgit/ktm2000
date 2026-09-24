@@ -1,10 +1,8 @@
-"""Импорт справочника eKranchik из ZIP (upload-zip): длины в product_lengths.
-Историческая дыра импорта: длина писалась только скаляром ``length_mm``
-(attributes JSONB), строки ``product_lengths`` не заводились — пары считали
-пустое пересечение при видимой в витрине длине (дев-БД выправлена разовым
-backfill-SQL, миграции нет). Регресс-тесты держат: создание заводит строку,
-реимпорт зеркалит длину в строку, legacy-артикул без строк при обновлении
-получает строку, ручные строки не трогаются.
+"""Импорт справочника eKranchik из ZIP (upload-zip).
+
+Контракт регресса: импорт создаёт и обновляет канонический реестр
+``product_lengths``, не затирает уже настроенные строки и лечит старые
+артикулы без реестра.
 """
 
 import sqlite3
@@ -25,9 +23,7 @@ def _make_zip_bytes(profiles: list[tuple], tmp_path: Path) -> bytes:
     """ZIP с profiles.db (eKranchik-структура): (name, qty, length, notes)."""
     db_path = tmp_path / "profiles.db"
     conn = sqlite3.connect(str(db_path))
-    conn.execute(
-        "DROP TABLE IF EXISTS profiles"
-    )
+    conn.execute("DROP TABLE IF EXISTS profiles")
     conn.execute(
         "CREATE TABLE profiles ("
         "name TEXT, quantity_per_hanger REAL, length REAL, notes TEXT, "
@@ -57,19 +53,20 @@ async def _upload(client: AsyncClient, zip_bytes: bytes, tmp_path: Path):
     return resp
 
 
-async def _lengths(session: AsyncSession, sku: str) -> list[float]:
-    product = await session.scalar(select(Product).where(Product.sku == sku))
-    assert product is not None
-    rows = await session.scalars(
-        select(ProductLength).where(ProductLength.product_id == product.id)
-    )
-    return sorted(row.length_mm for row in rows.all())
+async def _product_id(session: AsyncSession, sku: str) -> int:
+    product_id = await session.scalar(select(Product.id).where(Product.sku == sku))
+    assert product_id is not None
+    return product_id
 
 
-async def _scalar(session: AsyncSession, sku: str) -> float | None:
-    product = await session.scalar(select(Product).where(Product.sku == sku))
-    assert product is not None
-    return product.length_mm
+async def _product(client: AsyncClient, product_id: int) -> dict:
+    response = await client.get(f"/api/products/{product_id}")
+    assert response.status_code == 200, response.text
+    return response.json()
+
+
+async def _lengths(client: AsyncClient, product_id: int) -> list[dict]:
+    return (await _product(client, product_id))["lengths"]
 
 
 async def test_zip_import_creates_product_with_length_row(
@@ -77,17 +74,12 @@ async def test_zip_import_creates_product_with_length_row(
 ) -> None:
     await _upload(client, _make_zip_bytes([("ЮП-ZIP-1", 5, 2750, "")], tmp_path), tmp_path)
 
-    product = await session.scalar(select(Product).where(Product.sku == "ЮП-ZIP-1"))
-    assert product is not None
-    assert product.type == ProductType.component
-    assert product.source == "ekranchik_catalog"
-    # Длина — и скаляр (legacy-чтение), и канон-строка product_lengths.
-    assert await _scalar(session, "ЮП-ZIP-1") == 2750
-    assert await _lengths(session, "ЮП-ZIP-1") == [2750]
-    primary = await session.scalar(
-        select(ProductLength).where(ProductLength.product_id == product.id)
-    )
-    assert primary is not None and primary.is_primary is True
+    product = await _product(client, await _product_id(session, "ЮП-ZIP-1"))
+    assert product["type"] == "component"
+    assert product["source"] == "ekranchik_catalog"
+    assert product["lengths"] == [
+        {"length_mm": 2750.0, "raw_length_mm": None, "is_primary": True}
+    ]
 
 
 async def test_zip_reimport_updates_existing_length_row(
@@ -96,20 +88,20 @@ async def test_zip_reimport_updates_existing_length_row(
     await _upload(client, _make_zip_bytes([("ЮП-ZIP-2", 5, 2750, "")], tmp_path), tmp_path)
     await _upload(client, _make_zip_bytes([("ЮП-ZIP-2", 5, 3000, "")], tmp_path), tmp_path)
 
-    assert await _scalar(session, "ЮП-ZIP-2") == 3000
-    assert await _lengths(session, "ЮП-ZIP-2") == [3000]
+    assert await _lengths(client, await _product_id(session, "ЮП-ZIP-2")) == [
+        {"length_mm": 3000.0, "raw_length_mm": None, "is_primary": True}
+    ]
 
 
-async def test_zip_reimport_backfills_legacy_scalar_only_product(
+async def test_zip_reimport_heals_legacy_product_without_length_rows(
     client: AsyncClient, session: AsyncSession, tmp_path: Path
 ) -> None:
-    # Явно созданная дыра: скаляр есть, строк нет (историческое состояние).
+    # Исторический артикул мог существовать без канонического реестра длин.
     product = Product(
         sku="ЮП-ZIP-3",
         name="ЮП-ZIP-3",
         type=ProductType.component,
         unit="шт",
-        length_mm=2500,
     )
     session.add(product)
     await session.flush()
@@ -117,20 +109,19 @@ async def test_zip_reimport_backfills_legacy_scalar_only_product(
 
     await _upload(client, _make_zip_bytes([("ЮП-ZIP-3", 5, 2600, "")], tmp_path), tmp_path)
 
-    assert await _scalar(session, "ЮП-ZIP-3") == 2600
-    assert await _lengths(session, "ЮП-ZIP-3") == [2600]
+    assert await _lengths(client, await _product_id(session, "ЮП-ZIP-3")) == [
+        {"length_mm": 2600.0, "raw_length_mm": None, "is_primary": True}
+    ]
 
 
-async def test_zip_reimport_keeps_unrelated_rows(
+async def test_zip_reimport_keeps_manual_length_rows(
     client: AsyncClient, session: AsyncSession, tmp_path: Path
 ) -> None:
-    # Ручные строки, не совпадающие со старым скаляром, не трогаем.
     product = Product(
         sku="ЮП-ZIP-4",
         name="ЮП-ZIP-4",
         type=ProductType.component,
         unit="шт",
-        length_mm=2000,
     )
     session.add(product)
     await session.flush()
@@ -140,27 +131,7 @@ async def test_zip_reimport_keeps_unrelated_rows(
 
     await _upload(client, _make_zip_bytes([("ЮП-ZIP-4", 5, 2200, "")], tmp_path), tmp_path)
 
-    assert await _scalar(session, "ЮП-ZIP-4") == 2200
-    assert await _lengths(session, "ЮП-ZIP-4") == [1800, 2400]
-
-
-async def test_zip_reimport_heals_rows_even_when_scalar_matches(
-    client: AsyncClient, session: AsyncSession, tmp_path: Path
-) -> None:
-    # Главный кейс лечения: скаляр уже равен длине из ZIP, но строк нет —
-    # реимпорт заводит строку, хотя скаляр не менялся.
-    product = Product(
-        sku="ЮП-ZIP-5",
-        name="ЮП-ZIP-5",
-        type=ProductType.component,
-        unit="шт",
-        length_mm=2750,
-    )
-    session.add(product)
-    await session.flush()
-    await session.commit()
-
-    await _upload(client, _make_zip_bytes([("ЮП-ZIP-5", 5, 2750, "")], tmp_path), tmp_path)
-
-    assert await _scalar(session, "ЮП-ZIP-5") == 2750
-    assert await _lengths(session, "ЮП-ZIP-5") == [2750]
+    assert await _lengths(client, await _product_id(session, "ЮП-ZIP-4")) == [
+        {"length_mm": 1800.0, "raw_length_mm": None, "is_primary": False},
+        {"length_mm": 2400.0, "raw_length_mm": None, "is_primary": False},
+    ]

@@ -4,17 +4,18 @@ from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.models.dimension import DimensionType, ProductDimension
-from app.models.product import Product
+from app.models.product import ProductLength
 from app.seeds.dimension_types import DIMENSION_TYPES_DATA, DIMENSION_TYPES_FIELD_MAP
 from app.seeds.upsert import upsert_by_key
 
 
 async def seed_dimension_types(db: AsyncSession) -> dict[str, int]:
     """Upsert dimension types + create length_mm bindings for products with length_mm.
+    Нормальные длины линейных артикулов берутся из ``product_lengths``.
 
-    Product.length_mm хранится в миллиметрах (см. catalog_import / фронт «мм») —
-    конвертация не нужна. Идемпотентно: тип обновляется по code, существующие
-    привязки не перезаписываются (ручные правки сохраняются).
+    Значения длин приходят в миллиметрах; конвертация не нужна. Идемпотентно:
+    тип обновляется по code, существующие привязки не перезаписываются
+    (ручные правки сохраняются).
 
     Основная часть (DimensionType) — через table-driven upsert; хвост
     (ProductDimension биндинги) — bespoke-блок вне хелпера (cross-entity).
@@ -39,20 +40,29 @@ async def seed_dimension_types(db: AsyncSession) -> dict[str, int]:
         ).all()
     )
 
-    products = (
-        await db.scalars(select(Product).where(Product.attributes["length_mm"].is_not(None)))
+    length_rows = (
+        await db.execute(
+            select(ProductLength.product_id, ProductLength.length_mm, ProductLength.is_primary)
+            .order_by(
+                ProductLength.product_id,
+                ProductLength.is_primary.desc(),
+                ProductLength.length_mm,
+            )
+        )
     ).all()
 
     bindings_created = 0
-    for product in products:
-        if product.id in existing_product_ids:
+    processed_product_ids: set[int] = set()
+    for product_id, length_mm, _is_primary in length_rows:
+        if product_id in existing_product_ids or product_id in processed_product_ids:
             continue
+        processed_product_ids.add(product_id)
         db.add(
             ProductDimension(
-                product_id=product.id,
+                product_id=product_id,
                 dimension_type_id=length_type.id,
                 is_required=True,
-                default_value=product.length_mm,
+                default_value=length_mm,
             )
         )
         bindings_created += 1

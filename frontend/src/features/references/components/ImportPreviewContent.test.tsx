@@ -9,7 +9,7 @@ function makePreview(overrides: Partial<CatalogPreview> = {}): CatalogPreview {
       {
         sku: "SKU-CREATE",
         name: "Создаваемый",
-        length_mm: 1000,
+        lengths: [{ length_mm: 1000, raw_length_mm: null, is_primary: true }],
         quantity_per_hanger: 5,
         has_photo: false,
         action: "create",
@@ -17,7 +17,7 @@ function makePreview(overrides: Partial<CatalogPreview> = {}): CatalogPreview {
       {
         sku: "SKU-UPDATE",
         name: "Обновляемый",
-        length_mm: 2000,
+        lengths: [{ length_mm: 2000, raw_length_mm: 2100, is_primary: true }],
         quantity_per_hanger: null,
         has_photo: true,
         action: "update",

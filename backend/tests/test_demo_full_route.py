@@ -4,12 +4,32 @@ import pytest
 from sqlalchemy import select
 
 from app.core.security import create_access_token
-from app.models.product import Product, ProductType
+from app.models.product import Product, ProductLength, ProductPair, ProductType
 from app.models.production_plan import PlanPosition, ProductionPlan, ProductionPlanStatus
 from app.models.route import ProductionRoute, RouteStage, RouteOperation
 
 from app.models.section import Section
 from app.models.user import User, UserRole
+
+
+async def _make_demo_product(session, *, sku: str, name: str) -> Product:
+    product = Product(
+        sku=sku,
+        name=name,
+        type=ProductType.finished_good,
+        unit="pcs",
+        is_active=True,
+    )
+    session.add(product)
+    await session.flush()
+    session.add(ProductLength(
+        product_id=product.id,
+        length_mm=2700,
+        raw_length_mm=None,
+        is_primary=True,
+    ))
+    await session.flush()
+    return product
 
 
 async def _make_user(session, email: str = "demo@test.local") -> User:
@@ -90,9 +110,11 @@ async def test_demo_full_route_run_and_replay(client, session) -> None:
     user = await _make_user(session)
     headers = _auth_headers(user)
 
-    product = Product(sku="DEMO-FG-001", name="Demo Product", type=ProductType.finished_good, unit="pcs", is_active=True)
-    session.add(product)
-    await session.flush()
+    product = await _make_demo_product(
+        session,
+        sku="DEMO-FG-001",
+        name="Demo Product",
+    )
 
 
     route_steps_def = [
@@ -164,9 +186,11 @@ async def test_demo_full_route_forks_when_target_plan_released(client, session) 
     )
     session.add(released_plan)
 
-    product = Product(sku="DEMO-FG-002", name="Demo Product 2", type=ProductType.finished_good, unit="pcs", is_active=True)
-    session.add(product)
-    await session.flush()
+    product = await _make_demo_product(
+        session,
+        sku="DEMO-FG-002",
+        name="Demo Product 2",
+    )
 
 
     route_steps_def = [
@@ -209,9 +233,11 @@ async def test_demo_stage_preset_before_approve(client, session) -> None:
     user = await _make_user(session, email="before-approve@test.local")
     headers = _auth_headers(user)
 
-    product = Product(sku="DEMO-BA-001", name="Demo BA Product", type=ProductType.finished_good, unit="pcs", is_active=True)
-    session.add(product)
-    await session.flush()
+    product = await _make_demo_product(
+        session,
+        sku="DEMO-BA-001",
+        name="Demo BA Product",
+    )
 
 
     sections = [
@@ -265,9 +291,11 @@ async def test_demo_stage_preset_after_approve(client, session) -> None:
     user = await _make_user(session, email="after-approve@test.local")
     headers = _auth_headers(user)
 
-    product = Product(sku="DEMO-AA-001", name="Demo AA Product", type=ProductType.finished_good, unit="pcs", is_active=True)
-    session.add(product)
-    await session.flush()
+    product = await _make_demo_product(
+        session,
+        sku="DEMO-AA-001",
+        name="Demo AA Product",
+    )
 
 
     sections = [
@@ -321,9 +349,11 @@ async def test_demo_stage_preset_after_release(client, session) -> None:
     user = await _make_user(session, email="after-release@test.local")
     headers = _auth_headers(user)
 
-    product = Product(sku="DEMO-AR-001", name="Demo AR Product", type=ProductType.finished_good, unit="pcs", is_active=True)
-    session.add(product)
-    await session.flush()
+    product = await _make_demo_product(
+        session,
+        sku="DEMO-AR-001",
+        name="Demo AR Product",
+    )
 
 
     route_steps_def = [
@@ -361,9 +391,11 @@ async def test_demo_stage_preset_to_step_ready_first_step(client, session) -> No
     user = await _make_user(session, email="to-step-ready@test.local")
     headers = _auth_headers(user)
 
-    product = Product(sku="DEMO-TSR-001", name="Demo TSR Product", type=ProductType.finished_good, unit="pcs", is_active=True)
-    session.add(product)
-    await session.flush()
+    product = await _make_demo_product(
+        session,
+        sku="DEMO-TSR-001",
+        name="Demo TSR Product",
+    )
 
 
     route_steps_def = [
@@ -413,9 +445,11 @@ async def test_demo_stage_preset_to_step_ready_middle_step(client, session) -> N
     user = await _make_user(session, email="to-step-ready-mid@test.local")
     headers = _auth_headers(user)
 
-    product = Product(sku="DEMO-TSRM-001", name="Demo TSRM Product", type=ProductType.finished_good, unit="pcs", is_active=True)
-    session.add(product)
-    await session.flush()
+    product = await _make_demo_product(
+        session,
+        sku="DEMO-TSRM-001",
+        name="Demo TSRM Product",
+    )
 
 
     route_steps_def = [
@@ -474,28 +508,23 @@ async def test_demo_paired_profile_scenario_imports_as_paired_row(client, sessio
     user = await _make_user(session, email="paired-scenario@test.local")
     headers = _auth_headers(user)
 
-    product = Product(
+    product = await _make_demo_product(
+        session,
         sku="ЮП-2616+ЮП-2604",
         name="Paired 2616/2604",
-        type=ProductType.finished_good,
-        unit="pcs",
-        is_active=True,
     )
-    session.add(product)
-    await session.flush()
 
 
     # Пара резолвится из product_pairs (#148): сырьевые артикулы сценария
     # + ручная N на общей длине 2700 мм.
-    from app.models.product import ProductLength, ProductPair
 
     raw_a = Product(sku="ЮП-2616", name="Raw 2616", type=ProductType.component, unit="pcs", is_active=True)
     raw_b = Product(sku="ЮП-2604", name="Raw 2604", type=ProductType.component, unit="pcs", is_active=True)
     session.add_all([raw_a, raw_b])
     await session.flush()
     session.add_all([
-        ProductLength(product_id=raw_a.id, length_mm=2700),
-        ProductLength(product_id=raw_b.id, length_mm=2700),
+        ProductLength(product_id=raw_a.id, length_mm=2700, raw_length_mm=None, is_primary=True),
+        ProductLength(product_id=raw_b.id, length_mm=2700, raw_length_mm=None, is_primary=True),
     ])
     session.add(ProductPair(
         product_a_id=min(raw_a.id, raw_b.id),

@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 
-import type { Product, ProductPairCatalogEntry } from "@/shared/api/products";
+import type { Product, ProductLength, ProductPairCatalogEntry } from "@/shared/api/products";
 import type { HangerCalcResult, HangerSettings } from "@/shared/api/hangerCalc";
 import {
   buildCalcItems,
@@ -23,6 +23,15 @@ const SETTINGS: HangerSettings = {
   rod_count: 2,
 };
 
+const productLength = (
+  length_mm: number,
+  raw_length_mm: number | null = null,
+  is_primary = false,
+): ProductLength => ({ length_mm, raw_length_mm, is_primary });
+
+const productLengths = (...values: number[]): ProductLength[] =>
+  values.map((value) => productLength(value));
+
 function makeProduct(overrides: Partial<Product>): Product {
   return {
     id: 1,
@@ -37,7 +46,6 @@ function makeProduct(overrides: Partial<Product>): Product {
     alloy: null,
     color: null,
     anod_type: null,
-    length_mm: null,
     weight_per_meter: null,
     perimeter_mm: null,
     mount_width_mm: null,
@@ -51,9 +59,8 @@ function makeProduct(overrides: Partial<Product>): Product {
     is_paired_profile: false,
     skip_shot_blast: false,
     dimension_state: "length",
-    primary_length_mm: null,
     aliases: [],
-    lengths_mm: [],
+    lengths: [],
     processing_flags: [],
     is_laminated: false,
     ...overrides,
@@ -117,22 +124,36 @@ describe("buildCalcItems", () => {
       id: 7,
       perimeter_mm: 64.2,
       mount_width_mm: 19.35,
-      lengths_mm: [3000, 2780],
+      lengths: [productLength(3000), productLength(2780, null, true)],
     });
     const { items, refs, incompatible } = buildCalcItems([product], SETTINGS);
     expect(items).toEqual([
-      { perimeter_mm: 64.2, mount_width_mm: 19.35, length_mm: 2780 },
       { perimeter_mm: 64.2, mount_width_mm: 19.35, length_mm: 3000 },
+      { perimeter_mm: 64.2, mount_width_mm: 19.35, length_mm: 2780 },
     ]);
     expect(refs).toEqual([
-      { productId: 7, lengthMm: 2780 },
       { productId: 7, lengthMm: 3000 },
+      { productId: 7, lengthMm: 2780 },
     ]);
     expect(incompatible.size).toBe(0);
   });
 
+  it("в формулу уходит effective raw, а ref остаётся ключом нормальной длины", () => {
+    const product = makeProduct({
+      id: 17,
+      perimeter_mm: 64.2,
+      mount_width_mm: 19.35,
+      lengths: [productLength(2700, 2750, true), productLength(3000)],
+    });
+    const { items, refs } = buildCalcItems([product], SETTINGS);
+    expect(items.map((item) => item.length_mm)).toEqual([2750, 3000]);
+    expect(refs).toEqual([
+      { productId: 17, lengthMm: 2700 },
+      { productId: 17, lengthMm: 3000 },
+    ]);
+  });
   it("ручной артикул (нет периметра/габарита) не отправляется", () => {
-    const manual = makeProduct({ id: 8, lengths_mm: [2780] });
+    const manual = makeProduct({ id: 8, lengths: productLengths(2780) });
     const { items, incompatible } = buildCalcItems([manual], SETTINGS);
     expect(items).toEqual([]);
     expect(incompatible.size).toBe(0);
@@ -142,9 +163,8 @@ describe("buildCalcItems", () => {
     const manual = makeProduct({
       id: 16,
       hanger_mode: "manual",
-      perimeter_mm: 64.2,
+      lengths: productLengths(2780),
       mount_width_mm: 19.35,
-      lengths_mm: [2780],
     });
     const { items, incompatible } = buildCalcItems([manual], SETTINGS);
     expect(items).toEqual([]);
@@ -156,13 +176,13 @@ describe("buildCalcItems", () => {
       id: 9,
       perimeter_mm: 100,
       mount_width_mm: 1440,
-      lengths_mm: [2780],
+      lengths: productLengths(2780),
     });
     const good = makeProduct({
       id: 10,
       perimeter_mm: 64.2,
       mount_width_mm: 19.35,
-      lengths_mm: [2780],
+      lengths: productLengths(2780),
     });
     const { items, refs, incompatible } = buildCalcItems([bad, good], SETTINGS);
     expect(incompatible.get(9)).toBeTruthy();
@@ -258,7 +278,7 @@ describe("buildHangerCalcRows", () => {
       id: 1,
       perimeter_mm: 64.2,
       mount_width_mm: 19.35,
-      lengths_mm: [3000, 2780],
+      lengths: [productLength(3000), productLength(2780, null, true)],
       quantity_per_hanger: {
         "2780": { auto: 72, manual: 60 },
         "3000": { auto: 65, manual: null },
@@ -276,13 +296,24 @@ describe("buildHangerCalcRows", () => {
     expect(row.incompatibleReason).toBeNull();
   });
 
-  it("авто-артикул: явная primary_length_mm задаёт разбивку (#81/#85)", () => {
+  it("строка сохраняет отдельную сырьевую длину для каждой нормальной", () => {
+    const product = makeProduct({
+      lengths: [productLength(2700, 2750, true), productLength(3000, 3050)],
+    });
+    const [row] = buildHangerCalcRows([product], new Map(), new Map());
+    expect(row.lengths).toEqual([2700, 3000]);
+    expect(row.product.lengths).toEqual([
+      productLength(2700, 2750, true),
+      productLength(3000, 3050),
+    ]);
+  });
+
+  it("явный is_primary в записи реестра задаёт разбивку", () => {
     const product = makeProduct({
       id: 1,
       perimeter_mm: 64.2,
       mount_width_mm: 19.35,
-      primary_length_mm: 3000,
-      lengths_mm: [2780, 3000],
+      lengths: [productLength(2780), productLength(3000, null, true)],
       quantity_per_hanger: {
         "2780": { auto: 72, manual: 60 },
         "3000": { auto: 65, manual: null },
@@ -301,7 +332,7 @@ describe("buildHangerCalcRows", () => {
     const product = makeProduct({
       id: 2,
       hanger_mode: "manual",
-      lengths_mm: [2780],
+      lengths: productLengths(2780),
       quantity_per_hanger: { "2780": { auto: null, manual: 40 } },
     });
     const [row] = buildHangerCalcRows([product], new Map(), new Map());
@@ -314,7 +345,7 @@ describe("buildHangerCalcRows", () => {
     const product = makeProduct({
       id: 6,
       hanger_mode: "manual",
-      lengths_mm: [2780],
+      lengths: productLengths(2780),
       // Stale auto from previous auto-mode — should NOT affect total.
       quantity_per_hanger: { "2780": { auto: 72, manual: 40 } },
     });
@@ -329,7 +360,7 @@ describe("buildHangerCalcRows", () => {
       hanger_mode: "manual",
       perimeter_mm: 64.2,
       mount_width_mm: 19.35,
-      lengths_mm: [2780],
+      lengths: productLengths(2780),
       quantity_per_hanger: { "2780": { auto: 72, manual: 40 } },
     });
     const [row] = buildHangerCalcRows([product], new Map(), new Map());
@@ -343,7 +374,7 @@ describe("buildHangerCalcRows", () => {
       id: 3,
       perimeter_mm: 100,
       mount_width_mm: 1440,
-      lengths_mm: [2780],
+      lengths: productLengths(2780),
     });
     const incompatible = new Map([[3, "габарит не влезает"]]);
     const [row] = buildHangerCalcRows([product], new Map(), incompatible);
@@ -354,7 +385,7 @@ describe("buildHangerCalcRows", () => {
   });
 
   it("авто-артикул без результата (нет длин) — итог null", () => {
-    const product = makeProduct({ id: 4, perimeter_mm: 64.2, mount_width_mm: 19.35, lengths_mm: [] });
+    const product = makeProduct({ id: 4, perimeter_mm: 64.2, mount_width_mm: 19.35, lengths: [] });
     const [row] = buildHangerCalcRows([product], new Map(), new Map());
     expect(row.auto).toBe(true);
     expect(row.primaryLength).toBeNull();
@@ -366,7 +397,7 @@ describe("buildHangerCalcRows", () => {
       id: 5,
       perimeter_mm: 64.2,
       mount_width_mm: 19.35,
-      lengths_mm: [2780],
+      lengths: productLengths(2780),
     });
     const calcMap: CalcMap = new Map([
       [5, new Map([["2780", makeResult({ is_calculable: false, total: null, limiter: null })]])],
@@ -449,7 +480,7 @@ describe("pairedIncompatibilityReason", () => {
 
 describe("resolvePairs", () => {
   function product(id: number, sku: string): Product {
-    return makeProduct({ id, sku, lengths_mm: [2780, 3000] });
+    return makeProduct({ id, sku, lengths: productLengths(2780, 3000) });
   }
 
   it("сопоставляет пару из pairs-API с двумя артикулами", () => {
@@ -484,15 +515,15 @@ describe("resolvePairs", () => {
 });
 
 describe("buildPairedCalcItems", () => {
-  const autoA = () => makeProduct({ id: 1, sku: "ЮП-A", perimeter_mm: 64.2, mount_width_mm: 19.35, lengths_mm: [2780, 3000] });
-  const autoB = () => makeProduct({ id: 2, sku: "ЮП-B", perimeter_mm: 64.2, mount_width_mm: 19.35, lengths_mm: [3000, 3500] });
-  const manualModeB = () => makeProduct({ id: 2, sku: "ЮП-B", hanger_mode: "manual", perimeter_mm: 64.2, mount_width_mm: 19.35, lengths_mm: [3000, 3500] });
-  const noDataB = () => makeProduct({ id: 2, sku: "ЮП-B", lengths_mm: [3000, 3500] });
+  const autoA = () => makeProduct({ id: 1, sku: "ЮП-A", perimeter_mm: 64.2, mount_width_mm: 19.35, lengths: productLengths(2780, 3000) });
+  const autoB = () => makeProduct({ id: 2, sku: "ЮП-B", perimeter_mm: 64.2, mount_width_mm: 19.35, lengths: productLengths(3000, 3500) });
+  const manualModeB = () => makeProduct({ id: 2, sku: "ЮП-B", hanger_mode: "manual", perimeter_mm: 64.2, mount_width_mm: 19.35, lengths: productLengths(3000, 3500) });
+  const noDataB = () => makeProduct({ id: 2, sku: "ЮП-B", lengths: productLengths(3000, 3500) });
   const pair = (a: Product, b: Product, lengths = [3000]) => makePair({ productA: a, productB: b, lengths });
 
-  it("авто-пара: item на каждую длину пары (сервер), refs в том же порядке", () => {
+  it("авто-пара: item создаётся для общей нормальной длины", () => {
     const { items, refs, incompatible } = buildPairedCalcItems(
-      [pair(autoA(), autoB(), [2780, 3000])],
+      [pair(autoA(), autoB(), [3000])],
       SETTINGS,
     );
     expect(items).toEqual([
@@ -501,21 +532,21 @@ describe("buildPairedCalcItems", () => {
         mount_width_a_mm: 19.35,
         perimeter_b_mm: 64.2,
         mount_width_b_mm: 19.35,
-        length_mm: 2780,
-      },
-      {
-        perimeter_a_mm: 64.2,
-        mount_width_a_mm: 19.35,
-        perimeter_b_mm: 64.2,
-        mount_width_b_mm: 19.35,
         length_mm: 3000,
       },
     ]);
-    expect(refs).toEqual([
-      { pairId: 7, lengthMm: 2780 },
-      { pairId: 7, lengthMm: 3000 },
-    ]);
+    expect(refs).toEqual([{ pairId: 7, lengthMm: 3000 }]);
     expect(incompatible.size).toBe(0);
+  });
+
+  it("пара отправляет одинаковую effective raw, но результат остаётся keyed по нормальной", () => {
+    const a = autoA();
+    const b = autoB();
+    a.lengths = [productLength(3000, 3050, true)];
+    b.lengths = [productLength(3000, 3050, true)];
+    const { items, refs } = buildPairedCalcItems([pair(a, b, [3000])], SETTINGS);
+    expect(items[0]?.length_mm).toBe(3050);
+    expect(refs).toEqual([{ pairId: 7, lengthMm: 3000 }]);
   });
 
   it("пара с одним ручным артикулом (hanger_mode=manual) не считается — режим пары ручной", () => {
@@ -531,7 +562,7 @@ describe("buildPairedCalcItems", () => {
 
   it("несовместимая пара помечается и не рвёт batch", () => {
     const wide = (id: number, sku: string) =>
-      makeProduct({ id, sku, perimeter_mm: 100, mount_width_mm: 1500, lengths_mm: [3000] });
+      makeProduct({ id, sku, perimeter_mm: 100, mount_width_mm: 1500, lengths: productLengths(3000) });
     const { items, refs, incompatible } = buildPairedCalcItems([
       pair(wide(3, "ЮП-WIDE-A"), wide(4, "ЮП-WIDE-B")),
       pair(autoA(), autoB()),
@@ -563,8 +594,8 @@ describe("resultsToPairedCalcMap", () => {
 describe("buildPairedHangerCalcRows", () => {
   it("авто-пара: разбивка по первой длине пары, совместный итог", () => {
     const pair = makePair({
-      productA: makeProduct({ id: 1, sku: "ЮП-A", perimeter_mm: 64.2, mount_width_mm: 19.35, lengths_mm: [2780, 3000] }),
-      productB: makeProduct({ id: 2, sku: "ЮП-B", perimeter_mm: 64.2, mount_width_mm: 19.35, lengths_mm: [3000, 3500] }),
+      productA: makeProduct({ id: 1, sku: "ЮП-A", perimeter_mm: 64.2, mount_width_mm: 19.35, lengths: productLengths(2780, 3000) }),
+      productB: makeProduct({ id: 2, sku: "ЮП-B", perimeter_mm: 64.2, mount_width_mm: 19.35, lengths: productLengths(3000, 3500) }),
       lengths: [3000],
     });
     const calcMap = new Map([[7, new Map([["3000", makeResult({ total: 30, limiter: "area" })]])]]);
@@ -584,8 +615,8 @@ describe("buildPairedHangerCalcRows", () => {
 
   it("ручная пара: итог — ручное N из словаря пары на основной длине", () => {
     const pair = makePair({
-      productA: makeProduct({ id: 1, sku: "ЮП-A", lengths_mm: [2780] }),
-      productB: makeProduct({ id: 2, sku: "ЮП-B", hanger_mode: "manual", lengths_mm: [2780] }),
+      productA: makeProduct({ id: 1, sku: "ЮП-A", lengths: productLengths(2780) }),
+      productB: makeProduct({ id: 2, sku: "ЮП-B", hanger_mode: "manual", lengths: productLengths(2780) }),
       lengths: [2780],
       manualPerLength: { "2780": 40 },
     });
@@ -599,8 +630,8 @@ describe("buildPairedHangerCalcRows", () => {
 
   it("ручная пара без ручного N на длине — итог null", () => {
     const pair = makePair({
-      productA: makeProduct({ id: 1, sku: "ЮП-A", lengths_mm: [2780] }),
-      productB: makeProduct({ id: 2, sku: "ЮП-B", hanger_mode: "manual", lengths_mm: [2780] }),
+      productA: makeProduct({ id: 1, sku: "ЮП-A", lengths: productLengths(2780) }),
+      productB: makeProduct({ id: 2, sku: "ЮП-B", hanger_mode: "manual", lengths: productLengths(2780) }),
       lengths: [2780],
       manualPerLength: {},
     });
@@ -611,8 +642,8 @@ describe("buildPairedHangerCalcRows", () => {
 
   it("несовместимая пара помечается причиной, итоги не считаются", () => {
     const pair = makePair({
-      productA: makeProduct({ id: 1, sku: "ЮП-A", perimeter_mm: 100, mount_width_mm: 1500, lengths_mm: [3000] }),
-      productB: makeProduct({ id: 2, sku: "ЮП-B", perimeter_mm: 100, mount_width_mm: 1500, lengths_mm: [3000] }),
+      productA: makeProduct({ id: 1, sku: "ЮП-A", perimeter_mm: 100, mount_width_mm: 1500, lengths: productLengths(3000) }),
+      productB: makeProduct({ id: 2, sku: "ЮП-B", perimeter_mm: 100, mount_width_mm: 1500, lengths: productLengths(3000) }),
       lengths: [3000],
       manualPerLength: { "3000": 10 },
     });

@@ -9,14 +9,13 @@ from app.models.product import Product, ProductType
 from app.services.dimension_validation import MissingDimensionsError, resolve_product_dimensions
 
 
-async def _make_product(session: AsyncSession, *, sku: str, length_mm: float | None = None) -> Product:
+async def _make_product(session: AsyncSession, *, sku: str) -> Product:
     product = Product(
         sku=sku,
         name=f"Product {sku}",
         type=ProductType.component,
         unit="pcs",
         is_active=True,
-        length_mm=length_mm,
     )
     session.add(product)
     await session.flush()

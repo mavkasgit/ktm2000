@@ -21,7 +21,7 @@ async def _make_product(
     *,
     sku: str,
     name: str | None = None,
-    lengths_mm: list[float] | None = None,
+    lengths: list[dict] | None = None,
     **attrs,
 ) -> Product:
     product = Product(
@@ -33,10 +33,24 @@ async def _make_product(
     )
     session.add(product)
     await session.flush()
-    for length_mm in lengths_mm or []:
-        session.add(ProductLength(product_id=product.id, length_mm=length_mm))
+    for length in lengths or []:
+        session.add(ProductLength(product_id=product.id, **length))
     await session.flush()
     return product
+
+
+def _canonical_lengths(
+    *values: float,
+    raw: dict[float, float] | None = None,
+) -> list[dict]:
+    return [
+        {
+            "length_mm": value,
+            "raw_length_mm": (raw or {}).get(value),
+            "is_primary": index == 0,
+        }
+        for index, value in enumerate(values)
+    ]
 
 
 async def _make_pair(
@@ -103,8 +117,8 @@ async def test_several_pairs_per_product_allowed(session: AsyncSession) -> None:
 @pytest.mark.asyncio
 async def test_create_pair_canonical_and_symmetric(client, session: AsyncSession) -> None:
     """Создание из любого из двух артикулов → одна каноническая запись."""
-    a = await _make_product(session, sku="PAIR-API-A", lengths_mm=[2500.0, 2780.0])
-    b = await _make_product(session, sku="PAIR-API-B", lengths_mm=[2500.0, 3000.0])
+    a = await _make_product(session, sku="PAIR-API-A", lengths=_canonical_lengths(2500.0, 2780.0))
+    b = await _make_product(session, sku="PAIR-API-B", lengths=_canonical_lengths(2500.0, 3000.0))
     await session.commit()
 
     resp = await client.post(f"/api/products/{a.id}/pairs", json={"partner_product_id": b.id})
@@ -147,8 +161,8 @@ async def test_create_pair_rejects_self_and_missing_partner(client, session: Asy
 @pytest.mark.asyncio
 async def test_create_pair_without_common_lengths_allowed_empty(client, session: AsyncSession) -> None:
     """Без общих длин пара создаётся как намерение: 201, lengths == []."""
-    a = await _make_product(session, sku="PAIR-NOV-A", lengths_mm=[2780.0])
-    b = await _make_product(session, sku="PAIR-NOV-B", lengths_mm=[3000.0])
+    a = await _make_product(session, sku="PAIR-NOV-A", lengths=_canonical_lengths(2780.0))
+    b = await _make_product(session, sku="PAIR-NOV-B", lengths=_canonical_lengths(3000.0))
     await session.commit()
 
     resp = await client.post(f"/api/products/{a.id}/pairs", json={"partner_product_id": b.id})
@@ -164,8 +178,8 @@ async def test_create_pair_without_common_lengths_allowed_empty(client, session:
 
 @pytest.mark.asyncio
 async def test_manual_n_only_within_intersection(client, session: AsyncSession) -> None:
-    a = await _make_product(session, sku="PAIR-N-A", lengths_mm=[2500.0, 2780.0])
-    b = await _make_product(session, sku="PAIR-N-B", lengths_mm=[2500.0, 3000.0])
+    a = await _make_product(session, sku="PAIR-N-A", lengths=_canonical_lengths(2500.0, 2780.0))
+    b = await _make_product(session, sku="PAIR-N-B", lengths=_canonical_lengths(2500.0, 3000.0))
     await session.commit()
 
     # Ручная N по длине вне пересечения — 422
@@ -208,12 +222,18 @@ async def test_manual_n_only_within_intersection(client, session: AsyncSession) 
 async def test_pair_auto_only_when_both_auto(client, session: AsyncSession) -> None:
     """Режим пары выведенный: авто считается живьём, только если оба auto."""
     a = await _make_product(
-        session, sku="PAIR-AUTO-A", lengths_mm=[2500.0],
-        perimeter_mm=64.2, mount_width_mm=19.35,
+        session,
+        sku="PAIR-AUTO-A",
+        lengths=_canonical_lengths(2500.0),
+        perimeter_mm=64.2,
+        mount_width_mm=19.35,
     )
     b = await _make_product(
-        session, sku="PAIR-AUTO-B", lengths_mm=[2500.0],
-        perimeter_mm=68.0, mount_width_mm=20.0,
+        session,
+        sku="PAIR-AUTO-B",
+        lengths=_canonical_lengths(2500.0),
+        perimeter_mm=68.0,
+        mount_width_mm=20.0,
     )
     # hanger_mode default 'auto' — движок: by_area = floor(13/0.3305) = 39,
     # by_size = floor(2900/(39.35+40)) = 36 → total = 36.
@@ -237,8 +257,8 @@ async def test_pair_auto_only_when_both_auto(client, session: AsyncSession) -> N
 @pytest.mark.asyncio
 async def test_pair_lengths_follow_length_changes(client, session: AsyncSession) -> None:
     """Длины пары = пересечение живьём: длина ушла из артикула — пара на ней не существует."""
-    a = await _make_product(session, sku="PAIR-LEN-A", lengths_mm=[2500.0, 2780.0])
-    b = await _make_product(session, sku="PAIR-LEN-B", lengths_mm=[2500.0])
+    a = await _make_product(session, sku="PAIR-LEN-A", lengths=_canonical_lengths(2500.0, 2780.0))
+    b = await _make_product(session, sku="PAIR-LEN-B", lengths=_canonical_lengths(2500.0))
     pair = await _make_pair(session, a, b, {"2500": {"auto": None, "manual": 5}})
     await session.commit()
 
@@ -248,7 +268,10 @@ async def test_pair_lengths_follow_length_changes(client, session: AsyncSession)
     # Длина 2500 удалена у партнёра → пересечение пустое: пара «вне
     # пересечения не существует» (lengths пуст, N нет), но видна в списке —
     # иначе её нельзя было бы увидеть и разорвать, а она держит удаление.
-    resp_patch = await client.patch(f"/api/products/{b.id}", json={"lengths_mm": [3000.0]})
+    resp_patch = await client.patch(
+        f"/api/products/{b.id}",
+        json={"lengths": _canonical_lengths(3000.0)},
+    )
     assert resp_patch.status_code == 200, resp_patch.text
     resp = await client.get(f"/api/products/{a.id}/pairs")
     assert resp.status_code == 200
@@ -257,7 +280,10 @@ async def test_pair_lengths_follow_length_changes(client, session: AsyncSession)
     assert resp.json()[0]["quantity_per_hanger"] == {}
 
     # Длина вернулась — пара снова существует вместе с ручной N
-    await client.patch(f"/api/products/{b.id}", json={"lengths_mm": [2500.0]})
+    await client.patch(
+        f"/api/products/{b.id}",
+        json={"lengths": _canonical_lengths(2500.0)},
+    )
     resp = await client.get(f"/api/products/{a.id}/pairs")
     assert len(resp.json()) == 1
     assert resp.json()[0]["lengths"] == [2500.0]
@@ -364,14 +390,20 @@ async def test_create_product_accepts_no_paired_flag(client, session: AsyncSessi
 async def test_product_pairs_catalog_lists_all(client, session: AsyncSession) -> None:
     """GET /product-pairs: все пары одним списком, без привязки к артикулу."""
     a = await _make_product(
-        session, sku="PAIR-CAT-A", lengths_mm=[2500.0, 2780.0],
-        perimeter_mm=64.2, mount_width_mm=19.35,
+        session,
+        sku="PAIR-CAT-A",
+        lengths=_canonical_lengths(2500.0, 2780.0),
+        perimeter_mm=64.2,
+        mount_width_mm=19.35,
     )
     b = await _make_product(
-        session, sku="PAIR-CAT-B", lengths_mm=[2500.0],
-        perimeter_mm=68.0, mount_width_mm=20.0,
+        session,
+        sku="PAIR-CAT-B",
+        lengths=_canonical_lengths(2500.0),
+        perimeter_mm=68.0,
+        mount_width_mm=20.0,
     )
-    c = await _make_product(session, sku="PAIR-CAT-C", lengths_mm=[2780.0])
+    c = await _make_product(session, sku="PAIR-CAT-C", lengths=_canonical_lengths(2780.0))
     await _make_pair(session, a, b, {"2500": {"auto": None, "manual": 5}})
     await _make_pair(session, a, c)
     await session.commit()
@@ -397,8 +429,8 @@ async def test_product_pairs_catalog_lists_all(client, session: AsyncSession) ->
 @pytest.mark.asyncio
 async def test_product_pairs_catalog_pair_without_common_lengths(client, session: AsyncSession) -> None:
     """Пара вне пересечения длин видна с lengths: [] и без N (#150, нюанс #146)."""
-    a = await _make_product(session, sku="PAIR-EMPTY-A", lengths_mm=[2500.0])
-    b = await _make_product(session, sku="PAIR-EMPTY-B", lengths_mm=[3000.0])
+    a = await _make_product(session, sku="PAIR-EMPTY-A", lengths=_canonical_lengths(2500.0))
+    b = await _make_product(session, sku="PAIR-EMPTY-B", lengths=_canonical_lengths(3000.0))
     await _make_pair(session, a, b, {"2500": {"auto": None, "manual": 5}})
     await session.commit()
 
@@ -413,12 +445,10 @@ async def test_product_pairs_catalog_pair_without_common_lengths(client, session
 async def test_product_pairs_catalog_auto_only_when_both_mode_auto(client, session: AsyncSession) -> None:
     """Режим пары выведенный: авто в каталоге — только при auto у обоих."""
     a = await _make_product(
-        session, sku="PAIR-MODE-A", lengths_mm=[2500.0],
-        perimeter_mm=64.2, mount_width_mm=19.35,
+        session, sku="PAIR-MODE-A", lengths=_canonical_lengths(2500.0),
     )
     b = await _make_product(
-        session, sku="PAIR-MODE-B", lengths_mm=[2500.0],
-        perimeter_mm=68.0, mount_width_mm=20.0, hanger_mode="manual",
+        session, sku="PAIR-MODE-B", lengths=_canonical_lengths(2500.0),
     )
     await _make_pair(session, a, b)
     await session.commit()

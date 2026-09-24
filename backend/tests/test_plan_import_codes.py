@@ -32,13 +32,11 @@ SPEC_ERROR_CODES = frozenset(
         "active_route_has_no_steps",
         "route_contains_inactive_section",
         "duplicate_sku_due_date",
-        "raw_length_not_found",
+        "normal_length_not_found",
     }
 )
 SPEC_WARNING_BASES = frozenset(
     {
-        "raw_length_substituted",
-        "paired_hanger_adjusted",
         "hanger_quantity_not_set",
         "input_dimensions_unresolved",
         "product_name_missing",
@@ -57,10 +55,8 @@ SCANNED_FILES = ("plan_import_service.py", "excel_import.py")
 ERROR_ATTRS = {"errors"}
 WARNING_ATTRS = {"warnings"}
 # Динамические passthrough с классификацией вне append-строки:
-# raw_error/single_raw_error — возврат _materialize_raw_length_mm
-# (литерал "raw_length_not_found" проверяется отдельно как error);
 # selection.error — RouteSelectionResult.error (значения в ERROR_CODES).
-ALLOWED_DYNAMIC_ERRORS = {"raw_error", "single_raw_error", "selection.error"}
+ALLOWED_DYNAMIC_ERRORS = {"selection.error"}
 
 
 def test_error_catalog_matches_spec():
@@ -80,8 +76,6 @@ def test_classify_warnings_with_params():
         "product_name_missing",
         "input_dimensions_unresolved",
         "paired_profile_product_unmapped",
-        "raw_length_substituted:ГП 2,7 м → сырьё 3 м",
-        "paired_hanger_adjusted:SKU1: 10 → 12 шт (на подвесе 6)",
         "hanger_quantity_not_set:SKU1",
         "invalid_input_length:row=3",
         "invalid_output_length:row=5",
@@ -96,7 +90,8 @@ def test_classify_warnings_with_params():
 
 def test_classify_unknown_is_none():
     assert classify_plan_import_code("some_future_code") is None
-    assert classify_plan_import_code("raw_length_future_error") is None
+    assert classify_plan_import_code("raw_length_not_found") is None
+    assert classify_plan_import_code("raw_length_substituted:2700→2750") is None
 
 
 def test_row_status_rule():

@@ -129,7 +129,7 @@ export function ProductsPage() {
                     </td>
                     <td className="px-4 py-2 text-muted-foreground">{product.color ?? "—"}</td>
                     <td className="px-4 py-2 text-muted-foreground">
-                      {product.lengths_mm.length > 0 ? `${product.lengths_mm.join(", ")} мм` : "—"}
+                      {(product.lengths ?? []).length > 0 ? product.lengths.map((length) => `${length.length_mm} мм${length.raw_length_mm != null ? ` (сырьё ${length.raw_length_mm})` : ""}`).join(", ") : "—"}
                     </td>
                     <td className="px-4 py-2">
                       {product.composition && product.composition.length > 0 ? (

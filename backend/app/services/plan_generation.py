@@ -8,7 +8,13 @@ from sqlalchemy.orm import selectinload
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.models.internal_plan import InternalPlan, SectionPlanLine
-from app.models.production_plan import PlanPosition, PlanPositionStatus, ProductionPlan, ProductionPlanStatus
+from app.models.production_plan import (
+    PlanPosition,
+    PlanPositionStatus,
+    ProductionPlan,
+    ProductionPlanStatus,
+    require_current_length_model,
+)
 from app.models.product import Product
 from app.models.release_batch import ReleaseBatch, ReleaseBatchPosition, ReleaseBatchStatus, ReleaseBatchType
 from app.models.route import ProductionRoute, RouteOperation, RouteStage, SectionOperation
@@ -32,6 +38,7 @@ async def create_release_batch(
     plan = await db.get(ProductionPlan, production_plan_id)
     if plan is None:
         raise ValueError("Production plan not found")
+    require_current_length_model(plan)
     if plan.status not in {ProductionPlanStatus.approved, ProductionPlanStatus.partially_released}:
         raise ValueError("Production plan must be approved before release")
 
@@ -112,6 +119,10 @@ async def release_batch(
     batch = await db.get(ReleaseBatch, release_batch_id)
     if batch is None:
         raise ValueError("Release batch not found")
+    plan = await db.get(ProductionPlan, batch.production_plan_id)
+    if plan is None:
+        raise ValueError("Production plan not found")
+    require_current_length_model(plan)
     if batch.status == ReleaseBatchStatus.cancelled:
         raise ValueError("Cancelled release batch cannot be released")
 

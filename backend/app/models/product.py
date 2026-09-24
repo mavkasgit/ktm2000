@@ -108,25 +108,13 @@ class Product(Base):
         default=DimensionState.length,
     )
 
-    # Flexible attributes JSONB (#19): length_mm, weight_per_meter, quantity_per_hanger, cross_section
-    # quantity_per_hanger (#60) — dict {length_mm: {"auto": int|null, "manual": int|null}}
+    # Flexible profile attributes JSONB: perimeter, weight, hanger N, section.
+    # Normal lengths live only in ProductLength; raw_length_mm is nullable there.
     attributes: Mapped[dict[str, Any]] = mapped_column(
         JSONB, nullable=False, server_default=text("'{}'::jsonb"), default=dict
     )
 
-    # ─── Derived accessors for backward compatibility ───────────────────────
-    @property
-    def length_mm(self) -> float | None:
-        return (self.attributes or {}).get("length_mm")
-
-    @length_mm.setter
-    def length_mm(self, value: float | None) -> None:
-        attrs = dict(self.attributes or {})
-        if value is None:
-            attrs.pop("length_mm", None)
-        else:
-            attrs["length_mm"] = value
-        self.attributes = attrs
+    # ─── Derived profile attributes ──────────────────────────────────────────
 
     @property
     def perimeter_mm(self) -> float | None:
@@ -373,6 +361,10 @@ class ProductLength(Base):
     __tablename__ = "product_lengths"
     __table_args__ = (
         CheckConstraint("length_mm > 0", name="positive"),
+        CheckConstraint(
+            "raw_length_mm IS NULL OR raw_length_mm >= length_mm",
+            name="raw_length_mm_at_least_length_mm",
+        ),
         Index(
             "uq_product_lengths_one_primary_per_product",
             "product_id",
@@ -384,11 +376,19 @@ class ProductLength(Base):
     id: Mapped[int] = mapped_column(BigInteger, Identity(always=True), primary_key=True)
     product_id: Mapped[int] = mapped_column(BigInteger, ForeignKey("products.id"), nullable=False)
     length_mm: Mapped[float] = mapped_column(Float, nullable=False)
+    raw_length_mm: Mapped[float | None] = mapped_column(Float, nullable=True)
     is_primary: Mapped[bool] = mapped_column(
         Boolean, nullable=False, server_default=text("false"), default=False
     )
 
+
+    @property
+    def effective_raw_length_mm(self) -> float:
+        """Effective raw length: explicit value or normal-length fallback."""
+        return self.raw_length_mm if self.raw_length_mm is not None else self.length_mm
+
     product: Mapped["Product"] = relationship("Product", back_populates="lengths")
+
 
 
 class ProcessingFlag(Base):

@@ -24,11 +24,21 @@ from app.models.production_plan import (
     PlanSourceType,
     ProductionPlan,
     ProductionPlanStatus,
+    require_current_length_model,
 )
 from app.models.audit_log import AuditAction, AuditEntityType, AuditLog
 from app.services.plan_validation import validate_plan_position
 from app.services.audit_log_service import log_action
 from app.models.user import User
+
+
+async def require_mutable_plan(db: AsyncSession, production_plan_id: int) -> ProductionPlan:
+    """Load a plan and enforce the current normal/raw length model."""
+    plan = await db.get(ProductionPlan, production_plan_id)
+    if plan is None:
+        raise ValueError("Production plan not found")
+    require_current_length_model(plan)
+    return plan
 
 
 def _enrich_source_payload(
@@ -99,6 +109,7 @@ async def apply_change_set(db: AsyncSession, change_set_id: int, *, skip_invalid
     change_set = await db.get(PlanChangeSet, change_set_id)
     if change_set is None:
         raise ValueError("Change set not found")
+    await require_mutable_plan(db, change_set.production_plan_id)
     if change_set.status == PlanChangeSetStatus.applied:
         return await get_plan_preview(db, change_set.production_plan_id)
 
@@ -336,6 +347,7 @@ async def rollback_change_set(db: AsyncSession, change_set_id: int, changed_by: 
     change_set = await db.get(PlanChangeSet, change_set_id)
     if change_set is None:
         raise ValueError("Change set not found")
+    await require_mutable_plan(db, change_set.production_plan_id)
     if change_set.status != PlanChangeSetStatus.applied:
         raise ValueError("Only applied change sets can be rolled back")
 
@@ -614,6 +626,10 @@ async def delete_import_batch(
     db: AsyncSession, batch_id: int, *, delete_drafts_only: bool = False, changed_by: int | None = None
 ) -> dict:
     from app.models.imports import ImportBatch
+    batch = await db.get(ImportBatch, batch_id)
+    if batch is None:
+        raise ValueError("Import batch not found")
+    await require_mutable_plan(db, batch.production_plan_id)
 
     info = await get_batch_delete_blockers(db, batch_id)
     user = await db.get(User, changed_by) if changed_by else None
@@ -736,6 +752,7 @@ async def approve_plan_position(
     position = await db.get(PlanPosition, position_id)
     if position is None or position.production_plan_id != production_plan_id:
         raise ValueError("Plan position not found")
+    await require_mutable_plan(db, production_plan_id)
     if position.status in {PlanPositionStatus.released, PlanPositionStatus.approved}:
         raise ValueError(f"Position with status '{position.status.value}' cannot be approved")
     if position.status == PlanPositionStatus.invalid:
@@ -787,6 +804,7 @@ async def cancel_plan_position(
     position = await db.get(PlanPosition, position_id)
     if position is None or position.production_plan_id != production_plan_id:
         raise ValueError("Plan position not found")
+    await require_mutable_plan(db, production_plan_id)
     if position.status not in {PlanPositionStatus.approved, PlanPositionStatus.released}:
         raise ValueError(f"Нельзя отменить позицию со статусом '{position.status.value}'")
 
@@ -882,6 +900,7 @@ async def restore_plan_position(
     position = await db.get(PlanPosition, position_id)
     if position is None or position.production_plan_id != production_plan_id:
         raise ValueError("Plan position not found")
+    await require_mutable_plan(db, production_plan_id)
     if position.status != PlanPositionStatus.cancelled:
         raise ValueError(f"Нельзя восстановить позицию со статусом '{position.status.value}'")
 
@@ -946,6 +965,7 @@ async def soft_delete_cancelled_position(
     position = await db.get(PlanPosition, position_id)
     if position is None or position.production_plan_id != production_plan_id:
         raise ValueError("Plan position not found")
+    await require_mutable_plan(db, production_plan_id)
     if position.status != PlanPositionStatus.cancelled:
         raise ValueError(f"Можно скрыть только отменённую позицию (текущий статус: '{position.status.value}')")
 
@@ -1009,6 +1029,7 @@ async def get_plan_preview(db: AsyncSession, production_plan_id: int, extra: dic
         "production_plan_id": plan.id,
         "plan_no": plan.plan_no,
         "status": plan.status.value,
+        "length_model_version": plan.length_model_version,
         "positions_total": len(positions),
         "status_counts": dict(status_counts),
         "validation_counts": dict(validation_counts),

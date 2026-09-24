@@ -48,7 +48,7 @@ VALIDATION_ERROR_MESSAGES: dict[str, str] = {
     "manual_route_inactive": "Ручной маршрут неактивен",
     "auto_fallback": "Маршрут скорректирован автоматически — проверьте корректность",
     "hanger_calc_zero": "Авторасчёт количества на подвес невозможен — для этой длины получается 0 штук",
-    "raw_length_not_found": "В справочнике нет сырьевой длины ≥ длины ГП — добавьте длину в карточку артикула",
+    "normal_length_not_found": "Нормальная длина из Excel не найдена в реестре длин артикула — добавьте её в карточку артикула",
 }
 
 PAIRED_PROCESSING_VALUE: str = "paired_processing"

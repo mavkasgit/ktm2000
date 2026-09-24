@@ -44,7 +44,6 @@ const makeProduct = (overrides: Partial<Product> = {}): Product => ({
   alloy: null,
   color: "Чёрный",
   anod_type: null,
-  length_mm: 1200,
   weight_per_meter: null,
   perimeter_mm: null,
   mount_width_mm: null,
@@ -57,10 +56,12 @@ const makeProduct = (overrides: Partial<Product> = {}): Product => ({
   is_catalog_item: true,
   is_paired_profile: false,
   dimension_state: "length",
-  primary_length_mm: 1200,
   skip_shot_blast: false,
   aliases: [],
-  lengths_mm: [800, 1200],
+  lengths: [
+    { length_mm: 800, raw_length_mm: null, is_primary: false },
+    { length_mm: 1200, raw_length_mm: null, is_primary: true },
+  ],
   processing_flags: [],
   is_laminated: false,
   composition: [],
@@ -103,7 +104,7 @@ beforeEach(() => {
       sku: "FG-002",
       name: "Ручка белая",
       color: "Белый",
-      lengths_mm: [],
+      lengths: [],
       composition: [],
     }),
   ]);
@@ -150,7 +151,7 @@ describe("ProductsPage", () => {
       expect.objectContaining({ type: "finished_good", include_composition: true }),
     );
     expect(screen.getByText("RAW-01 ×2.5")).toBeTruthy();
-    expect(screen.getByText("800, 1200 мм")).toBeTruthy();
+    expect(screen.getByText("800 мм, 1200 мм")).toBeTruthy();
     expect(screen.getByText("Чёрный")).toBeTruthy();
   });
 

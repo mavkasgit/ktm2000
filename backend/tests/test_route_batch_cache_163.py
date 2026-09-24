@@ -3,7 +3,7 @@
 Кэш-путь обязан давать те же наблюдаемые результаты, что и бескэшный:
 - select_route_for_payload(..., batch_cache=...) == без кэша;
 - build_route_from_profile(..., batch=...) == без кэша (+ мемоизация built_routes);
-- resolve_pair_n(..., length_candidates_mm=...) == без кандидатов (старый SQL-путь).
+- resolve_pair_n(..., length_candidates=...) == без кандидатов (старый SQL-путь).
 """
 from __future__ import annotations
 
@@ -20,7 +20,7 @@ from app.models.route import (
 from app.models.section import Section
 from app.services.product_pair_resolver import (
     ResolvedPair,
-    pair_length_candidates_mm,
+    pair_length_candidates,
     resolve_pair_n,
 )
 from app.services.route_builder import build_route_from_profile, load_route_build_batch_cache
@@ -309,19 +309,26 @@ async def test_pair_n_candidates_equivalence_163(session) -> None:
     await session.flush()
     resolved = ResolvedPair(pair=pair, product_a=prod_a, product_b=prod_b)
 
-    candidates = await pair_length_candidates_mm(session, resolved)
-    assert candidates == [2700.0]
+    candidates = await pair_length_candidates(session, resolved)
+    assert [
+        (candidate.length_mm, candidate.raw_length_a_mm, candidate.raw_length_b_mm)
+        for candidate in candidates
+    ] == [(2700.0, 2700.0, 2700.0)]
 
     def _key(value) -> tuple:
         return (value.quantity_per_hanger, value.source, value.calc_error)
 
     manual_plain = await resolve_pair_n(session, resolved, length_mm=2700.0)
-    manual_cached = await resolve_pair_n(session, resolved, length_mm=2700.0, length_candidates_mm=candidates)
+    manual_cached = await resolve_pair_n(
+        session, resolved, length_mm=2700.0, length_candidates=candidates
+    )
     assert _key(manual_cached) == _key(manual_plain) == (8, "manual", False)
 
     # Длина вне пересечения (2800 есть только у A) → calc_error в обоих путях.
     err_plain = await resolve_pair_n(session, resolved, length_mm=2800.0)
-    err_cached = await resolve_pair_n(session, resolved, length_mm=2800.0, length_candidates_mm=candidates)
+    err_cached = await resolve_pair_n(
+        session, resolved, length_mm=2800.0, length_candidates=candidates
+    )
     assert err_plain.calc_error and err_cached.calc_error
     assert _key(err_cached) == _key(err_plain)
 

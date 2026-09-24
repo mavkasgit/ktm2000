@@ -29,11 +29,13 @@ from __future__ import annotations
 from dataclasses import dataclass
 from typing import Literal
 
-from sqlalchemy import select
+from sqlalchemy import inspect, select
 from sqlalchemy.ext.asyncio import AsyncSession
+from sqlalchemy.orm import selectinload
+from sqlalchemy.orm.attributes import NO_VALUE
 
 from app.domain.dimensions import LENGTH_MM
-from app.models.product import HANGER_MODE_MANUAL, Product
+from app.models.product import HANGER_MODE_MANUAL, Product, _length_key
 from app.services import product_pair_resolver
 from app.services.hanger_quantity_calc import (
     HangerConfigError,
@@ -149,6 +151,17 @@ def _manual_value_for_length(product: Product, length_mm: float) -> int | None:
     return product.quantity_per_hanger_for_length(length_mm)
 
 
+def _effective_raw_length_mm(product: Product, length_mm: float) -> float:
+    """Effective raw для пары «артикул + нормальная длина» (ADR-0028)."""
+    loaded_lengths = inspect(product).attrs.lengths.loaded_value
+    if loaded_lengths is NO_VALUE:
+        return length_mm
+    for product_length in loaded_lengths:
+        if _length_key(product_length.length_mm) == _length_key(length_mm):
+            return product_length.effective_raw_length_mm
+    return length_mm
+
+
 def resolve_position_hanger(
     product: Product | None,
     *,
@@ -195,7 +208,7 @@ def resolve_position_hanger(
             result = compute_hanger_quantity(
                 perimeter_mm=product.perimeter_mm,
                 mount_width_mm=product.mount_width_mm,
-                length_mm=length_mm,
+                length_mm=_effective_raw_length_mm(product, length_mm),
             )
         except HangerConfigError:
             return PositionHangerValue(None, None, calc_error=True)
@@ -225,12 +238,16 @@ async def resolve_positions_hanger(
     products: dict[int, Product] = {}
     if product_ids:
         rows = (
-            await db.execute(select(Product).where(Product.id.in_(product_ids)))
+            await db.execute(
+                select(Product).options(selectinload(Product.lengths)).where(
+                    Product.id.in_(product_ids)
+                )
+            )
         ).scalars().all()
         products = {p.id: p for p in rows}
 
     pair_cache: dict[tuple[str, ...], product_pair_resolver.ResolvedPair | None] = {}
-    candidates_cache: dict[int, list[float]] = {}
+    candidates_cache: dict[int, list[product_pair_resolver.PairLengthCandidate]] = {}
     result: dict[int, PositionHangerValue] = {}
     for p in positions:
         if (p.source_payload or {}).get("paired_profile"):
@@ -272,7 +289,7 @@ async def _resolve_paired_position_hanger(
     position,
     *,
     pair_cache: dict[tuple[str, ...], product_pair_resolver.ResolvedPair | None] | None = None,
-    candidates_cache: dict[int, list[float]] | None = None,
+    candidates_cache: dict[int, list[product_pair_resolver.PairLengthCandidate]] | None = None,
 ) -> PositionHangerValue:
     """N и source парной позиции: override → снапшот → резолв пары.
 
@@ -305,11 +322,15 @@ async def _resolve_paired_position_hanger(
     if candidates_cache is not None:
         pair_id = resolved.pair.id
         if pair_id not in candidates_cache:
-            candidates_cache[pair_id] = await product_pair_resolver.pair_length_candidates_mm(db, resolved)
+            candidates_cache[pair_id] = await product_pair_resolver.pair_length_candidates(
+                db, resolved
+            )
         length_candidates = candidates_cache[pair_id]
     pair_n = await product_pair_resolver.resolve_pair_n(
-        db, resolved, length_mm=position_length_mm(position),
-        length_candidates_mm=length_candidates,
+        db,
+        resolved,
+        length_mm=position_length_mm(position),
+        length_candidates=length_candidates,
     )
     if pair_n.calc_error:
         return PositionHangerValue(None, None)

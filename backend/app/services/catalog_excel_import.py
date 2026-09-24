@@ -21,6 +21,7 @@ TEMPLATE_HEADERS = [
     "Периметр, мм",
     "Габарит, мм",
     "Длины, мм",
+    "Сырьевые длины, мм",
     "Кол-во на подвесе",
     "Примечания",
     "Не дробеструится",
@@ -34,6 +35,7 @@ _HEADER_FIELDS = {
     "наименование": "name",
     "примечания": "notes",
     "длины, мм": "lengths_mm",
+    "сырьевые длины, мм": "raw_lengths_mm",
     "периметр, мм": "perimeter_mm",
     "габарит, мм": "mount_width_mm",
     "кол-во на подвесе": "quantities",
@@ -205,6 +207,34 @@ def parse_catalog_excel(content: bytes, filename: str) -> tuple[list[ParsedCatal
             elif lengths:
                 fields["lengths_mm"] = lengths
 
+        # Отсутствие колонки и пустой сегмент — разные состояния:
+        # отсутствие означает preserve при partial update, а пустой сегмент
+        # явно очищает raw_length_mm до SQL NULL. Полностью пустая ячейка без
+        # normal-длин остаётся маркером provided-column: validate/diff раскрывают
+        # его в позиционный список NULL по длинам существующего артикула.
+        if "raw_lengths_mm" in cells:
+            raw_text = _cell_text(cells.get("raw_lengths_mm"))
+            if raw_text or "lengths_mm" in fields:
+                segments = raw_text.split(",") if raw_text else [""] * len(fields.get("lengths_mm") or [])
+                raw_lengths: list[float | None] = []
+                raw_bad = False
+                for segment in segments:
+                    segment = segment.strip()
+                    if not segment:
+                        raw_lengths.append(None)
+                        continue
+                    number = _parse_number(segment)
+                    if number is None or number <= 0:
+                        row_errors.append(
+                            f"Сырьевые длины, мм: ожидается число > 0, получено «{segment}»"
+                        )
+                        raw_bad = True
+                        break
+                    raw_lengths.append(number)
+                if not raw_bad:
+                    fields["raw_lengths_mm"] = raw_lengths
+            else:
+                fields["raw_lengths_mm"] = []
         quantities_text = _cell_text(cells.get("quantities"))
         if quantities_text:
             if "+" in quantities_text:
@@ -263,7 +293,7 @@ def parse_catalog_excel(content: bytes, filename: str) -> tuple[list[ParsedCatal
             continue
 
         row = ParsedCatalogRow(row=row_number, sku=sku, fields=fields)
-        if not fields:
+        if not fields or fields == {"raw_lengths_mm": []}:
             row.warnings.append("Строка без данных: будет создан пустой артикул")
         parsed.append(row)
 
@@ -274,33 +304,70 @@ def _header_of(field_name: str) -> str:
     return _FIELD_HEADERS.get(field_name, field_name)
 
 
+def resolve_raw_lengths(
+    row: ParsedCatalogRow, lengths: list[float] | None
+) -> list[float | None] | None:
+    """Развернуть provided raw-колонку в позиционный список по normal-длинам."""
+    if "raw_lengths_mm" not in row.fields:
+        return None
+    values = row.fields["raw_lengths_mm"]
+    if values == [] and lengths:
+        return [None] * len(lengths)
+    return values
+
 def validate_row_counts(
     row: ParsedCatalogRow,
     existing_lengths: list[float] | None,
+    dimension_state: str | None = None,
 ) -> list[str]:
-    """Число значений «Кол-во на подвесе» строго равно числу длин.
+    """Проверить позиционные списки длин, сырьевых длин и норм.
 
-    Длины берутся из строки; если колонка длин пуста — из существующих
-    длин артикула (partial update по длинам справочника). Длин нет нигде:
-    одно значение — норма без длин (#177, Q2: хранится legacy-скаляром,
-    раскрывается в per-length, когда длины появятся); несколько — привязать
-    к длинам нечем.
+    Отсутствующая колонка сырьевых длин не участвует в проверке: это
+    режим preserve. Присутствующая колонка, включая пустые сегменты,
+    должна покрывать ровно список нормальных длин.
     """
-    quantities = row.fields.get("quantities")
+    errors: list[str] = []
     lengths = row.fields.get("lengths_mm")
-    if quantities is None:
-        return []
     if lengths is None:
         lengths = existing_lengths or None
-    if lengths is None:
-        if len(quantities) == 1:
-            return []
-        return ["Кол-во на подвесе: заполните «Длины, мм» — количества привязываются к длинам по индексу"]
-    if len(quantities) != len(lengths):
-        return [
-            f"Кол-во на подвесе: число значений ({len(quantities)}) не совпадает с числом длин ({len(lengths)})"
-        ]
-    return []
+
+    quantities = row.fields.get("quantities")
+    if quantities is not None:
+        if lengths is None:
+            if len(quantities) != 1:
+                errors.append(
+                    "Кол-во на подвесе: заполните «Длины, мм» — количества привязываются к длинам по индексу"
+                )
+        elif len(quantities) != len(lengths):
+            errors.append(
+                f"Кол-во на подвесе: число значений ({len(quantities)}) не совпадает с числом длин ({len(lengths)})"
+            )
+
+    raw_lengths = resolve_raw_lengths(row, lengths)
+    if raw_lengths is not None:
+        has_raw_value = any(value is not None for value in raw_lengths)
+        if not lengths and not has_raw_value:
+            # Пустая raw-колонка без нормальных длин не задаёт mapping;
+            # это допустимо для чернового артикула и не ошибка count.
+            pass
+        elif dimension_state not in (None, "length"):
+            if has_raw_value:
+                errors.append("Сырьевые длины, мм: допустимы только для линейных артикулов")
+        elif lengths is None:
+            errors.append(
+                "Сырьевые длины, мм: заполните «Длины, мм» — значения привязываются к длинам по индексу"
+            )
+        elif len(raw_lengths) != len(lengths):
+            errors.append(
+                f"Сырьевые длины, мм: число значений ({len(raw_lengths)}) не совпадает с числом длин ({len(lengths)})"
+            )
+        else:
+            for index, (normal, raw) in enumerate(zip(lengths, raw_lengths), start=1):
+                if raw is not None and raw < normal:
+                    errors.append(
+                        f"Сырьевые длины, мм: значение {index} ({_format_number(raw)}) меньше нормальной длины ({_format_number(normal)})"
+                    )
+    return errors
 
 
 def build_quantity_dict(lengths: list[float], quantities: list[int | None]) -> dict[str, dict[str, int | None]]:
@@ -344,6 +411,23 @@ def format_quantities_cell(
     return ", ".join("" if value is None else str(int(value)) for value in values)
 
 
+def format_raw_lengths_cell(
+    lengths: list[float], raw_lengths: list[float | None] | None
+) -> float | str | None:
+    """``Сырьевые длины, мм`` with explicit empty positional segments."""
+    if not lengths:
+        return None
+    values = list(raw_lengths or [None] * len(lengths))
+    if len(values) < len(lengths):
+        values.extend([None] * (len(lengths) - len(values)))
+    if all(value is None for value in values):
+        return None
+    if len(lengths) == 1:
+        value = values[0]
+        return None if value is None else float(value)
+    return ", ".join("" if value is None else _format_number(value) for value in values)
+
+
 def _format_number(value: float) -> str:
     return str(int(value)) if float(value).is_integer() else repr(float(value))
 
@@ -383,16 +467,19 @@ def diff_catalog_row(product: Product, row: ParsedCatalogRow) -> dict[str, Any]:
         current_lengths = sorted(length.length_mm for length in product.lengths)
         if sorted(lengths) != current_lengths:
             changes["lengths_mm"] = lengths
+    if "raw_lengths_mm" in fields:
+        base = lengths if lengths is not None else sorted(length.length_mm for length in product.lengths)
+        raw_lengths = resolve_raw_lengths(row, base)
+        if base or any(value is not None for value in raw_lengths):
+            current_raw = {length.length_mm: length.raw_length_mm for length in product.lengths}
+            new_raw = dict(zip(base, raw_lengths, strict=True))
+            if new_raw != current_raw:
+                changes["raw_lengths_mm"] = raw_lengths
 
     quantities = fields.get("quantities")
     if quantities is not None:
         base = lengths if lengths is not None else sorted(length.length_mm for length in product.lengths)
-        if not base:
-            # Нормы без длин (#177, Q2/Q11): хранится legacy-скаляром —
-            # setter принимает int и пишет bare {auto: null, manual: N}.
-            if product.quantity_per_hanger_by_length is None and quantities[0] != product.quantity_per_hanger:
-                changes["quantity_per_hanger"] = quantities[0]
-        else:
+        if base:
             new_dict = build_quantity_dict(base, quantities)
             current = product.quantity_per_hanger_by_length or {}
             # Импорт пишет только ручные значения (#127): вычисленное авто

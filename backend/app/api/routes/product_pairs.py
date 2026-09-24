@@ -2,10 +2,10 @@
 
 Роуты вложены в артикул (``/products/{product_id}/pairs``), редактирование
 симметричное — из формы любого из двух артикулов, без «владельца» записи;
-отдельного справочника пар нет. Ручная N задаётся только в пределах
-пересечения длин A и B (вне пересечения пара не существует); ``auto``
-пары не хранится и не принимается — считается движком живьём, только
-если оба артикула в режиме auto (режим пары выведенный).
+отдельного реестра пар нет. Ручная N задаётся только в пределах
+пересечения нормальных длин A и B (вне пересечения пара не существует).
+``auto`` пары не хранится и не принимается — считается движком живьём только
+для двух артикулов в режиме auto с равными эффективными сырьевыми длинами.
 """
 
 from fastapi import APIRouter, Depends, HTTPException, status
@@ -84,32 +84,45 @@ async def _get_pair_or_404(db: AsyncSession, product_id: int, pair_id: int) -> P
     return pair
 
 
-async def _lengths_by_product(db: AsyncSession, product_ids: list[int]) -> dict[int, set[float]]:
+async def _lengths_by_product(
+    db: AsyncSession, product_ids: list[int]
+) -> dict[int, dict[float, float]]:
     if not product_ids:
         return {}
-    rows = await db.execute(
-        select(ProductLength.product_id, ProductLength.length_mm).where(
-            ProductLength.product_id.in_(product_ids)
+    rows = (
+        await db.execute(
+            select(ProductLength).where(ProductLength.product_id.in_(product_ids))
         )
-    )
-    result: dict[int, set[float]] = {}
-    for pid, length in rows.all():
-        result.setdefault(pid, set()).add(float(length))
+    ).scalars().all()
+    result: dict[int, dict[float, float]] = {}
+    for row in rows:
+        result.setdefault(row.product_id, {})[float(row.length_mm)] = (
+            row.effective_raw_length_mm
+        )
     return result
 
 
-def _intersection_lengths(lengths_a: set[float], lengths_b: set[float]) -> list[float]:
-    """Длины пары — пересечение длин A и B, по возрастанию."""
-    return sorted(lengths_a & lengths_b)
+def _intersection_lengths(
+    lengths_a: dict[float, float], lengths_b: dict[float, float]
+) -> list[float]:
+    """Нормальные длины пары — пересечение длин A и B, по возрастанию."""
+    return sorted(set(lengths_a) & set(lengths_b))
 
 
-def _pair_auto_value(a: Product, b: Product, length_mm: float) -> int | None:
+def _pair_auto_value(
+    a: Product,
+    b: Product,
+    raw_length_a_mm: float,
+    raw_length_b_mm: float,
+) -> int | None:
     """Авто N пары живьём (#146): движок по сумме периметров/габаритов.
 
-    Режим пары выведенный: авто — только если оба артикула в режиме auto;
-    несовместимые габариты (пара не влезает на подвес) → None.
+    Режим пары выведенный: авто — только если оба артикула в режиме auto.
+    Разные эффективные сырьевые длины несовместимы на одном подвесе.
     """
     if a.hanger_mode != HANGER_MODE_AUTO or b.hanger_mode != HANGER_MODE_AUTO:
+        return None
+    if raw_length_a_mm != raw_length_b_mm:
         return None
     try:
         calc = compute_paired_hanger_quantity(
@@ -117,7 +130,7 @@ def _pair_auto_value(a: Product, b: Product, length_mm: float) -> int | None:
             mount_width_a_mm=a.mount_width_mm,
             perimeter_b_mm=b.perimeter_mm,
             mount_width_b_mm=b.mount_width_mm,
-            length_mm=length_mm,
+            length_mm=raw_length_a_mm,
         )
     except HangerConfigError:
         return None
@@ -149,6 +162,8 @@ def _quantity_out(
     a: Product,
     b: Product,
     lengths: list[float],
+    raw_lengths_a: dict[float, float],
+    raw_lengths_b: dict[float, float],
 ) -> dict[str, PairHangerValue]:
     """N пары по длине на выходе API (#146/#150): авто движком живьём + ручное из словаря пары."""
     stored = pair.quantity_per_hanger if isinstance(pair.quantity_per_hanger, dict) else {}
@@ -158,7 +173,7 @@ def _quantity_out(
         entry = stored.get(key)
         manual = entry.get("manual") if isinstance(entry, dict) else None
         quantity[key] = PairHangerValue(
-            auto=_pair_auto_value(a, b, length),
+            auto=_pair_auto_value(a, b, raw_lengths_a[length], raw_lengths_b[length]),
             manual=manual,
         )
     return quantity
@@ -169,8 +184,12 @@ def _pair_out(
     product: Product,
     partner: Product,
     lengths: list[float],
+    raw_lengths_product: dict[float, float],
+    raw_lengths_partner: dict[float, float],
 ) -> ProductPairOut:
-    quantity = _quantity_out(pair, product, partner, lengths)
+    quantity = _quantity_out(
+        pair, product, partner, lengths, raw_lengths_product, raw_lengths_partner
+    )
     return ProductPairOut(
         id=pair.id,
         product_a_id=pair.product_a_id,
@@ -212,7 +231,9 @@ async def list_product_pairs(
         )
     ).scalars().all()
     partners_by_id = {p.id: p for p in partners}
-    lengths_by_id = await _lengths_by_product(db, partner_ids + [product.id])
+    raw_lengths_by_id = await _lengths_by_product(
+        db, partner_ids + [product.id]
+    )
 
     out: list[ProductPairOut] = []
     for pair in pairs:
@@ -222,10 +243,19 @@ async def list_product_pairs(
         if partner is None:
             continue
         lengths = _intersection_lengths(
-            lengths_by_id.get(pair.product_a_id, set()),
-            lengths_by_id.get(pair.product_b_id, set()),
+            raw_lengths_by_id.get(pair.product_a_id, {}),
+            raw_lengths_by_id.get(pair.product_b_id, {}),
         )
-        out.append(_pair_out(pair, product, partner, lengths))
+        out.append(
+            _pair_out(
+                pair,
+                product,
+                partner,
+                lengths,
+                raw_lengths_by_id[product.id],
+                raw_lengths_by_id[partner.id],
+            )
+        )
     return out
 
 
@@ -257,9 +287,13 @@ async def create_product_pair(
     # длин» — предупреждение в UI, а не запрет); оживает сама, когда у обоих
     # артикулов появятся общие длины. Ниже по стеку пустое пересечение уже
     # первоклассно: каталог отдаёт lengths: [], резолвер N — calc_error.
-    lengths = _intersection_lengths(
-        {l.length_mm for l in product.lengths}, {l.length_mm for l in partner.lengths}
-    )
+    raw_lengths_product = {
+        float(length.length_mm): length.effective_raw_length_mm for length in product.lengths
+    }
+    raw_lengths_partner = {
+        float(length.length_mm): length.effective_raw_length_mm for length in partner.lengths
+    }
+    lengths = _intersection_lengths(raw_lengths_product, raw_lengths_partner)
 
     pair = ProductPair(
         product_a_id=min(product.id, partner.id),
@@ -273,7 +307,9 @@ async def create_product_pair(
         # Гонка двух симметричных POST: уникальность неупорядоченной пары — 409.
         await db.rollback()
         raise HTTPException(status_code=409, detail="Пара этих артикулов уже существует") from None
-    return _pair_out(pair, product, partner, lengths)
+    return _pair_out(
+        pair, product, partner, lengths, raw_lengths_product, raw_lengths_partner
+    )
 
 
 async def _load_with_lengths(db: AsyncSession, product_id: int) -> Product:
@@ -302,13 +338,19 @@ async def patch_product_pair(
     partner_id = pair.product_b_id if pair.product_a_id == product_id else pair.product_a_id
     product = await _load_with_lengths(db, product.id)
     partner = await _load_with_lengths(db, partner_id)
-    lengths = _intersection_lengths(
-        {l.length_mm for l in product.lengths}, {l.length_mm for l in partner.lengths}
-    )
+    raw_lengths_product = {
+        float(length.length_mm): length.effective_raw_length_mm for length in product.lengths
+    }
+    raw_lengths_partner = {
+        float(length.length_mm): length.effective_raw_length_mm for length in partner.lengths
+    }
+    lengths = _intersection_lengths(raw_lengths_product, raw_lengths_partner)
 
     pair.quantity_per_hanger = _manual_by_length(payload.quantity_per_hanger, lengths)
     await db.flush()
-    return _pair_out(pair, product, partner, lengths)
+    return _pair_out(
+        pair, product, partner, lengths, raw_lengths_product, raw_lengths_partner
+    )
 
 
 @router.delete("/{product_id}/pairs/{pair_id}", status_code=status.HTTP_204_NO_CONTENT)
@@ -366,16 +408,22 @@ async def list_all_product_pairs(
         b = by_id.get(pair.product_b_id)
         if a is None or b is None:
             continue
-        lengths = _intersection_lengths(
-            {l.length_mm for l in a.lengths}, {l.length_mm for l in b.lengths}
-        )
+        raw_lengths_a = {
+            float(length.length_mm): length.effective_raw_length_mm for length in a.lengths
+        }
+        raw_lengths_b = {
+            float(length.length_mm): length.effective_raw_length_mm for length in b.lengths
+        }
+        lengths = _intersection_lengths(raw_lengths_a, raw_lengths_b)
         out.append(
             ProductPairCatalogOut(
                 id=pair.id,
                 product_a_id=pair.product_a_id,
                 product_b_id=pair.product_b_id,
                 lengths=lengths,
-                quantity_per_hanger=_quantity_out(pair, a, b, lengths),
+                quantity_per_hanger=_quantity_out(
+                    pair, a, b, lengths, raw_lengths_a, raw_lengths_b
+                ),
             )
         )
     return out

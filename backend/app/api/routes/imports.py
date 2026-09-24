@@ -14,7 +14,12 @@ from app.api.deps import get_current_user
 from app.models.user import User
 from app.models.import_template import ImportTemplate
 from app.models.imports import ImportBatch, ImportBatchMode, ImportBatchStatus, ImportFile
-from app.models.production_plan import PlanChangeSet, PlanPosition, ProductionPlan
+from app.models.production_plan import (
+    PlanChangeSet,
+    PlanPosition,
+    ProductionPlan,
+    require_current_length_model,
+)
 from app.models.product import Product
 from app.models.route import ProductionRoute, RouteRuleProfile
 from app.services.plan_import_service import create_excel_import_change_set
@@ -75,6 +80,21 @@ async def _resolve_template_context(
     return resolved_mapping, rule_profile_id
 
 
+async def _reject_legacy_plan_mutation(
+    db: AsyncSession,
+    production_plan_id: int | None,
+) -> None:
+    if production_plan_id is None:
+        return
+    plan = await db.get(ProductionPlan, production_plan_id)
+    if plan is None:
+        raise HTTPException(status_code=404, detail="Production plan not found")
+    try:
+        require_current_length_model(plan)
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+
 @router.post("/excel", response_model=ImportPreviewOut, status_code=status.HTTP_201_CREATED)
 async def import_excel_plan(
     file: UploadFile = File(...),
@@ -90,6 +110,7 @@ async def import_excel_plan(
 ) -> ImportPreviewOut:
     if template_id is None:
         raise HTTPException(status_code=400, detail="template_id is required")
+    await _reject_legacy_plan_mutation(db, production_plan_id)
     resolved_mapping, rule_profile_id = await _resolve_template_context(
         db, template_id, column_mapping
     )
@@ -298,6 +319,7 @@ async def import_simulated_excel(
             db, payload.template_id, None
         )
 
+    await _reject_legacy_plan_mutation(db, payload.production_plan_id)
     content = _simulated_plan_workbook(payload.rows, payload.sheet_name)
     try:
         result = await create_excel_import_change_set(

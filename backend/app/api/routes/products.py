@@ -1,10 +1,11 @@
 import base64
+from collections.abc import Sequence
 from pathlib import Path
 
 from typing import List, Literal
 from fastapi import APIRouter, Depends, File, HTTPException, Query, UploadFile, status, Response
 from pydantic import BaseModel, Field
-from sqlalchemy import case, cast, exists, func, or_, select, type_coerce, delete, update, Integer, Float
+from sqlalchemy import case, cast, exists, func, or_, select, type_coerce, delete, Integer, Float
 from sqlalchemy.types import ARRAY, String
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import selectinload
@@ -106,6 +107,18 @@ class HangerQuantityValue(BaseModel):
     manual: int | None = Field(default=None, gt=0, description="Ручное значение «кол-во на подвес» (>0)")
 
 
+class ProductLengthIn(BaseModel):
+    length_mm: float = Field(gt=0, allow_inf_nan=False)
+    raw_length_mm: float | None = Field(default=None, gt=0, allow_inf_nan=False)
+    is_primary: bool = False
+
+
+class ProductLengthOut(BaseModel):
+    length_mm: float
+    raw_length_mm: float | None
+    is_primary: bool
+
+
 class ProductIn(BaseModel):
     sku: str
     code: str | None = None
@@ -118,7 +131,6 @@ class ProductIn(BaseModel):
     alloy: str | None = None
     color: str | None = None
     anod_type: str | None = None
-    length_mm: float | None = None
     weight_per_meter: float | None = None
     perimeter_mm: float | None = Field(default=None, gt=0, description="Периметр сечения, мм (>0)")
     mount_width_mm: float | None = Field(default=None, gt=0, description="Габарит профиля, мм (>0)")
@@ -131,9 +143,8 @@ class ProductIn(BaseModel):
     is_catalog_item: bool = False
     skip_shot_blast: bool = False
     dimension_state: DimensionState = DimensionState.length
-    primary_length_mm: float | None = None
+    lengths: List[ProductLengthIn] = []
     aliases: List[str] = []
-    lengths_mm: List[float] = []
     processing_flag_codes: List[str] = []
     is_laminated: bool = False
 
@@ -150,7 +161,6 @@ class ProductPatch(BaseModel):
     alloy: str | None = None
     color: str | None = None
     anod_type: str | None = None
-    length_mm: float | None = None
     weight_per_meter: float | None = None
     perimeter_mm: float | None = Field(default=None, gt=0, description="Периметр сечения, мм (>0)")
     mount_width_mm: float | None = Field(default=None, gt=0, description="Габарит профиля, мм (>0)")
@@ -163,9 +173,8 @@ class ProductPatch(BaseModel):
     is_catalog_item: bool | None = None
     skip_shot_blast: bool | None = None
     dimension_state: DimensionState | None = None
-    primary_length_mm: float | None = None
+    lengths: List[ProductLengthIn] | None = None
     aliases: List[str] | None = None
-    lengths_mm: List[float] | None = None
     processing_flag_codes: List[str] | None = None
     is_laminated: bool | None = None
 
@@ -191,7 +200,7 @@ class CompositionItemOut(BaseModel):
     name: str
     is_active: bool
     quantity: float
-    unit: str
+    unit: str | None
 
 
 class CompositionOut(BaseModel):
@@ -211,7 +220,6 @@ class ProductOut(BaseModel):
     alloy: str | None
     color: str | None
     anod_type: str | None
-    length_mm: float | None
     weight_per_meter: float | None
     perimeter_mm: float | None
     mount_width_mm: float | None
@@ -222,17 +230,14 @@ class ProductOut(BaseModel):
     photo_full: str | None
     source: str | None
     is_catalog_item: bool
-    # Выведенный флаг (ADR-0023, #146): у артикула есть пары в product_pairs.
     is_paired_profile: bool
     skip_shot_blast: bool
     dimension_state: DimensionState
-    primary_length_mm: float | None
+    lengths: List[ProductLengthOut]
     aliases: List[str]
-    lengths_mm: List[float]
     processing_flags: List[ProcessingFlagInfo]
     is_laminated: bool
     dimensions: dict[str, float] | None = None
-    # Состав ГП (#152): заполняется только при include_composition=1 в списке.
     composition: List[CompositionItemOut] | None = None
 
 
@@ -247,7 +252,7 @@ _DIRECT_SORT_FIELDS = frozenset({
 
 # Числовые атрибуты из JSONB-колонки attributes (#19)
 _JSONB_NUMERIC_SORT_FIELDS = frozenset({
-    "length_mm", "weight_per_meter", "perimeter_mm", "mount_width_mm",
+    "weight_per_meter", "perimeter_mm", "mount_width_mm",
 })
 
 # Текстовые атрибуты из JSONB-колонки attributes
@@ -261,7 +266,7 @@ VALID_SORT_FIELDS = (
     | _JSONB_NUMERIC_SORT_FIELDS
     | _JSONB_TEXT_SORT_FIELDS
     | _FLAG_SORT_FIELDS
-    | {"quantity_per_hanger", "aliases"}
+    | {"quantity_per_hanger", "aliases", "length_mm"}
 )
 
 
@@ -324,52 +329,88 @@ class ProductsListResponse(BaseModel):
     total: int
 
 
-async def _sync_lengths(db: AsyncSession, product_id: int, lengths: list[float]) -> None:
-    """Replace all lengths for a product with the given list.
+def _validate_linear_lengths(
+    lengths: list[ProductLengthIn] | list[float], *, dimension_state: DimensionState
+) -> list[ProductLengthIn]:
+    """Validate and normalize the canonical linear-length registry."""
+    if dimension_state in (DimensionState.area, DimensionState.volume):
+        if lengths:
+            raise HTTPException(status_code=422, detail="lengths are only valid for linear products")
+        return []
 
-    Основная длина (#81): сохраняется, если прежняя основная есть в новом
-    списке; иначе — первая по возрастанию. Ровно одна основная на продукт.
-    Дубли и неположительные длины отсекаются заранее (edge cases).
-    """
-    unique = sorted({l for l in lengths if l > 0})
-    if len(unique) != len(lengths):
-        raise HTTPException(status_code=400, detail="lengths_mm must be unique and > 0")
-    if not unique:
+    normalized: list[ProductLengthIn] = []
+    for value in lengths:
+        if isinstance(value, ProductLengthIn):
+            normalized.append(value)
+        else:
+            normalized.append(ProductLengthIn(length_mm=value))
+
+    if not normalized:
+        return []
+    by_length: dict[float, ProductLengthIn] = {}
+    primary_count = 0
+    for value in normalized:
+        length = float(value.length_mm)
+        if length in by_length:
+            raise HTTPException(status_code=422, detail="lengths must contain unique length_mm values")
+        if value.is_primary:
+            primary_count += 1
+        by_length[length] = value
+    if primary_count > 1:
+        raise HTTPException(status_code=422, detail="only one length can be primary")
+    return normalized
+
+
+async def _sync_lengths(
+    db: AsyncSession,
+    product_id: int,
+    lengths: list[ProductLengthIn] | list[float],
+    *,
+    dimension_state: DimensionState = DimensionState.length,
+    clear_invalid_raw: bool = False,
+):
+    """Replace the product length registry, preserving omitted raw values on patch."""
+    normalized = _validate_linear_lengths(lengths, dimension_state=dimension_state)
+    existing = {
+        float(row.length_mm): row
+        for row in (await db.scalars(select(ProductLength).where(ProductLength.product_id == product_id))).all()
+    }
+    if not normalized:
         await db.execute(delete(ProductLength).where(ProductLength.product_id == product_id))
         return
-    prev_primary = await db.scalar(
-        select(ProductLength.length_mm)
-        .where(ProductLength.product_id == product_id, ProductLength.is_primary.is_(True))
+
+    previous_primary = next((row.length_mm for row in existing.values() if row.is_primary), None)
+    requested_primary = next((float(v.length_mm) for v in normalized if v.is_primary), None)
+    primary = requested_primary if requested_primary is not None else (
+        previous_primary if previous_primary in {float(v.length_mm) for v in normalized} else min(float(v.length_mm) for v in normalized)
     )
     await db.execute(delete(ProductLength).where(ProductLength.product_id == product_id))
-    primary = prev_primary if prev_primary is not None and prev_primary in unique else min(unique)
-    for length in unique:
-        db.add(ProductLength(product_id=product_id, length_mm=length, is_primary=length == primary))
-
-
-async def _set_primary_length(db: AsyncSession, product_id: int, length_mm: float | None) -> None:
-    """Назначить основную длину артикула (#81): ровно одна основная на продукт."""
-    if length_mm is None:
-        return
-    await db.flush()
-    exists_len = await db.scalar(
-        select(ProductLength.id).where(
-            ProductLength.product_id == product_id, ProductLength.length_mm == length_mm
+    for value in normalized:
+        length = float(value.length_mm)
+        old = existing.get(length)
+        # Pydantic distinguishes an omitted raw from explicit null.  On patch,
+        # omitted means retain the current value; a changed normal length that
+        # overtakes the old raw invalidates it and therefore falls back to NULL.
+        raw = value.raw_length_mm
+        if raw is not None and raw < length:
+            if not clear_invalid_raw or "raw_length_mm" in value.model_fields_set:
+                raise HTTPException(
+                    status_code=422,
+                    detail=f"raw_length_mm must be greater than or equal to length_mm ({length})",
+                )
+            raw = None
+        if "raw_length_mm" not in value.model_fields_set and old is not None:
+            raw = old.raw_length_mm
+        if raw is not None and raw < length:
+            raw = None
+        db.add(
+            ProductLength(
+                product_id=product_id,
+                length_mm=length,
+                raw_length_mm=raw,
+                is_primary=length == primary,
+            )
         )
-    )
-    if exists_len is None:
-        raise HTTPException(status_code=422, detail=f"length_mm {length_mm} is not a length of the product")
-    await db.execute(
-        update(ProductLength)
-        .where(ProductLength.product_id == product_id)
-        .values(is_primary=False)
-    )
-    await db.execute(
-        update(ProductLength)
-        .where(ProductLength.product_id == product_id, ProductLength.length_mm == length_mm)
-        .values(is_primary=True)
-    )
-
 
 async def _sync_processing_flags(db: AsyncSession, product_id: int, codes: list[str]) -> None:
     """Replace all processing flags for a product with the given codes."""
@@ -387,7 +428,7 @@ async def _sync_processing_flags(db: AsyncSession, product_id: int, codes: list[
 
 
 def _build_hanger_quantity_dict(
-    lengths_mm: list[float],
+    lengths: Sequence[ProductLengthIn | ProductLength],
     perimeter_mm: float | None,
     mount_width_mm: float | None,
     manual_by_length: dict[str, int | None] | None,
@@ -405,8 +446,14 @@ def _build_hanger_quantity_dict(
     auto_mode = perimeter_mm is not None and mount_width_mm is not None
     existing = existing or {}
     result: dict[str, dict[str, int | None]] = {}
-    for length in sorted(lengths_mm):
-        key = _length_key(length)
+    for record in sorted(lengths, key=lambda value: value.length_mm):
+        normal_length = float(record.length_mm)
+        effective_raw_length = (
+            float(record.raw_length_mm)
+            if record.raw_length_mm is not None
+            else normal_length
+        )
+        key = _length_key(normal_length)
         manual = manual_by_length.get(key) if manual_by_length else None
         if manual is None:
             prev = existing.get(key)
@@ -418,7 +465,7 @@ def _build_hanger_quantity_dict(
                 calc = compute_hanger_quantity(
                     perimeter_mm=perimeter_mm,
                     mount_width_mm=mount_width_mm,
-                    length_mm=length,
+                    length_mm=effective_raw_length,
                     hanger=DEFAULT_HANGER_SETTINGS,
                 )
             except HangerConfigError as exc:
@@ -565,7 +612,14 @@ def _to_product_out(
     dimensions: dict[str, float] | None = None,
     composition: list[CompositionItemOut] | None = None,
 ) -> ProductOut:
-    lengths = sorted([l.length_mm for l in product.lengths]) if product.lengths else []
+    lengths = [
+        ProductLengthOut(
+            length_mm=float(row.length_mm),
+            raw_length_mm=float(row.raw_length_mm) if row.raw_length_mm is not None else None,
+            is_primary=bool(row.is_primary),
+        )
+        for row in sorted(product.lengths or [], key=lambda row: row.length_mm)
+    ]
     flags = [
         ProcessingFlagInfo(code=f.code, name=f.name, section_scope=f.section_scope)
         for f in product.processing_flags
@@ -573,17 +627,12 @@ def _to_product_out(
     flag_codes = {f.code for f in product.processing_flags}
     quantity_per_hanger = None
     if product.dimension_state in (DimensionState.area, DimensionState.volume) and dimensions:
-        # Лист (#126): одна запись по длине полотна, auto — формула листов
-        # живьём из dimensions (значения осей ведутся через product_dimensions).
         quantity_per_hanger = _sheet_hanger_quantity_out(product, dimensions)
     else:
         by_length = product.quantity_per_hanger_by_length
         if by_length:
             quantity_per_hanger = {
-                length: HangerQuantityValue(
-                    auto=entry.get("auto"),
-                    manual=entry.get("manual"),
-                )
+                length: HangerQuantityValue(auto=entry.get("auto"), manual=entry.get("manual"))
                 for length, entry in by_length.items()
             }
     return ProductOut(
@@ -599,7 +648,6 @@ def _to_product_out(
         alloy=product.alloy,
         color=product.color,
         anod_type=product.anod_type,
-        length_mm=product.length_mm,
         weight_per_meter=product.weight_per_meter,
         perimeter_mm=product.perimeter_mm,
         mount_width_mm=product.mount_width_mm,
@@ -613,9 +661,8 @@ def _to_product_out(
         is_paired_profile=product.is_paired_profile,
         skip_shot_blast="skip_shot_blast" in flag_codes,
         dimension_state=product.dimension_state,
-        primary_length_mm=product.primary_length_mm,
+        lengths=lengths,
         aliases=product.aliases or [],
-        lengths_mm=lengths,
         processing_flags=flags,
         is_laminated="is_laminated" in flag_codes,
         dimensions=dimensions,
@@ -655,7 +702,7 @@ async def _enforce_bidirectional_aliases(
 
 
 def _flag_exists_expr(code: str):
-    """Коррелированный exists-подзапрос: у продукта установлен processing flag `code`."""
+    """Коррелированный exists-подзапрос: у продукта установлен processing flag ``code``."""
     return exists().where(
         ProductProcessingFlag.product_id == Product.id,
         ProductProcessingFlag.flag_id == ProcessingFlag.id,
@@ -664,39 +711,38 @@ def _flag_exists_expr(code: str):
 
 
 def _parse_sort(sort_param: str):
-    """Parse sort parameter like 'sku:asc,length_mm:desc' into list of order clauses.
-
-    Поддерживаются (#76): прямые колонки Product, числовые/текстовые
-    JSONB-атрибуты, quantity_per_hanger (по эффективному значению основной
-    длины), aliases (по объединённому тексту) и флаги обработки (boolean).
-    """
+    """Parse sort parameter into registry-backed or attribute-backed clauses."""
     rules = []
     for part in sort_param.split(","):
         part = part.strip()
         if ":" in part:
             field, order = part.rsplit(":", 1)
         else:
-            field = part
-            order = "asc"
+            field, order = part, "asc"
         field = field.strip()
         order = order.strip().lower()
         if field not in VALID_SORT_FIELDS:
             raise HTTPException(status_code=400, detail=f"Invalid sort field: {field}")
         if order not in ("asc", "desc"):
             raise HTTPException(status_code=400, detail=f"Invalid sort order: {order}")
-        if field == "quantity_per_hanger":
-            # Per-length dict (#60): сортируем по эффективному значению основной длины.
+        if field == "length_mm":
+            col = (
+                select(ProductLength.length_mm)
+                .where(ProductLength.product_id == Product.id)
+                .order_by(ProductLength.is_primary.desc(), ProductLength.length_mm.asc())
+                .limit(1)
+                .correlate(Product)
+                .scalar_subquery()
+            )
+        elif field == "quantity_per_hanger":
             col = _primary_length_quantity_expr()
         elif field == "aliases":
-            # Сортировка по объединённому тексту массива алиасов (#76).
             col = func.coalesce(func.array_to_string(Product.aliases, ","), "")
         elif field in _JSONB_NUMERIC_SORT_FIELDS:
-            # JSONB-атрибут (#19): сортировка по числовому значению.
             col = Product.attributes[field].as_float()
         elif field in _JSONB_TEXT_SORT_FIELDS:
             col = Product.attributes[field].astext
         elif field in _FLAG_SORT_FIELDS:
-            # Флаг обработки (M2M): булевская сортировка — desc ставит с флагом первыми.
             col = _flag_exists_expr(field)
         else:
             col = getattr(Product, field)
@@ -912,14 +958,13 @@ async def create_product(
         if existing_code:
             raise HTTPException(status_code=409, detail="Code already exists")
 
-    product_data = payload.model_dump(exclude={"lengths_mm", "processing_flag_codes", "skip_shot_blast", "is_laminated", "quantity_per_hanger", "primary_length_mm"})
+    product_data = payload.model_dump(
+        exclude={"lengths", "processing_flag_codes", "skip_shot_blast", "is_laminated", "quantity_per_hanger"}
+    )
     item = Product(**product_data)
     db.add(item)
     await db.flush()
 
-    # Режим подвеса (#127): при создании 1D-артикула без явного режима —
-    # вывести из данных (периметр И габарит → auto, иначе manual), как в
-    # миграции существующих данных. Листы и явный режим не трогаем.
     if payload.hanger_mode is None and payload.dimension_state == DimensionState.length:
         item.hanger_mode = (
             "auto"
@@ -927,11 +972,12 @@ async def create_product(
             else "manual"
         )
 
-    if payload.lengths_mm:
-        await _sync_lengths(db, item.id, payload.lengths_mm)
-    if payload.primary_length_mm is not None and payload.lengths_mm:
-        await _set_primary_length(db, item.id, payload.primary_length_mm)
-    # Sync boolean flags to M2M (#17)
+    await _sync_lengths(
+        db,
+        item.id,
+        payload.lengths,
+        dimension_state=payload.dimension_state,
+    )
     flag_codes = list(payload.processing_flag_codes)
     if payload.skip_shot_blast:
         flag_codes.append("skip_shot_blast")
@@ -940,10 +986,6 @@ async def create_product(
     if flag_codes:
         await _sync_processing_flags(db, item.id, list(set(flag_codes)))
 
-    # Авто-расчёт per-length dict (#60): auto из движка при заполненных
-    # perimeter_mm И mount_width_mm, manual из payload — раздельно.
-    # Для листов (#126) — одна запись по длине полотна (осей при создании
-    # ещё нет — словарь пустой до заведения product_dimensions).
     manual_by_length = _manual_by_length_from_payload(payload.quantity_per_hanger)
     if payload.dimension_state in (DimensionState.area, DimensionState.volume):
         item.quantity_per_hanger = _build_sheet_hanger_quantity_dict(
@@ -951,7 +993,7 @@ async def create_product(
         )
     else:
         item.quantity_per_hanger = _build_hanger_quantity_dict(
-            payload.lengths_mm or [],
+            payload.lengths,
             payload.perimeter_mm,
             payload.mount_width_mm,
             manual_by_length,
@@ -1022,7 +1064,10 @@ async def patch_product(
 
     old_aliases = item.aliases if payload.aliases is not None else None
 
-    patch_data = payload.model_dump(exclude_unset=True, exclude={"lengths_mm", "processing_flag_codes", "skip_shot_blast", "is_laminated", "quantity_per_hanger", "primary_length_mm"})
+    patch_data = payload.model_dump(
+        exclude_unset=True,
+        exclude={"lengths", "processing_flag_codes", "skip_shot_blast", "is_laminated", "quantity_per_hanger"},
+    )
     new_code = patch_data.get("code")
     if new_code:
         duplicate_code = await db.scalar(
@@ -1053,27 +1098,27 @@ async def patch_product(
     for key, value in patch_data.items():
         setattr(item, key, value)
 
-    # Миграция product_dimensions при смене dimension_state (Ref #72):
-    # поля 2D/3D ведутся через product_dimensions, приводим их к новой
-    # размерности (создать недостающие, удалить поля других размерностей).
     if payload.dimension_state is not None:
         await _migrate_dimensions_for_state(db, product_id, payload.dimension_state)
 
-    if payload.lengths_mm is not None:
-        await _sync_lengths(db, product_id, payload.lengths_mm)
-    if payload.primary_length_mm is not None:
-        await _set_primary_length(db, product_id, payload.primary_length_mm)
+    if item.dimension_state in (DimensionState.area, DimensionState.volume):
+        await _sync_lengths(db, product_id, [], dimension_state=item.dimension_state)
+
+    if payload.lengths is not None:
+        await _sync_lengths(
+            db,
+            product_id,
+            payload.lengths,
+            dimension_state=item.dimension_state,
+            clear_invalid_raw=True,
+        )
     if payload.processing_flag_codes is not None:
         await _sync_processing_flags(db, product_id, payload.processing_flag_codes)
-    # Sync boolean flags to M2M (#17)
     if payload.skip_shot_blast is not None:
         await _sync_boolean_flag(db, product_id, "skip_shot_blast", payload.skip_shot_blast)
     if payload.is_laminated is not None:
         await _sync_boolean_flag(db, product_id, "is_laminated", payload.is_laminated)
 
-    # Авто-расчёт per-length dict (#60): авто из движка при заполненных
-    # perimeter_mm И mount_width_mm; manual из payload (или сохранённый).
-    # Для листов (#126) — одна запись по длине полотна из product_dimensions.
     manual_by_length = _manual_by_length_from_payload(payload.quantity_per_hanger)
     existing = item.quantity_per_hanger_by_length or {}
     sheet_dims: dict[str, float] | None = None
@@ -1085,19 +1130,16 @@ async def patch_product(
     else:
         current_lengths = (
             await db.scalars(
-                select(ProductLength.length_mm).where(ProductLength.product_id == product_id)
+                select(ProductLength).where(ProductLength.product_id == product_id)
             )
         ).all()
-        lengths_mm = sorted(current_lengths)
         item.quantity_per_hanger = _build_hanger_quantity_dict(
-            lengths_mm,
+            current_lengths,
             item.perimeter_mm,
             item.mount_width_mm,
             manual_by_length,
             existing,
         )
-
-    await db.flush()
 
     if payload.aliases is not None and old_aliases is not None:
         activated = await _enforce_bidirectional_aliases(db, product_id, payload.aliases, old_aliases=list(old_aliases))

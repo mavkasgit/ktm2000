@@ -43,6 +43,7 @@ from app.services.production_plan_service import (
     get_plan_preview,
     restore_plan_position,
     rollback_change_set,
+    require_mutable_plan,
     soft_delete_cancelled_position,
 )
 from app.services.route_matcher import resolve_position_route, ResolvedRouteInfo, make_position_route_cache_key
@@ -54,12 +55,23 @@ from app.services.plan_position_hanger import resolve_positions_hanger
 router = APIRouter(prefix="/production-plans", tags=["production-plans"])
 
 
+async def _reject_legacy_plan_mutation(
+    db: AsyncSession,
+    production_plan_id: int,
+) -> None:
+    try:
+        await require_mutable_plan(db, production_plan_id)
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+
 class PlanSummaryOut(BaseModel):
     id: int
     plan_no: str
     name: str
     status: str
     period_start: str | None
+    length_model_version: int
     period_end: str | None
     total_positions: int
     draft_positions: int
@@ -88,6 +100,7 @@ async def list_plans(db: AsyncSession = Depends(get_db)) -> list[PlanSummaryOut]
             PlanSummaryOut(
                 id=plan.id,
                 plan_no=plan.plan_no,
+                length_model_version=plan.length_model_version,
                 name=plan.name,
                 status=plan.status.value,
                 period_start=plan.period_start.isoformat() if plan.period_start else None,
@@ -168,6 +181,7 @@ async def apply_plan_change_set(
         raise HTTPException(status_code=404, detail="Change set not found")
     if change_set.production_plan_id != production_plan_id:
         raise HTTPException(status_code=400, detail="Change set does not belong to production plan")
+    await _reject_legacy_plan_mutation(db, production_plan_id)
     try:
         preview = await apply_change_set(db, change_set_id, skip_invalid=skip_invalid, changed_by=current_user.id)
     except ValueError as exc:
@@ -187,6 +201,7 @@ async def rollback_plan_change_set(
         raise HTTPException(status_code=404, detail="Change set not found")
     if change_set.production_plan_id != production_plan_id:
         raise HTTPException(status_code=400, detail="Change set does not belong to production plan")
+    await _reject_legacy_plan_mutation(db, production_plan_id)
     try:
         return await rollback_change_set(db, change_set_id, changed_by=current_user.id)
     except ValueError as exc:
@@ -208,6 +223,7 @@ async def discard_plan_change_set(
         raise HTTPException(status_code=404, detail="Change set not found")
     if change_set.production_plan_id != production_plan_id:
         raise HTTPException(status_code=400, detail="Change set does not belong to production plan")
+    await _reject_legacy_plan_mutation(db, production_plan_id)
 
     # Запись лога аудита (отклонение импорта)
     from app.services.audit_log_service import log_action
@@ -266,6 +282,7 @@ async def delete_import_batch(
 #: снести данные другого плана по произвольному batch_id.
     if batch is None or batch.production_plan_id != production_plan_id:
         raise HTTPException(status_code=404, detail="Import batch not found")
+    await _reject_legacy_plan_mutation(db, production_plan_id)
     try:
         return await delete_import_batch_service(
             db, batch_id, delete_drafts_only=delete_drafts_only, changed_by=current_user.id
@@ -381,6 +398,7 @@ async def delete_position(
     db: AsyncSession = Depends(get_db),
     current_user: User = Depends(get_current_user),
 ):
+    await _reject_legacy_plan_mutation(db, production_plan_id)
     position = await db.get(PlanPosition, position_id)
     if position is None or position.production_plan_id != production_plan_id:
         raise HTTPException(status_code=404, detail="Position not found")
@@ -459,6 +477,7 @@ async def bulk_approve_positions(
     db: AsyncSession = Depends(get_db),
     current_user: User = Depends(get_current_user),
 ) -> BulkActionResponse:
+    await _reject_legacy_plan_mutation(db, production_plan_id)
     """Approve multiple plan positions in a single request.
 
     Each position is processed in a savepoint so a single failure does
@@ -509,6 +528,7 @@ async def bulk_delete_positions(
     db: AsyncSession = Depends(get_db),
     current_user: User = Depends(get_current_user),
 ) -> BulkActionResponse:
+    await _reject_legacy_plan_mutation(db, production_plan_id)
     """Delete multiple plan positions in a single request.
 
     Cancelled positions are soft-deleted; all other eligible positions
@@ -584,6 +604,7 @@ async def create_plan_release_batch(
     payload: ReleaseBatchCreateIn,
     db: AsyncSession = Depends(get_db),
 ) -> dict:
+    await _reject_legacy_plan_mutation(db, production_plan_id)
     try:
         return await create_release_batch(
             db,
@@ -1535,6 +1556,8 @@ async def batch_assign_route_global(
             )
         )
     ).scalars().all()
+    for plan_id in {position.production_plan_id for position in positions}:
+        await _reject_legacy_plan_mutation(db, plan_id)
 
     for pos in positions:
         pos.route_id = payload.route_id
@@ -1594,6 +1617,7 @@ async def batch_assign_route(
     plan = await db.get(ProductionPlan, production_plan_id)
     if plan is None:
         raise HTTPException(status_code=404, detail="Production plan not found")
+    await _reject_legacy_plan_mutation(db, production_plan_id)
 
     if not payload.position_ids:
         raise HTTPException(status_code=400, detail="position_ids must not be empty")
@@ -1807,6 +1831,7 @@ async def update_position_quantity(
     position = await db.get(PlanPosition, position_id)
     if position is None or position.production_plan_id != production_plan_id:
         raise HTTPException(status_code=404, detail="Position not found")
+    await _reject_legacy_plan_mutation(db, production_plan_id)
 
     if position.status not in (PlanPositionStatus.draft, PlanPositionStatus.invalid, PlanPositionStatus.valid):
         raise HTTPException(status_code=400, detail="Можно менять только черновики")

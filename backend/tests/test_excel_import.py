@@ -323,7 +323,11 @@ async def test_preview_excel_resolves_paired_profile_when_pair_exists(
 
     template = await _create_template(session, name="Preview Pair Template", code="preview-pair-template")
     await _make_product_pair(
-        session, "ЮП-2616", "ЮП-2604", manual_n=8, length_mm=2700
+        session,
+        "ЮП-2616",
+        "ЮП-2604",
+        manual_n=8,
+        length={"length_mm": 2700, "is_primary": True},
     )
     await session.commit()
 
@@ -360,7 +364,13 @@ async def test_apply_paired_import_does_not_cache_hanger_override(
     """Импортная N пары не кэшируется как override: позиция читает снапшот."""
     monkeypatch.setattr(settings, "IMPORT_STORAGE_DIR", str(tmp_path))
 
-    await _make_product_pair(session, "ЮП-PAIR-A", "ЮП-PAIR-B", manual_n=8, length_mm=2700)
+    await _make_product_pair(
+        session,
+        "ЮП-PAIR-A",
+        "ЮП-PAIR-B",
+        manual_n=8,
+        length={"length_mm": 2700, "is_primary": True},
+    )
     template = await _create_template(session, name="Paired Apply Template", code="paired-apply-template")
     await session.commit()
 
@@ -623,10 +633,11 @@ def test_date_normalization() -> None:
 async def test_replace_draft_mode_creates_cancel_for_missing_rows(client, session, tmp_path, monkeypatch) -> None:
     monkeypatch.setattr(settings, "IMPORT_STORAGE_DIR", str(tmp_path))
 
-    from app.models.product import Product, ProductType
+    from app.models.product import Product, ProductLength, ProductType
     from app.models.route import ProductionRoute, RouteStage, RouteOperation
-    
     from app.models.section import Section
+
+
 
     product = Product(sku="FG-TEST", name="Test Product", type=ProductType.finished_good, unit="pcs")
     component = Product(sku="FG-TEST-RAW", name="Test Raw", type=ProductType.component, unit="pcs")
@@ -635,6 +646,8 @@ async def test_replace_draft_mode_creates_cancel_for_missing_rows(client, sessio
         Section(code="PACKING", name="Pack"),
     ]
     session.add_all([product, component, *sections])
+    await session.flush()
+    session.add(ProductLength(product_id=product.id, length_mm=2700, is_primary=True))
     await session.flush()
 
 
@@ -882,7 +895,7 @@ async def test_preview_excel_uses_template_profile_for_rule_selection(client, se
 # ─────────────────────────────────────────────────────────────
 
 def _workbook_with_quantity(
-    sku: str, name: str, quantity: int, *, output_length_m: float = 2.7
+    sku: str, name: str, quantity: int, *, output_length_m: float = 2.7, length_m: float = 2.7
 ) -> bytes:
     """Создаёт минимальный Excel с одной строкой плана.
 
@@ -915,7 +928,7 @@ def _workbook_with_quantity(
             "Комментарии",
         ]
     )
-    ws.append([sku, "ТЗ", name, 0, "", quantity, 2.7, "", "", "", output_length_m, quantity, "", quantity, "ГП"])
+    ws.append([sku, "ТЗ", name, 0, "", quantity, length_m, "", "", "", output_length_m, quantity, "", quantity, "ГП"])
     out = BytesIO()
     wb.save(out)
     return out.getvalue()
@@ -1183,14 +1196,13 @@ async def _add_single_hanger_product(
     session,
     sku: str,
     *,
-    lengths: list[float] | None = None,
-    primary_length_mm: float | None = None,
-    quantity_per_hanger: dict | int | None = None,
+    lengths: list[dict] | None = None,
+    quantity_per_hanger: dict | None = None,
     hanger_mode: str = "manual",
     perimeter_mm: float | None = None,
     mount_width_mm: float | None = None,
 ) -> None:
-    """Одиночный артикул: длины ProductLength и норма на подвес (#170)."""
+    """Одиночный артикул с каноническим реестром normal/raw длин."""
     from app.models.product import Product, ProductLength, ProductType
 
     product = Product(sku=sku, name=f"Single {sku}", type=ProductType.component, unit="pcs")
@@ -1203,39 +1215,36 @@ async def _add_single_hanger_product(
         product.mount_width_mm = mount_width_mm
     session.add(product)
     await session.flush()
-    for length in lengths or []:
-        session.add(
-            ProductLength(
-                product_id=product.id,
-                length_mm=length,
-                is_primary=(length == primary_length_mm),
-            )
-        )
+    session.add_all(
+        ProductLength(product_id=product.id, **length)
+        for length in (lengths or [])
+    )
     await session.commit()
 
 
 @pytest.mark.asyncio
-async def test_import_single_manual_norm_uses_raw_length_not_primary(
+async def test_import_single_manual_norm_keeps_excel_normal_length(
     client, session, tmp_path, monkeypatch
 ) -> None:
-    """Норма одиночной позиции — по сырьевой длине, а не по основной (#170)."""
+    """Excel 2700 остаётся геометрией плана; N выбирается по 2700, не по primary."""
     monkeypatch.setattr(settings, "IMPORT_STORAGE_DIR", str(tmp_path))
 
     await _add_single_hanger_product(
         session,
         "ЮП-NORM-LEN",
-        lengths=[2750, 3000],
-        primary_length_mm=3000,
+        lengths=[
+            {"length_mm": 2700, "raw_length_mm": 2750, "is_primary": False},
+            {"length_mm": 3000, "is_primary": True},
+        ],
         hanger_mode="manual",
         quantity_per_hanger={
-            "2750": {"auto": None, "manual": 5},
+            "2700": {"auto": None, "manual": 5},
             "3000": {"auto": None, "manual": 7},
         },
     )
     template = await _create_template(session, name="Norm Length Template", code="norm-length-template")
     await session.commit()
 
-    # Строка несёт ГП 2,7 м; сырьё артикула 2750 (норма 5), основная длина 3000 (норма 7).
     wb = _workbook_with_quantity("ЮП-NORM-LEN", "Norm Length", 11)
     response = await client.post(
         f"/api/imports/excel/preview?template_id={template.id}",
@@ -1245,25 +1254,27 @@ async def test_import_single_manual_norm_uses_raw_length_not_primary(
 
     assert response.status_code == 200
     item = response.json()["items"][0]
-    assert item["after_data"]["input_dimensions"] == {"length_mm": 2750}
+    assert item["after_data"]["input_dimensions"] == {"length_mm": 2700}
     assert item["after_data"]["quantity_per_hanger"] == 5
-    # ceil(11/5)*5 = 15; по основной длине было бы ceil(11/7)*7 = 14.
     assert item["after_data"]["quantity"] == "15"
     assert item["after_data"]["hanger_count"] == 3
+    assert "normal_length_not_found" not in item["errors"]
 
 
 @pytest.mark.asyncio
-async def test_import_single_manual_norm_missing_for_length_warns(
+async def test_import_single_missing_normal_norm_keeps_length_and_warns(
     client, session, tmp_path, monkeypatch
 ) -> None:
-    """Нет нормы для сырьевой длины → не округляем, warning с длиной (#170, Q2=а)."""
+    """Отсутствие N для зарегистрированной 2700 не меняет геометрию позиции."""
     monkeypatch.setattr(settings, "IMPORT_STORAGE_DIR", str(tmp_path))
 
     await _add_single_hanger_product(
         session,
         "ЮП-NORM-GAP",
-        lengths=[2750, 3000],
-        primary_length_mm=3000,
+        lengths=[
+            {"length_mm": 2700, "raw_length_mm": 2750, "is_primary": True},
+            {"length_mm": 3000, "is_primary": False},
+        ],
         hanger_mode="manual",
         quantity_per_hanger={"3000": {"auto": None, "manual": 7}},
     )
@@ -1279,33 +1290,35 @@ async def test_import_single_manual_norm_missing_for_length_warns(
 
     assert response.status_code == 200
     item = response.json()["items"][0]
-    assert item["after_data"]["input_dimensions"] == {"length_mm": 2750}
+    assert item["after_data"]["input_dimensions"] == {"length_mm": 2700}
     assert item["after_data"]["quantity_per_hanger"] is None
     assert item["after_data"]["quantity"] == item["after_data"]["original_quantity"]
     assert item["after_data"]["quantity"] in ("11", "11.0")
-    assert "hanger_quantity_not_set:2,75" in item["warnings"]
+    assert "hanger_quantity_not_set:2,7" in item["warnings"]
+
+
 
 
 @pytest.mark.asyncio
 async def test_import_single_auto_norm_computed_by_raw_length(
     client, session, tmp_path, monkeypatch
 ) -> None:
-    """auto-артикул: N считается по сырьевой длине, хранимый manual-скаляр игнорируется."""
+    """Auto использует effective raw для формулы, но сохраняет normal в позиции."""
     monkeypatch.setattr(settings, "IMPORT_STORAGE_DIR", str(tmp_path))
 
     await _add_single_hanger_product(
         session,
         "ЮП-NORM-AUTO",
-        lengths=[3000],
+        lengths=[{"length_mm": 3000, "raw_length_mm": 3050, "is_primary": True}],
         hanger_mode="auto",
-        quantity_per_hanger={"auto": None, "manual": 71},
+        quantity_per_hanger={"3000": {"auto": 72, "manual": 71}},
         perimeter_mm=60,
         mount_width_mm=15,
     )
     template = await _create_template(session, name="Norm Auto Template", code="norm-auto-template")
     await session.commit()
 
-    wb = _workbook_with_quantity("ЮП-NORM-AUTO", "Norm Auto", 500)
+    wb = _workbook_with_quantity("ЮП-NORM-AUTO", "Norm Auto", 500, output_length_m=3.0, length_m=3.0)
     response = await client.post(
         f"/api/imports/excel/preview?template_id={template.id}",
         data={"normalize_hanger_quantity": "true"},
@@ -1315,23 +1328,23 @@ async def test_import_single_auto_norm_computed_by_raw_length(
     assert response.status_code == 200
     item = response.json()["items"][0]
     assert item["after_data"]["input_dimensions"] == {"length_mm": 3000}
-    # Авторасчёт по 3000: floor(13/(60*3000/1e6)) = 72, скаляр 71 не используется.
-    assert item["after_data"]["quantity_per_hanger"] == 72
-    assert item["after_data"]["quantity"] == "504"  # ceil(500/72)*72 = 7*72
-    assert item["after_data"]["hanger_count"] == 7
+    assert item["after_data"]["outputs"][0]["dimensions"] == {"length_mm": 3000}
+    assert item["after_data"]["quantity_per_hanger"] == 71
+    assert item["after_data"]["quantity"] == "568"  # ceil(500/71)*71 = 8*71
+    assert item["after_data"]["hanger_count"] == 8
 
 
 @pytest.mark.asyncio
 async def test_import_single_auto_norm_per_length_uses_mode(
     client, session, tmp_path, monkeypatch
 ) -> None:
-    """auto + per-length: режим решает — авторасчёт по длине, а не хранимое значение."""
+    """В auto-режиме сохранённое значение не подменяет формулу по raw."""
     monkeypatch.setattr(settings, "IMPORT_STORAGE_DIR", str(tmp_path))
 
     await _add_single_hanger_product(
         session,
         "ЮП-NORM-AUTO-PL",
-        lengths=[3000],
+        lengths=[{"length_mm": 3000, "is_primary": True}],
         hanger_mode="auto",
         quantity_per_hanger={"3000": {"auto": 72, "manual": 71}},
         perimeter_mm=60,
@@ -1340,15 +1353,16 @@ async def test_import_single_auto_norm_per_length_uses_mode(
     template = await _create_template(session, name="Norm Auto Pl Template", code="norm-auto-pl-template")
     await session.commit()
 
-    wb = _workbook_with_quantity("ЮП-NORM-AUTO-PL", "Norm Auto Pl", 500)
+    wb = _workbook_with_quantity("ЮП-NORM-AUTO-PL", "Norm Auto Pl", 500, output_length_m=3.0, length_m=3.0)
     response = await client.post(
         f"/api/imports/excel/preview?template_id={template.id}",
         data={"normalize_hanger_quantity": "true"},
         files={"file": ("single.xlsx", wb, "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet")},
     )
-
     assert response.status_code == 200
     item = response.json()["items"][0]
+    assert item["after_data"]["input_dimensions"] == {"length_mm": 3000}
+    assert item["after_data"]["outputs"][0]["dimensions"] == {"length_mm": 3000}
     assert item["after_data"]["quantity_per_hanger"] == 72
     assert item["after_data"]["quantity"] == "504"
     assert item["after_data"]["hanger_count"] == 7
@@ -1358,20 +1372,20 @@ async def test_import_single_auto_norm_per_length_uses_mode(
 async def test_import_single_auto_norm_without_geometry_warns(
     client, session, tmp_path, monkeypatch
 ) -> None:
-    """auto без периметра/габарита: N не резолвится → не округляем, warning с длиной."""
+    """Auto без геометрии оставляет количество и normal-геометрию без подмены."""
     monkeypatch.setattr(settings, "IMPORT_STORAGE_DIR", str(tmp_path))
 
     await _add_single_hanger_product(
         session,
         "ЮП-NORM-NOGEO",
-        lengths=[3000],
+        lengths=[{"length_mm": 3000, "is_primary": True}],
         hanger_mode="auto",
-        quantity_per_hanger={"auto": None, "manual": 71},
+        quantity_per_hanger={"3000": {"auto": None, "manual": 71}},
     )
     template = await _create_template(session, name="Norm No Geo Template", code="norm-no-geo-template")
     await session.commit()
 
-    wb = _workbook_with_quantity("ЮП-NORM-NOGEO", "Norm No Geo", 500)
+    wb = _workbook_with_quantity("ЮП-NORM-NOGEO", "Norm No Geo", 500, output_length_m=3.0, length_m=3.0)
     response = await client.post(
         f"/api/imports/excel/preview?template_id={template.id}",
         data={"normalize_hanger_quantity": "true"},
@@ -1381,10 +1395,13 @@ async def test_import_single_auto_norm_without_geometry_warns(
     assert response.status_code == 200
     item = response.json()["items"][0]
     assert item["after_data"]["input_dimensions"] == {"length_mm": 3000}
+    assert item["after_data"]["outputs"][0]["dimensions"] == {"length_mm": 3000}
     assert item["after_data"]["quantity_per_hanger"] is None
     assert item["after_data"]["quantity"] == item["after_data"]["original_quantity"]
     assert item["after_data"]["quantity"] in ("500", "500.0")
     assert "hanger_quantity_not_set:3" in item["warnings"]
+
+
 
 
 def _workbook_paired(length_m: float = 2.7, output_length_m: float | None = None) -> bytes:
@@ -1439,10 +1456,10 @@ async def _make_product_pair(
     sku_b: str,
     *,
     manual_n: int | None = None,
-    length_mm: float = 2700,
-    length_b_mm: float | None = None,
+    length: dict,
+    length_b: dict | None = None,
 ) -> None:
-    """Пара сырьевых артикулов в product_pairs с общей длиной."""
+    """Пара артикулов с каноническими реестрами normal/raw длин."""
     from app.models.product import Product, ProductLength, ProductPair, ProductType
 
     comp_a = Product(sku=sku_a, name=f"Pair {sku_a}", type=ProductType.component, unit="pcs")
@@ -1450,10 +1467,11 @@ async def _make_product_pair(
     session.add_all([comp_a, comp_b])
     await session.flush()
     session.add_all([
-        ProductLength(product_id=comp_a.id, length_mm=length_mm),
-        ProductLength(product_id=comp_b.id, length_mm=length_b_mm if length_b_mm is not None else length_mm),
+        ProductLength(product_id=comp_a.id, **length),
+        ProductLength(product_id=comp_b.id, **(length_b or length)),
     ])
-    quantity = {f"{int(length_mm)}": {"auto": None, "manual": manual_n}} if manual_n is not None else {}
+    length_mm = length["length_mm"]
+    quantity = {str(int(length_mm)): {"auto": None, "manual": manual_n}} if manual_n is not None else {}
     session.add(ProductPair(
         product_a_id=min(comp_a.id, comp_b.id),
         product_b_id=max(comp_a.id, comp_b.id),
@@ -1469,7 +1487,13 @@ async def test_import_paired_profile_rounds_by_pair_manual_n(
     """N пары из ручной нормы product_pairs округляет количество позиции (#67: инвариант равенства)."""
     monkeypatch.setattr(settings, "IMPORT_STORAGE_DIR", str(tmp_path))
 
-    await _make_product_pair(session, "ЮП-PAIR-A", "ЮП-PAIR-B", manual_n=8)
+    await _make_product_pair(
+        session,
+        "ЮП-PAIR-A",
+        "ЮП-PAIR-B",
+        manual_n=8,
+        length={"length_mm": 2700, "is_primary": True},
+    )
     await session.commit()
 
     template = await _create_template(session, name="Paired Hanger Template", code="paired-hanger-template")
@@ -1501,7 +1525,12 @@ async def test_import_paired_profile_without_pair_n_reports_hanger_calc_zero(
     """Пара есть, но N невозможна (ручной нет, авто не считается) → hanger_calc_zero."""
     monkeypatch.setattr(settings, "IMPORT_STORAGE_DIR", str(tmp_path))
 
-    await _make_product_pair(session, "ЮП-PAIR-A", "ЮП-PAIR-B")
+    await _make_product_pair(
+        session,
+        "ЮП-PAIR-A",
+        "ЮП-PAIR-B",
+        length={"length_mm": 2700, "is_primary": True},
+    )
     await session.commit()
 
     template = await _create_template(session, name="Paired No Hanger Template", code="paired-no-hanger-template")
@@ -1526,298 +1555,90 @@ async def test_import_paired_profile_without_pair_n_reports_hanger_calc_zero(
     assert "hanger_calc_zero" in paired_item["errors"]
     assert paired_item["after_data"]["source_payload"]["product_pair"]["resolved"] is True
 
-
 @pytest.mark.asyncio
-async def test_import_paired_profile_substitutes_raw_length_nearest_above(
+async def test_import_paired_profile_keeps_normal_length_with_mismatched_raw(
     client, session, tmp_path, monkeypatch
 ) -> None:
-    """ГП 2,7 м при сырье 2750: вход материализуется в 2750, N резолвится (#156, ADR-0024)."""
-    monkeypatch.setattr(settings, "IMPORT_STORAGE_DIR", str(tmp_path))
-
-    await _make_product_pair(session, "ЮП-PAIR-A", "ЮП-PAIR-B", manual_n=8, length_mm=2750)
-    await session.commit()
-
-    template = await _create_template(session, name="Paired Raw Sub Template", code="paired-raw-sub-template")
-    await session.commit()
-
-    wb = _workbook_paired()
-    response = await client.post(
-        f"/api/imports/excel/preview?template_id={template.id}",
-        data={"normalize_hanger_quantity": "true"},
-        files={"file": ("paired.xlsx", wb, "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet")},
-    )
-    assert response.status_code == 200
-    body = response.json()
-    paired_item = body["items"][0]
-
-    # Подстановка вместо расчётной ошибки: hanger_calc_zero нет.
-    # Разница 50 мм в пределах допуска — штатная, без предупреждения.
-    assert "hanger_calc_zero" not in paired_item["errors"]
-    assert "raw_length_not_found" not in paired_item["errors"]
-    assert not any(w.startswith("raw_length_substituted:") for w in paired_item["warnings"])
-
-    after_data = paired_item["after_data"]
-    # Вход — сырьё 2750, выход — ГП 2700 (семантика вход→выход ADR-0002)
-    assert after_data["input_dimensions"] == {"length_mm": 2750}
-    assert after_data["outputs"][0]["dimensions"] == {"length_mm": 2700}
-    assert after_data["source_payload"]["input"]["inferred"] is False
-
-    # N пары резолвится по сырьевой длине, количество позиции округляется до N
-    snapshot = after_data["source_payload"]["product_pair"]
-    assert snapshot["resolved"] is True
-    assert snapshot["inputs"][0]["quantity_per_hanger"] == "8"
-    # 10 → 16 (кратно N=8), как у одиночных; округление молчаливое
-    assert after_data["quantity"] == "16"
-    assert after_data["hanger_count"] == 2
-    assert not any(w.startswith("paired_hanger_adjusted") for w in paired_item["warnings"])
-
-
-@pytest.mark.asyncio
-async def test_import_paired_profile_300mm_length_resolves_with_raw_substitution(
-    client, session, tmp_path, monkeypatch
-) -> None:
-    """Буквальный кейс тикета #169: пара с длиной 300 мм не падает в hanger_calc_zero.
-
-    Длина 300 мм не зарегистрирована у пары (сырьё 2750), поэтому «ближайшая
-    сверху» подставляет 2750 и оператор видит подстановку предупреждением,
-    а не тупик «получается 0 штук» без адреса.
-    """
-    monkeypatch.setattr(settings, "IMPORT_STORAGE_DIR", str(tmp_path))
-
-    await _make_product_pair(session, "ЮП-PAIR-A", "ЮП-PAIR-B", manual_n=8, length_mm=2750)
-    await session.commit()
-
-    template = await _create_template(session, name="Paired 300mm Template", code="paired-300mm-template")
-    await session.commit()
-
-    wb = _workbook_paired(length_m=0.3)
-    response = await client.post(
-        f"/api/imports/excel/preview?template_id={template.id}",
-        data={"normalize_hanger_quantity": "true"},
-        files={"file": ("paired.xlsx", wb, "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet")},
-    )
-    assert response.status_code == 200
-    paired_item = response.json()["items"][0]
-
-    assert "hanger_calc_zero" not in paired_item["errors"]
-    assert "raw_length_not_found" not in paired_item["errors"]
-
-    after_data = paired_item["after_data"]
-    assert after_data["input_dimensions"] == {"length_mm": 2750}
-    assert after_data["outputs"][0]["dimensions"] == {"length_mm": 300}
-    # Подстановка 2450 мм — далеко за допуском, оператор обязан её увидеть
-    assert any(w.startswith("raw_length_substituted:") for w in paired_item["warnings"])
-
-    snapshot = after_data["source_payload"]["product_pair"]
-    assert snapshot["inputs"][0]["quantity_per_hanger"] == "8"
-    # 10 → 16 (кратно N=8), как у одиночных; округление молчаливое
-    assert after_data["quantity"] == "16"
-    assert after_data["hanger_count"] == 2
-    assert not any(w.startswith("paired_hanger_adjusted") for w in paired_item["warnings"])
-
-
-@pytest.mark.asyncio
-async def test_import_paired_profile_with_cut_materializes_raw_length_for_n(
-    client, session, tmp_path, monkeypatch
-) -> None:
-    """Резка (вход 2,7 м → выход 0,9 м) не отменяет материализацию ГП→сырьё (#169).
-
-    План несёт коммерческую длину ГП, а на подвес пара встаёт сырьевой длиной
-    (ADR-0024): вход 2700 подбирается в 2750, N резолвится из словаря пары,
-    а не отдаёт hanger_calc_zero.
-    """
-    monkeypatch.setattr(settings, "IMPORT_STORAGE_DIR", str(tmp_path))
-
-    await _make_product_pair(session, "ЮП-PAIR-A", "ЮП-PAIR-B", manual_n=8, length_mm=2750)
-    await session.commit()
-
-    template = await _create_template(session, name="Paired Cut Template", code="paired-cut-template")
-    await session.commit()
-
-    wb = _workbook_paired(length_m=2.7, output_length_m=0.9)
-    response = await client.post(
-        f"/api/imports/excel/preview?template_id={template.id}",
-        data={"normalize_hanger_quantity": "true"},
-        files={"file": ("paired.xlsx", wb, "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet")},
-    )
-    assert response.status_code == 200
-    paired_item = response.json()["items"][0]
-
-    assert "hanger_calc_zero" not in paired_item["errors"]
-    assert "raw_length_not_found" not in paired_item["errors"]
-
-    after_data = paired_item["after_data"]
-    # Подставленное сырьё во входе, выход остаётся длиной после упаковки
-    assert after_data["input_dimensions"] == {"length_mm": 2750}
-    assert after_data["outputs"][0]["dimensions"] == {"length_mm": 900}
-
-    snapshot = after_data["source_payload"]["product_pair"]
-    assert snapshot["resolved"] is True
-    assert snapshot["inputs"][0]["quantity_per_hanger"] == "8"
-    # 10 → 16 (кратно N=8), как у одиночных; округление молчаливое
-    assert after_data["quantity"] == "16"
-    assert after_data["hanger_count"] == 2
-    assert not any(w.startswith("paired_hanger_adjusted") for w in paired_item["warnings"])
-
-
-@pytest.mark.asyncio
-async def test_import_paired_profile_without_raw_length_reports_raw_length_not_found(
-    client, session, tmp_path, monkeypatch
-) -> None:
-    """ГП 3,0 м при сырье максимум 2750 → raw_length_not_found, не hanger_calc_zero."""
-    monkeypatch.setattr(settings, "IMPORT_STORAGE_DIR", str(tmp_path))
-
-    await _make_product_pair(session, "ЮП-PAIR-A", "ЮП-PAIR-B", manual_n=8, length_mm=2750)
-    await session.commit()
-
-    template = await _create_template(session, name="Paired No Raw Template", code="paired-no-raw-template")
-    await session.commit()
-
-    wb = _workbook_paired(length_m=3.0)
-    response = await client.post(
-        f"/api/imports/excel/preview?template_id={template.id}",
-        data={"normalize_hanger_quantity": "true"},
-        files={"file": ("paired.xlsx", wb, "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet")},
-    )
-
-    assert response.status_code == 200
-    body = response.json()
-    paired_item = body["items"][0]
-
-    # Ошибка справочника, а не расчёта: вход остаётся длиной ГП
-    assert "raw_length_not_found" in paired_item["errors"]
-    assert "hanger_calc_zero" not in paired_item["errors"]
-    assert paired_item["after_data"]["input_dimensions"] == {"length_mm": 3000}
-    assert paired_item["after_data"]["source_payload"]["product_pair"]["resolved"] is True
-
-
-@pytest.mark.asyncio
-async def test_import_paired_profile_empty_intersection_reports_raw_length_not_found(
-    client, session, tmp_path, monkeypatch
-) -> None:
-    """Пустое пересечение длин A∩B — тоже raw_length_not_found (ADR-0024 п.6)."""
+    """Общая normal 2700 остаётся входом; ручная N работает при разных raw A/B."""
     monkeypatch.setattr(settings, "IMPORT_STORAGE_DIR", str(tmp_path))
 
     await _make_product_pair(
-        session, "ЮП-PAIR-A", "ЮП-PAIR-B", manual_n=8, length_mm=2750, length_b_mm=2600
+        session,
+        "ЮП-PAIR-A",
+        "ЮП-PAIR-B",
+        manual_n=8,
+        length={"length_mm": 2700, "raw_length_mm": 2750, "is_primary": True},
+        length_b={"length_mm": 2700, "raw_length_mm": 2800, "is_primary": True},
+    )
+    await session.commit()
+    template = await _create_template(
+        session, name="Paired Normal Template", code="paired-normal-template"
     )
     await session.commit()
 
-    template = await _create_template(session, name="Paired Empty X Template", code="paired-empty-x-template")
-    await session.commit()
-
-    wb = _workbook_paired()
     response = await client.post(
         f"/api/imports/excel/preview?template_id={template.id}",
         data={"normalize_hanger_quantity": "true"},
-        files={"file": ("paired.xlsx", wb, "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet")},
+        files={
+            "file": (
+                "paired.xlsx",
+                _workbook_paired(),
+                "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+            )
+        },
     )
 
-    assert response.status_code == 200
-    body = response.json()
-    paired_item = body["items"][0]
-
-    assert "raw_length_not_found" in paired_item["errors"]
-    assert "hanger_calc_zero" not in paired_item["errors"]
-
-
-@pytest.mark.asyncio
-async def test_import_single_profile_substitutes_raw_length_nearest_above(
-    client, session, tmp_path, monkeypatch
-) -> None:
-    """Одиночная позиция: та же механика «ближайшая сверху» по длинам артикула."""
-    monkeypatch.setattr(settings, "IMPORT_STORAGE_DIR", str(tmp_path))
-
-    from app.models.product import Product, ProductLength, ProductType
-
-    product = Product(sku="ЮП-SINGLE-RAW", name="Single Raw", type=ProductType.component, unit="pcs")
-    session.add(product)
-    await session.flush()
-    session.add(ProductLength(product_id=product.id, length_mm=2750))
-    await session.commit()
-
-    template = await _create_template(session, name="Single Raw Sub Template", code="single-raw-sub-template")
-    await session.commit()
-
-    wb = _workbook_with_quantity("ЮП-SINGLE-RAW", "Single Raw", 10)
-    response = await client.post(
-        f"/api/imports/excel/preview?template_id={template.id}",
-        data={"normalize_hanger_quantity": "true"},
-        files={"file": ("single.xlsx", wb, "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet")},
-    )
-
-    assert response.status_code == 200
-    body = response.json()
-    item = body["items"][0]
-
-    assert "raw_length_not_found" not in item["errors"]
-    assert not any(w.startswith("raw_length_substituted:") for w in item["warnings"])
-    assert item["after_data"]["input_dimensions"] == {"length_mm": 2750}
-    assert item["after_data"]["outputs"][0]["dimensions"] == {"length_mm": 2700}
-
-
-@pytest.mark.asyncio
-async def test_import_single_profile_with_cut_materializes_raw_length(
-    client, session, tmp_path, monkeypatch
-) -> None:
-    """Одиночная позиция с резкой: вход-ГП 2,7 м тоже подбирается в сырьё 2750 (#169)."""
-    monkeypatch.setattr(settings, "IMPORT_STORAGE_DIR", str(tmp_path))
-
-    from app.models.product import Product, ProductLength, ProductType
-
-    product = Product(sku="ЮП-SINGLE-CUT", name="Single Cut", type=ProductType.component, unit="pcs")
-    session.add(product)
-    await session.flush()
-    session.add(ProductLength(product_id=product.id, length_mm=2750))
-    await session.commit()
-
-    template = await _create_template(session, name="Single Cut Template", code="single-cut-template")
-    await session.commit()
-
-    wb = _workbook_with_quantity("ЮП-SINGLE-CUT", "Single Cut", 10, output_length_m=0.9)
-    response = await client.post(
-        f"/api/imports/excel/preview?template_id={template.id}",
-        data={"normalize_hanger_quantity": "true"},
-        files={"file": ("single.xlsx", wb, "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet")},
-    )
-
-    assert response.status_code == 200
+    assert response.status_code == 200, response.text
     item = response.json()["items"][0]
-
-    assert "raw_length_not_found" not in item["errors"]
-    assert item["after_data"]["input_dimensions"] == {"length_mm": 2750}
-    assert item["after_data"]["outputs"][0]["dimensions"] == {"length_mm": 900}
+    assert "normal_length_not_found" not in item["errors"]
+    assert "hanger_calc_zero" not in item["errors"]
+    after_data = item["after_data"]
+    assert after_data["input_dimensions"] == {"length_mm": 2700}
+    assert after_data["outputs"][0]["dimensions"] == {"length_mm": 2700}
+    assert after_data["quantity_per_hanger"] == 8
+    assert after_data["quantity"] == "16"
+    assert after_data["hanger_count"] == 2
 
 
 @pytest.mark.asyncio
-async def test_import_paired_profile_large_substitution_warns(
+async def test_import_paired_profile_unknown_normal_length_is_position_error(
     client, session, tmp_path, monkeypatch
 ) -> None:
-    """Разница ГП→сырьё больше допуска (2700 → 2900): подстановка с warning."""
+    """Нормальная длина вне пересечения пары даёт normal_length_not_found без подстановки."""
     monkeypatch.setattr(settings, "IMPORT_STORAGE_DIR", str(tmp_path))
 
-    await _make_product_pair(session, "ЮП-PAIR-A", "ЮП-PAIR-B", manual_n=8, length_mm=2900)
+    await _make_product_pair(
+        session,
+        "ЮП-PAIR-A",
+        "ЮП-PAIR-B",
+        manual_n=8,
+        length={"length_mm": 2750, "raw_length_mm": 2800, "is_primary": True},
+        length_b={"length_mm": 2600, "is_primary": True},
+    )
+    await session.commit()
+    template = await _create_template(
+        session, name="Paired Unknown Normal Template", code="paired-unknown-normal-template"
+    )
     await session.commit()
 
-    template = await _create_template(session, name="Paired Large Sub Template", code="paired-large-sub-template")
-    await session.commit()
-
-    wb = _workbook_paired()
     response = await client.post(
         f"/api/imports/excel/preview?template_id={template.id}",
         data={"normalize_hanger_quantity": "true"},
-        files={"file": ("paired.xlsx", wb, "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet")},
+        files={
+            "file": (
+                "paired.xlsx",
+                _workbook_paired(),
+                "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+            )
+        },
     )
 
-    assert response.status_code == 200
-    body = response.json()
-    paired_item = body["items"][0]
+    assert response.status_code == 200, response.text
+    item = response.json()["items"][0]
+    assert "normal_length_not_found" in item["errors"]
+    assert item["after_data"]["input_dimensions"] == {"length_mm": 2700}
+    assert item["after_data"]["source_payload"]["product_pair"]["resolved"] is True
 
-    assert "hanger_calc_zero" not in paired_item["errors"]
-    assert "raw_length_not_found" not in paired_item["errors"]
-    assert any(w.startswith("raw_length_substituted:") for w in paired_item["warnings"])
-    assert paired_item["after_data"]["input_dimensions"] == {"length_mm": 2900}
-    assert paired_item["after_data"]["outputs"][0]["dimensions"] == {"length_mm": 2700}
 
 @pytest.mark.asyncio
 async def test_batch_items_cursor_paging_returns_light_rows(client, session, tmp_path, monkeypatch) -> None:
@@ -2012,7 +1833,13 @@ async def test_preview_paired_hanger_source_manual_n(
     """Парная строка с ручной N пары → источник manual (source из PairHangerValue)."""
     monkeypatch.setattr(settings, "IMPORT_STORAGE_DIR", str(tmp_path))
 
-    await _make_product_pair(session, "ЮП-PAIR-A", "ЮП-PAIR-B", manual_n=8)
+    await _make_product_pair(
+        session,
+        "ЮП-PAIR-A",
+        "ЮП-PAIR-B",
+        manual_n=8,
+        length={"length_mm": 2700, "is_primary": True},
+    )
     await session.commit()
 
     template = await _create_template(

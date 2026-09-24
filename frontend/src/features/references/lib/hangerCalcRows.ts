@@ -5,6 +5,7 @@
 import type { Product, ProductPairCatalogEntry } from "@/shared/api/products";
 import type { HangerCalcItem, HangerCalcResult, HangerSettings, PairedHangerCalcItem } from "@/shared/api/hangerCalc";
 import {
+  effectiveRawLength,
   entryForLength,
   isHangerAutoMode,
   isSheetState,
@@ -46,44 +47,25 @@ export function incompatibilityReason(
  * несовместимость помечается локально, чтобы один плохой артикул не
  * рвал весь batch (эндпоинт вернул бы 422 на весь запрос).
  */
-export function buildCalcItems(
-  products: Product[],
-  settings: HangerSettings,
-): BuildCalcItemsResult {
+export function buildCalcItems(products: Product[], settings: HangerSettings): BuildCalcItemsResult {
   const items: HangerCalcItem[] = [];
   const refs: CalcItemRef[] = [];
   const incompatible = new Map<number, string>();
-
   for (const product of products) {
     if (isSheetState(product.dimension_state)) {
-      // Лист (#126): расчёт по осям полотна, периметр/габарит не нужны.
       if ((product.hanger_mode ?? "auto") !== "auto") continue;
       const { lengthMm, widthMm, heightMm } = sheetDims(product);
-      if (lengthMm == null) continue; // запись появится после заведения осей
-      items.push({
-        kind: "sheet",
-        perimeter_mm: null,
-        mount_width_mm: null,
-        length_mm: lengthMm,
-        width_mm: widthMm,
-        height_mm: product.dimension_state === "volume" ? heightMm : null,
-      });
+      if (lengthMm == null) continue;
+      items.push({ kind: "sheet", perimeter_mm: null, mount_width_mm: null, length_mm: lengthMm, width_mm: widthMm, height_mm: product.dimension_state === "volume" ? heightMm : null });
       refs.push({ productId: product.id, lengthMm });
       continue;
     }
-    if ((product.hanger_mode ?? "auto") !== "auto") continue; // ручной режим (#127) не считается
-    if (!isHangerAutoMode(product)) continue;
+    if ((product.hanger_mode ?? "auto") !== "auto" || !isHangerAutoMode(product)) continue;
     const reason = incompatibilityReason(product.mount_width_mm, settings);
-    if (reason) {
-      incompatible.set(product.id, reason);
-      continue;
-    }
-    for (const lengthMm of productLengths(product)) {
-      items.push({
-        perimeter_mm: product.perimeter_mm,
-        mount_width_mm: product.mount_width_mm,
-        length_mm: lengthMm,
-      });
+    if (reason) { incompatible.set(product.id, reason); continue; }
+    for (const length of product.lengths ?? []) {
+      const lengthMm = length.length_mm;
+      items.push({ perimeter_mm: product.perimeter_mm, mount_width_mm: product.mount_width_mm, length_mm: effectiveRawLength(length) });
       refs.push({ productId: product.id, lengthMm });
     }
   }
@@ -299,12 +281,15 @@ export function buildPairedCalcItems(
       continue;
     }
     for (const lengthMm of pair.lengths) {
+      const recordA = (pair.productA.lengths ?? []).find((length) => length.length_mm === lengthMm);
+      const recordB = (pair.productB.lengths ?? []).find((length) => length.length_mm === lengthMm);
+      if (!recordA || !recordB || effectiveRawLength(recordA) !== effectiveRawLength(recordB)) continue;
       items.push({
         perimeter_a_mm: pair.productA.perimeter_mm,
         mount_width_a_mm: pair.productA.mount_width_mm,
         perimeter_b_mm: pair.productB.perimeter_mm,
         mount_width_b_mm: pair.productB.mount_width_mm,
-        length_mm: lengthMm,
+        length_mm: effectiveRawLength(recordA),
       });
       refs.push({ pairId: pair.pairId, lengthMm });
     }

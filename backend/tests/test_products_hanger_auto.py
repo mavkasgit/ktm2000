@@ -6,7 +6,6 @@
   создании без режима выводится из данных (периметр И габарит → auto).
 - Используется значение выбранного режима; ручное никогда не затирается.
 - Валидация perimeter_mm/mount_width_mm >0 → 422.
-- Скаляр в attributes (миграция) → {первая_длина: {auto: null, manual: значение}}.
 """
 
 import pytest
@@ -24,6 +23,21 @@ def _payload(sku: str, **overrides) -> dict:
         "type": "component",
         "unit": "pcs",
     }
+    lengths_mm = overrides.pop("lengths_mm", None)
+    primary_length_mm = overrides.pop("primary_length_mm", None)
+    if lengths_mm is not None:
+        ordered_lengths_mm = sorted(lengths_mm)
+        primary_index = ordered_lengths_mm.index(
+            primary_length_mm if primary_length_mm is not None else ordered_lengths_mm[0]
+        )
+        data["lengths"] = [
+            {
+                "length_mm": length_mm,
+                "raw_length_mm": None,
+                "is_primary": index == primary_index,
+            }
+            for index, length_mm in enumerate(ordered_lengths_mm)
+        ]
     data.update(overrides)
     return data
 
@@ -160,72 +174,6 @@ async def test_cross_field_incompatibility_returns_422(client, session) -> None:
     assert resp.status_code == 422, resp.text
     assert "Несовместимые данные" in resp.json()["detail"]
 
-
-@pytest.mark.asyncio
-async def test_scalar_migrates_to_primary_length(client, session) -> None:
-    """Скаляр в attributes (как после миграции до нормализации) → per-length dict."""
-    product = Product(
-        sku="RAW-LEGACY-001",
-        name="Legacy scalar",
-        type=ProductType.component,
-        unit="pcs",
-    )
-    product.quantity_per_hanger = 25
-    session.add(product)
-    await session.flush()
-    session.add(ProductLength(product_id=product.id, length_mm=2800))
-    session.add(ProductLength(product_id=product.id, length_mm=3500))
-    await session.commit()
-
-    # Legacy-скаляр хранится как bare {auto:null, manual:25}; out → {первая_длина: ...}
-    resp = await client.get(f"/api/products/{product.id}")
-    assert resp.status_code == 200
-    qph = resp.json()["quantity_per_hanger"]
-    assert qph["2800"]["auto"] is None
-    assert qph["2800"]["manual"] == 25
-    # Остальные длины не входят в dict (ручной fallback только для первой).
-    assert "3500" not in qph
-
-
-@pytest.mark.asyncio
-async def test_quantity_per_hanger_legacy_scalar(client, session) -> None:
-    """Legacy-скаляр отдаётся скаляром для основной длины (обратная совместимость)."""
-    product = Product(
-        sku="RAW-MAIN-001",
-        name="Main",
-        type=ProductType.component,
-        unit="pcs",
-    )
-    product.quantity_per_hanger = 40
-    session.add(product)
-    await session.flush()
-    session.add(ProductLength(product_id=product.id, length_mm=2780))
-    await session.commit()
-
-    await session.refresh(product)
-    assert product.quantity_per_hanger == 40
-    assert product.quantity_per_hanger_for_length(2780) == 40
-
-
-@pytest.mark.asyncio
-async def test_legacy_scalar_without_lengths_not_crash(client, session) -> None:
-    """Legacy-скаляр без product_lengths (миграция не трогает) — out не падает."""
-    product = Product(
-        sku="RAW-NOLEN-001",
-        name="No lengths",
-        type=ProductType.component,
-        unit="pcs",
-    )
-    product.quantity_per_hanger = 33
-    session.add(product)
-    await session.commit()
-
-    resp = await client.get(f"/api/products/{product.id}")
-    assert resp.status_code == 200
-    # Длин нет — раскрыть per-length не во что; value остаётся в attributes.
-    assert resp.json()["quantity_per_hanger"] is None
-    await session.refresh(product)
-    assert product.quantity_per_hanger == 33
 
 
 @pytest.mark.asyncio
@@ -365,19 +313,24 @@ async def test_create_primary_defaults_to_first_length(client, session) -> None:
     )
     assert resp.status_code == 201, resp.text
     body = resp.json()
-    assert body["lengths_mm"] == [2780, 3500]
-    assert body["primary_length_mm"] == 2780
+    assert body["lengths"] == [
+        {"length_mm": 2780.0, "raw_length_mm": None, "is_primary": True},
+        {"length_mm": 3500.0, "raw_length_mm": None, "is_primary": False},
+    ]
 
 
 @pytest.mark.asyncio
 async def test_create_primary_explicit(client, session) -> None:
-    """Явный primary_length_mm при создании сохраняется."""
+    """Явный is_primary в реестре сохраняется."""
     resp = await client.post(
         "/api/products",
         json=_payload("RAW-PRIM-002", lengths_mm=[2780, 3500], primary_length_mm=3500),
     )
     assert resp.status_code == 201, resp.text
-    assert resp.json()["primary_length_mm"] == 3500
+    assert resp.json()["lengths"] == [
+        {"length_mm": 2780.0, "raw_length_mm": None, "is_primary": False},
+        {"length_mm": 3500.0, "raw_length_mm": None, "is_primary": True},
+    ]
 
     pls = (await session.execute(
         select(ProductLength).where(ProductLength.product_id == resp.json()["id"])
@@ -389,7 +342,7 @@ async def test_create_primary_explicit(client, session) -> None:
 
 @pytest.mark.asyncio
 async def test_patch_switch_primary(client, session) -> None:
-    """PATCH primary_length_mm переключает основную; legacy-скаляр следует за ней."""
+    """PATCH реестра переключает основную; ручное значение следует за ней."""
     resp = await client.post(
         "/api/products",
         json=_payload(
@@ -400,12 +353,20 @@ async def test_patch_switch_primary(client, session) -> None:
     )
     assert resp.status_code == 201, resp.text
     pid = resp.json()["id"]
-    assert resp.json()["primary_length_mm"] == 2780
+    assert resp.json()["lengths"][0]["is_primary"] is True
     assert resp.json()["quantity_per_hanger"]["2780"]["manual"] == 40
 
-    patched = await client.patch(f"/api/products/{pid}", json={"primary_length_mm": 3500})
+    patched = await client.patch(
+        f"/api/products/{pid}",
+        json={
+            "lengths": [
+                {"length_mm": 2780, "is_primary": False},
+                {"length_mm": 3500, "is_primary": True},
+            ]
+        },
+    )
     assert patched.status_code == 200, patched.text
-    assert patched.json()["primary_length_mm"] == 3500
+    assert patched.json()["lengths"][1]["is_primary"] is True
 
     product = (await session.execute(
         select(Product).options(selectinload(Product.lengths)).where(Product.id == pid)
@@ -414,7 +375,7 @@ async def test_patch_switch_primary(client, session) -> None:
 
 
 @pytest.mark.asyncio
-async def test_patch_primary_not_a_length_is_422(client, session) -> None:
+async def test_patch_multiple_primary_lengths_is_422(client, session) -> None:
     resp = await client.post(
         "/api/products",
         json=_payload("RAW-PRIM-004", lengths_mm=[2780]),
@@ -422,7 +383,15 @@ async def test_patch_primary_not_a_length_is_422(client, session) -> None:
     assert resp.status_code == 201
     pid = resp.json()["id"]
 
-    resp = await client.patch(f"/api/products/{pid}", json={"primary_length_mm": 9999})
+    resp = await client.patch(
+        f"/api/products/{pid}",
+        json={
+            "lengths": [
+                {"length_mm": 2780, "is_primary": True},
+                {"length_mm": 3500, "is_primary": True},
+            ]
+        },
+    )
     assert resp.status_code == 422
 
 
@@ -436,14 +405,30 @@ async def test_sync_lengths_keeps_primary(client, session) -> None:
     assert resp.status_code == 201
     pid = resp.json()["id"]
 
-    resp = await client.patch(f"/api/products/{pid}", json={"lengths_mm": [3500, 4000]})
+    resp = await client.patch(
+        f"/api/products/{pid}",
+        json={
+            "lengths": [
+                {"length_mm": 3500, "is_primary": True},
+                {"length_mm": 4000, "is_primary": False},
+            ]
+        },
+    )
     assert resp.status_code == 200, resp.text
-    assert resp.json()["primary_length_mm"] == 3500
+    assert resp.json()["lengths"][0]["is_primary"] is True
 
-    resp = await client.patch(f"/api/products/{pid}", json={"lengths_mm": [2780, 4000]})
+    resp = await client.patch(
+        f"/api/products/{pid}",
+        json={
+            "lengths": [
+                {"length_mm": 2780, "is_primary": True},
+                {"length_mm": 4000, "is_primary": False},
+            ]
+        },
+    )
     assert resp.status_code == 200
-    # Прежней основной нет — новая основная = первая по возрастанию.
-    assert resp.json()["primary_length_mm"] == 2780
+    # Прежней основной нет — новая основная — первая по возрастанию.
+    assert resp.json()["lengths"][0]["is_primary"] is True
 
 
 @pytest.mark.asyncio
@@ -476,64 +461,19 @@ async def test_sort_by_quantity_per_hanger_uses_primary(client, session) -> None
     assert skus == ["RAW-PRIM-SORT-B", "RAW-PRIM-SORT-A"]
 
 
-@pytest.mark.asyncio
-async def test_legacy_scalar_preserved_with_loaded_lengths(client, session) -> None:
-    """Legacy bare-словарь не теряется, когда lengths загружены (#81 регрессия).
-
-    _primary_hanger_length_key для bare {auto, manual} должен вернуть None,
-    чтобы quantity_per_hanger отдал скаляр.
-    """
-    product = Product(
-        sku="RAW-LEGACY-LEN",
-        name="Legacy with lengths",
-        type=ProductType.component,
-        unit="pcs",
-    )
-    product.quantity_per_hanger = 40
-    session.add(product)
-    await session.flush()
-    session.add_all([
-        ProductLength(product_id=product.id, length_mm=2780, is_primary=True),
-        ProductLength(product_id=product.id, length_mm=3500),
-    ])
-    await session.commit()
-
-    loaded = (await session.execute(
-        select(Product).options(selectinload(Product.lengths)).where(Product.id == product.id)
-    )).scalar_one()
-    assert loaded.quantity_per_hanger == 40
-
-
-@pytest.mark.asyncio
-async def test_sort_legacy_scalar_dict_not_crash(client, session) -> None:
-    """Сортировка по кол-ву при bare-словаре не падает (регрессия #81)."""
-    product = Product(
-        sku="RAW-LEGACY-SORT",
-        name="Legacy sort",
-        type=ProductType.component,
-        unit="pcs",
-    )
-    product.quantity_per_hanger = 33
-    session.add(product)
-    await session.commit()
-
-    resp = await client.get("/api/products?sort=quantity_per_hanger:asc")
-    assert resp.status_code == 200
-    skus = {i["sku"] for i in resp.json()["items"]}
-    assert "RAW-LEGACY-SORT" in skus
 
 
 @pytest.mark.asyncio
 async def test_duplicate_lengths_rejected(client, session) -> None:
-    """Дубли длин → 400 (edge cases; иначе partial unique index ломается)."""
+    """Дубли и неположительные нормальные длины отклоняются API."""
     resp = await client.post(
         "/api/products",
         json=_payload("RAW-DUP-001", lengths_mm=[3500, 3500]),
     )
-    assert resp.status_code == 400, resp.text
+    assert resp.status_code == 422, resp.text
 
     resp = await client.post(
         "/api/products",
         json=_payload("RAW-DUP-002", lengths_mm=[2780, -5]),
     )
-    assert resp.status_code == 400, resp.text
+    assert resp.status_code == 422, resp.text

@@ -24,6 +24,12 @@ export type QuantityPerHangerDict = Record<string, HangerQuantityValue>;
 /** Режим подвеса (#126): 'auto' — считается сервером, 'manual' — ручное значение. */
 export type HangerMode = "auto" | "manual";
 
+export type ProductLength = {
+  length_mm: number;
+  raw_length_mm: number | null;
+  is_primary: boolean;
+};
+
 export type Product = {
   id: number;
   sku: string;
@@ -37,7 +43,6 @@ export type Product = {
   alloy: string | null;
   color: string | null;
   anod_type: string | null;
-  length_mm: number | null;
   weight_per_meter: number | null;
   perimeter_mm: number | null;
   mount_width_mm: number | null;
@@ -50,14 +55,12 @@ export type Product = {
   is_catalog_item: boolean;
   is_paired_profile: boolean;
   dimension_state: DimensionState;
-  primary_length_mm: number | null;
   skip_shot_blast: boolean;
   aliases: string[];
-  lengths_mm: number[];
+  lengths: ProductLength[];
   processing_flags: ProcessingFlag[];
   is_laminated: boolean;
   dimensions?: Record<string, number> | null;
-  /** Состав ГП (#152): заполняется только при include_composition в запросе списка. */
   composition?: CompositionItem[] | null;
 };
 
@@ -89,7 +92,6 @@ export type CreateProductInput = {
   alloy?: string | null;
   color?: string | null;
   anod_type?: string | null;
-  length_mm?: number | null;
   weight_per_meter?: number | null;
   perimeter_mm?: number | null;
   mount_width_mm?: number | null;
@@ -100,9 +102,8 @@ export type CreateProductInput = {
   is_catalog_item?: boolean;
   skip_shot_blast?: boolean;
   dimension_state?: DimensionState;
-  primary_length_mm?: number | null;
   aliases?: string[];
-  lengths_mm?: number[];
+  lengths?: ProductLength[];
   processing_flag_codes?: string[];
   is_laminated?: boolean;
 };
@@ -334,16 +335,13 @@ export async function uploadCatalogZip(file: File) {
 export type CatalogPreviewItem = {
   sku: string;
   name: string;
-  length_mm: number | null;
   quantity_per_hanger: number | null;
   has_photo: boolean;
   action: "create" | "update" | "skip";
   row?: number;
-  lengths_mm?: number[];
+  lengths?: ProductLength[];
   quantities_per_hanger?: number[] | null;
-  /** Симметричные пары (#175): связь без нормы, норма — через pairs-API. */
   pairs?: { sku: string; create: boolean }[];
-  /** Черновик без длин (#175): создан неактивным, норматив допишется с длинами. */
   draft?: boolean;
   warnings?: string[];
 };

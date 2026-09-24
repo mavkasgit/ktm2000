@@ -832,30 +832,18 @@ export function RawMaterialsPage() {
                     {(() => {
                       const state = product.dimension_state ?? "length";
                       if (isLengthState(state)) {
-                        const lengths = productLengths(product);
-                        return lengths.length ? lengths.join(", ") + " мм" : "—";
+                        const lengths = product.lengths ?? [];
+                        return lengths.length ? lengths.map((length) => `${length.length_mm}${length.raw_length_mm != null ? ` (сырьё ${length.raw_length_mm})` : ""}`).join(", ") + " мм" : "—";
                       }
                       if (state === "area") {
                         const dims = product.dimensions;
                         if (!dims) return "—";
-                        const parts = [dims.length_mm, dims.width_mm, dims.thickness_mm]
-                          .filter((v): v is number => v != null)
-                          .map(String);
+                        const parts = [dims.length_mm, dims.width_mm, dims.thickness_mm].filter((v): v is number => v != null).map(String);
                         return parts.length ? parts.join("×") + " мм" : "—";
                       }
-                      // 3D
                       const dims3 = product.dimensions;
-                      const parts3 = dims3
-                        ? [dims3.length_mm, dims3.width_mm, dims3.height_mm]
-                            .filter((v): v is number => v != null)
-                            .map(String)
-                        : [];
-                      return (
-                        <span className="flex items-center gap-1.5">
-                          <Badge variant="secondary" className="text-xs">3D</Badge>
-                          {parts3.length > 0 && <span>{parts3.join("×")} мм</span>}
-                        </span>
-                      );
+                      const parts3 = dims3 ? [dims3.length_mm, dims3.width_mm, dims3.height_mm].filter((v): v is number => v != null).map(String) : [];
+                      return <span className="flex items-center gap-1.5"><Badge variant="secondary" className="text-xs">3D</Badge>{parts3.length > 0 && <span>{parts3.join("×")} мм</span>}</span>;
                     })()}
                   </td>
                   <td className="px-4 py-2">

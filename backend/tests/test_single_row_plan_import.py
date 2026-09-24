@@ -5,7 +5,7 @@ from openpyxl import Workbook
 from sqlalchemy import select
 
 from app.models.import_template import ImportTemplate
-from app.models.product import Product, ProductType
+from app.models.product import Product, ProductLength, ProductType
 from app.models.route import ProductionRoute, RouteStage, RouteOperation
 from app.models.section import Section
 
@@ -76,6 +76,18 @@ async def test_single_row_import_yup_2630_passes_when_product_and_route_exist(cl
         )
         session.add(product)
         await session.flush()
+    lengths = list(
+        await session.scalars(select(ProductLength).where(ProductLength.product_id == product.id))
+    )
+    canonical_length = next((length for length in lengths if length.length_mm == 2700), None)
+    if canonical_length is None:
+        canonical_length = ProductLength(product_id=product.id, length_mm=2700, is_primary=True)
+        session.add(canonical_length)
+    for length in lengths:
+        if length is not canonical_length:
+            length.is_primary = False
+    canonical_length.is_primary = True
+    await session.flush()
 
     section_specs = [
         ("WH-RAW-2630", "Склад сырья", "raw_stock"),

@@ -13,7 +13,7 @@ import { listProductsPaginated, listProductPairCatalog, patchProduct, getErrorMe
 import type { Product, ProductFilters, ProductPairCatalogEntry } from "@/shared/api/products";
 import { calcHanger, calcPairedHanger } from "@/shared/api/hangerCalc";
 import type { HangerCalcResult, HangerSettings } from "@/shared/api/hangerCalc";
-import { isHangerAutoMode, isSheetState, lengthKey, productLengths, sheetDims } from "@/shared/lib/hangerQuantity";
+import { effectiveRawLength, isHangerAutoMode, isSheetState, lengthKey, productLengths, sheetDims } from "@/shared/lib/hangerQuantity";
 import {
   buildCalcItems,
   buildHangerCalcRows,
@@ -91,14 +91,10 @@ export function HangerCalcTable({
       type: "component",
       limit: 2000,
     };
-    const query = debouncedSearch.trim();
-    if (query) params.q = query;
     const activeSort = sortConfigs[0];
-    if (activeSort && activeSort.field === "sku") {
-      params.sort = `sku:${activeSort.order}`;
-    }
+    if (activeSort && activeSort.field === "sku") params.sort = `sku:${activeSort.order}`;
     return params;
-  }, [debouncedSearch, sortConfigs]);
+  }, [sortConfigs]);
 
   const load = useCallback(async () => {
     setLoading(true);
@@ -225,16 +221,18 @@ export function HangerCalcTable({
       setCalcMap(removeFromCalc);
       return;
     }
+    const records = product.lengths ?? [];
     const resp = await calcHanger(
-      lengths.map((lengthMm) => ({
+      records.map((length) => ({
         perimeter_mm: product.perimeter_mm,
         mount_width_mm: product.mount_width_mm,
-        length_mm: lengthMm,
+        length_mm: effectiveRawLength(length),
       })),
     );
     const byLength = new Map<string, HangerCalcResult>();
     resp.results.forEach((result, index) => {
-      byLength.set(lengthKey(lengths[index]), result);
+      const normal = records[index]?.length_mm;
+      if (normal != null) byLength.set(lengthKey(normal), result);
     });
     setCalcMap((prev) => {
       const next = new Map(prev);
@@ -358,14 +356,21 @@ export function HangerCalcTable({
   );
 
   const visibleRows = useMemo(() => {
-    // Поиск (q) и сортировка sku — на сервере (#84); фильтры total/limiter —
-    // по вычисляемым полям расчёта (сервер их не знает, ADR-0014).
     const filtered = predicate ? allRows.filter(predicate) : allRows;
-    if (sortConfigs.length === 0) return filtered;
+    const query = debouncedSearch.trim().toLocaleLowerCase("ru");
+    const searched = query
+      ? filtered.filter((row) => {
+          const values = row.kind === "paired"
+            ? [row.label, ...row.productA.lengths.flatMap((length) => [String(length.length_mm), length.raw_length_mm == null ? "" : String(length.raw_length_mm)]), ...row.productB.lengths.flatMap((length) => [String(length.length_mm), length.raw_length_mm == null ? "" : String(length.raw_length_mm)])]
+            : [row.product.sku, ...row.product.lengths.flatMap((length) => [String(length.length_mm), length.raw_length_mm == null ? "" : String(length.raw_length_mm)])];
+          return values.some((value) => value.toLocaleLowerCase("ru").includes(query));
+        })
+      : filtered;
+    if (sortConfigs.length === 0) return searched;
     const hasServerSkuSort = sortConfigs.some((cfg) => cfg.field === "sku");
     const clientSorts = sortConfigs.filter((cfg) => cfg.field !== "sku");
-    if (!hasServerSkuSort && clientSorts.length === 0) return filtered;
-    const sorted = [...filtered];
+    if (!hasServerSkuSort && clientSorts.length === 0) return searched;
+    const sorted = [...searched];
     sorted.sort((a, b) => {
       for (const cfg of clientSorts) {
         const av = sortAccessor(a, cfg.field);
@@ -381,7 +386,7 @@ export function HangerCalcTable({
       return 0;
     });
     return sorted;
-  }, [allRows, predicate, sortConfigs]);
+  }, [allRows, predicate, sortConfigs, debouncedSearch]);
 
   const hasActiveFilters =
     search.trim().length > 0 || hasActiveColumnFilters || sortConfigs.length > 0;

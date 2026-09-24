@@ -306,7 +306,7 @@ async def _create_template(session, *, name: str, code: str) -> ImportTemplate:
 
 
 async def _seed_product_with_route(session, sku: str):
-    from app.models.product import Product, ProductType
+    from app.models.product import Product, ProductLength, ProductType
     from app.models.route import ProductionRoute, RouteOperation, RouteStage
     from app.models.section import Section
 
@@ -315,6 +315,7 @@ async def _seed_product_with_route(session, sku: str):
     sections = [Section(code="CUT", name="Cut"), Section(code="PACKING", name="Pack")]
     session.add_all([product, component, *sections])
     await session.flush()
+    session.add(ProductLength(product_id=product.id, length_mm=2700, is_primary=True))
 
     await session.flush()
 

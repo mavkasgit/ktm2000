@@ -76,39 +76,27 @@ export function effectiveForMode(
 }
 
 /**
- * Нормализовать массив длин: фильтр мусора, дедуп, сортировка по возрастанию.
- * Базовая функция для всех вариантов (мерж lengths_mm + legacy, raw array).
+ * Нормализовать массив нормальных длин: фильтр мусора, дедуп, сортировка по возрастанию.
  */
 export function normalizeLengths(values: Array<number | null | undefined>): number[] {
   return [...new Set(values.filter((v): v is number => typeof v === "number" && Number.isFinite(v) && v > 0))]
     .sort((a, b) => a - b);
 }
 
-/** Длины артикула по возрастанию — канон product_lengths (API lengths_mm); первая — основная по умолчанию.
- * Legacy-скаляр length_mm не подмешивается: он мог протухнуть относительно строк, а пары
- * и витрина должны видеть один источник правды. */
-export function productLengths(product: {
-  lengths_mm?: number[] | null;
-  length_mm?: number | null;
-}): number[] {
-  return normalizeLengths(product.lengths_mm ?? []);
+/** Канонический реестр нормальных длин по возрастанию. */
+export function productLengths(product: { lengths?: Array<{ length_mm: number }> | null }): number[] {
+  return normalizeLengths((product.lengths ?? []).map((length) => length.length_mm));
 }
 
-/** Основная длина артикула (#81): явный выбор или первая по возрастанию. */
-export function primaryLength(product: {
-  primary_length_mm?: number | null;
-  lengths_mm?: number[] | null;
-  length_mm?: number | null;
-}): number | null {
-  if (
-    typeof product.primary_length_mm === "number" &&
-    Number.isFinite(product.primary_length_mm) &&
-    product.primary_length_mm > 0
-  ) {
-    return product.primary_length_mm;
-  }
-  const lengths = productLengths(product);
-  return lengths[0] ?? null;
+/** Основная длина: явный флаг ProductLength, иначе первая по возрастанию. */
+export function primaryLength(product: { lengths?: Array<{ length_mm: number; is_primary?: boolean }> | null }): number | null {
+  const primary = (product.lengths ?? []).find((length) => length.is_primary && length.length_mm > 0);
+  return primary?.length_mm ?? productLengths(product)[0] ?? null;
+}
+
+/** Эффективная сырьевая длина для авторасчёта: fallback на нормальную. */
+export function effectiveRawLength(length: { length_mm: number; raw_length_mm?: number | null }): number {
+  return length.raw_length_mm ?? length.length_mm;
 }
 
 export function entryForLength(
@@ -152,9 +140,7 @@ export type PrimaryHangerValue = EffectiveHangerValue & { lengthMm: number };
  * Источник — по режиму подвеса (#127). null — нет длин или нет значения.
  */
 export function primaryHangerValue(product: {
-  primary_length_mm?: number | null;
-  lengths_mm?: number[] | null;
-  length_mm?: number | null;
+  lengths?: Array<{ length_mm: number; is_primary?: boolean }> | null;
   quantity_per_hanger?: QuantityPerHangerDict | null;
   hanger_mode?: HangerMode | null;
 }): PrimaryHangerValue | null {

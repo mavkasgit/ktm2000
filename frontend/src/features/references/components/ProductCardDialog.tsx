@@ -403,14 +403,14 @@ export function ProductCardDialog({
             <section>
               <h4 className="text-sm font-semibold mb-2">Длины</h4>
               <div className="flex flex-wrap gap-1">
-                {product.lengths_mm.length > 0 ? (
-                  product.lengths_mm.map((len) => (
+                {(product.lengths ?? []).length > 0 ? (
+                  product.lengths.map((length) => (
                     <Badge
-                      key={len}
+                      key={length.length_mm}
                       variant="outline"
-                      className={cn(len === product.primary_length_mm && "ring-1 ring-primary/40 bg-primary/10")}
+                      className={cn(length.is_primary && "ring-1 ring-primary/40 bg-primary/10")}
                     >
-                      {len} мм
+                      {length.length_mm} мм{length.raw_length_mm != null ? ` (сырьё ${length.raw_length_mm})` : ""}
                     </Badge>
                   ))
                 ) : (
