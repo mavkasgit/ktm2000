@@ -24,6 +24,7 @@ import {
   resultsToCalcMap,
   resultsToPairedCalcMap,
   rowSku,
+  rowSearchValues,
   LIMITER_LABELS,
   type CalcMap,
   type HangerCalcRow,
@@ -359,12 +360,11 @@ export function HangerCalcTable({
     const filtered = predicate ? allRows.filter(predicate) : allRows;
     const query = debouncedSearch.trim().toLocaleLowerCase("ru");
     const searched = query
-      ? filtered.filter((row) => {
-          const values = row.kind === "paired"
-            ? [row.label, ...row.productA.lengths.flatMap((length) => [String(length.length_mm), length.raw_length_mm == null ? "" : String(length.raw_length_mm)]), ...row.productB.lengths.flatMap((length) => [String(length.length_mm), length.raw_length_mm == null ? "" : String(length.raw_length_mm)])]
-            : [row.product.sku, ...row.product.lengths.flatMap((length) => [String(length.length_mm), length.raw_length_mm == null ? "" : String(length.raw_length_mm)])];
-          return values.some((value) => value.toLocaleLowerCase("ru").includes(query));
-        })
+      ? filtered.filter((row) =>
+          rowSearchValues(row).some((value) =>
+            value.toLocaleLowerCase("ru").includes(query),
+          ),
+        )
       : filtered;
     if (sortConfigs.length === 0) return searched;
     const hasServerSkuSort = sortConfigs.some((cfg) => cfg.field === "sku");

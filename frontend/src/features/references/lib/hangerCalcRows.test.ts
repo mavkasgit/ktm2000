@@ -8,12 +8,14 @@ import {
   buildPairedCalcItems,
   buildPairedHangerCalcRows,
   incompatibilityReason,
+  formatPairedLengthLabel,
   pairedIncompatibilityReason,
   resolvePairs,
   resultsToCalcMap,
   resultsToPairedCalcMap,
   type CalcMap,
   type PairedPair,
+  rowSearchValues,
 } from "./hangerCalcRows";
 
 const SETTINGS: HangerSettings = {
@@ -664,5 +666,60 @@ describe("buildPairedHangerCalcRows", () => {
     expect(row.auto).toBe(true);
     expect(row.primaryLength).toBeNull();
     expect(row.total).toBeNull();
+  });
+});
+
+describe("rowSearchValues", () => {
+  it("одиночная строка ищется по SKU, normal и explicit raw", () => {
+    const product = makeProduct({ lengths: [productLength(2700, 2750, true)] });
+    const [row] = buildHangerCalcRows([product], new Map(), new Map());
+
+    expect(rowSearchValues(row)).toEqual(
+      expect.arrayContaining(["ЮП-100", "2700", "2750"]),
+    );
+  });
+
+  it("при null raw ищет normal как effective raw", () => {
+    const product = makeProduct({ lengths: [productLength(2700, null, true)] });
+    const [row] = buildHangerCalcRows([product], new Map(), new Map());
+
+    expect(rowSearchValues(row)).toEqual(expect.arrayContaining(["2700"]));
+  });
+
+  it("парная строка ищется по label и обеим normal/raw длинам", () => {
+    const pair = makePair({
+      productA: makeProduct({
+        id: 1,
+        sku: "ЮП-A",
+        lengths: [productLength(2700, null, true)],
+      }),
+      productB: makeProduct({
+        id: 2,
+        sku: "ЮП-B",
+        lengths: [productLength(3000, 3050, true)],
+      }),
+      lengths: [2700, 3000],
+    });
+    const [row] = buildPairedHangerCalcRows([pair], new Map(), new Map());
+
+    expect(rowSearchValues(row)).toEqual(
+      expect.arrayContaining(["ЮП-A + ЮП-B", "2700", "3000", "3050"]),
+    );
+  });
+});
+
+describe("formatPairedLengthLabel", () => {
+  it("при равных normal и raw явно показывает сырьё", () => {
+    const label = formatPairedLengthLabel(2700, 2700, 2700);
+
+    expect(label).toContain("2700");
+    expect(label).toContain("сырьё 2700");
+  });
+
+  it("показывает разные raw обеих сторон", () => {
+    const label = formatPairedLengthLabel(3000, 2750, 3050);
+
+    expect(label).toContain("2750");
+    expect(label).toContain("3050");
   });
 });

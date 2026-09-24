@@ -104,6 +104,32 @@ export function rowSku(row: HangerCalcRow | PairedHangerCalcRow): string {
   return row.kind === "paired" ? row.label : row.product.sku;
 }
 
+
+/** Значения строки, по которым работает общий поиск таблицы подвесов. */
+export function rowSearchValues(row: HangerCalcRow | PairedHangerCalcRow): string[] {
+  const products = row.kind === "paired" ? [row.productA, row.productB] : [row.product];
+  const values = [rowSku(row)];
+  for (const product of products) {
+    for (const length of product.lengths ?? []) {
+      values.push(String(length.length_mm), String(effectiveRawLength(length)));
+    }
+  }
+  return values;
+}
+
+
+/** Явная подпись normal/сырьё пары: равные значения тоже показываются. */
+export function formatPairedLengthLabel(
+  normalMm: number,
+  rawAMm: number,
+  rawBMm: number,
+): string {
+  const raw = rawAMm === rawBMm
+    ? `сырьё ${rawAMm}`
+    : `сырьё ${rawAMm} и ${rawBMm}`;
+  return `${normalMm} / ${raw}`;
+}
+
 export type HangerCalcRow = {
   kind: "single";
   product: Product;

@@ -5,7 +5,7 @@ import { TableCornerResetCell } from "@/shared/ui";
 import { cn } from "@/shared/utils/cn";
 import type { HangerCalcResult } from "@/shared/api/hangerCalc";
 import { effectiveRawLength, lengthKey } from "@/shared/lib/hangerQuantity";
-import { LIMITER_LABELS, type PairedHangerCalcRow } from "../lib/hangerCalcRows";
+import { LIMITER_LABELS, formatPairedLengthLabel, type PairedHangerCalcRow } from "../lib/hangerCalcRows";
 import { DashCell } from "./DashCell";
 
 const chipClass = "inline-flex items-center rounded px-1.5 py-0.5 text-xs whitespace-nowrap";
@@ -43,7 +43,7 @@ function PairedLengthChips({ row, byLength }: { row: PairedHangerCalcRow; byLeng
     const rawB = recordB ? effectiveRawLength(recordB) : len;
     const isPrimary = primary != null && len === primary;
     const primaryMark = isPrimary ? <span className="ml-1 rounded bg-primary px-1 py-0.5 text-[10px] font-semibold text-primary-foreground">основная</span> : null;
-    const label = rawA !== rawB ? `${len} / сырьё ${rawA} и ${rawB}` : recordA?.raw_length_mm != null ? `${len} / сырьё ${rawA}` : `${len}`;
+    const label = formatPairedLengthLabel(len, rawA, rawB);
     if (!row.auto) return <span key={key} className={cn(chipClass, isPrimary ? "bg-primary/10 ring-1 ring-primary/40" : "bg-secondary text-secondary-foreground")}>{label} мм → {row.manualPerLength[key] ?? "—"} шт{primaryMark}</span>;
     if (row.incompatibleReason) return <Tooltip key={key}><TooltipTrigger asChild><span className={cn(chipClass, "bg-red-100 text-red-700")}>{label} мм → —{primaryMark}</span></TooltipTrigger><TooltipContent>{row.incompatibleReason}</TooltipContent></Tooltip>;
     const result = byLength?.get(key);

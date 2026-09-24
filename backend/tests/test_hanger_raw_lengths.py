@@ -7,6 +7,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.models.product import (
     HANGER_MODE_AUTO,
+    HANGER_MODE_MANUAL,
     Product,
     ProductLength,
     ProductPair,
@@ -224,3 +225,31 @@ def test_single_raw_length_keeps_existing_by_size_limit() -> None:
     assert null_result.quantity_per_hanger == 24
     assert raw_result.source == "auto"
     assert null_result.source == "auto"
+
+
+def test_single_manual_n_is_keyed_by_normal_length_and_survives_raw_change() -> None:
+    product = _single_product(
+        "RAW-SINGLE-MANUAL",
+        length_mm=2700.0,
+        raw_length_mm=2750.0,
+    )
+    product.hanger_mode = HANGER_MODE_MANUAL
+    product.quantity_per_hanger = {"2700": {"auto": None, "manual": 17}}
+
+    resolved = resolve_position_hanger(
+        product,
+        length_mm=2700.0,
+        payload_quantity_per_hanger=None,
+    )
+
+    product.lengths[0].raw_length_mm = 2800.0
+    after_raw_change = resolve_position_hanger(
+        product,
+        length_mm=2700.0,
+        payload_quantity_per_hanger=None,
+    )
+
+    assert resolved.quantity_per_hanger == 17
+    assert resolved.source == "manual"
+    assert after_raw_change.quantity_per_hanger == 17
+    assert after_raw_change.source == "manual"
