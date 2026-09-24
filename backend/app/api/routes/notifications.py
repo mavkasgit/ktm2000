@@ -33,8 +33,10 @@ class NotificationListOut(BaseModel):
     unread_count: int
 
 
-def _scoped_user_filter(user_id: int):
-    """Общие (user_id IS NULL) + персональные текущего пользователя."""
+def _scoped_user_filter(user_id: int, *, include_personal: bool = True):
+    """Общие всегда; персональные — только для обычного principal."""
+    if not include_personal:
+        return Notification.user_id.is_(None)
     return or_(
         Notification.user_id.is_(None),
         Notification.user_id == user_id,
@@ -84,15 +86,14 @@ async def _get_scoped_notification(
     db: AsyncSession,
     notification_id: int,
     user_id: int,
+    *,
+    include_personal: bool = True,
 ) -> Notification:
-    """Уведомление, доступное текущему пользователю.
-
-    Отсутствующее или чужое персональное → 404 (не раскрывает существование).
-    """
+    """Уведомление в скоупе principal; чужое персональное скрыто как 404."""
     notification = await db.scalar(
         select(Notification).where(
             Notification.id == notification_id,
-            _scoped_user_filter(user_id),
+            _scoped_user_filter(user_id, include_personal=include_personal),
         )
     )
     if notification is None:
@@ -109,10 +110,12 @@ async def _get_state(
     user_id: int,
 ) -> UserNotificationState | None:
     return await db.scalar(
-        select(UserNotificationState).where(
+        select(UserNotificationState)
+        .where(
             UserNotificationState.notification_id == notification_id,
             UserNotificationState.user_id == user_id,
         )
+        .execution_options(populate_existing=True)
     )
 
 
@@ -132,7 +135,10 @@ async def list_internal_notifications(
     список без ошибок. Пагинация limit/offset, сортировка по created_at.
     """
     state = aliased(UserNotificationState)
-    scope = _scoped_user_filter(current_user.id)
+    scope = _scoped_user_filter(
+        current_user.id,
+        include_personal=not getattr(current_user, "is_break_glass", False),
+    )
 
     base = (
         select(Notification, state)
@@ -172,7 +178,12 @@ async def mark_notification_read(
     Создаёт state-запись, если её нет; повторный вызов не меняет read_at.
     Чужое персональное → 404.
     """
-    notification = await _get_scoped_notification(db, notification_id, current_user.id)
+    notification = await _get_scoped_notification(
+        db,
+        notification_id,
+        current_user.id,
+        include_personal=not getattr(current_user, "is_break_glass", False),
+    )
     now = datetime.now(UTC)
     await db.execute(
         pg_insert(UserNotificationState)
@@ -200,7 +211,12 @@ async def close_notification(
 
     upsert: повторный вызов не меняет даты. Чужое персональное → 404.
     """
-    notification = await _get_scoped_notification(db, notification_id, current_user.id)
+    notification = await _get_scoped_notification(
+        db,
+        notification_id,
+        current_user.id,
+        include_personal=not getattr(current_user, "is_break_glass", False),
+    )
     now = datetime.now(UTC)
     await db.execute(
         pg_insert(UserNotificationState)
