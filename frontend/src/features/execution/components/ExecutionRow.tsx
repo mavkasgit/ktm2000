@@ -78,18 +78,21 @@ export function ExecutionRow({
       case "id":
         return `#${row.plan_position_id}`;
       case "row":
-        return `#${row.source_row_number ?? "—"}`;
-      case "plan":
         return (
-          <a
-            href={planPreviewUrl(row.production_plan_id)}
-            target="_blank"
-            rel="noreferrer"
-            className="text-blue-700 hover:underline"
-            onClick={(e) => e.stopPropagation()}
-          >
-            {row.production_plan_id}
-          </a>
+          <span className="inline-flex min-w-0 items-center gap-1">
+            <span className="shrink-0">#{row.source_row_number ?? "—"}</span>
+            <span className="text-muted-foreground">·</span>
+            <a
+              href={planPreviewUrl(row.production_plan_id)}
+              target="_blank"
+              rel="noreferrer"
+              className="min-w-0 truncate text-blue-700 hover:underline"
+              title={`Открыть план ${row.production_plan_id}`}
+              onClick={(e) => e.stopPropagation()}
+            >
+              План {row.production_plan_id}
+            </a>
+          </span>
         );
       case "sku":
         return (

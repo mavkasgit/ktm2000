@@ -182,17 +182,17 @@
   }
 
   .execution-table {
-    --execution-col-sku: 160px;
-    --execution-col-qty: 72px;
-    --execution-col-status: 112px;
-    --execution-col-stage: 200px;
-    --execution-col-actions: 370px;
+    --execution-col-sku: 144px;
+    --execution-col-qty: 128px;
+    --execution-col-status: 104px;
+    --execution-col-stage: 180px;
+    --execution-col-actions: 280px;
   }
 
   @media (max-width: 1099px) {
     .execution-table {
       --execution-col-sku: 128px;
-      --execution-col-qty: 56px;
+      --execution-col-qty: 128px;
       --execution-col-status: 92px;
       --execution-col-stage: 108px;
       --execution-col-actions: 112px;
@@ -202,7 +202,7 @@
   @media (max-width: 899px) {
     .execution-table {
       --execution-col-sku: 110px;
-      --execution-col-qty: 48px;
+      --execution-col-qty: 128px;
       --execution-col-status: 80px;
       --execution-col-stage: 96px;
       --execution-col-actions: 96px;
@@ -212,7 +212,7 @@
   @media (max-width: 699px) {
     .execution-table {
       --execution-col-sku: 100px;
-      --execution-col-qty: 48px;
+      --execution-col-qty: 128px;
       --execution-col-status: 80px;
       --execution-col-actions: 96px;
     }

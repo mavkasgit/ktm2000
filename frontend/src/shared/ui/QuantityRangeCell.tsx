@@ -16,7 +16,7 @@ export type QuantityRangeCellProps = {
 };
 
 /**
- * Ячейка «Кол-во»: «сырьё - итог (NП)», где сырьё уступает место плану из
+ * Ячейка «Кол-во»: «сырьё (NП) - итог», где сырьё уступает место плану из
  * Excel, если входа у позиции нет; совпадающие числа не дублируются.
  * Единый вид на странице плана, «Контроле выполнения» и в превью импорта.
  */
@@ -32,7 +32,13 @@ export function QuantityRangeCell({
   // Левая граница — сырьё, а без него план из Excel; равные числа не дублируются.
   const sourceStr = inputStr ?? originalStr;
   const showRange = sourceStr !== null && sourceStr !== qtyStr;
-  const hangerCount = countHangers(quantity, quantityPerHanger);
+  // Подвесы нарезаются из полноразмерного сырья до резки, поэтому считаем их
+  // от входа, а не от количества выходных кусков после разбиения.
+  let hangerBaseQuantity = quantity;
+  if (!isBlank(originalQuantity)) hangerBaseQuantity = originalQuantity;
+  if (!isBlank(inputQuantity)) hangerBaseQuantity = inputQuantity;
+  const hangerCount = countHangers(hangerBaseQuantity, quantityPerHanger);
+  const hangerLabel = hangerCount != null ? ` (${hangerCount}П)` : "";
 
   return (
     <span className="whitespace-nowrap">
@@ -43,6 +49,9 @@ export function QuantityRangeCell({
             title={inputStr ? "Сырьё: полноразмерные заготовки сырьевой длины" : "Количество из плана"}
           >
             {sourceStr}
+            {hangerCount != null && (
+              <span className="font-normal text-muted-foreground">{hangerLabel}</span>
+            )}
           </span>
           <span className="mx-1 text-muted-foreground">-</span>
         </>
@@ -52,7 +61,9 @@ export function QuantityRangeCell({
         title="Итог по длинам (после пилы)"
       >
         {qtyStr}
-        {hangerCount != null ? ` (${hangerCount}П)` : ""}
+        {!showRange && hangerCount != null && (
+          <span className="font-normal text-muted-foreground">{hangerLabel}</span>
+        )}
       </span>
     </span>
   );
