@@ -16,8 +16,8 @@ from app.services.session_service import SessionInactiveError, assert_session_ac
 
 @dataclass
 class _BreakGlassUser:
-    """Minimal User substitute for Break Glass emergency access — bypasses DB."""
-    id: int = 0
+    """Emergency principal; its ID attributes writes to the system user."""
+    id: int
     username: str = "emergency_admin"
     role: UserRole = UserRole.admin
     full_name: str = "Emergency Access Admin"
@@ -218,15 +218,18 @@ async def _get_current_user_strict(
             headers={"WWW-Authenticate": "Bearer"},
         )
 
-    # Break Glass (emergency) token: no sid, bypasses users table & session assertion
+    # Break Glass (emergency) token: no sid, bypasses session assertion.
     if payload.get("is_break_glass") is True:
-        return await _strict_break_glass_identity(payload)
+        return await _strict_break_glass_identity(db, payload)
 
     return await _strict_regular_identity(db, payload, subject)
 
 
-async def _strict_break_glass_identity(payload: dict) -> _BreakGlassUser:
-    """Break-glass identity: gate on flag + config only; sid must be absent."""
+async def _strict_break_glass_identity(
+    db: AsyncSession,
+    payload: dict,
+) -> _BreakGlassUser:
+    """Resolve the emergency principal and its ledger-attribution user."""
     if not settings.BREAK_GLASS_ENABLED:
         raise HTTPException(
             status_code=status.HTTP_401_UNAUTHORIZED,
@@ -240,7 +243,13 @@ async def _strict_break_glass_identity(payload: dict) -> _BreakGlassUser:
             detail="Invalid token payload",
             headers={"WWW-Authenticate": "Bearer"},
         )
-    return _make_break_glass_user()
+    system_user = await db.scalar(select(User).where(User.username == "system"))
+    if system_user is None:
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail="System user 'system' is missing",
+        )
+    return _make_break_glass_user(system_user.id)
 
 
 async def _strict_regular_identity(
@@ -273,8 +282,8 @@ async def _strict_regular_identity(
     return user
 
 
-def _make_break_glass_user() -> _BreakGlassUser:
-    return _BreakGlassUser()
+def _make_break_glass_user(system_user_id: int) -> _BreakGlassUser:
+    return _BreakGlassUser(id=system_user_id)
 
 
 # ─── Single-window lock (route-layer) ─────────────────────────────────────────

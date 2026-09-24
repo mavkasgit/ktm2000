@@ -435,7 +435,11 @@ async def test_break_glass_logout_records_corr_id(client, caplog, monkeypatch) -
 
 @pytest.mark.asyncio
 async def test_break_glass_accepted_without_db_session(client, monkeypatch) -> None:
-    """Strict mode accepts a break-glass token with no session row at all."""
+    """Strict mode accepts a break-glass token with no session row at all.
+
+    «Своей записи нет» наружу выражается ``id = 0`` — контракт не меняется
+    и после ADR-0027 (атрибуционный id служебной строки внутренний).
+    """
     from app.core.config import settings
 
     monkeypatch.setattr(settings, "DEV_BYPASS_AUTH", False)
@@ -451,7 +455,9 @@ async def test_break_glass_accepted_without_db_session(client, monkeypatch) -> N
         headers={"Authorization": f"Bearer {login.json()['access_token']}"},
     )
     assert response.status_code == 200
-    assert response.json()["is_break_glass"] is True
+    body = response.json()
+    assert body["is_break_glass"] is True
+    assert body["id"] == 0
 
 
 @pytest.mark.asyncio
