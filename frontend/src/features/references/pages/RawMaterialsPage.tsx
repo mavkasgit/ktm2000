@@ -1,4 +1,5 @@
 import React, { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { useSearchParams } from "react-router-dom";
 import { useQuery } from "@tanstack/react-query";
 import { Search, Image, X, Grid, List, Plus, Filter, Wrench, FileDown, FileSpreadsheet, Check, ChevronDown } from "lucide-react";
 import * as API from "@/shared/api/products";
@@ -226,10 +227,16 @@ function QuantityPerHangerCell({ product }: { product: Product }) {
 export function RawMaterialsPage() {
   const { canEditReferences } = usePermission();
   const isReadOnly = !canEditReferences;
+  const [searchParams] = useSearchParams();
   const [items, setItems] = useState<Product[]>([]);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState("");
-  const [viewMode, setViewMode] = useState<ViewMode>("table");
+  const [viewMode, setViewMode] = useState<ViewMode>(
+    searchParams.get("view") === "calc" ? "calc" : "table",
+  );
+  useEffect(() => {
+    if (searchParams.get("view") === "calc") setViewMode("calc");
+  }, [searchParams]);
   const [gridMenuOpen, setGridMenuOpen] = useState(false);
   const [gridDensity, setGridDensity] = useState<GridDensity>(() => {
     try {

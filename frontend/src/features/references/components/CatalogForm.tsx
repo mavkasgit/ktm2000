@@ -1,4 +1,5 @@
 import React, { useEffect, useImperativeHandle, useState, forwardRef, useCallback, useMemo, useRef } from "react";
+import { Link } from "react-router-dom";
 import { useQuery } from "@tanstack/react-query";
 import { Image, Maximize2, Camera, Trash2, Plus, ChevronDown, ChevronUp } from "lucide-react";
 import { Button } from "@/shared/ui/button";
@@ -112,7 +113,7 @@ function buildInitialForm(product: Product | null, mode: DialogMode): CreateProd
     perimeter_mm: product?.perimeter_mm ?? null,
     mount_width_mm: product?.mount_width_mm ?? null,
     quantity_per_hanger: manualDictFromProduct(product),
-    hanger_mode: product?.hanger_mode ?? "auto",
+    hanger_mode: product?.hanger_mode ?? "manual",
     cross_section: product?.cross_section ?? null,
     skip_shot_blast: product?.skip_shot_blast ?? false,
     dimension_state: product?.dimension_state ?? "length",
@@ -156,7 +157,7 @@ function getChanges(form: CreateProductInput, product: Product | null, isCreate:
   if (!eq(form.skip_shot_blast, product.skip_shot_blast)) changes.push({ field: "skip_shot_blast", label: "Не дробеструится", from: product.skip_shot_blast ? "Да" : "Нет", to: form.skip_shot_blast ? "Да" : "Нет" });
   if (!eq(form.aliases ?? [], product.aliases ?? [])) changes.push({ field: "aliases", label: "Эквиваленты", from: (product.aliases ?? []).join(", ") || "—", to: (form.aliases ?? []).join(", ") || "—" });
   if (!eq(form.lengths ?? [], product.lengths ?? [])) changes.push({ field: "lengths", label: "Длины", from: productLens.join(", ") || "—", to: formLengths.join(", ") || "—" });
-  const formPrimary = form.lengths?.find((length) => length.is_primary)?.length_mm ?? null;
+  const formPrimary = primaryLength(form);
   const productPrimary = primaryLength(product);
   if (!eq(formPrimary, productPrimary)) {
     changes.push({
@@ -258,8 +259,32 @@ export const CatalogForm = forwardRef<CatalogFormRef, {
   const formLengths = useMemo(() => productLengths(form), [form.lengths]);
   // Явный режим подвеса (#127): единый для 1D/2D/3D, без data-driven вывода.
   const autoMode = (form.hanger_mode ?? "auto") === "auto";
-  const sheetMode: HangerMode = form.hanger_mode ?? "auto"; // подпись режима для радио
+  const sheetMode: HangerMode = form.hanger_mode ?? "auto";
   const isSheet = isSheetState(form.dimension_state);
+  const canUseAuto = !isLengthState(form.dimension_state) || Boolean(
+    typeof form.perimeter_mm === "number" && form.perimeter_mm > 0 &&
+    typeof form.mount_width_mm === "number" && form.mount_width_mm > 0
+  );
+  const autoUnavailable = !canUseAuto;
+
+  const handleHangerModeChange = (nextMode: HangerMode) => {
+    if (nextMode === "auto" && autoUnavailable) return;
+    setForm((current) => {
+      if (nextMode !== "manual" || current.hanger_mode !== "auto") {
+        return { ...current, hanger_mode: nextMode };
+      }
+      const nextManual = { ...(current.quantity_per_hanger ?? {}) };
+      for (const [index, length] of productLengths(current).entries()) {
+        const key = lengthKey(length);
+        const autoValue = hangerPreview.status === "ready" ? hangerPreview.results?.[index]?.total : null;
+        nextManual[key] = {
+          auto: null,
+          manual: nextManual[key]?.manual ?? (autoValue != null && autoValue > 0 ? Math.trunc(autoValue) : null),
+        };
+      }
+      return { ...current, hanger_mode: nextMode, quantity_per_hanger: nextManual };
+    });
+  };
 
   // Длина полотна: из осей формы (create/edit) или сохранённых dimensions.
   const sheetLen = useMemo(() => {
@@ -447,7 +472,7 @@ export const CatalogForm = forwardRef<CatalogFormRef, {
   // Лист (#126): в ручном режиме значение должно быть положительным.
   const sheetManual = sheetLen != null ? manualForLength(sheetLen) : null;
   const sheetManualInvalid = isSheet && sheetMode === "manual" && sheetManual != null && !(sheetManual > 0);
-  const hasValidationErrors = perimeterInvalid || mountWidthInvalid || quantityInvalid || sheetManualInvalid;
+  const hasValidationErrors = (autoMode && autoUnavailable) || perimeterInvalid || mountWidthInvalid || quantityInvalid || sheetManualInvalid;
 
   useEffect(() => {
     onDirtyChange?.(isDirty);
@@ -749,13 +774,13 @@ export const CatalogForm = forwardRef<CatalogFormRef, {
                   <span className="text-sm font-medium">Режим подвеса:</span>
                   <RadioGroup
                     value={autoMode ? "auto" : "manual"}
-                    onValueChange={(val) => update("hanger_mode", val as HangerMode)}
+                    onValueChange={(val) => handleHangerModeChange(val as HangerMode)}
                     disabled={readOnly}
                     className="flex items-center gap-4"
                   >
                     <div className="flex items-center gap-1.5">
-                      <RadioGroupItem value="auto" id="hanger-mode-auto" />
-                      <label htmlFor="hanger-mode-auto" className={cn("text-sm cursor-pointer", autoMode && "font-semibold")}>Авто</label>
+                      <RadioGroupItem value="auto" id="hanger-mode-auto" disabled={autoUnavailable} />
+                      <label htmlFor="hanger-mode-auto" className={cn("text-sm cursor-pointer", autoUnavailable && "text-muted-foreground/60 cursor-not-allowed", autoMode && "font-semibold")}>Авто</label>
                     </div>
                     <div className="flex items-center gap-1.5">
                       <RadioGroupItem value="manual" id="hanger-mode-manual" />
@@ -769,11 +794,11 @@ export const CatalogForm = forwardRef<CatalogFormRef, {
                       <thead>
                         <tr className="bg-muted/50 text-xs text-muted-foreground border-b">
                           <th className="text-left font-medium px-3 py-2">
-                            {readOnly ? "Основная" : "Основная (радио)"}
+                            Основная
                           </th>
                           <th className="text-left font-medium px-3 py-2">Кол-во на подвесе, шт</th>
-                          <th className="text-left font-medium px-3 py-2">Нормальная, мм</th>
-                          <th className="text-left font-medium px-3 py-2">Сырьевая длина, мм</th>
+                          <th className="text-left font-medium px-2 py-2 w-[100px] min-w-[100px] max-w-[100px]">Нормальная, мм</th>
+                          <th className="text-left font-medium px-2 py-2 w-[100px] min-w-[100px] max-w-[100px]">Сырьевая длина, мм</th>
                           {!readOnly && <th className="px-2 py-2" aria-label="Действия" />}
                         </tr>
                       </thead>
@@ -819,19 +844,27 @@ export const CatalogForm = forwardRef<CatalogFormRef, {
                                       title={autoMode ? "В авто-режиме значение считается из периметра и габарита" : undefined}
                                     />
                                     {autoMode && (
-                                      <span className="text-xs font-medium text-emerald-700 whitespace-nowrap">авто</span>
+                                      <Link
+                                        to="/references/raw-materials?view=calc"
+                                        className="text-xs font-medium text-emerald-700 underline decoration-emerald-400 underline-offset-2 whitespace-nowrap hover:text-emerald-800"
+                                        onClick={(event) => {
+                                          event.stopPropagation();
+                                          onCancel();
+                                        }}
+                                      >
+                                        авто
+                                      </Link>
                                     )}
                                   </div>
                                 </td>
-                                <td className="px-3 py-1.5">
+                                <td className="px-2 py-1.5 w-[100px] min-w-[100px] max-w-[100px] text-center">
                                   <label htmlFor={`primary-${len}`} className={cn("cursor-pointer", primaryLength(form) === len && "font-semibold")}>{len}</label>
                                 </td>
-                                <td className="px-3 py-1.5">
+                                <td className="px-2 py-1.5 w-[100px] min-w-[100px] max-w-[100px]">
                                   <Input
                                     type="number"
-                                    className="h-9 w-28"
-                                    value={(form.lengths ?? []).find((length) => length.length_mm === len)?.raw_length_mm ?? ""}
-                                    placeholder="как нормальная"
+                                    className="h-9 w-full"
+                                    value={(form.lengths ?? []).find((length) => length.length_mm === len)?.raw_length_mm ?? len}
                                     onChange={(e) => {
                                       const parsed = parseNumericInput(e.target.value);
                                       setForm((f) => ({ ...f, lengths: (f.lengths ?? []).map((length) => length.length_mm === len ? { ...length, raw_length_mm: parsed } : length) }));
