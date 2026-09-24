@@ -2,7 +2,7 @@ from datetime import UTC, datetime
 from decimal import Decimal
 from typing import Literal
 
-from fastapi import APIRouter, Depends, HTTPException, Query
+from fastapi import APIRouter, Depends, HTTPException, Query, status
 from pydantic import BaseModel, ConfigDict
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -641,7 +641,7 @@ async def create_rework_task(
         raise HTTPException(status_code=400, detail=str(exc)) from exc
 
 
-@router.post("/comments")
+@router.post("/comments", status_code=status.HTTP_201_CREATED)
 async def create_comment_endpoint(
     payload: CommentPayload,
     db: AsyncSession = Depends(get_db),
@@ -662,7 +662,7 @@ async def create_comment_endpoint(
         raise HTTPException(status_code=400, detail=str(exc)) from exc
 
 
-@router.post("/attachments")
+@router.post("/attachments", status_code=status.HTTP_201_CREATED)
 async def create_attachment_endpoint(
     payload: CreateAttachmentPayload,
     db: AsyncSession = Depends(get_db),
@@ -684,7 +684,7 @@ async def create_attachment_endpoint(
         raise HTTPException(status_code=400, detail=str(exc)) from exc
 
 
-@router.post("/attachments/{attachment_id}/link")
+@router.post("/attachments/{attachment_id}/link", status_code=status.HTTP_201_CREATED)
 async def link_attachment_endpoint(
     attachment_id: int,
     payload: LinkAttachmentPayload,
