@@ -10,6 +10,7 @@ from app.api.deps import READER_ROLES, require_role, get_current_user, get_db
 from app.models.audit_log import AuditLog
 from app.models.user import User
 from app.models.work_task import WorkTask
+from app.services.audit_log_service import log_action
 
 router = APIRouter(prefix="/audit-logs", tags=["audit-logs"])
 
@@ -257,20 +258,16 @@ async def create_audit_log(
     current_user: User = Depends(get_current_user),
 ) -> AuditLogOut:
     """Создать новую запись в журнале аудита."""
-    task_ids_str = None
-    if payload.task_ids:
-        task_ids_str = ",".join(map(str, payload.task_ids))
-
-    log = AuditLog(
-        user_id=current_user.id,
-        user_name=current_user.full_name,
+    log = await log_action(
+        db,
         status=payload.status,
         title=payload.title,
         message=payload.message,
+        user=current_user,
         section_id=payload.section_id,
         section_name=payload.section_name,
         section_code=payload.section_code,
-        task_ids=task_ids_str,
+        task_ids=payload.task_ids,
         product_sku=payload.product_sku,
         operation_name=payload.operation_name,
         qty_text=payload.qty_text,
@@ -281,7 +278,6 @@ async def create_audit_log(
         entity_id=payload.entity_id,
         changes=payload.changes,
     )
-    db.add(log)
     await db.commit()
     await db.refresh(log)
     return AuditLogOut.model_validate(log)

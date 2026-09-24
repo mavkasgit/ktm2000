@@ -61,9 +61,10 @@ async def log_action(
     if task_ids:
         task_ids_str = ",".join(map(str, task_ids))
 
-    # Виртуальный break-glass пользователь не хранится в users (ADR-0006,
-    # id=0): пишем аудит с user_id=NULL, сохраняя имя, чтобы не нарушать FK.
-    u_id = user.id if user is not None and user.id else user_id
+    # Единственная точка атрибуции audit_logs: FK принимает только положительный
+    # persisted user id, а отображаемое имя сохраняется при его отсутствии.
+    candidate_id = user.id if user is not None else user_id
+    u_id = candidate_id if candidate_id and candidate_id > 0 else None
     u_name = (user.full_name if user is not None else None) or user_name
 
     # Преобразуем енамы в строки для бд, если переданы енамы
