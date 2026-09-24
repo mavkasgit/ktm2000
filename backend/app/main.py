@@ -40,6 +40,7 @@ from app.api.routes.audit_logs import router as audit_logs_router
 from app.api.routes.notifications import router as notifications_router
 from app.api.routes.users import router as users_router
 from app.api.routes.employees import router as employees_router
+from app.api.routes.daily_plans import router as daily_plans_router
 from app.core.config import settings
 from app.core.database import async_session
 from app.core.exceptions import KTMException
@@ -128,6 +129,7 @@ app.include_router(audit_logs_router, prefix="/api")
 app.include_router(notifications_router, prefix="/api")
 app.include_router(users_router, prefix="/api")
 app.include_router(employees_router, prefix="/api")
+app.include_router(daily_plans_router, prefix="/api")
 
 
 @app.get("/api/health")

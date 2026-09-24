@@ -38,6 +38,7 @@ class AuditEntityType(str, Enum):
     IMPORT_BATCH = "import_batch"
     USER = "user"
 
+    DAILY_PLAN = "daily_plan"
 
 class AuditLog(Base):
     __tablename__ = "audit_logs"

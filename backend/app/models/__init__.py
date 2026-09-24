@@ -25,6 +25,7 @@ from .production_plan import (
 from .release_batch import ReleaseBatch, ReleaseBatchPosition, ReleaseBatchStatus, ReleaseBatchType
 from .internal_plan import InternalPlan, InternalPlanStatus, SectionPlanLine
 from .work_task import WorkTask, WorkTaskStatus
+from .daily_plan import DailyPlan, DailyPlanItem
 from .import_template import ImportTemplate
 from .transfer import Transfer, TransferStatus, TransferDiscrepancy, TransferDiscrepancyStatus
 from .defect import (
@@ -100,6 +101,8 @@ __all__ = [
     "UserNotificationState",
     "WorkTask",
     "WorkTaskStatus",
+    "DailyPlan",
+    "DailyPlanItem",
     "ImportTemplate",
     "Transfer",
     "TransferStatus",

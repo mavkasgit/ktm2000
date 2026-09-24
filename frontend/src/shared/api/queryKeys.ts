@@ -189,6 +189,12 @@ export const queryKeys = {
     statsAll: () => ["shopfloor-stats"] as const,
     incomingTransfersAll: () => ["shopfloor-incoming-transfers"] as const,
   },
+  dailyPlans: {
+    all: () => ["shopfloor-daily-plans"] as const,
+    list: (sectionId: number) => ["shopfloor-daily-plans", "list", sectionId] as const,
+    composition: (planId: number) => ["shopfloor-daily-plans", "composition", planId] as const,
+    compositionAll: () => ["shopfloor-daily-plans", "composition"] as const,
+  },
   transfers: {
     ready: (
       spgId: number | null,

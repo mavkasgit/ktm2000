@@ -223,6 +223,7 @@ function renderTaskRow(
   bulkMode: boolean | undefined,
   bulkSelection: BulkSelectionController | undefined,
   onAction: (type: TaskActionDialogType, task: SectionBoardTask) => void,
+  readOnly: boolean,
   isLastInGroup = false,
   isInGroup = false,
 ) {
@@ -282,16 +283,20 @@ function renderTaskRow(
         )}
       </td>
       <td className="p-2">
-        <Button
-          size="sm"
-          variant="outline"
-          className={`${buttonBase} ${buttonDefault}`}
-          onClick={() => handleAction("complete")}
-          disabled={!isTaskCompletable(task)}
-          title={getCompletionDisabledReason(task) ?? "Завершить задачу"}
-        >
-          <span>Завершить</span>
-        </Button>
+        {readOnly ? (
+          <span className="text-xs text-muted-foreground">Просмотр</span>
+        ) : (
+          <Button
+            size="sm"
+            variant="outline"
+            className={`${buttonBase} ${buttonDefault}`}
+            onClick={() => handleAction("complete")}
+            disabled={!isTaskCompletable(task)}
+            title={getCompletionDisabledReason(task) ?? "Завершить задачу"}
+          >
+            <span>Завершить</span>
+          </Button>
+        )}
       </td>
       <TableCornerResetCell />
     </tr>
@@ -305,6 +310,7 @@ function renderMobileCard(
   bulkSelection: BulkSelectionController | undefined,
   onAction: (type: TaskActionDialogType, task: SectionBoardTask) => void,
   isLastInGroup = false,
+  readOnly: boolean,
 ) {
   const buttonBase = "flex-1 min-h-[36px] transition-all";
   const buttonDefault = "hover:bg-accent/50";
@@ -358,16 +364,20 @@ function renderMobileCard(
       ) : null}
 
       <div className="flex gap-2 pt-1">
-        <Button
-          size="sm"
-          variant="outline"
-          className={`${buttonBase} ${buttonDefault}`}
-          onClick={() => handleAction("complete")}
-          disabled={!isTaskCompletable(task)}
-          title={getCompletionDisabledReason(task) ?? "Завершить задачу"}
-        >
-          <span>Завершить</span>
-        </Button>
+        {readOnly ? (
+          <span className="text-xs text-muted-foreground">Режим просмотра</span>
+        ) : (
+          <Button
+            size="sm"
+            variant="outline"
+            className={`${buttonBase} ${buttonDefault}`}
+            onClick={() => handleAction("complete")}
+            disabled={!isTaskCompletable(task)}
+            title={getCompletionDisabledReason(task) ?? "Завершить задачу"}
+          >
+            <span>Завершить</span>
+          </Button>
+        )}
       </div>
     </div>
   );
@@ -484,6 +494,7 @@ type SectionTasksBoardProps = {
   mode: TaskBoardViewMode;
   onModeChange: (next: TaskBoardViewMode) => void;
   onAction: (type: TaskActionDialogType, task: SectionBoardTask) => void;
+  readOnly?: boolean;
   bulkMode?: boolean;
   onBulkModeChange?: (enabled: boolean) => void;
   bulkSelection?: BulkSelectionController;
@@ -527,6 +538,7 @@ export function SectionTasksBoard({
   mode,
   onModeChange,
   onAction,
+  readOnly = false,
   bulkMode,
   onBulkModeChange,
   bulkSelection,
@@ -797,7 +809,7 @@ export function SectionTasksBoard({
             isBulkMode={!!bulkMode}
             bulkSelection={bulkSelection}
             onToggleCollapse={() => toggleGroup(row.group.key)}
-            onCompleteGroup={onCompleteGroup}
+            onCompleteGroup={readOnly ? undefined : onCompleteGroup}
             onSelectGroup={() => {
               if (!bulkMode || !bulkSelection) return;
               const taskIds = row.group.tasks.map((t) => t.id);
@@ -826,9 +838,10 @@ export function SectionTasksBoard({
         onAction,
         row.isLastInGroup,
         row.isInGroup,
+        readOnly,
       );
     },
-    [bulkMode, bulkSelection, onAction, onCompleteGroup, toggleGroup],
+    [bulkMode, bulkSelection, onAction, onCompleteGroup, readOnly, toggleGroup],
   );
 
   const headerCellClass = `${DATA_TABLE_STYLES.headerRow} ${DATA_TABLE_STYLES.headerCell}`;
@@ -1032,7 +1045,7 @@ export function SectionTasksBoard({
               if (isSingleTask) {
                 const task = group.tasks[0];
                 const isSelected = bulkMode && bulkSelection?.isSelected(task.id);
-                return renderMobileCard(task, isSelected, bulkMode, bulkSelection, onAction, true);
+                return renderMobileCard(task, isSelected, bulkMode, bulkSelection, onAction, true, readOnly);
               }
 
               return (
@@ -1084,7 +1097,7 @@ export function SectionTasksBoard({
                       <Badge variant="secondary" className="bg-blue-100 text-blue-700">
                         &times;{group.tasks.length}
                       </Badge>
-                      {onCompleteGroup && (() => {
+                      {onCompleteGroup && !readOnly && (() => {
                         const groupHasCompletable = group.tasks.some(isTaskCompletable);
                         return (
                           <Button
@@ -1107,7 +1120,7 @@ export function SectionTasksBoard({
                   {!isCollapsed && <div className="divide-y divide-muted">{group.tasks.map((task, idx) => {
                     const isLast = idx === group.tasks.length - 1;
                     const isSelected = bulkMode && bulkSelection?.isSelected(task.id);
-                    return renderMobileCard(task, isSelected, bulkMode, bulkSelection, onAction, isLast);
+                    return renderMobileCard(task, isSelected, bulkMode, bulkSelection, onAction, isLast, readOnly);
                   })}</div>}
                 </div>
               );

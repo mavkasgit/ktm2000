@@ -1,10 +1,10 @@
 import { Button } from "@/shared/ui";
 
-export type SectionContentMode = "both" | "tasks" | "balances";
+export type SectionContentMode = "tasks" | "plan" | "balances";
 
 const MODES: { id: SectionContentMode; label: string }[] = [
-  { id: "both", label: "Всё" },
   { id: "tasks", label: "Задания" },
+  { id: "plan", label: "План" },
   { id: "balances", label: "Остатки" },
 ];
 
@@ -34,9 +34,13 @@ export function SectionPanelToggles({ mode, onChange }: SectionPanelTogglesProps
 }
 
 export function isTasksPanelVisible(mode: SectionContentMode): boolean {
-  return mode === "both" || mode === "tasks";
+  return mode === "tasks";
+}
+
+export function isPlanPanelVisible(mode: SectionContentMode): boolean {
+  return mode === "plan";
 }
 
 export function isBalancesPanelVisible(mode: SectionContentMode): boolean {
-  return mode === "both" || mode === "balances";
+  return mode === "balances";
 }

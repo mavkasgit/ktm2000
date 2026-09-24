@@ -142,6 +142,37 @@ export type SectionBoardResponse = {
   limit: number;
   offset: number;
 };
+export type DailyPlanSummary = {
+  id: number;
+  section_id: number;
+  plan_date: string;
+  created_at: string;
+  created_by: number;
+  item_count: number;
+  progress_percent: number;
+};
+
+export type DailyPlanCompositionItem = {
+  id: number;
+  daily_plan_id: number;
+  work_task_id: number;
+  task: SectionBoardTask;
+  progress_percent: number;
+};
+
+export type DailyPlanCompositionResponse = {
+  items: DailyPlanCompositionItem[];
+};
+
+export type CreateDailyPlanInput = {
+  plan_date: string;
+  work_task_ids: number[];
+};
+
+export type RevokeDailyPlanItemResponse = {
+  plan_id: number;
+  work_task_id: number;
+};
 
 export type DailyStatsRow = {
   date: string;
@@ -259,6 +290,63 @@ export async function getSectionBoard(
   const { data } = await apiClient.get<SectionBoardResponse>(
     `/shopfloor/sections/${sectionId}/board${qs ? `?${qs}` : ""}`,
     makeRequestConfig(options)
+  );
+  return data;
+}
+export async function listDailyPlans(
+  sectionId: number,
+  options?: ShopfloorRequestOptions,
+): Promise<DailyPlanSummary[]> {
+  const { data } = await apiClient.get<DailyPlanSummary[]>(
+    `/daily-plans/sections/${sectionId}`,
+    makeRequestConfig(options),
+  );
+  return data;
+}
+
+export async function getDailyPlanCandidates(
+  sectionId: number,
+  options?: ShopfloorRequestOptions,
+): Promise<SectionBoardTask[]> {
+  const { data } = await apiClient.get<SectionBoardTask[]>(
+    `/daily-plans/sections/${sectionId}/candidates`,
+    makeRequestConfig(options),
+  );
+  return data;
+}
+
+export async function getDailyPlanComposition(
+  planId: number,
+  options?: ShopfloorRequestOptions,
+): Promise<DailyPlanCompositionResponse> {
+  const { data } = await apiClient.get<DailyPlanCompositionResponse>(
+    `/daily-plans/${planId}/items`,
+    makeRequestConfig(options),
+  );
+  return data;
+}
+
+export async function createDailyPlan(
+  payload: CreateDailyPlanInput,
+  options?: ShopfloorRequestOptions,
+): Promise<DailyPlanSummary> {
+  const { data } = await apiClient.post<DailyPlanSummary>(
+    "/daily-plans",
+    payload,
+    makeRequestConfig(options),
+  );
+  return data;
+}
+
+export async function revokeDailyPlanItem(
+  planId: number,
+  workTaskId: number,
+  options?: ShopfloorRequestOptions,
+): Promise<RevokeDailyPlanItemResponse> {
+  const { data } = await apiClient.post<RevokeDailyPlanItemResponse>(
+    `/daily-plans/${planId}/items/${workTaskId}/revoke`,
+    undefined,
+    makeRequestConfig(options),
   );
   return data;
 }
