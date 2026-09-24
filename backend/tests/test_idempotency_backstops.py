@@ -538,9 +538,8 @@ async def isolated_client(
 async def test_api_double_click_comment_single_row(
     isolated_client: AsyncClient, engine: AsyncEngine, module_schema_name: str,
 ):
-    """Два параллельных POST /comments с одним ключом: {200, 409} или оба
-    по replay — комментарий ровно один, 409 доезжает до клиента как
-    entity_comment_idempotency_conflict (не глотается ValueError→400)."""
+    """Два параллельных POST /comments с одним ключом дают 201 победителя и
+    допустимый 409 конфликта (или оба 201 при replay), оставляя одну запись."""
     factory = _factory(engine)
     schema = _schema_sql(module_schema_name)
     fx = await _race_setup(factory, schema, "apicomment")
@@ -556,11 +555,11 @@ async def test_api_double_click_comment_single_row(
     )
 
     for resp in (r1, r2):
-        assert resp.status_code == 200 or (
+        assert resp.status_code == 201 or (
             resp.status_code == 409
             and resp.json()["error_code"] == "entity_comment_idempotency_conflict"
         ), resp.text
-    assert 200 in (r1.status_code, r2.status_code), "хотя бы одна подача проходит"
+    assert 201 in (r1.status_code, r2.status_code), "хотя бы одна подача проходит"
 
     async with factory() as check:
         await check.execute(text(schema))
