@@ -1,11 +1,15 @@
 """Публичные API-контракты перехода плана на модель normal/raw (ADR-0028)."""
 from __future__ import annotations
 
+from datetime import date
 from decimal import Decimal
 
 import pytest
+from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from app.models.action_journal import Action
+from app.models.internal_plan import InternalPlan, InternalPlanStatus, SectionPlanLine
 from app.models.product import Product, ProductType
 from app.models.production_plan import (
     PlanChangeSet,
@@ -14,9 +18,12 @@ from app.models.production_plan import (
     PlanPositionValidationStatus,
     PlanSourceType,
     ProductionPlan,
+    ProductionPlanStatus,
 )
 from app.models.route import ProductionRoute, RouteOperation, RouteStage
 from app.models.section import Section
+from app.models.work_task import WorkTask, WorkTaskStatus
+from app.stock import StockTransaction
 
 
 SIMULATE_URL = "/api/imports/excel/simulate"
@@ -296,13 +303,14 @@ async def test_version_one_plan_is_readable_but_all_position_mutations_are_block
     client,
     session: AsyncSession,
 ) -> None:
-    """A v1 plan remains readable while apply/approve/cancel/release/edit/delete return one stable error."""
+    """A v1 plan stays readable and all plan/position mutations share one stable error."""
     plan = ProductionPlan(
         plan_no="PLAN-CUTOVER-LEGACY",
         name="Legacy length plan",
         length_model_version=1,
     )
-    session.add(plan)
+    route = ProductionRoute(name="Legacy assignment route", is_active=True)
+    session.add_all([plan, route])
     await session.flush()
     change_set = PlanChangeSet(production_plan_id=plan.id, summary={})
     session.add(change_set)
@@ -364,6 +372,18 @@ async def test_version_one_plan_is_readable_but_all_position_mutations_are_block
             {"name": "must not release", "positions": []},
         ),
         (
+            "route assignment",
+            "POST",
+            f"/api/production-plans/{plan.id}/positions/batch-assign-route",
+            {"position_ids": [position.id], "route_id": route.id},
+        ),
+        (
+            "restore",
+            "POST",
+            f"/api/production-plans/{plan.id}/positions/{position.id}/restore",
+            {"reason": "must not restore"},
+        ),
+        (
             "quantity",
             "PATCH",
             f"/api/production-plans/{plan.id}/positions/{position.id}/quantity",
@@ -384,3 +404,143 @@ async def test_version_one_plan_is_readable_but_all_position_mutations_are_block
     unchanged = await client.get(f"/api/production-plans/{plan.id}/all-positions")
     assert unchanged.status_code == 200, unchanged.text
     assert unchanged.json()[0]["quantity"] == "10"
+
+
+@pytest.mark.asyncio
+async def test_direct_shopfloor_mutations_cannot_change_legacy_plan_task(
+    auth_client,
+    session: AsyncSession,
+) -> None:
+    """Direct complete/final-release are rejected before ledger, action, or task state changes."""
+    sku = "PLAN-CUTOVER-LEGACY-SHOPFLOOR"
+    production = Section(
+        code=f"{sku}-PROD",
+        name="Legacy production",
+        type="production",
+        is_active=True,
+    )
+    finished_stock = Section(
+        code=f"{sku}-FG",
+        name="Legacy finished stock",
+        type="finished_stock",
+        is_active=True,
+        is_output_default=True,
+    )
+    product = Product(
+        sku=sku,
+        name="Legacy shopfloor product",
+        type=ProductType.finished_good,
+        unit="pcs",
+        is_active=True,
+    )
+    session.add_all([production, finished_stock, product])
+    await session.flush()
+
+    route = ProductionRoute(name="Legacy shopfloor route", is_active=True)
+    session.add(route)
+    await session.flush()
+    stage = RouteStage(
+        route_id=route.id,
+        sequence=10,
+        section_id=production.id,
+        is_final=True,
+    )
+    session.add(stage)
+    await session.flush()
+    session.add(
+        RouteOperation(
+            route_stage_id=stage.id,
+            sequence=1,
+            operation_code="FINAL",
+            operation_name="Finish",
+        )
+    )
+
+    plan = ProductionPlan(
+        plan_no="PLAN-CUTOVER-LEGACY-SHOPFLOOR",
+        name="Legacy shopfloor plan",
+        status=ProductionPlanStatus.approved,
+        period_start=date(2026, 9, 1),
+        period_end=date(2026, 9, 30),
+        length_model_version=1,
+    )
+    session.add(plan)
+    await session.flush()
+    position = PlanPosition(
+        production_plan_id=plan.id,
+        product_id=product.id,
+        source_type=PlanSourceType.manual,
+        source_sku=product.sku,
+        source_name=product.name,
+        quantity=Decimal("10"),
+        source_payload={},
+        status=PlanPositionStatus.approved,
+        validation_status=PlanPositionValidationStatus.valid,
+        validation_errors=[],
+        route_id=route.id,
+    )
+    session.add(position)
+    await session.flush()
+    internal_plan = InternalPlan(
+        production_plan_id=plan.id,
+        status=InternalPlanStatus.active,
+    )
+    session.add(internal_plan)
+    await session.flush()
+    line = SectionPlanLine(
+        internal_plan_id=internal_plan.id,
+        plan_position_id=position.id,
+        section_id=production.id,
+        product_id=product.id,
+        route_id=route.id,
+        route_stage_id=stage.id,
+        sequence=10,
+        planned_quantity=Decimal("10"),
+    )
+    session.add(line)
+    await session.flush()
+    task = WorkTask(
+        section_plan_line_id=line.id,
+        section_id=production.id,
+        product_id=product.id,
+        route_stage_id=stage.id,
+        planned_quantity=Decimal("10"),
+        dimensions={"length_mm": 2700},
+        status=WorkTaskStatus.ready,
+        due_date=plan.period_end,
+    )
+    session.add(task)
+    await session.commit()
+
+    mutations = [
+        (
+            "complete",
+            f"/api/shopfloor/tasks/{task.id}/complete",
+            {"good_quantity": "10", "defect_quantity": "0"},
+        ),
+        (
+            "final-release",
+            f"/api/shopfloor/tasks/{task.id}/final-release",
+            {"quantity": "10", "dimensions": {"length_mm": 2700}},
+        ),
+    ]
+    responses = [
+        (name, await auth_client.post(url, json=payload))
+        for name, url, payload in mutations
+    ]
+    for name, response in responses:
+        assert response.status_code == 400, f"{name}: {response.text}"
+        assert response.json() == {"detail": "legacy_plan_read_only"}, name
+
+    ledger_count = await session.scalar(
+        select(func.count(StockTransaction.id)).where(
+            StockTransaction.task_id == task.id
+        )
+    )
+    action_count = await session.scalar(
+        select(func.count(Action.id)).where(Action.ref_id == task.id)
+    )
+    await session.refresh(task)
+    assert ledger_count == 0
+    assert action_count == 0
+    assert task.status == WorkTaskStatus.ready

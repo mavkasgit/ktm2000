@@ -31,7 +31,7 @@ from app.models.work_task import WorkTask
 from app.seeds.canon.dependencies import get_plant_config
 from app.seeds.canon.models import PlantConfig
 from app.services.action_journal_service import action_journal_service
-from app.services.shopfloor.common import _get_user_snapshot_name
+from app.services.shopfloor.common import _get_user_snapshot_name, _require_mutable_task
 from app.services.shopfloor_service import (
     add_defect_item,
     complete_task,
@@ -462,10 +462,10 @@ async def patch_task_operation(
     locked_section_id: int | None = Depends(get_single_window_locked_section_id),
 ) -> dict:
     await _ensure_task_lock(db, task_id, locked_section_id)
-
     task = await db.get(WorkTask, task_id)
     if not task:
         raise HTTPException(status_code=404, detail="Task not found")
+    await _require_mutable_task(db, task)
 
     # Validate that the operation exists for this task's section
     op = await db.scalar(
@@ -534,6 +534,10 @@ async def final_release_endpoint(
     current_user: User = Depends(get_current_user),
 ) -> dict:
     try:
+        task = await db.get(WorkTask, task_id)
+        if task is None:
+            raise ValueError("Task not found")
+        await _require_mutable_task(db, task)
         return await final_release(
             db,
             task_id=task_id,
@@ -952,6 +956,7 @@ async def return_remainder(
         task = await db.get(WorkTask, payload.task_id)
         if task is None:
             raise ValueError("Task not found")
+        await _require_mutable_task(db, task)
 
         # Available for return = issued - completed - transferred
         from app.stock.services import StockProjectionManager

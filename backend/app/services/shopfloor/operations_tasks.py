@@ -33,6 +33,7 @@ from .common import (
     _check_idempotency,
     _ensure_positive,
     _get_route_stage,
+    _require_mutable_task,
     _get_task,
     _get_user_snapshot_name,
     _to_decimal,
@@ -576,6 +577,7 @@ async def complete_task(
     (replay не пересчитывает порцию — факт уже в ledger).
     """
     task = await _get_task(db, task_id)
+    await _require_mutable_task(db, task)
 
     # Этапы оркестратора: replay → guard/лимиты → проводки good/scrap →
     # статус → авто-передача. Статус и передача — ЯВНЫЕ вызовы, без event-bus.
@@ -835,12 +837,12 @@ async def final_release(
     ``dimensions``. На нетрансформирующих этапах ``dimensions``
     опционален (по умолчанию — габарит задания).
     """
+    task = await _get_task(db, task_id)
+    await _require_mutable_task(db, task)
     if idempotency_key:
         existing = await _check_idempotency(db, idempotency_key=idempotency_key, entity_type=StockTransaction)
         if existing is not None:
             return {"transaction_id": existing.id, "task_id": task_id, "idempotent_replay": True}
-
-    task = await _get_task(db, task_id)
     stage = await _get_route_stage(db, task.route_stage_id)
     if not stage.is_final:
         raise ValueError("Final release allowed only for final route stage")
@@ -947,6 +949,13 @@ async def prepare_section_task(
     idempotency_key: str | None = None,
 ) -> dict:
     """Create or return an existing WorkTask for a given section from a released plan position."""
+    from app.models.production_plan import ProductionPlan, require_current_length_model
+
+    position = await db.get(PlanPosition, plan_position_id)
+    if position is None:
+        raise ValueError("Plan position not found")
+    plan = await db.get(ProductionPlan, position.production_plan_id)
+    require_current_length_model(plan)
     quantity = _to_decimal(quantity)
     _ensure_positive(quantity, "quantity")
 

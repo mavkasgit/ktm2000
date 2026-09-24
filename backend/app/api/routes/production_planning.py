@@ -872,6 +872,7 @@ async def _do_manual_pass(
     pos = await db.get(PlanPosition, position_id)
     if pos is None or pos.deleted_at is not None:
         raise HTTPException(status_code=404, detail="Position not found")
+    require_current_length_model(await db.get(ProductionPlan, pos.production_plan_id))
     if pos.status not in {PlanPositionStatus.approved, PlanPositionStatus.released}:
         raise HTTPException(status_code=400, detail=f"Position status must be approved or released, got '{pos.status.value}'")
 
@@ -1246,6 +1247,7 @@ async def cancel_position(
     pos = await db.get(PlanPosition, position_id)
     if pos is None:
         raise HTTPException(status_code=404, detail="Position not found")
+    require_current_length_model(await db.get(ProductionPlan, pos.production_plan_id))
 
     if pos.status not in {PlanPositionStatus.approved, PlanPositionStatus.released}:
         raise HTTPException(status_code=400, detail=f"Нельзя отменить позицию со статусом '{pos.status.value}'")
@@ -1329,6 +1331,7 @@ async def restore_position(
     pos = await db.get(PlanPosition, position_id)
     if pos is None:
         raise HTTPException(status_code=404, detail="Position not found")
+    require_current_length_model(await db.get(ProductionPlan, pos.production_plan_id))
 
     if pos.status != PlanPositionStatus.cancelled:
         raise HTTPException(status_code=400, detail=f"Нельзя восстановить позицию со статусом '{pos.status.value}'")
@@ -1582,6 +1585,10 @@ async def _process_position_cancel(
     pos = await db.get(PlanPosition, position_id)
     if pos is None or pos.deleted_at is not None:
         return BatchActionResult(position_id=position_id, status="failed", reason="Position not found")
+    try:
+        require_current_length_model(await db.get(ProductionPlan, pos.production_plan_id))
+    except ValueError as exc:
+        return BatchActionResult(position_id=position_id, status="failed", reason=str(exc))
     if pos.status == PlanPositionStatus.cancelled:
         return BatchActionResult(position_id=position_id, status="skipped", reason="Position is already cancelled")
     if pos.status not in {PlanPositionStatus.approved, PlanPositionStatus.released}:
@@ -1621,6 +1628,10 @@ async def _process_position_restore(
     pos = await db.get(PlanPosition, position_id)
     if pos is None or pos.deleted_at is not None:
         return BatchActionResult(position_id=position_id, status="failed", reason="Position not found")
+    try:
+        require_current_length_model(await db.get(ProductionPlan, pos.production_plan_id))
+    except ValueError as exc:
+        return BatchActionResult(position_id=position_id, status="failed", reason=str(exc))
     if pos.status in {PlanPositionStatus.approved, PlanPositionStatus.released}:
         return BatchActionResult(position_id=position_id, status="skipped", reason="Position is already active")
     if pos.status != PlanPositionStatus.cancelled:

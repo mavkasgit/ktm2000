@@ -20,6 +20,7 @@ from .common import (
     _get_defect,
     _get_task,
     _get_user_snapshot_name,
+    _require_mutable_task,
     _to_decimal,
 )
 from .scrap_policy import find_or_create_scrap_section_id
@@ -53,6 +54,10 @@ async def create_defect(
     comment: str | None = None,
     idempotency_key: str | None = None,
 ) -> dict:
+    if task_id is not None:
+        task = await _get_task(db, task_id)
+        await _require_mutable_task(db, task)
+
     if idempotency_key:
         existing = await _check_idempotency(db, idempotency_key=idempotency_key, entity_type=Defect)
         if existing is not None:
@@ -62,7 +67,6 @@ async def create_defect(
     _ensure_positive(quantity, "quantity")
 
     if task_id is not None:
-        task = await _get_task(db, task_id)
         prod_id = task.product_id
         sect_id = task.section_id
     else:
@@ -194,6 +198,8 @@ async def defect_decide(
 ) -> dict:
     defect = await _get_defect(db, defect_id)
     task = await _get_task(db, defect.task_id) if defect.task_id is not None else None
+    if task is not None:
+        await _require_mutable_task(db, task)
 
     if decision_type in {DefectDecisionType.rework_current, DefectDecisionType.return_previous} and task is None:
         raise ValueError("Rework decisions require an associated work task")
@@ -432,6 +438,7 @@ async def rework_create(
 ) -> dict:
     defect = await _get_defect(db, defect_id)
     source_task = await _get_task(db, source_task_id)
+    await _require_mutable_task(db, source_task)
 
     if idempotency_key:
         existing = await _check_idempotency(db, idempotency_key=idempotency_key, entity_type=ReworkTask)

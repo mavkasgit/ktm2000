@@ -38,13 +38,17 @@ apply ≤ 1 с ✓ (факт ≤ 0.35 с).
 Errors (блокируют, `invalid`): `product_not_found`, `product_inactive`,
 `product_pair_not_found`, `hanger_calc_zero`, `no_route_candidate` / `selection.error`,
 `active_route_has_no_steps`, `route_contains_inactive_section`,
-`duplicate_sku_due_date`, сырьевой `raw_error` (`raw_length_not_found` и т.п.).
+`duplicate_sku_due_date`, `normal_length_not_found`.
 
-Warnings (не блокируют): `raw_length_substituted`, `paired_hanger_adjusted`,
+Warnings (не блокируют): `paired_hanger_adjusted`,
 `hanger_quantity_not_set`, `input_dimensions_unresolved`, `product_name_missing`,
 `invalid_input_length` / `invalid_output_length`, `paired_row_auto_included:*`,
 `row_selection_applied:*` / `row_selection_auto_included:*`,
 `paired_profile_product_unmapped`.
+
+`raw_length_not_found`, `raw_length_substituted` и правило «ближайшая сверху»
+не входят в runtime-контракт плана: длина из Excel — нормальная длина каталога,
+а `rawLength` используется только в расчёте N на подвес.
 
 ## 4. Изменения pipeline
 
@@ -122,6 +126,29 @@ Warnings (не блокируют): `raw_length_substituted`, `paired_hanger_adj
 - После операции — тост («создано X, обновлено Y» / «импорт откачен») и
   инвалидация `allFiles` / `allPositions` / `preview` / `sections.all` /
   `shopfloor.boardAll` / `spg.snapshotAll` (+ `batchPreview` батча, #172).
+
+### 4.6. Переход на normal-only и старые планы (ADR-0028, #186)
+
+- Новый импорт записывает в `PlanPosition.input_dimensions`, `outputs[].dimensions`,
+  `WorkTask` и последующий ledger ровно нормальную длину из Excel. Сырьевая длина
+  карточки в геометрию движения не материализуется; рассчитанное N хранится в
+  снимке строки импорта и не пересчитывается после изменения карточки.
+- `length_model_version = 1` переводит существующий план в режим только для
+  чтения. Чтение списка, превью, позиций, истории и файлов остаётся доступным.
+  Импорт, apply/rollback, approve/cancel/restore/delete, изменение количества,
+  назначение маршрута, выпуск и прямые shopfloor-операции возвращают
+  `400 {"detail": "legacy_plan_read_only"}`.
+- Для продолжения работы переимпортировать исходный Excel как новый план после
+  проверки реестра нормальных длин. Не переносить `length_model_version` вручную
+  и не править план SQL-запросом: геометрия и N должны снова пройти штатный импорт.
+- Прямые операционные вызовы по таким заданиям также запрещены: изменение
+  операции, complete/final-release, возврат остатка, task-linked брак/переделка,
+  передача, корректировка и отмена передачи. Проверка выполняется по цепочке
+  `WorkTask → SectionPlanLine → PlanPosition → ProductionPlan`, поэтому прямой
+  shopfloor-запрос не обходит guards планового API.
+- Остатки, созданные по старым размерам, переоцениваются только штатными
+  операциями движения после сверки физического остатка. Автоматически заменять
+  `2750` на `2700` нельзя: это разные размерные группы ledger.
 
 ## 5. Приёмка (каждый тикет)
 

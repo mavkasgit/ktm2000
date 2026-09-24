@@ -8,6 +8,8 @@ from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.models.defect import Defect
+from app.models.internal_plan import SectionPlanLine
+from app.models.production_plan import PlanPosition, ProductionPlan, require_current_length_model
 from app.models.route import RouteStage
 from app.models.transfer import Transfer
 from app.models.user import User
@@ -44,6 +46,19 @@ async def _get_task_for_update(db: AsyncSession, task_id: int) -> WorkTask:
         raise ValueError("Task not found")
     return task
 
+
+
+async def _require_mutable_task(db: AsyncSession, task: WorkTask) -> None:
+    """Запретить операционные изменения задания из legacy-плана (#186)."""
+    plan = await db.scalar(
+        select(ProductionPlan)
+        .join(PlanPosition, PlanPosition.production_plan_id == ProductionPlan.id)
+        .join(SectionPlanLine, SectionPlanLine.plan_position_id == PlanPosition.id)
+        .where(SectionPlanLine.id == task.section_plan_line_id)
+    )
+    if plan is None:
+        raise ValueError("Production plan not found for task")
+    require_current_length_model(plan)
 
 async def _get_transfer(db: AsyncSession, transfer_id: int) -> Transfer:
     transfer = await db.get(Transfer, transfer_id)

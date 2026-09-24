@@ -48,6 +48,7 @@ from app.services.shopfloor.common import (
     _check_idempotency,
     _ensure_positive,
     _get_route_stage,
+    _require_mutable_task,
     _get_task,
     _get_task_for_update,
     _get_transfer,
@@ -214,6 +215,8 @@ async def transfer_send(
     ``physical_handover_at`` (or ``performed_at``) so the ledger
     reflects when the work physically moved between sections.
     """
+    from_task = await _get_task(db, from_task_id)
+    await _require_mutable_task(db, from_task)
     if idempotency_key:
         existing = await _check_idempotency(db, idempotency_key=idempotency_key, entity_type=Transfer)
         if existing is not None:
@@ -223,8 +226,8 @@ async def transfer_send(
                 "status": existing.status.value,
                 "idempotent_replay": True,
             }
-
     from_task = await _get_task_for_update(db, from_task_id)
+    await _require_mutable_task(db, from_task)
     from_line = await db.get(SectionPlanLine, from_task.section_plan_line_id)
     if from_line is None:
         raise ValueError("Source task plan line not found")
@@ -545,6 +548,7 @@ async def correct_transfer(
 
     from_task = await _get_task(db, transfer.from_task_id)
     to_task = await _get_task(db, transfer.to_task_id)
+    await _require_mutable_task(db, from_task)
 
     # 1. Domain-guard: источник имеет достаточно transferable (с учётом
     # возврата старого количества после компенсации). Лимит — через модуль
@@ -692,6 +696,7 @@ async def cancel_transfer(
 
     from_task = await _get_task(db, transfer.from_task_id)
     to_task = await _get_task(db, transfer.to_task_id)
+    await _require_mutable_task(db, from_task)
 
     # Domain-guard: приёмная сторона не должна иметь завершённых/отклонённых
     # частей сверх sent_quantity; иначе cancel создал бы отрицательный баланс.
