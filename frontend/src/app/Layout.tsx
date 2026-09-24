@@ -27,13 +27,10 @@ export function Layout() {
   const location = useLocation()
   const sidebarRef = useRef<HTMLDivElement>(null)
   const { user, logout, refreshUser, rolesCatalog, roleLabel, roleSections } = useAuth()
-  const isSingleWindowShopfloor =
-    location.pathname.startsWith("/section-tasks") &&
-    new URLSearchParams(location.search).get("singleWindow") === "1"
   const isBulkMode =
     location.pathname.startsWith("/section-tasks") &&
     new URLSearchParams(location.search).get("bulk") === "1"
-  const hideSidebar = isSingleWindowShopfloor || isBulkMode
+  const hideSidebar = isBulkMode
 
   // Close mobile menu when route changes
   useEffect(() => {

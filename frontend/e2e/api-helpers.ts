@@ -263,6 +263,7 @@ export async function apiEnsureCatalogProduct(spec: {
   sku: string;
   name: string;
   lengthsMm: number[];
+  rawLengthMm?: number | null;
   perimeterMm?: number;
   mountWidthMm?: number;
   quantityPerHanger?: number;
@@ -279,9 +280,11 @@ export async function apiEnsureCatalogProduct(spec: {
     sku: spec.sku,
     name: spec.name,
     is_catalog_item: true,
-    lengths_mm: spec.lengthsMm,
-    primary_length_mm: primary,
-    length_mm: primary,
+    lengths: spec.lengthsMm.map((lengthMm) => ({
+      length_mm: lengthMm,
+      raw_length_mm: spec.rawLengthMm ?? null,
+      is_primary: lengthMm === primary,
+    })),
     perimeter_mm: spec.perimeterMm ?? null,
     mount_width_mm: spec.mountWidthMm ?? null,
     quantity_per_hanger: hanger,

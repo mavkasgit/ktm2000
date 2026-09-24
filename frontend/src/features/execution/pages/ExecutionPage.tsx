@@ -157,7 +157,6 @@ export function ExecutionPage() {
   const [drawerOpen, setDrawerOpen] = useState(false);
   const [searchQuery, setSearchQuery] = useState("");
   const [debouncedSearchQuery, setDebouncedSearchQuery] = useState("");
-  const [hideColumnIds, setHideColumnIds] = useState(false);
   const {
     bindColumn,
     columnFilters,
@@ -747,14 +746,7 @@ export function ExecutionPage() {
         }
       },
     },
-    {
-      kind: "toggle" as const,
-      key: "hide-ids",
-      label: "Скрыть ID/Строка/План",
-      checked: hideColumnIds,
-      onChange: setHideColumnIds,
-    },
-  ], [hideColumnIds, searchQuery, bulkMode, exitBulkMode]);
+  ], [searchQuery, bulkMode, exitBulkMode]);
 
   const uniqueValuesByField = useMemo(() => {
     return {
@@ -1022,7 +1014,6 @@ export function ExecutionPage() {
         rangeLabel={getRangeLabel(rows.length, total, { onPage: true })}
         bindColumn={bindColumn}
         uniqueValuesByField={uniqueValuesByField}
-        hideColumnIds={hideColumnIds}
         bulkSelection={bulkSelection}
         bulkProgress={bulkProgress}
         bulkSummary={bulkSummary}

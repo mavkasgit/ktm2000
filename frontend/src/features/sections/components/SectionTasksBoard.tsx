@@ -273,16 +273,6 @@ function renderTaskRow(
         </Badge>
       </td>
       <td className="p-2">
-        {task.previous_stage ? (
-          <div className="text-xs">
-            <div>Годные: <span className="font-medium">{fmtQty(task.previous_stage.completed_quantity)}</span></div>
-            <div>Передано: <span className="font-medium">{fmtQty(task.previous_stage.transferred_quantity)}</span></div>
-          </div>
-        ) : (
-          <span className="text-xs text-muted-foreground">—</span>
-        )}
-      </td>
-      <td className="p-2">
         {readOnly ? (
           <span className="text-xs text-muted-foreground">Просмотр</span>
         ) : (
@@ -357,11 +347,6 @@ function renderMobileCard(
 
       {renderOutputsProgress(task, "block text-xs text-muted-foreground tabular-nums border-t pt-2")}
 
-      {task.previous_stage ? (
-        <div className="text-xs text-muted-foreground border-t pt-2">
-          Пред. этап: годные {fmtQty(task.previous_stage.completed_quantity)}, передано {fmtQty(task.previous_stage.transferred_quantity)}
-        </div>
-      ) : null}
 
       <div className="flex gap-2 pt-1">
         {readOnly ? (
@@ -460,7 +445,6 @@ function TableTaskGroupRow({
           )}
         </div>
       </td>
-      <td className={`p-2 text-xs text-muted-foreground ${isBulkMode && allSelected ? TABLE_ROW_STYLES.selectedGroupHeader : TABLE_ROW_STYLES.defaultGroupRow}`}>—</td>
       <td className={`p-2 ${isBulkMode && allSelected ? TABLE_ROW_STYLES.selectedGroupHeader : TABLE_ROW_STYLES.defaultGroupRow}`}>
         {onCompleteGroup && (
           <Button
@@ -1013,9 +997,6 @@ export function SectionTasksBoard({
                     />
                   </th>
                   <th className={`${headerCellClass} text-left`}>
-                    <span className="text-xs font-medium text-muted-foreground">Пред. этап</span>
-                  </th>
-                  <th className={`${headerCellClass} text-left`}>
                     <span className="text-xs font-medium text-muted-foreground">Действия</span>
                   </th>
                   <TableCornerResetHeader
@@ -1028,7 +1009,7 @@ export function SectionTasksBoard({
               {sortedTasks.length === 0 ? (
                 <tbody>
                   <tr>
-                    <td colSpan={14} className="p-8 text-center text-sm text-muted-foreground">
+                    <td colSpan={13} className="p-8 text-center text-sm text-muted-foreground">
                       Нет задач, соответствующих фильтру
                     </td>
                   </tr>

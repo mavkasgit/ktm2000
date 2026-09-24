@@ -21,8 +21,8 @@ export function SectionPanelToggles({ mode, onChange }: SectionPanelTogglesProps
           key={id}
           variant={mode === id ? "default" : "ghost"}
           size="sm"
-          className={`h-7 px-2.5 text-xs whitespace-nowrap ${
-            mode === id ? "" : "text-slate-600 hover:bg-white/80 hover:text-slate-900"
+          className={`h-10 px-4 text-xl font-bold leading-tight whitespace-nowrap ${
+            mode === id ? "" : "text-slate-700 hover:bg-white/80 hover:text-slate-900"
           }`}
           onClick={() => onChange(id)}
         >

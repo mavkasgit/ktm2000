@@ -3,7 +3,7 @@ import { describe, expect, it, vi } from "vitest";
 
 import type { ProductionPlanningRow } from "@/shared/api/productionPlans";
 
-import { executionTableColumns, getExecutionTableColumns } from "./execution-table-columns";
+import { executionTableColumns } from "./execution-table-columns";
 import { ExecutionRow } from "./ExecutionRow";
 
 const row: ProductionPlanningRow = {
@@ -46,7 +46,6 @@ describe("ExecutionRow", () => {
     expect(rowColumn).toEqual(
       expect.objectContaining({ id: "row", label: "№ / План", width: "110px" }),
     );
-    expect(getExecutionTableColumns(false).filter((column) => column.id === "row")).toHaveLength(1);
     expect(executionTableColumns.some((column) => column.id === "plan")).toBe(false);
 
     render(

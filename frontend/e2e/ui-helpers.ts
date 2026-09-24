@@ -274,33 +274,44 @@ export async function approvePositionViaUI(page: Page, position: ApprovablePosit
 
   const planRow = page.locator(`#plan-position-${position.id}`);
   await expect(planRow).toBeVisible({ timeout: 15_000 });
-
   const approveBtn = planRow.getByRole("button", { name: "Утвердить" });
   await expect(approveBtn).toBeVisible({ timeout: 5_000 });
-  await approveBtn.click();
 
-  const forceBtn = page.locator("button", { hasText: "Утвердить всё равно" }).filter({ visible: true });
+  const approveResponse = page.waitForResponse(
+    (response) =>
+      response.request().method() === "POST" &&
+      response.url().includes(`/positions/${position.id}/approve`),
+    { timeout: 15_000 },
+  );
   try {
-    await expect(forceBtn).toBeVisible({ timeout: 3_000 });
-    await forceBtn.click();
-    await expect(page.getByRole("alertdialog")).not.toBeVisible({ timeout: 5_000 });
-  } catch {
-    // no risk dialog — ok
+    await approveBtn.click();
+    const forceBtn = page.locator("button", { hasText: "Утвердить всё равно" }).filter({ visible: true });
+    try {
+      await expect(forceBtn).toBeVisible({ timeout: 3_000 });
+      await forceBtn.click();
+    } catch {
+      // Риск-диалог не открылся: approve выполняется без force.
+    }
+    const response = await approveResponse;
+    expect(response.ok(), `Approve position #${position.id}: HTTP ${response.status()}`).toBeTruthy();
+  } finally {
+    // response ожидается внутри try; при ошибке Playwright сам завершает ожидатель.
   }
 
-  await expect(approveBtn).not.toBeVisible({ timeout: 8_000 }).catch(async () => {
-    // Таблица плана иногда не перерисовывается после approve (refetch успевает
-    // раньше коммита). Перезагружаем и проверяем статус строки на свежих данных:
-    // если утверждение реально прошло — строки с кнопкой больше нет.
+  const successToast = page.getByText("Позиция утверждена", { exact: true });
+  await expect(successToast).toBeVisible({ timeout: 15_000 });
+  const approveButton = planRow.getByRole("button", { name: "Утвердить" });
+  if ((await approveButton.count()) > 0) {
     await page.reload();
     await expect(page.getByPlaceholder("Поиск")).toBeVisible({ timeout: 15_000 });
     if (position.sku) {
       await page.getByPlaceholder("Поиск").fill(singleSku(position.sku));
     }
-    await expect(approveBtn).not.toBeVisible({ timeout: 15_000 });
+  }
+  await expect(planRow.getByRole("button", { name: "Утвердить" })).toHaveCount(0, {
+    timeout: 15_000,
   });
 }
-
 export async function takeToWorkViaUI(page: Page, position: ApprovablePosition) {
   await page.goto("/execution");
   const execSearch = page.getByPlaceholder("Поиск");

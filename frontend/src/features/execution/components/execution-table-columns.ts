@@ -7,7 +7,6 @@ export interface ExecutionTableColumn {
   label: string;
   width: string;
   sortField?: ExecutionSortField;
-  hiddenWhenIdsHidden?: boolean;
   colClassName?: string;
   headerClassName?: string;
   cellClassName?: string;
@@ -22,7 +21,6 @@ export const executionTableColumns: ExecutionTableColumn[] = [
     label: "ID",
     width: "64px",
     sortField: "id",
-    hiddenWhenIdsHidden: true,
     colClassName: serviceColClass,
     headerClassName: serviceCellClass,
     cellClassName: `${serviceCellClass} font-mono text-muted-foreground`,
@@ -32,7 +30,6 @@ export const executionTableColumns: ExecutionTableColumn[] = [
     label: "№ / План",
     width: "110px",
     sortField: "row",
-    hiddenWhenIdsHidden: true,
     colClassName: serviceColClass,
     headerClassName: serviceCellClass,
     cellClassName: serviceCellClass,
@@ -96,6 +93,6 @@ export const executionTableColumns: ExecutionTableColumn[] = [
   },
 ];
 
-export function getExecutionTableColumns(hideColumnIds: boolean) {
-  return executionTableColumns.filter((column) => !hideColumnIds || !column.hiddenWhenIdsHidden);
+export function getExecutionTableColumns() {
+  return executionTableColumns;
 }

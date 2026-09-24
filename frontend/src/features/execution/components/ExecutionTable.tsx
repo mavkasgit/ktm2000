@@ -54,7 +54,6 @@ interface ExecutionTableProps {
     stage: string[];
     dimensions: string[];
   };
-  hideColumnIds: boolean;
   // bulk
   bulkSelection: {
     selectedIds: Set<number>;
@@ -116,7 +115,6 @@ export function ExecutionTable({
   getAriaSort,
   bindColumn,
   uniqueValuesByField,
-  hideColumnIds,
   bulkSelection,
   bulkProgress,
   bulkSummary,
@@ -149,7 +147,7 @@ export function ExecutionTable({
   onLimitChange,
   rangeLabel,
 }: ExecutionTableProps) {
-  const visibleColumns = getExecutionTableColumns(hideColumnIds);
+  const visibleColumns = getExecutionTableColumns();
   const headerCellClass = `${DATA_TABLE_STYLES.headerRow} ${DATA_TABLE_STYLES.headerCell}`;
 
   const actionVariant = (actionId: string): "default" | "destructive" | "outline" | "success" => {

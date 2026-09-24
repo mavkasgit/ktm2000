@@ -25,17 +25,16 @@ import {
 } from "./ui-helpers";
 
 /**
- * @ui — Пила внутри ПОЛНОГО цикла: раскрой сырья 2,75 м на ЧЕТЫРЕ длины.
+ * @ui — Пила внутри ПОЛНОГО цикла: раскрой сырья 2,7 м на ЧЕТЫРЕ длины.
  *
  * Сетап — бесфайловый (API, xlsx-фикстуры не храним):
- *  - каталог ЮП-2083, сырьевая длина 2750 мм (ADR-0024: импорт материализует
- *    вход позиции «ближайшей сверху» сырьевой длиной, поэтому план пишет 2,7 м,
- *    а позиция получает 2,75 м);
- *  - остаток: 700 заготовок 2,75 м на «Склад сырья». Потребность по входам —
+ *  - каталог ЮП-2083: нормальная длина 2700 мм, сырьевая длина 2750 мм
+ *    используется только для расчёта количества на подвес (ADR-0024);
+ *  - остаток: 700 заготовок 2,7 м на «Склад сырья». Потребность по входам —
  *    400 (150 + 50 + 150 + 50), сумма штук ГП по позициям — 650
  *    (250 + 50 + 300 + 50): запас покрывает оба чтения плана. Все количества
  *    кратны норме подвеса (50): вход P1 — 3 подвеса, его выходы — 5. До пилы
- *    материал считается в штуках входа (заготовки сырьевой длины) — длины
+ *    материал считается в штуках входа (заготовки нормальной длины) — длины
  *    появляются только на пиле (ADR-0002);
  *  - план (`/imports/excel/simulate`) — четыре позиции артикула:
  *      P1 ГП: вход 150 × 2,7 м → 0,9 × 50 + 1,35 × 100 + 1,8 × 50 + 2,7 × 50
@@ -58,11 +57,11 @@ import {
  */
 
 const SAW_SECTION_NAME = "Пила";
-/** Вход позиции-раскроя (заготовки 2,75 м) — кратен норме подвеса (3 подвеса). */
+/** Вход позиции-раскроя: 150 заготовок нормальной длины 2,7 м. */
 const INPUT_QTY = 150;
-/** Сырьевая длина входа (ADR-0024: 2,7 м в плане → 2,75 м у позиции). */
-const INPUT_LENGTH_MM = 2750;
-/** Выходы позиции-раскроя: длина → плановое количество (кратно норме подвеса 50). */
+const INPUT_LENGTH_MM = 2700;
+/** Сырьевая длина нужна только для расчёта количества на подвесе. */
+const RAW_LENGTH_MM = 2750;
 const OUTPUTS = [
   { mm: 900, total: 50 },
   { mm: 1350, total: 100 },
@@ -81,11 +80,11 @@ function lengthLabel(mm: number): string {
   return `${String(mm / 1000).replace(".", ",")} м`;
 }
 
-/** Строка задачи-раскроя на доске пилы: узнаётся по сводке операции (вход). */
+/** Строка задачи-раскроя на доске пилы: сводка входа и выходов. */
 function splitTaskRow(page: Page): Locator {
   return page
     .locator("tr")
-    .filter({ hasText: `${INPUT_QTY} шт × ${lengthLabel(INPUT_LENGTH_MM)}` })
+    .filter({ hasText: /Резка на пиле.*2,7\s*→\s*0,9×50/ })
     .first();
 }
 
@@ -167,10 +166,11 @@ async function splitSawIntoLengthsViaUI(page: Page, sectionId: number): Promise<
     return false;
   }
 
-  // Сводка операции: вход в сырьевых заготовках + все четыре выхода.
-  await expect(row).toContainText(`${INPUT_QTY} шт × ${lengthLabel(INPUT_LENGTH_MM)}`);
+  // На доске вход отображается как нормальная длина 2,7 м; сырьевая 2,75 м
+  // используется backend только при расчёте количества на подвес.
+  await expect(row).toContainText(lengthLabel(INPUT_LENGTH_MM));
   for (const out of OUTPUTS) {
-    await expect(row).toContainText(`${out.total} × ${lengthLabel(out.mm)}`);
+    await expect(row).toContainText(`${lengthLabel(out.mm)}×${out.total}`);
   }
 
   const completeBtn = () => splitTaskRow(page).getByRole("button", { name: "Завершить" }).first();
@@ -182,9 +182,7 @@ async function splitSawIntoLengthsViaUI(page: Page, sectionId: number): Promise<
     await completeBtn().click();
     const drawer = page.getByRole("dialog");
     await expect(drawer).toBeVisible({ timeout: 5_000 });
-
-    // Материал ещё не доехал до пилы («Вход: 0») — вернёмся в следующем раунде.
-    // Подписи диалога факта: «Вход: 150 × 2,75 м», «Раскроено: 0», «Осталось: 150».
+    // Подписи диалога факта: «Вход: 150 × 2,7 м», «Раскроено: 0», «Осталось: 150».
     const header = (await drawer.textContent()) ?? "";
     const issued = Number(header.match(/Вход:\s*(\d+)/)?.[1] ?? 0);
     const alreadyCut = Number(header.match(/Раскроено:\s*(\d+)/)?.[1] ?? 0);
@@ -247,15 +245,16 @@ test.describe("@ui Пила: раскрой 2,75 м на четыре длины
       if (response.status() < 400 || !response.url().includes("/api/")) return;
       const body = await response.text().catch(() => "");
       console.log(
-        `[api ${response.status()}] ${response.request().method()} ${response.url()} → ${body.slice(0, 400)}`,
+        `[api ${response.status()}] ${response.request().method()} ${response.url()} → ${body.slice(0, 1000)}`,
       );
     });
 
-    // ── ШАГ 1. Каталог: ЮП-2083 с сырьевой длиной 2750 мм ──────────────────
+    // ── ШАГ 1. Каталог: нормальная длина 2700 мм, сырьевая 2750 мм ───────
     await apiEnsureCatalogProduct({
       sku: SAW4_SKU,
       name: "Стык 38мм",
-      lengthsMm: [2750],
+      lengthsMm: [INPUT_LENGTH_MM],
+      rawLengthMm: RAW_LENGTH_MM,
       perimeterMm: 81.5,
       mountWidthMm: 36.9,
       quantityPerHanger: 50,
@@ -399,6 +398,8 @@ test.describe("@ui Пила: раскрой 2,75 м на четыре длины
     const sawSectionId = await openSawBoard(page);
     let sawSplitDone = false;
     for (let round = 0; round < 40; round++) {
+      console.log("[DEBUG] остановка перед передачами; продолжайте вручную в Playwright Inspector");
+      await page.pause();
       const sent = await sendReadyTransfersViaUI(page, SAW4_SKU);
       // Пила — строго до общего завершения задач: иначе П1 уйдёт полной порцией.
       if (!sawSplitDone) {

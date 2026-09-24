@@ -153,50 +153,27 @@ export function SectionsTasksPage() {
   const [planModalOpen, setPlanModalOpen] = useState(false);
   const [selectedPlanIds, setSelectedPlanIds] = useState<Set<number>>(new Set());
 
-  // Bulk mode state
-  const [bulkMode, setBulkMode] = useState(searchParams.get("bulk") === "1" || searchParams.get("singleWindow") === "1");
+  // Bulk mode state. Mass operations stay in the current page and do not
+  // activate single-window/fullscreen navigation.
+  const [bulkMode, setBulkMode] = useState(searchParams.get("bulk") === "1");
   useEffect(() => {
     setSelectedPlanIds(new Set());
   }, [sectionId]);
   const bulkSelection = useBulkSelection<number>();
-  const activatedSingleWindowRef = useRef(false);
-
-  // Sync bulkMode with URL search params
-  useEffect(() => {
-    const fromUrl = searchParams.get("bulk") === "1" || searchParams.get("singleWindow") === "1";
-    setBulkMode(fromUrl);
-  }, [searchParams]);
   const locationRef = useRef(location);
   locationRef.current = location;
+
+  useEffect(() => {
+    setBulkMode(searchParams.get("bulk") === "1");
+  }, [searchParams]);
 
   const toggleBulkMode = useCallback((force?: boolean) => {
     setBulkMode((prev) => {
       const nextBulk = force !== undefined ? force : !prev;
       if (!nextBulk) bulkSelection.clear();
-
-      const sp = new URLSearchParams(locationRef.current.search);
-      if (nextBulk) {
-        sp.set("bulk", "1");
-        const swAlready = sp.get("singleWindow") === "1";
-        if (!swAlready && sectionId) {
-          sp.set("singleWindow", "1");
-          activatedSingleWindowRef.current = true;
-        }
-      } else {
-        sp.delete("bulk");
-        if (activatedSingleWindowRef.current) {
-          sp.delete("singleWindow");
-          activatedSingleWindowRef.current = false;
-        }
-      }
-      const qs = sp.toString();
-      const expected = qs ? `?${qs}` : "";
-      if (locationRef.current.search !== expected) {
-        navigate(`${locationRef.current.pathname}${expected || ""}`, { replace: true });
-      }
       return nextBulk;
     });
-  }, [bulkSelection, sectionId, navigate]);
+  }, [bulkSelection]);
   const [bulkProgress, setBulkProgress] = useState<BulkRunnerProgress | null>(null);
   const [bulkResults, setBulkResults] = useState<BulkActionResultItem<number>[]>([]);
   const [bulkResultsOpen, setBulkResultsOpen] = useState(false);
@@ -431,7 +408,6 @@ export function SectionsTasksPage() {
             resetTimer = null;
           }
           lastEscapeAtRef.current = 0;
-          activatedSingleWindowRef.current = false;
           navigate(sectionId ? `/section-tasks/${sectionId}` : "/section-tasks");
         } else {
           lastEscapeAtRef.current = now;
@@ -967,6 +943,20 @@ export function SectionsTasksPage() {
       )}
 
       <section className="space-y-4">
+        {!isSingleWindow && (
+          <div className="space-y-2">
+            <div className="text-sm font-semibold text-slate-700">Выберите рабочий участок</div>
+            <SectionSwitcherTiles
+              sections={(sections || []).filter((section) => section.is_active && isProductionSection(section.type))}
+              summary={summary?.sections || []}
+              selectedSectionId={sectionId}
+              onSelect={(nextId) => {
+                setSectionId(nextId);
+                navigate(`/section-tasks/${nextId}`);
+              }}
+            />
+          </div>
+        )}
         {selectedSection && !selectedSectionIsStock && (
           <div
             className="rounded-xl border px-4 py-3"
@@ -974,43 +964,17 @@ export function SectionsTasksPage() {
           >
             <div className="flex items-center justify-between gap-3">
               <div className="flex items-center gap-3 min-w-0 flex-wrap">
-                {isSingleWindow ? (
-                  <SectionSwitcherTiles
-                    sections={(sections || []).filter((s) => s.is_active && isProductionSection(s.type))}
-                    summary={summary?.sections || []}
-                    selectedSectionId={sectionId}
-                    onSelect={(nextId) => {
-                      setSectionId(nextId);
-                      navigate(`/section-tasks/${nextId}?singleWindow=1`);
-                    }}
-                    variant="popover"
-                    headerContent={
-                      <>
-                        <span
-                          className="inline-flex h-10 w-10 shrink-0 items-center justify-center rounded-lg"
-                          style={{ backgroundColor: "#FFFFFFB3", color: selectedSectionColor }}
-                        >
-                          {selectedSection.icon ? renderIcon(selectedSection.icon, "h-5 w-5") : <span className="h-2.5 w-2.5 rounded-full bg-current" />}
-                        </span>
-                        <div className="min-w-0 truncate text-xl font-bold leading-tight text-slate-900">
-                          {selectedSection.name}
-                        </div>
-                      </>
-                    }
-                  />
-                ) : (
-                  <>
-                    <span
-                      className="inline-flex h-10 w-10 shrink-0 items-center justify-center rounded-lg"
-                      style={{ backgroundColor: "#FFFFFFB3", color: selectedSectionColor }}
-                    >
-                      {selectedSection.icon ? renderIcon(selectedSection.icon, "h-5 w-5") : <span className="h-2.5 w-2.5 rounded-full bg-current" />}
-                    </span>
-                    <div className="min-w-0 truncate text-xl font-bold leading-tight text-slate-900">
-                      {selectedSection.name}
-                    </div>
-                  </>
-                )}
+                <>
+                  <span
+                    className="inline-flex h-10 w-10 shrink-0 items-center justify-center rounded-lg"
+                    style={{ backgroundColor: "#FFFFFFB3", color: selectedSectionColor }}
+                  >
+                    {selectedSection.icon ? renderIcon(selectedSection.icon, "h-5 w-5") : <span className="h-2.5 w-2.5 rounded-full bg-current" />}
+                  </span>
+                  <div className="min-w-0 truncate text-xl font-bold leading-tight text-slate-900">
+                    {selectedSection.name}
+                  </div>
+                </>
                 {!isSingleWindowBlocked && sectionId && (
                   <SectionPanelToggles
                     mode={sectionContentMode}
@@ -1071,17 +1035,6 @@ export function SectionsTasksPage() {
           </div>
         )}
 
-        {!isSingleWindow && (
-          <SectionSwitcherTiles
-            sections={(sections || []).filter((section) => section.is_active && isProductionSection(section.type))}
-            summary={summary?.sections || []}
-            selectedSectionId={sectionId}
-            onSelect={(nextId) => {
-              setSectionId(nextId);
-              navigate(`/section-tasks/${nextId}`);
-            }}
-          />
-        )}
 
         {!isSingleWindowBlocked && sectionId && (
           <div className="space-y-4">
