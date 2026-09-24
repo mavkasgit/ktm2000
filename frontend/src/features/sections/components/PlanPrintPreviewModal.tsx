@@ -15,15 +15,8 @@
 import { useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 import * as RadixDialog from "@radix-ui/react-dialog";
 import type { SectionBoardTask } from "@/shared/api/shopfloor";
-import { formatDimensionsLabel } from "@/shared/api/stock";
-import type { GroupingProfile } from "../lib/groupingProfiles";
-import { groupTasksByProfile } from "../lib/groupTasksByProfile";
-import { buildPlanRows, type PlanTableMode } from "../lib/planTableRows";
-import {
-  getQtyPerHanger,
-  getPairedHangerLabel,
-  adjustQtyToHanger,
-} from "./PlanHangerDisplay";
+import { PlanTaskTable } from "./PlanTaskTable";
+import type { PlanTaskGroupingMode } from "../lib/planTaskGroups";
 
 // ---------------------------------------------------------------------------
 // Типы (реэкспорт из PlanModal для удобства импорта)
@@ -182,7 +175,7 @@ interface PlanPrintPreviewModalProps {
   singleProfile: GroupingProfile | null;
   showSingleTable: boolean;
   settings: PrintSettings;
-  hiddenGroupKeys: Set<string>;
+  groupingMode: PlanTaskGroupingMode;
 }
 
 export function PlanPrintPreviewModal({
@@ -197,7 +190,7 @@ export function PlanPrintPreviewModal({
   singleProfile,
   showSingleTable,
   settings,
-  hiddenGroupKeys,
+  groupingMode,
 }: PlanPrintPreviewModalProps) {
   const contentRef = useRef<HTMLDivElement>(null);
 
@@ -209,54 +202,33 @@ export function PlanPrintPreviewModal({
     window.print();
   }
 
-  const showBefore =
-    settings.tableMode === "before" || settings.tableMode === "both";
-  const showAfter =
-    settings.tableMode === "after" || settings.tableMode === "both";
+  const printContent = tasks.length > 0;
 
   useEffect(() => {
-    const handler = (e: KeyboardEvent) => {
-      if (e.key === "Escape") onClose();
+    const handler = (event: KeyboardEvent) => {
+      if (event.key === "Escape") onClose();
     };
     window.addEventListener("keydown", handler);
     return () => window.removeEventListener("keydown", handler);
   }, [onClose]);
 
-  const contentBlocks = useMemo(() => {
-    const blocks: { title: string; profile: GroupingProfile; mode: PlanTableMode }[] = [];
-    if (showSingleTable && singleProfile) {
-      blocks.push({ title: "План", profile: singleProfile, mode: "issue" });
-    } else {
-      if (showBefore) blocks.push({ title: "План выдачи на участок", profile: beforeProfile, mode: "issue" });
-      if (showAfter) blocks.push({ title: "План сдачи с участка", profile: afterProfile, mode: "handover" });
-    }
-    return blocks;
-  }, [showSingleTable, singleProfile, showBefore, showAfter, beforeProfile, afterProfile]);
-
-  // Split content into A4 pages based on actual measured height.
-  // Контент всегда рендерится напрямую (без скрытого measurement-контейнера),
-  // а пагинация применяется через CSS @media print (page-break-inside: avoid
-  // на строках + .print-page { page-break-after: always }).
-  // Здесь только измеряем, чтобы показать номера страниц «1/N» в шапке.
+  const hasContent = printContent;
   const [pageCount, setPageCount] = useState(1);
 
   useLayoutEffect(() => {
-    const el = contentRef.current;
-    if (!el || contentBlocks.length === 0) {
+    const element = contentRef.current;
+    if (!element || !printContent) {
       setPageCount(1);
       return;
     }
-    const A4_CONTENT_PX = 990; // ~277mm at 96dpi, minus header/footer
-    // total height = single page (header + content) — измеряем после рендера
     requestAnimationFrame(() => {
-      const h = el.scrollHeight;
-      // header height ≈ 50px, so available = A4_CONTENT_PX
-      const total = Math.max(1, Math.ceil(h / A4_CONTENT_PX));
-      setPageCount(total);
+      const height = element.scrollHeight;
+      setPageCount(Math.max(1, Math.ceil(height / 990)));
     });
-  }, [settings, tasks, contentBlocks, title]);
+  }, [printContent, tasks, title]);
 
-  const hasContent = contentBlocks.length > 0;
+
+
 
 
   return (
@@ -354,17 +326,13 @@ export function PlanPrintPreviewModal({
                   </div>
                 </div>
                 {hasContent ? (
-                  contentBlocks.map((block, idx) => (
-                    <PrintPreviewTable
-                      key={idx}
-                      title={block.title}
-                      tasks={tasks}
-                      profile={block.profile}
-                      mode={block.mode}
-                      settings={settings}
-                      hiddenGroupKeys={hiddenGroupKeys}
-                    />
-                  ))
+                  <PlanTaskTable
+                    tasks={tasks}
+                    mode={groupingMode}
+                    hiddenGroupKeys={hiddenGroupKeys}
+                    onHideGroup={() => undefined}
+                    printMode
+                  />
                 ) : (
                   <p className="text-center text-muted-foreground py-8 text-sm">
                     Нет данных для печати

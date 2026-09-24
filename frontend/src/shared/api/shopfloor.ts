@@ -65,6 +65,8 @@ export type SectionBoardTask = {
   planned_quantity: string;
   status: string;
   output_kind?: string | null;
+  quantity_per_hanger?: number | null;
+  hanger_count?: number | null;
   cache: {
     available_quantity: string;
     issued_quantity: string;

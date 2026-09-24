@@ -22,6 +22,7 @@ from app.models.section import Section
 from app.models.transfer import Transfer, TransferStatus
 from app.models.work_task import WorkTask, WorkTaskStatus
 from app.stock.models import QualityState, Reason, StockBalance, StockTransaction
+from app.services.plan_position_hanger import resolve_positions_hanger
 
 from .cache import _compute_available_from_balances
 from .common import _to_decimal
@@ -248,6 +249,7 @@ async def get_section_board(
         select(PlanPosition).where(PlanPosition.id.in_(plan_position_ids))
     )).scalars().all()
     position_by_id: dict[int, PlanPosition] = {p.id: p for p in all_positions}
+    hanger_values = await resolve_positions_hanger(db, all_positions)
 
     # Load all WorkTask for next task lookup AND for previous stages operation lookup
     next_line_ids = [line.id for line in all_lines]
@@ -566,6 +568,19 @@ async def get_section_board(
             "route_history_full": route_history_full,
             "route_history_after_full": route_history_after_full,
             "operation_codes": operation_codes,
+            "quantity_per_hanger": (
+                hanger_values[position_by_id[line.plan_position_id].id].quantity_per_hanger
+                if position_by_id.get(line.plan_position_id)
+                else None
+            ),
+            "hanger_count": (
+                int(
+                    (Decimal(task.planned_quantity) / hanger_values[position_by_id[line.plan_position_id].id].quantity_per_hanger).to_integral_value(rounding="ROUND_CEILING")
+                )
+                if position_by_id.get(line.plan_position_id)
+                and hanger_values[position_by_id[line.plan_position_id].id].quantity_per_hanger
+                else None
+            ),
             "operation_names": operation_names,
             # —— трансформация габаритов (ADR-0002) ——
             "transforms_dimensions": stage.transforms_dimensions,
