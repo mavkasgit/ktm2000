@@ -1,5 +1,6 @@
 import { fmtQty } from "@/shared/utils/fmtQty"
-import { Input, Button } from "@/shared/ui"
+import { Input, Button, RouteOriginMark } from "@/shared/ui"
+import { routeOriginLabel } from "@/shared/lib/routeMeta"
 import { type RowDetailsContentMode, type RowDetailsData } from "./types"
 import { useEffect, useMemo, useState } from "react"
 import { useQueryClient, useMutation } from "@tanstack/react-query"
@@ -136,6 +137,7 @@ export function RowDetailsContent({
   const hasIssues = hasErrors || hasWarnings || hasRouteCheckIssues
 
   const routeText = data.routeName || data.routeError || "Не назначен"
+  const routeOriginText = routeOriginLabel(data.routeOrigin)
   const positionIdText = typeof data.id === "number" || typeof data.id === "string" ? String(data.id) : "—"
   const statusLabel = statusLabels[data.status] || data.status
 
@@ -149,7 +151,8 @@ export function RowDetailsContent({
           <span className="text-muted-foreground">Маршрут:</span>
           <span className={`min-w-0 truncate font-medium ${data.routeError ? "text-red-700" : ""}`}>
             {routeText}
-            {data.routeName && data.routeMeta ? ` (${data.routeMeta})` : ""}
+            {data.routeName && routeOriginText ? ` (${routeOriginText})` : ""}
+            {data.routeName && data.routeOrigin.kind === "checkmark" ? <> <RouteOriginMark /></> : null}
           </span>
         </div>
         <div className="flex flex-wrap items-center gap-x-2 gap-y-1 text-muted-foreground">

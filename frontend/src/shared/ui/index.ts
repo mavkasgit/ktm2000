@@ -62,6 +62,7 @@ export { QuantityRangeCell } from "./QuantityRangeCell";
 export type { QuantityRangeCellProps } from "./QuantityRangeCell";
 export { CutLayoutCell } from "./CutLayoutCell";
 export type { CutLayoutCellProps } from "./CutLayoutCell";
+export { RouteOriginMark } from "./RouteOriginMark";
 export {
   DropdownMenu,
   DropdownMenuTrigger,

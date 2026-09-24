@@ -1,8 +1,9 @@
 import { ProductionPlanningRow } from "@/shared/api/productionPlans";
 import { formatDimensionsLabel } from "@/shared/api/stock";
-import { Badge, Button, CutLayoutCell, PositionSkuCell, QuantityRangeCell, TableCornerResetCell } from "@/shared/ui";
+import { Badge, Button, CutLayoutCell, PositionSkuCell, QuantityRangeCell, RouteOriginMark, TableCornerResetCell } from "@/shared/ui";
 import { ArrowRight, RotateCcw, Trash2, XCircle } from "lucide-react";
-import { positionStatusLabels, positionStatusColor, routeMetaLabel, planPreviewUrl, getLaunchBlockReason } from "./execution-utils";
+import { routeOrigin, routeOriginLabel } from "@/shared/lib/routeMeta";
+import { positionStatusLabels, positionStatusColor, planPreviewUrl, getLaunchBlockReason } from "./execution-utils";
 import { StepIndicator } from "../components/StepIndicator";
 import type { ExecutionColumnId, ExecutionTableColumn } from "./execution-table-columns";
 import { TABLE_ROW_STYLES } from "@/shared/lib/tableRowStyles";
@@ -18,11 +19,13 @@ function StatusBadge({ status, isCompleted }: { status: string; isCompleted?: bo
 
 function RowRouteCell({ row }: { row: ProductionPlanningRow }) {
   if (row.route_name) {
-    const meta = routeMetaLabel(row);
+    const origin = routeOrigin(row);
+    const label = routeOriginLabel(origin);
     return (
-      <span className="block truncate text-xs text-blue-700" title={`${row.route_name} (${meta})`}>
+      <span className="block truncate text-xs text-blue-700" title={`${row.route_name}${label ? ` (${label})` : ""}`}>
         <span className="truncate">{row.route_name}</span>
-        <span className="text-muted-foreground max-[1099px]:hidden"> ({meta})</span>
+        {origin.kind === "checkmark" && <> <RouteOriginMark /></>}
+        {label && <span className="text-muted-foreground max-[1099px]:hidden"> ({label})</span>}
       </span>
     );
   }

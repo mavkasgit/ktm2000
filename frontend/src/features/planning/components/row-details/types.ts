@@ -1,4 +1,5 @@
 import { type ProductionPlanningStage, type StatusHistoryEntry } from "@/shared/api/productionPlans"
+import { type RouteOrigin } from "@/shared/lib/routeMeta"
 
 export type RowDetailsContentMode = "stages" | "events"
 
@@ -11,7 +12,8 @@ export type RowDetailsData = {
   status: string
   routeName: string | null
   routeError: string | null
-  routeMeta: string
+  /** Происхождение маршрута: подпись, галочка «найден» или отсутствие данных. */
+  routeOrigin: RouteOrigin
   errors: string[]
   warnings: string[]
   productionPlanId: number

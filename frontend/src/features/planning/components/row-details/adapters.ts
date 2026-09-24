@@ -1,44 +1,9 @@
 import { type PlanPositionOut, type ProductionPlanningRowDetail, type ProductionPlanningStage } from "@/shared/api/productionPlans"
 import { type RowDetailsData } from "./types"
+import { routeOrigin } from "@/shared/lib/routeMeta"
 import { errorLabels, warningLabels } from "@/shared/lib/generated-labels"
 
 // ─── Helpers ─────────────────────────────────────────────────────────────────
-
-function formatRouteAssignedAt(value: string | null | undefined): string {
-  if (!value) return "дата неизвестна"
-  const dt = new Date(value)
-  if (Number.isNaN(dt.getTime())) return "дата неизвестна"
-  return dt.toLocaleString("ru-RU", {
-    day: "2-digit",
-    month: "2-digit",
-    year: "numeric",
-    hour: "2-digit",
-    minute: "2-digit",
-  })
-}
-
-function buildRouteMetaLabel(params: {
-  route_source: string | null
-  route_origin: string | null
-  route_match_quality: string | null
-  route_assigned_at: string | null
-}): string {
-  const assignedAt = formatRouteAssignedAt(params.route_assigned_at)
-  if (params.route_origin === "manual_confirmed" || params.route_source === "manual") {
-    return `вручную • ${assignedAt}`
-  }
-  if (params.route_origin === "auto" || params.route_source === "auto") {
-    const quality = params.route_match_quality === "exact" ? "полное" : "скорректирован"
-    return `автомаппинг (${quality}) • ${assignedAt}`
-  }
-  if (params.route_origin === "legacy" || params.route_source === "legacy") {
-    return "legacy • дата неизвестна"
-  }
-  if (params.route_source === "missing") {
-    return "не найден"
-  }
-  return "—"
-}
 
 function translateLabel(code: string, labels: Record<string, string>): string {
   const [base, ...rest] = String(code).split(":")
@@ -86,7 +51,7 @@ export function adaptPlanPositionOut(pos: PlanPositionOut): RowDetailsData {
     status: pos.status,
     routeName: pos.route_name,
     routeError: pos.route_error ? translateLabel(pos.route_error, errorLabels) : null,
-    routeMeta: buildRouteMetaLabel({
+    routeOrigin: routeOrigin({
       route_source: pos.route_source,
       route_origin: pos.route_origin,
       route_match_quality: pos.route_match_quality,
@@ -115,7 +80,7 @@ export function adaptExecutionDetail(detail: ProductionPlanningRowDetail): RowDe
     status: detail.position_status,
     routeName: detail.route_name,
     routeError: detail.route_error,
-    routeMeta: buildRouteMetaLabel({
+    routeOrigin: routeOrigin({
       route_source: detail.route_source,
       route_origin: detail.route_origin,
       route_match_quality: detail.route_match_quality,
@@ -163,7 +128,7 @@ export function adaptRawImportRow(row: Record<string, unknown>): RowDetailsData 
     status,
     routeName,
     routeError: null,
-    routeMeta: buildRouteMetaLabel({
+    routeOrigin: routeOrigin({
       route_source: (row.route_source as string | null) ?? null,
       route_origin: (row.route_origin as string | null) ?? null,
       route_match_quality: (row.route_match_quality as string | null) ?? null,

@@ -17,42 +17,6 @@ export const positionStatusColor: Record<string, string> = {
 
 export type ExecutionSortField = "id" | "row" | "plan" | "sku" | "name" | "qty" | "route" | "status" | "stage" | "dimensions";
 
-export type RouteMetaLike = Pick<
-  ProductionPlanningRow,
-  "route_source" | "route_origin" | "route_match_quality" | "route_assigned_at"
->;
-
-export function formatRouteAssignedAt(value: string | null | undefined): string {
-  if (!value) return "дата неизвестна";
-  const dt = new Date(value);
-  if (Number.isNaN(dt.getTime())) return "дата неизвестна";
-  return dt.toLocaleString("ru-RU", {
-    day: "2-digit",
-    month: "2-digit",
-    year: "numeric",
-    hour: "2-digit",
-    minute: "2-digit",
-  });
-}
-
-export function routeMetaLabel(route: RouteMetaLike): string {
-  const assignedAt = formatRouteAssignedAt(route.route_assigned_at);
-  if (route.route_origin === "manual_confirmed" || route.route_source === "manual") {
-    return `вручную • ${assignedAt}`;
-  }
-  if (route.route_origin === "auto" || route.route_source === "auto") {
-    const quality = route.route_match_quality === "exact" ? "полное" : "скорректирован";
-    return `автомаппинг (${quality}) • ${assignedAt}`;
-  }
-  if (route.route_origin === "legacy" || route.route_source === "legacy") {
-    return "legacy • дата неизвестна";
-  }
-  if (route.route_source === "missing") {
-    return "не найден";
-  }
-  return "—";
-}
-
 export function planPreviewUrl(planId: number): string {
   return `/plans/${planId}/preview`;
 }
