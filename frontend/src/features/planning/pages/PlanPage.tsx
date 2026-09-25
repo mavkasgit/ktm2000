@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useRef, useState } from "react"
-import { FileSpreadsheet, Plus, Upload, ListChecks } from "lucide-react"
+import { FileSpreadsheet, Plus, Upload, ListChecks, Trash2 } from "lucide-react"
 import { ImportWizard } from "../ImportWizard"
 import { ProductWipStatsDialog } from "@/features/execution/components/ProductWipStatsDialog"
 import { Button, Select, SelectContent, SelectItem, SelectTrigger, SelectValue, AlertDialog, AlertDialogContent, AlertDialogHeader, AlertDialogTitle, AlertDialogDescription, AlertDialogFooter, AlertDialogAction, AlertDialogCancel, SortableFilterHeader, FiltersPanel, TableCornerResetHeader, TablePaginationFooter, DATA_TABLE_STYLES, type FiltersPanelField, Badge } from "@/shared/ui"
@@ -11,7 +11,7 @@ import { formatDimensionsFilterValue, formatDimensionsLabel } from "@/shared/api
 import { PLAN_POSITIONS_GRID } from "../lib/gridTemplates"
 import { toast } from "@/shared/ui"
 import { useQuery, useQueryClient } from "@tanstack/react-query"
-import { allPlanFiles, allPlanPositions, PlanPositionOut, listPlans, batchAssignRouteGlobal, deleteImportBatch, approveProductionPlanPosition, getPlanDuplicates, bulkApprovePositions, bulkDeletePositions, type BatchDeleteConflict } from "@/shared/api/productionPlans"
+import { allPlanFiles, allPlanPositions, PlanPositionOut, listPlans, batchAssignRouteGlobal, deleteImportBatch, approveProductionPlanPosition, getPlanDuplicates, bulkApprovePositions, bulkDeletePositions, getProductionPlanDeletePreview, deleteProductionPlan, type BatchDeleteConflict } from "@/shared/api/productionPlans"
 import { listRoutes } from "@/shared/api/routes"
 import { listAllImportTemplates } from "@/shared/api/importTemplates"
 import { apiClient, getErrorMessage } from "@/shared/api/client"
@@ -30,6 +30,9 @@ import { findLastAppliedBatchId } from "../lib/appliedBatches"
 import { BatchDeleteBlockersDialog } from "../components/BatchDeleteBlockersDialog"
 import { parseBatchDeleteConflict } from "../lib/batchDeleteConflict"
 import { PositionRow } from "../components/PlanPositionRow"
+import { usePermission } from "@/features/auth/hooks/usePermission"
+import { DeletePlanConfirmDialog } from "../components/DeletePlanConfirmDialog"
+import { invalidatePlanDeletionCaches } from "../lib/planImportCaches"
 import {
   DuplicateConflict,
   PlanSortField,
@@ -56,6 +59,9 @@ export function PlanPage() {
   const [deleteConflict, setDeleteConflict] = useState<{ batchId: number; filename: string; conflict: BatchDeleteConflict } | null>(null)
   const [deletingDrafts, setDeletingDrafts] = useState(false)
   const tableScrollRef = useRef<HTMLDivElement>(null)
+  const [deletePlanDialogOpen, setDeletePlanDialogOpen] = useState(false)
+  const [deletingPlan, setDeletingPlan] = useState(false)
+  const [deletePlanError, setDeletePlanError] = useState<string | null>(null)
 
   const openDetail = (pos: PlanPositionOut) => {
     setDetailPosition(pos)
@@ -64,6 +70,12 @@ export function PlanPage() {
 
   const { data: plans } = useQuery({ queryKey: queryKeys.execution.plans(), queryFn: listPlans })
   const activePlan = plans && plans.length > 0 ? plans[0] : null
+  const { canDeleteProductionPlan } = usePermission()
+  const { data: deletePlanPreview, isLoading: deletePlanPreviewLoading, error: deletePlanPreviewError } = useQuery({
+    queryKey: queryKeys.plan.deletePreview(activePlan?.id ?? 0),
+    queryFn: () => getProductionPlanDeletePreview(activePlan!.id),
+    enabled: deletePlanDialogOpen && !!activePlan,
+  })
 
   const { data: routes } = useQuery({ queryKey: queryKeys.routes.all(), queryFn: () => listRoutes() })
   const activeRoutes = routes?.filter(r => r.is_active) ?? []
@@ -139,6 +151,31 @@ export function PlanPage() {
     queryClient.invalidateQueries({ queryKey: queryKeys.plan.allFiles() })
     queryClient.invalidateQueries({ queryKey: queryKeys.plan.allPositions() })
     queryClient.invalidateQueries({ queryKey: queryKeys.plan.duplicates() })
+  }
+
+  const handleDeletePlan = async (reason: string) => {
+    if (!activePlan || deletingPlan) return
+    setDeletingPlan(true)
+    setDeletePlanError(null)
+    try {
+      await deleteProductionPlan(activePlan.id, {
+        confirmation: activePlan.plan_no,
+        reason,
+      })
+      invalidatePlanDeletionCaches(queryClient, activePlan.id)
+      setDeletePlanDialogOpen(false)
+      toast({
+        title: "План удалён",
+        description: "Операции откатились, остатки восстановлены, история сохранена",
+        variant: "success",
+      })
+    } catch (error) {
+      const message = getErrorMessage(error)
+      setDeletePlanError(message)
+      toast({ title: "Ошибка удаления плана", description: message, variant: "destructive" })
+    } finally {
+      setDeletingPlan(false)
+    }
   }
 
   const handleApprove = async (positionId: number, planId?: number, force = false) => {
@@ -421,10 +458,14 @@ export function PlanPage() {
     setBulkMode(false)
   }
 
-  const { data: files, isLoading: filesLoading } = useQuery({
+  const { data: allFiles, isLoading: filesLoading } = useQuery({
     queryKey: queryKeys.plan.allFiles(),
     queryFn: () => allPlanFiles(),
   })
+  const files = useMemo(
+    () => allFiles?.filter((file) => file.production_plan_id === activePlan?.id),
+    [allFiles, activePlan],
+  )
 
   // Откат — LIFO: кнопка доступна только у последнего применённого батча плана (#172).
   const lastAppliedBatchId = useMemo(
@@ -704,7 +745,26 @@ export function PlanPage() {
           <div className="rounded-lg border bg-card flex flex-col md:flex-row">
             {/* Left column: stats */}
             <div className="p-4 md:w-72 border-b md:border-b-0 md:border-r shrink-0">
-              <h2 className="text-lg font-semibold mb-4">Общий план</h2>
+              <div className="mb-4 flex items-center justify-between gap-2">
+                <h2 className="text-lg font-semibold">Общий план</h2>
+                {canDeleteProductionPlan && (
+                  <Button
+                    variant="ghost"
+                    size="sm"
+                    className="h-7 text-xs text-destructive hover:bg-destructive/10 hover:text-destructive"
+                    disabled={deletingPlan}
+                    onClick={() => {
+                      setDeletePlanError(null)
+                      setDeletePlanDialogOpen(true)
+                    }}
+                  >
+                    <Trash2 className="h-3.5 w-3.5 mr-1" /> Удалить
+                  </Button>
+                )}
+              </div>
+              <p className="mb-3 truncate text-xs text-muted-foreground" title={activePlan.name}>
+                {activePlan.plan_no} · {activePlan.name}
+              </p>
               <div className="space-y-3 text-sm">
                 <div className="flex justify-between">
                   <span className="text-muted-foreground">Файлов</span>
@@ -1052,6 +1112,18 @@ export function PlanPage() {
           </AlertDialogFooter>
         </AlertDialogContent>
       </AlertDialog>
+
+      <DeletePlanConfirmDialog
+        open={deletePlanDialogOpen}
+        planNo={activePlan?.plan_no ?? ""}
+        planName={activePlan?.name ?? ""}
+        preview={deletePlanPreview}
+        previewLoading={deletePlanPreviewLoading}
+        deleting={deletingPlan}
+        error={deletePlanError ?? (deletePlanPreviewError ? getErrorMessage(deletePlanPreviewError) : null)}
+        onOpenChange={setDeletePlanDialogOpen}
+        onConfirm={(reason) => void handleDeletePlan(reason)}
+      />
 
       <ProductWipStatsDialog
         sku={wipStatsSku}

@@ -230,6 +230,27 @@ async def test_rollback_clears_applied_at_and_restores_applicable_state(client, 
 
 
 @pytest.mark.asyncio
+async def test_legacy_plan_can_rollback_applied_import(client, session) -> None:
+    """A read-only length model does not prevent removing its applied import."""
+    product = await _make_product(session, "ROLL-LEGACY-CUTOVER")
+    plan = await _make_plan(session, "ROLL-LEGACY-CUTOVER")
+    batch = await _make_batch(session, plan, "ROLL-LEGACY-CUTOVER")
+    change_set, _ = await _make_change_set(
+        session, plan, batch, product, row=6
+    )
+    await session.commit()
+
+    assert (await _apply(client, plan.id, change_set.id))["created_positions"] == 1
+    plan.length_model_version = 1
+    await session.commit()
+
+    response = await _rollback(client, plan.id, change_set.id)
+
+    assert response.status_code == 200, response.text
+    assert response.json()["positions_total"] == 0
+    assert (await _files_by_batch(client, plan.id))[batch.id]["status"] == "cancelled"
+
+@pytest.mark.asyncio
 async def test_reapply_after_rollback_reuses_position_without_duplicate_row(client, session) -> None:
     """Повторный apply откаченного сета создаёт позицию ещё раз, но без дубля строки."""
     product = await _make_product(session, "ROLL-REAPPLY")

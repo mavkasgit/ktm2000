@@ -197,6 +197,38 @@ async def test_delete_batch_all_drafts_full_delete(session: AsyncSession, client
     await assert_no_invariants_violations(session, context="batch-delete-drafts")
 
 
+async def test_legacy_plan_can_delete_import_batch(
+    session: AsyncSession,
+    client,
+) -> None:
+    """A read-only length model does not prevent deleting an unblocked import."""
+    product = await _make_product(session, "DELB-LEGACY")
+    plan, batch = await _make_plan_file_batch(session, "DELB-LEGACY")
+    position = _make_position(
+        session,
+        plan,
+        product,
+        batch,
+        status=PlanPositionStatus.draft,
+        row=2,
+    )
+    await session.flush()
+    await _make_change_set(session, plan, batch, [position], applied=True)
+    plan.length_model_version = 1
+    await session.commit()
+
+    response = await client.delete(
+        f"/api/production-plans/{plan.id}/batches/{batch.id}"
+    )
+
+    assert response.status_code == 200, response.text
+    assert response.json() == {"deleted": True, "batch_id": batch.id}
+    await assert_no_invariants_violations(
+        session,
+        context="legacy-batch-delete",
+    )
+
+
 async def test_delete_batch_released_409_then_safe_delete(session: AsyncSession, client) -> None:
     product = await _make_product(session, "DELB-R1")
     plan, batch = await _make_plan_file_batch(session, "DELB-R1")

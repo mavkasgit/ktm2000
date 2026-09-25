@@ -245,6 +245,7 @@ export const queryKeys = {
     batchPreview: (batchId: string | number) => ["batch-preview", batchId] as const,
     routeCheck: (planId: string | number, positionId: number) =>
       ["route-check", planId, positionId] as const,
+    deletePreview: (planId: string | number) => ["plan-delete-preview", planId] as const,
     list: () => ["plan-list"] as const,
     previewAll: () => ["plan-preview"] as const,
     positionDetailAll: () => ["plan-position-detail"] as const,

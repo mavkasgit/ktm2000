@@ -480,6 +480,7 @@ async def list_recent_imports(
         .join(ProductionPlan, ImportBatch.production_plan_id == ProductionPlan.id)
         .join(ImportFile, ImportBatch.source_file_id == ImportFile.id)
         .outerjoin(PlanChangeSet, PlanChangeSet.import_batch_id == ImportBatch.id)
+        .where(ProductionPlan.deleted_at.is_(None))
         .order_by(desc(ImportBatch.created_at))
         .limit(limit)
     )

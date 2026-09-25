@@ -236,6 +236,10 @@ async def create_excel_import_change_set(
         row_selection=row_selection,
         normalize_hanger_quantity=normalize_hanger_quantity,
     )
+    if production_plan_id is not None:
+        requested_plan = await db.get(ProductionPlan, production_plan_id)
+        if requested_plan is None or requested_plan.deleted_at is not None:
+            raise ValueError("Production plan not found")
 
     import_file = await _get_or_create_import_file(
         db,
@@ -258,6 +262,7 @@ async def create_excel_import_change_set(
             select(ProductionPlan)
             .where(
                 ProductionPlan.status.notin_(["released", "cancelled"]),
+                ProductionPlan.deleted_at.is_(None),
                 ProductionPlan.length_model_version == LENGTH_MODEL_VERSION_CURRENT,
             )
             .order_by(ProductionPlan.created_at.desc())

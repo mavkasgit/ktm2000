@@ -100,6 +100,7 @@ beforeEach(() => {
   vi.mocked(usePermission).mockReturnValue({
     canEditReferences: true,
     canEditSettings: false,
+    canDeleteProductionPlan: false,
   });
   vi.mocked(fetchAllProducts).mockResolvedValue([]);
   vi.mocked(listRouteSelectionRules).mockResolvedValue([]);
@@ -204,6 +205,7 @@ describe("RawMaterialsPage: меню «Операции»", () => {
     vi.mocked(usePermission).mockReturnValue({
       canEditReferences: false,
       canEditSettings: false,
+      canDeleteProductionPlan: false,
     });
     renderPage();
 

@@ -4,7 +4,7 @@ from collections import Counter
 from datetime import datetime, timezone
 from decimal import Decimal
 
-from sqlalchemy import delete, or_, select, update
+from sqlalchemy import and_, delete, or_, select, update
 from sqlalchemy import func as sa_func
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -32,10 +32,376 @@ from app.services.audit_log_service import log_action
 from app.models.user import User
 
 
+class PlanDeleteBlocked(Exception):
+    def __init__(self, blockers: list[dict]) -> None:
+        super().__init__("Production plan deletion is blocked")
+        self.blockers = blockers
+
+
+class PlanDeleteRefs:
+    def __init__(self) -> None:
+        self.position_ids: set[int] = set()
+        self.section_plan_line_ids: set[int] = set()
+        self.task_ids: set[int] = set()
+        self.transfer_ids: set[int] = set()
+        self.ledger_entry_ids: set[int] = set()
+        self.active_action_ids: set[int] = set()
+        self.action_roots: list[int] = []
+
+
+async def _require_active_plan(db: AsyncSession, production_plan_id: int) -> ProductionPlan:
+    plan = await db.get(ProductionPlan, production_plan_id)
+    if plan is None or plan.deleted_at is not None:
+        raise ValueError("Production plan not found")
+    return plan
+
+
+async def collect_production_plan_refs(
+    db: AsyncSession, production_plan_id: int
+) -> PlanDeleteRefs:
+    from app.models.action_journal import Action, ActionStatus
+    from app.reversal.action_compensator import ACTION_COMPENSABLE_TYPES
+    from app.services.action_journal_service import TASK_ACTION_FAMILY
+    from app.models.internal_plan import SectionPlanLine
+    from app.models.transfer import Transfer
+    from app.models.work_task import WorkTask
+    from app.stock.models import StockTransaction
+
+    await _require_active_plan(db, production_plan_id)
+    refs = PlanDeleteRefs()
+    refs.position_ids = set((await db.scalars(select(PlanPosition.id).where(
+        PlanPosition.production_plan_id == production_plan_id
+    ))).all())
+    if refs.position_ids:
+        refs.section_plan_line_ids = set((await db.scalars(select(SectionPlanLine.id).where(
+            SectionPlanLine.plan_position_id.in_(refs.position_ids)
+        ))).all())
+    if refs.section_plan_line_ids:
+        refs.task_ids = set((await db.scalars(select(WorkTask.id).where(
+            WorkTask.section_plan_line_id.in_(refs.section_plan_line_ids)
+        ))).all())
+    if refs.task_ids:
+        refs.transfer_ids = set((await db.scalars(select(Transfer.id).where(or_(
+            Transfer.from_task_id.in_(refs.task_ids),
+            Transfer.to_task_id.in_(refs.task_ids),
+        )))).all())
+        refs.ledger_entry_ids = set((await db.scalars(select(StockTransaction.id).where(or_(
+            StockTransaction.task_id.in_(refs.task_ids),
+            StockTransaction.transfer_id.in_(refs.transfer_ids),
+            StockTransaction.section_plan_line_id.in_(refs.section_plan_line_ids),
+        )))).all())
+        ledger_actions = set((await db.scalars(select(StockTransaction.action_id).where(
+            StockTransaction.id.in_(refs.ledger_entry_ids),
+            StockTransaction.action_id.is_not(None),
+            StockTransaction.reverses_id.is_(None),
+        ))).all())
+        allowed_action_types = set(ACTION_COMPENSABLE_TYPES) | {"transfer_send", "transfer_cancel"}
+        active = (await db.scalars(select(Action).where(
+            Action.status == ActionStatus.ACTIVE,
+            Action.action_type.in_(allowed_action_types),
+            or_(
+                and_(Action.ref_id.in_(refs.task_ids), Action.action_type.in_(TASK_ACTION_FAMILY)),
+                and_(Action.ref_id.in_(refs.transfer_ids), Action.action_type.in_({"transfer_send", "transfer_cancel"})),
+                Action.id.in_(ledger_actions),
+            ),
+        ).order_by(Action.id))).all()
+        refs.active_action_ids = {action.id for action in active}
+        active_ids = refs.active_action_ids
+        refs.action_roots = [
+            action.id for action in active
+            if not any(int(dep) in active_ids for dep in (action.depends_on or []))
+        ]
+    return refs
+
+
+async def _preview_plan_reversals(
+    db: AsyncSession, refs: PlanDeleteRefs
+) -> tuple[list[dict], list[int]]:
+    from app.reversal.service import reversal_service
+    from app.reversal.errors import ReversalError
+
+    blockers: list[dict] = []
+    plans: list[tuple[int, str]] = []
+    for action_id in refs.action_roots:
+        try:
+            reversal_preview = await reversal_service.preview_reverse(
+                db, action_id, cascade=True
+            )
+        except ReversalError as exc:
+            blockers.append({
+                "action_id": action_id,
+                "kind": "reversal_error",
+                "detail": str(exc),
+            })
+            continue
+        for blocker in reversal_preview.blockers:
+            blockers.append({
+                "action_id": blocker.node_id or action_id,
+                "kind": blocker.kind,
+                "detail": blocker.detail,
+                **(
+                    {"deficit": str(blocker.deficit)}
+                    if blocker.deficit is not None
+                    else {}
+                ),
+            })
+        if not reversal_preview.blockers and reversal_preview.plan_token:
+            plans.append(action_id)
+    return blockers, plans
+
+
+async def get_production_plan_delete_preview(
+    db: AsyncSession, production_plan_id: int
+) -> dict:
+    from app.models.daily_plan import DailyPlanItem
+    from app.models.defect import Defect
+    from app.models.product import Product
+    from app.models.rework_task import ReworkTask
+    from app.models.section import Section
+    from app.models.internal_plan import SectionPlanLine
+    from app.models.work_task import WorkTask
+    from app.stock.models import Reason, StockTransaction
+
+    plan = await _require_active_plan(db, production_plan_id)
+    refs = await collect_production_plan_refs(db, production_plan_id)
+    positions = (await db.scalars(select(PlanPosition).where(
+        PlanPosition.id.in_(refs.position_ids)
+    ).order_by(PlanPosition.id))).all() if refs.position_ids else []
+    task_to_position = {
+        task_id: position_id
+        for task_id, position_id in (
+            await db.execute(
+                select(WorkTask.id, SectionPlanLine.plan_position_id)
+                .join(
+                    SectionPlanLine,
+                    WorkTask.section_plan_line_id == SectionPlanLine.id,
+                )
+                .where(WorkTask.id.in_(refs.task_ids))
+            )
+        ).all()
+    } if refs.task_ids else {}
+    action_ids_by_task: dict[int, set[int]] = {}
+    if refs.task_ids:
+        from app.models.action_journal import Action, ActionStatus
+        from app.services.action_journal_service import TASK_ACTION_FAMILY
+        for action in (
+            await db.scalars(
+                select(Action).where(
+                    Action.ref_id.in_(refs.task_ids),
+                    Action.status == ActionStatus.ACTIVE,
+                    Action.action_type.in_(TASK_ACTION_FAMILY),
+                )
+            )
+        ).all():
+            action_ids_by_task.setdefault(action.ref_id, set()).add(action.id)
+    used_positions = []
+    for position in positions:
+        position_task_ids = {
+            task_id
+            for task_id, position_id in task_to_position.items()
+            if position_id == position.id
+        }
+        position_action_ids = {
+            action_id
+            for task_id in position_task_ids
+            for action_id in action_ids_by_task.get(task_id, set())
+        }
+        if (
+            position_task_ids
+            or position_action_ids
+            or position.status in {PlanPositionStatus.approved, PlanPositionStatus.released}
+        ):
+            used_positions.append({
+                "position_id": position.id,
+                "source_sku": position.source_sku,
+                "status": position.status.value,
+                "task_count": len(position_task_ids),
+                "action_count": len(position_action_ids),
+            })
+
+    defect_count = await db.scalar(select(sa_func.count(Defect.id)).where(Defect.task_id.in_(refs.task_ids))) if refs.task_ids else 0
+    rework_count = await db.scalar(select(sa_func.count(ReworkTask.id)).where(ReworkTask.source_task_id.in_(refs.task_ids))) if refs.task_ids else 0
+    daily_count = await db.scalar(select(sa_func.count(DailyPlanItem.work_task_id)).where(DailyPlanItem.work_task_id.in_(refs.task_ids))) if refs.task_ids else 0
+    blockers, reversal_plans = await _preview_plan_reversals(db, refs)
+
+    transactions = (await db.scalars(select(StockTransaction).where(
+        StockTransaction.id.in_(refs.ledger_entry_ids)
+    ).order_by(StockTransaction.id))).all() if refs.ledger_entry_ids else []
+    products = {p.id: p.sku for p in (await db.scalars(select(Product).where(Product.id.in_({tx.product_id for tx in transactions})))).all()} if transactions else {}
+    locations = {s.id: s.code for s in (await db.scalars(select(Section).where(Section.id.in_({loc for tx in transactions for loc in (tx.from_location_id, tx.to_location_id) if loc is not None})))).all()} if transactions else {}
+    stock_effects = [{
+        "transaction_id": tx.id,
+        "action_id": tx.action_id,
+        "product_id": tx.product_id,
+        "product_sku": products.get(tx.product_id, f"product:{tx.product_id}"),
+        "reason": tx.reason.value,
+        "quantity": str(tx.quantity),
+        "dimensions": tx.dimensions,
+        "from_location": locations.get(tx.to_location_id),
+        "to_location": locations.get(tx.from_location_id),
+        "effect": "return" if tx.reason in {
+            Reason.ISSUE_TO_WORK,
+            Reason.TRANSFORM_CONSUME,
+            Reason.SCRAP,
+            Reason.REWORK,
+            Reason.RETURN_TO_STOCK,
+            Reason.RETURN_TO_PREVIOUS,
+        } else "reverse",
+    } for tx in transactions if tx.reverses_id is None and tx.action_id in refs.active_action_ids]
+
+    return {
+        "plan_id": plan.id,
+        "plan_no": plan.plan_no,
+        "positions": len(refs.position_ids),
+        "work_tasks": len(refs.task_ids),
+        "transfers": len(refs.transfer_ids),
+        "ledger_entries": len(refs.ledger_entry_ids),
+        "active_actions": len(refs.active_action_ids),
+        "used_positions": used_positions,
+        "cancellations": {
+            "positions": len(refs.position_ids),
+            "work_tasks": len(refs.task_ids),
+            "transfers": len(refs.transfer_ids),
+            "defects": int(defect_count or 0),
+            "rework_tasks": int(rework_count or 0),
+            "daily_plan_items": int(daily_count or 0),
+        },
+        "stock_effects": stock_effects,
+        "blockers": blockers,
+        "_reversal_plans": reversal_plans,
+    }
+
+
+async def delete_production_plan(
+    db: AsyncSession,
+    production_plan_id: int,
+    *,
+    confirmation: str,
+    reason: str,
+    changed_by: int,
+) -> dict:
+    from app.models.action_journal import Action, ActionStatus
+    from app.models.daily_plan import DailyPlanItem
+    from app.models.internal_plan import InternalPlan, InternalPlanStatus
+    from app.models.release_batch import ReleaseBatch, ReleaseBatchStatus
+    from app.models.rework_task import ReworkTask, ReworkTaskStatus
+    from app.models.transfer import Transfer, TransferStatus
+    from app.models.work_task import WorkTask, WorkTaskStatus
+    from app.reversal.service import reversal_service
+    from app.reversal.errors import ReversalError
+
+    plan = await _require_active_plan(db, production_plan_id)
+    if confirmation != plan.plan_no:
+        raise ValueError("Confirmation must exactly match plan_no")
+    clean_reason = reason.strip()
+    if len(clean_reason) < 3:
+        raise ValueError("Reason must contain at least 3 characters")
+    preview = await get_production_plan_delete_preview(db, production_plan_id)
+    public_preview = {
+        key: value for key, value in preview.items() if not key.startswith("_")
+    }
+    if preview["blockers"]:
+        raise PlanDeleteBlocked(preview["blockers"])
+
+    user = await db.get(User, changed_by)
+    actor = (user.full_name or user.username) if user is not None else "system"
+    reversed_action_ids: list[int] = []
+    for action_id in preview["_reversal_plans"]:
+        action = await db.get(Action, action_id)
+        if action is None or action.status != ActionStatus.ACTIVE:
+            continue
+        try:
+            fresh_preview = await reversal_service.preview_reverse(
+                db, action_id, cascade=True
+            )
+            if fresh_preview.blockers or not fresh_preview.plan_token:
+                await db.rollback()
+                raise PlanDeleteBlocked([
+                    {
+                        "action_id": blocker.node_id or action_id,
+                        "kind": blocker.kind,
+                        "detail": blocker.detail,
+                    }
+                    for blocker in fresh_preview.blockers
+                ] or [{
+                    "action_id": action_id,
+                    "kind": "missing_plan_token",
+                    "detail": "Не удалось построить план отката",
+                }])
+            result = await reversal_service.reverse(
+                db,
+                action_id,
+                plan_token=fresh_preview.plan_token,
+                reason=clean_reason,
+                actor=actor,
+                actor_id=changed_by,
+            )
+        except ReversalError as exc:
+            await db.rollback()
+            raise PlanDeleteBlocked([{
+                "action_id": action_id,
+                "kind": "reversal_error",
+                "detail": str(exc),
+            }]) from exc
+        reversed_action_ids.extend(result.reversed_action_ids)
+
+    refs = await collect_production_plan_refs(db, production_plan_id)
+    now = datetime.now(timezone.utc)
+    if refs.task_ids:
+        await db.execute(delete(DailyPlanItem).where(DailyPlanItem.work_task_id.in_(refs.task_ids)))
+        await db.execute(update(WorkTask).where(WorkTask.id.in_(refs.task_ids)).values(status=WorkTaskStatus.cancelled))
+    if refs.transfer_ids:
+        await db.execute(update(Transfer).where(Transfer.id.in_(refs.transfer_ids)).values(status=TransferStatus.cancelled))
+    if refs.position_ids:
+        await db.execute(
+            update(PlanPosition)
+            .where(PlanPosition.id.in_(refs.position_ids))
+            .values(
+                status=PlanPositionStatus.cancelled,
+                deleted_at=now,
+                deleted_by=changed_by,
+                delete_reason=clean_reason,
+            )
+        )
+    await db.execute(update(InternalPlan).where(InternalPlan.production_plan_id == production_plan_id).values(status=InternalPlanStatus.cancelled))
+    await db.execute(update(ReleaseBatch).where(ReleaseBatch.production_plan_id == production_plan_id).values(status=ReleaseBatchStatus.cancelled))
+    from app.models.defect import Defect, DefectStatus
+    if refs.task_ids:
+        await db.execute(update(Defect).where(Defect.task_id.in_(refs.task_ids)).values(status=DefectStatus.closed))
+        await db.execute(update(ReworkTask).where(ReworkTask.source_task_id.in_(refs.task_ids)).values(status=ReworkTaskStatus.cancelled))
+
+    plan.status = ProductionPlanStatus.cancelled
+    plan.deleted_at = now
+    plan.deleted_by = changed_by
+    plan.delete_reason = clean_reason
+    history_action = Action(
+        action_type="production_plan_delete", ref_id=plan.id, actor=actor,
+        reason=clean_reason, depends_on=list(dict.fromkeys(reversed_action_ids)),
+    )
+    db.add(history_action)
+    await db.flush()
+    await log_action(
+        db, status="success", title="Удаление производственного плана",
+        message=f"План {plan.plan_no} отменён и перемещён в архив. Причина: {clean_reason}.",
+        user=user, action=AuditAction.DELETE,
+        entity_type=AuditEntityType.PRODUCTION_PLAN, entity_id=plan.id,
+        changes={"before": public_preview, "after": {"status": plan.status.value, "deleted_at": now.isoformat(), "deleted_by": changed_by, "delete_reason": clean_reason}},
+    )
+    await db.commit()
+    return {
+        "deleted": True,
+        "plan_id": plan.id,
+        "plan_no": plan.plan_no,
+        "reversed_action_ids": list(dict.fromkeys(reversed_action_ids)),
+        "preserved_ledger_entries": len(refs.ledger_entry_ids),
+        "history_action_id": history_action.id,
+    }
+
+
 async def require_mutable_plan(db: AsyncSession, production_plan_id: int) -> ProductionPlan:
     """Load a plan and enforce the current normal/raw length model."""
     plan = await db.get(ProductionPlan, production_plan_id)
-    if plan is None:
+    if plan is None or plan.deleted_at is not None:
         raise ValueError("Production plan not found")
     require_current_length_model(plan)
     return plan
@@ -344,10 +710,11 @@ async def apply_change_set(db: AsyncSession, change_set_id: int, *, skip_invalid
 
 
 async def rollback_change_set(db: AsyncSession, change_set_id: int, changed_by: int | None = None) -> dict:
+    #: Откат не переводит размеры и не создаёт новых задач; проверка released ниже
+    #: остаётся обязательным бизнес-гейтом даже для cleanup старого импорта.
     change_set = await db.get(PlanChangeSet, change_set_id)
     if change_set is None:
         raise ValueError("Change set not found")
-    await require_mutable_plan(db, change_set.production_plan_id)
     if change_set.status != PlanChangeSetStatus.applied:
         raise ValueError("Only applied change sets can be rolled back")
 
@@ -625,11 +992,12 @@ async def _cascade_delete_positions(db: AsyncSession, position_ids: list[int]) -
 async def delete_import_batch(
     db: AsyncSession, batch_id: int, *, delete_drafts_only: bool = False, changed_by: int | None = None
 ) -> dict:
+    #: Удаление старого импорта не переводит размеры. Живые downstream-данные всё
+    #: равно защищает общий blocker-контракт ниже.
     from app.models.imports import ImportBatch
     batch = await db.get(ImportBatch, batch_id)
     if batch is None:
         raise ValueError("Import batch not found")
-    await require_mutable_plan(db, batch.production_plan_id)
 
     info = await get_batch_delete_blockers(db, batch_id)
     user = await db.get(User, changed_by) if changed_by else None
