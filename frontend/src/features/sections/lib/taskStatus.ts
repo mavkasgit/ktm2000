@@ -32,6 +32,10 @@ export function isTaskExecutionComplete(task: SectionBoardTask): boolean {
 /** Задача передала весь план, но формально ещё не закрыта (status != completed). */
 export function isTaskFullyTransferred(task: SectionBoardTask): boolean {
   if (!ACTIVE_STATUSES.has(task.status)) return false;
+  // Для трансформации remaining_quantity относится к выходному объёму,
+  // а не к входным заготовкам. После получения входа остаток может быть 0
+  // ещё до завершения раскроя, поэтому задача остаётся активной.
+  if (task.transforms_dimensions) return false;
   const remaining = parseFloat(task.cache.remaining_quantity) || 0;
   return remaining <= 0;
 }

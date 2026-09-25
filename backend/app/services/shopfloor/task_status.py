@@ -10,7 +10,13 @@ from app.models.work_task import WorkTask, WorkTaskStatus
 from app.stock.task_cache import resolve_work_task_status
 
 
-def _status_from_cache(task: WorkTask, cache: dict) -> str | None:
+def _status_from_cache(
+    task: WorkTask,
+    cache: dict,
+    *,
+    transform_input_quantity: Decimal | None = None,
+    transform_processed_quantity: Decimal | None = None,
+) -> str | None:
     return resolve_work_task_status(
         current_status=task.status.value,
         planned_quantity=task.planned_quantity,
@@ -20,6 +26,8 @@ def _status_from_cache(task: WorkTask, cache: dict) -> str | None:
         rejected_quantity=cache.get("rejected_quantity", Decimal("0")),
         issued_quantity=cache.get("issued_quantity", Decimal("0")),
         received_quantity=cache.get("received_quantity", Decimal("0")),
+        transform_input_quantity=transform_input_quantity,
+        transform_processed_quantity=transform_processed_quantity,
     )
 
 
@@ -35,7 +43,21 @@ async def sync_work_task_status(
 
         cache = await StockProjectionManager().get_task_cache(db, task.id)
 
-    new_status = _status_from_cache(task, cache)
+    transform_input_quantity = None
+    transform_processed_quantity = None
+    if task.input_quantity is not None and task.outputs:
+        from app.services.shopfloor.operations_transform import get_transform_progress
+
+        progress = await get_transform_progress(db, task.id)
+        transform_input_quantity = Decimal(str(task.input_quantity))
+        transform_processed_quantity = progress.consumed_quantity + progress.scrapped_quantity
+
+    new_status = _status_from_cache(
+        task,
+        cache,
+        transform_input_quantity=transform_input_quantity,
+        transform_processed_quantity=transform_processed_quantity,
+    )
     if new_status is None or new_status == task.status.value:
         return False
 

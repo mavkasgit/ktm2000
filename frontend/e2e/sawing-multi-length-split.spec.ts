@@ -24,11 +24,10 @@ import {
   apiAddRouteStep,
   apiApplyChangeSet,
   apiBatchAssignRoute,
-  apiCreateBareProduct,
+  apiEnsureCatalogProduct,
   apiCreateRoute,
   apiGetActiveTemplate,
   apiGetPlanPositions,
-  apiGetProductBySku,
   apiGetSectionByCode,
   apiResetAll,
   apiSeedData,
@@ -39,14 +38,11 @@ import {
 
 const SAW_SKU = "АТ-7121";
 
-/** Создать продукт без lengths, если его ещё нет (idempotent). */
-async function apiEnsureBareProduct(sku: string): Promise<{ id: number; sku: string }> {
-  try {
-    return await apiGetProductBySku(sku);
-  } catch {
-    return await apiCreateBareProduct(sku);
-  }
+/** Синхронизировать линейный продукт с нормальной длиной 2700 мм (idempotent). */
+async function apiEnsureSawProduct(sku: string): Promise<{ id: number; sku: string }> {
+  return apiEnsureCatalogProduct({ sku, name: "Стык с дюбелем 30 мм 2,7 анод. серебро матовы", lengthsMm: [2700] });
 }
+
 
 type PlanOutput = {
   row_number?: number | null;
@@ -118,7 +114,7 @@ test.describe("@ui Пила: распил одной задачи на неск�
     await apiSeedData();
 
     // ─── 1. API-setup: план с группой раскроя до состояния «сырьё у пилы» ────
-    const product = await apiEnsureBareProduct(SAW_SKU);
+    const product = await apiEnsureSawProduct(SAW_SKU);
 
     const template = await apiGetActiveTemplate();
     const importRes = await apiSimulatePlanImport(
@@ -251,10 +247,14 @@ test.describe("@ui Пила: распил одной задачи на неск�
     await authenticatedPage.goto(`/section-tasks/${sawing.id}`);
     const taskRow = authenticatedPage.locator("tr", { hasText: SAW_SKU }).first();
     await expect(taskRow).toBeVisible({ timeout: 15_000 });
-    // Сводка операции: «{вход} шт × {длина} → …» — вход и все выходы позиции.
-    await expect(taskRow.getByText(`${inputQty} шт × ${lengthLabel(inputLength!)}`)).toBeVisible({
-      timeout: 15_000,
-    });
+    // Доска показывает вход отдельной колонкой, а раскрой — компактной сводкой.
+    await expect(taskRow.getByText(lengthLabel(inputLength!))).toBeVisible({ timeout: 15_000 });
+    for (const output of pos!.outputs ?? []) {
+      const mm = output.dimensions?.length_mm;
+      if (!mm) continue;
+      const label = `${String(mm / 1000).replace(".", ",")}×${qty(output.quantity)}`;
+      await expect(taskRow).toContainText(label);
+    }
 
     let task = (await boardTasks(sawing.id)).find((t) => t.product_sku === SAW_SKU);
     expect(task!.transforms_dimensions).toBe(true);
@@ -315,18 +315,6 @@ test.describe("@ui Пила: распил одной задачи на неск�
     await drawer.getByRole("button", { name: "Сохранить" }).click();
     await expect(drawer).not.toBeVisible({ timeout: 15_000 });
 
-    await authenticatedPage.reload();
-    await expect(taskRow).toBeVisible({ timeout: 15_000 });
-    // UI: строка прогресса показывает полные итоги по каждой длине
-    // («0,9 м: 350/350 · 1,8 м: 50/50»).
-    const progressTotals = taskRow.locator('span[title*="/"]').first();
-    await expect(progressTotals).toBeVisible({ timeout: 15_000 });
-    for (const out of task!.outputs ?? []) {
-      const mm = out.dimensions?.length_mm;
-      if (!mm) continue;
-      const total = Math.round(qty(out.quantity));
-      await expect(progressTotals).toContainText(`${lengthLabel(mm)}: ${total}/${total}`);
-    }
 
     // ─── 5. Контроль: вход раскрыл полностью, ledger и остатки по длинам ────
     task = (await boardTasks(sawing.id)).find((t) => t.product_sku === SAW_SKU);

@@ -223,6 +223,26 @@ describe("isTaskFullyTransferred", () => {
     expect(isTaskFullyTransferred(makeTask({ status: "ready" }))).toBe(false);
   });
 
+  it("трансформация с нулевым остатком остаётся активной до полного входа", () => {
+    const task = makeTask({
+      status: "in_progress",
+      transforms_dimensions: true,
+      input_quantity: "150",
+      input_consumed_quantity: "75",
+      cache: {
+        available_quantity: "0",
+        issued_quantity: "150",
+        completed_quantity: "75",
+        transferred_quantity: "0",
+        received_quantity: "150",
+        rejected_quantity: "0",
+        remaining_quantity: "0",
+      },
+    });
+    expect(isTaskFullyTransferred(task)).toBe(false);
+    expect(getTaskViewCategory(task)).toBe("active");
+  });
+
   it("completed → не считается «переданным без закрытия»", () => {
     const task = makeTask({
       status: "completed",

@@ -40,7 +40,7 @@ test.describe("@smoke Финальный выпуск кнопкой «Отпр�
     const token = await apiAccessTokenFromPage(authenticatedPage);
     expect(token).toBeTruthy();
 
-    // 1. Свежий продукт без lengths (как в demo-фикстурах).
+    // 1. Свежий линейный продукт с нормальной длиной 2700 мм.
     const sku = `E2E-FINAL-${Date.now()}`;
     const product = await apiCreateBareProduct(sku);
 

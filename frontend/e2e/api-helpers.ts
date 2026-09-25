@@ -154,7 +154,7 @@ export async function apiGetProductBySku(sku: string) {
   return product;
 }
 
-/** @smoke — свежий продукт без lengths (как в demo-фикстурах) для кастомного роута. */
+/** @smoke — минимальный линейный продукт для кастомного роута. */
 export async function apiCreateBareProduct(sku: string) {
   const res = await fetch(`${BACKEND_URL}/api/products`, {
     method: "POST",
@@ -165,6 +165,8 @@ export async function apiCreateBareProduct(sku: string) {
       type: "finished_good",
       unit: "pcs",
       is_active: true,
+      dimension_state: "length",
+      lengths: [{ length_mm: 2700, raw_length_mm: null, is_primary: true }],
     }),
   });
   if (!res.ok) {

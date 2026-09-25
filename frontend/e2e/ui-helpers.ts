@@ -401,7 +401,7 @@ async function clickFirstRowAndWaitGone(
  * выпуски) — вызывающий читает `0` как «на маршруте больше нечего делать».
  */
 export async function sendReadyTransfersViaUI(page: Page, sku: string): Promise<number> {
-  await page.goto("/transfers");
+  await gotoWithTransientRetry(page, "/transfers");
   await expect(page.getByRole("heading", { name: "Передачи между ГХП" })).toBeVisible({
     timeout: 10_000,
   });
@@ -496,7 +496,7 @@ export async function transferRouteChainViaUI(
   positionId: number,
   maxSteps = 100,
 ): Promise<string[]> {
-  await page.goto("/transfers");
+  await gotoWithTransientRetry(page, "/transfers");
   await expect(page.getByRole("heading", { name: "Передачи между ГХП" })).toBeVisible({
     timeout: 10_000,
   });
@@ -581,6 +581,21 @@ export async function completeSectionTaskViaUI(page: Page, sectionId: number, sk
   await expect(drawer).not.toBeVisible({ timeout: 15_000 });
 }
 
+/** Переход с одной повторной попыткой только для временного обрыва dev-сервера. */
+async function gotoWithTransientRetry(page: Page, url: string): Promise<void> {
+  for (let attempt = 0; attempt < 2; attempt++) {
+    try {
+      await page.goto(url, { waitUntil: "domcontentloaded", timeout: 60_000 });
+      return;
+    } catch (error) {
+      const message = error instanceof Error ? error.message : String(error);
+      const transient = /ERR_CONNECTION_(?:TIMED_OUT|RESET|REFUSED)|ERR_NETWORK_CHANGED/.test(message);
+      if (!transient || attempt === 1) throw error;
+      await page.waitForTimeout(1_000);
+    }
+  }
+}
+
 /** Завершить завершаемые задачи SKU на производственных участках.
  *
  * `sections` — необязательный список имён участков (маршрут конкретного теста):
@@ -592,8 +607,7 @@ export async function completeAllSectionTasksViaUI(
   sku: string,
   sections?: string[],
 ): Promise<number> {
-  await page.goto("/section-tasks");
-  await expect(page.getByRole("heading", { name: "Участки" })).toBeVisible({ timeout: 10_000 });
+  await gotoWithTransientRetry(page, "/section-tasks");
 
   // Плитки производственных участков (SectionSwitcherTiles) — кнопки с бейджами
   // «ОЖ: N» / «ВР: N». Порядок обхода — с ненулевым бейджем вперёд, но САМ
@@ -686,11 +700,11 @@ export async function completeAllSectionTasksViaUI(
         break;
       }
       completed++;
-      await page.goto(sectionUrl);
+      await gotoWithTransientRetry(page, sectionUrl);
       await expandBoardGroupsViaUI(page);
     }
 
-    await page.goto("/section-tasks");
+    await gotoWithTransientRetry(page, "/section-tasks");
     await expect(page.getByRole("heading", { name: "Участки" })).toBeVisible({ timeout: 10_000 });
     await expect(tiles.first()).toBeVisible({ timeout: 20_000 });
   }
@@ -710,7 +724,7 @@ export async function completeAllSectionTasksViaUI(
  * зеленел бы на данных прошлых прогонов в накопительной dev-БД.
  */
 export async function expectShippedViaUI(page: Page, sku: string, positionIds: number[]) {
-  await page.goto("/transfers");
+  await gotoWithTransientRetry(page, "/transfers");
   await expect(page.getByRole("heading", { name: "Передачи между ГХП" })).toBeVisible({
     timeout: 10_000,
   });

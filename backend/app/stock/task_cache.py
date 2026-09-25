@@ -42,19 +42,29 @@ def resolve_work_task_status(
     rejected_quantity: Decimal,
     issued_quantity: Decimal,
     received_quantity: Decimal,
+    transform_input_quantity: Decimal | None = None,
+    transform_processed_quantity: Decimal | None = None,
 ) -> str | None:
     """Вывести целевой статус WorkTask из проекции ledger.
 
     Возвращает новый статус или None, если переход не требуется.
+    Для трансформации ``planned_quantity`` — количество выходов, поэтому
+    завершение определяется по списанному входу, а не по остатку выходов.
     """
     if current_status in ("completed", "cancelled"):
         return None
     if planned_quantity <= Decimal("0"):
         return None
 
-    if current_status == "waiting_previous":
-        return "ready" if received_quantity > Decimal("0") else None
-
+    if transform_input_quantity is not None:
+        processed = transform_processed_quantity or Decimal("0")
+        if processed >= transform_input_quantity:
+            return "completed"
+        if processed > Decimal("0"):
+            return "partially_completed"
+        if received_quantity > Decimal("0") and current_status == "ready":
+            return "in_progress"
+        return None
     active_statuses = {"ready", "in_progress", "partially_completed"}
     if current_status not in active_statuses:
         return None

@@ -46,6 +46,21 @@ def test_resolve_work_task_status_partial_when_remainder_left():
     ) == "partially_completed"
 
 
+def test_resolve_work_task_status_transform_uses_consumed_input():
+    assert resolve_work_task_status(
+        current_status="in_progress",
+        planned_quantity=Decimal("250"),
+        remaining_quantity=Decimal("0"),
+        transferred_quantity=Decimal("250"),
+        completed_quantity=Decimal("125"),
+        rejected_quantity=Decimal("0"),
+        issued_quantity=Decimal("150"),
+        received_quantity=Decimal("150"),
+        transform_input_quantity=Decimal("150"),
+        transform_processed_quantity=Decimal("75"),
+    ) == "partially_completed"
+
+
 def test_available_after_transfer_receive_on_second_stage():
     available = compute_task_available(
         planned_quantity=Decimal("504"),

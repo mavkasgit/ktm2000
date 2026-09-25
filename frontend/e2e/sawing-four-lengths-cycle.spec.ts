@@ -80,21 +80,20 @@ function lengthLabel(mm: number): string {
   return `${String(mm / 1000).replace(".", ",")} м`;
 }
 
-/** Строка задачи-раскроя на доске пилы: сводка входа и выходов. */
+/** Компактная подпись выхода в CutLayoutCell: «0,9×50». */
+function cutOutputLabel(mm: number, total: number): string {
+  return `${String(mm / 1000).replace(".", ",")}×${total}`;
+}
+
+/** Строка P1 на пиле: после первой порции cut_layout может исчезнуть из DOM. */
 function splitTaskRow(page: Page): Locator {
   return page
     .locator("tr")
-    .filter({ hasText: /Резка на пиле.*2,7\s*→\s*0,9×50/ })
+    .filter({ hasText: "250" })
+    .filter({ hasText: "150" })
     .first();
 }
 
-/** Доска по умолчанию прячет завершённые задачи — включаем режим «Завершенные». */
-async function showCompletedTasks(page: Page): Promise<void> {
-  const toggle = page.getByRole("button", { name: /Завершенн/ }).first();
-  if (await toggle.isVisible().catch(() => false)) {
-    await toggle.click();
-  }
-}
 
 /**
  * Дождаться строк доски участка.
@@ -134,7 +133,10 @@ async function openSawBoard(page: Page): Promise<number> {
 
 /** Прогресс по выходам на доске: текст строки «0,9 м: 40/40 · …». */
 async function outputsProgressText(page: Page): Promise<string> {
-  const progress = splitTaskRow(page).locator('span[title*="/"]').first();
+  const progress = splitTaskRow(page)
+    .locator("span")
+    .filter({ hasText: /\d+\s*м:\s*\d+\/\d+/ })
+    .first();
   await expect(progress).toBeVisible({ timeout: 20_000 });
   return (await progress.textContent()) ?? "";
 }
@@ -147,7 +149,6 @@ async function outputsProgressText(page: Page): Promise<string> {
  */
 async function splitSawIntoLengthsViaUI(page: Page, sectionId: number): Promise<boolean> {
   await page.goto(`/section-tasks/${sectionId}`);
-  await showCompletedTasks(page);
   await waitForBoardRows(page);
   // Доска прячет однотипные задачи в свёрнутую группу — раскрываем её.
   await expandBoardGroupsViaUI(page);
@@ -170,7 +171,7 @@ async function splitSawIntoLengthsViaUI(page: Page, sectionId: number): Promise<
   // используется backend только при расчёте количества на подвес.
   await expect(row).toContainText(lengthLabel(INPUT_LENGTH_MM));
   for (const out of OUTPUTS) {
-    await expect(row).toContainText(`${lengthLabel(out.mm)}×${out.total}`);
+    await expect(row).toContainText(cutOutputLabel(out.mm, out.total));
   }
 
   const completeBtn = () => splitTaskRow(page).getByRole("button", { name: "Завершить" }).first();
@@ -202,7 +203,6 @@ async function splitSawIntoLengthsViaUI(page: Page, sectionId: number): Promise<
 
     // Доска не рефетчится после мутации — перезагружаем страницу участка.
     await page.goto(`/section-tasks/${sectionId}`);
-    await showCompletedTasks(page);
     await waitForBoardRows(page);
     await expandBoardGroupsViaUI(page);
 
