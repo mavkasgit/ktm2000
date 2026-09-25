@@ -62,6 +62,18 @@ npm run dev
 | `npm run db:seed` | Демо-данные |
 | `npm run test:pytest:fast` | Тесты backend (рекомендуется) |
 | `npm run prod:up` | Production в Docker |
+| `npm run verify:sync` | Принудительно проверить совпадение с `../hrms` |
+
+Syncgate автоматически выключен и не блокирует `npm run dev` или сборку.
+Включить его для одной команды:
+
+```powershell
+$env:KTM_SYNCGATE = "1"; npm run dev
+```
+
+Допустимы `1`, `true`, `yes`, `on`. `npm run verify:sync` запускает проверку
+принудительно независимо от переключателя. Решение действует до возврата
+двухпроектной синхронизации; подробности — [ADR-0029](docs/adr/0029-vremennaya-priostanovka-syncgate-hrms-ktm.md).
 
 Тестирование → [docs/testing-guide.md](docs/testing-guide.md). Production → [docs/deployment.md](docs/deployment.md).
 

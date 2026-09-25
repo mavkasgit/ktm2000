@@ -15,6 +15,12 @@ import {
 const REPO_ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "../..")
 const SCRIPT = path.join(REPO_ROOT, "scripts/verify-sync.mjs")
 
+function envWithoutSyncgate() {
+  const env = { ...process.env }
+  delete env.KTM_SYNCGATE
+  return env
+}
+
 const tempDirs = []
 
 function makeTree(files) {
@@ -62,13 +68,78 @@ describe("verify-sync.mjs", () => {
     expect(normalize("a\r\nb\rc\n")).toBe("a\nb\nc\n")
   })
 
-  it("parseArgs извлекает --other и --root", () => {
-    expect(parseArgs(["node", "x", "--other", "../hrms"])).toEqual({ other: "../hrms", root: null })
-    expect(parseArgs(["node", "x", "--root", "/tmp/a", "--other", "../hrms"])).toEqual({
+  it("parseArgs извлекает --other, --root и --if-enabled", () => {
+    expect(parseArgs(["node", "x", "--other", "../hrms"])).toEqual({
+      other: "../hrms",
+      root: null,
+      ifEnabled: false,
+    })
+    expect(parseArgs(["node", "x", "--root", "/tmp/a", "--other", "../hrms", "--if-enabled"])).toEqual({
       other: "../hrms",
       root: "/tmp/a",
+      ifEnabled: true,
     })
-    expect(parseArgs([])).toEqual({ other: null, root: null })
+    expect(parseArgs([])).toEqual({ other: null, root: null, ifEnabled: false })
+  })
+
+  it("--if-enabled без KTM_SYNCGATE пропускает проверку", () => {
+    const root = makeTree(baseTree())
+    const other = makeTree(baseTree())
+    const spawned = spawnSync(
+      process.execPath,
+      [SCRIPT, "--root", root, "--other", other, "--if-enabled"],
+      { cwd: root, encoding: "utf8", env: envWithoutSyncgate() },
+    )
+
+    expect(spawned.status).toBe(0)
+    expect(spawned.stdout).toContain("Синк-гейт отключён")
+    expect(spawned.stdout).not.toContain("Синк-гейт пройден")
+  })
+
+  it.each(["1", "TrUe", "YeS", "oN"])(
+    "--if-enabled с KTM_SYNCGATE=%s выполняет проверку независимо от регистра",
+    (value) => {
+      const root = makeTree(baseTree())
+      const otherTree = baseTree()
+      otherTree["mod/index.ts"] = `export const DEMO_VERSION = "9.9.9"\n`
+      const other = makeTree(otherTree)
+      const spawned = spawnSync(
+        process.execPath,
+        [SCRIPT, "--root", root, "--other", other, "--if-enabled"],
+        { cwd: root, encoding: "utf8", env: { ...process.env, KTM_SYNCGATE: value } },
+      )
+
+      expect(spawned.status).toBe(1)
+      expect(spawned.stderr).toContain("version mismatch")
+    },
+  )
+
+  it("--if-enabled с недопустимым KTM_SYNCGATE завершается с кодом 2", () => {
+    const root = makeTree(baseTree())
+    const other = makeTree(baseTree())
+    const spawned = spawnSync(
+      process.execPath,
+      [SCRIPT, "--root", root, "--other", other, "--if-enabled"],
+      { cwd: root, encoding: "utf8", env: { ...process.env, KTM_SYNCGATE: "maybe" } },
+    )
+
+    expect(spawned.status).toBe(2)
+    expect(spawned.stderr).toContain("1, true, yes, on")
+  })
+
+  it("ручной режим игнорирует KTM_SYNCGATE", () => {
+    const root = makeTree(baseTree())
+    const otherTree = baseTree()
+    otherTree["mod/index.ts"] = `export const DEMO_VERSION = "9.9.9"\n`
+    const other = makeTree(otherTree)
+    const spawned = spawnSync(
+      process.execPath,
+      [SCRIPT, "--root", root, "--other", other],
+      { cwd: root, encoding: "utf8", env: { ...process.env, KTM_SYNCGATE: "maybe" } },
+    )
+
+    expect(spawned.status).toBe(1)
+    expect(spawned.stderr).toContain("version mismatch")
   })
 
   it("extractVersions читает *_VERSION и version из JSON", () => {
