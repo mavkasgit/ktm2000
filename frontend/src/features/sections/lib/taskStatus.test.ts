@@ -169,6 +169,22 @@ describe("isTaskCompletable", () => {
     expect(isTaskCompletable(t)).toBe(true);
   });
 
+  it("полностью обработанное задание без передачи → не completable", () => {
+    const task = makeTask({
+      status: "in_progress",
+      cache: {
+        available_quantity: "0",
+        issued_quantity: "200",
+        completed_quantity: "200",
+        transferred_quantity: "0",
+        received_quantity: "0",
+        rejected_quantity: "0",
+        remaining_quantity: "200",
+      },
+    });
+    expect(isTaskCompletable(task)).toBe(false);
+  });
+
   it("completed/cancelled/done → false", () => {
     expect(isTaskCompletable(makeTask({ status: "completed" }))).toBe(false);
     expect(isTaskCompletable(makeTask({ status: "cancelled" }))).toBe(false);
@@ -249,6 +265,54 @@ describe("getTaskViewCategory", () => {
 
   it("ready с остатком → active", () => {
     expect(getTaskViewCategory(makeTask({ status: "ready" }))).toBe("active");
+  });
+
+  it("полностью обработанное задание без передачи → completed", () => {
+    const task = makeTask({
+      status: "in_progress",
+      cache: {
+        available_quantity: "0",
+        issued_quantity: "200",
+        completed_quantity: "200",
+        transferred_quantity: "0",
+        received_quantity: "0",
+        rejected_quantity: "0",
+        remaining_quantity: "200",
+      },
+    });
+    expect(getTaskViewCategory(task)).toBe("completed");
+  });
+
+  it("частично обработанное задание → active", () => {
+    const task = makeTask({
+      status: "in_progress",
+      cache: {
+        available_quantity: "0",
+        issued_quantity: "200",
+        completed_quantity: "100",
+        transferred_quantity: "0",
+        received_quantity: "0",
+        rejected_quantity: "0",
+        remaining_quantity: "200",
+      },
+    });
+    expect(getTaskViewCategory(task)).toBe("active");
+  });
+
+  it("частично обработанное задание → completable", () => {
+    const task = makeTask({
+      status: "in_progress",
+      cache: {
+        available_quantity: "0",
+        issued_quantity: "200",
+        completed_quantity: "100",
+        transferred_quantity: "0",
+        received_quantity: "0",
+        rejected_quantity: "0",
+        remaining_quantity: "200",
+      },
+    });
+    expect(isTaskCompletable(task)).toBe(true);
   });
 
   it("waiting_previous → waiting", () => {

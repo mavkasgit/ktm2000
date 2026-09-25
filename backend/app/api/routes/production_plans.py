@@ -1,4 +1,5 @@
 from datetime import UTC, datetime
+import logging
 from decimal import Decimal
 from typing import Literal
 
@@ -307,13 +308,17 @@ async def approve_position(
     db: AsyncSession = Depends(get_db),
     current_user: User = Depends(get_current_user),
 ) -> dict:
-    import logging
     logger = logging.getLogger(__name__)
     try:
-        position = await approve_plan_position(db, production_plan_id, position_id, force=force, changed_by=current_user.id)
+        position = await approve_plan_position(
+            db, production_plan_id, position_id, force=force, changed_by=current_user.id
+        )
     except ValueError as exc:
-        logger.error("approve_position failed: %s (plan=%d, pos=%d, force=%s)", exc, production_plan_id, position_id, force)
+        logger.warning("approve_position rejected: %s (plan=%d, pos=%d, force=%s)", exc, production_plan_id, position_id, force)
         raise HTTPException(status_code=400, detail=str(exc)) from exc
+    except Exception:
+        logger.exception("approve_position failed (plan=%d, pos=%d, force=%s)", production_plan_id, position_id, force)
+        raise
     return {
         "id": position.id,
         "production_plan_id": position.production_plan_id,

@@ -151,7 +151,6 @@ export function SectionsTasksPage() {
   const [performedShift, setPerformedShift] = useState<"1" | "2">("1");
   const [actionComment, setActionComment] = useState("");
   const [shortageStrategy, setShortageStrategy] = useState<ShortageStrategy>("fail");
-  const [autoTransferNext, setAutoTransferNext] = useState(false);
   const [planModalOpen, setPlanModalOpen] = useState(false);
   const [selectedPlanIds, setSelectedPlanIds] = useState<Set<number>>(new Set());
 
@@ -394,9 +393,9 @@ export function SectionsTasksPage() {
     void queryClient.invalidateQueries({ queryKey: queryKeys.shopfloor.board(sectionId as number) });
     void queryClient.invalidateQueries({ queryKey: queryKeys.shopfloor.stats(sectionId as number) });
     void queryClient.invalidateQueries({ queryKey: queryKeys.dailyPlans.all() });
-    void queryClient.invalidateQueries({ queryKey: queryKeys.shopfloor.incomingTransfers(sectionId as number) });
     void queryClient.invalidateQueries({ queryKey: queryKeys.shopfloor.summary() });
     void queryClient.invalidateQueries({ queryKey: queryKeys.transfers.readyAll() });
+    void queryClient.invalidateQueries({ queryKey: queryKeys.shopfloor.incomingTransfers(sectionId as number) });
     void queryClient.invalidateQueries({ queryKey: queryKeys.transfers.historyAll() });
     void queryClient.invalidateQueries({ queryKey: ["auditLogs"] });
     if (sectionId !== null) {
@@ -413,7 +412,6 @@ export function SectionsTasksPage() {
     setConflictHint(null);
     setActionQty("");
     setDefectQty("");
-    setAutoTransferNext(true);
   }, []);
 
   // Escape key: double-Escape exits single-window mode, single-Escape exits bulk mode.
@@ -715,7 +713,7 @@ export function SectionsTasksPage() {
               performed_at: effectivePerformedAt,
               accounted_at: effectiveAccountedAt,
               shortage_strategy: shortageStrategy,
-              auto_transfer_next: autoTransferNext,
+              auto_transfer_next: true,
             });
           }
 
@@ -757,7 +755,7 @@ export function SectionsTasksPage() {
           performed_at: effectivePerformedAt,
           accounted_at: effectiveAccountedAt,
           shortage_strategy: shortageStrategy,
-          auto_transfer_next: autoTransferNext,
+          auto_transfer_next: true,
         },
       });
     }
@@ -772,7 +770,6 @@ export function SectionsTasksPage() {
     actionComment,
     defectQty,
     shortageStrategy,
-    autoTransferNext,
   ]);
 
   const finishBulk = useCallback((
@@ -1281,8 +1278,6 @@ export function SectionsTasksPage() {
         setActionComment={setActionComment}
         shortageStrategy={shortageStrategy}
         setShortageStrategy={setShortageStrategy}
-        autoTransferNext={autoTransferNext}
-        setAutoTransferNext={setAutoTransferNext}
         pending={pendingMutation}
         conflictHint={conflictHint}
         onSubmit={submitAction}

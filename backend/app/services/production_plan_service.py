@@ -749,7 +749,13 @@ async def approve_plan_position(
     force: bool = False,
     changed_by: int | None = None,
 ) -> PlanPosition:
-    position = await db.get(PlanPosition, position_id)
+    position = (
+        await db.execute(
+            select(PlanPosition)
+            .where(PlanPosition.id == position_id)
+            .with_for_update()
+        )
+    ).scalar_one_or_none()
     if position is None or position.production_plan_id != production_plan_id:
         raise ValueError("Plan position not found")
     await require_mutable_plan(db, production_plan_id)

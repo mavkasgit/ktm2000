@@ -70,6 +70,7 @@ from app.stock.models import QualityState, Reason, StockTransaction
 from app.stock.services import (
     StockCommand,
     StockCommandService,
+    dimensions_match_clause,
 )
 from app.services.shopfloor.output_rows import (
     UsedSource,
@@ -261,6 +262,7 @@ async def transfer_send(
             select(WorkTask).where(
                 WorkTask.section_plan_line_id == next_line.id,
                 WorkTask.status.notin_([WorkTaskStatus.completed, WorkTaskStatus.cancelled]),
+                dimensions_match_clause(WorkTask.dimensions, dimensions),
             )
         )
         if existing_task:
@@ -269,7 +271,10 @@ async def transfer_send(
             # Трансформирующий этап несёт вход/выходы позиции (ADR-0002)
             from app.services.route_transform import transform_fields_for_task
 
-            lazy_planned_quantity = max(from_line.planned_quantity, quantity)
+            # Each output dimension is an independent receiving task. A
+            # pre-created task from the plan can represent only one dimension;
+            # never reuse it for a different output.
+            lazy_planned_quantity = quantity
             transform_fields = await transform_fields_for_task(
                 db,
                 route_stage_id=next_line.route_stage_id,
@@ -281,8 +286,6 @@ async def transfer_send(
                 section_id=next_line.section_id,
                 product_id=next_line.product_id,
                 route_stage_id=next_line.route_stage_id,
-                # If more than planned is being transferred, expand the task's plan
-                # so the receiving section can issue and complete the full quantity.
                 planned_quantity=lazy_planned_quantity,
                 status=WorkTaskStatus.waiting_previous,
                 due_date=next_line.due_date,
@@ -887,15 +890,14 @@ async def auto_create_transfer_after_complete(
         if next_stage is None:
             break
 
-        next_task = await db.scalar(
-            select(WorkTask).where(
-                WorkTask.section_plan_line_id == next_line.id,
-                WorkTask.status.notin_([WorkTaskStatus.completed, WorkTaskStatus.cancelled]),
+        next_task = None
+        if next_stage.is_transit:
+            next_task = await db.scalar(
+                select(WorkTask).where(
+                    WorkTask.section_plan_line_id == next_line.id,
+                    WorkTask.status.notin_([WorkTaskStatus.completed, WorkTaskStatus.cancelled]),
+                )
             )
-        )
-        if next_task is None and not next_stage.is_transit:
-            break
-
         step_idx = next_line.sequence - from_line.sequence
         for pair_idx, (qty, dims) in enumerate(pairs):
             key = (
@@ -903,11 +905,20 @@ async def auto_create_transfer_after_complete(
                 if idempotency_key
                 else None
             )
+            target_task = next_task
+            if not next_stage.is_transit:
+                target_task = await db.scalar(
+                    select(WorkTask).where(
+                        WorkTask.section_plan_line_id == next_line.id,
+                        WorkTask.status.notin_([WorkTaskStatus.completed, WorkTaskStatus.cancelled]),
+                        dimensions_match_clause(WorkTask.dimensions, dims),
+                    )
+                )
 
             result = await transfer_send(
                 db,
                 from_task_id=current_task.id,
-                to_task_id=next_task.id if next_task else None,
+                to_task_id=target_task.id if target_task is not None else None,
                 quantity=qty,
                 actor_id=actor_id,
                 comment=comment or "Авто-перемещение после завершения",
@@ -917,6 +928,12 @@ async def auto_create_transfer_after_complete(
 
             if first_result is None:
                 first_result = result
+
+            if result.get("to_task_id") is not None:
+                receiving_task = await db.get(WorkTask, int(result["to_task_id"]))
+                if receiving_task is not None:
+                    receiving_task.planned_quantity = qty
+                    await db.flush()
 
         if not next_stage.is_transit:
             break

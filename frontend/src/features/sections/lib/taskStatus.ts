@@ -13,6 +13,22 @@ const ACTIVE_STATUSES = new Set([
 
 export type TaskViewCategory = "active" | "waiting" | "completed";
 
+/** Задание, по которому весь выданный материал обработан. */
+export function isTaskExecutionComplete(task: SectionBoardTask): boolean {
+  if (task.transforms_dimensions) {
+    const input = parseFloat(task.input_quantity ?? "0") || 0;
+    const consumed = parseFloat(task.input_consumed_quantity ?? "0") || 0;
+    const rejected = parseFloat(task.cache.rejected_quantity) || 0;
+    return input > 0 && consumed + rejected >= input;
+  }
+
+  const issued = parseFloat(task.cache.issued_quantity) || 0;
+  const processed =
+    (parseFloat(task.cache.completed_quantity) || 0) +
+    (parseFloat(task.cache.rejected_quantity) || 0);
+  return issued > 0 && processed >= issued;
+}
+
 /** Задача передала весь план, но формально ещё не закрыта (status != completed). */
 export function isTaskFullyTransferred(task: SectionBoardTask): boolean {
   if (!ACTIVE_STATUSES.has(task.status)) return false;
@@ -23,7 +39,7 @@ export function isTaskFullyTransferred(task: SectionBoardTask): boolean {
 /** Категория для фильтров «Активные / Ожидают / Завершенные» на доске участка. */
 export function getTaskViewCategory(task: SectionBoardTask): TaskViewCategory {
   if (["completed", "cancelled", "done"].includes(task.status)) return "completed";
-  if (isTaskFullyTransferred(task)) return "completed";
+  if (isTaskExecutionComplete(task) || isTaskFullyTransferred(task)) return "completed";
   if (["waiting_previous", "pending", "blocked"].includes(task.status)) return "waiting";
   if (ACTIVE_STATUSES.has(task.status)) return "active";
   return "active";
@@ -55,13 +71,13 @@ export function getReadyStatusLabel(task: SectionBoardTask): "Передано" 
 }
 
 export function getStatusLabel(task: SectionBoardTask): string {
-  if (isTaskFullyTransferred(task)) return "Завершен";
+  if (isTaskExecutionComplete(task) || isTaskFullyTransferred(task)) return "Завершен";
   if (task.status === "ready") return getReadyStatusLabel(task);
   return taskStatusLabels[task.status] || task.status;
 }
 
 export function getStatusColor(task: SectionBoardTask): string {
-  if (isTaskFullyTransferred(task) || ["completed", "done"].includes(task.status)) {
+  if (isTaskExecutionComplete(task) || isTaskFullyTransferred(task) || ["completed", "done"].includes(task.status)) {
     return "bg-emerald-100 text-emerald-700";
   }
   if (task.status === "ready") {
@@ -76,6 +92,7 @@ export function isTaskCompletable(task: SectionBoardTask): boolean {
   if (task.status === "waiting_previous") return false;
   if (task.status === "ready" && getReadyStatusLabel(task) === "Не передано") return false;
   if (["completed", "cancelled", "done"].includes(task.status)) return false;
+  if (isTaskExecutionComplete(task)) return false;
   return true;
 }
 
@@ -88,6 +105,9 @@ export function getCompletionDisabledReason(task: SectionBoardTask): string | nu
   }
   if (["completed", "cancelled", "done"].includes(task.status)) {
     return "Задание уже завершено";
+  }
+  if (isTaskExecutionComplete(task)) {
+    return "Факт по заданию уже внесён";
   }
   return null;
 }

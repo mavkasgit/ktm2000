@@ -1,5 +1,4 @@
 import type { Dispatch, SetStateAction } from "react";
-import { useEffect } from "react";
 import { AlertTriangle } from "lucide-react";
 import { cn } from "@/shared/utils/cn";
 import { parseNumericInput } from "@/shared/lib/parseNumericInput";
@@ -9,7 +8,6 @@ import { formatDimensionsLabel } from "@/shared/api/stock";
 import {
   Badge,
   Button,
-  Checkbox,
   DatePicker,
   Dialog,
   DialogContent,
@@ -66,8 +64,6 @@ type TaskActionDrawerProps = {
   setActionComment: Dispatch<SetStateAction<string>>;
   shortageStrategy: ShortageStrategy;
   setShortageStrategy: Dispatch<SetStateAction<ShortageStrategy>>;
-  autoTransferNext: boolean;
-  setAutoTransferNext: Dispatch<SetStateAction<boolean>>;
   pending: boolean;
   conflictHint: string | null;
   onSubmit: () => void;
@@ -90,8 +86,6 @@ export function TaskActionDrawer({
   setActionComment,
   shortageStrategy,
   setShortageStrategy,
-  autoTransferNext,
-  setAutoTransferNext,
   pending,
   conflictHint,
   onSubmit,
@@ -106,12 +100,6 @@ export function TaskActionDrawer({
   const inputConsumed = isTransform ? toNumber(task?.input_consumed_quantity ?? "0") : 0;
   const inputRejected = isTransform ? toNumber(task?.cache.rejected_quantity ?? "0") : 0;
   const remainingInput = Math.max(0, inputQty - inputConsumed - inputRejected);
-
-  // Авто-передача неприменима к трансформации (выходы разных
-  // габаритов) — сбрасываем флаг, чтобы не ушёл в payload.
-  useEffect(() => {
-    if (isTransform && autoTransferNext) setAutoTransferNext(false);
-  }, [isTransform, autoTransferNext, setAutoTransferNext]);
 
   const maxQty = isTransform
     ? remainingInput
@@ -427,22 +415,6 @@ export function TaskActionDrawer({
             <Input value={actionComment} onChange={(e) => setActionComment(e.target.value)} placeholder="Опционально" />
           </div>
 
-          {!isTransform && (
-            <label className="flex items-start gap-2 cursor-pointer select-none rounded-md border border-slate-200 bg-slate-50/50 p-3 hover:bg-slate-50">
-              <Checkbox
-                checked={autoTransferNext}
-                onCheckedChange={(v) => setAutoTransferNext(Boolean(v))}
-                className="mt-0.5"
-              />
-              <div className="flex-1">
-                <div className="text-sm font-medium">Сразу отправить на следующий участок</div>
-                <div className="text-xs text-muted-foreground mt-0.5">
-                  Создаст запись в «Передачах» на нужное количество годных.
-                  Снимите, если хотите управлять перемещением вручную.
-                </div>
-              </div>
-            </label>
-          )}
         </div>
 
         <div className="border-t p-4 flex justify-end gap-2">

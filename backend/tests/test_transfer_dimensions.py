@@ -1043,6 +1043,75 @@ async def test_auto_transfer_next_creates_per_output_transfers(client, session) 
     assert by_len[900].sent_quantity == Decimal("100")
     assert by_len[1800].sent_quantity == Decimal("100")
 
+async def test_auto_transfer_next_creates_receiving_task_per_output_dimension(client, session) -> None:
+    """SAWING→PACKING: каждый выход резки получает отдельную receiving-задачу по размеру."""
+    from app.services.shopfloor.operations_tasks import complete_task
+
+    user = await _make_user(session, "dim-sawpack4@test.local")
+    output_rows = [
+        {"row_number": 1, "quantity": "20", "dimensions": {"length_mm": 900}},
+        {"row_number": 2, "quantity": "30", "dimensions": {"length_mm": 1350}},
+        {"row_number": 3, "quantity": "30", "dimensions": {"length_mm": 1800}},
+        {"row_number": 4, "quantity": "20", "dimensions": {"length_mm": 2700}},
+    ]
+    fx = await _make_transform_route_fixture(
+        session,
+        sku="SAWPACK4",
+        qty=Decimal("100"),
+        input_quantity=Decimal("100"),
+        input_dimensions={"length_mm": 2700},
+        outputs=output_rows,
+        separate_ghps=True,
+    )
+    await _release_via_take_to_work(client, fx["position"].id)
+    saw_task = (await _tasks_for_position(session, fx["position"].id))[0]
+
+    svc = StockCommandService()
+    await svc.record(
+        session,
+        StockCommand(
+            product_id=saw_task.product_id,
+            from_location_id=None,
+            to_location_id=saw_task.section_id,
+            quantity=Decimal("100"),
+            reason=Reason.MANUAL_IN,
+            dimensions={"length_mm": 2700},
+            created_by=user.id,
+        ),
+    )
+    await session.commit()
+    await complete_task(
+        session,
+        task_id=saw_task.id,
+        good_quantity=Decimal("100"),
+        defect_quantity=Decimal("0"),
+        actor_id=user.id,
+        auto_transfer_next=True,
+        idempotency_key="auto-saw-pack-four-outputs",
+    )
+    await session.commit()
+
+    receiving_tasks = (
+        await session.execute(
+            select(WorkTask)
+            .where(WorkTask.section_id == fx["sections"][2].id)
+            .order_by(WorkTask.id)
+        )
+    ).scalars().all()
+    assert len(receiving_tasks) == 4
+    by_length = {
+        (task.dimensions or {}).get("length_mm"): task.planned_quantity
+        for task in receiving_tasks
+    }
+    assert by_length == {
+        900: Decimal("20"),
+        1350: Decimal("30"),
+        1800: Decimal("30"),
+        2700: Decimal("20"),
+    }
+    assert sum((task.planned_quantity for task in receiving_tasks), Decimal("0")) == Decimal("100")
+
+
 
 async def test_auto_transfer_next_duplicate_output_size_does_not_overflow(client, session) -> None:
     """Тикет #91: дублирующиеся выходы одного размера не удваивают бюджет авто-передачи."""
