@@ -3,7 +3,7 @@ import { useQuery } from "@tanstack/react-query";
 import { Send, X } from "lucide-react";
 
 import { useAuth } from "@/features/auth/hooks/useAuth";
-import { listUsers } from "@/shared/api/users";
+import { listUsers, type UserListItem } from "@/shared/api/users";
 import type { ReadyToTransferTask } from "@/shared/api/transfers";
 import {
   Button,
@@ -35,6 +35,23 @@ function isPastDate(dateStr: string): boolean {
   if (!dateStr) return false;
   const today = nowLocalDateParts();
   return dateStr < today;
+}
+
+type ExecutorProfile = {
+  id?: number | null;
+  full_name?: string | null;
+  username?: string | null;
+  is_break_glass?: boolean;
+};
+
+export function resolveDefaultExecutorId(
+  me: ExecutorProfile | null,
+  allUsers: UserListItem[] | undefined,
+): number | null {
+  if (!me || me.id == null) return null;
+  if (!me.is_break_glass) return me.id;
+
+  return allUsers?.find((user) => user.is_active && user.username === "system")?.id ?? null;
 }
 
 export type BulkTransferSubmitData = {
@@ -78,21 +95,23 @@ export function BulkTransferFooter({
   });
 
   const executorOptions = useMemo(() => {
-    if (isAdmin && allUsers?.length) {
-      return allUsers
-        .filter((u) => u.is_active)
-        .map((u) => ({ id: u.id, label: u.full_name || u.username }));
+    const activeUsers = allUsers?.filter((u) => u.is_active) ?? [];
+    if (isAdmin && activeUsers.length) {
+      return activeUsers.map((u) => ({ id: u.id, label: u.full_name || u.username }));
     }
-    if (me) {
+    if (me && !me.is_break_glass) {
       return [{ id: me.id, label: me.full_name || me.username }];
     }
     return [];
   }, [isAdmin, allUsers, me]);
 
+  const defaultExecutorId = resolveDefaultExecutorId(me, allUsers);
+
   useEffect(() => {
     if (executorUserId) return;
-    if (me?.id) setExecutorUserId(String(me.id));
-  }, [me?.id, executorUserId]);
+    if (defaultExecutorId != null) setExecutorUserId(String(defaultExecutorId));
+  }, [defaultExecutorId, executorUserId]);
+
 
   const totalQty = useMemo(
     () => selectedTasks.reduce((sum, t) => sum + (parseFloat(t.transferable_quantity) || 0), 0),
