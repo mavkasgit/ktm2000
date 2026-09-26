@@ -198,13 +198,28 @@ async function splitSawIntoLengthsViaUI(page: Page, sectionId: number): Promise<
     await drawer.locator('input[type="number"]').first().fill(String(portion));
     await drawer.getByRole("button", { name: "Сохранить" }).click();
     await expect(drawer).not.toBeVisible({ timeout: 15_000 });
-
     consumed += portion;
 
-    // Доска не рефетчится после мутации — перезагружаем страницу участка.
+    // Проверяем ответ доски сразу после порции: P1 не исчезает из API
+    // после первой порции, а после второй закономерно становится completed.
+    const boardResponsePromise = page.waitForResponse(
+      (response) =>
+        response.ok() &&
+        response.url().includes(`/api/shopfloor/sections/${sectionId}/board`),
+    );
     await page.goto(`/section-tasks/${sectionId}`);
+    const boardResponse = await boardResponsePromise;
+    const boardBody = await boardResponse.json();
+    const transformTask = (boardBody.tasks as Array<Record<string, unknown>>).find(
+      (task) => Number(task.input_quantity) === INPUT_QTY,
+    );
+    expect(transformTask, "P1 отсутствует в ответе board после сохранения порции").toBeTruthy();
+    expect(transformTask?.status).toBe(index === PORTIONS.length - 1 ? "completed" : "partially_completed");
+    expect(transformTask?.input_consumed_quantity).toBe(String(consumed));
+
     await waitForBoardRows(page);
     await expandBoardGroupsViaUI(page);
+
 
     // Кумулятивная пропорция бэкенда: target_i = total_i × раскроено / вход.
     const progress = await outputsProgressText(page);
@@ -398,8 +413,6 @@ test.describe("@ui Пила: раскрой 2,75 м на четыре длины
     const sawSectionId = await openSawBoard(page);
     let sawSplitDone = false;
     for (let round = 0; round < 40; round++) {
-      console.log("[DEBUG] остановка перед передачами; продолжайте вручную в Playwright Inspector");
-      await page.pause();
       const sent = await sendReadyTransfersViaUI(page, SAW4_SKU);
       // Пила — строго до общего завершения задач: иначе П1 уйдёт полной порцией.
       if (!sawSplitDone) {

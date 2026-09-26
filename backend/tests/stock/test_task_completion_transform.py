@@ -35,6 +35,7 @@ from app.models.route import ProductionRoute, RouteOperation, RouteStage
 from app.models.spg import SpgSection, StorageProductionGroup
 from app.models.work_task import WorkTask, WorkTaskStatus
 from app.services.shopfloor.operations_tasks import complete_task
+from app.services.shopfloor.queries_sections import get_section_board
 from tests.stock.helpers import canon_scrap_section_id
 from app.stock import (
     QualityState,
@@ -332,6 +333,43 @@ async def test_partial_portion_moves_ledger_proportionally(session: AsyncSession
     cache = await StockProjectionManager().get_task_cache(session, fx["task"].id)
     assert cache["completed_quantity"] == Decimal("200")
     await assert_no_stock_ledger_invariants_violations(session, context="transform-partial-2")
+
+
+async def test_partial_transform_task_remains_visible_on_section_board(
+    session: AsyncSession,
+) -> None:
+    """After 75 of 150 inputs, the consumer-visible card stays active on the board."""
+    outputs = [
+        {"row_number": 1, "quantity": "50", "dimensions": {"length_mm": 600}},
+        {"row_number": 2, "quantity": "100", "dimensions": {"length_mm": 900}},
+        {"row_number": 3, "quantity": "50", "dimensions": {"length_mm": 1350}},
+        {"row_number": 4, "quantity": "50", "dimensions": {"length_mm": 1800}},
+    ]
+    fx = await _make_transform_setup(
+        session,
+        sku="TRC-BOARD-PART",
+        planned_quantity=Decimal("250"),
+        input_quantity=Decimal("150"),
+        outputs=outputs,
+    )
+    await _receive_input(session, fx, quantity=Decimal("150"))
+    await complete_task(
+        session,
+        task_id=fx["task"].id,
+        good_quantity=Decimal("75"),
+        defect_quantity=Decimal("0"),
+        actor_id=fx["user"].id,
+    )
+    await session.commit()
+
+    board = await get_section_board(session, section_id=fx["saw"].id)
+    cards = [card for card in board["tasks"] if card["id"] == fx["task"].id]
+
+    assert len(cards) == 1
+    card = cards[0]
+    assert card["status"] == "partially_completed"
+    assert card["input_consumed_quantity"] == "75"
+    assert card["cache"]["remaining_quantity"] == "250"
 
 
 async def test_defect_written_with_input_dimensions(session: AsyncSession) -> None:
