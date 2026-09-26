@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 
 import type { DailyPlanSummary } from "@/shared/api/shopfloor";
 import { Button, DatePicker, formatDateRu } from "@/shared/ui";
@@ -6,6 +6,7 @@ import { Button, DatePicker, formatDateRu } from "@/shared/ui";
 type DailyPlansPanelProps = {
   plans: DailyPlanSummary[];
   selectedPlanIds: Set<number>;
+  onSelectPlan: (planId: number) => void;
   onTogglePlan: (planId: number) => void;
   onClearPlans: () => void;
   onCreatePlan?: (planDate: string) => void;
@@ -26,6 +27,7 @@ function localToday(): string {
 export function DailyPlansPanel({
   plans,
   selectedPlanIds,
+  onSelectPlan,
   onTogglePlan,
   onClearPlans,
   onCreatePlan,
@@ -39,6 +41,7 @@ export function DailyPlansPanel({
 }: DailyPlansPanelProps) {
   const [creating, setCreating] = useState(false);
   const [planDate, setPlanDate] = useState(localToday);
+  const planListRef = useRef<HTMLDivElement | null>(null);
 
   const planNumber = useMemo(() => {
     const sameDatePlans = plans
@@ -65,6 +68,19 @@ export function DailyPlansPanel({
   };
   const hasSelectedTasks = selectedTaskCount > 0;
 
+  // Стрелки вверх/вниз переключают фокус между планами — быстрый перебор
+  // без повторного клика мышью.
+  const handlePlanListKeyDown = (event: React.KeyboardEvent<HTMLDivElement>) => {
+    if (event.key !== "ArrowDown" && event.key !== "ArrowUp") return;
+    const buttons = planListRef.current?.querySelectorAll<HTMLButtonElement>("[data-plan-select]");
+    if (!buttons || buttons.length === 0) return;
+    const currentIndex = [...buttons].indexOf(document.activeElement as HTMLButtonElement);
+    if (currentIndex === -1) return;
+    event.preventDefault();
+    const offset = event.key === "ArrowDown" ? 1 : -1;
+    const nextIndex = (currentIndex + offset + buttons.length) % buttons.length;
+    buttons[nextIndex]?.focus();
+  };
 
   return (
     <aside className="space-y-3 rounded-lg border border-slate-200 bg-white p-3 shadow-sm">
@@ -127,16 +143,29 @@ export function DailyPlansPanel({
         </div>
       )}
 
-      <Button
-        variant={selectedPlanIds.size === 0 ? "default" : "outline"}
-        size="sm"
-        className="w-full justify-start"
-        onClick={onClearPlans}
-      >
-        Все задания участка
-      </Button>
+      <div className="flex items-stretch gap-1.5">
+        <Button
+          variant={selectedPlanIds.size === 0 ? "default" : "outline"}
+          size="sm"
+          className="min-w-0 flex-1 justify-start"
+          onClick={onClearPlans}
+        >
+          <span className="truncate">Все задания участка</span>
+        </Button>
+        <Button
+          variant="outline"
+          size="sm"
+          className="shrink-0 px-2.5"
+          onClick={onClearPlans}
+          disabled={selectedPlanIds.size === 0}
+          title="Выключить все планы"
+          aria-label="Выключить все планы"
+        >
+          <span aria-hidden="true" className="text-base leading-none text-slate-500">✕</span>
+        </Button>
+      </div>
 
-      <div className="space-y-1.5">
+      <div className="space-y-1.5" ref={planListRef} onKeyDown={handlePlanListKeyDown}>
         <div className="px-1 text-[11px] font-semibold uppercase tracking-wide text-slate-500">
           Недавние планы
         </div>
@@ -146,30 +175,56 @@ export function DailyPlansPanel({
           <p className="px-1 py-2 text-xs text-slate-500">Планов пока нет</p>
         ) : plans.map((plan) => {
           const selected = selectedPlanIds.has(plan.id);
+          const onlySelected = selected && selectedPlanIds.size === 1;
           const sameDatePlans = plans
             .filter((item) => item.plan_date === plan.plan_date)
             .sort((left, right) => left.created_at.localeCompare(right.created_at));
           const number = sameDatePlans.findIndex((item) => item.id === plan.id) + 1;
           return (
-            <button
+            <div
               key={plan.id}
-              type="button"
-              aria-pressed={selected}
-              className={`w-full rounded-md border px-2.5 py-2 text-left transition-colors ${
+              className={`flex items-stretch overflow-hidden rounded-md border transition-colors ${
                 selected
                   ? "border-blue-500 bg-blue-50 text-blue-900"
                   : "border-slate-200 bg-white text-slate-800 hover:border-blue-300 hover:bg-slate-50"
               }`}
-              onClick={() => onTogglePlan(plan.id)}
             >
-              <div className="flex items-center justify-between gap-2">
-                <span className="text-sm font-medium">План №{number} · {formatDateRu(plan.plan_date)}</span>
-                <span className="text-xs font-semibold tabular-nums">{plan.progress_percent}%</span>
-              </div>
-              <div className="mt-1 text-xs text-slate-500">
-                {plan.item_count} заданий
-              </div>
-            </button>
+              <button
+                type="button"
+                role="checkbox"
+                aria-checked={selected}
+                onClick={() => onTogglePlan(plan.id)}
+                title={selected
+                  ? "Убрать план из выбранных"
+                  : "Добавить план к выбранным"}
+                className="flex shrink-0 items-center px-2.5 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-blue-500"
+              >
+                <span
+                  aria-hidden="true"
+                  className={`flex h-4 w-4 items-center justify-center rounded-[4px] border text-[11px] leading-none ${
+                    selected ? "border-blue-600 bg-blue-600 text-white" : "border-slate-300 bg-white"
+                  }`}
+                >
+                  {selected ? "✓" : ""}
+                </span>
+              </button>
+              <button
+                type="button"
+                data-plan-select
+                aria-pressed={onlySelected}
+                onClick={() => onSelectPlan(plan.id)}
+                title="Показать только этот план"
+                className="min-w-0 flex-1 py-2 pr-2.5 text-left focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-blue-500"
+              >
+                <div className="flex items-center justify-between gap-2">
+                  <span className="truncate text-sm font-medium">План №{number} · {formatDateRu(plan.plan_date)}</span>
+                  <span className="shrink-0 text-xs font-semibold tabular-nums">{plan.progress_percent}%</span>
+                </div>
+                <div className="mt-1 text-xs text-slate-500">
+                  {plan.item_count} заданий
+                </div>
+              </button>
+            </div>
           );
         })}
       </div>

@@ -950,6 +950,10 @@ export function SectionsTasksPage() {
       return next;
     });
   }, [revokeSelection]);
+  const selectOnlyPlan = useCallback((planId: number) => {
+    revokeSelection.clear();
+    setSelectedPlanIds(new Set([planId]));
+  }, [revokeSelection]);
   const clearPlanSelection = useCallback(() => {
     revokeSelection.clear();
     setSelectedPlanIds(new Set());
@@ -1138,6 +1142,7 @@ export function SectionsTasksPage() {
                   <DailyPlansPanel
                     plans={dailyPlans ?? []}
                     selectedPlanIds={selectedPlanIds}
+                    onSelectPlan={selectOnlyPlan}
                     onTogglePlan={togglePlanSelection}
                     onClearPlans={clearPlanSelection}
                     onCreatePlan={handleCreatePlan}
@@ -1239,6 +1244,7 @@ export function SectionsTasksPage() {
                   plans={dailyPlans ?? []}
                   onCreatePlan={handleCreatePlan}
                   selectedTaskCount={selectedTasks.length}
+                  onSelectPlan={selectOnlyPlan}
                   selectedPlanIds={selectedPlanIds}
                   onCreateModeChange={handleDailyPlanModeChange}
                   onTogglePlan={togglePlanSelection}
