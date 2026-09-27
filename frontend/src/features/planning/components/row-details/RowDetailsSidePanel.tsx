@@ -1,6 +1,6 @@
 import { useEffect, useState } from "react"
 import { Dialog, DialogContent } from "@/shared/ui"
-import { fmtQty } from "@/shared/utils/fmtQty"
+import { fmtQty } from "@/shared/lib/quantityFormat"
 import { type RowDetailsContentMode, type RowDetailsData } from "./types"
 import { RowDetailsContent } from "./RowDetailsContent"
 import { RowDetailsPanelToggles } from "./RowDetailsPanelToggles"

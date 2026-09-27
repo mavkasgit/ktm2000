@@ -9,6 +9,7 @@ import { LIMITER_LABELS, type HangerCalcRow } from "../lib/hangerCalcRows";
 import { DashCell } from "./DashCell";
 import { HangerFieldCell } from "./HangerFieldCell";
 import { LengthChips } from "./LengthChips";
+import { fmtQtyPrecise } from "@/shared/lib/quantityFormat";
 
 export type RowSaveState = { status: "saving" } | { status: "saved" } | { status: "error"; message: string };
 
@@ -55,11 +56,11 @@ export function HangerCalcRowView({
       );
     }
     if (showBreakdown) {
-      return <span className="font-medium">{primary!.total}</span>;
+      return <span className="font-medium">{fmtQtyPrecise(primary!.total)}</span>;
     }
     if (!row.auto) {
       return row.total != null
-        ? <span className="text-muted-foreground">{row.total}</span>
+        ? <span className="text-muted-foreground">{fmtQtyPrecise(row.total)}</span>
         : <DashCell reason={breakdownReason} />;
     }
     return dashCell;
@@ -123,10 +124,10 @@ export function HangerCalcRowView({
         <LengthChips row={row} byLength={byLength} />
       </td>
       <td className="px-4 py-2">
-        {showBreakdown ? primary!.by_area : dashCell}
+        {showBreakdown ? fmtQtyPrecise(primary!.by_area) : dashCell}
       </td>
       <td className="px-4 py-2">
-        {showBreakdown ? primary!.by_size : dashCell}
+        {showBreakdown ? fmtQtyPrecise(primary!.by_size) : dashCell}
       </td>
       <td className="px-4 py-2">{totalCell}</td>
       <td className="px-4 py-2">

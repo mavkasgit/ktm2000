@@ -49,6 +49,7 @@ import { PRESET_PROFILES, type GroupingProfile } from "../lib/groupingProfiles";
 import { isTaskCompletable, getNonCompletableTasks } from "../lib/taskStatus";
 import { createAuditLog, getAuditLogs, type AuditLogEntry } from "@/shared/api/auditLogs";
 import { isAnyDialogOpen } from "@/shared/lib/dialogOpen";
+import { fmtQty } from "@/shared/lib/quantityFormat";
 
 type MeResponse = {
   id: number;
@@ -58,12 +59,6 @@ type MeResponse = {
   section_id: number | null;
   is_active: boolean;
 };
-
-function fmtQty(value: string): string {
-  const n = parseFloat(value);
-  if (!Number.isFinite(n)) return "0";
-  return String(Math.round(n));
-}
 
 function toInteger(value: string | number): number {
   const n = typeof value === "number" ? value : parseFloat(value);

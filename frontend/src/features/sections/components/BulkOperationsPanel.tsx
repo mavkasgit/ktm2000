@@ -5,6 +5,7 @@ import { cn } from "@/shared/utils/cn";
 import type { SectionBoardTask } from "@/shared/api/shopfloor";
 import { formatDimensionsLabel } from "@/shared/api/stock";
 import { normalizeQuantityInput, type QuantityInputIssue } from "@/shared/lib/quantityInput";
+import { fmtQty } from "@/shared/lib/quantityFormat";
 import {
   taskGroupingDimensions,
   taskGroupingDimensionsKey,
@@ -35,12 +36,6 @@ function QtyInput({
       {...props}
     />
   );
-}
-
-function fmtQty(value: string | number): string {
-  const n = typeof value === "number" ? value : parseFloat(value);
-  if (!Number.isFinite(n)) return "0";
-  return String(Math.round(n));
 }
 
 function toInteger(value: string | number): number {

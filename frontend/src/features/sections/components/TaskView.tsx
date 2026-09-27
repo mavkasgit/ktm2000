@@ -10,7 +10,7 @@ import type { ReactNode } from "react";
 
 import type { SectionBoardTask } from "@/shared/api/shopfloor";
 import { formatDimensionsLabel } from "@/shared/api/stock";
-import { fmtQty } from "@/shared/utils/fmtQty";
+import { fmtQty } from "@/shared/lib/quantityFormat";
 import { TABLE_ROW_STYLES } from "@/shared/lib/tableRowStyles";
 import { CutLayoutCell } from "@/shared/ui";
 import { taskGroupingDimensions } from "../lib/groupTasksByProfile";

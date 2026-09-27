@@ -150,7 +150,8 @@ describe("ProductsPage", () => {
     expect(fetchAllProducts).toHaveBeenCalledWith(
       expect.objectContaining({ type: "finished_good", include_composition: true }),
     );
-    expect(screen.getByText("RAW-01 ×2.5")).toBeTruthy();
+    // Состав печатается дробью через fmtQtyPrecise: разделитель — запятая.
+    expect(screen.getByText("RAW-01 ×2,5")).toBeTruthy();
     expect(screen.getByText("800 мм, 1200 мм")).toBeTruthy();
     expect(screen.getByText("Чёрный")).toBeTruthy();
   });
@@ -162,7 +163,7 @@ describe("ProductsPage", () => {
 
     expect(await screen.findByText("Характеристики")).toBeTruthy();
     // Состав карточки — из элемента списка
-    expect(screen.getByText(/×2.5 pcs/)).toBeTruthy();
+    expect(screen.getByText(/×2,5 pcs/)).toBeTruthy();
   });
 
   it("operator (без editReferences) не видит правку состава", async () => {

@@ -29,12 +29,6 @@ export function formatQualityStateLabel(state: string): string {
   return qualityStateLabels[state] ?? state;
 }
 
-export function formatBalanceQtyInteger(qty: string | number): string {
-  const n = typeof qty === "string" ? Number.parseFloat(qty) : qty;
-  if (!Number.isFinite(n)) return "—";
-  return String(Math.round(n));
-}
-
 /**
  * Подпись размера — единственный источник для всех экранов (#195, ADR-0035).
  *

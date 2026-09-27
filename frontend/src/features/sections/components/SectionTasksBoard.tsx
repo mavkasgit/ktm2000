@@ -57,7 +57,7 @@ import {
 import { TABLE_ROW_STYLES } from "@/shared/lib/tableRowStyles";
 import { TABLE_ROW_COMPACT } from "@/shared/lib/dataTableStyles";
 import { cn } from "@/shared/utils/cn";
-import { fmtQty } from "@/shared/utils/fmtQty";
+import { fmtQty } from "@/shared/lib/quantityFormat";
 import { boardColumns } from "../lib/boardColumns";
 
 // ---------------------------------------------------------------------------

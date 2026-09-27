@@ -8,6 +8,7 @@
  */
 
 import type { SectionBoardTask } from "@/shared/api/shopfloor";
+import { fmtQtyPrecise } from "@/shared/lib/quantityFormat";
 
 // ---------------------------------------------------------------------------
 // Helpers
@@ -54,7 +55,7 @@ export function getPairedHangerLabel(task: SectionBoardTask): string | null {
 
   if (getPairSnapshot(payload)?.resolved !== true) return null;
   const quantity = getQtyPerHanger(task);
-  return quantity !== null ? String(Math.round(quantity)) : null;
+  return quantity !== null ? fmtQtyPrecise(quantity) : null;
 }
 
 /** Считает количество подвесов по логике backend (hanger_quantity.py) */
@@ -84,7 +85,7 @@ export function PlanHangerColumns({ groupQty, task }: PlanHangerColumnsProps) {
   return (
     <>
       <td className="px-1 py-0.5 text-left">{hangers}</td>
-      <td className="px-1 py-0.5 text-left">{pairedLabel ?? (qtyPerHanger != null ? String(qtyPerHanger) : "—")}</td>
+      <td className="px-1 py-0.5 text-left">{pairedLabel ?? (qtyPerHanger != null ? fmtQtyPrecise(qtyPerHanger) : "—")}</td>
     </>
   );
 }

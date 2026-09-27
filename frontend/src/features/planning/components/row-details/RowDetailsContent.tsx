@@ -1,4 +1,4 @@
-import { fmtQty } from "@/shared/utils/fmtQty"
+import { fmtQty } from "@/shared/lib/quantityFormat"
 import { Input, Button, RouteOriginMark } from "@/shared/ui"
 import { routeOriginLabel } from "@/shared/lib/routeMeta"
 import { type RowDetailsContentMode, type RowDetailsData } from "./types"
@@ -89,8 +89,8 @@ export function RowDetailsContent({
     const qty = Number(editQuantity) || 0
     const perHanger = Number(editQuantityPerHanger) || 0
     if (perHanger > 0) {
-      const val = qty / perHanger
-      return Number.isInteger(val) ? String(val) : val.toFixed(1)
+      // Подвесов не бывает дробными: остаток вешается целиком (ADR-0040).
+      return String(Math.ceil(qty / perHanger))
     }
     return null
   }, [editQuantity, editQuantityPerHanger])

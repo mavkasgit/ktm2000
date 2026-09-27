@@ -1,4 +1,4 @@
-import { fmtQty } from "@/shared/utils/fmtQty";
+import { fmtQty } from "@/shared/lib/quantityFormat";
 import { countHangers } from "@/shared/lib/hangerCount";
 
 export type QuantityRangeCellProps = {

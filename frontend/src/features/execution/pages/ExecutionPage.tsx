@@ -52,7 +52,7 @@ import {
   getSoftDeleteBlockReason,
   getManualPassBlockReason,
 } from "../components/execution-utils";
-import { fmtQty } from "@/shared/utils/fmtQty";
+import { fmtQty } from "@/shared/lib/quantityFormat";
 import { buildExecutionSortParam } from "../lib/executionSortMapping";
 import { useDebouncedValue } from "@/shared/lib/useDebouncedValue";
 import { exactMatchColumnParams } from "@/shared/lib/columnSpecs";

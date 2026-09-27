@@ -16,7 +16,7 @@ import type { PageLimitOption } from "@/shared/hooks/usePaginatedTableQuery";
 import type { useFilterableTable } from "@/shared/hooks/useFilterableTable";
 import { SortConfig } from "@/shared/hooks/useTableQueryEngine";
 import { ExecutionSortField, positionStatusLabels } from "./execution-utils";
-import { fmtQty } from "@/shared/utils/fmtQty";
+import { fmtQty } from "@/shared/lib/quantityFormat";
 import { ExecutionRow } from "./ExecutionRow";
 import { getExecutionTableColumns } from "./execution-table-columns";
 import { TABLE_ROW_COMPACT } from "@/shared/lib/dataTableStyles";

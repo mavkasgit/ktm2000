@@ -17,13 +17,7 @@ import {
 } from "@/shared/ui";
 import { cn } from "@/shared/utils/cn";
 import type { BulkRunnerProgress } from "@/shared/bulk";
-
-function fmtQty(value: string | number | null | undefined): string {
-  if (value == null) return "0";
-  const n = parseFloat(String(value));
-  if (!Number.isFinite(n)) return "0";
-  return String(Math.round(n));
-}
+import { fmtQty } from "@/shared/lib/quantityFormat";
 
 function nowLocalDateParts(): string {
   const d = new Date();

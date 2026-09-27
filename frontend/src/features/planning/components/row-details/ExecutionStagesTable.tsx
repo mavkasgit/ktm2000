@@ -5,7 +5,7 @@ import { useFilterableTable } from "@/shared/hooks/useFilterableTable";
 import { renderIcon } from "@/shared/ui/EntityDialog";
 import { listSections } from "@/shared/api/sections";
 import { queryKeys } from "@/shared/api/queryKeys";
-import { fmtQty } from "@/shared/utils/fmtQty";
+import { fmtQty } from "@/shared/lib/quantityFormat";
 import { isStorageType } from "@/shared/lib/routeStageClassifier";
 import { type ProductionPlanningStage } from "@/shared/api/productionPlans";
 import { stageStatusLabels } from "@/shared/lib/generated-labels";

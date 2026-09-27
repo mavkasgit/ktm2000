@@ -2,6 +2,7 @@ import { useMemo } from "react";
 import type { SectionBoardTask } from "@/shared/api/shopfloor";
 import { formatDimensionsLabel } from "@/shared/api/stock";
 import { colorNameLabels } from "@/shared/lib/generated-labels";
+import { fmtQty, fmtQtyPrecise } from "@/shared/lib/quantityFormat";
 import { adjustQtyToHanger, getQtyPerHanger } from "./PlanHangerDisplay";
 import {
   buildPlanTaskGroups,
@@ -47,7 +48,7 @@ function perHangerForRows(rows: PlanTaskRow[]): string {
     for (const task of row.tasks) {
       const perHanger = getQtyPerHanger(task) ?? task.quantity_per_hanger;
       if (perHanger == null) continue;
-      const text = String(perHanger);
+      const text = fmtQtyPrecise(perHanger);
       if (!values.includes(text)) values.push(text);
     }
   }
@@ -75,7 +76,7 @@ function operationsLabel(row: PlanTaskRow): string {
 function packagingLabel(row: PlanTaskRow): string {
   if (row.packaging.length === 0) return "—";
   if (row.packaging.length === 1) return row.packaging[0].label;
-  return row.packaging.map((item) => `${item.label} ${item.qty.toFixed(0)}`).join(" · ");
+  return row.packaging.map((item) => `${item.label} ${fmtQty(item.qty)}`).join(" · ");
 }
 
 const cellBase = "px-3 py-2";
@@ -100,13 +101,13 @@ function rowCell(row: PlanTaskRow, key: PlanColumnKey, single: boolean) {
     case "perHanger":
       return <td key={key} className={cn(cellBase, "text-right whitespace-nowrap")}>{perHangerForRow(row)}</td>;
     case "issued":
-      return <td key={key} className={cn(cellBase, "text-right")}>{row.issuedQty.toFixed(0)}</td>;
+      return <td key={key} className={cn(cellBase, "text-right")}>{fmtQty(row.issuedQty)}</td>;
     case "done":
-      return <td key={key} className={cn(cellBase, "text-right")}>{row.doneQty.toFixed(0)}</td>;
+      return <td key={key} className={cn(cellBase, "text-right")}>{fmtQty(row.doneQty)}</td>;
     case "transferred":
-      return <td key={key} className={cn(cellBase, "text-right")}>{row.transferredQty.toFixed(0)}</td>;
+      return <td key={key} className={cn(cellBase, "text-right")}>{fmtQty(row.transferredQty)}</td>;
     case "balance":
-      return <td key={key} className={cn(cellBase, "text-right text-blue-700 font-semibold")}>{row.balanceQty.toFixed(0)}</td>;
+      return <td key={key} className={cn(cellBase, "text-right text-blue-700 font-semibold")}>{fmtQty(row.balanceQty)}</td>;
     case "actions":
       return <td key={key} className="no-print-col" />;
     default:
@@ -122,7 +123,7 @@ function aggregateCell(
 ) {
   return (
     <td key={key} className={cn(cellBase, "text-right font-semibold", accent && "text-blue-700")}>
-      {value.toFixed(0)}
+      {fmtQty(value)}
     </td>
   );
 }

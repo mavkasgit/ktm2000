@@ -21,12 +21,7 @@ import {
   getReadyStatusLabel,
   isTaskCompletable,
 } from "../lib/taskStatus";
-
-function fmtQty(value: string): string {
-  const n = parseFloat(value);
-  if (!Number.isFinite(n)) return "0";
-  return String(Math.round(n));
-}
+import { fmtQty } from "@/shared/lib/quantityFormat";
 
 function toNumber(value: string): number {
   const n = parseNumericInput(value);

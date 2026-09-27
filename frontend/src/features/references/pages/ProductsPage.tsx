@@ -11,7 +11,7 @@ import { DATA_TABLE_STYLES } from "@/shared/ui";
 import { usePermission } from "@/features/auth/hooks/usePermission";
 import { ProductPhoto } from "../components/ProductPhoto";
 import { ProductCardDialog } from "../components/ProductCardDialog";
-import { formatQuantity } from "../lib/formatQuantity";
+import { fmtQtyPrecise } from "@/shared/lib/quantityFormat";
 import { useDebouncedValue } from "@/shared/lib/useDebouncedValue";
 
 const headerCellClass = `${DATA_TABLE_STYLES.headerRow} ${DATA_TABLE_STYLES.headerCell}`;
@@ -133,7 +133,7 @@ export function ProductsPage() {
                         <div className="flex flex-wrap gap-1">
                           {product.composition.map((item) => (
                             <Badge key={item.component_product_id} variant="outline" className="text-xs font-normal">
-                              {item.sku} ×{formatQuantity(item.quantity)}
+                              {item.sku} ×{fmtQtyPrecise(item.quantity)}
                             </Badge>
                           ))}
                         </div>

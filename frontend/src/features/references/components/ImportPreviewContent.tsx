@@ -2,6 +2,7 @@ import { useState, type ReactNode } from "react";
 import { CheckCircle, AlertCircle, SkipForward, Image } from "lucide-react";
 import { Button } from "@/shared/ui/button";
 import type { CatalogPreview } from "@/shared/api/products";
+import { fmtQtyPrecise } from "@/shared/lib/quantityFormat";
 
 type ActionFilter = "all" | "create" | "update" | "skip";
 
@@ -116,8 +117,8 @@ export function ImportPreviewContent({ preview }: { preview: CatalogPreview }) {
                 : null;
               const quantitiesText =
                 item.quantities_per_hanger && item.quantities_per_hanger.length > 0
-                  ? item.quantities_per_hanger.map((q) => q ?? "—").join(", ")
-                  : item.quantity_per_hanger ?? null;
+                  ? item.quantities_per_hanger.map((q) => fmtQtyPrecise(q)).join(", ")
+                  : fmtQtyPrecise(item.quantity_per_hanger);
               return (
                 <tr key={item.sku} className="hover:bg-muted/50">
                   <td className="px-4 py-2 font-medium">{item.sku}</td>

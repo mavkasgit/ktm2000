@@ -17,7 +17,6 @@ import { useFilterableTable } from "@/shared/hooks/useFilterableTable";
 import { usePaginatedTableQuery } from "@/shared/hooks/usePaginatedTableQuery";
 import {
   getStockTransactions,
-  formatBalanceQtyInteger,
   formatDimensionsLabel,
   formatQualityStateLabel,
   formatStockReasonLabel,
@@ -26,6 +25,7 @@ import type { StockTransactionEntry, StockTransactionsParams } from "@/shared/ap
 import { queryKeys } from "@/shared/api/queryKeys";
 import { pickColumnApiValue } from "@/shared/lib/columnFilterSearch";
 import { useDebouncedValue } from "@/shared/lib/useDebouncedValue";
+import { fmtQty } from "@/shared/lib/quantityFormat";
 import {
   buildTransactionSortParam,
   type TransactionSortField,
@@ -63,7 +63,7 @@ function getTxCellValue(tx: StockTransactionEntry, field: TransactionSortField):
     case "to":
       return tx.to_location_name || (tx.to_location_id ? `#${tx.to_location_id}` : "—");
     case "quantity":
-      return formatBalanceQtyInteger(tx.quantity);
+      return fmtQty(tx.quantity);
     case "quality":
       return formatTxQuality(tx);
     case "comment":

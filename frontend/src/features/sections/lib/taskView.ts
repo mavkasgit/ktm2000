@@ -19,7 +19,7 @@ import {
   isTaskFullyTransferred,
   getTaskViewCategory,
 } from "./taskStatus";
-import { fmtQty } from "@/shared/utils/fmtQty";
+import { fmtQty } from "@/shared/lib/quantityFormat";
 
 /**
  * Тон задания: «в ожидании», «в работе», «взято в работу», «завершено»,

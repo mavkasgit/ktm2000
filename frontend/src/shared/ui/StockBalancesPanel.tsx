@@ -3,7 +3,6 @@ import { useQuery } from "@tanstack/react-query";
 
 import {
   formatQualityStateLabel,
-  formatBalanceQtyInteger,
   formatDimensionsLabel,
   getStockBalances,
 } from "@/shared/api/stock";
@@ -22,6 +21,7 @@ import { RouteStepsDisplay } from "./RouteStepsDisplay";
 import { buildBalanceSortParam, type BalanceSortField } from "@/shared/lib/stockSortParams";
 import { stockBalanceColumns } from "@/shared/lib/stockBalanceColumns";
 import { useDebouncedValue } from "@/shared/lib/useDebouncedValue";
+import { fmtQty } from "@/shared/lib/quantityFormat";
 
 function getBalanceOperationsLabel(balance: StockBalanceEntry): string {
   if (balance.completed_stages?.length) {
@@ -35,7 +35,7 @@ function getBalanceCellValue(balance: StockBalanceEntry, field: BalanceSortField
     case "sku":
       return balance.product_sku || `#${balance.product_id}`;
     case "quantity":
-      return formatBalanceQtyInteger(balance.balance_qty);
+      return fmtQty(balance.balance_qty);
     case "operations":
       return getBalanceOperationsLabel(balance);
     case "quality":
@@ -284,7 +284,7 @@ export function StockBalancesPanel({
                           </button>
                         </td>
                         <td className="p-2 font-semibold font-mono">
-                          {formatBalanceQtyInteger(b.balance_qty)}
+                          {fmtQty(b.balance_qty)}
                         </td>
                         <td className="p-2 text-xs whitespace-nowrap">
                           {formatDimensionsLabel(b.dimensions, b.dimensions_label)}

@@ -1,4 +1,4 @@
-import { fmtQty } from "@/shared/utils/fmtQty";
+import { fmtQty } from "@/shared/lib/quantityFormat";
 
 export type PositionSkuCellProps = {
   sku: string;

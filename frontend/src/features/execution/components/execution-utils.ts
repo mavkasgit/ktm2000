@@ -1,6 +1,6 @@
 import type { ProductionPlanningRow } from "@/shared/api/productionPlans";
 import { formatDimensionsLabel } from "@/shared/api/stock";
-import { fmtQty } from "@/shared/utils/fmtQty";
+import { fmtQty } from "@/shared/lib/quantityFormat";
 import { statusLabels } from "@/shared/lib/generated-labels";
 
 export { statusLabels as positionStatusLabels };

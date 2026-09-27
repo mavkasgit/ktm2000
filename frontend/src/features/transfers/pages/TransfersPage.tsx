@@ -95,13 +95,7 @@ import {
   type HistorySortField,
   type ReadySortField,
 } from "../lib/transferSortParams";
-
-function fmtQty(value: string | number | null | undefined): string {
-  if (value == null) return "0";
-  const n = parseFloat(String(value));
-  if (!Number.isFinite(n)) return "0";
-  return String(Math.round(n));
-}
+import { fmtQty } from "@/shared/lib/quantityFormat";
 
 function conflictHintFromTransferError(message: string): string | null {
   const n = message.toLowerCase();
@@ -694,7 +688,7 @@ export function TransfersPage() {
   );
 
   const readyPagination = usePaginatedTableQuery({
-    extraDeps: [
+    resetPageDeps: [
       showAllSpgs,
       activeSpgId,
       debouncedReadySearch,
@@ -756,7 +750,7 @@ export function TransfersPage() {
   );
 
   const historyPagination = usePaginatedTableQuery({
-    extraDeps: [
+    resetPageDeps: [
       showAllSpgs,
       activeSpgId,
       debouncedHistorySearch,
@@ -840,8 +834,8 @@ export function TransfersPage() {
     limit: historyLimit,
     setLimit: setHistoryLimit,
     resetPage: resetHistoryPage,
-    totalPages: computeHistoryTotalPages,
-    rangeLabel: historyRangeLabel,
+    getTotalPages: computeHistoryTotalPages,
+    getRangeLabel: historyRangeLabel,
   } = historyPagination;
   const historyTotalPages = computeHistoryTotalPages(historyTotal);
 
@@ -851,8 +845,8 @@ export function TransfersPage() {
     limit: readyLimit,
     setLimit: setReadyLimit,
     resetPage: resetReadyPage,
-    totalPages: computeReadyTotalPages,
-    rangeLabel: readyRangeLabel,
+    getTotalPages: computeReadyTotalPages,
+    getRangeLabel: readyRangeLabel,
   } = readyPagination;
   const readyTotalPages = computeReadyTotalPages(readyTotal);
 

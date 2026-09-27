@@ -71,3 +71,21 @@ describe("getQtyPerHanger / getPairedHangerLabel — парные профили
     }
   });
 });
+
+describe("формат количества на подвесе (#201)", () => {
+  it("дробная норма не округляется и печатается с запятой", () => {
+    const task = taskWithPayload({
+      product_pair: { resolved: true, quantity_per_hanger: 2.5, source: "manual" },
+    });
+
+    expect(getPairedHangerLabel(task)).toBe("2,5");
+  });
+
+  it("целая норма печатается так же, дробных нулей не добавляет", () => {
+    const task = taskWithPayload({
+      product_pair: { resolved: true, quantity_per_hanger: 8, source: "manual" },
+    });
+
+    expect(getPairedHangerLabel(task)).toBe("8");
+  });
+});

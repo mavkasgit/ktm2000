@@ -1,7 +1,7 @@
 import { useMemo } from "react";
 import { Badge, DataTableColumnHeader, TableCornerResetCell, TableCornerResetHeader, DATA_TABLE_STYLES } from "@/shared/ui";
 import { useFilterableTable } from "@/shared/hooks/useFilterableTable";
-import { fmtQty } from "@/shared/utils/fmtQty";
+import { fmtQty } from "@/shared/lib/quantityFormat";
 import { type ProductionPlanningStage, type StatusHistoryEntry } from "@/shared/api/productionPlans";
 import { translateStatusHistoryReason } from "@/features/planning/lib/plan-labels";
 import { statusLabels } from "@/shared/lib/generated-labels";
