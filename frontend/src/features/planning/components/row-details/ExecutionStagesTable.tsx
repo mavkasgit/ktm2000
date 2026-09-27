@@ -1,6 +1,6 @@
 import { useCallback, useMemo } from "react";
 import { useQuery } from "@tanstack/react-query";
-import { SortableFilterHeader, TableCornerResetCell, TableCornerResetHeader, DATA_TABLE_STYLES } from "@/shared/ui";
+import { DataTableColumnHeader, TableCornerResetCell, TableCornerResetHeader, DATA_TABLE_STYLES } from "@/shared/ui";
 import { useFilterableTable } from "@/shared/hooks/useFilterableTable";
 import { renderIcon } from "@/shared/ui/EntityDialog";
 import { listSections } from "@/shared/api/sections";
@@ -14,7 +14,8 @@ import {
   type ColumnSortDef,
 } from "@/shared/hooks/useTableQueryEngine";
 
-type StageSortField = "section" | "status";
+import { stageColumns, type StageField } from "./executionStagesColumns";
+
 type StageRowTone = "current" | "completed" | "partial" | "default";
 
 const ROW_TONE_CLASS: Record<StageRowTone, string> = {
@@ -111,7 +112,6 @@ function getStageProgressPercent(
 }
 
 const headerCellClass = `${DATA_TABLE_STYLES.headerRow} ${DATA_TABLE_STYLES.headerCell}`;
-const numHeaderClass = `${headerCellClass} text-right whitespace-nowrap`;
 
 export function ExecutionStagesTable({
   stages,
@@ -125,7 +125,7 @@ export function ExecutionStagesTable({
     handleSort: handleSortChange,
     hasActiveFilters,
     resetAll: handleResetFilters,
-  } = useFilterableTable<StageSortField>();
+  } = useFilterableTable<StageField>();
 
   const { data: sectionsData } = useQuery({
     queryKey: queryKeys.sections.all(),
@@ -161,14 +161,14 @@ export function ExecutionStagesTable({
   );
 
   const getCellValue = useCallback(
-    (row: (typeof stageRows)[number], field: StageSortField): string => {
+    (row: (typeof stageRows)[number], field: StageField): string => {
       if (field === "section") return getStageSectionLabel(row.stage);
       return getStageStatusLabel(row.stage, row.isFinalStage);
     },
     [],
   );
 
-  const sortDefs = useMemo((): ColumnSortDef<(typeof stageRows)[number], StageSortField>[] => [
+  const sortDefs = useMemo((): ColumnSortDef<(typeof stageRows)[number], StageField>[] => [
     { field: "section", getSortValue: (row) => getCellValue(row, "section") },
     { field: "status", getSortValue: (row) => getCellValue(row, "status") },
   ], [getCellValue]);
@@ -179,7 +179,7 @@ export function ExecutionStagesTable({
   );
 
   const uniqueValues = useMemo(
-    () => ({
+    (): Record<StageField, string[]> => ({
       section: [...new Set(stageRows.map((row) => getCellValue(row, "section")))].sort((a, b) =>
         a.localeCompare(b, "ru"),
       ),
@@ -212,38 +212,21 @@ export function ExecutionStagesTable({
       <table className="w-full text-sm border-separate border-spacing-0">
         <thead>
           <tr>
-            <th className={`${headerCellClass} w-14`}>Этап</th>
-            <th className={`${headerCellClass} p-0 min-w-[140px]`}>
-              <SortableFilterHeader
-                field="section"
-                label="Участок"
-                currentSorts={sortConfigs}
-                onSortChange={handleSortChange}
-                values={uniqueValues.section}
-                {...bindColumn("section")}
-              />
-            </th>
-            <th className={`${headerCellClass} p-0 min-w-[120px]`}>
-              <SortableFilterHeader
-                field="status"
-                label="Статус этапа"
-                currentSorts={sortConfigs}
-                onSortChange={handleSortChange}
-                values={uniqueValues.status}
-                {...bindColumn("status")}
-              />
-            </th>
-            <th className={numHeaderClass}>План</th>
-            <th className={numHeaderClass} title="Пришло с предыдущего этапа">
-              Получено
-            </th>
-            <th className={numHeaderClass} title="Годные">Годные</th>
-            <th className={numHeaderClass} title="Брак">Брак</th>
-            <th className={numHeaderClass} title="Выдано на следующий этап">
-              Выдано
-            </th>
-            <th className={numHeaderClass}>Остаток</th>
-            <th className={numHeaderClass} title="Склад: выдано/план, производство: годные/план">%</th>
+            {stageColumns.map((column) => (
+              <th
+                key={column.id}
+                title={column.title}
+                className={`${headerCellClass} ${column.headerClassName ?? ""}`}
+              >
+                <DataTableColumnHeader
+                  column={column}
+                  bindColumn={bindColumn}
+                  values={column.filterField ? uniqueValues[column.filterField] : undefined}
+                  currentSorts={sortConfigs}
+                  onSortChange={handleSortChange}
+                />
+              </th>
+            ))}
             <TableCornerResetHeader
               hasActiveFilters={hasActiveFilters}
               onReset={handleResetFilters}

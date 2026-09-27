@@ -131,4 +131,57 @@ describe("useFilterableTable", () => {
 
     harness.unmount();
   });
+
+  it("сортировка по умолчанию не считается активными фильтрами", () => {
+    const harness = mountHarness({ defaultSort: [{ field: "status", order: "desc" }] });
+
+    expect(harness.getResult().hasActiveFilters).toBe(false);
+    expect(harness.getResult().sortConfigs).toEqual([{ field: "status", order: "desc" }]);
+
+    harness.unmount();
+  });
+
+  it("отклонение сортировки от дефолтной считается активными фильтрами", () => {
+    const harness = mountHarness({ defaultSort: [{ field: "status", order: "desc" }] });
+
+    act(() => {
+      harness.getResult().handleSort("status");
+    });
+
+    expect(harness.getResult().sortConfigs).toEqual([{ field: "status", order: "asc" }]);
+    expect(harness.getResult().hasActiveFilters).toBe(true);
+
+    harness.unmount();
+  });
+
+  it("сброс возвращает сортировку по умолчанию, а не пустую", () => {
+    const harness = mountHarness({ defaultSort: [{ field: "status", order: "desc" }] });
+
+    act(() => {
+      harness.getResult().handleSort("status");
+    });
+    act(() => {
+      harness.getResult().resetAll();
+    });
+
+    expect(harness.getResult().sortConfigs).toEqual([{ field: "status", order: "desc" }]);
+    expect(harness.getResult().hasActiveFilters).toBe(false);
+
+    harness.unmount();
+  });
+
+  it("сброс без дефолтной сортировки очищает её", () => {
+    const harness = mountHarness();
+
+    act(() => {
+      harness.getResult().handleSort("status");
+    });
+    act(() => {
+      harness.getResult().resetAll();
+    });
+
+    expect(harness.getResult().sortConfigs).toEqual([]);
+
+    harness.unmount();
+  });
 });

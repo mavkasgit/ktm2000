@@ -9,17 +9,18 @@ import {
 } from "@/shared/api/stock";
 import type { StockBalanceEntry } from "@/shared/api/stock";
 import { queryKeys } from "@/shared/api/queryKeys";
-import { SortableFilterHeader } from "./SortableFilterHeader";
+import { DataTableColumnHeader } from "./DataTableColumnHeader";
 import { TablePanelHeader } from "./TablePanelHeader";
 import { TableCornerResetCell, TableCornerResetHeader } from "./TableCornerResetHeader";
 import { TablePaginationFooter } from "./TablePaginationFooter";
 import { DATA_TABLE_STYLES } from "@/shared/lib/dataTableStyles";
 import { useFilterableTable } from "@/shared/hooks/useFilterableTable";
 import { usePaginatedTableQuery } from "@/shared/hooks/usePaginatedTableQuery";
-import { pickColumnApiValue } from "@/shared/lib/columnFilterSearch";
+import { buildColumnApiParams } from "@/shared/lib/columnSpecs";
 import { RouteStepsDisplay } from "./RouteStepsDisplay";
 
 import { buildBalanceSortParam, type BalanceSortField } from "@/shared/lib/stockSortParams";
+import { stockBalanceColumns } from "@/shared/lib/stockBalanceColumns";
 import { useDebouncedValue } from "@/shared/lib/useDebouncedValue";
 
 function getBalanceOperationsLabel(balance: StockBalanceEntry): string {
@@ -44,59 +45,14 @@ function getBalanceCellValue(balance: StockBalanceEntry, field: BalanceSortField
   }
 }
 
-
-function extractQualityStateApiValue(label: string): string | undefined {
-  if (label === "—") return undefined;
-  const normalized = label.toLowerCase();
-  if (normalized === "годный") return "good";
-  if (normalized === "брак") return "scrap";
-  if (normalized === "окончательный брак") return "final_scrap";
-  if (normalized === "переделка") return "rework";
-  return label;
-}
-
 function buildBalanceColumnApiParams(
   columnFilters: Partial<Record<BalanceSortField, Set<string>>>,
   columnSearchQueries: Partial<Record<BalanceSortField, string>>,
-) {
-  const params: {
-    sku?: string;
-    quantity?: string;
-    quality?: string;
-    location?: string;
-    operations?: string;
-  } = {};
-
-  const sku = pickColumnApiValue(columnFilters, columnSearchQueries, "sku", (v) =>
-    v.startsWith("#") ? undefined : v,
-  );
-  if (sku) params.sku = sku;
-
-  const quantity = pickColumnApiValue(columnFilters, columnSearchQueries, "quantity", (v) =>
-    v === "—" ? undefined : v,
-  );
-  if (quantity) params.quantity = quantity;
-
-  const quality = pickColumnApiValue(
-    columnFilters,
-    columnSearchQueries,
-    "quality",
-    extractQualityStateApiValue,
-  );
-  if (quality) params.quality = quality;
-
-  const location = pickColumnApiValue(columnFilters, columnSearchQueries, "location", (v) =>
-    v.startsWith("#") ? undefined : v,
-  );
-  if (location) params.location = location;
-
-  const operations = pickColumnApiValue(columnFilters, columnSearchQueries, "operations", (v) =>
-    v === "—" ? undefined : v,
-  );
-  if (operations) params.operations = operations;
-
-  return params;
+): Record<string, string> {
+  return buildColumnApiParams(columnFilters, columnSearchQueries, stockBalanceColumns);
 }
+
+
 
 export interface StockBalancesPanelProps {
   locationId?: number;
@@ -224,7 +180,7 @@ export function StockBalancesPanel({
   const total = data?.total ?? 0;
   const totalPages = getTotalPages(total);
 
-  const uniqueValues = useMemo(() => ({
+  const uniqueValues: Partial<Record<BalanceSortField, string[]>> = useMemo(() => ({
     sku: [...new Set(balances.map((b) => getBalanceCellValue(b, "sku")))].sort((a, b) =>
       a.localeCompare(b, "ru"),
     ),
@@ -275,60 +231,25 @@ export function StockBalancesPanel({
                 <table className="w-full text-sm text-left">
                   <thead>
                     <tr>
-                      <th className={`${headerCellClass} p-0`}>
-                        <SortableFilterHeader
-                          field="sku"
-                          label="Артикул"
-                          currentSorts={sortConfigs}
-                          onSortChange={handleSortChange}
-                          values={uniqueValues.sku}
-                          {...bindColumn("sku")}
-                        />
-                      </th>
-                      <th className={`${headerCellClass} p-0`}>
-                        <SortableFilterHeader
-                          field="quantity"
-                          label="Количество"
-                          currentSorts={sortConfigs}
-                          onSortChange={handleSortChange}
-                          values={uniqueValues.quantity}
-                          {...bindColumn("quantity")}
-                        />
-                      </th>
-                      {/* Габаритная группа (ADR-0001): разные длины одного SKU — разные строки */}
-                      <th className={`${headerCellClass} px-2`}>Размеры</th>
-                      <th className={`${headerCellClass} p-0 min-w-[140px]`}>
-                        <SortableFilterHeader
-                          field="operations"
-                          label="Операции"
-                          currentSorts={sortConfigs}
-                          onSortChange={handleSortChange}
-                          values={uniqueValues.operations}
-                          {...bindColumn("operations")}
-                        />
-                      </th>
-                      <th className={`${headerCellClass} p-0`}>
-                        <SortableFilterHeader
-                          field="quality"
-                          label="Статус качества"
-                          currentSorts={sortConfigs}
-                          onSortChange={handleSortChange}
-                          values={uniqueValues.quality}
-                          {...bindColumn("quality")}
-                        />
-                      </th>
-                      {!hideLocationColumn && (
-                        <th className={`${headerCellClass} p-0`}>
-                          <SortableFilterHeader
-                            field="location"
-                            label="Участок"
-                            currentSorts={sortConfigs}
-                            onSortChange={handleSortChange}
-                            values={uniqueValues.location}
-                            {...bindColumn("location")}
-                          />
-                        </th>
-                      )}
+                      {stockBalanceColumns.map((column) => {
+                        // Колонка «Участок» скрыта, когда панель показывает
+                        // остатки по заводу: участка в такой строке нет.
+                        if (column.hideWhenNoLocation && hideLocationColumn) return null;
+                        return (
+                          <th
+                            key={column.id}
+                            className={`${headerCellClass} ${column.filterField ? "p-0" : ""} ${column.headerClassName ?? ""}`}
+                          >
+                            <DataTableColumnHeader
+                              column={column}
+                              bindColumn={bindColumn}
+                              values={column.filterField ? uniqueValues[column.filterField] : undefined}
+                              currentSorts={sortConfigs}
+                              onSortChange={handleSortChange}
+                            />
+                          </th>
+                        );
+                      })}
                       <th className={headerCellClass}>
                         Действия
                       </th>

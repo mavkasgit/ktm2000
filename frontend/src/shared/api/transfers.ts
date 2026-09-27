@@ -68,7 +68,11 @@ export type ReadyToTransferListParams = {
   next_operation_name?: string;
   next_section_name?: string;
   task_id?: number;
-  plan_position_id?: number;
+  /**
+   * Приходит числом из формы и строкой из общего сборщика параметров колонок;
+   * в запрос уезжает в обоих случаях одна и та же строка.
+   */
+  plan_position_id?: number | string;
   transferable_qty?: string;
   /** Фильтр точного совпадения по габариту: JSON-строка (`{"length_mm":2700}`) или `null` для безразмерных. */
   dimensions?: string;
@@ -179,6 +183,9 @@ export async function listReadyToTransfer(
   if (params.next_operation_name) search.set("next_operation_name", params.next_operation_name);
   if (params.next_section_name) search.set("next_section_name", params.next_section_name);
   if (params.task_id != null) search.set("task_id", String(params.task_id));
+  // Бэкенд принимает `plan_position_id` (`ready_to_transfer`), но параметр
+  // не сериализовался: фильтр «ID» на передачах молча не работал.
+  if (params.plan_position_id != null) search.set("plan_position_id", String(params.plan_position_id));
   if (params.transferable_qty) search.set("transferable_qty", params.transferable_qty);
   if (params.dimensions) search.set("dimensions", params.dimensions);
   const qs = search.toString();

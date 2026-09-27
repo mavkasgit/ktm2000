@@ -39,3 +39,24 @@ function appendWithinLimit<Field extends string>(
   if (prev.length < MAX_SORT_FIELDS) return [...prev, config];
   return [...prev.slice(prev.length - MAX_SORT_FIELDS + 1), config];
 }
+
+/**
+ * Совпадает ли текущий порядок строк с заявленным по умолчанию.
+ *
+ * Экраны, у которых есть сортировка по умолчанию («сначала свежие»), не могут
+ * считать её фильтром: иначе кнопка сброса висит на странице всегда. Каждый
+ * такой экран сравнивал сортировку сам, и сравнение расходилось от экрана к
+ * экрану. Порядок приоритетов тоже часть сравнения: `a, b` и `b, a` — разные
+ * порядки строк, даже если набор колонок один.
+ */
+export function isDefaultSort<Field extends string>(
+  current: ReadonlyArray<SortConfig<Field>>,
+  defaultSort: ReadonlyArray<SortConfig<Field>> | undefined,
+): boolean {
+  if (defaultSort === undefined) return current.length === 0;
+  if (current.length !== defaultSort.length) return false;
+  return current.every((config, index) => {
+    const expected = defaultSort[index];
+    return expected !== undefined && config.field === expected.field && config.order === expected.order;
+  });
+}

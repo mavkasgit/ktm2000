@@ -8,20 +8,30 @@ import { Button } from "./button";
 import type { SortConfig } from "@/shared/hooks/useTableQueryEngine";
 import { sortByPartialSearchMatch } from "@/shared/lib/columnFilterSearch";
 
-export interface SortableFilterHeaderProps<Field extends string> {
+/** Один на таблицу: колонке без фильтра нечего показывать в бейдже. */
+const EMPTY_SET: Set<string> = new Set<string>();
+const noopFilterChange = () => {};
+
+export interface SortableFilterHeaderProps<Field extends string, SortField extends string = Field> {
   field: Field;
   label: React.ReactNode;
-  currentSorts: SortConfig<Field>[];
-  onSortChange: (field: Field) => void;
+  currentSorts: SortConfig<SortField>[];
+  onSortChange: (field: SortField) => void;
   values: string[];
-  selectedValues: Set<string>;
-  onFilterChange: (field: Field, selected: Set<string>) => void;
+  selectedValues?: Set<string>;
+  onFilterChange?: (field: Field, selected: Set<string>) => void;
   valueLabel?: (value: string) => string;
   /**
    * false — колонка фильтруется, но не сортируется: сервер не умеет сортировать
    * по этому полю, а подставлять вместо него чужое поле молча нельзя.
    */
   sortable?: boolean;
+  /**
+   * false — колонка сортируется, но не фильтруется: сервер такого фильтра не
+   * понимает, и показывать оператору попапер, который ничего не делает,
+   * незачем. Подпись становится текстом, кнопка сортировки остаётся.
+   */
+  filterable?: boolean;
   /** Controlled search query for live table filtering */
   searchQuery?: string;
   onSearchChange?: (field: Field, query: string) => void;
@@ -33,19 +43,20 @@ export interface SortableFilterHeaderProps<Field extends string> {
  * - Click sort icon → cycle sort (none → asc → desc)
  * - Search in popover: partial match + relevance sort; live table filter via onSearchChange
  */
-export function SortableFilterHeader<Field extends string>({
+export function SortableFilterHeader<Field extends string, SortField extends string = Field>({
   field,
   label,
   currentSorts,
   onSortChange,
-  values,
-  selectedValues,
-  onFilterChange,
+  values = [],
+  selectedValues = EMPTY_SET,
+  onFilterChange = noopFilterChange,
   valueLabel,
   sortable = true,
+  filterable = true,
   searchQuery: controlledSearchQuery,
   onSearchChange,
-}: SortableFilterHeaderProps<Field>) {
+}: SortableFilterHeaderProps<Field, SortField>) {
   const [internalSearchQuery, setInternalSearchQuery] = useState("");
   const [open, setOpen] = useState(false);
 
@@ -64,7 +75,11 @@ export function SortableFilterHeader<Field extends string>({
     [field, isSearchControlled, onSearchChange],
   );
 
-  const activeSort = sortable ? currentSorts.find((s) => s.field === field) : undefined;
+  // Поле фильтра и поле сортировки могут различаться по типу, но не по
+  // значению: колонка сортируется по себе же, когда сервер её умеет.
+  const activeSort = sortable
+    ? currentSorts.find((s) => (s.field as string) === (field as string))
+    : undefined;
   const sortPriority = activeSort ? currentSorts.indexOf(activeSort) + 1 : null;
 
   const hasSetFilter = selectedValues.size > 0;
@@ -121,7 +136,8 @@ export function SortableFilterHeader<Field extends string>({
 
   return (
     <div className="inline-flex items-center gap-1 max-w-full">
-      <Popover open={open} onOpenChange={handleOpenChange}>
+      {filterable ? (
+        <Popover open={open} onOpenChange={handleOpenChange}>
         <PopoverTrigger asChild>
           <button
             type="button"
@@ -210,12 +226,24 @@ export function SortableFilterHeader<Field extends string>({
             </div>
           </div>
         </PopoverContent>
-      </Popover>
+        </Popover>
+      ) : (
+        // Подпись без фильтра — обычный текст: делать её кнопкой без
+        // действия незачем, иначе оператор кликает в никуда.
+        <span
+          className={cn(
+            "inline-flex items-center gap-1 text-left font-medium text-xs tracking-normal text-muted-foreground min-w-0",
+            activeSort && "text-foreground",
+          )}
+        >
+          <span className="truncate">{label}</span>
+        </span>
+      )}
 
       {sortable && (
         <button
           type="button"
-          onClick={() => onSortChange(field)}
+          onClick={() => onSortChange(field as unknown as SortField)}
           aria-pressed={activeSort ? "true" : "false"}
           aria-label={`Сортировка по ${String(field)}${activeSort ? ` (${activeSort.order})` : ""}`}
           data-sort-order={activeSort?.order ?? "none"}

@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { buildPlanSortParam, mapPlanSortFieldToApi } from "./planApiParams";
+import { buildPlanColumnApiParams, buildPlanPositionsQuery, buildPlanSortParam, mapPlanSortFieldToApi } from "./planApiParams";
 import type { PlanSortField } from "./plan-labels";
 
 /**
@@ -110,5 +110,106 @@ describe("buildPlanSortParam", () => {
     // а строки переставлялись по номеру строки исходника.
     expect(buildPlanSortParam([{ field: "route", order: "asc" }])).toBeUndefined();
     expect(buildPlanSortParam([{ field: "warnings", order: "desc" }])).toBeUndefined();
+  });
+});
+
+describe("buildPlanColumnApiParams", () => {
+  it("выбранный габарит уезжает в запрос — фильтр «Размер» работает", () => {
+    // Сборщик отдавал `dimensions`, а страница перечисляла поля запроса руками
+    // и его там не было: фильтр был виден и не фильтровал ничего.
+    const params = buildPlanColumnApiParams({ dimensions: new Set(['{"length_mm":2700}']) }, {});
+
+    expect(params.dimensions).toBe('{"length_mm":2700}');
+  });
+
+  it("поиск габарита в поповере не подменяется выбранным значением", () => {
+    const params = buildPlanColumnApiParams(
+      { dimensions: new Set(['{"length_mm":2700}']) },
+      { dimensions: "2,7" },
+    );
+
+    expect(params.dimensions).toBe('{"length_mm":2700}');
+  });
+
+  it("колонки, фильтруемые на клиенте, в запрос не уезжают", () => {
+    const params = buildPlanColumnApiParams(
+      { id: new Set(["42"]), rowNum: new Set(["7"]), qty: new Set(["5"]) },
+      { id: "42", rowNum: "7", qty: "5" },
+    );
+
+    expect(params).toEqual({});
+  });
+
+  it("артикул и наименование уезжают под серверными именами", () => {
+    expect(buildPlanColumnApiParams({ sku: new Set(["КР-01"]) }, { name: "Брус" })).toEqual({
+      source_sku: "КР-01",
+      source_name: "Брус",
+    });
+  });
+
+  it("«Не назначен» в маршруте уезжает как отсутствие маршрута", () => {
+    expect(buildPlanColumnApiParams({ route: new Set(["Не назначен"]) }, {})).toEqual({ has_route: "no" });
+    expect(buildPlanColumnApiParams({ route: new Set(["Пиление"]) }, {})).toEqual({ has_route: "yes" });
+  });
+
+  it("нулевые ошибки и предупреждения уезжат как их отсутствие", () => {
+    expect(buildPlanColumnApiParams({ errors: new Set(["0"]), warnings: new Set(["0"]) }, {})).toEqual({
+      has_errors: "no",
+      has_warnings: "no",
+    });
+  });
+
+  it("без фильтров параметров не уезжает вовсе", () => {
+    expect(buildPlanColumnApiParams({}, {})).toEqual({});
+  });
+});
+
+describe("buildPlanPositionsQuery", () => {
+  const base = { limit: 50, offset: 0, search: "", sort: undefined };
+  const noPanel = {
+    status: "all",
+    validationStatus: "all",
+    hasRoute: "all",
+    hasErrors: "all",
+    hasWarnings: "all",
+  };
+
+  it("выбранный габарит доезжает до запроса — фильтр «Размер» работает", () => {
+    // Страница перечисляла поля запроса руками и `dimensions` среди них не
+    // было: фильтр собирался, показывался и не фильтровал ничего.
+    const query = buildPlanPositionsQuery(
+      buildPlanColumnApiParams({ dimensions: new Set(['{"length_mm":2700}']) }, {}),
+      { ...base, panel: noPanel },
+    );
+
+    expect(query.dimensions).toBe('{"length_mm":2700}');
+  });
+
+  it("без выбранного габарита параметра в запросе нет", () => {
+    expect(buildPlanPositionsQuery(buildPlanColumnApiParams({}, {}), { ...base, panel: noPanel }).dimensions)
+      .toBeUndefined();
+  });
+
+  it("панельный фильтр имеет приоритет над фильтром колонки", () => {
+    const query = buildPlanPositionsQuery(
+      buildPlanColumnApiParams({ route: new Set(["Не назначен"]) }, {}),
+      { ...base, panel: { ...noPanel, hasRoute: "yes" } },
+    );
+
+    expect(query.has_route).toBe("yes");
+  });
+
+  it("при пустой панели уезжает фильтр колонки", () => {
+    const query = buildPlanPositionsQuery(
+      buildPlanColumnApiParams({ route: new Set(["Не назначен"]) }, {}),
+      { ...base, panel: noPanel },
+    );
+
+    expect(query.has_route).toBe("no");
+  });
+
+  it("поиск обрезается, а пустой не уезжает вовсе", () => {
+    expect(buildPlanPositionsQuery({}, { ...base, search: "  ", panel: noPanel }).search).toBeUndefined();
+    expect(buildPlanPositionsQuery({}, { ...base, search: " брус ", panel: noPanel }).search).toBe("брус");
   });
 });

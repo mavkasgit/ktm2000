@@ -40,7 +40,7 @@ import {
   AlertDialogDescription,
   AlertDialogAction,
   AlertDialogCancel,
-  SortableFilterHeader,
+  DataTableColumnHeader,
   TableCornerResetCell,
   TableCornerResetHeader,
   DATA_TABLE_STYLES,
@@ -66,7 +66,8 @@ import {
 import { getErrorMessage } from "@/shared/api/client";
 import { queryKeys } from "@/shared/api/queryKeys";
 import { formatDimensionsFilterValue, formatDimensionsLabel } from "@/shared/api/stock";
-import { pickExactMatchColumnValue } from "@/shared/lib/columnFilterSearch";
+import { buildColumnApiParams } from "@/shared/lib/columnSpecs";
+import { historyColumns, readyColumns } from "../lib/transferColumns";
 import { TABLE_ROW_COMPACT } from "@/shared/lib/dataTableStyles";
 import { cn } from "@/shared/utils/cn";
 import {
@@ -183,138 +184,35 @@ function getHistoryStatusLabel(
   return `${direction} / Принята`;
 }
 
-function extractSectionName(cellValue: string): string {
-  return cellValue.split(" / ")[0]?.trim() ?? cellValue;
-}
 
-function extractTransferStatusFromLabel(label: string): string | undefined {
-  const part = label.split(" / ").pop()?.trim();
-  switch (part) {
-    case "Аннулирована":
-      return "cancelled";
-    case "Отправлена":
-      return "sent";
-    case "Частично принята":
-      return "partially_accepted";
-    case "Принята":
-      return "accepted";
-    default:
-      return undefined;
-  }
-}
-
-function pickColumnApiValue<T extends string>(
-  columnFilters: Partial<Record<T, Set<string>>>,
-  columnSearchQueries: Partial<Record<T, string>>,
-  field: T,
-  mapValue: (value: string) => string | undefined = (value) => value,
-): string | undefined {
-  const searchQuery = columnSearchQueries[field]?.trim();
-  if (searchQuery) return mapValue(searchQuery);
-
-  const selected = columnFilters[field];
-  if (!selected || selected.size !== 1) return undefined;
-  const [value] = selected;
-  return mapValue(value);
-}
-
+/**
+ * Параметры журнала собираются из описания колонок. Раньше здесь стояло
+ * четыре строки с именами колонок.
+ */
 function buildHistoryColumnApiParams(
   columnFilters: Partial<Record<HistorySortField, Set<string>>>,
   columnSearchQueries: Partial<Record<HistorySortField, string>>,
-): Pick<
-  TransferHistoryListParams,
-  "product_sku" | "from_section_name" | "to_section_name" | "status"
-> {
-  const params: Pick<
-    TransferHistoryListParams,
-    "product_sku" | "from_section_name" | "to_section_name" | "status"
-  > = {};
-
-  const productSku = pickColumnApiValue(columnFilters, columnSearchQueries, "sku");
-  if (productSku) params.product_sku = productSku;
-
-  const fromSectionName = pickColumnApiValue(
-    columnFilters,
-    columnSearchQueries,
-    "from",
-    extractSectionName,
-  );
-  if (fromSectionName) params.from_section_name = fromSectionName;
-
-  const toSectionName = pickColumnApiValue(
-    columnFilters,
-    columnSearchQueries,
-    "to",
-    extractSectionName,
-  );
-  if (toSectionName) params.to_section_name = toSectionName;
-
-  const statusValue = pickColumnApiValue(
-    columnFilters,
-    columnSearchQueries,
-    "status",
-    extractTransferStatusFromLabel,
-  );
-  if (statusValue) params.status = statusValue;
-
-  return params;
+): Record<string, string> {
+  return buildColumnApiParams(columnFilters, columnSearchQueries, historyColumns);
 }
 
+/**
+ * Параметры готовых к передаче собираются из описания колонок. Раньше здесь
+ * стояло семь строк с именами колонок, включая ручной вызов точного значения
+ * по имени поля «Размер».
+ *
+ * Возвращается `Record<string, string>`, а не `Pick<ReadyToTransferListParams, …>`:
+ * приведение к `Pick` компилируется с любым набором строковых ключей и
+ * поэтому ничего не проверяет — именно через него проскочило имя
+ * `transferableQty` вместо `transferable_qty`, и фильтр перестал уезжать.
+ */
 function buildReadyColumnApiParams(
   columnFilters: Partial<Record<ReadySortField, Set<string>>>,
   columnSearchQueries: Partial<Record<ReadySortField, string>>,
-): Pick<
-  ReadyToTransferListParams,
-  | "product_sku"
-  | "operation_name"
-  | "next_operation_name"
-  | "next_section_name"
-  | "plan_position_id"
-  | "transferable_qty"
-  | "dimensions"
-> {
-  const params: Pick<
-    ReadyToTransferListParams,
-    | "product_sku"
-    | "operation_name"
-    | "next_operation_name"
-    | "next_section_name"
-    | "plan_position_id"
-    | "transferable_qty"
-    | "dimensions"
-  > = {};
-
-  const productSku = pickColumnApiValue(columnFilters, columnSearchQueries, "sku");
-  if (productSku && productSku !== "—") params.product_sku = productSku;
-
-  const stageName = pickColumnApiValue(columnFilters, columnSearchQueries, "stage");
-  if (stageName && stageName !== "—") params.operation_name = stageName;
-
-  const transferableQty = pickColumnApiValue(columnFilters, columnSearchQueries, "transferableQty");
-  if (transferableQty) params.transferable_qty = transferableQty;
-
-  const dimensions = pickExactMatchColumnValue(columnFilters, "dimensions");
-  if (dimensions) params.dimensions = dimensions;
-
-  const positionIdStr = pickColumnApiValue(columnFilters, columnSearchQueries, "positionId");
-  if (positionIdStr) {
-    const parsed = Number(positionIdStr);
-    if (Number.isFinite(parsed)) params.plan_position_id = parsed;
-  }
-
-  const nextSearch = columnSearchQueries.next?.trim();
-  const nextSelected = columnFilters.next;
-  let nextRaw: string | undefined;
-  if (nextSearch) nextRaw = nextSearch;
-  else if (nextSelected?.size === 1) nextRaw = [...nextSelected][0];
-  if (nextRaw && nextRaw !== "Финальный") {
-    const [op, section] = nextRaw.split(" / ").map((part) => part.trim());
-    if (op) params.next_operation_name = op;
-    if (section) params.next_section_name = section;
-  }
-
-  return params;
+): Record<string, string> {
+  return buildColumnApiParams(columnFilters, columnSearchQueries, readyColumns);
 }
+
 
 function getHistoryCellValue(
   transfer: IncomingTransfer,
@@ -1321,70 +1219,20 @@ export function TransfersPage() {
                       />
                     </TableHead>
                   )}
-                  <TableHead className={`${headerCellClass} p-0`}>
-                    <SortableFilterHeader
-                      field="positionId"
-                      label="ID"
-                      currentSorts={readySortConfigs}
-                      onSortChange={handleReadySort}
-                      values={readyUniqueValues.positionId}
-                      {...bindReadyColumn("positionId")}
-                      valueLabel={(v) => `#${v}`}
-                    />
-                  </TableHead>
-                  <TableHead className={`${headerCellClass} p-0`}>
-                    <SortableFilterHeader
-                      field="sku"
-                      label="Артикул"
-                      currentSorts={readySortConfigs}
-                      onSortChange={handleReadySort}
-                      values={readyUniqueValues.sku}
-                      {...bindReadyColumn("sku")}
-                    />
-                  </TableHead>
-                  <TableHead className={`${headerCellClass} p-0`}>
-                    <SortableFilterHeader
-                      field="dimensions"
-                      label="Размер"
-                      currentSorts={readySortConfigs}
-                      onSortChange={handleReadySort}
-                      values={readyUniqueValues.dimensions}
-                      selectedValues={bindReadyColumn("dimensions").selectedValues}
-                      onFilterChange={bindReadyColumn("dimensions").onFilterChange}
-                      valueLabel={formatDimensionsFilterValue}
-                    />
-                  </TableHead>
-                  <TableHead className={`${headerCellClass} p-0`}>
-                    <SortableFilterHeader
-                      field="stage"
-                      label="Этап"
-                      currentSorts={readySortConfigs}
-                      onSortChange={handleReadySort}
-                      values={readyUniqueValues.stage}
-                      {...bindReadyColumn("stage")}
-                    />
-                  </TableHead>
-                  <TableHead className={`${headerCellClass} p-0 text-right`}>
-                    <SortableFilterHeader
-                      field="transferableQty"
-                      label="К передаче"
-                      currentSorts={readySortConfigs}
-                      onSortChange={handleReadySort}
-                      values={readyUniqueValues.transferableQty}
-                      {...bindReadyColumn("transferableQty")}
-                      valueLabel={(v) => `${v} шт.`}
-                    />
-                  </TableHead>
-                  <TableHead className={`${headerCellClass} p-0`}>
-                    <SortableFilterHeader
-                      field="next"
-                      label="Следующий"
-                      currentSorts={readySortConfigs}
-                      onSortChange={handleReadySort}
-                      values={readyUniqueValues.next}
-                      {...bindReadyColumn("next")}
-                    />
-                  </TableHead>
+                  {readyColumns.map((column) => (
+                    <TableHead
+                      key={column.id}
+                      className={`${headerCellClass} p-0${column.id === "transferableQty" ? " text-right" : ""}`}
+                    >
+                      <DataTableColumnHeader
+                        column={column}
+                        bindColumn={bindReadyColumn}
+                        values={readyUniqueValues[column.filterField] ?? []}
+                        currentSorts={readySortConfigs}
+                        onSortChange={handleReadySort}
+                      />
+                    </TableHead>
+                  ))}
                   {!bulkMode && (
                     <TableHead className={headerCellClass}>
                       Действия
@@ -1506,63 +1354,20 @@ export function TransfersPage() {
                   <table className="w-full caption-bottom text-sm">
                     <TableHeader>
                       <TableRow>
-                        <TableHead className={`${headerCellClass} p-0 font-mono`}>
-                          ID
-                        </TableHead>
-                        <TableHead className={`${headerCellClass} p-0`}>
-                          <SortableFilterHeader
-                            field="from"
-                            label="Отправитель (Откуда)"
-                            currentSorts={historySortConfigs}
-                            onSortChange={handleHistorySort}
-                            values={historyUniqueValues.from}
-                            {...bindHistoryColumn("from")}
-                          />
-                        </TableHead>
-                        <TableHead className={`${headerCellClass} p-0`}>
-                          <SortableFilterHeader
-                            field="to"
-                            label="Получатель (Куда)"
-                            currentSorts={historySortConfigs}
-                            onSortChange={handleHistorySort}
-                            values={historyUniqueValues.to}
-                            {...bindHistoryColumn("to")}
-                          />
-                        </TableHead>
-                        <TableHead className={`${headerCellClass} p-0`}>
-                          <SortableFilterHeader
-                            field="sku"
-                            label="Артикул"
-                            currentSorts={historySortConfigs}
-                            onSortChange={handleHistorySort}
-                            values={historyUniqueValues.sku}
-                            {...bindHistoryColumn("sku")}
-                          />
-                        </TableHead>
-                        <TableHead className={`${headerCellClass} p-0`}>
-                          <span className="text-xs font-medium text-muted-foreground">Размер</span>
-                        </TableHead>
-                        <TableHead className={`${headerCellClass} p-0 text-right`}>
-                          <SortableFilterHeader
-                            field="quantity"
-                            label="Кол-во"
-                            currentSorts={historySortConfigs}
-                            onSortChange={handleHistorySort}
-                            values={historyUniqueValues.quantity}
-                            {...bindHistoryColumn("quantity")}
-                          />
-                        </TableHead>
-                        <TableHead className={`${headerCellClass} p-0`}>
-                          <SortableFilterHeader
-                            field="status"
-                            label="Статус"
-                            currentSorts={historySortConfigs}
-                            onSortChange={handleHistorySort}
-                            values={historyUniqueValues.status}
-                            {...bindHistoryColumn("status")}
-                          />
-                        </TableHead>
-                        <TableHead className={`${headerCellClass} w-[40px]`} />
+                        {historyColumns.map((column) => (
+                          <TableHead
+                            key={column.id}
+                            className={`${headerCellClass} p-0 ${column.headerClassName ?? ""}`}
+                          >
+                            <DataTableColumnHeader
+                              column={column}
+                              bindColumn={bindHistoryColumn}
+                              values={column.filterField ? historyUniqueValues[column.filterField] : undefined}
+                              currentSorts={historySortConfigs}
+                              onSortChange={handleHistorySort}
+                            />
+                          </TableHead>
+                        ))}
                         <TableCornerResetHeader
                           hasActiveFilters={hasHistoryFiltersActive}
                           onReset={resetHistoryFilters}

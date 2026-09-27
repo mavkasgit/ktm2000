@@ -25,12 +25,26 @@ React 18.3 + TypeScript + Vite + Tailwind CSS + shadcn/ui + TanStack Query/Virtu
 
 - **Описание колонки** — семантика колонки объявляется один раз в
   [`src/shared/lib/columnSpecs.ts`](src/shared/lib/columnSpecs.ts)
-  (`ColumnSpec`): `filterField`, `sortField`, `valueLabel`, `exactMatch`.
-  Из описания порождаются шапка, фильтр и параметры запроса. Тернарник
+  (`ColumnSpec`): `filterField`, `sortField`, `valueLabel`, `exactMatch`,
+  `apiParam`, `mapValue`, `toParams`, `clientOnly`. Из описания порождаются
+  шапка, фильтр, сортировка и параметры запроса. Тернарник
   `filterField === "dimensions"` в шапке и ручной вызов
   `pickExactMatchColumnValue(…, "dimensions")` — не способ объявить
   семантику: добавить колонку с особым фильтром значило бы править и то и
   другое. Значения точного совпадения собирает `exactMatchColumnParams`.
+  Своя функция `buildXColumnApiParams` с перечислением колонок — не способ
+  собрать параметры: используйте `buildColumnApiParams`, он берёт колонки из
+  описания.
+  Шапка собирается компонентом
+  [`src/shared/ui/DataTableColumnHeader.tsx`](src/shared/ui/DataTableColumnHeader.tsx):
+  фильтр, сортировка, фильтр-без-сортировки, сортировка-без-фильтра и голая
+  подпись — его решение. Тернарник `filterField ? … : <span>` в разметке
+  экрана означает, что случай ещё не покрыт общим компонентом.
+  Сортировка по умолчанию объявляется хуку (`defaultSort`) и сбросом
+  возвращается, а не считается фильтром: условие «сортировка нестандартная»,
+  написанное руками, расходилось между экранами.
+  Колонка, которую сервер не фильтрует, объявляется **без** `filterField` и
+  `sortField`, а не с флагом, который ничего не отправляет.
 - **Пауза перед запросом по поиску** — [`src/shared/lib/useDebouncedValue.ts`](src/shared/lib/useDebouncedValue.ts).
   Свой `useState` + `useEffect` с `setTimeout` рядом с полем — нельзя: таких
   копий было двенадцать, и одна цифра в задержке меняла поведение одного

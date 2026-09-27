@@ -1,5 +1,5 @@
 import { useMemo } from "react";
-import { Badge, SortableFilterHeader, TableCornerResetCell, TableCornerResetHeader, DATA_TABLE_STYLES } from "@/shared/ui";
+import { Badge, DataTableColumnHeader, TableCornerResetCell, TableCornerResetHeader, DATA_TABLE_STYLES } from "@/shared/ui";
 import { useFilterableTable } from "@/shared/hooks/useFilterableTable";
 import { fmtQty } from "@/shared/utils/fmtQty";
 import { type ProductionPlanningStage, type StatusHistoryEntry } from "@/shared/api/productionPlans";
@@ -10,7 +10,7 @@ import {
   type ColumnSortDef,
 } from "@/shared/hooks/useTableQueryEngine";
 
-type EventSortField = "date" | "type" | "event" | "from" | "to" | "quantity";
+import { eventColumns, type EventField } from "./executionEventsColumns";
 
 export type ExecutionEventRow = {
   id: string;
@@ -96,7 +96,7 @@ function buildEventRows(
   return rows;
 }
 
-function getCellValue(row: ExecutionEventRow, field: EventSortField): string {
+function getCellValue(row: ExecutionEventRow, field: EventField): string {
   switch (field) {
     case "date":
       return fmtEventAt(row.event_at);
@@ -123,14 +123,14 @@ export function ExecutionEventsTable({ stages, statusHistory }: ExecutionEventsT
     handleSort: handleSortChange,
     hasActiveFilters,
     resetAll: handleResetFilters,
-  } = useFilterableTable<EventSortField>();
+  } = useFilterableTable<EventField>();
 
   const eventRows = useMemo(
     () => buildEventRows(stages, statusHistory),
     [stages, statusHistory],
   );
 
-  const sortDefs = useMemo((): ColumnSortDef<ExecutionEventRow, EventSortField>[] => [
+  const sortDefs = useMemo((): ColumnSortDef<ExecutionEventRow, EventField>[] => [
     {
       field: "date",
       getSortValue: (row) => (row.event_at ? new Date(row.event_at).getTime() : 0),
@@ -150,29 +150,26 @@ export function ExecutionEventsTable({ stages, statusHistory }: ExecutionEventsT
     [buildFilterPredicate],
   );
 
-  const uniqueValues = useMemo(
-    () => ({
-      date: [...new Set(eventRows.map((row) => getCellValue(row, "date")))].sort((a, b) =>
-        a.localeCompare(b, "ru"),
-      ),
-      type: [...new Set(eventRows.map((row) => getCellValue(row, "type")))].sort((a, b) =>
-        a.localeCompare(b, "ru"),
-      ),
-      event: [...new Set(eventRows.map((row) => getCellValue(row, "event")))].sort((a, b) =>
-        a.localeCompare(b, "ru"),
-      ),
-      from: [...new Set(eventRows.map((row) => getCellValue(row, "from")))].sort((a, b) =>
-        a.localeCompare(b, "ru"),
-      ),
-      to: [...new Set(eventRows.map((row) => getCellValue(row, "to")))].sort((a, b) =>
-        a.localeCompare(b, "ru"),
-      ),
-      quantity: [...new Set(eventRows.map((row) => getCellValue(row, "quantity")))].sort(
-        (a, b) => (Number.parseFloat(a) || 0) - (Number.parseFloat(b) || 0),
-      ),
-    }),
-    [eventRows],
-  );
+  const uniqueValues = useMemo((): Record<EventField, string[]> => ({
+    date: [...new Set(eventRows.map((row) => getCellValue(row, "date")))].sort((a, b) =>
+      a.localeCompare(b, "ru"),
+    ),
+    type: [...new Set(eventRows.map((row) => getCellValue(row, "type")))].sort((a, b) =>
+      a.localeCompare(b, "ru"),
+    ),
+    event: [...new Set(eventRows.map((row) => getCellValue(row, "event")))].sort((a, b) =>
+      a.localeCompare(b, "ru"),
+    ),
+    from: [...new Set(eventRows.map((row) => getCellValue(row, "from")))].sort((a, b) =>
+      a.localeCompare(b, "ru"),
+    ),
+    to: [...new Set(eventRows.map((row) => getCellValue(row, "to")))].sort((a, b) =>
+      a.localeCompare(b, "ru"),
+    ),
+    quantity: [...new Set(eventRows.map((row) => getCellValue(row, "quantity")))].sort(
+      (a, b) => (Number.parseFloat(a) || 0) - (Number.parseFloat(b) || 0),
+    ),
+  }), [eventRows]);
 
   const { rows: filteredRows } = useTableQueryEngine({
     rows: eventRows,
@@ -196,69 +193,20 @@ export function ExecutionEventsTable({ stages, statusHistory }: ExecutionEventsT
       <table className="w-full text-sm">
         <thead>
           <tr>
-            <th className={`${headerCellClass} p-0`}>
-              <SortableFilterHeader
-                field="date"
-                label="Дата"
-                currentSorts={sortConfigs}
-                onSortChange={handleSortChange}
-                values={uniqueValues.date}
-                {...bindColumn("date")}
-              />
-            </th>
-            <th className={`${headerCellClass} p-0`}>
-              <SortableFilterHeader
-                field="type"
-                label="Тип"
-                currentSorts={sortConfigs}
-                onSortChange={handleSortChange}
-                values={uniqueValues.type}
-                {...bindColumn("type")}
-              />
-            </th>
-            <th className={`${headerCellClass} p-0`}>
-              <SortableFilterHeader
-                field="event"
-                label="Событие"
-                currentSorts={sortConfigs}
-                onSortChange={handleSortChange}
-                values={uniqueValues.event}
-                {...bindColumn("event")}
-              />
-            </th>
-            <th className={`${headerCellClass} p-0`}>
-              <SortableFilterHeader
-                field="from"
-                label="Откуда"
-                currentSorts={sortConfigs}
-                onSortChange={handleSortChange}
-                values={uniqueValues.from}
-                {...bindColumn("from")}
-              />
-            </th>
-            <th className={`${headerCellClass} p-0`}>
-              <SortableFilterHeader
-                field="to"
-                label="Куда"
-                currentSorts={sortConfigs}
-                onSortChange={handleSortChange}
-                values={uniqueValues.to}
-                {...bindColumn("to")}
-              />
-            </th>
-            <th className={`${headerCellClass} p-0`}>
-              <SortableFilterHeader
-                field="quantity"
-                label="Кол-во"
-                currentSorts={sortConfigs}
-                onSortChange={handleSortChange}
-                values={uniqueValues.quantity}
-                {...bindColumn("quantity")}
-              />
-            </th>
-            <th className={headerCellClass}>
-              Детали
-            </th>
+            {eventColumns.map((column) => (
+              <th
+                key={column.id}
+                className={`${headerCellClass} ${column.headerClassName ?? ""}`}
+              >
+                <DataTableColumnHeader
+                  column={column}
+                  bindColumn={bindColumn}
+                  values={column.filterField ? uniqueValues[column.filterField] : undefined}
+                  currentSorts={sortConfigs}
+                  onSortChange={handleSortChange}
+                />
+              </th>
+            ))}
             <TableCornerResetHeader
               hasActiveFilters={hasActiveFilters}
               onReset={handleResetFilters}

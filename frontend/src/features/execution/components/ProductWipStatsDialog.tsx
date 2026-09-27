@@ -211,19 +211,16 @@ export function ProductWipStatsDialog({ sku, open, onOpenChange }: ProductWipSta
     sortConfigs,
     setSortConfigs,
     handleSort: handleSortChange,
-    hasActiveColumnFilters,
+    hasActiveFilters,
     resetAll,
     resetColumnFilters,
   } = useFilterableTable<WipRemainderSortField>({
-    onExtraReset: () => setSortConfigs(DEFAULT_WIP_SORT),
+    // Порядок «от большего остатка» задан по умолчанию: он не считается
+    // фильтром, и сброс возвращает его, а не пустоту. Условие «сортировка
+    // нестандартная» раньше было написано здесь руками.
+    defaultSort: DEFAULT_WIP_SORT,
   });
 
-  const sortIsNonDefault =
-    sortConfigs.length !== 1 ||
-    sortConfigs[0]?.field !== "qty" ||
-    sortConfigs[0]?.order !== "desc";
-
-  const hasActiveFilters = hasActiveColumnFilters || sortIsNonDefault;
   const handleResetFilters = resetAll;
 
   const uniqueValues = useMemo(() => {

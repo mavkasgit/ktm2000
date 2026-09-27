@@ -6,10 +6,8 @@ import { TooltipProvider } from "@/shared/ui/tooltip";
 import { toast } from "@/shared/ui/use-toast";
 import { SortableFilterHeader } from "@/shared/ui/SortableFilterHeader";
 import { TableCornerResetHeader, DATA_TABLE_STYLES } from "@/shared/ui";
-import { useSortableColumnFilters } from "@/shared/hooks/useSortableColumnFilters";
-import { nextMultiSortConfigs } from "@/shared/lib/multiSort";
+import { useFilterableTable } from "@/shared/hooks/useFilterableTable";
 import { buildSortParam } from "@/shared/lib/sortQueryParam";
-import type { SortConfig } from "@/shared/hooks/useTableQueryEngine";
 import { listProductsPaginated, listProductPairCatalog, patchProduct, getErrorMessage } from "@/shared/api/products";
 import type { Product, ProductFilters, ProductPairCatalogEntry } from "@/shared/api/products";
 import { calcHanger, calcPairedHanger } from "@/shared/api/hangerCalc";
@@ -80,13 +78,21 @@ export function HangerCalcTable({
 
   const [search, setSearch] = useState("");
   const debouncedSearch = useDebouncedValue(search);
-  const [sortConfigs, setSortConfigs] = useState<SortConfig<HangerCalcSortField>[]>([]);
   const {
     bindColumn,
     buildFilterPredicate,
-    hasActiveColumnFilters,
-    resetColumnFilters,
-  } = useSortableColumnFilters<HangerCalcSortField>();
+    sortConfigs,
+    handleSort,
+    hasActiveFilters,
+    resetAll,
+  } = useFilterableTable<HangerCalcSortField>({
+    // Поиск считается фильтром, а сортировка и фильтры колонок — общим
+    // правилом хука: условие «активно» раньше было написано здесь руками и
+    // могло разойтись с правилом на других экранах. Сортировка тоже живёт в
+    // хуке: своё состояние рядом с ним делало счётчик слепым к сортировке.
+    extraHasActive: search.trim().length > 0,
+    onExtraReset: () => setSearch(""),
+  });
 
 
 
@@ -381,14 +387,7 @@ export function HangerCalcTable({
     return sortHangerCalcRows(searched, sortConfigs);
   }, [allRows, predicate, sortConfigs, debouncedSearch]);
 
-  const hasActiveFilters =
-    search.trim().length > 0 || hasActiveColumnFilters || sortConfigs.length > 0;
-
-  const resetFilters = () => {
-    setSearch("");
-    setSortConfigs([]);
-    resetColumnFilters();
-  };
+  const resetFilters = resetAll;
 
   return (
     <TooltipProvider delayDuration={200}>
@@ -433,7 +432,7 @@ export function HangerCalcTable({
                       field="sku"
                       label="Артикул"
                       currentSorts={sortConfigs}
-                      onSortChange={(field) => setSortConfigs((prev) => nextMultiSortConfigs(prev, field))}
+                      onSortChange={handleSort}
                       values={uniqueValues.sku}
                       {...bindColumn("sku")}
                     />
@@ -448,7 +447,7 @@ export function HangerCalcTable({
                       field="total"
                       label="Итог"
                       currentSorts={sortConfigs}
-                      onSortChange={(field) => setSortConfigs((prev) => nextMultiSortConfigs(prev, field))}
+                      onSortChange={handleSort}
                       values={uniqueValues.total}
                       {...bindColumn("total")}
                     />
@@ -458,7 +457,7 @@ export function HangerCalcTable({
                       field="limiter"
                       label="Лимитер"
                       currentSorts={sortConfigs}
-                      onSortChange={(field) => setSortConfigs((prev) => nextMultiSortConfigs(prev, field))}
+                      onSortChange={handleSort}
                       values={uniqueValues.limiter}
                       {...bindColumn("limiter")}
                     />

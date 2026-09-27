@@ -1,0 +1,154 @@
+/**
+ * Описание колонок передач — единственное место, где объявляется, что это за
+ * колонка, как она фильтруется, сортируется и какими параметрами уезжает в
+ * запрос (#198, ADR-0038).
+ *
+ * Пока параметры собирались в `buildReadyColumnApiParams` и
+ * `buildHistoryColumnApiParams`, а значение «—» отбрасывалось в шести местах
+ * двумя способами, колонка называлась и в разметке шапки, и в сборке.
+ */
+import { formatDimensionsFilterValue } from "@/shared/api/stock";
+import type { ColumnSpec } from "@/shared/lib/columnSpecs";
+
+import type { HistorySortField, ReadySortField } from "./transferSortParams";
+
+export type ReadyColumn = ColumnSpec<ReadySortField> & {
+  id: string;
+  label: string;
+  /** Все колонки готовых к передаче фильтруемые. */
+  filterField: ReadySortField;
+};
+
+export type HistoryColumn = ColumnSpec<HistorySortField> & {
+  id: string;
+  label: string;
+  /** Класс `<th>` сверх общего: выравнивание и ширина. */
+  headerClassName?: string;
+};
+
+/** «—» — это пусто, а не значение: сервер такого не понимает. */
+const dropDash = (value: string) => (value === "—" ? undefined : value);
+
+/** Ячейка участка хранит операцию вместе с участком: «Пиление / Упаковка». */
+const sectionNameOnly = (cellValue: string): string => cellValue.split(" / ")[0]?.trim() ?? cellValue;
+
+/** Ячейка статуса — «Входящая / Принята», серверу нужен только код. */
+const transferStatusCode = (label: string): string | undefined => {
+  const part = label.split(" / ").pop()?.trim();
+  switch (part) {
+    case "Аннулирована":
+      return "cancelled";
+    case "Отправлена":
+      return "sent";
+    case "Частично принята":
+      return "partially_accepted";
+    case "Принята":
+      return "accepted";
+    default:
+      return undefined;
+  }
+};
+
+/** «Пиление / Упаковка» — это операция и участок сразу, в одном значении. */
+const splitNext = (value: string): Record<string, string> => {
+  if (value === "Финальный") return {};
+  const [operation, section] = value.split(" / ").map((part) => part.trim());
+  const params: Record<string, string> = {};
+  if (operation) params.next_operation_name = operation;
+  if (section) params.next_section_name = section;
+  return params;
+};
+
+export const readyColumns: ReadyColumn[] = [
+  {
+    id: "positionId",
+    label: "ID",
+    filterField: "positionId",
+    sortField: "positionId",
+    apiParam: "plan_position_id",
+    // Номер позиции — число, а не строка: нечисловой ввод в фильтр не уходит.
+    mapValue: (value) => (Number.isFinite(Number(value)) ? value : undefined),
+    valueLabel: (value) => `#${value}`,
+  },
+  {
+    id: "sku",
+    label: "Артикул",
+    filterField: "sku",
+    sortField: "sku",
+    apiParam: "product_sku",
+    mapValue: dropDash,
+  },
+  {
+    id: "dimensions",
+    label: "Размер",
+    filterField: "dimensions",
+    sortField: "dimensions",
+    // Оператор выбирает габарит из списка, а не ищет подстроку в подписи.
+    exactMatch: true,
+    valueLabel: formatDimensionsFilterValue,
+  },
+  {
+    id: "stage",
+    label: "Этап",
+    filterField: "stage",
+    sortField: "stage",
+    apiParam: "operation_name",
+    mapValue: dropDash,
+  },
+  {
+    id: "transferableQty",
+    label: "К передаче",
+    filterField: "transferableQty",
+    sortField: "transferableQty",
+    apiParam: "transferable_qty",
+    valueLabel: (value) => `${value} шт.`,
+  },
+  { id: "next", label: "Следующий", filterField: "next", sortField: "next", toParams: splitNext },
+];
+
+/**
+ * Журнал передач. Колонка «Размер» объявлена без фильтра и без сортировки:
+ * `TransferHistoryListParams` такого параметра не знает, и
+ * `listTransferHistory` его не сериализует. Добавить фильтр — значит сперва
+ * расширить контракт бэкенда, а не выдумывать параметр на фронте.
+ */
+export const historyColumns: HistoryColumn[] = [
+  { id: "positionId", label: "ID", headerClassName: "font-mono" },
+  {
+    id: "from",
+    label: "Отправитель (Откуда)",
+    filterField: "from",
+    sortField: "from",
+    apiParam: "from_section_name",
+    mapValue: sectionNameOnly,
+  },
+  {
+    id: "to",
+    label: "Получатель (Куда)",
+    filterField: "to",
+    sortField: "to",
+    apiParam: "to_section_name",
+    mapValue: sectionNameOnly,
+  },
+  { id: "sku", label: "Артикул", filterField: "sku", sortField: "sku", apiParam: "product_sku" },
+  { id: "dimensions", label: "Размер" },
+  {
+    id: "quantity",
+    label: "Кол-во",
+    headerClassName: "text-right",
+    // Фильтра нет: `transfer_history_generic` такого параметра не принимает,
+    // и `listTransferHistory` его не сериализует. Попапер выбора количества
+    // не делал ничего. Сортировка по количеству серверу знакома, поэтому она
+    // остаётся.
+    sortField: "quantity",
+  },
+  {
+    id: "status",
+    label: "Статус",
+    filterField: "status",
+    sortField: "status",
+    apiParam: "status",
+    mapValue: transferStatusCode,
+  },
+  { id: "expansion", label: "", headerClassName: "w-[40px]" },
+];

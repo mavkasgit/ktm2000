@@ -2,7 +2,7 @@ import { useEffect, useMemo, useRef, useState } from "react"
 import { FileSpreadsheet, Plus, Upload, ListChecks } from "lucide-react"
 import { ImportWizard } from "../ImportWizard"
 import { ProductWipStatsDialog } from "@/features/execution/components/ProductWipStatsDialog"
-import { Button, Select, SelectContent, SelectItem, SelectTrigger, SelectValue, AlertDialog, AlertDialogContent, AlertDialogHeader, AlertDialogTitle, AlertDialogDescription, AlertDialogFooter, AlertDialogAction, AlertDialogCancel, SortableFilterHeader, FiltersPanel, TableCornerResetHeader, TablePaginationFooter, DATA_TABLE_STYLES, type FiltersPanelField, Badge } from "@/shared/ui"
+import { Button, Select, SelectContent, SelectItem, SelectTrigger, SelectValue, AlertDialog, AlertDialogContent, AlertDialogHeader, AlertDialogTitle, AlertDialogDescription, AlertDialogFooter, AlertDialogAction, AlertDialogCancel, DataTableColumnHeader, FiltersPanel, TableCornerResetHeader, TablePaginationFooter, DATA_TABLE_STYLES, type FiltersPanelField, Badge } from "@/shared/ui"
 import { buildActiveFilterSummary } from "@/shared/ui/buildActiveFilterSummary"
 import { usePaginatedTableQuery } from "@/shared/hooks/usePaginatedTableQuery"
 import { useFilterableTable } from "@/shared/hooks/useFilterableTable"
@@ -35,7 +35,8 @@ import {
   PlanSortField,
   PlanFiltersState,
 } from "../lib/plan-labels"
-import { buildPlanColumnApiParams, buildPlanSortParam } from "../lib/planApiParams"
+import { buildPlanColumnApiParams, buildPlanPositionsQuery, buildPlanSortParam } from "../lib/planApiParams"
+import { planColumnLabels, planColumns } from "../lib/planColumns"
 import { useDebouncedValue } from "@/shared/lib/useDebouncedValue";
 
 export function PlanPage() {
@@ -95,10 +96,21 @@ export function PlanPage() {
     sortConfigs,
     setSortConfigs,
     handleSort: handleSortChange,
-    resetColumnFilters,
+    resetAll,
     hasActiveFilters: hasTableFiltersActive,
   } = useFilterableTable<PlanSortField>({
     extraHasActive: panelFiltersActive,
+    onExtraReset: () => {
+      setSearchQuery("")
+      setFilters({
+        status: "all",
+        validation_status: "all",
+        has_route: "all",
+        has_errors: "all",
+        has_warnings: "all",
+        has_duplicates: "all",
+      })
+    },
   })
 
 
@@ -229,17 +241,7 @@ export function PlanPage() {
   }
 
   const resetAllFilters = () => {
-    setSearchQuery("")
-    setSortConfigs([])
-    resetColumnFilters()
-    setFilters({
-      status: "all",
-      validation_status: "all",
-      has_route: "all",
-      has_errors: "all",
-      has_warnings: "all",
-      has_duplicates: "all",
-    })
+    resetAll()
     pagination.resetPage()
     bulkSelection.clear()
     setBulkMode(false)
@@ -435,26 +437,21 @@ export function PlanPage() {
   // а если поддерживаемых нет — действует дефолт сервера.
   const planSort = useMemo(() => buildPlanSortParam(sortConfigs), [sortConfigs])
   const positionsQueryParams = useMemo(
-    () => ({
-      limit: pagination.limit,
-      offset: pagination.offset,
-      search: debouncedSearchQuery.trim() || undefined,
-      sort: planSort,
-      status: filters.status !== "all" ? filters.status : undefined,
-      validation_status: filters.validation_status !== "all" ? filters.validation_status : undefined,
-      has_route: filters.has_route !== "all" ? filters.has_route : columnApiParams.has_route,
-      has_errors: filters.has_errors !== "all" ? filters.has_errors : columnApiParams.has_errors,
-      has_warnings: filters.has_warnings !== "all" ? filters.has_warnings : columnApiParams.has_warnings,
-      source_sku: columnApiParams.source_sku,
-      source_name: columnApiParams.source_name,
-    }),
-    [
-      pagination.limit,
-      pagination.offset,
-      planSort,
-      filters,
-      columnApiParams,
-    ],
+    () =>
+      buildPlanPositionsQuery(columnApiParams, {
+        limit: pagination.limit,
+        offset: pagination.offset,
+        search: debouncedSearchQuery,
+        sort: planSort,
+        panel: {
+          status: filters.status,
+          validationStatus: filters.validation_status,
+          hasRoute: filters.has_route,
+          hasErrors: filters.has_errors,
+          hasWarnings: filters.has_warnings,
+        },
+      }),
+    [pagination.limit, pagination.offset, planSort, filters, columnApiParams, debouncedSearchQuery],
   )
 
   const { data: positionsData, isLoading: posLoading } = useQuery({
@@ -562,24 +559,20 @@ export function PlanPage() {
       buildActiveFilterSummary(filters, searchQuery, sortConfigs.length, {
         columnFilters,
         columnSearchQueries,
+        // Подписи берутся из описания колонок, а не перечисляются здесь:
+        // переименование колонки иначе нужно делать в двух местах.
         columnLabels: {
-          id: "Id",
-          rowNum: "Строка",
-          sku: "Артикул",
-          name: "Наименование",
-          qty: "Кол-во",
-          route: "Маршрут",
-          dimensions: "Размер",
+          ...planColumnLabels,
+          // Статус и валидация живут не в шапке таблицы, а в панели
+          // фильтров, но в счётчике активных фильтров они тоже участвуют.
           status: "Статус",
           validation: "Валидация",
-          errors: "Ошибки",
-          warnings: "Предупр.",
         },
       }),
     [filters, searchQuery, sortConfigs.length, columnFilters, columnSearchQueries],
   )
 
-  const uniqueValuesByField = useMemo(() => {
+  const uniqueValuesByField: Partial<Record<PlanSortField, string[]>> = useMemo(() => {
     const allRows = positions
     return {
       id: [...new Set(allRows.map((p) => String(p.id)))],
@@ -846,101 +839,17 @@ export function PlanPage() {
                     className={`grid items-start ${DATA_TABLE_STYLES.headerRow}`}
                     style={{ gridTemplateColumns: PLAN_POSITIONS_GRID }}
                   >
-                    <div className={DATA_TABLE_STYLES.headerCell}>
-                      <SortableFilterHeader
-                        field="id"
-                        label="Id"
-                        currentSorts={sortConfigs}
-                        onSortChange={handleSortChange}
-                        values={uniqueValuesByField.id}
-                        {...bindColumn("id")}
-                      />
-                    </div>
-                    <div className={DATA_TABLE_STYLES.headerCell}>
-                      <SortableFilterHeader
-                        field="rowNum"
-                        label="Строка"
-                        currentSorts={sortConfigs}
-                        onSortChange={handleSortChange}
-                        values={uniqueValuesByField.rowNum}
-                        {...bindColumn("rowNum")}
-                      />
-                    </div>
-                    <div className={DATA_TABLE_STYLES.headerCell}>
-                      <SortableFilterHeader
-                        field="sku"
-                        label="Артикул"
-                        currentSorts={sortConfigs}
-                        onSortChange={handleSortChange}
-                        values={uniqueValuesByField.sku}
-                        {...bindColumn("sku")}
-                      />
-                    </div>
-                    <div className={DATA_TABLE_STYLES.headerCell}>
-                      <SortableFilterHeader
-                        field="qty"
-                        label="Кол-во"
-                        currentSorts={sortConfigs}
-                        onSortChange={handleSortChange}
-                        values={uniqueValuesByField.qty}
-                        {...bindColumn("qty")}
-                        valueLabel={(v) => v}
-                      />
-                    </div>
-                    <div className={DATA_TABLE_STYLES.headerCell}>
-                      <SortableFilterHeader
-                        field="dimensions"
-                        label="Размер"
-                        currentSorts={sortConfigs}
-                        onSortChange={handleSortChange}
-                        values={uniqueValuesByField.dimensions}
-                        selectedValues={bindColumn("dimensions").selectedValues}
-                        onFilterChange={bindColumn("dimensions").onFilterChange}
-                        valueLabel={formatDimensionsFilterValue}
-                      />
-                    </div>
-                    <div className={DATA_TABLE_STYLES.headerCell}>
-                      <SortableFilterHeader
-                        field="name"
-                        label="Наименование"
-                        currentSorts={sortConfigs}
-                        onSortChange={handleSortChange}
-                        values={uniqueValuesByField.name}
-                        {...bindColumn("name")}
-                      />
-                    </div>
-                    <div className={DATA_TABLE_STYLES.headerCell}>
-                      <SortableFilterHeader
-                        field="route"
-                        label="Маршрут"
-                        currentSorts={sortConfigs}
-                        onSortChange={handleSortChange}
-                        values={uniqueValuesByField.route}
-                        {...bindColumn("route")}
-                        sortable={false}
-                      />
-                    </div>
-                    <div className={DATA_TABLE_STYLES.headerCell}>
-                      <SortableFilterHeader
-                        field="errors"
-                        label="Ошибки"
-                        currentSorts={sortConfigs}
-                        onSortChange={handleSortChange}
-                        values={uniqueValuesByField.errors}
-                        {...bindColumn("errors")}
-                      />
-                    </div>
-                    <div className={DATA_TABLE_STYLES.headerCell}>
-                      <SortableFilterHeader
-                        field="warnings"
-                        label="Предупр."
-                        currentSorts={sortConfigs}
-                        onSortChange={handleSortChange}
-                        values={uniqueValuesByField.warnings}
-                        {...bindColumn("warnings")}
-                        sortable={false}
-                      />
-                    </div>
+                    {planColumns.map((column) => (
+                      <div className={DATA_TABLE_STYLES.headerCell} key={column.id}>
+                        <DataTableColumnHeader
+                          column={column}
+                          bindColumn={bindColumn}
+                          values={uniqueValuesByField[column.filterField] ?? []}
+                          currentSorts={sortConfigs}
+                          onSortChange={handleSortChange}
+                        />
+                      </div>
+                    ))}
                     <div className={`${DATA_TABLE_STYLES.headerCell} text-xs font-medium text-muted-foreground`}>
                       Действия
                     </div>
