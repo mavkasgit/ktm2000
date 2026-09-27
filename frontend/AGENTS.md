@@ -41,6 +41,30 @@ React 18.3 + TypeScript + Vite + Tailwind CSS + shadcn/ui + TanStack Query/Virtu
   наведения. Термин и правило — [ADR-0032](../docs/adr/0032-edinoe-pravilo-vvoda-kolichestva.md)
   и [CONTEXT.md](../CONTEXT.md).
 
+## Окна
+
+- Новое окно берёт **каркас** `Dialog`
+  ([`src/shared/ui/dialog.tsx`](src/shared/ui/dialog.tsx)): оверлей,
+  центрирование, удержание фокуса, закрытие по `Escape`, блокировку прокрутки,
+  возврат фокуса и подписи он даёт сам. Свой оверлей
+  `fixed inset-0 bg-black/…`, свой `role="dialog"` и
+  `window.addEventListener("keydown", …)` для `Escape` — нельзя: это ровно то,
+  из-за чего окна ведут себя по-разному.
+- Размер окна — из `DIALOG_SIZES`
+  ([`src/shared/lib/dialogSizes.ts`](src/shared/lib/dialogSizes.ts)):
+  `sm` — подтверждение и короткая форма, `md` — панель настроек, `wide` —
+  таблицы и печать. Свои `max-w-[…]` рядом с окном — нельзя; уточнить можно
+  только рядом с собой и поверх общего набора.
+- Заголовок окна — `DialogTitle`, пояснение — `DialogDescription`. Свой
+  крестик и `aria-label` на безымянном `div` — нельзя: имя окна для чтения с
+  экрана берётся из самого текста.
+- Глобальный обработчик клавиш страницы **спрашивает `isAnyDialogOpen()`**
+  ([`src/shared/lib/dialogOpen.ts`](src/shared/lib/dialogOpen.ts)), а не флаги
+  состояния: перечисление окон флагами забывает новое окно, и `Escape` начинает
+  работать поверх открытого окна.
+- Термин и правило — [ADR-0033](../docs/adr/0033-obshchiy-karkas-modalnyh-okon.md)
+  и [CONTEXT.md](../CONTEXT.md).
+
 ## Команды
 
 ```bash

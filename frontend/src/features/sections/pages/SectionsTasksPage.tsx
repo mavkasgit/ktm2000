@@ -48,6 +48,7 @@ import {
 import { PRESET_PROFILES, type GroupingProfile } from "../lib/groupingProfiles";
 import { isTaskCompletable, getNonCompletableTasks } from "../lib/taskStatus";
 import { createAuditLog, getAuditLogs, type AuditLogEntry } from "@/shared/api/auditLogs";
+import { isAnyDialogOpen } from "@/shared/lib/dialogOpen";
 
 type MeResponse = {
   id: number;
@@ -425,6 +426,9 @@ export function SectionsTasksPage() {
     const handler = (e: KeyboardEvent) => {
       if (e.key !== "Escape") return;
       if (actionDialog.open || bulkResultsOpen) return;
+      // Окно плана и предпросмотра печати тоже Radix: перечислить их флагами
+      // значит забыть один. Пока открыто любое окно, страница клавиши не трогает.
+      if (isAnyDialogOpen()) return;
       e.preventDefault();
       if (isSingleWindow) {
         const now = Date.now();

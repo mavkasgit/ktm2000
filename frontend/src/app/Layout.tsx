@@ -6,6 +6,7 @@ import { toast } from "@/shared/ui"
 import { UserAvatar, getUserSeed } from "@user/ui"
 import { KtmUserSettingsDialog } from "@/features/user-settings/KtmUserSettingsDialog"
 import { KtmNotificationBell } from "@/features/notifications"
+import { installDialogFocusTracker } from "@/shared/lib/dialogFocus"
 
 const navItems = [
   { to: "/", label: "Обзор", icon: Gauge },
@@ -36,6 +37,13 @@ export function Layout() {
   useEffect(() => {
     setMobileMenuOpen(false)
   }, [location])
+
+  // Источник открытия окна запоминается до монтирования окна: между кликом и
+  // монтированием страница перерисовывается и активный элемент теряет фокус,
+  // поэтому каркас без этого возвращает фокус на `body` (ADR-0033).
+  useEffect(() => {
+    installDialogFocusTracker()
+  }, [])
 
   // Close mobile menu when clicking outside
   useEffect(() => {

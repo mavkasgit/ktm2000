@@ -13,8 +13,10 @@
  */
 
 import { useEffect, useLayoutEffect, useRef, useState } from "react";
-import * as RadixDialog from "@radix-ui/react-dialog";
 import type { SectionBoardTask } from "@/shared/api/shopfloor";
+import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogDescription } from "@/shared/ui";
+import { DIALOG_SIZES } from "@/shared/lib/dialogSizes";
+import { cn } from "@/shared/utils/cn";
 import { PlanTaskTable } from "./PlanTaskTable";
 import type { PlanTaskGroupingMode } from "../lib/planTaskGroups";
 
@@ -88,14 +90,6 @@ export function PlanPrintPreviewModal({
 
   const printContent = tasks.length > 0;
 
-  useEffect(() => {
-    const handler = (event: KeyboardEvent) => {
-      if (event.key === "Escape") onClose();
-    };
-    window.addEventListener("keydown", handler);
-    return () => window.removeEventListener("keydown", handler);
-  }, [onClose]);
-
   const hasContent = printContent;
   const [pageCount, setPageCount] = useState(1);
 
@@ -116,10 +110,15 @@ export function PlanPrintPreviewModal({
 
 
   return (
-    <RadixDialog.Root open onOpenChange={() => onClose()}>
-      <RadixDialog.Portal>
-        <RadixDialog.Overlay className="fixed inset-0 z-[60] bg-black/50" />
-        <RadixDialog.Content id="print-preview-sheet" className="print-preview-sheet fixed left-[50%] top-[50%] z-[60] w-[90vw] max-w-[1200px] max-h-[90vh] translate-x-[-50%] translate-y-[-50%] bg-white shadow-lg rounded-lg overflow-hidden flex flex-col p-0">
+    <Dialog open onOpenChange={(isOpen) => !isOpen && onClose()}>
+      <DialogContent
+        id="print-preview-sheet"
+        className={cn(
+          DIALOG_SIZES.wide.width,
+          DIALOG_SIZES.wide.height,
+          "print-preview-sheet flex flex-col gap-0 overflow-hidden p-0 bg-white",
+        )}
+      >
           {/* Print styles — как в hrms */}
           <style>{`
             @page { size: A4 portrait; margin: 0; }
@@ -170,10 +169,10 @@ export function PlanPrintPreviewModal({
           `}</style>
 
           {/* Header — финальный шаг: превью + кнопка Печать */}
-          <div className="flex items-center justify-between p-4 border-b no-print">
+          <DialogHeader className="flex-row items-center justify-between gap-4 space-y-0 border-b p-4 pr-12 text-left no-print">
             <div>
-              <h2 className="text-lg font-semibold">Печать плана</h2>
-              <p className="text-sm text-muted-foreground">{sectionName}</p>
+              <DialogTitle className="text-lg font-semibold">Печать плана</DialogTitle>
+              <DialogDescription className="text-sm text-muted-foreground">{sectionName}</DialogDescription>
             </div>
             <div className="flex items-center gap-2">
               <button
@@ -183,14 +182,8 @@ export function PlanPrintPreviewModal({
                 Печать
               </button>
               <kbd className="hidden sm:inline-block text-[10px] text-muted-foreground border rounded px-1.5 py-0.5 font-mono">ESC</kbd>
-              <RadixDialog.Close
-                className="text-muted-foreground hover:text-foreground text-2xl leading-none"
-                aria-label="Закрыть"
-              >
-                ×
-              </RadixDialog.Close>
             </div>
-          </div>
+          </DialogHeader>
 
           {/* Preview — контент рендерится напрямую, без скрытого measurement */}
           <div className="flex-1 overflow-auto bg-white">
@@ -225,8 +218,7 @@ export function PlanPrintPreviewModal({
               </div>
             </div>
           </div>
-        </RadixDialog.Content>
-      </RadixDialog.Portal>
-    </RadixDialog.Root>
+      </DialogContent>
+    </Dialog>
   );
 }

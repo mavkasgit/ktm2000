@@ -21,6 +21,10 @@ import {
   saveDefaultProfile,
 } from "../lib/groupingProfiles";
 
+import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogDescription } from "@/shared/ui";
+import { DIALOG_SIZES } from "@/shared/lib/dialogSizes";
+import { cn } from "@/shared/utils/cn";
+
 
 // ---------------------------------------------------------------------------
 // Типы
@@ -110,25 +114,15 @@ export function GroupingSettingsModal({
   // ---------------------------------------------------------------------------
 
   return (
-    <div
-      className="fixed inset-0 z-50 bg-black/50 flex items-center justify-center"
-      onClick={(e) => e.target === e.currentTarget && onClose()}
-    >
-      <div className="bg-white rounded-lg shadow-xl max-w-lg w-full max-h-[90vh] flex flex-col m-4" role="dialog" aria-modal>
+    <Dialog open onOpenChange={(isOpen) => !isOpen && onClose()}>
+      <DialogContent className={cn(DIALOG_SIZES.md.width, DIALOG_SIZES.md.height, "flex flex-col gap-0 overflow-hidden p-0 bg-white")}>
         {/* Заголовок */}
-        <div className="flex items-center justify-between p-4 border-b">
+        <DialogHeader className="flex-row items-start justify-between gap-4 space-y-0 border-b p-4 pr-12 text-left">
           <div>
-            <h2 className="text-lg font-semibold">Настройки группировки</h2>
-            <p className="text-sm text-muted-foreground">Участок: {sectionName}</p>
+            <DialogTitle className="text-lg font-semibold">Настройки группировки</DialogTitle>
+            <DialogDescription className="text-sm text-muted-foreground">Участок: {sectionName}</DialogDescription>
           </div>
-          <button
-            className="text-muted-foreground hover:text-foreground text-2xl leading-none"
-            onClick={onClose}
-            aria-label="Закрыть"
-          >
-            ×
-          </button>
-        </div>
+        </DialogHeader>
 
         {/* Список пресетов */}
         <div className="flex-1 overflow-auto p-4 space-y-3">
@@ -229,8 +223,8 @@ export function GroupingSettingsModal({
             Применить
           </button>
         </div>
-      </div>
-    </div>
+      </DialogContent>
+    </Dialog>
   );
 }
 

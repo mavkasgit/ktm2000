@@ -34,7 +34,13 @@ import {
   AlertDialogFooter,
   AlertDialogHeader,
   AlertDialogTitle,
+  Dialog,
+  DialogContent,
+  DialogHeader,
+  DialogTitle,
 } from "@/shared/ui";
+import { DIALOG_SIZES } from "@/shared/lib/dialogSizes";
+import { cn } from "@/shared/utils/cn";
 
 interface PlanModalProps {
   open: boolean;
@@ -123,15 +129,6 @@ export function PlanModal({
     }
   }, [printSettings, presets, activePresetId]);
 
-  useEffect(() => {
-    if (!open) return;
-    const handleKeyDown = (event: KeyboardEvent) => {
-      if (event.key === "Escape" && !printSettingsOpen) onOpenChange(false);
-    };
-    window.addEventListener("keydown", handleKeyDown);
-    return () => window.removeEventListener("keydown", handleKeyDown);
-  }, [open, printSettingsOpen, onOpenChange]);
-
   const hideGroup = (key: string) => {
     setHiddenGroupKeys((previous) => new Set(previous).add(key));
   };
@@ -177,13 +174,9 @@ export function PlanModal({
     });
   }, [tasks, printSettings.minQty, printSettings.maxQty]);
 
-  if (!open) return null;
-
   return (
-    <div
-      className="fixed inset-0 z-50 bg-black/50 flex items-center justify-center"
-      onClick={(event) => event.target === event.currentTarget && onOpenChange(false)}
-    >
+    <>
+      <Dialog open={open} onOpenChange={onOpenChange}>
       <style>{`
         @page { size: A4 landscape; margin: 10mm; }
         @media print {
@@ -195,14 +188,18 @@ export function PlanModal({
           .no-print { display: none !important; }
         }
       `}</style>
-      <div className="bg-white rounded-lg shadow-xl w-[92vw] max-w-[1500px] max-h-[92vh] flex flex-col m-4 print-area" role="dialog" aria-modal="true" aria-label={`План: ${sectionName}`}>
-        <div className="p-4 border-b space-y-3 no-print">
-          <div className="flex items-center justify-between">
-            <h2 className="text-lg font-semibold">План: {sectionName}</h2>
-            <div className="flex items-center gap-2">
-              <kbd className="hidden sm:inline-block text-[10px] text-muted-foreground border rounded px-1.5 py-0.5 font-mono">ESC</kbd>
-              <button type="button" className="text-muted-foreground hover:text-foreground text-2xl leading-none" onClick={() => onOpenChange(false)} aria-label="Закрыть">×</button>
-            </div>
+      <DialogContent
+        className={cn(
+          DIALOG_SIZES.wide.width,
+          DIALOG_SIZES.wide.height,
+          "flex flex-col gap-0 overflow-hidden p-0",
+          "bg-white print-area",
+        )}
+      >
+        <DialogHeader className="p-4 border-b space-y-3 no-print text-left">
+          <div className="flex items-center justify-between gap-2 pr-10">
+            <DialogTitle className="text-lg font-semibold">План: {sectionName}</DialogTitle>
+            <kbd className="hidden sm:inline-block text-[10px] text-muted-foreground border rounded px-1.5 py-0.5 font-mono">ESC</kbd>
           </div>
 
           <div className="flex flex-wrap items-center gap-1.5 text-xs">
@@ -257,7 +254,7 @@ export function PlanModal({
             </div>
             <button type="button" onClick={() => setPrintSettingsOpen(true)} className="ml-auto px-3 py-1.5 rounded-md bg-blue-600 text-white text-xs font-medium hover:bg-blue-700">Печать</button>
           </div>
-        </div>
+        </DialogHeader>
 
         <div className="flex-1 overflow-auto p-4">
           {hiddenGroupKeys.size > 0 && (
@@ -272,25 +269,26 @@ export function PlanModal({
         <div className="flex justify-end p-4 border-t no-print">
           <button type="button" className="px-4 py-2 rounded-md border hover:bg-gray-50 text-sm" onClick={() => onOpenChange(false)}>Закрыть</button>
         </div>
-      </div>
+      </DialogContent>
+    </Dialog>
 
-      {printSettingsOpen && (
-        <PlanPrintPreviewModal
-          sectionName={sectionName}
-          onClose={() => setPrintSettingsOpen(false)}
-          tasks={filteredTasks}
-          settings={printSettings}
-          groupingMode={groupingMode}
-          hiddenGroupKeys={hiddenGroupKeys}
-        />
-      )}
+    {printSettingsOpen && (
+      <PlanPrintPreviewModal
+        sectionName={sectionName}
+        onClose={() => setPrintSettingsOpen(false)}
+        tasks={filteredTasks}
+        settings={printSettings}
+        groupingMode={groupingMode}
+        hiddenGroupKeys={hiddenGroupKeys}
+      />
+    )}
 
-      <AlertDialog open={!!presetToDelete} onOpenChange={(open) => !open && setPresetToDelete(null)}>
-        <AlertDialogContent className="max-w-sm">
-          <AlertDialogHeader><AlertDialogTitle>Удалить пресет?</AlertDialogTitle><AlertDialogDescription>Пресет «{presetToDelete?.name}» будет удалён.</AlertDialogDescription></AlertDialogHeader>
-          <AlertDialogFooter><AlertDialogCancel>Отмена</AlertDialogCancel><AlertDialogAction onClick={confirmDeletePreset} className="bg-destructive text-destructive-foreground">Удалить</AlertDialogAction></AlertDialogFooter>
-        </AlertDialogContent>
-      </AlertDialog>
-    </div>
+    <AlertDialog open={!!presetToDelete} onOpenChange={(isOpen) => !isOpen && setPresetToDelete(null)}>
+      <AlertDialogContent className="max-w-sm">
+        <AlertDialogHeader><AlertDialogTitle>Удалить пресет?</AlertDialogTitle><AlertDialogDescription>Пресет «{presetToDelete?.name}» будет удалён.</AlertDialogDescription></AlertDialogHeader>
+        <AlertDialogFooter><AlertDialogCancel>Отмена</AlertDialogCancel><AlertDialogAction onClick={confirmDeletePreset} className="bg-destructive text-destructive-foreground">Удалить</AlertDialogAction></AlertDialogFooter>
+      </AlertDialogContent>
+    </AlertDialog>
+    </>
   );
 }
