@@ -9,10 +9,13 @@
     "prebuild": "node ../scripts/verify-sync.mjs --other ../hrms --if-enabled",
     "preview": "vite preview",
     "test": "vitest run",
-    "test:e2e": "playwright test",
-    "test:e2e:ui": "playwright test --project=ui-e2e",
-    "test:e2e:smoke": "playwright test --project=smoke",
-    "test:e2e:playwright-ui": "playwright test --ui",
+    "e2e:prep": "node ../scripts/verify-sync.mjs --other ../hrms --if-enabled && npm --prefix .. run db:up && npm --prefix .. run db:wait && npm --prefix .. run db:migrate",
+    "test:e2e": "npm run e2e:prep && playwright test",
+    "test:e2e:smoke": "npm run e2e:prep && playwright test --project=smoke",
+    "test:e2e:ui": "npm run e2e:prep && playwright test --project=ui-e2e",
+    "test:e2e:ui:narrow": "npm run e2e:prep && playwright test --project=ui-narrow",
+    "test:e2e:all": "npm run e2e:prep && playwright test --project=smoke --project=ui-e2e --project=ui-narrow",
+    "test:e2e:playwright-ui": "npm run e2e:prep && playwright test --ui",
     "test:e2e:report": "playwright show-report"
   },
   "dependencies": {

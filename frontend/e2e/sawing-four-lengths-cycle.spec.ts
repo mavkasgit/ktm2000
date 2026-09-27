@@ -25,7 +25,7 @@ import {
 } from "./ui-helpers";
 
 /**
- * @ui — Пила внутри ПОЛНОГО цикла: раскрой сырья 2,7 м на ЧЕТЫРЕ длины.
+ * @ui-narrow — Пила внутри ПОЛНОГО цикла: раскрой сырья 2,7 м на ЧЕТЫРЕ длины.
  *
  * Сетап — бесфайловый (API, xlsx-фикстуры не храним):
  *  - каталог ЮП-2083: нормальная длина 2700 мм, сырьевая длина 2750 мм
@@ -93,7 +93,6 @@ function splitTaskRow(page: Page): Locator {
     .filter({ hasText: "150" })
     .first();
 }
-
 
 /**
  * Дождаться строк доски участка.
@@ -239,7 +238,7 @@ async function splitSawIntoLengthsViaUI(page: Page, sectionId: number): Promise<
   return true;
 }
 
-test.describe("@ui Пила: раскрой 2,75 м на четыре длины в полном цикле", () => {
+test.describe("@ui-narrow Пила: раскрой 2,75 м на четыре длины в полном цикле", () => {
   test.beforeEach(async ({ page, loginAsAdmin }) => {
     await loginAsAdmin();
     // `reset-all` — системный сброс: он чистит и справочники импорта

@@ -1,6 +1,7 @@
 import { test as base, expect, type Page } from "@playwright/test";
 
 import { ensureDbBootstrapped } from "./api-helpers";
+import { passCache, testCacheKey } from "./pass-cache";
 
 /**
  * Shared fixtures for E2E tests.
@@ -156,7 +157,34 @@ async function ensureAuthenticated(page: Page) {
   }
 }
 
-export const test = base.extend<{
+// Кеш «уже проходил на этой версии»: с флагом `E2E_SKIP_PASSED=1` зелёный
+// тест пропускается, прогон гоняет только непроверенное и упавшее. Ключ
+// версии — коммит вместе с диффом рабочего дерева (`pass-cache.ts`).
+//
+// Именно автофикстура, а не `test.beforeEach`/`test.afterEach` из этого
+// модуля: Playwright выполняет хуки в области того файла, который их
+// зарегистрировал, и при переиспользовании воркера между спеками хуки из
+// общего модуля отваливаются после первой спеки — прогон молча переставал
+// записывать результаты (проверено: 1 запись на 6 тестов). Фикстура живёт в
+// графе фикстур каждого теста и от переиспользования воркера не зависит.
+const testWithPassCache = base.extend<{ _passCache: void }>({
+  _passCache: [
+    async ({}, use, testInfo) => {
+      const key = testCacheKey(testInfo.project.name, testInfo.titlePath);
+      if (passCache.alreadyPassed(key)) {
+        test.skip(
+          true,
+          `уже проходил на этой версии (E2E_SKIP_PASSED=1); зелёных в кеше: ${passCache.knownCount()}`,
+        );
+      }
+      await use();
+      passCache.record(key, testInfo.status ?? "unknown");
+    },
+    { auto: true },
+  ],
+});
+
+export const test = testWithPassCache.extend<{
   authenticatedPage: Page;
   loginAsAdmin: () => Promise<void>;
   seedTestData: () => Promise<void>;

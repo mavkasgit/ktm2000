@@ -6,6 +6,7 @@
  * Usage:
  *   node scripts/ensure-dev-ports.js           # interactive if TTY; else fail if busy
  *   node scripts/ensure-dev-ports.js --kill    # kill without prompt
+ *   node scripts/ensure-dev-ports.js --no-docker   # like --kill, but don't touch/start Docker
  *   node scripts/ensure-dev-ports.js --check   # report only; exit 1 if busy
  *   KTM_DEV_KILL=1                             # same as --kill
  *
@@ -31,6 +32,9 @@ function parseArgs(argv) {
     process.env.HRMS_DEV_KILL === "1" ||
     process.env.HRMS_DEV_KILL === "true";
   const checkOnly = argv.includes("--check");
+  // Teardown после прогона: порты надо освободить, но Docker поднимать нельзя —
+  // иначе уборка запустит Docker Desktop уже после тестов.
+  const skipDocker = argv.includes("--no-docker");
   const ports = [];
   for (let i = 0; i < argv.length; i++) {
     if (argv[i] === "--ports" && argv[i + 1]) {
@@ -46,6 +50,7 @@ function parseArgs(argv) {
   return {
     forceKill,
     checkOnly,
+    skipDocker,
     ports: ports.length ? ports : DEFAULT_PORTS,
   };
 }
@@ -372,7 +377,7 @@ function ensureDockerRunning(maxWaitSeconds = 45) {
 }
 
 async function main() {
-  const { forceKill, checkOnly, ports } = parseArgs(process.argv.slice(2));
+  const { forceKill, checkOnly, skipDocker, ports } = parseArgs(process.argv.slice(2));
 
   let snapshot = listeningSnapshot(ports);
   let portMap = pidsFromSnapshot(snapshot);
@@ -443,7 +448,7 @@ async function main() {
 
   console.log(`✓ Dev ports free: ${ports.map((p) => ":" + p).join(", ")}`);
 
-  if (!checkOnly) {
+  if (!checkOnly && !skipDocker) {
     const dockerOk = ensureDockerRunning();
     if (!dockerOk) process.exit(1);
   }

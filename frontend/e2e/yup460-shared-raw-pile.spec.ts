@@ -13,7 +13,7 @@ import {
 import { seedReferenceDataViaUI, waitForPlanningTableViaUI } from "./ui-helpers";
 
 /**
- * @ui — ЮП-460 в трёх вариантах делят одну кучу чистого сырья.
+ * @ui-narrow — ЮП-460 в трёх вариантах делят одну кучу чистого сырья.
  *
  * План из трёх строк одного артикула, различающихся только
  * «Пробивкой/сверловкой»: «окно» (PRESS_WINDOW), «гребенка» (PRESS_COMB)
@@ -100,7 +100,7 @@ function parseRemainder(rowText: string): number | null {
   return Number.isFinite(value) ? value : null;
 }
 
-test.describe("@ui ЮП-460: окно / гребенка / без пресса делят одну кучу сырья", () => {
+test.describe("@ui-narrow ЮП-460: окно / гребенка / без пресса делят одну кучу сырья", () => {
   test.beforeEach(async ({ page, loginAsAdmin }) => {
     await loginAsAdmin();
     // API-сетап с токеном страницы (приём из sawing-multi-length-split).
