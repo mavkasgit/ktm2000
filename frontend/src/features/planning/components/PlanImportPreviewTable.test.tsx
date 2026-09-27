@@ -126,7 +126,7 @@ function rowText(overrides: Record<string, unknown>): string {
 }
 
 describe("PlanImportPreviewTable — колонка «Кол-во» и маршрут", () => {
-  it("показывает сырьё, итог и подвесы итога так же, как страница плана", () => {
+  it("показывает сырьё с подвесами и итог так же, как страница плана", () => {
     const text = rowText({
       quantity: "144",
       original_quantity: "100",
@@ -134,7 +134,7 @@ describe("PlanImportPreviewTable — колонка «Кол-во» и марш�
       quantity_per_hanger: 72,
     });
 
-    expect(text).toContain("100-144 (2П)");
+    expect(text).toContain("100 (2П)-144");
   });
 
   it("без нормы на подвес диапазон остаётся, подвесы не пишутся", () => {

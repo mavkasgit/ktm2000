@@ -7,6 +7,7 @@ import os
 import socket
 import subprocess
 import uuid
+import tempfile
 from pathlib import Path
 from urllib.parse import urlparse
 
@@ -22,6 +23,25 @@ from app.services.hanger_quantity_calc import (
 import app.models  # noqa: F401
 
 BACKEND_DIR = Path(__file__).resolve().parents[1]
+
+
+# ``alembic/env.py`` вызывает ``apply_env_file()``, а тот по умолчанию
+# перекрывает переменные процесса содержимым ``$ENV_FILE`` (по умолчанию
+# ``<repo>/.env.dev``). Поэтому переданный тестом ``DATABASE_URL`` до alembic
+# не доходил: он уезжал на DSN из env-файла, миграции накатывались на чужую БД и
+# возвращался 0 — тест видел пустую базу и падал на «relation ... does not
+# exist». Пустой файл отключает подмену: DSN остаётся тем, что дал тест.
+_EMPTY_ENV_FILE = Path(tempfile.gettempdir()) / "ktm2000_migrations_empty.env"
+_EMPTY_ENV_FILE.write_text("", encoding="utf-8")
+
+
+def _alembic_env(target_url: str) -> dict[str, str]:
+    """Окружение подпроцесса alembic: целевая БД и пустой env-файл."""
+    return {
+        **os.environ,
+        "DATABASE_URL": target_url,
+        "ENV_FILE": str(_EMPTY_ENV_FILE),
+    }
 
 
 def _test_db_url() -> str:
@@ -66,7 +86,7 @@ async def test_alembic_upgrade_head_creates_full_schema():
         await conn.execute(text(f'CREATE DATABASE "{db_name}"'))
     await admin_engine.dispose()
 
-    env = {**os.environ, "DATABASE_URL": target_url}
+    env = _alembic_env(target_url)
     try:
         result = subprocess.run(
             ["alembic", "upgrade", "head"],
@@ -124,7 +144,7 @@ async def test_migration_054_product_pairs_and_flag_drop():
         await conn.execute(text(f'CREATE DATABASE "{db_name}"'))
     await admin_engine.dispose()
 
-    env = {**os.environ, "DATABASE_URL": target_url}
+    env = _alembic_env(target_url)
     try:
         result = subprocess.run(
             ["alembic", "upgrade", "head"],
@@ -211,7 +231,7 @@ async def test_migration_032_scalar_quantity_per_hanger_to_per_length():
         await conn.execute(text(f'CREATE DATABASE "{db_name}"'))
     await admin_engine.dispose()
 
-    env = {**os.environ, "DATABASE_URL": target_url}
+    env = _alembic_env(target_url)
     try:
         # 1. До нужной ревизии (031) — скалярная форма ещё актуальна.
         result = subprocess.run(
@@ -288,7 +308,7 @@ async def test_migration_036_primary_length_backfill():
         await conn.execute(text(f'CREATE DATABASE "{db_name}"'))
     await admin_engine.dispose()
 
-    env = {**os.environ, "DATABASE_URL": target_url}
+    env = _alembic_env(target_url)
     try:
         # 1. До 036 (035) — колонки is_primary ещё нет.
         result = subprocess.run(
@@ -373,7 +393,7 @@ async def test_migration_046_replay_of_action_id_roundtrip():
         await conn.execute(text(f'CREATE DATABASE "{db_name}"'))
     await admin_engine.dispose()
 
-    env = {**os.environ, "DATABASE_URL": target_url}
+    env = _alembic_env(target_url)
 
     async def _columns_and_indexes(engine):
         async with engine.connect() as conn:
@@ -459,7 +479,7 @@ async def test_migration_048_product_hanger_mode_backfill():
         await conn.execute(text(f'CREATE DATABASE "{db_name}"'))
     await admin_engine.dispose()
 
-    env = {**os.environ, "DATABASE_URL": target_url}
+    env = _alembic_env(target_url)
 
     def _expected_auto(perimeter_mm: float, mount_width_mm: float, length_mm: float):
         """Ожидаемый auto по независимому движку (#62): total или None.
@@ -678,7 +698,7 @@ async def test_migration_053_product_composition_schema():
         await conn.execute(text(f'CREATE DATABASE "{db_name}"'))
     await admin_engine.dispose()
 
-    env = {**os.environ, "DATABASE_URL": target_url}
+    env = _alembic_env(target_url)
 
     def _run(*args: str) -> None:
         result = subprocess.run(
@@ -830,7 +850,7 @@ async def test_migration_058_product_pair_quantity_norms():
         await conn.execute(text(f'CREATE DATABASE "{db_name}"'))
     await admin_engine.dispose()
 
-    env = {**os.environ, "DATABASE_URL": target_url}
+    env = _alembic_env(target_url)
 
     # (SKU A, SKU B, ручная N на 2750 мм) — значения из файла справочника (#177).
     norms: list[tuple[str, str, int]] = [
@@ -1038,7 +1058,7 @@ async def test_migration_059_backfills_legacy_linear_length_without_raw():
         await conn.execute(text(f'CREATE DATABASE "{db_name}"'))
     await admin_engine.dispose()
 
-    env = {**os.environ, "DATABASE_URL": target_url}
+    env = _alembic_env(target_url)
     engine = create_async_engine(target_url)
     try:
         upgraded = subprocess.run(
@@ -1148,7 +1168,7 @@ async def test_migration_059_stops_on_conflicting_linear_default_until_manual_re
         await conn.execute(text(f'CREATE DATABASE "{db_name}"'))
     await admin_engine.dispose()
 
-    env = {**os.environ, "DATABASE_URL": target_url}
+    env = _alembic_env(target_url)
     engine = create_async_engine(target_url)
     try:
         upgraded = subprocess.run(
