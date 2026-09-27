@@ -25,6 +25,10 @@ import {
 import type { StockTransactionEntry, StockTransactionsParams } from "@/shared/api/stock";
 import { queryKeys } from "@/shared/api/queryKeys";
 import { pickColumnApiValue } from "@/shared/lib/columnFilterSearch";
+import {
+  buildTransactionSortParam,
+  type TransactionSortField,
+} from "@/shared/lib/stockSortParams";
 
 interface StockTransactionsHistoryDrawerProps {
   productId?: number;
@@ -34,7 +38,6 @@ interface StockTransactionsHistoryDrawerProps {
   onOpenChange: (open: boolean) => void;
 }
 
-type TransactionSortField = "date" | "reason" | "from" | "to" | "quantity" | "quality" | "comment";
 
 function formatTxDate(createdAt: string | null): string {
   if (!createdAt) return "—";
@@ -64,21 +67,6 @@ function getTxCellValue(tx: StockTransactionEntry, field: TransactionSortField):
       return formatTxQuality(tx);
     case "comment":
       return tx.comment || "—";
-  }
-}
-
-function mapTxSortFieldToApi(field: TransactionSortField): string {
-  switch (field) {
-    case "date":
-      return "created_at";
-    case "from":
-      return "from_location";
-    case "to":
-      return "to_location";
-    case "quality":
-      return "quality_state";
-    default:
-      return field;
   }
 }
 
@@ -153,6 +141,7 @@ export function StockTransactionsHistoryDrawer({
     bindColumn,
     columnFilters,
     columnSearchQueries,
+    handleSort: applySort,
     sortConfigs,
     setSortConfigs,
     hasActiveFilters,
@@ -172,7 +161,7 @@ export function StockTransactionsHistoryDrawer({
     [columnFilters, columnSearchQueries],
   );
 
-  const activeSort = sortConfigs[0];
+  const sort = buildTransactionSortParam(sortConfigs);
 
   const {
     page,
@@ -198,16 +187,10 @@ export function StockTransactionsHistoryDrawer({
 
   const handleSortChange = useCallback(
     (field: TransactionSortField) => {
-      setSortConfigs((prev) => {
-        const existing = prev.find((sort) => sort.field === field);
-        if (!existing) {
-          return [{ field, order: "desc" }];
-        }
-        return [{ field, order: existing.order === "asc" ? "desc" : "asc" }];
-      });
+      applySort(field);
       resetPage();
     },
-    [resetPage, setSortConfigs],
+    [applySort, resetPage],
   );
 
   useEffect(() => {
@@ -234,8 +217,7 @@ export function StockTransactionsHistoryDrawer({
       search: debouncedSearch.trim() || undefined,
       date_from: dateRange.from || undefined,
       date_to: dateRange.to || undefined,
-      sort_by: activeSort ? mapTxSortFieldToApi(activeSort.field) : "created_at",
-      sort_order: activeSort?.order ?? "desc",
+      sort,
       limit,
       offset,
       ...columnApiParams,
@@ -246,7 +228,7 @@ export function StockTransactionsHistoryDrawer({
       debouncedSearch,
       dateRange.from,
       dateRange.to,
-      activeSort,
+      sort,
       limit,
       offset,
       columnApiParams,
@@ -262,8 +244,7 @@ export function StockTransactionsHistoryDrawer({
       search: debouncedSearch || undefined,
       dateFrom: dateRange.from || undefined,
       dateTo: dateRange.to || undefined,
-      sort_by: txQueryParams.sort_by,
-      sort_order: txQueryParams.sort_order,
+      sort: txQueryParams.sort,
       reason: txQueryParams.reason as string | undefined,
       from_location: txQueryParams.from_location,
       to_location: txQueryParams.to_location,

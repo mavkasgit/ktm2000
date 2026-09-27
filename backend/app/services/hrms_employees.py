@@ -10,8 +10,8 @@ from datetime import datetime, timezone
 import httpx
 from sqlalchemy import String, cast, delete, func, or_, select
 from sqlalchemy.ext.asyncio import AsyncSession
-
 from app.core.config import settings
+from app.core.sorting import SortClause, apply_sort, parse_sort
 from app.models.hrms_employee import HrmsEmployee
 from app.schemas.employees import (
     SyncChangeOut,
@@ -188,7 +188,29 @@ async def preview_sync(db: AsyncSession) -> SyncPreviewOut:
 
 # ─── List (paginated read) ───────────────────────────────────────────
 
-EMPLOYEE_SORT_FIELDS = frozenset({"name", "tab_number", "position", "department", "hrms_id"})
+# ─── Сортировка кеша сотрудников ──────────────────────────────────────
+# Единая таблица «поле ?sort= → выражение SQL»; она же — источник истины
+# для валидации (apply_sort отвечает 400 на поле, которого здесь нет).
+_SORT_COLUMNS: dict[str, object] = {
+    "hrms_id": HrmsEmployee.hrms_id,
+    "name": HrmsEmployee.name,
+    "tab_number": HrmsEmployee.tab_number,
+    "position": HrmsEmployee.position,
+    "department": HrmsEmployee.department,
+}
+
+# Курируемый набор полей сортировки: контракт для фронта. Выводится из
+# таблицы резолва, а не живёт отдельно.
+VALID_SORT_FIELDS = frozenset(_SORT_COLUMNS)
+
+# Поля, где значение может быть пустым: необязательные колонки HRMS.
+# Пустые уходят в конец в ЛЮБОМ направлении (в Postgres DESC по умолчанию
+# ставит NULL первым — оператор кликнул «спустить», а незаполненные
+# значения оказываются наверху).
+_SORT_NULLS_LAST_FIELDS = ("tab_number", "position", "department")
+
+# Порядок по умолчанию — тот же, что давал sort_by=name&sort_order=asc.
+_SORT_DEFAULT = SortClause("name", "asc")
 
 
 async def list_employees(
@@ -197,8 +219,7 @@ async def list_employees(
     limit: int = 50,
     offset: int = 0,
     search: str | None = None,
-    sort_by: str = "name",
-    sort_order: str = "asc",
+    sort: str | None = None,
     department: str | None = None,
 ) -> tuple[list[HrmsEmployee], int, datetime | None]:
     """List cached employees with pagination, search, sort, department filter."""
@@ -222,23 +243,17 @@ async def list_employees(
     count_stmt = select(func.count()).select_from(stmt.subquery())
     total = (await db.execute(count_stmt)).scalar() or 0
 
-    # Resolve sort column
-    if sort_by == "tab_number":
-        order_col = HrmsEmployee.tab_number
-    elif sort_by == "position":
-        order_col = HrmsEmployee.position
-    elif sort_by == "department":
-        order_col = HrmsEmployee.department
-    elif sort_by == "hrms_id":
-        order_col = HrmsEmployee.hrms_id
-    else:
-        order_col = HrmsEmployee.name
-
-    if sort_order == "desc":
-        stmt = stmt.order_by(order_col.desc(), HrmsEmployee.hrms_id.desc())
-    else:
-        stmt = stmt.order_by(order_col.asc(), HrmsEmployee.hrms_id.asc())
-
+    # Сортировка разбирается до выборки: неизвестное поле или направление —
+    # 400, а не молчаливый фолбэк на name. Приоритеты слева направо, в конце
+    # tiebreaker по hrms_id (порядок строк между страницами не «мигает»).
+    clauses = parse_sort(sort, default=_SORT_DEFAULT)
+    stmt = apply_sort(
+        stmt,
+        clauses,
+        _SORT_COLUMNS,
+        tiebreaker=HrmsEmployee.hrms_id,
+        nulls_last=_SORT_NULLS_LAST_FIELDS,
+    )
     stmt = stmt.limit(limit).offset(offset)
     result = await db.execute(stmt)
     employees = list(result.scalars().all())

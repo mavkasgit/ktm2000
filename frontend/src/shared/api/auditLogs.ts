@@ -60,8 +60,8 @@ export type GetAuditLogsParams = {
   action?: string | null;
   entity_type?: string | null;
   user_name?: string | null;
-  sort_by?: string | null;
-  sort_order?: "asc" | "desc" | null;
+  /** Мультисортировка строкой `поле:направление,...` (контракт `app/core/sorting.py`). */
+  sort?: string | null;
   date_from?: string | null;
   date_to?: string | null;
 };

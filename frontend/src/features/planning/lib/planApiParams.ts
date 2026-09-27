@@ -1,24 +1,50 @@
-import type { AllPlanPositionsParams } from "@/shared/api/productionPlans";
+import type { SortConfig } from "@/shared/hooks/useTableQueryEngine";
+import { buildSortParam } from "@/shared/lib/sortQueryParam";
 import { pickColumnApiValue, pickExactMatchColumnValue } from "@/shared/lib/columnFilterSearch";
 import type { PlanSortField } from "./plan-labels";
+import type { AllPlanPositionsParams } from "@/shared/api/productionPlans";
 
-export function mapPlanSortFieldToApi(field: PlanSortField): string {
-  switch (field) {
-    case "rowNum":
-      return "source_row_number";
-    case "sku":
-      return "source_sku";
-    case "qty":
-      return "quantity";
-    case "dimensions":
-      return "dimensions";
-    case "status":
-      return "status";
-    case "validation":
-      return "validation_status";
-    default:
-      return "source_row_number";
-  }
+/**
+ * Соответствие «колонка плана → поле сортировки all-positions».
+ *
+ * Ключ, которого здесь нет, сервер сортировать не умеет: `route` собирается
+ * в Python (`resolve_position_route`, ADR про dynamic build) и не выводится
+ * в SQL, `warnings` берётся из последнего PlanChangeItem позиции, а не из
+ * агрегата, — оба значения нельзя честно выразить в ORDER BY. Подставлять
+ * вместо них другое поле нельзя (пользователь увидит чужой порядок строк),
+ * поэтому маппинг возвращает `undefined`, а колонка остаётся без иконки
+ * сортировки (см. `SortableFilterHeader` prop `sortable`).
+ *
+ * Набор полей на backend: ALL_POSITIONS_SORT_FIELDS в
+ * backend/app/api/routes/production_plans.py.
+ */
+const PLAN_SORT_FIELD_TO_API: Partial<Record<PlanSortField, string>> = {
+  id: "id",
+  rowNum: "source_row_number",
+  sku: "source_sku",
+  name: "source_name",
+  qty: "quantity",
+  dimensions: "dimensions",
+  status: "status",
+  validation: "validation_status",
+  errors: "errors",
+};
+
+/** Поле сортировки для API или `undefined`, если сервер его не поддерживает. */
+export function mapPlanSortFieldToApi(field: PlanSortField): string | undefined {
+  return PLAN_SORT_FIELD_TO_API[field];
+}
+
+/**
+ * Строка `?sort=...` по всем выбранным приоритетам, от старшего к младшему.
+ * Колонки без серверной сортировки (route, warnings) в строку не попадают.
+ * Если поддерживаемых полей нет, возвращается `undefined`: параметр не
+ * уезжает вовсе и действует дефолт сервера.
+ */
+export function buildPlanSortParam(
+  sortConfigs: SortConfig<PlanSortField>[],
+): AllPlanPositionsParams["sort"] {
+  return buildSortParam(sortConfigs, mapPlanSortFieldToApi);
 }
 
 export function buildPlanColumnApiParams(

@@ -7,6 +7,7 @@ from sqlalchemy import String, and_, case, cast, exists, func, or_, select
 from sqlalchemy.orm import selectinload
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from app.core.sorting import SortClause, apply_sort, parse_sort
 from app.domain.dimensions import format_cut_layout, format_dimensions, parse_dimensions_filter
 from app.models.internal_plan import SectionPlanLine
 from app.models.product import Product
@@ -23,16 +24,49 @@ from app.services.route_matcher import ResolvedRouteInfo, resolve_position_route
 
 MANUAL_ROUTE_PASS_PREFIX = "manual_route_pass:"
 
-ROWS_SORT_FIELDS = frozenset({
-    "row_number",
-    "product_sku",
-    "status",
-    "planned_qty",
-    "completed_qty",
-    "due_date",
-    "sequence",
-    "dimensions",
-})
+
+def _sort_columns(product, route) -> dict[str, object]:
+    """Единая таблица «поле ?sort= → выражение SQL» для строк плана.
+
+    Таблица строится на запрос, потому что часть выражений завязана на алиасы
+    этого запроса (sku продукта, маршрут). apply_sort сам валидирует поле по
+    таблице и отвечает 400 на поле, которого здесь нет, — поэтому объявить
+    поле, но не резолвить (или наоборот) нельзя.
+    """
+    return {
+        "row_number": PlanPosition.source_row_number,
+        "product_sku": func.coalesce(product.sku, PlanPosition.source_sku),
+        "status": PlanPosition.status,
+        "planned_qty": PlanPosition.quantity,
+        "completed_qty": lambda: _completed_qty_subquery(),
+        "due_date": PlanPosition.due_date,
+        "sequence": lambda: _current_sequence_subquery(),
+        "dimensions": lambda: _position_task_length_mm_expr(),
+    }
+
+
+# Курируемый набор полей сортировки: контракт для фронта. Валидация идёт по
+# таблице выше, поэтому набор выводится из неё, а не живёт отдельно.
+ROWS_SORT_FIELDS = frozenset(_sort_columns(Product, ProductionRoute))
+
+# Ключ группировки строк по планам. Входит только в порядок по умолчанию, в
+# контракт ?sort= не выведен: колонки «План» в таблице строк нет.
+_GROUPING_SORT_FIELD = "production_plan_id"
+
+# Пустые значения уходят в конец в ЛЮБОМ направлении: в Postgres DESC по
+# умолчанию ставит NULL первым, и оператор, кликнувший «спустить», увидел бы
+# неразмерные позиции и позиции без срока наверху. NOT NULL-колонки и
+# подзапросы без NULL на этом не меняются.
+_ROWS_SORT_NULLS_LAST_FIELDS = tuple(ROWS_SORT_FIELDS)
+
+# Сортировка по умолчанию — планы новые сверху, внутри плана строки импорта по
+# номеру, без номера в конце; третий ключ добавляет tiebreaker по id. Три ключа,
+# а не один: строки разных планов не должны перемешиваться, а группировка по
+# плану — это то, что оператор видит при первом открытии страницы.
+_SORT_DEFAULT_CLAUSES = (
+    SortClause(_GROUPING_SORT_FIELD, "desc"),
+    SortClause("row_number", "asc"),
+)
 
 _ACTIVE_POSITION_STATUSES = (
     PlanPositionStatus.approved,
@@ -45,8 +79,7 @@ _ACTIVE_POSITION_STATUSES = (
 class PlanningRowsQueryParams:
     section_id: int | None = None
     search: str | None = None
-    sort_by: str | None = None
-    sort_order: str = "desc"
+    sort: str | None = None
     limit: int = 50
     offset: int = 0
     plan_position_id: str | None = None
@@ -268,48 +301,40 @@ def _apply_planning_rows_filters(stmt, params: PlanningRowsQueryParams, *, produ
 
 
 def _apply_planning_rows_order(stmt, params: PlanningRowsQueryParams, *, product: Product | None = None, route: ProductionRoute | None = None):
+    """ORDER BY строк плана: приоритеты слева направо, в конце tiebreaker по PK.
+
+    Tiebreaker всегда возрастающий, хотя раньше повторял направление сортировки.
+    Для уникального PK это тот же результат: направление последнего ключа
+    влияет только на порядок среди строк с равными значениями ВСЕХ ключей, а
+    равенства по id не бывает — порядок строк не меняется.
+    """
     if product is None:
         product = Product
     if route is None:
         route = ProductionRoute
 
-    resolved_sort_by = params.sort_by if params.sort_by in ROWS_SORT_FIELDS else None
-    sort_order = params.sort_order if params.sort_order in ("asc", "desc") else "desc"
-
-    if resolved_sort_by is None:
-        if sort_order == "asc":
-            return stmt.order_by(
-                PlanPosition.production_plan_id.asc(),
-                PlanPosition.source_row_number.asc().nulls_last(),
-                PlanPosition.id.asc(),
-            )
-        return stmt.order_by(
-            PlanPosition.production_plan_id.desc(),
-            PlanPosition.source_row_number.asc().nulls_last(),
-            PlanPosition.id.asc(),
-        )
-
-    order_column = PlanPosition.id
-    if resolved_sort_by == "row_number":
-        order_column = PlanPosition.source_row_number
-    elif resolved_sort_by == "product_sku":
-        order_column = func.coalesce(product.sku, PlanPosition.source_sku)
-    elif resolved_sort_by == "status":
-        order_column = PlanPosition.status
-    elif resolved_sort_by == "planned_qty":
-        order_column = PlanPosition.quantity
-    elif resolved_sort_by == "completed_qty":
-        order_column = _completed_qty_subquery()
-    elif resolved_sort_by == "due_date":
-        order_column = PlanPosition.due_date
-    elif resolved_sort_by == "sequence":
-        order_column = _current_sequence_subquery()
-    elif resolved_sort_by == "dimensions":
-        order_column = _position_task_length_mm_expr()
-
-    if sort_order == "asc":
-        return stmt.order_by(order_column.asc().nulls_last(), PlanPosition.id.asc())
-    return stmt.order_by(order_column.desc().nulls_last(), PlanPosition.id.desc())
+    columns = _sort_columns(product, route)
+    # Дефолт — три ключа, а не один: группировка по планам это часть того,
+    # что оператор видит при первом открытии страницы. Пользовательский
+    # ?sort= всегда стартует с его первого поля, группировка там не нужна.
+    is_default_sort = params.sort is None or not params.sort.strip()
+    clauses = (
+        list(_SORT_DEFAULT_CLAUSES)
+        if is_default_sort
+        else parse_sort(params.sort, default=_SORT_DEFAULT_CLAUSES[0])
+    )
+    if is_default_sort:
+        # Ключ группировки по плану резолвится только для дефолтного порядка.
+        resolvable = {**columns, _GROUPING_SORT_FIELD: PlanPosition.production_plan_id}
+    else:
+        resolvable = columns
+    return apply_sort(
+        stmt,
+        clauses,
+        resolvable,
+        tiebreaker=PlanPosition.id,
+        nulls_last=_ROWS_SORT_NULLS_LAST_FIELDS,
+    )
 
 
 async def _get_stage_with_operations(db: AsyncSession, stage_id: int) -> RouteStage | None:

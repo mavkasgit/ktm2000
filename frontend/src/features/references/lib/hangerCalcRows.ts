@@ -4,6 +4,7 @@
  */
 import type { Product, ProductPairCatalogEntry } from "@/shared/api/products";
 import type { HangerCalcItem, HangerCalcResult, HangerSettings, PairedHangerCalcItem } from "@/shared/api/hangerCalc";
+import type { SortConfig } from "@/shared/hooks/useTableQueryEngine";
 import {
   effectiveRawLength,
   entryForLength,
@@ -411,5 +412,54 @@ export function buildPairedHangerCalcRows(
       limiter: primaryResult?.limiter ?? null,
       areaM2: primaryResult?.area_m2 ?? null,
     };
+  });
+}
+
+// ─── Порядок строк таблицы подвесов ────────────────────────────────────────
+
+/** Сортируемые колонки таблицы подвесов (заголовки `HangerCalcTable`). */
+export type HangerCalcSortField = "sku" | "total" | "limiter";
+
+function sortValue(
+  row: HangerCalcRow | PairedHangerCalcRow,
+  field: HangerCalcSortField,
+): string | number | null {
+  if (field === "sku") return rowSku(row);
+  if (field === "total") return row.total;
+  return row.limiter ? LIMITER_LABELS[row.limiter] : null;
+}
+
+/**
+ * Порядок объединённой таблицы (одиночные + парные строки) по мультисортировке.
+ *
+ * Сортируется весь массив строк, включая парные: `sku` уходит на сервер
+ * (`sort=sku:<order>`), но сервер сортирует только одиночные строки — парные
+ * приходят отдельным запросом и в общий порядок не попадали. Клиент применяет
+ * всю цепочку приоритетов, поэтому серверный ключ `sku` остаётся старшим
+ * независимо от добавленных колонок, а при `sku` не на первом месте
+ * сортировка по нему выполняется на клиенте целиком.
+ *
+ * Строки без значения (`total`/`limiter` = null) уходят в конец при любом
+ * направлении — как `NULLS LAST` в серверной сортировке позиций плана.
+ */
+export function sortHangerCalcRows<T extends HangerCalcRow | PairedHangerCalcRow>(
+  rows: readonly T[],
+  sortConfigs: readonly SortConfig<HangerCalcSortField>[],
+): T[] {
+  if (sortConfigs.length === 0) return [...rows];
+  return [...rows].sort((a, b) => {
+    for (const cfg of sortConfigs) {
+      const aValue = sortValue(a, cfg.field);
+      const bValue = sortValue(b, cfg.field);
+      if (aValue == null && bValue == null) continue;
+      if (aValue == null) return 1;
+      if (bValue == null) return -1;
+      const cmp =
+        typeof aValue === "number" && typeof bValue === "number"
+          ? aValue - bValue
+          : String(aValue).localeCompare(String(bValue), "ru");
+      if (cmp !== 0) return cfg.order === "asc" ? cmp : -cmp;
+    }
+    return 0;
   });
 }

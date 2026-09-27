@@ -3,19 +3,9 @@ from __future__ import annotations
 from sqlalchemy import String, cast, exists, func, or_, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from app.core.sorting import SortClause, apply_sort, parse_sort
 from app.models.section import Section
 from app.models.user import User, user_sections
-
-USER_SORT_FIELDS = frozenset({
-    "id",
-    "username",
-    "full_name",
-    "email",
-    "role",
-    "is_active",
-    "created_at",
-    "section",
-})
 
 
 def _user_section_codes_subquery():
@@ -26,6 +16,40 @@ def _user_section_codes_subquery():
         .correlate(User)
         .scalar_subquery()
     )
+
+
+# ─── Сортировка списка пользователей ────────────────────────────────────
+# Единая таблица «поле ?sort= → выражение SQL»; она же — источник истины
+# для валидации (apply_sort отвечает 400 на поле, которого здесь нет).
+#
+# Прямые колонки users лежат значением. ``section`` — коррелированный
+# скалярный подзапрос (коды участков одной строкой через запятую), поэтому
+# его выражение строится на каждый запрос и кладётся callable.
+_SORT_COLUMNS: dict[str, object] = {
+    "id": User.id,
+    "username": User.username,
+    "full_name": User.full_name,
+    "email": User.email,
+    "role": User.role,
+    "is_active": User.is_active,
+    "created_at": User.created_at,
+    "section": lambda: _user_section_codes_subquery(),
+}
+
+# Курируемый набор полей сортировки: контракт для фронта. Выводится из
+# таблицы резолва, а не живёт отдельно.
+VALID_SORT_FIELDS = frozenset(_SORT_COLUMNS)
+
+# Поля, где значение может быть пустым: необязательные колонки.
+# Пустые уходят в конец в ЛЮБОМ направлении (в Postgres DESC по умолчанию
+# ставит NULL первым — оператор кликнул «спустить», а незаполненные
+# значения оказываются наверху).
+_SORT_NULLS_LAST_FIELDS = ("email",)
+
+# Порядок по умолчанию — тот же, что давал sort_by=id&sort_order=asc.
+_SORT_DEFAULT = SortClause("id", "asc")
+
+
 
 
 def _apply_user_filters(
@@ -68,23 +92,6 @@ def _apply_user_filters(
     return stmt
 
 
-def _resolve_user_order_column(sort_by: str):
-    if sort_by == "username":
-        return User.username
-    if sort_by == "full_name":
-        return User.full_name
-    if sort_by == "email":
-        return User.email
-    if sort_by == "role":
-        return User.role
-    if sort_by == "is_active":
-        return User.is_active
-    if sort_by == "section":
-        return _user_section_codes_subquery()
-    if sort_by == "id":
-        return User.id
-    return User.created_at
-
 
 async def list_users_paginated(
     db: AsyncSession,
@@ -92,16 +99,13 @@ async def list_users_paginated(
     limit: int,
     offset: int,
     search: str | None = None,
-    sort_by: str = "id",
-    sort_order: str = "asc",
+    sort: str | None = None,
     role: str | None = None,
     is_active: bool | None = None,
     full_name: str | None = None,
     email: str | None = None,
     section: str | None = None,
 ) -> tuple[list[User], int]:
-    resolved_sort_by = sort_by if sort_by in USER_SORT_FIELDS else "id"
-    order_column = _resolve_user_order_column(resolved_sort_by)
 
     stmt = _apply_user_filters(
         select(User),
@@ -116,10 +120,17 @@ async def list_users_paginated(
     count_stmt = select(func.count()).select_from(stmt.subquery())
     total = (await db.execute(count_stmt)).scalar() or 0
 
-    if sort_order == "desc":
-        stmt = stmt.order_by(order_column.desc(), User.id.desc())
-    else:
-        stmt = stmt.order_by(order_column.asc(), User.id.asc())
+    # Сортировка разбирается до выборки: неизвестное поле или направление —
+    # 400, а не молчаливый фолбэк на id. Приоритеты слева направо, в конце
+    # tiebreaker по PK (порядок строк между страницами не «мигает»).
+    clauses = parse_sort(sort, default=_SORT_DEFAULT)
+    stmt = apply_sort(
+        stmt,
+        clauses,
+        _SORT_COLUMNS,
+        tiebreaker=User.id,
+        nulls_last=_SORT_NULLS_LAST_FIELDS,
+    )
 
     stmt = stmt.limit(limit).offset(offset)
     users = list((await db.execute(stmt)).scalars().all())

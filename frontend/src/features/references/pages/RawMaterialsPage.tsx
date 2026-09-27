@@ -7,6 +7,8 @@ import type { ProductFilters } from "@/shared/api/products";
 import { listRouteSelectionRules } from "@/shared/api/routes";
 import { queryKeys } from "@/shared/api/queryKeys";
 import { pickColumnApiValue } from "@/shared/lib/columnFilterSearch";
+import { buildSortParam } from "@/shared/lib/sortQueryParam";
+import { nextMultiSortConfigs } from "@/shared/lib/multiSort";
 import { Button } from "@/shared/ui/button";
 import { Input } from "@/shared/ui/input";
 import { Card } from "@/shared/ui/card";
@@ -152,10 +154,10 @@ function buildRawMaterialsApiParams(
     if (Number.isFinite(parsed)) params.qty_to = parsed;
   }
 
-  const activeSort = sortConfigs[0];
-  if (activeSort) {
-    params.sort = `${activeSort.field}:${activeSort.order}`;
-  }
+  // Все сортируемые колонки справочника сервер сортировать умеет,
+  // поэтому поле колонки уходит как есть.
+  const sort = buildSortParam(sortConfigs, (field) => field);
+  if (sort) params.sort = sort;
 
   return params;
 }
@@ -486,12 +488,7 @@ export function RawMaterialsPage() {
   };
 
   const handleSort = (field: SortField) => {
-    setSortConfigs((prev) => {
-      const existing = prev.find((c) => c.field === field);
-      if (!existing) return [...prev, { field, order: "desc" }];
-      if (existing.order === "desc") return prev.map((c) => c.field === field ? { ...c, order: "asc" } : c);
-      return prev.filter((c) => c.field !== field);
-    });
+    setSortConfigs((prev) => nextMultiSortConfigs(prev, field));
   };
 
   const uniqueValues = useMemo(() => {

@@ -14,6 +14,7 @@ from sqlalchemy import func as sa_func
 
 from app.api.deps import WRITER_ROLES, require_role, get_current_user
 from app.core.database import get_db
+from app.core.sorting import SortClause, apply_sort, parse_sort
 from app.domain.dimensions import format_cut_layout
 from app.models.production_plan import (
     PlanChangeItem,
@@ -1059,14 +1060,44 @@ ALL_POSITIONS_PLANNING_STATUSES = (
     PlanPositionStatus.valid,
 )
 
-ALL_POSITIONS_SORT_FIELDS = frozenset({
-    "source_row_number",
-    "source_sku",
-    "quantity",
-    "status",
-    "validation_status",
-    "dimensions",
-})
+# Единая таблица «поле ?sort= → выражение SQL» для списка позиций всех планов.
+# Она же — источник истины для валидации: apply_sort отвечает 400 на поле,
+# которого здесь нет, поэтому поле нельзя забыть прописать (или, наоборот,
+# объявить, но не резолвить).
+#
+# Значение — выражение SQLAlchemy для прямой колонки plan_positions либо
+# callable для полей, чьё выражение строится на каждый запрос (скалярный
+# подзапрос длины задания, счётчик ошибок валидации).
+_ALL_POSITIONS_SORT_COLUMNS: dict[str, object] = {
+    "id": PlanPosition.id,
+    "source_row_number": PlanPosition.source_row_number,
+    "source_sku": PlanPosition.source_sku,
+    "source_name": PlanPosition.source_name,
+    "quantity": PlanPosition.quantity,
+    # Статусы — enum, сортируем по имени значения, а не по внутреннему порядку.
+    "status": lambda: cast(PlanPosition.status, String),
+    "validation_status": lambda: cast(PlanPosition.validation_status, String),
+    "dimensions": lambda: _position_task_length_mm_expr(),
+    # Счётчик ошибок валидации — тот же, что фильтр has_errors.
+    "errors": lambda: sa_func.coalesce(
+        sa_func.jsonb_array_length(PlanPosition.validation_errors), 0
+    ),
+}
+
+# Курируемый набор полей сортировки: контракт для фронта. Валидация идёт по
+# _ALL_POSITIONS_SORT_COLUMNS, поэтому набор выводится из таблицы, а не живёт
+# отдельно.
+ALL_POSITIONS_SORT_FIELDS = frozenset(_ALL_POSITIONS_SORT_COLUMNS)
+
+# Поля, где значение может быть пустым: безразмерные позиции (NULL) и позиции
+# без наименования. Пустые уходят в конец в ЛЮБОМ направлении (в Postgres DESC
+# по умолчанию ставит NULL первым — оператор кликнул «спустить», а пустые
+# уехали наверх).
+_ALL_POSITIONS_SORT_NULLS_LAST_FIELDS = ("dimensions", "source_name")
+
+# Сортировка по умолчанию — порядок строк импорта (тот же, что был до
+# перехода на общий контракт ``?sort=``).
+_ALL_POSITIONS_SORT_DEFAULT = SortClause("source_row_number", "asc")
 
 
 # Длина/габарит задания позиции в SQL — общий с execution-страницей:
@@ -1175,33 +1206,6 @@ def _apply_all_positions_filters(
     return stmt
 
 
-def _all_positions_order_columns(sort_by: str, sort_order: str):
-    resolved_sort_by = sort_by if sort_by in ALL_POSITIONS_SORT_FIELDS else "source_row_number"
-    if sort_order not in ("asc", "desc"):
-        sort_order = "asc"
-
-    if resolved_sort_by == "source_sku":
-        order_column = PlanPosition.source_sku
-    elif resolved_sort_by == "quantity":
-        order_column = PlanPosition.quantity
-    elif resolved_sort_by == "status":
-        order_column = cast(PlanPosition.status, String)
-    elif resolved_sort_by == "validation_status":
-        order_column = cast(PlanPosition.validation_status, String)
-    elif resolved_sort_by == "dimensions":
-        order_column = _position_task_length_mm_expr()
-    else:
-        order_column = PlanPosition.source_row_number
-
-    # Безразмерные (NULL) — всегда в конец, независимо от направления сортировки.
-    if resolved_sort_by == "dimensions":
-        if sort_order == "asc":
-            return order_column.asc().nulls_last(), PlanPosition.id.asc()
-        return order_column.desc().nulls_last(), PlanPosition.id.desc()
-
-    if sort_order == "asc":
-        return order_column.asc(), PlanPosition.id.asc()
-    return order_column.desc(), PlanPosition.id.desc()
 
 
 async def _serialize_plan_positions(
@@ -1310,8 +1314,10 @@ async def all_plan_positions(
         default=None,
         description='Column filter: exact JSON match on position task dimensions, e.g. {"length_mm":2700} or null',
     ),
-    sort_by: str = Query(default="source_row_number"),
-    sort_order: str = Query(default="asc"),
+    sort: str | None = Query(
+        default=None,
+        description="Comma-separated sort rules: field:asc|desc, e.g. source_row_number:asc,id:asc",
+    ),
     limit: int = Query(default=50, ge=1, le=500),
     offset: int = Query(default=0, ge=0),
     db: AsyncSession = Depends(get_db),
@@ -1340,12 +1346,17 @@ async def all_plan_positions(
     count_stmt = select(sa_func.count()).select_from(stmt.subquery())
     total = (await db.execute(count_stmt)).scalar() or 0
 
-    primary_order, tiebreaker_order = _all_positions_order_columns(sort_by, sort_order)
-    positions = (
-        await db.execute(
-            stmt.order_by(primary_order, tiebreaker_order).limit(limit).offset(offset)
-        )
-    ).scalars().all()
+    # Сортировка разбирается до выполнения запроса: неизвестное поле — 400, а не
+    # пустая выборка. Приоритеты слева направо, в конце tiebreaker по PK.
+    sort_clauses = parse_sort(sort, default=_ALL_POSITIONS_SORT_DEFAULT)
+    stmt = apply_sort(
+        stmt,
+        sort_clauses,
+        _ALL_POSITIONS_SORT_COLUMNS,
+        tiebreaker=PlanPosition.id,
+        nulls_last=_ALL_POSITIONS_SORT_NULLS_LAST_FIELDS,
+    )
+    positions = (await db.execute(stmt.limit(limit).offset(offset))).scalars().all()
 
     serialized = await _serialize_plan_positions(db, positions)
     return AllPlanPositionsListResponse(

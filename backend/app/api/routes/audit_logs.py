@@ -7,6 +7,7 @@ from sqlalchemy import func, or_, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.api.deps import READER_ROLES, require_role, get_current_user, get_db
+from app.core.sorting import SortClause, apply_sort, parse_sort
 from app.models.audit_log import AuditLog
 from app.models.user import User
 from app.models.work_task import WorkTask
@@ -14,15 +15,44 @@ from app.services.audit_log_service import log_action
 
 router = APIRouter(prefix="/audit-logs", tags=["audit-logs"])
 
-AUDIT_SORT_FIELDS = frozenset({
-    "created_at",
-    "status",
+# Единая таблица «поле ?sort= → выражение SQL» для логов аудита. Она же —
+# источник истины для валидации: apply_sort отвечает 400 на поле, которого
+# здесь нет, поэтому поле нельзя объявить, но не резолвить (или наоборот).
+_AUDIT_SORT_COLUMNS: dict[str, object] = {
+    "id": AuditLog.id,
+    "created_at": AuditLog.created_at,
+    "status": AuditLog.status,
+    "section_name": AuditLog.section_name,
+    "product_sku": AuditLog.product_sku,
+    "action": AuditLog.action,
+    "entity_type": AuditLog.entity_type,
+    "user_name": AuditLog.user_name,
+}
+
+# Курируемый набор полей сортировки: контракт для фронта. Валидация идёт по
+# _AUDIT_SORT_COLUMNS, поэтому набор выводится из таблицы, а не живёт отдельно.
+AUDIT_SORT_FIELDS = frozenset(_AUDIT_SORT_COLUMNS)
+
+# Поля, где значение может быть пустым: необязательные колонки лога. Пустые
+# уходят в конец в ЛЮБОМ направлении (в Postgres DESC по умолчанию ставит NULL
+# первым — оператор кликнул «спустить», а пустые уехали наверх).
+_AUDIT_SORT_NULLS_LAST_FIELDS = (
     "section_name",
     "product_sku",
     "action",
     "entity_type",
     "user_name",
-})
+)
+
+# Порядок по умолчанию — свежие сверху. Второй ключ (id) обязателен и повторяет
+# направление: created_at — это now(), а в Postgres now() это метка времени
+# ТРАНЗАКЦИИ, поэтому все логи одного запроса имеют одинаковую метку, и без
+# id их порядок не определён. Именно id, а не «равных нет»: направление
+# tiebreaker здесь наблюдаемо, и asc сломал бы порядок логов внутри пачки.
+_AUDIT_SORT_DEFAULT_CLAUSES = (
+    SortClause("created_at", "desc"),
+    SortClause("id", "desc"),
+)
 
 
 def _apply_audit_log_filters(
@@ -136,8 +166,10 @@ async def get_audit_logs(
     search: str | None = Query(None),
     date_from: datetime | None = Query(None),
     date_to: datetime | None = Query(None),
-    sort_by: str | None = Query("created_at"),
-    sort_order: str | None = Query("desc"),
+    sort: str | None = Query(
+        default=None,
+        description="Comma-separated sort rules: field:asc|desc, e.g. created_at:desc,section_name:asc",
+    ),
     db: AsyncSession = Depends(get_db),
     _current_user: User = Depends(get_current_user),
 ) -> AuditLogsResponse:
@@ -160,26 +192,22 @@ async def get_audit_logs(
     count_stmt = select(func.count()).select_from(stmt.subquery())
     total = (await db.execute(count_stmt)).scalar() or 0
 
-    # Сортировка на сервере (whitelist + fallback created_at)
-    resolved_sort_by = sort_by if sort_by in AUDIT_SORT_FIELDS else "created_at"
-    order_column = AuditLog.created_at
-    if resolved_sort_by == "status":
-        order_column = AuditLog.status
-    elif resolved_sort_by == "section_name":
-        order_column = AuditLog.section_name
-    elif resolved_sort_by == "product_sku":
-        order_column = AuditLog.product_sku
-    elif resolved_sort_by == "action":
-        order_column = AuditLog.action
-    elif resolved_sort_by == "entity_type":
-        order_column = AuditLog.entity_type
-    elif resolved_sort_by == "user_name":
-        order_column = AuditLog.user_name
-
-    if sort_order == "asc":
-        stmt = stmt.order_by(order_column.asc(), AuditLog.id.asc())
-    else:
-        stmt = stmt.order_by(order_column.desc(), AuditLog.id.desc())
+    # Сортировка разбирается до выполнения запроса: неизвестное поле — 400, а не
+    # пустая выборка. Приоритеты слева направо, в конце tiebreaker по PK.
+    # Дефолт несёт id вторым ключом (см. _AUDIT_SORT_DEFAULT_CLAUSES), поэтому
+    # разбор без параметра сортировки отдаёт исходный порядок, а не перепутанный.
+    # Хвост «, id ASC» от apply_sort — несуществующий ключ: id уже стоит вторым
+    # и уникален, поэтому третий ключ не может ничего изменить. Он нужен ради
+    # единого хелпера, а не ради результата.
+    stmt = apply_sort(
+        stmt,
+        parse_sort(sort, default=_AUDIT_SORT_DEFAULT_CLAUSES[0])
+        if sort and sort.strip()
+        else list(_AUDIT_SORT_DEFAULT_CLAUSES),
+        _AUDIT_SORT_COLUMNS,
+        tiebreaker=AuditLog.id,
+        nulls_last=_AUDIT_SORT_NULLS_LAST_FIELDS,
+    )
 
     # Выполняем пагинацию
     stmt = stmt.limit(limit).offset(offset)

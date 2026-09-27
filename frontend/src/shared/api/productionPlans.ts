@@ -189,8 +189,8 @@ export type AllPlanPositionsParams = {
   limit?: number;
   offset?: number;
   search?: string;
-  sort_by?: string;
-  sort_order?: string;
+  /** Мультисортировка строкой `поле:направление,...` (контракт `app/core/sorting.py`). */
+  sort?: string;
   status?: string;
   validation_status?: string;
   source_sku?: string;
@@ -542,8 +542,8 @@ export type ListProductionPlanningRowsParams = {
   limit?: number;
   offset?: number;
   search?: string;
-  sort_by?: string;
-  sort_order?: "asc" | "desc";
+  /** Мультисортировка строкой `поле:направление,...` (контракт `app/core/sorting.py`). */
+  sort?: string;
   plan_position_id?: string;
   source_row_number?: string;
   production_plan_id?: string;

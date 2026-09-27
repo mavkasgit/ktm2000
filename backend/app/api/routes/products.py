@@ -10,8 +10,8 @@ from sqlalchemy.types import ARRAY, String
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import selectinload
 
-from app.core.config import settings
 from app.core.database import get_db
+from app.core.sorting import SortClause, apply_sort, parse_sort
 from app.api.deps import REFERENCES_READER_ROLES, REFERENCES_WRITER_ROLES, require_role
 from app.models.product import Product, ProductType, DimensionState, ProductLength, ProcessingFlag, ProductProcessingFlag, ProductComposition, ProductPair, _length_key
 from app.models.dimension import ProductDimension, DimensionType
@@ -241,33 +241,71 @@ class ProductOut(BaseModel):
     composition: List[CompositionItemOut] | None = None
 
 
-# Курируемый набор полей сортировки справочника сырья (#76): прямые колонки,
-# JSONB-атрибуты, quantity_per_hanger (per-length), aliases (объединённый текст),
-# флаги обработки (булевская сортировка).
-_DIRECT_SORT_FIELDS = frozenset({
-    "sku", "code", "name", "type", "unit", "is_active", "is_catalog_item",
-    "is_paired_profile", "profile_type", "alloy", "color", "anod_type",
-    "source", "dimension_state", "id",
-})
+# ─── Сортировка справочника сырья (#76) ─────────────────────────────────────
+# Единая таблица «поле ?sort= → выражение SQL». Она же — источник истины для
+# валидации: apply_sort отвечает 400 на поле, которого здесь нет, поэтому
+# поле нельзя забыть прописать (или, наоборот, объявить, но не резолвить).
+#
+# Значение — выражение SQLAlchemy для прямой колонки products либо callable
+# для полей, чьё выражение строится на каждый запрос (скалярные подзапросы,
+# JSONB-ключи, exists-флаги). apply_sort умеет и то, и другое.
+_SORT_COLUMNS: dict[str, object] = {
+    # Прямые колонки products
+    "id": Product.id,
+    "sku": Product.sku,
+    "code": Product.code,
+    "name": Product.name,
+    "type": Product.type,
+    "unit": Product.unit,
+    "is_active": Product.is_active,
+    "is_catalog_item": Product.is_catalog_item,
+    "is_paired_profile": Product.is_paired_profile,
+    "profile_type": Product.profile_type,
+    "alloy": Product.alloy,
+    "color": Product.color,
+    "anod_type": Product.anod_type,
+    "source": Product.source,
+    "dimension_state": Product.dimension_state,
+    # Длина основной длины — скалярный подзапрос по product_lengths
+    "length_mm": lambda: (
+        select(ProductLength.length_mm)
+        .where(ProductLength.product_id == Product.id)
+        .order_by(ProductLength.is_primary.desc(), ProductLength.length_mm.asc())
+        .limit(1)
+        .correlate(Product)
+        .scalar_subquery()
+    ),
+    # Кол-во на подвесе для основной длины (#60, #81, #127)
+    "quantity_per_hanger": lambda: _primary_length_quantity_expr(),
+    # Алиасы — объединённый текст, а не массив
+    "aliases": lambda: func.coalesce(func.array_to_string(Product.aliases, ","), ""),
+    # Числовые атрибуты из JSONB-колонки attributes (#19)
+    "weight_per_meter": lambda: Product.attributes["weight_per_meter"].as_float(),
+    "perimeter_mm": lambda: Product.attributes["perimeter_mm"].as_float(),
+    "mount_width_mm": lambda: Product.attributes["mount_width_mm"].as_float(),
+    # Текстовый атрибут из JSONB
+    "cross_section": lambda: Product.attributes["cross_section"].astext,
+    # Флаги обработки (M2M product_processing_flags) — сортируются как boolean
+    "skip_shot_blast": lambda: _flag_exists_expr("skip_shot_blast"),
+    "is_laminated": lambda: _flag_exists_expr("is_laminated"),
+}
 
-# Числовые атрибуты из JSONB-колонки attributes (#19)
-_JSONB_NUMERIC_SORT_FIELDS = frozenset({
-    "weight_per_meter", "perimeter_mm", "mount_width_mm",
-})
+# Курируемый набор полей сортировки: контракт для фронта. Валидация идёт по
+# _SORT_COLUMNS, поэтому набор выводится из таблицы, а не живёт отдельно.
+VALID_SORT_FIELDS = frozenset(_SORT_COLUMNS)
 
-# Текстовые атрибуты из JSONB-колонки attributes
-_JSONB_TEXT_SORT_FIELDS = frozenset({"cross_section"})
-
-# Флаги обработки (M2M product_processing_flags) — сортируются как boolean
-_FLAG_SORT_FIELDS = frozenset({"skip_shot_blast", "is_laminated"})
-
-VALID_SORT_FIELDS = (
-    _DIRECT_SORT_FIELDS
-    | _JSONB_NUMERIC_SORT_FIELDS
-    | _JSONB_TEXT_SORT_FIELDS
-    | _FLAG_SORT_FIELDS
-    | {"quantity_per_hanger", "aliases", "length_mm"}
+# Поля, где значение может быть пустым: необязательные колонки, отсутствующие
+# ключи JSONB и подзапросы без строк. Пустые уходят в конец в ЛЮБОМ направлении
+# (в Postgres DESC по умолчанию ставит NULL первым — оператор кликнул «спустить»,
+# а не заполненные значения уехали наверх).
+_SORT_NULLS_LAST_FIELDS = (
+    "code", "profile_type", "alloy", "color", "anod_type", "source",
+    "length_mm", "quantity_per_hanger",
+    "weight_per_meter", "perimeter_mm", "mount_width_mm", "cross_section",
 )
+
+# Сортировка по умолчанию — артикул по возрастанию (тот же, что у Query ниже).
+_SORT_DEFAULT = SortClause("sku", "asc")
 
 
 def _quantity_effective_expr(entry_value):
@@ -710,45 +748,6 @@ def _flag_exists_expr(code: str):
     )
 
 
-def _parse_sort(sort_param: str):
-    """Parse sort parameter into registry-backed or attribute-backed clauses."""
-    rules = []
-    for part in sort_param.split(","):
-        part = part.strip()
-        if ":" in part:
-            field, order = part.rsplit(":", 1)
-        else:
-            field, order = part, "asc"
-        field = field.strip()
-        order = order.strip().lower()
-        if field not in VALID_SORT_FIELDS:
-            raise HTTPException(status_code=400, detail=f"Invalid sort field: {field}")
-        if order not in ("asc", "desc"):
-            raise HTTPException(status_code=400, detail=f"Invalid sort order: {order}")
-        if field == "length_mm":
-            col = (
-                select(ProductLength.length_mm)
-                .where(ProductLength.product_id == Product.id)
-                .order_by(ProductLength.is_primary.desc(), ProductLength.length_mm.asc())
-                .limit(1)
-                .correlate(Product)
-                .scalar_subquery()
-            )
-        elif field == "quantity_per_hanger":
-            col = _primary_length_quantity_expr()
-        elif field == "aliases":
-            col = func.coalesce(func.array_to_string(Product.aliases, ","), "")
-        elif field in _JSONB_NUMERIC_SORT_FIELDS:
-            col = Product.attributes[field].as_float()
-        elif field in _JSONB_TEXT_SORT_FIELDS:
-            col = Product.attributes[field].astext
-        elif field in _FLAG_SORT_FIELDS:
-            col = _flag_exists_expr(field)
-        else:
-            col = getattr(Product, field)
-        rules.append(col.desc() if order == "desc" else col)
-    return rules
-
 
 @router.get("", response_model=ProductsListResponse)
 async def list_products(
@@ -838,11 +837,20 @@ async def list_products(
         if qty_exists is not None:
             stmt = stmt.where(qty_exists)
 
+
     count_stmt = select(func.count()).select_from(stmt.subquery())
     total = (await db.execute(count_stmt)).scalar() or 0
 
-    for order_clause in _parse_sort(sort):
-        stmt = stmt.order_by(order_clause)
+    # Сортировка разбирается до запроса: неизвестное поле — 400, а не пустая
+    # выборка. Приоритеты слева направо, в конце tiebreaker по PK.
+    sort_clauses = parse_sort(sort, default=_SORT_DEFAULT)
+    stmt = apply_sort(
+        stmt,
+        sort_clauses,
+        _SORT_COLUMNS,
+        tiebreaker=Product.id,
+        nulls_last=_SORT_NULLS_LAST_FIELDS,
+    )
     stmt = stmt.limit(limit).offset(offset)
     items = (await db.execute(stmt)).scalars().unique().all()
     response.headers["X-Total-Count"] = str(total)

@@ -84,6 +84,8 @@ async def _seed_board_tasks(
     operation_name: str = "Прессование",
     plan_no: str | None = None,
     dimensions: dict | None = None,
+    due_date: date | None = None,
+    set_due_date: bool = False,
 ) -> None:
     plan = ProductionPlan(
         plan_no=plan_no or f"BOARD-PAGINATION-{uuid.uuid4().hex[:8]}",
@@ -136,7 +138,7 @@ async def _seed_board_tasks(
             product_id=product.id,
             sequence=2,
             planned_quantity=Decimal("10"),
-            due_date=date(2026, 1, 1 + (i % 28)),
+            due_date=due_date if set_due_date else date(2026, 1, 1 + (i % 28)),
         )
         session.add_all([raw_line, target_line])
         await session.flush()
@@ -314,8 +316,7 @@ async def test_board_sort_by_product_sku(client, session: AsyncSession):
     board = await get_section_board(
         session,
         section_id=target_section.id,
-        sort_by="product_sku",
-        sort_order="asc",
+        sort="product_sku:asc",
         limit=50,
     )
     skus = [task["product_sku"] for task in board["tasks"]]
@@ -349,8 +350,7 @@ async def test_board_sort_by_dimensions_desc(session: AsyncSession):
     board = await get_section_board(
         session,
         section_id=target_section.id,
-        sort_by="dimensions",
-        sort_order="desc",
+        sort="dimensions:desc",
         limit=50,
     )
     dims = [task["dimensions"] for task in board["tasks"]]
@@ -429,3 +429,157 @@ async def test_board_limit_max_validation(client, session: AsyncSession):
 
     resp = await client.get(f"/api/shopfloor/sections/{target_section.id}/board?limit=1000")
     assert resp.status_code == 422
+
+
+@pytest.mark.asyncio
+async def test_board_default_order_unchanged(client, session: AsyncSession):
+    """Без параметра сортировки доска идёт по sequence, как и до перехода на ?sort=."""
+    user = await _make_user(session)
+    token = create_access_token(subject=user.email)
+    client.headers["Authorization"] = f"Bearer {token}"
+
+    _, target_section, route, raw_stage, target_stage = await _setup_two_stage_route(session)
+    # Одинаковый sequence у всех задач: порядок целиком определяет tiebreaker.
+    for sku in ("ZZZ-LAST", "AAA-FIRST", "MMM-MID"):
+        await _seed_board_tasks(
+            session,
+            target_section=target_section,
+            route=route,
+            raw_stage=raw_stage,
+            target_stage=target_stage,
+            count=1,
+            sku_prefix=sku,
+            plan_no=f"BOARD-DEF-{uuid.uuid4().hex[:8]}",
+        )
+
+    board = await get_section_board(session, section_id=target_section.id, limit=50)
+    task_ids = [task["id"] for task in board["tasks"]]
+    assert len(task_ids) == 3
+    assert task_ids == sorted(task_ids), "tiebreaker по id должен быть возрастающим"
+
+    # Явный дефолт даёт тот же порядок, что и отсутствие параметра.
+    explicit = await get_section_board(
+        session, section_id=target_section.id, sort="sequence:asc", limit=50
+    )
+    assert [task["id"] for task in explicit["tasks"]] == task_ids
+
+    # Дефолт не «просто любой»: сортировка по не-дефолтному полю переставляет
+    # строки. На HEAD, где параметра sort нет, остался бы исходный порядок —
+    # этот assert ловит именно перевод на общий контракт.
+    by_sku = await get_section_board(
+        session, section_id=target_section.id, sort="product_sku:asc", limit=50
+    )
+    assert [task["product_sku"] for task in by_sku["tasks"]] == [
+        "AAA-FIRST-0000",
+        "MMM-MID-0000",
+        "ZZZ-LAST-0000",
+    ]
+
+
+@pytest.mark.asyncio
+async def test_board_multi_sort_priorities(client, session: AsyncSession):
+    """Два приоритета: сначала статус, потом артикул.
+
+    Статус у всех задач одинаковый, поэтому порядок по одному полю не алфавитный,
+    а по двум — алфавитный. Иначе тест не отличает мультисортировку от
+    одиночной сортировки по второму полю.
+    """
+    user = await _make_user(session)
+    token = create_access_token(subject=user.email)
+    client.headers["Authorization"] = f"Bearer {token}"
+
+    _, target_section, route, raw_stage, target_stage = await _setup_two_stage_route(session)
+    for sku in ("ZZZ-LAST", "AAA-FIRST", "MMM-MID"):
+        await _seed_board_tasks(
+            session,
+            target_section=target_section,
+            route=route,
+            raw_stage=raw_stage,
+            target_stage=target_stage,
+            count=1,
+            sku_prefix=sku,
+            plan_no=f"BOARD-MULTI-{uuid.uuid4().hex[:8]}",
+        )
+
+    # Один приоритет: статус у всех задач ready, порядок задаёт tiebreaker по id,
+    # то есть порядок посева, а не алфавитный.
+    by_status = await get_section_board(
+        session, section_id=target_section.id, sort="status:asc", limit=50
+    )
+    seeded_order = [task["product_sku"] for task in by_status["tasks"]]
+    assert seeded_order != sorted(seeded_order), (
+ "одиночная сортировка по статусу не должна совпасть с алфавитной"
+    )
+
+    # Второй приоритет переставляет строки внутри равных по статусу.
+    by_both = await get_section_board(
+        session,
+        section_id=target_section.id,
+        sort="status:asc,product_sku:asc",
+        limit=50,
+    )
+    assert [task["product_sku"] for task in by_both["tasks"]] == [
+        "AAA-FIRST-0000",
+        "MMM-MID-0000",
+        "ZZZ-LAST-0000",
+    ]
+
+
+@pytest.mark.asyncio
+async def test_board_due_date_nulls_last_both_directions(client, session: AsyncSession):
+    """Задачи без срока уходят в конец и при возрастании, и при убывании."""
+    user = await _make_user(session)
+    token = create_access_token(subject=user.email)
+    client.headers["Authorization"] = f"Bearer {token}"
+
+    _, target_section, route, raw_stage, target_stage = await _setup_two_stage_route(session)
+    await _seed_board_tasks(
+        session, target_section=target_section, route=route,
+        raw_stage=raw_stage, target_stage=target_stage, count=1,
+        sku_prefix="DUE-NONE", plan_no=f"BOARD-DUE-{uuid.uuid4().hex[:8]}",
+        due_date=None, set_due_date=True,
+    )
+    await _seed_board_tasks(
+        session, target_section=target_section, route=route,
+        raw_stage=raw_stage, target_stage=target_stage, count=1,
+        sku_prefix="DUE-LATE", plan_no=f"BOARD-DUE-{uuid.uuid4().hex[:8]}",
+        due_date=date(2026, 6, 1), set_due_date=True,
+    )
+    await _seed_board_tasks(
+        session, target_section=target_section, route=route,
+        raw_stage=raw_stage, target_stage=target_stage, count=1,
+        sku_prefix="DUE-EARLY", plan_no=f"BOARD-DUE-{uuid.uuid4().hex[:8]}",
+        due_date=date(2026, 2, 1), set_due_date=True,
+    )
+
+    for direction, expected in (
+        ("asc", ["DUE-EARLY-0000", "DUE-LATE-0000", "DUE-NONE-0000"]),
+        ("desc", ["DUE-LATE-0000", "DUE-EARLY-0000", "DUE-NONE-0000"]),
+    ):
+        board = await get_section_board(
+            session,
+            section_id=target_section.id,
+            sort=f"due_date:{direction}",
+            limit=50,
+        )
+        assert [task["product_sku"] for task in board["tasks"]] == expected
+
+
+@pytest.mark.asyncio
+async def test_board_rejects_unknown_field_and_direction(client, session: AsyncSession):
+    """Неизвестное поле или направление — 400, а не молчаливый фолбэк."""
+    user = await _make_user(session)
+    token = create_access_token(subject=user.email)
+    client.headers["Authorization"] = f"Bearer {token}"
+
+    _, target_section, _, _, _ = await _setup_two_stage_route(session)
+
+    unknown_field = await client.get(
+        f"/api/shopfloor/sections/{target_section.id}/board?sort=nope:asc"
+    )
+    assert unknown_field.status_code == 400, unknown_field.text
+
+    bad_direction = await client.get(
+        f"/api/shopfloor/sections/{target_section.id}/board?sort=status:sideways"
+    )
+    assert bad_direction.status_code == 400, bad_direction.text

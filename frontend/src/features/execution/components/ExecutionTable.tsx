@@ -295,40 +295,42 @@ export function ExecutionTable({
               </colgroup>
               <thead>
                 <tr>
-                  {visibleColumns.map((column) => (
-                    <th
-                      key={column.id}
-                      className={`${headerCellClass} ${column.headerClassName ?? ""}`}
-                      aria-sort={column.sortField ? getAriaSort(column.sortField) : undefined}
-                    >
-                      {column.sortField ? (
-                        <SortableFilterHeader
-                          field={column.sortField}
-                          label={column.label}
-                          currentSorts={sortConfigs}
-                          onSortChange={handleSortChange}
-                          values={uniqueValuesByField[column.sortField]}
-                          {...(column.sortField === "dimensions"
-                            ? {
-                                selectedValues: bindColumn("dimensions").selectedValues,
-                                onFilterChange: bindColumn("dimensions").onFilterChange,
-                              }
-                            : bindColumn(column.sortField))}
-                          valueLabel={
-                            column.sortField === "status"
-                              ? (v) => positionStatusLabels[v] ?? v
-                              : column.sortField === "dimensions"
-                                ? formatDimensionsFilterValue
-                                : undefined
-                          }
-                        />
-                      ) : column.id === "actions" ? (
-                        <span className="block truncate">{column.label}</span>
-                      ) : (
-                        <span className="block truncate">{column.label}</span>
-                      )}
-                    </th>
-                  ))}
+                  {visibleColumns.map((column) => {
+                    const filterField = column.filterField;
+                    return (
+                      <th
+                        key={column.id}
+                        className={`${headerCellClass} ${column.headerClassName ?? ""}`}
+                        aria-sort={column.sortField ? getAriaSort(column.sortField) : undefined}
+                      >
+                        {filterField ? (
+                          <SortableFilterHeader
+                            field={filterField}
+                            label={column.label}
+                            currentSorts={sortConfigs}
+                            onSortChange={handleSortChange}
+                            sortable={Boolean(column.sortField)}
+                            values={uniqueValuesByField[filterField]}
+                            {...(filterField === "dimensions"
+                              ? {
+                                  selectedValues: bindColumn("dimensions").selectedValues,
+                                  onFilterChange: bindColumn("dimensions").onFilterChange,
+                                }
+                              : bindColumn(filterField))}
+                            valueLabel={
+                              filterField === "status"
+                                ? (v) => positionStatusLabels[v] ?? v
+                                : filterField === "dimensions"
+                                  ? formatDimensionsFilterValue
+                                  : undefined
+                            }
+                          />
+                        ) : (
+                          <span className="block truncate">{column.label}</span>
+                        )}
+                      </th>
+                    );
+                  })}
                   <TableCornerResetHeader
                     hasActiveFilters={tableHasActiveFilters}
                     onReset={onResetAll}

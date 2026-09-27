@@ -13,14 +13,17 @@ dedicated ``/transfers`` UI page.
 
 from __future__ import annotations
 
+from collections.abc import Callable, Sequence
 from datetime import datetime
 from decimal import Decimal
-from typing import cast as tcast
+from typing import Any, cast as tcast
 
+from fastapi import HTTPException
 from sqlalchemy import String, Subquery, and_, case, cast, func, or_, select
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import aliased
 
+from app.core.sorting import SortClause, apply_sort, parse_sort, sort_items
 from app.models.defect import DefectItem, TransferDiscrepancyDefectItem
 from app.models.internal_plan import SectionPlanLine
 from app.models.product import Product
@@ -346,16 +349,72 @@ def _hydrate_production_ready_row(
         })
     return items
 
-READY_SORT_FIELDS = frozenset({
-    "sequence",
-    "task_id",
-    "plan_position_id",
-    "product_sku",
-    "operation_name",
-    "transferable_qty",
-    "next_section_name",
-    "dimensions",
-})
+
+# ─── Сортировка ready-страницы (единый контракт ?sort=field:order,...) ───────
+# Две таблицы резолва одного и того же набора полей:
+#   * _READY_SORT_KEYS — значения уже готовых строк (Python, ФИНАЛЬНЫЙ порядок,
+#     общий для производственных и складских строк);
+#   * _ready_production_sort_columns() — выражения SQL для производственных
+#     заданий (порядок строк-заданий ДО гидрации).
+# Расхождение таблиц означало бы, что одни и те же задания приходят в разном
+# порядке в зависимости от ветки; его ловит тест test_ready_sort_tables_agree.
+def _ready_dimensions_length(item: dict) -> float | None:
+    """Длина из габарита готовой строки; None — безразмерная."""
+    dims = item.get("dimensions")
+    if not isinstance(dims, dict):
+        return None
+    raw = dims.get("length_mm")
+    if raw is None:
+        return None
+    try:
+        return float(_to_decimal(raw))
+    except Exception:
+        return None
+
+
+def _ready_transferable_qty(item: dict) -> Decimal:
+    try:
+        return _to_decimal(item.get("transferable_quantity") or "0")
+    except Exception:
+        return Decimal("0")
+
+
+_READY_SORT_KEYS: dict[str, Callable[[dict], Any]] = {
+    "sequence": lambda item: item.get("sequence") or 0,
+    "task_id": lambda item: item.get("task_id") or 0,
+    "plan_position_id": lambda item: item.get("plan_position_id") or 0,
+    "product_sku": lambda item: item.get("product_sku") or "",
+    # «Этап» — это номер этапа маршрута, текст операции лишь дополняет его.
+    "operation_name": lambda item: (
+        (item.get("sequence") or 0, item.get("operation_name") or "")
+    ),
+    "transferable_qty": _ready_transferable_qty,
+    "next_section_name": lambda item: item.get("next_section_name") or "",
+    "dimensions": _ready_dimensions_length,
+}
+
+READY_SORT_FIELDS = frozenset(_READY_SORT_KEYS)
+
+# Безразмерные строки уходят в конец в ЛЮБОМ направлении (как в SQL-пути).
+_READY_SORT_NULLS_LAST_FIELDS = ("dimensions",)
+
+# Без параметра сортировки порядок прежний: этап по возрастанию.
+_READY_SORT_DEFAULT = SortClause("sequence", "asc")
+
+
+def _ready_item_tiebreaker(item: dict) -> tuple:
+    """Последний уровень порядка ready-строк.
+
+    Строки одного задания (в том числе выходы трансформирующей задачи) не
+    должны «мигать» между страницами: их раскладывает габарит, а затем план.
+    """
+    length = _ready_dimensions_length(item)
+    return (
+        item.get("task_id") or 0,
+        0 if length is None else 1,
+        0.0 if length is None else length,
+        _ready_transferable_qty(item),
+    )
 
 
 def _next_operation_names_subquery():
@@ -370,43 +429,58 @@ def _next_operation_names_subquery():
     )
 
 
-def _apply_ready_production_order(
-    query,
+def _ready_production_sort_columns(
     *,
-    sort_by: str,
-    sort_order: str,
     transferable_expr,
     from_line,
     from_stage,
     next_section,
-    next_op_names_sq,
-):
-    order_column = from_line.sequence
-    if sort_by == "task_id":
-        order_column = WorkTask.id
-    elif sort_by == "plan_position_id":
-        order_column = from_line.plan_position_id
-    elif sort_by == "product_sku":
-        order_column = Product.sku
-    elif sort_by == "operation_name":
-        order_column = from_stage.sequence
-    elif sort_by == "transferable_qty":
-        order_column = transferable_expr
-    elif sort_by == "next_section_name":
-        order_column = next_section.name
-    elif sort_by == "dimensions":
-        order_column = WorkTask.dimensions["length_mm"].as_float()
+) -> dict[str, object]:
+    """«поле ?sort= → выражение SQL» для производственных заданий.
 
-    nulls_last = sort_by == "dimensions"
-    if sort_order == "asc":
-        primary = order_column.asc()
-        if nulls_last:
-            primary = primary.nulls_last()
-        return query.order_by(primary, WorkTask.id.asc())
-    primary = order_column.desc()
-    if nulls_last:
-        primary = primary.nulls_last()
-    return query.order_by(primary, WorkTask.id.desc())
+    Алиасы запроса приходят аргументами, поэтому таблица собирается на
+    каждый вызов. Набор полей обязан совпадать с ``_READY_SORT_KEYS``: иначе
+    задание и складская строка окажутся в разном порядке (ловит тест
+    test_ready_sort_tables_agree).
+    """
+    return {
+        "sequence": from_line.sequence,
+        "task_id": WorkTask.id,
+        "plan_position_id": from_line.plan_position_id,
+        "product_sku": Product.sku,
+        "operation_name": from_stage.sequence,
+        "transferable_qty": transferable_expr,
+        "next_section_name": next_section.name,
+        "dimensions": lambda: WorkTask.dimensions["length_mm"].as_float(),
+    }
+
+
+def _apply_ready_production_order(
+    query,
+    *,
+    clauses,
+    transferable_expr,
+    from_line,
+    from_stage,
+    next_section,
+):
+    """ORDER BY производственных заданий: приоритеты ``?sort=`` + tiebreaker.
+
+    Этот порядок действует ДО гидрации строк; финальный порядок страницы
+    (включая складские строки) задаёт общий Python-проход ``sort_items``.
+    """
+    return apply_sort(
+        query,
+        clauses,
+        _ready_production_sort_columns(
+            transferable_expr=transferable_expr,
+            from_line=from_line,
+            from_stage=from_stage,
+            next_section=next_section,
+        ),
+        tiebreaker=WorkTask.id,
+        nulls_last=_READY_SORT_NULLS_LAST_FIELDS,
+    )
 
 
 def _build_production_ready_query(
@@ -422,8 +496,7 @@ def _build_production_ready_query(
     plan_position_id: int | None = None,
     transferable_qty: Decimal | None = None,
     dimensions: str | None = None,
-    sort_by: str = "sequence",
-    sort_order: str = "asc",
+    sort_clauses: Sequence[SortClause] = (),
 ):
     from_section = aliased(Section, name="from_section")
     next_section = aliased(Section, name="next_section")
@@ -577,20 +650,13 @@ def _build_production_ready_query(
         if dims_active:
             query = query.where(dimensions_match_clause(WorkTask.dimensions, dims))
 
-    if sort_by not in READY_SORT_FIELDS:
-        sort_by = "sequence"
-    if sort_order not in ("asc", "desc"):
-        sort_order = "asc"
-
     return _apply_ready_production_order(
         query,
-        sort_by=sort_by,
-        sort_order=sort_order,
+        clauses=sort_clauses,
         transferable_expr=stage_qty_expr,
         from_line=from_line,
         from_stage=from_stage,
         next_section=next_section,
-        next_op_names_sq=next_op_names_sq,
     )
 
 
@@ -668,47 +734,6 @@ def _ready_item_matches_column_filters(
             elif item_dims != dims:
                 return False
     return True
-
-
-def _ready_item_sort_key(item: dict, sort_by: str, sort_order: str = "asc") -> tuple:
-    if sort_by == "task_id":
-        return (item.get("task_id") or 0,)
-    if sort_by == "plan_position_id":
-        return (item.get("plan_position_id") or 0,)
-    if sort_by == "product_sku":
-        return (item.get("product_sku") or "",)
-    if sort_by == "operation_name":
-        return (item.get("sequence") or 0, item.get("operation_name") or "")
-    if sort_by == "transferable_qty":
-        return (_to_decimal(item.get("transferable_quantity") or "0"),)
-    if sort_by == "next_section_name":
-        return (item.get("next_section_name") or "",)
-    if sort_by == "dimensions":
-        return _ready_dimensions_sort_key(item, sort_order)
-    return (item.get("sequence") or 0, item.get("task_id") or 0)
-
-
-def _ready_dimensions_sort_key(item: dict, sort_order: str) -> tuple:
-    """Сортировочный ключ размера: длина от большей к меньшей, безразмерные — в конец.
-
-    ``sort_order`` нужен, потому что общий путь (has_stock) сортирует через
-    ``reverse=sort_order == "desc"`` — инверсия «переворачивает» null-флаг.
-    """
-    dims = item.get("dimensions")
-    length = None
-    if isinstance(dims, dict):
-        raw = dims.get("length_mm")
-        if raw is not None:
-            try:
-                length = _to_decimal(raw)
-            except Exception:
-                length = None
-    has_length = length is not None
-    if sort_order == "desc":
-        # reverse=True: первый элемент — наибольший ключ. Безразмерные — наименьший ключ → последние.
-        return (1, float(length)) if has_length else (0, 0)
-    # reverse=False: безразмерные — наибольший ключ → последние.
-    return (0, float(length)) if has_length else (1, 0)
 
 
 async def _fetch_stock_ready_items(
@@ -945,8 +970,7 @@ async def list_ready_to_transfer(
     limit: int = 50,
     offset: int = 0,
     search: str | None = None,
-    sort_by: str = "sequence",
-    sort_order: str = "asc",
+    sort: str = "sequence:asc",
     product_sku: str | None = None,
     operation_name: str | None = None,
     next_operation_name: str | None = None,
@@ -973,6 +997,14 @@ async def list_ready_to_transfer(
       * ``spg_id`` — restrict to all sections of an SPG (overrides
         ``section_id`` if both given).
     """
+    # Сортировка разбирается и проверяется ДО выборки, в том числе до раннего
+    # выхода по пустому СПГ: кликнул неизвестную колонку — 400, а не пустая
+    # таблица. Молчаливого отката на дефолт нет.
+    sort_clauses = parse_sort(sort, default=_READY_SORT_DEFAULT)
+    for clause in sort_clauses:
+        if clause.field not in READY_SORT_FIELDS:
+            raise HTTPException(status_code=400, detail=f"Invalid sort field: {clause.field}")
+
     spg_section_ids: list[int] | None = None
     if spg_id is not None:
         spg_section_ids = (
@@ -996,11 +1028,6 @@ async def list_ready_to_transfer(
         except Exception:
             parsed_transferable_qty = None
 
-    if sort_by not in READY_SORT_FIELDS:
-        sort_by = "sequence"
-    if sort_order not in ("asc", "desc"):
-        sort_order = "asc"
-
     # transferable_qty/dimensions применяются по строке в Python (тикет #91):
     # трансформирующая задача разворачивается в строки выходов, и эти фильтры
     # на уровне SQL-задачи неверны. Остальные фильтры (task-level атрибуты)
@@ -1017,8 +1044,7 @@ async def list_ready_to_transfer(
         plan_position_id=plan_position_id,
         transferable_qty=None,
         dimensions=None,
-        sort_by=sort_by,
-        sort_order=sort_order,
+        sort_clauses=sort_clauses,
     )
 
     has_stock = await _scope_has_stock_sections(db, section_id=section_id, spg_id=spg_id)
@@ -1071,8 +1097,16 @@ async def list_ready_to_transfer(
         )
         items.extend(stock_items)
 
-    reverse = sort_order == "desc"
-    items.sort(key=lambda item: _ready_item_sort_key(item, sort_by, sort_order), reverse=reverse)
+    # Финальный порядок страницы — общий Python-проход по ОБЕИМ веткам
+    # (производственные и складские строки), поэтому одинаковый вход даёт
+    # одинаковый порядок независимо от ветки.
+    items = sort_items(
+        items,
+        sort_clauses,
+        _READY_SORT_KEYS,
+        nulls_last=_READY_SORT_NULLS_LAST_FIELDS,
+        tiebreaker=_ready_item_tiebreaker,
+    )
     total = len(items)
     items = items[offset : offset + limit]
 
@@ -1085,6 +1119,31 @@ async def list_ready_to_transfer(
     }
 
 
+
+# ─── Сортировка журнала передач (единый контракт ?sort=field:order,...) ───────
+# Короткие имена ``sku`` / ``from`` / ``to`` / ``quantity`` — часть контракта
+# журнала: фронт шлёт именно их. Переименование — отдельное решение, здесь они
+# остаются вторыми именами тех же колонок внутри общей таблицы резолва.
+def _history_sort_columns(*, from_section, to_section) -> dict[str, object]:
+    return {
+        "created_at": Transfer.created_at,
+        "status": Transfer.status,
+        "product_sku": Product.sku,
+        "sku": Product.sku,
+        "from_section_name": from_section.name,
+        "from": from_section.name,
+        "to_section_name": to_section.name,
+        "to": to_section.name,
+        "sent_quantity": Transfer.sent_quantity,
+        "quantity": Transfer.sent_quantity,
+        "transfer_no": Transfer.transfer_no,
+    }
+
+
+# Без параметра сортировки порядок прежний: новые передачи сверху.
+_HISTORY_SORT_DEFAULT = SortClause("created_at", "desc")
+
+
 async def get_section_transfer_history(
     db: AsyncSession,
     *,
@@ -1094,8 +1153,7 @@ async def get_section_transfer_history(
     offset: int = 0,
     search: str | None = None,
     status: str | None = None,
-    sort_by: str = "created_at",
-    sort_order: str = "desc",
+    sort: str = "created_at:desc",
     date_from: datetime | None = None,
     date_to: datetime | None = None,
     product_sku: str | None = None,
@@ -1103,6 +1161,8 @@ async def get_section_transfer_history(
     to_section_name: str | None = None,
 ) -> dict:
     """Return both incoming and outgoing transfers for a section or SPG (history log)."""
+    sort_clauses = parse_sort(sort, default=_HISTORY_SORT_DEFAULT)
+
     from_section = aliased(Section)
     to_section = aliased(Section)
     from_task = aliased(WorkTask)
@@ -1110,6 +1170,13 @@ async def get_section_transfer_history(
     from_stage = aliased(RouteStage)
     to_stage = aliased(RouteStage)
     from_line = aliased(SectionPlanLine)
+
+    # 400 на неизвестное поле — до раннего выхода по пустому СПГ: кликнул
+    # колонку, которой сервер не умеет сортировать, и получил пустой журнал.
+    sort_columns = _history_sort_columns(from_section=from_section, to_section=to_section)
+    for clause in sort_clauses:
+        if clause.field not in sort_columns:
+            raise HTTPException(status_code=400, detail=f"Invalid sort field: {clause.field}")
 
     base_query = (
         select(
@@ -1193,33 +1260,12 @@ async def get_section_transfer_history(
     count_stmt = select(func.count()).select_from(base_query.subquery())
     total = (await db.execute(count_stmt)).scalar() or 0
 
-    order_column = Transfer.created_at
-    if sort_by == "status":
-        order_column = Transfer.status
-    elif sort_by in ("product_sku", "sku"):
-        order_column = Product.sku
-    elif sort_by in ("from_section_name", "from"):
-        order_column = from_section.name
-    elif sort_by in ("to_section_name", "to"):
-        order_column = to_section.name
-    elif sort_by in ("sent_quantity", "quantity"):
-        order_column = Transfer.sent_quantity
-    elif sort_by == "transfer_no":
-        order_column = Transfer.transfer_no
+    # Приоритеты слева направо, в конце tiebreaker по PK.
+    base_query = apply_sort(
+        base_query, sort_clauses, sort_columns, tiebreaker=Transfer.id,
+    )
 
-    if sort_order == "asc":
-        order_by = (order_column.asc(), Transfer.id.asc())
-    else:
-        order_by = (order_column.desc(), Transfer.id.desc())
-
-    rows = (
-        await db.execute(
-            base_query
-            .order_by(*order_by)
-            .offset(offset)
-            .limit(limit)
-        )
-    ).all()
+    rows = (await db.execute(base_query.offset(offset).limit(limit))).all()
 
     transfers = []
     for transfer, from_sec, to_sec, src_task, dst_task, src_stage, dst_stage, src_line, product_sku in rows:

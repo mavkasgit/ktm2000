@@ -441,7 +441,7 @@ type SectionTasksBoardProps = {
   totalPages: number;
   rangeLabel: string;
   onServerQueryChange: (
-    query: Pick<SectionBoardQueryParams, "search" | "product_sku" | "sort_by" | "sort_order">,
+    query: Pick<SectionBoardQueryParams, "search" | "product_sku" | "sort">,
   ) => void;
 };
 
@@ -576,6 +576,16 @@ export function SectionTasksBoard({
     { field: "remainingQty", getSortValue: (t) => parseFloat(t.cache.remaining_quantity) || 0 },
   ], []);
 
+  // Поиск колонки по полю для клиентской сортировки: таблица статична.
+  const sortDefsByField = useMemo(
+    () =>
+      Object.fromEntries(sortDefs.map((def) => [def.field, def])) as Record<
+        TaskSortField,
+        ColumnSortDef<SectionBoardTask, TaskSortField> | undefined
+      >,
+    [sortDefs],
+  );
+
   const uniqueValues = useMemo(() => ({
     sequence: [...new Set(visibleTasks.map((t) => String(t.sequence)))],
     productSku: [...new Set(visibleTasks.map((t) => t.product_sku))],
@@ -591,27 +601,36 @@ export function SectionTasksBoard({
     remainingQty: [...new Set(visibleTasks.map((t) => String(parseFloat(t.cache.remaining_quantity) || 0)))],
   }), [visibleTasks]);
 
-  // Порядок строк доски. Активная сортировка колонки — единственный
-  // источник порядка: сервер сортирует сам (sequence/productSku/status/
-  // dimensions), остальные поля — здесь, до группировки. Без сортировки
+  // Порядок строк доски. Колонки серверной сортировки (sequence/productSku/
+  // status/dimensions) уже пришли в нужном порядке с сервера, остальные
+  // клиент упорядочивает здесь, поверх ответа и до группировки. Без сортировки
   // действует дефолт «количество убыв., размер убыв.», а внутри группы —
   // «статус, затем sequence» (CONTEXT.md, раздел «Сортировка строк по размеру»).
   const hasActiveSort = sortConfigs.length > 0;
+  const clientSortConfigs = useMemo(
+    () => sortConfigs.filter((config) => !isServerSortField(config.field)),
+    [sortConfigs],
+  );
   const sortedTasks = useMemo(() => {
-    const activeSort = sortConfigs[0];
-    if (!activeSort || isServerSortField(activeSort.field)) {
-      return visibleTasks;
-    }
-    const def = sortDefs.find((item) => item.field === activeSort.field);
-    if (!def) return visibleTasks;
-    return [...visibleTasks].sort((a, b) => {
-      const left = def.getSortValue(a);
-      const right = def.getSortValue(b);
-      if (left === right) return 0;
-      const cmp = left < right ? -1 : 1;
-      return activeSort.order === "asc" ? cmp : -cmp;
+    // Приоритеты сравниваются по очереди, от старшего к младшему: сортировка
+    // устойчива, поэтому при равенстве по клиентским колонкам сохраняется
+    // порядок сервера (за серверные колонки отвечает он).
+    const clientSorts = clientSortConfigs.flatMap((config) => {
+      const def = sortDefsByField[config.field];
+      return def ? [{ def, order: config.order }] : [];
     });
-  }, [visibleTasks, sortConfigs, sortDefs]);
+    if (clientSorts.length === 0) return visibleTasks;
+    return [...visibleTasks].sort((a, b) => {
+      for (const { def, order } of clientSorts) {
+        const left = def.getSortValue(a);
+        const right = def.getSortValue(b);
+        if (left === right) continue;
+        const cmp = left < right ? -1 : 1;
+        return order === "asc" ? cmp : -cmp;
+      }
+      return 0;
+    });
+  }, [visibleTasks, clientSortConfigs, sortDefsByField]);
 
   const groups = useMemo(() => {
     // groupTasksByProfile сохраняет порядок первого появления, поэтому

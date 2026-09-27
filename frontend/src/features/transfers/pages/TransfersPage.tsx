@@ -87,6 +87,12 @@ import {
   type ReadyTransferGroup,
 } from "../lib/groupReadyTransfers";
 import { makeIdempotencyKey, runTransferBatch } from "../lib/runTransferBatch";
+import {
+  buildHistorySortParam,
+  buildReadySortParam,
+  type HistorySortField,
+  type ReadySortField,
+} from "../lib/transferSortParams";
 
 function fmtQty(value: string | number | null | undefined): string {
   if (value == null) return "0";
@@ -144,8 +150,6 @@ function statusBadgeVariant(status: string): StatusBadgeVariant {
   return "outline";
 }
 
-type ReadySortField = "positionId" | "sku" | "dimensions" | "stage" | "transferableQty" | "next";
-
 function getReadyCellValue(task: ReadyToTransferTask, field: ReadySortField): string {
   switch (field) {
     case "positionId":
@@ -165,8 +169,6 @@ function getReadyCellValue(task: ReadyToTransferTask, field: ReadySortField): st
   }
 }
 
-type HistorySortField = "from" | "to" | "sku" | "quantity" | "status";
-
 function getHistoryStatusLabel(
   transfer: IncomingTransfer,
   sectionIdsInSpg: Set<number>,
@@ -178,38 +180,6 @@ function getHistoryStatusLabel(
   if (transfer.status === "sent") return `${direction} / Отправлена`;
   if (transfer.status === "partially_accepted") return `${direction} / Частично принята`;
   return `${direction} / Принята`;
-}
-
-function mapReadySortFieldToApi(field: ReadySortField): string {
-  switch (field) {
-    case "positionId":
-      return "plan_position_id";
-    case "sku":
-      return "product_sku";
-    case "dimensions":
-      return "dimensions";
-    case "stage":
-      return "operation_name";
-    case "transferableQty":
-      return "transferable_qty";
-    case "next":
-      return "next_section_name";
-  }
-}
-
-function mapHistorySortFieldToApi(field: HistorySortField): string {
-  switch (field) {
-    case "from":
-      return "from";
-    case "to":
-      return "to";
-    case "sku":
-      return "sku";
-    case "quantity":
-      return "quantity";
-    case "status":
-      return "status";
-  }
 }
 
 function extractSectionName(cellValue: string): string {
@@ -818,7 +788,7 @@ export function TransfersPage() {
     columnFilters: readyColumnFilters,
     columnSearchQueries: readyColumnSearchQueries,
     sortConfigs: readySortConfigs,
-    setSortConfigs: setReadySortConfigs,
+    handleSort: applyReadySort,
     hasActiveFilters: hasReadyFiltersActive,
     resetAll: resetReadyFiltersBase,
   } = useFilterableTable<ReadySortField>({
@@ -842,23 +812,19 @@ export function TransfersPage() {
     ],
   });
 
-  const activeReadySort = readySortConfigs[0];
   const readyQueryParams = useMemo(
     () => ({
       limit: readyPagination.limit,
       offset: readyPagination.offset,
       search: debouncedReadySearch.trim() || undefined,
-      sort_by: activeReadySort
-        ? mapReadySortFieldToApi(activeReadySort.field)
-        : "sequence",
-      sort_order: activeReadySort?.order ?? "asc",
+      sort: buildReadySortParam(readySortConfigs),
       ...readyColumnApiParams,
     }),
     [
       readyPagination.limit,
       readyPagination.offset,
       debouncedReadySearch,
-      activeReadySort,
+      readySortConfigs,
       readyColumnApiParams,
     ],
   );
@@ -881,6 +847,7 @@ export function TransfersPage() {
     columnSearchQueries: historyColumnSearchQueries,
     sortConfigs: historySortConfigs,
     setSortConfigs: setHistorySortConfigs,
+    handleSort: applyHistorySort,
     hasActiveFilters: hasHistoryFiltersActive,
     resetAll: resetHistoryFiltersBase,
   } = useFilterableTable<HistorySortField>({
@@ -907,23 +874,19 @@ export function TransfersPage() {
     ],
   });
 
-  const activeHistorySort = historySortConfigs[0];
   const historyQueryParams = useMemo(
     () => ({
       limit: historyPagination.limit,
       offset: historyPagination.offset,
       search: debouncedHistorySearch.trim() || undefined,
-      sort_by: activeHistorySort
-        ? mapHistorySortFieldToApi(activeHistorySort.field)
-        : "created_at",
-      sort_order: activeHistorySort?.order ?? "desc",
+      sort: buildHistorySortParam(historySortConfigs),
       ...historyColumnApiParams,
     }),
     [
       historyPagination.limit,
       historyPagination.offset,
       debouncedHistorySearch,
-      activeHistorySort,
+      historySortConfigs,
       historyColumnApiParams,
     ],
   );
@@ -945,11 +908,24 @@ export function TransfersPage() {
 
   const readyGroupItems = useMemo(() => groupReadyTransfers(readyItems), [readyItems]);
 
+  // Свёрнутая группа и сортировка по колонке несовместимы: в шапке группы
+  // печатается общий этап и СУММА «К передаче», а порядок групп — порядок
+  // первого появления строки. Пока колонка не выбрана, дефолтный порядок
+  // сервера (этап маршрута) группировке не противоречит, и группы остаются
+  // свёрнутыми. Как только оператор выбрал колонку, рисуем строки заданий
+  // как есть: тогда порядок строк совпадает с тем, что напечатано в ячейке.
+  const readySortingActive = readySortConfigs.length > 0;
+
   // Строки таблицы «Готово к передаче» = свёрнутые группы (только заголовки) +
   // дети раскрытых + одиночные строки. В чекбокс-режиме группы раскрыты
   // принудительно: там оператор выбирает строки точечно, а групповую отправку
   // делает футер.
   const readyTableRows = useMemo<ReadyTableRow[]>(() => {
+    if (readySortingActive) {
+      // Порядок пришёл с сервера и уже отсортирован по выбранной колонке —
+      // рендерим строки заданий как есть, без перегруппировки.
+      return readyItems.map((task) => ({ kind: "task" as const, task, groupKey: null }));
+    }
     const rows: ReadyTableRow[] = [];
     for (const item of readyGroupItems) {
       if (item.kind === "single") {
@@ -962,7 +938,7 @@ export function TransfersPage() {
       }
     }
     return rows;
-  }, [bulkMode, readyGroupItems, expandedGroupKeys]);
+  }, [bulkMode, readyGroupItems, readyItems, expandedGroupKeys, readySortingActive]);
 
   const historyItems = historyData?.transfers ?? [];
   const historyTotal = historyData?.total ?? 0;
@@ -988,18 +964,15 @@ export function TransfersPage() {
   } = readyPagination;
   const readyTotalPages = computeReadyTotalPages(readyTotal);
 
+  // Цикл клика общий (нет → убыв. → возр. → снять): третье состояние
+  // возвращает свёрнутые группы, а выбранные приоритеты уходят на сервер
+  // все сразу одной строкой `sort`.
   const handleReadySort = useCallback(
     (field: ReadySortField) => {
-      setReadySortConfigs((prev) => {
-        const existing = prev.find((sort) => sort.field === field);
-        if (!existing) {
-          return [{ field, order: "desc" }];
-        }
-        return [{ field, order: existing.order === "asc" ? "desc" : "asc" }];
-      });
+      applyReadySort(field);
       readyPagination.resetPage();
     },
-    [setReadySortConfigs, readyPagination],
+    [applyReadySort, readyPagination],
   );
 
   const resetReadyFilters = useCallback(() => {
@@ -1008,16 +981,10 @@ export function TransfersPage() {
 
   const handleHistorySort = useCallback(
     (field: HistorySortField) => {
-      setHistorySortConfigs((prev) => {
-        const existing = prev.find((sort) => sort.field === field);
-        if (!existing) {
-          return [{ field, order: "desc" }];
-        }
-        return [{ field, order: existing.order === "asc" ? "desc" : "asc" }];
-      });
+      applyHistorySort(field);
       resetHistoryPage();
     },
-    [setHistorySortConfigs, resetHistoryPage],
+    [applyHistorySort, resetHistoryPage],
   );
 
   const resetHistoryFilters = useCallback(() => {

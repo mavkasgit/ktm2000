@@ -23,7 +23,12 @@ import {
   DialogTitle,
 } from "shared/ui"
 
-type SortConfig = { key: string; dir: "asc" | "desc" } | null
+import {
+  nextImportPreviewSortConfig,
+  sortImportPreviewRows,
+  type ImportPreviewSortConfig,
+  type ImportPreviewSortKey,
+} from "./lib/importPreviewSort"
 
 
 type SheetPreviewCache = Record<string, SheetPreviewResponse>
@@ -48,7 +53,7 @@ export function ImportWizard(props: {
   const [selectedSheet, setSelectedSheet] = useState(0)
   const [sheetPreviews, setSheetPreviews] = useState<SheetPreviewCache>({})
   const [previewLoading, setPreviewLoading] = useState<Record<string, boolean>>({})
-  const [sortConfig, setSortConfig] = useState<SortConfig>(null)
+  const [sortConfig, setSortConfig] = useState<ImportPreviewSortConfig | null>(null)
   const [filterErrors, setFilterErrors] = useState(false)
   const [filterWarnings, setFilterWarnings] = useState(false)
   const [filterDuplicates, setFilterDuplicates] = useState(false)
@@ -200,23 +205,7 @@ export function ImportWizard(props: {
         return rowNum.includes(q) || planPosId.includes(q) || sku.toLowerCase().includes(q) || name.toLowerCase().includes(q)
       })
     }
-    if (!sortConfig) return rows
-    return [...rows].sort((a, b) => {
-      let aVal: string
-      let bVal: string
-      if (sortConfig.key === "change_action" || sortConfig.key === "status") {
-        aVal = String(a[sortConfig.key] ?? "")
-        bVal = String(b[sortConfig.key] ?? "")
-      } else {
-        const aAfter = (a.after_data as Record<string, unknown>) || {}
-        const bAfter = (b.after_data as Record<string, unknown>) || {}
-        aVal = String(aAfter[sortConfig.key] ?? a[sortConfig.key] ?? "")
-        bVal = String(bAfter[sortConfig.key] ?? b[sortConfig.key] ?? "")
-      }
-      if (aVal < bVal) return sortConfig.dir === "asc" ? -1 : 1
-      if (aVal > bVal) return sortConfig.dir === "asc" ? 1 : -1
-      return 0
-    })
+    return sortImportPreviewRows(rows, sortConfig)
   }, [allRows, filterErrors, filterWarnings, filterDuplicates, sortConfig, rowSelection, searchQuery])
 
   const summary = useMemo(() => {
@@ -487,12 +476,8 @@ export function ImportWizard(props: {
     }
   }
 
-  function toggleSort(key: string) {
-    setSortConfig((prev) => {
-      if (!prev || prev.key !== key) return { key, dir: "asc" }
-      if (prev.dir === "asc") return { key, dir: "desc" }
-      return null
-    })
+  function toggleSort(key: ImportPreviewSortKey) {
+    setSortConfig((prev) => nextImportPreviewSortConfig(prev, key))
   }
 
   function reset() {

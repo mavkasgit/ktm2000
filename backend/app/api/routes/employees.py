@@ -20,8 +20,10 @@ async def get_employees(
     limit: int = Query(default=50, ge=1, le=500),
     offset: int = Query(default=0, ge=0),
     search: str | None = Query(default=None),
-    sort_by: str = Query(default="name"),
-    sort_order: str = Query(default="asc"),
+    sort: str | None = Query(
+        default=None,
+        description="Сортировка списком правил field:asc|desc через запятую, например sort=department:asc,name:desc",
+    ),
     department: str | None = Query(default=None),
     db: AsyncSession = Depends(get_db),
     _current_user: User = Depends(require_role([UserRole.admin])),
@@ -31,9 +33,8 @@ async def get_employees(
         db,
         limit=limit,
         offset=offset,
+        sort=sort,
         search=search,
-        sort_by=sort_by,
-        sort_order=sort_order,
         department=department,
     )
     return EmployeeListOut(

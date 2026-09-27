@@ -17,6 +17,11 @@ export interface SortableFilterHeaderProps<Field extends string> {
   selectedValues: Set<string>;
   onFilterChange: (field: Field, selected: Set<string>) => void;
   valueLabel?: (value: string) => string;
+  /**
+   * false — колонка фильтруется, но не сортируется: сервер не умеет сортировать
+   * по этому полю, а подставлять вместо него чужое поле молча нельзя.
+   */
+  sortable?: boolean;
   /** Controlled search query for live table filtering */
   searchQuery?: string;
   onSearchChange?: (field: Field, query: string) => void;
@@ -37,6 +42,7 @@ export function SortableFilterHeader<Field extends string>({
   selectedValues,
   onFilterChange,
   valueLabel,
+  sortable = true,
   searchQuery: controlledSearchQuery,
   onSearchChange,
 }: SortableFilterHeaderProps<Field>) {
@@ -58,7 +64,7 @@ export function SortableFilterHeader<Field extends string>({
     [field, isSearchControlled, onSearchChange],
   );
 
-  const activeSort = currentSorts.find((s) => s.field === field);
+  const activeSort = sortable ? currentSorts.find((s) => s.field === field) : undefined;
   const sortPriority = activeSort ? currentSorts.indexOf(activeSort) + 1 : null;
 
   const hasSetFilter = selectedValues.size > 0;
@@ -206,25 +212,27 @@ export function SortableFilterHeader<Field extends string>({
         </PopoverContent>
       </Popover>
 
-      <button
-        type="button"
-        onClick={() => onSortChange(field)}
-        aria-pressed={activeSort ? "true" : "false"}
-        aria-label={`Сортировка по ${String(field)}${activeSort ? ` (${activeSort.order})` : ""}`}
-        data-sort-order={activeSort?.order ?? "none"}
-        data-sort-priority={sortPriority ?? undefined}
-        className={cn(
-          "inline-flex items-center shrink-0 text-muted-foreground hover:text-foreground transition-colors cursor-pointer",
-          activeSort && "text-foreground",
-        )}
-      >
-        {sortIcon}
-        {sortPriority !== null && (
-          <span className="inline-flex items-center justify-center h-4 w-4 rounded-full bg-primary/10 text-[10px] font-semibold text-primary ml-0.5">
-            {sortPriority}
-          </span>
-        )}
-      </button>
+      {sortable && (
+        <button
+          type="button"
+          onClick={() => onSortChange(field)}
+          aria-pressed={activeSort ? "true" : "false"}
+          aria-label={`Сортировка по ${String(field)}${activeSort ? ` (${activeSort.order})` : ""}`}
+          data-sort-order={activeSort?.order ?? "none"}
+          data-sort-priority={sortPriority ?? undefined}
+          className={cn(
+            "inline-flex items-center shrink-0 text-muted-foreground hover:text-foreground transition-colors cursor-pointer",
+            activeSort && "text-foreground",
+          )}
+        >
+          {sortIcon}
+          {sortPriority !== null && (
+            <span className="inline-flex items-center justify-center h-4 w-4 rounded-full bg-primary/10 text-[10px] font-semibold text-primary ml-0.5">
+              {sortPriority}
+            </span>
+          )}
+        </button>
+      )}
     </div>
   );
 }

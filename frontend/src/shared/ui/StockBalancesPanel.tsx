@@ -19,7 +19,7 @@ import { usePaginatedTableQuery } from "@/shared/hooks/usePaginatedTableQuery";
 import { pickColumnApiValue } from "@/shared/lib/columnFilterSearch";
 import { RouteStepsDisplay } from "./RouteStepsDisplay";
 
-type BalanceSortField = "sku" | "quantity" | "operations" | "quality" | "location";
+import { buildBalanceSortParam, type BalanceSortField } from "@/shared/lib/stockSortParams";
 
 function getBalanceOperationsLabel(balance: StockBalanceEntry): string {
   if (balance.completed_stages?.length) {
@@ -43,9 +43,6 @@ function getBalanceCellValue(balance: StockBalanceEntry, field: BalanceSortField
   }
 }
 
-function mapBalanceSortFieldToApi(field: BalanceSortField): string {
-  return field;
-}
 
 function extractQualityStateApiValue(label: string): string | undefined {
   if (label === "—") return undefined;
@@ -135,7 +132,7 @@ export function StockBalancesPanel({
     columnFilters,
     columnSearchQueries,
     sortConfigs,
-    setSortConfigs,
+    handleSort: applySort,
     hasActiveFilters,
     resetAll: handleResetFilters,
   } = useFilterableTable<BalanceSortField>({
@@ -148,7 +145,7 @@ export function StockBalancesPanel({
     [columnFilters, columnSearchQueries],
   );
 
-  const activeSort = sortConfigs[0];
+  const sort = buildBalanceSortParam(sortConfigs);
   const normalizedLocationIds = useMemo(
     () => (locationIds?.length ? [...locationIds].sort((a, b) => a - b) : undefined),
     [locationIds],
@@ -176,16 +173,10 @@ export function StockBalancesPanel({
 
   const handleSortChange = useCallback(
     (field: BalanceSortField) => {
-      setSortConfigs((prev) => {
-        const existing = prev.find((sort) => sort.field === field);
-        if (!existing) {
-          return [{ field, order: "asc" }];
-        }
-        return [{ field, order: existing.order === "asc" ? "desc" : "asc" }];
-      });
+      applySort(field);
       resetPage();
     },
-    [resetPage, setSortConfigs],
+    [applySort, resetPage],
   );
 
   useEffect(() => {
@@ -198,8 +189,7 @@ export function StockBalancesPanel({
       location_id: locationId,
       location_ids: normalizedLocationIds,
       search: debouncedSearch.trim() || undefined,
-      sort_by: activeSort ? mapBalanceSortFieldToApi(activeSort.field) : "sku",
-      sort_order: activeSort?.order ?? "asc",
+      sort,
       limit,
       offset,
       ...columnApiParams,
@@ -208,7 +198,7 @@ export function StockBalancesPanel({
       locationId,
       normalizedLocationIds,
       debouncedSearch,
-      activeSort,
+      sort,
       limit,
       offset,
       columnApiParams,
@@ -222,8 +212,7 @@ export function StockBalancesPanel({
       search: debouncedSearch.trim() || undefined,
       limit,
       offset,
-      sort_by: balanceQueryParams.sort_by,
-      sort_order: balanceQueryParams.sort_order,
+      sort: balanceQueryParams.sort,
       sku: columnApiParams.sku,
       quantity: columnApiParams.quantity,
       quality: columnApiParams.quality,

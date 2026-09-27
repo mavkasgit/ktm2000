@@ -31,8 +31,8 @@ export type SectionListParams = {
   limit?: number;
   offset?: number;
   search?: string;
-  sort_by?: string;
-  sort_order?: "asc" | "desc";
+  /** Сортировка строкой `поле:порядок[,поле:порядок]` — старший приоритет первый. */
+  sort?: string;
   type?: SectionType | string;
   is_active?: boolean;
   code?: string;

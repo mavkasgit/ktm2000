@@ -13,6 +13,8 @@ import { queryKeys } from "@/shared/api/queryKeys";
 import { DateRangePicker, SortableFilterHeader, TableCornerResetHeader, TableCornerResetCell, TablePaginationFooter, DATA_TABLE_STYLES } from "@/shared/ui";
 import { useFilterableTable } from "@/shared/hooks/useFilterableTable";
 import { usePaginatedTableQuery } from "@/shared/hooks/usePaginatedTableQuery";
+import type { SortConfig } from "@/shared/hooks/useTableQueryEngine";
+import { buildSortParam } from "@/shared/lib/sortQueryParam";
 import { pickColumnApiValue } from "@/shared/lib/columnFilterSearch";
 
 type LogFilterField = "createdAt" | "status" | "sectionName" | "productSku" | "action" | "entityType";
@@ -134,9 +136,13 @@ export function AuditLogsPage() {
     setSortConfigs([{ field: "createdAt", order: "desc" }]);
   }, [setSortConfigs]);
 
-  const activeSort = sortConfigs[0] ?? { field: "createdAt" as LogFilterField, order: "desc" as const };
-  const sortBy = activeSort.field;
-  const sortOrder = activeSort.order;
+  // Сортировка по умолчанию — «сначала свежие»: она же уезжает на сервер,
+  // пока пользователь не выбрал колонку. Признак «фильтры активны» считает
+  // выбранные приоритеты, поэтому дефолт фильтром не считается.
+  const effectiveSortConfigs = useMemo<SortConfig<LogFilterField>[]>(
+    () => (sortConfigs.length > 0 ? sortConfigs : [{ field: "createdAt", order: "desc" }]),
+    [sortConfigs],
+  );
 
   const sortIsNonDefault =
     sortConfigs.length !== 1 ||
@@ -170,8 +176,7 @@ export function AuditLogsPage() {
       search: search.trim() || undefined,
       date_from: dateFrom ? `${dateFrom}T00:00:00` : undefined,
       date_to: dateTo ? `${dateTo}T23:59:59` : undefined,
-      sort_by: mapSortFieldToApi(sortBy),
-      sort_order: sortOrder,
+      sort: buildSortParam(effectiveSortConfigs, mapSortFieldToApi),
       limit,
       offset,
       ...restColumnParams,
@@ -183,8 +188,7 @@ export function AuditLogsPage() {
       search,
       dateFrom,
       dateTo,
-      sortBy,
-      sortOrder,
+      effectiveSortConfigs,
       limit,
       offset,
     ],

@@ -336,8 +336,10 @@ class PlanningRowDetailOut(BaseModel):
 async def list_rows(
     section_id: int | None = Query(default=None),
     search: str | None = Query(default=None),
-    sort_by: str | None = Query(default=None),
-    sort_order: str = Query(default="desc"),
+    sort: str | None = Query(
+        default=None,
+        description="Comma-separated sort rules: field:asc|desc, e.g. product_sku:asc,planned_qty:desc",
+    ),
     limit: int = Query(default=50, ge=1, le=500),
     offset: int = Query(default=0, ge=0),
     plan_position_id: str | None = Query(default=None, description="Column filter: position id"),
@@ -368,8 +370,7 @@ async def list_rows(
     params = PlanningRowsQueryParams(
         section_id=section_id,
         search=search,
-        sort_by=sort_by,
-        sort_order=sort_order,
+        sort=sort,
         limit=limit,
         offset=offset,
         plan_position_id=plan_position_id,

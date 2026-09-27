@@ -103,16 +103,27 @@ describe("taskGroupingDimensionsKey", () => {
 // ---------------------------------------------------------------------------
 
 describe("groupTasksByProfile", () => {
-  it("разные размеры одного артикула — разные группы", () => {
+  it("разные размеры одного артикула — разные группы, порядок входа сохраняется", () => {
     const tasks = [
       makeTask({ id: 1, dimensions: { length_mm: 2700 } }),
       makeTask({ id: 2, dimensions: { length_mm: 3000 } }),
     ];
     const groups = groupTasksByProfile(tasks, SKU_PROFILE);
     expect(groups).toHaveLength(2);
-    // равное количество — размер убыв.: 3 м первым
-    expect(groups[0].label).toBe("ЮП-460 · 3 м");
-    expect(groups[1].label).toBe("ЮП-460 · 2,7 м");
+    // Порядок строк — дело вызывающего: группировка не пересортировывает,
+    // иначе она затирала бы сортировку колонки, выбранную пользователем.
+    expect(groups[0].label).toBe("ЮП-460 · 2,7 м");
+    expect(groups[1].label).toBe("ЮП-460 · 3 м");
+  });
+
+  it("группировка не затирает сортировку по колонке: серверный порядок доходит до групп", () => {
+    // Сортировка по количеству убыв. — обратная порядку размеров.
+    const tasks = [
+      makeTask({ id: 1, dimensions: { length_mm: 3000 }, planned_quantity: "10" }),
+      makeTask({ id: 2, dimensions: { length_mm: 2700 }, planned_quantity: "900" }),
+    ];
+    const groups = groupTasksByProfile(tasks, SKU_PROFILE);
+    expect(groups.map((g) => g.label)).toEqual(["ЮП-460 · 3 м", "ЮП-460 · 2,7 м"]);
   });
 
   it("безразмерные — отдельная строка «артикул · —»", () => {

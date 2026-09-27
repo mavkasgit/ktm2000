@@ -53,30 +53,12 @@ import {
   getManualPassBlockReason,
 } from "../components/execution-utils";
 import { fmtQty } from "@/shared/utils/fmtQty";
+import { buildExecutionSortParam } from "../lib/executionSortMapping";
 
 function extractPlanId(value: string): string | undefined {
   const trimmed = value.trim();
   if (!trimmed) return undefined;
   return trimmed.split(/\s+/)[0];
-}
-
-function mapExecutionSortFieldToApi(field: ExecutionSortField): string | undefined {
-  switch (field) {
-    case "row":
-      return "row_number";
-    case "sku":
-      return "product_sku";
-    case "status":
-      return "status";
-    case "qty":
-      return "planned_qty";
-    case "stage":
-      return "sequence";
-    case "dimensions":
-      return "dimensions";
-    default:
-      return undefined;
-  }
 }
 
 function buildExecutionColumnApiParams(
@@ -198,19 +180,22 @@ export function ExecutionPage() {
     [columnFilters, columnSearchQueries],
   );
 
-  const activeSort = sortConfigs[0];
-  const sortByApi = activeSort ? mapExecutionSortFieldToApi(activeSort.field) : undefined;
+  // Вся выбранная сортировка уезжает одной строкой `sort` по приоритетам.
+  // Несортируемые сервером колонки в неё не попадают.
+  const sortParams = useMemo(
+    () => ({ sort: buildExecutionSortParam(sortConfigs) }),
+    [sortConfigs],
+  );
 
   const rowsQueryParams = useMemo(
     () => ({
       search: debouncedSearchQuery.trim() || undefined,
-      sort_by: sortByApi,
-      sort_order: sortByApi ? activeSort?.order : undefined,
+      ...sortParams,
       limit,
       offset,
       ...columnApiParams,
     }),
-    [debouncedSearchQuery, sortByApi, activeSort?.order, limit, offset, columnApiParams],
+    [debouncedSearchQuery, sortParams, limit, offset, columnApiParams],
   );
 
   const { data: rowsData, isLoading, error } = useQuery({

@@ -10,6 +10,8 @@ import {
 } from "@/shared/ui/import-utils";
 
 import { errorLabels as PLAN_IMPORT_ERROR_LABELS, warningLabels } from "@/shared/lib/generated-labels";
+import type { ImportPreviewSortConfig, ImportPreviewSortKey } from "../lib/importPreviewSort";
+
 export { PLAN_IMPORT_ERROR_LABELS };
 
 /** Подсветка артикула по источнику количества на подвес (after_data.hanger_source): цвет текста + обводка. */
@@ -56,8 +58,8 @@ function translateLabels(
 
 export type PlanImportPreviewTableProps = {
   rows: Record<string, unknown>[];
-  sortConfig?: { key: string; dir: "asc" | "desc" } | null;
-  onSort?: (key: string) => void;
+  sortConfig?: ImportPreviewSortConfig | null;
+  onSort?: (key: ImportPreviewSortKey) => void;
   expansion: ImportRowExpansion;
   hasActiveFilters: boolean;
   onReset: () => void;

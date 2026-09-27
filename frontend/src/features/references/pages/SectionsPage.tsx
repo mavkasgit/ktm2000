@@ -92,8 +92,7 @@ const SPG_FIELDS: Record<string, EntityDialogField> = {
 
 async function apiListSections(params: {
   search?: string;
-  sort_by?: string;
-  sort_order?: "asc" | "desc";
+  sort?: string;
 }): Promise<Section[]> {
   const data = await fetchAllSections(params);
   return data as Section[];
@@ -474,8 +473,9 @@ export function SectionsPage() {
     try {
       const sections = await apiListSections({
         search: debouncedSearch || undefined,
-        sort_by: "sort_order",
-        sort_order: "asc",
+        // Порядок участков в справочнике задаёт сервер; дефолт сортировки
+        // совпадает с порядком, который оператор видит при первом открытии.
+        sort: "sort_order:asc",
       });
       setItems(sections);
       setOpsCountById((prev) => {

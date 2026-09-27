@@ -35,7 +35,7 @@ import {
   PlanSortField,
   PlanFiltersState,
 } from "../lib/plan-labels"
-import { buildPlanColumnApiParams, mapPlanSortFieldToApi } from "../lib/planApiParams"
+import { buildPlanColumnApiParams, buildPlanSortParam } from "../lib/planApiParams"
 
 export function PlanPage() {
   const [importOpen, setImportOpen] = useState(false)
@@ -432,14 +432,16 @@ export function PlanPage() {
     [files, activePlan],
   )
 
-  const activeSort = sortConfigs[0]
+  // Вся выбранная сортировка уезжает одной строкой `sort` по приоритетам;
+  // неподдерживаемые сервером колонки (route, warnings) в неё не попадают,
+  // а если поддерживаемых нет — действует дефолт сервера.
+  const planSort = useMemo(() => buildPlanSortParam(sortConfigs), [sortConfigs])
   const positionsQueryParams = useMemo(
     () => ({
       limit: pagination.limit,
       offset: pagination.offset,
       search: debouncedSearchQuery.trim() || undefined,
-      sort_by: activeSort ? mapPlanSortFieldToApi(activeSort.field) : "source_row_number",
-      sort_order: activeSort?.order ?? "asc",
+      sort: planSort,
       status: filters.status !== "all" ? filters.status : undefined,
       validation_status: filters.validation_status !== "all" ? filters.validation_status : undefined,
       has_route: filters.has_route !== "all" ? filters.has_route : columnApiParams.has_route,
@@ -451,8 +453,7 @@ export function PlanPage() {
     [
       pagination.limit,
       pagination.offset,
-      debouncedSearchQuery,
-      activeSort,
+      planSort,
       filters,
       columnApiParams,
     ],
@@ -626,12 +627,6 @@ export function PlanPage() {
     ],
     [searchQuery, bulkMode, exitBulkMode],
   )
-
-  const getAriaSort = (field: PlanSortField): "none" | "ascending" | "descending" => {
-    const active = sortConfigs.find((s) => s.field === field)
-    if (!active) return "none"
-    return active.order === "asc" ? "ascending" : "descending"
-  }
 
   const jumpToPosition = (positionId: number) => {
     setFilters(prev => ({ ...prev, status: "all" }))
@@ -924,6 +919,7 @@ export function PlanPage() {
                         onSortChange={handleSortChange}
                         values={uniqueValuesByField.route}
                         {...bindColumn("route")}
+                        sortable={false}
                       />
                     </div>
                     <div className={DATA_TABLE_STYLES.headerCell}>
@@ -944,6 +940,7 @@ export function PlanPage() {
                         onSortChange={handleSortChange}
                         values={uniqueValuesByField.warnings}
                         {...bindColumn("warnings")}
+                        sortable={false}
                       />
                     </div>
                     <div className={`${DATA_TABLE_STYLES.headerCell} text-xs font-medium text-muted-foreground`}>

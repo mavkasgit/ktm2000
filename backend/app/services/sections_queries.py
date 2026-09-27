@@ -4,18 +4,40 @@ from sqlalchemy import exists, func, or_, select
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import selectinload
 
+from app.core.sorting import SortClause, apply_sort, parse_sort
 from app.models.section import Section
 from app.models.spg import SpgSection, StorageProductionGroup
 
-SECTION_SORT_FIELDS = frozenset({
-    "id",
-    "code",
-    "name",
-    "type",
-    "sort_order",
-    "description",
-    "is_active",
-})
+# ─── Сортировка справочника участков ────────────────────────────────────
+# Единая таблица «поле ?sort= → выражение SQL». Она же — источник истины
+# для валидации: apply_sort отвечает 400 на поле, которого здесь нет,
+# поэтому поле нельзя объявить, но не зарезолвить (и наоборот).
+_SORT_COLUMNS: dict[str, object] = {
+    "id": Section.id,
+    "code": Section.code,
+    "name": Section.name,
+    "type": Section.type,
+    "sort_order": Section.sort_order,
+    "description": Section.description,
+    "is_active": Section.is_active,
+}
+
+# Курируемый набор полей сортировки: контракт для фронта. Выводится из
+# таблицы резолва, а не живёт отдельно.
+VALID_SORT_FIELDS = frozenset(_SORT_COLUMNS)
+
+# Пустое значение уходит в конец в ЛЮБОМ направлении (в Postgres DESC по
+# умолчанию ставит NULL первым). Список сохранён полным — как было до
+# перехода на общий контракт: смена поведения сортировки без решения
+# владельца недопустима. Практически nullable здесь только ``description``,
+# остальные колонки NOT NULL, поэтому NULLS LAST на них — no-op.
+_SORT_NULLS_LAST_FIELDS = (
+    "id", "code", "name", "type", "sort_order", "description", "is_active",
+)
+
+# Порядок участков по умолчанию — тот же, что давал sort_by=sort_order&sort_order=asc.
+_SORT_DEFAULT = SortClause("sort_order", "asc")
+
 
 
 def _apply_section_filters(
@@ -76,30 +98,13 @@ def _apply_section_filters(
     return stmt
 
 
-def _resolve_section_order_column(sort_by: str):
-    if sort_by == "code":
-        return Section.code
-    if sort_by == "name":
-        return Section.name
-    if sort_by == "type":
-        return Section.type
-    if sort_by == "description":
-        return Section.description
-    if sort_by == "is_active":
-        return Section.is_active
-    if sort_by == "id":
-        return Section.id
-    return Section.sort_order
-
-
 async def list_sections_paginated(
     db: AsyncSession,
     *,
     limit: int,
     offset: int,
     search: str | None = None,
-    sort_by: str = "sort_order",
-    sort_order: str = "asc",
+    sort: str | None = None,
     type: str | None = None,
     is_active: bool | None = None,
     code: str | None = None,
@@ -107,8 +112,6 @@ async def list_sections_paginated(
     description: str | None = None,
     spg_id: int | None = None,
 ) -> tuple[list[Section], int]:
-    resolved_sort_by = sort_by if sort_by in SECTION_SORT_FIELDS else "sort_order"
-    order_column = _resolve_section_order_column(resolved_sort_by)
 
     stmt = select(Section).options(
         selectinload(Section.spg_links),
@@ -128,10 +131,17 @@ async def list_sections_paginated(
     count_stmt = select(func.count()).select_from(stmt.subquery())
     total = (await db.execute(count_stmt)).scalar() or 0
 
-    if sort_order == "desc":
-        stmt = stmt.order_by(order_column.desc().nulls_last(), Section.id.desc())
-    else:
-        stmt = stmt.order_by(order_column.asc().nulls_last(), Section.id.asc())
+    # Сортировка разбирается до выборки: неизвестное поле или направление —
+    # 400, а не молчаливый фолбэк на sort_order. Приоритеты слева направо,
+    # в конце tiebreaker по PK (порядок строк между страницами не «мигает»).
+    clauses = parse_sort(sort, default=_SORT_DEFAULT)
+    stmt = apply_sort(
+        stmt,
+        clauses,
+        _SORT_COLUMNS,
+        tiebreaker=Section.id,
+        nulls_last=_SORT_NULLS_LAST_FIELDS,
+    )
 
     stmt = stmt.limit(limit).offset(offset)
     sections = list((await db.execute(stmt)).scalars().unique().all())

@@ -275,7 +275,7 @@ export function SectionsTasksPage() {
   );
 
   const [serverQuery, setServerQuery] = useState<
-    Pick<SectionBoardQueryParams, "search" | "product_sku" | "sort_by" | "sort_order">
+    Pick<SectionBoardQueryParams, "search" | "product_sku" | "sort">
   >({});
 
   const {

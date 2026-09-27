@@ -1,6 +1,16 @@
 import type { SortConfig } from "@/shared/hooks/useTableQueryEngine";
 
 /**
+ * Сколько колонок можно сортировать одновременно.
+ *
+ * Больше трёх шапка перестаёт читаться: бейджи приоритетов сливаются,
+ * а строка `sort` в запросе раздувается. При попытке добавить четвёртую
+ * снимается самая старая (приоритет 1) — оператор не упирается в
+ * «ничего не происходит», а видит, что порядок изменился.
+ */
+export const MAX_SORT_FIELDS = 3;
+
+/**
  * Click cycle for multi-sort: none -> desc (append with next priority) -> asc -> removed.
  */
 export function nextMultiSortConfigs<Field extends string>(
@@ -9,7 +19,7 @@ export function nextMultiSortConfigs<Field extends string>(
 ): SortConfig<Field>[] {
   const existing = prev.findIndex((s) => s.field === field);
   if (existing === -1) {
-    return [...prev, { field, order: "desc" }];
+    return appendWithinLimit(prev, { field, order: "desc" });
   }
 
   const next = [...prev];
@@ -21,3 +31,11 @@ export function nextMultiSortConfigs<Field extends string>(
   return next;
 }
 
+/** Добавляет сортировку в конец, вытесняя самую старую при переполнении. */
+function appendWithinLimit<Field extends string>(
+  prev: SortConfig<Field>[],
+  config: SortConfig<Field>,
+): SortConfig<Field>[] {
+  if (prev.length < MAX_SORT_FIELDS) return [...prev, config];
+  return [...prev.slice(prev.length - MAX_SORT_FIELDS + 1), config];
+}

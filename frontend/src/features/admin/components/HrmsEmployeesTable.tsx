@@ -13,6 +13,7 @@ import {
 import { useFilterableTable } from "@/shared/hooks/useFilterableTable"
 import { usePaginatedTableQuery } from "@/shared/hooks/usePaginatedTableQuery"
 import { pickColumnApiValue } from "@/shared/lib/columnFilterSearch"
+import { buildSortParam } from "@/shared/lib/sortQueryParam"
 import { queryKeys } from "@/shared/api/queryKeys"
 import { listEmployees, type Employee } from "../api"
 
@@ -20,6 +21,7 @@ export type EmployeeSortField = "hrmsId" | "name" | "tabNumber" | "position" | "
 
 const headerCellClass = `${DATA_TABLE_STYLES.headerRow} ${DATA_TABLE_STYLES.headerCell}`
 
+/** Все колонки сотрудников сервер сортировать умеет. */
 function mapSortFieldToApi(field: EmployeeSortField): string {
   switch (field) {
     case "hrmsId":
@@ -30,6 +32,9 @@ function mapSortFieldToApi(field: EmployeeSortField): string {
       return field
   }
 }
+
+/** Сортировка до первого клика по шапке — по имени по возрастанию. */
+const DEFAULT_EMPLOYEE_SORT = "name:asc"
 
 function buildColumnApiParams(
   columnFilters: Partial<Record<EmployeeSortField, Set<string>>>,
@@ -83,21 +88,24 @@ export function HrmsEmployeesTable({
     ],
   })
 
-  const activeSort = sortConfigs[0]
+  const sort = useMemo(
+    () => buildSortParam(sortConfigs, mapSortFieldToApi) ?? DEFAULT_EMPLOYEE_SORT,
+    [sortConfigs],
+  )
+
   const queryParams = useMemo(
     () => ({
       limit: pagination.limit,
       offset: pagination.offset,
       search: search.trim() || undefined,
-      sort_by: activeSort ? mapSortFieldToApi(activeSort.field) : "name",
-      sort_order: activeSort?.order ?? "asc",
+      sort,
       ...columnApiParams,
     }),
     [
       pagination.limit,
       pagination.offset,
       search,
-      activeSort,
+      sort,
       columnApiParams,
     ],
   )

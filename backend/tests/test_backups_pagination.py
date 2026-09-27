@@ -98,7 +98,120 @@ async def test_backups_sort_by_size(client, backups_dir: Path) -> None:
 
         os.utime(path, (mtime.timestamp(), mtime.timestamp()))
 
-    response = await client.get("/api/backups?sort_by=size&sort_order=asc&limit=10&offset=0")
+    response = await client.get("/api/backups?sort=size:asc&limit=10&offset=0")
     assert response.status_code == 200
     sizes = [item["size"] for item in response.json()["items"]]
     assert sizes == sorted(sizes)
+
+
+@pytest.mark.asyncio
+async def test_backups_sort_two_priorities(client, backups_dir: Path) -> None:
+    """Второй приоритет решает порядок внутри групп с одинаковым первым полем.
+
+    Данные засеяны так, что по ``backup_type`` пары идут одинаковыми группами
+    и различается только второй ключ. Сортировка одной колонкой (равные внутри
+    групп) такой порядок не даёт.
+    """
+    now = datetime.now()
+    # Одинаковый размер и разный mtime: tiebreaker обязан разложить группы
+    # по имени файла, а не оставить их в порядке обхода каталога.
+    for index, (day, backup_type) in enumerate(
+        [
+            ("2026-01-01", "daily"),
+            ("2026-01-02", "daily"),
+            ("2026-01-03", "manual"),
+            ("2026-01-04", "manual"),
+        ]
+    ):
+        _write_backup(
+            backups_dir / f"backup_ktm2000_test_{day}_10-00-00.zip",
+            mtime=now - timedelta(hours=index),
+            backup_type=backup_type,
+        )
+
+    response = await client.get("/api/backups?sort=backup_type:asc,filename:desc&limit=50")
+    assert response.status_code == 200, response.text
+    filenames = [item["filename"] for item in response.json()["items"]]
+    assert filenames == [
+        "backup_ktm2000_test_2026-01-02_10-00-00.zip",
+        "backup_ktm2000_test_2026-01-01_10-00-00.zip",
+        "backup_ktm2000_test_2026-01-04_10-00-00.zip",
+        "backup_ktm2000_test_2026-01-03_10-00-00.zip",
+    ]
+
+
+@pytest.mark.asyncio
+async def test_backups_sort_tiebreaker_keeps_pages_stable(client, backups_dir: Path) -> None:
+    """Порядок строк детерминирован и одинаков при постраничном обходе.
+
+    Список бэкапов — это файлы на диске, физический порядок обхода каталога
+    не гарантирован. У всех файлов одинаковый размер (сортировка по нему всех
+    уравнивает), поэтому порядок целиком определяет tiebreaker по имени файла —
+    и он должен совпадать на первой и на второй странице.
+    """
+    now = datetime.now()
+    for index in range(6):
+        _write_backup(
+            backups_dir / f"backup_ktm2000_test_2026-02-{index + 1:02d}_10-00-00.zip",
+            mtime=now - timedelta(hours=index),
+        )
+
+    full = await client.get("/api/backups?sort=size:asc&limit=50")
+    assert full.status_code == 200, full.text
+    filenames = [item["filename"] for item in full.json()["items"]]
+    assert len(filenames) == 6
+    assert len(set(filenames)) == 6
+
+    page2 = await client.get("/api/backups?sort=size:asc&limit=2&offset=2")
+    assert page2.status_code == 200, page2.text
+    assert [item["filename"] for item in page2.json()["items"]] == filenames[2:4]
+
+
+@pytest.mark.asyncio
+async def test_backups_sort_invalid_field_and_order_400(client, backups_dir: Path) -> None:
+    """Молчаливый фолбэк запрещён: поле вне таблицы — 400, не sort по created_at."""
+    now = datetime.now()
+    _write_backup(backups_dir / "backup_ktm2000_test_2026-01-01_10-00-00.zip", mtime=now)
+
+    unknown_field = await client.get("/api/backups?sort=format:asc")
+    assert unknown_field.status_code == 400
+
+    unknown_order = await client.get("/api/backups?sort=size:sideways")
+    assert unknown_order.status_code == 400
+
+
+@pytest.mark.asyncio
+async def test_backups_legacy_sort_params_ignored(client, backups_dir: Path) -> None:
+    """Сепаратные sort_by/sort_order больше не влияют на порядок.
+
+    FastAPI игнорирует неизвестные query-параметры, поэтому без этой проверки
+    фронт, шлёт старую форму, получил бы 200 и тихую сортировку по умолчанию —
+    ровно тот молчаливый фолбэк, который запрещён.
+    """
+    now = datetime.now()
+    for index in range(3):
+        path = backups_dir / f"backup_ktm2000_test_2026-03-{index + 1:02d}_10-00-00.zip"
+        path.write_bytes(b"x" * (10 - index))
+        import os
+
+        os.utime(path, ((now - timedelta(hours=index)).timestamp(),) * 2)
+
+    default = await client.get("/api/backups?limit=50")
+    legacy = await client.get("/api/backups?sort_by=size&sort_order=asc&limit=50")
+    assert default.status_code == 200, default.text
+    assert legacy.status_code == 200, legacy.text
+    assert legacy.json()["items"] == default.json()["items"]
+
+
+def test_backups_sort_table_keys_match_valid_fields() -> None:
+    """Таблица ключей и набор допустимых полей не разъезжаются.
+
+    Ловит дрейф: поле, добавленное в одну сторону и забытое в другой, дало бы
+    либо 400 на существующем поле, либо поле в контракте без ключа.
+    """
+    assert set(backups_api._SORT_KEYS) == backups_api.VALID_SORT_FIELDS
+    assert backups_api.VALID_SORT_FIELDS == {
+        "filename", "db_name", "backup_type", "size", "created_at", "comment",
+    }
+    assert set(backups_api._SORT_NULLS_LAST_FIELDS) <= backups_api.VALID_SORT_FIELDS
+    assert backups_api._SORT_DEFAULT.field in backups_api.VALID_SORT_FIELDS

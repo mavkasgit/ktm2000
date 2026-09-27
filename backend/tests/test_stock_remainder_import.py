@@ -256,7 +256,7 @@ async def test_preview_remainders_pagination_limit_offset(
     resp = await client.post(
         "/api/stock/import/remainders/preview",
         files={"file": ("test.xlsx", excel_buf, "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet")},
-        data={"sheet_index": "0", "limit": "2", "offset": "0", "sort_by": "row", "sort_order": "asc"},
+        data={"sheet_index": "0", "limit": "2", "offset": "0", "sort": "row:asc"},
     )
     assert resp.status_code == 200, resp.text
     body = resp.json()
@@ -272,7 +272,7 @@ async def test_preview_remainders_pagination_limit_offset(
     resp_page2 = await client.post(
         "/api/stock/import/remainders/preview",
         files={"file": ("test.xlsx", excel_buf, "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet")},
-        data={"sheet_index": "0", "limit": "2", "offset": "2", "sort_by": "row", "sort_order": "asc"},
+        data={"sheet_index": "0", "limit": "2", "offset": "2", "sort": "row:asc"},
     )
     assert resp_page2.status_code == 200, resp_page2.text
     body2 = resp_page2.json()
@@ -1486,3 +1486,146 @@ async def test_preview_remainders_unknown_template_id_404(
         data={"template_id": "999999", "sheet_index": "0"},
     )
     assert resp.status_code == 404, resp.text
+
+
+async def _preview_rows(
+    client: AsyncClient,
+    excel_buf: BytesIO,
+    extra_form: dict[str, str],
+) -> list[dict]:
+    """POST preview с дополнительными полями формы и вернуть items."""
+    resp = await client.post(
+        "/api/stock/import/remainders/preview",
+        files={
+            "file": (
+                "test.xlsx",
+                excel_buf,
+                "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+            ),
+        },
+        data={"sheet_index": "0", **extra_form},
+    )
+    assert resp.status_code == 200, resp.text
+    return resp.json()["items"]
+
+
+async def test_preview_remainders_multi_sort_quantity_then_row(
+    client: AsyncClient,
+    session: AsyncSession,
+) -> None:
+    """Вторая колонка ?sort= раскладывает равные количества по номеру строки листа."""
+    for idx in (1, 2, 3):
+        await _make_product(session, f"PV-MS-{idx}")
+    await session.commit()
+
+    # Количество одинаковое у всех строк: порядок по одной колонке задаёт
+    # tiebreaker (номер строки листа), а вторая колонка его переворачивает.
+    excel_buf = _make_excel([
+        ("PV-MS-1", 5, None),
+        ("PV-MS-2", 5, None),
+        ("PV-MS-3", 5, None),
+    ])
+
+    single = await _preview_rows(client, excel_buf, {"sort": "quantity:asc", "limit": "50"})
+    excel_buf.seek(0)
+    multi = await _preview_rows(
+        client, excel_buf, {"sort": "quantity:asc,row:desc", "limit": "50"},
+    )
+
+    assert [row["source_row_number"] for row in single] == [2, 3, 4]
+    assert [row["quantity"] for row in single] == [5.0, 5.0, 5.0]
+    assert [row["source_row_number"] for row in multi] == [4, 3, 2]
+    assert [row["sku"] for row in multi] == ["PV-MS-3", "PV-MS-2", "PV-MS-1"]
+
+
+async def test_preview_remainders_default_order_is_row_asc(
+    client: AsyncClient,
+    session: AsyncSession,
+) -> None:
+    """Без поля sort строки идут в порядке листа, а не по SKU."""
+    for sku in ("PV-DEF-C", "PV-DEF-A", "PV-DEF-B"):
+        await _make_product(session, sku)
+    await session.commit()
+
+    excel_buf = _make_excel([
+        ("PV-DEF-C", 5, None),
+        ("PV-DEF-A", 5, None),
+        ("PV-DEF-B", 5, None),
+    ])
+
+    items = await _preview_rows(client, excel_buf, {"limit": "50"})
+
+    assert [row["source_row_number"] for row in items] == [2, 3, 4]
+    assert [row["sku"] for row in items] == ["PV-DEF-C", "PV-DEF-A", "PV-DEF-B"]
+
+
+async def test_preview_remainders_rejects_unknown_sort_field(
+    client: AsyncClient,
+    session: AsyncSession,
+) -> None:
+    """Неизвестное поле сортировки в форме — 400, а не молчаливый дефолт."""
+    await _make_product(session, "PV-400")
+    await session.commit()
+    excel_buf = _make_excel([("PV-400", 1, None)])
+
+    resp = await client.post(
+        "/api/stock/import/remainders/preview",
+        files={
+            "file": (
+                "test.xlsx",
+                excel_buf,
+                "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+            ),
+        },
+        data={"sheet_index": "0", "sort": "unknown:asc"},
+    )
+    assert resp.status_code == 400, resp.text
+
+
+async def test_preview_remainders_rejects_unknown_direction(
+    client: AsyncClient,
+    session: AsyncSession,
+) -> None:
+    """Направление вне asc/desc в форме — 400."""
+    await _make_product(session, "PV-400B")
+    await session.commit()
+    excel_buf = _make_excel([("PV-400B", 1, None)])
+
+    resp = await client.post(
+        "/api/stock/import/remainders/preview",
+        files={
+            "file": (
+                "test.xlsx",
+                excel_buf,
+                "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+            ),
+        },
+        data={"sheet_index": "0", "sort": "quantity:sideways"},
+    )
+    assert resp.status_code == 400, resp.text
+
+
+async def test_preview_remainders_ignores_legacy_sort_by_form_fields(
+    client: AsyncClient,
+    session: AsyncSession,
+) -> None:
+    """Поля формы sort_by/sort_order не объявлены и порядок не меняют."""
+    for idx in (1, 2, 3):
+        await _make_product(session, f"PV-LEG-{idx}")
+    await session.commit()
+    excel_buf = _make_excel([
+        ("PV-LEG-1", 1, None),
+        ("PV-LEG-2", 3, None),
+        ("PV-LEG-3", 2, None),
+    ])
+
+    legacy = await _preview_rows(
+        client, excel_buf, {"sort_by": "quantity", "sort_order": "desc", "limit": "50"},
+    )
+    assert [row["source_row_number"] for row in legacy] == [2, 3, 4]
+
+    # «По количеству убыванию» — другой порядок: значит подставленные legacy-поля
+    # проявились бы, если бы сервер их читал.
+    excel_buf.seek(0)
+    by_quantity = await _preview_rows(client, excel_buf, {"sort": "quantity:desc", "limit": "50"})
+    assert [row["source_row_number"] for row in by_quantity] == [3, 4, 2]

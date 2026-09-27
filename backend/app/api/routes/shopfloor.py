@@ -818,8 +818,10 @@ async def section_board(
     search: str | None = Query(None, description="ILIKE: product_sku, task id, operation_name"),
     product_sku: str | None = Query(None, description="Column filter: ILIKE on product/source/output sku"),
     dimensions: str | None = Query(None, description="Column filter: exact JSON match on task dimensions, e.g. {\"length_mm\":2700} or null"),
-    sort_by: str = Query(default="sequence"),
-    sort_order: str = Query(default="asc"),
+    sort: str | None = Query(
+        default=None,
+        description="Comma-separated sort rules: field:asc|desc, e.g. sequence:asc,due_date:asc",
+    ),
     limit: int = Query(default=50, ge=1, le=500),
     offset: int = Query(default=0, ge=0),
     db: AsyncSession = Depends(get_db),
@@ -841,8 +843,7 @@ async def section_board(
         search=search,
         product_sku=product_sku,
         dimensions=dimensions,
-        sort_by=sort_by,
-        sort_order=sort_order,
+        sort=sort,
         limit=limit,
         offset=offset,
     )

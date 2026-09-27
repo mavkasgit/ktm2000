@@ -215,8 +215,129 @@ async def test_audit_logs_sort_by_section_name(client, session) -> None:
     await session.commit()
 
     response = await client.get(
-        "/api/audit-logs?sort_by=section_name&sort_order=asc&limit=50",
+        "/api/audit-logs?sort=section_name:asc&limit=50",
     )
     assert response.status_code == 200
     names = [item["section_name"] for item in response.json()["items"]]
     assert names == ["Alpha Section", "Mike Section", "Zebra Section"]
+
+
+@pytest.mark.asyncio
+async def test_audit_logs_default_order_is_created_at_desc_then_id_desc(client, session) -> None:
+    """Без параметра сортировки логи идут свежие сверху, а внутри одной пачки — по id.
+
+    created_at заполняется now(), а это в Postgres метка времени ТРАНЗАКЦИИ:
+    все логи одного запроса делят одну метку. Порядок внутри такой пачки задаёт
+    второй ключ, поэтому id обязан повторять направление сортировки — иначе
+    пачка логов разворачивается и «свежие сверху» перестаёт быть правдой.
+    """
+    await session.execute(AuditLog.__table__.delete())
+    await session.commit()
+
+    session.add(AuditLog(
+        status="success",
+        title="Пакет логов",
+        message="Все три созданы одной транзакцией → одна метка created_at",
+    ))
+    await session.flush()
+    for i in range(2):
+        session.add(AuditLog(
+            status="success",
+            title=f"Пакет логов {i}",
+            message="Та же транзакция",
+        ))
+    await session.commit()
+
+    response = await client.get("/api/audit-logs?limit=50")
+    assert response.status_code == 200
+    items = response.json()["items"]
+    assert len(items) == 3
+    timestamps = {item["created_at"] for item in items}
+    assert len(timestamps) == 1, "тест бессмысленен без общей метки времени"
+    # Свежие сверху: внутри пачки с равной меткой порядок — по убыванию id.
+    assert [item["id"] for item in items] == sorted(
+        (item["id"] for item in items), reverse=True
+    )
+
+
+@pytest.mark.asyncio
+async def test_audit_logs_multi_sort_priorities(client, session) -> None:
+    """Два приоритета: сначала статус, потом наименование участка.
+
+    Данные засеяны так, что порядок по одному полю совпадает у всех строк, а по
+    двум — различается. Иначе тест не отличает мультисортировку от одиночной.
+    """
+    await session.execute(AuditLog.__table__.delete())
+    await session.commit()
+
+    # (title, status, section_name) — статус у всех одинаковый.
+    rows = [
+        ("one", "error", "Zulu"),
+        ("two", "error", "Alpha"),
+        ("three", "error", "Mike"),
+    ]
+    for title, status, section_name in rows:
+        session.add(AuditLog(
+            status=status,
+            title=title,
+            message="Мультисортировка",
+            section_name=section_name,
+        ))
+    await session.commit()
+
+    # По одному полю status:asc все строки равны — порядок задаёт только id.
+    by_status = await client.get("/api/audit-logs?sort=status:asc&limit=50")
+    assert by_status.status_code == 200
+    assert [item["section_name"] for item in by_status.json()["items"]] == [
+        "Zulu",
+        "Alpha",
+        "Mike",
+    ]
+
+    # Добавленный второй приоритет переставляет строки внутри равных по статусу.
+    by_both = await client.get(
+        "/api/audit-logs?sort=status:asc,section_name:asc&limit=50"
+    )
+    assert by_both.status_code == 200
+    assert [item["section_name"] for item in by_both.json()["items"]] == [
+        "Alpha",
+        "Mike",
+        "Zulu",
+    ]
+
+
+@pytest.mark.asyncio
+async def test_audit_logs_sort_nulls_last_in_both_directions(client, session) -> None:
+    """Пустой участок уходит в конец и при возрастании, и при убывании."""
+    await session.execute(AuditLog.__table__.delete())
+    await session.commit()
+
+    for section_name in ("Zulu", None, "Alpha"):
+        session.add(AuditLog(
+            status="success",
+            title=f"Лог {section_name}",
+            message="Пустые значения",
+            section_name=section_name,
+        ))
+    await session.commit()
+
+    for direction, expected in (
+        ("asc", ["Alpha", "Zulu", None]),
+        ("desc", ["Zulu", "Alpha", None]),
+    ):
+        response = await client.get(f"/api/audit-logs?sort=section_name:{direction}&limit=50")
+        assert response.status_code == 200
+        assert [item["section_name"] for item in response.json()["items"]] == expected
+
+
+@pytest.mark.asyncio
+async def test_audit_logs_rejects_unknown_field_and_direction(client, session) -> None:
+    """Неизвестное поле или направление — 400, а не молчаливый фолбэк."""
+    await session.execute(AuditLog.__table__.delete())
+    await session.commit()
+
+    unknown_field = await client.get("/api/audit-logs?sort=nope:asc")
+    assert unknown_field.status_code == 400, unknown_field.text
+
+    bad_direction = await client.get("/api/audit-logs?sort=status:sideways")
+    assert bad_direction.status_code == 400, bad_direction.text

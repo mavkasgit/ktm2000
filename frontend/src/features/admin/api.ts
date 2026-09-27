@@ -24,8 +24,7 @@ export type ListUsersParams = {
   limit?: number
   offset?: number
   search?: string
-  sort_by?: string
-  sort_order?: "asc" | "desc"
+  sort?: string
   role?: string
   is_active?: boolean
   full_name?: string
@@ -74,8 +73,7 @@ export type ListEmployeesParams = {
   limit?: number
   offset?: number
   search?: string
-  sort_by?: string
-  sort_order?: "asc" | "desc"
+  sort?: string
   department?: string
 }
 

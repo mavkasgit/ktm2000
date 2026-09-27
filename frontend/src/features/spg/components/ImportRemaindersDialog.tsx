@@ -59,6 +59,10 @@ import { queryKeys } from "@/shared/api/queryKeys";
 import { RouteStepsDisplay } from "@/shared/ui/RouteStepsDisplay";
 import { listSections } from "@/shared/api/sections";
 import type { RemainderImportItem, RemainderSectionMeta } from "@/shared/api/stock";
+import {
+  buildRemainderPreviewSortParam,
+  type RemainderPreviewSortField,
+} from "@/shared/lib/stockSortParams";
 
 function hasSectionInFile(item: Pick<RemainderImportItem, "target_section_name">): boolean {
   const name = item.target_section_name?.trim();
@@ -113,16 +117,6 @@ function getEffectiveQualityState(
   }
   return normalizeImportQualityState(item.quality_state);
 }
-
-type RemainderPreviewSortField =
-  | "row"
-  | "sku"
-  | "quantity"
-  | "length"
-  | "operations"
-  | "quality"
-  | "section"
-  | "errors";
 
 function getImportItemOperationsLabel(item: RemainderImportItem): string {
   if (item.completed_stages?.length > 0) {
@@ -288,6 +282,7 @@ export function ImportRemaindersDialog({
     columnFilters,
     columnSearchQueries,
     sortConfigs,
+    handleSort: applySort,
     setSortConfigs,
     hasActiveFilters: hasPreviewFilters,
     resetAll: resetPreviewFilters,
@@ -306,7 +301,7 @@ export function ImportRemaindersDialog({
     [columnFilters, columnSearchQueries],
   );
 
-  const activeSort = sortConfigs[0];
+  const sort = buildRemainderPreviewSortParam(sortConfigs);
 
   const {
     page,
@@ -334,16 +329,10 @@ export function ImportRemaindersDialog({
 
   const handleSortChange = useCallback(
     (field: RemainderPreviewSortField) => {
-      setSortConfigs((prev) => {
-        const existing = prev.find((sort) => sort.field === field);
-        if (!existing) {
-          return [{ field, order: "asc" }];
-        }
-        return [{ field, order: existing.order === "asc" ? "desc" : "asc" }];
-      });
+      applySort(field);
       resetPage();
     },
-    [resetPage, setSortConfigs],
+    [applySort, resetPage],
   );
 
   const [previewData, setPreviewData] = useState<RemainderPreviewResponse | null>(null);
@@ -416,8 +405,7 @@ export function ImportRemaindersDialog({
       row_selection: rowSelection || undefined,
       search: debouncedSearch.trim() || undefined,
       filter_status: filterStatus,
-      sort_by: activeSort?.field ?? "row",
-      sort_order: activeSort?.order ?? "asc",
+      sort,
       limit,
       offset,
       ...columnApiParams,
@@ -428,7 +416,7 @@ export function ImportRemaindersDialog({
       rowSelection,
       debouncedSearch,
       filterStatus,
-      activeSort,
+      sort,
       limit,
       offset,
       columnApiParams,

@@ -35,4 +35,22 @@ describe("SortableFilterHeader", () => {
     expect(html).toContain('data-sort-order="asc"');
     expect(html).toContain('aria-pressed="true"');
   });
+
+  it("при sortable=false не рендерит кнопку сортировки, но оставляет фильтр", () => {
+    const html = renderToStaticMarkup(
+      <SortableFilterHeader
+        field="route"
+        label="Маршрут"
+        currentSorts={[{ field: "route", order: "desc" }]}
+        onSortChange={vi.fn()}
+        values={["Резка"]}
+        selectedValues={new Set()}
+        onFilterChange={vi.fn()}
+        sortable={false}
+      />,
+    );
+
+    expect(html).toContain("Маршрут");
+    expect(html).not.toContain("data-sort-order");
+  });
 });

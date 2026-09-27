@@ -2,8 +2,10 @@
 from __future__ import annotations
 
 import pytest
+from sqlalchemy import text
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from app.api.routes.products import VALID_SORT_FIELDS, _SORT_COLUMNS, _SORT_NULLS_LAST_FIELDS
 from app.models.product import Product, ProductLength, ProcessingFlag, ProductProcessingFlag, ProductPair, ProductType
 
 # Курируемый набор полей сортировки справочника сырья (#76)
@@ -191,3 +193,108 @@ async def test_products_sort_invalid_field_400(client, session: AsyncSession) ->
 
     response2 = await client.get("/api/products?sort=sku:sideways&limit=50")
     assert response2.status_code == 400
+
+
+@pytest.mark.asyncio
+async def test_products_sort_two_priorities(client, session: AsyncSession) -> None:
+    """Второй приоритет решает порядок внутри групп с одинаковым первым полем.
+
+    Данные засеяны так, что по ``name`` пары идут одинаковыми группами и
+    различается только второй ключ. Ни сортировка по одной колонке, ни
+    ``stmt.order_by`` в цикле (где выигрывает последний вызов) такого порядка
+    не дают.
+    """
+    await _make_product(session, sku="RM-MS-1", name="A-group", attributes={"weight_per_meter": 1.0})
+    await _make_product(session, sku="RM-MS-2", name="A-group", attributes={"weight_per_meter": 9.0})
+    await _make_product(session, sku="RM-MS-3", name="B-group", attributes={"weight_per_meter": 1.0})
+    await _make_product(session, sku="RM-MS-4", name="B-group", attributes={"weight_per_meter": 9.0})
+    await session.commit()
+
+    resp = await client.get("/api/products?sort=name:asc,weight_per_meter:desc&limit=50")
+    assert resp.status_code == 200, resp.text
+    skus = [item["sku"] for item in resp.json()["items"] if item["sku"].startswith("RM-MS-")]
+    assert skus == ["RM-MS-2", "RM-MS-1", "RM-MS-4", "RM-MS-3"]
+
+
+@pytest.mark.asyncio
+async def test_products_sort_tiebreaker_breaks_equal_values(client, session: AsyncSession) -> None:
+    """Равные значения сортировки разложены по PK: порядок строк детерминирован.
+
+    Все ``name`` одинаковы, поэтому решает только tiebreaker. UPDATE части строк
+    переписывает их в хвост таблицы: физический порядок хранения перестаёт
+    совпадать с порядком PK, и сортировка без tiebreaker отдаёт его вместо
+    возрастающего ``id``. Именно это и ломало переход между страницами.
+    """
+    created = []
+    for i in range(6):
+        created.append(await _make_product(session, sku=f"RM-TB-{i}", name="Same Name"))
+    await session.commit()
+    await session.execute(
+        text("UPDATE products SET name = 'Same Name' "
+             "WHERE sku IN ('RM-TB-2','RM-TB-3','RM-TB-4')")
+    )
+    await session.commit()
+    ids_by_sku = {p.sku: p.id for p in created}
+    assert [ids_by_sku[f"RM-TB-{i}"] for i in range(6)] == sorted(ids_by_sku.values())
+
+    resp = await client.get("/api/products?sort=name:asc&limit=50")
+    assert resp.status_code == 200, resp.text
+    skus = [item["sku"] for item in resp.json()["items"] if item["sku"].startswith("RM-TB-")]
+    assert skus == [f"RM-TB-{i}" for i in range(6)]
+
+    # Тот же порядок на странице 2 — строки не «мигают» при постраничном ходе.
+    page = await client.get("/api/products?sort=name:asc&limit=2&offset=2")
+    assert page.status_code == 200, page.text
+    page_skus = [item["sku"] for item in page.json()["items"] if item["sku"].startswith("RM-TB-")]
+    assert page_skus == skus[2:4]
+
+
+@pytest.mark.asyncio
+async def test_products_sort_nulls_last_in_both_directions(client, session: AsyncSession) -> None:
+    """Пустое значение уходит в конец и при asc, и при desc.
+
+    В Postgres DESC по умолчанию ставит NULL первым: оператор кликнул «спустить»,
+    а незаполненные значения оказывались наверху списка.
+    """
+    await _make_product(session, sku="RM-NL-1", name="NL1", attributes={"cross_section": "A"})
+    await _make_product(session, sku="RM-NL-2", name="NL2", attributes={"cross_section": "B"})
+    await _make_product(session, sku="RM-NL-3", name="NL3")
+    await _make_product(session, sku="RM-NL-4", name="NL4")
+    await session.commit()
+
+    for order in ("asc", "desc"):
+        resp = await client.get(f"/api/products?sort=cross_section:{order}&limit=50")
+        assert resp.status_code == 200, resp.text
+        skus = [item["sku"] for item in resp.json()["items"] if item["sku"].startswith("RM-NL-")]
+        assert skus[-2:] == ["RM-NL-3", "RM-NL-4"], order
+        assert set(skus[:2]) == {"RM-NL-1", "RM-NL-2"}, order
+
+
+def test_sort_table_keys_match_valid_fields() -> None:
+    """Таблица резолва и набор допустимых полей не разъезжаются.
+
+    Ловит дрейф: поле, добавленное в одну сторону и забытое в другой, дало бы
+    либо 400 на существующей колонке, либо поле в контракте без резолва.
+    """
+    assert set(_SORT_COLUMNS) == VALID_SORT_FIELDS
+    assert VALID_SORT_FIELDS == set(CURATED_SORT_FIELDS)
+    assert set(_SORT_NULLS_LAST_FIELDS) <= VALID_SORT_FIELDS
+
+
+@pytest.mark.asyncio
+async def test_products_sort_no_silent_fallback(client, session: AsyncSession) -> None:
+    """Поля вне таблицы — 400, а не тихая сортировка по дефолту.
+
+    Молчаливый фолбэк означал бы, что оператор кликнул «Наименование»,
+    получил 200 и не увидел эффекта.
+    """
+    await _make_product(session, sku="RM-FB-1", name="Fb")
+    await session.commit()
+
+    resp = await client.get("/api/products?sort=created_at:desc&limit=50")
+    assert resp.status_code == 400
+
+    # Поле резолвится само по себе (реальная колонка products), но не входит
+    # в курируемый контракт — тоже 400, а не сортировка по notes.
+    resp2 = await client.get("/api/products?sort=notes:asc&limit=50")
+    assert resp2.status_code == 400

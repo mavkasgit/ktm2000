@@ -7,6 +7,7 @@ import { SortableFilterHeader, TableCornerResetCell, TableCornerResetHeader, Tab
 import { useFilterableTable } from "@/shared/hooks/useFilterableTable"
 import { usePaginatedTableQuery } from "@/shared/hooks/usePaginatedTableQuery"
 import { pickColumnApiValue } from "@/shared/lib/columnFilterSearch"
+import { buildSortParam } from "@/shared/lib/sortQueryParam"
 import { fetchBackups } from "@/entities/backup/api"
 import type { BackupInfo } from "@/entities/backup/types"
 import {
@@ -66,7 +67,23 @@ function storageLabel(name: string): string {
   return backupStorageLabels[name] || name
 }
 
+
+/** Колонки списка бэкапов: их все умеет сортировать сервер. */
 type BackupSortField = "filename" | "db_name" | "backup_type" | "size" | "created_at" | "comment"
+
+/** Порядок до первого клика по шапке: свежие бэкапы сверху. */
+const DEFAULT_BACKUPS_SORT = "created_at:desc"
+
+/**
+ * Строка `sort` для запроса; без выбранных колонок — дефолтный порядок.
+ * Все колонки списка бэкапов сервер сортировать умеет, поэтому поле
+ * колонки уходит как есть.
+ */
+function buildBackupsSortParam(
+  sortConfigs: Array<{ field: BackupSortField; order: "asc" | "desc" }>,
+): string {
+  return buildSortParam(sortConfigs, (field) => field) ?? DEFAULT_BACKUPS_SORT
+}
 
 function buildBackupsQueryParams(
   pagination: { limit: number; offset: number },
@@ -75,12 +92,10 @@ function buildBackupsQueryParams(
   columnSearchQueries: Partial<Record<BackupSortField, string>>,
   sortConfigs: Array<{ field: BackupSortField; order: "asc" | "desc" }>,
 ) {
-  const activeSort = sortConfigs[0] ?? { field: "created_at" as const, order: "desc" as const }
   const params: Parameters<typeof fetchBackups>[0] = {
     limit: pagination.limit,
     offset: pagination.offset,
-    sort_by: activeSort.field,
-    sort_order: activeSort.order,
+    sort: buildBackupsSortParam(sortConfigs),
   }
 
   const typeFromColumn = pickColumnApiValue(columnFilters, columnSearchQueries, "backup_type")
@@ -188,11 +203,9 @@ export function BackupsPage() {
   const hasActiveFilters = useMemo(() => {
     if (hasActiveColumnFilters) return true
 
-    if (sortConfigs.length > 0) {
-      const active = sortConfigs[0]
-      if (active.field !== "created_at" || active.order !== "desc") {
-        return true
-      }
+    // Сортировка считается нестандартной, если строка `sort` отличается от дефолтной.
+    if (buildBackupsSortParam(sortConfigs) !== DEFAULT_BACKUPS_SORT) {
+      return true
     }
     return false
   }, [hasActiveColumnFilters, sortConfigs])
@@ -486,7 +499,7 @@ export function BackupsPage() {
     if (isNaN(days) || days < 0) return
     const cutoff = new Date(Date.now() - days * 24 * 60 * 60 * 1000)
     try {
-      const allBackups = await fetchBackups({ limit: 500, offset: 0, sort_by: "created_at", sort_order: "desc" })
+      const allBackups = await fetchBackups({ limit: 500, offset: 0, sort: DEFAULT_BACKUPS_SORT })
       const toDelete = allBackups.items
         .filter((b) => new Date(b.created_at) < cutoff)
         .map((b) => b.filename)

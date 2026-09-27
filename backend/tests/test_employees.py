@@ -3,11 +3,15 @@ from datetime import datetime, timezone
 from unittest.mock import AsyncMock, patch
 
 import pytest
-from sqlalchemy import func, select
+from sqlalchemy import func, select, text
 
 from app.models.hrms_employee import HrmsEmployee
 from app.services.hrms_employees import (
     HrmsSyncError,
+    _SORT_COLUMNS,
+    _SORT_DEFAULT,
+    _SORT_NULLS_LAST_FIELDS,
+    VALID_SORT_FIELDS,
     _build_employees_from_items,
     list_employees,
     preview_sync,
@@ -178,6 +182,132 @@ async def test_list_employees_department_filter(session) -> None:
     employees, total, _ = await list_employees(session, department="АСУ")
     assert total == 1
     assert employees[0].hrms_id == 1
+
+
+# ─── Integration: сортировка по ?sort=field:order,... ─────────────────
+
+
+@pytest.mark.asyncio
+async def test_list_employees_sort_two_priorities(session) -> None:
+    """Второй приоритет решает порядок внутри групп с одинаковым первым полем.
+
+    Данные засеяны так, что по ``department`` пары идут одинаковыми группами
+    и различается только второй ключ. Ни сортировка по одной колонке, ни
+    последовательные ``order_by`` такого порядка не дают.
+    """
+    synced_at = datetime(2026, 7, 28, tzinfo=timezone.utc)
+    for hrms_id, name, tab_number, department in [
+        (1, "Alpha", "T-001", "Цех А"),
+        (2, "Bravo", "T-002", "Цех А"),
+        (3, "Charlie", "T-003", "Цех Б"),
+        (4, "Delta", "T-004", "Цех Б"),
+    ]:
+        session.add(HrmsEmployee(
+            hrms_id=hrms_id, name=name, tab_number=tab_number,
+            department=department, synced_at=synced_at,
+        ))
+    await session.commit()
+
+    employees, total, _ = await list_employees(session, sort="department:asc,tab_number:desc")
+    assert total == 4
+    assert [e.name for e in employees] == ["Bravo", "Alpha", "Delta", "Charlie"]
+
+
+@pytest.mark.asyncio
+async def test_list_employees_sort_tiebreaker_breaks_equal_values(session) -> None:
+    """Равные значения сортировки разложены по hrms_id: порядок детерминирован.
+
+    Все ``name`` одинаковы, поэтому решает только tiebreaker. UPDATE части строк
+    переписывает их в хвост таблицы: физический порядок хранения перестаёт
+    совпадать с порядком hrms_id, и сортировка без tiebreaker отдаёт его вместо
+    возрастающего — именно это ломало переход между страницами.
+    """
+    synced_at = datetime(2026, 7, 28, tzinfo=timezone.utc)
+    for index in range(6):
+        session.add(HrmsEmployee(
+            hrms_id=index + 1, name="Same Name", tab_number=f"T-{index:03d}", synced_at=synced_at,
+        ))
+    await session.commit()
+    await session.execute(
+        text("UPDATE hrms_employees SET name = 'Same Name' WHERE hrms_id IN (3,4,5)")
+    )
+    await session.commit()
+
+    employees, total, _ = await list_employees(session, sort="name:asc")
+    assert total == 6
+    assert [e.hrms_id for e in employees] == [1, 2, 3, 4, 5, 6]
+
+    page, _, _ = await list_employees(session, sort="name:asc", limit=2, offset=2)
+    assert [e.hrms_id for e in page] == [3, 4]
+
+
+@pytest.mark.asyncio
+async def test_list_employees_sort_nulls_last_in_both_directions(session) -> None:
+    """Пустая должность уходит в конец и при asc, и при desc.
+
+    В Postgres DESC по умолчанию ставит NULL первым: оператор кликнул
+    «спустить», а сотрудники без должности оказывались наверху списка.
+    """
+    synced_at = datetime(2026, 7, 28, tzinfo=timezone.utc)
+    for index, position in [(1, "Инженер"), (2, "Мастер"), (3, None), (4, None)]:
+        session.add(HrmsEmployee(
+            hrms_id=index, name=f"Emp {index}", position=position, synced_at=synced_at,
+        ))
+    await session.commit()
+
+    for order in ("asc", "desc"):
+        employees, total, _ = await list_employees(session, sort=f"position:{order}")
+        assert total == 4, order
+        assert set(e.hrms_id for e in employees[-2:]) == {3, 4}, order
+        assert set(e.hrms_id for e in employees[:2]) == {1, 2}, order
+
+
+@pytest.mark.asyncio
+async def test_list_employees_sort_invalid_field_and_order_400(session) -> None:
+    """Молчаливый фолбэк запрещён: поле вне таблицы — 400, не sort по name."""
+    from fastapi import HTTPException
+
+    with pytest.raises(HTTPException) as unknown_field:
+        await list_employees(session, sort="synced_at:asc")
+    assert unknown_field.value.status_code == 400
+
+    with pytest.raises(HTTPException) as unknown_order:
+        await list_employees(session, sort="name:sideways")
+    assert unknown_order.value.status_code == 400
+
+
+@pytest.mark.asyncio
+async def test_get_employees_endpoint_sort_contract(auth_client) -> None:
+    """HTTP-контракт: 2+ приоритета принимаются, плохое поле/направление — 400.
+
+    Сепаратные sort_by/sort_order больше не принимаются: лишние query-параметры
+    FastAPI игнорирует, поэтому проверяем, что они не влияют на порядок строк.
+    """
+    ok = await auth_client.get("/api/employees?sort=department:asc,name:desc&limit=50")
+    assert ok.status_code == 200, ok.text
+
+    bad_field = await auth_client.get("/api/employees?sort=synced_at:asc")
+    assert bad_field.status_code == 400
+
+    bad_order = await auth_client.get("/api/employees?sort=name:sideways")
+    assert bad_order.status_code == 400
+
+    legacy = await auth_client.get("/api/employees?sort_by=name&sort_order=desc")
+    assert legacy.status_code == 200
+    legacy_body = await auth_client.get("/api/employees?limit=50")
+    assert legacy.json()["employees"] == legacy_body.json()["employees"]
+
+
+def test_employees_sort_table_keys_match_valid_fields() -> None:
+    """Таблица резолва и набор допустимых полей не разъезжаются.
+
+    Ловит дрейф: поле, добавленное в одну сторону и забытое в другой, дало бы
+    либо 400 на существующей колонке, либо поле в контракте без резолва.
+    """
+    assert set(_SORT_COLUMNS) == VALID_SORT_FIELDS
+    assert VALID_SORT_FIELDS == {"hrms_id", "name", "tab_number", "position", "department"}
+    assert set(_SORT_NULLS_LAST_FIELDS) <= VALID_SORT_FIELDS
+    assert _SORT_DEFAULT.field in VALID_SORT_FIELDS
 
 
 # ─── HTTP endpoint tests ─────────────────────────────────────────────

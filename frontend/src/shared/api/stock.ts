@@ -165,8 +165,8 @@ export type StockBalancesParams = {
   quality?: string;
   location?: string;
   operations?: string;
-  sort_by?: string;
-  sort_order?: "asc" | "desc";
+  /** Строка сортировки `field:order,field:order` (см. `buildSortParam`). */
+  sort?: string;
   limit?: number;
   offset?: number;
 };
@@ -188,8 +188,8 @@ export type StockTransactionsParams = {
   search?: string;
   date_from?: string;
   date_to?: string;
-  sort_by?: string;
-  sort_order?: "asc" | "desc";
+  /** Строка сортировки `field:order,field:order` (см. `buildSortParam`). */
+  sort?: string;
   from_location?: string;
   to_location?: string;
   quality_state?: string;
@@ -223,8 +223,7 @@ export async function getStockBalances(
   if (params?.quality) search.set("quality", params.quality);
   if (params?.location) search.set("location", params.location);
   if (params?.operations) search.set("operations", params.operations);
-  if (params?.sort_by) search.set("sort_by", params.sort_by);
-  if (params?.sort_order) search.set("sort_order", params.sort_order);
+  if (params?.sort) search.set("sort", params.sort);
   if (params?.limit !== undefined) search.set("limit", String(params.limit));
   if (params?.offset !== undefined) search.set("offset", String(params.offset));
   const qs = search.toString();
@@ -281,8 +280,7 @@ export async function getStockTransactions(
       typeof params.reason === "string" ? params.reason : toApiStockReason(params.reason),
     );
   }
-  if (params?.sort_by) search.set("sort_by", params.sort_by);
-  if (params?.sort_order) search.set("sort_order", params.sort_order);
+  if (params?.sort) search.set("sort", params.sort);
   if (params?.from_location) search.set("from_location", params.from_location);
   if (params?.to_location) search.set("to_location", params.to_location);
   if (params?.quality_state) search.set("quality_state", params.quality_state);
@@ -404,8 +402,8 @@ export type RemainderImportResponse = {
 export type RemainderPreviewQueryParams = {
   search?: string;
   filter_status?: "all" | "invalid";
-  sort_by?: "row" | "sku" | "quantity" | "length" | "operations" | "quality" | "section" | "errors";
-  sort_order?: "asc" | "desc";
+  /** Строка сортировки `field:order,field:order` (см. `buildSortParam`). */
+  sort?: string;
   limit?: number;
   offset?: number;
   row?: string;
@@ -453,8 +451,9 @@ export async function previewRemaindersExcel(
   formData.append("quality_state", toApiQualityState(opts.quality_state));
   formData.append("sheet_index", String(opts.sheet_index ?? 0));
   formData.append("filter_status", opts.filter_status ?? "all");
-  formData.append("sort_by", opts.sort_by ?? "row");
-  formData.append("sort_order", opts.sort_order ?? "asc");
+  // Сортировка уходит в теле запроса: эндпоинт объявляет её через Form,
+  // поэтому и новую строку `sort` кладём в FormData, а не в query.
+  formData.append("sort", opts.sort ?? "row:asc");
   formData.append("limit", String(opts.limit ?? 50));
   formData.append("offset", String(opts.offset ?? 0));
   if (opts.search) formData.append("search", opts.search);

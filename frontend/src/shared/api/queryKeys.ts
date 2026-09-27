@@ -9,8 +9,7 @@ type GetAuditLogsQueryKeyParams = {
   action?: string | null;
   entity_type?: string | null;
   user_name?: string | null;
-  sort_by?: string | null;
-  sort_order?: string | null;
+  sort?: string | null;
   date_from?: string | null;
   date_to?: string | null;
 };
@@ -23,8 +22,7 @@ type StockTransactionsQueryKeyParams = {
   search?: string;
   dateFrom?: string;
   dateTo?: string;
-  sort_by?: string;
-  sort_order?: string;
+  sort?: string;
   reason?: string;
   from_location?: string;
   to_location?: string;
@@ -38,8 +36,7 @@ type StockBalancesQueryKeyParams = {
   search?: string;
   limit?: number;
   offset?: number;
-  sort_by?: string;
-  sort_order?: string;
+  sort?: string;
   sku?: string;
   quantity?: string;
   quality?: string;
@@ -52,8 +49,7 @@ type ExecutionRowsQueryKeyParams = {
   limit?: number;
   offset?: number;
   search?: string;
-  sort_by?: string;
-  sort_order?: "asc" | "desc";
+  sort?: string;
   plan_position_id?: string;
   source_row_number?: string;
   production_plan_id?: string;
@@ -70,8 +66,7 @@ type AllPlanPositionsQueryKeyParams = {
   limit?: number;
   offset?: number;
   search?: string;
-  sort_by?: string;
-  sort_order?: string;
+  sort?: string;
   status?: string;
   validation_status?: string;
   source_sku?: string;
@@ -85,8 +80,7 @@ type UsersListQueryKeyParams = {
   limit?: number;
   offset?: number;
   search?: string;
-  sort_by?: string;
-  sort_order?: string;
+  sort?: string;
   role?: string;
   is_active?: boolean;
   full_name?: string;
@@ -100,8 +94,7 @@ type SectionBoardQueryKeyParams = {
   status?: string;
   search?: string;
   product_sku?: string;
-  sort_by?: string;
-  sort_order?: string;
+  sort?: string;
   limit?: number;
   offset?: number;
   singleSectionLockId?: number | null;
@@ -111,8 +104,7 @@ type ReadyToTransferQueryKeyParams = {
   limit?: number;
   offset?: number;
   search?: string;
-  sort_by?: string;
-  sort_order?: string;
+  sort?: string;
   product_sku?: string;
   operation_name?: string;
   next_operation_name?: string;
@@ -167,7 +159,7 @@ export const queryKeys = {
     list: (params?: UsersListQueryKeyParams) => ["users", "list", params ?? {}] as const,
   },
   employees: {
-    list: (params?: { limit?: number; offset?: number; search?: string; sort_by?: string; sort_order?: string; department?: string }) =>
+    list: (params?: { limit?: number; offset?: number; search?: string; sort?: string; department?: string }) =>
       ["employees", params ?? {}] as const,
   },
   stock: {
@@ -209,8 +201,7 @@ export const queryKeys = {
         offset?: number;
         search?: string;
         status?: string;
-        sort_by?: string;
-        sort_order?: string;
+        sort?: string;
         date_from?: string;
         date_to?: string;
         product_sku?: string;
@@ -224,8 +215,7 @@ export const queryKeys = {
         offset?: number;
         search?: string;
         status?: string;
-        sort_by?: string;
-        sort_order?: string;
+        sort?: string;
         date_from?: string;
         date_to?: string;
         product_sku?: string;
