@@ -31,6 +31,16 @@ backend/app/
 - Отмена = компенсационная транзакция с `reverses_id` (журнал действий — `action_journal`, ADR-0019).
 - Детали домена → [`docs/project-overview.md`](../docs/project-overview.md).
 
+## Dev-режим
+
+- `npm run backend` (из корня) поднимает `backend/scripts/dev_server.py`, а не
+  `uvicorn --reload` напрямую. Скрипт нужен на Windows: uvicorn перезапускает
+  рабочий процесс через `CTRL_C_EVENT`, который бьёт по всей консоли и уносит
+  FRONTEND/DB из `npm run dev`. Там же — скоуп `app/` (правки `tests/`, `alembic`,
+  `scripts` не перезапускают backend) и пропуск рестарта, если изменённый файл
+  не компилируется: тогда backend продолжает работать на последней валидной
+  версии кода.
+
 ## Тесты
 
 Канон pytest → [`tests/AGENTS.md`](tests/AGENTS.md).
