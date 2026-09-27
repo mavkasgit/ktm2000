@@ -9,12 +9,15 @@ export type PlanTaskGroupingMode = "article" | "anodizingColor";
 export type PlanTaskRow = {
   key: string;
   groupKey: string;
-  task: SectionBoardTask;
+  /** Задания строки: операции совпадают, упаковка может различаться. */
+  tasks: SectionBoardTask[];
+  productSku: string;
   dimensions: Record<string, unknown> | null;
   color: string | null;
   preOperations: RouteHistoryOp[];
-  packaging: string | null;
-  packagingDetails: string[];
+  operationName: string;
+  /** Упаковка строки: операция участка и количество, planQty вклада задания. */
+  packaging: { label: string; qty: number }[];
   planQty: number;
   issuedQty: number;
   doneQty: number;
@@ -55,22 +58,29 @@ function taskColor(task: SectionBoardTask): string | null {
   return null;
 }
 
-function taskPackaging(task: SectionBoardTask): { label: string | null; details: string[] } {
-  const payload = task.source_payload ?? {};
-  const rawLabel = payload.packaging;
-  const label = typeof rawLabel === "string" && rawLabel.trim() ? rawLabel.trim() : null;
-  const details: string[] = [];
+/**
+ * Префикс кодов упаковочных операций участка: `PACK`, `PACK_STRETCH`,
+ * `PACK_SPUNBOND` (группа «Упаковка» в `SectionOperation`).
+ */
+const PACKAGING_OPERATION_PREFIX = "PACK";
 
-  const packagedIn18 = payload.packaging_1_8_quantity;
-  if (packagedIn18 !== null && packagedIn18 !== undefined && String(packagedIn18).trim() !== "") {
-    details.push(`1,8 м: ${String(packagedIn18)}`);
-  }
-  const added = payload.add_quantity;
-  if (added !== null && added !== undefined && String(added).trim() !== "") {
-    details.push(`Добавить: ${String(added)}`);
+/**
+ * Упаковка строки плана — только операция упаковки самого участка
+ * («Стрейч», «Спанбонд», «Упаковка») из операций этапа задания.
+ * Описание упаковки из Excel-импорта в план не выводится.
+ */
+function taskPackaging(task: SectionBoardTask): string | null {
+  const codes = task.operation_codes ?? [];
+  const names = task.operation_names ?? [];
+  const labels: string[] = [];
+
+  for (const [index, code] of codes.entries()) {
+    if (!code || !code.startsWith(PACKAGING_OPERATION_PREFIX)) continue;
+    const name = names[index]?.trim();
+    if (name && !labels.includes(name)) labels.push(name);
   }
 
-  return { label, details };
+  return labels.length > 0 ? labels.join(" + ") : null;
 }
 
 function groupKeyForTask(task: SectionBoardTask, mode: PlanTaskGroupingMode): string {
@@ -89,66 +99,133 @@ function groupLabelForTask(task: SectionBoardTask, mode: PlanTaskGroupingMode): 
     : `${colorLabel} · ${size}`;
 }
 
-function makeRow(task: SectionBoardTask, groupKey: string): PlanTaskRow {
+/** Подпись строки: задания сливаются, только если совпадает всё, что в колонках. */
+function rowSignature(task: SectionBoardTask, preOperations: RouteHistoryOp[]): string {
+  const operations = preOperations
+    .map((operation) => operation.operation_name)
+    .filter(Boolean)
+    .join(" → ");
+  return [
+    task.product_sku,
+    taskColor(task) ?? "__no_color__",
+    dimensionsKey(task),
+    operations,
+    task.operation_name ?? "",
+  ].join("__");
+}
+
+function makeRow(
+  task: SectionBoardTask,
+  groupKey: string,
+  preOperations: RouteHistoryOp[],
+): PlanTaskRow {
   const planned = toNumber(task.planned_quantity);
-  const issued = toNumber(task.cache.issued_quantity);
-  const done = toNumber(task.cache.completed_quantity);
-  const transferred = toNumber(task.cache.transferred_quantity);
   const packaging = taskPackaging(task);
 
   return {
     key: `${groupKey}__task_${task.id}`,
     groupKey,
-    task,
+    tasks: [task],
+    productSku: task.product_sku,
     dimensions: taskGroupingDimensions(task),
     color: taskColor(task),
-    preOperations: (task.route_history ?? []).filter((operation) => operation.is_significant),
-    packaging: packaging.label,
-    packagingDetails: packaging.details,
+    preOperations,
+    operationName: task.operation_name || "Операция",
+    packaging: packaging ? [{ label: packaging, qty: planned }] : [],
     planQty: planned,
-    issuedQty: issued,
-    doneQty: done,
-    transferredQty: transferred,
-    balanceQty: Math.max(0, planned - done),
+    issuedQty: toNumber(task.cache.issued_quantity),
+    doneQty: toNumber(task.cache.completed_quantity),
+    transferredQty: toNumber(task.cache.transferred_quantity),
+    balanceQty: 0,
   };
+}
+
+/** Доливает строку плана заданием: количества суммируются, упаковка — в разбивку. */
+function mergeTaskIntoRow(row: PlanTaskRow, task: SectionBoardTask): void {
+  const planned = toNumber(task.planned_quantity);
+  const packaging = taskPackaging(task);
+
+  row.tasks.push(task);
+  if (packaging) {
+    const existing = row.packaging.find((item) => item.label === packaging);
+    if (existing) existing.qty += planned;
+    else row.packaging.push({ label: packaging, qty: planned });
+  }
+  row.planQty += planned;
+  row.issuedQty += toNumber(task.cache.issued_quantity);
+  row.doneQty += toNumber(task.cache.completed_quantity);
+  row.transferredQty += toNumber(task.cache.transferred_quantity);
+}
+
+function sortPackaging(row: PlanTaskRow): void {
+  row.packaging.sort((a, b) => b.qty - a.qty || a.label.localeCompare(b.label, "ru"));
+}
+
+function sumRows(rows: PlanTaskRow[], field: "planQty" | "issuedQty" | "doneQty" | "transferredQty"): number {
+  return rows.reduce((total, row) => total + row[field], 0);
 }
 
 /**
  * Строит дерево плана: верхняя группа — артикул или цвет анодирования,
- * внутри — одна строка на задание. Упаковка остаётся данными этой строки,
- * а не отдельным уровнем группировки.
+ * внутри — одна строка на набор заданий с одинаковыми операциями. Задания,
+ * отличающиеся только упаковкой, сливаются в строку: количество и подвесы
+ * общие, упаковка показана разбивкой «Спанбонд 300 · Стрейч 200».
  */
 export function buildPlanTaskGroups(
   tasks: SectionBoardTask[],
   mode: PlanTaskGroupingMode,
 ): PlanTaskGroup[] {
-  const groups = new Map<string, PlanTaskGroup>();
+  const groups = new Map<string, { key: string; label: string; rows: PlanTaskRow[] }>();
+  const rowsByGroup = new Map<string, Map<string, PlanTaskRow>>();
 
   for (const task of tasks) {
     const key = groupKeyForTask(task, mode);
-    const row = makeRow(task, key);
-    const existing = groups.get(key);
-    if (existing) {
-      existing.rows.push(row);
-      existing.totalQtyPlan += row.planQty;
-      existing.totalQtyDone += row.doneQty;
-      existing.totalQtyIssued += row.issuedQty;
-      existing.totalQtyTransferred += row.transferredQty;
+    const preOperations = (task.route_history ?? []).filter((operation) => operation.is_significant);
+    const signature = rowSignature(task, preOperations);
+
+    let rows = rowsByGroup.get(key);
+    if (!rows) {
+      rows = new Map<string, PlanTaskRow>();
+      rowsByGroup.set(key, rows);
+    }
+
+    const existingRow = rows.get(signature);
+    if (existingRow) {
+      mergeTaskIntoRow(existingRow, task);
+      continue;
+    }
+
+    const row = makeRow(task, key, preOperations);
+    rows.set(signature, row);
+
+    const group = groups.get(key);
+    if (group) {
+      group.rows.push(row);
     } else {
-      groups.set(key, {
-        key,
-        label: groupLabelForTask(task, mode),
-        rows: [row],
-        totalQtyPlan: row.planQty,
-        totalQtyDone: row.doneQty,
-        totalQtyIssued: row.issuedQty,
-        totalQtyTransferred: row.transferredQty,
-      });
+      groups.set(key, { key, label: groupLabelForTask(task, mode), rows: [row] });
     }
   }
 
-  return Array.from(groups.values()).sort((a, b) => {
-    if (b.totalQtyPlan !== a.totalQtyPlan) return b.totalQtyPlan - a.totalQtyPlan;
-    return a.label.localeCompare(b.label, "ru");
-  });
+  for (const group of groups.values()) {
+    for (const row of group.rows) {
+      row.balanceQty = Math.max(0, row.planQty - row.doneQty);
+      sortPackaging(row);
+    }
+  }
+
+  // Итоги группы — сумма по строкам: слитые задания уже учтены в своих строках.
+  return Array.from(groups.values())
+    .map((group): PlanTaskGroup => ({
+      key: group.key,
+      label: group.label,
+      rows: group.rows,
+      totalQtyPlan: sumRows(group.rows, "planQty"),
+      totalQtyDone: sumRows(group.rows, "doneQty"),
+      totalQtyIssued: sumRows(group.rows, "issuedQty"),
+      totalQtyTransferred: sumRows(group.rows, "transferredQty"),
+    }))
+    .sort((a, b) => {
+      if (b.totalQtyPlan !== a.totalQtyPlan) return b.totalQtyPlan - a.totalQtyPlan;
+      return a.label.localeCompare(b.label, "ru");
+    });
 }

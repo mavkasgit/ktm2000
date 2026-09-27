@@ -1308,6 +1308,8 @@ export function SectionsTasksPage() {
         onOpenChange={setPlanModalOpen}
         sectionId={sectionId ?? 0}
         sectionName={selectedSection?.name || "—"}
+        sectionCode={selectedSection?.code || null}
+        sectionType={selectedSection?.type || null}
         tasks={displayedTasks}
         availableOperations={board?.available_operations || []}
       />
