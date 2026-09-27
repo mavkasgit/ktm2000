@@ -38,6 +38,7 @@ import {
 import { HangerConstantsPanel } from "./HangerConstantsPanel";
 import { HangerCalcRowView, type RowSaveState } from "./HangerCalcRowView";
 import { PairedHangerRowView } from "./PairedHangerRowView";
+import { useDebouncedValue } from "@/shared/lib/useDebouncedValue";
 
 const headerCellClass = `${DATA_TABLE_STYLES.headerRow} ${DATA_TABLE_STYLES.headerCell}`;
 
@@ -78,7 +79,7 @@ export function HangerCalcTable({
   const pairProductsRef = useRef<Product[]>([]);
 
   const [search, setSearch] = useState("");
-  const [debouncedSearch, setDebouncedSearch] = useState("");
+  const debouncedSearch = useDebouncedValue(search);
   const [sortConfigs, setSortConfigs] = useState<SortConfig<HangerCalcSortField>[]>([]);
   const {
     bindColumn,
@@ -87,10 +88,7 @@ export function HangerCalcTable({
     resetColumnFilters,
   } = useSortableColumnFilters<HangerCalcSortField>();
 
-  useEffect(() => {
-    const timer = window.setTimeout(() => setDebouncedSearch(search), 300);
-    return () => window.clearTimeout(timer);
-  }, [search]);
+
 
   const setRowState = useCallback((id: number, state: RowSaveState | undefined) => {
     setRowStates((prev) => ({ ...prev, [id]: state }));

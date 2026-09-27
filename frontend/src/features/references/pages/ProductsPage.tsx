@@ -12,6 +12,7 @@ import { usePermission } from "@/features/auth/hooks/usePermission";
 import { ProductPhoto } from "../components/ProductPhoto";
 import { ProductCardDialog } from "../components/ProductCardDialog";
 import { formatQuantity } from "../lib/formatQuantity";
+import { useDebouncedValue } from "@/shared/lib/useDebouncedValue";
 
 const headerCellClass = `${DATA_TABLE_STYLES.headerRow} ${DATA_TABLE_STYLES.headerCell}`;
 
@@ -21,13 +22,9 @@ export function ProductsPage() {
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState("");
   const [search, setSearch] = useState("");
-  const [debouncedSearch, setDebouncedSearch] = useState("");
+  const debouncedSearch = useDebouncedValue(search);
   const [selected, setSelected] = useState<Product | null>(null);
 
-  useEffect(() => {
-    const timer = window.setTimeout(() => setDebouncedSearch(search), 300);
-    return () => window.clearTimeout(timer);
-  }, [search]);
 
   const load = useCallback(async () => {
     setLoading(true);

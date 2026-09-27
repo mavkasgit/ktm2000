@@ -20,6 +20,7 @@ import { pickColumnApiValue } from "@/shared/lib/columnFilterSearch";
 import { RouteStepsDisplay } from "./RouteStepsDisplay";
 
 import { buildBalanceSortParam, type BalanceSortField } from "@/shared/lib/stockSortParams";
+import { useDebouncedValue } from "@/shared/lib/useDebouncedValue";
 
 function getBalanceOperationsLabel(balance: StockBalanceEntry): string {
   if (balance.completed_stages?.length) {
@@ -125,8 +126,7 @@ export function StockBalancesPanel({
   enabled = true,
 }: StockBalancesPanelProps) {
   const [isExpanded, setIsExpanded] = useState(true);
-  const [debouncedSearch, setDebouncedSearch] = useState(searchQuery);
-
+  const debouncedSearch = useDebouncedValue(searchQuery);
   const {
     bindColumn,
     columnFilters,
@@ -179,10 +179,7 @@ export function StockBalancesPanel({
     [applySort, resetPage],
   );
 
-  useEffect(() => {
-    const timer = window.setTimeout(() => setDebouncedSearch(searchQuery), 300);
-    return () => window.clearTimeout(timer);
-  }, [searchQuery]);
+
 
   const balanceQueryParams = useMemo(
     () => ({

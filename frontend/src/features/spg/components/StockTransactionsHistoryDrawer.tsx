@@ -25,6 +25,7 @@ import {
 import type { StockTransactionEntry, StockTransactionsParams } from "@/shared/api/stock";
 import { queryKeys } from "@/shared/api/queryKeys";
 import { pickColumnApiValue } from "@/shared/lib/columnFilterSearch";
+import { useDebouncedValue } from "@/shared/lib/useDebouncedValue";
 import {
   buildTransactionSortParam,
   type TransactionSortField,
@@ -133,7 +134,7 @@ export function StockTransactionsHistoryDrawer({
   const productLabel = productSku?.trim() || (productId !== undefined ? `#${productId}` : null);
   const [dateRange, setDateRange] = useState<DateRangeValue>({ from: "", to: "" });
   const [search, setSearch] = useState("");
-  const [debouncedSearch, setDebouncedSearch] = useState("");
+  const debouncedSearch = useDebouncedValue(search);
   const tableScrollRef = useRef<HTMLDivElement>(null);
   const hasDateFilter = Boolean(dateRange.from || dateRange.to);
 
@@ -152,7 +153,6 @@ export function StockTransactionsHistoryDrawer({
     onExtraReset: () => {
       setDateRange({ from: "", to: "" });
       setSearch("");
-      setDebouncedSearch("");
     },
   });
 
@@ -193,16 +193,12 @@ export function StockTransactionsHistoryDrawer({
     [applySort, resetPage],
   );
 
-  useEffect(() => {
-    const timer = window.setTimeout(() => setDebouncedSearch(search), 300);
-    return () => window.clearTimeout(timer);
-  }, [search]);
+
 
   useEffect(() => {
     if (open) return;
     setDateRange({ from: "", to: "" });
     setSearch("");
-    setDebouncedSearch("");
     setSortConfigs([]);
     resetColumnFilters();
     resetPage();

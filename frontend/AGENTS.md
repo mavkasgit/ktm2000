@@ -23,6 +23,21 @@ React 18.3 + TypeScript + Vite + Tailwind CSS + shadcn/ui + TanStack Query/Virtu
   Термин и правило — [ADR-0030](../docs/adr/0030-komaktnaya-stroka-i-utochneniya-tablits.md)
   и [CONTEXT.md](../CONTEXT.md).
 
+- **Описание колонки** — семантика колонки объявляется один раз в
+  [`src/shared/lib/columnSpecs.ts`](src/shared/lib/columnSpecs.ts)
+  (`ColumnSpec`): `filterField`, `sortField`, `valueLabel`, `exactMatch`.
+  Из описания порождаются шапка, фильтр и параметры запроса. Тернарник
+  `filterField === "dimensions"` в шапке и ручной вызов
+  `pickExactMatchColumnValue(…, "dimensions")` — не способ объявить
+  семантику: добавить колонку с особым фильтром значило бы править и то и
+  другое. Значения точного совпадения собирает `exactMatchColumnParams`.
+- **Пауза перед запросом по поиску** — [`src/shared/lib/useDebouncedValue.ts`](src/shared/lib/useDebouncedValue.ts).
+  Свой `useState` + `useEffect` с `setTimeout` рядом с полем — нельзя: таких
+  копий было двенадцать, и одна цифра в задержке меняла поведение одного
+  экрана. Поле хранит введённое значение, задерживается запрос, а не ввод.
+  Для поля, где `Enter` означает «искать сейчас», — `useFlushableDebouncedValue`
+  (тот же хук с выходом `flush`, а не вторая реализация).
+
 ## Подпись размера
 
 - Колонка «Размер» печатается **только** через `formatDimensionsLabel`

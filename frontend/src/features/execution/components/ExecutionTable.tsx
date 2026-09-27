@@ -311,19 +311,8 @@ export function ExecutionTable({
                             onSortChange={handleSortChange}
                             sortable={Boolean(column.sortField)}
                             values={uniqueValuesByField[filterField]}
-                            {...(filterField === "dimensions"
-                              ? {
-                                  selectedValues: bindColumn("dimensions").selectedValues,
-                                  onFilterChange: bindColumn("dimensions").onFilterChange,
-                                }
-                              : bindColumn(filterField))}
-                            valueLabel={
-                              filterField === "status"
-                                ? (v) => positionStatusLabels[v] ?? v
-                                : filterField === "dimensions"
-                                  ? formatDimensionsFilterValue
-                                  : undefined
-                            }
+                            {...bindColumn(filterField)}
+                            valueLabel={column.valueLabel}
                           />
                         ) : (
                           <span className="block truncate">{column.label}</span>

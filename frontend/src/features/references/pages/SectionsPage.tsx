@@ -23,6 +23,7 @@ import { queryKeys } from "@/shared/api/queryKeys";
 import { sectionTypeLabels } from "@/shared/lib/generated-labels";
 import { STOCK_SECTION_TYPES } from "@/shared/lib/sectionTypes";
 import type { SectionType } from "shared/api/sections";
+import { useDebouncedValue } from "@/shared/lib/useDebouncedValue";
 
 type Section = {
   id?: string | number;
@@ -151,7 +152,7 @@ export function SectionsPage() {
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string>("");
   const [search, setSearch] = useState("");
-  const [debouncedSearch, setDebouncedSearch] = useState("");
+  const debouncedSearch = useDebouncedValue(search);
   const [dialogOpen, setDialogOpen] = useState(false);
   const [dialogMode, setDialogMode] = useState<"add" | "edit">("add");
   const [editingItem, setEditingItem] = useState<Section | null>(null);
@@ -516,10 +517,7 @@ export function SectionsPage() {
     }
   }, []);
 
-  useEffect(() => {
-    const timer = window.setTimeout(() => setDebouncedSearch(search), 300);
-    return () => window.clearTimeout(timer);
-  }, [search]);
+
 
   useEffect(() => {
     void load();

@@ -1,4 +1,6 @@
-import { pickColumnApiValue, pickExactMatchColumnValue } from "@/shared/lib/columnFilterSearch";
+import { pickColumnApiValue } from "@/shared/lib/columnFilterSearch";
+import { exactMatchColumnParams } from "@/shared/lib/columnSpecs";
+import { boardColumns } from "./boardColumns";
 import { buildSortParam } from "@/shared/lib/sortQueryParam";
 import type { SortConfig } from "@/shared/hooks/useTableQueryEngine";
 import type { SectionBoardQueryParams } from "@/shared/api/shopfloor";
@@ -50,10 +52,11 @@ export function buildBoardColumnApiParams(
   columnSearchQueries: Partial<Record<TaskSortField, string>>,
 ): Pick<SectionBoardQueryParams, "product_sku" | "dimensions"> {
   const productSku = pickColumnApiValue(columnFilters, columnSearchQueries, "productSku");
-  const dimensions = pickExactMatchColumnValue(columnFilters, "dimensions");
+  // Колонки, объявившие точный фильтр, — из описания, а не перечислением.
+  const exactMatch = exactMatchColumnParams(columnFilters, boardColumns);
   return {
     ...(productSku ? { product_sku: productSku } : {}),
-    ...(dimensions ? { dimensions } : {}),
+    ...(exactMatch.dimensions ? { dimensions: exactMatch.dimensions } : {}),
   };
 }
 

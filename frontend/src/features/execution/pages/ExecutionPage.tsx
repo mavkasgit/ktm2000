@@ -54,6 +54,9 @@ import {
 } from "../components/execution-utils";
 import { fmtQty } from "@/shared/utils/fmtQty";
 import { buildExecutionSortParam } from "../lib/executionSortMapping";
+import { useDebouncedValue } from "@/shared/lib/useDebouncedValue";
+import { exactMatchColumnParams } from "@/shared/lib/columnSpecs";
+import { executionTableColumns } from "../components/execution-table-columns";
 
 function extractPlanId(value: string): string | undefined {
   const trimmed = value.trim();
@@ -127,8 +130,8 @@ function buildExecutionColumnApiParams(
   );
   if (stageName) params.current_stage_section_name = stageName;
 
-  const dimensions = pickExactMatchColumnValue(columnFilters, "dimensions");
-  if (dimensions) params.dimensions = dimensions;
+  // Колонки, объявившие точный фильтр, — из описания, а не перечислением.
+  Object.assign(params, exactMatchColumnParams(columnFilters, executionTableColumns));
 
   return params;
 }
@@ -138,7 +141,7 @@ export function ExecutionPage() {
   const [wipStatsSku, setWipStatsSku] = useState<string | null>(null);
   const [drawerOpen, setDrawerOpen] = useState(false);
   const [searchQuery, setSearchQuery] = useState("");
-  const [debouncedSearchQuery, setDebouncedSearchQuery] = useState("");
+  const debouncedSearchQuery = useDebouncedValue(searchQuery);
   const {
     bindColumn,
     columnFilters,
@@ -170,10 +173,6 @@ export function ExecutionPage() {
     ],
   });
 
-  useEffect(() => {
-    const timer = window.setTimeout(() => setDebouncedSearchQuery(searchQuery), 300);
-    return () => window.clearTimeout(timer);
-  }, [searchQuery]);
 
   const columnApiParams = useMemo(
     () => buildExecutionColumnApiParams(columnFilters, columnSearchQueries),
@@ -697,7 +696,6 @@ export function ExecutionPage() {
 
   const resetExecutionFilters = useCallback(() => {
     setSearchQuery("");
-    setDebouncedSearchQuery("");
     resetColumnFilters();
     resetPage();
   }, [resetColumnFilters, resetPage]);

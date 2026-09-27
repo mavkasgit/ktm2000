@@ -1,20 +1,14 @@
 import type { ExecutionSortableField } from "../lib/executionSortMapping";
-import type { ExecutionSortField } from "./execution-utils";
+import { formatDimensionsFilterValue } from "@/shared/api/stock";
+import type { ColumnSpec } from "@/shared/lib/columnSpecs";
+import { positionStatusLabels, type ExecutionSortField } from "./execution-utils";
 
 export type ExecutionColumnId = ExecutionSortField | "actions";
 
-export interface ExecutionTableColumn {
+export interface ExecutionTableColumn extends ColumnSpec<ExecutionSortField, ExecutionSortableField> {
   id: ExecutionColumnId;
   label: string;
   width: string;
-  /** Поле колонки для попапера фильтра (всегда доступно). */
-  filterField?: ExecutionSortField;
-  /**
-   * Поле сортировки. Задаётся только для колонок, которые умеет сортировать
-   * API (см. `EXECUTION_SORT_FIELD_TO_API`), иначе в шапке не рисуется иконка
-   * сортировки — сортировать по такому полю сервер не может.
-   */
-  sortField?: ExecutionSortableField;
   colClassName?: string;
   headerClassName?: string;
   cellClassName?: string;
@@ -64,6 +58,9 @@ export const executionTableColumns: ExecutionTableColumn[] = [
     width: "110px",
     filterField: "dimensions",
     sortField: "dimensions",
+    // «Размер» — выбор габарита из списка, а не поиск подстроки в подписи.
+    exactMatch: true,
+    valueLabel: formatDimensionsFilterValue,
     colClassName: "hidden min-[600px]:table-column",
     headerClassName: "hidden min-[600px]:table-cell",
     cellClassName: "hidden min-[600px]:table-cell",
@@ -89,6 +86,7 @@ export const executionTableColumns: ExecutionTableColumn[] = [
     width: "var(--execution-col-status)",
     filterField: "status",
     sortField: "status",
+    valueLabel: (value: string) => positionStatusLabels[value] ?? value,
   },
   {
     id: "stage",

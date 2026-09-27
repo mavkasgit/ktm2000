@@ -59,6 +59,7 @@ import { queryKeys } from "@/shared/api/queryKeys";
 import { RouteStepsDisplay } from "@/shared/ui/RouteStepsDisplay";
 import { listSections } from "@/shared/api/sections";
 import type { RemainderImportItem, RemainderSectionMeta } from "@/shared/api/stock";
+import { useDebouncedValue } from "@/shared/lib/useDebouncedValue";
 import {
   buildRemainderPreviewSortParam,
   type RemainderPreviewSortField,
@@ -273,7 +274,7 @@ export function ImportRemaindersDialog({
   const [rowSelection, setRowSelection] = useState("");
   const [clearExisting, setClearExisting] = useState(false);
   const [searchQuery, setSearchQuery] = useState("");
-  const [debouncedSearch, setDebouncedSearch] = useState("");
+  const debouncedSearch = useDebouncedValue(searchQuery);
   const [filterStatus, setFilterStatus] = useState<"all" | "invalid">("all");
   const [targetSectionOverrides, setTargetSectionOverrides] = useState<Record<number, number>>({});
   const [qualityStateOverrides, setQualityStateOverrides] = useState<Record<number, QualityState>>({});
@@ -292,7 +293,6 @@ export function ImportRemaindersDialog({
     onExtraReset: () => {
       setFilterStatus("all");
       setSearchQuery("");
-      setDebouncedSearch("");
     },
   });
 
@@ -370,7 +370,6 @@ export function ImportRemaindersDialog({
       setClearExisting(false);
       resetExpansion();
       setSearchQuery("");
-      setDebouncedSearch("");
       setFilterStatus("all");
       resetPage();
       setTargetSectionOverrides({});
@@ -383,10 +382,7 @@ export function ImportRemaindersDialog({
     }
   }, [open, resetExpansion, resetColumnFilters, resetPage]);
 
-  useEffect(() => {
-    const timer = window.setTimeout(() => setDebouncedSearch(searchQuery), 300);
-    return () => window.clearTimeout(timer);
-  }, [searchQuery]);
+
 
   const getImportSource = (): RemainderImportSource | null => {
     if (importMode === "file" && file) {
@@ -480,7 +476,6 @@ export function ImportRemaindersDialog({
     setError(null);
     setFilterStatus("all");
     setSearchQuery("");
-    setDebouncedSearch("");
     resetPage();
     setStep("preview");
   }, [resetPage]);

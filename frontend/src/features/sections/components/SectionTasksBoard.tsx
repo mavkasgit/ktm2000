@@ -29,6 +29,7 @@ import type { ColumnSortDef } from "@/shared/hooks/useTableQueryEngine";
 import type { PageLimitOption } from "@/shared/hooks/usePaginatedTableQuery";
 import { useFilterableTable } from "@/shared/hooks/useFilterableTable";
 import { buildColumnFilterPredicate } from "@/shared/lib/columnFilterSearch";
+import { useDebouncedValue } from "@/shared/lib/useDebouncedValue";
 import {
   buildBoardServerQueryParams,
   isServerSortField,
@@ -57,6 +58,7 @@ import { TABLE_ROW_STYLES } from "@/shared/lib/tableRowStyles";
 import { TABLE_ROW_COMPACT } from "@/shared/lib/dataTableStyles";
 import { cn } from "@/shared/utils/cn";
 import { fmtQty } from "@/shared/utils/fmtQty";
+import { boardColumns } from "../lib/boardColumns";
 
 // ---------------------------------------------------------------------------
 // Экспорты для обратной совместимости
@@ -513,7 +515,7 @@ export function SectionTasksBoard({
 }: SectionTasksBoardProps) {
   const tableScrollRef = useRef<HTMLDivElement>(null);
   const [searchQuery, setSearchQuery] = useState("");
-  const [debouncedSearch, setDebouncedSearch] = useState("");
+  const debouncedSearch = useDebouncedValue(searchQuery);
   const {
     bindColumn,
     columnFilters,
@@ -526,10 +528,6 @@ export function SectionTasksBoard({
     extraHasActive: searchQuery.trim().length > 0,
   });
 
-  useEffect(() => {
-    const timer = window.setTimeout(() => setDebouncedSearch(searchQuery), 300);
-    return () => window.clearTimeout(timer);
-  }, [searchQuery]);
 
   useEffect(() => {
     onServerQueryChange(
@@ -778,7 +776,6 @@ export function SectionTasksBoard({
 
   const handleResetAllFilters = useCallback(() => {
     setSearchQuery("");
-    setDebouncedSearch("");
     resetAllFilters();
     bulkSelection?.clear();
     onBulkModeChange?.(false);
@@ -979,108 +976,29 @@ export function SectionTasksBoard({
             <table className="w-full border-separate border-spacing-0 text-sm">
               <thead>
                 <tr>
-                  <th className={`${headerCellClass} w-12 text-center`}>
-                    <span className="text-xs font-medium text-muted-foreground">Статус</span>
-                  </th>
-                  <th className={`${headerCellClass} text-left`}>
-                    <SortableFilterHeader
-                      field="productSku"
-                      label="Артикул"
-                      currentSorts={sortConfigs}
-                      onSortChange={handleSortChange}
-                      values={uniqueValues.productSku}
-                      {...bindColumn("productSku")}
-                    />
-                  </th>
-                  <th className={`${headerCellClass} text-left`}>
-                    <SortableFilterHeader
-                      field="dimensions"
-                      label="Размер"
-                      currentSorts={sortConfigs}
-                      onSortChange={handleSortChange}
-                      values={uniqueValues.dimensions}
-                      selectedValues={bindColumn("dimensions").selectedValues}
-                      onFilterChange={bindColumn("dimensions").onFilterChange}
-                      valueLabel={formatDimensionsFilterValue}
-                    />
-                  </th>
-                  <th className={`${headerCellClass} text-left`}>
-                    <span className="text-xs font-medium text-muted-foreground">Операция</span>
-                  </th>
-                  <th className={`${headerCellClass} text-left`}>
-                    <SortableFilterHeader
-                      field="plannedQty"
-                      label="План"
-                      currentSorts={sortConfigs}
-                      onSortChange={handleSortChange}
-                      values={uniqueValues.plannedQty}
-                      {...bindColumn("plannedQty")}
-                    />
-                  </th>
-                  <th className={`${headerCellClass} text-left`}>
-                    <SortableFilterHeader
-                      field="issuedQty"
-                      label="Выдано"
-                      currentSorts={sortConfigs}
-                      onSortChange={handleSortChange}
-                      values={uniqueValues.issuedQty}
-                      {...bindColumn("issuedQty")}
-                    />
-                  </th>
-                  <th className={`${headerCellClass} text-left`}>
-                    <SortableFilterHeader
-                      field="completedQty"
-                      label="Годные"
-                      currentSorts={sortConfigs}
-                      onSortChange={handleSortChange}
-                      values={uniqueValues.completedQty}
-                      {...bindColumn("completedQty")}
-                    />
-                  </th>
-                  <th className={`${headerCellClass} text-left`}>
-                    <SortableFilterHeader
-                      field="rejectedQty"
-                      label="Брак"
-                      currentSorts={sortConfigs}
-                      onSortChange={handleSortChange}
-                      values={uniqueValues.rejectedQty}
-                      {...bindColumn("rejectedQty")}
-                    />
-                  </th>
-                  <th className={`${headerCellClass} text-left`}>
-                    <SortableFilterHeader
-                      field="transferredQty"
-                      label="Передано"
-                      currentSorts={sortConfigs}
-                      onSortChange={handleSortChange}
-                      values={uniqueValues.transferredQty}
-                      {...bindColumn("transferredQty")}
-                    />
-                  </th>
-                  <th className={`${headerCellClass} text-left`}>
-                    <SortableFilterHeader
-                      field="remainingQty"
-                      label="Остаток"
-                      currentSorts={sortConfigs}
-                      onSortChange={handleSortChange}
-                      values={uniqueValues.remainingQty}
-                      {...bindColumn("remainingQty")}
-                    />
-                  </th>
-                  <th className={`${headerCellClass} text-left`}>
-                    <SortableFilterHeader
-                      field="status"
-                      label="Статус"
-                      currentSorts={sortConfigs}
-                      onSortChange={handleSortChange}
-                      values={uniqueValues.status}
-                      {...bindColumn("status")}
-                      valueLabel={statusLabel}
-                    />
-                  </th>
-                  <th className={`${headerCellClass} text-left`}>
-                    <span className="text-xs font-medium text-muted-foreground">Действия</span>
-                  </th>
+                  {boardColumns.map((column) => (
+                    <th
+                      key={column.id}
+                      className={`${headerCellClass} ${column.className ?? "text-left"}`}
+                    >
+                      {column.filterField ? (
+                        <SortableFilterHeader
+                          field={column.filterField}
+                          label={column.label}
+                          currentSorts={sortConfigs}
+                          onSortChange={handleSortChange}
+                          sortable={Boolean(column.sortField)}
+                          values={uniqueValues[column.filterField] ?? []}
+                          {...bindColumn(column.filterField)}
+                          valueLabel={column.valueLabel}
+                        />
+                      ) : (
+                        <span className="text-xs font-medium text-muted-foreground">
+                          {column.label}
+                        </span>
+                      )}
+                    </th>
+                  ))}
                   <TableCornerResetHeader
                     hasActiveFilters={hasTableFiltersActive}
                     onReset={handleResetAllFilters}

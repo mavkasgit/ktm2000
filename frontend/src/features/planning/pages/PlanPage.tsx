@@ -36,6 +36,7 @@ import {
   PlanFiltersState,
 } from "../lib/plan-labels"
 import { buildPlanColumnApiParams, buildPlanSortParam } from "../lib/planApiParams"
+import { useDebouncedValue } from "@/shared/lib/useDebouncedValue";
 
 export function PlanPage() {
   const [importOpen, setImportOpen] = useState(false)
@@ -80,7 +81,7 @@ export function PlanPage() {
     has_duplicates: "all",
   })
   const [searchQuery, setSearchQuery] = useState("")
-  const [debouncedSearchQuery, setDebouncedSearchQuery] = useState("")
+  const debouncedSearchQuery = useDebouncedValue(searchQuery);
   const panelFiltersActive = useMemo(
     () =>
       searchQuery.trim().length > 0 ||
@@ -100,10 +101,7 @@ export function PlanPage() {
     extraHasActive: panelFiltersActive,
   })
 
-  useEffect(() => {
-    const timer = window.setTimeout(() => setDebouncedSearchQuery(searchQuery), 300)
-    return () => window.clearTimeout(timer)
-  }, [searchQuery])
+
 
   const columnApiParams = useMemo(
     () => buildPlanColumnApiParams(columnFilters, columnSearchQueries),

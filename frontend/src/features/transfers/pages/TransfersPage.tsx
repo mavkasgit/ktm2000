@@ -87,6 +87,7 @@ import {
   type ReadyTransferGroup,
 } from "../lib/groupReadyTransfers";
 import { makeIdempotencyKey, runTransferBatch } from "../lib/runTransferBatch";
+import { useFlushableDebouncedValue } from "@/shared/lib/useDebouncedValue";
 import {
   buildHistorySortParam,
   buildReadySortParam,
@@ -716,23 +717,16 @@ export function TransfersPage() {
   const [showAllSpgs, setShowAllSpgs] = useState(true);
   const [editTransferRecord, setEditTransferRecord] = useState<IncomingTransfer | null>(null);
   const [historySearch, setHistorySearch] = useState("");
-  const [debouncedHistorySearch, setDebouncedHistorySearch] = useState("");
+  const { value: debouncedHistorySearch, flush: flushHistorySearch } =
+    useFlushableDebouncedValue(historySearch);
   const [readySearch, setReadySearch] = useState("");
-  const [debouncedReadySearch, setDebouncedReadySearch] = useState("");
+  const { value: debouncedReadySearch, flush: flushReadySearch } =
+    useFlushableDebouncedValue(readySearch);
   // Журнал передач — боковая панель: не отнимает ширину у «Готово к передаче».
   const [historyOpen, setHistoryOpen] = useState(false);
   const historyScrollRef = useRef<HTMLDivElement>(null);
   const readyScrollRef = useRef<HTMLDivElement>(null);
 
-  useEffect(() => {
-    const timer = window.setTimeout(() => setDebouncedHistorySearch(historySearch), 300);
-    return () => window.clearTimeout(timer);
-  }, [historySearch]);
-
-  useEffect(() => {
-    const timer = window.setTimeout(() => setDebouncedReadySearch(readySearch), 300);
-    return () => window.clearTimeout(timer);
-  }, [readySearch]);
 
   const inFlightRef = useRef<Set<number>>(new Set());
   const [inFlightVersion, setInFlightVersion] = useState(0);
@@ -1268,7 +1262,7 @@ export function TransfersPage() {
               onChange={(e) => setReadySearch(e.target.value)}
               onKeyDown={(e) => {
                 if (e.key === "Enter") {
-                  setDebouncedReadySearch(readySearch);
+                  flushReadySearch();
                   resetReadyPage();
                 }
               }}
@@ -1487,7 +1481,7 @@ export function TransfersPage() {
                 onChange={(e) => setHistorySearch(e.target.value)}
                 onKeyDown={(e) => {
                   if (e.key === "Enter") {
-                    setDebouncedHistorySearch(historySearch);
+                    flushHistorySearch();
                     resetHistoryPage();
                   }
                 }}

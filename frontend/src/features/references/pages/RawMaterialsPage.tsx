@@ -32,6 +32,7 @@ import { ProductWipStatsDialog } from "@/features/execution/components/ProductWi
 import { primaryHangerValue, effectiveForLength, effectiveForMode, productLengths, sheetHangerEntry } from "@/shared/lib/hangerQuantity";
 import { isLengthState } from "@/shared/lib/dimensionState";
 import { cn } from "@/shared/utils/cn";
+import { useDebouncedValue } from "@/shared/lib/useDebouncedValue";
 
 type ViewMode = "grid" | "table" | "calc";
 type DialogMode = "create" | "edit";
@@ -249,7 +250,7 @@ export function RawMaterialsPage() {
     }
   });
   const [search, setSearch] = useState("");
-  const [debouncedSearch, setDebouncedSearch] = useState("");
+  const debouncedSearch = useDebouncedValue(search);
   const [filtersOpen, setFiltersOpen] = useState(false);
   const [lengthFrom, setLengthFrom] = useState("");
   const [lengthTo, setLengthTo] = useState("");
@@ -316,10 +317,7 @@ export function RawMaterialsPage() {
     [selectionRules],
   );
 
-  useEffect(() => {
-    const timer = window.setTimeout(() => setDebouncedSearch(search), 300);
-    return () => window.clearTimeout(timer);
-  }, [search]);
+
 
   const filterApiParams = useMemo(
     () =>
@@ -523,7 +521,6 @@ export function RawMaterialsPage() {
 
   const resetTableFilters = () => {
     setSearch("");
-    setDebouncedSearch("");
     setLengthFrom("");
     setLengthTo("");
     setQtyFrom("");
