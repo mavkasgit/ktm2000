@@ -83,7 +83,7 @@ export function getCellValue(row: ProductionPlanningRow, field: ExecutionSortFie
     case "stage":
       return row.current_stage_section_name || "—";
     case "dimensions":
-      return row.dimensions_label ?? formatDimensionsLabel(row.dimensions);
+      return formatDimensionsLabel(row.dimensions, row.dimensions_label);
     default:
       return "";
   }

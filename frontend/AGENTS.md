@@ -23,6 +23,22 @@ React 18.3 + TypeScript + Vite + Tailwind CSS + shadcn/ui + TanStack Query/Virtu
   Термин и правило — [ADR-0030](../docs/adr/0030-komaktnaya-stroka-i-utochneniya-tablits.md)
   и [CONTEXT.md](../CONTEXT.md).
 
+## Подпись размера
+
+- Колонка «Размер» печатается **только** через `formatDimensionsLabel`
+  ([`src/shared/api/stock.ts`](src/shared/api/stock.ts)): «2,7 м», «—» для
+  безразмерных. Правило общее с бэкендом
+  (`backend/app/domain/dimensions.py::format_dimensions`).
+- Второй аргумент — готовая серверная подпись того же правила, а не запасной
+  путь. Сборка подписи на месте запрещена: `dimensions_label ??
+  formatDimensionsLabel(…)` и `dimensions_label || "—"` печатали для одного
+  размера разные строки. Доска считает подпись сама (в её ответе нет
+  `dimensions_label`), план и передачи берут готовую — расхождение было видно
+  как «—» против «2,75 м» в соседних экранах.
+- «—» означает, что габарита действительно нет. Термин и правило —
+  [ADR-0035](../docs/adr/0035-edinoe-imenovanie-razmera.md) и
+  [CONTEXT.md](../CONTEXT.md).
+
 ## Ввод количества
 
 - Поле количества в операции — **только целые штуки**: запятая, точка и минус

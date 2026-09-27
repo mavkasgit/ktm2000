@@ -181,4 +181,25 @@ describe("groupReadyTransfers", () => {
     expect(group.common.dimensionsLabel).toBe("2,75 м");
     expect(group.common.nextOperationName).toBe("Дробеструй");
   });
+
+  it("печатает размер строки, даже если сервер не прислал подпись (#195)", () => {
+    // `dimensions_label` в контракте nullable. Раньше группа брала только
+    // серверную подпись и печатала «—» — та же ячейка на доске в этот момент
+    // показывала «2,75 м».
+    const items = groupReadyTransfers([
+      makeTask({ task_id: 1, plan_position_id: 11, dimensions_label: null }),
+      makeTask({ task_id: 2, plan_position_id: 12, dimensions_label: null }),
+    ]);
+
+    expect(groupsOf(items)[0].common.dimensionsLabel).toBe("2,75 м");
+  });
+
+  it("безразмерные строки группы печатают прочерк, а не пустую строку (#195)", () => {
+    const items = groupReadyTransfers([
+      makeTask({ task_id: 1, plan_position_id: 11, dimensions: null, dimensions_label: null }),
+      makeTask({ task_id: 2, plan_position_id: 12, dimensions: {}, dimensions_label: null }),
+    ]);
+
+    expect(groupsOf(items)[0].common.dimensionsLabel).toBe("—");
+  });
 });

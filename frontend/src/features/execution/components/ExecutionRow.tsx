@@ -123,7 +123,7 @@ export function ExecutionRow({
           <span className="block whitespace-normal break-words text-xs text-muted-foreground">
             <CutLayoutCell
               layout={row.cut_layout}
-              fallback={row.dimensions_label ?? formatDimensionsLabel(row.dimensions)}
+              fallback={formatDimensionsLabel(row.dimensions, row.dimensions_label)}
             />
           </span>
         );

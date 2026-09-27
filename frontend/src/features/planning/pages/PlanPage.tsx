@@ -498,7 +498,7 @@ export function PlanPage() {
       case "name": return row.source_name ?? ""
       case "qty": return String(Number(row.quantity || 0))
       case "route": return row.route_name ?? "Не назначен"
-      case "dimensions": return row.dimensions_label ?? formatDimensionsLabel(row.dimensions)
+      case "dimensions": return formatDimensionsLabel(row.dimensions, row.dimensions_label)
       case "errors": return String(row.errors?.length ?? 0)
       case "warnings": return String(row.warnings?.length ?? 0)
       default: return ""

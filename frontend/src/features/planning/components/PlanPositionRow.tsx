@@ -225,7 +225,7 @@ export function PositionRow({ pos, onApprove, onDelete, selected, routes, onAssi
       <div className="p-2 text-sm whitespace-normal break-words leading-tight text-muted-foreground">
         <CutLayoutCell
           layout={pos.cut_layout}
-          fallback={pos.dimensions_label ?? formatDimensionsLabel(pos.dimensions)}
+          fallback={formatDimensionsLabel(pos.dimensions, pos.dimensions_label)}
         />
       </div>
       <div className="p-2 text-sm truncate whitespace-nowrap" title={pos.source_name ?? undefined}>{pos.source_name ?? "—"}</div>

@@ -1,4 +1,5 @@
 import type { ReadyToTransferTask } from "@/shared/api/transfers";
+import { formatDimensionsLabel } from "@/shared/api/stock";
 
 /**
  * Единица передачи — пара «задание × размер», но оператору удобнее отправить одним
@@ -115,7 +116,7 @@ export function groupReadyTransfers(items: ReadyToTransferTask[]): ReadyTransfer
       allFinal,
       hasNextStep: rows[0].has_next_step,
       common: {
-        dimensionsLabel: sameValue(rows, (row) => row.dimensions_label),
+        dimensionsLabel: sameValue(rows, (row) => formatDimensionsLabel(row.dimensions, row.dimensions_label)),
         operationName: sameValue(rows, (row) => row.operation_name),
         sequence: sameValue(rows, (row) => row.sequence),
         nextOperationName: sameValue(rows, (row) => row.next_operation_name),

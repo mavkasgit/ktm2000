@@ -44,6 +44,7 @@ import {
   downloadRemaindersImportTemplate,
   getRemainderImportOperations,
   formatQualityStateLabel,
+  formatDimensionsLabel,
   IMPORT_QUALITY_OPTIONS,
   normalizeImportQualityState,
   type QualityState,
@@ -178,7 +179,7 @@ function getImportItemCellValue(
     case "quantity":
       return item.quantity != null ? String(item.quantity) : "—";
     case "length":
-      return item.dimensions_label || "—";
+      return formatDimensionsLabel(item.dimensions, item.dimensions_label);
     case "operations":
       return getImportItemOperationsLabel(item);
     case "quality":
@@ -1165,7 +1166,7 @@ export function ImportRemaindersDialog({
                                   item.dimensions ? "font-medium text-foreground" : "text-muted-foreground"
                                 }`}
                               >
-                                {item.dimensions_label || "—"}
+                                {formatDimensionsLabel(item.dimensions, item.dimensions_label)}
                               </td>
                               <td className="px-1.5 py-0.5 min-w-[160px]">
                                 {item.completed_stages && item.completed_stages.length > 0 ? (

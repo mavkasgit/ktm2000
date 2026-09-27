@@ -153,7 +153,7 @@ function getReadyCellValue(task: ReadyToTransferTask, field: ReadySortField): st
     case "sku":
       return task.product_sku ?? "—";
     case "dimensions":
-      return task.dimensions_label ?? formatDimensionsLabel(task.dimensions);
+      return formatDimensionsLabel(task.dimensions, task.dimensions_label);
     case "stage":
       return task.operation_name ?? "—";
     case "transferableQty":
@@ -484,7 +484,7 @@ function ReadyTransferRow({
       <TableCell className="${TABLE_ROW_COMPACT.cell} font-mono text-xs text-muted-foreground">#{task.plan_position_id}</TableCell>
       <TableCell className={TABLE_ROW_COMPACT.cell}>{task.product_sku ?? "—"}</TableCell>
       <TableCell className="${TABLE_ROW_COMPACT.cell} text-xs text-muted-foreground whitespace-nowrap">
-        {task.dimensions_label ?? formatDimensionsLabel(task.dimensions)}
+        {formatDimensionsLabel(task.dimensions, task.dimensions_label)}
       </TableCell>
       <TableCell className={TABLE_ROW_COMPACT.cell}>
         <div className="text-xs">
@@ -498,9 +498,9 @@ function ReadyTransferRow({
           <span className="text-[11px] text-muted-foreground">
             (план {fmtQty(task.planned_quantity)})
           </span>
-          {task.dimensions != null && task.dimensions_label && (
+          {task.dimensions != null && (
             <span className="ml-1 text-[10px] text-muted-foreground" title="Габарит из плана">
-              · {task.dimensions_label}
+              · {formatDimensionsLabel(task.dimensions, task.dimensions_label)}
             </span>
           )}
         </div>
