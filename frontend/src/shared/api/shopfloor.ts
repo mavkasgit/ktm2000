@@ -428,25 +428,6 @@ export function groupProgress(group: TaskGroup): number {
   );
 }
 
-// ---------------------------------------------------------------------------
-// Payload-keys API — для кастомных полей группировки
-// ---------------------------------------------------------------------------
-
-/**
- * Загружает уникальные ключи source_payload для участка.
- * Используется в GroupingSettingsModal для чекбоксов кастомных полей.
- */
-export async function getSectionPayloadKeys(
-  sectionId: number,
-  options?: ShopfloorRequestOptions,
-): Promise<string[]> {
-  const { data } = await apiClient.get<{ keys: string[] }>(
-    `/shopfloor/sections/${sectionId}/payload-keys`,
-    makeRequestConfig(options),
-  );
-  return data.keys;
-}
-
 export interface SectionOperation {
   id: number;
   operation_code: string;
