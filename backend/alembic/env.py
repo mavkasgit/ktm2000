@@ -2,6 +2,15 @@ from logging.config import fileConfig
 from asyncio import run
 import os
 
+from app.core.env_file import apply_env_file
+
+# DSN берём из env-файла (`.env.dev` / `$ENV_FILE`), и он перекрывает переменные
+# окружения процесса. Иначе устаревшая `DATABASE_URL` в окружении (протечка из
+# шелла агента/CI) уводила бы миграции на чужую БД — вплоть до отказа
+# подключения при полностью рабочем Postgres. Вызываем до импорта приложения.
+apply_env_file()
+
+
 from sqlalchemy import Column, MetaData, PrimaryKeyConstraint, String, Table, pool
 from sqlalchemy.ext.asyncio import async_engine_from_config
 from alembic import context

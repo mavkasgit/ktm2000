@@ -25,6 +25,17 @@ npm run test:db:cleanup        # Уборка осиротевших тесто�
 
 Порты dev: Postgres `5440`, backend `8012`, frontend `5172`.
 
+### Если dev-стек не поднимается или «падает сам»
+
+| Симптом | Причина | Что делать |
+|---------|---------|-----------|
+| Страница по LAN-IP не открывается, `localhost` отвечает | Порт держит чужой процесс, слушающий только `127.0.0.1` | `npm run dev:ports` (кто держит) → `npm run dev:kill` |
+| Vite: `Port 5172 is already in use` и уходит | Порт занят другим vite | `npm run dev:kill`, затем `npm run dev` |
+| `alembic` / backend: `ConnectionRefusedError` при живом Postgres | В окружении осталась чужая `DATABASE_URL` (напр. на `:5432` вместо `:5440`) | Env-файл — источник правды: `.env.dev` перекрывает окружение сам. Если ошибка в чужом окружении — снять `DATABASE_URL` |
+| Весь стек умер после правки `.py` | — | Не должен: `npm run backend` ведёт `backend/scripts/dev_server.py` (рестарт только рабочего процесса, скоуп `app/`, битый синтаксис не роняет API). Если упало — пришлите лог |
+
+Детали реализации → [`backend/AGENTS.md`](backend/AGENTS.md) («Dev-режим») и [`docs/agent-registry.md`](docs/agent-registry.md) («Порты»).
+
 ## Тесты
 
 Канон pytest → [`backend/tests/AGENTS.md`](backend/tests/AGENTS.md).

@@ -117,6 +117,12 @@ def main() -> int:
     # uvicorn CLI добавляет cwd в sys.path, мы запускаемся как скрипт — нет.
     if str(BACKEND_DIR) not in sys.path:
         sys.path.insert(0, str(BACKEND_DIR))
+    # `.env.dev` перекрывает окружение процесса, иначе устаревшая DATABASE_URL
+    # в окружении уводила бы приложение на чужую БД (реloader наследует её в
+    # рабочий процесс, поэтому достаточно один раз здесь).
+    from app.core.env_file import apply_env_file
+
+    apply_env_file()
     WatchFilesReload.should_restart = _should_restart  # type: ignore[method-assign]
     WatchFilesReload.restart = _restart  # type: ignore[method-assign]
 

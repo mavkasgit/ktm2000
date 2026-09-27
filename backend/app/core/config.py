@@ -6,8 +6,10 @@ import re
 from pydantic import model_validator
 from pydantic_settings import BaseSettings
 
+from app.core.env_file import env_file_path
+
 BASE_DIR = Path(__file__).resolve().parent.parent.parent
-_env_file = os.getenv("ENV_FILE") or str(BASE_DIR.parent / ".env.dev")
+_env_file = str(env_file_path())
 
 
 def _running_in_container() -> bool:
