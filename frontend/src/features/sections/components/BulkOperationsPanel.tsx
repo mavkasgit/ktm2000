@@ -9,9 +9,10 @@ import {
   taskGroupingDimensionsKey,
   taskSizeMm,
 } from "../lib/groupTasksByProfile";
+import { TaskStatusDot } from "./TaskView";
 import {
-  getReadyStatusLabel,
   getStatusLabel,
+  getReadyStatusLabel,
   isTaskCompletable,
 } from "../lib/taskStatus";
 
@@ -198,27 +199,6 @@ function groupTasks(tasks: SectionBoardTask[]): BulkOpGroup[] {
 
 function groupSizeMm(group: BulkOpGroup): number {
   return taskSizeMm(group.tasks[0]);
-}
-
-function StatusDot({ task }: { task: SectionBoardTask }) {
-  const status = task.status;
-  let colorClass = "bg-slate-300";
-  if (["in_progress", "in_work"].includes(status)) {
-    colorClass = "bg-amber-500 animate-pulse";
-  } else if (["ready", "partially_completed", "partially"].includes(status)) {
-    colorClass = status === "ready" && getReadyStatusLabel(task) === "Не передано"
-      ? "bg-slate-400"
-      : "bg-blue-500";
-  } else if (["completed", "done"].includes(status)) {
-    colorClass = "bg-emerald-500";
-  } else if (status === "blocked") {
-    colorClass = "bg-red-500";
-  } else if (["waiting_previous", "pending"].includes(status)) {
-    colorClass = "bg-yellow-400";
-  }
-  return (
-    <span className={`inline-block h-2.5 w-2.5 rounded-full ${colorClass}`} title={getStatusLabel(task)} />
-  );
 }
 
 interface BulkOperationsPanelProps {
@@ -494,10 +474,10 @@ export function BulkOperationsPanel({
                       {(() => {
                         const uniqueStatuses = Array.from(new Set(group.tasks.map((t) => t.status)));
                         if (uniqueStatuses.length === 1) {
-                          return <StatusDot task={group.tasks[0]} />;
+                          return <TaskStatusDot task={group.tasks[0]} />;
                         }
                         return group.tasks.map((task) => (
-                          <StatusDot key={task.id} task={task} />
+                          <TaskStatusDot key={task.id} task={task} />
                         ));
                       })()}
                     </div>

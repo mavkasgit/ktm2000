@@ -34,7 +34,7 @@ import {
   isServerSortField,
   type TaskSortField,
 } from "../lib/boardQueryParams";
-import { groupTasksByProfile, groupStatus, sortGroupsByPriority, taskGroupingDimensions } from "../lib/groupTasksByProfile";
+import { groupTasksByProfile, sortGroupsByQuantityAndSize, taskGroupingDimensions } from "../lib/groupTasksByProfile";
 import type { GroupingProfile } from "../lib/groupingProfiles";
 import {
   getReadyStatusLabel,
@@ -45,9 +45,18 @@ import {
   getTaskViewCategory,
   isTaskFullyTransferred,
 } from "../lib/taskStatus";
+import { getTaskGroupHeaderState } from "../lib/taskView";
+import {
+  TaskExtras,
+  TaskStatusDot,
+  buildTaskViewFields,
+  getTaskCardClass,
+  getTaskRowClass,
+} from "./TaskView";
 import { TABLE_ROW_STYLES } from "@/shared/lib/tableRowStyles";
 import { TABLE_ROW_COMPACT } from "@/shared/lib/dataTableStyles";
 import { cn } from "@/shared/utils/cn";
+import { fmtQty } from "@/shared/utils/fmtQty";
 
 // ---------------------------------------------------------------------------
 // Экспорты для обратной совместимости
@@ -99,12 +108,6 @@ function pickClientFilterState<Field extends string>(
   return { columnFilters: nextFilters, columnSearchQueries: nextSearches };
 }
 
-function fmtQty(value: string): string {
-  const n = parseFloat(value);
-  if (!Number.isFinite(n)) return "0";
-  return String(Math.round(n));
-}
-
 function isTaskVisible(task: SectionBoardTask, mode: TaskBoardViewMode): boolean {
   const category = getTaskViewCategory(task);
   if (mode.active && category === "active") return true;
@@ -121,55 +124,6 @@ function getStatusPriority(task: SectionBoardTask): number {
   return 3;
 }
 
-function getRowStatusClass(task: SectionBoardTask, isSelected: boolean, isInGroup: boolean): string {
-  if (isSelected) return TABLE_ROW_STYLES.selectedRow;
-
-  const category = getTaskViewCategory(task);
-  const status = task.status;
-  const isWaiting = category === "waiting";
-  const isActive = category === "active";
-  const isCompleted = category === "completed";
-
-  if (isWaiting) {
-    return "bg-background hover:bg-slate-50 transition-colors border-l-4 border-l-yellow-400 text-slate-800";
-  }
-  if (isActive) {
-    if (["in_progress", "in_work"].includes(status)) {
-      return "bg-amber-50/30 hover:bg-amber-50/70 border-l-4 border-l-amber-400 text-slate-900 font-medium";
-    }
-    return "bg-blue-50/20 hover:bg-blue-50/50 border-l-4 border-l-blue-400 text-slate-900";
-  }
-  if (isCompleted) {
-    return "bg-emerald-50/10 text-emerald-700/80 line-through decoration-slate-300 hover:bg-emerald-50/30 border-l-4 border-l-emerald-300 opacity-60";
-  }
-
-  return isInGroup ? TABLE_ROW_STYLES.defaultGroupRow : TABLE_ROW_STYLES.defaultRow;
-}
-
-function getMobileCardStatusClass(task: SectionBoardTask, isSelected: boolean): string {
-  if (isSelected) return TABLE_ROW_STYLES.selectedMobileCard;
-
-  const category = getTaskViewCategory(task);
-  const status = task.status;
-  const isWaiting = category === "waiting";
-  const isActive = category === "active";
-  const isCompleted = category === "completed";
-
-  if (isWaiting) {
-    return "border border-slate-200 bg-background text-slate-800 rounded-lg border-l-4 border-l-yellow-400";
-  }
-  if (isActive) {
-    if (["in_progress", "in_work"].includes(status)) {
-      return "border border-amber-200 bg-amber-50/30 text-slate-900 rounded-lg border-l-4 border-l-amber-400";
-    }
-    return "border border-blue-200 bg-blue-50/20 text-slate-900 rounded-lg border-l-4 border-l-blue-400";
-  }
-  if (isCompleted) {
-    return "border border-emerald-100 bg-emerald-50/10 text-slate-400 opacity-60 rounded-lg border-l-4 border-l-emerald-300 line-through decoration-slate-300";
-  }
-  return "border border-slate-200 rounded-lg bg-card text-card-foreground";
-}
-
 function getTaskCellValue(task: SectionBoardTask, field: TaskSortField): string {
   switch (field) {
     case "sequence": return String(task.sequence);
@@ -183,40 +137,6 @@ function getTaskCellValue(task: SectionBoardTask, field: TaskSortField): string 
     case "rejectedQty": return String(parseFloat(task.cache.rejected_quantity) || 0);
     case "remainingQty": return String(parseFloat(task.cache.remaining_quantity) || 0);
   }
-}
-
-function StatusDot({ task }: { task: SectionBoardTask }) {
-  const status = task.status;
-  let colorClass = "bg-slate-300";
-  if (["in_progress", "in_work"].includes(status)) {
-    colorClass = "bg-amber-500 animate-pulse";
-  } else if (["ready", "partially_completed", "partially"].includes(status)) {
-    colorClass = status === "ready" && getReadyStatusLabel(task) === "Не передано"
-      ? "bg-slate-400"
-      : "bg-blue-500";
-  } else if (["completed", "done"].includes(status) || isTaskFullyTransferred(task)) {
-    colorClass = "bg-emerald-500";
-  } else if (status === "blocked") {
-    colorClass = "bg-red-500";
-  } else if (["waiting_previous", "pending"].includes(status)) {
-    colorClass = "bg-yellow-400";
-  }
-  return (
-    <span className={`inline-block h-2.5 w-2.5 rounded-full ${colorClass}`} title={getStatusLabel(task)} />
-  );
-}
-
-/** Компактный прогресс по выходам трансформирующего задания (ADR-0002). */
-function renderOutputsProgress(task: SectionBoardTask, className: string) {
-  if (!task.transforms_dimensions || !task.outputs_progress?.length) return null;
-  const text = task.outputs_progress
-    .map((row) => `${formatDimensionsLabel(row.dimensions)}: ${fmtQty(row.produced_quantity)}/${fmtQty(row.quantity)}`)
-    .join(" · ");
-  return (
-    <span className={className} title={text}>
-      {text}
-    </span>
-  );
 }
 
 // ---------------------------------------------------------------------------
@@ -244,7 +164,7 @@ function renderTaskRow(
   isLastInGroup = false,
   isInGroup = false,
 ) {
-  const buttonBase = ROW_ACTION_BUTTON_CLASS;
+  const fields = buildTaskViewFields(task);
 
   const handleAction = (type: TaskActionDialogType) => {
     onAction(type, task);
@@ -252,7 +172,7 @@ function renderTaskRow(
   return (
     <tr
       key={task.id}
-      className={`cursor-pointer transition-colors ${getRowStatusClass(task, !!isSelected, isInGroup)} ${isLastInGroup ? "border-b-2 border-blue-300" : "border-b"}`}
+      className={`cursor-pointer transition-colors ${getTaskRowClass(task, !!isSelected, isInGroup)} ${isLastInGroup ? "border-b-2 border-blue-300" : "border-b"}`}
       onClick={() => {
         if (bulkMode && bulkSelection && task.status !== "waiting_previous") {
           bulkSelection.selectOne(task.id);
@@ -260,31 +180,19 @@ function renderTaskRow(
       }}
     >
       <td className={`${ROW_CELL_CLASS} text-center`}>
-        <StatusDot task={task} />
+        <TaskStatusDot task={task} />
       </td>
       <td className={`${ROW_CELL_CLASS} font-medium`}>{task.product_sku}</td>
-      <td className={`${ROW_CELL_CLASS} text-xs text-muted-foreground`}>{formatDimensionsLabel(taskGroupingDimensions(task))}</td>
+      {fields.map((field) => (
+        <td key={field.key} className={cn(ROW_CELL_CLASS, field.cellClass)}>
+          {field.node}
+          {field.key === "operation" && (
+            <TaskExtras task={task} className="block text-xs text-muted-foreground" />
+          )}
+        </td>
+      ))}
       <td className={ROW_CELL_CLASS}>
-        {task.operation_names && task.operation_names.length > 1 ? (
-          <span className="text-xs font-medium">{task.operation_names.join(" + ")}</span>
-        ) : (
-          <span className="text-xs">{task.operation_name || "—"}</span>
-        )}
-        {task.cut_layout && (
-          <span className="block text-xs text-muted-foreground">
-            <CutLayoutCell layout={task.cut_layout} />
-          </span>
-        )}
-        {renderOutputsProgress(task, "block text-xs text-muted-foreground tabular-nums")}
-      </td>
-      <td className={ROW_CELL_CLASS}>{fmtQty(task.planned_quantity)}</td>
-      <td className={ROW_CELL_CLASS}>{fmtQty(task.cache.issued_quantity)}</td>
-      <td className={ROW_CELL_CLASS}>{fmtQty(task.cache.completed_quantity)}</td>
-      <td className={ROW_CELL_CLASS}>{fmtQty(task.cache.rejected_quantity)}</td>
-      <td className={ROW_CELL_CLASS}>{fmtQty(task.cache.transferred_quantity)}</td>
-      <td className={ROW_CELL_CLASS}>{fmtQty(task.cache.remaining_quantity)}</td>
-      <td className={ROW_CELL_CLASS}>
-        <Badge variant="secondary" className={cn(getStatusColor(task), "px-2 py-0")}>
+        <Badge variant="secondary" className={cn(getStatusColor(task), TABLE_ROW_COMPACT.badge)}>
           {getStatusLabel(task)}
         </Badge>
       </td>
@@ -292,7 +200,7 @@ function renderTaskRow(
         {onRevokeItem ? (
           <Button
             variant={isSelected ? "default" : "outline"}
-            className={buttonBase}
+            className={ROW_ACTION_BUTTON_CLASS}
             aria-pressed={isSelected}
             disabled={isRevoking}
             onClick={(event) => {
@@ -308,7 +216,7 @@ function renderTaskRow(
         ) : (
           <Button
             variant="outline"
-            className={buttonBase}
+            className={ROW_ACTION_BUTTON_CLASS}
             onClick={() => handleAction("complete")}
             disabled={!isTaskCompletable(task)}
             title={getCompletionDisabledReason(task) ?? "Завершить задачу"}
@@ -333,7 +241,8 @@ function renderMobileCard(
   isLastInGroup = false,
   readOnly: boolean,
 ) {
-  const buttonBase = "flex-1 min-h-[36px] transition-all";
+  const buttonBase = `flex-1 ${TABLE_ROW_COMPACT.actionButton}`;
+  const fields = buildTaskViewFields(task);
   const buttonDefault = "hover:bg-accent/50";
 
   const handleAction = (type: TaskActionDialogType) => {
@@ -342,7 +251,7 @@ function renderMobileCard(
   return (
     <div
       key={task.id}
-      className={`p-4 space-y-3 cursor-pointer transition-colors ${getMobileCardStatusClass(task, !!isSelected)} ${isLastInGroup ? "border-b-2 border-blue-300 mb-3" : "mb-0"}`}
+      className={`p-4 space-y-3 cursor-pointer transition-colors ${getTaskCardClass(task, !!isSelected)} ${isLastInGroup ? "border-b-2 border-blue-300 mb-3" : "mb-0"}`}
       onClick={() => {
         if (bulkMode && bulkSelection && task.status !== "waiting_previous") {
           bulkSelection.selectOne(task.id);
@@ -351,39 +260,30 @@ function renderMobileCard(
     >
       <div className="flex items-center justify-between gap-2">
         <div className="flex items-center gap-2 font-semibold">
-          <StatusDot task={task} />
+          <TaskStatusDot task={task} />
           <span className="text-sm font-medium">{task.product_sku}</span>
         </div>
-        <Badge variant="secondary" className={getStatusColor(task)}>
+        <Badge variant="secondary" className={cn(getStatusColor(task), TABLE_ROW_COMPACT.badge)}>
           {getStatusLabel(task)}
         </Badge>
       </div>
 
       <div className="grid grid-cols-2 gap-2 text-sm">
-        <div><span className="text-muted-foreground">План:</span> {fmtQty(task.planned_quantity)}</div>
-        <div><span className="text-muted-foreground">Размер:</span> {formatDimensionsLabel(taskGroupingDimensions(task))}</div>
-        <div><span className="text-muted-foreground">Операция:</span> {task.operation_names && task.operation_names.length > 1 ? task.operation_names.join(" + ") : (task.operation_name || "—")}</div>
-        <div><span className="text-muted-foreground">Выдано:</span> {fmtQty(task.cache.issued_quantity)}</div>
-        <div><span className="text-muted-foreground">Годные:</span> {fmtQty(task.cache.completed_quantity)}</div>
-        <div><span className="text-muted-foreground">Брак:</span> {fmtQty(task.cache.rejected_quantity)}</div>
-        <div><span className="text-muted-foreground">Передано:</span> {fmtQty(task.cache.transferred_quantity)}</div>
-        <div><span className="text-muted-foreground">Остаток:</span> {fmtQty(task.cache.remaining_quantity)}</div>
+        {fields.map((field) => (
+          <div key={field.key}>
+            <span className="text-muted-foreground">{field.label}:</span> {field.node}
+          </div>
+        ))}
       </div>
 
-      {task.cut_layout ? (
-        <div className="text-xs text-muted-foreground border-t pt-2">
-          <CutLayoutCell layout={task.cut_layout} />
-        </div>
-      ) : null}
-
-      {renderOutputsProgress(task, "block text-xs text-muted-foreground tabular-nums border-t pt-2")}
+      <TaskExtras task={task} className="block text-xs text-muted-foreground border-t pt-2" />
 
 
         {onRevokeItem ? (
           <Button
             size="sm"
             variant={isSelected ? "default" : "outline"}
-            className={`${buttonBase} ${buttonDefault}`}
+            className={`${buttonBase} transition-all hover:bg-accent/50`}
             aria-pressed={isSelected}
             disabled={isRevoking}
             onClick={(event) => {
@@ -400,7 +300,7 @@ function renderMobileCard(
           <Button
             size="sm"
             variant="outline"
-            className={`${buttonBase} ${buttonDefault}`}
+            className={`${buttonBase} transition-all hover:bg-accent/50`}
             onClick={() => handleAction("complete")}
             disabled={!isTaskCompletable(task)}
             title={getCompletionDisabledReason(task) ?? "Завершить задачу"}
@@ -436,7 +336,7 @@ function TableTaskGroupRow({
   const taskIds = group.tasks.map((t) => t.id);
   const allSelected = bulkSelection?.isAllSelected(taskIds) ?? false;
   const firstTask = group.tasks[0];
-  const groupHasCompletable = group.tasks.some(isTaskCompletable);
+  const header = getTaskGroupHeaderState(group, { isCollapsed, isBulkMode, allSelected });
 
   return (
     <tr
@@ -454,9 +354,9 @@ function TableTaskGroupRow({
               e.stopPropagation();
               onToggleCollapse();
             }}
-            title={isCollapsed ? "Раскрыть" : "Скрыть"}
+            title={header.collapseTitle}
           >
-            {isCollapsed ? (
+            {header.isCollapsed ? (
               <ChevronRight className="h-4 w-4 shrink-0" />
             ) : (
               <ChevronDown className="h-4 w-4 shrink-0" />
@@ -481,10 +381,10 @@ function TableTaskGroupRow({
       <td className={`${ROW_CELL_CLASS} text-slate-700`}>{fmtQty(String(group.tasks.reduce((s, t) => s + parseFloat(t.cache.remaining_quantity), 0)))}</td>
       <td className={ROW_CELL_CLASS}>
         <div className="flex items-center gap-1">
-          <Badge variant="secondary" className="px-2 py-0 font-bold">
+          <Badge variant="secondary" className={`${TABLE_ROW_COMPACT.badge} font-bold`}>
             &times;{group.tasks.length}
           </Badge>
-          {isBulkMode && allSelected && (
+          {isBulkMode && header.allSelected && (
             <span className={`text-xs ${TABLE_ROW_STYLES.selectedLabel}`}>выбрано</span>
           )}
         </div>
@@ -498,8 +398,8 @@ function TableTaskGroupRow({
               e.stopPropagation();
               onCompleteGroup(group);
             }}
-            disabled={!groupHasCompletable}
-            title={groupHasCompletable ? "Открыть панель завершения группы" : "Все задания в группе завершены"}
+            disabled={!header.hasCompletable}
+            title={header.completeTitle}
           >
             <span>Завершить группу</span>
           </Button>
@@ -691,6 +591,12 @@ export function SectionTasksBoard({
     remainingQty: [...new Set(visibleTasks.map((t) => String(parseFloat(t.cache.remaining_quantity) || 0)))],
   }), [visibleTasks]);
 
+  // Порядок строк доски. Активная сортировка колонки — единственный
+  // источник порядка: сервер сортирует сам (sequence/productSku/status/
+  // dimensions), остальные поля — здесь, до группировки. Без сортировки
+  // действует дефолт «количество убыв., размер убыв.», а внутри группы —
+  // «статус, затем sequence» (CONTEXT.md, раздел «Сортировка строк по размеру»).
+  const hasActiveSort = sortConfigs.length > 0;
   const sortedTasks = useMemo(() => {
     const activeSort = sortConfigs[0];
     if (!activeSort || isServerSortField(activeSort.field)) {
@@ -708,10 +614,13 @@ export function SectionTasksBoard({
   }, [visibleTasks, sortConfigs, sortDefs]);
 
   const groups = useMemo(() => {
+    // groupTasksByProfile сохраняет порядок первого появления, поэтому
+    // сортировка (серверная или клиентская) доходит до строк таблицы.
     const grouped = groupTasksByProfile(sortedTasks, profile);
-    
-    // Sort tasks inside each group by status priority, then by sequence
-    for (const g of grouped) {
+    if (hasActiveSort) return grouped;
+
+    const ordered = sortGroupsByQuantityAndSize(grouped);
+    for (const g of ordered) {
       g.tasks.sort((a, b) => {
         const pA = getStatusPriority(a);
         const pB = getStatusPriority(b);
@@ -720,8 +629,8 @@ export function SectionTasksBoard({
       });
     }
 
-    return grouped;
-  }, [sortedTasks, profile]);
+    return ordered;
+  }, [sortedTasks, profile, hasActiveSort]);
 
   // Порядок доски: активные задания → разделитель «В ожидании» → ожидающие →
   // завершённые группы. Сортировка и группировка по профилю внутри каждого
@@ -1202,6 +1111,11 @@ export function SectionTasksBoard({
                 return renderMobileCard(task, isSelected, bulkMode, bulkSelection, onAction, onRevokeItem, isRevoking, true, readOnly);
               }
 
+              const mobileHeader = getTaskGroupHeaderState(group, {
+                isCollapsed,
+                isBulkMode: Boolean(bulkMode),
+                allSelected: Boolean(bulkMode && bulkSelection?.isAllSelected(group.tasks.map((t) => t.id))),
+              });
               return (
                 <div key={entry.key} className={`rounded-lg overflow-hidden transition-colors ${bulkMode && bulkSelection?.isAllSelected(group.tasks.map(t => t.id)) ? TABLE_ROW_STYLES.selectedGroupContainer : TABLE_ROW_STYLES.defaultGroupContainer}`}>
                   <div
@@ -1232,9 +1146,9 @@ export function SectionTasksBoard({
                           e.stopPropagation();
                           toggleGroup(entry.key);
                         }}
-                        title={isCollapsed ? "Раскрыть" : "Скрыть"}
+                        title={mobileHeader.collapseTitle}
                       >
-                        {isCollapsed ? (
+                        {mobileHeader.isCollapsed ? (
                           <ChevronRight className="h-4 w-4 text-muted-foreground" />
                         ) : (
                           <ChevronDown className="h-4 w-4 text-muted-foreground" />
@@ -1243,32 +1157,28 @@ export function SectionTasksBoard({
                       <span className="font-semibold text-sm truncate">
                         {group.label}
                       </span>
-                      {bulkMode && bulkSelection?.isAllSelected(group.tasks.map(t => t.id)) && (
+                      {bulkMode && mobileHeader.allSelected && (
                         <span className={`text-xs ${TABLE_ROW_STYLES.selectedLabel} ml-1`}>выбрано</span>
                       )}
                     </div>
                     <div className="flex items-center gap-2 shrink-0">
-                      <Badge variant="secondary" className="bg-blue-100 text-blue-700">
+                      <Badge variant="secondary" className={`bg-blue-100 text-blue-700 ${TABLE_ROW_COMPACT.badge}`}>
                         &times;{group.tasks.length}
                       </Badge>
-                      {onCompleteGroup && !readOnly && (() => {
-                        const groupHasCompletable = group.tasks.some(isTaskCompletable);
-                        return (
-                          <Button
-                            size="sm"
-                            variant="outline"
-                            className="min-h-[32px] transition-all hover:bg-accent/50"
-                            onClick={(e) => {
-                              e.stopPropagation();
-                              onCompleteGroup(group);
-                            }}
-                            disabled={!groupHasCompletable}
-                            title={groupHasCompletable ? "Открыть панель завершения группы" : "Все задания в группе завершены"}
-                          >
-                            <span>Завершить группу</span>
-                          </Button>
-                        );
-                      })()}
+                      {onCompleteGroup && !readOnly && (
+                        <Button
+                          variant="outline"
+                          className={ROW_ACTION_BUTTON_CLASS}
+                          onClick={(e) => {
+                            e.stopPropagation();
+                            onCompleteGroup(group);
+                          }}
+                          disabled={!mobileHeader.hasCompletable}
+                          title={mobileHeader.completeTitle}
+                        >
+                          <span>Завершить группу</span>
+                        </Button>
+                      )}
                     </div>
                   </div>
                   {!isCollapsed && <div className="divide-y divide-muted">{group.tasks.map((task, idx) => {
