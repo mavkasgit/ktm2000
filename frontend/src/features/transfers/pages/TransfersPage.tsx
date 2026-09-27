@@ -67,6 +67,7 @@ import { getErrorMessage } from "@/shared/api/client";
 import { queryKeys } from "@/shared/api/queryKeys";
 import { formatDimensionsFilterValue, formatDimensionsLabel } from "@/shared/api/stock";
 import { pickExactMatchColumnValue } from "@/shared/lib/columnFilterSearch";
+import { TABLE_ROW_COMPACT } from "@/shared/lib/dataTableStyles";
 import { cn } from "@/shared/utils/cn";
 import {
   useBulkSelection,
@@ -471,7 +472,7 @@ function ReadyTransferRow({
       onClick={bulkMode ? onSelect : undefined}
     >
       {bulkMode && (
-        <TableCell className="w-[40px] p-2" onClick={(e) => e.stopPropagation()}>
+        <TableCell className="${TABLE_ROW_COMPACT.cell} w-[40px]" onClick={(e) => e.stopPropagation()}>
           <Checkbox
             checked={isSelected}
             disabled={isFinalRow}
@@ -480,18 +481,18 @@ function ReadyTransferRow({
           />
         </TableCell>
       )}
-      <TableCell className="font-mono text-xs text-muted-foreground">#{task.plan_position_id}</TableCell>
-      <TableCell>{task.product_sku ?? "—"}</TableCell>
-      <TableCell className="text-xs text-muted-foreground whitespace-nowrap">
+      <TableCell className="${TABLE_ROW_COMPACT.cell} font-mono text-xs text-muted-foreground">#{task.plan_position_id}</TableCell>
+      <TableCell className={TABLE_ROW_COMPACT.cell}>{task.product_sku ?? "—"}</TableCell>
+      <TableCell className="${TABLE_ROW_COMPACT.cell} text-xs text-muted-foreground whitespace-nowrap">
         {task.dimensions_label ?? formatDimensionsLabel(task.dimensions)}
       </TableCell>
-      <TableCell>
+      <TableCell className={TABLE_ROW_COMPACT.cell}>
         <div className="text-xs">
           <div className="font-medium">{task.operation_name ?? "—"}</div>
           <div className="text-muted-foreground">#{task.sequence}</div>
         </div>
       </TableCell>
-      <TableCell className="text-right tabular-nums">
+      <TableCell className="${TABLE_ROW_COMPACT.cell} text-right tabular-nums">
         <div className="whitespace-nowrap">
           <span className="font-medium">{fmtQty(task.transferable_quantity)} шт.</span>{" "}
           <span className="text-[11px] text-muted-foreground">
@@ -509,7 +510,7 @@ function ReadyTransferRow({
           </div>
         )}
       </TableCell>
-      <TableCell className="text-xs">
+      <TableCell className="${TABLE_ROW_COMPACT.cell} text-xs">
         {task.has_next_step ? (
           <>
             <div>{task.next_operation_name ?? "—"}</div>
@@ -522,7 +523,7 @@ function ReadyTransferRow({
         )}
       </TableCell>
       {!bulkMode && (
-        <TableCell onClick={(e) => e.stopPropagation()}>
+        <TableCell className={TABLE_ROW_COMPACT.cell} onClick={(e) => e.stopPropagation()}>
           <div className="flex items-center justify-end gap-2">
             <div className="flex items-center gap-1">
               <Input
@@ -545,6 +546,7 @@ function ReadyTransferRow({
             {isFinalRow ? (
               <Button
                 size="sm"
+                className={TABLE_ROW_COMPACT.actionButton}
                 disabled={isSubmitting || releaseMutation.isPending || qtyNum <= 0}
                 title="Финальный выпуск готовой продукции"
                 onClick={() => {
@@ -565,6 +567,7 @@ function ReadyTransferRow({
             ) : (
               <Button
                 size="sm"
+                className={TABLE_ROW_COMPACT.actionButton}
                 disabled={!task.has_next_step || isSubmitting || mutation.isPending || qtyNum <= 0}
                 onClick={() => {
                   if (submittingRef.current || isSubmitting || mutation.isPending) return;
@@ -632,8 +635,8 @@ function ReadyTransferGroupRow({
       }`}
       onClick={bulkMode ? undefined : onToggleCollapse}
     >
-      {bulkMode && <TableCell className="w-[40px] p-2" />}
-      <TableCell className="p-2 text-center">
+      {bulkMode && <TableCell className="${TABLE_ROW_COMPACT.cell} w-[40px]" />}
+      <TableCell className="${TABLE_ROW_COMPACT.cell} text-center">
         <button
           className="p-1 hover:bg-muted rounded transition-colors text-muted-foreground"
           title={bulkMode ? "Группа раскрыта для ручного выбора" : isCollapsed ? "Раскрыть" : "Скрыть"}
@@ -650,7 +653,7 @@ function ReadyTransferGroupRow({
           )}
         </button>
       </TableCell>
-      <TableCell>
+      <TableCell className={TABLE_ROW_COMPACT.cell}>
         <div className="flex items-center gap-2">
           <span>{group.productSku ?? "—"}</span>
           <Badge variant="secondary" className="font-bold">
@@ -658,10 +661,10 @@ function ReadyTransferGroupRow({
           </Badge>
         </div>
       </TableCell>
-      <TableCell className="text-xs text-muted-foreground whitespace-nowrap">
+      <TableCell className="${TABLE_ROW_COMPACT.cell} text-xs text-muted-foreground whitespace-nowrap">
         {common.dimensionsLabel ?? "—"}
       </TableCell>
-      <TableCell>
+      <TableCell className={TABLE_ROW_COMPACT.cell}>
         <div className="text-xs">
           <div className="font-medium">{common.operationName ?? "—"}</div>
           <div className="text-muted-foreground">
@@ -669,7 +672,7 @@ function ReadyTransferGroupRow({
           </div>
         </div>
       </TableCell>
-      <TableCell className="text-right tabular-nums">
+      <TableCell className="${TABLE_ROW_COMPACT.cell} text-right tabular-nums">
         {/* Как у одиночной строки: в «К передаче» — текст, редактируемое поле —
             в «Действиях». Сумма по группе, распределяется по строкам. */}
         <div className="whitespace-nowrap">
@@ -679,7 +682,7 @@ function ReadyTransferGroupRow({
           </span>
         </div>
       </TableCell>
-      <TableCell className="text-xs">
+      <TableCell className="${TABLE_ROW_COMPACT.cell} text-xs">
         {group.hasNextStep ? (
           <>
             <div>{common.nextOperationName ?? "—"}</div>
@@ -692,7 +695,7 @@ function ReadyTransferGroupRow({
         )}
       </TableCell>
       {!bulkMode && (
-        <TableCell onClick={(e) => e.stopPropagation()}>
+        <TableCell className={TABLE_ROW_COMPACT.cell} onClick={(e) => e.stopPropagation()}>
           <div className="flex items-center justify-end gap-2">
             <div className="flex items-center gap-1">
               <Input
@@ -714,6 +717,7 @@ function ReadyTransferGroupRow({
             </div>
             <Button
               size="sm"
+              className={TABLE_ROW_COMPACT.actionButton}
               disabled={isSubmitting || hasInFlightRow || qtyNum <= 0}
               title={
                 hasInFlightRow
@@ -734,7 +738,7 @@ function ReadyTransferGroupRow({
   );
 }
 
-const headerCellClass = `${DATA_TABLE_STYLES.headerRow} ${DATA_TABLE_STYLES.headerCell}`;
+const headerCellClass = cn(DATA_TABLE_STYLES.headerRow, DATA_TABLE_STYLES.headerCell, TABLE_ROW_COMPACT.headerCell);
 
 export function TransfersPage() {
   const queryClient = useQueryClient();
@@ -1437,7 +1441,7 @@ export function TransfersPage() {
                   <TableRow>
                     <TableCell
                       colSpan={bulkMode ? 8 : 8}
-                      className="py-6 text-center text-sm text-muted-foreground"
+                      className="${TABLE_ROW_COMPACT.cell} py-6 text-center text-sm text-muted-foreground"
                     >
                       Нет заданий, соответствующих фильтру
                     </TableCell>
@@ -1446,7 +1450,7 @@ export function TransfersPage() {
               ) : (
                 <VirtualizedTableBody
                   rows={readyTableRows}
-                  rowHeight={56}
+                  rowHeight={TABLE_ROW_COMPACT.rowHeightPx}
                   colSpan={bulkMode ? 8 : 8}
                   scrollContainerRef={readyScrollRef}
                   renderRow={(row) =>
@@ -1608,7 +1612,7 @@ export function TransfersPage() {
                     {historyItems.length === 0 ? (
                       <TableBody>
                         <TableRow>
-                          <TableCell colSpan={9} className="py-6 text-center text-sm text-muted-foreground">
+                          <TableCell colSpan={9} className="${TABLE_ROW_COMPACT.cell} py-6 text-center text-sm text-muted-foreground">
                             Нет записей, соответствующих фильтру
                           </TableCell>
                         </TableRow>
@@ -1616,7 +1620,7 @@ export function TransfersPage() {
                     ) : (
                       <VirtualizedTableBody
                         rows={historyItems}
-                        rowHeight={56}
+                        rowHeight={TABLE_ROW_COMPACT.rowHeightPx}
                         colSpan={9}
                         scrollContainerRef={historyScrollRef}
                         renderRow={(t) => {
@@ -1636,29 +1640,29 @@ export function TransfersPage() {
                               className={`group cursor-pointer hover:bg-muted/50 transition-colors ${isCancelled ? "opacity-60" : ""}`}
                               onClick={() => setEditTransferRecord(t)}
                             >
-                              <TableCell className="font-mono text-xs text-muted-foreground">
+                              <TableCell className="${TABLE_ROW_COMPACT.cell} font-mono text-xs text-muted-foreground">
                                 #{t.plan_position_id}
                               </TableCell>
-                              <TableCell>
+                              <TableCell className={TABLE_ROW_COMPACT.cell}>
                                 <div className="text-xs">
                                   <div className="font-medium">{t.from_section_name}</div>
                                   <div className="text-muted-foreground">{t.from_operation_name}</div>
                                 </div>
                               </TableCell>
-                              <TableCell>
+                              <TableCell className={TABLE_ROW_COMPACT.cell}>
                                 <div className="text-xs">
                                   <div className="font-medium">{t.to_section_name}</div>
                                   <div className="text-muted-foreground">{t.to_operation_name}</div>
                                 </div>
                               </TableCell>
-                              <TableCell className="text-xs font-medium">{t.product_sku}</TableCell>
-                              <TableCell className="text-xs text-muted-foreground whitespace-nowrap">
+                              <TableCell className="${TABLE_ROW_COMPACT.cell} text-xs font-medium">{t.product_sku}</TableCell>
+                              <TableCell className="${TABLE_ROW_COMPACT.cell} text-xs text-muted-foreground whitespace-nowrap">
                                 {formatDimensionsLabel(t.dimensions)}
                               </TableCell>
-                              <TableCell className="text-right tabular-nums font-semibold whitespace-nowrap">
+                              <TableCell className="${TABLE_ROW_COMPACT.cell} text-right tabular-nums font-semibold whitespace-nowrap">
                                 {fmtQty(t.sent_quantity)}
                               </TableCell>
-                              <TableCell>
+                              <TableCell className={TABLE_ROW_COMPACT.cell}>
                                 <div className="flex flex-col items-start gap-1">
                                   <div className="flex flex-wrap items-center gap-1">
                                     <Badge variant={isIncoming ? "default" : "secondary"} className="text-[10px] py-0 px-1.5 h-4">
@@ -1683,7 +1687,7 @@ export function TransfersPage() {
                                   )}
                                 </div>
                               </TableCell>
-                              <TableCell className="text-right w-[40px]">
+                              <TableCell className="${TABLE_ROW_COMPACT.cell} text-right w-[40px]">
                                 <ChevronRight className="h-4 w-4 text-muted-foreground/60 transition-transform group-hover:translate-x-0.5 inline-block" />
                               </TableCell>
                               <TableCornerResetCell />

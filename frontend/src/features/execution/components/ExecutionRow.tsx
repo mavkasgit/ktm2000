@@ -7,11 +7,12 @@ import { positionStatusLabels, positionStatusColor, planPreviewUrl, getLaunchBlo
 import { StepIndicator } from "../components/StepIndicator";
 import type { ExecutionColumnId, ExecutionTableColumn } from "./execution-table-columns";
 import { TABLE_ROW_STYLES } from "@/shared/lib/tableRowStyles";
+import { TABLE_ROW_COMPACT } from "@/shared/lib/dataTableStyles";
 
 function StatusBadge({ status, isCompleted }: { status: string; isCompleted?: boolean }) {
   const displayStatus = isCompleted ? "completed" : status;
   return (
-    <span className={`inline-flex max-w-full items-center truncate whitespace-nowrap rounded-full px-2 py-0.5 text-xs ${positionStatusColor[displayStatus] || "bg-gray-100 text-gray-700"}`}>
+    <span className={`inline-flex max-w-full items-center truncate whitespace-nowrap rounded-full ${TABLE_ROW_COMPACT.badge} text-xs font-semibold ${positionStatusColor[displayStatus] || "bg-gray-100 text-gray-700"}`}>
       {positionStatusLabels[displayStatus] || displayStatus}
     </span>
   );
@@ -71,7 +72,7 @@ export function ExecutionRow({
   const canManualPass = !!row.route_id && ["approved", "released"].includes(row.position_status) && !row.is_completed;
   const blockReason = getLaunchBlockReason(row);
 
-  const cellBaseClass = "p-2 align-middle min-w-0 overflow-hidden text-ellipsis whitespace-nowrap text-sm";
+  const cellBaseClass = `${TABLE_ROW_COMPACT.cell} align-middle min-w-0 overflow-hidden text-ellipsis whitespace-nowrap text-sm`;
 
   const renderCell = (columnId: ExecutionColumnId) => {
     switch (columnId) {
@@ -164,7 +165,7 @@ export function ExecutionRow({
               <Button
                 size="sm"
                 variant="outline"
-                className="h-8 min-w-0 shrink px-2"
+                className={`${TABLE_ROW_COMPACT.actionButton} min-w-0 shrink`}
                 onClick={() => onSingleLaunch(row)}
                 title="Взять в работу"
               >
@@ -182,7 +183,7 @@ export function ExecutionRow({
               <Button
                 size="sm"
                 variant="outline"
-                className="h-8 w-8 shrink-0 px-0"
+                className={`${TABLE_ROW_COMPACT.actionButton} w-8 shrink-0 px-0`}
                 onClick={() => onManualPass(row)}
                 title="Сквозной проход"
               >
@@ -193,7 +194,7 @@ export function ExecutionRow({
               <Button
                 size="sm"
                 variant="ghost"
-                className="h-8 min-w-0 shrink px-2 text-red-600 hover:text-red-700 max-[959px]:w-8 max-[959px]:shrink-0 max-[959px]:px-0"
+                className={`${TABLE_ROW_COMPACT.actionButton} min-w-0 shrink text-red-600 hover:text-red-700 max-[959px]:w-8 max-[959px]:shrink-0 max-[959px]:px-0`}
                 onClick={() => onCancel(row)}
                 title="Отменить"
               >
@@ -205,7 +206,7 @@ export function ExecutionRow({
               <Button
                 size="sm"
                 variant="ghost"
-                className="h-8 min-w-0 shrink px-2 text-red-600 hover:text-red-700 max-[959px]:w-8 max-[959px]:shrink-0 max-[959px]:px-0"
+                className={`${TABLE_ROW_COMPACT.actionButton} min-w-0 shrink text-red-600 hover:text-red-700 max-[959px]:w-8 max-[959px]:shrink-0 max-[959px]:px-0`}
                 onClick={() => onCancel(row)}
                 title="Остановить"
               >
@@ -218,7 +219,7 @@ export function ExecutionRow({
                 <Button
                   size="sm"
                   variant="ghost"
-                  className="h-8 min-w-0 shrink px-2 text-green-600 hover:text-green-700 max-[959px]:w-8 max-[959px]:shrink-0 max-[959px]:px-0"
+                  className={`${TABLE_ROW_COMPACT.actionButton} min-w-0 shrink text-green-600 hover:text-green-700 max-[959px]:w-8 max-[959px]:shrink-0 max-[959px]:px-0`}
                   onClick={() => onRestore(row)}
                   title="Восстановить"
                 >
@@ -228,7 +229,7 @@ export function ExecutionRow({
                 <Button
                   size="sm"
                   variant="ghost"
-                  className="h-8 min-w-0 shrink px-2 text-red-600 hover:text-red-700 max-[959px]:w-8 max-[959px]:shrink-0 max-[959px]:px-0"
+                  className={`${TABLE_ROW_COMPACT.actionButton} min-w-0 shrink text-red-600 hover:text-red-700 max-[959px]:w-8 max-[959px]:shrink-0 max-[959px]:px-0`}
                   onClick={() => onSoftDelete(row)}
                   title="Удалить из списка"
                 >

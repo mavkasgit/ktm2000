@@ -19,6 +19,8 @@ import { ExecutionSortField, positionStatusLabels } from "./execution-utils";
 import { fmtQty } from "@/shared/utils/fmtQty";
 import { ExecutionRow } from "./ExecutionRow";
 import { getExecutionTableColumns } from "./execution-table-columns";
+import { TABLE_ROW_COMPACT } from "@/shared/lib/dataTableStyles";
+import { cn } from "@/shared/utils/cn";
 import {
   type BulkActionDefinition,
   type BulkActionResultItem,
@@ -148,7 +150,7 @@ export function ExecutionTable({
   rangeLabel,
 }: ExecutionTableProps) {
   const visibleColumns = getExecutionTableColumns();
-  const headerCellClass = `${DATA_TABLE_STYLES.headerRow} ${DATA_TABLE_STYLES.headerCell}`;
+  const headerCellClass = cn(DATA_TABLE_STYLES.headerRow, DATA_TABLE_STYLES.headerCell, TABLE_ROW_COMPACT.headerCell);
 
   const actionVariant = (actionId: string): "default" | "destructive" | "outline" | "success" => {
     switch (actionId) {
@@ -336,7 +338,7 @@ export function ExecutionTable({
               </thead>
               <VirtualizedTableBody
                 rows={rows}
-                rowHeight={48}
+                rowHeight={TABLE_ROW_COMPACT.rowHeightPx}
                 colSpan={visibleColumns.length + 1}
                 scrollContainerRef={tableScrollRef as React.RefObject<HTMLElement | null>}
                 renderRow={(row, rowIdx) => (
