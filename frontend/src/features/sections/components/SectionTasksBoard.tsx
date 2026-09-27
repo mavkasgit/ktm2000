@@ -46,6 +46,7 @@ import {
   isTaskFullyTransferred,
 } from "../lib/taskStatus";
 import { TABLE_ROW_STYLES } from "@/shared/lib/tableRowStyles";
+import { TABLE_ROW_COMPACT } from "@/shared/lib/dataTableStyles";
 import { cn } from "@/shared/utils/cn";
 
 // ---------------------------------------------------------------------------
@@ -219,16 +220,15 @@ function renderOutputsProgress(task: SectionBoardTask, className: string) {
 }
 
 // ---------------------------------------------------------------------------
-// Плотная посадка строк доски (desktop-таблица)
+// Компактная строка
 // ---------------------------------------------------------------------------
-// Высота строки = кнопка 32px + вертикальные отступы ячеек 8px + 1px бордер = 41px.
-// Кнопки заданы без size="sm": у него h-9 (36px), а min-h не уменьшает
+// Задаётся общим правилом (CONTEXT.md, ADR-0030): доска знает только, что
+// берёт общий набор, а не решает высоту строки сама.
+// Кнопки задаются без size="sm": у него h-9 (36px), а min-h не уменьшает
 // фиксированную высоту — именно он растягивал строку до 52px.
-const ROW_CELL_CLASS = "px-2 py-1";
-const ROW_ACTION_BUTTON_CLASS = "h-8 px-2 text-xs transition-all hover:bg-accent/50";
-const ROW_HEADER_CELL_CLASS = "px-2 py-1.5";
-/** Оценка для VirtualizedTableBody: реальная высота строки минус 1px бордер. */
-const ROW_HEIGHT_PX = 40;
+const ROW_CELL_CLASS = TABLE_ROW_COMPACT.cell;
+const ROW_ACTION_BUTTON_CLASS = `${TABLE_ROW_COMPACT.actionButton} transition-all hover:bg-accent/50`;
+const ROW_HEIGHT_PX = TABLE_ROW_COMPACT.rowHeightPx;
 /** Число колонок доски: используется для полноширинных служебных строк. */
 const BOARD_COLSPAN = 13;
 
@@ -980,7 +980,7 @@ export function SectionTasksBoard({
   const headerCellClass = cn(
     DATA_TABLE_STYLES.headerRow,
     DATA_TABLE_STYLES.headerCell,
-    ROW_HEADER_CELL_CLASS,
+    TABLE_ROW_COMPACT.headerCell,
   );
 
   const activeFilterSummary = useMemo(

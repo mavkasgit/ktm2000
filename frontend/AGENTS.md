@@ -12,6 +12,17 @@ React 18.3 + TypeScript + Vite + Tailwind CSS + shadcn/ui + TanStack Query/Virtu
 - Общее — спускать в `entities` или `shared`.
 - Роутер: [`src/app/Router.tsx`](src/app/Router.tsx).
 
+## Таблицы
+
+- **Компактная строка** — высота строки, отступы ячеек, размер кнопки действия
+  и бейджа берутся из `TABLE_ROW_COMPACT`
+  ([`src/shared/lib/dataTableStyles.ts`](src/shared/lib/dataTableStyles.ts)).
+  Новая таблица берёт общий набор; свои уточнения объявляет рядом с собой и
+  разворачивает поверх (`{ ...TABLE_ROW_COMPACT, ...overrides }`).
+  Свои `p-2`, `size="sm"` и `rowHeight={…}` рядом с таблицей — нельзя.
+  Термин и правило — [ADR-0030](../docs/adr/0030-komaktnaya-stroka-i-utochneniya-tablits.md)
+  и [CONTEXT.md](../CONTEXT.md).
+
 ## Команды
 
 ```bash
