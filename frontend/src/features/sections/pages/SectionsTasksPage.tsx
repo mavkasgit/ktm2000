@@ -119,7 +119,9 @@ export function SectionsTasksPage() {
   );
   const profile = PRESET_PROFILES.find((p) => p.id === "sku+routeHistoryAfter") || PRESET_PROFILES[2];
 
-  const [viewMode, setViewMode] = useState<TaskBoardViewMode>({ active: true, waiting: false, completed: false });
+  // По умолчанию доска показывает активные и ожидающие задания: ожидающие —
+  // отдельным блоком внизу таблицы, под разделителем «В ожидании».
+  const [viewMode, setViewMode] = useState<TaskBoardViewMode>({ active: true, waiting: true, completed: false });
   const [sectionContentMode, setSectionContentMode] = useState<SectionContentMode>("tasks");
   const [creatingDailyPlan, setCreatingDailyPlan] = useState(false);
   const [dateRange, setDateRange] = useState<DateRangeValue>({ from: "", to: "" });

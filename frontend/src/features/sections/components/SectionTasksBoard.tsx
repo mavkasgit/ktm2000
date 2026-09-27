@@ -46,6 +46,7 @@ import {
   isTaskFullyTransferred,
 } from "../lib/taskStatus";
 import { TABLE_ROW_STYLES } from "@/shared/lib/tableRowStyles";
+import { cn } from "@/shared/utils/cn";
 
 // ---------------------------------------------------------------------------
 // Экспорты для обратной совместимости
@@ -217,6 +218,20 @@ function renderOutputsProgress(task: SectionBoardTask, className: string) {
   );
 }
 
+// ---------------------------------------------------------------------------
+// Плотная посадка строк доски (desktop-таблица)
+// ---------------------------------------------------------------------------
+// Высота строки = кнопка 32px + вертикальные отступы ячеек 8px + 1px бордер = 41px.
+// Кнопки заданы без size="sm": у него h-9 (36px), а min-h не уменьшает
+// фиксированную высоту — именно он растягивал строку до 52px.
+const ROW_CELL_CLASS = "px-2 py-1";
+const ROW_ACTION_BUTTON_CLASS = "h-8 px-2 text-xs transition-all hover:bg-accent/50";
+const ROW_HEADER_CELL_CLASS = "px-2 py-1.5";
+/** Оценка для VirtualizedTableBody: реальная высота строки минус 1px бордер. */
+const ROW_HEIGHT_PX = 40;
+/** Число колонок доски: используется для полноширинных служебных строк. */
+const BOARD_COLSPAN = 13;
+
 function renderTaskRow(
   task: SectionBoardTask,
   isSelected: boolean | undefined,
@@ -229,8 +244,7 @@ function renderTaskRow(
   isLastInGroup = false,
   isInGroup = false,
 ) {
-  const buttonBase = "min-h-[32px] transition-all";
-  const buttonDefault = "hover:bg-accent/50";
+  const buttonBase = ROW_ACTION_BUTTON_CLASS;
 
   const handleAction = (type: TaskActionDialogType) => {
     onAction(type, task);
@@ -245,12 +259,12 @@ function renderTaskRow(
         }
       }}
     >
-      <td className="p-2 text-center">
+      <td className={`${ROW_CELL_CLASS} text-center`}>
         <StatusDot task={task} />
       </td>
-      <td className="p-2 font-medium">{task.product_sku}</td>
-      <td className="p-2 text-xs text-muted-foreground">{formatDimensionsLabel(taskGroupingDimensions(task))}</td>
-      <td className="p-2">
+      <td className={`${ROW_CELL_CLASS} font-medium`}>{task.product_sku}</td>
+      <td className={`${ROW_CELL_CLASS} text-xs text-muted-foreground`}>{formatDimensionsLabel(taskGroupingDimensions(task))}</td>
+      <td className={ROW_CELL_CLASS}>
         {task.operation_names && task.operation_names.length > 1 ? (
           <span className="text-xs font-medium">{task.operation_names.join(" + ")}</span>
         ) : (
@@ -263,23 +277,22 @@ function renderTaskRow(
         )}
         {renderOutputsProgress(task, "block text-xs text-muted-foreground tabular-nums")}
       </td>
-      <td className="p-2">{fmtQty(task.planned_quantity)}</td>
-      <td className="p-2">{fmtQty(task.cache.issued_quantity)}</td>
-      <td className="p-2">{fmtQty(task.cache.completed_quantity)}</td>
-      <td className="p-2">{fmtQty(task.cache.rejected_quantity)}</td>
-      <td className="p-2">{fmtQty(task.cache.transferred_quantity)}</td>
-      <td className="p-2">{fmtQty(task.cache.remaining_quantity)}</td>
-      <td className="p-2">
-        <Badge variant="secondary" className={getStatusColor(task)}>
+      <td className={ROW_CELL_CLASS}>{fmtQty(task.planned_quantity)}</td>
+      <td className={ROW_CELL_CLASS}>{fmtQty(task.cache.issued_quantity)}</td>
+      <td className={ROW_CELL_CLASS}>{fmtQty(task.cache.completed_quantity)}</td>
+      <td className={ROW_CELL_CLASS}>{fmtQty(task.cache.rejected_quantity)}</td>
+      <td className={ROW_CELL_CLASS}>{fmtQty(task.cache.transferred_quantity)}</td>
+      <td className={ROW_CELL_CLASS}>{fmtQty(task.cache.remaining_quantity)}</td>
+      <td className={ROW_CELL_CLASS}>
+        <Badge variant="secondary" className={cn(getStatusColor(task), "px-2 py-0")}>
           {getStatusLabel(task)}
         </Badge>
       </td>
-      <td className="p-2">
+      <td className={ROW_CELL_CLASS}>
         {onRevokeItem ? (
           <Button
-            size="sm"
             variant={isSelected ? "default" : "outline"}
-            className={`${buttonBase} ${buttonDefault}`}
+            className={buttonBase}
             aria-pressed={isSelected}
             disabled={isRevoking}
             onClick={(event) => {
@@ -294,9 +307,8 @@ function renderTaskRow(
           <span className="text-xs text-muted-foreground">Просмотр</span>
         ) : (
           <Button
-            size="sm"
             variant="outline"
-            className={`${buttonBase} ${buttonDefault}`}
+            className={buttonBase}
             onClick={() => handleAction("complete")}
             disabled={!isTaskCompletable(task)}
             title={getCompletionDisabledReason(task) ?? "Завершить задачу"}
@@ -434,10 +446,10 @@ function TableTaskGroupRow({
         else onToggleCollapse();
       }}
     >
-      <td className="p-2 text-center">
+      <td className={`${ROW_CELL_CLASS} text-center`}>
         <div className="flex items-center justify-center">
           <button
-            className="p-1 hover:bg-slate-200 rounded transition-colors text-slate-500 hover:text-slate-800"
+            className="p-0.5 hover:bg-slate-200 rounded transition-colors text-slate-500 hover:text-slate-800"
             onClick={(e) => {
               e.stopPropagation();
               onToggleCollapse();
@@ -452,24 +464,24 @@ function TableTaskGroupRow({
           </button>
         </div>
       </td>
-      <td className="p-2 text-slate-900">
+      <td className={`${ROW_CELL_CLASS} text-slate-900`}>
         {firstTask.product_sku}
       </td>
-      <td className="p-2 text-xs text-slate-500 font-medium">
+      <td className={`${ROW_CELL_CLASS} text-xs text-slate-500 font-medium`}>
         {formatDimensionsLabel(taskGroupingDimensions(firstTask))}
       </td>
-      <td className="p-2 text-xs text-slate-500 font-medium">
+      <td className={`${ROW_CELL_CLASS} text-xs text-slate-500 font-medium`}>
         {firstTask.operation_name || "—"}
       </td>
-      <td className="p-2 text-slate-700">{fmtQty(String(group.totalQtyPlan))}</td>
-      <td className="p-2 text-slate-700">{fmtQty(String(group.tasks.reduce((s, t) => s + parseFloat(t.cache.issued_quantity), 0)))}</td>
-      <td className="p-2 text-slate-700">{fmtQty(String(group.totalQtyDone))}</td>
-      <td className="p-2 text-slate-700">{fmtQty(String(group.tasks.reduce((s, t) => s + parseFloat(t.cache.rejected_quantity), 0)))}</td>
-      <td className="p-2 text-slate-700">{fmtQty(String(group.tasks.reduce((s, t) => s + parseFloat(t.cache.transferred_quantity), 0)))}</td>
-      <td className="p-2 text-slate-700">{fmtQty(String(group.tasks.reduce((s, t) => s + parseFloat(t.cache.remaining_quantity), 0)))}</td>
-      <td className="p-2">
+      <td className={`${ROW_CELL_CLASS} text-slate-700`}>{fmtQty(String(group.totalQtyPlan))}</td>
+      <td className={`${ROW_CELL_CLASS} text-slate-700`}>{fmtQty(String(group.tasks.reduce((s, t) => s + parseFloat(t.cache.issued_quantity), 0)))}</td>
+      <td className={`${ROW_CELL_CLASS} text-slate-700`}>{fmtQty(String(group.totalQtyDone))}</td>
+      <td className={`${ROW_CELL_CLASS} text-slate-700`}>{fmtQty(String(group.tasks.reduce((s, t) => s + parseFloat(t.cache.rejected_quantity), 0)))}</td>
+      <td className={`${ROW_CELL_CLASS} text-slate-700`}>{fmtQty(String(group.tasks.reduce((s, t) => s + parseFloat(t.cache.transferred_quantity), 0)))}</td>
+      <td className={`${ROW_CELL_CLASS} text-slate-700`}>{fmtQty(String(group.tasks.reduce((s, t) => s + parseFloat(t.cache.remaining_quantity), 0)))}</td>
+      <td className={ROW_CELL_CLASS}>
         <div className="flex items-center gap-1">
-          <Badge variant="secondary" className="font-bold">
+          <Badge variant="secondary" className="px-2 py-0 font-bold">
             &times;{group.tasks.length}
           </Badge>
           {isBulkMode && allSelected && (
@@ -477,12 +489,11 @@ function TableTaskGroupRow({
           )}
         </div>
       </td>
-      <td className={`p-2 ${isBulkMode && allSelected ? TABLE_ROW_STYLES.selectedGroupHeader : TABLE_ROW_STYLES.defaultGroupRow}`}>
+      <td className={`${ROW_CELL_CLASS} ${isBulkMode && allSelected ? TABLE_ROW_STYLES.selectedGroupHeader : TABLE_ROW_STYLES.defaultGroupRow}`}>
         {onCompleteGroup && (
           <Button
-            size="sm"
             variant="outline"
-            className="min-h-[32px] transition-all hover:bg-accent/50"
+            className={ROW_ACTION_BUTTON_CLASS}
             onClick={(e) => {
               e.stopPropagation();
               onCompleteGroup(group);
@@ -534,11 +545,18 @@ type SectionTasksBoardProps = {
   ) => void;
 };
 
+/**
+ * Строка доски: группа, задание либо разделитель блоков («В ожидании»).
+ * Разделитель — обычная `<tr>` с одной ячейкой на всю ширину, поэтому
+ * табличная сетка и виртуализация (ROW_HEIGHT_PX) не ломаются.
+ */
 type VirtualBoardRow =
   | {
       kind: "group";
       key: string;
-      group: ReturnType<typeof groupTasksByProfile>[number];
+      /** Ключ блока (`active-…` / `waiting-…`) — по нему живёт состояние свёртки. */
+      entryKey: string;
+      group: TaskGroup;
       isCollapsed: boolean;
     }
   | {
@@ -547,7 +565,21 @@ type VirtualBoardRow =
       task: SectionBoardTask;
       isLastInGroup: boolean;
       isInGroup: boolean;
+    }
+  | {
+      kind: "divider";
+      key: string;
+      /** Количество заданий в ожидании под разделителем. */
+      count: number;
     };
+
+/**
+ * Порядок блоков доски: сначала активные задания, затем (если есть)
+ * разделитель «В ожидании» и сами ожидающие, затем завершённые группы.
+ */
+type BoardEntry =
+  | { kind: "group"; key: string; group: TaskGroup }
+  | { kind: "divider"; key: string; count: number };
 
 // ---------------------------------------------------------------------------
 // Компонент
@@ -688,34 +720,59 @@ export function SectionTasksBoard({
       });
     }
 
-    // Split groups into active/waiting and completed, preserving user's sorting order
-    const activeOrWaiting: typeof grouped = [];
-    const completed: typeof grouped = [];
+    return grouped;
+  }, [sortedTasks, profile]);
 
-    for (const g of grouped) {
-      const isCompleted = g.tasks.every((t) => getStatusPriority(t) >= 2);
-      if (isCompleted) {
-        completed.push(g);
-      } else {
-        activeOrWaiting.push(g);
+  // Порядок доски: активные задания → разделитель «В ожидании» → ожидающие →
+  // завершённые группы. Сортировка и группировка по профилю внутри каждого
+  // блока сохраняются: берём те же группы и те же строки, только разрезаем
+  // смешанные группы по категории задания.
+  const boardEntries = useMemo((): BoardEntry[] => {
+    const activeGroups: TaskGroup[] = [];
+    const waitingGroups: TaskGroup[] = [];
+    const completedGroups: TaskGroup[] = [];
+
+    for (const g of groups) {
+      if (g.tasks.every((t) => getStatusPriority(t) >= 2)) {
+        completedGroups.push(g);
+        continue;
       }
+      const activeTasks = g.tasks.filter((t) => getStatusPriority(t) === 0);
+      const waitingTasks = g.tasks.filter((t) => getStatusPriority(t) === 1);
+      if (activeTasks.length > 0) activeGroups.push({ ...g, tasks: activeTasks });
+      if (waitingTasks.length > 0) waitingGroups.push({ ...g, tasks: waitingTasks });
     }
 
-    return [...activeOrWaiting, ...completed];
-  }, [sortedTasks, profile]);
+    const entries: BoardEntry[] = [];
+    activeGroups.forEach((g, i) => entries.push({ kind: "group", key: `active-${i}-${g.key}`, group: g }));
+    if (waitingGroups.length > 0) {
+      const waitingCount = waitingGroups.reduce((sum, g) => sum + g.tasks.length, 0);
+      entries.push({ kind: "divider", key: "divider-waiting", count: waitingCount });
+      waitingGroups.forEach((g, i) => entries.push({ kind: "group", key: `waiting-${i}-${g.key}`, group: g }));
+    }
+    completedGroups.forEach((g, i) => entries.push({ kind: "group", key: `completed-${i}-${g.key}`, group: g }));
+    return entries;
+  }, [groups]);
+
+  // Задания, доступные для группового выбора: ожидающие в выделение не попадают.
+  const selectableTaskIds = useMemo(
+    () => visibleTasks.filter((t) => getTaskViewCategory(t) !== "waiting").map((t) => t.id),
+    [visibleTasks],
+  );
 
   // Группы по умолчанию свёрнуты; пользователь может раскрыть любую вручную.
   // Сохраняем развёрнутые пользователем ключи, остальные — свернуты.
   const [manuallyExpanded, setManuallyExpanded] = useState<Set<string>>(new Set());
   const collapsedGroups = useMemo(() => {
     const collapsed = new Set<string>();
-    for (const g of groups) {
-      if (g.tasks.length > 1 && !manuallyExpanded.has(g.key)) {
-        collapsed.add(g.key);
+    for (const entry of boardEntries) {
+      if (entry.kind !== "group") continue;
+      if (entry.group.tasks.length > 1 && !manuallyExpanded.has(entry.key)) {
+        collapsed.add(entry.key);
       }
     }
     return collapsed;
-  }, [groups, manuallyExpanded]);
+  }, [boardEntries, manuallyExpanded]);
 
   const toggleGroup = useCallback((groupKey: string) => {
     setManuallyExpanded((prev) => {
@@ -771,7 +828,7 @@ export function SectionTasksBoard({
           checked: mode.waiting,
           onChange: () => onModeChange({ ...mode, waiting: !mode.waiting }),
           hideIcon: true,
-          disabled: true,
+          tone: "amber",
           layoutSpan: "min-w-[0px]",
         },
       );
@@ -802,7 +859,12 @@ export function SectionTasksBoard({
 
   const virtualRows = useMemo((): VirtualBoardRow[] => {
     const items: VirtualBoardRow[] = [];
-    for (const group of groups) {
+    for (const entry of boardEntries) {
+      if (entry.kind === "divider") {
+        items.push({ kind: "divider", key: entry.key, count: entry.count });
+        continue;
+      }
+      const group = entry.group;
       if (group.tasks.length === 1) {
         const task = group.tasks[0];
         items.push({
@@ -815,10 +877,11 @@ export function SectionTasksBoard({
         continue;
       }
 
-      const isCollapsed = collapsedGroups.has(group.key);
+      const isCollapsed = collapsedGroups.has(entry.key);
       items.push({
         kind: "group",
-        key: `group-${group.key}`,
+        key: `group-${entry.key}`,
+        entryKey: entry.key,
         group,
         isCollapsed,
       });
@@ -835,10 +898,37 @@ export function SectionTasksBoard({
       }
     }
     return items;
-  }, [groups, collapsedGroups]);
+  }, [boardEntries, collapsedGroups]);
+
+  /** Разделитель блоков «В ожидании»: строка таблицы на всю ширину. */
+  const renderWaitingDivider = useCallback((row: Extract<VirtualBoardRow, { kind: "divider" }>) => (
+    <tr key={row.key} data-testid="waiting-divider">
+      <td colSpan={BOARD_COLSPAN} className="p-0" style={{ height: ROW_HEIGHT_PX }}>
+        <div className="flex h-10 items-center gap-2 border-y border-amber-200 bg-amber-50/70 px-2">
+          <span className="text-[11px] font-semibold uppercase tracking-wide text-amber-800">
+            В ожидании
+          </span>
+          <span className="text-[11px] tabular-nums text-amber-800/70">{row.count}</span>
+          <span className="h-px flex-1 bg-amber-200" />
+        </div>
+      </td>
+    </tr>
+  ), []);
+
+  /** Заголовок блока «В ожидании» для мобильных карточек. */
+  const renderWaitingDividerMobile = useCallback((key: string, count: number) => (
+    <div key={key} className="flex items-center gap-2 px-1">
+      <span className="text-[11px] font-semibold uppercase tracking-wide text-amber-800">
+        В ожидании
+      </span>
+      <span className="text-[11px] tabular-nums text-amber-800/70">{count}</span>
+      <span className="h-px flex-1 bg-amber-200" />
+    </div>
+  ), []);
 
   const renderVirtualRow = useCallback(
     (row: VirtualBoardRow) => {
+      if (row.kind === "divider") return renderWaitingDivider(row);
       if (row.kind === "group") {
         return (
           <TableTaskGroupRow
@@ -847,7 +937,7 @@ export function SectionTasksBoard({
             isCollapsed={row.isCollapsed}
             isBulkMode={!!bulkMode}
             bulkSelection={bulkSelection}
-            onToggleCollapse={() => toggleGroup(row.group.key)}
+            onToggleCollapse={() => toggleGroup(row.entryKey)}
             onCompleteGroup={readOnly ? undefined : onCompleteGroup}
             onSelectGroup={() => {
               if (!bulkMode || !bulkSelection) return;
@@ -884,10 +974,14 @@ export function SectionTasksBoard({
         row.isInGroup,
       );
     },
-    [bulkMode, bulkSelection, onAction, onCompleteGroup, onRevokeItem, readOnly, revokeSelection, toggleGroup],
+    [bulkMode, bulkSelection, onAction, onCompleteGroup, onRevokeItem, readOnly, renderWaitingDivider, revokeSelection, toggleGroup],
   );
 
-  const headerCellClass = `${DATA_TABLE_STYLES.headerRow} ${DATA_TABLE_STYLES.headerCell}`;
+  const headerCellClass = cn(
+    DATA_TABLE_STYLES.headerRow,
+    DATA_TABLE_STYLES.headerCell,
+    ROW_HEADER_CELL_CLASS,
+  );
 
   const activeFilterSummary = useMemo(
     () =>
@@ -917,9 +1011,9 @@ export function SectionTasksBoard({
         activeSummary={activeFilterSummary}
         onSelectAll={onSelectAllVisible ? () => {
           onBulkModeChange?.(true);
-          onSelectAllVisible(visibleTasks.filter((t) => t.status !== "waiting_previous").map((t) => t.id));
+          onSelectAllVisible(selectableTaskIds);
         } : undefined}
-        totalRowCount={total}
+        totalRowCount={selectableTaskIds.length}
         actions={
           revokeSelection && revokeSelection.selectedCount > 0 ? (
             <div className="flex items-center gap-2">
@@ -960,7 +1054,7 @@ export function SectionTasksBoard({
                   <th className={`${headerCellClass} w-12 text-center`}>
                     <span className="text-xs font-medium text-muted-foreground">Статус</span>
                   </th>
-                  <th className={`${headerCellClass} p-0 text-left`}>
+                  <th className={`${headerCellClass} text-left`}>
                     <SortableFilterHeader
                       field="productSku"
                       label="Артикул"
@@ -970,7 +1064,7 @@ export function SectionTasksBoard({
                       {...bindColumn("productSku")}
                     />
                   </th>
-                  <th className={`${headerCellClass} p-0 text-left`}>
+                  <th className={`${headerCellClass} text-left`}>
                     <SortableFilterHeader
                       field="dimensions"
                       label="Размер"
@@ -985,7 +1079,7 @@ export function SectionTasksBoard({
                   <th className={`${headerCellClass} text-left`}>
                     <span className="text-xs font-medium text-muted-foreground">Операция</span>
                   </th>
-                  <th className={`${headerCellClass} p-0 text-left`}>
+                  <th className={`${headerCellClass} text-left`}>
                     <SortableFilterHeader
                       field="plannedQty"
                       label="План"
@@ -995,7 +1089,7 @@ export function SectionTasksBoard({
                       {...bindColumn("plannedQty")}
                     />
                   </th>
-                  <th className={`${headerCellClass} p-0 text-left`}>
+                  <th className={`${headerCellClass} text-left`}>
                     <SortableFilterHeader
                       field="issuedQty"
                       label="Выдано"
@@ -1005,7 +1099,7 @@ export function SectionTasksBoard({
                       {...bindColumn("issuedQty")}
                     />
                   </th>
-                  <th className={`${headerCellClass} p-0 text-left`}>
+                  <th className={`${headerCellClass} text-left`}>
                     <SortableFilterHeader
                       field="completedQty"
                       label="Годные"
@@ -1015,7 +1109,7 @@ export function SectionTasksBoard({
                       {...bindColumn("completedQty")}
                     />
                   </th>
-                  <th className={`${headerCellClass} p-0 text-left`}>
+                  <th className={`${headerCellClass} text-left`}>
                     <SortableFilterHeader
                       field="rejectedQty"
                       label="Брак"
@@ -1025,7 +1119,7 @@ export function SectionTasksBoard({
                       {...bindColumn("rejectedQty")}
                     />
                   </th>
-                  <th className={`${headerCellClass} p-0 text-left`}>
+                  <th className={`${headerCellClass} text-left`}>
                     <SortableFilterHeader
                       field="transferredQty"
                       label="Передано"
@@ -1035,7 +1129,7 @@ export function SectionTasksBoard({
                       {...bindColumn("transferredQty")}
                     />
                   </th>
-                  <th className={`${headerCellClass} p-0 text-left`}>
+                  <th className={`${headerCellClass} text-left`}>
                     <SortableFilterHeader
                       field="remainingQty"
                       label="Остаток"
@@ -1045,7 +1139,7 @@ export function SectionTasksBoard({
                       {...bindColumn("remainingQty")}
                     />
                   </th>
-                  <th className={`${headerCellClass} p-0 text-left`}>
+                  <th className={`${headerCellClass} text-left`}>
                     <SortableFilterHeader
                       field="status"
                       label="Статус"
@@ -1069,7 +1163,7 @@ export function SectionTasksBoard({
               {sortedTasks.length === 0 ? (
                 <tbody>
                   <tr>
-                    <td colSpan={13} className="p-8 text-center text-sm text-muted-foreground">
+                    <td colSpan={BOARD_COLSPAN} className="p-8 text-center text-sm text-muted-foreground">
                       Нет задач, соответствующих фильтру
                     </td>
                   </tr>
@@ -1077,8 +1171,8 @@ export function SectionTasksBoard({
               ) : (
                 <VirtualizedTableBody
                   rows={virtualRows}
-                  rowHeight={48}
-                  colSpan={13}
+                  rowHeight={ROW_HEIGHT_PX}
+                  colSpan={BOARD_COLSPAN}
                   scrollContainerRef={tableScrollRef}
                   renderRow={(row) => renderVirtualRow(row)}
                 />
@@ -1093,8 +1187,10 @@ export function SectionTasksBoard({
               <div className="rounded-lg border p-4 text-sm text-muted-foreground text-center">
                 Нет задач, соответствующих фильтру
               </div>
-            ) : groups.map((group) => {
-              const isCollapsed = collapsedGroups.has(group.key);
+            ) : boardEntries.map((entry) => {
+              if (entry.kind === "divider") return renderWaitingDividerMobile(entry.key, entry.count);
+              const group = entry.group;
+              const isCollapsed = collapsedGroups.has(entry.key);
               const isSingleTask = group.tasks.length === 1;
 
               // Одна задача — рендерим напрямую без шапки группы
@@ -1107,7 +1203,7 @@ export function SectionTasksBoard({
               }
 
               return (
-                <div key={group.key} className={`rounded-lg overflow-hidden transition-colors ${bulkMode && bulkSelection?.isAllSelected(group.tasks.map(t => t.id)) ? TABLE_ROW_STYLES.selectedGroupContainer : TABLE_ROW_STYLES.defaultGroupContainer}`}>
+                <div key={entry.key} className={`rounded-lg overflow-hidden transition-colors ${bulkMode && bulkSelection?.isAllSelected(group.tasks.map(t => t.id)) ? TABLE_ROW_STYLES.selectedGroupContainer : TABLE_ROW_STYLES.defaultGroupContainer}`}>
                   <div
                     className="p-3 flex items-center justify-between gap-2 border-b border-muted cursor-pointer"
                     onClick={() => {
@@ -1125,7 +1221,7 @@ export function SectionTasksBoard({
                           }
                         }
                       } else {
-                        toggleGroup(group.key);
+                        toggleGroup(entry.key);
                       }
                     }}
                   >
@@ -1134,7 +1230,7 @@ export function SectionTasksBoard({
                         className="p-0.5 hover:bg-muted/50 rounded transition-colors cursor-pointer"
                         onClick={(e) => {
                           e.stopPropagation();
-                          toggleGroup(group.key);
+                          toggleGroup(entry.key);
                         }}
                         title={isCollapsed ? "Раскрыть" : "Скрыть"}
                       >
