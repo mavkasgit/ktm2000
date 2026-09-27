@@ -26,7 +26,10 @@ function App() {
   return (
     <AuthProvider>
       <QueryClientProvider client={queryClient}>
-        <RouterProvider router={router} />
+        {/* Раздел приезжает своим чанком. Навигация идёт через
+            `startTransition`, поэтому React не прячет уже показанный раздел,
+            пока едет чанк: фокус не теряется, «белого экрана» нет. */}
+        <RouterProvider router={router} future={{ v7_startTransition: true }} />
         <Toaster />
       </QueryClientProvider>
     </AuthProvider>

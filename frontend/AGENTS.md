@@ -12,6 +12,33 @@ React 18.3 + TypeScript + Vite + Tailwind CSS + shadcn/ui + TanStack Query/Virtu
 - Общее — спускать в `entities` или `shared`.
 - Роутер: [`src/app/Router.tsx`](src/app/Router.tsx).
 
+## Разделы и загрузка кода
+
+- Страница раздела подключается **только** через `lazyPage`
+  ([`src/app/lazyRoute.tsx`](src/app/lazyRoute.tsx)). Статический импорт
+  страницы в [`src/app/Router.tsx`](src/app/Router.tsx) возвращает все
+  разделы в начальный пакет: до #199 он весил 2 538 КБ (653 КБ gzip), сейчас —
+  654 КБ (213 КБ gzip).
+- Ссылка на модуль страницы — **по файлу страницы**
+  (`import("../features/references/pages/ProductsPage")`). Барелы
+  `features/references`, `features/planning` и `features/admin` удалены
+  вместе с переходом на ленивую загрузку: импортировать страницу из барела
+  больше нечего, а `tsc` не даёт вернуть путь, которым начальный пакет снова
+  становится 2,5 МБ.
+- Граница `Suspense` живёт один раз — на `<Outlet />` в
+  [`src/app/Layout.tsx`](src/app/Layout.tsx) и на маршрутах вне каркаса
+  (`/login`, `/auth/callback`). Своя граница на странице — нельзя: её легко
+  забыть, и тогда переход в этот раздел покажет белый экран.
+- Пока едет чанк, видно `RoutePending`, а не пустое место. Обзор
+  (`DashboardPage`) остаётся в начальном пакете: это первый экран, и ждать
+  его чанк после каркаса — значит показать спиннер там, где его не было.
+- Флаг `future={{ v7_startTransition: true }}` у `RouterProvider`
+  ([`src/app/main.tsx`](src/app/main.tsx)) нельзя снимать: без него переход
+  в ещё не загруженный раздел — синхронное обновление, React прячет прежний
+  раздел вместе с фокусом и рисует фолбэк вместо него.
+- Термин и правило — [ADR-0039](../docs/adr/0039-stranica-razdela-prishodit-svoim-chankom.md)
+  и [CONTEXT.md](../CONTEXT.md).
+
 ## Таблицы
 
 - **Компактная строка** — высота строки, отступы ячеек, размер кнопки действия

@@ -1,31 +1,38 @@
 import { Navigate, createBrowserRouter } from "react-router-dom"
 import { Layout, DashboardPage } from "./Layout"
-import { ReferencesPage, RawMaterialsPage, ProductsPage, SectionsPage, RoutesPage } from "../features/references"
-import { DevPage } from "../features/references/pages/DevPage"
-import { PlanPage } from "../features/planning/pages/PlanPage"
-import { PlanPreviewPage } from "../features/planning/pages/PlanPreviewPage"
-import { ExecutionPage } from "../features/execution/pages/ExecutionPage"
-import { SectionsTasksPage } from "../features/sections/pages/SectionsTasksPage"
-import { AuditLogsPage } from "../features/sections/pages/AuditLogsPage"
-import { ActionsJournalPage } from "../features/reversal/pages/ActionsJournalPage"
-import { SpgSnapshotPage } from "../features/spg/pages/SpgSnapshotPage"
-import { TransfersPage } from "../features/transfers/pages/TransfersPage"
-import { SettingsPage } from "../features/settings/SettingsPage"
-import { BackupsPage } from "../features/settings/SettingsBackupsPage"
-import { DevSettingsPage } from "../features/settings/DevSettingsPage"
-import { LoginPage } from "../features/auth/pages/LoginPage"
-import { OidcCallbackPage } from "../features/auth/pages/OidcCallbackPage"
+import { RouteBoundary, lazyPage } from "./lazyRoute"
 import { ProtectedRoute } from "../features/auth/components/ProtectedRoute"
-import { UsersPage, EmployeesPage } from "../features/admin"
+
+const ReferencesPage = lazyPage(() => import("../features/references/ReferencesPage"), "ReferencesPage")
+const RawMaterialsPage = lazyPage(() => import("../features/references/pages/RawMaterialsPage"), "RawMaterialsPage")
+const ProductsPage = lazyPage(() => import("../features/references/pages/ProductsPage"), "ProductsPage")
+const SectionsPage = lazyPage(() => import("../features/references/pages/SectionsPage"), "SectionsPage")
+const RoutesPage = lazyPage(() => import("../features/references/pages/RoutesPage"), "RoutesPage")
+const DevPage = lazyPage(() => import("../features/references/pages/DevPage"), "DevPage")
+const PlanPage = lazyPage(() => import("../features/planning/pages/PlanPage"), "PlanPage")
+const PlanPreviewPage = lazyPage(() => import("../features/planning/pages/PlanPreviewPage"), "PlanPreviewPage")
+const ExecutionPage = lazyPage(() => import("../features/execution/pages/ExecutionPage"), "ExecutionPage")
+const SectionsTasksPage = lazyPage(() => import("../features/sections/pages/SectionsTasksPage"), "SectionsTasksPage")
+const AuditLogsPage = lazyPage(() => import("../features/sections/pages/AuditLogsPage"), "AuditLogsPage")
+const ActionsJournalPage = lazyPage(() => import("../features/reversal/pages/ActionsJournalPage"), "ActionsJournalPage")
+const SpgSnapshotPage = lazyPage(() => import("../features/spg/pages/SpgSnapshotPage"), "SpgSnapshotPage")
+const TransfersPage = lazyPage(() => import("../features/transfers/pages/TransfersPage"), "TransfersPage")
+const SettingsPage = lazyPage(() => import("../features/settings/SettingsPage"), "SettingsPage")
+const BackupsPage = lazyPage(() => import("../features/settings/SettingsBackupsPage"), "BackupsPage")
+const DevSettingsPage = lazyPage(() => import("../features/settings/DevSettingsPage"), "DevSettingsPage")
+const UsersPage = lazyPage(() => import("../features/admin/pages/UsersPage"), "UsersPage")
+const EmployeesPage = lazyPage(() => import("../features/admin/pages/EmployeesPage"), "EmployeesPage")
+const LoginPage = lazyPage(() => import("../features/auth/pages/LoginPage"), "LoginPage")
+const OidcCallbackPage = lazyPage(() => import("../features/auth/pages/OidcCallbackPage"), "OidcCallbackPage")
 
 export const router = createBrowserRouter([
   {
     path: "/login",
-    element: <LoginPage />,
+    element: <RouteBoundary><LoginPage /></RouteBoundary>,
   },
   {
     path: "/auth/callback",
-    element: <OidcCallbackPage />,
+    element: <RouteBoundary><OidcCallbackPage /></RouteBoundary>,
   },
   {
     path: "/",
@@ -77,4 +84,3 @@ export const router = createBrowserRouter([
     ],
   },
 ])
-

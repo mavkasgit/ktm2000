@@ -5,6 +5,7 @@ import { useAuth } from "@/features/auth/hooks/useAuth"
 import { toast } from "@/shared/ui"
 import { UserAvatar, getUserSeed } from "@user/ui"
 import { KtmUserSettingsDialog } from "@/features/user-settings/KtmUserSettingsDialog"
+import { RouteBoundary } from "./lazyRoute"
 import { KtmNotificationBell } from "@/features/notifications"
 import { installDialogFocusTracker } from "@/shared/lib/dialogFocus"
 
@@ -217,7 +218,9 @@ export function Layout() {
         </aside>
       )}
       <main className={hideSidebar ? "main-area !pt-6 md:!pt-6" : "main-area"}>
-        <Outlet />
+        <RouteBoundary>
+          <Outlet />
+        </RouteBoundary>
       </main>
     </div>
   )
