@@ -49,7 +49,7 @@ import { PRESET_PROFILES, type GroupingProfile } from "../lib/groupingProfiles";
 import { isTaskCompletable, getNonCompletableTasks } from "../lib/taskStatus";
 import { createAuditLog, getAuditLogs, type AuditLogEntry } from "@/shared/api/auditLogs";
 import { isAnyDialogOpen } from "@/shared/lib/dialogOpen";
-import { fmtQty } from "@/shared/lib/quantityFormat";
+import { fmtQty, toQtyInteger } from "@/shared/lib/quantityFormat";
 
 type MeResponse = {
   id: number;
@@ -60,10 +60,6 @@ type MeResponse = {
   is_active: boolean;
 };
 
-function toInteger(value: string | number): number {
-  const n = typeof value === "number" ? value : parseFloat(value);
-  return Number.isFinite(n) ? Math.round(n) : 0;
-}
 
 function nowLocalDateTime(): string {
   const d = new Date();
@@ -476,8 +472,8 @@ export function SectionsTasksPage() {
     onSuccess: (response, variables) => {
       const tasks = variables.tasks || [];
       const summary = summarizeBulkResults(response.results.map(r => ({ id: r.id, status: r.status, reason: r.reason })));
-      const totalGood = variables.entries.reduce((sum, e) => sum + toInteger(e.good_quantity), 0);
-      const totalDefect = variables.entries.reduce((sum, e) => sum + toInteger(e.defect_quantity || "0"), 0);
+      const totalGood = variables.entries.reduce((sum, e) => sum + toQtyInteger(e.good_quantity), 0);
+      const totalDefect = variables.entries.reduce((sum, e) => sum + toQtyInteger(e.defect_quantity || "0"), 0);
 
       const sectionInfo = selectedSection ? `на участке "${selectedSection.name}" (${selectedSection.code})` : "";
       const taskInfo = tasks.length > 0
@@ -606,13 +602,13 @@ export function SectionsTasksPage() {
     const isGroup = !!tasks && tasks.length > 0;
     if (!task && !isGroup) return;
 
-    const qty = toInteger(actionQty || "0");
+    const qty = toQtyInteger(actionQty || "0");
     const effectivePerformedAt = `${performedDate}T${performedShift === "1" ? "08:00" : "20:00"}`;
     const effectiveAccountedAt = nowLocalDateTime();
     const executorUserId = me?.id;
 
     const good = qty;
-    const defect = toInteger(defectQty || "0");
+    const defect = toQtyInteger(defectQty || "0");
     if (good + defect <= 0) {
       toast({ title: "Ошибка", description: "Укажите факт или брак", variant: "destructive" });
       setConflictHint("Укажите хотя бы одно количество: годные или брак.");
@@ -620,7 +616,7 @@ export function SectionsTasksPage() {
     }
 
     const calcInWork = (t: SectionBoardTask) =>
-      Math.max(0, toInteger(t.cache.issued_quantity) - toInteger(t.cache.completed_quantity) - toInteger(t.cache.rejected_quantity));
+      Math.max(0, toQtyInteger(t.cache.issued_quantity) - toQtyInteger(t.cache.completed_quantity) - toQtyInteger(t.cache.rejected_quantity));
     const inWork = isGroup
       ? tasks.reduce((sum, t) => sum + calcInWork(t), 0)
       : calcInWork(task!);
@@ -690,7 +686,7 @@ export function SectionsTasksPage() {
 
         for (let i = 0; i < completableTasks.length; i++) {
           const t = completableTasks[i];
-          const capacity = Math.max(0, toInteger(t.planned_quantity));
+          const capacity = Math.max(0, toQtyInteger(t.planned_quantity));
 
           // good: минимум из остатка, planned_quantity и in_work (если in_work>0)
           const tInWork = calcInWork(t);
@@ -821,8 +817,8 @@ export function SectionsTasksPage() {
     setBulkProgress({ total: entries.length, completed: 0, running: true });
     const lockOptions = lockedSectionId !== null ? { singleSectionLockId: lockedSectionId } : undefined;
     
-    const totalGood = entries.reduce((sum, e) => sum + toInteger(e.goodQty), 0);
-    const totalDefect = entries.reduce((sum, e) => sum + toInteger(e.defectQty), 0);
+    const totalGood = entries.reduce((sum, e) => sum + toQtyInteger(e.goodQty), 0);
+    const totalDefect = entries.reduce((sum, e) => sum + toQtyInteger(e.defectQty), 0);
 
     try {
       const response = await bulkCompleteTasks(
@@ -862,8 +858,8 @@ export function SectionsTasksPage() {
     const effectivePerformedAt = data.performedAt || nowLocalDateTime();
     const effectiveAccountedAt = data.accountedAt || effectivePerformedAt;
 
-    const totalGood = data.completeEntries.reduce((sum, e) => sum + toInteger(e.goodQty), 0);
-    const totalDefect = data.completeEntries.reduce((sum, e) => sum + toInteger(e.defectQty), 0);
+    const totalGood = data.completeEntries.reduce((sum, e) => sum + toQtyInteger(e.goodQty), 0);
+    const totalDefect = data.completeEntries.reduce((sum, e) => sum + toQtyInteger(e.defectQty), 0);
 
     if (data.completeEntries.length > 0) {
       try {

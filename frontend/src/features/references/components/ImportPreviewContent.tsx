@@ -115,9 +115,12 @@ export function ImportPreviewContent({ preview }: { preview: CatalogPreview }) {
               const lengthsText = item.lengths && item.lengths.length > 0
                 ? item.lengths.map((length) => `${length.length_mm}${length.raw_length_mm != null ? ` (сырьё ${length.raw_length_mm})` : ""}`).join(", ")
                 : null;
+              // Разделитель списка — « · », а не «, »: десятичный разделитель
+              // тоже запятая (ADR-0035/0040), и «2,5, 3» не даёт понять, где
+              // кончилось значение и началась следующая норма.
               const quantitiesText =
                 item.quantities_per_hanger && item.quantities_per_hanger.length > 0
-                  ? item.quantities_per_hanger.map((q) => fmtQtyPrecise(q)).join(", ")
+                  ? item.quantities_per_hanger.map((q) => fmtQtyPrecise(q)).join(" · ")
                   : fmtQtyPrecise(item.quantity_per_hanger);
               return (
                 <tr key={item.sku} className="hover:bg-muted/50">

@@ -688,7 +688,7 @@ export function TransfersPage() {
   );
 
   const readyPagination = usePaginatedTableQuery({
-    resetPageDeps: [
+    extraDeps: [
       showAllSpgs,
       activeSpgId,
       debouncedReadySearch,
@@ -750,7 +750,7 @@ export function TransfersPage() {
   );
 
   const historyPagination = usePaginatedTableQuery({
-    resetPageDeps: [
+    extraDeps: [
       showAllSpgs,
       activeSpgId,
       debouncedHistorySearch,
@@ -834,8 +834,8 @@ export function TransfersPage() {
     limit: historyLimit,
     setLimit: setHistoryLimit,
     resetPage: resetHistoryPage,
-    getTotalPages: computeHistoryTotalPages,
-    getRangeLabel: historyRangeLabel,
+    totalPages: computeHistoryTotalPages,
+    rangeLabel: historyRangeLabel,
   } = historyPagination;
   const historyTotalPages = computeHistoryTotalPages(historyTotal);
 
@@ -845,8 +845,8 @@ export function TransfersPage() {
     limit: readyLimit,
     setLimit: setReadyLimit,
     resetPage: resetReadyPage,
-    getTotalPages: computeReadyTotalPages,
-    getRangeLabel: readyRangeLabel,
+    totalPages: computeReadyTotalPages,
+    rangeLabel: readyRangeLabel,
   } = readyPagination;
   const readyTotalPages = computeReadyTotalPages(readyTotal);
 

@@ -1,4 +1,5 @@
 import { fmtQty } from "@/shared/lib/quantityFormat"
+import { countHangers } from "@/shared/lib/hangerCount"
 import { Input, Button, RouteOriginMark } from "@/shared/ui"
 import { routeOriginLabel } from "@/shared/lib/routeMeta"
 import { type RowDetailsContentMode, type RowDetailsData } from "./types"
@@ -86,13 +87,12 @@ export function RowDetailsContent({
   })
 
   const hangerCount = useMemo(() => {
-    const qty = Number(editQuantity) || 0
-    const perHanger = Number(editQuantityPerHanger) || 0
-    if (perHanger > 0) {
-      // Подвесов не бывает дробными: остаток вешается целиком (ADR-0040).
-      return String(Math.ceil(qty / perHanger))
-    }
-    return null
+    // Считаем каноническим countHangers, а не своей копией округления вверх:
+    // правило округления подвесов живёт в одном месте (@/shared/lib/hangerCount),
+    // и «значения нет» здесь — это null, а не «0», иначе предпросмотр врал бы
+    // оператору, показав ноль подвесов там, где количество ещё не введено.
+    const count = countHangers(editQuantity, Number(editQuantityPerHanger));
+    return count === null ? null : String(count);
   }, [editQuantity, editQuantityPerHanger])
 
   const hangerSourceHint = data.quantityPerHangerOverridden

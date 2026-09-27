@@ -58,3 +58,19 @@ export function fmtQtyPrecise(value: number | string | null | undefined): string
   if (quantity === null) return QTY_EMPTY;
   return String(Number(quantity.toFixed(QTY_PRECISION))).replace(".", ",");
 }
+
+/**
+ * Значение количества из БД → целые штуки числом: `2.4` → `2`, мусор → `0`.
+ * Обратная сторона `fmtQty`: печать — в текст, здесь — в поле запроса, где
+ * нужен именно `number` для арифметики по задачам. Живёт в том же модуле,
+ * чтобы разбор и печать не разошлись: девять локальных копий этого
+ * округления и породили девять форматтеров (ADR-0040).
+ *
+ * Ноль по умолчанию, а не `null`, — единственное отличие от `fmtQty`, и оно
+ * осознанное: вызывающий считает «сколько добавить» или «сколько брака», где
+ * ноль — безопасный ответ на пустое поле, а отказ бросает лишнее состояние.
+ */
+export function toQtyInteger(value: string | number): number {
+  const parsed = typeof value === "number" ? value : parseFloat(value);
+  return Number.isFinite(parsed) ? Math.round(parsed) : 0;
+}

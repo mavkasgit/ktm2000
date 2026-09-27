@@ -33,6 +33,7 @@ import { primaryHangerValue, effectiveForLength, effectiveForMode, productLength
 import { isLengthState } from "@/shared/lib/dimensionState";
 import { cn } from "@/shared/utils/cn";
 import { useDebouncedValue } from "@/shared/lib/useDebouncedValue";
+import { fmtQtyPrecise } from "@/shared/lib/quantityFormat";
 
 type ViewMode = "grid" | "table" | "calc";
 type DialogMode = "create" | "edit";
@@ -174,9 +175,9 @@ function QuantityPerHangerCell({ product }: { product: Product }) {
     return (
       <span
         className="inline-flex items-center gap-1 rounded px-1.5 py-0.5 text-xs font-medium ring-1 ring-primary/40 bg-primary/10 text-secondary-foreground"
-        title={`${eff.value} шт (${eff.source === "auto" ? "авто" : "ручное"})`}
+        title={`${fmtQtyPrecise(eff.value)} шт (${eff.source === "auto" ? "авто" : "ручное"})`}
       >
-        {eff.value} шт
+        {fmtQtyPrecise(eff.value)} шт
         {eff.source === "auto" ? (
           <span className="rounded bg-emerald-100 px-1 text-[10px] font-semibold text-emerald-800">авто</span>
         ) : (
@@ -211,9 +212,9 @@ function QuantityPerHangerCell({ product }: { product: Product }) {
               "inline-flex items-center gap-1 rounded bg-secondary px-1.5 py-0.5 text-xs text-secondary-foreground",
               isPrimary && "font-medium ring-1 ring-primary/40 bg-primary/10",
             )}
-            title={groupEntries.map(({ len, eff }) => `${len} мм: ${eff.value} шт (${eff.source === "auto" ? "авто" : "ручное"})`).join("\n")}
+            title={groupEntries.map(({ len, eff }) => `${len} мм: ${fmtQtyPrecise(eff.value)} шт (${eff.source === "auto" ? "авто" : "ручное"})`).join("\n")}
           >
-            {value} шт{multipleLengths ? "" : ` при ${groupEntries[0].len} мм`}
+            {fmtQtyPrecise(value)} шт{multipleLengths ? "" : ` при ${groupEntries[0].len} мм`}
             {source === "auto" && (
               <span className="rounded bg-emerald-100 px-1 text-[10px] font-semibold text-emerald-800">авто</span>
             )}
@@ -492,15 +493,11 @@ export function RawMaterialsPage() {
   const uniqueValues = useMemo(() => {
     return {
       sku: [...new Set(items.map((p) => p.sku))].sort(),
-      quantity_per_hanger: [...new Set(items.map((p) => {
-        const value = primaryHangerValue(p)?.value;
-        return value != null ? String(value) : "—";
-      }))]
-        .sort((a, b) => {
-          if (a === "—") return 1;
-          if (b === "—") return -1;
-          return Number(a) - Number(b);
-        }),
+      quantity_per_hanger: [
+        ...new Set(items.map((p) => primaryHangerValue(p)?.value ?? null)),
+      ]
+        .sort((a, b) => (a === null ? 1 : b === null ? -1 : a - b))
+        .map((value) => (value === null ? "—" : fmtQtyPrecise(value))),
       length_mm: [...new Set(items.flatMap((p) => productLengths(p).map(String)))]
         .sort((a, b) => Number(a) - Number(b)),
       is_paired_profile: ["Да", "Нет"],

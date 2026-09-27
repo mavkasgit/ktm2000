@@ -132,12 +132,12 @@ function getTaskCellValue(task: SectionBoardTask, field: TaskSortField): string 
     case "productSku": return task.product_sku;
     case "dimensions": return formatDimensionsLabel(taskGroupingDimensions(task));
     case "status": return getStatusLabel(task);
-    case "plannedQty": return String(parseFloat(task.planned_quantity) || 0);
-    case "issuedQty": return String(parseFloat(task.cache.issued_quantity) || 0);
-    case "completedQty": return String(parseFloat(task.cache.completed_quantity) || 0);
-    case "transferredQty": return String(parseFloat(task.cache.transferred_quantity) || 0);
-    case "rejectedQty": return String(parseFloat(task.cache.rejected_quantity) || 0);
-    case "remainingQty": return String(parseFloat(task.cache.remaining_quantity) || 0);
+    case "plannedQty": return fmtQty(task.planned_quantity);
+    case "issuedQty": return fmtQty(task.cache.issued_quantity);
+    case "completedQty": return fmtQty(task.cache.completed_quantity);
+    case "transferredQty": return fmtQty(task.cache.transferred_quantity);
+    case "rejectedQty": return fmtQty(task.cache.rejected_quantity);
+    case "remainingQty": return fmtQty(task.cache.remaining_quantity);
   }
 }
 
@@ -591,12 +591,12 @@ export function SectionTasksBoard({
       (a, b) => formatDimensionsFilterValue(a).localeCompare(formatDimensionsFilterValue(b), "ru"),
     ),
     status: [...new Set(visibleTasks.map((t) => getStatusLabel(t)))],
-    plannedQty: [...new Set(visibleTasks.map((t) => String(parseFloat(t.planned_quantity) || 0)))],
-    issuedQty: [...new Set(visibleTasks.map((t) => String(parseFloat(t.cache.issued_quantity) || 0)))],
-    completedQty: [...new Set(visibleTasks.map((t) => String(parseFloat(t.cache.completed_quantity) || 0)))],
-    transferredQty: [...new Set(visibleTasks.map((t) => String(parseFloat(t.cache.transferred_quantity) || 0)))],
-    rejectedQty: [...new Set(visibleTasks.map((t) => String(parseFloat(t.cache.rejected_quantity) || 0)))],
-    remainingQty: [...new Set(visibleTasks.map((t) => String(parseFloat(t.cache.remaining_quantity) || 0)))],
+    plannedQty: [...new Set(visibleTasks.map((t) => fmtQty(t.planned_quantity)))],
+    issuedQty: [...new Set(visibleTasks.map((t) => fmtQty(t.cache.issued_quantity)))],
+    completedQty: [...new Set(visibleTasks.map((t) => fmtQty(t.cache.completed_quantity)))],
+    transferredQty: [...new Set(visibleTasks.map((t) => fmtQty(t.cache.transferred_quantity)))],
+    rejectedQty: [...new Set(visibleTasks.map((t) => fmtQty(t.cache.rejected_quantity)))],
+    remainingQty: [...new Set(visibleTasks.map((t) => fmtQty(t.cache.remaining_quantity)))],
   }), [visibleTasks]);
 
   // Порядок строк доски. Колонки серверной сортировки (sequence/productSku/

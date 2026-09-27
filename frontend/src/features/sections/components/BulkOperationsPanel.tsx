@@ -5,7 +5,7 @@ import { cn } from "@/shared/utils/cn";
 import type { SectionBoardTask } from "@/shared/api/shopfloor";
 import { formatDimensionsLabel } from "@/shared/api/stock";
 import { normalizeQuantityInput, type QuantityInputIssue } from "@/shared/lib/quantityInput";
-import { fmtQty } from "@/shared/lib/quantityFormat";
+import { fmtQty, toQtyInteger } from "@/shared/lib/quantityFormat";
 import {
   taskGroupingDimensions,
   taskGroupingDimensionsKey,
@@ -38,10 +38,6 @@ function QtyInput({
   );
 }
 
-function toInteger(value: string | number): number {
-  const n = typeof value === "number" ? value : parseFloat(value);
-  return Number.isFinite(n) ? Math.round(n) : 0;
-}
 
 function nowLocalDateTime(): string {
   const d = new Date();
@@ -101,7 +97,7 @@ function distributeQtyProportional(
   }
 
   // Берём ёмкость каждой задачи из её плана (planned_quantity).
-  const capacities = tasks.map((t) => Math.max(0, toInteger(t.planned_quantity)));
+  const capacities = tasks.map((t) => Math.max(0, toQtyInteger(t.planned_quantity)));
   const totalCapacity = capacities.reduce((s, c) => s + c, 0);
 
   if (totalCapacity === 0) {
@@ -140,12 +136,12 @@ function initGroup(tasks: SectionBoardTask[]): BulkOpGroup {
   const label = buildGroupLabel(tasks[0]);
   const operationName = getOperationName(tasks[0]);
 
-  const totalPlan = sumTasks(tasks, (t) => toInteger(t.planned_quantity));
-  const totalIssued = sumTasks(tasks, (t) => toInteger(t.cache.issued_quantity));
-  const totalCompleted = sumTasks(tasks, (t) => toInteger(t.cache.completed_quantity));
-  const totalTransferred = sumTasks(tasks, (t) => toInteger(t.cache.transferred_quantity));
-  const totalRejected = sumTasks(tasks, (t) => toInteger(t.cache.rejected_quantity));
-  const totalRemaining = sumTasks(tasks, (t) => toInteger(t.cache.remaining_quantity));
+  const totalPlan = sumTasks(tasks, (t) => toQtyInteger(t.planned_quantity));
+  const totalIssued = sumTasks(tasks, (t) => toQtyInteger(t.cache.issued_quantity));
+  const totalCompleted = sumTasks(tasks, (t) => toQtyInteger(t.cache.completed_quantity));
+  const totalTransferred = sumTasks(tasks, (t) => toQtyInteger(t.cache.transferred_quantity));
+  const totalRejected = sumTasks(tasks, (t) => toQtyInteger(t.cache.rejected_quantity));
+  const totalRemaining = sumTasks(tasks, (t) => toQtyInteger(t.cache.remaining_quantity));
   // in_work = issued - completed - rejected (cached_in_work_quantity removed; compute inline)
   const totalInWork = Math.max(0, totalIssued - totalCompleted - totalRejected);
 
@@ -263,8 +259,8 @@ export function BulkOperationsPanel({
         if (g.key !== groupKey) return g;
         const updated = { ...g, [field]: digits };
         // Пересчитать per-task распределение
-        const addVal = toInteger(updated.addQty);
-        const defectVal = toInteger(updated.defectQty);
+        const addVal = toQtyInteger(updated.addQty);
+        const defectVal = toQtyInteger(updated.defectQty);
         updated.taskAddQty = distributeQtyUncapped(g.tasks, addVal);
         updated.taskDefectQty = distributeQtyUncapped(g.tasks, defectVal);
         return updated;
@@ -276,8 +272,8 @@ export function BulkOperationsPanel({
     setGroups((prev) =>
       prev.map((g) => {
         const plannedVal = String(g.totalPlan);
-        const addVal = toInteger(plannedVal);
-        const defectVal = toInteger(g.defectQty);
+        const addVal = toQtyInteger(plannedVal);
+        const defectVal = toQtyInteger(g.defectQty);
         return {
           ...g,
           addQty: plannedVal,
@@ -313,8 +309,8 @@ export function BulkOperationsPanel({
     const skippedTasks: SectionBoardTask[] = [];
 
     for (const group of groups) {
-      const totalAdd = toInteger(group.addQty);
-      const totalDefect = toInteger(group.defectQty);
+      const totalAdd = toQtyInteger(group.addQty);
+      const totalDefect = toQtyInteger(group.defectQty);
       if (totalAdd <= 0 && totalDefect <= 0) continue;
 
       for (const task of group.tasks) {
@@ -366,8 +362,8 @@ export function BulkOperationsPanel({
 
   const getTaskProgress = (group: BulkOpGroup): string => {
     return group.tasks.map((task) => {
-      const completed = toInteger(task.cache.completed_quantity);
-      const planned = toInteger(task.planned_quantity);
+      const completed = toQtyInteger(task.cache.completed_quantity);
+      const planned = toQtyInteger(task.planned_quantity);
       return `${completed}/${planned}`;
     }).join(", ");
   };
@@ -375,7 +371,7 @@ export function BulkOperationsPanel({
   const getPlanBreakdown = (group: BulkOpGroup): string => {
     if (group.tasks.length <= 1) return fmtQty(group.totalPlan);
     return group.tasks
-      .map((t) => fmtQty(toInteger(t.planned_quantity)))
+      .map((t) => fmtQty(toQtyInteger(t.planned_quantity)))
       .join("+");
   };
 
@@ -625,13 +621,13 @@ export function BulkOperationsPanel({
                 pending
                 || !groups.some(
                   (g) => g.tasks.some((t) => isTaskCompletable(t))
-                    && (toInteger(g.addQty) > 0 || toInteger(g.defectQty) > 0),
+                    && (toQtyInteger(g.addQty) > 0 || toQtyInteger(g.defectQty) > 0),
                 )
               }
               title={
                 groups.every(
                   (g) => !g.tasks.some((t) => isTaskCompletable(t))
-                    || (toInteger(g.addQty) <= 0 && toInteger(g.defectQty) <= 0),
+                    || (toQtyInteger(g.addQty) <= 0 && toQtyInteger(g.defectQty) <= 0),
                 )
                   ? "Все выбранные задачи имеют статус, не допускающий завершение (например, «Не передано»)"
                   : undefined

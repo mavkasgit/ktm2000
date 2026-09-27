@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 
-import { QTY_EMPTY, fmtQty, fmtQtyPrecise } from "./quantityFormat";
+import { QTY_EMPTY, fmtQty, fmtQtyPrecise, toQtyInteger } from "./quantityFormat";
 
 describe("fmtQty — целые штуки", () => {
   it("дробь округляется, целое не трогается", () => {
@@ -57,5 +57,32 @@ describe("fmtQtyPrecise — дробь живая", () => {
       expect(fmtQtyPrecise(value)).toBe(QTY_EMPTY);
       expect(fmtQtyPrecise(value)).not.toBe("0");
     }
+  });
+});
+
+describe("toQtyInteger — обратная сторона fmtQty", () => {
+  it("разбирает значение БД в целые штуки числом", () => {
+    expect(toQtyInteger("200.0")).toBe(200);
+    expect(toQtyInteger(2.4)).toBe(2);
+    expect(toQtyInteger("12.500")).toBe(13);
+    expect(toQtyInteger(-3)).toBe(-3);
+  });
+
+  it("печать и разбор не расходятся на целых штуках", () => {
+    for (const value of ["0", "1", "8", "999", "200.0"]) {
+      expect(String(toQtyInteger(value))).toBe(fmtQty(value));
+    }
+  });
+
+  it("не-разбираемое значение даёт ноль: вызывающий считает «сколько добавить»", () => {
+    for (const value of ["", "  ", "abc", "шт"]) {
+      expect(toQtyInteger(value)).toBe(0);
+    }
+  });
+
+  it("запятая не мешает разбору: parseFloat берёт целую часть, как и прежде", () => {
+    // В отличие от fmtQty, «2,5» здесь — это 2, а не «—»: значение нужно числом
+    // для арифметики по задачам, и молча подставить ноль значило бы занизить итог.
+    expect(toQtyInteger("2,5")).toBe(2);
   });
 });
