@@ -1147,10 +1147,8 @@ export function SectionsTasksPage() {
                     onSelectPlan={selectOnlyPlan}
                     onTogglePlan={togglePlanSelection}
                     onClearPlans={clearPlanSelection}
-                    onCreatePlan={handleCreatePlan}
-                    selectedTaskCount={selectedTasks.length}
-                    onCreateModeChange={handleDailyPlanModeChange}
                     onOpenPlans={() => setSectionContentMode("plan")}
+                    opensPlans
                     isLoading={dailyPlansLoading}
                   />
                 </div>
