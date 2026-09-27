@@ -13,7 +13,9 @@ Bootstrap-инструкции для AI-агентов. Детали — в `do
 npm run dev                    # Postgres + migrate + backend :8012 + frontend :5172
 npm run db:makemigrate -- "…"  # Новая миграция Alembic
 npm run db:migrate             # Применить миграции
-npm run db:seed                # Демо-данные
+npm run db:seed                # Справочники (участки, маршруты, шаблоны импорта)
+npm run db:seed:packing-demo   # Демо-доска «Участков»: 55 заданий на пиле/упаковке/анодировании + 36 дневных планов
+npm run db:snapshot -- dump <label> / restore <name>   # Слепок dev-БД в data/backups/snapshots
 npm run test:pytest            # Тесты backend (параллельно, дефолт)
 npm run test:pytest:full       # Полный прогон в один поток
 npm run test:pytest:mon        # Только изменённые тесты
