@@ -4,6 +4,7 @@ import { Button, Input, toast, Checkbox, DatePicker } from "@/shared/ui";
 import { cn } from "@/shared/utils/cn";
 import type { SectionBoardTask } from "@/shared/api/shopfloor";
 import { formatDimensionsLabel } from "@/shared/api/stock";
+import { normalizeQuantityInput, type QuantityInputIssue } from "@/shared/lib/quantityInput";
 import {
   taskGroupingDimensions,
   taskGroupingDimensionsKey,
@@ -16,7 +17,7 @@ import {
   isTaskCompletable,
 } from "../lib/taskStatus";
 
-const QTY_INPUT_CLASSES = "h-7 text-xs [appearance:textfield] [&::-webkit-outer-spin-button]:appearance-none [&::-webkit-inner-spin-button]:appearance-none";
+const QTY_INPUT_CLASSES = "h-7 text-xs";
 
 function QtyInput({
   value,
@@ -26,7 +27,8 @@ function QtyInput({
 }: React.ComponentProps<typeof Input>) {
   return (
     <Input
-      type="number"
+      type="text"
+      inputMode="numeric"
       value={value}
       onChange={onChange}
       className={`${QTY_INPUT_CLASSES} ${className}`}
@@ -220,6 +222,8 @@ export function BulkOperationsPanel({
 }: BulkOperationsPanelProps) {
   const [groups, setGroups] = useState<BulkOpGroup[]>(() => groupTasks(tasks));
   const [actionLog, setActionLog] = useState<{ type: string; time: string; status: "success" | "error"; message: string }[]>([]);
+  // Причины отклонённого ввода по группам и полям: `groupKey.field` → текст (ADR-0032).
+  const [issues, setIssues] = useState<Record<string, QuantityInputIssue | null>>({});
 
   // Date/Time States
   const now = nowLocalDateTimeParts();
@@ -254,7 +258,11 @@ export function BulkOperationsPanel({
   }
 
   const updateGroupQty = (groupKey: string, field: "addQty" | "defectQty", value: string) => {
-    const digits = value.replace(/[^\d]/g, "");
+    const { value: digits, issue } = normalizeQuantityInput(value);
+    setIssues((prev) => ({ ...prev, [`${groupKey}.${field}`]: issue }));
+    // Недопустимый символ не подставляется: значение остаётся прежним, а
+    // причина висит под полем, пока ввод снова не станет допустимым (ADR-0032).
+    if (issue) return;
     setGroups((prev) =>
       prev.map((g) => {
         if (g.key !== groupKey) return g;
@@ -518,23 +526,35 @@ export function BulkOperationsPanel({
                   <td className="p-2 text-center whitespace-nowrap font-mono text-xs border-r">
                     {fmtQty(group.totalCompleted)}/{fmtQty(group.totalRejected)}
                   </td>
-                  <td className="p-2 text-center border-r">
+                  <td className="p-2 text-center border-r align-top">
                     <QtyInput
-                      min="0"
                       value={group.addQty}
                       onChange={(ev) => updateGroupQty(group.key, "addQty", ev.target.value)}
+                      onBlur={() => setIssues((prev) => ({ ...prev, [`${group.key}.addQty`]: null }))}
+                      aria-invalid={issues[`${group.key}.addQty`] != null}
                       className="w-20 mx-auto"
                       disabled={pending}
                     />
+                    {issues[`${group.key}.addQty`] && (
+                      <div className="mt-1 max-w-[12rem] whitespace-normal text-[11px] leading-tight text-red-600" role="status">
+                        {issues[`${group.key}.addQty`]!.text}
+                      </div>
+                    )}
                   </td>
-                  <td className="p-2 text-center border-r">
+                  <td className="p-2 text-center border-r align-top">
                     <QtyInput
-                      min="0"
                       value={group.defectQty}
                       onChange={(ev) => updateGroupQty(group.key, "defectQty", ev.target.value)}
+                      onBlur={() => setIssues((prev) => ({ ...prev, [`${group.key}.defectQty`]: null }))}
+                      aria-invalid={issues[`${group.key}.defectQty`] != null}
                       className="w-20 mx-auto"
                       disabled={pending}
                     />
+                    {issues[`${group.key}.defectQty`] && (
+                      <div className="mt-1 max-w-[12rem] whitespace-normal text-[11px] leading-tight text-red-600" role="status">
+                        {issues[`${group.key}.defectQty`]!.text}
+                      </div>
+                    )}
                   </td>
                   <td className="p-2 text-center text-xs text-muted-foreground whitespace-nowrap font-mono border-r">
                     {progress}
