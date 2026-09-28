@@ -34,8 +34,8 @@ from app.models.product import DimensionState, Product
 from app.services.plan_position_hanger import resolve_position_hanger
 
 BACKEND_DIR = Path(__file__).resolve().parents[1]
-PREV_REVISION = "065_route_stage_transit_normalization"
-HEAD_REVISION = "066_hanger_norm_key_normalization"
+PREV_REVISION = "066_route_signature_backfill"
+HEAD_REVISION = "067_hanger_norm_key_normalization"
 
 
 def _test_db_url() -> str:

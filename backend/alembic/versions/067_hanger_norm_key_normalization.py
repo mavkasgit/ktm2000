@@ -45,8 +45,8 @@ import sqlalchemy as sa
 from alembic import op
 
 
-revision: str = "066_hanger_norm_key_normalization"
-down_revision: Union[str, None] = "065_route_stage_transit_normalization"
+revision: str = "067_hanger_norm_key_normalization"
+down_revision: Union[str, None] = "066_route_signature_backfill"
 branch_labels: Union[str, Sequence[str], None] = None
 depends_on: Union[str, Sequence[str], None] = None
 

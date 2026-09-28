@@ -324,6 +324,25 @@ export type RouteCheckResponse = {
   } | null;
   match: boolean;
   issues: string[];
+  route_signature: RouteSignatureCheck;
+};
+
+export type RouteSignatureStep = {
+  stage_kind: string;
+  section_code: string;
+  operation_codes: string[];
+  is_significant: boolean;
+  transforms_dimensions: boolean;
+  is_final: boolean;
+};
+
+/** Сигнатура маршрута позиции: ожидаемая, фактическая и вердикт (#214). */
+export type RouteSignatureCheck = {
+  verdict: "match" | "mismatch" | "unknown";
+  expected: string | null;
+  expected_steps: RouteSignatureStep[];
+  actual: string | null;
+  actual_steps: RouteSignatureStep[];
 };
 
 export async function routeCheck(planId: number, positionId: number) {

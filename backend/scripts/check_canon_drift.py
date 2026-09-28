@@ -61,11 +61,14 @@ async def run_check(session: AsyncSession) -> int:
     """Напечатать отчёт о дрейфе; вернуть код выхода (0 — дрейфа нет).
 
     Публичный шов для тестов: принимает готовую ``AsyncSession`` и ничего
-    не коммитит.
+    не коммитит. Канон собирается здесь — CLI это composition root, а сервис
+    получает его параметром (ADR-0004 §5).
     """
+    from app.seeds.canon import build_plant_config
+
     from app.services.canon_drift import check_canon_drift
 
-    report = await check_canon_drift(session)
+    report = await check_canon_drift(session, build_plant_config())
     if not report.has_drift:
         print("OK: дрейфа канона нет — все строки канона присутствуют в БД.")
         return 0
