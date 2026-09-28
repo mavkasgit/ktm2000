@@ -1871,3 +1871,298 @@ async def test_migration_066_normalizes_hanger_norm_keys_by_article(tmp_path: Pa
         async with admin_engine.connect() as conn:
             await conn.execute(text(f'DROP DATABASE IF EXISTS "{db_name}" WITH (FORCE)'))
         await admin_engine.dispose()
+
+
+_MIG068_PREV = "067_hanger_norm_key_normalization"
+
+
+async def _seed_mig068_routes(conn) -> dict[str, int]:
+    """Маршруты в том виде, в каком их оставил импорт ДО #221.
+
+    Запись брала значимость ПЕРВОГО шага группы: у ``SAW_PREP`` (незначимая)
+    она давала ``is_significant = false``, тогда как сборка по тому же шагу
+    говорила «значим» (в группе есть значимая ``SAW``). Такой этап —
+    ровно тот случай, который чинит #221.
+    """
+    await conn.execute(text(
+        "INSERT INTO sections (code, name, sort_order, type, is_active) VALUES "
+        "('MIG068-SAW', 'Пила', 70, 'production', true), "
+        "('MIG068-PACK', 'Упаковка', 80, 'production', true), "
+        "('MIG068-FG', 'Склад ГП', 90, 'finished_stock', true)"
+    ))
+    sections = dict(
+        (await conn.execute(text("SELECT code, id FROM sections WHERE code LIKE 'MIG068-%'"))).all()
+    )
+    await conn.execute(
+        text(
+            "INSERT INTO section_operations "
+            "(section_id, operation_code, operation_name, is_significant, "
+            "transforms_dimensions, group_code, group_name, sort_order) VALUES "
+            "(:saw, 'SAW_PREP', 'Разметка', false, false, 'SAW_PREP_GRP', 'Разметка', 0), "
+            "(:saw, 'SAW', 'Распил', true, true, 'SAW', 'Пиление', 1), "
+            "(:pack, 'PACK_STRETCH', 'Стрейч', false, false, 'PACK', 'Упаковка', 1)"
+        ),
+        {"saw": sections["MIG068-SAW"], "pack": sections["MIG068-PACK"]},
+    )
+    # Маршрут без этапов — сигнатуры не получает и не должен её терять.
+    await conn.execute(
+        text(
+            "INSERT INTO production_routes (name, code, is_active) VALUES "
+            "('Без этапов', 'mig068-empty', true), "
+            "('Динамический', 'mig068-dynamic', true), "
+            "('Обычный участок', 'mig068-plain', true), "
+            "('Импорт после #214', 'mig068-import', true), "
+            "('Импорт до #214', 'mig068-legacy', true)"
+        )
+    )
+    routes = dict(
+        (
+            await conn.execute(
+                text("SELECT code, id FROM production_routes WHERE code LIKE 'mig068-%'")
+            )
+        ).all()
+    )
+
+    # Динамический маршрут завода: операция этапа разрешается в рантайме,
+    # код пустой — справочник не может ответить, значимость остаётся прежней.
+    await conn.execute(
+        text(
+            "INSERT INTO route_stages "
+            "(route_id, sequence, section_id, stage_kind, is_significant, is_final) "
+            "VALUES (:route, 1, :saw, 'production', true, true)"
+        ),
+        {"route": routes["mig068-dynamic"], "saw": sections["MIG068-SAW"]},
+    )
+    dynamic_stage = (
+        await conn.execute(
+            text("SELECT id FROM route_stages WHERE route_id = :route"),
+            {"route": routes["mig068-dynamic"]},
+        )
+    ).scalar_one()
+    await conn.execute(
+        text(
+            "INSERT INTO route_operations "
+            "(route_stage_id, sequence, operation_code, operation_name) "
+            "VALUES (:stage, 1, NULL, 'Пила')"
+        ),
+        {"stage": dynamic_stage},
+    )
+
+    # Обычный участок с одной значимой операцией: эталон регресса.
+    await conn.execute(
+        text(
+            "INSERT INTO route_stages "
+            "(route_id, sequence, section_id, stage_kind, is_significant, "
+            "transforms_dimensions, is_final) "
+            "VALUES (:route, 1, :saw, 'production', true, true, true)"
+        ),
+        {"route": routes["mig068-plain"], "saw": sections["MIG068-SAW"]},
+    )
+    plain_stage = (
+        await conn.execute(
+            text("SELECT id FROM route_stages WHERE route_id = :route"),
+            {"route": routes["mig068-plain"]},
+        )
+    ).scalar_one()
+    await conn.execute(
+        text(
+            "INSERT INTO route_operations "
+            "(route_stage_id, sequence, operation_code, operation_name) "
+            "VALUES (:stage, 1, 'SAW', 'Распил')"
+        ),
+        {"stage": plain_stage},
+    )
+
+    for code in ("mig068-import", "mig068-legacy"):
+        route = routes[code]
+        await conn.execute(
+            text(
+                "INSERT INTO route_stages "
+                "(route_id, sequence, section_id, storage_section_id, stage_kind, "
+                "is_significant, transforms_dimensions, is_final) VALUES "
+                "(:route, 1, NULL, :fg, 'transit', false, false, false), "
+                "(:route, 2, :saw, NULL, 'production', false, true, false), "
+                "(:route, 3, NULL, :fg, 'transit', false, false, true)"
+            ),
+            {"route": route, "saw": sections["MIG068-SAW"], "fg": sections["MIG068-FG"]},
+        )
+        saw_stage = (
+            await conn.execute(
+                text("SELECT id FROM route_stages WHERE route_id = :route AND sequence = 2"),
+                {"route": route},
+            )
+        ).scalar_one()
+        for sequence, code_ in ((1, "SAW_PREP"), (2, "SAW")):
+            await conn.execute(
+                text(
+                    "INSERT INTO route_operations "
+                    "(route_stage_id, sequence, operation_code, operation_name) "
+                    "VALUES (:stage, :seq, :code, :code)"
+                ),
+                {"stage": saw_stage, "seq": sequence, "code": code_},
+            )
+
+    # Импорт ПОСЛЕ #214 уже писал сигнатуру из входа сборки — по любому шагу
+    # группы, то есть «1». Эта строка обязана пережить миграции без изменений.
+    await conn.execute(
+        text("UPDATE production_routes SET route_signature = :sig WHERE code = 'mig068-import'"),
+        {
+            "sig": (
+                "transit:MIG068-FG::0:0:0"
+                ">production:MIG068-SAW:SAW_PREP,SAW:1:1:0"
+                ">transit:MIG068-FG::0:0:1"
+            )
+        },
+    )
+
+    # Маршрут до #214: бэкфилл 066 посчитал ему сигнатуру по записанным
+    # этапам, то есть по старому правилу записи («первый шаг»).
+    await conn.execute(
+        text("UPDATE production_routes SET route_signature = :sig WHERE code = 'mig068-legacy'"),
+        {
+            "sig": (
+                "transit:MIG068-FG::0:0:0"
+                ">production:MIG068-SAW:SAW_PREP,SAW:0:1:0"
+                ">transit:MIG068-FG::0:0:1"
+            )
+        },
+    )
+    return sections
+
+
+async def _mig068_state(conn) -> list[tuple]:
+    stages = list(
+        (
+            await conn.execute(
+                text(
+                    "SELECT r.code, rs.sequence, rs.is_significant "
+                    "FROM route_stages rs JOIN production_routes r ON r.id = rs.route_id "
+                    "WHERE r.code LIKE 'mig068%' ORDER BY r.code, rs.sequence"
+                )
+            )
+        ).all()
+    )
+    signatures = list(
+        (
+            await conn.execute(
+                text(
+                    "SELECT code, route_signature FROM production_routes "
+                    "WHERE code LIKE 'mig068%' ORDER BY code"
+                )
+            )
+        ).all()
+    )
+    return [stages, signatures]
+
+
+@pytest.mark.asyncio
+async def test_migration_068_recals_significance_then_signature(tmp_path: Path):
+    """#221: значимость этапа пересчитывается из справочника, сигнатуры — после.
+
+    Ревизия 068 восстанавливает ``is_significant`` этапа по справочнику
+    операций участка (значим, если значима хотя бы одна операция этапа), 069
+    пересчитывает сигнатуры маршрутов по уже исправленным этапам. Порядок
+    обязателен: наоборот сигнатуры остались бы посчитаны по прежним данным.
+    """
+    db_name = f"ktm_mig_{uuid.uuid4().hex[:10]}"
+    admin_url = _test_db_url().rsplit("/", 1)[0] + "/postgres"
+    target_url = _test_db_url().rsplit("/", 1)[0] + f"/{db_name}"
+
+    admin_engine = create_async_engine(admin_url, isolation_level="AUTOCOMMIT")
+    async with admin_engine.connect() as conn:
+        await conn.execute(text(f'CREATE DATABASE "{db_name}"'))
+    await admin_engine.dispose()
+
+    env = _alembic_env(target_url, tmp_path)
+    engine = create_async_engine(target_url)
+
+    def _run(*args: str) -> None:
+        result = subprocess.run(
+            ["alembic", *args],
+            cwd=BACKEND_DIR,
+            env=env,
+            capture_output=True,
+            text=True,
+            check=False,
+        )
+        assert result.returncode == 0, result.stderr or result.stdout
+
+    build_input_signature = (
+        "transit:MIG068-FG::0:0:0"
+        ">production:MIG068-SAW:SAW_PREP,SAW:1:1:0"
+        ">transit:MIG068-FG::0:0:1"
+    )
+    legacy_stored_signature = build_input_signature.replace(
+        "SAW_PREP,SAW:1:1:0", "SAW_PREP,SAW:0:1:0"
+    )
+
+    try:
+        _run("upgrade", _MIG068_PREV)
+        async with engine.begin() as conn:
+            await _seed_mig068_routes(conn)
+
+        async with engine.connect() as conn:
+            before = await _mig068_state(conn)
+        # Фикстура расходится: запись дала этапу «0», сборка — «1».
+        assert ("mig068-import", 2, False) in before[0]
+        assert ("mig068-import", build_input_signature) in before[1]
+        assert ("mig068-legacy", legacy_stored_signature) in before[1]
+
+        _run("upgrade", "head")
+        async with engine.connect() as conn:
+            after = await _mig068_state(conn)
+
+        assert after == [
+            [
+                ("mig068-dynamic", 1, True),
+                ("mig068-import", 1, False),
+                ("mig068-import", 2, True),
+                ("mig068-import", 3, False),
+                ("mig068-legacy", 1, False),
+                ("mig068-legacy", 2, True),
+                ("mig068-legacy", 3, False),
+                ("mig068-plain", 1, True),
+            ],
+            [
+                ("mig068-dynamic", "production:MIG068-SAW::1:0:1"),
+                # Маршрут без этапов сигнатуры не получает.
+                ("mig068-empty", None),
+                # Главная проверка: маршрут, созданный импортом ДО миграций, —
+                # сохранённая сигнатура не изменилась, то есть расхождения,
+                # которого не было, не появилось.
+                ("mig068-import", build_input_signature),
+                # Маршрут до #214: сигнатура была посчитана по этапам бэкфиллом
+                # 066 по старому правилу и теперь догнала вход сборки.
+                ("mig068-legacy", build_input_signature),
+                # Регресс: обычный участок с одной значимой операцией — как было.
+                ("mig068-plain", "production:MIG068-SAW:SAW:1:1:1"),
+            ],
+        ]
+
+        # Идемпотентность: повторный прогон (stamp назад + upgrade head).
+        _run("stamp", _MIG068_PREV)
+        _run("upgrade", "head")
+        async with engine.connect() as conn:
+            assert await _mig068_state(conn) == after
+
+        # Downgrade возвращает прежние значения и убирает отчёты.
+        _run("downgrade", _MIG068_PREV)
+        async with engine.connect() as conn:
+            reverted = await _mig068_state(conn)
+            leftover = (
+                await conn.execute(
+                    text(
+                        "SELECT count(*) FROM information_schema.tables "
+                        "WHERE table_schema = 'public' AND table_name IN "
+                        "('route_stage_significance_migration', 'route_signature_migration')"
+                    )
+                )
+            ).scalar_one()
+        assert reverted == before
+        assert leftover == 0
+    finally:
+        await engine.dispose()
+        admin_engine = create_async_engine(admin_url, isolation_level="AUTOCOMMIT")
+        async with admin_engine.connect() as conn:
+            await conn.execute(text(f'DROP DATABASE IF EXISTS "{db_name}" WITH (FORCE)'))
+        await admin_engine.dispose()

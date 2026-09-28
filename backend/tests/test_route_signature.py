@@ -149,10 +149,14 @@ class ParsedRow:
 
 
 @pytest.mark.asyncio
-async def test_import_stores_signature_of_build_input_not_of_written_stages(session) -> None:
-    """Сигнатура описывает маршрут таким, каким он СОБРАН, а не таким, каким
-    записан: этап участка с двумя группами пишется с признаком значимости
-    первого шага, а сигнатура — с признаком любого шага группы.
+async def test_import_writes_stage_significance_by_any_step_of_group(session) -> None:
+    """Запись и сборка считают значимость этапа одинаково: этап значим, если
+    значим хотя бы один шаг группы (#221).
+
+    Участок с двумя группами, где первая незначимая, а вторая значимая, — и
+    есть тот случай, где «первый шаг» и «любой шаг» расходятся. Импорт
+    обязан записать ``is_significant = 1`` именно по этому признаку, и тогда
+    сохранённая сигнатура совпадает с сигнатурой по записанным этапам.
     """
     await _seed_sections(session)
     sawing = await session.scalar(select(Section).where(Section.code == "SAWING"))
@@ -186,20 +190,26 @@ async def test_import_stores_signature_of_build_input_not_of_written_stages(sess
     assert route_id is not None
     route = await session.get(ProductionRoute, route_id)
 
-    assert route.route_signature == (
+    from_build_input = (
         "transit:RAW_STOCK::0:0:0"
         ">production:SAWING:SAW_PREP,SAW:1:1:0"
         ">production:PACKING:PACK_STRETCH:0:0:0"
         ">transit:FINISHED_STOCK::0:0:1"
     )
+    assert route.route_signature == from_build_input
 
-    written = await signature_for_route_stages(session, route.id)
-    assert written == (
-        "transit:RAW_STOCK::0:0:0"
-        ">production:SAWING:SAW_PREP,SAW:0:1:0"
-        ">production:PACKING:PACK_STRETCH:0:0:0"
-        ">transit:FINISHED_STOCK::0:0:1"
-    ), "фикстура должна оставаться расходящейся: запись теряет признак значимости"
+    # Записанный этап значим по ЛЮБОМУ шагу группы: первый шаг незначимый.
+    sawing_stage = await session.scalar(
+        select(RouteStage).where(
+            RouteStage.route_id == route.id,
+            RouteStage.section_id == sawing.id,
+        )
+    )
+    assert sawing_stage.is_significant is True
+
+    # Регресс в том же маршруте: незначимая упаковка и транзитные этапы
+    # складов остались незначимыми — расхождения нет нигде.
+    assert await signature_for_route_stages(session, route.id) == from_build_input
 
 
 @pytest.mark.asyncio
