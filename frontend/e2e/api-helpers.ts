@@ -13,21 +13,20 @@ export function unwrapItems<T>(body: T[] | { items?: T[] }): T[] {
 
 /**
  * Проверить тестовую БД и при необходимости бутстрапнуть её (единое поведение
- * для всех e2e-тестов). Перезапись — ТОЛЬКО если БД пуста: миграции + базовый
- * сид через backend/.venv. Инициализированная БД не трогается.
+ * для всех e2e-тестов). Перезапись — ТОЛЬКО если не хватает справочников,
+ * нужных тестам: миграции + базовый сид через backend/.venv.
  */
 export async function ensureDbBootstrapped(): Promise<void> {
-  let sections: unknown[] = [];
-  try {
-    const res = await fetch(`${BACKEND_URL}/api/sections`);
-    sections = res.ok ? unwrapItems<unknown>(await res.json()) : [];
-  } catch {
-    throw new Error(
-      `Тест-стек недоступен на ${BACKEND_URL}. Поднимите его: ` +
-        `EXTERNAL_PORT=8100 docker compose --env-file .env.test -f infra/compose/docker-compose.test.yml up -d --build`,
-    );
-  }
-  if (sections.length > 0) {
+  // Проверяем НЕ секции, а то, что тестам действительно нужно: активный
+  // шаблон импорта и маршруты. `reset-all` чистит `import_templates` и
+  // `production_routes`, но секции оставляет — проверка по секциям
+  // возвращала «БД инициализирована», справочники не восстанавливались,
+  // и следующий тест падал на «No active import template found».
+  const [templatesOk, routesOk] = await Promise.all([
+    hasActiveImportTemplate(),
+    hasAnyRoute(),
+  ]);
+  if (templatesOk && routesOk) {
     return; // БД инициализирована — ничего не перезаписываем
   }
 
@@ -48,10 +47,36 @@ export async function ensureDbBootstrapped(): Promise<void> {
     ) ??
     "python";
   const env = { ...process.env, DATABASE_URL: dbUrl };
-  console.log("[ensureDbBootstrapped] БД пуста — миграции + базовый сид…");
+  console.log(
+    `[ensureDbBootstrapped] справочники неполны (шаблон=${templatesOk}, маршруты=${routesOk}) — миграции + базовый сид…`,
+  );
   execFileSync(py, ["-m", "alembic", "upgrade", "head"], { cwd: backendDir, env, stdio: "inherit" });
   execFileSync(py, ["scripts/seed_all.py"], { cwd: backendDir, env, stdio: "inherit" });
 }
+
+/** Есть ли активный шаблон импорта — без него не работает ни один импорт. */
+async function hasActiveImportTemplate(): Promise<boolean> {
+  try {
+    const res = await fetch(`${BACKEND_URL}/api/import-templates`);
+    if (!res.ok) return false;
+    const templates = unwrapItems<{ is_active?: boolean }>(await res.json());
+    return templates.some((t) => t.is_active === true);
+  } catch {
+    return false;
+  }
+}
+
+/** Есть ли хоть один маршрут — без него позиция плана не запускается. */
+async function hasAnyRoute(): Promise<boolean> {
+  try {
+    const res = await fetch(`${BACKEND_URL}/api/routes?limit=1&offset=0`);
+    if (!res.ok) return false;
+    return unwrapItems<unknown>(await res.json()).length > 0;
+  } catch {
+    return false;
+  }
+}
+
 
 /** Прочитать KEY=VALUE из корневого .env.test (без зависимости от dotenv). */
 function readEnvTestVar(key: string): string | undefined {

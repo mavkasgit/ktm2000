@@ -8,14 +8,19 @@ import { passCache, testCacheKey } from "./pass-cache";
  * Provides authenticated page context and helpers for the KTM2000 workflow.
  *
  * Login: Break Glass (общий auth-shell, идентичен HRMS) или OIDC/Authentik.
- * Режим выбирается через E2E_AUTH_MODE: `auto` (по умолчанию),
- * `break-glass` или `oidc`. Dev credentials можно переопределить через
+ * Режим выбирается через E2E_AUTH_MODE: `break-glass` (по умолчанию),
+ * `auto` или `oidc`. Dev credentials можно переопределить через
  * E2E_ADMIN_PASSWORD, E2E_OIDC_USERNAME и E2E_OIDC_PASSWORD.
+ *
+ * По умолчанию `break-glass`: прогон не должен зависеть от внешнего IdP.
+ * В `oidc` вход идёт в Authentik на отдельной машине, и его моргание
+ * превращало зелёный прогон в прогон «на ретраях». `auto` оставлен для
+ * ручной отладки — он читает `/api/auth/oidc/config` и выбирает по факту.
  */
 
 type AuthMode = "auto" | "break-glass" | "oidc";
 
-const AUTH_MODE = (process.env.E2E_AUTH_MODE || "auto") as AuthMode;
+const AUTH_MODE = (process.env.E2E_AUTH_MODE || "break-glass") as AuthMode;
 const BREAK_GLASS_PASSWORD = process.env.E2E_ADMIN_PASSWORD || "break-glass-dev";
 const OIDC_USERNAME = process.env.E2E_OIDC_USERNAME || "akadmin";
 const OIDC_PASSWORD = process.env.E2E_OIDC_PASSWORD || "akadmin-dev-local";
@@ -178,6 +183,11 @@ const testWithPassCache = base.extend<{ _passCache: void }>({
         );
       }
       await use();
+      // На ретрае результат не записывается: с `retries: 2` в CI первая попытка
+      // красная, вторая зелёная — и флейк навсегда попал бы в кеш зелёных,
+      // а локальный прогон с `E2E_SKIP_PASSED=1` пропускал бы его молча.
+      // Канон `AGENTS.md` прямо запрещает маскировать ошибки retry.
+      if (testInfo.retry > 0) return;
       passCache.record(key, testInfo.status ?? "unknown");
     },
     { auto: true },

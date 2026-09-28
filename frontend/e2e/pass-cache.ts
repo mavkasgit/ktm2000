@@ -10,10 +10,17 @@
  *
  * Версия кода
  * -----------
- * Ключ версии — коммит **плюс дифф рабочего дерева** (`git diff HEAD` и
- * список незакоммиченных файлов). Одного хеша коммита мало: в рабочем дереве
- * почти всегда есть незакоммиченные правки, и кеш по коммиту молча пропускал бы
- * тесты для кода, который никто не проверял.
+ * Ключ версии — коммит **плюс дифф рабочего дерева** (`git diff HEAD`,
+ * `git status --porcelain=v1`) **плюс содержимое незакоммиченных (untracked)
+ * файлов**. Одного хеша коммита мало: в рабочем дереве почти всегда есть
+ * незакоммиченные правки, и кеш по коммиту молча пропускал бы тесты для кода,
+ * который никто не проверял.
+ *
+ * Untracked-файлы в версию входят **содержимым**, а не путём: `git diff HEAD`
+ * их не видит вообще, а `status --porcelain` сообщает только имя. Считать
+ * одного «файл появился» было бы мало — агент правит новый файл без `git add`,
+ * и все правки его содержимого после создания дали бы одну и ту же версию,
+ * то есть молчаливо зелёный прогон на непроверенном коде.
  *
  * Что кеш НЕ делает
  * -----------------
@@ -51,7 +58,7 @@ const REPO_ROOT = path.resolve(E2E_DIR, "..", "..");
 const CACHE_PATH = path.join(FRONTEND_DIR, ".playwright", "e2e-passed.json");
 
 /** Меняется при несовместимой правке формата кеша — старый файл тогда игнор. */
-const CACHE_FORMAT = 2;
+const CACHE_FORMAT = 3;
 
 function git(args: string[]): string | null {
   try {
@@ -75,9 +82,37 @@ function resolveVersion(): string | null {
   if (!head) return null;
   const status = git(["status", "--porcelain=v1"]) ?? "";
   const diff = git(["diff", "HEAD"]) ?? "";
+  const untracked = resolveUntrackedContents();
+  if (untracked === null) return null;
   return createHash("sha1")
-    .update(`format=${CACHE_FORMAT}\nHEAD=${head.trim()}\nstatus=${status}\ndiff=${diff}`)
+    .update(
+      `format=${CACHE_FORMAT}\nHEAD=${head.trim()}\nstatus=${status}\ndiff=${diff}\nuntracked=${untracked}`,
+    )
     .digest("hex");
+}
+
+/**
+ * Содержимое всех незакоммиченных файлов, отсортированное по пути и
+ * склеенное в одну строку. `null` — git недоступен или список не читается:
+ * тогда версию не считаем вовсе, чтобы не «прошёл мимо» ни одного файла.
+ */
+function resolveUntrackedContents(): string | null {
+  const listing = git(["ls-files", "--others", "--exclude-standard"]);
+  if (listing === null) return null;
+  const parts: string[] = [];
+  for (const relPath of listing.split("\n").map((line) => line.trim()).filter(Boolean).sort()) {
+    const abs = path.resolve(REPO_ROOT, relPath);
+    let content: Buffer;
+    try {
+      content = fs.readFileSync(abs);
+    } catch {
+      // Файл исчез между `ls-files` и чтением (или это не файл) — версия
+      // неполна, кеш лучше не включать, чем считать проверенным не всё дерево.
+      return null;
+    }
+    parts.push(`${relPath}:${createHash("sha1").update(content).digest("hex")}`);
+  }
+  return parts.join("\n");
 }
 
 interface CacheEntry {
