@@ -32,6 +32,7 @@ from app.services.route_selection import (
     _load_rules_by_phase,
     _evaluate_condition_with_diagnostic,
 )
+from app.services.route_signature import signature_from_built_steps
 
 
 @dataclass
@@ -49,6 +50,7 @@ class BuiltRouteStep:
     operation_code: str | None = None
     operation_name: str = ""
     is_significant: bool = False
+    transforms_dimensions: bool = False
     is_final: bool = False
 
 
@@ -61,6 +63,7 @@ class BuiltRoute:
     steps: list[BuiltRouteStep] = field(default_factory=list)
     error: str | None = None
     name: str = ""
+    signature: str = ""
 
 @dataclass(slots=True)
 class RouteBuildBatchCache:
@@ -362,6 +365,7 @@ async def build_route_from_profile(
                 operation_code=first_op.operation_code,
                 operation_name=first_op.operation_name,
                 is_significant=first_op.is_significant,
+                transforms_dimensions=first_op.transforms_dimensions,
                 is_final=False,
 
             ))
@@ -410,10 +414,9 @@ async def build_route_from_profile(
                         operation_code=op.operation_code,
                         operation_name=op.operation_name,
                         is_significant=is_sig,
-                is_final=False,
-
-
-            ))
+                        transforms_dimensions=op.transforms_dimensions,
+                        is_final=False,
+                    ))
     # Mark last step as final (determined by route structure, not section_code)
     if steps:
         steps[-1].is_final = True
@@ -436,6 +439,7 @@ async def build_route_from_profile(
         excluded_sections=sorted(excluded_codes),
         steps=steps,
         name=route_name,
+        signature=signature_from_built_steps(steps),
     )
     if batch is not None:
         batch.built_routes[memo_key] = result

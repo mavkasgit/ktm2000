@@ -938,6 +938,9 @@ async def _make_change_items(
                                     name=built_route.name,
                                     is_active=True,
                                     import_template_id=template_id,
+                                    # Тождество маршрута — сигнатура из входа
+                                    # сборки (#214), а не пересчёт записанных этапов.
+                                    route_signature=built_route.signature,
                                 )
                                 db.add(created_route)
                                 await db.flush()
@@ -1015,12 +1018,11 @@ async def _make_change_items(
                                                 await db.flush()
                                             else:
                                                 # Маркер трансформации этапа (ADR-0002) —
-                                                # из справочника операций участка, не из кода.
-                                                from app.services.route_transform import resolve_stage_transforms_dimensions
-                                                stage_transforms = await resolve_stage_transforms_dimensions(
-                                                    db,
-                                                    section_id=primary_section.id,
-                                                    operation_codes=[s[0].operation_code for s in group],
+                                                # из собранного шага, а не из повторного
+                                                # чтения справочника: так записанный этап
+                                                # и сигнатура маршрута говорят одно (#214).
+                                                stage_transforms = any(
+                                                    s[0].transforms_dimensions for s in group
                                                 )
                                                 stage = RouteStage(
                                                     route_id=created_route.id,
