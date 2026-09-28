@@ -92,7 +92,7 @@ export function AuditLogsPage() {
     columnFilters,
     columnSearchQueries,
     sortConfigs,
-    setSortConfigs,
+    handleSort: handleSortChange,
     resetAll,
     hasActiveFilters,
   } = useFilterableTable<LogFilterField>({
@@ -111,10 +111,11 @@ export function AuditLogsPage() {
 
   // Сортировку можно снять целиком, а сервер по умолчанию сортирует «сначала
   // свежие»: без этой подстановки строки приедут в произвольном порядке.
+  // Цикл клика — общий (нет → убыв. → возр. → снять), поэтому третий клик
+  // действительно снимает колонку и подстановка вступает в дело. Свой цикл
+  // (нет → убыв. → возр. → возр.) этого не давал, и строка была мёртвой
+  // веткой: снять сортировку было нечем.
   const effectiveSortConfigs = sortConfigs.length > 0 ? sortConfigs : LOG_DEFAULT_SORT;
-
-
-
 
   const pagination = usePaginatedTableQuery({
     limitOptions: [50, 100],
@@ -184,16 +185,6 @@ export function AuditLogsPage() {
     }),
     [parsedLogs],
   );
-
-  const handleSortChange = (field: LogField) => {
-    setSortConfigs((prev) => {
-      const existing = prev.find((s) => s.field === field);
-      if (!existing) {
-        return [{ field, order: "desc" }];
-      }
-      return [{ field, order: existing.order === "asc" ? "desc" : "asc" }];
-    });
-  };
 
   const toggleRow = (id: number) => {
     setExpandedRows((prev) => {

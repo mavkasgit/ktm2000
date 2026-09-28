@@ -19,10 +19,12 @@ export interface UsePaginatedTableQueryOptions {
   initialPage?: number;
   initialLimit?: PaginatedTableLimit;
   limitOptions?: readonly PaginatedTableLimit[];
-  /** When any dependency changes, page resets to 1. */
+  /**
+   * Что сбрасывает страницу на первую. Один список: второй параметр с тем же
+   * смыслом (`extraDeps`) жил рядом и использовался одним экраном, поэтому
+   * «от чего сбрасывается страница» приходилось искать по двум полям.
+   */
   resetPageDeps?: readonly unknown[];
-  /** Alias for resetPageDeps (TransfersPage). */
-  extraDeps?: readonly unknown[];
 }
 
 export function usePaginatedTableQuery(options: UsePaginatedTableQueryOptions = {}) {
@@ -31,12 +33,10 @@ export function usePaginatedTableQuery(options: UsePaginatedTableQueryOptions = 
     initialLimit = 50,
     limitOptions = DEFAULT_LIMIT_OPTIONS,
     resetPageDeps = [],
-    extraDeps,
   } = options;
 
-  const pageResetDeps = extraDeps ?? resetPageDeps;
-
   const [page, setPage] = useState(initialPage);
+
   const [limit, setLimit] = useState<PaginatedTableLimit>(() =>
     resolveInitialLimit(initialLimit, limitOptions),
   );
@@ -45,7 +45,7 @@ export function usePaginatedTableQuery(options: UsePaginatedTableQueryOptions = 
   useEffect(() => {
     setPage(1);
     // eslint-disable-next-line react-hooks/exhaustive-deps -- pageResetDeps is caller-controlled
-  }, [limit, ...pageResetDeps]);
+  }, [limit, ...resetPageDeps]);
 
   const resetPage = useCallback(() => {
     setPage(1);
@@ -73,8 +73,6 @@ export function usePaginatedTableQuery(options: UsePaginatedTableQueryOptions = 
     offset,
     getTotalPages,
     getRangeLabel,
-    totalPages: getTotalPages,
-    rangeLabel: getRangeLabel,
     resetPage,
   };
 }

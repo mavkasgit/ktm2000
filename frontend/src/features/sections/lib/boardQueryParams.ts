@@ -1,5 +1,4 @@
-import { pickColumnApiValue } from "@/shared/lib/columnFilterSearch";
-import { exactMatchColumnParams } from "@/shared/lib/columnSpecs";
+import { buildColumnApiParams } from "@/shared/lib/columnSpecs";
 import { boardColumns } from "./boardColumns";
 import { buildSortParam } from "@/shared/lib/sortQueryParam";
 import type { SortConfig } from "@/shared/hooks/useTableQueryEngine";
@@ -47,16 +46,20 @@ export function isServerSortField(field: TaskSortField): boolean {
   return mapTaskSortFieldToApi(field) !== undefined;
 }
 
+/**
+ * Параметры фильтров колонок для запроса доски. Собираются общим сборщиком
+ * по описанию колонок: перечисления полей здесь нет, поэтому новая
+ * серверная колонка не требует правки этого файла, а колонка, помеченная
+ * `clientOnly`, в запрос не попадает сама.
+ */
 export function buildBoardColumnApiParams(
   columnFilters: Partial<Record<TaskSortField, Set<string>>>,
   columnSearchQueries: Partial<Record<TaskSortField, string>>,
 ): Pick<SectionBoardQueryParams, "product_sku" | "dimensions"> {
-  const productSku = pickColumnApiValue(columnFilters, columnSearchQueries, "productSku");
-  // Колонки, объявившие точный фильтр, — из описания, а не перечислением.
-  const exactMatch = exactMatchColumnParams(columnFilters, boardColumns);
+  const params = buildColumnApiParams(columnFilters, columnSearchQueries, boardColumns);
   return {
-    ...(productSku ? { product_sku: productSku } : {}),
-    ...(exactMatch.dimensions ? { dimensions: exactMatch.dimensions } : {}),
+    ...(params.product_sku !== undefined ? { product_sku: params.product_sku } : {}),
+    ...(params.dimensions !== undefined ? { dimensions: params.dimensions } : {}),
   };
 }
 

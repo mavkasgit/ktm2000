@@ -6,7 +6,7 @@ import {
   Button,
   FiltersPanel,
   VirtualizedTableBody,
-  SortableFilterHeader,
+  DataTableColumnHeader,
   TableCornerResetHeader,
   TablePaginationFooter,
   DATA_TABLE_STYLES,
@@ -295,31 +295,24 @@ export function ExecutionTable({
               </colgroup>
               <thead>
                 <tr>
-                  {visibleColumns.map((column) => {
-                    const filterField = column.filterField;
-                    return (
-                      <th
-                        key={column.id}
-                        className={`${headerCellClass} ${column.headerClassName ?? ""}`}
-                        aria-sort={column.sortField ? getAriaSort(column.sortField) : undefined}
-                      >
-                        {filterField ? (
-                          <SortableFilterHeader
-                            field={filterField}
-                            label={column.label}
-                            currentSorts={sortConfigs}
-                            onSortChange={handleSortChange}
-                            sortable={Boolean(column.sortField)}
-                            values={uniqueValuesByField[filterField]}
-                            {...bindColumn(filterField)}
-                            valueLabel={column.valueLabel}
-                          />
-                        ) : (
-                          <span className="block truncate">{column.label}</span>
-                        )}
-                      </th>
-                    );
-                  })}
+                  {visibleColumns.map((column) => (
+                    <th
+                      key={column.id}
+                      className={`${headerCellClass} ${column.headerClassName ?? ""}`}
+                      aria-sort={column.sortField ? getAriaSort(column.sortField) : undefined}
+                    >
+                      {/* Явный `ExecutionSortField`: конфиг сортировки таблицы
+                          шире, чем подмножество серверно-сортируемых полей, на
+                          котором объявлены колонки. */}
+                      <DataTableColumnHeader<ExecutionSortField>
+                        column={column}
+                        bindColumn={bindColumn}
+                        values={column.filterField ? uniqueValuesByField[column.filterField] : undefined}
+                        currentSorts={sortConfigs}
+                        onSortChange={handleSortChange}
+                      />
+                    </th>
+                  ))}
                   <TableCornerResetHeader
                     hasActiveFilters={tableHasActiveFilters}
                     onReset={onResetAll}

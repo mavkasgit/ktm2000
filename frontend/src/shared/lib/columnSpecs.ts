@@ -11,6 +11,21 @@
 
 import { pickColumnApiValue, pickExactMatchColumnValue } from "./columnFilterSearch";
 
+/**
+ * Род значения, которое колонка кладёт в запрос.
+ *
+ * Значение колонки приходит из попапера строкой, а контракт запроса у части
+ * экранов строгий: длина — `number`, флаг — `boolean`. Приводить это вручную
+ * на экране нельзя (это перечисление полей, ради устранения которого описание
+ * колонок и заведено), а ослаблять контракт до `number | string` — значит
+ * перестать ловить мусор на границе с сервером. Поэтому род объявляет описание,
+ * а приведение делает сборщик.
+ */
+export type ColumnParamKind = "string" | "number" | "boolean";
+
+/** Значение параметра запроса в том виде, в каком его ждёт контракт. */
+export type ColumnParamValue = string | number | boolean;
+
 /** Что таблица знает о своей колонке. Всё остальное — производное. */
 export type ColumnSpec<
   Field extends string,
@@ -46,12 +61,24 @@ export type ColumnSpec<
    * сервер понимает не то, что видит оператор: «Не назначен» → `no`, а
    * «—» → ничего. Возвращённый `undefined` означает «не отправлять».
    */
-  mapValue?: (value: string) => string | undefined;
+  mapValue?: (value: string) => ColumnParamValue | undefined;
   /**
    * Колонка, дающая сразу несколько параметров. Случай редкий, но
    * настоящий: «Следующий» на передачах — это и операция, и участок.
    */
-  toParams?: (value: string) => Record<string, string>;
+  toParams?: (value: string) => Record<string, ColumnParamValue>;
+  /**
+   * Род значения параметра: строка (по умолчанию), число или флаг.
+   *
+   * Значение колонки всегда строка — оператор выбирает из списка. Но
+   * контракт запроса у части экранов строгий: `length_from` — это `number`,
+   * `is_paired_profile` — `boolean`. Ослаблять контракт до `number | string`
+   * ради сборщика нельзя: он перестал бы ловить мусор на границе с сервером.
+   * Поэтому род объявляет описание, а приведение делает общий сборщик —
+   * иначе экран приводит значения руками, то есть возвращается к перечислению
+   * полей, ради которого описание и заводилось.
+   */
+  paramKind?: ColumnParamKind;
   /**
    * Фильтруется на клиенте и в запрос не уезжает. Объявлено, чтобы список
    * клиентских колонок не расходился с шапкой.
@@ -86,13 +113,16 @@ export function exactMatchColumnParams<Field extends string>(
 }
 
 /**
- * Параметры запроса для всех отфильтрованных колонок.
+ * Параметры запроса для всех отфильтрованных колонок — строковые.
  *
  * Экраны собирали их одинаково и в пяти местах: пять функций
  * `buildXColumnApiParams`, в каждой — перечисление колонок строкой. Колонка
  * попадала в список дважды: в разметке шапки и в сборке параметров. Здесь
  * перечисления нет — оно берётся из описания колонки, поэтому шестая
  * колонка не требует правки кода, который собирает параметры.
+ *
+ * Колонки с нестроковым параметром (`paramKind`) сюда не попадают: их
+ * значения собирает `buildTypedColumnApiParams`.
  */
 export function buildColumnApiParams<Field extends string>(
   columnFilters: Partial<Record<Field, Set<string>>>,
@@ -101,21 +131,107 @@ export function buildColumnApiParams<Field extends string>(
 ): Record<string, string> {
   const params: Record<string, string> = {};
   for (const column of columns) {
-    if (!column.filterField || column.clientOnly) continue;
-
-    const value = column.exactMatch
-      ? pickExactMatchColumnValue(columnFilters, column.filterField)
-      : pickColumnApiValue(columnFilters, columnSearchQueries, column.filterField);
+    if (!column.filterField) continue;
+    const value = readColumnValue(column, columnFilters, columnSearchQueries);
     if (value === undefined) continue;
 
     if (column.toParams) {
-      Object.assign(params, column.toParams(value));
+      const multi = column.toParams(value);
+      if (column.paramKind === "number" || column.paramKind === "boolean") {
+        throw new Error(
+          `Колонка «${column.filterField}» объявила paramKind, но toParams отдаёт строки — приведение делает buildTypedColumnApiParams`,
+        );
+      }
+      for (const [name, multiValue] of Object.entries(multi)) {
+        params[name] = String(multiValue);
+      }
       continue;
     }
 
     const mapped = column.mapValue ? column.mapValue(value) : value;
     if (mapped === undefined) continue;
-    params[column.apiParam ?? column.filterField] = mapped;
+    if (column.paramKind !== undefined && column.paramKind !== "string") {
+      throw new Error(
+        `Колонка «${column.filterField}» объявила paramKind, но собрана строковым buildColumnApiParams — используйте buildTypedColumnApiParams`,
+      );
+    }
+    params[column.apiParam ?? column.filterField] = String(mapped);
   }
   return params;
+}
+
+/**
+ * Параметры запроса в типах, которые объявил контракт экрана: длина приходит
+ * числом, флаг — булевым.
+ *
+ * Значение из попапера — строка, и приводить его на экране нельзя: это
+ * перечисление полей, ради устранения которого описание колонок и заведено.
+ * Ослаблять контракт до `number | string` тоже нельзя — он перестал бы ловить
+ * мусор на границе с сервером. Поэтому род объявляет описание (`paramKind`),
+ * а приведение делает сборщик. Экран получает ровно свой тип — `Pick` от
+ * контракта запроса, без `as` и без послаблений.
+ */
+export function buildTypedColumnApiParams<Field extends string, Params>(
+  columnFilters: Partial<Record<Field, Set<string>>>,
+  columnSearchQueries: Partial<Record<Field, string>>,
+  columns: ReadonlyArray<ColumnSpec<Field>>,
+): Partial<Params> {
+  const params: Record<string, ColumnParamValue> = {};
+  for (const column of columns) {
+    if (!column.filterField) continue;
+    const value = readColumnValue(column, columnFilters, columnSearchQueries);
+    if (value === undefined) continue;
+    if (column.toParams) {
+      for (const [name, multiValue] of Object.entries(column.toParams(value))) {
+        const converted = toParamKind(multiValue, column.paramKind);
+        if (converted === undefined) continue;
+        params[name] = converted;
+      }
+      continue;
+    }
+
+    const mapped = column.mapValue ? column.mapValue(value) : value;
+    if (mapped === undefined) continue;
+    const converted = toParamKind(mapped, column.paramKind);
+    if (converted === undefined) continue;
+    params[column.apiParam ?? column.filterField] = converted;
+  }
+  return params as Partial<Params>;
+}
+
+/**
+ * Значение колонки из состояния таблицы: выбранное значение, а для точной
+ * колонки — только оно, без результата поиска в поповере.
+ */
+function readColumnValue<Field extends string>(
+  column: ColumnSpec<Field>,
+  columnFilters: Partial<Record<Field, Set<string>>>,
+  columnSearchQueries: Partial<Record<Field, string>>,
+): string | undefined {
+  if (!column.filterField || column.clientOnly) return undefined;
+  return column.exactMatch
+    ? pickExactMatchColumnValue(columnFilters, column.filterField)
+    : pickColumnApiValue(columnFilters, columnSearchQueries, column.filterField);
+}
+
+/**
+ * Приводит значение к роду, объявленному в описании колонки.
+ *
+ * Значение, которое привести нельзя, не отправляется вовсе: мусор в запросе
+ * сузил бы выборку до пустой, а 422 на границе с сервером хуже, чем тихий
+ * пропуск фильтра.
+ */
+function toParamKind(
+  value: ColumnParamValue,
+  kind: ColumnParamKind | undefined,
+): ColumnParamValue | undefined {
+  if (kind === undefined || kind === "string") return value;
+  if (kind === "number") {
+    const num = typeof value === "number" ? value : Number(value);
+    return Number.isFinite(num) ? num : undefined;
+  }
+  if (typeof value === "boolean") return value;
+  if (value === "true") return true;
+  if (value === "false") return false;
+  return undefined;
 }

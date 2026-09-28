@@ -30,7 +30,16 @@ const left = "text-left";
 
 export const boardColumns: BoardColumn[] = [
   { id: "statusDot", label: "Статус", className: "w-12 text-center" },
-  { id: "productSku", label: "Артикул", className: left, filterField: "productSku", sortField: "productSku" },
+  {
+    id: "productSku",
+    label: "Артикул",
+    className: left,
+    filterField: "productSku",
+    sortField: "productSku",
+    // Поле доски `productSku`, а параметр запроса — `product_sku`: имя
+    // перекодировки объявлено здесь, а не в сборщике параметров.
+    apiParam: "product_sku",
+  },
   {
     id: "dimensions",
     label: "Размер",
@@ -42,18 +51,22 @@ export const boardColumns: BoardColumn[] = [
     valueLabel: formatDimensionsFilterValue,
   },
   { id: "operation", label: "Операция", className: left },
-  { id: "plannedQty", label: "План", className: left, filterField: "plannedQty", sortField: "plannedQty" },
-  { id: "issuedQty", label: "Выдано", className: left, filterField: "issuedQty", sortField: "issuedQty" },
-  { id: "completedQty", label: "Годные", className: left, filterField: "completedQty", sortField: "completedQty" },
-  { id: "rejectedQty", label: "Брак", className: left, filterField: "rejectedQty", sortField: "rejectedQty" },
-  { id: "transferredQty", label: "Передано", className: left, filterField: "transferredQty", sortField: "transferredQty" },
-  { id: "remainingQty", label: "Остаток", className: left, filterField: "remainingQty", sortField: "remainingQty" },
+  // Количества и статус доска фильтрует сама, по уже пришедшим строкам:
+  // сервер фильтров по ним не знает, и отправка подписанного значения
+  // («Годные», «12 шт.») сузила бы выборку до пустой.
+  { id: "plannedQty", label: "План", className: left, filterField: "plannedQty", sortField: "plannedQty", clientOnly: true },
+  { id: "issuedQty", label: "Выдано", className: left, filterField: "issuedQty", sortField: "issuedQty", clientOnly: true },
+  { id: "completedQty", label: "Годные", className: left, filterField: "completedQty", sortField: "completedQty", clientOnly: true },
+  { id: "rejectedQty", label: "Брак", className: left, filterField: "rejectedQty", sortField: "rejectedQty", clientOnly: true },
+  { id: "transferredQty", label: "Передано", className: left, filterField: "transferredQty", sortField: "transferredQty", clientOnly: true },
+  { id: "remainingQty", label: "Остаток", className: left, filterField: "remainingQty", sortField: "remainingQty", clientOnly: true },
   {
     id: "status",
     label: "Статус",
     className: left,
     filterField: "status",
     sortField: "status",
+    clientOnly: true,
     // Значения статуса уже подписаны при сборе: `uniqueValues.status`
     // строится через `getStatusLabel`, поэтому переподписывать их нечего.
   },

@@ -1,5 +1,6 @@
 import { describe, expect, it } from "vitest";
 import { buildPlanColumnApiParams, buildPlanPositionsQuery, buildPlanSortParam, mapPlanSortFieldToApi } from "./planApiParams";
+import { isRouteFilterClientSide, PLAN_CLIENT_FILTER_FIELDS, planColumns } from "./planColumns";
 import type { PlanSortField } from "./plan-labels";
 
 /**
@@ -161,6 +162,39 @@ describe("buildPlanColumnApiParams", () => {
 
   it("без фильтров параметров не уезжает вовсе", () => {
     expect(buildPlanColumnApiParams({}, {})).toEqual({});
+  });
+});
+
+describe("isRouteFilterClientSide — куда уходит фильтр «Маршрут»", () => {
+  it("конкретный маршрут фильтруется на клиенте: сервер знает только «назначен или нет»", () => {
+    // В запрос ушёл бы `has_route=yes`, а это все строки с любым маршрутом:
+    // фильтр выглядел бы работающим и показывал лишнее.
+    expect(isRouteFilterClientSide({ route: new Set(["Пиление"]) }, {})).toBe(true);
+  });
+
+  it("поиск конкретного маршрута в поповере — тоже клиентский", () => {
+    expect(isRouteFilterClientSide({}, { route: "Пиление" })).toBe(true);
+  });
+
+  it("«Не назначен» — серверный фильтр, клиент вмешиваться не должен", () => {
+    expect(isRouteFilterClientSide({ route: new Set(["Не назначен"]) }, {})).toBe(false);
+  });
+
+  it("без выбранного маршрута фильтр не клиентский", () => {
+    expect(isRouteFilterClientSide({}, {})).toBe(false);
+    expect(isRouteFilterClientSide({ route: new Set() }, {})).toBe(false);
+  });
+});
+
+describe("PLAN_CLIENT_FILTER_FIELDS — что страница сужает у себя", () => {
+  it("в списке ровно те колонки, которые объявлены clientOnly в описании", () => {
+    // Перечисление в странице расходилось бы с описанием молча: колонка
+    // переехала бы в запрос, который такого фильтра не знает.
+    expect(PLAN_CLIENT_FILTER_FIELDS).toEqual(
+      planColumns.filter((column) => column.clientOnly).map((column) => column.filterField),
+    );
+    expect(PLAN_CLIENT_FILTER_FIELDS).toContain("qty");
+    expect(PLAN_CLIENT_FILTER_FIELDS).not.toContain("route");
   });
 });
 

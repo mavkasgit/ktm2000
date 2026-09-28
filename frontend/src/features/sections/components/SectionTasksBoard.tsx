@@ -15,7 +15,7 @@ import {
   Badge,
   Button,
   CutLayoutCell,
-  SortableFilterHeader,
+  DataTableColumnHeader,
   FiltersPanel,
   TableCornerResetCell,
   TableCornerResetHeader,
@@ -86,15 +86,15 @@ export type BulkSelectionController = {
 // Внутренние типы
 // ---------------------------------------------------------------------------
 
-const CLIENT_FILTER_FIELDS: TaskSortField[] = [
-  "plannedQty",
-  "issuedQty",
-  "completedQty",
-  "transferredQty",
-  "rejectedQty",
-  "remainingQty",
-  "status",
-];
+/**
+ * Колонки, которые доска фильтрует сама, по уже пришедшим строкам. Список
+ * берётся из описания (`clientOnly`): ручной перечень расходился с шапкой —
+ * колонку переименовали в описании, а здесь забыли, и фильтр уходил на
+ * сервер, который о нём не знает.
+ */
+const CLIENT_FILTER_FIELDS: TaskSortField[] = boardColumns.flatMap((column) =>
+  column.clientOnly && column.filterField ? [column.filterField] : [],
+);
 
 function pickClientFilterState<Field extends string>(
   columnFilters: Partial<Record<Field, Set<string>>>,
@@ -910,20 +910,12 @@ export function SectionTasksBoard({
 
   const activeFilterSummary = useMemo(
     () =>
-      buildActiveFilterSummary({}, searchQuery, sortConfigs.length, {
+      buildActiveFilterSummary(searchQuery, sortConfigs.length, {
         columnFilters,
         columnSearchQueries,
-        columnLabels: {
-          sequence: "№",
-          productSku: "Артикул",
-          status: "Статус",
-          plannedQty: "План",
-          issuedQty: "Выдано",
-          completedQty: "Готово",
-          transferredQty: "Передано",
-          rejectedQty: "Брак",
-          remainingQty: "Остаток",
-        },
+        columnLabels: Object.fromEntries(
+          boardColumns.filter((c) => c.filterField).map((c) => [c.filterField, c.label]),
+        ),
       }),
     [searchQuery, sortConfigs.length, columnFilters, columnSearchQueries],
   );
@@ -981,22 +973,13 @@ export function SectionTasksBoard({
                       key={column.id}
                       className={`${headerCellClass} ${column.className ?? "text-left"}`}
                     >
-                      {column.filterField ? (
-                        <SortableFilterHeader
-                          field={column.filterField}
-                          label={column.label}
-                          currentSorts={sortConfigs}
-                          onSortChange={handleSortChange}
-                          sortable={Boolean(column.sortField)}
-                          values={uniqueValues[column.filterField] ?? []}
-                          {...bindColumn(column.filterField)}
-                          valueLabel={column.valueLabel}
-                        />
-                      ) : (
-                        <span className="text-xs font-medium text-muted-foreground">
-                          {column.label}
-                        </span>
-                      )}
+                      <DataTableColumnHeader
+                        column={column}
+                        bindColumn={bindColumn}
+                        values={column.filterField ? uniqueValues[column.filterField] : undefined}
+                        currentSorts={sortConfigs}
+                        onSortChange={handleSortChange}
+                      />
                     </th>
                   ))}
                   <TableCornerResetHeader

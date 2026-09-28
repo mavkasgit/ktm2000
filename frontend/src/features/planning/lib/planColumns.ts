@@ -50,6 +50,15 @@ export const planColumns: PlanColumn[] = [
     mapValue: toYesNo("Не назначен"),
     // Маршрут собирается в Python и не выводится в SQL: подставлять вместо
     // него другое поле молча нельзя, поэтому иконки сортировки нет.
+    //
+    // Фильтр у этой колонки двойной. Сервер понимает только «назначен или
+    // нет» (`has_route`), а конкретный маршрут он не фильтрует: значение
+    // «Упаковка» превратилось бы в `has_route=yes` и выбрало бы все строки с
+    // любым маршрутом. Поэтому конкретный маршрут страница сужает у себя,
+    // а в запрос уходит только «назначен/не назначен». Проверка «уходит ли
+    // этот фильтр на клиент» живёт здесь, `isRouteFilterClientSide`, а не в
+    // странице: колонка одна, и её семантика не должна расходиться по двум
+    // файлам.
   },
   {
     id: "errors",
@@ -74,3 +83,30 @@ export const planColumns: PlanColumn[] = [
 export const planColumnLabels: Record<string, string> = Object.fromEntries(
   planColumns.map((column) => [column.filterField, column.label]),
 );
+
+/**
+ * Колонки плана, которые страница сужает у себя: сервер фильтрует их не
+ * умеет. Берётся из описания, а не перечисляется в странице — иначе
+ * переименование колонки ломало бы фильтрацию молча.
+ */
+export const PLAN_CLIENT_FILTER_FIELDS: PlanSortField[] = planColumns
+  .filter((column) => column.clientOnly)
+  .map((column) => column.filterField);
+
+/**
+ * Уходит ли фильтр колонки «Маршрут» на клиент.
+ *
+ * Истина для конкретного маршрута: сервер такого параметра не знает и вместо
+ * фильтра вернул бы все строки с назначенным маршрутом. Ложь для
+ * «Не назначен» — это `has_route=no`, и такой фильтр серверный.
+ */
+export function isRouteFilterClientSide(
+  columnFilters: Partial<Record<PlanSortField, Set<string>>>,
+  columnSearchQueries: Partial<Record<PlanSortField, string>>,
+): boolean {
+  const value =
+    columnFilters.route?.size === 1
+      ? [...columnFilters.route][0]
+      : columnSearchQueries.route?.trim() || undefined;
+  return Boolean(value && value !== "Не назначен");
+}

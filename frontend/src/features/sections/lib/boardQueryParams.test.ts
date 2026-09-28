@@ -10,11 +10,14 @@
 import { describe, expect, it } from "vitest";
 
 import {
+  buildBoardColumnApiParams,
   buildBoardServerQueryParams,
   isServerSortField,
   mapTaskSortFieldToApi,
   type TaskSortField,
 } from "./boardQueryParams";
+import { boardColumns } from "./boardColumns";
+import { buildColumnApiParams } from "@/shared/lib/columnSpecs";
 
 function buildParams(sortConfigs: { field: TaskSortField; order: "asc" | "desc" }[]) {
   return buildBoardServerQueryParams({
@@ -102,5 +105,60 @@ describe("buildBoardServerQueryParams", () => {
       dimensions: '{"length_mm":2700}',
       sort: "sequence:asc",
     });
+  });
+});
+
+describe("параметры фильтров колонок доски", () => {
+  it("размер уезжает выбранным габаритом, а не подстрокой из поиска поповера", () => {
+    // Поиск в поповере сужает только список значений; отправка подстроки
+    // означала бы «фильтр по тексту подписи», которого у сервера нет.
+    expect(
+      buildBoardColumnApiParams(
+        { dimensions: new Set(['{"length_mm":2700}']) },
+        { dimensions: "2,7" },
+      ),
+    ).toEqual({ dimensions: '{"length_mm":2700}' });
+  });
+
+  it("поиск поповера без выбранного значения не уезжает вовсе", () => {
+    expect(buildBoardColumnApiParams({}, { dimensions: "2,7" })).toEqual({});
+  });
+
+  it("колонка с фильтром уезжает под своим именем параметра без правки сборщика", () => {
+    // Поле доски `productSku`, а параметр запроса — `product_sku`. Пока сборщик
+    // брал поле руками, опечатка в имени параметра гасила фильтр молча.
+    expect(buildBoardColumnApiParams({}, { productSku: "АРТ" })).toEqual({ product_sku: "АРТ" });
+  });
+
+  it("клиентские количества и статус в запрос не уезжают", () => {
+    // Сервер фильтров по ним не знает, а значение колонки подписано
+    // («Годные», «12 шт.») — отправка сузила бы выборку до пустой.
+    expect(
+      buildBoardColumnApiParams(
+        {
+          plannedQty: new Set(["12 шт."]),
+          completedQty: new Set(["Годные"]),
+          status: new Set(["Готово"]),
+        },
+        {},
+      ),
+    ).toEqual({});
+  });
+
+  it("ни один ключ описания не выходит за пределы контракта запроса", () => {
+    // Обёртка `buildBoardColumnApiParams` отдаёт ровно два поля по типу, и
+    // сверять с ней бесполезно: опечатку в `apiParam` поймал бы лишь сборщик,
+    // отдающий ключи как есть.
+    const all = buildColumnApiParams(
+      Object.fromEntries(
+        boardColumns
+          .filter((column) => column.filterField)
+          .map((column) => [column.filterField, new Set(["значение"])]),
+      ),
+      {},
+      boardColumns,
+    );
+
+    expect(Object.keys(all).sort()).toEqual(["dimensions", "product_sku"]);
   });
 });

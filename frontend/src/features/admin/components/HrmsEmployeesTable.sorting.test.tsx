@@ -5,6 +5,12 @@
  * Регресс: на сервер уходил только `sortConfigs[0]`, поэтому вторая
  * колонка с бейджем приоритета «2» вообще не влияла на порядок строк —
  * оператор кликал и не видел эффекта.
+ *
+ * Порядок по умолчанию объявлен хуку (`defaultSort`), поэтому он стоит
+ * первым приоритетом, пока оператор его не снимет: раньше экран подставлял
+ * `name:asc` сравнением строк и первым же кликом по любой колонке этот
+ * порядок заменялся — после чего «сортировка нестандартная» и сброс
+ * считались руками и расходились с остальными экранами.
  */
 import { fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
@@ -63,15 +69,15 @@ describe("HrmsEmployeesTable: сортировка колонок", () => {
     expect(vi.mocked(listEmployees).mock.calls[0][0]).toMatchObject({ sort: "name:asc" });
   });
 
-  it("в запрос уходят оба выбранных приоритета в порядке выбора", async () => {
+  it("в запрос уходят все выбранные приоритета, от старшего к младшему", async () => {
     renderTable();
     await waitFor(() => expect(lastSort()).toBe("name:asc"));
 
     clickSort("department");
-    await waitFor(() => expect(lastSort()).toBe("department:desc"));
+    await waitFor(() => expect(lastSort()).toBe("name:asc,department:desc"));
 
-    clickSort("name");
-    await waitFor(() => expect(lastSort()).toBe("department:desc,name:desc"));
+    clickSort("position");
+    await waitFor(() => expect(lastSort()).toBe("name:asc,department:desc,position:desc"));
   });
 
   it("колонка HRMS ID уходит на сервер полем hrms_id, а не именем колонки", async () => {
@@ -79,7 +85,7 @@ describe("HrmsEmployeesTable: сортировка колонок", () => {
     await waitFor(() => expect(lastSort()).toBe("name:asc"));
 
     clickSort("hrmsId");
-    await waitFor(() => expect(lastSort()).toBe("hrms_id:desc"));
+    await waitFor(() => expect(lastSort()).toBe("name:asc,hrms_id:desc"));
   });
 
   it("повторный клик по колонке меняет направление, а не добавляет приоритет", async () => {
@@ -87,8 +93,24 @@ describe("HrmsEmployeesTable: сортировка колонок", () => {
     await waitFor(() => expect(lastSort()).toBe("name:asc"));
 
     clickSort("tabNumber");
-    await waitFor(() => expect(lastSort()).toBe("tab_number:desc"));
+    await waitFor(() => expect(lastSort()).toBe("name:asc,tab_number:desc"));
     clickSort("tabNumber");
-    await waitFor(() => expect(lastSort()).toBe("tab_number:asc"));
+    await waitFor(() => expect(lastSort()).toBe("name:asc,tab_number:asc"));
+  });
+
+  it("снятие сортировки по имени не уезжает в запрос: сервер сортирует так же", async () => {
+    // Цикл клика общий: нет → убыв. → возр. → снять. «ФИО» стоит в состоянии
+    // сразу (порядок по умолчанию), поэтому первый клик снимает колонку, и
+    // строка `sort` исчезает. Порядок строк не меняется: сервер по умолчанию
+    // сортирует по имени возрастанию (`_SORT_DEFAULT`) — ровно так же, как
+    // `defaultSort`. Если дефолты разойдутся, тест упадёт.
+    renderTable();
+    await waitFor(() => expect(lastSort()).toBe("name:asc"));
+
+    clickSort("name");
+    await waitFor(() => expect(lastSort()).toBeUndefined());
+
+    clickSort("name");
+    await waitFor(() => expect(lastSort()).toBe("name:desc"));
   });
 });

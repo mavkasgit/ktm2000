@@ -1,7 +1,7 @@
 /**
  * Сортировка списка бэкапов: наружу уходит строка `sort`, а дефолтный
  * порядок «свежие сверху» сохраняется, пока оператор не выбрал другую
- * колонку.
+ * колонку, и возвращается сбросом.
  *
  * Проверка «сортировка нестандартная» для кнопки сброса читает ту же
  * строку, что уходит в запрос: если они разойдутся, кнопка будет врать.
@@ -62,24 +62,23 @@ describe("BackupsPage: сортировка", () => {
     expect(lastSort()).toBe("created_at:desc");
   });
 
-  it("выбор другой колонки уходит в запрос строкой с полем API", async () => {
+  it("выбор другой колонки не выбрасывает дефолтный порядок", async () => {
     renderPage();
     await waitFor(() => expect(lastSort()).toBe("created_at:desc"));
 
+    // цикл клика общий: клик по новой колонке добавляет её к дефолтной
     clickSort("filename");
-    await waitFor(() => expect(lastSort()).toBe("filename:asc"));
+    await waitFor(() => expect(lastSort()).toBe("created_at:desc,filename:desc"));
   });
 
   it("снятие сортировки возвращает дефолтный порядок", async () => {
     renderPage();
     await waitFor(() => expect(lastSort()).toBe("created_at:desc"));
 
-    // размер: убыв. → возр. → снять → снова дефолтный порядок
-    clickSort("size");
-    await waitFor(() => expect(lastSort()).toBe("size:desc"));
-    clickSort("size");
-    await waitFor(() => expect(lastSort()).toBe("size:asc"));
-    clickSort("size");
+    // «дата создания» уже отсортирована: убыв. → возр. → снять → снова дефолт
+    clickSort("created_at");
+    await waitFor(() => expect(lastSort()).toBe("created_at:asc"));
+    clickSort("created_at");
     await waitFor(() => expect(lastSort()).toBe("created_at:desc"));
   });
 
@@ -88,9 +87,9 @@ describe("BackupsPage: сортировка", () => {
     await waitFor(() => expect(lastSort()).toBe("created_at:desc"));
 
     clickSort("comment");
-    await waitFor(() => expect(lastSort()).toBe("comment:asc"));
+    await waitFor(() => expect(lastSort()).toBe("created_at:desc,comment:desc"));
 
-    resetButton().click();
+    fireEvent.click(resetButton());
     await waitFor(() => expect(lastSort()).toBe("created_at:desc"));
   });
 });

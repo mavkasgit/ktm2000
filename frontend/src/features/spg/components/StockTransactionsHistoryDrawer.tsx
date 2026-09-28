@@ -4,9 +4,9 @@ import { Loader2, Search, X } from "lucide-react";
 
 import {
   Button,
+  DataTableColumnHeader,
   DateRangePicker,
   Input,
-  SortableFilterHeader,
   TableCornerResetCell,
   TableCornerResetHeader,
   TablePaginationFooter,
@@ -14,6 +14,7 @@ import {
   type DateRangeValue,
 } from "@/shared/ui";
 import { useFilterableTable } from "@/shared/hooks/useFilterableTable";
+import type { SortConfig } from "@/shared/hooks/useTableQueryEngine";
 import { usePaginatedTableQuery } from "@/shared/hooks/usePaginatedTableQuery";
 import {
   getStockTransactions,
@@ -23,13 +24,14 @@ import {
 } from "@/shared/api/stock";
 import type { StockTransactionEntry, StockTransactionsParams } from "@/shared/api/stock";
 import { queryKeys } from "@/shared/api/queryKeys";
-import { pickColumnApiValue } from "@/shared/lib/columnFilterSearch";
+import { buildColumnApiParams } from "@/shared/lib/columnSpecs";
 import { useDebouncedValue } from "@/shared/lib/useDebouncedValue";
 import { fmtQty } from "@/shared/lib/quantityFormat";
 import {
   buildTransactionSortParam,
   type TransactionSortField,
 } from "@/shared/lib/stockSortParams";
+import { transactionColumns } from "../lib/transactionColumns";
 
 interface StockTransactionsHistoryDrawerProps {
   productId?: number;
@@ -71,58 +73,33 @@ function getTxCellValue(tx: StockTransactionEntry, field: TransactionSortField):
   }
 }
 
-function extractQualityStateLabel(label: string): string | undefined {
-  if (label === "—") return undefined;
-  const part = label.split(" → ")[0]?.trim() ?? label;
-  const normalized = part.toLowerCase();
-  if (normalized === "годный") return "good";
-  if (normalized === "брак") return "scrap";
-  if (normalized === "окончательный брак") return "final_scrap";
-  if (normalized === "переделка") return "rework";
-  return part;
-}
-
+/**
+ * Параметры колоночных фильтров, приведённые к контракту запроса.
+ *
+ * Обёртка нужна ради типов: `buildColumnApiParams` отдаёт `Record<string, string>`,
+ * и спред такого объекта теряет конкретные ключи — после спреда TypeScript не
+ * видел в запросе ни `reason`, ни `comment`, и фильтр по колонке уезжал в
+ * `queryKey` как `undefined`, то есть два разных фильтра делили один кеш.
+ * Колонки не перечисляются: они приходят из описания.
+ */
 function buildTxColumnApiParams(
   columnFilters: Partial<Record<TransactionSortField, Set<string>>>,
   columnSearchQueries: Partial<Record<TransactionSortField, string>>,
-): Pick<StockTransactionsParams, "reason" | "from_location" | "to_location" | "quality_state" | "comment"> {
-  const params: Pick<
-    StockTransactionsParams,
-    "reason" | "from_location" | "to_location" | "quality_state" | "comment"
-  > = {};
-
-  const reason = pickColumnApiValue(columnFilters, columnSearchQueries, "reason", (v) =>
-    v === "—" ? undefined : v,
-  );
-  if (reason) params.reason = reason;
-
-  const fromLocation = pickColumnApiValue(columnFilters, columnSearchQueries, "from", (v) =>
-    v === "—" ? undefined : v,
-  );
-  if (fromLocation) params.from_location = fromLocation;
-
-  const toLocation = pickColumnApiValue(columnFilters, columnSearchQueries, "to", (v) =>
-    v === "—" ? undefined : v,
-  );
-  if (toLocation) params.to_location = toLocation;
-
-  const qualityState = pickColumnApiValue(
-    columnFilters,
-    columnSearchQueries,
-    "quality",
-    extractQualityStateLabel,
-  );
-  if (qualityState) params.quality_state = qualityState;
-
-  const comment = pickColumnApiValue(columnFilters, columnSearchQueries, "comment", (v) =>
-    v === "—" ? undefined : v,
-  );
-  if (comment) params.comment = comment;
-
-  return params;
+): Pick<
+  StockTransactionsParams,
+  "reason" | "from_location" | "to_location" | "quality_state" | "comment"
+> {
+  return buildColumnApiParams(columnFilters, columnSearchQueries, transactionColumns);
 }
 
 const headerCellClass = `${DATA_TABLE_STYLES.headerRow} ${DATA_TABLE_STYLES.headerCell}`;
+
+/**
+ * Свежие движения сверху. Тот же порядок, что и дефолт эндпоинта
+ * (`DEFAULT_TRANSACTION_SORT`), но объявленный здесь: сброс возвращает его,
+ * а не пустую сортировку, и он не считается активным фильтром.
+ */
+const TX_DEFAULT_SORT: SortConfig<TransactionSortField>[] = [{ field: "date", order: "desc" }];
 
 export function StockTransactionsHistoryDrawer({
   productId,
@@ -149,6 +126,7 @@ export function StockTransactionsHistoryDrawer({
     resetAll: handleResetFilters,
     resetColumnFilters,
   } = useFilterableTable<TransactionSortField>({
+    defaultSort: TX_DEFAULT_SORT,
     extraHasActive: hasDateFilter || search.trim().length > 0,
     onExtraReset: () => {
       setDateRange({ from: "", to: "" });
@@ -199,7 +177,7 @@ export function StockTransactionsHistoryDrawer({
     if (open) return;
     setDateRange({ from: "", to: "" });
     setSearch("");
-    setSortConfigs([]);
+    setSortConfigs([...TX_DEFAULT_SORT]);
     resetColumnFilters();
     resetPage();
     // Reset only when the drawer closes; avoid unstable callback deps while closed.
@@ -241,7 +219,7 @@ export function StockTransactionsHistoryDrawer({
       dateFrom: dateRange.from || undefined,
       dateTo: dateRange.to || undefined,
       sort: txQueryParams.sort,
-      reason: txQueryParams.reason as string | undefined,
+      reason: txQueryParams.reason,
       from_location: txQueryParams.from_location,
       to_location: txQueryParams.to_location,
       quality_state: txQueryParams.quality_state,
@@ -255,10 +233,9 @@ export function StockTransactionsHistoryDrawer({
   const total = data?.total ?? 0;
   const totalPages = getTotalPages(total);
 
-  const uniqueValues = useMemo(() => ({
-    date: [...new Set(transactions.map((tx) => getTxCellValue(tx, "date")))].sort((a, b) =>
-      a.localeCompare(b, "ru"),
-    ),
+  // Значения для попаперов фильтра. Колонки без фильтра («Дата», «Кол-во»)
+  // списка не собирают: их шапка рисует одну подпись.
+  const uniqueValues: Partial<Record<TransactionSortField, string[]>> = useMemo(() => ({
     reason: [...new Set(transactions.map((tx) => getTxCellValue(tx, "reason")))].sort((a, b) =>
       a.localeCompare(b, "ru"),
     ),
@@ -267,9 +244,6 @@ export function StockTransactionsHistoryDrawer({
     ),
     to: [...new Set(transactions.map((tx) => getTxCellValue(tx, "to")))].sort((a, b) =>
       a.localeCompare(b, "ru"),
-    ),
-    quantity: [...new Set(transactions.map((tx) => getTxCellValue(tx, "quantity")))].sort(
-      (a, b) => (Number.parseFloat(a) || 0) - (Number.parseFloat(b) || 0),
     ),
     quality: [...new Set(transactions.map((tx) => getTxCellValue(tx, "quality")))].sort((a, b) =>
       a.localeCompare(b, "ru"),
@@ -345,76 +319,20 @@ export function StockTransactionsHistoryDrawer({
                 <table className="w-full text-sm">
                   <thead>
                     <tr>
-                      <th className={`${headerCellClass} p-0`}>
-                        <SortableFilterHeader
-                          field="date"
-                          label="Дата"
-                          currentSorts={sortConfigs}
-                          onSortChange={handleSortChange}
-                          values={uniqueValues.date}
-                          {...bindColumn("date")}
-                        />
-                      </th>
-                      <th className={`${headerCellClass} p-0`}>
-                        <SortableFilterHeader
-                          field="reason"
-                          label="Причина"
-                          currentSorts={sortConfigs}
-                          onSortChange={handleSortChange}
-                          values={uniqueValues.reason}
-                          {...bindColumn("reason")}
-                        />
-                      </th>
-                      <th className={`${headerCellClass} p-0`}>
-                        <SortableFilterHeader
-                          field="from"
-                          label="Откуда"
-                          currentSorts={sortConfigs}
-                          onSortChange={handleSortChange}
-                          values={uniqueValues.from}
-                          {...bindColumn("from")}
-                        />
-                      </th>
-                      <th className={`${headerCellClass} p-0`}>
-                        <SortableFilterHeader
-                          field="to"
-                          label="Куда"
-                          currentSorts={sortConfigs}
-                          onSortChange={handleSortChange}
-                          values={uniqueValues.to}
-                          {...bindColumn("to")}
-                        />
-                      </th>
-                      <th className={`${headerCellClass} p-0 text-right`}>
-                        <SortableFilterHeader
-                          field="quantity"
-                          label="Кол-во"
-                          currentSorts={sortConfigs}
-                          onSortChange={handleSortChange}
-                          values={uniqueValues.quantity}
-                          {...bindColumn("quantity")}
-                        />
-                      </th>
-                      <th className={`${headerCellClass} p-0`}>
-                        <SortableFilterHeader
-                          field="quality"
-                          label="Качество"
-                          currentSorts={sortConfigs}
-                          onSortChange={handleSortChange}
-                          values={uniqueValues.quality}
-                          {...bindColumn("quality")}
-                        />
-                      </th>
-                      <th className={`${headerCellClass} p-0`}>
-                        <SortableFilterHeader
-                          field="comment"
-                          label="Комментарий"
-                          currentSorts={sortConfigs}
-                          onSortChange={handleSortChange}
-                          values={uniqueValues.comment}
-                          {...bindColumn("comment")}
-                        />
-                      </th>
+                      {transactionColumns.map((column) => (
+                        <th
+                          key={column.id}
+                          className={`${headerCellClass} ${column.headerClassName ?? "text-left"}`}
+                        >
+                          <DataTableColumnHeader
+                            column={column}
+                            bindColumn={bindColumn}
+                            values={column.filterField ? uniqueValues[column.filterField] : undefined}
+                            currentSorts={sortConfigs}
+                            onSortChange={handleSortChange}
+                          />
+                        </th>
+                      ))}
                       <TableCornerResetHeader
                         hasActiveFilters={hasActiveFilters}
                         onReset={handleResetFilters}
