@@ -59,6 +59,7 @@ import { TABLE_ROW_STYLES } from "@/shared/lib/tableRowStyles";
 import { TABLE_ROW_COMPACT } from "@/shared/lib/dataTableStyles";
 import { cn } from "@/shared/utils/cn";
 import { fmtQty } from "@/shared/lib/quantityFormat";
+import { packagingBreakdownLabel, taskPrimaryOperation } from "../lib/taskView";
 import { boardColumns } from "../lib/boardColumns";
 
 // ---------------------------------------------------------------------------
@@ -152,8 +153,15 @@ function getTaskCellValue(task: SectionBoardTask, field: TaskSortField): string 
 const ROW_CELL_CLASS = TABLE_ROW_COMPACT.cell;
 const ROW_ACTION_BUTTON_CLASS = `${TABLE_ROW_COMPACT.actionButton} transition-all hover:bg-accent/50`;
 const ROW_HEIGHT_PX = TABLE_ROW_COMPACT.rowHeightPx;
-/** Число колонок доски: используется для полноширинных служебных строк. */
-const BOARD_COLSPAN = 13;
+/**
+ * Число колонок доски для полноширинных служебных строк («В ожидании»,
+ * пустое состояние, распорки виртуализации).
+ *
+ * Считается от описания колонок, а не константой: забытое число оставляло
+ * служебную строку уже шапки, и полоса обрывалась, не закрывая угол сброса
+ * фильтров. `+ 1` — угол `TableCornerResetHeader` рядом с колонками.
+ */
+const BOARD_COLSPAN = boardColumns.length + 1;
 
 function renderTaskRow(
   task: SectionBoardTask,
@@ -174,6 +182,7 @@ function renderTaskRow(
   };
   return (
     <tr
+      data-row-kind="board-task"
       key={task.id}
       className={`cursor-pointer transition-colors ${getTaskRowClass(task, !!isSelected, isInGroup)} ${isLastInGroup ? "border-b-2 border-blue-300" : "border-b"}`}
       onClick={() => {
@@ -374,7 +383,10 @@ function TableTaskGroupRow({
         {formatDimensionsLabel(taskGroupingDimensions(firstTask))}
       </td>
       <td className={`${ROW_CELL_CLASS} text-xs text-slate-500 font-medium`}>
-        {firstTask.operation_name || "—"}
+        {taskPrimaryOperation(firstTask) || "—"}
+      </td>
+      <td className={`${ROW_CELL_CLASS} text-xs text-slate-500 font-medium`}>
+        {packagingBreakdownLabel(group.tasks, fmtQty)}
       </td>
       <td className={`${ROW_CELL_CLASS} text-slate-700`}>{fmtQty(String(group.totalQtyPlan))}</td>
       <td className={`${ROW_CELL_CLASS} text-slate-700`}>{fmtQty(String(group.tasks.reduce((s, t) => s + parseFloat(t.cache.issued_quantity), 0)))}</td>
