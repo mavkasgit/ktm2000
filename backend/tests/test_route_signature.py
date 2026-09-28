@@ -11,12 +11,14 @@ from datetime import UTC, date, datetime
 from decimal import Decimal
 
 import pytest
-from sqlalchemy import select
+from sqlalchemy import func, select
 from sqlalchemy.orm import selectinload
 
 from app.models.imports import ImportBatch, ImportBatchMode, ImportBatchStatus, ImportFile
 from app.models.product import Product, ProductType
 from app.models.production_plan import (
+    PlanChangeItemStatus,
+    PlanChangeSet,
     PlanPosition,
     PlanPositionRouteOrigin,
     PlanPositionStatus,
@@ -36,6 +38,7 @@ from app.models.route import (
 from app.models.section import Section
 from app.seeds.run_seed import run_full_seed
 from app.services.plan_import_service import _make_change_items
+from app.services.production_plan_service import apply_change_set
 from app.services.route_builder import build_route_from_profile
 from app.services.route_signature import (
     encode_signature,
@@ -463,3 +466,184 @@ async def test_manual_rename_keeps_route_signature(client, session) -> None:
     await session.refresh(route)
     assert route.name == "Маршрут оператора (переименован)"
     assert route.route_signature == "production:SAWING:SAW:0:1:0>production:PACKING:PACK_STRETCH:0:0:1"
+
+
+ROUTE_NAME = "ГП"
+
+
+async def _make_product(session, sku: str) -> Product:
+    product = Product(sku=sku, name="Артикул", type=ProductType.finished_good, unit="pcs")
+    session.add(product)
+    await session.commit()
+    return product
+
+
+async def _make_named_profile(session, code: str, sections=None) -> RouteRuleProfile:
+    """Профиль, имя маршрута которого равно `output_kind` — иначе сверять не с чем."""
+    profile = await _make_profile(session, code=code, sections=sections)
+    profile.route_name_pattern = "{output_kind}"
+    await session.commit()
+    return profile
+
+
+async def _import_one_row(session, profile, product, *, sku: str, payload: dict | None = None):
+    """Импорт одной строки плана профилем — публичный шов импорта."""
+    items, _diagnostics = await _make_change_items(
+        session,
+        change_set_id=1,
+        parsed_rows=[ParsedRow(sku, "Артикул", Decimal("10"), payload or {"output_kind": "ГП"})],
+        products_by_sku={sku.lower(): product},
+        mode=None,
+        existing_positions=[],
+        rule_profile_id=profile.id,
+        template_id=None,
+    )
+    return items
+
+
+@pytest.mark.asyncio
+async def test_import_rejects_row_when_named_route_has_other_signature(session) -> None:
+    """Маршрут с тем же именем и другой сигнатурой — другой маршрут: строка
+    импорта получает ошибку, а маршрут под неё не подставляется (#215).
+    """
+    await _seed_sections(session)
+    profile = await _make_named_profile(session, "sig_conflict")
+    product = await _make_product(session, "FG-CONFLICT")
+    existing = await _make_route_with_signature(session, ROUTE_NAME, FOREIGN_SIGNATURE)
+
+    items = await _import_one_row(session, profile, product, sku="FG-CONFLICT")
+
+    item = items[0]
+    assert item.errors == ["route_signature_conflict"]
+    assert item.status == PlanChangeItemStatus.invalid
+    assert item.after_data.get("route_id") is None
+    # Чужой маршрут остался на месте — импорт не переименовал и не заменил его.
+    await session.refresh(existing)
+    assert existing.name == ROUTE_NAME
+
+
+@pytest.mark.asyncio
+async def test_import_preview_shows_signature_conflict(session) -> None:
+    """Предпросмотр импорта показывает тот же конфликт: `change_set_id = 0` —
+    записи маршрута в нём нет, иначе невалидность всплыла бы только при
+    применении сета."""
+    await _seed_sections(session)
+    profile = await _make_named_profile(session, "sig_preview")
+    product = await _make_product(session, "FG-PREVIEW")
+    await _make_route_with_signature(session, ROUTE_NAME, FOREIGN_SIGNATURE)
+
+    items, _diagnostics = await _make_change_items(
+        session,
+        change_set_id=0,
+        parsed_rows=[ParsedRow("FG-PREVIEW", "Артикул", Decimal("10"), {"output_kind": "ГП"})],
+        products_by_sku={"fg-preview": product},
+        mode=None,
+        existing_positions=[],
+        rule_profile_id=profile.id,
+        template_id=None,
+    )
+
+    assert items[0].errors == ["route_signature_conflict"]
+    assert items[0].status == PlanChangeItemStatus.invalid
+    assert items[0].after_data.get("route_id") is None
+    # Собранные шаги остаются видны: оператор видит, что именно не совпало.
+    assert [step["section_code"] for step in items[0].after_data["route_steps"]] == [
+        "RAW_STOCK", "SAWING", "PACKING", "FINISHED_STOCK",
+    ]
+
+
+@pytest.mark.asyncio
+async def test_import_reuses_named_route_with_matching_signature(session) -> None:
+    """Регресс: сигнатуры совпадают — маршрут, найденный по имени,
+    переиспользуется как раньше, без ошибки строки."""
+    await _seed_sections(session)
+    profile = await _make_named_profile(session, "sig_matched")
+    product = await _make_product(session, "FG-MATCHED")
+    existing = await _make_route_with_signature(session, ROUTE_NAME, MATCHED_SIGNATURE)
+
+    items = await _import_one_row(session, profile, product, sku="FG-MATCHED")
+
+    item = items[0]
+    assert item.errors == []
+    assert item.status != PlanChangeItemStatus.invalid
+    assert item.after_data["route_id"] == existing.id
+
+
+@pytest.mark.asyncio
+async def test_two_rows_of_one_import_share_the_route(session) -> None:
+    """Регресс: две строки с одинаковым маршрутом в одном импорте
+    переиспользуют один маршрут, а не спорят за него."""
+    await _seed_sections(session)
+    profile = await _make_named_profile(session, "sig_pair")
+    first = await _make_product(session, "FG-PAIR-1")
+    second = await _make_product(session, "FG-PAIR-2")
+
+    items, _diagnostics = await _make_change_items(
+        session,
+        change_set_id=1,
+        parsed_rows=[
+            ParsedRow("FG-PAIR-1", "Артикул", Decimal("10"), {"output_kind": "ГП"}),
+            ParsedRow("FG-PAIR-2", "Артикул", Decimal("10"), {"output_kind": "ГП"}),
+        ],
+        products_by_sku={"fg-pair-1": first, "fg-pair-2": second},
+        mode=None,
+        existing_positions=[],
+        rule_profile_id=profile.id,
+        template_id=None,
+    )
+
+    assert [item.errors for item in items] == [[], []]
+    route_ids = {item.after_data["route_id"] for item in items}
+    assert len(route_ids) == 1 and None not in route_ids
+    assert await session.scalar(
+        select(func.count(ProductionRoute.id)).where(ProductionRoute.name == ROUTE_NAME)
+    ) == 1
+
+
+@pytest.mark.asyncio
+async def test_route_build_error_stays_out_of_row_errors(session) -> None:
+    """Регресс: ошибки сборки, не связанные с конфликтом, остаются в журнале
+    и в ошибки строки не превращаются (глушение снимать нельзя — см. ADR-0045).
+    """
+    await _seed_sections(session)
+    profile = await _make_named_profile(session, "sig_broken", sections=["NO_SUCH_SECTION"])
+    product = await _make_product(session, "FG-BROKEN")
+    await _make_route_with_signature(session, ROUTE_NAME, FOREIGN_SIGNATURE)
+
+    items = await _import_one_row(session, profile, product, sku="FG-BROKEN")
+
+    assert items[0].errors == []
+
+
+@pytest.mark.asyncio
+async def test_conflicting_row_becomes_invalid_position_in_plan(session) -> None:
+    """Строка с конфликтом не исчезает из импорта: применение сета создаёт
+    позицию со статусом «невалидна» и кодом в её ошибках — её видно в
+    плане, и оператор видит, что чинить."""
+    await _seed_sections(session)
+    profile = await _make_named_profile(session, "sig_apply")
+    product = await _make_product(session, "FG-APPLY")
+    await _make_route_with_signature(session, ROUTE_NAME, FOREIGN_SIGNATURE)
+    plan = ProductionPlan(plan_no="PLAN-215", name="План 215", status=ProductionPlanStatus.draft)
+    session.add(plan)
+    await session.commit()
+    change_set = PlanChangeSet(production_plan_id=plan.id, summary={})
+    session.add(change_set)
+    await session.commit()
+
+    items = await _import_one_row(session, profile, product, sku="FG-APPLY")
+    items[0].change_set_id = change_set.id
+    session.add(items[0])
+    await session.commit()
+
+    await apply_change_set(session, change_set.id)
+
+    positions = (
+        await session.execute(
+            select(PlanPosition).where(PlanPosition.production_plan_id == plan.id)
+        )
+    ).scalars().all()
+    assert len(positions) == 1
+    assert positions[0].status == PlanPositionStatus.invalid
+    assert "route_signature_conflict" in positions[0].validation_errors
+    assert positions[0].route_id is None

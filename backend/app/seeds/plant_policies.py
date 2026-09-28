@@ -40,6 +40,7 @@ VALIDATION_ERROR_MESSAGES: dict[str, str] = {
     "route_contains_inactive_section": "Маршрут содержит неактивный участок",
     "duplicate_sku_due_date": "Дубликат строки Excel: такая же строка уже есть в плане.",
     "route_not_matching_import_signature": "Маршрут не совпадает с ожидаемым",
+    "route_signature_conflict": "Маршрут с таким именем уже есть и отличается по составу этапов. Подставлять его нельзя — приведите его в соответствие вручную.",
     "route_missing_required_step": "В маршруте отсутствует обязательный этап",
     "route_missing_pack_additional_operation": "В маршруте нет дополнительной операции упаковки",
     "route_primary_operation_mismatch": "Основная операция маршрута не совпадает с импортированной. Проверьте соответствие профиля и маршрута.",
