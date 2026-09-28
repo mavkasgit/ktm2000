@@ -32,7 +32,7 @@ from app.api.routes.audit_logs import AuditLogOut
 from app.models.imports import ImportBatch
 from app.models.product import Product
 from app.models.release_batch import ReleaseBatchType
-from app.models.route import ProductionRoute, RouteStage
+from app.models.route import ProductionRoute, RouteRuleProfile, RouteStage
 from app.models.section import Section
 from app.models.user import User
 from app.services.plan_generation import create_release_batch
@@ -52,6 +52,7 @@ from app.services.production_plan_service import (
     soft_delete_cancelled_position,
 )
 from app.services.route_matcher import resolve_position_route, ResolvedRouteInfo, make_position_route_cache_key
+from app.services.route_signature_check import compare_position_route_signature
 from app.services.route_selection import select_route_for_payload
 from app.services.route_validation import validate_route_match
 from app.services.plan_validation import format_validation_error
@@ -143,11 +144,31 @@ class UpdatePositionQuantityIn(BaseModel):
 # Удален StatusHistoryOut, так как PositionStatusHistory удалена. История теперь читается через аудит-логи.
 
 
+class RouteSignatureStepOut(BaseModel):
+    stage_kind: str
+    section_code: str
+    operation_codes: list[str]
+    is_significant: bool
+    transforms_dimensions: bool
+    is_final: bool
+
+
+class RouteSignatureCheckOut(BaseModel):
+    """Сигнатура маршрута позиции: ожидаемая, фактическая, вердикт (#214)."""
+
+    verdict: Literal["match", "mismatch", "unknown"]
+    expected: str | None = None
+    expected_steps: list[RouteSignatureStepOut] = []
+    actual: str | None = None
+    actual_steps: list[RouteSignatureStepOut] = []
+
+
 class RouteCheckOut(BaseModel):
     expected_signature: dict
     active_route_snapshot: dict | None
     match: bool
     issues: list[str]
+    route_signature: RouteSignatureCheckOut
 
 
 class SectionTotalsLineOut(BaseModel):
@@ -772,11 +793,32 @@ async def route_check(
             },
         }
 
+    signature_comparison = await compare_position_route_signature(
+        db,
+        position,
+        profile=await db.get(RouteRuleProfile, rule_profile_id) if rule_profile_id else None,
+        product=product,
+        route_id=route_info.route_id,
+    )
+
     return RouteCheckOut(
         expected_signature=expected_signature,
         active_route_snapshot=active_route_snapshot,
         match=len(issues) == 0,
         issues=issues,
+        route_signature=RouteSignatureCheckOut(
+            verdict=signature_comparison.verdict,
+            expected=signature_comparison.expected,
+            expected_steps=[
+                RouteSignatureStepOut(**step.as_dict())
+                for step in signature_comparison.expected_steps
+            ],
+            actual=signature_comparison.actual,
+            actual_steps=[
+                RouteSignatureStepOut(**step.as_dict())
+                for step in signature_comparison.actual_steps
+            ],
+        ),
     )
 
 

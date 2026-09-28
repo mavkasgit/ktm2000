@@ -12,6 +12,7 @@ import { invalidateAfter } from "@/shared/api/cacheInvalidation"
 import { statusLabels } from "@/shared/lib/generated-labels"
 import { ExecutionStagesTable } from "./ExecutionStagesTable"
 import { ExecutionEventsTable } from "./ExecutionEventsTable"
+import { RouteSignatureCheckCard } from "./RouteSignatureCheck"
 
 function planPreviewUrl(planId: number): string {
   return `/plans/${planId}/preview`
@@ -121,6 +122,10 @@ export function RowDetailsContent({
 
   const canEdit = typeof data.id === "number" && data.productionPlanId > 0 &&
     (data.status === "draft" || data.status === "invalid" || data.status === "valid")
+  // Сигнатуру имеет смысл показывать там, где есть с чем сравнивать:
+  // у позиции плана и назначенный маршрут.
+  const canCheckRouteSignature =
+    typeof data.id === "number" && data.productionPlanId > 0 && data.routeOrigin.kind !== "none"
   const hasErrors = data.errors.length > 0
   const hasWarnings = data.warnings.length > 0
   const hasRouteCheckIssues = (data.routeCheckIssues?.length ?? 0) > 0
@@ -305,6 +310,13 @@ export function RowDetailsContent({
             )}
           </div>
         </div>
+      )}
+
+      {canCheckRouteSignature && (
+        <RouteSignatureCheckCard
+          productionPlanId={data.productionPlanId}
+          positionId={data.id as number}
+        />
       )}
 
       {hasStages && contentMode === "stages" && (

@@ -1475,3 +1475,139 @@ async def test_migration_065_normalizes_storage_route_stages_to_transit(tmp_path
         async with admin_engine.connect() as conn:
             await conn.execute(text(f'DROP DATABASE IF EXISTS "{db_name}" WITH (FORCE)'))
         await admin_engine.dispose()
+
+
+@pytest.mark.asyncio
+async def test_migration_066_backfills_route_signature_idempotently(tmp_path: Path):
+    """#214: существующие маршруты получают сигнатуру по записанным этапам.
+
+    Этапы не пересобираются, а повторный прогон ничего не меняет. Формат
+    совпадает с той, что считает ``app.services.route_signature``.
+    """
+    db_name = f"ktm_mig_{uuid.uuid4().hex[:10]}"
+    admin_url = _test_db_url().rsplit("/", 1)[0] + "/postgres"
+    target_url = _test_db_url().rsplit("/", 1)[0] + f"/{db_name}"
+
+    admin_engine = create_async_engine(admin_url, isolation_level="AUTOCOMMIT")
+    async with admin_engine.connect() as conn:
+        await conn.execute(text(f'CREATE DATABASE "{db_name}"'))
+    await admin_engine.dispose()
+
+    env = _alembic_env(target_url, tmp_path)
+
+    def _run(*args: str) -> None:
+        result = subprocess.run(
+            ["alembic", *args],
+            cwd=BACKEND_DIR,
+            env=env,
+            capture_output=True,
+            text=True,
+            check=False,
+        )
+        assert result.returncode == 0, result.stderr or result.stdout
+
+    engine = create_async_engine(target_url)
+    try:
+        _run("upgrade", "065_route_stage_transit_normalization")
+
+        async with engine.begin() as conn:
+            await conn.execute(text(
+                "INSERT INTO sections (code, name, sort_order, type, is_active) VALUES "
+                "('MIG066-SAW', 'Пила', 70, 'production', true), "
+                "('MIG066-FG', 'Склад ГП', 90, 'finished_stock', true)"
+            ))
+            section_ids = dict(
+                (
+                    await conn.execute(
+                        text("SELECT code, id FROM sections WHERE code LIKE 'MIG066-%'")
+                    )
+                ).all()
+            )
+            await conn.execute(text(
+                "INSERT INTO production_routes (name, code, is_active) "
+                "VALUES ('Маршрут 066', 'mig066', true), ('Без этапов', 'mig066-empty', true)"
+            ))
+            route_id = (
+                await conn.execute(text("SELECT id FROM production_routes WHERE code = 'mig066'"))
+            ).scalar_one()
+            await conn.execute(
+                text(
+                    "INSERT INTO route_stages "
+                    "(route_id, sequence, section_id, storage_section_id, stage_kind, "
+                    "is_significant, transforms_dimensions, is_final) VALUES "
+                    "(:route, 1, :saw, NULL, 'production', true, true, false), "
+                    "(:route, 2, NULL, :fg, 'transit', false, false, true)"
+                ),
+                {
+                    "route": route_id,
+                    "saw": section_ids["MIG066-SAW"],
+                    "fg": section_ids["MIG066-FG"],
+                },
+            )
+            for op_sequence, operation_code in ((1, "SAW_PREP"), (2, "SAW")):
+                await conn.execute(
+                    text(
+                        "INSERT INTO route_operations "
+                        "(route_stage_id, sequence, operation_code, operation_name) "
+                        "SELECT id, :seq, :code, :code FROM route_stages "
+                        "WHERE route_id = :route AND sequence = 1"
+                    ),
+                    {
+                        "route": route_id,
+                        "seq": op_sequence,
+                        "code": operation_code,
+                    },
+                )
+
+        async def _state() -> list[tuple]:
+            async with engine.connect() as conn:
+                signatures = list(
+                    (
+                        await conn.execute(
+                            text(
+                                "SELECT code, route_signature FROM production_routes "
+                                "WHERE code LIKE 'mig066%' ORDER BY code"
+                            )
+                        )
+                    ).all()
+                )
+                stages = list(
+                    (
+                        await conn.execute(
+                            text(
+                                "SELECT sequence, section_id, storage_section_id, "
+                                "is_significant, transforms_dimensions, is_final "
+                                "FROM route_stages WHERE route_id = :route "
+                                "ORDER BY sequence"
+                            ),
+                            {"route": route_id},
+                        )
+                    ).all()
+                )
+            return [signatures, stages]
+
+        _run("upgrade", "head")
+        after = await _state()
+
+        assert after == [
+            [
+                ("mig066", "production:MIG066-SAW:SAW_PREP,SAW:1:1:0>transit:MIG066-FG::0:0:1"),
+                ("mig066-empty", None),
+            ],
+            [
+                (1, section_ids["MIG066-SAW"], None, True, True, False),
+                (2, None, section_ids["MIG066-FG"], False, False, True),
+            ],
+        ]
+
+        # Повторный прогон (stamp назад + upgrade head) — no-op: ни сигнатуры,
+        # ни этапы не меняются.
+        _run("stamp", "065_route_stage_transit_normalization")
+        _run("upgrade", "head")
+        assert await _state() == after
+    finally:
+        await engine.dispose()
+        admin_engine = create_async_engine(admin_url, isolation_level="AUTOCOMMIT")
+        async with admin_engine.connect() as conn:
+            await conn.execute(text(f'DROP DATABASE IF EXISTS "{db_name}" WITH (FORCE)'))
+        await admin_engine.dispose()
