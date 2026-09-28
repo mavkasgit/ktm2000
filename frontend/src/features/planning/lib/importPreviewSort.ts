@@ -7,6 +7,9 @@
  * поэтому новая сортируемая колонка обязана попасть в `ImportPreviewSortKey`.
  */
 
+import type { SortConfig } from "@/shared/hooks/useTableQueryEngine";
+import { nextMultiSortConfigs } from "@/shared/lib/multiSort";
+
 /** Колонки превью, по которым можно сортировать (заголовки таблицы). */
 export type ImportPreviewSortKey =
   | "source_row_number"
@@ -28,15 +31,21 @@ const STRING_COLLATOR = new Intl.Collator(["ru-RU", "en-US"], {
 
 /**
  * Цикл клика по шапке: нет сортировки → по убыванию → по возрастанию → нет.
- * Тот же контракт, что у `SortableFilterHeader` (`nextMultiSortConfigs`).
+ *
+ * Сам цикл — не этот файл, а `nextMultiSortConfigs`: он уже отвечает за
+ * клик по шапке на всех остальных экранах, и вторая копия процедуры
+ * разошлась бы с первой при первой же правке. Здесь только проекция на
+ * превью, где сортируется одна колонка, а не мультисортировка: клик по
+ * другой колонке заменяет выбранную, а не добавляет ей приоритет.
  */
 export function nextImportPreviewSortConfig(
   prev: ImportPreviewSortConfig | null,
   key: ImportPreviewSortKey,
 ): ImportPreviewSortConfig | null {
-  if (!prev || prev.key !== key) return { key, dir: "desc" };
-  if (prev.dir === "desc") return { key, dir: "asc" };
-  return null;
+  const current: SortConfig<ImportPreviewSortKey>[] =
+    prev && prev.key === key ? [{ field: prev.key, order: prev.dir }] : [];
+  const [head] = nextMultiSortConfigs(current, key);
+  return head ? { key: head.field, dir: head.order } : null;
 }
 
 /** Число из значения или null; массив — по первому числовому элементу. */

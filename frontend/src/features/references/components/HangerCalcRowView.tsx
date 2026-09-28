@@ -10,6 +10,7 @@ import { DashCell } from "./DashCell";
 import { HangerFieldCell } from "./HangerFieldCell";
 import { LengthChips } from "./LengthChips";
 import { fmtQtyPrecise } from "@/shared/lib/quantityFormat";
+import { hangerCalcTotalText } from "../lib/hangerCalcColumns";
 
 export type RowSaveState = { status: "saving" } | { status: "saved" } | { status: "error"; message: string };
 
@@ -43,7 +44,7 @@ export function HangerCalcRowView({
 
   // Единый guard для ячеек разбивки: авто, не инвалид, есть расчёт (#64 — dedup).
   const showBreakdown = row.auto && !rowInvalid && !!primary?.is_calculable;
-  const isZeroTotal = showBreakdown && primary!.total === 0;
+  const isZeroTotal = showBreakdown && row.total === 0;
   const dashCell = <DashCell reason={breakdownReason} danger={rowInvalid} />;
 
   const totalCell = (() => {
@@ -56,11 +57,11 @@ export function HangerCalcRowView({
       );
     }
     if (showBreakdown) {
-      return <span className="font-medium">{fmtQtyPrecise(primary!.total)}</span>;
+      return <span className="font-medium">{hangerCalcTotalText(row)}</span>;
     }
     if (!row.auto) {
       return row.total != null
-        ? <span className="text-muted-foreground">{fmtQtyPrecise(row.total)}</span>
+        ? <span className="text-muted-foreground">{hangerCalcTotalText(row)}</span>
         : <DashCell reason={breakdownReason} />;
     }
     return dashCell;

@@ -44,18 +44,13 @@ interface ExecutionTableProps {
   handleSortChange: (field: ExecutionSortField) => void;
   getAriaSort: (field: ExecutionSortField) => "none" | "ascending" | "descending";
   bindColumn: ReturnType<typeof useFilterableTable<ExecutionSortField>>["bindColumn"];
-  uniqueValuesByField: {
-    id: string[];
-    row: string[];
-    plan: string[];
-    sku: string[];
-    name: string[];
-    qty: string[];
-    route: string[];
-    status: string[];
-    stage: string[];
-    dimensions: string[];
-  };
+  /**
+   * Значения для попапера фильтра — по списку на каждое объявленное
+   * `filterField`. Ключи — подмножество `ExecutionSortField`: объединение
+   * шире набора колонок (поле `plan` не фильтрует ни одна), поэтому тип
+   * частичный, а ключ без данных означал бы фильтр по несуществующей колонке.
+   */
+  uniqueValuesByField: Partial<Record<ExecutionSortField, string[]>>;
   // bulk
   bulkSelection: {
     selectedIds: Set<number>;

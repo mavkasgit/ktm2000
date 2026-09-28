@@ -128,6 +128,14 @@ const headerCellClass = `${DATA_TABLE_STYLES.headerRow} ${DATA_TABLE_STYLES.head
 export function BackupsPage() {
   const { canEditSettings } = usePermission()
   const isReadOnly = !canEditSettings
+  // Экран переведён на общий хук `useFilterableTable` осознанно (AC #198:
+  // один цикл клика по шапке на всех экранах вместо копии на этом).
+  // Собственная одно-колоночная сортировка была у него не семантикой
+  // экрана, а частным случаем того же общего цикла: клик по другой колонке
+  // добавляет ей приоритет (`created_at:desc,filename:desc`), а не
+  // заменяет выбранную. Поэтому дефолт остался прежним — `backupsDefaultSort`
+  // = `created_at:desc` («свежие сверху»); он не считается активным
+  // фильтром, и сброс возвращает его, а не пустоту.
   const {
     bindColumn,
     columnFilters,

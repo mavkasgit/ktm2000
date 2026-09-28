@@ -16,6 +16,7 @@ import { usePaginatedTableQuery } from "@/shared/hooks/usePaginatedTableQuery";
 import type { SortConfig } from "@/shared/hooks/useTableQueryEngine";
 import { buildSortParam } from "@/shared/lib/sortQueryParam";
 import { buildColumnApiParams } from "@/shared/lib/columnSpecs";
+import { useDebouncedValue } from "@/shared/lib/useDebouncedValue";
 import { auditColumns, type AuditFilterField } from "../lib/auditColumns";
 
 type LogFilterField = AuditFilterField;
@@ -78,6 +79,9 @@ function buildAuditColumnApiParams(
 export function AuditLogsPage() {
   // Поиск и базовые фильтры
   const [search, setSearch] = useState("");
+  // Поиск по журналу уходит на сервер: без паузы каждый символ — отдельный
+  // запрос. В задержке только запрос, само поле отвечает на ввод сразу.
+  const debouncedSearch = useDebouncedValue(search);
   const [statusFilter, setStatusFilter] = useState<"all" | "success" | "error" | "info">("all");
   const [dateFrom, setDateFrom] = useState<string>("");
   const [dateTo, setDateTo] = useState<string>("");
@@ -119,7 +123,7 @@ export function AuditLogsPage() {
 
   const pagination = usePaginatedTableQuery({
     limitOptions: [50, 100],
-    resetPageDeps: [search, statusFilter, dateFrom, dateTo, columnFilters, columnSearchQueries, sortConfigs],
+    resetPageDeps: [debouncedSearch, statusFilter, dateFrom, dateTo, columnFilters, columnSearchQueries, sortConfigs],
   });
   const { page, setPage, limit, setLimit, limitOptions, offset, getTotalPages, getRangeLabel } = pagination;
 
@@ -132,7 +136,7 @@ export function AuditLogsPage() {
     const { status: columnStatus, ...restColumnParams } = columnApiParams;
     return {
       status: statusFilter === "all" ? columnStatus : statusFilter,
-      search: search.trim() || undefined,
+      search: debouncedSearch.trim() || undefined,
       date_from: dateFrom ? `${dateFrom}T00:00:00` : undefined,
       date_to: dateTo ? `${dateTo}T23:59:59` : undefined,
       sort: buildSortParam(effectiveSortConfigs, mapSortFieldToApi),
@@ -144,7 +148,7 @@ export function AuditLogsPage() {
     [
       statusFilter,
       columnApiParams,
-      search,
+      debouncedSearch,
       dateFrom,
       dateTo,
       effectiveSortConfigs,

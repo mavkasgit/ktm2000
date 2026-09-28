@@ -87,32 +87,6 @@ export type ColumnSpec<
 };
 
 /**
- * Параметры точного совпадения для всех колонок, которые объявили его в
- * описании. Экран отдаёт их в запрос целиком и не перечисляет колонки руками:
- * вторая колонка с точным совпадением появляется без правки этого кода.
- *
- * Значение читается тем же `pickExactMatchColumnValue`, что и в
- * `buildColumnApiParams`, — иначе один и тот же клик по «Выбрать все» в
- * поповере габаритов отправлял бы на доске первое значение, а на плане не
- * отправлял ничего. Точный фильтр по определению не мультизначный: «Размер»
- * — это один габарит, и несколько выбранных значений запросу не
- * соответствуют.
- */
-export function exactMatchColumnParams<Field extends string>(
-  columnFilters: Partial<Record<Field, Set<string>>>,
-  columns: ReadonlyArray<ColumnSpec<Field>>,
-): Partial<Record<Field, string>> {
-  const params: Partial<Record<Field, string>> = {};
-  for (const column of columns) {
-    if (!column.exactMatch || column.filterField === undefined) continue;
-    const value = pickExactMatchColumnValue(columnFilters, column.filterField);
-    if (value === undefined) continue;
-    params[column.filterField] = value;
-  }
-  return params;
-}
-
-/**
  * Параметры запроса для всех отфильтрованных колонок — строковые.
  *
  * Экраны собирали их одинаково и в пяти местах: пять функций
@@ -123,6 +97,13 @@ export function exactMatchColumnParams<Field extends string>(
  *
  * Колонки с нестроковым параметром (`paramKind`) сюда не попадают: их
  * значения собирает `buildTypedColumnApiParams`.
+ *
+ * Значения точного совпадения (`exactMatch`) собирает тоже этот файл, но
+ * глубже — в `readColumnValue`, откуда их берут и `buildColumnApiParams`, и
+ * `buildTypedColumnApiParams`. Отдельного сборщика точных параметров нет
+ * намеренно: он был мёртвым экспортом без единого production-вызова, и в
+ * нём не было проверки `clientOnly`, которую имеет `readColumnValue`. Экраны
+ * зовут эти две функции.
  */
 export function buildColumnApiParams<Field extends string>(
   columnFilters: Partial<Record<Field, Set<string>>>,

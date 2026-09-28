@@ -18,6 +18,7 @@
  * пустой объект, и это зафиксировано тестом.
  */
 import type { ProductWipRemainder } from "@/shared/api/productionPlans";
+import { fmtQty } from "@/shared/lib/quantityFormat";
 import type { ColumnSpec } from "@/shared/lib/columnSpecs";
 
 /** Поля фильтра и сортировки сводки: обе связи у колонок совпадают. */
@@ -62,12 +63,38 @@ export const wipStatsColumns: WipStatsColumn[] = [
 ];
 
 /**
+ * Формат «Остатка» — целые штуки, домен `fmtQty` (ADR-0040). Вынесен
+ * рядом с описанием колонки и используется в ячейке, в поповере и в
+ * предикате: пока попапер отдавал `String(row.quantity)`, а ячейка печатала
+ * `fmtQty`, дробный остаток в таблице читался как «3», а в списке фильтра
+ * как «2,5» — и выбранное значение не совпадало с напечатанным.
+ */
+export function wipStatsQtyText(row: ProductWipRemainder): string {
+  return fmtQty(row.quantity);
+}
+
+/**
+ * Порядок значений «Остатка» в поповере: сравнивается напечатанная строка,
+ * а не сырое число, — иначе список сортировался бы по значениям, которых
+ * оператор в таблице не видит. Не-число («—») уходит в конец.
+ */
+export function wipStatsQtyCompare(a: string, b: string): number {
+  const numA = Number(a);
+  const numB = Number(b);
+  if (!Number.isFinite(numA)) return Number.isFinite(numB) ? 1 : 0;
+  if (!Number.isFinite(numB)) return -1;
+  return numA - numB;
+}
+
+/**
  * Значение ячейки, по которому работает клиентский фильтр колонки. Поля
  * названы здесь же: пока предикат сравнивал поле строкой, новое поле можно
- * было забыть, и фильтр по нему молча ничего не сужал.
+ * было забыть, и фильтр по нему молча ничего не сужал. «Остаток» берёт
+ * тот же форматтер, что и ячейка, — иначе попапер показывал бы оператору
+ * число, которого в строке нет.
  */
 export function wipStatsCellValue(row: ProductWipRemainder, field: WipStatsField): string {
-  return field === "name" ? row.spg_name : String(row.quantity);
+  return field === "name" ? row.spg_name : wipStatsQtyText(row);
 }
 
 /**

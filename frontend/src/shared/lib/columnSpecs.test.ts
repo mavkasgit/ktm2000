@@ -5,7 +5,7 @@
  */
 import { describe, expect, it } from "vitest";
 
-import { buildColumnApiParams, exactMatchColumnParams, type ColumnSpec } from "./columnSpecs";
+import { buildColumnApiParams, type ColumnSpec } from "./columnSpecs";
 
 type ParamField = "sku" | "dimensions" | "errors" | "rowNum" | "next";
 
@@ -90,68 +90,17 @@ describe("buildColumnApiParams", () => {
       has_warnings: "no",
     });
   });
-});
-
-type Field = "sku" | "dimensions" | "status";
-
-const COLUMNS: ColumnSpec<Field>[] = [
-  { filterField: "sku" },
-  { filterField: "dimensions", exactMatch: true },
-  { filterField: "status" },
-];
-
-describe("exactMatchColumnParams", () => {
-  it("берёт значение только у колонки, объявленной как точное совпадение", () => {
-    const params = exactMatchColumnParams(
-      { sku: new Set(["ABC"]), dimensions: new Set(['{"length_mm":2700}']) },
-      COLUMNS,
-    );
-    expect(params).toEqual({ dimensions: '{"length_mm":2700}' });
-  });
-
-  it("колонка без признака exactMatch в результат не попадает, даже если отфильтрована", () => {
-    // «Артикул» ищется по подстроке: его значение уходит отдельным
-    // параметром, и повторять его здесь нельзя.
-    const params = exactMatchColumnParams({ sku: new Set(["ABC"]) }, COLUMNS);
-    expect(params).toEqual({});
-  });
-
-  it("колонка без фильтра в описании не даёт значения", () => {
-    const columns: ColumnSpec<Field>[] = [{ filterField: "dimensions", exactMatch: true }, {}];
-    expect(exactMatchColumnParams({ dimensions: new Set(['{"length_mm":900}']) }, columns)).toEqual({
-      dimensions: '{"length_mm":900}',
-    });
-  });
-
-  it("вторая колонка точного совпадения добавляется без правки вызова", () => {
-    // Смысл объявления один раз: появление новой точной колонки не должно
-    // требовать менять код, который собирает параметры.
-    type TwoFields = "dimensions" | "location";
-    const columns: ColumnSpec<TwoFields>[] = [
-      { filterField: "dimensions", exactMatch: true },
-      { filterField: "location", exactMatch: true },
-    ];
-    const params = exactMatchColumnParams<TwoFields>(
-      { dimensions: new Set(['{"length_mm":2700}']), location: new Set(["A-1"]) },
-      columns,
-    );
-    expect(params).toEqual({ dimensions: '{"length_mm":2700}', location: "A-1" });
-  });
-
-  it("колонка объявлена точной, но не отфильтрована — параметра нет", () => {
-    expect(exactMatchColumnParams({}, COLUMNS)).toEqual({});
-  });
 
   it("несколько выбранных значений точной колонки не отправляют ничего", () => {
     // «Выбрать все» в поповере выбирает несколько габаритов. Точный фильтр
     // не мультизначный: отправлять первый из них значит фильтровать по
-    // произвольному размеру. Планирующая и передачи уже так себя ведут, и
-    // доска обязана вести себя так же, иначе один клик даёт разный запрос
-    // на разных экранах.
-    const params = exactMatchColumnParams(
+    // произвольному размеру.
+    const params = buildColumnApiParams(
       { dimensions: new Set(['{"length_mm":2700}', '{"length_mm":900}']) },
-      COLUMNS,
+      {},
+      PARAM_COLUMNS,
     );
-    expect(params).toEqual({});
+    expect(params.dimensions).toBeUndefined();
   });
 });
+

@@ -2,7 +2,6 @@ import { useMemo, useState, useCallback, useRef, useEffect } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import {
   getProductionPlanningRowDetail,
-  listPlans,
   listProductionPlanningRows,
   manualPassToStage,
   takeToWork,
@@ -83,6 +82,17 @@ function buildExecutionColumnApiParams(
   return buildColumnApiParams(columnFilters, columnSearchQueries, executionTableColumns);
 }
 
+/**
+ * Подписи колонок для счётчика активных фильтров — из описания колонки, как
+ * на доске задач. Ручной словарь расходился с таблицей: колонки «Размер» в
+ * нём не было, и оператор читал «Колонка: dimensions».
+ */
+const EXECUTION_COLUMN_LABELS: Record<string, string> = Object.fromEntries(
+  executionTableColumns.flatMap((column) =>
+    column.filterField ? [[column.filterField, column.label] as const] : [],
+  ),
+);
+
 
 export function ExecutionPage() {
   const [selectedPositionId, setSelectedPositionId] = useState<number | null>(null);
@@ -153,10 +163,6 @@ export function ExecutionPage() {
   const rows = rowsData?.rows ?? [];
   const total = rowsData?.total ?? 0;
   const totalPages = getTotalPages(total);
-  const { data: plans } = useQuery({
-    queryKey: queryKeys.execution.plans(),
-    queryFn: listPlans,
-  });
   const { data: sections } = useQuery({
     queryKey: queryKeys.sections.all(),
     queryFn: listSections,
@@ -168,11 +174,6 @@ export function ExecutionPage() {
     enabled: drawerOpen && selectedPositionId !== null,
   });
 
-  const planNameById = useMemo(() => {
-    const map = new Map<number, string>();
-    (plans || []).forEach((p) => map.set(p.id, p.plan_no));
-    return map;
-  }, [plans]);
   const sectionMetaById = useMemo(() => {
     const map = new Map<number, { icon: string | null; icon_color: string | null }>();
     (sections || []).forEach((s) => map.set(s.id, { icon: s.icon, icon_color: s.icon_color }));
@@ -610,17 +611,7 @@ export function ExecutionPage() {
       buildActiveFilterSummary(searchQuery, sortConfigs.length, {
         columnFilters,
         columnSearchQueries,
-        columnLabels: {
-          id: "ID",
-          row: "Строка",
-          plan: "План",
-          sku: "SKU",
-          name: "Наименование",
-          qty: "Кол-во",
-          route: "Маршрут",
-          status: "Статус",
-          stage: "Этап",
-        },
+        columnLabels: EXECUTION_COLUMN_LABELS,
       }),
     [columnFilters, columnSearchQueries, searchQuery, sortConfigs.length],
   );
@@ -666,7 +657,6 @@ export function ExecutionPage() {
     return {
       id: [...new Set(rows.map((r) => String(r.plan_position_id)))],
       row: [...new Set(rows.map((r) => String(r.source_row_number ?? "")))],
-      plan: [...new Set(rows.map((r) => `${r.production_plan_id} ${planNameById.get(r.production_plan_id) || ""}`))],
       sku: [...new Set(rows.map((r) => r.source_sku))],
       name: [...new Set(rows.map((r) => r.source_name || "").filter(Boolean))],
       qty: [...new Set(rows.map((r) => fmtQty(r.quantity)))],
@@ -677,7 +667,7 @@ export function ExecutionPage() {
         (a, b) => formatDimensionsFilterValue(a).localeCompare(formatDimensionsFilterValue(b), "ru"),
       ),
     };
-  }, [rows, planNameById]);
+  }, [rows]);
 
   const handleSelectAll = useCallback(() => {
     const pageIds = rows.map((r) => r.plan_position_id);

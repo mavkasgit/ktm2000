@@ -28,6 +28,8 @@ import type { SortConfig } from "@/shared/hooks/useTableQueryEngine";
 import type { ColumnSpec } from "@/shared/lib/columnSpecs";
 import { buildSortParam } from "@/shared/lib/sortQueryParam";
 
+import { fmtQtyPrecise, QTY_EMPTY } from "@/shared/lib/quantityFormat";
+
 import {
   LIMITER_LABELS,
   rowSku,
@@ -48,14 +50,41 @@ export type HangerCalcColumn = ColumnSpec<HangerCalcSortField> & {
   sortValues?: (a: string, b: string) => number;
 };
 
+/**
+ * Формат «Итога» — дробь живая, домен `fmtQtyPrecise` (ADR-0040). Источник
+ * один: пока ячейка печатала `fmtQtyPrecise(primary.total)`, а попапер и
+ * предикат брали `String(row.total)`, дробной итог в строке читался как
+ * «2,5», а в списке фильтра как «2.5» — выбранное значение не совпадало с
+ * напечатанным. Поле берётся `row.total`: это уже итог «основной длины»
+ * с авто-приоритетом и ручным запасным значением, и именно его сортирует
+ * `sortHangerCalcRows`, то есть расхождение источника закрывается здесь.
+ */
+export function hangerCalcTotalText(row: HangerCalcRow | PairedHangerCalcRow): string {
+  return row.total != null ? fmtQtyPrecise(row.total) : QTY_EMPTY;
+}
+
 /** Значение ячейки: и в списке фильтра, и в ключе клиентской выборки. */
 export function hangerCalcCellValue(
   row: HangerCalcRow | PairedHangerCalcRow,
   field: HangerCalcSortField,
 ): string {
   if (field === "sku") return rowSku(row);
-  if (field === "total") return row.total != null ? String(row.total) : "—";
+  if (field === "total") return hangerCalcTotalText(row);
   return row.limiter ? LIMITER_LABELS[row.limiter] : "—";
+}
+
+/**
+ * Порядок значений «Итога» в поповере. Сравнивается напечатанная строка:
+ * «2,5» — это не `Number("2,5")`, то есть разбор запятой обязателен, иначе
+ * список сортировался бы по `NaN`. «—» (нет значения) уходит в конец.
+ */
+export function compareHangerCalcTotals(a: string, b: string): number {
+  // «—» и любой не-числовой текст дают `NaN` и уходят в конец списка.
+  const numA = Number(a.replace(",", "."));
+  const numB = Number(b.replace(",", "."));
+  if (!Number.isFinite(numA)) return Number.isFinite(numB) ? 1 : 0;
+  if (!Number.isFinite(numB)) return -1;
+  return numA - numB;
 }
 
 /** `p-0` — попапер фильтра сам занимает всю ячейку шапки. */
@@ -92,7 +121,7 @@ export const hangerCalcColumns: HangerCalcColumn[] = [
     sortField: "total",
     clientOnly: true,
     // Числа по возрастанию, «—» (нет значения) в конец.
-    sortValues: (a, b) => (a === "—" ? 1 : b === "—" ? -1 : Number(a) - Number(b)),
+    sortValues: compareHangerCalcTotals,
   },
   {
     id: "limiter",

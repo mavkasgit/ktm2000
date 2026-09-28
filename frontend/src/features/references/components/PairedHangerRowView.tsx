@@ -6,6 +6,7 @@ import { cn } from "@/shared/utils/cn";
 import type { HangerCalcResult } from "@/shared/api/hangerCalc";
 import { effectiveRawLength, lengthKey } from "@/shared/lib/hangerQuantity";
 import { fmtQtyPrecise } from "@/shared/lib/quantityFormat";
+import { hangerCalcTotalText } from "../lib/hangerCalcColumns";
 import { LIMITER_LABELS, formatPairedLengthLabel, type PairedHangerCalcRow } from "../lib/hangerCalcRows";
 import { DashCell } from "./DashCell";
 
@@ -16,9 +17,9 @@ export function PairedHangerRowView({ row, byLength }: { row: PairedHangerCalcRo
   const primary = row.primaryResult;
   const breakdownReason = row.incompatibleReason ?? (!row.auto ? "Ручной режим: не оба артикула в режиме авто" : row.primaryLength == null ? "Расчёт невозможен: у пары нет общих длин" : !primary || !primary.is_calculable ? "Расчёт невозможен: не хватает данных" : null);
   const showBreakdown = row.auto && !rowInvalid && !!primary?.is_calculable;
-  const isZeroTotal = showBreakdown && primary!.total === 0;
+  const isZeroTotal = showBreakdown && row.total === 0;
   const dashCell = <DashCell reason={breakdownReason} danger={rowInvalid} />;
-  const totalCell = isZeroTotal ? <DashCell reason="Итог 0: пара не помещается по лимитам — проверьте периметр и габариты" danger /> : showBreakdown ? <span className="font-medium">{fmtQtyPrecise(primary!.total)}</span> : !row.auto ? row.total != null ? <span className="text-muted-foreground">{fmtQtyPrecise(row.total)}</span> : <DashCell reason={breakdownReason} /> : dashCell;
+  const totalCell = isZeroTotal ? <DashCell reason="Итог 0: пара не помещается по лимитам — проверьте периметр и габариты" danger /> : showBreakdown ? <span className="font-medium">{hangerCalcTotalText(row)}</span> : !row.auto ? row.total != null ? <span className="text-muted-foreground">{hangerCalcTotalText(row)}</span> : <DashCell reason={breakdownReason} /> : dashCell;
   return <tr className={cn("hover:bg-muted/50", rowInvalid && "bg-red-50 hover:bg-red-100/60")}>
     <td className="px-4 py-2"><div className="flex items-center gap-1.5 flex-wrap"><span className="font-medium">{row.label}</span>{row.auto ? <Badge variant="secondary" className="text-xs bg-emerald-100">авто</Badge> : <Badge variant="secondary" className="text-xs">ручное</Badge>}<Badge variant="secondary" className="text-xs bg-purple-100">Парная</Badge></div></td>
     <td className="px-4 py-2">{row.perimeterSum != null ? <span className="text-muted-foreground">{row.perimeterSum}</span> : dashCell}</td>

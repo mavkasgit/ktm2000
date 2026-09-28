@@ -9,7 +9,7 @@ import { Loader2, Layers, Package, ClipboardList, AlertCircle } from "lucide-rea
 import type { SortConfig } from "@/shared/hooks/useTableQueryEngine";
 import { useFilterableTable } from "@/shared/hooks/useFilterableTable";
 
-import { wipStatsColumns, wipStatsCellValue, wipStatsSortValue, type WipStatsField } from "../lib/wipStatsColumns";
+import { wipStatsColumns, wipStatsCellValue, wipStatsQtyCompare, wipStatsQtyText, wipStatsSortValue, type WipStatsField } from "../lib/wipStatsColumns";
 
 interface ProductWipStatsDialogProps {
   sku: string | null;
@@ -106,7 +106,7 @@ function RemainderRow({ rem, withResetCell = false }: { rem: ProductWipRemainder
         {formatDimensionsLabel(rem.dimensions, rem.dimensions_label)}
       </td>
       <td className="px-3 py-2 text-right font-mono font-semibold text-emerald-600 dark:text-emerald-400">
-        {fmtQty(rem.quantity)}
+        {wipStatsQtyText(rem)}
       </td>
       {withResetCell && <TableCornerResetCell />}
     </tr>
@@ -228,7 +228,7 @@ export function ProductWipStatsDialog({ sku, open, onOpenChange }: ProductWipSta
     if (!data) return { name: [], qty: [] };
     return {
       name: Array.from(new Set(data.remainders.map((r) => r.spg_name))).sort(),
-      qty: Array.from(new Set(data.remainders.map((r) => String(r.quantity)))).sort((a, b) => Number(a) - Number(b)),
+      qty: Array.from(new Set(data.remainders.map((r) => wipStatsQtyText(r)))).sort(wipStatsQtyCompare),
     };
   }, [data]);
 

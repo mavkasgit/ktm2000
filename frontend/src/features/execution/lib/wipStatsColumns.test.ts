@@ -14,6 +14,8 @@ import {
   wipStatsCellValue,
   wipStatsColumns,
   wipStatsSortValue,
+  wipStatsQtyCompare,
+  wipStatsQtyText,
   type WipStatsField,
 } from "./wipStatsColumns";
 
@@ -32,6 +34,9 @@ const remainder = (name: string, quantity: number): ProductWipRemainder => ({
 });
 
 const rows = [remainder("ГХП А", 10), remainder("ГХП Б", 4), remainder("ГХП А", 7)];
+
+/** Дробный остаток: именно он раньше расходился между ячейкой и попапером. */
+const fractional = remainder("ГХП В", 2.5);
 
 /** Клиентский предикат диалога: тот же, что собирает `useFilterableTable`. */
 const predicateFor = (columnFilters: Partial<Record<WipStatsField, Set<string>>>) =>
@@ -97,5 +102,35 @@ describe("описание колонок сводки", () => {
     const [a, b] = [remainder("ГХП А", 10), remainder("ГХП Б", 4)];
     // Сравнение строк дало бы обратный порядок: "10" < "4".
     expect(wipStatsSortValue(a, qty!)).toBeGreaterThan(wipStatsSortValue(b, qty!) as number);
+  });
+});
+
+describe("«Остаток»: ячейка и попапер печатают одно и то же", () => {
+  it("значение попапера совпадает с напечатанным в ячейке", () => {
+    // Попапер отдаёт `wipStatsCellValue`, ячейка печатает `wipStatsQtyText`.
+    // Строка дробная: 2,5 округляется до «3», и расхождение видно сразу.
+    expect(wipStatsQtyText(fractional)).toBe("3");
+    expect(wipStatsCellValue(fractional, "qty")).toBe(wipStatsQtyText(fractional));
+  });
+
+  it("выбор в поповере по дробному остатку находит строку, напечатанную в ячейке", () => {
+    // Старый попапер отдавал `String(quantity)` → «2.5»; выбор «2.5» находил
+    // строку, в таблице напечатанную как «3», и наоборот выбор «3» её терял.
+    const predicate = buildColumnFilterPredicate({
+      columnFilters: { qty: new Set([wipStatsQtyText(fractional)]) },
+      columnSearchQueries: {},
+      getCellValue: wipStatsCellValue,
+    });
+    if (!predicate) throw new Error("предикат по «Остатку» должен быть построен");
+    expect([fractional].filter((item) => predicate(item)).map((row) => row.spg_name)).toEqual(["ГХП В"]);
+  });
+
+  it("попапер не отдаёт дробное значение, которого в таблице нет", () => {
+    expect(String(fractional.quantity)).not.toBe(wipStatsCellValue(fractional, "qty"));
+  });
+
+  it("значения попапера сортируются так, как они напечатаны", () => {
+    const values = [fractional, ...rows].map((row) => wipStatsQtyText(row));
+    expect([...new Set(values)].sort(wipStatsQtyCompare)).toEqual(["3", "4", "7", "10"]);
   });
 });

@@ -39,7 +39,6 @@ function Harness({ sortConfigs }: { sortConfigs: { field: ExecutionSortField; or
       uniqueValuesByField={{
         id: [],
         row: [],
-        plan: [],
         sku: [],
         name: [],
         qty: [],
