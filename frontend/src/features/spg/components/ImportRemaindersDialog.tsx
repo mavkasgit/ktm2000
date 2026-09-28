@@ -273,6 +273,7 @@ export function ImportRemaindersDialog({
     bindColumn,
     columnFilters,
     columnSearchQueries,
+    debouncedColumnSearchQueries,
     sortConfigs,
     handleSort: applySort,
     setSortConfigs,
@@ -288,8 +289,8 @@ export function ImportRemaindersDialog({
   });
 
   const columnApiParams = useMemo(
-    () => buildRemainderPreviewColumnApiParams(columnFilters, columnSearchQueries),
-    [columnFilters, columnSearchQueries],
+    () => buildRemainderPreviewColumnApiParams(columnFilters, debouncedColumnSearchQueries),
+    [columnFilters, debouncedColumnSearchQueries],
   );
 
   const sort = buildRemainderPreviewSortParam(sortConfigs);

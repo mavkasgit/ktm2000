@@ -1,6 +1,6 @@
 import { useEffect, useMemo, useRef, useState } from "react"
 import { Plus, Trash2, Upload } from "lucide-react"
-import { useQuery, useQueryClient } from "@tanstack/react-query"
+import { keepPreviousData, useQuery, useQueryClient } from "@tanstack/react-query"
 import {
   listImportTemplates,
   createImportTemplate,
@@ -112,9 +112,12 @@ export function ImportTemplatesPage() {
     [pagination.limit, pagination.offset],
   )
 
-  const { data: templatesPage, isLoading } = useQuery({
+  // `placeholderData: keepPreviousData` держит дерево на смене страницы: без
+  // него `isLoading` гасит таблицу целиком (ADR-0044).
+  const { data: templatesPage, isPending } = useQuery({
     queryKey: queryKeys.importTemplates.list(templatesQueryParams),
     queryFn: () => listImportTemplates(templatesQueryParams),
+    placeholderData: keepPreviousData,
   })
 
   const templates = templatesPage?.items ?? []
@@ -182,9 +185,9 @@ export function ImportTemplatesPage() {
         )}
       </div>
 
-      {isLoading && <p className="text-sm text-muted-foreground">Загрузка...</p>}
+      {isPending && templates.length === 0 && <p className="text-sm text-muted-foreground">Загрузка...</p>}
 
-      {!isLoading && total === 0 && (
+      {!isPending && total === 0 && (
         <div className="rounded-lg border p-8 text-center text-sm text-muted-foreground">
           Нет шаблонов. Нажмите «Создать шаблон» чтобы добавить.
         </div>

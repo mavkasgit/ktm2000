@@ -1,5 +1,5 @@
 import { useMemo, useState, useCallback, useRef, useEffect } from "react";
-import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
+import { keepPreviousData, useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import {
   getProductionPlanningRowDetail,
   listProductionPlanningRows,
@@ -104,6 +104,7 @@ export function ExecutionPage() {
     bindColumn,
     columnFilters,
     columnSearchQueries,
+    debouncedColumnSearchQueries,
     sortConfigs,
     setSortConfigs,
     handleSort: handleSortChange,
@@ -126,15 +127,15 @@ export function ExecutionPage() {
     resetPageDeps: [
       debouncedSearchQuery,
       columnFilters,
-      columnSearchQueries,
+      debouncedColumnSearchQueries,
       sortConfigs,
     ],
   });
 
 
   const columnApiParams = useMemo(
-    () => buildExecutionColumnApiParams(columnFilters, columnSearchQueries),
-    [columnFilters, columnSearchQueries],
+    () => buildExecutionColumnApiParams(columnFilters, debouncedColumnSearchQueries),
+    [columnFilters, debouncedColumnSearchQueries],
   );
 
   // Вся выбранная сортировка уезжает одной строкой `sort` по приоритетам.
@@ -155,9 +156,15 @@ export function ExecutionPage() {
     [debouncedSearchQuery, sortParams, limit, offset, columnApiParams],
   );
 
-  const { data: rowsData, isLoading, error } = useQuery({
+  // `placeholderData: keepPreviousData` — обязателен: фильтры, сортировка и
+  // страница входят в queryKey, поэтому их смена открывает новую запись кэша.
+  // Без placeholder `isLoading` гасит страницу целиком — вместе с открытым
+  // поповером и набранным в нём текстом. `isPending` ниже ловит только первую
+  // загрузку, когда строк на экране ещё не было ни разу.
+  const { data: rowsData, isPending, isFetching, error } = useQuery({
     queryKey: queryKeys.execution.rows(rowsQueryParams),
     queryFn: () => listProductionPlanningRows(rowsQueryParams),
+    placeholderData: keepPreviousData,
   });
 
   const rows = rowsData?.rows ?? [];
@@ -864,7 +871,7 @@ export function ExecutionPage() {
     scopeRef: tableScrollRef,
     filteredIds,
     hasSelection: bulkSelection.selectedCount > 0,
-    disabled: isLoading,
+    disabled: isFetching,
     isRunning: Boolean(bulkProgress?.running),
     selectAllFiltered: bulkSelection.selectAllFiltered,
     clear: bulkSelection.clear,
@@ -886,7 +893,10 @@ export function ExecutionPage() {
     setDrawerOpen(true);
   };
 
-  if (isLoading) {
+  // Заглушка — только пока строк не было ни разу. Дальше дерево остаётся на
+  // месте, а смену параметров показывает `isFetching`: иначе смена страницы
+  // или фильтра размонтировала бы таблицу вместе с открытым поповером.
+  if (isPending && rows.length === 0) {
     return <div className="p-6 text-sm text-muted-foreground">Загрузка...</div>;
   }
 
@@ -898,7 +908,7 @@ export function ExecutionPage() {
     <>
       <ExecutionTable
         rows={rows}
-        isLoading={isLoading}
+        isLoading={isFetching}
         bulkMode={bulkMode}
         totalRows={totalRows}
         releasedRows={releasedRows}

@@ -1,5 +1,5 @@
 import { useState, useCallback, useEffect, useMemo, useRef } from "react";
-import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
+import { keepPreviousData, useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import {
   Send,
   Inbox,
@@ -670,6 +670,7 @@ export function TransfersPage() {
     bindColumn: bindReadyColumn,
     columnFilters: readyColumnFilters,
     columnSearchQueries: readyColumnSearchQueries,
+    debouncedColumnSearchQueries: readyDebouncedColumnSearchQueries,
     sortConfigs: readySortConfigs,
     handleSort: applyReadySort,
     hasActiveFilters: hasReadyFiltersActive,
@@ -680,8 +681,8 @@ export function TransfersPage() {
   });
 
   const readyColumnApiParams = useMemo(
-    () => buildReadyColumnApiParams(readyColumnFilters, readyColumnSearchQueries),
-    [readyColumnFilters, readyColumnSearchQueries],
+    () => buildReadyColumnApiParams(readyColumnFilters, readyDebouncedColumnSearchQueries),
+    [readyColumnFilters, readyDebouncedColumnSearchQueries],
   );
 
   const readyPagination = usePaginatedTableQuery({
@@ -690,7 +691,7 @@ export function TransfersPage() {
       activeSpgId,
       debouncedReadySearch,
       readyColumnFilters,
-      readyColumnSearchQueries,
+      readyDebouncedColumnSearchQueries,
       readySortConfigs,
     ],
   });
@@ -712,7 +713,10 @@ export function TransfersPage() {
     ],
   );
 
-  const { data: readyData, isLoading: readyLoading, refetch: refetchReady } = useQuery({
+  // `placeholderData: keepPreviousData` держит дерево на смене параметров:
+  // без него гейт ниже гасит обе таблицы вместе с открытым поповером фильтра,
+  // и набранный текст теряется на ровном месте (ADR-0044).
+  const { data: readyData, isPending: readyPending, refetch: refetchReady } = useQuery({
     queryKey: showAllSpgs
       ? queryKeys.transfers.readyAll(readyQueryParams)
       : queryKeys.transfers.ready(activeSpgId, readyQueryParams),
@@ -722,12 +726,14 @@ export function TransfersPage() {
         ...readyQueryParams,
       }),
     enabled: showAllSpgs || activeSpgId != null,
+    placeholderData: keepPreviousData,
   });
 
   const {
     bindColumn: bindHistoryColumn,
     columnFilters: historyColumnFilters,
     columnSearchQueries: historyColumnSearchQueries,
+    debouncedColumnSearchQueries: historyDebouncedColumnSearchQueries,
     sortConfigs: historySortConfigs,
     setSortConfigs: setHistorySortConfigs,
     handleSort: applyHistorySort,
@@ -742,8 +748,8 @@ export function TransfersPage() {
   });
 
   const historyColumnApiParams = useMemo(
-    () => buildHistoryColumnApiParams(historyColumnFilters, historyColumnSearchQueries),
-    [historyColumnFilters, historyColumnSearchQueries],
+    () => buildHistoryColumnApiParams(historyColumnFilters, historyDebouncedColumnSearchQueries),
+    [historyColumnFilters, historyDebouncedColumnSearchQueries],
   );
 
   const historyPagination = usePaginatedTableQuery({
@@ -752,7 +758,7 @@ export function TransfersPage() {
       activeSpgId,
       debouncedHistorySearch,
       historyColumnFilters,
-      historyColumnSearchQueries,
+      historyDebouncedColumnSearchQueries,
       historySortConfigs,
     ],
   });
@@ -774,7 +780,7 @@ export function TransfersPage() {
     ],
   );
 
-  const { data: historyData, isLoading: historyLoading, refetch: refetchHistory } = useQuery({
+  const { data: historyData, isPending: historyPending, refetch: refetchHistory } = useQuery({
     queryKey: showAllSpgs
       ? queryKeys.transfers.historyAll(historyQueryParams)
       : queryKeys.transfers.history(activeSpgId, historyQueryParams),
@@ -784,6 +790,7 @@ export function TransfersPage() {
         ...historyQueryParams,
       }),
     enabled: showAllSpgs || activeSpgId != null,
+    placeholderData: keepPreviousData,
   });
 
   const readyItems = readyData?.items ?? [];
@@ -1139,7 +1146,7 @@ export function TransfersPage() {
           )}
         </CardHeader>
         <CardContent>
-          {readyLoading ? (
+          {readyPending && readyItems.length === 0 ? (
             <div className="text-sm text-muted-foreground py-4 text-center">Загрузка…</div>
           ) : readyTotal === 0 && !debouncedReadySearch.trim() && !hasReadyFiltersActive ? (
             <div className="text-sm text-muted-foreground py-6 text-center">
@@ -1292,7 +1299,7 @@ export function TransfersPage() {
             </div>
           </div>
           <div className="flex-1 overflow-auto p-4">
-            {historyLoading ? (
+            {historyPending && historyItems.length === 0 ? (
               <div className="text-sm text-muted-foreground py-4 text-center">Загрузка…</div>
             ) : historyTotal === 0 && !hasHistoryFiltersActive ? (
               <div className="text-sm text-muted-foreground py-6 text-center">

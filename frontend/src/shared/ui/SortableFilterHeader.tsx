@@ -35,13 +35,33 @@ export interface SortableFilterHeaderProps<Field extends string, SortField exten
   /** Controlled search query for live table filtering */
   searchQuery?: string;
   onSearchChange?: (field: Field, query: string) => void;
+  /**
+   * Можно ли выбрать несколько значений. Да только у колонок, которые
+   * фильтрует сам экран: сервер принимает на колонку одно значение, и второй
+   * выбранный молча ушёл бы в никуда, оставив в шапке бейдж несуществующего
+   * фильтра (ADR-0044).
+   */
+  multiSelect?: boolean;
+  /**
+   * Применить набранный текст немедленно, не дожидаясь паузы. Вызывается по
+   * `Enter` и по кнопке «Готово»: оператор, нажавший «Готово», сказал «искать
+   * сейчас», и ждать после этого полсекунды незачем.
+   */
+  onApplySearch?: () => void;
 }
 
 /**
  * Unified column header with sort + filter:
  * - Click text → filter popover with clickable rows (filled when selected)
  * - Click sort icon → cycle sort (none → asc → desc)
- * - Search in popover: partial match + relevance sort; live table filter via onSearchChange
+ * - Search in popover: partial match + relevance sort; live table filter via
+ *   onSearchChange
+ *
+ * Пока в поповере введён текст, списка значений на экране нет: одно поле — одно
+ * действие, и «ищу подстроку» с «выбираю значение» не должны быть двумя
+ * молчащими режимами одного контрола. Текст приоритетнее выбора, поэтому
+ * непустой текст снимает выбранное значение, а не оставляет его жить в
+ * состоянии невидимым.
  */
 export function SortableFilterHeader<Field extends string, SortField extends string = Field>({
   field,
@@ -56,6 +76,8 @@ export function SortableFilterHeader<Field extends string, SortField extends str
   filterable = true,
   searchQuery: controlledSearchQuery,
   onSearchChange,
+  multiSelect = false,
+  onApplySearch,
 }: SortableFilterHeaderProps<Field, SortField>) {
   const [internalSearchQuery, setInternalSearchQuery] = useState("");
   const [open, setOpen] = useState(false);
@@ -65,15 +87,21 @@ export function SortableFilterHeader<Field extends string, SortField extends str
 
   const setSearchQuery = useCallback(
     (query: string) => {
-      if (isSearchControlled) {
-        onSearchChange?.(field, query);
-      } else {
-        setInternalSearchQuery(query);
-        onSearchChange?.(field, query);
+      setInternalSearchQuery(query);
+      onSearchChange?.(field, query);
+      // Непустой текст забирает контрол себе: оставить при этом выбранное
+      // значение значит показать в шапке фильтр, которого в запросе нет.
+      if (query.trim() && selectedValues.size > 0) {
+        onFilterChange(field, new Set());
       }
     },
-    [field, isSearchControlled, onSearchChange],
+    [field, onSearchChange, onFilterChange, selectedValues],
   );
+
+  const applyAndClose = useCallback(() => {
+    onApplySearch?.();
+    setOpen(false);
+  }, [onApplySearch]);
 
   // Поле фильтра и поле сортировки могут различаться по типу, но не по
   // значению: колонка сортируется по себе же, когда сервер её умеет.
@@ -97,6 +125,12 @@ export function SortableFilterHeader<Field extends string, SortField extends str
   );
 
   const toggleOne = (value: string) => {
+    if (!multiSelect) {
+      // Однозначная колонка: повторный клик снимает выбор, иначе выбрать
+      // другое значение было бы нельзя.
+      onFilterChange(field, selectedValues.has(value) ? new Set() : new Set([value]));
+      return;
+    }
     const newSelected = new Set(selectedValues);
     if (newSelected.has(value)) {
       newSelected.delete(value);
@@ -169,40 +203,56 @@ export function SortableFilterHeader<Field extends string, SortField extends str
               placeholder="Поиск..."
               value={searchQuery}
               onChange={(e) => setSearchQuery(e.target.value)}
+              onKeyDown={(e) => {
+                if (e.key === "Enter") {
+                  e.preventDefault();
+                  applyAndClose();
+                }
+              }}
               className="h-7 text-xs"
               autoFocus
             />
-            <div className="flex items-center justify-between px-1">
-              <button
-                type="button"
-                onClick={selectAll}
-                className="text-xs text-primary hover:underline"
-              >
-                Выбрать все
-              </button>
-            </div>
-            <div className="max-h-52 overflow-y-auto rounded border">
-              {filteredValues.length === 0 && (
-                <p className="text-xs text-muted-foreground px-2 py-2">Нет значений</p>
-              )}
-              {filteredValues.map((value) => {
-                const isSelected = selectedValues.has(value);
-                return (
-                  <div
-                    key={value}
-                    className={cn(
-                      "px-2 py-1 text-xs cursor-pointer transition-colors truncate",
-                      isSelected
-                        ? "bg-primary text-primary-foreground"
-                        : "hover:bg-accent text-foreground",
-                    )}
-                    onClick={() => toggleOne(value)}
-                  >
-                    {displayLabel(value)}
+            {hasSearchFilter ? (
+              <p className="px-1 text-[10px] text-muted-foreground">
+                Список значений скрыт, пока идёт поиск. Сбросить — «Сбросить колонку».
+              </p>
+            ) : (
+              <>
+                {multiSelect && (
+                  <div className="flex items-center justify-between px-1">
+                    <button
+                      type="button"
+                      onClick={selectAll}
+                      className="text-xs text-primary hover:underline"
+                    >
+                      Выбрать все
+                    </button>
                   </div>
-                );
-              })}
-            </div>
+                )}
+                <div className="max-h-52 overflow-y-auto rounded border">
+                  {filteredValues.length === 0 && (
+                    <p className="text-xs text-muted-foreground px-2 py-2">Нет значений</p>
+                  )}
+                  {filteredValues.map((value) => {
+                    const isSelected = selectedValues.has(value);
+                    return (
+                      <div
+                        key={value}
+                        className={cn(
+                          "px-2 py-1 text-xs cursor-pointer transition-colors truncate",
+                          isSelected
+                            ? "bg-primary text-primary-foreground"
+                            : "hover:bg-accent text-foreground",
+                        )}
+                        onClick={() => toggleOne(value)}
+                      >
+                        {displayLabel(value)}
+                      </div>
+                    );
+                  })}
+                </div>
+              </>
+            )}
             <div className="flex justify-end gap-1 pt-1 border-t">
               {hasFilter && (
                 <Button
@@ -219,7 +269,7 @@ export function SortableFilterHeader<Field extends string, SortField extends str
                 variant="default"
                 size="sm"
                 className="h-6 text-xs"
-                onClick={() => setOpen(false)}
+                onClick={applyAndClose}
               >
                 Готово
               </Button>
@@ -255,7 +305,7 @@ export function SortableFilterHeader<Field extends string, SortField extends str
         >
           {sortIcon}
           {sortPriority !== null && (
-            <span className="inline-flex items-center justify-center h-4 w-4 rounded-full bg-primary/10 text-[10px] font-semibold text-primary ml-0.5">
+            <span className="inline-flex items-center justify-center w-4 h-4 rounded-full bg-primary/10 text-[10px] font-semibold text-primary ml-0.5">
               {sortPriority}
             </span>
           )}

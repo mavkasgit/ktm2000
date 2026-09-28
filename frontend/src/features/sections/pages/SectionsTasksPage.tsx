@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useMemo, useState, useRef } from "react";
-import { useMutation, useQueries, useQuery, useQueryClient } from "@tanstack/react-query";
+import { keepPreviousData, useMutation, useQueries, useQuery, useQueryClient } from "@tanstack/react-query";
 import { useLocation, useNavigate, useParams, useSearchParams } from "react-router-dom";
 
 
@@ -297,7 +297,10 @@ export function SectionsTasksPage() {
     [boardParams, serverQuery, boardLimit, boardOffset],
   );
 
-  const { data: board, isLoading: boardLoading } = useQuery({
+  // `placeholderData: keepPreviousData` держит дерево на смене параметров
+  // запроса: без него `isLoading` гасит доску целиком вместе с открытым
+  // поповером фильтра, и набранный текст теряется на ровном месте (ADR-0044).
+  const { data: board, isPending: boardPending } = useQuery({
     queryKey: queryKeys.shopfloor.board(sectionId as number, {
       ...boardQueryParams,
       singleSectionLockId: requestOptions?.singleSectionLockId ?? null,
@@ -305,6 +308,7 @@ export function SectionsTasksPage() {
     queryFn: () => getSectionBoard(sectionId as number, boardQueryParams, requestOptions),
     enabled: sectionId !== null && !!me?.id && !isSingleWindowBlocked,
     retry: false,
+    placeholderData: keepPreviousData,
   });
   const { data: dailyPlans, isLoading: dailyPlansLoading } = useQuery({
     queryKey: queryKeys.dailyPlans.list(sectionId as number),
@@ -1100,7 +1104,7 @@ export function SectionsTasksPage() {
                   <SectionTasksBoard
                     tasks={displayedTasks}
                     total={displayedTasks.length}
-                    isLoading={boardLoading || selectedCompositionsLoading}
+                    isLoading={boardPending || selectedCompositionsLoading}
                     mode={viewMode}
                     onModeChange={setViewMode}
                     onAction={openActionDialog}
@@ -1193,7 +1197,7 @@ export function SectionsTasksPage() {
                   <SectionTasksBoard
                     tasks={displayedTasks}
                     total={displayedTasks.length}
-                    isLoading={boardLoading || selectedCompositionsLoading}
+                    isLoading={boardPending || selectedCompositionsLoading}
                     mode={sectionContentMode === "plan" ? { active: true, waiting: true, completed: true } : viewMode}
                     onModeChange={setViewMode}
                     showStatusFilters={selectedPlanIds.size > 0}

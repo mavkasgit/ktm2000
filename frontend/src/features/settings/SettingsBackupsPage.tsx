@@ -140,6 +140,7 @@ export function BackupsPage() {
     bindColumn,
     columnFilters,
     columnSearchQueries,
+    debouncedColumnSearchQueries,
     sortConfigs,
     handleSort,
     hasActiveFilters,
@@ -154,7 +155,7 @@ export function BackupsPage() {
   }, [columnFilters.backup_type])
 
   const pagination = usePaginatedTableQuery({
-    resetPageDeps: [columnFilters, columnSearchQueries, sortConfigs, activeTypeFilter],
+    resetPageDeps: [columnFilters, debouncedColumnSearchQueries, sortConfigs, activeTypeFilter],
   })
 
   const backupsQueryParams = useMemo(
@@ -163,7 +164,7 @@ export function BackupsPage() {
         { limit: pagination.limit, offset: pagination.offset },
         activeTypeFilter,
         columnFilters,
-        columnSearchQueries,
+        debouncedColumnSearchQueries,
         sortConfigs,
       ),
     [
@@ -171,12 +172,12 @@ export function BackupsPage() {
       pagination.offset,
       activeTypeFilter,
       columnFilters,
-      columnSearchQueries,
+      debouncedColumnSearchQueries,
       sortConfigs,
     ],
   )
 
-  const { data: backupsPage, isLoading, refetch: refetchBackups } = useBackups(backupsQueryParams)
+  const { data: backupsPage, isPending, refetch: refetchBackups } = useBackups(backupsQueryParams)
   const displayedBackups = backupsPage?.items ?? []
   const total = backupsPage?.total ?? 0
   const totalPages = pagination.getTotalPages(total)
@@ -769,7 +770,7 @@ export function BackupsPage() {
             </tr>
           </thead>
           <tbody>
-            {isLoading ? (
+            {isPending && displayedBackups.length === 0 ? (
               <tr>
                 <td colSpan={isReadOnly ? 8 : 9} className="px-3 py-4 text-center text-muted-foreground text-xs">
                   Загрузка...

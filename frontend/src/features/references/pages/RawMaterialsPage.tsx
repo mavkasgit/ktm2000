@@ -183,6 +183,7 @@ export function RawMaterialsPage() {
   const {
     columnFilters,
     columnSearchQueries,
+    debouncedColumnSearchQueries,
     bindColumn,
     sortConfigs,
     handleSort,
@@ -255,7 +256,7 @@ export function RawMaterialsPage() {
 
   const filterApiParams = useMemo(
     () => ({
-      ...buildRawMaterialColumnApiParams(columnFilters, columnSearchQueries),
+      ...buildRawMaterialColumnApiParams(columnFilters, debouncedColumnSearchQueries),
       // Панельные диапазоны имеют приоритет над фильтром колонки по тому же
       // полю: оператор, введший «от 3000», ждёт именно его, а не выбранную в
       // шапке длину.
@@ -267,7 +268,7 @@ export function RawMaterialsPage() {
       // (`_SORT_COLUMNS` в products.py), поэтому поле колонки уходит как есть.
       sort: buildSortParam(sortConfigs, (field) => field),
     }),
-    [columnFilters, columnSearchQueries, lengthFrom, lengthTo, qtyFrom, qtyTo, sortConfigs],
+    [columnFilters, debouncedColumnSearchQueries, lengthFrom, lengthTo, qtyFrom, qtyTo, sortConfigs],
   );
 
   const productsQueryParams = useMemo(
@@ -284,7 +285,7 @@ export function RawMaterialsPage() {
   // кэша. Без placeholder `isLoading` гасит таблицу целиком («Загрузка...»),
   // и на долю секунды исчезают шапка, сортировка и строки. До переезда на кэш
   // сортировка была клиентской и список не пропадал.
-  const { data: items = EMPTY_PRODUCTS, isLoading, error: loadError } = useQuery({
+  const { data: items = EMPTY_PRODUCTS, isPending, error: loadError } = useQuery({
     queryKey: queryKeys.rawMaterials.list(productsQueryParams),
     queryFn: () => API.fetchAllProducts(productsQueryParams),
     placeholderData: keepPreviousData,
@@ -638,7 +639,7 @@ export function RawMaterialsPage() {
 
       {viewMode === "calc" ? (
         <HangerCalcTable readOnly={isReadOnly} onEdit={openEdit} />
-      ) : isLoading ? (
+      ) : isPending && items.length === 0 ? (
         <div className="text-muted-foreground py-8 text-center">Загрузка...</div>
       ) : viewMode === "grid" && items.length === 0 ? (
         <div className="text-muted-foreground py-8 text-center">Ничего не найдено</div>

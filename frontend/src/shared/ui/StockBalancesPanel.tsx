@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useMemo, useState } from "react";
-import { useQuery } from "@tanstack/react-query";
+import { keepPreviousData, useQuery } from "@tanstack/react-query";
 
 import {
   formatQualityStateLabel,
@@ -87,6 +87,7 @@ export function StockBalancesPanel({
     bindColumn,
     columnFilters,
     columnSearchQueries,
+    debouncedColumnSearchQueries,
     sortConfigs,
     handleSort: applySort,
     hasActiveFilters,
@@ -97,8 +98,8 @@ export function StockBalancesPanel({
   });
 
   const columnApiParams = useMemo(
-    () => buildBalanceColumnApiParams(columnFilters, columnSearchQueries),
-    [columnFilters, columnSearchQueries],
+    () => buildBalanceColumnApiParams(columnFilters, debouncedColumnSearchQueries),
+    [columnFilters, debouncedColumnSearchQueries],
   );
 
   const sort = buildBalanceSortParam(sortConfigs);
@@ -122,7 +123,7 @@ export function StockBalancesPanel({
       normalizedLocationIds,
       debouncedSearch,
       columnFilters,
-      columnSearchQueries,
+      debouncedColumnSearchQueries,
       sortConfigs,
     ],
   });
@@ -158,7 +159,10 @@ export function StockBalancesPanel({
     ],
   );
 
-  const { data, isLoading } = useQuery({
+  // `placeholderData: keepPreviousData` держит дерево на смене параметров:
+  // без него гейт ниже гасит панель целиком вместе с открытым поповером
+  // фильтра, и набранный текст теряется на ровном месте (ADR-0044).
+  const { data, isPending } = useQuery({
     queryKey: queryKeys.stock.balances({
       locationId,
       locationIds: normalizedLocationIds,
@@ -174,6 +178,7 @@ export function StockBalancesPanel({
     }),
     queryFn: () => getStockBalances(balanceQueryParams),
     enabled,
+    placeholderData: keepPreviousData,
   });
 
   const balances = data?.balances ?? [];
@@ -219,7 +224,7 @@ export function StockBalancesPanel({
 
       {isExpanded && (
         <>
-          {isLoading ? (
+          {isPending && balances.length === 0 ? (
             <p className="text-sm text-muted-foreground py-4 text-center">Загрузка остатков...</p>
           ) : total === 0 ? (
             <div className="text-center py-8 text-sm text-muted-foreground border rounded-lg border-dashed">

@@ -59,6 +59,7 @@ import { TABLE_ROW_COMPACT } from "@/shared/lib/dataTableStyles";
 import { cn } from "@/shared/utils/cn";
 import { fmtQty } from "@/shared/lib/quantityFormat";
 import { boardColumns } from "../lib/boardColumns";
+import { packagingBreakdownLabel, taskPrimaryOperation } from "../lib/planTaskGroups";
 
 // ---------------------------------------------------------------------------
 // Экспорты для обратной совместимости
@@ -373,7 +374,10 @@ function TableTaskGroupRow({
         {formatDimensionsLabel(taskGroupingDimensions(firstTask))}
       </td>
       <td className={`${ROW_CELL_CLASS} text-xs text-slate-500 font-medium`}>
-        {firstTask.operation_name || "—"}
+        {taskPrimaryOperation(firstTask) || "—"}
+      </td>
+      <td className={`${ROW_CELL_CLASS} text-xs text-slate-500 font-medium`}>
+        {packagingBreakdownLabel(group.tasks, fmtQty)}
       </td>
       <td className={`${ROW_CELL_CLASS} text-slate-700`}>{fmtQty(String(group.totalQtyPlan))}</td>
       <td className={`${ROW_CELL_CLASS} text-slate-700`}>{fmtQty(String(group.tasks.reduce((s, t) => s + parseFloat(t.cache.issued_quantity), 0)))}</td>
@@ -514,12 +518,17 @@ export function SectionTasksBoard({
   onServerQueryChange,
 }: SectionTasksBoardProps) {
   const tableScrollRef = useRef<HTMLDivElement>(null);
+  // Заглушка уместна, только пока заданий на экране не было ни разу: это первая
+  // загрузка. Дальше дерево остаётся на месте, а смену страницы и фильтров
+  // показывает вызывающий экран (ADR-0044).
+  const showLoadingPlaceholder = isLoading && total === 0;
   const [searchQuery, setSearchQuery] = useState("");
   const debouncedSearch = useDebouncedValue(searchQuery);
   const {
     bindColumn,
     columnFilters,
     columnSearchQueries,
+    debouncedColumnSearchQueries,
     sortConfigs,
     handleSort: handleSortChange,
     resetAll: resetAllFilters,
@@ -534,11 +543,11 @@ export function SectionTasksBoard({
       buildBoardServerQueryParams({
         search: debouncedSearch,
         columnFilters,
-        columnSearchQueries,
+        columnSearchQueries: debouncedColumnSearchQueries,
         sortConfigs,
       }),
     );
-  }, [debouncedSearch, columnFilters, columnSearchQueries, sortConfigs, onServerQueryChange]);
+  }, [debouncedSearch, columnFilters, debouncedColumnSearchQueries, sortConfigs, onServerQueryChange]);
 
   const clientFilterState = useMemo(
     () => pickClientFilterState(columnFilters, columnSearchQueries, CLIENT_FILTER_FIELDS),
@@ -949,14 +958,18 @@ export function SectionTasksBoard({
         }
       />
 
-      {isLoading && <div className="rounded-lg border p-4 text-sm text-muted-foreground">Загрузка задач...</div>}
-      {!isLoading && total === 0 && (
+      {/* Заглушка — только пока заданий на экране не было ни разу. Дальше дерево
+          остаётся на месте, а смену страницы и фильтров показывает
+          `isFetching` вызывающего экрана: иначе размонтирование уносит с собой
+          открытый поповер и набранный в нём текст (ADR-0044). */}
+      {showLoadingPlaceholder && <div className="rounded-lg border p-4 text-sm text-muted-foreground">Загрузка задач...</div>}
+      {!showLoadingPlaceholder && total === 0 && (
         <div className="rounded-lg border p-4 text-sm text-muted-foreground text-center">
           Нет задач в выбранном режиме
         </div>
       )}
 
-      {!isLoading && total > 0 && (
+      {!showLoadingPlaceholder && total > 0 && (
         <>
           {/* Desktop table */}
           <div className={`hidden md:block ${DATA_TABLE_STYLES.container}`}>

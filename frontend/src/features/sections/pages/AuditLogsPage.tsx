@@ -17,6 +17,7 @@ import type { SortConfig } from "@/shared/hooks/useTableQueryEngine";
 import { buildSortParam } from "@/shared/lib/sortQueryParam";
 import { buildColumnApiParams } from "@/shared/lib/columnSpecs";
 import { useDebouncedValue } from "@/shared/lib/useDebouncedValue";
+import { keepPreviousData } from "@tanstack/react-query";
 import { auditColumns, type AuditFilterField } from "../lib/auditColumns";
 
 type LogFilterField = AuditFilterField;
@@ -95,6 +96,7 @@ export function AuditLogsPage() {
     bindColumn,
     columnFilters,
     columnSearchQueries,
+    debouncedColumnSearchQueries,
     sortConfigs,
     handleSort: handleSortChange,
     resetAll,
@@ -123,13 +125,13 @@ export function AuditLogsPage() {
 
   const pagination = usePaginatedTableQuery({
     limitOptions: [50, 100],
-    resetPageDeps: [debouncedSearch, statusFilter, dateFrom, dateTo, columnFilters, columnSearchQueries, sortConfigs],
+    resetPageDeps: [debouncedSearch, statusFilter, dateFrom, dateTo, columnFilters, debouncedColumnSearchQueries, sortConfigs],
   });
   const { page, setPage, limit, setLimit, limitOptions, offset, getTotalPages, getRangeLabel } = pagination;
 
   const columnApiParams = useMemo(
-    () => buildAuditColumnApiParams(columnFilters, columnSearchQueries),
-    [columnFilters, columnSearchQueries],
+    () => buildAuditColumnApiParams(columnFilters, debouncedColumnSearchQueries),
+    [columnFilters, debouncedColumnSearchQueries],
   );
 
   const auditQueryParams = useMemo(() => {
@@ -157,9 +159,13 @@ export function AuditLogsPage() {
     ],
   );
 
-  const { data, isLoading } = useQuery({
+  // `placeholderData: keepPreviousData` держит дерево на смене параметров
+  // запроса: без него `isLoading` гасит журнал целиком вместе с открытым
+  // поповером фильтра, и оператор теряет набор текста на ровном месте.
+  const { data, isPending } = useQuery({
     queryKey: queryKeys.auditLogs.list(auditQueryParams),
     queryFn: () => getAuditLogs(auditQueryParams),
+    placeholderData: keepPreviousData,
   });
 
   const parsedLogs = data?.items || [];
@@ -356,7 +362,7 @@ export function AuditLogsPage() {
 
         {/* Таблица */}
         <div className={DATA_TABLE_STYLES.container}>
-          {isLoading ? (
+          {isPending ? (
             <div className="flex items-center justify-center py-20 text-slate-400 text-sm">
               Загрузка журнала аудита...
             </div>

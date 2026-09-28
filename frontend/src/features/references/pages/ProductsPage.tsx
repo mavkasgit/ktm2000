@@ -2,7 +2,7 @@
 // карточка-модалка. Образец — RawMaterialsPage, но список отдельный:
 // только type=finished_good, только норматив (ADR-0001) — без остатков и факта.
 import { useMemo, useState } from "react";
-import { useQuery, useQueryClient } from "@tanstack/react-query";
+import { keepPreviousData, useQuery, useQueryClient } from "@tanstack/react-query";
 import { Search, X } from "lucide-react";
 import * as API from "@/shared/api/products";
 import type { CompositionItem, Product } from "@/shared/api/products";
@@ -40,9 +40,13 @@ export function ProductsPage() {
     [debouncedSearch],
   );
 
-  const { data: items = EMPTY_PRODUCTS, isLoading, error: loadError } = useQuery({
+  // `placeholderData: keepPreviousData` держит дерево на смене поискового
+  // запроса: без него `isLoading` гасит каталог целиком на каждый ввод
+  // (ADR-0044).
+  const { data: items = EMPTY_PRODUCTS, isPending, error: loadError } = useQuery({
     queryKey: queryKeys.products.list(listParams),
     queryFn: () => API.fetchAllProducts(listParams),
+    placeholderData: keepPreviousData,
   });
 
   // Ответ диалога — уже сохранённый на сервере состав, поэтому список
@@ -94,7 +98,7 @@ export function ProductsPage() {
 
       {error && <div className="text-sm text-destructive bg-destructive/10 p-3 rounded-md">{error}</div>}
 
-      {isLoading ? (
+      {isPending && items.length === 0 ? (
         <div className="text-muted-foreground py-8 text-center">Загрузка...</div>
       ) : (
         <div className="rounded-lg border bg-card overflow-x-auto">

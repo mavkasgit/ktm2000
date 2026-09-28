@@ -1,5 +1,5 @@
 import { useMemo, useState } from "react"
-import { useQuery } from "@tanstack/react-query"
+import { keepPreviousData, useQuery } from "@tanstack/react-query"
 import { Loader2, Search, Users } from "lucide-react"
 
 import {
@@ -14,6 +14,7 @@ import { useFilterableTable } from "@/shared/hooks/useFilterableTable"
 import { usePaginatedTableQuery } from "@/shared/hooks/usePaginatedTableQuery"
 import type { SortConfig } from "@/shared/hooks/useTableQueryEngine"
 import { buildColumnApiParams } from "@/shared/lib/columnSpecs"
+import { useDebouncedValue } from "@/shared/lib/useDebouncedValue"
 import { buildSortParam } from "@/shared/lib/sortQueryParam"
 import { queryKeys } from "@/shared/api/queryKeys"
 import { listEmployees, type Employee, type ListEmployeesParams } from "../api"
@@ -56,11 +57,15 @@ export function HrmsEmployeesTable({
   emptyMessage = "Кеш пуст. Запустите синхронизацию, чтобы загрузить сотрудников из HRMS.",
 }: HrmsEmployeesTableProps) {
   const [search, setSearch] = useState("")
+  // Поиск уходит на сервер: без паузы каждый символ — отдельный запрос. В
+  // задержке только запрос, само поле отвечает на ввод сразу.
+  const debouncedSearch = useDebouncedValue(search);
 
   const {
     bindColumn,
     columnFilters,
     columnSearchQueries,
+    debouncedColumnSearchQueries,
     sortConfigs,
     handleSort,
     resetAll,
@@ -73,16 +78,16 @@ export function HrmsEmployeesTable({
 
 
   const columnApiParams = useMemo(
-    () => buildEmployeeColumnApiParams(columnFilters, columnSearchQueries),
-    [columnFilters, columnSearchQueries],
+    () => buildEmployeeColumnApiParams(columnFilters, debouncedColumnSearchQueries),
+    [columnFilters, debouncedColumnSearchQueries],
   )
 
 
   const pagination = usePaginatedTableQuery({
     resetPageDeps: [
-      search,
+      debouncedSearch,
       columnFilters,
-      columnSearchQueries,
+      debouncedColumnSearchQueries,
       sortConfigs,
     ],
   })
@@ -96,22 +101,26 @@ export function HrmsEmployeesTable({
     () => ({
       limit: pagination.limit,
       offset: pagination.offset,
-      search: search.trim() || undefined,
+      search: debouncedSearch.trim() || undefined,
       sort,
       ...columnApiParams,
     }),
     [
       pagination.limit,
       pagination.offset,
-      search,
+      debouncedSearch,
       sort,
       columnApiParams,
     ],
   )
 
-  const { data, isLoading } = useQuery({
+  // `placeholderData: keepPreviousData` держит дерево на смене параметров: без
+  // него гейт загрузки ниже гасит строки и шапку вместе с открытым поповером
+  // фильтра, и набранный текст теряется на ровном месте.
+  const { data, isPending } = useQuery({
     queryKey: queryKeys.employees.list(queryParams),
     queryFn: () => listEmployees(queryParams),
+    placeholderData: keepPreviousData,
   })
 
   const employees = data?.employees ?? []
@@ -132,7 +141,7 @@ export function HrmsEmployeesTable({
     [employees],
   )
 
-  if (!isLoading && total === 0 && !search.trim() && !hasTableFiltersActive) {
+  if (!isPending && total === 0 && !search.trim() && !hasTableFiltersActive) {
     return (
       <div className="rounded-lg border border-dashed bg-muted/10 px-4 py-10 text-center">
         <Users className="h-8 w-8 text-muted-foreground/40 mx-auto mb-2" />
@@ -189,7 +198,7 @@ export function HrmsEmployeesTable({
             </tr>
           </thead>
           <tbody className="divide-y">
-            {isLoading ? (
+            {isPending && employees.length === 0 ? (
               <tr>
                 <td colSpan={6} className="px-4 py-8 text-center text-sm text-muted-foreground">
                   <Loader2 className="h-5 w-5 animate-spin inline-block mr-2" />

@@ -29,6 +29,8 @@ type BoundColumn<Field extends string> = {
   selectedValues: Set<string>;
   onSearchChange?: (field: Field, query: string) => void;
   onFilterChange: (field: Field, selected: Set<string>) => void;
+  /** Применить набранный текст сейчас, минуя паузу перед запросом. */
+  onApplySearch?: () => void;
 };
 
 export interface DataTableColumnHeaderProps<Field extends string, SortField extends string = Field> {
@@ -48,7 +50,7 @@ export function DataTableColumnHeader<Field extends string, SortField extends st
   currentSorts,
   onSortChange,
 }: DataTableColumnHeaderProps<Field, SortField>) {
-  const { filterField, sortField, exactMatch, valueLabel, label } = column;
+  const { filterField, sortField, exactMatch, clientOnly, valueLabel, label } = column;
   const filterable = filterField !== undefined;
   const sortable = sortField !== undefined;
 
@@ -65,7 +67,11 @@ export function DataTableColumnHeader<Field extends string, SortField extends st
     ? {}
     : exactMatch
       ? { selectedValues: bound.selectedValues, onFilterChange: bound.onFilterChange }
-      : bound;
+      : { ...bound, onApplySearch: bound.onApplySearch };
+  // Несколько значений выбирает только колонка, которую фильтрует сам экран:
+  // сервер принимает на колонку одно значение, и лишний выбор ушёл бы в
+  // никуда, оставив бейдж несуществующего фильтра (ADR-0044).
+  const multiSelect = clientOnly === true;
 
   return (
     <SortableFilterHeader<Field, SortField>
@@ -77,6 +83,7 @@ export function DataTableColumnHeader<Field extends string, SortField extends st
       filterable={filterable}
       values={values ?? []}
       valueLabel={valueLabel}
+      multiSelect={multiSelect}
       {...searchBinding}
     />
   );

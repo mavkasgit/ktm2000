@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
-import { useQuery } from "@tanstack/react-query";
+import { keepPreviousData, useQuery } from "@tanstack/react-query";
 import { Loader2, Search, X } from "lucide-react";
 
 import {
@@ -119,6 +119,7 @@ export function StockTransactionsHistoryDrawer({
     bindColumn,
     columnFilters,
     columnSearchQueries,
+    debouncedColumnSearchQueries,
     handleSort: applySort,
     sortConfigs,
     setSortConfigs,
@@ -135,8 +136,8 @@ export function StockTransactionsHistoryDrawer({
   });
 
   const columnApiParams = useMemo(
-    () => buildTxColumnApiParams(columnFilters, columnSearchQueries),
-    [columnFilters, columnSearchQueries],
+    () => buildTxColumnApiParams(columnFilters, debouncedColumnSearchQueries),
+    [columnFilters, debouncedColumnSearchQueries],
   );
 
   const sort = buildTransactionSortParam(sortConfigs);
@@ -158,7 +159,7 @@ export function StockTransactionsHistoryDrawer({
       dateRange.from,
       dateRange.to,
       columnFilters,
-      columnSearchQueries,
+      debouncedColumnSearchQueries,
       sortConfigs,
     ],
   });
@@ -209,7 +210,10 @@ export function StockTransactionsHistoryDrawer({
     ],
   );
 
-  const { data, isLoading } = useQuery({
+  // `placeholderData: keepPreviousData` держит дерево на смене параметров:
+  // без него гейт ниже гасит журнал целиком вместе с открытым поповером
+  // фильтра, и набранный текст теряется на ровном месте (ADR-0044).
+  const { data, isPending } = useQuery({
     queryKey: queryKeys.stock.transactions({
       productId,
       locationId,
@@ -227,6 +231,7 @@ export function StockTransactionsHistoryDrawer({
     }),
     queryFn: () => getStockTransactions(txQueryParams),
     enabled: open && productId !== undefined,
+    placeholderData: keepPreviousData,
   });
 
   const transactions = data?.transactions ?? [];
@@ -301,7 +306,7 @@ export function StockTransactionsHistoryDrawer({
             />
           </div>
 
-          {isLoading ? (
+          {isPending && transactions.length === 0 ? (
             <div className="flex items-center justify-center py-12">
               <Loader2 className="h-6 w-6 animate-spin text-muted-foreground" />
             </div>

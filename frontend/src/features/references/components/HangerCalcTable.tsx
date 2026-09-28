@@ -403,7 +403,10 @@ export function HangerCalcTable({
 
         {error && <div className="text-sm text-destructive bg-destructive/10 p-3 rounded-md">{error}</div>}
 
-        {loading ? (
+        {/* Заглушка — только пока строк на экране не было ни разу. Перечитывание
+            по сортировке не должно уносить дерево вместе с открытым поповером
+            фильтра (ADR-0044). */}
+        {loading && allRows.length === 0 ? (
           <div className="text-muted-foreground py-8 text-center">Загрузка...</div>
         ) : allRows.length === 0 ? (
           <div className="text-muted-foreground py-8 text-center">Ничего не найдено</div>

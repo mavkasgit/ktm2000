@@ -1,4 +1,4 @@
-import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
+import { keepPreviousData, useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 import * as api from "./api";
 import { invalidateAfter, invalidateEverything } from "@/shared/api/cacheInvalidation";
 import { queryKeys } from "@/shared/api/queryKeys";
@@ -27,10 +27,17 @@ export function useUpdateBackupConfig() {
   });
 }
 
+/**
+ * `placeholderData: keepPreviousData` — обязателен: фильтры, сортировка и
+ * страница входят в queryKey, поэтому их смена открывает новую запись кэша.
+ * Без placeholder `isLoading` гасит tbody вместе с открытым поповером
+ * фильтра, и оператор теряет набор текста на ровном месте (ADR-0044).
+ */
 export function useBackups(params: api.ListBackupsParams = {}) {
   return useQuery({
     queryKey: queryKeys.backups.list(params),
     queryFn: () => api.fetchBackups(params),
+    placeholderData: keepPreviousData,
   });
 }
 

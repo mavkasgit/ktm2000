@@ -10,7 +10,7 @@ import { buildColumnFilterPredicate } from "@/shared/lib/columnFilterSearch"
 import { formatDimensionsFilterValue, formatDimensionsLabel } from "@/shared/api/stock"
 import { PLAN_POSITIONS_GRID } from "../lib/gridTemplates"
 import { toast } from "@/shared/ui"
-import { useQuery, useQueryClient } from "@tanstack/react-query"
+import { keepPreviousData, useQuery, useQueryClient } from "@tanstack/react-query"
 import { allPlanFiles, allPlanPositions, PlanPositionOut, listPlans, batchAssignRouteGlobal, deleteImportBatch, approveProductionPlanPosition, getPlanDuplicates, bulkApprovePositions, bulkDeletePositions, type BatchDeleteConflict } from "@/shared/api/productionPlans"
 import { listRoutes } from "@/shared/api/routes"
 import { listAllImportTemplates } from "@/shared/api/importTemplates"
@@ -94,6 +94,7 @@ export function PlanPage() {
     bindColumn,
     columnFilters,
     columnSearchQueries,
+    debouncedColumnSearchQueries,
     sortConfigs,
     setSortConfigs,
     handleSort: handleSortChange,
@@ -117,8 +118,8 @@ export function PlanPage() {
 
 
   const columnApiParams = useMemo(
-    () => buildPlanColumnApiParams(columnFilters, columnSearchQueries),
-    [columnFilters, columnSearchQueries],
+    () => buildPlanColumnApiParams(columnFilters, debouncedColumnSearchQueries),
+    [columnFilters, debouncedColumnSearchQueries],
   )
 
   const pagination = usePaginatedTableQuery({
@@ -126,7 +127,7 @@ export function PlanPage() {
       debouncedSearchQuery,
       filters,
       columnFilters,
-      columnSearchQueries,
+      debouncedColumnSearchQueries,
       sortConfigs,
     ],
   })
@@ -447,10 +448,14 @@ export function PlanPage() {
     [pagination.limit, pagination.offset, planSort, filters, columnApiParams, debouncedSearchQuery],
   )
 
-  const { data: positionsData, isLoading: posLoading } = useQuery({
+  // `placeholderData: keepPreviousData` держит дерево на смене параметров
+  // запроса: без него `isLoading` гасит таблицу целиком вместе с открытым
+  // поповером фильтра, и набранный текст теряется на ровном месте (ADR-0044).
+  const { data: positionsData, isPending: posPending } = useQuery({
     queryKey: queryKeys.plan.allPositions(positionsQueryParams),
     queryFn: () => allPlanPositions(positionsQueryParams),
     enabled: !!activePlan,
+    placeholderData: keepPreviousData,
   })
 
   const positions = positionsData?.positions ?? []
@@ -826,8 +831,8 @@ export function PlanPage() {
 
 
             <div className="flex-1 flex flex-col min-h-0">
-            {posLoading && <p className="text-sm text-muted-foreground">Загрузка...</p>}
-            {(positionsTotal > 0 || posLoading) && (
+            {posPending && processedRows.length === 0 && <p className="text-sm text-muted-foreground">Загрузка...</p>}
+            {(positionsTotal > 0 || processedRows.length > 0 || posPending) && (
               <>
               <div
                 className={`flex-1 ${DATA_TABLE_STYLES.frame}`}
@@ -878,7 +883,7 @@ export function PlanPage() {
                         onSkuClick={setWipStatsSku}
                       />
                     ))}
-                    {processedRows.length === 0 && !posLoading && (
+                    {processedRows.length === 0 && !posPending && (
                       <p className="text-sm text-muted-foreground p-4 text-center">Нет позиций, соответствующих фильтру</p>
                     )}
                   </div>
