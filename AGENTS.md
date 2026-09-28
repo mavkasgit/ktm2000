@@ -85,6 +85,28 @@ npm run test:db:cleanup        # Уборка осиротевших тесто�
 | [`frontend/e2e/AGENTS.md`](frontend/e2e/AGENTS.md) | **Канон E2E** (Playwright) |
 | [`docs/agent-registry.md`](docs/agent-registry.md) | Порты, MCP-матрица |
 
+## Логи контейнеров
+
+Каждый сервис в `infra/compose/docker-compose.prod.yml` обязан объявлять потолок лога:
+
+```yaml
+logging:
+  driver: json-file
+  options:
+    max-size: "20m"
+    max-file: "3"
+```
+
+Потолок — около 60 МБ на контейнер: без него json-лог растёт неограниченно. В прод-стеке
+блок пока не проставлен.
+
+Прод ktm2000 крутится на рабочей машине, где хостового logrotate нет, — здесь блок
+в compose единственная защита. На прод-сервере дополнительно стоит
+`/etc/logrotate.d/docker-containers` (`size 200M`, `rotate 3`, `compress`, `copytruncate`).
+
+`docker logs` отдаёт и ротированные файлы, поэтому его вывод больше текущего файла —
+это не протечка потолка.
+
 ## Agent skills
 
 ### Issue tracker
