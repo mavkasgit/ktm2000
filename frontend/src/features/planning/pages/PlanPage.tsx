@@ -35,6 +35,7 @@ import {
   DuplicateConflict,
   PlanSortField,
   PlanFiltersState,
+  validationFilterOptions,
 } from "../lib/plan-labels"
 import { buildPlanColumnApiParams, buildPlanPositionsQuery, buildPlanSortParam } from "../lib/planApiParams"
 import { planColumnLabels, planColumns, PLAN_CLIENT_FILTER_FIELDS, isRouteFilterClientSide } from "../lib/planColumns"
@@ -649,8 +650,20 @@ export function PlanPage() {
           }
         },
       },
+      {
+        kind: "select",
+        key: "validation_status",
+        placeholder: "Валидация",
+        value: filters.validation_status,
+        options: validationFilterOptions,
+        onChange: (value: string) =>
+          setFilters((prev) => ({
+            ...prev,
+            validation_status: value as PlanFiltersState["validation_status"],
+          })),
+      },
     ],
-    [searchQuery, bulkMode, exitBulkMode],
+    [searchQuery, bulkMode, exitBulkMode, filters.validation_status],
   )
 
   const jumpToPosition = (positionId: number) => {

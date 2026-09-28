@@ -102,9 +102,10 @@ export async function approveProductionPlanPosition(
 ) {
   const { data } = await apiClient.post<ApprovePositionResponse>(
     `/production-plans/${productionPlanId}/positions/${positionId}/approve`,
-    undefined,
+    // Причина — в теле: текст оператора не должен попадать в URL.
+    options?.force ? { reason: options.reason ?? null } : undefined,
     {
-      params: options?.force ? { force: true, reason: options.reason } : undefined,
+      params: options?.force ? { force: true } : undefined,
     },
   );
   return data;

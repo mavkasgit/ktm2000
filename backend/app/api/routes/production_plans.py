@@ -304,19 +304,36 @@ async def delete_import_batch(
         )
 
 
+class PositionApproveIn(BaseModel):
+    """Тело approve-позиции.
+
+    `force` остаётся query-параметром (контракт ADR-0048), а причина уходит
+    в тело: это свободный текст оператора, и в URL он попал бы в access_log,
+    историю браузера и Referer.
+    """
+
+    model_config = ConfigDict(extra="forbid")
+    reason: str | None = None
+
+
 @router.post("/{production_plan_id}/positions/{position_id}/approve")
 async def approve_position(
     production_plan_id: int,
     position_id: int,
     force: bool = False,
-    reason: str | None = None,
+    payload: PositionApproveIn | None = None,
     db: AsyncSession = Depends(get_db),
     current_user: User = Depends(get_current_user),
 ) -> dict:
     logger = logging.getLogger(__name__)
     try:
         position = await approve_plan_position(
-            db, production_plan_id, position_id, force=force, changed_by=current_user.id, reason=reason
+            db,
+            production_plan_id,
+            position_id,
+            force=force,
+            changed_by=current_user.id,
+            reason=payload.reason if payload else None,
         )
     except ValueError as exc:
         logger.warning("approve_position rejected: %s (plan=%d, pos=%d, force=%s)", exc, production_plan_id, position_id, force)

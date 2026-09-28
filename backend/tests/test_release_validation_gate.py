@@ -32,6 +32,8 @@ from app.models.route import ProductionRoute, RouteOperation, RouteStage
 from app.models.section import Section
 from app.services.plan_generation import create_release_batch
 from app.services.production_plan_service import approve_plan_position
+from tests.test_bulk_planning import _auth_headers, _make_plan_with_positions, _make_user
+
 
 #: Этапы маршрута: участок, операция, признак значимости.
 _ROUTE_STEPS = (
@@ -240,6 +242,41 @@ async def test_valid_position_is_released_without_changes(session) -> None:
     )
 
     assert [row["plan_position_id"] for row in batch["positions"]] == [position.id]
+
+
+@pytest.mark.asyncio
+async def test_force_approve_without_reason_in_body_is_rejected(client, session) -> None:
+    """`force` без причины в теле — 400 с внятным текстом, а не тихий обход."""
+    user = await _make_user(session, "gate-no-reason@test.local")
+    plan, positions, _route = await _make_plan_with_positions(session, "FG-GATE-API-NOREASON", 1)
+    product = await session.get(Product, positions[0].product_id)
+    product.is_active = False
+    await session.flush()
+
+    response = await client.post(
+        f"/api/production-plans/{plan.id}/positions/{positions[0].id}/approve?force=true",
+        json={},
+        headers=_auth_headers(user),
+    )
+
+    assert response.status_code == 400, response.text
+    assert "причин" in response.json()["detail"].lower()
+
+
+@pytest.mark.asyncio
+async def test_reason_without_force_does_not_require_override(client, session) -> None:
+    """Причина без форса — обычное утверждение: лишнее поле не ломает контракт."""
+    user = await _make_user(session, "gate-reason-no-force@test.local")
+    plan, positions, _route = await _make_plan_with_positions(session, "FG-GATE-API-REASON", 1)
+
+    response = await client.post(
+        f"/api/production-plans/{plan.id}/positions/{positions[0].id}/approve",
+        json={"reason": "заметка на будущее"},
+        headers=_auth_headers(user),
+    )
+
+    assert response.status_code == 200, response.text
+    assert response.json()["validation_status"] == "valid"
 
 
 @pytest.mark.asyncio
