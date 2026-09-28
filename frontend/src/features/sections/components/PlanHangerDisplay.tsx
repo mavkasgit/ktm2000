@@ -1,14 +1,15 @@
 /**
  * components/PlanHangerDisplay.tsx
  * ================================
- * Правила подсчёта подвесов и нормы на подвес для листа плана участка.
+ * Норма на подвес для листа плана участка (приоритет источников тот же,
+ * что у бэкенда). Количество подвесов считает канон
+ * `@/shared/lib/hangerCount` — второго счёта в проекте нет.
  *
  * Ячейки колонок печати собираются из описаний колонок в
  * `planPrintSettings.ts`, поэтому здесь только вычисления.
  */
 
 import type { SectionBoardTask } from "@/shared/api/shopfloor";
-import { fmtQtyPrecise } from "@/shared/lib/quantityFormat";
 
 // ---------------------------------------------------------------------------
 // Helpers
@@ -48,22 +49,7 @@ export function getQtyPerHanger(task: SectionBoardTask): number | null {
   return getSnapshotPairQuantity(payload);
 }
 
-/** Для парных профилей возвращает одно N, для обычных — null */
-export function getPairedHangerLabel(task: SectionBoardTask): string | null {
-  const payload = task.source_payload as Record<string, unknown> | null;
-  if (!payload) return null;
-
-  if (getPairSnapshot(payload)?.resolved !== true) return null;
-  const quantity = getQtyPerHanger(task);
-  return quantity !== null ? fmtQtyPrecise(quantity) : null;
-}
-
-/** Считает количество подвесов по логике backend (hanger_quantity.py) */
-export function adjustQtyToHanger(qty: number, qtyPerHanger: number | null) {
-  if (!qtyPerHanger || qtyPerHanger <= 0 || qty <= 0) {
-    return { hangers: 1 };
-  }
-  const hangers = Math.ceil(qty / qtyPerHanger);
-  return { hangers };
-}
+// Подвесы строки считает канон `@/shared/lib/hangerCount`: второй счётчик
+// здесь жил и печатал выдуманную единицу там, где данных нет. Этот модуль
+// отвечает только за норму на подвес.
 

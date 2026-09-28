@@ -2,8 +2,9 @@ import { useMemo } from "react";
 import type { SectionBoardTask } from "@/shared/api/shopfloor";
 import { formatDimensionsLabel } from "@/shared/api/stock";
 import { colorNameLabels } from "@/shared/lib/generated-labels";
-import { fmtQty, fmtQtyPrecise } from "@/shared/lib/quantityFormat";
-import { adjustQtyToHanger, getQtyPerHanger } from "./PlanHangerDisplay";
+import { QTY_EMPTY, fmtQty, fmtQtyPrecise } from "@/shared/lib/quantityFormat";
+import { getQtyPerHanger } from "./PlanHangerDisplay";
+import { countHangers } from "@/shared/lib/hangerCount";
 import {
   buildPlanTaskGroups,
   type PlanTaskGroup,
@@ -22,19 +23,30 @@ interface PlanTaskTableProps {
   columns: PlanColumnKey[];
 }
 
+/**
+ * Подвесы задания: готовый `hanger_count` бэкенда, иначе канон
+ * `countHangers`. Нормы нет или количество неположительное — значения нет
+ * (`null`), а не «1 подвес»: в печатном листе это `—`.
+ */
 function hangersForTask(task: SectionBoardTask): number | null {
   if (task.hanger_count != null) return task.hanger_count;
-  const quantityPerHanger = task.quantity_per_hanger ?? getQtyPerHanger(task);
-  if (quantityPerHanger == null) return null;
-  return adjustQtyToHanger(parseFloat(task.planned_quantity) || 0, quantityPerHanger).hangers;
+  return countHangers(task.planned_quantity, task.quantity_per_hanger ?? getQtyPerHanger(task));
 }
 
-/** Подвесы строки — сумма по объединённым заданиям. */
+/**
+ * Подвесы строки — сумма по объединённым заданиям. Пропуск не превращается в
+ * ноль молча: если хотя бы у одного задания нормы нет, сумма строки тоже
+ * неизвестна, иначе в печати вышел бы заниженный итог как настоящий.
+ */
 function hangersForRow(row: PlanTaskRow): number | null {
-  const values = row.tasks
-    .map(hangersForTask)
-    .filter((value): value is number => value != null);
-  return values.length === 0 ? null : values.reduce((total, value) => total + value, 0);
+  if (row.tasks.length === 0) return null;
+  let total = 0;
+  for (const task of row.tasks) {
+    const hangers = hangersForTask(task);
+    if (hangers === null) return null;
+    total += hangers;
+  }
+  return total;
 }
 
 /**
@@ -52,7 +64,7 @@ function perHangerForRows(rows: PlanTaskRow[]): string {
       if (!values.includes(text)) values.push(text);
     }
   }
-  return values.length === 0 ? "—" : values.join(" / ");
+  return values.length === 0 ? QTY_EMPTY : values.join(" / ");
 }
 
 function perHangerForRow(row: PlanTaskRow): string {
@@ -60,21 +72,20 @@ function perHangerForRow(row: PlanTaskRow): string {
 }
 
 function colorLabel(color: string | null): string {
-  if (!color) return "—";
+  if (!color) return QTY_EMPTY;
   return colorNameLabels[color] ?? color;
 }
 
 function operationsLabel(row: PlanTaskRow): string {
-  if (row.preOperations.length === 0) return "—";
+  if (row.preOperations.length === 0) return QTY_EMPTY;
   return row.preOperations
     .map((operation) => operation.operation_name)
     .filter(Boolean)
     .join(" → ");
 }
 
-/** Упаковка строки: одна операция — просто названием, несколько — с количествами. */
 function packagingLabel(row: PlanTaskRow): string {
-  if (row.packaging.length === 0) return "—";
+  if (row.packaging.length === 0) return QTY_EMPTY;
   if (row.packaging.length === 1) return row.packaging[0].label;
   return row.packaging.map((item) => `${item.label} ${fmtQty(item.qty)}`).join(" · ");
 }
@@ -97,7 +108,7 @@ function rowCell(row: PlanTaskRow, key: PlanColumnKey, single: boolean) {
     case "packaging":
       return <td key={key} className={cn(cellBase, "max-w-[220px] break-words")}>{packagingLabel(row)}</td>;
     case "hangers":
-      return <td key={key} className={cn(cellBase, "text-right")}>{hangersForRow(row) ?? "—"}</td>;
+      return <td key={key} className={cn(cellBase, "text-right")}>{hangersForRow(row) ?? QTY_EMPTY}</td>;
     case "perHanger":
       return <td key={key} className={cn(cellBase, "text-right whitespace-nowrap")}>{perHangerForRow(row)}</td>;
     case "issued":
@@ -126,9 +137,20 @@ function aggregateCell(
   );
 }
 
+/**
+ * Подвесы группы — сумма по строкам. Строка с пропуском делает сумму группы
+ * неизвестной: частичный итог в шапке читался бы как настоящий, но был бы
+ * занижен. Все строки известны — сумма; хотя бы одна нет — `—`.
+ */
 function sumHangers(rows: PlanTaskRow[]): number | null {
-  const values = rows.map(hangersForRow).filter((value): value is number => value != null);
-  return values.length === 0 ? null : values.reduce((total, value) => total + value, 0);
+  if (rows.length === 0) return null;
+  let total = 0;
+  for (const row of rows) {
+    const hangers = hangersForRow(row);
+    if (hangers === null) return null;
+    total += hangers;
+  }
+  return total;
 }
 
 export function PlanTaskTable({
@@ -231,7 +253,7 @@ function PlanGroupRows({
                   const hangers = sumHangers(group.rows);
                   return (
                     <td key={column.key} className={cn(cellBase, "text-right font-semibold")}>
-                      {hangers ?? "—"}
+                      {hangers ?? QTY_EMPTY}
                     </td>
                   );
                 }
