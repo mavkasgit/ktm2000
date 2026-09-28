@@ -285,11 +285,9 @@ export async function confirmForceApproveViaUI(page: Page, reason: string) {
 }
 
 export async function approvePositionViaUI(page: Page, position: ApprovablePosition) {
-  const planSearch = page.getByPlaceholder("Поиск");
-  await expect(planSearch).toBeVisible({ timeout: 10_000 });
-  if (position.sku) {
-    await planSearch.fill(singleSku(position.sku));
-  }
+  // Поиск по артикулу НЕ ставим: он сужал список до одной строки, и после
+  // approve проверять было нечего. Строка адресуется прямо по
+  // `#plan-position-<id>` в общем списке плана.
 
   const planRow = page.locator(`#plan-position-${position.id}`);
   await expect(planRow).toBeVisible({ timeout: 15_000 });
