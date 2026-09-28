@@ -30,17 +30,26 @@ function loadStandEnv(file: string): void {
 
 loadStandEnv(STAND_ENV_FILE);
 
-const baseURL = process.env.PLAYWRIGHT_TEST_BASE_URL!;
-const e2eApiUrl = process.env.E2E_API_URL!;
+// Портов у стенда нет: их на каждый прогон берёт обёртка
+// `scripts/run-e2e.mjs` (`listen(0)`) и кладёт в эти две переменные. Статика в
+// `.env.e2e` убрана намеренно: у прогоняемого стенда не должно быть адреса,
+// который можно занять чужим процессом, — ни себе на следующий прогон, ни
+// чужому vite, который молча уехал бы с 5172 на 5173.
+// Ручной стек (тот же devstack) — единственный случай с явными адресами:
+// PW_REUSE_STACK=1 плюс E2E_API_URL/PLAYWRIGHT_TEST_BASE_URL руками.
+const envBaseURL = process.env.PLAYWRIGHT_TEST_BASE_URL;
+const envApiUrl = process.env.E2E_API_URL;
 
 for (const [name, value] of [
-  ["PLAYWRIGHT_TEST_BASE_URL", baseURL],
-  ["E2E_API_URL", e2eApiUrl],
+  ["PLAYWRIGHT_TEST_BASE_URL", envBaseURL],
+  ["E2E_API_URL", envApiUrl],
 ] as const) {
   if (!value) {
     throw new Error(
-      `${name} не задан: адреса стенда берутся из env-файла ${STAND_ENV_FILE} ` +
-        "(или задай переменную сам).",
+      `${name} не задан: порты стенда выбирает scripts/run-e2e.mjs, ` +
+        "поэтому запускай прогон через npm-скрипт (npm run test:e2e / " +
+        "test:e2e:smoke / test:e2e:ui). Ручной стенд — это явные " +
+        "E2E_API_URL и PLAYWRIGHT_TEST_BASE_URL вместе с PW_REUSE_STACK=1.",
     );
   }
   if (!isPrivateHost(value)) {
@@ -49,6 +58,21 @@ for (const [name, value] of [
     );
   }
 }
+// Валидация выше бросает на пустом значении, поэтому после неё переменные
+// определены — TS без `!` не сужает тип через цикл.
+const baseURL = process.env.PLAYWRIGHT_TEST_BASE_URL!;
+const e2eApiUrl = process.env.E2E_API_URL!;
+// Порт в URL обязателен: молчаливый дефолт означал бы адрес, которого у
+// стенда нет, и vite с `--strictPort` упал бы с «already in use».
+const frontendPort = Number(new URL(baseURL).port);
+const backendPort = Number(new URL(e2eApiUrl).port);
+if (!frontendPort || !backendPort) {
+  throw new Error(
+    `В ${baseURL} / ${e2eApiUrl} не указан порт: стенд всегда слушает ` +
+      "свой, угадывать его по умолчанию нечего.",
+  );
+}
+
 // Владение dev-стеком — у Playwright, а не у собственных setup/teardown.
 //
 // Что было: `globalSetup` поднимал `npm run dev` через
@@ -75,8 +99,6 @@ if (!localStack && !reuseStack) {
       "localhost, либо поставь PW_REUSE_STACK=1, если стек поднят руками.",
   );
 }
-const frontendPort = Number(new URL(baseURL).port || 5172);
-const backendPort = Number(new URL(e2eApiUrl).port || 8012);
 
 export default defineConfig({
   testDir: "./e2e",

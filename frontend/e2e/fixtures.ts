@@ -24,9 +24,9 @@ const AUTH_MODE = (process.env.E2E_AUTH_MODE || "break-glass") as AuthMode;
 const BREAK_GLASS_PASSWORD = process.env.E2E_ADMIN_PASSWORD || "break-glass-dev";
 const OIDC_USERNAME = process.env.E2E_OIDC_USERNAME || "akadmin";
 const OIDC_PASSWORD = process.env.E2E_OIDC_PASSWORD || "akadmin-dev-local";
-const APP_ORIGIN = new URL(
-  process.env.PLAYWRIGHT_TEST_BASE_URL || "http://localhost:5172",
-).origin;
+// Без адреса стенда fall back'а на devstack нет: 5172 здесь означал бы
+// авторизацию на чужом стенде (и падение по OIDC-заглушке там, где её нет).
+const APP_ORIGIN = new URL(process.env.PLAYWRIGHT_TEST_BASE_URL!).origin;
 
 function safeCurrentUrl(page: Page) {
   const url = new URL(page.url());

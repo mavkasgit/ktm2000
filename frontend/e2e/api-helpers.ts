@@ -2,9 +2,17 @@ import { execFileSync } from "child_process";
 import fs from "fs";
 import path from "path";
 
-export const BACKEND_URL = process.env.E2E_API_URL
-  ? process.env.E2E_API_URL.replace(/\/api$/, "")
-  : "http://localhost:8012";
+// Без `E2E_API_URL` бьём не в стенд, а в devstack на :8012 — тихий увод
+// прогона в чужую БД. Адрес приходит из обёртки `scripts/run-e2e.mjs`
+// (свободный порт на каждый прогон), поэтому падать здесь безопасно:
+// до сюда дело доходит только при запуске в обход npm-скриптов.
+if (!process.env.E2E_API_URL) {
+  throw new Error(
+    "E2E_API_URL не задан — адрес стенда выбирает scripts/run-e2e.mjs. " +
+      "Запускай прогон через npm run test:e2e (или test:e2e:smoke / test:e2e:ui).",
+  );
+}
+export const BACKEND_URL = process.env.E2E_API_URL.replace(/\/api$/, "");
 
 export function unwrapItems<T>(body: T[] | { items?: T[] }): T[] {
   return Array.isArray(body) ? body : body.items ?? [];

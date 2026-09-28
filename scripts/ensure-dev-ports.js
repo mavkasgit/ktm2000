@@ -19,6 +19,14 @@ const readline = require("readline");
 const os = require("os");
 
 const DEFAULT_PORTS = [8012, 5172];
+
+/** Порты заданы явно (`--ports`) — значит, это не дев-стек. */
+function isDefaultPorts(ports) {
+  return (
+    ports.length === DEFAULT_PORTS.length &&
+    ports.every((p, i) => p === DEFAULT_PORTS[i])
+  );
+}
 const isWin = process.platform === "win32";
 
 function parseArgs(argv) {
@@ -135,15 +143,17 @@ function addressesFor(snapshot, port, pid) {
 
 function processInfo(pid) {
   if (!Number.isFinite(pid) || pid <= 4) {
-    return { pid, name: "(system)", cmd: "" };
+    return { pid, name: "(system)", cmd: "", alive: true };
   }
   if (isWin) {
     let name = "unknown";
     let cmd = "";
+    let alive = true;
     try {
       const tl = run("tasklist.exe", ["/FI", `PID eq ${pid}`, "/FO", "CSV", "/NH"]);
       const m = tl.match(/"([^"]+)","(\d+)"/);
       if (m && Number(m[2]) === pid) name = m[1];
+      else alive = false;
     } catch {
       /* ignore */
     }
@@ -159,10 +169,11 @@ function processInfo(pid) {
     } catch {
       /* ignore */
     }
-    return { pid, name, cmd };
+    return { pid, name, cmd, alive };
   }
   let name = "unknown";
   let cmd = "";
+  let alive = true;
   try {
     name = run("ps", ["-p", String(pid), "-o", "comm="]).trim() || name;
     cmd = run("ps", ["-p", String(pid), "-o", "args="]).trim();
@@ -170,7 +181,8 @@ function processInfo(pid) {
   } catch {
     /* ignore */
   }
-  return { pid, name, cmd };
+  if (!name || name === "unknown") alive = false;
+  return { pid, name, cmd, alive };
 }
 
 function isDockerProcess(info) {
@@ -188,7 +200,7 @@ function isDockerProcess(info) {
 }
 
 function collectOccupants(portMap) {
-  /** @type {{ port: number, pid: number, name: string, cmd: string, isDocker: boolean }[]} */
+  /** @type {{ port: number, pid: number, name: string, cmd: string, isDocker: boolean, alive: boolean }[]} */
   const rows = [];
   const seen = new Set();
   for (const [port, pids] of portMap) {
@@ -199,7 +211,7 @@ function collectOccupants(portMap) {
       seen.add(key);
       const info = processInfo(pid);
       const isDocker = isDockerProcess(info);
-      rows.push({ port, pid, name: info.name, cmd: info.cmd, isDocker });
+      rows.push({ port, pid, name: info.name, cmd: info.cmd, isDocker, alive: info.alive });
     }
   }
   return rows;
@@ -257,7 +269,7 @@ function sleepMs(ms) {
 
 function printOccupants(rows, snapshot) {
   console.log("");
-  console.log("⚠  Dev ports already in use (LISTENING):");
+  console.log("⚠  Ports already in use (LISTENING):");
   console.log("   (old uvicorn/vite orphans cause WinError 10048 / EADDRINUSE and stale API)");
   console.log("");
   for (const row of rows) {
@@ -270,6 +282,12 @@ function printOccupants(rows, snapshot) {
     } else {
       console.log(`   :${row.port}${bind}  PID ${row.pid}  ${row.name}`);
       if (row.cmd) console.log(`           ${row.cmd}`);
+      if (!row.alive) {
+        console.log(
+           `           ℹ PID ${row.pid} не виден в списке процессов (другая сессия/WSL/Hyper-V):`,
+        );
+        console.log(`           kill по нему не сработает. Освободить порт вручную или перезапустите стенд.`);
+      }
     }
   }
   for (const port of loopbackOnlyPorts(snapshot)) {
@@ -383,8 +401,16 @@ async function main() {
 
     const killableRows = rows.filter((r) => !r.isDocker);
 
+    // Подсказка обязана совпадать с тем, что реально будет убито: `npm run
+    // dev:kill` жмёт по 8012/5172, а для любых других портов (в т.ч. портов
+    // стенда E2E, доставленных прогону) он бессмыслен — там нужен явный
+    // `--ports` с теми же номерами.
+    const killHint = isDefaultPorts(ports)
+      ? "npm run dev:kill   or   KTM_DEV_KILL=1 npm run dev"
+      : `node scripts/ensure-dev-ports.js --kill --ports ${ports.join(",")}`;
+
     if (checkOnly && killableRows.length > 0) {
-      console.log("Use: npm run dev:kill   or   KTM_DEV_KILL=1 npm run dev");
+      console.log(`Use: ${killHint}`);
       process.exit(1);
     }
 
@@ -395,12 +421,12 @@ async function main() {
           const promptMsg = `Kill non-Docker processes (${killableRows.length} tree(s)) and continue? [Y/n] (Press Enter for Yes): `;
           shouldKill = await askYesNo(promptMsg);
           if (!shouldKill) {
-            console.error("Aborted. Free ports manually or run: npm run dev:kill");
+            console.error(`Aborted. Free ports manually or run: ${killHint}`);
             process.exit(1);
           }
         } else {
           console.error(
-            "Non-interactive shell: ports busy. Run npm run dev:kill or set KTM_DEV_KILL=1"
+            "Non-interactive shell: ports busy. Run " + killHint + " or set KTM_DEV_KILL=1"
           );
           process.exit(1);
         }
@@ -441,7 +467,7 @@ async function main() {
     }
   }
 
-  console.log(`✓ Dev ports free: ${ports.map((p) => ":" + p).join(", ")}`);
+  console.log(`✓ Ports free: ${ports.map((p) => ":" + p).join(", ")}`);
 
   // Раньше здесь был флаг --no-docker («убить порты, но не трогать Docker»)
   // вместе с skipDocker. Он удалён: вызывающих нет ни в npm-скриптах, ни в

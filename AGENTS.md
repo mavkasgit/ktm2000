@@ -20,13 +20,18 @@ npm run test:pytest            # Тесты backend (параллельно, д�
 npm run test:pytest:full       # Полный прогон в один поток
 npm run test:pytest:mon        # Только изменённые тесты
 npm run test:pytest:lf         # Только упавшие тесты
-npm run test:e2e              # Playwright на ОТДЕЛЬНОМ стенде: своя БД ktm2000_e2e (Postgres :5441), порты 8013/5173
+npm run test:e2e              # Playwright на ОТДЕЛЬНОМ стенде: своя БД ktm2000_e2e (Postgres :5441), порты — свободные, каждый прогон свои
 npm run test:db:cleanup        # Уборка осиротевших тестовых БД (TTL 24h)
 ```
 
 Порты dev: Postgres `5440`, backend `8012`, frontend `5172`.
-Стенд E2E (`npm run test:e2e`) не делит их: Postgres `5441`, backend `8013`,
-frontend `5173`, БД `ktm2000_e2e` — конфиг в `.env.e2e`.
+Стенд E2E (`npm run test:e2e`) не делит их: Postgres `5441`, БД `ktm2000_e2e`,
+хранилище `data/storage-e2e` (`.env.e2e`). Порты backend и frontend стенд
+**не имеет** — [`frontend/scripts/run-e2e.mjs`](frontend/scripts/run-e2e.mjs)
+берёт два свободных порта у ОС на каждый прогон, поэтому осиротевший стек
+прошлого прогона не может сорвать следующий. Прогон против уже поднятого
+стека — `PW_REUSE_STACK=1` вместе с `E2E_API_URL`/`PLAYWRIGHT_TEST_BASE_URL`
+(тогда обёртка их не трогает).
 
 ### Если dev-стек не поднимается или «падает сам»
 
