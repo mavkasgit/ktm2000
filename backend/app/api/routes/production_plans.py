@@ -1,3 +1,4 @@
+import asyncio
 from datetime import UTC, datetime
 import logging
 from decimal import Decimal
@@ -9,6 +10,7 @@ from pydantic import BaseModel, ConfigDict
 from sqlalchemy import String, cast, exists, or_, select, text
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import selectinload
+from sqlalchemy.exc import DBAPIError, OperationalError
 
 from sqlalchemy import func as sa_func
 
@@ -1823,26 +1825,64 @@ async def batch_preview(production_plan_id: int, batch_id: int, db: AsyncSession
     }
 
 
+_TRUNCATE_ALL_PRODUCTION_DATA = text("""
+    TRUNCATE TABLE
+        defect_items, defect_decisions, transfer_discrepancy_defect_items,
+        defects, rework_tasks, stock_balances, stock_transactions, transfers,
+        work_tasks, section_plan_lines, internal_plans,
+        release_batch_positions, release_batches,
+        plan_change_items, plan_change_sets,
+        plan_positions, import_batches, import_files,
+        production_plans,
+        route_selection_rules, route_rule_profiles, production_routes,
+        route_stages, route_operations, route_matching_rules, route_rule_conditions,
+        import_templates
+    CASCADE
+""")
+
+_TRUNCATE_ATTEMPTS = 5
+
+
+async def _truncate_all_production_data(db: AsyncSession) -> None:
+    """`TRUNCATE ... CASCADE` с повтором по дедлоку.
+
+    Полный сброс берёт ACCESS EXCLUSIVE сразу на всех таблицах, поэтому
+    сталкивается с любой транзакцией, которая ещё держит блокировку. Такие
+    транзакции — норма, а не аномалия: `get_db` коммитит ПОСЛЕ ответа
+    (см. докстринг там), значит запрос, чей ответ уже ушёл, ещё секунду
+    держит блокировки. В E2E это давало 500 на `reset-all` и грязные данные
+    в следующем тесте.
+
+    Дедлок в Postgres — штатная транзиентная ситуация, её штатное лечение —
+    повтор: откатываемся и пробуем снова. Не маскируем ничего: если
+    конфликт не рассосался за `_TRUNCATE_ATTEMPTS`, ошибка уходит наверх.
+    """
+    for attempt in range(1, _TRUNCATE_ATTEMPTS + 1):
+        try:
+            await db.execute(_TRUNCATE_ALL_PRODUCTION_DATA)
+            return
+        except (DBAPIError, OperationalError) as exc:
+            is_deadlock = "deadlock" in str(exc).lower() or getattr(
+                getattr(exc, "orig", None), "__class__", type(None)
+            ).__name__ == "DeadlockDetectedError"
+            if not is_deadlock or attempt == _TRUNCATE_ATTEMPTS:
+                raise
+            logging.getLogger(__name__).warning(
+                "reset-all: дедлок на попытке %d/%d, повторяем",
+                attempt,
+                _TRUNCATE_ATTEMPTS,
+            )
+            await db.rollback()
+            await asyncio.sleep(0.2 * attempt)
+
+
 @router.post("/reset-all", status_code=status.HTTP_204_NO_CONTENT)
 async def reset_all_plans(
     db: AsyncSession = Depends(get_db),
     current_user: User = Depends(get_current_user),
 ):
     """Удалить все производственные планы, связанные данные и справочники (маршруты, правила, импорты)."""
-    await db.execute(text("""
-        TRUNCATE TABLE
-            defect_items, defect_decisions, transfer_discrepancy_defect_items,
-            defects, rework_tasks, stock_balances, stock_transactions, transfers,
-            work_tasks, section_plan_lines, internal_plans,
-            release_batch_positions, release_batches,
-            plan_change_items, plan_change_sets,
-            plan_positions, import_batches, import_files,
-            production_plans,
-            route_selection_rules, route_rule_profiles, production_routes,
-            route_stages, route_operations, route_matching_rules, route_rule_conditions,
-            import_templates
-        CASCADE
-    """))
+    await _truncate_all_production_data(db)
 
     # Запись лога аудита (полный сброс системы)
     from app.services.audit_log_service import log_action
