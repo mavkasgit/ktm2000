@@ -1227,12 +1227,19 @@ async def take_rows_to_work(
             import logging
             logger = logging.getLogger(__name__)
             logger.exception(f"take-to-work failed for position {position_id}")
+            # Сессия после исключения непригодна для следующей позиции:
+            # откатываем только неудачную, уже выпущенные позиции сохраняются.
+            await db.rollback()
             results.append(TakeToWorkResult(
                 position_id=position_id,
                 status="failed",
                 reason=f"Internal error: {str(exc)}",
             ))
 
+    # Коммит ДО ответа: `get_db` коммитит после выхода из зависимости, а
+    # FastAPI 0.106+ отдаёт ответ раньше. Без этого клиент, получив 200,
+    # перечитывает строки контроля и видит позицию ещё не запущенной.
+    await db.commit()
     return TakeToWorkResponse(results=results)
 
 

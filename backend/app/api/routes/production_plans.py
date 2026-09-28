@@ -320,6 +320,11 @@ async def approve_position(
     except Exception:
         logger.exception("approve_position failed (plan=%d, pos=%d, force=%s)", production_plan_id, position_id, force)
         raise
+    # Коммит ДО формирования ответа. `get_db` коммитит после выхода из
+    # зависимости, а FastAPI 0.106+ отдаёт ответ раньше: клиент, получив 200,
+    # сразу перечитывает план и видит незакоммиченный статус — кнопка
+    # «Утвердить» остаётся на уже утверждённой позиции.
+    await db.commit()
     return {
         "id": position.id,
         "production_plan_id": position.production_plan_id,
@@ -343,6 +348,12 @@ async def cancel_position(
         )
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
+    # Коммит ДО формирования ответа — ровно как в `approve_position` (:329).
+    # `cancel_plan_position` меняет статус позиции, статус плана и пишет
+    # AuditLog, но коммитит только `flush`: `get_db` коммитит уже после
+    # ответа, а FastAPI 0.106+ отдаёт ответ раньше. Клиент, получив 200 и
+    # сразу перечитав план, увидел бы позицию по-прежнему `approved`.
+    await db.commit()
     return {
         "id": position.id,
         "production_plan_id": position.production_plan_id,
@@ -364,6 +375,10 @@ async def restore_position(
         )
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
+    # Коммит ДО формирования ответа — см. комментарий в `cancel_position`.
+    # `restore_plan_position` меняет статус позиции и плана и пишет AuditLog,
+    # но только `flush` — без коммита клиент увидел бы отменённую позицию.
+    await db.commit()
     return {
         "id": position.id,
         "production_plan_id": position.production_plan_id,
@@ -520,6 +535,12 @@ async def bulk_approve_positions(
             results.append(
                 BulkActionResultItem(id=position_id, status="failed", reason="Внутренняя ошибка сервера")
             )
+    # Коммит ДО формирования ответа — ровно как в `approve_position` (:329).
+    # `get_db` коммитит уже после ответа, а FastAPI 0.106+ отдаёт ответ
+    # раньше: оператор видит «успешно» и сразу перечитывает план, где
+    # статусы ещё не сохранены. Один коммит закрывает весь батч — включая
+    # записи аудита и `validation_status`, сделанные внутри savepoint'ов.
+    await db.commit()
     return BulkActionResponse(results=results)
 
 
@@ -601,6 +622,12 @@ async def bulk_delete_positions(
             results.append(
                 BulkActionResultItem(id=position_id, status="failed", reason="Внутренняя ошибка сервера")
             )
+    # Коммит ДО формирования ответа — ровно как в `bulk_approve_positions` (:535).
+    # Внутри цикла только savepoint'ы (`begin_nested`), а `get_db` коммитит уже
+    # после ответа: клиент получил бы 200 со списком успехов и перечитал план,
+    # где удаления и скрытия ещё не сохранены. Один коммит закрывает весь
+    # батч — включая hard-delete, `deleted_at` и записи аудита из savepoint'ов.
+    await db.commit()
     return BulkActionResponse(results=results)
 
 
