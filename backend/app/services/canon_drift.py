@@ -18,7 +18,6 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.models.route import RouteSelectionRule, SectionOperation
 from app.models.section import Section
-from app.seeds.canon import build_plant_config
 from app.seeds.canon.models import PlantConfig
 
 # Правило без кода (создано из UI) в отчёте о лишних строках обозначается так:
@@ -68,7 +67,7 @@ class CanonDrift:
         return "\n".join(lines)
 
 
-async def check_canon_drift(session: AsyncSession) -> CanonDrift:
+async def check_canon_drift(session: AsyncSession, config: PlantConfig) -> CanonDrift:
     """Сверить код-канон с содержимым БД. Только чтение, без коммита.
 
     Ключи свои у каждой таблицы: ``sections.code``; ``section_operations`` —
@@ -76,8 +75,10 @@ async def check_canon_drift(session: AsyncSession) -> CanonDrift:
     ``route_selection_rules.code`` (``NULL`` у административных правил).
     Операции отсутствующего в БД участка не докладываются: без участка их
     и не может быть, а строкой в отчёте они бы только шумели.
+
+    ``config`` приходит параметром: канон резолвит composition root, а не
+    сервис (ADR-0004 §5, гейт ``tests/test_canon_access_gate.py``).
     """
-    config = build_plant_config()
 
     db_sections = set((await session.scalars(select(Section.code))).all())
     missing_sections = tuple(

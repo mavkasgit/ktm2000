@@ -121,7 +121,7 @@ class TestCleanDatabase:
     """На просидированной БД дрейфа нет."""
 
     async def test_fully_seeded_database_has_no_drift(self, seeded) -> None:
-        report = await check_canon_drift(seeded)
+        report = await check_canon_drift(seeded, build_plant_config())
         assert report.missing_sections == ()
         assert report.missing_operations == ()
         assert report.missing_rules == ()
@@ -137,7 +137,7 @@ class TestMissingCanonRow:
     async def test_missing_section_is_reported(self, seeded) -> None:
         await _drop_section(seeded, DRIFT_SECTION_CODE)
 
-        report = await check_canon_drift(seeded)
+        report = await check_canon_drift(seeded, build_plant_config())
 
         assert DRIFT_SECTION_CODE in report.missing_sections
         # Операции отсутствующего участка отдельными строками не докладываются:
@@ -150,14 +150,14 @@ class TestMissingCanonRow:
     async def test_missing_section_operation_is_reported(self, seeded) -> None:
         section_code, operation_code = await _drop_first_operation(seeded)
 
-        report = await check_canon_drift(seeded)
+        report = await check_canon_drift(seeded, build_plant_config())
 
         assert (section_code, operation_code) in report.missing_operations
 
     async def test_missing_selection_rule_is_reported(self, seeded) -> None:
         code = await _drop_first_rule(seeded)
 
-        report = await check_canon_drift(seeded)
+        report = await check_canon_drift(seeded, build_plant_config())
 
         assert code in report.missing_rules
 
@@ -178,7 +178,7 @@ class TestExtraDatabaseRow:
     async def test_admin_rule_without_code_is_not_drift(self, seeded) -> None:
         await _add_admin_rule(seeded, code=None)
 
-        report = await check_canon_drift(seeded)
+        report = await check_canon_drift(seeded, build_plant_config())
 
         assert report.has_drift is False
         assert NULL_CODE_LABEL in report.extra_rules
@@ -186,7 +186,7 @@ class TestExtraDatabaseRow:
     async def test_rule_with_code_outside_canon_is_not_drift(self, seeded) -> None:
         await _add_admin_rule(seeded, code="admin_one_off")
 
-        report = await check_canon_drift(seeded)
+        report = await check_canon_drift(seeded, build_plant_config())
 
         assert report.has_drift is False
         assert "admin_one_off" in report.extra_rules
@@ -197,10 +197,10 @@ class TestReadOnly:
 
     async def test_repeated_check_does_not_repair_drift(self, seeded) -> None:
         code = await _drop_first_rule(seeded)
-        before = await check_canon_drift(seeded)
+        before = await check_canon_drift(seeded, build_plant_config())
 
         await run_check(seeded)
-        after = await check_canon_drift(seeded)
+        after = await check_canon_drift(seeded, build_plant_config())
 
         assert before == after
         assert code in after.missing_rules
