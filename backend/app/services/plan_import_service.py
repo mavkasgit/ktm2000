@@ -995,7 +995,7 @@ async def _make_change_items(
 
                                         stage_seq = 1
                                         for group in groups:
-                                            primary_step, primary_section = group[0]
+                                            primary_section = group[0][1]
                                             is_final = any(s[0].is_final for s in group)
                                             if is_storage_section(primary_section):
                                                 # Склад/терминал — проход, а не цех (#178).
@@ -1017,18 +1017,24 @@ async def _make_change_items(
                                                 db.add(stage)
                                                 await db.flush()
                                             else:
-                                                # Маркер трансформации этапа (ADR-0002) —
-                                                # из собранного шага, а не из повторного
-                                                # чтения справочника: так записанный этап
-                                                # и сигнатура маршрута говорят одно (#214).
+                                                # Признаки этапа собираются из ВСЕХ
+                                                # шагов группы, а не из первого: этап
+                                                # значим, если значим хотя бы один шаг
+                                                # (#221) — то же правило, по которому
+                                                # сигнатура считает шаг этапа, поэтому
+                                                # записанный этап и сигнатура маршрута
+                                                # говорят одно.
                                                 stage_transforms = any(
                                                     s[0].transforms_dimensions for s in group
+                                                )
+                                                stage_significant = any(
+                                                    s[0].is_significant for s in group
                                                 )
                                                 stage = RouteStage(
                                                     route_id=created_route.id,
                                                     sequence=stage_seq,
                                                     section_id=primary_section.id,
-                                                    is_significant=primary_step.is_significant,
+                                                    is_significant=stage_significant,
                                                     transforms_dimensions=stage_transforms,
                                                     requires_acceptance=True,
                                                     allow_parallel=False,
