@@ -162,3 +162,25 @@ export function manualByLength(
   }
   return result;
 }
+
+/**
+ * Ключи ручных норм, не применимых ни к одной длине реестра (ADR-0047).
+ *
+ * Ключ нормы — нормальная длина артикула, поэтому значение под длиной,
+ * которой нет в реестре, не применится нигде: сохранение карточки его
+ * отклоняет, пока оператор не удалит значение или не введёт длину.
+ * У листа длина одна по определению — там запись под прошлым полотном
+ * восстанавливается по единственной записи, а не считается сиротой.
+ */
+export function orphanNormKeys(product: {
+  dimension_state?: DimensionState | null;
+  lengths?: Array<{ length_mm: number }> | null;
+  quantity_per_hanger?: QuantityPerHangerDict | null;
+}): string[] {
+  if (isSheetState(product.dimension_state)) return [];
+  const registry = new Set(productLengths(product).map(lengthKey));
+  return Object.entries(product.quantity_per_hanger ?? {})
+    .filter(([key, entry]) => entry?.manual != null && !registry.has(key))
+    .map(([key]) => key)
+    .sort((a, b) => Number(a) - Number(b));
+}

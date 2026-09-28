@@ -11,6 +11,7 @@ import {
   lengthKey,
   manualByLength,
   normalizeLengths,
+  orphanNormKeys,
   primaryHangerValue,
   primaryLength,
   productLengths,
@@ -237,5 +238,44 @@ describe("sheetHangerEntry", () => {
     expect(sheetHangerEntry({})).toBeNull();
     expect(sheetHangerEntry(null)).toBeNull();
     expect(sheetHangerEntry(undefined)).toBeNull();
+  });
+});
+
+describe("orphanNormKeys", () => {
+  it("ключ нормы, которого нет в реестре длин, — норма-сирота", () => {
+    expect(
+      orphanNormKeys({
+        dimension_state: "length",
+        lengths: [length(2700, 2750, true)],
+        quantity_per_hanger: {
+          "2700": { auto: null, manual: 40 },
+          "2750": { auto: null, manual: 62 },
+        },
+      }),
+    ).toEqual(["2750"]);
+  });
+
+  it("точное совпадение с реестром и пустое значение сиротой не считаются", () => {
+    expect(
+      orphanNormKeys({
+        dimension_state: "length",
+        lengths: [length(2700)],
+        quantity_per_hanger: {
+          "2700": { auto: null, manual: 40 },
+          "3000": { auto: null, manual: null },
+        },
+      }),
+    ).toEqual([]);
+    expect(orphanNormKeys({ dimension_state: "length", lengths: [], quantity_per_hanger: null })).toEqual([]);
+  });
+
+  it("у листа длина одна по определению — запись под старым полотном не сирота", () => {
+    expect(
+      orphanNormKeys({
+        dimension_state: "area",
+        lengths: [],
+        quantity_per_hanger: { "1000": { auto: 18, manual: 5 } },
+      }),
+    ).toEqual([]);
   });
 });
