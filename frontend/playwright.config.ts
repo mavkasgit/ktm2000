@@ -1,17 +1,49 @@
+import { readFileSync } from "node:fs";
+import { fileURLToPath } from "node:url";
 import { defineConfig, devices } from "@playwright/test";
 import { isPrivateHost } from "./src/shared/lib/hostGuard";
 
-const PORT = 5172;
-const BACKEND_PORT = 8012;
+// Стенд E2E — отдельная БД и отдельные порты (#220). Источник правды для
+// них — `.env.e2e` в корне репозитория (та же БД, что поднимает `e2e:prep`),
+// а не константы этого файла: прогон против чужого стека переопределяет
+// значения переменными окружения, и они важнее содержимого файла.
+const STAND_ENV_FILE = fileURLToPath(new URL("../.env.e2e", import.meta.url));
 
-const baseURL = process.env.PLAYWRIGHT_TEST_BASE_URL || `http://localhost:${PORT}`;
-const e2eApiUrl = process.env.E2E_API_URL;
+function loadStandEnv(file: string): void {
+  let content: string;
+  try {
+    content = readFileSync(file, "utf8");
+  } catch {
+    throw new Error(
+      `Не найден env-файл стенда ${file}: без него прогон не знает свою БД и порты.`,
+    );
+  }
+  for (const line of content.split(/\r?\n/)) {
+    const match = /^\s*([A-Za-z_][A-Za-z0-9_]*)\s*=\s*(.*?)\s*$/.exec(line);
+    if (!match) continue;
+    const [, key, value] = match;
+    if (process.env[key] === undefined) {
+      process.env[key] = value.replace(/^["']|["']$/g, "");
+    }
+  }
+}
+
+loadStandEnv(STAND_ENV_FILE);
+
+const baseURL = process.env.PLAYWRIGHT_TEST_BASE_URL!;
+const e2eApiUrl = process.env.E2E_API_URL!;
 
 for (const [name, value] of [
   ["PLAYWRIGHT_TEST_BASE_URL", baseURL],
-  ["E2E_API_URL", e2eApiUrl ?? ""],
-]) {
-  if (value && !isPrivateHost(value)) {
+  ["E2E_API_URL", e2eApiUrl],
+] as const) {
+  if (!value) {
+    throw new Error(
+      `${name} не задан: адреса стенда берутся из env-файла ${STAND_ENV_FILE} ` +
+        "(или задай переменную сам).",
+    );
+  }
+  if (!isPrivateHost(value)) {
     throw new Error(
       `${name}=${value} указывает на публичный (боевой) хост. E2E запрещено гонять против прод-окружения.`,
     );
@@ -44,7 +76,7 @@ if (!localStack && !reuseStack) {
   );
 }
 const frontendPort = Number(new URL(baseURL).port || 5172);
-const backendPort = Number(e2eApiUrl?.match(/:(\d+)/)?.[1] ?? 8012);
+const backendPort = Number(new URL(e2eApiUrl).port || 8012);
 
 export default defineConfig({
   testDir: "./e2e",
@@ -68,17 +100,24 @@ export default defineConfig({
         {
           // БД поднимается до прогона (`npm run e2e:prep`): `webServer`
           // стартует команды параллельно, а `npm run backend` сам Docker не
-          // поднимает.
+          // поднимает. ENV_FILE уводит backend на БД стенда (`.env.e2e`),
+          // а не на общую dev-БД из `.env.dev`; BACKEND_PORT — на порт стенда,
+          // чтобы стек не делил 8012 с работающим devstack.
           command: "npm --prefix .. run backend",
           url: `http://127.0.0.1:${backendPort}/api/health`,
+          env: { ENV_FILE: STAND_ENV_FILE, BACKEND_PORT: String(backendPort) },
           reuseExistingServer: false,
           timeout: 120_000,
           stdout: "pipe" as const,
           stderr: "pipe" as const,
         },
         {
-          command: "npm run dev",
+          // Порт стенда задаётся аргументами vite: в конфиге он зашит на 5172
+          // (LAN-ссылки devstack), а стенд идёт на своём. VITE_PROXY_TARGET
+          // уводит /api на backend стенда, иначе UI ходил бы в чужой.
+          command: `npm run dev -- --port ${frontendPort} --strictPort`,
           url: `http://127.0.0.1:${frontendPort}/`,
+          env: { VITE_PROXY_TARGET: `http://127.0.0.1:${backendPort}` },
           reuseExistingServer: false,
           timeout: 120_000,
           stdout: "pipe" as const,

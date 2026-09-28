@@ -15,6 +15,7 @@ from sqlalchemy import inspect, text
 from sqlalchemy.ext.asyncio import create_async_engine
 
 from app.models.base import Base
+from app.models.production_plan import PlanPositionValidationStatus
 from app.services.hanger_quantity_calc import (
     HangerConfigError,
     compute_hanger_quantity,
@@ -1290,6 +1291,875 @@ async def test_migration_059_stops_on_conflicting_linear_default_until_manual_re
             (2700.0, None, True)
         ]
         assert all(row.length_mm != 2750.0 for row in lengths)
+    finally:
+        await engine.dispose()
+        admin_engine = create_async_engine(admin_url, isolation_level="AUTOCOMMIT")
+        async with admin_engine.connect() as conn:
+            await conn.execute(text(f'DROP DATABASE IF EXISTS "{db_name}" WITH (FORCE)'))
+        await admin_engine.dispose()
+
+
+@pytest.mark.asyncio
+async def test_migration_064_adds_overridden_validation_status(tmp_path: Path):
+    """#212 (ADR-0048): состояние «перекрыта» появляется в PG-типе позиции плана.
+
+    Тесты строят схему через `Base.metadata.create_all`, поэтому ревизию,
+    добавляющую значение в enum, проверяем на реальной цепочке alembic —
+    на изолированной БД тестового сервера, с повторным прогоном (значение
+    уже есть → миграция обязана быть no-op, а не падать на дубликате).
+    """
+    db_name = f"ktm_mig_{uuid.uuid4().hex[:10]}"
+    admin_url = _test_db_url().rsplit("/", 1)[0] + "/postgres"
+    target_url = _test_db_url().rsplit("/", 1)[0] + f"/{db_name}"
+
+    admin_engine = create_async_engine(admin_url, isolation_level="AUTOCOMMIT")
+    async with admin_engine.connect() as conn:
+        await conn.execute(text(f'CREATE DATABASE "{db_name}"'))
+    await admin_engine.dispose()
+
+    env = _alembic_env(target_url, tmp_path)
+    engine = create_async_engine(target_url)
+    try:
+        upgraded = subprocess.run(
+            ["alembic", "upgrade", "head"],
+            cwd=BACKEND_DIR,
+            env=env,
+            capture_output=True,
+            text=True,
+            check=False,
+        )
+        assert upgraded.returncode == 0, upgraded.stderr or upgraded.stdout
+
+        async with engine.connect() as conn:
+            labels = (
+                await conn.execute(
+                    text(
+                        "SELECT e.enumlabel FROM pg_enum e "
+                        "JOIN pg_type t ON t.oid = e.enumtypid "
+                        "WHERE t.typname = 'plan_position_validation_status'"
+                    )
+                )
+            ).scalars().all()
+        assert set(PlanPositionValidationStatus) == {label for label in labels}, (
+            "значения модели и PG-типа разошлись — миграция не догнала enum"
+        )
+
+        # Повторный прогон: значение уже добавлено, миграция обязана быть no-op.
+        again = subprocess.run(
+            ["alembic", "upgrade", "head"],
+            cwd=BACKEND_DIR,
+            env=env,
+            capture_output=True,
+            text=True,
+            check=False,
+        )
+        assert again.returncode == 0, again.stderr or again.stdout
+    finally:
+        await engine.dispose()
+        admin_engine = create_async_engine(admin_url, isolation_level="AUTOCOMMIT")
+        async with admin_engine.connect() as conn:
+            await conn.execute(text(f'DROP DATABASE IF EXISTS "{db_name}" WITH (FORCE)'))
+        await admin_engine.dispose()
+
+
+@pytest.mark.asyncio
+async def test_migration_065_normalizes_storage_route_stages_to_transit(tmp_path: Path):
+    """#178: этапы на складских/терминальных секциях становятся транзит-хопами.
+
+    Маршрут, собранный импортом плана, держал склад как `stage_kind=production`
+    с заполненным `section_id`. Миграция переносит склад в
+    `storage_section_id`, обнуляет `section_id` и не трогает `is_final`
+    (правило финальности #176 не менялось). Повторный прогон — no-op.
+    """
+    db_name = f"ktm_mig_{uuid.uuid4().hex[:10]}"
+    admin_url = _test_db_url().rsplit("/", 1)[0] + "/postgres"
+    target_url = _test_db_url().rsplit("/", 1)[0] + f"/{db_name}"
+
+    admin_engine = create_async_engine(admin_url, isolation_level="AUTOCOMMIT")
+    async with admin_engine.connect() as conn:
+        await conn.execute(text(f'CREATE DATABASE "{db_name}"'))
+    await admin_engine.dispose()
+
+    env = _alembic_env(target_url, tmp_path)
+
+    def _run(*args: str) -> None:
+        result = subprocess.run(
+            ["alembic", *args],
+            cwd=BACKEND_DIR,
+            env=env,
+            capture_output=True,
+            text=True,
+            check=False,
+        )
+        assert result.returncode == 0, result.stderr or result.stdout
+
+    engine = create_async_engine(target_url)
+    try:
+        _run("upgrade", "064_plan_position_validation_overridden")
+
+        async with engine.begin() as conn:
+            await conn.execute(text(
+                "INSERT INTO sections (code, name, sort_order, type, is_active) VALUES "
+                "('MIG065-SAW', 'Пила', 70, 'production', true), "
+                "('MIG065-FG', 'Склад ГП', 90, 'finished_stock', true), "
+                "('MIG065-SHIPPED', 'Отправлено', 110, 'terminal', true)"
+            ))
+            section_ids = dict(
+                (
+                    await conn.execute(
+                        text("SELECT code, id FROM sections WHERE code LIKE 'MIG065-%'")
+                    )
+                ).all()
+            )
+            await conn.execute(text(
+                "INSERT INTO production_routes (name, code, is_active) "
+                "VALUES ('Маршрут 065', 'mig065', true)"
+            ))
+            route_id = (
+                await conn.execute(text("SELECT id FROM production_routes WHERE code = 'mig065'"))
+            ).scalar_one()
+            for sequence, (code, is_final) in enumerate(
+                [("MIG065-SAW", False), ("MIG065-FG", False), ("MIG065-SHIPPED", True)],
+                start=1,
+            ):
+                await conn.execute(
+                    text(
+                        "INSERT INTO route_stages (route_id, sequence, section_id, is_final) "
+                        "VALUES (:route, :seq, :section, :final)"
+                    ),
+                    {
+                        "route": route_id,
+                        "seq": sequence,
+                        "section": section_ids[code],
+                        "final": is_final,
+                    },
+                )
+
+        async def _stages() -> list[tuple]:
+            async with engine.connect() as conn:
+                return list(
+                    (
+                        await conn.execute(
+                            text(
+                                "SELECT rs.sequence, rs.stage_kind, rs.section_id, "
+                                "rs.storage_section_id, rs.is_final "
+                                "FROM route_stages rs WHERE rs.route_id = :route "
+                                "ORDER BY rs.sequence"
+                            ),
+                            {"route": route_id},
+                        )
+                    ).all()
+                )
+
+        before = await _stages()
+        assert [row[1] for row in before] == ["production"] * 3
+
+        _run("upgrade", "head")
+        after = await _stages()
+
+        # Цеховой этап не тронут; склад и терминал — транзит с переехавшим
+        # складом, is_final терминала сохранён (правило #176 не менялось).
+        assert after == [
+            (1, "production", section_ids["MIG065-SAW"], None, False),
+            (2, "transit", None, section_ids["MIG065-FG"], False),
+            (3, "transit", None, section_ids["MIG065-SHIPPED"], True),
+        ]
+
+        # Повторный прогон (stamp назад + upgrade head) — no-op.
+        _run("stamp", "064_plan_position_validation_overridden")
+        _run("upgrade", "head")
+        assert await _stages() == after
+    finally:
+        await engine.dispose()
+        admin_engine = create_async_engine(admin_url, isolation_level="AUTOCOMMIT")
+        async with admin_engine.connect() as conn:
+            await conn.execute(text(f'DROP DATABASE IF EXISTS "{db_name}" WITH (FORCE)'))
+        await admin_engine.dispose()
+
+
+@pytest.mark.asyncio
+async def test_migration_066_backfills_route_signature_idempotently(tmp_path: Path):
+    """#214: существующие маршруты получают сигнатуру по записанным этапам.
+
+    Этапы не пересобираются, а повторный прогон ничего не меняет. Формат
+    совпадает с той, что считает ``app.services.route_signature``.
+    """
+    db_name = f"ktm_mig_{uuid.uuid4().hex[:10]}"
+    admin_url = _test_db_url().rsplit("/", 1)[0] + "/postgres"
+    target_url = _test_db_url().rsplit("/", 1)[0] + f"/{db_name}"
+
+    admin_engine = create_async_engine(admin_url, isolation_level="AUTOCOMMIT")
+    async with admin_engine.connect() as conn:
+        await conn.execute(text(f'CREATE DATABASE "{db_name}"'))
+    await admin_engine.dispose()
+
+    env = _alembic_env(target_url, tmp_path)
+
+    def _run(*args: str) -> None:
+        result = subprocess.run(
+            ["alembic", *args],
+            cwd=BACKEND_DIR,
+            env=env,
+            capture_output=True,
+            text=True,
+            check=False,
+        )
+        assert result.returncode == 0, result.stderr or result.stdout
+
+    engine = create_async_engine(target_url)
+    try:
+        _run("upgrade", "065_route_stage_transit_normalization")
+
+        async with engine.begin() as conn:
+            await conn.execute(text(
+                "INSERT INTO sections (code, name, sort_order, type, is_active) VALUES "
+                "('MIG066-SAW', 'Пила', 70, 'production', true), "
+                "('MIG066-FG', 'Склад ГП', 90, 'finished_stock', true)"
+            ))
+            section_ids = dict(
+                (
+                    await conn.execute(
+                        text("SELECT code, id FROM sections WHERE code LIKE 'MIG066-%'")
+                    )
+                ).all()
+            )
+            await conn.execute(text(
+                "INSERT INTO production_routes (name, code, is_active) "
+                "VALUES ('Маршрут 066', 'mig066', true), ('Без этапов', 'mig066-empty', true)"
+            ))
+            route_id = (
+                await conn.execute(text("SELECT id FROM production_routes WHERE code = 'mig066'"))
+            ).scalar_one()
+            await conn.execute(
+                text(
+                    "INSERT INTO route_stages "
+                    "(route_id, sequence, section_id, storage_section_id, stage_kind, "
+                    "is_significant, transforms_dimensions, is_final) VALUES "
+                    "(:route, 1, :saw, NULL, 'production', true, true, false), "
+                    "(:route, 2, NULL, :fg, 'transit', false, false, true)"
+                ),
+                {
+                    "route": route_id,
+                    "saw": section_ids["MIG066-SAW"],
+                    "fg": section_ids["MIG066-FG"],
+                },
+            )
+            for op_sequence, operation_code in ((1, "SAW_PREP"), (2, "SAW")):
+                await conn.execute(
+                    text(
+                        "INSERT INTO route_operations "
+                        "(route_stage_id, sequence, operation_code, operation_name) "
+                        "SELECT id, :seq, :code, :code FROM route_stages "
+                        "WHERE route_id = :route AND sequence = 1"
+                    ),
+                    {
+                        "route": route_id,
+                        "seq": op_sequence,
+                        "code": operation_code,
+                    },
+                )
+
+        async def _state() -> list[tuple]:
+            async with engine.connect() as conn:
+                signatures = list(
+                    (
+                        await conn.execute(
+                            text(
+                                "SELECT code, route_signature FROM production_routes "
+                                "WHERE code LIKE 'mig066%' ORDER BY code"
+                            )
+                        )
+                    ).all()
+                )
+                stages = list(
+                    (
+                        await conn.execute(
+                            text(
+                                "SELECT sequence, section_id, storage_section_id, "
+                                "is_significant, transforms_dimensions, is_final "
+                                "FROM route_stages WHERE route_id = :route "
+                                "ORDER BY sequence"
+                            ),
+                            {"route": route_id},
+                        )
+                    ).all()
+                )
+            return [signatures, stages]
+
+        _run("upgrade", "head")
+        after = await _state()
+
+        assert after == [
+            [
+                ("mig066", "production:MIG066-SAW:SAW_PREP,SAW:1:1:0>transit:MIG066-FG::0:0:1"),
+                ("mig066-empty", None),
+            ],
+            [
+                (1, section_ids["MIG066-SAW"], None, True, True, False),
+                (2, None, section_ids["MIG066-FG"], False, False, True),
+            ],
+        ]
+
+        # Повторный прогон (stamp назад + upgrade head) — no-op: ни сигнатуры,
+        # ни этапы не меняются.
+        _run("stamp", "065_route_stage_transit_normalization")
+        _run("upgrade", "head")
+        assert await _state() == after
+    finally:
+        await engine.dispose()
+        admin_engine = create_async_engine(admin_url, isolation_level="AUTOCOMMIT")
+        async with admin_engine.connect() as conn:
+            await conn.execute(text(f'DROP DATABASE IF EXISTS "{db_name}" WITH (FORCE)'))
+        await admin_engine.dispose()
+
+
+_MIG066_PREV = "065_route_stage_transit_normalization"
+
+
+async def _seed_mig066_products(conn) -> dict[str, int]:
+    """Артикулы со всеми формами разрыва: 2750-сырьё, 2750-норма, сирота, лист."""
+    fixtures = [
+        # (sku, dimension_state, attributes, [(length_mm, raw_length_mm, is_primary)], norms)
+        (
+            "MIG066-LINEAR",
+            "length",
+            '{"hanger_mode": "manual"}',
+            [(2700, 2750, True)],
+            {"2750": {"auto": None, "manual": 62}},
+        ),
+        (
+            "MIG066-AUTO",
+            "length",
+            '{"hanger_mode": "auto", "perimeter_mm": 100, "mount_width_mm": 50}',
+            [(2700, 2750, True)],
+            {"2750": {"auto": 48, "manual": None}},
+        ),
+        # Пара: 2750 — НОРМАЛЬНАЯ длина артикула (миграция 058), ключ верен.
+        (
+            "MIG066-PAIR",
+            "length",
+            '{"hanger_mode": "manual"}',
+            [(2750, None, True)],
+            {"2750": {"auto": None, "manual": 30}},
+        ),
+        # Норма-сирота: 3000 нет ни как нормальная, ни как сырьевая.
+        (
+            "MIG066-ORPHAN",
+            "length",
+            '{"hanger_mode": "manual"}',
+            [(2700, 2750, True)],
+            {"3000": {"auto": None, "manual": 7}},
+        ),
+        # Коллизия: нормальная длина уже занята — перезапись стёрла бы чужое.
+        (
+            "MIG066-COLLIDE",
+            "length",
+            '{"hanger_mode": "manual"}',
+            [(2700, 2750, True)],
+            {"2700": {"auto": None, "manual": 5}, "2750": {"auto": None, "manual": 9}},
+        ),
+        # Лист: длина одна по определению, запись одна — миграция не трогает.
+        (
+            "MIG066-SHEET",
+            "area",
+            '{"hanger_mode": "manual"}',
+            [],
+            {"2000": {"auto": None, "manual": 5}},
+        ),
+        # Legacy bare-словарь: не per-length, ключ не длина.
+        (
+            "MIG066-BARE",
+            "length",
+            '{"hanger_mode": "manual"}',
+            [(2700, 2750, True)],
+            {"auto": None, "manual": 12},
+        ),
+        # Два legacy-ключа, канонизирующиеся в один («2750» и «2750.0»):
+        # второй не должен затереть перенесённое значение первого.
+        (
+            "MIG066-DUPKEY",
+            "length",
+            '{"hanger_mode": "manual"}',
+            [(2700, 2750, True)],
+            {"2750": {"auto": None, "manual": 11}, "2750.0": {"auto": None, "manual": 13}},
+        ),
+        # Неоднозначное сырьё: 2750 — сырьевая длина сразу двух нормальных
+        # длин артикула. Выбирать одну — догадка, поэтому не трогаем.
+        (
+            "MIG066-AMBIG",
+            "length",
+            '{"hanger_mode": "manual"}',
+            [(2500, 2750, True), (2700, 2750, False)],
+            {"2750": {"auto": None, "manual": 17}},
+        ),
+    ]
+    ids: dict[str, int] = {}
+    for sku, state, attributes, lengths, norms in fixtures:
+        product_id = (
+            await conn.execute(
+                text(
+                    "INSERT INTO products "
+                    "(sku, name, type, unit, is_active, dimension_state, attributes) "
+                    "VALUES (:sku, :sku, 'component', 'pcs', true, :state, "
+                    "CAST(:attributes AS jsonb) || CAST(:norms AS jsonb)) RETURNING id"
+                ),
+                {
+                    "sku": sku,
+                    "state": state,
+                    "attributes": attributes,
+                    "norms": json.dumps({"quantity_per_hanger": norms}),
+                },
+            )
+        ).scalar_one()
+        ids[sku] = product_id
+        for length_mm, raw_length_mm, is_primary in lengths:
+            await conn.execute(
+                text(
+                    "INSERT INTO product_lengths "
+                    "(product_id, length_mm, raw_length_mm, is_primary) "
+                    "VALUES (:product_id, :length_mm, :raw_length_mm, :is_primary)"
+                ),
+                {
+                    "product_id": product_id,
+                    "length_mm": length_mm,
+                    "raw_length_mm": raw_length_mm,
+                    "is_primary": is_primary,
+                },
+            )
+    return ids
+
+
+async def _mig066_norms(conn) -> dict[str, dict]:
+    rows = (
+        await conn.execute(
+            text(
+                "SELECT sku, attributes->'quantity_per_hanger' AS norms "
+                "FROM products WHERE sku LIKE 'MIG066-%' ORDER BY sku"
+            )
+        )
+    ).all()
+    return {row.sku: row.norms for row in rows}
+
+
+async def _mig066_report(conn) -> list[tuple]:
+    return list(
+        (
+            await conn.execute(
+                text(
+                    "SELECT sku, old_key, new_key, status, reason "
+                    "FROM hanger_norm_key_migration ORDER BY sku, old_key"
+                )
+            )
+        ).all()
+    )
+
+
+@pytest.mark.asyncio
+async def test_migration_066_normalizes_hanger_norm_keys_by_article(tmp_path: Path):
+    """#218 (ADR-0047 п. 1): ключ ручной нормы приводится к нормальной длине.
+
+    Правило «на статью», а не «2750 → 2700» массово: у артикула, где 2750 —
+    НОРМАЛЬНАЯ длина (пары), ключ верен и не трогается; ключ, равный чьей-то
+    сырьевой длине, переписывается; несовпавший ни с чем сохраняется и попадает
+    в отчёт как требующий решения оператора. Листы и legacy bare-словарь не
+    трогаются. Идемпотентна и имеет downgrade.
+    """
+    db_name = f"ktm_mig_{uuid.uuid4().hex[:10]}"
+    admin_url = _test_db_url().rsplit("/", 1)[0] + "/postgres"
+    target_url = _test_db_url().rsplit("/", 1)[0] + f"/{db_name}"
+
+    admin_engine = create_async_engine(admin_url, isolation_level="AUTOCOMMIT")
+    async with admin_engine.connect() as conn:
+        await conn.execute(text(f'CREATE DATABASE "{db_name}"'))
+    await admin_engine.dispose()
+
+    env = _alembic_env(target_url, tmp_path)
+    engine = create_async_engine(target_url)
+
+    def _run(*args: str) -> None:
+        result = subprocess.run(
+            ["alembic", *args],
+            cwd=BACKEND_DIR,
+            env=env,
+            capture_output=True,
+            text=True,
+            check=False,
+        )
+        assert result.returncode == 0, result.stderr or result.stdout
+
+    try:
+        _run("upgrade", _MIG066_PREV)
+        async with engine.begin() as conn:
+            await _seed_mig066_products(conn)
+
+        _run("upgrade", "head")
+        async with engine.connect() as conn:
+            norms = await _mig066_norms(conn)
+            report = await _mig066_report(conn)
+
+        # Ключ, равный сырьевой длине артикула, → нормальная длина этого артикула.
+        assert norms["MIG066-LINEAR"] == {"2700": {"auto": None, "manual": 62}}
+        # Авто-режим — тот же разрыв, те же 43 артикула: ключ тоже нормализуется.
+        assert norms["MIG066-AUTO"] == {"2700": {"auto": 48, "manual": None}}
+        # 2750 как НОРМАЛЬНАЯ длина (пара) — не трогаем.
+        assert norms["MIG066-PAIR"] == {"2750": {"auto": None, "manual": 30}}
+        # Норма-сирота сохранена как есть (решение оператора, не наша).
+        assert norms["MIG066-ORPHAN"] == {"3000": {"auto": None, "manual": 7}}
+        # Коллизия: обе записи на месте, ничего не стёрто.
+        assert norms["MIG066-COLLIDE"] == {
+            "2700": {"auto": None, "manual": 5},
+            "2750": {"auto": None, "manual": 9},
+        }
+        # Лист: запись по длине одна, фолбэк на неё — единственный путь (#126).
+        assert norms["MIG066-SHEET"] == {"2000": {"auto": None, "manual": 5}}
+        # Legacy bare-словарь — не per-length, миграция его не читает.
+        assert norms["MIG066-BARE"] == {"auto": None, "manual": 12}
+        # Дубль ключа: перенесённое значение первого ключа не затирает второе.
+        assert norms["MIG066-DUPKEY"] == {
+            "2700": {"auto": None, "manual": 11},
+            "2750.0": {"auto": None, "manual": 13},
+        }
+        # Неоднозначное сырьё: норма одна, а сырьевая длина принадлежит двум
+        # нормальным — выбирать длину без решения оператора нельзя.
+        assert norms["MIG066-AMBIG"] == {"2750": {"auto": None, "manual": 17}}
+
+        # Отчёт: каждый изменённый артикул со старым и новым ключом + отдельно
+        # неразрешённые.
+        assert report == [
+            ("MIG066-AMBIG", "2750", None, "unresolved", "ambiguous_raw_length"),
+            ("MIG066-AUTO", "2750", "2700", "rewritten", None),
+            ("MIG066-COLLIDE", "2750", None, "unresolved", "target_key_exists"),
+            ("MIG066-DUPKEY", "2750", "2700", "rewritten", None),
+            ("MIG066-DUPKEY", "2750.0", None, "unresolved", "target_key_exists"),
+            ("MIG066-LINEAR", "2750", "2700", "rewritten", None),
+            ("MIG066-ORPHAN", "3000", None, "unresolved", "not_in_registry"),
+        ]
+
+        # Идемпотентность: повторный прогон не меняет ни данные, ни отчёт.
+        _run("stamp", _MIG066_PREV)
+        _run("upgrade", "head")
+        async with engine.connect() as conn:
+            assert await _mig066_norms(conn) == norms
+            assert await _mig066_report(conn) == report
+
+        # Downgrade возвращает исходные ключи и убирает отчёт.
+        _run("downgrade", _MIG066_PREV)
+        async with engine.connect() as conn:
+            reverted = await _mig066_norms(conn)
+            report_table_count = (
+                await conn.execute(
+                    text(
+                        "SELECT count(*) FROM information_schema.tables "
+                        "WHERE table_schema = 'public' AND table_name = 'hanger_norm_key_migration'"
+                    )
+                )
+            ).scalar_one()
+        assert reverted["MIG066-LINEAR"] == {"2750": {"auto": None, "manual": 62}}
+        assert reverted["MIG066-AUTO"] == {"2750": {"auto": 48, "manual": None}}
+        assert reverted["MIG066-COLLIDE"] == {
+            "2700": {"auto": None, "manual": 5},
+            "2750": {"auto": None, "manual": 9},
+        }
+        assert reverted["MIG066-DUPKEY"] == {
+            "2750": {"auto": None, "manual": 11},
+            "2750.0": {"auto": None, "manual": 13},
+        }
+        assert report_table_count == 0
+    finally:
+        await engine.dispose()
+        admin_engine = create_async_engine(admin_url, isolation_level="AUTOCOMMIT")
+        async with admin_engine.connect() as conn:
+            await conn.execute(text(f'DROP DATABASE IF EXISTS "{db_name}" WITH (FORCE)'))
+        await admin_engine.dispose()
+
+
+_MIG068_PREV = "067_hanger_norm_key_normalization"
+
+
+async def _seed_mig068_routes(conn) -> dict[str, int]:
+    """Маршруты в том виде, в каком их оставил импорт ДО #221.
+
+    Запись брала значимость ПЕРВОГО шага группы: у ``SAW_PREP`` (незначимая)
+    она давала ``is_significant = false``, тогда как сборка по тому же шагу
+    говорила «значим» (в группе есть значимая ``SAW``). Такой этап —
+    ровно тот случай, который чинит #221.
+    """
+    await conn.execute(text(
+        "INSERT INTO sections (code, name, sort_order, type, is_active) VALUES "
+        "('MIG068-SAW', 'Пила', 70, 'production', true), "
+        "('MIG068-PACK', 'Упаковка', 80, 'production', true), "
+        "('MIG068-FG', 'Склад ГП', 90, 'finished_stock', true)"
+    ))
+    sections = dict(
+        (await conn.execute(text("SELECT code, id FROM sections WHERE code LIKE 'MIG068-%'"))).all()
+    )
+    await conn.execute(
+        text(
+            "INSERT INTO section_operations "
+            "(section_id, operation_code, operation_name, is_significant, "
+            "transforms_dimensions, group_code, group_name, sort_order) VALUES "
+            "(:saw, 'SAW_PREP', 'Разметка', false, false, 'SAW_PREP_GRP', 'Разметка', 0), "
+            "(:saw, 'SAW', 'Распил', true, true, 'SAW', 'Пиление', 1), "
+            "(:pack, 'PACK_STRETCH', 'Стрейч', false, false, 'PACK', 'Упаковка', 1)"
+        ),
+        {"saw": sections["MIG068-SAW"], "pack": sections["MIG068-PACK"]},
+    )
+    # Маршрут без этапов — сигнатуры не получает и не должен её терять.
+    await conn.execute(
+        text(
+            "INSERT INTO production_routes (name, code, is_active) VALUES "
+            "('Без этапов', 'mig068-empty', true), "
+            "('Динамический', 'mig068-dynamic', true), "
+            "('Обычный участок', 'mig068-plain', true), "
+            "('Импорт после #214', 'mig068-import', true), "
+            "('Импорт до #214', 'mig068-legacy', true)"
+        )
+    )
+    routes = dict(
+        (
+            await conn.execute(
+                text("SELECT code, id FROM production_routes WHERE code LIKE 'mig068-%'")
+            )
+        ).all()
+    )
+
+    # Динамический маршрут завода: операция этапа разрешается в рантайме,
+    # код пустой — справочник не может ответить, значимость остаётся прежней.
+    await conn.execute(
+        text(
+            "INSERT INTO route_stages "
+            "(route_id, sequence, section_id, stage_kind, is_significant, is_final) "
+            "VALUES (:route, 1, :saw, 'production', true, true)"
+        ),
+        {"route": routes["mig068-dynamic"], "saw": sections["MIG068-SAW"]},
+    )
+    dynamic_stage = (
+        await conn.execute(
+            text("SELECT id FROM route_stages WHERE route_id = :route"),
+            {"route": routes["mig068-dynamic"]},
+        )
+    ).scalar_one()
+    await conn.execute(
+        text(
+            "INSERT INTO route_operations "
+            "(route_stage_id, sequence, operation_code, operation_name) "
+            "VALUES (:stage, 1, NULL, 'Пила')"
+        ),
+        {"stage": dynamic_stage},
+    )
+
+    # Обычный участок с одной значимой операцией: эталон регресса.
+    await conn.execute(
+        text(
+            "INSERT INTO route_stages "
+            "(route_id, sequence, section_id, stage_kind, is_significant, "
+            "transforms_dimensions, is_final) "
+            "VALUES (:route, 1, :saw, 'production', true, true, true)"
+        ),
+        {"route": routes["mig068-plain"], "saw": sections["MIG068-SAW"]},
+    )
+    plain_stage = (
+        await conn.execute(
+            text("SELECT id FROM route_stages WHERE route_id = :route"),
+            {"route": routes["mig068-plain"]},
+        )
+    ).scalar_one()
+    await conn.execute(
+        text(
+            "INSERT INTO route_operations "
+            "(route_stage_id, sequence, operation_code, operation_name) "
+            "VALUES (:stage, 1, 'SAW', 'Распил')"
+        ),
+        {"stage": plain_stage},
+    )
+
+    for code in ("mig068-import", "mig068-legacy"):
+        route = routes[code]
+        await conn.execute(
+            text(
+                "INSERT INTO route_stages "
+                "(route_id, sequence, section_id, storage_section_id, stage_kind, "
+                "is_significant, transforms_dimensions, is_final) VALUES "
+                "(:route, 1, NULL, :fg, 'transit', false, false, false), "
+                "(:route, 2, :saw, NULL, 'production', false, true, false), "
+                "(:route, 3, NULL, :fg, 'transit', false, false, true)"
+            ),
+            {"route": route, "saw": sections["MIG068-SAW"], "fg": sections["MIG068-FG"]},
+        )
+        saw_stage = (
+            await conn.execute(
+                text("SELECT id FROM route_stages WHERE route_id = :route AND sequence = 2"),
+                {"route": route},
+            )
+        ).scalar_one()
+        for sequence, code_ in ((1, "SAW_PREP"), (2, "SAW")):
+            await conn.execute(
+                text(
+                    "INSERT INTO route_operations "
+                    "(route_stage_id, sequence, operation_code, operation_name) "
+                    "VALUES (:stage, :seq, :code, :code)"
+                ),
+                {"stage": saw_stage, "seq": sequence, "code": code_},
+            )
+
+    # Импорт ПОСЛЕ #214 уже писал сигнатуру из входа сборки — по любому шагу
+    # группы, то есть «1». Эта строка обязана пережить миграции без изменений.
+    await conn.execute(
+        text("UPDATE production_routes SET route_signature = :sig WHERE code = 'mig068-import'"),
+        {
+            "sig": (
+                "transit:MIG068-FG::0:0:0"
+                ">production:MIG068-SAW:SAW_PREP,SAW:1:1:0"
+                ">transit:MIG068-FG::0:0:1"
+            )
+        },
+    )
+
+    # Маршрут до #214: бэкфилл 066 посчитал ему сигнатуру по записанным
+    # этапам, то есть по старому правилу записи («первый шаг»).
+    await conn.execute(
+        text("UPDATE production_routes SET route_signature = :sig WHERE code = 'mig068-legacy'"),
+        {
+            "sig": (
+                "transit:MIG068-FG::0:0:0"
+                ">production:MIG068-SAW:SAW_PREP,SAW:0:1:0"
+                ">transit:MIG068-FG::0:0:1"
+            )
+        },
+    )
+    return sections
+
+
+async def _mig068_state(conn) -> list[tuple]:
+    stages = list(
+        (
+            await conn.execute(
+                text(
+                    "SELECT r.code, rs.sequence, rs.is_significant "
+                    "FROM route_stages rs JOIN production_routes r ON r.id = rs.route_id "
+                    "WHERE r.code LIKE 'mig068%' ORDER BY r.code, rs.sequence"
+                )
+            )
+        ).all()
+    )
+    signatures = list(
+        (
+            await conn.execute(
+                text(
+                    "SELECT code, route_signature FROM production_routes "
+                    "WHERE code LIKE 'mig068%' ORDER BY code"
+                )
+            )
+        ).all()
+    )
+    return [stages, signatures]
+
+
+@pytest.mark.asyncio
+async def test_migration_068_recals_significance_then_signature(tmp_path: Path):
+    """#221: значимость этапа пересчитывается из справочника, сигнатуры — после.
+
+    Ревизия 068 восстанавливает ``is_significant`` этапа по справочнику
+    операций участка (значим, если значима хотя бы одна операция этапа), 069
+    пересчитывает сигнатуры маршрутов по уже исправленным этапам. Порядок
+    обязателен: наоборот сигнатуры остались бы посчитаны по прежним данным.
+    """
+    db_name = f"ktm_mig_{uuid.uuid4().hex[:10]}"
+    admin_url = _test_db_url().rsplit("/", 1)[0] + "/postgres"
+    target_url = _test_db_url().rsplit("/", 1)[0] + f"/{db_name}"
+
+    admin_engine = create_async_engine(admin_url, isolation_level="AUTOCOMMIT")
+    async with admin_engine.connect() as conn:
+        await conn.execute(text(f'CREATE DATABASE "{db_name}"'))
+    await admin_engine.dispose()
+
+    env = _alembic_env(target_url, tmp_path)
+    engine = create_async_engine(target_url)
+
+    def _run(*args: str) -> None:
+        result = subprocess.run(
+            ["alembic", *args],
+            cwd=BACKEND_DIR,
+            env=env,
+            capture_output=True,
+            text=True,
+            check=False,
+        )
+        assert result.returncode == 0, result.stderr or result.stdout
+
+    build_input_signature = (
+        "transit:MIG068-FG::0:0:0"
+        ">production:MIG068-SAW:SAW_PREP,SAW:1:1:0"
+        ">transit:MIG068-FG::0:0:1"
+    )
+    legacy_stored_signature = build_input_signature.replace(
+        "SAW_PREP,SAW:1:1:0", "SAW_PREP,SAW:0:1:0"
+    )
+
+    try:
+        _run("upgrade", _MIG068_PREV)
+        async with engine.begin() as conn:
+            await _seed_mig068_routes(conn)
+
+        async with engine.connect() as conn:
+            before = await _mig068_state(conn)
+        # Фикстура расходится: запись дала этапу «0», сборка — «1».
+        assert ("mig068-import", 2, False) in before[0]
+        assert ("mig068-import", build_input_signature) in before[1]
+        assert ("mig068-legacy", legacy_stored_signature) in before[1]
+
+        _run("upgrade", "head")
+        async with engine.connect() as conn:
+            after = await _mig068_state(conn)
+
+        assert after == [
+            [
+                ("mig068-dynamic", 1, True),
+                ("mig068-import", 1, False),
+                ("mig068-import", 2, True),
+                ("mig068-import", 3, False),
+                ("mig068-legacy", 1, False),
+                ("mig068-legacy", 2, True),
+                ("mig068-legacy", 3, False),
+                ("mig068-plain", 1, True),
+            ],
+            [
+                ("mig068-dynamic", "production:MIG068-SAW::1:0:1"),
+                # Маршрут без этапов сигнатуры не получает.
+                ("mig068-empty", None),
+                # Главная проверка: маршрут, созданный импортом ДО миграций, —
+                # сохранённая сигнатура не изменилась, то есть расхождения,
+                # которого не было, не появилось.
+                ("mig068-import", build_input_signature),
+                # Маршрут до #214: сигнатура была посчитана по этапам бэкфиллом
+                # 066 по старому правилу и теперь догнала вход сборки.
+                ("mig068-legacy", build_input_signature),
+                # Регресс: обычный участок с одной значимой операцией — как было.
+                ("mig068-plain", "production:MIG068-SAW:SAW:1:1:1"),
+            ],
+        ]
+
+        # Идемпотентность: повторный прогон (stamp назад + upgrade head).
+        _run("stamp", _MIG068_PREV)
+        _run("upgrade", "head")
+        async with engine.connect() as conn:
+            assert await _mig068_state(conn) == after
+
+        # Downgrade возвращает прежние значения и убирает отчёты.
+        _run("downgrade", _MIG068_PREV)
+        async with engine.connect() as conn:
+            reverted = await _mig068_state(conn)
+            leftover = (
+                await conn.execute(
+                    text(
+                        "SELECT count(*) FROM information_schema.tables "
+                        "WHERE table_schema = 'public' AND table_name IN "
+                        "('route_stage_significance_migration', 'route_signature_migration')"
+                    )
+                )
+            ).scalar_one()
+        assert reverted == before
+        assert leftover == 0
     finally:
         await engine.dispose()
         admin_engine = create_async_engine(admin_url, isolation_level="AUTOCOMMIT")

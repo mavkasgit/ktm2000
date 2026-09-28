@@ -30,6 +30,13 @@ class ProductionRoute(Base):
     sort_order: Mapped[int] = mapped_column(Integer, nullable=False, default=0, server_default=text("0"))
     import_template_id: Mapped[int | None] = mapped_column(ForeignKey("import_templates.id"), nullable=True)
 
+    # Сигнатура маршрута (#214, ADR-0045): упорядоченный набор шагов с
+    # признаками этапа. Имя — подпись для человека; тождество маршрута
+    # задаёт сигнатура. Считается из входа сборки (`BuiltRoute`), а у
+    # маршрутов, созданных до #214, — по записанным этапам: входа сборки у
+    # них нет. ``NULL`` — сигнатуры нет (маршрут без этапов).
+    route_signature: Mapped[str | None] = mapped_column(Text, nullable=True)
+
     stages: Mapped[list["RouteStage"]] = relationship("RouteStage", back_populates="route", lazy="selectin")
     rules: Mapped[list["RouteMatchingRule"]] = relationship("RouteMatchingRule", back_populates="route", lazy="selectin")
 

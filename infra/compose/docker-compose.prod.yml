@@ -4,6 +4,11 @@ services:
   postgres:
     image: postgres:15-alpine
     container_name: ktm2000-postgres-prod
+    logging:
+      driver: json-file
+      options:
+        max-size: "20m"
+        max-file: "3"
     environment:
       POSTGRES_USER: ${POSTGRES_USER:-ktm2000_user}
       POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-ktm2000_prod_pass}
@@ -25,6 +30,11 @@ services:
       context: ../../backend
       dockerfile: Dockerfile
     container_name: ktm2000-backend-prod
+    logging:
+      driver: json-file
+      options:
+        max-size: "20m"
+        max-file: "3"
     env_file:
       - ../../.env.prod
       # Note: env_file does NOT resolve ${VAR} references.
@@ -80,6 +90,11 @@ services:
       context: ../../frontend
       dockerfile: Dockerfile
     container_name: ktm2000-frontend-prod
+    logging:
+      driver: json-file
+      options:
+        max-size: "20m"
+        max-file: "3"
     expose:
       - "80"
     depends_on:
@@ -89,6 +104,11 @@ services:
   nginx:
     image: nginx:alpine
     container_name: ktm2000-nginx-prod
+    logging:
+      driver: json-file
+      options:
+        max-size: "20m"
+        max-file: "3"
     ports:
       - "8082:80"
     volumes:
@@ -105,6 +125,11 @@ services:
     profiles: ["tunnel"]
     image: cloudflare/cloudflared:latest
     container_name: ktm2000-cloudflared-prod
+    logging:
+      driver: json-file
+      options:
+        max-size: "20m"
+        max-file: "3"
     network_mode: "service:nginx"
     depends_on:
       - nginx

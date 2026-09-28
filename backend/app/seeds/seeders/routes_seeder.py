@@ -14,6 +14,7 @@ from app.services.route_storage_classifier import (
     STAGE_KIND_PRODUCTION,
     STAGE_KIND_TRANSIT,
 )
+from app.services.route_signature import refresh_route_signature
 
 # Operations that affect plan grouping (technological)
 SIGNIFICANT_OPS = {
@@ -225,7 +226,8 @@ async def seed_routes(
 
             stage_seq += 1
 
-        await db.flush()
+        # Сигнатура маршрута (#214) — по этапам, которые сид только что записал.
+        await refresh_route_signature(db, route)
         result[template["code"]] = route
 
     return result
@@ -332,6 +334,8 @@ async def seed_production_routes_from_profiles(
                 )
                 db.add(op)
 
+        # Сигнатура маршрута (#214) — по этапам, записанным выше.
+        await refresh_route_signature(db, route)
         created_count += 1
 
     await db.flush()

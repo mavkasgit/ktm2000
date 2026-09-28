@@ -20,10 +20,13 @@ npm run test:pytest            # Тесты backend (параллельно, д�
 npm run test:pytest:full       # Полный прогон в один поток
 npm run test:pytest:mon        # Только изменённые тесты
 npm run test:pytest:lf         # Только упавшие тесты
+npm run test:e2e              # Playwright на ОТДЕЛЬНОМ стенде: своя БД ktm2000_e2e (Postgres :5441), порты 8013/5173
 npm run test:db:cleanup        # Уборка осиротевших тестовых БД (TTL 24h)
 ```
 
 Порты dev: Postgres `5440`, backend `8012`, frontend `5172`.
+Стенд E2E (`npm run test:e2e`) не делит их: Postgres `5441`, backend `8013`,
+frontend `5173`, БД `ktm2000_e2e` — конфиг в `.env.e2e`.
 
 ### Если dev-стек не поднимается или «падает сам»
 
@@ -97,6 +100,28 @@ npm run test:db:cleanup        # Уборка осиротевших тесто�
 | [`frontend/AGENTS.md`](frontend/AGENTS.md) | FSD, Vitest |
 | [`frontend/e2e/AGENTS.md`](frontend/e2e/AGENTS.md) | **Канон E2E** (Playwright) |
 | [`docs/agent-registry.md`](docs/agent-registry.md) | Порты, MCP-матрица |
+
+## Логи контейнеров
+
+Каждый сервис в `infra/compose/docker-compose.prod.yml` обязан объявлять потолок лога:
+
+```yaml
+logging:
+  driver: json-file
+  options:
+    max-size: "20m"
+    max-file: "3"
+```
+
+Потолок — около 60 МБ на контейнер: без него json-лог растёт неограниченно. Новый сервис
+в compose — сразу с этим блоком.
+
+Прод ktm2000 крутится на рабочей машине, где хостового logrotate нет, — здесь блок
+в compose единственная защита. На прод-сервере дополнительно стоит
+`/etc/logrotate.d/docker-containers` (`size 200M`, `rotate 3`, `compress`, `copytruncate`).
+
+`docker logs` отдаёт и ротированные файлы, поэтому его вывод больше текущего файла —
+это не протечка потолка.
 
 ## Agent skills
 

@@ -95,14 +95,90 @@ export async function discardProductionPlanChangeSet(productionPlanId: number, c
   return data;
 }
 
+export type ProductionPlanDeletePreview = {
+  plan_id: number;
+  plan_no: string;
+  positions: number;
+  work_tasks: number;
+  transfers: number;
+  ledger_entries: number;
+  active_actions: number;
+  used_positions: Array<{
+    position_id: number;
+    source_sku: string;
+    status: string;
+    task_count: number;
+    action_count: number;
+  }>;
+  cancellations: {
+    positions: number;
+    work_tasks: number;
+    transfers: number;
+    defects: number;
+    rework_tasks: number;
+    daily_plan_items: number;
+  };
+  stock_effects: Array<{
+    transaction_id: number;
+    action_id: number;
+    product_id: number;
+    product_sku: string;
+    reason: string;
+    quantity: string;
+    dimensions: Record<string, unknown> | null;
+    from_location: string | null;
+    to_location: string | null;
+    effect: "reverse" | "return";
+  }>;
+  blockers: Array<{
+    action_id: number;
+    kind: string;
+    detail: string;
+    deficit?: string | null;
+  }>;
+};
+
+export type DeleteProductionPlanInput = {
+  confirmation: string;
+  reason: string;
+};
+
+export type DeleteProductionPlanResult = {
+  deleted: true;
+  plan_id: number;
+  plan_no: string;
+  reversed_action_ids: number[];
+  preserved_ledger_entries: number;
+  history_action_id: number;
+};
+
+export async function getProductionPlanDeletePreview(productionPlanId: number) {
+  const { data } = await apiClient.get<ProductionPlanDeletePreview>(
+    `/production-plans/${productionPlanId}/delete-preview`,
+  );
+  return data;
+}
+
+export async function deleteProductionPlan(
+  productionPlanId: number,
+  payload: DeleteProductionPlanInput,
+) {
+  const { data } = await apiClient.delete<DeleteProductionPlanResult>(
+    `/production-plans/${productionPlanId}`,
+    { data: payload },
+  );
+  return data;
+}
+
 export async function approveProductionPlanPosition(
   productionPlanId: number,
   positionId: number,
-  options?: { force?: boolean },
+  options?: { force?: boolean; reason?: string },
 ) {
   const { data } = await apiClient.post<ApprovePositionResponse>(
     `/production-plans/${productionPlanId}/positions/${positionId}/approve`,
-    undefined,
+    // Причина — в теле: текст оператора не должен попадать в URL.
+    options?.force ? { reason: options.reason ?? null } : undefined,
     {
       params: options?.force ? { force: true } : undefined,
     },
@@ -323,6 +399,25 @@ export type RouteCheckResponse = {
   } | null;
   match: boolean;
   issues: string[];
+  route_signature: RouteSignatureCheck;
+};
+
+export type RouteSignatureStep = {
+  stage_kind: string;
+  section_code: string;
+  operation_codes: string[];
+  is_significant: boolean;
+  transforms_dimensions: boolean;
+  is_final: boolean;
+};
+
+/** Сигнатура маршрута позиции: ожидаемая, фактическая и вердикт (#214). */
+export type RouteSignatureCheck = {
+  verdict: "match" | "mismatch" | "unknown";
+  expected: string | null;
+  expected_steps: RouteSignatureStep[];
+  actual: string | null;
+  actual_steps: RouteSignatureStep[];
 };
 
 export async function routeCheck(planId: number, positionId: number) {
@@ -852,10 +947,11 @@ export async function bulkApprovePositions(
   planId: number,
   ids: number[],
   force = false,
+  reason?: string,
 ): Promise<BulkActionResponse> {
   const { data } = await apiClient.post<BulkActionResponse>(
     `/production-plans/${planId}/positions/bulk-approve`,
-    { ids, force },
+    { ids, force, reason },
   );
   return data;
 }

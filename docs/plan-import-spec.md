@@ -38,7 +38,9 @@ apply ≤ 1 с ✓ (факт ≤ 0.35 с).
 Errors (блокируют, `invalid`): `product_not_found`, `product_inactive`,
 `product_pair_not_found`, `hanger_calc_zero`, `no_route_candidate` / `selection.error`,
 `active_route_has_no_steps`, `route_contains_inactive_section`,
-`duplicate_sku_due_date`, `normal_length_not_found`.
+`duplicate_sku_due_date`, `normal_length_not_found`, `route_signature_conflict`
+(#215, ADR-0045: маршрут, найденный по имени, с другой сигнатурой — другой
+маршрут; строка остаётся невалидной, подстановки нет).
 
 Warnings (не блокируют): `paired_hanger_adjusted`,
 `hanger_quantity_not_set`, `input_dimensions_unresolved`, `product_name_missing`,
@@ -135,9 +137,13 @@ Warnings (не блокируют): `paired_hanger_adjusted`,
   снимке строки импорта и не пересчитывается после изменения карточки.
 - `length_model_version = 1` переводит существующий план в режим только для
   чтения. Чтение списка, превью, позиций, истории и файлов остаётся доступным.
-  Импорт, apply/rollback, approve/cancel/restore/delete, изменение количества,
+  Импорт, apply, approve/cancel/restore/delete позиции, изменение количества,
   назначение маршрута, выпуск и прямые shopfloor-операции возвращают
   `400 {"detail": "legacy_plan_read_only"}`.
+- Исключение составляют cleanup-операции импорта: откат applied change set и
+  удаление батча разрешены, потому что не создают новую размерную геометрию.
+  Существующие защиты сохраняются: released-позиция блокирует откат (400), а
+  released/downstream-блокеры полного удаления возвращают прежний 409.
 - Для продолжения работы переимпортировать исходный Excel как новый план после
   проверки реестра нормальных длин. Не переносить `length_model_version` вручную
   и не править план SQL-запросом: геометрия и N должны снова пройти штатный импорт.

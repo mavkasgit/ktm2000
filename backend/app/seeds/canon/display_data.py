@@ -48,6 +48,8 @@ VALIDATION_LABELS = {
     "valid": "Пройдена",
     "invalid": "Ошибка",
     "pending": "Ожидает",
+    # Валидация перекрыта форс-аппрувом с причиной (#212, ADR-0048).
+    "overridden": "Перекрыта",
 }
 
 TASK_STATUS_LABELS = {

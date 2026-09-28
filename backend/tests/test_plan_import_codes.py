@@ -11,6 +11,7 @@ import ast
 from pathlib import Path
 
 from app.models.production_plan import PlanChangeItemStatus
+from app.seeds.plant_policies import VALIDATION_ERROR_MESSAGES
 from app.services.plan_import_service import (
     PLAN_IMPORT_ERROR_CODES,
     PLAN_IMPORT_WARNING_CODES,
@@ -18,6 +19,7 @@ from app.services.plan_import_service import (
     classify_plan_import_code,
     plan_import_row_status,
 )
+
 
 # Спека docs/plan-import-spec.md §3 — эталон, дублирует каталог намеренно:
 # дрейф каталога мимо спеки должен ломать тест.
@@ -33,6 +35,7 @@ SPEC_ERROR_CODES = frozenset(
         "route_contains_inactive_section",
         "duplicate_sku_due_date",
         "normal_length_not_found",
+        "route_signature_conflict",
     }
 )
 SPEC_WARNING_BASES = frozenset(
@@ -62,8 +65,17 @@ ALLOWED_DYNAMIC_ERRORS = {"selection.error"}
 def test_error_catalog_matches_spec():
     assert PLAN_IMPORT_ERROR_CODES == SPEC_ERROR_CODES
 
+
 def test_warning_catalog_matches_spec():
     assert PLAN_IMPORT_WARNING_CODES | frozenset(PLAN_IMPORT_WARNING_PREFIXES) == SPEC_WARNING_BASES
+
+
+def test_every_error_code_has_operator_text():
+    """У каждого кода ошибки строки есть текст в каноне подписей: иначе
+    оператор в колонке «Ошибки» и в деталях строки увидит сам код, а текст
+    до фронта не доедет — лейблы генерируются из этого канона."""
+    without_text = sorted(code for code in SPEC_ERROR_CODES if not VALIDATION_ERROR_MESSAGES.get(code))
+    assert without_text == []
 
 
 def test_classify_errors():

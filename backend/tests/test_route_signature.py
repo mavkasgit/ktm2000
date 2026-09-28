@@ -1,0 +1,649 @@
+"""Сигнатура маршрута (#214, ADR-0045).
+
+Сигнатура — упорядоченный набор шагов с признаками этапа; она, а не имя,
+делает два маршрута одним. Считается из ВХОДА сборки (профиль минус
+исключённые участки плюс разрешённые операции), а не из записанных этапов:
+сверка, читающая обе стороны из базы, сравнивает базу саму с собой.
+"""
+from __future__ import annotations
+
+from datetime import UTC, date, datetime
+from decimal import Decimal
+
+import pytest
+from sqlalchemy import func, select
+from sqlalchemy.orm import selectinload
+
+from app.models.imports import ImportBatch, ImportBatchMode, ImportBatchStatus, ImportFile
+from app.models.product import Product, ProductType
+from app.models.production_plan import (
+    PlanChangeItemStatus,
+    PlanChangeSet,
+    PlanPosition,
+    PlanPositionRouteOrigin,
+    PlanPositionStatus,
+    PlanPositionValidationStatus,
+    PlanSourceType,
+    ProductionPlan,
+    ProductionPlanStatus,
+)
+
+from app.models.route import (
+    ProductionRoute,
+    RouteOperation,
+    RouteRuleProfile,
+    RouteStage,
+    SectionOperation,
+)
+from app.models.section import Section
+from app.seeds.run_seed import run_full_seed
+from app.services.plan_import_service import _make_change_items
+from app.services.production_plan_service import apply_change_set
+from app.services.route_builder import build_route_from_profile
+from app.services.route_signature import (
+    encode_signature,
+    signature_for_route_stages,
+    signature_steps_from_stages,
+)
+
+
+async def _signature_steps(session, route_id: int) -> list:
+    stages = (
+        await session.execute(
+            select(RouteStage)
+            .where(RouteStage.route_id == route_id)
+            .options(
+                selectinload(RouteStage.operations),
+                selectinload(RouteStage.section),
+                selectinload(RouteStage.storage_section),
+            )
+            .order_by(RouteStage.sequence)
+        )
+    ).scalars().all()
+    return signature_steps_from_stages(stages)
+
+
+PROFILE_SECTIONS = ["RAW_STOCK", "SAWING", "PACKING", "FINISHED_STOCK"]
+
+
+async def _seed_sections(session) -> None:
+    """Склад сырья → пила → упаковка → склад готовой продукции."""
+    for code, name, sort_order, section_type in (
+        ("RAW_STOCK", "Склад сырья", 10, "raw_stock"),
+        ("SAWING", "Пила", 20, "production"),
+        ("PACKING", "Упаковка", 30, "production"),
+        ("FINISHED_STOCK", "Склад готовой продукции", 40, "finished_stock"),
+    ):
+        session.add(Section(code=code, name=name, sort_order=sort_order, type=section_type, is_active=True))
+    await session.flush()
+
+    sawing = await session.scalar(select(Section).where(Section.code == "SAWING"))
+    session.add(SectionOperation(
+        section_id=sawing.id,
+        operation_code="SAW",
+        operation_name="Распил",
+        group_code="SAW",
+        group_name="Пиление",
+        is_significant=True,
+        transforms_dimensions=True,
+        sort_order=1,
+    ))
+    packing = await session.scalar(select(Section).where(Section.code == "PACKING"))
+    session.add(SectionOperation(
+        section_id=packing.id,
+        operation_code="PACK_STRETCH",
+        operation_name="Стрейч",
+        group_code="PACK",
+        group_name="Упаковка",
+        is_significant=False,
+        sort_order=1,
+    ))
+    await session.commit()
+
+
+async def _make_profile(session, *, code: str = "sig_profile", sections=None) -> RouteRuleProfile:
+    profile = RouteRuleProfile(
+        code=code,
+        name="Профиль подписи",
+        is_active=True,
+        priority=1000,
+        route_sections=list(sections or PROFILE_SECTIONS),
+    )
+    session.add(profile)
+    await session.commit()
+    return profile
+
+
+@pytest.mark.asyncio
+async def test_built_route_carries_signature_of_its_steps(session) -> None:
+    """Сборка из профиля даёт сигнатуру: склад — транзитом, признаки этапа — в ней."""
+    await _seed_sections(session)
+    profile = await _make_profile(session)
+
+    built = await build_route_from_profile(session, profile, {"output_kind": "ГП"})
+
+    assert built.error is None
+    assert built.signature == (
+        "transit:RAW_STOCK::0:0:0"
+        ">production:SAWING:SAW:1:1:0"
+        ">production:PACKING:PACK_STRETCH:0:0:0"
+        ">transit:FINISHED_STOCK::0:0:1"
+    )
+
+
+class ParsedRow:
+    """Минимальный образ разобранной строки плана (как в тестах импорта)."""
+
+    def __init__(self, sku: str, name: str, quantity: Decimal, payload: dict):
+        self.source_sku = sku
+        self.source_name = name
+        self.quantity = quantity
+        self.payload = payload
+        self.source_row_number = 1
+        self.source_row_numbers = [1]
+        self.source_ref = None
+        self.source_fingerprint = f"{sku}_{name}_{quantity}"
+        self.source_row_hash = f"hash_{sku}"
+        self.input_quantity = None
+        self.input_dimensions = None
+        self.outputs: list = []
+        self.warnings: list = []
+        self.errors: list = []
+
+
+@pytest.mark.asyncio
+async def test_import_writes_stage_significance_by_any_step_of_group(session) -> None:
+    """Запись и сборка считают значимость этапа одинаково: этап значим, если
+    значим хотя бы один шаг группы (#221).
+
+    Участок с двумя группами, где первая незначимая, а вторая значимая, — и
+    есть тот случай, где «первый шаг» и «любой шаг» расходятся. Импорт
+    обязан записать ``is_significant = 1`` именно по этому признаку, и тогда
+    сохранённая сигнатура совпадает с сигнатурой по записанным этапам.
+    """
+    await _seed_sections(session)
+    sawing = await session.scalar(select(Section).where(Section.code == "SAWING"))
+    session.add(SectionOperation(
+        section_id=sawing.id,
+        operation_code="SAW_PREP",
+        operation_name="Разметка",
+        group_code="SAW_PREP_GRP",
+        group_name="Разметка",
+        is_significant=False,
+        sort_order=0,
+    ))
+    await session.commit()
+    profile = await _make_profile(session)
+    product = Product(sku="FG-SIG", name="Артикул подписи", type=ProductType.finished_good, unit="pcs")
+    session.add(product)
+    await session.commit()
+
+    items, _diagnostics = await _make_change_items(
+        session,
+        change_set_id=1,
+        parsed_rows=[ParsedRow("FG-SIG", "Артикул подписи", Decimal("10"), {"output_kind": "ГП"})],
+        products_by_sku={"fg-sig": product},
+        mode=None,
+        existing_positions=[],
+        rule_profile_id=profile.id,
+        template_id=None,
+    )
+
+    route_id = items[0].after_data.get("route_id")
+    assert route_id is not None
+    route = await session.get(ProductionRoute, route_id)
+
+    from_build_input = (
+        "transit:RAW_STOCK::0:0:0"
+        ">production:SAWING:SAW_PREP,SAW:1:1:0"
+        ">production:PACKING:PACK_STRETCH:0:0:0"
+        ">transit:FINISHED_STOCK::0:0:1"
+    )
+    assert route.route_signature == from_build_input
+
+    # Записанный этап значим по ЛЮБОМУ шагу группы: первый шаг незначимый.
+    sawing_stage = await session.scalar(
+        select(RouteStage).where(
+            RouteStage.route_id == route.id,
+            RouteStage.section_id == sawing.id,
+        )
+    )
+    assert sawing_stage.is_significant is True
+
+    # Регресс в том же маршруте: незначимая упаковка и транзитные этапы
+    # складов остались незначимыми — расхождения нет нигде.
+    assert await signature_for_route_stages(session, route.id) == from_build_input
+
+
+@pytest.mark.asyncio
+async def test_seed_routes_sharing_sections_differ_by_stage_significance(session) -> None:
+    """Два сид-маршрута завода с одинаковым набором участков и пустыми кодами
+    операций различаются только признаком значимости этапа — и сигнатуры у
+    них разные. Сигнатура из одних пар «участок + операция» их бы не различила.
+    """
+    await run_full_seed(session, force=True)
+
+    universal = await session.scalar(
+        select(ProductionRoute).where(ProductionRoute.code == "universal_rp")
+    )
+    dynamic = await session.scalar(
+        select(ProductionRoute).where(ProductionRoute.code == "dynamic_packaging_map_rp")
+    )
+    assert universal is not None and dynamic is not None
+
+    universal_steps = await _signature_steps(session, universal.id)
+    dynamic_steps = await _signature_steps(session, dynamic.id)
+
+    assert [
+        (step.stage_kind, step.section_code, step.operation_codes,
+         step.transforms_dimensions, step.is_final)
+        for step in universal_steps
+    ] == [
+        (step.stage_kind, step.section_code, step.operation_codes,
+         step.transforms_dimensions, step.is_final)
+        for step in dynamic_steps
+    ], "фикстура: маршруты должны совпадать во всём, кроме значимости этапа"
+    assert [step.is_significant for step in universal_steps] != [
+        step.is_significant for step in dynamic_steps
+    ]
+
+    assert universal.route_signature != dynamic.route_signature
+    assert universal.route_signature == encode_signature(universal_steps)
+    assert dynamic.route_signature == encode_signature(dynamic_steps)
+
+
+async def _make_position_with_route(
+    session,
+    profile: RouteRuleProfile,
+    route: ProductionRoute,
+    *,
+    sku: str = "FG-CHECK",
+) -> tuple:
+    """Позиция плана, импортированная профилем и обслуживаемая маршрутом."""
+    plan = ProductionPlan(
+        plan_no=f"PLAN-{sku}",
+        name="План проверки",
+        status=ProductionPlanStatus.draft,
+        period_start=date(2026, 9, 1),
+        period_end=date(2026, 9, 30),
+    )
+    file = ImportFile(
+        original_filename="plan.xlsx",
+        stored_path="plan.xlsx",
+        content_type="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+        file_extension=".xlsx",
+        detected_format="zip-workbook",
+        file_sha256=f"sig-{sku}",
+        size_bytes=10,
+    )
+    product = Product(sku=sku, name="Позиция проверки", type=ProductType.finished_good, unit="pcs")
+    session.add_all([plan, file, product])
+    await session.flush()
+    batch = ImportBatch(
+        source_file_id=file.id,
+        production_plan_id=plan.id,
+        rule_profile_id=profile.id,
+        mode=ImportBatchMode.create_plan,
+        status=ImportBatchStatus.applied,
+        sheet_name="Лист1",
+        header_row_number=1,
+        total_rows=1,
+        parsed_rows=1,
+        summary={},
+    )
+    session.add(batch)
+    await session.flush()
+    position = PlanPosition(
+        production_plan_id=plan.id,
+        import_batch_id=batch.id,
+        product_id=product.id,
+        source_type=PlanSourceType.excel_import,
+        source_sku=sku,
+        source_name="Позиция проверки",
+        quantity=Decimal("10"),
+        source_payload={"output_kind": "ГП"},
+        period_start=plan.period_start,
+        period_end=plan.period_end,
+        status=PlanPositionStatus.draft,
+        validation_status=PlanPositionValidationStatus.valid,
+        validation_errors=[],
+        route_id=route.id,
+        route_origin=PlanPositionRouteOrigin.manual_confirmed,
+        route_assigned_at=datetime.now(UTC),
+        route_manual_confirmed_at=datetime.now(UTC),
+    )
+    session.add(position)
+    await session.commit()
+    return plan, position
+
+
+async def _make_route_with_signature(session, name: str, signature: str) -> ProductionRoute:
+    """Маршрут с этапами профиля и сохранённой сигнатурой."""
+    sections = {
+        code: await session.scalar(select(Section).where(Section.code == code))
+        for code in ("RAW_STOCK", "SAWING", "PACKING", "FINISHED_STOCK")
+    }
+    route = ProductionRoute(name=name, is_active=True, route_signature=signature)
+    session.add(route)
+    await session.flush()
+    for sequence, (code, operation_code, is_significant, transforms) in enumerate((
+        ("RAW_STOCK", None, False, False),
+        ("SAWING", "SAW", True, True),
+        ("PACKING", "PACK_STRETCH", False, False),
+        ("FINISHED_STOCK", None, False, False),
+    ), start=1):
+        section = sections[code]
+        transit = section.type in ("raw_stock", "finished_stock")
+        stage = RouteStage(
+            route_id=route.id,
+            sequence=sequence,
+            section_id=None if transit else section.id,
+            stage_kind="transit" if transit else "production",
+            storage_section_id=section.id if transit else None,
+            is_significant=is_significant,
+            transforms_dimensions=transforms,
+            is_final=sequence == 4,
+        )
+        session.add(stage)
+        await session.flush()
+        if not transit:
+            session.add(RouteOperation(
+                route_stage_id=stage.id,
+                sequence=1,
+                operation_code=operation_code,
+                operation_name=operation_code or "",
+            ))
+    await session.commit()
+    return route
+
+
+MATCHED_SIGNATURE = (
+    "transit:RAW_STOCK::0:0:0"
+    ">production:SAWING:SAW:1:1:0"
+    ">production:PACKING:PACK_STRETCH:0:0:0"
+    ">transit:FINISHED_STOCK::0:0:1"
+)
+
+FOREIGN_SIGNATURE = (
+    "production:SAWING:SAW:1:1:1"
+)
+
+
+@pytest.mark.asyncio
+async def test_route_check_shows_matching_signatures(client, session) -> None:
+    """Проверка маршрута позиции показывает обе сигнатуры и вердикт «совпадает»."""
+    await _seed_sections(session)
+    profile = await _make_profile(session)
+    route = await _make_route_with_signature(session, "Совпадающий", MATCHED_SIGNATURE)
+    plan, position = await _make_position_with_route(session, profile, route)
+
+    response = await client.get(
+        f"/api/production-plans/{plan.id}/positions/{position.id}/route-check"
+    )
+
+    assert response.status_code == 200
+    check = response.json()["route_signature"]
+    assert check["verdict"] == "match"
+    assert check["expected"] == MATCHED_SIGNATURE
+    assert check["actual"] == MATCHED_SIGNATURE
+    assert [step["section_code"] for step in check["expected_steps"]] == [
+        "RAW_STOCK", "SAWING", "PACKING", "FINISHED_STOCK",
+    ]
+    assert [step["section_code"] for step in check["actual_steps"]] == [
+        "RAW_STOCK", "SAWING", "PACKING", "FINISHED_STOCK",
+    ]
+
+
+@pytest.mark.asyncio
+async def test_route_check_reports_mismatch_and_blocks_nothing(auth_client, session) -> None:
+    """Расхождение видно в проверке, но утверждение позиции работает как раньше."""
+    await _seed_sections(session)
+    profile = await _make_profile(session)
+    route = await _make_route_with_signature(session, "Чужой", FOREIGN_SIGNATURE)
+    plan, position = await _make_position_with_route(session, profile, route)
+
+    response = await auth_client.get(
+        f"/api/production-plans/{plan.id}/positions/{position.id}/route-check"
+    )
+
+    assert response.status_code == 200
+    check = response.json()["route_signature"]
+    assert check["verdict"] == "mismatch"
+    assert check["expected"] == MATCHED_SIGNATURE
+    assert check["actual"] == FOREIGN_SIGNATURE
+
+    approve = await auth_client.post(
+        f"/api/production-plans/{plan.id}/positions/{position.id}/approve"
+    )
+    assert approve.status_code == 200, approve.text
+    assert approve.json()["status"] == "approved"
+
+
+@pytest.mark.asyncio
+async def test_manual_rename_keeps_route_signature(client, session) -> None:
+    """Ручное переименование маршрута — подпись, а не тождество: сигнатура
+    маршрута, собранного в UI из этапов, после переименования та же.
+    """
+    await _seed_sections(session)
+    section_ids = {
+        code: (await session.scalar(select(Section).where(Section.code == code))).id
+        for code in ("SAWING", "PACKING")
+    }
+
+    created = await client.post("/api/routes", json={"name": "Маршрут оператора"})
+    assert created.status_code == 201, created.text
+    route_id = created.json()["id"]
+
+    steps = await client.put(
+        f"/api/routes/{route_id}/steps",
+        json=[
+            {
+                "sequence": 1,
+                "section_id": section_ids["SAWING"],
+                "operation_code": "SAW",
+                "operation_name": "Распил",
+                "is_final": False,
+            },
+            {
+                "sequence": 2,
+                "section_id": section_ids["PACKING"],
+                "operation_code": "PACK_STRETCH",
+                "operation_name": "Стрейч",
+                "is_final": True,
+            },
+        ],
+    )
+    assert steps.status_code == 200, steps.text
+
+    route = await session.get(ProductionRoute, route_id)
+    assert route.route_signature == "production:SAWING:SAW:0:1:0>production:PACKING:PACK_STRETCH:0:0:1"
+
+    renamed = await client.put(
+        f"/api/routes/{route_id}", json={"name": "Маршрут оператора (переименован)"}
+    )
+    assert renamed.status_code == 200, renamed.text
+
+    await session.refresh(route)
+    assert route.name == "Маршрут оператора (переименован)"
+    assert route.route_signature == "production:SAWING:SAW:0:1:0>production:PACKING:PACK_STRETCH:0:0:1"
+
+
+ROUTE_NAME = "ГП"
+
+
+async def _make_product(session, sku: str) -> Product:
+    product = Product(sku=sku, name="Артикул", type=ProductType.finished_good, unit="pcs")
+    session.add(product)
+    await session.commit()
+    return product
+
+
+async def _make_named_profile(session, code: str, sections=None) -> RouteRuleProfile:
+    """Профиль, имя маршрута которого равно `output_kind` — иначе сверять не с чем."""
+    profile = await _make_profile(session, code=code, sections=sections)
+    profile.route_name_pattern = "{output_kind}"
+    await session.commit()
+    return profile
+
+
+async def _import_one_row(session, profile, product, *, sku: str, payload: dict | None = None):
+    """Импорт одной строки плана профилем — публичный шов импорта."""
+    items, _diagnostics = await _make_change_items(
+        session,
+        change_set_id=1,
+        parsed_rows=[ParsedRow(sku, "Артикул", Decimal("10"), payload or {"output_kind": "ГП"})],
+        products_by_sku={sku.lower(): product},
+        mode=None,
+        existing_positions=[],
+        rule_profile_id=profile.id,
+        template_id=None,
+    )
+    return items
+
+
+@pytest.mark.asyncio
+async def test_import_rejects_row_when_named_route_has_other_signature(session) -> None:
+    """Маршрут с тем же именем и другой сигнатурой — другой маршрут: строка
+    импорта получает ошибку, а маршрут под неё не подставляется (#215).
+    """
+    await _seed_sections(session)
+    profile = await _make_named_profile(session, "sig_conflict")
+    product = await _make_product(session, "FG-CONFLICT")
+    existing = await _make_route_with_signature(session, ROUTE_NAME, FOREIGN_SIGNATURE)
+
+    items = await _import_one_row(session, profile, product, sku="FG-CONFLICT")
+
+    item = items[0]
+    assert item.errors == ["route_signature_conflict"]
+    assert item.status == PlanChangeItemStatus.invalid
+    assert item.after_data.get("route_id") is None
+    # Чужой маршрут остался на месте — импорт не переименовал и не заменил его.
+    await session.refresh(existing)
+    assert existing.name == ROUTE_NAME
+
+
+@pytest.mark.asyncio
+async def test_import_preview_shows_signature_conflict(session) -> None:
+    """Предпросмотр импорта показывает тот же конфликт: `change_set_id = 0` —
+    записи маршрута в нём нет, иначе невалидность всплыла бы только при
+    применении сета."""
+    await _seed_sections(session)
+    profile = await _make_named_profile(session, "sig_preview")
+    product = await _make_product(session, "FG-PREVIEW")
+    await _make_route_with_signature(session, ROUTE_NAME, FOREIGN_SIGNATURE)
+
+    items, _diagnostics = await _make_change_items(
+        session,
+        change_set_id=0,
+        parsed_rows=[ParsedRow("FG-PREVIEW", "Артикул", Decimal("10"), {"output_kind": "ГП"})],
+        products_by_sku={"fg-preview": product},
+        mode=None,
+        existing_positions=[],
+        rule_profile_id=profile.id,
+        template_id=None,
+    )
+
+    assert items[0].errors == ["route_signature_conflict"]
+    assert items[0].status == PlanChangeItemStatus.invalid
+    assert items[0].after_data.get("route_id") is None
+    # Собранные шаги остаются видны: оператор видит, что именно не совпало.
+    assert [step["section_code"] for step in items[0].after_data["route_steps"]] == [
+        "RAW_STOCK", "SAWING", "PACKING", "FINISHED_STOCK",
+    ]
+
+
+@pytest.mark.asyncio
+async def test_import_reuses_named_route_with_matching_signature(session) -> None:
+    """Регресс: сигнатуры совпадают — маршрут, найденный по имени,
+    переиспользуется как раньше, без ошибки строки."""
+    await _seed_sections(session)
+    profile = await _make_named_profile(session, "sig_matched")
+    product = await _make_product(session, "FG-MATCHED")
+    existing = await _make_route_with_signature(session, ROUTE_NAME, MATCHED_SIGNATURE)
+
+    items = await _import_one_row(session, profile, product, sku="FG-MATCHED")
+
+    item = items[0]
+    assert item.errors == []
+    assert item.status != PlanChangeItemStatus.invalid
+    assert item.after_data["route_id"] == existing.id
+
+
+@pytest.mark.asyncio
+async def test_two_rows_of_one_import_share_the_route(session) -> None:
+    """Регресс: две строки с одинаковым маршрутом в одном импорте
+    переиспользуют один маршрут, а не спорят за него."""
+    await _seed_sections(session)
+    profile = await _make_named_profile(session, "sig_pair")
+    first = await _make_product(session, "FG-PAIR-1")
+    second = await _make_product(session, "FG-PAIR-2")
+
+    items, _diagnostics = await _make_change_items(
+        session,
+        change_set_id=1,
+        parsed_rows=[
+            ParsedRow("FG-PAIR-1", "Артикул", Decimal("10"), {"output_kind": "ГП"}),
+            ParsedRow("FG-PAIR-2", "Артикул", Decimal("10"), {"output_kind": "ГП"}),
+        ],
+        products_by_sku={"fg-pair-1": first, "fg-pair-2": second},
+        mode=None,
+        existing_positions=[],
+        rule_profile_id=profile.id,
+        template_id=None,
+    )
+
+    assert [item.errors for item in items] == [[], []]
+    route_ids = {item.after_data["route_id"] for item in items}
+    assert len(route_ids) == 1 and None not in route_ids
+    assert await session.scalar(
+        select(func.count(ProductionRoute.id)).where(ProductionRoute.name == ROUTE_NAME)
+    ) == 1
+
+
+@pytest.mark.asyncio
+async def test_route_build_error_stays_out_of_row_errors(session) -> None:
+    """Регресс: ошибки сборки, не связанные с конфликтом, остаются в журнале
+    и в ошибки строки не превращаются (глушение снимать нельзя — см. ADR-0045).
+    """
+    await _seed_sections(session)
+    profile = await _make_named_profile(session, "sig_broken", sections=["NO_SUCH_SECTION"])
+    product = await _make_product(session, "FG-BROKEN")
+    await _make_route_with_signature(session, ROUTE_NAME, FOREIGN_SIGNATURE)
+
+    items = await _import_one_row(session, profile, product, sku="FG-BROKEN")
+
+    assert items[0].errors == []
+
+
+@pytest.mark.asyncio
+async def test_conflicting_row_becomes_invalid_position_in_plan(session) -> None:
+    """Строка с конфликтом не исчезает из импорта: применение сета создаёт
+    позицию со статусом «невалидна» и кодом в её ошибках — её видно в
+    плане, и оператор видит, что чинить."""
+    await _seed_sections(session)
+    profile = await _make_named_profile(session, "sig_apply")
+    product = await _make_product(session, "FG-APPLY")
+    await _make_route_with_signature(session, ROUTE_NAME, FOREIGN_SIGNATURE)
+    plan = ProductionPlan(plan_no="PLAN-215", name="План 215", status=ProductionPlanStatus.draft)
+    session.add(plan)
+    await session.commit()
+    change_set = PlanChangeSet(production_plan_id=plan.id, summary={})
+    session.add(change_set)
+    await session.commit()
+
+    items = await _import_one_row(session, profile, product, sku="FG-APPLY")
+    items[0].change_set_id = change_set.id
+    session.add(items[0])
+    await session.commit()
+
+    await apply_change_set(session, change_set.id)
+
+    positions = (
+        await session.execute(
+            select(PlanPosition).where(PlanPosition.production_plan_id == plan.id)
+        )
+    ).scalars().all()
+    assert len(positions) == 1
+    assert positions[0].status == PlanPositionStatus.invalid
+    assert "route_signature_conflict" in positions[0].validation_errors
+    assert positions[0].route_id is None

@@ -42,11 +42,11 @@ export async function ensureDbBootstrapped(): Promise<void> {
   }
   const dbUrl =
     process.env.E2E_TEST_DATABASE_URL ??
-    readEnvTestVar("TEST_DATABASE_URL") ??
+    readStandEnvVar("E2E_TEST_DATABASE_URL") ??
     process.env.DATABASE_URL;
   if (!dbUrl) {
     throw new Error(
-      "БД пуста, но URL не задан: установите E2E_TEST_DATABASE_URL или TEST_DATABASE_URL в .env.test",
+      "БД пуста, но URL не задан: установите E2E_TEST_DATABASE_URL или DATABASE_URL в .env.e2e",
     );
   }
   const backendDir = path.resolve(process.cwd(), "../backend");
@@ -98,10 +98,10 @@ async function hasAnyRoute(): Promise<boolean> {
 }
 
 
-/** Прочитать KEY=VALUE из корневого .env.test (без зависимости от dotenv). */
-function readEnvTestVar(key: string): string | undefined {
+/** Прочитать KEY=VALUE из env-файла стенда (без зависимости от dotenv). */
+function readStandEnvVar(key: string): string | undefined {
   try {
-    const text = fs.readFileSync(path.resolve(process.cwd(), "../.env.test"), "utf8");
+    const text = fs.readFileSync(path.resolve(process.cwd(), "../.env.e2e"), "utf8");
     return text.match(new RegExp(`^${key}=(.*)$`, "m"))?.[1]?.trim();
   } catch {
     return undefined;
@@ -122,22 +122,25 @@ export async function apiSeedData() {
 const E2E_TEST_PRODUCTS: Array<{
   sku: string;
   name: string;
-    type: string;
-    lengths_mm: number[];
-    quantity_per_hanger: number;
+  type: string;
+  lengths_mm: number[];
+  quantity_per_hanger: number;
 }> = [
   {
     sku: "ЮП-3270",
     name: "Профиль ЮП-3270",
     type: "component",
-    lengths_mm: [6000],
+    // 2700 мм — длина, под которой спеки заводят планы (`length_m: 2.7`).
+    // Артикул без такой нормальной длины получает позицию плана
+    // `invalid: normal_length_not_found`, и бизнес-шаги не начинаются.
+    lengths_mm: [2700],
     quantity_per_hanger: 100,
   },
   {
     sku: "ЮП-2083",
     name: "Профиль ЮП-2083",
     type: "component",
-    lengths_mm: [6000],
+    lengths_mm: [2700],
     quantity_per_hanger: 100,
   },
 ];
@@ -157,32 +160,23 @@ export const E2E_SPG = {
   ANODIZING: "ANODIZING",
 } as const;
 
-/** @smoke only — create catalog products if missing (not used in @ui). */
+/**
+ * @smoke only — артикулы общих смоук-спеок (не используются в @ui).
+ *
+ * Через `apiEnsureCatalogProduct`, а не собственным POST: контракт артикула
+ * (нормальные длины в `lengths`, «кол-во на подвес» — словарь по длинам)
+ * менялся, и отдельная копия сетапа молча уезжала в 422 / в позиции плана
+ * без нормальной длины.
+ */
 export async function apiEnsureTestProducts() {
   for (const product of E2E_TEST_PRODUCTS) {
-    try {
-      await apiGetProductBySku(product.sku);
-    } catch {
-      const res = await fetch(`${BACKEND_URL}/api/products`, {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
-          sku: product.sku,
-          name: product.name,
-          type: product.type,
-          unit: "pcs",
-          is_active: true,
-          is_catalog_item: true,
-          lengths_mm: product.lengths_mm,
-          length_mm: product.lengths_mm[0],
-          quantity_per_hanger: product.quantity_per_hanger,
-        }),
-      });
-      if (!res.ok) {
-        const errText = await res.text();
-        throw new Error(`Create product ${product.sku} failed: ${res.status} ${errText}`);
-      }
-    }
+    await apiEnsureCatalogProduct({
+      sku: product.sku,
+      name: product.name,
+      type: product.type,
+      lengthsMm: product.lengths_mm,
+      quantityPerHanger: product.quantity_per_hanger,
+    });
   }
 }
 

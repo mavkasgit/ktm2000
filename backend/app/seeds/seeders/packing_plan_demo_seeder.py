@@ -1239,7 +1239,13 @@ async def seed_packing_plan_demo(
     if invalid:
         raise RuntimeError(f"Позиции не прошли валидацию: {invalid[:5]}")
     for position in positions:
-        await approve_plan_position(db, position.production_plan_id, position.id, force=True)
+        await approve_plan_position(
+            db,
+            position.production_plan_id,
+            position.id,
+            force=True,
+            reason=f"{DEMO_PLAN_MARKER}: демо-стенд наполняется принудительным утверждением",
+        )
 
     batch = await create_release_batch(
         db,

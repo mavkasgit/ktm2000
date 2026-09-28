@@ -16,8 +16,19 @@
 npm run test:pytest            # backend, параллельно, изолированная per-run БД (по умолчанию)
 npm run test:pytest:full       # backend, серийно
 npm --prefix frontend run test    # Vitest
-npm --prefix frontend run test:e2e  # Playwright
+npm run test:e2e             # Playwright, отдельный стенд (своя БД и порты)
 ```
+
+## Стенд E2E
+
+`npm run test:e2e` не трогает devstack: поднимает **свою** БД `ktm2000_e2e`
+на тестовом Postgres (`:5441`) и слушает свои порты (backend `8013`, frontend
+`5173`). Источник правды — [`.env.e2e`](../.env.e2e): там и порты, и DSN.
+Поэтому прогон идёт параллельно с работой в основном дереве.
+
+Подготовка прогона (`e2e:prep`) поднимает тестовый Postgres, создаёт БД стенда
+(и отказывается, если DSN нацелен на общую dev-БД), накатывает миграции и сиды
+**только** на неё. Детали и отладка — [`frontend/e2e/AGENTS.md`](../frontend/e2e/AGENTS.md).
 
 ## npm-скрипты backend
 

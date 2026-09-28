@@ -2,7 +2,7 @@ import { Link, useParams } from "react-router-dom";
 import { useQuery } from "@tanstack/react-query";
 import { previewProductionPlan } from "@/shared/api/productionPlans";
 import { queryKeys } from "@/shared/api/queryKeys";
-import { statusLabels } from "@/shared/lib/generated-labels";
+import { statusLabels, validationLabels } from "@/shared/lib/generated-labels";
 import { fmtQtyPrecise } from "@/shared/lib/quantityFormat";
 
 type PreviewPosition = {
@@ -79,7 +79,7 @@ export function PlanPreviewPage() {
                 <td className="p-2">{row.source_name || "—"}</td>
                 <td className="p-2">{fmtQtyPrecise(row.quantity)}</td>
                 <td className="p-2">{statusLabels[row.status] || row.status}</td>
-                <td className="p-2">{row.validation_status}</td>
+                <td className="p-2">{validationLabels[row.validation_status] || row.validation_status}</td>
                 <td className="p-2 text-xs text-red-600">{(row.validation_errors || []).join(", ") || "—"}</td>
               </tr>
             ))}

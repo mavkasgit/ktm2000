@@ -11,7 +11,7 @@ import {
   apiSimulatePlanImport,
 } from "./api-helpers";
 import { expect, test } from "./fixtures";
-import { E2E_SKU, seedReferenceDataViaUI } from "./ui-helpers";
+import { E2E_SKU, confirmForceApproveViaUI, seedReferenceDataViaUI } from "./ui-helpers";
 
 /**
  * @ui — СВЕЖЕСТЬ ПОСЛЕ УТВЕРЖДЕНИЯ: позиция, утверждённая на «Плане», видна на
@@ -147,7 +147,11 @@ async function firstApprovablePlanRow(page: Page): Promise<ApprovableRow> {
 async function approveSingleViaUI(page: Page, row: Locator) {
   await row.first().getByRole("button", { name: "Утвердить" }).click();
   const forceBtn = page.getByRole("button", { name: "Утвердить всё равно" });
-  if (await forceBtn.isVisible().catch(() => false)) await forceBtn.click();
+  if (await forceBtn.isVisible().catch(() => false))
+    await confirmForceApproveViaUI(
+      page,
+      "e2e: проверяем свежесть плана после approve, позиция заведена и сверена вручную",
+    );
   await expect(page.getByText("Позиция утверждена", { exact: true })).toBeVisible({ timeout: 15_000 });
 }
 

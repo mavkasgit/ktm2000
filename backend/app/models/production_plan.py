@@ -51,6 +51,9 @@ class PlanPositionValidationStatus(str, enum.Enum):
     pending = "pending"
     valid = "valid"
     invalid = "invalid"
+    # Валидация перекрыта человеком форс-аппрувом с причиной (ADR-0048).
+    # Ошибки на позиции остаются, но гейт релиза это состояние пропускает.
+    overridden = "overridden"
 
 
 class PlanPositionRouteOrigin(str, enum.Enum):
@@ -116,6 +119,9 @@ class ProductionPlan(Base):
         default=LENGTH_MODEL_VERSION_CURRENT,
     )
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False, server_default=func.now())
+    deleted_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    deleted_by: Mapped[int | None] = mapped_column(ForeignKey("users.id", ondelete="SET NULL"), nullable=True)
+    delete_reason: Mapped[str | None] = mapped_column(Text, nullable=True)
 
 
 class PlanPosition(Base):

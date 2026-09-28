@@ -15,7 +15,7 @@ import { uploadProductPhoto, getErrorMessage } from "@/shared/api/products";
 import { listDimensionTypes } from "../api";
 import { queryKeys } from "@/shared/api/queryKeys";
 import { calcHanger, type HangerCalcResult } from "@/shared/api/hangerCalc";
-import { isHangerAutoMode, isSheetState, lengthKey, manualByLength, normalizeLengths, primaryLength, productLengths, effectiveRawLength } from "@/shared/lib/hangerQuantity";
+import { isHangerAutoMode, isSheetState, lengthKey, manualByLength, normalizeLengths, orphanNormKeys, primaryLength, productLengths, effectiveRawLength } from "@/shared/lib/hangerQuantity";
 import { parseNumericInput } from "@/shared/lib/parseNumericInput";
 import { isLengthState } from "@/shared/lib/dimensionState";
 import { RadioGroup, RadioGroupItem } from "@/shared/ui/radio-group";
@@ -73,14 +73,22 @@ function manualChangeTexts(
   return { from: fmt(productManuals), to: fmt(merged) };
 }
 
-/** Payload-словарь {length: {auto: null, manual}} для всех длин формы. */
+/**
+ * Payload-словарь {length: {auto: null, manual}} для всех длин формы.
+ * `extraKeys` — ключи норм вне реестра (ADR-0047): их правкой нельзя
+ * молча пожертвовать значением, поэтому удаление уходит явным null.
+ */
 function buildManualPayloadDict(
   lengths: Array<number | ProductLength>,
   merged: Record<string, number | null>,
+  extraKeys: string[] = [],
 ): QuantityPerHangerDict {
   const dict: QuantityPerHangerDict = {};
   for (const length of lengths) {
     const key = lengthKey(typeof length === "number" ? length : length.length_mm);
+    dict[key] = { auto: null, manual: merged[key] ?? null };
+  }
+  for (const key of extraKeys) {
     dict[key] = { auto: null, manual: merged[key] ?? null };
   }
   return dict;
@@ -88,6 +96,26 @@ function buildManualPayloadDict(
 
 function lengthsFromProduct(product: Product | null): ProductLength[] {
   return (product?.lengths ?? []).map((length) => ({ ...length }));
+}
+
+/**
+ * Обнулить ручные нормы длин, снятых из реестра (ADR-0047): ключ остаётся
+ * в словаре с manual=null, чтобы правка ушла явным снятием значения, а не
+ * молчаливым исчезновением вместе с длиной. Ключи вне реестра не трогаем —
+ * их снимает оператор кнопкой в предупреждении, иначе правка длин стирала бы
+ * чужой ручной ввод.
+ */
+function clearNormsOfRemovedLengths(
+  dict: QuantityPerHangerDict | null | undefined,
+  previousLengths: number[],
+  keptLengths: number[],
+): QuantityPerHangerDict | null {
+  if (!dict) return dict ?? null;
+  const kept = new Set(keptLengths.map(lengthKey));
+  const removed = previousLengths.map(lengthKey).filter((key) => !kept.has(key));
+  const result: QuantityPerHangerDict = { ...dict };
+  for (const key of removed) result[key] = { auto: null, manual: null };
+  return result;
 }
 
 /** Подписи режима подвеса (#126) для списка изменений. */
@@ -257,6 +285,17 @@ export const CatalogForm = forwardRef<CatalogFormRef, {
     setChangesOpen(false);
   }, [product?.id, mode]);
   const formLengths = useMemo(() => productLengths(form), [form.lengths]);
+  // Норма-сирота: ручное N под длиной, которой нет в реестре (ADR-0047).
+  // Считаем по состоянию формы: введённая длина или снятое значение
+  // снимают предупреждение сразу, ещё до сохранения.
+  const orphanNormKeyList = useMemo(
+    () => orphanNormKeys({
+      dimension_state: form.dimension_state,
+      lengths: form.lengths,
+      quantity_per_hanger: form.quantity_per_hanger,
+    }),
+    [form.dimension_state, form.lengths, form.quantity_per_hanger],
+  );
   // Явный режим подвеса (#127): единый для 1D/2D/3D, без data-driven вывода.
   const autoMode = (form.hanger_mode ?? "auto") === "auto";
   const sheetMode: HangerMode = form.hanger_mode ?? "auto";
@@ -376,6 +415,17 @@ export const CatalogForm = forwardRef<CatalogFormRef, {
       },
     }));
   };
+
+  /** Явная очистка нормы-сироты: null по ключу уходит в PATCH (ADR-0047). */
+  const clearOrphanNorm = useCallback((key: string) => {
+    setForm((f) => ({
+      ...f,
+      quantity_per_hanger: {
+        ...(f.quantity_per_hanger ?? {}),
+        [key]: { auto: null, manual: null },
+      },
+    }));
+  }, []);
   const setLengths = useCallback((values: Array<number | ProductLength>) => {
     const normalized = normalizeLengths(values.map((value) => typeof value === "number" ? value : value.length_mm));
     setForm((f) => {
@@ -388,6 +438,14 @@ export const CatalogForm = forwardRef<CatalogFormRef, {
           const old = previous.get(length);
           return { length_mm: length, raw_length_mm: old?.raw_length_mm ?? null, is_primary: length === primary };
         }),
+        // Норма под снятой длиной — ручной ввод: её снятие уходит в PATCH
+        // явным null, иначе сервер отклонит правку как потерю значения
+        // (ADR-0047). Ключ остаётся в словаре формы — отсюда и payload.
+        quantity_per_hanger: clearNormsOfRemovedLengths(
+          f.quantity_per_hanger,
+          productLengths(f),
+          normalized,
+        ),
       };
     });
   }, []);
@@ -424,7 +482,12 @@ export const CatalogForm = forwardRef<CatalogFormRef, {
     if (!eq(merged, manualByLength(product.quantity_per_hanger ?? null))) {
       // Лист (#126): ключ словаря — длина полотна из осей, не список длин профиля.
       const payloadLengths = !isSheet && formLengths.length > 0 ? formLengths : sheetLen != null ? [sheetLen] : [];
-      patch.quantity_per_hanger = buildManualPayloadDict(payloadLengths, merged);
+      // Ключи вне реестра (норма-сирота, снятая длина) едут в payload иначе:
+      // сервер не отличит их снятие от молчаливой правки карточки (ADR-0047).
+      const extraKeys = Object.keys(form.quantity_per_hanger ?? {}).filter(
+        (key) => !payloadLengths.some((length) => lengthKey(length) === key),
+      );
+      patch.quantity_per_hanger = buildManualPayloadDict(payloadLengths, merged, extraKeys);
     }
     if (!eq(form.cross_section, product.cross_section)) patch.cross_section = form.cross_section;
     if (!eq(form.skip_shot_blast, product.skip_shot_blast)) patch.skip_shot_blast = form.skip_shot_blast;
@@ -914,6 +977,33 @@ export const CatalogForm = forwardRef<CatalogFormRef, {
                     Значения рассчитаны из периметра и габарита.
                   </p>
                 ) : null}
+                {orphanNormKeyList.length > 0 && (
+                  <div
+                    role="alert"
+                    className="rounded-md border border-amber-300 bg-amber-50 px-3 py-2 space-y-1"
+                  >
+                    <p className="text-xs text-amber-900">
+                      Норма подвеса не применима ни к одной длине: карточка не сохранится,
+                      пока значение не удалено или в реестр не введена совпадающая длина.
+                    </p>
+                    {orphanNormKeyList.map((key) => (
+                      <div key={key} className="flex items-center gap-2 text-xs text-amber-900">
+                        <span>
+                          {key} мм — {form.quantity_per_hanger?.[key]?.manual ?? "—"} шт
+                        </span>
+                        {!readOnly && (
+                          <button
+                            type="button"
+                            onClick={() => clearOrphanNorm(key)}
+                            className="underline underline-offset-2 hover:text-amber-950"
+                          >
+                            Удалить норму
+                          </button>
+                        )}
+                      </div>
+                    ))}
+                  </div>
+                )}
                 {quantityInvalid && (
                   <p className="text-xs text-destructive">Значение должно быть больше 0</p>
                 )}

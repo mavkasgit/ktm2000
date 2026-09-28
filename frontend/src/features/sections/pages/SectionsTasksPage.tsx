@@ -204,7 +204,7 @@ export function SectionsTasksPage() {
   const { data: summary } = useQuery({
     queryKey: queryKeys.shopfloor.summary(),
     queryFn: getSectionsSummary,
-    enabled: !!me?.id,
+    enabled: me != null,
     retry: false,
   });
 
@@ -315,7 +315,7 @@ export function SectionsTasksPage() {
       singleSectionLockId: requestOptions?.singleSectionLockId ?? null,
     }),
     queryFn: () => getSectionBoard(sectionId as number, boardQueryParams, requestOptions),
-    enabled: sectionId !== null && !!me?.id && !isSingleWindowBlocked,
+    enabled: sectionId !== null && me != null && !isSingleWindowBlocked,
     retry: false,
     placeholderData: keepPreviousDataForScope<SectionBoardResponse>(
       (key) => key[1],
@@ -325,7 +325,7 @@ export function SectionsTasksPage() {
   const { data: dailyPlans, isLoading: dailyPlansLoading } = useQuery({
     queryKey: queryKeys.dailyPlans.list(sectionId as number),
     queryFn: () => listDailyPlans(sectionId as number, requestOptions),
-    enabled: sectionId !== null && !!me?.id && !isSingleWindowBlocked,
+    enabled: sectionId !== null && me != null && !isSingleWindowBlocked,
     retry: false,
   });
 
@@ -337,7 +337,7 @@ export function SectionsTasksPage() {
     queries: selectedPlanIdList.map((planId) => ({
       queryKey: queryKeys.dailyPlans.composition(planId),
       queryFn: () => getDailyPlanComposition(planId, requestOptions),
-      enabled: !!me?.id && !isSingleWindowBlocked,
+      enabled: me != null && !isSingleWindowBlocked,
       retry: false,
     })),
   });
@@ -390,7 +390,7 @@ export function SectionsTasksPage() {
         date_from: `${dateFrom}T00:00:00`,
         date_to: `${dateTo}T23:59:59`,
       }, requestOptions),
-    enabled: sectionId !== null && !!me?.id && !!dateFrom && !!dateTo && !isSingleWindow && !isSingleWindowBlocked,
+    enabled: sectionId !== null && me != null && !!dateFrom && !!dateTo && !isSingleWindow && !isSingleWindowBlocked,
     retry: false,
   });
 

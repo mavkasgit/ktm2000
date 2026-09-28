@@ -96,6 +96,7 @@ beforeEach(() => {
   vi.mocked(usePermission).mockReturnValue({
     canEditReferences: true,
     canEditSettings: false,
+    canDeleteProductionPlan: false,
   });
   vi.mocked(fetchAllProducts).mockResolvedValue([
     makeProduct({ composition: [makeComposition()] }),
@@ -170,6 +171,7 @@ describe("ProductsPage", () => {
     vi.mocked(usePermission).mockReturnValue({
       canEditReferences: false,
       canEditSettings: false,
+      canDeleteProductionPlan: false,
     });
     renderPage();
 

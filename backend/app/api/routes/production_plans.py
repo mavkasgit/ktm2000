@@ -32,9 +32,9 @@ from app.api.routes.audit_logs import AuditLogOut
 from app.models.imports import ImportBatch
 from app.models.product import Product
 from app.models.release_batch import ReleaseBatchType
-from app.models.route import ProductionRoute, RouteStage
+from app.models.route import ProductionRoute, RouteRuleProfile, RouteStage
 from app.models.section import Section
-from app.models.user import User
+from app.models.user import User, UserRole
 from app.services.plan_generation import create_release_batch
 from app.services.position_remainders import PositionStockFigures
 from app.services.production_plan_service import (
@@ -45,6 +45,9 @@ from app.services.production_plan_service import (
     approve_plan_position,
     cancel_plan_position,
     delete_import_batch as delete_import_batch_service,
+    delete_production_plan,
+    get_production_plan_delete_preview,
+    PlanDeleteBlocked,
     get_plan_preview,
     restore_plan_position,
     rollback_change_set,
@@ -52,6 +55,7 @@ from app.services.production_plan_service import (
     soft_delete_cancelled_position,
 )
 from app.services.route_matcher import resolve_position_route, ResolvedRouteInfo, make_position_route_cache_key
+from app.services.route_signature_check import compare_position_route_signature
 from app.services.route_selection import select_route_for_payload
 from app.services.route_validation import validate_route_match
 from app.services.plan_validation import format_validation_error
@@ -64,10 +68,20 @@ async def _reject_legacy_plan_mutation(
     db: AsyncSession,
     production_plan_id: int,
 ) -> None:
+    await _require_visible_plan(db, production_plan_id)
     try:
         await require_mutable_plan(db, production_plan_id)
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+
+async def _require_visible_plan(
+    db: AsyncSession, production_plan_id: int
+) -> ProductionPlan:
+    plan = await db.get(ProductionPlan, production_plan_id)
+    if plan is None or plan.deleted_at is not None:
+        raise HTTPException(status_code=404, detail="Production plan not found")
+    return plan
 
 
 class PlanSummaryOut(BaseModel):
@@ -87,7 +101,13 @@ class PlanSummaryOut(BaseModel):
 
 @router.get("", response_model=list[PlanSummaryOut])
 async def list_plans(db: AsyncSession = Depends(get_db)) -> list[PlanSummaryOut]:
-    plans = (await db.execute(select(ProductionPlan).order_by(ProductionPlan.created_at.desc()))).scalars().all()
+    plans = (
+        await db.execute(
+            select(ProductionPlan)
+            .where(ProductionPlan.deleted_at.is_(None))
+            .order_by(ProductionPlan.created_at.desc())
+        )
+    ).scalars().all()
     result = []
     for plan in plans:
         counts = (
@@ -140,7 +160,77 @@ class UpdatePositionQuantityIn(BaseModel):
     quantity_per_hanger: int | None = None
 
 
+
+class PlanDeleteIn(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    confirmation: str
+    reason: str
+
+
+@router.get("/{production_plan_id}/delete-preview")
+async def preview_production_plan_delete(
+    production_plan_id: int,
+    db: AsyncSession = Depends(get_db),
+    _current_user: User = Depends(require_role([UserRole.admin])),
+) -> dict:
+    try:
+        preview = await get_production_plan_delete_preview(db, production_plan_id)
+        preview.pop("_reversal_plans", None)
+        return preview
+    except ValueError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+
+
+@router.delete("/{production_plan_id}", response_model=None)
+async def delete_production_plan_route(
+    production_plan_id: int,
+    payload: PlanDeleteIn,
+    db: AsyncSession = Depends(get_db),
+    current_user: User = Depends(require_role([UserRole.admin])),
+) -> dict | JSONResponse:
+    try:
+        return await delete_production_plan(
+            db,
+            production_plan_id,
+            confirmation=payload.confirmation,
+            reason=payload.reason,
+            changed_by=current_user.id,
+        )
+    except PlanDeleteBlocked as exc:
+        return JSONResponse(
+            status_code=409,
+            content={
+                "code": "plan_delete_blocked",
+                "detail": "Нельзя откатить все операции плана",
+                "blockers": exc.blockers,
+            },
+        )
+    except ValueError as exc:
+        plan = await db.get(ProductionPlan, production_plan_id)
+        if plan is None or plan.deleted_at is not None:
+            raise HTTPException(status_code=404, detail=str(exc)) from exc
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+
 # Удален StatusHistoryOut, так как PositionStatusHistory удалена. История теперь читается через аудит-логи.
+
+
+class RouteSignatureStepOut(BaseModel):
+    stage_kind: str
+    section_code: str
+    operation_codes: list[str]
+    is_significant: bool
+    transforms_dimensions: bool
+    is_final: bool
+
+
+class RouteSignatureCheckOut(BaseModel):
+    """Сигнатура маршрута позиции: ожидаемая, фактическая, вердикт (#214)."""
+
+    verdict: Literal["match", "mismatch", "unknown"]
+    expected: str | None = None
+    expected_steps: list[RouteSignatureStepOut] = []
+    actual: str | None = None
+    actual_steps: list[RouteSignatureStepOut] = []
 
 
 class RouteCheckOut(BaseModel):
@@ -148,6 +238,7 @@ class RouteCheckOut(BaseModel):
     active_route_snapshot: dict | None
     match: bool
     issues: list[str]
+    route_signature: RouteSignatureCheckOut
 
 
 class SectionTotalsLineOut(BaseModel):
@@ -167,6 +258,7 @@ class SectionTotalsOut(BaseModel):
 
 @router.get("/{production_plan_id}/preview")
 async def preview_production_plan(production_plan_id: int, db: AsyncSession = Depends(get_db)) -> dict:
+    await _require_visible_plan(db, production_plan_id)
     try:
         return await get_plan_preview(db, production_plan_id)
     except ValueError as exc:
@@ -181,6 +273,7 @@ async def apply_plan_change_set(
     db: AsyncSession = Depends(get_db),
     current_user: User = Depends(get_current_user),
 ) -> dict:
+    await _require_visible_plan(db, production_plan_id)
     change_set = await db.get(PlanChangeSet, change_set_id)
     if change_set is None:
         raise HTTPException(status_code=404, detail="Change set not found")
@@ -202,11 +295,11 @@ async def rollback_plan_change_set(
     current_user: User = Depends(get_current_user),
 ) -> dict:
     change_set = await db.get(PlanChangeSet, change_set_id)
+    await _require_visible_plan(db, production_plan_id)
     if change_set is None:
         raise HTTPException(status_code=404, detail="Change set not found")
     if change_set.production_plan_id != production_plan_id:
         raise HTTPException(status_code=400, detail="Change set does not belong to production plan")
-    await _reject_legacy_plan_mutation(db, production_plan_id)
     try:
         return await rollback_change_set(db, change_set_id, changed_by=current_user.id)
     except ValueError as exc:
@@ -220,6 +313,7 @@ async def discard_plan_change_set(
     db: AsyncSession = Depends(get_db),
     current_user: User = Depends(get_current_user),
 ) -> dict:
+    await _require_visible_plan(db, production_plan_id)
     """Discard a change set: delete pending ones directly, rollback applied ones."""
     from sqlalchemy import delete
 
@@ -282,12 +376,12 @@ async def delete_import_batch(
 #: released-позиции, задачи и передачи не тронуты). «Удалить всё» при блокерах
 #: запрещено — флага обхода нет.
 
+    await _require_visible_plan(db, production_plan_id)
     batch = await db.get(ImportBatch, batch_id)
 #: Сверка с планом из URL: чужой батч — как отсутствующий (404), иначе можно
 #: снести данные другого плана по произвольному batch_id.
     if batch is None or batch.production_plan_id != production_plan_id:
         raise HTTPException(status_code=404, detail="Import batch not found")
-    await _reject_legacy_plan_mutation(db, production_plan_id)
     try:
         return await delete_import_batch_service(
             db, batch_id, delete_drafts_only=delete_drafts_only, changed_by=current_user.id
@@ -304,18 +398,31 @@ async def delete_import_batch(
         )
 
 
+# Тело approve-позиции — то же `StatusActionIn`, что у cancel/restore: единственное
+# поле `reason`. `force` остаётся query-параметром (контракт ADR-0048), а причина
+# уходит в тело: это свободный текст оператора, и в URL он попал бы в access_log,
+# историю браузера и Referer.
+
+
 @router.post("/{production_plan_id}/positions/{position_id}/approve")
 async def approve_position(
     production_plan_id: int,
     position_id: int,
     force: bool = False,
+    payload: StatusActionIn | None = None,
     db: AsyncSession = Depends(get_db),
     current_user: User = Depends(get_current_user),
 ) -> dict:
+    await _require_visible_plan(db, production_plan_id)
     logger = logging.getLogger(__name__)
     try:
         position = await approve_plan_position(
-            db, production_plan_id, position_id, force=force, changed_by=current_user.id
+            db,
+            production_plan_id,
+            position_id,
+            force=force,
+            changed_by=current_user.id,
+            reason=payload.reason if payload else None,
         )
     except ValueError as exc:
         logger.warning("approve_position rejected: %s (plan=%d, pos=%d, force=%s)", exc, production_plan_id, position_id, force)
@@ -345,6 +452,7 @@ async def cancel_position(
     db: AsyncSession = Depends(get_db),
     current_user: User = Depends(get_current_user),
 ) -> dict:
+    await _require_visible_plan(db, production_plan_id)
     try:
         position = await cancel_plan_position(
             db, production_plan_id, position_id, changed_by=current_user.id, reason=payload.reason if payload else None
@@ -372,6 +480,7 @@ async def restore_position(
     db: AsyncSession = Depends(get_db),
     current_user: User = Depends(get_current_user),
 ) -> dict:
+    await _require_visible_plan(db, production_plan_id)
     try:
         position = await restore_plan_position(
             db, production_plan_id, position_id, changed_by=current_user.id, reason=payload.reason if payload else None
@@ -395,6 +504,7 @@ async def position_history(
     position_id: int,
     db: AsyncSession = Depends(get_db),
 ) -> list[AuditLogOut]:
+    await _require_visible_plan(db, production_plan_id)
     position = await db.get(PlanPosition, position_id)
     if position is None or position.production_plan_id != production_plan_id:
         raise HTTPException(status_code=404, detail="Position not found")
@@ -520,6 +630,7 @@ async def bulk_approve_positions(
                     position_id,
                     force=payload.force,
                     changed_by=current_user.id,
+                    reason=payload.reason,
                 )
                 results.append(
                     BulkActionResultItem(
@@ -659,6 +770,7 @@ async def route_check(
     position_id: int,
     db: AsyncSession = Depends(get_db),
 ) -> RouteCheckOut:
+    await _require_visible_plan(db, production_plan_id)
     position = await db.get(PlanPosition, position_id)
     if position is None:
         raise HTTPException(status_code=404, detail="Position not found")
@@ -759,11 +871,32 @@ async def route_check(
             },
         }
 
+    signature_comparison = await compare_position_route_signature(
+        db,
+        position,
+        profile=await db.get(RouteRuleProfile, rule_profile_id) if rule_profile_id else None,
+        product=product,
+        route_id=route_info.route_id,
+    )
+
     return RouteCheckOut(
         expected_signature=expected_signature,
         active_route_snapshot=active_route_snapshot,
         match=len(issues) == 0,
         issues=issues,
+        route_signature=RouteSignatureCheckOut(
+            verdict=signature_comparison.verdict,
+            expected=signature_comparison.expected,
+            expected_steps=[
+                RouteSignatureStepOut(**step.as_dict())
+                for step in signature_comparison.expected_steps
+            ],
+            actual=signature_comparison.actual,
+            actual_steps=[
+                RouteSignatureStepOut(**step.as_dict())
+                for step in signature_comparison.actual_steps
+            ],
+        ),
     )
 
 
@@ -772,6 +905,7 @@ async def section_totals(
     production_plan_id: int,
     db: AsyncSession = Depends(get_db),
 ) -> SectionTotalsOut:
+    await _require_visible_plan(db, production_plan_id)
     positions = (
         await db.execute(
             select(PlanPosition).where(PlanPosition.production_plan_id == production_plan_id)
@@ -873,6 +1007,8 @@ def _plan_files_query():
     return (
         select(ImportBatch, ImportFile, PlanChangeSet.id, PlanChangeSet.applied_at)
         .join(ImportFile, ImportBatch.source_file_id == ImportFile.id)
+        .join(ProductionPlan, ImportBatch.production_plan_id == ProductionPlan.id)
+        .where(ProductionPlan.deleted_at.is_(None))
         .outerjoin(PlanChangeSet, PlanChangeSet.import_batch_id == ImportBatch.id)
     )
 
@@ -903,6 +1039,7 @@ def _plan_file_info(
 
 @router.get("/{production_plan_id}/files")
 async def plan_files(production_plan_id: int, db: AsyncSession = Depends(get_db)) -> list[PlanFileInfo]:
+    await _require_visible_plan(db, production_plan_id)
     batches = (
         await db.execute(
             _plan_files_query()
@@ -1162,6 +1299,9 @@ def _apply_all_positions_filters(
     has_warnings: str | None,
     dimensions: str | None = None,
 ):
+    stmt = stmt.join(ProductionPlan, PlanPosition.production_plan_id == ProductionPlan.id).where(
+        ProductionPlan.deleted_at.is_(None)
+    )
     stmt = stmt.where(
         PlanPosition.status.in_(ALL_POSITIONS_PLANNING_STATUSES),
         PlanPosition.deleted_at.is_(None),
@@ -1328,7 +1468,11 @@ async def _serialize_plan_positions(
 async def all_plan_files(db: AsyncSession = Depends(get_db)) -> list[PlanFileInfo]:
     """Return files from all production plans."""
     batches = (
-        await db.execute(_plan_files_query().order_by(ImportBatch.created_at.desc()))
+        await db.execute(
+            _plan_files_query()
+            .where(ProductionPlan.deleted_at.is_(None))
+            .order_by(ImportBatch.created_at.desc())
+        )
     ).all()
     return [_plan_file_info(batch, file, change_set_id, applied_at) for batch, file, change_set_id, applied_at in batches]
 
@@ -1408,6 +1552,8 @@ async def cancelled_positions(db: AsyncSession = Depends(get_db)) -> list[PlanPo
     positions = (
         await db.execute(
             select(PlanPosition)
+            .join(ProductionPlan, PlanPosition.production_plan_id == ProductionPlan.id)
+            .where(ProductionPlan.deleted_at.is_(None))
             .where(PlanPosition.status == PlanPositionStatus.cancelled)
             .where(PlanPosition.deleted_at.is_(None))
             .order_by(PlanPosition.source_row_number, PlanPosition.id)
@@ -1488,6 +1634,7 @@ async def cancelled_positions(db: AsyncSession = Depends(get_db)) -> list[PlanPo
 
 @router.get("/{production_plan_id}/all-positions")
 async def all_positions(production_plan_id: int, db: AsyncSession = Depends(get_db)) -> list[PlanPositionOut]:
+    await _require_visible_plan(db, production_plan_id)
     from app.models.production_plan import PlanChangeItem
 
     positions = (
@@ -1669,9 +1816,7 @@ async def batch_assign_route(
 ) -> BatchAssignRouteOut:
     print(f"DEBUG batch_assign_route: plan_id={production_plan_id}, position_ids={payload.position_ids}, route_id={payload.route_id}")
 
-    plan = await db.get(ProductionPlan, production_plan_id)
-    if plan is None:
-        raise HTTPException(status_code=404, detail="Production plan not found")
+    await _require_visible_plan(db, production_plan_id)
     await _reject_legacy_plan_mutation(db, production_plan_id)
 
     if not payload.position_ids:
@@ -1751,6 +1896,7 @@ class DuplicateGroup(BaseModel):
 @router.get("/{production_plan_id}/duplicates", response_model=list[DuplicateGroup])
 async def find_plan_duplicates(production_plan_id: int, db: AsyncSession = Depends(get_db)) -> list[DuplicateGroup]:
     """Find duplicate positions by unique Excel row fingerprint within a production plan."""
+    await _require_visible_plan(db, production_plan_id)
     positions = (
         await db.execute(
             select(PlanPosition)
@@ -1796,6 +1942,7 @@ async def find_plan_duplicates(production_plan_id: int, db: AsyncSession = Depen
 
 @router.get("/{production_plan_id}/batches/{batch_id}/preview")
 async def batch_preview(production_plan_id: int, batch_id: int, db: AsyncSession = Depends(get_db)) -> dict:
+    await _require_visible_plan(db, production_plan_id)
     from app.models.production_plan import PlanChangeItem
 
     change_set = (
@@ -1966,6 +2113,7 @@ async def update_position_quantity(
     from app.services.plan_validation import validate_plan_position
     from app.models.production_plan import PlanPositionValidationStatus
 
+    await _require_visible_plan(db, production_plan_id)
     position = await db.get(PlanPosition, position_id)
     if position is None or position.production_plan_id != production_plan_id:
         raise HTTPException(status_code=404, detail="Position not found")

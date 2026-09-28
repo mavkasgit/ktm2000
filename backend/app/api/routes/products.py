@@ -465,6 +465,44 @@ async def _sync_processing_flags(db: AsyncSession, product_id: int, codes: list[
         db.add(ProductProcessingFlag(product_id=product_id, flag_id=fid))
 
 
+def _orphan_hanger_norm_keys(
+    manual_by_length: dict[str, int | None] | None,
+    existing: dict[str, dict[str, int | None]],
+    registry_keys: set[str],
+) -> list[str]:
+    """Ключи ручных норм, не применимых ни к одной длине реестра (ADR-0047).
+
+    Ключ нормы — нормальная длина артикула (ADR-0028 п. 2). Значение под
+    длиной, которой нет в реестре, не применится нигде: пересборка словаря
+    при PATCH его тихо выбросит, а это ручной ввод человека. Спасение одно
+    из двух — оператор удаляет значение (payload приносит для этого ключа
+    ``manual=null``) или вводит совпадающую длину в реестр.
+    """
+    values: dict[str, int | None] = {
+        key: (entry.get("manual") if isinstance(entry, dict) else None)
+        for key, entry in existing.items()
+    }
+    for key, manual in (manual_by_length or {}).items():
+        values[key] = manual
+    return sorted(
+        (key for key, manual in values.items() if manual is not None and key not in registry_keys),
+        key=float,
+    )
+
+
+def _reject_orphan_hanger_norms(orphan_keys: list[str]) -> None:
+    """Отклонить сохранение карточки с нормой вне реестра длин (ADR-0047 п. 3)."""
+    if not orphan_keys:
+        return
+    listed = ", ".join(f"{key} мм" for key in orphan_keys)
+    raise HTTPException(
+        status_code=422,
+        detail=(
+            f"Норма подвеса не применима ни к одной длине артикула: {listed}. "
+            "Удалите значение или добавьте в реестр артикула длину, совпадающую с ключом нормы."
+        ),
+    )
+
 def _build_hanger_quantity_dict(
     lengths: Sequence[ProductLengthIn | ProductLength],
     perimeter_mm: float | None,
@@ -1141,6 +1179,16 @@ async def patch_product(
                 select(ProductLength).where(ProductLength.product_id == product_id)
             )
         ).all()
+        # Ключ нормы проверяется по реестру ПОСЛЕ его синхронизации: длина,
+        # введённая этим же PATCH, снимает блокировку (ADR-0047 п. 3).
+        # Снятая длина — не исключение: её норма тоже была ручным вводом.
+        _reject_orphan_hanger_norms(
+            _orphan_hanger_norm_keys(
+                manual_by_length,
+                existing,
+                {_length_key(float(row.length_mm)) for row in current_lengths},
+            )
+        )
         item.quantity_per_hanger = _build_hanger_quantity_dict(
             current_lengths,
             item.perimeter_mm,
