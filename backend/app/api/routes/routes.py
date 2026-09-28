@@ -10,6 +10,7 @@ from app.models.section import Section
 from app.models.internal_plan import SectionPlanLine
 from app.models.release_batch import ReleaseBatchPosition
 from app.models.production_plan import PlanPosition, PlanChangeItem
+from app.services.route_signature import refresh_route_signature
 from app.services.route_transform import resolve_stage_transforms_dimensions
 
 router = APIRouter(prefix="/routes", tags=["routes"])
@@ -546,6 +547,8 @@ async def create_route_step(route_id: int, payload: StepCreate, db: AsyncSession
         db.add(op)
         await db.flush()
     await db.refresh(stage)
+    # Сигнатура маршрута (#214) — по этапам, включая только что добавленный.
+    await refresh_route_signature(db, route)
 
     if stage_kind == "transit":
         section_for_response = storage_section
@@ -692,4 +695,6 @@ async def replace_route_steps(route_id: int, payload: list[StepUpdate], db: Asyn
             stage_kind=stage.stage_kind,
             storage_section_id=stage.storage_section_id,
         ))
+    # Сигнатура маршрута (#214) — по этапам, которые оператор только что задал.
+    await refresh_route_signature(db, route)
     return result

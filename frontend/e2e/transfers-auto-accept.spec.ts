@@ -37,7 +37,7 @@ import {
   E2E_SECTION,
   unwrapItems,
 } from "./api-helpers";
-import { confirmProductionLaunchViaUI } from "./ui-helpers";
+import { confirmForceApproveViaUI, confirmProductionLaunchViaUI } from "./ui-helpers";
 
 /** Строка позиции плана, нужная этому спеку (api-helpers отдаёт сырой JSON). */
 type PlanPositionRow = {
@@ -136,7 +136,10 @@ test.describe("@smoke Explicit transfer — 2-step ritual (Send + Issue)", () =>
       .filter({ visible: true });
     try {
       await expect(visibleConfirmBtn).toBeVisible({ timeout: 3_000 });
-      await visibleConfirmBtn.click();
+      await confirmForceApproveViaUI(
+        authenticatedPage,
+        "e2e: проверяем auto-accept передачи, позиция заведена вручную и сверена",
+      );
     } catch {
       // no risk dialog
     }
@@ -147,7 +150,7 @@ test.describe("@smoke Explicit transfer — 2-step ritual (Send + Issue)", () =>
     const execSearch = authenticatedPage.getByPlaceholder("Поиск");
     await expect(execSearch).toBeVisible({ timeout: 10_000 });
     await execSearch.fill("ЮП-2083");
-    const execRow = authenticatedPage.locator("tr", { hasText: `#${pos2083.id}` }).first();
+    const execRow = authenticatedPage.locator(`tr[data-row-key="${pos2083.id}"]`).first();
     await expect(execRow).toBeVisible({ timeout: 15_000 });
     const launchBtn = execRow.getByRole("button", { name: "Взять в работу" });
     await expect(launchBtn).toBeVisible({ timeout: 5_000 });

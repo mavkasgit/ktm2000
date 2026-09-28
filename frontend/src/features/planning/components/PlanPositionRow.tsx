@@ -1,6 +1,7 @@
 import { useMemo, useState } from "react"
 import { AlertTriangle, Route } from "lucide-react"
 import { useQuery, useQueryClient } from "@tanstack/react-query"
+import { validationLabels } from "@/shared/lib/generated-labels"
 import { Button, AlertDialog, AlertDialogContent, AlertDialogHeader, AlertDialogTitle, AlertDialogDescription, AlertDialogFooter, AlertDialogAction, AlertDialogCancel, Combobox, PositionSkuCell, QuantityRangeCell, CutLayoutCell } from "@/shared/ui"
 import { formatDimensionsLabel } from "@/shared/api/stock"
 import { cn } from "@/shared/utils/cn"
@@ -21,7 +22,7 @@ import {
 
 export function PositionRow({ pos, onApprove, onDelete, selected, routes, onAssignRoute, onOpenDetail, duplicateConflict, onJumpToPosition, onSelect, onSkuClick }: {
   pos: PlanPositionOut;
-  onApprove: (id: number, planId?: number, force?: boolean) => Promise<void>;
+  onApprove: (id: number, planId?: number, force?: boolean, reason?: string) => Promise<void>;
   onDelete: (id: number, planId?: number) => void;
   selected?: boolean;
   routes?: ProductionRoute[];
@@ -38,6 +39,7 @@ export function PositionRow({ pos, onApprove, onDelete, selected, routes, onAssi
   const noWarnings = !hasWarnings
   const originalQuantity = (pos.payload?.original_quantity ?? null) as string | number | null
   const translatedErrors = hasErrors ? pos.errors.map((e) => translateLabel(e, errorLabels)) : []
+  const validationOverridden = pos.validation_status === "overridden"
   const translatedWarnings = hasWarnings ? pos.warnings.map((w) => translateLabel(w, warningLabels)) : []
   const rowNum = (() => {
     const numbers = Array.isArray(pos.source_row_numbers)
@@ -58,6 +60,7 @@ export function PositionRow({ pos, onApprove, onDelete, selected, routes, onAssi
   const [deleteDialogOpen, setDeleteDialogOpen] = useState(false)
   const [approving, setApproving] = useState(false)
   const [shouldRunRouteCheck, setShouldRunRouteCheck] = useState(false)
+  const [overrideReason, setOverrideReason] = useState("")
 
   // Route-check runs lazily on-demand or when the dialog is open
   const { data: routeCheckData, isLoading: routeCheckLoading, error: routeCheckError } = useQuery({
@@ -105,12 +108,16 @@ export function PositionRow({ pos, onApprove, onDelete, selected, routes, onAssi
   }
 
   const handleConfirmApprove = async () => {
+    const reason = overrideReason.trim()
+    // Форс без причины сервер не примет: обход = запись о согласии человека.
+    if (!reason) return
     setApproving(true)
     try {
-      await onApprove(pos.id, pos.production_plan_id, true)
+      await onApprove(pos.id, pos.production_plan_id, true, reason)
     } finally {
       setApproving(false)
       setApproveDialogOpen(false)
+      setOverrideReason("")
     }
   }
 
@@ -209,6 +216,8 @@ export function PositionRow({ pos, onApprove, onDelete, selected, routes, onAssi
       <div className="p-2 text-sm">
         <PositionSkuCell
           sku={pos.source_sku}
+          freeStockQuantity={pos.free_stock_quantity}
+          deficitQuantity={pos.deficit_quantity}
           availableQuantity={pos.available_remainder_quantity}
           onClick={onSkuClick}
         />
@@ -225,7 +234,7 @@ export function PositionRow({ pos, onApprove, onDelete, selected, routes, onAssi
       <div className="p-2 text-sm whitespace-normal break-words leading-tight text-muted-foreground">
         <CutLayoutCell
           layout={pos.cut_layout}
-          fallback={pos.dimensions_label ?? formatDimensionsLabel(pos.dimensions)}
+          fallback={formatDimensionsLabel(pos.dimensions, pos.dimensions_label)}
         />
       </div>
       <div className="p-2 text-sm truncate whitespace-nowrap" title={pos.source_name ?? undefined}>{pos.source_name ?? "—"}</div>
@@ -270,34 +279,43 @@ export function PositionRow({ pos, onApprove, onDelete, selected, routes, onAssi
         )}
       </div>
       <div className="p-2 text-xs">
-        {noErrors ? null : (
-        <div className="space-y-1 text-red-600">
-          {hasDuplicateConflict && (
-            <div>
-              <span className="block">Дубликат Excel-строки</span>
-              <div className="flex flex-wrap gap-1 mt-1">
-                {duplicateConflict?.conflictIds.map((id) => (
-                  <button
-                    key={id}
-                    type="button"
-                    className="underline hover:no-underline"
-                    onClick={(e) => {
-                      e.stopPropagation()
-                      onJumpToPosition?.(id)
-                    }}
-                  >
-                    #{id}
-                  </button>
-                ))}
-              </div>
+        {validationOverridden ? (
+          <div className="space-y-1 text-amber-700">
+            <span className="block font-medium">Валидация: {validationLabels.overridden}</span>
+            {hasErrors && (
+              <span className="truncate block" title={translatedErrors.join("\n")}>
+                {translatedErrors.join(", ")}
+              </span>
+            )}
+          </div>
+        ) : noErrors ? null : (
+          <div className="space-y-1 text-red-600">
+            {hasErrors && (
+              <span className="truncate block" title={translatedErrors.join("\n")}>
+                {translatedErrors.join(", ")}
+              </span>
+            )}
+          </div>
+        )}
+        {hasDuplicateConflict && (
+          <div className="space-y-1 text-red-600">
+            <span className="block">Дубликат Excel-строки</span>
+            <div className="flex flex-wrap gap-1 mt-1">
+              {duplicateConflict?.conflictIds.map((id) => (
+                <button
+                  key={id}
+                  type="button"
+                  className="underline hover:no-underline"
+                  onClick={(e) => {
+                    e.stopPropagation()
+                    onJumpToPosition?.(id)
+                  }}
+                >
+                  #{id}
+                </button>
+              ))}
             </div>
-          )}
-          {hasErrors && (
-            <span className="truncate block" title={translatedErrors.join("\n")}>
-              {translatedErrors.join(", ")}
-            </span>
-          )}
-        </div>
+          </div>
         )}
       </div>
       <div className="p-2 text-xs">
@@ -337,7 +355,7 @@ export function PositionRow({ pos, onApprove, onDelete, selected, routes, onAssi
             Позиция требует внимания
           </AlertDialogTitle>
           <AlertDialogDescription className="text-left">
-            Эта позиция может содержать некорректные данные. Утверждение потребует последующей проверки.
+            Эта позиция может содержать некорректные данные. Утверждение потребует причины: она попадёт в журнал действий.
           </AlertDialogDescription>
         </AlertDialogHeader>
 
@@ -390,9 +408,30 @@ export function PositionRow({ pos, onApprove, onDelete, selected, routes, onAssi
           </div>
         )}
 
+        <div className="rounded-md border bg-amber-50 p-3">
+          <label htmlFor={`override-reason-${pos.id}`} className="text-sm font-medium block mb-1">
+            Причина перекрытия валидации
+          </label>
+          <p className="text-xs text-muted-foreground mb-2">
+            Позиция уйдёт в работу с «{validationLabels.overridden}» валидацией: ошибки останутся на позиции,
+            а причина попадёт в журнал действий. Обход не отменяет правила, а фиксирует, что человек знал о них.
+          </p>
+          <textarea
+            id={`override-reason-${pos.id}`}
+            value={overrideReason}
+            onChange={(e) => setOverrideReason(e.target.value)}
+            rows={3}
+            placeholder="Например: запрещённый этап исключён по заявке технолога №123"
+            className="w-full rounded-md border bg-background px-2 py-1 text-sm"
+          />
+        </div>
+
         <AlertDialogFooter>
           <AlertDialogCancel disabled={approving}>Отмена</AlertDialogCancel>
-          <AlertDialogAction onClick={handleConfirmApprove} disabled={approving}>
+          <AlertDialogAction
+            onClick={handleConfirmApprove}
+            disabled={approving || overrideReason.trim().length === 0}
+          >
             {approving ? "Утверждение..." : "Утвердить всё равно"}
           </AlertDialogAction>
         </AlertDialogFooter>

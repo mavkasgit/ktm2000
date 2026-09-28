@@ -14,7 +14,7 @@ import {
 import { statusLabels, statusVariant } from "../lib/plan-labels"
 import { isDuplicateRow } from "../lib/duplicateRows"
 import { buildImportRowStats } from "../lib/importRowStats"
-import { invalidatePlanImportCaches } from "../lib/planImportCaches"
+import { invalidateAfter } from "@/shared/api/cacheInvalidation"
 import { queryKeys } from "@/shared/api/queryKeys"
 import { applyChangeSet, rollbackChangeSet } from "../api"
 import { ApplyImportConfirmDialog } from "./ApplyImportConfirmDialog"
@@ -69,7 +69,7 @@ export function FileRow({
         description: `Создано: ${result.created_positions ?? 0}, обновлено: ${result.updated_positions ?? 0}`,
         variant: "success",
       })
-      invalidatePlanImportCaches(queryClient, { planId: activePlan.id, batchId: file.batch_id })
+      invalidateAfter(queryClient, "importApplied")
       setApplyDialogOpen(false)
     } catch (e) {
       toast({ title: "Ошибка применения", description: getErrorMessage(e), variant: "destructive" })
@@ -84,7 +84,7 @@ export function FileRow({
     try {
       await rollbackChangeSet(String(activePlan.id), String(changeSetId))
       toast({ title: "Импорт откачен", description: `Файл «${file.filename}» и его позиции отменены`, variant: "success" })
-      invalidatePlanImportCaches(queryClient, { planId: activePlan.id, batchId: file.batch_id })
+      invalidateAfter(queryClient, "importApplied")
       setRollbackDialogOpen(false)
     } catch (e) {
       toast({ title: "Ошибка отката", description: getErrorMessage(e), variant: "destructive" })

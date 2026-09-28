@@ -202,7 +202,7 @@ async def test_balances_sort_by_quantity(client, session: AsyncSession):
 
     resp = await client.get(
         f"/api/stock/balance?location_id={location.id}"
-        f"&sort_by=quantity&sort_order=asc&limit=50",
+        f"&sort=quantity:asc&limit=50",
     )
     assert resp.status_code == 200, resp.text
     quantities = [Decimal(row["balance_qty"]) for row in resp.json()["balances"]]
@@ -282,3 +282,179 @@ async def test_balances_location_ids_filter(client, session: AsyncSession):
     assert body["total"] == 2
     location_ids = {row["location_id"] for row in body["balances"]}
     assert location_ids == {loc_a.id, loc_b.id}
+
+
+@pytest.mark.asyncio
+async def test_balances_multi_sort_quantity_then_sku(client, session: AsyncSession):
+    """Вторая колонка ?sort= перебивает tiebreaker первой (порядок создания)."""
+    user = await _make_user(session)
+    token = create_access_token(subject=user.email)
+    client.headers["Authorization"] = f"Bearer {token}"
+
+    location = await _make_location(session, code="BAL-MSORT-LOC", name="Multi Sort Balance")
+    svc = StockCommandService()
+    # Артикулы заводятся по возрастанию: порядок создания (product_id) совпадает
+    # с sku:asc и противоположен sku:desc — без этого вторая колонка ничего бы
+    # не поменяла и тест прошёл бы на одноприоритетной сортировке.
+    for sku in ("BAL-MS-A", "BAL-MS-B", "BAL-MS-C"):
+        product = await _make_product(session, sku=sku)
+        await svc.record(session, StockCommand(
+            product_id=product.id,
+            to_location_id=location.id,
+            quantity=Decimal("7"),
+            reason=Reason.MANUAL_IN,
+            created_by=user.id,
+        ))
+    await session.commit()
+
+    single = await client.get(
+        f"/api/stock/balance?location_id={location.id}&sort=quantity:asc&limit=50",
+    )
+    multi = await client.get(
+        f"/api/stock/balance?location_id={location.id}&sort=quantity:asc,sku:desc&limit=50",
+    )
+    assert single.status_code == 200, single.text
+    assert multi.status_code == 200, multi.text
+
+    single_skus = [row["product_sku"] for row in single.json()["balances"]]
+    multi_skus = [row["product_sku"] for row in multi.json()["balances"]]
+    assert single_skus == ["BAL-MS-A", "BAL-MS-B", "BAL-MS-C"]
+    assert multi_skus == ["BAL-MS-C", "BAL-MS-B", "BAL-MS-A"]
+    assert single_skus != multi_skus
+
+
+@pytest.mark.asyncio
+async def test_balances_grouping_levels_kept_on_ties(client, session: AsyncSession):
+    """При равных количествах строки одного товара идут подряд и по своим локациям."""
+    user = await _make_user(session)
+    token = create_access_token(subject=user.email)
+    client.headers["Authorization"] = f"Bearer {token}"
+
+    loc_a = await _make_location(session, code="BAL-GRP-A", name="Group A")
+    loc_b = await _make_location(session, code="BAL-GRP-B", name="Group B")
+    svc = StockCommandService()
+    # Порядок проводок внутри товара НАМЕРЕННО обратный порядку локаций:
+    # так тест краснеет, если из ORDER BY выпал уровень «location_id».
+    for sku, locations in (
+        ("BAL-GRP-1", (loc_b, loc_a)),
+        ("BAL-GRP-2", (loc_a, loc_b)),
+    ):
+        product = await _make_product(session, sku=sku)
+        for location in locations:
+            await svc.record(session, StockCommand(
+                product_id=product.id,
+                to_location_id=location.id,
+                quantity=Decimal("4"),
+                reason=Reason.MANUAL_IN,
+                created_by=user.id,
+            ))
+    await session.commit()
+
+    resp = await client.get(
+        f"/api/stock/balance?location_ids={loc_a.id}&location_ids={loc_b.id}"
+        f"&sort=quantity:asc&limit=50",
+    )
+    assert resp.status_code == 200, resp.text
+    rows = resp.json()["balances"]
+    assert len(rows) == 4
+    assert {Decimal(row["balance_qty"]) for row in rows} == {Decimal("4")}
+
+    assert [(row["product_sku"], row["location_id"]) for row in rows] == [
+        ("BAL-GRP-1", loc_a.id),
+        ("BAL-GRP-1", loc_b.id),
+        ("BAL-GRP-2", loc_a.id),
+        ("BAL-GRP-2", loc_b.id),
+    ]
+
+
+@pytest.mark.asyncio
+async def test_balances_default_order_is_sku_asc(client, session: AsyncSession):
+    """Без параметра сортировки порядок прежний: артикул по возрастанию."""
+    user = await _make_user(session)
+    token = create_access_token(subject=user.email)
+    client.headers["Authorization"] = f"Bearer {token}"
+
+    location = await _make_location(session, code="BAL-DEF-LOC", name="Default Order Balance")
+    svc = StockCommandService()
+    # Создаём НЕ по алфавиту: сортировка по product_id дала бы другой порядок.
+    for sku in ("BAL-DEF-C", "BAL-DEF-A", "BAL-DEF-B"):
+        product = await _make_product(session, sku=sku)
+        await svc.record(session, StockCommand(
+            product_id=product.id,
+            to_location_id=location.id,
+            quantity=Decimal("1"),
+            reason=Reason.MANUAL_IN,
+            created_by=user.id,
+        ))
+    await session.commit()
+
+    resp = await client.get(f"/api/stock/balance?location_id={location.id}&limit=50")
+    assert resp.status_code == 200, resp.text
+    assert [row["product_sku"] for row in resp.json()["balances"]] == [
+        "BAL-DEF-A",
+        "BAL-DEF-B",
+        "BAL-DEF-C",
+    ]
+
+
+@pytest.mark.asyncio
+async def test_balances_rejects_unknown_sort_field(client, session: AsyncSession):
+    """Кликнул неизвестную колонку — 400, а не молчаливый откат на дефолт."""
+    user = await _make_user(session)
+    token = create_access_token(subject=user.email)
+    client.headers["Authorization"] = f"Bearer {token}"
+
+    resp = await client.get("/api/stock/balance?sort=unknown:asc")
+    assert resp.status_code == 400, resp.text
+
+
+@pytest.mark.asyncio
+async def test_balances_rejects_unknown_direction(client, session: AsyncSession):
+    """Направление вне asc/desc — 400, а не asc по умолчанию."""
+    user = await _make_user(session)
+    token = create_access_token(subject=user.email)
+    client.headers["Authorization"] = f"Bearer {token}"
+
+    resp = await client.get("/api/stock/balance?sort=quantity:sideways")
+    assert resp.status_code == 400, resp.text
+
+
+@pytest.mark.asyncio
+async def test_balances_ignores_legacy_sort_by_params(client, session: AsyncSession):
+    """Сепарактные sort_by/sort_order больше не объявлены и не сортируют."""
+    user = await _make_user(session)
+    token = create_access_token(subject=user.email)
+    client.headers["Authorization"] = f"Bearer {token}"
+
+    location = await _make_location(session, code="BAL-LEG-LOC", name="Legacy Params Balance")
+    svc = StockCommandService()
+    for sku, qty in (("BAL-LEG-A", "1"), ("BAL-LEG-B", "3"), ("BAL-LEG-C", "2")):
+        product = await _make_product(session, sku=sku)
+        await svc.record(session, StockCommand(
+            product_id=product.id,
+            to_location_id=location.id,
+            quantity=Decimal(qty),
+            reason=Reason.MANUAL_IN,
+            created_by=user.id,
+        ))
+    await session.commit()
+
+    legacy = await client.get(
+        f"/api/stock/balance?location_id={location.id}"
+        f"&sort_by=quantity&sort_order=desc&limit=50",
+    )
+    assert legacy.status_code == 200, legacy.text
+    assert [row["product_sku"] for row in legacy.json()["balances"]] == [
+        "BAL-LEG-A",
+        "BAL-LEG-B",
+        "BAL-LEG-C",
+    ]
+
+    # Данные подобраны так, что «по количеству убыванию» — другой порядок:
+    # значит тест краснеет, если legacy-параметры вдруг начнут влиять.
+    by_quantity = await client.get(
+        f"/api/stock/balance?location_id={location.id}&sort=quantity:desc&limit=50",
+    )
+    assert by_quantity.status_code == 200, by_quantity.text
+    quantity_skus = [row["product_sku"] for row in by_quantity.json()["balances"]]
+    assert quantity_skus == ["BAL-LEG-B", "BAL-LEG-C", "BAL-LEG-A"]

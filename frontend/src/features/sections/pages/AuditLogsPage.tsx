@@ -1,4 +1,4 @@
-import { useState, useMemo, Fragment, useEffect } from "react";
+import { useState, useMemo, Fragment } from "react";
 import {
   CheckCircle2,
   AlertCircle,
@@ -10,12 +10,16 @@ import {
 import { useQuery } from "@tanstack/react-query";
 import { getAuditLogs, type AuditLogEntry, type GetAuditLogsParams } from "@/shared/api/auditLogs";
 import { queryKeys } from "@/shared/api/queryKeys";
-import { DateRangePicker, SortableFilterHeader, TableCornerResetHeader, TableCornerResetCell, TablePaginationFooter, DATA_TABLE_STYLES } from "@/shared/ui";
+import { DateRangePicker, DataTableColumnHeader, TableCornerResetHeader, TableCornerResetCell, TablePaginationFooter, DATA_TABLE_STYLES } from "@/shared/ui";
 import { useFilterableTable } from "@/shared/hooks/useFilterableTable";
 import { usePaginatedTableQuery } from "@/shared/hooks/usePaginatedTableQuery";
-import { pickColumnApiValue } from "@/shared/lib/columnFilterSearch";
+import type { SortConfig } from "@/shared/hooks/useTableQueryEngine";
+import { buildSortParam } from "@/shared/lib/sortQueryParam";
+import { buildColumnApiParams } from "@/shared/lib/columnSpecs";
+import { useDebouncedValue } from "@/shared/lib/useDebouncedValue";
+import { auditColumns, type AuditFilterField } from "../lib/auditColumns";
 
-type LogFilterField = "createdAt" | "status" | "sectionName" | "productSku" | "action" | "entityType";
+type LogFilterField = AuditFilterField;
 type LogField = LogFilterField;
 
 function formatDateTime(dateStr: string) {
@@ -34,6 +38,13 @@ function formatDateTime(dateStr: string) {
   return `${date} ${time}`;
 }
 
+/**
+ * Порядок строк по умолчанию: «сначала свежие». Сервер сортирует по нему,
+ * пока оператор не выбрал колонку, и сброс возвращает его, а не пустоту.
+ */
+const LOG_DEFAULT_SORT: SortConfig<LogFilterField>[] = [{ field: "createdAt", order: "desc" }];
+
+
 function mapSortFieldToApi(field: LogFilterField): string {
   switch (field) {
     case "createdAt":
@@ -49,56 +60,28 @@ function mapSortFieldToApi(field: LogFilterField): string {
   }
 }
 
-function extractEntityType(cellValue: string): string | undefined {
-  if (cellValue === "—") return undefined;
-  const hashIdx = cellValue.indexOf(" #");
-  return hashIdx >= 0 ? cellValue.slice(0, hashIdx) : cellValue;
-}
-
+/**
+ * Параметры запроса по отфильтрованным колонкам — из описания колонок, а не
+ * перечислением: пока здесь стояло пять строк с именами колонок, шестая
+ * потребовала бы правки этого кода.
+ */
 function buildAuditColumnApiParams(
-  columnFilters: Partial<Record<LogFilterField, Set<string>>>,
-  columnSearchQueries: Partial<Record<LogFilterField, string>>,
+  columnFilters: Partial<Record<AuditFilterField, Set<string>>>,
+  columnSearchQueries: Partial<Record<AuditFilterField, string>>,
 ): Pick<
   GetAuditLogsParams,
   "section_name" | "product_sku" | "action" | "entity_type" | "status"
 > {
-  const params: Pick<
-    GetAuditLogsParams,
-    "section_name" | "product_sku" | "action" | "entity_type" | "status"
-  > = {};
-
-  const sectionName = pickColumnApiValue(columnFilters, columnSearchQueries, "sectionName", (v) =>
-    v === "—" ? undefined : v,
-  );
-  if (sectionName) params.section_name = sectionName;
-
-  const productSku = pickColumnApiValue(columnFilters, columnSearchQueries, "productSku", (v) =>
-    v === "—" ? undefined : v,
-  );
-  if (productSku) params.product_sku = productSku;
-
-  const action = pickColumnApiValue(columnFilters, columnSearchQueries, "action", (v) =>
-    v === "—" ? undefined : v,
-  );
-  if (action) params.action = action;
-
-  const entityType = pickColumnApiValue(
-    columnFilters,
-    columnSearchQueries,
-    "entityType",
-    extractEntityType,
-  );
-  if (entityType) params.entity_type = entityType;
-
-  const status = pickColumnApiValue(columnFilters, columnSearchQueries, "status");
-  if (status) params.status = status;
-
-  return params;
+  return buildColumnApiParams(columnFilters, columnSearchQueries, auditColumns);
 }
+
 
 export function AuditLogsPage() {
   // Поиск и базовые фильтры
   const [search, setSearch] = useState("");
+  // Поиск по журналу уходит на сервер: без паузы каждый символ — отдельный
+  // запрос. В задержке только запрос, само поле отвечает на ввод сразу.
+  const debouncedSearch = useDebouncedValue(search);
   const [statusFilter, setStatusFilter] = useState<"all" | "success" | "error" | "info">("all");
   const [dateFrom, setDateFrom] = useState<string>("");
   const [dateTo, setDateTo] = useState<string>("");
@@ -113,10 +96,11 @@ export function AuditLogsPage() {
     columnFilters,
     columnSearchQueries,
     sortConfigs,
-    setSortConfigs,
+    handleSort: handleSortChange,
     resetAll,
-    hasActiveFilters: hasTableFiltersActive,
+    hasActiveFilters,
   } = useFilterableTable<LogFilterField>({
+    defaultSort: LOG_DEFAULT_SORT,
     extraHasActive:
       search.trim().length > 0 ||
       statusFilter !== "all" ||
@@ -126,35 +110,20 @@ export function AuditLogsPage() {
       setStatusFilter("all");
       setDateFrom("");
       setDateTo("");
-      setSortConfigs([{ field: "createdAt", order: "desc" }]);
     },
   });
 
-  useEffect(() => {
-    setSortConfigs([{ field: "createdAt", order: "desc" }]);
-  }, [setSortConfigs]);
-
-  const activeSort = sortConfigs[0] ?? { field: "createdAt" as LogFilterField, order: "desc" as const };
-  const sortBy = activeSort.field;
-  const sortOrder = activeSort.order;
-
-  const sortIsNonDefault =
-    sortConfigs.length !== 1 ||
-    sortConfigs[0]?.field !== "createdAt" ||
-    sortConfigs[0]?.order !== "desc";
-
-  const hasActiveFilters =
-    search.trim().length > 0 ||
-    statusFilter !== "all" ||
-    hasActiveExtraFilters ||
-    hasTableFiltersActive ||
-    sortIsNonDefault;
-
-  const handleResetAllFilters = resetAll;
+  // Сортировку можно снять целиком, а сервер по умолчанию сортирует «сначала
+  // свежие»: без этой подстановки строки приедут в произвольном порядке.
+  // Цикл клика — общий (нет → убыв. → возр. → снять), поэтому третий клик
+  // действительно снимает колонку и подстановка вступает в дело. Свой цикл
+  // (нет → убыв. → возр. → возр.) этого не давал, и строка была мёртвой
+  // веткой: снять сортировку было нечем.
+  const effectiveSortConfigs = sortConfigs.length > 0 ? sortConfigs : LOG_DEFAULT_SORT;
 
   const pagination = usePaginatedTableQuery({
     limitOptions: [50, 100],
-    resetPageDeps: [search, statusFilter, dateFrom, dateTo, columnFilters, columnSearchQueries, sortConfigs],
+    resetPageDeps: [debouncedSearch, statusFilter, dateFrom, dateTo, columnFilters, columnSearchQueries, sortConfigs],
   });
   const { page, setPage, limit, setLimit, limitOptions, offset, getTotalPages, getRangeLabel } = pagination;
 
@@ -167,11 +136,10 @@ export function AuditLogsPage() {
     const { status: columnStatus, ...restColumnParams } = columnApiParams;
     return {
       status: statusFilter === "all" ? columnStatus : statusFilter,
-      search: search.trim() || undefined,
+      search: debouncedSearch.trim() || undefined,
       date_from: dateFrom ? `${dateFrom}T00:00:00` : undefined,
       date_to: dateTo ? `${dateTo}T23:59:59` : undefined,
-      sort_by: mapSortFieldToApi(sortBy),
-      sort_order: sortOrder,
+      sort: buildSortParam(effectiveSortConfigs, mapSortFieldToApi),
       limit,
       offset,
       ...restColumnParams,
@@ -180,11 +148,10 @@ export function AuditLogsPage() {
     [
       statusFilter,
       columnApiParams,
-      search,
+      debouncedSearch,
       dateFrom,
       dateTo,
-      sortBy,
-      sortOrder,
+      effectiveSortConfigs,
       limit,
       offset,
     ],
@@ -200,16 +167,9 @@ export function AuditLogsPage() {
   const totalPages = getTotalPages(total);
   const counts = data?.counts || { all: 0, success: 0, error: 0, info: 0 };
   const taskStatuses = data?.task_statuses || {};
-  const uniqueValues = useMemo(
+  const uniqueValues: Partial<Record<AuditFilterField, string[]>> = useMemo(
     () => ({
       status: [...new Set(parsedLogs.map((entry) => entry.status))].sort(),
-      createdAt: [...new Set(parsedLogs.map((entry) => formatDateTime(entry.created_at)))].sort((a, b) => {
-        const getTime = (formatted: string) => {
-          const entry = parsedLogs.find((item) => formatDateTime(item.created_at) === formatted);
-          return entry ? new Date(entry.created_at).getTime() : 0;
-        };
-        return getTime(a) - getTime(b);
-      }),
       sectionName: [...new Set(parsedLogs.map((entry) => entry.section_name || "—"))].sort((a, b) =>
         a.localeCompare(b, "ru"),
       ),
@@ -229,16 +189,6 @@ export function AuditLogsPage() {
     }),
     [parsedLogs],
   );
-
-  const handleSortChange = (field: LogField) => {
-    setSortConfigs((prev) => {
-      const existing = prev.find((s) => s.field === field);
-      if (!existing) {
-        return [{ field, order: "desc" }];
-      }
-      return [{ field, order: existing.order === "asc" ? "desc" : "asc" }];
-    });
-  };
 
   const toggleRow = (id: number) => {
     setExpandedRows((prev) => {
@@ -426,78 +376,23 @@ export function AuditLogsPage() {
             <table className="w-full border-separate border-spacing-0 text-sm">
               <thead>
                 <tr>
-                  <th className={`${headerCellClass} p-0 w-[8%] text-left`}>
-                    <SortableFilterHeader<LogFilterField>
-                      field="status"
-                      label="Статус"
-                      currentSorts={sortConfigs}
-                      onSortChange={handleSortChange}
-                      values={uniqueValues.status}
-                      {...bindColumn("status")}
-                      valueLabel={(val) =>
-                        val === "success" ? "Успешно" : val === "error" ? "Ошибка" : "Информация"
-                      }
-                    />
-                  </th>
-                  <th className={`${headerCellClass} p-0 w-[16%] text-left`}>
-                    <SortableFilterHeader<LogFilterField>
-                      field="createdAt"
-                      label="Дата и время"
-                      currentSorts={sortConfigs}
-                      onSortChange={handleSortChange}
-                      values={uniqueValues.createdAt}
-                      {...bindColumn("createdAt")}
-                    />
-                  </th>
-                  <th className={`${headerCellClass} p-0 w-[14%] text-left`}>
-                    <SortableFilterHeader<LogFilterField>
-                      field="sectionName"
-                      label="Участок"
-                      currentSorts={sortConfigs}
-                      onSortChange={handleSortChange}
-                      values={uniqueValues.sectionName}
-                      {...bindColumn("sectionName")}
-                    />
-                  </th>
-                  <th className={`${headerCellClass} w-[12%] text-left`}>
-                    <span className="text-xs font-medium text-muted-foreground">Задание</span>
-                  </th>
-                  <th className={`${headerCellClass} p-0 w-[12%] text-left`}>
-                    <SortableFilterHeader<LogFilterField>
-                      field="productSku"
-                      label="Артикул"
-                      currentSorts={sortConfigs}
-                      onSortChange={handleSortChange}
-                      values={uniqueValues.productSku}
-                      {...bindColumn("productSku")}
-                    />
-                  </th>
-                  <th className={`${headerCellClass} p-0 w-[14%] text-left`}>
-                    <SortableFilterHeader<LogFilterField>
-                      field="action"
-                      label="Действие"
-                      currentSorts={sortConfigs}
-                      onSortChange={handleSortChange}
-                      values={uniqueValues.action}
-                      {...bindColumn("action")}
-                    />
-                  </th>
-                  <th className={`${headerCellClass} p-0 w-[12%] text-left`}>
-                    <SortableFilterHeader<LogFilterField>
-                      field="entityType"
-                      label="Сущность"
-                      currentSorts={sortConfigs}
-                      onSortChange={handleSortChange}
-                      values={uniqueValues.entityType}
-                      {...bindColumn("entityType")}
-                    />
-                  </th>
-                  <th className={`${headerCellClass} w-[12%] text-left`}>
-                    <span className="text-xs font-medium text-muted-foreground">Подробности</span>
-                  </th>
+                  {auditColumns.map((column) => (
+                    <th
+                      key={column.id}
+                      className={`${headerCellClass} ${column.headerClassName ?? "text-left"}`}
+                    >
+                      <DataTableColumnHeader
+                        column={column}
+                        bindColumn={bindColumn}
+                        values={column.filterField ? uniqueValues[column.filterField] : undefined}
+                        currentSorts={sortConfigs}
+                        onSortChange={handleSortChange}
+                      />
+                    </th>
+                  ))}
                   <TableCornerResetHeader
                     hasActiveFilters={hasActiveFilters}
-                    onReset={handleResetAllFilters}
+                    onReset={resetAll}
                     dataTableHeader
                   />
                 </tr>

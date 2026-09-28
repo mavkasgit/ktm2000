@@ -15,7 +15,7 @@ import {
   Badge,
   Button,
   CutLayoutCell,
-  SortableFilterHeader,
+  DataTableColumnHeader,
   FiltersPanel,
   TableCornerResetCell,
   TableCornerResetHeader,
@@ -29,12 +29,13 @@ import type { ColumnSortDef } from "@/shared/hooks/useTableQueryEngine";
 import type { PageLimitOption } from "@/shared/hooks/usePaginatedTableQuery";
 import { useFilterableTable } from "@/shared/hooks/useFilterableTable";
 import { buildColumnFilterPredicate } from "@/shared/lib/columnFilterSearch";
+import { useDebouncedValue } from "@/shared/lib/useDebouncedValue";
 import {
   buildBoardServerQueryParams,
   isServerSortField,
   type TaskSortField,
 } from "../lib/boardQueryParams";
-import { groupTasksByProfile, groupStatus, sortGroupsByPriority, taskGroupingDimensions } from "../lib/groupTasksByProfile";
+import { groupTasksByProfile, sortGroupsByQuantityAndSize, taskGroupingDimensions } from "../lib/groupTasksByProfile";
 import type { GroupingProfile } from "../lib/groupingProfiles";
 import {
   getReadyStatusLabel,
@@ -45,7 +46,19 @@ import {
   getTaskViewCategory,
   isTaskFullyTransferred,
 } from "../lib/taskStatus";
+import { getTaskGroupHeaderState } from "../lib/taskView";
+import {
+  TaskExtras,
+  TaskStatusDot,
+  buildTaskViewFields,
+  getTaskCardClass,
+  getTaskRowClass,
+} from "./TaskView";
 import { TABLE_ROW_STYLES } from "@/shared/lib/tableRowStyles";
+import { TABLE_ROW_COMPACT } from "@/shared/lib/dataTableStyles";
+import { cn } from "@/shared/utils/cn";
+import { fmtQty } from "@/shared/lib/quantityFormat";
+import { boardColumns } from "../lib/boardColumns";
 
 // ---------------------------------------------------------------------------
 // Экспорты для обратной совместимости
@@ -73,15 +86,15 @@ export type BulkSelectionController = {
 // Внутренние типы
 // ---------------------------------------------------------------------------
 
-const CLIENT_FILTER_FIELDS: TaskSortField[] = [
-  "plannedQty",
-  "issuedQty",
-  "completedQty",
-  "transferredQty",
-  "rejectedQty",
-  "remainingQty",
-  "status",
-];
+/**
+ * Колонки, которые доска фильтрует сама, по уже пришедшим строкам. Список
+ * берётся из описания (`clientOnly`): ручной перечень расходился с шапкой —
+ * колонку переименовали в описании, а здесь забыли, и фильтр уходил на
+ * сервер, который о нём не знает.
+ */
+const CLIENT_FILTER_FIELDS: TaskSortField[] = boardColumns.flatMap((column) =>
+  column.clientOnly && column.filterField ? [column.filterField] : [],
+);
 
 function pickClientFilterState<Field extends string>(
   columnFilters: Partial<Record<Field, Set<string>>>,
@@ -95,12 +108,6 @@ function pickClientFilterState<Field extends string>(
     if (columnSearchQueries[field]) nextSearches[field] = columnSearchQueries[field];
   }
   return { columnFilters: nextFilters, columnSearchQueries: nextSearches };
-}
-
-function fmtQty(value: string): string {
-  const n = parseFloat(value);
-  if (!Number.isFinite(n)) return "0";
-  return String(Math.round(n));
 }
 
 function isTaskVisible(task: SectionBoardTask, mode: TaskBoardViewMode): boolean {
@@ -119,103 +126,33 @@ function getStatusPriority(task: SectionBoardTask): number {
   return 3;
 }
 
-function getRowStatusClass(task: SectionBoardTask, isSelected: boolean, isInGroup: boolean): string {
-  if (isSelected) return TABLE_ROW_STYLES.selectedRow;
-
-  const category = getTaskViewCategory(task);
-  const status = task.status;
-  const isWaiting = category === "waiting";
-  const isActive = category === "active";
-  const isCompleted = category === "completed";
-
-  if (isWaiting) {
-    return "bg-background hover:bg-slate-50 transition-colors border-l-4 border-l-yellow-400 text-slate-800";
-  }
-  if (isActive) {
-    if (["in_progress", "in_work"].includes(status)) {
-      return "bg-amber-50/30 hover:bg-amber-50/70 border-l-4 border-l-amber-400 text-slate-900 font-medium";
-    }
-    return "bg-blue-50/20 hover:bg-blue-50/50 border-l-4 border-l-blue-400 text-slate-900";
-  }
-  if (isCompleted) {
-    return "bg-emerald-50/10 text-emerald-700/80 line-through decoration-slate-300 hover:bg-emerald-50/30 border-l-4 border-l-emerald-300 opacity-60";
-  }
-
-  return isInGroup ? TABLE_ROW_STYLES.defaultGroupRow : TABLE_ROW_STYLES.defaultRow;
-}
-
-function getMobileCardStatusClass(task: SectionBoardTask, isSelected: boolean): string {
-  if (isSelected) return TABLE_ROW_STYLES.selectedMobileCard;
-
-  const category = getTaskViewCategory(task);
-  const status = task.status;
-  const isWaiting = category === "waiting";
-  const isActive = category === "active";
-  const isCompleted = category === "completed";
-
-  if (isWaiting) {
-    return "border border-slate-200 bg-background text-slate-800 rounded-lg border-l-4 border-l-yellow-400";
-  }
-  if (isActive) {
-    if (["in_progress", "in_work"].includes(status)) {
-      return "border border-amber-200 bg-amber-50/30 text-slate-900 rounded-lg border-l-4 border-l-amber-400";
-    }
-    return "border border-blue-200 bg-blue-50/20 text-slate-900 rounded-lg border-l-4 border-l-blue-400";
-  }
-  if (isCompleted) {
-    return "border border-emerald-100 bg-emerald-50/10 text-slate-400 opacity-60 rounded-lg border-l-4 border-l-emerald-300 line-through decoration-slate-300";
-  }
-  return "border border-slate-200 rounded-lg bg-card text-card-foreground";
-}
-
 function getTaskCellValue(task: SectionBoardTask, field: TaskSortField): string {
   switch (field) {
     case "sequence": return String(task.sequence);
     case "productSku": return task.product_sku;
     case "dimensions": return formatDimensionsLabel(taskGroupingDimensions(task));
     case "status": return getStatusLabel(task);
-    case "plannedQty": return String(parseFloat(task.planned_quantity) || 0);
-    case "issuedQty": return String(parseFloat(task.cache.issued_quantity) || 0);
-    case "completedQty": return String(parseFloat(task.cache.completed_quantity) || 0);
-    case "transferredQty": return String(parseFloat(task.cache.transferred_quantity) || 0);
-    case "rejectedQty": return String(parseFloat(task.cache.rejected_quantity) || 0);
-    case "remainingQty": return String(parseFloat(task.cache.remaining_quantity) || 0);
+    case "plannedQty": return fmtQty(task.planned_quantity);
+    case "issuedQty": return fmtQty(task.cache.issued_quantity);
+    case "completedQty": return fmtQty(task.cache.completed_quantity);
+    case "transferredQty": return fmtQty(task.cache.transferred_quantity);
+    case "rejectedQty": return fmtQty(task.cache.rejected_quantity);
+    case "remainingQty": return fmtQty(task.cache.remaining_quantity);
   }
 }
 
-function StatusDot({ task }: { task: SectionBoardTask }) {
-  const status = task.status;
-  let colorClass = "bg-slate-300";
-  if (["in_progress", "in_work"].includes(status)) {
-    colorClass = "bg-amber-500 animate-pulse";
-  } else if (["ready", "partially_completed", "partially"].includes(status)) {
-    colorClass = status === "ready" && getReadyStatusLabel(task) === "Не передано"
-      ? "bg-slate-400"
-      : "bg-blue-500";
-  } else if (["completed", "done"].includes(status) || isTaskFullyTransferred(task)) {
-    colorClass = "bg-emerald-500";
-  } else if (status === "blocked") {
-    colorClass = "bg-red-500";
-  } else if (["waiting_previous", "pending"].includes(status)) {
-    colorClass = "bg-yellow-400";
-  }
-  return (
-    <span className={`inline-block h-2.5 w-2.5 rounded-full ${colorClass}`} title={getStatusLabel(task)} />
-  );
-}
-
-/** Компактный прогресс по выходам трансформирующего задания (ADR-0002). */
-function renderOutputsProgress(task: SectionBoardTask, className: string) {
-  if (!task.transforms_dimensions || !task.outputs_progress?.length) return null;
-  const text = task.outputs_progress
-    .map((row) => `${formatDimensionsLabel(row.dimensions)}: ${fmtQty(row.produced_quantity)}/${fmtQty(row.quantity)}`)
-    .join(" · ");
-  return (
-    <span className={className} title={text}>
-      {text}
-    </span>
-  );
-}
+// ---------------------------------------------------------------------------
+// Компактная строка
+// ---------------------------------------------------------------------------
+// Задаётся общим правилом (CONTEXT.md, ADR-0030): доска знает только, что
+// берёт общий набор, а не решает высоту строки сама.
+// Кнопки задаются без size="sm": у него h-9 (36px), а min-h не уменьшает
+// фиксированную высоту — именно он растягивал строку до 52px.
+const ROW_CELL_CLASS = TABLE_ROW_COMPACT.cell;
+const ROW_ACTION_BUTTON_CLASS = `${TABLE_ROW_COMPACT.actionButton} transition-all hover:bg-accent/50`;
+const ROW_HEIGHT_PX = TABLE_ROW_COMPACT.rowHeightPx;
+/** Число колонок доски: используется для полноширинных служебных строк. */
+const BOARD_COLSPAN = 13;
 
 function renderTaskRow(
   task: SectionBoardTask,
@@ -229,8 +166,7 @@ function renderTaskRow(
   isLastInGroup = false,
   isInGroup = false,
 ) {
-  const buttonBase = "min-h-[32px] transition-all";
-  const buttonDefault = "hover:bg-accent/50";
+  const fields = buildTaskViewFields(task);
 
   const handleAction = (type: TaskActionDialogType) => {
     onAction(type, task);
@@ -238,48 +174,35 @@ function renderTaskRow(
   return (
     <tr
       key={task.id}
-      className={`cursor-pointer transition-colors ${getRowStatusClass(task, !!isSelected, isInGroup)} ${isLastInGroup ? "border-b-2 border-blue-300" : "border-b"}`}
+      className={`cursor-pointer transition-colors ${getTaskRowClass(task, !!isSelected, isInGroup)} ${isLastInGroup ? "border-b-2 border-blue-300" : "border-b"}`}
       onClick={() => {
         if (bulkMode && bulkSelection && task.status !== "waiting_previous") {
           bulkSelection.selectOne(task.id);
         }
       }}
     >
-      <td className="p-2 text-center">
-        <StatusDot task={task} />
+      <td className={`${ROW_CELL_CLASS} text-center`}>
+        <TaskStatusDot task={task} />
       </td>
-      <td className="p-2 font-medium">{task.product_sku}</td>
-      <td className="p-2 text-xs text-muted-foreground">{formatDimensionsLabel(taskGroupingDimensions(task))}</td>
-      <td className="p-2">
-        {task.operation_names && task.operation_names.length > 1 ? (
-          <span className="text-xs font-medium">{task.operation_names.join(" + ")}</span>
-        ) : (
-          <span className="text-xs">{task.operation_name || "—"}</span>
-        )}
-        {task.cut_layout && (
-          <span className="block text-xs text-muted-foreground">
-            <CutLayoutCell layout={task.cut_layout} />
-          </span>
-        )}
-        {renderOutputsProgress(task, "block text-xs text-muted-foreground tabular-nums")}
-      </td>
-      <td className="p-2">{fmtQty(task.planned_quantity)}</td>
-      <td className="p-2">{fmtQty(task.cache.issued_quantity)}</td>
-      <td className="p-2">{fmtQty(task.cache.completed_quantity)}</td>
-      <td className="p-2">{fmtQty(task.cache.rejected_quantity)}</td>
-      <td className="p-2">{fmtQty(task.cache.transferred_quantity)}</td>
-      <td className="p-2">{fmtQty(task.cache.remaining_quantity)}</td>
-      <td className="p-2">
-        <Badge variant="secondary" className={getStatusColor(task)}>
+      <td className={`${ROW_CELL_CLASS} font-medium`}>{task.product_sku}</td>
+      {fields.map((field) => (
+        <td key={field.key} className={cn(ROW_CELL_CLASS, field.cellClass)}>
+          {field.node}
+          {field.key === "operation" && (
+            <TaskExtras task={task} className="block text-xs text-muted-foreground" />
+          )}
+        </td>
+      ))}
+      <td className={ROW_CELL_CLASS}>
+        <Badge variant="secondary" className={cn(getStatusColor(task), TABLE_ROW_COMPACT.badge)}>
           {getStatusLabel(task)}
         </Badge>
       </td>
-      <td className="p-2">
+      <td className={ROW_CELL_CLASS}>
         {onRevokeItem ? (
           <Button
-            size="sm"
             variant={isSelected ? "default" : "outline"}
-            className={`${buttonBase} ${buttonDefault}`}
+            className={ROW_ACTION_BUTTON_CLASS}
             aria-pressed={isSelected}
             disabled={isRevoking}
             onClick={(event) => {
@@ -294,9 +217,8 @@ function renderTaskRow(
           <span className="text-xs text-muted-foreground">Просмотр</span>
         ) : (
           <Button
-            size="sm"
             variant="outline"
-            className={`${buttonBase} ${buttonDefault}`}
+            className={ROW_ACTION_BUTTON_CLASS}
             onClick={() => handleAction("complete")}
             disabled={!isTaskCompletable(task)}
             title={getCompletionDisabledReason(task) ?? "Завершить задачу"}
@@ -321,7 +243,8 @@ function renderMobileCard(
   isLastInGroup = false,
   readOnly: boolean,
 ) {
-  const buttonBase = "flex-1 min-h-[36px] transition-all";
+  const buttonBase = `flex-1 ${TABLE_ROW_COMPACT.actionButton}`;
+  const fields = buildTaskViewFields(task);
   const buttonDefault = "hover:bg-accent/50";
 
   const handleAction = (type: TaskActionDialogType) => {
@@ -330,7 +253,7 @@ function renderMobileCard(
   return (
     <div
       key={task.id}
-      className={`p-4 space-y-3 cursor-pointer transition-colors ${getMobileCardStatusClass(task, !!isSelected)} ${isLastInGroup ? "border-b-2 border-blue-300 mb-3" : "mb-0"}`}
+      className={`p-4 space-y-3 cursor-pointer transition-colors ${getTaskCardClass(task, !!isSelected)} ${isLastInGroup ? "border-b-2 border-blue-300 mb-3" : "mb-0"}`}
       onClick={() => {
         if (bulkMode && bulkSelection && task.status !== "waiting_previous") {
           bulkSelection.selectOne(task.id);
@@ -339,39 +262,30 @@ function renderMobileCard(
     >
       <div className="flex items-center justify-between gap-2">
         <div className="flex items-center gap-2 font-semibold">
-          <StatusDot task={task} />
+          <TaskStatusDot task={task} />
           <span className="text-sm font-medium">{task.product_sku}</span>
         </div>
-        <Badge variant="secondary" className={getStatusColor(task)}>
+        <Badge variant="secondary" className={cn(getStatusColor(task), TABLE_ROW_COMPACT.badge)}>
           {getStatusLabel(task)}
         </Badge>
       </div>
 
       <div className="grid grid-cols-2 gap-2 text-sm">
-        <div><span className="text-muted-foreground">План:</span> {fmtQty(task.planned_quantity)}</div>
-        <div><span className="text-muted-foreground">Размер:</span> {formatDimensionsLabel(taskGroupingDimensions(task))}</div>
-        <div><span className="text-muted-foreground">Операция:</span> {task.operation_names && task.operation_names.length > 1 ? task.operation_names.join(" + ") : (task.operation_name || "—")}</div>
-        <div><span className="text-muted-foreground">Выдано:</span> {fmtQty(task.cache.issued_quantity)}</div>
-        <div><span className="text-muted-foreground">Годные:</span> {fmtQty(task.cache.completed_quantity)}</div>
-        <div><span className="text-muted-foreground">Брак:</span> {fmtQty(task.cache.rejected_quantity)}</div>
-        <div><span className="text-muted-foreground">Передано:</span> {fmtQty(task.cache.transferred_quantity)}</div>
-        <div><span className="text-muted-foreground">Остаток:</span> {fmtQty(task.cache.remaining_quantity)}</div>
+        {fields.map((field) => (
+          <div key={field.key}>
+            <span className="text-muted-foreground">{field.label}:</span> {field.node}
+          </div>
+        ))}
       </div>
 
-      {task.cut_layout ? (
-        <div className="text-xs text-muted-foreground border-t pt-2">
-          <CutLayoutCell layout={task.cut_layout} />
-        </div>
-      ) : null}
-
-      {renderOutputsProgress(task, "block text-xs text-muted-foreground tabular-nums border-t pt-2")}
+      <TaskExtras task={task} className="block text-xs text-muted-foreground border-t pt-2" />
 
 
         {onRevokeItem ? (
           <Button
             size="sm"
             variant={isSelected ? "default" : "outline"}
-            className={`${buttonBase} ${buttonDefault}`}
+            className={`${buttonBase} transition-all hover:bg-accent/50`}
             aria-pressed={isSelected}
             disabled={isRevoking}
             onClick={(event) => {
@@ -388,7 +302,7 @@ function renderMobileCard(
           <Button
             size="sm"
             variant="outline"
-            className={`${buttonBase} ${buttonDefault}`}
+            className={`${buttonBase} transition-all hover:bg-accent/50`}
             onClick={() => handleAction("complete")}
             disabled={!isTaskCompletable(task)}
             title={getCompletionDisabledReason(task) ?? "Завершить задачу"}
@@ -424,7 +338,7 @@ function TableTaskGroupRow({
   const taskIds = group.tasks.map((t) => t.id);
   const allSelected = bulkSelection?.isAllSelected(taskIds) ?? false;
   const firstTask = group.tasks[0];
-  const groupHasCompletable = group.tasks.some(isTaskCompletable);
+  const header = getTaskGroupHeaderState(group, { isCollapsed, isBulkMode, allSelected });
 
   return (
     <tr
@@ -434,17 +348,17 @@ function TableTaskGroupRow({
         else onToggleCollapse();
       }}
     >
-      <td className="p-2 text-center">
+      <td className={`${ROW_CELL_CLASS} text-center`}>
         <div className="flex items-center justify-center">
           <button
-            className="p-1 hover:bg-slate-200 rounded transition-colors text-slate-500 hover:text-slate-800"
+            className="p-0.5 hover:bg-slate-200 rounded transition-colors text-slate-500 hover:text-slate-800"
             onClick={(e) => {
               e.stopPropagation();
               onToggleCollapse();
             }}
-            title={isCollapsed ? "Раскрыть" : "Скрыть"}
+            title={header.collapseTitle}
           >
-            {isCollapsed ? (
+            {header.isCollapsed ? (
               <ChevronRight className="h-4 w-4 shrink-0" />
             ) : (
               <ChevronDown className="h-4 w-4 shrink-0" />
@@ -452,43 +366,42 @@ function TableTaskGroupRow({
           </button>
         </div>
       </td>
-      <td className="p-2 text-slate-900">
+      <td className={`${ROW_CELL_CLASS} text-slate-900`}>
         {firstTask.product_sku}
       </td>
-      <td className="p-2 text-xs text-slate-500 font-medium">
+      <td className={`${ROW_CELL_CLASS} text-xs text-slate-500 font-medium`}>
         {formatDimensionsLabel(taskGroupingDimensions(firstTask))}
       </td>
-      <td className="p-2 text-xs text-slate-500 font-medium">
+      <td className={`${ROW_CELL_CLASS} text-xs text-slate-500 font-medium`}>
         {firstTask.operation_name || "—"}
       </td>
-      <td className="p-2 text-slate-700">{fmtQty(String(group.totalQtyPlan))}</td>
-      <td className="p-2 text-slate-700">{fmtQty(String(group.tasks.reduce((s, t) => s + parseFloat(t.cache.issued_quantity), 0)))}</td>
-      <td className="p-2 text-slate-700">{fmtQty(String(group.totalQtyDone))}</td>
-      <td className="p-2 text-slate-700">{fmtQty(String(group.tasks.reduce((s, t) => s + parseFloat(t.cache.rejected_quantity), 0)))}</td>
-      <td className="p-2 text-slate-700">{fmtQty(String(group.tasks.reduce((s, t) => s + parseFloat(t.cache.transferred_quantity), 0)))}</td>
-      <td className="p-2 text-slate-700">{fmtQty(String(group.tasks.reduce((s, t) => s + parseFloat(t.cache.remaining_quantity), 0)))}</td>
-      <td className="p-2">
+      <td className={`${ROW_CELL_CLASS} text-slate-700`}>{fmtQty(String(group.totalQtyPlan))}</td>
+      <td className={`${ROW_CELL_CLASS} text-slate-700`}>{fmtQty(String(group.tasks.reduce((s, t) => s + parseFloat(t.cache.issued_quantity), 0)))}</td>
+      <td className={`${ROW_CELL_CLASS} text-slate-700`}>{fmtQty(String(group.totalQtyDone))}</td>
+      <td className={`${ROW_CELL_CLASS} text-slate-700`}>{fmtQty(String(group.tasks.reduce((s, t) => s + parseFloat(t.cache.rejected_quantity), 0)))}</td>
+      <td className={`${ROW_CELL_CLASS} text-slate-700`}>{fmtQty(String(group.tasks.reduce((s, t) => s + parseFloat(t.cache.transferred_quantity), 0)))}</td>
+      <td className={`${ROW_CELL_CLASS} text-slate-700`}>{fmtQty(String(group.tasks.reduce((s, t) => s + parseFloat(t.cache.remaining_quantity), 0)))}</td>
+      <td className={ROW_CELL_CLASS}>
         <div className="flex items-center gap-1">
-          <Badge variant="secondary" className="font-bold">
+          <Badge variant="secondary" className={`${TABLE_ROW_COMPACT.badge} font-bold`}>
             &times;{group.tasks.length}
           </Badge>
-          {isBulkMode && allSelected && (
+          {isBulkMode && header.allSelected && (
             <span className={`text-xs ${TABLE_ROW_STYLES.selectedLabel}`}>выбрано</span>
           )}
         </div>
       </td>
-      <td className={`p-2 ${isBulkMode && allSelected ? TABLE_ROW_STYLES.selectedGroupHeader : TABLE_ROW_STYLES.defaultGroupRow}`}>
+      <td className={`${ROW_CELL_CLASS} ${isBulkMode && allSelected ? TABLE_ROW_STYLES.selectedGroupHeader : TABLE_ROW_STYLES.defaultGroupRow}`}>
         {onCompleteGroup && (
           <Button
-            size="sm"
             variant="outline"
-            className="min-h-[32px] transition-all hover:bg-accent/50"
+            className={ROW_ACTION_BUTTON_CLASS}
             onClick={(e) => {
               e.stopPropagation();
               onCompleteGroup(group);
             }}
-            disabled={!groupHasCompletable}
-            title={groupHasCompletable ? "Открыть панель завершения группы" : "Все задания в группе завершены"}
+            disabled={!header.hasCompletable}
+            title={header.completeTitle}
           >
             <span>Завершить группу</span>
           </Button>
@@ -530,15 +443,22 @@ type SectionTasksBoardProps = {
   totalPages: number;
   rangeLabel: string;
   onServerQueryChange: (
-    query: Pick<SectionBoardQueryParams, "search" | "product_sku" | "sort_by" | "sort_order">,
+    query: Pick<SectionBoardQueryParams, "search" | "product_sku" | "sort">,
   ) => void;
 };
 
+/**
+ * Строка доски: группа, задание либо разделитель блоков («В ожидании»).
+ * Разделитель — обычная `<tr>` с одной ячейкой на всю ширину, поэтому
+ * табличная сетка и виртуализация (ROW_HEIGHT_PX) не ломаются.
+ */
 type VirtualBoardRow =
   | {
       kind: "group";
       key: string;
-      group: ReturnType<typeof groupTasksByProfile>[number];
+      /** Ключ блока (`active-…` / `waiting-…`) — по нему живёт состояние свёртки. */
+      entryKey: string;
+      group: TaskGroup;
       isCollapsed: boolean;
     }
   | {
@@ -547,7 +467,21 @@ type VirtualBoardRow =
       task: SectionBoardTask;
       isLastInGroup: boolean;
       isInGroup: boolean;
+    }
+  | {
+      kind: "divider";
+      key: string;
+      /** Количество заданий в ожидании под разделителем. */
+      count: number;
     };
+
+/**
+ * Порядок блоков доски: сначала активные задания, затем (если есть)
+ * разделитель «В ожидании» и сами ожидающие, затем завершённые группы.
+ */
+type BoardEntry =
+  | { kind: "group"; key: string; group: TaskGroup }
+  | { kind: "divider"; key: string; count: number };
 
 // ---------------------------------------------------------------------------
 // Компонент
@@ -581,7 +515,7 @@ export function SectionTasksBoard({
 }: SectionTasksBoardProps) {
   const tableScrollRef = useRef<HTMLDivElement>(null);
   const [searchQuery, setSearchQuery] = useState("");
-  const [debouncedSearch, setDebouncedSearch] = useState("");
+  const debouncedSearch = useDebouncedValue(searchQuery);
   const {
     bindColumn,
     columnFilters,
@@ -594,10 +528,6 @@ export function SectionTasksBoard({
     extraHasActive: searchQuery.trim().length > 0,
   });
 
-  useEffect(() => {
-    const timer = window.setTimeout(() => setDebouncedSearch(searchQuery), 300);
-    return () => window.clearTimeout(timer);
-  }, [searchQuery]);
 
   useEffect(() => {
     onServerQueryChange(
@@ -644,6 +574,16 @@ export function SectionTasksBoard({
     { field: "remainingQty", getSortValue: (t) => parseFloat(t.cache.remaining_quantity) || 0 },
   ], []);
 
+  // Поиск колонки по полю для клиентской сортировки: таблица статична.
+  const sortDefsByField = useMemo(
+    () =>
+      Object.fromEntries(sortDefs.map((def) => [def.field, def])) as Record<
+        TaskSortField,
+        ColumnSortDef<SectionBoardTask, TaskSortField> | undefined
+      >,
+    [sortDefs],
+  );
+
   const uniqueValues = useMemo(() => ({
     sequence: [...new Set(visibleTasks.map((t) => String(t.sequence)))],
     productSku: [...new Set(visibleTasks.map((t) => t.product_sku))],
@@ -651,35 +591,53 @@ export function SectionTasksBoard({
       (a, b) => formatDimensionsFilterValue(a).localeCompare(formatDimensionsFilterValue(b), "ru"),
     ),
     status: [...new Set(visibleTasks.map((t) => getStatusLabel(t)))],
-    plannedQty: [...new Set(visibleTasks.map((t) => String(parseFloat(t.planned_quantity) || 0)))],
-    issuedQty: [...new Set(visibleTasks.map((t) => String(parseFloat(t.cache.issued_quantity) || 0)))],
-    completedQty: [...new Set(visibleTasks.map((t) => String(parseFloat(t.cache.completed_quantity) || 0)))],
-    transferredQty: [...new Set(visibleTasks.map((t) => String(parseFloat(t.cache.transferred_quantity) || 0)))],
-    rejectedQty: [...new Set(visibleTasks.map((t) => String(parseFloat(t.cache.rejected_quantity) || 0)))],
-    remainingQty: [...new Set(visibleTasks.map((t) => String(parseFloat(t.cache.remaining_quantity) || 0)))],
+    plannedQty: [...new Set(visibleTasks.map((t) => fmtQty(t.planned_quantity)))],
+    issuedQty: [...new Set(visibleTasks.map((t) => fmtQty(t.cache.issued_quantity)))],
+    completedQty: [...new Set(visibleTasks.map((t) => fmtQty(t.cache.completed_quantity)))],
+    transferredQty: [...new Set(visibleTasks.map((t) => fmtQty(t.cache.transferred_quantity)))],
+    rejectedQty: [...new Set(visibleTasks.map((t) => fmtQty(t.cache.rejected_quantity)))],
+    remainingQty: [...new Set(visibleTasks.map((t) => fmtQty(t.cache.remaining_quantity)))],
   }), [visibleTasks]);
 
+  // Порядок строк доски. Колонки серверной сортировки (sequence/productSku/
+  // status/dimensions) уже пришли в нужном порядке с сервера, остальные
+  // клиент упорядочивает здесь, поверх ответа и до группировки. Без сортировки
+  // действует дефолт «количество убыв., размер убыв.», а внутри группы —
+  // «статус, затем sequence» (CONTEXT.md, раздел «Сортировка строк по размеру»).
+  const hasActiveSort = sortConfigs.length > 0;
+  const clientSortConfigs = useMemo(
+    () => sortConfigs.filter((config) => !isServerSortField(config.field)),
+    [sortConfigs],
+  );
   const sortedTasks = useMemo(() => {
-    const activeSort = sortConfigs[0];
-    if (!activeSort || isServerSortField(activeSort.field)) {
-      return visibleTasks;
-    }
-    const def = sortDefs.find((item) => item.field === activeSort.field);
-    if (!def) return visibleTasks;
-    return [...visibleTasks].sort((a, b) => {
-      const left = def.getSortValue(a);
-      const right = def.getSortValue(b);
-      if (left === right) return 0;
-      const cmp = left < right ? -1 : 1;
-      return activeSort.order === "asc" ? cmp : -cmp;
+    // Приоритеты сравниваются по очереди, от старшего к младшему: сортировка
+    // устойчива, поэтому при равенстве по клиентским колонкам сохраняется
+    // порядок сервера (за серверные колонки отвечает он).
+    const clientSorts = clientSortConfigs.flatMap((config) => {
+      const def = sortDefsByField[config.field];
+      return def ? [{ def, order: config.order }] : [];
     });
-  }, [visibleTasks, sortConfigs, sortDefs]);
+    if (clientSorts.length === 0) return visibleTasks;
+    return [...visibleTasks].sort((a, b) => {
+      for (const { def, order } of clientSorts) {
+        const left = def.getSortValue(a);
+        const right = def.getSortValue(b);
+        if (left === right) continue;
+        const cmp = left < right ? -1 : 1;
+        return order === "asc" ? cmp : -cmp;
+      }
+      return 0;
+    });
+  }, [visibleTasks, clientSortConfigs, sortDefsByField]);
 
   const groups = useMemo(() => {
+    // groupTasksByProfile сохраняет порядок первого появления, поэтому
+    // сортировка (серверная или клиентская) доходит до строк таблицы.
     const grouped = groupTasksByProfile(sortedTasks, profile);
-    
-    // Sort tasks inside each group by status priority, then by sequence
-    for (const g of grouped) {
+    if (hasActiveSort) return grouped;
+
+    const ordered = sortGroupsByQuantityAndSize(grouped);
+    for (const g of ordered) {
       g.tasks.sort((a, b) => {
         const pA = getStatusPriority(a);
         const pB = getStatusPriority(b);
@@ -688,34 +646,59 @@ export function SectionTasksBoard({
       });
     }
 
-    // Split groups into active/waiting and completed, preserving user's sorting order
-    const activeOrWaiting: typeof grouped = [];
-    const completed: typeof grouped = [];
+    return ordered;
+  }, [sortedTasks, profile, hasActiveSort]);
 
-    for (const g of grouped) {
-      const isCompleted = g.tasks.every((t) => getStatusPriority(t) >= 2);
-      if (isCompleted) {
-        completed.push(g);
-      } else {
-        activeOrWaiting.push(g);
+  // Порядок доски: активные задания → разделитель «В ожидании» → ожидающие →
+  // завершённые группы. Сортировка и группировка по профилю внутри каждого
+  // блока сохраняются: берём те же группы и те же строки, только разрезаем
+  // смешанные группы по категории задания.
+  const boardEntries = useMemo((): BoardEntry[] => {
+    const activeGroups: TaskGroup[] = [];
+    const waitingGroups: TaskGroup[] = [];
+    const completedGroups: TaskGroup[] = [];
+
+    for (const g of groups) {
+      if (g.tasks.every((t) => getStatusPriority(t) >= 2)) {
+        completedGroups.push(g);
+        continue;
       }
+      const activeTasks = g.tasks.filter((t) => getStatusPriority(t) === 0);
+      const waitingTasks = g.tasks.filter((t) => getStatusPriority(t) === 1);
+      if (activeTasks.length > 0) activeGroups.push({ ...g, tasks: activeTasks });
+      if (waitingTasks.length > 0) waitingGroups.push({ ...g, tasks: waitingTasks });
     }
 
-    return [...activeOrWaiting, ...completed];
-  }, [sortedTasks, profile]);
+    const entries: BoardEntry[] = [];
+    activeGroups.forEach((g, i) => entries.push({ kind: "group", key: `active-${i}-${g.key}`, group: g }));
+    if (waitingGroups.length > 0) {
+      const waitingCount = waitingGroups.reduce((sum, g) => sum + g.tasks.length, 0);
+      entries.push({ kind: "divider", key: "divider-waiting", count: waitingCount });
+      waitingGroups.forEach((g, i) => entries.push({ kind: "group", key: `waiting-${i}-${g.key}`, group: g }));
+    }
+    completedGroups.forEach((g, i) => entries.push({ kind: "group", key: `completed-${i}-${g.key}`, group: g }));
+    return entries;
+  }, [groups]);
+
+  // Задания, доступные для группового выбора: ожидающие в выделение не попадают.
+  const selectableTaskIds = useMemo(
+    () => visibleTasks.filter((t) => getTaskViewCategory(t) !== "waiting").map((t) => t.id),
+    [visibleTasks],
+  );
 
   // Группы по умолчанию свёрнуты; пользователь может раскрыть любую вручную.
   // Сохраняем развёрнутые пользователем ключи, остальные — свернуты.
   const [manuallyExpanded, setManuallyExpanded] = useState<Set<string>>(new Set());
   const collapsedGroups = useMemo(() => {
     const collapsed = new Set<string>();
-    for (const g of groups) {
-      if (g.tasks.length > 1 && !manuallyExpanded.has(g.key)) {
-        collapsed.add(g.key);
+    for (const entry of boardEntries) {
+      if (entry.kind !== "group") continue;
+      if (entry.group.tasks.length > 1 && !manuallyExpanded.has(entry.key)) {
+        collapsed.add(entry.key);
       }
     }
     return collapsed;
-  }, [groups, manuallyExpanded]);
+  }, [boardEntries, manuallyExpanded]);
 
   const toggleGroup = useCallback((groupKey: string) => {
     setManuallyExpanded((prev) => {
@@ -771,7 +754,7 @@ export function SectionTasksBoard({
           checked: mode.waiting,
           onChange: () => onModeChange({ ...mode, waiting: !mode.waiting }),
           hideIcon: true,
-          disabled: true,
+          tone: "amber",
           layoutSpan: "min-w-[0px]",
         },
       );
@@ -793,7 +776,6 @@ export function SectionTasksBoard({
 
   const handleResetAllFilters = useCallback(() => {
     setSearchQuery("");
-    setDebouncedSearch("");
     resetAllFilters();
     bulkSelection?.clear();
     onBulkModeChange?.(false);
@@ -802,7 +784,12 @@ export function SectionTasksBoard({
 
   const virtualRows = useMemo((): VirtualBoardRow[] => {
     const items: VirtualBoardRow[] = [];
-    for (const group of groups) {
+    for (const entry of boardEntries) {
+      if (entry.kind === "divider") {
+        items.push({ kind: "divider", key: entry.key, count: entry.count });
+        continue;
+      }
+      const group = entry.group;
       if (group.tasks.length === 1) {
         const task = group.tasks[0];
         items.push({
@@ -815,10 +802,11 @@ export function SectionTasksBoard({
         continue;
       }
 
-      const isCollapsed = collapsedGroups.has(group.key);
+      const isCollapsed = collapsedGroups.has(entry.key);
       items.push({
         kind: "group",
-        key: `group-${group.key}`,
+        key: `group-${entry.key}`,
+        entryKey: entry.key,
         group,
         isCollapsed,
       });
@@ -835,10 +823,37 @@ export function SectionTasksBoard({
       }
     }
     return items;
-  }, [groups, collapsedGroups]);
+  }, [boardEntries, collapsedGroups]);
+
+  /** Разделитель блоков «В ожидании»: строка таблицы на всю ширину. */
+  const renderWaitingDivider = useCallback((row: Extract<VirtualBoardRow, { kind: "divider" }>) => (
+    <tr key={row.key} data-testid="waiting-divider">
+      <td colSpan={BOARD_COLSPAN} className="p-0" style={{ height: ROW_HEIGHT_PX }}>
+        <div className="flex h-10 items-center gap-2 border-y border-amber-200 bg-amber-50/70 px-2">
+          <span className="text-[11px] font-semibold uppercase tracking-wide text-amber-800">
+            В ожидании
+          </span>
+          <span className="text-[11px] tabular-nums text-amber-800/70">{row.count}</span>
+          <span className="h-px flex-1 bg-amber-200" />
+        </div>
+      </td>
+    </tr>
+  ), []);
+
+  /** Заголовок блока «В ожидании» для мобильных карточек. */
+  const renderWaitingDividerMobile = useCallback((key: string, count: number) => (
+    <div key={key} className="flex items-center gap-2 px-1">
+      <span className="text-[11px] font-semibold uppercase tracking-wide text-amber-800">
+        В ожидании
+      </span>
+      <span className="text-[11px] tabular-nums text-amber-800/70">{count}</span>
+      <span className="h-px flex-1 bg-amber-200" />
+    </div>
+  ), []);
 
   const renderVirtualRow = useCallback(
     (row: VirtualBoardRow) => {
+      if (row.kind === "divider") return renderWaitingDivider(row);
       if (row.kind === "group") {
         return (
           <TableTaskGroupRow
@@ -847,7 +862,7 @@ export function SectionTasksBoard({
             isCollapsed={row.isCollapsed}
             isBulkMode={!!bulkMode}
             bulkSelection={bulkSelection}
-            onToggleCollapse={() => toggleGroup(row.group.key)}
+            onToggleCollapse={() => toggleGroup(row.entryKey)}
             onCompleteGroup={readOnly ? undefined : onCompleteGroup}
             onSelectGroup={() => {
               if (!bulkMode || !bulkSelection) return;
@@ -884,27 +899,23 @@ export function SectionTasksBoard({
         row.isInGroup,
       );
     },
-    [bulkMode, bulkSelection, onAction, onCompleteGroup, onRevokeItem, readOnly, revokeSelection, toggleGroup],
+    [bulkMode, bulkSelection, onAction, onCompleteGroup, onRevokeItem, readOnly, renderWaitingDivider, revokeSelection, toggleGroup],
   );
 
-  const headerCellClass = `${DATA_TABLE_STYLES.headerRow} ${DATA_TABLE_STYLES.headerCell}`;
+  const headerCellClass = cn(
+    DATA_TABLE_STYLES.headerRow,
+    DATA_TABLE_STYLES.headerCell,
+    TABLE_ROW_COMPACT.headerCell,
+  );
 
   const activeFilterSummary = useMemo(
     () =>
-      buildActiveFilterSummary({}, searchQuery, sortConfigs.length, {
+      buildActiveFilterSummary(searchQuery, sortConfigs.length, {
         columnFilters,
         columnSearchQueries,
-        columnLabels: {
-          sequence: "№",
-          productSku: "Артикул",
-          status: "Статус",
-          plannedQty: "План",
-          issuedQty: "Выдано",
-          completedQty: "Готово",
-          transferredQty: "Передано",
-          rejectedQty: "Брак",
-          remainingQty: "Остаток",
-        },
+        columnLabels: Object.fromEntries(
+          boardColumns.filter((c) => c.filterField).map((c) => [c.filterField, c.label]),
+        ),
       }),
     [searchQuery, sortConfigs.length, columnFilters, columnSearchQueries],
   );
@@ -917,9 +928,9 @@ export function SectionTasksBoard({
         activeSummary={activeFilterSummary}
         onSelectAll={onSelectAllVisible ? () => {
           onBulkModeChange?.(true);
-          onSelectAllVisible(visibleTasks.filter((t) => t.status !== "waiting_previous").map((t) => t.id));
+          onSelectAllVisible(selectableTaskIds);
         } : undefined}
-        totalRowCount={total}
+        totalRowCount={selectableTaskIds.length}
         actions={
           revokeSelection && revokeSelection.selectedCount > 0 ? (
             <div className="flex items-center gap-2">
@@ -957,108 +968,20 @@ export function SectionTasksBoard({
             <table className="w-full border-separate border-spacing-0 text-sm">
               <thead>
                 <tr>
-                  <th className={`${headerCellClass} w-12 text-center`}>
-                    <span className="text-xs font-medium text-muted-foreground">Статус</span>
-                  </th>
-                  <th className={`${headerCellClass} p-0 text-left`}>
-                    <SortableFilterHeader
-                      field="productSku"
-                      label="Артикул"
-                      currentSorts={sortConfigs}
-                      onSortChange={handleSortChange}
-                      values={uniqueValues.productSku}
-                      {...bindColumn("productSku")}
-                    />
-                  </th>
-                  <th className={`${headerCellClass} p-0 text-left`}>
-                    <SortableFilterHeader
-                      field="dimensions"
-                      label="Размер"
-                      currentSorts={sortConfigs}
-                      onSortChange={handleSortChange}
-                      values={uniqueValues.dimensions}
-                      selectedValues={bindColumn("dimensions").selectedValues}
-                      onFilterChange={bindColumn("dimensions").onFilterChange}
-                      valueLabel={formatDimensionsFilterValue}
-                    />
-                  </th>
-                  <th className={`${headerCellClass} text-left`}>
-                    <span className="text-xs font-medium text-muted-foreground">Операция</span>
-                  </th>
-                  <th className={`${headerCellClass} p-0 text-left`}>
-                    <SortableFilterHeader
-                      field="plannedQty"
-                      label="План"
-                      currentSorts={sortConfigs}
-                      onSortChange={handleSortChange}
-                      values={uniqueValues.plannedQty}
-                      {...bindColumn("plannedQty")}
-                    />
-                  </th>
-                  <th className={`${headerCellClass} p-0 text-left`}>
-                    <SortableFilterHeader
-                      field="issuedQty"
-                      label="Выдано"
-                      currentSorts={sortConfigs}
-                      onSortChange={handleSortChange}
-                      values={uniqueValues.issuedQty}
-                      {...bindColumn("issuedQty")}
-                    />
-                  </th>
-                  <th className={`${headerCellClass} p-0 text-left`}>
-                    <SortableFilterHeader
-                      field="completedQty"
-                      label="Годные"
-                      currentSorts={sortConfigs}
-                      onSortChange={handleSortChange}
-                      values={uniqueValues.completedQty}
-                      {...bindColumn("completedQty")}
-                    />
-                  </th>
-                  <th className={`${headerCellClass} p-0 text-left`}>
-                    <SortableFilterHeader
-                      field="rejectedQty"
-                      label="Брак"
-                      currentSorts={sortConfigs}
-                      onSortChange={handleSortChange}
-                      values={uniqueValues.rejectedQty}
-                      {...bindColumn("rejectedQty")}
-                    />
-                  </th>
-                  <th className={`${headerCellClass} p-0 text-left`}>
-                    <SortableFilterHeader
-                      field="transferredQty"
-                      label="Передано"
-                      currentSorts={sortConfigs}
-                      onSortChange={handleSortChange}
-                      values={uniqueValues.transferredQty}
-                      {...bindColumn("transferredQty")}
-                    />
-                  </th>
-                  <th className={`${headerCellClass} p-0 text-left`}>
-                    <SortableFilterHeader
-                      field="remainingQty"
-                      label="Остаток"
-                      currentSorts={sortConfigs}
-                      onSortChange={handleSortChange}
-                      values={uniqueValues.remainingQty}
-                      {...bindColumn("remainingQty")}
-                    />
-                  </th>
-                  <th className={`${headerCellClass} p-0 text-left`}>
-                    <SortableFilterHeader
-                      field="status"
-                      label="Статус"
-                      currentSorts={sortConfigs}
-                      onSortChange={handleSortChange}
-                      values={uniqueValues.status}
-                      {...bindColumn("status")}
-                      valueLabel={statusLabel}
-                    />
-                  </th>
-                  <th className={`${headerCellClass} text-left`}>
-                    <span className="text-xs font-medium text-muted-foreground">Действия</span>
-                  </th>
+                  {boardColumns.map((column) => (
+                    <th
+                      key={column.id}
+                      className={`${headerCellClass} ${column.className ?? "text-left"}`}
+                    >
+                      <DataTableColumnHeader
+                        column={column}
+                        bindColumn={bindColumn}
+                        values={column.filterField ? uniqueValues[column.filterField] : undefined}
+                        currentSorts={sortConfigs}
+                        onSortChange={handleSortChange}
+                      />
+                    </th>
+                  ))}
                   <TableCornerResetHeader
                     hasActiveFilters={hasTableFiltersActive}
                     onReset={handleResetAllFilters}
@@ -1069,7 +992,7 @@ export function SectionTasksBoard({
               {sortedTasks.length === 0 ? (
                 <tbody>
                   <tr>
-                    <td colSpan={13} className="p-8 text-center text-sm text-muted-foreground">
+                    <td colSpan={BOARD_COLSPAN} className="p-8 text-center text-sm text-muted-foreground">
                       Нет задач, соответствующих фильтру
                     </td>
                   </tr>
@@ -1077,8 +1000,8 @@ export function SectionTasksBoard({
               ) : (
                 <VirtualizedTableBody
                   rows={virtualRows}
-                  rowHeight={48}
-                  colSpan={13}
+                  rowHeight={ROW_HEIGHT_PX}
+                  colSpan={BOARD_COLSPAN}
                   scrollContainerRef={tableScrollRef}
                   renderRow={(row) => renderVirtualRow(row)}
                 />
@@ -1093,8 +1016,10 @@ export function SectionTasksBoard({
               <div className="rounded-lg border p-4 text-sm text-muted-foreground text-center">
                 Нет задач, соответствующих фильтру
               </div>
-            ) : groups.map((group) => {
-              const isCollapsed = collapsedGroups.has(group.key);
+            ) : boardEntries.map((entry) => {
+              if (entry.kind === "divider") return renderWaitingDividerMobile(entry.key, entry.count);
+              const group = entry.group;
+              const isCollapsed = collapsedGroups.has(entry.key);
               const isSingleTask = group.tasks.length === 1;
 
               // Одна задача — рендерим напрямую без шапки группы
@@ -1106,8 +1031,13 @@ export function SectionTasksBoard({
                 return renderMobileCard(task, isSelected, bulkMode, bulkSelection, onAction, onRevokeItem, isRevoking, true, readOnly);
               }
 
+              const mobileHeader = getTaskGroupHeaderState(group, {
+                isCollapsed,
+                isBulkMode: Boolean(bulkMode),
+                allSelected: Boolean(bulkMode && bulkSelection?.isAllSelected(group.tasks.map((t) => t.id))),
+              });
               return (
-                <div key={group.key} className={`rounded-lg overflow-hidden transition-colors ${bulkMode && bulkSelection?.isAllSelected(group.tasks.map(t => t.id)) ? TABLE_ROW_STYLES.selectedGroupContainer : TABLE_ROW_STYLES.defaultGroupContainer}`}>
+                <div key={entry.key} className={`rounded-lg overflow-hidden transition-colors ${bulkMode && bulkSelection?.isAllSelected(group.tasks.map(t => t.id)) ? TABLE_ROW_STYLES.selectedGroupContainer : TABLE_ROW_STYLES.defaultGroupContainer}`}>
                   <div
                     className="p-3 flex items-center justify-between gap-2 border-b border-muted cursor-pointer"
                     onClick={() => {
@@ -1125,7 +1055,7 @@ export function SectionTasksBoard({
                           }
                         }
                       } else {
-                        toggleGroup(group.key);
+                        toggleGroup(entry.key);
                       }
                     }}
                   >
@@ -1134,11 +1064,11 @@ export function SectionTasksBoard({
                         className="p-0.5 hover:bg-muted/50 rounded transition-colors cursor-pointer"
                         onClick={(e) => {
                           e.stopPropagation();
-                          toggleGroup(group.key);
+                          toggleGroup(entry.key);
                         }}
-                        title={isCollapsed ? "Раскрыть" : "Скрыть"}
+                        title={mobileHeader.collapseTitle}
                       >
-                        {isCollapsed ? (
+                        {mobileHeader.isCollapsed ? (
                           <ChevronRight className="h-4 w-4 text-muted-foreground" />
                         ) : (
                           <ChevronDown className="h-4 w-4 text-muted-foreground" />
@@ -1147,32 +1077,28 @@ export function SectionTasksBoard({
                       <span className="font-semibold text-sm truncate">
                         {group.label}
                       </span>
-                      {bulkMode && bulkSelection?.isAllSelected(group.tasks.map(t => t.id)) && (
+                      {bulkMode && mobileHeader.allSelected && (
                         <span className={`text-xs ${TABLE_ROW_STYLES.selectedLabel} ml-1`}>выбрано</span>
                       )}
                     </div>
                     <div className="flex items-center gap-2 shrink-0">
-                      <Badge variant="secondary" className="bg-blue-100 text-blue-700">
+                      <Badge variant="secondary" className={`bg-blue-100 text-blue-700 ${TABLE_ROW_COMPACT.badge}`}>
                         &times;{group.tasks.length}
                       </Badge>
-                      {onCompleteGroup && !readOnly && (() => {
-                        const groupHasCompletable = group.tasks.some(isTaskCompletable);
-                        return (
-                          <Button
-                            size="sm"
-                            variant="outline"
-                            className="min-h-[32px] transition-all hover:bg-accent/50"
-                            onClick={(e) => {
-                              e.stopPropagation();
-                              onCompleteGroup(group);
-                            }}
-                            disabled={!groupHasCompletable}
-                            title={groupHasCompletable ? "Открыть панель завершения группы" : "Все задания в группе завершены"}
-                          >
-                            <span>Завершить группу</span>
-                          </Button>
-                        );
-                      })()}
+                      {onCompleteGroup && !readOnly && (
+                        <Button
+                          variant="outline"
+                          className={ROW_ACTION_BUTTON_CLASS}
+                          onClick={(e) => {
+                            e.stopPropagation();
+                            onCompleteGroup(group);
+                          }}
+                          disabled={!mobileHeader.hasCompletable}
+                          title={mobileHeader.completeTitle}
+                        >
+                          <span>Завершить группу</span>
+                        </Button>
+                      )}
                     </div>
                   </div>
                   {!isCollapsed && <div className="divide-y divide-muted">{group.tasks.map((task, idx) => {

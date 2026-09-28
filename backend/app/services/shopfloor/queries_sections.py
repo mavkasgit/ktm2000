@@ -9,6 +9,7 @@ from sqlalchemy import String, case, cast, exists, func, or_, select
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import aliased
 
+from app.core.sorting import SortClause, apply_sort, parse_sort
 from app.domain.dimensions import (
     format_cut_layout,
     format_quantity,
@@ -20,7 +21,7 @@ from app.models.product import Product
 from app.models.route import RouteOperation, RouteStage, SectionOperation
 from app.models.section import Section
 from app.models.transfer import Transfer, TransferStatus
-from app.models.work_task import WorkTask, WorkTaskStatus
+from app.models.work_task import CLOSED_WORK_TASK_STATUSES, RESOLVED_WORK_TASK_STATUSES, WorkTask, WorkTaskStatus
 from app.stock.models import QualityState, Reason, StockBalance, StockTransaction
 from app.services.plan_position_hanger import resolve_positions_hanger
 
@@ -48,7 +49,34 @@ def _compute_fingerprint(
     return hashlib.sha256(canonical.encode()).hexdigest()[:16]
 
 
-BOARD_SORT_FIELDS = frozenset({"sequence", "task_id", "product_sku", "status", "due_date", "dimensions"})
+# Единая таблица «поле ?sort= → выражение SQL» для доски. Она же — источник
+# истины для валидации: apply_sort отвечает 400 на поле, которого здесь нет,
+# поэтому поле нельзя объявить, но не резолвить (или наоборот).
+#
+# Значение — выражение SQLAlchemy для прямой колонки; callable для полей,
+# выражение которых собирается на каждый запрос (JSONB-ключ здесь один).
+_BOARD_SORT_COLUMNS: dict[str, object] = {
+    "sequence": SectionPlanLine.sequence,
+    "task_id": WorkTask.id,
+    "product_sku": Product.sku,
+    "status": WorkTask.status,
+    "due_date": WorkTask.due_date,
+    "dimensions": lambda: WorkTask.dimensions["length_mm"].as_float(),
+}
+
+# Курируемый набор полей сортировки: контракт для фронта. Валидация идёт по
+# _BOARD_SORT_COLUMNS, поэтому набор выводится из таблицы, а не живёт отдельно.
+BOARD_SORT_FIELDS = frozenset(_BOARD_SORT_COLUMNS)
+
+# Поля, где значение может быть пустым: срок и длина задания не заполнены.
+# Пустые уходят в конец в ЛЮБОМ направлении (в Postgres DESC по умолчанию
+# ставит NULL первым — оператор кликнул «спустить», а пустые уехали наверх).
+_BOARD_SORT_NULLS_LAST_FIELDS = ("due_date", "dimensions")
+
+# Сортировка по умолчанию — порядок строк маршрута (тот же, что был до
+# перехода на общий контракт ``?sort=``).
+_BOARD_SORT_DEFAULT = SortClause("sequence", "asc")
+
 DEFAULT_BOARD_LIMIT = 50
 MAX_BOARD_LIMIT = 500
 
@@ -139,35 +167,21 @@ def _build_section_board_query(
     return query
 
 
-def _apply_board_sort(query, *, sort_by: str, sort_order: str):
-    resolved_sort_by = sort_by if sort_by in BOARD_SORT_FIELDS else "sequence"
-    if sort_order not in ("asc", "desc"):
-        sort_order = "asc"
+def _apply_board_sort(query, clauses: list[SortClause]):
+    """ORDER BY доски: приоритеты слева направо, в конце tiebreaker по PK задачи.
 
-    if resolved_sort_by == "task_id":
-        order_column = WorkTask.id
-    elif resolved_sort_by == "product_sku":
-        order_column = Product.sku
-    elif resolved_sort_by == "status":
-        order_column = WorkTask.status
-    elif resolved_sort_by == "due_date":
-        order_column = WorkTask.due_date
-    elif resolved_sort_by == "dimensions":
-        order_column = WorkTask.dimensions["length_mm"].as_float()
-    else:
-        order_column = SectionPlanLine.sequence
-
-    nulls_last = resolved_sort_by in ("due_date", "dimensions")
-    if sort_order == "asc":
-        primary = order_column.asc()
-        if nulls_last:
-            primary = primary.nulls_last()
-        return query.order_by(primary, WorkTask.id.asc())
-
-    primary = order_column.desc()
-    if nulls_last:
-        primary = primary.nulls_last()
-    return query.order_by(primary, WorkTask.id.desc())
+    Tiebreaker всегда возрастающий, хотя раньше повторял направление сортировки.
+    Для уникального PK это тот же результат: направление последнего ключа
+    влияет только на порядок среди строк с равными значениями ВСЕХ ключей, а
+    равенства по id не бывает — порядок строк не меняется.
+    """
+    return apply_sort(
+        query,
+        clauses,
+        _BOARD_SORT_COLUMNS,
+        tiebreaker=WorkTask.id,
+        nulls_last=_BOARD_SORT_NULLS_LAST_FIELDS,
+    )
 
 
 async def get_section_board(
@@ -180,8 +194,7 @@ async def get_section_board(
     search: str | None = None,
     product_sku: str | None = None,
     dimensions: str | None = None,
-    sort_by: str = "sequence",
-    sort_order: str = "asc",
+    sort: str | None = None,
     limit: int = DEFAULT_BOARD_LIMIT,
     offset: int = 0,
 ) -> dict:
@@ -204,7 +217,7 @@ async def get_section_board(
     )
     total = (await db.execute(count_stmt)).scalar() or 0
 
-    query = _apply_board_sort(query, sort_by=sort_by, sort_order=sort_order)
+    query = _apply_board_sort(query, parse_sort(sort, default=_BOARD_SORT_DEFAULT))
     query = query.limit(limit).offset(offset)
     rows = (await db.execute(query)).all()
 
@@ -627,7 +640,7 @@ async def get_sections_summary(db: AsyncSession) -> dict:
             .outerjoin(SectionPlanLine, WorkTask.section_plan_line_id == SectionPlanLine.id)
             .outerjoin(PlanPosition, SectionPlanLine.plan_position_id == PlanPosition.id)
             .where(
-                WorkTask.status.notin_([WorkTaskStatus.cancelled, WorkTaskStatus.completed]),
+                WorkTask.status.notin_(CLOSED_WORK_TASK_STATUSES),
                 (PlanPosition.deleted_at.is_(None)) | (PlanPosition.id.is_(None)),
             )
             .group_by(WorkTask.section_id)
@@ -643,7 +656,7 @@ async def get_sections_summary(db: AsyncSession) -> dict:
             .outerjoin(SectionPlanLine, WorkTask.section_plan_line_id == SectionPlanLine.id)
             .outerjoin(PlanPosition, SectionPlanLine.plan_position_id == PlanPosition.id)
             .where(
-                WorkTask.status == WorkTaskStatus.completed,
+                WorkTask.status.in_(RESOLVED_WORK_TASK_STATUSES),
                 (PlanPosition.deleted_at.is_(None)) | (PlanPosition.id.is_(None)),
             )
             .group_by(WorkTask.section_id)
@@ -767,36 +780,6 @@ async def get_section_daily_stats(
             daily_map[day_key]["rejected_quantity"] = str(_to_decimal(total_qty))
 
     return {"section_id": section_id, "daily_stats": list(daily_map.values())}
-
-
-async def get_section_payload_keys(
-    db: AsyncSession,
-    *,
-    section_id: int,
-) -> dict:
-    """
-    Возвращает список уникальных ключей из source_payload для всех задач участка.
-
-    Используется в GroupingSettingsModal для показа чекбоксов кастомных полей.
-
-    ПОЧЕМУ ОТДЕЛЬНЫЙ ЗАПРОС, А НЕ ЧАСТЬ get_section_board:
-      Этот запрос нужен только при открытии модалки настроек (~1 раз в сессию),
-      а не при каждой загрузке доски. Разделение снижает объём данных в основном запросе.
-
-    PostgreSQL jsonb_object_keys() — встроенная функция для извлечения ключей JSONB.
-    """
-    stmt = (
-        select(
-            func.jsonb_object_keys(PlanPosition.source_payload).label("key")
-        )
-        .join(SectionPlanLine, SectionPlanLine.plan_position_id == PlanPosition.id)
-        .where(SectionPlanLine.section_id == section_id)
-        .distinct()
-        .order_by(func.jsonb_object_keys(PlanPosition.source_payload))
-    )
-
-    rows = (await db.execute(stmt)).scalars().all()
-    return {"keys": list(rows)}
 
 
 async def get_warehouse_remainders(

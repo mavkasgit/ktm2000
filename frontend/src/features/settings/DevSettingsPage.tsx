@@ -8,6 +8,7 @@ import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogDescription, Di
 import { toast } from "@/shared/ui"
 import { seedRoutes, listRoutes, listRouteRuleProfiles, listRouteSelectionRules, seedPreview, seedDemoProduction, clearDemoProduction } from "@/shared/api/routes"
 import { listAllImportTemplates } from "@/shared/api/importTemplates"
+import { invalidateEverything } from "@/shared/api/cacheInvalidation"
 import { listSections } from "@/shared/api/sections"
 import { queryKeys } from "@/shared/api/queryKeys"
 import { usePermission } from "@/features/auth/hooks/usePermission"
@@ -42,7 +43,7 @@ function SeedDialog({ open, onOpenChange }: { open: boolean; onOpenChange: (v: b
     setSeeding(true)
     try {
       const summary = await seedRoutes(true)
-      queryClient.invalidateQueries()
+      void invalidateEverything(queryClient)
       toast({
         title: "Справочники загружены",
         description:
@@ -195,7 +196,7 @@ export function DevSettingsPage() {
     setSeedingDemo(true)
     try {
       const summary = await seedDemoProduction()
-      queryClient.invalidateQueries()
+      void invalidateEverything(queryClient)
       toast({
         title: "Демо-данные загружены",
         description: `Продуктов: ${summary.products}, Остатков: ${summary.remainders}, Дефектов: ${summary.defects}`,
@@ -217,7 +218,7 @@ export function DevSettingsPage() {
     setClearingDemo(true)
     try {
       const summary = await clearDemoProduction()
-      queryClient.invalidateQueries()
+      void invalidateEverything(queryClient)
       const clearedCount = Object.values(summary.cleanup).reduce((a: number, b: any) => a + (typeof b === "number" ? b : 0), 0)
       toast({
         title: "Демо-данные очищены",

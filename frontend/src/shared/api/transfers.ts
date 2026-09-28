@@ -61,14 +61,18 @@ export type ReadyToTransferListParams = {
   limit?: number;
   offset?: number;
   search?: string;
-  sort_by?: string;
-  sort_order?: "asc" | "desc";
+  /** Строка сортировки `field:order,field:order` (см. `buildSortParam`). */
+  sort?: string;
   product_sku?: string;
   operation_name?: string;
   next_operation_name?: string;
   next_section_name?: string;
   task_id?: number;
-  plan_position_id?: number;
+  /**
+   * Приходит числом из формы и строкой из общего сборщика параметров колонок;
+   * в запрос уезжает в обоих случаях одна и та же строка.
+   */
+  plan_position_id?: number | string;
   transferable_qty?: string;
   /** Фильтр точного совпадения по габариту: JSON-строка (`{"length_mm":2700}`) или `null` для безразмерных. */
   dimensions?: string;
@@ -173,13 +177,15 @@ export async function listReadyToTransfer(
   if (params.limit != null) search.set("limit", String(params.limit));
   if (params.offset != null) search.set("offset", String(params.offset));
   if (params.search) search.set("search", params.search);
-  if (params.sort_by) search.set("sort_by", params.sort_by);
-  if (params.sort_order) search.set("sort_order", params.sort_order);
+  if (params.sort) search.set("sort", params.sort);
   if (params.product_sku) search.set("product_sku", params.product_sku);
   if (params.operation_name) search.set("operation_name", params.operation_name);
   if (params.next_operation_name) search.set("next_operation_name", params.next_operation_name);
   if (params.next_section_name) search.set("next_section_name", params.next_section_name);
   if (params.task_id != null) search.set("task_id", String(params.task_id));
+  // Бэкенд принимает `plan_position_id` (`ready_to_transfer`), но параметр
+  // не сериализовался: фильтр «ID» на передачах молча не работал.
+  if (params.plan_position_id != null) search.set("plan_position_id", String(params.plan_position_id));
   if (params.transferable_qty) search.set("transferable_qty", params.transferable_qty);
   if (params.dimensions) search.set("dimensions", params.dimensions);
   const qs = search.toString();
@@ -300,8 +306,8 @@ export type TransferHistoryListParams = {
   offset?: number;
   search?: string;
   status?: string;
-  sort_by?: string;
-  sort_order?: "asc" | "desc";
+  /** Строка сортировки `field:order,field:order` (см. `buildSortParam`). */
+  sort?: string;
   date_from?: string;
   date_to?: string;
   product_sku?: string;
@@ -320,8 +326,7 @@ export async function listTransferHistory(
   if (params.offset != null) search.set("offset", String(params.offset));
   if (params.search) search.set("search", params.search);
   if (params.status) search.set("status", params.status);
-  if (params.sort_by) search.set("sort_by", params.sort_by);
-  if (params.sort_order) search.set("sort_order", params.sort_order);
+  if (params.sort) search.set("sort", params.sort);
   if (params.date_from) search.set("date_from", params.date_from);
   if (params.date_to) search.set("date_to", params.date_to);
   if (params.product_sku) search.set("product_sku", params.product_sku);

@@ -158,6 +158,19 @@ class StockCommand:
     # участка закрывается последующей выдачей. Для СПГ с lot-учётом
     # (requires_lot) минус по-прежнему запрещён — см. StockCommandService._validate.
     allow_negative: bool = False
+    # Пройденные операции материала (ADR-0043): канонический отсортированный
+    # список operation_code. None = состояние не зафиксировано (операция
+    # вне маршрута: ручной приход, импорт остатков, сид, legacy). Список
+    # (в т.ч. пустой) = состояние известно. record() либо примет признак от
+    # вызывающего (когда семантика «не до этапа задания» — вход
+    # трансформирующего этапа, возврат на предыдущий этап), либо выведет
+    # его сам из маршрута позиции; проверки — в record().
+    completed_operations: list[str] | None = None
+    # Явное разрешение «состояние неизвестно» для плановой проводки, у
+    # которой маршрут не восстанавливается (задание вне строки плана).
+    # По умолчанию такой путь закрыт исключением: молчаливый NULL здесь
+    # означал бы потерю признака в середине маршрута.
+    allow_unknown_completed_operations: bool = False
     extra: dict[str, Any] = field(default_factory=dict)
 
 
@@ -584,12 +597,16 @@ class StockCommandService:
            с таким ключом, вернуть её (не создавать дубль).
         2. Валидация (product exists, quantity > 0, locations differ, reason
            consistent with quality_state).
-        3. INSERT StockTransaction. При гонке (конкурент закоммитил тот же
+        3. Признак «пройденные операции» (ADR-0043): канонизация формы,
+           проверка кодов по справочнику операций, восстановление из
+           маршрута позиции, зеркало компенсации. Плановой проводке без
+           признака путь закрыт — см. :meth:`_resolve_completed_operations`.
+        4. INSERT StockTransaction. При гонке (конкурент закоммитил тот же
            ключ между шагом 1 и flush) unique-бэкстоп ловится и подача
            отклоняется ``StockIdempotencyConflict`` (409, ADR-0022) —
            replay на этом уровне запрещён: side effects вызывающего в
            текущей транзакции откатываются вместе с ней.
-        4. ``projection_manager.stock_changed(tx)`` — синхронно в той же
+        5. ``projection_manager.stock_changed(tx)`` — синхронно в той же
            транзакции.
 
         Возвращает созданную (или существующую по идемпотентности)
@@ -608,6 +625,7 @@ class StockCommandService:
             raise StockValidationError(f"invalid dimensions: {exc}") from exc
 
         await self._validate(session, cmd)
+        await self._resolve_completed_operations(session, cmd)
 
         tx = StockTransaction(
             product_id=cmd.product_id,
@@ -615,6 +633,7 @@ class StockCommandService:
             to_location_id=cmd.to_location_id,
             quantity=cmd.quantity,
             dimensions=cmd.dimensions,
+            completed_operations=cmd.completed_operations,
             reason=cmd.reason,
             from_quality_state=cmd.quality_state,
             to_quality_state=cmd.to_quality_state or cmd.quality_state,
@@ -650,6 +669,111 @@ class StockCommandService:
 
         await self._projection_manager.stock_changed(session, tx)
         return tx
+
+    async def _resolve_completed_operations(
+        self, session: AsyncSession, cmd: StockCommand
+    ) -> None:
+        """Инварианты признака «пройденные операции» (ADR-0043).
+
+        Три правила, и все три живут здесь — в единственном пути записи,
+        иначе признак молча теряется на том пути, который забыли:
+
+        1. **Форма.** Список приводится к канону (без дублей, по
+           возрастанию), каждый код проверяется по справочнику
+           ``section_operations``.
+        2. **Компенсация зеркалит признак.** Проводка с ``reverses_id``
+           несёт ровно то же значение, что и исходная: не передан —
+           зеркалится автоматически, передан и отличается — отказ.
+           Откат возвращает тот же материал, а не «материал без операций».
+        3. **Плановая проводка не остаётся без признака.** Если команда
+           привязана к заданию или строке плана, а вызывающий признак не
+           задал, он выводится из маршрута позиции. Не вывелся — путь
+           закрыт исключением, а не «тихим» NULL.
+
+        Вне плана (ручной приход, импорт остатков, сид) состояние
+        неизвестно, и ``NULL`` — честное значение, а не ошибка.
+        """
+        from app.services.material_operations import (
+            CompletedOperationsError,
+            canonicalize_completed_operations,
+        )
+
+        try:
+            resolved = canonicalize_completed_operations(cmd.completed_operations)
+        except CompletedOperationsError as exc:
+            raise StockValidationError(f"invalid completed_operations: {exc}") from exc
+
+        if cmd.reverses_id is not None:
+            source = await session.get(StockTransaction, cmd.reverses_id)
+            if source is None:
+                raise StockValidationError(
+                    f"reverses_id={cmd.reverses_id} not found in ledger"
+                )
+            source_value = canonicalize_completed_operations(source.completed_operations)
+            # Не передан — зеркалим молча: откат возвращает тот же
+            # материал, и «забытый» вызывающим признак не должен
+            # превращать откат в потерю состояния. Передан и отличается —
+            # это расхождение с исходной проводкой, а не опечатка.
+            if resolved is not None and resolved != source_value:
+                raise StockValidationError(
+                    f"compensation of tx #{cmd.reverses_id} must mirror "
+                    f"completed_operations: source={source_value}, command={resolved}"
+                )
+            resolved = source_value
+            await self._assert_known(session, resolved)
+            cmd.completed_operations = resolved
+            return
+
+        if resolved is None and self._is_plan_driven(cmd):
+            resolved = await self._completed_operations_from_route(session, cmd)
+            if resolved is None and not cmd.allow_unknown_completed_operations:
+                raise StockValidationError(
+                    "completed_operations is required for plan-driven stock "
+                    f"writes: task_id={cmd.task_id}, "
+                    f"section_plan_line_id={cmd.section_plan_line_id}"
+                )
+
+        await self._assert_known(session, resolved)
+        cmd.completed_operations = resolved
+
+    @staticmethod
+    async def _assert_known(
+        session: AsyncSession, codes: list[str] | None
+    ) -> None:
+        from app.services.material_operations import (
+            CompletedOperationsError,
+            assert_known_operation_codes,
+        )
+
+        try:
+            await assert_known_operation_codes(session, codes or [])
+        except CompletedOperationsError as exc:
+            raise StockValidationError(str(exc)) from exc
+
+    @staticmethod
+    def _is_plan_driven(cmd: StockCommand) -> bool:
+        """Проводка принадлежит позиции плана (заданию или строке плана)."""
+        return cmd.task_id is not None or cmd.section_plan_line_id is not None
+
+    @staticmethod
+    async def _completed_operations_from_route(
+        session: AsyncSession, cmd: StockCommand
+    ) -> list[str] | None:
+        """Признак по маршруту позиции: операции до этапа задания.
+
+        Единственный источник — маршрут строки плана и этап задания, а не
+        обратное чтение ledger по складу: на складе материал может быть
+        смешанным, и чтение «назад» дало бы недетерминированную атрибуцию
+        (ADR-0021).
+        """
+        from app.services.material_operations import completed_operations_for_task
+
+        if cmd.task_id is None:
+            return None
+        task = await session.get(WorkTask, cmd.task_id)
+        if task is None:
+            return None
+        return await completed_operations_for_task(session, task)
 
     async def _find_by_idempotency_key(
         self, session: AsyncSession, key: str

@@ -10,6 +10,7 @@ from __future__ import annotations
 
 import json
 import re
+from collections.abc import Callable
 from dataclasses import dataclass, field
 from decimal import Decimal, InvalidOperation
 from functools import lru_cache
@@ -19,6 +20,7 @@ from typing import Literal
 
 from sqlalchemy import func, or_, select
 
+from app.core.sorting import SortClause, parse_sort, sort_items
 from app.domain.dimensions import (
     DIMENSIONLESS_LABEL,
     LENGTH_MM,
@@ -1100,16 +1102,11 @@ async def generate_remainders_template_for_location(
 
 # ─── Preview table query (server pagination / filter / sort) ───────────────────
 
-REMAINDER_PREVIEW_SORT_FIELDS = frozenset({
-    "row",
-    "sku",
-    "quantity",
-    "length",
-    "operations",
-    "quality",
-    "section",
-    "errors",
-})
+# Порядок превью без параметра сортировки прежний: номер строки листа
+# по возрастанию. Набор допустимых полей отдельно не объявляется — он
+# выводится из таблицы ключей ``_preview_sort_keys`` (sort_items отвечает 400
+# на поле, которого в ней нет), поэтому забыть поле невозможно.
+_PREVIEW_SORT_DEFAULT = SortClause("row", "asc")
 
 _PREVIEW_QUALITY_LABELS: dict[QualityState, str] = {
     QualityState.GOOD: "Годный",
@@ -1270,39 +1267,59 @@ def _preview_matches_column_filters(
     return True
 
 
-def _preview_sort_key(
-    item: RemainderItem,
-    field: str,
+def _preview_length_mm(item: RemainderItem) -> float:
+    """Числовая длина строки превью; безразмерные (—) — в начале (-1.0)."""
+    length_mm = (item.dimensions or {}).get(LENGTH_MM)
+    if isinstance(length_mm, (int, float)):
+        return float(length_mm)
+    return -1.0
+
+
+def _preview_sort_keys(
     *,
     default_quality_state: QualityState,
     target_section_overrides: dict[int, int] | None,
     quality_state_overrides: dict[int, QualityState] | None,
     section_names: dict[int, str],
-) -> tuple[int | float | str, ...]:
-    if field == "row":
-        return (item.source_row_number,)
-    if field == "quantity":
-        return (item.quantity if item.quantity is not None else -1,)
-    if field == "length":
-        # Сортируем по числовой длине; безразмерные (—) — в начале.
-        length_mm = (item.dimensions or {}).get(LENGTH_MM)
-        if isinstance(length_mm, (int, float)):
-            return (float(length_mm),)
-        return (-1.0,)
-    cell = _preview_cell_value(
-        item,
-        field,
-        default_quality_state=default_quality_state,
-        target_section_overrides=target_section_overrides,
-        quality_state_overrides=quality_state_overrides,
-        section_names=section_names,
-    )
-    if field in {"row", "quantity"}:
-        try:
-            return (float(cell),)
-        except ValueError:
-            return (0.0,)
-    return (cell.casefold(),)
+) -> dict[str, Callable[[RemainderItem], object]]:
+    """Таблица «поле ?sort= → значение ячейки» для сортировки превью.
+
+    Числовые поля отдают число, текстовые — casefold-подпись колонки
+    (регистр на порядок не влияет, как и раньше). Пустые значения, как и
+    прежде, встают в начало: количество без значения — ``-1``, длина без
+    габарита — ``-1.0``; общий ``nulls_last`` здесь не применяется, иначе
+    пустые поменялись бы местами с непустыми.
+
+    Каждое поле сравнивается только со своим же типом: sort_items делает
+    отдельный проход на приоритет, поэтому casefold-строка и число никогда
+    не сравниваются между собой.
+    """
+    def _text(field: str) -> Callable[[RemainderItem], str]:
+        return lambda item: _preview_cell_value(
+            item,
+            field,
+            default_quality_state=default_quality_state,
+            target_section_overrides=target_section_overrides,
+            quality_state_overrides=quality_state_overrides,
+            section_names=section_names,
+        ).casefold()
+
+    return {
+        "row": lambda item: item.source_row_number,
+        "quantity": lambda item: item.quantity if item.quantity is not None else -1,
+        "length": _preview_length_mm,
+        "sku": _text("sku"),
+        "operations": _text("operations"),
+        "quality": _text("quality"),
+        "section": _text("section"),
+        "errors": _text("errors"),
+    }
+
+
+def _preview_sort_tiebreaker(item: RemainderItem) -> int:
+    """Последний уровень порядка — номер строки листа: он уникален, поэтому
+    равные значения колонки сортировки не «мигают» между страницами."""
+    return item.source_row_number
 
 
 def build_remainder_section_meta(items: list[RemainderItem]) -> list[RemainderSectionMeta]:
@@ -1322,8 +1339,7 @@ def query_remainder_preview_items(
     *,
     search: str | None = None,
     filter_status: str = "all",
-    sort_by: str = "row",
-    sort_order: str = "asc",
+    sort: str = "row:asc",
     limit: int = 50,
     offset: int = 0,
     default_quality_state: QualityState = QualityState.GOOD,
@@ -1374,18 +1390,18 @@ def query_remainder_preview_items(
             )
         ]
 
-    resolved_sort_by = sort_by if sort_by in REMAINDER_PREVIEW_SORT_FIELDS else "row"
-    reverse = sort_order.lower() == "desc"
-    filtered.sort(
-        key=lambda item: _preview_sort_key(
-            item,
-            resolved_sort_by,
+    # Приоритеты слева направо, в конце tiebreaker по номеру строки листа.
+    sort_clauses = parse_sort(sort, default=_PREVIEW_SORT_DEFAULT)
+    filtered = sort_items(
+        filtered,
+        sort_clauses,
+        _preview_sort_keys(
             default_quality_state=default_quality_state,
             target_section_overrides=target_section_overrides,
             quality_state_overrides=quality_state_overrides,
             section_names=resolved_section_names,
         ),
-        reverse=reverse,
+        tiebreaker=_preview_sort_tiebreaker,
     )
 
     items_total = len(filtered)

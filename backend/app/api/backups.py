@@ -22,6 +22,7 @@ from pydantic import BaseModel
 
 from app.core.config import settings
 from app.core.database import engine
+from app.core.sorting import SortClause, parse_sort, sort_items
 
 logger = logging.getLogger("app.backups")
 
@@ -50,14 +51,36 @@ BACKUP_STORAGE_DIRS = {
 BACKUP_JOBS: dict[str, dict] = {}
 BACKUP_JOBS_LOCK = threading.Lock()
 
-BACKUP_SORT_FIELDS = {
-    "filename",
-    "db_name",
-    "backup_type",
-    "size",
-    "created_at",
-    "comment",
+# ─── Сортировка списка бэкапов ─────────────────────────────────────────
+# Бэкапы — это файлы на диске, а не строки БД, поэтому сортировка идёт
+# в Python: sort_items, а не apply_sort. Таблица «поле ?sort= → ключ
+# сортировки» — тот же единый контракт, она же — источник истины для
+# валидации (поле вне таблицы — 400, а не молчаливый фолбэк).
+#
+# Ключ приводит значение к сравнимому типу ВНУТРИ своего поля: size — int,
+# остальные — str. Между разными полями ключи не сравниваются, каждый
+# приоритет сортируется своим же правилом.
+_SORT_KEYS: dict[str, Callable[[Dict], object]] = {
+    "filename": lambda item: str(item.get("filename") or ""),
+    "db_name": lambda item: str(item.get("db_name") or ""),
+    "backup_type": lambda item: str(item.get("backup_type") or "manual"),
+    "size": lambda item: int(item.get("size") or 0),
+    "created_at": lambda item: str(item.get("created_at") or ""),
+    "comment": lambda item: str(item.get("comment") or ""),
 }
+
+# Курируемый набор полей сортировки: контракт для фронта. Выводится из
+# таблицы ключей, а не живёт отдельно.
+VALID_SORT_FIELDS = frozenset(_SORT_KEYS)
+
+# Пустые значения НЕ отправляются в конец: ключи отдают не-None строки,
+# а пустая строка — это обычное значение. Иначе пришлось бы менять порядок
+# строк относительно прежнего поведения (пустой комментарий сортировался
+# первым), а менять порядок без решения владельца нельзя.
+_SORT_NULLS_LAST_FIELDS: tuple[str, ...] = ()
+
+# Порядок по умолчанию — тот же, что давал sort_by=created_at&sort_order=desc.
+_SORT_DEFAULT = SortClause("created_at", "desc")
 
 
 def _get_db_name() -> str:
@@ -353,17 +376,8 @@ def _backup_matches_filters(
     return True
 
 
-def _backup_sort_key(item: Dict, sort_by: str) -> str | int | float:
-    if sort_by == "size":
-        return int(item.get("size") or 0)
-    if sort_by == "created_at":
-        return str(item.get("created_at") or "")
-    if sort_by == "backup_type":
-        return str(item.get("backup_type") or "manual")
-    if sort_by == "comment":
-        return str(item.get("comment") or "")
-    if sort_by == "db_name":
-        return str(item.get("db_name") or "")
+def _backup_tiebreaker_key(item: Dict) -> str:
+    """Tiebreaker: имя файла уникально в пределах списка бэкапов."""
     return str(item.get("filename") or "")
 
 
@@ -372,8 +386,7 @@ def _list_backups_paginated(
     limit: int,
     offset: int,
     search: str | None = None,
-    sort_by: str = "created_at",
-    sort_order: str = "desc",
+    sort: str | None = None,
     backup_type: str | None = None,
     filename: str | None = None,
     db_name: str | None = None,
@@ -381,8 +394,9 @@ def _list_backups_paginated(
     size: int | None = None,
     created_at: str | None = None,
 ) -> tuple[list[Dict], int]:
-    resolved_sort_by = sort_by if sort_by in BACKUP_SORT_FIELDS else "created_at"
-    resolved_sort_order = sort_order if sort_order in {"asc", "desc"} else "desc"
+    # Сортировка разбирается до обхода списка: неизвестное поле или
+    # направление — 400, а не молчаливый фолбэк на created_at.
+    clauses = parse_sort(sort, default=_SORT_DEFAULT)
 
     items = _collect_backup_items()
 
@@ -401,8 +415,16 @@ def _list_backups_paginated(
         )
     ]
 
-    reverse = resolved_sort_order == "desc"
-    items.sort(key=lambda item: _backup_sort_key(item, resolved_sort_by), reverse=reverse)
+    # Приоритеты слева направо, в конце tiebreaker по имени файла: список
+    # файлов на диске не имеет стабильного физического порядка, и без
+    # tiebreaker строки «мигают» при переходе между страницами.
+    items = sort_items(
+        items,
+        clauses,
+        _SORT_KEYS,
+        tiebreaker=_backup_tiebreaker_key,
+        nulls_last=_SORT_NULLS_LAST_FIELDS,
+    )
 
     total = len(items)
     page = items[offset : offset + limit]
@@ -1025,8 +1047,10 @@ async def list_backups(
     limit: int = Query(default=50, ge=1, le=500),
     offset: int = Query(default=0, ge=0),
     search: str | None = Query(default=None),
-    sort_by: str = Query(default="created_at"),
-    sort_order: str = Query(default="desc"),
+    sort: str | None = Query(
+        default=None,
+        description="Сортировка списком правил field:asc|desc через запятую, например sort=size:desc,filename:asc",
+    ),
     backup_type: str | None = Query(default=None),
     filename: str | None = Query(default=None),
     db_name: str | None = Query(default=None),
@@ -1040,8 +1064,7 @@ async def list_backups(
         limit=limit,
         offset=offset,
         search=search,
-        sort_by=sort_by,
-        sort_order=sort_order,
+        sort=sort,
         backup_type=backup_type,
         filename=filename,
         db_name=db_name,

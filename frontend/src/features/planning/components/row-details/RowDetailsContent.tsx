@@ -1,4 +1,5 @@
-import { fmtQty } from "@/shared/utils/fmtQty"
+import { fmtQty } from "@/shared/lib/quantityFormat"
+import { countHangers } from "@/shared/lib/hangerCount"
 import { Input, Button, RouteOriginMark } from "@/shared/ui"
 import { routeOriginLabel } from "@/shared/lib/routeMeta"
 import { type RowDetailsContentMode, type RowDetailsData } from "./types"
@@ -7,10 +8,11 @@ import { useQueryClient, useMutation } from "@tanstack/react-query"
 import { updatePositionQuantity } from "@/shared/api/productionPlans"
 import { toast } from "@/shared/ui"
 import { getErrorMessage } from "@/shared/api/client"
-import { queryKeys } from "@/shared/api/queryKeys"
+import { invalidateAfter } from "@/shared/api/cacheInvalidation"
 import { statusLabels } from "@/shared/lib/generated-labels"
 import { ExecutionStagesTable } from "./ExecutionStagesTable"
 import { ExecutionEventsTable } from "./ExecutionEventsTable"
+import { RouteSignatureCheckCard } from "./RouteSignatureCheck"
 
 function planPreviewUrl(planId: number): string {
   return `/plans/${planId}/preview`
@@ -68,15 +70,7 @@ export function RowDetailsContent({
       }
       const newPerHanger = updatedPosition.quantity_per_hanger
       setEditQuantityPerHanger(newPerHanger != null ? String(newPerHanger) : "")
-      void queryClient.invalidateQueries({ queryKey: queryKeys.plan.allPositions() })
-      void queryClient.invalidateQueries({ queryKey: queryKeys.plan.positionDetail(Number(data.id)) })
-      void queryClient.invalidateQueries({ queryKey: queryKeys.sections.all() })
-      void queryClient.invalidateQueries({ queryKey: queryKeys.shopfloor.boardAll() })
-      void queryClient.invalidateQueries({ queryKey: queryKeys.shopfloor.statsAll() })
-      void queryClient.invalidateQueries({ queryKey: queryKeys.shopfloor.summary() })
-      void queryClient.invalidateQueries({ queryKey: queryKeys.transfers.readyAll() })
-      void queryClient.invalidateQueries({ queryKey: queryKeys.transfers.historyAll() })
-      void queryClient.invalidateQueries({ queryKey: queryKeys.plan.previewAll() })
+      void invalidateAfter(queryClient, "positionQuantityChanged")
       toast({ title: "Количество обновлено", variant: "success" })
       onSaved?.()
     },
@@ -86,13 +80,12 @@ export function RowDetailsContent({
   })
 
   const hangerCount = useMemo(() => {
-    const qty = Number(editQuantity) || 0
-    const perHanger = Number(editQuantityPerHanger) || 0
-    if (perHanger > 0) {
-      const val = qty / perHanger
-      return Number.isInteger(val) ? String(val) : val.toFixed(1)
-    }
-    return null
+    // Считаем каноническим countHangers, а не своей копией округления вверх:
+    // правило округления подвесов живёт в одном месте (@/shared/lib/hangerCount),
+    // и «значения нет» здесь — это null, а не «0», иначе предпросмотр врал бы
+    // оператору, показав ноль подвесов там, где количество ещё не введено.
+    const count = countHangers(editQuantity, Number(editQuantityPerHanger));
+    return count === null ? null : String(count);
   }, [editQuantity, editQuantityPerHanger])
 
   const hangerSourceHint = data.quantityPerHangerOverridden
@@ -129,6 +122,10 @@ export function RowDetailsContent({
 
   const canEdit = typeof data.id === "number" && data.productionPlanId > 0 &&
     (data.status === "draft" || data.status === "invalid" || data.status === "valid")
+  // Сигнатуру имеет смысл показывать там, где есть с чем сравнивать:
+  // у позиции плана и назначенный маршрут.
+  const canCheckRouteSignature =
+    typeof data.id === "number" && data.productionPlanId > 0 && data.routeOrigin.kind !== "none"
   const hasErrors = data.errors.length > 0
   const hasWarnings = data.warnings.length > 0
   const hasRouteCheckIssues = (data.routeCheckIssues?.length ?? 0) > 0
@@ -313,6 +310,13 @@ export function RowDetailsContent({
             )}
           </div>
         </div>
+      )}
+
+      {canCheckRouteSignature && (
+        <RouteSignatureCheckCard
+          productionPlanId={data.productionPlanId}
+          positionId={data.id as number}
+        />
       )}
 
       {hasStages && contentMode === "stages" && (

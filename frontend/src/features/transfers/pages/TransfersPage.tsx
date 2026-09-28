@@ -40,7 +40,7 @@ import {
   AlertDialogDescription,
   AlertDialogAction,
   AlertDialogCancel,
-  SortableFilterHeader,
+  DataTableColumnHeader,
   TableCornerResetCell,
   TableCornerResetHeader,
   DATA_TABLE_STYLES,
@@ -64,9 +64,12 @@ import {
   type TransferHistoryListParams,
 } from "@/shared/api/transfers";
 import { getErrorMessage } from "@/shared/api/client";
+import { invalidateAfter } from "@/shared/api/cacheInvalidation";
 import { queryKeys } from "@/shared/api/queryKeys";
 import { formatDimensionsFilterValue, formatDimensionsLabel } from "@/shared/api/stock";
-import { pickExactMatchColumnValue } from "@/shared/lib/columnFilterSearch";
+import { buildColumnApiParams } from "@/shared/lib/columnSpecs";
+import { historyColumns, readyColumns } from "../lib/transferColumns";
+import { TABLE_ROW_COMPACT } from "@/shared/lib/dataTableStyles";
 import { cn } from "@/shared/utils/cn";
 import {
   useBulkSelection,
@@ -86,13 +89,14 @@ import {
   type ReadyTransferGroup,
 } from "../lib/groupReadyTransfers";
 import { makeIdempotencyKey, runTransferBatch } from "../lib/runTransferBatch";
-
-function fmtQty(value: string | number | null | undefined): string {
-  if (value == null) return "0";
-  const n = parseFloat(String(value));
-  if (!Number.isFinite(n)) return "0";
-  return String(Math.round(n));
-}
+import { useFlushableDebouncedValue } from "@/shared/lib/useDebouncedValue";
+import {
+  buildHistorySortParam,
+  buildReadySortParam,
+  type HistorySortField,
+  type ReadySortField,
+} from "../lib/transferSortParams";
+import { fmtQty } from "@/shared/lib/quantityFormat";
 
 function conflictHintFromTransferError(message: string): string | null {
   const n = message.toLowerCase();
@@ -143,8 +147,6 @@ function statusBadgeVariant(status: string): StatusBadgeVariant {
   return "outline";
 }
 
-type ReadySortField = "positionId" | "sku" | "dimensions" | "stage" | "transferableQty" | "next";
-
 function getReadyCellValue(task: ReadyToTransferTask, field: ReadySortField): string {
   switch (field) {
     case "positionId":
@@ -152,7 +154,7 @@ function getReadyCellValue(task: ReadyToTransferTask, field: ReadySortField): st
     case "sku":
       return task.product_sku ?? "—";
     case "dimensions":
-      return task.dimensions_label ?? formatDimensionsLabel(task.dimensions);
+      return formatDimensionsLabel(task.dimensions, task.dimensions_label);
     case "stage":
       return task.operation_name ?? "—";
     case "transferableQty":
@@ -163,8 +165,6 @@ function getReadyCellValue(task: ReadyToTransferTask, field: ReadySortField): st
         : "Финальный";
   }
 }
-
-type HistorySortField = "from" | "to" | "sku" | "quantity" | "status";
 
 function getHistoryStatusLabel(
   transfer: IncomingTransfer,
@@ -179,170 +179,35 @@ function getHistoryStatusLabel(
   return `${direction} / Принята`;
 }
 
-function mapReadySortFieldToApi(field: ReadySortField): string {
-  switch (field) {
-    case "positionId":
-      return "plan_position_id";
-    case "sku":
-      return "product_sku";
-    case "dimensions":
-      return "dimensions";
-    case "stage":
-      return "operation_name";
-    case "transferableQty":
-      return "transferable_qty";
-    case "next":
-      return "next_section_name";
-  }
-}
 
-function mapHistorySortFieldToApi(field: HistorySortField): string {
-  switch (field) {
-    case "from":
-      return "from";
-    case "to":
-      return "to";
-    case "sku":
-      return "sku";
-    case "quantity":
-      return "quantity";
-    case "status":
-      return "status";
-  }
-}
-
-function extractSectionName(cellValue: string): string {
-  return cellValue.split(" / ")[0]?.trim() ?? cellValue;
-}
-
-function extractTransferStatusFromLabel(label: string): string | undefined {
-  const part = label.split(" / ").pop()?.trim();
-  switch (part) {
-    case "Аннулирована":
-      return "cancelled";
-    case "Отправлена":
-      return "sent";
-    case "Частично принята":
-      return "partially_accepted";
-    case "Принята":
-      return "accepted";
-    default:
-      return undefined;
-  }
-}
-
-function pickColumnApiValue<T extends string>(
-  columnFilters: Partial<Record<T, Set<string>>>,
-  columnSearchQueries: Partial<Record<T, string>>,
-  field: T,
-  mapValue: (value: string) => string | undefined = (value) => value,
-): string | undefined {
-  const searchQuery = columnSearchQueries[field]?.trim();
-  if (searchQuery) return mapValue(searchQuery);
-
-  const selected = columnFilters[field];
-  if (!selected || selected.size !== 1) return undefined;
-  const [value] = selected;
-  return mapValue(value);
-}
-
+/**
+ * Параметры журнала собираются из описания колонок. Раньше здесь стояло
+ * четыре строки с именами колонок.
+ */
 function buildHistoryColumnApiParams(
   columnFilters: Partial<Record<HistorySortField, Set<string>>>,
   columnSearchQueries: Partial<Record<HistorySortField, string>>,
-): Pick<
-  TransferHistoryListParams,
-  "product_sku" | "from_section_name" | "to_section_name" | "status"
-> {
-  const params: Pick<
-    TransferHistoryListParams,
-    "product_sku" | "from_section_name" | "to_section_name" | "status"
-  > = {};
-
-  const productSku = pickColumnApiValue(columnFilters, columnSearchQueries, "sku");
-  if (productSku) params.product_sku = productSku;
-
-  const fromSectionName = pickColumnApiValue(
-    columnFilters,
-    columnSearchQueries,
-    "from",
-    extractSectionName,
-  );
-  if (fromSectionName) params.from_section_name = fromSectionName;
-
-  const toSectionName = pickColumnApiValue(
-    columnFilters,
-    columnSearchQueries,
-    "to",
-    extractSectionName,
-  );
-  if (toSectionName) params.to_section_name = toSectionName;
-
-  const statusValue = pickColumnApiValue(
-    columnFilters,
-    columnSearchQueries,
-    "status",
-    extractTransferStatusFromLabel,
-  );
-  if (statusValue) params.status = statusValue;
-
-  return params;
+): Record<string, string> {
+  return buildColumnApiParams(columnFilters, columnSearchQueries, historyColumns);
 }
 
+/**
+ * Параметры готовых к передаче собираются из описания колонок. Раньше здесь
+ * стояло семь строк с именами колонок, включая ручной вызов точного значения
+ * по имени поля «Размер».
+ *
+ * Возвращается `Record<string, string>`, а не `Pick<ReadyToTransferListParams, …>`:
+ * приведение к `Pick` компилируется с любым набором строковых ключей и
+ * поэтому ничего не проверяет — именно через него проскочило имя
+ * `transferableQty` вместо `transferable_qty`, и фильтр перестал уезжать.
+ */
 function buildReadyColumnApiParams(
   columnFilters: Partial<Record<ReadySortField, Set<string>>>,
   columnSearchQueries: Partial<Record<ReadySortField, string>>,
-): Pick<
-  ReadyToTransferListParams,
-  | "product_sku"
-  | "operation_name"
-  | "next_operation_name"
-  | "next_section_name"
-  | "plan_position_id"
-  | "transferable_qty"
-  | "dimensions"
-> {
-  const params: Pick<
-    ReadyToTransferListParams,
-    | "product_sku"
-    | "operation_name"
-    | "next_operation_name"
-    | "next_section_name"
-    | "plan_position_id"
-    | "transferable_qty"
-    | "dimensions"
-  > = {};
-
-  const productSku = pickColumnApiValue(columnFilters, columnSearchQueries, "sku");
-  if (productSku && productSku !== "—") params.product_sku = productSku;
-
-  const stageName = pickColumnApiValue(columnFilters, columnSearchQueries, "stage");
-  if (stageName && stageName !== "—") params.operation_name = stageName;
-
-  const transferableQty = pickColumnApiValue(columnFilters, columnSearchQueries, "transferableQty");
-  if (transferableQty) params.transferable_qty = transferableQty;
-
-  const dimensions = pickExactMatchColumnValue(columnFilters, "dimensions");
-  if (dimensions) params.dimensions = dimensions;
-
-  const positionIdStr = pickColumnApiValue(columnFilters, columnSearchQueries, "positionId");
-  if (positionIdStr) {
-    const parsed = Number(positionIdStr);
-    if (Number.isFinite(parsed)) params.plan_position_id = parsed;
-  }
-
-  const nextSearch = columnSearchQueries.next?.trim();
-  const nextSelected = columnFilters.next;
-  let nextRaw: string | undefined;
-  if (nextSearch) nextRaw = nextSearch;
-  else if (nextSelected?.size === 1) nextRaw = [...nextSelected][0];
-  if (nextRaw && nextRaw !== "Финальный") {
-    const [op, section] = nextRaw.split(" / ").map((part) => part.trim());
-    if (op) params.next_operation_name = op;
-    if (section) params.next_section_name = section;
-  }
-
-  return params;
+): Record<string, string> {
+  return buildColumnApiParams(columnFilters, columnSearchQueries, readyColumns);
 }
+
 
 function getHistoryCellValue(
   transfer: IncomingTransfer,
@@ -371,8 +236,7 @@ interface ReadyTransferRowProps {
   isSubmitting: boolean;
   tryAcquire: () => boolean;
   release: () => void;
-  invalidateShopfloorCaches: (fromSectionId: number | null, toSectionId: number | null) => void;
-  invalidateTransfersCaches: () => void;
+  invalidateTransferCaches: () => void;
 }
 
 function ReadyTransferRow({
@@ -383,8 +247,7 @@ function ReadyTransferRow({
   isSubmitting,
   tryAcquire,
   release,
-  invalidateShopfloorCaches,
-  invalidateTransfersCaches,
+  invalidateTransferCaches,
 }: ReadyTransferRowProps) {
   const [quantity, setQuantity] = useState(task.transferable_quantity);
   const submittingRef = useRef(false);
@@ -410,8 +273,7 @@ function ReadyTransferRow({
         title: "Передача создана",
         description: `Позиция #${task.plan_position_id} отправлена`,
       });
-      invalidateShopfloorCaches(task.section_id, task.next_section_id);
-      invalidateTransfersCaches();
+      invalidateTransferCaches();
     },
     onError: (err: unknown) => {
       const message = getErrorMessage(err);
@@ -439,8 +301,7 @@ function ReadyTransferRow({
         title: "Финальный выпуск",
         description: `Позиция #${task.plan_position_id} выпущена`,
       });
-      invalidateShopfloorCaches(task.section_id, task.next_section_id);
-      invalidateTransfersCaches();
+      invalidateTransferCaches();
     },
     onError: (err: unknown) => {
       const message = getErrorMessage(err);
@@ -471,7 +332,7 @@ function ReadyTransferRow({
       onClick={bulkMode ? onSelect : undefined}
     >
       {bulkMode && (
-        <TableCell className="w-[40px] p-2" onClick={(e) => e.stopPropagation()}>
+        <TableCell className="${TABLE_ROW_COMPACT.cell} w-[40px]" onClick={(e) => e.stopPropagation()}>
           <Checkbox
             checked={isSelected}
             disabled={isFinalRow}
@@ -480,26 +341,26 @@ function ReadyTransferRow({
           />
         </TableCell>
       )}
-      <TableCell className="font-mono text-xs text-muted-foreground">#{task.plan_position_id}</TableCell>
-      <TableCell>{task.product_sku ?? "—"}</TableCell>
-      <TableCell className="text-xs text-muted-foreground whitespace-nowrap">
-        {task.dimensions_label ?? formatDimensionsLabel(task.dimensions)}
+      <TableCell className="${TABLE_ROW_COMPACT.cell} font-mono text-xs text-muted-foreground">#{task.plan_position_id}</TableCell>
+      <TableCell className={TABLE_ROW_COMPACT.cell}>{task.product_sku ?? "—"}</TableCell>
+      <TableCell className="${TABLE_ROW_COMPACT.cell} text-xs text-muted-foreground whitespace-nowrap">
+        {formatDimensionsLabel(task.dimensions, task.dimensions_label)}
       </TableCell>
-      <TableCell>
+      <TableCell className={TABLE_ROW_COMPACT.cell}>
         <div className="text-xs">
           <div className="font-medium">{task.operation_name ?? "—"}</div>
           <div className="text-muted-foreground">#{task.sequence}</div>
         </div>
       </TableCell>
-      <TableCell className="text-right tabular-nums">
+      <TableCell className="${TABLE_ROW_COMPACT.cell} text-right tabular-nums">
         <div className="whitespace-nowrap">
           <span className="font-medium">{fmtQty(task.transferable_quantity)} шт.</span>{" "}
           <span className="text-[11px] text-muted-foreground">
             (план {fmtQty(task.planned_quantity)})
           </span>
-          {task.dimensions != null && task.dimensions_label && (
+          {task.dimensions != null && (
             <span className="ml-1 text-[10px] text-muted-foreground" title="Габарит из плана">
-              · {task.dimensions_label}
+              · {formatDimensionsLabel(task.dimensions, task.dimensions_label)}
             </span>
           )}
         </div>
@@ -509,7 +370,7 @@ function ReadyTransferRow({
           </div>
         )}
       </TableCell>
-      <TableCell className="text-xs">
+      <TableCell className="${TABLE_ROW_COMPACT.cell} text-xs">
         {task.has_next_step ? (
           <>
             <div>{task.next_operation_name ?? "—"}</div>
@@ -522,7 +383,7 @@ function ReadyTransferRow({
         )}
       </TableCell>
       {!bulkMode && (
-        <TableCell onClick={(e) => e.stopPropagation()}>
+        <TableCell className={TABLE_ROW_COMPACT.cell} onClick={(e) => e.stopPropagation()}>
           <div className="flex items-center justify-end gap-2">
             <div className="flex items-center gap-1">
               <Input
@@ -545,6 +406,7 @@ function ReadyTransferRow({
             {isFinalRow ? (
               <Button
                 size="sm"
+                className={TABLE_ROW_COMPACT.actionButton}
                 disabled={isSubmitting || releaseMutation.isPending || qtyNum <= 0}
                 title="Финальный выпуск готовой продукции"
                 onClick={() => {
@@ -565,6 +427,7 @@ function ReadyTransferRow({
             ) : (
               <Button
                 size="sm"
+                className={TABLE_ROW_COMPACT.actionButton}
                 disabled={!task.has_next_step || isSubmitting || mutation.isPending || qtyNum <= 0}
                 onClick={() => {
                   if (submittingRef.current || isSubmitting || mutation.isPending) return;
@@ -632,8 +495,8 @@ function ReadyTransferGroupRow({
       }`}
       onClick={bulkMode ? undefined : onToggleCollapse}
     >
-      {bulkMode && <TableCell className="w-[40px] p-2" />}
-      <TableCell className="p-2 text-center">
+      {bulkMode && <TableCell className="${TABLE_ROW_COMPACT.cell} w-[40px]" />}
+      <TableCell className="${TABLE_ROW_COMPACT.cell} text-center">
         <button
           className="p-1 hover:bg-muted rounded transition-colors text-muted-foreground"
           title={bulkMode ? "Группа раскрыта для ручного выбора" : isCollapsed ? "Раскрыть" : "Скрыть"}
@@ -650,7 +513,7 @@ function ReadyTransferGroupRow({
           )}
         </button>
       </TableCell>
-      <TableCell>
+      <TableCell className={TABLE_ROW_COMPACT.cell}>
         <div className="flex items-center gap-2">
           <span>{group.productSku ?? "—"}</span>
           <Badge variant="secondary" className="font-bold">
@@ -658,10 +521,10 @@ function ReadyTransferGroupRow({
           </Badge>
         </div>
       </TableCell>
-      <TableCell className="text-xs text-muted-foreground whitespace-nowrap">
+      <TableCell className="${TABLE_ROW_COMPACT.cell} text-xs text-muted-foreground whitespace-nowrap">
         {common.dimensionsLabel ?? "—"}
       </TableCell>
-      <TableCell>
+      <TableCell className={TABLE_ROW_COMPACT.cell}>
         <div className="text-xs">
           <div className="font-medium">{common.operationName ?? "—"}</div>
           <div className="text-muted-foreground">
@@ -669,7 +532,7 @@ function ReadyTransferGroupRow({
           </div>
         </div>
       </TableCell>
-      <TableCell className="text-right tabular-nums">
+      <TableCell className="${TABLE_ROW_COMPACT.cell} text-right tabular-nums">
         {/* Как у одиночной строки: в «К передаче» — текст, редактируемое поле —
             в «Действиях». Сумма по группе, распределяется по строкам. */}
         <div className="whitespace-nowrap">
@@ -679,7 +542,7 @@ function ReadyTransferGroupRow({
           </span>
         </div>
       </TableCell>
-      <TableCell className="text-xs">
+      <TableCell className="${TABLE_ROW_COMPACT.cell} text-xs">
         {group.hasNextStep ? (
           <>
             <div>{common.nextOperationName ?? "—"}</div>
@@ -692,7 +555,7 @@ function ReadyTransferGroupRow({
         )}
       </TableCell>
       {!bulkMode && (
-        <TableCell onClick={(e) => e.stopPropagation()}>
+        <TableCell className={TABLE_ROW_COMPACT.cell} onClick={(e) => e.stopPropagation()}>
           <div className="flex items-center justify-end gap-2">
             <div className="flex items-center gap-1">
               <Input
@@ -714,6 +577,7 @@ function ReadyTransferGroupRow({
             </div>
             <Button
               size="sm"
+              className={TABLE_ROW_COMPACT.actionButton}
               disabled={isSubmitting || hasInFlightRow || qtyNum <= 0}
               title={
                 hasInFlightRow
@@ -734,7 +598,7 @@ function ReadyTransferGroupRow({
   );
 }
 
-const headerCellClass = `${DATA_TABLE_STYLES.headerRow} ${DATA_TABLE_STYLES.headerCell}`;
+const headerCellClass = cn(DATA_TABLE_STYLES.headerRow, DATA_TABLE_STYLES.headerCell, TABLE_ROW_COMPACT.headerCell);
 
 export function TransfersPage() {
   const queryClient = useQueryClient();
@@ -742,23 +606,16 @@ export function TransfersPage() {
   const [showAllSpgs, setShowAllSpgs] = useState(true);
   const [editTransferRecord, setEditTransferRecord] = useState<IncomingTransfer | null>(null);
   const [historySearch, setHistorySearch] = useState("");
-  const [debouncedHistorySearch, setDebouncedHistorySearch] = useState("");
+  const { value: debouncedHistorySearch, flush: flushHistorySearch } =
+    useFlushableDebouncedValue(historySearch);
   const [readySearch, setReadySearch] = useState("");
-  const [debouncedReadySearch, setDebouncedReadySearch] = useState("");
+  const { value: debouncedReadySearch, flush: flushReadySearch } =
+    useFlushableDebouncedValue(readySearch);
   // Журнал передач — боковая панель: не отнимает ширину у «Готово к передаче».
   const [historyOpen, setHistoryOpen] = useState(false);
   const historyScrollRef = useRef<HTMLDivElement>(null);
   const readyScrollRef = useRef<HTMLDivElement>(null);
 
-  useEffect(() => {
-    const timer = window.setTimeout(() => setDebouncedHistorySearch(historySearch), 300);
-    return () => window.clearTimeout(timer);
-  }, [historySearch]);
-
-  useEffect(() => {
-    const timer = window.setTimeout(() => setDebouncedReadySearch(readySearch), 300);
-    return () => window.clearTimeout(timer);
-  }, [readySearch]);
 
   const inFlightRef = useRef<Set<number>>(new Set());
   const [inFlightVersion, setInFlightVersion] = useState(0);
@@ -814,7 +671,7 @@ export function TransfersPage() {
     columnFilters: readyColumnFilters,
     columnSearchQueries: readyColumnSearchQueries,
     sortConfigs: readySortConfigs,
-    setSortConfigs: setReadySortConfigs,
+    handleSort: applyReadySort,
     hasActiveFilters: hasReadyFiltersActive,
     resetAll: resetReadyFiltersBase,
   } = useFilterableTable<ReadySortField>({
@@ -828,7 +685,7 @@ export function TransfersPage() {
   );
 
   const readyPagination = usePaginatedTableQuery({
-    extraDeps: [
+    resetPageDeps: [
       showAllSpgs,
       activeSpgId,
       debouncedReadySearch,
@@ -838,23 +695,19 @@ export function TransfersPage() {
     ],
   });
 
-  const activeReadySort = readySortConfigs[0];
   const readyQueryParams = useMemo(
     () => ({
       limit: readyPagination.limit,
       offset: readyPagination.offset,
       search: debouncedReadySearch.trim() || undefined,
-      sort_by: activeReadySort
-        ? mapReadySortFieldToApi(activeReadySort.field)
-        : "sequence",
-      sort_order: activeReadySort?.order ?? "asc",
+      sort: buildReadySortParam(readySortConfigs),
       ...readyColumnApiParams,
     }),
     [
       readyPagination.limit,
       readyPagination.offset,
       debouncedReadySearch,
-      activeReadySort,
+      readySortConfigs,
       readyColumnApiParams,
     ],
   );
@@ -877,6 +730,7 @@ export function TransfersPage() {
     columnSearchQueries: historyColumnSearchQueries,
     sortConfigs: historySortConfigs,
     setSortConfigs: setHistorySortConfigs,
+    handleSort: applyHistorySort,
     hasActiveFilters: hasHistoryFiltersActive,
     resetAll: resetHistoryFiltersBase,
   } = useFilterableTable<HistorySortField>({
@@ -893,7 +747,7 @@ export function TransfersPage() {
   );
 
   const historyPagination = usePaginatedTableQuery({
-    extraDeps: [
+    resetPageDeps: [
       showAllSpgs,
       activeSpgId,
       debouncedHistorySearch,
@@ -903,23 +757,19 @@ export function TransfersPage() {
     ],
   });
 
-  const activeHistorySort = historySortConfigs[0];
   const historyQueryParams = useMemo(
     () => ({
       limit: historyPagination.limit,
       offset: historyPagination.offset,
       search: debouncedHistorySearch.trim() || undefined,
-      sort_by: activeHistorySort
-        ? mapHistorySortFieldToApi(activeHistorySort.field)
-        : "created_at",
-      sort_order: activeHistorySort?.order ?? "desc",
+      sort: buildHistorySortParam(historySortConfigs),
       ...historyColumnApiParams,
     }),
     [
       historyPagination.limit,
       historyPagination.offset,
       debouncedHistorySearch,
-      activeHistorySort,
+      historySortConfigs,
       historyColumnApiParams,
     ],
   );
@@ -941,11 +791,24 @@ export function TransfersPage() {
 
   const readyGroupItems = useMemo(() => groupReadyTransfers(readyItems), [readyItems]);
 
+  // Свёрнутая группа и сортировка по колонке несовместимы: в шапке группы
+  // печатается общий этап и СУММА «К передаче», а порядок групп — порядок
+  // первого появления строки. Пока колонка не выбрана, дефолтный порядок
+  // сервера (этап маршрута) группировке не противоречит, и группы остаются
+  // свёрнутыми. Как только оператор выбрал колонку, рисуем строки заданий
+  // как есть: тогда порядок строк совпадает с тем, что напечатано в ячейке.
+  const readySortingActive = readySortConfigs.length > 0;
+
   // Строки таблицы «Готово к передаче» = свёрнутые группы (только заголовки) +
   // дети раскрытых + одиночные строки. В чекбокс-режиме группы раскрыты
   // принудительно: там оператор выбирает строки точечно, а групповую отправку
   // делает футер.
   const readyTableRows = useMemo<ReadyTableRow[]>(() => {
+    if (readySortingActive) {
+      // Порядок пришёл с сервера и уже отсортирован по выбранной колонке —
+      // рендерим строки заданий как есть, без перегруппировки.
+      return readyItems.map((task) => ({ kind: "task" as const, task, groupKey: null }));
+    }
     const rows: ReadyTableRow[] = [];
     for (const item of readyGroupItems) {
       if (item.kind === "single") {
@@ -958,7 +821,7 @@ export function TransfersPage() {
       }
     }
     return rows;
-  }, [bulkMode, readyGroupItems, expandedGroupKeys]);
+  }, [bulkMode, readyGroupItems, readyItems, expandedGroupKeys, readySortingActive]);
 
   const historyItems = historyData?.transfers ?? [];
   const historyTotal = historyData?.total ?? 0;
@@ -968,8 +831,8 @@ export function TransfersPage() {
     limit: historyLimit,
     setLimit: setHistoryLimit,
     resetPage: resetHistoryPage,
-    totalPages: computeHistoryTotalPages,
-    rangeLabel: historyRangeLabel,
+    getTotalPages: computeHistoryTotalPages,
+    getRangeLabel: historyRangeLabel,
   } = historyPagination;
   const historyTotalPages = computeHistoryTotalPages(historyTotal);
 
@@ -979,23 +842,20 @@ export function TransfersPage() {
     limit: readyLimit,
     setLimit: setReadyLimit,
     resetPage: resetReadyPage,
-    totalPages: computeReadyTotalPages,
-    rangeLabel: readyRangeLabel,
+    getTotalPages: computeReadyTotalPages,
+    getRangeLabel: readyRangeLabel,
   } = readyPagination;
   const readyTotalPages = computeReadyTotalPages(readyTotal);
 
+  // Цикл клика общий (нет → убыв. → возр. → снять): третье состояние
+  // возвращает свёрнутые группы, а выбранные приоритеты уходят на сервер
+  // все сразу одной строкой `sort`.
   const handleReadySort = useCallback(
     (field: ReadySortField) => {
-      setReadySortConfigs((prev) => {
-        const existing = prev.find((sort) => sort.field === field);
-        if (!existing) {
-          return [{ field, order: "desc" }];
-        }
-        return [{ field, order: existing.order === "asc" ? "desc" : "asc" }];
-      });
+      applyReadySort(field);
       readyPagination.resetPage();
     },
-    [setReadySortConfigs, readyPagination],
+    [applyReadySort, readyPagination],
   );
 
   const resetReadyFilters = useCallback(() => {
@@ -1004,16 +864,10 @@ export function TransfersPage() {
 
   const handleHistorySort = useCallback(
     (field: HistorySortField) => {
-      setHistorySortConfigs((prev) => {
-        const existing = prev.find((sort) => sort.field === field);
-        if (!existing) {
-          return [{ field, order: "desc" }];
-        }
-        return [{ field, order: existing.order === "asc" ? "desc" : "asc" }];
-      });
+      applyHistorySort(field);
       resetHistoryPage();
     },
-    [setHistorySortConfigs, resetHistoryPage],
+    [applyHistorySort, resetHistoryPage],
   );
 
   const resetHistoryFilters = useCallback(() => {
@@ -1067,40 +921,21 @@ export function TransfersPage() {
     void refetchHistory();
   }
 
-  function invalidateShopfloorCaches(fromSectionId: number | null, toSectionId: number | null) {
-    const sectionIds = new Set<number>();
-    if (fromSectionId != null) sectionIds.add(fromSectionId);
-    if (toSectionId != null && toSectionId !== fromSectionId) sectionIds.add(toSectionId);
-    sectionIds.forEach((sid) => {
-      void queryClient.invalidateQueries({ queryKey: queryKeys.shopfloor.board(sid) });
-      void queryClient.invalidateQueries({ queryKey: queryKeys.shopfloor.stats(sid) });
-      void queryClient.invalidateQueries({ queryKey: queryKeys.shopfloor.incomingTransfers(sid) });
-    });
-    void queryClient.invalidateQueries({ queryKey: queryKeys.shopfloor.summary() });
-    void queryClient.invalidateQueries({ queryKey: queryKeys.sections.all() });
-  }
-
-  function invalidateTransfersCaches() {
-    void queryClient.invalidateQueries({ queryKey: queryKeys.transfers.readyAll() });
-    void queryClient.invalidateQueries({ queryKey: ["transfers-history"] });
-    if (activeSpgId != null) {
-      void queryClient.invalidateQueries({ queryKey: queryKeys.transfers.ready(activeSpgId) });
-    }
-  }
+  // Передача меняет остатки, доску участков и журнал передач — задеты все
+  // домены, к которым она прикасается, поэтому сброс берём из реестра.
+  const invalidateTransferCaches = useCallback(() => {
+    void invalidateAfter(queryClient, "transferChanged");
+  }, [queryClient]);
 
   const cancelMutation = useMutation({
     mutationFn: (transferId: number) => cancelTransfer(transferId),
-    onSuccess: (_, transferId) => {
+    onSuccess: () => {
       toast({
         variant: "success",
         title: "Передача отменена",
         description: "Передача успешно аннулирована",
       });
-      const record = historyItems.find((t) => t.transfer_id === transferId);
-      if (record) {
-        invalidateShopfloorCaches(record.from_section_id, record.to_section_id);
-      }
-      invalidateTransfersCaches();
+      invalidateTransferCaches();
     },
     onError: (err: unknown) => {
       toast({
@@ -1132,21 +967,6 @@ export function TransfersPage() {
     });
   }, []);
 
-  /** Инвалидировать кэши участков-источников и получателей отправленных строк. */
-  const invalidateBatchSections = useCallback(
-    (rows: ReadyToTransferTask[]) => {
-      const sectionPairs = new Set<string>();
-      rows.forEach((task) => {
-        sectionPairs.add(`${task.section_id}-${task.next_section_id}`);
-      });
-      sectionPairs.forEach((pair) => {
-        const [fromId, toId] = pair.split("-").map(Number);
-        invalidateShopfloorCaches(fromId, toId);
-      });
-    },
-    [invalidateShopfloorCaches],
-  );
-
   async function handleGroupTransfer(group: ReadyTransferGroup, quantity: string) {
     if (groupSubmittingKey != null) return;
     setGroupSubmittingKey(group.key);
@@ -1163,8 +983,7 @@ export function TransfersPage() {
     setBulkResults(results);
     setBulkSummary(summary);
 
-    invalidateBatchSections(group.rows);
-    invalidateTransfersCaches();
+    invalidateTransferCaches();
 
     const description = [`Отправлено ${summary.success} из ${summary.total} позиций`];
     if (undistributed > 0) {
@@ -1206,8 +1025,7 @@ export function TransfersPage() {
     setBulkResults(results);
     setBulkSummary(summary);
 
-    invalidateBatchSections(selectedTasks);
-    invalidateTransfersCaches();
+    invalidateTransferCaches();
 
     toast({
       title: summary.failed > 0 ? "Частичный успех" : "Передача выполнена",
@@ -1221,7 +1039,7 @@ export function TransfersPage() {
 
     bulkSelection.clear();
     setBulkMode(false);
-  }, [readyItems, bulkSelection, invalidateBatchSections, invalidateTransfersCaches]);
+  }, [readyItems, bulkSelection, invalidateTransferCaches]);
 
   if (spgs !== undefined && spgs.length === 0) {
     return (
@@ -1297,7 +1115,7 @@ export function TransfersPage() {
               onChange={(e) => setReadySearch(e.target.value)}
               onKeyDown={(e) => {
                 if (e.key === "Enter") {
-                  setDebouncedReadySearch(readySearch);
+                  flushReadySearch();
                   resetReadyPage();
                 }
               }}
@@ -1356,70 +1174,20 @@ export function TransfersPage() {
                       />
                     </TableHead>
                   )}
-                  <TableHead className={`${headerCellClass} p-0`}>
-                    <SortableFilterHeader
-                      field="positionId"
-                      label="ID"
-                      currentSorts={readySortConfigs}
-                      onSortChange={handleReadySort}
-                      values={readyUniqueValues.positionId}
-                      {...bindReadyColumn("positionId")}
-                      valueLabel={(v) => `#${v}`}
-                    />
-                  </TableHead>
-                  <TableHead className={`${headerCellClass} p-0`}>
-                    <SortableFilterHeader
-                      field="sku"
-                      label="Артикул"
-                      currentSorts={readySortConfigs}
-                      onSortChange={handleReadySort}
-                      values={readyUniqueValues.sku}
-                      {...bindReadyColumn("sku")}
-                    />
-                  </TableHead>
-                  <TableHead className={`${headerCellClass} p-0`}>
-                    <SortableFilterHeader
-                      field="dimensions"
-                      label="Размер"
-                      currentSorts={readySortConfigs}
-                      onSortChange={handleReadySort}
-                      values={readyUniqueValues.dimensions}
-                      selectedValues={bindReadyColumn("dimensions").selectedValues}
-                      onFilterChange={bindReadyColumn("dimensions").onFilterChange}
-                      valueLabel={formatDimensionsFilterValue}
-                    />
-                  </TableHead>
-                  <TableHead className={`${headerCellClass} p-0`}>
-                    <SortableFilterHeader
-                      field="stage"
-                      label="Этап"
-                      currentSorts={readySortConfigs}
-                      onSortChange={handleReadySort}
-                      values={readyUniqueValues.stage}
-                      {...bindReadyColumn("stage")}
-                    />
-                  </TableHead>
-                  <TableHead className={`${headerCellClass} p-0 text-right`}>
-                    <SortableFilterHeader
-                      field="transferableQty"
-                      label="К передаче"
-                      currentSorts={readySortConfigs}
-                      onSortChange={handleReadySort}
-                      values={readyUniqueValues.transferableQty}
-                      {...bindReadyColumn("transferableQty")}
-                      valueLabel={(v) => `${v} шт.`}
-                    />
-                  </TableHead>
-                  <TableHead className={`${headerCellClass} p-0`}>
-                    <SortableFilterHeader
-                      field="next"
-                      label="Следующий"
-                      currentSorts={readySortConfigs}
-                      onSortChange={handleReadySort}
-                      values={readyUniqueValues.next}
-                      {...bindReadyColumn("next")}
-                    />
-                  </TableHead>
+                  {readyColumns.map((column) => (
+                    <TableHead
+                      key={column.id}
+                      className={`${headerCellClass} p-0${column.id === "transferableQty" ? " text-right" : ""}`}
+                    >
+                      <DataTableColumnHeader
+                        column={column}
+                        bindColumn={bindReadyColumn}
+                        values={readyUniqueValues[column.filterField] ?? []}
+                        currentSorts={readySortConfigs}
+                        onSortChange={handleReadySort}
+                      />
+                    </TableHead>
+                  ))}
                   {!bulkMode && (
                     <TableHead className={headerCellClass}>
                       Действия
@@ -1437,7 +1205,7 @@ export function TransfersPage() {
                   <TableRow>
                     <TableCell
                       colSpan={bulkMode ? 8 : 8}
-                      className="py-6 text-center text-sm text-muted-foreground"
+                      className="${TABLE_ROW_COMPACT.cell} py-6 text-center text-sm text-muted-foreground"
                     >
                       Нет заданий, соответствующих фильтру
                     </TableCell>
@@ -1446,7 +1214,7 @@ export function TransfersPage() {
               ) : (
                 <VirtualizedTableBody
                   rows={readyTableRows}
-                  rowHeight={56}
+                  rowHeight={TABLE_ROW_COMPACT.rowHeightPx}
                   colSpan={bulkMode ? 8 : 8}
                   scrollContainerRef={readyScrollRef}
                   renderRow={(row) =>
@@ -1476,8 +1244,7 @@ export function TransfersPage() {
                         }
                         tryAcquire={() => tryAcquireTransferLock(row.task.task_id)}
                         release={() => releaseTransferLock(row.task.task_id)}
-                        invalidateShopfloorCaches={invalidateShopfloorCaches}
-                        invalidateTransfersCaches={invalidateTransfersCaches}
+                        invalidateTransferCaches={invalidateTransferCaches}
                       />
                     )
                   }
@@ -1516,7 +1283,7 @@ export function TransfersPage() {
                 onChange={(e) => setHistorySearch(e.target.value)}
                 onKeyDown={(e) => {
                   if (e.key === "Enter") {
-                    setDebouncedHistorySearch(historySearch);
+                    flushHistorySearch();
                     resetHistoryPage();
                   }
                 }}
@@ -1541,63 +1308,20 @@ export function TransfersPage() {
                   <table className="w-full caption-bottom text-sm">
                     <TableHeader>
                       <TableRow>
-                        <TableHead className={`${headerCellClass} p-0 font-mono`}>
-                          ID
-                        </TableHead>
-                        <TableHead className={`${headerCellClass} p-0`}>
-                          <SortableFilterHeader
-                            field="from"
-                            label="Отправитель (Откуда)"
-                            currentSorts={historySortConfigs}
-                            onSortChange={handleHistorySort}
-                            values={historyUniqueValues.from}
-                            {...bindHistoryColumn("from")}
-                          />
-                        </TableHead>
-                        <TableHead className={`${headerCellClass} p-0`}>
-                          <SortableFilterHeader
-                            field="to"
-                            label="Получатель (Куда)"
-                            currentSorts={historySortConfigs}
-                            onSortChange={handleHistorySort}
-                            values={historyUniqueValues.to}
-                            {...bindHistoryColumn("to")}
-                          />
-                        </TableHead>
-                        <TableHead className={`${headerCellClass} p-0`}>
-                          <SortableFilterHeader
-                            field="sku"
-                            label="Артикул"
-                            currentSorts={historySortConfigs}
-                            onSortChange={handleHistorySort}
-                            values={historyUniqueValues.sku}
-                            {...bindHistoryColumn("sku")}
-                          />
-                        </TableHead>
-                        <TableHead className={`${headerCellClass} p-0`}>
-                          <span className="text-xs font-medium text-muted-foreground">Размер</span>
-                        </TableHead>
-                        <TableHead className={`${headerCellClass} p-0 text-right`}>
-                          <SortableFilterHeader
-                            field="quantity"
-                            label="Кол-во"
-                            currentSorts={historySortConfigs}
-                            onSortChange={handleHistorySort}
-                            values={historyUniqueValues.quantity}
-                            {...bindHistoryColumn("quantity")}
-                          />
-                        </TableHead>
-                        <TableHead className={`${headerCellClass} p-0`}>
-                          <SortableFilterHeader
-                            field="status"
-                            label="Статус"
-                            currentSorts={historySortConfigs}
-                            onSortChange={handleHistorySort}
-                            values={historyUniqueValues.status}
-                            {...bindHistoryColumn("status")}
-                          />
-                        </TableHead>
-                        <TableHead className={`${headerCellClass} w-[40px]`} />
+                        {historyColumns.map((column) => (
+                          <TableHead
+                            key={column.id}
+                            className={`${headerCellClass} p-0 ${column.headerClassName ?? ""}`}
+                          >
+                            <DataTableColumnHeader
+                              column={column}
+                              bindColumn={bindHistoryColumn}
+                              values={column.filterField ? historyUniqueValues[column.filterField] : undefined}
+                              currentSorts={historySortConfigs}
+                              onSortChange={handleHistorySort}
+                            />
+                          </TableHead>
+                        ))}
                         <TableCornerResetHeader
                           hasActiveFilters={hasHistoryFiltersActive}
                           onReset={resetHistoryFilters}
@@ -1608,7 +1332,7 @@ export function TransfersPage() {
                     {historyItems.length === 0 ? (
                       <TableBody>
                         <TableRow>
-                          <TableCell colSpan={9} className="py-6 text-center text-sm text-muted-foreground">
+                          <TableCell colSpan={9} className="${TABLE_ROW_COMPACT.cell} py-6 text-center text-sm text-muted-foreground">
                             Нет записей, соответствующих фильтру
                           </TableCell>
                         </TableRow>
@@ -1616,7 +1340,7 @@ export function TransfersPage() {
                     ) : (
                       <VirtualizedTableBody
                         rows={historyItems}
-                        rowHeight={56}
+                        rowHeight={TABLE_ROW_COMPACT.rowHeightPx}
                         colSpan={9}
                         scrollContainerRef={historyScrollRef}
                         renderRow={(t) => {
@@ -1636,29 +1360,29 @@ export function TransfersPage() {
                               className={`group cursor-pointer hover:bg-muted/50 transition-colors ${isCancelled ? "opacity-60" : ""}`}
                               onClick={() => setEditTransferRecord(t)}
                             >
-                              <TableCell className="font-mono text-xs text-muted-foreground">
+                              <TableCell className="${TABLE_ROW_COMPACT.cell} font-mono text-xs text-muted-foreground">
                                 #{t.plan_position_id}
                               </TableCell>
-                              <TableCell>
+                              <TableCell className={TABLE_ROW_COMPACT.cell}>
                                 <div className="text-xs">
                                   <div className="font-medium">{t.from_section_name}</div>
                                   <div className="text-muted-foreground">{t.from_operation_name}</div>
                                 </div>
                               </TableCell>
-                              <TableCell>
+                              <TableCell className={TABLE_ROW_COMPACT.cell}>
                                 <div className="text-xs">
                                   <div className="font-medium">{t.to_section_name}</div>
                                   <div className="text-muted-foreground">{t.to_operation_name}</div>
                                 </div>
                               </TableCell>
-                              <TableCell className="text-xs font-medium">{t.product_sku}</TableCell>
-                              <TableCell className="text-xs text-muted-foreground whitespace-nowrap">
+                              <TableCell className="${TABLE_ROW_COMPACT.cell} text-xs font-medium">{t.product_sku}</TableCell>
+                              <TableCell className="${TABLE_ROW_COMPACT.cell} text-xs text-muted-foreground whitespace-nowrap">
                                 {formatDimensionsLabel(t.dimensions)}
                               </TableCell>
-                              <TableCell className="text-right tabular-nums font-semibold whitespace-nowrap">
+                              <TableCell className="${TABLE_ROW_COMPACT.cell} text-right tabular-nums font-semibold whitespace-nowrap">
                                 {fmtQty(t.sent_quantity)}
                               </TableCell>
-                              <TableCell>
+                              <TableCell className={TABLE_ROW_COMPACT.cell}>
                                 <div className="flex flex-col items-start gap-1">
                                   <div className="flex flex-wrap items-center gap-1">
                                     <Badge variant={isIncoming ? "default" : "secondary"} className="text-[10px] py-0 px-1.5 h-4">
@@ -1683,7 +1407,7 @@ export function TransfersPage() {
                                   )}
                                 </div>
                               </TableCell>
-                              <TableCell className="text-right w-[40px]">
+                              <TableCell className="${TABLE_ROW_COMPACT.cell} text-right w-[40px]">
                                 <ChevronRight className="h-4 w-4 text-muted-foreground/60 transition-transform group-hover:translate-x-0.5 inline-block" />
                               </TableCell>
                               <TableCornerResetCell />
@@ -1721,8 +1445,7 @@ export function TransfersPage() {
           onClose={() => setEditTransferRecord(null)}
           onSuccess={() => {
             setEditTransferRecord(null);
-            invalidateShopfloorCaches(editTransferRecord.from_section_id, editTransferRecord.to_section_id);
-            invalidateTransfersCaches();
+            invalidateTransferCaches();
           }}
           onCancel={() => {
             cancelMutation.mutate(editTransferRecord.transfer_id);

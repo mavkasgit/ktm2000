@@ -15,8 +15,8 @@ export type ListBackupsParams = {
   limit?: number;
   offset?: number;
   search?: string;
-  sort_by?: string;
-  sort_order?: "asc" | "desc";
+  /** Сортировка строкой `поле:порядок[,поле:порядок]` — старший приоритет первый. */
+  sort?: string;
   backup_type?: string;
   filename?: string;
   db_name?: string;

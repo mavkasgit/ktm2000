@@ -36,7 +36,11 @@ export default defineConfig({
   },
   server: {
     host: "0.0.0.0",
+    // Порт фиксирован: LAN-ссылки (OPS_PUBLIC_IP:5172) и E2E жёстко завязаны
+    // на 5172. Без strictPort Vite молча уезжает на 5173 — снаружи это выглядит
+    // как «страница не найдена», хотя localhost ещё отвечает.
     port: 5172,
+    strictPort: true,
     proxy: {
       "/api": {
         target: proxyTarget,

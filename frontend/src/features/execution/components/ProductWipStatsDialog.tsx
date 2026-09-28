@@ -1,12 +1,15 @@
 import { useEffect, useState, useMemo, type ReactNode } from "react";
-import { Dialog, DialogContent, DialogHeader, DialogTitle, Badge, renderIcon, SortableFilterHeader, TableCornerResetCell, TableCornerResetHeader, DATA_TABLE_STYLES } from "@/shared/ui";
+import { Dialog, DialogContent, DialogHeader, DialogTitle, Badge, renderIcon, DataTableColumnHeader, TableCornerResetCell, TableCornerResetHeader, DATA_TABLE_STYLES } from "@/shared/ui";
 import { getProductWipStats, ProductWipStats, type ProductWipRemainder, type ProductWipTask } from "@/shared/api/productionPlans";
 import { getErrorMessage } from "@/shared/api/client";
 import { formatDimensionsLabel } from "@/shared/api/stock";
 import { errorLabels } from "@/shared/lib/generated-labels";
+import { fmtQty } from "@/shared/lib/quantityFormat";
 import { Loader2, Layers, Package, ClipboardList, AlertCircle } from "lucide-react";
 import type { SortConfig } from "@/shared/hooks/useTableQueryEngine";
 import { useFilterableTable } from "@/shared/hooks/useFilterableTable";
+
+import { wipStatsColumns, wipStatsCellValue, wipStatsQtyCompare, wipStatsQtyText, wipStatsSortValue, type WipStatsField } from "../lib/wipStatsColumns";
 
 interface ProductWipStatsDialogProps {
   sku: string | null;
@@ -14,9 +17,7 @@ interface ProductWipStatsDialogProps {
   onOpenChange: (open: boolean) => void;
 }
 
-type WipRemainderSortField = "name" | "qty";
-
-const DEFAULT_WIP_SORT: SortConfig<WipRemainderSortField>[] = [{ field: "qty", order: "desc" }];
+const DEFAULT_WIP_SORT: SortConfig<WipStatsField>[] = [{ field: "qty", order: "desc" }];
 
 const headerCellClass = `${DATA_TABLE_STYLES.headerRow} ${DATA_TABLE_STYLES.headerCell}`;
 
@@ -105,7 +106,7 @@ function RemainderRow({ rem, withResetCell = false }: { rem: ProductWipRemainder
         {formatDimensionsLabel(rem.dimensions, rem.dimensions_label)}
       </td>
       <td className="px-3 py-2 text-right font-mono font-semibold text-emerald-600 dark:text-emerald-400">
-        {rem.quantity.toLocaleString("ru-RU")}
+        {wipStatsQtyText(rem)}
       </td>
       {withResetCell && <TableCornerResetCell />}
     </tr>
@@ -158,13 +159,13 @@ function InWorkTable({ tasks }: { tasks: ProductWipTask[] }) {
                 </Badge>
               </td>
               <td className="px-3 py-2 text-right font-mono text-muted-foreground">
-                {task.planned_qty.toLocaleString("ru-RU")}
+                {fmtQty(task.planned_qty)}
               </td>
               <td className="px-3 py-2 text-right font-mono font-semibold text-blue-600 dark:text-blue-400">
-                {task.issued_qty.toLocaleString("ru-RU")}
+                {fmtQty(task.issued_qty)}
               </td>
               <td className="px-3 py-2 text-right font-mono text-emerald-600 dark:text-emerald-400">
-                {task.completed_qty.toLocaleString("ru-RU")}
+                {fmtQty(task.completed_qty)}
               </td>
             </tr>
           ))}
@@ -211,34 +212,28 @@ export function ProductWipStatsDialog({ sku, open, onOpenChange }: ProductWipSta
     sortConfigs,
     setSortConfigs,
     handleSort: handleSortChange,
-    hasActiveColumnFilters,
+    hasActiveFilters,
     resetAll,
     resetColumnFilters,
-  } = useFilterableTable<WipRemainderSortField>({
-    onExtraReset: () => setSortConfigs(DEFAULT_WIP_SORT),
+  } = useFilterableTable<WipStatsField>({
+    // Порядок «от большего остатка» задан по умолчанию: он не считается
+    // фильтром, и сброс возвращает его, а не пустоту. Условие «сортировка
+    // нестандартная» раньше было написано здесь руками.
+    defaultSort: DEFAULT_WIP_SORT,
   });
 
-  const sortIsNonDefault =
-    sortConfigs.length !== 1 ||
-    sortConfigs[0]?.field !== "qty" ||
-    sortConfigs[0]?.order !== "desc";
-
-  const hasActiveFilters = hasActiveColumnFilters || sortIsNonDefault;
   const handleResetFilters = resetAll;
 
-  const uniqueValues = useMemo(() => {
+  const uniqueValues = useMemo<Record<WipStatsField, string[]>>(() => {
     if (!data) return { name: [], qty: [] };
     return {
       name: Array.from(new Set(data.remainders.map((r) => r.spg_name))).sort(),
-      qty: Array.from(new Set(data.remainders.map((r) => String(r.quantity)))).sort((a, b) => Number(a) - Number(b)),
+      qty: Array.from(new Set(data.remainders.map((r) => wipStatsQtyText(r)))).sort(wipStatsQtyCompare),
     };
   }, [data]);
 
   const filterPredicate = useMemo(
-    () => buildFilterPredicate((rem: ProductWipRemainder, field) => {
-      if (field === "name") return rem.spg_name;
-      return String(rem.quantity);
-    }),
+    () => buildFilterPredicate(wipStatsCellValue),
     [buildFilterPredicate],
   );
 
@@ -254,8 +249,7 @@ export function ProductWipStatsDialog({ sku, open, onOpenChange }: ProductWipSta
 
     list.sort((a, b) => {
       for (const sort of sortConfigs) {
-        const fieldValue = (row: ProductWipRemainder) =>
-          sort.field === "qty" ? row.quantity : row.spg_name;
+        const fieldValue = (row: ProductWipRemainder) => wipStatsSortValue(row, sort.field);
         const valA = fieldValue(a);
         const valB = fieldValue(b);
 
@@ -397,27 +391,20 @@ export function ProductWipStatsDialog({ sku, open, onOpenChange }: ProductWipSta
                     <table className="w-full text-xs">
                       <thead>
                         <tr>
-                          <th className={`${headerCellClass} p-0`}>
-                            <SortableFilterHeader
-                              field="name"
-                              label="ГХП (выполненные операции)"
-                              currentSorts={sortConfigs}
-                              onSortChange={handleSortChange}
-                              values={uniqueValues.name}
-                              {...bindColumn("name")}
-                            />
-                          </th>
-                          <th className={`${headerCellClass} px-2 w-[100px]`}>Размер</th>
-                          <th className={`${headerCellClass} p-0 w-[180px] text-right`}>
-                            <SortableFilterHeader
-                              field="qty"
-                              label="Остаток (шт.)"
-                              currentSorts={sortConfigs}
-                              onSortChange={handleSortChange}
-                              values={uniqueValues.qty}
-                              {...bindColumn("qty")}
-                            />
-                          </th>
+                          {wipStatsColumns.map((column) => (
+                            <th
+                              key={column.id}
+                              className={`${headerCellClass} ${column.headerClassName ?? ""}`}
+                            >
+                              <DataTableColumnHeader
+                                column={column}
+                                bindColumn={bindColumn}
+                                values={column.filterField ? uniqueValues[column.filterField] : undefined}
+                                currentSorts={sortConfigs}
+                                onSortChange={handleSortChange}
+                              />
+                            </th>
+                          ))}
                           <TableCornerResetHeader
                             hasActiveFilters={hasActiveFilters}
                             onReset={handleResetFilters}

@@ -354,6 +354,19 @@ async def defect_decide(
             # DB constraint prevents same from/to
             if to_loc == task.section_id:
                 to_loc = None
+            # Признак «пройденные операции» (ADR-0043): материал уходит
+            # НАЗАД по маршруту, поэтому несёт операции до предыдущего
+            # этапа, а не собственные. Маршрут из одного этапа — материал
+            # по этому маршруту не прошёл ничего ([]).
+            from app.services.material_operations import (
+                completed_operations_for_task,
+                previous_stage_sequence,
+            )
+
+            previous_sequence = await previous_stage_sequence(db, task)
+            through_previous = await completed_operations_for_task(
+                db, task, through_sequence=previous_sequence or 0
+            )
 
             tx = await svc.record(db, StockCommand(
                 product_id=task.product_id,
@@ -362,6 +375,7 @@ async def defect_decide(
                 quantity=quantity,
                 reason=_decision_reason or Reason.RETURN_TO_PREVIOUS,
                 task_id=task.id,
+                completed_operations=through_previous,
                 source_ref=f"defect:{defect.id}:decision:return_previous",
                 idempotency_key=f"{idempotency_key}:return" if idempotency_key else None,
                 action_id=action.id,

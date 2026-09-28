@@ -284,6 +284,19 @@ async def record_transform_portion(
     для СПГ с lot-учётом минус по-прежнему блокирует сам сервис ledger.
     """
     tx_ids: list[int] = []
+    # Признак «пройденные операции» (ADR-0043): вход трансформирующего
+    # этапа — материал ДО этого этапа, выход — материал ПОСЛЕ него.
+    # Поэтому у списания входа Through-sequence на шаг меньше, чем у
+    # прихода выходов; дальше record() выводит признак по этапу задания.
+    from app.services.material_operations import (
+        completed_operations_for_task,
+        previous_stage_sequence,
+    )
+
+    previous_sequence = await previous_stage_sequence(db, task)
+    through_input = await completed_operations_for_task(
+        db, task, through_sequence=previous_sequence if previous_sequence is not None else 0
+    )
 
     # 1. Списание входа: good шт × входной габарит.
     tx_consume = await svc.record(db, StockCommand(
@@ -297,6 +310,7 @@ async def record_transform_portion(
         allow_negative=allow_negative,
         task_id=task.id,
         source_ref=source_ref,
+        completed_operations=through_input,
         idempotency_key=idempotency_key,
         comment=comment,
         created_by=actor_id,

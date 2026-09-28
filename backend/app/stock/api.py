@@ -35,6 +35,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.api.deps import READER_ROLES, WRITER_ROLES, get_current_user, require_role
 from app.core.database import get_db
+from app.core.sorting import SortClause, apply_sort, parse_sort
 from app.domain.dimensions import format_dimensions
 from app.models.import_template import ImportTemplate
 from app.models.product import Product
@@ -229,14 +230,31 @@ class StockAdjustmentOut(BaseModel):
 
 # ─── Balance ──────────────────────────────────────────────────────────────────
 
-BALANCE_SORT_FIELDS = frozenset({
-    "sku",
-    "quantity",
-    "operations",
-    "quality",
-    "location",
-    "product_id",
-})
+# ─── Сортировка остатков (единый контракт ?sort=field:order,...) ─────────────
+# Единая таблица «поле ?sort= → выражение SQL». Она же — источник истины для
+# валидации: apply_sort отвечает 400 на поле, которого здесь нет, поэтому
+# набор допустимых полей выводится из таблицы, а не живёт отдельно.
+#
+# Значение — выражение SQLAlchemy для прямой колонки либо callable для поля,
+# чьё выражение строится на каждый запрос (комментарий последнего MANUAL_IN).
+_BALANCE_SORT_COLUMNS: dict[str, object] = {
+    "sku": Product.sku,
+    "quantity": StockBalance.balance_qty,
+    "operations": lambda: _latest_manual_in_comment_expr(),
+    "quality": StockBalance.quality_state,
+    "location": Section.name,
+    "product_id": StockBalance.product_id,
+}
+
+BALANCE_SORT_FIELDS = frozenset(_BALANCE_SORT_COLUMNS)
+
+# Пустые значения уходят в конец в ЛЮБОМ направлении: sku и location приходят
+# из outerjoin, operations — скалярный подзапрос, у которого может не быть
+# строки. Раньше primary-колонка всегда сортировалась с NULLS LAST.
+BALANCE_SORT_NULLS_LAST_FIELDS = tuple(_BALANCE_SORT_COLUMNS)
+
+# Без параметра сортировки порядок прежний: артикул по возрастанию.
+_BALANCE_SORT_DEFAULT = SortClause("sku", "asc")
 
 
 def _latest_manual_in_comment_expr():
@@ -317,33 +335,29 @@ def _apply_balance_filters(
     return stmt
 
 
-def _apply_balance_sort(stmt, *, sort_by: str, sort_order: str):
-    resolved_sort_by = sort_by if sort_by in BALANCE_SORT_FIELDS else "sku"
-    order_column = Product.sku
-    if resolved_sort_by == "quantity":
-        order_column = StockBalance.balance_qty
-    elif resolved_sort_by == "quality":
-        order_column = StockBalance.quality_state
-    elif resolved_sort_by == "location":
-        order_column = Section.name
-    elif resolved_sort_by == "product_id":
-        order_column = StockBalance.product_id
-    elif resolved_sort_by == "operations":
-        order_column = _latest_manual_in_comment_expr()
+def _apply_balance_sort(stmt, *, clauses):
+    """ORDER BY остатков: приоритеты ``?sort=`` и три уровня группировки.
 
-    if sort_order == "desc":
-        return stmt.order_by(
-            order_column.desc().nulls_last(),
-            StockBalance.product_id.desc(),
-            StockBalance.location_id.desc(),
-            StockBalance.id.desc(),
-        )
-    return stmt.order_by(
-        order_column.asc().nulls_last(),
-        StockBalance.product_id.asc(),
-        StockBalance.location_id.asc(),
-        StockBalance.id.asc(),
+    Уровни ``product_id → location_id → id`` нужны для группировки: строки
+    одного товара по разным локациям не должны разъезжаться, когда значения
+    колонки сортировки совпали. Общий хелпер принимает ОДИН tiebreaker,
+    поэтому уровни вынесены в отдельный фиксированный ``order_by``,
+    дописанный ПОСЛЕ приоритетов (``Select.order_by`` дополняет список, а не
+    заменяет его — иначе уровни встали бы перед колонкой сортировки).
+    Первый уровень отдан хелперу, остальные два дописываются здесь.
+
+    Направление уровней всегда возрастающее (контракт хелпера): строки
+    товара по-прежнему идут подряд, но внутри товара при ``desc`` порядок
+    по возрастанию — как и tiebreaker в остальных переведённых эндпоинтах.
+    """
+    stmt = apply_sort(
+        stmt,
+        clauses,
+        _BALANCE_SORT_COLUMNS,
+        tiebreaker=StockBalance.product_id,
+        nulls_last=BALANCE_SORT_NULLS_LAST_FIELDS,
     )
+    return stmt.order_by(StockBalance.location_id.asc(), StockBalance.id.asc())
 
 
 def _serialize_balance(
@@ -468,8 +482,10 @@ async def list_balances(
         default=None,
         description="Column filter: ILIKE on latest MANUAL_IN comment",
     ),
-    sort_by: str = Query(default="sku"),
-    sort_order: str = Query(default="asc"),
+    sort: str = Query(
+        default="sku:asc",
+        description="Сортировка через запятую: field:asc|desc, например quantity:desc,location:asc",
+    ),
     limit: int = Query(default=50, ge=1, le=500),
     offset: int = Query(default=0, ge=0),
     db: AsyncSession = Depends(get_db),
@@ -499,7 +515,8 @@ async def list_balances(
     count_stmt = select(func.count()).select_from(stmt.subquery())
     total = (await db.execute(count_stmt)).scalar() or 0
 
-    stmt = _apply_balance_sort(stmt, sort_by=sort_by, sort_order=sort_order)
+    sort_clauses = parse_sort(sort, default=_BALANCE_SORT_DEFAULT)
+    stmt = _apply_balance_sort(stmt, clauses=sort_clauses)
     stmt = stmt.limit(limit).offset(offset)
     result = await db.execute(stmt)
     balances = await _serialize_balances_with_operations(db, list(result.all()))
@@ -534,15 +551,27 @@ async def list_balances_by_product(
 
 # ─── Transactions ─────────────────────────────────────────────────────────────
 
-TX_SORT_FIELDS = frozenset({
-    "created_at",
-    "reason",
-    "quantity",
-    "from_location",
-    "to_location",
-    "quality_state",
-    "comment",
-})
+# Единая таблица «поле ?sort= → выражение SQL» для ленты транзакций. Часть
+# полей приходит из алиасов секций, поэтому таблица собирается на каждый
+# запрос; набор допустимых полей выводится из неё (apply_sort отвечает 400
+# на поле, которого здесь нет), а не живёт отдельно.
+def _transaction_sort_columns(from_section, to_section) -> dict[str, object]:
+    return {
+        "created_at": StockTransaction.created_at,
+        "reason": StockTransaction.reason,
+        "quantity": StockTransaction.quantity,
+        "from_location": from_section.name,
+        "to_location": to_section.name,
+        "quality_state": StockTransaction.to_quality_state,
+        "comment": StockTransaction.comment,
+    }
+
+
+# Без параметра сортировки порядок прежний: новые транзакции сверху.
+_TX_SORT_DEFAULT = SortClause("created_at", "desc")
+
+# NULLS LAST здесь намеренно не задан: так было и раньше, а пустой комментарий
+# или участок не должны менять привычный порядок ленты без запроса сортировки.
 
 
 def _serialize_transaction(
@@ -622,8 +651,10 @@ async def list_transactions(
     ),
     date_from: Optional[date] = Query(default=None),
     date_to: Optional[date] = Query(default=None),
-    sort_by: str = Query(default="created_at"),
-    sort_order: str = Query(default="desc"),
+    sort: str = Query(
+        default="created_at:desc",
+        description="Сортировка через запятую: field:asc|desc, например quantity:desc,created_at:desc",
+    ),
     limit: int = Query(default=50, ge=1, le=500),
     offset: int = Query(default=0, ge=0),
     db: AsyncSession = Depends(get_db),
@@ -705,25 +736,15 @@ async def list_transactions(
     count_stmt = select(func.count()).select_from(stmt.subquery())
     total = (await db.execute(count_stmt)).scalar() or 0
 
-    resolved_sort_by = sort_by if sort_by in TX_SORT_FIELDS else "created_at"
-    order_column = StockTransaction.created_at
-    if resolved_sort_by == "reason":
-        order_column = StockTransaction.reason
-    elif resolved_sort_by == "quantity":
-        order_column = StockTransaction.quantity
-    elif resolved_sort_by == "from_location":
-        order_column = from_section.name
-    elif resolved_sort_by == "to_location":
-        order_column = to_section.name
-    elif resolved_sort_by == "quality_state":
-        order_column = StockTransaction.to_quality_state
-    elif resolved_sort_by == "comment":
-        order_column = StockTransaction.comment
-
-    if sort_order == "asc":
-        stmt = stmt.order_by(order_column.asc(), StockTransaction.id.asc())
-    else:
-        stmt = stmt.order_by(order_column.desc(), StockTransaction.id.desc())
+    # Сортировка разбирается до выборки: неизвестное поле — 400, а не пустая
+    # лента. Приоритеты слева направо, в конце tiebreaker по PK.
+    sort_clauses = parse_sort(sort, default=_TX_SORT_DEFAULT)
+    stmt = apply_sort(
+        stmt,
+        sort_clauses,
+        _transaction_sort_columns(from_section, to_section),
+        tiebreaker=StockTransaction.id,
+    )
 
     stmt = stmt.limit(limit).offset(offset)
     result = await db.execute(stmt)
@@ -898,8 +919,7 @@ async def preview_remainders_excel(
     template_id: int | None = Form(None),
     search: str | None = Form(None),
     filter_status: str = Form("all"),
-    sort_by: str = Form("row"),
-    sort_order: str = Form("asc"),
+    sort: str = Form("row:asc"),
     limit: int = Form(50),
     offset: int = Form(0),
     row: str | None = Form(None),
@@ -924,7 +944,7 @@ async def preview_remainders_excel(
     * ``limit`` / ``offset`` / ``items_total`` — серверная пагинация по ``items``.
     * ``search`` — поиск по SKU, product_name, номеру строки.
     * ``filter_status`` — ``all`` или ``invalid``.
-    * ``sort_by`` / ``sort_order`` — сортировка страницы preview.
+    * ``sort`` — сортировка страницы preview, ``field:order`` через запятую.
     * ``row``, ``sku``, ``quantity``, ``length``, ``operations``, ``quality``,
       ``section``, ``errors`` — column filters (partial match).
     """
@@ -993,8 +1013,7 @@ async def preview_remainders_excel(
         items,
         search=search,
         filter_status=filter_status,
-        sort_by=sort_by,
-        sort_order=sort_order,
+        sort=sort,
         limit=limit,
         offset=offset,
         default_quality_state=quality_state,

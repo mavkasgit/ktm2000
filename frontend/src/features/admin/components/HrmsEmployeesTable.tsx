@@ -4,45 +4,46 @@ import { Loader2, Search, Users } from "lucide-react"
 
 import {
   DATA_TABLE_STYLES,
+  DataTableColumnHeader,
   Input,
-  SortableFilterHeader,
   TableCornerResetCell,
   TableCornerResetHeader,
   TablePaginationFooter,
 } from "@/shared/ui"
 import { useFilterableTable } from "@/shared/hooks/useFilterableTable"
 import { usePaginatedTableQuery } from "@/shared/hooks/usePaginatedTableQuery"
-import { pickColumnApiValue } from "@/shared/lib/columnFilterSearch"
+import type { SortConfig } from "@/shared/hooks/useTableQueryEngine"
+import { buildColumnApiParams } from "@/shared/lib/columnSpecs"
+import { buildSortParam } from "@/shared/lib/sortQueryParam"
 import { queryKeys } from "@/shared/api/queryKeys"
-import { listEmployees, type Employee } from "../api"
-
-export type EmployeeSortField = "hrmsId" | "name" | "tabNumber" | "position" | "department"
+import { listEmployees, type Employee, type ListEmployeesParams } from "../api"
+import {
+  employeeColumns,
+  EMPLOYEE_SORT_FIELD_TO_API,
+  type EmployeeSortField,
+} from "../lib/employeeColumns"
 
 const headerCellClass = `${DATA_TABLE_STYLES.headerRow} ${DATA_TABLE_STYLES.headerCell}`
+/**
+ * Порядок строк по умолчанию — по имени по возрастанию. Он объявлен хуку, а
+ * не подставляется сравнением строк вручную: условие «сортировка
+ * нестандартная» расходилось между экранами, а сброс возвращал пустоту вместо
+ * этого порядка. Тем же полем сервер сортирует по умолчанию
+ * (`_SORT_DEFAULT` в `hrms_employees.py`), поэтому снятая сортировка и пустая
+ * строка `sort` дают один и тот же порядок строк.
+ */
+const DEFAULT_SORT: SortConfig<EmployeeSortField>[] = [{ field: "name", order: "asc" }]
 
-function mapSortFieldToApi(field: EmployeeSortField): string {
-  switch (field) {
-    case "hrmsId":
-      return "hrms_id"
-    case "tabNumber":
-      return "tab_number"
-    default:
-      return field
-  }
-}
-
-function buildColumnApiParams(
+/**
+ * Параметры запроса по отфильтрованным колонкам — из описания колонок, а не
+ * перечислением: пока здесь стоял один вызов `pickColumnApiValue` с именем
+ * `department`, шестая колонка потребовала бы правки этого кода.
+ */
+function buildEmployeeColumnApiParams(
   columnFilters: Partial<Record<EmployeeSortField, Set<string>>>,
   columnSearchQueries: Partial<Record<EmployeeSortField, string>>,
-): { department?: string } {
-  const params: { department?: string } = {}
-
-  const department = pickColumnApiValue(columnFilters, columnSearchQueries, "department", (value) =>
-    value === "—" ? undefined : value,
-  )
-  if (department) params.department = department
-
-  return params
+): Pick<ListEmployeesParams, "department"> {
+  return buildColumnApiParams(columnFilters, columnSearchQueries, employeeColumns)
 }
 
 export interface HrmsEmployeesTableProps {
@@ -65,14 +66,17 @@ export function HrmsEmployeesTable({
     resetAll,
     hasActiveFilters: hasTableFiltersActive,
   } = useFilterableTable<EmployeeSortField>({
+    defaultSort: DEFAULT_SORT,
     extraHasActive: search.trim().length > 0,
     onExtraReset: () => setSearch(""),
   })
 
+
   const columnApiParams = useMemo(
-    () => buildColumnApiParams(columnFilters, columnSearchQueries),
+    () => buildEmployeeColumnApiParams(columnFilters, columnSearchQueries),
     [columnFilters, columnSearchQueries],
   )
+
 
   const pagination = usePaginatedTableQuery({
     resetPageDeps: [
@@ -83,21 +87,24 @@ export function HrmsEmployeesTable({
     ],
   })
 
-  const activeSort = sortConfigs[0]
+  const sort = useMemo(
+    () => buildSortParam(sortConfigs, (field) => EMPLOYEE_SORT_FIELD_TO_API[field]),
+    [sortConfigs],
+  )
+
   const queryParams = useMemo(
     () => ({
       limit: pagination.limit,
       offset: pagination.offset,
       search: search.trim() || undefined,
-      sort_by: activeSort ? mapSortFieldToApi(activeSort.field) : "name",
-      sort_order: activeSort?.order ?? "asc",
+      sort,
       ...columnApiParams,
     }),
     [
       pagination.limit,
       pagination.offset,
       search,
-      activeSort,
+      sort,
       columnApiParams,
     ],
   )
@@ -111,20 +118,13 @@ export function HrmsEmployeesTable({
   const total = data?.total ?? 0
   const totalPages = pagination.getTotalPages(total)
 
-  const uniqueValues = useMemo(
+  /**
+   * Значения поповера — только для фильтруемых колонок, и берутся из описания:
+   * остальные четыре колонки сервер не фильтрует (см. `employeeColumns`), и
+   * список их значений был бы посчитан и ни разу не показан.
+   */
+  const uniqueValues = useMemo<Partial<Record<EmployeeSortField, string[]>>>(
     () => ({
-      hrmsId: [...new Set(employees.map((e) => String(e.hrms_id)))].sort((a, b) =>
-        Number(a) - Number(b),
-      ),
-      name: [...new Set(employees.map((e) => e.name))].sort((a, b) =>
-        a.localeCompare(b, "ru"),
-      ),
-      tabNumber: [...new Set(employees.map((e) => e.tab_number ?? "—"))].sort((a, b) =>
-        a.localeCompare(b, "ru"),
-      ),
-      position: [...new Set(employees.map((e) => e.position ?? "—"))].sort((a, b) =>
-        a.localeCompare(b, "ru"),
-      ),
       department: [...new Set(employees.map((e) => e.department ?? "—"))].sort((a, b) =>
         a.localeCompare(b, "ru"),
       ),
@@ -167,56 +167,20 @@ export function HrmsEmployeesTable({
         <table className="w-full text-sm border-collapse">
           <thead>
             <tr>
-              <th className={`${headerCellClass} p-0 px-4 text-left w-24`}>
-                <SortableFilterHeader<EmployeeSortField>
-                  field="hrmsId"
-                  label="HRMS ID"
-                  currentSorts={sortConfigs}
-                  onSortChange={handleSort}
-                  values={uniqueValues.hrmsId}
-                  {...bindColumn("hrmsId")}
-                />
-              </th>
-              <th className={`${headerCellClass} p-0 px-4 text-left`}>
-                <SortableFilterHeader<EmployeeSortField>
-                  field="name"
-                  label="ФИО"
-                  currentSorts={sortConfigs}
-                  onSortChange={handleSort}
-                  values={uniqueValues.name}
-                  {...bindColumn("name")}
-                />
-              </th>
-              <th className={`${headerCellClass} p-0 px-4 text-left w-28`}>
-                <SortableFilterHeader<EmployeeSortField>
-                  field="tabNumber"
-                  label="Таб. №"
-                  currentSorts={sortConfigs}
-                  onSortChange={handleSort}
-                  values={uniqueValues.tabNumber}
-                  {...bindColumn("tabNumber")}
-                />
-              </th>
-              <th className={`${headerCellClass} p-0 px-4 text-left`}>
-                <SortableFilterHeader<EmployeeSortField>
-                  field="position"
-                  label="Должность"
-                  currentSorts={sortConfigs}
-                  onSortChange={handleSort}
-                  values={uniqueValues.position}
-                  {...bindColumn("position")}
-                />
-              </th>
-              <th className={`${headerCellClass} p-0 px-4 text-left`}>
-                <SortableFilterHeader<EmployeeSortField>
-                  field="department"
-                  label="Подразделение"
-                  currentSorts={sortConfigs}
-                  onSortChange={handleSort}
-                  values={uniqueValues.department}
-                  {...bindColumn("department")}
-                />
-              </th>
+              {employeeColumns.map((column) => (
+                <th
+                  key={column.id}
+                  className={`${headerCellClass} ${column.headerClassName ?? "text-left"}`}
+                >
+                  <DataTableColumnHeader<EmployeeSortField>
+                    column={column}
+                    bindColumn={bindColumn}
+                    values={uniqueValues[column.id]}
+                    currentSorts={sortConfigs}
+                    onSortChange={handleSort}
+                  />
+                </th>
+              ))}
               <TableCornerResetHeader
                 hasActiveFilters={hasTableFiltersActive}
                 onReset={resetAll}

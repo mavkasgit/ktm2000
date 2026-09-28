@@ -11,11 +11,19 @@ export interface BuildActiveFilterSummaryOptions {
   columnLabels?: Record<string, string>;
 }
 
+/**
+ * Сводка того, что сейчас сужает таблицу: панельные фильтры, поиск, сортировка
+ * и фильтры колонок.
+ *
+ * `panelFilters` — опционально: у экрана без панели фильтров их нет, и раньше
+ * им приходилось передавать `{}` только ради сигнатуры. Пустой объект на
+ * месте панели — это утверждение «панели нет», которое легко принять за
+ * «панель есть, но ничего не выбрано».
+ */
 export function buildActiveFilterSummary(
-  filters: object,
   searchQuery: string,
   sortCount: number,
-  options?: BuildActiveFilterSummaryOptions,
+  options?: BuildActiveFilterSummaryOptions & { panelFilters?: object },
 ): ActiveFilterSummary {
   const labels: string[] = [];
 
@@ -27,7 +35,7 @@ export function buildActiveFilterSummary(
     labels.push(`Сортировка: ${sortCount}`);
   }
 
-  for (const [key, value] of Object.entries(filters)) {
+  for (const [key, value] of Object.entries(options?.panelFilters ?? {})) {
     if (value === true) {
       labels.push(filterShortLabels[key] ?? key);
       continue;

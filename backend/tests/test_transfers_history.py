@@ -262,14 +262,14 @@ async def test_history_sort_by_sku(client, session) -> None:
             ctx = await _make_tasks_transferable_reuse_stock(session, client, setup)
         await _seed_transfer_records(session, setup, ctx, count=1, transfer_no_prefix=f"HIST-{sku}")
 
-    asc_response = await client.get("/api/transfers/history?sort_by=sku&sort_order=asc&limit=50")
+    asc_response = await client.get("/api/transfers/history?sort=sku:asc&limit=50")
     assert asc_response.status_code == 200
     asc_body = asc_response.json()
     assert asc_body["total"] == 3
     asc_skus = [item["product_sku"] for item in asc_body["transfers"]]
     assert asc_skus == ["AAA-HIST", "CCC-HIST", "MMM-HIST"]
 
-    desc_response = await client.get("/api/transfers/history?sort_by=product_sku&sort_order=desc&limit=50")
+    desc_response = await client.get("/api/transfers/history?sort=product_sku:desc&limit=50")
     assert desc_response.status_code == 200
     desc_body = desc_response.json()
     desc_skus = [item["product_sku"] for item in desc_body["transfers"]]
@@ -308,3 +308,198 @@ async def test_history_status_filter(client, session) -> None:
     cancelled_body = cancelled_response.json()
     assert cancelled_body["total"] == 2
     assert all(item["status"] == "cancelled" for item in cancelled_body["transfers"])
+
+
+@pytest.mark.asyncio
+async def test_history_multi_sort_sku_then_quantity(client, session) -> None:
+    """Вторая колонка ?sort= раскладывает передачи одного SKU по количеству."""
+    await session.execute(Transfer.__table__.delete())
+    await session.commit()
+
+    setup = await _make_two_ghp_setup(session, sku="HIST-MSORT")
+    ctx = await _make_tasks_transferable(session, client, setup)
+    transfer_ids = await _seed_transfer_records(
+        session, setup, ctx, count=3, transfer_no_prefix="HIST-MS",
+    )
+    # Один SKU на все передачи: различаются только количества, причём в порядке,
+    # обратном порядку их создания (tiebreaker по id).
+    for transfer_id, qty in zip(transfer_ids, ("1", "3", "2"), strict=True):
+        transfer = await session.get(Transfer, transfer_id)
+        transfer.sent_quantity = Decimal(qty)
+    await session.commit()
+
+    single = await client.get("/api/transfers/history?sort=sku:asc&limit=50")
+    multi = await client.get(
+        "/api/transfers/history?sort=sku:asc,quantity:desc&limit=50",
+    )
+    assert single.status_code == 200, single.text
+    assert multi.status_code == 200, multi.text
+
+    single_ids = [item["transfer_id"] for item in single.json()["transfers"]]
+    multi_ids = [item["transfer_id"] for item in multi.json()["transfers"]]
+    assert single_ids == transfer_ids
+    assert multi_ids == [transfer_ids[1], transfer_ids[2], transfer_ids[0]]
+    assert [
+        item["sent_quantity"] for item in multi.json()["transfers"]
+    ] == ["3", "2", "1"]
+
+
+@pytest.mark.asyncio
+async def test_history_keeps_short_field_aliases(client, session) -> None:
+    """Короткие имена sku/from/to/quantity — рабочие синонимы длинных колонок."""
+    await session.execute(Transfer.__table__.delete())
+    await session.commit()
+
+    set_a = await _make_two_ghp_setup(session, sku="AAA-SHORT")
+    ctx_a = await _make_tasks_transferable(session, client, set_a)
+    set_b = await _make_two_ghp_setup(session, sku="BBB-SHORT")
+    ctx_b = await _make_tasks_transferable_reuse_stock(session, client, set_b)
+
+    # Имена секций у фикстур одинаковые ("S1"/"S2") — переименовываем, иначе
+    # сортировка по участкам была бы вырожденной.
+    for setup, prefix in ((set_a, "AAA"), (set_b, "BBB")):
+        setup["sections"][0].name = f"{prefix}-FROM"
+        setup["sections"][1].name = f"{prefix}-TO"
+    await session.commit()
+
+    ids_a = await _seed_transfer_records(
+        session, set_a, ctx_a, count=2, transfer_no_prefix="HIST-AAA",
+    )
+    ids_b = await _seed_transfer_records(
+        session, set_b, ctx_b, count=2, transfer_no_prefix="HIST-BBB",
+    )
+    for transfer_id, qty in zip(
+        [*ids_a, *ids_b], ("4", "1", "3", "2"), strict=True,
+    ):
+        transfer = await session.get(Transfer, transfer_id)
+        transfer.sent_quantity = Decimal(qty)
+    await session.commit()
+
+    async def _order(sort: str, key: str) -> list[str]:
+        resp = await client.get(f"/api/transfers/history?sort={sort}&limit=50")
+        assert resp.status_code == 200, resp.text
+        body = resp.json()
+        assert body["total"] == 4
+        return [item[key] for item in body["transfers"]]
+
+    # Каждый короткий алиас даёт тот же порядок, что и его длинная колонка.
+    assert await _order("sku:asc", "transfer_id") == await _order(
+        "product_sku:asc", "transfer_id",
+    )
+    assert await _order("from:asc", "from_section_name") == await _order(
+        "from_section_name:asc", "from_section_name",
+    )
+    assert await _order("to:asc", "to_section_name") == await _order(
+        "to_section_name:asc", "to_section_name",
+    )
+    assert await _order("quantity:desc", "sent_quantity") == await _order(
+        "sent_quantity:desc", "sent_quantity",
+    )
+
+    # Порядки не вырожденные: все четыре колонки реально различают строки.
+    assert await _order("sku:asc", "product_sku") == [
+        "AAA-SHORT", "AAA-SHORT", "BBB-SHORT", "BBB-SHORT",
+    ]
+    assert await _order("from:asc", "from_section_name") == [
+        "AAA-FROM", "AAA-FROM", "BBB-FROM", "BBB-FROM",
+    ]
+    assert await _order("to:asc", "to_section_name") == [
+        "AAA-TO", "AAA-TO", "BBB-TO", "BBB-TO",
+    ]
+    assert await _order("quantity:desc", "sent_quantity") == ["4", "3", "2", "1"]
+
+
+@pytest.mark.asyncio
+async def test_history_default_order_is_created_at_desc(client, session) -> None:
+    """Без параметра сортировки журнал: новые сверху (не по id)."""
+    await session.execute(Transfer.__table__.delete())
+    await session.commit()
+
+    setup = await _make_two_ghp_setup(session, sku="HIST-DEF")
+    ctx = await _make_tasks_transferable(session, client, setup)
+    transfer_ids = await _seed_transfer_records(
+        session, setup, ctx, count=3, transfer_no_prefix="HIST-DEF",
+    )
+
+    # created_at намеренно НЕ совпадает с порядком id: последняя по id передача
+    # оказывается самой старой, поэтому «desc по id» и «desc по created_at»
+    # дают разные последовательности.
+    base = datetime.now(UTC)
+    for transfer_id, created_at in zip(
+        transfer_ids,
+        (base - timedelta(hours=2), base - timedelta(hours=1), base - timedelta(hours=3)),
+        strict=True,
+    ):
+        transfer = await session.get(Transfer, transfer_id)
+        transfer.created_at = created_at
+    await session.commit()
+
+    resp = await client.get("/api/transfers/history?limit=50")
+    assert resp.status_code == 200, resp.text
+    assert [item["transfer_id"] for item in resp.json()["transfers"]] == [
+        transfer_ids[1],
+        transfer_ids[0],
+        transfer_ids[2],
+    ]
+
+
+@pytest.mark.asyncio
+async def test_history_rejects_unknown_sort_field(client, session) -> None:
+    """Неизвестное поле сортировки — 400, а не пустой журнал."""
+    setup = await _make_two_ghp_setup(session, sku="HIST-400")
+    ctx = await _make_tasks_transferable(session, client, setup)
+    await _seed_transfer_records(session, setup, ctx, count=1, transfer_no_prefix="HIST-400")
+
+    resp = await client.get("/api/transfers/history?sort=unknown:asc")
+    assert resp.status_code == 400, resp.text
+
+
+@pytest.mark.asyncio
+async def test_history_rejects_unknown_direction(client, session) -> None:
+    """Направление вне asc/desc — 400."""
+    setup = await _make_two_ghp_setup(session, sku="HIST-400B")
+    ctx = await _make_tasks_transferable(session, client, setup)
+    await _seed_transfer_records(session, setup, ctx, count=1, transfer_no_prefix="HIST-400B")
+
+    resp = await client.get("/api/transfers/history?sort=quantity:sideways")
+    assert resp.status_code == 400, resp.text
+
+
+@pytest.mark.asyncio
+async def test_history_ignores_legacy_sort_by_params(client, session) -> None:
+    """Сепарактные sort_by/sort_order больше не объявлены и не сортируют."""
+    await session.execute(Transfer.__table__.delete())
+    await session.commit()
+
+    setup = await _make_two_ghp_setup(session, sku="HIST-LEG")
+    ctx = await _make_tasks_transferable(session, client, setup)
+    transfer_ids = await _seed_transfer_records(
+        session, setup, ctx, count=3, transfer_no_prefix="HIST-LEG",
+    )
+    # Переворачиваем время создания относительно номеров передач: дефолтный
+    # порядок журнала (created_at:desc) и «номер по возрастанию» расходятся.
+    base = datetime.now(UTC)
+    for transfer_id, created_at in zip(
+        transfer_ids,
+        (base - timedelta(hours=3), base - timedelta(hours=2), base - timedelta(hours=1)),
+        strict=True,
+    ):
+        transfer = await session.get(Transfer, transfer_id)
+        transfer.created_at = created_at
+    await session.commit()
+
+    legacy = await client.get(
+        "/api/transfers/history?sort_by=transfer_no&sort_order=asc&limit=50",
+    )
+    assert legacy.status_code == 200, legacy.text
+    assert [item["transfer_id"] for item in legacy.json()["transfers"]] == list(
+        reversed(transfer_ids),
+    )
+
+    # «По номеру передачи возрастанию» — прямой порядок: значит подставленные
+    # legacy-поля проявились бы, если бы сервер их читал.
+    by_no = await client.get(
+        "/api/transfers/history?sort=transfer_no:asc&limit=50",
+    )
+    assert by_no.status_code == 200, by_no.text
+    assert [item["transfer_id"] for item in by_no.json()["transfers"]] == transfer_ids

@@ -7,6 +7,7 @@ from sqlalchemy import String, and_, case, cast, exists, func, or_, select
 from sqlalchemy.orm import selectinload
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from app.core.sorting import SortClause, apply_sort, parse_sort
 from app.domain.dimensions import format_cut_layout, format_dimensions, parse_dimensions_filter
 from app.models.internal_plan import SectionPlanLine
 from app.models.product import Product
@@ -15,24 +16,63 @@ from app.models.audit_log import AuditLog, AuditEntityType
 from app.models.route import ProductionRoute, RouteOperation, RouteStage, SectionOperation
 from app.models.section import Section
 from app.models.transfer import Transfer
-from app.models.work_task import WorkTask, WorkTaskStatus
+from app.models.work_task import CLOSED_WORK_TASK_STATUSES, RESOLVED_WORK_TASK_STATUSES, WorkTask, WorkTaskStatus
 from app.stock.ledger import net_quantity_expr
 from app.stock.models import Reason, StockTransaction
 from app.services.plan_position_hanger import position_dimensions_for_task, resolve_positions_hanger
+from app.services.position_remainders import PositionStockFigures
+from app.models.work_task import CLOSED_WORK_TASK_STATUSES
 from app.services.route_matcher import ResolvedRouteInfo, resolve_position_route, make_position_route_cache_key
 
 MANUAL_ROUTE_PASS_PREFIX = "manual_route_pass:"
 
-ROWS_SORT_FIELDS = frozenset({
-    "row_number",
-    "product_sku",
-    "status",
-    "planned_qty",
-    "completed_qty",
-    "due_date",
-    "sequence",
-    "dimensions",
-})
+# Значения закрытых статусов задания для сравнения «по строке» (SQL-строка
+# из выборки, а не Enum). Пропуск закрыт наравне с выполнением.
+CLOSED_STATUS_VALUES = {status.value for status in CLOSED_WORK_TASK_STATUSES}
+
+
+def _sort_columns(product, route) -> dict[str, object]:
+    """Единая таблица «поле ?sort= → выражение SQL» для строк плана.
+
+    Таблица строится на запрос, потому что часть выражений завязана на алиасы
+    этого запроса (sku продукта, маршрут). apply_sort сам валидирует поле по
+    таблице и отвечает 400 на поле, которого здесь нет, — поэтому объявить
+    поле, но не резолвить (или наоборот) нельзя.
+    """
+    return {
+        "row_number": PlanPosition.source_row_number,
+        "product_sku": func.coalesce(product.sku, PlanPosition.source_sku),
+        "status": PlanPosition.status,
+        "planned_qty": PlanPosition.quantity,
+        "completed_qty": lambda: _completed_qty_subquery(),
+        "due_date": PlanPosition.due_date,
+        "sequence": lambda: _current_sequence_subquery(),
+        "dimensions": lambda: _position_task_length_mm_expr(),
+    }
+
+
+# Курируемый набор полей сортировки: контракт для фронта. Валидация идёт по
+# таблице выше, поэтому набор выводится из неё, а не живёт отдельно.
+ROWS_SORT_FIELDS = frozenset(_sort_columns(Product, ProductionRoute))
+
+# Ключ группировки строк по планам. Входит только в порядок по умолчанию, в
+# контракт ?sort= не выведен: колонки «План» в таблице строк нет.
+_GROUPING_SORT_FIELD = "production_plan_id"
+
+# Пустые значения уходят в конец в ЛЮБОМ направлении: в Postgres DESC по
+# умолчанию ставит NULL первым, и оператор, кликнувший «спустить», увидел бы
+# неразмерные позиции и позиции без срока наверху. NOT NULL-колонки и
+# подзапросы без NULL на этом не меняются.
+_ROWS_SORT_NULLS_LAST_FIELDS = tuple(ROWS_SORT_FIELDS)
+
+# Сортировка по умолчанию — планы новые сверху, внутри плана строки импорта по
+# номеру, без номера в конце; третий ключ добавляет tiebreaker по id. Три ключа,
+# а не один: строки разных планов не должны перемешиваться, а группировка по
+# плану — это то, что оператор видит при первом открытии страницы.
+_SORT_DEFAULT_CLAUSES = (
+    SortClause(_GROUPING_SORT_FIELD, "desc"),
+    SortClause("row_number", "asc"),
+)
 
 _ACTIVE_POSITION_STATUSES = (
     PlanPositionStatus.approved,
@@ -45,8 +85,7 @@ _ACTIVE_POSITION_STATUSES = (
 class PlanningRowsQueryParams:
     section_id: int | None = None
     search: str | None = None
-    sort_by: str | None = None
-    sort_order: str = "desc"
+    sort: str | None = None
     limit: int = 50
     offset: int = 0
     plan_position_id: str | None = None
@@ -125,7 +164,7 @@ def _position_is_completed_condition():
         .join(WorkTask, WorkTask.section_plan_line_id == SectionPlanLine.id)
         .where(
             SectionPlanLine.plan_position_id == PlanPosition.id,
-            WorkTask.status.notin_([WorkTaskStatus.completed, WorkTaskStatus.cancelled]),
+            WorkTask.status.notin_(CLOSED_WORK_TASK_STATUSES),
         )
     )
     final_stage_completed = exists(
@@ -135,7 +174,7 @@ def _position_is_completed_condition():
         .join(RouteStage, RouteStage.id == SectionPlanLine.route_stage_id)
         .where(
             SectionPlanLine.plan_position_id == PlanPosition.id,
-            WorkTask.status == WorkTaskStatus.completed,
+            WorkTask.status.in_(RESOLVED_WORK_TASK_STATUSES),
             RouteStage.is_final.is_(True),
         )
     )
@@ -268,48 +307,40 @@ def _apply_planning_rows_filters(stmt, params: PlanningRowsQueryParams, *, produ
 
 
 def _apply_planning_rows_order(stmt, params: PlanningRowsQueryParams, *, product: Product | None = None, route: ProductionRoute | None = None):
+    """ORDER BY строк плана: приоритеты слева направо, в конце tiebreaker по PK.
+
+    Tiebreaker всегда возрастающий, хотя раньше повторял направление сортировки.
+    Для уникального PK это тот же результат: направление последнего ключа
+    влияет только на порядок среди строк с равными значениями ВСЕХ ключей, а
+    равенства по id не бывает — порядок строк не меняется.
+    """
     if product is None:
         product = Product
     if route is None:
         route = ProductionRoute
 
-    resolved_sort_by = params.sort_by if params.sort_by in ROWS_SORT_FIELDS else None
-    sort_order = params.sort_order if params.sort_order in ("asc", "desc") else "desc"
-
-    if resolved_sort_by is None:
-        if sort_order == "asc":
-            return stmt.order_by(
-                PlanPosition.production_plan_id.asc(),
-                PlanPosition.source_row_number.asc().nulls_last(),
-                PlanPosition.id.asc(),
-            )
-        return stmt.order_by(
-            PlanPosition.production_plan_id.desc(),
-            PlanPosition.source_row_number.asc().nulls_last(),
-            PlanPosition.id.asc(),
-        )
-
-    order_column = PlanPosition.id
-    if resolved_sort_by == "row_number":
-        order_column = PlanPosition.source_row_number
-    elif resolved_sort_by == "product_sku":
-        order_column = func.coalesce(product.sku, PlanPosition.source_sku)
-    elif resolved_sort_by == "status":
-        order_column = PlanPosition.status
-    elif resolved_sort_by == "planned_qty":
-        order_column = PlanPosition.quantity
-    elif resolved_sort_by == "completed_qty":
-        order_column = _completed_qty_subquery()
-    elif resolved_sort_by == "due_date":
-        order_column = PlanPosition.due_date
-    elif resolved_sort_by == "sequence":
-        order_column = _current_sequence_subquery()
-    elif resolved_sort_by == "dimensions":
-        order_column = _position_task_length_mm_expr()
-
-    if sort_order == "asc":
-        return stmt.order_by(order_column.asc().nulls_last(), PlanPosition.id.asc())
-    return stmt.order_by(order_column.desc().nulls_last(), PlanPosition.id.desc())
+    columns = _sort_columns(product, route)
+    # Дефолт — три ключа, а не один: группировка по планам это часть того,
+    # что оператор видит при первом открытии страницы. Пользовательский
+    # ?sort= всегда стартует с его первого поля, группировка там не нужна.
+    is_default_sort = params.sort is None or not params.sort.strip()
+    clauses = (
+        list(_SORT_DEFAULT_CLAUSES)
+        if is_default_sort
+        else parse_sort(params.sort, default=_SORT_DEFAULT_CLAUSES[0])
+    )
+    if is_default_sort:
+        # Ключ группировки по плану резолвится только для дефолтного порядка.
+        resolvable = {**columns, _GROUPING_SORT_FIELD: PlanPosition.production_plan_id}
+    else:
+        resolvable = columns
+    return apply_sort(
+        stmt,
+        clauses,
+        resolvable,
+        tiebreaker=PlanPosition.id,
+        nulls_last=_ROWS_SORT_NULLS_LAST_FIELDS,
+    )
 
 
 async def _get_stage_with_operations(db: AsyncSession, stage_id: int) -> RouteStage | None:
@@ -340,6 +371,8 @@ def _to_float(value: Decimal | int | float | None) -> float:
     return float(value)
 
 
+
+
 def _clamp_percent(numerator: float, denominator: float) -> float:
     if denominator <= 0:
         return 0.0
@@ -351,7 +384,13 @@ def _summarize_task_status(statuses: list[str]) -> str:
     if not statuses:
         return "not_started"
     status_set = set(statuses)
-    if status_set == {"completed"}:
+    # Пропуск виден как пропуск: «почему этап закрыт без работы» — вопрос,
+    # на который должен отвечать сам прогресс, а не прятать его под
+    # «выполнен» (#207). Смешанный набор (часть выполнена, часть
+    # пропущена) читается как выполненный: этап закрыт результатом.
+    if status_set == {"skipped"}:
+        return "skipped"
+    if status_set <= {"completed", "skipped"}:
         return "completed"
     if "in_progress" in status_set:
         return "in_progress"
@@ -392,21 +431,6 @@ async def _resolve_effective_product_ids(
     from app.services import product_pair_resolver
 
     return await product_pair_resolver.resolve_effective_product_ids(db, position)
-
-
-def min_available_remainder(
-    available_by_product: dict[int, float], product_ids: list[int]
-) -> float:
-    """Свободный остаток позиции по её продуктам.
-
-    Пара заходит на маршрут как единая загрузка ``N×A + N×B``: нужны равные
-    количества обоих, поэтому берётся минимум по компонентам. Одиночная
-    позиция — единственное значение; продуктов нет — 0.
-    """
-    return min(
-        (available_by_product.get(product_id, 0.0) for product_id in product_ids),
-        default=0.0,
-    )
 
 
 async def _fetch_paginated_positions(
@@ -459,7 +483,7 @@ async def _build_planning_rows_for_positions(db: AsyncSession, positions: list[P
                 SectionPlanLine.plan_position_id,
                 func.count(WorkTask.id).label("total_tasks"),
                 func.sum(
-                    case((WorkTask.status == WorkTaskStatus.completed, 1), else_=0)
+                    case((WorkTask.status.in_(RESOLVED_WORK_TASK_STATUSES), 1), else_=0)
                 ).label("completed_tasks"),
             )
             .join(WorkTask, WorkTask.section_plan_line_id == SectionPlanLine.id)
@@ -481,7 +505,7 @@ async def _build_planning_rows_for_positions(db: AsyncSession, positions: list[P
             .join(RouteStage, RouteStage.id == SectionPlanLine.route_stage_id)
             .where(
                 SectionPlanLine.plan_position_id.in_(position_ids),
-                WorkTask.status == WorkTaskStatus.completed,
+                WorkTask.status.in_(RESOLVED_WORK_TASK_STATUSES),
                 RouteStage.is_final.is_(True),
             )
             .group_by(SectionPlanLine.plan_position_id)
@@ -600,7 +624,9 @@ async def _build_planning_rows_for_positions(db: AsyncSession, positions: list[P
         chosen_row = None
         for row in rows:
             status_value = row.task_status.value if hasattr(row.task_status, "value") else str(row.task_status)
-            if status_value not in {"completed", "cancelled"}:
+            # Пропущенный этап — закрытый, а не текущий: иначе после пропуска
+            # «Пресс»/«Дробеструй» выдавались бы за текущий участок (#207).
+            if status_value not in CLOSED_STATUS_VALUES:
                 chosen_row = row
                 break
         if chosen_row is None and rows:
@@ -615,7 +641,7 @@ async def _build_planning_rows_for_positions(db: AsyncSession, positions: list[P
 
     # Сначала резолвим effective_product_id для каждой позиции и считаем
     # доступные остатки — одним батчем, без N+1.
-    position_remainder_steps: dict[int, list[dict]] = {}
+    position_stock_figures: dict[int, PositionStockFigures] = {}
     position_effective_product_ids: dict[int, list[int]] = {}
     for pos in positions:
         position_effective_product_ids[pos.id] = await _resolve_effective_product_ids(db, pos)
@@ -659,24 +685,12 @@ async def _build_planning_rows_for_positions(db: AsyncSession, positions: list[P
                     for stage, section in stages
                 ]
 
-    from app.services.position_remainders import compute_available_remainder_quantities
+    from app.services.position_remainders import compute_position_stock_figures
 
-    product_ids_for_remainders: set[int] = set()
-    for pos in positions:
-        route_info = route_cache[make_position_route_cache_key(pos)]
-        if route_info.route_id is None:
-            continue
-        if not route_remainder_steps_cache.get(route_info.route_id):
-            continue
-        effective_ids = position_effective_product_ids.get(pos.id)
-        if effective_ids:
-            product_ids_for_remainders.update(effective_ids)
-
-    available_by_product = await compute_available_remainder_quantities(
-        db,
-        product_ids_for_remainders,
-    )
-
+    # Индикатор (#207): позиция не вычитает сама себя, но чужие позиции
+    # того же артикула учитываются. Позиции без маршрута получают три
+    # None: данных о наличии нет, и это не то же, что ноль.
+    indicator_targets: list[tuple[int, list[int], float]] = []
     for pos in positions:
         route_info = route_cache[make_position_route_cache_key(pos)]
         remainder_steps = (
@@ -685,13 +699,18 @@ async def _build_planning_rows_for_positions(db: AsyncSession, positions: list[P
             else None
         )
         if not remainder_steps:
-            position_remainder_steps[pos.id] = 0.0
+            position_stock_figures[pos.id] = PositionStockFigures(None, None, None)
             continue
-        # Пара идёт как единая загрузка: свободный остаток — минимум по её
-        # продуктам (см. min_available_remainder).
-        position_remainder_steps[pos.id] = min_available_remainder(
-            available_by_product, position_effective_product_ids.get(pos.id) or []
+        indicator_targets.append(
+            (
+                pos.id,
+                position_effective_product_ids.get(pos.id) or [],
+                _to_float(pos.quantity),
+            )
         )
+    position_stock_figures.update(
+        await compute_position_stock_figures(db, indicator_targets)
+    )
 
     # N на подвес — тем же батч-резолвером, что и страница плана (#127):
     # число подвесов на «Контроле выполнения» совпадает с планом.
@@ -712,6 +731,9 @@ async def _build_planning_rows_for_positions(db: AsyncSession, positions: list[P
         raw_stage_info = current_stage_by_position.get(pos.id, {})
 
         route_steps = route_steps_cache.get(route_info.route_id) if route_info.route_id is not None else None
+        figures = position_stock_figures.get(
+            pos.id, PositionStockFigures(None, None, None)
+        )
         result.append(
             {
                 "plan_position_id": pos.id,
@@ -757,7 +779,11 @@ async def _build_planning_rows_for_positions(db: AsyncSession, positions: list[P
                 "current_stage_section_name": raw_stage_info.get("current_stage_section_name"),
                 "current_stage_task_status": raw_stage_info.get("current_stage_task_status"),
                 "route_steps": route_steps,
-                "available_remainder_quantity": round(position_remainder_steps.get(pos.id, 0.0), 3),
+                # Индикатор остатка: три числа с тремя именами (#207).
+                # «Свободно на складах» — свойство склада, «Доступно для
+                # позиции» — минус чужие открытые позиции, «Дефицит» — до
+                # планового количества позиции.
+                **figures.as_fields(),
             }
         )
 
@@ -904,7 +930,14 @@ async def get_production_planning_row_detail(db: AsyncSession, position_id: int)
 
         # Get all task_ids for this position
         task_in_pos = (await db.execute(
-            select(WorkTask.id, WorkTask.section_plan_line_id, WorkTask.status)
+            # skip_reason нужен в выборке, а не подгружается отдельно: без
+            # него карточка позиции падала бы на пропущенном этапе (#207).
+            select(
+                WorkTask.id,
+                WorkTask.section_plan_line_id,
+                WorkTask.status,
+                WorkTask.skip_reason,
+            )
             .join(SectionPlanLine, SectionPlanLine.id == WorkTask.section_plan_line_id)
             .where(SectionPlanLine.plan_position_id == pos.id)
         )).all()
@@ -953,6 +986,9 @@ async def get_production_planning_row_detail(db: AsyncSession, position_id: int)
 
         task_aggregates_by_stage: dict[int, dict[str, float]] = {}
         task_statuses_by_stage: dict[int, list[str]] = {}
+        # Причина пропуска (#207): у этапа она одна — все его задания
+        # пропущены с одной причиной, иначе это разные пропуски.
+        skip_reason_by_stage: dict[int, str] = {}
         for t in task_in_pos:
             stage_id = spl_to_stage.get(t.section_plan_line_id)
             if stage_id is None:
@@ -972,6 +1008,8 @@ async def get_production_planning_row_detail(db: AsyncSession, position_id: int)
             task_statuses_by_stage.setdefault(stage_id, []).append(
                 t.status.value if hasattr(t.status, "value") else str(t.status)
             )
+            if t.status == WorkTaskStatus.skipped and t.skip_reason:
+                skip_reason_by_stage.setdefault(stage_id, t.skip_reason)
 
         flow_by_stage: dict[int, dict] = {}
         task_ids_in_pos = [t.id for t in task_in_pos]
@@ -1260,6 +1298,7 @@ async def get_production_planning_row_detail(db: AsyncSession, position_id: int)
                     "transfer_percent": _clamp_percent(transferred_quantity, planned_quantity),
                     "reject_percent": _clamp_percent(rejected_quantity, planned_quantity),
                     "task_status": task_status,
+                    "skip_reason": skip_reason_by_stage.get(stage.id),
                     "not_started": not has_tasks,
                     "issued_qty": round(_to_float(flow.get("issued_qty")), 3),
                     "issued_last_at": flow.get("issued_last_at"),
@@ -1336,7 +1375,9 @@ async def get_production_planning_row_detail(db: AsyncSession, position_id: int)
             ).all()
             for row in fallback_stage_rows:
                 status_value = row.task_status.value if hasattr(row.task_status, "value") else str(row.task_status)
-                if status_value not in {"completed", "cancelled"}:
+                # Пропущенный этап — закрытый, а не текущий: иначе после пропуска
+                # «Пресс»/«Дробеструй» выдавались бы за текущий участок (#207).
+                if status_value not in CLOSED_STATUS_VALUES:
                     current_stage_row = row
                     break
             if not current_stage_row and fallback_stage_rows:
@@ -1358,30 +1399,19 @@ async def get_production_planning_row_detail(db: AsyncSession, position_id: int)
                 ),
             }
 
-    # Подсчёт доступных остатков ГХП по тем же правилам prefix-match,
-    # что и в list_production_planning_rows.
-    available_remainder_quantity: float = 0.0
+    # Индикатор остатка по тем же правилам, что и в списке (#207): три
+    # числа с тремя именами, позиция не вычитает сама себя, брак не
+    # источник, «нет данных» отличается от нуля.
+    stock_figures = PositionStockFigures(None, None, None)
     if route_info.route_id is not None and stages:
-        route_remainder_steps: list[dict] = [
-            {
-                "sequence": stage.sequence,
-                "section_id": section.id,
-                "operation_codes": {op.operation_code for op in (stage.operations or [])},
-            }
-            for stage, section in stages
-        ]
+        from app.services.position_remainders import compute_position_stock_figures
+
         effective_product_ids = await _resolve_effective_product_ids(db, pos)
-        from app.services.position_remainders import compute_available_remainder_quantity
-        per_component = {
-            product_id: await compute_available_remainder_quantity(
-                db,
-                effective_product_id=product_id,
-                route_steps=route_remainder_steps,
-                position_id=pos.id,
+        stock_figures = (
+            await compute_position_stock_figures(
+                db, [(pos.id, effective_product_ids, _to_float(pos.quantity))]
             )
-            for product_id in effective_product_ids
-        }
-        available_remainder_quantity = min_available_remainder(per_component, effective_product_ids)
+        )[pos.id]
 
     return {
         "plan_position_id": pos.id,
@@ -1414,7 +1444,7 @@ async def get_production_planning_row_detail(db: AsyncSession, position_id: int)
         "current_stage_section_code": current_stage_info.get("current_stage_section_code") if current_stage_info else None,
         "current_stage_section_name": current_stage_info.get("current_stage_section_name") if current_stage_info else None,
         "current_stage_task_status": current_stage_info.get("current_stage_task_status") if current_stage_info else None,
-        "available_remainder_quantity": round(available_remainder_quantity, 3),
+        **stock_figures.as_fields(),
         "raw_excel_row": (pos.source_payload or {}).get("raw_excel_row"),
         "payload": pos.source_payload,
         "status_history": await _load_position_status_history(db, pos.id),

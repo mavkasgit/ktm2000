@@ -6,7 +6,7 @@ import {
   Button,
   FiltersPanel,
   VirtualizedTableBody,
-  SortableFilterHeader,
+  DataTableColumnHeader,
   TableCornerResetHeader,
   TablePaginationFooter,
   DATA_TABLE_STYLES,
@@ -16,9 +16,11 @@ import type { PageLimitOption } from "@/shared/hooks/usePaginatedTableQuery";
 import type { useFilterableTable } from "@/shared/hooks/useFilterableTable";
 import { SortConfig } from "@/shared/hooks/useTableQueryEngine";
 import { ExecutionSortField, positionStatusLabels } from "./execution-utils";
-import { fmtQty } from "@/shared/utils/fmtQty";
+import { fmtQty } from "@/shared/lib/quantityFormat";
 import { ExecutionRow } from "./ExecutionRow";
 import { getExecutionTableColumns } from "./execution-table-columns";
+import { TABLE_ROW_COMPACT } from "@/shared/lib/dataTableStyles";
+import { cn } from "@/shared/utils/cn";
 import {
   type BulkActionDefinition,
   type BulkActionResultItem,
@@ -42,18 +44,13 @@ interface ExecutionTableProps {
   handleSortChange: (field: ExecutionSortField) => void;
   getAriaSort: (field: ExecutionSortField) => "none" | "ascending" | "descending";
   bindColumn: ReturnType<typeof useFilterableTable<ExecutionSortField>>["bindColumn"];
-  uniqueValuesByField: {
-    id: string[];
-    row: string[];
-    plan: string[];
-    sku: string[];
-    name: string[];
-    qty: string[];
-    route: string[];
-    status: string[];
-    stage: string[];
-    dimensions: string[];
-  };
+  /**
+   * Значения для попапера фильтра — по списку на каждое объявленное
+   * `filterField`. Ключи — подмножество `ExecutionSortField`: объединение
+   * шире набора колонок (поле `plan` не фильтрует ни одна), поэтому тип
+   * частичный, а ключ без данных означал бы фильтр по несуществующей колонке.
+   */
+  uniqueValuesByField: Partial<Record<ExecutionSortField, string[]>>;
   // bulk
   bulkSelection: {
     selectedIds: Set<number>;
@@ -148,7 +145,7 @@ export function ExecutionTable({
   rangeLabel,
 }: ExecutionTableProps) {
   const visibleColumns = getExecutionTableColumns();
-  const headerCellClass = `${DATA_TABLE_STYLES.headerRow} ${DATA_TABLE_STYLES.headerCell}`;
+  const headerCellClass = cn(DATA_TABLE_STYLES.headerRow, DATA_TABLE_STYLES.headerCell, TABLE_ROW_COMPACT.headerCell);
 
   const actionVariant = (actionId: string): "default" | "destructive" | "outline" | "success" => {
     switch (actionId) {
@@ -299,32 +296,16 @@ export function ExecutionTable({
                       className={`${headerCellClass} ${column.headerClassName ?? ""}`}
                       aria-sort={column.sortField ? getAriaSort(column.sortField) : undefined}
                     >
-                      {column.sortField ? (
-                        <SortableFilterHeader
-                          field={column.sortField}
-                          label={column.label}
-                          currentSorts={sortConfigs}
-                          onSortChange={handleSortChange}
-                          values={uniqueValuesByField[column.sortField]}
-                          {...(column.sortField === "dimensions"
-                            ? {
-                                selectedValues: bindColumn("dimensions").selectedValues,
-                                onFilterChange: bindColumn("dimensions").onFilterChange,
-                              }
-                            : bindColumn(column.sortField))}
-                          valueLabel={
-                            column.sortField === "status"
-                              ? (v) => positionStatusLabels[v] ?? v
-                              : column.sortField === "dimensions"
-                                ? formatDimensionsFilterValue
-                                : undefined
-                          }
-                        />
-                      ) : column.id === "actions" ? (
-                        <span className="block truncate">{column.label}</span>
-                      ) : (
-                        <span className="block truncate">{column.label}</span>
-                      )}
+                      {/* Явный `ExecutionSortField`: конфиг сортировки таблицы
+                          шире, чем подмножество серверно-сортируемых полей, на
+                          котором объявлены колонки. */}
+                      <DataTableColumnHeader<ExecutionSortField>
+                        column={column}
+                        bindColumn={bindColumn}
+                        values={column.filterField ? uniqueValuesByField[column.filterField] : undefined}
+                        currentSorts={sortConfigs}
+                        onSortChange={handleSortChange}
+                      />
                     </th>
                   ))}
                   <TableCornerResetHeader
@@ -336,7 +317,7 @@ export function ExecutionTable({
               </thead>
               <VirtualizedTableBody
                 rows={rows}
-                rowHeight={48}
+                rowHeight={TABLE_ROW_COMPACT.rowHeightPx}
                 colSpan={visibleColumns.length + 1}
                 scrollContainerRef={tableScrollRef as React.RefObject<HTMLElement | null>}
                 renderRow={(row, rowIdx) => (

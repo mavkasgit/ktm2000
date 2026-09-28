@@ -1,6 +1,6 @@
 import { useEffect, useState } from "react";
 import { useQueryClient } from "@tanstack/react-query";
-import { queryKeys } from "@/shared/api/queryKeys";
+import { invalidateAfter } from "@/shared/api/cacheInvalidation";
 import {
   amendAction,
   parseReversalError,
@@ -10,6 +10,10 @@ import {
 } from "@/shared/api/actions";
 import { toast } from "@/shared/ui/use-toast";
 import { Button, Input } from "@/shared/ui";
+import {
+  normalizeCorrectedQuantityInput,
+  type CorrectedQuantityIssue,
+} from "@/shared/lib/correctedQuantityInput";
 import {
   Dialog,
   DialogContent,
@@ -41,6 +45,7 @@ export function AmendDialog({
   const queryClient = useQueryClient();
   const [quantity, setQuantity] = useState("");
   const [fromTaskId, setFromTaskId] = useState("");
+  const [quantityIssue, setQuantityIssue] = useState<CorrectedQuantityIssue | null>(null);
   const [toTaskId, setToTaskId] = useState("");
   const [dimensions, setDimensions] = useState("");
   const [cascade, setCascade] = useState(false);
@@ -51,6 +56,7 @@ export function AmendDialog({
   useEffect(() => {
     if (!open) {
       setQuantity("");
+      setQuantityIssue(null);
       setFromTaskId("");
       setToTaskId("");
       setDimensions("");
@@ -62,9 +68,14 @@ export function AmendDialog({
 
   if (!action) return null;
 
+  // Правило ввода при правке факта: дробь законна (домен передач), ноль и
+  // мусор — нет. Причина показывается под полем, предпросмотр не запускается.
+  const correctedQuantity = normalizeCorrectedQuantityInput(quantity);
+  const quantityBlocked = quantityIssue !== null;
+
   const buildChanges = (): Record<string, unknown> => {
     const changes: Record<string, unknown> = {};
-    if (quantity.trim()) changes.quantity = quantity.trim();
+    if (correctedQuantity.number !== null) changes.quantity = correctedQuantity.number;
     if (fromTaskId.trim()) changes.from_task_id = Number(fromTaskId.trim());
     if (toTaskId.trim()) changes.to_task_id = Number(toTaskId.trim());
     if (dimensions.trim()) {
@@ -78,6 +89,7 @@ export function AmendDialog({
   };
 
   const handlePreview = async () => {
+    if (quantityBlocked) return;
     setLoading(true);
     try {
       const data = await previewAmend(action.id, buildChanges(), cascade);
@@ -99,7 +111,7 @@ export function AmendDialog({
       const result = await amendAction(action.id, {
         plan_token: preview.plan_token,
       });
-      void queryClient.invalidateQueries({ queryKey: queryKeys.actions.all });
+      void invalidateAfter(queryClient, "actionReversed");
       toast({
         variant: "success",
         title: "Действие изменено",
@@ -152,10 +164,24 @@ export function AmendDialog({
             <Input
               id="amend-quantity"
               data-testid="amend-quantity"
+              type="text"
+              inputMode="decimal"
               value={quantity}
-              onChange={(e) => setQuantity(e.target.value)}
-              placeholder="напр. 5"
+              onChange={(e) => {
+                const result = normalizeCorrectedQuantityInput(e.target.value);
+                setQuantity(e.target.value);
+                setQuantityIssue(result.issue);
+                setPreview(null);
+              }}
+              onBlur={() => setQuantityIssue(null)}
+              aria-invalid={quantityBlocked}
+              placeholder="напр. 5 или 0,5"
             />
+            {quantityIssue && (
+              <div className="text-xs text-red-600" role="status" data-testid="amend-quantity-issue">
+                {quantityIssue.text}
+              </div>
+            )}
           </div>
           <div className="space-y-1">
             <label htmlFor="amend-dimensions" className="text-sm font-medium text-slate-700">Габариты (JSON)</label>

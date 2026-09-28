@@ -1,6 +1,7 @@
 import { test, expect } from "./fixtures";
 import {
   apiAddRemainder,
+  apiEnsureTestProducts,
   apiGetProductBySku,
   apiGetSectionByCode,
 } from "./api-helpers";
@@ -25,7 +26,10 @@ test.describe("@smoke Отмена действий — журнал /reversal (
   }) => {
     test.slow();
 
-    // Сетап: продукт + склад RAW_STOCK, ручной приход → Action в журнале.
+    // Сетап: артикул из фикстуры @smoke + склад RAW_STOCK, ручной приход →
+    // Action в журнале. Артикул создаём сами: стенд поднимается на пустой БД,
+    // и полагаться на то, что его завёл другой спек, нельзя.
+    await apiEnsureTestProducts();
     const product = await apiGetProductBySku("ЮП-3270");
     const raw = await apiGetSectionByCode("RAW_STOCK");
     const comment = `E2E-REVERSAL-${Date.now()}`;

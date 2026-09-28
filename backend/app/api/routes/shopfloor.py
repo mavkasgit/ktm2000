@@ -44,7 +44,6 @@ from app.services.shopfloor_service import (
     get_route_stage_aggregates_for_plan_position,
     get_section_board,
     get_section_daily_stats,
-    get_section_payload_keys,
     get_sections_summary,
     get_task_details,
     get_warehouse_remainders,
@@ -818,8 +817,10 @@ async def section_board(
     search: str | None = Query(None, description="ILIKE: product_sku, task id, operation_name"),
     product_sku: str | None = Query(None, description="Column filter: ILIKE on product/source/output sku"),
     dimensions: str | None = Query(None, description="Column filter: exact JSON match on task dimensions, e.g. {\"length_mm\":2700} or null"),
-    sort_by: str = Query(default="sequence"),
-    sort_order: str = Query(default="asc"),
+    sort: str | None = Query(
+        default=None,
+        description="Comma-separated sort rules: field:asc|desc, e.g. sequence:asc,due_date:asc",
+    ),
     limit: int = Query(default=50, ge=1, le=500),
     offset: int = Query(default=0, ge=0),
     db: AsyncSession = Depends(get_db),
@@ -841,21 +842,10 @@ async def section_board(
         search=search,
         product_sku=product_sku,
         dimensions=dimensions,
-        sort_by=sort_by,
-        sort_order=sort_order,
+        sort=sort,
         limit=limit,
         offset=offset,
     )
-
-
-@router.get("/sections/{section_id}/payload-keys", dependencies=[Depends(require_role(list(READER_ROLES)))])
-async def section_payload_keys(
-    section_id: int,
-    db: AsyncSession = Depends(get_db),
-    locked_section_id: int | None = Depends(get_single_window_locked_section_id),
-) -> dict:
-    _ensure_section_lock(section_id, locked_section_id)
-    return await get_section_payload_keys(db, section_id=section_id)
 
 
 @router.get("/sections/{section_id}/daily-stats", dependencies=[Depends(require_role(list(READER_ROLES)))])
@@ -978,6 +968,18 @@ async def return_remainder(
             ref_id=task.id,
             actor=await _get_user_snapshot_name(db, current_user.id),
         )
+        # Признак «пройденные операции» (ADR-0043): возвращается в запас
+        # необработанный остаток задания, поэтому он несёт операции до
+        # ПРЕДЫДУЩЕГО этапа, а не пройденные операции своего.
+        from app.services.material_operations import (
+            completed_operations_for_task,
+            previous_stage_sequence,
+        )
+
+        previous_sequence = await previous_stage_sequence(db, task)
+        through_previous = await completed_operations_for_task(
+            db, task, through_sequence=previous_sequence or 0
+        )
         # return_to_stock: material removed from section (to_location=None for now)
         tx = await svc.record(db, StockCommand(
             product_id=task.product_id,
@@ -986,6 +988,7 @@ async def return_remainder(
             quantity=quantity,
             reason=Reason.RETURN_TO_STOCK,
             task_id=task.id,
+            completed_operations=through_previous,
             comment=payload.comment,
             idempotency_key=payload.idempotency_key,
             created_by=current_user.id,

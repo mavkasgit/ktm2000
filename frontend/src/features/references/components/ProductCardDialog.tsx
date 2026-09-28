@@ -22,7 +22,7 @@ import {
   type Product,
 } from "@/shared/api/products";
 import { ProductPhoto } from "./ProductPhoto";
-import { formatQuantity } from "../lib/formatQuantity";
+import { fmtQtyPrecise } from "@/shared/lib/quantityFormat";
 import { cn } from "@/shared/utils/cn";
 
 const MAX_COMPONENTS = 2;
@@ -57,7 +57,7 @@ function toDraftItems(items: CompositionItem[]): DraftItem[] {
     name: item.name,
     unit: item.unit,
     is_active: item.is_active,
-    quantity: formatQuantity(item.quantity),
+    quantity: fmtQtyPrecise(item.quantity),
   }));
 }
 
@@ -343,7 +343,7 @@ export function ProductCardDialog({
                           <div className="text-xs text-muted-foreground truncate">{item.name}</div>
                         </div>
                         <Badge variant="secondary">
-                          ×{formatQuantity(item.quantity)} {item.unit}
+                          ×{fmtQtyPrecise(item.quantity)} {item.unit}
                         </Badge>
                       </div>
                     ))}

@@ -1,10 +1,17 @@
 import type { ReadyToTransferTask } from "@/shared/api/transfers";
+import { formatDimensionsLabel } from "@/shared/api/stock";
 
 /**
  * Единица передачи — пара «задание × размер», но оператору удобнее отправить одним
  * действием строки, неразличимые для передачи: тот же артикул, того же размера,
  * с того же участка и в тот же адрес. Такие строки собираются в одну (свёрнутую
  * по умолчанию) группу.
+ *
+ * Свёрнутая группа показывает СВОДНЫЕ значения (общий этап, сумма
+ * `transferable_quantity`), поэтому порядок групп — порядок первого появления
+ * строки — не выражает сортировку ни по одной из этих колонок. Поэтому
+ * страница применяет группировку только когда сортировка не выбрана, а при
+ * выбранной колонке рисует строки заданий как есть (см. `TransfersPage`).
  *
  * Участок и адресат обязательны в ключе. Страница грузит ready по ГХП, то есть
  * сразу по нескольким участкам; а ГП и П/ф — разные динамические маршруты
@@ -115,7 +122,7 @@ export function groupReadyTransfers(items: ReadyToTransferTask[]): ReadyTransfer
       allFinal,
       hasNextStep: rows[0].has_next_step,
       common: {
-        dimensionsLabel: sameValue(rows, (row) => row.dimensions_label),
+        dimensionsLabel: sameValue(rows, (row) => formatDimensionsLabel(row.dimensions, row.dimensions_label)),
         operationName: sameValue(rows, (row) => row.operation_name),
         sequence: sameValue(rows, (row) => row.sequence),
         nextOperationName: sameValue(rows, (row) => row.next_operation_name),

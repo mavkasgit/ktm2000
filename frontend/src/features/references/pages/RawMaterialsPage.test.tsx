@@ -38,6 +38,7 @@ vi.mock("../api", async (importOriginal) => ({
   listProductDimensions: vi.fn(),
 }));
 
+import { MemoryRouter } from "react-router-dom";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import {
   exportCatalogExcel,
@@ -122,11 +123,14 @@ const renderPage = () => {
     defaultOptions: { queries: { retry: false } },
   });
   return render(
-    <QueryClientProvider client={client}>
-      <RawMaterialsPage />
-    </QueryClientProvider>,
+    <MemoryRouter>
+      <QueryClientProvider client={client}>
+        <RawMaterialsPage />
+      </QueryClientProvider>
+    </MemoryRouter>,
   );
 };
+
 
 /** Открывает меню «Операции» (Radix слушает pointerdown, а не click). */
 const openOperationsMenu = async () => {
@@ -288,5 +292,28 @@ describe("RawMaterialsPage: реестр длин и расчёт подвесо
 
     expect(await screen.findByRole("button", { name: "RAW-2700" })).toBeTruthy();
     await waitFor(() => expect(screen.queryByRole("button", { name: "RAW-3000" })).toBeNull());
+  });
+});
+
+describe("RawMaterialsPage: сортировка колонок", () => {
+  const lastSort = () => {
+    const calls = vi.mocked(fetchAllProducts).mock.calls;
+    return calls[calls.length - 1]?.[0]?.sort;
+  };
+
+  // У активной колонки в aria-label добавляется направление: «Сортировка по sku (desc)».
+  const clickSort = (field: string) =>
+    fireEvent.click(screen.getByRole("button", { name: new RegExp(`^Сортировка по ${field}`) }));
+
+  it("в запрос уходят оба выбранных приоритета в порядке выбора", async () => {
+    vi.mocked(fetchAllProducts).mockResolvedValue([product()]);
+    renderPage();
+    await screen.findByRole("button", { name: /^Сортировка по sku/ });
+
+    clickSort("sku");
+    await waitFor(() => expect(lastSort()).toBe("sku:desc"));
+
+    clickSort("is_laminated");
+    await waitFor(() => expect(lastSort()).toBe("sku:desc,is_laminated:desc"));
   });
 });

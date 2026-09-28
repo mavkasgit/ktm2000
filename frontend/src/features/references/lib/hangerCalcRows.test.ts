@@ -13,9 +13,14 @@ import {
   resolvePairs,
   resultsToCalcMap,
   resultsToPairedCalcMap,
-  type CalcMap,
-  type PairedPair,
   rowSearchValues,
+  rowSku,
+  sortHangerCalcRows,
+  type CalcMap,
+  type HangerCalcRow,
+  type PairedCalcMap,
+  type PairedHangerCalcRow,
+  type PairedPair,
 } from "./hangerCalcRows";
 
 const SETTINGS: HangerSettings = {
@@ -721,5 +726,198 @@ describe("formatPairedLengthLabel", () => {
 
     expect(label).toContain("2750");
     expect(label).toContain("3050");
+  });
+});
+
+// ─── Порядок объединённой таблицы (одиночные + парные строки) ─────────────────
+
+/** Одиночная строка с заданным итогом: считается авто-расчётом по основной длине. */
+function singleRow(id: number, sku: string, total: number, limiter: "area" | "size" = "area"): HangerCalcRow {
+  const product = makeProduct({
+    id,
+    sku,
+    perimeter_mm: 64.2,
+    mount_width_mm: 19.35,
+    lengths: [productLength(3000, null, true)],
+  });
+  const calcMap: CalcMap = new Map([
+    [id, new Map([["3000", makeResult({ total, limiter })]])],
+  ]);
+  const [row] = buildHangerCalcRows([product], calcMap, new Map());
+  return row;
+}
+
+/** Парная строка: сервер сортирует только одиночные, парные приходят отдельно. */
+function pairedRow(pairId: number, skuA: string, skuB: string, total: number): PairedHangerCalcRow {
+  const productA = makeProduct({
+    id: pairId * 10,
+    sku: skuA,
+    perimeter_mm: 64.2,
+    mount_width_mm: 19.35,
+    lengths: [productLength(3000, null, true)],
+  });
+  const productB = makeProduct({
+    id: pairId * 10 + 1,
+    sku: skuB,
+    perimeter_mm: 64.2,
+    mount_width_mm: 19.35,
+    lengths: [productLength(3000, null, true)],
+  });
+  const [row] = buildPairedHangerCalcRows(
+    [makePair({ pairId, productA, productB, lengths: [3000] })],
+    new Map([[pairId, new Map([["3000", makeResult({ total })]])]]),
+    new Map(),
+  );
+  return row;
+}
+
+const skus = (rows: readonly (HangerCalcRow | PairedHangerCalcRow)[]): string[] => rows.map(rowSku);
+
+describe("sortHangerCalcRows — «Итог» по объединённой таблице", () => {
+  it("парная строка встаёт в общий порядок, а не в хвост после одиночных", () => {
+    const allRows = [
+      singleRow(1, "ЮП-A", 30),
+      pairedRow(7, "ЮП-P", "ЮП-Q", 40),
+      singleRow(2, "ЮП-B", 20),
+    ];
+
+    expect(skus(sortHangerCalcRows(allRows, [{ field: "total", order: "asc" }]))).toEqual([
+      "ЮП-B",
+      "ЮП-A",
+      "ЮП-P + ЮП-Q",
+    ]);
+    expect(skus(sortHangerCalcRows(allRows, [{ field: "total", order: "desc" }]))).toEqual([
+      "ЮП-P + ЮП-Q",
+      "ЮП-A",
+      "ЮП-B",
+    ]);
+  });
+
+  it("строки без итога уходят в конец при любом направлении", () => {
+    const noCalc = makeProduct({
+      id: 3,
+      sku: "ЮП-NO",
+      lengths: [productLength(3000, null, true)],
+    });
+    const [withoutTotal] = buildHangerCalcRows([noCalc], new Map(), new Map());
+    const allRows = [withoutTotal, singleRow(1, "ЮП-A", 30), pairedRow(7, "ЮП-P", "ЮП-Q", 10)];
+
+    expect(skus(sortHangerCalcRows(allRows, [{ field: "total", order: "asc" }]))).toEqual([
+      "ЮП-P + ЮП-Q",
+      "ЮП-A",
+      "ЮП-NO",
+    ]);
+    expect(skus(sortHangerCalcRows(allRows, [{ field: "total", order: "desc" }]))).toEqual([
+      "ЮП-A",
+      "ЮП-P + ЮП-Q",
+      "ЮП-NO",
+    ]);
+  });
+});
+
+describe("sortHangerCalcRows — приоритет 1 по «Артикулу»", () => {
+  // Серверный порядок по sku: одиночные вернулись отсортированными, парные — нет.
+  const serverOrdered = () => [
+    singleRow(1, "ЮП-A", 30),
+    singleRow(2, "ЮП-B", 10),
+    singleRow(3, "ЮП-C", 20),
+    pairedRow(7, "ЮП-P", "ЮП-Q", 15),
+  ];
+
+  it("сортирует объединённую таблицу целиком, когда выбран только «Артикул»", () => {
+    // Одиночные пришли от сервера не по алфавиту, парные — отдельным запросом в хвосте.
+    const unordered = [
+      singleRow(1, "ЮП-B", 30),
+      singleRow(2, "ЮП-C", 20),
+      singleRow(3, "ЮП-A", 10),
+      pairedRow(7, "ЮП-P", "ЮП-Q", 15),
+    ];
+    expect(skus(sortHangerCalcRows(unordered, [{ field: "sku", order: "asc" }]))).toEqual([
+      "ЮП-A",
+      "ЮП-B",
+      "ЮП-C",
+      "ЮП-P + ЮП-Q",
+    ]);
+  });
+
+  it("остаётся старшим ключом, когда добавлен второй приоритет по «Итогу»", () => {
+    expect(
+      skus(
+        sortHangerCalcRows(serverOrdered(), [
+          { field: "sku", order: "asc" },
+          { field: "total", order: "desc" },
+        ]),
+      ),
+    ).toEqual(["ЮП-A", "ЮП-B", "ЮП-C", "ЮП-P + ЮП-Q"]);
+  });
+
+  it("«Итог» вторым приоритетом переставляет строки внутри одного артикула", () => {
+    const rows = [
+      singleRow(1, "ЮП-A", 10),
+      singleRow(2, "ЮП-A", 30),
+      singleRow(3, "ЮП-B", 20),
+    ];
+
+    expect(
+      skus(
+        sortHangerCalcRows(rows, [
+          { field: "sku", order: "asc" },
+          { field: "total", order: "desc" },
+        ]),
+      ),
+    ).toEqual(["ЮП-A", "ЮП-A", "ЮП-B"]);
+    const sorted = sortHangerCalcRows(rows, [
+      { field: "sku", order: "asc" },
+      { field: "total", order: "desc" },
+    ]);
+    expect(sorted[0]?.total).toBe(30);
+    expect(sorted[1]?.total).toBe(10);
+  });
+
+  it("по убыванию артикулы разворачиваются, парная строка следует за своим местом", () => {
+    expect(skus(sortHangerCalcRows(serverOrdered(), [{ field: "sku", order: "desc" }]))).toEqual([
+      "ЮП-P + ЮП-Q",
+      "ЮП-C",
+      "ЮП-B",
+      "ЮП-A",
+    ]);
+  });
+});
+
+describe("sortHangerCalcRows — «Артикул» не на первом месте", () => {
+  it("сортируется на клиенте как обычный ключ своей очереди", () => {
+    const rows = [singleRow(1, "ЮП-C", 10), singleRow(2, "ЮП-A", 10), singleRow(3, "ЮП-B", 20)];
+
+    // Сервер приоритет 1 по sku не применил бы — цепочка целиком клиентская.
+    expect(
+      skus(
+        sortHangerCalcRows(rows, [
+          { field: "total", order: "asc" },
+          { field: "sku", order: "asc" },
+        ]),
+      ),
+    ).toEqual(["ЮП-A", "ЮП-C", "ЮП-B"]);
+  });
+});
+
+describe("sortHangerCalcRows — «Лимитер» и пустая сортировка", () => {
+  it("лимитер сортируется по подписи в обоих направлениях", () => {
+    const rows = [
+      singleRow(1, "ЮП-A", 10, "size"),
+      singleRow(2, "ЮП-B", 10, "area"),
+      pairedRow(7, "ЮП-P", "ЮП-Q", 10),
+    ];
+
+    // Подписи: площадь < размер; у парной лимитер от авто-расчёта — площадь.
+    expect(skus(sortHangerCalcRows(rows, [{ field: "limiter", order: "asc" }]))).toEqual([
+      "ЮП-B",
+      "ЮП-P + ЮП-Q",
+      "ЮП-A",
+    ]);
+  });
+
+  it("без сортировки порядок строк не меняется", () => {
+    const rows = [singleRow(1, "ЮП-B", 10), pairedRow(7, "ЮП-P", "ЮП-Q", 99), singleRow(2, "ЮП-A", 10)];
+    expect(skus(sortHangerCalcRows(rows, []))).toEqual(["ЮП-B", "ЮП-P + ЮП-Q", "ЮП-A"]);
   });
 });

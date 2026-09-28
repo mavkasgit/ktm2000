@@ -45,16 +45,18 @@ function qtyCellText(pos: PlanPositionOut): string {
 }
 
 describe("PositionRow — ячейка «Кол-во»", () => {
-  it("сырьё → итог, подвесы считаются от итога", () => {
+  it("подвесы считаются от сырья, а не от итога", () => {
     const text = qtyCellText(
       position({
         quantity: "144",
         input_quantity: "100",
-        quantity_per_hanger: 72,
+        quantity_per_hanger: 30,
         payload: { original_quantity: "100" },
       }),
     )
-    expect(text).toBe("100-144 (2П)")
+    // От сырья: ceil(100/30) = 4. От итога было бы ceil(144/30) = 5 — то есть
+    // тест различает базу, а не подтверждает одно и то же число дважды.
+    expect(text).toBe("100 (4П)-144")
     expect(text).not.toContain("ГП")
   })
 
@@ -66,7 +68,7 @@ describe("PositionRow — ячейка «Кол-во»", () => {
         payload: { original_quantity: "100" },
       }),
     )
-    expect(text).toBe("100-144 (2П)")
+    expect(text).toBe("100 (2П)-144")
   })
 
   it("без изменений количества показывает одно число с подвесами", () => {
@@ -123,5 +125,27 @@ describe("PositionRow — ячейка «Размер»", () => {
     const cell = sizeCell(position({ quantity: "144", dimensions_label: "2,75 м" }))
 
     expect(cell.textContent).toBe("2,75 м")
+  })
+})
+
+describe("PositionRow — состояние валидации", () => {
+  it("перекрытая форс-аппрувом валидация видна подписью канона, а не сырым кодом", () => {
+    const client = new QueryClient({ defaultOptions: { queries: { retry: false } } })
+    const { container } = render(
+      <QueryClientProvider client={client}>
+        <PositionRow
+          pos={position({
+            status: "approved",
+            validation_status: "overridden",
+            errors: ["route_contains_excluded_step: DRILLING"],
+          })}
+          onApprove={vi.fn()}
+          onDelete={vi.fn()}
+        />
+      </QueryClientProvider>,
+    )
+
+    expect(container.textContent).toContain("Перекрыта")
+    expect(container.textContent).not.toContain("overridden")
   })
 })

@@ -2,7 +2,6 @@ import { useMemo, useState, useCallback, useRef, useEffect } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import {
   getProductionPlanningRowDetail,
-  listPlans,
   listProductionPlanningRows,
   manualPassToStage,
   takeToWork,
@@ -21,13 +20,13 @@ import { RemainderAllocationDialog } from "../components/RemainderAllocationDial
 import { listSections } from "@/shared/api/sections";
 import { useFilterableTable } from "@/shared/hooks/useFilterableTable";
 import { usePaginatedTableQuery } from "@/shared/hooks/usePaginatedTableQuery";
-import { pickColumnApiValue, pickExactMatchColumnValue } from "@/shared/lib/columnFilterSearch";
 import { formatDimensionsFilterValue } from "@/shared/api/stock";
 
 
 import { toast } from "@/shared/ui/use-toast";
 import { buildActiveFilterSummary } from "@/shared/ui/buildActiveFilterSummary";
 import { getErrorMessage } from "@/shared/api/client";
+import { invalidateAfter } from "@/shared/api/cacheInvalidation";
 import { queryKeys } from "@/shared/api/queryKeys";
 import {
   BulkResultsDialog,
@@ -52,33 +51,19 @@ import {
   getSoftDeleteBlockReason,
   getManualPassBlockReason,
 } from "../components/execution-utils";
-import { fmtQty } from "@/shared/utils/fmtQty";
+import { fmtQty } from "@/shared/lib/quantityFormat";
+import { buildExecutionSortParam } from "../lib/executionSortMapping";
+import { useDebouncedValue } from "@/shared/lib/useDebouncedValue";
+import { buildColumnApiParams } from "@/shared/lib/columnSpecs";
+import { executionTableColumns } from "../components/execution-table-columns";
 
-function extractPlanId(value: string): string | undefined {
-  const trimmed = value.trim();
-  if (!trimmed) return undefined;
-  return trimmed.split(/\s+/)[0];
-}
-
-function mapExecutionSortFieldToApi(field: ExecutionSortField): string | undefined {
-  switch (field) {
-    case "row":
-      return "row_number";
-    case "sku":
-      return "product_sku";
-    case "status":
-      return "status";
-    case "qty":
-      return "planned_qty";
-    case "stage":
-      return "sequence";
-    case "dimensions":
-      return "dimensions";
-    default:
-      return undefined;
-  }
-}
-
+/**
+ * Параметры запроса по отфильтрованным колонкам — из описания колонок, а не
+ * перечислением: пока здесь стояло десять вызовов `pickColumnApiValue` по
+ * имени колонки, одиннадцатая потребовала бы правки этого кода. Имя параметра
+ * запроса и правило «это значение серверу не показывать» объявлены у колонки
+ * там, где она описана.
+ */
 function buildExecutionColumnApiParams(
   columnFilters: Partial<Record<ExecutionSortField, Set<string>>>,
   columnSearchQueries: Partial<Record<ExecutionSortField, string>>,
@@ -86,8 +71,7 @@ function buildExecutionColumnApiParams(
   ListProductionPlanningRowsParams,
   | "plan_position_id"
   | "source_row_number"
-  | "production_plan_id"
-  | "source_sku"
+  | "product_sku"
   | "source_name"
   | "quantity"
   | "route_name"
@@ -95,68 +79,27 @@ function buildExecutionColumnApiParams(
   | "current_stage_section_name"
   | "dimensions"
 > {
-  const params: Pick<
-    ListProductionPlanningRowsParams,
-    | "plan_position_id"
-    | "source_row_number"
-    | "production_plan_id"
-    | "source_sku"
-    | "source_name"
-    | "quantity"
-    | "route_name"
-    | "status"
-    | "current_stage_section_name"
-    | "dimensions"
-  > = {};
-
-  const planPositionId = pickColumnApiValue(columnFilters, columnSearchQueries, "id");
-  if (planPositionId) params.plan_position_id = planPositionId;
-
-  const sourceRowNumber = pickColumnApiValue(columnFilters, columnSearchQueries, "row");
-  if (sourceRowNumber) params.source_row_number = sourceRowNumber;
-
-  const productionPlanId = pickColumnApiValue(
-    columnFilters,
-    columnSearchQueries,
-    "plan",
-    extractPlanId,
-  );
-  if (productionPlanId) params.production_plan_id = productionPlanId;
-
-  const sourceSku = pickColumnApiValue(columnFilters, columnSearchQueries, "sku");
-  if (sourceSku) params.source_sku = sourceSku;
-
-  const sourceName = pickColumnApiValue(columnFilters, columnSearchQueries, "name");
-  if (sourceName) params.source_name = sourceName;
-
-  const quantity = pickColumnApiValue(columnFilters, columnSearchQueries, "qty");
-  if (quantity) params.quantity = quantity;
-
-  const routeName = pickColumnApiValue(columnFilters, columnSearchQueries, "route", (v) =>
-    v === "Не назначен" ? undefined : v,
-  );
-  if (routeName) params.route_name = routeName;
-
-  const status = pickColumnApiValue(columnFilters, columnSearchQueries, "status");
-  if (status) params.status = status;
-
-  const stageName = pickColumnApiValue(columnFilters, columnSearchQueries, "stage", (v) =>
-    v === "—" ? undefined : v,
-  );
-  if (stageName) params.current_stage_section_name = stageName;
-
-  const dimensions = pickExactMatchColumnValue(columnFilters, "dimensions");
-  if (dimensions) params.dimensions = dimensions;
-
-  return params;
+  return buildColumnApiParams(columnFilters, columnSearchQueries, executionTableColumns);
 }
+
+/**
+ * Подписи колонок для счётчика активных фильтров — из описания колонки, как
+ * на доске задач. Ручной словарь расходился с таблицей: колонки «Размер» в
+ * нём не было, и оператор читал «Колонка: dimensions».
+ */
+const EXECUTION_COLUMN_LABELS: Record<string, string> = Object.fromEntries(
+  executionTableColumns.flatMap((column) =>
+    column.filterField ? [[column.filterField, column.label] as const] : [],
+  ),
+);
+
 
 export function ExecutionPage() {
   const [selectedPositionId, setSelectedPositionId] = useState<number | null>(null);
   const [wipStatsSku, setWipStatsSku] = useState<string | null>(null);
   const [drawerOpen, setDrawerOpen] = useState(false);
   const [searchQuery, setSearchQuery] = useState("");
-  const [debouncedSearchQuery, setDebouncedSearchQuery] = useState("");
+  const debouncedSearchQuery = useDebouncedValue(searchQuery);
   const {
     bindColumn,
     columnFilters,
@@ -188,29 +131,28 @@ export function ExecutionPage() {
     ],
   });
 
-  useEffect(() => {
-    const timer = window.setTimeout(() => setDebouncedSearchQuery(searchQuery), 300);
-    return () => window.clearTimeout(timer);
-  }, [searchQuery]);
 
   const columnApiParams = useMemo(
     () => buildExecutionColumnApiParams(columnFilters, columnSearchQueries),
     [columnFilters, columnSearchQueries],
   );
 
-  const activeSort = sortConfigs[0];
-  const sortByApi = activeSort ? mapExecutionSortFieldToApi(activeSort.field) : undefined;
+  // Вся выбранная сортировка уезжает одной строкой `sort` по приоритетам.
+  // Несортируемые сервером колонки в неё не попадают.
+  const sortParams = useMemo(
+    () => ({ sort: buildExecutionSortParam(sortConfigs) }),
+    [sortConfigs],
+  );
 
   const rowsQueryParams = useMemo(
     () => ({
       search: debouncedSearchQuery.trim() || undefined,
-      sort_by: sortByApi,
-      sort_order: sortByApi ? activeSort?.order : undefined,
+      ...sortParams,
       limit,
       offset,
       ...columnApiParams,
     }),
-    [debouncedSearchQuery, sortByApi, activeSort?.order, limit, offset, columnApiParams],
+    [debouncedSearchQuery, sortParams, limit, offset, columnApiParams],
   );
 
   const { data: rowsData, isLoading, error } = useQuery({
@@ -221,10 +163,6 @@ export function ExecutionPage() {
   const rows = rowsData?.rows ?? [];
   const total = rowsData?.total ?? 0;
   const totalPages = getTotalPages(total);
-  const { data: plans } = useQuery({
-    queryKey: queryKeys.execution.plans(),
-    queryFn: listPlans,
-  });
   const { data: sections } = useQuery({
     queryKey: queryKeys.sections.all(),
     queryFn: listSections,
@@ -236,11 +174,6 @@ export function ExecutionPage() {
     enabled: drawerOpen && selectedPositionId !== null,
   });
 
-  const planNameById = useMemo(() => {
-    const map = new Map<number, string>();
-    (plans || []).forEach((p) => map.set(p.id, p.plan_no));
-    return map;
-  }, [plans]);
   const sectionMetaById = useMemo(() => {
     const map = new Map<number, { icon: string | null; icon_color: string | null }>();
     (sections || []).forEach((s) => map.set(s.id, { icon: s.icon, icon_color: s.icon_color }));
@@ -248,23 +181,6 @@ export function ExecutionPage() {
   }, [sections]);
 
   const queryClient = useQueryClient();
-
-  const invalidateAll = useCallback(() => {
-    queryClient.invalidateQueries({ queryKey: queryKeys.execution.rows() });
-    queryClient.invalidateQueries({ queryKey: queryKeys.execution.rowDetailAll() });
-    queryClient.invalidateQueries({ queryKey: queryKeys.execution.plans() });
-    queryClient.invalidateQueries({ queryKey: queryKeys.shopfloor.boardAll() });
-    queryClient.invalidateQueries({ queryKey: queryKeys.shopfloor.statsAll() });
-    queryClient.invalidateQueries({ queryKey: queryKeys.shopfloor.summary() });
-    queryClient.invalidateQueries({ queryKey: queryKeys.shopfloor.incomingTransfersAll() });
-    queryClient.invalidateQueries({ queryKey: queryKeys.transfers.readyAll() });
-    queryClient.invalidateQueries({ queryKey: queryKeys.transfers.historyAll() });
-    queryClient.invalidateQueries({ queryKey: queryKeys.spg.snapshotAll() });
-    queryClient.invalidateQueries({ queryKey: queryKeys.spg.defectsAll() });
-    queryClient.invalidateQueries({ queryKey: queryKeys.plan.allPositions() });
-    queryClient.invalidateQueries({ queryKey: queryKeys.plan.previewAll() });
-    queryClient.invalidateQueries({ queryKey: queryKeys.sections.all() });
-  }, [queryClient]);
 
   const bulkSelection = useBulkSelection<number>();
   const [selectedBulkActionId, setSelectedBulkActionId] = useState("take-to-work");
@@ -345,7 +261,7 @@ export function ExecutionPage() {
       } else {
         toast({ title: "Запуск завершён", description: `${successCount} запущено, ${alreadyCount} уже было запущено`, variant: "success" });
       }
-      invalidateAll();
+      void invalidateAfter(queryClient, "executionChanged");
       bulkSelection.clear();
       setSelectionOrder([]);
       setRemainderDialog((prev) => ({ ...prev, open: false }));
@@ -380,7 +296,7 @@ export function ExecutionPage() {
         description: `Пропущено этапов: ${data.skipped_stages}. Создано фактов: ${data.movements_created}.`,
         variant: data.complete_route && !data.position_completed ? "destructive" : "success",
       });
-      invalidateAll();
+      void invalidateAfter(queryClient, "executionChanged");
       setManualPassDialog({ open: false, positionId: null, targetRouteStepId: "", comment: "" });
     },
     onError: (err) => toast({ title: "Ошибка сквозного прохода", description: getErrorMessage(err), variant: "destructive" }),
@@ -396,7 +312,7 @@ export function ExecutionPage() {
     mutationFn: cancelPositionExecution,
     onSuccess: () => {
       toast({ title: "Позиция отменена", variant: "success" });
-      invalidateAll();
+      void invalidateAfter(queryClient, "executionChanged");
     },
     onError: (err) => toast({ title: "Ошибка отмены", description: getErrorMessage(err), variant: "destructive" }),
   });
@@ -411,7 +327,7 @@ export function ExecutionPage() {
     mutationFn: ({ positionId, reason }: { positionId: number; reason?: string }) => restorePositionExecution(positionId, reason),
     onSuccess: () => {
       toast({ title: "Позиция восстановлена", variant: "success" });
-      invalidateAll();
+      void invalidateAfter(queryClient, "executionChanged");
     },
     onError: (err) => toast({ title: "Ошибка восстановления", description: getErrorMessage(err), variant: "destructive" }),
   });
@@ -427,7 +343,7 @@ export function ExecutionPage() {
       softDeleteCancelledPosition(planId, positionId, reason),
     onSuccess: () => {
       toast({ title: "Позиция удалена из списка", variant: "success" });
-      invalidateAll();
+      void invalidateAfter(queryClient, "executionChanged");
     },
     onError: (err) => toast({ title: "Ошибка удаления", description: getErrorMessage(err), variant: "destructive" }),
   });
@@ -549,7 +465,7 @@ export function ExecutionPage() {
     setBulkSummary(summary);
     if (summary.failed > 0) setBulkResultsOpen(true);
     setBulkProgress(null);
-    invalidateAll();
+    void invalidateAfter(queryClient, "executionChanged");
     toast({
       title: summary.failed > 0 ? "Частичный успех" : "Массовый сквозной проход",
       description: summary.failed > 0
@@ -670,7 +586,7 @@ export function ExecutionPage() {
     if (summary.failed > 0) setBulkResultsOpen(true);
     setBulkSoftDeleting(false);
     setBulkProgress(null);
-    invalidateAll();
+    void invalidateAfter(queryClient, "executionChanged");
     toast({
       title: summary.failed > 0 ? "Частичный успех" : "Массовое удаление",
       description: summary.failed > 0
@@ -680,7 +596,7 @@ export function ExecutionPage() {
     });
     bulkSelection.clear();
     setSelectionOrder([]);
-  }, [bulkSelection, rows]);
+  }, [bulkSelection, queryClient, rows]);
 
   const confirmCancel = useCallback(() => {
     if (cancelDialog.positionId) {
@@ -692,27 +608,16 @@ export function ExecutionPage() {
   // Filter states
   const executionActiveFilterSummary = useMemo(
     () =>
-      buildActiveFilterSummary({}, searchQuery, sortConfigs.length, {
+      buildActiveFilterSummary(searchQuery, sortConfigs.length, {
         columnFilters,
         columnSearchQueries,
-        columnLabels: {
-          id: "ID",
-          row: "Строка",
-          plan: "План",
-          sku: "SKU",
-          name: "Наименование",
-          qty: "Кол-во",
-          route: "Маршрут",
-          status: "Статус",
-          stage: "Этап",
-        },
+        columnLabels: EXECUTION_COLUMN_LABELS,
       }),
     [columnFilters, columnSearchQueries, searchQuery, sortConfigs.length],
   );
 
   const resetExecutionFilters = useCallback(() => {
     setSearchQuery("");
-    setDebouncedSearchQuery("");
     resetColumnFilters();
     resetPage();
   }, [resetColumnFilters, resetPage]);
@@ -752,7 +657,6 @@ export function ExecutionPage() {
     return {
       id: [...new Set(rows.map((r) => String(r.plan_position_id)))],
       row: [...new Set(rows.map((r) => String(r.source_row_number ?? "")))],
-      plan: [...new Set(rows.map((r) => `${r.production_plan_id} ${planNameById.get(r.production_plan_id) || ""}`))],
       sku: [...new Set(rows.map((r) => r.source_sku))],
       name: [...new Set(rows.map((r) => r.source_name || "").filter(Boolean))],
       qty: [...new Set(rows.map((r) => fmtQty(r.quantity)))],
@@ -763,7 +667,7 @@ export function ExecutionPage() {
         (a, b) => formatDimensionsFilterValue(a).localeCompare(formatDimensionsFilterValue(b), "ru"),
       ),
     };
-  }, [rows, planNameById]);
+  }, [rows]);
 
   const handleSelectAll = useCallback(() => {
     const pageIds = rows.map((r) => r.plan_position_id);
@@ -907,7 +811,7 @@ export function ExecutionPage() {
     setBulkResults(results);
     setBulkSummary(summary);
     if (summary.failed > 0 || summary.skipped > 0) setBulkResultsOpen(true);
-    invalidateAll();
+    void invalidateAfter(queryClient, "executionChanged");
     toast({
       title: summary.failed > 0 ? "Частичный успех" : "Массовое действие выполнено",
       description: `${summary.success} успешно, ${summary.skipped} пропущено, ${summary.failed} ошибок`,
@@ -916,7 +820,7 @@ export function ExecutionPage() {
     bulkSelection.clear();
     setSelectionOrder([]);
     setBulkProgress(null);
-  }, [bulkSelection, executionBulkActions, queryClient, rowById, invalidateAll]);
+  }, [bulkSelection, executionBulkActions, queryClient, rowById]);
 
   const runSelectedBulkAction = useCallback(async (actionId?: string) => {
     if (bulkSelection.selectedCount === 0) {
@@ -941,7 +845,7 @@ export function ExecutionPage() {
     setBulkResults(results);
     setBulkSummary(summary);
     if (summary.failed > 0 || summary.skipped > 0) setBulkResultsOpen(true);
-    invalidateAll();
+    void invalidateAfter(queryClient, "executionChanged");
     toast({
       title: summary.failed > 0 ? "Частичный успех" : "Массовое действие выполнено",
       description: `${summary.success} успешно, ${summary.skipped} пропущено, ${summary.failed} ошибок`,
@@ -950,7 +854,7 @@ export function ExecutionPage() {
     bulkSelection.clear();
     setSelectionOrder([]);
     setBulkProgress(null);
-  }, [bulkSelection, executionBulkActions, queryClient, rowById, selectedBulkActionId, invalidateAll]);
+  }, [bulkSelection, executionBulkActions, queryClient, rowById, selectedBulkActionId]);
 
   const tableScrollRef = useRef<HTMLDivElement>(null);
 

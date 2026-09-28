@@ -10,11 +10,11 @@ import { ApplyImportConfirmDialog } from "./components/ApplyImportConfirmDialog"
 import { buildActiveFilterSummary } from "shared/ui/buildActiveFilterSummary"
 import { isDuplicateRow, type DuplicateRowSignal } from "./lib/duplicateRows"
 import { buildImportRowStats } from "./lib/importRowStats"
-import { invalidatePlanImportCaches } from "./lib/planImportCaches"
 import { useQuery, useQueryClient } from "@tanstack/react-query"
 import { listAllImportTemplates, type ImportTemplate } from "@/shared/api/importTemplates"
 import { getErrorMessage } from "@/shared/api/client"
 import { queryKeys } from "@/shared/api/queryKeys"
+import { invalidateAfter } from "@/shared/api/cacheInvalidation"
 import {
   Dialog,
   DialogContent,
@@ -23,7 +23,12 @@ import {
   DialogTitle,
 } from "shared/ui"
 
-type SortConfig = { key: string; dir: "asc" | "desc" } | null
+import {
+  nextImportPreviewSortConfig,
+  sortImportPreviewRows,
+  type ImportPreviewSortConfig,
+  type ImportPreviewSortKey,
+} from "./lib/importPreviewSort"
 
 
 type SheetPreviewCache = Record<string, SheetPreviewResponse>
@@ -48,7 +53,7 @@ export function ImportWizard(props: {
   const [selectedSheet, setSelectedSheet] = useState(0)
   const [sheetPreviews, setSheetPreviews] = useState<SheetPreviewCache>({})
   const [previewLoading, setPreviewLoading] = useState<Record<string, boolean>>({})
-  const [sortConfig, setSortConfig] = useState<SortConfig>(null)
+  const [sortConfig, setSortConfig] = useState<ImportPreviewSortConfig | null>(null)
   const [filterErrors, setFilterErrors] = useState(false)
   const [filterWarnings, setFilterWarnings] = useState(false)
   const [filterDuplicates, setFilterDuplicates] = useState(false)
@@ -200,23 +205,7 @@ export function ImportWizard(props: {
         return rowNum.includes(q) || planPosId.includes(q) || sku.toLowerCase().includes(q) || name.toLowerCase().includes(q)
       })
     }
-    if (!sortConfig) return rows
-    return [...rows].sort((a, b) => {
-      let aVal: string
-      let bVal: string
-      if (sortConfig.key === "change_action" || sortConfig.key === "status") {
-        aVal = String(a[sortConfig.key] ?? "")
-        bVal = String(b[sortConfig.key] ?? "")
-      } else {
-        const aAfter = (a.after_data as Record<string, unknown>) || {}
-        const bAfter = (b.after_data as Record<string, unknown>) || {}
-        aVal = String(aAfter[sortConfig.key] ?? a[sortConfig.key] ?? "")
-        bVal = String(bAfter[sortConfig.key] ?? b[sortConfig.key] ?? "")
-      }
-      if (aVal < bVal) return sortConfig.dir === "asc" ? -1 : 1
-      if (aVal > bVal) return sortConfig.dir === "asc" ? 1 : -1
-      return 0
-    })
+    return sortImportPreviewRows(rows, sortConfig)
   }, [allRows, filterErrors, filterWarnings, filterDuplicates, sortConfig, rowSelection, searchQuery])
 
   const summary = useMemo(() => {
@@ -234,15 +223,13 @@ export function ImportWizard(props: {
 
   const previewActiveFilterSummary = useMemo(
     () =>
-      buildActiveFilterSummary(
-        {
+      buildActiveFilterSummary(searchQuery, sortConfig ? 1 : 0, {
+        panelFilters: {
           has_errors: filterErrors,
           has_warnings: filterWarnings,
           has_duplicates: filterDuplicates,
         },
-        searchQuery,
-        sortConfig ? 1 : 0,
-      ),
+      }),
     [filterErrors, filterWarnings, filterDuplicates, searchQuery, sortConfig],
   )
   const resetPreviewFilters = useCallback(() => {
@@ -425,9 +412,10 @@ export function ImportWizard(props: {
       setPendingChangeSet(null)
       setUploadSummary(null)
       setStep("result")
-      // Инвалидируем все домены, которые зависят от плана
-      invalidatePlanImportCaches(queryClient, { planId: changeSet.planId, batchId: changeSet.batchId })
-      void queryClient.invalidateQueries({ queryKey: queryKeys.importTemplates.all() })
+      // Импорт может создать или обновить шаблон, поэтому шаблоны — тоже
+      // затронутый домен, а не «случайно сбросим лишнее».
+      invalidateAfter(queryClient, "importApplied")
+      void invalidateAfter(queryClient, "importTemplatesChanged")
       props.onSuccess(changeSet.planId, changeSet.changeSetId)
     } catch (e) {
       // If apply failed right after creating a change set, cleanup immediately.
@@ -487,20 +475,17 @@ export function ImportWizard(props: {
     }
   }
 
-  function toggleSort(key: string) {
-    setSortConfig((prev) => {
-      if (!prev || prev.key !== key) return { key, dir: "asc" }
-      if (prev.dir === "asc") return { key, dir: "desc" }
-      return null
-    })
+  function toggleSort(key: ImportPreviewSortKey) {
+    setSortConfig((prev) => nextImportPreviewSortConfig(prev, key))
   }
 
   function reset() {
-    // Discard any pending change set on reset
+    // Откат неприменённого change set. Превью конкретного плана отдельной
+    // инвалидацией не сбрасывается: корень `plan-preview` уже входит в домен
+    // `plan`, и `importDiscarded` покрывает его вместе с остальным импортом.
     if (pendingChangeSet) {
       discardImport(pendingChangeSet.planId, pendingChangeSet.changeSetId).catch(() => {})
-      void queryClient.invalidateQueries({ queryKey: queryKeys.plan.allPositions() });
-      void queryClient.invalidateQueries({ queryKey: queryKeys.plan.preview(pendingChangeSet.planId) });
+      void invalidateAfter(queryClient, "importDiscarded")
     }
     setStep("upload")
     setFile(null)

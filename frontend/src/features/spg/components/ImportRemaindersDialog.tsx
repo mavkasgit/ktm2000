@@ -18,7 +18,7 @@ import {
   SelectItem,
   SectionSelect,
   SectionLocationBadge,
-  SortableFilterHeader,
+  DataTableColumnHeader,
   TableCornerResetCell,
   TableCornerResetHeader,
   TablePaginationFooter,
@@ -28,7 +28,8 @@ import {
 } from "@/shared/ui";
 import { useFilterableTable } from "@/shared/hooks/useFilterableTable";
 import { usePaginatedTableQuery } from "@/shared/hooks/usePaginatedTableQuery";
-import { pickColumnApiValue } from "@/shared/lib/columnFilterSearch";
+import { buildColumnApiParams } from "@/shared/lib/columnSpecs";
+import { remainderPreviewColumns, remainderPreviewColumnFields } from "../lib/remainderPreviewColumns";
 
 import {
   useImportRowExpansion,
@@ -44,6 +45,7 @@ import {
   downloadRemaindersImportTemplate,
   getRemainderImportOperations,
   formatQualityStateLabel,
+  formatDimensionsLabel,
   IMPORT_QUALITY_OPTIONS,
   normalizeImportQualityState,
   type QualityState,
@@ -54,10 +56,16 @@ import {
 import { getErrorMessage } from "@/shared/api/client";
 import { translateImportError } from "@/shared/api/errorMessages";
 import { getExcelSheetNames } from "@/shared/api/imports";
+import { invalidateAfter } from "@/shared/api/cacheInvalidation";
 import { queryKeys } from "@/shared/api/queryKeys";
 import { RouteStepsDisplay } from "@/shared/ui/RouteStepsDisplay";
 import { listSections } from "@/shared/api/sections";
 import type { RemainderImportItem, RemainderSectionMeta } from "@/shared/api/stock";
+import { useDebouncedValue } from "@/shared/lib/useDebouncedValue";
+import {
+  buildRemainderPreviewSortParam,
+  type RemainderPreviewSortField,
+} from "@/shared/lib/stockSortParams";
 
 function hasSectionInFile(item: Pick<RemainderImportItem, "target_section_name">): boolean {
   const name = item.target_section_name?.trim();
@@ -89,18 +97,7 @@ function buildRemainderPreviewColumnApiParams(
   columnFilters: Partial<Record<RemainderPreviewSortField, Set<string>>>,
   columnSearchQueries: Partial<Record<RemainderPreviewSortField, string>>,
 ) {
-  return {
-    row: pickColumnApiValue(columnFilters, columnSearchQueries, "row"),
-    sku: pickColumnApiValue(columnFilters, columnSearchQueries, "sku"),
-    quantity: pickColumnApiValue(columnFilters, columnSearchQueries, "quantity"),
-    length: pickColumnApiValue(columnFilters, columnSearchQueries, "length"),
-    operations: pickColumnApiValue(columnFilters, columnSearchQueries, "operations"),
-    quality: pickColumnApiValue(columnFilters, columnSearchQueries, "quality"),
-    section: pickColumnApiValue(columnFilters, columnSearchQueries, "section"),
-    errors: pickColumnApiValue(columnFilters, columnSearchQueries, "errors", (value) =>
-      value === "—" || value === "Ошибка" ? undefined : value,
-    ),
-  };
+  return buildColumnApiParams(columnFilters, columnSearchQueries, remainderPreviewColumns);
 }
 
 function getEffectiveQualityState(
@@ -112,16 +109,6 @@ function getEffectiveQualityState(
   }
   return normalizeImportQualityState(item.quality_state);
 }
-
-type RemainderPreviewSortField =
-  | "row"
-  | "sku"
-  | "quantity"
-  | "length"
-  | "operations"
-  | "quality"
-  | "section"
-  | "errors";
 
 function getImportItemOperationsLabel(item: RemainderImportItem): string {
   if (item.completed_stages?.length > 0) {
@@ -178,7 +165,7 @@ function getImportItemCellValue(
     case "quantity":
       return item.quantity != null ? String(item.quantity) : "—";
     case "length":
-      return item.dimensions_label || "—";
+      return formatDimensionsLabel(item.dimensions, item.dimensions_label);
     case "operations":
       return getImportItemOperationsLabel(item);
     case "quality":
@@ -278,7 +265,7 @@ export function ImportRemaindersDialog({
   const [rowSelection, setRowSelection] = useState("");
   const [clearExisting, setClearExisting] = useState(false);
   const [searchQuery, setSearchQuery] = useState("");
-  const [debouncedSearch, setDebouncedSearch] = useState("");
+  const debouncedSearch = useDebouncedValue(searchQuery);
   const [filterStatus, setFilterStatus] = useState<"all" | "invalid">("all");
   const [targetSectionOverrides, setTargetSectionOverrides] = useState<Record<number, number>>({});
   const [qualityStateOverrides, setQualityStateOverrides] = useState<Record<number, QualityState>>({});
@@ -287,6 +274,7 @@ export function ImportRemaindersDialog({
     columnFilters,
     columnSearchQueries,
     sortConfigs,
+    handleSort: applySort,
     setSortConfigs,
     hasActiveFilters: hasPreviewFilters,
     resetAll: resetPreviewFilters,
@@ -296,7 +284,6 @@ export function ImportRemaindersDialog({
     onExtraReset: () => {
       setFilterStatus("all");
       setSearchQuery("");
-      setDebouncedSearch("");
     },
   });
 
@@ -305,7 +292,7 @@ export function ImportRemaindersDialog({
     [columnFilters, columnSearchQueries],
   );
 
-  const activeSort = sortConfigs[0];
+  const sort = buildRemainderPreviewSortParam(sortConfigs);
 
   const {
     page,
@@ -333,16 +320,10 @@ export function ImportRemaindersDialog({
 
   const handleSortChange = useCallback(
     (field: RemainderPreviewSortField) => {
-      setSortConfigs((prev) => {
-        const existing = prev.find((sort) => sort.field === field);
-        if (!existing) {
-          return [{ field, order: "asc" }];
-        }
-        return [{ field, order: existing.order === "asc" ? "desc" : "asc" }];
-      });
+      applySort(field);
       resetPage();
     },
-    [resetPage, setSortConfigs],
+    [applySort, resetPage],
   );
 
   const [previewData, setPreviewData] = useState<RemainderPreviewResponse | null>(null);
@@ -380,7 +361,6 @@ export function ImportRemaindersDialog({
       setClearExisting(false);
       resetExpansion();
       setSearchQuery("");
-      setDebouncedSearch("");
       setFilterStatus("all");
       resetPage();
       setTargetSectionOverrides({});
@@ -393,10 +373,7 @@ export function ImportRemaindersDialog({
     }
   }, [open, resetExpansion, resetColumnFilters, resetPage]);
 
-  useEffect(() => {
-    const timer = window.setTimeout(() => setDebouncedSearch(searchQuery), 300);
-    return () => window.clearTimeout(timer);
-  }, [searchQuery]);
+
 
   const getImportSource = (): RemainderImportSource | null => {
     if (importMode === "file" && file) {
@@ -415,8 +392,7 @@ export function ImportRemaindersDialog({
       row_selection: rowSelection || undefined,
       search: debouncedSearch.trim() || undefined,
       filter_status: filterStatus,
-      sort_by: activeSort?.field ?? "row",
-      sort_order: activeSort?.order ?? "asc",
+      sort,
       limit,
       offset,
       ...columnApiParams,
@@ -427,7 +403,7 @@ export function ImportRemaindersDialog({
       rowSelection,
       debouncedSearch,
       filterStatus,
-      activeSort,
+      sort,
       limit,
       offset,
       columnApiParams,
@@ -491,7 +467,6 @@ export function ImportRemaindersDialog({
     setError(null);
     setFilterStatus("all");
     setSearchQuery("");
-    setDebouncedSearch("");
     resetPage();
     setStep("preview");
   }, [resetPage]);
@@ -549,8 +524,7 @@ export function ImportRemaindersDialog({
           imported_count: response.imported_count,
           errors: response.errors,
         });
-        void queryClient.invalidateQueries({ queryKey: queryKeys.stock.balancesAll() });
-        void queryClient.invalidateQueries({ queryKey: queryKeys.stock.transactions() });
+        void invalidateAfter(queryClient, "stockChanged");
         onSaved();
         setStep("result");
       } else {
@@ -627,16 +601,10 @@ export function ImportRemaindersDialog({
   const previewTotalPages = getTotalPages(previewItemsTotal);
 
   const uniqueValues = useMemo(() => {
-    const fields: RemainderPreviewSortField[] = [
-      "row",
-      "sku",
-      "quantity",
-      "length",
-      "operations",
-      "quality",
-      "section",
-      "errors",
-    ];
+    // Список колонок — из описания, а не перечислением: пока он стоял
+    // отдельно от шапки и от сборки параметров, девятая колонка появлялась
+    // в одном месте из трёх.
+    const fields = remainderPreviewColumnFields;
     const result = {} as Record<RemainderPreviewSortField, string[]>;
     for (const field of fields) {
       result[field] = [
@@ -1040,86 +1008,20 @@ export function ImportRemaindersDialog({
                     <thead>
                       <tr>
                         <th className={`${headerCellClass} w-7`} />
-                        <th className={`${headerCellClass} p-0 w-10`}>
-                          <SortableFilterHeader
-                            field="row"
-                            label="#"
-                            currentSorts={sortConfigs}
-                            onSortChange={handleSortChange}
-                            values={uniqueValues.row}
-                            {...bindColumn("row")}
-                          />
-                        </th>
-                        <th className={`${headerCellClass} p-0 w-24`}>
-                          <SortableFilterHeader
-                            field="sku"
-                            label="Артикул"
-                            currentSorts={sortConfigs}
-                            onSortChange={handleSortChange}
-                            values={uniqueValues.sku}
-                            {...bindColumn("sku")}
-                          />
-                        </th>
-                        <th className={`${headerCellClass} p-0 w-14`}>
-                          <SortableFilterHeader
-                            field="quantity"
-                            label="Кол-во"
-                            currentSorts={sortConfigs}
-                            onSortChange={handleSortChange}
-                            values={uniqueValues.quantity}
-                            {...bindColumn("quantity")}
-                          />
-                        </th>
-                        <th className={`${headerCellClass} p-0 w-16`}>
-                          <SortableFilterHeader
-                            field="length"
-                            label="Длина"
-                            currentSorts={sortConfigs}
-                            onSortChange={handleSortChange}
-                            values={uniqueValues.length}
-                            {...bindColumn("length")}
-                          />
-                        </th>
-                        <th className={`${headerCellClass} p-0 min-w-[160px]`}>
-                          <SortableFilterHeader
-                            field="operations"
-                            label="Операции"
-                            currentSorts={sortConfigs}
-                            onSortChange={handleSortChange}
-                            values={uniqueValues.operations}
-                            {...bindColumn("operations")}
-                          />
-                        </th>
-                        <th className={`${headerCellClass} p-0 w-24`}>
-                          <SortableFilterHeader
-                            field="quality"
-                            label="Качество"
-                            currentSorts={sortConfigs}
-                            onSortChange={handleSortChange}
-                            values={uniqueValues.quality}
-                            {...bindColumn("quality")}
-                          />
-                        </th>
-                        <th className={`${headerCellClass} p-0 min-w-[150px]`}>
-                          <SortableFilterHeader
-                            field="section"
-                            label="Участок"
-                            currentSorts={sortConfigs}
-                            onSortChange={handleSortChange}
-                            values={uniqueValues.section}
-                            {...bindColumn("section")}
-                          />
-                        </th>
-                        <th className={`${headerCellClass} p-0 min-w-[140px]`}>
-                          <SortableFilterHeader
-                            field="errors"
-                            label="Ошибки"
-                            currentSorts={sortConfigs}
-                            onSortChange={handleSortChange}
-                            values={uniqueValues.errors}
-                            {...bindColumn("errors")}
-                          />
-                        </th>
+                        {remainderPreviewColumns.map((column) => (
+                          <th
+                            key={column.id}
+                            className={`${headerCellClass} p-0 ${column.headerClassName ?? ""}`}
+                          >
+                            <DataTableColumnHeader
+                              column={column}
+                              bindColumn={bindColumn}
+                              values={column.filterField ? uniqueValues[column.filterField] : undefined}
+                              currentSorts={sortConfigs}
+                              onSortChange={handleSortChange}
+                            />
+                          </th>
+                        ))}
                         <TableCornerResetHeader
                           hasActiveFilters={hasPreviewFilters}
                           onReset={resetPreviewFilters}
@@ -1165,7 +1067,7 @@ export function ImportRemaindersDialog({
                                   item.dimensions ? "font-medium text-foreground" : "text-muted-foreground"
                                 }`}
                               >
-                                {item.dimensions_label || "—"}
+                                {formatDimensionsLabel(item.dimensions, item.dimensions_label)}
                               </td>
                               <td className="px-1.5 py-0.5 min-w-[160px]">
                                 {item.completed_stages && item.completed_stages.length > 0 ? (

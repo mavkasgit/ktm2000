@@ -208,7 +208,7 @@ async def test_rows_sort_by_product_sku(client, session: AsyncSession):
 
     resp = await client.get(
         "/api/production-planning/rows"
-        "?sort_by=product_sku&sort_order=asc&limit=50"
+        "?sort=product_sku:asc&limit=50"
     )
     assert resp.status_code == 200, resp.text
     skus = [row["source_sku"] for row in resp.json()["rows"] if row["source_sku"].endswith("-SORT-SKU")]
@@ -223,7 +223,7 @@ async def test_rows_limit_max_validation(client):
 
 @pytest.mark.asyncio
 async def test_rows_sort_by_dimensions_desc(client, session: AsyncSession):
-    """sort_by=dimensions на странице плана: 3 м → 1 м → безразмерные в конце."""
+    """sort=dimensions:desc на странице плана: 3 м → 1 м → безразмерные в конце."""
     product, route = await _make_route(session, "EXEC-DIMSORT")
     plan = ProductionPlan(
         plan_no="PLAN-DIMSORT",
@@ -261,7 +261,7 @@ async def test_rows_sort_by_dimensions_desc(client, session: AsyncSession):
     await session.commit()
 
     resp = await client.get(
-        "/api/production-planning/rows?sort_by=dimensions&sort_order=desc&limit=50"
+        "/api/production-planning/rows?sort=dimensions:desc&limit=50"
     )
     assert resp.status_code == 200, resp.text
     body = resp.json()
@@ -394,3 +394,167 @@ async def test_rows_expose_cut_layout_hanger_and_original_quantity(
     assert transform["original_quantity"] == "120"
 
     assert rows["CUT-NODIMS"]["cut_layout"] is None
+
+
+@pytest.mark.asyncio
+async def test_rows_default_order_groups_by_plan_then_row_number(client, session: AsyncSession):
+    """Без параметра сортировки строки идут по планам, а внутри плана — по номеру.
+
+    Дефолт трёхключевой: production_plan_id, затем source_row_number без пустых
+    в конце, затем id. Один столбец вместо этого перемешал бы строки разных
+    планов, а порядок при первом открытии страницы измениться не должен.
+    """
+    product, route = await _make_route(session, "ROWDEF")
+    early = ProductionPlan(
+        plan_no="PLAN-ROWDEF-EARLY",
+        name="Ранний",
+        status=ProductionPlanStatus.approved,
+        period_start=date(2026, 5, 1),
+        period_end=date(2026, 5, 31),
+    )
+    late = ProductionPlan(
+        plan_no="PLAN-ROWDEF-LATE",
+        name="Поздний",
+        status=ProductionPlanStatus.approved,
+        period_start=date(2026, 5, 1),
+        period_end=date(2026, 5, 31),
+    )
+    session.add_all([early, late])
+    await session.flush()
+
+    # Планы заведены в порядке early, late, поэтому при production_plan_id DESC
+    # (новые сверху) первым идёт late, а внутри него — по номеру строки.
+    for plan, sku, row_number in (
+        (late, "ROWDEF-LATE-1", 1),
+        (early, "ROWDEF-EARLY-2", 2),
+        (early, "ROWDEF-EARLY-1", 1),
+    ):
+        session.add(
+            PlanPosition(
+                production_plan_id=plan.id,
+                product_id=product.id,
+                source_type=PlanSourceType.manual,
+                source_sku=sku,
+                source_name=sku,
+                quantity=Decimal("10"),
+                source_payload={},
+                status=PlanPositionStatus.approved,
+                validation_status=PlanPositionValidationStatus.valid,
+                validation_errors=[],
+                period_start=plan.period_start,
+                period_end=plan.period_end,
+                has_pack_ops=False,
+                route_id=route.id,
+                source_row_number=row_number,
+            )
+        )
+    await session.commit()
+
+    resp = await client.get("/api/production-planning/rows?limit=50")
+    assert resp.status_code == 200, resp.text
+    body = resp.json()
+    assert body["total"] == 3
+    assert [row["source_sku"] for row in body["rows"]] == [
+        "ROWDEF-LATE-1",
+        "ROWDEF-EARLY-1",
+        "ROWDEF-EARLY-2",
+    ]
+
+    # Дефолт не «просто любой»: сортировка по не-дефолтному полю переставляет
+    # строки. На HEAD, где параметра sort нет, остался бы дефолтный порядок —
+    # этот assert ловит именно перевод на общий контракт.
+    by_qty = await client.get(
+        "/api/production-planning/rows?sort=planned_qty:desc&limit=50"
+    )
+    assert by_qty.status_code == 200, by_qty.text
+    assert [row["source_sku"] for row in by_qty.json()["rows"]] == [
+        "ROWDEF-LATE-1",
+        "ROWDEF-EARLY-2",
+        "ROWDEF-EARLY-1",
+    ]
+
+
+@pytest.mark.asyncio
+async def test_rows_multi_sort_priorities(client, session: AsyncSession):
+    """Два приоритета: сначала количество, потом артикул.
+
+    Количество у всех строк одинаковое, поэтому порядок по одному полю не
+    алфавитный, а по двум — алфавитный. Иначе тест не отличает мультисортировку
+    от одиночной сортировки по второму полю.
+    """
+    product, route = await _make_route(session, "ROWMULTI")
+    plan = ProductionPlan(
+        plan_no="PLAN-ROWMULTI",
+        name="Plan ROWMULTI",
+        status=ProductionPlanStatus.approved,
+        period_start=date(2026, 5, 1),
+        period_end=date(2026, 5, 31),
+    )
+    session.add(plan)
+    await session.flush()
+
+    # Колонка «Артикул» резолвится в products.sku, поэтому у строк должны быть
+    # РАЗНЫЕ продукты — иначе второй приоритет ничего не различает.
+    for row_no, sku in enumerate(("ZZZ-LAST", "AAA-FIRST", "MMM-MID"), start=1):
+        row_product, _ = await _make_route(session, sku)
+        session.add(
+            PlanPosition(
+                production_plan_id=plan.id,
+                product_id=row_product.id,
+                source_type=PlanSourceType.manual,
+                source_sku=sku,
+                source_name=sku,
+                quantity=Decimal("10"),
+                source_payload={},
+                status=PlanPositionStatus.approved,
+                validation_status=PlanPositionValidationStatus.valid,
+                validation_errors=[],
+                period_start=plan.period_start,
+                period_end=plan.period_end,
+                has_pack_ops=False,
+                route_id=route.id,
+                source_row_number=row_no,
+            )
+        )
+    await session.commit()
+
+    # Один приоритет: количество у всех 10, порядок задаёт tiebreaker по id,
+    # то есть порядок посева, а не алфавитный.
+    by_qty = await client.get(
+        "/api/production-planning/rows?sort=planned_qty:asc&limit=50"
+    )
+    assert by_qty.status_code == 200, by_qty.text
+    seeded = [row["source_sku"] for row in by_qty.json()["rows"]]
+    assert seeded == ["ZZZ-LAST", "AAA-FIRST", "MMM-MID"]
+
+    # Второй приоритет переставляет строки внутри равных по количеству.
+    by_both = await client.get(
+        "/api/production-planning/rows?sort=planned_qty:asc,product_sku:asc&limit=50"
+    )
+    assert by_both.status_code == 200, by_both.text
+    assert [row["source_sku"] for row in by_both.json()["rows"]] == [
+        "AAA-FIRST",
+        "MMM-MID",
+        "ZZZ-LAST",
+    ]
+
+
+@pytest.mark.asyncio
+async def test_rows_rejects_unknown_field_and_direction(client, session: AsyncSession):
+    """Неизвестное поле или направление — 400, а не молчаливый фолбэк."""
+    unknown_field = await client.get("/api/production-planning/rows?sort=nope:asc")
+    assert unknown_field.status_code == 400, unknown_field.text
+
+    bad_direction = await client.get("/api/production-planning/rows?sort=status:sideways")
+    assert bad_direction.status_code == 400, bad_direction.text
+
+
+@pytest.mark.asyncio
+async def test_rows_rejects_production_plan_id_not_in_contract(client, session: AsyncSession):
+    """production_plan_id — ключ группировки дефолта, но не колонка ?sort=.
+
+    Раньше поле вне списка молча заменялось колонкой по умолчанию, и оператор
+    видел «сортировку», которой не было.
+    """
+    resp = await client.get("/api/production-planning/rows?sort=production_plan_id:asc")
+    assert resp.status_code == 400, resp.text

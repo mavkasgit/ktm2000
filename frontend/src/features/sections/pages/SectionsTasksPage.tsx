@@ -23,6 +23,7 @@ import {
   type ShortageStrategy,
   type DailyPlanCompositionItem,
 } from "@/shared/api/shopfloor";
+import { invalidateAfter } from "@/shared/api/cacheInvalidation";
 import { queryKeys } from "@/shared/api/queryKeys";
 import { usePaginatedTableQuery } from "@/shared/hooks/usePaginatedTableQuery";
 import type { SectionBoardQueryParams } from "@/shared/api/shopfloor";
@@ -48,6 +49,8 @@ import {
 import { PRESET_PROFILES, type GroupingProfile } from "../lib/groupingProfiles";
 import { isTaskCompletable, getNonCompletableTasks } from "../lib/taskStatus";
 import { createAuditLog, getAuditLogs, type AuditLogEntry } from "@/shared/api/auditLogs";
+import { isAnyDialogOpen } from "@/shared/lib/dialogOpen";
+import { fmtQty, toQtyInteger } from "@/shared/lib/quantityFormat";
 
 type MeResponse = {
   id: number;
@@ -58,16 +61,6 @@ type MeResponse = {
   is_active: boolean;
 };
 
-function fmtQty(value: string): string {
-  const n = parseFloat(value);
-  if (!Number.isFinite(n)) return "0";
-  return String(Math.round(n));
-}
-
-function toInteger(value: string | number): number {
-  const n = typeof value === "number" ? value : parseFloat(value);
-  return Number.isFinite(n) ? Math.round(n) : 0;
-}
 
 function nowLocalDateTime(): string {
   const d = new Date();
@@ -119,7 +112,9 @@ export function SectionsTasksPage() {
   );
   const profile = PRESET_PROFILES.find((p) => p.id === "sku+routeHistoryAfter") || PRESET_PROFILES[2];
 
-  const [viewMode, setViewMode] = useState<TaskBoardViewMode>({ active: true, waiting: false, completed: false });
+  // По умолчанию доска показывает активные и ожидающие задания: ожидающие —
+  // отдельным блоком внизу таблицы, под разделителем «В ожидании».
+  const [viewMode, setViewMode] = useState<TaskBoardViewMode>({ active: true, waiting: true, completed: false });
   const [sectionContentMode, setSectionContentMode] = useState<SectionContentMode>("tasks");
   const [creatingDailyPlan, setCreatingDailyPlan] = useState(false);
   const [dateRange, setDateRange] = useState<DateRangeValue>({ from: "", to: "" });
@@ -272,7 +267,7 @@ export function SectionsTasksPage() {
   );
 
   const [serverQuery, setServerQuery] = useState<
-    Pick<SectionBoardQueryParams, "search" | "product_sku" | "sort_by" | "sort_order">
+    Pick<SectionBoardQueryParams, "search" | "product_sku" | "sort">
   >({});
 
   const {
@@ -338,7 +333,9 @@ export function SectionsTasksPage() {
   const createPlanMutation = useMutation({
     mutationFn: (payload: CreateDailyPlanInput) => createDailyPlan(payload, requestOptions),
     onSuccess: async (plan) => {
-      await queryClient.invalidateQueries({ queryKey: queryKeys.dailyPlans.list(plan.section_id) });
+      // Состав и список дневных планов лежат под корнем `shopfloor-daily-plans`,
+      // который целиком входит в домен `shopfloor` — точечный ключ не нужен.
+      await invalidateAfter(queryClient, "dailyPlanChanged");
       setSelectedPlanIds(new Set([plan.id]));
       bulkSelection.clear();
       revokeSelection.clear();
@@ -358,14 +355,8 @@ export function SectionsTasksPage() {
         throw new Error(`Не удалось отозвать задания: ${failed} из ${items.length}`);
       }
     },
-    onSuccess: async (_, items) => {
-      const planIds = [...new Set(items.map((item) => item.daily_plan_id))];
-      await Promise.all(
-        planIds.map((planId) => queryClient.invalidateQueries({ queryKey: queryKeys.dailyPlans.composition(planId) })),
-      );
-      if (sectionId !== null) {
-        await queryClient.invalidateQueries({ queryKey: queryKeys.dailyPlans.list(sectionId) });
-      }
+    onSuccess: async () => {
+      await invalidateAfter(queryClient, "dailyPlanChanged");
       revokeSelection.clear();
     },
     onError: (error) => {
@@ -389,20 +380,6 @@ export function SectionsTasksPage() {
 
   const pushActionLog = useCallback((_payload: any) => {}, []);
 
-  const invalidateShopfloor = useCallback(() => {
-    void queryClient.invalidateQueries({ queryKey: queryKeys.shopfloor.board(sectionId as number) });
-    void queryClient.invalidateQueries({ queryKey: queryKeys.shopfloor.stats(sectionId as number) });
-    void queryClient.invalidateQueries({ queryKey: queryKeys.dailyPlans.all() });
-    void queryClient.invalidateQueries({ queryKey: queryKeys.shopfloor.summary() });
-    void queryClient.invalidateQueries({ queryKey: queryKeys.transfers.readyAll() });
-    void queryClient.invalidateQueries({ queryKey: queryKeys.shopfloor.incomingTransfers(sectionId as number) });
-    void queryClient.invalidateQueries({ queryKey: queryKeys.transfers.historyAll() });
-    void queryClient.invalidateQueries({ queryKey: ["auditLogs"] });
-    if (sectionId !== null) {
-      void queryClient.invalidateQueries({ queryKey: queryKeys.stock.balancesAll() });
-    }
-  }, [queryClient, sectionId]);
-
   const openActionDialog = useCallback((_type: TaskActionDialogType, task: SectionBoardTask) => {
     const now = nowLocalDateTimeParts();
     setActionDialog({ open: true, type: "complete", task, tasks: null });
@@ -423,6 +400,9 @@ export function SectionsTasksPage() {
     const handler = (e: KeyboardEvent) => {
       if (e.key !== "Escape") return;
       if (actionDialog.open || bulkResultsOpen) return;
+      // Окно плана и предпросмотра печати тоже Radix: перечислить их флагами
+      // значит забыть один. Пока открыто любое окно, страница клавиши не трогает.
+      if (isAnyDialogOpen()) return;
       e.preventDefault();
       if (isSingleWindow) {
         const now = Date.now();
@@ -475,8 +455,8 @@ export function SectionsTasksPage() {
     onSuccess: (response, variables) => {
       const tasks = variables.tasks || [];
       const summary = summarizeBulkResults(response.results.map(r => ({ id: r.id, status: r.status, reason: r.reason })));
-      const totalGood = variables.entries.reduce((sum, e) => sum + toInteger(e.good_quantity), 0);
-      const totalDefect = variables.entries.reduce((sum, e) => sum + toInteger(e.defect_quantity || "0"), 0);
+      const totalGood = variables.entries.reduce((sum, e) => sum + toQtyInteger(e.good_quantity), 0);
+      const totalDefect = variables.entries.reduce((sum, e) => sum + toQtyInteger(e.defect_quantity || "0"), 0);
 
       const sectionInfo = selectedSection ? `на участке "${selectedSection.name}" (${selectedSection.code})` : "";
       const taskInfo = tasks.length > 0
@@ -517,7 +497,7 @@ export function SectionsTasksPage() {
         closeActionDrawer();
         setConflictHint(null);
       }
-      invalidateShopfloor();
+      void invalidateAfter(queryClient, "sectionTaskChanged");
     },
     onError: (err, variables) => {
       const message = getErrorMessage(err);
@@ -568,7 +548,7 @@ export function SectionsTasksPage() {
         qtyText: `годн: ${goodQty}, брак: ${defectQty}`,
         comment: comment || undefined,
       });
-      invalidateShopfloor();
+      void invalidateAfter(queryClient, "sectionTaskChanged");
       closeActionDrawer();
       setConflictHint(null);
     },
@@ -605,13 +585,13 @@ export function SectionsTasksPage() {
     const isGroup = !!tasks && tasks.length > 0;
     if (!task && !isGroup) return;
 
-    const qty = toInteger(actionQty || "0");
+    const qty = toQtyInteger(actionQty || "0");
     const effectivePerformedAt = `${performedDate}T${performedShift === "1" ? "08:00" : "20:00"}`;
     const effectiveAccountedAt = nowLocalDateTime();
     const executorUserId = me?.id;
 
     const good = qty;
-    const defect = toInteger(defectQty || "0");
+    const defect = toQtyInteger(defectQty || "0");
     if (good + defect <= 0) {
       toast({ title: "Ошибка", description: "Укажите факт или брак", variant: "destructive" });
       setConflictHint("Укажите хотя бы одно количество: годные или брак.");
@@ -619,7 +599,7 @@ export function SectionsTasksPage() {
     }
 
     const calcInWork = (t: SectionBoardTask) =>
-      Math.max(0, toInteger(t.cache.issued_quantity) - toInteger(t.cache.completed_quantity) - toInteger(t.cache.rejected_quantity));
+      Math.max(0, toQtyInteger(t.cache.issued_quantity) - toQtyInteger(t.cache.completed_quantity) - toQtyInteger(t.cache.rejected_quantity));
     const inWork = isGroup
       ? tasks.reduce((sum, t) => sum + calcInWork(t), 0)
       : calcInWork(task!);
@@ -689,7 +669,7 @@ export function SectionsTasksPage() {
 
         for (let i = 0; i < completableTasks.length; i++) {
           const t = completableTasks[i];
-          const capacity = Math.max(0, toInteger(t.planned_quantity));
+          const capacity = Math.max(0, toQtyInteger(t.planned_quantity));
 
           // good: минимум из остатка, planned_quantity и in_work (если in_work>0)
           const tInWork = calcInWork(t);
@@ -820,8 +800,8 @@ export function SectionsTasksPage() {
     setBulkProgress({ total: entries.length, completed: 0, running: true });
     const lockOptions = lockedSectionId !== null ? { singleSectionLockId: lockedSectionId } : undefined;
     
-    const totalGood = entries.reduce((sum, e) => sum + toInteger(e.goodQty), 0);
-    const totalDefect = entries.reduce((sum, e) => sum + toInteger(e.defectQty), 0);
+    const totalGood = entries.reduce((sum, e) => sum + toQtyInteger(e.goodQty), 0);
+    const totalDefect = entries.reduce((sum, e) => sum + toQtyInteger(e.defectQty), 0);
 
     try {
       const response = await bulkCompleteTasks(
@@ -861,8 +841,8 @@ export function SectionsTasksPage() {
     const effectivePerformedAt = data.performedAt || nowLocalDateTime();
     const effectiveAccountedAt = data.accountedAt || effectivePerformedAt;
 
-    const totalGood = data.completeEntries.reduce((sum, e) => sum + toInteger(e.goodQty), 0);
-    const totalDefect = data.completeEntries.reduce((sum, e) => sum + toInteger(e.defectQty), 0);
+    const totalGood = data.completeEntries.reduce((sum, e) => sum + toQtyInteger(e.goodQty), 0);
+    const totalDefect = data.completeEntries.reduce((sum, e) => sum + toQtyInteger(e.defectQty), 0);
 
     if (data.completeEntries.length > 0) {
       try {
@@ -889,10 +869,10 @@ export function SectionsTasksPage() {
       }
     }
 
-    invalidateShopfloor();
+    void invalidateAfter(queryClient, "sectionTaskChanged");
     setBulkProgress({ total, completed: total, running: false });
     finishBulk(allResults, totalGood, totalDefect);
-  }, [me?.id, lockedSectionId, invalidateShopfloor, finishBulk]);
+  }, [me?.id, lockedSectionId, finishBulk, queryClient]);
 
   // Завершить группу: открывает боковую панель завершения группы
   const handleCompleteGroup = useCallback((group: TaskGroup) => {
@@ -949,6 +929,10 @@ export function SectionsTasksPage() {
       else next.add(planId);
       return next;
     });
+  }, [revokeSelection]);
+  const selectOnlyPlan = useCallback((planId: number) => {
+    revokeSelection.clear();
+    setSelectedPlanIds(new Set([planId]));
   }, [revokeSelection]);
   const clearPlanSelection = useCallback(() => {
     revokeSelection.clear();
@@ -1138,12 +1122,11 @@ export function SectionsTasksPage() {
                   <DailyPlansPanel
                     plans={dailyPlans ?? []}
                     selectedPlanIds={selectedPlanIds}
+                    onSelectPlan={selectOnlyPlan}
                     onTogglePlan={togglePlanSelection}
                     onClearPlans={clearPlanSelection}
-                    onCreatePlan={handleCreatePlan}
-                    selectedTaskCount={selectedTasks.length}
-                    onCreateModeChange={handleDailyPlanModeChange}
                     onOpenPlans={() => setSectionContentMode("plan")}
+                    opensPlans
                     isLoading={dailyPlansLoading}
                   />
                 </div>
@@ -1239,6 +1222,7 @@ export function SectionsTasksPage() {
                   plans={dailyPlans ?? []}
                   onCreatePlan={handleCreatePlan}
                   selectedTaskCount={selectedTasks.length}
+                  onSelectPlan={selectOnlyPlan}
                   selectedPlanIds={selectedPlanIds}
                   onCreateModeChange={handleDailyPlanModeChange}
                   onTogglePlan={togglePlanSelection}
@@ -1298,6 +1282,7 @@ export function SectionsTasksPage() {
         onOpenChange={setPlanModalOpen}
         sectionId={sectionId ?? 0}
         sectionName={selectedSection?.name || "—"}
+        sectionCode={selectedSection?.code || null}
         tasks={displayedTasks}
         availableOperations={board?.available_operations || []}
       />

@@ -1,7 +1,8 @@
-import type { Dispatch, SetStateAction } from "react";
+import { useState, type Dispatch, type SetStateAction } from "react";
 import { AlertTriangle } from "lucide-react";
 import { cn } from "@/shared/utils/cn";
 import { parseNumericInput } from "@/shared/lib/parseNumericInput";
+import { normalizeQuantityInput, type QuantityInputIssue } from "@/shared/lib/quantityInput";
 
 import type { SectionBoardTask, ShortageStrategy } from "@/shared/api/shopfloor";
 import { formatDimensionsLabel } from "@/shared/api/stock";
@@ -20,23 +21,13 @@ import {
   getReadyStatusLabel,
   isTaskCompletable,
 } from "../lib/taskStatus";
-
-function fmtQty(value: string): string {
-  const n = parseFloat(value);
-  if (!Number.isFinite(n)) return "0";
-  return String(Math.round(n));
-}
+import { fmtQty } from "@/shared/lib/quantityFormat";
 
 function toNumber(value: string): number {
   const n = parseNumericInput(value);
   return n == null ? 0 : Math.round(n);
 }
 
-function normalizeIntegerInput(value: string): string {
-  const digits = value.replace(/[^\d]/g, "");
-  if (!digits) return "";
-  return String(parseInt(digits, 10));
-}
 
 function inWorkQuantity(task: SectionBoardTask | null): number {
   if (!task) return 0;
@@ -90,6 +81,16 @@ export function TaskActionDrawer({
   conflictHint,
   onSubmit,
 }: TaskActionDrawerProps) {
+  // Причина отклонённого ввода под полем (ADR-0032). Недопустимый символ не
+  // подставляется в значение: поле остаётся с тем, что было, и показывает
+  // причину, пока значение снова не станет допустимым.
+  const [issue, setIssue] = useState<QuantityInputIssue | null>(null);
+
+  const handleQtyChange = (value: string, setValue: Dispatch<SetStateAction<string>>) => {
+    const result = normalizeQuantityInput(value);
+    setIssue(result.issue);
+    if (!result.issue) setValue(result.value);
+  };
   const isGroup = !!tasks && tasks.length > 0;
 
   // Трансформирующий этап (ADR-0002): факт вводится во входных заготовках,
@@ -266,11 +267,12 @@ export function TaskActionDrawer({
                 {isTransform ? "Факт (раскроено заготовок)" : "Факт (годные)"}
               </label>
               <Input
-                type="number"
-                step="1"
-                min="0"
+                type="text"
+                inputMode="numeric"
                 value={actionQty}
-                onChange={(e) => setActionQty(normalizeIntegerInput(e.target.value))}
+                onChange={(e) => handleQtyChange(e.target.value, setActionQty)}
+                onBlur={() => setIssue(null)}
+                aria-invalid={issue !== null}
                 className="w-[150px] h-8"
               />
             </div>
@@ -279,15 +281,21 @@ export function TaskActionDrawer({
                 {isTransform ? "Брак (заготовок)" : "Брак"}
               </label>
               <Input
-                type="number"
-                step="1"
-                min="0"
+                type="text"
+                inputMode="numeric"
                 value={defectQty}
-                onChange={(e) => setDefectQty(normalizeIntegerInput(e.target.value))}
+                onChange={(e) => handleQtyChange(e.target.value, setDefectQty)}
+                onBlur={() => setIssue(null)}
+                aria-invalid={issue !== null}
                 className="w-[150px] h-8"
               />
             </div>
           </div>
+          {issue && (
+            <div className="mt-1 text-xs text-red-600" role="status">
+              {issue.text}
+            </div>
+          )}
           {outOfRange && (
             <div className="mt-1 text-xs text-red-600">
               {isTransform

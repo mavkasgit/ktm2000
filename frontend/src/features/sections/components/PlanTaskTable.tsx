@@ -2,36 +2,82 @@ import { useMemo } from "react";
 import type { SectionBoardTask } from "@/shared/api/shopfloor";
 import { formatDimensionsLabel } from "@/shared/api/stock";
 import { colorNameLabels } from "@/shared/lib/generated-labels";
-import { adjustQtyToHanger, getQtyPerHanger } from "./PlanHangerDisplay";
+import { QTY_EMPTY, fmtQty, fmtQtyPrecise } from "@/shared/lib/quantityFormat";
+import { getQtyPerHanger } from "./PlanHangerDisplay";
+import { countHangers } from "@/shared/lib/hangerCount";
 import {
   buildPlanTaskGroups,
   type PlanTaskGroup,
   type PlanTaskGroupingMode,
   type PlanTaskRow,
 } from "../lib/planTaskGroups";
+import { PLAN_COLUMNS, type PlanColumnKey } from "../lib/planPrintSettings";
+import { cn } from "@/shared/utils/cn";
 
 interface PlanTaskTableProps {
   tasks: SectionBoardTask[];
   mode: PlanTaskGroupingMode;
   hiddenGroupKeys: Set<string>;
   onHideGroup: (groupKey: string) => void;
-  printMode?: boolean;
+  /** Печатный набор колонок; служебные колонки окна добавляются автоматически. */
+  columns: PlanColumnKey[];
 }
 
+/**
+ * Подвесы задания: готовый `hanger_count` бэкенда, иначе канон
+ * `countHangers`. Нормы нет или количество неположительное — значения нет
+ * (`null`), а не «1 подвес»: в печатном листе это `—`.
+ */
+function hangersForTask(task: SectionBoardTask): number | null {
+  if (task.hanger_count != null) return task.hanger_count;
+  return countHangers(task.planned_quantity, task.quantity_per_hanger ?? getQtyPerHanger(task));
+}
+
+/**
+ * Подвесы строки — сумма по объединённым заданиям. Пропуск не превращается в
+ * ноль молча: если хотя бы у одного задания нормы нет, сумма строки тоже
+ * неизвестна, иначе в печати вышел бы заниженный итог как настоящий.
+ */
 function hangersForRow(row: PlanTaskRow): number | null {
-  if (row.task.hanger_count != null) return row.task.hanger_count;
-  const quantityPerHanger = row.task.quantity_per_hanger ?? getQtyPerHanger(row.task);
-  if (quantityPerHanger == null) return null;
-  return adjustQtyToHanger(row.planQty, quantityPerHanger).hangers;
+  if (row.tasks.length === 0) return null;
+  let total = 0;
+  for (const task of row.tasks) {
+    const hangers = hangersForTask(task);
+    if (hangers === null) return null;
+    total += hangers;
+  }
+  return total;
+}
+
+/**
+ * Норма на подвес задания: ручной override из payload → пара (`product_pair`)
+ * → норма позиции. Тот же приоритет, что и при подсчёте подвесов.
+ * Норма не суммируется: в объединённой строке показываются разные значения.
+ */
+function perHangerForRows(rows: PlanTaskRow[]): string {
+  const values: string[] = [];
+  for (const row of rows) {
+    for (const task of row.tasks) {
+      const perHanger = getQtyPerHanger(task) ?? task.quantity_per_hanger;
+      if (perHanger == null) continue;
+      const text = fmtQtyPrecise(perHanger);
+      if (!values.includes(text)) values.push(text);
+    }
+  }
+  return values.length === 0 ? QTY_EMPTY : values.join(" / ");
+}
+
+function perHangerForRow(row: PlanTaskRow): string {
+  return perHangerForRows([row]);
 }
 
 function colorLabel(color: string | null): string {
-  if (!color) return "—";
+  if (!color) return QTY_EMPTY;
   return colorNameLabels[color] ?? color;
 }
 
 function operationsLabel(row: PlanTaskRow): string {
-  if (row.preOperations.length === 0) return "—";
+  if (row.preOperations.length === 0) return QTY_EMPTY;
   return row.preOperations
     .map((operation) => operation.operation_name)
     .filter(Boolean)
@@ -39,18 +85,72 @@ function operationsLabel(row: PlanTaskRow): string {
 }
 
 function packagingLabel(row: PlanTaskRow): string {
-  const details = row.packagingDetails.length > 0 ? row.packagingDetails.join(" · ") : "";
-  if (row.packaging && details) return `${row.packaging} · ${details}`;
-  return row.packaging ?? (details || "—");
+  if (row.packaging.length === 0) return QTY_EMPTY;
+  if (row.packaging.length === 1) return row.packaging[0].label;
+  return row.packaging.map((item) => `${item.label} ${fmtQty(item.qty)}`).join(" · ");
 }
 
-function sum(rows: PlanTaskRow[], field: "planQty" | "issuedQty" | "doneQty" | "transferredQty" | "balanceQty"): string {
-  return rows.reduce((total, row) => total + row[field], 0).toFixed(0);
+const cellBase = "px-3 py-2";
+
+/** Ячейка колонки в строке задания. */
+function rowCell(row: PlanTaskRow, key: PlanColumnKey, single: boolean) {
+  switch (key) {
+    case "group":
+      return <td key={key} className={cn(cellBase, "text-muted-foreground no-print-col")}>{single ? "" : "↳"}</td>;
+    case "sku":
+      return <td key={key} className={cn(cellBase, "font-medium break-words")}>{row.productSku}</td>;
+    case "size":
+      return <td key={key} className={cn(cellBase, "whitespace-nowrap")}>{formatDimensionsLabel(row.dimensions)}</td>;
+    case "preOps":
+      return <td key={key} className={cn(cellBase, "max-w-[220px]")}>{operationsLabel(row)}</td>;
+    case "operation":
+      return <td key={key} className={cn(cellBase, "max-w-[180px] break-words")}>{row.operationName}</td>;
+    case "packaging":
+      return <td key={key} className={cn(cellBase, "max-w-[220px] break-words")}>{packagingLabel(row)}</td>;
+    case "hangers":
+      return <td key={key} className={cn(cellBase, "text-right")}>{hangersForRow(row) ?? QTY_EMPTY}</td>;
+    case "perHanger":
+      return <td key={key} className={cn(cellBase, "text-right whitespace-nowrap")}>{perHangerForRow(row)}</td>;
+    case "issued":
+      return <td key={key} className={cn(cellBase, "text-right")}>{fmtQty(row.issuedQty)}</td>;
+    case "done":
+      return <td key={key} className={cn(cellBase, "text-right")}>{fmtQty(row.doneQty)}</td>;
+    case "transferred":
+      return <td key={key} className={cn(cellBase, "text-right")}>{fmtQty(row.transferredQty)}</td>;
+    case "balance":
+      return <td key={key} className={cn(cellBase, "text-right text-blue-700 font-semibold")}>{fmtQty(row.balanceQty)}</td>;
+    case "actions":
+      return <td key={key} className="no-print-col" />;
+  }
 }
 
-function sumHangers(rows: PlanTaskRow[]): string {
-  const values = rows.map(hangersForRow).filter((value): value is number => value != null);
-  return values.length === 0 ? "—" : String(values.reduce((total, value) => total + value, 0));
+/** Числовая ячейка в строке группы. */
+function aggregateCell(
+  key: PlanColumnKey,
+  value: number,
+  accent: boolean,
+) {
+  return (
+    <td key={key} className={cn(cellBase, "text-right font-semibold", accent && "text-blue-700")}>
+      {fmtQty(value)}
+    </td>
+  );
+}
+
+/**
+ * Подвесы группы — сумма по строкам. Строка с пропуском делает сумму группы
+ * неизвестной: частичный итог в шапке читался бы как настоящий, но был бы
+ * занижен. Все строки известны — сумма; хотя бы одна нет — `—`.
+ */
+function sumHangers(rows: PlanTaskRow[]): number | null {
+  if (rows.length === 0) return null;
+  let total = 0;
+  for (const row of rows) {
+    const hangers = hangersForRow(row);
+    if (hangers === null) return null;
+    total += hangers;
+  }
+  return total;
 }
 
 export function PlanTaskTable({
@@ -58,11 +158,24 @@ export function PlanTaskTable({
   mode,
   hiddenGroupKeys,
   onHideGroup,
-  printMode = false,
+  columns,
 }: PlanTaskTableProps) {
   const groups = useMemo(
     () => buildPlanTaskGroups(tasks, mode).filter((group) => !hiddenGroupKeys.has(group.key)),
     [tasks, mode, hiddenGroupKeys],
+  );
+
+  /** Выбранные печатные колонки + служебные колонки окна, в порядке определения. */
+  const active = useMemo(() => {
+    const selected = new Set(columns);
+    return PLAN_COLUMNS.filter(
+      (column) => column.service || selected.has(column.key),
+    );
+  }, [columns]);
+
+  const labelSpan = useMemo(
+    () => active.filter((column) => column.kind === "label").length,
+    [active],
   );
 
   if (tasks.length === 0) {
@@ -70,24 +183,25 @@ export function PlanTaskTable({
   }
 
   return (
-    <div className={printMode ? "w-full" : "rounded-lg border overflow-x-auto"}>
+    <div className="rounded-lg border overflow-x-auto plan-table">
       <table className="w-full text-sm border-collapse">
         <thead className="bg-gray-50">
           <tr className="border-b">
-            <th className="px-3 py-2 text-left font-semibold">Группа</th>
-            <th className="px-3 py-2 text-left font-semibold">Артикул</th>
-            <th className="px-3 py-2 text-left font-semibold">Цвет</th>
-            <th className="px-3 py-2 text-left font-semibold whitespace-nowrap">Размер</th>
-            <th className="px-3 py-2 text-left font-semibold">Пред операции</th>
-            <th className="px-3 py-2 text-left font-semibold">Операция</th>
-            <th className="px-3 py-2 text-left font-semibold">Упаковка</th>
-            <th className="px-3 py-2 text-right font-semibold">План</th>
-            <th className="px-3 py-2 text-right font-semibold">Подвесы</th>
-            <th className="px-3 py-2 text-right font-semibold">Выдано</th>
-            <th className="px-3 py-2 text-right font-semibold">Сделано</th>
-            <th className="px-3 py-2 text-right font-semibold">Передано</th>
-            <th className="px-3 py-2 text-right font-semibold">Осталось</th>
-            {!printMode && <th className="w-8" />}
+            {active.map((column) => (
+              <th
+                key={column.key}
+                className={cn(
+                  cellBase,
+                  "font-semibold",
+                  column.kind === "number" ? "text-right" : "text-left",
+                  column.key === "size" && "whitespace-nowrap",
+                  column.service && "no-print-col",
+                  column.key === "actions" && "w-8",
+                )}
+              >
+                {column.title}
+              </th>
+            ))}
           </tr>
         </thead>
         <tbody>
@@ -97,19 +211,10 @@ export function PlanTaskTable({
               group={group}
               mode={mode}
               onHideGroup={onHideGroup}
-              printMode={printMode}
+              active={active}
+              labelSpan={labelSpan}
             />
           ))}
-          <tr className="border-t-2 font-semibold bg-gray-50">
-            <td colSpan={7} className="px-3 py-2">Итого</td>
-            <td className="px-3 py-2 text-right">{sum(groups.flatMap((group) => group.rows), "planQty")}</td>
-            <td className="px-3 py-2 text-right">{sumHangers(groups.flatMap((group) => group.rows))}</td>
-            <td className="px-3 py-2 text-right">{sum(groups.flatMap((group) => group.rows), "issuedQty")}</td>
-            <td className="px-3 py-2 text-right">{sum(groups.flatMap((group) => group.rows), "doneQty")}</td>
-            <td className="px-3 py-2 text-right">{sum(groups.flatMap((group) => group.rows), "transferredQty")}</td>
-            <td className="px-3 py-2 text-right text-blue-700">{sum(groups.flatMap((group) => group.rows), "balanceQty")}</td>
-            {!printMode && <td />}
-          </tr>
         </tbody>
       </table>
     </div>
@@ -120,44 +225,65 @@ function PlanGroupRows({
   group,
   mode,
   onHideGroup,
-  printMode,
+  active,
+  labelSpan,
 }: {
   group: PlanTaskGroup;
   mode: PlanTaskGroupingMode;
   onHideGroup: (groupKey: string) => void;
-  printMode: boolean;
+  active: typeof PLAN_COLUMNS;
+  labelSpan: number;
 }) {
+  // Группа из одной строки не дублируется заголовком: строка и есть группа.
+  const single = group.rows.length === 1;
+
   return (
     <>
-      <tr className="bg-slate-50 border-b">
-        <td colSpan={7} className="px-3 py-2 font-semibold">
-          {group.label}
-          {mode === "anodizingColor" && <span className="ml-2 font-normal text-muted-foreground">Цвет: {colorLabel(group.rows[0]?.color ?? null)}</span>}
-        </td>
-        <td className="px-3 py-2 text-right font-semibold">{group.totalQtyPlan.toFixed(0)}</td>
-        <td className="px-3 py-2 text-right font-semibold">{sumHangers(group.rows)}</td>
-        <td className="px-3 py-2 text-right font-semibold">{group.totalQtyIssued.toFixed(0)}</td>
-        <td className="px-3 py-2 text-right font-semibold">{group.totalQtyDone.toFixed(0)}</td>
-        <td className="px-3 py-2 text-right font-semibold">{group.totalQtyTransferred.toFixed(0)}</td>
-        <td className="px-3 py-2 text-right font-semibold text-blue-700">{(group.totalQtyPlan - group.totalQtyDone).toFixed(0)}</td>
-        {!printMode && <td className="px-1 py-2 text-center"><button type="button" className="text-muted-foreground hover:text-red-600 text-lg leading-none" onClick={() => onHideGroup(group.key)} title="Скрыть группу">×</button></td>}
-      </tr>
+      {!single && (
+        <tr className="bg-slate-50 border-b">
+          <td colSpan={labelSpan} className={cn(cellBase, "font-semibold")}>
+            {group.label}
+            {mode === "anodizingColor" && <span className="ml-2 font-normal text-muted-foreground">Цвет: {colorLabel(group.rows[0]?.color ?? null)}</span>}
+          </td>
+          {active
+            .filter((column) => column.kind === "number")
+            .map((column) => {
+              switch (column.key) {
+                case "hangers": {
+                  const hangers = sumHangers(group.rows);
+                  return (
+                    <td key={column.key} className={cn(cellBase, "text-right font-semibold")}>
+                      {hangers ?? QTY_EMPTY}
+                    </td>
+                  );
+                }
+                case "perHanger":
+                  return (
+                    <td key={column.key} className={cn(cellBase, "text-right font-semibold whitespace-nowrap")}>
+                      {perHangerForRows(group.rows)}
+                    </td>
+                  );
+                case "issued":
+                  return aggregateCell(column.key, group.totalQtyIssued, false);
+                case "done":
+                  return aggregateCell(column.key, group.totalQtyDone, false);
+                case "transferred":
+                  return aggregateCell(column.key, group.totalQtyTransferred, false);
+                case "balance":
+                  return aggregateCell(column.key, group.totalQtyPlan - group.totalQtyDone, true);
+                case "actions":
+                  return (
+                    <td key={column.key} className={cn(cellBase, "px-1 py-2 text-center no-print-col")}>
+                      <button type="button" className="text-muted-foreground hover:text-red-600 text-lg leading-none" onClick={() => onHideGroup(group.key)} title="Скрыть группу">×</button>
+                    </td>
+                  );
+              }
+            })}
+        </tr>
+      )}
       {group.rows.map((row) => (
         <tr key={row.key} className="border-b hover:bg-gray-50">
-          <td className="px-3 py-2 text-muted-foreground">↳</td>
-          <td className="px-3 py-2 font-medium break-words">{row.task.product_sku}</td>
-          <td className="px-3 py-2 whitespace-nowrap">{colorLabel(row.color)}</td>
-          <td className="px-3 py-2 whitespace-nowrap">{formatDimensionsLabel(row.dimensions)}</td>
-          <td className="px-3 py-2 max-w-[220px]">{operationsLabel(row)}</td>
-          <td className="px-3 py-2 max-w-[180px] break-words">{row.task.operation_name || "Операция"}</td>
-          <td className="px-3 py-2 max-w-[220px] break-words">{packagingLabel(row)}</td>
-          <td className="px-3 py-2 text-right">{row.planQty.toFixed(0)}</td>
-          <td className="px-3 py-2 text-right">{hangersForRow(row) ?? "—"}</td>
-          <td className="px-3 py-2 text-right">{row.issuedQty.toFixed(0)}</td>
-          <td className="px-3 py-2 text-right">{row.doneQty.toFixed(0)}</td>
-          <td className="px-3 py-2 text-right">{row.transferredQty.toFixed(0)}</td>
-          <td className="px-3 py-2 text-right text-blue-700 font-semibold">{row.balanceQty.toFixed(0)}</td>
-          {!printMode && <td />}
+          {active.map((column) => rowCell(row, column.key, single))}
         </tr>
       ))}
     </>

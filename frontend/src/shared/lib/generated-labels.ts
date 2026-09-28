@@ -48,6 +48,7 @@ export const errorLabels: Record<string, string> = {
   "route_primary_operation_mismatch": "Основная операция маршрута не совпадает с импортированной. Проверьте соответствие профиля и маршрута.",
   "route_rule_conflict": "Правила выбора маршрута конфликтуют",
   "route_sequence_invalid": "Неверная последовательность этапов в маршруте",
+  "route_signature_conflict": "Маршрут с таким именем уже есть и отличается по составу этапов. Подставлять его нельзя — приведите его в соответствие вручную.",
   "route_signature_incomplete": "Сигнатура маршрута позиции неполная",
   "selection_rules": "Маршрут выбран правилами",
 }
@@ -68,6 +69,7 @@ export const warningLabels: Record<string, string> = {
 // Лейблы статуса валидации позиции
 export const validationLabels: Record<string, string> = {
   "invalid": "Ошибка",
+  "overridden": "Перекрыта",
   "pending": "Ожидает",
   "valid": "Пройдена",
 }
@@ -83,6 +85,7 @@ export const taskStatusLabels: Record<string, string> = {
   "partially": "Частично",
   "partially_completed": "Частично",
   "pending": "Ожидает",
+  "skipped": "Пропущено",
   "waiting_previous": "Ожидает",
 }
 
@@ -94,6 +97,7 @@ export const stageStatusLabels: Record<string, string> = {
   "not_started": "Не начат",
   "partially_completed": "Частично выполнен",
   "ready": "Готов",
+  "skipped": "Пропущено",
   "waiting_previous": "Ожидает этап",
 }
 

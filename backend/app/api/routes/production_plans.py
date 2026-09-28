@@ -1,3 +1,4 @@
+import asyncio
 from datetime import UTC, datetime
 import logging
 from decimal import Decimal
@@ -9,11 +10,13 @@ from pydantic import BaseModel, ConfigDict
 from sqlalchemy import String, cast, exists, or_, select, text
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import selectinload
+from sqlalchemy.exc import DBAPIError
 
 from sqlalchemy import func as sa_func
 
 from app.api.deps import WRITER_ROLES, require_role, get_current_user
 from app.core.database import get_db
+from app.core.sorting import SortClause, apply_sort, parse_sort
 from app.domain.dimensions import format_cut_layout
 from app.models.production_plan import (
     PlanChangeItem,
@@ -29,10 +32,11 @@ from app.api.routes.audit_logs import AuditLogOut
 from app.models.imports import ImportBatch
 from app.models.product import Product
 from app.models.release_batch import ReleaseBatchType
-from app.models.route import ProductionRoute, RouteStage
+from app.models.route import ProductionRoute, RouteRuleProfile, RouteStage
 from app.models.section import Section
 from app.models.user import User, UserRole
 from app.services.plan_generation import create_release_batch
+from app.services.position_remainders import PositionStockFigures
 from app.services.production_plan_service import (
     BATCH_DELETE_SAFE_ACTION,
     BatchDeleteBlocked,
@@ -51,6 +55,7 @@ from app.services.production_plan_service import (
     soft_delete_cancelled_position,
 )
 from app.services.route_matcher import resolve_position_route, ResolvedRouteInfo, make_position_route_cache_key
+from app.services.route_signature_check import compare_position_route_signature
 from app.services.route_selection import select_route_for_payload
 from app.services.route_validation import validate_route_match
 from app.services.plan_validation import format_validation_error
@@ -209,11 +214,31 @@ async def delete_production_plan_route(
 # Удален StatusHistoryOut, так как PositionStatusHistory удалена. История теперь читается через аудит-логи.
 
 
+class RouteSignatureStepOut(BaseModel):
+    stage_kind: str
+    section_code: str
+    operation_codes: list[str]
+    is_significant: bool
+    transforms_dimensions: bool
+    is_final: bool
+
+
+class RouteSignatureCheckOut(BaseModel):
+    """Сигнатура маршрута позиции: ожидаемая, фактическая, вердикт (#214)."""
+
+    verdict: Literal["match", "mismatch", "unknown"]
+    expected: str | None = None
+    expected_steps: list[RouteSignatureStepOut] = []
+    actual: str | None = None
+    actual_steps: list[RouteSignatureStepOut] = []
+
+
 class RouteCheckOut(BaseModel):
     expected_signature: dict
     active_route_snapshot: dict | None
     match: bool
     issues: list[str]
+    route_signature: RouteSignatureCheckOut
 
 
 class SectionTotalsLineOut(BaseModel):
@@ -373,11 +398,18 @@ async def delete_import_batch(
         )
 
 
+# Тело approve-позиции — то же `StatusActionIn`, что у cancel/restore: единственное
+# поле `reason`. `force` остаётся query-параметром (контракт ADR-0048), а причина
+# уходит в тело: это свободный текст оператора, и в URL он попал бы в access_log,
+# историю браузера и Referer.
+
+
 @router.post("/{production_plan_id}/positions/{position_id}/approve")
 async def approve_position(
     production_plan_id: int,
     position_id: int,
     force: bool = False,
+    payload: StatusActionIn | None = None,
     db: AsyncSession = Depends(get_db),
     current_user: User = Depends(get_current_user),
 ) -> dict:
@@ -385,7 +417,12 @@ async def approve_position(
     logger = logging.getLogger(__name__)
     try:
         position = await approve_plan_position(
-            db, production_plan_id, position_id, force=force, changed_by=current_user.id
+            db,
+            production_plan_id,
+            position_id,
+            force=force,
+            changed_by=current_user.id,
+            reason=payload.reason if payload else None,
         )
     except ValueError as exc:
         logger.warning("approve_position rejected: %s (plan=%d, pos=%d, force=%s)", exc, production_plan_id, position_id, force)
@@ -393,6 +430,11 @@ async def approve_position(
     except Exception:
         logger.exception("approve_position failed (plan=%d, pos=%d, force=%s)", production_plan_id, position_id, force)
         raise
+    # Коммит ДО формирования ответа. `get_db` коммитит после выхода из
+    # зависимости, а FastAPI 0.106+ отдаёт ответ раньше: клиент, получив 200,
+    # сразу перечитывает план и видит незакоммиченный статус — кнопка
+    # «Утвердить» остаётся на уже утверждённой позиции.
+    await db.commit()
     return {
         "id": position.id,
         "production_plan_id": position.production_plan_id,
@@ -417,6 +459,12 @@ async def cancel_position(
         )
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
+    # Коммит ДО формирования ответа — ровно как в `approve_position` (:329).
+    # `cancel_plan_position` меняет статус позиции, статус плана и пишет
+    # AuditLog, но коммитит только `flush`: `get_db` коммитит уже после
+    # ответа, а FastAPI 0.106+ отдаёт ответ раньше. Клиент, получив 200 и
+    # сразу перечитав план, увидел бы позицию по-прежнему `approved`.
+    await db.commit()
     return {
         "id": position.id,
         "production_plan_id": position.production_plan_id,
@@ -439,6 +487,10 @@ async def restore_position(
         )
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
+    # Коммит ДО формирования ответа — см. комментарий в `cancel_position`.
+    # `restore_plan_position` меняет статус позиции и плана и пишет AuditLog,
+    # но только `flush` — без коммита клиент увидел бы отменённую позицию.
+    await db.commit()
     return {
         "id": position.id,
         "production_plan_id": position.production_plan_id,
@@ -578,6 +630,7 @@ async def bulk_approve_positions(
                     position_id,
                     force=payload.force,
                     changed_by=current_user.id,
+                    reason=payload.reason,
                 )
                 results.append(
                     BulkActionResultItem(
@@ -596,6 +649,12 @@ async def bulk_approve_positions(
             results.append(
                 BulkActionResultItem(id=position_id, status="failed", reason="Внутренняя ошибка сервера")
             )
+    # Коммит ДО формирования ответа — ровно как в `approve_position` (:329).
+    # `get_db` коммитит уже после ответа, а FastAPI 0.106+ отдаёт ответ
+    # раньше: оператор видит «успешно» и сразу перечитывает план, где
+    # статусы ещё не сохранены. Один коммит закрывает весь батч — включая
+    # записи аудита и `validation_status`, сделанные внутри savepoint'ов.
+    await db.commit()
     return BulkActionResponse(results=results)
 
 
@@ -677,6 +736,12 @@ async def bulk_delete_positions(
             results.append(
                 BulkActionResultItem(id=position_id, status="failed", reason="Внутренняя ошибка сервера")
             )
+    # Коммит ДО формирования ответа — ровно как в `bulk_approve_positions` (:535).
+    # Внутри цикла только savepoint'ы (`begin_nested`), а `get_db` коммитит уже
+    # после ответа: клиент получил бы 200 со списком успехов и перечитал план,
+    # где удаления и скрытия ещё не сохранены. Один коммит закрывает весь
+    # батч — включая hard-delete, `deleted_at` и записи аудита из savepoint'ов.
+    await db.commit()
     return BulkActionResponse(results=results)
 
 
@@ -806,11 +871,32 @@ async def route_check(
             },
         }
 
+    signature_comparison = await compare_position_route_signature(
+        db,
+        position,
+        profile=await db.get(RouteRuleProfile, rule_profile_id) if rule_profile_id else None,
+        product=product,
+        route_id=route_info.route_id,
+    )
+
     return RouteCheckOut(
         expected_signature=expected_signature,
         active_route_snapshot=active_route_snapshot,
         match=len(issues) == 0,
         issues=issues,
+        route_signature=RouteSignatureCheckOut(
+            verdict=signature_comparison.verdict,
+            expected=signature_comparison.expected,
+            expected_steps=[
+                RouteSignatureStepOut(**step.as_dict())
+                for step in signature_comparison.expected_steps
+            ],
+            actual=signature_comparison.actual,
+            actual_steps=[
+                RouteSignatureStepOut(**step.as_dict())
+                for step in signature_comparison.actual_steps
+            ],
+        ),
     )
 
 
@@ -991,7 +1077,15 @@ class PlanPositionOut(BaseModel):
     route_error: str | None = None
     raw_excel_row: dict | None = None
     payload: dict | None = None
+    # Индикатор остатка (#207) — три числа с тремя именами. None = «нет
+    # данных о наличии» (индикатор не показывается), 0 = «действительно
+    # ноль» (показывается).
+    #   free_stock_quantity        — «Свободно на складах» (свойство склада)
+    #   available_remainder_quantity — «Доступно для позиции» (минус чужие)
+    #   deficit_quantity           — «Дефицит позиции» (до планового количества)
+    free_stock_quantity: float | None = None
     available_remainder_quantity: float | None = None
+    deficit_quantity: float | None = None
     # Авторасчёт «количество на подвес» (#66): расчёт на лету по длине позиции.
     quantity_per_hanger: int | None = None
     quantity_per_hanger_source: str | None = None  # "auto" | "manual" | null
@@ -1050,24 +1144,22 @@ def _source_row_numbers_from_position(position: PlanPosition) -> list[int] | Non
     return None
 
 
-async def _compute_available_remainder_for_positions(
+async def _compute_position_stock_figures(
     db: AsyncSession,
     positions: list[PlanPosition],
     route_info_by_id: dict[int, ResolvedRouteInfo],
-) -> dict[int, float]:
-    """Считает available_remainder_quantity для списка позиций плана.
+) -> dict[int, PositionStockFigures]:
+    """Три числа индикатора остатка для списка позиций плана (#207).
 
-    Для каждой позиции: резолвит effective_product_id, загружает route_remainder_steps
-    (один раз на route_id), вызывает compute_available_remainder_quantity.
-    Возвращает dict {position_id: available_remainder_quantity}.
+    Для каждой позиции: резолвим effective_product_id, один раз на
+    route_id грузим этапы, считаем «свободно на складах» / «доступно для
+    позиции» / «дефицит». Позиция не вычитает сама себя, но чужие позиции
+    того же артикула учитываются — поэтому считаем всё разом, без N+1.
     """
     from sqlalchemy.orm import selectinload
 
-    from app.services.position_remainders import compute_available_remainder_quantities
-    from app.services.production_planning_rows import (
-        _resolve_effective_product_ids,
-        min_available_remainder,
-    )
+    from app.services.position_remainders import compute_position_stock_figures
+    from app.services.production_planning_rows import _resolve_effective_product_ids
 
     if not positions:
         return {}
@@ -1083,7 +1175,7 @@ async def _compute_available_remainder_for_positions(
         for info in route_info_by_id.values()
         if info.route_id is not None
     }
-    route_remainder_steps_by_route_id: dict[int, list[dict]] = {}
+    route_steps_by_route_id: dict[int, list[dict]] = {}
     if unique_route_ids:
         rows = (
             await db.execute(
@@ -1096,7 +1188,7 @@ async def _compute_available_remainder_for_positions(
             )
         ).all()
         for stage, section in rows:
-            route_remainder_steps_by_route_id.setdefault(stage.route_id, []).append(
+            route_steps_by_route_id.setdefault(stage.route_id, []).append(
                 {
                     "sequence": stage.sequence,
                     "section_id": section.id,
@@ -1104,34 +1196,28 @@ async def _compute_available_remainder_for_positions(
                 }
             )
 
-    product_ids_for_remainders: set[int] = set()
+    result: dict[int, PositionStockFigures] = {}
+    indicator_targets: list[tuple[int, list[int], float]] = []
     for p in positions:
         info = route_info_by_id.get(p.id)
-        if info is None or info.route_id is None:
-            continue
-        if not route_remainder_steps_by_route_id.get(info.route_id):
-            continue
-        effective_ids = effective_products_by_id.get(p.id)
-        if effective_ids:
-            product_ids_for_remainders.update(effective_ids)
-
-    available_by_product = await compute_available_remainder_quantities(
-        db,
-        product_ids_for_remainders,
-    )
-
-    result: dict[int, float] = {}
-    for p in positions:
-        info = route_info_by_id.get(p.id)
-        if info is None or info.route_id is None:
-            result[p.id] = 0.0
-            continue
-        steps = route_remainder_steps_by_route_id.get(info.route_id) or []
+        steps = (
+            route_steps_by_route_id.get(info.route_id)
+            if info is not None and info.route_id
+            else None
+        )
         if not steps:
-            result[p.id] = 0.0
+            # Нет маршрута — нет и данных о наличии: индикатор не
+            # показывается, а не показывается ноль (#207).
+            result[p.id] = PositionStockFigures(None, None, None)
             continue
-        effective_ids = effective_products_by_id.get(p.id) or []
-        result[p.id] = min_available_remainder(available_by_product, effective_ids)
+        indicator_targets.append(
+            (
+                p.id,
+                effective_products_by_id.get(p.id) or [],
+                float(p.quantity or 0),
+            )
+        )
+    result.update(await compute_position_stock_figures(db, indicator_targets))
     return result
 
 
@@ -1141,14 +1227,44 @@ ALL_POSITIONS_PLANNING_STATUSES = (
     PlanPositionStatus.valid,
 )
 
-ALL_POSITIONS_SORT_FIELDS = frozenset({
-    "source_row_number",
-    "source_sku",
-    "quantity",
-    "status",
-    "validation_status",
-    "dimensions",
-})
+# Единая таблица «поле ?sort= → выражение SQL» для списка позиций всех планов.
+# Она же — источник истины для валидации: apply_sort отвечает 400 на поле,
+# которого здесь нет, поэтому поле нельзя забыть прописать (или, наоборот,
+# объявить, но не резолвить).
+#
+# Значение — выражение SQLAlchemy для прямой колонки plan_positions либо
+# callable для полей, чьё выражение строится на каждый запрос (скалярный
+# подзапрос длины задания, счётчик ошибок валидации).
+_ALL_POSITIONS_SORT_COLUMNS: dict[str, object] = {
+    "id": PlanPosition.id,
+    "source_row_number": PlanPosition.source_row_number,
+    "source_sku": PlanPosition.source_sku,
+    "source_name": PlanPosition.source_name,
+    "quantity": PlanPosition.quantity,
+    # Статусы — enum, сортируем по имени значения, а не по внутреннему порядку.
+    "status": lambda: cast(PlanPosition.status, String),
+    "validation_status": lambda: cast(PlanPosition.validation_status, String),
+    "dimensions": lambda: _position_task_length_mm_expr(),
+    # Счётчик ошибок валидации — тот же, что фильтр has_errors.
+    "errors": lambda: sa_func.coalesce(
+        sa_func.jsonb_array_length(PlanPosition.validation_errors), 0
+    ),
+}
+
+# Курируемый набор полей сортировки: контракт для фронта. Валидация идёт по
+# _ALL_POSITIONS_SORT_COLUMNS, поэтому набор выводится из таблицы, а не живёт
+# отдельно.
+ALL_POSITIONS_SORT_FIELDS = frozenset(_ALL_POSITIONS_SORT_COLUMNS)
+
+# Поля, где значение может быть пустым: безразмерные позиции (NULL) и позиции
+# без наименования. Пустые уходят в конец в ЛЮБОМ направлении (в Postgres DESC
+# по умолчанию ставит NULL первым — оператор кликнул «спустить», а пустые
+# уехали наверх).
+_ALL_POSITIONS_SORT_NULLS_LAST_FIELDS = ("dimensions", "source_name")
+
+# Сортировка по умолчанию — порядок строк импорта (тот же, что был до
+# перехода на общий контракт ``?sort=``).
+_ALL_POSITIONS_SORT_DEFAULT = SortClause("source_row_number", "asc")
 
 
 # Длина/габарит задания позиции в SQL — общий с execution-страницей:
@@ -1260,33 +1376,6 @@ def _apply_all_positions_filters(
     return stmt
 
 
-def _all_positions_order_columns(sort_by: str, sort_order: str):
-    resolved_sort_by = sort_by if sort_by in ALL_POSITIONS_SORT_FIELDS else "source_row_number"
-    if sort_order not in ("asc", "desc"):
-        sort_order = "asc"
-
-    if resolved_sort_by == "source_sku":
-        order_column = PlanPosition.source_sku
-    elif resolved_sort_by == "quantity":
-        order_column = PlanPosition.quantity
-    elif resolved_sort_by == "status":
-        order_column = cast(PlanPosition.status, String)
-    elif resolved_sort_by == "validation_status":
-        order_column = cast(PlanPosition.validation_status, String)
-    elif resolved_sort_by == "dimensions":
-        order_column = _position_task_length_mm_expr()
-    else:
-        order_column = PlanPosition.source_row_number
-
-    # Безразмерные (NULL) — всегда в конец, независимо от направления сортировки.
-    if resolved_sort_by == "dimensions":
-        if sort_order == "asc":
-            return order_column.asc().nulls_last(), PlanPosition.id.asc()
-        return order_column.desc().nulls_last(), PlanPosition.id.desc()
-
-    if sort_order == "asc":
-        return order_column.asc(), PlanPosition.id.asc()
-    return order_column.desc(), PlanPosition.id.desc()
 
 
 async def _serialize_plan_positions(
@@ -1319,7 +1408,7 @@ async def _serialize_plan_positions(
             route_resolve_cache[cache_key] = route_info
         route_info_by_id[p.id] = route_info
 
-    available_remainder_by_id = await _compute_available_remainder_for_positions(
+    stock_figures_by_id = await _compute_position_stock_figures(
         db, positions, route_info_by_id
     )
     hanger_values = await resolve_positions_hanger(db, positions)
@@ -1332,6 +1421,9 @@ async def _serialize_plan_positions(
         route_info = route_info_by_id[p.id]
         hanger_value = hanger_values[p.id]
         task_dims = position_dimensions_for_task(p)
+        figures = stock_figures_by_id.get(
+            p.id, PositionStockFigures(None, None, None)
+        )
         result.append(
             PlanPositionOut(
                 id=p.id,
@@ -1361,7 +1453,7 @@ async def _serialize_plan_positions(
                 route_error=route_info.error,
                 raw_excel_row=(p.source_payload or {}).get("raw_excel_row"),
                 payload=p.source_payload,
-                available_remainder_quantity=round(available_remainder_by_id.get(p.id, 0.0), 3),
+                **figures.as_fields(),
                 quantity_per_hanger=hanger_value.quantity_per_hanger,
                 quantity_per_hanger_source=hanger_value.source,
                 dimensions=task_dims,
@@ -1399,8 +1491,10 @@ async def all_plan_positions(
         default=None,
         description='Column filter: exact JSON match on position task dimensions, e.g. {"length_mm":2700} or null',
     ),
-    sort_by: str = Query(default="source_row_number"),
-    sort_order: str = Query(default="asc"),
+    sort: str | None = Query(
+        default=None,
+        description="Comma-separated sort rules: field:asc|desc, e.g. source_row_number:asc,id:asc",
+    ),
     limit: int = Query(default=50, ge=1, le=500),
     offset: int = Query(default=0, ge=0),
     db: AsyncSession = Depends(get_db),
@@ -1429,12 +1523,17 @@ async def all_plan_positions(
     count_stmt = select(sa_func.count()).select_from(stmt.subquery())
     total = (await db.execute(count_stmt)).scalar() or 0
 
-    primary_order, tiebreaker_order = _all_positions_order_columns(sort_by, sort_order)
-    positions = (
-        await db.execute(
-            stmt.order_by(primary_order, tiebreaker_order).limit(limit).offset(offset)
-        )
-    ).scalars().all()
+    # Сортировка разбирается до выполнения запроса: неизвестное поле — 400, а не
+    # пустая выборка. Приоритеты слева направо, в конце tiebreaker по PK.
+    sort_clauses = parse_sort(sort, default=_ALL_POSITIONS_SORT_DEFAULT)
+    stmt = apply_sort(
+        stmt,
+        sort_clauses,
+        _ALL_POSITIONS_SORT_COLUMNS,
+        tiebreaker=PlanPosition.id,
+        nulls_last=_ALL_POSITIONS_SORT_NULLS_LAST_FIELDS,
+    )
+    positions = (await db.execute(stmt.limit(limit).offset(offset))).scalars().all()
 
     serialized = await _serialize_plan_positions(db, positions)
     return AllPlanPositionsListResponse(
@@ -1482,7 +1581,7 @@ async def cancelled_positions(db: AsyncSession = Depends(get_db)) -> list[PlanPo
             route_resolve_cache[cache_key] = route_info
         route_info_by_id[p.id] = route_info
 
-    available_remainder_by_id = await _compute_available_remainder_for_positions(
+    stock_figures_by_id = await _compute_position_stock_figures(
         db, positions, route_info_by_id
     )
     hanger_values = await resolve_positions_hanger(db, positions)
@@ -1491,6 +1590,9 @@ async def cancelled_positions(db: AsyncSession = Depends(get_db)) -> list[PlanPo
     for p in positions:
         route_info = route_info_by_id[p.id]
         hanger_value = hanger_values[p.id]
+        figures = stock_figures_by_id.get(
+            p.id, PositionStockFigures(None, None, None)
+        )
         result.append(
             PlanPositionOut(
                 id=p.id,
@@ -1520,7 +1622,7 @@ async def cancelled_positions(db: AsyncSession = Depends(get_db)) -> list[PlanPo
                 route_error=route_info.error,
                 raw_excel_row=(p.source_payload or {}).get("raw_excel_row"),
                 payload=p.source_payload,
-                available_remainder_quantity=round(available_remainder_by_id.get(p.id, 0.0), 3),
+                **figures.as_fields(),
                 quantity_per_hanger=hanger_value.quantity_per_hanger,
                 quantity_per_hanger_source=hanger_value.source,
                 **_position_operation_fields(p),
@@ -1568,7 +1670,7 @@ async def all_positions(production_plan_id: int, db: AsyncSession = Depends(get_
             route_resolve_cache[cache_key] = route_info
         route_info_by_id[p.id] = route_info
 
-    available_remainder_by_id = await _compute_available_remainder_for_positions(
+    stock_figures_by_id = await _compute_position_stock_figures(
         db, positions, route_info_by_id
     )
     hanger_values = await resolve_positions_hanger(db, positions)
@@ -1577,6 +1679,9 @@ async def all_positions(production_plan_id: int, db: AsyncSession = Depends(get_
     for p in positions:
         route_info = route_info_by_id[p.id]
         hanger_value = hanger_values[p.id]
+        figures = stock_figures_by_id.get(
+            p.id, PositionStockFigures(None, None, None)
+        )
         result.append(
             PlanPositionOut(
                 id=p.id,
@@ -1606,7 +1711,7 @@ async def all_positions(production_plan_id: int, db: AsyncSession = Depends(get_
                 route_error=route_info.error,
                 raw_excel_row=(p.source_payload or {}).get("raw_excel_row"),
                 payload=p.source_payload,
-                available_remainder_quantity=round(available_remainder_by_id.get(p.id, 0.0), 3),
+                **figures.as_fields(),
                 quantity_per_hanger=hanger_value.quantity_per_hanger,
                 quantity_per_hanger_source=hanger_value.source,
                 **_position_operation_fields(p),
@@ -1877,26 +1982,108 @@ async def batch_preview(production_plan_id: int, batch_id: int, db: AsyncSession
     }
 
 
+_TRUNCATE_ALL_PRODUCTION_DATA = text("""
+    TRUNCATE TABLE
+        defect_items, defect_decisions, transfer_discrepancy_defect_items,
+        defects, rework_tasks, stock_balances, stock_transactions, transfers,
+        work_tasks, section_plan_lines, internal_plans,
+        release_batch_positions, release_batches,
+        plan_change_items, plan_change_sets,
+        plan_positions, import_batches, import_files,
+        production_plans,
+        route_selection_rules, route_rule_profiles, production_routes,
+        route_stages, route_operations, route_matching_rules, route_rule_conditions,
+        import_templates
+    CASCADE
+""")
+
+_TRUNCATE_ATTEMPTS = 5
+
+# Полный сброс берёт ACCESS EXCLUSIVE сразу на всех таблицах, поэтому
+# сталкивается с любой транзакцией, которая ещё держит блокировку. Такие
+# транзакции — норма, а не аномалия: `get_db` коммитит ПОСЛЕ ответа
+# (см. докстринг там), значит запрос, чей ответ уже ушёл, ещё секунду
+# держит блокировки. В E2E это давало 500 на `reset-all` и грязные данные
+# в следующем тесте.
+#
+# `lock_timeout` обязателен: без него ожидание блокировки не имеет предела.
+# `deadlock_timeout` в Postgres срабатывает только на настоящем цикле
+# ожидания, а `TRUNCATE` против транзакции, которая просто держит блокировку,
+# — это не цикл. Без предела запрос висел бы до бесконечности, а не
+# повторялся.
+_TRUNCATE_LOCK_TIMEOUT = "2s"
+
+# SQLSTATE → что это за конфликт. Различаем по коду, а не по тексту: текст
+# драйвера не контракт, «deadlock» в сообщении чужой ошибки дал бы ложный
+# повтор, а настоящий дедлок с нестандартной формулировкой — пропуск.
+_TRUNCATE_RETRY_CONFLICTS = {
+    # lock_not_available — lock_timeout истёк, блокировку держит другая транзакция
+    "55P03": "ожидание блокировки не уложилось в lock_timeout",
+    # deadlock_detected — сервер сам разорвал цикл ожидания
+    "40P01": "дедлок обнаружен сервером",
+}
+
+
+def _db_error_sqlstate(exc: BaseException) -> str | None:
+    """SQLSTATE драйвера (`sqlstate` у psycopg, `pgcode` у asyncpg)."""
+    orig = getattr(exc, "orig", None)
+    if orig is None:
+        return None
+    for attr in ("sqlstate", "pgcode"):
+        code = getattr(orig, attr, None)
+        if code:
+            return str(code).upper()
+    return None
+
+
+async def _truncate_all_production_data(db: AsyncSession) -> None:
+    """`TRUNCATE ... CASCADE` с повтором по конфликту блокировок.
+
+    Конфликт блокировок в Postgres — штатная транзиентная ситуация, её
+    штатное лечение — повтор: откатываемся и пробуем снова. Ничего не
+    маскируем: если конфликт не рассосался за `_TRUNCATE_ATTEMPTS`,
+    ошибка уходит наверх.
+
+    Вызывающий обязан снять атрибуцию аудита ДО вызова: откат здесь
+    переводит ORM-объекты сессии в expired, и чтение их полей после
+    повтора упало бы `MissingGreenlet`.
+    """
+    log = logging.getLogger(__name__)
+    for attempt in range(1, _TRUNCATE_ATTEMPTS + 1):
+        try:
+            await db.execute(text(f"SET LOCAL lock_timeout = '{_TRUNCATE_LOCK_TIMEOUT}'"))
+            await db.execute(_TRUNCATE_ALL_PRODUCTION_DATA)
+            return
+        except DBAPIError as exc:
+            sqlstate = _db_error_sqlstate(exc)
+            conflict = _TRUNCATE_RETRY_CONFLICTS.get(sqlstate or "")
+            if conflict is None or attempt == _TRUNCATE_ATTEMPTS:
+                raise
+            log.warning(
+                "reset-all: %s (SQLSTATE %s) на попытке %d/%d, откат и повтор",
+                conflict,
+                sqlstate,
+                attempt,
+                _TRUNCATE_ATTEMPTS,
+            )
+            await db.rollback()
+            await asyncio.sleep(0.2 * attempt)
+
+
 @router.post("/reset-all", status_code=status.HTTP_204_NO_CONTENT)
 async def reset_all_plans(
     db: AsyncSession = Depends(get_db),
     current_user: User = Depends(get_current_user),
 ):
     """Удалить все производственные планы, связанные данные и справочники (маршруты, правила, импорты)."""
-    await db.execute(text("""
-        TRUNCATE TABLE
-            defect_items, defect_decisions, transfer_discrepancy_defect_items,
-            defects, rework_tasks, stock_balances, stock_transactions, transfers,
-            work_tasks, section_plan_lines, internal_plans,
-            release_batch_positions, release_batches,
-            plan_change_items, plan_change_sets,
-            plan_positions, import_batches, import_files,
-            production_plans,
-            route_selection_rules, route_rule_profiles, production_routes,
-            route_stages, route_operations, route_matching_rules, route_rule_conditions,
-            import_templates
-        CASCADE
-    """))
+    # Атрибуция аудита снимается ДО сброса. Откат в цикле повтора делает
+    # `current_user` expired, и чтение user.id / user.full_name после него
+    # упало бы MissingGreenlet — то есть повтор, вылечивший TRUNCATE,
+    # ломал эндпоинт на аудите и давал 500.
+    user_id = current_user.id if current_user is not None else None
+    user_name = current_user.full_name if current_user is not None else None
+
+    await _truncate_all_production_data(db)
 
     # Запись лога аудита (полный сброс системы)
     from app.services.audit_log_service import log_action
@@ -1906,7 +2093,8 @@ async def reset_all_plans(
         status="success",
         title="Сброс системы",
         message="Все производственные планы, связанные данные, справочники, маршруты и импорты были полностью удалены (TRUNCATE CASCADE).",
-        user=current_user,
+        user_id=user_id,
+        user_name=user_name,
         action=AuditAction.DELETE,
     )
 
@@ -1985,6 +2173,11 @@ async def update_position_quantity(
 
     route_info = await resolve_position_route(db, position)
     hanger_value = (await resolve_positions_hanger(db, [position]))[position.id]
+    # Индикатор после правки количества — пересчитываем, а не гасим:
+    # именно этой правкой меняется «дефицит позиции» (#207).
+    stock_figures = (
+        await _compute_position_stock_figures(db, [position], {position.id: route_info})
+    ).get(position.id, PositionStockFigures(None, None, None))
 
     return PlanPositionOut(
         id=position.id,
@@ -2014,7 +2207,7 @@ async def update_position_quantity(
         route_error=route_info.error,
         raw_excel_row=(position.source_payload or {}).get("raw_excel_row"),
         payload=position.source_payload,
-        available_remainder_quantity=None,
+        **stock_figures.as_fields(),
         quantity_per_hanger=hanger_value.quantity_per_hanger,
         quantity_per_hanger_source=hanger_value.source,
         **_position_operation_fields(position),

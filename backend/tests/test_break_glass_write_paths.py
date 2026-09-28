@@ -82,7 +82,10 @@ async def test_break_glass_shopfloor_completion_defect_and_decision(
     )
     assert completed.status_code == 200, completed.text
     body = completed.json()
-    assert body["status"] == "in_progress"
+    # Трансформирующий участок: списан весь вход (90 годных + 10 брака = 100),
+    # поэтому задание завершено. Статус считается по списанному входу, а не по
+    # остатку выходов (transform-aware логика, d7fb76c).
+    assert body["status"] == "completed"
     assert Decimal(str(body["completed_quantity"])) == Decimal("100")
     defect_id = body["defect_id"]
     assert defect_id is not None

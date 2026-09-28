@@ -11,6 +11,7 @@ import {
 import { getProductStockBalances } from "@/shared/api/stock";
 import { getProduct } from "@/shared/api/products";
 import { queryKeys } from "@/shared/api/queryKeys";
+import { fmtQty } from "@/shared/lib/quantityFormat";
 
 interface ProductStockBalanceDialogProps {
   productId: number;
@@ -79,7 +80,7 @@ export function ProductStockBalanceDialog({
                       <td className="p-2">
                         <span className="text-xs font-medium text-muted-foreground">{b.quality_state}</span>
                       </td>
-                      <td className="p-2 text-right font-semibold font-mono">{b.balance_qty}</td>
+                      <td className="p-2 text-right font-semibold font-mono">{fmtQty(b.balance_qty)}</td>
                       <td className="p-2 text-center">
                         <Button
                           size="sm"
@@ -96,7 +97,7 @@ export function ProductStockBalanceDialog({
                 <tfoot className="bg-muted/30 border-t font-semibold">
                   <tr>
                     <td colSpan={2} className="p-2 text-right">Итого:</td>
-                    <td className="p-2 text-right font-mono">{String(Math.round(total))}</td>
+                    <td className="p-2 text-right font-mono">{fmtQty(total)}</td>
                     <td />
                   </tr>
                 </tfoot>

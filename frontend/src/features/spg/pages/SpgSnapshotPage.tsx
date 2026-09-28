@@ -10,6 +10,7 @@ import { StockAdjustmentDialog } from "../components/StockAdjustmentDialog";
 import { ImportRemaindersDialog } from "../components/ImportRemaindersDialog";
 import { ProductStockBalanceDialog } from "../components/ProductStockBalanceDialog";
 import { StockTransactionsHistoryDrawer } from "../components/StockTransactionsHistoryDrawer";
+import { invalidateAfter } from "@/shared/api/cacheInvalidation";
 import { queryKeys } from "@/shared/api/queryKeys";
 import { Input, Button, StockBalancesPanel } from "@/shared/ui";
 
@@ -31,7 +32,7 @@ export function SpgSnapshotPage() {
   });
 
   const handleRefresh = () => {
-    void queryClient.invalidateQueries({ queryKey: queryKeys.stock.balancesAll() });
+    void invalidateAfter(queryClient, "stockChanged");
   };
 
   const handleToggleSpg = (id: number) => {
@@ -187,8 +188,7 @@ export function SpgSnapshotPage() {
         open={isImportDialogOpen}
         onOpenChange={setIsImportDialogOpen}
         onSaved={() => {
-          void queryClient.invalidateQueries({ queryKey: queryKeys.stock.balancesAll() });
-          void queryClient.invalidateQueries({ queryKey: queryKeys.stock.transactions() });
+          void invalidateAfter(queryClient, "stockChanged");
         }}
       />
 

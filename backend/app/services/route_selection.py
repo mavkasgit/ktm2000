@@ -4,7 +4,7 @@ from dataclasses import dataclass, field
 import re
 from typing import Any
 
-from sqlalchemy import select
+from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.models.product import Product
@@ -571,13 +571,21 @@ async def load_route_selection_batch_cache(
 async def load_route_sections(
     db: AsyncSession, route_ids: list[int]
 ) -> dict[int, list[tuple[int, str]]]:
-    """Join этапов маршрутов: route_id -> [(section_id, section_code)]."""
+    """Join этапов маршрутов: route_id -> [(section_id, section_code)].
+
+    Транзитный этап хранит склад в ``storage_section_id`` (секция этапа
+    пуста — инвариант БД), поэтому джойним по ``coalesce(section_id,
+    storage_section_id)``: складской шаг маршрута так же виден подбору и
+    его диагностике, как и цеховой. Иначе маршрут, собранный сидером или
+    импортом, терял бы в подборе все складские шаги.
+    """
     if not route_ids:
         return {}
+    effective_section = func.coalesce(RouteStage.section_id, RouteStage.storage_section_id)
     rows = (
         await db.execute(
             select(RouteStage.route_id, Section.id, Section.code)
-            .join(Section, Section.id == RouteStage.section_id)
+            .join(Section, Section.id == effective_section)
             .where(RouteStage.route_id.in_(route_ids))
             .order_by(RouteStage.route_id, RouteStage.sequence)
         )

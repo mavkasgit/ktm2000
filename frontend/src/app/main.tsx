@@ -16,7 +16,12 @@ startAppVersionWatch()
 const queryClient = new QueryClient({
   defaultOptions: {
     queries: {
-      staleTime: 1000 * 60 * 5,
+      // Три секунды, а не пять минут. `staleTime` здесь — не «как долго
+      // хранить», а «когда прийти на экран и не перечитывать заново»: всё, что
+      // дольше нескольких секунд, превращает любую забытую инвалидацию в тихий
+      // баг, который виден только как «данные появились после F5». Реальная
+      // свежесть обеспечивается реестром сброса (`shared/api/cacheInvalidation`).
+      staleTime: 1000 * 3,
       retry: 1,
     },
   },
@@ -26,7 +31,10 @@ function App() {
   return (
     <AuthProvider>
       <QueryClientProvider client={queryClient}>
-        <RouterProvider router={router} />
+        {/* Раздел приезжает своим чанком. Навигация идёт через
+            `startTransition`, поэтому React не прячет уже показанный раздел,
+            пока едет чанк: фокус не теряется, «белого экрана» нет. */}
+        <RouterProvider router={router} future={{ v7_startTransition: true }} />
         <Toaster />
       </QueryClientProvider>
     </AuthProvider>

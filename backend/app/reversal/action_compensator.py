@@ -162,9 +162,11 @@ class StockActionCompensator(MirrorLedgerMixin):
         action_id (amend #115) координатами не являются.
 
         Структура payload: ``{"entries": [<tx_coord>, …]}`` — каждая
-        запись содержит product/from/to/quantity/reason/dimensions/quality
-        и опциональные task_id, section_plan_line_id, is_post_factum.
+        запись содержит product/from/to/quantity/reason/dimensions/
+        completed_operations/quality и опциональные task_id,
+        section_plan_line_id, is_post_factum.
         """
+
         txs = await self._generation(db, action)
         if not txs:
             return None
@@ -179,6 +181,11 @@ class StockActionCompensator(MirrorLedgerMixin):
                 "from_quality_state": _enum_str(tx.from_quality_state),
                 "to_quality_state": _enum_str(tx.to_quality_state),
                 "dimensions": dict(tx.dimensions) if tx.dimensions is not None else None,
+                "completed_operations": (
+                    list(tx.completed_operations)
+                    if tx.completed_operations is not None
+                    else None
+                ),
             }
             if tx.task_id is not None:
                 entry["task_id"] = int(tx.task_id)

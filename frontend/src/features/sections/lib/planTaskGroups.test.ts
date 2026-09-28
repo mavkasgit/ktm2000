@@ -65,8 +65,8 @@ describe("buildPlanTaskGroups", () => {
 
     expect(groups).toHaveLength(2);
     const groupsByLabel = Object.fromEntries(groups.map((group) => [group.label, group]));
-    expect(groupsByLabel["ЮП-2083 · 2,75 м"].rows.map((row) => row.task.id)).toEqual([1, 2]);
-    expect(groupsByLabel["ЮП-2083 · 3 м"].rows.map((row) => row.task.id)).toEqual([3]);
+    expect(groupsByLabel["ЮП-2083 · 2,75 м"].rows.map((row) => row.tasks.map((task) => task.id))).toEqual([[1], [2]]);
+    expect(groupsByLabel["ЮП-2083 · 3 м"].rows.map((row) => row.tasks.map((task) => task.id))).toEqual([[3]]);
   });
 
   it("объединяет разные артикулы одинакового цвета и размера", () => {
@@ -84,46 +84,66 @@ describe("buildPlanTaskGroups", () => {
       "серебро · 2,75 м",
       "чёрный · 2,75 м",
     ]);
-    expect(groupsByLabel["серебро · 2,75 м"].rows.map((row) => row.task.product_sku)).toEqual([
+    expect(groupsByLabel["серебро · 2,75 м"].rows.map((row) => row.productSku)).toEqual([
       "ЮП-2083",
       "ЮП-2091",
     ]);
-    expect(groupsByLabel["чёрный · 2,75 м"].rows.map((row) => row.task.product_sku)).toEqual([
+    expect(groupsByLabel["чёрный · 2,75 м"].rows.map((row) => row.productSku)).toEqual([
       "ЮП-2122",
     ]);
   });
 
-  it("хранит упаковку и её детали в соответствующей строке задания", () => {
+  it("сливает задания с одинаковыми операциями и разбивает упаковку по количеству", () => {
     const tasks = [
       makeTask({
         id: 1,
-        source_payload: {
-          packaging: "Стрейч",
-          packaging_1_8_quantity: "80",
-          add_quantity: "20",
-        },
+        planned_quantity: "300",
+        operation_codes: ["ANOD_01", "PACK_SPUNBOND"],
+        operation_names: ["Серебро", "Спанбонд"],
+        source_payload: { packaging: "смотка спанбондом поштучно в пачке 10 штук" },
       }),
       makeTask({
         id: 2,
-        source_payload: {
-          packaging: "Короб",
-          packaging_1_8_quantity: "40",
-          add_quantity: "10",
-        },
+        planned_quantity: "200",
+        operation_codes: ["ANOD_01", "PACK_STRETCH"],
+        operation_names: ["Серебро", "Стрейч"],
+        source_payload: { packaging: "поф, красная этикетка РП 23*150" },
       }),
     ];
 
     const groups = buildPlanTaskGroups(tasks, "article");
 
     expect(groups).toHaveLength(1);
-    expect(groups[0].rows.map((row) => ({
-      taskId: row.task.id,
-      packaging: row.packaging,
-      details: row.packagingDetails,
-    }))).toEqual([
-      { taskId: 1, packaging: "Стрейч", details: ["1,8 м: 80", "Добавить: 20"] },
-      { taskId: 2, packaging: "Короб", details: ["1,8 м: 40", "Добавить: 10"] },
+    expect(groups[0].rows).toHaveLength(1);
+    const row = groups[0].rows[0];
+    expect(row.tasks.map((task) => task.id)).toEqual([1, 2]);
+    expect(row.planQty).toBe(500);
+    expect(row.balanceQty).toBe(500);
+    expect(row.packaging).toEqual([
+      { label: "Спанбонд", qty: 300 },
+      { label: "Стрейч", qty: 200 },
     ]);
+    expect(groups[0].totalQtyPlan).toBe(500);
+  });
+
+  it("не сливает задания с разными операциями участка", () => {
+    const tasks = [
+      makeTask({ id: 1, operation_code: "ANOD_01", operation_name: "Серебро" }),
+      makeTask({ id: 2, operation_code: "ANOD_05", operation_name: "Чёрный" }),
+    ];
+
+    const groups = buildPlanTaskGroups(tasks, "article");
+
+    expect(groups[0].rows.map((row) => row.operationName)).toEqual(["Серебро", "Чёрный"]);
+  });
+
+  it("оставляет упаковку пустой, если на участке нет упаковочной операции", () => {
+    const groups = buildPlanTaskGroups(
+      [makeTask({ operation_codes: ["ANOD_01"], operation_names: ["Серебро"] })],
+      "article",
+    );
+
+    expect(groups[0].rows[0].packaging).toEqual([]);
   });
 
   it("не объединяет одинаковый цвет с разными размерами", () => {
@@ -139,10 +159,10 @@ describe("buildPlanTaskGroups", () => {
 
     expect(Object.entries(groupsByLabel).map(([label, group]) => ({
       label,
-      taskIds: group.rows.map((row) => row.task.id),
+      taskIds: group.rows.map((row) => row.tasks.map((task) => task.id)),
     }))).toEqual(expect.arrayContaining([
-      { label: "серебро · 3 м", taskIds: [2] },
-      { label: "серебро · 2,75 м", taskIds: [1] },
+      { label: "серебро · 3 м", taskIds: [[2]] },
+      { label: "серебро · 2,75 м", taskIds: [[1]] },
     ]));
   });
 });

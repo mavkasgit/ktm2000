@@ -174,11 +174,85 @@ async def test_all_positions_sort_by_source_sku(client, session: AsyncSession):
     await session.commit()
 
     resp = await client.get(
-        "/api/production-plans/all-positions?sort_by=source_sku&sort_order=asc&limit=50"
+        "/api/production-plans/all-positions?sort=source_sku:asc&limit=50"
     )
     assert resp.status_code == 200, resp.text
     returned_skus = [pos["source_sku"] for pos in resp.json()["positions"]]
     assert returned_skus == sorted(skus)
+
+
+@pytest.mark.asyncio
+async def test_all_positions_sort_by_source_name_id_and_errors(client, session: AsyncSession):
+    """Колонки «Наименование», «Id» и «Ошибки» сортируются сервером по своим полям.
+
+    Раньше эти поля не резолвились, и фронт молча слал sort_by=source_row_number —
+    порядок строк не менялся.
+    """
+    plan = await _make_plan(session, plan_no="PLAN-SORT-NEW")
+    rows = [
+        # (sku, source_name, source_row_number, validation_errors)
+        ("NEW-SORT-1", "Яблоко", 1, ["ошибка 1", "ошибка 2"]),
+        ("NEW-SORT-2", "Абрикос", 2, []),
+        ("NEW-SORT-3", "Вишня", 3, ["ошибка 1"]),
+    ]
+    for sku, name, row_number, errors in rows:
+        product = await _make_product(session, sku, name=name)
+        session.add(
+            PlanPosition(
+                production_plan_id=plan.id,
+                product_id=product.id,
+                source_type=PlanSourceType.manual,
+                source_sku=sku,
+                source_name=name,
+                quantity=Decimal("1"),
+                source_payload={},
+                status=PlanPositionStatus.draft,
+                validation_status=PlanPositionValidationStatus.valid,
+                validation_errors=errors,
+                source_row_number=row_number,
+                period_start=plan.period_start,
+                period_end=plan.period_end,
+                has_pack_ops=False,
+            )
+        )
+    await session.commit()
+
+    by_name = await client.get(
+        "/api/production-plans/all-positions?sort=source_name:asc&limit=50"
+    )
+    assert by_name.status_code == 200, by_name.text
+    names = [pos["source_name"] for pos in by_name.json()["positions"]]
+    assert names == ["Абрикос", "Вишня", "Яблоко"]
+
+    by_name_desc = await client.get(
+        "/api/production-plans/all-positions?sort=source_name:desc&limit=50"
+    )
+    assert by_name_desc.status_code == 200, by_name_desc.text
+    assert [pos["source_name"] for pos in by_name_desc.json()["positions"]] == [
+        "Яблоко",
+        "Вишня",
+        "Абрикос",
+    ]
+
+    by_id = await client.get(
+        "/api/production-plans/all-positions?sort=id:asc&limit=50"
+    )
+    assert by_id.status_code == 200, by_id.text
+    ids = [pos["id"] for pos in by_id.json()["positions"]]
+    assert ids == sorted(ids)
+
+    # Сортировка по числу ошибок валидации: 0 → 1 → 2.
+    by_errors = await client.get(
+        "/api/production-plans/all-positions?sort=errors:asc&limit=50"
+    )
+    assert by_errors.status_code == 200, by_errors.text
+    assert [len(pos["errors"]) for pos in by_errors.json()["positions"]] == [0, 1, 2]
+
+    by_errors_desc = await client.get(
+        "/api/production-plans/all-positions?sort=errors:desc&limit=50"
+    )
+    assert by_errors_desc.status_code == 200, by_errors_desc.text
+    assert [len(pos["errors"]) for pos in by_errors_desc.json()["positions"]] == [2, 1, 0]
 
 
 @pytest.mark.asyncio
@@ -305,12 +379,130 @@ async def test_all_positions_filter_sort_by_dimensions(client, session: AsyncSes
 
     # Сортировка по размеру убыв.: 3000 → 2700 → 1000 → безразмерные в конце.
     sort_resp = await client.get(
-        "/api/production-plans/all-positions?sort_by=dimensions&sort_order=desc"
+        "/api/production-plans/all-positions?sort=dimensions:desc"
     )
-    assert sort_resp.status_code == 200, sort_resp.text
     skus = [p["source_sku"] for p in sort_resp.json()["positions"]]
     assert skus == ["DIMS-3000", "DIMS-2700", "DIMS-1000", "DIMS-NONE"]
 
     # Мусор в dimensions → 422.
     bad = await client.get("/api/production-plans/all-positions?dimensions=not-json")
     assert bad.status_code == 422
+
+
+@pytest.mark.asyncio
+async def test_all_positions_default_order_unchanged(client, session: AsyncSession):
+    """Без параметра сортировки позиции идут по номеру строки импорта, как и раньше."""
+    plan = await _make_plan(session, plan_no="PLAN-DEF-ORDER")
+    for idx, row_number in enumerate((30, 10, 20)):
+        product = await _make_product(session, f"DEF-ORDER-{idx}")
+        session.add(
+            PlanPosition(
+                production_plan_id=plan.id,
+                product_id=product.id,
+                source_type=PlanSourceType.manual,
+                source_sku=f"DEF-ORDER-{idx}",
+                source_name=f"DEF-ORDER-{idx}",
+                quantity=Decimal("1"),
+                source_payload={},
+                status=PlanPositionStatus.draft,
+                validation_status=PlanPositionValidationStatus.valid,
+                validation_errors=[],
+                source_row_number=row_number,
+                period_start=plan.period_start,
+                period_end=plan.period_end,
+                has_pack_ops=False,
+            )
+        )
+    await session.commit()
+
+    default_resp = await client.get("/api/production-plans/all-positions?limit=50")
+    assert default_resp.status_code == 200, default_resp.text
+    default_rows = [p["source_row_number"] for p in default_resp.json()["positions"]]
+    assert default_rows == [10, 20, 30]
+
+    # Явный дефолт даёт тот же порядок, что и отсутствие параметра.
+    explicit = await client.get(
+        "/api/production-plans/all-positions?sort=source_row_number:asc&limit=50"
+    )
+    assert explicit.status_code == 200, explicit.text
+    assert [p["source_row_number"] for p in explicit.json()["positions"]] == default_rows
+
+    # Дефолт не «просто любой»: сортировка по не-дефолтному полю переставляет
+    # строки. На HEAD, где параметра sort нет, остался бы исходный порядок —
+    # этот assert ловит именно перевод на общий контракт.
+    by_sku = await client.get(
+        "/api/production-plans/all-positions?sort=source_sku:desc&limit=50"
+    )
+    assert by_sku.status_code == 200, by_sku.text
+    # Артикулы заведены как DEF-ORDER-0/1/2 для строк 30/10/20, поэтому по
+    # source_sku:desc получаем 2, 1, 0.
+    assert [p["source_row_number"] for p in by_sku.json()["positions"]] == [20, 10, 30]
+
+
+@pytest.mark.asyncio
+async def test_all_positions_multi_sort_priorities(client, session: AsyncSession):
+    """Два приоритета: сначала валидация, потом наименование.
+
+    validation_status у всех позиций одинаковый, поэтому порядок по одному полю
+    не алфавитный, а по двум — алфавитный. Иначе тест не отличает
+    мультисортировку от одиночной сортировки по второму полю.
+    """
+    plan = await _make_plan(session, plan_no="PLAN-MULTI")
+    for name, row_number in (("Яблоко", 1), ("Абрикос", 2), ("Вишня", 3)):
+        product = await _make_product(session, f"MULTI-{row_number}")
+        session.add(
+            PlanPosition(
+                production_plan_id=plan.id,
+                product_id=product.id,
+                source_type=PlanSourceType.manual,
+                source_sku=f"MULTI-{row_number}",
+                source_name=name,
+                quantity=Decimal("1"),
+                source_payload={},
+                status=PlanPositionStatus.draft,
+                validation_status=PlanPositionValidationStatus.valid,
+                validation_errors=[],
+                source_row_number=row_number,
+                period_start=plan.period_start,
+                period_end=plan.period_end,
+                has_pack_ops=False,
+            )
+        )
+    await session.commit()
+
+    # Один приоритет: validation_status у всех valid, порядок задаёт tiebreaker
+    # по id, то есть порядок посева, а не алфавитный.
+    by_status = await client.get(
+        "/api/production-plans/all-positions?sort=validation_status:asc&limit=50"
+    )
+    assert by_status.status_code == 200, by_status.text
+    seeded_names = [p["source_name"] for p in by_status.json()["positions"]]
+    assert seeded_names == ["Яблоко", "Абрикос", "Вишня"], (
+ "одиночная сортировка по статусу не должна совпасть с алфавитной"
+    )
+
+    # Второй приоритет переставляет строки внутри равных по статусу.
+    by_both = await client.get(
+        "/api/production-plans/all-positions"
+        "?sort=validation_status:asc,source_name:asc&limit=50"
+    )
+    assert by_both.status_code == 200, by_both.text
+    assert [p["source_name"] for p in by_both.json()["positions"]] == [
+        "Абрикос",
+        "Вишня",
+        "Яблоко",
+    ]
+
+
+@pytest.mark.asyncio
+async def test_all_positions_rejects_unknown_field_and_direction(client, session: AsyncSession):
+    """Неизвестное поле или направление — 400, а не молчаливый фолбэк."""
+    unknown_field = await client.get(
+        "/api/production-plans/all-positions?sort=nope:asc"
+    )
+    assert unknown_field.status_code == 400, unknown_field.text
+
+    bad_direction = await client.get(
+        "/api/production-plans/all-positions?sort=status:sideways"
+    )
+    assert bad_direction.status_code == 400, bad_direction.text

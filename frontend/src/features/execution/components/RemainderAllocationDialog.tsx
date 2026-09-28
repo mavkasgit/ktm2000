@@ -9,14 +9,13 @@ import {
   Badge,
 } from "@/shared/ui";
 import {
-  formatBalanceQtyInteger,
   formatDimensionsLabel,
   formatQualityStateLabel,
   getProductStockBalances,
 } from "@/shared/api/stock";
 import type { StockBalanceEntry } from "@/shared/api/stock";
 import { listProducts } from "@/shared/api/products";
-import { fmtQty } from "@/shared/utils/fmtQty";
+import { fmtQty } from "@/shared/lib/quantityFormat";
 import {
   AlertCircle,
   AlertTriangle,
@@ -252,7 +251,7 @@ export function RemainderAllocationDialog({
                           {row.location}
                         </td>
                         <td className="py-1 text-right font-mono tabular-nums whitespace-nowrap">
-                          {formatBalanceQtyInteger(row.qty)}
+                          {fmtQty(row.qty)}
                           {row.dims !== "—" && (
                             <span className="text-muted-foreground"> × {row.dims}</span>
                           )}

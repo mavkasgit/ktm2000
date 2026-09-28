@@ -1,10 +1,12 @@
 /**
  * components/PlanHangerDisplay.tsx
  * ================================
- * Компонент отображения количества подвесов для печатной формы плана.
+ * Норма на подвес для листа плана участка (приоритет источников тот же,
+ * что у бэкенда). Количество подвесов считает канон
+ * `@/shared/lib/hangerCount` — второго счёта в проекте нет.
  *
- * Используется только в специфических сценариях печати,
- * где нужно показать количество подвесов и штук на подвес.
+ * Ячейки колонок печати собираются из описаний колонок в
+ * `planPrintSettings.ts`, поэтому здесь только вычисления.
  */
 
 import type { SectionBoardTask } from "@/shared/api/shopfloor";
@@ -47,66 +49,7 @@ export function getQtyPerHanger(task: SectionBoardTask): number | null {
   return getSnapshotPairQuantity(payload);
 }
 
-/** Для парных профилей возвращает одно N, для обычных — null */
-export function getPairedHangerLabel(task: SectionBoardTask): string | null {
-  const payload = task.source_payload as Record<string, unknown> | null;
-  if (!payload) return null;
+// Подвесы строки считает канон `@/shared/lib/hangerCount`: второй счётчик
+// здесь жил и печатал выдуманную единицу там, где данных нет. Этот модуль
+// отвечает только за норму на подвес.
 
-  if (getPairSnapshot(payload)?.resolved !== true) return null;
-  const quantity = getQtyPerHanger(task);
-  return quantity !== null ? String(Math.round(quantity)) : null;
-}
-
-/** Считает количество подвесов по логике backend (hanger_quantity.py) */
-export function adjustQtyToHanger(qty: number, qtyPerHanger: number | null) {
-  if (!qtyPerHanger || qtyPerHanger <= 0 || qty <= 0) {
-    return { hangers: 1 };
-  }
-  const hangers = Math.ceil(qty / qtyPerHanger);
-  return { hangers };
-}
-
-// ---------------------------------------------------------------------------
-// PlanHangerColumns — колонки подвесов для таблицы
-// ---------------------------------------------------------------------------
-
-interface PlanHangerColumnsProps {
-  groupQty: number;
-  task: SectionBoardTask;
-}
-
-/** Рендерит две ячейки таблицы: "Подвесов" и "Кол-во на подвес" */
-export function PlanHangerColumns({ groupQty, task }: PlanHangerColumnsProps) {
-  const qtyPerHanger = getQtyPerHanger(task);
-  const pairedLabel = getPairedHangerLabel(task);
-  const { hangers } = adjustQtyToHanger(groupQty, qtyPerHanger);
-
-  return (
-    <>
-      <td className="px-1 py-0.5 text-left">{hangers}</td>
-      <td className="px-1 py-0.5 text-left">{pairedLabel ?? (qtyPerHanger != null ? String(qtyPerHanger) : "—")}</td>
-    </>
-  );
-}
-
-/** Рендерит два заголовка для колонки подвесов */
-export function PlanHangerHeaders() {
-  return (
-    <>
-      <th className="text-left px-1 py-0.5 font-semibold whitespace-nowrap">Подвесов</th>
-      <th className="text-left px-1 py-0.5 font-semibold" style={{ minWidth: "60px" }}>
-        Кол-во<br />на подвес
-      </th>
-    </>
-  );
-}
-
-/** Ренерит две пустые ячейки для строки "Итого" */
-export function PlanHangerEmpty() {
-  return (
-    <>
-      <td className="px-1 py-0.5 text-right"></td>
-      <td className="px-1 py-0.5 text-right"></td>
-    </>
-  );
-}

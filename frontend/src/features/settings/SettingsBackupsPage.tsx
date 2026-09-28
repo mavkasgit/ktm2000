@@ -3,12 +3,14 @@ import { Download, RotateCcw, Eye, Database, Upload, AlertTriangle, Loader2, Che
 import { Button } from "@/shared/ui/button"
 import { Input } from "@/shared/ui/input"
 import { cn } from "@/shared/utils/cn"
-import { SortableFilterHeader, TableCornerResetCell, TableCornerResetHeader, TablePaginationFooter, DATA_TABLE_STYLES } from "@/shared/ui"
+import { TableCornerResetCell, TableCornerResetHeader, TablePaginationFooter, DataTableColumnHeader, DATA_TABLE_STYLES } from "@/shared/ui"
 import { useFilterableTable } from "@/shared/hooks/useFilterableTable"
+import type { SortConfig } from "@/shared/hooks/useTableQueryEngine"
 import { usePaginatedTableQuery } from "@/shared/hooks/usePaginatedTableQuery"
-import { pickColumnApiValue } from "@/shared/lib/columnFilterSearch"
+import { buildColumnApiParams } from "@/shared/lib/columnSpecs"
+import { buildSortParam } from "@/shared/lib/sortQueryParam"
 import { fetchBackups } from "@/entities/backup/api"
-import type { BackupInfo } from "@/entities/backup/types"
+import type { ListBackupsParams } from "@/entities/backup/api"
 import {
   Dialog,
   DialogContent,
@@ -47,68 +49,75 @@ import type { BackupPreview } from "@/entities/backup/types"
 import { toast } from "@/shared/ui/use-toast"
 import { getErrorMessage } from "@/shared/api/client"
 import { usePermission } from "@/features/auth/hooks/usePermission"
-import { backupStageLabels, backupStorageLabels, backupTypeLabels } from "@/shared/lib/generated-labels"
-
-function formatBytes(bytes: number): string {
-  if (bytes === 0) return "0 B"
-  const k = 1024
-  const sizes = ["B", "KB", "MB", "GB"]
-  const i = Math.floor(Math.log(bytes) / Math.log(k))
-  return parseFloat((bytes / Math.pow(k, i)).toFixed(2)) + " " + sizes[i]
-}
-
-function formatDate(iso: string): string {
-  const d = new Date(iso)
-  return d.toLocaleString("ru-RU")
-}
+import { backupStageLabels, backupStorageLabels } from "@/shared/lib/generated-labels"
+import {
+  backupColumns,
+  backupsDefaultSort,
+  backupsDefaultSortParam,
+  formatBytes,
+  formatDate,
+  type BackupSortField,
+} from "./lib/backupColumns"
 
 function storageLabel(name: string): string {
   return backupStorageLabels[name] || name
 }
 
-type BackupSortField = "filename" | "db_name" | "backup_type" | "size" | "created_at" | "comment"
 
+/**
+ * Строка `sort` для запроса; без выбранных колонок — дефолтный порядок.
+ * Все колонки списка бэкапов сервер сортировать умеет, поэтому поле
+ * колонки уходит как есть.
+ */
+function buildBackupsSortParam(sortConfigs: SortConfig<BackupSortField>[]): string {
+  return buildSortParam(sortConfigs, (field) => field) ?? backupsDefaultSortParam
+}
+
+/**
+ * Параметры запроса по колонкам — из описания, а не перечислением: пока
+ * здесь стояло шесть вызовов `pickColumnApiValue` по имени колонки, седьмая
+ * потребовала бы правки этого кода.
+ */
+function buildBackupsColumnApiParams(
+  columnFilters: Partial<Record<BackupSortField, Set<string>>>,
+  columnSearchQueries: Partial<Record<BackupSortField, string>>,
+): Pick<
+  ListBackupsParams,
+  "backup_type" | "filename" | "db_name" | "comment" | "created_at"
+> & { size?: string } {
+  return buildColumnApiParams(columnFilters, columnSearchQueries, backupColumns)
+}
+
+/**
+ * Параметры запроса списка бэкапов.
+ *
+ * Перечисления колонок здесь нет, но два параметра разбираются на границе
+ * запроса, и оба исключения — не семантика колонки:
+ *
+ * - «Размер» приходит значением колонки строкой, а сервер ждёт число;
+ * - у «Типа» кроме фильтра колонки есть панельный фильтр, и панельный выбор
+ *   главнее. Панель пишет в то же состояние колонки, поэтому правило
+ *   приоритета — про экран, и в описание колонки оно не годится.
+ */
 function buildBackupsQueryParams(
   pagination: { limit: number; offset: number },
   activeTypeFilter: string,
   columnFilters: Partial<Record<BackupSortField, Set<string>>>,
   columnSearchQueries: Partial<Record<BackupSortField, string>>,
-  sortConfigs: Array<{ field: BackupSortField; order: "asc" | "desc" }>,
-) {
-  const activeSort = sortConfigs[0] ?? { field: "created_at" as const, order: "desc" as const }
-  const params: Parameters<typeof fetchBackups>[0] = {
+  sortConfigs: SortConfig<BackupSortField>[],
+): ListBackupsParams {
+  const columnParams = buildBackupsColumnApiParams(columnFilters, columnSearchQueries)
+
+  return {
     limit: pagination.limit,
     offset: pagination.offset,
-    sort_by: activeSort.field,
-    sort_order: activeSort.order,
+    sort: buildBackupsSortParam(sortConfigs),
+    ...columnParams,
+    size: columnParams.size === undefined ? undefined : Number(columnParams.size),
+    backup_type: activeTypeFilter !== "all" ? activeTypeFilter : columnParams.backup_type,
   }
-
-  const typeFromColumn = pickColumnApiValue(columnFilters, columnSearchQueries, "backup_type")
-  const backupType = activeTypeFilter !== "all" ? activeTypeFilter : typeFromColumn
-  if (backupType) params.backup_type = backupType
-
-  const filename = pickColumnApiValue(columnFilters, columnSearchQueries, "filename")
-  if (filename) params.filename = filename
-
-  const dbName = pickColumnApiValue(columnFilters, columnSearchQueries, "db_name")
-  if (dbName) params.db_name = dbName
-
-  const comment = pickColumnApiValue(columnFilters, columnSearchQueries, "comment", (value) =>
-    value === "—" ? undefined : value,
-  )
-  if (comment) params.comment = comment
-
-  const sizeValue = pickColumnApiValue(columnFilters, columnSearchQueries, "size")
-  if (sizeValue) {
-    const parsed = Number.parseInt(sizeValue, 10)
-    if (Number.isFinite(parsed)) params.size = parsed
-  }
-
-  const createdAt = pickColumnApiValue(columnFilters, columnSearchQueries, "created_at")
-  if (createdAt) params.created_at = createdAt
-
-  return params
 }
+
 
 function backupStageLabel(stage: string): string {
   return backupStageLabels[stage] || stage
@@ -119,16 +128,24 @@ const headerCellClass = `${DATA_TABLE_STYLES.headerRow} ${DATA_TABLE_STYLES.head
 export function BackupsPage() {
   const { canEditSettings } = usePermission()
   const isReadOnly = !canEditSettings
+  // Экран переведён на общий хук `useFilterableTable` осознанно (AC #198:
+  // один цикл клика по шапке на всех экранах вместо копии на этом).
+  // Собственная одно-колоночная сортировка была у него не семантикой
+  // экрана, а частным случаем того же общего цикла: клик по другой колонке
+  // добавляет ей приоритет (`created_at:desc,filename:desc`), а не
+  // заменяет выбранную. Поэтому дефолт остался прежним — `backupsDefaultSort`
+  // = `created_at:desc` («свежие сверху»); он не считается активным
+  // фильтром, и сброс возвращает его, а не пустоту.
   const {
     bindColumn,
     columnFilters,
     columnSearchQueries,
     sortConfigs,
-    setSortConfigs,
-    hasActiveColumnFilters,
+    handleSort,
+    hasActiveFilters,
     resetAll: clearFilters,
     setColumnFilters,
-  } = useFilterableTable<BackupSortField>()
+  } = useFilterableTable<BackupSortField>({ defaultSort: backupsDefaultSort })
 
   const activeTypeFilter = useMemo(() => {
     const selected = columnFilters.backup_type
@@ -164,20 +181,6 @@ export function BackupsPage() {
   const total = backupsPage?.total ?? 0
   const totalPages = pagination.getTotalPages(total)
 
-  const handleSort = (field: BackupSortField) => {
-    const defaultOrder = (field === "created_at" || field === "size") ? "desc" : "asc"
-    setSortConfigs((prev) => {
-      const active = prev[0]
-      if (!active || active.field !== field) {
-        return [{ field, order: defaultOrder }]
-      }
-      if (active.order === defaultOrder) {
-        return [{ field, order: defaultOrder === "asc" ? "desc" : "asc" }]
-      }
-      return []
-    })
-  }
-
   const handleTypeFilterChange = (type: string) => {
     setColumnFilters(prev => ({
       ...prev,
@@ -185,19 +188,9 @@ export function BackupsPage() {
     }))
   }
 
-  const hasActiveFilters = useMemo(() => {
-    if (hasActiveColumnFilters) return true
-
-    if (sortConfigs.length > 0) {
-      const active = sortConfigs[0]
-      if (active.field !== "created_at" || active.order !== "desc") {
-        return true
-      }
-    }
-    return false
-  }, [hasActiveColumnFilters, sortConfigs])
-
-  const uniqueValues = useMemo(() => {
+  // Значения для поповеров фильтра — по одному ключу на колонку, иначе `map`
+  // по описанию не смог бы достать список своей колонке.
+  const uniqueValues = useMemo<Record<BackupSortField, string[]>>(() => {
     const items = displayedBackups
     return {
       filename: [...new Set(items.map(b => b.filename))].sort(),
@@ -486,7 +479,7 @@ export function BackupsPage() {
     if (isNaN(days) || days < 0) return
     const cutoff = new Date(Date.now() - days * 24 * 60 * 60 * 1000)
     try {
-      const allBackups = await fetchBackups({ limit: 500, offset: 0, sort_by: "created_at", sort_order: "desc" })
+      const allBackups = await fetchBackups({ limit: 500, offset: 0, sort: backupsDefaultSortParam })
       const toDelete = allBackups.items
         .filter((b) => new Date(b.created_at) < cutoff)
         .map((b) => b.filename)
@@ -754,69 +747,17 @@ export function BackupsPage() {
                   />
                 </th>
               )}
-              <th className={`${headerCellClass} p-0`}>
-                <SortableFilterHeader
-                  field="filename"
-                  label="Имя файла"
-                  currentSorts={sortConfigs}
-                  onSortChange={handleSort}
-                  values={uniqueValues.filename}
-                  {...bindColumn("filename")}
-                />
-              </th>
-              <th className={`${headerCellClass} p-0`}>
-                <SortableFilterHeader
-                  field="db_name"
-                  label="База данных"
-                  currentSorts={sortConfigs}
-                  onSortChange={handleSort}
-                  values={uniqueValues.db_name}
-                  {...bindColumn("db_name")}
-                />
-              </th>
-              <th className={`${headerCellClass} p-0`}>
-                <SortableFilterHeader
-                  field="backup_type"
-                  label="Тип"
-                  currentSorts={sortConfigs}
-                  onSortChange={handleSort}
-                  values={uniqueValues.backup_type}
-                  {...bindColumn("backup_type")}
-                  valueLabel={(val) => backupTypeLabels[val] || val}
-                />
-              </th>
-              <th className={`${headerCellClass} p-0`}>
-                <SortableFilterHeader
-                  field="size"
-                  label="Размер"
-                  currentSorts={sortConfigs}
-                  onSortChange={handleSort}
-                  values={uniqueValues.size}
-                  {...bindColumn("size")}
-                  valueLabel={(val) => formatBytes(Number(val))}
-                />
-              </th>
-              <th className={`${headerCellClass} p-0`}>
-                <SortableFilterHeader
-                  field="created_at"
-                  label="Дата создания"
-                  currentSorts={sortConfigs}
-                  onSortChange={handleSort}
-                  values={uniqueValues.created_at}
-                  {...bindColumn("created_at")}
-                  valueLabel={formatDate}
-                />
-              </th>
-              <th className={`${headerCellClass} p-0`}>
-                <SortableFilterHeader
-                  field="comment"
-                  label="Комментарий"
-                  currentSorts={sortConfigs}
-                  onSortChange={handleSort}
-                  values={uniqueValues.comment}
-                  {...bindColumn("comment")}
-                />
-              </th>
+              {backupColumns.map((column) => (
+                <th key={column.id} className={`${headerCellClass} ${column.headerClassName ?? "text-left"}`}>
+                  <DataTableColumnHeader
+                    column={column}
+                    bindColumn={bindColumn}
+                    values={column.filterField ? uniqueValues[column.filterField] : undefined}
+                    currentSorts={sortConfigs}
+                    onSortChange={handleSort}
+                  />
+                </th>
+              ))}
               <th className={`${headerCellClass} text-right`}>
                 Действия
               </th>

@@ -19,6 +19,14 @@ nullable для ручных приходов/расходов из ниотку
 ``{"length_mm": 2700}``; ``NULL`` — безразмерные штуки (и legacy-записи
 до миграции 023). Остатки разных длин одного SKU на одной секции —
 разные строки баланса.
+
+``completed_operations`` (ADR-0043) — третья ось учёта, но не размер, а
+**состояние материала**: JSONB-список ``operation_code``, которые материал уже
+прошёл (например ``["ISSUE_RAW", "PRESS_COMB", "SHOT"]``). Источник —
+маршрут позиции, а не обратное чтение склада. ``NULL`` — состояние не
+зафиксировано (операция вне маршрута), ``[]`` — «прошёл маршрут, операций не
+было»; это разные значения. Инварианты формы и зеркала компенсаций
+проверяет ``StockCommandService.record()``.
 """
 from __future__ import annotations
 
@@ -137,6 +145,17 @@ class StockTransaction(Base):
     # none_as_null: Python None → SQL NULL (не jsonb 'null'), иначе
     # legacy-группа расщепляется на два разных ключа.
     dimensions: Mapped[dict | None] = mapped_column(
+        JSONB(none_as_null=True), nullable=True
+    )
+    # Пройденные операции материала (ADR-0043): список operation_code из
+    # section_operations секций, через которые материал уже прошёл, —
+    # в канонической форме (отсортированный уникальный список). Пишется
+    # один раз в момент перевода на склад, дальше несётся по ledger.
+    # NULL = состояние не зафиксировано (операция вне маршрута: ручной
+    # приход, импорт остатков, сид, legacy-проводки). [] = «прошёл
+    # маршрут, операций не было» — это НЕ то же, что NULL.
+    # Инварианты формы и зеркала — StockCommandService.record().
+    completed_operations: Mapped[list | None] = mapped_column(
         JSONB(none_as_null=True), nullable=True
     )
     reason: Mapped[Reason] = mapped_column(

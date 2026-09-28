@@ -3,6 +3,7 @@ import { Tooltip, TooltipContent, TooltipTrigger } from "@/shared/ui/tooltip";
 import { cn } from "@/shared/utils/cn";
 import type { HangerCalcResult } from "@/shared/api/hangerCalc";
 import { effectiveRawLength, entryForLength, lengthKey, primaryLength } from "@/shared/lib/hangerQuantity";
+import { fmtQtyPrecise } from "@/shared/lib/quantityFormat";
 import { LIMITER_LABELS, type HangerCalcRow } from "../lib/hangerCalcRows";
 
 const chipClass = "inline-flex items-center rounded px-1.5 py-0.5 text-xs whitespace-nowrap";
@@ -21,7 +22,7 @@ export function LengthChips({ row, byLength }: { row: HangerCalcRow; byLength: M
         const label = `${len} / сырьё ${rawLength}`;
         if (!row.auto) {
           const manual = entryForLength(row.product.quantity_per_hanger, len)?.manual ?? null;
-          return <span key={key} className={cn(chipClass, isPrimary ? "bg-primary/10 ring-1 ring-primary/40" : "bg-secondary text-secondary-foreground")}>{label} мм → {manual ?? "—"} шт{primaryMark}</span>;
+          return <span key={key} className={cn(chipClass, isPrimary ? "bg-primary/10 ring-1 ring-primary/40" : "bg-secondary text-secondary-foreground")}>{label} мм → {fmtQtyPrecise(manual)} шт{primaryMark}</span>;
         }
         if (row.incompatibleReason) {
           return <Tooltip key={key}><TooltipTrigger asChild><span className={cn(chipClass, "bg-red-100 text-red-700")}>{label} мм → —{primaryMark}</span></TooltipTrigger><TooltipContent>{row.incompatibleReason}</TooltipContent></Tooltip>;
@@ -31,7 +32,7 @@ export function LengthChips({ row, byLength }: { row: HangerCalcRow; byLength: M
           return <Tooltip key={key}><TooltipTrigger asChild><span className={cn(chipClass, "bg-amber-100 text-amber-800")}>{label} мм → —{primaryMark}</span></TooltipTrigger><TooltipContent>Расчёт невозможен: не хватает данных</TooltipContent></Tooltip>;
         }
         const limiterNote = result.limiter ? ` · ${LIMITER_LABELS[result.limiter]}` : "";
-        return <Tooltip key={key}><TooltipTrigger asChild><span className={cn(chipClass, isPrimary ? "bg-primary/10 ring-1 ring-primary/40" : "bg-secondary text-secondary-foreground", "cursor-help")}>{label} мм → {result.total ?? "—"} шт{limiterNote}{primaryMark}</span></TooltipTrigger><TooltipContent><div className="text-xs space-y-0.5"><div className="font-medium">Нормальная длина {len} мм{isPrimary ? " (основная)" : ""}</div><div>Сырьевая длина: {rawLength} мм</div><div>По площади: {result.by_area ?? "—"}</div><div>По размеру: {result.by_size ?? "—"}</div><div>Итог: {result.total ?? "—"}</div><div>Лимитер: {result.limiter ? LIMITER_LABELS[result.limiter] : "—"}</div></div></TooltipContent></Tooltip>;
+        return <Tooltip key={key}><TooltipTrigger asChild><span className={cn(chipClass, isPrimary ? "bg-primary/10 ring-1 ring-primary/40" : "bg-secondary text-secondary-foreground", "cursor-help")}>{label} мм → {fmtQtyPrecise(result.total)} шт{limiterNote}{primaryMark}</span></TooltipTrigger><TooltipContent><div className="text-xs space-y-0.5"><div className="font-medium">Нормальная длина {len} мм{isPrimary ? " (основная)" : ""}</div><div>Сырьевая длина: {rawLength} мм</div><div>По площади: {fmtQtyPrecise(result.by_area)}</div><div>По размеру: {fmtQtyPrecise(result.by_size)}</div><div>Итог: {fmtQtyPrecise(result.total)}</div><div>Лимитер: {result.limiter ? LIMITER_LABELS[result.limiter] : "—"}</div></div></TooltipContent></Tooltip>;
       })}
     </div>
   );

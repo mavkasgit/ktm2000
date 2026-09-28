@@ -38,7 +38,9 @@ apply ≤ 1 с ✓ (факт ≤ 0.35 с).
 Errors (блокируют, `invalid`): `product_not_found`, `product_inactive`,
 `product_pair_not_found`, `hanger_calc_zero`, `no_route_candidate` / `selection.error`,
 `active_route_has_no_steps`, `route_contains_inactive_section`,
-`duplicate_sku_due_date`, `normal_length_not_found`.
+`duplicate_sku_due_date`, `normal_length_not_found`, `route_signature_conflict`
+(#215, ADR-0045: маршрут, найденный по имени, с другой сигнатурой — другой
+маршрут; строка остаётся невалидной, подстановки нет).
 
 Warnings (не блокируют): `paired_hanger_adjusted`,
 `hanger_quantity_not_set`, `input_dimensions_unresolved`, `product_name_missing`,

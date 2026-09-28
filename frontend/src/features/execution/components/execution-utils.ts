@@ -1,6 +1,6 @@
 import type { ProductionPlanningRow } from "@/shared/api/productionPlans";
 import { formatDimensionsLabel } from "@/shared/api/stock";
-import { fmtQty } from "@/shared/utils/fmtQty";
+import { fmtQty } from "@/shared/lib/quantityFormat";
 import { statusLabels } from "@/shared/lib/generated-labels";
 
 export { statusLabels as positionStatusLabels };
@@ -83,7 +83,7 @@ export function getCellValue(row: ProductionPlanningRow, field: ExecutionSortFie
     case "stage":
       return row.current_stage_section_name || "—";
     case "dimensions":
-      return row.dimensions_label ?? formatDimensionsLabel(row.dimensions);
+      return formatDimensionsLabel(row.dimensions, row.dimensions_label);
     default:
       return "";
   }

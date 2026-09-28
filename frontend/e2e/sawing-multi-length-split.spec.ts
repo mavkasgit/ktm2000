@@ -1,7 +1,7 @@
 import { test, expect } from "./fixtures";
 
 /**
- * @ui — Участок пилы: распил одной заготовки на несколько РАЗНЫХ
+ * @ui-narrow — Участок пилы: распил одной заготовки на несколько РАЗНЫХ
  * длин (ADR-0002/0003), видимый оператору сценарий на доске участка.
  *
  * Сетап ускорен через API/пресеты (сид, бесфайловый импорт плана
@@ -88,7 +88,7 @@ function lengthLabel(mm: number): string {
   return `${String(mm / 1000).replace(".", ",")} м`;
 }
 
-test.describe("@ui Пила: распил одной задачи на несколько разных длин", () => {
+test.describe("@ui-narrow Пила: распил одной задачи на несколько разных длин", () => {
   // Сид/импорт на медленном бэкенде превышают дефолтные 30с хуков.
   test.setTimeout(240_000);
 
@@ -208,9 +208,11 @@ test.describe("@ui Пила: распил одной задачи на неск�
     }
 
     async function approveAndRelease() {
+      // Форс требует причину в теле (ADR-0048): без неё approve вернёт 400.
       await apiJson(
         `/api/production-plans/${importRes.production_plan_id}/positions/${pos!.id}/approve?force=true`,
         "POST",
+        { reason: "e2e: распил на несколько длин проверяем на заготовке из упаковочного плана" },
       );
       // Создание батча только фиксирует позиции — задачи создаёт релиз батча.
       const batch = (await apiJson(

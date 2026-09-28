@@ -1,6 +1,11 @@
 import { useMemo } from "react";
 import { Layers } from "lucide-react";
-import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue, renderIcon } from "@/shared/ui";
+// Прямой импорт, а не через "@/shared/ui": сам barrel реэкспортирует этот
+// модуль, и импорт из него замыкает цикл index.ts → SpgSelect.tsx →
+// index.ts. Rollup раскладывает такие модули по разным чанкам и получает
+// цикл между чанками — порядок инициализации перестаёт быть определённым.
+import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "./select";
+import { renderIcon } from "./EntityDialog";
 
 export type SpgSelectItem = {
   id: number;

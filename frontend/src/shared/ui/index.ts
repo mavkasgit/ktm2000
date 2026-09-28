@@ -33,6 +33,8 @@ export { SortableHeader } from "./SortableHeader";
 export type { SortableHeaderProps } from "./SortableHeader";
 export { SortableFilterHeader } from "./SortableFilterHeader";
 export type { SortableFilterHeaderProps } from "./SortableFilterHeader";
+export { DataTableColumnHeader } from "./DataTableColumnHeader";
+export type { DataTableColumnHeaderProps } from "./DataTableColumnHeader";
 export { TablePanelHeader } from "./TablePanelHeader";
 export type { TablePanelHeaderProps } from "./TablePanelHeader";
 export { TableHeaderResetCell } from "./TableHeaderResetCell";

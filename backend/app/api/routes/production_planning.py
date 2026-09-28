@@ -19,7 +19,7 @@ from app.models.production_plan import (
     require_current_length_model,
 )
 from app.models.transfer import Transfer
-from app.models.work_task import WorkTask, WorkTaskStatus
+from app.models.work_task import CLOSED_WORK_TASK_STATUSES, RESOLVED_WORK_TASK_STATUSES, WorkTask, WorkTaskStatus
 from app.models.route import ProductionRoute, RouteStage, SectionOperation
 from app.models.section import Section
 from app.models.user import User
@@ -216,7 +216,13 @@ class PlanningRowOut(BaseModel):
     current_stage_section_name: str | None = None
     current_stage_task_status: str | None = None
     route_steps: list[dict] | None = None
+    # Индикатор остатка (#207): free_stock_quantity — «Свободно на
+    # складах», available_remainder_quantity — «Доступно для позиции»
+    # (минус чужие открытые позиции), deficit_quantity — «Дефицит
+    # позиции». None = нет данных о наличии, ноль = действительно ноль.
+    free_stock_quantity: float | None = None
     available_remainder_quantity: float | None = None
+    deficit_quantity: float | None = None
 
 
 class PlanningRouteSnapshotStepOut(BaseModel):
@@ -274,6 +280,10 @@ class PlanningStageOut(BaseModel):
     transfer_percent: float
     reject_percent: float
     task_status: str
+    # Пропуск этапа (#207): причина заполняется только при task_status
+    # «skipped» («материал подан в готовом виде»). Без неё пропуск неотличим
+    # от выполнения и не отвечает на вопрос «почему этап закрыт без работы».
+    skip_reason: str | None = None
     not_started: bool
     issued_qty: float
     issued_last_at: str | None = None
@@ -329,15 +339,19 @@ class PlanningRowDetailOut(BaseModel):
     status_history: list[PositionStatusHistoryOut] = Field(default_factory=list)
     raw_excel_row: dict | None = None
     payload: dict | None = None
+    free_stock_quantity: float | None = None
     available_remainder_quantity: float | None = None
+    deficit_quantity: float | None = None
 
 
 @router.get("/rows", response_model=PlanningRowsListResponse)
 async def list_rows(
     section_id: int | None = Query(default=None),
     search: str | None = Query(default=None),
-    sort_by: str | None = Query(default=None),
-    sort_order: str = Query(default="desc"),
+    sort: str | None = Query(
+        default=None,
+        description="Comma-separated sort rules: field:asc|desc, e.g. product_sku:asc,planned_qty:desc",
+    ),
     limit: int = Query(default=50, ge=1, le=500),
     offset: int = Query(default=0, ge=0),
     plan_position_id: str | None = Query(default=None, description="Column filter: position id"),
@@ -368,8 +382,7 @@ async def list_rows(
     params = PlanningRowsQueryParams(
         section_id=section_id,
         search=search,
-        sort_by=sort_by,
-        sort_order=sort_order,
+        sort=sort,
         limit=limit,
         offset=offset,
         plan_position_id=plan_position_id,
@@ -511,7 +524,7 @@ async def get_production_planning_overview(
             for line in lines:
                 for wt in line_work_tasks.get(line.id, []):
                     total_steps += 1
-                    if wt.status == WorkTaskStatus.completed:
+                    if wt.status in RESOLVED_WORK_TASK_STATUSES:
                         completed_steps += 1
 
                     # Get operation info from route stage
@@ -1017,7 +1030,7 @@ async def _do_manual_pass(
         .join(SectionPlanLine, WorkTask.section_plan_line_id == SectionPlanLine.id)
         .where(
             SectionPlanLine.plan_position_id == position_id,
-            WorkTask.status == WorkTaskStatus.completed,
+            WorkTask.status.in_(RESOLVED_WORK_TASK_STATUSES),
         )
     )
     position_completed = bool(total_tasks and completed_tasks == total_tasks)
@@ -1226,12 +1239,19 @@ async def take_rows_to_work(
             import logging
             logger = logging.getLogger(__name__)
             logger.exception(f"take-to-work failed for position {position_id}")
+            # Сессия после исключения непригодна для следующей позиции:
+            # откатываем только неудачную, уже выпущенные позиции сохраняются.
+            await db.rollback()
             results.append(TakeToWorkResult(
                 position_id=position_id,
                 status="failed",
                 reason=f"Internal error: {str(exc)}",
             ))
 
+    # Коммит ДО ответа: `get_db` коммитит после выхода из зависимости, а
+    # FastAPI 0.106+ отдаёт ответ раньше. Без этого клиент, получив 200,
+    # перечитывает строки контроля и видит позицию ещё не запущенной.
+    await db.commit()
     return TakeToWorkResponse(results=results)
 
 

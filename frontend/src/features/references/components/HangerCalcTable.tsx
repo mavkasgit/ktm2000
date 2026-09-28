@@ -4,11 +4,9 @@ import { Button } from "@/shared/ui/button";
 import { Input } from "@/shared/ui/input";
 import { TooltipProvider } from "@/shared/ui/tooltip";
 import { toast } from "@/shared/ui/use-toast";
-import { SortableFilterHeader } from "@/shared/ui/SortableFilterHeader";
 import { TableCornerResetHeader, DATA_TABLE_STYLES } from "@/shared/ui";
-import { useSortableColumnFilters } from "@/shared/hooks/useSortableColumnFilters";
-import { nextMultiSortConfigs } from "@/shared/lib/multiSort";
-import type { SortConfig } from "@/shared/hooks/useTableQueryEngine";
+import { useFilterableTable } from "@/shared/hooks/useFilterableTable";
+import { DataTableColumnHeader } from "@/shared/ui/DataTableColumnHeader";
 import { listProductsPaginated, listProductPairCatalog, patchProduct, getErrorMessage } from "@/shared/api/products";
 import type { Product, ProductFilters, ProductPairCatalogEntry } from "@/shared/api/products";
 import { calcHanger, calcPairedHanger } from "@/shared/api/hangerCalc";
@@ -23,20 +21,25 @@ import {
   resolvePairs,
   resultsToCalcMap,
   resultsToPairedCalcMap,
-  rowSku,
   rowSearchValues,
-  LIMITER_LABELS,
+  sortHangerCalcRows,
   type CalcMap,
   type HangerCalcRow,
+  type HangerCalcSortField,
   type PairedCalcMap,
   type PairedHangerCalcRow,
   type PairedPair,
 } from "../lib/hangerCalcRows";
+import {
+  buildHangerCalcSortParam,
+  hangerCalcCellValue,
+  hangerCalcColumns,
+} from "../lib/hangerCalcColumns";
 import { HangerConstantsPanel } from "./HangerConstantsPanel";
 import { HangerCalcRowView, type RowSaveState } from "./HangerCalcRowView";
 import { PairedHangerRowView } from "./PairedHangerRowView";
-
-type CalcFilterField = "sku" | "total" | "limiter";
+import { useDebouncedValue } from "@/shared/lib/useDebouncedValue";
+import { cn } from "@/shared/utils/cn";
 
 const headerCellClass = `${DATA_TABLE_STYLES.headerRow} ${DATA_TABLE_STYLES.headerCell}`;
 
@@ -67,19 +70,24 @@ export function HangerCalcTable({
   const pairProductsRef = useRef<Product[]>([]);
 
   const [search, setSearch] = useState("");
-  const [debouncedSearch, setDebouncedSearch] = useState("");
-  const [sortConfigs, setSortConfigs] = useState<SortConfig<CalcFilterField>[]>([]);
+  const debouncedSearch = useDebouncedValue(search);
   const {
     bindColumn,
     buildFilterPredicate,
-    hasActiveColumnFilters,
-    resetColumnFilters,
-  } = useSortableColumnFilters<CalcFilterField>();
+    sortConfigs,
+    handleSort,
+    hasActiveFilters,
+    resetAll,
+  } = useFilterableTable<HangerCalcSortField>({
+    // Поиск считается фильтром, а сортировка и фильтры колонок — общим
+    // правилом хука: условие «активно» раньше было написано здесь руками и
+    // могло разойтись с правилом на других экранах. Сортировка тоже живёт в
+    // хуке: своё состояние рядом с ним делало счётчик слепым к сортировке.
+    extraHasActive: search.trim().length > 0,
+    onExtraReset: () => setSearch(""),
+  });
 
-  useEffect(() => {
-    const timer = window.setTimeout(() => setDebouncedSearch(search), 300);
-    return () => window.clearTimeout(timer);
-  }, [search]);
+
 
   const setRowState = useCallback((id: number, state: RowSaveState | undefined) => {
     setRowStates((prev) => ({ ...prev, [id]: state }));
@@ -92,8 +100,9 @@ export function HangerCalcTable({
       type: "component",
       limit: 2000,
     };
-    const activeSort = sortConfigs[0];
-    if (activeSort && activeSort.field === "sku") params.sort = `sku:${activeSort.order}`;
+    // «Итог» и «Лимитер» считаются на клиенте, сервер их не сортирует.
+    const sort = buildHangerCalcSortParam(sortConfigs);
+    if (sort) params.sort = sort;
     return params;
   }, [sortConfigs]);
 
@@ -329,30 +338,22 @@ export function HangerCalcTable({
 
   const allRows = useMemo(() => [...rows, ...pairedRows], [rows, pairedRows]);
 
-  const uniqueValues = useMemo(
-    () => ({
-      sku: [
-        ...new Set(
-          allRows.map(rowSku),
-        ),
-      ].sort((a, b) => a.localeCompare(b, "ru")),
-      total: [...new Set(allRows.map((r) => (r.total != null ? String(r.total) : "—")))].sort((a, b) => {
-        if (a === "—") return 1;
-        if (b === "—") return -1;
-        return Number(a) - Number(b);
-      }),
-      limiter: [...new Set(allRows.map((r) => (r.limiter ? LIMITER_LABELS[r.limiter] : "—")))],
-    }),
-    [allRows],
-  );
+  // Список значений каждой фильтруемой колонки берётся из описания: перебор
+  // полей здесь означал бы, что шапка и список значений живут отдельно и
+  // могут разойтись при добавлении колонки.
+  const columnValues = useMemo(() => {
+    const result: Partial<Record<HangerCalcSortField, string[]>> = {};
+    for (const column of hangerCalcColumns) {
+      const field = column.filterField;
+      if (!field) continue;
+      const values = [...new Set(allRows.map((row) => hangerCalcCellValue(row, field)))];
+      result[field] = column.sortValues ? values.sort(column.sortValues) : values;
+    }
+    return result;
+  }, [allRows]);
 
   const predicate = useMemo(
-    () =>
-      buildFilterPredicate<HangerCalcRow | PairedHangerCalcRow>((row, field) => {
-        if (field === "sku") return rowSku(row);
-        if (field === "total") return row.total != null ? String(row.total) : "—";
-        return row.limiter ? LIMITER_LABELS[row.limiter] : "—";
-      }),
+    () => buildFilterPredicate<HangerCalcRow | PairedHangerCalcRow>(hangerCalcCellValue),
     [buildFilterPredicate],
   );
 
@@ -366,36 +367,12 @@ export function HangerCalcTable({
           ),
         )
       : filtered;
-    if (sortConfigs.length === 0) return searched;
-    const hasServerSkuSort = sortConfigs.some((cfg) => cfg.field === "sku");
-    const clientSorts = sortConfigs.filter((cfg) => cfg.field !== "sku");
-    if (!hasServerSkuSort && clientSorts.length === 0) return searched;
-    const sorted = [...searched];
-    sorted.sort((a, b) => {
-      for (const cfg of clientSorts) {
-        const av = sortAccessor(a, cfg.field);
-        const bv = sortAccessor(b, cfg.field);
-        let cmp = 0;
-        if (av == null && bv == null) cmp = 0;
-        else if (av == null) cmp = 1;
-        else if (bv == null) cmp = -1;
-        else if (typeof av === "number" && typeof bv === "number") cmp = av - bv;
-        else cmp = String(av).localeCompare(String(bv), "ru");
-        if (cmp !== 0) return cfg.order === "asc" ? cmp : -cmp;
-      }
-      return 0;
-    });
-    return sorted;
+    // Сортируется весь массив: сервер отдаёт по `sku` только одиночные строки,
+    // парные приходят отдельным запросом и в общий порядок не попадали.
+    return sortHangerCalcRows(searched, sortConfigs);
   }, [allRows, predicate, sortConfigs, debouncedSearch]);
 
-  const hasActiveFilters =
-    search.trim().length > 0 || hasActiveColumnFilters || sortConfigs.length > 0;
-
-  const resetFilters = () => {
-    setSearch("");
-    setSortConfigs([]);
-    resetColumnFilters();
-  };
+  const resetFilters = resetAll;
 
   return (
     <TooltipProvider delayDuration={200}>
@@ -435,42 +412,17 @@ export function HangerCalcTable({
             <table className="w-full text-sm min-w-[1150px]">
               <thead>
                 <tr>
-                  <th className={`${headerCellClass} p-0 min-w-48`}>
-                    <SortableFilterHeader<CalcFilterField>
-                      field="sku"
-                      label="Артикул"
-                      currentSorts={sortConfigs}
-                      onSortChange={(field) => setSortConfigs((prev) => nextMultiSortConfigs(prev, field))}
-                      values={uniqueValues.sku}
-                      {...bindColumn("sku")}
-                    />
-                  </th>
-                  <th className={`${headerCellClass} w-28`}>Периметр</th>
-                  <th className={`${headerCellClass} w-28`}>Габарит</th>
-                  <th className={`${headerCellClass} min-w-56`}>Длины → кол-во</th>
-                  <th className={`${headerCellClass} w-24`}>По площади</th>
-                  <th className={`${headerCellClass} w-24`}>По размеру</th>
-                  <th className={`${headerCellClass} p-0 w-24`}>
-                    <SortableFilterHeader<CalcFilterField>
-                      field="total"
-                      label="Итог"
-                      currentSorts={sortConfigs}
-                      onSortChange={(field) => setSortConfigs((prev) => nextMultiSortConfigs(prev, field))}
-                      values={uniqueValues.total}
-                      {...bindColumn("total")}
-                    />
-                  </th>
-                  <th className={`${headerCellClass} p-0 w-28`}>
-                    <SortableFilterHeader<CalcFilterField>
-                      field="limiter"
-                      label="Лимитер"
-                      currentSorts={sortConfigs}
-                      onSortChange={(field) => setSortConfigs((prev) => nextMultiSortConfigs(prev, field))}
-                      values={uniqueValues.limiter}
-                      {...bindColumn("limiter")}
-                    />
-                  </th>
-                  <th className={`${headerCellClass} w-28`}>м² на подвес</th>
+                  {hangerCalcColumns.map((column) => (
+                    <th key={column.id} className={cn(headerCellClass, column.headerClassName)}>
+                      <DataTableColumnHeader<HangerCalcSortField>
+                        column={column}
+                        bindColumn={bindColumn}
+                        values={column.filterField ? columnValues[column.filterField] : undefined}
+                        currentSorts={sortConfigs}
+                        onSortChange={handleSort}
+                      />
+                    </th>
+                  ))}
                   <TableCornerResetHeader
                     hasActiveFilters={hasActiveFilters}
                     onReset={resetFilters}
@@ -507,11 +459,3 @@ export function HangerCalcTable({
   );
 }
 
-function sortAccessor(
-  row: HangerCalcRow | PairedHangerCalcRow,
-  field: CalcFilterField,
-): string | number | null {
-  if (field === "sku") return rowSku(row);
-  if (field === "total") return row.total;
-  return row.limiter ? LIMITER_LABELS[row.limiter] : null;
-}

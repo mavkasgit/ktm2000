@@ -4,19 +4,21 @@
  * Пресеты настроек печати плана для участка.
  *
  * Хранятся в localStorage по ключу `plan-presets-{sectionId}`.
- * Каждый пресет — это снимок `PrintSettings` (tableMode, columns, title,
- * showQtyPerHanger, minQty, maxQty), который можно применить одним кликом.
+ * Каждый пресет — это снимок `PrintSettings` (columns, title),
+ * который можно применить одним кликом.
  *
  * Встроенные пресеты (BUILTIN_PRESETS) помечены `isBuiltin: true` и
  * не сохраняются в localStorage — они всегда доступны.
  */
 
 import {
-  ALL_PRINT_COLUMNS,
-  type PrintColumn,
+  COMPACT_PRINT_COLUMNS,
+  DEFAULT_PRINT_COLUMNS,
+  isPlanColumnKey,
+  PRINT_PROFILES,
+  type PlanColumnKey,
   type PrintSettings,
-  type TableMode,
-} from "../components/PlanPrintPreviewModal";
+} from "./planPrintSettings";
 
 // ---------------------------------------------------------------------------
 // Типы
@@ -33,48 +35,34 @@ export interface PlanPreset {
 
 // ---------------------------------------------------------------------------
 // Встроенные пресеты — не редактируются, не удаляются
-// ---------------------------------------------------------------------------
-
-const ALL_COLS: PrintColumn[] = [...ALL_PRINT_COLUMNS];
-const SKU_AND_PLAN: PrintColumn[] = ["productSku", "qtyPlan"];
+const ALL_COLS: PlanColumnKey[] = [...DEFAULT_PRINT_COLUMNS];
+const SKU_ONLY: PlanColumnKey[] = ["sku"];
 
 export const BUILTIN_PRESETS: PlanPreset[] = [
   {
     id: "builtin-full",
     name: "Полный план",
-    settings: {
-      tableMode: "both" as TableMode,
-      columns: ALL_COLS,
-      title: "",
-      showQtyPerHanger: false,
-      minQty: null,
-      maxQty: null,
-    },
+    settings: { columns: ALL_COLS, title: "" },
     isBuiltin: true,
   },
   {
     id: "builtin-sku-plan",
     name: "Только артикулы",
-    settings: {
-      tableMode: "both" as TableMode,
-      columns: SKU_AND_PLAN,
-      title: "",
-      showQtyPerHanger: false,
-      minQty: null,
-      maxQty: null,
-    },
+    settings: { columns: SKU_ONLY, title: "" },
     isBuiltin: true,
   },
   {
-    id: "builtin-with-hangers",
+    id: "builtin-compact",
+    name: "Компактный",
+    settings: { columns: [...COMPACT_PRINT_COLUMNS], title: "" },
+    isBuiltin: true,
+  },
+  {
+    id: "builtin-hangers",
     name: "С подвесами",
     settings: {
-      tableMode: "both" as TableMode,
-      columns: ALL_COLS,
+      columns: [...(PRINT_PROFILES.ANODIZING ?? DEFAULT_PRINT_COLUMNS)],
       title: "",
-      showQtyPerHanger: true,
-      minQty: null,
-      maxQty: null,
     },
     isBuiltin: true,
   },
@@ -86,6 +74,14 @@ export const BUILTIN_PRESETS: PlanPreset[] = [
 
 function storageKey(sectionId: number): string {
   return `plan-presets-${sectionId}`;
+}
+
+/** Старые сохранённые пресеты могли содержать неизвестные ключи колонок. */
+function normalizeSettings(settings: PrintSettings): PrintSettings {
+  return {
+    ...settings,
+    columns: settings.columns.filter(isPlanColumnKey),
+  };
 }
 
 function loadCustomPresets(sectionId: number): PlanPreset[] {
@@ -103,7 +99,11 @@ function loadCustomPresets(sectionId: number): PlanPreset[] {
           typeof (p as PlanPreset).name === "string" &&
           typeof (p as PlanPreset).settings === "object",
       )
-      .map((p) => ({ ...p, isBuiltin: false }));
+      .map((p) => ({
+        ...p,
+        settings: normalizeSettings(p.settings),
+        isBuiltin: false,
+      }));
   } catch {
     return [];
   }
@@ -146,11 +146,7 @@ export function deletePreset(sectionId: number, presetId: PresetId): void {
 // ---------------------------------------------------------------------------
 
 export function isSameSettings(a: PrintSettings, b: PrintSettings): boolean {
-  if (a.tableMode !== b.tableMode) return false;
   if (a.title !== b.title) return false;
-  if (a.showQtyPerHanger !== b.showQtyPerHanger) return false;
-  if (a.minQty !== b.minQty) return false;
-  if (a.maxQty !== b.maxQty) return false;
   if (a.columns.length !== b.columns.length) return false;
   const aCols = new Set(a.columns);
   return b.columns.every((c) => aCols.has(c));

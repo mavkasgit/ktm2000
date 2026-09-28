@@ -1,11 +1,11 @@
 import { useCallback, useMemo } from "react";
 import { useQuery } from "@tanstack/react-query";
-import { SortableFilterHeader, TableCornerResetCell, TableCornerResetHeader, DATA_TABLE_STYLES } from "@/shared/ui";
+import { DataTableColumnHeader, TableCornerResetCell, TableCornerResetHeader, DATA_TABLE_STYLES } from "@/shared/ui";
 import { useFilterableTable } from "@/shared/hooks/useFilterableTable";
 import { renderIcon } from "@/shared/ui/EntityDialog";
 import { listSections } from "@/shared/api/sections";
 import { queryKeys } from "@/shared/api/queryKeys";
-import { fmtQty } from "@/shared/utils/fmtQty";
+import { fmtQty } from "@/shared/lib/quantityFormat";
 import { isStorageType } from "@/shared/lib/routeStageClassifier";
 import { type ProductionPlanningStage } from "@/shared/api/productionPlans";
 import { stageStatusLabels } from "@/shared/lib/generated-labels";
@@ -14,7 +14,8 @@ import {
   type ColumnSortDef,
 } from "@/shared/hooks/useTableQueryEngine";
 
-type StageSortField = "section" | "status";
+import { stageColumns, type StageField } from "./executionStagesColumns";
+
 type StageRowTone = "current" | "completed" | "partial" | "default";
 
 const ROW_TONE_CLASS: Record<StageRowTone, string> = {
@@ -50,7 +51,13 @@ function getStageRowTone(
   const hasActivity =
     stage.issued_qty > 0 || stage.accounted_total_qty > 0 || stage.sent_qty > 0 || stage.completed_quantity > 0;
 
-  if (stage.task_status === "completed" || (planned > 0 && accounted >= planned)) {
+  // Пропуск — закрытый этап без работы (#207): по нему нет ни issued, ни
+  // accounted, и без этой ветки он читался бы как «ещё не начат».
+  if (
+    stage.task_status === "completed" ||
+    stage.task_status === "skipped" ||
+    (planned > 0 && accounted >= planned)
+  ) {
     return "completed";
   }
 
@@ -111,7 +118,6 @@ function getStageProgressPercent(
 }
 
 const headerCellClass = `${DATA_TABLE_STYLES.headerRow} ${DATA_TABLE_STYLES.headerCell}`;
-const numHeaderClass = `${headerCellClass} text-right whitespace-nowrap`;
 
 export function ExecutionStagesTable({
   stages,
@@ -125,7 +131,7 @@ export function ExecutionStagesTable({
     handleSort: handleSortChange,
     hasActiveFilters,
     resetAll: handleResetFilters,
-  } = useFilterableTable<StageSortField>();
+  } = useFilterableTable<StageField>();
 
   const { data: sectionsData } = useQuery({
     queryKey: queryKeys.sections.all(),
@@ -161,14 +167,14 @@ export function ExecutionStagesTable({
   );
 
   const getCellValue = useCallback(
-    (row: (typeof stageRows)[number], field: StageSortField): string => {
+    (row: (typeof stageRows)[number], field: StageField): string => {
       if (field === "section") return getStageSectionLabel(row.stage);
       return getStageStatusLabel(row.stage, row.isFinalStage);
     },
     [],
   );
 
-  const sortDefs = useMemo((): ColumnSortDef<(typeof stageRows)[number], StageSortField>[] => [
+  const sortDefs = useMemo((): ColumnSortDef<(typeof stageRows)[number], StageField>[] => [
     { field: "section", getSortValue: (row) => getCellValue(row, "section") },
     { field: "status", getSortValue: (row) => getCellValue(row, "status") },
   ], [getCellValue]);
@@ -179,7 +185,7 @@ export function ExecutionStagesTable({
   );
 
   const uniqueValues = useMemo(
-    () => ({
+    (): Record<StageField, string[]> => ({
       section: [...new Set(stageRows.map((row) => getCellValue(row, "section")))].sort((a, b) =>
         a.localeCompare(b, "ru"),
       ),
@@ -212,38 +218,21 @@ export function ExecutionStagesTable({
       <table className="w-full text-sm border-separate border-spacing-0">
         <thead>
           <tr>
-            <th className={`${headerCellClass} w-14`}>Этап</th>
-            <th className={`${headerCellClass} p-0 min-w-[140px]`}>
-              <SortableFilterHeader
-                field="section"
-                label="Участок"
-                currentSorts={sortConfigs}
-                onSortChange={handleSortChange}
-                values={uniqueValues.section}
-                {...bindColumn("section")}
-              />
-            </th>
-            <th className={`${headerCellClass} p-0 min-w-[120px]`}>
-              <SortableFilterHeader
-                field="status"
-                label="Статус этапа"
-                currentSorts={sortConfigs}
-                onSortChange={handleSortChange}
-                values={uniqueValues.status}
-                {...bindColumn("status")}
-              />
-            </th>
-            <th className={numHeaderClass}>План</th>
-            <th className={numHeaderClass} title="Пришло с предыдущего этапа">
-              Получено
-            </th>
-            <th className={numHeaderClass} title="Годные">Годные</th>
-            <th className={numHeaderClass} title="Брак">Брак</th>
-            <th className={numHeaderClass} title="Выдано на следующий этап">
-              Выдано
-            </th>
-            <th className={numHeaderClass}>Остаток</th>
-            <th className={numHeaderClass} title="Склад: выдано/план, производство: годные/план">%</th>
+            {stageColumns.map((column) => (
+              <th
+                key={column.id}
+                title={column.title}
+                className={`${headerCellClass} ${column.headerClassName ?? ""}`}
+              >
+                <DataTableColumnHeader
+                  column={column}
+                  bindColumn={bindColumn}
+                  values={column.filterField ? uniqueValues[column.filterField] : undefined}
+                  currentSorts={sortConfigs}
+                  onSortChange={handleSortChange}
+                />
+              </th>
+            ))}
             <TableCornerResetHeader
               hasActiveFilters={hasActiveFilters}
               onReset={handleResetFilters}
@@ -289,8 +278,16 @@ export function ExecutionStagesTable({
                     <span className="font-medium truncate">{stage.section_name}</span>
                   </div>
                 </td>
-                <td className="px-2 py-1.5 align-top text-xs text-muted-foreground">
+                <td
+                  className="px-2 py-1.5 align-top text-xs text-muted-foreground"
+                  title={stage.skip_reason ?? undefined}
+                >
                   {stageStatusText}
+                  {stage.skip_reason && (
+                    <div className="mt-0.5 text-[11px] italic text-muted-foreground/80">
+                      {stage.skip_reason}
+                    </div>
+                  )}
                 </td>
                 <QtyCell value={stage.planned_quantity} />
                 <QtyCell value={receivedQty} />

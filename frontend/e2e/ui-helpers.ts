@@ -265,6 +265,25 @@ export async function findApprovablePositionViaUI(page: Page): Promise<Approvabl
   return Number.isFinite(positionId) ? { id: positionId, sku } : null;
 }
 
+/**
+ * Подтвердить форс-аппрув: заполнить причину и нажать «Утвердить всё равно».
+ *
+ * Форс-диалог требует непустую причину (ADR-0048) — без неё запрос approve
+ * не уходит, и тест падал бы на таймауте ожидания ответа. Причина пишется
+ * осмысленно: она попадает в журнал действий и объясняет, почему сценарий
+ * идёт против проверки валидации.
+ */
+export async function confirmForceApproveViaUI(page: Page, reason: string) {
+  const reasonBox = page.getByLabel("Причина перекрытия валидации").last();
+  await expect(reasonBox).toBeVisible({ timeout: 3_000 });
+  await reasonBox.fill(reason);
+  const confirmBtn = page
+    .locator("button", { hasText: "Утвердить всё равно" })
+    .filter({ visible: true });
+  await expect(confirmBtn).toBeEnabled({ timeout: 3_000 });
+  await confirmBtn.click();
+}
+
 export async function approvePositionViaUI(page: Page, position: ApprovablePosition) {
   const planSearch = page.getByPlaceholder("Поиск");
   await expect(planSearch).toBeVisible({ timeout: 10_000 });
@@ -288,7 +307,10 @@ export async function approvePositionViaUI(page: Page, position: ApprovablePosit
     const forceBtn = page.locator("button", { hasText: "Утвердить всё равно" }).filter({ visible: true });
     try {
       await expect(forceBtn).toBeVisible({ timeout: 3_000 });
-      await forceBtn.click();
+      await confirmForceApproveViaUI(
+        page,
+        `e2e: позиция #${position.id} заведена как эталонная, расхождения валидации проверены вручную`,
+      );
     } catch {
       // Риск-диалог не открылся: approve выполняется без force.
     }
@@ -300,14 +322,11 @@ export async function approvePositionViaUI(page: Page, position: ApprovablePosit
 
   const successToast = page.getByText("Позиция утверждена", { exact: true });
   await expect(successToast).toBeVisible({ timeout: 15_000 });
-  const approveButton = planRow.getByRole("button", { name: "Утвердить" });
-  if ((await approveButton.count()) > 0) {
-    await page.reload();
-    await expect(page.getByPlaceholder("Поиск")).toBeVisible({ timeout: 15_000 });
-    if (position.sku) {
-      await page.getByPlaceholder("Поиск").fill(singleSku(position.sku));
-    }
-  }
+  // Раньше здесь стоял `page.reload()` с комментарием про «кэш React Query»:
+  // он пересоздавал QueryClient и маскировал рассинхрон инвалидации — тест был
+  // зелёным вместе с багом, а не вопреки ему. Теперь перечитывание делает
+  // реестр (`invalidateAfter`), поэтому ждём исчезновения кнопки на живой
+  // странице: если инвалидация снова разъедется, тест упадёт здесь.
   await expect(planRow.getByRole("button", { name: "Утвердить" })).toHaveCount(0, {
     timeout: 15_000,
   });
@@ -321,7 +340,10 @@ export async function takeToWorkViaUI(page: Page, position: ApprovablePosition) 
     await execSearch.fill(singleSku(position.sku));
   }
 
-  const execRow = page.locator("tr", { hasText: `#${position.id}` }).first();
+  // Строку адресуем по `data-row-key`, а не по видимому `#<id>`: колонка `id`
+  // скрыта набором колонок, и текстовый локатор переставал находить строку
+  // именно тогда, когда её статус менялся.
+  const execRow = page.locator(`tr[data-row-key="${position.id}"]`).first();
   await expect(execRow).toBeVisible({ timeout: 15_000 });
 
   const launchBtn = execRow.getByRole("button", { name: "Взять в работу" });
@@ -339,13 +361,12 @@ export async function takeToWorkViaUI(page: Page, position: ApprovablePosition) 
   await launchBtn.click();
   await confirmProductionLaunchViaUI(page);
 
-  // Таблица может не перерисоваться после запуска (кэш React Query).
-  // Перезагружаем /execution и ждём статус «Запущен» на свежем DOM.
-  await page.goto("/execution");
-  await expect(page.getByPlaceholder("Поиск")).toBeVisible({ timeout: 10_000 });
-  await page.getByPlaceholder("Поиск").fill(singleSku(position.sku));
-
-  const launchedRow = page.locator("tr", { hasText: `#${position.id}` }).first();
+  // Раньше здесь стоял `page.goto("/execution")` с комментарием про «кэш React
+  // Query»: полная перезагрузка пересоздавала QueryClient и затыкала баг, из-за
+  // которого после запуска строка не перерисовывалась. Экран уже на /execution,
+  // поиск уже заполнен — перечитывание обязано произойти по реестру
+  // (`invalidateAfter`, действие `executionChanged`) на живой странице.
+  const launchedRow = page.locator(`tr[data-row-key="${position.id}"]`).first();
   await expect(launchedRow.locator("span").filter({ hasText: /^Запущен$/ })).toBeVisible({
     timeout: 15_000,
   });
@@ -573,7 +594,9 @@ export async function completeSectionTaskViaUI(page: Page, sectionId: number, sk
   if ((await plannedBtn.count()) > 0) {
     await plannedBtn.click();
   } else {
-    const goodInput = drawer.locator('input[type="number"]').first();
+    // Поле факта в TaskActionDrawer — `type="text" inputMode="numeric"`
+    // (не `type="number"`): селектор по type здесь больше ничего не находит.
+    const goodInput = drawer.locator('input[inputmode="numeric"]').first();
     await goodInput.fill(String(await taskRow.locator("td").nth(1).textContent() ?? "0"));
   }
 
@@ -683,7 +706,9 @@ export async function completeAllSectionTasksViaUI(
         await plannedBtn.click();
       } else {
         // Нет кнопки «Плановое» — берём выданное на участок количество.
-        const goodInput = drawer.locator('input[type="number"]').first();
+        // Поле факта в TaskActionDrawer — `type="text" inputMode="numeric"`
+        // (не `type="number"`): селектор по type здесь больше ничего не находит.
+        const goodInput = drawer.locator('input[inputmode="numeric"]').first();
         await goodInput.fill(String(inWork));
       }
 

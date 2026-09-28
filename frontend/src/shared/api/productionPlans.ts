@@ -173,11 +173,12 @@ export async function deleteProductionPlan(
 export async function approveProductionPlanPosition(
   productionPlanId: number,
   positionId: number,
-  options?: { force?: boolean },
+  options?: { force?: boolean; reason?: string },
 ) {
   const { data } = await apiClient.post<ApprovePositionResponse>(
     `/production-plans/${productionPlanId}/positions/${positionId}/approve`,
-    undefined,
+    // Причина — в теле: текст оператора не должен попадать в URL.
+    options?.force ? { reason: options.reason ?? null } : undefined,
     {
       params: options?.force ? { force: true } : undefined,
     },
@@ -232,7 +233,14 @@ export type PlanPositionOut = {
   route_error: string | null;
   raw_excel_row: Record<string, unknown> | null;
   payload?: Record<string, unknown> | null;
+  // Индикатор остатка (#207): три числа с тремя именами.
+  //   free_stock_quantity          — «Свободно на складах» (свойство склада)
+  //   available_remainder_quantity — «Доступно для позиции» (минус чужие)
+  //   deficit_quantity             — «Дефицит позиции»
+  // null = данных о наличии нет (индикатор не показывается), 0 = ноль.
+  free_stock_quantity?: number | null;
   available_remainder_quantity?: number | null;
+  deficit_quantity?: number | null;
   // Авторасчёт «количество на подвес» (#66): расчёт на лету по длине позиции.
   quantity_per_hanger?: number | null;
   quantity_per_hanger_source?: "auto" | "manual" | null;
@@ -264,8 +272,8 @@ export type AllPlanPositionsParams = {
   limit?: number;
   offset?: number;
   search?: string;
-  sort_by?: string;
-  sort_order?: string;
+  /** Мультисортировка строкой `поле:направление,...` (контракт `app/core/sorting.py`). */
+  sort?: string;
   status?: string;
   validation_status?: string;
   source_sku?: string;
@@ -391,6 +399,25 @@ export type RouteCheckResponse = {
   } | null;
   match: boolean;
   issues: string[];
+  route_signature: RouteSignatureCheck;
+};
+
+export type RouteSignatureStep = {
+  stage_kind: string;
+  section_code: string;
+  operation_codes: string[];
+  is_significant: boolean;
+  transforms_dimensions: boolean;
+  is_final: boolean;
+};
+
+/** Сигнатура маршрута позиции: ожидаемая, фактическая и вердикт (#214). */
+export type RouteSignatureCheck = {
+  verdict: "match" | "mismatch" | "unknown";
+  expected: string | null;
+  expected_steps: RouteSignatureStep[];
+  actual: string | null;
+  actual_steps: RouteSignatureStep[];
 };
 
 export async function routeCheck(planId: number, positionId: number) {
@@ -508,7 +535,14 @@ export type ProductionPlanningRow = {
     section_icon_color: string | null;
     sequence: number;
   }[];
+  // Индикатор остатка (#207): три числа с тремя именами.
+  //   free_stock_quantity          — «Свободно на складах» (свойство склада)
+  //   available_remainder_quantity — «Доступно для позиции» (минус чужие)
+  //   deficit_quantity             — «Дефицит позиции»
+  // null = данных о наличии нет (индикатор не показывается), 0 = ноль.
+  free_stock_quantity?: number | null;
   available_remainder_quantity?: number | null;
+  deficit_quantity?: number | null;
 };
 
 export type ProductionPlanningRouteSnapshotStep = {
@@ -525,6 +559,8 @@ export type ProductionPlanningRouteSnapshotStep = {
 };
 
 export type ProductionPlanningStage = {
+  /** Причина пропуска этапа (#207); заполняется только при task_status = «skipped». */
+  skip_reason?: string | null;
   flow_events: {
     step: string;
     label: string;
@@ -609,7 +645,14 @@ export type ProductionPlanningRowDetail = {
   status_history: StatusHistoryEntry[];
   raw_excel_row: Record<string, unknown> | null;
   payload?: Record<string, unknown> | null;
+  // Индикатор остатка (#207): три числа с тремя именами.
+  //   free_stock_quantity          — «Свободно на складах» (свойство склада)
+  //   available_remainder_quantity — «Доступно для позиции» (минус чужие)
+  //   deficit_quantity             — «Дефицит позиции»
+  // null = данных о наличии нет (индикатор не показывается), 0 = ноль.
+  free_stock_quantity?: number | null;
   available_remainder_quantity?: number | null;
+  deficit_quantity?: number | null;
 };
 
 export type ListProductionPlanningRowsParams = {
@@ -617,8 +660,8 @@ export type ListProductionPlanningRowsParams = {
   limit?: number;
   offset?: number;
   search?: string;
-  sort_by?: string;
-  sort_order?: "asc" | "desc";
+  /** Мультисортировка строкой `поле:направление,...` (контракт `app/core/sorting.py`). */
+  sort?: string;
   plan_position_id?: string;
   source_row_number?: string;
   production_plan_id?: string;
@@ -904,10 +947,11 @@ export async function bulkApprovePositions(
   planId: number,
   ids: number[],
   force = false,
+  reason?: string,
 ): Promise<BulkActionResponse> {
   const { data } = await apiClient.post<BulkActionResponse>(
     `/production-plans/${planId}/positions/bulk-approve`,
-    { ids, force },
+    { ids, force, reason },
   );
   return data;
 }

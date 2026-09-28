@@ -39,7 +39,7 @@ from app.core.idempotency import raise_idempotency_conflict_on_violation
 from app.models.internal_plan import SectionPlanLine
 from app.models.section import Section
 from app.models.transfer import Transfer, TransferStatus
-from app.models.work_task import WorkTask, WorkTaskStatus
+from app.models.work_task import CLOSED_WORK_TASK_STATUSES, WorkTask, WorkTaskStatus
 
 from app.services.shopfloor.cache import (
     _refresh_section_plan_line_cache,
@@ -66,6 +66,7 @@ from app.services.shopfloor.common import (
 # Коррекция — in-place изменение quantity активных транзакций.
 from app.domain.dimensions import canonicalize_dimensions
 from app.services.action_journal_service import action_journal_service
+from app.services.material_operations import completed_operations_for_task
 from app.stock.models import QualityState, Reason, StockTransaction
 from app.stock.services import (
     StockCommand,
@@ -261,7 +262,7 @@ async def transfer_send(
         existing_task = await db.scalar(
             select(WorkTask).where(
                 WorkTask.section_plan_line_id == next_line.id,
-                WorkTask.status.notin_([WorkTaskStatus.completed, WorkTaskStatus.cancelled]),
+                WorkTask.status.notin_(CLOSED_WORK_TASK_STATUSES),
                 dimensions_match_clause(WorkTask.dimensions, dimensions),
             )
         )
@@ -413,6 +414,12 @@ async def transfer_send(
         route_id=from_line.route_id,
         through_sequence=from_stage.sequence,
     )
+    # Признак «пройденные операции» (ADR-0043): проводка приёма относится
+    # к ЭТАПУ-получателю, но материал пришёл с предыдущего этапа. Поэтому
+    # признак берём у исходного задания, а не у приёмного, — иначе
+    # материал на каждой передаче «проходил» бы ещё и операции этапа
+    # назначения, которого он ещё не касался.
+    completed_operations_through_source = await completed_operations_for_task(db, from_task)
     receive_tx = await _stock_command_service.record(
         db,
         StockCommand(
@@ -422,6 +429,7 @@ async def transfer_send(
             from_location_id=None,
             to_location_id=None,
             dimensions=dimensions,
+            completed_operations=completed_operations_through_source,
             quality_state=quality_state,
             task_id=to_task.id,
             transfer_id=transfer.id,
@@ -895,7 +903,7 @@ async def auto_create_transfer_after_complete(
             next_task = await db.scalar(
                 select(WorkTask).where(
                     WorkTask.section_plan_line_id == next_line.id,
-                    WorkTask.status.notin_([WorkTaskStatus.completed, WorkTaskStatus.cancelled]),
+                    WorkTask.status.notin_(CLOSED_WORK_TASK_STATUSES),
                 )
             )
         step_idx = next_line.sequence - from_line.sequence
@@ -910,7 +918,7 @@ async def auto_create_transfer_after_complete(
                 target_task = await db.scalar(
                     select(WorkTask).where(
                         WorkTask.section_plan_line_id == next_line.id,
-                        WorkTask.status.notin_([WorkTaskStatus.completed, WorkTaskStatus.cancelled]),
+                        WorkTask.status.notin_(CLOSED_WORK_TASK_STATUSES),
                         dimensions_match_clause(WorkTask.dimensions, dims),
                     )
                 )
@@ -944,7 +952,7 @@ async def auto_create_transfer_after_complete(
             created_task = await db.scalar(
                 select(WorkTask).where(
                     WorkTask.section_plan_line_id == next_line.id,
-                    WorkTask.status.notin_([WorkTaskStatus.completed, WorkTaskStatus.cancelled]),
+                    WorkTask.status.notin_(CLOSED_WORK_TASK_STATUSES),
                 )
             )
             if created_task is None:

@@ -1,6 +1,6 @@
-import React, { useCallback, useEffect, useMemo, useState } from "react";
+import React, { useCallback, useMemo, useState } from "react";
 import { Plus, ArrowUp, ArrowDown, Settings, X, Pencil, Trash2, Move, Layers, ChevronRight, Warehouse, Factory, Search } from "lucide-react";
-import { useQueryClient } from "@tanstack/react-query";
+import { useQuery, useQueryClient } from "@tanstack/react-query";
 import * as API from "shared/api";
 import { usePermission } from "@/features/auth/hooks/usePermission";
 import * as SectionsAPI from "shared/api/sections";
@@ -20,9 +20,11 @@ import type { EntityDialogField } from "@/shared/ui/EntityDialog";
 import type { OperationGroup, SectionOperationInfo } from "shared/api/sections";
 import { fetchAllSections } from "shared/api/sections";
 import { queryKeys } from "@/shared/api/queryKeys";
+import { invalidateAfter } from "@/shared/api/cacheInvalidation";
 import { sectionTypeLabels } from "@/shared/lib/generated-labels";
 import { STOCK_SECTION_TYPES } from "@/shared/lib/sectionTypes";
 import type { SectionType } from "shared/api/sections";
+import { useDebouncedValue } from "@/shared/lib/useDebouncedValue";
 
 type Section = {
   id?: string | number;
@@ -58,6 +60,12 @@ const TYPE_OPTIONS = [
 const ui = UI as unknown as Record<string, React.ComponentType<any>>;
 const Table = ui.Table ?? "table";
 
+// Стабильные пустые ссылки: иначе `data = []` давал бы новый массив на
+// каждом рендере, и `useMemo` ниже пересчитывался бы без нужды.
+const EMPTY_SECTIONS: Section[] = [];
+const EMPTY_SPGS: SpgAPI.SpgOut[] = [];
+const EMPTY_OP_GROUPS: OperationGroup[] = [];
+
 const OP_FIELDS: Record<string, EntityDialogField> = {
   operation_code: { type: "text", label: "Код операции", placeholder: "Введите код", required: true, rowGroup: "row1" },
   operation_name: { type: "text", label: "Название операции", placeholder: "Введите название", required: true, rowGroup: "row1" },
@@ -92,8 +100,7 @@ const SPG_FIELDS: Record<string, EntityDialogField> = {
 
 async function apiListSections(params: {
   search?: string;
-  sort_by?: string;
-  sort_order?: "asc" | "desc";
+  sort?: string;
 }): Promise<Section[]> {
   const data = await fetchAllSections(params);
   return data as Section[];
@@ -148,16 +155,12 @@ export function SectionsPage() {
   const { canEditReferences } = usePermission();
   const isReadOnly = !canEditReferences;
   const queryClient = useQueryClient();
-  const [items, setItems] = useState<Section[]>([]);
-  const [loading, setLoading] = useState(false);
-  const [error, setError] = useState<string>("");
   const [search, setSearch] = useState("");
-  const [debouncedSearch, setDebouncedSearch] = useState("");
+  const debouncedSearch = useDebouncedValue(search);
   const [dialogOpen, setDialogOpen] = useState(false);
   const [dialogMode, setDialogMode] = useState<"add" | "edit">("add");
   const [editingItem, setEditingItem] = useState<Section | null>(null);
   const [deleteDialogOpen, setDeleteDialogOpen] = useState(false);
-  const [spgs, setSpgs] = useState<SpgAPI.SpgOut[]>([]);
   const [spgDialogOpen, setSpgDialogOpen] = useState(false);
   const [spgDialogMode, setSpgDialogMode] = useState<"add" | "edit">("add");
   const [editingSpg, setEditingSpg] = useState<SpgAPI.SpgOut | null>(null);
@@ -166,9 +169,6 @@ export function SectionsPage() {
   // Operations panel — now uses groups
   const [expandedSectionId, setExpandedSectionId] = useState<number | null>(null);
   const [expandedSectionName, setExpandedSectionName] = useState<string>("");
-  const [opGroups, setOpGroups] = useState<OperationGroup[]>([]);
-  const [opsCountById, setOpsCountById] = useState<Record<number, number | undefined>>({});
-  const [opsLoading, setOpsLoading] = useState(false);
   const [deleteOpDialog, setDeleteOpDialog] = useState<{ sectionId: number; opId: number; opName: string } | null>(null);
   const [opDialogOpen, setOpDialogOpen] = useState(false);
   const [opDialogMode, setOpDialogMode] = useState<"add" | "edit">("add");
@@ -188,60 +188,106 @@ export function SectionsPage() {
   // Move operation dialog
   const [moveOpDialog, setMoveOpDialog] = useState<{ sectionId: number; opId: number; opName: string; currentGroup: string | null } | null>(null);
 
-  // Единая точка инвалидации связанных кэшей после изменений секций/операций/ГХП.
-  const invalidateRelatedCaches = useCallback(() => {
-    void queryClient.invalidateQueries({ queryKey: queryKeys.sections.all() });
-    void queryClient.invalidateQueries({ queryKey: queryKeys.operations.all() });
-    void queryClient.invalidateQueries({ queryKey: queryKeys.operationGroups.all() });
-    void queryClient.invalidateQueries({ queryKey: queryKeys.spg.all() });
-    void queryClient.invalidateQueries({ queryKey: queryKeys.shopfloor.boardAll() });
-    void queryClient.invalidateQueries({ queryKey: queryKeys.shopfloor.statsAll() });
-    void queryClient.invalidateQueries({ queryKey: queryKeys.shopfloor.summary() });
-    void queryClient.invalidateQueries({ queryKey: queryKeys.shopfloor.incomingTransfersAll() });
-    void queryClient.invalidateQueries({ queryKey: queryKeys.transfers.readyAll() });
-    void queryClient.invalidateQueries({ queryKey: queryKeys.transfers.historyAll() });
-    void queryClient.invalidateQueries({ queryKey: queryKeys.spg.snapshotAll() });
-    void queryClient.invalidateQueries({ queryKey: queryKeys.routes.all() });
-  }, [queryClient]);
+  // Справочник участков, список ГХП и панель операций — три независимых
+  // чтения: у каждого своя частота, и склеивать их в один запрос значило бы
+  // перечитывать панель операций при каждом движении поиска.
+  const sectionsListParams = useMemo(
+    () => ({
+      search: debouncedSearch || undefined,
+      // Порядок участков в справочнике задаёт сервер; дефолт сортировки
+      // совпадает с порядком, который оператор видит при первом открытии.
+      sort: "sort_order:asc",
+    }),
+    [debouncedSearch],
+  );
 
-  const loadOpGroups = useCallback(async (sectionId: number, sectionName: string) => {
-    setExpandedSectionId(sectionId);
-    setExpandedSectionName(sectionName);
-    setOpsLoading(true);
-    try {
-      const groups = await SectionsAPI.getSectionOperationGroups(sectionId);
-      setOpGroups(groups);
-      const total = groups.reduce((sum, g) => sum + g.operations.length, 0);
-      setOpsCountById((prev) => ({ ...prev, [sectionId]: total }));
-    } catch (e) {
-      toast({ title: "Ошибка загрузки групп", description: API.getErrorMessage(e), variant: "destructive" });
-    } finally {
-      setOpsLoading(false);
+  const { data: items = EMPTY_SECTIONS, isLoading, error: listError } = useQuery({
+    queryKey: queryKeys.sections.list(sectionsListParams),
+    queryFn: () => apiListSections(sectionsListParams),
+  });
+
+  const { data: spgs = EMPTY_SPGS } = useQuery({
+    queryKey: queryKeys.spg.all(),
+    queryFn: SpgAPI.getSpgList,
+  });
+
+  // Группы операций читаются только для раскрытого участка: `enabled`
+  // не даёт ждать все секции и держать в кэше то, что никто не открывал.
+  const { data: opGroups = EMPTY_OP_GROUPS, isLoading: opsLoading } = useQuery({
+    queryKey: queryKeys.operationGroups.bySection(expandedSectionId ?? 0),
+    queryFn: () => SectionsAPI.getSectionOperationGroups(expandedSectionId!),
+    enabled: expandedSectionId != null,
+  });
+
+  // Счётчик операций участка приходит вместе со справочником, а не из
+  // загруженных групп: иначе у нераскрытых секций его неоткуда взять.
+  const opsCountById = useMemo(() => {
+    const counts: Record<number, number | undefined> = {};
+    for (const section of items) {
+      if (section.id !== undefined) counts[Number(section.id)] = section.operations_count ?? 0;
     }
-  }, []);
+    return counts;
+  }, [items]);
 
-  const toggleSectionOps = useCallback(async (sectionId: number, sectionName: string) => {
+  // Правка секции, операции, группы или ГХП меняет и доски участков, и
+  // план: перечень доменей — решение матрицы, а не перечисление здесь.
+  const invalidateSections = useCallback(
+    () => invalidateAfter(queryClient, "sectionsChanged"),
+    [queryClient],
+  );
+
+  // Правка списка разделов в кэше: обмен соседних строк рисуется сразу,
+  // а канонический порядок подтверждается перечитыванием после `reorderSections`.
+  const reorderItemsLocally = useCallback(
+    (currentId: string | number | undefined, targetId: string | number | undefined) => {
+      queryClient.setQueryData<Section[]>(queryKeys.sections.list(sectionsListParams), (prev) => {
+        const next = [...(prev ?? [])];
+        const idxCurrent = next.findIndex((item) => item.id === currentId);
+        const idxTarget = next.findIndex((item) => item.id === targetId);
+        if (idxCurrent === -1 || idxTarget === -1) return prev ?? [];
+        const temp = next[idxCurrent];
+        next[idxCurrent] = next[idxTarget];
+        next[idxTarget] = temp;
+        return next;
+      });
+    },
+    [queryClient, sectionsListParams],
+  );
+
+  /** Правка панели операций в кэше: ответ сервера уже пришёл, рисовать его
+   *  мгновенно дешевле, чем ждать перечитывания всей панели. */
+  const patchOpGroups = useCallback(
+    (sectionId: number, updater: (prev: OperationGroup[]) => OperationGroup[]) => {
+      queryClient.setQueryData<OperationGroup[]>(
+        queryKeys.operationGroups.bySection(sectionId),
+        (prev) => updater(prev ?? []),
+      );
+    },
+    [queryClient],
+  );
+
+  const toggleSectionOps = useCallback((sectionId: number, sectionName: string) => {
     if (expandedSectionId === sectionId) {
       setExpandedSectionId(null);
-      setOpGroups([]);
+      setExpandedSectionName("");
       return;
     }
-    await loadOpGroups(sectionId, sectionName);
-  }, [expandedSectionId, loadOpGroups]);
+    setExpandedSectionId(sectionId);
+    setExpandedSectionName(sectionName);
+  }, [expandedSectionId]);
 
   const toggleOpSignificant = useCallback(async (sectionId: number, opId: number, current: boolean) => {
     try {
-      const updated = await ShopfloorAPI.updateSectionOperation(sectionId, opId, { is_significant: !current });
-      // Update in groups state
-      setOpGroups((prev) => prev.map((g) => ({
+      await ShopfloorAPI.updateSectionOperation(sectionId, opId, { is_significant: !current });
+      patchOpGroups(sectionId, (prev) => prev.map((g) => ({
         ...g,
         operations: g.operations.map((o) => o.id === opId ? { ...o, is_significant: !current } : o),
       })));
-      invalidateRelatedCaches();
+      await invalidateSections();
     } catch (e) {
       toast({ title: "Ошибка обновления", description: API.getErrorMessage(e), variant: "destructive" });
     }
-  }, [invalidateRelatedCaches]);
+  }, [invalidateSections, patchOpGroups]);
 
   const openAddOp = useCallback((sectionId: number, groupCode: string | null) => {
     setOpDialogSectionId(sectionId);
@@ -290,14 +336,14 @@ export function SectionsPage() {
         }
         // Add to state — find or create the group
         if (opDialogGroupCode) {
-          setOpGroups((prev) => prev.map((g) =>
+          patchOpGroups(opDialogSectionId, (prev) => prev.map((g) =>
             g.group_code === opDialogGroupCode
               ? { ...g, operations: [...g.operations, created as SectionOperationInfo] }
               : g,
           ));
         } else {
           // Add to "no group" section
-          setOpGroups((prev) => {
+          patchOpGroups(opDialogSectionId, (prev) => {
             const noneGroup = prev.find((g) => g.group_code === null);
             if (noneGroup) {
               return prev.map((g) =>
@@ -309,8 +355,9 @@ export function SectionsPage() {
             return [...prev, { group_code: null, group_name: null, sort_order: 0, operations: [created as SectionOperationInfo] }];
           });
         }
-        await invalidateRelatedCaches();
-        setOpsCountById((prev) => ({ ...prev, [opDialogSectionId]: (prev[opDialogSectionId] ?? 0) + 1 }));
+        // Счётчик операций приходит со справочником, поэтому перечитывается
+        // тем же действием, что и панель, — вручную его не правим.
+        await invalidateSections();
         setOpDialogOpen(false);
       } catch (e) {
         toast({ title: "Ошибка создания", description: API.getErrorMessage(e), variant: "destructive" });
@@ -323,17 +370,17 @@ export function SectionsPage() {
           icon_color: String(values.icon_color || "") || null,
         };
         const updated = await ShopfloorAPI.updateSectionOperation(opDialogSectionId, opDialogOpId, payload);
-        setOpGroups((prev) => prev.map((g) => ({
+        patchOpGroups(opDialogSectionId, (prev) => prev.map((g) => ({
           ...g,
           operations: g.operations.map((o) => o.id === opDialogOpId ? { ...o, ...updated } : o),
         })));
-        await invalidateRelatedCaches();
+        await invalidateSections();
         setOpDialogOpen(false);
       } catch (e) {
         toast({ title: "Ошибка обновления", description: API.getErrorMessage(e), variant: "destructive" });
       }
     }
-  }, [opDialogMode, opDialogSectionId, opDialogOpId, opDialogGroupCode, opGroups, invalidateRelatedCaches]);
+  }, [opDialogMode, opDialogSectionId, opDialogOpId, opDialogGroupCode, opGroups, invalidateSections, patchOpGroups]);
 
   const deleteOp = useCallback(async (sectionId: number, opId: number, opName: string) => {
     setDeleteOpDialog({ sectionId, opId, opName });
@@ -344,21 +391,17 @@ export function SectionsPage() {
     const { sectionId, opId } = deleteOpDialog;
     try {
       await ShopfloorAPI.deleteSectionOperation(sectionId, opId);
-      setOpGroups((prev) => prev.map((g) => ({
+      patchOpGroups(sectionId, (prev) => prev.map((g) => ({
         ...g,
         operations: g.operations.filter((o) => o.id !== opId),
       })).filter((g) => g.operations.length > 0 || g.group_code !== null));
-      setOpsCountById((prev) => {
-        const cur = prev[sectionId] ?? 0;
-        return { ...prev, [sectionId]: Math.max(0, cur - 1) };
-      });
-      await invalidateRelatedCaches();
+      await invalidateSections();
     } catch (e) {
       toast({ title: "Ошибка удаления", description: API.getErrorMessage(e), variant: "destructive" });
     } finally {
       setDeleteOpDialog(null);
     }
-  }, [deleteOpDialog, invalidateRelatedCaches]);
+  }, [deleteOpDialog, invalidateSections, patchOpGroups]);
 
   // Group management
   const openAddGroup = useCallback((sectionId: number) => {
@@ -390,10 +433,9 @@ export function SectionsPage() {
           sort_order: Number(values.sort_order) || 0,
         };
         const created = await SectionsAPI.createOperationGroup(groupDialogSectionId, payload);
-        setOpGroups((prev) => [...prev, created]);
-        setOpsCountById((prev) => ({ ...prev, [groupDialogSectionId]: (prev[groupDialogSectionId] ?? 0) + created.operations.length }));
+        patchOpGroups(groupDialogSectionId, (prev) => [...prev, created]);
         setGroupDialogOpen(false);
-        invalidateRelatedCaches();
+        await invalidateSections();
       } catch (e) {
         toast({ title: "Ошибка создания группы", description: API.getErrorMessage(e), variant: "destructive" });
       }
@@ -403,32 +445,27 @@ export function SectionsPage() {
         if (values.group_name !== undefined) payload.group_name = String(values.group_name);
         if (values.sort_order !== undefined) payload.sort_order = Number(values.sort_order);
         const updated = await SectionsAPI.updateOperationGroup(groupDialogSectionId, groupDialogGroupCode, payload);
-        setOpGroups((prev) => prev.map((g) => g.group_code === groupDialogGroupCode ? updated : g));
+        patchOpGroups(groupDialogSectionId, (prev) => prev.map((g) => g.group_code === groupDialogGroupCode ? updated : g));
         setGroupDialogOpen(false);
-        invalidateRelatedCaches();
+        await invalidateSections();
       } catch (e) {
         toast({ title: "Ошибка обновления группы", description: API.getErrorMessage(e), variant: "destructive" });
       }
     }
-  }, [groupDialogMode, groupDialogSectionId, groupDialogGroupCode, invalidateRelatedCaches]);
+  }, [groupDialogMode, groupDialogSectionId, groupDialogGroupCode, invalidateSections, patchOpGroups]);
 
   const confirmedDeleteGroup = useCallback(async () => {
     if (!deleteGroupDialog) return;
     const { sectionId, groupCode } = deleteGroupDialog;
     try {
-      const removedCount = opGroups.find((g) => g.group_code === groupCode)?.operations.length ?? 0;
       await SectionsAPI.deleteOperationGroup(sectionId, groupCode);
-      setOpGroups((prev) => prev.filter((g) => g.group_code !== groupCode));
-      setOpsCountById((prev) => {
-        const cur = prev[sectionId] ?? 0;
-        return { ...prev, [sectionId]: Math.max(0, cur - removedCount) };
-      });
+      patchOpGroups(sectionId, (prev) => prev.filter((g) => g.group_code !== groupCode));
       setDeleteGroupDialog(null);
-      invalidateRelatedCaches();
+      await invalidateSections();
     } catch (e) {
       toast({ title: "Ошибка удаления группы", description: API.getErrorMessage(e), variant: "destructive" });
     }
-  }, [deleteGroupDialog, opGroups, invalidateRelatedCaches]);
+  }, [deleteGroupDialog, invalidateSections, patchOpGroups]);
 
   const openMoveOp = useCallback((sectionId: number, op: SectionOperationInfo) => {
     setMoveOpDialog({ sectionId, opId: op.id, opName: op.operation_name, currentGroup: op.group_code });
@@ -441,90 +478,48 @@ export function SectionsPage() {
         operation_id: moveOpDialog.opId,
         new_group_code: targetGroupCode,
       });
-      // Update local state
+      // Перенос рисуется сразу: операция уже переехала на сервере, ждать
+      // перечитывания панели ради одного чипа незачем.
       const targetGroup = opGroups.find((g) => g.group_code === targetGroupCode);
-      setOpGroups((prev) => {
-        let next = prev.map((g) => {
-          const movedOp = g.operations.find((o) => o.id === moveOpDialog.opId);
-          if (!movedOp) return g;
-          return {
-            ...g,
-            operations: g.operations.filter((o) => o.id !== moveOpDialog.opId),
-          };
-        }).filter((g) => g.operations.length > 0 || g.group_code === null);
-
-        // Add to target group
-        const targetGroupName = targetGroup?.group_name || null;
-        return next.map((g) =>
+      const targetGroupName = targetGroup?.group_name ?? null;
+      patchOpGroups(moveOpDialog.sectionId, (prev) => {
+        const movedOp = prev.flatMap((g) => g.operations).find((o) => o.id === moveOpDialog.opId);
+        const withoutMoved = prev
+          .map((g) => ({ ...g, operations: g.operations.filter((o) => o.id !== moveOpDialog.opId) }))
+          .filter((g) => g.operations.length > 0 || g.group_code === null);
+        if (!movedOp) return withoutMoved;
+        return withoutMoved.map((g) =>
           g.group_code === targetGroupCode
-            ? { ...g, operations: [...g.operations, { ...moveOpDialog as any, group_code: targetGroupCode, group_name: targetGroupName }] }
+            ? {
+                ...g,
+                operations: [...g.operations, { ...movedOp, group_code: targetGroupCode, group_name: targetGroupName }],
+              }
             : g,
         );
       });
       setMoveOpDialog(null);
-      invalidateRelatedCaches();
+      await invalidateSections();
     } catch (e) {
       toast({ title: "Ошибка перемещения", description: API.getErrorMessage(e), variant: "destructive" });
     }
-  }, [moveOpDialog, opGroups, invalidateRelatedCaches]);
-
-  const load = useCallback(async () => {
-    setLoading(true);
-    setError("");
-    try {
-      const sections = await apiListSections({
-        search: debouncedSearch || undefined,
-        sort_by: "sort_order",
-        sort_order: "asc",
-      });
-      setItems(sections);
-      setOpsCountById((prev) => {
-        const next = { ...prev };
-        sections.forEach((s) => {
-          if (s.id !== undefined) {
-            next[Number(s.id)] = s.operations_count ?? 0;
-          }
-        });
-        return next;
-      });
-    } catch (e) {
-      setError(e instanceof Error ? e.message : "Unknown error");
-    } finally {
-      setLoading(false);
-    }
-  }, [debouncedSearch]);
+  }, [moveOpDialog, opGroups, invalidateSections, patchOpGroups]);
 
   const commitReorder = useCallback(async () => {
     try {
       const ids = items.map((item) => Number(item.id)).filter(Boolean);
       if (ids.length > 0) {
         await SectionsAPI.reorderSections(ids);
-        invalidateRelatedCaches();
+        // Порядок на сервере стал каноническим: справочник перечитывается,
+        // иначе после чужой правки экран держал бы свой локальный порядок.
+        await invalidateSections();
       }
     } catch (e) {
       toast({ title: "Ошибка сортировки", description: API.getErrorMessage(e), variant: "destructive" });
-      await load();
+      // Несохранённый локальный обмен строк откатывается перечитыванием.
+      await invalidateSections();
     }
-  }, [items, load, invalidateRelatedCaches]);
+  }, [items, invalidateSections]);
 
-  const loadSpgs = useCallback(async () => {
-    try {
-      const list = await SpgAPI.getSpgList();
-      setSpgs(list);
-    } catch (e) {
-      console.error("Failed to load SPGs:", e);
-    }
-  }, []);
-
-  useEffect(() => {
-    const timer = window.setTimeout(() => setDebouncedSearch(search), 300);
-    return () => window.clearTimeout(timer);
-  }, [search]);
-
-  useEffect(() => {
-    void load();
-    void loadSpgs();
-  }, [load, loadSpgs]);
 
   const openAddSpg = () => {
     setSpgDialogMode("add");
@@ -575,8 +570,7 @@ export function SectionsPage() {
       }
       setSpgDialogOpen(false);
       setEditingSpg(null);
-      await loadSpgs();
-      invalidateRelatedCaches();
+      await invalidateSections();
     } catch (e) {
       const action = spgDialogMode === "edit" ? "обновления" : "создания";
       toast({ title: `Ошибка ${action} ГХП`, description: API.getErrorMessage(e), variant: "destructive" });
@@ -588,8 +582,7 @@ export function SectionsPage() {
     try {
       await SpgAPI.deleteSpg(deleteSpgDialog.id);
       toast({ title: "Удалено", description: `ГХП "${deleteSpgDialog.name}" удалено`, variant: "success" });
-      await Promise.all([loadSpgs(), load()]);
-      invalidateRelatedCaches();
+      await invalidateSections();
     } catch (e) {
       toast({ title: "Ошибка удаления ГХП", description: API.getErrorMessage(e), variant: "destructive" });
     } finally {
@@ -630,8 +623,7 @@ export function SectionsPage() {
         toast({ title: "Создано", description: `Участок "${payload.name}" (код: ${payload.code}, тип: ${sectionTypeLabels[payload.type] ?? payload.type}) успешно создан`, variant: "success" });
       }
       setDialogOpen(false);
-      await load();
-      invalidateRelatedCaches();
+      await invalidateSections();
     } catch (e) {
       const action = dialogMode === "edit" ? `обновления: ${editingItem?.name} (ID: ${editingItem?.id})` : `создания: ${payload.name}`;
       toast({ title: `Ошибка ${action}`, description: API.getErrorMessage(e), variant: "destructive" });
@@ -644,8 +636,7 @@ export function SectionsPage() {
       await apiDeleteSection(Number(editingItem.id));
       toast({ title: "Удалено", description: `Участок "${editingItem.name}" (код: ${editingItem.code}, ID: ${editingItem.id}, тип: ${sectionTypeLabels[editingItem.type ?? "production"] ?? editingItem.type}) успешно удалён`, variant: "success" });
       setDialogOpen(false);
-      await load();
-      invalidateRelatedCaches();
+      await invalidateSections();
     } catch (e) {
       toast({ title: `Ошибка удаления: ${editingItem.name} (код: ${editingItem.code}, ID: ${editingItem.id})`, description: API.getErrorMessage(e), variant: "destructive" });
     } finally {
@@ -797,22 +788,12 @@ export function SectionsPage() {
     const currentItem = subsection[index];
     const targetItem = subsection[targetIndex];
 
-    setItems((prev) => {
-      const next = [...prev];
-      const idxCurrent = next.findIndex(item => item.id === currentItem.id);
-      const idxTarget = next.findIndex(item => item.id === targetItem.id);
-      if (idxCurrent !== -1 && idxTarget !== -1) {
-        const temp = next[idxCurrent];
-        next[idxCurrent] = next[idxTarget];
-        next[idxTarget] = temp;
-      }
-      return next;
-    });
+    reorderItemsLocally(currentItem.id, targetItem.id);
 
     setTimeout(() => {
       void commitReorder();
     }, 0);
-  }, [commitReorder]);
+  }, [commitReorder, reorderItemsLocally]);
 
   const renderSectionTable = (sectionList: Section[], group: Group, isStock: boolean) => {
     if (sectionList.length === 0) {
@@ -1152,8 +1133,8 @@ export function SectionsPage() {
         </div>
       </div>
 
-      {error ? <div role="alert">{error}</div> : null}
-      {loading ? <div>Загрузка...</div> : null}
+      {listError ? <div role="alert">{listError instanceof Error ? listError.message : "Unknown error"}</div> : null}
+      {isLoading ? <div>Загрузка...</div> : null}
 
       <div className="grid gap-3 items-start" style={{ gridTemplateColumns: "minmax(0, 7fr) minmax(0, 3fr)" }}>
         <div className="space-y-4 pr-5">

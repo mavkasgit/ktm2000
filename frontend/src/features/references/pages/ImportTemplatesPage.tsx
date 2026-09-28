@@ -9,6 +9,7 @@ import {
   type ImportTemplate,
   type CreateImportTemplateInput,
 } from "@/shared/api/importTemplates"
+import { invalidateAfter } from "@/shared/api/cacheInvalidation"
 import { queryKeys } from "@/shared/api/queryKeys"
 import { usePaginatedTableQuery } from "@/shared/hooks/usePaginatedTableQuery"
 import { TablePaginationFooter } from "@/shared/ui"
@@ -147,8 +148,7 @@ export function ImportTemplatesPage() {
     try {
       await deleteImportTemplate(deletingTemplate.id)
       toast({ title: "Шаблон удалён", variant: "success" })
-      queryClient.invalidateQueries({ queryKey: queryKeys.importTemplates.all() })
-      queryClient.invalidateQueries({ queryKey: ["import-templates", "list"] })
+      void invalidateAfter(queryClient, "importTemplatesChanged")
     } catch (e) {
       toast({ title: "Ошибка", description: getErrorMessage(e), variant: "destructive" })
     } finally {
@@ -244,8 +244,7 @@ export function ImportTemplatesPage() {
         onSuccess={() => {
           setEditDialogOpen(false)
           setPendingCreateFile(null)
-          queryClient.invalidateQueries({ queryKey: queryKeys.importTemplates.all() })
-      queryClient.invalidateQueries({ queryKey: ["import-templates", "list"] })
+          void invalidateAfter(queryClient, "importTemplatesChanged")
         }}
         readOnly={isReadOnly}
       />

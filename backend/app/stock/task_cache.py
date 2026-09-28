@@ -51,7 +51,7 @@ def resolve_work_task_status(
     Для трансформации ``planned_quantity`` — количество выходов, поэтому
     завершение определяется по списанному входу, а не по остатку выходов.
     """
-    if current_status in ("completed", "cancelled"):
+    if current_status in ("completed", "cancelled", "skipped"):
         return None
     if planned_quantity <= Decimal("0"):
         return None

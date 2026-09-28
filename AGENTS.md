@@ -13,15 +13,31 @@ Bootstrap-инструкции для AI-агентов. Детали — в `do
 npm run dev                    # Postgres + migrate + backend :8012 + frontend :5172
 npm run db:makemigrate -- "…"  # Новая миграция Alembic
 npm run db:migrate             # Применить миграции
-npm run db:seed                # Демо-данные
+npm run db:seed                # Справочники (участки, маршруты, шаблоны импорта)
+npm run db:seed:packing-demo   # Демо-доска «Участков»: 55 заданий на пиле/упаковке/анодировании + 36 дневных планов
+npm run db:snapshot -- dump <label> / restore <name>   # Слепок dev-БД в data/backups/snapshots
 npm run test:pytest            # Тесты backend (параллельно, дефолт)
 npm run test:pytest:full       # Полный прогон в один поток
 npm run test:pytest:mon        # Только изменённые тесты
 npm run test:pytest:lf         # Только упавшие тесты
+npm run test:e2e              # Playwright на ОТДЕЛЬНОМ стенде: своя БД ktm2000_e2e (Postgres :5441), порты 8013/5173
 npm run test:db:cleanup        # Уборка осиротевших тестовых БД (TTL 24h)
 ```
 
 Порты dev: Postgres `5440`, backend `8012`, frontend `5172`.
+Стенд E2E (`npm run test:e2e`) не делит их: Postgres `5441`, backend `8013`,
+frontend `5173`, БД `ktm2000_e2e` — конфиг в `.env.e2e`.
+
+### Если dev-стек не поднимается или «падает сам»
+
+| Симптом | Причина | Что делать |
+|---------|---------|-----------|
+| Страница по LAN-IP не открывается, `localhost` отвечает | Порт держит чужой процесс, слушающий только `127.0.0.1` | `npm run dev:ports` (кто держит) → `npm run dev:kill` |
+| Vite: `Port 5172 is already in use` и уходит | Порт занят другим vite | `npm run dev:kill`, затем `npm run dev` |
+| `alembic` / backend: `ConnectionRefusedError` при живом Postgres | В окружении осталась чужая `DATABASE_URL` (напр. на `:5432` вместо `:5440`) | Env-файл — источник правды: `.env.dev` перекрывает окружение сам. Если ошибка в чужом окружении — снять `DATABASE_URL` |
+| Весь стек умер после правки `.py` | — | Не должен: `npm run backend` ведёт `backend/scripts/dev_server.py` (рестарт только рабочего процесса, скоуп `app/`, битый синтаксис не роняет API). Если упало — пришлите лог |
+
+Детали реализации → [`backend/AGENTS.md`](backend/AGENTS.md) («Dev-режим») и [`docs/agent-registry.md`](docs/agent-registry.md) («Порты»).
 
 ## Тесты
 

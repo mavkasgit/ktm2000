@@ -215,6 +215,13 @@ function buildGroupLabel(
 // Главная функция группировки
 // ---------------------------------------------------------------------------
 
+/**
+ * Группировка без переупорядочивания: группы идут в порядке первого
+ * появления задания, задания внутри группы — во входном порядке.
+ *
+ * Порядок строк — дело вызывающего (доска применяет сортировку колонки
+ * либо дефолт «количество убыв., размер убыв.»); группировка его не затирает.
+ */
 export function groupTasksByProfile(
   tasks: SectionBoardTask[],
   profile: GroupingProfile,
@@ -243,7 +250,7 @@ export function groupTasksByProfile(
     group.totalQtyDone += completedQty;
   }
 
-  return sortGroupsByQuantityAndSize(Array.from(map.values()));
+  return Array.from(map.values());
 }
 
 
