@@ -58,7 +58,7 @@ async def _seed_sections(session) -> None:
         section_id=anod_section.id,
         operation_code="ANOD_01",
         operation_name="Серебро",
-        group_code="ANOD",
+        group_code="ANODIZING",
         group_name="Анодирование",
         is_significant=True,
         sort_order=1,
@@ -67,7 +67,7 @@ async def _seed_sections(session) -> None:
         section_id=anod_section.id,
         operation_code="ANOD_05",
         operation_name="Чёрный",
-        group_code="ANOD",
+        group_code="ANODIZING",
         group_name="Анодирование",
         is_significant=True,
         sort_order=2,
@@ -162,7 +162,7 @@ async def _make_profile_with_rules(session, template_id: int | None = None) -> i
             {
                 "action": "set_operation_by_mapping",
                 "section_code": "ANODIZING",
-                "group_code": "ANOD",
+                "group_code": "ANODIZING",
                 "lookup_field": "color",
                 "mapping": [
                     {"keyword": "черн", "operation_code": "ANOD_05"},

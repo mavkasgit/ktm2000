@@ -2,6 +2,7 @@ import type { RouteHistoryOp, SectionBoardTask } from "@/shared/api/shopfloor";
 import { formatDimensionsLabel } from "@/shared/api/stock";
 import { colorNameLabels } from "@/shared/lib/generated-labels";
 import { taskGroupingDimensions } from "./groupTasksByProfile";
+import { taskPackaging } from "./taskView";
 
 /** Режим верхней группировки строк плана анодирования. */
 export type PlanTaskGroupingMode = "article" | "anodizingColor";
@@ -58,30 +59,6 @@ function taskColor(task: SectionBoardTask): string | null {
   return null;
 }
 
-/**
- * Префикс кодов упаковочных операций участка: `PACK`, `PACK_STRETCH`,
- * `PACK_SPUNBOND` (группа «Упаковка» в `SectionOperation`).
- */
-const PACKAGING_OPERATION_PREFIX = "PACK";
-
-/**
- * Упаковка строки плана — только операция упаковки самого участка
- * («Стрейч», «Спанбонд», «Упаковка») из операций этапа задания.
- * Описание упаковки из Excel-импорта в план не выводится.
- */
-function taskPackaging(task: SectionBoardTask): string | null {
-  const codes = task.operation_codes ?? [];
-  const names = task.operation_names ?? [];
-  const labels: string[] = [];
-
-  for (const [index, code] of codes.entries()) {
-    if (!code || !code.startsWith(PACKAGING_OPERATION_PREFIX)) continue;
-    const name = names[index]?.trim();
-    if (name && !labels.includes(name)) labels.push(name);
-  }
-
-  return labels.length > 0 ? labels.join(" + ") : null;
-}
 
 function groupKeyForTask(task: SectionBoardTask, mode: PlanTaskGroupingMode): string {
   const size = dimensionsKey(task);

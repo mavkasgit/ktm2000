@@ -19,7 +19,7 @@ import {
   isTaskFullyTransferred,
   getTaskViewCategory,
 } from "./taskStatus";
-import { fmtQty } from "@/shared/lib/quantityFormat";
+import { QTY_EMPTY, fmtQty } from "@/shared/lib/quantityFormat";
 
 /**
  * Тон задания: «в ожидании», «в работе», «взято в работу», «завершено»,
@@ -95,4 +95,91 @@ export function getTaskGroupHeaderState(
       ? "Открыть панель завершения группы"
       : "Все задания в группе завершены",
   };
+}
+
+/**
+ * Префикс кодов упаковочных операций участка: `PACK`, `PACK_STRETCH`,
+ * `PACK_SPUNBOND` (группа «Упаковка» в `SectionOperation`).
+ */
+const PACKAGING_OPERATION_PREFIX = "PACK";
+
+/**
+ * Упаковка задания — операция упаковки участка («Стрейч», «Спанбонд»,
+ * «Упаковка») из операций его этапа. Описание упаковки из Excel-импорта в
+ * план не выводится.
+ */
+export function taskPackaging(task: SectionBoardTask): string | null {
+  const codes = task.operation_codes ?? [];
+  const names = task.operation_names ?? [];
+  const labels: string[] = [];
+
+  for (const [index, code] of codes.entries()) {
+    if (!code || !code.startsWith(PACKAGING_OPERATION_PREFIX)) continue;
+    const name = names[index]?.trim();
+    if (name && !labels.includes(name)) labels.push(name);
+  }
+
+  return labels.length > 0 ? labels.join(" + ") : null;
+}
+
+/**
+ * Первая операция участка — та, что стоит в колонке «Операция».
+ *
+ * Берётся первая операция этапа, а не «эффективная» (`operation_name`): туда
+ * попадает и ручной выбор операции, и она может оказаться упаковочной — тогда
+ * цвет позиции в «Операции» утонул бы в списке. Упаковочная операция первой в
+ * «Операции» не показывается вовсе: её несёт колонка «Упаковка».
+ */
+export function taskPrimaryOperation(task: SectionBoardTask): string {
+  const codes = task.operation_codes ?? [];
+  const names = task.operation_names ?? [];
+  const firstCode = codes[0];
+  if (!firstCode || !firstCode.startsWith(PACKAGING_OPERATION_PREFIX)) {
+    return names[0]?.trim() || task.operation_name?.trim() || "";
+  }
+  return "";
+}
+
+/**
+ * Разбивка упаковки строки: вид упаковки → количество заданий этого вида.
+ *
+ * Строка доски объединяет позиции одного артикула и первой операции, поэтому
+ * упаковка в ней может быть разной: «Спанбонд 180 · Стрейч 120». Количество —
+ * план задания: речь о том, сколько материала пойдёт этим видом.
+ */
+export function packagingBreakdown(
+  tasks: SectionBoardTask[],
+): { label: string; qty: number }[] {
+  const byLabel = new Map<string, number>();
+  for (const task of tasks) {
+    const label = taskPackaging(task);
+    if (!label) continue;
+    const planned = Number(task.planned_quantity);
+    byLabel.set(label, (byLabel.get(label) ?? 0) + (Number.isFinite(planned) ? planned : 0));
+  }
+  const items = Array.from(byLabel, ([label, qty]) => ({ label, qty }));
+  items.sort((a, b) => b.qty - a.qty || a.label.localeCompare(b.label, "ru"));
+  return items;
+}
+
+/**
+ * Подпись упаковки: нет видов — прочерк, один — только название, несколько —
+ * название с количеством через « · ». Единственная реализация на доску и на
+ * печатный лист.
+ */
+export function packagingLabel(
+  items: { label: string; qty: number }[],
+  formatQty: (value: number) => string,
+): string {
+  if (items.length === 0) return QTY_EMPTY;
+  if (items.length === 1) return items[0].label;
+  return items.map((item) => `${item.label} ${formatQty(item.qty)}`).join(" · ");
+}
+
+/** Подпись разбивки упаковки по заданиям строки. */
+export function packagingBreakdownLabel(
+  tasks: SectionBoardTask[],
+  formatQty: (value: number) => string,
+): string {
+  return packagingLabel(packagingBreakdown(tasks), formatQty);
 }

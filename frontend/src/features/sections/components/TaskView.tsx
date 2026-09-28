@@ -15,7 +15,7 @@ import { TABLE_ROW_STYLES } from "@/shared/lib/tableRowStyles";
 import { CutLayoutCell } from "@/shared/ui";
 import { taskGroupingDimensions } from "../lib/groupTasksByProfile";
 import { getStatusLabel } from "../lib/taskStatus";
-import { getStatusDotClass, getTaskOutputsProgressText, getTaskTone, type TaskTone } from "../lib/taskView";
+import { getStatusDotClass, getTaskOutputsProgressText, getTaskTone, taskPackaging, taskPrimaryOperation, type TaskTone } from "../lib/taskView";
 
 const ROW_TONE_CLASS: Record<TaskTone, string> = {
   waiting: "bg-background hover:bg-slate-50 transition-colors border-l-4 border-l-yellow-400 text-slate-800",
@@ -90,6 +90,7 @@ export function TaskExtras({ task, className }: { task: SectionBoardTask; classN
 export type TaskViewFieldKey =
   | "dimensions"
   | "operation"
+  | "packaging"
   | "planned"
   | "issued"
   | "completed"
@@ -112,7 +113,6 @@ export type TaskViewField = {
  * одно, а не в двух раскладках.
  */
 export function buildTaskViewFields(task: SectionBoardTask): TaskViewField[] {
-  const isMultiOperation = Boolean(task.operation_names && task.operation_names.length > 1);
   return [
     {
       key: "dimensions",
@@ -123,11 +123,12 @@ export function buildTaskViewFields(task: SectionBoardTask): TaskViewField[] {
     {
       key: "operation",
       label: "Операция",
-      node: (
-        <span className={isMultiOperation ? "text-xs font-medium" : "text-xs"}>
-          {isMultiOperation ? task.operation_names!.join(" + ") : task.operation_name || "—"}
-        </span>
-      ),
+      node: <span className="text-xs">{taskPrimaryOperation(task) || "—"}</span>,
+    },
+    {
+      key: "packaging",
+      label: "Упаковка",
+      node: <span className="text-xs">{taskPackaging(task) ?? "—"}</span>,
     },
     { key: "planned", label: "План", node: fmtQty(task.planned_quantity) },
     { key: "issued", label: "Выдано", node: fmtQty(task.cache.issued_quantity) },

@@ -79,11 +79,9 @@ function renderBoard(tasks: SectionBoardTask[]) {
   );
 }
 
-/** Порядок строк доски по колонке «Артикул» (2-я ячейка). */
+/** Порядок строк доски по колонке «Артикул». */
 function renderedSkuOrder(): string[] {
-  return [...document.querySelectorAll("tbody tr")]
-    .map((row) => row.querySelectorAll("td")[1]?.textContent ?? "")
-    .filter(Boolean);
+  return renderedColumnOrder("Артикул");
 }
 
 /** Клик по кнопке сортировки колонки. Цикл: нет → убыв. → возр. → снять. */
@@ -93,17 +91,31 @@ function clickSort(field: string) {
   });
 }
 
-/** Значения колонки «План» в порядке строк доски. */
-function renderedPlanOrder(): string[] {
-  return [...document.querySelectorAll("tbody tr")]
-    .map((row) => row.querySelectorAll("td")[4]?.textContent ?? "")
+/**
+ * Значения колонки по её заголовку, только по строкам заданий.
+ *
+ * Индексы ячеек — не контракт: добавление колонки сдвигает их все, и тест
+ * падал бы на разметке, а не на сортировке. Ищем колонку по подписи, а строки
+ * берём помеченные: шапка группы и строка «В ожидании» тоже живут в tbody.
+ */
+function renderedColumnOrder(label: string): string[] {
+  const headers = [...document.querySelectorAll("thead th")];
+  const index = headers.findIndex((cell) => cell.textContent?.trim().startsWith(label));
+  if (index < 0) throw new Error(`На доске нет колонки «${label}»`);
+  return [...document.querySelectorAll('tbody tr[data-row-kind="board-task"]')]
+    .map((row) => row.querySelectorAll("td")[index]?.textContent ?? "")
     .filter(Boolean);
 }
 
-/** Значения колонки «Размер» в порядке строк доски. */
-function renderedSizeOrder(): string[] {
+/** Значения колонки в строках шапок групп (агрегаты по всей группе). */
+function renderedGroupColumnOrder(label: string): string[] {
+  const headers = [...document.querySelectorAll("thead th")];
+  const index = headers.findIndex((cell) => cell.textContent?.trim().startsWith(label));
+  if (index < 0) throw new Error(`На доске нет колонки «${label}»`);
   return [...document.querySelectorAll("tbody tr")]
-    .map((row) => row.querySelectorAll("td")[2]?.textContent ?? "")
+    .filter((row) => !row.matches('[data-row-kind="board-task"]'))
+    .filter((row) => row.querySelectorAll("td").length > 1)
+    .map((row) => row.querySelectorAll("td")[index]?.textContent ?? "")
     .filter(Boolean);
 }
 
@@ -146,8 +158,8 @@ describe("SectionTasksBoard: сортировка колонок", () => {
     clickSort("plannedQty");
     clickSort("plannedQty"); // возрастание
 
-    expect(renderedPlanOrder()).toEqual(["10", "900"]);
-    expect(renderedSizeOrder()).toEqual(["1 м", "2 м"]);
+    expect(renderedColumnOrder("План")).toEqual(["10", "900"]);
+    expect(renderedColumnOrder("Размер")).toEqual(["1 м", "2 м"]);
   });
 
   it("клиентская сортировка накладывается поверх серверного порядка", () => {
@@ -200,5 +212,57 @@ describe("SectionTasksBoard: сортировка колонок", () => {
 
     // 900 — первым; затем равные 10: 3 м раньше 2 м.
     expect(renderedSkuOrder()).toEqual(["B", "A", "C"]);
+  });
+});
+
+describe("SectionTasksBoard: колонки «Операция» и «Упаковка»", () => {
+  it("цвет позиции стоит в «Операции», упаковка — в своей колонке", () => {
+    // Регресс #210: участок с двумя группами (цвет + упаковка) отдавал в
+    // «Операции» весь список через «+», и цвет позиции тонул рядом с видом
+    // упаковки.
+    renderBoard([
+      makeTask({
+        id: 1,
+        operation_code: "ANOD_05",
+        operation_name: "Чёрный",
+        operation_codes: ["ANOD_05", "PACK_SPUNBOND"],
+        operation_names: ["Чёрный", "Спанбонд"],
+      }),
+    ]);
+
+    expect(renderedColumnOrder("Операция")).toEqual(["Чёрный"]);
+    expect(renderedColumnOrder("Упаковка")).toEqual(["Спанбонд"]);
+  });
+
+  it("участок без упаковочной операции показывает прочерк в «Упаковке»", () => {
+    renderBoard([
+      makeTask({
+        id: 1,
+        operation_code: "SAW",
+        operation_name: "Резка на пиле",
+        operation_codes: ["SAW"],
+        operation_names: ["Резка на пиле"],
+      }),
+    ]);
+
+    expect(renderedColumnOrder("Упаковка")).toEqual(["—"]);
+  });
+
+  it("упаковка первой операцией в «Операции» не дублируется", () => {
+    // На упаковке единственная операция участка — сама упаковка. Печатный
+    // лист это уже учёл (в профиле PACKING колонки «Операция» нет); доска
+    // показывала одно и то же значение дважды.
+    renderBoard([
+      makeTask({
+        id: 1,
+        operation_code: "PACK",
+        operation_name: "Упаковка",
+        operation_codes: ["PACK"],
+        operation_names: ["Упаковка"],
+      }),
+    ]);
+
+    expect(renderedColumnOrder("Операция")).toEqual(["—"]);
+    expect(renderedColumnOrder("Упаковка")).toEqual(["Упаковка"]);
   });
 });

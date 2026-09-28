@@ -53,8 +53,8 @@ def test_resolve_payload_color_composite_last_segment_extracted() -> None:
 def test_dynamic_route_name_for_anodtitan_contains_titan() -> None:
     pattern = "{output_kind} - {press_op} - {drill_op} - {shot_op} - {color} - {pack_op}"
     resolved_names = {
-        ("PRESSING", "PRESS"): "Окно",
-        ("ANODIZING", "ANOD"): "Титан",
+        ("PRESSING", "PRESSING"): "Окно",
+        ("ANODIZING", "ANODIZING"): "Титан",
         ("ANODIZING", "PACK"): "Стрейч",
     }
     included_sections = [

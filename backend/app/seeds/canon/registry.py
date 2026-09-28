@@ -76,6 +76,7 @@ def build_plant_config() -> PlantConfig:
         spgs=[SPGDef.model_validate(d) for d in SPGS_DATA],
         import_template_codes=[t["code"] for t in IMPORT_TEMPLATES],
         section_codes=[s.code for s in sections],
+        ops=ops,
     )
 
     quality = _build_quality_canon()
@@ -229,8 +230,9 @@ def _build_routing_canon(
     spgs: list[SPGDef],
     import_template_codes: list[str],
     section_codes: list[str],
+    ops: list[OperationDef],
 ) -> RoutingCanon:
-    """Собирает RoutingCanon и проверяет cross-ref правила 1, 2, 5, 6, 7."""
+    """Собирает RoutingCanon и проверяет cross-ref правила 1, 2, 5, 6, 7, 9."""
     section_set = set(section_codes)
 
     # Правило 2: нет дублей code в каждом наборе
@@ -271,6 +273,9 @@ def _build_routing_canon(
                     f"references unknown section '{section_code}'"
                 )
 
+    # Правило 9: group_code в actions существует в операциях участка
+    validate_rule_group_codes(selection_rules, ops)
+
     # SPG: section_codes существуют в sections
     for spg in spgs:
         for section_code in spg.section_codes:
@@ -284,6 +289,36 @@ def _build_routing_canon(
         route_rule_profiles=route_rule_profiles,
         spgs=spgs,
     )
+
+def validate_rule_group_codes(
+    selection_rules: list[SelectionRuleDef],
+    ops: list[OperationDef],
+) -> None:
+    """Правило 8: ``group_code`` в действии — это группа операций участка.
+
+    Адресация операции в ``set_operation``/``set_operation_by_mapping`` идёт
+    парой ``(section_code, group_code)``. Несуществующая группа не даёт ошибки
+    при разборе: правило молча резолвит код в никуда, а шаг маршрута берёт
+    первую операцию группы. Позиция годами показывает чужую операцию, поэтому
+    опечатку ловим здесь, на сборке канона.
+    """
+    groups_by_section: dict[str, set[str]] = {}
+    for op in ops:
+        if op.group_code:
+            groups_by_section.setdefault(op.section_code, set()).add(op.group_code)
+
+    for rule in selection_rules:
+        for action in rule.actions:
+            group_code = getattr(action, "group_code", None)
+            section_code = getattr(action, "section_code", None)
+            if not group_code or not section_code:
+                continue
+            if group_code not in groups_by_section.get(section_code, set()):
+                raise ValueError(
+                    f"Selection rule '{rule.code}' action '{action.action}' "
+                    f"references unknown group '{group_code}' in section "
+                    f"'{section_code}'"
+                )
 
 
 def _validate_unique_codes(codes: list[str], kind: str) -> None:

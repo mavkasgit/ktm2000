@@ -147,24 +147,37 @@ async def _seed_infrastructure(session, profile: RouteRuleProfile):
         sort_order=1, is_significant=True,
     )
 
-    # Create ANOD section operations (ANOD group)
+    # Create ANOD section operations (ANODIZING group — как в каноне участка)
     await _make_section_operation(
         session, section_map["ANODIZING"].id,
         "ANOD_01", "Анод: Серебро",
-        group_code="ANOD", group_name="Анодирование",
+        group_code="ANODIZING", group_name="Анодирование",
         sort_order=1, is_significant=True,
     )
     await _make_section_operation(
         session, section_map["ANODIZING"].id,
         "ANOD_05", "Анод: Чёрный",
-        group_code="ANOD", group_name="Анодирование",
+        group_code="ANODIZING", group_name="Анодирование",
         sort_order=2, is_significant=True,
     )
     await _make_section_operation(
         session, section_map["ANODIZING"].id,
         "ANOD_06", "Анод: Шампань",
-        group_code="ANOD", group_name="Анодирование",
+        group_code="ANODIZING", group_name="Анодирование",
         sort_order=3, is_significant=True,
+    )
+    # Упаковка — вторая группа участка: без неё доска не отдаёт вид упаковки.
+    await _make_section_operation(
+        session, section_map["ANODIZING"].id,
+        "PACK_STRETCH", "Стрейч",
+        group_code="PACK", group_name="Упаковка",
+        sort_order=20, is_significant=True,
+    )
+    await _make_section_operation(
+        session, section_map["ANODIZING"].id,
+        "PACK_SPUNBOND", "Спанбонд",
+        group_code="PACK", group_name="Упаковка",
+        sort_order=20, is_significant=True,
     )
     
     # Seed selection rules

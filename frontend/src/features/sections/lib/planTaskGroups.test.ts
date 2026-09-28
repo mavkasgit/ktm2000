@@ -1,6 +1,12 @@
 import { describe, expect, it } from "vitest";
 import type { SectionBoardTask } from "@/shared/api/shopfloor";
 import { buildPlanTaskGroups } from "./planTaskGroups";
+import {
+  packagingBreakdown,
+  packagingBreakdownLabel,
+  taskPackaging,
+  taskPrimaryOperation,
+} from "./taskView";
 
 function makeTask(overrides: Partial<SectionBoardTask> = {}): SectionBoardTask {
   return {
@@ -164,5 +170,64 @@ describe("buildPlanTaskGroups", () => {
       { label: "серебро · 3 м", taskIds: [[2]] },
       { label: "серебро · 2,75 м", taskIds: [[1]] },
     ]));
+  });
+});
+
+describe("колонки «Операция» и «Упаковка» доски", () => {
+  it("показывает в «Операции» первую операцию, а упаковку — отдельно", () => {
+    const task = makeTask({
+      operation_code: "ANOD_05",
+      operation_name: "Чёрный",
+      operation_codes: ["ANOD_05", "PACK_SPUNBOND"],
+      operation_names: ["Чёрный", "Спанбонд"],
+    });
+
+    expect(taskPrimaryOperation(task)).toBe("Чёрный");
+    expect(taskPackaging(task)).toBe("Спанбонд");
+  });
+
+  it("разбивает упаковку слитой строки по видам с количеством", () => {
+    const tasks = [
+      makeTask({
+        id: 1,
+        planned_quantity: "300",
+        operation_codes: ["ANOD_01", "PACK_SPUNBOND"],
+        operation_names: ["Серебро", "Спанбонд"],
+      }),
+      makeTask({
+        id: 2,
+        planned_quantity: "200",
+        operation_codes: ["ANOD_01", "PACK_STRETCH"],
+        operation_names: ["Серебро", "Стрейч"],
+      }),
+      makeTask({
+        id: 3,
+        planned_quantity: "50",
+        operation_codes: ["ANOD_01", "PACK_STRETCH"],
+        operation_names: ["Серебро", "Стрейч"],
+      }),
+    ];
+
+    expect(packagingBreakdown(tasks)).toEqual([
+      { label: "Спанбонд", qty: 300 },
+      { label: "Стрейч", qty: 250 },
+    ]);
+    expect(packagingBreakdownLabel(tasks, (value) => String(value))).toBe(
+      "Спанбонд 300 · Стрейч 250",
+    );
+  });
+
+  it("один вид упаковки подписывается без количества", () => {
+    const tasks = [
+      makeTask({ operation_codes: ["ANOD_05", "PACK_STRETCH"], operation_names: ["Чёрный", "Стрейч"] }),
+    ];
+
+    expect(packagingBreakdownLabel(tasks, (value) => String(value))).toBe("Стрейч");
+  });
+
+  it("участок без упаковочной операции показывает прочерк", () => {
+    const tasks = [makeTask({ operation_codes: ["SAW"], operation_names: ["Резка на пиле"] })];
+
+    expect(packagingBreakdownLabel(tasks, (value) => String(value))).toBe("—");
   });
 });

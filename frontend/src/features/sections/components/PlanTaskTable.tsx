@@ -11,6 +11,7 @@ import {
   type PlanTaskGroupingMode,
   type PlanTaskRow,
 } from "../lib/planTaskGroups";
+import { packagingLabel } from "../lib/taskView";
 import { PLAN_COLUMNS, type PlanColumnKey } from "../lib/planPrintSettings";
 import { cn } from "@/shared/utils/cn";
 
@@ -84,11 +85,6 @@ function operationsLabel(row: PlanTaskRow): string {
     .join(" → ");
 }
 
-function packagingLabel(row: PlanTaskRow): string {
-  if (row.packaging.length === 0) return QTY_EMPTY;
-  if (row.packaging.length === 1) return row.packaging[0].label;
-  return row.packaging.map((item) => `${item.label} ${fmtQty(item.qty)}`).join(" · ");
-}
 
 const cellBase = "px-3 py-2";
 
@@ -106,7 +102,7 @@ function rowCell(row: PlanTaskRow, key: PlanColumnKey, single: boolean) {
     case "operation":
       return <td key={key} className={cn(cellBase, "max-w-[180px] break-words")}>{row.operationName}</td>;
     case "packaging":
-      return <td key={key} className={cn(cellBase, "max-w-[220px] break-words")}>{packagingLabel(row)}</td>;
+      return <td key={key} className={cn(cellBase, "max-w-[220px] break-words")}>{packagingLabel(row.packaging, fmtQty)}</td>;
     case "hangers":
       return <td key={key} className={cn(cellBase, "text-right")}>{hangersForRow(row) ?? QTY_EMPTY}</td>;
     case "perHanger":

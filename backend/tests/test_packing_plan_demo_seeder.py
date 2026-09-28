@@ -25,20 +25,25 @@ from app.models.daily_plan import DailyPlan, DailyPlanItem
 from app.models.internal_plan import SectionPlanLine
 from app.models.product import Product, ProductLength
 from app.models.production_plan import PlanPosition, PlanPositionStatus, ProductionPlan
+from app.models.route import RouteOperation, RouteRuleProfile, RouteStage
 from app.models.section import Section
 from app.models.work_task import WorkTask, WorkTaskStatus
 from app.seeds.import_templates import IMPORT_TEMPLATES
 from app.seeds.run_seed import run_full_seed
 from app.seeds.seeders.packing_plan_demo_seeder import (
+    DEMO_ROUTE_PROFILE_CODE,
     DEMO_SECTION_CODES,
     PACKING_PLAN_ROWS,
     _daily_plan_specs,
     _plan_workbook,
     _progress_mode,
+    _target_section_for,
     seed_packing_plan_demo,
 )
-from app.services.excel_import import parse_factory_plan_workbook
 from app.services.daily_plan_service import TERMINAL_TASK_STATUSES
+from app.services.excel_import import parse_factory_plan_workbook
+from app.services.route_builder import _resolve_operations
+from app.services.shopfloor.queries_sections import get_section_board
 from app.stock.services import StockProjectionManager
 
 PLAN_ROW_COUNT = 55
@@ -71,10 +76,6 @@ def _plan_sheet() -> tuple[list[str], list[list[object]]]:
     return headers, data
 
 
-def _target_section_code(index: int) -> str:
-    """Участок, на котором останавливается прогон позиции ``index`` (деление по кругу)."""
-    return DEMO_SECTION_CODES[index % len(DEMO_SECTION_CODES)]
-
 
 async def _demo_sections(session) -> dict[str, Section]:
     """Участки демо по коду; падение здесь = не засеян справочник, а не пустой тест."""
@@ -96,6 +97,37 @@ async def _positions(session, plan_id: int) -> list[PlanPosition]:
             )
         ).all()
     )
+
+async def _position_section_ids(session, position_id: int) -> list[int]:
+    """Участки, через которые позиция проходит по своему маршруту."""
+    return list(
+        (
+            await session.scalars(
+                select(SectionPlanLine.section_id).where(
+                    SectionPlanLine.plan_position_id == position_id
+                )
+            )
+        ).all()
+    )
+
+async def _expected_color_ops(session) -> dict[str, str]:
+    """Операция анодирования, которую правило разбора даёт каждому цвету фикстуры.
+
+    Ожидание берётся у самого правила, а сверяется с тем, что попало в этап
+    маршрута. Это не тавтология: дефект был в том, что резолв правила
+    отрабатывал, а в маршрут попадала первая операция группы — проверка
+    сравнивает результат правила с этапом.
+    """
+    profile = await session.scalar(
+        select(RouteRuleProfile).where(RouteRuleProfile.code == DEMO_ROUTE_PROFILE_CODE)
+    )
+    mapping: dict[str, str] = {}
+    for color in {str(row["color"]) for row in PACKING_PLAN_ROWS}:
+        resolved = await _resolve_operations(session, profile.id, {"color": color}, None)
+        operation = resolved.get(("ANODIZING", "ANODIZING"))
+        assert operation, f"правило разбора не дало операции для цвета {color}"
+        mapping[color] = operation
+    return mapping
 
 
 async def _target_task(session, position_id: int, section_id: int) -> WorkTask:
@@ -366,18 +398,109 @@ async def test_demo_seed_releases_all_plan_positions(session) -> None:
         {"length_mm": round(float(row["output_length_m"]) * 1000)} for row in PACKING_PLAN_ROWS
     ]
 
-    # Каждой позиции нужна задача на всех трёх участках, иначе доска участка пуста.
-    assert stats["tasks_by_section"] == {code: {"total": PLAN_ROW_COUNT, "open": PLAN_ROW_COUNT} for code in DEMO_SECTION_CODES}
+    # Участок получает столько заданий, сколько позиций реально проходит через
+    # него по своему маршруту: спанбонд («П/ф») не заходит на пилу и упаковку,
+    # (конкретные числа — в вычисляемом ожидании ниже, а не в тексте).
     sections = await _demo_sections(session)
+    skipped_by_route = sum(
+        1 for row in PACKING_PLAN_ROWS if str(row["kind"]).upper() != "ГП"
+    )
     for code, section in sections.items():
+        expected = (
+            PLAN_ROW_COUNT - skipped_by_route
+            if code in ("SAWING", "PACKING")
+            else PLAN_ROW_COUNT
+        )
+        assert stats["tasks_by_section"][code]["total"] == expected, (
+            f"участок {code}: заданий {stats['tasks_by_section'][code]['total']}, "
+            f"а через него проходит {expected} позиций"
+        )
         assert await _count(
             session, WorkTask, WorkTask.section_id == section.id
-        ) == PLAN_ROW_COUNT, f"на участке {code} не все позиции получили задание"
+        ) == expected, f"на участке {code} не все позиции получили задание"
 
     # Нормативная длина артикула — входная: по ней считается геометрия выдачи.
     assert await _demo_product_lengths(session) == {
         str(row["sku"]): round(float(row["input_length_m"]) * 1000) for row in PACKING_PLAN_ROWS
     }
+
+@pytest.mark.asyncio
+async def test_demo_board_carries_each_position_own_operations(session) -> None:
+    """Демо-доска показывает операции позиции, а не заглушку шаблонного маршрута.
+
+    Без профиля правил импорт кладёт все позиции на шаблонный маршрут, где у этапа
+    анодирования одна операция без кода: в колонке «Операция» весь цех выглядит
+    одинаковым, а «Упаковка» пустая.
+    """
+    await run_full_seed(session, force=True)
+    await seed_packing_plan_demo(session, reset=True, run_route=False)
+
+    sections = await _demo_sections(session)
+    plans = list((await session.scalars(select(ProductionPlan))).all())
+    positions = await _positions(session, plans[0].id)
+
+    codes_by_sku: dict[str, list[str]] = {}
+    for position in positions:
+        ops = list(
+            (
+                await session.scalars(
+                    select(RouteOperation)
+                    .join(RouteStage, RouteStage.id == RouteOperation.route_stage_id)
+                    .join(SectionPlanLine, SectionPlanLine.route_stage_id == RouteStage.id)
+                    .where(
+                        SectionPlanLine.plan_position_id == position.id,
+                        SectionPlanLine.section_id == sections["ANODIZING"].id,
+                    )
+                    .order_by(RouteOperation.sequence)
+                )
+            ).all()
+        )
+        codes_by_sku[position.source_sku] = [op.operation_code for op in ops]
+
+    # У каждой позиции две операции участка: цвет анодирования и упаковка.
+    assert all(len(codes) == 2 for codes in codes_by_sku.values()), (
+        f"этап анодирования без двух операций: {codes_by_sku}"
+    )
+    assert all(code for codes in codes_by_sku.values() for code in codes), (
+        f"в этапе анодирования остались операции без кода: {codes_by_sku}"
+    )
+
+    # Позиция получает операцию своего цвета, а не первую в группе: при
+    # неверном group_code правила резолв терялся и всем 55 позициям доставалась
+    # одна и та же «Серебро» — префикс «ANOD_» такой дефект не поймал бы.
+    expected_color_ops = await _expected_color_ops(session)
+    for row, position in zip(PACKING_PLAN_ROWS, positions, strict=True):
+        color_op, pack_op = codes_by_sku[position.source_sku]
+        assert color_op == expected_color_ops[str(row["color"])], (
+            f"цвет {row['color']} → {color_op}, а операция группы {expected_color_ops[str(row['color'])]}"
+        )
+        expected_pack = "PACK_STRETCH" if str(row["kind"]).upper() == "ГП" else "PACK_SPUNBOND"
+        assert pack_op == expected_pack, f"{row['kind']} → {pack_op}"
+
+    # Разные цвета демо обязаны давать разные операции, иначе проверка выше
+    # прошла бы на одной сплошной «Серебро».
+    assert len(set(expected_color_ops.values())) > 1, (
+        f"в фикстуре один цвет на все позиции: {expected_color_ops}"
+    )
+
+
+    # То же самое с другой стороны — глазами доски: она отдаёт оба кода
+    # операции этапа, из них и собираются колонки «Операция» и «Упаковка».
+    board = await get_section_board(session, section_id=sections["ANODIZING"].id, limit=500)
+    codes_by_task = {row["id"]: row["operation_codes"] for row in board["tasks"]}
+
+    pairs = set()
+    for position in positions:
+        task = await _target_task(session, position.id, sections["ANODIZING"].id)
+        codes = codes_by_task.get(task.id) or []
+        assert codes == codes_by_sku[position.source_sku], (
+            f"доска отдала {codes} вместо {codes_by_sku[position.source_sku]} "
+            f"для {position.source_sku}"
+        )
+        pairs.add(tuple(codes))
+
+    assert len(pairs) > 1, "демо-доска не должна быть одноцветной"
+
 
 
 @pytest.mark.asyncio
@@ -422,7 +545,10 @@ async def test_demo_seed_fills_daily_plans_on_every_demo_section(session) -> Non
     distinct = await session.scalar(
         select(func.count(func.distinct(DailyPlanItem.work_task_id)))
     )
-    assert items == distinct == PLAN_ROW_COUNT * len(DEMO_SECTION_CODES), (
+    # Задание на участок одно, сколько бы участков позиция ни проходила:
+    # всего их столько, сколько позиций прошло через свой маршрут.
+    expected_tasks = sum(entry["total"] for entry in stats["tasks_by_section"].values())
+    assert items == distinct == expected_tasks, (
         "каждое задание должно стоять ровно в одной карточке"
     )
 
@@ -460,11 +586,16 @@ async def test_route_run_leaves_a_live_queue_on_all_three_sections(session) -> N
     )
 
     # Глубина прогона по позициям: старые закрыты, следующие выполнены на 60 %,
-    # хвост выдан и не начат.
+    # хвост выдан и не начат. Участок остановки — тот же, что выбрал сид: он
+    # берёт первый участок круга, который реально есть в маршруте позиции.
+    target_ids = [sections[code].id for code in DEMO_SECTION_CODES]
     shares = []
     for index in (3, 17, 40):
-        code = _target_section_code(index)
-        task = await _target_task(session, positions[index].id, sections[code].id)
+        route_ids = set(await _position_section_ids(session, positions[index].id))
+        target = _target_section_for(index, target_ids, route_ids)
+        assert target is not None, f"позиция {index} не заходит ни на один демо-участок"
+        code = DEMO_SECTION_CODES[target_ids.index(target)]
+        task = await _target_task(session, positions[index].id, target)
         cache = await StockProjectionManager().get_task_cache(session, task.id)
         issued = Decimal(str(cache["issued_quantity"]))
         assert issued > 0, f"задание участка {code} позиции {index} не выдано"
@@ -502,7 +633,7 @@ async def test_rerun_with_reset_replaces_previous_demo(session) -> None:
     for code, section in sections.items():
         assert await _count(
             session, WorkTask, WorkTask.section_id == section.id
-        ) == PLAN_ROW_COUNT, f"участок {code} получил второй набор заданий"
+        ) == second["tasks_by_section"][code]["total"], f"участок {code} получил второй набор заданий"
         assert await _count(
             session, DailyPlan, DailyPlan.section_id == section.id
         ) == 12, f"участок {code} получил второй набор карточек"
@@ -529,6 +660,10 @@ async def test_prod_guard_fires_before_any_write(session, monkeypatch) -> None:
     sections = await _demo_sections(session)
     models = (ProductionPlan, PlanPosition, WorkTask, DailyPlan, DailyPlanItem, Product)
     before = [await _count(session, model) for model in models]
+    before_work_tasks = {
+        code: await _count(session, WorkTask, WorkTask.section_id == section.id)
+        for code, section in sections.items()
+    }
 
     monkeypatch.setattr(settings, "ENV", "production")
     with pytest.raises(RuntimeError):
@@ -540,7 +675,7 @@ async def test_prod_guard_fires_before_any_write(session, monkeypatch) -> None:
     for code, section in sections.items():
         assert await _count(
             session, WorkTask, WorkTask.section_id == section.id
-        ) == PLAN_ROW_COUNT, f"участок {code} потерял задания до срабатывания защиты"
+        ) == before_work_tasks[code], f"участок {code} потерял задания до срабатывания защиты"
         assert await _count(
             session, DailyPlan, DailyPlan.section_id == section.id
         ) == 12, f"участок {code} потерял карточки до срабатывания защиты"

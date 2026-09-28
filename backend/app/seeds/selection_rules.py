@@ -83,7 +83,7 @@ SELECTION_RULES = [
             {
                 "action": "set_operation_by_mapping",
                 "section_code": "PRESSING",
-                "group_code": "PRESS",
+                "group_code": "PRESSING",
                 "lookup_field": "operation",
                 "mapping": [
                     {"keyword": "окн", "operation_code": "PRESS_WINDOW"},
@@ -241,7 +241,7 @@ SELECTION_RULES = [
             {
                 "action": "set_operation_by_mapping",
                 "section_code": "ANODIZING",
-                "group_code": "ANOD",
+                "group_code": "ANODIZING",
                 "lookup_field": "color",
                 "mapping": [
                     {"keyword": "анодсеребро", "operation_code": "ANOD_01"},

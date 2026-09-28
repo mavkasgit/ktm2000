@@ -152,6 +152,7 @@ class TestRoutingCanonIntegrity:
                         f"-> unknown section '{section_code}'"
                     )
 
+
     def test_rule_phase_is_valid_enum(self) -> None:
         """Правило 6: phase — только допустимые значения."""
         config = build_plant_config()
@@ -231,6 +232,7 @@ class TestRoutingCanonFailFast:
             spgs=kwargs.get("spgs", []),
             import_template_codes=kwargs.get("import_template_codes", ["tpl"]),
             section_codes=kwargs.get("section_codes", ["RAW_STOCK", "ANODIZING"]),
+            ops=kwargs.get("ops", []),
         )
 
     def test_unknown_profile_code_raises(self) -> None:
@@ -309,6 +311,51 @@ class TestRoutingCanonFailFast:
             self._build(
                 selection_rules=[dup, dup],
                 route_rule_profiles=[],
+            )
+
+    def test_unknown_group_in_action_raises(self) -> None:
+        """Правило 9: group_code правила — существующая группа операций участка.
+
+        Несуществующая группа не даёт ошибки при разборе: резолв уходит в
+        никуда, а шаг маршрута берёт первую операцию — и позиция годами
+        показывает чужую операцию (#210).
+        """
+        from app.seeds.canon.models import OperationDef, RouteRuleProfileDef, SelectionRuleDef
+
+        rule = SelectionRuleDef(
+            code="r",
+            name="Rule",
+            profile_code="prof",
+            priority=1,
+            phase="resolve_operations",
+            actions=[
+                {
+                    "action": "set_operation_by_mapping",
+                    "section_code": "ANODIZING",
+                    "group_code": "ANOD",
+                    "lookup_field": "color",
+                    "mapping": [{"keyword": "мед", "operation_code": "ANOD_07"}],
+                }
+            ],
+        )
+        ops = [
+            OperationDef(
+                section_code="ANODIZING",
+                group_code="ANODIZING",
+                group_name="Анодирование",
+                sort_order=10,
+                operation_code="ANOD_07",
+                operation_name="Медь",
+                is_significant=True,
+            )
+        ]
+
+        with pytest.raises(ValueError, match="unknown group"):
+            self._build(
+                selection_rules=[rule],
+                route_rule_profiles=[RouteRuleProfileDef(code="prof", name="prof", route_sections=["ANODIZING"])],
+                section_codes=["ANODIZING"],
+                ops=ops,
             )
 
     def test_invalid_phase_rejected_by_model(self) -> None:

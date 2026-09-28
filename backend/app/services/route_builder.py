@@ -652,9 +652,9 @@ async def _resolve_operation_names(
 # Mapping from template variable to (section_code, group_code) in resolved_names.
 # This is the only place that knows which operations feed which name slots.
 _NAME_VAR_MAPPING: dict[str, tuple[str, str]] = {
-    "press_op": ("PRESSING", "PRESS"),
+    "press_op": ("PRESSING", "PRESSING"),
     "drill_op": ("DRILLING", "DRILLING"),
-    "color": ("ANODIZING", "ANOD"),
+    "color": ("ANODIZING", "ANODIZING"),
     "pack_op": ("ANODIZING", "PACK"),
 }
 

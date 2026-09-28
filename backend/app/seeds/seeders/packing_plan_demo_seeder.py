@@ -30,7 +30,7 @@ from app.models.internal_plan import SectionPlanLine
 from app.models.product import Product, ProductLength, ProductType
 from app.models.production_plan import PlanPosition, PlanPositionStatus
 from app.models.release_batch import ReleaseBatchType
-from app.models.route import RouteStage
+from app.models.route import RouteRuleProfile, RouteStage
 from app.models.section import Section
 from app.models.user import User
 from app.models.work_task import CLOSED_WORK_TASK_STATUSES, WorkTask, WorkTaskStatus
@@ -56,6 +56,11 @@ DEMO_PLAN_MARKER = "DEMO"
 # между ними по кругу, у каждого своя глубина прогона — так на всех трёх есть и
 # активные задания, и «в ожидании» от предыдущей стадии.
 DEMO_SECTION_CODES = ("SAWING", "PACKING", "ANODIZING")
+
+# Профиль маршрута, по которому демо-позиции собирают этапы. Шаблон листа
+# демо — «Упаковочная карта РП», и разбирать его операции должен тот же профиль,
+# что и живой импорт: иначе позиции уедут на шаблонный маршрут с заглушками.
+DEMO_ROUTE_PROFILE_CODE = "packaging_map_rp"
 
 # Окружения, в которых сид, сносящий оперативку, запускать нельзя (канон
 # ``routes_seed``: force-защита по ``settings.ENV``).
@@ -975,10 +980,30 @@ async def _ensure_source_stock(
     return True
 
 
+def _target_section_for(
+    index: int,
+    target_order: list[int],
+    route_section_ids: set[int],
+) -> int | None:
+    """Демо-участок, на котором останавливается прогон позиции.
+
+    Позиции делятся между участками по кругу, но маршрут решает: спанбонд
+    («П/ф») не заходит на пилу и упаковку, и назначать ему такой участок
+    нельзя — иначе позиция осталась бы недоигранной. Берём первый участок
+    круга, который есть в маршруте позиции. ``index`` — порядковый номер
+    позиции, ``target_order`` — участки демо по кругу.
+    """
+    for offset in range(len(target_order)):
+        candidate = target_order[(index + offset) % len(target_order)]
+        if candidate in route_section_ids:
+            return candidate
+    return None
+
+
 async def _run_route_progress(
     db: AsyncSession,
     positions: list[PlanPosition],
-    target_section_ids: list[int],
+    target_order: list[int],
     actor_id: int,
     scrap_policy,
     start: datetime,
@@ -995,11 +1020,11 @@ async def _run_route_progress(
     total = len(positions)
     for index, position in enumerate(positions):
         rows = await _position_task_rows(db, position.id)
-        target_section_id = target_section_ids[min(index, len(target_section_ids) - 1)]
-        stop_index = next((i for i, row in enumerate(rows) if row[3].id == target_section_id), None)
-        if stop_index is None:
-            stats["skipped"].append(f"{position.source_sku}#pos{position.id}: нет участка в маршруте")
+        target_section_id = _target_section_for(index, target_order, {row[3].id for row in rows})
+        if target_section_id is None:
+            stats["skipped"].append(f"{position.source_sku}#pos{position.id}: нет демо-участка в маршруте")
             continue
+        stop_index = next((i for i, row in enumerate(rows) if row[3].id == target_section_id), None)
         mode = _progress_mode(index, total)
         try:
             carry: Decimal | None = None
@@ -1165,6 +1190,17 @@ async def seed_packing_plan_demo(
 
     stats.update(await _ensure_products(db, PACKING_PLAN_ROWS))
 
+    # Профиль правил обязателен: без него импорт раскладывает все позиции на
+    # шаблонный маршрут, где операции — заглушки без кодов, и доска участка
+    # показывает вместо цвета и упаковки позиции пустую операцию.
+    profile = await db.scalar(
+        select(RouteRuleProfile).where(RouteRuleProfile.code == DEMO_ROUTE_PROFILE_CODE)
+    )
+    if profile is None:
+        raise RuntimeError(
+            f"Профиль маршрута «{DEMO_ROUTE_PROFILE_CODE}» не засеян — выполните `npm run db:seed`"
+        )
+
     import_result = await create_excel_import_change_set(
         db,
         filename=f"demo-{DEMO_PLAN_MARKER.lower()}-packing-plan-{date.today().isoformat()}.xlsx",
@@ -1174,6 +1210,7 @@ async def seed_packing_plan_demo(
         mode=ImportBatchMode.create_plan,
         production_plan_id=None,
         column_mapping=None,
+        rule_profile_id=profile.id,
         user=actor,
     )
     change_set_id = int(import_result["change_set_id"])
@@ -1215,7 +1252,6 @@ async def seed_packing_plan_demo(
     await db.flush()
 
     position_ids = [item.id for item in positions]
-    target_section_ids = [target_order[index % len(target_order)] for index in range(len(positions))]
     tasks_by_section: dict[int, list[WorkTask]] = {
         section_id: list(
             (
@@ -1239,7 +1275,7 @@ async def seed_packing_plan_demo(
         stats["route_progress"] = await _run_route_progress(
             db,
             positions=positions,
-            target_section_ids=target_section_ids,
+            target_order=target_order,
             actor_id=actor.id,
             scrap_policy=build_plant_config().production.scrap_policy,
             start=datetime.combine(date.today(), datetime.min.time(), tzinfo=UTC).replace(hour=8),
