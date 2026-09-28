@@ -7,6 +7,7 @@ import { listUsers } from "@/shared/api/users";
 import type { ReadyToTransferTask } from "@/shared/api/transfers";
 import {
   Button,
+  ActionWithReason,
   DatePicker,
   Input,
   Select,
@@ -18,6 +19,7 @@ import {
 import { cn } from "@/shared/utils/cn";
 import type { BulkRunnerProgress } from "@/shared/bulk";
 import { fmtQty } from "@/shared/lib/quantityFormat";
+import type { ActionReasonCode } from "@/shared/lib/actionReasons";
 
 function nowLocalDateParts(): string {
   const d = new Date();
@@ -95,6 +97,19 @@ export function BulkTransferFooter({
 
   const running = Boolean(progress?.running);
   const canSubmit = selectedTasks.length > 0 && executorUserId && !pending && !running;
+  /**
+   * Причина, по которой «Передать все» не нажимается (#193). Временные
+   * состояния (`pending`, `running`) причиной не считаются: о них говорит
+   * надпись на кнопке.
+   */
+  const submitBlockReason: ActionReasonCode | null =
+    pending || running
+      ? null
+      : selectedTasks.length === 0
+        ? "no_tasks_selected"
+        : executorUserId
+          ? null
+          : "no_executor";
 
   const handleConfirm = () => {
     if (!canSubmit) return;
@@ -224,13 +239,15 @@ export function BulkTransferFooter({
               >
                 Сбросить
               </Button>
-              <Button
-                size="sm"
-                onClick={handleConfirm}
-                disabled={!canSubmit}
-              >
-                {pending || running ? "Отправка..." : `Передать все (${selectedTasks.length})`}
-              </Button>
+              <ActionWithReason reason={submitBlockReason}>
+                <Button
+                  size="sm"
+                  onClick={handleConfirm}
+                  disabled={!canSubmit}
+                >
+                  {pending || running ? "Отправка..." : `Передать все (${selectedTasks.length})`}
+                </Button>
+              </ActionWithReason>
               <Button variant="ghost" size="sm" onClick={onExit} disabled={running}>
                 <X className="h-4 w-4 mr-1" />
                 Выйти

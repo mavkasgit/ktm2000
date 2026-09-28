@@ -13,6 +13,7 @@
 
 import type { SectionBoardTask } from "@/shared/api/shopfloor";
 import { formatDimensionsLabel } from "@/shared/api/stock";
+import type { ActionReasonCode } from "@/shared/lib/actionReasons";
 import {
   getReadyStatusLabel,
   isTaskCompletable,
@@ -76,7 +77,13 @@ export type TaskGroupHeaderState = {
   collapseTitle: string;
   allSelected: boolean;
   hasCompletable: boolean;
-  completeTitle: string;
+  /** Подсказка о том, что делает кнопка, когда действие доступно (#193). */
+  completeHint: string;
+  /**
+   * Причина, по которой завершение группы недоступно: `null` — доступно.
+   * Код из общего словаря причин, а не текст рядом с кнопкой.
+   */
+  completeReason: ActionReasonCode | null;
 };
 
 /** Состояние шапки группы — одно для строки таблицы и для карточки группы. */
@@ -91,9 +98,8 @@ export function getTaskGroupHeaderState(
     collapseTitle: options.isCollapsed ? "Раскрыть" : "Скрыть",
     allSelected: options.allSelected,
     hasCompletable,
-    completeTitle: hasCompletable
-      ? "Открыть панель завершения группы"
-      : "Все задания в группе завершены",
+    completeHint: "Открыть панель завершения группы",
+    completeReason: hasCompletable ? null : "group_nothing_to_complete",
   };
 }
 

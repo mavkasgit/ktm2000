@@ -11,6 +11,7 @@ import {
 } from "lucide-react";
 
 import {
+  ActionWithReason,
   Badge,
   Button,
   buttonVariants,
@@ -100,6 +101,7 @@ import {
   type ReadySortField,
 } from "../lib/transferSortParams";
 import { fmtQty } from "@/shared/lib/quantityFormat";
+import { actionReasonText, type ActionReasonCode } from "@/shared/lib/actionReasons";
 
 function conflictHintFromTransferError(message: string): string | null {
   const n = message.toLowerCase();
@@ -321,6 +323,8 @@ function ReadyTransferRow({
   const qtyNum = parseFloat(quantity || "0");
   const overLimit = qtyNum > maxQty;
   const isOverPlan = qtyNum > parseFloat(task.planned_quantity);
+  /** Количество не введено или обнулено — передавать нечего (#193). */
+  const quantityReason: ActionReasonCode | null = qtyNum > 0 ? null : "zero_quantity";
 
   return (
     <TableRow
@@ -340,7 +344,7 @@ function ReadyTransferRow({
             checked={isSelected}
             disabled={isFinalRow}
             onCheckedChange={onSelect}
-            title={isFinalRow ? "Финальный выпуск недоступен в групповой передаче" : undefined}
+            title={isFinalRow ? actionReasonText("final_release_not_in_bulk") : undefined}
           />
         </TableCell>
       )}
@@ -382,7 +386,14 @@ function ReadyTransferRow({
             </div>
           </>
         ) : (
-          <Badge variant="outline">Финальный</Badge>
+          <div>
+            <Badge variant="outline">Финальный</Badge>
+            {bulkMode && isFinalRow && (
+              <div className="mt-0.5 whitespace-nowrap text-[10px] leading-tight text-muted-foreground">
+                {actionReasonText("final_release_not_in_bulk")}
+              </div>
+            )}
+          </div>
         )}
       </TableCell>
       {!bulkMode && (
@@ -406,48 +417,51 @@ function ReadyTransferRow({
                 </Badge>
               )}
             </div>
-            {isFinalRow ? (
-              <Button
-                size="sm"
-                className={TABLE_ROW_COMPACT.actionButton}
-                disabled={isSubmitting || releaseMutation.isPending || qtyNum <= 0}
-                title="Финальный выпуск готовой продукции"
-                onClick={() => {
-                  if (submittingRef.current || isSubmitting || releaseMutation.isPending) return;
-                  if (!tryAcquire()) return;
-                  submittingRef.current = true;
-                  const key = makeIdempotencyKey(`final-release-${task.task_id}`);
-                  releaseMutation.mutate(key, {
-                    onSettled: () => {
-                      submittingRef.current = false;
-                      release();
-                    },
-                  });
-                }}
-              >
-                {releaseMutation.isPending || isSubmitting ? "Отправка..." : "Отправить"}
-              </Button>
-            ) : (
-              <Button
-                size="sm"
-                className={TABLE_ROW_COMPACT.actionButton}
-                disabled={!task.has_next_step || isSubmitting || mutation.isPending || qtyNum <= 0}
-                onClick={() => {
-                  if (submittingRef.current || isSubmitting || mutation.isPending) return;
-                  if (!tryAcquire()) return;
-                  submittingRef.current = true;
-                  const key = makeIdempotencyKey(`transfer-send-${task.task_id}`);
-                  mutation.mutate(key, {
-                    onSettled: () => {
-                      submittingRef.current = false;
-                      release();
-                    },
-                  });
-                }}
-              >
-                {mutation.isPending || isSubmitting ? "Отправка..." : "Передать"}
-              </Button>
-            )}
+            <ActionWithReason reason={quantityReason}>
+              {isFinalRow ? (
+                <Button
+                  size="sm"
+                  className={TABLE_ROW_COMPACT.actionButton}
+                  disabled={isSubmitting || releaseMutation.isPending || quantityReason !== null}
+                  title={quantityReason ? actionReasonText(quantityReason) : "Финальный выпуск готовой продукции"}
+                  onClick={() => {
+                    if (submittingRef.current || isSubmitting || releaseMutation.isPending) return;
+                    if (!tryAcquire()) return;
+                    submittingRef.current = true;
+                    const key = makeIdempotencyKey(`final-release-${task.task_id}`);
+                    releaseMutation.mutate(key, {
+                      onSettled: () => {
+                        submittingRef.current = false;
+                        release();
+                      },
+                    });
+                  }}
+                >
+                  {releaseMutation.isPending || isSubmitting ? "Отправка..." : "Отправить"}
+                </Button>
+              ) : (
+                <Button
+                  size="sm"
+                  className={TABLE_ROW_COMPACT.actionButton}
+                  disabled={isSubmitting || mutation.isPending || quantityReason !== null}
+                  title={quantityReason ? actionReasonText(quantityReason) : "Передать на следующий этап"}
+                  onClick={() => {
+                    if (submittingRef.current || isSubmitting || mutation.isPending) return;
+                    if (!tryAcquire()) return;
+                    submittingRef.current = true;
+                    const key = makeIdempotencyKey(`transfer-send-${task.task_id}`);
+                    mutation.mutate(key, {
+                      onSettled: () => {
+                        submittingRef.current = false;
+                        release();
+                      },
+                    });
+                  }}
+                >
+                  {mutation.isPending || isSubmitting ? "Отправка..." : "Передать"}
+                </Button>
+              )}
+            </ActionWithReason>
           </div>
         </TableCell>
       )}
@@ -489,6 +503,16 @@ function ReadyTransferGroupRow({
   const { common } = group;
   const qtyNum = parseFloat(quantity || "0");
   const overLimit = Math.round(qtyNum * 1000) > Math.round(group.totalTransferable * 1000);
+  /**
+   * Причина, по которой передача группы не нажимается (#193). Собственная
+   * отправка группы (`isSubmitting`) причиной не считается — о ней говорит
+   * надпись «Отправка...».
+   */
+  const groupBlockReason: ActionReasonCode | null = hasInFlightRow
+    ? "row_in_flight"
+    : qtyNum > 0
+      ? null
+      : "zero_quantity";
 
   return (
     <TableRow
@@ -578,21 +602,23 @@ function ReadyTransferGroupRow({
                 onChange={(e) => setQuantity(e.target.value)}
               />
             </div>
-            <Button
-              size="sm"
-              className={TABLE_ROW_COMPACT.actionButton}
-              disabled={isSubmitting || hasInFlightRow || qtyNum <= 0}
-              title={
-                hasInFlightRow
-                  ? "Строка группы уже отправляется"
-                  : group.allFinal
-                    ? "Финальный выпуск всех заданий группы"
-                    : "Передать на следующий этап все задания группы"
-              }
-              onClick={() => onTransferGroup(group, quantity)}
-            >
-              {isSubmitting ? "Отправка..." : group.allFinal ? "Отправить" : "Передать"}
-            </Button>
+            <ActionWithReason reason={groupBlockReason}>
+              <Button
+                size="sm"
+                className={TABLE_ROW_COMPACT.actionButton}
+                disabled={isSubmitting || groupBlockReason !== null}
+                title={
+                  groupBlockReason
+                    ? actionReasonText(groupBlockReason)
+                    : group.allFinal
+                      ? "Финальный выпуск всех заданий группы"
+                      : "Передать на следующий этап все задания группы"
+                }
+                onClick={() => onTransferGroup(group, quantity)}
+              >
+                {isSubmitting ? "Отправка..." : group.allFinal ? "Отправить" : "Передать"}
+              </Button>
+            </ActionWithReason>
           </div>
         </TableCell>
       )}

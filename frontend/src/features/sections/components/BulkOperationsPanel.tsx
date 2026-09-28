@@ -1,11 +1,12 @@
 import { useState, useMemo, useCallback, useEffect } from "react";
 import { AlertTriangle, Check } from "lucide-react";
-import { Button, Input, toast, Checkbox, DatePicker } from "@/shared/ui";
+import { ActionWithReason, Button, Input, toast, Checkbox, DatePicker } from "@/shared/ui";
 import { cn } from "@/shared/utils/cn";
 import type { SectionBoardTask } from "@/shared/api/shopfloor";
 import { formatDimensionsLabel } from "@/shared/api/stock";
 import { normalizeQuantityInput, type QuantityInputIssue } from "@/shared/lib/quantityInput";
 import { fmtQty, toQtyInteger } from "@/shared/lib/quantityFormat";
+import { actionReasonText, type ActionReasonCode } from "@/shared/lib/actionReasons";
 import {
   taskGroupingDimensions,
   taskGroupingDimensionsKey,
@@ -14,7 +15,7 @@ import {
 import { TaskStatusDot } from "./TaskView";
 import {
   getStatusLabel,
-  getReadyStatusLabel,
+  groupTasksByBlockReason,
   isTaskCompletable,
 } from "../lib/taskStatus";
 
@@ -379,18 +380,23 @@ export function BulkOperationsPanel({
     () => tasks.filter((t) => !isTaskCompletable(t)),
     [tasks],
   );
-  const skippedByReason = useMemo(() => {
-    const notTransferred: SectionBoardTask[] = [];
-    const other: SectionBoardTask[] = [];
-    for (const t of skippedTasks) {
-      if (t.status === "ready" && getReadyStatusLabel(t) === "Не передано") {
-        notTransferred.push(t);
-      } else {
-        other.push(t);
-      }
-    }
-    return { notTransferred, other };
-  }, [skippedTasks]);
+  const skippedByReason = useMemo(() => groupTasksByBlockReason(skippedTasks), [skippedTasks]);
+
+  /**
+   * Причина, по которой «Подтвердить» не нажимается. Две разные: заданий для
+   * завершения нет вовсе или количество не введено — раньше вторая молчала, а
+   * кнопка выглядела просто серой.
+   *
+   * Кнопка гасится, но причина видна текстом рядом с ней, а не подсказкой:
+   * именно видимость снимает запрет ADR-0032 на дизейбл кнопки подтверждения
+   * (ADR-0049, п. 5).
+   */
+  const confirmBlockReason: ActionReasonCode | null = useMemo(() => {
+    const hasCompletable = groups.some((g) => g.tasks.some((t) => isTaskCompletable(t)));
+    if (!hasCompletable) return "bulk_nothing_to_complete";
+    const hasQuantity = groups.some((g) => toQtyInteger(g.addQty) > 0 || toQtyInteger(g.defectQty) > 0);
+    return hasQuantity ? null : "bulk_no_quantity";
+  }, [groups]);
 
   return (
     <div className="rounded-lg border bg-card inline-block">
@@ -401,24 +407,17 @@ export function BulkOperationsPanel({
             <div className="font-medium">
               Будет пропущено: {skippedTasks.length} задач (нельзя завершить)
             </div>
-            {skippedByReason.notTransferred.length > 0 && (
-              <div className="mt-1">
-                <span className="font-semibold">«Не передано» ({skippedByReason.notTransferred.length}):</span>{" "}
-                {Array.from(new Set(skippedByReason.notTransferred.map((t) => t.product_sku)))
+            {skippedByReason.map(({ reason, tasks: grouped }) => (
+              <div className="mt-1" key={reason}>
+                <span className="font-semibold">
+                  {actionReasonText(reason)} ({grouped.length}):
+                </span>{" "}
+                {Array.from(new Set(grouped.map((t) => t.product_sku)))
                   .slice(0, 5)
                   .join(", ")}
-                {skippedByReason.notTransferred.length > 5 ? "…" : ""} — сырьё с предыдущего участка ещё не поступило.
+                {grouped.length > 5 ? "…" : ""}
               </div>
-            )}
-            {skippedByReason.other.length > 0 && (
-              <div className="mt-1">
-                <span className="font-semibold">Прочие ({skippedByReason.other.length}):</span>{" "}
-                {Array.from(new Set(skippedByReason.other.map((t) => t.product_sku)))
-                  .slice(0, 5)
-                  .join(", ")}
-                {skippedByReason.other.length > 5 ? "…" : ""} — ожидают сырья или уже завершены.
-              </div>
-            )}
+            ))}
           </div>
         </div>
       )}
@@ -614,27 +613,16 @@ export function BulkOperationsPanel({
             >
               Очистить
             </Button>
-            <Button
-              size="sm"
-              onClick={doConfirm}
-              disabled={
-                pending
-                || !groups.some(
-                  (g) => g.tasks.some((t) => isTaskCompletable(t))
-                    && (toQtyInteger(g.addQty) > 0 || toQtyInteger(g.defectQty) > 0),
-                )
-              }
-              title={
-                groups.every(
-                  (g) => !g.tasks.some((t) => isTaskCompletable(t))
-                    || (toQtyInteger(g.addQty) <= 0 && toQtyInteger(g.defectQty) <= 0),
-                )
-                  ? "Все выбранные задачи имеют статус, не допускающий завершение (например, «Не передано»)"
-                  : undefined
-              }
-            >
-              Подтвердить
-            </Button>
+            <ActionWithReason reason={confirmBlockReason}>
+              <Button
+                size="sm"
+                onClick={doConfirm}
+                disabled={pending || confirmBlockReason !== null}
+                title={confirmBlockReason ? actionReasonText(confirmBlockReason) : "Завершить выбранные задания"}
+              >
+                Подтвердить
+              </Button>
+            </ActionWithReason>
           </div>
         </div>
       </div>

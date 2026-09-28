@@ -18,9 +18,10 @@ import {
   Input,
 } from "@/shared/ui";
 import {
-  getReadyStatusLabel,
+  groupTasksByBlockReason,
   isTaskCompletable,
 } from "../lib/taskStatus";
+import { actionReasonText } from "@/shared/lib/actionReasons";
 import { fmtQty } from "@/shared/lib/quantityFormat";
 
 function toNumber(value: string): number {
@@ -225,13 +226,8 @@ export function TaskActionDrawer({
           )}
 
           {isGroup && tasks && tasks.some((t) => !isTaskCompletable(t)) && (() => {
-            const notTransferred = tasks.filter(
-              (t) => t.status === "ready" && getReadyStatusLabel(t) === "Не передано",
-            );
-            const other = tasks.filter(
-              (t) => !isTaskCompletable(t) && !(t.status === "ready" && getReadyStatusLabel(t) === "Не передано"),
-            );
-            const total = notTransferred.length + other.length;
+            const byReason = groupTasksByBlockReason(tasks);
+            const total = byReason.reduce((sum, group) => sum + group.tasks.length, 0);
             return (
               <div className="rounded-lg border border-amber-300 bg-amber-50 p-3 text-sm text-amber-800">
                 <div className="flex items-start gap-2">
@@ -240,21 +236,17 @@ export function TaskActionDrawer({
                     <div className="font-medium">
                       {total} из {tasks.length} задач будут пропущены
                     </div>
-                    {notTransferred.length > 0 && (
-                      <div className="mt-1 text-xs">
-                        <span className="font-semibold">«Не передано» ({notTransferred.length}):</span>{" "}
-                        {Array.from(new Set(notTransferred.map((t) => t.product_sku)))
+                    {byReason.map(({ reason, tasks: grouped }) => (
+                      <div className="mt-1 text-xs" key={reason}>
+                        <span className="font-semibold">
+                          {actionReasonText(reason)} ({grouped.length}):
+                        </span>{" "}
+                        {Array.from(new Set(grouped.map((t) => t.product_sku)))
                           .slice(0, 5)
                           .join(", ")}
-                        {notTransferred.length > 5 ? "…" : ""} — сырьё с предыдущего участка ещё не поступило.
+                        {grouped.length > 5 ? "…" : ""}
                       </div>
-                    )}
-                    {other.length > 0 && (
-                      <div className="mt-1 text-xs">
-                        <span className="font-semibold">Прочие ({other.length}):</span>{" "}
-                        ожидают сырья или уже завершены.
-                      </div>
-                    )}
+                    ))}
                   </div>
                 </div>
               </div>

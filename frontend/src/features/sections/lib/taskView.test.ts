@@ -140,7 +140,7 @@ describe("getTaskGroupHeaderState", () => {
       collapseTitle: "Раскрыть",
       allSelected: false,
       hasCompletable: true,
-      completeTitle: "Открыть панель завершения группы",
+      completeReason: null,
     });
   });
 
@@ -153,13 +153,13 @@ describe("getTaskGroupHeaderState", () => {
     expect(state.allSelected).toBe(true);
   });
 
-  it("блокирует завершение группы, когда завершать нечего", () => {
+  it("называет причину, когда завершать нечего", () => {
     const state = getTaskGroupHeaderState(
       { tasks: [makeTask({ status: "completed" })] },
       { isCollapsed: false, isBulkMode: false, allSelected: false },
     );
     expect(state.hasCompletable).toBe(false);
-    expect(state.completeTitle).toBe("Все задания в группе завершены");
+    expect(state.completeReason).toBe("group_nothing_to_complete");
   });
 });
 

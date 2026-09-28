@@ -1,4 +1,5 @@
 import type { SectionBoardTask } from "@/shared/api/shopfloor";
+import type { ActionReasonCode } from "@/shared/lib/actionReasons";
 import { taskStatusLabels } from "@/shared/lib/generated-labels";
 
 export { taskStatusLabels };
@@ -95,28 +96,26 @@ export function getStatusColor(task: SectionBoardTask): string {
   return taskStatusColor[task.status] || "";
 }
 
-export function isTaskCompletable(task: SectionBoardTask): boolean {
-  if (task.status === "waiting_previous") return false;
-  if (task.status === "ready" && getReadyStatusLabel(task) === "Не передано") return false;
-  if (["completed", "cancelled", "done", "skipped"].includes(task.status)) return false;
-  if (isTaskExecutionComplete(task)) return false;
-  return true;
+/**
+ * Причина, по которой задание нельзя завершить, — код из общего словаря
+ * причин (#193). `null` — завершать можно.
+ *
+ * Предикат и причина объявлены одной функцией: раньше это были два независимых
+ * списка, и они разошлись — статус `skipped` закрывал завершение, но причины
+ * не имел, поэтому кнопка гасла без объяснения.
+ */
+export function getCompletionBlockReason(task: SectionBoardTask): ActionReasonCode | null {
+  if (task.status === "waiting_previous") return "awaiting_raw";
+  if (task.status === "ready" && getReadyStatusLabel(task) === "Не передано") return "raw_not_received";
+  if (["completed", "done"].includes(task.status)) return "already_completed";
+  if (task.status === "cancelled") return "cancelled";
+  if (task.status === "skipped") return "stage_skipped";
+  if (isTaskExecutionComplete(task)) return "fact_entered";
+  return null;
 }
 
-export function getCompletionDisabledReason(task: SectionBoardTask): string | null {
-  if (task.status === "waiting_previous") {
-    return "Нельзя завершить задание: ожидает передачи сырья с предыдущего участка";
-  }
-  if (task.status === "ready" && getReadyStatusLabel(task) === "Не передано") {
-    return "Нельзя завершить задание: сырьё ещё не передано с предыдущего участка";
-  }
-  if (["completed", "cancelled", "done"].includes(task.status)) {
-    return "Задание уже завершено";
-  }
-  if (isTaskExecutionComplete(task)) {
-    return "Факт по заданию уже внесён";
-  }
-  return null;
+export function isTaskCompletable(task: SectionBoardTask): boolean {
+  return getCompletionBlockReason(task) === null;
 }
 
 // Список задач, которые не будут завершены при групповой операции
@@ -125,4 +124,25 @@ export function getNonCompletableTasks(
   tasks: SectionBoardTask[],
 ): SectionBoardTask[] {
   return tasks.filter((t) => !isTaskCompletable(t));
+}
+
+/**
+ * Незавершаемые задания, сгруппированные по причине, — баннер панели массовых
+ * операций и подсказка в диалоге завершения группы показывают одно и то же.
+ * Раньше обе собирали список вручную и делили его надвое («Не передано» /
+ * «Прочие — ожидают сырья или уже завершены»), из-за чего формулировка
+ * расходилась с кнопкой доски.
+ */
+export function groupTasksByBlockReason(
+  tasks: SectionBoardTask[],
+): { reason: ActionReasonCode; tasks: SectionBoardTask[] }[] {
+  const groups = new Map<ActionReasonCode, SectionBoardTask[]>();
+  for (const task of tasks) {
+    const reason = getCompletionBlockReason(task);
+    if (!reason) continue;
+    const bucket = groups.get(reason);
+    if (bucket) bucket.push(task);
+    else groups.set(reason, [task]);
+  }
+  return Array.from(groups, ([reason, grouped]) => ({ reason, tasks: grouped }));
 }

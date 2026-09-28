@@ -49,7 +49,13 @@ import {
   type SectionContentMode,
 } from "../components/SectionPanelToggles";
 import { PRESET_PROFILES, type GroupingProfile } from "../lib/groupingProfiles";
-import { isTaskCompletable, getNonCompletableTasks } from "../lib/taskStatus";
+import {
+  getCompletionBlockReason,
+  groupTasksByBlockReason,
+  isTaskCompletable,
+  getNonCompletableTasks,
+} from "../lib/taskStatus";
+import { actionReasonText } from "@/shared/lib/actionReasons";
 import { createAuditLog, getAuditLogs, type AuditLogEntry } from "@/shared/api/auditLogs";
 import { isAnyDialogOpen } from "@/shared/lib/dialogOpen";
 import { fmtQty, toQtyInteger } from "@/shared/lib/quantityFormat";
@@ -650,9 +656,12 @@ export function SectionsTasksPage() {
       const skipped = getNonCompletableTasks(tasks);
 
       if (completableTasks.length === 0) {
+        // Причины — по кодам: у группы они могут быть разными («не передано»,
+        // «отменено», «этап пропущен»), и одна общая фраза врала бы.
+        const reasons = Array.from(new Set(groupTasksByBlockReason(tasks).map((g) => actionReasonText(g.reason))));
         toast({
           title: "Нет задач для завершения",
-          description: "Все выбранные задания имеют статус, не допускающий завершение (например, «Не передано»).",
+          description: reasons.join("; "),
           variant: "destructive",
         });
         return;
@@ -722,13 +731,11 @@ export function SectionsTasksPage() {
 
       groupCompleteMutation.mutate({ entries, tasks: completableTasks });
     } else {
-      if (!isTaskCompletable(task!)) {
-        const reason = task!.status === "ready"
-          ? "сырьё с предыдущего участка ещё не передано"
-          : "задание имеет статус, не допускающий завершение";
+      const blockReason = getCompletionBlockReason(task!);
+      if (blockReason) {
         toast({
           title: "Нельзя завершить задание",
-          description: reason,
+          description: actionReasonText(blockReason),
           variant: "destructive",
         });
         return;

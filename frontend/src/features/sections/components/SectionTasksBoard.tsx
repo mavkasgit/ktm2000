@@ -13,6 +13,7 @@ import type { SectionBoardQueryParams, SectionBoardTask, TaskGroup } from "@/sha
 import { formatDimensionsFilterValue, formatDimensionsLabel } from "@/shared/api/stock";
 import {
   Badge,
+  ActionWithReason,
   Button,
   CutLayoutCell,
   DataTableColumnHeader,
@@ -43,7 +44,7 @@ import {
   getStatusLabel,
   getStatusColor,
   isTaskCompletable,
-  getCompletionDisabledReason,
+  getCompletionBlockReason,
   getTaskViewCategory,
   isTaskFullyTransferred,
 } from "../lib/taskStatus";
@@ -57,6 +58,7 @@ import {
 } from "./TaskView";
 import { TABLE_ROW_STYLES } from "@/shared/lib/tableRowStyles";
 import { TABLE_ROW_COMPACT } from "@/shared/lib/dataTableStyles";
+import { actionReasonText } from "@/shared/lib/actionReasons";
 import { cn } from "@/shared/utils/cn";
 import { fmtQty } from "@/shared/lib/quantityFormat";
 import { packagingBreakdownLabel, taskPrimaryOperation } from "../lib/taskView";
@@ -176,6 +178,7 @@ function renderTaskRow(
   isInGroup = false,
 ) {
   const fields = buildTaskViewFields(task);
+  const blockReason = getCompletionBlockReason(task);
 
   const handleAction = (type: TaskActionDialogType) => {
     onAction(type, task);
@@ -226,15 +229,17 @@ function renderTaskRow(
         ) : readOnly ? (
           <span className="text-xs text-muted-foreground">Просмотр</span>
         ) : (
-          <Button
-            variant="outline"
-            className={ROW_ACTION_BUTTON_CLASS}
-            onClick={() => handleAction("complete")}
-            disabled={!isTaskCompletable(task)}
-            title={getCompletionDisabledReason(task) ?? "Завершить задачу"}
-          >
-            <span>Завершить</span>
-          </Button>
+          <ActionWithReason reason={blockReason}>
+            <Button
+              variant="outline"
+              className={ROW_ACTION_BUTTON_CLASS}
+              onClick={() => handleAction("complete")}
+              disabled={blockReason !== null}
+              title={blockReason ? actionReasonText(blockReason) : "Завершить задачу"}
+            >
+              <span>Завершить</span>
+            </Button>
+          </ActionWithReason>
         )}
       </td>
       <TableCornerResetCell />
@@ -255,6 +260,7 @@ function renderMobileCard(
 ) {
   const buttonBase = `flex-1 ${TABLE_ROW_COMPACT.actionButton}`;
   const fields = buildTaskViewFields(task);
+  const blockReason = getCompletionBlockReason(task);
   const buttonDefault = "hover:bg-accent/50";
 
   const handleAction = (type: TaskActionDialogType) => {
@@ -309,16 +315,18 @@ function renderMobileCard(
         ) : readOnly ? (
           <span className="text-xs text-muted-foreground">Режим просмотра</span>
         ) : (
-          <Button
-            size="sm"
-            variant="outline"
-            className={`${buttonBase} transition-all hover:bg-accent/50`}
-            onClick={() => handleAction("complete")}
-            disabled={!isTaskCompletable(task)}
-            title={getCompletionDisabledReason(task) ?? "Завершить задачу"}
-          >
-            <span>Завершить</span>
-          </Button>
+          <ActionWithReason reason={blockReason} layout="column">
+            <Button
+              size="sm"
+              variant="outline"
+              className={`${buttonBase} transition-all hover:bg-accent/50`}
+              onClick={() => handleAction("complete")}
+              disabled={blockReason !== null}
+              title={blockReason ? actionReasonText(blockReason) : "Завершить задачу"}
+            >
+              <span>Завершить</span>
+            </Button>
+          </ActionWithReason>
         )}
     </div>
   );
@@ -406,18 +414,20 @@ function TableTaskGroupRow({
       </td>
       <td className={`${ROW_CELL_CLASS} ${isBulkMode && allSelected ? TABLE_ROW_STYLES.selectedGroupHeader : TABLE_ROW_STYLES.defaultGroupRow}`}>
         {onCompleteGroup && (
-          <Button
-            variant="outline"
-            className={ROW_ACTION_BUTTON_CLASS}
-            onClick={(e) => {
-              e.stopPropagation();
-              onCompleteGroup(group);
-            }}
-            disabled={!header.hasCompletable}
-            title={header.completeTitle}
-          >
-            <span>Завершить группу</span>
-          </Button>
+          <ActionWithReason reason={header.completeReason}>
+            <Button
+              variant="outline"
+              className={ROW_ACTION_BUTTON_CLASS}
+              onClick={(e) => {
+                e.stopPropagation();
+                onCompleteGroup(group);
+              }}
+              disabled={!header.hasCompletable}
+              title={header.completeReason ? actionReasonText(header.completeReason) : header.completeHint}
+            >
+              <span>Завершить группу</span>
+            </Button>
+          </ActionWithReason>
         )}
       </td>
       <TableCornerResetCell />
@@ -1107,18 +1117,20 @@ export function SectionTasksBoard({
                         &times;{group.tasks.length}
                       </Badge>
                       {onCompleteGroup && !readOnly && (
-                        <Button
-                          variant="outline"
-                          className={ROW_ACTION_BUTTON_CLASS}
-                          onClick={(e) => {
-                            e.stopPropagation();
-                            onCompleteGroup(group);
-                          }}
-                          disabled={!mobileHeader.hasCompletable}
-                          title={mobileHeader.completeTitle}
-                        >
-                          <span>Завершить группу</span>
-                        </Button>
+                        <ActionWithReason reason={mobileHeader.completeReason}>
+                          <Button
+                            variant="outline"
+                            className={ROW_ACTION_BUTTON_CLASS}
+                            onClick={(e) => {
+                              e.stopPropagation();
+                              onCompleteGroup(group);
+                            }}
+                            disabled={!mobileHeader.hasCompletable}
+                            title={mobileHeader.completeReason ? actionReasonText(mobileHeader.completeReason) : mobileHeader.completeHint}
+                          >
+                            <span>Завершить группу</span>
+                          </Button>
+                        </ActionWithReason>
                       )}
                     </div>
                   </div>
