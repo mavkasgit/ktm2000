@@ -5,8 +5,7 @@
  *
  * Usage:
  *   node scripts/ensure-dev-ports.js           # interactive if TTY; else fail if busy
- *   node scripts/ensure-dev-ports.js --kill    # kill without prompt
- *   node scripts/ensure-dev-ports.js --no-docker   # like --kill, but don't touch/start Docker
+ *   node scripts/ensure-dev-ports.js --kill    # kill without prompt; --check skips the Docker step
  *   node scripts/ensure-dev-ports.js --check   # report only; exit 1 if busy
  *   KTM_DEV_KILL=1                             # same as --kill
  *
@@ -32,9 +31,6 @@ function parseArgs(argv) {
     process.env.HRMS_DEV_KILL === "1" ||
     process.env.HRMS_DEV_KILL === "true";
   const checkOnly = argv.includes("--check");
-  // Teardown после прогона: порты надо освободить, но Docker поднимать нельзя —
-  // иначе уборка запустит Docker Desktop уже после тестов.
-  const skipDocker = argv.includes("--no-docker");
   const ports = [];
   for (let i = 0; i < argv.length; i++) {
     if (argv[i] === "--ports" && argv[i + 1]) {
@@ -50,7 +46,6 @@ function parseArgs(argv) {
   return {
     forceKill,
     checkOnly,
-    skipDocker,
     ports: ports.length ? ports : DEFAULT_PORTS,
   };
 }
@@ -377,7 +372,7 @@ function ensureDockerRunning(maxWaitSeconds = 45) {
 }
 
 async function main() {
-  const { forceKill, checkOnly, skipDocker, ports } = parseArgs(process.argv.slice(2));
+  const { forceKill, checkOnly, ports } = parseArgs(process.argv.slice(2));
 
   let snapshot = listeningSnapshot(ports);
   let portMap = pidsFromSnapshot(snapshot);
@@ -448,7 +443,14 @@ async function main() {
 
   console.log(`✓ Dev ports free: ${ports.map((p) => ":" + p).join(", ")}`);
 
-  if (!checkOnly && !skipDocker) {
+  // Раньше здесь был флаг --no-docker («убить порты, но не трогать Docker»)
+  // вместе с skipDocker. Он удалён: вызывающих нет ни в npm-скриптах, ни в
+  // e2e/global-teardown.ts (уборка после прогона режет осиротевшие браузеры
+  // сама, порты не трогает), а сам флаг в неинтерактивном шелле не делал
+  // обещанного — не выставлял forceKill, поэтому упирался в отказ по занятым
+  // портам вместо kill. Пропуск шага Docker теперь покрывает --check.
+
+  if (!checkOnly) {
     const dockerOk = ensureDockerRunning();
     if (!dockerOk) process.exit(1);
   }
