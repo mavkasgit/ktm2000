@@ -82,7 +82,6 @@ export function useSortableColumnFilters<Field extends string>() {
     columnFilters,
     columnSearchQueries,
     debouncedColumnSearchQueries,
-    flushColumnSearchQueries,
     onColumnFilterChange,
     onColumnSearchChange,
     bindColumn,
