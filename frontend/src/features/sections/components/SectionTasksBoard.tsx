@@ -60,7 +60,6 @@ import { TABLE_ROW_COMPACT } from "@/shared/lib/dataTableStyles";
 import { cn } from "@/shared/utils/cn";
 import { fmtQty } from "@/shared/lib/quantityFormat";
 import { boardColumns } from "../lib/boardColumns";
-import { packagingBreakdownLabel, taskPrimaryOperation } from "../lib/planTaskGroups";
 
 // ---------------------------------------------------------------------------
 // Экспорты для обратной совместимости
@@ -375,10 +374,7 @@ function TableTaskGroupRow({
         {formatDimensionsLabel(taskGroupingDimensions(firstTask))}
       </td>
       <td className={`${ROW_CELL_CLASS} text-xs text-slate-500 font-medium`}>
-        {taskPrimaryOperation(firstTask) || "—"}
-      </td>
-      <td className={`${ROW_CELL_CLASS} text-xs text-slate-500 font-medium`}>
-        {packagingBreakdownLabel(group.tasks, fmtQty)}
+        {firstTask.operation_name || "—"}
       </td>
       <td className={`${ROW_CELL_CLASS} text-slate-700`}>{fmtQty(String(group.totalQtyPlan))}</td>
       <td className={`${ROW_CELL_CLASS} text-slate-700`}>{fmtQty(String(group.tasks.reduce((s, t) => s + parseFloat(t.cache.issued_quantity), 0)))}</td>
