@@ -47,6 +47,7 @@ from app.services.hanger_quantity import adjust_quantity_to_hanger
 from app.services.import_normalization import normalize_sku as _normalize_sku
 from app.services.plan_position_hanger import PositionHangerValue, position_length_mm, resolve_position_hanger
 from app.services.route_builder import build_route_from_profile, load_route_build_batch_cache
+from app.services.route_storage_classifier import STAGE_KIND_TRANSIT, is_storage_section
 
 
 #: Каталог кодов строк импорта плана (спека docs/plan-import-spec.md §3, карта #157).
@@ -992,36 +993,57 @@ async def _make_change_items(
                                         stage_seq = 1
                                         for group in groups:
                                             primary_step, primary_section = group[0]
-                                            # Маркер трансформации этапа (ADR-0002) —
-                                            # из справочника операций участка, не из кода.
-                                            from app.services.route_transform import resolve_stage_transforms_dimensions
-                                            stage_transforms = await resolve_stage_transforms_dimensions(
-                                                db,
-                                                section_id=primary_section.id,
-                                                operation_codes=[s[0].operation_code for s in group],
-                                            )
-                                            stage = RouteStage(
-                                                route_id=created_route.id,
-                                                sequence=stage_seq,
-                                                section_id=primary_section.id,
-                                                is_significant=primary_step.is_significant,
-                                                transforms_dimensions=stage_transforms,
-                                                requires_acceptance=True,
-                                                allow_parallel=False,
-                                                is_final=any(s[0].is_final for s in group),
-                                            )
-                                            db.add(stage)
-                                            await db.flush()
-
-                                            for op_idx, (step, _) in enumerate(group, start=1):
-                                                op = RouteOperation(
-                                                    route_stage_id=stage.id,
-                                                    sequence=op_idx,
-                                                    operation_code=step.operation_code,
-                                                    operation_name=step.operation_name,
+                                            is_final = any(s[0].is_final for s in group)
+                                            if is_storage_section(primary_section):
+                                                # Склад/терминал — проход, а не цех (#178).
+                                                # Тот же контракт, что у сидера: section_id
+                                                # пуст, склад живёт в storage_section_id,
+                                                # реальных операций у этапа нет.
+                                                stage = RouteStage(
+                                                    route_id=created_route.id,
+                                                    sequence=stage_seq,
+                                                    section_id=None,
+                                                    stage_kind=STAGE_KIND_TRANSIT,
+                                                    storage_section_id=primary_section.id,
+                                                    is_significant=False,
+                                                    transforms_dimensions=False,
+                                                    requires_acceptance=False,
+                                                    allow_parallel=False,
+                                                    is_final=is_final,
                                                 )
-                                                db.add(op)
-                                            
+                                                db.add(stage)
+                                                await db.flush()
+                                            else:
+                                                # Маркер трансформации этапа (ADR-0002) —
+                                                # из справочника операций участка, не из кода.
+                                                from app.services.route_transform import resolve_stage_transforms_dimensions
+                                                stage_transforms = await resolve_stage_transforms_dimensions(
+                                                    db,
+                                                    section_id=primary_section.id,
+                                                    operation_codes=[s[0].operation_code for s in group],
+                                                )
+                                                stage = RouteStage(
+                                                    route_id=created_route.id,
+                                                    sequence=stage_seq,
+                                                    section_id=primary_section.id,
+                                                    is_significant=primary_step.is_significant,
+                                                    transforms_dimensions=stage_transforms,
+                                                    requires_acceptance=True,
+                                                    allow_parallel=False,
+                                                    is_final=is_final,
+                                                )
+                                                db.add(stage)
+                                                await db.flush()
+
+                                                for op_idx, (step, _) in enumerate(group, start=1):
+                                                    op = RouteOperation(
+                                                        route_stage_id=stage.id,
+                                                        sequence=op_idx,
+                                                        operation_code=step.operation_code,
+                                                        operation_name=step.operation_name,
+                                                    )
+                                                    db.add(op)
+
                                             stage_seq += 1
 
                                         await db.flush()
