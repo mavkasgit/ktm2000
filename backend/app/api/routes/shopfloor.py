@@ -44,7 +44,6 @@ from app.services.shopfloor_service import (
     get_route_stage_aggregates_for_plan_position,
     get_section_board,
     get_section_daily_stats,
-    get_section_payload_keys,
     get_sections_summary,
     get_task_details,
     get_warehouse_remainders,
@@ -847,16 +846,6 @@ async def section_board(
         limit=limit,
         offset=offset,
     )
-
-
-@router.get("/sections/{section_id}/payload-keys", dependencies=[Depends(require_role(list(READER_ROLES)))])
-async def section_payload_keys(
-    section_id: int,
-    db: AsyncSession = Depends(get_db),
-    locked_section_id: int | None = Depends(get_single_window_locked_section_id),
-) -> dict:
-    _ensure_section_lock(section_id, locked_section_id)
-    return await get_section_payload_keys(db, section_id=section_id)
 
 
 @router.get("/sections/{section_id}/daily-stats", dependencies=[Depends(require_role(list(READER_ROLES)))])

@@ -782,36 +782,6 @@ async def get_section_daily_stats(
     return {"section_id": section_id, "daily_stats": list(daily_map.values())}
 
 
-async def get_section_payload_keys(
-    db: AsyncSession,
-    *,
-    section_id: int,
-) -> dict:
-    """
-    Возвращает список уникальных ключей из source_payload для всех задач участка.
-
-    Используется в GroupingSettingsModal для показа чекбоксов кастомных полей.
-
-    ПОЧЕМУ ОТДЕЛЬНЫЙ ЗАПРОС, А НЕ ЧАСТЬ get_section_board:
-      Этот запрос нужен только при открытии модалки настроек (~1 раз в сессию),
-      а не при каждой загрузке доски. Разделение снижает объём данных в основном запросе.
-
-    PostgreSQL jsonb_object_keys() — встроенная функция для извлечения ключей JSONB.
-    """
-    stmt = (
-        select(
-            func.jsonb_object_keys(PlanPosition.source_payload).label("key")
-        )
-        .join(SectionPlanLine, SectionPlanLine.plan_position_id == PlanPosition.id)
-        .where(SectionPlanLine.section_id == section_id)
-        .distinct()
-        .order_by(func.jsonb_object_keys(PlanPosition.source_payload))
-    )
-
-    rows = (await db.execute(stmt)).scalars().all()
-    return {"keys": list(rows)}
-
-
 async def get_warehouse_remainders(
     db: AsyncSession,
     *,
