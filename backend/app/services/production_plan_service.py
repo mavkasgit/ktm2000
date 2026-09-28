@@ -748,7 +748,15 @@ async def approve_plan_position(
     position_id: int,
     force: bool = False,
     changed_by: int | None = None,
+    reason: str | None = None,
 ) -> PlanPosition:
+    """Утвердить позицию плана.
+
+    `force` — осознанный обход невалидной валидации (ADR-0048): требует
+    непустой причины, пишет её в журнал действий и переводит валидацию в
+    состояние `overridden` — именно его гейт релиза пропускает. Ошибки при
+    этом остаются на позиции.
+    """
     position = (
         await db.execute(
             select(PlanPosition)
@@ -767,9 +775,23 @@ async def approve_plan_position(
         raise ValueError("Сначала назначьте маршрут")
 
     errors = await validate_plan_position(db, position)
+    from_validation = position.validation_status
+    override_reason: str | None = None
+    if errors and force:
+        # Причину проверяем ДО правки позиции: форс без неё — отказ,
+        # а не «утверждённая позиция с забытым обоснованием».
+        override_reason = (reason or "").strip()
+        if not override_reason:
+            raise ValueError("Форс-аппрув требует причину: укажите, почему ошибки валидации можно проигнорировать")
+
     position.validation_errors = errors
-    position.validation_status = PlanPositionValidationStatus.invalid if errors else PlanPositionValidationStatus.valid
-    if errors and not force:
+    if not errors:
+        position.validation_status = PlanPositionValidationStatus.valid
+    elif override_reason:
+        # Обход не отменяет ошибки — он переводит их в «перекрыто человеком».
+        position.validation_status = PlanPositionValidationStatus.overridden
+    else:
+        position.validation_status = PlanPositionValidationStatus.invalid
         position.status = PlanPositionStatus.invalid
         raise ValueError("; ".join(errors))
 
@@ -778,21 +800,31 @@ async def approve_plan_position(
     plan = await db.get(ProductionPlan, production_plan_id)
     if plan is not None and plan.status in {ProductionPlanStatus.draft, ProductionPlanStatus.validated}:
         plan.status = ProductionPlanStatus.approved
-    
+
     # Запись лога аудита
     user = await db.get(User, changed_by) if changed_by else None
+    message = f"Позиция плана #{position_id} (арт. {position.source_sku}) успешно утверждена."
+    if override_reason:
+        message += f" Валидация перекрыта: {override_reason}."
     await log_action(
         db,
         status="success",
         title="Утверждение позиции",
-        message=f"Позиция плана #{position_id} (арт. {position.source_sku}) успешно утверждена.",
+        message=message,
         user=user,
         product_sku=position.source_sku,
         qty_text=str(position.quantity),
+        comment=override_reason,
         action=AuditAction.APPROVE,
         entity_type=AuditEntityType.PLAN_POSITION,
         entity_id=position_id,
-        changes={"before": {"status": from_status}, "after": {"status": PlanPositionStatus.approved.value}},
+        changes={
+            "before": {"status": from_status, "validation_status": from_validation},
+            "after": {
+                "status": PlanPositionStatus.approved.value,
+                "validation_status": position.validation_status,
+            },
+        },
     )
 
     await db.flush()

@@ -13,6 +13,7 @@ from app.models.production_plan import (
     PlanPositionStatus,
     ProductionPlan,
     ProductionPlanStatus,
+    PlanPositionValidationStatus,
     require_current_length_model,
 )
 from app.models.product import Product
@@ -25,6 +26,30 @@ from app.services.action_journal_service import action_journal_service
 from app.services.plan_position_hanger import position_dimensions_for_task
 from app.services.production_plan_service import refresh_plan_status
 from app.services.route_transform import build_transform_spec, raw_input_quantity_for
+
+
+def _reject_invalid_validation(
+    selected_positions: list[tuple[PlanPosition, Decimal]],
+) -> None:
+    """Гейт релиза (ADR-0048): невалидная валидация в работу не уходит.
+
+    Значение `validation_status` читается как есть, без пересчёта: ошибки
+    посчитаны при импорте или утверждении. Состояние `overridden` — форс-аппрув
+    с причиной — гейт пропускает, `invalid` — нет.
+    """
+    blocked = [
+        f"#{position.id} {position.source_sku}: "
+        + ("; ".join(position.validation_errors or []) or "валидация не пройдена")
+        for position, _quantity in selected_positions
+        if position.validation_status == PlanPositionValidationStatus.invalid
+    ]
+    if not blocked:
+        return
+    raise ValueError(
+        "Гейт релиза: валидация позиции не пройдена — "
+        + "; ".join(blocked)
+        + ". Исправьте позицию или утвердите её с форсом и причиной."
+    )
 
 
 async def create_release_batch(
@@ -45,6 +70,7 @@ async def create_release_batch(
     selected_positions = await _select_release_positions(db, production_plan_id, positions)
     if not selected_positions:
         raise ValueError("No approved positions selected")
+    _reject_invalid_validation(selected_positions)
 
     batch = ReleaseBatch(
         batch_no=_make_batch_no(),

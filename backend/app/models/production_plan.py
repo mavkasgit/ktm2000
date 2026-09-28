@@ -51,6 +51,9 @@ class PlanPositionValidationStatus(str, enum.Enum):
     pending = "pending"
     valid = "valid"
     invalid = "invalid"
+    # Валидация перекрыта человеком форс-аппрувом с причиной (ADR-0048).
+    # Ошибки на позиции остаются, но гейт релиза это состояние пропускает.
+    overridden = "overridden"
 
 
 class PlanPositionRouteOrigin(str, enum.Enum):

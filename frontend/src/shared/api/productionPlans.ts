@@ -98,13 +98,13 @@ export async function discardProductionPlanChangeSet(productionPlanId: number, c
 export async function approveProductionPlanPosition(
   productionPlanId: number,
   positionId: number,
-  options?: { force?: boolean },
+  options?: { force?: boolean; reason?: string },
 ) {
   const { data } = await apiClient.post<ApprovePositionResponse>(
     `/production-plans/${productionPlanId}/positions/${positionId}/approve`,
     undefined,
     {
-      params: options?.force ? { force: true } : undefined,
+      params: options?.force ? { force: true, reason: options.reason } : undefined,
     },
   );
   return data;
@@ -852,10 +852,11 @@ export async function bulkApprovePositions(
   planId: number,
   ids: number[],
   force = false,
+  reason?: string,
 ): Promise<BulkActionResponse> {
   const { data } = await apiClient.post<BulkActionResponse>(
     `/production-plans/${planId}/positions/bulk-approve`,
-    { ids, force },
+    { ids, force, reason },
   );
   return data;
 }

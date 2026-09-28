@@ -127,3 +127,25 @@ describe("PositionRow — ячейка «Размер»", () => {
     expect(cell.textContent).toBe("2,75 м")
   })
 })
+
+describe("PositionRow — состояние валидации", () => {
+  it("перекрытая форс-аппрувом валидация видна подписью канона, а не сырым кодом", () => {
+    const client = new QueryClient({ defaultOptions: { queries: { retry: false } } })
+    const { container } = render(
+      <QueryClientProvider client={client}>
+        <PositionRow
+          pos={position({
+            status: "approved",
+            validation_status: "overridden",
+            errors: ["route_contains_excluded_step: DRILLING"],
+          })}
+          onApprove={vi.fn()}
+          onDelete={vi.fn()}
+        />
+      </QueryClientProvider>,
+    )
+
+    expect(container.textContent).toContain("Перекрыта")
+    expect(container.textContent).not.toContain("overridden")
+  })
+})

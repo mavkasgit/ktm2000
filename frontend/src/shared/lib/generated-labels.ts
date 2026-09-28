@@ -68,6 +68,7 @@ export const warningLabels: Record<string, string> = {
 // Лейблы статуса валидации позиции
 export const validationLabels: Record<string, string> = {
   "invalid": "Ошибка",
+  "overridden": "Перекрыта",
   "pending": "Ожидает",
   "valid": "Пройдена",
 }

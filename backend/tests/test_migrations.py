@@ -15,6 +15,7 @@ from sqlalchemy import inspect, text
 from sqlalchemy.ext.asyncio import create_async_engine
 
 from app.models.base import Base
+from app.models.production_plan import PlanPositionValidationStatus
 from app.services.hanger_quantity_calc import (
     HangerConfigError,
     compute_hanger_quantity,
@@ -1290,6 +1291,69 @@ async def test_migration_059_stops_on_conflicting_linear_default_until_manual_re
             (2700.0, None, True)
         ]
         assert all(row.length_mm != 2750.0 for row in lengths)
+    finally:
+        await engine.dispose()
+        admin_engine = create_async_engine(admin_url, isolation_level="AUTOCOMMIT")
+        async with admin_engine.connect() as conn:
+            await conn.execute(text(f'DROP DATABASE IF EXISTS "{db_name}" WITH (FORCE)'))
+        await admin_engine.dispose()
+
+
+@pytest.mark.asyncio
+async def test_migration_064_adds_overridden_validation_status(tmp_path: Path):
+    """#212 (ADR-0048): состояние «перекрыта» появляется в PG-типе позиции плана.
+
+    Тесты строят схему через `Base.metadata.create_all`, поэтому ревизию,
+    добавляющую значение в enum, проверяем на реальной цепочке alembic —
+    на изолированной БД тестового сервера, с повторным прогоном (значение
+    уже есть → миграция обязана быть no-op, а не падать на дубликате).
+    """
+    db_name = f"ktm_mig_{uuid.uuid4().hex[:10]}"
+    admin_url = _test_db_url().rsplit("/", 1)[0] + "/postgres"
+    target_url = _test_db_url().rsplit("/", 1)[0] + f"/{db_name}"
+
+    admin_engine = create_async_engine(admin_url, isolation_level="AUTOCOMMIT")
+    async with admin_engine.connect() as conn:
+        await conn.execute(text(f'CREATE DATABASE "{db_name}"'))
+    await admin_engine.dispose()
+
+    env = _alembic_env(target_url, tmp_path)
+    engine = create_async_engine(target_url)
+    try:
+        upgraded = subprocess.run(
+            ["alembic", "upgrade", "head"],
+            cwd=BACKEND_DIR,
+            env=env,
+            capture_output=True,
+            text=True,
+            check=False,
+        )
+        assert upgraded.returncode == 0, upgraded.stderr or upgraded.stdout
+
+        async with engine.connect() as conn:
+            labels = (
+                await conn.execute(
+                    text(
+                        "SELECT e.enumlabel FROM pg_enum e "
+                        "JOIN pg_type t ON t.oid = e.enumtypid "
+                        "WHERE t.typname = 'plan_position_validation_status'"
+                    )
+                )
+            ).scalars().all()
+        assert set(PlanPositionValidationStatus) == {label for label in labels}, (
+            "значения модели и PG-типа разошлись — миграция не догнала enum"
+        )
+
+        # Повторный прогон: значение уже добавлено, миграция обязана быть no-op.
+        again = subprocess.run(
+            ["alembic", "upgrade", "head"],
+            cwd=BACKEND_DIR,
+            env=env,
+            capture_output=True,
+            text=True,
+            check=False,
+        )
+        assert again.returncode == 0, again.stderr or again.stdout
     finally:
         await engine.dispose()
         admin_engine = create_async_engine(admin_url, isolation_level="AUTOCOMMIT")

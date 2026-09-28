@@ -40,6 +40,14 @@ import { buildPlanColumnApiParams, buildPlanPositionsQuery, buildPlanSortParam }
 import { planColumnLabels, planColumns, PLAN_CLIENT_FILTER_FIELDS, isRouteFilterClientSide } from "../lib/planColumns"
 import { useDebouncedValue } from "@/shared/lib/useDebouncedValue";
 
+/** Один запуск массового утверждения: что уходит в API и что остаётся «пропущенным». */
+type BulkApproveRun = {
+  planId: number;
+  ids: number[];
+  force: boolean;
+  skipped: BulkActionResultItem<number>[];
+};
+
 export function PlanPage() {
   const [importOpen, setImportOpen] = useState(false)
   const queryClient = useQueryClient()
@@ -50,6 +58,8 @@ export function PlanPage() {
   const [bulkDeleting, setBulkDeleting] = useState(false)
   const [bulkDeleteConfirmOpen, setBulkDeleteConfirmOpen] = useState(false)
   const [bulkProgress, setBulkProgress] = useState<BulkRunnerProgress | null>(null)
+  const [bulkOverrideRun, setBulkOverrideRun] = useState<BulkApproveRun | null>(null)
+  const [bulkOverrideReason, setBulkOverrideReason] = useState("")
   const [bulkResults, setBulkResults] = useState<BulkActionResultItem<number>[]>([])
   const [bulkSummary, setBulkSummary] = useState<BulkActionSummary | null>(null)
   const [bulkResultsOpen, setBulkResultsOpen] = useState(false)
@@ -149,11 +159,11 @@ export function PlanPage() {
     void invalidateAfter(queryClient, "importApplied")
   }
 
-  const handleApprove = async (positionId: number, planId?: number, force = false) => {
+  const handleApprove = async (positionId: number, planId?: number, force = false, reason?: string) => {
     const targetPlanId = planId || activePlan?.id
     if (!targetPlanId) return
     try {
-      await approveProductionPlanPosition(targetPlanId, positionId, { force })
+      await approveProductionPlanPosition(targetPlanId, positionId, { force, reason })
       void invalidateAfter(queryClient, "positionApproved")
       toast({ title: "Позиция утверждена", variant: "success" })
     } catch (e) {
@@ -280,52 +290,32 @@ export function PlanPage() {
     return null
   }
 
-  const handleBulkApprove = async () => {
-    if (bulkSelection.selectedCount === 0) return
-    const selectedIds = Array.from(bulkSelection.selectedIds)
-    const selectedPositionsMap = new Map(positions?.map(p => [p.id, p]) ?? [])
-
-    const results: BulkActionResultItem<number>[] = []
-    setBulkProgress({ total: selectedIds.length, completed: 0, running: true })
+  const runBulkApprove = async (run: BulkApproveRun, reason?: string) => {
+    const total = run.ids.length + run.skipped.length
+    const results: BulkActionResultItem<number>[] = [...run.skipped]
+    setBulkProgress({ total, completed: 0, running: true })
     setBulkApproving(true)
 
-    // Pre-filter: only send positions that pass client-side eligibility.
-    // Ineligible positions are reported as "skipped" without hitting the API.
-    const eligibleIds: number[] = []
-    for (const id of selectedIds) {
-      const pos = selectedPositionsMap.get(id)
-      if (!pos) {
-        results.push({ id, status: "failed", reason: "Позиция не найдена" })
-      } else if (!canApprovePosition(pos)) {
-        results.push({ id, status: "skipped", reason: getApproveIneligibleReason(pos) ?? "Не может быть утверждена" })
-      } else {
-        eligibleIds.push(id)
-      }
-    }
-
-    if (eligibleIds.length > 0) {
-      const targetPlanId = activePlan?.id
-      if (targetPlanId != null) {
-        try {
-          const response = await bulkApprovePositions(targetPlanId, eligibleIds, true)
-          for (const result of response.results) {
-            results.push({
-              id: result.id,
-              status: result.status,
-              reason: result.reason,
-              meta: result.meta ?? undefined,
-            })
-          }
-        } catch (e) {
-          const reason = getErrorMessage(e)
-          for (const id of eligibleIds) {
-            results.push({ id, status: "failed", reason })
-          }
+    if (run.ids.length > 0) {
+      try {
+        const response = await bulkApprovePositions(run.planId, run.ids, run.force, reason)
+        for (const result of response.results) {
+          results.push({
+            id: result.id,
+            status: result.status,
+            reason: result.reason,
+            meta: result.meta ?? undefined,
+          })
+        }
+      } catch (e) {
+        const errorText = getErrorMessage(e)
+        for (const id of run.ids) {
+          results.push({ id, status: "failed", reason: errorText })
         }
       }
     }
 
-    setBulkProgress({ total: selectedIds.length, completed: selectedIds.length, running: false })
+    setBulkProgress({ total, completed: total, running: false })
 
     const summary = summarizeBulkResults(results)
     setBulkResults(results)
@@ -344,6 +334,51 @@ export function PlanPage() {
     })
     bulkSelection.clear()
     setBulkMode(false)
+  }
+
+  const handleBulkApprove = async () => {
+    if (bulkSelection.selectedCount === 0) return
+    const targetPlanId = activePlan?.id
+    if (targetPlanId == null) return
+    const selectedIds = Array.from(bulkSelection.selectedIds)
+    const selectedPositionsMap = new Map(positions?.map(p => [p.id, p]) ?? [])
+
+    // Pre-filter: only send positions that pass client-side eligibility.
+    // Ineligible positions are reported as "skipped" without hitting the API.
+    // Позиция с невалидной валидацией — не «пропущенная», а форсируемая:
+    // обход требует причины, поэтому она ждёт подтверждения оператора.
+    const eligibleIds: number[] = []
+    const overrideIds: number[] = []
+    const skipped: BulkActionResultItem<number>[] = []
+    for (const id of selectedIds) {
+      const pos = selectedPositionsMap.get(id)
+      if (!pos) {
+        skipped.push({ id, status: "failed", reason: "Позиция не найдена" })
+      } else if (canApprovePosition(pos)) {
+        eligibleIds.push(id)
+      } else if (pos.route_id !== null && pos.validation_status !== 'valid') {
+        overrideIds.push(id)
+      } else {
+        skipped.push({ id, status: "skipped", reason: getApproveIneligibleReason(pos) ?? "Не может быть утверждена" })
+      }
+    }
+
+    if (overrideIds.length > 0) {
+      setBulkOverrideRun({ planId: targetPlanId, ids: [...eligibleIds, ...overrideIds], force: true, skipped })
+      setBulkOverrideReason("")
+      return
+    }
+
+    await runBulkApprove({ planId: targetPlanId, ids: eligibleIds, force: false, skipped })
+  }
+
+  const confirmBulkOverride = async () => {
+    const run = bulkOverrideRun
+    const reason = bulkOverrideReason.trim()
+    if (!run || !reason) return
+    setBulkOverrideRun(null)
+    setBulkOverrideReason("")
+    await runBulkApprove(run, reason)
   }
 
   const requestBulkDelete = () => {
@@ -930,6 +965,42 @@ export function PlanPage() {
         results={bulkResults}
       />
       )}
+
+      <AlertDialog open={bulkOverrideRun !== null} onOpenChange={(open) => { if (!open) setBulkOverrideRun(null) }}>
+        <AlertDialogContent>
+          <AlertDialogHeader>
+            <AlertDialogTitle>Утвердить с перекрытием валидации</AlertDialogTitle>
+            <AlertDialogDescription>
+              В выбранных {bulkOverrideRun?.ids.length ?? 0} позициях есть непройденная валидация.
+              Они уйдут в работу с перекрытой валидацией: ошибки останутся на позициях, а причина
+              попадёт в журнал действий.
+            </AlertDialogDescription>
+          </AlertDialogHeader>
+          <label htmlFor="bulk-override-reason" className="text-sm font-medium block mb-1">
+            Причина перекрытия валидации
+          </label>
+          <textarea
+            id="bulk-override-reason"
+            value={bulkOverrideReason}
+            onChange={(e) => setBulkOverrideReason(e.target.value)}
+            rows={3}
+            placeholder="Например: запрещённый этап исключён по заявке технолога №123"
+            className="w-full rounded-md border bg-background px-2 py-1 text-sm"
+          />
+          <AlertDialogFooter>
+            <AlertDialogCancel disabled={bulkApproving}>Отмена</AlertDialogCancel>
+            <AlertDialogAction
+              onClick={(e) => {
+                e.preventDefault()
+                void confirmBulkOverride()
+              }}
+              disabled={bulkApproving || bulkOverrideReason.trim().length === 0}
+            >
+              {bulkApproving ? "Утверждение..." : "Утвердить с причиной"}
+            </AlertDialogAction>
+          </AlertDialogFooter>
+        </AlertDialogContent>
+      </AlertDialog>
 
       <AlertDialog open={bulkDeleteConfirmOpen} onOpenChange={setBulkDeleteConfirmOpen}>
         <AlertDialogContent>

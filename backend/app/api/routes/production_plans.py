@@ -309,13 +309,14 @@ async def approve_position(
     production_plan_id: int,
     position_id: int,
     force: bool = False,
+    reason: str | None = None,
     db: AsyncSession = Depends(get_db),
     current_user: User = Depends(get_current_user),
 ) -> dict:
     logger = logging.getLogger(__name__)
     try:
         position = await approve_plan_position(
-            db, production_plan_id, position_id, force=force, changed_by=current_user.id
+            db, production_plan_id, position_id, force=force, changed_by=current_user.id, reason=reason
         )
     except ValueError as exc:
         logger.warning("approve_position rejected: %s (plan=%d, pos=%d, force=%s)", exc, production_plan_id, position_id, force)
@@ -520,6 +521,7 @@ async def bulk_approve_positions(
                     position_id,
                     force=payload.force,
                     changed_by=current_user.id,
+                    reason=payload.reason,
                 )
                 results.append(
                     BulkActionResultItem(

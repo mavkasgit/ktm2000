@@ -368,7 +368,13 @@ async def run_full_route_test(
 
     # Approve the position
     try:
-        await approve_plan_position(db, position.production_plan_id, position.id, force=True)
+        await approve_plan_position(
+            db,
+            position.production_plan_id,
+            position.id,
+            force=True,
+            reason=f"Демо-прогон {run_id}: маршрут стенда подставлен принудительно",
+        )
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=f"Approve failed: {exc}") from exc
 
