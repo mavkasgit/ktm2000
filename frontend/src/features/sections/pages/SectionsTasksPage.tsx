@@ -805,39 +805,6 @@ export function SectionsTasksPage() {
     });
   }, [bulkSelection, pushActionLog, selectedSection, board]);
 
-  // Bulk operations via panel
-  const handleBulkComplete = useCallback(async (entries: { taskId: number; goodQty: string; defectQty: string }[]) => {
-    setBulkProgress({ total: entries.length, completed: 0, running: true });
-    const lockOptions = lockedSectionId !== null ? { singleSectionLockId: lockedSectionId } : undefined;
-    
-    const totalGood = entries.reduce((sum, e) => sum + toQtyInteger(e.goodQty), 0);
-    const totalDefect = entries.reduce((sum, e) => sum + toQtyInteger(e.defectQty), 0);
-
-    try {
-      const response = await bulkCompleteTasks(
-        entries.map((entry) => ({
-          task_id: entry.taskId,
-          good_quantity: entry.goodQty,
-          defect_quantity: entry.defectQty || "0",
-          idempotency_key: makeIdempotencyKey("bulk-complete"),
-          executor_user_id: me?.id,
-          performed_at: nowLocalDateTime(),
-          accounted_at: nowLocalDateTime(),
-        })),
-        lockOptions,
-      );
-      const results: BulkActionResultItem<number>[] = response.results.map((r) => ({
-        id: r.id,
-        status: r.status,
-        reason: r.reason,
-      }));
-      finishBulk(results, totalGood, totalDefect);
-    } catch (e) {
-      const reason = getErrorMessage(e);
-      finishBulk(entries.map((entry) => ({ id: entry.taskId, status: "failed" as const, reason })), totalGood, totalDefect);
-    }
-  }, [me?.id, lockedSectionId, finishBulk]);
-
   const handleBulkExecuteAll = useCallback(async (data: {
     completeEntries: { taskId: number; goodQty: string; defectQty: string }[];
     performedAt?: string;
@@ -865,6 +832,9 @@ export function SectionsTasksPage() {
             executor_user_id: me?.id,
             performed_at: effectivePerformedAt,
             accounted_at: effectiveAccountedAt,
+            // Авто-передача при фиксации факта обязательна (#187):
+            // панель массовых операций — тот же факт, только пачкой.
+            auto_transfer_next: true,
           })),
           lockOptions,
         );
