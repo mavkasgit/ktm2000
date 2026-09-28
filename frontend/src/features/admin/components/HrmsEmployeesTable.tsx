@@ -23,6 +23,7 @@ import {
   EMPLOYEE_SORT_FIELD_TO_API,
   type EmployeeSortField,
 } from "../lib/employeeColumns"
+import { isFirstRowsLoad } from "@/shared/lib/tableQueryPlaceholder"
 
 const headerCellClass = `${DATA_TABLE_STYLES.headerRow} ${DATA_TABLE_STYLES.headerCell}`
 /**
@@ -57,7 +58,8 @@ export function HrmsEmployeesTable({
   emptyMessage = "Кеш пуст. Запустите синхронизацию, чтобы загрузить сотрудников из HRMS.",
 }: HrmsEmployeesTableProps) {
   const [search, setSearch] = useState("")
-  // Поиск уходит на сервер: без паузы каждый символ — отдельный запрос. В
+  // Верхний поиск отложен тем же правилом, что и поповер: он уходит на сервер,
+  // и без паузы каждый символ — отдельный запрос (ADR-0037, ADR-0044). В
   // задержке только запрос, само поле отвечает на ввод сразу.
   const debouncedSearch = useDebouncedValue(search);
 
@@ -198,7 +200,7 @@ export function HrmsEmployeesTable({
             </tr>
           </thead>
           <tbody className="divide-y">
-            {isPending && employees.length === 0 ? (
+            {isFirstRowsLoad(isPending, employees) ? (
               <tr>
                 <td colSpan={6} className="px-4 py-8 text-center text-sm text-muted-foreground">
                   <Loader2 className="h-5 w-5 animate-spin inline-block mr-2" />

@@ -48,6 +48,15 @@ export interface SortableFilterHeaderProps<Field extends string, SortField exten
    * сейчас», и ждать после этого полсекунды незачем.
    */
   onApplySearch?: () => void;
+  /**
+   * Текст в поповере фильтрует выборку (server-колонка): пока он введён,
+   * список значений скрыт, а выбранное значение снимается.
+   *
+   * false у колонки, чей поиск сужает только список: у `exactMatch` текст не
+   * уезжает в запрос, и скрывать единственный список, который он сужает, —
+   * значит сломать поиск, ничего не дав взамен.
+   */
+  searchFiltersTable?: boolean;
 }
 
 /**
@@ -57,11 +66,13 @@ export interface SortableFilterHeaderProps<Field extends string, SortField exten
  * - Search in popover: partial match + relevance sort; live table filter via
  *   onSearchChange
  *
- * Пока в поповере введён текст, списка значений на экране нет: одно поле — одно
- * действие, и «ищу подстроку» с «выбираю значение» не должны быть двумя
- * молчащими режимами одного контрола. Текст приоритетнее выбора, поэтому
- * непустой текст снимает выбранное значение, а не оставляет его жить в
- * состоянии невидимым.
+ * Пока в поповере серверной колонки введён текст, списка значений на экране
+ * нет: одно поле — одно действие, и «ищу подстроку» с «выбираю значение» не
+ * должны быть двумя молчащими режимами одного контрола. Текст приоритетнее
+ * выбора, поэтому непустой текст снимает выбранное значение, а не оставляет
+ * его жить в состоянии невидимым. У колонки, чей поиск сужает только список
+ * (`searchFiltersTable: false`), список остаётся: там текст — это поиск по
+ * списку, и скрывать нечего, кроме самого поиска.
  */
 export function SortableFilterHeader<Field extends string, SortField extends string = Field>({
   field,
@@ -78,6 +89,7 @@ export function SortableFilterHeader<Field extends string, SortField extends str
   onSearchChange,
   multiSelect = false,
   onApplySearch,
+  searchFiltersTable = true,
 }: SortableFilterHeaderProps<Field, SortField>) {
   const [internalSearchQuery, setInternalSearchQuery] = useState("");
   const [open, setOpen] = useState(false);
@@ -90,12 +102,14 @@ export function SortableFilterHeader<Field extends string, SortField extends str
       setInternalSearchQuery(query);
       onSearchChange?.(field, query);
       // Непустой текст забирает контрол себе: оставить при этом выбранное
-      // значение значит показать в шапке фильтр, которого в запросе нет.
-      if (query.trim() && selectedValues.size > 0) {
+      // значение значит показать в шапке фильтр, которого в запросе нет. У
+      // колонки, чей текст сужает только список, выбранное значение — часть
+      // этого списка, и снимать его незачем.
+      if (searchFiltersTable && query.trim() && selectedValues.size > 0) {
         onFilterChange(field, new Set());
       }
     },
-    [field, onSearchChange, onFilterChange, selectedValues],
+    [field, onSearchChange, onFilterChange, searchFiltersTable, selectedValues],
   );
 
   const applyAndClose = useCallback(() => {
@@ -212,7 +226,7 @@ export function SortableFilterHeader<Field extends string, SortField extends str
               className="h-7 text-xs"
               autoFocus
             />
-            {hasSearchFilter ? (
+            {searchFiltersTable && hasSearchFilter ? (
               <p className="px-1 text-[10px] text-muted-foreground">
                 Список значений скрыт, пока идёт поиск. Сбросить — «Сбросить колонку».
               </p>

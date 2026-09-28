@@ -18,6 +18,7 @@ import { buildSortParam } from "@/shared/lib/sortQueryParam";
 import { buildColumnApiParams } from "@/shared/lib/columnSpecs";
 import { useDebouncedValue } from "@/shared/lib/useDebouncedValue";
 import { keepPreviousData } from "@tanstack/react-query";
+import { isFirstRowsLoad } from "@/shared/lib/tableQueryPlaceholder";
 import { auditColumns, type AuditFilterField } from "../lib/auditColumns";
 
 type LogFilterField = AuditFilterField;
@@ -362,7 +363,7 @@ export function AuditLogsPage() {
 
         {/* Таблица */}
         <div className={DATA_TABLE_STYLES.container}>
-          {isPending ? (
+          {isFirstRowsLoad(isPending, parsedLogs) ? (
             <div className="flex items-center justify-center py-20 text-slate-400 text-sm">
               Загрузка журнала аудита...
             </div>

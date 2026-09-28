@@ -67,7 +67,10 @@ export function DataTableColumnHeader<Field extends string, SortField extends st
     ? {}
     : exactMatch
       ? { selectedValues: bound.selectedValues, onFilterChange: bound.onFilterChange }
-      : { ...bound, onApplySearch: bound.onApplySearch };
+      : bound;
+  // Поиск `exactMatch` сужает только список значений — он не уезжает в запрос
+  // и не забирает контрол себе, поэтому приоритет текста на нём не действует.
+  const searchFiltersTable = !exactMatch;
   // Несколько значений выбирает только колонка, которую фильтрует сам экран:
   // сервер принимает на колонку одно значение, и лишний выбор ушёл бы в
   // никуда, оставив бейдж несуществующего фильтра (ADR-0044).
@@ -84,6 +87,7 @@ export function DataTableColumnHeader<Field extends string, SortField extends st
       values={values ?? []}
       valueLabel={valueLabel}
       multiSelect={multiSelect}
+      searchFiltersTable={searchFiltersTable}
       {...searchBinding}
     />
   );

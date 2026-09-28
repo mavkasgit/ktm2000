@@ -50,6 +50,7 @@ import { toast } from "@/shared/ui/use-toast"
 import { getErrorMessage } from "@/shared/api/client"
 import { usePermission } from "@/features/auth/hooks/usePermission"
 import { backupStageLabels, backupStorageLabels } from "@/shared/lib/generated-labels"
+import { isFirstRowsLoad } from "@/shared/lib/tableQueryPlaceholder"
 import {
   backupColumns,
   backupsDefaultSort,
@@ -770,7 +771,7 @@ export function BackupsPage() {
             </tr>
           </thead>
           <tbody>
-            {isPending && displayedBackups.length === 0 ? (
+            {isFirstRowsLoad(isPending, displayedBackups) ? (
               <tr>
                 <td colSpan={isReadOnly ? 8 : 9} className="px-3 py-4 text-center text-muted-foreground text-xs">
                   Загрузка...

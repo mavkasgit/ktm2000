@@ -56,6 +56,7 @@ import { buildExecutionSortParam } from "../lib/executionSortMapping";
 import { useDebouncedValue } from "@/shared/lib/useDebouncedValue";
 import { buildColumnApiParams } from "@/shared/lib/columnSpecs";
 import { executionTableColumns } from "../components/execution-table-columns";
+import { isFirstRowsLoad } from "@/shared/lib/tableQueryPlaceholder";
 
 /**
  * Параметры запроса по отфильтрованным колонкам — из описания колонок, а не
@@ -871,7 +872,10 @@ export function ExecutionPage() {
     scopeRef: tableScrollRef,
     filteredIds,
     hasSelection: bulkSelection.selectedCount > 0,
-    disabled: isFetching,
+    // Блокируются только пока строк на экране нет: массовые действия выводятся
+    // из загруженных строк, и на фоновой перезагрузке (страница, сортировка)
+    // отключать их незачем — на экране дерево, строки на месте (ADR-0044).
+    disabled: rows.length === 0,
     isRunning: Boolean(bulkProgress?.running),
     selectAllFiltered: bulkSelection.selectAllFiltered,
     clear: bulkSelection.clear,
@@ -896,7 +900,7 @@ export function ExecutionPage() {
   // Заглушка — только пока строк не было ни разу. Дальше дерево остаётся на
   // месте, а смену параметров показывает `isFetching`: иначе смена страницы
   // или фильтра размонтировала бы таблицу вместе с открытым поповером.
-  if (isPending && rows.length === 0) {
+  if (isFirstRowsLoad(isPending, rows)) {
     return <div className="p-6 text-sm text-muted-foreground">Загрузка...</div>;
   }
 

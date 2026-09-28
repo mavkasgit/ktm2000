@@ -1,12 +1,13 @@
 import { useCallback, useEffect, useMemo, useState } from "react";
-import { keepPreviousData, useQuery } from "@tanstack/react-query";
+import { useQuery } from "@tanstack/react-query";
 
 import {
   formatQualityStateLabel,
   formatDimensionsLabel,
   getStockBalances,
 } from "@/shared/api/stock";
-import type { StockBalanceEntry } from "@/shared/api/stock";
+import type { StockBalanceEntry, StockBalancesListResponse } from "@/shared/api/stock";
+import { isFirstRowsLoad, keepPreviousDataForScope } from "@/shared/lib/tableQueryPlaceholder";
 import { queryKeys } from "@/shared/api/queryKeys";
 import { DataTableColumnHeader } from "./DataTableColumnHeader";
 import { TablePanelHeader } from "./TablePanelHeader";
@@ -159,9 +160,9 @@ export function StockBalancesPanel({
     ],
   );
 
-  // `placeholderData: keepPreviousData` держит дерево на смене параметров:
-  // без него гейт ниже гасит панель целиком вместе с открытым поповером
-  // фильтра, и набранный текст теряется на ровном месте (ADR-0044).
+  // Дерево держится на смене страницы, фильтра и сортировки, но НЕ через смену
+  // склада: склад меняется выбором, и placeholder оставил бы под новым заголовком
+  // остатки прежнего (ADR-0044).
   const { data, isPending } = useQuery({
     queryKey: queryKeys.stock.balances({
       locationId,
@@ -178,7 +179,13 @@ export function StockBalancesPanel({
     }),
     queryFn: () => getStockBalances(balanceQueryParams),
     enabled,
-    placeholderData: keepPreviousData,
+    placeholderData: keepPreviousDataForScope<StockBalancesListResponse>(
+      (key) => {
+        const params = key[1] as { locationId?: number; locationIds?: number[] } | undefined;
+        return `${params?.locationId ?? ""}|${params?.locationIds?.join(",") ?? ""}`;
+      },
+      `${locationId ?? ""}|${normalizedLocationIds?.join(",") ?? ""}`,
+    ),
   });
 
   const balances = data?.balances ?? [];
@@ -224,7 +231,7 @@ export function StockBalancesPanel({
 
       {isExpanded && (
         <>
-          {isPending && balances.length === 0 ? (
+          {isFirstRowsLoad(isPending, balances) ? (
             <p className="text-sm text-muted-foreground py-4 text-center">Загрузка остатков...</p>
           ) : total === 0 ? (
             <div className="text-center py-8 text-sm text-muted-foreground border rounded-lg border-dashed">

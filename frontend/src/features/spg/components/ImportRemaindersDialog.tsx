@@ -314,7 +314,7 @@ export function ImportRemaindersDialog({
       debouncedSearch,
       filterStatus,
       columnFilters,
-      columnSearchQueries,
+      debouncedColumnSearchQueries,
       sortConfigs,
     ],
   });
@@ -990,8 +990,11 @@ export function ImportRemaindersDialog({
 
               <ImportPreview.TableFrame
                 className={`${DATA_TABLE_STYLES.container} min-h-0`}
-                loading={previewLoading}
-                isEmpty={!previewLoading && previewItems.length === 0}
+                // Спиннер — только пока предпросмотра на экране не было ни
+                // разу: перечитывание по фильтру не должно уносить таблицу
+                // вместе с открытым поповером и набранным текстом (ADR-0044).
+                loading={previewLoading && !previewData}
+                isEmpty={previewData !== null && previewItems.length === 0}
                 emptyContent={
                   previewData && previewItemsTotal > 0 ? (
                     <span>Нет строк по текущему фильтру или поиску.</span>

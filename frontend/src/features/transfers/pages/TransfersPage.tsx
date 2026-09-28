@@ -62,12 +62,15 @@ import {
   type IncomingTransfer,
   type ReadyToTransferTask,
   type TransferHistoryListParams,
+  type ReadyToTransferResponse,
+  type TransferHistoryResponse,
 } from "@/shared/api/transfers";
 import { getErrorMessage } from "@/shared/api/client";
 import { invalidateAfter } from "@/shared/api/cacheInvalidation";
 import { queryKeys } from "@/shared/api/queryKeys";
 import { formatDimensionsFilterValue, formatDimensionsLabel } from "@/shared/api/stock";
 import { buildColumnApiParams } from "@/shared/lib/columnSpecs";
+import { isFirstRowsLoad, keepPreviousDataForScope } from "@/shared/lib/tableQueryPlaceholder";
 import { historyColumns, readyColumns } from "../lib/transferColumns";
 import { TABLE_ROW_COMPACT } from "@/shared/lib/dataTableStyles";
 import { cn } from "@/shared/utils/cn";
@@ -713,9 +716,10 @@ export function TransfersPage() {
     ],
   );
 
-  // `placeholderData: keepPreviousData` держит дерево на смене параметров:
-  // без него гейт ниже гасит обе таблицы вместе с открытым поповером фильтра,
-  // и набранный текст теряется на ровном месте (ADR-0044).
+  // Дерево держится на смене страницы, фильтра и сортировки, но НЕ через смену
+  // ГХП: он переключается селектом без размонтирования, и placeholder оставил бы
+  // строки прежнего ГХП под новым — при том, что подписи участков в них уже
+  // пересчитаны по новому (ADR-0044).
   const { data: readyData, isPending: readyPending, refetch: refetchReady } = useQuery({
     queryKey: showAllSpgs
       ? queryKeys.transfers.readyAll(readyQueryParams)
@@ -726,7 +730,10 @@ export function TransfersPage() {
         ...readyQueryParams,
       }),
     enabled: showAllSpgs || activeSpgId != null,
-    placeholderData: keepPreviousData,
+    placeholderData: keepPreviousDataForScope<ReadyToTransferResponse>(
+      (key) => key[1],
+      showAllSpgs ? "all" : activeSpgId,
+    ),
   });
 
   const {
@@ -790,7 +797,10 @@ export function TransfersPage() {
         ...historyQueryParams,
       }),
     enabled: showAllSpgs || activeSpgId != null,
-    placeholderData: keepPreviousData,
+    placeholderData: keepPreviousDataForScope<TransferHistoryResponse>(
+      (key) => key[1],
+      showAllSpgs ? "all" : activeSpgId,
+    ),
   });
 
   const readyItems = readyData?.items ?? [];
@@ -1146,7 +1156,7 @@ export function TransfersPage() {
           )}
         </CardHeader>
         <CardContent>
-          {readyPending && readyItems.length === 0 ? (
+          {isFirstRowsLoad(readyPending, readyItems) ? (
             <div className="text-sm text-muted-foreground py-4 text-center">Загрузка…</div>
           ) : readyTotal === 0 && !debouncedReadySearch.trim() && !hasReadyFiltersActive ? (
             <div className="text-sm text-muted-foreground py-6 text-center">
@@ -1299,7 +1309,7 @@ export function TransfersPage() {
             </div>
           </div>
           <div className="flex-1 overflow-auto p-4">
-            {historyPending && historyItems.length === 0 ? (
+            {isFirstRowsLoad(historyPending, historyItems) ? (
               <div className="text-sm text-muted-foreground py-4 text-center">Загрузка…</div>
             ) : historyTotal === 0 && !hasHistoryFiltersActive ? (
               <div className="text-sm text-muted-foreground py-6 text-center">

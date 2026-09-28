@@ -38,6 +38,7 @@ import { isLengthState } from "@/shared/lib/dimensionState";
 import { cn } from "@/shared/utils/cn";
 import { useDebouncedValue } from "@/shared/lib/useDebouncedValue";
 import { fmtQtyPrecise } from "@/shared/lib/quantityFormat";
+import { isFirstRowsLoad } from "@/shared/lib/tableQueryPlaceholder";
 
 type ViewMode = "grid" | "table" | "calc";
 type DialogMode = "create" | "edit";
@@ -639,7 +640,7 @@ export function RawMaterialsPage() {
 
       {viewMode === "calc" ? (
         <HangerCalcTable readOnly={isReadOnly} onEdit={openEdit} />
-      ) : isPending && items.length === 0 ? (
+      ) : isFirstRowsLoad(isPending, items) ? (
         <div className="text-muted-foreground py-8 text-center">Загрузка...</div>
       ) : viewMode === "grid" && items.length === 0 ? (
         <div className="text-muted-foreground py-8 text-center">Ничего не найдено</div>

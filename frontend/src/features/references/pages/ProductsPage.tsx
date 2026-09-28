@@ -16,6 +16,7 @@ import { ProductPhoto } from "../components/ProductPhoto";
 import { ProductCardDialog } from "../components/ProductCardDialog";
 import { fmtQtyPrecise } from "@/shared/lib/quantityFormat";
 import { useDebouncedValue } from "@/shared/lib/useDebouncedValue";
+import { isFirstRowsLoad } from "@/shared/lib/tableQueryPlaceholder";
 
 const headerCellClass = `${DATA_TABLE_STYLES.headerRow} ${DATA_TABLE_STYLES.headerCell}`;
 
@@ -98,7 +99,7 @@ export function ProductsPage() {
 
       {error && <div className="text-sm text-destructive bg-destructive/10 p-3 rounded-md">{error}</div>}
 
-      {isPending && items.length === 0 ? (
+      {isFirstRowsLoad(isPending, items) ? (
         <div className="text-muted-foreground py-8 text-center">Загрузка...</div>
       ) : (
         <div className="rounded-lg border bg-card overflow-x-auto">

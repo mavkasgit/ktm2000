@@ -39,6 +39,7 @@ import { Badge } from "@/shared/ui/badge"
 import { toast } from "@/shared/ui/use-toast"
 import { getErrorMessage } from "@/shared/api/client"
 import { usePermission } from "@/features/auth/hooks/usePermission";
+import { isFirstRowsLoad } from "@/shared/lib/tableQueryPlaceholder";
 
 // Reverse mapping: header name (normalized) → system key
 const HEADER_KEY_BY_NAME: Record<string, string> = {
@@ -185,7 +186,7 @@ export function ImportTemplatesPage() {
         )}
       </div>
 
-      {isPending && templates.length === 0 && <p className="text-sm text-muted-foreground">Загрузка...</p>}
+      {isFirstRowsLoad(isPending, templates) && <p className="text-sm text-muted-foreground">Загрузка...</p>}
 
       {!isPending && total === 0 && (
         <div className="rounded-lg border p-8 text-center text-sm text-muted-foreground">

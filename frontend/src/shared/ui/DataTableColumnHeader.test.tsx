@@ -109,4 +109,40 @@ describe("DataTableColumnHeader", () => {
     expect(header.searches()).toEqual({});
     expect(header.hasActiveFilters()).toBe(false);
   });
+
+  it("у точной колонки текст сужает список значений на экране, а выбранное остаётся", () => {
+    // Поповер рисуется по описанию колонки, и «Размер» обязан получить тот,
+    // где текст ищет по списку. Получи серверный — выбор молча снялся бы на
+    // первом же символе, а оператор искал бы по списку, которого на экране
+    // нет.
+    const header = mountColumnHeader(
+      { filterField: "dimensions", sortField: "dimensions", exactMatch: true, label: "Размер" },
+      ["2700x1500", "1800x600"],
+    );
+    header.open();
+    fireEvent.click(screen.getByText("2700x1500"));
+
+    fireEvent.change(screen.getByPlaceholderText("Поиск..."), { target: { value: "1800" } });
+
+    expect(screen.getByText("1800x600")).toBeTruthy();
+    expect(screen.queryByText("2700x1500")).toBeNull();
+    expect(screen.queryByText(/Список значений скрыт/)).toBeNull();
+    expect(header.selected()).toEqual({ dimensions: new Set(["2700x1500"]) });
+  });
+
+  it("у обычной колонки тот же текст убирает список и снимает выбор", () => {
+    // Контр-случай к предыдущему: молчание точной колонки должно объясняться
+    // `exactMatch`, а не тем, что поповер вообще не реагирует на текст.
+    const header = mountColumnHeader(
+      { filterField: "sku", sortField: "sku", label: "Артикул" },
+      ["ЮП-460", "ABC-100"],
+    );
+    header.open();
+    fireEvent.click(screen.getByText("ЮП-460"));
+
+    fireEvent.change(screen.getByPlaceholderText("Поиск..."), { target: { value: "460" } });
+
+    expect(screen.getByText(/Список значений скрыт/)).toBeTruthy();
+    expect(header.selected()).toEqual({ sku: new Set() });
+  });
 });

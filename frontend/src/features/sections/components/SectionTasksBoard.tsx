@@ -30,6 +30,7 @@ import type { PageLimitOption } from "@/shared/hooks/usePaginatedTableQuery";
 import { useFilterableTable } from "@/shared/hooks/useFilterableTable";
 import { buildColumnFilterPredicate } from "@/shared/lib/columnFilterSearch";
 import { useDebouncedValue } from "@/shared/lib/useDebouncedValue";
+import { isFirstRowsLoad } from "@/shared/lib/tableQueryPlaceholder";
 import {
   buildBoardServerQueryParams,
   isServerSortField,
@@ -518,10 +519,9 @@ export function SectionTasksBoard({
   onServerQueryChange,
 }: SectionTasksBoardProps) {
   const tableScrollRef = useRef<HTMLDivElement>(null);
-  // Заглушка уместна, только пока заданий на экране не было ни разу: это первая
-  // загрузка. Дальше дерево остаётся на месте, а смену страницы и фильтров
-  // показывает вызывающий экран (ADR-0044).
-  const showLoadingPlaceholder = isLoading && total === 0;
+  // Правило заглушки — общее для всех таблиц (ADR-0044), поэтому берётся из
+  // shared, а не пишется здесь выражением: тринадцать копий однажды разъедутся.
+  const showLoadingPlaceholder = isFirstRowsLoad(isLoading, tasks);
   const [searchQuery, setSearchQuery] = useState("");
   const debouncedSearch = useDebouncedValue(searchQuery);
   const {

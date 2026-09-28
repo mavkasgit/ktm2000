@@ -163,9 +163,12 @@ describe("выбор значения в поповере", () => {
 
 describe("текст в поповере фильтра", () => {
   it("непустой текст убирает список значений и снимает ранее выбранное", () => {
-    // Пока идёт текстовый поиск, значения в списке не выбирают: оставить при
-    // этом старое выбранным — показать в шапке фильтр, которого в запросе нет.
-    const { emittedSelections } = mountFilterPopover();
+    // Контр-случай к двум следующим: молчание колонки, чей текст сужает
+    // только список, должно объясняться `searchFiltersTable={false}`, а не тем,
+    // что правило мертво. Пока идёт текстовый поиск, значения в списке не
+    // выбирают: оставить при этом старое выбранным — показать в шапке фильтр,
+    // которого в запросе нет.
+    const { emittedSelections } = mountFilterPopover({ searchFiltersTable: true });
     fireEvent.click(screen.getByText("ЮП-460"));
 
     fireEvent.change(searchInput(), { target: { value: "460" } });
@@ -173,6 +176,33 @@ describe("текст в поповере фильтра", () => {
     expect(screen.queryByText("ABC-100")).toBeNull();
     expect(screen.getByText(/Список значений скрыт/)).toBeTruthy();
     expect(emittedSelections).toEqual([new Set(["ЮП-460"]), new Set()]);
+  });
+
+  it("у колонки, чей текст сужает только список, значения остаются на экране и выбор не снимается", () => {
+    // «Размер» выбирается кликом по габариту, и её поиск ищет по списку, а не
+    // по выборке. Выбранный габарит — часть этого списка: снять его текстом
+    // значит стереть у оператора выбор, которого он не менял.
+    const { emittedSelections } = mountFilterPopover({ searchFiltersTable: false });
+    fireEvent.click(screen.getByText("ЮП-460"));
+
+    fireEvent.change(searchInput(), { target: { value: "460" } });
+
+    // Список на экране и сужен текстом: несовпавшее значение ушло из него.
+    expect(screen.getByText("ЮП-460")).toBeTruthy();
+    expect(screen.queryByText("ABC-100")).toBeNull();
+    expect(screen.queryByText(/Список значений скрыт/)).toBeNull();
+    expect(emittedSelections).toEqual([new Set(["ЮП-460"])]);
+  });
+
+  it("у колонки, чей текст сужает только список, значение под текстом всё ещё выбирается", () => {
+    // Список, который нарисован, но не выбирается, обманывает хуже скрытого:
+    // оператор кликает по габариту и не получает ничего.
+    const { emittedSelections } = mountFilterPopover({ searchFiltersTable: false });
+
+    fireEvent.change(searchInput(), { target: { value: "460" } });
+    fireEvent.click(screen.getByText("ЮП-460"));
+
+    expect(emittedSelections).toEqual([new Set(["ЮП-460"])]);
   });
 
   it("пробельный текст не считается непустым: список остаётся, выбор не снимается", () => {

@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
-import { keepPreviousData, useQuery } from "@tanstack/react-query";
+import { useQuery } from "@tanstack/react-query";
 import { Loader2, Search, X } from "lucide-react";
 
 import {
@@ -22,10 +22,11 @@ import {
   formatQualityStateLabel,
   formatStockReasonLabel,
 } from "@/shared/api/stock";
-import type { StockTransactionEntry, StockTransactionsParams } from "@/shared/api/stock";
+import type { StockTransactionEntry, StockTransactionsListResponse, StockTransactionsParams } from "@/shared/api/stock";
 import { queryKeys } from "@/shared/api/queryKeys";
 import { buildColumnApiParams } from "@/shared/lib/columnSpecs";
 import { useDebouncedValue } from "@/shared/lib/useDebouncedValue";
+import { isFirstRowsLoad, keepPreviousDataForScope } from "@/shared/lib/tableQueryPlaceholder";
 import { fmtQty } from "@/shared/lib/quantityFormat";
 import {
   buildTransactionSortParam,
@@ -210,9 +211,9 @@ export function StockTransactionsHistoryDrawer({
     ],
   );
 
-  // `placeholderData: keepPreviousData` держит дерево на смене параметров:
-  // без него гейт ниже гасит журнал целиком вместе с открытым поповером
-  // фильтра, и набранный текст теряется на ровном месте (ADR-0044).
+  // Дерево держится на смене страницы, фильтра и сортировки, но НЕ через смену
+  // артикула или склада: они входят в ключ, и placeholder оставил бы проводки
+  // прежнего товара в ящике нового (ADR-0044).
   const { data, isPending } = useQuery({
     queryKey: queryKeys.stock.transactions({
       productId,
@@ -231,7 +232,13 @@ export function StockTransactionsHistoryDrawer({
     }),
     queryFn: () => getStockTransactions(txQueryParams),
     enabled: open && productId !== undefined,
-    placeholderData: keepPreviousData,
+    placeholderData: keepPreviousDataForScope<StockTransactionsListResponse>(
+      (key) => {
+        const params = key[1] as { productId?: number; locationId?: number } | undefined;
+        return `${params?.productId ?? ""}|${params?.locationId ?? ""}`;
+      },
+      `${productId ?? ""}|${locationId ?? ""}`,
+    ),
   });
 
   const transactions = data?.transactions ?? [];
@@ -306,7 +313,7 @@ export function StockTransactionsHistoryDrawer({
             />
           </div>
 
-          {isPending && transactions.length === 0 ? (
+          {isFirstRowsLoad(isPending, transactions) ? (
             <div className="flex items-center justify-center py-12">
               <Loader2 className="h-6 w-6 animate-spin text-muted-foreground" />
             </div>

@@ -19,6 +19,7 @@ import {
   type CreateDailyPlanInput,
   type DailyStatsRow,
   type SectionBoardTask,
+  type SectionBoardResponse,
   type TaskGroup,
   type ShortageStrategy,
   type DailyPlanCompositionItem,
@@ -27,6 +28,7 @@ import { invalidateAfter } from "@/shared/api/cacheInvalidation";
 import { queryKeys } from "@/shared/api/queryKeys";
 import { usePaginatedTableQuery } from "@/shared/hooks/usePaginatedTableQuery";
 import type { SectionBoardQueryParams } from "@/shared/api/shopfloor";
+import { isFirstRowsLoad, keepPreviousDataForScope } from "@/shared/lib/tableQueryPlaceholder";
 import { DateRangePicker, renderIcon, toast, Button, type DateRangeValue } from "@/shared/ui";
 import { useBulkSelection } from "@/shared/bulk";
 import { BulkResultsDialog, summarizeBulkResults, type BulkActionResultItem, type BulkActionSummary, type BulkRunnerProgress } from "@/shared/bulk";
@@ -297,9 +299,10 @@ export function SectionsTasksPage() {
     [boardParams, serverQuery, boardLimit, boardOffset],
   );
 
-  // `placeholderData: keepPreviousData` держит дерево на смене параметров
-  // запроса: без него `isLoading` гасит доску целиком вместе с открытым
-  // поповером фильтра, и набранный текст теряется на ровном месте (ADR-0044).
+  // Дерево держится на смене страницы, фильтра и сортировки, но НЕ через смену
+  // участка: участок переключается плитками без размонтирования, и placeholder
+  // оставил бы под шапкой нового участка задания прежнего — вместе с
+  // действиями над ними (ADR-0044).
   const { data: board, isPending: boardPending } = useQuery({
     queryKey: queryKeys.shopfloor.board(sectionId as number, {
       ...boardQueryParams,
@@ -308,7 +311,10 @@ export function SectionsTasksPage() {
     queryFn: () => getSectionBoard(sectionId as number, boardQueryParams, requestOptions),
     enabled: sectionId !== null && !!me?.id && !isSingleWindowBlocked,
     retry: false,
-    placeholderData: keepPreviousData,
+    placeholderData: keepPreviousDataForScope<SectionBoardResponse>(
+      (key) => key[1],
+      sectionId,
+    ),
   });
   const { data: dailyPlans, isLoading: dailyPlansLoading } = useQuery({
     queryKey: queryKeys.dailyPlans.list(sectionId as number),
