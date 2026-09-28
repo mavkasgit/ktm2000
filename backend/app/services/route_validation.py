@@ -117,7 +117,17 @@ async def validate_route_match(
     if not steps:
         return []
 
-    active_section_ids = {step.section_id for step in steps}
+    # Складской этап лежит в `storage_section_id`, а не в `section_id` (тикет
+    # #178: складские шаги импорта стали транзит-хопами). Раньше здесь брались
+    # только `section_id`, поэтому ЛЮБОЙ маршрут со складскими этапами
+    # объявлялся неполным — approve упирался в форс-аппрув по причине,
+    # которой на самом деле нет. Транзит-хоп это тоже этап маршрута.
+    active_section_ids = {
+        sid
+        for step in steps
+        for sid in (step.section_id, step.storage_section_id)
+        if sid is not None
+    }
     required_ids = set(selection.required_section_ids)
     excluded_ids = set(selection.excluded_section_ids)
     issues: list[str] = []

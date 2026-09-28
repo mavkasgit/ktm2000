@@ -3,6 +3,13 @@ from __future__ import annotations
 SELECTION_RULES = [
     {
         "code": "core_sections",
+        # SHIPMENT/SHIPPED здесь намеренно НЕ требуются: завод делает и
+        # маршруты с отправкой, и без неё, и требование было безусловным.
+        # Следствие было не косметическим — любой маршрут без отправки получал
+        # `route_missing_required_step` на approve и упирался в форс-аппрув,
+        # то есть утвердить обычную позицию было невозможно в принципе.
+        # Требование отправки задаётся составом самого маршрута: если этапы
+        # отгрузки нужны, их вносит тот, кто создаёт маршрут.
         "name": "Базовые участки маршрута",
         "profile_code": "packaging_map_rp",
         "priority": 1000,
@@ -13,8 +20,6 @@ SELECTION_RULES = [
             {"action": "require_section", "section_code": "RAW_STOCK"},
             {"action": "require_section", "section_code": "ANODIZING"},
             {"action": "require_section", "section_code": "FINISHED_STOCK"},
-            {"action": "require_section", "section_code": "SHIPMENT"},
-            {"action": "require_section", "section_code": "SHIPPED"},
         ],
     },
     {
@@ -83,7 +88,7 @@ SELECTION_RULES = [
             {
                 "action": "set_operation_by_mapping",
                 "section_code": "PRESSING",
-                "group_code": "PRESSING",
+                "group_code": "PRESS",
                 "lookup_field": "operation",
                 "mapping": [
                     {"keyword": "окн", "operation_code": "PRESS_WINDOW"},
@@ -241,7 +246,7 @@ SELECTION_RULES = [
             {
                 "action": "set_operation_by_mapping",
                 "section_code": "ANODIZING",
-                "group_code": "ANODIZING",
+                "group_code": "ANOD",
                 "lookup_field": "color",
                 "mapping": [
                     {"keyword": "анодсеребро", "operation_code": "ANOD_01"},

@@ -92,6 +92,10 @@ htmlcov/
 *.xlsb
 *.ods
 
+# Тестовые Excel для e2e — единственный набор, который нужен в репозитории:
+# без него ручной импорт нечем проверять (тест грузит файл через UI-визард).
+!frontend/e2e/testdata/*.xlsx
+
 # Local Excel working area (sources, builds, archive) — not part of repo
 /excel/
 
