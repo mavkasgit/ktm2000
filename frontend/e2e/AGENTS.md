@@ -159,45 +159,68 @@ change-set); каталог/остатки — прямые вызовы API (`a
 (передача: Send → auto-accept → in_progress). Это минимально достаточный
 уровень уверенности для флоу, который операторы используют ежедневно.
 
-## Владение dev-стеком
+## Стенд: своя БД и свои порты (#220)
 
-Стеком владеет **Playwright** (`webServer` в [`playwright.config.ts`](../playwright.config.ts)):
-он сам стартует backend и frontend, сам ждёт готовности и по завершении
-прогона убивает своё дерево процессов. Поднимаются оба **параллельно**,
-у каждого `timeout: 120_000`, вывод обоих процессов Playwright сам показывает
-(`stdout: "pipe"`, `stderr: "pipe"`):
+Прогон идёт **параллельно** с работой в основном дереве: он не делит с devstack
+ни БД, ни порты, ни каталог файлов. Источник правды — [`.env.e2e`](../../.env.e2e)
+в корне репозитория (в git, копировать руками не нужно):
 
-| Сервер | Команда | Ждёт готовности | Порт по умолчанию |
-|--------|---------|-----------------|-------------------|
-| backend | `npm --prefix .. run backend` (корень репозитория: `cd backend && python scripts/dev_server.py`) | `http://127.0.0.1:<порт>/api/health` | 8012 |
-| frontend | `npm run dev` (vite) | `http://127.0.0.1:<порт>/` | 5172 |
+| Что | Стенд | devstack |
+|-----|-------|----------|
+| БД | `ktm2000_e2e` на тестовом Postgres `:5441` | `ktm2000_dev` на `:5440` |
+| Backend | `http://localhost:8013` | `:8012` |
+| Frontend | `http://localhost:5173` | `:5172` |
+| Хранилище файлов | `data/storage-e2e` | `data/storage-dev` |
 
-Порты конфиг берёт не из констант, а из окружения: frontend — порт из
-`PLAYWRIGHT_TEST_BASE_URL`, backend — порт из `E2E_API_URL`.
+Как это работает:
 
-БД — единственное, что осталось снаружи: её поднимает `npm run e2e:prep`
-в [`package.json`](../package.json) (`db:up` → `db:wait` → `db:migrate`),
-и делают это npm-скрипты `test:e2e*` **до** запуска Playwright — потому что
-`webServer` стартует команды параллельно, а `npm run backend` сам Docker не
-поднимает. Голый `npx playwright test` её не вызывает (см. «Отладка»).
+- **Подготовка** (`npm run e2e:prep` в [`package.json`](../package.json)):
+  `db:e2e:up` → `db:e2e:wait` → `db:e2e:create` → `db:e2e:migrate` →
+  `db:e2e:seed`. Всё это работает по `.env.e2e` (`scripts/with-env-file.mjs`
+  экспортирует `ENV_FILE` и значения файла в процесс), поэтому миграции и сиды
+  идут на БД стенда, а не на dev-БД.
+- **Guard.** `scripts/e2e-db.py ensure` до подключения сверяет DSN стенда с
+  dev-конфигом и **отказывается** работать, если имя базы или host:port — dev'евские
+  (код возврата 2). Общая dev-БД для прогона недостижима.
+- **Стенд поднимает Playwright** (`webServer` в
+  [`playwright.config.ts`](../playwright.config.ts)): он сам стартует backend и
+  frontend, сам ждёт готовности и по завершении прогона убивает своё дерево
+  процессов. Оба **параллельно**, у каждого `timeout: 120_000`, вывод обоих
+  процессов Playwright показывает сам (`stdout: "pipe"`, `stderr: "pipe"`):
+
+| Сервер | Команда | Ждёт готовности | Порт стенда |
+|--------|---------|-----------------|-------------|
+| backend | `npm --prefix .. run backend` + `ENV_FILE=.env.e2e`, `BACKEND_PORT` | `http://127.0.0.1:8013/api/health` | 8013 |
+| frontend | `npm run dev -- --port 5173 --strictPort` + `VITE_PROXY_TARGET` | `http://127.0.0.1:5173/` | 5173 |
+
+- **Адреса и порты** конфиг берёт не из констант, а из окружения, которое само
+  берётся из `.env.e2e`: frontend — порт из `PLAYWRIGHT_TEST_BASE_URL`, backend —
+  порт из `E2E_API_URL`. Переменная из окружения важнее файла, поэтому прогон
+  против своего стенда переопределяется снаружи.
+- **Vite проксирует `/api`** на `VITE_PROXY_TARGET`, который конфиг ставит в порт
+  backend стенда: иначе UI ходил бы в чужой backend. Порт vite передан
+  аргументом CLI, потому что в `vite.config.ts` он зашит на 5172 ради LAN-ссылок
+  devstack.
+- `npm run backend` (devstack) не менялся: там `ENV_FILE` не задан, поэтому
+  backend берёт `.env.dev` и дефолтный порт 8012.
 
 Отдельный запуск стек не требует. Ручной стек нужен только для отладки, и
 тогда запускать прогон надо с явным флагом владения:
 
 ```bash
-# терминал 1 — стек поднят руками
+# терминал 1 — стек поднят руками (тогда и БД у него своя, см. .env.dev)
 npm run dev
 
 # терминал 2 — прогон идёт против него и НЕ трогает его
-PW_REUSE_STACK=1 npm --prefix frontend run test:e2e:ui
+PW_REUSE_STACK=1 E2E_API_URL=http://localhost:8012/api \
+  PLAYWRIGHT_TEST_BASE_URL=http://localhost:5172 \
+  npm --prefix frontend run test:e2e:ui
 ```
 
-Без `PW_REUSE_STACK=1` прогон при занятых портах стека (по умолчанию 8012/5172)
-**падает** с сообщением Playwright про занятый порт, а чужой стек не трогает:
-`reuseExistingServer: false` — переиспользовать чужое нельзя.
-Молча брать чужой стек нельзя: он может быть старше рабочего дерева, и E2E
-поедет против старого бэкенда — это уже случалось (E2E шли с новым контрактом
-сортировки против бэкенда со старым, `500` на
+Без `PW_REUSE_STACK=1` Playwright не переиспользует чужой стек и не должен:
+`reuseExistingServer: false`. Молча брать чужой стек нельзя: он может быть
+старше рабочего дерева, и E2E поедет против старого бэкенда — это уже случалось
+(E2E шли с новым контрактом сортировки против бэкенда со старым, `500` на
 `/api/stock/import/remainders/preview`).
 
 Прогон без флагов:
@@ -282,14 +305,20 @@ E2E_SKIP_PASSED=1 npm --prefix frontend run test:e2e:ui
 
 ## Переменные окружения
 
-| Переменная | По умолчанию | Назначение |
+Дефолты всех четырёх берутся из [`.env.e2e`](../../.env.e2e) — конфиг читает
+файл при старте и **не перекрывает** уже заданные переменные окружения.
+Значения в таблице — дефолты стенда, а не devstack.
+
+| Переменная | По умолчанию (`.env.e2e`) | Назначение |
 |------------|--------------|------------|
-| `PLAYWRIGHT_TEST_BASE_URL` | `http://localhost:5172` | UI (`baseURL`) и порт frontend в `webServer` |
-| `E2E_API_URL` | — | Только для `@smoke`; fallback в `api-helpers.ts`: `http://localhost:8012`. В конфиге — ещё и порт backend в `webServer` |
+| `PLAYWRIGHT_TEST_BASE_URL` | `http://localhost:5173` | UI (`baseURL`) и порт frontend в `webServer` |
+| `E2E_API_URL` | `http://localhost:8013/api` | API для `@smoke`; в конфиге — ещё и порт backend в `webServer` |
+| `E2E_TEST_DATABASE_URL` | DSN `ktm2000_e2e` на `:5441` | БД стенда для `ensureDbBootstrapped` (достраивает справочники сам) |
 | `PW_REUSE_STACK` | — | `1` — стек поднят руками, Playwright его не трогает и не поднимает свой |
 | `E2E_SKIP_PASSED` | — | `1` — пропускать тесты, уже прошедшие на этой версии кода |
 
 ```cmd
+REM прогон против уже поднятого devstack
 set E2E_API_URL=http://localhost:8012/api
 set PLAYWRIGHT_TEST_BASE_URL=http://localhost:5172
 set PW_REUSE_STACK=1

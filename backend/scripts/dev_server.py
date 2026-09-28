@@ -30,6 +30,7 @@ import logging
 import os
 import subprocess
 import sys
+from collections.abc import Mapping
 from pathlib import Path
 
 import uvicorn
@@ -41,7 +42,30 @@ BACKEND_DIR = Path(__file__).resolve().parents[1]
 APP_DIR = (BACKEND_DIR / "app").resolve()
 APP_IMPORT = "app.main:app"
 HOST = "0.0.0.0"
-PORT = 8012
+DEFAULT_PORT = 8012
+PORT_ENV_VAR = "BACKEND_PORT"
+
+
+def resolve_port(env: Mapping[str, str] | None = None) -> int:
+    """Порт backend'а: ``$BACKEND_PORT``, иначе порт devstack.
+
+    Стенд E2E (#220) поднимает backend на своём порту рядом с работающим
+    devstack, поэтому порт не может быть константой. Некорректное значение —
+    ошибка, а не тихий откат на 8012: тот порт принадлежит чужому стеку, и
+    прогон молча уехал бы в чужой backend.
+    """
+    source: Mapping[str, str] = os.environ if env is None else env
+    raw = (source.get(PORT_ENV_VAR) or "").strip()
+    if not raw:
+        return DEFAULT_PORT
+    try:
+        port = int(raw)
+    except ValueError as exc:
+        raise ValueError(f"{PORT_ENV_VAR}={raw!r} — не число") from exc
+    if not 1 <= port <= 65535:
+        raise ValueError(f"{PORT_ENV_VAR}={raw!r} — вне диапазона 1..65535")
+    return port
+
 
 logger = logging.getLogger("uvicorn.error")
 
@@ -129,7 +153,7 @@ def main() -> int:
     config = uvicorn.Config(
         APP_IMPORT,
         host=HOST,
-        port=PORT,
+        port=resolve_port(),
         reload=True,
         reload_dirs=[str(APP_DIR)],
     )

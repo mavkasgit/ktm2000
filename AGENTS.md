@@ -20,10 +20,13 @@ npm run test:pytest            # Тесты backend (параллельно, д�
 npm run test:pytest:full       # Полный прогон в один поток
 npm run test:pytest:mon        # Только изменённые тесты
 npm run test:pytest:lf         # Только упавшие тесты
+npm run test:e2e              # Playwright на ОТДЕЛЬНОМ стенде: своя БД ktm2000_e2e (Postgres :5441), порты 8013/5173
 npm run test:db:cleanup        # Уборка осиротевших тестовых БД (TTL 24h)
 ```
 
 Порты dev: Postgres `5440`, backend `8012`, frontend `5172`.
+Стенд E2E (`npm run test:e2e`) не делит их: Postgres `5441`, backend `8013`,
+frontend `5173`, БД `ktm2000_e2e` — конфиг в `.env.e2e`.
 
 ### Если dev-стек не поднимается или «падает сам»
 
