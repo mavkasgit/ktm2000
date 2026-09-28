@@ -1,10 +1,10 @@
 /**
  * components/PlanHangerDisplay.tsx
  * ================================
- * Компонент отображения количества подвесов для печатной формы плана.
+ * Правила подсчёта подвесов и нормы на подвес для листа плана участка.
  *
- * Используется только в специфических сценариях печати,
- * где нужно показать количество подвесов и штук на подвес.
+ * Ячейки колонок печати собираются из описаний колонок в
+ * `planPrintSettings.ts`, поэтому здесь только вычисления.
  */
 
 import type { SectionBoardTask } from "@/shared/api/shopfloor";
@@ -67,47 +67,3 @@ export function adjustQtyToHanger(qty: number, qtyPerHanger: number | null) {
   return { hangers };
 }
 
-// ---------------------------------------------------------------------------
-// PlanHangerColumns — колонки подвесов для таблицы
-// ---------------------------------------------------------------------------
-
-interface PlanHangerColumnsProps {
-  groupQty: number;
-  task: SectionBoardTask;
-}
-
-/** Рендерит две ячейки таблицы: "Подвесов" и "Кол-во на подвес" */
-export function PlanHangerColumns({ groupQty, task }: PlanHangerColumnsProps) {
-  const qtyPerHanger = getQtyPerHanger(task);
-  const pairedLabel = getPairedHangerLabel(task);
-  const { hangers } = adjustQtyToHanger(groupQty, qtyPerHanger);
-
-  return (
-    <>
-      <td className="px-1 py-0.5 text-left">{hangers}</td>
-      <td className="px-1 py-0.5 text-left">{pairedLabel ?? (qtyPerHanger != null ? fmtQtyPrecise(qtyPerHanger) : "—")}</td>
-    </>
-  );
-}
-
-/** Рендерит два заголовка для колонки подвесов */
-export function PlanHangerHeaders() {
-  return (
-    <>
-      <th className="text-left px-1 py-0.5 font-semibold whitespace-nowrap">Подвесов</th>
-      <th className="text-left px-1 py-0.5 font-semibold" style={{ minWidth: "60px" }}>
-        Кол-во<br />на подвес
-      </th>
-    </>
-  );
-}
-
-/** Ренерит две пустые ячейки для строки "Итого" */
-export function PlanHangerEmpty() {
-  return (
-    <>
-      <td className="px-1 py-0.5 text-right"></td>
-      <td className="px-1 py-0.5 text-right"></td>
-    </>
-  );
-}

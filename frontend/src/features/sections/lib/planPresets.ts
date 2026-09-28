@@ -36,7 +36,7 @@ export interface PlanPreset {
 // ---------------------------------------------------------------------------
 // Встроенные пресеты — не редактируются, не удаляются
 const ALL_COLS: PlanColumnKey[] = [...DEFAULT_PRINT_COLUMNS];
-const SKU_AND_PLAN: PlanColumnKey[] = ["sku", "plan"];
+const SKU_ONLY: PlanColumnKey[] = ["sku"];
 
 export const BUILTIN_PRESETS: PlanPreset[] = [
   {
@@ -48,7 +48,7 @@ export const BUILTIN_PRESETS: PlanPreset[] = [
   {
     id: "builtin-sku-plan",
     name: "Только артикулы",
-    settings: { columns: SKU_AND_PLAN, title: "" },
+    settings: { columns: SKU_ONLY, title: "" },
     isBuiltin: true,
   },
   {

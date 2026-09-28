@@ -2,14 +2,11 @@
  * Окно плана участка.
  *
  * Для анодирования показывается единое дерево: предоперации, анодирование и
- * упаковка остаются в строке одного задания. Верхняя группировка переключается
- * между артикулом и цветом анодирования.
- *
- * Превью печатного листа видно сразу, без отдельного шага: внизу окна —
- * крупная кнопка «Печать» (основная задача окна).
+ * упаковка остаются в строке одного задания. Лист печатается сразу из окна:
+ * набор колонок и заголовок задаются в его шапке, печатаются все задания.
  */
 
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useState } from "react";
 import { Printer } from "lucide-react";
 import type { SectionBoardTask, SectionOperation } from "@/shared/api/shopfloor";
 import { PlanTaskTable } from "./PlanTaskTable";
@@ -54,9 +51,8 @@ interface PlanModalProps {
   onOpenChange: (open: boolean) => void;
   sectionId: number;
   sectionName: string;
-  /** Код и тип секции задают печатный профиль по умолчанию. */
+  /** Код секции задаёт печатный профиль по умолчанию. */
   sectionCode?: string | null;
-  sectionType?: string | null;
   tasks: SectionBoardTask[];
   availableOperations?: SectionOperation[];
 }
@@ -87,11 +83,10 @@ export function PlanModal({
   sectionId,
   sectionName,
   sectionCode,
-  sectionType,
   tasks,
 }: PlanModalProps) {
   const [printSettings, setPrintSettings] = useState<PrintSettings>(() =>
-    loadPrintSettings(sectionId, printColumnsFor(sectionCode, sectionType)),
+    loadPrintSettings(sectionId, printColumnsFor(sectionCode)),
   );
   const [hiddenGroupKeys, setHiddenGroupKeys] = useState<Set<string>>(() => new Set());
   const [presets, setPresets] = useState<PlanPreset[]>(() => loadPresets(sectionId));
@@ -100,11 +95,11 @@ export function PlanModal({
   const [presetToDelete, setPresetToDelete] = useState<PlanPreset | null>(null);
 
   useEffect(() => {
-    setPrintSettings(loadPrintSettings(sectionId, printColumnsFor(sectionCode, sectionType)));
+    setPrintSettings(loadPrintSettings(sectionId, printColumnsFor(sectionCode)));
     setPresets(loadPresets(sectionId));
     setActivePresetId(null);
     setHiddenGroupKeys(new Set());
-  }, [sectionId, sectionCode, sectionType]);
+  }, [sectionId, sectionCode]);
 
 
   useEffect(() => {
@@ -225,15 +220,13 @@ export function PlanModal({
             </div>
           </div>
 
-          <div className="flex flex-wrap items-center gap-x-4 gap-y-2 text-xs">
-            <div className="flex flex-wrap items-center gap-1.5">
-              <span className="font-medium text-muted-foreground">Колонки печати:</span>
-              {PRINTABLE_COLUMNS.map((column) => (
-                <Button key={column.key} type="button" size="sm" variant={printSettings.columns.includes(column.key) ? "default" : "outline"} onClick={() => toggleColumn(column.key)}>
-                  {column.title}
-                </Button>
-              ))}
-            </div>
+          <div className="flex flex-wrap items-center gap-1.5 text-xs">
+            <span className="font-medium text-muted-foreground">Колонки печати:</span>
+            {PRINTABLE_COLUMNS.map((column) => (
+              <Button key={column.key} type="button" size="sm" variant={printSettings.columns.includes(column.key) ? "default" : "outline"} onClick={() => toggleColumn(column.key)}>
+                {column.title}
+              </Button>
+            ))}
           </div>
         </DialogHeader>
 

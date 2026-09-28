@@ -110,12 +110,10 @@ function rowCell(row: PlanTaskRow, key: PlanColumnKey, single: boolean) {
       return <td key={key} className={cn(cellBase, "text-right text-blue-700 font-semibold")}>{fmtQty(row.balanceQty)}</td>;
     case "actions":
       return <td key={key} className="no-print-col" />;
-    default:
-      return <td key={key} />;
   }
 }
 
-/** Числовая ячейка в строке группы или «Итого». */
+/** Числовая ячейка в строке группы. */
 function aggregateCell(
   key: PlanColumnKey,
   value: number,
@@ -251,7 +249,7 @@ function PlanGroupRows({
                   return aggregateCell(column.key, group.totalQtyTransferred, false);
                 case "balance":
                   return aggregateCell(column.key, group.totalQtyPlan - group.totalQtyDone, true);
-                default:
+                case "actions":
                   return (
                     <td key={column.key} className={cn(cellBase, "px-1 py-2 text-center no-print-col")}>
                       <button type="button" className="text-muted-foreground hover:text-red-600 text-lg leading-none" onClick={() => onHideGroup(group.key)} title="Скрыть группу">×</button>

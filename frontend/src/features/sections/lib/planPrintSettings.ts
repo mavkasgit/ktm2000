@@ -5,12 +5,12 @@
  *
  * Таблица рендерит только выбранные колонки, поэтому печать и предпросмотр
  * совпадают: лишних ячеек в DOM нет, CSS-прятание не используется.
- * Профиль участка (по коду секции, затем по типу) задаёт набор по умолчанию;
- * кнопки «Колонки печати» и пресеты позволяют его переопределить.
+ * Профиль участка (по коду секции) задаёт набор по умолчанию; кнопки
+ * «Колонки печати» и пресеты позволяют его переопределить.
  *
  * Как добавить исключение для участка — одна строка в `PRINT_PROFILES`:
  *
- *   PACKING: ["sku", "color", "size", "preOps", "packaging", "plan", "balance"],
+ *   PACKING: ["sku", "size", "preOps", "packaging", "balance"],
  */
 
 export type PlanColumnKey =
@@ -20,7 +20,6 @@ export type PlanColumnKey =
   | "preOps"
   | "operation"
   | "packaging"
-  | "plan"
   | "hangers"
   | "perHanger"
   | "issued"
@@ -32,7 +31,7 @@ export type PlanColumnKey =
 export type PlanColumnDef = {
   key: PlanColumnKey;
   title: string;
-  /** `label` — текстовые (объединяются в шапке группы/«Итого»), `number` — числовые. */
+  /** `label` — текстовые (объединяются в шапке группы), `number` — числовые. */
   kind: "label" | "number";
   /** Служебная колонка окна: рисуется всегда, на печать не выводится. */
   service?: boolean;
@@ -64,9 +63,10 @@ export function isPlanColumnKey(value: unknown): value is PlanColumnKey {
 export const PRINTABLE_COLUMNS: PlanColumnDef[] = PLAN_COLUMNS.filter((column) => !column.service);
 
 /**
- * Набор печати по умолчанию, если для участка не задан профиль.
+ * Расширенный набор печати: артикул, размер, операции, упаковка и остаток.
+ * Основа встроенного пресета «Полный план».
  * Ни цвета, ни плана в печати нет: на анодировании цвет — это операция
- * участка, а «План» производная величина от «Осталось».
+ * участка, а план производная величина от остатка.
  */
 export const DEFAULT_PRINT_COLUMNS: PlanColumnKey[] = [
   "sku",
@@ -103,7 +103,7 @@ const ANODIZING_COLUMNS: PlanColumnKey[] = [
 ];
 
 /**
- * Профили печати по коду секции, затем по типу; `*` — для всех остальных.
+ * Профили печати по коду секции; `*` — для всех остальных.
  * Участки и их операции: `backend/app/seeds/sections.py`.
  */
 export const PRINT_PROFILES: Record<string, PlanColumnKey[]> = {
@@ -122,16 +122,8 @@ export const PRINT_PROFILES: Record<string, PlanColumnKey[]> = {
 /** Альтернативный набор: используется как встроенный пресет. */
 export const COMPACT_PRINT_COLUMNS: PlanColumnKey[] = ["sku", "size", "operation", "balance"];
 
-export function printColumnsFor(
-  sectionCode?: string | null,
-  sectionType?: string | null,
-): PlanColumnKey[] {
-  return (
-    (sectionCode ? PRINT_PROFILES[sectionCode] : undefined) ??
-    (sectionType ? PRINT_PROFILES[sectionType] : undefined) ??
-    PRINT_PROFILES["*"] ??
-    DEFAULT_PRINT_COLUMNS
-  );
+export function printColumnsFor(sectionCode?: string | null): PlanColumnKey[] {
+  return (sectionCode ? PRINT_PROFILES[sectionCode] : undefined) ?? PRINT_PROFILES["*"];
 }
 
 export interface PrintSettings {
