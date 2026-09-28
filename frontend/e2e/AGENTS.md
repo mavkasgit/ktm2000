@@ -410,8 +410,16 @@ set E2E_SKIP_PASSED=1
 # а голый `npx playwright` его не вызывает — падение «нет соединения с БД»
 # выглядит как баг приложения.
 npm --prefix frontend run e2e:prep
-cd frontend && npx playwright test --project=ui-e2e -g "import wizard" --debug
-cd frontend && npx playwright test --project=smoke e2e/reversal-journal.spec.ts --headed
+
+# Отладка — тоже через обёртку: она выдаёт порты стенда. Голый
+# `npx playwright test` без E2E_API_URL/PLAYWRIGHT_TEST_BASE_URL падает
+# сразу на чтении конфига.
+npm --prefix frontend run test:e2e:ui -- --debug -g "import wizard"
+npm --prefix frontend run test:e2e:smoke -- e2e/reversal-journal.spec.ts --headed
+npm --prefix frontend run test:e2e:playwright-ui   # UI mode целиком
 ```
+
+Аргументы после `--` уходят скрипту как есть: `run-e2e.mjs` дописывает
+только порты и передаёт их дальше в `playwright test`.
 
 Отчёт: `frontend/playwright-report/` после прогона с failures.
