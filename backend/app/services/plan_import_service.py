@@ -46,8 +46,9 @@ from app.services.dimension_validation import MissingDimensionsError, resolve_pr
 from app.services.hanger_quantity import adjust_quantity_to_hanger
 from app.services.import_normalization import normalize_sku as _normalize_sku
 from app.services.plan_position_hanger import PositionHangerValue, position_length_mm, resolve_position_hanger
-from app.services.route_builder import build_route_from_profile, load_route_build_batch_cache
+from app.services.route_builder import BuiltRoute, build_route_from_profile, load_route_build_batch_cache
 from app.services.route_storage_classifier import STAGE_KIND_TRANSIT, is_storage_section
+from app.services.route_signature import route_signature_conflicts
 
 
 #: Каталог кодов строк импорта плана (спека docs/plan-import-spec.md §3, карта #157).
@@ -69,6 +70,7 @@ PLAN_IMPORT_ERROR_CODES: frozenset[str] = frozenset(
         "route_contains_inactive_section",
         "duplicate_sku_due_date",
         "normal_length_not_found",
+        "route_signature_conflict",
     }
 )
 #: Точные warning-коды без параметров.
@@ -122,6 +124,24 @@ def plan_import_row_status(errors: list[str], warnings: list[str]) -> PlanChange
     if warnings:
         return PlanChangeItemStatus.warning
     return PlanChangeItemStatus.pending
+
+
+def _drop_resolved_route(after_data: dict) -> None:
+    """Снять маршрут, подобранный автоматчиком, — конфликт сигнатур (#215).
+
+    Маршрут автоматчика при наличии профиля всё равно перекрывался бы сборкой,
+    а в конфликте подставлять нечего: строка остаётся невалидной и без
+    маршрута, пока оператор не приведёт существующий в соответствие.
+    """
+    after_data.update({
+        "route_id": None,
+        "route_name": None,
+        "route_source": "missing",
+        "route_origin": None,
+        "route_assigned_at": None,
+        "route_match_quality": None,
+        "route_match_reason": None,
+    })
 
 
 def plan_import_item_is_duplicate(item: PlanChangeItem) -> bool:
@@ -504,6 +524,20 @@ async def _make_change_items(
         else None
     )
 
+    async def find_route_by_name(name: str) -> ProductionRoute | None:
+        """Маршрут с таким именем, без повторного запроса на том же имени."""
+        if name in existing_route_by_name_cache:
+            return existing_route_by_name_cache[name]
+        found = await db.scalar(select(ProductionRoute).where(ProductionRoute.name == name))
+        existing_route_by_name_cache[name] = found
+        return found
+
+    async def signature_conflicts_with(route: ProductionRoute | None, built: BuiltRoute) -> bool:
+        """Конфликт сигнатур (#215, ADR-0045): имя совпало, тождество — нет."""
+        if route is None or not built.name:
+            return False
+        return await route_signature_conflicts(db, route, built.signature)
+
     def make_hashable(val):
         if isinstance(val, dict):
             return tuple((k, make_hashable(v)) for k, v in sorted(val.items()))
@@ -866,8 +900,19 @@ async def _make_change_items(
                         }
                         for step in built_route.steps
                     ]
-                    # Use built route name and assign dynamic route
-                    if built_route.name:
+                    # Use built route name and assign dynamic route.
+                    # Совпадение имени — не тождество (#215): предпросмотр
+                    # показывает ту же ошибку строки, что и запись, иначе
+                    # невалидность всплыла бы только после применения.
+                    if built_route.name and await signature_conflicts_with(
+                        await find_route_by_name(built_route.name), built_route
+                    ):
+                        # Строка импорта и предпросмотра общая, а блок записи
+                        # ниже отработает для того же сета — код один раз.
+                        if "route_signature_conflict" not in errors:
+                            errors.append("route_signature_conflict")
+                        _drop_resolved_route(after_data)
+                    elif built_route.name:
                         after_data["route_name"] = built_route.name
                         after_data["route_source"] = "dynamic_build"
                         after_data["route_assigned_at"] = datetime.now(UTC).isoformat()
@@ -911,24 +956,30 @@ async def _make_change_items(
                         import logging
                         logger = logging.getLogger(__name__)
                         logger.info(f"Route cache key: ops={resolved_ops_summary}")
-                        
+                        # Маршрут с тем же именем, но другой сигнатурой (#215).
+                        route_conflict = False
+
                         # Check cache first
                         if cache_key in route_cache:
                             created_route_id = route_cache[cache_key]
                             # Use cached route - steps already exist
                         else:
                             # Lookup existing ProductionRoute
-                            if built_route.name in existing_route_by_name_cache:
-                                existing_route = existing_route_by_name_cache[built_route.name]
-                            else:
-                                existing_route = await db.scalar(
-                                    select(ProductionRoute).where(
-                                        ProductionRoute.name == built_route.name,
-                                    )
-                                )
-                                existing_route_by_name_cache[built_route.name] = existing_route
-                            
-                            if existing_route is not None:
+                            existing_route = await find_route_by_name(built_route.name)
+
+                            if existing_route is not None and await signature_conflicts_with(
+                                existing_route, built_route
+                            ):
+                                # Имя то же, а маршрут другой (#215, ADR-0045):
+                                # строка остаётся невалидной, чужой маршрут
+                                # под неё не подставляется. Выхода из конфликта
+                                # нет намеренно — маршрут, применённый к
+                                # выпущенным позициям, пересборка сломала бы их.
+                                if "route_signature_conflict" not in errors:
+                                    errors.append("route_signature_conflict")
+                                route_conflict = True
+                                _drop_resolved_route(after_data)
+                            elif existing_route is not None:
                                 # Route already exists - it should have steps
                                 created_route_id = existing_route.id
                                 route_cache[cache_key] = created_route_id
@@ -1085,14 +1136,18 @@ async def _make_change_items(
                                         created_route,
                                         created_section_rows.get(created_route.id, []),
                                     )
-                        
-                        # Update after_data with the created route
-                        after_data["route_id"] = created_route_id
-                        after_data["route_name"] = built_route.name
-                        after_data["route_source"] = "dynamic_build"
-                        after_data["route_origin"] = PlanPositionRouteOrigin.auto.value
-                        after_data["route_assigned_at"] = datetime.now(UTC).isoformat()
-                        after_data["route_match_quality"] = PlanPositionRouteMatchQuality.exact.value
+
+                        # Конфликтующая строка остаётся без маршрута: подставить
+                        # найденный по имени чужой маршрут — значит сделать дефект
+                        # тихим, а строка невалидна и ждёт решения оператора.
+                        if not route_conflict:
+                            # Update after_data with the created route
+                            after_data["route_id"] = created_route_id
+                            after_data["route_name"] = built_route.name
+                            after_data["route_source"] = "dynamic_build"
+                            after_data["route_origin"] = PlanPositionRouteOrigin.auto.value
+                            after_data["route_assigned_at"] = datetime.now(UTC).isoformat()
+                            after_data["route_match_quality"] = PlanPositionRouteMatchQuality.exact.value
             except Exception as route_error:
                 # Log route building errors but don't fail the entire import
                 import logging

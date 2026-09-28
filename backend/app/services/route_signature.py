@@ -155,6 +155,30 @@ async def signature_for_route_stages(db: AsyncSession, route_id: int) -> str:
     return encode_signature(signature_steps_from_stages(await load_route_stages(db, route_id)))
 
 
+async def route_signature_conflicts(
+    db: AsyncSession,
+    route: ProductionRoute,
+    expected_signature: str,
+) -> bool:
+    """Расходится ли сигнатура маршрута с ожидаемой (#215, ADR-0045).
+
+    Совпадение имени — не тождество: маршрут, найденный по имени, подходит
+    только если сигнатуры совпадают. Ожидаемая сигнатура приходит из входа
+    сборки, фактическая — сохранённая (#214), а у маршрута без неё —
+    посчитанная по этапам.
+
+    Отсутствие сигнатуры (нет и сохранённой, и этапов) — не конфликт:
+    сравнивать не с чем, и маршрут переиспользуется как раньше.
+    """
+    if not expected_signature:
+        return False
+    actual = route.route_signature
+    if not actual:
+        stages = await load_route_stages(db, route.id)
+        actual = encode_signature(stages) if stages else None
+    return actual is not None and actual != expected_signature
+
+
 async def refresh_route_signature(db: AsyncSession, route: ProductionRoute) -> None:
     """Пересчитать сигнатуру маршрута по его этапам и сохранить её.
 
