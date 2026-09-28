@@ -4,26 +4,37 @@ import { Badge } from "@/shared/ui/badge";
 import { TableCornerResetCell } from "@/shared/ui";
 import { cn } from "@/shared/utils/cn";
 import type { Product } from "@/shared/api/products";
-import type { HangerCalcResult } from "@/shared/api/hangerCalc";
-import { LIMITER_LABELS, type HangerCalcRow } from "../lib/hangerCalcRows";
+import { fmtQtyPrecise } from "@/shared/lib/quantityFormat";
+import { LIMITER_LABELS, type HangerCalcRow, type HangerLengthLine } from "../lib/hangerCalcRows";
 import { DashCell } from "./DashCell";
 import { HangerFieldCell } from "./HangerFieldCell";
-import { LengthChips } from "./LengthChips";
-import { fmtQtyPrecise } from "@/shared/lib/quantityFormat";
-import { hangerCalcTotalText } from "../lib/hangerCalcColumns";
+import { HangerLineCell } from "./HangerLineCell";
 
 export type RowSaveState = { status: "saving" } | { status: "saved" } | { status: "error"; message: string };
 
+/** Причина нулевого итога подстроки: профиль не помещается по лимитам. */
+const ZERO_TOTAL_REASON = "Итог 0: профиль не помещается по лимитам — проверьте периметр и габарит";
+
+/** Пометка основной длины: её выбирает пользователь (ADR-0013). */
+function PrimaryMark({ isPrimary }: { isPrimary: boolean }) {
+  if (!isPrimary) return null;
+  return <span className="ml-1.5 rounded bg-primary px-1 py-0.5 text-[10px] font-semibold text-primary-foreground">основная</span>;
+}
+
+/**
+ * Строка таблицы «Расчёт подвесов»: одна на артикул, внутри — подстроки по
+ * длинам (ADR-0050). Ячейки артикула, периметра и габарита принадлежат
+ * артикулу и занимают всю строку, поэтому у них `rowSpan`; колонки длины и
+ * разбивки печатают по подстроке, и своя разбивка у своей длины.
+ */
 export function HangerCalcRowView({
   row,
-  byLength,
   saveState,
   readOnly,
   onEdit,
   onCommit,
 }: {
   row: HangerCalcRow;
-  byLength: Map<string, HangerCalcResult> | undefined;
   saveState: RowSaveState | undefined;
   readOnly: boolean;
   onEdit: (product: Product) => void;
@@ -31,45 +42,29 @@ export function HangerCalcRowView({
 }) {
   const { product } = row;
   const rowInvalid = row.incompatibleReason != null;
-  const primary = row.primaryResult;
+  const span = row.lines.length;
 
-  const breakdownReason = row.incompatibleReason
-    ?? (!row.auto
-      ? "Ручной режим: периметр или габарит не заполнены, расчёт не запускался"
-      : row.primaryLength == null
-        ? "Расчёт невозможен: у артикула нет длин"
-        : !primary || !primary.is_calculable
-          ? "Расчёт невозможен: не хватает данных"
-          : null);
-
-  // Единый guard для ячеек разбивки: авто, не инвалид, есть расчёт (#64 — dedup).
-  const showBreakdown = row.auto && !rowInvalid && !!primary?.is_calculable;
-  const isZeroTotal = showBreakdown && row.total === 0;
-  const dashCell = <DashCell reason={breakdownReason} danger={rowInvalid} />;
-
-  const totalCell = (() => {
-    if (isZeroTotal) {
-      return (
-        <DashCell
-          reason="Итог 0: профиль не помещается по лимитам — проверьте периметр и габарит"
-          danger
-        />
-      );
-    }
-    if (showBreakdown) {
-      return <span className="font-medium">{hangerCalcTotalText(row)}</span>;
-    }
-    if (!row.auto) {
-      return row.total != null
-        ? <span className="text-muted-foreground">{hangerCalcTotalText(row)}</span>
-        : <DashCell reason={breakdownReason} />;
-    }
-    return dashCell;
-  })();
+  const totalCell = (line: HangerLengthLine) => {
+    if (line.total === 0) return <DashCell reason={ZERO_TOTAL_REASON} danger />;
+    if (line.total != null) return <span className="font-medium">{fmtQtyPrecise(line.total)}</span>;
+    return <DashCell reason={line.totalReason} danger={rowInvalid} />;
+  };
+  // Разбивка печатается там, где у подстроки есть результат расчёта; в
+  // ручном режиме его нет by design, и причину называет сама подстрока.
+  const breakdownCell = (line: HangerLengthLine, value: number | null | undefined) =>
+    line.result ? fmtQtyPrecise(value) : <DashCell reason={line.breakdownReason} danger={rowInvalid} />;
+  const limiterCell = (line: HangerLengthLine) =>
+    line.result && line.total !== 0 && line.result.limiter
+      ? LIMITER_LABELS[line.result.limiter]
+      : <DashCell reason={line.breakdownReason} danger={rowInvalid} />;
+  const areaCell = (line: HangerLengthLine) =>
+    line.result && line.total !== 0 && line.result.area_m2 != null
+      ? line.result.area_m2.toFixed(3)
+      : <DashCell reason={line.breakdownReason} danger={rowInvalid} />;
 
   return (
     <tr className={cn("hover:bg-muted/50", rowInvalid && "bg-red-50 hover:bg-red-100/60")}>
-      <td className="px-4 py-2">
+      <td rowSpan={span} className="px-4 py-1 align-top">
         <div className="flex items-center gap-1.5 flex-wrap">
           <button
             type="button"
@@ -101,7 +96,7 @@ export function HangerCalcRowView({
           </span>
         )}
       </td>
-      <td className="px-4 py-2">
+      <td rowSpan={span} className="px-4 py-1 align-top">
         <HangerFieldCell
           value={product.perimeter_mm}
           disabled={readOnly}
@@ -111,7 +106,7 @@ export function HangerCalcRowView({
           ariaLabel={`Периметр для ${product.sku}`}
         />
       </td>
-      <td className="px-4 py-2">
+      <td rowSpan={span} className="px-4 py-1 align-top">
         <HangerFieldCell
           value={product.mount_width_mm}
           disabled={readOnly}
@@ -121,27 +116,15 @@ export function HangerCalcRowView({
           ariaLabel={`Габарит для ${product.sku}`}
         />
       </td>
-      <td className="px-4 py-2">
-        <LengthChips row={row} byLength={byLength} />
-      </td>
-      <td className="px-4 py-2">
-        {showBreakdown ? fmtQtyPrecise(primary!.by_area) : dashCell}
-      </td>
-      <td className="px-4 py-2">
-        {showBreakdown ? fmtQtyPrecise(primary!.by_size) : dashCell}
-      </td>
-      <td className="px-4 py-2">{totalCell}</td>
-      <td className="px-4 py-2">
-        {/* Итог 0: лимитер не печатается — противоречиво (#64). */}
-        {showBreakdown && !isZeroTotal && primary!.limiter
-          ? LIMITER_LABELS[primary!.limiter]
-          : dashCell}
-      </td>
-      <td className="px-4 py-2">
-        {showBreakdown && !isZeroTotal && primary!.area_m2 != null
-          ? primary!.area_m2.toFixed(3)
-          : dashCell}
-      </td>
+      <HangerLineCell
+        lines={row.lines}
+        render={(line) => <span className="whitespace-nowrap">{line.lengthLabel}<PrimaryMark isPrimary={line.isPrimary} /></span>}
+      />
+      <HangerLineCell lines={row.lines} render={(line) => breakdownCell(line, line.result?.by_area)} />
+      <HangerLineCell lines={row.lines} render={(line) => breakdownCell(line, line.result?.by_size)} />
+      <HangerLineCell lines={row.lines} render={totalCell} />
+      <HangerLineCell lines={row.lines} render={limiterCell} />
+      <HangerLineCell lines={row.lines} render={areaCell} />
       <TableCornerResetCell />
     </tr>
   );

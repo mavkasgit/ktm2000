@@ -33,7 +33,7 @@ import {
 import { skipShotBlastSectionLabel } from "../lib/skipShotBlastLabel";
 import { HangerCalcTable } from "../components/HangerCalcTable";
 import { ProductWipStatsDialog } from "@/features/execution/components/ProductWipStatsDialog";
-import { primaryHangerValue, effectiveForLength, effectiveForMode, productLengths, sheetHangerEntry } from "@/shared/lib/hangerQuantity";
+import { primaryHangerValue, primaryLength, effectiveForLength, effectiveForMode, productLengths, sheetHangerEntry, type EffectiveHangerValue } from "@/shared/lib/hangerQuantity";
 import { isLengthState } from "@/shared/lib/dimensionState";
 import { cn } from "@/shared/utils/cn";
 import { useDebouncedValue } from "@/shared/lib/useDebouncedValue";
@@ -89,7 +89,14 @@ const headerCellClass = `${DATA_TABLE_STYLES.headerRow} ${DATA_TABLE_STYLES.head
  *  рендере, и `useMemo` ниже пересчитывался бы без нужды. */
 const EMPTY_PRODUCTS: Product[] = [];
 
-/** Колонка «Кол-во на подвесе» в списке сырья (#65, #85): значение основной длины, подпись «при N мм», бейдж «авто/ручное». */
+/**
+ * Колонка «Кол-во на подвесе» в списке сырья: значение **основной** длины
+ * (спека #59 п. 25) — ровно то, по которому колонку сортирует, фильтрует и
+ * наполняет попапер. Нормы остальных длин живут в подсказке: подставлять их
+ * вместо основной нельзя, колонка перестала бы показывать то, по чему
+ * сортируется, а у 47 артикулов с несколькими длинами нормы на основной
+ * длине нет вовсе (ADR-0050).
+ */
 function QuantityPerHangerCell({ product }: { product: Product }) {
   if (!isLengthState(product.dimension_state)) {
     // Лист (#126): одна запись, отображаемое значение выбирает hanger_mode.
@@ -109,45 +116,45 @@ function QuantityPerHangerCell({ product }: { product: Product }) {
       </span>
     );
   }
-  const primary = primaryHangerValue(product);
-  const lengths = productLengths(product);
-  const entries = lengths
-    .map((len) => ({ len, eff: effectiveForLength(product.quantity_per_hanger, len, product.hanger_mode) }))
+  const primaryLengthMm = primaryLength(product);
+  // Длин нет вовсе — печатать нечего, и подсказка «нет нормы» была бы враньём.
+  if (primaryLengthMm == null) return <span className="text-muted-foreground">—</span>;
+  const describe = (lengthMm: number, eff: EffectiveHangerValue): string =>
+    `${lengthMm} мм: ${fmtQtyPrecise(eff.value)} шт (${eff.source === "auto" ? "авто" : "ручное"})`;
+  const primary = effectiveForLength(product.quantity_per_hanger, primaryLengthMm, product.hanger_mode);
+  const others = productLengths(product)
+    .filter((lengthMm) => lengthMm !== primaryLengthMm)
+    .map((lengthMm) => ({ lengthMm, eff: effectiveForLength(product.quantity_per_hanger, lengthMm, product.hanger_mode) }))
     .filter(({ eff }) => eff.value != null);
-  if (entries.length === 0) return <span className="text-muted-foreground">—</span>;
-  const groups = new Map<number, typeof entries>();
-  for (const entry of entries) {
-    const group = groups.get(entry.eff.value!) ?? [];
-    group.push(entry);
-    groups.set(entry.eff.value!, group);
+
+  if (primary.value == null) {
+    // Основной длины без нормы: прочерк и перечень длин, у которых норма есть.
+    if (others.length === 0) return <span className="text-muted-foreground">—</span>;
+    const rest = others.map(({ lengthMm, eff }) => describe(lengthMm, eff)).join("; ");
+    // Прочерк с причиной: у списка нет TooltipProvider, поэтому причина живёт
+    // в `title`, как и у остальных ячеек этой таблицы.
+    return (
+      <span
+        className="text-muted-foreground cursor-help"
+        title={`Норма не задана для основной длины ${primaryLengthMm} мм; ${rest}`}
+      >
+        —
+      </span>
+    );
   }
+
   return (
-    <div className="flex flex-wrap gap-1">
-      {[...groups.entries()].map(([value, groupEntries]) => {
-        const primaryEntry = groupEntries.find(({ len }) => primary?.lengthMm === len);
-        const isPrimary = primaryEntry != null;
-        const source = primaryEntry?.eff.source ?? groupEntries[0]?.eff.source ?? null;
-        const multipleLengths = groupEntries.length > 1;
-        return (
-          <span
-            key={value}
-            className={cn(
-              "inline-flex items-center gap-1 rounded bg-secondary px-1.5 py-0.5 text-xs text-secondary-foreground",
-              isPrimary && "font-medium ring-1 ring-primary/40 bg-primary/10",
-            )}
-            title={groupEntries.map(({ len, eff }) => `${len} мм: ${fmtQtyPrecise(eff.value)} шт (${eff.source === "auto" ? "авто" : "ручное"})`).join("\n")}
-          >
-            {fmtQtyPrecise(value)} шт{multipleLengths ? "" : ` при ${groupEntries[0].len} мм`}
-            {source === "auto" && (
-              <span className="rounded bg-emerald-100 px-1 text-[10px] font-semibold text-emerald-800">авто</span>
-            )}
-            {source === "manual" && (
-              <span className="rounded bg-amber-100 px-1 text-[10px] font-semibold text-amber-800">ручное</span>
-            )}
-          </span>
-        );
-      })}
-    </div>
+    <span
+      className="inline-flex items-center gap-1 rounded px-1.5 py-0.5 text-xs font-medium ring-1 ring-primary/40 bg-primary/10 text-secondary-foreground"
+      title={[describe(primaryLengthMm, primary), ...others.map(({ lengthMm, eff }) => describe(lengthMm, eff))].join("\n")}
+    >
+      {fmtQtyPrecise(primary.value)} шт при {primaryLengthMm} мм
+      {primary.source === "auto" ? (
+        <span className="rounded bg-emerald-100 px-1 text-[10px] font-semibold text-emerald-800">авто</span>
+      ) : (
+        <span className="rounded bg-amber-100 px-1 text-[10px] font-semibold text-amber-800">ручное</span>
+      )}
+    </span>
   );
 }
 
@@ -438,6 +445,9 @@ export function RawMaterialsPage() {
   // колонки руками.
   const uniqueValues = useMemo<Record<RawMaterialColumnId, string[]>>(() => ({
     sku: [...new Set(items.map((p) => p.sku))].sort(),
+    // Попапер колонки «Кол-во на подвесе» — это значения **основной** длины:
+    // серверный фильтр `qty_from/qty_to` и сортировка считают по ней, и ячейка
+    // печатает её же (спека #59 п. 25).
     quantity_per_hanger: [
       ...new Set(items.map((p) => primaryHangerValue(p)?.value ?? null)),
     ]

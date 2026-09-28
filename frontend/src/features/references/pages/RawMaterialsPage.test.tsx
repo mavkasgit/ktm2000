@@ -237,7 +237,7 @@ describe("RawMaterialsPage: реестр длин и расчёт подвесо
     }));
   });
 
-  it("в расчёте подвесов показывает обе длины, включая равные", async () => {
+  it("в расчёте подвесов даёт подстроку на каждую длину со своим N", async () => {
     const current = product({
       hanger_mode: "auto",
       lengths: [
@@ -259,8 +259,13 @@ describe("RawMaterialsPage: реестр длин и расчёт подвесо
     const row = await screen.findByRole("button", { name: "RAW-2700" });
     const hangerRow = row.closest("tr");
     expect(hangerRow).not.toBeNull();
+    // Подстрока на каждую длину реестра; сырьё в подписи печатается, только
+    // когда оно отличается от нормальной (ADR-0050).
     expect(hangerRow!.textContent).toContain("2700 / сырьё 2750");
-    expect(hangerRow!.textContent).toContain("3000 / сырьё 3000");
+    expect(hangerRow!.textContent).toContain("3000");
+    // Разбивка у каждой подстроки своя, а не одна на строку.
+    expect(hangerRow!.textContent).toContain("50");
+    expect(hangerRow!.textContent).toContain("55");
   });
 
   it.each(["2700", "2750"])("поиск по длине %s оставляет строку артикула", async (query) => {

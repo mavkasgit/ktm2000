@@ -17,6 +17,7 @@ import {
   sheetHangerEntry,
   sheetLengths,
 } from "@/shared/lib/hangerQuantity";
+import { fmtQtyPrecise } from "@/shared/lib/quantityFormat";
 
 /** productId → lengthKey → результат расчёта. */
 export type CalcMap = Map<number, Map<string, HangerCalcResult>>;
@@ -119,16 +120,139 @@ export function rowSearchValues(row: HangerCalcRow | PairedHangerCalcRow): strin
 }
 
 
-/** Явная подпись normal/сырьё пары: равные значения тоже показываются. */
+/** Причина «—» в колонке N: ручной режим, для этой длины нормы нет. */
+const manualNoNormReason = (lengthMm: number): string =>
+  `Ручной режим: для длины ${fmtQtyPrecise(lengthMm)} мм не задана норма`;
+
+/** Причина «—» в разбивке: ручной режим, расчёт по периметру не запускался. */
+const MANUAL_NO_CALC_REASON = "Ручной режим: расчёт по периметру не запускался";
+
+/** Причина «—» в авто-режиме: результата по длине нет. */
+const NO_CALC_DATA_REASON = "Расчёт невозможен: не хватает данных";
+
+/**
+ * Подстрока строки расчёта: одна на длину (ADR-0050). Строка принадлежит
+ * артикулу (или паре), подстроки — его длинам: N подстроки — N длины, а не
+ * N артикула. Разбивка каждой подстроки своя, потому что формула подвеса
+ * считается по сырьевой длине этой строки реестра.
+ */
+export type HangerLengthLine = {
+  /** Нормальная длина из реестра; null — у артикула длин нет вовсе. */
+  lengthMm: number | null;
+  /** Подпись длины: «2700» либо «2700 / сырьё 2750». */
+  lengthLabel: string;
+  isPrimary: boolean;
+  /** Результат расчёта этой длины; в ручном режиме — null. */
+  result: HangerCalcResult | null;
+  /** N этой длины: авто-итог или ручная норма; null — значения нет. */
+  total: number | null;
+  /** Источник N по режиму подвеса. */
+  source: "auto" | "manual" | null;
+  /** Почему N напечатан «—». */
+  totalReason: string | null;
+  /** Почему разбивка напечатана «—». */
+  breakdownReason: string | null;
+};
+
+/** Подпись нормальной и сырьевой длины: сырьё печатается, только если отличается. */
+export function formatLengthLabel(normalMm: number, rawMm: number): string {
+  return rawMm === normalMm ? `${normalMm}` : `${normalMm} / сырьё ${rawMm}`;
+}
+
+/** То же для пары: сырьё обеих сторон печатается, только если отличается. */
 export function formatPairedLengthLabel(
   normalMm: number,
   rawAMm: number,
   rawBMm: number,
 ): string {
-  const raw = rawAMm === rawBMm
-    ? `сырьё ${rawAMm}`
-    : `сырьё ${rawAMm} и ${rawBMm}`;
+  if (rawAMm === normalMm && rawBMm === normalMm) return `${normalMm}`;
+  const raw = rawAMm === rawBMm ? `сырьё ${rawAMm}` : `сырьё ${rawAMm} и ${rawBMm}`;
   return `${normalMm} / ${raw}`;
+}
+
+export type BuildLengthLinesInput = {
+  lengths: number[];
+  /** Подпись длины строки: у одиночной «2700» / «2700 / сырьё 2750». */
+  labelOf: (lengthMm: number) => string;
+  primaryLengthMm: number | null;
+  auto: boolean;
+  /** Несовместимость — свойство артикула, а не длины: причина у всех подстрок. */
+  incompatibleReason: string | null;
+  /** Результат расчёта длины (авто-режим). */
+  resultOf: (lengthMm: number) => HangerCalcResult | null;
+  /** Ручная N длины. */
+  manualOf: (lengthMm: number) => number | null;
+  /** Причина для артикула без длин. */
+  noLengthsReason: string;
+};
+
+/**
+ * Подстроки строки: по одной на длину, по возрастанию. Режим выбирает,
+ * откуда берётся N (ADR-0047, #127): авто — результат движка по этой длине,
+ * ручной — норма из словаря под ключом этой длины, без фолбэка.
+ */
+export function buildLengthLines(input: BuildLengthLinesInput): HangerLengthLine[] {
+  const { lengths, labelOf, primaryLengthMm, auto, incompatibleReason, resultOf, manualOf, noLengthsReason } = input;
+  if (lengths.length === 0) {
+    return [{
+      lengthMm: null,
+      lengthLabel: "—",
+      isPrimary: false,
+      result: null,
+      total: null,
+      source: null,
+      totalReason: noLengthsReason,
+      breakdownReason: noLengthsReason,
+    }];
+  }
+  return lengths.map((lengthMm) => {
+    const base = {
+      lengthMm,
+      lengthLabel: labelOf(lengthMm),
+      isPrimary: primaryLengthMm != null && lengthMm === primaryLengthMm,
+    };
+    if (incompatibleReason != null) {
+      return {
+        ...base,
+        result: null,
+        total: null,
+        source: null,
+        totalReason: incompatibleReason,
+        breakdownReason: incompatibleReason,
+      };
+    }
+    if (!auto) {
+      const manual = manualOf(lengthMm);
+      const reason = manual == null ? manualNoNormReason(lengthMm) : null;
+      return {
+        ...base,
+        result: null,
+        total: manual,
+        source: "manual",
+        totalReason: reason,
+        breakdownReason: reason ?? MANUAL_NO_CALC_REASON,
+      };
+    }
+    const result = resultOf(lengthMm);
+    if (!result?.is_calculable) {
+      return {
+        ...base,
+        result: result ?? null,
+        total: null,
+        source: "auto",
+        totalReason: result?.reason ?? NO_CALC_DATA_REASON,
+        breakdownReason: result?.reason ?? NO_CALC_DATA_REASON,
+      };
+    }
+    return {
+      ...base,
+      result,
+      total: result.total,
+      source: "auto",
+      totalReason: null,
+      breakdownReason: null,
+    };
+  });
 }
 
 export type HangerCalcRow = {
@@ -138,18 +262,24 @@ export type HangerCalcRow = {
   primaryLength: number | null;
   auto: boolean;
   incompatibleReason: string | null;
-  primaryResult: HangerCalcResult | null;
-  /** Итог основной длины: авто-итог, иначе ручное значение (без авто-приоритета). */
+  /** Подстроки по длинам — то, что печатается в колонках (ADR-0050). */
+  lines: HangerLengthLine[];
+  /**
+   * Итог и лимитер **основной** длины: по ним сортируется, фильтруется и
+   * собирается попапер колонки. Внутри строки итогов столько же, сколько
+   * подстрок, поэтому единственное число для этих операций — агрегат
+   * основной длины, а не «первый» или «минимальный» по строкам.
+   */
   total: number | null;
   limiter: "area" | "size" | null;
-  areaM2: number | null;
 };
 
 /**
- * Вьюмодели строк таблицы: разбивка — по основной длине (#81: выбранная
- * is_primary, иначе первая из ProductLength по возрастанию), ручной
- * артикул — без разбивки (#64, п. 14).
+ * Вьюмодели строк таблицы: одна строка на артикул, внутри — подстроки по
+ * длинам реестра (ADR-0050). Основная длина — выбор пользователя (#81,
+ * ADR-0013), её помечают; разбивка печатается по каждой длине.
  */
+
 export function buildHangerCalcRows(
   products: Product[],
   calcMap: CalcMap,
@@ -166,24 +296,29 @@ export function buildHangerCalcRows(
       : primaryLength(product);
     const incompatibleReason = incompatible.get(product.id) ?? null;
     const byLength = calcMap.get(product.id);
-    const primaryResult =
-      auto && primaryLengthMm != null
-        ? byLength?.get(lengthKey(primaryLengthMm)) ?? null
-        : null;
-    const primaryEntry = sheet
-      ? sheetHangerEntry(product.quantity_per_hanger)
-      : primaryLengthMm != null
-        ? entryForLength(product.quantity_per_hanger, primaryLengthMm)
-        : null;
-
-    let total: number | null = null;
-    if (auto && primaryResult?.is_calculable) {
-      total = primaryResult.total;
-    } else if (!auto) {
-      // Ручной режим: итог — только manual (без приоритета auto>manual,
-      // потому что устаревший auto в ручной строке не должен давать итог).
-      total = primaryEntry?.manual ?? null;
-    }
+    const records = product.lengths ?? [];
+    const lines = buildLengthLines({
+      lengths,
+      labelOf: (lengthMm) => {
+        const record = records.find((length) => length.length_mm === lengthMm);
+        return formatLengthLabel(lengthMm, record ? effectiveRawLength(record) : lengthMm);
+      },
+      primaryLengthMm,
+      auto,
+      incompatibleReason,
+      resultOf: (lengthMm) => byLength?.get(lengthKey(lengthMm)) ?? null,
+      // У листа длина одна по определению, поэтому там допустим фолбэк на
+      // единственную запись словаря (ADR-0047 п. 4): он восстанавливает
+      // значение при смене длины полотна, а не угадывает.
+      manualOf: (lengthMm) =>
+        (sheet
+          ? sheetHangerEntry(product.quantity_per_hanger)?.manual
+          : entryForLength(product.quantity_per_hanger, lengthMm)?.manual) ?? null,
+      noLengthsReason: auto
+        ? "Расчёт невозможен: у артикула нет длин"
+        : "Ручной режим: у артикула нет длин",
+    });
+    const primaryLine = lines.find((line) => line.isPrimary) ?? null;
 
     return {
       kind: "single",
@@ -192,10 +327,9 @@ export function buildHangerCalcRows(
       primaryLength: primaryLengthMm,
       auto,
       incompatibleReason,
-      primaryResult,
-      total,
-      limiter: primaryResult?.limiter ?? null,
-      areaM2: primaryResult?.area_m2 ?? null,
+      lines,
+      total: primaryLine?.total ?? null,
+      limiter: primaryLine?.result?.limiter ?? null,
     };
   });
 }
@@ -345,22 +479,25 @@ export type PairedHangerCalcRow = {
   primaryLength: number | null;
   auto: boolean;
   incompatibleReason: string | null;
-  primaryResult: HangerCalcResult | null;
   /** Ручная N пары по длине (lengthKey → N); режим авто — не используется. */
   manualPerLength: Record<string, number | null>;
   /** Суммы периметра/габарита пары (идут в формулы совместного расчёта). */
   perimeterSum: number | null;
   widthSum: number | null;
+  /** Подстроки по длинам пары — те же подстроки, что у одиночной строки. */
+  lines: HangerLengthLine[];
+  /** Итог и лимитер основной длины пары — ключ сортировки и попапера. */
   total: number | null;
   limiter: "area" | "size" | null;
-  areaM2: number | null;
 };
 
 /**
- * Вьюмодели парных строк: разбивка — по первой длине пары (по возрастанию).
- * Режим пары выведенный (#150): авто (совместный расчёт) — только если оба
- * артикула в режиме auto; иначе ручное N из словаря пары на каждую длину.
+ * Вьюмодели парных строк: одна строка на пару, внутри — подстроки по длинам
+ * пары (ADR-0050). Режим пары выведенный (#150): авто (совместный расчёт) —
+ * только если оба артикула в режиме auto; иначе ручное N из словаря пары на
+ * каждую длину.
  */
+
 export function buildPairedHangerCalcRows(
   pairs: PairedPair[],
   calcMap: PairedCalcMap,
@@ -371,11 +508,6 @@ export function buildPairedHangerCalcRows(
     const primaryLengthMm = lengths[0] ?? null;
     const auto = pairModeAuto(pair.productA, pair.productB);
     const incompatibleReason = incompatible.get(pair.pairId) ?? null;
-    const primaryResult =
-      auto && primaryLengthMm != null
-        ? calcMap.get(pair.pairId)?.get(lengthKey(primaryLengthMm)) ?? null
-        : null;
-
     const perimeterSum =
       pair.productA.perimeter_mm != null && pair.productB.perimeter_mm != null
         ? Number((pair.productA.perimeter_mm + pair.productB.perimeter_mm).toFixed(2))
@@ -385,14 +517,31 @@ export function buildPairedHangerCalcRows(
         ? Number((pair.productA.mount_width_mm + pair.productB.mount_width_mm).toFixed(2))
         : null;
 
-    let total: number | null = null;
-    if (auto && primaryResult?.is_calculable) {
-      total = primaryResult.total;
-    } else if (!auto) {
-      // Ручной режим: итог — ручное N основной длины (без авто-приоритета).
-      total =
-        (primaryLengthMm != null ? pair.manualPerLength[lengthKey(primaryLengthMm)] : null) ?? null;
-    }
+    const byLength = calcMap.get(pair.pairId);
+    const recordsA = pair.productA.lengths ?? [];
+    const recordsB = pair.productB.lengths ?? [];
+    const lines = buildLengthLines({
+      lengths,
+      labelOf: (lengthMm) => {
+        const rawA = recordsA.find((length) => length.length_mm === lengthMm);
+        const rawB = recordsB.find((length) => length.length_mm === lengthMm);
+        return formatPairedLengthLabel(
+          lengthMm,
+          rawA ? effectiveRawLength(rawA) : lengthMm,
+          rawB ? effectiveRawLength(rawB) : lengthMm,
+        );
+      },
+      primaryLengthMm,
+      auto,
+      incompatibleReason,
+      resultOf: (lengthMm) => byLength?.get(lengthKey(lengthMm)) ?? null,
+      manualOf: (lengthMm) => pair.manualPerLength[lengthKey(lengthMm)] ?? null,
+      noLengthsReason: auto
+        ? "Расчёт невозможен: у пары нет общих длин"
+        : "Ручной режим: у пары нет общих длин",
+    });
+    const primaryLine = lines.find((line) => line.isPrimary) ?? null;
+
 
     return {
       kind: "paired",
@@ -404,13 +553,12 @@ export function buildPairedHangerCalcRows(
       primaryLength: primaryLengthMm,
       auto,
       incompatibleReason,
-      primaryResult,
       manualPerLength: pair.manualPerLength,
       perimeterSum,
       widthSum,
-      total,
-      limiter: primaryResult?.limiter ?? null,
-      areaM2: primaryResult?.area_m2 ?? null,
+      lines,
+      total: primaryLine?.total ?? null,
+      limiter: primaryLine?.result?.limiter ?? null,
     };
   });
 }

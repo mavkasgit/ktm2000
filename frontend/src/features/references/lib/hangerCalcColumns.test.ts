@@ -22,7 +22,7 @@ import {
   hangerCalcCellValue,
   hangerCalcTotalText,
 } from "./hangerCalcColumns";
-import type { HangerCalcRow, HangerCalcSortField } from "./hangerCalcRows";
+import type { HangerCalcRow, HangerCalcSortField, HangerLengthLine } from "./hangerCalcRows";
 
 /** Фильтруемые колонки описания: ровно они попадают в попапер фильтра. */
 const filterFields = hangerCalcColumns
@@ -86,14 +86,14 @@ describe("состав шапки", () => {
   });
 
   it("порядок описания совпадает с порядком ячеек в теле таблицы", () => {
-    // Тело строки: артикул, периметр, габарит, длины, по площади, по
+    // Тело строки: артикул, периметр, габарит, длина, по площади, по
     // размеру, итог, лимитер, м² на подвес — девять `<td>` в
     // `HangerCalcRowView` и `PairedHangerRowView` плюс угол сброса.
     expect(hangerCalcColumns.map((item) => item.id)).toEqual([
       "sku",
       "perimeter",
       "mountWidth",
-      "lengths",
+      "length",
       "byArea",
       "bySize",
       "total",
@@ -115,6 +115,22 @@ describe("состав шапки", () => {
   });
 });
 
+/** Подстрока строки по длине: N и источник задаются тестом. */
+const line = (
+  total: number | null,
+  overrides: Partial<HangerLengthLine> = {},
+): HangerLengthLine => ({
+  lengthMm: 6000,
+  lengthLabel: "6000",
+  isPrimary: false,
+  result: null,
+  total,
+  source: total == null ? null : "manual",
+  totalReason: null,
+  breakdownReason: null,
+  ...overrides,
+});
+
 /** Строка таблицы подвесов: собирается напрямую, формат берётся из строки. */
 const row = (total: number | null, overrides: Partial<HangerCalcRow> = {}): HangerCalcRow => ({
   kind: "single",
@@ -123,10 +139,9 @@ const row = (total: number | null, overrides: Partial<HangerCalcRow> = {}): Hang
   primaryLength: 6000,
   auto: true,
   incompatibleReason: null,
-  primaryResult: null,
+  lines: [line(total, { isPrimary: true })],
   total,
   limiter: null,
-  areaM2: null,
   ...overrides,
 });
 
@@ -145,16 +160,19 @@ describe("«Итог»: ячейка и попапер печатают одно
     expect(String(fractional.total)).not.toBe(hangerCalcCellValue(fractional, "total"));
   });
 
-  it("ячейка и попапер берут один источник: итог строки, а не результат расчёта", () => {
-    // `primaryResult.total` и `row.total` — разные поля: ручной режим берёт
-    // manual, авто с нерасчётным результатом отдаёт null. Пока ячейка печатала
-    // `primary.total`, строка и попапер могли разойтись по источнику.
-    const manual = row(40, {
+  it("ячейка и попапер берут итог строки — по основной длине, а не по любой подстроке", () => {
+    // Вторая длина даёт 99 шт, но ключ ячейки и попапера — N основной (40 шт).
+    // Регресс: если бы печатался максимум или N неосновной подстроки, строка и
+    // попапер разошлись бы с колонкой «Итог».
+    const multi = row(40, {
       auto: false,
-      primaryResult: { by_area: 99, by_size: 99, total: 99, limiter: "area", area_m2: 1, is_calculable: true },
+      lines: [
+        line(40, { isPrimary: true, source: "manual" }),
+        line(99, { lengthMm: 7000, lengthLabel: "7000", source: "manual" }),
+      ],
     });
-    expect(hangerCalcTotalText(manual)).toBe("40");
-    expect(hangerCalcCellValue(manual, "total")).toBe("40");
+    expect(hangerCalcTotalText(multi)).toBe("40");
+    expect(hangerCalcCellValue(multi, "total")).toBe("40");
   });
 
   it("итог без значения печатается «—» в обоих местах", () => {

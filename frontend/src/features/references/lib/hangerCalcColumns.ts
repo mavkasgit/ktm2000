@@ -104,11 +104,17 @@ export const hangerCalcColumns: HangerCalcColumn[] = [
     filterField: "sku",
     sortField: "sku",
     clientOnly: true,
-    sortValues: (a, b) => a.localeCompare(b, "ru"),
   },
   { id: "perimeter", label: "Периметр", headerClassName: "w-28" },
   { id: "mountWidth", label: "Габарит", headerClassName: "w-28" },
-  { id: "lengths", label: "Длины → кол-во", headerClassName: "min-w-56" },
+  {
+    id: "length",
+    // Подпись длины, а не «длины → кол-во»: строка разбита на подстроки по
+    // длинам (ADR-0050), и своя длина каждой подстроки печатается в своей
+    // строке, а её N — в «Итоге» этой же подстроки.
+    label: "Длина",
+    headerClassName: "min-w-56",
+  },
   { id: "byArea", label: "По площади", headerClassName: "w-24" },
   { id: "bySize", label: "По размеру", headerClassName: "w-24" },
   {

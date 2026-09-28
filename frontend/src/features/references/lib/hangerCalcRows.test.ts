@@ -9,6 +9,7 @@ import {
   buildPairedHangerCalcRows,
   incompatibilityReason,
   formatPairedLengthLabel,
+  formatLengthLabel,
   pairedIncompatibilityReason,
   resolvePairs,
   resultsToCalcMap,
@@ -280,27 +281,61 @@ describe("resultsToCalcMap", () => {
 });
 
 describe("buildHangerCalcRows", () => {
-  it("авто-артикул: разбивка по основной (минимальной) длине", () => {
+  it("авто-артикул: подстроки по обеим длинам, каждая со своим N и разбивкой", () => {
+    // ADR-0050: строка одна, подстрок по длине столько же, сколько длин.
     const product = makeProduct({
       id: 1,
       perimeter_mm: 64.2,
       mount_width_mm: 19.35,
-      lengths: [productLength(3000), productLength(2780, null, true)],
+      lengths: [productLength(2780, null, true), productLength(3000, 3050)],
       quantity_per_hanger: {
         "2780": { auto: 72, manual: 60 },
         "3000": { auto: 65, manual: null },
       },
     });
     const calcMap: CalcMap = new Map([
-      [1, new Map([["2780", makeResult({ total: 72, limiter: "area" })]])],
+      [
+        1,
+        new Map([
+          ["2780", makeResult({ by_area: 72, by_size: 90, total: 72, limiter: "area" })],
+          ["3000", makeResult({ by_area: 54, by_size: 65, total: 65, limiter: "size" })],
+        ]),
+      ],
     ]);
     const [row] = buildHangerCalcRows([product], calcMap, new Map());
+
     expect(row.auto).toBe(true);
-    expect(row.primaryLength).toBe(2780);
+    expect(row.incompatibleReason).toBeNull();
+    expect(row.lines).toHaveLength(2);
+
+    const [primary, second] = row.lines;
+    expect(primary).toMatchObject({
+      lengthMm: 2780,
+      lengthLabel: "2780",
+      isPrimary: true,
+      total: 72,
+      source: "auto",
+      totalReason: null,
+      breakdownReason: null,
+    });
+    expect(primary?.result?.by_area).toBe(72);
+    expect(primary?.result?.by_size).toBe(90);
+    expect(primary?.result?.area_m2).toBeCloseTo(0.17976);
+
+    expect(second).toMatchObject({
+      lengthMm: 3000,
+      lengthLabel: "3000 / сырьё 3050",
+      isPrimary: false,
+      total: 65,
+      source: "auto",
+    });
+    expect(second?.result?.by_area).toBe(54);
+    expect(second?.result?.limiter).toBe("size");
+
+    // Итог строки — агрегат основной длины: вторая подстрока даёт 65 и в
+    // сортировку/попапер не попадает.
     expect(row.total).toBe(72);
     expect(row.limiter).toBe("area");
-    expect(row.areaM2).toBeCloseTo(0.17976);
-    expect(row.incompatibleReason).toBeNull();
   });
 
   it("строка сохраняет отдельную сырьевую длину для каждой нормальной", () => {
@@ -313,6 +348,43 @@ describe("buildHangerCalcRows", () => {
       productLength(2700, 2750, true),
       productLength(3000, 3050),
     ]);
+  });
+
+  it("ручной артикул: разбивки нет, итог — ручное значение основной длины", () => {
+    const product = makeProduct({
+      id: 2,
+      hanger_mode: "manual",
+      lengths: productLengths(2780),
+      quantity_per_hanger: { "2780": { auto: null, manual: 40 } },
+    });
+    const [row] = buildHangerCalcRows([product], new Map(), new Map());
+    expect(row.auto).toBe(false);
+    expect(row.lines[0]?.result).toBeNull();
+    expect(row.lines[0]?.breakdownReason).toBe("Ручной режим: расчёт по периметру не запускался");
+    expect(row.total).toBe(40);
+    expect(row.limiter).toBeNull();
+  });
+
+  it("ручной артикул, у основной длины нет нормы: итог строки null, причина называет длину", () => {
+    const product = makeProduct({
+      id: 8,
+      hanger_mode: "manual",
+      lengths: [productLength(2780, null, true), productLength(3000)],
+      quantity_per_hanger: {
+        "2780": { auto: 72, manual: null },
+        "3000": { auto: 65, manual: 44 },
+      },
+    });
+    const [row] = buildHangerCalcRows([product], new Map(), new Map());
+
+    const primary = row.lines.find((line) => line.isPrimary);
+    expect(primary?.lengthMm).toBe(2780);
+    expect(primary?.total).toBeNull();
+    expect(primary?.totalReason).toBe("Ручной режим: для длины 2780 мм не задана норма");
+    // Вторая длина норму имеет — её N печатается, но в итог строки не идёт.
+    expect(row.lines.find((line) => line.lengthMm === 3000)?.total).toBe(44);
+    expect(row.total).toBeNull();
+    expect(row.limiter).toBeNull();
   });
 
   it("явный is_primary в записи реестра задаёт разбивку", () => {
@@ -333,19 +405,6 @@ describe("buildHangerCalcRows", () => {
     expect(row.primaryLength).toBe(3000);
     expect(row.total).toBe(65);
     expect(row.limiter).toBe("size");
-  });
-
-  it("ручной артикул: разбивки нет, итог — ручное значение основной длины", () => {
-    const product = makeProduct({
-      id: 2,
-      hanger_mode: "manual",
-      lengths: productLengths(2780),
-      quantity_per_hanger: { "2780": { auto: null, manual: 40 } },
-    });
-    const [row] = buildHangerCalcRows([product], new Map(), new Map());
-    expect(row.auto).toBe(false);
-    expect(row.primaryResult).toBeNull();
-    expect(row.total).toBe(40);
   });
 
   it("ручной артикул с устаревшим auto: итог — только manual (#64)", () => {
@@ -372,8 +431,9 @@ describe("buildHangerCalcRows", () => {
     });
     const [row] = buildHangerCalcRows([product], new Map(), new Map());
     expect(row.auto).toBe(false);
-    expect(row.primaryResult).toBeNull();
     expect(row.total).toBe(40);
+    // Периметр и габарит заполнены, но режим ручной — разбивки всё равно нет.
+    expect(row.lines[0]?.breakdownReason).toBe("Ручной режим: расчёт по периметру не запускался");
   });
 
   it("несовместимый артикул помечается причиной, итоги не считаются", () => {
@@ -399,7 +459,7 @@ describe("buildHangerCalcRows", () => {
     expect(row.total).toBeNull();
   });
 
-  it("нерасчётный результат (is_calculable=false) — итог null", () => {
+  it("нерасчётный результат (is_calculable=false) — итог null, причина движка в подстроке", () => {
     const product = makeProduct({
       id: 5,
       perimeter_mm: 64.2,
@@ -407,11 +467,21 @@ describe("buildHangerCalcRows", () => {
       lengths: productLengths(2780),
     });
     const calcMap: CalcMap = new Map([
-      [5, new Map([["2780", makeResult({ is_calculable: false, total: null, limiter: null })]])],
+      [
+        5,
+        new Map([
+          ["2780", makeResult({ is_calculable: false, total: null, limiter: null, reason: "Не хватает данных" })],
+        ]),
+      ],
     ]);
     const [row] = buildHangerCalcRows([product], calcMap, new Map());
     expect(row.total).toBeNull();
-    expect(row.primaryResult?.is_calculable).toBe(false);
+    expect(row.limiter).toBeNull();
+    const [line] = row.lines;
+    expect(line?.result?.is_calculable).toBe(false);
+    expect(line?.total).toBeNull();
+    expect(line?.totalReason).toBe("Не хватает данных");
+    expect(line?.breakdownReason).toBe("Не хватает данных");
   });
 
   // ─── Листы 2D/3D (#126) ───────────────────────────────────────────────
@@ -431,8 +501,11 @@ describe("buildHangerCalcRows", () => {
     expect(row.auto).toBe(true);
     expect(row.primaryLength).toBe(3000);
     expect(row.lengths).toEqual([3000]);
+    expect(row.lines).toHaveLength(1);
+    expect(row.lines[0]?.isPrimary).toBe(true);
+    expect(row.lines[0]?.result?.total).toBe(2);
+    expect(row.lines[0]?.totalReason).toBeNull();
     expect(row.total).toBe(2);
-    expect(row.primaryResult?.total).toBe(2);
   });
 
   it("лист в ручном режиме: итог — только manual единственной записи", () => {
@@ -445,11 +518,12 @@ describe("buildHangerCalcRows", () => {
     });
     const [row] = buildHangerCalcRows([product], new Map(), new Map());
     expect(row.auto).toBe(false);
-    expect(row.primaryResult).toBeNull();
     expect(row.total).toBe(5);
+    expect(row.lines[0]?.result).toBeNull();
+    expect(row.lines[0]?.breakdownReason).toBe("Ручной режим: расчёт по периметру не запускался");
   });
 
-  it("лист без результата (нерасчётный) — итог null, причина в primaryResult", () => {
+  it("лист без результата (нерасчётный) — итог null, причина в подстроке", () => {
     const product = makeProduct({
       id: 22,
       dimension_state: "area",
@@ -461,7 +535,8 @@ describe("buildHangerCalcRows", () => {
     const [row] = buildHangerCalcRows([product], calcMap, new Map());
     expect(row.auto).toBe(true);
     expect(row.total).toBeNull();
-    expect(row.primaryResult?.reason).toContain("3000×1500");
+    expect(row.lines[0]?.totalReason).toContain("3000×1500");
+    expect(row.lines[0]?.breakdownReason).toContain("3000×1500");
   });
 });
 
@@ -599,7 +674,7 @@ describe("resultsToPairedCalcMap", () => {
 });
 
 describe("buildPairedHangerCalcRows", () => {
-  it("авто-пара: разбивка по первой длине пары, совместный итог", () => {
+  it("авто-пара: подстрока по первой длине пары, совместный итог", () => {
     const pair = makePair({
       productA: makeProduct({ id: 1, sku: "ЮП-A", perimeter_mm: 64.2, mount_width_mm: 19.35, lengths: productLengths(2780, 3000) }),
       productB: makeProduct({ id: 2, sku: "ЮП-B", perimeter_mm: 64.2, mount_width_mm: 19.35, lengths: productLengths(3000, 3500) }),
@@ -612,9 +687,11 @@ describe("buildPairedHangerCalcRows", () => {
     expect(row.auto).toBe(true);
     expect(row.primaryLength).toBe(3000);
     expect(row.lengths).toEqual([3000]);
+    expect(row.lines).toHaveLength(1);
+    expect(row.lines[0]).toMatchObject({ lengthMm: 3000, isPrimary: true, total: 30, source: "auto" });
+    expect(row.lines[0]?.result?.by_area).toBe(72);
     expect(row.total).toBe(30);
     expect(row.limiter).toBe("area");
-    expect(row.primaryResult?.by_area).toBe(72);
     // Суммы пары идут в формулы совместного расчёта (Feature Envy fix).
     expect(row.perimeterSum).toBe(128.4);
     expect(row.widthSum).toBe(38.7);
@@ -629,7 +706,8 @@ describe("buildPairedHangerCalcRows", () => {
     });
     const [row] = buildPairedHangerCalcRows([pair], new Map(), new Map());
     expect(row.auto).toBe(false);
-    expect(row.primaryResult).toBeNull();
+    expect(row.lines[0]?.result).toBeNull();
+    expect(row.lines[0]?.breakdownReason).toBe("Ручной режим: расчёт по периметру не запускался");
     expect(row.total).toBe(40);
     expect(row.perimeterSum).toBeNull();
     expect(row.widthSum).toBeNull();
@@ -713,19 +791,27 @@ describe("rowSearchValues", () => {
   });
 });
 
-describe("formatPairedLengthLabel", () => {
-  it("при равных normal и raw явно показывает сырьё", () => {
-    const label = formatPairedLengthLabel(2700, 2700, 2700);
-
-    expect(label).toContain("2700");
-    expect(label).toContain("сырьё 2700");
+describe("formatLengthLabel", () => {
+  it("сырьё, равное нормальной длине, не печатается", () => {
+    expect(formatLengthLabel(2700, 2700)).toBe("2700");
   });
 
-  it("показывает разные raw обеих сторон", () => {
-    const label = formatPairedLengthLabel(3000, 2750, 3050);
+  it("отличное сырьё печатается рядом с нормальной длиной", () => {
+    expect(formatLengthLabel(2700, 2750)).toBe("2700 / сырьё 2750");
+  });
+});
 
-    expect(label).toContain("2750");
-    expect(label).toContain("3050");
+describe("formatPairedLengthLabel", () => {
+  it("сырьё, равное нормальной длине, не печатается", () => {
+    expect(formatPairedLengthLabel(2700, 2700, 2700)).toBe("2700");
+  });
+
+  it("одинаковое отличное сырьё обеих сторон печатается один раз", () => {
+    expect(formatPairedLengthLabel(2700, 2750, 2750)).toBe("2700 / сырьё 2750");
+  });
+
+  it("разные raw обеих сторон печатаются оба", () => {
+    expect(formatPairedLengthLabel(3000, 2750, 3050)).toBe("3000 / сырьё 2750 и 3050");
   });
 });
 
@@ -742,6 +828,36 @@ function singleRow(id: number, sku: string, total: number, limiter: "area" | "si
   });
   const calcMap: CalcMap = new Map([
     [id, new Map([["3000", makeResult({ total, limiter })]])],
+  ]);
+  const [row] = buildHangerCalcRows([product], calcMap, new Map());
+  return row;
+}
+
+/**
+ * Одиночная строка с двумя длинами: N основной и N второй задаются раздельно,
+ * лимитеры тоже разные — проверяем, чьи значения попадают в ключи строки.
+ */
+function twoLengthRow(
+  id: number,
+  sku: string,
+  primaryTotal: number,
+  secondaryTotal: number,
+): HangerCalcRow {
+  const product = makeProduct({
+    id,
+    sku,
+    perimeter_mm: 64.2,
+    mount_width_mm: 19.35,
+    lengths: [productLength(2780, null, true), productLength(3000)],
+  });
+  const calcMap: CalcMap = new Map([
+    [
+      id,
+      new Map([
+        ["2780", makeResult({ total: primaryTotal, limiter: "area" })],
+        ["3000", makeResult({ total: secondaryTotal, limiter: "size" })],
+      ]),
+    ],
   ]);
   const [row] = buildHangerCalcRows([product], calcMap, new Map());
   return row;
@@ -813,6 +929,28 @@ describe("sortHangerCalcRows — «Итог» по объединённой та
       "ЮП-NO",
     ]);
   });
+
+  it("ключи строки берутся с основной длины: вторая длина с бо́льшим N строку не двигает", () => {
+    // «ЮП-A»: основная 2780 даёт 10 шт (площадь), вторая 3000 — 99 шт (размер).
+    // Итог и лимитер строки обязаны остаться от основной длины, иначе строка
+    // встала бы по 99 шт и по «размер».
+    const wide = twoLengthRow(1, "ЮП-A", 10, 99);
+    const plain = singleRow(2, "ЮП-B", 20, "size");
+
+    expect(wide.lines[1]?.total).toBe(99);
+    expect(wide.total).toBe(10);
+    expect(wide.limiter).toBe("area");
+
+    expect(skus(sortHangerCalcRows([wide, plain], [{ field: "total", order: "asc" }]))).toEqual([
+      "ЮП-A",
+      "ЮП-B",
+    ]);
+    expect(skus(sortHangerCalcRows([wide, plain], [{ field: "limiter", order: "asc" }]))).toEqual([
+      "ЮП-A",
+      "ЮП-B",
+    ]);
+  });
+
 });
 
 describe("sortHangerCalcRows — приоритет 1 по «Артикулу»", () => {

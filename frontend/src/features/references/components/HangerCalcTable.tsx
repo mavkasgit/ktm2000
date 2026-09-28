@@ -436,16 +436,11 @@ export function HangerCalcTable({
               <tbody className="divide-y">
                 {visibleRows.map((row) =>
                   row.kind === "paired" ? (
-                    <PairedHangerRowView
-                      key={`pair-${row.pairId}`}
-                      row={row}
-                      byLength={pairedCalcMap.get(row.pairId)}
-                    />
+                    <PairedHangerRowView key={`pair-${row.pairId}`} row={row} />
                   ) : (
                     <HangerCalcRowView
                       key={row.product.id}
                       row={row}
-                      byLength={calcMap.get(row.product.id)}
                       saveState={rowStates[row.product.id]}
                       readOnly={readOnly}
                       onEdit={onEdit}
