@@ -31,11 +31,19 @@ import {
  * каждом из них и снова возвращается на передачи. Цикл идёт, пока есть что
  * отправлять; последний шаг — финальный выпуск в «Отправлено».
  *
- * Позиция плана (ЮП-009, 2,05 м × 300) сетапится бесфайлово через API —
+ * Позиция плана (ЮП-009, 3 м × 300) сетапится бесфайлово через API —
  * xlsx-фикстуры не храним. Все бизнес-шаги — из UI.
+ *
+ * Длины — по ADR-0028 п.2: нормальная 3 м материализуется в каталоге, остатке
+ * и плане, сырьевая 3,05 м живёт только в карточке как параметр подвеса
+ * (`rawLengthMm`) и ни в остатках, ни в плане, ни в ledger не появляется.
  *
  * Требует запущенного dev-окружения: `npm run dev` из корня проекта.
  */
+/** Нормальная длина: единственная, что материализуется в плане и остатках. */
+const NORMAL_LENGTH_MM = 3000;
+/** Сырьевая длина — только параметр расчёта количества на подвесе (ADR-0028). */
+const RAW_LENGTH_MM = 3050;
 test.describe("@ui Одна строка плана: сквозной маршрут передачами и участками", () => {
   test.beforeEach(async ({ page, loginAsAdmin }) => {
     await loginAsAdmin();
@@ -60,7 +68,8 @@ test.describe("@ui Одна строка плана: сквозной маршр
     await apiEnsureCatalogProduct({
       sku: E2E_SKU,
       name: "Уголок 15*15",
-      lengthsMm: [2050, 3050],
+      lengthsMm: [NORMAL_LENGTH_MM],
+      rawLengthMm: RAW_LENGTH_MM,
       perimeterMm: 60,
       mountWidthMm: 15,
     });
@@ -69,7 +78,9 @@ test.describe("@ui Одна строка плана: сквозной маршр
 
     // ── ШАГ 2. Остатки на «Склад сырья» ────────────────────────────────────
     const rawStock = await apiGetSectionByCode("RAW_STOCK");
-    await apiAddRemainder(product.id, rawStock.id, 400, "E2E остаток 2050мм", { length_mm: 2050 });
+    await apiAddRemainder(product.id, rawStock.id, 400, "E2E остаток 3000мм", {
+      length_mm: NORMAL_LENGTH_MM,
+    });
     console.log("[step2] остатки готовы");
 
     // ── ШАГ 3. План из ОДНОЙ строки ────────────────────────────────────────
@@ -82,9 +93,9 @@ test.describe("@ui Одна строка плана: сквозной маршр
           raw_stock: 400,
           color: "серебро",
           qty_per_27: 300,
-          length_m: 2.05,
+          length_m: 3,
           packaging: "смотка спанбондом поштучно в пачке 10 штук",
-          output_length_m: 2.05,
+          output_length_m: 3,
           output_qty: 300,
           west: 300,
           east: 0,

@@ -17,11 +17,22 @@ export function unwrapItems<T>(body: T[] | { items?: T[] }): T[] {
  * нужных тестам: миграции + базовый сид через backend/.venv.
  */
 export async function ensureDbBootstrapped(): Promise<void> {
-  // Проверяем НЕ секции, а то, что тестам действительно нужно: активный
-  // шаблон импорта и маршруты. `reset-all` чистит `import_templates` и
-  // `production_routes`, но секции оставляет — проверка по секциям
-  // возвращала «БД инициализирована», справочники не восстанавливались,
-  // и следующий тест падал на «No active import template found».
+  // Два РАЗНЫХ вопроса, и путать их нельзя.
+  //
+  // 1) Жив ли стенд. Если backend не отвечает — сид бесполезен, а оператор
+  //    должен увидеть «поднимите стек», а не «БД пуста, но URL не задан».
+  // 2) Хватает ли тестам справочников. Проверяем НЕ секции, а активный
+  //    шаблон импорта и маршруты: `reset-all` чистит `import_templates` и
+  //    `production_routes`, но секции оставляет. Проверка по секциям
+  //    радостно объявляла базу готовой, справочники не восстанавливались,
+  //    и следующий тест падал на «No active import template found».
+  if (!(await isStackReachable())) {
+    throw new Error(
+      `Тест-стек недоступен на ${BACKEND_URL}. Поднимите его: ` +
+        `EXTERNAL_PORT=8100 docker compose --env-file .env.test -f infra/compose/docker-compose.test.yml up -d --build`,
+    );
+  }
+
   const [templatesOk, routesOk] = await Promise.all([
     hasActiveImportTemplate(),
     hasAnyRoute(),
@@ -29,7 +40,6 @@ export async function ensureDbBootstrapped(): Promise<void> {
   if (templatesOk && routesOk) {
     return; // БД инициализирована — ничего не перезаписываем
   }
-
   const dbUrl =
     process.env.E2E_TEST_DATABASE_URL ??
     readEnvTestVar("TEST_DATABASE_URL") ??
@@ -52,6 +62,16 @@ export async function ensureDbBootstrapped(): Promise<void> {
   );
   execFileSync(py, ["-m", "alembic", "upgrade", "head"], { cwd: backendDir, env, stdio: "inherit" });
   execFileSync(py, ["scripts/seed_all.py"], { cwd: backendDir, env, stdio: "inherit" });
+}
+
+/** Жив ли стенд: без backend сид бессмысленен, а ошибка должна называть причину. */
+async function isStackReachable(): Promise<boolean> {
+  try {
+    const res = await fetch(`${BACKEND_URL}/api/sections`);
+    return res.ok;
+  } catch {
+    return false;
+  }
 }
 
 /** Есть ли активный шаблон импорта — без него не работает ни один импорт. */

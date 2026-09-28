@@ -103,17 +103,22 @@ test.describe("@ui Полный цикл производства (ЮП-009)", (
     console.log("[step3] план импортирован");
 
     // ── ШАГ 5. Утверждение обеих позиций (без force-диалога) ──────────
+    // План импортирован двумя строками (ШАГ 3) — значит, утвердиться обязаны
+    // обе. Раньше тут стоял `test.skip` на «не нашлось позиции»: он превращал
+    // в зелёный прогон, в котором половина канона просто не исполнилась.
     const positions: ApprovablePosition[] = [];
     for (let attempt = 0; attempt < 2; attempt++) {
       const position = await findApprovablePositionViaUI(page);
-      if (!position) {
-        test.skip(true, "Нет утверждаемых позиций после импорта плана ЮП-009");
-        break;
-      }
-      positions.push(position);
-      await approvePositionViaUI(page, position);
-      console.log(`[step5] позиция #${position.id} утверждена`);
+      expect(
+        position,
+        `раунд ${attempt}: в плане нет утверждаемой позиции — импортировано 2 строки, ` +
+          `утверждено ${positions.length}`,
+      ).not.toBeNull();
+      positions.push(position!);
+      await approvePositionViaUI(page, position!);
+      console.log(`[step5] позиция #${position!.id} утверждена`);
     }
+    expect(new Set(positions.map((p) => p.id)).size, "обе позиции плана должны быть разными").toBe(2);
 
     // ── ШАГ 6. Запуск в работу обеих позиций на /execution ───────────
     for (const position of positions) {

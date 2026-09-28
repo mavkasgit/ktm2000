@@ -126,3 +126,6 @@ terminals/
 brain/
 agent-tools/
 
+# Локальный scratch (временные скриншоты, заметки агентов)
+.scratch/
+

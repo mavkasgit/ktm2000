@@ -18,7 +18,7 @@ import { seedReferenceDataViaUI, waitForPlanningTableViaUI } from "./ui-helpers"
  * План из трёх строк одного артикула, различающихся только
  * «Пробивкой/сверловкой»: «окно» (PRESS_WINDOW), «гребенка» (PRESS_COMB)
  * и пусто (без пресса). Сырьё — одна куча чистого (Годный, без операций)
- * 1000 × 2,05 м на «Складе сырья».
+ * 1000 × 2,7 м на «Складе сырья».
  *
  * Регрессия: варианты разъезжались по разным продуктам/кучам, и индикатор
  * свободного остатка показывал, например, «окно — 1000», а «гребенка — 0».
@@ -70,8 +70,12 @@ async function apiEnsureProduct460(token: string): Promise<{ id: number; sku: st
     unit: "pcs",
     is_active: true,
     is_catalog_item: true,
-    lengths_mm: [2050, 3050],
-    length_mm: 2050,
+    // Нормальная длина ЮП-460 — 2,7 м (см. packing_plan_demo_seeder: «РП-АКП-03
+    // 2,7 м анод. медь матов»). В реестре одна длина: вторая была мусором от
+    // прежнего захода, а сырьевая длина по ADR-0028 —
+    // отдельный параметр подвеса и в реестр длин не пишется.
+    lengths_mm: [2700],
+    length_mm: 2700,
   });
   const created = (await list()).filter((p) => p.sku === SKU);
   expect(created.length, `продукт ${SKU} не создался`).toBe(1);
@@ -81,15 +85,16 @@ async function apiEnsureProduct460(token: string): Promise<{ id: number; sku: st
 /**
  * Сырьевые длины продукта. Продукт может уже существовать в накопительной
  * dev-БД (reset-all справочник сырья не чистит) — подстраиваем план и кучу
- * под его минимальную длину, чтобы вход материализовался точь-в-точь
- * (ADR-0024) без подстановки «ближайшей сверху».
+ * под его минимальную длину, чтобы вход материализовался точь-в-точь:
+ * длина входа берётся из нормальных длин продукта, сырьевая (ADR-0028) в
+ * материализацию входа не попадает.
  */
 async function apiGetProductLengthsMm(token: string, productId: number): Promise<number[]> {
   const body = await apiJson(token, `/api/products/${productId}`);
   const lengths = Array.isArray(body?.lengths_mm)
     ? body.lengths_mm.map(Number).filter((n: number) => Number.isFinite(n) && n > 0)
     : [];
-  return lengths.length > 0 ? lengths : [2050];
+  return lengths.length > 0 ? lengths : [2700];
 }
 
 /** Свободный остаток из текста строки плана («[ЮП-460] · 1000 …»). */
@@ -100,7 +105,7 @@ function parseRemainder(rowText: string): number | null {
   return Number.isFinite(value) ? value : null;
 }
 
-test.describe("@ui-narrow ЮП-460: окно / гребенка / без пресса делят одну кучу сырья", () => {
+test.describe("@ui @ui-narrow ЮП-460: окно / гребенка / без пресса делят одну кучу сырья", () => {
   test.beforeEach(async ({ page, loginAsAdmin }) => {
     await loginAsAdmin();
     // API-сетап с токеном страницы (приём из sawing-multi-length-split).
@@ -208,23 +213,37 @@ test.describe("@ui-narrow ЮП-460: окно / гребенка / без пре�
     console.log("[step3] план импортирован (3 строки)");
 
     // ── ШАГ 4. Общая куча: у всех трёх остаток 1000 ───────────────────
-    const remainders: number[] = [];
+    // Таблица плана живёт на react-query: `available_remainder_quantity` считается
+    // на бэкенде от остатка склада МИНУС запущенный спрос, и строки приходят
+    // перерисовкой после первой загрузки. Раньше остаток читался ОДИН раз сразу
+    // после `waitForPlanningTableViaUI`, и на недописанной таблице все три
+    // позиции показывали «· 0» — тест падал на «видит 0, а не общую кучу».
+    // Ждём, пока все три строки покажут кучу; значение по-прежнему сверяется
+    // ровно, «любое» не подставляем.
     const rowTexts: string[] = [];
-    for (let i = 0; i < 3; i++) {
-      const text = ((await rows.nth(i).innerText()) ?? "").replace(/\s+/g, " ").trim();
-      rowTexts.push(text);
-      expect(text, `строка ${i}: неожиданный артикул`).toContain(SKU);
-      expect(text, `строка ${i}: маршрут не назначен`).not.toContain("Не назначен");
-      const remainder = parseRemainder(text);
-      expect(remainder, `строка ${i}: индикатор остатка не читается: ${text}`).not.toBeNull();
-      remainders.push(remainder!);
-    }
-    for (const [i, value] of remainders.entries()) {
-      expect(
-        value,
-        `позиция ${i} видит ${value}, а не общую кучу ${PILE_QTY}: ${rowTexts[i]}`,
-      ).toBe(PILE_QTY);
-    }
+    const remainders: number[] = [];
+    await expect
+      .poll(
+        async () => {
+          rowTexts.length = 0;
+          remainders.length = 0;
+          for (let i = 0; i < 3; i++) {
+            const text = ((await rows.nth(i).innerText()) ?? "").replace(/\s+/g, " ").trim();
+            rowTexts.push(text);
+            expect(text, `строка ${i}: неожиданный артикул`).toContain(SKU);
+            expect(text, `строка ${i}: маршрут не назначен`).not.toContain("Не назначен");
+            const remainder = parseRemainder(text);
+            expect(remainder, `строка ${i}: индикатор остатка не читается: ${text}`).not.toBeNull();
+            remainders.push(remainder!);
+          }
+          return remainders.join("/");
+        },
+        {
+          timeout: 30_000,
+          message: `все три позиции должны видеть общую кучу ${PILE_QTY}`,
+        },
+      )
+      .toBe([PILE_QTY, PILE_QTY, PILE_QTY].join("/"));
     console.log(`[step4] остатки всех позиций: ${remainders.join(" / ")}`);
 
     // ── ШАГ 5. Три разных варианта, а не три копии ─────────────────────

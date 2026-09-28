@@ -88,7 +88,7 @@ function lengthLabel(mm: number): string {
   return `${String(mm / 1000).replace(".", ",")} м`;
 }
 
-test.describe("@ui-narrow Пила: распил одной задачи на несколько разных длин", () => {
+test.describe("@ui @ui-narrow Пила: распил одной задачи на несколько разных длин", () => {
   // Сид/импорт на медленном бэкенде превышают дефолтные 30с хуков.
   test.setTimeout(240_000);
 
@@ -245,9 +245,17 @@ test.describe("@ui-narrow Пила: распил одной задачи на н
 
     // ─── 2. Доска пилы: карточка трансформации видна ────────────────────────
     await authenticatedPage.goto(`/section-tasks/${sawing.id}`);
-    const taskRow = authenticatedPage.locator("tr", { hasText: SAW_SKU }).first();
-    await expect(taskRow).toBeVisible({ timeout: 15_000 });
-    // Доска показывает вход отдельной колонкой, а раскрой — компактной сводкой.
+    // Строка ЗАДАЧИ, а не шапка группы: `TaskExtras` (раскрой + прогресс) есть
+    // только в `renderTaskRow` — в `TableTaskGroupRow` его нет, поэтому шапка
+    // свёрнутой группы не содержит ни одного «0,9×…». Заодно раскрываем группы:
+    // группа с несколькими заданиями свёрнута по умолчанию.
+    const taskRow = authenticatedPage
+      .locator("tr")
+      .filter({ has: authenticatedPage.getByRole("button", { name: "Завершить", exact: true }) })
+      .filter({ hasText: SAW_SKU })
+      .first();
+    await expect(taskRow, "на доске пилы нет строки задачи-раскроя").toBeVisible({ timeout: 15_000 });
+    // Доска показывает вход отдельной колонкой («Размер»), а раскрой — сводкой.
     await expect(taskRow.getByText(lengthLabel(inputLength!))).toBeVisible({ timeout: 15_000 });
     for (const output of pos!.outputs ?? []) {
       const mm = output.dimensions?.length_mm;
@@ -263,7 +271,7 @@ test.describe("@ui-narrow Пила: распил одной задачи на н
     expect(["in_progress", "ready"]).toContain(task!.status);
 
     // ─── 3. «Внести факт»: первая порция ────────────────────────────────────
-    const completeBtn = taskRow.getByRole("button", { name: "Завершить" }).first();
+    const completeBtn = taskRow.getByRole("button", { name: "Завершить", exact: true }).first();
     await expect(completeBtn).toBeVisible({ timeout: 5_000 });
     await completeBtn.click();
     const drawer = authenticatedPage.getByRole("dialog");
@@ -275,7 +283,9 @@ test.describe("@ui-narrow Пила: распил одной задачи на н
     await expect(drawer.getByText(lengthLabel(inputLength!))).toBeVisible();
 
     const portion1 = Math.floor(inputQty / 2);
-    await drawer.locator('input[type="number"]').first().fill(String(portion1));
+    // Поле факта в drawer'е — `type="text" inputMode="numeric"` (#192); полей два
+    // («Факт (раскроено заготовок)» и «Брак»), берём первое.
+    await drawer.locator('input[inputmode="numeric"]').first().fill(String(portion1));
     await drawer.getByRole("button", { name: "Сохранить" }).click();
     await expect(drawer).not.toBeVisible({ timeout: 15_000 });
 
@@ -304,25 +314,27 @@ test.describe("@ui-narrow Пила: распил одной задачи на н
 
     // ─── 4. Вторая порция: полный раскрой ───────────────────────────────────
     await expect(
-      taskRow.getByRole("button", { name: "Завершить" }).first(),
+      taskRow.getByRole("button", { name: "Завершить", exact: true }).first(),
     ).toBeEnabled({ timeout: 10_000 });
     await completeBtn.click();
     await expect(drawer).toBeVisible({ timeout: 5_000 });
     const rest = inputQty - portion1;
-    // Кнопка «Плановое» на трансформации подставляет ПОЛНЫЙ вход, а не остаток —
-    // вводим остаток вручную (превышение остатка бракуется бэкендом).
-    await drawer.locator('input[type="number"]').first().fill(String(rest));
+    // Кнопка «Плановое (N)» на трансформации подставляет ПОЛНЫЙ вход, а не
+    // остаток — вводим остаток вручную (превышение остатка бракуется бэкендом).
+    await drawer.locator('input[inputmode="numeric"]').first().fill(String(rest));
     await drawer.getByRole("button", { name: "Сохранить" }).click();
     await expect(drawer).not.toBeVisible({ timeout: 15_000 });
 
-
     // ─── 5. Контроль: вход раскрыл полностью, ledger и остатки по длинам ────
     task = (await boardTasks(sawing.id)).find((t) => t.product_sku === SAW_SKU);
-    // Статус задачи считается от planned_quantity позиции (сумма строк Excel),
-    // которая может отличаться от суммы выходов спецификации — контракт
-    // распила проверяем по ledger: вход списан, все выходы оприходованы.
+    // Статус задачи НЕ приравнивается к полному раскрою: он считается от
+    // `planned_quantity` позиции (сумма строк Excel = 350 + 50 = 400), а вход
+    // раскрыт на 150, поэтому задача уходит в `completed` по факту полного
+    // входа (isTaskExecutionComplete) — но контракт распила проверяем по
+    // ledger: вход списан целиком и все выходы оприходованы.
     expect(["completed", "partially_completed"]).toContain(task!.status);
     expect(Number(task!.input_consumed_quantity)).toBe(inputQty);
+    expect(task!.outputs_progress?.length).toBeGreaterThanOrEqual(2);
     for (const row of task!.outputs_progress ?? []) {
       expect(Number(row.produced_quantity)).toBe(Number(row.quantity));
     }

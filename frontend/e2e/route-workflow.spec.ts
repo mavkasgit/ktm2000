@@ -30,17 +30,22 @@ test.describe("@ui Route workflow E2E", () => {
     await waitForPlanningTableViaUI(page);
 
     const rows = page.locator('[id^="plan-position-"]');
+    // Таблица плана грузится асинхронно: `count()` сразу после goto видел 0
+    // строк на ещё не отрисованной таблице — и тест уходил в `test.skip`.
+    // Ждём конкретное состояние (есть строка), а не «сколько бы ни нашлось».
+    await expect(rows.first()).toBeVisible({ timeout: 30_000 });
     const count = await rows.count();
-    if (count === 0) {
-      test.skip(true, "No plan positions rendered after import");
-    }
 
     const firstRow = rows.first();
-    await expect(firstRow).toBeVisible({ timeout: 10_000 });
+    // Строка плана — CSS-grid из <div>, а не <table>: локатор `td` в ней не
+    // находит ничего (маршрут читался как «нет подсказки» на любом прогоне).
+    // Седьмая ячейка grid — «Маршрут» (порядок в PlanPositionRow).
+    const routeCell = firstRow.locator("> div").nth(6);
+    await expect(routeCell).toBeVisible({ timeout: 10_000 });
+    // Живой импорт «Упаковочного плана» назначает маршрут каждой строке,
+    // поэтому в ячейке имя маршрута, а не плейсхолдеры неразрешённого route.
+    await expect(routeCell).not.toHaveText(/Не назначен|Нажмите для выбора/i);
 
-    const routeCell = firstRow.locator("td").filter({ hasText: /типовой|маршрут|route/i });
-    const hasRouteHint = (await routeCell.count()) > 0;
-    console.log(`First imported row has route hint in table: ${hasRouteHint}`);
     expect(count).toBeGreaterThan(0);
   });
 
@@ -51,15 +56,26 @@ test.describe("@ui Route workflow E2E", () => {
     });
 
     const addFileBtn = page.getByRole("button", { name: /добавить файл/i });
-    await expect(addFileBtn).toBeVisible();
+    await expect(addFileBtn).toBeVisible({ timeout: 10_000 });
     await addFileBtn.click();
 
-    await expect(page.getByRole("dialog")).toBeVisible({ timeout: 5_000 });
-    await expect(page.getByRole("heading", { name: /импорт|загруз|import/i })).toBeVisible({
-      timeout: 5_000,
+    const wizard = page.getByRole("dialog");
+    await expect(wizard).toBeVisible({ timeout: 10_000 });
+    await expect(wizard.getByRole("heading", { name: /импорт|загруз|import/i })).toBeVisible({
+      timeout: 10_000,
+    });
+
+    // Шаблон импорта выбирается на шаге загрузки, а список приезжает отдельным
+    // запросом после открытия визарда — ждём его появления, а не факта диалога.
+    const templateSelect = wizard.getByRole("combobox").first();
+    await expect(templateSelect).toBeVisible({ timeout: 10_000 });
+    await templateSelect.click();
+    await expect(page.getByRole("option", { name: /Упаковочная карта РП/i })).toBeVisible({
+      timeout: 10_000,
     });
 
     await page.keyboard.press("Escape");
-    await expect(page.getByRole("dialog")).not.toBeVisible({ timeout: 5_000 });
+    await page.keyboard.press("Escape");
+    await expect(page.getByRole("dialog")).not.toBeVisible({ timeout: 10_000 });
   });
 });

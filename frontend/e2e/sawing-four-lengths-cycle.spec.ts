@@ -85,12 +85,25 @@ function cutOutputLabel(mm: number, total: number): string {
   return `${String(mm / 1000).replace(".", ",")}×${total}`;
 }
 
-/** Строка P1 на пиле: после первой порции cut_layout может исчезнуть из DOM. */
+/**
+ * Строка задачи-раскроя P1 на пиле.
+ *
+ * Ищем по раскрою, а не по числам колонок: шапка свёрнутой группы на доске
+ * (`TableTaskGroupRow`, SectionTasksBoard.tsx:343) рендерит артикул, размер и
+ * СУММЫ плана/выдано, но НЕ рендерит `TaskExtras` — раскроя и прогресса в ней
+ * нет. P1/P3/P4 попадают в одну группу (артикул + вход 2,7 м + операция
+ * «Резка профиля»), а группа с несколькими задачами свёрнута по умолчанию
+ * (SectionTasksBoard.tsx:692-701), поэтому фильтр по «250»/«150» находил
+ * ШАПКУ группы, а не задачу, и прогресс по выходам не читался никогда.
+ *
+ * Выход 0,9 м есть только у P1 — это и есть однозначный маркер строки.
+ * Кнопка «Завершить» с `exact` отсекает «Завершить группу» из шапки.
+ */
 function splitTaskRow(page: Page): Locator {
   return page
     .locator("tr")
-    .filter({ hasText: "250" })
-    .filter({ hasText: "150" })
+    .filter({ has: page.getByRole("button", { name: "Завершить", exact: true }) })
+    .filter({ hasText: cutOutputLabel(OUTPUTS[0].mm, OUTPUTS[0].total) })
     .first();
 }
 
@@ -173,7 +186,8 @@ async function splitSawIntoLengthsViaUI(page: Page, sectionId: number): Promise<
     await expect(row).toContainText(cutOutputLabel(out.mm, out.total));
   }
 
-  const completeBtn = () => splitTaskRow(page).getByRole("button", { name: "Завершить" }).first();
+  const completeBtn = () =>
+    splitTaskRow(page).getByRole("button", { name: "Завершить", exact: true }).first();
   if (!(await completeBtn().isVisible().catch(() => false))) return false;
   if (!(await completeBtn().isEnabled().catch(() => false))) return false;
 
@@ -194,7 +208,10 @@ async function splitSawIntoLengthsViaUI(page: Page, sectionId: number): Promise<
       return false;
     }
 
-    await drawer.locator('input[type="number"]').first().fill(String(portion));
+    // Поле факта в диалоге — `type="text" inputMode="numeric"` (#192): `type="number"`
+    // в `sections/` больше нет ни в одном Input, и такой локатор провисел бы до
+    // таймаута теста. Полей два — «Факт (раскроено заготовок)» и «Брак», берём первое.
+    await drawer.locator('input[inputmode="numeric"]').first().fill(String(portion));
     await drawer.getByRole("button", { name: "Сохранить" }).click();
     await expect(drawer).not.toBeVisible({ timeout: 15_000 });
     consumed += portion;
@@ -215,11 +232,45 @@ async function splitSawIntoLengthsViaUI(page: Page, sectionId: number): Promise<
     expect(transformTask, "P1 отсутствует в ответе board после сохранения порции").toBeTruthy();
     expect(transformTask?.status).toBe(index === PORTIONS.length - 1 ? "completed" : "partially_completed");
     expect(transformTask?.input_consumed_quantity).toBe(String(consumed));
+    const lastPortion = index === PORTIONS.length - 1;
 
+    // Доска перерисована после goto: дожидаемся её строк и раскрываем группы
+    // ДО ветвления, иначе «P1 ушла из активной доски» прочиталось бы как
+    // «данные ещё не приехали» и прошло бы на пустом tbody.
     await waitForBoardRows(page);
     await expandBoardGroupsViaUI(page);
 
-
+    if (lastPortion) {
+      // Последняя порция закрывает задание: `isTaskExecutionComplete` переводит
+      // её в категорию «completed», а доска `/section-tasks/:id` по умолчанию
+      // показывает только активные и ожидающие (`viewMode.completed = false`,
+      // SectionsTasksPage.tsx:125) — переключателя «Завершённые» на главной
+      // доске нет вовсе (`showCompletedStatus = false` по умолчанию,
+      // SectionTasksBoard.tsx:497, а страница его не передаёт). Поэтому полный
+      // раскрой читаем из ответа board той же строки, что и статус/списание,
+      // и отдельно убеждаемся, что из активной доски строка ушла.
+      const progressRows = (transformTask?.outputs_progress ?? []) as Array<{
+        dimensions: { length_mm?: number } | null;
+        produced_quantity: number | string;
+        quantity: number | string;
+      }>;
+      expect(progressRows, "после полного раскроя в board нет прогресса по выходам").toHaveLength(
+        OUTPUTS.length,
+      );
+      for (const out of OUTPUTS) {
+        const row = progressRows.find((r) => r.dimensions?.length_mm === out.mm);
+        expect(row, `в board нет выхода ${lengthLabel(out.mm)}`).toBeTruthy();
+        expect(
+          Number(row!.produced_quantity),
+          `после ${consumed} заготовок выход ${lengthLabel(out.mm)}`,
+        ).toBe(out.total);
+      }
+      await expect(
+        splitTaskRow(page),
+        "полностью раскроенная P1 должна уйти из активной доски",
+      ).toHaveCount(0, { timeout: 15_000 });
+      continue;
+    }
     // Кумулятивная пропорция бэкенда: target_i = total_i × раскроено / вход.
     const progress = await outputsProgressText(page);
     for (const out of OUTPUTS) {
@@ -238,7 +289,7 @@ async function splitSawIntoLengthsViaUI(page: Page, sectionId: number): Promise<
   return true;
 }
 
-test.describe("@ui-narrow Пила: раскрой 2,75 м на четыре длины в полном цикле", () => {
+test.describe("@ui @ui-narrow Пила: раскрой 2,75 м на четыре длины в полном цикле", () => {
   test.beforeEach(async ({ page, loginAsAdmin }) => {
     await loginAsAdmin();
     // `reset-all` — системный сброс: он чистит и справочники импорта
@@ -391,10 +442,18 @@ test.describe("@ui-narrow Пила: раскрой 2,75 м на четыре д�
     console.log("[step3] план импортирован");
 
     // ── ШАГ 4. Утверждение всех четырёх позиций ────────────────────────────
+    // Таблица плана живёт на react-query: сразу после approve предыдущей
+    // позиции строк с кнопкой «Утвердить» может ещё не быть в DOM (перерисовка
+    // после reload), и `findApprovablePositionViaUI` вернул бы null. Раньше цикл
+    // на этом `break`вался и падал с «утверждены не все позиции плана» — ждём
+    // следующую утверждаемую позицию, а не сдаёмся на первом пустом снимке.
     const positions: ApprovablePosition[] = [];
-    for (let attempt = 0; attempt < POSITIONS; attempt++) {
+    for (let attempt = 0; attempt < POSITIONS * 6 && positions.length < POSITIONS; attempt++) {
       const position = await findApprovablePositionViaUI(page);
-      if (!position) break;
+      if (!position) {
+        await page.waitForTimeout(1_000);
+        continue;
+      }
       expect(position.sku, "в плане неожиданный артикул").toContain(SAW4_SKU);
       await approvePositionViaUI(page, position);
       positions.push(position);
