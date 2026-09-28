@@ -1611,3 +1611,263 @@ async def test_migration_066_backfills_route_signature_idempotently(tmp_path: Pa
         async with admin_engine.connect() as conn:
             await conn.execute(text(f'DROP DATABASE IF EXISTS "{db_name}" WITH (FORCE)'))
         await admin_engine.dispose()
+
+
+_MIG066_PREV = "065_route_stage_transit_normalization"
+
+
+async def _seed_mig066_products(conn) -> dict[str, int]:
+    """Артикулы со всеми формами разрыва: 2750-сырьё, 2750-норма, сирота, лист."""
+    fixtures = [
+        # (sku, dimension_state, attributes, [(length_mm, raw_length_mm, is_primary)], norms)
+        (
+            "MIG066-LINEAR",
+            "length",
+            '{"hanger_mode": "manual"}',
+            [(2700, 2750, True)],
+            {"2750": {"auto": None, "manual": 62}},
+        ),
+        (
+            "MIG066-AUTO",
+            "length",
+            '{"hanger_mode": "auto", "perimeter_mm": 100, "mount_width_mm": 50}',
+            [(2700, 2750, True)],
+            {"2750": {"auto": 48, "manual": None}},
+        ),
+        # Пара: 2750 — НОРМАЛЬНАЯ длина артикула (миграция 058), ключ верен.
+        (
+            "MIG066-PAIR",
+            "length",
+            '{"hanger_mode": "manual"}',
+            [(2750, None, True)],
+            {"2750": {"auto": None, "manual": 30}},
+        ),
+        # Норма-сирота: 3000 нет ни как нормальная, ни как сырьевая.
+        (
+            "MIG066-ORPHAN",
+            "length",
+            '{"hanger_mode": "manual"}',
+            [(2700, 2750, True)],
+            {"3000": {"auto": None, "manual": 7}},
+        ),
+        # Коллизия: нормальная длина уже занята — перезапись стёрла бы чужое.
+        (
+            "MIG066-COLLIDE",
+            "length",
+            '{"hanger_mode": "manual"}',
+            [(2700, 2750, True)],
+            {"2700": {"auto": None, "manual": 5}, "2750": {"auto": None, "manual": 9}},
+        ),
+        # Лист: длина одна по определению, запись одна — миграция не трогает.
+        (
+            "MIG066-SHEET",
+            "area",
+            '{"hanger_mode": "manual"}',
+            [],
+            {"2000": {"auto": None, "manual": 5}},
+        ),
+        # Legacy bare-словарь: не per-length, ключ не длина.
+        (
+            "MIG066-BARE",
+            "length",
+            '{"hanger_mode": "manual"}',
+            [(2700, 2750, True)],
+            {"auto": None, "manual": 12},
+        ),
+        # Два legacy-ключа, канонизирующиеся в один («2750» и «2750.0»):
+        # второй не должен затереть перенесённое значение первого.
+        (
+            "MIG066-DUPKEY",
+            "length",
+            '{"hanger_mode": "manual"}',
+            [(2700, 2750, True)],
+            {"2750": {"auto": None, "manual": 11}, "2750.0": {"auto": None, "manual": 13}},
+        ),
+        # Неоднозначное сырьё: 2750 — сырьевая длина сразу двух нормальных
+        # длин артикула. Выбирать одну — догадка, поэтому не трогаем.
+        (
+            "MIG066-AMBIG",
+            "length",
+            '{"hanger_mode": "manual"}',
+            [(2500, 2750, True), (2700, 2750, False)],
+            {"2750": {"auto": None, "manual": 17}},
+        ),
+    ]
+    ids: dict[str, int] = {}
+    for sku, state, attributes, lengths, norms in fixtures:
+        product_id = (
+            await conn.execute(
+                text(
+                    "INSERT INTO products "
+                    "(sku, name, type, unit, is_active, dimension_state, attributes) "
+                    "VALUES (:sku, :sku, 'component', 'pcs', true, :state, "
+                    "CAST(:attributes AS jsonb) || CAST(:norms AS jsonb)) RETURNING id"
+                ),
+                {
+                    "sku": sku,
+                    "state": state,
+                    "attributes": attributes,
+                    "norms": json.dumps({"quantity_per_hanger": norms}),
+                },
+            )
+        ).scalar_one()
+        ids[sku] = product_id
+        for length_mm, raw_length_mm, is_primary in lengths:
+            await conn.execute(
+                text(
+                    "INSERT INTO product_lengths "
+                    "(product_id, length_mm, raw_length_mm, is_primary) "
+                    "VALUES (:product_id, :length_mm, :raw_length_mm, :is_primary)"
+                ),
+                {
+                    "product_id": product_id,
+                    "length_mm": length_mm,
+                    "raw_length_mm": raw_length_mm,
+                    "is_primary": is_primary,
+                },
+            )
+    return ids
+
+
+async def _mig066_norms(conn) -> dict[str, dict]:
+    rows = (
+        await conn.execute(
+            text(
+                "SELECT sku, attributes->'quantity_per_hanger' AS norms "
+                "FROM products WHERE sku LIKE 'MIG066-%' ORDER BY sku"
+            )
+        )
+    ).all()
+    return {row.sku: row.norms for row in rows}
+
+
+async def _mig066_report(conn) -> list[tuple]:
+    return list(
+        (
+            await conn.execute(
+                text(
+                    "SELECT sku, old_key, new_key, status, reason "
+                    "FROM hanger_norm_key_migration ORDER BY sku, old_key"
+                )
+            )
+        ).all()
+    )
+
+
+@pytest.mark.asyncio
+async def test_migration_066_normalizes_hanger_norm_keys_by_article(tmp_path: Path):
+    """#218 (ADR-0047 п. 1): ключ ручной нормы приводится к нормальной длине.
+
+    Правило «на статью», а не «2750 → 2700» массово: у артикула, где 2750 —
+    НОРМАЛЬНАЯ длина (пары), ключ верен и не трогается; ключ, равный чьей-то
+    сырьевой длине, переписывается; несовпавший ни с чем сохраняется и попадает
+    в отчёт как требующий решения оператора. Листы и legacy bare-словарь не
+    трогаются. Идемпотентна и имеет downgrade.
+    """
+    db_name = f"ktm_mig_{uuid.uuid4().hex[:10]}"
+    admin_url = _test_db_url().rsplit("/", 1)[0] + "/postgres"
+    target_url = _test_db_url().rsplit("/", 1)[0] + f"/{db_name}"
+
+    admin_engine = create_async_engine(admin_url, isolation_level="AUTOCOMMIT")
+    async with admin_engine.connect() as conn:
+        await conn.execute(text(f'CREATE DATABASE "{db_name}"'))
+    await admin_engine.dispose()
+
+    env = _alembic_env(target_url, tmp_path)
+    engine = create_async_engine(target_url)
+
+    def _run(*args: str) -> None:
+        result = subprocess.run(
+            ["alembic", *args],
+            cwd=BACKEND_DIR,
+            env=env,
+            capture_output=True,
+            text=True,
+            check=False,
+        )
+        assert result.returncode == 0, result.stderr or result.stdout
+
+    try:
+        _run("upgrade", _MIG066_PREV)
+        async with engine.begin() as conn:
+            await _seed_mig066_products(conn)
+
+        _run("upgrade", "head")
+        async with engine.connect() as conn:
+            norms = await _mig066_norms(conn)
+            report = await _mig066_report(conn)
+
+        # Ключ, равный сырьевой длине артикула, → нормальная длина этого артикула.
+        assert norms["MIG066-LINEAR"] == {"2700": {"auto": None, "manual": 62}}
+        # Авто-режим — тот же разрыв, те же 43 артикула: ключ тоже нормализуется.
+        assert norms["MIG066-AUTO"] == {"2700": {"auto": 48, "manual": None}}
+        # 2750 как НОРМАЛЬНАЯ длина (пара) — не трогаем.
+        assert norms["MIG066-PAIR"] == {"2750": {"auto": None, "manual": 30}}
+        # Норма-сирота сохранена как есть (решение оператора, не наша).
+        assert norms["MIG066-ORPHAN"] == {"3000": {"auto": None, "manual": 7}}
+        # Коллизия: обе записи на месте, ничего не стёрто.
+        assert norms["MIG066-COLLIDE"] == {
+            "2700": {"auto": None, "manual": 5},
+            "2750": {"auto": None, "manual": 9},
+        }
+        # Лист: запись по длине одна, фолбэк на неё — единственный путь (#126).
+        assert norms["MIG066-SHEET"] == {"2000": {"auto": None, "manual": 5}}
+        # Legacy bare-словарь — не per-length, миграция его не читает.
+        assert norms["MIG066-BARE"] == {"auto": None, "manual": 12}
+        # Дубль ключа: перенесённое значение первого ключа не затирает второе.
+        assert norms["MIG066-DUPKEY"] == {
+            "2700": {"auto": None, "manual": 11},
+            "2750.0": {"auto": None, "manual": 13},
+        }
+        # Неоднозначное сырьё: норма одна, а сырьевая длина принадлежит двум
+        # нормальным — выбирать длину без решения оператора нельзя.
+        assert norms["MIG066-AMBIG"] == {"2750": {"auto": None, "manual": 17}}
+
+        # Отчёт: каждый изменённый артикул со старым и новым ключом + отдельно
+        # неразрешённые.
+        assert report == [
+            ("MIG066-AMBIG", "2750", None, "unresolved", "ambiguous_raw_length"),
+            ("MIG066-AUTO", "2750", "2700", "rewritten", None),
+            ("MIG066-COLLIDE", "2750", None, "unresolved", "target_key_exists"),
+            ("MIG066-DUPKEY", "2750", "2700", "rewritten", None),
+            ("MIG066-DUPKEY", "2750.0", None, "unresolved", "target_key_exists"),
+            ("MIG066-LINEAR", "2750", "2700", "rewritten", None),
+            ("MIG066-ORPHAN", "3000", None, "unresolved", "not_in_registry"),
+        ]
+
+        # Идемпотентность: повторный прогон не меняет ни данные, ни отчёт.
+        _run("stamp", _MIG066_PREV)
+        _run("upgrade", "head")
+        async with engine.connect() as conn:
+            assert await _mig066_norms(conn) == norms
+            assert await _mig066_report(conn) == report
+
+        # Downgrade возвращает исходные ключи и убирает отчёт.
+        _run("downgrade", _MIG066_PREV)
+        async with engine.connect() as conn:
+            reverted = await _mig066_norms(conn)
+            report_table_count = (
+                await conn.execute(
+                    text(
+                        "SELECT count(*) FROM information_schema.tables "
+                        "WHERE table_schema = 'public' AND table_name = 'hanger_norm_key_migration'"
+                    )
+                )
+            ).scalar_one()
+        assert reverted["MIG066-LINEAR"] == {"2750": {"auto": None, "manual": 62}}
+        assert reverted["MIG066-AUTO"] == {"2750": {"auto": 48, "manual": None}}
+        assert reverted["MIG066-COLLIDE"] == {
+            "2700": {"auto": None, "manual": 5},
+            "2750": {"auto": None, "manual": 9},
+        }
+        assert reverted["MIG066-DUPKEY"] == {
+            "2750": {"auto": None, "manual": 11},
+            "2750.0": {"auto": None, "manual": 13},
+        }
+        assert report_table_count == 0
+    finally:
+        await engine.dispose()
+        admin_engine = create_async_engine(admin_url, isolation_level="AUTOCOMMIT")
+        async with admin_engine.connect() as conn:
+            await conn.execute(text(f'DROP DATABASE IF EXISTS "{db_name}" WITH (FORCE)'))
+        await admin_engine.dispose()
