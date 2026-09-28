@@ -23,6 +23,7 @@ import {
   type ShortageStrategy,
   type DailyPlanCompositionItem,
 } from "@/shared/api/shopfloor";
+import { invalidateAfter } from "@/shared/api/cacheInvalidation";
 import { queryKeys } from "@/shared/api/queryKeys";
 import { usePaginatedTableQuery } from "@/shared/hooks/usePaginatedTableQuery";
 import type { SectionBoardQueryParams } from "@/shared/api/shopfloor";
@@ -332,7 +333,9 @@ export function SectionsTasksPage() {
   const createPlanMutation = useMutation({
     mutationFn: (payload: CreateDailyPlanInput) => createDailyPlan(payload, requestOptions),
     onSuccess: async (plan) => {
-      await queryClient.invalidateQueries({ queryKey: queryKeys.dailyPlans.list(plan.section_id) });
+      // Состав и список дневных планов лежат под корнем `shopfloor-daily-plans`,
+      // который целиком входит в домен `shopfloor` — точечный ключ не нужен.
+      await invalidateAfter(queryClient, "dailyPlanChanged");
       setSelectedPlanIds(new Set([plan.id]));
       bulkSelection.clear();
       revokeSelection.clear();
@@ -352,14 +355,8 @@ export function SectionsTasksPage() {
         throw new Error(`Не удалось отозвать задания: ${failed} из ${items.length}`);
       }
     },
-    onSuccess: async (_, items) => {
-      const planIds = [...new Set(items.map((item) => item.daily_plan_id))];
-      await Promise.all(
-        planIds.map((planId) => queryClient.invalidateQueries({ queryKey: queryKeys.dailyPlans.composition(planId) })),
-      );
-      if (sectionId !== null) {
-        await queryClient.invalidateQueries({ queryKey: queryKeys.dailyPlans.list(sectionId) });
-      }
+    onSuccess: async () => {
+      await invalidateAfter(queryClient, "dailyPlanChanged");
       revokeSelection.clear();
     },
     onError: (error) => {
@@ -382,20 +379,6 @@ export function SectionsTasksPage() {
   });
 
   const pushActionLog = useCallback((_payload: any) => {}, []);
-
-  const invalidateShopfloor = useCallback(() => {
-    void queryClient.invalidateQueries({ queryKey: queryKeys.shopfloor.board(sectionId as number) });
-    void queryClient.invalidateQueries({ queryKey: queryKeys.shopfloor.stats(sectionId as number) });
-    void queryClient.invalidateQueries({ queryKey: queryKeys.dailyPlans.all() });
-    void queryClient.invalidateQueries({ queryKey: queryKeys.shopfloor.summary() });
-    void queryClient.invalidateQueries({ queryKey: queryKeys.transfers.readyAll() });
-    void queryClient.invalidateQueries({ queryKey: queryKeys.shopfloor.incomingTransfers(sectionId as number) });
-    void queryClient.invalidateQueries({ queryKey: queryKeys.transfers.historyAll() });
-    void queryClient.invalidateQueries({ queryKey: ["auditLogs"] });
-    if (sectionId !== null) {
-      void queryClient.invalidateQueries({ queryKey: queryKeys.stock.balancesAll() });
-    }
-  }, [queryClient, sectionId]);
 
   const openActionDialog = useCallback((_type: TaskActionDialogType, task: SectionBoardTask) => {
     const now = nowLocalDateTimeParts();
@@ -514,7 +497,7 @@ export function SectionsTasksPage() {
         closeActionDrawer();
         setConflictHint(null);
       }
-      invalidateShopfloor();
+      void invalidateAfter(queryClient, "sectionTaskChanged");
     },
     onError: (err, variables) => {
       const message = getErrorMessage(err);
@@ -565,7 +548,7 @@ export function SectionsTasksPage() {
         qtyText: `годн: ${goodQty}, брак: ${defectQty}`,
         comment: comment || undefined,
       });
-      invalidateShopfloor();
+      void invalidateAfter(queryClient, "sectionTaskChanged");
       closeActionDrawer();
       setConflictHint(null);
     },
@@ -886,10 +869,10 @@ export function SectionsTasksPage() {
       }
     }
 
-    invalidateShopfloor();
+    void invalidateAfter(queryClient, "sectionTaskChanged");
     setBulkProgress({ total, completed: total, running: false });
     finishBulk(allResults, totalGood, totalDefect);
-  }, [me?.id, lockedSectionId, invalidateShopfloor, finishBulk]);
+  }, [me?.id, lockedSectionId, finishBulk, queryClient]);
 
   // Завершить группу: открывает боковую панель завершения группы
   const handleCompleteGroup = useCallback((group: TaskGroup) => {

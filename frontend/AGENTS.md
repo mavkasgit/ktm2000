@@ -39,6 +39,27 @@ React 18.3 + TypeScript + Vite + Tailwind CSS + shadcn/ui + TanStack Query/Virtu
 - Термин и правило — [ADR-0039](../docs/adr/0039-stranica-razdela-prishodit-svoim-chankom.md)
   и [CONTEXT.md](../CONTEXT.md).
 
+## Свежесть данных
+
+- Списки и карточки читаются **только** через `useQuery` из
+  [`@tanstack/react-query`](https://tanstack.com/query). Список в локальном
+  `useState` с `useEffect(load)` — дрейф: такой экран не видит чужих изменений
+  и не может сообщить о своих.
+- После мутации экран зовёт `invalidateAfter` из
+  [`src/shared/api/cacheInvalidation.ts`](src/shared/api/cacheInvalidation.ts)
+  с бизнес-действием. **Прямой `invalidateQueries` в фиче запрещён**: именно
+  разбросанные списки ключей разошлись и дали баг «строка видна только после
+  F5». Какие домены задевает действие — решение матрицы `CACHE_ACTIONS`.
+- Ключи берутся из фабрики
+  [`src/shared/api/queryKeys.ts`](src/shared/api/queryKeys.ts), а не пишутся
+  литералами.
+- Глобальный `staleTime` — 3 секунды
+  ([`src/app/main.tsx`](src/app/main.tsx)): это «пришёл на экран — перечитай»,
+  а не «как долго хранить». Длинный `staleTime` не чинит свежесть, он прячет
+  забытую инвалидацию.
+- Правило и его история —
+  [ADR-0041](../docs/adr/0041-reestr-sbrosa-kesa-i-stale-time.md).
+
 ## Таблицы
 
 - **Компактная строка** — высота строки, отступы ячеек, размер кнопки действия
@@ -53,8 +74,8 @@ React 18.3 + TypeScript + Vite + Tailwind CSS + shadcn/ui + TanStack Query/Virtu
 - **Описание колонки** — семантика колонки объявляется один раз в
   [`src/shared/lib/columnSpecs.ts`](src/shared/lib/columnSpecs.ts)
   (`ColumnSpec`): `filterField`, `sortField`, `valueLabel`, `exactMatch`,
-  `apiParam`, `mapValue`, `toParams`, `clientOnly`. Из описания порождаются
-  шапка, фильтр, сортировка и параметры запроса. Тернарник
+  `apiParam`, `mapValue`, `toParams`, `paramKind`, `clientOnly`. Из описания
+  порождаются шапка, фильтр, сортировка и параметры запроса. Тернарник
   `filterField === "dimensions"` в шапке и ручной вызов
   `pickExactMatchColumnValue(…, "dimensions")` — не способ объявить
   семантику: добавить колонку с особым фильтром значило бы править и то и
@@ -66,12 +87,30 @@ React 18.3 + TypeScript + Vite + Tailwind CSS + shadcn/ui + TanStack Query/Virtu
   [`src/shared/ui/DataTableColumnHeader.tsx`](src/shared/ui/DataTableColumnHeader.tsx):
   фильтр, сортировка, фильтр-без-сортировки, сортировка-без-фильтра и голая
   подпись — его решение. Тернарник `filterField ? … : <span>` в разметке
-  экрана означает, что случай ещё не покрыт общим компонентом.
+  экрана означает, что случай ещё не покрыт общим компонентом, и прямой вызов
+  `SortableFilterHeader` рядом с ним — то же самое.
   Сортировка по умолчанию объявляется хуку (`defaultSort`) и сбросом
   возвращается, а не считается фильтром: условие «сортировка нестандартная»,
   написанное руками, расходилось между экранами.
   Колонка, которую сервер не фильтрует, объявляется **без** `filterField` и
   `sortField`, а не с флагом, который ничего не отправляет.
+  **Колонка, которую фильтрует сам экран, объявляется `clientOnly: true`** —
+  попапер остаётся, но значение уходит не в запрос, а в предикат по уже
+  загруженным строкам. Без этого флага переход на общий `buildColumnApiParams`
+  увёл бы подписанное значение («Годные», «площадь») в запрос, который такого
+  параметра не знает, и выборка схлопнулась бы в пустую. Расхождение ловит
+  тест: поповер есть, а ключа в параметрах нет.
+  Свой `handleSort` с ручным циклом направлений — нельзя: цикл клика один
+  (`nextMultiSortConfigs`), и экран, который не умеет снять сортировку,
+  обещает сброс к дефолту, а сброс туда не приводит.
+- **Род значения параметра** объявляет описание колонки
+  (`paramKind: "string" | "number" | "boolean"`), а приводит сборщик
+  (`buildTypedColumnApiParams`). Значение из попапера — строка, а контракт
+  запроса у части экранов строгий (`length_from` — `number`,
+  `is_paired_profile` — `boolean`). Ослаблять контракт до `number | string`
+  ради сборщика нельзя: он перестал бы ловить мусор на границе с сервером.
+  Приводить значения руками на экране — тоже нельзя: это то же перечисление
+  полей, ради устранения которого описание и заведено.
 - **Пауза перед запросом по поиску** — [`src/shared/lib/useDebouncedValue.ts`](src/shared/lib/useDebouncedValue.ts).
   Свой `useState` + `useEffect` с `setTimeout` рядом с полем — нельзя: таких
   копий было двенадцать, и одна цифра в задержке меняла поведение одного

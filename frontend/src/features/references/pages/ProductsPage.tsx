@@ -1,10 +1,13 @@
 // Страница «Продукты» (#152) — вариант A прототипа #143: таблица ГП +
 // карточка-модалка. Образец — RawMaterialsPage, но список отдельный:
 // только type=finished_good, только норматив (ADR-0001) — без остатков и факта.
-import { useCallback, useEffect, useState } from "react";
+import { useMemo, useState } from "react";
+import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { Search, X } from "lucide-react";
 import * as API from "@/shared/api/products";
 import type { CompositionItem, Product } from "@/shared/api/products";
+import { queryKeys } from "@/shared/api/queryKeys";
+import { invalidateAfter } from "@/shared/api/cacheInvalidation";
 import { Badge } from "@/shared/ui/badge";
 import { Input } from "@/shared/ui/input";
 import { DATA_TABLE_STYLES } from "@/shared/ui";
@@ -16,42 +19,50 @@ import { useDebouncedValue } from "@/shared/lib/useDebouncedValue";
 
 const headerCellClass = `${DATA_TABLE_STYLES.headerRow} ${DATA_TABLE_STYLES.headerCell}`;
 
+/** Стабильная пустая ссылка: иначе `items` менял бы identity на каждом
+ *  рендере, и зависимости ниже пересчитывались бы без нужды. */
+const EMPTY_PRODUCTS: Product[] = [];
+
 export function ProductsPage() {
   const { canEditReferences } = usePermission();
-  const [items, setItems] = useState<Product[]>([]);
-  const [loading, setLoading] = useState(false);
-  const [error, setError] = useState("");
+  const queryClient = useQueryClient();
   const [search, setSearch] = useState("");
   const debouncedSearch = useDebouncedValue(search);
   const [selected, setSelected] = useState<Product | null>(null);
 
+  const listParams = useMemo(
+    () => ({
+      type: "finished_good" as const,
+      q: debouncedSearch || undefined,
+      include_composition: true,
+      sort: "sku:asc",
+    }),
+    [debouncedSearch],
+  );
 
-  const load = useCallback(async () => {
-    setLoading(true);
-    setError("");
-    try {
-      const data = await API.fetchAllProducts({
-        type: "finished_good",
-        q: debouncedSearch || undefined,
-        include_composition: true,
-        sort: "sku:asc",
-      });
-      setItems(data);
-    } catch (e) {
-      setError(e instanceof Error ? e.message : "Ошибка загрузки");
-    } finally {
-      setLoading(false);
-    }
-  }, [debouncedSearch]);
+  const { data: items = EMPTY_PRODUCTS, isLoading, error: loadError } = useQuery({
+    queryKey: queryKeys.products.list(listParams),
+    queryFn: () => API.fetchAllProducts(listParams),
+  });
 
-  useEffect(() => {
-    void load();
-  }, [load]);
-
+  // Ответ диалога — уже сохранённый на сервере состав, поэтому список
+  // перечитывается сбросом кэша. Локальной правки `setQueryData` поверх кэша
+  // здесь нет намеренно: после смены состава меняются и подбор компонентов в
+  // плане, и раскрой, а два пути записи в одну строку — это тот же дрейф,
+  // который и вычищается реестром. `setSelected` — состояние открытой карточки,
+  // не данные с сервера, поэтому остаётся локальным.
   const handleCompositionSaved = (productId: number, composition: CompositionItem[]) => {
-    setItems((prev) => prev.map((p) => (p.id === productId ? { ...p, composition } : p)));
+    void invalidateAfter(queryClient, "productsChanged");
     setSelected((prev) => (prev && prev.id === productId ? { ...prev, composition } : prev));
   };
+
+  // Текст ошибки — тот же, что давал локальный `catch`: сообщение сервера,
+  // а для не-ошибки (строка, axios-объект) общий текст.
+  const error = loadError
+    ? loadError instanceof Error
+      ? loadError.message
+      : "Ошибка загрузки"
+    : "";
 
   return (
     <section className="space-y-4">
@@ -83,7 +94,7 @@ export function ProductsPage() {
 
       {error && <div className="text-sm text-destructive bg-destructive/10 p-3 rounded-md">{error}</div>}
 
-      {loading ? (
+      {isLoading ? (
         <div className="text-muted-foreground py-8 text-center">Загрузка...</div>
       ) : (
         <div className="rounded-lg border bg-card overflow-x-auto">

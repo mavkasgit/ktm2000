@@ -132,12 +132,16 @@ export const queryKeys = {
   },
   sections: {
     all: () => ["sections"] as const,
+    /** Справочник участков с параметрами экрана (поиск, сортировка). */
+    list: (params?: Record<string, unknown>) => ["sections", "list", params ?? {}] as const,
   },
   operations: {
     all: () => ["operations"] as const,
   },
   operationGroups: {
     all: () => ["operation-groups"] as const,
+    /** Группы операций одного участка: панель операций раскрывается по секции. */
+    bySection: (sectionId: number) => ["operation-groups", "section", sectionId] as const,
   },
   spg: {
     all: () => ["spg"] as const,
@@ -254,6 +258,8 @@ export const queryKeys = {
   },
   products: {
     all: () => ["products"] as const,
+    /** Каталог артикулов с параметрами экрана (поиск, тип, сортировка). */
+    list: (params?: Record<string, unknown>) => ["products", "list", params ?? {}] as const,
     pairs: (productId: number) => ["products", "pairs", productId] as const,
     routeStages: (productId: number) => ["products", "route-stages", productId] as const,
   },

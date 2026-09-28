@@ -56,6 +56,7 @@ import {
 import { getErrorMessage } from "@/shared/api/client";
 import { translateImportError } from "@/shared/api/errorMessages";
 import { getExcelSheetNames } from "@/shared/api/imports";
+import { invalidateAfter } from "@/shared/api/cacheInvalidation";
 import { queryKeys } from "@/shared/api/queryKeys";
 import { RouteStepsDisplay } from "@/shared/ui/RouteStepsDisplay";
 import { listSections } from "@/shared/api/sections";
@@ -523,8 +524,7 @@ export function ImportRemaindersDialog({
           imported_count: response.imported_count,
           errors: response.errors,
         });
-        void queryClient.invalidateQueries({ queryKey: queryKeys.stock.balancesAll() });
-        void queryClient.invalidateQueries({ queryKey: queryKeys.stock.transactions() });
+        void invalidateAfter(queryClient, "stockChanged");
         onSaved();
         setStep("result");
       } else {

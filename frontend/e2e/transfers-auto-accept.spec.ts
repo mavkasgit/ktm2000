@@ -147,7 +147,7 @@ test.describe("@smoke Explicit transfer — 2-step ritual (Send + Issue)", () =>
     const execSearch = authenticatedPage.getByPlaceholder("Поиск");
     await expect(execSearch).toBeVisible({ timeout: 10_000 });
     await execSearch.fill("ЮП-2083");
-    const execRow = authenticatedPage.locator("tr", { hasText: `#${pos2083.id}` }).first();
+    const execRow = authenticatedPage.locator(`tr[data-row-key="${pos2083.id}"]`).first();
     await expect(execRow).toBeVisible({ timeout: 15_000 });
     const launchBtn = execRow.getByRole("button", { name: "Взять в работу" });
     await expect(launchBtn).toBeVisible({ timeout: 5_000 });

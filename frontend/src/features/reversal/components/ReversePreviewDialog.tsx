@@ -7,7 +7,7 @@ import {
   type JournalAction,
   type PreviewResponse,
 } from "@/shared/api/actions";
-import { queryKeys } from "@/shared/api/queryKeys";
+import { invalidateAfter } from "@/shared/api/cacheInvalidation";
 import { toast } from "@/shared/ui/use-toast";
 import { Button } from "@/shared/ui";
 import {
@@ -85,7 +85,7 @@ export function ReversePreviewDialog({
         plan_token: preview.plan_token,
         reason: reason.trim() || null,
       });
-      void queryClient.invalidateQueries({ queryKey: queryKeys.actions.all });
+      void invalidateAfter(queryClient, "actionReversed");
       toast({
         variant: "success",
         title: "Действие отменено",

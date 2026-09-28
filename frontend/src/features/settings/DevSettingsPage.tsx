@@ -44,6 +44,9 @@ function SeedDialog({ open, onOpenChange }: { open: boolean; onOpenChange: (v: b
     setSeeding(true)
     try {
       const summary = await seedRoutes(true)
+      // Исключение из правила реестра: сид пересоздаёт справочники целиком, и
+      // перечислить задетые домены здесь — значит перечислить их неполно и
+      // получить тот же баг. Dev-экран, в проде недоступен.
       queryClient.invalidateQueries()
       toast({
         title: "Справочники загружены",

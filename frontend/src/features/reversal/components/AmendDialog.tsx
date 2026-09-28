@@ -1,6 +1,6 @@
 import { useEffect, useState } from "react";
 import { useQueryClient } from "@tanstack/react-query";
-import { queryKeys } from "@/shared/api/queryKeys";
+import { invalidateAfter } from "@/shared/api/cacheInvalidation";
 import {
   amendAction,
   parseReversalError,
@@ -111,7 +111,7 @@ export function AmendDialog({
       const result = await amendAction(action.id, {
         plan_token: preview.plan_token,
       });
-      void queryClient.invalidateQueries({ queryKey: queryKeys.actions.all });
+      void invalidateAfter(queryClient, "actionReversed");
       toast({
         variant: "success",
         title: "Действие изменено",

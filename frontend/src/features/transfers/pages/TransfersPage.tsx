@@ -64,6 +64,7 @@ import {
   type TransferHistoryListParams,
 } from "@/shared/api/transfers";
 import { getErrorMessage } from "@/shared/api/client";
+import { invalidateAfter } from "@/shared/api/cacheInvalidation";
 import { queryKeys } from "@/shared/api/queryKeys";
 import { formatDimensionsFilterValue, formatDimensionsLabel } from "@/shared/api/stock";
 import { buildColumnApiParams } from "@/shared/lib/columnSpecs";
@@ -235,8 +236,7 @@ interface ReadyTransferRowProps {
   isSubmitting: boolean;
   tryAcquire: () => boolean;
   release: () => void;
-  invalidateShopfloorCaches: (fromSectionId: number | null, toSectionId: number | null) => void;
-  invalidateTransfersCaches: () => void;
+  invalidateTransferCaches: () => void;
 }
 
 function ReadyTransferRow({
@@ -247,8 +247,7 @@ function ReadyTransferRow({
   isSubmitting,
   tryAcquire,
   release,
-  invalidateShopfloorCaches,
-  invalidateTransfersCaches,
+  invalidateTransferCaches,
 }: ReadyTransferRowProps) {
   const [quantity, setQuantity] = useState(task.transferable_quantity);
   const submittingRef = useRef(false);
@@ -274,8 +273,7 @@ function ReadyTransferRow({
         title: "Передача создана",
         description: `Позиция #${task.plan_position_id} отправлена`,
       });
-      invalidateShopfloorCaches(task.section_id, task.next_section_id);
-      invalidateTransfersCaches();
+      invalidateTransferCaches();
     },
     onError: (err: unknown) => {
       const message = getErrorMessage(err);
@@ -303,8 +301,7 @@ function ReadyTransferRow({
         title: "Финальный выпуск",
         description: `Позиция #${task.plan_position_id} выпущена`,
       });
-      invalidateShopfloorCaches(task.section_id, task.next_section_id);
-      invalidateTransfersCaches();
+      invalidateTransferCaches();
     },
     onError: (err: unknown) => {
       const message = getErrorMessage(err);
@@ -688,7 +685,7 @@ export function TransfersPage() {
   );
 
   const readyPagination = usePaginatedTableQuery({
-    extraDeps: [
+    resetPageDeps: [
       showAllSpgs,
       activeSpgId,
       debouncedReadySearch,
@@ -750,7 +747,7 @@ export function TransfersPage() {
   );
 
   const historyPagination = usePaginatedTableQuery({
-    extraDeps: [
+    resetPageDeps: [
       showAllSpgs,
       activeSpgId,
       debouncedHistorySearch,
@@ -834,8 +831,8 @@ export function TransfersPage() {
     limit: historyLimit,
     setLimit: setHistoryLimit,
     resetPage: resetHistoryPage,
-    totalPages: computeHistoryTotalPages,
-    rangeLabel: historyRangeLabel,
+    getTotalPages: computeHistoryTotalPages,
+    getRangeLabel: historyRangeLabel,
   } = historyPagination;
   const historyTotalPages = computeHistoryTotalPages(historyTotal);
 
@@ -845,8 +842,8 @@ export function TransfersPage() {
     limit: readyLimit,
     setLimit: setReadyLimit,
     resetPage: resetReadyPage,
-    totalPages: computeReadyTotalPages,
-    rangeLabel: readyRangeLabel,
+    getTotalPages: computeReadyTotalPages,
+    getRangeLabel: readyRangeLabel,
   } = readyPagination;
   const readyTotalPages = computeReadyTotalPages(readyTotal);
 
@@ -924,40 +921,21 @@ export function TransfersPage() {
     void refetchHistory();
   }
 
-  function invalidateShopfloorCaches(fromSectionId: number | null, toSectionId: number | null) {
-    const sectionIds = new Set<number>();
-    if (fromSectionId != null) sectionIds.add(fromSectionId);
-    if (toSectionId != null && toSectionId !== fromSectionId) sectionIds.add(toSectionId);
-    sectionIds.forEach((sid) => {
-      void queryClient.invalidateQueries({ queryKey: queryKeys.shopfloor.board(sid) });
-      void queryClient.invalidateQueries({ queryKey: queryKeys.shopfloor.stats(sid) });
-      void queryClient.invalidateQueries({ queryKey: queryKeys.shopfloor.incomingTransfers(sid) });
-    });
-    void queryClient.invalidateQueries({ queryKey: queryKeys.shopfloor.summary() });
-    void queryClient.invalidateQueries({ queryKey: queryKeys.sections.all() });
-  }
-
-  function invalidateTransfersCaches() {
-    void queryClient.invalidateQueries({ queryKey: queryKeys.transfers.readyAll() });
-    void queryClient.invalidateQueries({ queryKey: ["transfers-history"] });
-    if (activeSpgId != null) {
-      void queryClient.invalidateQueries({ queryKey: queryKeys.transfers.ready(activeSpgId) });
-    }
-  }
+  // Передача меняет остатки, доску участков и журнал передач — задеты все
+  // домены, к которым она прикасается, поэтому сброс берём из реестра.
+  const invalidateTransferCaches = useCallback(() => {
+    void invalidateAfter(queryClient, "transferChanged");
+  }, [queryClient]);
 
   const cancelMutation = useMutation({
     mutationFn: (transferId: number) => cancelTransfer(transferId),
-    onSuccess: (_, transferId) => {
+    onSuccess: () => {
       toast({
         variant: "success",
         title: "Передача отменена",
         description: "Передача успешно аннулирована",
       });
-      const record = historyItems.find((t) => t.transfer_id === transferId);
-      if (record) {
-        invalidateShopfloorCaches(record.from_section_id, record.to_section_id);
-      }
-      invalidateTransfersCaches();
+      invalidateTransferCaches();
     },
     onError: (err: unknown) => {
       toast({
@@ -989,21 +967,6 @@ export function TransfersPage() {
     });
   }, []);
 
-  /** Инвалидировать кэши участков-источников и получателей отправленных строк. */
-  const invalidateBatchSections = useCallback(
-    (rows: ReadyToTransferTask[]) => {
-      const sectionPairs = new Set<string>();
-      rows.forEach((task) => {
-        sectionPairs.add(`${task.section_id}-${task.next_section_id}`);
-      });
-      sectionPairs.forEach((pair) => {
-        const [fromId, toId] = pair.split("-").map(Number);
-        invalidateShopfloorCaches(fromId, toId);
-      });
-    },
-    [invalidateShopfloorCaches],
-  );
-
   async function handleGroupTransfer(group: ReadyTransferGroup, quantity: string) {
     if (groupSubmittingKey != null) return;
     setGroupSubmittingKey(group.key);
@@ -1020,8 +983,7 @@ export function TransfersPage() {
     setBulkResults(results);
     setBulkSummary(summary);
 
-    invalidateBatchSections(group.rows);
-    invalidateTransfersCaches();
+    invalidateTransferCaches();
 
     const description = [`Отправлено ${summary.success} из ${summary.total} позиций`];
     if (undistributed > 0) {
@@ -1063,8 +1025,7 @@ export function TransfersPage() {
     setBulkResults(results);
     setBulkSummary(summary);
 
-    invalidateBatchSections(selectedTasks);
-    invalidateTransfersCaches();
+    invalidateTransferCaches();
 
     toast({
       title: summary.failed > 0 ? "Частичный успех" : "Передача выполнена",
@@ -1078,7 +1039,7 @@ export function TransfersPage() {
 
     bulkSelection.clear();
     setBulkMode(false);
-  }, [readyItems, bulkSelection, invalidateBatchSections, invalidateTransfersCaches]);
+  }, [readyItems, bulkSelection, invalidateTransferCaches]);
 
   if (spgs !== undefined && spgs.length === 0) {
     return (
@@ -1283,8 +1244,7 @@ export function TransfersPage() {
                         }
                         tryAcquire={() => tryAcquireTransferLock(row.task.task_id)}
                         release={() => releaseTransferLock(row.task.task_id)}
-                        invalidateShopfloorCaches={invalidateShopfloorCaches}
-                        invalidateTransfersCaches={invalidateTransfersCaches}
+                        invalidateTransferCaches={invalidateTransferCaches}
                       />
                     )
                   }
@@ -1485,8 +1445,7 @@ export function TransfersPage() {
           onClose={() => setEditTransferRecord(null)}
           onSuccess={() => {
             setEditTransferRecord(null);
-            invalidateShopfloorCaches(editTransferRecord.from_section_id, editTransferRecord.to_section_id);
-            invalidateTransfersCaches();
+            invalidateTransferCaches();
           }}
           onCancel={() => {
             cancelMutation.mutate(editTransferRecord.transfer_id);

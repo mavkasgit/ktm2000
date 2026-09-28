@@ -247,6 +247,11 @@ export function ExecutionRow({
 
   return (
     <tr
+      // Стабильный адрес строки. Без него строку приходилось искать по видимому
+      // тексту `#<id>`, а колонка `id` скрывается набором колонок — тогда строка
+      // переставала находиться ровно в тот момент, когда её статус поменялся.
+      // Таблица передач адресуется так же (`data-row-key`, см. `clickFirstRowAndWaitGone`).
+      data-row-key={row.plan_position_id}
       className={`border-b hover:bg-accent hover:ring-1 hover:ring-ring/20 cursor-pointer transition-colors overflow-hidden ${isSelected ? TABLE_ROW_STYLES.selectedRow : ""}`}
       onClick={(e) => {
         if (bulkMode) {

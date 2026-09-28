@@ -15,6 +15,7 @@ import { useQuery, useQueryClient } from "@tanstack/react-query"
 import { listAllImportTemplates, type ImportTemplate } from "@/shared/api/importTemplates"
 import { getErrorMessage } from "@/shared/api/client"
 import { queryKeys } from "@/shared/api/queryKeys"
+import { invalidateAfter } from "@/shared/api/cacheInvalidation"
 import {
   Dialog,
   DialogContent,
@@ -223,15 +224,13 @@ export function ImportWizard(props: {
 
   const previewActiveFilterSummary = useMemo(
     () =>
-      buildActiveFilterSummary(
-        {
+      buildActiveFilterSummary(searchQuery, sortConfig ? 1 : 0, {
+        panelFilters: {
           has_errors: filterErrors,
           has_warnings: filterWarnings,
           has_duplicates: filterDuplicates,
         },
-        searchQuery,
-        sortConfig ? 1 : 0,
-      ),
+      }),
     [filterErrors, filterWarnings, filterDuplicates, searchQuery, sortConfig],
   )
   const resetPreviewFilters = useCallback(() => {
@@ -414,9 +413,10 @@ export function ImportWizard(props: {
       setPendingChangeSet(null)
       setUploadSummary(null)
       setStep("result")
-      // Инвалидируем все домены, которые зависят от плана
+      // Импорт может создать или обновить шаблон, поэтому шаблоны — тоже
+      // затронутый домен, а не «случайно сбросим лишнее».
       invalidatePlanImportCaches(queryClient, { planId: changeSet.planId, batchId: changeSet.batchId })
-      void queryClient.invalidateQueries({ queryKey: queryKeys.importTemplates.all() })
+      void invalidateAfter(queryClient, "importTemplatesChanged")
       props.onSuccess(changeSet.planId, changeSet.changeSetId)
     } catch (e) {
       // If apply failed right after creating a change set, cleanup immediately.
@@ -481,11 +481,12 @@ export function ImportWizard(props: {
   }
 
   function reset() {
-    // Discard any pending change set on reset
+    // Откат неприменённого change set: сбрасываем домены импорта и превью
+    // конкретного плана — оно параметризовано planId и в домен не входит.
     if (pendingChangeSet) {
       discardImport(pendingChangeSet.planId, pendingChangeSet.changeSetId).catch(() => {})
-      void queryClient.invalidateQueries({ queryKey: queryKeys.plan.allPositions() });
-      void queryClient.invalidateQueries({ queryKey: queryKeys.plan.preview(pendingChangeSet.planId) });
+      void invalidateAfter(queryClient, "importDiscarded")
+      void queryClient.invalidateQueries({ queryKey: queryKeys.plan.preview(pendingChangeSet.planId) })
     }
     setStep("upload")
     setFile(null)

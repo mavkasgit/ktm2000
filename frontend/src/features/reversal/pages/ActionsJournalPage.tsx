@@ -5,7 +5,7 @@ import {
   type ActionStatus,
   type JournalAction,
 } from "@/shared/api/actions";
-import { queryKeys } from "@/shared/api/queryKeys";
+import { invalidateAfter } from "@/shared/api/cacheInvalidation";
 import {
   Badge,
   Select,
@@ -38,7 +38,7 @@ function formatDateTime(value: string | null) {
 export function ActionsJournalPage() {
   const [typeFilter, setTypeFilter] = useState<string>("all");
   const [statusFilter, setStatusFilter] = useState<string>("all");
-  const { page, setPage, limit, setLimit, limitOptions, totalPages, rangeLabel } =
+  const { page, setPage, limit, setLimit, limitOptions, getTotalPages, getRangeLabel } =
     usePaginatedTableQuery({
       resetPageDeps: [typeFilter, statusFilter],
     });
@@ -56,11 +56,9 @@ export function ActionsJournalPage() {
   const total = data?.total ?? 0;
 
   const refresh = () => {
-    // Список журнала и деревья цепочки: инвалидируем оба префикса ключей.
-    void queryClient.invalidateQueries({ queryKey: queryKeys.actions.all });
-    void queryClient.invalidateQueries({
-      queryKey: queryKeys.actions.tree(0).slice(0, -1),
-    });
+    // Домен `actions` покрывает и список журнала, и деревья цепочки —
+    // точечный сброс ключа дерева не нужен.
+    void invalidateAfter(queryClient, "actionReversed");
   };
 
   // Известные типы действий для фильтра: текущая страница + базовый набор.
@@ -160,14 +158,14 @@ export function ActionsJournalPage() {
 
         <TablePaginationFooter
           page={page}
-          totalPages={totalPages(total)}
+          totalPages={getTotalPages(total)}
           total={total}
           shownCount={items.length}
           limit={limit}
           limitOptions={[...limitOptions]}
           onPageChange={setPage}
           onLimitChange={setLimit}
-          rangeLabel={rangeLabel(items.length, total)}
+          rangeLabel={getRangeLabel(items.length, total)}
         />
       </div>
     </div>

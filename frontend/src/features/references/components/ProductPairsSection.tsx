@@ -10,6 +10,7 @@ import {
   patchProductPair,
   searchProductsForAlias,
 } from "@/shared/api/products";
+import { invalidateAfter } from "@/shared/api/cacheInvalidation";
 import { queryKeys } from "@/shared/api/queryKeys";
 import { lengthKey } from "@/shared/lib/hangerQuantity";
 import { cn } from "@/shared/utils/cn";
@@ -42,10 +43,10 @@ export function ProductPairsSection({
   });
 
   const invalidate = useCallback(() => {
-    queryClient.invalidateQueries({ queryKey: queryKeys.products.pairs(productId) });
-    // Флаг is_paired_profile выведенный — список артикулов тоже обновить.
-    queryClient.invalidateQueries({ queryKey: queryKeys.products.all() });
-  }, [queryClient, productId]);
+    // Флаг is_paired_profile выведенный — вместе с парами обновляется и
+    // список артикулов, и всё, что из пар считается: план, остатки, строки.
+    void invalidateAfter(queryClient, "productsChanged");
+  }, [queryClient]);
 
   const fetchSuggestions = useCallback(
     (q: string) =>

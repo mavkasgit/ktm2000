@@ -6,7 +6,7 @@ import { Button, Select, SelectContent, SelectItem, SelectTrigger, SelectValue, 
 import { buildActiveFilterSummary } from "@/shared/ui/buildActiveFilterSummary"
 import { usePaginatedTableQuery } from "@/shared/hooks/usePaginatedTableQuery"
 import { useFilterableTable } from "@/shared/hooks/useFilterableTable"
-import { buildColumnFilterPredicate, pickColumnApiValue } from "@/shared/lib/columnFilterSearch"
+import { buildColumnFilterPredicate } from "@/shared/lib/columnFilterSearch"
 import { formatDimensionsFilterValue, formatDimensionsLabel } from "@/shared/api/stock"
 import { PLAN_POSITIONS_GRID } from "../lib/gridTemplates"
 import { toast } from "@/shared/ui"
@@ -16,6 +16,7 @@ import { listRoutes } from "@/shared/api/routes"
 import { listAllImportTemplates } from "@/shared/api/importTemplates"
 import { apiClient, getErrorMessage } from "@/shared/api/client"
 import { queryKeys } from "@/shared/api/queryKeys"
+import { invalidateAfter } from "@/shared/api/cacheInvalidation"
 import { RowDetailsSidePanel, adaptPlanPositionOut } from "../components/row-details"
 import {
   BulkResultsDialog,
@@ -36,7 +37,7 @@ import {
   PlanFiltersState,
 } from "../lib/plan-labels"
 import { buildPlanColumnApiParams, buildPlanPositionsQuery, buildPlanSortParam } from "../lib/planApiParams"
-import { planColumnLabels, planColumns } from "../lib/planColumns"
+import { planColumnLabels, planColumns, PLAN_CLIENT_FILTER_FIELDS, isRouteFilterClientSide } from "../lib/planColumns"
 import { useDebouncedValue } from "@/shared/lib/useDebouncedValue";
 
 export function PlanPage() {
@@ -145,10 +146,7 @@ export function PlanPage() {
   })
 
   const handleSuccess = () => {
-    queryClient.invalidateQueries({ queryKey: queryKeys.execution.plans() })
-    queryClient.invalidateQueries({ queryKey: queryKeys.plan.allFiles() })
-    queryClient.invalidateQueries({ queryKey: queryKeys.plan.allPositions() })
-    queryClient.invalidateQueries({ queryKey: queryKeys.plan.duplicates() })
+    void invalidateAfter(queryClient, "importApplied")
   }
 
   const handleApprove = async (positionId: number, planId?: number, force = false) => {
@@ -156,9 +154,7 @@ export function PlanPage() {
     if (!targetPlanId) return
     try {
       await approveProductionPlanPosition(targetPlanId, positionId, { force })
-      queryClient.invalidateQueries({ queryKey: queryKeys.plan.allPositions() })
-      queryClient.invalidateQueries({ queryKey: queryKeys.plan.duplicates() })
-      queryClient.invalidateQueries({ queryKey: queryKeys.execution.rows() })
+      void invalidateAfter(queryClient, "positionApproved")
       toast({ title: "Позиция утверждена", variant: "success" })
     } catch (e) {
       const msg = getErrorMessage(e)
@@ -180,8 +176,7 @@ export function PlanPage() {
     if (!targetPlanId) return
     try {
       await apiClient.delete(`/production-plans/${targetPlanId}/positions/${positionId}`)
-      queryClient.invalidateQueries({ queryKey: queryKeys.plan.allPositions() })
-      queryClient.invalidateQueries({ queryKey: queryKeys.plan.duplicates() })
+      void invalidateAfter(queryClient, "positionRemoved")
       toast({ title: "Позиция удалена", variant: "success" })
     } catch (e) {
       toast({ title: "Ошибка", description: e instanceof Error ? e.message : "Не удалось удалить", variant: "destructive" })
@@ -192,8 +187,7 @@ export function PlanPage() {
     if (!activePlan) return
     try {
       await deleteImportBatch(activePlan.id, batchId)
-      queryClient.invalidateQueries({ queryKey: queryKeys.plan.allFiles() })
-      queryClient.invalidateQueries({ queryKey: queryKeys.plan.allPositions() })
+      void invalidateAfter(queryClient, "importDiscarded")
       toast({ title: "Импорт удалён", variant: "success" })
     } catch (e) {
       const conflict = parseBatchDeleteConflict(e)
@@ -213,8 +207,7 @@ export function PlanPage() {
     setDeletingDrafts(true)
     try {
       const result = await deleteImportBatch(activePlan.id, deleteConflict.batchId, { deleteDraftsOnly: true })
-      queryClient.invalidateQueries({ queryKey: queryKeys.plan.allFiles() })
-      queryClient.invalidateQueries({ queryKey: queryKeys.plan.allPositions() })
+      void invalidateAfter(queryClient, "importDiscarded")
       toast({
         title: result.deleted ? "Импорт удалён" : `Черновики удалены (${result.deleted_drafts ?? 0})`,
         description: result.deleted ? undefined : "Запущенные позиции, задачи и передачи не тронуты",
@@ -251,7 +244,7 @@ export function PlanPage() {
     try {
       const rid = (routeId === null || Number.isNaN(routeId)) ? null : routeId
       await batchAssignRouteGlobal([positionId], rid)
-      queryClient.invalidateQueries({ queryKey: queryKeys.plan.allPositions() })
+      void invalidateAfter(queryClient, "routeAssigned")
     } catch (e) {
       toast({
         title: "Ошибка",
@@ -340,7 +333,7 @@ export function PlanPage() {
     if (summary.failed > 0) setBulkResultsOpen(true)
     setBulkApproving(false)
     setBulkProgress(null)
-    queryClient.invalidateQueries({ queryKey: queryKeys.plan.allPositions() })
+    void invalidateAfter(queryClient, "positionApproved")
     const failedEntries = results.filter(r => r.status === "failed")
     toast({
       title: summary.failed > 0 ? "Частичный успех" : "Массовое утверждение",
@@ -408,7 +401,7 @@ export function PlanPage() {
     if (summary.failed > 0) setBulkResultsOpen(true)
     setBulkDeleting(false)
     setBulkProgress(null)
-    queryClient.invalidateQueries({ queryKey: queryKeys.plan.allPositions() })
+    void invalidateAfter(queryClient, "positionRemoved")
     const failedEntries = results.filter(r => r.status === "failed")
     toast({
       title: summary.failed > 0 ? "Частичный успех" : "Массовое удаление",
@@ -501,28 +494,33 @@ export function PlanPage() {
     }
   }
 
-  const routeColumnValue = pickColumnApiValue(columnFilters, columnSearchQueries, "route")
-  const needsClientRouteFilter = Boolean(
-    routeColumnValue && routeColumnValue !== "Не назначен",
-  )
+  // Список клиентских колонок и решение «уходит ли маршрут на клиент» — из
+  // описания колонок: пока они перечислялись здесь, переименование колонки
+  // ломало бы фильтрацию молча.
+  const needsClientRouteFilter = isRouteFilterClientSide(columnFilters, columnSearchQueries);
+  const clientFilterFields = useMemo(
+    () =>
+      needsClientRouteFilter
+        ? [...PLAN_CLIENT_FILTER_FIELDS, "route" as const]
+        : PLAN_CLIENT_FILTER_FIELDS,
+    [needsClientRouteFilter],
+  );
 
   const clientOnlyColumnFilters = useMemo(() => {
-    const fields: PlanSortField[] = ["id", "rowNum", "qty", ...(needsClientRouteFilter ? (["route"] as const) : [])]
     const result: Partial<Record<PlanSortField, Set<string>>> = {}
-    for (const field of fields) {
+    for (const field of clientFilterFields) {
       if (columnFilters[field]?.size) result[field] = columnFilters[field]
     }
     return result
-  }, [columnFilters, needsClientRouteFilter])
+  }, [columnFilters, clientFilterFields])
 
   const clientOnlyColumnSearch = useMemo(() => {
-    const fields: PlanSortField[] = ["id", "rowNum", "qty", ...(needsClientRouteFilter ? (["route"] as const) : [])]
     const result: Partial<Record<PlanSortField, string>> = {}
-    for (const field of fields) {
+    for (const field of clientFilterFields) {
       if (columnSearchQueries[field]?.trim()) result[field] = columnSearchQueries[field]
     }
     return result
-  }, [columnSearchQueries, needsClientRouteFilter])
+  }, [columnSearchQueries, clientFilterFields])
 
   const clientOnlyFilterPredicate = useMemo(() => {
     const predicates: Array<(row: PlanPositionOut) => boolean> = []
@@ -556,7 +554,8 @@ export function PlanPage() {
   const filteredPositionIds = useMemo(() => processedRows.map((p) => p.id), [processedRows])
   const activeFilterSummary = useMemo(
     () =>
-      buildActiveFilterSummary(filters, searchQuery, sortConfigs.length, {
+      buildActiveFilterSummary(searchQuery, sortConfigs.length, {
+        panelFilters: filters,
         columnFilters,
         columnSearchQueries,
         // Подписи берутся из описания колонок, а не перечисляются здесь:
@@ -914,13 +913,12 @@ export function PlanPage() {
         />
       ))}
 
+      {/* onSaved не передаём: инвалидацию после правки количества делает сам
+          RowDetailsContent — второй сброс того же действия был бы дублем. */}
       <RowDetailsSidePanel
         open={detailOpen}
         onOpenChange={setDetailOpen}
         data={detailData}
-        onSaved={() => {
-          queryClient.invalidateQueries({ queryKey: queryKeys.plan.allPositions() })
-        }}
       />
 
       {bulkSummary && bulkSummary.failed > 0 && (

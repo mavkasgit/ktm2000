@@ -21,7 +21,7 @@ import { listProducts } from "@/shared/api/products";
 import type { Product } from "@/shared/api/products";
 import { postStockAdjustment } from "@/shared/api/stock";
 import type { QualityState } from "@/shared/api/stock";
-import { queryKeys } from "@/shared/api/queryKeys";
+import { invalidateAfter } from "@/shared/api/cacheInvalidation";
 
 interface StockAdjustmentDialogProps {
   open: boolean;
@@ -107,8 +107,7 @@ export function StockAdjustmentDialog({ open, onOpenChange }: StockAdjustmentDia
       });
     },
     onSuccess: () => {
-      void queryClient.invalidateQueries({ queryKey: queryKeys.stock.balancesAll() });
-      void queryClient.invalidateQueries({ queryKey: queryKeys.stock.productBalance(selectedProductId!) });
+      void invalidateAfter(queryClient, "stockChanged");
       onOpenChange(false);
     },
     onError: (e: unknown) => {

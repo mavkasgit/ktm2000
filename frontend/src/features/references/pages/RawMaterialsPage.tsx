@@ -1,14 +1,13 @@
 import React, { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { useSearchParams } from "react-router-dom";
-import { useQuery } from "@tanstack/react-query";
+import { keepPreviousData, useQuery, useQueryClient } from "@tanstack/react-query";
 import { Search, Image, X, Grid, List, Plus, Filter, Wrench, FileDown, FileSpreadsheet, Check, ChevronDown } from "lucide-react";
 import * as API from "@/shared/api/products";
 import type { ProductFilters } from "@/shared/api/products";
 import { listRouteSelectionRules } from "@/shared/api/routes";
 import { queryKeys } from "@/shared/api/queryKeys";
-import { pickColumnApiValue } from "@/shared/lib/columnFilterSearch";
+import { invalidateAfter } from "@/shared/api/cacheInvalidation";
 import { buildSortParam } from "@/shared/lib/sortQueryParam";
-import { nextMultiSortConfigs } from "@/shared/lib/multiSort";
 import { Button } from "@/shared/ui/button";
 import { Input } from "@/shared/ui/input";
 import { Card } from "@/shared/ui/card";
@@ -23,9 +22,14 @@ import { CatalogCard } from "../components/CatalogCard";
 import { getPhotoUrl } from "../components/getPhotoUrl";
 import type { Product, CreateProductInput, PatchProductInput, CatalogPreview } from "@/shared/api/products";
 import { usePermission } from "@/features/auth/hooks/usePermission";
-import { SortableFilterHeader } from "@/shared/ui/SortableFilterHeader";
-import { TableCornerResetCell, TableCornerResetHeader, DATA_TABLE_STYLES, PositionSkuCell, DropdownMenu, DropdownMenuTrigger, DropdownMenuContent, DropdownMenuItem } from "@/shared/ui";
-import { useSortableColumnFilters } from "@/shared/hooks/useSortableColumnFilters";
+import { TableCornerResetCell, TableCornerResetHeader, DATA_TABLE_STYLES, PositionSkuCell, DropdownMenu, DropdownMenuTrigger, DropdownMenuContent, DropdownMenuItem, DataTableColumnHeader } from "@/shared/ui";
+import { useFilterableTable } from "@/shared/hooks/useFilterableTable";
+import {
+  buildRawMaterialColumnApiParams,
+  rawMaterialColumns,
+  type RawMaterialColumnField,
+  type RawMaterialColumnId,
+} from "../lib/rawMaterialColumns";
 import { skipShotBlastSectionLabel } from "../lib/skipShotBlastLabel";
 import { HangerCalcTable } from "../components/HangerCalcTable";
 import { ProductWipStatsDialog } from "@/features/execution/components/ProductWipStatsDialog";
@@ -37,9 +41,6 @@ import { fmtQtyPrecise } from "@/shared/lib/quantityFormat";
 
 type ViewMode = "grid" | "table" | "calc";
 type DialogMode = "create" | "edit";
-type SortField = "sku" | "name" | "length_mm" | "quantity_per_hanger" | "id" | "is_paired_profile" | "skip_shot_blast" | "is_laminated";
-type ColumnFilterField = "sku" | "quantity_per_hanger" | "length_mm" | "is_paired_profile" | "skip_shot_blast" | "is_laminated";
-type SortOrder = "asc" | "desc";
 
 type GridDensity = "large" | "medium" | "small";
 
@@ -57,114 +58,35 @@ const GRID_DENSITY_CLASSES: Record<GridDensity, string> = {
   small: "grid-cols-4 sm:grid-cols-6 lg:grid-cols-8 xl:grid-cols-10",
 };
 
-interface SortConfig {
-  field: SortField;
-  order: SortOrder;
-}
-
-function boolFromYesNo(value: string | undefined): boolean | undefined {
-  if (value === "Да") return true;
-  if (value === "Нет") return false;
-  return undefined;
-}
-
-function buildRawMaterialsApiParams(
-  columnFilters: Partial<Record<ColumnFilterField, Set<string>>>,
-  columnSearchQueries: Partial<Record<ColumnFilterField, string>>,
-  lengthFrom: string,
-  lengthTo: string,
-  qtyFrom: string,
-  qtyTo: string,
-  sortConfigs: SortConfig[],
-): Pick<
+/**
+ * Диапазоны панели фильтров: «Длина от/до» и «Кол-во от/до» — состояние
+ * экрана, а не колонки. Попапера в шапке у них нет, и в описание колонок
+ * они не входят, поэтому собираются здесь, рядом с полями ввода.
+ *
+ * Пустое или нечисловое поле параметра не даёт: иначе `length_from=NaN`
+ * сузил бы выборку до пустой.
+ */
+function buildPanelRangeParams(length: { from: string; to: string }, qty: { from: string; to: string }): Pick<
   ProductFilters,
-  | "sku"
-  | "length_from"
-  | "length_to"
-  | "qty_from"
-  | "qty_to"
-  | "is_paired_profile"
-  | "skip_shot_blast"
-  | "is_laminated"
-  | "sort"
+  "length_from" | "length_to" | "qty_from" | "qty_to"
 > {
-  const params: Pick<
-    ProductFilters,
-    | "sku"
-    | "length_from"
-    | "length_to"
-    | "qty_from"
-    | "qty_to"
-    | "is_paired_profile"
-    | "skip_shot_blast"
-    | "is_laminated"
-    | "sort"
-  > = {};
-
-  const sku = pickColumnApiValue(columnFilters, columnSearchQueries, "sku");
-  if (sku) params.sku = sku;
-
-  const lengthValue = pickColumnApiValue(columnFilters, columnSearchQueries, "length_mm");
-  if (lengthValue) {
-    const parsed = Number.parseFloat(lengthValue);
-    if (Number.isFinite(parsed)) {
-      params.length_from = parsed;
-      params.length_to = parsed;
-    }
-  }
-
-  const qtyValue = pickColumnApiValue(columnFilters, columnSearchQueries, "quantity_per_hanger", (v) =>
-    v === "—" ? undefined : v,
-  );
-  if (qtyValue) {
-    const parsed = Number.parseInt(qtyValue, 10);
-    if (Number.isFinite(parsed)) {
-      params.qty_from = parsed;
-      params.qty_to = parsed;
-    }
-  }
-
-  const paired = boolFromYesNo(
-    pickColumnApiValue(columnFilters, columnSearchQueries, "is_paired_profile"),
-  );
-  if (paired !== undefined) params.is_paired_profile = paired;
-
-  const skipShot = boolFromYesNo(
-    pickColumnApiValue(columnFilters, columnSearchQueries, "skip_shot_blast"),
-  );
-  if (skipShot !== undefined) params.skip_shot_blast = skipShot;
-
-  const laminated = boolFromYesNo(
-    pickColumnApiValue(columnFilters, columnSearchQueries, "is_laminated"),
-  );
-  if (laminated !== undefined) params.is_laminated = laminated;
-
-  if (lengthFrom) {
-    const parsed = Number.parseFloat(lengthFrom);
-    if (Number.isFinite(parsed)) params.length_from = parsed;
-  }
-  if (lengthTo) {
-    const parsed = Number.parseFloat(lengthTo);
-    if (Number.isFinite(parsed)) params.length_to = parsed;
-  }
-  if (qtyFrom) {
-    const parsed = Number.parseInt(qtyFrom, 10);
-    if (Number.isFinite(parsed)) params.qty_from = parsed;
-  }
-  if (qtyTo) {
-    const parsed = Number.parseInt(qtyTo, 10);
-    if (Number.isFinite(parsed)) params.qty_to = parsed;
-  }
-
-  // Все сортируемые колонки справочника сервер сортировать умеет,
-  // поэтому поле колонки уходит как есть.
-  const sort = buildSortParam(sortConfigs, (field) => field);
-  if (sort) params.sort = sort;
-
+  const params: Pick<ProductFilters, "length_from" | "length_to" | "qty_from" | "qty_to"> = {};
+  const lengthFrom = Number.parseFloat(length.from);
+  if (length.from.trim() && Number.isFinite(lengthFrom)) params.length_from = lengthFrom;
+  const lengthTo = Number.parseFloat(length.to);
+  if (length.to.trim() && Number.isFinite(lengthTo)) params.length_to = lengthTo;
+  const qtyFrom = Number.parseInt(qty.from, 10);
+  if (qty.from.trim() && Number.isFinite(qtyFrom)) params.qty_from = qtyFrom;
+  const qtyTo = Number.parseInt(qty.to, 10);
+  if (qty.to.trim() && Number.isFinite(qtyTo)) params.qty_to = qtyTo;
   return params;
 }
 
 const headerCellClass = `${DATA_TABLE_STYLES.headerRow} ${DATA_TABLE_STYLES.headerCell}`;
+
+/** Стабильная пустая ссылка: иначе `items` менял бы identity на каждом
+ *  рендере, и `useMemo` ниже пересчитывался бы без нужды. */
+const EMPTY_PRODUCTS: Product[] = [];
 
 /** Колонка «Кол-во на подвесе» в списке сырья (#65, #85): значение основной длины, подпись «при N мм», бейдж «авто/ручное». */
 function QuantityPerHangerCell({ product }: { product: Product }) {
@@ -232,9 +154,10 @@ export function RawMaterialsPage() {
   const { canEditReferences } = usePermission();
   const isReadOnly = !canEditReferences;
   const [searchParams] = useSearchParams();
-  const [items, setItems] = useState<Product[]>([]);
-  const [loading, setLoading] = useState(false);
-  const [error, setError] = useState("");
+  const queryClient = useQueryClient();
+  // Ошибка действия (сохранение, импорт) — не данные с сервера, поэтому
+  // остаётся в состоянии экрана; ошибку чтения списка отдаёт `useQuery`.
+  const [actionError, setActionError] = useState("");
   const [viewMode, setViewMode] = useState<ViewMode>(
     searchParams.get("view") === "calc" ? "calc" : "table",
   );
@@ -257,14 +180,24 @@ export function RawMaterialsPage() {
   const [lengthTo, setLengthTo] = useState("");
   const [qtyFrom, setQtyFrom] = useState("");
   const [qtyTo, setQtyTo] = useState("");
-  const [sortConfigs, setSortConfigs] = useState<SortConfig[]>([]);
   const {
     columnFilters,
     columnSearchQueries,
     bindColumn,
-    hasActiveColumnFilters: hasColumnFiltersActive,
-    resetColumnFilters,
-  } = useSortableColumnFilters<ColumnFilterField>();
+    sortConfigs,
+    handleSort,
+    hasActiveFilters,
+    resetAll: resetTableFilters,
+  } = useFilterableTable<RawMaterialColumnField>({
+    extraHasActive: search.trim().length > 0 || [lengthFrom, lengthTo, qtyFrom, qtyTo].some(Boolean),
+    onExtraReset: () => {
+      setSearch("");
+      setLengthFrom("");
+      setLengthTo("");
+      setQtyFrom("");
+      setQtyTo("");
+    },
+  });
 
   const [dialogOpen, setDialogOpen] = useState(false);
   const [dialogMode, setDialogMode] = useState<DialogMode>("create");
@@ -321,16 +254,19 @@ export function RawMaterialsPage() {
 
 
   const filterApiParams = useMemo(
-    () =>
-      buildRawMaterialsApiParams(
-        columnFilters,
-        columnSearchQueries,
-        lengthFrom,
-        lengthTo,
-        qtyFrom,
-        qtyTo,
-        sortConfigs,
+    () => ({
+      ...buildRawMaterialColumnApiParams(columnFilters, columnSearchQueries),
+      // Панельные диапазоны имеют приоритет над фильтром колонки по тому же
+      // полю: оператор, введший «от 3000», ждёт именно его, а не выбранную в
+      // шапке длину.
+      ...buildPanelRangeParams(
+        { from: lengthFrom, to: lengthTo },
+        { from: qtyFrom, to: qtyTo },
       ),
+      // Все сортируемые колонки справочника сервер сортировать умеет
+      // (`_SORT_COLUMNS` в products.py), поэтому поле колонки уходит как есть.
+      sort: buildSortParam(sortConfigs, (field) => field),
+    }),
     [columnFilters, columnSearchQueries, lengthFrom, lengthTo, qtyFrom, qtyTo, sortConfigs],
   );
 
@@ -343,23 +279,29 @@ export function RawMaterialsPage() {
     [debouncedSearch, filterApiParams],
   );
 
-  const load = useCallback(async () => {
-    setLoading(true);
-    setError("");
-    try {
-      const data = await API.fetchAllProducts(productsQueryParams);
-      setItems(data);
-    } catch (e) {
-      setError(e instanceof Error ? e.message : "Ошибка загрузки");
-    } finally {
-      setLoading(false);
-    }
-  }, [productsQueryParams]);
+  // `placeholderData: keepPreviousData` — обязателен, а не украшение: сортировка
+  // и фильтры входят в queryKey, поэтому смена сортировки открывает новую запись
+  // кэша. Без placeholder `isLoading` гасит таблицу целиком («Загрузка...»),
+  // и на долю секунды исчезают шапка, сортировка и строки. До переезда на кэш
+  // сортировка была клиентской и список не пропадал.
+  const { data: items = EMPTY_PRODUCTS, isLoading, error: loadError } = useQuery({
+    queryKey: queryKeys.rawMaterials.list(productsQueryParams),
+    queryFn: () => API.fetchAllProducts(productsQueryParams),
+    placeholderData: keepPreviousData,
+  });
 
-  useEffect(() => {
-    setError("");
-    void load();
-  }, [load]);
+  // Сброс кэша перечитывает список сам, поэтому после мутации `load()`
+  // больше не зовётся: иначе экран рисовал бы два разных списка.
+  const invalidateProducts = useCallback(
+    () => invalidateAfter(queryClient, "productsChanged"),
+    [queryClient],
+  );
+
+  const error = loadError
+    ? loadError instanceof Error
+      ? loadError.message
+      : "Ошибка загрузки"
+    : actionError;
 
   const openCreate = () => {
     setSelectedProduct(null);
@@ -381,6 +323,7 @@ export function RawMaterialsPage() {
   };
 
   const handleSave = async (payload: CreateProductInput | PatchProductInput, mode: DialogMode) => {
+    setActionError("");
     try {
       if (mode === "create") {
         const result = await API.createProduct(payload as CreateProductInput);
@@ -407,20 +350,21 @@ export function RawMaterialsPage() {
       }
       setDialogOpen(false);
       setFormDirty(false);
-      await load();
+      await invalidateProducts();
       if (pendingAliasSku) {
         navigateToAlias(pendingAliasSku);
         setPendingAliasSku(null);
       }
     } catch (e) {
       const action = dialogMode === "create" ? `создания: ${(payload as CreateProductInput).sku}` : `сохранения: ${selectedProduct?.sku} (ID: ${selectedProduct?.id})`;
-      setError(API.getErrorMessage(e));
+      setActionError(API.getErrorMessage(e));
       toast({ title: `Ошибка ${action}`, description: API.getErrorMessage(e), variant: "destructive" });
     }
   };
 
   const handleDelete = async () => {
     if (!selectedProduct) return;
+    setActionError("");
     try {
       await API.deleteProduct(selectedProduct.id);
       const lengths = productLengths(selectedProduct);
@@ -429,7 +373,7 @@ export function RawMaterialsPage() {
       toast({ title: "Удалено", description: `Сырьё "${selectedProduct.sku}" (артикул: ${selectedProduct.sku}, ID: ${selectedProduct.id}, длины: ${lengthsText}, кол-во на подвесе: ${qtyText}) успешно удалено`, variant: "success" });
       setDialogOpen(false);
       setFormDirty(false);
-      await load();
+      await invalidateProducts();
     } catch (e) {
       toast({ title: `Ошибка удаления: ${selectedProduct.sku} (ID: ${selectedProduct.id})`, description: API.getErrorMessage(e), variant: "destructive" });
     } finally {
@@ -441,7 +385,7 @@ export function RawMaterialsPage() {
     const file = e.target.files?.[0];
     if (!file) return;
     e.target.value = "";
-    setError("");
+    setActionError("");
     setPreviewLoading(true);
     try {
       const preview = await API.previewCatalogZip(file);
@@ -478,7 +422,7 @@ export function RawMaterialsPage() {
       setPendingImportFile(null);
       const errorsNote = result.errors.length > 0 ? `, с ошибками: ${result.errors.length}` : "";
       toast({ variant: "success", title: "Импорт завершён", description: `Файл: "${file.name}". Создано: ${result.imported}, обновлено: ${result.updated}, пропущено: ${result.skipped}${errorsNote}` });
-      await load();
+      await invalidateProducts();
     } catch (err) {
       toast({ variant: "destructive", title: `Ошибка импорта: ${file.name}`, description: API.getErrorMessage(err) });
     } finally {
@@ -486,45 +430,41 @@ export function RawMaterialsPage() {
     }
   };
 
-  const handleSort = (field: SortField) => {
-    setSortConfigs((prev) => nextMultiSortConfigs(prev, field));
-  };
 
-  const uniqueValues = useMemo(() => {
-    return {
-      sku: [...new Set(items.map((p) => p.sku))].sort(),
-      quantity_per_hanger: [
-        ...new Set(items.map((p) => primaryHangerValue(p)?.value ?? null)),
-      ]
-        .sort((a, b) => (a === null ? 1 : b === null ? -1 : a - b))
-        .map((value) => (value === null ? "—" : fmtQtyPrecise(value))),
-      length_mm: [...new Set(items.flatMap((p) => productLengths(p).map(String)))]
-        .sort((a, b) => Number(a) - Number(b)),
-      is_paired_profile: ["Да", "Нет"],
-      skip_shot_blast: ["Да", "Нет"],
-      is_laminated: ["Да", "Нет"],
-    };
-  }, [items]);
+  // Список значений для попаперов: ключ — идентификатор колонки, он же поле
+  // фильтра, поэтому шапка берёт значения по `column.id` и не перечисляет
+  // колонки руками.
+  const uniqueValues = useMemo<Record<RawMaterialColumnId, string[]>>(() => ({
+    sku: [...new Set(items.map((p) => p.sku))].sort(),
+    quantity_per_hanger: [
+      ...new Set(items.map((p) => primaryHangerValue(p)?.value ?? null)),
+    ]
+      .sort((a, b) => (a === null ? 1 : b === null ? -1 : a - b))
+      .map((value) => (value === null ? "—" : fmtQtyPrecise(value))),
+    length_mm: [...new Set(items.flatMap((p) => productLengths(p).map(String)))]
+      .sort((a, b) => Number(a) - Number(b)),
+    is_paired_profile: ["Да", "Нет"],
+    skip_shot_blast: ["Да", "Нет"],
+    is_laminated: ["Да", "Нет"],
+  }), [items]);
 
   const activeFiltersCount = [lengthFrom, lengthTo, qtyFrom, qtyTo].filter(Boolean).length +
     Object.values(columnFilters).reduce((acc, set) => acc + (set?.size ?? 0), 0) +
     Object.values(columnSearchQueries).filter((q) => q?.trim()).length;
 
-  const hasTableActiveFilters =
-    search.trim().length > 0 ||
-    [lengthFrom, lengthTo, qtyFrom, qtyTo].some(Boolean) ||
-    hasColumnFiltersActive ||
-    sortConfigs.length > 0;
+  /**
+   * Описание колонок с подписью «Пропуск участка» из правил выбора маршрута:
+   * она лежит в БД, поэтому подставляется здесь, а не литералом в описании.
+   * Остальные пять подписей статичны и приходят из описания как есть.
+   */
+  const headerColumns = useMemo(
+    () =>
+      rawMaterialColumns.map((column) =>
+        column.id === "skip_shot_blast" ? { ...column, label: skipSectionLabel } : column,
+      ),
+    [skipSectionLabel],
+  );
 
-  const resetTableFilters = () => {
-    setSearch("");
-    setLengthFrom("");
-    setLengthTo("");
-    setQtyFrom("");
-    setQtyTo("");
-    setSortConfigs([]);
-    resetColumnFilters();
-  };
 
   return (
     <section className="space-y-4">
@@ -698,7 +638,7 @@ export function RawMaterialsPage() {
 
       {viewMode === "calc" ? (
         <HangerCalcTable readOnly={isReadOnly} onEdit={openEdit} />
-      ) : loading ? (
+      ) : isLoading ? (
         <div className="text-muted-foreground py-8 text-center">Загрузка...</div>
       ) : viewMode === "grid" && items.length === 0 ? (
         <div className="text-muted-foreground py-8 text-center">Ничего не найдено</div>
@@ -714,69 +654,19 @@ export function RawMaterialsPage() {
             <thead>
               <tr>
                 <th className={`${headerCellClass} w-16`}>Фото</th>
-                <th className={`${headerCellClass} p-0 w-48`}>
-                  <SortableFilterHeader<ColumnFilterField>
-                    field="sku"
-                    label="Артикул"
-                    currentSorts={sortConfigs as { field: ColumnFilterField; order: SortOrder }[]}
-                    onSortChange={(field) => handleSort(field as SortField)}
-                    values={uniqueValues.sku}
-                    {...bindColumn("sku")}
-                  />
-                </th>
-                <th className={`${headerCellClass} p-0 w-48`}>
-                  <SortableFilterHeader<ColumnFilterField>
-                    field="quantity_per_hanger"
-                    label="Кол-во на подвесе"
-                    currentSorts={sortConfigs as { field: ColumnFilterField; order: SortOrder }[]}
-                    onSortChange={(field) => handleSort(field as SortField)}
-                    values={uniqueValues.quantity_per_hanger}
-                    {...bindColumn("quantity_per_hanger")}
-                  />
-                </th>
-                <th className={`${headerCellClass} p-0 w-40`}>
-                  <SortableFilterHeader<ColumnFilterField>
-                    field="length_mm"
-                    label="Размеры"
-                    currentSorts={sortConfigs as { field: ColumnFilterField; order: SortOrder }[]}
-                    onSortChange={(field) => handleSort(field as SortField)}
-                    values={uniqueValues.length_mm}
-                    {...bindColumn("length_mm")}
-                    valueLabel={(v) => v + " мм"}
-                  />
-                </th>
-                <th className={`${headerCellClass} p-0 w-36`}>
-                  <SortableFilterHeader<ColumnFilterField>
-                    field="is_paired_profile"
-                    label="Парный"
-                    currentSorts={sortConfigs as { field: ColumnFilterField; order: SortOrder }[]}
-                    onSortChange={(field) => handleSort(field as SortField)}
-                    values={uniqueValues.is_paired_profile}
-                    {...bindColumn("is_paired_profile")}
-                  />
-                </th>
-                <th className={`${headerCellClass} p-0 w-36`}>
-                  <SortableFilterHeader<ColumnFilterField>
-                    field="skip_shot_blast"
-                    label={skipSectionLabel}
-                    currentSorts={sortConfigs as { field: ColumnFilterField; order: SortOrder }[]}
-                    onSortChange={(field) => handleSort(field as SortField)}
-                    values={uniqueValues.skip_shot_blast}
-                    {...bindColumn("skip_shot_blast")}
-                  />
-                </th>
-                <th className={`${headerCellClass} p-0 w-40`}>
-                  <SortableFilterHeader<ColumnFilterField>
-                    field="is_laminated"
-                    label="Ламинируется"
-                    currentSorts={sortConfigs as { field: ColumnFilterField; order: SortOrder }[]}
-                    onSortChange={(field) => handleSort(field as SortField)}
-                    values={uniqueValues.is_laminated}
-                    {...bindColumn("is_laminated")}
-                  />
-                </th>
+                {headerColumns.map((column) => (
+                  <th key={column.id} className={`${headerCellClass} ${column.headerClassName ?? ""}`}>
+                    <DataTableColumnHeader
+                      column={column}
+                      bindColumn={bindColumn}
+                      values={uniqueValues[column.id]}
+                      currentSorts={sortConfigs}
+                      onSortChange={handleSort}
+                    />
+                  </th>
+                ))}
                 <TableCornerResetHeader
-                  hasActiveFilters={hasTableActiveFilters}
+                  hasActiveFilters={hasActiveFilters}
                   onReset={resetTableFilters}
                   dataTableHeader
                 />
@@ -987,7 +877,7 @@ export function RawMaterialsPage() {
       <ImportWizardDialog
         open={wizardOpen}
         onOpenChange={setWizardOpen}
-        onImported={load}
+        onImported={invalidateProducts}
       />
 
       <ProductWipStatsDialog

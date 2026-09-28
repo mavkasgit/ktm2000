@@ -4,6 +4,7 @@ import { useState, useEffect, useRef, useImperativeHandle, forwardRef } from "re
 import { Input } from "@/shared/ui/input";
 import { toast } from "@/shared/ui/use-toast";
 import { getErrorMessage } from "@/shared/api/client";
+import { invalidateAfter } from "@/shared/api/cacheInvalidation";
 import { queryKeys } from "@/shared/api/queryKeys";
 import {
   listProductDimensions,
@@ -83,7 +84,8 @@ export const ProductDimensionsSection = forwardRef<
   }, [multiValues, onValuesChange]);
 
   const invalidate = () => {
-    if (productId) queryClient.invalidateQueries({ queryKey: queryKeys.dimensions.product(productId) });
+    // Размерности меряются в плане и в остатках — домен решает, что пересчитать.
+    void invalidateAfter(queryClient, "productsChanged");
   };
 
   const onError = (error: unknown, action: string) => {

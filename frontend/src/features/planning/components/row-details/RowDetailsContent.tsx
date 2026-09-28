@@ -8,7 +8,7 @@ import { useQueryClient, useMutation } from "@tanstack/react-query"
 import { updatePositionQuantity } from "@/shared/api/productionPlans"
 import { toast } from "@/shared/ui"
 import { getErrorMessage } from "@/shared/api/client"
-import { queryKeys } from "@/shared/api/queryKeys"
+import { invalidateAfter } from "@/shared/api/cacheInvalidation"
 import { statusLabels } from "@/shared/lib/generated-labels"
 import { ExecutionStagesTable } from "./ExecutionStagesTable"
 import { ExecutionEventsTable } from "./ExecutionEventsTable"
@@ -69,15 +69,7 @@ export function RowDetailsContent({
       }
       const newPerHanger = updatedPosition.quantity_per_hanger
       setEditQuantityPerHanger(newPerHanger != null ? String(newPerHanger) : "")
-      void queryClient.invalidateQueries({ queryKey: queryKeys.plan.allPositions() })
-      void queryClient.invalidateQueries({ queryKey: queryKeys.plan.positionDetail(Number(data.id)) })
-      void queryClient.invalidateQueries({ queryKey: queryKeys.sections.all() })
-      void queryClient.invalidateQueries({ queryKey: queryKeys.shopfloor.boardAll() })
-      void queryClient.invalidateQueries({ queryKey: queryKeys.shopfloor.statsAll() })
-      void queryClient.invalidateQueries({ queryKey: queryKeys.shopfloor.summary() })
-      void queryClient.invalidateQueries({ queryKey: queryKeys.transfers.readyAll() })
-      void queryClient.invalidateQueries({ queryKey: queryKeys.transfers.historyAll() })
-      void queryClient.invalidateQueries({ queryKey: queryKeys.plan.previewAll() })
+      void invalidateAfter(queryClient, "positionQuantityChanged")
       toast({ title: "Количество обновлено", variant: "success" })
       onSaved?.()
     },

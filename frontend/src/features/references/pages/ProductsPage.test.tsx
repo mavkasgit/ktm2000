@@ -182,6 +182,26 @@ describe("ProductsPage", () => {
   it("сохраняет изменённый состав и обновляет чипы в таблице", async () => {
     const updated = [makeComposition({ quantity: 4 })];
     vi.mocked(replaceProductComposition).mockResolvedValue(updated);
+    // Фейковый сервер: после сохранения состав меняется и в ответе списка.
+    // Экран после мутации перечитывает список (сброс кэша по реестру), поэтому
+    // статичный мок отдавал бы старый состав и чип откатывался бы назад —
+    // настоящий сервер так не ведёт себя.
+    let serverComposition = [makeComposition()];
+    vi.mocked(fetchAllProducts).mockImplementation(async () => [
+      makeProduct({ composition: serverComposition }),
+      makeProduct({
+        id: 2,
+        sku: "FG-002",
+        name: "Ручка белая",
+        color: "Белый",
+        lengths: [],
+        composition: [],
+      }),
+    ]);
+    vi.mocked(replaceProductComposition).mockImplementation(async () => {
+      serverComposition = updated;
+      return updated;
+    });
     renderPage();
 
     fireEvent.click(await screen.findByTestId("product-row-FG-001"));
