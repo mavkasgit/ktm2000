@@ -1852,33 +1852,70 @@ _TRUNCATE_ALL_PRODUCTION_DATA = text("""
 
 _TRUNCATE_ATTEMPTS = 5
 
+# Полный сброс берёт ACCESS EXCLUSIVE сразу на всех таблицах, поэтому
+# сталкивается с любой транзакцией, которая ещё держит блокировку. Такие
+# транзакции — норма, а не аномалия: `get_db` коммитит ПОСЛЕ ответа
+# (см. докстринг там), значит запрос, чей ответ уже ушёл, ещё секунду
+# держит блокировки. В E2E это давало 500 на `reset-all` и грязные данные
+# в следующем тесте.
+#
+# `lock_timeout` обязателен: без него ожидание блокировки не имеет предела.
+# `deadlock_timeout` в Postgres срабатывает только на настоящем цикле
+# ожидания, а `TRUNCATE` против транзакции, которая просто держит блокировку,
+# — это не цикл. Без предела запрос висел бы до бесконечности, а не
+# повторялся.
+_TRUNCATE_LOCK_TIMEOUT = "2s"
+
+# SQLSTATE → что это за конфликт. Различаем по коду, а не по тексту: текст
+# драйвера не контракт, «deadlock» в сообщении чужой ошибки дал бы ложный
+# повтор, а настоящий дедлок с нестандартной формулировкой — пропуск.
+_TRUNCATE_RETRY_CONFLICTS = {
+    # lock_not_available — lock_timeout истёк, блокировку держит другая транзакция
+    "55P03": "ожидание блокировки не уложилось в lock_timeout",
+    # deadlock_detected — сервер сам разорвал цикл ожидания
+    "40P01": "дедлок обнаружен сервером",
+}
+
+
+def _db_error_sqlstate(exc: BaseException) -> str | None:
+    """SQLSTATE драйвера (`sqlstate` у psycopg, `pgcode` у asyncpg)."""
+    orig = getattr(exc, "orig", None)
+    if orig is None:
+        return None
+    for attr in ("sqlstate", "pgcode"):
+        code = getattr(orig, attr, None)
+        if code:
+            return str(code).upper()
+    return None
+
 
 async def _truncate_all_production_data(db: AsyncSession) -> None:
-    """`TRUNCATE ... CASCADE` с повтором по дедлоку.
+    """`TRUNCATE ... CASCADE` с повтором по конфликту блокировок.
 
-    Полный сброс берёт ACCESS EXCLUSIVE сразу на всех таблицах, поэтому
-    сталкивается с любой транзакцией, которая ещё держит блокировку. Такие
-    транзакции — норма, а не аномалия: `get_db` коммитит ПОСЛЕ ответа
-    (см. докстринг там), значит запрос, чей ответ уже ушёл, ещё секунду
-    держит блокировки. В E2E это давало 500 на `reset-all` и грязные данные
-    в следующем тесте.
+    Конфликт блокировок в Postgres — штатная транзиентная ситуация, её
+    штатное лечение — повтор: откатываемся и пробуем снова. Ничего не
+    маскируем: если конфликт не рассосался за `_TRUNCATE_ATTEMPTS`,
+    ошибка уходит наверх.
 
-    Дедлок в Postgres — штатная транзиентная ситуация, её штатное лечение —
-    повтор: откатываемся и пробуем снова. Не маскируем ничего: если
-    конфликт не рассосался за `_TRUNCATE_ATTEMPTS`, ошибка уходит наверх.
+    Вызывающий обязан снять атрибуцию аудита ДО вызова: откат здесь
+    переводит ORM-объекты сессии в expired, и чтение их полей после
+    повтора упало бы `MissingGreenlet`.
     """
+    log = logging.getLogger(__name__)
     for attempt in range(1, _TRUNCATE_ATTEMPTS + 1):
         try:
+            await db.execute(text(f"SET LOCAL lock_timeout = '{_TRUNCATE_LOCK_TIMEOUT}'"))
             await db.execute(_TRUNCATE_ALL_PRODUCTION_DATA)
             return
-        except (DBAPIError, OperationalError) as exc:
-            is_deadlock = "deadlock" in str(exc).lower() or getattr(
-                getattr(exc, "orig", None), "__class__", type(None)
-            ).__name__ == "DeadlockDetectedError"
-            if not is_deadlock or attempt == _TRUNCATE_ATTEMPTS:
+        except DBAPIError as exc:
+            sqlstate = _db_error_sqlstate(exc)
+            conflict = _TRUNCATE_RETRY_CONFLICTS.get(sqlstate or "")
+            if conflict is None or attempt == _TRUNCATE_ATTEMPTS:
                 raise
-            logging.getLogger(__name__).warning(
-                "reset-all: дедлок на попытке %d/%d, повторяем",
+            log.warning(
+                "reset-all: %s (SQLSTATE %s) на попытке %d/%d, откат и повтор",
+                conflict,
+                sqlstate,
                 attempt,
                 _TRUNCATE_ATTEMPTS,
             )
@@ -1892,6 +1929,13 @@ async def reset_all_plans(
     current_user: User = Depends(get_current_user),
 ):
     """Удалить все производственные планы, связанные данные и справочники (маршруты, правила, импорты)."""
+    # Атрибуция аудита снимается ДО сброса. Откат в цикле повтора делает
+    # `current_user` expired, и чтение user.id / user.full_name после него
+    # упало бы MissingGreenlet — то есть повтор, вылечивший TRUNCATE,
+    # ломал эндпоинт на аудите и давал 500.
+    user_id = current_user.id if current_user is not None else None
+    user_name = current_user.full_name if current_user is not None else None
+
     await _truncate_all_production_data(db)
 
     # Запись лога аудита (полный сброс системы)
@@ -1902,7 +1946,8 @@ async def reset_all_plans(
         status="success",
         title="Сброс системы",
         message="Все производственные планы, связанные данные, справочники, маршруты и импорты были полностью удалены (TRUNCATE CASCADE).",
-        user=current_user,
+        user_id=user_id,
+        user_name=user_name,
         action=AuditAction.DELETE,
     )
 
