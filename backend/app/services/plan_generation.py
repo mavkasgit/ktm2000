@@ -19,7 +19,7 @@ from app.models.product import Product
 from app.models.release_batch import ReleaseBatch, ReleaseBatchPosition, ReleaseBatchStatus, ReleaseBatchType
 from app.models.route import ProductionRoute, RouteOperation, RouteStage, SectionOperation
 from app.models.section import Section
-from app.models.work_task import WorkTask, WorkTaskStatus
+from app.models.work_task import RESOLVED_WORK_TASK_STATUSES, WorkTask, WorkTaskStatus
 from app.services import product_pair_resolver
 from app.services.action_journal_service import action_journal_service
 from app.services.plan_position_hanger import position_dimensions_for_task
@@ -253,7 +253,7 @@ async def release_batch(
             if planned_qty <= 0:
                 # Stage fully covered by remainders: auto-complete so chain continues
                 task_status = WorkTaskStatus.completed
-            elif not any(t.status != WorkTaskStatus.completed for t in created_tasks):
+            elif all(t.status in RESOLVED_WORK_TASK_STATUSES for t in created_tasks):
                 # First stage that actually needs work: ready
                 task_status = WorkTaskStatus.ready
             else:

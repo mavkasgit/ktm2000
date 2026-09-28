@@ -209,6 +209,8 @@ export function PositionRow({ pos, onApprove, onDelete, selected, routes, onAssi
       <div className="p-2 text-sm">
         <PositionSkuCell
           sku={pos.source_sku}
+          freeStockQuantity={pos.free_stock_quantity}
+          deficitQuantity={pos.deficit_quantity}
           availableQuantity={pos.available_remainder_quantity}
           onClick={onSkuClick}
         />

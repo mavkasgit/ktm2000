@@ -41,7 +41,7 @@ from app.models.transfer import (
     TransferDiscrepancy,
     TransferStatus,
 )
-from app.models.work_task import WorkTask, WorkTaskStatus
+from app.models.work_task import CLOSED_WORK_TASK_STATUSES, WorkTask, WorkTaskStatus
 from app.domain.dimensions import parse_dimensions_filter, format_dimensions
 from app.services.plan_position_hanger import task_dimensions_for_plan_line
 
@@ -842,7 +842,7 @@ async def _fetch_stock_ready_items(
             next_task = await db.scalar(
                 select(WorkTask).where(
                     WorkTask.section_plan_line_id == next_line.id,
-                    WorkTask.status.notin_([WorkTaskStatus.completed, WorkTaskStatus.cancelled]),
+                    WorkTask.status.notin_(CLOSED_WORK_TASK_STATUSES),
                 )
             )
             if next_task is None and not destination_accepts_transfer:

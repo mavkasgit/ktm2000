@@ -51,7 +51,13 @@ function getStageRowTone(
   const hasActivity =
     stage.issued_qty > 0 || stage.accounted_total_qty > 0 || stage.sent_qty > 0 || stage.completed_quantity > 0;
 
-  if (stage.task_status === "completed" || (planned > 0 && accounted >= planned)) {
+  // Пропуск — закрытый этап без работы (#207): по нему нет ни issued, ни
+  // accounted, и без этой ветки он читался бы как «ещё не начат».
+  if (
+    stage.task_status === "completed" ||
+    stage.task_status === "skipped" ||
+    (planned > 0 && accounted >= planned)
+  ) {
     return "completed";
   }
 
@@ -272,8 +278,16 @@ export function ExecutionStagesTable({
                     <span className="font-medium truncate">{stage.section_name}</span>
                   </div>
                 </td>
-                <td className="px-2 py-1.5 align-top text-xs text-muted-foreground">
+                <td
+                  className="px-2 py-1.5 align-top text-xs text-muted-foreground"
+                  title={stage.skip_reason ?? undefined}
+                >
                   {stageStatusText}
+                  {stage.skip_reason && (
+                    <div className="mt-0.5 text-[11px] italic text-muted-foreground/80">
+                      {stage.skip_reason}
+                    </div>
+                  )}
                 </td>
                 <QtyCell value={stage.planned_quantity} />
                 <QtyCell value={receivedQty} />

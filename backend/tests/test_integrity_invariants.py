@@ -251,6 +251,72 @@ _STOCK_LEDGER_INVARIANT_QUERIES: list[tuple[str, str]] = [
         WHERE r.net_released > COALESCE(p.produced, 0)
         """,
     ),
+    # ADR-0043 (#207): плановая проводка обязана нести признак
+    # «пройденные операции». NULL у плановой проводки означал бы, что
+    # признак потерялся на одном из путей записи, и материал на складе
+    # стал бы неотличим от сырья. Внеплановые приходы (ручной ввод,
+    # импорт остатков, сид) с NULL — законное «состояние неизвестно».
+    #
+    # ОГРАНИЧЕНИЕ: миграция 062 добавляет колонку без бэкфилла, поэтому на
+    # БД, существовавшей ДО миграции, все плановые проводки имеют NULL и
+    # инвариант красный сразу после апгрейда. Бэкфилл невозможен по
+    # существу: признак выводится из маршрута позиции, а не из проводки,
+    # и «восстановить» его обратным чтением склада — как раз то угадывание,
+    # которое запрещает ADR-0021. Тесты живут на схеме, созданной текущим
+    # кодом, где ложных срабатываний нет; на legacy-БД этот инвариант —
+    # диагностика, а не приёмка.
+    (
+        "C1_plan_write_carries_completed_operations",
+        """
+        SELECT st.id AS tx_id, st.task_id, st.reason
+        FROM stock_transactions st
+        WHERE st.task_id IS NOT NULL
+          AND st.completed_operations IS NULL
+        """,
+    ),
+    # Компенсация обязана зеркалить признак исходной проводки, включая
+    # различие NULL и [] (материал без операций — известное состояние).
+    (
+        "C2_compensation_mirrors_completed_operations",
+        """
+        SELECT c.id AS tx_id, c.reverses_id,
+               c.completed_operations AS compensation_ops,
+               s.completed_operations AS source_ops
+        FROM stock_transactions c
+        JOIN stock_transactions s ON s.id = c.reverses_id
+        WHERE c.completed_operations IS DISTINCT FROM s.completed_operations
+        """,
+    ),
+    # Каждый код признака обязан существовать в справочнике операций
+    # секций: иначе в ledger попадёт опечатка, которую нечем сопоставить
+    # с реальностью процесса.
+    (
+        "C3_completed_operations_codes_are_known",
+        """
+        SELECT st.id AS tx_id, code AS unknown_code
+        FROM stock_transactions st
+        CROSS JOIN LATERAL jsonb_array_elements_text(
+            COALESCE(st.completed_operations, '[]'::jsonb)
+        ) AS code
+        WHERE NOT EXISTS (
+            SELECT 1 FROM section_operations so
+            WHERE so.operation_code = code
+        )
+        """,
+    ),
+    # Пропущенный этап (#207) закрыт без физической работы: по нему не
+    # должно быть ни одной проводки ledger. Проводка означала бы, что
+    # материал через этот этап всё-таки двигался, и «пропуск» был бы ложью.
+    (
+        "C4_skipped_stage_has_no_stock_movement",
+        """
+        SELECT wt.id AS task_id, COUNT(st.id) AS movements
+        FROM work_tasks wt
+        JOIN stock_transactions st ON st.task_id = wt.id
+        WHERE wt.status = 'skipped'
+        GROUP BY wt.id
+        """,
+    ),
 ]
 
 

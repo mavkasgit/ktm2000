@@ -99,6 +99,8 @@ export function ExecutionRow({
         return (
           <PositionSkuCell
             sku={row.source_sku}
+            freeStockQuantity={row.free_stock_quantity}
+            deficitQuantity={row.deficit_quantity}
             availableQuantity={row.available_remainder_quantity}
             onClick={onSkuClick}
           />

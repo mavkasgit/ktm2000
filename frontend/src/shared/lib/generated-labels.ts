@@ -83,6 +83,7 @@ export const taskStatusLabels: Record<string, string> = {
   "partially": "Частично",
   "partially_completed": "Частично",
   "pending": "Ожидает",
+  "skipped": "Пропущено",
   "waiting_previous": "Ожидает",
 }
 
@@ -94,6 +95,7 @@ export const stageStatusLabels: Record<string, string> = {
   "not_started": "Не начат",
   "partially_completed": "Частично выполнен",
   "ready": "Готов",
+  "skipped": "Пропущено",
   "waiting_previous": "Ожидает этап",
 }
 

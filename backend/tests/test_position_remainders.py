@@ -21,7 +21,7 @@ from app.models.release_batch import ReleaseBatch, ReleaseBatchPosition, Release
 from app.models.route import ProductionRoute, RouteStage
 from app.models.section import Section
 from app.models.work_task import WorkTask, WorkTaskStatus
-from app.services.position_remainders import compute_available_remainder_quantities
+from app.services.position_remainders import compute_position_stock_figures
 from app.stock import Reason, StockCommand, StockCommandService
 
 pytestmark = pytest.mark.asyncio
@@ -132,22 +132,25 @@ async def _seed_released_position(
     return position
 
 
-async def test_available_is_physical_stock_without_committed(session) -> None:
+async def test_free_stock_is_physical_without_committed(session) -> None:
     product, _ = await _seed_product_stock(session, sku="REM-FREE", stock_qty=Decimal("5000"))
 
-    available = await compute_available_remainder_quantities(session, {product.id})
+    figures = await compute_position_stock_figures(session, [(1, [product.id], 100.0)])
 
-    assert available[product.id] == 5000.0
+    assert figures[1].free_stock == 5000.0
+    assert figures[1].available_for_position == 5000.0
+    assert figures[1].deficit == 0.0
 
 
-async def test_available_subtracts_released_open_positions(session) -> None:
+async def test_other_released_position_lowers_available_but_not_free(session) -> None:
+    """Чужая открытая позиция уменьшает «доступно», но не «свободно на складах»."""
     product, stock = await _seed_product_stock(session, sku="REM-COMMIT", stock_qty=Decimal("5000"))
     prod = Section(code="REM-PROD", name="Цех", type="production", is_active=True, sort_order=1)
     route = ProductionRoute(name="R-REM", is_active=True)
     session.add_all([prod, route])
     await session.flush()
 
-    await _seed_released_position(
+    neighbour = await _seed_released_position(
         session,
         product=product,
         route=route,
@@ -156,9 +159,17 @@ async def test_available_subtracts_released_open_positions(session) -> None:
         quantity=Decimal("1200"),
     )
 
-    available = await compute_available_remainder_quantities(session, {product.id})
+    # Индикатор для позиции, которой здесь нет: её собственного спроса в
+    # агрегате тоже нет, поэтому видно ровно чужую заявку — 5000 − 1200.
+    figures = await compute_position_stock_figures(session, [(1, [product.id], 0.0)])
 
-    assert available[product.id] == 3800.0
+    assert figures[1].free_stock == 5000.0
+    assert figures[1].available_for_position == 3800.0
+    # Та же позиция, для которой посчитан индикатор, свой спрос не вычитает.
+    own = await compute_position_stock_figures(
+        session, [(neighbour, [product.id], 1200.0)]
+    )
+    assert own[neighbour].available_for_position == 5000.0
 
 
 async def test_available_ignores_completed_positions(session) -> None:
@@ -182,6 +193,8 @@ async def test_available_ignores_completed_positions(session) -> None:
     task.status = WorkTaskStatus.completed
     await session.commit()
 
-    available = await compute_available_remainder_quantities(session, {product.id})
+    figures = await compute_position_stock_figures(
+        session, [(position.id, [product.id], 1200.0)]
+    )
 
-    assert available[product.id] == 5000.0
+    assert figures[position.id].available_for_position == 5000.0

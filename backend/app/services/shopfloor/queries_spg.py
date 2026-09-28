@@ -8,7 +8,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app.models.product import Product
 from app.models.spg import SpgSection, StorageProductionGroup
 from app.models.section import Section
-from app.models.work_task import WorkTask, WorkTaskStatus
+from app.models.work_task import RESOLVED_WORK_TASK_STATUSES, WorkTask
 from app.models.internal_plan import SectionPlanLine
 from app.models.production_plan import PlanPosition, PlanPositionStatus
 from app.models.route import RouteStage
@@ -63,7 +63,7 @@ async def get_spg_snapshot(
         .join(WorkTask, WorkTask.section_plan_line_id == SectionPlanLine.id)
         .join(RouteStage, RouteStage.id == SectionPlanLine.route_stage_id)
         .where(
-            WorkTask.status == WorkTaskStatus.completed,
+            WorkTask.status.in_(RESOLVED_WORK_TASK_STATUSES),
             RouteStage.is_final.is_(True),
         )
     )

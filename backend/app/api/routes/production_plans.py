@@ -10,7 +10,7 @@ from pydantic import BaseModel, ConfigDict
 from sqlalchemy import String, cast, exists, or_, select, text
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import selectinload
-from sqlalchemy.exc import DBAPIError, OperationalError
+from sqlalchemy.exc import DBAPIError
 
 from sqlalchemy import func as sa_func
 
@@ -36,6 +36,7 @@ from app.models.route import ProductionRoute, RouteStage
 from app.models.section import Section
 from app.models.user import User
 from app.services.plan_generation import create_release_batch
+from app.services.position_remainders import PositionStockFigures
 from app.services.production_plan_service import (
     BATCH_DELETE_SAFE_ACTION,
     BatchDeleteBlocked,
@@ -939,7 +940,15 @@ class PlanPositionOut(BaseModel):
     route_error: str | None = None
     raw_excel_row: dict | None = None
     payload: dict | None = None
+    # Индикатор остатка (#207) — три числа с тремя именами. None = «нет
+    # данных о наличии» (индикатор не показывается), 0 = «действительно
+    # ноль» (показывается).
+    #   free_stock_quantity        — «Свободно на складах» (свойство склада)
+    #   available_remainder_quantity — «Доступно для позиции» (минус чужие)
+    #   deficit_quantity           — «Дефицит позиции» (до планового количества)
+    free_stock_quantity: float | None = None
     available_remainder_quantity: float | None = None
+    deficit_quantity: float | None = None
     # Авторасчёт «количество на подвес» (#66): расчёт на лету по длине позиции.
     quantity_per_hanger: int | None = None
     quantity_per_hanger_source: str | None = None  # "auto" | "manual" | null
@@ -998,24 +1007,22 @@ def _source_row_numbers_from_position(position: PlanPosition) -> list[int] | Non
     return None
 
 
-async def _compute_available_remainder_for_positions(
+async def _compute_position_stock_figures(
     db: AsyncSession,
     positions: list[PlanPosition],
     route_info_by_id: dict[int, ResolvedRouteInfo],
-) -> dict[int, float]:
-    """Считает available_remainder_quantity для списка позиций плана.
+) -> dict[int, PositionStockFigures]:
+    """Три числа индикатора остатка для списка позиций плана (#207).
 
-    Для каждой позиции: резолвит effective_product_id, загружает route_remainder_steps
-    (один раз на route_id), вызывает compute_available_remainder_quantity.
-    Возвращает dict {position_id: available_remainder_quantity}.
+    Для каждой позиции: резолвим effective_product_id, один раз на
+    route_id грузим этапы, считаем «свободно на складах» / «доступно для
+    позиции» / «дефицит». Позиция не вычитает сама себя, но чужие позиции
+    того же артикула учитываются — поэтому считаем всё разом, без N+1.
     """
     from sqlalchemy.orm import selectinload
 
-    from app.services.position_remainders import compute_available_remainder_quantities
-    from app.services.production_planning_rows import (
-        _resolve_effective_product_ids,
-        min_available_remainder,
-    )
+    from app.services.position_remainders import compute_position_stock_figures
+    from app.services.production_planning_rows import _resolve_effective_product_ids
 
     if not positions:
         return {}
@@ -1031,7 +1038,7 @@ async def _compute_available_remainder_for_positions(
         for info in route_info_by_id.values()
         if info.route_id is not None
     }
-    route_remainder_steps_by_route_id: dict[int, list[dict]] = {}
+    route_steps_by_route_id: dict[int, list[dict]] = {}
     if unique_route_ids:
         rows = (
             await db.execute(
@@ -1044,7 +1051,7 @@ async def _compute_available_remainder_for_positions(
             )
         ).all()
         for stage, section in rows:
-            route_remainder_steps_by_route_id.setdefault(stage.route_id, []).append(
+            route_steps_by_route_id.setdefault(stage.route_id, []).append(
                 {
                     "sequence": stage.sequence,
                     "section_id": section.id,
@@ -1052,34 +1059,28 @@ async def _compute_available_remainder_for_positions(
                 }
             )
 
-    product_ids_for_remainders: set[int] = set()
+    result: dict[int, PositionStockFigures] = {}
+    indicator_targets: list[tuple[int, list[int], float]] = []
     for p in positions:
         info = route_info_by_id.get(p.id)
-        if info is None or info.route_id is None:
-            continue
-        if not route_remainder_steps_by_route_id.get(info.route_id):
-            continue
-        effective_ids = effective_products_by_id.get(p.id)
-        if effective_ids:
-            product_ids_for_remainders.update(effective_ids)
-
-    available_by_product = await compute_available_remainder_quantities(
-        db,
-        product_ids_for_remainders,
-    )
-
-    result: dict[int, float] = {}
-    for p in positions:
-        info = route_info_by_id.get(p.id)
-        if info is None or info.route_id is None:
-            result[p.id] = 0.0
-            continue
-        steps = route_remainder_steps_by_route_id.get(info.route_id) or []
+        steps = (
+            route_steps_by_route_id.get(info.route_id)
+            if info is not None and info.route_id
+            else None
+        )
         if not steps:
-            result[p.id] = 0.0
+            # Нет маршрута — нет и данных о наличии: индикатор не
+            # показывается, а не показывается ноль (#207).
+            result[p.id] = PositionStockFigures(None, None, None)
             continue
-        effective_ids = effective_products_by_id.get(p.id) or []
-        result[p.id] = min_available_remainder(available_by_product, effective_ids)
+        indicator_targets.append(
+            (
+                p.id,
+                effective_products_by_id.get(p.id) or [],
+                float(p.quantity or 0),
+            )
+        )
+    result.update(await compute_position_stock_figures(db, indicator_targets))
     return result
 
 
@@ -1267,7 +1268,7 @@ async def _serialize_plan_positions(
             route_resolve_cache[cache_key] = route_info
         route_info_by_id[p.id] = route_info
 
-    available_remainder_by_id = await _compute_available_remainder_for_positions(
+    stock_figures_by_id = await _compute_position_stock_figures(
         db, positions, route_info_by_id
     )
     hanger_values = await resolve_positions_hanger(db, positions)
@@ -1280,6 +1281,9 @@ async def _serialize_plan_positions(
         route_info = route_info_by_id[p.id]
         hanger_value = hanger_values[p.id]
         task_dims = position_dimensions_for_task(p)
+        figures = stock_figures_by_id.get(
+            p.id, PositionStockFigures(None, None, None)
+        )
         result.append(
             PlanPositionOut(
                 id=p.id,
@@ -1309,7 +1313,7 @@ async def _serialize_plan_positions(
                 route_error=route_info.error,
                 raw_excel_row=(p.source_payload or {}).get("raw_excel_row"),
                 payload=p.source_payload,
-                available_remainder_quantity=round(available_remainder_by_id.get(p.id, 0.0), 3),
+                **figures.as_fields(),
                 quantity_per_hanger=hanger_value.quantity_per_hanger,
                 quantity_per_hanger_source=hanger_value.source,
                 dimensions=task_dims,
@@ -1431,7 +1435,7 @@ async def cancelled_positions(db: AsyncSession = Depends(get_db)) -> list[PlanPo
             route_resolve_cache[cache_key] = route_info
         route_info_by_id[p.id] = route_info
 
-    available_remainder_by_id = await _compute_available_remainder_for_positions(
+    stock_figures_by_id = await _compute_position_stock_figures(
         db, positions, route_info_by_id
     )
     hanger_values = await resolve_positions_hanger(db, positions)
@@ -1440,6 +1444,9 @@ async def cancelled_positions(db: AsyncSession = Depends(get_db)) -> list[PlanPo
     for p in positions:
         route_info = route_info_by_id[p.id]
         hanger_value = hanger_values[p.id]
+        figures = stock_figures_by_id.get(
+            p.id, PositionStockFigures(None, None, None)
+        )
         result.append(
             PlanPositionOut(
                 id=p.id,
@@ -1469,7 +1476,7 @@ async def cancelled_positions(db: AsyncSession = Depends(get_db)) -> list[PlanPo
                 route_error=route_info.error,
                 raw_excel_row=(p.source_payload or {}).get("raw_excel_row"),
                 payload=p.source_payload,
-                available_remainder_quantity=round(available_remainder_by_id.get(p.id, 0.0), 3),
+                **figures.as_fields(),
                 quantity_per_hanger=hanger_value.quantity_per_hanger,
                 quantity_per_hanger_source=hanger_value.source,
                 **_position_operation_fields(p),
@@ -1516,7 +1523,7 @@ async def all_positions(production_plan_id: int, db: AsyncSession = Depends(get_
             route_resolve_cache[cache_key] = route_info
         route_info_by_id[p.id] = route_info
 
-    available_remainder_by_id = await _compute_available_remainder_for_positions(
+    stock_figures_by_id = await _compute_position_stock_figures(
         db, positions, route_info_by_id
     )
     hanger_values = await resolve_positions_hanger(db, positions)
@@ -1525,6 +1532,9 @@ async def all_positions(production_plan_id: int, db: AsyncSession = Depends(get_
     for p in positions:
         route_info = route_info_by_id[p.id]
         hanger_value = hanger_values[p.id]
+        figures = stock_figures_by_id.get(
+            p.id, PositionStockFigures(None, None, None)
+        )
         result.append(
             PlanPositionOut(
                 id=p.id,
@@ -1554,7 +1564,7 @@ async def all_positions(production_plan_id: int, db: AsyncSession = Depends(get_
                 route_error=route_info.error,
                 raw_excel_row=(p.source_payload or {}).get("raw_excel_row"),
                 payload=p.source_payload,
-                available_remainder_quantity=round(available_remainder_by_id.get(p.id, 0.0), 3),
+                **figures.as_fields(),
                 quantity_per_hanger=hanger_value.quantity_per_hanger,
                 quantity_per_hanger_source=hanger_value.source,
                 **_position_operation_fields(p),
@@ -1970,6 +1980,11 @@ async def update_position_quantity(
 
     route_info = await resolve_position_route(db, position)
     hanger_value = (await resolve_positions_hanger(db, [position]))[position.id]
+    # Индикатор после правки количества — пересчитываем, а не гасим:
+    # именно этой правкой меняется «дефицит позиции» (#207).
+    stock_figures = (
+        await _compute_position_stock_figures(db, [position], {position.id: route_info})
+    ).get(position.id, PositionStockFigures(None, None, None))
 
     return PlanPositionOut(
         id=position.id,
@@ -1999,7 +2014,7 @@ async def update_position_quantity(
         route_error=route_info.error,
         raw_excel_row=(position.source_payload or {}).get("raw_excel_row"),
         payload=position.source_payload,
-        available_remainder_quantity=None,
+        **stock_figures.as_fields(),
         quantity_per_hanger=hanger_value.quantity_per_hanger,
         quantity_per_hanger_source=hanger_value.source,
         **_position_operation_fields(position),

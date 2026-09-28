@@ -21,7 +21,7 @@ from app.models.product import Product
 from app.models.route import RouteOperation, RouteStage, SectionOperation
 from app.models.section import Section
 from app.models.transfer import Transfer, TransferStatus
-from app.models.work_task import WorkTask, WorkTaskStatus
+from app.models.work_task import CLOSED_WORK_TASK_STATUSES, RESOLVED_WORK_TASK_STATUSES, WorkTask, WorkTaskStatus
 from app.stock.models import QualityState, Reason, StockBalance, StockTransaction
 from app.services.plan_position_hanger import resolve_positions_hanger
 
@@ -640,7 +640,7 @@ async def get_sections_summary(db: AsyncSession) -> dict:
             .outerjoin(SectionPlanLine, WorkTask.section_plan_line_id == SectionPlanLine.id)
             .outerjoin(PlanPosition, SectionPlanLine.plan_position_id == PlanPosition.id)
             .where(
-                WorkTask.status.notin_([WorkTaskStatus.cancelled, WorkTaskStatus.completed]),
+                WorkTask.status.notin_(CLOSED_WORK_TASK_STATUSES),
                 (PlanPosition.deleted_at.is_(None)) | (PlanPosition.id.is_(None)),
             )
             .group_by(WorkTask.section_id)
@@ -656,7 +656,7 @@ async def get_sections_summary(db: AsyncSession) -> dict:
             .outerjoin(SectionPlanLine, WorkTask.section_plan_line_id == SectionPlanLine.id)
             .outerjoin(PlanPosition, SectionPlanLine.plan_position_id == PlanPosition.id)
             .where(
-                WorkTask.status == WorkTaskStatus.completed,
+                WorkTask.status.in_(RESOLVED_WORK_TASK_STATUSES),
                 (PlanPosition.deleted_at.is_(None)) | (PlanPosition.id.is_(None)),
             )
             .group_by(WorkTask.section_id)

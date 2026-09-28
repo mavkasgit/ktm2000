@@ -157,7 +157,14 @@ export type PlanPositionOut = {
   route_error: string | null;
   raw_excel_row: Record<string, unknown> | null;
   payload?: Record<string, unknown> | null;
+  // Индикатор остатка (#207): три числа с тремя именами.
+  //   free_stock_quantity          — «Свободно на складах» (свойство склада)
+  //   available_remainder_quantity — «Доступно для позиции» (минус чужие)
+  //   deficit_quantity             — «Дефицит позиции»
+  // null = данных о наличии нет (индикатор не показывается), 0 = ноль.
+  free_stock_quantity?: number | null;
   available_remainder_quantity?: number | null;
+  deficit_quantity?: number | null;
   // Авторасчёт «количество на подвес» (#66): расчёт на лету по длине позиции.
   quantity_per_hanger?: number | null;
   quantity_per_hanger_source?: "auto" | "manual" | null;
@@ -433,7 +440,14 @@ export type ProductionPlanningRow = {
     section_icon_color: string | null;
     sequence: number;
   }[];
+  // Индикатор остатка (#207): три числа с тремя именами.
+  //   free_stock_quantity          — «Свободно на складах» (свойство склада)
+  //   available_remainder_quantity — «Доступно для позиции» (минус чужие)
+  //   deficit_quantity             — «Дефицит позиции»
+  // null = данных о наличии нет (индикатор не показывается), 0 = ноль.
+  free_stock_quantity?: number | null;
   available_remainder_quantity?: number | null;
+  deficit_quantity?: number | null;
 };
 
 export type ProductionPlanningRouteSnapshotStep = {
@@ -450,6 +464,8 @@ export type ProductionPlanningRouteSnapshotStep = {
 };
 
 export type ProductionPlanningStage = {
+  /** Причина пропуска этапа (#207); заполняется только при task_status = «skipped». */
+  skip_reason?: string | null;
   flow_events: {
     step: string;
     label: string;
@@ -534,7 +550,14 @@ export type ProductionPlanningRowDetail = {
   status_history: StatusHistoryEntry[];
   raw_excel_row: Record<string, unknown> | null;
   payload?: Record<string, unknown> | null;
+  // Индикатор остатка (#207): три числа с тремя именами.
+  //   free_stock_quantity          — «Свободно на складах» (свойство склада)
+  //   available_remainder_quantity — «Доступно для позиции» (минус чужие)
+  //   deficit_quantity             — «Дефицит позиции»
+  // null = данных о наличии нет (индикатор не показывается), 0 = ноль.
+  free_stock_quantity?: number | null;
   available_remainder_quantity?: number | null;
+  deficit_quantity?: number | null;
 };
 
 export type ListProductionPlanningRowsParams = {

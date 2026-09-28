@@ -56,6 +56,8 @@ TASK_STATUS_LABELS = {
     "partially_completed": "Частично",
     "completed": "Завершен",
     "cancelled": "Отменен",
+    # Пропущено (#207): этап закрыт без работы — материал подан готовым.
+    "skipped": "Пропущено",
     "pending": "Ожидает",
     "in_work": "В работе",
     "done": "Завершен",
@@ -70,6 +72,7 @@ STAGE_STATUS_LABELS = {
     "partially_completed": "Частично выполнен",
     "completed": "Выполнен",
     "cancelled": "Отменён",
+    "skipped": "Пропущено",
     "not_started": "Не начат",
 }
 

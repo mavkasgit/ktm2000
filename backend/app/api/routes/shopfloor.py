@@ -968,6 +968,18 @@ async def return_remainder(
             ref_id=task.id,
             actor=await _get_user_snapshot_name(db, current_user.id),
         )
+        # Признак «пройденные операции» (ADR-0043): возвращается в запас
+        # необработанный остаток задания, поэтому он несёт операции до
+        # ПРЕДЫДУЩЕГО этапа, а не пройденные операции своего.
+        from app.services.material_operations import (
+            completed_operations_for_task,
+            previous_stage_sequence,
+        )
+
+        previous_sequence = await previous_stage_sequence(db, task)
+        through_previous = await completed_operations_for_task(
+            db, task, through_sequence=previous_sequence or 0
+        )
         # return_to_stock: material removed from section (to_location=None for now)
         tx = await svc.record(db, StockCommand(
             product_id=task.product_id,
@@ -976,6 +988,7 @@ async def return_remainder(
             quantity=quantity,
             reason=Reason.RETURN_TO_STOCK,
             task_id=task.id,
+            completed_operations=through_previous,
             comment=payload.comment,
             idempotency_key=payload.idempotency_key,
             created_by=current_user.id,

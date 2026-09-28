@@ -42,7 +42,9 @@ export function isTaskFullyTransferred(task: SectionBoardTask): boolean {
 
 /** Категория для фильтров «Активные / Ожидают / Завершенные» на доске участка. */
 export function getTaskViewCategory(task: SectionBoardTask): TaskViewCategory {
-  if (["completed", "cancelled", "done"].includes(task.status)) return "completed";
+  // skipped — закрытый этап (#207): материал подан в готовом виде, этап
+  // не выполнялся, но он и не отменён.
+  if (["completed", "cancelled", "done", "skipped"].includes(task.status)) return "completed";
   if (isTaskExecutionComplete(task) || isTaskFullyTransferred(task)) return "completed";
   if (["waiting_previous", "pending", "blocked"].includes(task.status)) return "waiting";
   if (ACTIVE_STATUSES.has(task.status)) return "active";
@@ -56,6 +58,7 @@ export const taskStatusColor: Record<string, string> = {
   partially_completed: "bg-orange-100 text-orange-700",
   completed: "bg-emerald-100 text-emerald-700",
   cancelled: "bg-red-100 text-red-600",
+  skipped: "bg-slate-100 text-slate-600",
   pending: "bg-gray-100 text-gray-600",
   in_work: "bg-amber-100 text-amber-700",
   done: "bg-emerald-100 text-emerald-700",
@@ -95,7 +98,7 @@ export function getStatusColor(task: SectionBoardTask): string {
 export function isTaskCompletable(task: SectionBoardTask): boolean {
   if (task.status === "waiting_previous") return false;
   if (task.status === "ready" && getReadyStatusLabel(task) === "Не передано") return false;
-  if (["completed", "cancelled", "done"].includes(task.status)) return false;
+  if (["completed", "cancelled", "done", "skipped"].includes(task.status)) return false;
   if (isTaskExecutionComplete(task)) return false;
   return true;
 }

@@ -33,7 +33,7 @@ from app.models.release_batch import ReleaseBatchType
 from app.models.route import RouteStage
 from app.models.section import Section
 from app.models.user import User
-from app.models.work_task import WorkTask, WorkTaskStatus
+from app.models.work_task import CLOSED_WORK_TASK_STATUSES, WorkTask, WorkTaskStatus
 from app.seeds.canon.registry import build_plant_config
 from app.services.action_journal_service import action_journal_service
 from app.services.shopfloor_service import complete_task

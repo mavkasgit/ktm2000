@@ -19,7 +19,7 @@ from app.models.production_plan import (
     require_current_length_model,
 )
 from app.models.transfer import Transfer
-from app.models.work_task import WorkTask, WorkTaskStatus
+from app.models.work_task import CLOSED_WORK_TASK_STATUSES, RESOLVED_WORK_TASK_STATUSES, WorkTask, WorkTaskStatus
 from app.models.route import ProductionRoute, RouteStage, SectionOperation
 from app.models.section import Section
 from app.models.user import User
@@ -216,7 +216,13 @@ class PlanningRowOut(BaseModel):
     current_stage_section_name: str | None = None
     current_stage_task_status: str | None = None
     route_steps: list[dict] | None = None
+    # Индикатор остатка (#207): free_stock_quantity — «Свободно на
+    # складах», available_remainder_quantity — «Доступно для позиции»
+    # (минус чужие открытые позиции), deficit_quantity — «Дефицит
+    # позиции». None = нет данных о наличии, ноль = действительно ноль.
+    free_stock_quantity: float | None = None
     available_remainder_quantity: float | None = None
+    deficit_quantity: float | None = None
 
 
 class PlanningRouteSnapshotStepOut(BaseModel):
@@ -274,6 +280,10 @@ class PlanningStageOut(BaseModel):
     transfer_percent: float
     reject_percent: float
     task_status: str
+    # Пропуск этапа (#207): причина заполняется только при task_status
+    # «skipped» («материал подан в готовом виде»). Без неё пропуск неотличим
+    # от выполнения и не отвечает на вопрос «почему этап закрыт без работы».
+    skip_reason: str | None = None
     not_started: bool
     issued_qty: float
     issued_last_at: str | None = None
@@ -329,7 +339,9 @@ class PlanningRowDetailOut(BaseModel):
     status_history: list[PositionStatusHistoryOut] = Field(default_factory=list)
     raw_excel_row: dict | None = None
     payload: dict | None = None
+    free_stock_quantity: float | None = None
     available_remainder_quantity: float | None = None
+    deficit_quantity: float | None = None
 
 
 @router.get("/rows", response_model=PlanningRowsListResponse)
@@ -512,7 +524,7 @@ async def get_production_planning_overview(
             for line in lines:
                 for wt in line_work_tasks.get(line.id, []):
                     total_steps += 1
-                    if wt.status == WorkTaskStatus.completed:
+                    if wt.status in RESOLVED_WORK_TASK_STATUSES:
                         completed_steps += 1
 
                     # Get operation info from route stage
@@ -1018,7 +1030,7 @@ async def _do_manual_pass(
         .join(SectionPlanLine, WorkTask.section_plan_line_id == SectionPlanLine.id)
         .where(
             SectionPlanLine.plan_position_id == position_id,
-            WorkTask.status == WorkTaskStatus.completed,
+            WorkTask.status.in_(RESOLVED_WORK_TASK_STATUSES),
         )
     )
     position_completed = bool(total_tasks and completed_tasks == total_tasks)

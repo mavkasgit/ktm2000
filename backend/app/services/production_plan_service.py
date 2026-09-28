@@ -966,7 +966,7 @@ async def soft_delete_cancelled_position(
     from sqlalchemy import select
 
     from app.models.internal_plan import SectionPlanLine
-    from app.models.work_task import WorkTask, WorkTaskStatus
+    from app.models.work_task import CLOSED_WORK_TASK_STATUSES, WorkTask
 
     position = await db.get(PlanPosition, position_id)
     if position is None or position.production_plan_id != production_plan_id:
@@ -1010,7 +1010,7 @@ async def soft_delete_cancelled_position(
         await db.execute(
             WorkTask.__table__.update()
             .where(WorkTask.section_plan_line_id.in_(line_ids_result))
-            .where(WorkTask.status.notin_([WorkTaskStatus.completed, WorkTaskStatus.cancelled]))
+            .where(WorkTask.status.notin_(CLOSED_WORK_TASK_STATUSES))
             .values(status=WorkTaskStatus.cancelled)
         )
 

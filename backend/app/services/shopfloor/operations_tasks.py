@@ -15,7 +15,7 @@ from app.models.internal_plan import SectionPlanLine
 from app.models.production_plan import PlanPosition, PlanPositionStatus
 from app.models.route import RouteStage
 from app.models.section import Section
-from app.models.work_task import WorkTask, WorkTaskStatus
+from app.models.work_task import CLOSED_WORK_TASK_STATUSES, WorkTask, WorkTaskStatus
 from app.seeds.canon.models import ScrapPolicy
 from app.services.plan_position_hanger import position_dimensions_for_task
 from app.services.action_journal_service import action_journal_service
@@ -987,7 +987,7 @@ async def prepare_section_task(
     existing_task = await db.scalar(
         select(WorkTask).where(
             WorkTask.section_plan_line_id == line.id,
-            WorkTask.status.notin_([WorkTaskStatus.completed, WorkTaskStatus.cancelled]),
+            WorkTask.status.notin_(CLOSED_WORK_TASK_STATUSES),
         )
     )
     if existing_task is not None:

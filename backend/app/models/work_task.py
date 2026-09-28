@@ -17,6 +17,30 @@ class WorkTaskStatus(str, enum.Enum):
     completed = "completed"
     cancelled = "cancelled"
 
+    # Пропущено (тикет #207, Q6): материал подан в готовом виде, этап
+    # закрыт без физической работы. Считается закрытым этапом, а не
+    # отменой: «задача закрыта = все этапы закрыты» должно остаться
+    # верным для прогресса, отчётности и отмены позиции.
+    skipped = "skipped"
+
+
+# Статусы, при которых задание больше не числится открытым. Единый набор
+# вместо списков «[completed, cancelled]», разбросанных по двадцати
+# запросам: забытый в одном месте статус молча оставлял бы пропущенный
+# этап открытым — в прогрессе, в отчётности и в списке заданий к выдаче.
+CLOSED_WORK_TASK_STATUSES = frozenset({
+    WorkTaskStatus.completed,
+    WorkTaskStatus.cancelled,
+    WorkTaskStatus.skipped,
+})
+
+# Этап закрыт результатом (а не отменой): и выполненный, и пропущенный
+# этапы закрывают позицию. Отмена результатом не является.
+RESOLVED_WORK_TASK_STATUSES = frozenset({
+    WorkTaskStatus.completed,
+    WorkTaskStatus.skipped,
+})
+
 
 class WorkTask(Base):
     __tablename__ = "work_tasks"
@@ -41,6 +65,9 @@ class WorkTask(Base):
     # штуки. Источник для transfer_send, когда payload не несёт dimensions.
     dimensions: Mapped[dict | None] = mapped_column(JSONB, nullable=True)
     status: Mapped[WorkTaskStatus] = mapped_column(Enum(WorkTaskStatus, name="work_task_status"), nullable=False)
+    # Причина пропуска этапа (#207): «материал подан в готовом виде».
+    # Заполняется только для статуса skipped; для остальных — NULL.
+    skip_reason: Mapped[str | None] = mapped_column(String(255), nullable=True)
     due_date: Mapped[date | None] = mapped_column(Date, nullable=True)
     assigned_to: Mapped[int | None] = mapped_column(ForeignKey("users.id"), nullable=True)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False, server_default=func.now())
