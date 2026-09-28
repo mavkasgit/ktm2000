@@ -7,7 +7,6 @@ import os
 import socket
 import subprocess
 import uuid
-import tempfile
 from pathlib import Path
 from urllib.parse import urlparse
 
@@ -30,17 +29,16 @@ BACKEND_DIR = Path(__file__).resolve().parents[1]
 # ``<repo>/.env.dev``). Поэтому переданный тестом ``DATABASE_URL`` до alembic
 # не доходил: он уезжал на DSN из env-файла, миграции накатывались на чужую БД и
 # возвращался 0 — тест видел пустую базу и падал на «relation ... does not
-# exist». Пустой файл отключает подмену: DSN остаётся тем, что дал тест.
-_EMPTY_ENV_FILE = Path(tempfile.gettempdir()) / "ktm2000_migrations_empty.env"
-_EMPTY_ENV_FILE.write_text("", encoding="utf-8")
-
-
-def _alembic_env(target_url: str) -> dict[str, str]:
-    """Окружение подпроцесса alembic: целевая БД и пустой env-файл."""
+# exist». ``$ENV_FILE`` указываем на несуществующий путь внутри ``tmp_path``:
+# ``apply_env_file()`` на отсутствующем файле — документированный no-op, DSN
+# остаётся тем, что дал тест, и на диск (в т.ч. в общий ``gettempdir()``)
+# не пишется ничего.
+def _alembic_env(target_url: str, tmp_path: Path) -> dict[str, str]:
+    """Окружение подпроцесса alembic: целевая БД и несуществующий env-файл."""
     return {
         **os.environ,
         "DATABASE_URL": target_url,
-        "ENV_FILE": str(_EMPTY_ENV_FILE),
+        "ENV_FILE": str(tmp_path / "absent.env"),
     }
 
 
@@ -76,7 +74,7 @@ pytestmark = pytest.mark.skipif(
 
 
 @pytest.mark.asyncio
-async def test_alembic_upgrade_head_creates_full_schema():
+async def test_alembic_upgrade_head_creates_full_schema(tmp_path: Path):
     db_name = f"ktm_mig_{uuid.uuid4().hex[:10]}"
     admin_url = _test_db_url().rsplit("/", 1)[0] + "/postgres"
     target_url = _test_db_url().rsplit("/", 1)[0] + f"/{db_name}"
@@ -86,7 +84,7 @@ async def test_alembic_upgrade_head_creates_full_schema():
         await conn.execute(text(f'CREATE DATABASE "{db_name}"'))
     await admin_engine.dispose()
 
-    env = _alembic_env(target_url)
+    env = _alembic_env(target_url, tmp_path)
     try:
         result = subprocess.run(
             ["alembic", "upgrade", "head"],
@@ -127,7 +125,7 @@ async def test_alembic_upgrade_head_creates_full_schema():
 
 
 @pytest.mark.asyncio
-async def test_migration_054_product_pairs_and_flag_drop():
+async def test_migration_054_product_pairs_and_flag_drop(tmp_path: Path):
     """#146 (ADR-0023): таблица product_pairs, флаг is_paired_profile дропнут (поверх 053).
 
     Миграция — чистый лист: парных данных прошлой модели нет. Проверяем схему
@@ -144,7 +142,7 @@ async def test_migration_054_product_pairs_and_flag_drop():
         await conn.execute(text(f'CREATE DATABASE "{db_name}"'))
     await admin_engine.dispose()
 
-    env = _alembic_env(target_url)
+    env = _alembic_env(target_url, tmp_path)
     try:
         result = subprocess.run(
             ["alembic", "upgrade", "head"],
@@ -220,7 +218,7 @@ async def test_migration_054_product_pairs_and_flag_drop():
 
 
 @pytest.mark.asyncio
-async def test_migration_032_scalar_quantity_per_hanger_to_per_length():
+async def test_migration_032_scalar_quantity_per_hanger_to_per_length(tmp_path: Path):
     """#60: скаляр quantity_per_hanger в attributes → {первая_длина: {auto, manual}}."""
     db_name = f"ktm_mig_{uuid.uuid4().hex[:10]}"
     admin_url = _test_db_url().rsplit("/", 1)[0] + "/postgres"
@@ -231,7 +229,7 @@ async def test_migration_032_scalar_quantity_per_hanger_to_per_length():
         await conn.execute(text(f'CREATE DATABASE "{db_name}"'))
     await admin_engine.dispose()
 
-    env = _alembic_env(target_url)
+    env = _alembic_env(target_url, tmp_path)
     try:
         # 1. До нужной ревизии (031) — скалярная форма ещё актуальна.
         result = subprocess.run(
@@ -297,7 +295,7 @@ async def test_migration_032_scalar_quantity_per_hanger_to_per_length():
 
 
 @pytest.mark.asyncio
-async def test_migration_036_primary_length_backfill():
+async def test_migration_036_primary_length_backfill(tmp_path: Path):
     """#81: is_primary на product_lengths — основной становится первая длина по возрастанию."""
     db_name = f"ktm_mig_{uuid.uuid4().hex[:10]}"
     admin_url = _test_db_url().rsplit("/", 1)[0] + "/postgres"
@@ -308,7 +306,7 @@ async def test_migration_036_primary_length_backfill():
         await conn.execute(text(f'CREATE DATABASE "{db_name}"'))
     await admin_engine.dispose()
 
-    env = _alembic_env(target_url)
+    env = _alembic_env(target_url, tmp_path)
     try:
         # 1. До 036 (035) — колонки is_primary ещё нет.
         result = subprocess.run(
@@ -382,7 +380,7 @@ async def test_migration_036_primary_length_backfill():
 
 
 @pytest.mark.asyncio
-async def test_migration_046_replay_of_action_id_roundtrip():
+async def test_migration_046_replay_of_action_id_roundtrip(tmp_path: Path):
     """#121: replay_of_action_id + индекс; downgrade снимает их чисто."""
     db_name = f"ktm_mig_{uuid.uuid4().hex[:10]}"
     admin_url = _test_db_url().rsplit("/", 1)[0] + "/postgres"
@@ -393,7 +391,7 @@ async def test_migration_046_replay_of_action_id_roundtrip():
         await conn.execute(text(f'CREATE DATABASE "{db_name}"'))
     await admin_engine.dispose()
 
-    env = _alembic_env(target_url)
+    env = _alembic_env(target_url, tmp_path)
 
     async def _columns_and_indexes(engine):
         async with engine.connect() as conn:
@@ -456,7 +454,7 @@ async def test_migration_046_replay_of_action_id_roundtrip():
 
 
 @pytest.mark.asyncio
-async def test_migration_048_product_hanger_mode_backfill():
+async def test_migration_048_product_hanger_mode_backfill(tmp_path: Path):
     """#129: backfill hanger_mode — досчёт словаря и границы формулы движка.
 
     Покрывает: (1) SQL-формула 048 совпадает с ``compute_hanger_quantity``
@@ -479,7 +477,7 @@ async def test_migration_048_product_hanger_mode_backfill():
         await conn.execute(text(f'CREATE DATABASE "{db_name}"'))
     await admin_engine.dispose()
 
-    env = _alembic_env(target_url)
+    env = _alembic_env(target_url, tmp_path)
 
     def _expected_auto(perimeter_mm: float, mount_width_mm: float, length_mm: float):
         """Ожидаемый auto по независимому движку (#62): total или None.
@@ -677,7 +675,7 @@ async def test_migration_048_product_hanger_mode_backfill():
 
 
 @pytest.mark.asyncio
-async def test_migration_053_product_composition_schema():
+async def test_migration_053_product_composition_schema(tmp_path: Path):
     """#147: таблица состава ГП — констрейнты и триггер-инварианты.
 
     Покрывает: (1) таблица product_compositions с CHECK quantity > 0 и
@@ -698,7 +696,7 @@ async def test_migration_053_product_composition_schema():
         await conn.execute(text(f'CREATE DATABASE "{db_name}"'))
     await admin_engine.dispose()
 
-    env = _alembic_env(target_url)
+    env = _alembic_env(target_url, tmp_path)
 
     def _run(*args: str) -> None:
         result = subprocess.run(
@@ -820,7 +818,7 @@ async def test_migration_053_product_composition_schema():
 
 
 @pytest.mark.asyncio
-async def test_migration_058_product_pair_quantity_norms():
+async def test_migration_058_product_pair_quantity_norms(tmp_path: Path):
     """#177 (Q13): нормы парных профилей из файла справочника → product_pairs.
 
     Миграция — разовый перенос значений, которых в БД не было (импорт формат
@@ -850,7 +848,7 @@ async def test_migration_058_product_pair_quantity_norms():
         await conn.execute(text(f'CREATE DATABASE "{db_name}"'))
     await admin_engine.dispose()
 
-    env = _alembic_env(target_url)
+    env = _alembic_env(target_url, tmp_path)
 
     # (SKU A, SKU B, ручная N на 2750 мм) — значения из файла справочника (#177).
     norms: list[tuple[str, str, int]] = [
@@ -1047,7 +1045,7 @@ async def test_migration_058_product_pair_quantity_norms():
 
 
 @pytest.mark.asyncio
-async def test_migration_059_backfills_legacy_linear_length_without_raw():
+async def test_migration_059_backfills_legacy_linear_length_without_raw(tmp_path: Path):
     """Скаляр 2700 переносится один раз; совпадающий линейный default очищается."""
     db_name = f"ktm_mig_{uuid.uuid4().hex[:10]}"
     admin_url = _test_db_url().rsplit("/", 1)[0] + "/postgres"
@@ -1058,7 +1056,7 @@ async def test_migration_059_backfills_legacy_linear_length_without_raw():
         await conn.execute(text(f'CREATE DATABASE "{db_name}"'))
     await admin_engine.dispose()
 
-    env = _alembic_env(target_url)
+    env = _alembic_env(target_url, tmp_path)
     engine = create_async_engine(target_url)
     try:
         upgraded = subprocess.run(
@@ -1157,7 +1155,7 @@ async def test_migration_059_backfills_legacy_linear_length_without_raw():
 
 
 @pytest.mark.asyncio
-async def test_migration_059_stops_on_conflicting_linear_default_until_manual_resolution():
+async def test_migration_059_stops_on_conflicting_linear_default_until_manual_resolution(tmp_path: Path):
     """Конфликт 2750/2700 откатывается и повторяется только после решения оператора."""
     db_name = f"ktm_mig_{uuid.uuid4().hex[:10]}"
     admin_url = _test_db_url().rsplit("/", 1)[0] + "/postgres"
@@ -1168,7 +1166,7 @@ async def test_migration_059_stops_on_conflicting_linear_default_until_manual_re
         await conn.execute(text(f'CREATE DATABASE "{db_name}"'))
     await admin_engine.dispose()
 
-    env = _alembic_env(target_url)
+    env = _alembic_env(target_url, tmp_path)
     engine = create_async_engine(target_url)
     try:
         upgraded = subprocess.run(
