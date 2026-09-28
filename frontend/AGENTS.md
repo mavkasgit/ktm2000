@@ -79,7 +79,9 @@ React 18.3 + TypeScript + Vite + Tailwind CSS + shadcn/ui + TanStack Query/Virtu
   `filterField === "dimensions"` в шапке и ручной вызов
   `pickExactMatchColumnValue(…, "dimensions")` — не способ объявить
   семантику: добавить колонку с особым фильтром значило бы править и то и
-  другое. Значения точного совпадения собирает `exactMatchColumnParams`.
+  другое. Значения точного совпадения собирает `buildColumnApiParams`
+  (он же читает их для ячейки через `readColumnValue`); отдельного сборщика
+  точного совпадения нет.
   Своя функция `buildXColumnApiParams` с перечислением колонок — не способ
   собрать параметры: используйте `buildColumnApiParams`, он берёт колонки из
   описания.
