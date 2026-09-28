@@ -208,9 +208,11 @@ test.describe("@ui-narrow Пила: распил одной задачи на н
     }
 
     async function approveAndRelease() {
+      // Форс требует причину в теле (ADR-0048): без неё approve вернёт 400.
       await apiJson(
         `/api/production-plans/${importRes.production_plan_id}/positions/${pos!.id}/approve?force=true`,
         "POST",
+        { reason: "e2e: распил на несколько длин проверяем на заготовке из упаковочного плана" },
       );
       // Создание батча только фиксирует позиции — задачи создаёт релиз батча.
       const batch = (await apiJson(

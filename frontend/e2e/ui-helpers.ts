@@ -265,6 +265,25 @@ export async function findApprovablePositionViaUI(page: Page): Promise<Approvabl
   return Number.isFinite(positionId) ? { id: positionId, sku } : null;
 }
 
+/**
+ * Подтвердить форс-аппрув: заполнить причину и нажать «Утвердить всё равно».
+ *
+ * Форс-диалог требует непустую причину (ADR-0048) — без неё запрос approve
+ * не уходит, и тест падал бы на таймауте ожидания ответа. Причина пишется
+ * осмысленно: она попадает в журнал действий и объясняет, почему сценарий
+ * идёт против проверки валидации.
+ */
+export async function confirmForceApproveViaUI(page: Page, reason: string) {
+  const reasonBox = page.getByLabel("Причина перекрытия валидации").last();
+  await expect(reasonBox).toBeVisible({ timeout: 3_000 });
+  await reasonBox.fill(reason);
+  const confirmBtn = page
+    .locator("button", { hasText: "Утвердить всё равно" })
+    .filter({ visible: true });
+  await expect(confirmBtn).toBeEnabled({ timeout: 3_000 });
+  await confirmBtn.click();
+}
+
 export async function approvePositionViaUI(page: Page, position: ApprovablePosition) {
   const planSearch = page.getByPlaceholder("Поиск");
   await expect(planSearch).toBeVisible({ timeout: 10_000 });
@@ -288,7 +307,10 @@ export async function approvePositionViaUI(page: Page, position: ApprovablePosit
     const forceBtn = page.locator("button", { hasText: "Утвердить всё равно" }).filter({ visible: true });
     try {
       await expect(forceBtn).toBeVisible({ timeout: 3_000 });
-      await forceBtn.click();
+      await confirmForceApproveViaUI(
+        page,
+        `e2e: позиция #${position.id} заведена как эталонная, расхождения валидации проверены вручную`,
+      );
     } catch {
       // Риск-диалог не открылся: approve выполняется без force.
     }

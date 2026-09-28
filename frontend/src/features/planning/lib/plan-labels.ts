@@ -1,5 +1,6 @@
 import { PlanPositionOut } from "@/shared/api/productionPlans"
 import type { BadgeProps } from "@/shared/ui/badge"
+import type { FiltersPanelOption } from "@/shared/ui"
 import { errorLabels, errorPhraseTranslations, statusLabels, validationLabels, warningLabels } from "@/shared/lib/generated-labels"
 
 export { errorLabels, statusLabels, warningLabels }
@@ -47,8 +48,8 @@ export type PlanSortField = "id" | "rowNum" | "sku" | "name" | "qty" | "route" |
 
 export interface PlanFiltersState {
   status: "all" | "draft" | "valid" | "invalid"
-  /** «Перекрыта» — форс-аппрув с причиной (#212): ошибки остались, обход разрешён. */
-  validation_status: "all" | "valid" | "invalid" | "overridden"
+  /** Состояния валидации позиции; «перекрыта» — форс-аппрув с причиной (#212). */
+  validation_status: "all" | keyof typeof validationLabels
   has_route: "all" | "yes" | "no"
   has_errors: "all" | "yes" | "no"
   has_warnings: "all" | "yes" | "no"
@@ -56,12 +57,12 @@ export interface PlanFiltersState {
 }
 
 /**
- * Варианты панельного фильтра по валидации. Список и подписи берутся из
- * канона, чтобы новое состояние не пришлось объявлять здесь повторно.
+ * Варианты панельного фильтра по валидации. Список и подписи берутся из канона:
+ * новое состояние валидации попадает в фильтр само, дописывать его здесь не надо.
  */
-export const validationFilterOptions: { value: PlanFiltersState["validation_status"]; label: string }[] = [
+export const validationFilterOptions: FiltersPanelOption[] = [
   { value: "all", label: "Все" },
-  ...(["valid", "invalid", "overridden"] as const).map((value) => ({
+  ...Object.keys(validationLabels).map((value) => ({
     value,
     label: validationLabels[value],
   })),

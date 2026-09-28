@@ -265,7 +265,7 @@ async def test_force_approve_without_reason_in_body_is_rejected(client, session)
 
 @pytest.mark.asyncio
 async def test_reason_without_force_does_not_require_override(client, session) -> None:
-    """Причина без форса — обычное утверждение: лишнее поле не ломает контракт."""
+    """Обычное утверждение с причиной в теле идёт как обычное: форс не включается."""
     user = await _make_user(session, "gate-reason-no-force@test.local")
     plan, positions, _route = await _make_plan_with_positions(session, "FG-GATE-API-REASON", 1)
 
@@ -277,6 +277,33 @@ async def test_reason_without_force_does_not_require_override(client, session) -
 
     assert response.status_code == 200, response.text
     assert response.json()["validation_status"] == "valid"
+
+
+@pytest.mark.asyncio
+async def test_force_approve_reason_from_body_reaches_journal(client, session) -> None:
+    """Причина из тела доезжает до сервиса: позиция перекрыта, причина в журнале."""
+    user = await _make_user(session, "gate-reason-body@test.local")
+    plan, positions, _route = await _make_plan_with_positions(session, "FG-GATE-API-BODY", 1)
+    product = await session.get(Product, positions[0].product_id)
+    product.is_active = False
+    await session.flush()
+    reason = "Артикул снят с продаж, отгрузка срочная — маршрут согласован"
+
+    response = await client.post(
+        f"/api/production-plans/{plan.id}/positions/{positions[0].id}/approve?force=true",
+        json={"reason": reason},
+        headers=_auth_headers(user),
+    )
+
+    assert response.status_code == 200, response.text
+    assert response.json()["validation_status"] == "overridden"
+    entry = await session.scalar(
+        select(AuditLog).where(
+            AuditLog.entity_type == AuditEntityType.PLAN_POSITION.value,
+            AuditLog.entity_id == positions[0].id,
+        )
+    )
+    assert entry is not None and entry.comment == reason
 
 
 @pytest.mark.asyncio
