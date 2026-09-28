@@ -1360,3 +1360,118 @@ async def test_migration_064_adds_overridden_validation_status(tmp_path: Path):
         async with admin_engine.connect() as conn:
             await conn.execute(text(f'DROP DATABASE IF EXISTS "{db_name}" WITH (FORCE)'))
         await admin_engine.dispose()
+
+
+@pytest.mark.asyncio
+async def test_migration_065_normalizes_storage_route_stages_to_transit(tmp_path: Path):
+    """#178: этапы на складских/терминальных секциях становятся транзит-хопами.
+
+    Маршрут, собранный импортом плана, держал склад как `stage_kind=production`
+    с заполненным `section_id`. Миграция переносит склад в
+    `storage_section_id`, обнуляет `section_id` и не трогает `is_final`
+    (правило финальности #176 не менялось). Повторный прогон — no-op.
+    """
+    db_name = f"ktm_mig_{uuid.uuid4().hex[:10]}"
+    admin_url = _test_db_url().rsplit("/", 1)[0] + "/postgres"
+    target_url = _test_db_url().rsplit("/", 1)[0] + f"/{db_name}"
+
+    admin_engine = create_async_engine(admin_url, isolation_level="AUTOCOMMIT")
+    async with admin_engine.connect() as conn:
+        await conn.execute(text(f'CREATE DATABASE "{db_name}"'))
+    await admin_engine.dispose()
+
+    env = _alembic_env(target_url, tmp_path)
+
+    def _run(*args: str) -> None:
+        result = subprocess.run(
+            ["alembic", *args],
+            cwd=BACKEND_DIR,
+            env=env,
+            capture_output=True,
+            text=True,
+            check=False,
+        )
+        assert result.returncode == 0, result.stderr or result.stdout
+
+    engine = create_async_engine(target_url)
+    try:
+        _run("upgrade", "064_plan_position_validation_overridden")
+
+        async with engine.begin() as conn:
+            await conn.execute(text(
+                "INSERT INTO sections (code, name, sort_order, type, is_active) VALUES "
+                "('MIG065-SAW', 'Пила', 70, 'production', true), "
+                "('MIG065-FG', 'Склад ГП', 90, 'finished_stock', true), "
+                "('MIG065-SHIPPED', 'Отправлено', 110, 'terminal', true)"
+            ))
+            section_ids = dict(
+                (
+                    await conn.execute(
+                        text("SELECT code, id FROM sections WHERE code LIKE 'MIG065-%'")
+                    )
+                ).all()
+            )
+            await conn.execute(text(
+                "INSERT INTO production_routes (name, code, is_active) "
+                "VALUES ('Маршрут 065', 'mig065', true)"
+            ))
+            route_id = (
+                await conn.execute(text("SELECT id FROM production_routes WHERE code = 'mig065'"))
+            ).scalar_one()
+            for sequence, (code, is_final) in enumerate(
+                [("MIG065-SAW", False), ("MIG065-FG", False), ("MIG065-SHIPPED", True)],
+                start=1,
+            ):
+                await conn.execute(
+                    text(
+                        "INSERT INTO route_stages (route_id, sequence, section_id, is_final) "
+                        "VALUES (:route, :seq, :section, :final)"
+                    ),
+                    {
+                        "route": route_id,
+                        "seq": sequence,
+                        "section": section_ids[code],
+                        "final": is_final,
+                    },
+                )
+
+        async def _stages() -> list[tuple]:
+            async with engine.connect() as conn:
+                return list(
+                    (
+                        await conn.execute(
+                            text(
+                                "SELECT rs.sequence, rs.stage_kind, rs.section_id, "
+                                "rs.storage_section_id, rs.is_final "
+                                "FROM route_stages rs WHERE rs.route_id = :route "
+                                "ORDER BY rs.sequence"
+                            ),
+                            {"route": route_id},
+                        )
+                    ).all()
+                )
+
+        before = await _stages()
+        assert [row[1] for row in before] == ["production"] * 3
+
+        _run("upgrade", "head")
+        after = await _stages()
+
+        # Цеховой этап не тронут; склад и терминал — транзит с переехавшим
+        # складом, is_final терминала сохранён (правило #176 не менялось).
+        assert after == [
+            (1, "production", section_ids["MIG065-SAW"], None, False),
+            (2, "transit", None, section_ids["MIG065-FG"], False),
+            (3, "transit", None, section_ids["MIG065-SHIPPED"], True),
+        ]
+
+        # Повторный прогон (stamp назад + upgrade head) — no-op.
+        _run("stamp", "064_plan_position_validation_overridden")
+        _run("upgrade", "head")
+        assert await _stages() == after
+    finally:
+        await engine.dispose()
+        admin_engine = create_async_engine(admin_url, isolation_level="AUTOCOMMIT")
+        async with admin_engine.connect() as conn:
+            await conn.execute(text(f'DROP DATABASE IF EXISTS "{db_name}" WITH (FORCE)'))
+        await admin_engine.dispose()
