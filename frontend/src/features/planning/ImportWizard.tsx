@@ -10,7 +10,6 @@ import { ApplyImportConfirmDialog } from "./components/ApplyImportConfirmDialog"
 import { buildActiveFilterSummary } from "shared/ui/buildActiveFilterSummary"
 import { isDuplicateRow, type DuplicateRowSignal } from "./lib/duplicateRows"
 import { buildImportRowStats } from "./lib/importRowStats"
-import { invalidatePlanImportCaches } from "./lib/planImportCaches"
 import { useQuery, useQueryClient } from "@tanstack/react-query"
 import { listAllImportTemplates, type ImportTemplate } from "@/shared/api/importTemplates"
 import { getErrorMessage } from "@/shared/api/client"
@@ -415,7 +414,7 @@ export function ImportWizard(props: {
       setStep("result")
       // Импорт может создать или обновить шаблон, поэтому шаблоны — тоже
       // затронутый домен, а не «случайно сбросим лишнее».
-      invalidatePlanImportCaches(queryClient, { planId: changeSet.planId, batchId: changeSet.batchId })
+      invalidateAfter(queryClient, "importApplied")
       void invalidateAfter(queryClient, "importTemplatesChanged")
       props.onSuccess(changeSet.planId, changeSet.changeSetId)
     } catch (e) {
@@ -481,12 +480,12 @@ export function ImportWizard(props: {
   }
 
   function reset() {
-    // Откат неприменённого change set: сбрасываем домены импорта и превью
-    // конкретного плана — оно параметризовано planId и в домен не входит.
+    // Откат неприменённого change set. Превью конкретного плана отдельной
+    // инвалидацией не сбрасывается: корень `plan-preview` уже входит в домен
+    // `plan`, и `importDiscarded` покрывает его вместе с остальным импортом.
     if (pendingChangeSet) {
       discardImport(pendingChangeSet.planId, pendingChangeSet.changeSetId).catch(() => {})
       void invalidateAfter(queryClient, "importDiscarded")
-      void queryClient.invalidateQueries({ queryKey: queryKeys.plan.preview(pendingChangeSet.planId) })
     }
     setStep("upload")
     setFile(null)

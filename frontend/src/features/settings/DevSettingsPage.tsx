@@ -13,6 +13,7 @@ import { listAllImportTemplates } from "@/shared/api/importTemplates"
 import { listSections } from "@/shared/api/sections"
 import { queryKeys } from "@/shared/api/queryKeys"
 import { usePermission } from "@/features/auth/hooks/usePermission"
+import { invalidateEverything } from "@/shared/api/cacheInvalidation"
 
 function useCurrentData() {
   const routes = useQuery({ queryKey: queryKeys.routes.all(), queryFn: () => listRoutes() })
@@ -44,10 +45,11 @@ function SeedDialog({ open, onOpenChange }: { open: boolean; onOpenChange: (v: b
     setSeeding(true)
     try {
       const summary = await seedRoutes(true)
-      // Исключение из правила реестра: сид пересоздаёт справочники целиком, и
-      // перечислить задетые домены здесь — значит перечислить их неполно и
-      // получить тот же баг. Dev-экран, в проде недоступен.
-      queryClient.invalidateQueries()
+      // Сид, чистка и демо-данные пересоздают базу целиком, поэтому перечислить
+      // задетые домены здесь — значит перечислить их неполно и получить тот
+      // же баг. Сброс «всё» живёт в реестре (`invalidateEverything`), прямой
+      // вызов здесь означал бы возврат к запрещённому ADR-0041 способу.
+      void invalidateEverything(queryClient)
       toast({
         title: "Справочники загружены",
         description:
@@ -352,7 +354,7 @@ function CleanupDatabaseDialog({ open, onOpenChange }: { open: boolean; onOpenCh
         description: `Успешно удалены записи из ${effectiveSelected.size} таблиц.`,
         variant: "success",
       });
-      queryClient.invalidateQueries();
+      void invalidateEverything(queryClient);
       onOpenChange(false);
       setUserSelected(new Set());
     } catch (e) {
@@ -643,7 +645,7 @@ export function DevSettingsPage() {
     setSeedingDemo(true)
     try {
       const summary = await seedDemoProduction()
-      queryClient.invalidateQueries()
+      void invalidateEverything(queryClient)
       toast({
         title: "Демо-данные загружены",
         description: `Продуктов: ${summary.products}, Остатков: ${summary.remainders}, Дефектов: ${summary.defects}`,
@@ -665,7 +667,7 @@ export function DevSettingsPage() {
     setClearingDemo(true)
     try {
       const summary = await clearDemoProduction()
-      queryClient.invalidateQueries()
+      void invalidateEverything(queryClient)
       const clearedCount = Object.values(summary.cleanup).reduce((a: number, b: any) => a + (typeof b === "number" ? b : 0), 0)
       toast({
         title: "Демо-данные очищены",

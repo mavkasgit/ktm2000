@@ -41,6 +41,7 @@ const CACHE_DOMAIN_KEYS = {
     ["plan-preview"],
     ["plan-preview-page"],
     ["plan-position-detail"],
+    ["batch-preview"],
   ],
   /** Контроль выполнения: строки плана в работе и карточка позиции. */
   execution: [["production-planning-rows"], ["production-planning-row-detail"], ["plans"]],
@@ -75,6 +76,10 @@ const CACHE_DOMAIN_KEYS = {
   audit: [["auditLogs"]],
   /** Отмена действий: журнал и деревья цепочек (корень `actions` покрывает и то и другое). */
   actions: [["actions"]],
+  /** Сотрудники HRMS: список после синхронизации. */
+  employees: [["employees"]],
+  /** Резервные копии: список, конфигурация, задания, превью, текущее состояние. */
+  backups: [["backups"], ["backup-config"], ["backup-jobs"], ["backup-previews"], ["current-preview"]],
 } as const satisfies Record<string, readonly (readonly string[])[]>;
 
 export type CacheDomain = keyof typeof CACHE_DOMAIN_KEYS;
@@ -117,6 +122,10 @@ export const CACHE_ACTIONS = {
   importTemplatesChanged: ["importTemplates"],
   /** Действие отменено или исправлено. */
   actionReversed: ["actions", "audit", "execution", "shopfloor", "transfers", "stock"],
+  /** Синхронизирован список сотрудников HRMS. */
+  employeesSynced: ["employees"],
+  /** Изменился бэкап или его конфигурация: список, превью, задания, текущее состояние. */
+  backupsChanged: ["backups"],
 } as const satisfies Record<string, readonly CacheDomain[]>;
 
 /** Бизнес-действие, после которого нужно сбросить кэш. */
@@ -132,6 +141,17 @@ export function invalidateDomains(queryClient: QueryClient, domains: readonly Ca
       CACHE_DOMAIN_KEYS[domain].map((queryKey) => queryClient.invalidateQueries({ queryKey: [...queryKey] })),
     ),
   ).then(() => undefined);
+}
+
+/**
+ * Сбросить вообще всё — для действий, которые меняют саму БД (восстановление
+ * из бэкапа), а не домен данных. Перечислить задетые ключи здесь нельзя:
+ * после восстановления невалиден любой запрос, включая тот, чьего ключа ещё
+ * нет в `CACHE_DOMAIN_KEYS`. Поэтому «сбросить всё» живёт здесь же, в
+ * реестре, а не размазывается по хукам прямыми вызовами (ADR-0041).
+ */
+export function invalidateEverything(queryClient: QueryClient): Promise<void> {
+  return queryClient.invalidateQueries().then(() => undefined);
 }
 
 /** Сбросить домены по бизнес-действию. Основной вход для экранов. */

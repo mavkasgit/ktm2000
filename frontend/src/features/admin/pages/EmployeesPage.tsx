@@ -2,6 +2,7 @@ import { useState } from "react"
 import { useMutation, useQueryClient } from "@tanstack/react-query"
 import { RefreshCw, Users } from "lucide-react"
 import { Button } from "@/shared/ui"
+import { invalidateAfter } from "@/shared/api/cacheInvalidation"
 import { syncEmployees } from "../api"
 import { HrmsEmployeesTable } from "../components/HrmsEmployeesTable"
 
@@ -12,7 +13,7 @@ export function EmployeesPage() {
   const syncMutation = useMutation({
     mutationFn: syncEmployees,
     onSuccess: (data) => {
-      queryClient.invalidateQueries({ queryKey: ["employees"] })
+      void invalidateAfter(queryClient, "employeesSynced")
       setSyncedAt(data.synced_at)
     },
   })

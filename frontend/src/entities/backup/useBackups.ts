@@ -1,6 +1,14 @@
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 import * as api from "./api";
+import { invalidateAfter, invalidateEverything } from "@/shared/api/cacheInvalidation";
 import { queryKeys } from "@/shared/api/queryKeys";
+
+/**
+ * Хуки бэкапов сбрасывают кэш через реестр (ADR-0041): перечень задетых
+ * ключей — дело `CACHE_DOMAIN_KEYS.backups`, а не каждого хука. Перечислить
+ * их здесь означало бы разойтись с реестром при первом же новом ключе
+ * в `queryKeys.backups`.
+ */
 
 export function useBackupConfig() {
   return useQuery({
@@ -14,7 +22,7 @@ export function useUpdateBackupConfig() {
   return useMutation({
     mutationFn: api.updateBackupConfig,
     onSuccess: () => {
-      void queryClient.invalidateQueries({ queryKey: queryKeys.backups.config() });
+      void invalidateAfter(queryClient, "backupsChanged");
     },
   });
 }
@@ -31,7 +39,7 @@ export function useCreateBackup() {
   return useMutation({
     mutationFn: api.createBackup,
     onSuccess: () => {
-      queryClient.invalidateQueries({ queryKey: queryKeys.backups.all() });
+      void invalidateAfter(queryClient, "backupsChanged");
     },
   });
 }
@@ -67,11 +75,8 @@ export function useUploadPreview() {
   const queryClient = useQueryClient();
   return useMutation({
     mutationFn: (file: File) => api.uploadPreview(file),
-    onSuccess: (_data, file) => {
-      void queryClient.invalidateQueries({ queryKey: queryKeys.backups.all() });
-      void queryClient.invalidateQueries({ queryKey: ["backups", "list"] });
-      void queryClient.invalidateQueries({ queryKey: queryKeys.backups.previews((file as unknown as { batch_id?: number })?.batch_id ?? -1) });
-      void queryClient.invalidateQueries({ queryKey: queryKeys.backups.currentPreview() });
+    onSuccess: () => {
+      void invalidateAfter(queryClient, "backupsChanged");
     },
   });
 }
@@ -82,10 +87,7 @@ export function useUpdateBackupComment() {
     mutationFn: ({ filename, comment }: { filename: string; comment: string }) =>
       api.updateBackupComment(filename, comment),
     onSuccess: () => {
-      void queryClient.invalidateQueries({ queryKey: queryKeys.backups.all() });
-      void queryClient.invalidateQueries({ queryKey: ["backups", "list"] });
-      void queryClient.invalidateQueries({ queryKey: queryKeys.backups.currentPreview() });
-      void queryClient.invalidateQueries({ queryKey: queryKeys.backups.previewsAll() });
+      void invalidateAfter(queryClient, "backupsChanged");
     },
   });
 }
@@ -95,11 +97,7 @@ export function useDeleteBackup() {
   return useMutation({
     mutationFn: (filename: string) => api.deleteBackup(filename),
     onSuccess: () => {
-      void queryClient.invalidateQueries({ queryKey: queryKeys.backups.all() });
-      void queryClient.invalidateQueries({ queryKey: ["backups", "list"] });
-      void queryClient.invalidateQueries({ queryKey: queryKeys.backups.previewsAll() });
-      void queryClient.invalidateQueries({ queryKey: queryKeys.backups.currentPreview() });
-      void queryClient.invalidateQueries({ queryKey: queryKeys.backups.jobs() });
+      void invalidateAfter(queryClient, "backupsChanged");
     },
   });
 }
@@ -109,10 +107,7 @@ export function useBulkDeleteBackups() {
   return useMutation({
     mutationFn: (filenames: string[]) => api.bulkDeleteBackups(filenames),
     onSuccess: () => {
-      void queryClient.invalidateQueries({ queryKey: queryKeys.backups.all() });
-      void queryClient.invalidateQueries({ queryKey: ["backups", "list"] });
-      void queryClient.invalidateQueries({ queryKey: queryKeys.backups.previewsAll() });
-      void queryClient.invalidateQueries({ queryKey: queryKeys.backups.currentPreview() });
+      void invalidateAfter(queryClient, "backupsChanged");
     },
   });
 }
@@ -122,10 +117,7 @@ export function useDeleteBackupsOlderThan() {
   return useMutation({
     mutationFn: (days: number) => api.deleteBackupsOlderThan(days),
     onSuccess: () => {
-      void queryClient.invalidateQueries({ queryKey: queryKeys.backups.all() });
-      void queryClient.invalidateQueries({ queryKey: ["backups", "list"] });
-      void queryClient.invalidateQueries({ queryKey: queryKeys.backups.previewsAll() });
-      void queryClient.invalidateQueries({ queryKey: queryKeys.backups.currentPreview() });
+      void invalidateAfter(queryClient, "backupsChanged");
     },
   });
 }
@@ -136,8 +128,11 @@ export function useRestoreBackup() {
     mutationFn: ({ filename, db_name }: { filename: string; db_name: string }) =>
       api.restoreBackup(filename, { db_name }),
     onSuccess: () => {
-      // Восстановление БД — сбрасываем ВСЁ.
-      void queryClient.invalidateQueries();
+      // Восстановление переписывает саму БД, поэтому невалиден любой запрос,
+      // а не только ключи домена `backups`. «Сбросить всё» живёт в реестре
+      // (`invalidateEverything`): прямой вызов здесь был бы возвратом к
+      // запрещённому ADR-0041 способу.
+      void invalidateEverything(queryClient);
     },
   });
 }
@@ -148,8 +143,8 @@ export function useUploadRestore() {
     mutationFn: ({ file, db_name }: { file: File; db_name: string }) =>
       api.uploadRestore(file, { db_name }),
     onSuccess: () => {
-      // Восстановление БД — сбрасываем ВСЁ.
-      void queryClient.invalidateQueries();
+      // См. `useRestoreBackup`: после восстановления БД невалиден любой запрос.
+      void invalidateEverything(queryClient);
     },
   });
 }

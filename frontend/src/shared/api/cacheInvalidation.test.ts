@@ -1,7 +1,7 @@
 import { QueryClient } from "@tanstack/react-query";
 import { describe, expect, it } from "vitest";
 
-import { CACHE_ACTIONS, invalidateAfter, invalidateDomains } from "./cacheInvalidation";
+import { CACHE_ACTIONS, invalidateAfter, invalidateDomains, invalidateEverything } from "./cacheInvalidation";
 import { queryKeys } from "./queryKeys";
 
 /**
@@ -97,6 +97,8 @@ describe("реестр сброса кэша", () => {
       importTemplates: true,
       audit: true,
       actions: true,
+      employees: true,
+      backups: true,
     };
     for (const [action, actionDomains] of Object.entries(CACHE_ACTIONS)) {
       expect(actionDomains.length, `у действия ${action} пустой список доменов`).toBeGreaterThan(0);
@@ -107,6 +109,60 @@ describe("реестр сброса кэша", () => {
         ).toBe(true);
       }
     }
+  });
+
+  it("синхронизация сотрудников сбрасывает список при любых параметрах", async () => {
+    // Регрессия: у `EmployeesPage` не было домена в реестре, и он сбрасывал
+    // ключ литералом `["employees"]` — мимо фабрики, а значит мимо любой
+    // её будущей правки.
+    const list = queryKeys.employees.list({ limit: 50, offset: 0, search: "Иванов" });
+    const queryClient = clientWithKeys([list]);
+
+    await invalidateAfter(queryClient, "employeesSynced");
+
+    expect(invalidated(queryClient, list)).toBe(true);
+  });
+
+  it("изменение бэкапа сбрасывает список, конфигурацию и превью", async () => {
+    // Регрессия: `useBackups` перечислял 15 ключей вручную и не покрывал
+    // ключ, добавленный в `queryKeys.backups` позже.
+    const list = queryKeys.backups.list({ limit: 50, offset: 0, sort: "created_at:desc" });
+    const config = queryKeys.backups.config();
+    const previews = queryKeys.backups.previews(3);
+    const jobs = queryKeys.backups.jobs();
+    const queryClient = clientWithKeys([list, config, previews, jobs]);
+
+    await invalidateAfter(queryClient, "backupsChanged");
+
+    expect(invalidated(queryClient, list)).toBe(true);
+    expect(invalidated(queryClient, config)).toBe(true);
+    expect(invalidated(queryClient, previews)).toBe(true);
+    expect(invalidated(queryClient, jobs)).toBe(true);
+  });
+
+  it("применение импорта сбрасывает превью батча", async () => {
+    // Регрессия: `planImportCaches` сбрасывал `batchPreview` точечно, мимо
+    // реестра. Ключ параметризован batchId, но корень `batch-preview` в
+    // домене `plan` покрывает все параметризованные варианты.
+    const batch = [...queryKeys.plan.batchPreview(17), "light"];
+    const planPreview = queryKeys.plan.preview(4);
+    const queryClient = clientWithKeys([batch, planPreview]);
+
+    await invalidateAfter(queryClient, "importApplied");
+
+    expect(invalidated(queryClient, batch)).toBe(true);
+    expect(invalidated(queryClient, planPreview)).toBe(true);
+  });
+
+  it("invalidateEverything сбрасывает и то, чего в реестре нет", async () => {
+    // Восстановление БД переписывает базу целиком: невалиден любой запрос.
+    const orphan = ["auth-me"] as const;
+    const queryClient = clientWithKeys([orphan, queryKeys.execution.rows({ limit: 50, offset: 0 })]);
+
+    await expect(invalidateEverything(queryClient)).resolves.toBeUndefined();
+
+    expect(invalidated(queryClient, orphan)).toBe(true);
+    expect(invalidated(queryClient, queryKeys.execution.rows({ limit: 50, offset: 0 }))).toBe(true);
   });
 
   it("invalidateDomains переживает повторный вызов", async () => {
