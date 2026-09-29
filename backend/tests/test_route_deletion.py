@@ -7,16 +7,18 @@
 * ``?force=true`` сносит весь граф, включая операции этапов и условия
   правил привязки — «висячих» операций не остаётся;
 * уборка сирот не трогает маршрут с позицией плана;
-* уборка по умолчанию — dry run, удаляет только при ``execute=True``.
+* уборка по умолчанию — dry run, удаляет только при ``execute=True``;
+* сирота — маршрут, который создал ИМПОРТ: на свежей БД после ``db:seed``
+  уборка с ``execute`` не сносит эталонные ``universal_rp`` / ``dynamic_*``
+  (у них нет ни позиций, ни заданий, но справочный код есть);
+* архивный маршрут уборке не подлежит — за архивирование отвечает человек.
 """
 from __future__ import annotations
 
 from decimal import Decimal
 
 import pytest
-from httpx import AsyncClient
-from sqlalchemy import func, select
-from sqlalchemy.ext.asyncio import AsyncSession
+from sqlalchemy import func, or_, select, update
 
 from app.models.internal_plan import InternalPlan, SectionPlanLine
 from app.models.production_plan import PlanPosition
@@ -28,7 +30,9 @@ from app.models.route import (
     RouteStage,
 )
 from app.models.work_task import WorkTask
+from app.seeds.run_seed import run_full_seed
 from app.services.route_deletion import cleanup_orphan_routes, find_orphan_routes
+from app.services.route_signature import auto_route_code
 from tests.stock.test_shopfloor_stage3 import _setup_minimal_route
 
 pytestmark = pytest.mark.asyncio
@@ -57,9 +61,14 @@ async def _add_matching_rule(session: AsyncSession, route_id: int) -> tuple[int,
 
 
 async def _make_orphan_route(
-    session: AsyncSession, *, name: str, code: str, section_id: int
+    session: AsyncSession, *, name: str, code: str | None, section_id: int
 ) -> int:
-    """Маршрут без позиций плана, строк плана участков и заданий."""
+    """Маршрут, который создал импорт, но ни одна позиция его не взяла.
+
+    ``code`` — тот, что импорт реально пишет: ``NULL`` для маршрута, созданного
+    до #230, и ``auto-<хеш сигнатуры>`` после (#230, ADR-0051). Справочный код
+    у такого маршрута не бывает, поэтому его и не передаём.
+    """
     route = ProductionRoute(name=name, code=code, is_active=True)
     session.add(route)
     await session.flush()
@@ -73,6 +82,11 @@ async def _make_orphan_route(
     )
     await session.commit()
     return route.id
+
+
+def _auto_code(tag: str) -> str:
+    """Код маршрута импорта из его сигнатуры — так же, как это делает импорт."""
+    return auto_route_code(f"SAWING:SAW>{tag}:,1")
 
 
 async def _count(session: AsyncSession, stmt) -> int:
@@ -162,7 +176,7 @@ async def test_orphan_routes_exclude_routes_with_positions(
     fx = await _setup_minimal_route(session, sku="RD-ORPH", qty=Decimal("10"))
     linked_id = await _route_id(session, "R-RD-ORPH")
     orphan_id = await _make_orphan_route(
-        session, name="RD-orphan-1", code="RD-ORPHAN-1", section_id=fx["prod"].id
+        session, name="RD-orphan-1", code=_auto_code("ORPH1"), section_id=fx["prod"].id
     )
 
     orphans = await find_orphan_routes(session)
@@ -181,10 +195,10 @@ async def test_cleanup_orphan_routes_is_dry_run_by_default_and_executes_on_flag(
     fx = await _setup_minimal_route(session, sku="RD-DRY", qty=Decimal("10"))
     linked_id = await _route_id(session, "R-RD-DRY")
     dry1 = await _make_orphan_route(
-        session, name="RD-dry-1", code="RD-DRY-1", section_id=fx["prod"].id
+        session, name="RD-dry-1", code=_auto_code("DRY1"), section_id=fx["prod"].id
     )
     dry2 = await _make_orphan_route(
-        session, name="RD-dry-2", code="RD-DRY-2", section_id=fx["prod"].id
+        session, name="RD-dry-2", code=None, section_id=fx["prod"].id
     )
 
     report = await cleanup_orphan_routes(session)
@@ -215,3 +229,84 @@ async def test_cleanup_orphan_routes_is_dry_run_by_default_and_executes_on_flag(
     # Уборка не должна задеть маршрут с позицией плана.
     assert await _count(session, select(func.count()).select_from(ProductionRoute).where(ProductionRoute.id == linked_id)) == 1
     assert await _count(session, select(func.count()).select_from(PlanPosition).where(PlanPosition.route_id == linked_id)) == 1
+
+
+async def test_cleanup_orphan_routes_keeps_seeded_reference_routes(session) -> None:
+    """Уборка с execute не сносит эталонные маршруты завода.
+
+    Регресс #228 на свежей БД: у сид-маршрутов (``universal_rp``,
+    ``dynamic_*``) после ``db:seed`` нет ни позиций плана, ни заданий, и
+    критерий «нет связей» считал их сиротами. Дальше уборка с ``--execute``
+    удаляла их, а ``run_seed`` не восстанавливал: он находит существующие
+    строки по коду и только обновляет их. Признак «маршрут создал импорт»
+    (кода нет либо он ``auto-``) — обязательная часть критерия.
+    """
+    await run_full_seed(session, force=True)
+
+    seeded = list(
+        (
+            await session.scalars(
+                select(ProductionRoute).where(
+                    or_(
+                        ProductionRoute.code == "universal_rp",
+                        ProductionRoute.code.like("dynamic_%"),
+                    )
+                )
+            )
+        ).all()
+    )
+    assert seeded, "Предусловие: db:seed оставил эталонные маршруты"
+    seeded_ids = {route.id for route in seeded}
+
+    # Ни у одного эталонного маршрута нет ни позиций плана, ни заданий —
+    # иначе тест проверял бы не то: связанный маршрут уборка и так не тронет.
+    for route in seeded:
+        assert await _count(
+            session,
+            select(func.count())
+            .select_from(WorkTask)
+            .join(RouteStage, WorkTask.route_stage_id == RouteStage.id)
+            .where(RouteStage.route_id == route.id),
+        ) == 0, f"Предусловие: у сид-маршрута {route.code!r} нет заданий"
+
+    orphans = await find_orphan_routes(session)
+    assert not (seeded_ids & {o.id for o in orphans}), (
+        "Справочный код — признак «маршрут создал не импорт»: эталонные "
+        f"маршруты попали в отчёт сирот: {sorted(seeded_ids & {o.id for o in orphans})}"
+    )
+
+    report = await cleanup_orphan_routes(session, execute=True)
+
+    assert not (seeded_ids & set(report.deleted_ids)), (
+        "Уборка снесла эталонные маршруты завода — потеря данных: "
+        f"{sorted(seeded_ids & set(report.deleted_ids))}"
+    )
+    assert await _count(
+        session,
+        select(func.count()).select_from(ProductionRoute).where(ProductionRoute.id.in_(seeded_ids)),
+    ) == len(seeded_ids)
+
+
+async def test_orphan_criterion_skips_archived_import_route(session: AsyncSession) -> None:
+    """Архивный маршрут импорта уборке не подлежит.
+
+    Архивный маршрут назначением не считается (``route_matcher``), и удалять
+    его — не уборка сирот: за архивирование отвечает человек.
+    """
+    fx = await _setup_minimal_route(session, sku="RD-ARCH", qty=Decimal("10"))
+    archived_id = await _make_orphan_route(
+        session, name="RD-archived", code=_auto_code("ARCH"), section_id=fx["prod"].id
+    )
+    await session.execute(
+        update(ProductionRoute).where(ProductionRoute.id == archived_id).values(is_active=False)
+    )
+    await session.commit()
+
+    assert archived_id not in {o.id for o in await find_orphan_routes(session)}
+
+    report = await cleanup_orphan_routes(session, execute=True)
+
+    assert archived_id not in report.deleted_ids
+    assert await _count(
+        session, select(func.count()).select_from(ProductionRoute).where(ProductionRoute.id == archived_id)
+    ) == 1

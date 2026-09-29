@@ -23,6 +23,11 @@
 ни строк плана участков, ни заданий, ни позиций выпуска. Такой маршрут
 виден в подборе (`app/services/route_selection.py`) и только мешает.
 Уборка — `scripts/cleanup_orphan_routes.py`, dry-run по умолчанию.
+
+«Создал импорт» — тоже часть критерия, а не деталь: справочный код
+(`universal_rp`, `dynamic_*`) у сид-маршрутов есть, и на свежей БД после
+`db:seed` у них нет ни позиций, ни заданий. Без этого признака уборка
+снесла бы эталонные маршруты завода, а `run_seed` их не восстановит.
 """
 
 from __future__ import annotations
@@ -51,6 +56,7 @@ from app.models.route import (
 from app.models.transfer import Transfer, TransferDiscrepancy
 from app.models.work_task import WorkTask
 from app.stock.models import StockTransaction
+from app.services.route_signature import AUTO_CODE_PREFIX
 
 
 @dataclass(frozen=True)
@@ -348,17 +354,38 @@ class OrphanCleanupReport:
 
 
 async def find_orphan_routes(db: AsyncSession) -> list[OrphanRoute]:
-    """Маршруты без позиций плана и без истории цеха.
+    """Маршруты, которые создал импорт и ни одна позиция не взяла.
 
-    Критерий сироты (тикет #228): ни позиций плана, ни строк плана
-    участков, ни заданий на этапах маршрута, ни позиций выпуска. Этапы,
-    операции и правила привязки — не данные, они уходят каскадом.
-    Маршруты с любыми из этих строк уборка не трогает.
+    Критерий сироты (тикет #228), два условия ОБЯЗАТЕЛЬНЫ:
+
+    * маршрут создал импорт — у него нет справочного кода: код ``NULL``
+      (маршрут, созданный импортом до #230) либо ``auto-<хеш>``
+      (детерминированный код из сигнатуры, ADR-0051). Сид-маршруты завода
+      ``universal_rp`` и ``dynamic_*`` несут справочный код, и на свежей
+      БД после ``db:seed`` у них нет ни позиций, ни заданий — то есть
+      по одному лишь признаку «нет связей» уборка снесла бы эталонные
+      маршруты, а ``run_seed`` их не восстановит: он ищет существующие
+      строки по коду и только их обновляет;
+    * маршрут не архивный (``is_active``) — архивный маршрут назначением
+      не считается (``route_matcher``), и убирать его уборке сирот нечего.
+
+    Плюс прежний признак #228: ни позиций плана, ни строк плана участков,
+    ни заданий на этапах маршрута, ни позиций выпуска. Этапы, операции и
+    правила привязки — не данные, они уходят каскадом. Маршруты с любыми
+    из этих строк уборка не трогает.
     """
     rows = (
         await db.execute(
             select(ProductionRoute.id, ProductionRoute.code, ProductionRoute.name)
             .where(
+                # Справочный код — признак «маршрут создал не импорт».
+                # Фильтр в выборке, а не после неё: иначе эталонные
+                # сид-маршруты попали бы в отчёт dry-run.
+                ProductionRoute.is_active.is_(True),
+                or_(
+                    ProductionRoute.code.is_(None),
+                    ProductionRoute.code.like(f"{AUTO_CODE_PREFIX}%"),
+                ),
                 ~select(PlanPosition.id)
                 .where(PlanPosition.route_id == ProductionRoute.id)
                 .exists()
