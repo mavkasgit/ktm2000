@@ -1,4 +1,5 @@
 import { test, expect } from "./fixtures";
+import { apiResetAll } from "./api-helpers";
 import {
   ensureE2ECatalogViaUI,
   PACKAGING_PLAN_XLS_PATH,
@@ -16,6 +17,12 @@ import { errorLabels } from "../src/shared/lib/generated-labels";
 test.describe("@ui Route workflow E2E", () => {
   test.beforeEach(async ({ page, loginAsAdmin }) => {
     await loginAsAdmin();
+    // Сброс производственных таблиц перед сценарием: без него вердикт спеки
+    // зависит от того, что оставили прошлые прогоны и прошлые версии сида —
+    // именно так 13 позиций «конфликтовали» с маршрутами промежуточной
+    // итерации, лежавшими в БД стенда (#225). Справочники после сброса сеются
+    // заново, поэтому порядок обязателен: сначала reset, потом seed.
+    await apiResetAll();
     await seedReferenceDataViaUI(page);
   });
 
