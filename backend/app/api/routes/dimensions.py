@@ -3,7 +3,7 @@ from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import selectinload
 
-from app.api.deps import NON_VIEWER_ROLES, require_role
+from app.api.deps import REFERENCES_WRITER_ROLES, require_role
 from app.core.database import get_db
 from app.models.dimension import DimensionType, ProductDimension
 from app.models.product import Product
@@ -54,7 +54,7 @@ async def list_dimension_types(db: AsyncSession = Depends(get_db)) -> list[Dimen
     "/dimension-types",
     response_model=DimensionTypeOut,
     status_code=status.HTTP_201_CREATED,
-    dependencies=[Depends(require_role(list(NON_VIEWER_ROLES)))],
+    dependencies=[Depends(require_role(list(REFERENCES_WRITER_ROLES)))],
 )
 async def create_dimension_type(
     payload: DimensionTypeIn,
@@ -76,7 +76,7 @@ async def create_dimension_type(
 @router.patch(
     "/dimension-types/{type_id}",
     response_model=DimensionTypeOut,
-    dependencies=[Depends(require_role(list(NON_VIEWER_ROLES)))],
+    dependencies=[Depends(require_role(list(REFERENCES_WRITER_ROLES)))],
 )
 async def patch_dimension_type(
     type_id: int,
@@ -111,7 +111,7 @@ async def patch_dimension_type(
 @router.delete(
     "/dimension-types/{type_id}",
     status_code=status.HTTP_204_NO_CONTENT,
-    dependencies=[Depends(require_role(list(NON_VIEWER_ROLES)))],
+    dependencies=[Depends(require_role(list(REFERENCES_WRITER_ROLES)))],
 )
 async def delete_dimension_type(type_id: int, db: AsyncSession = Depends(get_db)):
     item = await db.get(DimensionType, type_id)
@@ -159,7 +159,7 @@ async def list_product_dimensions(
     "/products/{product_id}/dimensions",
     response_model=ProductDimensionOut,
     status_code=status.HTTP_201_CREATED,
-    dependencies=[Depends(require_role(list(NON_VIEWER_ROLES)))],
+    dependencies=[Depends(require_role(list(REFERENCES_WRITER_ROLES)))],
 )
 async def create_product_dimension(
     product_id: int,
@@ -196,7 +196,7 @@ async def create_product_dimension(
 @router.patch(
     "/products/{product_id}/dimensions/{link_id}",
     response_model=ProductDimensionOut,
-    dependencies=[Depends(require_role(list(NON_VIEWER_ROLES)))],
+    dependencies=[Depends(require_role(list(REFERENCES_WRITER_ROLES)))],
 )
 async def patch_product_dimension(
     product_id: int,
@@ -223,7 +223,7 @@ async def patch_product_dimension(
 @router.delete(
     "/products/{product_id}/dimensions/{link_id}",
     status_code=status.HTTP_204_NO_CONTENT,
-    dependencies=[Depends(require_role(list(NON_VIEWER_ROLES)))],
+    dependencies=[Depends(require_role(list(REFERENCES_WRITER_ROLES)))],
 )
 async def delete_product_dimension(
     product_id: int,

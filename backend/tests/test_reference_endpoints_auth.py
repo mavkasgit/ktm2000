@@ -3,8 +3,12 @@
 Чтение справочников по решению владельца остаётся анонимно доступным и здесь
 не сужается — единственное, что закрываем, это изменяющие ручки
 (POST/PUT/PATCH/DELETE): аноним — 401, токен роли viewer — 403, токен роли
-operator — проходит гвард. Гоняем настоящий вход: пользователь + активная
-серверная сессия (claim sid).
+operator — 403. Запись — `POLICIES.editReferences` (admin, planner,
+section_manager), зеркало `deps.REFERENCES_WRITER_ROLES`: роль, которой
+фронт показывает кнопки правки, должна проходить и бэк, а роль, которой не
+показывает, не должна проходить бэк.
+
+Гоняем настоящий вход: пользователь + активная серверная сессия (claim sid).
 
 Охваченные роутеры: products (в т.ч. пары), dimensions (типы и связи
 продукта), sections, import-templates, spg, route-selection-rules,
@@ -106,13 +110,18 @@ async def seeded(
     Нужны, чтобы ручки пар и связей размерностей доходили до тела обработчика:
     гвард должен отбивать запрос, а не «продукт не найден».
 
+    Сеет planner, а не operator: запись в справочники — это
+    `POLICIES.editReferences` (admin, planner, section_manager), и operator
+    после возврата зеркала гвардом отбивается. Посев от роли без права записи
+    упал бы на 403 и тест проверял бы не то.
+
     Строгий режим ставит общий `monkeypatch` фикстуры, а не свой: свой
     `MonkeyPatch` откатывался бы после отката фикстуры и оставлял
     `DEV_BYPASS_AUTH=False` на весь остаток воркера — следующий тест получил
     бы 401 вместо 200.
     """
     monkeypatch.setattr(settings, "DEV_BYPASS_AUTH", False)
-    headers = await _headers_for(session, UserRole.operator, "references_seeder")
+    headers = await _headers_for(session, UserRole.planner, "references_seeder")
     ids: dict[str, int] = {}
     for sku in ("AUTH-SEED-A", "AUTH-SEED-B"):
         res = await client.post(
@@ -188,18 +197,41 @@ async def test_anonymous_still_reads_references(
     assert res.status_code == 200, res.text
 
 
-async def test_operator_may_create_product(
+@pytest.mark.parametrize("key", _MUTATING_KEYS)
+async def test_operator_cannot_write_references(
     client: AsyncClient,
     session: AsyncSession,
     monkeypatch: pytest.MonkeyPatch,
+    seeded: dict[str, int],
+    key: str,
 ) -> None:
-    """Роль, которой запись полагается (operator), проходит гвард."""
+    """operator читает раздел, но не пишет: зеркало `POLICIES.editReferences`.
+
+    Регресс: набор `NON_VIEWER_ROLES` («все роли, кроме зрителя», 0c86fa6)
+    дал operator запись в справочники по API, тогда как фронт прячет кнопки
+    правки — `canEditReferences` у operator ложен. Ручки обязаны держать
+    зеркало, иначе роль правит через API то, чего не видит в UI.
+    """
     monkeypatch.setattr(settings, "DEV_BYPASS_AUTH", False)
     headers = await _headers_for(session, UserRole.operator, "references_operator")
+    method, path, payload = _build_request(key, seeded)
 
-    created = await client.post(
-        "/api/products",
-        json={"sku": "AUTH-OPERATOR", "name": "Operator product", "type": "component"},
-        headers=headers,
-    )
-    assert created.status_code not in (401, 403), created.text
+    res = await client.request(method, path, json=payload, headers=headers)
+    assert res.status_code == 403, res.text
+
+
+@pytest.mark.parametrize("key", _MUTATING_KEYS)
+async def test_planner_may_write_references(
+    client: AsyncClient,
+    session: AsyncSession,
+    monkeypatch: pytest.MonkeyPatch,
+    seeded: dict[str, int],
+    key: str,
+) -> None:
+    """Роль, которой `POLICIES.editReferences` разрешает правку, пишет."""
+    monkeypatch.setattr(settings, "DEV_BYPASS_AUTH", False)
+    headers = await _headers_for(session, UserRole.planner, "references_planner")
+    method, path, payload = _build_request(key, seeded)
+
+    res = await client.request(method, path, json=payload, headers=headers)
+    assert res.status_code not in (401, 403), res.text

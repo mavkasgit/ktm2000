@@ -7,7 +7,7 @@ from pydantic import BaseModel
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.api.deps import NON_VIEWER_ROLES, require_role
+from app.api.deps import REFERENCES_WRITER_ROLES, require_role
 from app.core.database import get_db
 from app.models.route import RouteRuleProfile, RouteSelectionRule
 from app.models.section import Section
@@ -111,7 +111,7 @@ async def list_route_selection_rules(
     "",
     response_model=RouteSelectionRuleOut,
     status_code=status.HTTP_201_CREATED,
-    dependencies=[Depends(require_role(list(NON_VIEWER_ROLES)))],
+    dependencies=[Depends(require_role(list(REFERENCES_WRITER_ROLES)))],
 )
 async def create_route_selection_rule(payload: RouteSelectionRuleIn, db: AsyncSession = Depends(get_db)) -> RouteSelectionRuleOut:
     await _validate_payload(db, payload)
@@ -144,7 +144,7 @@ async def create_route_selection_rule(payload: RouteSelectionRuleIn, db: AsyncSe
 @router.put(
     "/{rule_id}",
     response_model=RouteSelectionRuleOut,
-    dependencies=[Depends(require_role(list(NON_VIEWER_ROLES)))],
+    dependencies=[Depends(require_role(list(REFERENCES_WRITER_ROLES)))],
 )
 async def update_route_selection_rule(
     rule_id: int,
@@ -184,7 +184,7 @@ async def update_route_selection_rule(
     status_code=status.HTTP_204_NO_CONTENT,
     response_class=Response,
     response_model=None,
-    dependencies=[Depends(require_role(list(NON_VIEWER_ROLES)))],
+    dependencies=[Depends(require_role(list(REFERENCES_WRITER_ROLES)))],
 )
 async def delete_route_selection_rule(rule_id: int, db: AsyncSession = Depends(get_db)) -> None:
     rule = await db.get(RouteSelectionRule, rule_id)

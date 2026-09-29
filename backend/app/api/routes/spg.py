@@ -7,7 +7,7 @@ from sqlalchemy import delete, select
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import selectinload
 
-from app.api.deps import NON_VIEWER_ROLES, READER_ROLES, WRITER_ROLES, get_current_user, require_role
+from app.api.deps import READER_ROLES, REFERENCES_WRITER_ROLES, WRITER_ROLES, get_current_user, require_role
 from app.core.database import get_db
 from app.models.product import Product
 from app.models.route import ProductionRoute, RouteStage, RouteRuleProfile, SectionOperation
@@ -207,7 +207,7 @@ async def get_spg(spg_id: int, db: AsyncSession = Depends(get_db)) -> SpgOut:
     "",
     response_model=SpgOut,
     status_code=status.HTTP_201_CREATED,
-    dependencies=[Depends(require_role(list(NON_VIEWER_ROLES)))],
+    dependencies=[Depends(require_role(list(REFERENCES_WRITER_ROLES)))],
 )
 async def create_spg(payload: SpgIn, db: AsyncSession = Depends(get_db)) -> SpgOut:
     existing = await db.scalar(
@@ -237,7 +237,7 @@ async def create_spg(payload: SpgIn, db: AsyncSession = Depends(get_db)) -> SpgO
 @router.patch(
     "/{spg_id}",
     response_model=SpgOut,
-    dependencies=[Depends(require_role(list(NON_VIEWER_ROLES)))],
+    dependencies=[Depends(require_role(list(REFERENCES_WRITER_ROLES)))],
 )
 async def patch_spg(spg_id: int, payload: SpgPatch, db: AsyncSession = Depends(get_db)) -> SpgOut:
     spg = await db.get(StorageProductionGroup, spg_id)
@@ -258,7 +258,7 @@ async def patch_spg(spg_id: int, payload: SpgPatch, db: AsyncSession = Depends(g
 @router.delete(
     "/{spg_id}",
     status_code=status.HTTP_204_NO_CONTENT,
-    dependencies=[Depends(require_role(list(NON_VIEWER_ROLES)))],
+    dependencies=[Depends(require_role(list(REFERENCES_WRITER_ROLES)))],
 )
 async def delete_spg(spg_id: int, db: AsyncSession = Depends(get_db)):
     spg = await db.get(StorageProductionGroup, spg_id)

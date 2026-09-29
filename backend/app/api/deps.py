@@ -39,17 +39,24 @@ WRITER_ROLES: frozenset[UserRole] = frozenset(
 READER_ROLES: frozenset[UserRole] = frozenset(
     {UserRole.admin, UserRole.planner, UserRole.section_manager, UserRole.operator, UserRole.viewer, UserRole.transporter}
 )
-# Набор ролей для изменяющих ручек: все роли, кроме зрителя (viewer — только чтение).
-NON_VIEWER_ROLES: frozenset[UserRole] = frozenset(READER_ROLES - {UserRole.viewer})
 
 TRANSFER_WRITER_ROLES: frozenset[UserRole] = frozenset(
     WRITER_ROLES | {UserRole.transporter}
 )
 
-# Справочники /references (спека #145) — зеркала frontend/src/features/auth/policies.ts.
+
+# Справочники /references (спека #145) — зеркало
+# frontend/src/features/auth/policies.ts. Раздел прикрыт во фронте
+# `canEditReferences`, и бэк держит ту же политику: писать в справочник
+# может ровно тот, кому фронт показывает кнопки правки.
+#
 # READER: «просмотр — все роли с разделом /references» (admin, planner,
 # section_manager, operator; viewer/transporter раздела не имеют).
-# WRITER: «правка — POLICIES.editReferences» (admin, planner, section_manager).
+# WRITER: «правка — POLICIES.editReferences» (admin, planner,
+# section_manager). Набор из 0c86fa6 «все роли, кроме зрителя» разошёлся
+# с зеркалом: operator получал права на запись по API, не видя кнопки, и
+# раздел /references держал две политики (composition — по WRITER, остальные
+# ручки — по NON_VIEWER). Решение владельца — вернуть зеркало.
 REFERENCES_READER_ROLES: frozenset[UserRole] = frozenset(
     {UserRole.admin, UserRole.planner, UserRole.section_manager, UserRole.operator}
 )

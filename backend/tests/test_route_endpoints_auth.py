@@ -3,7 +3,8 @@
 Раньше эти ручки были единственными в своём роутере без гварда, и аноним
 проходил по ним и в strict-режиме. Тест гоняет настоящий вход: без токена —
 401, токен роли viewer на чтение — 200, на запись — 403, токен роли operator
-на запись — не 401/403.
+на запись — 403, токен роли planner на запись — проходит. Запись маршрутов —
+часть справочников, то есть зеркало `POLICIES.editReferences`.
 """
 from __future__ import annotations
 
@@ -61,18 +62,52 @@ async def test_viewer_reads_routes_but_cannot_write(
     assert (await client.delete("/api/routes/1", headers=headers)).status_code == 403
 
 
-async def test_operator_may_create_route(
+async def test_operator_cannot_create_route_but_planner_can(
     client: AsyncClient,
     session: AsyncSession,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    """Роль, которой запись полагается (operator), проходит гвард."""
+    """Маршруты — часть справочников: запись держит зеркало editReferences.
+
+    `RoutesPage` закрыт `canEditReferences`, значит и бэк маршрутов обязан
+    отбивать operator (403) и пускать planner.
+    """
     monkeypatch.setattr(settings, "DEV_BYPASS_AUTH", False)
-    headers = await _headers_for(session, UserRole.operator, "routes_operator")
+    operator = await _headers_for(session, UserRole.operator, "routes_operator")
+    planner = await _headers_for(session, UserRole.planner, "routes_planner")
+
+    forbidden = await client.post(
+        "/api/routes",
+        json={"name": "Operator route", "is_active": True},
+        headers=operator,
+    )
+    assert forbidden.status_code == 403, forbidden.text
 
     created = await client.post(
         "/api/routes",
-        json={"name": "Operator route", "is_active": True},
-        headers=headers,
+        json={"name": "Planner route", "is_active": True},
+        headers=planner,
     )
     assert created.status_code not in (401, 403), created.text
+
+
+async def test_operator_cannot_run_route_seed(
+    client: AsyncClient,
+    session: AsyncSession,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """`/api/routes-seed` — та же запись справочника, значит и тот же гвард.
+
+    Посев с `force=true` перезаписывает маршруты завода. Ручка закрыта
+    только на аноним, и этого мало: без ролевого гварда operator сносил бы
+    эталонные маршруты, не имея на это права во фронте.
+    """
+    monkeypatch.setattr(settings, "DEV_BYPASS_AUTH", False)
+    operator = await _headers_for(session, UserRole.operator, "routes_seed_operator")
+
+    assert (await client.post("/api/routes-seed", headers=operator)).status_code == 403
+    assert (
+        await client.post("/api/routes-seed?force=true", headers=operator)
+    ).status_code == 403
+    assert (await client.post("/api/routes-seed/demo-production", headers=operator)).status_code == 403
+    assert (await client.post("/api/routes-seed/clear-demo-production", headers=operator)).status_code == 403

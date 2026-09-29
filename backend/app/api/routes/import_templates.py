@@ -5,7 +5,7 @@ from pydantic import BaseModel, ConfigDict
 from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.api.deps import NON_VIEWER_ROLES, require_role
+from app.api.deps import REFERENCES_WRITER_ROLES, require_role
 from app.core.database import get_db
 from app.models.import_template import ImportTemplate
 
@@ -73,7 +73,7 @@ async def list_templates(
     "",
     response_model=ImportTemplateOut,
     status_code=status.HTTP_201_CREATED,
-    dependencies=[Depends(require_role(list(NON_VIEWER_ROLES)))],
+    dependencies=[Depends(require_role(list(REFERENCES_WRITER_ROLES)))],
 )
 async def create_template(payload: ImportTemplateIn, db: AsyncSession = Depends(get_db)) -> ImportTemplateOut:
     if not payload.name.strip():
@@ -100,7 +100,7 @@ async def create_template(payload: ImportTemplateIn, db: AsyncSession = Depends(
 @router.put(
     "/{template_id}",
     response_model=ImportTemplateOut,
-    dependencies=[Depends(require_role(list(NON_VIEWER_ROLES)))],
+    dependencies=[Depends(require_role(list(REFERENCES_WRITER_ROLES)))],
 )
 async def update_template(
     template_id: int,
@@ -137,7 +137,7 @@ async def update_template(
     status_code=status.HTTP_204_NO_CONTENT,
     response_class=Response,
     response_model=None,
-    dependencies=[Depends(require_role(list(NON_VIEWER_ROLES)))],
+    dependencies=[Depends(require_role(list(REFERENCES_WRITER_ROLES)))],
 )
 async def delete_template(template_id: int, db: AsyncSession = Depends(get_db)) -> None:
     item = await db.get(ImportTemplate, template_id)

@@ -12,7 +12,7 @@ from sqlalchemy.orm import selectinload
 
 from app.core.database import get_db
 from app.core.sorting import SortClause, apply_sort, parse_sort
-from app.api.deps import NON_VIEWER_ROLES, REFERENCES_READER_ROLES, REFERENCES_WRITER_ROLES, require_role
+from app.api.deps import REFERENCES_READER_ROLES, REFERENCES_WRITER_ROLES, require_role
 from app.models.product import Product, ProductType, DimensionState, ProductLength, ProcessingFlag, ProductProcessingFlag, ProductComposition, ProductPair, _length_key
 from app.models.dimension import ProductDimension, DimensionType
 from app.models.production_plan import PlanPosition
@@ -994,7 +994,7 @@ async def search_products(
     "",
     response_model=ProductOut,
     status_code=status.HTTP_201_CREATED,
-    dependencies=[Depends(require_role(list(NON_VIEWER_ROLES)))],
+    dependencies=[Depends(require_role(list(REFERENCES_WRITER_ROLES)))],
 )
 async def create_product(
     payload: ProductIn,
@@ -1095,7 +1095,7 @@ async def get_product(product_id: int, db: AsyncSession = Depends(get_db)) -> Pr
 @router.patch(
     "/{product_id}",
     response_model=ProductOut,
-    dependencies=[Depends(require_role(list(NON_VIEWER_ROLES)))],
+    dependencies=[Depends(require_role(list(REFERENCES_WRITER_ROLES)))],
 )
 async def patch_product(
     product_id: int,
@@ -1220,7 +1220,7 @@ async def patch_product(
 @router.delete(
     "/{product_id}",
     status_code=status.HTTP_204_NO_CONTENT,
-    dependencies=[Depends(require_role(list(NON_VIEWER_ROLES)))],
+    dependencies=[Depends(require_role(list(REFERENCES_WRITER_ROLES)))],
 )
 async def delete_product(product_id: int, db: AsyncSession = Depends(get_db)):
     item = await db.get(Product, product_id)
@@ -1378,7 +1378,7 @@ async def replace_product_composition(
 @router.post(
     "/{product_id}/photo",
     response_model=ProductOut,
-    dependencies=[Depends(require_role(list(NON_VIEWER_ROLES)))],
+    dependencies=[Depends(require_role(list(REFERENCES_WRITER_ROLES)))],
 )
 async def upload_product_photo(
     product_id: int,

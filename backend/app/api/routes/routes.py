@@ -4,7 +4,7 @@ from sqlalchemy import select
 from sqlalchemy.orm import selectinload
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.api.deps import NON_VIEWER_ROLES, READER_ROLES, require_role
+from app.api.deps import READER_ROLES, REFERENCES_WRITER_ROLES, require_role
 from app.core.database import get_db
 from app.models.route import ProductionRoute, RouteMatchingRule, RouteStage, RouteOperation, SectionOperation
 from app.models.section import Section
@@ -250,7 +250,7 @@ async def _load_rules_by_route(
     return rules_by_route
 
 
-@router.post("/reorder", status_code=status.HTTP_204_NO_CONTENT, dependencies=[Depends(require_role(list(NON_VIEWER_ROLES)))])
+@router.post("/reorder", status_code=status.HTTP_204_NO_CONTENT, dependencies=[Depends(require_role(list(REFERENCES_WRITER_ROLES)))])
 async def reorder_routes(payload: ReorderRoutesIn, db: AsyncSession = Depends(get_db)):
     from sqlalchemy import update
     for idx, route_id in enumerate(payload.ids):
@@ -302,7 +302,7 @@ async def get_route(route_id: int, db: AsyncSession = Depends(get_db)) -> RouteD
     return await _build_route_detail(route, db, sections_cache=sections_cache)
 
 
-@router.post("", response_model=RouteOut, status_code=status.HTTP_201_CREATED, dependencies=[Depends(require_role(list(NON_VIEWER_ROLES)))])
+@router.post("", response_model=RouteOut, status_code=status.HTTP_201_CREATED, dependencies=[Depends(require_role(list(REFERENCES_WRITER_ROLES)))])
 async def create_route(payload: RouteCreate, db: AsyncSession = Depends(get_db)) -> RouteOut:
     # Имя — подпись, а не ключ (ADR-0045, ADR-0051): одинаковые имена у
     # разных маршрутов законны, и БД их теперь допускает. Для маршрута,
@@ -322,7 +322,7 @@ async def create_route(payload: RouteCreate, db: AsyncSession = Depends(get_db))
     return RouteOut.model_validate(route, from_attributes=True)
 
 
-@router.put("/{route_id}", response_model=RouteOut, dependencies=[Depends(require_role(list(NON_VIEWER_ROLES)))])
+@router.put("/{route_id}", response_model=RouteOut, dependencies=[Depends(require_role(list(REFERENCES_WRITER_ROLES)))])
 async def update_route(route_id: int, payload: RouteUpdate, db: AsyncSession = Depends(get_db)) -> RouteOut:
     route = await db.get(ProductionRoute, route_id)
     if route is None:
@@ -372,7 +372,7 @@ class DeleteRouteWarning(BaseModel):
     plan_positions_count: int
 
 
-@router.delete("/{route_id}", status_code=status.HTTP_204_NO_CONTENT, dependencies=[Depends(require_role(list(NON_VIEWER_ROLES)))])
+@router.delete("/{route_id}", status_code=status.HTTP_204_NO_CONTENT, dependencies=[Depends(require_role(list(REFERENCES_WRITER_ROLES)))])
 async def delete_route(
     route_id: int,
     force: str = "false",
@@ -399,7 +399,7 @@ async def delete_route(
     await db.flush()
 
 
-@router.post("/{route_id}/steps", response_model=StepOut, status_code=status.HTTP_201_CREATED, dependencies=[Depends(require_role(list(NON_VIEWER_ROLES)))])
+@router.post("/{route_id}/steps", response_model=StepOut, status_code=status.HTTP_201_CREATED, dependencies=[Depends(require_role(list(REFERENCES_WRITER_ROLES)))])
 async def create_route_step(route_id: int, payload: StepCreate, db: AsyncSession = Depends(get_db)) -> StepOut:
     from app.services.route_storage_classifier import is_storage_section
 
@@ -528,7 +528,7 @@ async def create_route_step(route_id: int, payload: StepCreate, db: AsyncSession
     )
 
 
-@router.put("/{route_id}/steps", response_model=list[StepOut], dependencies=[Depends(require_role(list(NON_VIEWER_ROLES)))])
+@router.put("/{route_id}/steps", response_model=list[StepOut], dependencies=[Depends(require_role(list(REFERENCES_WRITER_ROLES)))])
 async def replace_route_steps(route_id: int, payload: list[StepUpdate], db: AsyncSession = Depends(get_db)) -> list[StepOut]:
     from app.services.route_storage_classifier import is_storage_section
 

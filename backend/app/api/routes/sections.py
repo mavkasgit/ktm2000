@@ -3,7 +3,7 @@ from pydantic import BaseModel
 from sqlalchemy import select, delete
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.api.deps import NON_VIEWER_ROLES, require_role
+from app.api.deps import REFERENCES_WRITER_ROLES, require_role
 from app.core.database import get_db
 from app.models.route import ProductionRoute, RouteStage, SectionOperation
 from app.models.section import Section
@@ -250,7 +250,7 @@ async def get_section(section_id: int, db: AsyncSession = Depends(get_db)) -> Se
     "",
     response_model=SectionOut,
     status_code=status.HTTP_201_CREATED,
-    dependencies=[Depends(require_role(list(NON_VIEWER_ROLES)))],
+    dependencies=[Depends(require_role(list(REFERENCES_WRITER_ROLES)))],
 )
 async def create_section(payload: SectionIn, db: AsyncSession = Depends(get_db)) -> SectionOut:
     existing = await db.scalar(select(Section).where(Section.code == payload.code))
@@ -278,7 +278,7 @@ async def create_section(payload: SectionIn, db: AsyncSession = Depends(get_db))
 @router.patch(
     "/{section_id}",
     response_model=SectionOut,
-    dependencies=[Depends(require_role(list(NON_VIEWER_ROLES)))],
+    dependencies=[Depends(require_role(list(REFERENCES_WRITER_ROLES)))],
 )
 async def patch_section(section_id: int, payload: SectionPatch, db: AsyncSession = Depends(get_db)) -> SectionOut:
     item = await db.get(Section, section_id)
@@ -312,7 +312,7 @@ class ReorderSectionsIn(BaseModel):
 @router.post(
     "/reorder",
     status_code=status.HTTP_204_NO_CONTENT,
-    dependencies=[Depends(require_role(list(NON_VIEWER_ROLES)))],
+    dependencies=[Depends(require_role(list(REFERENCES_WRITER_ROLES)))],
 )
 async def reorder_sections(payload: ReorderSectionsIn, db: AsyncSession = Depends(get_db)):
     items = (await db.execute(select(Section).where(Section.id.in_(payload.ids)).order_by(Section.id))).scalars().all()
@@ -327,7 +327,7 @@ async def reorder_sections(payload: ReorderSectionsIn, db: AsyncSession = Depend
 @router.delete(
     "/{section_id}",
     status_code=status.HTTP_204_NO_CONTENT,
-    dependencies=[Depends(require_role(list(NON_VIEWER_ROLES)))],
+    dependencies=[Depends(require_role(list(REFERENCES_WRITER_ROLES)))],
 )
 async def delete_section(section_id: int, db: AsyncSession = Depends(get_db)):
     item = await db.get(Section, section_id)
@@ -418,7 +418,7 @@ async def list_section_operation_groups(section_id: int, db: AsyncSession = Depe
     "/{section_id}/operation-groups",
     response_model=OperationGroupOut,
     status_code=status.HTTP_201_CREATED,
-    dependencies=[Depends(require_role(list(NON_VIEWER_ROLES)))],
+    dependencies=[Depends(require_role(list(REFERENCES_WRITER_ROLES)))],
 )
 async def create_operation_group(
     section_id: int,
@@ -481,7 +481,7 @@ async def create_operation_group(
 @router.put(
     "/{section_id}/operation-groups/{group_code}",
     response_model=OperationGroupOut,
-    dependencies=[Depends(require_role(list(NON_VIEWER_ROLES)))],
+    dependencies=[Depends(require_role(list(REFERENCES_WRITER_ROLES)))],
 )
 async def update_operation_group(
     section_id: int,
@@ -535,7 +535,7 @@ async def update_operation_group(
 @router.delete(
     "/{section_id}/operation-groups/{group_code}",
     status_code=status.HTTP_204_NO_CONTENT,
-    dependencies=[Depends(require_role(list(NON_VIEWER_ROLES)))],
+    dependencies=[Depends(require_role(list(REFERENCES_WRITER_ROLES)))],
 )
 async def delete_operation_group(
     section_id: int,
@@ -566,7 +566,7 @@ async def delete_operation_group(
 @router.put(
     "/{section_id}/operations/{operation_id}/move",
     status_code=status.HTTP_204_NO_CONTENT,
-    dependencies=[Depends(require_role(list(NON_VIEWER_ROLES)))],
+    dependencies=[Depends(require_role(list(REFERENCES_WRITER_ROLES)))],
 )
 async def move_operation_to_group(
     section_id: int,
