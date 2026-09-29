@@ -54,6 +54,11 @@ from app.services.production_plan_service import (
     require_mutable_plan,
     soft_delete_cancelled_position,
 )
+from app.services.import_batch_force_delete import (
+    BatchForceDeleteBlocked,
+    force_delete_import_batch,
+    get_batch_force_delete_preview,
+)
 from app.services.route_matcher import resolve_position_route, ResolvedRouteInfo, make_position_route_cache_key
 from app.services.route_signature_check import compare_position_route_signature
 from app.services.route_selection import select_route_for_payload
@@ -396,6 +401,70 @@ async def delete_import_batch(
                 "drafts": exc.drafts,
             },
         )
+
+
+class BatchForceDeleteIn(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    #: Точное имя файла-источника: оператор подтверждает осознанно, а не кликом.
+    confirmation: str
+    reason: str
+
+
+@router.get("/{production_plan_id}/batches/{batch_id}/force-delete-preview", response_model=None)
+async def preview_batch_force_delete(
+    production_plan_id: int,
+    batch_id: int,
+    db: AsyncSession = Depends(get_db),
+    _current_user: User = Depends(require_role([UserRole.admin])),
+) -> dict:
+#: Превью force-удаления (см. import_batch_force_delete): оператор видит
+#: цифры последствий и остатков ДО ввода причины. Admin-only: превью
+#: раскрывает структуру производственных данных батча.
+    await _require_visible_plan(db, production_plan_id)
+    batch = await db.get(ImportBatch, batch_id)
+    if batch is None or batch.production_plan_id != production_plan_id:
+        raise HTTPException(status_code=404, detail="Import batch not found")
+    try:
+        return await get_batch_force_delete_preview(db, batch_id)
+    except ValueError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+
+
+@router.delete("/{production_plan_id}/batches/{batch_id}/force", response_model=None)
+async def force_delete_import_batch_route(
+    production_plan_id: int,
+    batch_id: int,
+    payload: BatchForceDeleteIn,
+    db: AsyncSession = Depends(get_db),
+    current_user: User = Depends(require_role([UserRole.admin])),
+) -> dict | JSONResponse:
+#: Принудительное удаление поверх живых данных: сносит поддерево батча
+#: (позиции, задания, передачи, проводки) и возвращает склад к состоянию
+#: до импорта. Неоткрутимые случаи — 409 с теми же blockers, что и обычный.
+    await _require_visible_plan(db, production_plan_id)
+    batch = await db.get(ImportBatch, batch_id)
+    if batch is None or batch.production_plan_id != production_plan_id:
+        raise HTTPException(status_code=404, detail="Import batch not found")
+    try:
+        return await force_delete_import_batch(
+            db,
+            batch_id,
+            confirmation=payload.confirmation,
+            reason=payload.reason,
+            changed_by=current_user.id,
+        )
+    except BatchForceDeleteBlocked as exc:
+        return JSONResponse(
+            status_code=409,
+            content={
+                "code": "batch_force_delete_blocked",
+                "blockers": exc.blockers,
+                "safe_action": BATCH_DELETE_SAFE_ACTION,
+                "drafts": exc.drafts,
+            },
+        )
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
 
 
 # Тело approve-позиции — то же `StatusActionIn`, что у cancel/restore: единственное

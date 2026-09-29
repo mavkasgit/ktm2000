@@ -97,6 +97,7 @@ beforeEach(() => {
     canEditReferences: true,
     canEditSettings: false,
     canDeleteProductionPlan: false,
+    canForceDeleteImport: false,
   });
   vi.mocked(fetchAllProducts).mockResolvedValue([
     makeProduct({ composition: [makeComposition()] }),
@@ -172,6 +173,7 @@ describe("ProductsPage", () => {
       canEditReferences: false,
       canEditSettings: false,
       canDeleteProductionPlan: false,
+      canForceDeleteImport: false,
     });
     renderPage();
 

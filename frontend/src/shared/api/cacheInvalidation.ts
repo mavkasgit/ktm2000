@@ -42,6 +42,7 @@ const CACHE_DOMAIN_KEYS = {
     ["plan-preview-page"],
     ["plan-position-detail"],
     ["batch-preview"],
+    ["batch-force-delete-preview"],
   ],
   /** Контроль выполнения: строки плана в работе и карточка позиции. */
   execution: [["production-planning-rows"], ["production-planning-row-detail"], ["plans"]],
@@ -104,6 +105,8 @@ export const CACHE_ACTIONS = {
   importApplied: ["plan", "execution", "shopfloor", "spg", "sections", "products"],
   /** Импорт откатан или отброшен. */
   importDiscarded: ["plan", "execution"],
+  /** Импорт удалён принудительно: снесены позиции, задания, передачи и проводки. */
+  importForceDeleted: ["plan", "execution", "shopfloor", "transfers", "stock", "spg", "sections", "audit", "actions"],
   /** Позиция запущена, отменена, восстановлена, пройдена вручную, удалена из работы. */
   executionChanged: ["execution", "plan", "shopfloor", "transfers", "spg", "sections"],
   /** Задача на участке создана, завершена или скорректирована. */

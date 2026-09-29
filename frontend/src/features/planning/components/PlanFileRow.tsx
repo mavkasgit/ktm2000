@@ -11,9 +11,10 @@ import {
   getImportFileDownloadUrl,
   type ImportFullItem,
 } from "@/shared/api/imports"
-import { statusLabels, statusVariant } from "../lib/plan-labels"
+import { actionLabels, statusLabels, statusVariant } from "../lib/plan-labels"
 import { isDuplicateRow } from "../lib/duplicateRows"
 import { buildImportRowStats } from "../lib/importRowStats"
+import { fmtQtyPrecise } from "@/shared/lib/quantityFormat"
 import { invalidateAfter } from "@/shared/api/cacheInvalidation"
 import { queryKeys } from "@/shared/api/queryKeys"
 import { applyChangeSet, rollbackChangeSet } from "../api"
@@ -198,9 +199,9 @@ export function FileRow({
                     <th className="text-left p-2">Строки</th>
                     <th className="text-left p-2">Артикул</th>
                     <th className="text-left p-2">Наименование</th>
-                    <th className="text-left p-2">Кол-во</th>
-                    <th className="text-left p-2">Статус</th>
-                    <th className="text-left p-2">Действие</th>
+                    <th className="text-left p-2 whitespace-nowrap">Кол-во</th>
+                    <th className="text-left p-2 whitespace-nowrap">Статус</th>
+                    <th className="text-left p-2 whitespace-nowrap">Действие</th>
                   </tr>
                 </thead>
                 <tbody>
@@ -213,14 +214,14 @@ export function FileRow({
                         <td className="p-2">{row.source_row_numbers.join(", ") || "—"}</td>
                         <td className="p-2">{row.source_sku ?? "—"}</td>
                         <td className="p-2">{row.source_name ?? "—"}</td>
-                        <td className="p-2">{row.quantity ?? "—"}</td>
-                        <td className="p-2">
-                          <span className="mr-1">{row.status}</span>
+                        <td className="p-2 whitespace-nowrap tabular-nums">{fmtQtyPrecise(row.quantity)}</td>
+                        <td className="p-2 whitespace-nowrap">
+                          <span className="mr-1">{statusLabels[row.status] ?? row.status}</span>
                           {isDuplicateRow(row) && (
                             <Badge variant="outline" className="text-violet-700 border-violet-200 bg-violet-50">Дубль</Badge>
                           )}
                         </td>
-                        <td className="p-2">{row.change_action}</td>
+                        <td className="p-2 whitespace-nowrap">{actionLabels[row.change_action] ?? row.change_action}</td>
                       </tr>
                       {selectedItemId === row.item_id && (
                         <tr key={`${row.item_id}-detail`} className="border-b bg-muted/30">
@@ -295,10 +296,10 @@ function ItemDetail({ item }: { item: ImportFullItem }) {
   const fields: [string, unknown][] = [
     ["Артикул", after.source_sku],
     ["Наименование", after.source_name],
-    ["Количество", after.quantity],
+    ["Количество", fmtQtyPrecise(after.quantity as string | number | null | undefined)],
     ["Маршрут", after.route_name],
-    ["Действие", item.change_action],
-    ["Статус", item.status],
+    ["Действие", actionLabels[item.change_action] ?? item.change_action],
+    ["Статус", statusLabels[item.status] ?? item.status],
   ]
   return (
     <div className="space-y-2 text-xs">

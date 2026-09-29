@@ -8,6 +8,7 @@ export function usePermission() {
     canEditReferences: POLICIES.editReferences(user?.role),
     canEditSettings: POLICIES.editSettings(user?.role),
     canDeleteProductionPlan: POLICIES.deleteProductionPlan(user?.role),
+    canForceDeleteImport: POLICIES.forceDeleteImport(user?.role),
   };
 }
 export type UsePermissionResult = ReturnType<typeof usePermission>;

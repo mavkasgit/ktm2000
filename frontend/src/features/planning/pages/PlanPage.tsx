@@ -741,6 +741,14 @@ export function PlanPage() {
   const fileParsedRows = files?.reduce((sum, f) => sum + f.parsed_rows, 0) ?? 0
   const displayPositions = activePlan?.total_positions ?? (positionsTotal > 0 ? positionsTotal : fileParsedRows)
   const displayTotalQty = fileParsedRows > 0 && positionsTotal === 0 ? String(fileParsedRows) : "—"
+  // План без файлов и позиций — пустая оболочка от force-удаления батча (или
+  // от ещё не загруженного импорта). Показывать её нечего, а строка с
+  // нулевым кол-ва сбивает с толку: в БД план есть, в UI его как будто нет.
+  // Данные не успели — показываем старое дерево, а не пустое состояние.
+  const planHasContent =
+    !filesLoading &&
+    !posPending &&
+    ((files?.length ?? 0) > 0 || (activePlan?.total_positions ?? 0) > 0)
 
   return (
     <>
@@ -763,12 +771,16 @@ export function PlanPage() {
         </div>
       </header>
 
-      {!activePlan && (
+      {(!activePlan || !planHasContent) && (
         <div className="rounded-lg border border-dashed p-12 text-center">
           <Upload className="h-12 w-12 mx-auto text-muted-foreground mb-3" />
-          <h3 className="text-lg font-medium mb-1">Нет активного плана</h3>
+          <h3 className="text-lg font-medium mb-1">
+            {activePlan ? "План пуст" : "Нет активного плана"}
+          </h3>
           <p className="text-sm text-muted-foreground mb-4">
-            Загрузите Excel-файл чтобы создать производственный план
+            {activePlan
+              ? "В текущем плане не осталось ни файлов импорта, ни позиций"
+              : "Загрузите Excel-файл чтобы создать производственный план"}
           </p>
           <Button onClick={() => setImportOpen(true)}>
             <Upload className="h-4 w-4 mr-2" />
@@ -777,7 +789,7 @@ export function PlanPage() {
         </div>
       )}
 
-      {activePlan && (
+      {activePlan && planHasContent && (
         <div className="space-y-6">
           {/* Unified plan card: two columns */}
           <div className="rounded-lg border bg-card flex flex-col md:flex-row">
@@ -1131,6 +1143,12 @@ export function PlanPage() {
           conflict={deleteConflict.conflict}
           deleting={deletingDrafts}
           onConfirmDrafts={handleConfirmDeleteDrafts}
+          planId={activePlan?.id ?? 0}
+          batchId={deleteConflict.batchId}
+          onForceDeleted={() => {
+            setDeleteConflict(null)
+            void invalidateAfter(queryClient, "importForceDeleted")
+          }}
         />
       )}
     </>

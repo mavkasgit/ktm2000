@@ -4,6 +4,7 @@ import type { FiltersPanelOption } from "@/shared/ui"
 import { errorLabels, errorPhraseTranslations, statusLabels, validationLabels, warningLabels } from "@/shared/lib/generated-labels"
 
 export { errorLabels, statusLabels, warningLabels }
+export { actionLabels } from "@/shared/lib/generated-labels"
 export { errorLabels as routeErrorLabels } from "@/shared/lib/generated-labels"
 
 export const planStatusLabels = statusLabels

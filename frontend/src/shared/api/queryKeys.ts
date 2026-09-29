@@ -237,6 +237,9 @@ export const queryKeys = {
     positionDetail: (positionId: number) => ["plan-position-detail", positionId] as const,
     previewPage: (planId: string | number) => ["plan-preview-page", planId] as const,
     batchPreview: (batchId: string | number) => ["batch-preview", batchId] as const,
+    forceDeletePreview: (planId: string | number, batchId: string | number) =>
+      ["batch-force-delete-preview", planId, batchId] as const,
+    forceDeletePreviewAll: () => ["batch-force-delete-preview"] as const,
     routeCheck: (planId: string | number, positionId: number) =>
       ["route-check", planId, positionId] as const,
     deletePreview: (planId: string | number) => ["plan-delete-preview", planId] as const,

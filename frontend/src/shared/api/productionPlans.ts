@@ -479,6 +479,61 @@ export async function deleteImportBatch(planId: number, batchId: number, opts?: 
   return data as BatchDeleteResult;
 }
 
+export type BatchForceDeletePreview = {
+  batch_id: number;
+  filename: string;
+  production_plan_id: number;
+  positions: number;
+  section_plan_lines: number;
+  work_tasks: number;
+  transfers: number;
+  defects: number;
+  ledger_entries: number;
+  stock_effects: Array<{
+    product_sku: string;
+    location_id: number;
+    location_code: string;
+    dimensions: Record<string, unknown> | null;
+    net_delta: string;
+    ledger_entries: number;
+  }>;
+  blockers: BatchDeleteBlocker[];
+};
+
+export type ForceDeleteResult = {
+  deleted: true;
+  mode: "force";
+  batch_id: number;
+  filename: string;
+  positions: number;
+  section_plan_lines: number;
+  work_tasks: number;
+  transfers: number;
+  defects: number;
+  ledger_entries: number;
+  purged_action_ids: number[];
+  history_action_id: number;
+};
+
+export async function getBatchForceDeletePreview(planId: number, batchId: number) {
+  const { data } = await apiClient.get<BatchForceDeletePreview>(
+    `/production-plans/${planId}/batches/${batchId}/force-delete-preview`,
+  );
+  return data;
+}
+
+export async function forceDeleteImportBatch(
+  planId: number,
+  batchId: number,
+  payload: { confirmation: string; reason: string },
+) {
+  const { data } = await apiClient.delete<ForceDeleteResult>(
+    `/production-plans/${planId}/batches/${batchId}/force`,
+    { data: payload },
+  );
+  return data;
+}
+
 export async function batchAssignRouteGlobal(positionIds: number[], routeId: number | null) {
   const { data } = await apiClient.post(`/production-plans/positions/batch-assign-route`, {
     position_ids: positionIds,

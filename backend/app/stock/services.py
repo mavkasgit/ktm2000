@@ -298,6 +298,34 @@ class StockProjectionManager:
             row.balance_qty = balance
             row.refreshed_at = datetime.now()
 
+    async def recompute_balance_key(
+        self,
+        session: AsyncSession,
+        product_id: int,
+        location_id: int,
+        quality_state: QualityState | str,
+        dimensions: dict | None,
+    ) -> None:
+        """Пересчитать один ключ баланса из ledger — публичная точка входа.
+
+        Нужна операциям, которые удаляют проводки напрямую (force-удаление
+        поддерева импорта): после удаления ``refresh_balance`` вызывать
+        нечем — проводки уже стёрты, а инвариант S1 требует, чтобы
+        материализованный баланс совпадал с остатком ledger. Качество
+        принимается строкой тоже: вызывающий читает его из проводок, которые
+        уже может не достать из сессии.
+        """
+        state = (
+            quality_state
+            if isinstance(quality_state, QualityState)
+            else QualityState(quality_state)
+        )
+        if location_id in await self._terminal_location_ids(session, location_id):
+            return
+        await self._recompute_balance(
+            session, product_id, location_id, state, dimensions
+        )
+
     async def rebuild_all_balances(self, session: AsyncSession) -> int:
         """Полный пересчёт всех строк StockBalance из ledger.
 
