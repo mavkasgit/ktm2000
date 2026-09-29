@@ -1,6 +1,6 @@
 from fastapi import APIRouter, Depends, HTTPException, Query, status
 from pydantic import BaseModel
-from sqlalchemy import func, select, delete
+from sqlalchemy import select
 from sqlalchemy.orm import selectinload
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -8,9 +8,7 @@ from app.api.deps import NON_VIEWER_ROLES, READER_ROLES, require_role
 from app.core.database import get_db
 from app.models.route import ProductionRoute, RouteMatchingRule, RouteStage, RouteOperation, SectionOperation
 from app.models.section import Section
-from app.models.internal_plan import SectionPlanLine
-from app.models.release_batch import ReleaseBatchPosition
-from app.models.production_plan import PlanPosition, PlanChangeItem
+from app.services.route_deletion import count_route_relations, delete_route_with_relations
 from app.services.route_signature import refresh_route_signature
 from app.services.route_transform import resolve_stage_transforms_dimensions
 
@@ -343,32 +341,13 @@ async def check_route_delete(route_id: int, db: AsyncSession = Depends(get_db)):
     if route is None:
         raise HTTPException(status_code=404, detail="Route not found")
 
-    steps_count = await db.scalar(select(func.count()).select_from(RouteStage).where(RouteStage.route_id == route_id))
-    legacy_rules_count = await db.scalar(select(func.count()).select_from(RouteMatchingRule).where(RouteMatchingRule.route_id == route_id))
-    spl_count = await db.scalar(select(func.count()).select_from(SectionPlanLine).where(SectionPlanLine.route_id == route_id))
-    rbp_count = await db.scalar(select(func.count()).select_from(ReleaseBatchPosition).where(ReleaseBatchPosition.route_id == route_id))
-    plan_positions_count = await db.scalar(select(func.count()).select_from(PlanPosition).where(PlanPosition.route_id == route_id))
-
-    warning_parts = []
-    if steps_count:
-        warning_parts.append(f"{steps_count} шаг(ов) маршрута")
-    if legacy_rules_count:
-        warning_parts.append(f"{legacy_rules_count} правило(ок) привязки")
-    if spl_count:
-        warning_parts.append(f"{spl_count} линия(ий) плана участков")
-    if rbp_count:
-        warning_parts.append(f"{rbp_count} позиция(ий) выпуска")
-    if plan_positions_count:
-        warning_parts.append(f"{plan_positions_count} позиция(ий) плана")
+    relations = await count_route_relations(db, route_id)
+    warning_parts = relations.warning_parts()
 
     return {
         "has_relations": bool(warning_parts),
         "warning": f"Будут удалены: {', '.join(warning_parts)}." if warning_parts else None,
-        "steps_count": steps_count or 0,
-        "rules_count": legacy_rules_count or 0,
-        "spl_count": spl_count or 0,
-        "rbp_count": rbp_count or 0,
-        "plan_positions_count": plan_positions_count or 0,
+        **relations.as_counts_payload(),
     }
 
 
@@ -377,6 +356,7 @@ class DeleteRouteWarning(BaseModel):
     steps_count: int
     rules_count: int
     spl_count: int
+    work_tasks_count: int
     rbp_count: int
     plan_positions_count: int
 
@@ -388,57 +368,23 @@ async def delete_route(
     db: AsyncSession = Depends(get_db)
 ) -> None:
     force_bool = force.lower() in ("true", "1", "yes")
-    
+
     route = await db.get(ProductionRoute, route_id)
     if route is None:
         raise HTTPException(status_code=404, detail="Route not found")
 
-    # Check for relations
-    steps_count = await db.scalar(select(func.count()).select_from(RouteStage).where(RouteStage.route_id == route_id))
-    legacy_rules_count = await db.scalar(select(func.count()).select_from(RouteMatchingRule).where(RouteMatchingRule.route_id == route_id))
-    spl_count = await db.scalar(select(func.count()).select_from(SectionPlanLine).where(SectionPlanLine.route_id == route_id))
-    rbp_count = await db.scalar(select(func.count()).select_from(ReleaseBatchPosition).where(ReleaseBatchPosition.route_id == route_id))
-    plan_positions_count = await db.scalar(select(func.count()).select_from(PlanPosition).where(PlanPosition.route_id == route_id))
-
-    # If not force deletion and there are relations, return warning
-    if not force_bool and (steps_count or legacy_rules_count or spl_count or rbp_count or plan_positions_count):
-        warning_parts = []
-        if steps_count:
-            warning_parts.append(f"{steps_count} шаг(ов) маршрута")
-        if legacy_rules_count:
-            warning_parts.append(f"{legacy_rules_count} правило(ок) привязки")
-        if spl_count:
-            warning_parts.append(f"{spl_count} линия(ий) плана участков")
-        if rbp_count:
-            warning_parts.append(f"{rbp_count} позиция(ий) выпуска")
-        if plan_positions_count:
-            warning_parts.append(f"{plan_positions_count} позиция(ий) плана")
-        
-        warning = f"Будут удалены: {', '.join(warning_parts)}. Продолжить?"
+    # Связи маршрута и порядок их сноса — один источник истины
+    # (app/services/route_deletion.py), иначе предупреждение ручки и её
+    # фактическое удаление расходятся.
+    relations = await count_route_relations(db, route_id)
+    if not force_bool and relations.has_relations:
+        warning = f"Будут удалены: {', '.join(relations.warning_parts())}. Продолжить?"
         raise HTTPException(
             status_code=409,
             detail=warning
         )
 
-    # Delete related records in proper order
-    if steps_count:
-        await db.execute(delete(RouteStage).where(RouteStage.route_id == route_id))
-    if legacy_rules_count:
-        await db.execute(delete(RouteMatchingRule).where(RouteMatchingRule.route_id == route_id))
-    if spl_count:
-        await db.execute(delete(SectionPlanLine).where(SectionPlanLine.route_id == route_id))
-    if rbp_count:
-        await db.execute(delete(ReleaseBatchPosition).where(ReleaseBatchPosition.route_id == route_id))
-    
-    # Delete plan_positions and all their related items
-    if plan_positions_count:
-        plan_position_ids = await db.scalars(select(PlanPosition.id).where(PlanPosition.route_id == route_id))
-        plan_position_ids = list(plan_position_ids)
-        if plan_position_ids:
-            await db.execute(delete(PlanChangeItem).where(PlanChangeItem.plan_position_id.in_(plan_position_ids)))
-        await db.execute(delete(PlanPosition).where(PlanPosition.route_id == route_id))
-
-    await db.delete(route)
+    await delete_route_with_relations(db, route, relations)
     await db.flush()
 
 
