@@ -96,7 +96,6 @@ beforeEach(() => {
   vi.mocked(usePermission).mockReturnValue({
     canEditReferences: true,
     canEditSettings: false,
-    canDeleteProductionPlan: false,
     canForceDeleteImport: false,
   });
   vi.mocked(fetchAllProducts).mockResolvedValue([
@@ -172,7 +171,6 @@ describe("ProductsPage", () => {
     vi.mocked(usePermission).mockReturnValue({
       canEditReferences: false,
       canEditSettings: false,
-      canDeleteProductionPlan: false,
       canForceDeleteImport: false,
     });
     renderPage();

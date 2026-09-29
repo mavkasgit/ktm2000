@@ -4,5 +4,4 @@ export const POLICIES = {
   /** Принудительное удаление импорта поверх живых данных — только админу. */
   forceDeleteImport: (role?: string) => role === "admin",
   editSettings: (role?: string) => role === "admin",
-  deleteProductionPlan: (role?: string) => role === "admin",
 }
