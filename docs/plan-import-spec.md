@@ -41,6 +41,10 @@ Errors (блокируют, `invalid`): `product_not_found`, `product_inactive`,
 `duplicate_sku_due_date`, `normal_length_not_found`, `route_signature_conflict`
 (#215, ADR-0045: маршрут, найденный по имени, с другой сигнатурой — другой
 маршрут; строка остаётся невалидной, подстановки нет).
+`route_operation_not_recognized` (#227: непустое значение колонки
+«Пробивка/сверловка» не узнало ни одного правила профиля; раньше строка
+молча получала первую операцию группы. Пустое значение ошибки не даёт —
+его легитимно обрабатывает правило `empty_primary`).
 
 Warnings (не блокируют): `paired_hanger_adjusted`,
 `hanger_quantity_not_set`, `input_dimensions_unresolved`, `product_name_missing`,

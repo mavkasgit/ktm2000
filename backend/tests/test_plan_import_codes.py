@@ -36,6 +36,7 @@ SPEC_ERROR_CODES = frozenset(
         "duplicate_sku_due_date",
         "normal_length_not_found",
         "route_signature_conflict",
+        "route_operation_not_recognized",
     }
 )
 SPEC_WARNING_BASES = frozenset(

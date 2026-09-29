@@ -30,7 +30,7 @@ from app.models.production_plan import (
     ProductionPlan,
     require_current_length_model,
 )
-from app.models.route import ProductionRoute, RouteStage, RouteOperation, RouteRuleProfile
+from app.models.route import ProductionRoute, RouteStage, RouteOperation, RouteRuleProfile, RouteSelectionRule
 from app.models.section import Section
 from app.services.excel_import import (
     ParsedWorkbook,
@@ -40,7 +40,7 @@ from app.services.excel_import import (
     sha256_bytes,
     validate_excel_extension,
 )
-from app.services.route_selection import load_route_sections, load_selection_rules_for_profile, load_route_selection_batch_cache, select_route_for_payload
+from app.services.route_selection import RouteSelectionResult, load_route_sections, load_selection_rules_for_profile, load_route_selection_batch_cache, select_route_for_payload
 from app.domain.dimensions import LENGTH_MM, DimensionsValidationError, canonicalize_dimensions
 from app.services.dimension_validation import MissingDimensionsError, resolve_product_dimensions
 from app.services.hanger_quantity import adjust_quantity_to_hanger
@@ -71,6 +71,10 @@ PLAN_IMPORT_ERROR_CODES: frozenset[str] = frozenset(
         "duplicate_sku_due_date",
         "normal_length_not_found",
         "route_signature_conflict",
+#: #227: значение колонки «Пробивка/сверловка» непустое, но ни одно правило
+#: профиля его не узнало — раньше строка молча получала чужую операцию из
+#: группы (см. _operation_value_recognized). Пустое значение ошибки не даёт.
+        "route_operation_not_recognized",
     }
 )
 #: Точные warning-коды без параметров.
@@ -124,6 +128,54 @@ def plan_import_row_status(errors: list[str], warnings: list[str]) -> PlanChange
     if warnings:
         return PlanChangeItemStatus.warning
     return PlanChangeItemStatus.pending
+
+
+#: Поле payload со значением операции из колонки «Пробивка/сверловка».
+_OPERATION_PAYLOAD_FIELD = "operation"
+
+
+def _rule_reads_operation(rule: RouteSelectionRule) -> bool:
+    """Читает ли правило значение операции строки (любая фаза)."""
+    for condition in rule.conditions or []:
+        field_path = str(condition.get("field_path") or "")
+        if field_path.split(".", 1)[0] == _OPERATION_PAYLOAD_FIELD:
+            return True
+    return False
+
+
+def _operation_value_recognized(
+    operation_rules: list[RouteSelectionRule],
+    selection: RouteSelectionResult,
+) -> bool:
+    """Узнало ли значение операции строки хотя бы одно правило профиля (#227).
+
+    Правило засчитывается, если оно сработало И дало по этому значению
+    конкретный результат: ``set_operation`` и ``require_section`` /
+    ``exclude_section`` срабатывают детерминированно, а
+    ``set_operation_by_mapping`` — только когда mapping нашёл ключевое
+    слово. Именно его молчаливый промах (значение не узнано, в группу
+    операций ничего не подставлено) и означает нераспознанную операцию.
+
+    Ключевые слова не зашиты: узнаёт ли значение операция — решают данные
+    (``SELECTION_RULES``), поэтому новое правило профиля узнаёт значение без
+    правок здесь.
+    """
+    matched_rule_ids = set(selection.matched_rule_ids)
+    for rule in operation_rules:
+        if rule.id not in matched_rule_ids:
+            continue
+        for action in rule.actions or []:
+            action_kind = str(action.get("action") or "")
+            if action_kind in ("set_operation", "require_section", "exclude_section"):
+                return True
+            if action_kind == "set_operation_by_mapping":
+                group_key = (
+                    str(action.get("section_code") or ""),
+                    str(action.get("group_code") or ""),
+                )
+                if group_key in selection.resolved_operations:
+                    return True
+    return False
 
 
 def _drop_resolved_route(after_data: dict) -> None:
@@ -523,6 +575,9 @@ async def _make_change_items(
     # участки, группы операций. Семантика не меняется, только чтение.
     batch_profile = await db.get(RouteRuleProfile, rule_profile_id) if rule_profile_id is not None else None
     selection_batch = await load_route_selection_batch_cache(db, rule_profile_id)
+    # Правила, которые вообще читают значение операции строки (#227): снимок
+    # на батч, чтобы проверка «узнала ли операция» не стоила запроса на строку.
+    operation_rules = [rule for rule in selection_batch.rules if _rule_reads_operation(rule)]
     build_batch = (
         await load_route_build_batch_cache(db, batch_profile, selection_cache=selection_batch)
         if batch_profile is not None
@@ -674,6 +729,18 @@ async def _make_change_items(
                 batch_cache=selection_batch,
             )
             select_route_cache[route_sel_key] = selection
+
+        # #227: непустое значение операции обязано быть узнано хотя бы одним
+        # правилом профиля. Раньше нераспознанное значение молча уезжало в
+        # маршрут, а группа операций без резолва брала первую операцию группы.
+        # Пустая операция легитимна (правило empty_primary), поэтому ошибки
+        # не даёт. Проверка на уровне строки импорта, а не сборки маршрута:
+        # строка невалидна независимо от того, собрался маршрут или нет.
+        if (
+            str(row.payload.get(_OPERATION_PAYLOAD_FIELD) or "").strip()
+            and not _operation_value_recognized(operation_rules, selection)
+        ):
+            errors.append("route_operation_not_recognized")
 
         route = selection.route
         excel_condition_diagnostics = [

@@ -45,6 +45,7 @@ export const errorLabels: Record<string, string> = {
   "route_missing_required_step": "В маршруте отсутствует обязательный этап",
   "route_not_found": "Не найден маршрут для позиции",
   "route_not_matching_import_signature": "Маршрут не совпадает с ожидаемым",
+  "route_operation_not_recognized": "Операция из файла не распознана ни одним правилом маршрута — исправьте значение в колонке «Пробивка/сверловка» или добавьте правило в профиль",
   "route_primary_operation_mismatch": "Основная операция маршрута не совпадает с импортированной. Проверьте соответствие профиля и маршрута.",
   "route_rule_conflict": "Правила выбора маршрута конфликтуют",
   "route_sequence_invalid": "Неверная последовательность этапов в маршруте",
