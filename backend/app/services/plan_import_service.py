@@ -134,13 +134,38 @@ def plan_import_row_status(errors: list[str], warnings: list[str]) -> PlanChange
 _OPERATION_PAYLOAD_FIELD = "operation"
 
 
+def _rule_operation_conditions(rule: RouteSelectionRule) -> list[dict]:
+    """Условия правила, которые читают значение операции строки (любая фаза)."""
+    return [
+        condition
+        for condition in (rule.conditions or [])
+        if str(condition.get("field_path") or "").split(".", 1)[0] == _OPERATION_PAYLOAD_FIELD
+    ]
+
+
 def _rule_reads_operation(rule: RouteSelectionRule) -> bool:
     """Читает ли правило значение операции строки (любая фаза)."""
-    for condition in rule.conditions or []:
-        field_path = str(condition.get("field_path") or "")
-        if field_path.split(".", 1)[0] == _OPERATION_PAYLOAD_FIELD:
-            return True
-    return False
+    return bool(_rule_operation_conditions(rule))
+
+
+def _rule_selects_operation_value(rule: RouteSelectionRule) -> bool:
+    """Различает ли правило значения операции, а не просто ловит непустое.
+
+    ``not_empty`` (и ``not_contains`` без уточняющего условия) срабатывает на
+    ЛЮБОЕ непустое значение: правило с таким условием попадает в
+    ``matched_rule_ids`` всегда, поэтому признаком распознавания оно быть не
+    может. Различают значение условия на конкретное слово (``contains``,
+    ``equals``, ``in``, ``regex``) либо ``not_contains`` в связке с другим
+    условием правила.
+    """
+    operators = {str(condition.get("operator") or "") for condition in _rule_operation_conditions(rule)}
+    if not operators:
+        return False
+    if operators & {"contains", "equals", "eq", "in", "regex"}:
+        return True
+    # `not_contains` различает значение только рядом с другим условием по
+    # операции: одиночный `not_contains` ловит всё, кроме одного слова.
+    return "not_contains" in operators and len(operators) > 1
 
 
 def _operation_value_recognized(
@@ -149,12 +174,20 @@ def _operation_value_recognized(
 ) -> bool:
     """Узнало ли значение операции строки хотя бы одно правило профиля (#227).
 
-    Правило засчитывается, если оно сработало И дало по этому значению
-    конкретный результат: ``set_operation`` и ``require_section`` /
-    ``exclude_section`` срабатывают детерминированно, а
-    ``set_operation_by_mapping`` — только когда mapping нашёл ключевое
-    слово. Именно его молчаливый промах (значение не узнано, в группу
-    операций ничего не подставлено) и означает нераспознанную операцию.
+    Правило засчитывается, только если выполнены оба условия:
+
+    * оно РАЗЛИЧАЕТ значения операции — иначе «сработало» не значит
+      «узнало» (правило с ``not_empty`` срабатывает на любой непустой
+      ввод, включая опечатку);
+    * оно дало по этому значению конкретный результат: ``set_operation``,
+      ``require_section`` / ``exclude_section`` срабатывают детерминированно,
+      а ``set_operation_by_mapping`` — только когда mapping нашёл ключевое
+      слово. Именно его молчаливый промах и означает нераспознанную
+      операцию: в группу операций ничего не подставлено.
+
+    Первое условие проверяется по данным правила, а не по перечню видов
+    действий: перечень рос вместе с движком, и любое новое действие у
+    правила с ``not_empty`` молча отключало бы ошибку строки.
 
     Ключевые слова не зашиты: узнаёт ли значение операция — решают данные
     (``SELECTION_RULES``), поэтому новое правило профиля узнаёт значение без
@@ -163,6 +196,8 @@ def _operation_value_recognized(
     matched_rule_ids = set(selection.matched_rule_ids)
     for rule in operation_rules:
         if rule.id not in matched_rule_ids:
+            continue
+        if not _rule_selects_operation_value(rule):
             continue
         for action in rule.actions or []:
             action_kind = str(action.get("action") or "")

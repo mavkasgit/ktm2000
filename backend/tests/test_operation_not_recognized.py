@@ -324,3 +324,85 @@ async def test_empty_operation_stays_legitimate(session: AsyncSession) -> None:
     item = items["ОП-1004"]
     assert OPERATION_CODE not in (item.errors or []), item.errors
     assert item.status != PlanChangeItemStatus.invalid, item.errors
+
+
+async def _import_with_extra_action(session: AsyncSession, action: dict) -> dict[str, PlanChangeItem]:
+    """Тот же импорт, но к правилу с ``not_empty`` добавлено ещё одно действие.
+
+    Правило ``press_types`` срабатывает на ЛЮБОЕ непустое значение
+    операции, поэтому его id попадает в ``matched_rule_ids`` всегда. Признаком
+    распознавания он быть не может: узнаёт значение только действие, дающее
+    результат по этому значению. Отсюда и проверка — сколько бы действий у
+    такого правила ни было, нераспознанное значение обязано остаться
+    ошибкой строки.
+    """
+    template_id, profile_id = await _seed_factory(session)
+    rule = await session.scalar(
+        select(RouteSelectionRule).where(
+            RouteSelectionRule.profile_id == profile_id,
+            RouteSelectionRule.code == "press_types",
+        )
+    )
+    assert rule is not None, "предусловие: правило press_types создано"
+    rule.actions = [*(rule.actions or []), action]
+    await session.commit()
+
+    plan = ProductionPlan(plan_no="PLAN-227-EXTRA", name="План 227 с новым действием")
+    session.add(plan)
+    await session.flush()
+    result = await create_excel_import_change_set(
+        session,
+        filename="plan-227-extra.xlsx",
+        content=_workbook(PLAN_ROWS),
+        content_type="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+        production_plan_id=plan.id,
+        template_id=template_id,
+        rule_profile_id=profile_id,
+    )
+    items = (
+        await session.execute(
+            select(PlanChangeItem)
+            .where(PlanChangeItem.change_set_id == result["change_set_id"])
+            .order_by(PlanChangeItem.id)
+        )
+    ).scalars().all()
+    return {(item.after_data or {})["source_sku"]: item for item in items}
+
+
+#: Действия, добавленные к правилу с ``not_empty``. Ни одно не узнаёт значение
+#: операции: одно требует участок, другое пишет произвольное поле, третье —
+#: действие, которого движок не знает вовсе. Признаком распознавания они быть
+#: не могут, и нераспознанное значение обязано остаться ошибкой строки.
+EXTRA_ACTIONS = [
+    pytest.param({"action": "require_section", "section_code": "PRESSING"}, id="require_section"),
+    pytest.param(
+        {"action": "set_field", "path": "ctx.flagged", "value": True}, id="set_field"
+    ),
+    pytest.param({"action": "mark_possible_duplicate"}, id="unknown_action"),
+]
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("action", EXTRA_ACTIONS)
+async def test_not_empty_rule_with_extra_action_still_reports_unrecognized(
+    session: AsyncSession, action: dict
+) -> None:
+    """Новое действие у правила с ``not_empty`` не отключает ошибку #227.
+
+    ``not_empty`` срабатывает на любое непустое значение, поэтому такое
+    правило всегда в ``matched_rule_ids``. Если бы «сработало» считалось
+    признаком распознавания, ошибка ``route_operation_not_recognized``
+    пропала бы молча — ровно тот дефект, который #227 и закрывал.
+    """
+    items = await _import_with_extra_action(session, action)
+
+    unknown = items["ОП-1005"]
+    assert OPERATION_CODE in (unknown.errors or []), (
+        f"действие {action['action']!r} у правила с not_empty засчитало "
+        f"непустое значение как распознанное: {unknown.errors}"
+    )
+    assert unknown.status == PlanChangeItemStatus.invalid
+
+    # Узнанные значения ошибки не дают — новый action их не сломал.
+    for sku in ("ОП-1001", "ОП-1002", "ОП-1003"):
+        assert OPERATION_CODE not in (items[sku].errors or []), f"{sku}: {items[sku].errors}"
