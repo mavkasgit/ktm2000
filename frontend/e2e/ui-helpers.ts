@@ -48,6 +48,26 @@ export const E2E_CATALOG_SKUS = [
   { sku: "ЮП-2083", name: "Профиль ЮП-2083", lengthMm: 6000 },
 ] as const;
 
+/**
+ * Тело доски участка из API, а не из перехваченного ответа.
+ *
+ * `page.waitForResponse(...)` + `response.json()` работает, только пока
+ * страница не ушла в навигацию: `page.goto` уничтожает сетевой ресурс, и
+ * Chromium отдаёт `Protocol error (Network.getResponseBody): No resource
+ * with given identifier found`. Отдельный запрос через `page.request`
+ * выполняется уже после навигации и тело отдаёт всегда, при этом
+ * используя ту же авторизованную сессию страницы.
+ */
+export async function fetchBoardViaUI(page: Page, sectionId: number) {
+  const response = await page.request.get(`/api/shopfloor/sections/${sectionId}/board`);
+  expect(
+    response.ok(),
+    `Доска участка ${sectionId}: HTTP ${response.status()}`,
+  ).toBeTruthy();
+  return (await response.json()) as {
+    tasks: Array<Record<string, unknown>>;
+  };
+}
 /** Подтвердить диалог «Запуск в производство» после «Взять в работу». */
 export async function confirmProductionLaunchViaUI(page: Page) {
   const launchDialog = page.getByRole("dialog").filter({ hasText: "Запуск в производство" });
@@ -273,13 +293,20 @@ export async function findApprovablePositionViaUI(page: Page): Promise<Approvabl
  * осмысленно: она попадает в журнал действий и объясняет, почему сценарий
  * идёт против проверки валидации.
  */
-export async function confirmForceApproveViaUI(page: Page, reason: string) {
-  const reasonBox = page.getByLabel("Причина перекрытия валидации").last();
+export async function confirmForceApproveViaUI(page: Page, reason: string, positionId?: number) {
+  // Поле причины адресуем по `id` конкретной позиции (`override-reason-<id>`),
+  // а не через `getByLabel(...).last()`: подписи одинаковы у всех строк, и
+  // `.last()` молча указывал на поле чужой строки, если порядок рендера
+  // отличался от порядка approve. С id выбор однозначен.
+  const reasonBox = positionId
+    ? page.locator(`#override-reason-${positionId}`)
+    : page.getByLabel("Причина перекрытия валидации").last();
   await expect(reasonBox).toBeVisible({ timeout: 3_000 });
   await reasonBox.fill(reason);
   const confirmBtn = page
     .locator("button", { hasText: "Утвердить всё равно" })
-    .filter({ visible: true });
+    .filter({ visible: true })
+    .first();
   await expect(confirmBtn).toBeEnabled({ timeout: 3_000 });
   await confirmBtn.click();
 }
@@ -302,15 +329,31 @@ export async function approvePositionViaUI(page: Page, position: ApprovablePosit
   );
   try {
     await approveBtn.click();
+    // Риск-диалог открывается не всегда: `handleApproveClick` сначала
+    // спрашивает route-check и либо утверждает сразу, либо показывает диалог
+    // обхода валидации. Различаем эти два случая ЯВНО.
+    //
+    // Раньше здесь стоял общий `try { … } catch { }`, и это был дефект: он
+    // проглатывал не только «диалог не открылся», но и любую ошибку
+    // подтверждения (поле причины не нашлось, кнопка не активировалась).
+    // Тогда тест молча ждал approve-ответ, которого не будет, и падал через
+    // 15 с с `TimeoutError: page.waitForResponse` — по симптому, не указывающему
+    // на настоящую причину.
+    //
+    // Теперь отсутствие диалога — это ожидаемый исход, тихо игнорируемый, а
+    // сбой подтверждения пробрасывается наружу сразу и с понятным сообщением.
     const forceBtn = page.locator("button", { hasText: "Утвердить всё равно" }).filter({ visible: true });
-    try {
-      await expect(forceBtn).toBeVisible({ timeout: 3_000 });
+    const dialogShown = await forceBtn
+      .first()
+      .waitFor({ state: "visible", timeout: 3_000 })
+      .then(() => true)
+      .catch(() => false);
+    if (dialogShown) {
       await confirmForceApproveViaUI(
         page,
         `e2e: позиция #${position.id} заведена как эталонная, расхождения валидации проверены вручную`,
+        position.id,
       );
-    } catch {
-      // Риск-диалог не открылся: approve выполняется без force.
     }
     const response = await approveResponse;
     expect(response.ok(), `Approve position #${position.id}: HTTP ${response.status()}`).toBeTruthy();
@@ -318,8 +361,14 @@ export async function approvePositionViaUI(page: Page, position: ApprovablePosit
     // response ожидается внутри try; при ошибке Playwright сам завершает ожидатель.
   }
 
-  const successToast = page.getByText("Позиция утверждена", { exact: true });
-  await expect(successToast).toBeVisible({ timeout: 15_000 });
+  // Тост «Позиция утверждена» намеренно НЕ проверяется: он не содержит ID
+  // позиции и живёт 4 секунды, поэтому по природе ненадёжен как признак
+  // конкретной операции. При нескольких утверждениях подряд старые тосты ещё
+  // висят — `getByText(...).toBeVisible()` падал в strict mode на двух
+  // совпадениях; при быстром approve тост успевает исчезнуть до проверки —
+  // падал по таймауту с `Received: 0`. Оба варианта наблюдались.
+  // Операцию подтверждают два признака, привязанных к самой позиции: HTTP-ответ
+  // approve выше и исчезновение кнопки «Утвердить» у `#plan-position-<id>`.
   // Раньше здесь стоял `page.reload()` с комментарием про «кэш React Query»:
   // он пересоздавал QueryClient и маскировал рассинхрон инвалидации — тест был
   // зелёным вместе с багом, а не вопреки ему. Теперь перечитывание делает

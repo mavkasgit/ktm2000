@@ -15,6 +15,7 @@ import {
   approvePositionViaUI,
   completeAllSectionTasksViaUI,
   expandBoardGroupsViaUI,
+  fetchBoardViaUI,
   expectShippedViaUI,
   findApprovablePositionViaUI,
   seedReferenceDataViaUI,
@@ -218,14 +219,14 @@ async function splitSawIntoLengthsViaUI(page: Page, sectionId: number): Promise<
 
     // Проверяем ответ доски сразу после порции: P1 не исчезает из API
     // после первой порции, а после второй закономерно становится completed.
-    const boardResponsePromise = page.waitForResponse(
-      (response) =>
-        response.ok() &&
-        response.url().includes(`/api/shopfloor/sections/${sectionId}/board`),
-    );
+    //
+    // Тело берём НЕ из перехваченного `page.waitForResponse`, а отдельным
+    // запросом `page.request`: перехваченный ответ не переживает `page.goto`,
+    // который уничтожает сетевой ресурс, и `.json()` падал с
+    // `Protocol error (Network.getResponseBody): No resource with given
+    // identifier found`. Это была не гонка данных, а способ чтения.
     await page.goto(`/section-tasks/${sectionId}`);
-    const boardResponse = await boardResponsePromise;
-    const boardBody = await boardResponse.json();
+    const boardBody = await fetchBoardViaUI(page, sectionId);
     const transformTask = (boardBody.tasks as Array<Record<string, unknown>>).find(
       (task) => Number(task.input_quantity) === INPUT_QTY,
     );
@@ -448,14 +449,25 @@ test.describe("@ui @ui-narrow Пила: раскрой 2,75 м на четыре
     // на этом `break`вался и падал с «утверждены не все позиции плана» — ждём
     // следующую утверждаемую позицию, а не сдаёмся на первом пустом снимке.
     const positions: ApprovablePosition[] = [];
+    // Уже утверждённые позиции исключаем из выбора. `findApprovablePositionViaUI`
+    // отбирает строку по наличию кнопки «Утвердить», а таблица перерисовывается
+    // по react-query: в момент следующей итерации уже утверждённая строка ещё
+    // может быть в DOM со старым состоянием, и цикл подхватывал её повторно —
+    // approve уходил на позицию, которая уже утверждена. Из-за этого падал
+    // `waitForResponse` (второй POST не уходит) и `expect(positions.length)`
+    // (набиралось меньше POSITIONS уникальных позиций за отведённые попытки).
+    const approved = new Set<number>();
     for (let attempt = 0; attempt < POSITIONS * 6 && positions.length < POSITIONS; attempt++) {
       const position = await findApprovablePositionViaUI(page);
-      if (!position) {
+      if (!position || approved.has(position.id)) {
+        // Уже утверждали эту строку: ждём, пока таблица её обновит, и берём
+        // следующую, вместо того чтобы повторно кликать «Утвердить».
         await page.waitForTimeout(1_000);
         continue;
       }
       expect(position.sku, "в плане неожиданный артикул").toContain(SAW4_SKU);
       await approvePositionViaUI(page, position);
+      approved.add(position.id);
       positions.push(position);
       console.log(`[step4] позиция #${position.id} утверждена`);
     }
