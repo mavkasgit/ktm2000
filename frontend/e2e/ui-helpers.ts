@@ -294,6 +294,16 @@ export async function approvePositionViaUI(page: Page, position: ApprovablePosit
   const approveBtn = planRow.getByRole("button", { name: "Утвердить" });
   await expect(approveBtn).toBeVisible({ timeout: 5_000 });
 
+  // Тост «Позиция утверждена» не содержит ID позиции, привязать его к
+  // конкретной операции по содержимому нельзя. Позиций в approve цикле
+  // несколько, а тост живёт 4 с, поэтому предыдущий ещё висит, когда приходит
+  // следующий: `getByText(...).toBeVisible()` падал в strict mode на двух
+  // совпадениях, а `.first()` принял бы чужой тост за свой. Поэтому тост
+  // считается: снимаем число ДО клика и ждём следующего, а сама операция
+  // подтверждается её HTTP-ответом и состоянием строки ниже.
+  const approveToasts = page.getByText("Позиция утверждена", { exact: true });
+  const toastsBefore = await approveToasts.count();
+
   const approveResponse = page.waitForResponse(
     (response) =>
       response.request().method() === "POST" &&
@@ -318,8 +328,7 @@ export async function approvePositionViaUI(page: Page, position: ApprovablePosit
     // response ожидается внутри try; при ошибке Playwright сам завершает ожидатель.
   }
 
-  const successToast = page.getByText("Позиция утверждена", { exact: true });
-  await expect(successToast).toBeVisible({ timeout: 15_000 });
+  await expect(approveToasts).toHaveCount(toastsBefore + 1, { timeout: 15_000 });
   // Раньше здесь стоял `page.reload()` с комментарием про «кэш React Query»:
   // он пересоздавал QueryClient и маскировал рассинхрон инвалидации — тест был
   // зелёным вместе с багом, а не вопреки ему. Теперь перечитывание делает
