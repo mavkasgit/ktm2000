@@ -33,6 +33,7 @@ from app.models.work_task import WorkTask
 from app.seeds.run_seed import run_full_seed
 from app.services.route_deletion import cleanup_orphan_routes, find_orphan_routes
 from app.services.route_signature import auto_route_code
+from tests.test_integrity_invariants import assert_no_invariants_violations
 from tests.stock.test_shopfloor_stage3 import _setup_minimal_route
 
 pytestmark = pytest.mark.asyncio
@@ -130,6 +131,8 @@ async def test_delete_linked_route_without_force_returns_409(
     assert await _count(session, select(func.count()).select_from(SectionPlanLine).where(SectionPlanLine.route_id == route_id)) == 1
     assert await _count(session, select(func.count()).select_from(WorkTask).where(WorkTask.id == task_id)) == 1
     assert await _count(session, select(func.count()).select_from(PlanPosition).where(PlanPosition.route_id == route_id)) == 1
+    # Отказ ничего не меняет, и ledger в частности: каскад при 409 не идёт.
+    await assert_no_invariants_violations(session, context="после 409 без force")
 
 
 async def test_delete_linked_route_with_force_removes_whole_graph(
@@ -167,6 +170,12 @@ async def test_delete_linked_route_with_force_removes_whole_graph(
     assert await _count(session, select(func.count()).select_from(PlanPosition).where(PlanPosition.route_id == route_id)) == 0
     # Внутренний план остался пустой оболочкой — его тоже убирают.
     assert await _count(session, select(func.count()).select_from(InternalPlan)) == 0
+    # Каскад обнуляет task_id/transfer_id/section_plan_line_id у проводок и
+    # сносит Transfer вместе с расхождениями. StockTransaction — единый
+    # источник правды (backend/AGENTS.md), поэтому после такого сноса
+    # инварианты обязаны остаться в силе: без проверки регресс был бы
+    # незамеченным.
+    await assert_no_invariants_violations(session, context="после force-удаления маршрута")
 
 
 async def test_orphan_routes_exclude_routes_with_positions(
@@ -229,6 +238,7 @@ async def test_cleanup_orphan_routes_is_dry_run_by_default_and_executes_on_flag(
     # Уборка не должна задеть маршрут с позицией плана.
     assert await _count(session, select(func.count()).select_from(ProductionRoute).where(ProductionRoute.id == linked_id)) == 1
     assert await _count(session, select(func.count()).select_from(PlanPosition).where(PlanPosition.route_id == linked_id)) == 1
+    await assert_no_invariants_violations(session, context="после уборки сирот с execute")
 
 
 async def test_cleanup_orphan_routes_keeps_seeded_reference_routes(session) -> None:
@@ -285,6 +295,7 @@ async def test_cleanup_orphan_routes_keeps_seeded_reference_routes(session) -> N
         session,
         select(func.count()).select_from(ProductionRoute).where(ProductionRoute.id.in_(seeded_ids)),
     ) == len(seeded_ids)
+    await assert_no_invariants_violations(session, context="после уборки на свежей БД")
 
 
 async def test_orphan_criterion_skips_archived_import_route(session: AsyncSession) -> None:
