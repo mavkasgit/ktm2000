@@ -34,9 +34,11 @@ from app.models.production_plan import (
     PlanPositionValidationStatus,
     PlanSourceType,
 )
-from app.models.route import ProductionRoute, RouteRuleProfile
+from app.models.route import ProductionRoute, RouteRuleProfile, RouteStage
+from app.models.section import Section
 from app.services.route_builder import build_route_from_profile
 from app.services.route_matcher import _payload_for_dynamic_build, resolve_position_route
+from app.services.route_signature import auto_route_code
 
 # Имя маршрута, сохранённое в позиции до правки: содержит цвет, которого нет
 # в пересобранном имени (шаблон «{output_kind} - {operations}»).
@@ -187,3 +189,78 @@ async def test_rebuild_name_wins_over_stale_stored_route_id_when_route_exists(se
 
     assert result.route_id == fresh_route.id
     assert result.route_name == built_name
+
+
+async def _make_renamed_import_route(session, position: PlanPosition) -> ProductionRoute:
+    """Маршрут импорта с настоящим ``auto-``-кодом, которому сменили состав.
+
+    Код считается из сигнатуры, но ``refresh_route_signature`` код не
+    обновляет: отредактированный руками маршрут сохраняет прежний
+    ``auto-``-код и продолжает находиться по нему. Именно этот случай
+    отличается по сигнатуре, но совпадает по коду.
+    """
+    from tests.test_dynamic_route_generation import _make_profile_with_rules, _seed_sections
+
+    built = await _built_route(session, position)
+    code = auto_route_code(built.signature)
+    assert code is not None, "предусловие: у собранного маршрута есть сигнатура"
+
+    section = await session.scalar(select(Section).where(Section.code == "PACKING"))
+    route = ProductionRoute(name=built.name, code=code, is_active=True)
+    session.add(route)
+    await session.flush()
+    # Состав маршрута в БД — один участок, а сигнатура осталась от
+    # исходной пересборки: ровно то, что даёт правка маршрута руками.
+    stage = RouteStage(route_id=route.id, sequence=1, section_id=section.id, is_final=True)
+    session.add(stage)
+    await session.flush()
+    await session.commit()
+    return route
+
+
+async def _built_route(session, position: PlanPosition):
+    profile = await session.get(RouteRuleProfile, position.route_profile_id)
+    assert profile is not None
+    return await build_route_from_profile(
+        session, profile, _payload_for_dynamic_build(position), position
+    )
+
+
+@pytest.mark.asyncio
+async def test_route_edited_by_hand_keeps_auto_code_but_signature_is_verified(session) -> None:
+    """Маршрут, найденный по коду, проходит сверку сигнатуры (ADR-0051 п.4).
+
+    Ветка кода возвращала ``id`` сразу, без сверки, и позиция получала
+    маршрут чужого состава с ``error=None`` — выглядела назначенной и
+    проходила дальше. Ровно тот случай, от которого защищает ADR-0045.
+    """
+    from tests.test_dynamic_route_generation import _make_profile_with_rules, _seed_sections
+
+    await _seed_sections(session)
+    profile_id = await _make_profile_with_rules(session)
+    position = PlanPosition(
+        production_plan_id=1,
+        product_id=None,
+        source_type=PlanSourceType.excel_import,
+        source_sku="ХТ-466-3776",
+        quantity=1,
+        source_payload={"output_kind": "П/Ф", "source_name": "РП-АКТ-03 2,7 м анодчерный матов"},
+        status=PlanPositionStatus.draft,
+        validation_status=PlanPositionValidationStatus.pending,
+        validation_errors=[],
+        route_id=None,
+        route_profile_id=profile_id,
+        route_origin=PlanPositionRouteOrigin.auto,
+    )
+    # Позиция в памяти, как в соседних тестах: резолву нужен профиль и
+    # payload, а не строка плана в БД.
+
+    edited = await _make_renamed_import_route(session, position)
+    assert edited.route_signature is None, (
+        "предусловие: у маршрута нет сохранённой сигнатуры — сверка берёт её с этапов"
+    )
+
+    result = await resolve_position_route(session, position)
+
+    assert result.route_id != edited.id, "маршрут чужого состава нельзя подставлять"
+    assert result.error == "route_signature_conflict"

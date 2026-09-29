@@ -19,7 +19,22 @@ from app.models.route import ProductionRoute, RouteRuleProfile
 from app.services.color_extraction import resolve_payload_color
 from app.services.route_builder import build_route_from_profile
 from app.services.route_selection import RouteCandidateDiagnostic, select_route_for_payload
-from app.services.route_signature import auto_route_code
+from app.services.route_signature import auto_route_code, route_signature_conflicts
+
+
+class RouteSignatureConflict(Exception):
+    """Маршрут найден по коду, но его состав разошёлся с пересобранным.
+
+    Код — производная сигнатуры, но ``refresh_route_signature`` код не
+    обновляет: маршрут, переписанный руками, сохраняет прежний ``auto-``-код
+    и продолжает находиться по нему. Отдельное исключение, а не возврат
+    ``None``, потому что ``None`` уводит резолв в ветку сохранённого
+    назначения — и позиция выглядела бы назначенной иной маршрут, молча.
+    """
+
+    def __init__(self, route_id: int) -> None:
+        super().__init__(f"route #{route_id}: сигнатура не совпадает с пересобранной")
+        self.route_id = route_id
 
 
 @dataclass(slots=True)
@@ -125,6 +140,14 @@ async def _resolve_route_id_for_dynamic_name(
     Поэтому в fallback-ветке id и имя указывают на разные строки — это цена
     совпадения с предпросмотром, а не дефект резолва.
 
+    Сигнатура сверяется в обоих путях, как требует ADR-0051 п.4: маршрут,
+    найденный по коду, мог быть переписан руками. Код — производная
+    сигнатуры, но `refresh_route_signature` код не обновляет, поэтому
+    переписанный маршрут продолжает находиться по своему прежнему
+    `auto-`-коду. Расхождение — не «не нашли», а конфликт: подставлять такой
+    маршрут нельзя (ADR-0045), поэтому поднимается `RouteSignatureConflict`,
+    а вызыващий отдаёт `route_signature_conflict` строке позиции.
+
     Архивированный маршрут (`is_active=False`) назначением не считается: он
     прошёл бы резолв с `error=None`, выглядел бы назначенным и падал бы позже,
     в take-to-work («Route is not active», production_planning.py).
@@ -136,12 +159,19 @@ async def _resolve_route_id_for_dynamic_name(
     built_code = auto_route_code(built_signature)
     if built_code is not None:
         matched = await db.scalar(
-            select(ProductionRoute.id)
+            select(ProductionRoute)
             .where(ProductionRoute.code == built_code, ProductionRoute.is_active.is_(True))
             .limit(1)
         )
         if matched is not None:
-            return matched
+            # Код — производная сигнатуры, но пересчёт сигнатуры код не
+            # обновляет (`refresh_route_signature`), поэтому маршрут,
+            # переписанный руками, сохраняет старый `auto-`-код. Сверка
+            # обязательна и здесь, как в импорте (ADR-0051 п.4): иначе
+            # позиция получила бы маршрут чужого состава с error=None.
+            if await route_signature_conflicts(db, matched, built_signature):
+                raise RouteSignatureConflict(matched.id)
+            return matched.id
     matched = await db.scalar(
         select(ProductionRoute.id)
         .where(
@@ -252,13 +282,30 @@ async def resolve_position_route(
                 built_route = await build_route_from_profile(db, profile, payload, position)
 
                 if not built_route.error and built_route.name:
-                    resolved_route_id = await _resolve_route_id_for_dynamic_name(
-                        db,
-                        built_name=built_route.name,
-                        built_signature=built_route.signature,
-                        stored_route_id=route_id,
-                        route_cache=route_cache,
-                    )
+                    try:
+                        resolved_route_id = await _resolve_route_id_for_dynamic_name(
+                            db,
+                            built_name=built_route.name,
+                            built_signature=built_route.signature,
+                            stored_route_id=route_id,
+                            route_cache=route_cache,
+                        )
+                    except RouteSignatureConflict:
+                        # Маршрут с этим кодом переписан руками: подставлять
+                        # его нельзя (ADR-0045), и уводить позицию в
+                        # сохранённое назначение тоже нельзя — конфликт
+                        # виден пользователю, а не гасится в fallback.
+                        return ResolvedRouteInfo(
+                            route_id=None,
+                            route_name=built_route.name,
+                            source="dynamic_build",
+                            route_origin=origin or PlanPositionRouteOrigin.auto.value,
+                            route_match_quality=quality or PlanPositionRouteMatchQuality.exact.value,
+                            route_match_reason=reason or PlanPositionRouteMatchReason.selection_rules.value,
+                            route_assigned_at=assigned_at,
+                            route_manual_confirmed_at=manual_confirmed_at,
+                            error="route_signature_conflict",
+                        )
                     if resolved_route_id is not None:
                         return ResolvedRouteInfo(
                             route_id=resolved_route_id,
