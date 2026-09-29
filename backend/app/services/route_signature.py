@@ -17,6 +17,7 @@
 сравнивает базу саму с собой и собственных потерь при записи не заметит.
 """
 from __future__ import annotations
+import hashlib
 
 from collections.abc import Iterable, Sequence
 from dataclasses import dataclass
@@ -36,6 +37,31 @@ if TYPE_CHECKING:
 _FIELD_SEP = ":"
 _OP_SEP = ","
 _STEP_SEP = ">"
+
+#: Префикс кода маршрута, созданного импортом (#230, ADR-0051).
+AUTO_CODE_PREFIX = "auto-"
+#: Сколько hex-символов хеша сигнатуры входит в код. 16 символов = 64 бита:
+#: на масштабе завода (сотни маршрутов) коллизия не наступает, а код
+#: остаётся читаемым в списке маршрутов и в сообщениях об ошибках.
+_AUTO_CODE_HASH_LEN = 16
+
+
+def auto_route_code(signature: str) -> str | None:
+    """Код маршрута импорта — детерминированная функция его сигнатуры.
+
+    Один и тот же состав даёт один и тот же код, разный состав — разный,
+    даже если имя совпало: имя — подпись, а идентичность — пара «код +
+    сигнатура» (#230, ADR-0051). Формула обязана совпадать с бэкфиллом
+    ревизии ``071`` (``'auto-' || substr(sha256(signature), 1, 16)``),
+    иначе прод не узнал бы в своих маршрутах своих же.
+
+    ``None`` — сигнатуры нет (маршрут без этапов): кода нет, и тождество
+    по-прежнему держится на имени (ADR-0045).
+    """
+    if not signature:
+        return None
+    digest = hashlib.sha256(signature.encode("utf-8")).hexdigest()
+    return f"{AUTO_CODE_PREFIX}{digest[:_AUTO_CODE_HASH_LEN]}"
 
 
 @dataclass(frozen=True, slots=True)

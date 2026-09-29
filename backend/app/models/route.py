@@ -23,8 +23,16 @@ class ProductionRoute(Base):
     __tablename__ = "production_routes"
 
     id: Mapped[int] = mapped_column(BigInteger, Identity(always=True), primary_key=True)
+    # Идентичность маршрута — пара «код + сигнатура» (#230, ADR-0051).
+    # Код у маршрутов импорта — детерминированная функция сигнатуры
+    # (``auto-<хеш>``), у сид-маршрутов завода — заданный справочником.
+    # Уникальность кода и есть уникальность маршрута.
     code: Mapped[str | None] = mapped_column(String(100), nullable=True, unique=True)
-    name: Mapped[str] = mapped_column(String(255), nullable=False, unique=True)
+    # Имя — подпись для человека, а не ключ (ADR-0045, ADR-0051): шаблон
+    # имени выбрасывает пустые слоты, поэтому два разных маршрута законно
+    # дают одно имя. Уникальности имени в БД нет намеренно — иначе второй
+    # маршрут с тем же именем просто не создался бы.
+    name: Mapped[str] = mapped_column(String(255), nullable=False)
     description: Mapped[str | None] = mapped_column(Text, nullable=True)
     is_active: Mapped[bool] = mapped_column(Boolean, nullable=False, default=True, server_default=text("true"))
     sort_order: Mapped[int] = mapped_column(Integer, nullable=False, default=0, server_default=text("0"))

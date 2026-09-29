@@ -48,7 +48,7 @@ from app.services.import_normalization import normalize_sku as _normalize_sku
 from app.services.plan_position_hanger import PositionHangerValue, position_length_mm, resolve_position_hanger
 from app.services.route_builder import BuiltRoute, build_route_from_profile, load_route_build_batch_cache
 from app.services.route_storage_classifier import STAGE_KIND_TRANSIT, is_storage_section
-from app.services.route_signature import route_signature_conflicts
+from app.services.route_signature import auto_route_code, route_signature_conflicts
 
 
 #: Каталог кодов строк импорта плана (спека docs/plan-import-spec.md §3, карта #157).
@@ -556,7 +556,10 @@ async def _make_change_items(
         except Exception:
             product_is_active_cache[prod.id] = False
     
-    # Cache for already created/found routes by route_name -> route_id
+    # Маршруты, уже найденные или созданные в этом импорте: код -> route_id.
+    # Ключ — код, а не имя: одинаковый состав даёт одинаковый код при любом
+    # имени, а разный состав с тем же именем обязан получить свой маршрут
+    # (#230, ADR-0051).
     route_cache: dict[str, int] = {}
 
     # Локальные кэши для устранения N+1 запросов при сопоставлении маршрутов и пар
@@ -567,7 +570,8 @@ async def _make_change_items(
     route_stages_cache = {}           # route.id -> list[RouteStage]
     sections_by_id_cache = {}         # section_id -> Section
     sections_by_code_cache = {}       # section_code -> Section
-    existing_route_by_name_cache = {} # built_route.name -> ProductionRoute
+    existing_route_by_code_cache: dict[str, ProductionRoute] = {}  # code -> ProductionRoute
+    legacy_route_by_name_cache: dict[str, ProductionRoute] = {}     # имя -> маршрут без кода
     typical_dimensions_cache: dict[int, dict | None] = {}  # product.id -> типовой размер либо None
 
     # Межстрочные кэши подбора/сборки маршрута (спека §4.1, #163): снимок
@@ -584,19 +588,65 @@ async def _make_change_items(
         else None
     )
 
-    async def find_route_by_name(name: str) -> ProductionRoute | None:
-        """Маршрут с таким именем, без повторного запроса на том же имени."""
-        if name in existing_route_by_name_cache:
-            return existing_route_by_name_cache[name]
-        found = await db.scalar(select(ProductionRoute).where(ProductionRoute.name == name))
-        existing_route_by_name_cache[name] = found
+    async def find_route_by_code(code: str) -> ProductionRoute | None:
+        """Маршрут с таким кодом, без повторного запроса на том же коде."""
+        if code in existing_route_by_code_cache:
+            return existing_route_by_code_cache[code]
+        found = await db.scalar(select(ProductionRoute).where(ProductionRoute.code == code))
+        existing_route_by_code_cache[code] = found
+        return found
+
+    async def find_legacy_route_by_name(name: str) -> ProductionRoute | None:
+        """Маршрут БЕЗ кода с таким именем — переходное состояние базы.
+
+        Такой маршрут создан импортом до #230: кода у него нет, и иначе он
+        стал бы недостижим (поиск теперь по коду). Именно поэтому ищем
+        только среди строк с ``code IS NULL`` — маршрут с кодом, пусть и с
+        тем же именем, уже имеет собственную идентичность и чужим составом
+        быть не может.
+        """
+        if name in legacy_route_by_name_cache:
+            return legacy_route_by_name_cache[name]
+        found = await db.scalar(
+            select(ProductionRoute)
+            .where(ProductionRoute.name == name, ProductionRoute.code.is_(None))
+            .order_by(ProductionRoute.id)
+            .limit(1)
+        )
+        legacy_route_by_name_cache[name] = found
         return found
 
     async def signature_conflicts_with(route: ProductionRoute | None, built: BuiltRoute) -> bool:
-        """Конфликт сигнатур (#215, ADR-0045): имя совпало, тождество — нет."""
+        """Конфликт сигнатур (#215, ADR-0045): нашёлся маршрут, а тождество — нет."""
         if route is None or not built.name:
             return False
         return await route_signature_conflicts(db, route, built.signature)
+
+    async def resolve_route_for_build(built: BuiltRoute) -> tuple[ProductionRoute | None, bool]:
+        """Маршрут импорта для собранного маршрута: (маршрут, конфликт).
+
+        Порядок (#230, ADR-0051): сначала код из сигнатуры — он и есть
+        идентичность. Если по коду ничего нет, ищем по имени среди строк
+        БЕЗ кода: их создал импорт до #230, и иначе они стали бы
+        недостижимыми. Маршрут, найденный по имени с кодом, — не наш: у него
+        своя идентичность, и по подписи его опознавать нельзя.
+
+        Конфликт сигнатур (ADR-0045) проверяется в обоих случаях: маршрут,
+        найденный по коду, мог быть переписан руками, а найденный по имени —
+        тем более, его создал старый импорт и сверить его состав необходимо,
+        прежде чем подставлять.
+        """
+        code = auto_route_code(built.signature)
+        if code is not None:
+            found = await find_route_by_code(code)
+            if found is not None:
+                return found, await signature_conflicts_with(found, built)
+        # Код не найден (или сигнатуры нет — маршрут без этапов): ищем по
+        # имени среди строк без кода.
+        legacy = await find_legacy_route_by_name(built.name) if built.name else None
+        if legacy is None:
+            return None, False
+        return legacy, await signature_conflicts_with(legacy, built)
 
     def make_hashable(val):
         if isinstance(val, dict):
@@ -973,12 +1023,11 @@ async def _make_change_items(
                         for step in built_route.steps
                     ]
                     # Use built route name and assign dynamic route.
-                    # Совпадение имени — не тождество (#215): предпросмотр
+                    # Конфликт тождества — не тождество (#215): предпросмотр
                     # показывает ту же ошибку строки, что и запись, иначе
                     # невалидность всплыла бы только после применения.
-                    if built_route.name and await signature_conflicts_with(
-                        await find_route_by_name(built_route.name), built_route
-                    ):
+                    _preview_route, preview_conflict = await resolve_route_for_build(built_route)
+                    if built_route.name and preview_conflict:
                         # Строка импорта и предпросмотра общая, а блок записи
                         # ниже отработает для того же сета — код один раз.
                         if "route_signature_conflict" not in errors:
@@ -1017,18 +1066,21 @@ async def _make_change_items(
                         logger.warning(f"Built route has NO STEPS! route_sections={built_route.route_sections}, excluded={built_route.excluded_sections}")
                     
                     if not built_route.error and built_route.name:
-                        # Cache key includes route name — color/output_kind are encoded in the name.
-                        resolved_ops_summary = tuple(
-                            (step.section_code, step.operation_code)
-                            for step in built_route.steps
-                            if step.operation_code
-                        )
-                        cache_key = (built_route.name, resolved_ops_summary)
-                        
+                        # Ключ кэша батча — код маршрута, то есть его
+                        # тождество (#230, ADR-0051). Прежний ключ
+                        # (имя + состав операций) был прокси того же самого, но
+                        # прокси ненадёжный: два разных состава с одним именем
+                        # в нём сливались, и имя переставало быть ключом лишь
+                        # на словах. Код отличается ровно там, где отличается
+                        # сигнатура, и одинаков ровно там же.
+                        route_code = auto_route_code(built_route.signature)
+                        cache_key = route_code or built_route.name
+
                         import logging
                         logger = logging.getLogger(__name__)
-                        logger.info(f"Route cache key: ops={resolved_ops_summary}")
-                        # Маршрут с тем же именем, но другой сигнатурой (#215).
+                        logger.info(f"Route cache key: code={route_code}")
+
+                        # Нашёлся маршрут, а тождество — нет (#215).
                         route_conflict = False
 
                         # Check cache first
@@ -1036,17 +1088,16 @@ async def _make_change_items(
                             created_route_id = route_cache[cache_key]
                             # Use cached route - steps already exist
                         else:
-                            # Lookup existing ProductionRoute
-                            existing_route = await find_route_by_name(built_route.name)
+                            # Поиск существующего ProductionRoute: сначала по
+                            # коду, затем (для строк без кода) по имени.
+                            existing_route, existing_conflict = await resolve_route_for_build(built_route)
 
-                            if existing_route is not None and await signature_conflicts_with(
-                                existing_route, built_route
-                            ):
-                                # Имя то же, а маршрут другой (#215, ADR-0045):
-                                # строка остаётся невалидной, чужой маршрут
-                                # под неё не подставляется. Выхода из конфликта
-                                # нет намеренно — маршрут, применённый к
-                                # выпущенным позициям, пересборка сломала бы их.
+                            if existing_conflict:
+                                # Тождество то же, а маршрут другой (#215,
+                                # ADR-0045): строка остаётся невалидной, чужой
+                                # маршрут под неё не подставляется. Выхода из
+                                # конфликта нет намеренно — маршрут, применённый
+                                # к выпущенным позициям, пересборка сломала бы их.
                                 if "route_signature_conflict" not in errors:
                                     errors.append("route_signature_conflict")
                                 route_conflict = True
@@ -1058,6 +1109,10 @@ async def _make_change_items(
                             else:
                                 # Create new ProductionRoute with steps
                                 created_route = ProductionRoute(
+                                    # Код производная сигнатуры: тот же состав —
+                                    # тот же маршрут, разный состав — свой, даже
+                                    # если имя совпало (#230, ADR-0051).
+                                    code=route_code,
                                     name=built_route.name,
                                     is_active=True,
                                     import_template_id=template_id,
@@ -1067,12 +1122,17 @@ async def _make_change_items(
                                 )
                                 db.add(created_route)
                                 await db.flush()
-                                # Кэшируем маршрут по имени сразу после создания:
-                                # иначе следующая строка этого же импорта с тем же именем
-                                # маршрута (но другим ops_summary → иным cache_key) возьмёт
-                                # из existing_route_by_name_cache None и попытается создать
-                                # дубль → UniqueViolation uq_production_routes_name.
-                                existing_route_by_name_cache[built_route.name] = created_route
+                                # Кэшируем созданный маршрут по коду сразу: иначе
+                                # следующая строка этого же импорта с тем же
+                                # составом пошла бы в БД и либо нашла его сама
+                                # (лишний запрос), либо попыталась создать дубль
+                                # кода. По имени — только когда кода нет
+                                # (маршрут без этапов, сигнатура пуста): такой
+                                # маршрут ищется fallback-ом по имени.
+                                if route_code is not None:
+                                    existing_route_by_code_cache[route_code] = created_route
+                                else:
+                                    legacy_route_by_name_cache[built_route.name] = created_route
 
                                 # Create route stages and operations with savepoint protection
                                 steps_created_successfully = False

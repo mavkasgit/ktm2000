@@ -2166,3 +2166,242 @@ async def test_migration_068_recals_significance_then_signature(tmp_path: Path):
         async with admin_engine.connect() as conn:
             await conn.execute(text(f'DROP DATABASE IF EXISTS "{db_name}" WITH (FORCE)'))
         await admin_engine.dispose()
+
+
+_MIG071_PREV = "070_production_plan_archive"
+
+
+async def _seed_mig071_routes(conn) -> None:
+    """Маршруты в том виде, в каком их оставил импорт ДО #230.
+
+    Четыре случая, каждый со своим ожиданием после миграции:
+
+    * ``mig071-import`` — обычный маршрут импорта: получает код.
+    * ``mig071-twin`` — ВТОРОЙ маршрут с той же сигнатурой и ДРУГИМ именем.
+      Один состав — один код, поэтому код получает только первый (иначе
+      ``uq_production_routes_code`` падает), а второй остаётся без кода и
+      ищется по имени.
+    * ``mig071-empty`` — без этапов: сигнатуры нет, кода не будет.
+    * ``mig071-seed`` — сид-маршрут завода: код задан справочником,
+      миграция его не трогает.
+
+    Одноимённой пары здесь быть не может: ограничение ``uq_production_routes_name``
+    ещё стоит. Её создаёт сам тест уже после миграции — так и проверяется,
+    что ограничение действительно снято.
+    """
+    await conn.execute(text(
+        "INSERT INTO sections (code, name, sort_order, type, is_active) VALUES "
+        "('MIG071-PACK', 'Упаковка', 80, 'production', true), "
+        "('MIG071-FG', 'Склад ГП', 90, 'finished_stock', true)"
+    ))
+    sections = dict(
+        (await conn.execute(text("SELECT code, id FROM sections WHERE code LIKE 'MIG071-%'"))).all()
+    )
+    shared_signature = (
+        "transit:MIG071-FG::0:0:0"
+        ">production:MIG071-PACK:PACK_STRETCH:0:0:1"
+    )
+    # Порядок важен: у одинаковой сигнатуры код достаётся маршруту с
+    # наименьшим id, а это — первый из двух. Кода у обоих нет: импорт до
+    # #230 его не писал, иначе миграции было нечего проставлять.
+    await conn.execute(
+        text(
+            "INSERT INTO production_routes (name, code, is_active, route_signature) VALUES "
+            "('ГП - Серебро - Стрейч', NULL, true, :shared), "
+            "('Дубль состава под другим именем', NULL, true, :shared), "
+            "('Без этапов', NULL, true, NULL), "
+            "('Сид-маршрут', 'universal_rp', true, NULL)"
+        ),
+        {"shared": shared_signature},
+    )
+    for name in ("ГП - Серебро - Стрейч", "Дубль состава под другим именем"):
+        route_id = (
+            await conn.execute(
+                text("SELECT id FROM production_routes WHERE name = :name"), {"name": name}
+            )
+        ).scalar_one()
+        await conn.execute(
+            text(
+                "INSERT INTO route_stages "
+                "(route_id, sequence, section_id, storage_section_id, stage_kind, "
+                "is_significant, is_final) VALUES "
+                "(:route, 1, NULL, :fg, 'transit', false, false), "
+                "(:route, 2, :pack, NULL, 'production', false, true)"
+            ),
+            {"route": route_id, "pack": sections["MIG071-PACK"], "fg": sections["MIG071-FG"]},
+        )
+        pack_stage = (
+            await conn.execute(
+                text("SELECT id FROM route_stages WHERE route_id = :route AND sequence = 2"),
+                {"route": route_id},
+            )
+        ).scalar_one()
+        await conn.execute(
+            text(
+                "INSERT INTO route_operations (route_stage_id, sequence, operation_code, operation_name) "
+                "VALUES (:stage, 1, 'PACK_STRETCH', 'Стрейч')"
+            ),
+            {"stage": pack_stage},
+        )
+
+
+async def _mig071_state(conn) -> list[tuple]:
+    # Отбор по ИМЕНИ, а не по коду: после миграции дубль состава остаётся
+    # без кода, и отбор по ``code LIKE 'mig071%'`` его бы потерял — а именно
+    # он и есть главная проверка.
+    codes = list(
+        (
+            await conn.execute(
+                text(
+                    "SELECT name, code FROM production_routes "
+                    "WHERE name IN ("
+                    "  'ГП - Серебро - Стрейч', 'Дубль состава под другим именем',"
+                    "  'Без этапов', 'Сид-маршрут'"
+                    ") ORDER BY name"
+                )
+            )
+        ).all()
+    )
+    # Одноимённых маршрутов до миграции быть не могло (uq на name), а после —
+    # обязаны: это и есть проверка, что ограничение снято.
+    same_name = list(
+        (
+            await conn.execute(
+                text(
+                    "SELECT name, count(*) FROM production_routes "
+                    "WHERE name LIKE 'ГП - Серебро%' GROUP BY name"
+                )
+            )
+        ).all()
+    )
+    constraint = (
+        await conn.execute(
+            text(
+                "SELECT count(*) FROM pg_constraint "
+                "WHERE conname = 'uq_production_routes_name'"
+            )
+        )
+    ).scalar_one()
+    return [codes, same_name, constraint]
+
+
+@pytest.mark.asyncio
+async def test_migration_071_assigns_route_codes_and_drops_name_unique(tmp_path: Path):
+    """#230 (ADR-0051): код маршрута импорта — из сигнатуры, имя перестаёт быть ключом.
+
+    Проверяем три вещи: код проставлен по формуле
+    ``app.services.route_signature.auto_route_code`` (прод обязан узнать в
+    своих маршрутах своих же), дубль состава под другим именем кода не
+    получил, а ограничение уникальности имени снято — иначе второй маршрут
+    с тем же именем не создался бы вовсе.
+    """
+    db_name = f"ktm_mig_{uuid.uuid4().hex[:10]}"
+    admin_url = _test_db_url().rsplit("/", 1)[0] + "/postgres"
+    target_url = _test_db_url().rsplit("/", 1)[0] + f"/{db_name}"
+
+    admin_engine = create_async_engine(admin_url, isolation_level="AUTOCOMMIT")
+    async with admin_engine.connect() as conn:
+        await conn.execute(text(f'CREATE DATABASE "{db_name}"'))
+    await admin_engine.dispose()
+
+    env = _alembic_env(target_url, tmp_path)
+    engine = create_async_engine(target_url)
+
+    def _run(*args: str) -> None:
+        result = subprocess.run(
+            ["alembic", *args],
+            cwd=BACKEND_DIR,
+            env=env,
+            capture_output=True,
+            text=True,
+            check=False,
+        )
+        assert result.returncode == 0, result.stderr or result.stdout
+
+    try:
+        _run("upgrade", _MIG071_PREV)
+        async with engine.begin() as conn:
+            await _seed_mig071_routes(conn)
+
+        async with engine.connect() as conn:
+            before = await _mig071_state(conn)
+        # Фикстура: импортных маршрутов два, кода у них нет, ограничение
+        # имени на месте.
+        assert before[2] == 1
+        assert dict(before[0])["ГП - Серебро - Стрейч"] is None
+
+        _run("upgrade", "head")
+        async with engine.connect() as conn:
+            after = await _mig071_state(conn)
+
+        from app.services.route_signature import auto_route_code
+
+        codes = dict(after[0])
+        shared_signature = (
+            "transit:MIG071-FG::0:0:0"
+            ">production:MIG071-PACK:PACK_STRETCH:0:0:1"
+        )
+        # Главное: код совпадает с тем, что считает приложение. Иначе прод
+        # не узнал бы в своих маршрутах своих же и завёл бы дубль каждому.
+        assert codes["ГП - Серебро - Стрейч"] == auto_route_code(shared_signature)
+        # Дубль того же состава кода НЕ получает: один состав — один код,
+        # иначе уникальный индекс падает. Он остаётся находимым по имени.
+        assert codes["Дубль состава под другим именем"] is None
+        # Без этапов сигнатуры нет — кода нет.
+        assert codes["Без этапов"] is None
+        # Сид-маршрут завода не трогаем.
+        assert codes["Сид-маршрут"] == "universal_rp"
+        # Ограничение уникальности имени снято.
+        assert after[2] == 0
+
+        # Главное следствие снятия ограничения: маршрут с ТЕМ ЖЕ именем, но
+        # своим составом, теперь создаётся. До #230 это было невозможно.
+        async with engine.begin() as conn:
+            await conn.execute(
+                text(
+                    "INSERT INTO production_routes (name, code, is_active, route_signature) "
+                    "VALUES ('ГП - Серебро - Стрейч', 'mig071-samename', true, :sig)"
+                ),
+                {"sig": shared_signature + ">transit:MIG071-FG::0:0:1"},
+            )
+        async with engine.connect() as conn:
+            same_name = await _mig071_state(conn)
+        assert same_name[1] == [("ГП - Серебро - Стрейч", 2)]
+
+        # Идемпотентность: повторный прогон (stamp назад + upgrade head) —
+        # ни коды, ни имена не меняются.
+        _run("stamp", _MIG071_PREV)
+        _run("upgrade", "head")
+        async with engine.connect() as conn:
+            assert await _mig071_state(conn) == same_name
+
+        # Downgrade возвращает прежние коды и уникальность имени. Одноимённую
+        # пару убираем: с ней ограничение не восстановится, и downgrade
+        # обязан на этом честно упасть (см. docstring миграции).
+        async with engine.begin() as conn:
+            await conn.execute(
+                text("DELETE FROM production_routes WHERE code = 'mig071-samename'")
+            )
+        _run("downgrade", _MIG071_PREV)
+        async with engine.connect() as conn:
+            reverted = await _mig071_state(conn)
+            leftover = (
+                await conn.execute(
+                    text(
+                        "SELECT count(*) FROM information_schema.tables "
+                        "WHERE table_schema = 'public' AND table_name = 'route_code_migration'"
+                    )
+                )
+            ).scalar_one()
+        assert reverted[2] == 1, "уникальность имени обязана вернуться"
+        assert leftover == 0
+        # Прежние коды возвращены: у импортных маршрутов кода не было.
+        assert dict(reverted[0])["ГП - Серебро - Стрейч"] is None
+        assert dict(reverted[0])["Дубль состава под другим именем"] is None
+        assert dict(reverted[0])["Сид-маршрут"] == "universal_rp"
+    finally:
+        await engine.dispose()
+        admin_engine = create_async_engine(admin_url, isolation_level="AUTOCOMMIT")
+        async with admin_engine.connect() as conn:
+            await conn.execute(text(f'DROP DATABASE IF EXISTS "{db_name}" WITH (FORCE)'))
+        await admin_engine.dispose()

@@ -268,7 +268,14 @@ async def run_full_route_test(
     if payload.route_id is not None:
         route = await db.get(ProductionRoute, payload.route_id)
     if route is None:
-        route = await db.scalar(select(ProductionRoute).where(ProductionRoute.name == payload.route_name))
+        # ``limit(1)``: имя — подпись, а не ключ (ADR-0051), и одинаковых
+        # имён у разных маршрутов в базе теперь может быть несколько.
+        route = await db.scalar(
+            select(ProductionRoute)
+            .where(ProductionRoute.name == payload.route_name)
+            .order_by(ProductionRoute.id)
+            .limit(1)
+        )
     if route is None:
         raise HTTPException(status_code=404, detail="Route not found")
     if not route.is_active:

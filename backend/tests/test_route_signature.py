@@ -32,6 +32,7 @@ from app.models.route import (
     ProductionRoute,
     RouteOperation,
     RouteRuleProfile,
+    RouteSelectionRule,
     RouteStage,
     SectionOperation,
 )
@@ -41,6 +42,7 @@ from app.services.plan_import_service import _make_change_items
 from app.services.production_plan_service import apply_change_set
 from app.services.route_builder import build_route_from_profile
 from app.services.route_signature import (
+    auto_route_code,
     encode_signature,
     signature_for_route_stages,
     signature_steps_from_stages,
@@ -647,3 +649,179 @@ async def test_conflicting_row_becomes_invalid_position_in_plan(session) -> None
     assert positions[0].status == PlanPositionStatus.invalid
     assert "route_signature_conflict" in positions[0].validation_errors
     assert positions[0].route_id is None
+
+
+# --- #230: идентичность маршрута импорта — код, а не имя -------------------
+
+
+PACKING_GROUP = "PACK"
+SECOND_PACKING_OP = "PACK_SPUNBOND"
+
+
+async def _add_packing_variants(session) -> None:
+    """Вторая операция упаковки в своей группе участка и правило выбора.
+
+    Нужна, чтобы получить ДВА разных состава при ОДНОМ имени: имя
+    профиля — ``{output_kind}``, то есть константа, а состав меняет
+    операция упаковки, выбираемая правилом по значению строки. Ровно этот
+    случай и порождал ``route_signature_conflict`` до #230.
+    """
+    packing = await session.scalar(select(Section).where(Section.code == "PACKING"))
+    session.add(SectionOperation(
+        section_id=packing.id,
+        operation_code=SECOND_PACKING_OP,
+        operation_name="Спанбонд",
+        group_code=PACKING_GROUP,
+        group_name="Упаковка",
+        is_significant=False,
+        sort_order=2,
+    ))
+    await session.flush()
+
+    profile = await session.scalar(
+        select(RouteRuleProfile).where(RouteRuleProfile.code == "sig_shared_name")
+    )
+    for index, (value, operation_code) in enumerate(
+        (("спанбонд", SECOND_PACKING_OP), ("стрейч", "PACK_STRETCH"))
+    ):
+        session.add(RouteSelectionRule(
+            code=f"shared_name_pack_{index}",
+            name=f"Упаковка: {value}",
+            profile_id=profile.id,
+            priority=100,
+            is_active=True,
+            phase="resolve_operations",
+            conditions=[
+                {"source": "payload", "field_path": "pack", "operator": "equals", "value": value},
+            ],
+            actions=[
+                {
+                    "action": "set_operation",
+                    "section_code": "PACKING",
+                    "group_code": PACKING_GROUP,
+                    "operation_code": operation_code,
+                },
+            ],
+        ))
+    await session.commit()
+
+
+@pytest.mark.asyncio
+async def test_compositions_with_same_name_get_separate_routes(session) -> None:
+    """Два разных состава с ОДНИМ именем — два маршрута, а не конфликт.
+
+    До #230 вторая строка приходила в импорт как
+    ``route_signature_conflict``: имя то же, а сигнатуры разные, и БД
+    запрещала вторую строку с тем же именем вовсе. Теперь идентичность —
+    код, а имя — подпись, поэтому оба маршрута законны, имеют разные коды
+    и обе строки валидны.
+    """
+    await _seed_sections(session)
+    await _make_named_profile(session, "sig_shared_name")
+    await _add_packing_variants(session)
+    first = await _make_product(session, "FG-PACK-STRETCH")
+    second = await _make_product(session, "FG-PACK-SPUNBOND")
+
+    items, _diagnostics = await _make_change_items(
+        session,
+        change_set_id=1,
+        parsed_rows=[
+            ParsedRow("FG-PACK-STRETCH", "Артикул", Decimal("10"), {"output_kind": ROUTE_NAME, "pack": "стрейч"}),
+            ParsedRow("FG-PACK-SPUNBOND", "Артикул", Decimal("10"), {"output_kind": ROUTE_NAME, "pack": "спанбонд"}),
+        ],
+        products_by_sku={"fg-pack-stretch": first, "fg-pack-spunbond": second},
+        mode=None,
+        existing_positions=[],
+        rule_profile_id=(await session.scalar(
+            select(RouteRuleProfile).where(RouteRuleProfile.code == "sig_shared_name")
+        )).id,
+        template_id=None,
+    )
+
+    assert [item.errors for item in items] == [[], []]
+    route_ids = {item.after_data["route_id"] for item in items}
+    assert len(route_ids) == 2, "разные составы обязаны получить разные маршруты"
+
+    routes = (
+        await session.execute(select(ProductionRoute).order_by(ProductionRoute.id))
+    ).scalars().all()
+    assert len(routes) == 2
+    # Имя одно и то же — это законно; различает их код.
+    assert {route.name for route in routes} == {ROUTE_NAME}
+    assert {route.code for route in routes} == {
+        auto_route_code(route.route_signature) for route in routes
+    }
+    assert all(route.code and route.code.startswith("auto-") for route in routes)
+
+
+@pytest.mark.asyncio
+async def test_same_composition_reuses_route_across_imports(session) -> None:
+    """Повторный импорт того же состава переиспользует маршрут по коду.
+
+    Ключ переиспользования — код, поэтому второй импорт (другой батч, но та
+    же БД) находит маршрут первого и не плодит дубль. Проверяем и кэш
+    внутри батча: обе строки одного импорта получают один route_id.
+    """
+    await _seed_sections(session)
+    profile = await _make_named_profile(session, "sig_reuse_by_code")
+    product = await _make_product(session, "FG-REUSE-CODE")
+
+    first = await _import_one_row(session, profile, product, sku="FG-REUSE-CODE")
+    second = await _import_one_row(session, profile, product, sku="FG-REUSE-CODE")
+
+    assert first[0].errors == [] and second[0].errors == []
+    assert first[0].after_data["route_id"] == second[0].after_data["route_id"]
+    assert await session.scalar(
+        select(func.count(ProductionRoute.id)).where(ProductionRoute.name == ROUTE_NAME)
+    ) == 1
+
+
+@pytest.mark.asyncio
+async def test_legacy_route_without_code_is_reused_by_name(session) -> None:
+    """Маршрут, созданный импортом ДО #230 (кода нет), импорт находит по имени.
+
+    Переходное состояние существующих БД: у таких маршрутов кода ещё нет, и
+    поиск только по коду сделал бы их недостижимыми. Импорт обязан найти их
+    по имени — и, как и раньше, сверить сигнатуру, прежде чем подставить.
+    """
+    await _seed_sections(session)
+    profile = await _make_named_profile(session, "sig_legacy_fallback")
+    product = await _make_product(session, "FG-LEGACY")
+    legacy = await _make_route_with_signature(session, ROUTE_NAME, MATCHED_SIGNATURE)
+    assert legacy.code is None, "фикстура должна имитировать маршрут до #230"
+
+    items = await _import_one_row(session, profile, product, sku="FG-LEGACY")
+
+    assert items[0].errors == []
+    assert items[0].after_data["route_id"] == legacy.id
+
+
+@pytest.mark.asyncio
+async def test_legacy_route_with_other_signature_still_conflicts(session) -> None:
+    """Fallback по имени не отменяет защиту ADR-0045.
+
+    Маршрут без кода, с тем же именем и ЧУЖОЙ сигнатурой, подставлять нельзя:
+    строка получает ``route_signature_conflict`` и остаётся в плане
+    невалидной. Иначе импорт молча навесил бы на позицию маршрут, к
+    которому она отношения не имеет.
+    """
+    await _seed_sections(session)
+    profile = await _make_named_profile(session, "sig_legacy_conflict")
+    product = await _make_product(session, "FG-LEGACY-CONFLICT")
+    legacy = await _make_route_with_signature(session, ROUTE_NAME, FOREIGN_SIGNATURE)
+
+    items = await _import_one_row(session, profile, product, sku="FG-LEGACY-CONFLICT")
+
+    assert items[0].errors == ["route_signature_conflict"]
+    assert items[0].after_data.get("route_id") is None
+    await session.refresh(legacy)
+    assert legacy.name == ROUTE_NAME
+
+
+@pytest.mark.asyncio
+async def test_created_route_code_is_deterministic_for_signature() -> None:
+    """Код — функция сигнатуры: тот же состав даёт тот же код всегда."""
+    assert auto_route_code(MATCHED_SIGNATURE) == auto_route_code(MATCHED_SIGNATURE)
+    assert auto_route_code(MATCHED_SIGNATURE) != auto_route_code(FOREIGN_SIGNATURE)
+    # Маршрут без этапов сигнатуры не имеет — кода тоже.
+    assert auto_route_code("") is None

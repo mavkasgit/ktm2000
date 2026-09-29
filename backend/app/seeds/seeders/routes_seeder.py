@@ -57,10 +57,19 @@ async def seed_routes(
     result: dict[str, ProductionRoute] = {}
 
     for template in routes_data:
-        # Upsert by code, fallback to name for legacy
+        # Upsert by code, fallback to name for legacy. По имени ищем только
+        # строки БЕЗ кода (#230, ADR-0051): код — идентичность маршрута, и
+        # маршрут, уже имеющий чужой код, нельзя переименовыванием в наш
+        # переделать. ``limit(1)`` — одинаковых имён теперь может быть
+        # сколько угодно, и ``db.scalar`` на нескольких строках raises.
         route = await db.scalar(select(ProductionRoute).where(ProductionRoute.code == template["code"]))
         if route is None:
-            route = await db.scalar(select(ProductionRoute).where(ProductionRoute.name == template["name"]))
+            route = await db.scalar(
+                select(ProductionRoute)
+                .where(ProductionRoute.name == template["name"], ProductionRoute.code.is_(None))
+                .order_by(ProductionRoute.id)
+                .limit(1)
+            )
 
         if route is None:
             route = ProductionRoute(
@@ -260,11 +269,18 @@ async def seed_production_routes_from_profiles(
         route_name = f"Dynamic: {profile.name}"
         route_code = f"dynamic_{profile.code}"
 
-        # Check if route already exists
+        # Check if route already exists. По имени — только среди строк без
+        # кода: код идентифицирует маршрут (#230, ADR-0051), и найденный
+        # по имени маршрут с чужим кодом переписывать нельзя. ``limit(1)`` —
+        # одинаковых имён у разных маршрутов теперь может быть несколько.
         route = await db.scalar(
-            select(ProductionRoute).where(
-                (ProductionRoute.code == route_code) | (ProductionRoute.name == route_name)
+            select(ProductionRoute)
+            .where(
+                (ProductionRoute.code == route_code)
+                | ((ProductionRoute.name == route_name) & ProductionRoute.code.is_(None))
             )
+            .order_by(ProductionRoute.id)
+            .limit(1)
         )
 
         if route is None:

@@ -17,8 +17,9 @@ from app.models.production_plan import (
 )
 from app.models.route import ProductionRoute, RouteRuleProfile
 from app.services.color_extraction import resolve_payload_color
-from app.services.route_selection import RouteCandidateDiagnostic, select_route_for_payload
 from app.services.route_builder import build_route_from_profile
+from app.services.route_selection import RouteCandidateDiagnostic, select_route_for_payload
+from app.services.route_signature import auto_route_code
 
 
 @dataclass(slots=True)
@@ -97,17 +98,26 @@ async def _resolve_route_id_for_dynamic_name(
     db: AsyncSession,
     *,
     built_name: str,
+    built_signature: str = "",
     stored_route_id: int | None,
     route_cache: dict | None = None,
 ) -> int | None:
-    """`route_id` позиции по пересобранному имени; `None` — не нашли.
+    """`route_id` позиции по пересобранному маршруту; `None` — не нашли.
 
-    Порядок: сохранённое назначение (если имя совпало) → поиск по имени →
-    сохранённое назначение как последний выход. Имя пересборки берётся из
-    шаблона профиля (`{output_kind} - {operations}`), и на части позиций оно
-    не совпадает с сохранённым. Раньше это обнуляло назначение: позиция
-    отдавала `route_not_found`, а take-to-work отказывал с HTTP 200
-    «No route found for this position» — при живом, назначенном маршруте.
+    Порядок: сохранённое назначение (если имя совпало) → поиск по коду из
+    сигнатуры → поиск по имени → сохранённое назначение как последний выход.
+    Имя пересборки берётся из шаблона профиля (`{output_kind} - {operations}`),
+    и на части позиций оно не совпадает с сохранённым. Раньше это обнуляло
+    назначение: позиция отдавала `route_not_found`, а take-to-work отказывал
+    с HTTP 200 «No route found for this position» — при живом, назначенном
+    маршруте.
+
+    Поиск по коду (#230, ADR-0051) обязателен, а не оптимизация: имя —
+    подпись, и два разных маршрута законно носят одно имя (ADR-0045). Без
+    кода резолв выбирал бы «самый свежий» из одноимённых и мог указать
+    позиции на маршрут чужого состава. По имени ищем только строки без кода
+    (маршруты, созданные импортом до #230) — у маршрута с кодом своя
+    идентичность, и подменять её догадкой по имени нельзя.
 
     Возвращается только id, а `route_name` вызывающий берёт из пересборки
     намеренно: страница плана обязана показывать то же имя, что и предпросмотр
@@ -123,9 +133,22 @@ async def _resolve_route_id_for_dynamic_name(
         route = await _cached_route(db, stored_route_id, route_cache)
         if route is not None and route.name == built_name and route.is_active:
             return route.id
+    built_code = auto_route_code(built_signature)
+    if built_code is not None:
+        matched = await db.scalar(
+            select(ProductionRoute.id)
+            .where(ProductionRoute.code == built_code, ProductionRoute.is_active.is_(True))
+            .limit(1)
+        )
+        if matched is not None:
+            return matched
     matched = await db.scalar(
         select(ProductionRoute.id)
-        .where(ProductionRoute.name == built_name, ProductionRoute.is_active.is_(True))
+        .where(
+            ProductionRoute.name == built_name,
+            ProductionRoute.code.is_(None),
+            ProductionRoute.is_active.is_(True),
+        )
         .order_by(ProductionRoute.id.desc())
         .limit(1)
     )
@@ -148,7 +171,6 @@ async def _cached_route(
     if route_cache is not None:
         route_cache[route_id] = route
     return route
-
 
 
 def make_position_route_cache_key(position: PlanPosition) -> tuple:
@@ -233,6 +255,7 @@ async def resolve_position_route(
                     resolved_route_id = await _resolve_route_id_for_dynamic_name(
                         db,
                         built_name=built_route.name,
+                        built_signature=built_route.signature,
                         stored_route_id=route_id,
                         route_cache=route_cache,
                     )

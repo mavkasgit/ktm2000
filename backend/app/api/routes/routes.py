@@ -304,8 +304,15 @@ async def get_route(route_id: int, db: AsyncSession = Depends(get_db)) -> RouteD
 
 @router.post("", response_model=RouteOut, status_code=status.HTTP_201_CREATED, dependencies=[Depends(require_role(list(NON_VIEWER_ROLES)))])
 async def create_route(payload: RouteCreate, db: AsyncSession = Depends(get_db)) -> RouteOut:
-    # Check unique name
-    existing = await db.scalar(select(ProductionRoute).where(ProductionRoute.name == payload.name))
+    # Имя — подпись, а не ключ (ADR-0045, ADR-0051): одинаковые имена у
+    # разных маршрутов законны, и БД их теперь допускает. Для маршрута,
+    # который оператор завёл руками, совпадение имени — всё же почти
+    # наверняка ошибка, поэтому предупреждаем. ``limit(1)`` обязателен:
+    # без него ``db.scalar`` на нескольких строках raises, а совпадений
+    # теперь может быть сколько угодно.
+    existing = await db.scalar(
+        select(ProductionRoute).where(ProductionRoute.name == payload.name).limit(1)
+    )
     if existing:
         raise HTTPException(status_code=409, detail="Route with this name already exists")
     route = ProductionRoute(name=payload.name, description=payload.description, is_active=payload.is_active)
@@ -321,7 +328,11 @@ async def update_route(route_id: int, payload: RouteUpdate, db: AsyncSession = D
     if route is None:
         raise HTTPException(status_code=404, detail="Route not found")
     if payload.name is not None:
-        existing = await db.scalar(select(ProductionRoute).where(ProductionRoute.name == payload.name, ProductionRoute.id != route_id))
+        existing = await db.scalar(
+            select(ProductionRoute)
+            .where(ProductionRoute.name == payload.name, ProductionRoute.id != route_id)
+            .limit(1)
+        )
         if existing:
             raise HTTPException(status_code=409, detail="Route with this name already exists")
         route.name = payload.name
