@@ -136,11 +136,41 @@ export type CacheAction = keyof typeof CACHE_ACTIONS;
  * пользователя, и (в будущем) события с сервера.
  */
 export function invalidateDomains(queryClient: QueryClient, domains: readonly CacheDomain[]): Promise<void> {
-  return Promise.all(
-    domains.flatMap((domain) =>
-      CACHE_DOMAIN_KEYS[domain].map((queryKey) => queryClient.invalidateQueries({ queryKey: [...queryKey] })),
-    ),
-  ).then(() => undefined);
+  const invalidated = domains.flatMap((domain) =>
+    CACHE_DOMAIN_KEYS[domain].map((queryKey) => queryClient.invalidateQueries({ queryKey: [...queryKey] })),
+  );
+
+  // Добивающий refetch для записей, которые ещё НИКОГДА не получили данных.
+  //
+  // Найдено на живом E2E (`full-cycle`): запись строк «Контроля выполнения»,
+  // созданная debounce'ом поиска, к моменту инвалидации ещё не отдала ни
+  // одного результата. Её первый GET уходит ДО коммита мутации, поэтому
+  // сервер честно отвечает прежним состоянием, а `invalidateQueries` для
+  // записи без данных последующего refetch не заводит. Устаревший ответ
+  // закрепляется в кэше навсегда: экран остаётся на «Утверждён» после
+  // запуска позиции в работу, пока не случится F5.
+  //
+  // Именно `state.data === undefined`, а не `dataUpdateCount === 0`:
+  // счётчик — свойство истории обновлений, а «данных ещё нет» — это
+  // состояние query. И важно, что выборка узкая: записи с данными (и тем
+  // более активные) ведут себя как раньше, а неактивные записи других
+  // доменов не превращаются в prefetch (`refetchType: "all"` был бы
+  // расширением контракта механизма ради одного случая).
+  const awaitingFirstData = domains
+    .flatMap((domain) => CACHE_DOMAIN_KEYS[domain].map((queryKey) => [...queryKey] as const))
+    .flatMap((queryKey) => queryClient.getQueryCache().findAll({ queryKey: [...queryKey] }))
+    .filter((query) => query.state.data === undefined);
+
+  // Дождаться текущего (уже ушедшего до коммита) ответа и только после него
+  // перезапросить: `refetchQueries` для записи В ПОЛЁТЕ молча пропускает её.
+  // Поэтому «сначала дождаться, потом refetch» — единственный порядок, при
+  // котором свежий запрос действительно уходит.
+  const refetchAfterInFlight = awaitingFirstData.map(async (query) => {
+    await query.promise?.catch(() => undefined);
+    await queryClient.refetchQueries({ queryKey: query.queryKey });
+  });
+
+  return Promise.all([...invalidated, ...refetchAfterInFlight]).then(() => undefined);
 }
 
 /**

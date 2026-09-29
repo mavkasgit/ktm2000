@@ -1,4 +1,4 @@
-import { QueryClient } from "@tanstack/react-query";
+import { QueryClient, QueryObserver } from "@tanstack/react-query";
 import { describe, expect, it } from "vitest";
 
 import { CACHE_ACTIONS, invalidateAfter, invalidateDomains, invalidateEverything } from "./cacheInvalidation";
@@ -21,6 +21,35 @@ function clientWithKeys(keys: readonly (readonly unknown[])[]) {
 
 const invalidated = (queryClient: QueryClient, queryKey: readonly unknown[]) =>
   queryClient.getQueryState([...queryKey])?.isInvalidated === true;
+
+/**
+ * Дождаться данных в query. Резолв промиса проходит через несколько
+ * микротасков, поэтому одного `await Promise.resolve()` мало: ждём по
+ * состоянию, а не по числу тиков.
+ */
+async function untilData(queryClient: QueryClient, queryKey: readonly unknown[], expected: string) {
+  for (let i = 0; i < 100; i++) {
+    if (queryClient.getQueryData(queryKey) === expected) return;
+    await Promise.resolve();
+  }
+  throw new Error(
+    `query так и не получил ${expected}: ${JSON.stringify(queryClient.getQueryData(queryKey))}`,
+  );
+}
+
+/**
+ * Ответ, который отдаёт тест, когда он сам решит. `Promise.withResolvers`
+ * требует `lib: es2024`, а проект собран под ES2020, поэтому гейт локальный.
+ */
+type TestGate<T> = { promise: Promise<T>; resolve: (value: T) => void };
+
+function testGate<T>(): TestGate<T> {
+  let resolve!: (value: T) => void;
+  const promise = new Promise<T>((r) => {
+    resolve = r;
+  });
+  return { promise, resolve };
+}
 
 describe("реестр сброса кэша", () => {
   it("утверждение позиции сбрасывает и план, и контроль выполнения", async () => {
@@ -171,4 +200,75 @@ describe("реестр сброса кэша", () => {
     const queryClient = clientWithKeys([queryKeys.execution.rows({ limit: 50, offset: 0 })]);
     await expect(invalidateDomains(queryClient, ["execution", "plan"])).resolves.toBeUndefined();
   });
+
+  it("запись без данных после инвалидации добирает свежий ответ", async () => {
+    // Регрессия (живой баг, `full-cycle` / `single-line-cycle`): запись строк,
+    // созданная debounce'ом поиска, ещё не отдавала ни одного результата, когда
+    // пришла инвалидация после take-to-work. Её первый GET уходил ДО коммита,
+    // последующего refetch не было, и устаревший ответ навсегда оставался в
+    // кэше — строка не перерисовывалась из «Утверждён» в «Запущен».
+    // Условие боевого провала: наблюдатель есть, данных ещё нет.
+    const queryClient = new QueryClient();
+    const queryKey = queryKeys.execution.rows({ search: "ЮП-009", limit: 50, offset: 0 });
+    const gates: TestGate<string>[] = [];
+    const observer = new QueryObserver(queryClient, {
+      queryKey,
+      queryFn: () => {
+        const g = testGate<string>();
+        gates.push(g);
+        return g.promise;
+      },
+    });
+    const unsubscribe = observer.subscribe(() => {});
+    await Promise.resolve();
+    expect(gates).toHaveLength(1);
+
+    // Мутация завершилась, а первый ответ ещё в полёте. Промис инвалидации не
+    // ждём: он завершится лишь с добивающим fetch, ради которого проверка и
+    // написана, — иначе она ждала бы сама себя.
+    void invalidateAfter(queryClient, "executionChanged");
+
+    // Первый GET приходит и приносит состояние, прочитанное ДО коммита.
+    gates[0].resolve("approved");
+    await untilData(queryClient, queryKey, "approved");
+    await Promise.resolve();
+
+    // Добивающий refetch обязан был уйти после него: без него устаревший ответ
+    // остался бы единственным содержимым кэша — ровно тот баг, что ловит E2E.
+    expect(gates).toHaveLength(2);
+    gates[1].resolve("released");
+    await untilData(queryClient, queryKey, "released");
+    unsubscribe();
+  });
+
+  it("запись, у которой данные уже есть, перечитывается ровно один раз", async () => {
+    // Граница фикса: поведение записи с данными не меняется. Реестр не должен
+    // превращаться в prefetch-механизм для всего кэша.
+    const queryClient = new QueryClient();
+    const queryKey = queryKeys.execution.rows({ limit: 50, offset: 0 });
+    const gates: TestGate<string>[] = [];
+    const observer = new QueryObserver(queryClient, {
+      queryKey,
+      queryFn: () => {
+        const g = testGate<string>();
+        gates.push(g);
+        return g.promise;
+      },
+    });
+    const unsubscribe = observer.subscribe(() => {});
+    await Promise.resolve();
+    gates[0].resolve("approved");
+    await untilData(queryClient, queryKey, "approved");
+
+    void invalidateAfter(queryClient, "executionChanged");
+    await Promise.resolve();
+    await Promise.resolve();
+
+    // Ровно одна перечитка — как до фикса, никакого второго запроса.
+    expect(gates).toHaveLength(2);
+    gates[1].resolve("released");
+    await untilData(queryClient, queryKey, "released");
+    unsubscribe();
+  });
+
 });
