@@ -226,6 +226,10 @@ class RouteSignatureStepOut(BaseModel):
     is_significant: bool
     transforms_dimensions: bool
     is_final: bool
+    # Подписи для человека. В тождество маршрута не входят: вердикт
+    # считается по кодам. Optional — старый ответ без них остаётся валидным.
+    section_name: str | None = None
+    operation_names: list[str] = []
 
 
 class RouteSignatureCheckOut(BaseModel):

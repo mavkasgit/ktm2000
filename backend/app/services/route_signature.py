@@ -74,6 +74,12 @@ class RouteSignatureStep:
     is_significant: bool
     transforms_dimensions: bool
     is_final: bool
+    # Подписи для человека: участок и операции. В тождество маршрута они
+    # НЕ входят (``encode`` их не читает) — вердикт считается только по
+    # кодам, поэтому переименование участка или операции расхождения не
+    # создаёт, а карточку не обесценивает.
+    section_name: str | None = None
+    operation_names: tuple[str, ...] = ()
 
     def encode(self) -> str:
         return _FIELD_SEP.join((
@@ -93,6 +99,8 @@ class RouteSignatureStep:
             "is_significant": self.is_significant,
             "transforms_dimensions": self.transforms_dimensions,
             "is_final": self.is_final,
+            "section_name": self.section_name,
+            "operation_names": list(self.operation_names),
         }
 
 
@@ -122,6 +130,8 @@ def signature_steps_from_built_steps(steps: Sequence[BuiltRouteStep]) -> list[Ro
             is_significant=any(step.is_significant for step in group),
             transforms_dimensions=any(step.transforms_dimensions for step in group),
             is_final=any(step.is_final for step in group),
+            section_name=group[0].section_name,
+            operation_names=tuple(step.operation_name for step in group),
         )
         for group in grouped
     ]
@@ -154,6 +164,14 @@ def signature_steps_from_stages(stages: Sequence[RouteStage]) -> list[RouteSigna
             is_significant=stage.is_significant,
             transforms_dimensions=stage.transforms_dimensions,
             is_final=stage.is_final,
+            # Имя участка — текущее из справочника (``Section.name`` не
+            # денормализовано в этапе), имя операции — снимок на момент
+            # записи маршрута (``RouteOperation.operation_name``).
+            section_name=(
+                stage.storage_section.name if stage.storage_section is not None
+                else stage.section.name if stage.section is not None else None
+            ),
+            operation_names=tuple(op.operation_name for op in stage.operations),
         )
         for stage in sorted(stages, key=lambda item: item.sequence)
     ]

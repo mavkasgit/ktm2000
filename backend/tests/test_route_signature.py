@@ -396,6 +396,88 @@ async def test_route_check_shows_matching_signatures(client, session) -> None:
     ]
 
 
+
+SECTION_NAMES_BY_CODE = {
+    "RAW_STOCK": "Склад сырья",
+    "SAWING": "Пила",
+    "PACKING": "Упаковка",
+    "FINISHED_STOCK": "Склад готовой продукции",
+}
+
+
+def _assert_section_names_from_catalog(steps: list) -> None:
+    """Имя участка в проверке — из справочника, а не из кода."""
+    for step in steps:
+        assert step["section_name"] == SECTION_NAMES_BY_CODE[step["section_code"]]
+
+
+@pytest.mark.asyncio
+async def test_route_check_shows_section_and_operation_names(client, session) -> None:
+    """Проверка маршрута подписывает шаги по-русски: участок — именем из
+    справочника, производственный шаг — именами операций, столько же,
+    сколько кодов, чтобы строки читались, а не угадывались.
+    """
+    await _seed_sections(session)
+    profile = await _make_profile(session)
+    route = await _make_route_with_signature(session, "Совпадающий", MATCHED_SIGNATURE)
+    plan, position = await _make_position_with_route(session, profile, route)
+
+    response = await client.get(
+        f"/api/production-plans/{plan.id}/positions/{position.id}/route-check"
+    )
+
+    assert response.status_code == 200
+    check = response.json()["route_signature"]
+    _assert_section_names_from_catalog(check["expected_steps"])
+    _assert_section_names_from_catalog(check["actual_steps"])
+
+    # Ожидаемая сторона собрана профилем: имена операций — из справочника.
+    expected_names = {
+        step["section_code"]: step["operation_names"]
+        for step in check["expected_steps"]
+    }
+    assert expected_names["SAWING"] == ["Распил"]
+    assert expected_names["PACKING"] == ["Стрейч"]
+
+    # Фактическая сторона — записанные этапы: у каждой операции столько же
+    # имён, сколько кодов, и ни одного шага без имён.
+    for step in check["actual_steps"]:
+        assert len(step["operation_names"]) == len(step["operation_codes"])
+        if step["stage_kind"] == "production":
+            assert step["operation_names"]
+
+
+@pytest.mark.asyncio
+async def test_route_check_section_rename_keeps_verdict_and_signature(client, session) -> None:
+    """Переименование участка — подпись, а не тождество: вердикт и обе
+    сигнатуры прежние (нового имени в них нет), но оператор видит в шагах
+    маршрута актуальное название участка.
+    """
+    await _seed_sections(session)
+    profile = await _make_profile(session)
+    route = await _make_route_with_signature(session, "Совпадающий", MATCHED_SIGNATURE)
+    plan, position = await _make_position_with_route(session, profile, route)
+    url = f"/api/production-plans/{plan.id}/positions/{position.id}/route-check"
+
+    before = (await client.get(url)).json()["route_signature"]
+    assert before["verdict"] == "match"
+
+    sawing = await session.scalar(select(Section).where(Section.code == "SAWING"))
+    sawing.name = "Пиление корпусов"
+    await session.commit()
+    await session.refresh(sawing)
+
+    after = (await client.get(url)).json()["route_signature"]
+
+    assert after["verdict"] == "match"
+    assert after["expected"] == MATCHED_SIGNATURE
+    assert after["actual"] == MATCHED_SIGNATURE
+    assert "Пиление корпусов" not in after["actual"]
+    assert {step["section_code"]: step["section_name"] for step in after["actual_steps"]}[
+        "SAWING"
+    ] == "Пиление корпусов"
+
+
 @pytest.mark.asyncio
 async def test_route_check_reports_mismatch_and_blocks_nothing(auth_client, session) -> None:
     """Расхождение видно в проверке, но утверждение позиции работает как раньше."""

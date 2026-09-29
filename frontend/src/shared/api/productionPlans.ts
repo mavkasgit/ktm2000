@@ -334,6 +334,9 @@ export type RouteSignatureStep = {
   is_significant: boolean;
   transforms_dimensions: boolean;
   is_final: boolean;
+  /** Подписи для человека; в тождество маршрута не входят. */
+  section_name?: string | null;
+  operation_names?: string[];
 };
 
 /** Сигнатура маршрута позиции: ожидаемая, фактическая и вердикт (#214). */
