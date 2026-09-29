@@ -13,7 +13,7 @@ import { DataTableColumnHeader } from "./DataTableColumnHeader";
 import { TablePanelHeader } from "./TablePanelHeader";
 import { TableCornerResetCell, TableCornerResetHeader } from "./TableCornerResetHeader";
 import { TablePaginationFooter } from "./TablePaginationFooter";
-import { DATA_TABLE_STYLES } from "@/shared/lib/dataTableStyles";
+import { DATA_TABLE_STYLES, TABLE_ROW_DENSE } from "@/shared/lib/dataTableStyles";
 import { useFilterableTable } from "@/shared/hooks/useFilterableTable";
 import { usePaginatedTableQuery } from "@/shared/hooks/usePaginatedTableQuery";
 import { buildColumnApiParams } from "@/shared/lib/columnSpecs";
@@ -69,7 +69,14 @@ export interface StockBalancesPanelProps {
   enabled?: boolean;
 }
 
-const headerCellClass = `${DATA_TABLE_STYLES.headerRow} ${DATA_TABLE_STYLES.headerCell}`;
+/**
+ * Ячейка тела «Остатков». Отступ по вертикали — 2px: высоту строки держит
+ * закреплённый `rowHeightPx` (32px), а не отступ, поэтому `py-1` здесь
+ * добавлял бы к строке лишний пиксель вместе с `border-b`.
+ */
+const BALANCE_CELL_CLASS = "px-2 py-0.5";
+
+const headerCellClass = `${DATA_TABLE_STYLES.headerRow} ${DATA_TABLE_STYLES.headerCell} ${TABLE_ROW_DENSE.headerCell}`;
 
 export function StockBalancesPanel({
   locationId,
@@ -284,8 +291,16 @@ export function StockBalancesPanel({
                       </tr>
                     ) : (
                     balances.map((b) => (
-                      <tr key={b.id} className="border-b hover:bg-muted/30">
-                        <td className="p-2">
+                      <tr
+                        key={b.id}
+                        // Высота закреплена, как на доске: содержимое «Операций»
+                        // (RouteStepsDisplay) само задаёт 24px, а строки без
+                        // операций схлопывались бы до высоты текста. Ровно 32px
+                        // — та же плотность, что на «Заданиях» и «Передачах».
+                        style={{ height: TABLE_ROW_DENSE.rowHeightPx }}
+                        className="border-b hover:bg-muted/30"
+                      >
+                        <td className={BALANCE_CELL_CLASS}>
                           <button
                             type="button"
                             className="font-medium hover:text-primary transition-colors cursor-pointer"
@@ -295,30 +310,30 @@ export function StockBalancesPanel({
                             {b.product_sku || `#${b.product_id}`}
                           </button>
                         </td>
-                        <td className="p-2 font-semibold font-mono">
+                        <td className={`${BALANCE_CELL_CLASS} font-semibold font-mono`}>
                           {fmtQty(b.balance_qty)}
                         </td>
-                        <td className="p-2 text-xs whitespace-nowrap">
+                        <td className={`${BALANCE_CELL_CLASS} text-xs whitespace-nowrap`}>
                           {formatDimensionsLabel(b.dimensions, b.dimensions_label)}
                         </td>
-                        <td className="p-2 max-w-[280px]">
+                        <td className={`${BALANCE_CELL_CLASS} max-w-[280px]`}>
                           {b.completed_stages && b.completed_stages.length > 0 ? (
                             <RouteStepsDisplay steps={b.completed_stages} compact showIcons={false} />
                           ) : (
                             <span className="text-xs text-muted-foreground">—</span>
                           )}
                         </td>
-                        <td className="p-2">
+                        <td className={BALANCE_CELL_CLASS}>
                           <span className="text-xs font-medium text-muted-foreground">
                             {formatQualityStateLabel(b.quality_state)}
                           </span>
                         </td>
                         {!hideLocationColumn && (
-                          <td className="p-2 text-xs">
+                          <td className={`${BALANCE_CELL_CLASS} text-xs`}>
                             {b.location_name || `#${b.location_id}`}
                           </td>
                         )}
-                        <td className="p-2">
+                        <td className={BALANCE_CELL_CLASS}>
                           <button
                             type="button"
                             className="text-xs text-muted-foreground hover:text-primary cursor-pointer"

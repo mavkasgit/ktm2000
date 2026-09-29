@@ -73,7 +73,7 @@ import { formatDimensionsFilterValue, formatDimensionsLabel } from "@/shared/api
 import { buildColumnApiParams } from "@/shared/lib/columnSpecs";
 import { isFirstRowsLoad, keepPreviousDataForScope } from "@/shared/lib/tableQueryPlaceholder";
 import { historyColumns, readyColumns } from "../lib/transferColumns";
-import { TABLE_ROW_COMPACT } from "@/shared/lib/dataTableStyles";
+import { TABLE_ROW_COMPACT, TABLE_ROW_DENSE } from "@/shared/lib/dataTableStyles";
 import { cn } from "@/shared/utils/cn";
 import {
   useBulkSelection,
@@ -106,16 +106,25 @@ import { fmtQty } from "@/shared/lib/quantityFormat";
 import { actionReasonText, type ActionReasonCode } from "@/shared/lib/actionReasons";
 
 /**
- * Уточнение компактной строки для таблиц «Передачи» (ADR-0033): действие и
- * поле количества на 4px ниже, чем в общем наборе, — строка «Готово к передаче»
- * сама по себе держит в себе только номер этапа, поэтому контролам не нужен
- * базовый `h-8`, а стока — 41px. Уменьшение самих контролов (а не сдвиг
- * `translate`) действительно укорачивает строку, а не прижимает её к низу.
+ * Плотность строки «Передачи» — общий уточнённый набор 32px (ADR-0033), тот
+ * же, что у доски участков и «Остатков». Раньше здесь был свой набор на 37px:
+ * строки расходились на пять пикселей, а `rowHeightPx` оставался общим (40) —
+ * виртуализация считала по одной высоте, а строки были другими.
+ *
+ * Поле количества повторяет высоту действия: иначе строка растёт от него.
+ * `rowHeightPx` общий с доской: высота строки закреплена прямо на `<tr>`,
+ * поэтому `border-b` от `TableRow` больше не добавляет к строке пиксель, и
+ * все три таблицы дают ровно 32px. Константа обязана совпадать с измеренной
+ * высотой — по ней виртуализация ставит полосу обрыва (ADR-0030).
  */
 const TRANSFERS_ROW = {
-  ...TABLE_ROW_COMPACT,
-  actionButton: "h-7 px-2 text-xs",
-  quantityInput: "h-7",
+  ...TABLE_ROW_DENSE,
+  // Отступ по вертикали — 2px, а не 4px: у этой таблицы `border-collapse`, и
+  // её `border-b` добавил бы к строке ещё пиксель сверх общих 32. Высота держит
+  // закреплённый ниже `rowHeightPx`, поэтому 24px действия укладываются с запасом.
+  cell: "px-2 py-0.5",
+  quantityInput: "h-6",
+  rowHeightPx: TABLE_ROW_DENSE.rowHeightPx,
 } as const;
 
 function conflictHintFromTransferError(message: string): string | null {
@@ -350,11 +359,15 @@ function ReadyTransferRow({
       // `rows.first()` уводит клик в соседнюю строку при refetch, а текст
       // строки меняется на «Отправка…» прямо во время ожидания.
       data-row-key={readyRowIdentity(task)}
+      // Высота строки закреплена: без неё строка равна сумме контента и
+      // `border-b` от `TableRow`, то есть 33px вместо общих 32. Ячейки не
+      // сжимаются — 24px действия плюс 4px отступа укладываются с запасом.
+      style={{ height: TRANSFERS_ROW.rowHeightPx }}
       className={bulkMode ? "cursor-pointer hover:bg-muted/50" : undefined}
       onClick={bulkMode ? onSelect : undefined}
     >
       {bulkMode && (
-        <TableCell className="${TABLE_ROW_COMPACT.cell} w-[40px]" onClick={(e) => e.stopPropagation()}>
+        <TableCell className={`${TRANSFERS_ROW.cell} w-[40px]`} onClick={(e) => e.stopPropagation()}>
           <Checkbox
             checked={isSelected}
             disabled={isFinalRow}
@@ -363,15 +376,15 @@ function ReadyTransferRow({
           />
         </TableCell>
       )}
-      <TableCell className="${TABLE_ROW_COMPACT.cell} font-mono text-xs text-muted-foreground">#{task.plan_position_id}</TableCell>
-      <TableCell className={TABLE_ROW_COMPACT.cell}>{task.product_sku ?? "—"}</TableCell>
-      <TableCell className="${TABLE_ROW_COMPACT.cell} text-xs text-muted-foreground whitespace-nowrap">
+      <TableCell className={`${TRANSFERS_ROW.cell} font-mono text-xs text-muted-foreground`}>#{task.plan_position_id}</TableCell>
+      <TableCell className={TRANSFERS_ROW.cell}>{task.product_sku ?? "—"}</TableCell>
+      <TableCell className={`${TRANSFERS_ROW.cell} text-xs text-muted-foreground whitespace-nowrap`}>
         {formatDimensionsLabel(task.dimensions, task.dimensions_label)}
       </TableCell>
-      <TableCell className="${TABLE_ROW_COMPACT.cell} text-xs whitespace-nowrap">
+      <TableCell className={`${TRANSFERS_ROW.cell} text-xs whitespace-nowrap`}>
         {task.operation_name ?? "—"}
       </TableCell>
-      <TableCell className="${TABLE_ROW_COMPACT.cell} text-right tabular-nums">
+      <TableCell className={`${TRANSFERS_ROW.cell} text-right tabular-nums`}>
         <div className="whitespace-nowrap">
           <span className="font-medium">{fmtQty(task.transferable_quantity)} шт.</span>{" "}
           <span className="text-[11px] text-muted-foreground">
@@ -385,7 +398,7 @@ function ReadyTransferRow({
         </div>
       </TableCell>
       <TableCell
-        className="${TABLE_ROW_COMPACT.cell} text-xs whitespace-nowrap"
+        className={`${TRANSFERS_ROW.cell} text-xs whitespace-nowrap`}
         title={task.has_next_step ? nextStepLabel(task.next_operation_name, task.next_section_name) : undefined}
       >
         {task.has_next_step ? (
@@ -402,7 +415,7 @@ function ReadyTransferRow({
         )}
       </TableCell>
       {!bulkMode && (
-        <TableCell className={TABLE_ROW_COMPACT.cell} onClick={(e) => e.stopPropagation()}>
+        <TableCell className={TRANSFERS_ROW.cell} onClick={(e) => e.stopPropagation()}>
           <div className="flex items-center justify-end gap-2">
             <div className="flex items-center gap-1">
               <Input
@@ -522,13 +535,14 @@ function ReadyTransferGroupRow({
   return (
     <TableRow
       data-row-kind="ready-group"
+      style={{ height: TRANSFERS_ROW.rowHeightPx }}
       className={`border-y border-border/60 bg-muted/50 font-semibold hover:bg-muted ${
         bulkMode ? "" : "cursor-pointer"
       }`}
       onClick={bulkMode ? undefined : onToggleCollapse}
     >
-      {bulkMode && <TableCell className="${TABLE_ROW_COMPACT.cell} w-[40px]" />}
-      <TableCell className="${TABLE_ROW_COMPACT.cell} text-center">
+      {bulkMode && <TableCell className={`${TRANSFERS_ROW.cell} w-[40px]`} />}
+      <TableCell className={`${TRANSFERS_ROW.cell} text-center`}>
         <button
           className="p-1 hover:bg-muted rounded transition-colors text-muted-foreground"
           title={bulkMode ? "Группа раскрыта для ручного выбора" : isCollapsed ? "Раскрыть" : "Скрыть"}
@@ -545,7 +559,7 @@ function ReadyTransferGroupRow({
           )}
         </button>
       </TableCell>
-      <TableCell className={TABLE_ROW_COMPACT.cell}>
+      <TableCell className={TRANSFERS_ROW.cell}>
         <div className="flex items-center gap-2">
           <span>{group.productSku ?? "—"}</span>
           <Badge variant="secondary" className="font-bold">
@@ -553,13 +567,13 @@ function ReadyTransferGroupRow({
           </Badge>
         </div>
       </TableCell>
-      <TableCell className="${TABLE_ROW_COMPACT.cell} text-xs text-muted-foreground whitespace-nowrap">
+      <TableCell className={`${TRANSFERS_ROW.cell} text-xs text-muted-foreground whitespace-nowrap`}>
         {common.dimensionsLabel ?? "—"}
       </TableCell>
-      <TableCell className="${TABLE_ROW_COMPACT.cell} text-xs whitespace-nowrap">
+      <TableCell className={`${TRANSFERS_ROW.cell} text-xs whitespace-nowrap`}>
         {common.operationName ?? "—"}
       </TableCell>
-      <TableCell className="${TABLE_ROW_COMPACT.cell} text-right tabular-nums">
+      <TableCell className={`${TRANSFERS_ROW.cell} text-right tabular-nums`}>
         {/* Как у одиночной строки: в «К передаче» — текст, редактируемое поле —
             в «Действиях». Сумма по группе, распределяется по строкам. */}
         <div className="whitespace-nowrap">
@@ -570,7 +584,7 @@ function ReadyTransferGroupRow({
         </div>
       </TableCell>
       <TableCell
-        className="${TABLE_ROW_COMPACT.cell} text-xs whitespace-nowrap"
+        className={`${TRANSFERS_ROW.cell} text-xs whitespace-nowrap`}
         title={group.hasNextStep ? nextStepLabel(common.nextOperationName, common.nextSectionName) : undefined}
       >
         {group.hasNextStep ? (
@@ -580,7 +594,7 @@ function ReadyTransferGroupRow({
         )}
       </TableCell>
       {!bulkMode && (
-        <TableCell className={TABLE_ROW_COMPACT.cell} onClick={(e) => e.stopPropagation()}>
+        <TableCell className={TRANSFERS_ROW.cell} onClick={(e) => e.stopPropagation()}>
           <div className="flex items-center justify-end gap-2">
             <div className="flex items-center gap-1">
               <Input
@@ -1246,7 +1260,7 @@ export function TransfersPage() {
                   <TableRow>
                     <TableCell
                       colSpan={bulkMode ? 8 : 8}
-                      className="${TABLE_ROW_COMPACT.cell} py-6 text-center text-sm text-muted-foreground"
+                      className={`${TRANSFERS_ROW.cell} py-6 text-center text-sm text-muted-foreground`}
                     >
                       Нет заданий, соответствующих фильтру
                     </TableCell>
@@ -1255,7 +1269,7 @@ export function TransfersPage() {
               ) : (
                 <VirtualizedTableBody
                   rows={readyTableRows}
-                  rowHeight={TABLE_ROW_COMPACT.rowHeightPx}
+                  rowHeight={TRANSFERS_ROW.rowHeightPx}
                   colSpan={bulkMode ? 8 : 8}
                   scrollContainerRef={readyScrollRef}
                   renderRow={(row) =>
@@ -1382,7 +1396,7 @@ export function TransfersPage() {
                     {historyItems.length === 0 ? (
                       <TableBody>
                         <TableRow>
-                          <TableCell colSpan={9} className="${TABLE_ROW_COMPACT.cell} py-6 text-center text-sm text-muted-foreground">
+                          <TableCell colSpan={9} className={`${TRANSFERS_ROW.cell} py-6 text-center text-sm text-muted-foreground`}>
                             Нет записей, соответствующих фильтру
                           </TableCell>
                         </TableRow>
@@ -1390,7 +1404,7 @@ export function TransfersPage() {
                     ) : (
                       <VirtualizedTableBody
                         rows={historyItems}
-                        rowHeight={TABLE_ROW_COMPACT.rowHeightPx}
+                        rowHeight={TRANSFERS_ROW.rowHeightPx}
                         colSpan={9}
                         scrollContainerRef={historyScrollRef}
                         renderRow={(t) => {
@@ -1410,29 +1424,29 @@ export function TransfersPage() {
                               className={`group cursor-pointer hover:bg-muted/50 transition-colors ${isCancelled ? "opacity-60" : ""}`}
                               onClick={() => setEditTransferRecord(t)}
                             >
-                              <TableCell className="${TABLE_ROW_COMPACT.cell} font-mono text-xs text-muted-foreground">
+                              <TableCell className={`${TRANSFERS_ROW.cell} font-mono text-xs text-muted-foreground`}>
                                 #{t.plan_position_id}
                               </TableCell>
-                              <TableCell className={TABLE_ROW_COMPACT.cell}>
+                              <TableCell className={TRANSFERS_ROW.cell}>
                                 <div className="text-xs">
                                   <div className="font-medium">{t.from_section_name}</div>
                                   <div className="text-muted-foreground">{t.from_operation_name}</div>
                                 </div>
                               </TableCell>
-                              <TableCell className={TABLE_ROW_COMPACT.cell}>
+                              <TableCell className={TRANSFERS_ROW.cell}>
                                 <div className="text-xs">
                                   <div className="font-medium">{t.to_section_name}</div>
                                   <div className="text-muted-foreground">{t.to_operation_name}</div>
                                 </div>
                               </TableCell>
-                              <TableCell className="${TABLE_ROW_COMPACT.cell} text-xs font-medium">{t.product_sku}</TableCell>
-                              <TableCell className="${TABLE_ROW_COMPACT.cell} text-xs text-muted-foreground whitespace-nowrap">
+                              <TableCell className={`${TRANSFERS_ROW.cell} text-xs font-medium`}>{t.product_sku}</TableCell>
+                              <TableCell className={`${TRANSFERS_ROW.cell} text-xs text-muted-foreground whitespace-nowrap`}>
                                 {formatDimensionsLabel(t.dimensions)}
                               </TableCell>
-                              <TableCell className="${TABLE_ROW_COMPACT.cell} text-right tabular-nums font-semibold whitespace-nowrap">
+                              <TableCell className={`${TRANSFERS_ROW.cell} text-right tabular-nums font-semibold whitespace-nowrap`}>
                                 {fmtQty(t.sent_quantity)}
                               </TableCell>
-                              <TableCell className={TABLE_ROW_COMPACT.cell}>
+                              <TableCell className={TRANSFERS_ROW.cell}>
                                 <div className="flex flex-col items-start gap-1">
                                   <div className="flex flex-wrap items-center gap-1">
                                     <Badge variant={isIncoming ? "default" : "secondary"} className="text-[10px] py-0 px-1.5 h-4">
@@ -1457,7 +1471,7 @@ export function TransfersPage() {
                                   )}
                                 </div>
                               </TableCell>
-                              <TableCell className="${TABLE_ROW_COMPACT.cell} text-right w-[40px]">
+                              <TableCell className={`${TRANSFERS_ROW.cell} text-right w-[40px]`}>
                                 <ChevronRight className="h-4 w-4 text-muted-foreground/60 transition-transform group-hover:translate-x-0.5 inline-block" />
                               </TableCell>
                               <TableCornerResetCell />
