@@ -49,6 +49,7 @@ from app.services.plan_position_hanger import PositionHangerValue, position_leng
 from app.services.route_builder import BuiltRoute, build_route_from_profile, load_route_build_batch_cache
 from app.services.route_storage_classifier import STAGE_KIND_TRANSIT, is_storage_section
 from app.services.route_signature import auto_route_code, route_signature_conflicts
+from app.services.route_identity import find_route_by_code, find_route_by_name
 
 
 #: Каталог кодов строк импорта плана (спека docs/plan-import-spec.md §3, карта #157).
@@ -623,11 +624,11 @@ async def _make_change_items(
         else None
     )
 
-    async def find_route_by_code(code: str) -> ProductionRoute | None:
+    async def find_route_by_code_cached(code: str) -> ProductionRoute | None:
         """Маршрут с таким кодом, без повторного запроса на том же коде."""
         if code in existing_route_by_code_cache:
             return existing_route_by_code_cache[code]
-        found = await db.scalar(select(ProductionRoute).where(ProductionRoute.code == code))
+        found = await find_route_by_code(db, code)
         existing_route_by_code_cache[code] = found
         return found
 
@@ -642,12 +643,7 @@ async def _make_change_items(
         """
         if name in legacy_route_by_name_cache:
             return legacy_route_by_name_cache[name]
-        found = await db.scalar(
-            select(ProductionRoute)
-            .where(ProductionRoute.name == name, ProductionRoute.code.is_(None))
-            .order_by(ProductionRoute.id)
-            .limit(1)
-        )
+        found = await find_route_by_name(db, name, legacy_name_only=True)
         legacy_route_by_name_cache[name] = found
         return found
 
@@ -673,7 +669,7 @@ async def _make_change_items(
         """
         code = auto_route_code(built.signature)
         if code is not None:
-            found = await find_route_by_code(code)
+            found = await find_route_by_code_cached(code)
             if found is not None:
                 return found, await signature_conflicts_with(found, built)
         # Код не найден (или сигнатуры нет — маршрут без этапов): ищем по
