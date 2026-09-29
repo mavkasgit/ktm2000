@@ -35,6 +35,7 @@ from app.seeds.canon.models import PlantConfig
 from app.services.plan_generation import create_release_batch, release_batch
 from app.services.plan_import_service import create_excel_import_change_set
 from app.services.production_plan_service import apply_change_set, approve_plan_position
+from app.services.route_identity import find_route_by_name
 from app.api.routes.production_planning import _ensure_task_issued_via_transfer
 from app.services.shopfloor_service import complete_task
 from app.transfers.services import transfer_send
@@ -268,13 +269,14 @@ async def run_full_route_test(
     if payload.route_id is not None:
         route = await db.get(ProductionRoute, payload.route_id)
     if route is None:
-        # ``limit(1)``: имя — подпись, а не ключ (ADR-0051), и одинаковых
-        # имён у разных маршрутов в базе теперь может быть несколько.
-        route = await db.scalar(
-            select(ProductionRoute)
-            .where(ProductionRoute.name == payload.route_name)
-            .order_by(ProductionRoute.id)
-            .limit(1)
+        # ``only_active``: архивный маршрут назначением не считается, и
+        # брать его вместо активного одноимённого нельзя — так маршрут,
+        # который оператор отключил, всё равно пошёл бы в демо-выпуск.
+        # Проверка ``not route.is_active`` ниже остаётся для случая, когда
+        # маршрут пришёл по явному ``route_id``: такой отказ должен быть 400
+        # «Route is inactive», а не 404 «Route not found».
+        route = await find_route_by_name(
+            db, payload.route_name, legacy_name_only=False, only_active=True
         )
     if route is None:
         raise HTTPException(status_code=404, detail="Route not found")

@@ -582,3 +582,113 @@ async def test_demo_paired_profile_scenario_imports_as_paired_row(client, sessio
     component_skus = [component.get("sku") for component in components]
     assert "ЮП-2616" in component_skus
     assert "ЮП-2604" in component_skus
+
+
+@pytest.mark.asyncio
+async def test_demo_picks_active_route_over_archived_with_smaller_id(client, session) -> None:
+    """Поиск по имени берёт АКТИВНЫЙ маршрут, даже если архивный старше.
+
+    Поиск demo шёл по имени без фильтра по активности и брал самый старый
+    (``order_by(id)``): при двух одноимённых маршрутах в выпуск уходил
+    архивный. Теперь фильтр внутри поиска (``only_active``), и порядок общий.
+    """
+    user = await _make_user(session, email="demo-active@test.local")
+    headers = _auth_headers(user)
+    product = await _make_demo_product(session, sku="DEMO-ACT-001", name="Active route product")
+
+    route_steps_def = [
+        ("ISSUE", "ISSUE_RAW", "Выдача сырья", False),
+        ("SHOT_BLAST", "SHOT", "Дробеструй", False),
+        ("ANODIZING", "ANOD", "Анодирование", False),
+        ("WIP", "MOVE_TO_WIP", "Перед. на склад п/ф", False),
+        ("SAWING", "SAW", "Резка на пиле", False),
+        ("PACKING", "PACK", "Упаковка", False),
+        ("FINISHED_STOCK", "ACCEPT_FINISHED", "Приемка ГП", True),
+    ]
+    # Архивный создаём ПЕРВЫМ — у него меньший id. Имя у обоих общее: иначе
+    # это не дубль, а разные маршруты, и порядок выборки не имеет значения.
+    archived = await _make_demo_route(session, "DEMO-ACT-OLD", route_steps_def)
+    archived.is_active = False
+    await session.commit()
+
+    active = await _make_demo_route(session, "DEMO-ACT-NEW", route_steps_def)
+    active.name = archived.name
+    await session.commit()
+    assert archived.id < active.id, "предусловие: архивный должен быть старше"
+
+    raw_section = await session.scalar(
+        select(Section).where(Section.code == "DEMO-ACT-NEW-ISSUE")
+    )
+    await _seed_demo_stock(session, product.id, raw_section.id, Decimal("200"),
+                           dimensions={"length_mm": 2700})
+
+    response = await client.post(
+        "/api/demo/test-runs/full-route",
+        json={
+            "initial_quantity": "100",
+            "product_id": product.id,
+            "route_name": active.name,
+            "run_id": "demo-active-001",
+            "stage_preset": "full_route",
+        },
+        headers=headers,
+    )
+
+    assert response.status_code == 200, response.text
+    assert response.json()["route_id"] == active.id, "взялся архивный маршрут"
+
+
+@pytest.mark.asyncio
+async def test_demo_archived_only_route_still_answers_inactive(client, session) -> None:
+    """Ответ про архивный маршрут прежний: 400 по id, 404 по имени.
+
+    Проверка ``not route.is_active`` осталась на месте — при явном ``route_id``
+    отказ «маршрут отключён», а не «маршрут не найден». Здесь маршрут ищется
+    по имени, его отсекает фильтр поиска, и наступает 404. Оба ответа
+    зафиксированы с кодом и текстом, чтобы перенос фильтра не поменял их
+    молча.
+    """
+    user = await _make_user(session, email="demo-arch@test.local")
+    headers = _auth_headers(user)
+    product = await _make_demo_product(session, sku="DEMO-ARCH-001", name="Archived route product")
+
+    route_steps_def = [
+        ("ISSUE", "ISSUE_RAW", "Выдача сырья", False),
+        ("SHOT_BLAST", "SHOT", "Дробеструй", False),
+        ("ANODIZING", "ANOD", "Анодирование", False),
+        ("WIP", "MOVE_TO_WIP", "Перед. на склад п/ф", False),
+        ("SAWING", "SAW", "Резка на пиле", False),
+        ("PACKING", "PACK", "Упаковка", False),
+        ("FINISHED_STOCK", "ACCEPT_FINISHED", "Приемка ГП", True),
+    ]
+    archived = await _make_demo_route(session, "DEMO-ARCH", route_steps_def)
+    archived.is_active = False
+    await session.commit()
+
+    by_id = await client.post(
+        "/api/demo/test-runs/full-route",
+        json={
+            "initial_quantity": "100",
+            "product_id": product.id,
+            "route_id": archived.id,
+            "run_id": "demo-arch-by-id",
+            "stage_preset": "full_route",
+        },
+        headers=headers,
+    )
+    assert by_id.status_code == 400, by_id.text
+    assert by_id.json()["detail"] == "Route is inactive", by_id.text
+
+    by_name = await client.post(
+        "/api/demo/test-runs/full-route",
+        json={
+            "initial_quantity": "100",
+            "product_id": product.id,
+            "route_name": archived.name,
+            "run_id": "demo-arch-by-name",
+            "stage_preset": "full_route",
+        },
+        headers=headers,
+    )
+    assert by_name.status_code == 404, by_name.text
+    assert by_name.json()["detail"] == "Route not found", by_name.text
