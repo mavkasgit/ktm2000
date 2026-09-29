@@ -5,6 +5,7 @@ from pydantic import BaseModel, ConfigDict
 from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from app.api.deps import NON_VIEWER_ROLES, require_role
 from app.core.database import get_db
 from app.models.import_template import ImportTemplate
 
@@ -68,7 +69,12 @@ async def list_templates(
     )
 
 
-@router.post("", response_model=ImportTemplateOut, status_code=status.HTTP_201_CREATED)
+@router.post(
+    "",
+    response_model=ImportTemplateOut,
+    status_code=status.HTTP_201_CREATED,
+    dependencies=[Depends(require_role(list(NON_VIEWER_ROLES)))],
+)
 async def create_template(payload: ImportTemplateIn, db: AsyncSession = Depends(get_db)) -> ImportTemplateOut:
     if not payload.name.strip():
         raise HTTPException(status_code=400, detail="Template name is required")
@@ -91,7 +97,11 @@ async def create_template(payload: ImportTemplateIn, db: AsyncSession = Depends(
     return await _template_out(db, item)
 
 
-@router.put("/{template_id}", response_model=ImportTemplateOut)
+@router.put(
+    "/{template_id}",
+    response_model=ImportTemplateOut,
+    dependencies=[Depends(require_role(list(NON_VIEWER_ROLES)))],
+)
 async def update_template(
     template_id: int,
     payload: ImportTemplateIn,
@@ -122,7 +132,13 @@ async def update_template(
     return await _template_out(db, item)
 
 
-@router.delete("/{template_id}", status_code=status.HTTP_204_NO_CONTENT, response_class=Response, response_model=None)
+@router.delete(
+    "/{template_id}",
+    status_code=status.HTTP_204_NO_CONTENT,
+    response_class=Response,
+    response_model=None,
+    dependencies=[Depends(require_role(list(NON_VIEWER_ROLES)))],
+)
 async def delete_template(template_id: int, db: AsyncSession = Depends(get_db)) -> None:
     item = await db.get(ImportTemplate, template_id)
     if item is None:

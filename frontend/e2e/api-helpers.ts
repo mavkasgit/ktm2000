@@ -14,6 +14,34 @@ if (!process.env.E2E_API_URL) {
 }
 export const BACKEND_URL = process.env.E2E_API_URL.replace(/\/api$/, "");
 
+/**
+ * Bearer стенда для прямых вызовов из Node. Раньше эти вызовы шли анонимом и
+ * проходили только потому, что стенд стоял на `DEV_BYPASS_AUTH=true`; теперь
+ * `/api/routes*` и `/api/routes-seed` закрыты гвардом роли, и анонимный вызов
+ * получает 401. Токен берём тем же входом, которым заходит UI стенда
+ * (break-glass, пароль из `.env.e2e`), один раз на воркер.
+ */
+let standToken: string | null = null;
+
+export async function apiStandToken(): Promise<string> {
+  if (standToken) return standToken;
+  const password = process.env.E2E_ADMIN_PASSWORD || process.env.BREAK_GLASS_PASSWORD || "break-glass-dev";
+  const res = await fetch(`${BACKEND_URL}/api/auth/break-glass/login`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ password }),
+  });
+  if (!res.ok) {
+    throw new Error(`Break-glass login failed: ${res.statusText} (${res.status})`);
+  }
+  standToken = (await res.json()).access_token as string;
+  return standToken;
+}
+
+export async function authHeaders(extra?: Record<string, string>): Promise<Record<string, string>> {
+  return { ...extra, Authorization: `Bearer ${await apiStandToken()}` };
+}
+
 export function unwrapItems<T>(body: T[] | { items?: T[] }): T[] {
   return Array.isArray(body) ? body : body.items ?? [];
 }
@@ -97,7 +125,9 @@ async function hasActiveImportTemplate(): Promise<boolean> {
 /** Есть ли хоть один маршрут — без него позиция плана не запускается. */
 async function hasAnyRoute(): Promise<boolean> {
   try {
-    const res = await fetch(`${BACKEND_URL}/api/routes?limit=1&offset=0`);
+    const res = await fetch(`${BACKEND_URL}/api/routes?limit=1&offset=0`, {
+      headers: await authHeaders(),
+    });
     if (!res.ok) return false;
     return unwrapItems<unknown>(await res.json()).length > 0;
   } catch {
@@ -119,7 +149,7 @@ function readStandEnvVar(key: string): string | undefined {
 export async function apiSeedData() {
   const res = await fetch(`${BACKEND_URL}/api/routes-seed?force=true`, {
     method: "POST",
-    headers: { "Content-Type": "application/json" },
+    headers: await authHeaders({ "Content-Type": "application/json" }),
   });
   if (!res.ok) {
     throw new Error(`Seed failed: ${res.statusText} (${res.status})`);
@@ -205,7 +235,7 @@ export async function apiGetProductBySku(sku: string) {
 export async function apiCreateBareProduct(sku: string) {
   const res = await fetch(`${BACKEND_URL}/api/products`, {
     method: "POST",
-    headers: { "Content-Type": "application/json" },
+    headers: await authHeaders({ "Content-Type": "application/json" }),
     body: JSON.stringify({
       sku,
       name: `Bare ${sku}`,
@@ -287,7 +317,7 @@ export async function apiSimulatePlanImport(
 ) {
   const res = await fetch(`${BACKEND_URL}/api/imports/excel/simulate`, {
     method: "POST",
-    headers: { "Content-Type": "application/json" },
+    headers: await authHeaders({ "Content-Type": "application/json" }),
     body: JSON.stringify({
       rows,
       template_id: opts.templateId ?? null,
@@ -345,12 +375,12 @@ export async function apiEnsureCatalogProduct(spec: {
   const res = existing
     ? await fetch(`${BACKEND_URL}/api/products/${existing.id}`, {
         method: "PATCH",
-        headers: { "Content-Type": "application/json" },
+        headers: await authHeaders({ "Content-Type": "application/json" }),
         body: JSON.stringify(fields),
       })
     : await fetch(`${BACKEND_URL}/api/products`, {
         method: "POST",
-        headers: { "Content-Type": "application/json" },
+        headers: await authHeaders({ "Content-Type": "application/json" }),
         body: JSON.stringify({
           ...fields,
           type: spec.type ?? "component",
@@ -369,7 +399,7 @@ export async function apiApplyChangeSet(planId: number, changeSetId: number) {
     `${BACKEND_URL}/api/production-plans/${planId}/change-sets/${changeSetId}/apply`,
     {
       method: "POST",
-      headers: { "Content-Type": "application/json" },
+      headers: await authHeaders({ "Content-Type": "application/json" }),
     },
   );
   if (!res.ok) {
@@ -388,7 +418,7 @@ export async function apiGetPlanPositions(planId: number) {
 }
 
 export async function apiGetActiveRoutes() {
-  const res = await fetch(`${BACKEND_URL}/api/routes`);
+  const res = await fetch(`${BACKEND_URL}/api/routes`, { headers: await authHeaders() });
   if (!res.ok) {
     throw new Error(`Get routes failed: ${res.statusText} (${res.status})`);
   }
@@ -405,7 +435,7 @@ export async function apiBatchAssignRoute(
     `${BACKEND_URL}/api/production-plans/${planId}/positions/batch-assign-route`,
     {
       method: "POST",
-      headers: { "Content-Type": "application/json" },
+      headers: await authHeaders({ "Content-Type": "application/json" }),
       body: JSON.stringify({
         position_ids: positionIds,
         route_id: routeId,
@@ -422,6 +452,7 @@ export async function apiBatchAssignRoute(
 export async function apiResetAll() {
   const res = await fetch(`${BACKEND_URL}/api/production-plans/reset-all`, {
     method: "POST",
+    headers: await authHeaders(),
   });
   if (!res.ok && res.status !== 404) {
     throw new Error(`Reset all failed: ${res.statusText} (${res.status})`);
@@ -464,7 +495,7 @@ export async function apiAddRemainder(
 ) {
   const res = await fetch(`${BACKEND_URL}/api/stock/adjustment`, {
     method: "POST",
-    headers: { "Content-Type": "application/json" },
+    headers: await authHeaders({ "Content-Type": "application/json" }),
     body: JSON.stringify({
       product_id: productId,
       location_id: sectionId,
@@ -486,7 +517,7 @@ export async function apiAddRemainder(
 export async function apiCreateRoute(name: string) {
   const res = await fetch(`${BACKEND_URL}/api/routes`, {
     method: "POST",
-    headers: { "Content-Type": "application/json" },
+    headers: await authHeaders({ "Content-Type": "application/json" }),
     body: JSON.stringify({ name, description: "E2E final-release", is_active: true }),
   });
   if (!res.ok) {
@@ -509,7 +540,7 @@ export async function apiAddRouteStep(
 ) {
   const res = await fetch(`${BACKEND_URL}/api/routes/${routeId}/steps`, {
     method: "POST",
-    headers: { "Content-Type": "application/json" },
+    headers: await authHeaders({ "Content-Type": "application/json" }),
     body: JSON.stringify({
       sequence: step.sequence,
       section_id: step.section_id,

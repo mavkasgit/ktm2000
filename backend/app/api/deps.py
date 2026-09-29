@@ -39,6 +39,9 @@ WRITER_ROLES: frozenset[UserRole] = frozenset(
 READER_ROLES: frozenset[UserRole] = frozenset(
     {UserRole.admin, UserRole.planner, UserRole.section_manager, UserRole.operator, UserRole.viewer, UserRole.transporter}
 )
+# Набор ролей для изменяющих ручек: все роли, кроме зрителя (viewer — только чтение).
+NON_VIEWER_ROLES: frozenset[UserRole] = frozenset(READER_ROLES - {UserRole.viewer})
+
 TRANSFER_WRITER_ROLES: frozenset[UserRole] = frozenset(
     WRITER_ROLES | {UserRole.transporter}
 )

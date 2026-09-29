@@ -1,6 +1,6 @@
 import { test as base, expect, type Page } from "@playwright/test";
 
-import { ensureDbBootstrapped } from "./api-helpers";
+import { apiStandToken, ensureDbBootstrapped } from "./api-helpers";
 import { passCache, testCacheKey } from "./pass-cache";
 
 /**
@@ -213,10 +213,16 @@ export const test = testWithPassCache.extend<{
   seedTestData: async ({ page }, use) => {
     await use(async () => {
       // Use the seed API to set up test data
-      const response = await page.evaluate(async () => {
-        const res = await fetch("/api/routes-seed?force=true", { method: "POST" });
+      const token = await apiStandToken();
+      const response = await page.evaluate(async (bearer) => {
+        // Сырой `fetch` страницы идёт мимо apiClient-интерсептора, поэтому
+        // Bearer передаём сами — иначе гвард `/api/routes-seed` отвечает 401.
+        const res = await fetch("/api/routes-seed?force=true", {
+          method: "POST",
+          headers: { Authorization: `Bearer ${bearer}` },
+        });
         return res.json();
-      });
+      }, token);
       expect(response).toBeDefined();
     });
   },

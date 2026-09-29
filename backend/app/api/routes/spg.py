@@ -7,7 +7,7 @@ from sqlalchemy import delete, select
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import selectinload
 
-from app.api.deps import READER_ROLES, WRITER_ROLES, get_current_user, require_role
+from app.api.deps import NON_VIEWER_ROLES, READER_ROLES, WRITER_ROLES, get_current_user, require_role
 from app.core.database import get_db
 from app.models.product import Product
 from app.models.route import ProductionRoute, RouteStage, RouteRuleProfile, SectionOperation
@@ -203,7 +203,12 @@ async def get_spg(spg_id: int, db: AsyncSession = Depends(get_db)) -> SpgOut:
     return await _build_spg_out(db, spg)
 
 
-@router.post("", response_model=SpgOut, status_code=status.HTTP_201_CREATED)
+@router.post(
+    "",
+    response_model=SpgOut,
+    status_code=status.HTTP_201_CREATED,
+    dependencies=[Depends(require_role(list(NON_VIEWER_ROLES)))],
+)
 async def create_spg(payload: SpgIn, db: AsyncSession = Depends(get_db)) -> SpgOut:
     existing = await db.scalar(
         select(StorageProductionGroup).where(StorageProductionGroup.code == payload.code)
@@ -229,7 +234,11 @@ async def create_spg(payload: SpgIn, db: AsyncSession = Depends(get_db)) -> SpgO
     return await _build_spg_out(db, spg)
 
 
-@router.patch("/{spg_id}", response_model=SpgOut)
+@router.patch(
+    "/{spg_id}",
+    response_model=SpgOut,
+    dependencies=[Depends(require_role(list(NON_VIEWER_ROLES)))],
+)
 async def patch_spg(spg_id: int, payload: SpgPatch, db: AsyncSession = Depends(get_db)) -> SpgOut:
     spg = await db.get(StorageProductionGroup, spg_id)
     if spg is None:
@@ -246,7 +255,11 @@ async def patch_spg(spg_id: int, payload: SpgPatch, db: AsyncSession = Depends(g
     return await _build_spg_out(db, spg)
 
 
-@router.delete("/{spg_id}", status_code=status.HTTP_204_NO_CONTENT)
+@router.delete(
+    "/{spg_id}",
+    status_code=status.HTTP_204_NO_CONTENT,
+    dependencies=[Depends(require_role(list(NON_VIEWER_ROLES)))],
+)
 async def delete_spg(spg_id: int, db: AsyncSession = Depends(get_db)):
     spg = await db.get(StorageProductionGroup, spg_id)
     if spg is None:

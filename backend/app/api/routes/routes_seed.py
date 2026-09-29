@@ -8,7 +8,7 @@ from pydantic import BaseModel
 from sqlalchemy import text
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.api.deps import WRITER_ROLES, require_role, get_current_user
+from app.api.deps import NON_VIEWER_ROLES, READER_ROLES, WRITER_ROLES, require_role, get_current_user
 from app.models.user import User
 from app.core.config import settings
 from app.core.database import get_db
@@ -51,7 +51,7 @@ def _defect_types() -> list:
     return DEFECT_TYPES
 
 
-@router.get("/preview", response_model=SeedPreview)
+@router.get("/preview", response_model=SeedPreview, dependencies=[Depends(require_role(list(READER_ROLES)))])
 async def seed_preview() -> SeedPreview:
     """Return counts from seed files without touching the database."""
     from app.seeds.import_templates import IMPORT_TEMPLATES
@@ -81,7 +81,7 @@ async def seed_preview() -> SeedPreview:
     )
 
 
-@router.post("", response_model=SeedSummary, status_code=status.HTTP_201_CREATED)
+@router.post("", response_model=SeedSummary, status_code=status.HTTP_201_CREATED, dependencies=[Depends(require_role(list(NON_VIEWER_ROLES)))])
 async def seed_all(
     force: bool = Query(False, description="Force replace routes and dependent data"),
     db: AsyncSession = Depends(get_db),
@@ -116,7 +116,7 @@ class DemoSeedSummary(BaseModel):
     defects: int
 
 
-@router.post("/demo-production", response_model=DemoSeedSummary, status_code=status.HTTP_201_CREATED)
+@router.post("/demo-production", response_model=DemoSeedSummary, status_code=status.HTTP_201_CREATED, dependencies=[Depends(require_role(list(NON_VIEWER_ROLES)))])
 async def seed_demo_production_endpoint(
     db: AsyncSession = Depends(get_db),
 ) -> DemoSeedSummary:
@@ -139,7 +139,7 @@ class ClearSummary(BaseModel):
     cleanup: dict
 
 
-@router.post("/clear-demo-production", response_model=ClearSummary)
+@router.post("/clear-demo-production", response_model=ClearSummary, dependencies=[Depends(require_role(list(NON_VIEWER_ROLES)))])
 async def clear_demo_production_endpoint(
     db: AsyncSession = Depends(get_db),
 ) -> ClearSummary:
@@ -162,7 +162,7 @@ class CleanupRequest(BaseModel):
     tables: list[str]
 
 
-@router.get("/cleanup-stats", response_model=CleanupStatsResponse)
+@router.get("/cleanup-stats", response_model=CleanupStatsResponse, dependencies=[Depends(require_role(list(READER_ROLES)))])
 async def cleanup_stats_endpoint(
     db: AsyncSession = Depends(get_db),
 ) -> CleanupStatsResponse:

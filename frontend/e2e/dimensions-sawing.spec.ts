@@ -2,6 +2,7 @@ import { test, expect } from "./fixtures";
 import {
   apiSeedData,
   apiGetSections,
+  authHeaders,
   BACKEND_URL,
   unwrapItems,
 } from "./api-helpers";
@@ -34,7 +35,7 @@ async function apiEnsureDimProduct(): Promise<{ id: number; sku: string }> {
   // Create
   const createRes = await fetch(`${BACKEND_URL}/api/products`, {
     method: "POST",
-    headers: { "Content-Type": "application/json" },
+    headers: await authHeaders({ "Content-Type": "application/json" }),
     body: JSON.stringify({
       sku: DIM_SKU,
       name: DIM_PRODUCT_NAME,

@@ -9,6 +9,7 @@ from pydantic import BaseModel, Field
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from app.api.deps import NON_VIEWER_ROLES, require_role
 from app.core.database import get_db
 from app.models.import_template import ImportTemplate
 from app.models.route import RouteRuleProfile, RouteSelectionRule
@@ -61,7 +62,12 @@ async def list_route_rule_profiles(db: AsyncSession = Depends(get_db)) -> list[R
     return [await _profile_out(p, db) for p in profiles]
 
 
-@router.post("", response_model=RouteRuleProfileOut, status_code=status.HTTP_201_CREATED)
+@router.post(
+    "",
+    response_model=RouteRuleProfileOut,
+    status_code=status.HTTP_201_CREATED,
+    dependencies=[Depends(require_role(list(NON_VIEWER_ROLES)))],
+)
 async def create_route_rule_profile(
     payload: RouteRuleProfileIn,
     db: AsyncSession = Depends(get_db),
@@ -99,7 +105,11 @@ async def create_route_rule_profile(
     return await _profile_out(profile, db)
 
 
-@router.put("/{profile_id}", response_model=RouteRuleProfileOut)
+@router.put(
+    "/{profile_id}",
+    response_model=RouteRuleProfileOut,
+    dependencies=[Depends(require_role(list(NON_VIEWER_ROLES)))],
+)
 async def update_route_rule_profile(
     profile_id: int,
     payload: RouteRuleProfileIn,
@@ -142,7 +152,13 @@ async def update_route_rule_profile(
     return await _profile_out(profile, db)
 
 
-@router.delete("/{profile_id}", status_code=status.HTTP_204_NO_CONTENT, response_class=Response, response_model=None)
+@router.delete(
+    "/{profile_id}",
+    status_code=status.HTTP_204_NO_CONTENT,
+    response_class=Response,
+    response_model=None,
+    dependencies=[Depends(require_role(list(NON_VIEWER_ROLES)))],
+)
 async def delete_route_rule_profile(profile_id: int, db: AsyncSession = Depends(get_db)) -> None:
     profile = await db.get(RouteRuleProfile, profile_id)
     if profile is None:

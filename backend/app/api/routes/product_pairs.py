@@ -15,6 +15,7 @@ from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import selectinload
 
+from app.api.deps import NON_VIEWER_ROLES, require_role
 from app.core.database import get_db
 from app.models.product import (
     HANGER_MODE_AUTO,
@@ -259,7 +260,12 @@ async def list_product_pairs(
     return out
 
 
-@router.post("/{product_id}/pairs", response_model=ProductPairOut, status_code=status.HTTP_201_CREATED)
+@router.post(
+    "/{product_id}/pairs",
+    response_model=ProductPairOut,
+    status_code=status.HTTP_201_CREATED,
+    dependencies=[Depends(require_role(list(NON_VIEWER_ROLES)))],
+)
 async def create_product_pair(
     product_id: int,
     payload: ProductPairIn,
@@ -325,7 +331,11 @@ async def _load_with_lengths(db: AsyncSession, product_id: int) -> Product:
     return product
 
 
-@router.patch("/{product_id}/pairs/{pair_id}", response_model=ProductPairOut)
+@router.patch(
+    "/{product_id}/pairs/{pair_id}",
+    response_model=ProductPairOut,
+    dependencies=[Depends(require_role(list(NON_VIEWER_ROLES)))],
+)
 async def patch_product_pair(
     product_id: int,
     pair_id: int,
@@ -353,7 +363,11 @@ async def patch_product_pair(
     )
 
 
-@router.delete("/{product_id}/pairs/{pair_id}", status_code=status.HTTP_204_NO_CONTENT)
+@router.delete(
+    "/{product_id}/pairs/{pair_id}",
+    status_code=status.HTTP_204_NO_CONTENT,
+    dependencies=[Depends(require_role(list(NON_VIEWER_ROLES)))],
+)
 async def delete_product_pair(
     product_id: int,
     pair_id: int,

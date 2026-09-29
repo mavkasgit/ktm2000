@@ -12,7 +12,7 @@ from sqlalchemy.orm import selectinload
 
 from app.core.database import get_db
 from app.core.sorting import SortClause, apply_sort, parse_sort
-from app.api.deps import REFERENCES_READER_ROLES, REFERENCES_WRITER_ROLES, require_role
+from app.api.deps import NON_VIEWER_ROLES, REFERENCES_READER_ROLES, REFERENCES_WRITER_ROLES, require_role
 from app.models.product import Product, ProductType, DimensionState, ProductLength, ProcessingFlag, ProductProcessingFlag, ProductComposition, ProductPair, _length_key
 from app.models.dimension import ProductDimension, DimensionType
 from app.models.production_plan import PlanPosition
@@ -990,7 +990,12 @@ async def search_products(
     return [AliasSuggestion(id=r.id, sku=r.sku, name=r.name, is_paired_profile=r.is_paired_profile) for r in rows]
 
 
-@router.post("", response_model=ProductOut, status_code=status.HTTP_201_CREATED)
+@router.post(
+    "",
+    response_model=ProductOut,
+    status_code=status.HTTP_201_CREATED,
+    dependencies=[Depends(require_role(list(NON_VIEWER_ROLES)))],
+)
 async def create_product(
     payload: ProductIn,
     response: Response,
@@ -1087,7 +1092,11 @@ async def get_product(product_id: int, db: AsyncSession = Depends(get_db)) -> Pr
     return _to_product_out(item, dimensions)
 
 
-@router.patch("/{product_id}", response_model=ProductOut)
+@router.patch(
+    "/{product_id}",
+    response_model=ProductOut,
+    dependencies=[Depends(require_role(list(NON_VIEWER_ROLES)))],
+)
 async def patch_product(
     product_id: int,
     payload: ProductPatch,
@@ -1208,7 +1217,11 @@ async def patch_product(
     return _to_product_out(item, sheet_dims)
 
 
-@router.delete("/{product_id}", status_code=status.HTTP_204_NO_CONTENT)
+@router.delete(
+    "/{product_id}",
+    status_code=status.HTTP_204_NO_CONTENT,
+    dependencies=[Depends(require_role(list(NON_VIEWER_ROLES)))],
+)
 async def delete_product(product_id: int, db: AsyncSession = Depends(get_db)):
     item = await db.get(Product, product_id)
     if item is None:
@@ -1362,7 +1375,11 @@ async def replace_product_composition(
     return CompositionOut(items=await _load_composition(db, product_id))
 
 
-@router.post("/{product_id}/photo", response_model=ProductOut)
+@router.post(
+    "/{product_id}/photo",
+    response_model=ProductOut,
+    dependencies=[Depends(require_role(list(NON_VIEWER_ROLES)))],
+)
 async def upload_product_photo(
     product_id: int,
     file: UploadFile = File(...),

@@ -3,6 +3,7 @@ from pydantic import BaseModel
 from sqlalchemy import select, delete
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from app.api.deps import NON_VIEWER_ROLES, require_role
 from app.core.database import get_db
 from app.models.route import ProductionRoute, RouteStage, SectionOperation
 from app.models.section import Section
@@ -245,7 +246,12 @@ async def get_section(section_id: int, db: AsyncSession = Depends(get_db)) -> Se
     return SectionOut.model_validate(item, from_attributes=True)
 
 
-@router.post("", response_model=SectionOut, status_code=status.HTTP_201_CREATED)
+@router.post(
+    "",
+    response_model=SectionOut,
+    status_code=status.HTTP_201_CREATED,
+    dependencies=[Depends(require_role(list(NON_VIEWER_ROLES)))],
+)
 async def create_section(payload: SectionIn, db: AsyncSession = Depends(get_db)) -> SectionOut:
     existing = await db.scalar(select(Section).where(Section.code == payload.code))
     if existing:
@@ -269,7 +275,11 @@ async def create_section(payload: SectionIn, db: AsyncSession = Depends(get_db))
     return SectionOut.model_validate(item, from_attributes=True)
 
 
-@router.patch("/{section_id}", response_model=SectionOut)
+@router.patch(
+    "/{section_id}",
+    response_model=SectionOut,
+    dependencies=[Depends(require_role(list(NON_VIEWER_ROLES)))],
+)
 async def patch_section(section_id: int, payload: SectionPatch, db: AsyncSession = Depends(get_db)) -> SectionOut:
     item = await db.get(Section, section_id)
     if item is None:
@@ -299,7 +309,11 @@ class ReorderSectionsIn(BaseModel):
     ids: list[int]
 
 
-@router.post("/reorder", status_code=status.HTTP_204_NO_CONTENT)
+@router.post(
+    "/reorder",
+    status_code=status.HTTP_204_NO_CONTENT,
+    dependencies=[Depends(require_role(list(NON_VIEWER_ROLES)))],
+)
 async def reorder_sections(payload: ReorderSectionsIn, db: AsyncSession = Depends(get_db)):
     items = (await db.execute(select(Section).where(Section.id.in_(payload.ids)).order_by(Section.id))).scalars().all()
     by_id = {item.id: item for item in items}
@@ -310,7 +324,11 @@ async def reorder_sections(payload: ReorderSectionsIn, db: AsyncSession = Depend
     await db.flush()
 
 
-@router.delete("/{section_id}", status_code=status.HTTP_204_NO_CONTENT)
+@router.delete(
+    "/{section_id}",
+    status_code=status.HTTP_204_NO_CONTENT,
+    dependencies=[Depends(require_role(list(NON_VIEWER_ROLES)))],
+)
 async def delete_section(section_id: int, db: AsyncSession = Depends(get_db)):
     item = await db.get(Section, section_id)
     if item is None:
@@ -396,7 +414,12 @@ async def list_section_operation_groups(section_id: int, db: AsyncSession = Depe
     return [OperationGroupOut.model_validate(g) for g in sorted(groups.values(), key=lambda g: g["sort_order"])]
 
 
-@router.post("/{section_id}/operation-groups", response_model=OperationGroupOut, status_code=status.HTTP_201_CREATED)
+@router.post(
+    "/{section_id}/operation-groups",
+    response_model=OperationGroupOut,
+    status_code=status.HTTP_201_CREATED,
+    dependencies=[Depends(require_role(list(NON_VIEWER_ROLES)))],
+)
 async def create_operation_group(
     section_id: int,
     payload: OperationGroupCreate,
@@ -455,7 +478,11 @@ async def create_operation_group(
     )
 
 
-@router.put("/{section_id}/operation-groups/{group_code}", response_model=OperationGroupOut)
+@router.put(
+    "/{section_id}/operation-groups/{group_code}",
+    response_model=OperationGroupOut,
+    dependencies=[Depends(require_role(list(NON_VIEWER_ROLES)))],
+)
 async def update_operation_group(
     section_id: int,
     group_code: str,
@@ -505,7 +532,11 @@ async def update_operation_group(
     )
 
 
-@router.delete("/{section_id}/operation-groups/{group_code}", status_code=status.HTTP_204_NO_CONTENT)
+@router.delete(
+    "/{section_id}/operation-groups/{group_code}",
+    status_code=status.HTTP_204_NO_CONTENT,
+    dependencies=[Depends(require_role(list(NON_VIEWER_ROLES)))],
+)
 async def delete_operation_group(
     section_id: int,
     group_code: str,
@@ -532,7 +563,11 @@ async def delete_operation_group(
     await db.flush()
 
 
-@router.put("/{section_id}/operations/{operation_id}/move", status_code=status.HTTP_204_NO_CONTENT)
+@router.put(
+    "/{section_id}/operations/{operation_id}/move",
+    status_code=status.HTTP_204_NO_CONTENT,
+    dependencies=[Depends(require_role(list(NON_VIEWER_ROLES)))],
+)
 async def move_operation_to_group(
     section_id: int,
     operation_id: int,
