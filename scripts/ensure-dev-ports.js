@@ -199,8 +199,78 @@ function isDockerProcess(info) {
   );
 }
 
+/**
+ * Снимок процессов Windows: pid -> {name, cmd, parent}.
+ * Нужен для случая, когда владелец listening-сокета из netstat уже мёртв:
+ * сокет унаследован живым сиротой (uvicorn-worker пережил свой dev_server.py),
+ * и taskkill по «мёртвому» PID порт не освобождает.
+ * @returns {Map<number, {name: string, cmd: string, parent: number}>}
+ */
+function winProcessTable() {
+  if (!isWin) return new Map();
+  const raw = run("powershell.exe", [
+    "-NoProfile",
+    "-NonInteractive",
+    "-Command",
+    "Get-CimInstance Win32_Process | Select-Object ProcessId,ParentProcessId,Name,CommandLine | ConvertTo-Json -Compress",
+  ]);
+  let data = [];
+  try {
+    data = JSON.parse((raw || "").trim() || "[]");
+  } catch {
+    return new Map();
+  }
+  if (!Array.isArray(data)) data = [data];
+  const table = new Map();
+  for (const row of data) {
+    const pid = Number(row && row.ProcessId);
+    if (!Number.isFinite(pid)) continue;
+    const cmd = String((row && row.CommandLine) || "").trim().replace(/\s+/g, " ");
+    table.set(pid, {
+      name: String((row && row.Name) || "unknown"),
+      cmd: cmd.length > 160 ? cmd.slice(0, 157) + "..." : cmd,
+      parent: Number(row && row.ParentProcessId) || 0,
+    });
+  }
+  return table;
+}
+
+/**
+ * Живые потомки мёртвого PID (дети и внуки) — реальные держатели сокета.
+ * @param {Map<number, {parent: number}>} table
+ * @param {number} deadPid
+ * @returns {number[]}
+ */
+function orphanHeirs(table, deadPid) {
+  const heirs = new Set();
+  let frontier = [deadPid];
+  while (frontier.length > 0) {
+    const next = [];
+    for (const [pid, info] of table) {
+      if (frontier.includes(info.parent) && !heirs.has(pid)) {
+        heirs.add(pid);
+        next.push(pid);
+      }
+    }
+    frontier = next;
+  }
+  return [...heirs];
+}
+
+/**
+ * Хосты консолей и оболочки. Ребёнком мёртвого процесса они числятся по
+ * inheritance, но держать унаследованный сокет не могут, а убивать их нельзя:
+ * это чужое окно терминала пользователя.
+ * @param {string} name
+ */
+function isShellHost(name) {
+  return /^(conhost|openconsole|windowsterminal|powershell|pwsh|cmd|explorer)\.exe$/i.test(
+    String(name || ""),
+  );
+}
+
 function collectOccupants(portMap) {
-  /** @type {{ port: number, pid: number, name: string, cmd: string, isDocker: boolean, alive: boolean }[]} */
+  /** @type {{ port: number, pid: number, name: string, cmd: string, isDocker: boolean, alive: boolean, heirs: number[] }[]} */
   const rows = [];
   const seen = new Set();
   for (const [port, pids] of portMap) {
@@ -211,7 +281,32 @@ function collectOccupants(portMap) {
       seen.add(key);
       const info = processInfo(pid);
       const isDocker = isDockerProcess(info);
-      rows.push({ port, pid, name: info.name, cmd: info.cmd, isDocker, alive: info.alive });
+      rows.push({ port, pid, name: info.name, cmd: info.cmd, isDocker, alive: info.alive, heirs: [] });
+    }
+  }
+
+  // Мёртвый PID в netstat при живом порте = сокет унаследован сиротой. Такого
+  // сироту (например, uvicorn-worker, переживший dev_server.py) скрипт раньше
+  // не видел и уходил с «kill не сработает», хотя порт освобождается тривиально.
+  const table = rows.some((r) => !r.alive) ? winProcessTable() : new Map();
+  for (const row of rows) {
+    if (row.alive || table.size === 0) continue;
+    for (const heir of orphanHeirs(table, row.pid)) {
+      const info = table.get(heir) || { name: "unknown", cmd: "" };
+      if (isShellHost(info.name)) continue;
+      const key = `${row.port}:${heir}`;
+      if (seen.has(key)) continue;
+      seen.add(key);
+      row.heirs.push(heir);
+      rows.push({
+        port: row.port,
+        pid: heir,
+        name: info.name,
+        cmd: info.cmd,
+        isDocker: isDockerProcess(info),
+        alive: true,
+        heirs: [],
+      });
     }
   }
   return rows;
@@ -283,10 +378,16 @@ function printOccupants(rows, snapshot) {
       console.log(`   :${row.port}${bind}  PID ${row.pid}  ${row.name}`);
       if (row.cmd) console.log(`           ${row.cmd}`);
       if (!row.alive) {
-        console.log(
-           `           ℹ PID ${row.pid} не виден в списке процессов (другая сессия/WSL/Hyper-V):`,
-        );
-        console.log(`           kill по нему не сработает. Освободить порт вручную или перезапустите стенд.`);
+        if (row.heirs.length > 0) {
+          console.log(
+            `           ℹ PID ${row.pid} мёртв — сокет унаследован сиротой PID ${row.heirs.join(", ")}.`,
+          );
+        } else {
+          console.log(
+            `           ℹ PID ${row.pid} не виден в списке процессов (другая сессия/WSL/Hyper-V):`,
+          );
+          console.log(`           kill по нему не сработает. Освободить порт вручную или перезапустите стенд.`);
+        }
       }
     }
   }
@@ -432,7 +533,7 @@ async function main() {
         }
       }
 
-      const uniquePids = [...new Set(killableRows.map((r) => r.pid))];
+      const uniquePids = [...new Set(killableRows.filter((r) => r.alive).map((r) => r.pid))];
       console.log(`Killing ${uniquePids.length} process tree(s) (Docker processes excluded)...`);
       for (const pid of uniquePids) {
         const ok = killTree(pid);
@@ -447,7 +548,7 @@ async function main() {
 
       if (remainingKillable.length > 0) {
         console.log("Still busy after kill — second pass...");
-        for (const pid of new Set(remainingKillable.map((r) => r.pid))) {
+        for (const pid of new Set(remainingKillable.filter((r) => r.alive).map((r) => r.pid))) {
           killTree(pid);
         }
         sleepMs(500);
