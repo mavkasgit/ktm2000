@@ -1,17 +1,20 @@
 /**
- * Сериализованный запуск одного яруса E2E.
+ * Сериализованный запуск одного яруса E2E — единственная точка входа прогона.
  *
  * Зачем
  * -----
- * E2E ходят в ОДНО живое dev-окружение: один Postgres, один backend на :8012,
- * один фронт на :5172. А ещё `apiResetAll()` в `beforeEach` чистит базу целиком.
- * Два параллельных прогона поэтому несовместимы: второй `globalSetup` убьёт
- * стек первого (`ensure-dev-ports.js --kill`), а данные одного теста сотрут
- * данные другого.
+ * Стенд у каждого прогона свой (порты выдаёт ОС, см. `scripts/run-e2e.mjs`),
+ * но **БД общая**: `ktm2000_e2e` на :5441, и `apiResetAll()` в `beforeEach`
+ * чистит её целиком. Два параллельных прогона поэтому несовместимы: данные
+ * одного теста сотрут данные другого, и вердикт обоих станет нечитаемым.
  *
- * Когда несколько агентов правят разные ярусы, каждый прогон должен брать
- * этот скрипт, а не звать `playwright test` напрямую. Скрипт держит
- * эксклюзивный лок-файл: ждущий агент блокируется, пока стек свободен.
+ * Скрипт держит эксклюзивный лок-файл: ждущий прогон блокируется, пока
+ * предыщий не освободит лок. Порты не сериализуются — они и не конфликтуют.
+ *
+ * Именно этот скрипт, а не `playwright test` напрямую: владельцем стенда
+ * (порты, `E2E_API_URL`, `PLAYWRIGHT_TEST_BASE_URL`, `CORS_ORIGINS`) остаётся
+ * `scripts/run-e2e.mjs`, и звать Playwright мимо него нельзя — конфиг
+ * требует эти переменные и падает без них.
  *
  * Использование
  * -------------
@@ -24,7 +27,9 @@
  *   E2E_LOCK_STALE_MS    после какого возраста лок считается брошенным и
  *                        подбирается (по умолчанию 40 мин)
  *
- * Лок-файл: `node_modules/.e2e-run.lock` (в `.gitignore` через node_modules).
+ * Лок-файл: `node_modules/.e2e-run/current.lock` (в `.gitignore` через
+ * node_modules). Прежняя шапка называла `node_modules/.e2e-run.lock` — этого
+ * пути в коде нет.
  */
 
 import { spawnSync } from "node:child_process";
@@ -42,11 +47,14 @@ const STALE_MS = Number(process.env.E2E_LOCK_STALE_MS ?? 40 * 60_000);
 const POLL_MS = 3_000;
 
 const TIER = process.argv[2];
-const VALID_TIERS = ["smoke", "ui-e2e", "ui-narrow"];
+// `all` — полный прогон: Playwright сам проходит проекты по `dependencies`
+// (smoke → ui-e2e → ui-narrow) одним вызовом, стенд поднимается один раз.
+const VALID_TIERS = ["all", "smoke", "ui-e2e", "ui-narrow"];
 if (!VALID_TIERS.includes(TIER)) {
   console.error(`Usage: node e2e/run-tier.mjs <${VALID_TIERS.join("|")}>`);
   process.exit(2);
 }
+const projectArgs = TIER === "all" ? [] : ["--project", TIER];
 
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 
@@ -138,13 +146,26 @@ if (prep.status !== 0) {
 }
 console.log(`[e2e:run] e2e:prep ok (БД поднята, миграции накаты)`);
 
+// Playwright запускается ЧЕРЕЗ `scripts/run-e2e.mjs`, а не напрямую: обёртка
+// выдаёт стенду свободные порты и прописывает `E2E_API_URL` /
+// `PLAYWRIGHT_TEST_BASE_URL`, без которых конфиг падает на чтении. Обёртка
+// пробрасывает stdio и код выхода, поэтому вердикт не теряется.
+//
+// `--no-deps` — только для одиночного яруса: у него `dependencies` нет, и флаг
+// защищает от лишней фазы. На `all` он бы оборвал цепочку smoke → ui-e2e →
+// ui-narrow, то есть тир `@ui` пошёл бы без своего предусловия.
 const result = spawnSync(
-  "npx",
-  ["playwright", "test", "--project", TIER, "--no-deps", "--reporter=list"],
+  process.execPath,
+  [
+    path.join(FRONTEND_DIR, "scripts", "run-e2e.mjs"),
+    ...projectArgs,
+    ...(TIER === "all" ? [] : ["--no-deps"]),
+    "--reporter=list",
+  ],
   {
     cwd: FRONTEND_DIR,
     encoding: "utf8",
-    shell: true,
+    shell: false,
     maxBuffer: 64 * 1024 * 1024,
   },
 );

@@ -10,11 +10,12 @@
     "preview": "vite preview",
     "test": "vitest run",
     "e2e:prep": "node ../scripts/verify-sync.mjs --other ../hrms --if-enabled && npm --prefix .. run db:e2e:up && npm --prefix .. run db:e2e:wait && npm --prefix .. run db:e2e:create && npm --prefix .. run db:e2e:migrate && npm --prefix .. run db:e2e:seed",
-    "test:e2e": "npm run e2e:prep && node scripts/run-e2e.mjs",
-    "test:e2e:smoke": "npm run e2e:prep && node scripts/run-e2e.mjs --project=smoke",
-    "test:e2e:ui": "npm run e2e:prep && node scripts/run-e2e.mjs --project=ui-e2e",
-    "test:e2e:ui:narrow": "npm run e2e:prep && node scripts/run-e2e.mjs --project=ui-narrow",
-    "test:e2e:playwright-ui": "npm run e2e:prep && node scripts/run-e2e.mjs --ui",
+    "e2e:run": "node e2e/run-tier.mjs",
+    "test:e2e": "npm run e2e:run -- all",
+    "test:e2e:smoke": "npm run e2e:run -- smoke",
+    "test:e2e:ui": "npm run e2e:run -- ui-e2e",
+    "test:e2e:ui:narrow": "npm run e2e:run -- ui-narrow",
+    "test:e2e:playwright-ui": "npm run e2e:run -- ui-e2e",
     "test:e2e:report": "playwright show-report"
   },
   "dependencies": {
