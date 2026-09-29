@@ -384,3 +384,80 @@ describe("TransfersPage: сортировка таблицы «Готово к �
     });
   });
 });
+
+/**
+ * Идентичность строк ready-таблицы: пара «задание × размер», а не task_id.
+ *
+ * Трансформирующая задача (#91, резка) отдаёт по строке на КАЖДЫЙ выход
+ * спецификации: task_id у всех выходов ОДИН И ТОТ ЖЕ, различаются только
+ * dimensions. Единица передачи — именно эта пара (см. `groupReadyTransfers`),
+ * поэтому task_id как React-ключ не годится: строки одного задания делят
+ * ключ, React переиспользует узлы и в DOM оказывается больше <tr>, чем
+ * строк отдала страница (оператор видит дубли, E2E падает в strict mode).
+ *
+ * Проверяем ровно этот контраст: сколько строк пришло из данных — столько
+ * оказалось в DOM, и у каждой свой `data-row-key`.
+ */
+describe("TransfersPage: идентичность строк ready-таблицы", () => {
+  it("выходы одной трансформирующей задачи не дублируются в DOM", async () => {
+    // Три выхода резки одного задания (task_id 1) плюс обычная строка (task_id 2).
+    // Размер входит в ключ группировки, поэтому строки одного задания с
+    // разными размерами не схлопываются в группу-заголовок.
+    const full = [900, 1350, 1800].map((lengthMm) =>
+      makeTask({
+        task_id: 1,
+        plan_position_id: 7,
+        operation_name: "Резка",
+        dimensions: { length_mm: lengthMm },
+        dimensions_label: `${lengthMm / 1000} м`,
+        transferable_quantity: "30",
+      }),
+    );
+    const plain = makeTask({
+      task_id: 2,
+      plan_position_id: 3,
+      operation_name: "Пила",
+      dimensions: { length_mm: 2200 },
+      dimensions_label: "2,2 м",
+      transferable_quantity: "40",
+    });
+    const all = [...full, plain];
+
+    // Ответ сервера меняется: задание могли частично передать, и следующая
+    // выборка уже короче. Смена набора — обычное дело, дублирующийся ключ
+    // проявляется именно на ней: React не может отличить одну строку от
+    // другой и оставляет в DOM лишний <tr>.
+    let items = all;
+    let calls = 0;
+    vi.mocked(listReadyToTransfer).mockImplementation(async () => {
+      calls += 1;
+      return {
+        items: serverSort(items, { sort: "plan_position_id:desc" }),
+        total: items.length,
+        limit: 50,
+        offset: 0,
+        filters: { section_id: null, spg_id: null },
+      };
+    });
+
+    renderPage();
+    await waitForReadyTaskRows(all.length);
+
+    items = [full[1], plain];
+    await clickReadySort("positionId");
+    await waitFor(() => {
+      expect(calls).toBeGreaterThan(1);
+    });
+
+    // Столько строк отдал сервер — столько и осталось в DOM, и ключи у них
+    // попарно различны: с `key={task_id}` здесь оставалось три <tr>, два из
+    // которых были копиями одной строки 1350 мм.
+    await waitFor(() => {
+      expect(document.querySelectorAll('tr[data-row-kind="ready-task"]').length).toBe(items.length);
+    });
+    const keys = [...document.querySelectorAll('tr[data-row-kind="ready-task"]')].map((row) =>
+      row.getAttribute("data-row-key"),
+    );
+    expect(new Set(keys).size).toBe(items.length);
+  });
+});

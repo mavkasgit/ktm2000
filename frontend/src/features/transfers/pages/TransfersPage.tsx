@@ -90,6 +90,7 @@ import {
   dimensionsKey,
   groupReadyTransfers,
   isFinalReadyRow,
+  readyRowIdentity,
   type ReadyTransferGroup,
 } from "../lib/groupReadyTransfers";
 import { makeIdempotencyKey, runTransferBatch } from "../lib/runTransferBatch";
@@ -334,7 +335,7 @@ function ReadyTransferRow({
       // `task_id` мало. E2E-хелперы адресуют строку по нему: динамический
       // `rows.first()` уводит клик в соседнюю строку при refetch, а текст
       // строки меняется на «Отправка…» прямо во время ожидания.
-      data-row-key={`${task.task_id}:${dimensionsKey(task.dimensions)}`}
+      data-row-key={readyRowIdentity(task)}
       className={bulkMode ? "cursor-pointer hover:bg-muted/50" : undefined}
       onClick={bulkMode ? onSelect : undefined}
     >
@@ -1276,7 +1277,16 @@ export function TransfersPage() {
                       />
                     ) : (
                       <ReadyTransferRow
-                        key={row.task.task_id}
+                        // Ключ строки — пара «задание × размер», а НЕ task_id:
+                        // трансформирующая задача (#91) отдаёт по строке на
+                        // каждый выход спецификации, и у всех выходов task_id
+                        // ОДИН. При `key={task_id}` четыре строки делили ключ,
+                        // React переиспользовал узлы и в DOM оказывалось 8
+                        // `<tr>` — по две копии первых выходов, при 5
+                        // фактических строках от сервера. Оператор видел
+                        // дубли, а тесты падали в strict mode.
+                        // Тот же идентификатор, что и у `data-row-key` строки.
+                        key={readyRowIdentity(row.task)}
                         task={row.task}
                         bulkMode={bulkMode}
                         isSelected={bulkSelection.isSelected(row.task.task_id)}

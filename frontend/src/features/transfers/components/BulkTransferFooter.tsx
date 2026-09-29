@@ -20,6 +20,7 @@ import { cn } from "@/shared/utils/cn";
 import type { BulkRunnerProgress } from "@/shared/bulk";
 import { fmtQty } from "@/shared/lib/quantityFormat";
 import type { ActionReasonCode } from "@/shared/lib/actionReasons";
+import { readyRowIdentity } from "../lib/groupReadyTransfers";
 
 function nowLocalDateParts(): string {
   const d = new Date();
@@ -162,7 +163,7 @@ export function BulkTransferFooter({
             {selectedTasks.length > 0 ? (
               <div className="max-h-24 overflow-y-auto rounded-md border bg-muted/30 p-2 text-xs space-y-1">
                 {selectedTasks.map((task) => (
-                  <div key={task.task_id} className="flex justify-between gap-3 border-b border-border/50 pb-1 last:border-0 last:pb-0">
+                  <div key={readyRowIdentity(task)} className="flex justify-between gap-3 border-b border-border/50 pb-1 last:border-0 last:pb-0">
                     <div className="min-w-0 truncate">
                       <span className="font-mono font-medium">#{task.task_id}</span>{" "}
                       <span className="text-muted-foreground">{task.product_sku}</span>

@@ -66,6 +66,21 @@ export function dimensionsKey(dimensions: ReadyToTransferTask["dimensions"]): st
   return keys.map((key) => `${key}=${dimensions[key]}`).join(",");
 }
 
+/**
+ * Идентичность строки ready-таблицы: единица передачи — пара «задание × размер».
+ *
+ * Один `task_id` у трансформирующей задачи (#91) даёт столько строк, сколько
+ * выходов спецификации, поэтому `task_id` как ключ React не уникален. На этом
+ * готовом ключе строились дубли `<tr>` — React переиспользовал узлы строк с
+ * одинаковым ключом, и в DOM оказывалось больше строк, чем отдал сервер.
+ *
+ * Владелец выражения — здесь, рядом с `dimensionsKey`: его используют и
+ * `data-row-key`, и React-ключ, и они не должны разойтись при правке одного.
+ */
+export function readyRowIdentity(task: ReadyToTransferTask): string {
+  return `${task.task_id}:${dimensionsKey(task.dimensions)}`;
+}
+
 /** Ключ идентичности строки ready — см. комментарий к модулю. */
 export function readyTransferGroupKey(task: ReadyToTransferTask): string {
   return [
