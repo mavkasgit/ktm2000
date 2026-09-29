@@ -32,6 +32,20 @@
  * - Не считает `skipped`/`timedOut`/`interrupted` прохождением: прошёл —
  *   значит последняя попытка `passed`.
  *
+ * Зелёный не с первой попытки
+ * --------------------------
+ * Запись с ретрая не выбрасывается: она попадает в кеш с пометкой
+ * `passedOnRetry`, и такой тест **не пропускается** в следующем прогоне,
+ * пока не пройдёт чисто с первой попытки. Пометка снимается сама, когда
+ * тест зелёный на первой попытке (запись перезаписывается) или снова красный.
+ * Смысл: результат зелёный, но «прошёл с первой попытки» — нет, а кеш
+ * существует ради второго. Раньше ретрайная попытка просто не записывалась,
+ * и флейк на этой же версии кода оставался в кеше зелёным навсегда.
+ *
+ * Видимость флейка в самом прогоне — отдельная история: её даёт репортер
+ * [`green-on-retry-reporter.ts`](green-on-retry-reporter.ts), потому что
+ * прогон с `retries: 2` в CI иначе выглядит зелёным ровно как чистый.
+ *
  * Формат хранения
  * ---------------
  * Файл — `frontend/.playwright/e2e-passed.json` (в `.gitignore`). Записи
@@ -119,6 +133,13 @@ interface CacheEntry {
   /** Метка времени: у ключей с одинаковым значением побеждает большая. */
   at: number;
   status: string;
+  /**
+   * Зелёный, но не с первой попытки: первая попытка была красной, вторая —
+   * зелёной. Такой тест НЕ пропускается в следующем прогоне, пока не
+   * пройдёт чисто: иначе флейк, однажды попав в кеш, молча выпадал бы из
+   * проверки навсегда.
+   */
+  passedOnRetry?: boolean;
 }
 
 interface CacheFile {
@@ -127,16 +148,31 @@ interface CacheFile {
   entries: Record<string, CacheEntry>;
 }
 
-class PassCache {
+export interface PassCacheOptions {
+  /** Файл кеша; по умолчанию — боевой `.playwright/e2e-passed.json`. */
+  file?: string;
+  /** Версия кода; по умолчанию — хеш git. `null` оставляет кеш выключенным. */
+  version?: string | null;
+  /** Проброс флага `E2E_SKIP_PASSED` мимо окружения (юнит-тест). */
+  enabled?: boolean;
+}
+
+export class PassCache {
   /** Кеш включается только флагом: по умолчанию прогон всегда полный. */
-  readonly enabled = process.env.E2E_SKIP_PASSED === "1";
+  readonly enabled: boolean;
 
   private readonly version: string | null;
+  private readonly file: string;
   private entries = new Map<string, CacheEntry>();
   private loaded = false;
 
-  constructor() {
-    this.version = this.enabled ? resolveVersion() : null;
+  constructor(options: PassCacheOptions = {}) {
+    this.enabled = options.enabled ?? process.env.E2E_SKIP_PASSED === "1";
+    this.file = options.file ?? CACHE_PATH;
+    // Версию считаем только при включённом кеше: git зовётся зря, когда флага нет.
+    if (!this.enabled) this.version = null;
+    else if (options.version !== undefined) this.version = options.version;
+    else this.version = resolveVersion();
     if (this.enabled && this.version === null) {
       console.log("[e2e:pass-cache] git недоступен — кеш выключен, прогон полный");
     }
@@ -150,7 +186,7 @@ class PassCache {
   /** Записи файла этой версии. Чужой формат/версия — пусто. */
   private readFile(): Record<string, CacheEntry> {
     try {
-      const raw = JSON.parse(fs.readFileSync(CACHE_PATH, "utf8")) as CacheFile;
+      const raw = JSON.parse(fs.readFileSync(this.file, "utf8")) as CacheFile;
       if (raw.format === CACHE_FORMAT && raw.version === this.version && raw.entries) {
         return raw.entries;
       }
@@ -166,7 +202,6 @@ class PassCache {
     this.entries = new Map(Object.entries(this.readFile()));
   }
 
-
   private write(key: string, entry: CacheEntry): void {
     if (this.version === null) return;
     // Перечитываем перед записью: соседний worker мог увидеть другой тест.
@@ -177,34 +212,52 @@ class PassCache {
     this.entries = new Map(Object.entries(merged));
     const payload: CacheFile = { format: CACHE_FORMAT, version: this.version, entries: merged };
     try {
-      fs.mkdirSync(path.dirname(CACHE_PATH), { recursive: true });
-      fs.writeFileSync(CACHE_PATH, `${JSON.stringify(payload, null, 2)}\n`);
+      fs.mkdirSync(path.dirname(this.file), { recursive: true });
+      fs.writeFileSync(this.file, `${JSON.stringify(payload, null, 2)}\n`);
     } catch (err) {
       console.log(`[e2e:pass-cache] не удалось записать кеш: ${(err as Error).message}`);
     }
   }
 
-  /** Тест уже проходил на этой версии — его можно не гонять. */
+  /**
+   * Тест уже проходил на этой версии — его можно не гонять.
+   *
+   * Зелёный с ретрая сюда НЕ попадает: такая запись помечена `passedOnRetry`,
+   * и пока флейк не пройдёт чисто с первой попытки, прогон гоняет его снова.
+   * Иначе кеш превращал бы флейк в «проверенный» результат — ровно то
+   * маскирование, ради которого ретрай и не записывается вслепую.
+   */
   alreadyPassed(key: string): boolean {
     if (!this.active) return false;
     this.load();
-    return this.entries.get(key)?.status === "passed";
+    const entry = this.entries.get(key);
+    return entry?.status === "passed" && !entry.passedOnRetry;
   }
 
-  /** Запомнить результат теста: зелёный — в кеш, остальное затирает его. */
-  record(key: string, status: string): void {
+  /**
+   * Запомнить результат теста: зелёный — в кеш, остальное затирает его.
+   *
+   * `retry` — номер попытки, нумерация с 0. Зелёный результат попытки с
+   * ретраем записывается, но с пометкой `passedOnRetry`: результат настоящий,
+   * а вот «прошло с первой попытки» — нет, и кеш обязан это различать.
+   */
+  record(key: string, status: string, retry = 0): void {
     if (!this.active) return;
     this.load();
-    this.write(key, { at: Date.now(), status });
+    this.write(key, {
+      at: Date.now(),
+      status,
+      ...(retry > 0 && status === "passed" ? { passedOnRetry: true } : {}),
+    });
   }
 
-  /** Для диагностики: сколько тестов этой версии уже зелёные. */
+  /** Для диагностики: сколько тестов этой версии реально будут пропущены. */
   knownCount(): number {
     if (!this.active) return 0;
     this.load();
     let count = 0;
     for (const entry of this.entries.values()) {
-      if (entry.status === "passed") count += 1;
+      if (entry.status === "passed" && !entry.passedOnRetry) count += 1;
     }
     return count;
   }

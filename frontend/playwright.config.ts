@@ -102,11 +102,23 @@ if (!localStack && !reuseStack) {
 
 export default defineConfig({
   testDir: "./e2e",
+  // Спеки Playwright — `*.spec.ts`. Файл `*.test.ts` в этом каталоге —
+  // юнит-тест vitest'а (логика прогона, например `pass-cache.test.ts`), и
+  // дефолтный `testMatch` Playwright его подобрал бы, а прогон упал бы на
+  // `Vitest failed to access its internal state`. Разделение симметрично
+  // `exclude` в `vitest.config.ts`.
+  testIgnore: "**/*.test.ts",
   fullyParallel: false,
   forbidOnly: !!process.env.CI,
   retries: process.env.CI ? 2 : 0,
   workers: 1,
-  reporter: [["html", { outputFolder: "playwright-report" }], ["list"]],
+  // `list` идёт первым, чтобы сводка репортера о зелёных не с первой попытки
+  // печаталась в конце вывода, а не пряталась среди строк тестов.
+  reporter: [
+    ["html", { outputFolder: "playwright-report" }],
+    ["list"],
+    ["./e2e/green-on-retry-reporter.ts"],
+  ],
   use: {
     baseURL,
     trace: "on-first-retry",

@@ -182,7 +182,10 @@ const result = spawnSync(
     path.join(FRONTEND_DIR, "scripts", "run-e2e.mjs"),
     ...projectArgs,
     ...(TIER === "all" ? [] : ["--no-deps"]),
-    ...(uiMode ? [] : ["--reporter=list"]),
+    // Репортер зелёных не с первой попытки — в списке CLI, а не только в
+    // конфиге: `--reporter` заменяет конфиговый список целиком, и без этой
+    // строки сводка по флейкам не дошла бы ни до одного прогона отсюда.
+    ...(uiMode ? [] : ["--reporter=list,./e2e/green-on-retry-reporter.ts"]),
     ...extraArgs,
   ],
   uiMode
