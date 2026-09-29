@@ -57,7 +57,7 @@ import {
   getTaskRowClass,
 } from "./TaskView";
 import { TABLE_ROW_STYLES } from "@/shared/lib/tableRowStyles";
-import { TABLE_ROW_COMPACT } from "@/shared/lib/dataTableStyles";
+import { TABLE_ROW_COMPACT, TABLE_ROW_DENSE } from "@/shared/lib/dataTableStyles";
 import { actionReasonText } from "@/shared/lib/actionReasons";
 import { cn } from "@/shared/utils/cn";
 import { fmtQty } from "@/shared/lib/quantityFormat";
@@ -148,13 +148,14 @@ function getTaskCellValue(task: SectionBoardTask, field: TaskSortField): string 
 // ---------------------------------------------------------------------------
 // Компактная строка
 // ---------------------------------------------------------------------------
-// Задаётся общим правилом (CONTEXT.md, ADR-0030): доска знает только, что
-// берёт общий набор, а не решает высоту строки сама.
+// Плотность 32px — общий уточнённый набор (ADR-0033), не местная выдумка:
+// с такой же высотой идут «Передачи» и «Остатки».
 // Кнопки задаются без size="sm": у него h-9 (36px), а min-h не уменьшает
 // фиксированную высоту — именно он растягивал строку до 52px.
-const ROW_CELL_CLASS = TABLE_ROW_COMPACT.cell;
-const ROW_ACTION_BUTTON_CLASS = `${TABLE_ROW_COMPACT.actionButton} transition-all hover:bg-accent/50`;
-const ROW_HEIGHT_PX = TABLE_ROW_COMPACT.rowHeightPx;
+const ROW_CELL_CLASS = TABLE_ROW_DENSE.cell;
+const ROW_ACTION_BUTTON_CLASS = `${TABLE_ROW_DENSE.actionButton} transition-all hover:bg-accent/50`;
+const ROW_BADGE_CLASS = TABLE_ROW_DENSE.badge;
+const ROW_HEIGHT_PX = TABLE_ROW_DENSE.rowHeightPx;
 /**
  * Число колонок доски для полноширинных служебных строк («В ожидании»,
  * пустое состояние, распорки виртуализации).
@@ -187,6 +188,9 @@ function renderTaskRow(
     <tr
       data-row-kind="board-task"
       key={task.id}
+      // Высота задана явно: в readOnly («План») кнопки в строке нет, и без
+      // этого строка схлопнулась бы до высоты текста (30px против 32px).
+      style={{ height: ROW_HEIGHT_PX }}
       className={`cursor-pointer transition-colors ${getTaskRowClass(task, !!isSelected, isInGroup)} ${isLastInGroup ? "border-b-2 border-blue-300" : "border-b"}`}
       onClick={() => {
         if (bulkMode && bulkSelection && task.status !== "waiting_previous") {
@@ -207,7 +211,7 @@ function renderTaskRow(
         </td>
       ))}
       <td className={ROW_CELL_CLASS}>
-        <Badge variant="secondary" className={cn(getStatusColor(task), TABLE_ROW_COMPACT.badge)}>
+        <Badge variant="secondary" className={cn(getStatusColor(task), ROW_BADGE_CLASS)}>
           {getStatusLabel(task)}
         </Badge>
       </td>
@@ -360,6 +364,7 @@ function TableTaskGroupRow({
 
   return (
     <tr
+      style={{ height: ROW_HEIGHT_PX }}
       className={`border-y border-slate-200 cursor-pointer transition-colors font-semibold ${isBulkMode && allSelected ? TABLE_ROW_STYLES.selectedGroupHeader : TABLE_ROW_STYLES.defaultGroupHeader}`}
       onClick={() => {
         if (isBulkMode) onSelectGroup();
@@ -404,7 +409,7 @@ function TableTaskGroupRow({
       <td className={`${ROW_CELL_CLASS} text-slate-700`}>{fmtQty(String(group.tasks.reduce((s, t) => s + parseFloat(t.cache.remaining_quantity), 0)))}</td>
       <td className={ROW_CELL_CLASS}>
         <div className="flex items-center gap-1">
-          <Badge variant="secondary" className={`${TABLE_ROW_COMPACT.badge} font-bold`}>
+          <Badge variant="secondary" className={`${ROW_BADGE_CLASS} font-bold`}>
             &times;{group.tasks.length}
           </Badge>
           {isBulkMode && header.allSelected && (
@@ -852,11 +857,10 @@ export function SectionTasksBoard({
     return items;
   }, [boardEntries, collapsedGroups]);
 
-  /** Разделитель блоков «В ожидании»: строка таблицы на всю ширину. */
   const renderWaitingDivider = useCallback((row: Extract<VirtualBoardRow, { kind: "divider" }>) => (
     <tr key={row.key} data-testid="waiting-divider">
       <td colSpan={BOARD_COLSPAN} className="p-0" style={{ height: ROW_HEIGHT_PX }}>
-        <div className="flex h-10 items-center gap-2 border-y border-amber-200 bg-amber-50/70 px-2">
+        <div className={`flex ${TABLE_ROW_DENSE.divider} items-center gap-2 border-y border-amber-200 bg-amber-50/70 px-2`}>
           <span className="text-[11px] font-semibold uppercase tracking-wide text-amber-800">
             В ожидании
           </span>
