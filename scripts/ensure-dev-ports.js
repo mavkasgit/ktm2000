@@ -10,6 +10,10 @@
  *   KTM_DEV_KILL=1                             # same as --kill
  *
  * Safety: LISTENING only; skips PID 0–4 and own PID; process tree kill on Windows; protects Docker processes.
+ *
+ * Чистые части (разбор снимка процессов, поиск наследников мёртвого PID,
+ * отсев хостов консолей) вынесены в ensure-dev-ports-core.js и покрыты
+ * ensure-dev-ports.test.js (`npm run test:scripts`).
  */
 
 "use strict";
@@ -17,6 +21,13 @@
 const { execFileSync, spawnSync } = require("child_process");
 const readline = require("readline");
 const os = require("os");
+// Разбор снимка процессов, поиск живых наследников мёртвого PID и отсев
+// хостов консолей — чистые функции, покрытые scripts/ensure-dev-ports.test.js.
+const {
+  parseProcessTable,
+  isDockerProcess,
+  expandDeadOwners,
+} = require("./ensure-dev-ports-core");
 
 const DEFAULT_PORTS = [8012, 5172];
 
@@ -185,20 +196,6 @@ function processInfo(pid) {
   return { pid, name, cmd, alive };
 }
 
-function isDockerProcess(info) {
-  const name = (info.name || "").toLowerCase();
-  const cmd = (info.cmd || "").toLowerCase();
-  return (
-    name.includes("docker") ||
-    cmd.includes("docker") ||
-    name.includes("vmmem") ||
-    name.includes("vpnkit") ||
-    cmd.includes("vpnkit") ||
-    name.includes("wslrelay") ||
-    cmd.includes("wslrelay")
-  );
-}
-
 /**
  * Снимок процессов Windows: pid -> {name, cmd, parent}.
  * Нужен для случая, когда владелец listening-сокета из netstat уже мёртв:
@@ -214,59 +211,7 @@ function winProcessTable() {
     "-Command",
     "Get-CimInstance Win32_Process | Select-Object ProcessId,ParentProcessId,Name,CommandLine | ConvertTo-Json -Compress",
   ]);
-  let data = [];
-  try {
-    data = JSON.parse((raw || "").trim() || "[]");
-  } catch {
-    return new Map();
-  }
-  if (!Array.isArray(data)) data = [data];
-  const table = new Map();
-  for (const row of data) {
-    const pid = Number(row && row.ProcessId);
-    if (!Number.isFinite(pid)) continue;
-    const cmd = String((row && row.CommandLine) || "").trim().replace(/\s+/g, " ");
-    table.set(pid, {
-      name: String((row && row.Name) || "unknown"),
-      cmd: cmd.length > 160 ? cmd.slice(0, 157) + "..." : cmd,
-      parent: Number(row && row.ParentProcessId) || 0,
-    });
-  }
-  return table;
-}
-
-/**
- * Живые потомки мёртвого PID (дети и внуки) — реальные держатели сокета.
- * @param {Map<number, {parent: number}>} table
- * @param {number} deadPid
- * @returns {number[]}
- */
-function orphanHeirs(table, deadPid) {
-  const heirs = new Set();
-  let frontier = [deadPid];
-  while (frontier.length > 0) {
-    const next = [];
-    for (const [pid, info] of table) {
-      if (frontier.includes(info.parent) && !heirs.has(pid)) {
-        heirs.add(pid);
-        next.push(pid);
-      }
-    }
-    frontier = next;
-  }
-  return [...heirs];
-}
-
-/**
- * Хосты консолей и оболочки. Ребёнком мёртвого процесса они числятся по
- * inheritance, но держать унаследованный сокет не могут, а убивать их нельзя:
- * это чужое окно терминала пользователя.
- * @param {string} name
- */
-function isShellHost(name) {
-  return /^(conhost|openconsole|windowsterminal|powershell|pwsh|cmd|explorer)\.exe$/i.test(
-    String(name || ""),
-  );
+  return parseProcessTable(raw);
 }
 
 function collectOccupants(portMap) {
@@ -289,27 +234,7 @@ function collectOccupants(portMap) {
   // сироту (например, uvicorn-worker, переживший dev_server.py) скрипт раньше
   // не видел и уходил с «kill не сработает», хотя порт освобождается тривиально.
   const table = rows.some((r) => !r.alive) ? winProcessTable() : new Map();
-  for (const row of rows) {
-    if (row.alive || table.size === 0) continue;
-    for (const heir of orphanHeirs(table, row.pid)) {
-      const info = table.get(heir) || { name: "unknown", cmd: "" };
-      if (isShellHost(info.name)) continue;
-      const key = `${row.port}:${heir}`;
-      if (seen.has(key)) continue;
-      seen.add(key);
-      row.heirs.push(heir);
-      rows.push({
-        port: row.port,
-        pid: heir,
-        name: info.name,
-        cmd: info.cmd,
-        isDocker: isDockerProcess(info),
-        alive: true,
-        heirs: [],
-      });
-    }
-  }
-  return rows;
+  return expandDeadOwners(rows, table);
 }
 
 function killTree(pid) {
@@ -585,7 +510,11 @@ async function main() {
   process.exit(0);
 }
 
-main().catch((err) => {
-  console.error(err);
-  process.exit(1);
-});
+// CLI запускается только при прямом вызове файла: `require`-ом (например, из
+// тестов) скрипт не должен ни читать порты, ни поднимать Docker.
+if (require.main === module) {
+  main().catch((err) => {
+    console.error(err);
+    process.exit(1);
+  });
+}

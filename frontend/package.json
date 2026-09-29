@@ -15,7 +15,7 @@
     "test:e2e:smoke": "npm run e2e:run -- smoke",
     "test:e2e:ui": "npm run e2e:run -- ui-e2e",
     "test:e2e:ui:narrow": "npm run e2e:run -- ui-narrow",
-    "test:e2e:playwright-ui": "npm run e2e:run -- ui-e2e",
+    "test:e2e:ui-mode": "npm run e2e:run -- ui-e2e --ui",
     "test:e2e:report": "playwright show-report"
   },
   "dependencies": {

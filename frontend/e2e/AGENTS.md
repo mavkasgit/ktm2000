@@ -182,6 +182,20 @@ change-set); каталог/остатки — прямые вызовы API (`a
   `db:e2e:seed`. Всё это работает по `.env.e2e` (`scripts/with-env-file.mjs`
   экспортирует `ENV_FILE` и значения файла в процесс), поэтому миграции и сиды
   идут на БД стенда, а не на dev-БД.
+- **Чистит прогон именно эту базу, и чистит целиком.** `apiResetAll()` в
+  [`api-helpers.ts`](api-helpers.ts) зовёт `POST /api/production-plans/reset-all`,
+  а это `TRUNCATE TABLE … CASCADE` по 27 таблицам, включая `production_routes`,
+  `route_rule_profiles` и `import_templates`
+  ([`production_plans.py`](../../backend/app/api/routes/production_plans.py):1985-1998,
+  сам эндпоинт — :2073). Смысл для прогона: справочники маршрутов и шаблонов
+  импорта после `reset-all` пусты, поэтому в `beforeEach` сброс идёт первым, а
+  сид справочников — после него. `CASCADE` берёт и таблицы, которых в списке
+  нет, так что «очистилось всё производство» — буквальное свойство, а не
+  приближение. Стенд при этом один: база `ktm2000_e2e` на тестовом Postgres
+  `:5441`, DSN из [`.env.e2e`](../../.env.e2e) (`DATABASE_URL` и
+  `E2E_TEST_DATABASE_URL`) — тот же Postgres, на котором работают pytest-прогоны,
+  но другая база. Свою базу стенд не создаёт на ходу: её поднимает
+  `npm run db:e2e:create` в `e2e:prep`.
 - **Guard.** `scripts/e2e-db.py ensure` до подключения сверяет DSN стенда с
   dev-конфигом и **отказывается** работать, если имя базы или host:port — dev'евские
   (код возврата 2). Общая dev-БД для прогона недостижима.
@@ -242,7 +256,7 @@ PW_REUSE_STACK=1 E2E_API_URL=http://localhost:8012/api \
 ```bash
 npm --prefix frontend run test:e2e:ui
 npm --prefix frontend run test:e2e:smoke
-npm --prefix frontend run test:e2e:playwright-ui   # Playwright UI mode (отладка)
+npm --prefix frontend run test:e2e:ui-mode    # Playwright UI mode (отладка)
 npm --prefix frontend run test:e2e:report
 ```
 
@@ -397,6 +411,7 @@ set E2E_SKIP_PASSED=1
 | `route-workflow.spec.ts` | `@ui` | Реальный импорт главного «Упаковочного плана» (xlsx через UI-визард) + инфо о маршруте в таблице плана | ✅ |
 | `single-line-cycle.spec.ts` | `@ui` | Одна строка плана (ЮП-009, сетап API) → approve → запуск → цикл «передачи ↔ участки»: цепочка адресатов читается из журнала передач (включая складские секции), задача завершается на текущем участке, до «Отправлено» | ✅ |
 | `approve-freshness.spec.ts` | `@ui` | Свежесть: позиция, утверждённая на плане (одиночно и массово). Строгая часть — на живой странице «Плана» БЕЗ ухода: строка теряет кнопку «Утвердить» только если сработала инвалидация после approve (перечитывания по таймеру и ремонтирования тут нет). Затем переход кликом на «Контроль выполнения» и проверка строки по `data-row-key` — сквозной результат исходного бага. Возврат кликом на `/execution` и проверка сразу после approve баг НЕ ловили: ремонтирование маршрута refetch-ит не зависимо от `invalidateAfter` | ✅ регресс |
+| `column-filter-pause.spec.ts` | `@ui` | Поповер фильтра колонки на «Контроле выполнения»: серия нажатий даёт ОДИН запрос к списку строк, поповер не размонтируется (поле остаётся в фокусе и с набранным текстом), «Загрузка...» не появляется. Сетап — API (план без xlsx), в кадре только работа с поповером | ✅ регресс |
 | `sawing-multi-length-split.spec.ts` | `@ui` + `@ui-narrow` | Пила: распил одной задачи на несколько разных длин (2,7 м → 0,9 м + 1,8 м) порциями через доску; ledger + остатки по длинам. Сетап — API (план без xlsx), в кадре только действие участка | ✅ |
 | `sawing-four-lengths-cycle.spec.ts` | `@ui` + `@ui-narrow` | Пила в полном цикле (ЮП-2083): каталог/остатки (2,75 м)/план из 4 позиций (ГП-раскрой 2,7 м → 0,9 + 1,35 + 1,8 + 2,7, П/ф 2,7, ГП одиночный 1,35, ГП без резки) — сетап API (без xlsx) → approve → запуск → маршрут с двумя порциями на пиле → отгрузка. Дальше только UI | ✅ |
 | `yup460-shared-raw-pile.spec.ts` | `@ui` + `@ui-narrow` | ЮП-460: окно / гребенка / без пресса делят одну кучу сырья; план из 3 строк — сетап API (без xlsx) | ✅ |
@@ -419,11 +434,17 @@ npm --prefix frontend run e2e:prep
 # сразу на чтении конфига.
 npm --prefix frontend run test:e2e:ui -- --debug -g "import wizard"
 npm --prefix frontend run test:e2e:smoke -- e2e/reversal-journal.spec.ts --headed
-npm --prefix frontend run test:e2e:playwright-ui   # UI mode целиком
+npm --prefix frontend run test:e2e:ui-mode   # UI mode целиком
 ```
 
 Аргументы после `--` уходят скрипту как есть: `run-tier.mjs` передаёт их
 `run-e2e.mjs`, а та дописывает только порты и передаёт их в `playwright test`.
+
+`test:e2e:ui-mode` — тот же ярус `ui-e2e`, но с `--ui` от Playwright:
+`run-tier.mjs` узнаёт режим по этому флагу, не навязывает свой
+`--reporter=list` (в UI-режиме репортер задаёт сам Playwright, иначе панель
+отчётов пустает) и отдаёт терминал ребёнку через `stdio: "inherit"` — иначе
+интерактивный прогон молчал бы до закрытия окна.
 
 ### Единственная точка входа — `run-tier.mjs`
 

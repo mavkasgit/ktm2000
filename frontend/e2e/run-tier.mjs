@@ -27,6 +27,11 @@
  *   E2E_LOCK_STALE_MS    после какого возраста лок считается брошенным и
  *                        подбирается (по умолчанию 40 мин)
  *
+ * Аргументы после яруса уходят в `playwright test` как есть: `npm run
+ * e2e:run -- ui-e2e --ui` (режим UI, см. `test:e2e:ui-mode`), `--debug`,
+ * `--headed`, `-g`, путь к спеке. Наш дефолт `--reporter=list` в UI-режиме
+ * не добавляется — там репортер задаёт сам Playwright.
+ *
  * Лок-файл: `node_modules/.e2e-run/current.lock` (в `.gitignore` через
  * node_modules). Прежняя шапка называла `node_modules/.e2e-run.lock` — этого
  * пути в коде нет.
@@ -55,6 +60,23 @@ if (!VALID_TIERS.includes(TIER)) {
   process.exit(2);
 }
 const projectArgs = TIER === "all" ? [] : ["--project", TIER];
+// Аргументы после яруса уходят в `playwright test` как есть: отладка
+// (`--debug`, `--headed`, `-g`, путь к спеке) и режим UI (`--ui`) приходят
+// именно так — `npm run test:e2e:ui-mode`. Они идут ПОСЛЕ наших дефолтов,
+// чтобы пользовательский флаг перебил дефолтный, а не наоборот.
+const extraArgs = process.argv.slice(3);
+
+// Режим UI Playwright (`--ui`, `--ui-host`, `--ui-port`) — интерактивный: он
+// сам поднимает окно и живёт, пока его не закрыли. Два следствия:
+//
+//  * репортер нашёлкивать нельзя: `--reporter=list` уехал бы в панель отчётов
+//    UI-режима, и она осталась бы пустой. Там нужен репортер самого Playwright;
+//  * вывод должен идти в терминал сразу (`stdio: "inherit"`), а не копиться
+//    в буфере `spawnSync` до закрытия окна — иначе отладка, ради которой
+//    режим существует, ничего не показывает, пока не поздно.
+const uiMode = extraArgs.some(
+  (arg) => arg === "--ui" || arg === "--ui-host" || arg === "--ui-port",
+);
 
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 
@@ -160,21 +182,26 @@ const result = spawnSync(
     path.join(FRONTEND_DIR, "scripts", "run-e2e.mjs"),
     ...projectArgs,
     ...(TIER === "all" ? [] : ["--no-deps"]),
-    "--reporter=list",
+    ...(uiMode ? [] : ["--reporter=list"]),
+    ...extraArgs,
   ],
-  {
-    cwd: FRONTEND_DIR,
-    encoding: "utf8",
-    shell: false,
-    maxBuffer: 64 * 1024 * 1024,
-  },
+  uiMode
+    ? { cwd: FRONTEND_DIR, shell: false, stdio: "inherit" }
+    : {
+        cwd: FRONTEND_DIR,
+        encoding: "utf8",
+        shell: false,
+        maxBuffer: 64 * 1024 * 1024,
+      },
 );
 
+// В UI-режиме вывод уже ушёл в терминал как есть (`stdio: "inherit"`), а
+// `result.stdout` пуст — печатать его повторно нечего.
 const wall = Math.round((Date.now() - startedAt) / 1000);
-const output = `${result.stdout ?? ""}${result.stderr ?? ""}`;
+if (!uiMode) {
+  console.log(`${result.stdout ?? ""}${result.stderr ?? ""}`);
+}
 release();
-
-console.log(output);
 console.log(`[e2e:run] === ярус ${TIER}: ${wall}s, код ${result.status} ===`);
 
 // Код прогона наружу, чтобы вызывающая оболочка/агент увидел вердикт.

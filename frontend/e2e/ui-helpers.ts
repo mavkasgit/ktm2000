@@ -100,7 +100,10 @@ export async function ensureProductViaUI(
   await page.getByRole("button", { name: "Добавить" }).click();
   const dialog = page.getByRole("dialog");
   await expect(dialog).toBeVisible({ timeout: 5_000 });
-  await expect(dialog.getByRole("heading", { name: "Новое сырье" })).toBeVisible();
+  // Заголовок диалога проверять нельзя: он менялся вместе с формой (#64) и
+  // падал на свежей БД, где SKU ещё нет и создание реально выполняется.
+  // Устойчивый признак формы — поле артикула, его и ждём.
+  await expect(dialog.locator('input[placeholder="ЮП-1234"]')).toBeVisible({ timeout: 5_000 });
 
   await dialog.locator('input[placeholder="ЮП-1234"]').fill(sku);
   await dialog.locator('input[placeholder="Полное название"]').fill(name);
@@ -108,7 +111,12 @@ export async function ensureProductViaUI(
   const lengthInput = dialog.getByPlaceholder("Введите длину");
   await lengthInput.fill(String(lengthMm));
   await dialog.getByRole("button", { name: "Добавить" }).click();
-  await expect(dialog.getByText(`${lengthMm} мм`)).toBeVisible({ timeout: 5_000 });
+  // Длина добавляется строкой в таблицу длин, а её ячейки — <input> (видно
+  // только значение, не текст), поэтому «6000 мм» в DOM текстом не лежит.
+  // Ждём саму строку по aria-label ячейки сырьевой длины.
+  await expect(
+    dialog.locator(`input[aria-label="Сырьевая длина для ${lengthMm} мм"]`),
+  ).toBeVisible({ timeout: 5_000 });
 
   await dialog.getByRole("button", { name: "Создать" }).click();
   try {
@@ -793,7 +801,7 @@ export async function completeAllSectionTasksViaUI(
  * получатель — «Отправлено» (обычная передача «К отгрузке» → «Отправлено»).
  *
  * Строку привязываем к позициям **этого** прогона (`positionIds`), иначе шаг
- * зеленел бы на данных прошлых прогонов в накопительной dev-БД.
+ * зеленел бы на данных прошлых прогонов в общей БД стенда.
  */
 export async function expectShippedViaUI(page: Page, sku: string, positionIds: number[]) {
   await gotoWithTransientRetry(page, "/transfers");
