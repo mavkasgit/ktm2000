@@ -8,6 +8,7 @@ from app.models.route import ProductionRoute, RouteRuleProfile, RouteStage, Rout
 from app.models.section import Section
 from app.models.transfer import Transfer
 from app.models.work_task import WorkTask
+from app.services.route_identity import find_route_by_code, find_route_by_name
 from app.services.route_transform import resolve_stage_transforms_dimensions
 from app.services.route_storage_classifier import (
     is_storage_section,
@@ -60,16 +61,14 @@ async def seed_routes(
         # Upsert by code, fallback to name for legacy. По имени ищем только
         # строки БЕЗ кода (#230, ADR-0051): код — идентичность маршрута, и
         # маршрут, уже имеющий чужой код, нельзя переименовыванием в наш
-        # переделать. ``limit(1)`` — одинаковых имён теперь может быть
-        # сколько угодно, и ``db.scalar`` на нескольких строках raises.
-        route = await db.scalar(select(ProductionRoute).where(ProductionRoute.code == template["code"]))
+        # переделать.
+        #
+        # `only_active` НЕ включаем, и это намеренно: повторный `run_seed`
+        # обязан находить архивный маршрут и обновлять его, иначе он завёл бы
+        # дубль на каждом прогоне. Порядок и фильтр по коду — общие.
+        route = await find_route_by_code(db, template["code"])
         if route is None:
-            route = await db.scalar(
-                select(ProductionRoute)
-                .where(ProductionRoute.name == template["name"], ProductionRoute.code.is_(None))
-                .order_by(ProductionRoute.id)
-                .limit(1)
-            )
+            route = await find_route_by_name(db, template["name"], legacy_name_only=True)
 
         if route is None:
             route = ProductionRoute(
@@ -271,17 +270,15 @@ async def seed_production_routes_from_profiles(
 
         # Check if route already exists. По имени — только среди строк без
         # кода: код идентифицирует маршрут (#230, ADR-0051), и найденный
-        # по имени маршрут с чужим кодом переписывать нельзя. ``limit(1)`` —
-        # одинаковых имён у разных маршрутов теперь может быть несколько.
-        route = await db.scalar(
-            select(ProductionRoute)
-            .where(
-                (ProductionRoute.code == route_code)
-                | ((ProductionRoute.name == route_name) & ProductionRoute.code.is_(None))
-            )
-            .order_by(ProductionRoute.id)
-            .limit(1)
-        )
+        # по имени маршрут с чужим кодом переписывать нельзя.
+        #
+        # `only_active` НЕ включаем намеренно — как в `seed_routes` выше:
+        # повторный `run_seed` обязан обновлять архивный маршрут, а не
+        # заводить ему дубль. По коду и по имени теперь два вызова вместо
+        # одного OR-запроса: предикат общий, и порядок в обоих одинаков.
+        route = await find_route_by_code(db, route_code)
+        if route is None:
+            route = await find_route_by_name(db, route_name, legacy_name_only=True)
 
         if route is None:
             route = ProductionRoute(
