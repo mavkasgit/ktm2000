@@ -200,8 +200,16 @@ async def route_signature_conflicts(
         return False
     actual = route.route_signature
     if not actual:
+        # Сигнатура маршрута без сохранённой — по его этапам, и сверять
+        # надо шаги (`RouteSignatureStep`), а не сами `RouteStage`:
+        # `encode_signature` ждёт шаги, и на этапах падал
+        # `AttributeError: 'RouteStage' object has no attribute 'encode'`.
+        # Вызывающий резолв глотал это общим `except Exception`, и конфликт
+        # молча не проверялся вовсе.
         stages = await load_route_stages(db, route.id)
-        actual = encode_signature(stages) if stages else None
+        actual = (
+            encode_signature(signature_steps_from_stages(stages)) if stages else None
+        )
     return actual is not None and actual != expected_signature
 
 

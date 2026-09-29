@@ -825,3 +825,28 @@ async def test_created_route_code_is_deterministic_for_signature() -> None:
     assert auto_route_code(MATCHED_SIGNATURE) != auto_route_code(FOREIGN_SIGNATURE)
     # Маршрут без этапов сигнатуры не имеет — кода тоже.
     assert auto_route_code("") is None
+
+
+@pytest.mark.asyncio
+async def test_signature_conflict_verified_against_stages_when_not_saved(session) -> None:
+    """Сверка сигнатуры работает и по этапам, когда сигнатура не сохранена.
+
+    Ветка «сохранённой сигнатуры нет — считаем по этапам» передавала в
+    ``encode_signature`` сами ``RouteStage`` вместо ``RouteSignatureStep`` и
+    падала ``AttributeError: 'RouteStage' object has no attribute 'encode'``.
+    Вызывающий ``route_matcher`` глотал это общим ``except Exception``, так
+    что сверка не выполнялась вовсе, а позиция получала маршрут чужого
+    состава с ``error=None``.
+    """
+    from app.services.route_signature import route_signature_conflicts
+
+    await _seed_sections(session)
+    route = await _make_route_with_signature(session, ROUTE_NAME, MATCHED_SIGNATURE)
+    # Гасим сохранённую сигнатуру — сверка обязана посчитать её по этапам.
+    route.route_signature = None
+    await session.flush()
+
+    assert await route_signature_conflicts(session, route, MATCHED_SIGNATURE) is False
+    assert await route_signature_conflicts(session, route, FOREIGN_SIGNATURE) is True
+    # Пустая ожидаемая сигнатура — сравнивать не с чем.
+    assert await route_signature_conflicts(session, route, "") is False
