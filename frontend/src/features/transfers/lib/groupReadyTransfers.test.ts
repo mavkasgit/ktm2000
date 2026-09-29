@@ -2,6 +2,7 @@ import { describe, expect, it } from "vitest";
 import type { ReadyToTransferTask } from "@/shared/api/transfers";
 import {
   groupReadyTransfers,
+  nextStepLabel,
   type ReadyTransferGroup,
   type ReadyTransferRowItem,
 } from "./groupReadyTransfers";
@@ -31,7 +32,6 @@ function makeTask(overrides: Partial<ReadyToTransferTask> = {}): ReadyToTransfer
     next_step_sequence: 2,
     next_step_is_final: false,
     is_final: false,
-    completion_comment: null,
     dimensions: { length_mm: 2750 },
     dimensions_label: "2,75 м",
     ...overrides,
@@ -177,9 +177,9 @@ describe("groupReadyTransfers", () => {
 
     const [group] = groupsOf(items);
     expect(group.common.operationName).toBeNull();
-    expect(group.common.sequence).toBeNull();
     expect(group.common.dimensionsLabel).toBe("2,75 м");
     expect(group.common.nextOperationName).toBe("Дробеструй");
+    expect(group.common.nextSectionName).toBe("Дробеструй");
   });
 
   it("печатает размер строки, даже если сервер не прислал подпись (#195)", () => {
@@ -201,5 +201,45 @@ describe("groupReadyTransfers", () => {
     ]);
 
     expect(groupsOf(items)[0].common.dimensionsLabel).toBe("—");
+  });
+
+  it("отдаёт в common название следующего участка, а при расхождении строк — null", () => {
+    // Название участка в подписи колонки «Следующий» — единственный адресат
+    // складского этапа, где операций нет. Общее значение расходится, значит
+    // подписи у строк группы разные, и свёрнутая строка не имеет права
+    // показывать участок ни одной из них.
+    const agreed = groupReadyTransfers([
+      makeTask({ task_id: 1, plan_position_id: 11, next_section_name: "Склад полуфабриката" }),
+      makeTask({ task_id: 2, plan_position_id: 12, next_section_name: "Склад полуфабриката" }),
+    ]);
+    expect(groupsOf(agreed)[0].common.nextSectionName).toBe("Склад полуфабриката");
+
+    const diverged = groupReadyTransfers([
+      makeTask({ task_id: 1, plan_position_id: 11, next_section_name: "Склад полуфабриката" }),
+      makeTask({ task_id: 2, plan_position_id: 12, next_section_name: "Склад готовой продукции" }),
+    ]);
+    expect(groupsOf(diverged)[0].common.nextSectionName).toBeNull();
+  });
+});
+
+/**
+ * Подпись адресата передачи: операция приоритетнее названия участка, а когда
+ * нет ни того, ни другого — прочерк. Складские этапы (`next_operation_name`
+ * === null) обязаны печатать название участка, иначе адресат пропадал бы.
+ */
+describe("nextStepLabel", () => {
+  it("печатает операцию, не добавляя к ней код участка и номер этапа", () => {
+    expect(nextStepLabel("Хранение: Склад готовой продукции", "Склад готовой продукции")).toBe(
+      "Хранение: Склад готовой продукции",
+    );
+  });
+
+  it("без операции печатает название участка — так у складских этапов", () => {
+    expect(nextStepLabel(null, "Склад полуфабриката")).toBe("Склад полуфабриката");
+  });
+
+  it("без операции и без участка печатает прочерк, а не пустую ячейку", () => {
+    expect(nextStepLabel(null, null)).toBe("—");
+    expect(nextStepLabel("", "")).toBe("—");
   });
 });

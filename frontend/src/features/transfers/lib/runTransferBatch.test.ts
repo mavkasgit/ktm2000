@@ -27,7 +27,6 @@ function makeTask(overrides: Partial<ReadyToTransferTask> = {}): ReadyToTransfer
     next_step_sequence: 2,
     next_step_is_final: false,
     is_final: false,
-    completion_comment: null,
     dimensions: { length_mm: 2750 },
     dimensions_label: "2,75 м",
     ...overrides,

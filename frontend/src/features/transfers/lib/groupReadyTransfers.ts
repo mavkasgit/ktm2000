@@ -24,10 +24,8 @@ export type ReadyTransferGroupCommon = {
   /** Подпись размера, общая для группы; `null` — строки группы не совпали (в UI «—»). */
   dimensionsLabel: string | null;
   operationName: string | null;
-  sequence: number | null;
   nextOperationName: string | null;
-  nextSectionCode: string | null;
-  nextStepSequence: number | null;
+  nextSectionName: string | null;
 };
 
 export type ReadyTransferGroup = {
@@ -52,6 +50,19 @@ export type ReadyTransferSingle = {
 };
 
 export type ReadyTransferRowItem = ReadyTransferGroup | ReadyTransferSingle;
+
+/**
+ * Подпись адресата передачи для колонки «Следующий» — одна строка по-русски.
+ *
+ * Код участка (`FINISHED_STOCK`) и номер этапа маршрута в таблице не печатаются:
+ * оператору нужен адрес, а не идентификатор. Операция приоритетнее названия
+ * участка, потому что в маршрутах она уже уточняет адрес («Хранение: Склад
+ * готовой продукции»), но у складских этапов операций нет — там остаётся
+ * название участка.
+ */
+export function nextStepLabel(operationName: string | null, sectionName: string | null): string {
+  return operationName || sectionName || "—";
+}
 
 /** Строка в ready-списке = финальный выпуск, а не передача на следующий этап. */
 export function isFinalReadyRow(task: ReadyToTransferTask): boolean {
@@ -139,10 +150,8 @@ export function groupReadyTransfers(items: ReadyToTransferTask[]): ReadyTransfer
       common: {
         dimensionsLabel: sameValue(rows, (row) => formatDimensionsLabel(row.dimensions, row.dimensions_label)),
         operationName: sameValue(rows, (row) => row.operation_name),
-        sequence: sameValue(rows, (row) => row.sequence),
         nextOperationName: sameValue(rows, (row) => row.next_operation_name),
-        nextSectionCode: sameValue(rows, (row) => row.next_section_code),
-        nextStepSequence: sameValue(rows, (row) => row.next_step_sequence),
+        nextSectionName: sameValue(rows, (row) => row.next_section_name),
       },
     });
   }

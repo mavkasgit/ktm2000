@@ -260,7 +260,6 @@ def _ready_row_common(row) -> dict:
         next_l,
         next_stg,
         next_sec,
-        completion_comment,
         _completed,
         _transferred,
         _released,
@@ -300,7 +299,6 @@ def _ready_row_common(row) -> dict:
         "next_step_sequence": next_stg.sequence if next_stg is not None else None,
         "next_step_is_final": bool(next_stg.is_final) if next_stg is not None else None,
         "is_final": is_final,
-        "completion_comment": completion_comment,
     }
 
 
@@ -506,7 +504,7 @@ def _build_production_ready_query(
     next_line = aliased(SectionPlanLine, name="next_line")
 
     from app.stock.ledger import net_by_reason_sq
-    from app.stock.models import Reason, StockTransaction
+    from app.stock.models import Reason
     # «Произведено/завершено» — публичная SQL-форма модуля transferable (#131).
     completed_sq = completed_qty_sq()
     transferred_sq = tcast(
@@ -533,16 +531,6 @@ def _build_production_ready_query(
         (from_stage.is_final.is_(True), sendable_expr), else_=transferable_expr
     )
 
-    latest_complete = (
-        select(
-            StockTransaction.task_id,
-            StockTransaction.id.label("st_id"),
-        )
-        .where(StockTransaction.reason == Reason.COMPLETE)
-        .distinct(StockTransaction.task_id)
-        .order_by(StockTransaction.task_id, StockTransaction.id.desc())
-        .subquery()
-    )
 
     query = (
         select(
@@ -554,7 +542,6 @@ def _build_production_ready_query(
             next_line,
             next_stage,
             next_section,
-            StockTransaction.id.label("completion_tx_id"),
             func.coalesce(completed_sq.c.completed_qty, 0).label("completed_qty"),
             func.coalesce(transferred_sq.c.net_quantity, 0).label("transferred_qty"),
             func.coalesce(released_sq.c.net_quantity, 0).label("released_qty"),
@@ -575,14 +562,6 @@ def _build_production_ready_query(
         )
         .outerjoin(next_stage, next_stage.id == next_line.route_stage_id)
         .outerjoin(next_section, next_section.id == next_line.section_id)
-        .outerjoin(
-            latest_complete,
-            latest_complete.c.task_id == WorkTask.id,
-        )
-        .outerjoin(
-            StockTransaction,
-            StockTransaction.id == latest_complete.c.st_id,
-        )
         .where(
             WorkTask.status.notin_(
                 [WorkTaskStatus.cancelled, WorkTaskStatus.waiting_previous]
@@ -932,7 +911,6 @@ async def _fetch_stock_ready_items(
                     "next_step_sequence": next_stage.sequence,
                     "next_step_is_final": bool(next_stage.is_final),
                     "is_final": False,
-                    "completion_comment": None,
                     **_ready_dimensions_fields(fake_task.dimensions),
                 }
             if search and search.strip():

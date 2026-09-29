@@ -90,6 +90,7 @@ import {
   dimensionsKey,
   groupReadyTransfers,
   isFinalReadyRow,
+  nextStepLabel,
   readyRowIdentity,
   type ReadyTransferGroup,
 } from "../lib/groupReadyTransfers";
@@ -103,6 +104,19 @@ import {
 } from "../lib/transferSortParams";
 import { fmtQty } from "@/shared/lib/quantityFormat";
 import { actionReasonText, type ActionReasonCode } from "@/shared/lib/actionReasons";
+
+/**
+ * Уточнение компактной строки для таблиц «Передачи» (ADR-0033): действие и
+ * поле количества на 4px ниже, чем в общем наборе, — строка «Готово к передаче»
+ * сама по себе держит в себе только номер этапа, поэтому контролам не нужен
+ * базовый `h-8`, а стока — 41px. Уменьшение самих контролов (а не сдвиг
+ * `translate`) действительно укорачивает строку, а не прижимает её к низу.
+ */
+const TRANSFERS_ROW = {
+  ...TABLE_ROW_COMPACT,
+  actionButton: "h-7 px-2 text-xs",
+  quantityInput: "h-7",
+} as const;
 
 function conflictHintFromTransferError(message: string): string | null {
   const n = message.toLowerCase();
@@ -354,11 +368,8 @@ function ReadyTransferRow({
       <TableCell className="${TABLE_ROW_COMPACT.cell} text-xs text-muted-foreground whitespace-nowrap">
         {formatDimensionsLabel(task.dimensions, task.dimensions_label)}
       </TableCell>
-      <TableCell className={TABLE_ROW_COMPACT.cell}>
-        <div className="text-xs">
-          <div className="font-medium">{task.operation_name ?? "—"}</div>
-          <div className="text-muted-foreground">#{task.sequence}</div>
-        </div>
+      <TableCell className="${TABLE_ROW_COMPACT.cell} text-xs whitespace-nowrap">
+        {task.operation_name ?? "—"}
       </TableCell>
       <TableCell className="${TABLE_ROW_COMPACT.cell} text-right tabular-nums">
         <div className="whitespace-nowrap">
@@ -372,20 +383,13 @@ function ReadyTransferRow({
             </span>
           )}
         </div>
-        {task.completion_comment && (
-          <div className="text-[10px] text-muted-foreground mt-0.5 leading-tight" title={task.completion_comment}>
-            {task.completion_comment}
-          </div>
-        )}
       </TableCell>
-      <TableCell className="${TABLE_ROW_COMPACT.cell} text-xs">
+      <TableCell
+        className="${TABLE_ROW_COMPACT.cell} text-xs whitespace-nowrap"
+        title={task.has_next_step ? nextStepLabel(task.next_operation_name, task.next_section_name) : undefined}
+      >
         {task.has_next_step ? (
-          <>
-            <div>{task.next_operation_name ?? "—"}</div>
-            <div className="text-muted-foreground">
-              {task.next_section_code ?? "—"} #{task.next_step_sequence ?? "—"}
-            </div>
-          </>
+          nextStepLabel(task.next_operation_name, task.next_section_name)
         ) : (
           <div>
             <Badge variant="outline">Финальный</Badge>
@@ -406,7 +410,7 @@ function ReadyTransferRow({
                 step="1"
                 min="0"
                 value={quantity}
-                className={`w-20 h-8 text-right px-2 ${
+                className={`w-20 ${TRANSFERS_ROW.quantityInput} text-right px-2 ${
                   overLimit ? "border-amber-400 focus-visible:ring-amber-400" : ""
                 }`}
                 title={overLimit ? `Превышает доступное (${fmtQty(task.transferable_quantity)} шт.)` : undefined}
@@ -422,7 +426,7 @@ function ReadyTransferRow({
               {isFinalRow ? (
                 <Button
                   size="sm"
-                  className={TABLE_ROW_COMPACT.actionButton}
+                  className={TRANSFERS_ROW.actionButton}
                   disabled={isSubmitting || releaseMutation.isPending || quantityReason !== null}
                   title={quantityReason ? actionReasonText(quantityReason) : "Финальный выпуск готовой продукции"}
                   onClick={() => {
@@ -443,7 +447,7 @@ function ReadyTransferRow({
               ) : (
                 <Button
                   size="sm"
-                  className={TABLE_ROW_COMPACT.actionButton}
+                  className={TRANSFERS_ROW.actionButton}
                   disabled={isSubmitting || mutation.isPending || quantityReason !== null}
                   title={quantityReason ? actionReasonText(quantityReason) : "Передать на следующий этап"}
                   onClick={() => {
@@ -552,13 +556,8 @@ function ReadyTransferGroupRow({
       <TableCell className="${TABLE_ROW_COMPACT.cell} text-xs text-muted-foreground whitespace-nowrap">
         {common.dimensionsLabel ?? "—"}
       </TableCell>
-      <TableCell className={TABLE_ROW_COMPACT.cell}>
-        <div className="text-xs">
-          <div className="font-medium">{common.operationName ?? "—"}</div>
-          <div className="text-muted-foreground">
-            {common.sequence == null ? "—" : `#${common.sequence}`}
-          </div>
-        </div>
+      <TableCell className="${TABLE_ROW_COMPACT.cell} text-xs whitespace-nowrap">
+        {common.operationName ?? "—"}
       </TableCell>
       <TableCell className="${TABLE_ROW_COMPACT.cell} text-right tabular-nums">
         {/* Как у одиночной строки: в «К передаче» — текст, редактируемое поле —
@@ -570,14 +569,12 @@ function ReadyTransferGroupRow({
           </span>
         </div>
       </TableCell>
-      <TableCell className="${TABLE_ROW_COMPACT.cell} text-xs">
+      <TableCell
+        className="${TABLE_ROW_COMPACT.cell} text-xs whitespace-nowrap"
+        title={group.hasNextStep ? nextStepLabel(common.nextOperationName, common.nextSectionName) : undefined}
+      >
         {group.hasNextStep ? (
-          <>
-            <div>{common.nextOperationName ?? "—"}</div>
-            <div className="text-muted-foreground">
-              {common.nextSectionCode ?? "—"} #{common.nextStepSequence ?? "—"}
-            </div>
-          </>
+          nextStepLabel(common.nextOperationName, common.nextSectionName)
         ) : (
           <Badge variant="outline">Финальный</Badge>
         )}
@@ -592,7 +589,7 @@ function ReadyTransferGroupRow({
                 min="0"
                 value={quantity}
                 disabled={isSubmitting}
-                className={`w-20 h-8 text-right px-2 ${
+                className={`w-20 ${TRANSFERS_ROW.quantityInput} text-right px-2 ${
                   overLimit ? "border-amber-400 focus-visible:ring-amber-400" : ""
                 }`}
                 title={
@@ -606,7 +603,7 @@ function ReadyTransferGroupRow({
             <ActionWithReason reason={groupBlockReason}>
               <Button
                 size="sm"
-                className={TABLE_ROW_COMPACT.actionButton}
+                className={TRANSFERS_ROW.actionButton}
                 disabled={isSubmitting || groupBlockReason !== null}
                 title={
                   groupBlockReason
