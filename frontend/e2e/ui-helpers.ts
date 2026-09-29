@@ -78,25 +78,9 @@ export async function confirmProductionLaunchViaUI(page: Page) {
   await expect(launchDialog).not.toBeVisible({ timeout: 15_000 });
 }
 
-/** Создать продукт в справочнике сырья через UI, если его ещё нет. */
-export async function ensureProductViaUI(
-  page: Page,
-  sku: string,
-  name: string,
-  lengthMm = 6000,
-) {
-  await page.goto("/references/raw-materials");
+/** Открыть диалог создания артикула и дождаться его формы. */
+async function openCreateProductDialogViaUI(page: Page): Promise<Locator> {
   await expect(page.getByPlaceholder("Поиск")).toBeVisible({ timeout: 10_000 });
-
-  const search = page.getByPlaceholder("Поиск");
-  await search.fill(sku);
-  await page.waitForTimeout(800);
-
-  const existingRow = page.locator("tr", { hasText: sku }).first();
-  if ((await existingRow.count()) > 0) {
-    return;
-  }
-
   await page.getByRole("button", { name: "Добавить" }).click();
   const dialog = page.getByRole("dialog");
   await expect(dialog).toBeVisible({ timeout: 5_000 });
@@ -104,7 +88,16 @@ export async function ensureProductViaUI(
   // падал на свежей БД, где SKU ещё нет и создание реально выполняется.
   // Устойчивый признак формы — поле артикула, его и ждём.
   await expect(dialog.locator('input[placeholder="ЮП-1234"]')).toBeVisible({ timeout: 5_000 });
+  return dialog;
+}
 
+/** Заполнить открытый диалог создания и нажать «Создать». */
+async function submitCreateProductDialogViaUI(
+  dialog: Locator,
+  sku: string,
+  name: string,
+  lengthMm: number,
+) {
   await dialog.locator('input[placeholder="ЮП-1234"]').fill(sku);
   await dialog.locator('input[placeholder="Полное название"]').fill(name);
 
@@ -126,6 +119,74 @@ export async function ensureProductViaUI(
     await dialog.getByRole("button", { name: "Закрыть" }).first().click();
     await expect(dialog).not.toBeVisible({ timeout: 5_000 });
   }
+}
+
+/**
+ * Создать артикул в справочнике сырья через UI БЕЗ раннего выхода: диалог
+ * открывается всегда, даже если SKU уже есть. Режим «ensure» живёт отдельно
+ * (`ensureProductViaUI`), а тесты, которым нужен сам путь создания, зовут
+ * этот хелпер — он и был мёртвым кодом на накопительной БД.
+ */
+export async function createProductViaUI(
+  page: Page,
+  sku: string,
+  name: string,
+  lengthMm = 6000,
+) {
+  await page.goto("/references/raw-materials");
+  const dialog = await openCreateProductDialogViaUI(page);
+  await submitCreateProductDialogViaUI(dialog, sku, name, lengthMm);
+}
+
+/**
+ * Удалить артикул из справочника сырья через UI: карточка → «Удалить» →
+ * подтверждение «Удалить E2E-...?». Ждёт исчезновения строки из списка.
+ */
+export async function deleteProductViaUI(page: Page, sku: string) {
+  await page.goto("/references/raw-materials");
+  const search = page.getByPlaceholder("Поиск");
+  await expect(search).toBeVisible({ timeout: 10_000 });
+  await search.fill(sku);
+
+  const row = page.locator("tr", { hasText: sku }).first();
+  await expect(row).toBeVisible({ timeout: 10_000 });
+  // Клик по строке открывает карточку, но клик по самому артикулу уводит в
+  // сводку (кнопка гасит всплытие) — берём первую ячейку с фото.
+  await row.locator("td").first().click();
+  const dialog = page.getByRole("dialog");
+  await expect(dialog).toBeVisible({ timeout: 5_000 });
+  await expect(dialog.locator('input[placeholder="ЮП-1234"]')).toHaveValue(sku, { timeout: 5_000 });
+  // `exact` обязателен: в карточке есть ещё и кнопки «Удалить длину».
+  await dialog.getByRole("button", { name: "Удалить", exact: true }).click();
+
+  const confirm = page.getByRole("alertdialog").filter({ hasText: `Удалить ${sku}?` });
+  await expect(confirm).toBeVisible({ timeout: 5_000 });
+  await confirm.getByRole("button", { name: "Удалить", exact: true }).click();
+  await expect(confirm).toBeHidden({ timeout: 10_000 });
+  await expect(row).toBeHidden({ timeout: 10_000 });
+}
+
+/** Создать продукт в справочнике сырья через UI, если его ещё нет. */
+export async function ensureProductViaUI(
+  page: Page,
+  sku: string,
+  name: string,
+  lengthMm = 6000,
+) {
+  await page.goto("/references/raw-materials");
+  await expect(page.getByPlaceholder("Поиск")).toBeVisible({ timeout: 10_000 });
+
+  const search = page.getByPlaceholder("Поиск");
+  await search.fill(sku);
+  await page.waitForTimeout(800);
+
+  const existingRow = page.locator("tr", { hasText: sku }).first();
+  if ((await existingRow.count()) > 0) {
+    return;
+  }
+
+  const dialog = await openCreateProductDialogViaUI(page);
+  await submitCreateProductDialogViaUI(dialog, sku, name, lengthMm);
 }
 
 
