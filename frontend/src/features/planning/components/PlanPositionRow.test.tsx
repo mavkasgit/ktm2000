@@ -151,15 +151,25 @@ describe("PositionRow — состояние валидации", () => {
   })
 })
 
-/** Ячейка «Маршрут» отрендеренной строки. */
-function routeCell(pos: PlanPositionOut, props?: { routes: ProductionRoute[]; onAssignRoute: (positionId: number, routeId: number | null) => void }): HTMLElement {
+/** Строка плана целиком: ячейки — прямые <div>-и внутри строки (CSS-grid). */
+function renderRow(pos: PlanPositionOut, props?: { routes: ProductionRoute[]; onAssignRoute: (positionId: number, routeId: number | null) => void }): HTMLElement {
   const client = new QueryClient({ defaultOptions: { queries: { retry: false } } })
   const { container } = render(
     <QueryClientProvider client={client}>
       <PositionRow pos={pos} onApprove={vi.fn()} onDelete={vi.fn()} {...props} />
     </QueryClientProvider>,
   )
-  return container.querySelectorAll('[id^="plan-position-"] > div')[6] as HTMLElement
+  return container.querySelector('[id^="plan-position-"]') as HTMLElement
+}
+
+function cells(row: HTMLElement): HTMLElement[] {
+  return Array.from(row.children) as HTMLElement[]
+}
+
+const ROUTE_CELL_INDEX = 6
+
+function routeCell(row: HTMLElement): HTMLElement {
+  return cells(row)[ROUTE_CELL_INDEX]
 }
 
 describe("PositionRow — ячейка «Маршрут» при невыбранном маршруте", () => {
@@ -170,40 +180,54 @@ describe("PositionRow — ячейка «Маршрут» при невыбра�
     route_name: "ЮП-460 резка",
     route_source: "dynamic_build",
     errors: ["route_signature_conflict"],
+    // Номер подвеса нужен проверке места признака: он живёт в ячейке «Кол-во»,
+    // а признак обязан стоять левее неё (в самом начале строки).
+    input_quantity: "100",
+    quantity_per_hanger: 30,
   })
 
-  it("пересобранное имя без route_id помечено как ожидаемое, а не как назначенный маршрут", () => {
-    const cell = routeCell(conflictPosition)
+  it("признак стоит в самом начале строки — перед номером подвеса", () => {
+    const row = renderRow(conflictPosition)
+    const markerCellIndex = cells(row).findIndex((cell) => cell.querySelector('[data-route-state="expected"]'))
+    const hangerCellIndex = cells(row).findIndex((cell) => /\(\d+П\)/.test(cell.textContent ?? ""))
 
-    expect(cell.textContent).toContain("ЮП-460 резка")
-    const marker = cell.querySelector('[data-route-state="expected"]')
-    expect(marker).not.toBeNull()
+    expect(markerCellIndex).toBe(0)
+    expect(hangerCellIndex).toBeGreaterThan(0)
+    expect(markerCellIndex).toBeLessThan(hangerCellIndex)
+    const marker = cells(row)[markerCellIndex].querySelector('[data-route-state="expected"]')
     expect(marker?.getAttribute("title")).toBe("маршрут не назначен: показано ожидаемое имя")
+    // Имя остаётся видимым — контракт «страница плана = предпросмотр импорта».
+    expect(routeCell(row).textContent).toContain("ЮП-460 резка")
   })
 
   it("признак ожидаемого имени — тот же красный, что у ошибок строки", () => {
-    const marker = routeCell(conflictPosition).querySelector('[data-route-state="expected"]')
+    const row = renderRow(conflictPosition)
+    const marker = row.querySelector('[data-route-state="expected"]')
 
-    expect(marker?.querySelector("svg")?.getAttribute("class")).toEqual(expect.stringContaining("text-red-600"))
+    expect(marker?.querySelector("svg")?.getAttribute("class")).toEqual(
+      expect.stringContaining("text-red-600"),
+    )
+    expect(routeCell(row).querySelector(".text-red-700")?.textContent).toBe("ЮП-460 резка")
   })
 
-  it("назначенный маршрут помечен как обычный, ячейка не меняется", () => {
-    const cell = routeCell(
+  it("назначенный маршрут помечен как обычный, строка не меняется", () => {
+    const row = renderRow(
       position({ route_id: 42, route_name: "ЮП-460 резка", status: "valid" }),
     )
 
-    expect(cell.textContent).toContain("ЮП-460 резка")
-    expect(cell.querySelector('[data-route-state="expected"]')).toBeNull()
-    expect(cell.querySelector(".text-blue-700")?.textContent).toBe("ЮП-460 резка")
+    expect(row.querySelector('[data-route-state="expected"]')).toBeNull()
+    expect(routeCell(row).textContent).toContain("ЮП-460 резка")
+    expect(routeCell(row).querySelector(".text-blue-700")?.textContent).toBe("ЮП-460 резка")
   })
 
   it("признак работает и в режиме выбора маршрута из выпадающего списка", () => {
-    const cell = routeCell(conflictPosition, {
+    const row = renderRow(conflictPosition, {
       routes: [{ id: 42, code: "R-42", name: "ЮП-460 резка", description: null, is_active: true }],
       onAssignRoute: vi.fn(),
     })
+    const markerCellIndex = cells(row).findIndex((cell) => cell.querySelector('[data-route-state="expected"]'))
 
-    expect(cell.querySelector('[data-route-state="expected"]')).not.toBeNull()
-    expect(cell.textContent).toContain("ЮП-460 резка")
+    expect(markerCellIndex).toBe(0)
+    expect(routeCell(row).textContent).toContain("ЮП-460 резка")
   })
 })

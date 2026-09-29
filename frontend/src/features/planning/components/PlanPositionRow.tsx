@@ -21,20 +21,20 @@ import {
 } from "../lib/plan-labels"
 
 /**
- * Имя маршрута при `route_id = null` (#229): маршрут не назначен, а имя
- * пересобрано профилем для предпросмотра импорта. Показываем имя (контракт
- * «страница плана = предпросмотр»), но тем же признаком, что ошибки строки
- * (иконка + красный), чтобы ожидаемое имя не читалось как назначенный маршрут.
+ * Признак «маршрут не назначен» (#229): при `route_id = null` имя пересобрано
+ * профилем для предпросмотра импорта, и читать его как назначенный маршрут
+ * нельзя. Признак стоит в самом начале строки — перед количеством с номером
+ * подвеса, — иначе он оказывается правее по строке и при беглом просмотре
+ * строки не читается.
  */
-function ExpectedRouteName({ name }: { name: string }) {
+function ExpectedRouteMarker() {
   return (
     <span
       data-route-state="expected"
       title="маршрут не назначен: показано ожидаемое имя"
-      className="inline-flex items-center gap-1 min-w-0"
+      className="inline-flex shrink-0"
     >
-      <AlertTriangle className="h-3.5 w-3.5 shrink-0 text-red-600" aria-hidden="true" />
-      <span className="truncate text-red-700">{name}</span>
+      <AlertTriangle className="h-3.5 w-3.5 text-red-600" aria-hidden="true" />
     </span>
   )
 }
@@ -231,7 +231,10 @@ export function PositionRow({ pos, onApprove, onDelete, selected, routes, onAssi
       }}
     >
       <div className="p-2 text-sm">
-        <span className="text-muted-foreground">#{pos.id}</span>
+        <span className="inline-flex items-center gap-1">
+          {routeNameIsExpected && <ExpectedRouteMarker />}
+          <span className="text-muted-foreground">#{pos.id}</span>
+        </span>
       </div>
       <div className="p-2 text-sm font-medium">{rowNum}</div>
       <div className="p-2 text-sm">
@@ -277,7 +280,7 @@ export function PositionRow({ pos, onApprove, onDelete, selected, routes, onAssi
                 <Route className={cn("h-3.5 w-3.5 shrink-0", pos.route_id ? "text-blue-600" : "text-muted-foreground group-hover:text-primary")} />
                 {pos.route_name ? (
                   routeNameIsExpected ? (
-                    <ExpectedRouteName name={pos.route_name} />
+                    <span className="truncate text-red-700" title={pos.route_name}>{pos.route_name}</span>
                   ) : (
                     <span className="text-blue-700 truncate" title={pos.route_name}>
                       {pos.route_name}
@@ -294,7 +297,7 @@ export function PositionRow({ pos, onApprove, onDelete, selected, routes, onAssi
           </div>
         ) : pos.route_name ? (
           routeNameIsExpected ? (
-            <ExpectedRouteName name={pos.route_name} />
+            <span className="truncate text-red-700" title={pos.route_name}>{pos.route_name}</span>
           ) : (
             <span className="inline-flex items-center gap-1 text-blue-700 truncate" title={`Маршрут #${pos.route_id}`}>
               <Route className="h-3 w-3 shrink-0" />
