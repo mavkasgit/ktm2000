@@ -3,11 +3,12 @@ from __future__ import annotations
 SELECTION_RULES = [
     {
         "code": "core_sections",
-        # SHIPMENT/SHIPPED здесь намеренно НЕ требуются: завод делает и
-        # маршруты с отправкой и без неё, а требование было безусловным. Из-за
-        # него любой маршрут без отправки получал route_missing_required_step и
-        # упирался в форс-аппрув — утвердить обычную позицию было невозможно.
-        # Требование отправки задаётся составом самого маршрута.
+        # SHIPMENT/SHIPPED обязательны, и требование рабочее: складские этапы
+        # лежат в `storage_section_id`, а `validate_route_match` их учитывает
+        # наравне с `section_id` (фикс рядом, в route_validation). Прежняя
+        # ошибка «любой маршрут со складами неполон» лечилась чтением
+        # `storage_section_id`, а не снятием требования: без этого фикса
+        # маршрут без отправки проходил бы approve незаметно.
         "name": "Базовые участки маршрута",
         "profile_code": "packaging_map_rp",
         "priority": 1000,
@@ -18,6 +19,8 @@ SELECTION_RULES = [
             {"action": "require_section", "section_code": "RAW_STOCK"},
             {"action": "require_section", "section_code": "ANODIZING"},
             {"action": "require_section", "section_code": "FINISHED_STOCK"},
+            {"action": "require_section", "section_code": "SHIPMENT"},
+            {"action": "require_section", "section_code": "SHIPPED"},
         ],
     },
     {

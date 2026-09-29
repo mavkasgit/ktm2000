@@ -100,36 +100,47 @@ async def _resolve_route_id_for_dynamic_name(
     stored_route_id: int | None,
     route_cache: dict | None = None,
 ) -> int | None:
-    """Prefer stored route_id when its name matches; otherwise lookup by dynamic name.
+    """`route_id` позиции по пересобранному имени; `None` — не нашли.
 
-    If neither path resolves by name, the STORED route_id is still authoritative:
-    the position carries a real assignment, and the dynamic rebuild only
-    reproduces its display name. Those two can legitimately disagree — the
-    rebuild goes by the profile pattern (`{output_kind} - {operations}`), which
-    drops the colour, so a stored route «П/Ф - Серебро - Спанбонд» rebuilds as
-    «П/Ф - Спанбонд» and matches nothing. Erasing the assignment there made the
-    position report `route_not_found` and take-to-work refuse it with
-    «No route found for this position», although the route was assigned and
-    present the whole time.
+    Порядок: сохранённое назначение (если имя совпало) → поиск по имени →
+    сохранённое назначение как последний выход. Имя пересборки берётся из
+    шаблона профиля (`{output_kind} - {operations}`), и на части позиций оно
+    не совпадает с сохранённым. Раньше это обнуляло назначение: позиция
+    отдавала `route_not_found`, а take-to-work отказывал с HTTP 200
+    «No route found for this position» — при живом, назначенном маршруте.
+
+    Возвращается только id, а `route_name` вызывающий берёт из пересборки
+    намеренно: страница плана обязана показывать то же имя, что и предпросмотр
+    импорта (контракт закреплён `test_resolve_position_route_rebuilds_dynamic_name_over_wrong_route_id`).
+    Поэтому в fallback-ветке id и имя указывают на разные строки — это цена
+    совпадения с предпросмотром, а не дефект резолва.
+
+    Архивированный маршрут (`is_active=False`) назначением не считается: он
+    прошёл бы резолв с `error=None`, выглядел бы назначенным и падал бы позже,
+    в take-to-work («Route is not active», production_planning.py).
     """
     if stored_route_id is not None:
         route = await _cached_route(db, stored_route_id, route_cache)
-        if route is not None and route.name == built_name:
+        if route is not None and route.name == built_name and route.is_active:
             return route.id
     matched = await db.scalar(
         select(ProductionRoute.id)
-        .where(ProductionRoute.name == built_name)
+        .where(ProductionRoute.name == built_name, ProductionRoute.is_active.is_(True))
         .order_by(ProductionRoute.id.desc())
         .limit(1)
     )
     if matched is not None:
         return matched
     if stored_route_id is not None:
-        # Название не восстановилось — назначение всё равно действительное.
-        return stored_route_id
+        stored = await _cached_route(db, stored_route_id, route_cache)
+        if stored is not None and stored.is_active:
+            return stored.id
     return None
 
-async def _cached_route(db: AsyncSession, route_id: int, route_cache: dict | None) -> ProductionRoute | None:
+
+async def _cached_route(
+    db: AsyncSession, route_id: int, route_cache: dict | None
+) -> ProductionRoute | None:
     """Fetch ProductionRoute by id, reusing the batch-level cache when provided."""
     if route_cache is not None and route_id in route_cache:
         return route_cache[route_id]
@@ -225,17 +236,24 @@ async def resolve_position_route(
                         stored_route_id=route_id,
                         route_cache=route_cache,
                     )
-                    return ResolvedRouteInfo(
-                        route_id=resolved_route_id,
-                        route_name=built_route.name,
-                        source="dynamic_build",
-                        route_origin=origin or PlanPositionRouteOrigin.auto.value,
-                        route_match_quality=quality or PlanPositionRouteMatchQuality.exact.value,
-                        route_match_reason=reason or PlanPositionRouteMatchReason.selection_rules.value,
-                        route_assigned_at=assigned_at,
-                        route_manual_confirmed_at=manual_confirmed_at,
-                        error=None,
-                    )
+                    if resolved_route_id is not None:
+                        return ResolvedRouteInfo(
+                            route_id=resolved_route_id,
+                            # Имя — из пересборки, не у найденного маршрута:
+                            # страница плана обязана совпадать с предпросмотром
+                            # импорта (см. docstring резолва).
+                            route_name=built_route.name,
+                            source="dynamic_build",
+                            route_origin=origin or PlanPositionRouteOrigin.auto.value,
+                            route_match_quality=quality or PlanPositionRouteMatchQuality.exact.value,
+                            route_match_reason=reason or PlanPositionRouteMatchReason.selection_rules.value,
+                            route_assigned_at=assigned_at,
+                            route_manual_confirmed_at=manual_confirmed_at,
+                            error=None,
+                        )
+                    # Ничего не нашли — идём в ветку сохранённого назначения
+                    # ниже: там архивный маршрут отсеется, а существующий
+                    # вернётся со своим именем и без ошибки.
             except Exception:
                 pass  # Fall through to stored route_id or auto selection
 
@@ -243,7 +261,11 @@ async def resolve_position_route(
     if route_id is not None:
         route = await _cached_route(db, route_id, route_cache)
         source = _compat_source_from_origin(origin, route_id)
-        if route is None:
+        # Архивированный маршрут (`is_active=False`) — это отзыв назначения,
+        # а не действительный маршрут. take-to-work всё равно его отвергнет
+        # («Route is not active», production_planning.py), то есть позиция
+        # выглядела бы назначенной и падала бы только на запуске.
+        if route is None or not route.is_active:
             return ResolvedRouteInfo(
                 route_id=None,
                 route_name=None,
