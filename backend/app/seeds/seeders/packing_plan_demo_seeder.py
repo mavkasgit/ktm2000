@@ -17,7 +17,7 @@ change set → approve → release batch → ``work_tasks``, затем пове
 """
 
 from datetime import UTC, date, datetime, timedelta
-from decimal import Decimal
+from decimal import ROUND_FLOOR, Decimal
 from io import BytesIO
 
 from openpyxl import Workbook
@@ -916,6 +916,19 @@ def _progress_mode(index: int, total: int) -> str:
         if ratio < edge:
             return name
 
+
+def _whole_pieces(value: Decimal) -> Decimal:
+    """Целые штуки из расчётной доли, округление по полу.
+
+    Производство считает трубы и заготовки штуками, долей штуки не существует:
+    дробь в ``complete``/``scrap`` уезжает в ledger, в остаток склада и в
+    колонку «передать» (там она видна оператору как «619.2 шт»). По полу, а
+    не по умолчанию: нельзя выпустить больше, чем реально выдано, иначе
+    годные уедут за остаток выдачи.
+    """
+    return value.to_integral_value(rounding=ROUND_FLOOR)
+
+
 async def _position_task_rows(
     db: AsyncSession, position_id: int
 ) -> list[tuple[WorkTask, SectionPlanLine, RouteStage, Section]]:
@@ -1114,9 +1127,16 @@ async def _run_route_progress(
                 if mode == "issued":
                     stats["issued"] += 1
                     continue
-                issued = (await StockProjectionManager().get_task_cache(db, task.id))["issued_quantity"]
+                # Штук у нас не бывает: годные и брак — целые. Доля от плана
+                # округляется по полу (не выдаём больше выпущенного) и не в
+                # ноль — нулевая порция не проходит `complete_task`. Иначе
+                # 0.6·1032 = 619.2 уезжает в ledger, в остаток склада и в
+                # колонку «передать» готовой продукции.
+                issued = Decimal(
+                    str((await StockProjectionManager().get_task_cache(db, task.id))["issued_quantity"])
+                )
                 share = Decimal("1") if mode == "done" else Decimal("0.6")
-                good = min((issued * share).quantize(Decimal("0.001")), issued)
+                good = min(_whole_pieces(issued * share), _whole_pieces(issued))
                 # На позициях с раскроем материал приходит на участок с
                 # габаритом выхода (например 0,9 м), а задание остаётся с
                 # входным (2,7 м): брак списывается по габариту задания, и на
@@ -1126,8 +1146,15 @@ async def _run_route_progress(
                     (group.get("dimensions") or {}) != (task.dimensions or {})
                     for group in (rows[stop_index - 1][0].outputs if stop_index else [])
                 )
-                defect = Decimal("0") if split_arrival else min(
-                    issued - good, (issued * Decimal("0.01")).quantize(Decimal("0.001"))
+                # Брак ~1 % выданного, но не меньше штуки: он виден в колонках
+                # доски и означает «в работе». Больше остатка годных — нельзя.
+                defect = (
+                    Decimal("0")
+                    if split_arrival
+                    else min(
+                        _whole_pieces(issued - good),
+                        max(_whole_pieces(issued * Decimal("0.01")), Decimal("1")),
+                    )
                 )
                 await complete_task(
                     db,
