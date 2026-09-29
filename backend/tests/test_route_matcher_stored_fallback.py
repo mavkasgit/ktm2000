@@ -264,3 +264,51 @@ async def test_route_edited_by_hand_keeps_auto_code_but_signature_is_verified(se
 
     assert result.route_id != edited.id, "маршрут чужого состава нельзя подставлять"
     assert result.error == "route_signature_conflict"
+
+
+@pytest.mark.asyncio
+async def test_legacy_name_fallback_resolves_oldest_codeless_route(session) -> None:
+    """Fallback по имени берёт самый старый маршрут без кода, как сид и импорт.
+
+    Ветка брала ``order_by(id DESC)`` — самый свежий, тогда как сид, импорт и
+    ``run_seed`` работают с самым старым. На дублях без кода (маршруты,
+    созданные импортом до #230) это тихо разные выборки: позиция получала
+    другой маршрут, и результат зависел от того, когда строка создана.
+    """
+    from tests.test_dynamic_route_generation import _make_profile_with_rules, _seed_sections
+
+    await _seed_sections(session)
+    profile_id = await _make_profile_with_rules(session)
+    position = PlanPosition(
+        production_plan_id=1,
+        product_id=None,
+        source_type=PlanSourceType.excel_import,
+        source_sku="ХТ-466-3776",
+        quantity=1,
+        source_payload={"output_kind": "П/Ф", "source_name": "РП-АКТ-03 2,7 м анодчерный матов"},
+        status=PlanPositionStatus.draft,
+        validation_status=PlanPositionValidationStatus.pending,
+        validation_errors=[],
+        route_id=None,
+        route_profile_id=profile_id,
+        route_origin=PlanPositionRouteOrigin.auto,
+    )
+    built = await _built_route(session, position)
+    assert built.signature, "предусловие: пересборка даёт сигнатуру"
+    assert auto_route_code(built.signature) is not None
+
+    # Два маршрута до #230: кода нет ни у одного, имя общее.
+    older = ProductionRoute(name=built.name, code=None, is_active=True)
+    session.add(older)
+    await session.flush()
+    newer = ProductionRoute(name=built.name, code=None, is_active=True)
+    session.add(newer)
+    await session.commit()
+    assert newer.id > older.id
+
+    result = await resolve_position_route(session, position)
+
+    # Ветка кода не сработала: auto-кода в базе нет, только безкодовые.
+    assert result.route_id == older.id, (
+        f"fallback взял {result.route_id}, ожидался самый старый {older.id}"
+    )

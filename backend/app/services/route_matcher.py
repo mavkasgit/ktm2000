@@ -20,6 +20,7 @@ from app.services.color_extraction import resolve_payload_color
 from app.services.route_builder import build_route_from_profile
 from app.services.route_selection import RouteCandidateDiagnostic, select_route_for_payload
 from app.services.route_signature import auto_route_code, route_signature_conflicts
+from app.services.route_identity import find_route_by_code, find_route_by_name
 
 
 class RouteSignatureConflict(Exception):
@@ -158,11 +159,7 @@ async def _resolve_route_id_for_dynamic_name(
             return route.id
     built_code = auto_route_code(built_signature)
     if built_code is not None:
-        matched = await db.scalar(
-            select(ProductionRoute)
-            .where(ProductionRoute.code == built_code, ProductionRoute.is_active.is_(True))
-            .limit(1)
-        )
+        matched = await find_route_by_code(db, built_code, only_active=True)
         if matched is not None:
             # Код — производная сигнатуры, но пересчёт сигнатуры код не
             # обновляет (`refresh_route_signature`), поэтому маршрут,
@@ -172,18 +169,13 @@ async def _resolve_route_id_for_dynamic_name(
             if await route_signature_conflicts(db, matched, built_signature):
                 raise RouteSignatureConflict(matched.id)
             return matched.id
-    matched = await db.scalar(
-        select(ProductionRoute.id)
-        .where(
-            ProductionRoute.name == built_name,
-            ProductionRoute.code.is_(None),
-            ProductionRoute.is_active.is_(True),
-        )
-        .order_by(ProductionRoute.id.desc())
-        .limit(1)
+    # Fallback по имени — только среди строк без кода (ADR-0051 п. 6), и
+    # порядок тот же, что у сида и импорта: самый старый.
+    legacy = await find_route_by_name(
+        db, built_name, legacy_name_only=True, only_active=True
     )
-    if matched is not None:
-        return matched
+    if legacy is not None:
+        return legacy.id
     if stored_route_id is not None:
         stored = await _cached_route(db, stored_route_id, route_cache)
         if stored is not None and stored.is_active:
