@@ -20,6 +20,25 @@ import {
   DuplicateConflict,
 } from "../lib/plan-labels"
 
+/**
+ * Имя маршрута при `route_id = null` (#229): маршрут не назначен, а имя
+ * пересобрано профилем для предпросмотра импорта. Показываем имя (контракт
+ * «страница плана = предпросмотр»), но тем же признаком, что ошибки строки
+ * (иконка + красный), чтобы ожидаемое имя не читалось как назначенный маршрут.
+ */
+function ExpectedRouteName({ name }: { name: string }) {
+  return (
+    <span
+      data-route-state="expected"
+      title="маршрут не назначен: показано ожидаемое имя"
+      className="inline-flex items-center gap-1 min-w-0"
+    >
+      <AlertTriangle className="h-3.5 w-3.5 shrink-0 text-red-600" aria-hidden="true" />
+      <span className="truncate text-red-700">{name}</span>
+    </span>
+  )
+}
+
 export function PositionRow({ pos, onApprove, onDelete, selected, routes, onAssignRoute, onOpenDetail, duplicateConflict, onJumpToPosition, onSelect, onSkuClick }: {
   pos: PlanPositionOut;
   onApprove: (id: number, planId?: number, force?: boolean, reason?: string) => Promise<void>;
@@ -49,6 +68,8 @@ export function PositionRow({ pos, onApprove, onDelete, selected, routes, onAssi
     return pos.source_row_number ?? "—"
   })()
   const routeError = pos.route_error ? translateLabel(pos.route_error, routeErrorLabels) : null
+  // Имя без `route_id` — ожидаемое (пересобрано профилем), а не назначенный маршрут.
+  const routeNameIsExpected = Boolean(pos.route_name) && !pos.route_id
   const hasDuplicateConflict = Boolean(duplicateConflict && duplicateConflict.conflictIds.length > 0)
   const canApprove =
     (pos.status === 'draft' || pos.status === 'valid') &&
@@ -255,9 +276,13 @@ export function PositionRow({ pos, onApprove, onDelete, selected, routes, onAssi
               <span className="inline-flex items-center gap-1.5 w-full min-w-0">
                 <Route className={cn("h-3.5 w-3.5 shrink-0", pos.route_id ? "text-blue-600" : "text-muted-foreground group-hover:text-primary")} />
                 {pos.route_name ? (
-                  <span className="text-blue-700 truncate" title={pos.route_name}>
-                    {pos.route_name}
-                  </span>
+                  routeNameIsExpected ? (
+                    <ExpectedRouteName name={pos.route_name} />
+                  ) : (
+                    <span className="text-blue-700 truncate" title={pos.route_name}>
+                      {pos.route_name}
+                    </span>
+                  )
                 ) : (
                   <span className={cn("text-xs truncate", routeError ? "text-red-600" : "text-muted-foreground group-hover:text-foreground")} title={routeError || undefined}>
                     {routeError || "Нажмите для выбора"}
@@ -268,10 +293,14 @@ export function PositionRow({ pos, onApprove, onDelete, selected, routes, onAssi
           />
           </div>
         ) : pos.route_name ? (
-          <span className="inline-flex items-center gap-1 text-blue-700 truncate" title={`Маршрут #${pos.route_id}`}>
-            <Route className="h-3 w-3 shrink-0" />
-            {pos.route_name}
-          </span>
+          routeNameIsExpected ? (
+            <ExpectedRouteName name={pos.route_name} />
+          ) : (
+            <span className="inline-flex items-center gap-1 text-blue-700 truncate" title={`Маршрут #${pos.route_id}`}>
+              <Route className="h-3 w-3 shrink-0" />
+              {pos.route_name}
+            </span>
+          )
         ) : (
           <span className={routeError ? "text-red-600 text-xs truncate" : "text-muted-foreground text-xs truncate"} title={routeError || undefined}>
             {routeError || "Не назначен"}

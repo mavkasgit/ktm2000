@@ -3,6 +3,7 @@ import { QueryClient, QueryClientProvider } from "@tanstack/react-query"
 import { describe, expect, it, vi } from "vitest"
 
 import type { PlanPositionOut } from "@/shared/api/productionPlans"
+import type { ProductionRoute } from "@/shared/api/routes"
 import { PositionRow } from "./PlanPositionRow"
 
 function position(overrides: Partial<PlanPositionOut>): PlanPositionOut {
@@ -147,5 +148,62 @@ describe("PositionRow — состояние валидации", () => {
 
     expect(container.textContent).toContain("Перекрыта")
     expect(container.textContent).not.toContain("overridden")
+  })
+})
+
+/** Ячейка «Маршрут» отрендеренной строки. */
+function routeCell(pos: PlanPositionOut, props?: { routes: ProductionRoute[]; onAssignRoute: (positionId: number, routeId: number | null) => void }): HTMLElement {
+  const client = new QueryClient({ defaultOptions: { queries: { retry: false } } })
+  const { container } = render(
+    <QueryClientProvider client={client}>
+      <PositionRow pos={pos} onApprove={vi.fn()} onDelete={vi.fn()} {...props} />
+    </QueryClientProvider>,
+  )
+  return container.querySelectorAll('[id^="plan-position-"] > div')[6] as HTMLElement
+}
+
+describe("PositionRow — ячейка «Маршрут» при невыбранном маршруте", () => {
+  const conflictPosition = position({
+    status: "invalid",
+    validation_status: "invalid",
+    route_id: null,
+    route_name: "ЮП-460 резка",
+    route_source: "dynamic_build",
+    errors: ["route_signature_conflict"],
+  })
+
+  it("пересобранное имя без route_id помечено как ожидаемое, а не как назначенный маршрут", () => {
+    const cell = routeCell(conflictPosition)
+
+    expect(cell.textContent).toContain("ЮП-460 резка")
+    const marker = cell.querySelector('[data-route-state="expected"]')
+    expect(marker).not.toBeNull()
+    expect(marker?.getAttribute("title")).toBe("маршрут не назначен: показано ожидаемое имя")
+  })
+
+  it("признак ожидаемого имени — тот же красный, что у ошибок строки", () => {
+    const marker = routeCell(conflictPosition).querySelector('[data-route-state="expected"]')
+
+    expect(marker?.querySelector("svg")?.getAttribute("class")).toEqual(expect.stringContaining("text-red-600"))
+  })
+
+  it("назначенный маршрут помечен как обычный, ячейка не меняется", () => {
+    const cell = routeCell(
+      position({ route_id: 42, route_name: "ЮП-460 резка", status: "valid" }),
+    )
+
+    expect(cell.textContent).toContain("ЮП-460 резка")
+    expect(cell.querySelector('[data-route-state="expected"]')).toBeNull()
+    expect(cell.querySelector(".text-blue-700")?.textContent).toBe("ЮП-460 резка")
+  })
+
+  it("признак работает и в режиме выбора маршрута из выпадающего списка", () => {
+    const cell = routeCell(conflictPosition, {
+      routes: [{ id: 42, code: "R-42", name: "ЮП-460 резка", description: null, is_active: true }],
+      onAssignRoute: vi.fn(),
+    })
+
+    expect(cell.querySelector('[data-route-state="expected"]')).not.toBeNull()
+    expect(cell.textContent).toContain("ЮП-460 резка")
   })
 })
