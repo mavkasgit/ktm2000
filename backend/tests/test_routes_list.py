@@ -119,3 +119,57 @@ async def test_list_routes_include_steps_count_matches_routes(client, session) -
     detail_data = detail_response.json()
     assert len(detail_data) == route_count
     assert all("steps" in row for row in detail_data)
+
+
+@pytest.mark.asyncio
+async def test_create_route_conflicts_with_import_route_name(client, session) -> None:
+    """409 срабатывает и на имени АВТОмаршрута (код не NULL), а не только ручного.
+
+    ADR-0051 снял уникальность имени и ввёл поиск по коду, но ручной API
+    сохраняет 409 на совпадение имени — это защита от ошибки оператора
+    («Последствия» ADR-0051). Поэтому поиск здесь идёт БЕЗ фильтра по коду:
+    с фильтром `code IS NULL` ручной маршрут с именем автомаршрута создался
+    бы вторым и молча (уникальность по коду NULL не нарушает).
+
+    Регресс-тест на контракт, откатом не проверяется: правки здесь нет, есть
+    риск, что её посчитают лишней при следующем переносе.
+    """
+    auto_route = ProductionRoute(
+        name="ЮП-460 резка", code="auto-0123456789abcdef", is_active=True
+    )
+    session.add(auto_route)
+    await session.commit()
+
+    created = await client.post(
+        "/api/routes", json={"name": "ЮП-460 резка", "is_active": True}
+    )
+
+    assert created.status_code == 409, created.text
+    assert created.json()["detail"] == "Route with this name already exists"
+
+
+@pytest.mark.asyncio
+async def test_update_route_conflicts_with_import_route_name(client, session) -> None:
+    """PUT: переименование в имя автомаршрута тоже отбивается 409.
+
+    Тот же контракт, что в POST, плюс ``exclude_id``: маршрут не считается
+    конфликтом сам с собой, поэтому переименование в своё же имя проходит.
+    """
+    auto_route = ProductionRoute(
+        name="ЮП-460 резка", code="auto-0123456789abcdef", is_active=True
+    )
+    manual = ProductionRoute(name="Ручной маршрут", is_active=True)
+    session.add_all([auto_route, manual])
+    await session.commit()
+
+    forbidden = await client.put(
+        f"/api/routes/{manual.id}", json={"name": "ЮП-460 резка"}
+    )
+
+    assert forbidden.status_code == 409, forbidden.text
+    assert forbidden.json()["detail"] == "Route with this name already exists"
+
+    same_name = await client.put(
+        f"/api/routes/{manual.id}", json={"name": manual.name}
+    )
+    assert same_name.status_code == 200, same_name.text

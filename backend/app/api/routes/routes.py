@@ -8,6 +8,7 @@ from app.api.deps import READER_ROLES, REFERENCES_WRITER_ROLES, require_role
 from app.core.database import get_db
 from app.models.route import ProductionRoute, RouteMatchingRule, RouteStage, RouteOperation, SectionOperation
 from app.models.section import Section
+from app.services.route_identity import find_route_by_name
 from app.services.route_deletion import count_route_relations, delete_route_with_relations
 from app.services.route_signature import refresh_route_signature
 from app.services.route_transform import resolve_stage_transforms_dimensions
@@ -307,11 +308,17 @@ async def create_route(payload: RouteCreate, db: AsyncSession = Depends(get_db))
     # Имя — подпись, а не ключ (ADR-0045, ADR-0051): одинаковые имена у
     # разных маршрутов законны, и БД их теперь допускает. Для маршрута,
     # который оператор завёл руками, совпадение имени — всё же почти
-    # наверняка ошибка, поэтому предупреждаем. ``limit(1)`` обязателен:
-    # без него ``db.scalar`` на нескольких строках raises, а совпадений
-    # теперь может быть сколько угодно.
-    existing = await db.scalar(
-        select(ProductionRoute).where(ProductionRoute.name == payload.name).limit(1)
+    # наверняка ошибка, поэтому предупреждаем.
+    #
+    # ФИЛЬТРА ПО КОДА ЗДЕСЬ НЕТ, в отличие от поиска импортных маршрутов
+    # (ADR-0051 п. 3), и это не оговорка: `legacy_name_only=False` — по
+    # контракту ADR-0051 («Последствия») ручной API сохраняет 409 на
+    # совпадение имени как защиту от ошибки оператора. С фильтром по коду
+    # 409 не срабатывал бы на автомаршрут с тем же именем, и ручной маршрут
+    # создался бы вторым: код у него NULL, а уникальность по коду NULL в
+    # PostgreSQL не нарушает.
+    existing = await find_route_by_name(
+        db, payload.name, legacy_name_only=False
     )
     if existing:
         raise HTTPException(status_code=409, detail="Route with this name already exists")
@@ -328,10 +335,10 @@ async def update_route(route_id: int, payload: RouteUpdate, db: AsyncSession = D
     if route is None:
         raise HTTPException(status_code=404, detail="Route not found")
     if payload.name is not None:
-        existing = await db.scalar(
-            select(ProductionRoute)
-            .where(ProductionRoute.name == payload.name, ProductionRoute.id != route_id)
-            .limit(1)
+        # Тот же контракт, что в POST: 409 на совпадение имени, включая
+        # автомаршрут (см. комментарий выше — фильтра по коду здесь нет).
+        existing = await find_route_by_name(
+            db, payload.name, legacy_name_only=False, exclude_id=route_id
         )
         if existing:
             raise HTTPException(status_code=409, detail="Route with this name already exists")
