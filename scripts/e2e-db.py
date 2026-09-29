@@ -81,6 +81,13 @@ ROUTE_RULES_SOURCES = (
     "backend/app/services/route_signature.py",
     "backend/app/seeds/route_rule_profiles.py",
     "backend/app/seeds/selection_rules.py",
+    # Канон участков и операций: SECTION_OPS и TRANSFORMING_SECTION_OPS
+    # отсюда попадают в профили и правила через canon/registry, и правка
+    # этого файла меняет собираемые имя и сигнатуру маршрута. Без него в
+    # digest правка sections.py не видна, стенд не пересоздаётся, и маршруты
+    # прежней версии кода конфликтуют сами с собой — инцидент с 13 ложными
+    # route_signature_conflict (#226, разбор в комментарии к #225).
+    "backend/app/seeds/sections.py",
 )
 
 STAMP_TABLE = "e2e_stand_stamp"
