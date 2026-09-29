@@ -345,4 +345,185 @@ SELECTION_RULES = [
             },
         ],
     },
+
+    # ===== Упаковка: вид и сборка (#226) =====
+    # «Склейка» и «установка рассеивателя» — это операции участка упаковки, а не
+    # отдельный шаг маршрута: строка различает их одной колонкой, поэтому группа
+    # операций упаковки и получает дефолтную `PACK` для всех остальных строк.
+    # Правила маршрута снимают с таких строк сверловку и пресс — иначе строка
+    # без первичной операции уходила бы в цех, которого на плане нет.
+    {
+        "code": "pack_glue_route",
+        "name": "Склейка: участок маршрута",
+        "profile_code": "packaging_map_rp",
+        "priority": 850,
+        "is_active": True,
+        "phase": "route_select",
+        "conditions": [
+            {"source": "payload", "field_path": "operation", "operator": "contains", "value": "клей"},
+        ],
+        "actions": [
+            {"action": "exclude_section", "section_code": "DRILLING"},
+            {"action": "exclude_section", "section_code": "PRESSING"},
+        ],
+    },
+    {
+        "code": "pack_lens_route",
+        # Условие ловит и «рассеиватель», и «Без рассеивателя»: это признак
+        # отсутствия, отдельной операции у него нет (#226), но маршрут такой
+        # строки — тот же, что у строки без первичной операции.
+        "name": "Рассеиватель: участок маршрута",
+        "profile_code": "packaging_map_rp",
+        "priority": 850,
+        "is_active": True,
+        "phase": "route_select",
+        "conditions": [
+            {"source": "payload", "field_path": "operation", "operator": "contains", "value": "рассеивател"},
+        ],
+        "actions": [
+            {"action": "exclude_section", "section_code": "DRILLING"},
+            {"action": "exclude_section", "section_code": "PRESSING"},
+        ],
+    },
+    {
+        "code": "pack_glue_types",
+        "name": "Упаковка: склейка",
+        "profile_code": "packaging_map_rp",
+        "priority": 100,
+        "is_active": True,
+        "phase": "resolve_operations",
+        "conditions": [
+            {"source": "payload", "field_path": "operation", "operator": "contains", "value": "клей"},
+        ],
+        "actions": [
+            {
+                "action": "set_operation",
+                "section_code": "PACKING",
+                "group_code": "PACKING",
+                "operation_code": "PACK_GLUE",
+            },
+        ],
+    },
+    {
+        "code": "pack_lens_types",
+        # «Без рассеивателя» содержит слово «рассеиватель», поэтому признак
+        # отсутствия отсекается явно: операция под него не назначается.
+        "name": "Упаковка: установка рассеивателя",
+        "profile_code": "packaging_map_rp",
+        "priority": 100,
+        "is_active": True,
+        "phase": "resolve_operations",
+        "conditions": [
+            {"source": "payload", "field_path": "operation", "operator": "contains", "value": "рассеивател"},
+            {"source": "payload", "field_path": "operation", "operator": "not_contains", "value": "без"},
+        ],
+        "condition_logic": "and",
+        "actions": [
+            {
+                "action": "set_operation",
+                "section_code": "PACKING",
+                "group_code": "PACKING",
+                "operation_code": "PACK_LENS",
+            },
+        ],
+    },
+
+    # ===== Пила: операция по длине раскроя (#226) =====
+    # Длина раскроя лежит в payload-полях `input_length`/`output_length`
+    # (колонки G и K «Упаковочной карты РП», import_templates.py:22,26) в
+    # метрах строкой. Резать имеет смысл строку с РАЗНЫМИ входом и выходом и
+    # с одним выходом: раскрой на несколько длин (ADR-0003) одной операцией не
+    # описывается, и такие строки остаются на базовой `SAW`.
+    {
+        "code": "saw_length_0900",
+        "name": "Пила: резка на 0,9 м",
+        "profile_code": "packaging_map_rp",
+        "priority": 90,
+        "is_active": True,
+        "phase": "resolve_operations",
+        "conditions": [
+            {"source": "payload", "field_path": "output_length", "operator": "equals", "value": "0.9"},
+            {"source": "payload", "field_path": "input_length", "operator": "not_empty", "value": None},
+            {"source": "payload", "field_path": "input_length", "operator": "not_equals", "value": "0.9"},
+            {"source": "payload", "field_path": "outputs.1", "operator": "empty", "value": None},
+        ],
+        "condition_logic": "and",
+        "actions": [
+            {
+                "action": "set_operation",
+                "section_code": "SAWING",
+                "group_code": "SAWING",
+                "operation_code": "SAW_0900",
+            },
+        ],
+    },
+    {
+        "code": "saw_length_1350",
+        "name": "Пила: резка на 1,35 м",
+        "profile_code": "packaging_map_rp",
+        "priority": 90,
+        "is_active": True,
+        "phase": "resolve_operations",
+        "conditions": [
+            {"source": "payload", "field_path": "output_length", "operator": "equals", "value": "1.35"},
+            {"source": "payload", "field_path": "input_length", "operator": "not_empty", "value": None},
+            {"source": "payload", "field_path": "input_length", "operator": "not_equals", "value": "1.35"},
+            {"source": "payload", "field_path": "outputs.1", "operator": "empty", "value": None},
+        ],
+        "condition_logic": "and",
+        "actions": [
+            {
+                "action": "set_operation",
+                "section_code": "SAWING",
+                "group_code": "SAWING",
+                "operation_code": "SAW_1350",
+            },
+        ],
+    },
+    {
+        "code": "saw_length_1800",
+        "name": "Пила: резка на 1,8 м",
+        "profile_code": "packaging_map_rp",
+        "priority": 90,
+        "is_active": True,
+        "phase": "resolve_operations",
+        "conditions": [
+            {"source": "payload", "field_path": "output_length", "operator": "equals", "value": "1.8"},
+            {"source": "payload", "field_path": "input_length", "operator": "not_empty", "value": None},
+            {"source": "payload", "field_path": "input_length", "operator": "not_equals", "value": "1.8"},
+            {"source": "payload", "field_path": "outputs.1", "operator": "empty", "value": None},
+        ],
+        "condition_logic": "and",
+        "actions": [
+            {
+                "action": "set_operation",
+                "section_code": "SAWING",
+                "group_code": "SAWING",
+                "operation_code": "SAW_1800",
+            },
+        ],
+    },
+    {
+        "code": "saw_length_2700",
+        "name": "Пила: резка на 2,7 м",
+        "profile_code": "packaging_map_rp",
+        "priority": 90,
+        "is_active": True,
+        "phase": "resolve_operations",
+        "conditions": [
+            {"source": "payload", "field_path": "output_length", "operator": "equals", "value": "2.7"},
+            {"source": "payload", "field_path": "input_length", "operator": "not_empty", "value": None},
+            {"source": "payload", "field_path": "input_length", "operator": "not_equals", "value": "2.7"},
+            {"source": "payload", "field_path": "outputs.1", "operator": "empty", "value": None},
+        ],
+        "condition_logic": "and",
+        "actions": [
+            {
+                "action": "set_operation",
+                "section_code": "SAWING",
+                "group_code": "SAWING",
+                "operation_code": "SAW_2700",
+            },
+        ],
+    },
 ]

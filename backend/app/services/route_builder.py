@@ -660,6 +660,14 @@ _NAME_VAR_MAPPING: dict[str, tuple[str, str]] = {
     "drill_op": ("DRILLING", "DRILLING"),
     "color": ("ANODIZING", "ANODIZING"),
     "pack_op": ("ANODIZING", "PACK"),
+    # Упаковка и резка различают строки плана между собой (#226): без их
+    # слотов две сборки, различающиеся только этими операциями, делили одно
+    # имя маршрута — импорт видел в них конфликт сигнатур (#214). Слоты
+    # адресуют базовые группы участков: правило выбирает операцию в них
+    # (set_operation с operation_code вида PACK_GLUE / SAW_2700), поэтому
+    # значение слота — имя операции, а не код группы.
+    "packing_op": ("PACKING", "PACKING"),
+    "saw_op": ("SAWING", "SAWING"),
 }
 
 

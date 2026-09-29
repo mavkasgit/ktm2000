@@ -20,12 +20,82 @@ from app.models.production_plan import (
 )
 from app.models.release_batch import ReleaseBatch, ReleaseBatchPosition
 from app.models.rework_task import ReworkTask
-from app.models.route import RouteRuleProfile, RouteSelectionRule
+from app.models.route import RouteRuleProfile, RouteSelectionRule, SectionOperation
 from app.models.section import Section
 from app.models.transfer import Transfer
 from app.models.work_task import WorkTask
+from app.seeds.canon.quality_data import DEFECT_TYPES
+from app.seeds.import_templates import IMPORT_TEMPLATES
+from app.seeds.route_rule_profiles import ROUTE_RULE_PROFILES
+from app.seeds.routes import ROUTES
+from app.seeds.selection_rules import SELECTION_RULES
+from app.seeds.sections import SECTION_OPS, SECTIONS_DATA
 from app.services.route_selection import select_route_for_payload
 from app.stock.models import StockBalance, StockTransaction
+
+
+def _declared_rule_codes() -> set[str]:
+    """Коды правил отбора, объявленных в сиде."""
+    return {rule["code"] for rule in SELECTION_RULES}
+
+
+def _declared_operation_codes() -> set[tuple[str, str]]:
+    """Пары (участок, операция) из объявления сида.
+
+    Операция без кода — placeholder, резолвится динамически и в справочник
+    не попадает, поэтому в множество не входит.
+    """
+    return {
+        (section_code, op[3])
+        for section_code, ops in SECTION_OPS.items()
+        for op in ops
+        if op[3] is not None
+    }
+
+
+def _expected_seed_summary() -> dict[str, int]:
+    """Сводка сида, посчитанная по объявлению, а не по зафиксированным числам.
+
+    Смысл проверки — «сколько создаст» и «сколько создалось» не разъезжаются:
+    иначе пропавшее из сида правило или операция никто не заметит.
+    """
+    return {
+        "import_templates": len(IMPORT_TEMPLATES),
+        "route_rule_profiles": len(ROUTE_RULE_PROFILES),
+        # Статический маршрут + по одному динамическому на профиль с этапами.
+        "routes": len(ROUTES)
+        + sum(1 for profile in ROUTE_RULE_PROFILES if profile.get("route_sections")),
+        "selection_rules": len(SELECTION_RULES),
+        "sections": len(SECTIONS_DATA),
+        "section_operations": len(_declared_operation_codes()),
+        "defect_types": len(DEFECT_TYPES),
+    }
+
+
+#: Пила различает раскрой по целевой длине, упаковка — вид и сборку (#226).
+#: Без этих операций в справочнике строка плана осталась бы с дефолтной
+#: `SAW`/`PACK`, и колонка плана перестала бы что-либо различать.
+SAWING_LENGTH_OPS = {"SAW_0900", "SAW_1350", "SAW_1800", "SAW_2700"}
+PACKING_VARIANT_OPS = {"PACK_GLUE", "PACK_LENS"}
+
+#: Правила, которые назначают эти операции и снимают с упаковочной строки
+#: участки, которых на плане нет.
+SAWING_LENGTH_RULES = {"saw_length_0900", "saw_length_1350", "saw_length_1800", "saw_length_2700"}
+PACKING_ROUTE_RULES = {"pack_glue_route", "pack_lens_route"}
+PACKING_TYPE_RULES = {"pack_glue_types", "pack_lens_types"}
+
+
+async def _seeded_rule_codes(session) -> set[str]:
+    return set((await session.scalars(select(RouteSelectionRule.code))).all())
+
+
+async def _seeded_operation_codes(session) -> set[tuple[str, str]]:
+    rows = await session.execute(
+        select(Section.code, SectionOperation.operation_code).join(
+            Section, Section.id == SectionOperation.section_id
+        )
+    )
+    return set(rows.all())
 
 
 DEFAULT_SECTIONS = [
@@ -111,19 +181,45 @@ async def test_seed_routes_creates_characteristic_routes(client, session) -> Non
     response = await client.post("/api/routes-seed")
     assert response.status_code == 201
     data = response.json()
-    assert data == {"import_templates": 1, "route_rule_profiles": 1, "routes": 2, "selection_rules": 18, "sections": 12, "section_operations": 21, "defect_types": 6}
-    first_rules_count = len((await session.execute(select(RouteSelectionRule))).scalars().all())
-    assert first_rules_count == 18
+    assert data == _expected_seed_summary()
+
+    # Правила отбора в БД — ровно объявленный набор кодов: ни потерянных,
+    # ни лишних, ни задвоенных.
+    assert await _seeded_rule_codes(session) == _declared_rule_codes()
+
+    # Операции участков — справочник совпадает с объявлением по парам
+    # (участок, операция): иначе резолв операции строки плана уходит в никуда.
+    assert await _seeded_operation_codes(session) == _declared_operation_codes()
 
     # idempotency/update behavior
     response2 = await client.post("/api/routes-seed")
     assert response2.status_code == 201
     data2 = response2.json()
     assert data2 == data
-    second_rules = (await session.execute(select(RouteSelectionRule))).scalars().all()
-    assert len(second_rules) == first_rules_count
-    unique_keys = {rule.code for rule in second_rules}
-    assert len(unique_keys) == first_rules_count
+    # Повторный сид не плодит дубли: тот же набор кодов и тот же состав.
+    assert await _seeded_rule_codes(session) == _declared_rule_codes()
+    assert await _seeded_operation_codes(session) == _declared_operation_codes()
+
+
+@pytest.mark.asyncio
+async def test_seed_lands_the_declared_sawing_and_packing_operations(client, session) -> None:
+    """#226: резка по длине и вид упаковки — операции справочника.
+
+    Сверка по кодам, а не по количеству: операция, объявленная сидом и
+    потерявшаяся при seeding, не сдвинет счётчик — она просто исчезнет.
+    """
+    await _seed_default_sections(session)
+    assert (await client.post("/api/routes-seed")).status_code == 201
+
+    operations_by_section: dict[str, set[str]] = {}
+    for section_code, operation_code in await _seeded_operation_codes(session):
+        operations_by_section.setdefault(section_code, set()).add(operation_code)
+
+    assert SAWING_LENGTH_OPS <= operations_by_section["SAWING"]
+    assert PACKING_VARIANT_OPS <= operations_by_section["PACKING"]
+
+    rule_codes = await _seeded_rule_codes(session)
+    assert SAWING_LENGTH_RULES | PACKING_ROUTE_RULES | PACKING_TYPE_RULES <= rule_codes
 
 
 @pytest.mark.asyncio
@@ -238,7 +334,7 @@ async def test_force_seed_clears_generated_production_data(client, session) -> N
 
     force_response = await client.post("/api/routes-seed?force=true")
     assert force_response.status_code == 201
-    assert force_response.json() == {"import_templates": 1, "route_rule_profiles": 1, "routes": 2, "selection_rules": 18, "sections": 12, "section_operations": 21, "defect_types": 6}
+    assert force_response.json() == _expected_seed_summary()
 
     for model in (
         ReleaseBatchPosition,
@@ -256,7 +352,10 @@ async def test_force_seed_clears_generated_production_data(client, session) -> N
     ):
         assert await _count(session, model) == 0
 
-    assert len((await session.execute(select(RouteSelectionRule))).scalars().all()) == 18
+    # Force-сид пересоздаёт справочник целиком: после очистки в нём снова
+    # весь объявленный набор — правил по кодам и операций по парам.
+    assert await _seeded_rule_codes(session) == _declared_rule_codes()
+    assert await _seeded_operation_codes(session) == _declared_operation_codes()
 
 
 @pytest.mark.asyncio

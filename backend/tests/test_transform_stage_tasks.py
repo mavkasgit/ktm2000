@@ -24,6 +24,27 @@ from app.models.production_plan import (
 from app.models.route import ProductionRoute, RouteOperation, RouteStage, SectionOperation
 from app.models.section import Section
 from app.models.work_task import WorkTask
+from app.seeds.sections import TRANSFORMING_SECTION_OPS
+from app.seeds.selection_rules import SELECTION_RULES
+from app.services.route_transform import (
+    build_transform_spec,
+    resolve_stage_transforms_dimensions,
+)
+from app.services.shopfloor.queries_sections import get_section_board
+
+
+# --- helpers ---
+
+
+def _rule_assigned_operations() -> set[tuple[str, str]]:
+    """Пары (участок, операция), которые правила отбора назначают строке плана."""
+    return {
+        (action["section_code"], action["operation_code"])
+        for rule in SELECTION_RULES
+        for action in rule["actions"]
+        if action.get("action") == "set_operation" and action.get("operation_code")
+    }
+
 from app.services.route_transform import (
     build_transform_spec,
     resolve_stage_transforms_dimensions,
@@ -493,7 +514,12 @@ def test_build_transform_spec_does_not_mutate_position_outputs() -> None:
 
 
 @pytest.mark.asyncio
-async def test_seed_marks_sawing_operation_and_stage_as_transforming(client, session) -> None:
+async def test_seed_marks_exactly_the_declared_transforming_operations(client, session) -> None:
+    """Справочник помечает трансформирующими ровно объявленные операции (ADR-0002).
+
+    Свойство — точное равенство множеств: лишняя помеченная операция (например
+    упаковка) и потерянная (резка на длину) ломают маршер одинаково незаметно.
+    """
     for index, (code, type_) in enumerate(
         [
             ("RAW_STOCK", "raw_stock"),
@@ -517,28 +543,39 @@ async def test_seed_marks_sawing_operation_and_stage_as_transforming(client, ses
     response = await client.post("/api/routes-seed")
     assert response.status_code == 201, response.text
 
-    sawing = await session.scalar(select(Section).where(Section.code == "SAWING"))
-    saw_op = await session.scalar(
-        select(SectionOperation).where(
-            SectionOperation.section_id == sawing.id,
-            SectionOperation.operation_code == "SAW",
-        )
-    )
-    assert saw_op is not None
-    assert saw_op.transforms_dimensions is True
-
-    # Остальные операции справочника — не трансформирующие.
-    other_transforming = (
-        await session.execute(
-            select(SectionOperation).where(
-                SectionOperation.transforms_dimensions.is_(True),
-                SectionOperation.id != saw_op.id,
+    # Множество помеченных операций в БД = объявление TRANSFORMING_SECTION_OPS.
+    marked = {
+        (section_code, operation_code)
+        for section_code, operation_code, is_transforming in (
+            await session.execute(
+                select(
+                    Section.code,
+                    SectionOperation.operation_code,
+                    SectionOperation.transforms_dimensions,
+                ).join(Section, Section.id == SectionOperation.section_id)
             )
-        )
-    ).scalars().all()
-    assert other_transforming == []
+        ).all()
+        if is_transforming
+    }
+    assert marked == TRANSFORMING_SECTION_OPS
 
-    # Этап SAWING в засеянных маршрутах несёт маркер, остальные — нет.
+    # Связка объявлений: операция, которую правило назначает трансформирующему
+    # участку, обязана сама нести маркер — иначе резолв по коду операции снимет
+    # маркер с этапа и резка по длине молча перестанет быть резкой (ADR-0002).
+    transforming_sections = {section_code for section_code, _ in TRANSFORMING_SECTION_OPS}
+    for section_code, operation_code in _rule_assigned_operations():
+        if section_code in transforming_sections:
+            assert (section_code, operation_code) in TRANSFORMING_SECTION_OPS, (
+                f"rule assigns {section_code}.{operation_code}, which the "
+                f"transforming section does not mark as transforming"
+            )
+
+    # Этапы маршрутов наследуют способность участка: маркер несут ровно те
+    # этапы, чей участок объявлен трансформирующим.
+    section_codes_by_id = {
+        section.id: section.code
+        for section in (await session.execute(select(Section))).scalars().all()
+    }
     stages = (
         await session.execute(
             select(RouteStage).where(RouteStage.section_id.isnot(None))
@@ -546,7 +583,7 @@ async def test_seed_marks_sawing_operation_and_stage_as_transforming(client, ses
     ).scalars().all()
     assert stages, "seed created no route stages"
     for stage in stages:
-        expected = stage.section_id == sawing.id
+        expected = section_codes_by_id[stage.section_id] in transforming_sections
         assert stage.transforms_dimensions is expected, (
             f"stage seq={stage.sequence} section_id={stage.section_id}: "
             f"transforms_dimensions={stage.transforms_dimensions}, expected {expected}"

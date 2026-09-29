@@ -6,6 +6,7 @@ import {
   uploadTestFileViaUI,
   waitForPlanningTableViaUI,
 } from "./ui-helpers";
+import { errorLabels } from "../src/shared/lib/generated-labels";
 
 /**
  * @ui — канонический E2E: только UI, без прямых fetch к бизнес-API.
@@ -34,19 +35,80 @@ test.describe("@ui Route workflow E2E", () => {
     // строк на ещё не отрисованной таблице — и тест уходил в `test.skip`.
     // Ждём конкретное состояние (есть строка), а не «сколько бы ни нашлось».
     await expect(rows.first()).toBeVisible({ timeout: 30_000 });
-    const count = await rows.count();
 
-    const firstRow = rows.first();
-    // Строка плана — CSS-grid из <div>, а не <table>: локатор `td` в ней не
-    // находит ничего (маршрут читался как «нет подсказки» на любом прогоне).
-    // Седьмая ячейка grid — «Маршрут» (порядок в PlanPositionRow).
-    const routeCell = firstRow.locator("> div").nth(6);
-    await expect(routeCell).toBeVisible({ timeout: 10_000 });
-    // Живой импорт «Упаковочного плана» назначает маршрут каждой строке,
-    // поэтому в ячейке имя маршрута, а не плейсхолдеры неразрешённого route.
-    await expect(routeCell).not.toHaveText(/Не назначен|Нажмите для выбора/i);
+    // Сводная таблица пагинируется (50 строк на страницу по умолчанию), а в
+    // «Упаковочном плане» 55 строк: не расширив страницу, «все строки» молча
+    // означали бы «50 первых», и хвост плана не проверялся бы вовсе. Сектор
+    // футера рисуется только когда строк больше 50 — при меньшем плане его
+    // нет, и все строки уже на странице.
+    const pageSizeSelect = page.getByRole("combobox", {
+      name: "Количество записей на странице",
+    });
+    if (await pageSizeSelect.isVisible()) {
+      await pageSizeSelect.click();
+      await page.getByRole("option", { name: "200", exact: true }).click();
+    }
 
-    expect(count).toBeGreaterThan(0);
+    // Счётчик позиций в шапке секции — независимый источник ожидаемого числа
+    // строк: по нему ждём, пока отрисуется вся страница, а не первая строка.
+    const totalLabel = page
+      .locator("section")
+      .filter({ has: page.getByRole("heading", { name: "Сводная таблица позиций" }) })
+      .getByText(/^\d+\s+строк$/)
+      .first();
+    await expect(totalLabel).toBeVisible({ timeout: 30_000 });
+    const total = Number((await totalLabel.innerText()).match(/\d+/)?.[0]);
+    // Смена размера страницы перезапрашивает данные: пока таблица не
+    // перерисовалась, в DOM остаётся предыдущая страница из 50 строк.
+    await expect
+      .poll(() => rows.count(), { timeout: 30_000 })
+      .toBe(total);
+
+    // Снимок всех строк одним заходом: пока идёт поштучный обход, таблица
+    // может перерисоваться (пагинация, поллинг), и строки смешаются со
+    // следующей страницей. Строка плана — CSS-grid из <div>, а не <table>:
+    // локатор `td` в ней не находит ничего. Седьмая ячейка grid — «Маршрут»,
+    // восьмая — «Ошибки» (порядок в PlanPositionRow).
+    const planRows = await rows.evaluateAll((rowEls) =>
+      rowEls.map((row) => {
+        const cells = Array.from(row.children) as HTMLElement[];
+        return {
+          id: row.id,
+          sourceRow: cells[1]?.textContent?.trim() ?? "",
+          sku: cells[2]?.textContent?.trim() ?? "",
+          route: cells[6]?.textContent?.trim() ?? "",
+          errors: cells[7]?.textContent?.trim() ?? "",
+        };
+      }),
+    );
+    const describe = (row: (typeof planRows)[number]) =>
+      `${row.id} (строка ${row.sourceRow}, ${row.sku}): маршрут «${row.route}», ошибки «${row.errors}»`;
+
+    // Проверка идёт по ВСЕМ строкам импортированного плана, а не по первой:
+    // присваивание маршрута обязано покрыть каждую позицию.
+    expect(planRows.length, "в таблице отрисован не весь план").toBe(total);
+
+    // Первое: у каждой строки в ячейке маршрута стоит имя, а не плейсхолдер
+    // неразрешённого route («Не назначен» / «Нажмите для выбора»).
+    expect(
+      planRows
+        .filter((row) => /Не назначен|Нажмите для выбора/i.test(row.route))
+        .map(describe),
+      "строки плана остались без маршрута",
+    ).toEqual([]);
+
+    // Второе: строка без маршрута в этой таблице выглядит убедительно — backend
+    // отдаёт имя маршрута по пересборке из профиля (`route_matcher`), поэтому
+    // ячейка «Маршрут» показывает чужое имя и плейсхолдера в ней нет. Единственный
+    // след неразрешённого присваивания в UI — код `route_signature_conflict`
+    // в колонке «Ошибки». Проверяем его по всем строкам: пока backend-фикс #226
+    // не лёг, импорт оставляет несколько таких позиций.
+    expect(
+      planRows
+        .filter((row) => row.errors.includes(errorLabels.route_signature_conflict))
+        .map(describe),
+      "импорт оставил позиции с конфликтом сигнатуры маршрута",
+    ).toEqual([]);
   });
 
   test("import wizard opens and shows template options", async ({ page }) => {

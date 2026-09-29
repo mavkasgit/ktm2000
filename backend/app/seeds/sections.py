@@ -59,9 +59,21 @@ SECTION_OPS: dict[str, list[tuple[str | None, str | None, int, str | None, str, 
     ],
     "SAWING": [
         ("SAWING", "Резка", 10, "SAW", "Резка на пиле", True, "Fan", "#F97316", None, {}, "production"),
+        # Раскрой по целевой длине. Операции идут после базовой `SAW` в её же
+        # группе: строка без раскроя получает дефолт группы — «Резка на пиле»,
+        # а не первую попавшуюся по длине (#226).
+        ("SAWING", "Резка", 20, "SAW_0900", "Резка на 0,9 м", True, "Fan", "#F97316", None, {}, "production"),
+        ("SAWING", "Резка", 20, "SAW_1350", "Резка на 1,35 м", True, "Fan", "#F97316", None, {}, "production"),
+        ("SAWING", "Резка", 20, "SAW_1800", "Резка на 1,8 м", True, "Fan", "#F97316", None, {}, "production"),
+        ("SAWING", "Резка", 20, "SAW_2700", "Резка на 2,7 м", True, "Fan", "#F97316", None, {}, "production"),
     ],
     "PACKING": [
         ("PACKING", "Упаковка", 10, "PACK", "Упаковка", True, "Package", "#10B981", None, {}, "production"),
+        # Вид и сборка упаковки — те же операции участка, что и базовая упаковка:
+        # колонка плана различает склейку и рассеиватель, поэтому операцию
+        # назначает правило, а дефолтом группы остаётся `PACK` (#226).
+        ("PACKING", "Упаковка", 20, "PACK_GLUE", "Склейка", True, "Package", "#0EA5E9", None, {}, "production"),
+        ("PACKING", "Упаковка", 20, "PACK_LENS", "Установка рассеивателя", True, "PackageOpen", "#8B5CF6", None, {}, "production"),
     ],
     "FINISHED_STOCK": [
         ("FINISHED_STOCK", "Склад ГП", 10, "FG_WH", "Склад готовой продукции", False, "Container", "#065F46", None, {}, "transport"),
@@ -79,6 +91,12 @@ SECTION_OPS: dict[str, list[tuple[str | None, str | None, int, str | None, str, 
 # из справочника/этапа маршрута, а не сравнивает код секции со строкой.
 TRANSFORMING_SECTION_OPS: set[tuple[str, str]] = {
     ("SAWING", "SAW"),
+    # Резка на конкретную длину трансформирует габариты так же, как «просто
+    # резка»: одна заготовка → выходы разной длины (ADR-0002).
+    ("SAWING", "SAW_0900"),
+    ("SAWING", "SAW_1350"),
+    ("SAWING", "SAW_1800"),
+    ("SAWING", "SAW_2700"),
 }
 
 # field_map для table-driven upsert (ADR-0010): живут рядом с данными,

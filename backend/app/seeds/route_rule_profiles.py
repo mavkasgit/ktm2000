@@ -6,7 +6,7 @@ ROUTE_RULE_PROFILES = [
         "name": "Упаковочная карта РП",
         "is_active": True,
         "priority": 1000,
-        "route_name_pattern": "{output_kind} - {press_op} - {drill_op} - {shot_op} - {color} - {pack_op}",
+        "route_name_pattern": "{output_kind} - {press_op} - {drill_op} - {shot_op} - {color} - {pack_op} - {packing_op} - {saw_op}",
         "import_template_code": "upakovochnaya_karta_rp",
         "route_sections": ["RAW_STOCK", "DRILLING", "PRESSING", "SHOT_BLAST", "PREP_STOCK", "ANODIZING", "WIP_STOCK", "SAWING", "PACKING", "FINISHED_STOCK", "SHIPMENT", "SHIPPED"],
         "excel_column_passport": [
