@@ -82,12 +82,13 @@ owner-строки) в TTL-уборку не попадают: `cleanup` ска�
 
 | Команда | Назначение |
 |---------|------------|
-| `npm run test:pytest` | Параллельный прогон (по умолчанию, ~3 мин) |
+| `npm run test:pytest` | Параллельный прогон (по умолчанию, ~4.5 мин при `PYTEST_NUM_WORKERS=4` — замер 2026-10-01) |
 | `npm run test:pytest:fast` | Алиас `test:pytest` |
 | `npm run test:pytest:full` | Полный прогон в один поток |
 | `npm run test:pytest:mon` | Только изменённые тесты (testmon) |
 | `npm run test:pytest:lf` | Только упавшие в прошлый раз |
 | `npm run test:db:cleanup` | Уборка orphan run-DB по TTL (24h) |
+| `npm run test:hygiene` | Report-only отчёт по мёртвым импортам в тестах (`scripts/check-test-imports.py`, без линтера) |
 
 Отдельный тест через launcher (изолированная БД):
 `npm run test:pytest -- -k shopflow`
