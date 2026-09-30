@@ -59,6 +59,7 @@ EXPECTED_GUARDS: dict[tuple[str, str], frozenset[UserRole]] = {
     ("POST", "/api/production-plans/{production_plan_id}/change-sets/{change_set_id}/rollback"): ADMIN_ONLY,
     ("DELETE", "/api/production-plans/{production_plan_id}/change-sets/{change_set_id}"): ADMIN_ONLY,
     ("DELETE", "/api/production-plans/{production_plan_id}/batches/{batch_id}"): ADMIN_ONLY,
+    ("POST", "/api/production-plans/{production_plan_id}/batches/{batch_id}/hide"): ADMIN_ONLY,
     ("GET", "/api/production-plans/{production_plan_id}/delete-preview"): ADMIN_ONLY,
     ("DELETE", "/api/production-plans/{production_plan_id}"): ADMIN_ONLY,
     ("GET", "/api/production-plans/{production_plan_id}/batches/{batch_id}/force-delete-preview"): ADMIN_ONLY,
@@ -74,16 +75,6 @@ EXPECTED_GUARDS: dict[tuple[str, str], frozenset[UserRole]] = {
     ("GET", "/api/imports/{batch_id}/positions"): READER_ROLES,
     ("GET", "/api/imports/files/{file_id}/download"): READER_ROLES,
 }
-
-#: План-импортные ручки, которых в этом коммите ещё нет: их добавляет
-#: параллельная ветка (issue #235 и ADR-0056 пишутся одновременно). Запись
-#: безвредна, пока ручки нет в дереве, и требует ролевого гейта, когда она
-#: появится, — иначе в матрице осталась бы молчаливая дырка.
-PENDING_ROUTES: dict[tuple[str, str], str] = {
-    ("POST", "/api/production-plans/{production_plan_id}/batches/{batch_id}/hide"):
-        "скрытие батча импорта (ADR-0056)",
-}
-
 
 @pytest.fixture(autouse=True)
 def _strict_auth(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -167,15 +158,11 @@ def test_plan_import_route_matrix_is_complete() -> None:
 
     missing = set(EXPECTED_GUARDS) - set(actual)
     assert not missing, f"план-импортный маршрут пропал или переименован: {sorted(missing)}"
-    unlisted = set(actual) - set(EXPECTED_GUARDS) - set(PENDING_ROUTES)
+    unlisted = set(actual) - set(EXPECTED_GUARDS)
     assert not unlisted, f"новый план-импортный путь без записи в таблице гейтов: {sorted(unlisted)}"
 
     for key, expected in EXPECTED_GUARDS.items():
         assert actual[key] == expected, f"{key[0]} {key[1]}: ожидался {expected}, объявлен {actual[key]}"
-
-    for key, what in PENDING_ROUTES.items():
-        if key in actual:
-            assert actual[key] is not None, f"{what}: ручка появилась в дереве без ролевого гейта"
 
 
 async def test_anonymous_cannot_reach_plan_and_import_endpoints(
