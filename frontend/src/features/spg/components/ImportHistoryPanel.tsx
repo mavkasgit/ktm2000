@@ -29,7 +29,7 @@ import {
   TABLE_ROW_DENSE,
   toast,
 } from "@/shared/ui";
-import { Loader2, RefreshCw, Undo2 } from "lucide-react";
+import { Loader2, Undo2 } from "lucide-react";
 import { getErrorMessage } from "@/shared/api/client";
 import { previewReverse } from "@/shared/api/actions";
 import { invalidateAfter } from "@/shared/api/cacheInvalidation";
@@ -87,7 +87,7 @@ export function ImportHistoryPanel() {
   const [rollbackTarget, setRollbackTarget] = useState<StockImportBatch | null>(null);
   const [hideTarget, setHideTarget] = useState<StockImportBatch | null>(null);
 
-  const { data: batches, isLoading, isFetching, error } = useQuery({
+  const { data: batches, isLoading, error } = useQuery({
     queryKey: queryKeys.stock.importBatches(),
     queryFn: () => getStockImportBatches(),
   });
@@ -123,23 +123,6 @@ export function ImportHistoryPanel() {
 
   return (
     <div className="space-y-1.5">
-      <div className="flex items-center justify-between">
-        <h3 className="text-sm font-semibold text-foreground">История импортов</h3>
-        <Button
-          variant="outline"
-          size="sm"
-          disabled={isFetching}
-          onClick={() => {
-            void queryClient.invalidateQueries({
-              queryKey: queryKeys.stock.importBatches(),
-            });
-          }}
-        >
-          <RefreshCw className="h-4 w-4 mr-1" />
-          Обновить
-        </Button>
-      </div>
-
       {isLoading ? (
         <div className="flex items-center gap-2 py-3 text-sm text-muted-foreground">
           <Loader2 className="h-3.5 w-3.5 animate-spin" />

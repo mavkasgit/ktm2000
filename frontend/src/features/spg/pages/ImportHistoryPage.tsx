@@ -9,42 +9,52 @@
  * Права на чтение и на откат — те же, что у секции в модалке: список отдаёт
  * `READER_ROLES`, откат и скрытие — только админу (ADR-0052 п.6).
  */
-import { ArrowLeft, History } from "lucide-react";
-import { useNavigate } from "react-router-dom";
+import { useIsFetching, useQueryClient } from "@tanstack/react-query";
+import { History, RefreshCw } from "lucide-react";
 
-import { Button } from "@/shared/ui";
+import { BackButton, Button } from "@/shared/ui";
+import { queryKeys } from "@/shared/api/queryKeys";
 import { ImportHistoryPanel } from "../components/ImportHistoryPanel";
 
+const IMPORT_BATCHES = queryKeys.stock.importBatches();
+
 export function ImportHistoryPage() {
-  const navigate = useNavigate();
+  const queryClient = useQueryClient();
+  // Шапка принадлежит странице, а не панели: «Обновить» зеркалит «Передачи» и
+  // стоит наравне с фильтрами, а панель остаётся таблицей без своей шапки.
+  const isFetching = useIsFetching({ queryKey: IMPORT_BATCHES }) > 0;
 
   return (
     <>
-      <header className="page-header flex items-start justify-between">
-        <div>
-          <h1 className="page-title flex items-center gap-2">
-            <History className="h-6 w-6" />
-            История импортов остатков
-          </h1>
-          <p className="page-subtitle">
-            Какие остатки заливались в склады, кем и когда. Откат возвращает
-            склад к состоянию до импорта; «Убрать из списка» только прячет
-            запись, не трогая остатки.
-          </p>
+      <header className="page-header">
+        <div className="flex items-start gap-2">
+          <BackButton to="/spg" title="К ГХП" />
+          <div>
+            <h1 className="page-title flex items-center gap-2">
+              <History className="h-6 w-6" />
+              История импортов остатков
+            </h1>
+            <p className="page-subtitle">
+              Какие остатки заливались в склады, кем и когда. Откат возвращает
+              склад к состоянию до импорта; «Убрать из списка» только прячет
+              запись, не трогая остатки.
+            </p>
+          </div>
         </div>
         <Button
           variant="outline"
-          onClick={() => navigate("/spg")}
-          className="flex items-center gap-2"
+          size="sm"
+          disabled={isFetching}
+          onClick={() => {
+            void queryClient.invalidateQueries({ queryKey: IMPORT_BATCHES });
+          }}
         >
-          <ArrowLeft className="h-4 w-4" />
-          К ГХП
+          <RefreshCw className="h-4 w-4 mr-1" />
+          Обновить
         </Button>
       </header>
 
-      <div className="rounded-lg border bg-card p-4">
-        <ImportHistoryPanel />
-      </div>
+      <ImportHistoryPanel />
     </>
   );
 }

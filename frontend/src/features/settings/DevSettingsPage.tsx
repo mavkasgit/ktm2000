@@ -1,8 +1,9 @@
-import { Database, Trash2, Download, Check, X, Loader2, Wrench, ArrowLeft } from "lucide-react"
+import { Database, Trash2, Download, Check, X, Loader2, Wrench } from "lucide-react"
 import { useNavigate } from "react-router-dom"
 import { useState } from "react"
 import { useQuery, useQueryClient } from "@tanstack/react-query"
 import { Button } from "@/shared/ui/button"
+import { BackButton } from "@/shared/ui"
 import { AlertDialog, AlertDialogContent, AlertDialogHeader, AlertDialogTitle, AlertDialogDescription, AlertDialogFooter, AlertDialogAction, AlertDialogCancel } from "@/shared/ui"
 import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogDescription, DialogFooter } from "@/shared/ui/dialog"
 import { toast } from "@/shared/ui"
@@ -238,18 +239,17 @@ export function DevSettingsPage() {
 
   return (
     <>
-      <header className="page-header flex items-center justify-between">
-        <div>
-          <h1 className="page-title flex items-center gap-2">
-            <Wrench className="h-6 w-6 text-violet-500" />
-            Панель разработчика
-          </h1>
-          <p className="page-subtitle">Инструменты для отладки, заполнения базы демо-данными и сброса состояния.</p>
+      <header className="page-header">
+        <div className="flex items-start gap-2">
+          <BackButton to="/settings" title="К настройкам" />
+          <div>
+            <h1 className="page-title flex items-center gap-2">
+              <Wrench className="h-6 w-6 text-violet-500" />
+              Панель разработчика
+            </h1>
+            <p className="page-subtitle">Инструменты для отладки, заполнения базы демо-данными и сброса состояния.</p>
+          </div>
         </div>
-        <Button variant="outline" onClick={() => navigate("/settings")} className="flex items-center gap-2">
-          <ArrowLeft className="h-4 w-4" />
-          Назад к настройкам
-        </Button>
       </header>
 
       <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-3">

@@ -71,6 +71,16 @@ React 18.3 + TypeScript + Vite + Tailwind CSS + shadcn/ui + TanStack Query/Virtu
   Термин и правило — [ADR-0030](../docs/adr/0030-komaktnaya-stroka-i-utochneniya-tablits.md)
   и [CONTEXT.md](../CONTEXT.md).
 
+- **Кнопка возврата** — `BackButton` из
+  [`src/shared/ui/BackButton.tsx`](src/shared/ui/BackButton.tsx): безымянная
+  иконка слева от заголовка, в `page-header`. Своя стрелка с текстом
+  «Назад к …», `Link`-подобная ссылка и `window.history.back()` рядом с
+  заголовком — нельзя: `history.back()` при прямом заходе по ссылке или после
+  перезагрузки не делает ничего, а на вложенном экране кнопка может быть
+  единственным выходом. Имя кнопки — в `aria-label`, название раздела — в
+  `title` (на тач-экране подсказку не видно). Не путать с «Назад» внутри
+  мастеров: там возврат на шаг, а не на маршрут.
+
 - **Описание колонки** — семантика колонки объявляется один раз в
   [`src/shared/lib/columnSpecs.ts`](src/shared/lib/columnSpecs.ts)
   (`ColumnSpec`): `filterField`, `sortField`, `valueLabel`, `exactMatch`,

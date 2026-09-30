@@ -42,6 +42,7 @@ export type { TableHeaderResetCellProps } from "./TableHeaderResetCell";
 export { TableCornerResetHeader, TableCornerResetCell, TABLE_CORNER_RESET_TH_CLASS, TABLE_CORNER_RESET_TD_CLASS } from "./TableCornerResetHeader";
 export { ActionWithReason } from "./ActionWithReason";
 export type { ActionWithReasonProps } from "./ActionWithReason";
+export { BackButton } from "./BackButton";
 export { DATA_TABLE_STYLES, TABLE_ROW_COMPACT, TABLE_ROW_DENSE } from "@/shared/lib/dataTableStyles";
 export type { TableCornerResetHeaderProps } from "./TableCornerResetHeader";
 export { FiltersPanel, type FiltersPanelProps, type FiltersPanelField, type FiltersPanelOption } from "./FiltersPanel";

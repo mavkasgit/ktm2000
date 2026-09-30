@@ -8,6 +8,7 @@
  */
 import { fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
+import { MemoryRouter } from "react-router-dom";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
 vi.mock("@/features/auth/hooks/usePermission", () => ({
@@ -27,11 +28,15 @@ import { BackupsPage } from "./SettingsBackupsPage";
 
 import type { UsePermissionResult } from "@/features/auth/hooks/usePermission";
 import type { BackupPreview } from "@/entities/backup/types";
+// `MemoryRouter` обязателен: кнопка возврата ходит через `useNavigate`, как и
+// любая другая маршрутная навигация.
 const renderPage = () =>
   render(
-    <QueryClientProvider client={new QueryClient({ defaultOptions: { queries: { retry: false } } })}>
-      <BackupsPage />
-    </QueryClientProvider>,
+    <MemoryRouter>
+      <QueryClientProvider client={new QueryClient({ defaultOptions: { queries: { retry: false } } })}>
+        <BackupsPage />
+      </QueryClientProvider>
+    </MemoryRouter>,
   );
 
 // У активной колонки в aria-label добавляется направление: «Сортировка по size (desc)».

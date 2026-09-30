@@ -1,9 +1,9 @@
 import { useEffect, useRef, useState, useMemo } from "react"
-import { Download, RotateCcw, Eye, Database, Upload, AlertTriangle, Loader2, CheckCircle2, Trash2, ArrowLeft, Clock, Save } from "lucide-react"
+import { Download, RotateCcw, Eye, Database, Upload, AlertTriangle, Loader2, CheckCircle2, Trash2, Clock, Save } from "lucide-react"
 import { Button } from "@/shared/ui/button"
 import { Input } from "@/shared/ui/input"
 import { cn } from "@/shared/utils/cn"
-import { TableCornerResetCell, TableCornerResetHeader, TablePaginationFooter, DataTableColumnHeader, DATA_TABLE_STYLES } from "@/shared/ui"
+import { TableCornerResetCell, TableCornerResetHeader, TablePaginationFooter, DataTableColumnHeader, DATA_TABLE_STYLES, BackButton } from "@/shared/ui"
 import { useFilterableTable } from "@/shared/hooks/useFilterableTable"
 import type { SortConfig } from "@/shared/hooks/useTableQueryEngine"
 import { usePaginatedTableQuery } from "@/shared/hooks/usePaginatedTableQuery"
@@ -534,9 +534,7 @@ export function BackupsPage() {
     <div className="space-y-6">
       <div className="flex items-center justify-between">
         <div className="flex items-center gap-2">
-          <Button variant="ghost" size="icon" onClick={() => window.history.back()} title="Назад">
-            <ArrowLeft className="h-5 w-5" />
-          </Button>
+          <BackButton to="/settings" title="К настройкам" />
           <h1 className="text-xl font-bold flex items-center gap-2">
             <Database className="h-5 w-5" />
             Резервное копирование БД и файлов

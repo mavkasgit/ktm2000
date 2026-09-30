@@ -1,9 +1,10 @@
-import { Link, useParams } from "react-router-dom";
+import { useParams } from "react-router-dom";
 import { useQuery } from "@tanstack/react-query";
 import { previewProductionPlan } from "@/shared/api/productionPlans";
 import { queryKeys } from "@/shared/api/queryKeys";
 import { statusLabels, validationLabels } from "@/shared/lib/generated-labels";
 import { fmtQtyPrecise } from "@/shared/lib/quantityFormat";
+import { BackButton } from "@/shared/ui";
 
 type PreviewPosition = {
   id: number;
@@ -42,15 +43,15 @@ export function PlanPreviewPage() {
   return (
     <section className="space-y-4">
       <header className="page-header">
-        <div>
-          <h1 className="page-title">Превью плана</h1>
-          <p className="page-subtitle">
-            План #{Number((data as Record<string, unknown> | undefined)?.production_plan_id || 0)} · {String((data as Record<string, unknown> | undefined)?.plan_no || "—")}
-          </p>
+        <div className="flex items-start gap-2">
+          <BackButton to="/execution" title="К контролю выполнения" />
+          <div>
+            <h1 className="page-title">Превью плана</h1>
+            <p className="page-subtitle">
+              План #{Number((data as Record<string, unknown> | undefined)?.production_plan_id || 0)} · {String((data as Record<string, unknown> | undefined)?.plan_no || "—")}
+            </p>
+          </div>
         </div>
-        <Link to="/execution" className="text-sm text-blue-700 hover:underline">
-          Назад к контролю выполнения
-        </Link>
       </header>
 
       <div className="flex gap-3 text-sm">
