@@ -1001,6 +1001,13 @@ export type ProductWipRemainder = {
   spg_id: number;
   spg_code: string;
   spg_name: string;
+  /**
+   * ADR-0055: ось операций — часть ключа остатка, поэтому две строки одного
+   * артикула, участка и размера с разными операциями приходят раздельно.
+   * `null` («не зафиксировано») и `[]` («без операций») — разные значения.
+   */
+  completed_operations?: string[] | null;
+  /** Подпись оси операций для чтения: имена операций либо её пустое состояние. */
   completed_ops: string;
   spg_icon: string | null;
   spg_icon_color: string | null;

@@ -38,6 +38,65 @@ class CompletedOperationsError(ValueError):
     """Некорректный список пройденных операций (форма или справочник)."""
 
 
+# Подписи двух пустых состояний оси операций (ADR-0055 п.6). Это НЕ имена
+# операций, а то, что видит оператор в колонке «Операции»: у строки без
+# признака имён просто нет, поэтому обычное сравнение по названиям их не
+# различило бы. Один источник строк на весь бэкенд — иначе фильтр колонки,
+# подпись в ответе и подпись в сводке разъехались бы текстом.
+OPERATIONS_NOT_RECORDED_LABEL = "не зафиксировано"
+OPERATIONS_EMPTY_LABEL = "без операций"
+
+
+def completed_operation_stages(
+    ops: list[str] | None, operations: list[dict]
+) -> list[dict]:
+    """Этапы справочника, соответствующие кодам признака, — по порядку маршрута.
+
+    ``operations`` — справочник в формате ``resolve_operations_dictionary``
+    (``RouteStepsDisplay``). Порядок задаёт ``sequence`` (порядок секции в
+    маршруте); внутри одной секции сохраняется порядок справочника —
+    ``sorted`` устойчив, а справочник уже упорядочен по
+    ``(sort_order, id)``.
+
+    Код, которого нет в справочнике, в набор этапов не попадает: ``record()``
+    отвергает такие на записи, он мог остаться лишь от удаления справочной
+    записи — молчаливое отбрасывание сделало бы строку неотличимой от
+    «операций не было».
+    """
+    by_code = {operation["operation_code"]: operation for operation in operations}
+    return sorted(
+        (
+            by_code[code]
+            for code in (ops or [])
+            if code in by_code
+        ),
+        key=lambda stage: stage["sequence"],
+    )
+
+
+def format_completed_operations_label(
+    ops: list[str] | None, stages: list[dict] | None = None
+) -> str:
+    """Человекочитаемая подпись оси операций — зеркало клиентской.
+
+    Три различимых состояния (ADR-0055 п.6): ``None`` — «не зафиксировано»,
+    ``[]`` — «без операций», список — имена пройденных операций. Имена берутся
+    из ``stages`` (развёрнутый справочником признак); если справочник не
+    разрешился, печатаются коды — иначе непустой признак выглядел бы как
+    «без операций» и две разные группы остатка получили бы одну подпись.
+    """
+    if ops is None:
+        return OPERATIONS_NOT_RECORDED_LABEL
+    if not ops:
+        return OPERATIONS_EMPTY_LABEL
+    names = [
+        stage["operation_name"]
+        for stage in (stages or [])
+        if stage.get("operation_name")
+    ]
+    return ", ".join(names) if names else ", ".join(ops)
+
+
 def canonicalize_completed_operations(
     values: Iterable[str] | None,
 ) -> list[str] | None:

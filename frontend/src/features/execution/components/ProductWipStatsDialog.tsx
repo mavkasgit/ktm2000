@@ -29,6 +29,23 @@ function EmptyNote({ children }: { children: ReactNode }) {
   );
 }
 
+/** Полный ключ строки остатка: ГХП + ось операций + размер (ADR-0001, ADR-0055).
+ *
+ * Ключ строится по самой оси операций, а не по её подписи: подпись — текст для
+ * чтения, и два разных признака с совпавшими именами операций дали бы один
+ * ключ, то есть две физически разные строки остатка слились бы в рендере.
+ * `null` («не зафиксировано»), `[]` («без операций») и список — разные ключи.
+ */
+function remainderRowKey(rem: ProductWipRemainder): string {
+  const ops =
+    rem.completed_operations === undefined
+      ? "unknown"
+      : rem.completed_operations === null
+        ? "null"
+        : rem.completed_operations.join("+");
+  return `${rem.spg_id}-${ops}-${rem.dimensions_label}`;
+}
+
 /** Остатки одного артикула: парная сводка показывает такую таблицу на каждый компонент. */
 function RemaindersTable({ rows }: { rows: ProductWipRemainder[] }) {
   return (
@@ -43,7 +60,7 @@ function RemaindersTable({ rows }: { rows: ProductWipRemainder[] }) {
         </thead>
         <tbody>
           {rows.map((rem) => (
-            <RemainderRow key={`${rem.spg_id}-${rem.completed_ops}-${rem.dimensions_label}`} rem={rem} />
+            <RemainderRow key={remainderRowKey(rem)} rem={rem} />
           ))}
         </tbody>
       </table>
@@ -73,9 +90,7 @@ function RemainderRow({ rem, withResetCell = false }: { rem: ProductWipRemainder
           <div>
             <div className="font-medium text-xs">{rem.spg_name}</div>
             <div className="flex flex-wrap items-center gap-1 mt-0.5">
-              {rem.stages_with_icons && rem.stages_with_icons.length === 0 ? (
-                <span className="text-[10px] text-muted-foreground">Без обработки</span>
-              ) : rem.stages_with_icons ? (
+              {rem.stages_with_icons?.length ? (
                 rem.stages_with_icons.map((s, idx) => (
                   <span key={idx} className="flex items-center gap-1">
                     {idx > 0 && <span className="text-muted-foreground/40 text-[10px]">›</span>}
@@ -414,7 +429,7 @@ export function ProductWipStatsDialog({ sku, open, onOpenChange }: ProductWipSta
                       </thead>
                       <tbody>
                         {sortedRemainders.map((rem) => (
-                          <RemainderRow key={`${rem.spg_id}-${rem.completed_ops}-${rem.dimensions_label}`} rem={rem} withResetCell />
+                          <RemainderRow key={remainderRowKey(rem)} rem={rem} withResetCell />
                         ))}
                       </tbody>
                     </table>

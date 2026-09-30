@@ -1847,6 +1847,10 @@ class ProductWipRemainderOut(BaseModel):
     spg_id: int
     spg_code: str
     spg_name: str
+    # Сам признак оси операций (ADR-0055) и его подпись — разные вещи: `null`
+    # («не зафиксировано») и `[]` («без операций») печатаются по-разному, и
+    # клиент не должен выводить состояние из текста подписи.
+    completed_operations: list[str] | None = None
     completed_ops: str
     spg_icon: str | None = None
     spg_icon_color: str | None = None
@@ -1895,7 +1899,13 @@ class ProductWipStatsOut(BaseModel):
 
 
 async def _product_remainders(db: AsyncSession, product_id: int) -> list[ProductWipRemainderOut]:
-    """Остатки артикула на складах подготовки, разбитые по СПГ и размерам."""
+    """Остатки артикула на складах подготовки: СПГ + размеры + операции."""
+    from app.services.material_operations import (
+        canonicalize_completed_operations,
+        completed_operation_stages,
+        format_completed_operations_label,
+    )
+    from app.stock.import_service import resolve_operations_dictionary
     from app.stock.models import QualityState, StockBalance
     from app.stock.services import _dimensions_hash_key
 
@@ -1910,9 +1920,16 @@ async def _product_remainders(db: AsyncSession, product_id: int) -> list[Product
         .order_by(StockBalance.refreshed_at)
     )).all()
 
-    # Group by location/SPG + dimensions (ADR-0001): разные размеры одного
-    # SKU на одной секции — разные строки, в общий «котёл» не сводятся.
-    rem_grouped: dict[tuple[int, str, str | None], dict] = {}
+    # Справочник операций — один на весь ответ: подпись оси собирается из него.
+    operations = await resolve_operations_dictionary(db)
+
+    # Group by location/SPG + operations + dimensions (ADR-0001, ADR-0055):
+    # разные размеры одного SKU на одной секции — разные строки, в общий
+    # «котёл» не сводятся, и пройденные операции — тоже ось ключа остатка.
+    # Материал, прошедший пресс, и сырьё, лежащее на том же участке с тем же
+    # габаритом, — два разных остатка: слитая сумма говорила бы, что это одна
+    # куча (ровно дефект `13388` из ADR-0055).
+    rem_grouped: dict[tuple[int, tuple[str, ...] | None, str | None], dict] = {}
     for bal, section in balances:
         spg_section = await db.scalar(
             select(SpgSection).where(SpgSection.section_id == bal.location_id).limit(1)
@@ -1924,10 +1941,14 @@ async def _product_remainders(db: AsyncSession, product_id: int) -> list[Product
         spg_icon = spg.icon if spg else section.icon
         spg_icon_color = spg.icon_color if spg else section.icon_color
 
-        ops_str = section.name or "Склад"
+        # Признак берётся из самой строки остатка, а не из названия участка:
+        # он и есть пятая ось ключа, и подпись обязана совпадать с ним.
+        ops = canonicalize_completed_operations(bal.completed_operations)
+        ops_key = tuple(ops) if ops is not None else None
+        stages = completed_operation_stages(ops, operations)
         dims = canonicalize_dimensions(bal.dimensions)
         dims_key = _dimensions_hash_key(dims)
-        key = (spg_id, ops_str, dims_key)
+        key = (spg_id, ops_key, dims_key)
         if key not in rem_grouped:
             rem_grouped[key] = {
                 "spg_id": spg_id,
@@ -1935,9 +1956,12 @@ async def _product_remainders(db: AsyncSession, product_id: int) -> list[Product
                 "spg_name": spg_name,
                 "spg_icon": spg_icon,
                 "spg_icon_color": spg_icon_color,
-                "completed_ops": ops_str,
-                "stages_with_icons": [],
-                "max_completed_seq": 0,
+                "completed_operations": ops,
+                "completed_ops": format_completed_operations_label(ops, stages),
+                "stages_with_icons": stages,
+                "max_completed_seq": max(
+                    (stage["sequence"] for stage in stages), default=0
+                ),
                 "dimensions": dims,
                 "dimensions_label": format_dimensions(dims),
                 "quantity": 0.0,
@@ -1950,6 +1974,7 @@ async def _product_remainders(db: AsyncSession, product_id: int) -> list[Product
                 spg_id=val["spg_id"],
                 spg_code=val["spg_code"],
                 spg_name=val["spg_name"],
+                completed_operations=val["completed_operations"],
                 completed_ops=val["completed_ops"],
                 spg_icon=val["spg_icon"],
                 spg_icon_color=val["spg_icon_color"],

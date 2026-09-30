@@ -1011,8 +1011,20 @@ async def task_spg_available(
     task_id: int,
     db: AsyncSession = Depends(get_db),
 ) -> dict:
-    """Return available stock balance for a task's product at its section location."""
+    """Available stock of the task's input group at the storage feeding its section.
+
+    ``available`` — сумма по ОДНОЙ группе оси операций: материал на питающем
+    складе лежит в группе своего этапа (ADR-0055 п.7) — ровно та группа,
+    которую спишет ``TRANSFER_SEND`` со склада в это задание. Без фильтра по
+    оси сумма складывала бы сырьё и подготовленный материал в одно число, а
+    списание точное: нет строки с совпавшим признаком — расход невозможен,
+    даже если участок суммарно полон (ADR-0055 п.3). Размер — вторая ось
+    ключа, но здесь она не выбирается: размер задаёт конкретная передача
+    (``task_transferable_lines`` даёт бюджет по каждому размеру), поэтому
+    ``available`` — физический остаток группы по всем размерам.
+    """
     from app.stock.models import StockBalance, QualityState
+    from app.stock.services import completed_operations_match_clause
     from sqlalchemy import func
 
     task = await db.get(WorkTask, task_id)
@@ -1024,17 +1036,39 @@ async def task_spg_available(
     stock_loc = await _get_stock_location(db, task.section_id)
 
     if stock_loc is None:
-        return {"available": 0, "location_id": None, "location_name": None}
+        return {
+            "available": 0,
+            "location_id": None,
+            "location_name": None,
+            "completed_operations": None,
+            "source": "stock_balance",
+        }
 
     from app.models import Section
     location = await db.get(Section, stock_loc)
+
+    from app.services.material_operations import completed_operations_for_task
+    from app.services.shopfloor.operations_transform import resolve_consume_operations
+
+    if stock_loc == task.section_id:
+        # Задание стоит на самой складской секции: материал у неё несёт признак
+        # её собственного этапа — так его пишет её же TRANSFER_SEND.
+        completed_operations = await completed_operations_for_task(db, task)
+    else:
+        # Материал на питающем складе несёт признак этапа склада — это группа
+        # входа задания, её же читает потребление входа (ADR-0055 п.7).
+        completed_operations = await resolve_consume_operations(db, task)
 
     available = await db.scalar(
         select(func.coalesce(func.sum(StockBalance.balance_qty), 0))
         .where(
             StockBalance.product_id == task.product_id,
             StockBalance.location_id == stock_loc,
+            StockBalance.balance_qty > 0,
             StockBalance.quality_state == QualityState.GOOD,
+            completed_operations_match_clause(
+                StockBalance.completed_operations, completed_operations
+            ),
         )
     ) or 0
 
@@ -1042,5 +1076,6 @@ async def task_spg_available(
         "available": float(available),
         "location_id": stock_loc,
         "location_name": location.name if location else None,
+        "completed_operations": completed_operations,
         "source": "stock_balance",
     }

@@ -53,6 +53,11 @@ from app.stock.models import (
 )
 from app.stock.services import StockCommand, StockCommandService, StockValidationError
 from app.services.action_journal_service import action_journal_service
+from app.services.material_operations import (
+    OPERATIONS_EMPTY_LABEL,
+    OPERATIONS_NOT_RECORDED_LABEL,
+    completed_operation_stages,
+)
 from app.stock.import_service import (
     ImportResult,
     RemainderItem,
@@ -265,11 +270,9 @@ _BALANCE_SORT_DEFAULT = SortClause("sku", "asc")
 
 
 
-# Подписи пустых состояний оси операций (ADR-0055). Это НЕ имена операций,
-# а то, что видит оператор в колонке «Операции» для строк без признака, —
-# поэтому значения фильтра на UI обязаны их различать.
-_OPERATIONS_NOT_RECORDED_LABEL = "не зафиксировано"
-_OPERATIONS_EMPTY_LABEL = "без операций"
+# Подписи пустых состояний оси операций (ADR-0055) живут в доменном модуле
+# оси: тот же текст печатает сводка артикула, и второй набор строк разъехался
+# бы с фильтром колонки.
 
 
 def _balance_operations_label_expr():
@@ -331,12 +334,12 @@ def _balance_operations_filter(operations: str):
     значения в фильтре молча возвращал бы ноль строк.
     """
     label = operations.strip().lower()
-    if label == _OPERATIONS_NOT_RECORDED_LABEL:
+    if label == OPERATIONS_NOT_RECORDED_LABEL:
         return or_(
             StockBalance.completed_operations.is_(None),
             StockBalance.completed_operations == text("'null'::jsonb"),
         )
-    if label == _OPERATIONS_EMPTY_LABEL:
+    if label == OPERATIONS_EMPTY_LABEL:
         return StockBalance.completed_operations == cast([], JSONB)
     return _balance_operations_label_expr().ilike(f"%{operations}%")
 
@@ -465,25 +468,17 @@ async def _serialize_balances_with_operations(
         return []
 
     ops_dict = await resolve_operations_dictionary(db)
-    by_code = {op["operation_code"]: op for op in ops_dict}
 
     result: list[StockBalanceOut] = []
     for row, location_name, product_sku in rows:
-        stages_out: list[StockBalanceCompletedStageOut] = []
         # Код, которого нет в справочнике, в подпись не попадает: record()
         # отвергает такие на записи, он мог остаться лишь от удаления
         # справочной записи — молчаливое отбрасывание сделало бы строку
         # неотличимой от «операций не было».
-        ordered = sorted(
-            (
-                by_code[code]
-                for code in (row.completed_operations or [])
-                if code in by_code
-            ),
-            key=lambda stage: stage["sequence"],
-        )
-        for stage in ordered:
-            stages_out.append(StockBalanceCompletedStageOut(**stage))
+        ordered = completed_operation_stages(row.completed_operations, ops_dict)
+        stages_out = [
+            StockBalanceCompletedStageOut(**stage) for stage in ordered
+        ]
         result.append(_serialize_balance(row, location_name, product_sku, stages_out))
     return result
 
