@@ -31,6 +31,7 @@ from app.models.spg import SpgSection, StorageProductionGroup
 from app.models.work_task import WorkTask, WorkTaskStatus
 from app.seeds.canon.models import ScrapPolicy
 from app.stock import Reason, StockCommand, StockCommandService, StockTransaction
+from app.services.material_operations import completed_operations_for_task
 from app.services.shopfloor.operations_defects import create_defect, defect_decide
 from app.services.shopfloor.operations_tasks import complete_task
 from tests.stock.helpers import FAKE_DEFECT_DECISION_MAP, FAKE_SCRAP_POLICY, record_transfer_receive
@@ -125,14 +126,18 @@ async def _make_route_without_scrap(
 
 async def _issue_material(session: AsyncSession, fx: dict, *, quantity: Decimal) -> None:
     """Выдача материала на участок: MANUAL_IN на raw + TRANSFER_RECEIVE на задачу."""
-    svc = StockCommandService()
-    await svc.record(session, StockCommand(
+    await StockCommandService().record(session, StockCommand(
         product_id=fx["product"].id,
         from_location_id=None,
         to_location_id=fx["raw"].id,
         quantity=quantity,
         reason=Reason.MANUAL_IN,
         created_by=fx["user"].id,
+        # ADR-0055: списание TRANSFER_RECEIVE идёт по полному ключу остатка,
+        # включая признак операций, который record() выводит из маршрута
+        # позиции. MANUAL_IN без признака лёг бы в NULL-группу и остался бы
+        # невидимым для приёма — значение берём тем же резолвером, что прод.
+        completed_operations=await completed_operations_for_task(session, fx["task"]),
     ))
     await record_transfer_receive(
         session,

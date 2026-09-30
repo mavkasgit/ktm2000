@@ -9,6 +9,7 @@ import {
   Badge,
 } from "@/shared/ui";
 import {
+  formatCompletedOperationsLabel,
   formatDimensionsLabel,
   formatQualityStateLabel,
   getProductStockBalances,
@@ -66,19 +67,26 @@ const READINESS_META: Record<
 };
 
 function groupBalances(balances: StockBalanceEntry[]) {
-  const map = new Map<string, { location: string; quality: string; dims: string; qty: number }>();
+  const map = new Map<
+    string,
+    { location: string; quality: string; dims: string; ops: string; qty: number }
+  >();
   for (const b of balances) {
     const location = b.location_name || `Участок #${b.location_id}`;
     const quality = formatQualityStateLabel(b.quality_state);
     // Габаритная группа (ADR-0001): разные длины одного SKU не смешиваются.
     const dims = formatDimensionsLabel(b.dimensions, b.dimensions_label);
-    const key = `${location}\0${quality}\0${dims}`;
+    // ADR-0055: операции — часть идентичности остатка. Без них в ключе две
+    // разные строки складывались бы в одну строку выдачи, и диалог обещал бы
+    // материал, который списать нельзя: точное списание идёт по операциям.
+    const ops = formatCompletedOperationsLabel(b.completed_operations, b.completed_stages);
+    const key = `${location}\0${quality}\0${dims}\0${ops}`;
     const prev = map.get(key);
     const add = Math.round(Number.parseFloat(b.balance_qty) || 0);
     if (prev) {
       prev.qty += add;
     } else {
-      map.set(key, { location, quality, dims, qty: add });
+      map.set(key, { location, quality, dims, ops, qty: add });
     }
   }
   return Array.from(map.values()).sort((a, b) => b.qty - a.qty);
@@ -246,9 +254,17 @@ export function RemainderAllocationDialog({
                   </thead>
                   <tbody>
                     {groupedBalances.slice(0, 6).map((row) => (
-                      <tr key={`${row.location}-${row.quality}-${row.dims}`} className="border-b border-border/50 last:border-0">
-                        <td className="py-1 pr-2 truncate max-w-[140px]" title={row.location}>
-                          {row.location}
+                      <tr
+                        key={`${row.location}-${row.quality}-${row.dims}-${row.ops}`}
+                        className="border-b border-border/50 last:border-0"
+                      >
+                        <td className="py-1 pr-2">
+                          <div className="truncate max-w-[140px]" title={row.location}>
+                            {row.location}
+                          </div>
+                          <div className="text-muted-foreground truncate max-w-[140px]" title={row.ops}>
+                            {row.ops}
+                          </div>
                         </td>
                         <td className="py-1 text-right font-mono tabular-nums whitespace-nowrap">
                           {fmtQty(row.qty)}

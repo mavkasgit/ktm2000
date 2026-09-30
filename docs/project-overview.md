@@ -70,7 +70,7 @@ ktm2000/
 |----------|---------|------------|
 | `Location` (= `Section`) | `sections` | Локация материала; `type`: `production`, `raw_stock`, `wip_stock`, `finished_stock`, `scrap`, `terminal` |
 | `StockTransaction` | `stock_transactions` | Ledger: from/to location, quantity, reason, quality_state |
-| `StockBalance` | `stock_balances` | Кэш баланса по (product, location, quality_state) |
+| `StockBalance` | `stock_balances` | Кэш баланса по (product, location, quality_state, dimensions, completed_operations) |
 | `WorkTask` | `work_tasks` | План в `planned_quantity`; выполнение — из транзакций |
 | `Transfer` | `transfers` | Бизнес-lifecycle; 2 StockTransaction; cancel = компенсация |
 | `Defect` | `defects` | Обоснование брака; `stock_transaction_id` FK |

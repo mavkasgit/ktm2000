@@ -33,7 +33,7 @@ from app.models.production_plan import (
     ProductionPlan,
     ProductionPlanStatus,
 )
-from app.models.route import ProductionRoute, RouteOperation, RouteStage
+from app.models.route import ProductionRoute, RouteOperation, RouteStage, SectionOperation
 from app.models.section import Section
 from app.models.spg import SpgSection, StorageProductionGroup
 from app.models.user import User, UserRole
@@ -43,6 +43,7 @@ from app.stock.models import StockBalance, StockTransaction
 from app.stock.services import dimensions_match_clause
 from app.transfers.services import transfer_send
 
+from tests.helpers.transfers import _section_route_operations
 from tests.test_integrity_invariants import assert_no_invariants_violations
 
 pytestmark = pytest.mark.asyncio
@@ -94,18 +95,32 @@ async def _link_length_dimension(
     await session.flush()
 
 
-def _make_remainders_excel(rows: list[tuple]) -> BytesIO:
-    """Create .xlsx with headers (SKU, Количество, Длина, Комментарий)."""
+def _make_remainders_excel(rows: list[tuple], *, operations: str | None = None) -> BytesIO:
+    """Create .xlsx with headers (SKU, Количество, Длина, Комментарий, Операции).
+
+    ``operations`` — значение колонки «Операции» (ADR-0055): пройденные
+    материалом операции строки остатка. Без неё импорт кладёт остаток в
+    NULL-группу, из которой плановая выдача его не заберёт.
+    """
     wb = Workbook()
     ws = wb.active
     ws.title = "Остатки"
-    ws.append(["SKU", "Количество", "Длина", "Комментарий"])
+    ws.append(["SKU", "Количество", "Длина", "Комментарий", "Операции"])
     for row in rows:
-        ws.append(list(row))
+        ws.append([*row, operations])
     buf = BytesIO()
     wb.save(buf)
     buf.seek(0)
     return buf
+
+
+async def _section_operation_name(session: AsyncSession, section_id: int) -> str:
+    """Название операции участка — значение колонки «Операции» для импорта."""
+    return await session.scalar(
+        select(SectionOperation.operation_name).where(
+            SectionOperation.section_id == section_id
+        )
+    )
 
 
 async def _make_dimensions_route(
@@ -163,6 +178,23 @@ async def _make_dimensions_route(
         await session.flush()
         session.add(RouteOperation(route_stage_id=stage.id, sequence=1, operation_code=op_code, operation_name=op_code))
         stages.append(stage)
+    await session.flush()
+
+    # Справочник операций складского участка (ADR-0043): из него выводится
+    # признак «пройденные операции» материала, лежащего на складе. Код берём
+    # у операции первого этапа маршрута — материал на складе её уже прошёл.
+    # Без строки справочника признак выводился бы пустым списком, и импорт
+    # остатков не смог бы заложить сырьё в ту же ops-группу, из которой его
+    # заберёт плановая выдача (ADR-0055).
+    session.add(
+        SectionOperation(
+            section_id=sections[0].id,
+            operation_code=op_codes[0],
+            operation_name=op_codes[0],
+            is_significant=True,
+            sort_order=0,
+        )
+    )
     await session.flush()
     return product, sections, route, stages
 
@@ -312,7 +344,13 @@ async def test_dimensions_lifecycle_import_to_saw(client, session: AsyncSession)
     await assert_no_invariants_violations(session, context="after-setup")
 
     # ── Шаг 2: Импорт остатков 100 × 2,7 м на склад сырья ──────────────────
-    excel_buf = _make_remainders_excel([("DIM-E2E", 100, "2,7", None)])
+    # Колонка «Операции» несёт признак материала (ADR-0055): сырьё на складе
+    # уже прошло операцию складского участка, и признак ложится в ту же
+    # ops-группу, из которой его заберёт плановая выдача.
+    raw_ops_name = await _section_operation_name(session, raw_sec.id)
+    excel_buf = _make_remainders_excel(
+        [("DIM-E2E", 100, "2,7", None)], operations=raw_ops_name
+    )
     resp = await client.post(
         "/api/stock/import/remainders",
         files={"file": ("remainders.xlsx", excel_buf, XLSX_MIME)},
@@ -518,6 +556,9 @@ async def test_dimensionless_lifecycle_no_regressions(client, session: AsyncSess
         reason=Reason.MANUAL_IN,
         to_location_id=raw_sec.id,
         quality_state=QualityState.GOOD,
+        # ADR-0055: расход точный — остаток кладём в ту же ops-группу, из
+        # которой его заберёт плановая выдача (резолвер маршрута).
+        completed_operations=await _section_route_operations(session, raw_sec.id),
         created_by=user.id,
         comment="Безразмерный остаток",
     ))
@@ -618,7 +659,8 @@ async def test_dimensionless_lifecycle_no_regressions(client, session: AsyncSess
     # ── Завершить пилу (обычное завершение, без трансформации) ──────────────
     await _complete_task(client, saw_task.id, "100")
 
-    # Баланс на пиле остаётся 100 (net-zero COMPLETE: from=section, to=section)
+    # Баланс на пиле остаётся 100: завершение переносит материал из входной
+    # группы в группу своего этапа, а не удваивает его (ADR-0055).
     bal_saw_after = await _get_balance(session, product.id, saw_sec.id, None)
     assert bal_saw_after == Decimal("100")
     await assert_no_invariants_violations(session, context="nodim-after-complete-saw")

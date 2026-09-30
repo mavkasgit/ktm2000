@@ -18,6 +18,7 @@ from app.models.production_plan import (
 from app.models.section import Section
 from app.models.work_task import WorkTask, WorkTaskStatus
 from app.stock import Reason, StockCommand, StockCommandService
+from app.services.material_operations import completed_operations_for_task
 from tests.helpers.transfers import _make_dim_route_fixture, _make_two_ghp_setup, _seed_balance
 from tests.test_integrity_invariants import _make_user, _release_via_take_to_work
 
@@ -44,6 +45,10 @@ async def _complete_source_tasks(session, setup: dict) -> list[int]:
 
     svc = StockCommandService()
     for task in tasks:
+        # Признак берём у того же источника, что и плановая проводка задания
+        # (ADR-0043 §2): иначе приход лёг бы в NULL-группу, а последующее
+        # списание искало бы группу маршрута и получало «available 0» (ADR-0055).
+        ops = await completed_operations_for_task(session, task)
         await svc.record(
             session,
             StockCommand(
@@ -52,6 +57,7 @@ async def _complete_source_tasks(session, setup: dict) -> list[int]:
                 to_location_id=stock.id,
                 quantity=task.planned_quantity,
                 reason=Reason.MANUAL_IN,
+                completed_operations=ops,
                 created_by=setup["user"].id,
             ),
         )
@@ -468,6 +474,9 @@ async def _complete_section_tasks(session, section_id: int, *, user_id: int, sto
     ).scalars().all()
     svc = StockCommandService()
     for task in tasks:
+        # Тот же источник признака, что у плановой проводки задания (ADR-0043 §2) —
+        # см. комментарий в _complete_source_tasks.
+        ops = await completed_operations_for_task(session, task)
         await svc.record(
             session,
             StockCommand(
@@ -476,6 +485,7 @@ async def _complete_section_tasks(session, section_id: int, *, user_id: int, sto
                 to_location_id=stock.id,
                 quantity=task.planned_quantity,
                 reason=Reason.MANUAL_IN,
+                completed_operations=ops,
                 created_by=user_id,
             ),
         )

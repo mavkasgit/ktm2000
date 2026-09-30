@@ -34,6 +34,12 @@ async def _make_tasks_transferable_reuse_stock(session, client, setup: dict) -> 
         session.add(stock)
         await session.flush()
 
+    # Признак берём у того же источника, что и плановое ``TRANSFER_RECEIVE``
+    # (ADR-0043 §2): иначе приход лёг бы в NULL-группу, а receive искал бы
+    # группу маршрута задания и получал «available 0» (ADR-0055).
+    from app.services.material_operations import completed_operations_for_task
+
+    ops = await completed_operations_for_task(session, src)
     svc = StockCommandService()
     await svc.record(
         session,
@@ -43,6 +49,7 @@ async def _make_tasks_transferable_reuse_stock(session, client, setup: dict) -> 
             to_location_id=stock.id,
             quantity=src.planned_quantity,
             reason=Reason.MANUAL_IN,
+            completed_operations=ops,
             created_by=setup["user"].id,
         ),
     )

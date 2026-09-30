@@ -111,12 +111,18 @@ async def _make_plain_task_budget(
     await session.flush()
 
     svc = StockCommandService()
+    # Признак берём у того же источника, что и плановое ``TRANSFER_RECEIVE``
+    # (ADR-0043 §2): иначе приход лёг бы в NULL-группу (ADR-0055).
+    from app.services.material_operations import completed_operations_for_task
+
+    ops = await completed_operations_for_task(session, src)
     await svc.record(session, StockCommand(
         product_id=src.product_id,
         from_location_id=None,
         to_location_id=stock.id,
         quantity=received,
         reason=Reason.MANUAL_IN,
+        completed_operations=ops,
         created_by=setup["user"].id,
     ))
     # received: материал на секции источника (issued).

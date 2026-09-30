@@ -147,6 +147,11 @@ async def test_plain_ready_list_and_write_guard_agree_on_transferable(
     )
     session.add(stock)
     await session.flush()
+    # Признак берём у того же источника, что и плановое ``TRANSFER_RECEIVE``
+    # (ADR-0043 §2): иначе приход лёг бы в NULL-группу (ADR-0055).
+    from app.services.material_operations import completed_operations_for_task
+
+    ops = await completed_operations_for_task(session, from_task)
     svc = StockCommandService()
     await svc.record(
         session,
@@ -156,6 +161,7 @@ async def test_plain_ready_list_and_write_guard_agree_on_transferable(
             to_location_id=stock.id,
             quantity=Decimal("10"),
             reason=Reason.MANUAL_IN,
+            completed_operations=ops,
             created_by=user.id,
         ),
     )

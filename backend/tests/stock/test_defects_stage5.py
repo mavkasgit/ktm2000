@@ -36,6 +36,7 @@ from app.stock import (
     StockCommandService,
     StockTransaction,
 )
+from app.services.material_operations import completed_operations_for_task
 from tests.stock.helpers import canon_scrap_section_id, record_transfer_receive
 from tests.test_integrity_invariants import assert_no_stock_ledger_invariants_violations
 
@@ -92,6 +93,28 @@ async def _balance(
     )
     bal = row.scalar_one_or_none()
     return bal.balance_qty if bal else Decimal("0")
+
+
+async def _seed_raw_stock(
+    session: AsyncSession, fx: dict, quantity: Decimal = Decimal("100"),
+) -> None:
+    """Занести остаток на «Склад сырья» в той же группе, что и списание.
+
+    ADR-0055: списание идёт по полному ключу остатка, включая признак
+    «пройденные операции», а ``record()`` выводит этот признак плановой
+    проводки из маршрута позиции. MANUAL_IN без явного значения лёг бы в
+    NULL-группу, и TRANSFER_RECEIVE задания её бы не нашёл. Значение берём
+    тем же резолвером, что и прод, — без хардкода кодов операций.
+    """
+    await StockCommandService().record(session, StockCommand(
+        product_id=fx["product"].id,
+        from_location_id=None,
+        to_location_id=fx["raw"].id,
+        quantity=quantity,
+        reason=Reason.MANUAL_IN,
+        created_by=fx["user"].id,
+        completed_operations=await completed_operations_for_task(session, fx["task"]),
+    ))
 
 
 async def _setup_minimal_route(session: AsyncSession, *, sku: str = "DEF5", qty: Decimal = Decimal("10")) -> dict:
@@ -179,15 +202,7 @@ async def test_complete_task_scrap_links_defect_to_stock_tx(session: AsyncSessio
     fx = await _setup_minimal_route(session)
     task = fx["task"]
 
-    svc = StockCommandService()
-    await svc.record(session, StockCommand(
-        product_id=fx["product"].id,
-        from_location_id=None,
-        to_location_id=fx["raw"].id,
-        quantity=Decimal("100"),
-        reason=Reason.MANUAL_IN,
-        created_by=fx["user"].id,
-    ))
+    await _seed_raw_stock(session, fx)
     await record_transfer_receive(
         session,
         product_id=fx["product"].id,
@@ -240,15 +255,7 @@ async def test_defect_decide_scrap_creates_stock_tx(session: AsyncSession):
     product = fx["product"]
 
     # Seed stock
-    svc = StockCommandService()
-    await svc.record(session, StockCommand(
-        product_id=product.id,
-        from_location_id=None,
-        to_location_id=fx["raw"].id,
-        quantity=Decimal("100"),
-        reason=Reason.MANUAL_IN,
-        created_by=fx["user"].id,
-    ))
+    await _seed_raw_stock(session, fx)
     await record_transfer_receive(
         session,
         product_id=product.id,
@@ -322,15 +329,7 @@ async def test_defect_decide_rework_creates_stock_tx(session: AsyncSession):
     task = fx["task"]
 
     # Seed stock
-    svc = StockCommandService()
-    await svc.record(session, StockCommand(
-        product_id=fx["product"].id,
-        from_location_id=None,
-        to_location_id=fx["raw"].id,
-        quantity=Decimal("100"),
-        reason=Reason.MANUAL_IN,
-        created_by=fx["user"].id,
-    ))
+    await _seed_raw_stock(session, fx)
     await record_transfer_receive(
         session,
         product_id=fx["product"].id,
@@ -404,15 +403,7 @@ async def test_defect_decide_return_previous_creates_stock_tx(session: AsyncSess
     task = fx["task"]
 
     # Seed stock
-    svc = StockCommandService()
-    await svc.record(session, StockCommand(
-        product_id=fx["product"].id,
-        from_location_id=None,
-        to_location_id=fx["raw"].id,
-        quantity=Decimal("100"),
-        reason=Reason.MANUAL_IN,
-        created_by=fx["user"].id,
-    ))
+    await _seed_raw_stock(session, fx)
     await record_transfer_receive(
         session,
         product_id=fx["product"].id,
@@ -475,15 +466,7 @@ async def test_defect_decide_accept_deviation_creates_complete_tx(session: Async
     task = fx["task"]
 
     # Need issued quantity for complete to work
-    svc = StockCommandService()
-    await svc.record(session, StockCommand(
-        product_id=fx["product"].id,
-        from_location_id=None,
-        to_location_id=fx["raw"].id,
-        quantity=Decimal("100"),
-        reason=Reason.MANUAL_IN,
-        created_by=fx["user"].id,
-    ))
+    await _seed_raw_stock(session, fx)
     await record_transfer_receive(
         session,
         product_id=fx["product"].id,
@@ -546,15 +529,7 @@ async def test_defect_decide_idempotent(session: AsyncSession):
     task = fx["task"]
 
     # Seed stock
-    svc = StockCommandService()
-    await svc.record(session, StockCommand(
-        product_id=fx["product"].id,
-        from_location_id=None,
-        to_location_id=fx["raw"].id,
-        quantity=Decimal("100"),
-        reason=Reason.MANUAL_IN,
-        created_by=fx["user"].id,
-    ))
+    await _seed_raw_stock(session, fx)
     await record_transfer_receive(
         session,
         product_id=fx["product"].id,

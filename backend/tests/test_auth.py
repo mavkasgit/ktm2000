@@ -258,6 +258,7 @@ async def test_transporter_can_manage_transfers_globally_but_not_shopfloor_tasks
     from app.models.section import Section
     from app.models.work_task import WorkTask
     from app.services.shopfloor.cache import _refresh_section_plan_line_cache
+    from app.services.material_operations import completed_operations_for_task
     from app.stock import StockCommand, StockCommandService, Reason
     from tests.test_plan_generation import _make_plan_position, _make_ready_product
 
@@ -309,6 +310,10 @@ async def test_transporter_can_manage_transfers_globally_but_not_shopfloor_tasks
     admin_headers = {"Authorization": f"Bearer {create_access_token(subject=admin_user.username)}"}
 
     svc = StockCommandService()
+    # ADR-0055: приход на склад несёт тот же признак операций, что выведет
+    # plan-driven TRANSFER_RECEIVE ниже из маршрута задания, — иначе списание
+    # ищет группу маршрута и находит 0.
+    seed_ops = await completed_operations_for_task(session, first_task)
     await svc.record(
         session,
         StockCommand(
@@ -316,6 +321,7 @@ async def test_transporter_can_manage_transfers_globally_but_not_shopfloor_tasks
             to_location_id=raw_stock.id,
             quantity=Decimal("100"),
             reason=Reason.MANUAL_IN,
+            completed_operations=seed_ops,
             created_by=admin_user.id,
         ),
     )

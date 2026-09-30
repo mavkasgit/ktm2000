@@ -48,6 +48,7 @@ from app.services.dimension_validation import (
 )
 from app.services.excel_import import parse_row_selection
 from app.services.import_column_resolver import detect_header_row, resolve_columns
+from app.services.material_operations import canonicalize_completed_operations
 from app.services.route_storage_classifier import is_production_section, is_terminal_section
 
 _OPERATIONS_COMMENT_RE = re.compile(r"операции:\s*([^|]+)", re.IGNORECASE)
@@ -838,6 +839,28 @@ def _resolve_item_quality_state(
         return quality_state_overrides[item.source_row_number]
     return item.quality_state or default_quality_state
 
+
+def _row_completed_operations(item: RemainderItem) -> list[str] | None:
+    """Признак пройденных операций строки импорта (ADR-0055).
+
+    Берётся из ``completed_stages`` — уже разрешённых по справочнику элементов
+    колонки «Операции» (у каждого есть ``operation_code``). Колонка заполнена
+    частично — неизвестные названия не резолвятся и лишь добавляют ошибку
+    строке (см. ``resolve_completed_stages``), поэтому признак отражает ровно
+    то, что подтверждено справочником.
+
+    ``None`` — колонка пуста: состояние не зафиксировано (операция вне
+    маршрута). Это НЕ то же, что ``[]``: пустая колонка значит «операций не
+    было» только если это явно указано значением, которое резолвится в пустой
+    список; неотличить его от отсутствия колонки нельзя, поэтому неотличимое
+    и отдаётся как ``None``.
+    """
+    if not item.completed_stages:
+        return None
+    return canonicalize_completed_operations(
+        stage["operation_code"] for stage in item.completed_stages
+    )
+
 async def apply_remainders_import(
     db: AsyncSession,
     location_id: int,
@@ -966,8 +989,11 @@ async def apply_remainders_import(
                     product_id=bal.product_id,
                     from_location_id=location_id,
                     quantity=bal.balance_qty,
-                    # Гасим каждую габаритную группу отдельно (ADR-0001).
+                    # Гасим каждую габаритную группу и каждое состояние
+                    # материала отдельно (ADR-0001, ADR-0055): строка остатка
+                    # определяется обоими признаками.
                     dimensions=bal.dimensions,
+                    completed_operations=bal.completed_operations,
                     reason=Reason.ADJUSTMENT_OUT,
                     quality_state=bal.quality_state,
                     comment="Очистка перед импортом остатков",
@@ -1008,6 +1034,12 @@ async def apply_remainders_import(
             sep = " | " if final_comment else ""
             final_comment = f"{final_comment or ''}{sep}операции: {ops_names}"
 
+        # Строки с одним артикулом, участком и длиной, но разными «Выполненные
+        # операции», — физически разный материал (ADR-0055), поэтому признак
+        # пишется в проводку и попадает в ключ остатка. Раньше он уезжал
+        # только в текст комментария, и такие строки сливались в одну.
+        row_ops = _row_completed_operations(item)
+
         row_quality = _resolve_item_quality_state(
             item, quality_state, quality_state_overrides
         )
@@ -1017,6 +1049,7 @@ async def apply_remainders_import(
             quantity=Decimal(str(item.quantity)),
             # Габаритная группа строки (ADR-0003, п. 3); None = безразмерные.
             dimensions=item.dimensions,
+            completed_operations=row_ops,
             reason=Reason.MANUAL_IN,
             quality_state=row_quality,
             comment=final_comment or "Импорт остатков из Excel",
@@ -1083,6 +1116,7 @@ async def apply_remainders_import(
                     else None
                 ),
                 dimensions=item.dimensions,
+                completed_operations=_row_completed_operations(item) if is_valid else None,
                 target_section_id=to_loc,
                 quality_state=row_quality.value,
                 status=(

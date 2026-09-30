@@ -9,6 +9,7 @@ from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.idempotency import raise_idempotency_conflict_on_violation
+from app.domain.dimensions import canonicalize_dimensions
 from app.domain.shortage import ShortageStrategy
 from app.models.defect import Defect, DefectItem, DefectStatus
 from app.models.internal_plan import SectionPlanLine
@@ -27,7 +28,7 @@ from app.services.route_storage_classifier import (
 )
 from app.stock import QualityState, Reason, StockCommand, StockCommandService
 from app.stock.models import StockBalance, StockTransaction
-from app.stock.services import dimensions_match_clause
+from app.stock.services import completed_operations_match_clause, dimensions_match_clause
 
 from .common import (
     _check_idempotency,
@@ -47,6 +48,7 @@ from .operations_transform import (
     get_transform_progress,
     record_transform_portion,
     resolve_consume_dimensions,
+    resolve_consume_operations,
     resolve_transform_spec,
 )
 from .scrap_policy import find_or_create_scrap_section_id
@@ -114,13 +116,22 @@ class _TransformPlan(NamedTuple):
     """Резолв трансформирующего этапа для одной порции завершения.
 
     Собирается один раз до проводок; этапы-функции получают план готовым
-    и не повторяют резолв сами.
+    и не повторяют резолв сами. ``consume_dims``/``consume_ops`` — полный
+    ключ строки баланса, из которой списывается ВХОД порции (ADR-0001,
+    ADR-0055): расхождение с проводкой означало бы, что резолв считал одну
+    группу, а ledger списал другую.
+
+    У трансформирующего этапа это вход спецификации (ADR-0002), у обычного —
+    материал, пришедший с предыдущего этапа: COMPLETE переводит его в группу
+    собственного этапа, а брак/возврат списывают из той же входной группы.
+    Поэтому ``consume_ops`` заполнен на обоих типах этапов.
     """
 
     stage: RouteStage | None
     spec: TransformSpec | None
     progress: TransformProgress | None
     consume_dims: dict | None
+    consume_ops: list[str] | None
 
 
 class _CompletionCtx(NamedTuple):
@@ -231,29 +242,51 @@ async def _resolve_transform_plan(
                 f"Portion exceeds remaining input quantity: "
                 f"requested {total}, remaining input {remaining_input}"
             )
+        consume_ops = await resolve_consume_operations(db, task)
         consume_dims = await resolve_consume_dimensions(
             db,
             product_id=task.product_id,
             location_id=task.section_id,
             dimensions=spec.input_dimensions,
+            completed_operations=consume_ops,
             required=total,
         )
     else:
         in_work = cache["issued_quantity"] - cache["completed_quantity"] - cache["rejected_quantity"]
         if total > in_work:
             raise ValueError("Complete quantity exceeds issued quantity")
+        # Нетрансформирующий этап: списания входа по спецификации нет, но
+        # группа ВХОДА нужна — COMPLETE переводит материал из неё в группу
+        # собственного этапа (ADR-0055). Материал на участке помечен
+        # признаком предыдущего этапа (так его пишет TRANSFER_SEND источника),
+        # и без адреса этой группы выпуск «подвешивал» бы остаток в чужой
+        # группе: следующая передача искала бы группу своего этапа и не
+        # находила её.
+        consume_ops = await resolve_consume_operations(db, task)
 
-    return _TransformPlan(stage=stage, spec=spec, progress=progress, consume_dims=consume_dims)
+    return _TransformPlan(
+        stage=stage,
+        spec=spec,
+        progress=progress,
+        consume_dims=consume_dims,
+        consume_ops=consume_ops,
+    )
 
 
 async def _good_input_balance(
-    db: AsyncSession, *, product_id: int, location_id: int, consume_dims: dict | None,
+    db: AsyncSession, *,
+    product_id: int, location_id: int,
+    consume_dims: dict | None, consume_ops: list[str] | None,
 ) -> Decimal:
-    """Доступный GOOD-баланс входной габаритной группы на участке.
+    """Доступный GOOD-баланс входной группы участка — по всем пяти осям.
 
     Ключ тот же, по которому ``record_transform_portion`` будет списывать
-    вход порции: ``(product, section, GOOD, consume_dims)`` через
-    ``dimensions_match_clause`` (NULL-группа матчится явно).
+    вход порции: ``(product, section, GOOD, consume_dims, consume_ops)``
+    через ``dimensions_match_clause`` и ``completed_operations_match_clause``
+    (NULL-группа по обеим осям матчится явно). Признак операций — точная
+    ось (ADR-0055): суммировать «сырьё и подготовленное» здесь означало бы
+    показать оператору остаток, который ``StockCommandService`` всё равно
+    не даст списать.
 
     Строки баланса читаются ``FOR UPDATE`` (тикет #134): две конкурентные
     порции otherwise читают один и тот же доступный остаток и обе проходят
@@ -271,6 +304,9 @@ async def _good_input_balance(
             StockBalance.location_id == location_id,
             StockBalance.quality_state == QualityState.GOOD,
             dimensions_match_clause(StockBalance.dimensions, consume_dims),
+            completed_operations_match_clause(
+                StockBalance.completed_operations, consume_ops,
+            ),
         )
         .with_for_update()
         .subquery()
@@ -279,6 +315,71 @@ async def _good_input_balance(
         select(func.coalesce(func.sum(balance_rows.c.balance_qty), 0))
     )
     return Decimal(total)
+
+
+async def _input_group_allocations(
+    db: AsyncSession,
+    *,
+    task: WorkTask,
+    consume_ops: list[str] | None,
+    required: Decimal,
+    preferred_dims: dict | None,
+    allow_negative: bool = False,
+) -> list[tuple[dict | None, Decimal]]:
+    """Разложить порцию по строкам ВХОДНОЙ группы участка.
+
+    Вход этапа лежит на его участке в группе признака ПРЕДЫДУЩЕГО этапа
+    (ADR-0055), и таких габаритных групп может быть несколько: материал
+    приходит несколькими выходами раскроя (``auto_transfer_next`` заводит
+    передачу на каждый выход). Возвращает ``[(габарит, количество), ...]`` —
+    по этим группам порция списывается и приходуется в группу своего этапа.
+
+    Габарит каждой группы сохраняется: выпуск лишь переносит материал в
+    другую ops-группу, а не меняет его размер (ADR-0001). Поэтому списание
+    идёт по фактическим строкам баланса, а не по ``task.dimensions``:
+    задание несёт нормативный размер плана (2,7 м), тогда как участку
+    передали выход раскроя (0,9 м), и по нормативному размеру остатка нет.
+
+    Недостачу не прячем: если строк не хватило, остаток порции возвращается
+    отдельной записью с предпочтительным габаритом — ledger назовёт продукт,
+    участок, габарит и признак, как и раньше.
+    """
+    if allow_negative:
+        # Осознанный минус (negative_remainder): дробить нечего — физики
+        # больше нет, важно провести порцию целиком.
+        return [(preferred_dims, required)]
+
+    rows = (
+        await db.execute(
+            select(StockBalance.dimensions, StockBalance.balance_qty)
+            .where(
+                StockBalance.product_id == task.product_id,
+                StockBalance.location_id == task.section_id,
+                StockBalance.quality_state == QualityState.GOOD,
+                completed_operations_match_clause(
+                    StockBalance.completed_operations, consume_ops,
+                ),
+            )
+            .order_by(StockBalance.id)
+        )
+    ).all()
+    canonical = canonicalize_dimensions(preferred_dims)
+    ordered = sorted(
+        rows, key=lambda row: 0 if canonicalize_dimensions(row[0]) == canonical else 1,
+    )
+    remaining = required
+    allocations: list[tuple[dict | None, Decimal]] = []
+    for dims, qty in ordered:
+        if remaining <= 0:
+            break
+        take = min(Decimal(qty), remaining)
+        if take <= 0:
+            continue
+        allocations.append((dims, take))
+        remaining -= take
+    if remaining > 0:
+        allocations.append((preferred_dims, remaining))
+    return allocations
 
 
 class _ShortageResolution(NamedTuple):
@@ -328,6 +429,7 @@ async def _resolve_shortage(
         product_id=task.product_id,
         location_id=task.section_id,
         consume_dims=plan.consume_dims,
+        consume_ops=plan.consume_ops,
     )
     if good_quantity + defect_quantity <= available:
         return _ShortageResolution(good_quantity, defect_quantity, False)
@@ -360,8 +462,11 @@ async def _post_good_portion(
     """Проводки годной части порции; возвращает ids созданных транзакций.
 
     Трансформирующий этап — атомарные списание входа + приход всех выходов
-    (record_transform_portion); обычный этап — net-zero COMPLETE при уже
-    выданном материале либо выпуск «из ниоткуда» (legacy).
+    (record_transform_portion). Обычный этап переводит материал в группу
+    своего этапа (ADR-0055): списание входной группы + выпуск, по паре
+    проводок на каждую фактическую габаритную группу входа; материал, не
+    привязанный ни к какой входной группе, пишется выпуском «из ниоткуда»
+    (legacy).
     ``cache_issued`` — issued_quantity из task-cache, прочитанного ДО проводок.
     ``allow_negative`` (#133) — осознанный минус входной группы, действует
     только на трансформирующем этапе.
@@ -390,6 +495,7 @@ async def _post_good_portion(
             progress=plan.progress,
             good_quantity=good_quantity,
             consume_dims=plan.consume_dims,
+            consume_ops=plan.consume_ops,
             actor_id=ctx.actor_id,
             executor_user_id=ctx.eff_executor,
             comment=complete_comment,
@@ -402,47 +508,90 @@ async def _post_good_portion(
         ))
         return tx_ids
 
-    # Material already on section (issued_quantity > 0): net-zero COMPLETE
-    # records выпуск without duplicating balance after TRANSFER_SEND.
-    # Legacy path (issued_quantity == 0): good appears from nowhere.
+    # Материал уже на участке (issued_quantity > 0): он лежит в группе
+    # признака ПРЕДЫДУЩЕГО этапа — так его помечает TRANSFER_SEND источника.
+    # Выпуск переводит его в группу собственного этапа: списываем входную
+    # группу отдельной проводкой и приходуем годное «из ниоткуда».
+    # Раньше здесь была одна net-zero проводка COMPLETE, и группа своего
+    # этапа не появлялась вовсе — следующая передача искала её и получала
+    # «available 0» (ADR-0055).
+    #
+    # Причина списания — TRANSFORM_CONSUME («вход этапа потреблён»): второй
+    # COMPLETE со знаком минус обнулил бы выпуск в task-cache, которая
+    # суммирует COMPLETE со знаком.
+    allocations: list[tuple[dict | None, Decimal]] = []
     if cache_issued > 0:
-        complete_from = task.section_id
-        complete_to = task.section_id
-    else:
-        complete_from = None
-        complete_to = task.section_id
+        allocations = await _input_group_allocations(
+            db,
+            task=task,
+            consume_ops=plan.consume_ops,
+            required=good_quantity,
+            preferred_dims=task.dimensions,
+            allow_negative=allow_negative,
+        )
+    if not allocations:
+        # Legacy-путь: материал «из ниоткуда» (issued_quantity == 0).
+        allocations = [(task.dimensions, good_quantity)]
+
     complete_comment = ctx.comment
-    if complete_to == task.section_id:
-        line = await db.get(SectionPlanLine, task.section_plan_line_id)
-        legacy_stage = await _get_route_stage(db, task.route_stage_id)
-        if line is not None:
-            complete_comment = await enrich_comment_with_route_operations(
-                db,
-                ctx.comment,
-                route_id=line.route_id,
-                through_sequence=legacy_stage.sequence,
-            )
-    tx_good = await svc.record(db, StockCommand(
-        product_id=task.product_id,
-        from_location_id=complete_from,
-        to_location_id=complete_to,
-        quantity=good_quantity,
-        reason=Reason.COMPLETE,
-        quality_state=QualityState.GOOD,
-        # Габарит задания (ADR-0001): запись не движет баланс (net-zero),
-        # но несёт ту же размерную группу, что и полученный материал.
-        dimensions=task.dimensions,
-        task_id=task.id,
-        source_ref=ctx.source_ref,
-        idempotency_key=ctx.idempotency_key,
-        comment=complete_comment,
-        created_by=ctx.actor_id,
-        executor_user_id=ctx.eff_executor,
-        performed_at=ctx.eff_performed,
-        accounted_at=ctx.eff_accounted,
-        action_id=ctx.action_id,
-    ))
-    tx_ids.append(tx_good.id)
+    line = await db.get(SectionPlanLine, task.section_plan_line_id)
+    legacy_stage = await _get_route_stage(db, task.route_stage_id)
+    if line is not None:
+        complete_comment = await enrich_comment_with_route_operations(
+            db,
+            ctx.comment,
+            route_id=line.route_id,
+            through_sequence=legacy_stage.sequence,
+        )
+    for index, (dims, portion) in enumerate(allocations):
+        if cache_issued > 0:
+            tx_consume = await svc.record(db, StockCommand(
+                product_id=task.product_id,
+                from_location_id=task.section_id,
+                to_location_id=None,
+                quantity=portion,
+                reason=Reason.TRANSFORM_CONSUME,
+                dimensions=dims,
+                quality_state=QualityState.GOOD,
+                completed_operations=plan.consume_ops,
+                task_id=task.id,
+                source_ref=ctx.source_ref,
+                idempotency_key=(
+                    f"{ctx.idempotency_key}:stage-consume{index}"
+                    if ctx.idempotency_key else None
+                ),
+                comment=ctx.comment,
+                created_by=ctx.actor_id,
+                executor_user_id=ctx.eff_executor,
+                performed_at=ctx.eff_performed,
+                accounted_at=ctx.eff_accounted,
+                action_id=ctx.action_id,
+            ))
+            tx_ids.append(tx_consume.id)
+        tx_good = await svc.record(db, StockCommand(
+            product_id=task.product_id,
+            from_location_id=None,
+            to_location_id=task.section_id,
+            quantity=portion,
+            reason=Reason.COMPLETE,
+            quality_state=QualityState.GOOD,
+            # Габарит полученного материала (ADR-0001): выпуск несёт ту же
+            # размерную группу, что и вход, — размер материал не меняет.
+            dimensions=dims,
+            task_id=task.id,
+            source_ref=ctx.source_ref,
+            idempotency_key=(
+                ctx.idempotency_key if index == 0
+                else f"{ctx.idempotency_key}:stage-out{index}"
+            ),
+            comment=complete_comment,
+            created_by=ctx.actor_id,
+            executor_user_id=ctx.eff_executor,
+            performed_at=ctx.eff_performed,
+            accounted_at=ctx.eff_accounted,
+            action_id=ctx.action_id,
+        ))
+        tx_ids.append(tx_good.id)
     return tx_ids
 
 
@@ -461,11 +610,13 @@ async def _register_scrap_and_defect(
     """Брак порции: SCRAP-проводка на SCRAP-секцию + Defect/DefectItem.
 
     Find-or-create SCRAP-секции — общий шов ``scrap_policy`` (тикет #132),
-    тот же модуль использует defect_decide. Брак заготовок трансформации
-    уходит с габаритом входа; на нетрансформирующих этапах — с габаритом
-    задания (ADR-0001). ``allow_negative`` (#133) наследует стратегию
-    negative_remainder: брак списывается вслед за годными, когда входная
-    группа уже уведена в минус.
+    тот же модуль использует defect_decide. Брак — это забракованный ВХОД
+    порции, поэтому он списывается из входной группы участка с её
+    габаритом: у трансформирующего этапа это габарит входа спецификации
+    (ADR-0002), у обычного — те строки баланса, что реально пришли с
+    предыдущего этапа (ADR-0055). ``allow_negative`` (#133) наследует
+    стратегию negative_remainder: брак списывается вслед за годными, когда
+    входная группа уже уведена в минус.
     """
     if defect_quantity <= 0:
         return [], None
@@ -474,33 +625,59 @@ async def _register_scrap_and_defect(
     # ADR-0007); сервис не резолвит PlantConfig сам.
     scrap_loc = await find_or_create_scrap_section_id(db, scrap_policy=scrap_policy)
 
-    tx_scrap = await svc.record(db, StockCommand(
-        product_id=task.product_id,
-        from_location_id=task.section_id,
-        to_location_id=scrap_loc,
-        quantity=defect_quantity,
-        reason=Reason.SCRAP,
-        dimensions=plan.consume_dims if plan.spec is not None else task.dimensions,
-        quality_state=QualityState.GOOD,
-        to_quality_state=QualityState.SCRAP,
-        allow_negative=allow_negative,
-        task_id=task.id,
-        source_ref=ctx.source_ref,
-        idempotency_key=_scrap_tx_key(ctx.idempotency_key) if ctx.idempotency_key else None,
-        comment=ctx.comment,
-        created_by=ctx.actor_id,
-        executor_user_id=ctx.eff_executor,
-        performed_at=ctx.eff_performed,
-        accounted_at=ctx.eff_accounted,
-        action_id=ctx.action_id,
-    ))
+    if plan.spec is not None:
+        # Трансформация: группа входа уже зафиксирована резолвом порции
+        # (``resolve_consume_dimensions``), и брак обязан списаться из неё же.
+        scrap_allocations: list[tuple[dict | None, Decimal]] = [
+            (plan.consume_dims, defect_quantity)
+        ]
+    else:
+        scrap_allocations = await _input_group_allocations(
+            db,
+            task=task,
+            consume_ops=plan.consume_ops,
+            required=defect_quantity,
+            preferred_dims=task.dimensions,
+            allow_negative=allow_negative,
+        ) or [(task.dimensions, defect_quantity)]
+
+    scrap_ids: list[int] = []
+    for index, (dims, portion) in enumerate(scrap_allocations):
+        tx_scrap = await svc.record(db, StockCommand(
+            product_id=task.product_id,
+            from_location_id=task.section_id,
+            to_location_id=scrap_loc,
+            quantity=portion,
+            reason=Reason.SCRAP,
+            dimensions=dims,
+            quality_state=QualityState.GOOD,
+            to_quality_state=QualityState.SCRAP,
+            allow_negative=allow_negative,
+            task_id=task.id,
+            completed_operations=plan.consume_ops,
+            source_ref=ctx.source_ref,
+            idempotency_key=(
+                _scrap_tx_key(ctx.idempotency_key) if ctx.idempotency_key else None
+            ) if index == 0 else (
+                f"{_scrap_tx_key(ctx.idempotency_key)}{index}"
+                if ctx.idempotency_key else None
+            ),
+            comment=ctx.comment,
+            created_by=ctx.actor_id,
+            executor_user_id=ctx.eff_executor,
+            performed_at=ctx.eff_performed,
+            accounted_at=ctx.eff_accounted,
+            action_id=ctx.action_id,
+        ))
+        scrap_ids.append(tx_scrap.id)
+    tx_scrap_id = scrap_ids[0]
 
     defect_key = _defect_key(ctx.idempotency_key) if ctx.idempotency_key else None
     defect = Defect(
         product_id=task.product_id,
         section_id=task.section_id,
         task_id=task.id,
-        stock_transaction_id=tx_scrap.id,
+        stock_transaction_id=tx_scrap_id,
         status=DefectStatus.decision_required,
         comment=ctx.comment,
         created_by=ctx.actor_id,
@@ -529,7 +706,7 @@ async def _register_scrap_and_defect(
         created_by=ctx.actor_id,
     )
     db.add(defect_item)
-    return [tx_scrap.id], defect.id
+    return scrap_ids, defect.id
 
 
 async def complete_task(

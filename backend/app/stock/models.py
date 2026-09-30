@@ -11,8 +11,9 @@ nullable для ручных приходов/расходов из ниотку
 состоянием качества ``quality_state``.
 
 ``StockBalance`` — материализованный кэш баланса по ключу
-``(product_id, location_id, quality_state, dimensions)``. Пересчитывается из
-``StockTransaction`` через ``StockProjectionManager``. Не бизнес-сущность.
+``(product_id, location_id, quality_state, dimensions, completed_operations)``.
+Пересчитывается из ``StockTransaction`` через ``StockProjectionManager``.
+Не бизнес-сущность.
 
 ``dimensions`` (ADR-0001) — вторая ось учёта: JSONB в канонической форме
 (``app.domain.dimensions.canonicalize_dimensions``), например
@@ -20,13 +21,15 @@ nullable для ручных приходов/расходов из ниотку
 до миграции 023). Остатки разных длин одного SKU на одной секции —
 разные строки баланса.
 
-``completed_operations`` (ADR-0043) — третья ось учёта, но не размер, а
-**состояние материала**: JSONB-список ``operation_code``, которые материал уже
-прошёл (например ``["ISSUE_RAW", "PRESS_COMB", "SHOT"]``). Источник —
-маршрут позиции, а не обратное чтение склада. ``NULL`` — состояние не
-зафиксировано (операция вне маршрута), ``[]`` — «прошёл маршрут, операций не
-было»; это разные значения. Инварианты формы и зеркала компенсаций
-проверяет ``StockCommandService.record()``.
+``completed_operations`` (ADR-0043, ADR-0055) — третья ось учёта и вторая
+ось ``StockBalance``: JSONB-список ``operation_code``, которые материал уже
+прошёл (например ``["ISSUE_RAW", "PRESS_COMB", "SHOT"]``). Материал, прошедший
+разные операции, физически различен (крашеный/некрашеный, закалённый/нет) и
+стоит по-разному, поэтому такая пара занимает **две строки остатка**, а не
+сливается в одну сумму. Источник — маршрут позиции, а не обратное чтение
+склада. ``NULL`` — состояние не зафиксировано (операция вне маршрута), ``[]``
+— «прошёл маршрут, операций не было»; это разные значения. Инварианты формы
+и зеркала компенсаций проверяет ``StockCommandService.record()``.
 """
 from __future__ import annotations
 
@@ -218,7 +221,8 @@ class StockTransaction(Base):
 
 
 class StockBalance(Base):
-    """Материализованный кэш баланса по ``(product, location, quality_state, dimensions)``.
+    """Материализованный кэш баланса по ключу
+    ``(product, location, quality_state, dimensions, completed_operations)``.
 
     Не источник правды — пересчитывается из ``StockTransaction`` через
     ``StockProjectionManager.refresh_balance``. Существует только для
@@ -227,14 +231,16 @@ class StockBalance(Base):
 
     __tablename__ = "stock_balances"
     __table_args__ = (
-        # NULLS NOT DISTINCT (PG15+): два NULL-габарита — одна и та же legacy-группа,
-        # дубли строк баланса по одному ключу невозможны.
+        # NULLS NOT DISTINCT (PG15+): два NULL-габарита или два NULL-признака —
+        # одна и та же legacy-группа, дубли строк баланса по одному ключу
+        # невозможны. Ось операций добавлена ADR-0055.
         UniqueConstraint(
             "product_id",
             "location_id",
             "quality_state",
             "dimensions",
-            name="uq_stock_balances_product_location_quality_dims",
+            "completed_operations",
+            name="uq_stock_balances_product_location_quality_dims_ops",
             postgresql_nulls_not_distinct=True,
         ),
         CheckConstraint("balance_qty <> 0", name="nonzero"),
@@ -253,6 +259,14 @@ class StockBalance(Base):
     )
     # Габарит группы остатка (каноническая форма); NULL = legacy/безразмерные.
     dimensions: Mapped[dict | None] = mapped_column(
+        JSONB(none_as_null=True), nullable=True
+    )
+    # Пройденные операции материала (ADR-0043, ADR-0055): та же каноническая
+    # форма, что у StockTransaction.completed_operations. NULL = состояние не
+    # зафиксировано, [] = «операций не было» — это НЕ то же, что NULL.
+    # Ось входит в ключ строки баланса, поэтому пересчитывается и фильтруется
+    # так же, как dimensions.
+    completed_operations: Mapped[list | None] = mapped_column(
         JSONB(none_as_null=True), nullable=True
     )
     balance_qty: Mapped[Decimal] = mapped_column(Numeric(14, 3), nullable=False, default=0)

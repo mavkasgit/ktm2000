@@ -272,6 +272,22 @@ async def defect_decide(
             actor=await _get_user_snapshot_name(db, actor_id),
         )
 
+    # Признак «пройденные операции» (ADR-0043/ADR-0055): решения по браку
+    # двигают забракованный ВХОД задания, а он лежит в группе признака
+    # ПРЕДЫДУЩЕГО этапа. Признак собственного этапа появляется только у
+    # выпущенного годного, и списание брака по нему упало бы на «available 0».
+    from app.services.material_operations import (
+        completed_operations_for_task,
+        previous_stage_sequence,
+    )
+
+    through_previous: list[str] | None = None
+    if task is not None:
+        previous_sequence = await previous_stage_sequence(db, task)
+        through_previous = await completed_operations_for_task(
+            db, task, through_sequence=previous_sequence or 0
+        )
+
     if decision_type == DefectDecisionType.scrap:
         # ADR-0007: данные SCRAP-секции из composition root; find-or-create —
         # общий шов с complete_task (scrap_policy.py, тикет #132).
@@ -287,6 +303,10 @@ async def defect_decide(
             quality_state=QualityState.GOOD,
             to_quality_state=QualityState.SCRAP,
             task_id=task.id if task else None,
+            # Зарегистрированный дефект — это забракованный ВЫПУСК задания,
+            # он лежит в группе признака своего этапа; решения по нему
+            # материал из неё и уводят (в отличие от брака заготовок, который
+            # пишет само завершение, — тот уходит из входной группы).
             source_ref=f"defect:{defect.id}:decision:scrap",
             idempotency_key=idempotency_key,
             action_id=action.id,
@@ -325,6 +345,7 @@ async def defect_decide(
                 quality_state=QualityState.GOOD,
                 to_quality_state=QualityState.REWORK,
                 task_id=task.id,
+                # Забракованный выпуск — группа своего этапа (см. scrap выше).
                 source_ref=f"defect:{defect.id}:decision:rework",
                 idempotency_key=f"{idempotency_key}:rework" if idempotency_key else None,
                 action_id=action.id,
@@ -356,18 +377,7 @@ async def defect_decide(
                 to_loc = None
             # Признак «пройденные операции» (ADR-0043): материал уходит
             # НАЗАД по маршруту, поэтому несёт операции до предыдущего
-            # этапа, а не собственные. Маршрут из одного этапа — материал
-            # по этому маршруту не прошёл ничего ([]).
-            from app.services.material_operations import (
-                completed_operations_for_task,
-                previous_stage_sequence,
-            )
-
-            previous_sequence = await previous_stage_sequence(db, task)
-            through_previous = await completed_operations_for_task(
-                db, task, through_sequence=previous_sequence or 0
-            )
-
+            # этапа, а не собственные, — посчитан выше для всех решений.
             tx = await svc.record(db, StockCommand(
                 product_id=task.product_id,
                 from_location_id=task.section_id,

@@ -22,6 +22,13 @@ export type StockBalanceEntry = {
   /** Готовая подпись габарита с бэкенда («2,7 м» / «—»). */
   dimensions_label?: string;
   completed_stages?: ImportOperationStep[];
+  /**
+   * ADR-0055: часть идентичности остатка. `null` — состояние не зафиксировано
+   * (операция вне маршрута: ручной ввод, seed, legacy-строки), `[]` — маршрут
+   * пройден, операций не было. Значения НЕ взаимозаменяемы: две строки одного
+   * товара с разными операциями — это разные остатки.
+   */
+  completed_operations?: string[] | null;
   refreshed_at: string | null;
 };
 
@@ -81,6 +88,35 @@ export function formatDimensionsFilterValue(value: string): string {
     // невалидная строка — показываем как есть
   }
   return value;
+}
+
+/** Подпись «не зафиксировано»: операции вне маршрута (ADR-0055). */
+export const OPERATIONS_NOT_RECORDED_LABEL = "не зафиксировано";
+
+/** Подпись «маршрут пройден, операций не было» (ADR-0055). */
+export const OPERATIONS_EMPTY_LABEL = "без операций";
+
+/**
+ * Подпись выполненных операций остатка с тремя различимыми состояниями:
+ * `null` (не зафиксировано) / `[]` (без операций) / список операций.
+ *
+ * Пустые состояния определяет `completed_operations` — он и есть ось ключа
+ * остатка. Названия же берутся из `completed_stages`: это тот же признак,
+ * развёрнутый справочником операций, и подпись обязана совпадать с ним и с
+ * фильтром колонки (фильтр работает по `operation_name`). Коды остаются
+ * запасным путём для ответов, где `completed_stages` не пришёл.
+ */
+export function formatCompletedOperationsLabel(
+  ops: string[] | null | undefined,
+  stages?: ImportOperationStep[],
+): string {
+  if (ops === null) return OPERATIONS_NOT_RECORDED_LABEL;
+  const names = stages?.map((stage) => stage.operation_name).filter(Boolean) ?? [];
+  if (ops === undefined) {
+    return names.length ? names.join(", ") : OPERATIONS_NOT_RECORDED_LABEL;
+  }
+  if (ops.length === 0) return OPERATIONS_EMPTY_LABEL;
+  return names.length ? names.join(", ") : ops.join(", ");
 }
 
 export type StockReason =

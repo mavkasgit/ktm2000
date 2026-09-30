@@ -211,8 +211,7 @@ async def resolve_budget_kind(
 
 
 async def compute_stock_section_transferable(
-    db: AsyncSession,
-    *,
+    db: AsyncSession, *,
     task: WorkTask,
     section: Section,
     planned_qty: Decimal,
@@ -225,9 +224,20 @@ async def compute_stock_section_transferable(
     ``already_transferred`` учитывается по размеру (не по строке целиком):
     несколько передач одного размера разрешены, сумма ограничена через
     ``transferable``.
+
+    Ось «пройденные операции» (ADR-0055) — точная, а не суммируемая:
+    ``TRANSFER_SEND`` пишется с признаком, выведенным ``record()`` из
+    маршрута ИСХОДНОГО задания (``completed_operations_for_task``), и
+    списание в ledger идёт по строке баланса с ровно этим признаком.
+    Поэтому ``physical_stock`` читается по полному ключу, а не «всего по
+    артикулу на участке»: иначе write-guard сообщил бы «передавать можно
+    100», а ``StockCommandService`` отказал бы — сырьё и подготовленное
+    физически разный материал. Строка склада без плановой привязки даёт
+    ``None`` → NULL-группа, куда и пишет неplan-driven путь.
     """
+    from app.services.material_operations import completed_operations_for_task
     from app.stock.models import QualityState, StockBalance
-    from app.stock.services import dimensions_match_clause
+    from app.stock.services import completed_operations_match_clause, dimensions_match_clause
 
     # Размер группы: если явный не передан — берём из задания (канонический
     # габарит плана). None = безразмерная legacy-группа.
@@ -242,11 +252,16 @@ async def compute_stock_section_transferable(
 
     plan_remaining = max(Decimal("0"), _dec(planned_qty) - already_transferred)
 
+    # Тот же признак, что запишет TRANSFER_SEND: маршрут исходного задания
+    # до его собственного этапа включительно.
+    consume_ops = await completed_operations_for_task(db, task)
+
     physical_stock_q = select(func.coalesce(func.sum(StockBalance.balance_qty), 0)).where(
         StockBalance.location_id == section.id,
         StockBalance.product_id == task.product_id,
         StockBalance.balance_qty > 0,
         StockBalance.quality_state == QualityState.GOOD,
+        completed_operations_match_clause(StockBalance.completed_operations, consume_ops),
     )
     # Задание несёт габарит (ADR-0001): остаток считается только по строке
     # баланса этой размерности. Без длины — legacy-поведение (все группы).

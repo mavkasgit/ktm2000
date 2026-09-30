@@ -36,7 +36,7 @@ from app.stock import (
     StockTransaction,
 )
 from app.stock.services import StockProjectionManager
-from tests.stock.helpers import record_transfer_receive
+from tests.stock.helpers import record_transfer_receive, seed_stock_for_task
 
 pytestmark = pytest.mark.asyncio
 
@@ -146,12 +146,12 @@ async def test_completed_qty_from_ledger(session: AsyncSession):
     fx = await _setup_one_task(session)
     task = fx["task"]
 
-    svc = StockCommandService()
-    # Seed stock
-    await svc.record(session, StockCommand(
-        product_id=fx["product"].id, from_location_id=None, to_location_id=fx["raw"].id,
-        quantity=Decimal("100"), reason=Reason.MANUAL_IN, created_by=fx["user"].id,
-    ))
+    await seed_stock_for_task(
+        session,
+        product_id=fx["product"].id, task=task,
+        quantity=Decimal("100"), created_by=fx["user"].id,
+        location_id=fx["raw"].id,
+    )
     await record_transfer_receive(
         session,
         product_id=fx["product"].id,
@@ -180,11 +180,12 @@ async def test_issued_qty_from_ledger(session: AsyncSession):
     fx = await _setup_one_task(session)
     task = fx["task"]
 
-    svc = StockCommandService()
-    await svc.record(session, StockCommand(
-        product_id=fx["product"].id, from_location_id=None, to_location_id=fx["raw"].id,
-        quantity=Decimal("100"), reason=Reason.MANUAL_IN, created_by=fx["user"].id,
-    ))
+    await seed_stock_for_task(
+        session,
+        product_id=fx["product"].id, task=task,
+        quantity=Decimal("100"), created_by=fx["user"].id,
+        location_id=fx["raw"].id,
+    )
 
     await record_transfer_receive(
         session,
@@ -239,10 +240,12 @@ async def test_transferred_qty_net_from_ledger(session: AsyncSession):
 
     # Seed stock, issue, complete on from_task
     svc = StockCommandService()
-    await svc.record(session, StockCommand(
-        product_id=fx["product"].id, from_location_id=None, to_location_id=fx["raw"].id,
-        quantity=Decimal("100"), reason=Reason.MANUAL_IN, created_by=fx["user"].id,
-    ))
+    await seed_stock_for_task(
+        session,
+        product_id=fx["product"].id, task=from_task,
+        quantity=Decimal("100"), created_by=fx["user"].id,
+        location_id=fx["raw"].id,
+    )
     await record_transfer_receive(
         session,
         product_id=fx["product"].id,
@@ -292,10 +295,12 @@ async def test_available_qty_from_ledger(session: AsyncSession):
     task = fx["task"]
 
     svc = StockCommandService()
-    await svc.record(session, StockCommand(
-        product_id=fx["product"].id, from_location_id=None, to_location_id=fx["raw"].id,
-        quantity=Decimal("100"), reason=Reason.MANUAL_IN, created_by=fx["user"].id,
-    ))
+    await seed_stock_for_task(
+        session,
+        product_id=fx["product"].id, task=task,
+        quantity=Decimal("100"), created_by=fx["user"].id,
+        location_id=fx["raw"].id,
+    )
     await record_transfer_receive(
         session,
         product_id=fx["product"].id,
@@ -326,12 +331,13 @@ async def test_get_tasks_cache_bulk(session: AsyncSession):
     fx1 = await _setup_one_task(session, sku="BULK1", qty=Decimal("10"))
     fx2 = await _setup_one_task(session, sku="BULK2", qty=Decimal("20"))
 
-    svc = StockCommandService()
     for fx in [fx1, fx2]:
-        await svc.record(session, StockCommand(
-            product_id=fx["product"].id, from_location_id=None, to_location_id=fx["raw"].id,
-            quantity=Decimal("100"), reason=Reason.MANUAL_IN, created_by=fx["user"].id,
-        ))
+        await seed_stock_for_task(
+            session,
+            product_id=fx["product"].id, task=fx["task"],
+            quantity=Decimal("100"), created_by=fx["user"].id,
+            location_id=fx["raw"].id,
+        )
         await record_transfer_receive(
             session,
             product_id=fx["product"].id,

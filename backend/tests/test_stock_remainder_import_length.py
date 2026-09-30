@@ -334,8 +334,19 @@ async def test_import_writes_dimensions_and_splits_balance_by_length(
             )
         )
     ).all()
-    by_length = {bal.dimensions["length_mm"]: float(bal.balance_qty) for bal in balances}
-    assert by_length == {2700: 110.0, 900: 40.0}
+    # ADR-0055: ключ остатка — (dimensions, completed_operations). Ключ только
+    # по длине схлопнул бы строки разных операций в одну и прошёл бы случайно,
+    # поэтому ключ здесь полный, а признак операций проверяется явно.
+    by_group = {
+        (
+            (bal.dimensions or {}).get("length_mm"),
+            tuple(bal.completed_operations or ()),
+        ): float(bal.balance_qty)
+        for bal in balances
+    }
+    assert by_group == {(2700, ()): 110.0, (900, ()): 40.0}
+    # Импорт остатков — операция вне маршрута: признак не выдуман и не пуст.
+    assert all(bal.completed_operations is None for bal in balances)
 
     await assert_no_invariants_violations(session, context="remainder-import-length")
 

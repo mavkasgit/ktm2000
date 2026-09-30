@@ -40,6 +40,7 @@ from app.stock import (
 )
 from tests.stock.helpers import record_transfer_receive
 from tests.test_integrity_invariants import assert_no_stock_ledger_invariants_violations
+from app.services.material_operations import completed_operations_for_task
 
 pytestmark = pytest.mark.asyncio
 
@@ -94,6 +95,28 @@ async def _balance(
     )
     bal = row.scalar_one_or_none()
     return bal.balance_qty if bal else Decimal("0")
+
+
+async def _seed_raw_stock(
+    session: AsyncSession, fx: dict, quantity: Decimal = Decimal("100"),
+) -> None:
+    """Занести остаток на «Склад сырья» в той же группе, что и списание.
+
+    ADR-0055: списание идёт по полному ключу остатка, включая признак
+    «пройденные операции», а ``record()`` выводит этот признак плановой
+    проводки из маршрута позиции. MANUAL_IN без явного значения лёг бы в
+    NULL-группу, и TRANSFER_RECEIVE задания её бы не нашёл. Значение берём
+    тем же резолвером, что и прод, — без хардкода кодов операций.
+    """
+    await StockCommandService().record(session, StockCommand(
+        product_id=fx["product"].id,
+        from_location_id=None,
+        to_location_id=fx["raw"].id,
+        quantity=quantity,
+        reason=Reason.MANUAL_IN,
+        created_by=fx["user"].id,
+        completed_operations=await completed_operations_for_task(session, fx["task"]),
+    ))
 
 
 async def _setup_minimal_route(session: AsyncSession, *, sku: str = "S3", qty: Decimal = Decimal("10")) -> dict:
@@ -188,15 +211,7 @@ async def test_transfer_receive_creates_stock_tx(session: AsyncSession):
     fx = await _setup_minimal_route(session)
     task = fx["task"]
 
-    svc = StockCommandService()
-    await svc.record(session, StockCommand(
-        product_id=fx["product"].id,
-        from_location_id=None,
-        to_location_id=fx["raw"].id,
-        quantity=Decimal("100"),
-        reason=Reason.MANUAL_IN,
-        created_by=fx["user"].id,
-    ))
+    await _seed_raw_stock(session, fx)
 
     await record_transfer_receive(
         session,
@@ -226,15 +241,7 @@ async def test_transfer_receive_updates_cache(session: AsyncSession):
     fx = await _setup_minimal_route(session)
     task = fx["task"]
 
-    svc = StockCommandService()
-    await svc.record(session, StockCommand(
-        product_id=fx["product"].id,
-        from_location_id=None,
-        to_location_id=fx["raw"].id,
-        quantity=Decimal("100"),
-        reason=Reason.MANUAL_IN,
-        created_by=fx["user"].id,
-    ))
+    await _seed_raw_stock(session, fx)
 
     await record_transfer_receive(
         session,
@@ -285,15 +292,7 @@ async def test_complete_task_creates_complete_tx(session: AsyncSession):
     task = fx["task"]
 
     # Issue first
-    svc = StockCommandService()
-    await svc.record(session, StockCommand(
-        product_id=fx["product"].id,
-        from_location_id=None,
-        to_location_id=fx["raw"].id,
-        quantity=Decimal("100"),
-        reason=Reason.MANUAL_IN,
-        created_by=fx["user"].id,
-    ))
+    await _seed_raw_stock(session, fx)
     await record_transfer_receive(
         session,
         product_id=fx["product"].id,
@@ -348,15 +347,7 @@ async def test_complete_task_with_scrap(session: AsyncSession):
     fx = await _setup_minimal_route(session)
     task = fx["task"]
 
-    svc = StockCommandService()
-    await svc.record(session, StockCommand(
-        product_id=fx["product"].id,
-        from_location_id=None,
-        to_location_id=fx["raw"].id,
-        quantity=Decimal("100"),
-        reason=Reason.MANUAL_IN,
-        created_by=fx["user"].id,
-    ))
+    await _seed_raw_stock(session, fx)
     await record_transfer_receive(
         session,
         product_id=fx["product"].id,
@@ -419,14 +410,7 @@ async def test_final_release_creates_stock_tx(session: AsyncSession):
 
     # Setup: issue + complete
     svc = StockCommandService()
-    await svc.record(session, StockCommand(
-        product_id=fx["product"].id,
-        from_location_id=None,
-        to_location_id=fx["raw"].id,
-        quantity=Decimal("100"),
-        reason=Reason.MANUAL_IN,
-        created_by=fx["user"].id,
-    ))
+    await _seed_raw_stock(session, fx)
     await record_transfer_receive(
         session,
         product_id=fx["product"].id,
@@ -489,14 +473,7 @@ async def test_final_release_without_finished_stock_rejected(session: AsyncSessi
     # Setup: issue + complete (иначе не пройдёт проверка бюджета отправки,
     # стоящая до стража адресата).
     svc = StockCommandService()
-    await svc.record(session, StockCommand(
-        product_id=fx["product"].id,
-        from_location_id=None,
-        to_location_id=fx["raw"].id,
-        quantity=Decimal("100"),
-        reason=Reason.MANUAL_IN,
-        created_by=fx["user"].id,
-    ))
+    await _seed_raw_stock(session, fx)
     await record_transfer_receive(
         session,
         product_id=fx["product"].id,
@@ -556,15 +533,7 @@ async def test_return_to_stock_endpoint(session: AsyncSession):
     task.status = WorkTaskStatus.in_progress
 
     # Simulate issued quantity (via StockCommand) — issue + complete
-    svc = StockCommandService()
-    await svc.record(session, StockCommand(
-        product_id=fx["product"].id,
-        from_location_id=None,
-        to_location_id=fx["raw"].id,
-        quantity=Decimal("100"),
-        reason=Reason.MANUAL_IN,
-        created_by=fx["user"].id,
-    ))
+    await _seed_raw_stock(session, fx)
     await record_transfer_receive(
         session,
         product_id=fx["product"].id,
@@ -606,14 +575,7 @@ async def test_no_movement_written_in_shopfloor(session: AsyncSession):
     task = fx["task"]
 
     svc = StockCommandService()
-    await svc.record(session, StockCommand(
-        product_id=fx["product"].id,
-        from_location_id=None,
-        to_location_id=fx["raw"].id,
-        quantity=Decimal("100"),
-        reason=Reason.MANUAL_IN,
-        created_by=fx["user"].id,
-    ))
+    await _seed_raw_stock(session, fx)
     await record_transfer_receive(
         session,
         product_id=fx["product"].id,

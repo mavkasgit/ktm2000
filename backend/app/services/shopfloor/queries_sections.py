@@ -791,8 +791,17 @@ async def get_warehouse_remainders(
     """Return available stock balances for a section (legacy API stub).
 
     Now backed by StockBalance instead of SpgRemainder.
+
+    Одна строка ответа = одна строка ``StockBalance``, то есть полный ключ
+    ``(product, location, quality_state, dimensions, completed_operations)``
+    (ADR-0055). Артикул может лежать на участке несколькими строками —
+    прошёл разные операции, — поэтому признак и габарит отдаются в ответе:
+    без них две строки одного артикула неотличимы, и «остаток» в UI
+    читался бы как дубль. Суммировать здесь нечего: это перечисление
+    физически разных строк, а не «сколько всего на участке».
     """
     from app.stock.models import QualityState, StockBalance
+    from app.stock.services import _format_completed_operations
 
     query = select(
         StockBalance,
@@ -825,6 +834,17 @@ async def get_warehouse_remainders(
             "section_code": section.code if section else "",
             "section_name": section.name if section else "",
             "created_at": bal.refreshed_at.isoformat() if bal.refreshed_at else None,
+            # Ось ADR-0055: NULL («состояние не зафиксировано») и []
+            # («операций не было») — разные значения, оба доезжают как есть.
+            "completed_operations": (
+                list(bal.completed_operations)
+                if bal.completed_operations is not None
+                else None
+            ),
+            "completed_operations_label": _format_completed_operations(
+                bal.completed_operations
+            ),
+            "dimensions": dict(bal.dimensions) if bal.dimensions else None,
         })
 
     return {"remainders": remainders}

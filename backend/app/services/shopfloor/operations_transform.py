@@ -32,7 +32,11 @@ from app.models.work_task import WorkTask
 from app.stock import QualityState, Reason, StockCommand, StockCommandService
 from app.stock.ledger import net_quantity_expr
 from app.stock.models import StockBalance, StockTransaction
-from app.stock.services import _dimensions_hash_key, dimensions_match_clause
+from app.stock.services import (
+    _dimensions_hash_key,
+    completed_operations_match_clause,
+    dimensions_match_clause,
+)
 
 # Шаг квантования количеств — совпадает с Numeric(14, 3) в моделях.
 _QTY_STEP = Decimal("0.001")
@@ -234,6 +238,7 @@ async def resolve_consume_dimensions(
     product_id: int,
     location_id: int,
     dimensions: dict | None,
+    completed_operations: list[str] | None,
     required: Decimal,
 ) -> dict | None:
     """Габаритная группа, из которой списывается вход порции.
@@ -243,15 +248,49 @@ async def resolve_consume_dimensions(
     dimensions) и его хватает в NULL-группе — списываем из неё явно и
     детерминированно. Недостача не маскируется: возвращаем входной
     габарит, StockCommandService даст атомарный отказ.
+
+    ``completed_operations`` — ось ADR-0055, и fallback по ней НЕ делается:
+    списание точное (см. ``StockCommandService._ensure_sufficient_balance``),
+    искать «хоть какую-то» ops-группу здесь означало бы разойтись с
+    проводкой — баланс показал бы чужой материал, а ledger отказал бы.
+    Нет строки с нужным признаком → недостача, а не подмена группы.
     """
     dims = canonicalize_dimensions(dimensions)
     if dims is None:
         return None
-    if await _group_balance(db, product_id, location_id, dims) >= required:
+    if await _group_balance(
+        db, product_id, location_id, dims, completed_operations
+    ) >= required:
         return dims
-    if await _group_balance(db, product_id, location_id, None) >= required:
+    if await _group_balance(
+        db, product_id, location_id, None, completed_operations
+    ) >= required:
         return None
     return dims
+
+
+async def resolve_consume_operations(
+    db: AsyncSession, task: WorkTask,
+) -> list[str] | None:
+    """Признак «пройденные операции» для списания входа трансформации.
+
+    Вход трансформирующего этапа — материал ДО этого этапа, поэтому
+    through-sequence на шаг меньше собственного этапа задания. Значение
+    единственное для всех читателей порции (``resolve_consume_dimensions``,
+    ``_good_input_balance``, ``record_transform_portion``): разъезд по
+    оси операций между резолвом и проводкой означал бы, что баланс
+    показывал одну группу, а списание било по другой.
+    """
+    from app.services.material_operations import (
+        completed_operations_for_task,
+        previous_stage_sequence,
+    )
+
+    previous_sequence = await previous_stage_sequence(db, task)
+    return await completed_operations_for_task(
+        db, task,
+        through_sequence=previous_sequence if previous_sequence is not None else 0,
+    )
 
 
 async def record_transform_portion(
@@ -263,6 +302,7 @@ async def record_transform_portion(
     progress: TransformProgress,
     good_quantity: Decimal,
     consume_dims: dict | None,
+    consume_ops: list[str] | None,
     actor_id: int,
     executor_user_id: int | None,
     comment: str | None,
@@ -283,22 +323,14 @@ async def record_transform_portion(
     проводится даже при нехватке заготовок — баланс участка уходит в минус;
     для СПГ с lot-учётом минус по-прежнему блокирует сам сервис ledger.
     """
+
+    # Признак «пройденные операции» (ADR-0043/ADR-0055) входа приходит
+    # готовым от ``resolve_consume_operations``: чтение остатка, резолв
+    # габаритной группы и сама проводка обязаны стоять на одном значении
+    # оси операций, иначе баланс показал бы одну группу, а списание ударило
+    # по другой. Выходы несут свой признак — ``record()`` выводит его по
+    # этапу задания (материал ПОСЛЕ трансформации).
     tx_ids: list[int] = []
-    # Признак «пройденные операции» (ADR-0043): вход трансформирующего
-    # этапа — материал ДО этого этапа, выход — материал ПОСЛЕ него.
-    # Поэтому у списания входа Through-sequence на шаг меньше, чем у
-    # прихода выходов; дальше record() выводит признак по этапу задания.
-    from app.services.material_operations import (
-        completed_operations_for_task,
-        previous_stage_sequence,
-    )
-
-    previous_sequence = await previous_stage_sequence(db, task)
-    through_input = await completed_operations_for_task(
-        db, task, through_sequence=previous_sequence if previous_sequence is not None else 0
-    )
-
-    # 1. Списание входа: good шт × входной габарит.
     tx_consume = await svc.record(db, StockCommand(
         product_id=task.product_id,
         from_location_id=task.section_id,
@@ -310,7 +342,7 @@ async def record_transform_portion(
         allow_negative=allow_negative,
         task_id=task.id,
         source_ref=source_ref,
-        completed_operations=through_input,
+        completed_operations=consume_ops,
         idempotency_key=idempotency_key,
         comment=comment,
         created_by=actor_id,
@@ -416,14 +448,27 @@ async def _group_balance(
     product_id: int,
     location_id: int,
     dims: dict | None,
+    ops: list[str] | None,
 ) -> Decimal:
-    """Годный остаток габаритной группы на локации (0, если строки нет)."""
-    balance = await db.scalar(
-        select(StockBalance.balance_qty).where(
+    """Годный остаток строки баланса участка (0, если строки нет).
+
+    Фильтр по всем пяти осям ключа ``StockBalance`` — с учётом ADR-0055
+    это ровно одна строка; ``SUM`` вместо ``scalar`` оставлен как страховка
+    от ``MultipleResultsFound``, если ключ разъедется (соседние оси уже
+    суммируются здесь же — см. ``_good_input_balance``).
+    """
+    total = await db.scalar(
+        select(func.coalesce(func.sum(StockBalance.balance_qty), 0)).where(
             StockBalance.product_id == product_id,
             StockBalance.location_id == location_id,
             StockBalance.quality_state == QualityState.GOOD,
             dimensions_match_clause(StockBalance.dimensions, dims),
+            completed_operations_match_clause(StockBalance.completed_operations, ops),
         )
     )
-    return balance or Decimal("0")
+    return _dec_total(total)
+
+
+def _dec_total(value) -> Decimal:
+    """SUM/coalesce может вернуть ``0`` (int) — приводим к Decimal."""
+    return Decimal(value) if value is not None else Decimal("0")

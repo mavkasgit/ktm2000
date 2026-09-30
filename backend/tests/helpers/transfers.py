@@ -40,6 +40,7 @@ from app.models.production_plan import (
 from app.models.route import ProductionRoute, RouteOperation, RouteStage
 from app.models.spg import SpgSection, StorageProductionGroup
 from app.models.work_task import WorkTask
+from app.services.material_operations import completed_operations_for_task
 from app.stock.models import Reason
 from app.stock.services import StockCommand, StockCommandService
 from tests.test_integrity_invariants import (
@@ -158,6 +159,11 @@ async def _make_tasks_transferable(
     session.add(stock)
     await session.flush()
     stock_id = stock.id
+    # ADR-0043/0055: приход на складской участок — это материал ДО первого
+    # этапа маршрута, но ровно с тем же признаком, который выведет
+    # plan-driven списание TRANSFER_RECEIVE ниже. Без этого приход лёг бы в
+    # NULL-группу, а списание искало бы группу маршрута и получало «available 0».
+    stock_ops = await completed_operations_for_task(session, src)
 
     svc = StockCommandService()
     # Seed stock balance
@@ -167,6 +173,7 @@ async def _make_tasks_transferable(
         to_location_id=stock_id,
         quantity=src.planned_quantity,
         reason=Reason.MANUAL_IN,
+        completed_operations=stock_ops,
         created_by=setup["user"].id,
     ))
     # TRANSFER_RECEIVE: material received on source section (issued)
@@ -179,7 +186,10 @@ async def _make_tasks_transferable(
         task_id=src.id,
         created_by=setup["user"].id,
     ))
-    # complete: net-zero when material already issued on section
+    # Завершение фикстуры: событие выпуска без движения баланса. Материал
+    # уже лежит на участке в группе СВОЕГО этапа (его положил
+    # TRANSFER_RECEIVE выше с task_id=src), поэтому именно эту проводку
+    # прочитает transfer_send задания-источника (ADR-0055).
     await svc.record(session, StockCommand(
         product_id=src.product_id,
         from_location_id=src.section_id,
@@ -291,6 +301,33 @@ async def _make_dim_route_fixture(
     }
 
 
+async def _section_route_operations(
+    session: AsyncSession, section_id: int
+) -> list[str] | None:
+    """Признак материала, лежащего на секции — операции её этапа маршрута.
+
+    Тот же резолвер, что и у ``record()``: ``SectionOperation`` всех этапов
+    маршрута с ``sequence <=`` этапа этой секции. Нужен сидам, которые
+    заполняют склад ДО появления заданий (take-to-work ещё не вызван),
+    поэтому маршрут берётся по самой секции, а не по заданию.
+
+    ``None`` — секция вне маршрута: признак неизвестен, группа ``NULL``.
+    """
+    from app.services.material_operations import completed_operations_through_stage
+
+    stage = await session.scalar(
+        select(RouteStage)
+        .where(RouteStage.section_id == section_id)
+        .order_by(RouteStage.id)
+        .limit(1)
+    )
+    if stage is None:
+        return None
+    return await completed_operations_through_stage(
+        session, route_id=stage.route_id, through_sequence=stage.sequence
+    )
+
+
 async def _seed_balance(
     session: AsyncSession,
     *,
@@ -299,7 +336,22 @@ async def _seed_balance(
     product_id: int,
     qty: Decimal,
     dimensions: dict | None = None,
+    ops: list[str] | None = None,
 ) -> None:
+    """Приход остатка на складскую секцию в ops-группе её этапа маршрута.
+
+    ADR-0055: списание точное. Позже этот остаток списывает план-driven
+    ``TRANSFER_SEND``, а ``record()`` выводит его признак из маршрута
+    задания. Наивный ``MANUAL_IN`` без признака лёг бы в ``NULL``-группу,
+    и списание получало бы «available 0». Поэтому здесь берётся тот же
+    источник: операции секции до её собственного этапа маршрута.
+
+    ``ops`` передаётся явно там, где нужна не своя группа секции (например
+    приход на «Склад подготовки», который спишет задание другого этапа).
+    Секция вне маршрута остаётся в ``NULL``-группе — там признак неизвестен.
+    """
+    if ops is None:
+        ops = await _section_route_operations(session, location_id)
     svc = StockCommandService()
     await svc.record(
         session,
@@ -309,6 +361,7 @@ async def _seed_balance(
             quantity=qty,
             reason=Reason.MANUAL_IN,
             dimensions=dimensions,
+            completed_operations=ops,
             created_by=user_id,
         ),
     )
@@ -432,9 +485,22 @@ async def _tasks_for_position(session: AsyncSession, position_id: int) -> Sequen
 
 
 async def _complete_saw(session: AsyncSession, *, saw_task: WorkTask, user: User) -> None:
-    """Завести вход 100 × 2700 на пилу и полностью её раскроить (100 → 900+1800)."""
+    """Завести вход 100 × 2700 на пилу и полностью её раскроить (100 → 900+1800).
+
+    ADR-0055: списание точное. Трансформ на пиле списывает материал,
+    который на секцию пришёл с ПРЕДЫДУЩЕГО этапа и потому лежит в
+    ops-группе «до своего этапа» — ровно ту, которую выведет
+    ``TRANSFORM_CONSUME``. Наивный ``MANUAL_IN`` без признака лёг бы в
+    ``NULL``-группу, и раскрой падал бы с «введено 100, доступно 0».
+    """
+    from app.services.material_operations import previous_stage_sequence
     from app.services.shopfloor.operations_tasks import complete_task
 
+    previous_sequence = await previous_stage_sequence(session, saw_task)
+    consume_ops = await completed_operations_for_task(
+        session, saw_task,
+        through_sequence=previous_sequence if previous_sequence is not None else 0,
+    )
     svc = StockCommandService()
     await svc.record(
         session,
@@ -445,6 +511,7 @@ async def _complete_saw(session: AsyncSession, *, saw_task: WorkTask, user: User
             quantity=Decimal("100"),
             reason=Reason.MANUAL_IN,
             dimensions={"length_mm": 2700},
+            completed_operations=consume_ops,
             created_by=user.id,
         ),
     )

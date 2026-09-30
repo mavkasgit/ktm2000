@@ -176,11 +176,18 @@ async def _make_shipment_to_shipped(
     await session.flush()
 
     # Физический остаток источника — каноническим путём (ledger + проекция).
+    # ADR-0055: признак берём тем же резолвером, что и плановая SEND-проводка
+    # задания (ADR-0043 §2); наивный MANUAL_IN без признака лёг бы в
+    # NULL-группу, и ready-строка/списание не нашли бы остаток.
+    from app.services.material_operations import completed_operations_for_task
+
+    ops = await completed_operations_for_task(session, task)
     await StockCommandService().record(session, StockCommand(
         product_id=product.id,
         to_location_id=shipment.id,
         quantity=qty,
         reason=Reason.MANUAL_IN,
+        completed_operations=ops,
         created_by=user.id,
     ))
     await session.flush()

@@ -29,6 +29,7 @@ from app.models.route import ProductionRoute, RouteOperation, RouteStage
 from app.models.spg import SpgSection, StorageProductionGroup
 from app.models.work_task import WorkTask, WorkTaskStatus
 from app.stock import Reason, StockCommand, StockCommandService
+from app.services.material_operations import completed_operations_for_task
 from app.services.shopfloor.operations_tasks import complete_task
 from tests.stock.helpers import record_transfer_receive
 from tests.test_integrity_invariants import assert_no_stock_ledger_invariants_violations
@@ -228,6 +229,11 @@ async def _issue_to(session: AsyncSession, fx: dict, task: WorkTask, *, quantity
         quantity=quantity,
         reason=Reason.MANUAL_IN,
         created_by=fx["user"].id,
+        # ADR-0055: списание TRANSFER_RECEIVE идёт по полному ключу остатка,
+        # включая признак операций, который record() выводит из маршрута
+        # позиции. MANUAL_IN без признака лёг бы в NULL-группу и остался бы
+        # невидимым для приёма — значение берём тем же резолвером, что прод.
+        completed_operations=await completed_operations_for_task(session, task),
     ))
     await record_transfer_receive(
         session,

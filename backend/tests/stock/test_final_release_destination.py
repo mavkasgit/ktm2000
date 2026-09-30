@@ -20,6 +20,7 @@ from app.models.action_journal import Action
 from app.models.route import RouteStage
 from app.models.work_task import WorkTaskStatus
 from app.stock import Reason, StockCommand, StockCommandService, StockTransaction
+from app.services.material_operations import completed_operations_for_task
 from tests.stock.helpers import record_transfer_receive
 from tests.stock.test_shopfloor_stage3 import _setup_minimal_route
 from tests.test_integrity_invariants import assert_no_invariants_violations
@@ -40,6 +41,11 @@ async def _run_to_final_release(
         quantity=Decimal("100"),
         reason=Reason.MANUAL_IN,
         created_by=fx["user"].id,
+        # ADR-0055: списание TRANSFER_RECEIVE идёт по полному ключу остатка,
+        # включая признак операций, который record() выводит из маршрута
+        # позиции. MANUAL_IN без признака лёг бы в NULL-группу и остался бы
+        # невидимым для приёма — значение берём тем же резолвером, что прод.
+        completed_operations=await completed_operations_for_task(session, task),
     ))
     await record_transfer_receive(
         session,

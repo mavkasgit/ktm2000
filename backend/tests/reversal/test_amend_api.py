@@ -263,6 +263,13 @@ async def test_amend_confirm_shortfall_reports_real_deficit(
                 from_location_id=from_task.section_id,
                 to_location_id=to_task.section_id,
                 quality_state=QualityState.GOOD,
+                # ADR-0055: дрейф — такой же TRANSFER_SEND от источника,
+                # каким его пишет transfer_send: с task_id источника, чтобы
+                # record() вывел признак операций из маршрута и списание ушло
+                # из ТОЙ ЖЕ группы, что и засеянный остаток. Без task_id
+                # проводка легла бы в NULL-группу, остаток не дрейфовал, и
+                # тест проверял бы нехватку, которой нет.
+                task_id=from_task.id,
                 created_by=ctx["user"].id,
             ),
         )

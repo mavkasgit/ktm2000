@@ -19,6 +19,7 @@ LIFO — **UI-гейт** (ADR-0053 п.4), как в ADR-0025 п.2 для пла�
 """
 from __future__ import annotations
 
+import json
 from dataclasses import dataclass
 from datetime import datetime, timezone
 from decimal import Decimal
@@ -237,9 +238,12 @@ async def get_batch_rows(
     """Строки импорта с текущим остатком по каждой строке.
 
     «Текущий остаток» — ответ на вопрос после отката («а что там сейчас?»).
-    Читается из проекции ``stock_balances`` по ключу строки
-    ``(product, section, quality, dimensions)``; для откатанного батча это и
-    есть сумма уже без его вклада.
+    Читается из проекции ``stock_balances`` по полному ключу строки
+    ``(product, section, quality, dimensions, completed_operations)`` — при
+    совпадении только первых четырёх осей две строки одного участка с разными
+    операциями (ADR-0055) получили бы одну сумму, и «посмотреть» показало бы
+    не тот остаток, который батч завёл. Для откатанного батча это и есть
+    сумма уже без его вклада.
     """
     from app.models.product import Product
     from app.domain.dimensions import format_dimensions
@@ -259,7 +263,10 @@ async def get_batch_rows(
     # открываться мгновенно. Совпадение размеров — канонический
     # ``dimensions_match_clause``, а не ``contains`` (это подмножество, и
     # ``{"length_mm": 2700}`` совпало бы с ``{"length_mm": 2700, "width_mm": 100}``).
-    wanted: dict[tuple[int, int, str, str], dict | None] = {}
+    # Признак операций — пятая ось ключа баланса (ADR-0055): без неё в
+    # группировке две строки одного участка с разными операциями получили бы
+    # одну сумму, и «посмотреть» показало бы не тот остаток, который завёл батч.
+    wanted: dict[tuple[int, int, str, str, str], dict | None] = {}
     for row, _p, _s in rows:
         if row.product_id is None or row.target_section_id is None:
             continue
@@ -268,9 +275,10 @@ async def get_batch_rows(
             row.target_section_id,
             row.quality_state or QualityState.GOOD.value,
             _dims_key(row.dimensions),
+            _ops_key(row.completed_operations),
         )] = row.dimensions
 
-    balances: dict[tuple[int, int, str, str], Decimal] = {}
+    balances: dict[tuple[int, int, str, str, str], Decimal] = {}
     if wanted:
         product_ids = {k[0] for k in wanted}
         location_ids = {k[1] for k in wanted}
@@ -281,6 +289,7 @@ async def get_batch_rows(
                 StockBalance.location_id,
                 StockBalance.quality_state,
                 StockBalance.dimensions,
+                StockBalance.completed_operations,
                 func.coalesce(func.sum(StockBalance.balance_qty), 0),
             )
             .where(
@@ -293,10 +302,13 @@ async def get_batch_rows(
                 StockBalance.location_id,
                 StockBalance.quality_state,
                 StockBalance.dimensions,
+                StockBalance.completed_operations,
             )
         )
-        for pid, lid, qs, dims, qty in (await db.execute(bq)).all():
-            balances[(pid, lid, qs, _dims_key(dims))] = Decimal(str(qty or 0))
+        for pid, lid, qs, dims, ops, qty in (await db.execute(bq)).all():
+            balances[(pid, lid, qs, _dims_key(dims), _ops_key(ops))] = Decimal(
+                str(qty or 0)
+            )
 
     return [
         RowView(
@@ -322,6 +334,7 @@ async def get_batch_rows(
                     row.target_section_id,
                     (row.quality_state or QualityState.GOOD.value),
                     _dims_key(row.dimensions),
+                    _ops_key(row.completed_operations),
                 )
             )
             if row.product_id is not None and row.target_section_id is not None
@@ -413,6 +426,19 @@ def _dims_key(dims: dict | None) -> str:
     if dims is None:
         return ""
     return ",".join(f"{k}={dims[k]}" for k in sorted(dims))
+
+
+def _ops_key(ops: list | None) -> str:
+    """Канонический ключ признака операций строки импорта (ADR-0055).
+
+    ``json.dumps`` различает три состояния записи: ``null`` («состояние не
+    зафиксировано»), ``[]`` («маршрут пройден, операций не было») и список
+    кодов. Схлопывание ``NULL`` и ``[]`` в один ключ объединило бы две РАЗНЫЕ
+    строки остатка в одну — ровно тот дефект, ради которого ось операций и
+    вводилась. Список приходит каноническим (отсортированным без дублей) из
+    ``_row_completed_operations``, поэтому порядок обхода на ключ не влияет.
+    """
+    return json.dumps(ops, ensure_ascii=False)
 
 
 async def hide_batch(

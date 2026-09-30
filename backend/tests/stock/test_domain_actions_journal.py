@@ -27,6 +27,7 @@ from app.stock import Reason, StockCommand, StockCommandService
 from app.stock.import_service import RemainderItem, apply_remainders_import
 from app.stock.models import StockTransaction
 from app.seeds.seeders.spgs_seeder import seed_spgs
+from app.services.material_operations import completed_operations_for_task
 from tests.stock.helpers import FAKE_DEFECT_DECISION_MAP, FAKE_SCRAP_POLICY, record_transfer_receive
 from tests.stock.test_shopfloor_stage3 import _setup_minimal_route
 from tests.test_integrity_invariants import assert_no_invariants_violations
@@ -35,15 +36,18 @@ pytestmark = pytest.mark.asyncio
 
 
 async def _issue_material(session: AsyncSession, fx: dict, qty: Decimal = Decimal("10")) -> None:
-    """Выдать материал на задание: MANUAL_IN на склад + TRANSFER_RECEIVE на задачу."""
-    svc = StockCommandService()
-    await svc.record(session, StockCommand(
+    await StockCommandService().record(session, StockCommand(
         product_id=fx["product"].id,
         from_location_id=None,
         to_location_id=fx["raw"].id,
         quantity=Decimal("100"),
         reason=Reason.MANUAL_IN,
         created_by=fx["user"].id,
+        # ADR-0055: списание TRANSFER_RECEIVE идёт по полному ключу остатка,
+        # включая признак операций, который record() выводит из маршрута
+        # позиции. MANUAL_IN без признака лёг бы в NULL-группу и остался бы
+        # невидимым для приёма — значение берём тем же резолвером, что прод.
+        completed_operations=await completed_operations_for_task(session, fx["task"]),
     ))
     await record_transfer_receive(
         session,
@@ -67,7 +71,12 @@ async def _task_actions(session: AsyncSession, task_id: int) -> list[Action]:
 
 
 async def test_complete_task_creates_action(session: AsyncSession) -> None:
-    """complete_task (good+scrap) = один Action; обе проводки с его action_id."""
+    """complete_task (good+scrap) = один Action; все проводки с его action_id.
+
+    ADR-0055: завершение этапа даёт списание входа (``TRANSFORM_CONSUME``),
+    выпуск (``COMPLETE``) и брак (``SCRAP``) — три проводки одного действия,
+    а не две.
+    """
     from app.services.shopfloor.operations_tasks import complete_task
 
     fx = await _setup_minimal_route(session)
@@ -102,8 +111,12 @@ async def test_complete_task_creates_action(session: AsyncSession) -> None:
             StockTransaction.action_id == action.id,
         )
     )).scalars().all()
-    assert len(txs) == 2
-    assert {tx.reason for tx in txs} == {Reason.COMPLETE, Reason.SCRAP}
+    assert len(txs) == 3
+    assert {tx.reason for tx in txs} == {
+        Reason.TRANSFORM_CONSUME,  # списание входной группы участка
+        Reason.COMPLETE,  # выпуск годного в группу своего этапа
+        Reason.SCRAP,  # брак из той же входной группы
+    }
     assert sorted(tx.id for tx in txs) == sorted(result["transaction_ids"])
 
 

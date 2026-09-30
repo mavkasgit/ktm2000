@@ -15,6 +15,7 @@
 """
 from __future__ import annotations
 
+from collections.abc import Sequence
 from decimal import Decimal
 
 import pytest
@@ -24,6 +25,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.models import Product, ProductType, Section, User, UserRole
 from app.models.work_task import WorkTask
+from app.services.material_operations import completed_operations_for_task
 from app.stock import (
     QualityState,
     Reason,
@@ -34,7 +36,10 @@ from app.stock import (
     StockTransaction,
     StockValidationError,
 )
-from app.stock.services import dimensions_match_clause
+from app.stock.services import (
+    completed_operations_match_clause,
+    dimensions_match_clause,
+)
 from app.transfers.services import cancel_transfer, transfer_send
 from tests.test_integrity_invariants import (
     assert_no_stock_ledger_invariants_violations,
@@ -104,18 +109,43 @@ async def _balance(
     location_id: int,
     dims: dict | None,
     quality_state: QualityState = QualityState.GOOD,
+    ops: list[str] | None = None,
 ) -> Decimal:
-    """Остаток конкретной габаритной группы (NULL — legacy-группа)."""
+    """Остаток конкретной (габаритной × ops) группы; ``None`` — legacy-группа.
+
+    ADR-0055: ``completed_operations`` — полноправная ось ключа баланса,
+    поэтому поиск остатка обязан её учитывать, иначе ``scalar_one_or_none()``
+    нашёл бы не ту строку (или упал бы на нескольких группах).
+    """
     row = await session.execute(
         select(StockBalance).where(
             StockBalance.product_id == product_id,
             StockBalance.location_id == location_id,
             StockBalance.quality_state == quality_state,
             dimensions_match_clause(StockBalance.dimensions, dims),
+            completed_operations_match_clause(StockBalance.completed_operations, ops),
         )
     )
     bal = row.scalar_one_or_none()
     return bal.balance_qty if bal else Decimal("0")
+
+
+async def _balance_rows(
+    session: AsyncSession,
+    product_id: int,
+    location_id: int,
+) -> Sequence[StockBalance]:
+    """Все строки баланса участка — для проверки точного числа групп."""
+    return (
+        await session.execute(
+            select(StockBalance)
+            .where(
+                StockBalance.product_id == product_id,
+                StockBalance.location_id == location_id,
+            )
+            .order_by(StockBalance.id)
+        )
+    ).scalars().all()
 
 
 async def _manual_in(
@@ -217,13 +247,15 @@ async def test_balance_separates_lengths_and_legacy(session: AsyncSession) -> No
     assert await _balance(session, product.id, stock.id, DIMS_30) == Decimal("50")
     assert await _balance(session, product.id, stock.id, None) == Decimal("30")
 
-    rows = (await session.execute(
-        select(StockBalance).where(
-            StockBalance.product_id == product.id,
-            StockBalance.location_id == stock.id,
-        )
-    )).scalars().all()
+    # Все приходы здесь вне плана → признак операций NULL у всех трёх
+    # групп, и участок держит ровно три строки баланса.
+    rows = await _balance_rows(session, product.id, stock.id)
     assert len(rows) == 3
+    assert {tuple(r.dimensions.items()) if r.dimensions else None for r in rows} == {
+        (("length_mm", 2700),),
+        (("length_mm", 3000),),
+        None,
+    }
     await assert_no_stock_ledger_invariants_violations(session, context="dims-groups")
 
 
@@ -342,6 +374,10 @@ async def _make_tasks_transferable_with_dims(
     Аналог ``_make_tasks_transferable`` из test_transfer_stage2, но весь
     материал заводится в габаритной группе ``dims``, чтобы transfer_send
     с тем же габаритом проходил проверку остатка группы.
+
+    Складской приход сеется в ops-группе маршрута исходного задания —
+    ровно ту, которую ``record()`` выведет для ``TRANSFER_RECEIVE`` ниже
+    и которую потом спишет ``TRANSFER_SEND`` (ADR-0055, точное списание).
     """
     await _release_via_take_to_work(client, setup["position"].id)
     tasks = (await session.execute(
@@ -355,6 +391,8 @@ async def _make_tasks_transferable_with_dims(
     stock = await _make_location(
         session, code=f"{setup['product'].sku}-STK", name="Stock", loc_type="raw_stock",
     )
+    ops = await completed_operations_for_task(session, src)
+    assert ops is not None, "маршрут исходного задания не разрешён в ops-признак"
     svc = StockCommandService()
     await svc.record(session, StockCommand(
         product_id=src.product_id,
@@ -362,6 +400,7 @@ async def _make_tasks_transferable_with_dims(
         quantity=src.planned_quantity,
         reason=Reason.MANUAL_IN,
         dimensions=dims,
+        completed_operations=ops,
         created_by=setup["user"].id,
     ))
     await svc.record(session, StockCommand(
@@ -386,8 +425,7 @@ async def _make_tasks_transferable_with_dims(
         created_by=setup["user"].id,
     ))
     await session.flush()
-    return {"from_task_id": src.id, "to_task_id": dst.id, "user": setup["user"]}
-
+    return {"from_task_id": src.id, "to_task_id": dst.id, "user": setup["user"], "ops": ops}
 
 async def test_transfer_send_preserves_dimensions(session: AsyncSession, client) -> None:
     """SEND и RECEIVE несут один габарит; баланс двигается в группе габарита;
@@ -421,12 +459,13 @@ async def test_transfer_send_preserves_dimensions(session: AsyncSession, client)
     assert txs[0].dimensions == DIMS_27
     assert txs[1].dimensions == DIMS_27
 
-    # Баланс двигается внутри группы 2,7 м.
+    # Баланс двигается внутри группы 2,7 м И в ops-группе маршрута
+    # исходного задания — обе оси полноправны в ключе баланса (ADR-0055).
     assert await _balance(
-        session, from_task.product_id, from_task.section_id, DIMS_27,
+        session, from_task.product_id, from_task.section_id, DIMS_27, ops=ctx["ops"],
     ) == Decimal("6")
     assert await _balance(
-        session, to_task.product_id, to_task.section_id, DIMS_27,
+        session, to_task.product_id, to_task.section_id, DIMS_27, ops=ctx["ops"],
     ) == Decimal("4")
     await assert_no_stock_ledger_invariants_violations(session, context="dims-transfer")
 
@@ -446,11 +485,12 @@ async def test_transfer_send_preserves_dimensions(session: AsyncSession, client)
     )).scalars().all()
     assert len(comp_txs) == 2
     assert all(tx.dimensions == DIMS_27 for tx in comp_txs)
+    assert all(tx.completed_operations == ctx["ops"] for tx in comp_txs)
     assert await _balance(
-        session, from_task.product_id, from_task.section_id, DIMS_27,
+        session, from_task.product_id, from_task.section_id, DIMS_27, ops=ctx["ops"],
     ) == Decimal("10")
     assert await _balance(
-        session, to_task.product_id, to_task.section_id, DIMS_27,
+        session, to_task.product_id, to_task.section_id, DIMS_27, ops=ctx["ops"],
     ) == Decimal("0")
     await assert_no_stock_ledger_invariants_violations(session, context="dims-cancel")
 

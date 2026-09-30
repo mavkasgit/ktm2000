@@ -19,6 +19,7 @@ import {
   type BatchDeleteConflict,
   type BatchForceDeletePreview,
 } from "@/shared/api/productionPlans";
+import { formatCompletedOperationsLabel } from "@/shared/api/stock";
 import { queryKeys } from "@/shared/api/queryKeys";
 import { invalidateAfter } from "@/shared/api/cacheInvalidation";
 import { getErrorMessage } from "@/shared/api/client";
@@ -170,14 +171,24 @@ export function BatchForceDeleteDialog({
                         <tr>
                           <th className="text-left p-2 whitespace-nowrap">Артикул</th>
                           <th className="text-left p-2 whitespace-nowrap">Участок</th>
+                          <th className="text-left p-2 whitespace-nowrap">Операции</th>
                           <th className="text-right p-2 whitespace-nowrap">Изменение</th>
                         </tr>
                       </thead>
                       <tbody>
                         {preview.stock_effects.map((e) => (
-                          <tr key={`${e.product_sku}-${e.location_id}`} className="border-b">
+                          <tr
+                            key={`${e.product_sku}-${e.location_id}-${e.completed_operations?.join(",") ?? ""}`}
+                            className="border-b"
+                          >
                             <td className="p-2 whitespace-nowrap">{e.product_sku}</td>
                             <td className="p-2 whitespace-nowrap">{e.location_code}</td>
+                            {/* ADR-0055: без этой ячейки две строки одного
+                                артикула и участка выглядели бы одинаково —
+                                ключ остатка различает их по операциям. */}
+                            <td className="p-2 whitespace-nowrap text-muted-foreground">
+                              {formatCompletedOperationsLabel(e.completed_operations)}
+                            </td>
                             <td
                               className={`p-2 text-right whitespace-nowrap tabular-nums ${
                                 e.net_delta.startsWith("-") ? "text-red-600" : "text-green-700"

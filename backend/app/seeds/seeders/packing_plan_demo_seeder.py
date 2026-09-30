@@ -21,7 +21,7 @@ from decimal import ROUND_FLOOR, Decimal
 from io import BytesIO
 
 from openpyxl import Workbook
-from sqlalchemy import delete, select
+from sqlalchemy import delete, func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.models.daily_plan import DailyPlan
@@ -37,9 +37,14 @@ from app.models.work_task import CLOSED_WORK_TASK_STATUSES, WorkTask, WorkTaskSt
 from app.seeds.canon.registry import build_plant_config
 from app.services.action_journal_service import action_journal_service
 from app.services.shopfloor_service import complete_task
+from app.services.material_operations import completed_operations_through_stage
 from app.stock import QualityState, Reason, StockCommand, StockCommandService
 from app.stock.models import StockBalance
-from app.stock.services import StockProjectionManager
+from app.stock.services import (
+    StockProjectionManager,
+    completed_operations_match_clause,
+    dimensions_match_clause,
+)
 from app.transfers.services import transfer_send
 from app.seeds.seeders.cleanup_seeder import clear_generated_production_data
 from app.services.daily_plan_service import TERMINAL_TASK_STATUSES, create_plan
@@ -955,25 +960,44 @@ async def _ensure_source_stock(
     Склад ищется той же функцией, что и в выдаче, иначе остаток уедет на
     участок, а выдача упадёт «недостаточно сырья». Габарит обязан совпадать с
     габаритом задания: StockLedger ищет баланс по точному JSON-ключу.
+
+    Признак «пройденные операции» (ADR-0055) — та же ось, только точная:
+    демо-сырьё закладывается в ту же ops-группу, из которой его потом
+    заберёт ``transfer_send`` с фейкового складского задания (write-off
+    по признаку СПГ, а не «хоть с какой строки»). Признак берётся из
+    маршрута складской строки до её этапа включительно — ровно то, что
+    выведет ``record()`` для TRANSFER_SEND этого задания. Остаток читается
+    по полному ключу баланса (габарит × признак операций × GOOD), иначе
+    ``db.scalar`` поднял бы ``MultipleResultsFound`` на артикуле, у
+    которого на участке лежит и сырьё, и подготовленное.
     """
     source = await _find_preceding_stock_line(
         db, plan_position_id=line.plan_position_id, before_sequence=line.sequence
     )
     if source is None:
         return False
-    _stock_line, stock_section = source
+    stock_line, stock_section = source
     dimensions = task.dimensions
-    dimensions_filter = (
-        StockBalance.dimensions.is_(None) if dimensions is None else StockBalance.dimensions == dimensions
+    stock_stage = await db.get(RouteStage, stock_line.route_stage_id)
+    stock_ops = (
+        await completed_operations_through_stage(
+            db,
+            route_id=stock_line.route_id,
+            through_sequence=stock_stage.sequence if stock_stage else 0,
+        )
+        if stock_stage is not None
+        else None
     )
     balance = await db.scalar(
-        select(StockBalance.balance_qty).where(
+        select(func.coalesce(func.sum(StockBalance.balance_qty), 0)).where(
             StockBalance.product_id == task.product_id,
             StockBalance.location_id == stock_section.id,
-            dimensions_filter,
+            StockBalance.quality_state == QualityState.GOOD,
+            dimensions_match_clause(StockBalance.dimensions, dimensions),
+            completed_operations_match_clause(StockBalance.completed_operations, stock_ops),
         )
     )
-    balance = balance or Decimal("0")
+    balance = Decimal(balance or 0)
     if balance >= task.planned_quantity:
         return False
     await StockCommandService().record(
@@ -987,6 +1011,9 @@ async def _ensure_source_stock(
             created_by=actor_id,
             comment="Демо-сырьё упаковочного плана",
             dimensions=dimensions,
+            # Вне плана ``record()`` признак не выводит — задаём явно, иначе
+            # демо-сырьё легло бы в NULL-группу и выдача его не нашла бы.
+            completed_operations=stock_ops,
             action_id=action_id,
         ),
     )

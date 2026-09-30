@@ -129,6 +129,14 @@ async def _make_raw_stock_to_production_fixture(
 
 
 async def _seed_stock_balance(session, *, user_id: int, location_id: int, product_id: int, qty: Decimal) -> None:
+    # ADR-0055: списание точное. Позже этот остаток списывает план-driven
+    # TRANSFER_SEND, а record() выводит признак из маршрута задания. Naive
+    # MANUAL_IN без признака лёг бы в NULL-группу, и списание получало бы
+    # «available 0». Берём тот же источник: операции секции до её этапа
+    # маршрута (заполняем склад ДО take-to-work).
+    from tests.helpers.transfers import _section_route_operations
+
+    ops = await _section_route_operations(session, location_id)
     svc = StockCommandService()
     await svc.record(
         session,
@@ -137,6 +145,7 @@ async def _seed_stock_balance(session, *, user_id: int, location_id: int, produc
             to_location_id=location_id,
             quantity=qty,
             reason=Reason.MANUAL_IN,
+            completed_operations=ops,
             created_by=user_id,
         ),
     )

@@ -3,6 +3,7 @@ from decimal import Decimal
 import pytest
 from sqlalchemy import select
 
+from app.api.routes import demo as demo_routes
 from app.core.security import create_access_token
 from app.models.product import Product, ProductLength, ProductPair, ProductType
 from app.models.production_plan import PlanPosition, ProductionPlan, ProductionPlanStatus
@@ -90,8 +91,17 @@ async def _seed_demo_stock(
     session, product_id: int, section_id: int, quantity: Decimal = Decimal("100"),
     dimensions: dict | None = None,
 ) -> None:
-    """Seed initial stock for demo tests using StockCommandService."""
+    """Seed initial stock for demo tests using StockCommandService.
+
+    ADR-0055: расход точный, поэтому демо-сырьё кладётся в ту же
+    ops-группу, из которой его заберёт плановая выдача
+    (``_ensure_task_issued_via_transfer`` → ``transfer_send`` с фейкового
+    складского задания). Признак берётся из маршрута самой складской
+    секции — тот же резолвер, что и у ``record()``.
+    """
     from app.stock import StockCommand, StockCommandService, Reason, QualityState
+    from tests.helpers.transfers import _section_route_operations
+
     svc = StockCommandService()
     await svc.record(session, StockCommand(
         product_id=product_id,
@@ -100,6 +110,7 @@ async def _seed_demo_stock(
         to_location_id=section_id,
         quality_state=QualityState.GOOD,
         dimensions=dimensions,
+        completed_operations=await _section_route_operations(session, section_id),
         created_by=1,
         comment="Demo stock seed",
     ))
@@ -504,9 +515,31 @@ async def test_demo_stage_preset_to_step_ready_middle_step(client, session) -> N
 
 
 @pytest.mark.asyncio
-async def test_demo_paired_profile_scenario_imports_as_paired_row(client, session) -> None:
+async def test_demo_paired_profile_scenario_imports_as_paired_row(
+    client, session, monkeypatch
+) -> None:
+    """Демо-прогон по сценарию парного профиля даёт позицию с двумя компонентами.
+
+    Сценарий подставляется прямо здесь: справочник сценариев лежит в
+    ``backend/data/`` — каталоге рантайма (``.gitignore``), которого нет в
+    репозитории и у которого нет генератора. Тест не должен зависеть от
+    файла, которого в чистом checkout не бывает.
+    """
     user = await _make_user(session, email="paired-scenario@test.local")
     headers = _auth_headers(user)
+
+    monkeypatch.setattr(
+        demo_routes,
+        "_scenario_map",
+        lambda: {
+            "paired_2616_2604_sf": {
+                "scenario_id": "paired_2616_2604_sf",
+                "primary_sku": "ЮП-2616",
+                "secondary_sku": "ЮП-2604",
+                "output_kind_raw": "ГП",
+            }
+        },
+    )
 
     product = await _make_demo_product(
         session,

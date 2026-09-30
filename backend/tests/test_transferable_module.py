@@ -66,6 +66,11 @@ async def test_plain_line_and_write_guard_share_sources(client, session) -> None
     from app.stock import Reason, StockCommand, StockCommandService
 
     stock_sec = await _seed_manual_in_stock(session)
+    # Признак берём у того же источника, что и плановое ``TRANSFER_RECEIVE``
+    # (ADR-0043 §2): иначе приход лёг бы в NULL-группу (ADR-0055).
+    from app.services.material_operations import completed_operations_for_task
+
+    ops = await completed_operations_for_task(session, from_task)
     svc = StockCommandService()
     await svc.record(
         session,
@@ -75,6 +80,7 @@ async def test_plain_line_and_write_guard_share_sources(client, session) -> None
             to_location_id=stock_sec.id,
             quantity=Decimal("10"),
             reason=Reason.MANUAL_IN,
+            completed_operations=ops,
             created_by=user.id,
         ),
     )

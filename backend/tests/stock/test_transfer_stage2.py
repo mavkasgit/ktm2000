@@ -15,7 +15,7 @@ from datetime import UTC, datetime
 from decimal import Decimal
 
 import pytest
-from sqlalchemy import select
+from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.models import Product, ProductType, Section, User, UserRole
@@ -28,10 +28,19 @@ from app.models.production_plan import (
     ProductionPlan,
     ProductionPlanStatus,
 )
-from app.models.route import ProductionRoute, RouteOperation, RouteStage
+from app.models.route import (
+    ProductionRoute,
+    RouteOperation,
+    RouteStage,
+    SectionOperation,
+)
 from app.models.spg import SpgSection, StorageProductionGroup
 from app.models.transfer import Transfer, TransferStatus
 from app.models.work_task import WorkTask, WorkTaskStatus
+from app.services.material_operations import (
+    completed_operations_for_task,
+    previous_stage_sequence,
+)
 from app.stock.models import QualityState, Reason, StockBalance, StockTransaction
 from app.stock.services import StockCommand, StockCommandService
 from app.transfers.services import cancel_transfer, correct_transfer, transfer_send
@@ -404,8 +413,29 @@ async def test_transfer_send_task_cache_via_ledger(session: AsyncSession, client
 
 @_py_test_mark
 async def test_complete_after_transfer_balance_not_doubled(session: AsyncSession, client) -> None:
-    """transfer_send + complete_task: balance приёмника == qty, не 2×."""
+    """transfer_send + complete_task: balance приёмника == qty, не 2×.
+
+    ADR-0055: завершение этапа — не одна net-zero проводка ``COMPLETE``, а
+    перенос материала из группы ПРЕДЫДУЩЕГО этапа (в ней он лежит, пока
+    задание не завершено) в группу СВОЕГО этапа: списание входа отдельной
+    проводкой ``TRANSFORM_CONSUME`` + приход ``COMPLETE``. Баланс участка
+    при этом не двоится: сколько передали, столько и остаётся.
+    """
     setup = await _make_two_ghp_setup(session, sku="T2CMP", qty=Decimal("10"))
+    # Секции несут значимые операции своих этапов: без них признак
+    # «пройденные операции» у обеих сторон пуст, и перенос группы
+    # (``[]`` → ``[]``) был бы неотличим от старой net-zero проводки —
+    # проверять было бы нечего.
+    for section, code in zip(setup["sections"], ("OP1", "OP2"), strict=True):
+        session.add(SectionOperation(
+            section_id=section.id,
+            operation_code=code,
+            operation_name=code,
+            is_significant=True,
+            operation_type="production",
+            sort_order=10,
+        ))
+    await session.flush()
     ctx = await _make_tasks_transferable(session, client, setup)
 
     xfer_qty = Decimal("10")
@@ -446,8 +476,46 @@ async def test_complete_after_transfer_balance_not_doubled(session: AsyncSession
         )
     )
     assert complete_tx is not None
-    assert complete_tx.from_location_id == to_task.section_id
+    # Выпуск — только приход: ``from`` пуст, материал входит в группу СВОЕГО
+    # этапа. Прежняя форма ``from == to == section`` (net-zero) больше не
+    # создаётся — она не переносила признак и оставляла выпуск в чужой группе.
+    assert complete_tx.from_location_id is None
     assert complete_tx.to_location_id == to_task.section_id
+    own_ops = await completed_operations_for_task(session, to_task)
+    assert complete_tx.completed_operations == own_ops
+    assert complete_tx.quantity == xfer_qty
+
+    # Списание входа — отдельная проводка из группы ПРЕДЫДУЩЕГО этапа:
+    # именно её материал лежал на участке после передачи.
+    consume_tx = await session.scalar(
+        select(StockTransaction).where(
+            StockTransaction.task_id == to_task.id,
+            StockTransaction.reason == Reason.TRANSFORM_CONSUME,
+        )
+    )
+    assert consume_tx is not None
+    assert consume_tx.from_location_id == to_task.section_id
+    assert consume_tx.to_location_id is None
+    assert consume_tx.quantity == xfer_qty
+    previous_ops = await completed_operations_for_task(
+        session, to_task,
+        through_sequence=await previous_stage_sequence(session, to_task),
+    )
+    assert consume_tx.completed_operations == previous_ops
+    # Перенос действительно состоялся: группа входа и группа своего этапа —
+    # разные, иначе проверка выше ничего бы не доказывала.
+    assert consume_tx.completed_operations != complete_tx.completed_operations
+
+    # Суммарный баланс участка равен переданному количеству: перенос не
+    # двоит материал и не теряет его.
+    total_balance = await session.scalar(
+        select(func.coalesce(func.sum(StockBalance.balance_qty), 0)).where(
+            StockBalance.product_id == to_task.product_id,
+            StockBalance.location_id == to_task.section_id,
+            StockBalance.quality_state == QualityState.GOOD,
+        )
+    )
+    assert Decimal(total_balance) == xfer_qty
 
     from app.stock.services import StockProjectionManager
     pm = StockProjectionManager()

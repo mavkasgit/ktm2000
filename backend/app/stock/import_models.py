@@ -171,6 +171,13 @@ class StockImportRow(Base):
     product_id: Mapped[int | None] = mapped_column(ForeignKey("products.id"), nullable=True)
     quantity: Mapped[Decimal | None] = mapped_column(Numeric(18, 4), nullable=True)
     dimensions: Mapped[dict | None] = mapped_column(JSONB(none_as_null=True), nullable=True)
+    # Признак пройденных операций строки (ADR-0055): по нему остаток, созданный
+    # этой строкой, отличается от остатка соседней строки того же артикула,
+    # участка и длины. Нужен «посмотреть» в истории: текущий остаток строки
+    # ищется по полному ключу баланса.
+    completed_operations: Mapped[list | None] = mapped_column(
+        JSONB(none_as_null=True), nullable=True
+    )
     target_section_id: Mapped[int | None] = mapped_column(
         ForeignKey("sections.id"), nullable=True
     )

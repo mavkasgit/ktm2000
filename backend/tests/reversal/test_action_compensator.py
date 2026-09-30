@@ -125,8 +125,14 @@ async def test_task_complete_reverse_mirrors_entries(session: AsyncSession) -> N
 
     action = await _complete_task(session, fx, good=Decimal("7"), scrap=Decimal("3"))
     orig_txs = await _action_txs(session, action.id)
-    assert len(orig_txs) == 2
-    assert {t.reason for t in orig_txs} == {Reason.COMPLETE, Reason.SCRAP}
+    # Завершение пишет три проводки (ADR-0055): списание входной группы,
+    # выпуск годного и брак.
+    assert len(orig_txs) == 3
+    assert {t.reason for t in orig_txs} == {
+        Reason.COMPLETE,
+        Reason.TRANSFORM_CONSUME,
+        Reason.SCRAP,
+    }
     scrap_loc = next(t.to_location_id for t in orig_txs if t.reason == Reason.SCRAP)
     assert await _balance(session, scrap_loc, product_id) == Decimal("3")
 
@@ -559,9 +565,10 @@ async def test_replay_payload_task_complete(session: AsyncSession) -> None:
     payload = await comp.build_replay_payload(session, action)
     assert payload is not None
     entries = payload["entries"]
-    assert len(entries) == 2
+    # Три проводки завершения (ADR-0055): вход, годное, брак.
+    assert len(entries) == 3
     reasons = {e["reason"] for e in entries}
-    assert reasons == {"complete", "scrap"}
+    assert reasons == {"transform_consume", "complete", "scrap"}
     for e in entries:
         assert e["product_id"] == fx["product"].id
         assert Decimal(e["quantity"]) > 0

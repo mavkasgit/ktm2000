@@ -104,11 +104,41 @@ def dimensions_match_clause(column, dims: dict | None):
     return column == cast(dims, JSONB)
 
 
+def completed_operations_match_clause(column, ops: list | None):
+    """SQL-условие «признак операций равен ops» с учётом NULL (ADR-0055).
+
+    Семантика NULL повторяет ``dimensions_match_clause``: ``None`` —
+    «состояние не зафиксировано» — матчит и SQL ``NULL``, и JSON ``null``
+    (asyncpg при явном ``None`` в JSONB-колонке может сохранить
+    ``'null'::jsonb`` вместо SQL ``NULL``). ``[]`` — отдельное значение:
+    «операций не было», и оно не равно NULL ни в SQL, ни в Python.
+    """
+    if ops is None:
+        return or_(column.is_(None), column == text("'null'::jsonb"))
+    return column == cast(ops, JSONB)
+
+
+def _completed_operations_hash_key(ops: list | None) -> str | None:
+    """Хешируемый ключ группировки для признака операций (in-memory агрегация)."""
+    if ops is None:
+        return None
+    return json.dumps(ops, ensure_ascii=False)
+
+
 def _dimensions_hash_key(dims: dict | None) -> str | None:
     """Хешируемый ключ группировки для dict-габарита (in-memory агрегации)."""
     if dims is None:
         return None
     return json.dumps(dims, sort_keys=True, ensure_ascii=False)
+
+
+def _format_completed_operations(ops: list | None) -> str:
+    """Человекочитаемая метка признака операций для сообщений об ошибке."""
+    if ops is None:
+        return "не зафиксированы"
+    if not ops:
+        return "операций не было"
+    return ",".join(ops)
 
 
 @dataclass
@@ -196,9 +226,9 @@ class StockProjectionManager:
         """Инкрементальное обновление StockBalance для затронутых локаций.
 
         Баланс = SUM(incoming) - SUM(outgoing) по ключу
-        ``(product, location, quality_state, dimensions)``. from_quality_state
-        описывает состояние материала до перехода (на исходной локации),
-        to_quality_state — после (на целевой). Если баланс стал 0 —
+        ``(product, location, quality_state, dimensions, completed_operations)``.
+        from_quality_state описывает состояние материала до перехода (на исходной
+        локации), to_quality_state — после (на целевой). Если баланс стал 0 —
         строка удаляется (инкубатор: ck_stock_balances_nonzero).
 
         Терминальные секции (#136, «Отправлено») пропускаются: проводки в
@@ -211,13 +241,13 @@ class StockProjectionManager:
         if tx.from_location_id is not None and tx.from_location_id not in terminal:
             await self._recompute_balance(
                 session, tx.product_id, tx.from_location_id, tx.from_quality_state,
-                tx.dimensions,
+                tx.dimensions, tx.completed_operations,
             )
         # to_location: входящий материал в to_quality_state
         if tx.to_location_id is not None and tx.to_location_id not in terminal:
             await self._recompute_balance(
                 session, tx.product_id, tx.to_location_id, tx.to_quality_state,
-                tx.dimensions,
+                tx.dimensions, tx.completed_operations,
             )
 
     async def _terminal_location_ids(
@@ -242,12 +272,13 @@ class StockProjectionManager:
         location_id: int,
         quality_state: QualityState,
         dimensions: dict | None,
+        completed_operations: list | None = None,
     ) -> None:
         """Пересчёт одной строки баланса из ledger (атомарный UPSERT).
 
         Считаем SUM(incoming) - SUM(outgoing) по ledger для данного ключа
-        (включая габарит; NULL-габарит — отдельная legacy-группа).
-        Если 0 — удаляем строку; иначе UPSERT.
+        (габарит + признак пройденных операций, ADR-0055; NULL по каждой оси —
+        отдельная legacy-группа). Если 0 — удаляем строку; иначе UPSERT.
         """
         incoming = await session.execute(
             select(StockTransaction.quantity)
@@ -256,6 +287,9 @@ class StockProjectionManager:
                 StockTransaction.to_location_id == location_id,
                 StockTransaction.to_quality_state == quality_state,
                 dimensions_match_clause(StockTransaction.dimensions, dimensions),
+                completed_operations_match_clause(
+                    StockTransaction.completed_operations, completed_operations
+                ),
             )
         )
         outgoing = await session.execute(
@@ -265,6 +299,9 @@ class StockProjectionManager:
                 StockTransaction.from_location_id == location_id,
                 StockTransaction.from_quality_state == quality_state,
                 dimensions_match_clause(StockTransaction.dimensions, dimensions),
+                completed_operations_match_clause(
+                    StockTransaction.completed_operations, completed_operations
+                ),
             )
         )
         in_sum = sum((r[0] for r in incoming), Decimal("0"))
@@ -277,6 +314,9 @@ class StockProjectionManager:
                 StockBalance.location_id == location_id,
                 StockBalance.quality_state == quality_state,
                 dimensions_match_clause(StockBalance.dimensions, dimensions),
+                completed_operations_match_clause(
+                    StockBalance.completed_operations, completed_operations
+                ),
             )
         )
         row = existing.scalar_one_or_none()
@@ -290,6 +330,7 @@ class StockProjectionManager:
                 location_id=location_id,
                 quality_state=quality_state,
                 dimensions=dimensions,
+                completed_operations=completed_operations,
                 balance_qty=balance,
                 refreshed_at=datetime.now(),
             )
@@ -305,6 +346,7 @@ class StockProjectionManager:
         location_id: int,
         quality_state: QualityState | str,
         dimensions: dict | None,
+        completed_operations: list | None = None,
     ) -> None:
         """Пересчитать один ключ баланса из ledger — публичная точка входа.
 
@@ -323,7 +365,7 @@ class StockProjectionManager:
         if location_id in await self._terminal_location_ids(session, location_id):
             return
         await self._recompute_balance(
-            session, product_id, location_id, state, dimensions
+            session, product_id, location_id, state, dimensions, completed_operations
         )
 
     async def rebuild_all_balances(self, session: AsyncSession) -> int:
@@ -349,34 +391,55 @@ class StockProjectionManager:
                 StockTransaction.from_quality_state,
                 StockTransaction.to_quality_state,
                 StockTransaction.dimensions,
+                StockTransaction.completed_operations,
                 StockTransaction.quantity,
             )
         )
-        # Ключ агрегата включает хешируемый слепок габарита;
-        # сам dict храним отдельно для записи в строку баланса.
-        agg: dict[tuple[int, int, QualityState, str | None], Decimal] = {}
+        # Ключ агрегата включает хешируемые слепки габарита и признака
+        # операций; сами значения храним отдельно для записи в строку баланса.
+        agg: dict[tuple, Decimal] = {}
         dims_by_key: dict[str | None, dict | None] = {}
-        for product_id, from_loc, to_loc, from_qs, to_qs, dims, qty in result:
+        ops_by_key: dict[str | None, list | None] = {}
+        for (
+            product_id,
+            from_loc,
+            to_loc,
+            from_qs,
+            to_qs,
+            dims,
+            ops,
+            qty,
+        ) in result:
             dims_key = _dimensions_hash_key(dims)
+            ops_key = _completed_operations_hash_key(ops)
             dims_by_key.setdefault(dims_key, dims)
+            ops_by_key.setdefault(ops_key, ops)
             if to_loc is not None:
-                key = (product_id, to_loc, to_qs, dims_key)
+                key = (product_id, to_loc, to_qs, dims_key, ops_key)
                 agg[key] = agg.get(key, Decimal("0")) + qty
             if from_loc is not None:
-                key = (product_id, from_loc, from_qs, dims_key)
+                key = (product_id, from_loc, from_qs, dims_key, ops_key)
                 agg[key] = agg.get(key, Decimal("0")) - qty
         rows = [
-            (product_id, location_id, qs, dims_by_key.get(dims_key), balance)
-            for (product_id, location_id, qs, dims_key), balance in agg.items()
+            (
+                product_id,
+                location_id,
+                qs,
+                dims_by_key.get(dims_key),
+                ops_by_key.get(ops_key),
+                balance,
+            )
+            for (product_id, location_id, qs, dims_key, ops_key), balance in agg.items()
             if balance != 0 and location_id not in terminal_ids
         ]
-        for product_id, location_id, qs, dims, balance in rows:
+        for product_id, location_id, qs, dims, ops, balance in rows:
             session.add(
                 StockBalance(
                     product_id=product_id,
                     location_id=location_id,
                     quality_state=qs,
                     dimensions=dims,
+                    completed_operations=ops,
                     balance_qty=balance,
                     refreshed_at=datetime.now(),
                 )
@@ -629,12 +692,15 @@ class StockCommandService:
            проверка кодов по справочнику операций, восстановление из
            маршрута позиции, зеркало компенсации. Плановой проводке без
            признака путь закрыт — см. :meth:`_resolve_completed_operations`.
-        4. INSERT StockTransaction. При гонке (конкурент закоммитил тот же
+        4. Проверка достаточности остатка расходной стороны — **после**
+           шага 3: баланс читается по полному ключу, включая признак
+           операций (ADR-0055), и до его разрешения искала бы NULL-группу.
+        5. INSERT StockTransaction. При гонке (конкурент закоммитил тот же
            ключ между шагом 1 и flush) unique-бэкстоп ловится и подача
            отклоняется ``StockIdempotencyConflict`` (409, ADR-0022) —
            replay на этом уровне запрещён: side effects вызывающего в
            текущей транзакции откатываются вместе с ней.
-        5. ``projection_manager.stock_changed(tx)`` — синхронно в той же
+        6. ``projection_manager.stock_changed(tx)`` — синхронно в той же
            транзакции.
 
         Возвращает созданную (или существующую по идемпотентности)
@@ -653,7 +719,11 @@ class StockCommandService:
             raise StockValidationError(f"invalid dimensions: {exc}") from exc
 
         await self._validate(session, cmd)
+        # Признак операций разрешается ДО проверки остатка: баланс читается по
+        # полному ключу, и сравнение с ещё неразрешённым (None) признаком
+        # искало бы NULL-группу вместо строки материала, который отдают.
         await self._resolve_completed_operations(session, cmd)
+        await self._ensure_sufficient_balance(session, cmd)
 
         tx = StockTransaction(
             product_id=cmd.product_id,
@@ -843,12 +913,24 @@ class StockCommandService:
     async def _ensure_sufficient_balance(
         self, session: AsyncSession, cmd: StockCommand
     ) -> None:
-        """Проверка отрицательного остатка расходной стороны (#134).
+        """Проверка отрицательного остатка расходной стороны (#134, ADR-0055).
 
-        Извлечена из ``_validate``: чтение строки баланса по
-        (product, location, quality, dims) и вся политика минуса —
-        осознанный флаг ``allow_negative`` (#133) и правило
-        «lot-required блокирует минус» — живут в одном хелпере.
+        Живёт отдельно от ``_validate``, потому что читает баланс по полному
+        ключу — включая признак пройденных операций, который на момент
+        ``_validate`` ещё не разрешён. Вызывается из ``record()`` **после**
+        ``_resolve_completed_operations``: сравнивать остаток с признаком,
+        который для плановой проводки ещё ``None``, значило бы всегда искать
+        NULL-группу и ругаться на достаточный остаток.
+
+        Списание точное (ADR-0055): расход уменьшает строку с тем же
+        признаком операций. Отдельные строки одного участка не взаимозаменны —
+        прошедший пресс материал и сырьё стоят по-разному, поэтому «списать
+        понемногу оттуда и оттуда» здесь означало бы продажу несуществующего
+        остатка. Нет строки с нужным признаком — расход невозможен, даже если
+        суммарно участок полон: оператор должен указать, что именно отдаёт.
+
+        Вся политика минуса — осознанный флаг ``allow_negative`` (#133) и
+        правило «lot-required блокирует минус» — остаётся здесь же.
         Net-zero-операции (from == to, качество не меняется) не двигают
         баланс: одна транзакция даёт +qty (to) и −qty (from) в одну строку,
         поэтому проверка для них избыточна. Компенсация (reverses_id)
@@ -869,6 +951,9 @@ class StockCommandService:
                 StockBalance.location_id == cmd.from_location_id,
                 StockBalance.quality_state == cmd.quality_state,
                 dimensions_match_clause(StockBalance.dimensions, cmd.dimensions),
+                completed_operations_match_clause(
+                    StockBalance.completed_operations, cmd.completed_operations
+                ),
             )
         )
         balance_row = balance_result.scalar_one_or_none()
@@ -891,16 +976,19 @@ class StockCommandService:
             # закрытия последующей выдачей.
             return
 
-        # Габарит в ошибке (тикет #89): «без указания длины» вместо
-        # прочерка — понятнее оператору, какую строку остатка искать.
+        # Габарит и признак операций в ошибке (тикет #89, ADR-0055): оператор
+        # должен видеть, КАКУЮ строку остатка он искал, — иначе непонятно,
+        # почему участок «полон», а расход отклонён.
         dims_label = (
             format_dimensions(cmd.dimensions)
             if cmd.dimensions is not None
             else "без указания длины"
         )
+        ops_label = _format_completed_operations(cmd.completed_operations)
         raise StockValidationError(
             f"Insufficient stock for product_id={cmd.product_id} at location_id={cmd.from_location_id} "
-            f"(quality={cmd.quality_state.value}, dimensions={dims_label}): "
+            f"(quality={cmd.quality_state.value}, dimensions={dims_label}, "
+            f"completed_operations={ops_label}): "
             f"required {cmd.quantity}, available {current_balance}"
         )
 
@@ -968,9 +1056,9 @@ class StockCommandService:
                 f"reason=complete requires to_quality=good, got {to_qs.value}"
             )
 
-        # Отрицательный остаток — единый хелпер (#134): политика минуса
-        # (allow_negative, lot-required) и текст ошибки живут в одном месте.
-        await self._ensure_sufficient_balance(session, cmd)
+        # Отрицательный остаток проверяется НЕ здесь: чтение баланса идёт по
+        # полному ключу, включая признак операций, а он на этом шаге ещё не
+        # разрешён. Вызов живёт в record() после _resolve_completed_operations.
 
         # created_by mandatory at DB level — пока не enforced здесь (тесты могут
         # передавать 0/null); будет tightened когда все call sites подключатся.

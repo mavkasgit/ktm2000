@@ -28,6 +28,7 @@ from app.stock import (
     StockTransaction,
     StockValidationError,
 )
+from app.stock.services import completed_operations_match_clause
 from tests.test_integrity_invariants import assert_no_stock_ledger_invariants_violations
 
 
@@ -84,12 +85,25 @@ async def _balance(
     product_id: int,
     location_id: int,
     quality_state: QualityState = QualityState.GOOD,
+    completed_operations: list[str] | None = None,
 ) -> Decimal:
+    """Остаток по ПОЛНОМУ ключу (ADR-0055).
+
+    Признак «пройденные операции» — полноправная ось ключа остатка, а не
+    атрибут строки: одна и та же секция может держать строки ``NULL`` и
+    ``[]`` одновременно. Без признака в фильтре ``scalar_one_or_none()``
+    на такой фикстуре падал бы с MultipleResultsFound, поэтому ось
+    задаётся явно; ``None`` — «состояние не зафиксировано», это
+    самостоятельное значение, а не «любая группа».
+    """
     row = await session.execute(
         select(StockBalance).where(
             StockBalance.product_id == product_id,
             StockBalance.location_id == location_id,
             StockBalance.quality_state == quality_state,
+            completed_operations_match_clause(
+                StockBalance.completed_operations, completed_operations
+            ),
         )
     )
     bal = row.scalar_one_or_none()

@@ -8,7 +8,7 @@ import {
   DialogTitle,
   Button,
 } from "@/shared/ui";
-import { getProductStockBalances } from "@/shared/api/stock";
+import { formatCompletedOperationsLabel, getProductStockBalances } from "@/shared/api/stock";
 import { getProduct } from "@/shared/api/products";
 import { queryKeys } from "@/shared/api/queryKeys";
 import { fmtQty } from "@/shared/lib/quantityFormat";
@@ -38,8 +38,17 @@ export function ProductStockBalanceDialog({
     enabled: open,
   });
 
-  const sortedBalances = [...balances].sort((a, b) =>
-    (a.location_name || "").localeCompare(b.location_name || ""),
+  // ADR-0055: операции — часть идентичности остатка, поэтому вторичные ключи
+  // сортировки обязаны включать операции, иначе две разные строки одного
+  // участка сортировались бы как равные и читались как дубль.
+  const sortedBalances = [...balances].sort(
+    (a, b) =>
+      (a.location_name || "").localeCompare(b.location_name || "") ||
+      (a.quality_state || "").localeCompare(b.quality_state || "") ||
+      formatCompletedOperationsLabel(a.completed_operations, a.completed_stages).localeCompare(
+        formatCompletedOperationsLabel(b.completed_operations, b.completed_stages),
+        "ru",
+      ),
   );
 
   const total = sortedBalances.reduce((sum, b) => sum + parseFloat(b.balance_qty), 0);
@@ -69,6 +78,7 @@ export function ProductStockBalanceDialog({
                   <tr>
                     <th className="p-2 text-left font-medium">Участок</th>
                     <th className="p-2 text-left font-medium">Состояние качества</th>
+                    <th className="p-2 text-left font-medium">Операции</th>
                     <th className="p-2 text-right font-medium">Остаток</th>
                     <th className="p-2 text-center font-medium">Действия</th>
                   </tr>
@@ -79,6 +89,9 @@ export function ProductStockBalanceDialog({
                       <td className="p-2 text-xs">{b.location_name || `#${b.location_id}`}</td>
                       <td className="p-2">
                         <span className="text-xs font-medium text-muted-foreground">{b.quality_state}</span>
+                      </td>
+                      <td className="p-2 text-xs text-muted-foreground">
+                        {formatCompletedOperationsLabel(b.completed_operations, b.completed_stages)}
                       </td>
                       <td className="p-2 text-right font-semibold font-mono">{fmtQty(b.balance_qty)}</td>
                       <td className="p-2 text-center">
@@ -96,7 +109,9 @@ export function ProductStockBalanceDialog({
                 </tbody>
                 <tfoot className="bg-muted/30 border-t font-semibold">
                   <tr>
-                    <td colSpan={2} className="p-2 text-right">Итого:</td>
+                    <td colSpan={3} className="p-2 text-right text-muted-foreground text-xs">
+                      Итого по всем строкам:
+                    </td>
                     <td className="p-2 text-right font-mono">{fmtQty(total)}</td>
                     <td />
                   </tr>

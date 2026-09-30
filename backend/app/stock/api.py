@@ -30,10 +30,11 @@ from typing import Optional
 
 from fastapi import APIRouter, Depends, File, Form, HTTPException, Query, UploadFile
 from pydantic import BaseModel, Field
-from sqlalchemy import cast, func, or_, select
+from sqlalchemy import cast, func, or_, select, text
+from sqlalchemy.dialects.postgresql import JSONB, aggregate_order_by
+from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import aliased
 from sqlalchemy.types import String
-from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.api.deps import READER_ROLES, WRITER_ROLES, get_current_user, require_role
 from app.core.database import get_db
@@ -41,8 +42,8 @@ from app.core.sorting import SortClause, apply_sort, parse_sort
 from app.domain.dimensions import format_dimensions
 from app.models.import_template import ImportTemplate
 from app.models.product import Product
+from app.models.route import SectionOperation
 from app.models.section import Section
-from app.models.transfer import Transfer
 from app.models.user import User
 from app.stock.models import (
     QualityState,
@@ -60,7 +61,6 @@ from app.stock.import_service import (
     generate_remainders_template_for_location,
     parse_remainders_clipboard,
     parse_remainders_excel,
-    parse_operations_from_comment,
     query_remainder_preview_items,
     resolve_completed_stages,
     resolve_operations_dictionary,
@@ -152,6 +152,9 @@ class StockBalanceOut(BaseModel):
     # Габаритная группа остатка (ADR-0001); None = legacy/безразмерные.
     dimensions: dict | None = None
     dimensions_label: str = "—"
+    # Признак пройденных операций строки остатка (ADR-0055) — часть ключа,
+    # поэтому отдаётся наружу: по нему UI различает строки одного участка.
+    completed_operations: list[str] | None = None
     completed_stages: list[StockBalanceCompletedStageOut] = Field(default_factory=list)
     refreshed_at: str | None = None
 
@@ -239,11 +242,12 @@ class StockAdjustmentOut(BaseModel):
 # набор допустимых полей выводится из таблицы, а не живёт отдельно.
 #
 # Значение — выражение SQLAlchemy для прямой колонки либо callable для поля,
-# чьё выражение строится на каждый запрос (комментарий последнего MANUAL_IN).
+# чьё выражение строится на каждый запрос (подпись оси операций — агрегат
+# по справочнику операций).
 _BALANCE_SORT_COLUMNS: dict[str, object] = {
     "sku": Product.sku,
     "quantity": StockBalance.balance_qty,
-    "operations": lambda: _latest_manual_in_comment_expr(),
+    "operations": lambda: _balance_operations_label_expr(),
     "quality": StockBalance.quality_state,
     "location": Section.name,
     "product_id": StockBalance.product_id,
@@ -260,22 +264,81 @@ BALANCE_SORT_NULLS_LAST_FIELDS = tuple(_BALANCE_SORT_COLUMNS)
 _BALANCE_SORT_DEFAULT = SortClause("sku", "asc")
 
 
-def _latest_manual_in_comment_expr():
-    """Коррелированный подзапрос: комментарий последнего MANUAL_IN по ключу баланса."""
-    return (
-        select(StockTransaction.comment)
-        .where(
-            StockTransaction.reason == Reason.MANUAL_IN,
-            StockTransaction.reverses_id.is_(None),
-            StockTransaction.product_id == StockBalance.product_id,
-            StockTransaction.to_location_id == StockBalance.location_id,
-            StockTransaction.to_quality_state == StockBalance.quality_state,
+
+# Подписи пустых состояний оси операций (ADR-0055). Это НЕ имена операций,
+# а то, что видит оператор в колонке «Операции» для строк без признака, —
+# поэтому значения фильтра на UI обязаны их различать.
+_OPERATIONS_NOT_RECORDED_LABEL = "не зафиксировано"
+_OPERATIONS_EMPTY_LABEL = "без операций"
+
+
+def _balance_operations_label_expr():
+    """Названия пройденных операций строки баланса, склеенные в одну строку.
+
+    ADR-0055: признак лежит в самой строке остатка, поэтому подпись собирается
+    из её кодов, а не разбирается из комментария последней приходной проводки.
+    Прежний обратный разбор не мог различить две строки одного участка с
+    разными операциями — обе получили бы подпись одной и той же проводки.
+
+    Коды строки разворачиваются в элементы jsonb-массива
+    (``jsonb_array_elements_text``; в PostgreSQL функция в ``FROM`` неявно
+    латеральна, поэтому корреляция на ``stock_balances`` работает) и
+    соединяются со справочником операций. Порядок склейки — тот же, что у
+    ``completed_stages`` в ответе: ``(section.sort_order, operation.sort_order,
+    operation.id)``, то есть маршрут читается слева направо. Отбор операций —
+    тот же, что у ``resolve_operations_dictionary`` (значимые
+    производственные): подпись колонки и ``completed_stages`` обязаны
+    показывать одно и то же.
+    """
+    ops_values = (
+        func.jsonb_array_elements_text(StockBalance.completed_operations)
+        .table_valued("value")
+        .alias("balance_ops")
+    )
+    # `array_agg(... ORDER BY ...)`, а не `string_agg(... ORDER BY ...)`:
+    # PostgreSQL требует, чтобы ORDER BY шёл ПОСЛЕ всех обычных аргументов
+    # агрегата, а разделитель у `string_agg` — второй аргумент. Порядок
+    # элементов задаётся внутри `array_agg`, склейка — `array_to_string`.
+    ordered_names = func.array_agg(
+        aggregate_order_by(
+            SectionOperation.operation_name,
+            Section.sort_order,
+            SectionOperation.sort_order,
+            SectionOperation.id,
         )
-        .order_by(StockTransaction.created_at.desc(), StockTransaction.id.desc())
-        .limit(1)
+    )
+    return (
+        select(func.array_to_string(ordered_names, ", "))
+        .select_from(SectionOperation)
+        .join(Section, Section.id == SectionOperation.section_id)
+        .join(ops_values, ops_values.c.value == SectionOperation.operation_code)
+        .where(
+            SectionOperation.is_significant.is_(True),
+            SectionOperation.operation_type == "production",
+        )
         .correlate(StockBalance)
         .scalar_subquery()
     )
+
+
+def _balance_operations_filter(operations: str):
+    """Фильтр колонки «Операции» по значению из UI.
+
+    Два особых значения — не имена операций, а подписи пустых состояний, и
+    обычный ILIKE по названиям их не найдёт: у строки с неразрешённым признаком
+    просто нет названий. Поэтому «не зафиксировано» (NULL) и «без операций»
+    ([]) разбираются в явные предикаты по колонке — иначе выбор такого
+    значения в фильтре молча возвращал бы ноль строк.
+    """
+    label = operations.strip().lower()
+    if label == _OPERATIONS_NOT_RECORDED_LABEL:
+        return or_(
+            StockBalance.completed_operations.is_(None),
+            StockBalance.completed_operations == text("'null'::jsonb"),
+        )
+    if label == _OPERATIONS_EMPTY_LABEL:
+        return StockBalance.completed_operations == cast([], JSONB)
+    return _balance_operations_label_expr().ilike(f"%{operations}%")
 
 
 def _balance_base_stmt():
@@ -323,8 +386,7 @@ def _apply_balance_filters(
             )
         )
     if operations is not None:
-        latest_comment = _latest_manual_in_comment_expr()
-        stmt = stmt.where(latest_comment.ilike(f"%{operations}%"))
+        stmt = stmt.where(_balance_operations_filter(operations))
     if search:
         search_like = f"%{search}%"
         stmt = stmt.where(
@@ -379,78 +441,49 @@ def _serialize_balance(
         balance_qty=str(row.balance_qty),
         dimensions=row.dimensions,
         dimensions_label=format_dimensions(row.dimensions),
+        completed_operations=row.completed_operations,
         completed_stages=completed_stages or [],
         refreshed_at=row.refreshed_at.isoformat() if row.refreshed_at else None,
     )
 
 
-_OPERATION_COMMENT_REASONS = (
-    Reason.MANUAL_IN,
-    Reason.TRANSFER_RECEIVE,
-    Reason.COMPLETE,
-)
 
 
 async def _serialize_balances_with_operations(
     db: AsyncSession,
     rows: list[tuple[StockBalance, str | None, str | None]],
 ) -> list[StockBalanceOut]:
+    """Сериализация остатков с подписью пройденных операций.
+
+    ADR-0055: признак лежит в самой строке остатка, поэтому подпись собирается
+    из её кодов. Прежний обратный разбор комментария последней приходной
+    проводки не мог различить две строки одного участка с разными операциями —
+    обе получили бы подпись одной и той же проводки, и в таблице «Операции»
+    не осталось бы ни одного различия.
+    """
     if not rows:
         return []
 
-    product_ids = {row.product_id for row, _, _ in rows}
-    stmt = (
-        select(StockTransaction)
-        .where(
-            StockTransaction.reason.in_(_OPERATION_COMMENT_REASONS),
-            StockTransaction.reverses_id.is_(None),
-            StockTransaction.product_id.in_(product_ids),
-        )
-        .order_by(StockTransaction.created_at.desc())
-    )
-    txs = (await db.execute(stmt)).scalars().all()
-
-    transfer_ids = {
-        tx.transfer_id
-        for tx in txs
-        if tx.transfer_id is not None and tx.reason == Reason.TRANSFER_RECEIVE
-    }
-    transfers_by_id: dict[int, Transfer] = {}
-    if transfer_ids:
-        transfers = (
-            await db.execute(select(Transfer).where(Transfer.id.in_(transfer_ids)))
-        ).scalars().all()
-        transfers_by_id = {transfer.id: transfer for transfer in transfers}
-
-    comment_by_key: dict[tuple[int, int, QualityState], str | None] = {}
-    for tx in txs:
-        if not parse_operations_from_comment(tx.comment):
-            continue
-        location_id = tx.to_location_id
-        if location_id is None and tx.reason == Reason.TRANSFER_RECEIVE and tx.transfer_id:
-            transfer = transfers_by_id.get(tx.transfer_id)
-            if transfer is not None:
-                location_id = transfer.to_section_id
-        if location_id is None:
-            continue
-        key = (tx.product_id, location_id, tx.to_quality_state)
-        if key not in comment_by_key:
-            comment_by_key[key] = tx.comment
-
     ops_dict = await resolve_operations_dictionary(db)
+    by_code = {op["operation_code"]: op for op in ops_dict}
+
     result: list[StockBalanceOut] = []
     for row, location_name, product_sku in rows:
-        key = (row.product_id, row.location_id, row.quality_state)
-        comment = comment_by_key.get(key)
         stages_out: list[StockBalanceCompletedStageOut] = []
-        raw_ops = parse_operations_from_comment(comment)
-        if raw_ops:
-            stages_raw = await resolve_completed_stages(
-                db,
-                ", ".join(raw_ops),
-                ops_dict,
-            )
-            stages_out = [StockBalanceCompletedStageOut(**stage) for stage in stages_raw]
+        # Код, которого нет в справочнике, в подпись не попадает: record()
+        # отвергает такие на записи, он мог остаться лишь от удаления
+        # справочной записи — молчаливое отбрасывание сделало бы строку
+        # неотличимой от «операций не было».
+        ordered = sorted(
+            (
+                by_code[code]
+                for code in (row.completed_operations or [])
+                if code in by_code
+            ),
+            key=lambda stage: stage["sequence"],
+        )
+        for stage in ordered:
+            stages_out.append(StockBalanceCompletedStageOut(**stage))
         result.append(_serialize_balance(row, location_name, product_sku, stages_out))
     return result
 
@@ -483,7 +516,10 @@ async def list_balances(
     ),
     operations: Optional[str] = Query(
         default=None,
-        description="Column filter: ILIKE on latest MANUAL_IN comment",
+        description=(
+            "Column filter: operation name, or the empty-state labels "
+            "«не зафиксировано» / «без операций» (ADR-0055)"
+        ),
     ),
     sort: str = Query(
         default="sku:asc",

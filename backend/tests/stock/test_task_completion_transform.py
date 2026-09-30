@@ -34,6 +34,7 @@ from app.models.production_plan import (
 from app.models.route import ProductionRoute, RouteOperation, RouteStage
 from app.models.spg import SpgSection, StorageProductionGroup
 from app.models.work_task import WorkTask, WorkTaskStatus
+from app.services.material_operations import completed_operations_for_task
 from app.services.shopfloor.operations_tasks import complete_task
 from app.services.shopfloor.queries_sections import get_section_board
 from tests.stock.helpers import canon_scrap_section_id
@@ -46,7 +47,11 @@ from app.stock import (
     StockTransaction,
     StockValidationError,
 )
-from app.stock.services import StockProjectionManager, dimensions_match_clause
+from app.stock.services import (
+    StockProjectionManager,
+    completed_operations_match_clause,
+    dimensions_match_clause,
+)
 from tests.test_integrity_invariants import (
     assert_no_stock_ledger_invariants_violations,
 )
@@ -199,6 +204,10 @@ async def _receive_input(
         quantity=quantity,
         reason=Reason.MANUAL_IN,
         dimensions=dims,
+        # ADR-0055: приход на склад сырья несёт тот же признак операций,
+        # что выведет plan-driven TRANSFER_RECEIVE ниже из маршрута задания,
+        # — иначе списание ищет группу маршрута и находит 0.
+        completed_operations=await completed_operations_for_task(session, fx["task"]),
         created_by=fx["user"].id,
     ))
     await svc.record(session, StockCommand(
@@ -221,17 +230,37 @@ async def _balance(
     location_id: int,
     dims: dict | None,
     quality_state: QualityState = QualityState.GOOD,
+    completed_operations: list[str] | None = None,
 ) -> Decimal:
+    """Остаток строки баланса.
+
+    ADR-0055: ось ``completed_operations`` — часть ключа остатка, поэтому
+    поиск без неё на материале с несколькими группами даёт
+    ``MultipleResultsFound``. ``None`` (по умолчанию) — запрос NULL-группы;
+    вызывающий, который знает маршрут, передаёт выведенное значение.
+    """
     row = await session.execute(
         select(StockBalance).where(
             StockBalance.product_id == product_id,
             StockBalance.location_id == location_id,
             StockBalance.quality_state == quality_state,
             dimensions_match_clause(StockBalance.dimensions, dims),
+            completed_operations_match_clause(
+                StockBalance.completed_operations, completed_operations,
+            ),
         )
     )
     bal = row.scalar_one_or_none()
     return bal.balance_qty if bal else Decimal("0")
+
+
+async def _route_ops(session: AsyncSession, fx: dict) -> list[str]:
+    """Признак операций, который ledger выводит для задания из маршрута.
+
+    ADR-0055: ось остатка. Материал, идущий по проводке задания, лежит в
+    группе, равной маршруту, — и остаток надо читать именно по ней.
+    """
+    return await completed_operations_for_task(session, fx["task"])
 
 
 async def _tx_sum(
@@ -277,11 +306,19 @@ async def test_full_portion_moves_input_and_all_outputs(session: AsyncSession) -
     # 3 транзакции одной порции: consume + 2 выхода.
     assert len(result["transaction_ids"]) == 3
 
-    # Балансы по габаритным группам на пиле.
+    # Балансы по габаритным группам на пиле (ADR-0055: плюс ось операций —
+    # материал задания лежит в группе маршрута, а не в NULL).
     product_id, saw_id = fx["product"].id, fx["saw"].id
-    assert await _balance(session, product_id, saw_id, DIMS_IN) == Decimal("0")
-    assert await _balance(session, product_id, saw_id, DIMS_OUT_A) == Decimal("100")
-    assert await _balance(session, product_id, saw_id, DIMS_OUT_B) == Decimal("100")
+    ops = await _route_ops(session, fx)
+    assert await _balance(
+        session, product_id, saw_id, DIMS_IN, completed_operations=ops,
+    ) == Decimal("0")
+    assert await _balance(
+        session, product_id, saw_id, DIMS_OUT_A, completed_operations=ops,
+    ) == Decimal("100")
+    assert await _balance(
+        session, product_id, saw_id, DIMS_OUT_B, completed_operations=ops,
+    ) == Decimal("100")
 
     # Проекция задачи: completed = сумма выходов.
     cache = await StockProjectionManager().get_task_cache(session, fx["task"].id)
@@ -306,10 +343,17 @@ async def test_partial_portion_moves_ledger_proportionally(session: AsyncSession
     await session.commit()
 
     product_id, saw_id = fx["product"].id, fx["saw"].id
+    ops = await _route_ops(session, fx)
     assert await _tx_sum(session, fx["task"].id, Reason.TRANSFORM_CONSUME, DIMS_IN) == Decimal("50")
-    assert await _balance(session, product_id, saw_id, DIMS_IN) == Decimal("50")
-    assert await _balance(session, product_id, saw_id, DIMS_OUT_A) == Decimal("50")
-    assert await _balance(session, product_id, saw_id, DIMS_OUT_B) == Decimal("50")
+    assert await _balance(
+        session, product_id, saw_id, DIMS_IN, completed_operations=ops,
+    ) == Decimal("50")
+    assert await _balance(
+        session, product_id, saw_id, DIMS_OUT_A, completed_operations=ops,
+    ) == Decimal("50")
+    assert await _balance(
+        session, product_id, saw_id, DIMS_OUT_B, completed_operations=ops,
+    ) == Decimal("50")
 
     task = await session.get(WorkTask, fx["task"].id)
     assert task.status == WorkTaskStatus.partially_completed
@@ -326,9 +370,15 @@ async def test_partial_portion_moves_ledger_proportionally(session: AsyncSession
     await session.commit()
 
     assert await _tx_sum(session, fx["task"].id, Reason.TRANSFORM_CONSUME, DIMS_IN) == Decimal("100")
-    assert await _balance(session, product_id, saw_id, DIMS_IN) == Decimal("0")
-    assert await _balance(session, product_id, saw_id, DIMS_OUT_A) == Decimal("100")
-    assert await _balance(session, product_id, saw_id, DIMS_OUT_B) == Decimal("100")
+    assert await _balance(
+        session, product_id, saw_id, DIMS_IN, completed_operations=ops,
+    ) == Decimal("0")
+    assert await _balance(
+        session, product_id, saw_id, DIMS_OUT_A, completed_operations=ops,
+    ) == Decimal("100")
+    assert await _balance(
+        session, product_id, saw_id, DIMS_OUT_B, completed_operations=ops,
+    ) == Decimal("100")
 
     cache = await StockProjectionManager().get_task_cache(session, fx["task"].id)
     assert cache["completed_quantity"] == Decimal("200")
@@ -390,6 +440,7 @@ async def test_defect_written_with_input_dimensions(session: AsyncSession) -> No
     await session.commit()
 
     product_id, saw_id = fx["product"].id, fx["saw"].id
+    ops = await _route_ops(session, fx)
     # Списание входа только по годным; брак ушёл SCRAP с габаритом входа.
     assert await _tx_sum(session, fx["task"].id, Reason.TRANSFORM_CONSUME, DIMS_IN) == Decimal("90")
     assert await _tx_sum(session, fx["task"].id, Reason.SCRAP, DIMS_IN) == Decimal("10")
@@ -397,13 +448,16 @@ async def test_defect_written_with_input_dimensions(session: AsyncSession) -> No
     assert await _tx_sum(session, fx["task"].id, Reason.COMPLETE, DIMS_OUT_A) == Decimal("90")
     assert await _tx_sum(session, fx["task"].id, Reason.COMPLETE, DIMS_OUT_B) == Decimal("90")
 
-    assert await _balance(session, product_id, saw_id, DIMS_IN) == Decimal("0")
+    assert await _balance(
+        session, product_id, saw_id, DIMS_IN, completed_operations=ops,
+    ) == Decimal("0")
     # Брак уходит на каноническую SCRAP-секцию по коду политики (#134):
     # find по code+type, секция чужого кода из фикстуры его не подменяет.
     canon_scrap_id = await canon_scrap_section_id(session)
     assert canon_scrap_id != fx["scrap"].id
     assert await _balance(
         session, product_id, canon_scrap_id, DIMS_IN, QualityState.SCRAP,
+        completed_operations=ops,
     ) == Decimal("10")
 
     assert result["defect_id"] is not None
@@ -443,7 +497,11 @@ async def test_non_one_to_one_outputs_scale_by_input_ratio(session: AsyncSession
     )
     await session.commit()
     assert await _tx_sum(session, fx["task"].id, Reason.COMPLETE, DIMS_OUT_A) == Decimal("300")
-    assert await _balance(session, fx["product"].id, fx["saw"].id, DIMS_OUT_A) == Decimal("300")
+    ops = await _route_ops(session, fx)
+    assert await _balance(
+        session, fx["product"].id, fx["saw"].id, DIMS_OUT_A,
+        completed_operations=ops,
+    ) == Decimal("300")
     await assert_no_stock_ledger_invariants_violations(session, context="transform-ratio")
 
 
@@ -584,10 +642,19 @@ async def test_legacy_material_without_dimensions_consumed_from_null_group(
     await session.commit()
 
     product_id, saw_id = fx["product"].id, fx["saw"].id
+    # «Legacy» здесь — только ось РАЗМЕРОВ (dimensions=None). Ось операций
+    # у материала задания заполнена маршрутом (ADR-0055), как и приход.
+    ops = await _route_ops(session, fx)
     assert await _tx_sum(session, fx["task"].id, Reason.TRANSFORM_CONSUME, None) == Decimal("100")
-    assert await _balance(session, product_id, saw_id, None) == Decimal("0")
-    assert await _balance(session, product_id, saw_id, DIMS_OUT_A) == Decimal("100")
-    assert await _balance(session, product_id, saw_id, DIMS_OUT_B) == Decimal("100")
+    assert await _balance(
+        session, product_id, saw_id, None, completed_operations=ops,
+    ) == Decimal("0")
+    assert await _balance(
+        session, product_id, saw_id, DIMS_OUT_A, completed_operations=ops,
+    ) == Decimal("100")
+    assert await _balance(
+        session, product_id, saw_id, DIMS_OUT_B, completed_operations=ops,
+    ) == Decimal("100")
     await assert_no_stock_ledger_invariants_violations(session, context="transform-legacy")
 
 
@@ -613,7 +680,10 @@ async def test_shortage_fail_rejects_operation_and_names_available(session: Asyn
     assert await _tx_sum(
         session, fx["task"].id, Reason.TRANSFORM_CONSUME, any_dims=True,
     ) == Decimal("0")
-    assert await _balance(session, fx["product"].id, fx["saw"].id, DIMS_IN) == Decimal("80")
+    ops = await _route_ops(session, fx)
+    assert await _balance(
+        session, fx["product"].id, fx["saw"].id, DIMS_IN, completed_operations=ops,
+    ) == Decimal("80")
 
 
 async def test_shortage_partial_clamps_to_available_balance(session: AsyncSession) -> None:
@@ -633,8 +703,11 @@ async def test_shortage_partial_clamps_to_available_balance(session: AsyncSessio
     await session.commit()
 
     product_id, saw_id = fx["product"].id, fx["saw"].id
+    ops = await _route_ops(session, fx)
     assert await _tx_sum(session, fx["task"].id, Reason.TRANSFORM_CONSUME, DIMS_IN) == Decimal("80")
-    assert await _balance(session, product_id, saw_id, DIMS_IN) == Decimal("0")
+    assert await _balance(
+        session, product_id, saw_id, DIMS_IN, completed_operations=ops,
+    ) == Decimal("0")
     assert await _tx_sum(session, fx["task"].id, Reason.COMPLETE, DIMS_OUT_A) == Decimal("80")
     assert await _tx_sum(session, fx["task"].id, Reason.COMPLETE, DIMS_OUT_B) == Decimal("80")
 
@@ -662,8 +735,11 @@ async def test_shortage_negative_remainder_drives_input_balance_minus(session: A
     await session.commit()
 
     product_id, saw_id = fx["product"].id, fx["saw"].id
+    ops = await _route_ops(session, fx)
     assert await _tx_sum(session, fx["task"].id, Reason.TRANSFORM_CONSUME, DIMS_IN) == Decimal("100")
-    assert await _balance(session, product_id, saw_id, DIMS_IN) == Decimal("-20")
+    assert await _balance(
+        session, product_id, saw_id, DIMS_IN, completed_operations=ops,
+    ) == Decimal("-20")
     # Выходы приходуются полностью по спецификации.
     assert await _tx_sum(session, fx["task"].id, Reason.COMPLETE, DIMS_OUT_A) == Decimal("100")
     assert await _tx_sum(session, fx["task"].id, Reason.COMPLETE, DIMS_OUT_B) == Decimal("100")
@@ -732,7 +808,10 @@ async def test_requires_lot_spg_blocks_negative_remainder_in_complete(session: A
         )
 
     # Минус не создан, ledger без записей порции.
-    assert await _balance(session, fx["product"].id, fx["saw"].id, DIMS_IN) == Decimal("80")
+    ops = await _route_ops(session, fx)
+    assert await _balance(
+        session, fx["product"].id, fx["saw"].id, DIMS_IN, completed_operations=ops,
+    ) == Decimal("80")
     assert await _tx_sum(
         session, fx["task"].id, Reason.TRANSFORM_CONSUME, any_dims=True,
     ) == Decimal("0")
@@ -755,8 +834,10 @@ async def test_shortage_strategy_enum_dict_is_single_source(session: AsyncSessio
         shortage_strategy=ShortageStrategy.negative_remainder,
     )
     await session.commit()
+    ops_enum = await _route_ops(session, fx_enum)
     assert await _balance(
         session, fx_enum["product"].id, fx_enum["saw"].id, DIMS_IN,
+        completed_operations=ops_enum,
     ) == Decimal("-20")
 
     # Неизвестная стратегия отклоняется до проводок.

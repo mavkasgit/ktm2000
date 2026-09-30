@@ -458,3 +458,110 @@ async def test_balances_ignores_legacy_sort_by_params(client, session: AsyncSess
     assert by_quantity.status_code == 200, by_quantity.text
     quantity_skus = [row["product_sku"] for row in by_quantity.json()["balances"]]
     assert quantity_skus == ["BAL-LEG-B", "BAL-LEG-C", "BAL-LEG-A"]
+
+# ─── колонка «Операции» (ADR-0055) ───────────────────────────────────────────
+
+
+async def _make_operation_section(
+    session: AsyncSession, *, code: str, name: str, sort_order: int,
+    op_code: str, op_name: str,
+) -> Section:
+    """Участок справочника с одной значимой производственной операцией."""
+    from app.models.route import SectionOperation
+
+    section = Section(
+        code=code, name=name, type="production", is_active=True, sort_order=sort_order,
+    )
+    session.add(section)
+    await session.flush()
+    session.add(SectionOperation(
+        section_id=section.id,
+        operation_code=op_code,
+        operation_name=op_name,
+        operation_type="production",
+        is_significant=True,
+        sort_order=0,
+    ))
+    await session.flush()
+    return section
+
+
+async def _seed_balance_with_ops(
+    session: AsyncSession, *, product: Product, location_id: int, user_id: int,
+    ops: list[str] | None,
+) -> None:
+    await StockCommandService().record(session, StockCommand(
+        product_id=product.id,
+        to_location_id=location_id,
+        quantity=Decimal("10"),
+        reason=Reason.MANUAL_IN,
+        completed_operations=ops,
+        created_by=user_id,
+    ))
+    await session.commit()
+
+
+@pytest.mark.asyncio
+async def test_balances_operations_column_sorts_by_dictionary_order(
+    client, session: AsyncSession,
+):
+    """Сортировка по колонке «Операции» идёт по порядку справочника.
+
+    Регрессия ADR-0055: SQL-выражение колонки ссылалось на неопределённое имя
+    и падало на ЛЮБОМ обращении к сортировке/фильтру — путь не был покрыт,
+    потому что остальные тесты остатка колонку «Операции» не трогали.
+    """
+    user = await _make_user(session)
+    client.headers["Authorization"] = f"Bearer {create_access_token(subject=user.email)}"
+    location = await _make_location(session, code="BAL-OPS-LOC", name="Ops Balance")
+
+    # Коды объявлены у РАЗНЫХ участков справочника: порядок подписи задаёт
+    # участок, а не алфавит кодов.
+    await _make_operation_section(
+        session, code="BAL-OPS-SEC-A", name="Участок A", sort_order=1,
+        op_code="OP_B", op_name="Вторая",
+    )
+    await _make_operation_section(
+        session, code="BAL-OPS-SEC-B", name="Участок B", sort_order=0,
+        op_code="OP_A", op_name="Первая",
+    )
+
+    with_ops = await _make_product(session, sku="BAL-OPS-1")
+    null_ops = await _make_product(session, sku="BAL-OPS-2")
+    empty_ops = await _make_product(session, sku="BAL-OPS-3")
+    await _seed_balance_with_ops(
+        session, product=with_ops, location_id=location.id, user_id=user.id,
+        ops=["OP_B", "OP_A"],
+    )
+    await _seed_balance_with_ops(
+        session, product=null_ops, location_id=location.id, user_id=user.id, ops=None,
+    )
+    await _seed_balance_with_ops(
+        session, product=empty_ops, location_id=location.id, user_id=user.id, ops=[],
+    )
+
+    resp = await client.get(
+        "/api/stock/balance",
+        params={"location_id": location.id, "sort": "operations:asc,sku:asc"},
+    )
+    assert resp.status_code == 200, resp.text
+    labels = [
+        [stage["operation_name"] for stage in row["completed_stages"]]
+        for row in resp.json()["balances"]
+    ]
+    assert labels[0] == ["Первая", "Вторая"], "порядок — по sort_order участков"
+    order = [", ".join(names) for names in labels]
+    assert order == ["Первая, Вторая", "", ""]
+
+    for label, expected_sku in (
+        ("Первая", "BAL-OPS-1"),
+        ("не зафиксировано", "BAL-OPS-2"),
+        ("без операций", "BAL-OPS-3"),
+    ):
+        filtered = await client.get(
+            "/api/stock/balance",
+            params={"location_id": location.id, "operations": label},
+        )
+        assert filtered.status_code == 200, filtered.text
+        skus = [row["product_sku"] for row in filtered.json()["balances"]]
+        assert skus == [expected_sku], (label, skus)

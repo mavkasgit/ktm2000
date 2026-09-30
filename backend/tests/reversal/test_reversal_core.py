@@ -27,6 +27,7 @@ from app.models.action_journal import Action, ActionStatus
 from app.models.work_task import WorkTask
 from app.reversal import errors
 from app.reversal.service import Blocker, reversal_service
+from app.services.material_operations import completed_operations_for_task
 from app.stock import StockCommand, StockCommandService
 from app.stock.models import Reason, StockBalance, StockTransaction
 from app.transfers.services import cancel_transfer, correct_transfer, transfer_send
@@ -434,6 +435,10 @@ async def test_correct_transfer_preserves_quality_state(
     user = ctx["user"]
     from_task = await session.get(WorkTask, ctx["from_task_id"])
     to_task = await session.get(WorkTask, ctx["to_task_id"])
+    # ADR-0055: scrap-приход — тот же материал, что и годный, только в
+    # quality_state=SCRAP; группа операций та же, что выведет plan-driven
+    # TRANSFER_SEND ниже (completed_operations_for_task).
+    from_ops = await completed_operations_for_task(session, from_task)
 
     # Scrap-остаток на участке-источнике.
     svc = StockCommandService()
@@ -445,6 +450,7 @@ async def test_correct_transfer_preserves_quality_state(
             reason=Reason.MANUAL_IN,
             to_location_id=from_task.section_id,
             quality_state=QualityState.SCRAP,
+            completed_operations=from_ops,
             created_by=user.id,
         ),
     )

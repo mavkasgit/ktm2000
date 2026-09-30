@@ -25,6 +25,22 @@ PREP_STOCK_SECTION_CODE = "PREP_STOCK"
 WIP_STOCK_SECTION_CODE = "WIP_STOCK"
 
 
+def _ops_codes(stages: list[dict]) -> list[str] | None:
+    """Коды операций из ``build_completed_stages_json`` для проводки остатка.
+
+    ADR-0055: остаток различает материал по пройденным операциям, поэтому
+    демо-приход обязан нести тот же список, что и последующая проводка по
+    маршруту. Пустой результат — ``None`` («состояние не зафиксировано»):
+    этапы без операций не дают основания утверждать, что маршрут пройден.
+    """
+    codes = sorted({
+        stage["operation_code"]
+        for stage in stages
+        if stage.get("operation_code")
+    })
+    return codes or None
+
+
 async def seed_demo_production(db: AsyncSession) -> dict:
     """Seed demo remainders, route stages, and defects for manual workflows.
 
@@ -235,6 +251,10 @@ async def seed_demo_production(db: AsyncSession) -> dict:
                 reason=Reason.MANUAL_IN,
                 to_location_id=target_sec.id,
                 quality_state=QualityState.GOOD,
+                # ADR-0055: остаток различает материал по пройденным
+                # операциям, поэтому демо-сырьё обязано лежать в той же
+                # группе, из которой его потом заберёт проводка по маршруту.
+                completed_operations=_ops_codes(completed_stages1),
                 created_by=actor_id,
                 comment="Demo stock for remainder 1",
                 action_id=(await ensure_action()).id,
@@ -275,6 +295,8 @@ async def seed_demo_production(db: AsyncSession) -> dict:
                 reason=Reason.MANUAL_IN,
                 to_location_id=target_sec.id,
                 quality_state=QualityState.GOOD,
+                # ADR-0055: см. остаток 1 — операции задают группу остатка.
+                completed_operations=_ops_codes(completed_stages2),
                 created_by=actor_id,
                 comment="Demo stock for remainder 2",
                 action_id=(await ensure_action()).id,

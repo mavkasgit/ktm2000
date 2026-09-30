@@ -193,6 +193,7 @@ async def _collect_footprint(db: AsyncSession, batch_id: int) -> _Footprint:
                 StockTransaction.from_quality_state,
                 StockTransaction.to_quality_state,
                 StockTransaction.dimensions,
+                StockTransaction.completed_operations,
                 StockTransaction.quantity,
                 StockTransaction.action_id,
                 Product.sku,
@@ -227,16 +228,23 @@ async def _collect_footprint(db: AsyncSession, batch_id: int) -> _Footprint:
 
 
 def _aggregate_stock_effects(rows, locations: dict[int, str]) -> list[dict]:
-    """Свод по проводкам батча: чистый эффект на каждый (артикул, локация).
+    """Свод по проводкам батча: чистый эффект на каждый ключ остатка.
 
     Это ровно то изменение остатка, которое увидит склад после удаления:
     входящие плюсуются, исходящие вычитаются, компенсации (reverses_id)
     сокращают эффект до нуля естественным сложением.
+
+    Ключ повторяет ключ StockBalance, иначе свод врёт: остатки одного
+    артикула и участка, но разной длины и разного признака операций —
+    разные строки баланса, и сводить их в одну цифру нельзя (ADR-0043 §3).
+    Признак операций в свод выводится явно — иначе оператор увидит две
+    несопоставимые строки с одинаковыми артикулом, локацией и длиной.
     """
-    deltas: dict[tuple[str, int, str | None], Decimal] = {}
-    skus: dict[tuple[str, int, str | None], str] = {}
-    dimensions: dict[tuple[str, int, str | None], dict | None] = {}
-    counts: dict[tuple[str, int, str | None], int] = {}
+    deltas: dict[tuple[str, int, str | None, str | None], Decimal] = {}
+    skus: dict[tuple[str, int, str | None, str | None], str] = {}
+    dimensions: dict[tuple[str, int, str | None, str | None], dict | None] = {}
+    completed_operations: dict[tuple[str, int, str | None, str | None], list | None] = {}
+    counts: dict[tuple[str, int, str | None, str | None], int] = {}
 
     for row in rows:
         sign = Decimal("-1") if row.reverses_id is not None else Decimal("1")
@@ -246,11 +254,17 @@ def _aggregate_stock_effects(rows, locations: dict[int, str]) -> list[dict]:
         ):
             if location_id is None:
                 continue
-            key = (row.sku, int(location_id), _dims_signature(row.dimensions))
+            key = (
+                row.sku,
+                int(location_id),
+                _dims_signature(row.dimensions),
+                _ops_signature(row.completed_operations),
+            )
             direction = Decimal("1") if location_id == row.to_location_id else Decimal("-1")
             deltas[key] = deltas.get(key, Decimal("0")) + direction * sign * row.quantity
             skus[key] = row.sku
             dimensions[key] = row.dimensions
+            completed_operations[key] = row.completed_operations
             counts[key] = counts.get(key, 0) + 1
 
     return sorted(
@@ -260,13 +274,19 @@ def _aggregate_stock_effects(rows, locations: dict[int, str]) -> list[dict]:
                 "location_id": key[1],
                 "location_code": locations.get(key[1], f"section:{key[1]}"),
                 "dimensions": dimensions[key],
+                "completed_operations": completed_operations[key],
                 "net_delta": format(deltas[key], "f"),
                 "ledger_entries": counts[key],
             }
             for key in deltas
             if deltas[key] != 0
         ),
-        key=lambda e: (e["product_sku"], e["location_code"], e["location_id"]),
+        key=lambda e: (
+            e["product_sku"],
+            e["location_code"],
+            e["location_id"],
+            repr(e["completed_operations"]),
+        ),
     )
 
 
@@ -274,6 +294,17 @@ def _dims_signature(dimensions: dict | None) -> str | None:
     if dimensions is None:
         return None
     return repr(sorted((str(k), str(v)) for k, v in dimensions.items()))
+
+
+def _ops_signature(ops: list | None) -> str | None:
+    """Подпись признака операций для ключа баланса — зеркало ``_dims_signature``.
+
+    ``None`` (состояние не зафиксировано) и ``[]`` (операций не было) —
+    разные значения баланса и потому разные подписи (ADR-0043 §2).
+    """
+    if ops is None:
+        return None
+    return repr(tuple(str(code) for code in ops))
 
 
 async def _force_blockers(db: AsyncSession, fp: _Footprint) -> list[dict]:
@@ -412,11 +443,17 @@ async def force_delete_import_batch(
         "filename": filename,
         "stock_effects": fp.stock_effects,
     }
-    # Ключи баланса, которые пересчитаем: обе стороны каждой удаляемой проводки.
-    # Габарит — dict и в set не годится, поэтому в ключе лежит его стабильная
-    # подпись, а сам dict разбирается через dims_by_signature.
-    balance_keys: set[tuple[int, int, QualityState, str | None]] = set()
+    # Ключи баланса, которые пересчитаем: обе стороны каждой удаляемой
+    # проводки. Ключ повторяет ключ StockBalance целиком (ADR-0043 §3):
+    # без признака операций удалённые проводки одного артикула и участка,
+    # но разных операций попали бы в один пересчёт, и строки баланса, которых
+    # удаление не касается, пересчитывались бы по чужой группе. Габарит и
+    # признак операций — dict/list и в set не годятся, поэтому в ключе лежат
+    # их стабильные подписи, а значения разбираются через dims_by_signature
+    # и ops_by_signature.
+    balance_keys: set[tuple[int, int, QualityState, str | None, str | None]] = set()
     dims_by_signature: dict[str | None, dict | None] = {}
+    ops_by_signature: dict[str | None, list | None] = {}
     if fp.tx_ids:
         for row in (
             await db.execute(
@@ -427,11 +464,14 @@ async def force_delete_import_batch(
                     StockTransaction.from_quality_state,
                     StockTransaction.to_quality_state,
                     StockTransaction.dimensions,
+                    StockTransaction.completed_operations,
                 ).where(StockTransaction.id.in_(fp.tx_ids))
             )
         ).all():
             signature = _dims_signature(row.dimensions)
+            ops_signature = _ops_signature(row.completed_operations)
             dims_by_signature.setdefault(signature, row.dimensions)
+            ops_by_signature.setdefault(ops_signature, row.completed_operations)
             if row.from_location_id is not None:
                 balance_keys.add(
                     (
@@ -439,6 +479,7 @@ async def force_delete_import_batch(
                         int(row.from_location_id),
                         _quality(row.from_quality_state),
                         signature,
+                        ops_signature,
                     )
                 )
             if row.to_location_id is not None:
@@ -448,6 +489,7 @@ async def force_delete_import_batch(
                         int(row.to_location_id),
                         _quality(row.to_quality_state),
                         signature,
+                        ops_signature,
                     )
                 )
 
@@ -581,9 +623,14 @@ async def force_delete_import_batch(
     )
 
     projection = StockProjectionManager()
-    for product_id, location_id, quality_state, signature in balance_keys:
+    for product_id, location_id, quality_state, signature, ops_signature in balance_keys:
         await projection.recompute_balance_key(
-            db, product_id, location_id, quality_state, dims_by_signature[signature]
+            db,
+            product_id,
+            location_id,
+            quality_state,
+            dims_by_signature[signature],
+            ops_by_signature[ops_signature],
         )
 
     now = datetime.now(timezone.utc)

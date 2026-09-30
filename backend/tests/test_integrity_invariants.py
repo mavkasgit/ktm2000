@@ -85,7 +85,7 @@ _STOCK_LEDGER_INVARIANT_QUERIES: list[tuple[str, str]] = [
         "S1_stock_balance_equals_sum_of_transactions",
         """
         SELECT sb.product_id, sb.location_id, sb.quality_state, sb.dimensions,
-               sb.balance_qty
+               sb.completed_operations, sb.balance_qty
                  - COALESCE(SUM(CASE WHEN st.to_location_id   = sb.location_id
                                           AND st.to_quality_state   = sb.quality_state
                                      THEN st.quantity END), 0)
@@ -97,15 +97,22 @@ _STOCK_LEDGER_INVARIANT_QUERIES: list[tuple[str, str]] = [
         LEFT JOIN stock_transactions st
           ON st.product_id = sb.product_id
          AND st.dimensions IS NOT DISTINCT FROM sb.dimensions
+         -- ADR-0055: пятая ось ключа баланса. Без неё строки одного участка с
+         -- разными операциями сводились бы в один LEFT JOIN и S1 ругался бы на
+         -- ложное нарушение для каждой разделившейся группы.
+         AND (st.completed_operations IS NOT DISTINCT FROM sb.completed_operations
+              OR st.completed_operations = 'null'::jsonb AND sb.completed_operations IS NULL
+              OR sb.completed_operations = 'null'::jsonb AND st.completed_operations IS NULL)
          AND (st.to_location_id = sb.location_id OR st.from_location_id = sb.location_id)
-        GROUP BY sb.product_id, sb.location_id, sb.quality_state, sb.dimensions, sb.balance_qty
+        GROUP BY sb.product_id, sb.location_id, sb.quality_state, sb.dimensions,
+                 sb.completed_operations, sb.balance_qty
         HAVING sb.balance_qty
                  != COALESCE(SUM(CASE WHEN st.to_location_id   = sb.location_id
-                                           AND st.to_quality_state   = sb.quality_state
-                                      THEN st.quantity END), 0)
+                                          AND st.to_quality_state   = sb.quality_state
+                                     THEN st.quantity END), 0)
                   - COALESCE(SUM(CASE WHEN st.from_location_id = sb.location_id
-                                           AND st.from_quality_state = sb.quality_state
-                                      THEN st.quantity END), 0)
+                                          AND st.from_quality_state = sb.quality_state
+                                     THEN st.quantity END), 0)
         """,
     ),
     (

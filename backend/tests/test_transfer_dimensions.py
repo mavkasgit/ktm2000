@@ -110,12 +110,59 @@ async def _stock_ready_task(client, user: User, section_id: int) -> int:
     return items[0]["task_id"]
 
 
+async def _seed_transform_input(
+    session: AsyncSession,
+    *,
+    task: WorkTask,
+    quantity: Decimal,
+    length_mm: int,
+    user: User,
+) -> None:
+    """Вход трансформа на участок: материал пришёл с ПРЕДЫДУЩЕГО этапа (ADR-0002).
+
+    ADR-0055: списание точное, признак берётся тем же резолвером, что и
+    ``TRANSFORM_CONSUME`` (операции маршрута до предыдущего этапа). Наивный
+    ``MANUAL_IN`` без признака лёг бы в ``NULL``-группу, и раскрой падал бы
+    с «введено 100, доступно 0».
+    """
+    from app.services.material_operations import (
+        completed_operations_for_task,
+        previous_stage_sequence,
+    )
+
+    previous_sequence = await previous_stage_sequence(session, task)
+    ops = await completed_operations_for_task(
+        session,
+        task,
+        through_sequence=previous_sequence if previous_sequence is not None else 0,
+    )
+    await StockCommandService().record(
+        session,
+        StockCommand(
+            product_id=task.product_id,
+            from_location_id=None,
+            to_location_id=task.section_id,
+            quantity=quantity,
+            reason=Reason.MANUAL_IN,
+            dimensions={"length_mm": length_mm},
+            completed_operations=ops,
+            created_by=user.id,
+        ),
+    )
+    await session.commit()
+
+
 async def _complete_prod1_task(session: AsyncSession, *, sku: str, task: WorkTask, user: User) -> None:
     """Выдать материал на prod1 и завершить его (как _complete_source_tasks)."""
+    from app.services.material_operations import completed_operations_for_task
+
     stock = Section(code=f"{sku}-STK", name="Stock", type="raw_stock", is_active=True, sort_order=0)
     session.add(stock)
     await session.flush()
     svc = StockCommandService()
+    # Признак берём у того же источника, что и плановое ``TRANSFER_RECEIVE``
+    # (ADR-0043 §2): иначе приход лёг бы в NULL-группу (ADR-0055).
+    ops = await completed_operations_for_task(session, task)
     await svc.record(
         session,
         StockCommand(
@@ -124,6 +171,7 @@ async def _complete_prod1_task(session: AsyncSession, *, sku: str, task: WorkTas
             to_location_id=stock.id,
             quantity=task.planned_quantity,
             reason=Reason.MANUAL_IN,
+            completed_operations=ops,
             created_by=user.id,
         ),
     )
@@ -942,20 +990,9 @@ async def test_ready_cutting_transferable_capped_by_produced(client, session) ->
     await _release_via_take_to_work(client, fx["position"].id)
     saw_task = (await _tasks_for_position(session, fx["position"].id))[0]
 
-    svc = StockCommandService()
-    await svc.record(
-        session,
-        StockCommand(
-            product_id=saw_task.product_id,
-            from_location_id=None,
-            to_location_id=saw_task.section_id,
-            quantity=Decimal("100"),
-            reason=Reason.MANUAL_IN,
-            dimensions={"length_mm": 2700},
-            created_by=user.id,
-        ),
+    await _seed_transform_input(
+        session, task=saw_task, quantity=Decimal("100"), length_mm=2700, user=user
     )
-    await session.commit()
     await complete_task(
         session,
         task_id=saw_task.id,
@@ -999,20 +1036,9 @@ async def test_auto_transfer_next_creates_per_output_transfers(client, session) 
     await _release_via_take_to_work(client, fx["position"].id)
     saw_task = (await _tasks_for_position(session, fx["position"].id))[0]
 
-    svc = StockCommandService()
-    await svc.record(
-        session,
-        StockCommand(
-            product_id=saw_task.product_id,
-            from_location_id=None,
-            to_location_id=saw_task.section_id,
-            quantity=Decimal("100"),
-            reason=Reason.MANUAL_IN,
-            dimensions={"length_mm": 2700},
-            created_by=user.id,
-        ),
+    await _seed_transform_input(
+        session, task=saw_task, quantity=Decimal("100"), length_mm=2700, user=user
     )
-    await session.commit()
     await complete_task(
         session,
         task_id=saw_task.id,
@@ -1066,20 +1092,9 @@ async def test_auto_transfer_next_creates_receiving_task_per_output_dimension(cl
     await _release_via_take_to_work(client, fx["position"].id)
     saw_task = (await _tasks_for_position(session, fx["position"].id))[0]
 
-    svc = StockCommandService()
-    await svc.record(
-        session,
-        StockCommand(
-            product_id=saw_task.product_id,
-            from_location_id=None,
-            to_location_id=saw_task.section_id,
-            quantity=Decimal("100"),
-            reason=Reason.MANUAL_IN,
-            dimensions={"length_mm": 2700},
-            created_by=user.id,
-        ),
+    await _seed_transform_input(
+        session, task=saw_task, quantity=Decimal("100"), length_mm=2700, user=user
     )
-    await session.commit()
     await complete_task(
         session,
         task_id=saw_task.id,
@@ -1134,20 +1149,9 @@ async def test_auto_transfer_next_duplicate_output_size_does_not_overflow(client
     await _release_via_take_to_work(client, fx["position"].id)
     saw_task = (await _tasks_for_position(session, fx["position"].id))[0]
 
-    svc = StockCommandService()
-    await svc.record(
-        session,
-        StockCommand(
-            product_id=saw_task.product_id,
-            from_location_id=None,
-            to_location_id=saw_task.section_id,
-            quantity=Decimal("100"),
-            reason=Reason.MANUAL_IN,
-            dimensions={"length_mm": 2700},
-            created_by=user.id,
-        ),
+    await _seed_transform_input(
+        session, task=saw_task, quantity=Decimal("100"), length_mm=2700, user=user
     )
-    await session.commit()
     # Частичная порция: раскроено 50 заготовок → произведено 50 × 900.
     await complete_task(
         session,
@@ -1270,8 +1274,12 @@ async def test_transfer_history_carries_dimensions(client, session) -> None:
 async def _complete_task_generic(session: AsyncSession, *, task: WorkTask, user: User) -> None:
     """Выдать материал на задачу и завершить её (как _complete_prod1_task)."""
     from app.models.work_task import WorkTaskStatus
+    from app.services.material_operations import completed_operations_for_task
     from app.stock.services import StockCommand, StockCommandService
 
+    # Признак берём у того же источника, что и плановая ``COMPLETE``
+    # (ADR-0043 §2): иначе приход лёг бы в NULL-группу (ADR-0055).
+    ops = await completed_operations_for_task(session, task)
     svc = StockCommandService()
     await svc.record(
         session,
@@ -1281,6 +1289,7 @@ async def _complete_task_generic(session: AsyncSession, *, task: WorkTask, user:
             to_location_id=task.section_id,
             quantity=task.planned_quantity,
             reason=Reason.MANUAL_IN,
+            completed_operations=ops,
             created_by=user.id,
             # Габарит материала (ADR-0001): физический остаток по размеру.
             dimensions=task.dimensions,

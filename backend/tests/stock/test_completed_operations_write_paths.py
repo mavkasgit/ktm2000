@@ -23,6 +23,10 @@ from app.models.defect import DefectDecisionType
 from app.models.section import Section
 from app.models.work_task import WorkTask
 from app.reversal.service import reversal_service
+from app.services.material_operations import (
+    completed_operations_for_task,
+    previous_stage_sequence,
+)
 from app.services.plan_generation import create_release_batch, release_batch
 from app.services.route_storage_classifier import (
     SECTION_TYPE_FINISHED_STOCK,
@@ -102,6 +106,24 @@ async def _only_tx(
     return found[0]
 
 
+async def ops_of_task(session: AsyncSession, task: WorkTask) -> list[str]:
+    """Признак, который ``record()`` выведет для плановой проводки задания."""
+    ops = await completed_operations_for_task(session, task)
+    assert ops is not None, f"маршрут задания #{task.id} не разрешён в ops-признак"
+    return ops
+
+
+async def ops_of_task_through_previous(session: AsyncSession, task: WorkTask) -> list[str]:
+    """Признак ДО предыдущего этапа — вход трансформации, возврат остатка."""
+    previous_sequence = await previous_stage_sequence(session, task)
+    ops = await completed_operations_for_task(
+        session, task,
+        through_sequence=previous_sequence if previous_sequence is not None else 0,
+    )
+    assert ops is not None, f"маршрут задания #{task.id} не разрешён в ops-признак"
+    return ops
+
+
 async def _seed_balance(
     session: AsyncSession,
     *,
@@ -110,7 +132,15 @@ async def _seed_balance(
     location_id: int,
     qty: Decimal,
     dimensions: dict | None = None,
+    ops: list[str],
 ) -> None:
+    """Приход в ops-группу, из которой материал потом спишет маршрут.
+
+    ADR-0055: списание точное, остаток ищется по полному ключу, включая
+    признак операций. ``ops`` обязан совпадать с тем, что выведет
+    ``record()`` для последующей плановой проводки, иначе приход ляжет в
+    чужую группу и списание получит «available 0».
+    """
     await StockCommandService().record(
         session,
         StockCommand(
@@ -119,23 +149,44 @@ async def _seed_balance(
             quantity=qty,
             reason=Reason.MANUAL_IN,
             dimensions=dimensions,
+            completed_operations=ops,
             created_by=user_id,
         ),
     )
     await session.commit()
 
 
+
 async def _issue_to_task(
-    session: AsyncSession, fx: dict, task: WorkTask, *, qty: Decimal
+    session: AsyncSession,
+    fx: dict,
+    task: WorkTask,
+    *,
+    qty: Decimal,
+    ops: list[str] | None = None,
 ) -> None:
-    """Выдать материал на задание: приход на склад + TRANSFER_RECEIVE на этап."""
+    """Выдать материал на задание: приход на склад + TRANSFER_RECEIVE на этап.
+
+    По умолчанию склад и участок засеваются в группе признака ПРЕДЫДУЩЕГО
+    этапа: материал, пришедший на участок, ещё не прошёл операции своего
+    этапа, и именно из этой группы его списывают завершение, брак и возврат
+    остатка (ADR-0055). Группу своего этапа создаёт первое же завершение.
+
+    ``ops`` переопределяет группу — например для материала, который на
+    секцию этапа уже пришёл выпущенным.
+    """
     raw = fx["sections"][0]
+    issue_ops = (
+        ops if ops is not None
+        else await ops_of_task_through_previous(session, task)
+    )
     await _seed_balance(
         session,
         user_id=fx["user"].id,
         product_id=fx["product"].id,
         location_id=raw.id,
         qty=qty,
+        ops=issue_ops,
     )
     await record_transfer_receive(
         session,
@@ -144,6 +195,7 @@ async def _issue_to_task(
         to_location_id=task.section_id,
         quantity=qty,
         task_id=task.id,
+        completed_operations=issue_ops,
         created_by=fx["user"].id,
     )
     await session.commit()
@@ -210,6 +262,7 @@ async def test_transfer_out_of_prep_stock_carries_all_route_operations(
         product_id=fx["product"].id,
         location_id=prep.section_id,
         qty=Decimal("100"),
+        ops=await ops_of_task(session, prep),
     )
 
     result = await transfer_send(
@@ -253,6 +306,7 @@ async def test_transfer_out_of_raw_stock_carries_only_issue_raw(
         product_id=fx["product"].id,
         location_id=raw.section_id,
         qty=Decimal("100"),
+        ops=await ops_of_task(session, raw),
     )
 
     result = await transfer_send(
@@ -279,7 +333,12 @@ async def test_transfer_out_of_raw_stock_carries_only_issue_raw(
 async def test_complete_task_good_and_scrap_carry_task_stage_operations(
     session: AsyncSession,
 ) -> None:
-    """COMPLETE и SCRAP одного завершения несут операции этапа задания."""
+    """Выпуск несёт операции своего этапа, списание входа и брак — предыдущего.
+
+    Завершение переводит материал из группы предыдущего этапа в группу
+    своего (ADR-0055), поэтому у одного завершения два признака: списанный
+    вход — «до этапа», выпущенное годное — «включая этап».
+    """
     fx = await build_operation_route(session, sku="COPTASK", stages=TASK_STAGES)
     press = fx["tasks"][1]
     await _issue_to_task(session, fx, press, qty=Decimal("100"))
@@ -296,12 +355,19 @@ async def test_complete_task_good_and_scrap_carry_task_stage_operations(
     await session.commit()
     await assert_no_invariants_violations(session, context="complete-task-ops")
 
-    expected = ops_through(TASK_STAGES, 2)
-    assert expected == ["ISSUE_RAW", "PRESS_COMB", "PRESS_WINDOW"]
+    own_expected = ops_through(TASK_STAGES, 2)
+    previous_expected = ops_through(TASK_STAGES, 1)
+    assert own_expected == ["ISSUE_RAW", "PRESS_COMB", "PRESS_WINDOW"]
+    assert previous_expected == ["ISSUE_RAW"]
+
     complete_tx = await _only_tx(session, reason=Reason.COMPLETE, task_id=press.id)
+    consume_tx = await _only_tx(
+        session, reason=Reason.TRANSFORM_CONSUME, task_id=press.id
+    )
     scrap_tx = await _only_tx(session, reason=Reason.SCRAP, task_id=press.id)
-    assert complete_tx.completed_operations == expected
-    assert scrap_tx.completed_operations == expected
+    assert complete_tx.completed_operations == own_expected
+    assert consume_tx.completed_operations == previous_expected
+    assert scrap_tx.completed_operations == previous_expected
     assert result["defect_id"] is not None
 
 
@@ -327,7 +393,19 @@ async def test_defect_decide_carries_expected_operations(
     """Решение по дефекту записывает признак по направлению движения материала."""
     fx = await build_operation_route(session, sku=f"DEF{decision.value.upper()}", stages=TASK_STAGES)
     shot = fx["tasks"][2]
-    await _issue_to_task(session, fx, shot, qty=Decimal("100"))
+    # Участок «Дробеструй» законно несёт ДВЕ ops-группы (ADR-0055):
+    # прошедший SHOT материал (его списывают брак/доработка на текущем
+    # этапе) и материал, пришедший с пресса и SHOT ещё не проходивший
+    # (его возвращают назад по маршруту). Обе группы нужны этому тесту,
+    # потому что решения по дефекту параметризованы по обоим направлениям.
+    await _issue_to_task(
+        session, fx, shot, qty=Decimal("100"),
+        ops=await ops_of_task(session, shot),
+    )
+    await _issue_to_task(
+        session, fx, shot, qty=Decimal("100"),
+        ops=await ops_of_task_through_previous(session, shot),
+    )
     defect_id = await _open_defect(session, fx, shot, qty=Decimal("5"))
 
     await defect_decide(
@@ -369,7 +447,12 @@ async def test_return_remainder_carries_previous_stage_operations(
     """
     fx = await build_operation_route(session, sku="RETREM", stages=TASK_STAGES)
     shot = fx["tasks"][2]
-    await _issue_to_task(session, fx, shot, qty=Decimal("100"))
+    # Возврат остатка списывает материал, не прошедший «Дробеструй», —
+    # группа ДО своего этапа.
+    await _issue_to_task(
+        session, fx, shot, qty=Decimal("100"),
+        ops=await ops_of_task_through_previous(session, shot),
+    )
 
     resp = await client.post(
         "/api/shopfloor/remainders/return",
@@ -414,6 +497,7 @@ async def test_transform_consume_and_outputs_carry_stage_appropriate_operations(
         location_id=saw.section_id,
         qty=Decimal("100"),
         dimensions=dict(DIMS_IN),
+        ops=await ops_of_task_through_previous(session, saw),
     )
 
     await complete_task(
@@ -456,7 +540,9 @@ async def test_reverse_transfer_send_mirrors_completed_operations(
         product_id=fx["product"].id,
         location_id=prep.section_id,
         qty=Decimal("100"),
+        ops=await ops_of_task(session, prep),
     )
+
     result = await transfer_send(
         session,
         from_task_id=prep.id,
@@ -508,7 +594,9 @@ async def test_amend_transfer_send_mirrors_completed_operations(
         product_id=fx["product"].id,
         location_id=prep.section_id,
         qty=Decimal("100"),
+        ops=await ops_of_task(session, prep),
     )
+
     result = await transfer_send(
         session,
         from_task_id=prep.id,

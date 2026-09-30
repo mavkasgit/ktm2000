@@ -4,6 +4,7 @@ import { useQuery } from "@tanstack/react-query";
 import {
   formatQualityStateLabel,
   formatDimensionsLabel,
+  formatCompletedOperationsLabel,
   getStockBalances,
 } from "@/shared/api/stock";
 import type { StockBalanceEntry, StockBalancesListResponse } from "@/shared/api/stock";
@@ -25,10 +26,7 @@ import { useDebouncedValue } from "@/shared/lib/useDebouncedValue";
 import { fmtQty } from "@/shared/lib/quantityFormat";
 
 function getBalanceOperationsLabel(balance: StockBalanceEntry): string {
-  if (balance.completed_stages?.length) {
-    return balance.completed_stages.map((stage) => stage.operation_name).join(", ");
-  }
-  return "—";
+  return formatCompletedOperationsLabel(balance.completed_operations, balance.completed_stages);
 }
 
 function getBalanceCellValue(balance: StockBalanceEntry, field: BalanceSortField): string {
@@ -320,7 +318,9 @@ export function StockBalancesPanel({
                           {b.completed_stages && b.completed_stages.length > 0 ? (
                             <RouteStepsDisplay steps={b.completed_stages} compact showIcons={false} />
                           ) : (
-                            <span className="text-xs text-muted-foreground">—</span>
+                            <span className="text-xs text-muted-foreground">
+                              {getBalanceOperationsLabel(b)}
+                            </span>
                           )}
                         </td>
                         <td className={BALANCE_CELL_CLASS}>

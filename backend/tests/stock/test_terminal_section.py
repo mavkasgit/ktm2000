@@ -27,6 +27,7 @@ from app.models import Product, ProductType, Section, User, UserRole
 from app.models.action_journal import Action
 from app.models.route import SectionOperation
 from app.seeds.sections import SECTIONS_DATA
+from app.services.material_operations import completed_operations_for_task
 from app.services.route_storage_classifier import (
     OPERATIONAL_STOCK_TYPES,
     SECTION_TYPE_TERMINAL,
@@ -47,6 +48,7 @@ from app.stock import (
     StockTransaction,
 )
 from app.stock.import_service import resolve_target_section
+from app.stock.services import completed_operations_match_clause
 from tests.stock.test_shopfloor_stage3 import _setup_minimal_route
 from tests.test_integrity_invariants import assert_no_invariants_violations
 
@@ -92,12 +94,23 @@ async def _balance(
     product_id: int,
     location_id: int,
     quality_state: QualityState = QualityState.GOOD,
+    completed_operations: list[str] | None = None,
 ) -> Decimal:
+    """Остаток строки баланса.
+
+    ADR-0055: ось ``completed_operations`` — часть ключа, поэтому поиск без
+    неё на материале с несколькими группами даёт ``MultipleResultsFound``.
+    ``None`` (по умолчанию) — честный запрос NULL-группы; вызывающий, который
+    знает маршрут, передаёт выведенное значение.
+    """
     row = await session.execute(
         select(StockBalance).where(
             StockBalance.product_id == product_id,
             StockBalance.location_id == location_id,
             StockBalance.quality_state == quality_state,
+            completed_operations_match_clause(
+                StockBalance.completed_operations, completed_operations,
+            ),
         )
     )
     bal = row.scalar_one_or_none()
@@ -379,11 +392,17 @@ async def test_final_release_from_terminal_with_legacy_balance_rejected(
     """
     fx, shipped = await _terminal_task_with_shipped_material(session, sku="TSG2")
     task = fx["task"]
+    # ADR-0055: форс-мажорная строка должна лежать в ТОЙ ЖЕ группе
+    # операций, что и ledger этого материала (выводится из маршрута
+    # задания), иначе она не «остаток, который вымел бы rebuild», а
+    # отдельная ось, нарушающая S1.
+    legacy_ops = await completed_operations_for_task(session, task)
     session.add(StockBalance(
         product_id=fx["product"].id,
         location_id=shipped.id,
         quality_state=QualityState.GOOD,
         balance_qty=Decimal("8"),
+        completed_operations=legacy_ops,
     ))
     await session.commit()
 
@@ -397,8 +416,14 @@ async def test_final_release_from_terminal_with_legacy_balance_rejected(
         )
 
     # Материал остался на терминале и НЕ всплыл на складе ГП.
-    assert (await _balance(session, fx["product"].id, shipped.id)) == Decimal("8")
-    assert (await _balance(session, fx["product"].id, fx["fg"].id)) == Decimal("0")
+    assert (await _balance(
+        session, fx["product"].id, shipped.id,
+        completed_operations=legacy_ops,
+    )) == Decimal("8")
+    assert (await _balance(
+        session, fx["product"].id, fx["fg"].id,
+        completed_operations=legacy_ops,
+    )) == Decimal("0")
     assert (await session.execute(
         select(func.count(StockTransaction.id)).where(
             StockTransaction.task_id == task.id,

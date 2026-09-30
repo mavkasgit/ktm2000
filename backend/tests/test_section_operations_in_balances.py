@@ -21,9 +21,13 @@ from app.models.production_plan import (
 from app.models.route import ProductionRoute, RouteOperation, RouteStage, SectionOperation
 from app.models.spg import SpgSection, StorageProductionGroup
 from app.models.work_task import WorkTask, WorkTaskStatus
+from app.services.material_operations import (
+    completed_operations_for_task,
+    previous_stage_sequence,
+)
 from app.stock import QualityState, Reason, StockCommand, StockCommandService
 from app.transfers.services import transfer_send
-from tests.stock.helpers import record_transfer_receive
+from tests.stock.helpers import record_transfer_receive, seed_stock_for_task
 from tests.test_integrity_invariants import _release_via_take_to_work
 
 
@@ -165,15 +169,16 @@ async def _prepare_source_task_ready(
     await session.flush()
 
     svc = StockCommandService()
-    await svc.record(
+    # ADR-0055: приход на складской участок сеется в ops-группе маршрута
+    # исходного задания — ровно ту, которую выведет record() для
+    # TRANSFER_RECEIVE ниже и из которой потом спишет transfer_send.
+    await seed_stock_for_task(
         session,
-        StockCommand(
-            product_id=src.product_id,
-            to_location_id=stock.id,
-            quantity=src.planned_quantity,
-            reason=Reason.MANUAL_IN,
-            created_by=setup["user"].id,
-        ),
+        product_id=src.product_id,
+        task=src,
+        quantity=src.planned_quantity,
+        location_id=stock.id,
+        created_by=setup["user"].id,
     )
     await record_transfer_receive(
         session,
@@ -249,17 +254,23 @@ async def test_complete_task_populates_completed_stages_on_section_balance(
     stock = Section(code="CMPOPS-STK", name="Stock", type="raw_stock", is_active=True, sort_order=0)
     session.add(stock)
     await session.flush()
-
-    svc = StockCommandService()
-    await svc.record(
+    # ADR-0055: материал на производственном участке лежит в группе
+    # ПРЕДЫДУЩЕГО этапа — именно её списывает complete_task. Сид обязан
+    # писать ту же группу: seed по своему этапу оставил бы выпуск без входа
+    # и уронил бы завершение в «Insufficient stock» на полном участке.
+    previous_sequence = await previous_stage_sequence(session, task)
+    input_ops = await completed_operations_for_task(
+        session, task,
+        through_sequence=previous_sequence if previous_sequence is not None else 0,
+    )
+    await seed_stock_for_task(
         session,
-        StockCommand(
-            product_id=task.product_id,
-            to_location_id=stock.id,
-            quantity=task.planned_quantity,
-            reason=Reason.MANUAL_IN,
-            created_by=setup["user"].id,
-        ),
+        product_id=task.product_id,
+        task=task,
+        quantity=task.planned_quantity,
+        location_id=stock.id,
+        created_by=setup["user"].id,
+        through_previous_stage=True,
     )
     await record_transfer_receive(
         session,
@@ -269,6 +280,7 @@ async def test_complete_task_populates_completed_stages_on_section_balance(
         quantity=task.planned_quantity,
         task_id=task.id,
         created_by=setup["user"].id,
+        completed_operations=input_ops,
     )
     task.status = WorkTaskStatus.in_progress
     await session.commit()
@@ -291,6 +303,18 @@ async def test_complete_task_populates_completed_stages_on_section_balance(
     )
     assert resp.status_code == 200, resp.text
     balances = resp.json()["balances"]
-    assert len(balances) == 1
-    stage_names = [stage["operation_name"] for stage in balances[0]["completed_stages"]]
+    # ADR-0055: участок держит ДВЕ группы одного артикула — выпущенную
+    # (признак своего этапа) и ещё не раскрытую (признак предыдущего этапа,
+    # у первого этапа — «операций не было»). Слитой строки ``10`` нет.
+    assert len(balances) == 2, balances
+    by_ops = {tuple(row["completed_operations"] or []): row for row in balances}
+    assert set(by_ops) == {(), ("SAW_CUT",)}, by_ops
+
+    released = by_ops[("SAW_CUT",)]
+    assert Decimal(released["balance_qty"]) == Decimal("6")
+    stage_names = [stage["operation_name"] for stage in released["completed_stages"]]
     assert stage_names == ["Пила"]
+
+    not_yet = by_ops[()]
+    assert Decimal(not_yet["balance_qty"]) == Decimal("4")
+    assert not_yet["completed_stages"] == []

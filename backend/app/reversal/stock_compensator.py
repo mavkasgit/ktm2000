@@ -2,8 +2,9 @@
 
 Покрывает стоковые действия ``transfer_send`` и ``transfer_cancel``
 (``ref_id`` = id Transfer). Откат — зеркальные проводки 1:1 (те же
-product/from/to/dimensions/quantity, локации перевёрнуты,
-``reverses_id`` = исходная проводка), без партионности (ADR-0001).
+product/from/to/dimensions/completed_operations/quantity, локации
+перевёрнуты, ``reverses_id`` = исходная проводка), без партионности
+(ADR-0001).
 
 Зеркальная механика (план/покрытие/исполнение) выделена в
 ``MirrorLedgerMixin`` и переиспользуется универсальным
@@ -32,9 +33,19 @@ from app.reversal.resolver import (
     resolve_action,
 )
 from app.stock.models import QualityState, Reason, StockBalance, StockTransaction
-from app.stock.services import StockCommand, StockCommandService, dimensions_match_clause
+from app.stock.services import (
+    StockCommand,
+    StockCommandService,
+    completed_operations_match_clause,
+    dimensions_match_clause,
+)
 
 _STOCK_ACTION_TYPES = ("transfer_send", "transfer_cancel")
+
+#: Ключ покрытия: остаток баланса — это 5 осей (ADR-0043 §3), и признак
+#: операций в ключе не меньше обязателен, чем габарит: материал, прошедший
+#: разные операции на одном участке, лежит в РАЗНЫХ строках баланса.
+_CoverageKey = tuple[int, int, QualityState, object, object]
 
 
 class MirrorLedgerMixin:
@@ -105,14 +116,25 @@ class MirrorLedgerMixin:
     @staticmethod
     def _coverage_needs(
         entries: list[PlannedEntry],
-    ) -> tuple[dict[tuple[int, int, QualityState, object], Decimal], dict[object, dict | None]]:
-        """Потребности покрытий по ключу (product, location, quality, dims)."""
-        need: dict[tuple[int, int, QualityState, object], Decimal] = {}
+    ) -> tuple[dict[_CoverageKey, Decimal], dict[object, dict | None]]:
+        """Потребности покрытий по ключу (product, location, quality, dims, ops).
+
+        Признак операций — полноправная часть ключа: компенсация забирает
+        материал с той строки баланса, на которой он лежал, и суммирование
+        потребностей по разным признакам склеило бы несопоставимое.
+        """
+        need: dict[_CoverageKey, Decimal] = {}
         dims_by_key: dict[object, dict | None] = {}
         for e in entries:
             if e.from_location_id is None:
                 continue
-            key = (e.product_id, e.from_location_id, e.quality_state, _dims_key(e.dimensions))
+            key = (
+                e.product_id,
+                e.from_location_id,
+                e.quality_state,
+                _dims_key(e.dimensions),
+                _ops_key(e.completed_operations),
+            )
             dims_by_key.setdefault(_dims_key(e.dimensions), e.dimensions)
             need[key] = need.get(key, Decimal("0")) + e.quantity
         return need, dims_by_key
@@ -120,17 +142,24 @@ class MirrorLedgerMixin:
     async def _deficit_for(
         self,
         db: AsyncSession,
-        need: dict[tuple[int, int, QualityState, object], Decimal],
+        need: dict[_CoverageKey, Decimal],
         dims_by_key: dict[object, dict | None],
         *,
-        adjustments: dict[tuple[int, int, QualityState, object], Decimal] | None = None,
+        adjustments: dict[_CoverageKey, Decimal] | None = None,
     ) -> Decimal:
         """Дефицит по потребностям против текущих остатков; ``adjustments``
         — чистовый эффект ещё не применённых проводок на ключ (+приход /
-        −расход), например компенсаций в preview_amend (D7-A)."""
+        −расход), например компенсаций в preview_amend (D7-A).
+
+        Сумма берётся по ПОЛНОМУ ключу баланса: продукт, локация, качество,
+        габарит и признак операций. Ни одна из осей не суммируется «на
+        глаз» — остаток, разнесённый по операциям, нельзя сложить в один
+        числитель и сравнить с потребностью, которая относится к одному
+        признаку (ADR-0043 §3).
+        """
         deficit = Decimal("0")
         for key, qty in need.items():
-            product_id, location_id, qs, dk = key
+            product_id, location_id, qs, dk, ok = key
             available_q = (
                 select(func.coalesce(func.sum(StockBalance.balance_qty), 0)).where(
                     StockBalance.location_id == location_id,
@@ -138,6 +167,9 @@ class MirrorLedgerMixin:
                     StockBalance.quality_state == qs,
                     StockBalance.balance_qty > 0,
                     dimensions_match_clause(StockBalance.dimensions, dims_by_key.get(dk)),
+                    completed_operations_match_clause(
+                        StockBalance.completed_operations, _ops_value(ok)
+                    ),
                 )
             )
             available = ((await db.scalar(available_q)) or Decimal("0")) + (
@@ -384,10 +416,17 @@ class StockCompensator(MirrorLedgerMixin):
 
         Новая передача списывает склад-источник; если ``comp_entries``
         заданы (preview — компенсации ещё не применены), к доступному
-        остатку добавляется их чистовый эффект на каждый ключ.
+        остатку добавляется их чистовой эффект на каждый ключ.
+
+        Признак операций синтетической потребности НЕ угадывается: он
+        выводится тем же вызовом, которым его выведёт реальная запись
+        ``StockCommandService.record`` для этого задания (ADR-0043 §2 —
+        единственный источник признака плановой проводки, обратное
+        чтение ledger по складу недетерминировано и запрещено).
         """
         from app.domain.dimensions import canonicalize_dimensions
         from app.models.work_task import WorkTask
+        from app.services.material_operations import completed_operations_for_task
 
         transfer = await db.get(Transfer, ref_id) if ref_id is not None else None
         if transfer is None:
@@ -404,6 +443,15 @@ class StockCompensator(MirrorLedgerMixin):
         if from_task is None:
             return Decimal("0")
         quantity = Decimal(str(changes.get("quantity", transfer.sent_quantity)))
+        # Признак операций новой прямой проводки — ровно тот, который
+        # разрешит record() для from_task (маршрут позиции). Если он не
+        # определяется (задание не привязано к строке плана), реальная
+        # запись всё равно отклоняется _resolve_completed_operations, и
+        # считать покрытие против NULL-группы было бы угадыванием
+        # (ADR-0021) — дефицит здесь не вычисляется вовсе.
+        ops = await completed_operations_for_task(db, from_task)
+        if ops is None:
+            return Decimal("0")
         need_fwd: PlannedEntry = PlannedEntry(
             source_tx_id=0,
             product_id=product_id,
@@ -413,9 +461,10 @@ class StockCompensator(MirrorLedgerMixin):
             dimensions=dims,
             reason=Reason.TRANSFER_SEND,
             quality_state=QualityState.GOOD,
+            completed_operations=ops,
         )
         need, dims_by_key = self._coverage_needs([need_fwd])
-        adjustments: dict[tuple[int, int, QualityState, object], Decimal] = {}
+        adjustments: dict[_CoverageKey, Decimal] = {}
         if comp_entries:
             comp_need, _ = self._coverage_needs(comp_entries)
             # Чистовый эффект компенсаций: −расход на своём from_location
@@ -430,6 +479,7 @@ class StockCompensator(MirrorLedgerMixin):
                     e.to_location_id,
                     e.quality_state,
                     _dims_key(e.dimensions),
+                    _ops_key(e.completed_operations),
                 )
                 adjustments[ckey] = adjustments.get(ckey, Decimal("0")) + e.quantity
         return await self._deficit_for(db, need, dims_by_key, adjustments=adjustments)
@@ -618,8 +668,25 @@ class StockCompensator(MirrorLedgerMixin):
         }
 
 
-
 def _dims_key(dims: dict | None) -> tuple | None:
     if dims is None:
         return None
     return tuple(sorted(dims.items()))
+
+
+def _ops_key(ops: list | None) -> tuple | None:
+    """Хешируемый ключ признака операций — зеркало ``_dims_key``.
+
+    ``None`` («состояние не зафиксировано») и ``()`` («прошёл маршрут,
+    операций не было») — разные ключи: смешивать их нельзя (ADR-0043 §2).
+    """
+    if ops is None:
+        return None
+    return tuple(ops)
+
+
+def _ops_value(ok: tuple | None) -> list | None:
+    """Обратное преобразование ключа признака в значение для SQL."""
+    if ok is None:
+        return None
+    return list(ok)

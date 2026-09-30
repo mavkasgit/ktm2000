@@ -431,11 +431,17 @@ async def _make_two_stage_setup(factory: async_sessionmaker, schema: str, sku: s
         await s.flush()
 
         # transferable на task1: выданный и завершённый материал.
+        from app.services.material_operations import completed_operations_for_task
+
+        # Признак берём у того же источника, что и плановое
+        # ``TRANSFER_RECEIVE`` (ADR-0043 §2): иначе приход лёг бы в NULL-группу
+        # (ADR-0055).
+        ops = await completed_operations_for_task(s, task1)
         svc = StockCommandService()
         await svc.record(s, StockCommand(
             product_id=product.id, from_location_id=None,
             to_location_id=stock.id, quantity=Decimal("10"),
-            reason=Reason.MANUAL_IN, created_by=user.id,
+            reason=Reason.MANUAL_IN, completed_operations=ops, created_by=user.id,
         ))
         await svc.record(s, StockCommand(
             product_id=product.id, from_location_id=stock.id,

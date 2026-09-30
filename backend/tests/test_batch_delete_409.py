@@ -160,6 +160,11 @@ async def _make_transfer_chain(
     await session.flush()
     #: Материал должен реально лежать на участке-источнике: transfer_send
     #: списывает остаток StockBalance (SEND-проводка), иначе — Insufficient stock.
+    #: Признак берём у того же источника, что и плановая SEND-проводка задания
+    #: (ADR-0043 §2), иначе приход лёг бы в NULL-группу (ADR-0055).
+    from app.services.material_operations import completed_operations_for_task
+
+    ops = await completed_operations_for_task(session, task1)
     await StockCommandService().record(
         session,
         StockCommand(
@@ -168,6 +173,7 @@ async def _make_transfer_chain(
             to_location_id=sec1.id,
             quantity=Decimal("5"),
             reason=Reason.MANUAL_IN,
+            completed_operations=ops,
             created_by=user.id,
         ),
     )

@@ -21,6 +21,7 @@ from app.stock import (
     StockCommandService,
     StockTransaction,
 )
+from app.stock.services import completed_operations_match_clause
 from tests.test_integrity_invariants import assert_no_stock_ledger_invariants_violations
 
 
@@ -77,12 +78,22 @@ async def _balance(
     product_id: int,
     location_id: int,
     quality_state: QualityState = QualityState.GOOD,
+    completed_operations: list[str] | None = None,
 ) -> Decimal:
+    """Остаток строки баланса.
+
+    ADR-0055: ось ``completed_operations`` — часть ключа остатка, поэтому
+    поиск без неё на материале с несколькими группами даёт
+    ``MultipleResultsFound``. ``None`` (по умолчанию) — запрос NULL-группы.
+    """
     row = await session.execute(
         select(StockBalance).where(
             StockBalance.product_id == product_id,
             StockBalance.location_id == location_id,
             StockBalance.quality_state == quality_state,
+            completed_operations_match_clause(
+                StockBalance.completed_operations, completed_operations,
+            ),
         )
     )
     bal = row.scalar_one_or_none()
@@ -250,10 +261,15 @@ async def test_list_stock_balances_endpoint_returns_correct_data(client, session
 
 
 @pytest.mark.asyncio
-async def test_list_stock_balances_returns_completed_stages_from_import_comment(
+async def test_list_stock_balances_returns_completed_operations_from_ledger(
     client, session: AsyncSession,
 ):
-    """GET /api/stock/balance возвращает операции из комментария последнего MANUAL_IN."""
+    """GET /api/stock/balance отдаёт признак операций, сохранённый проводкой.
+
+    ADR-0021/ADR-0055: атрибуция операций НЕ выводится обратным чтением
+    комментария MANUAL_IN — она задаётся проводкой и хранится на строке
+    остатка, а словарь операций лишь превращает коды в названия для UI.
+    """
     from app.core.security import create_access_token
 
     user = await _make_user(session)
@@ -298,8 +314,54 @@ async def test_list_stock_balances_returns_completed_stages_from_import_comment(
         to_location_id=location.id,
         quantity=Decimal("40"),
         reason=Reason.MANUAL_IN,
+        completed_operations=["ANOD_BLACK", "SHOT"],
+        created_by=user.id,
+    ))
+    await session.commit()
+
+    # Признак сохранён на строке остатка в канонической форме (по возрастанию).
+    stored = await session.scalar(
+        select(StockBalance.completed_operations).where(
+            StockBalance.product_id == product.id,
+            StockBalance.location_id == location.id,
+        )
+    )
+    assert list(stored or []) == ["ANOD_BLACK", "SHOT"]
+
+    resp = await client.get("/api/stock/balance?limit=500")
+    assert resp.status_code == 200, resp.text
+    our_balance = [b for b in resp.json()["balances"] if b["product_id"] == product.id]
+    assert len(our_balance) == 1
+    assert our_balance[0]["completed_operations"] == ["ANOD_BLACK", "SHOT"]
+    # Названия приходят из справочника операций по кодам со строки остатка.
+    stage_names = [stage["operation_name"] for stage in our_balance[0]["completed_stages"]]
+    assert sorted(stage_names) == ["Дробеструй", "Чёрный"]
+
+
+@pytest.mark.asyncio
+async def test_manual_in_comment_does_not_attribute_operations(
+    client, session: AsyncSession,
+):
+    """Комментарий MANUAL_IN не источник правды: «операции: …» в тексте
+    остаются текстом, признак операций — ``None``."""
+    from app.core.security import create_access_token
+
+    user = await _make_user(session)
+    token = create_access_token(subject=user.email)
+    client.headers["Authorization"] = f"Bearer {token}"
+
+    product = await _make_product(session, sku="REM-CMNT")
+    location = await _make_location(
+        session, code="RAW-CMNT-1", name="Raw Comment", loc_type="raw_stock"
+    )
+
+    svc = StockCommandService()
+    await svc.record(session, StockCommand(
+        product_id=product.id,
+        to_location_id=location.id,
+        quantity=Decimal("5"),
+        reason=Reason.MANUAL_IN,
         comment="Партия A | операции: Дробеструй, Чёрный",
-        source_ref="import_remainders_excel",
         created_by=user.id,
     ))
     await session.commit()
@@ -308,8 +370,9 @@ async def test_list_stock_balances_returns_completed_stages_from_import_comment(
     assert resp.status_code == 200, resp.text
     our_balance = [b for b in resp.json()["balances"] if b["product_id"] == product.id]
     assert len(our_balance) == 1
-    stage_names = [stage["operation_name"] for stage in our_balance[0]["completed_stages"]]
-    assert stage_names == ["Дробеструй", "Чёрный"]
+    assert our_balance[0]["completed_operations"] is None
+    assert our_balance[0]["completed_stages"] == []
+
 
 
 @pytest.mark.asyncio

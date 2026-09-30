@@ -52,7 +52,15 @@ async def _seed_stock_balance(
     product_id: int,
     qty: Decimal,
 ) -> None:
+    """Приход на складскую секцию в ops-группе её этапа маршрута.
+
+    ADR-0055: списание точное, а ``record()`` выводит признак плановой
+    проводки (``manual-pass-batch`` выдаёт материал через ``transfer_send``
+    с фейкового складского задания) из маршрута. MANUAL_IN без признака лёг
+    бы в NULL-группу, и выдача не нашла бы остаток.
+    """
     from app.stock.services import StockCommand, StockCommandService, Reason
+    from tests.helpers.transfers import _section_route_operations
 
     svc = StockCommandService()
     await svc.record(
@@ -62,6 +70,7 @@ async def _seed_stock_balance(
             to_location_id=location_id,
             quantity=qty,
             reason=Reason.MANUAL_IN,
+            completed_operations=await _section_route_operations(session, location_id),
             created_by=user_id,
         ),
     )
@@ -322,7 +331,9 @@ async def test_manual_pass_batch_full_route(client, session) -> None:
         assert result["status"] == "success"
         # Stock fake_task stays ready; only the production WorkTask completes.
         assert result["position_completed"] is False
-        assert result["movements_created"] == 3  # TRANSFER_SEND + TRANSFER_RECEIVE + COMPLETE
+        # ADR-0055: выдача (SEND+RECEIVE) + завершение этапа, которое теперь
+        # состоит из списания входа (TRANSFORM_CONSUME) и выпуска (COMPLETE).
+        assert result["movements_created"] == 4
         assert result["transfers_created"] == 1  # stock→production for the single production step
 
     # Verify StockTransaction ledger facts for the through-pass (ISSUE via transfer + COMPLETE).
@@ -337,6 +348,8 @@ async def test_manual_pass_batch_full_route(client, session) -> None:
     assert len(tx_rows) >= 4  # at least issue (send/receive) + complete per position
     assert Reason.TRANSFER_SEND.value in tx_rows
     assert Reason.TRANSFER_RECEIVE.value in tx_rows
+    # Списание входной группы участка — отдельная проводка завершения.
+    assert Reason.TRANSFORM_CONSUME.value in tx_rows
     assert Reason.COMPLETE.value in tx_rows
 
     transfer_rows = (

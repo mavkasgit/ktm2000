@@ -18,6 +18,7 @@ from app.models.production_plan import (
 from app.models.work_task import WorkTask, WorkTaskStatus
 from app.services.production_plan_service import get_production_plan_delete_preview
 from app.services.action_journal_service import action_journal_service
+from app.services.material_operations import completed_operations_for_task
 from app.stock.models import Reason, StockTransaction
 from app.stock.services import StockCommand, StockCommandService
 from tests.stock.test_shopfloor_stage3 import _setup_minimal_route
@@ -29,6 +30,10 @@ pytestmark = pytest.mark.asyncio
 async def _final_release_fixture(session: AsyncSession, sku: str) -> dict:
     fx = await _setup_minimal_route(session, sku=sku, qty=Decimal("10"))
     stock = StockCommandService()
+    # ADR-0055: расход точный — материал на участке обязан лежать в той же
+    # ops-группе, из которой его заберёт плановая FINAL_RELEASE задания.
+    # Признак берётся тем же резолвером, что и в ``record()``.
+    ops = await completed_operations_for_task(session, fx["task"])
     await stock.record(
         session,
         StockCommand(
@@ -36,6 +41,7 @@ async def _final_release_fixture(session: AsyncSession, sku: str) -> dict:
             to_location_id=fx["prod"].id,
             quantity=Decimal("10"),
             reason=Reason.MANUAL_IN,
+            completed_operations=ops,
             created_by=fx["user"].id,
         ),
     )
