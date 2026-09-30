@@ -67,7 +67,12 @@ def test_ensure_lets_isolated_database_through(tmp_path: Path) -> None:
     # DSN приходит в SQLAlchemy-виде (`+asyncpg`): asyncpg такой схемы не
     # понимает, и без перевода он спотыкается ещё до попытки подключиться.
     assert "invalid DSN" not in output, output
-    assert "onnect" in output, output
+    # Признак того, что дошли до попытки подключения, а остановились на
+    # guard'е, — ветка `except Exception` вокруг `ensure_database` в
+    # scripts/e2e-db.py: её префикс задан в репозитории. Текст исключения
+    # внутри локализован Windows ("отклонил это сетевое подключение"), поэтому
+    # искать в нём английскую подстроку "onnect" бессмысленно.
+    assert "[e2e-db] не удалось подготовить БД стенда" in output, output
     assert "ktm2000_dev" not in output, output
 
 

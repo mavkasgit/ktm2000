@@ -239,6 +239,40 @@ _TRIGGERS_SQL = [
 ]
 
 
+async def _install_precreated_enum_types(conn) -> None:
+    """Create the enum types the models declare with ``create_type=False``.
+
+    ``create_all`` never emits ``CREATE TYPE`` for such an enum, and tests
+    build the schema without migration history. Production gets these types
+    from ``alembic/versions/001_sections_and_users.py``; without them here
+    the first table that references one (``section_operations``) fails to
+    build, and every table created after it in the same schema never gets
+    created at all.
+    """
+    import asyncpg
+
+    raw = await conn.get_raw_connection()
+    driver_conn = raw.driver_connection
+    schema = (await conn.execute(text("SHOW search_path"))).scalar() or "public"
+    first_schema = schema.split(",")[0].strip().strip('"')
+    await driver_conn.execute(f'SET search_path TO "{first_schema}"')
+    # Existence must be checked per schema: a PostgreSQL type lives in the
+    # schema of its first CREATE TYPE, and `pg_type` alone would see the type
+    # left behind by an earlier module and skip creating it in this one.
+    await driver_conn.execute(
+        "DO $$ BEGIN "
+        "  IF NOT EXISTS (SELECT 1 FROM pg_type t JOIN pg_namespace n ON n.oid = t.typnamespace "
+        "                  WHERE t.typname = 'route_stage_kind' AND n.nspname = current_schema()) THEN "
+        "    CREATE TYPE route_stage_kind AS ENUM ('production', 'transit'); "
+        "  END IF; "
+        "  IF NOT EXISTS (SELECT 1 FROM pg_type t JOIN pg_namespace n ON n.oid = t.typnamespace "
+        "                  WHERE t.typname = 'section_operation_type' AND n.nspname = current_schema()) THEN "
+        "    CREATE TYPE section_operation_type AS ENUM ('production', 'transport'); "
+        "  END IF; "
+        "END $$"
+    )
+
+
 async def _install_storage_vs_production_triggers(conn) -> None:
     import asyncpg
 
@@ -302,6 +336,7 @@ async def engine(
     async with eng.begin() as conn:
         await conn.execute(text(f"CREATE SCHEMA IF NOT EXISTS {_quote_ident(module_schema_name)}"))
         await conn.execute(text(f"SET search_path TO {_quote_ident(module_schema_name)}"))
+        await _install_precreated_enum_types(conn)
         await conn.run_sync(Base.metadata.create_all)
         await _install_storage_vs_production_triggers(conn)
     try:
