@@ -410,9 +410,41 @@ export async function apiApplyChangeSet(planId: number, changeSetId: number) {
 }
 
 export async function apiGetPlanPositions(planId: number) {
-  const res = await fetch(`${BACKEND_URL}/api/production-plans/${planId}/all-positions`);
+  const res = await fetch(`${BACKEND_URL}/api/production-plans/${planId}/all-positions`, {
+    headers: await authHeaders(),
+  });
   if (!res.ok) {
     throw new Error(`Get plan positions failed: ${res.statusText} (${res.status})`);
+  }
+  return res.json();
+}
+
+/**
+ * @ui — все позиции плана БЕЗ фильтра по статусу (ADR-0056): снимок для
+ * проверок «действие ничего не сдвинуло». Ответ `/{id}/all-positions`
+ * отсекает `approved`/`released`, и смена статуса позиции выглядела бы там как
+ * «позиция исчезла из обоих снимков» — то есть как «ничего не изменилось».
+ */
+export async function apiGetAllPlanPositions() {
+  const res = await fetch(`${BACKEND_URL}/api/production-plans/all-positions?limit=500`, {
+    headers: await authHeaders(),
+  });
+  if (!res.ok) {
+    throw new Error(`Get all plan positions failed: ${res.statusText} (${res.status})`);
+  }
+  return res.json();
+}
+
+/**
+ * @ui — снимок остатков артикула для проверок «скрытие ничего не двигает»
+ * (#233): список строк баланса по всем локациям, как его отдаёт API.
+ */
+export async function apiGetStockBalances(productId: number) {
+  const res = await fetch(`${BACKEND_URL}/api/stock/balance/by-product/${productId}`, {
+    headers: await authHeaders(),
+  });
+  if (!res.ok) {
+    throw new Error(`Get stock balances failed: ${res.statusText} (${res.status})`);
   }
   return res.json();
 }

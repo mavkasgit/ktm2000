@@ -10,7 +10,9 @@ export function invalidatePlanImportCaches(
   queryClient: QueryClient,
   params: { planId: string | number; batchId?: number | null },
 ): void {
-  void queryClient.invalidateQueries({ queryKey: queryKeys.plan.allFiles() });
+  // Корень ключа, а не `allFiles(false)`: список импортов лежит в двух кэшах
+  // (с `include_hidden` и без, ADR-0056), и префиксом одного другой не покрыт.
+  void queryClient.invalidateQueries({ queryKey: queryKeys.plan.allFilesRoot() });
   void queryClient.invalidateQueries({ queryKey: queryKeys.plan.allPositions() });
   void queryClient.invalidateQueries({ queryKey: queryKeys.plan.preview(params.planId) });
   void queryClient.invalidateQueries({ queryKey: queryKeys.shopfloor.boardAll() });

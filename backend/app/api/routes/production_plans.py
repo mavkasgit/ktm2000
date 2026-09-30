@@ -50,6 +50,7 @@ from app.services.production_plan_service import (
     get_production_plan_delete_preview,
     PlanDeleteBlocked,
     get_plan_preview,
+    hide_import_batch as hide_import_batch_service,
     restore_plan_position,
     rollback_change_set,
     require_mutable_plan,
@@ -406,6 +407,43 @@ async def delete_import_batch(
                 "drafts": exc.drafts,
             },
         )
+
+
+class BatchHideIn(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    #: Причина необязательна: UI её не спрашивает (как у остатков,
+    #: ADR-0052 п.5), а сервер отвергает только слишком короткую.
+    reason: str | None = None
+
+
+@router.post("/{production_plan_id}/batches/{batch_id}/hide", response_model=None)
+async def hide_import_batch(
+    production_plan_id: int,
+    batch_id: int,
+    payload: BatchHideIn | None = None,
+    db: AsyncSession = Depends(get_db),
+    current_user: User = Depends(require_role([UserRole.admin])),
+) -> dict:
+#: «Убрать из списка» — скрытие батча (ADR-0056). Отдельное действие, а не
+#: режим DELETE: позиции, задачи, ledger, узел журнала действий и AuditLog не
+#: трогаются, статус не меняется. Физическое удаление (§4.4) и force (#231)
+#: остаются на своих маршрутах. Роль — admin, как у соседних мутаций батча
+#: (apply/rollback/discard/DELETE) и как у скрытия батча остатков
+#: (ADR-0052 п.5): гейтить скрытие мягче сильного нельзя, а открытым оно
+#: было бы вопреки ADR-0054 п.6 (роли на маршрутах батчей).
+    await _require_visible_plan(db, production_plan_id)
+    batch = await db.get(ImportBatch, batch_id)
+#: Сверка с планом из URL: чужой батч — как отсутствующий (404), иначе можно
+#: спрятать импорт другого плана по произвольному batch_id.
+    if batch is None or batch.production_plan_id != production_plan_id:
+        raise HTTPException(status_code=404, detail="Import batch not found")
+    try:
+        await hide_import_batch_service(
+            db, batch_id, user=current_user, reason=payload.reason if payload else None
+        )
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    return {"hidden": True, "batch_id": batch_id}
 
 
 class BatchForceDeleteIn(BaseModel):
@@ -1079,23 +1117,35 @@ class PlanFileInfo(BaseModel):
     status: str
     created_at: str
     applied_at: str | None
+    #: Батч убран из списка (ADR-0056). Ортогонально `status`: скрытым может
+    #: быть и применённый, и распознанный, и откаченный батч. Поле есть всегда,
+    #: чтобы строка «помечена, а не просто исчезла» не зависела от того, каким
+    #: запросом её принесли.
+    hidden: bool = False
 
 
-def _plan_files_query():
+def _plan_files_query(*, include_hidden: bool = False):
     """Батч + файл + его сет: список файлов плана (`/{id}/files` и `/all-files`).
 
     Сет на батч ровно один, поэтому outerjoin не размножает строки, а
     неоткаченный/неприменённый батч даёт `change_set_id`/`applied_at` = NULL.
+
+    ``include_hidden`` показывает и убранные из списка батчи (ADR-0056);
+    по умолчанию они не видны — в этом и смысл `deleted_at`. Скрытость ортогональна
+    статусу, поэтому фильтр не смотрит на `status`.
     """
     from app.models.imports import ImportFile
 
-    return (
+    stmt = (
         select(ImportBatch, ImportFile, PlanChangeSet.id, PlanChangeSet.applied_at)
         .join(ImportFile, ImportBatch.source_file_id == ImportFile.id)
         .join(ProductionPlan, ImportBatch.production_plan_id == ProductionPlan.id)
         .where(ProductionPlan.deleted_at.is_(None))
         .outerjoin(PlanChangeSet, PlanChangeSet.import_batch_id == ImportBatch.id)
     )
+    if not include_hidden:
+        stmt = stmt.where(ImportBatch.deleted_at.is_(None))
+    return stmt
 
 
 def _plan_file_info(
@@ -1119,15 +1169,21 @@ def _plan_file_info(
         status=batch.status.value,
         created_at=batch.created_at.isoformat(),
         applied_at=applied_at.isoformat() if applied_at else None,
+        hidden=batch.deleted_at is not None,
     )
 
 
 @router.get("/{production_plan_id}/files", dependencies=[Depends(require_role(list(READER_ROLES)))])
-async def plan_files(production_plan_id: int, db: AsyncSession = Depends(get_db)) -> list[PlanFileInfo]:
+async def plan_files(
+    production_plan_id: int,
+    include_hidden: bool = Query(default=False),
+    db: AsyncSession = Depends(get_db),
+) -> list[PlanFileInfo]:
+    """Файлы плана; `include_hidden=true` добавляет убранные из списка (ADR-0056)."""
     await _require_visible_plan(db, production_plan_id)
     batches = (
         await db.execute(
-            _plan_files_query()
+            _plan_files_query(include_hidden=include_hidden)
             .where(ImportBatch.production_plan_id == production_plan_id)
             .order_by(ImportBatch.created_at)
         )
@@ -1550,12 +1606,14 @@ async def _serialize_plan_positions(
 
 
 @router.get("/all-files", response_model=list[PlanFileInfo], dependencies=[Depends(require_role(list(READER_ROLES)))])
-async def all_plan_files(db: AsyncSession = Depends(get_db)) -> list[PlanFileInfo]:
-    """Return files from all production plans."""
+async def all_plan_files(
+    include_hidden: bool = Query(default=False),
+    db: AsyncSession = Depends(get_db),
+) -> list[PlanFileInfo]:
+    """Файлы всех планов; `include_hidden=true` добавляет убранные из списка (ADR-0056)."""
     batches = (
         await db.execute(
-            _plan_files_query()
-            .where(ProductionPlan.deleted_at.is_(None))
+            _plan_files_query(include_hidden=include_hidden)
             .order_by(ImportBatch.created_at.desc())
         )
     ).all()

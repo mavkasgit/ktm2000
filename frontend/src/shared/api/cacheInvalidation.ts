@@ -107,6 +107,9 @@ export const CACHE_ACTIONS = {
   importApplied: ["plan", "execution", "shopfloor", "spg", "sections", "products"],
   /** Импорт откатан или отброшен. */
   importDiscarded: ["plan", "execution"],
+  /** Батч импорта плана убран из списка: меняется только состав списка
+   * импортов — позиции, задачи, остатки и журнал не тронуты (ADR-0056). */
+  importHidden: ["plan"],
   /** Импорт удалён принудительно: снесены позиции, задания, передачи и проводки. */
   importForceDeleted: ["plan", "execution", "shopfloor", "transfers", "stock", "spg", "sections", "audit", "actions"],
   /** Позиция запущена, отменена, восстановлена, пройдена вручную, удалена из работы. */

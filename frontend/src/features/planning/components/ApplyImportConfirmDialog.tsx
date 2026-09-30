@@ -43,9 +43,10 @@ export function ApplyImportConfirmDialog(props: {
   // Момент парсинга батча — серверный `created_at` из того же списка, что и
   // `applied_at`: сравнение идёт по одной шкале (клиентские часы не участвуют).
   const { data: files } = useQuery({
-    queryKey: queryKeys.plan.allFiles(),
-    queryFn: () => allPlanFiles(),
-    enabled: props.open && planId != null && batchId != null,
+    // Полный список, включая убранные из списка (ADR-0056): предупреждение о
+    // более свежем применённом батче — про план, а не про видимость строки.
+    queryKey: queryKeys.plan.allFiles(true),
+    queryFn: () => allPlanFiles({ includeHidden: true }),
   })
   const parsedAt = batchId == null ? null : ((files ?? []).find((f) => f.batch_id === batchId)?.created_at ?? null)
 

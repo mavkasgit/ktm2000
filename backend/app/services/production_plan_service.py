@@ -8,7 +8,7 @@ from sqlalchemy import and_, delete, or_, select, update
 from sqlalchemy import func as sa_func
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.models.imports import ImportBatchStatus
+from app.models.imports import ImportBatch, ImportBatchStatus, ImportFile
 from app.models.production_plan import (
     PlanChangeAction,
     PlanChangeItem,
@@ -676,8 +676,6 @@ async def apply_change_set(db: AsyncSession, change_set_id: int, *, skip_invalid
     change_set.status = PlanChangeSetStatus.applied
     change_set.applied_at = datetime.now(timezone.utc)
     if change_set.import_batch_id:
-        from app.models.imports import ImportBatch
-
         batch = await db.get(ImportBatch, change_set.import_batch_id)
         if batch is not None:
             batch.status = ImportBatchStatus.applied
@@ -747,8 +745,6 @@ async def rollback_change_set(db: AsyncSession, change_set_id: int, changed_by: 
     change_set.status = PlanChangeSetStatus.cancelled
     change_set.applied_at = None
     if change_set.import_batch_id:
-        from app.models.imports import ImportBatch
-
         batch = await db.get(ImportBatch, change_set.import_batch_id)
         if batch:
             batch.status = ImportBatchStatus.cancelled
@@ -772,8 +768,10 @@ async def rollback_change_set(db: AsyncSession, change_set_id: int, changed_by: 
 
 async def _delete_batch_and_orphan_file(db: AsyncSession, batch_id: int) -> bool:
 #: Удалить батч импорта и файл-источник, если на него больше никто не ссылается.
-    from app.models.imports import ImportBatch, ImportFile
-
+#: Считаем ВСЕ оставшиеся батчи файла, включая скрытые (ADR-0056): файл нужен
+#: и скрытому батчу — по «Скачать» и предпросмотру, иначе скрытие сделало бы
+#: ссылку битой, а физическое удаление соседнего батча — «убило» файл из-под
+#: скрытого.
     batch = await db.get(ImportBatch, batch_id)
     if batch is None:
         return False
@@ -994,7 +992,6 @@ async def delete_import_batch(
 ) -> dict:
     #: Удаление старого импорта не переводит размеры. Живые downstream-данные всё
     #: равно защищает общий blocker-контракт ниже.
-    from app.models.imports import ImportBatch
     batch = await db.get(ImportBatch, batch_id)
     if batch is None:
         raise ValueError("Import batch not found")
@@ -1108,6 +1105,48 @@ async def delete_import_batch(
         "deleted_drafts": len(deletable_ids),
         "blockers": info["blockers"],
     }
+
+
+#: Минимальная длина причины скрытия — та же, что у остатков (ADR-0052 п.5)
+#: и у force-удаления (#231): две буквы не причина, а шум в журнале.
+BATCH_HIDE_MIN_REASON_LENGTH = 3
+
+
+async def hide_import_batch(
+    db: AsyncSession, batch_id: int, *, user: User | None, reason: str | None = None
+) -> ImportBatch:
+    """«Убрать из списка»: скрыть батч, не потеряв ничего (ADR-0056).
+
+    Пишет только `deleted_at`/`deleted_by`/`delete_reason`. Позиции, задачи,
+    ledger, узел журнала действий (ADR-0019 п.7) и `AuditLog` не трогаются, а
+    `status` не меняется: скрытость ортогональна статусу, поэтому скрытым
+    может быть и применённый, и распознанный, и откаченный батч. Откат и
+    применение скрытого работают как у видимого.
+
+    Физическое удаление — отдельное действие (`DELETE` §4.4, force #231):
+    спрятать нельзя «отменить», а удалить можно.
+
+    Повторный вызов идемпотентен: уже скрытый батч возвращается как есть, без
+    новой отметки времени. Восстановления из скрытых нет (п.6) — `include_hidden`
+    даёт чтение, а не переключатель.
+    """
+    batch = await db.get(ImportBatch, batch_id)
+    if batch is None:
+        raise ValueError("Import batch not found")
+    # Причину проверяем ДО раннего выхода: валидность входа не зависит от
+    # состояния батча, и «уже скрыт + плохая причина» не должен проходить
+    # молча. Храним нормализованную: «  ок  » проходит проверку длины, но в
+    # истории батча читаться должно «ок».
+    clean_reason = reason.strip() if reason is not None else None
+    if clean_reason is not None and len(clean_reason) < BATCH_HIDE_MIN_REASON_LENGTH:
+        raise ValueError(f"Причина скрытия короче {BATCH_HIDE_MIN_REASON_LENGTH} символов")
+    if batch.deleted_at is not None:
+        return batch
+    batch.deleted_at = datetime.now(timezone.utc)
+    batch.deleted_by = user.id if user else None
+    batch.delete_reason = clean_reason
+    await db.commit()
+    return batch
 
 
 async def approve_plan_position(

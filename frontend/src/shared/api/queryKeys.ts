@@ -234,7 +234,13 @@ export const queryKeys = {
   plan: {
     allPositions: (params?: AllPlanPositionsQueryKeyParams) =>
       ["all-plan-positions", params ?? {}] as const,
-    allFiles: () => ["all-plan-files"] as const,
+    /** Флаг `include_hidden` в ключе, а не в URL: он меняет состав списка
+        (ADR-0056), поэтому два варианта — два разных кэша. */
+    allFiles: (includeHidden = false) => ["all-plan-files", includeHidden] as const,
+    /** Корень ключа файлов импорта — для ИНВАЛИДАЦИИ: `allFiles(false)` и
+        `allFiles(true)` — разные ключи, и префиксом одного из них другой не
+        покрывается. Читать — только через `allFiles(flag)`. */
+    allFilesRoot: () => ["all-plan-files"] as const,
     duplicates: (key?: string) => ["plan-duplicates-all", key ?? null] as const,
     preview: (planId: string | number) => ["plan-preview", planId] as const,
     positionDetail: (positionId: number) => ["plan-position-detail", positionId] as const,

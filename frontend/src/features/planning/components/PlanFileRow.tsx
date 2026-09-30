@@ -1,9 +1,9 @@
 import { Fragment, useMemo, useState } from "react"
-import { Download, Eye, FileSpreadsheet, Play, Trash2, Undo2 } from "lucide-react"
+import { Download, Eye, EyeOff, FileSpreadsheet, Play, Trash2, Undo2 } from "lucide-react"
 import { useQuery, useQueryClient } from "@tanstack/react-query"
 import { Button, Badge, Dialog, DialogContent, DialogDescription, DialogHeader, DialogTitle, AlertDialog, AlertDialogContent, AlertDialogHeader, AlertDialogTitle, AlertDialogDescription, AlertDialogFooter, AlertDialogAction, AlertDialogCancel, toast } from "@/shared/ui"
 import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from "@/shared/ui/tooltip"
-import { PlanFileInfo, PlanSummary } from "@/shared/api/productionPlans"
+import { PlanFileInfo } from "@/shared/api/productionPlans"
 import { getErrorMessage } from "@/shared/api/client"
 import {
   fetchAllImportBatchItems,
@@ -18,23 +18,52 @@ import { fmtQtyPrecise } from "@/shared/lib/quantityFormat"
 import { invalidateAfter } from "@/shared/api/cacheInvalidation"
 import { queryKeys } from "@/shared/api/queryKeys"
 import { applyChangeSet, rollbackChangeSet } from "../api"
+import { POLICIES } from "@/features/auth/policies"
+import { useAuth } from "@/features/auth/hooks/useAuth"
 import { ApplyImportConfirmDialog } from "./ApplyImportConfirmDialog"
 
+/**
+ * Строка батча импорта плана: файл, подпись плана и действия над батчем.
+ *
+ * План строки приходит двумя полями, а не объектом: список батчей —
+ * кросс-плановый (страница истории импортов, ADR-0054), поэтому подпись плана
+ * и `planId` для запросов собирает тот, у кого есть `listPlans`; строка о
+ * плане не догадывается. Если план из списка пропал (гонка двух запросов),
+ * подпись всё равно есть — «План #id», а адрес запроса остаётся верным.
+ *
+ * Действия строки — три разных смысла, и их нельзя сливать (ADR-0056):
+ * «Применить»/«Откатить» двигают план, «Убрать из списка» прячет строку и
+ * ничего не трогает, «Удалить» сносит батч вместе с данными. Скрытая строка
+ * помечена: она в списке только при `include_hidden` и по кнопке не вернуть.
+ */
 export function FileRow({
   file,
-  activePlan,
+  planId,
+  planLabel,
   isLastApplied,
   onDelete,
+  onHide,
 }: {
   file: PlanFileInfo
-  activePlan: PlanSummary
-  /** Батч — последний применённый в плане (по `applied_at`): только его можно откатить. */
+  /** План батча: уходит в адрес apply/rollback/delete. */
+  planId: number
+  /** Подпись плана в колонке «План». */
+  planLabel: string
+  /** Батч — последний применённый в **своём** плане (по `applied_at`): только его можно откатить. */
   isLastApplied: boolean
-  onDelete: (batchId: number) => void
+  onDelete: (planId: number, batchId: number) => void
+  /** «Убрать из списка»: скрыть батч, не тронув данные (ADR-0056). */
+  onHide: (planId: number, batchId: number) => void
 }) {
   const queryClient = useQueryClient()
+  // Сервер отдаёт 403 всем, кроме admin (ADR-0057); кнопка скрытия рисуется по
+  // той же политике, что и apply/rollback/DELETE батча, — «убрать из списка»
+  // не должна быть доступнее, чем удаление.
+  const { user } = useAuth()
+  const canHide = POLICIES.managePlanImport(user?.role)
   const [previewOpen, setPreviewOpen] = useState(false)
   const [deleteDialogOpen, setDeleteDialogOpen] = useState(false)
+  const [hideDialogOpen, setHideDialogOpen] = useState(false)
   const [applyDialogOpen, setApplyDialogOpen] = useState(false)
   const [rollbackDialogOpen, setRollbackDialogOpen] = useState(false)
   const [applying, setApplying] = useState(false)
@@ -48,7 +77,7 @@ export function FileRow({
   const { data: lightRows, isLoading: rowsLoading } = useQuery({
     queryKey: [...queryKeys.plan.batchPreview(file.batch_id), "light"],
     queryFn: () => fetchAllImportBatchItems(file.batch_id),
-    enabled: (previewOpen || applyDialogOpen) && !!activePlan,
+    enabled: (previewOpen || applyDialogOpen) && planId > 0,
   })
   const previewItems = lightRows ?? []
   // Цифры диалога применения считаются на клиенте по лёгким строкам батча (§4.3).
@@ -64,7 +93,7 @@ export function FileRow({
     if (!changeSetId) return
     setApplying(true)
     try {
-      const result = await applyChangeSet(String(activePlan.id), String(changeSetId), { skipInvalid })
+      const result = await applyChangeSet(String(planId), String(changeSetId), { skipInvalid })
       toast({
         title: "Импорт применён",
         description: `Создано: ${result.created_positions ?? 0}, обновлено: ${result.updated_positions ?? 0}`,
@@ -83,7 +112,7 @@ export function FileRow({
     if (!changeSetId) return
     setRollingBack(true)
     try {
-      await rollbackChangeSet(String(activePlan.id), String(changeSetId))
+      await rollbackChangeSet(String(planId), String(changeSetId))
       toast({ title: "Импорт откачен", description: `Файл «${file.filename}» и его позиции отменены`, variant: "success" })
       invalidateAfter(queryClient, "importApplied")
       setRollbackDialogOpen(false)
@@ -96,11 +125,19 @@ export function FileRow({
 
   return (
     <>
-      <tr className="border-b">
+      {/* Скрытая строка приглушена и помечена: иначе «убранный из списка» батч
+          выглядел бы живым импортом, а он всего лишь скрыт (ADR-0056). */}
+      <tr className={file.hidden ? "border-b bg-muted/40 text-muted-foreground" : "border-b"}>
+        <td className="p-3 text-sm text-muted-foreground">
+          <span className="block max-w-[220px] truncate" title={planLabel}>{planLabel}</span>
+        </td>
         <td className="p-3">
           <div className="flex items-center gap-2">
             <FileSpreadsheet className="h-4 w-4 text-muted-foreground" />
             <span className="font-medium text-sm">{file.filename}</span>
+            {file.hidden && (
+              <Badge variant="outline" className="text-muted-foreground">Убрана из списка</Badge>
+            )}
           </div>
         </td>
         <td className="p-3 text-sm text-muted-foreground">
@@ -138,6 +175,13 @@ export function FileRow({
                 onRollback={() => setRollbackDialogOpen(true)}
               />
             )}
+            {/* У скрытого батча кнопки скрытия нет: восстановления из скрытых
+                не существует (ADR-0056 п.6), повторное скрытие было бы враньём. */}
+            {canHide && !file.hidden && (
+              <Button variant="ghost" size="sm" className="h-7 text-xs" onClick={() => setHideDialogOpen(true)}>
+                <EyeOff className="h-3 w-3 mr-1" /> Убрать из списка
+              </Button>
+            )}
             <Button variant="ghost" size="sm" className="h-7 text-xs text-red-600 hover:text-red-700" onClick={() => setDeleteDialogOpen(true)}>
               <Trash2 className="h-3 w-3 mr-1" /> Удалить
             </Button>
@@ -151,7 +195,7 @@ export function FileRow({
         stats={applyStats}
         filename={file.filename}
         sheetName={file.sheet_name}
-        planId={activePlan.id}
+        planId={planId}
         batchId={file.batch_id}
         loading={applying || rowsLoading}
         onConfirm={(skipInvalid) => void handleApply(skipInvalid)}
@@ -240,6 +284,31 @@ export function FileRow({
         </DialogContent>
       </Dialog>
 
+
+      <AlertDialog open={hideDialogOpen} onOpenChange={setHideDialogOpen}>
+        <AlertDialogContent>
+          <AlertDialogHeader>
+            <AlertDialogTitle>Убрать импорт из списка?</AlertDialogTitle>
+            <AlertDialogDescription>
+              Строка исчезнет из списка, но файл «{file.filename}», его позиции,
+              задачи и остатки останутся как есть. Вернуть строку нельзя —
+              физическое удаление рядом, отдельной кнопкой «Удалить».
+            </AlertDialogDescription>
+          </AlertDialogHeader>
+          <AlertDialogFooter>
+            <AlertDialogCancel>Отмена</AlertDialogCancel>
+            <AlertDialogAction
+              onClick={(event) => {
+                event.preventDefault()
+                setHideDialogOpen(false)
+                onHide(planId, file.batch_id)
+              }}
+            >
+              Убрать из списка
+            </AlertDialogAction>
+          </AlertDialogFooter>
+        </AlertDialogContent>
+      </AlertDialog>
       <AlertDialog open={deleteDialogOpen} onOpenChange={setDeleteDialogOpen}>
         <AlertDialogContent>
           <AlertDialogHeader>
@@ -251,7 +320,7 @@ export function FileRow({
           <AlertDialogFooter>
             <AlertDialogCancel>Отмена</AlertDialogCancel>
             <AlertDialogAction
-              onClick={() => onDelete(file.batch_id)}
+              onClick={() => onDelete(planId, file.batch_id)}
               className="bg-red-600 hover:bg-red-700 text-white"
             >
               Удалить

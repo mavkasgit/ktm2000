@@ -130,6 +130,11 @@ export type PlanFileInfo = {
   status: string;
   created_at: string;
   applied_at: string | null;
+  /**
+   * Батч убран из списка (ADR-0056). Ортогонально `status`: скрытым может
+   * быть и применённый, и распознанный, и откаченный батч.
+   */
+  hidden?: boolean;
 };
 
 export type PlanPositionOut = {
@@ -183,13 +188,34 @@ export type PlanPositionOut = {
   cut_layout?: CutLayout | null;
 };
 
-export async function planFiles(planId: number) {
-  const { data } = await apiClient.get<PlanFileInfo[]>(`/production-plans/${planId}/files`);
+export type PlanFilesParams = {
+  /** Показать и убранные из списка батчи (ADR-0056). */
+  includeHidden?: boolean;
+};
+
+export async function planFiles(planId: number, params?: PlanFilesParams) {
+  const { data } = await apiClient.get<PlanFileInfo[]>(`/production-plans/${planId}/files`, {
+    params: params?.includeHidden ? { include_hidden: true } : undefined,
+  });
   return data;
 }
 
-export async function allPlanFiles() {
-  const { data } = await apiClient.get<PlanFileInfo[]>("/production-plans/all-files");
+export async function allPlanFiles(params?: PlanFilesParams) {
+  const { data } = await apiClient.get<PlanFileInfo[]>("/production-plans/all-files", {
+    params: params?.includeHidden ? { include_hidden: true } : undefined,
+  });
+  return data;
+}
+
+/**
+ * «Убрать из списка» (ADR-0056): скрыть батч, не тронув позиции, задачи,
+ * ledger и журнал. Физическое удаление — отдельное действие `deleteImportBatch`.
+ */
+export async function hideImportBatch(planId: number, batchId: number, opts?: { reason?: string }) {
+  const { data } = await apiClient.post<{ hidden: boolean; batch_id: number }>(
+    `/production-plans/${planId}/batches/${batchId}/hide`,
+    opts?.reason ? { reason: opts.reason } : undefined,
+  );
   return data;
 }
 
@@ -422,6 +448,10 @@ export type BatchForceDeletePreview = {
     location_id: number;
     location_code: string;
     dimensions: Record<string, unknown> | null;
+    // ADR-0055: операции — часть ключа остатка. Две строки одного артикула,
+    // локации и длины с разными операциями — разные остатки, и свод обязан их
+    // различать, иначе сводятся в одну неразличимую строку.
+    completed_operations: string[] | null;
     net_delta: string;
     ledger_entries: number;
   }>;

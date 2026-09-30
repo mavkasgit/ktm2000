@@ -1,7 +1,7 @@
 import enum
 from datetime import datetime
 
-from sqlalchemy import BigInteger, DateTime, Enum, ForeignKey, Identity, String, func, text
+from sqlalchemy import BigInteger, DateTime, Enum, ForeignKey, Identity, String, Text, func, text
 from sqlalchemy.dialects.postgresql import JSONB
 from sqlalchemy.orm import Mapped, mapped_column
 
@@ -59,3 +59,10 @@ class ImportBatch(Base):
     rules_snapshot: Mapped[list] = mapped_column(JSONB, nullable=False, server_default=text("'[]'::jsonb"), default=list)
     route_selection_diagnostics: Mapped[dict] = mapped_column(JSONB, nullable=False, server_default=text("'{}'::jsonb"), default=dict)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False, server_default=func.now())
+    #: Мягкое удаление «Убрать из списка» (ADR-0056) — как архивирование плана
+    #: и `stock_import_batches` (ADR-0052 п.5). Ортогонально `status`: скрытым
+    #: может быть и применённый, и распознанный, и откаченный батч. Физическое
+    #: удаление остаётся отдельным действием (#167 §4.4, #231 force).
+    deleted_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    deleted_by: Mapped[int | None] = mapped_column(ForeignKey("users.id", ondelete="SET NULL"), nullable=True)
+    delete_reason: Mapped[str | None] = mapped_column(Text, nullable=True)
