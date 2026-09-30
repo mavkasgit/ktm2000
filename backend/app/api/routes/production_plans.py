@@ -15,6 +15,7 @@ from sqlalchemy.exc import DBAPIError
 from sqlalchemy import func as sa_func
 
 from app.api.deps import WRITER_ROLES, require_role, get_current_user
+from app.core.config import settings
 from app.core.database import get_db
 from app.core.sorting import SortClause, apply_sort, parse_sort
 from app.domain.dimensions import format_cut_layout
@@ -2143,12 +2144,28 @@ async def _truncate_all_production_data(db: AsyncSession) -> None:
             await asyncio.sleep(0.2 * attempt)
 
 
+def _require_production_reset_enabled() -> None:
+    """Env-гейт полного сброса: вне dev/e2e ручки нет (issue #234).
+
+    Отключённый флаг отвечает 404, а не 403: прод не должен подтверждать
+    существование ручки. В сигнатуре маршрута эта зависимость объявлена
+    ПОСЛЕ ролевой (`require_role`) — иначе аноним получал бы 404 вместо 401.
+    """
+    if not settings.ALLOW_PRODUCTION_RESET:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Not Found")
+
+
 @router.post("/reset-all", status_code=status.HTTP_204_NO_CONTENT)
 async def reset_all_plans(
     db: AsyncSession = Depends(get_db),
-    current_user: User = Depends(get_current_user),
+    current_user: User = Depends(require_role([UserRole.admin])),
+    _reset_enabled: None = Depends(_require_production_reset_enabled),
 ):
-    """Удалить все производственные планы, связанные данные и справочники (маршруты, правила, импорты)."""
+    """Удалить все производственные планы, связанные данные и справочники (маршруты, правила, импорты).
+
+    Ручка — инструмент стенда: только `admin` и только при включённом
+    `ALLOW_PRODUCTION_RESET` (`.env.dev`/`.env.e2e`).
+    """
     # Атрибуция аудита снимается ДО сброса. Откат в цикле повтора делает
     # `current_user` expired, и чтение user.id / user.full_name после него
     # упало бы MissingGreenlet — то есть повтор, вылечивший TRUNCATE,

@@ -7,6 +7,11 @@ import tempfile
 import uuid
 
 os.environ.setdefault("DEV_BYPASS_AUTH", "true")
+# `POST /production-plans/reset-all` в бою закрыт флагом (issue #234) и отвечает
+# 404. Тесты гоняют ручку по-настоящему (в т.ч. регресс на повтор TRUNCATE),
+# поэтому флаг включается здесь; выключенное состояние проверяется точечно
+# через monkeypatch.
+os.environ.setdefault("ALLOW_PRODUCTION_RESET", "true")
 
 # Тесты пишут только во временный каталог: не зависеть от env-переменных
 # окружения (в т.ч. линуксовых /app/* путей) и дефолтов конфига.

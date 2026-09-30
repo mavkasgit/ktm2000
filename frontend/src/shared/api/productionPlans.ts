@@ -874,10 +874,6 @@ export async function getPositionHistory(planId: number, positionId: number) {
   return data;
 }
 
-export async function resetAllPlans() {
-  await apiClient.post("/production-plans/reset-all");
-}
-
 // --- Bulk action schemas (shared with backend BulkActionResponse) ----------
 
 export type BulkActionStatus = "success" | "failed" | "skipped";

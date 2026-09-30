@@ -26,6 +26,11 @@ class Settings(BaseSettings):
     ACCESS_TOKEN_EXPIRE_MINUTES: int = 1440
     ALGORITHM: str = "HS256"
     DEV_BYPASS_AUTH: bool = False
+    # Инструмент стенда, а не боевая ручка: `POST /production-plans/reset-all`
+    # стирает всё производство (`TRUNCATE ... CASCADE`). Пока флаг выключен,
+    # ручка отвечает 404 и существования своего не подтверждает. Включается в
+    # `.env.dev` и `.env.e2e` (issue #234).
+    ALLOW_PRODUCTION_RESET: bool = False
 
     DB_POOL_SIZE: int = 20
     DB_MAX_OVERFLOW: int = 10

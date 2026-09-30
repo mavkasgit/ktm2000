@@ -39,6 +39,14 @@ KTM-2000 разработан для локального и серверног�
 | `DATABASE_URL` | `postgresql+asyncpg://...` | Строка подключения ORM к PostgreSQL |
 | `SECRET_KEY` | `very-long-secret-key` | Ключ шифрования сессий и токенов |
 | `ENV` | `prod` / `dev` / `test` | Тип запущенного окружения |
+| `ALLOW_PRODUCTION_RESET` | `false` / `true` | Полный сброс производства (`POST /production-plans/reset-all`) разрешён. Только role `admin`; при `false` ручка отвечает 404 |
+
+**Сброс производства — только на dev/e2e.** `POST /api/production-plans/reset-all`
+стирает всё производство (`TRUNCATE ... CASCADE`: планы, позиции, задания,
+передачи, проводки, справочники и шаблоны импорта). Это инструмент стенда, а не
+боевая ручка: в прод-окружении `ALLOW_PRODUCTION_RESET=false`, и ручка отвечает
+404 — не подтверждая даже своего существования. Включать её допустимо лишь в
+`.env.dev` и `.env.e2e` (issue #234).
 
 ---
 
