@@ -6,8 +6,10 @@
 `ALLOW_PRODUCTION_RESET` — 404 (прод не подтверждает существование ручки),
 `admin` при включённом — 204.
 
-Порядок проверок в тесте соответствует порядку зависимостей в маршруте:
-ролевой гвард стоит раньше env-гейта, иначе аноним получал бы 404 вместо 401.
+Ролевая проверка стоит в сигнатуре маршрута раньше env-гейта. Тесты анонима и
+`viewer` гоняются при ВЫКЛЮЧЕННОМ флаге — именно так фиксируется этот порядок:
+без них перестановка двух зависимостей осталась бы зелёной, а аноним получал
+бы 404 вместо 401.
 """
 from __future__ import annotations
 
@@ -40,25 +42,25 @@ async def _headers_for(session: AsyncSession, role: UserRole, username: str) -> 
     return {"Authorization": f"Bearer {token}"}
 
 
-async def test_anonymous_gets_401(
+async def test_anonymous_gets_401_when_reset_disabled(
     client: AsyncClient,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    """Без токена — 401, а не 404: гейт окружения не подменяет вход."""
+    """Без токена — 401, а не 404: ролевой гвард раньше env-гейта."""
     monkeypatch.setattr(settings, "DEV_BYPASS_AUTH", False)
-    monkeypatch.setattr(settings, "ALLOW_PRODUCTION_RESET", True)
+    monkeypatch.setattr(settings, "ALLOW_PRODUCTION_RESET", False)
 
     assert (await client.post(RESET_ALL_URL)).status_code == 401
 
 
-async def test_viewer_gets_403(
+async def test_viewer_gets_403_when_reset_disabled(
     client: AsyncClient,
     session: AsyncSession,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     """Зритель не сбрасывает производство: ручка только для admin."""
     monkeypatch.setattr(settings, "DEV_BYPASS_AUTH", False)
-    monkeypatch.setattr(settings, "ALLOW_PRODUCTION_RESET", True)
+    monkeypatch.setattr(settings, "ALLOW_PRODUCTION_RESET", False)
     headers = await _headers_for(session, UserRole.viewer, "reset_viewer")
 
     assert (await client.post(RESET_ALL_URL, headers=headers)).status_code == 403
@@ -82,10 +84,7 @@ async def test_admin_gets_204_when_reset_enabled(
     session: AsyncSession,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    """Флаг включён (dev/e2e) — админ сбрасывает производство.
-
-    Последний в файле: TRUNCATE опустошает схему модуля.
-    """
+    """Флаг включён (dev/e2e) — админ сбрасывает производство."""
     monkeypatch.setattr(settings, "DEV_BYPASS_AUTH", False)
     monkeypatch.setattr(settings, "ALLOW_PRODUCTION_RESET", True)
     headers = await _headers_for(session, UserRole.admin, "reset_admin_on")

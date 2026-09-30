@@ -28,8 +28,9 @@ class Settings(BaseSettings):
     DEV_BYPASS_AUTH: bool = False
     # Инструмент стенда, а не боевая ручка: `POST /production-plans/reset-all`
     # стирает всё производство (`TRUNCATE ... CASCADE`). Пока флаг выключен,
-    # ручка отвечает 404 и существования своего не подтверждает. Включается в
-    # `.env.dev` и `.env.e2e` (issue #234).
+    # ручка отвечает 404 и существования своего не подтверждает. Включается
+    # только на стендах dev/e2e (файлы по `ENV_FILE`) и в тестах (conftest);
+    # в проде остаётся false (issue #234).
     ALLOW_PRODUCTION_RESET: bool = False
 
     DB_POOL_SIZE: int = 20

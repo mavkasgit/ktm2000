@@ -187,8 +187,13 @@ change-set); каталог/остатки — прямые вызовы API (`a
   `POST /api/production-plans/reset-all`, а это `TRUNCATE TABLE … CASCADE`
   по 27 таблицам, включая `production_routes`, `route_rule_profiles` и
   `import_templates`
-  ([`production_plans.py`](../../backend/app/api/routes/production_plans.py):1985-1998,
-  сам эндпоинт — :2073). Смысл для прогона: справочники маршрутов и шаблонов
+  ([`production_plans.py`](../../backend/app/api/routes/production_plans.py) —
+  `_truncate_all_production_data` и маршрут `POST /reset-all`). Ручка закрыта
+  дважды: ролью `admin` и флагом `ALLOW_PRODUCTION_RESET` (issue #234), который
+  стенд поднимает сам из [`.env.e2e`](../../.env.e2e). `apiResetAll()` глушит
+  404, поэтому снятый флаг прогон не уронит, а превратит сброс в тихий no-op:
+  увидев «грязные» данные между тестами, проверяйте флаг, а не порядок сида.
+  Смысл для прогона: справочники маршрутов и шаблонов
   импорта после `reset-all` пусты, поэтому в `beforeEach` сброс идёт первым, а
   сид справочников — после него. `CASCADE` берёт и таблицы, которых в списке
   нет, так что «очистилось всё производство» — буквальное свойство, а не
