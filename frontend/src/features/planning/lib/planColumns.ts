@@ -55,7 +55,7 @@ export const planColumns: PlanColumn[] = [
     valueLabel: formatDimensionsFilterValue,
     // Раскрой печатается в несколько строк (вход, стрелка, каждый распил), и
     // это осознанный перенос, а не обрезок: резать список распилов нельзя.
-    width: "200px",
+    width: "120px",
   },
   { id: "name", label: "Наименование", filterField: "name", sortField: "name", apiParam: "source_name", width: "320px" },
   {
@@ -109,7 +109,7 @@ export const PLAN_ACTIONS_COLUMN_WIDTH = "180px";
  * уголок сброса. Ниже неё таблица не сжимается, а прокручивается по
  * горизонтали — иначе колонки опять начнут сжиматься и наезжать друг на друга.
  */
-export const PLAN_TABLE_MIN_WIDTH = 1596;
+export const PLAN_TABLE_MIN_WIDTH = 1516;
 
 /** Подпись колонки для счётчика активных фильтров берётся отсюда же. */
 export const planColumnLabels: Record<string, string> = Object.fromEntries(
