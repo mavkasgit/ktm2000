@@ -14,7 +14,7 @@ from sqlalchemy.exc import DBAPIError
 
 from sqlalchemy import func as sa_func
 
-from app.api.deps import WRITER_ROLES, require_role, get_current_user
+from app.api.deps import PLAN_WRITER_ROLES, READER_ROLES, require_role, get_current_user
 from app.core.config import settings
 from app.core.database import get_db
 from app.core.sorting import SortClause, apply_sort, parse_sort
@@ -105,7 +105,7 @@ class PlanSummaryOut(BaseModel):
     created_at: str
 
 
-@router.get("", response_model=list[PlanSummaryOut])
+@router.get("", response_model=list[PlanSummaryOut], dependencies=[Depends(require_role(list(READER_ROLES)))])
 async def list_plans(db: AsyncSession = Depends(get_db)) -> list[PlanSummaryOut]:
     plans = (
         await db.execute(
@@ -266,7 +266,7 @@ class SectionTotalsOut(BaseModel):
     totals: list[SectionTotalsLineOut]
 
 
-@router.get("/{production_plan_id}/preview")
+@router.get("/{production_plan_id}/preview", dependencies=[Depends(require_role(list(READER_ROLES)))])
 async def preview_production_plan(production_plan_id: int, db: AsyncSession = Depends(get_db)) -> dict:
     await _require_visible_plan(db, production_plan_id)
     try:
@@ -281,7 +281,7 @@ async def apply_plan_change_set(
     change_set_id: int,
     skip_invalid: bool = False,
     db: AsyncSession = Depends(get_db),
-    current_user: User = Depends(get_current_user),
+    current_user: User = Depends(require_role([UserRole.admin])),
 ) -> dict:
     await _require_visible_plan(db, production_plan_id)
     change_set = await db.get(PlanChangeSet, change_set_id)
@@ -302,7 +302,7 @@ async def rollback_plan_change_set(
     production_plan_id: int,
     change_set_id: int,
     db: AsyncSession = Depends(get_db),
-    current_user: User = Depends(get_current_user),
+    current_user: User = Depends(require_role([UserRole.admin])),
 ) -> dict:
     change_set = await db.get(PlanChangeSet, change_set_id)
     await _require_visible_plan(db, production_plan_id)
@@ -321,7 +321,7 @@ async def discard_plan_change_set(
     production_plan_id: int,
     change_set_id: int,
     db: AsyncSession = Depends(get_db),
-    current_user: User = Depends(get_current_user),
+    current_user: User = Depends(require_role([UserRole.admin])),
 ) -> dict:
     await _require_visible_plan(db, production_plan_id)
     """Discard a change set: delete pending ones directly, rollback applied ones."""
@@ -378,7 +378,7 @@ async def delete_import_batch(
     batch_id: int,
     delete_drafts_only: bool = False,
     db: AsyncSession = Depends(get_db),
-    current_user: User = Depends(get_current_user),
+    current_user: User = Depends(require_role([UserRole.admin])),
 ) -> dict | JSONResponse:
 #: Удаление батча импорта (спека docs/plan-import-spec.md §4.4, тикет #167):
 #: при живых downstream-данных — 409 {code, blockers, safe_action, drafts};
@@ -485,7 +485,7 @@ async def approve_position(
     force: bool = False,
     payload: StatusActionIn | None = None,
     db: AsyncSession = Depends(get_db),
-    current_user: User = Depends(get_current_user),
+    current_user: User = Depends(require_role(list(PLAN_WRITER_ROLES))),
 ) -> dict:
     await _require_visible_plan(db, production_plan_id)
     logger = logging.getLogger(__name__)
@@ -524,7 +524,7 @@ async def cancel_position(
     position_id: int,
     payload: StatusActionIn | None = None,
     db: AsyncSession = Depends(get_db),
-    current_user: User = Depends(get_current_user),
+    current_user: User = Depends(require_role(list(PLAN_WRITER_ROLES))),
 ) -> dict:
     await _require_visible_plan(db, production_plan_id)
     try:
@@ -552,7 +552,7 @@ async def restore_position(
     position_id: int,
     payload: StatusActionIn | None = None,
     db: AsyncSession = Depends(get_db),
-    current_user: User = Depends(get_current_user),
+    current_user: User = Depends(require_role(list(PLAN_WRITER_ROLES))),
 ) -> dict:
     await _require_visible_plan(db, production_plan_id)
     try:
@@ -572,7 +572,11 @@ async def restore_position(
     }
 
 
-@router.get("/{production_plan_id}/positions/{position_id}/history", response_model=list[AuditLogOut])
+@router.get(
+    "/{production_plan_id}/positions/{position_id}/history",
+    response_model=list[AuditLogOut],
+    dependencies=[Depends(require_role(list(READER_ROLES)))],
+)
 async def position_history(
     production_plan_id: int,
     position_id: int,
@@ -604,7 +608,7 @@ async def delete_position(
     production_plan_id: int,
     position_id: int,
     db: AsyncSession = Depends(get_db),
-    current_user: User = Depends(get_current_user),
+    current_user: User = Depends(require_role(list(PLAN_WRITER_ROLES))),
 ):
     await _reject_legacy_plan_mutation(db, production_plan_id)
     position = await db.get(PlanPosition, position_id)
@@ -677,7 +681,7 @@ class BulkActionResponse(BaseModel):
 @router.post(
     "/{production_plan_id}/positions/bulk-approve",
     response_model=BulkActionResponse,
-    dependencies=[Depends(require_role(list(WRITER_ROLES)))],
+    dependencies=[Depends(require_role(list(PLAN_WRITER_ROLES)))],
 )
 async def bulk_approve_positions(
     production_plan_id: int,
@@ -735,7 +739,7 @@ async def bulk_approve_positions(
 @router.post(
     "/{production_plan_id}/positions/bulk-delete",
     response_model=BulkActionResponse,
-    dependencies=[Depends(require_role(list(WRITER_ROLES)))],
+    dependencies=[Depends(require_role(list(PLAN_WRITER_ROLES)))],
 )
 async def bulk_delete_positions(
     production_plan_id: int,
@@ -819,7 +823,11 @@ async def bulk_delete_positions(
     return BulkActionResponse(results=results)
 
 
-@router.post("/{production_plan_id}/release-batches", status_code=status.HTTP_201_CREATED)
+@router.post(
+    "/{production_plan_id}/release-batches",
+    status_code=status.HTTP_201_CREATED,
+    dependencies=[Depends(require_role(list(PLAN_WRITER_ROLES)))],
+)
 async def create_plan_release_batch(
     production_plan_id: int,
     payload: ReleaseBatchCreateIn,
@@ -838,7 +846,10 @@ async def create_plan_release_batch(
         raise HTTPException(status_code=400, detail=str(exc)) from exc
 
 
-@router.get("/{production_plan_id}/positions/{position_id}/route-check")
+@router.get(
+    "/{production_plan_id}/positions/{position_id}/route-check",
+    dependencies=[Depends(require_role(list(READER_ROLES)))],
+)
 async def route_check(
     production_plan_id: int,
     position_id: int,
@@ -974,7 +985,7 @@ async def route_check(
     )
 
 
-@router.get("/{production_plan_id}/section-totals")
+@router.get("/{production_plan_id}/section-totals", dependencies=[Depends(require_role(list(READER_ROLES)))])
 async def section_totals(
     production_plan_id: int,
     db: AsyncSession = Depends(get_db),
@@ -1111,7 +1122,7 @@ def _plan_file_info(
     )
 
 
-@router.get("/{production_plan_id}/files")
+@router.get("/{production_plan_id}/files", dependencies=[Depends(require_role(list(READER_ROLES)))])
 async def plan_files(production_plan_id: int, db: AsyncSession = Depends(get_db)) -> list[PlanFileInfo]:
     await _require_visible_plan(db, production_plan_id)
     batches = (
@@ -1538,7 +1549,7 @@ async def _serialize_plan_positions(
     return result
 
 
-@router.get("/all-files", response_model=list[PlanFileInfo])
+@router.get("/all-files", response_model=list[PlanFileInfo], dependencies=[Depends(require_role(list(READER_ROLES)))])
 async def all_plan_files(db: AsyncSession = Depends(get_db)) -> list[PlanFileInfo]:
     """Return files from all production plans."""
     batches = (
@@ -1551,7 +1562,11 @@ async def all_plan_files(db: AsyncSession = Depends(get_db)) -> list[PlanFileInf
     return [_plan_file_info(batch, file, change_set_id, applied_at) for batch, file, change_set_id, applied_at in batches]
 
 
-@router.get("/all-positions", response_model=AllPlanPositionsListResponse)
+@router.get(
+    "/all-positions",
+    response_model=AllPlanPositionsListResponse,
+    dependencies=[Depends(require_role(list(READER_ROLES)))],
+)
 async def all_plan_positions(
     search: str | None = Query(default=None, description="Поиск по source_sku, source_name, product sku/name"),
     status: str | None = Query(default=None, description="Фильтр статуса: draft, valid, invalid"),
@@ -1618,7 +1633,11 @@ async def all_plan_positions(
     )
 
 
-@router.get("/cancelled-positions", response_model=list[PlanPositionOut])
+@router.get(
+    "/cancelled-positions",
+    response_model=list[PlanPositionOut],
+    dependencies=[Depends(require_role(list(READER_ROLES)))],
+)
 async def cancelled_positions(db: AsyncSession = Depends(get_db)) -> list[PlanPositionOut]:
     """Return cancelled positions (for execution history/audit view)."""
     from app.models.production_plan import PlanChangeItem
@@ -1706,7 +1725,7 @@ async def cancelled_positions(db: AsyncSession = Depends(get_db)) -> list[PlanPo
     return result
 
 
-@router.get("/{production_plan_id}/all-positions")
+@router.get("/{production_plan_id}/all-positions", dependencies=[Depends(require_role(list(READER_ROLES)))])
 async def all_positions(production_plan_id: int, db: AsyncSession = Depends(get_db)) -> list[PlanPositionOut]:
     await _require_visible_plan(db, production_plan_id)
     from app.models.production_plan import PlanChangeItem
@@ -1810,7 +1829,7 @@ class BatchAssignRouteOut(BaseModel):
 async def batch_assign_route_global(
     payload: BatchAssignRouteIn,
     db: AsyncSession = Depends(get_db),
-    current_user: User = Depends(get_current_user),
+    current_user: User = Depends(require_role(list(PLAN_WRITER_ROLES))),
 ) -> BatchAssignRouteOut:
     """Assign route to positions by their IDs, regardless of which plan they belong to."""
     if not payload.position_ids:
@@ -1886,7 +1905,7 @@ async def batch_assign_route(
     production_plan_id: int,
     payload: BatchAssignRouteIn,
     db: AsyncSession = Depends(get_db),
-    current_user: User = Depends(get_current_user),
+    current_user: User = Depends(require_role(list(PLAN_WRITER_ROLES))),
 ) -> BatchAssignRouteOut:
     print(f"DEBUG batch_assign_route: plan_id={production_plan_id}, position_ids={payload.position_ids}, route_id={payload.route_id}")
 
@@ -1967,7 +1986,11 @@ class DuplicateGroup(BaseModel):
     positions: list[dict]
 
 
-@router.get("/{production_plan_id}/duplicates", response_model=list[DuplicateGroup])
+@router.get(
+    "/{production_plan_id}/duplicates",
+    response_model=list[DuplicateGroup],
+    dependencies=[Depends(require_role(list(READER_ROLES)))],
+)
 async def find_plan_duplicates(production_plan_id: int, db: AsyncSession = Depends(get_db)) -> list[DuplicateGroup]:
     """Find duplicate positions by unique Excel row fingerprint within a production plan."""
     await _require_visible_plan(db, production_plan_id)
@@ -2014,7 +2037,7 @@ async def find_plan_duplicates(production_plan_id: int, db: AsyncSession = Depen
     return result
 
 
-@router.get("/{production_plan_id}/batches/{batch_id}/preview")
+@router.get("/{production_plan_id}/batches/{batch_id}/preview", dependencies=[Depends(require_role(list(READER_ROLES)))])
 async def batch_preview(production_plan_id: int, batch_id: int, db: AsyncSession = Depends(get_db)) -> dict:
     await _require_visible_plan(db, production_plan_id)
     from app.models.production_plan import PlanChangeItem
@@ -2197,7 +2220,7 @@ async def update_position_quantity(
     position_id: int,
     payload: UpdatePositionQuantityIn,
     db: AsyncSession = Depends(get_db),
-    current_user: User = Depends(get_current_user),
+    current_user: User = Depends(require_role(list(PLAN_WRITER_ROLES))),
 ) -> PlanPositionOut:
     """Update position quantity and optionally quantity_per_hanger in source_payload."""
     from app.services.plan_validation import validate_plan_position

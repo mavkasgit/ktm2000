@@ -10,7 +10,7 @@ from sqlalchemy import desc, func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.database import get_db
-from app.api.deps import get_current_user
+from app.api.deps import PLAN_OWNER_ROLES, READER_ROLES, require_role
 from app.models.user import User
 from app.models.import_template import ImportTemplate
 from app.models.imports import ImportBatch, ImportBatchMode, ImportBatchStatus, ImportFile
@@ -106,7 +106,7 @@ async def import_excel_plan(
     column_mapping: str | None = Query(None),
     normalize_hanger_quantity: bool = Form(True),
     db: AsyncSession = Depends(get_db),
-    current_user: User = Depends(get_current_user),
+    current_user: User = Depends(require_role(list(PLAN_OWNER_ROLES))),
 ) -> ImportPreviewOut:
     if template_id is None:
         raise HTTPException(status_code=400, detail="template_id is required")
@@ -143,7 +143,11 @@ class SheetListOut(BaseModel):
     sheets: list[str]
 
 
-@router.post("/excel/sheets", response_model=SheetListOut)
+@router.post(
+    "/excel/sheets",
+    response_model=SheetListOut,
+    dependencies=[Depends(require_role(list(READER_ROLES)))],
+)
 async def list_excel_sheets(file: UploadFile = File(...)) -> SheetListOut:
     from io import BytesIO
 
@@ -165,7 +169,11 @@ class SheetPreviewOut(BaseModel):
     items: list[dict]
 
 
-@router.post("/excel/preview", response_model=SheetPreviewOut)
+@router.post(
+    "/excel/preview",
+    response_model=SheetPreviewOut,
+    dependencies=[Depends(require_role(list(READER_ROLES)))],
+)
 async def preview_excel_sheet_endpoint(
     file: UploadFile = File(...),
     sheet_index: int = Form(0),
@@ -305,7 +313,7 @@ def _simulated_plan_workbook(rows: list[SimulatedPlanRow], sheet_name: str) -> b
 async def import_simulated_excel(
     payload: SimulatedPlanImportIn,
     db: AsyncSession = Depends(get_db),
-    current_user: User = Depends(get_current_user),
+    current_user: User = Depends(require_role(list(PLAN_OWNER_ROLES))),
 ) -> ImportPreviewOut:
     """Импорт плана без файла: строки приходят в теле запроса, xlsx
     собирается в памяти и проходит тот же change-set, что и upload.
@@ -384,7 +392,11 @@ class ImportBatchItemsOut(BaseModel):
     total: int
 
 
-@router.get("/batches/{batch_id}/items", response_model=ImportBatchItemsOut)
+@router.get(
+    "/batches/{batch_id}/items",
+    response_model=ImportBatchItemsOut,
+    dependencies=[Depends(require_role(list(READER_ROLES)))],
+)
 async def list_import_batch_items(
     batch_id: int,
     cursor: int = Query(0, ge=0),
@@ -428,7 +440,7 @@ async def list_import_batch_items(
     }
 
 
-@router.get("/items/{item_id}")
+@router.get("/items/{item_id}", dependencies=[Depends(require_role(list(READER_ROLES)))])
 async def get_import_item(
     item_id: int,
     full: bool = Query(False),
@@ -470,7 +482,7 @@ class ImportRecentOut(BaseModel):
         from_attributes = True
 
 
-@router.get("/recent", response_model=list[ImportRecentOut])
+@router.get("/recent", response_model=list[ImportRecentOut], dependencies=[Depends(require_role(list(READER_ROLES)))])
 async def list_recent_imports(
     limit: int = Query(10, ge=1, le=50),
     db: AsyncSession = Depends(get_db),
@@ -534,7 +546,11 @@ class ImportPositionOut(BaseModel):
     import_batch_id: int | None
 
 
-@router.get("/{batch_id}/positions", response_model=list[ImportPositionOut])
+@router.get(
+    "/{batch_id}/positions",
+    response_model=list[ImportPositionOut],
+    dependencies=[Depends(require_role(list(READER_ROLES)))],
+)
 async def list_import_positions(batch_id: int, db: AsyncSession = Depends(get_db)) -> list[ImportPositionOut]:
     batch = await db.get(ImportBatch, batch_id)
     if batch is None:
@@ -598,7 +614,7 @@ async def list_import_positions(batch_id: int, db: AsyncSession = Depends(get_db
     return result
 
 
-@router.get("/files/{file_id}/download")
+@router.get("/files/{file_id}/download", dependencies=[Depends(require_role(list(READER_ROLES)))])
 async def download_import_file(file_id: int, db: AsyncSession = Depends(get_db)):
     from fastapi.responses import FileResponse
     from urllib.parse import quote

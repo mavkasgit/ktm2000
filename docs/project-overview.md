@@ -119,6 +119,7 @@ ktm2000/
 
 - Связка: primary `users.authentik_sub`, secondary username/email, optional JIT.
 - MES-роли (`users.role`) — app SoT; IdP groups не перезаписывают роль по умолчанию.
+- Роли план-импортных маршрутов: матрица (`PLAN_OWNER_ROLES`/`PLAN_WRITER_ROLES`) и зеркало фронта — [ADR-0057](adr/0057-roli-plan-importnyh-marshrutov.md).
 - Logout: clear `ktm2000_token` + Authentik end-session при OIDC on.
 - Dev: `DEV_BYPASS_AUTH` + magic Bearer `admin` (только dev); prod strict off.
 

@@ -102,6 +102,9 @@ beforeEach(() => {
     canEditReferences: true,
     canEditSettings: false,
     canForceDeleteImport: false,
+    canEditPlan: false,
+    canCreatePlanImport: false,
+    canManagePlanImport: false,
   });
   vi.mocked(fetchAllProducts).mockResolvedValue([]);
   vi.mocked(listRouteSelectionRules).mockResolvedValue([]);
@@ -210,6 +213,9 @@ describe("RawMaterialsPage: меню «Операции»", () => {
       canEditReferences: false,
       canEditSettings: false,
       canForceDeleteImport: false,
+      canEditPlan: false,
+      canCreatePlanImport: false,
+      canManagePlanImport: false,
     });
     renderPage();
 

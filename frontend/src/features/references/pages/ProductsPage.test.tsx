@@ -97,6 +97,9 @@ beforeEach(() => {
     canEditReferences: true,
     canEditSettings: false,
     canForceDeleteImport: false,
+    canEditPlan: false,
+    canCreatePlanImport: false,
+    canManagePlanImport: false,
   });
   vi.mocked(fetchAllProducts).mockResolvedValue([
     makeProduct({ composition: [makeComposition()] }),
@@ -172,6 +175,9 @@ describe("ProductsPage", () => {
       canEditReferences: false,
       canEditSettings: false,
       canForceDeleteImport: false,
+      canEditPlan: false,
+      canCreatePlanImport: false,
+      canManagePlanImport: false,
     });
     renderPage();
 

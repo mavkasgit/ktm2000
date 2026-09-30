@@ -44,6 +44,24 @@ TRANSFER_WRITER_ROLES: frozenset[UserRole] = frozenset(
     WRITER_ROLES | {UserRole.transporter}
 )
 
+# План-импортные ручки (issue #235, ADR-0057). Разделы канона: `/planning` —
+# admin и planner, `/execution` — admin, planner, section_manager.
+#
+# OWNER — владелец плана: создаёт батч импорта из мастера на `/planning`
+# (`POST /imports/excel`, `POST /imports/excel/simulate`). Коммит и снос батча
+# сильнее создания, поэтому там admin.
+PLAN_OWNER_ROLES: frozenset[UserRole] = frozenset(
+    {UserRole.admin, UserRole.planner}
+)
+
+# WRITER — мутации плана: зеркало ВСЕХ разделов, где нарисованы их кнопки, —
+# `/planning` (утверждение, выпуск, маршрут) и `/execution` (правка количества,
+# удаление позиции из списка). Массовые близнецы держат тот же набор, что
+# одиночные: иначе кнопка на экране планировщика — обманка.
+PLAN_WRITER_ROLES: frozenset[UserRole] = frozenset(
+    {UserRole.admin, UserRole.planner, UserRole.section_manager}
+)
+
 
 # Справочники /references (спека #145) — зеркало
 # frontend/src/features/auth/policies.ts. Раздел прикрыт во фронте
@@ -68,11 +86,16 @@ REFERENCES_WRITER_ROLES: frozenset[UserRole] = frozenset(
 def require_role(allowed_roles: Sequence[UserRole]) -> Callable:
     """Create a FastAPI dependency that checks the current user has one of the allowed roles."""
 
+    allowed = frozenset(allowed_roles)
+
     async def _guard(current_user: User = Depends(get_current_user)) -> User:
-        if current_user.role not in allowed_roles:
+        if current_user.role not in allowed:
             raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Insufficient permissions")
         return current_user
 
+    # Тест-матрица маршрутов (issue #235) читает набор отсюда: иначе минимально
+    # допустимую роль на путь пришлось бы выяснять запросами к каждой ручке.
+    setattr(_guard, "allowed_roles", allowed)
     return _guard
 
 
