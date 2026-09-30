@@ -22,7 +22,6 @@ import pytest
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.models.internal_plan import InternalPlan, SectionPlanLine
-from app.models.product import Product
 from app.models.production_plan import (
     PlanPosition,
     PlanPositionRouteOrigin,

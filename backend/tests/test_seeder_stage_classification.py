@@ -18,7 +18,7 @@ import pytest
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.models.route import ProductionRoute, RouteOperation, RouteStage
+from app.models.route import ProductionRoute, RouteStage
 from app.models.section import Section
 from app.seeds.canon.registry import build_plant_config
 from app.seeds.routes import ROUTES

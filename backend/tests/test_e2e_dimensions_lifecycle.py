@@ -37,9 +37,9 @@ from app.models.route import ProductionRoute, RouteOperation, RouteStage, Sectio
 from app.models.section import Section
 from app.models.spg import SpgSection, StorageProductionGroup
 from app.models.user import User, UserRole
-from app.models.work_task import WorkTask, WorkTaskStatus
+from app.models.work_task import WorkTask
 from app.stock import QualityState, Reason, StockCommand, StockCommandService
-from app.stock.models import StockBalance, StockTransaction
+from app.stock.models import StockBalance
 from app.stock.services import dimensions_match_clause
 from app.transfers.services import transfer_send
 

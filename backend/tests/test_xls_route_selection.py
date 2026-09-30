@@ -20,7 +20,6 @@ import json
 import pytest
 from sqlalchemy import select
 
-from app.models.import_template import ImportTemplate
 from app.models.product import Product, ProductType
 from app.models.route import RouteRuleProfile, RouteSelectionRule
 from app.models.section import Section

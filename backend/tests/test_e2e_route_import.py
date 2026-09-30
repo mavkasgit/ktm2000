@@ -7,8 +7,6 @@ This test verifies:
 4. Route steps are persisted in database
 5. Route assignment metadata is set (route_assigned_at, etc.)
 """
-from datetime import UTC, datetime
-from decimal import Decimal
 
 import pytest
 from sqlalchemy import select
@@ -17,11 +15,10 @@ from app.models.import_template import ImportTemplate
 from app.models.product import Product, ProductType
 from app.models.production_plan import (
     PlanChangeItem,
-    PlanChangeSet,
     PlanPositionRouteOrigin,
     ProductionPlan,
 )
-from app.models.route import ProductionRoute, RouteRuleProfile, RouteSelectionRule, RouteStage, RouteOperation, SectionOperation
+from app.models.route import ProductionRoute, RouteRuleProfile, RouteSelectionRule, RouteStage, SectionOperation
 from app.models.section import Section
 from app.services.plan_import_service import create_excel_import_change_set
 

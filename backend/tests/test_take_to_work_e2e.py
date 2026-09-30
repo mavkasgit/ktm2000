@@ -23,7 +23,7 @@ from app.models.production_plan import (
     ProductionPlan,
     ProductionPlanStatus,
 )
-from app.models.release_batch import ReleaseBatch, ReleaseBatchPosition
+from app.models.release_batch import ReleaseBatchPosition
 from app.models.route import ProductionRoute, RouteStage, RouteOperation
 from app.models.section import Section
 from app.services.plan_generation import create_release_batch

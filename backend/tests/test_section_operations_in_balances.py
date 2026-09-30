@@ -25,7 +25,7 @@ from app.services.material_operations import (
     completed_operations_for_task,
     previous_stage_sequence,
 )
-from app.stock import QualityState, Reason, StockCommand, StockCommandService
+from app.stock import Reason, StockCommand, StockCommandService
 from app.transfers.services import transfer_send
 from tests.stock.helpers import record_transfer_receive, seed_stock_for_task
 from tests.test_integrity_invariants import _release_via_take_to_work

@@ -29,7 +29,7 @@ from datetime import date
 from decimal import Decimal
 
 import pytest
-from sqlalchemy import func, select, text
+from sqlalchemy import text
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.security import create_access_token
@@ -47,7 +47,6 @@ from app.models.section import Section
 from app.models.spg import SpgSection, StorageProductionGroup
 from app.models.transfer import Transfer
 from app.models.user import User, UserRole
-from app.models.work_task import WorkTask
 
 
 # ─── helpers ────────────────────────────────────────────────────────────────

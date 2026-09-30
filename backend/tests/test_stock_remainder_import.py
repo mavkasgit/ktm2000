@@ -23,7 +23,6 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app.models import Product, ProductType, Section
 from app.models.import_template import ImportTemplate
 from app.models.route import SectionOperation
-from app.models.user import User, UserRole
 from app.stock.import_service import parse_operations_from_comment
 from app.stock.models import QualityState, Reason, StockBalance, StockTransaction
 from app.stock.services import StockCommand, StockCommandService

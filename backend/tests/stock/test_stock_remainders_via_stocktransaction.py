@@ -19,7 +19,6 @@ from app.stock import (
     StockBalance,
     StockCommand,
     StockCommandService,
-    StockTransaction,
 )
 from app.stock.services import completed_operations_match_clause
 from tests.test_integrity_invariants import assert_no_stock_ledger_invariants_violations

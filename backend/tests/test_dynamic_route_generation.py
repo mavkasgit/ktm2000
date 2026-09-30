@@ -6,7 +6,6 @@ Verifies that:
 3. Route steps are correctly created
 4. route_assigned_at is set properly
 """
-from datetime import UTC, date, datetime
 from decimal import Decimal
 
 import pytest
@@ -15,17 +14,10 @@ from sqlalchemy import select
 from app.models.import_template import ImportTemplate
 from app.models.product import Product, ProductType
 from app.models.production_plan import (
-    PlanChangeItem,
     PlanChangeItemStatus,
-    PlanChangeSet,
-    PlanPosition,
-    PlanPositionRouteOrigin,
     PlanPositionRouteMatchQuality,
-    PlanPositionStatus,
-    PlanSourceType,
-    ProductionPlan,
 )
-from app.models.route import ProductionRoute, RouteRuleProfile, RouteSelectionRule, RouteStage, RouteOperation, SectionOperation
+from app.models.route import ProductionRoute, RouteRuleProfile, RouteSelectionRule, RouteStage, SectionOperation
 from app.models.section import Section
 from app.services.plan_import_service import _make_change_items
 

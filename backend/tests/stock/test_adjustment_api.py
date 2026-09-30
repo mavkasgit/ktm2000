@@ -7,15 +7,14 @@
 """
 from __future__ import annotations
 
-from decimal import Decimal
 
 import pytest
 from httpx import AsyncClient
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.models import Product, ProductType, Section, User, UserRole
-from app.stock.models import QualityState, Reason, StockBalance, StockTransaction
+from app.models import Product, ProductType, Section
+from app.stock.models import Reason, StockBalance, StockTransaction
 
 pytestmark = pytest.mark.asyncio
 

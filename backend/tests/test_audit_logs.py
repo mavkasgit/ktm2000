@@ -84,7 +84,7 @@ async def test_get_audit_logs_task_statuses(client, session) -> None:
 
     # Создадим SectionPlanLine
     from app.models.internal_plan import InternalPlan, SectionPlanLine
-    from app.models.production_plan import PlanPosition, ProductionPlan, ProductionPlanStatus, PlanPositionStatus, PlanPositionValidationStatus, PlanSourceType
+    from app.models.production_plan import PlanPosition, ProductionPlan, PlanPositionStatus, PlanPositionValidationStatus, PlanSourceType
     plan = ProductionPlan(plan_no="PL-T", name="Plan Test")
     session.add(plan)
     await session.flush()

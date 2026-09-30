@@ -16,7 +16,7 @@ from app.models.production_plan import (
     PlanSourceType,
 )
 from app.models.section import Section
-from app.models.work_task import WorkTask, WorkTaskStatus
+from app.models.work_task import WorkTask
 from app.stock import Reason, StockCommand, StockCommandService
 from app.services.material_operations import completed_operations_for_task
 from tests.helpers.transfers import _make_dim_route_fixture, _make_two_ghp_setup, _seed_balance

@@ -6,7 +6,7 @@ from app.models.product import Product, ProductType
 from app.models.section import Section
 from app.models.spg import StorageProductionGroup
 from app.models.route import ProductionRoute, RouteStage, RouteOperation, RouteRuleProfile
-from app.models.defect import Defect, DefectItem, DefectStatus, DefectDecisionType
+from app.models.defect import Defect, DefectStatus, DefectDecisionType
 from app.models.user import User, UserRole
 from app.stock import Reason, StockCommand, StockCommandService, StockTransaction
 
@@ -134,7 +134,7 @@ async def test_get_product_last_completed_operation(client, session):
         PlanPositionValidationStatus,
     )
     from app.models.route import SectionOperation
-    from datetime import datetime, date
+    from datetime import date
 
     admin = await _make_admin(session)
     product = await _make_product(session, "FG-LAST-OP-TEST")
