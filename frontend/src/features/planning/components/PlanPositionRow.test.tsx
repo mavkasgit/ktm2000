@@ -34,15 +34,33 @@ function position(overrides: Partial<PlanPositionOut>): PlanPositionOut {
   }
 }
 
-/** Текст ячейки «Кол-во»: подпись итога лежит внутри неё. */
-function qtyCellText(pos: PlanPositionOut): string {
+/**
+ * Строка позиции внутри таблицы.
+ *
+ * `PositionRow` возвращает `<tr>`, поэтому рендерить его в bare-`div` нельзя:
+ * React ругается на `validateDOMNesting`, и тест проверял бы разметку, которой
+ * на странице нет. Обёртка повторяет настоящую — `<table><tbody>`.
+ */
+function renderPositionRow(
+  pos: PlanPositionOut,
+  props?: { routes?: ProductionRoute[]; onAssignRoute?: (positionId: number, routeId: number | null) => void },
+) {
   const client = new QueryClient({ defaultOptions: { queries: { retry: false } } })
-  render(
+  return render(
     <QueryClientProvider client={client}>
-      <PositionRow pos={pos} onApprove={vi.fn()} onDelete={vi.fn()} />
+      <table>
+        <tbody>
+          <PositionRow pos={pos} onApprove={vi.fn()} onDelete={vi.fn()} {...props} />
+        </tbody>
+      </table>
     </QueryClientProvider>,
   )
-  return screen.getByTitle("Итог по длинам (после пилы)").parentElement?.textContent ?? ""
+}
+
+/** Текст ячейки «Кол-во»: подпись итога лежит внутри неё. */
+function qtyCellText(pos: PlanPositionOut): string {
+  renderPositionRow(pos)
+  return screen.getByTitle("Итог после округления на подвесы").parentElement?.textContent ?? ""
 }
 
 describe("PositionRow — ячейка «Кол-во»", () => {
@@ -91,13 +109,8 @@ describe("PositionRow — ячейка «Кол-во»", () => {
 
 /** Ячейка «Размер» отрендеренной строки. */
 function sizeCell(pos: PlanPositionOut): HTMLElement {
-  const client = new QueryClient({ defaultOptions: { queries: { retry: false } } })
-  const { container } = render(
-    <QueryClientProvider client={client}>
-      <PositionRow pos={pos} onApprove={vi.fn()} onDelete={vi.fn()} />
-    </QueryClientProvider>,
-  )
-  return container.querySelectorAll('[id^="plan-position-"] > div')[4] as HTMLElement
+  const { container } = renderPositionRow(pos)
+  return container.querySelectorAll('[id^="plan-position-"] > td')[4] as HTMLElement
 }
 
 describe("PositionRow — ячейка «Размер»", () => {
@@ -131,19 +144,12 @@ describe("PositionRow — ячейка «Размер»", () => {
 
 describe("PositionRow — состояние валидации", () => {
   it("перекрытая форс-аппрувом валидация видна подписью канона, а не сырым кодом", () => {
-    const client = new QueryClient({ defaultOptions: { queries: { retry: false } } })
-    const { container } = render(
-      <QueryClientProvider client={client}>
-        <PositionRow
-          pos={position({
-            status: "approved",
-            validation_status: "overridden",
-            errors: ["route_contains_excluded_step: DRILLING"],
-          })}
-          onApprove={vi.fn()}
-          onDelete={vi.fn()}
-        />
-      </QueryClientProvider>,
+    const { container } = renderPositionRow(
+      position({
+        status: "approved",
+        validation_status: "overridden",
+        errors: ["route_contains_excluded_step: DRILLING"],
+      }),
     )
 
     expect(container.textContent).toContain("Перекрыта")
@@ -151,14 +157,9 @@ describe("PositionRow — состояние валидации", () => {
   })
 })
 
-/** Строка плана целиком: ячейки — прямые <div>-и внутри строки (CSS-grid). */
+/** Строка плана целиком: ячейки — прямые <td> внутри строки таблицы. */
 function renderRow(pos: PlanPositionOut, props?: { routes: ProductionRoute[]; onAssignRoute: (positionId: number, routeId: number | null) => void }): HTMLElement {
-  const client = new QueryClient({ defaultOptions: { queries: { retry: false } } })
-  const { container } = render(
-    <QueryClientProvider client={client}>
-      <PositionRow pos={pos} onApprove={vi.fn()} onDelete={vi.fn()} {...props} />
-    </QueryClientProvider>,
-  )
+  const { container } = renderPositionRow(pos, props)
   return container.querySelector('[id^="plan-position-"]') as HTMLElement
 }
 

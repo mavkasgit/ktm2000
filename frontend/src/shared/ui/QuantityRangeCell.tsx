@@ -40,6 +40,15 @@ export function QuantityRangeCell({
   const hangerCount = countHangers(hangerBaseQuantity, quantityPerHanger);
   const hangerLabel = hangerCount != null ? ` (${hangerCount}П)` : "";
 
+  // Округление на подвесы идёт вверх, поэтому итог больше сырья ровно тогда,
+  // когда сырьё не помещается в целые подвесы. Это и есть единственный повод
+  // выделить итог оранжевым — когда взяли лишний подвес. В остальных случаях
+  // итог серый, как и сырьё: чёрным он читался как «сырьё на месте», а в
+  // строке без диапазона это вообще единственное число, и оно выглядело
+  // главнее соседних строк. Вес не используется — жирным число читалось как
+  // другое количество.
+  const roundingAdded = originalStr !== null && originalStr !== qtyStr;
+
   return (
     <span className="whitespace-nowrap">
       {showRange && (
@@ -57,8 +66,8 @@ export function QuantityRangeCell({
         </>
       )}
       <span
-        className={originalStr !== null && originalStr !== qtyStr ? "font-medium text-amber-600" : "font-medium"}
-        title="Итог по длинам (после пилы)"
+        className={roundingAdded ? "text-amber-600" : "text-muted-foreground"}
+        title="Итог после округления на подвесы"
       >
         {qtyStr}
         {!showRange && hangerCount != null && (

@@ -346,8 +346,8 @@ export async function findApprovablePositionViaUI(page: Page): Promise<Approvabl
   }
 
   const positionId = Number.parseInt(rowId.replace("plan-position-", ""), 10);
-  // Ряд планирования — CSS-grid из <div>, не <table>: артикул рендерится
-  // PositionSkuCell как первый font-mono элемент строки (без «· остаток»).
+  // Артикул рендерится PositionSkuCell первым `font-mono` элементом строки
+  // (без «· остаток»).
   const skuEl = row.locator(".font-mono").first();
   const sku = ((await skuEl.textContent()) ?? "").trim();
 

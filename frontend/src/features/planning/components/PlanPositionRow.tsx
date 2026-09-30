@@ -2,15 +2,15 @@ import { useMemo, useState } from "react"
 import { AlertTriangle, Route } from "lucide-react"
 import { useQuery, useQueryClient } from "@tanstack/react-query"
 import { validationLabels } from "@/shared/lib/generated-labels"
-import { Button, AlertDialog, AlertDialogContent, AlertDialogHeader, AlertDialogTitle, AlertDialogDescription, AlertDialogFooter, AlertDialogAction, AlertDialogCancel, Combobox, PositionSkuCell, QuantityRangeCell, CutLayoutCell } from "@/shared/ui"
+import { Button, AlertDialog, AlertDialogContent, AlertDialogHeader, AlertDialogTitle, AlertDialogDescription, AlertDialogFooter, AlertDialogAction, AlertDialogCancel, Combobox, PositionSkuCell, QuantityRangeCell, CutLayoutCell, TABLE_CORNER_RESET_TD_CLASS } from "@/shared/ui"
 import { formatDimensionsLabel } from "@/shared/api/stock"
 import { cn } from "@/shared/utils/cn"
 import { TABLE_ROW_STYLES } from "@/shared/lib/tableRowStyles"
+import { TABLE_ROW_COMPACT } from "@/shared/lib/dataTableStyles"
 import { PlanPositionOut } from "@/shared/api/productionPlans"
 import { ProductionRoute } from "@/shared/api/routes"
 import { routeCheck } from "@/shared/api/productionPlans"
 import { queryKeys } from "@/shared/api/queryKeys"
-import { PLAN_POSITIONS_GRID } from "../lib/gridTemplates"
 import {
   translateLabel,
   routeErrorLabels,
@@ -215,12 +215,15 @@ export function PositionRow({ pos, onApprove, onDelete, selected, routes, onAssi
     return sections
   }, [routeCheckData, translatedWarnings, translatedErrors, pos])
 
+  // Ячейка тела строки. Высота строки и отступы — из общего набора
+  // (ADR-0030); свои `p-2` здесь означали бы третью плотность таблицы.
+  const cellClass = `${TABLE_ROW_COMPACT.cell} align-top min-w-0 text-sm`
+
   return (
     <>
-    <div
+    <tr
       id={`plan-position-${pos.id}`}
-      className={`grid items-start border-b ${hasErrors || hasDuplicateConflict ? "bg-red-50" : hasWarnings ? "bg-amber-50" : ""} ${selected ? TABLE_ROW_STYLES.selectedRow : ""} cursor-pointer hover:bg-accent hover:ring-1 hover:ring-ring/20 transition-colors`}
-      style={{ gridTemplateColumns: PLAN_POSITIONS_GRID }}
+      className={`border-b ${hasErrors || hasDuplicateConflict ? "bg-red-50" : hasWarnings ? "bg-amber-50" : ""} ${selected ? TABLE_ROW_STYLES.selectedRow : ""} cursor-pointer hover:bg-accent hover:ring-1 hover:ring-ring/20 transition-colors`}
       onClick={(e) => {
         if (onSelect) {
           e.stopPropagation()
@@ -230,23 +233,22 @@ export function PositionRow({ pos, onApprove, onDelete, selected, routes, onAssi
         }
       }}
     >
-      <div className="p-2 text-sm">
+      <td className={cellClass}>
         <span className="inline-flex items-center gap-1">
           {routeNameIsExpected && <ExpectedRouteMarker />}
           <span className="text-muted-foreground">#{pos.id}</span>
         </span>
-      </div>
-      <div className="p-2 text-sm font-medium">{rowNum}</div>
-      <div className="p-2 text-sm">
+      </td>
+      <td className={`${cellClass} font-medium`}>{rowNum}</td>
+      <td className={cellClass}>
         <PositionSkuCell
           sku={pos.source_sku}
-          freeStockQuantity={pos.free_stock_quantity}
           deficitQuantity={pos.deficit_quantity}
           availableQuantity={pos.available_remainder_quantity}
           onClick={onSkuClick}
         />
-      </div>
-      <div className="p-2 text-sm">
+      </td>
+      <td className={cellClass}>
         {/* Авторасчёт подвесов (#66): значение и источник приходят контрактом. */}
         <QuantityRangeCell
           quantity={pos.quantity}
@@ -254,15 +256,15 @@ export function PositionRow({ pos, onApprove, onDelete, selected, routes, onAssi
           originalQuantity={originalQuantity}
           quantityPerHanger={pos.quantity_per_hanger}
         />
-      </div>
-      <div className="p-2 text-sm whitespace-normal break-words leading-tight text-muted-foreground">
+      </td>
+      <td className={`${cellClass} whitespace-normal break-words leading-tight text-muted-foreground`}>
         <CutLayoutCell
           layout={pos.cut_layout}
           fallback={formatDimensionsLabel(pos.dimensions, pos.dimensions_label)}
         />
-      </div>
-      <div className="p-2 text-sm truncate whitespace-nowrap" title={pos.source_name ?? undefined}>{pos.source_name ?? "—"}</div>
-      <div className="p-2 text-sm truncate overflow-hidden">
+      </td>
+      <td className={`${cellClass} truncate whitespace-nowrap`} title={pos.source_name ?? undefined}>{pos.source_name ?? "—"}</td>
+      <td className={`${cellClass} truncate overflow-hidden`}>
         {routes && onAssignRoute ? (
           <div onClick={(e) => e.stopPropagation()} className="truncate">
           <Combobox
@@ -309,8 +311,8 @@ export function PositionRow({ pos, onApprove, onDelete, selected, routes, onAssi
             {routeError || "Не назначен"}
           </span>
         )}
-      </div>
-      <div className="p-2 text-xs">
+      </td>
+      <td className={`${cellClass} text-xs`}>
         {validationOverridden ? (
           <div className="space-y-1 text-amber-700">
             <span className="block font-medium">Валидация: {validationLabels.overridden}</span>
@@ -349,15 +351,15 @@ export function PositionRow({ pos, onApprove, onDelete, selected, routes, onAssi
             </div>
           </div>
         )}
-      </div>
-      <div className="p-2 text-xs">
+      </td>
+      <td className={`${cellClass} text-xs`}>
         {noWarnings ? null : (
         <span className="truncate block text-amber-600" title={translatedWarnings.join("\n")}>
           {translatedWarnings.join(", ")}
         </span>
         )}
-      </div>
-      <div className="p-2">
+      </td>
+      <td className={cellClass}>
         <div className="flex gap-1">
           {canApprove && (
             <>
@@ -375,9 +377,9 @@ export function PositionRow({ pos, onApprove, onDelete, selected, routes, onAssi
             </Button>
           )}
         </div>
-      </div>
-      <div />
-    </div>
+      </td>
+      <td className={TABLE_CORNER_RESET_TD_CLASS} />
+    </tr>
 
     <AlertDialog open={approveDialogOpen} onOpenChange={setApproveDialogOpen}>
       <AlertDialogContent>

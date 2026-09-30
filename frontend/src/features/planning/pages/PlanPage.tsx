@@ -8,7 +8,6 @@ import { usePaginatedTableQuery } from "@/shared/hooks/usePaginatedTableQuery"
 import { useFilterableTable } from "@/shared/hooks/useFilterableTable"
 import { buildColumnFilterPredicate } from "@/shared/lib/columnFilterSearch"
 import { formatDimensionsFilterValue, formatDimensionsLabel } from "@/shared/api/stock"
-import { PLAN_POSITIONS_GRID } from "../lib/gridTemplates"
 import { toast } from "@/shared/ui"
 import { keepPreviousData, useQuery, useQueryClient } from "@tanstack/react-query"
 import { allPlanFiles, allPlanPositions, PlanPositionOut, listPlans, batchAssignRouteGlobal, deleteImportBatch, approveProductionPlanPosition, getPlanDuplicates, bulkApprovePositions, bulkDeletePositions, type BatchDeleteConflict } from "@/shared/api/productionPlans"
@@ -38,8 +37,25 @@ import {
   validationFilterOptions,
 } from "../lib/plan-labels"
 import { buildPlanColumnApiParams, buildPlanPositionsQuery, buildPlanSortParam } from "../lib/planApiParams"
-import { planColumnLabels, planColumns, PLAN_CLIENT_FILTER_FIELDS, isRouteFilterClientSide } from "../lib/planColumns"
+import { planColumnLabels, planColumns, PLAN_ACTIONS_COLUMN_WIDTH, PLAN_TABLE_MIN_WIDTH, PLAN_CLIENT_FILTER_FIELDS, isRouteFilterClientSide } from "../lib/planColumns"
 import { useDebouncedValue } from "@/shared/lib/useDebouncedValue";
+import { TABLE_ROW_COMPACT } from "@/shared/lib/dataTableStyles"
+
+/**
+ * Ячейка шапки: стили таблицы данных плюс высота строки (ADR-0030).
+ */
+const headerCellClass = `${DATA_TABLE_STYLES.headerRow} ${DATA_TABLE_STYLES.headerCell} ${TABLE_ROW_COMPACT.headerCell}`
+
+/**
+ * Контейнер прокрутки таблицы плана.
+ *
+ * `DATA_TABLE_STYLES.container` гасит горизонтальную прокрутку
+ * (`overflow-x-hidden`), а план в неё упирается: колонки с фиксированными
+ * ширинами не влезают в узкое окно, и при обрезке колонки
+ * снова сжимаются, а это ровно тот дефект, который устранён `<colgroup>`.
+ * Поэтому горизонтальный скролл объявлен здесь, рядом с таблицей.
+ */
+const planTableScrollStyle = { maxHeight: "70vh", overflowX: "auto" } as const
 
 /** Один запуск массового утверждения: что уходит в API и что остаётся «пропущенным». */
 type BulkApproveRun = {
@@ -902,38 +918,46 @@ export function PlanPage() {
             {(positionsTotal > 0 || processedRows.length > 0 || posPending) && (
               <>
               <div
-                className={`flex-1 ${DATA_TABLE_STYLES.frame}`}
-                style={{ maxWidth: detailOpen ? 1600 : 1850, width: "100%" }}
+                className={`flex-1 ${DATA_TABLE_STYLES.container}`}
+                style={planTableScrollStyle}
               >
-                  {/* Header row */}
-                  <div
-                    className={`grid items-start ${DATA_TABLE_STYLES.headerRow}`}
-                    style={{ gridTemplateColumns: PLAN_POSITIONS_GRID }}
-                  >
+                <table
+                  className="w-full table-fixed border-separate border-spacing-0"
+                  style={{ minWidth: PLAN_TABLE_MIN_WIDTH }}
+                >
+                  {/* Ширины колонок — из описания: шапка и строки делят один
+                      `<colgroup>`, поэтому границы у них общие по построению. */}
+                  <colgroup>
                     {planColumns.map((column) => (
-                      <div className={DATA_TABLE_STYLES.headerCell} key={column.id}>
-                        <DataTableColumnHeader
-                          column={column}
-                          bindColumn={bindColumn}
-                          values={uniqueValuesByField[column.filterField] ?? []}
-                          currentSorts={sortConfigs}
-                          onSortChange={handleSortChange}
-                        />
-                      </div>
+                      <col key={column.id} style={{ width: column.width }} />
                     ))}
-                    <div className={`${DATA_TABLE_STYLES.headerCell} text-xs font-medium text-muted-foreground`}>
-                      Действия
-                    </div>
-                    <TableCornerResetHeader
-                      as="div"
-                      hasActiveFilters={hasTableFiltersActive}
-                      onReset={resetAllFilters}
-                      className={DATA_TABLE_STYLES.headerCell}
-                    />
-                  </div>
-
-                  {/* Data rows */}
-                  <div className="flex-1 overflow-auto min-h-0" style={{ maxHeight: '70vh' }}>
+                    <col style={{ width: PLAN_ACTIONS_COLUMN_WIDTH }} />
+                    <col style={{ width: "2.5rem" }} />
+                  </colgroup>
+                  <thead>
+                    <tr>
+                      {planColumns.map((column) => (
+                        <th key={column.id} className={headerCellClass}>
+                          <DataTableColumnHeader
+                            column={column}
+                            bindColumn={bindColumn}
+                            values={uniqueValuesByField[column.filterField] ?? []}
+                            currentSorts={sortConfigs}
+                            onSortChange={handleSortChange}
+                          />
+                        </th>
+                      ))}
+                      <th className={`${headerCellClass} text-xs font-medium text-muted-foreground`}>
+                        Действия
+                      </th>
+                      <TableCornerResetHeader
+                        hasActiveFilters={hasTableFiltersActive}
+                        onReset={resetAllFilters}
+                        dataTableHeader
+                      />
+                    </tr>
+                  </thead>
+                  <tbody>
                     {processedRows.map((p) => (
                       <PositionRow
                         key={p.id}
@@ -950,21 +974,22 @@ export function PlanPage() {
                         onSkuClick={setWipStatsSku}
                       />
                     ))}
-                    {processedRows.length === 0 && !posPending && (
-                      <p className="text-sm text-muted-foreground p-4 text-center">Нет позиций, соответствующих фильтру</p>
-                    )}
-                  </div>
-                  <TablePaginationFooter
-                    page={pagination.page}
-                    totalPages={positionsTotalPages}
-                    total={positionsTotal}
-                    shownCount={processedRows.length}
-                    limit={pagination.limit}
-                    onPageChange={pagination.setPage}
-                    onLimitChange={pagination.setLimit}
-                    rangeLabel={pagination.getRangeLabel(processedRows.length, positionsTotal, { onPage: true })}
-                  />
-                </div>
+                  </tbody>
+                </table>
+                {processedRows.length === 0 && !posPending && (
+                  <p className="text-sm text-muted-foreground p-4 text-center">Нет позиций, соответствующих фильтру</p>
+                )}
+                <TablePaginationFooter
+                  page={pagination.page}
+                  totalPages={positionsTotalPages}
+                  total={positionsTotal}
+                  shownCount={processedRows.length}
+                  limit={pagination.limit}
+                  onPageChange={pagination.setPage}
+                  onLimitChange={pagination.setLimit}
+                  rangeLabel={pagination.getRangeLabel(processedRows.length, positionsTotal, { onPage: true })}
+                />
+              </div>
               </>
             )}
             </div>

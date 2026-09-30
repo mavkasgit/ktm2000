@@ -1,5 +1,3 @@
-import type { ElementType } from "react";
-
 import { DATA_TABLE_STYLES } from "@/shared/lib/dataTableStyles";
 import { cn } from "@/shared/utils/cn";
 import { TableHeaderResetCell } from "./TableHeaderResetCell";
@@ -12,8 +10,6 @@ export interface TableCornerResetHeaderProps {
   hasActiveFilters: boolean;
   onReset: () => void;
   className?: string;
-  /** Для div-grid шапок (PlanPage) передайте `div`. */
-  as?: ElementType;
   /** Стили шапки DATA_TABLE_STYLES (execution, plan и т.п.). */
   dataTableHeader?: boolean;
 }
@@ -22,11 +18,10 @@ export function TableCornerResetHeader({
   hasActiveFilters,
   onReset,
   className,
-  as: Tag = "th",
   dataTableHeader = false,
 }: TableCornerResetHeaderProps) {
   return (
-    <Tag
+    <th
       className={cn(
         dataTableHeader && DATA_TABLE_STYLES.headerRow,
         dataTableHeader && DATA_TABLE_STYLES.headerCell,
@@ -35,7 +30,7 @@ export function TableCornerResetHeader({
       )}
     >
       <TableHeaderResetCell hasActiveFilters={hasActiveFilters} onReset={onReset} />
-    </Tag>
+    </th>
   );
 }
 

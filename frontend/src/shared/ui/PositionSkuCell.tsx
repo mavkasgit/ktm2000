@@ -1,13 +1,8 @@
 import { fmtQty } from "@/shared/lib/quantityFormat";
 
 export type PositionSkuCellProps = {
+  /** Артикул позиции; он же ключ снимка продукта для диалога статистики. */
   sku: string;
-  /**
-   * «Свободно на складах» (#207): физический годный остаток артикула по
-   * складам-хранилищам. Свойство склада — не зависит ни от какой позиции.
-   * `null`/`undefined` — данных о наличии нет, индикатор не показывается.
-   */
-  freeStockQuantity?: number | null;
   /**
    * «Доступно для позиции» (#207): свободно минус то, что занято ЧУЖИМИ
    * открытыми позициями. Позиция не вычитает сама себя.
@@ -30,29 +25,25 @@ export type PositionSkuCellProps = {
  * Ячейка «Артикул» с индикатором остатка.
  * Используется на страницах «Планирование» и «Контроль выполнения».
  *
- * Три числа с тремя именами (#207, решение Q4) — раньше здесь было одно
- * число, и оно вычитало саму позицию из остатка:
+ * Два числа, отвечающие на вопрос «хватит ли сырья этой позиции» (#207):
  *
- *   [КП-460] · 1500              — доступно для позиции
- *   [КП-460] · 1500 / 1200 · −300 — свободно на складах, доступно, дефицит
- *   [КП-460] · 0                 — действительно ноль
- *   [КП-460]                     — данных о наличии нет, индикатор молчит
+ *   [КП-460] 1500        — есть 1500, хватает
+ *   [КП-460] 492 −12     — есть 492, не хватает 12
+ *   [КП-460] 0 −318      — сырья нет, не хватает 318
+ *   [КП-460]             — данных о наличии нет, индикатор молчит
  *
- * Когда «свободно» и «доступно» совпадают, показывается одно число: два
- * одинаковых числа рядом ничего не добавляют, а различаются они ровно
- * тогда, когда чужую позицию это касается.
+ * «Свободно на складах» (#207) в строку больше не выводится: это свойство
+ * склада, а не позиции, и рядом с количеством позиции число вроде 1500
+ * читалось как «втрое больше», хотя к позиции отношения не имеет.
  */
 export function PositionSkuCell({
   sku,
-  freeStockQuantity,
   availableQuantity,
   deficitQuantity,
   onClick,
   title,
 }: PositionSkuCellProps) {
   const showQuantity = typeof availableQuantity === "number";
-  const showFreeStock =
-    typeof freeStockQuantity === "number" && freeStockQuantity !== availableQuantity;
   const hasDeficit = typeof deficitQuantity === "number" && deficitQuantity > 0;
 
   const skuElement = onClick ? (
@@ -74,59 +65,30 @@ export function PositionSkuCell({
   );
 
   return (
-    <div
-      className="flex items-center gap-1.5 min-w-0"
-      title={indicatorTitle(sku, freeStockQuantity, availableQuantity, deficitQuantity)}
-    >
+    <div className="flex items-center gap-1.5 min-w-0">
       {skuElement}
       {showQuantity && (
         <>
-          {showFreeStock && (
-            <span
-              className="font-mono text-xs text-muted-foreground shrink-0"
-              data-testid="position-sku-free-stock"
-            >
-              / {fmtQty(freeStockQuantity as number)}
-            </span>
-          )}
+          {/* Порядок «есть, потом не хватает»: второе число читается как
+              продолжение первого, а не как ещё одно количество наравне. */}
           <span
             className="font-mono text-xs text-muted-foreground shrink-0"
             data-testid="position-sku-available"
+            title={`Доступно для позиции ${sku}: ${fmtQty(availableQuantity as number)} шт.`}
           >
-            · {fmtQty(availableQuantity as number)}
+            {fmtQty(availableQuantity as number)}
           </span>
           {hasDeficit && (
             <span
               className="font-mono text-xs text-amber-600 shrink-0"
               data-testid="position-sku-deficit"
+              title={`Не хватает ${fmtQty(deficitQuantity as number)} шт. до планового количества`}
             >
-              · −{fmtQty(deficitQuantity as number)}
+              −{fmtQty(deficitQuantity as number)}
             </span>
           )}
         </>
       )}
     </div>
   );
-}
-
-/** Подсказка с обоими числами и дефицитом — одним блоком, а не «· 0». */
-function indicatorTitle(
-  sku: string,
-  freeStockQuantity?: number | null,
-  availableQuantity?: number | null,
-  deficitQuantity?: number | null,
-): string {
-  if (typeof availableQuantity !== "number") {
-    return `Нет данных о наличии ${sku}`;
-  }
-  const parts = [
-    `Свободно на складах: ${
-      typeof freeStockQuantity === "number" ? fmtQty(freeStockQuantity) : "—"
-    }`,
-    `Доступно для позиции: ${fmtQty(availableQuantity)}`,
-  ];
-  if (typeof deficitQuantity === "number" && deficitQuantity > 0) {
-    parts.push(`Дефицит позиции: ${fmtQty(deficitQuantity)}`);
-  }
-  return parts.join(" · ");
 }
