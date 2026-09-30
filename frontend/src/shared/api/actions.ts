@@ -17,6 +17,13 @@ export const AMENDABLE_ACTION_TYPES = [
 
 export type KnownActionType = (typeof AMENDABLE_ACTION_TYPES)[number];
 
+/** Типы действий, откат которых — отдельное право админа, а не обычная
+ *  писательская операция (ADR-0052 п.6). Зеркало бэка
+ *  `ADMIN_ONLY_REVERSE_TYPES` в `app/reversal/api.py`: сервер отвечает 403
+ *  на `/actions/{id}/preview-reverse` и `/actions/{id}/reverse`, а кнопка
+ *  в журнале для не-админа не показывается вовсе — иначе она ведёт в 403. */
+export const ADMIN_ONLY_REVERSE_ACTION_TYPES = ["import_remainders"] as const;
+
 export type JournalAction = {
   id: number;
   action_type: string;

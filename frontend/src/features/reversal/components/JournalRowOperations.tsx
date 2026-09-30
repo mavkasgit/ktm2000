@@ -1,7 +1,10 @@
 import { useState } from "react";
 import { GitBranch, Pencil, Undo2 } from "lucide-react";
 import type { ActionTreeNode, JournalAction } from "@/shared/api/actions";
+import { ADMIN_ONLY_REVERSE_ACTION_TYPES } from "@/shared/api/actions";
 import { Button } from "@/shared/ui";
+import { useAuth } from "@/features/auth/hooks/useAuth";
+import { POLICIES } from "@/features/auth/policies";
 import {
   Dialog,
   DialogContent,
@@ -34,6 +37,15 @@ export function JournalRowOperations({
   const [activeId, setActiveId] = useState(action.id);
   const tree = useActionTree(treeOpen ? activeId : null);
 
+  const { user } = useAuth();
+  // Откат импорта остатков — отдельное право админа (ADR-0052 п.6):
+  // сервер ответит 403, поэтому кнопка не показывается вовсе, а не ведёт
+  // зрителя в ошибку. Неактивное действие (status ≠ active) — напротив,
+  // обычная disabled-кнопка с причиной в title.
+  const reverseByRoleForbidden =
+    ADMIN_ONLY_REVERSE_ACTION_TYPES.includes(
+      action.action_type as (typeof ADMIN_ONLY_REVERSE_ACTION_TYPES)[number],
+    ) && !POLICIES.rollbackImport(user?.role);
   const canReverse = action.status === "active";
   const canAmend = action.action_type === "transfer_send" && action.status === "active";
 
@@ -52,16 +64,18 @@ export function JournalRowOperations({
       >
         <GitBranch className="h-4 w-4" />
       </Button>
-      <Button
-        variant="outline"
-        size="sm"
-        title={canReverse ? "Отменить действие" : "Только активные действия"}
-        disabled={!canReverse}
-        data-testid={`reverse-button-${action.id}`}
-        onClick={() => setReverseOpen(true)}
-      >
-        <Undo2 className="h-4 w-4" />
-      </Button>
+      {!reverseByRoleForbidden && (
+        <Button
+          variant="outline"
+          size="sm"
+          title={canReverse ? "Отменить действие" : "Только активные действия"}
+          disabled={!canReverse}
+          data-testid={`reverse-button-${action.id}`}
+          onClick={() => setReverseOpen(true)}
+        >
+          <Undo2 className="h-4 w-4" />
+        </Button>
+      )}
       <Button
         variant="outline"
         size="sm"

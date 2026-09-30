@@ -7,7 +7,13 @@ vi.mock("@/shared/api/actions", async (importOriginal) => ({
   getActions: vi.fn(),
 }));
 
+// `JournalRowOperations` читает роль: откат импорта остатков показывается
+// только админу (ADR-0052 п.6). Здесь дефолт — админ, чтобы проверки
+// кнопок остальных типов шли не про роль.
+vi.mock("@/features/auth/hooks/useAuth", () => ({ useAuth: vi.fn() }));
+
 import { getActions, type JournalAction } from "@/shared/api/actions";
+import { useAuth, type AuthShellUser } from "@/features/auth/hooks/useAuth";
 import { ActionsJournalPage } from "./ActionsJournalPage";
 
 const makeAction = (overrides: Partial<JournalAction> = {}): JournalAction => ({
@@ -34,6 +40,18 @@ function renderPage() {
 
 beforeEach(() => {
   vi.clearAllMocks();
+  const user: AuthShellUser = { username: "u", full_name: "U", role: "admin" };
+  vi.mocked(useAuth).mockReturnValue({
+    user,
+    rolesCatalog: [],
+    roleLabel: (r: string) => r,
+    roleSections: () => [],
+    isAuthenticated: true,
+    isLoading: false,
+    loginWithToken: vi.fn(),
+    logout: vi.fn(),
+    refreshUser: vi.fn(),
+  });
   vi.mocked(getActions).mockResolvedValue({
     items: [
       makeAction(),
