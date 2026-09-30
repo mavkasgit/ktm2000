@@ -1,16 +1,12 @@
 /**
  * Раскладка пары колонок «Ошибки»/«Предупр.» в превью импорта плана.
  *
- * Колонки условные: строка без сообщений вообще не рисует ячейку, поэтому
- * соседние ячейки добирают освободившиеся слоты через `colSpan`. Пара
- * «Ошибки»+«Предупр.» — две колонки, и сообщение одного типа занимает обе,
- * когда второго нет: иначе текст («Не задано количество на подвес: 2,7 м»)
- * упирается в 150px и переносится на десяток строк.
- *
- * Правило живёт здесь, потому что от него зависят и ячейки строки, и
- * `colSpan` строки с сырыми данными: разъезд в колонках тихо съедает
- * последние ячейки таблицы, и это видно только глазами.
+ * Слоты пары считает общий `messagePairLayout` — правило одно на обе
+ * таблицы плана, — а здесь к нему добавлен `colSpan` строки с сырыми
+ * данными: сумма всех `colSpan` строки обязана равняться числу колонок,
+ * иначе развёрнутая строка тихо съедает уголок сброса фильтров.
  */
+import { messagePairLayout } from "./messageColumns";
 
 /** Число колонок таблицы превью, включая уголок сброса фильтров. */
 export const PLAN_PREVIEW_TOTAL_COLUMNS = 10;
@@ -19,7 +15,7 @@ export const PLAN_PREVIEW_TOTAL_COLUMNS = 10;
 const COLUMNS_BEFORE_MESSAGES = 6;
 
 /** Слоты «Маршрут»+«Ошибки»+«Предупр.»: маршрут всегда один, плюс два под сообщения. */
-const MESSAGE_SLOT_COUNT = 3;
+const SLOTS_AROUND_MESSAGES = 3;
 
 export type PlanPreviewMessageLayout = {
   /** В строке есть хотя бы одна ошибка — ячейка «Ошибки» рисуется. */
@@ -46,12 +42,8 @@ export function planPreviewMessageLayout(
   hasErrors: boolean,
   hasWarnings: boolean,
 ): PlanPreviewMessageLayout {
-  const errorsColSpan = hasErrors ? (hasWarnings ? 1 : 2) : 0;
-  const warningsColSpan = hasWarnings ? (hasErrors ? 1 : 2) : 0;
-  const routeColSpan = MESSAGE_SLOT_COUNT - errorsColSpan - warningsColSpan;
-
-  const rowColSpan =
-    COLUMNS_BEFORE_MESSAGES + routeColSpan + errorsColSpan + warningsColSpan + 1;
+  const { errorsColSpan, warningsColSpan, precedingColSpan: routeColSpan } =
+    messagePairLayout(hasErrors, hasWarnings);
 
   return {
     hasErrors,
@@ -59,6 +51,9 @@ export function planPreviewMessageLayout(
     errorsColSpan,
     warningsColSpan,
     routeColSpan,
-    detailColSpan: rowColSpan,
+    // Развёрнутая строка закрывает таблицу целиком при любом наборе
+    // сообщений: сумма всех colSpan строки не зависит от их числа.
+    detailColSpan:
+      COLUMNS_BEFORE_MESSAGES + SLOTS_AROUND_MESSAGES + 1,
   };
 }

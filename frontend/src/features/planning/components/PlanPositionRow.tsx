@@ -19,6 +19,7 @@ import {
   isRiskyForApprove,
   DuplicateConflict,
 } from "../lib/plan-labels"
+import { messagePairLayout } from "../lib/messageColumns"
 
 /**
  * Признак «маршрут не назначен» (#229): при `route_id = null` имя пересобрано
@@ -219,6 +220,15 @@ export function PositionRow({ pos, onApprove, onDelete, selected, routes, onAssi
   // (ADR-0030); свои `p-2` здесь означали бы третью плотность таблицы.
   const cellClass = `${TABLE_ROW_COMPACT.cell} align-top min-w-0 text-sm`
 
+  // Пара «Ошибки»/«Предупр.» — две колонки, а сообщение бывает одно:
+  // тогда оно занимает обе, иначе текст упирается в 180px. Пустая ячейка
+  // пары не рисуется вовсе, поэтому её слоты достаются «Маршруту»: иначе
+  // «Действия» и уголок сброса уедут влево.
+  const errorsCellShown = validationOverridden || !noErrors || hasDuplicateConflict
+  const warningsCellShown = !noWarnings
+  const { errorsColSpan, warningsColSpan, precedingColSpan: routeColSpan } =
+    messagePairLayout(errorsCellShown, warningsCellShown)
+
   return (
     <>
     <tr
@@ -264,7 +274,7 @@ export function PositionRow({ pos, onApprove, onDelete, selected, routes, onAssi
         />
       </td>
       <td className={`${cellClass} truncate whitespace-nowrap`} title={pos.source_name ?? undefined}>{pos.source_name ?? "—"}</td>
-      <td className={`${cellClass} truncate overflow-hidden`}>
+      <td colSpan={routeColSpan} className={`${cellClass} truncate overflow-hidden`}>
         {routes && onAssignRoute ? (
           <div onClick={(e) => e.stopPropagation()} className="truncate">
           <Combobox
@@ -312,21 +322,26 @@ export function PositionRow({ pos, onApprove, onDelete, selected, routes, onAssi
           </span>
         )}
       </td>
-      <td className={`${cellClass} text-xs`}>
+      {errorsColSpan === 0 ? null : (
+      <td colSpan={errorsColSpan} className={`${cellClass} text-xs`}>
         {validationOverridden ? (
           <div className="space-y-1 text-amber-700">
             <span className="block font-medium">Валидация: {validationLabels.overridden}</span>
             {hasErrors && (
-              <span className="truncate block" title={translatedErrors.join("\n")}>
-                {translatedErrors.join(", ")}
+              <span className="line-clamp-2 block" title={translatedErrors.join(" · ")}>
+                {translatedErrors.map((error, idx) => (
+                  <span key={idx} className="block">{error}</span>
+                ))}
               </span>
             )}
           </div>
         ) : noErrors ? null : (
           <div className="space-y-1 text-red-600">
             {hasErrors && (
-              <span className="truncate block" title={translatedErrors.join("\n")}>
-                {translatedErrors.join(", ")}
+              <span className="line-clamp-2 block" title={translatedErrors.join(" · ")}>
+                {translatedErrors.map((error, idx) => (
+                  <span key={idx} className="block">{error}</span>
+                ))}
               </span>
             )}
           </div>
@@ -352,13 +367,16 @@ export function PositionRow({ pos, onApprove, onDelete, selected, routes, onAssi
           </div>
         )}
       </td>
-      <td className={`${cellClass} text-xs`}>
-        {noWarnings ? null : (
-        <span className="truncate block text-amber-600" title={translatedWarnings.join("\n")}>
-          {translatedWarnings.join(", ")}
+      )}
+      {warningsColSpan === 0 ? null : (
+      <td colSpan={warningsColSpan} className={`${cellClass} text-xs`}>
+        <span className="line-clamp-2 block text-amber-600" title={translatedWarnings.join(" · ")}>
+          {translatedWarnings.map((warning, idx) => (
+            <span key={idx} className="block">{warning}</span>
+          ))}
         </span>
-        )}
       </td>
+      )}
       <td className={cellClass}>
         <div className="flex gap-1">
           {canApprove && (

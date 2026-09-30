@@ -1,9 +1,12 @@
+import type { ComponentProps } from "react"
+
 import { render, screen } from "@testing-library/react"
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query"
 import { describe, expect, it, vi } from "vitest"
 
 import type { PlanPositionOut } from "@/shared/api/productionPlans"
 import type { ProductionRoute } from "@/shared/api/routes"
+import { planColumns } from "../lib/planColumns"
 import { PositionRow } from "./PlanPositionRow"
 
 function position(overrides: Partial<PlanPositionOut>): PlanPositionOut {
@@ -43,7 +46,7 @@ function position(overrides: Partial<PlanPositionOut>): PlanPositionOut {
  */
 function renderPositionRow(
   pos: PlanPositionOut,
-  props?: { routes?: ProductionRoute[]; onAssignRoute?: (positionId: number, routeId: number | null) => void },
+  props?: Partial<ComponentProps<typeof PositionRow>>,
 ) {
   const client = new QueryClient({ defaultOptions: { queries: { retry: false } } })
   return render(
@@ -158,7 +161,10 @@ describe("PositionRow — состояние валидации", () => {
 })
 
 /** Строка плана целиком: ячейки — прямые <td> внутри строки таблицы. */
-function renderRow(pos: PlanPositionOut, props?: { routes: ProductionRoute[]; onAssignRoute: (positionId: number, routeId: number | null) => void }): HTMLElement {
+function renderRow(
+  pos: PlanPositionOut,
+  props?: Partial<ComponentProps<typeof PositionRow>>,
+): HTMLElement {
   const { container } = renderPositionRow(pos, props)
   return container.querySelector('[id^="plan-position-"]') as HTMLElement
 }
@@ -232,3 +238,132 @@ describe("PositionRow — ячейка «Маршрут» при невыбра�
     expect(routeCell(row).textContent).toContain("ЮП-460 резка")
   })
 })
+
+/**
+ * Пара «Ошибки»/«Предупр.»: какие ячейки строки пришлись на её слоты.
+ * Ячейки берутся по месту — сразу за «Маршрутом» и перед «Действиями» с
+ * уголком, — а не по цвету текста: перекрытая валидация и дубликат строки
+ * печатаются в ячейке «Ошибки» не красным.
+ */
+function messageCells(
+  pos: PlanPositionOut,
+  props?: Partial<ComponentProps<typeof PositionRow>>,
+) {
+  const row = renderRow(pos, props)
+  const all = cells(row)
+
+  return { row, pair: all.slice(all.indexOf(routeCell(row)) + 1, -2) }
+}
+
+/** Сумма colSpan строки обязана равняться числу колонок таблицы. */
+function slotsOf(row: HTMLElement): number {
+  return cells(row).reduce((sum, cell) => sum + Number(cell.getAttribute("colspan") ?? 1), 0)
+}
+
+/** Колонки описания + «Действия» + уголок сброса. */
+const PLAN_TABLE_COLUMNS = planColumns.length + 2
+
+describe("PositionRow — пара «Ошибки»/«Предупр.»", () => {
+  it("только предупреждение занимает обе колонки пары", () => {
+    const { pair } = messageCells(position({ warnings: ["hanger_quantity_not_set:2.7"] }))
+
+    expect(pair).toHaveLength(1)
+    expect(pair[0].getAttribute("colspan")).toBe("2")
+    expect(pair[0].textContent).toContain("Не задано количество на подвес")
+  })
+
+  it("только ошибка занимает обе колонки пары", () => {
+    const { pair } = messageCells(position({ errors: ["product_not_found"] }))
+
+    expect(pair).toHaveLength(1)
+    expect(pair[0].getAttribute("colspan")).toBe("2")
+    expect(pair[0].textContent).toContain("Продукт не найден")
+  })
+
+  it("оба типа — по одной колонке, у каждого блока свой title", () => {
+    const { pair } = messageCells(
+      position({
+        errors: ["product_not_found", "quantity_must_be_positive"],
+        warnings: ["hanger_quantity_not_set:2.7"],
+      }),
+    )
+
+    expect(pair).toHaveLength(2)
+    expect(pair[0].getAttribute("colspan")).toBe("1")
+    expect(pair[1].getAttribute("colspan")).toBe("1")
+    // Каждый код — свой элемент блока, а не склейка через запятую.
+    const errorLines = pair[0].querySelector("[title]")!.children
+    expect(Array.from(errorLines)).toHaveLength(2)
+    expect(Array.from(errorLines).map((line) => line.textContent)).toEqual([
+      "Продукт не найден",
+      "Количество должно быть положительным",
+    ])
+    expect(pair[0].querySelector("[title]")?.getAttribute("title")).toContain("Продукт не найден")
+    expect(pair[1].querySelector("[title]")?.getAttribute("title")).toContain("Не задано количество")
+  })
+
+  it("без сообщений пара не рисуется — слоты забирает «Маршрут»", () => {
+    const { row, pair } = messageCells(position({}))
+
+    expect(pair).toHaveLength(0)
+    expect(routeCell(row).getAttribute("colspan")).toBe("3")
+  })
+
+  it("строка занимает все колонки при любом наборе сообщений", () => {
+    const cases: Partial<PlanPositionOut>[] = [
+      {},
+      { warnings: ["hanger_quantity_not_set:2.7"] },
+      { errors: ["product_not_found"] },
+      { errors: ["product_not_found"], warnings: ["hanger_quantity_not_set:2.7"] },
+      {
+        status: "approved",
+        validation_status: "overridden",
+        errors: ["route_contains_excluded_step: DRILLING"],
+      },
+    ]
+
+    for (const overrides of cases) {
+      const { row, pair } = messageCells(position(overrides))
+      const label = JSON.stringify(overrides)
+      const rowCells = cells(row)
+      const actions = rowCells[rowCells.length - 2]
+      const corner = rowCells[rowCells.length - 1]
+
+      expect(slotsOf(row), label).toBe(PLAN_TABLE_COLUMNS)
+      // «Действия» и уголок сброса остаются на своих местах, а перед ними —
+      // только слоты пары.
+      expect(actions.textContent?.trim(), label).not.toBe("")
+      expect(corner.getAttribute("class"), label).toContain("w-10")
+      expect(pair.length, label).toBeLessThanOrEqual(2)
+    }
+  })
+
+  it("дубликат строки Excel печатается в ячейке пары и тянет её на обе колонки", () => {
+    const { pair } = messageCells(
+      position({ status: "invalid", errors: [], warnings: [] }),
+      {
+        duplicateConflict: { fingerprint: "abc", conflictIds: [99] },
+        onJumpToPosition: vi.fn(),
+      },
+    )
+
+    expect(pair).toHaveLength(1)
+    expect(pair[0].getAttribute("colspan")).toBe("2")
+    expect(pair[0].textContent).toContain("Дубликат Excel-строки")
+  })
+
+  it("перекрытая валидация видна в паре и тянет её на обе колонки", () => {
+    const { pair } = messageCells(
+      position({
+        status: "approved",
+        validation_status: "overridden",
+        errors: ["route_contains_excluded_step: DRILLING"],
+      }),
+    )
+
+    expect(pair).toHaveLength(1)
+    expect(pair[0].getAttribute("colspan")).toBe("2")
+    expect(pair[0].textContent).toContain("Перекрыта")
+  })
+})
+
