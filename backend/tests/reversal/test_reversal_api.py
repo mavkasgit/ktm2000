@@ -133,6 +133,7 @@ async def test_reverse_stale_token_maps_409(session: AsyncSession, client) -> No
         json={"plan_token": token},
         headers=headers,
     )
+    assert resp.status_code == 409, resp.text
 
 
 async def test_not_allowed_preview_blocked(session: AsyncSession, client) -> None:
