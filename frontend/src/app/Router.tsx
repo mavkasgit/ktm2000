@@ -21,6 +21,7 @@ const DevPage = import.meta.env.DEV
   : null
 
 const PlanPage = lazyPage(() => import("../features/planning/pages/PlanPage"), "PlanPage")
+const PlanImportHistoryPage = lazyPage(() => import("../features/planning/pages/PlanImportHistoryPage"), "PlanImportHistoryPage")
 const PlanPreviewPage = lazyPage(() => import("../features/planning/pages/PlanPreviewPage"), "PlanPreviewPage")
 const ExecutionPage = lazyPage(() => import("../features/execution/pages/ExecutionPage"), "ExecutionPage")
 const SectionsTasksPage = lazyPage(() => import("../features/sections/pages/SectionsTasksPage"), "SectionsTasksPage")
@@ -72,6 +73,7 @@ export const router = createBrowserRouter([
         ],
       },
       { path: "planning", element: <PlanPage />, errorElement: routeErrorElement },
+      { path: "planning/import-history", element: <PlanImportHistoryPage />, errorElement: routeErrorElement },
       { path: "plans/:planId/preview", element: <PlanPreviewPage />, errorElement: routeErrorElement },
       { path: "execution", element: <ExecutionPage />, errorElement: routeErrorElement },
       { path: "section-tasks", element: <SectionsTasksPage />, errorElement: routeErrorElement },

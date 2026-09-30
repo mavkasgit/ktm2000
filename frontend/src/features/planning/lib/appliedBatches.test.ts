@@ -2,7 +2,7 @@ import { describe, expect, it } from "vitest";
 
 import type { PlanFileInfo } from "@/shared/api/productionPlans";
 
-import { findLastAppliedBatchId, findNewerAppliedBatch } from "./appliedBatches";
+import { lastAppliedBatchIdByPlan, findNewerAppliedBatch } from "./appliedBatches";
 
 function planFile(overrides: Partial<PlanFileInfo> = {}): PlanFileInfo {
   return {
@@ -23,38 +23,48 @@ function planFile(overrides: Partial<PlanFileInfo> = {}): PlanFileInfo {
   };
 }
 
-describe("findLastAppliedBatchId", () => {
+describe("lastAppliedBatchIdByPlan", () => {
   it("выбирает батч с самым поздним applied_at, а не последний в списке", () => {
     const files = [
       planFile({ batch_id: 9, applied_at: "2026-03-02T00:00:00Z", created_at: "2026-03-09T00:00:00Z" }),
       planFile({ batch_id: 5, applied_at: "2026-03-04T00:00:00Z", created_at: "2026-03-01T00:00:00Z" }),
       planFile({ batch_id: 3, applied_at: "2026-03-03T00:00:00Z", created_at: "2026-03-20T00:00:00Z" }),
     ];
-    expect(findLastAppliedBatchId(files, 1)).toBe(5);
+    expect(lastAppliedBatchIdByPlan(files).get(1)).toBe(5);
   });
 
-  it("пропускает неприменённые батчи и батчи других планов", () => {
+  it("держит «последний» отдельно по каждому плану", () => {
+    const files = [
+      planFile({ batch_id: 3, production_plan_id: 1, applied_at: "2026-03-01T00:00:00Z" }),
+      planFile({ batch_id: 4, production_plan_id: 2, applied_at: "2026-03-06T00:00:00Z" }),
+      planFile({ batch_id: 5, production_plan_id: 1, applied_at: "2026-03-02T00:00:00Z" }),
+      planFile({ batch_id: 6, production_plan_id: 2, applied_at: "2026-03-03T00:00:00Z" }),
+    ];
+    const map = lastAppliedBatchIdByPlan(files);
+    expect(map.get(1)).toBe(5);
+    expect(map.get(2)).toBe(4);
+  });
+
+  it("пропускает неприменённые батчи и неразбираемую дату", () => {
     const files = [
       planFile({ batch_id: 3, applied_at: null, created_at: "2026-03-05T00:00:00Z" }),
       planFile({ batch_id: 4, production_plan_id: 2, applied_at: "2026-03-06T00:00:00Z" }),
-      planFile({ batch_id: 6, applied_at: "2026-03-01T00:00:00Z" }),
-    ];
-    expect(findLastAppliedBatchId(files, 1)).toBe(6);
-  });
-
-  it("не считает применением неразбираемую дату", () => {
-    const files = [
       planFile({ batch_id: 5, applied_at: "2026-03-01T00:00:00Z" }),
-      planFile({ batch_id: 4, applied_at: "не дата" }),
+      planFile({ batch_id: 6, applied_at: "не дата" }),
     ];
-    expect(findLastAppliedBatchId(files, 1)).toBe(5);
+    const map = lastAppliedBatchIdByPlan(files);
+    expect(map.get(1)).toBe(5);
+    expect(map.get(2)).toBe(4);
   });
 
-  it("возвращает null без плана и когда применённых батчей нет", () => {
-    expect(findLastAppliedBatchId([], 1)).toBeNull();
-    expect(findLastAppliedBatchId([planFile({ applied_at: "2026-03-01T00:00:00Z" })], null)).toBeNull();
-    expect(findLastAppliedBatchId([planFile({ applied_at: "2026-03-01T00:00:00Z" })], undefined)).toBeNull();
-    expect(findLastAppliedBatchId([planFile({ applied_at: null })], 1)).toBeNull();
+  it("не заводит запись для плана без применённых батчей", () => {
+    expect(lastAppliedBatchIdByPlan([]).size).toBe(0);
+    const map = lastAppliedBatchIdByPlan([
+      planFile({ batch_id: 5, applied_at: null }),
+      planFile({ batch_id: 6, production_plan_id: 3, applied_at: "не дата" }),
+    ]);
+    expect(map.size).toBe(0);
+    expect(map.get(1)).toBeUndefined();
   });
 });
 

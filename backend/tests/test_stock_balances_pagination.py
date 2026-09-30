@@ -488,17 +488,48 @@ async def _make_operation_section(
 
 async def _seed_balance_with_ops(
     session: AsyncSession, *, product: Product, location_id: int, user_id: int,
-    ops: list[str] | None,
+    ops: list[str] | None, dimensions: dict | None = None,
 ) -> None:
     await StockCommandService().record(session, StockCommand(
         product_id=product.id,
         to_location_id=location_id,
         quantity=Decimal("10"),
         reason=Reason.MANUAL_IN,
+        dimensions=dimensions,
         completed_operations=ops,
         created_by=user_id,
     ))
     await session.commit()
+
+
+async def _make_section_with_operations(
+    session: AsyncSession, *, code: str, name: str, sort_order: int,
+    ops: list[tuple[str, str, int]],
+) -> Section:
+    """Участок справочника с несколькими значимыми производственными операциями.
+
+    ``ops`` — ``(operation_code, operation_name, sort_order)``; caller задаёт
+    порядок так, чтобы алфавит кодов НЕ совпадал с порядком справочника —
+    иначе регрессия на порядок подписи не заметна.
+    """
+    from app.models.route import SectionOperation
+
+    section = Section(
+        code=code, name=name, type="production", is_active=True, sort_order=sort_order,
+    )
+    session.add(section)
+    await session.flush()
+    for op_code, op_name, op_sort_order in ops:
+        session.add(SectionOperation(
+            section_id=section.id,
+            operation_code=op_code,
+            operation_name=op_name,
+            operation_type="production",
+            is_significant=True,
+            sort_order=op_sort_order,
+        ))
+    await session.flush()
+    return section
 
 
 @pytest.mark.asyncio
@@ -565,3 +596,162 @@ async def test_balances_operations_column_sorts_by_dictionary_order(
         assert filtered.status_code == 200, filtered.text
         skus = [row["product_sku"] for row in filtered.json()["balances"]]
         assert skus == [expected_sku], (label, skus)
+
+
+@pytest.mark.asyncio
+async def test_balances_operations_inside_one_section_follow_dictionary_order(
+    client, session: AsyncSession,
+):
+    """Две операции одного участка: ячейка печатает порядок справочника, не алфавит кодов.
+
+    Регрессия ADR-0055 (#238): ``completed_operation_stages`` сортировал
+    устойчиво по ``sequence`` секции, но обходил массив кодов — в канонической
+    форме это алфавит по коду. Внутри секции порядок имён в ячейке оказывался
+    алфавитным, SQL-подпись колонки — по ``sort_order`` справочника, и фильтр
+    по значению ячейки молча возвращал ноль строк.
+    """
+    user = await _make_user(session)
+    client.headers["Authorization"] = f"Bearer {create_access_token(subject=user.email)}"
+    location = await _make_location(
+        session, code="BAL-OPS-INSEC", name="Inside Section Balance",
+    )
+    await _make_section_with_operations(
+        session, code="BAL-OPS-INSEC-SEC", name="Один участок", sort_order=0,
+        # Алфавит кодов противоположен порядку справочника.
+        ops=[("Z_FIRST", "Первая операция", 10), ("A_SECOND", "Вторая операция", 20)],
+    )
+
+    product = await _make_product(session, sku="BAL-OPS-INSEC-1")
+    await _seed_balance_with_ops(
+        session, product=product, location_id=location.id, user_id=user.id,
+        ops=["A_SECOND", "Z_FIRST"],
+    )
+
+    resp = await client.get(
+        "/api/stock/balance", params={"location_id": location.id},
+    )
+    assert resp.status_code == 200, resp.text
+    rows = resp.json()["balances"]
+    assert len(rows) == 1, rows
+    cell_label = ", ".join(
+        stage["operation_name"] for stage in rows[0]["completed_stages"]
+    )
+    assert cell_label == "Первая операция, Вторая операция"
+
+    # Значение из ячейки, применённое как фильтр, находит эту же строку:
+    # ILIKE идёт по SQL-подписи, а она обязана совпасть с ячейкой.
+    filtered = await client.get(
+        "/api/stock/balance",
+        params={"location_id": location.id, "operations": cell_label},
+    )
+    assert filtered.status_code == 200, filtered.text
+    body = filtered.json()
+    assert body["total"] == 1, (cell_label, [row["id"] for row in body["balances"]])
+    assert [row["id"] for row in body["balances"]] == [rows[0]["id"]]
+
+
+@pytest.mark.asyncio
+async def test_balances_operations_section_sort_order_tie_breaks_by_section_id(
+    client, session: AsyncSession,
+):
+    """Равный ``sort_order`` секций: и ячейка, и SQL-подпись идут по ``section.id``.
+
+    ``resolve_operations_dictionary`` при равном ``sort_order`` секций
+    сравнивает ``section.id``, в SQL-подписи этого уровня раньше не было —
+    там шёл сразу ``operation.sort_order``. Секция с меньшим ``id``, но
+    операцией с большим ``sort_order`` уезжала в конец подписи, и ячейка с
+    фильтром разъезжались.
+    """
+    user = await _make_user(session)
+    client.headers["Authorization"] = f"Bearer {create_access_token(subject=user.email)}"
+    location = await _make_location(
+        session, code="BAL-OPS-TIE", name="Section Tie Balance",
+    )
+    # Обе секции с одинаковым sort_order; у первой операции sort_order больше —
+    # порядок по ``section.id`` и порядок по ``operation.sort_order`` противоположны.
+    first = await _make_section_with_operations(
+        session, code="BAL-OPS-TIE-1", name="Первая секция", sort_order=0,
+        ops=[("Z_TIE_LATE", "Из первой секции", 50)],
+    )
+    second = await _make_section_with_operations(
+        session, code="BAL-OPS-TIE-2", name="Вторая секция", sort_order=0,
+        ops=[("A_TIE_EARLY", "Из второй секции", 10)],
+    )
+    assert first.id < second.id
+
+    product = await _make_product(session, sku="BAL-OPS-TIE-1")
+    await _seed_balance_with_ops(
+        session, product=product, location_id=location.id, user_id=user.id,
+        ops=["A_TIE_EARLY", "Z_TIE_LATE"],
+    )
+
+    resp = await client.get(
+        "/api/stock/balance", params={"location_id": location.id},
+    )
+    assert resp.status_code == 200, resp.text
+    rows = resp.json()["balances"]
+    assert len(rows) == 1, rows
+    cell_label = ", ".join(
+        stage["operation_name"] for stage in rows[0]["completed_stages"]
+    )
+    assert cell_label == "Из первой секции, Из второй секции"
+
+    filtered = await client.get(
+        "/api/stock/balance",
+        params={"location_id": location.id, "operations": cell_label},
+    )
+    assert filtered.status_code == 200, filtered.text
+    body = filtered.json()
+    assert body["total"] == 1, (cell_label, [row["id"] for row in body["balances"]])
+
+
+@pytest.mark.asyncio
+async def test_balances_by_product_order_is_stable_on_operations_axis(
+    client, session: AsyncSession,
+):
+    """У одного товара строки, различающиеся признаком операций, стоят детерминированно.
+
+    ``list_balances_by_product`` сортировал по ``(location_id, quality_state)``
+    без tie-breaker'а по пятой оси: строки одного участка и качества приходили
+    в порядке кучи либо в порядке уникального индекса по ключу остатка и могли
+    меняться между прогонами. Уровни ORDER BY:
+    ``location_id → quality_state → completed_operations → id``; ``NULL`` оси
+    («не зафиксировано») — в конец.
+
+    Габариты и порядок записи подобраны так, чтобы оба «чужих» порядка — по
+    куче и по уникальному индексу, где ``dimensions`` идёт раньше признака —
+    совпали с ожидаемым. Иначе тест прошёл бы и без явного tie-breaker'а.
+    """
+    user = await _make_user(session)
+    client.headers["Authorization"] = f"Bearer {create_access_token(subject=user.email)}"
+    location = await _make_location(
+        session, code="BAL-BYPROD", name="By Product Balance",
+    )
+    await _make_section_with_operations(
+        session, code="BAL-BYPROD-SEC", name="Участок оси", sort_order=0,
+        ops=[("Z_LAST", "Последняя", 10), ("A_FIRST", "Первая", 20)],
+    )
+
+    product = await _make_product(session, sku="BAL-BYPROD-1")
+    # Запись: Z → NULL → A (ожидаемый порядок A → Z → NULL).
+    for ops, dimensions in (
+        (["Z_LAST"], {"length_mm": 1000}),
+        (None, None),
+        (["A_FIRST"], {"length_mm": 9000}),
+    ):
+        await _seed_balance_with_ops(
+            session, product=product, location_id=location.id, user_id=user.id,
+            ops=ops, dimensions=dimensions,
+        )
+
+    resp = await client.get(f"/api/stock/balance/by-product/{product.id}")
+    assert resp.status_code == 200, resp.text
+    rows = resp.json()
+    assert [row["completed_operations"] for row in rows] == [
+        ["A_FIRST"], ["Z_LAST"], None,
+    ]
+
+    # Повторный запрос того же набора — тот же порядок и те же id.
+    again = await client.get(f"/api/stock/balance/by-product/{product.id}")
+    assert again.status_code == 200, again.text
+    assert [row["id"] for row in again.json()] == [row["id"] for row in rows]

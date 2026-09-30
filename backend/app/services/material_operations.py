@@ -50,27 +50,45 @@ OPERATIONS_EMPTY_LABEL = "без операций"
 def completed_operation_stages(
     ops: list[str] | None, operations: list[dict]
 ) -> list[dict]:
-    """Этапы справочника, соответствующие кодам признака, — по порядку маршрута.
+    """Этапы справочника, соответствующие кодам признака, — в порядке справочника.
 
     ``operations`` — справочник в формате ``resolve_operations_dictionary``
-    (``RouteStepsDisplay``). Порядок задаёт ``sequence`` (порядок секции в
-    маршруте); внутри одной секции сохраняется порядок справочника —
-    ``sorted`` устойчив, а справочник уже упорядочен по
-    ``(sort_order, id)``.
+    (``RouteStepsDisplay``), уже упорядоченный по ``(section.sort_order,
+    section.id, section_operation.sort_order, section_operation.id)``. Результат —
+    та же последовательность, срезанная по кодам признака: порядок не
+    вычисляется заново, а наследуется из позиции этапа в справочнике.
+
+    Фактический порядок именно такой, а не «по ``sequence``»: ``sequence`` — это
+    только ``section.sort_order``, а обход идёт по массиву кодов ``ops``, в
+    канонической форме отсортированному алфавитно по коду
+    (``canonicalize_completed_operations``). Устойчивый ``sorted`` по одному
+    ``sequence`` внутри секции сохранил бы этот алфавит, и подпись ячейки
+    разошлась бы с SQL-подписью колонки «Операции»
+    (``stock/api.py::_balance_operations_label_expr``, где в ``ORDER BY`` идёт
+    ``(section.sort_order, section.id, operation.sort_order, operation.id)``):
+    фильтр по значению ячейки искал бы другой порядок имён и молча возвращал
+    ноль строк.
 
     Код, которого нет в справочнике, в набор этапов не попадает: ``record()``
     отвергает такие на записи, он мог остаться лишь от удаления справочной
     записи — молчаливое отбрасывание сделало бы строку неотличимой от
-    «операций не было».
+    «операций не было». Повтор кода в справочнике (уникальность — по паре
+    ``section_id, operation_code``) разрешается в пользу последней записи,
+    как и раньше, когда строился только словарь по кодам.
     """
-    by_code = {operation["operation_code"]: operation for operation in operations}
+    by_code: dict[str, dict] = {}
+    position: dict[str, int] = {}
+    for index, operation in enumerate(operations):
+        code = operation["operation_code"]
+        by_code[code] = operation
+        position[code] = index
     return sorted(
         (
             by_code[code]
             for code in (ops or [])
             if code in by_code
         ),
-        key=lambda stage: stage["sequence"],
+        key=lambda stage: position[stage["operation_code"]],
     )
 
 

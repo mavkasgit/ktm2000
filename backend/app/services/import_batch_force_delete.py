@@ -47,8 +47,10 @@ from app.models.user import User
 from app.models.work_task import WorkTask
 from app.services.audit_log_service import log_action
 from app.services.action_journal_service import action_journal_service
+from app.services.material_operations import completed_operation_stages
 from app.services.production_plan_service import _delete_batch_and_orphan_file
 from app.stock.services import StockProjectionManager
+from app.stock.import_service import resolve_operations_dictionary
 from app.stock.models import QualityState
 
 #: Коды причин, по которым force невозможен даже с подтверждением оператора.
@@ -223,11 +225,15 @@ async def _collect_footprint(db: AsyncSession, batch_id: int) -> _Footprint:
             )
         ).all()
     }
-    fp.stock_effects = _aggregate_stock_effects(rows, locations)
+    fp.stock_effects = _aggregate_stock_effects(
+        rows, locations, await resolve_operations_dictionary(db) if rows else []
+    )
     return fp
 
 
-def _aggregate_stock_effects(rows, locations: dict[int, str]) -> list[dict]:
+def _aggregate_stock_effects(
+    rows, locations: dict[int, str], operations: list[dict]
+) -> list[dict]:
     """Свод по проводкам батча: чистый эффект на каждый ключ остатка.
 
     Это ровно то изменение остатка, которое увидит склад после удаления:
@@ -239,6 +245,14 @@ def _aggregate_stock_effects(rows, locations: dict[int, str]) -> list[dict]:
     разные строки баланса, и сводить их в одну цифру нельзя (ADR-0043 §3).
     Признак операций в свод выводится явно — иначе оператор увидит две
     несопоставимые строки с одинаковыми артикулом, локацией и длиной.
+
+    ``operations`` — справочник ``resolve_operations_dictionary``: по нему
+    признак разворачивается в ``completed_stages`` (ADR-0055 §5). Подпись
+    в диалоге обязана совпадать с доской остатков («Пресс (окно)», а не
+    ``PRESS_WINDOW``), поэтому строки свода несут тот же развитый
+    справочником признак, что и строка баланса; пустые состояния различает
+    сам ``completed_operations`` (``None`` — «не зафиксировано», ``[]`` —
+    «без операций»), у обоих ``completed_stages`` пуст, как и на доске.
     """
     deltas: dict[tuple[str, int, str | None, str | None], Decimal] = {}
     skus: dict[tuple[str, int, str | None, str | None], str] = {}
@@ -275,6 +289,9 @@ def _aggregate_stock_effects(rows, locations: dict[int, str]) -> list[dict]:
                 "location_code": locations.get(key[1], f"section:{key[1]}"),
                 "dimensions": dimensions[key],
                 "completed_operations": completed_operations[key],
+                "completed_stages": completed_operation_stages(
+                    completed_operations[key], operations
+                ),
                 "net_delta": format(deltas[key], "f"),
                 "ledger_entries": counts[key],
             }

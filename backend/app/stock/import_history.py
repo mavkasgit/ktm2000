@@ -100,6 +100,9 @@ class RowView:
     target_section_id: int | None
     target_section_name: str | None
     quality_state: str | None
+    # Пятая ось ключа остатка (ADR-0055): без неё две строки одного артикула,
+    # склада и размера в «посмотреть» выглядят как дубль с разными остатками.
+    completed_operations: list[str] | None
     status: str
     errors: list[str]
     warnings: list[str]
@@ -244,6 +247,10 @@ async def get_batch_rows(
     операциями (ADR-0055) получили бы одну сумму, и «посмотреть» показало бы
     не тот остаток, который батч завёл. Для откатанного батча это и есть
     сумма уже без его вклада.
+
+    Сам признак строки попадает в ``RowView.completed_operations``: две строки
+    одного артикула и склада с разными остатками без оси на экране — два
+    неотличимых дубля, а с осью — две разные группы остатка (ADR-0055).
     """
     from app.models.product import Product
     from app.domain.dimensions import format_dimensions
@@ -324,6 +331,11 @@ async def get_batch_rows(
             target_section_id=row.target_section_id,
             target_section_name=section.name if section else None,
             quality_state=row.quality_state,
+            completed_operations=(
+                list(row.completed_operations)
+                if row.completed_operations is not None
+                else None
+            ),
             status=str(row.status),
             errors=list(row.errors or []),
             warnings=list(row.warnings or []),

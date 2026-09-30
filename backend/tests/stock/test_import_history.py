@@ -7,14 +7,17 @@ from __future__ import annotations
 
 import pytest
 from decimal import Decimal
+from httpx import AsyncClient
 from sqlalchemy import select
 
 from app.models import Product, ProductType, Section
 from app.core.security import create_access_token
 from app.models.action_journal import Action
+from app.models.route import SectionOperation
 from app.models.user import User, UserRole
 from app.reversal import errors
 from app.reversal.service import reversal_service
+from app.services.material_operations import format_completed_operations_label
 from app.stock.import_history import (
     BLOCK_ALREADY_ROLLED_BACK,
     BLOCK_LEGACY_NO_LOCATION,
@@ -127,6 +130,92 @@ async def test_invalid_row_is_persisted_without_transaction(session: AsyncSessio
     assert rows[0].status == StockImportRowStatus.INVALID.value
     assert "sku_not_found" in rows[0].errors
     assert rows[0].current_balance is None
+
+
+# ─── Ось операций в «посмотреть» (ADR-0055, #239) ─────────────────────────────
+
+
+async def test_view_rows_split_by_operations_axis(
+    client: AsyncClient, session: AsyncSession
+) -> None:
+    """Батч из двух строк одного артикула с разными операциями: «посмотреть»
+    отдаёт ось ключа, две разные подписи и свои остатки на каждую строку.
+
+    Без ``completed_operations`` в схеме эти две строки на экране — два
+    неотличимых дубля (один артикул, склад и размер) с разными «Текущим
+    остатком»: причина расхождения невидима. С осью это две группы остатка.
+    """
+    section = await _section(session, "HIST-OPS-LOC")
+    for order, (code, name) in enumerate(
+        (("HIST_WINDOW", "Окно"), ("HIST_SHOT", "Дробеструй")), start=1
+    ):
+        session.add(
+            SectionOperation(
+                section_id=section.id,
+                operation_code=code,
+                operation_name=name,
+                operation_type="production",
+                is_significant=True,
+                sort_order=order,
+            )
+        )
+    product = await _product(session, "HIST-OPS")
+    await session.commit()
+
+    items = [
+        RemainderItem(
+            source_row_number=row,
+            sku=product.sku,
+            quantity=qty,
+            comment=None,
+            product_id=None,
+            product_name=None,
+            status="valid",
+            errors=[],
+            raw_values=[product.sku, str(qty)],
+            completed_stages=[{"operation_code": code, "operation_name": name}],
+        )
+        for row, qty, code, name in (
+            (2, 8888.0, "HIST_WINDOW", "Окно"),
+            (3, 4500.0, "HIST_SHOT", "Дробеструй"),
+        )
+    ]
+    result = await _import(session, section, items)
+    await session.commit()
+    assert result.batch_id is not None
+
+    # Уровень сервиса: ось строки и её собственный остаток, не общая сумма.
+    views = await get_batch_rows(session, result.batch_id)
+    assert [v.completed_operations for v in views] == [
+        ["HIST_WINDOW"],
+        ["HIST_SHOT"],
+    ]
+    labels = [
+        format_completed_operations_label(v.completed_operations) for v in views
+    ]
+    assert labels == ["HIST_WINDOW", "HIST_SHOT"]
+    assert [v.current_balance for v in views] == [
+        Decimal("8888"),
+        Decimal("4500"),
+    ]
+
+    # Уровень API: та же ось и те же подписи в схеме ответа «посмотреть».
+    resp = await client.get(
+        f"/api/stock/import/remainders/batches/{result.batch_id}"
+    )
+    assert resp.status_code == 200, resp.text
+    rows = resp.json()["rows"]
+    assert [r["completed_operations"] for r in rows] == [
+        ["HIST_WINDOW"],
+        ["HIST_SHOT"],
+    ]
+    assert [Decimal(r["current_balance"]) for r in rows] == [
+        Decimal("8888"),
+        Decimal("4500"),
+    ]
+    assert [
+        format_completed_operations_label(r["completed_operations"]) for r in rows
+    ] == labels
 
 
 # ─── LIFO по складу (ADR-0053) ───────────────────────────────────────────────

@@ -314,7 +314,11 @@ export async function uploadTestFileViaUI(page: Page, filePath: string) {
 /** Дождаться активного плана и строк в таблице — без networkidle (polling ломает ожидание). */
 export async function waitForPlanningTableViaUI(page: Page) {
   await expect(page.getByText("Нет активного плана")).not.toBeVisible({ timeout: 30_000 });
-  await expect(page.getByRole("heading", { name: "Общий план" })).toBeVisible({ timeout: 15_000 });
+  // Карточки «Общий план» на странице плана больше нет (ADR-0054): готовность
+  // плана подтверждает заголовок сводной таблицы позиций, а строки — ниже.
+  await expect(page.getByRole("heading", { name: "Сводная таблица позиций" })).toBeVisible({
+    timeout: 15_000,
+  });
   await expect(page.locator('[id^="plan-position-"]').first()).toBeVisible({ timeout: 30_000 });
 }
 

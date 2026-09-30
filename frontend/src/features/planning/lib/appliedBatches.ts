@@ -7,22 +7,28 @@ function timestamp(value: string | null | undefined): number | null {
 }
 
 /**
- * Последний применённый батч плана (#172): откат — LIFO, поэтому ориентир —
- * `applied_at`, а не порядок загрузки (`created_at` батча) и не audit_logs.
- * Файлы в списке приходят по всем планам — план фильтруем явно.
+ * Последний применённый батч **каждого** плана (#172): откат — LIFO, поэтому
+ * ориентир — `applied_at`, а не порядок загрузки (`created_at` батча) и не
+ * audit_logs. Карта, а не одно число: список файлов приходит по всем планам
+ * сразу, и на странице истории импортов батчи разных планов лежат в одной
+ * таблице — «последний» у каждого плана свой. Глобальный LIFO погасил бы
+ * откат у всех планов, кроме одного.
+ *
+ * Равные `applied_at` — выигрывает первый: порядок внутри одной метки времени
+ * неразличим, а LIFO не должен зависеть от порядка строк в ответе.
  */
-export function findLastAppliedBatchId(files: PlanFileInfo[], planId: number | null | undefined): number | null {
-  if (planId == null) return null;
-  let lastBatchId: number | null = null;
-  let lastAppliedAt = Number.NEGATIVE_INFINITY;
+export function lastAppliedBatchIdByPlan(files: PlanFileInfo[]): Map<number, number> {
+  const lastAppliedAtByPlan = new Map<number, number>();
+  const lastBatchIdByPlan = new Map<number, number>();
   for (const file of files) {
-    if (file.production_plan_id !== planId) continue;
     const appliedAt = timestamp(file.applied_at);
-    if (appliedAt === null || appliedAt <= lastAppliedAt) continue;
-    lastAppliedAt = appliedAt;
-    lastBatchId = file.batch_id;
+    if (appliedAt === null) continue;
+    const previous = lastAppliedAtByPlan.get(file.production_plan_id);
+    if (previous !== undefined && previous >= appliedAt) continue;
+    lastAppliedAtByPlan.set(file.production_plan_id, appliedAt);
+    lastBatchIdByPlan.set(file.production_plan_id, file.batch_id);
   }
-  return lastBatchId;
+  return lastBatchIdByPlan;
 }
 
 /**
