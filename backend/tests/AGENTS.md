@@ -45,6 +45,9 @@
 
 Run-DB, осиротевшая из-за убитого прогона, убирается отдельной командой
 (`npm run test:db:cleanup`, TTL 24h). В обычный прогон cleanup не встроен.
+БД, оставленная прогоном с `--keep-db` (для разбора падения), сохраняет
+owner-строку — её убирает либо `python scripts/test-db.py drop <db>` сразу,
+либо тот же TTL-cleanup потом.
 
 Подробности реализации: [`conftest.py`](conftest.py), [`scripts/test-run.ps1`](../../scripts/test-run.ps1).
 

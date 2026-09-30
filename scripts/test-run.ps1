@@ -7,11 +7,15 @@ $ErrorActionPreference = "Stop"
 #   npm run test:pytest:full           serial
 #   npm run test:pytest:mon            parallel + testmon
 #   npm run test:pytest:lf             parallel + last-failed
+#   npm run test:pytest -- --keep-db   leave the run-DB in place (diagnosis)
 #   npm run test:pytest -- -k <expr>   extra pytest args pass through
 #
 # Every invocation gets its own TEST_RUN_ID / TEST_DB_NAME /
 # TEST_DATABASE_URL. Multiple agents may run this concurrently:
 # each run creates, uses and drops ONLY its own database.
+# With --keep-db the database survives the run (and its owner row too), so a
+# failure can be inspected; `python scripts/test-db.py drop <db>` removes it
+# right away, `npm run test:db:cleanup` — by TTL.
 # ============================================================
 
 # ------------------------------------------------------------
@@ -52,7 +56,8 @@ Write-Host ""
 $FullRun = $args -contains "--full"
 $Mon = $args -contains "--mon"
 $Lf = $args -contains "--lf"
-$PytestArgs = @($args | Where-Object { $_ -notin @("--full", "--mon", "--lf") })
+$KeepDb = $args -contains "--keep-db"
+$PytestArgs = @($args | Where-Object { $_ -notin @("--full", "--mon", "--lf", "--keep-db") })
 if ($Mon) { $PytestArgs += "--testmon" }
 if ($Lf) { $PytestArgs += "--lf" }
 
@@ -61,6 +66,7 @@ else {
     if ($NumWorkers) { Write-Host "Mode   : FAST / XDIST (workers=$NumWorkers)" }
     else             { Write-Host "Mode   : FAST / XDIST (auto)" }
 }
+if ($KeepDb) { Write-Host "DB     : keep after run (--keep-db)" }
 Write-Host ""
 
 # ------------------------------------------------------------
@@ -130,11 +136,19 @@ catch {
 }
 finally {
     if ($DatabaseCreated) {
-        Write-Host ""
-        Write-Host "[6/6] Cleaning up database: $TestDbName"
-        & python scripts/test-db.py drop $TestDbName
-        if ($LASTEXITCODE -ne 0) {
-            Write-Warning "Failed to cleanup test database: $TestDbName"
+        if ($KeepDb) {
+            Write-Host ""
+            Write-Host "[6/6] Keeping test database (--keep-db): $TestDbName"
+            Write-Host "      DSN  : $TestDatabaseUrl"
+            Write-Host "      Drop : python scripts/test-db.py drop $TestDbName"
+        }
+        else {
+            Write-Host ""
+            Write-Host "[6/6] Cleaning up database: $TestDbName"
+            & python scripts/test-db.py drop $TestDbName
+            if ($LASTEXITCODE -ne 0) {
+                Write-Warning "Failed to cleanup test database: $TestDbName"
+            }
         }
     }
 }
