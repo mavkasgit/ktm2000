@@ -21,6 +21,11 @@
 точно — ``Action.id`` монотонен, — в отличие от ADR-0025, где бэкфилл
 ``applied_at`` был отвергнут из-за невосстановимого порядка. У legacy-строк
 нет файла и per-row данных: ``file_id IS NULL``, ``legacy = true``.
+
+Повторный прогон безопасен (конвенция 052: тесты ревизий делают ``stamp``
+назад и ``upgrade head`` гоняет хвост цепочки поверх уже поднятой схемы):
+обе таблицы и индексы создаются с ``IF NOT EXISTS``, бэкфилл защищён
+``NOT EXISTS`` по ``action_id``.
 """
 from typing import Sequence, Union
 
@@ -101,10 +106,12 @@ def upgrade() -> None:
         ),
         sa.PrimaryKeyConstraint("id", name="pk_stock_import_batches"),
         sa.UniqueConstraint("action_id", name="uq_stock_import_batches_action_id"),
+        # Конвенция 052: таблица могла остаться от прошлого прогона.
+        if_not_exists=True,
     )
-    op.create_index("ix_stock_import_batches_location_id", "stock_import_batches", ["location_id"])
-    op.create_index("ix_stock_import_batches_status", "stock_import_batches", ["status"])
-    op.create_index("ix_stock_import_batches_created_at", "stock_import_batches", ["created_at"])
+    op.create_index("ix_stock_import_batches_location_id", "stock_import_batches", ["location_id"], if_not_exists=True)
+    op.create_index("ix_stock_import_batches_status", "stock_import_batches", ["status"], if_not_exists=True)
+    op.create_index("ix_stock_import_batches_created_at", "stock_import_batches", ["created_at"], if_not_exists=True)
 
     op.create_table(
         "stock_import_rows",
@@ -140,8 +147,9 @@ def upgrade() -> None:
             name="fk_stock_import_rows_stock_transaction_id_stock_transactions",
         ),
         sa.PrimaryKeyConstraint("id", name="pk_stock_import_rows"),
+        if_not_exists=True,
     )
-    op.create_index("ix_stock_import_rows_batch_id", "stock_import_rows", ["batch_id"])
+    op.create_index("ix_stock_import_rows_batch_id", "stock_import_rows", ["batch_id"], if_not_exists=True)
 
     # Бэкфилл истории (ADR-0052 п.7). ``location_id`` у legacy-импортов
     # неизвестен, поэтому NULL: склад не сохранился, и UI это помечает.

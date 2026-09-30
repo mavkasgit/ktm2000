@@ -12,6 +12,10 @@ legacy-группа с NULL-признаком не задвоилась.
 
 Бэкфилл берёт признак из ledger: у каждой существующей строки баланса он равен
 признаку проводок, образовавших эту строку.
+
+Повторный прогон безопасен (конвенция 052: ``stamp`` назад + ``upgrade head``):
+колонки добавляются с ``IF NOT EXISTS``, смена unique-констрейнта — по факту
+наличия старого и отсутствия нового.
 """
 from typing import Sequence, Union
 
@@ -128,9 +132,18 @@ WHERE a.product_id = zero.product_id
 
 
 def upgrade() -> None:
+    # Конвенция 052: повторный прогон (``stamp`` назад + ``upgrade head`` —
+    # так это проверяют тесты 065/066/068/071) идёт поверх уже поднятой схемы,
+    # поэтому колонки добавляются с ``IF NOT EXISTS``, а смена unique-констрейнта
+    # выполняется по факту его наличия.
+    bind = op.get_bind()
+    existing_unique = {
+        constraint["name"] for constraint in sa.inspect(bind).get_unique_constraints("stock_balances")
+    }
     op.add_column(
         "stock_balances",
         sa.Column("completed_operations", JSONB(), nullable=True),
+        if_not_exists=True,
     )
     # Признак самой строки импорта: «посмотреть» в истории ищет текущий
     # остаток строки по полному пятиосевому ключу, а он берётся отсюда
@@ -138,22 +151,25 @@ def upgrade() -> None:
     op.add_column(
         "stock_import_rows",
         sa.Column("completed_operations", JSONB(), nullable=True),
+        if_not_exists=True,
     )
 
-    op.drop_constraint(OLD_CONSTRAINT, "stock_balances", type_="unique")
-    op.create_unique_constraint(
-        NEW_CONSTRAINT,
-        "stock_balances",
+    if OLD_CONSTRAINT in existing_unique:
+        op.drop_constraint(OLD_CONSTRAINT, "stock_balances", type_="unique")
+    if NEW_CONSTRAINT not in existing_unique:
+        op.create_unique_constraint(
+            NEW_CONSTRAINT,
+            "stock_balances",
 
-        [
-            "product_id",
-            "location_id",
-            "quality_state",
-            "dimensions",
-            "completed_operations",
-        ],
-        postgresql_nulls_not_distinct=True,
-    )
+            [
+                "product_id",
+                "location_id",
+                "quality_state",
+                "dimensions",
+                "completed_operations",
+            ],
+            postgresql_nulls_not_distinct=True,
+        )
     op.execute(_BACKFILL_SQL)
 
 
