@@ -50,7 +50,10 @@ IN_PROGRESS / DONE / REJECTED / BLOCKED_NEEDS_HUMAN.
 ## B-0003 — Нет ни одного линтера/статического анализа для backend и frontend
 
 - **Категория:** гигиена конфигов
-- **Статус:** NEW
+- **Статус:** NEW (частично закрыто `T-0009`/`T-0012`: мёртвые импорты вычищены
+  и проверяются report-only скриптом `npm run test:hygiene`; полноценный
+  линтер (ruff/eslint) по-прежнему требует решения человека — установка
+  зависимости и правила)
 - **Доказательство:** в корне и в `frontend/` нет конфигов ruff/flake8/mypy/
   eslint/prettier (проверено листингом корня и `frontend/`, в `frontend/` есть
   только `tsconfig.json`); в `frontend/devDependencies` нет eslint/prettier;
@@ -178,9 +181,33 @@ IN_PROGRESS / DONE / REJECTED / BLOCKED_NEEDS_HUMAN.
 
 ---
 
+## B-0010 — Тесты-тавтологии: «проверки», которые не могут упасть
+
+- **Категория:** проверка самих тестов
+- **Статус:** DONE (`T-0010` `f76b30f`, `T-0011` `a5a4813`, `T-0012` `c039f4f`)
+- **Доказательство:** AST-скан `logs/analyze_tests.py` (секция «тесты без
+  assert/pytest.raises») нашёл 4 кандидата. Разбор показал:
+  - `test_reversal_api.py::test_reverse_stale_token_maps_409` — ответ на POST
+    не проверялся вообще (`T-0010`);
+  - `test_take_to_work_e2e.py::test_take_position_to_work_fails_without_route`
+    — try/except с печатью, без единого assert (`T-0011`);
+  - `test_hanger_quantity_calc.py::test_valid_constants_do_not_raise` и
+    `test_terminal_section.py::test_transport_operation_allowed_on_terminal` —
+    осознанные проверки «не бросает исключение» (проверил чтением, не трогал).
+  Дополнительно: скан `try/except` с широким перехватом в тестах дал одно
+  совпадение — best-effort teardown в `conftest.py:357` (не тавтология).
+- **Что осталось:** повторяемой проверки «нет assert» нет — она слишком
+  эвристична (два из четырёх кандидатов оказались осознанными). Повторять
+  вручную при следующем заходе.
+
 ## Отклонено / снято
 
-- (пусто)
+- «Дублирующиеся имена тестов» из первого анализа — ложная тревога: это
+  одноимённые методы в разных классах (`TestBoundaries` / `TestPairedBoundaries`
+  в `test_hanger_quantity_calc.py`), затенения нет.
+- Замер с 8 воркерами вместо 4: выигрыша нет (255.94s против 256.55s) — идея
+  «поднять число воркеров» закрыта, ограничение в последовательном модуле
+  демо-сидера (`T-0001`).
 
 ## Порядок работы (указание пользователя на ночь)
 
