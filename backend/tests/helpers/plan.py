@@ -2,9 +2,9 @@
 
 Сетап из четырёх таблиц (продукт, секции, маршрут с этапами, план с позициями)
 нужен каждому тесту, который проверяет доступ к плановым ручкам. Определения
-перенесены из `tests.test_bulk_planning` (там они остаются локальными, пока
-модуль не переведён на общий хелпер) — как это сделано в
-`tests/helpers/transfers.py`.
+живут здесь, а `tests.test_bulk_planning` реэкспортирует их под прежними
+именами — та же схема, что в `tests/helpers/transfers.py`: одно определение,
+старые пути импорта продолжают работать.
 """
 from __future__ import annotations
 
@@ -26,7 +26,8 @@ from app.models.route import ProductionRoute, RouteOperation, RouteStage
 from app.models.section import Section
 
 
-async def _make_route(session: AsyncSession, sku: str) -> tuple[Product, ProductionRoute]:
+async def make_route(session: AsyncSession, sku: str) -> tuple[Product, ProductionRoute]:
+    """Продукт + маршрут из двух секций (сырьё → готовая продукция)."""
     product = Product(
         sku=sku,
         name=f"Finished {sku}",
@@ -44,9 +45,8 @@ async def _make_route(session: AsyncSession, sku: str) -> tuple[Product, Product
     session.add(route)
     await session.flush()
 
-    for idx, (section, op_code) in enumerate(
-        zip(sections, ["ISSUE_RAW", "ACCEPT_FINISHED"], strict=True), start=1
-    ):
+    step_ops = ["ISSUE_RAW", "ACCEPT_FINISHED"]
+    for idx, (section, op_code) in enumerate(zip(sections, step_ops, strict=True), start=1):
         stage = RouteStage(
             route_id=route.id,
             sequence=idx,
@@ -73,9 +73,13 @@ async def make_plan_with_positions(
     n_positions: int,
     *,
     status: PlanPositionStatus = PlanPositionStatus.draft,
+    cancelled_count: int = 0,
 ) -> tuple[ProductionPlan, list[PlanPosition], ProductionRoute]:
-    """План с `n_positions` позициями в статусе `status`, у каждой — маршрут."""
-    product, route = await _make_route(session, sku)
+    """План с `n_positions` позициями статуса `status`; первые `cancelled_count` — отменённые.
+
+    У каждой позиции есть маршрут: без него её не утвердить.
+    """
+    product, route = await make_route(session, sku)
     plan = ProductionPlan(
         plan_no=f"PLAN-{sku}",
         name=f"Plan {sku}",
@@ -87,7 +91,8 @@ async def make_plan_with_positions(
     await session.flush()
 
     positions: list[PlanPosition] = []
-    for _ in range(n_positions):
+    for i in range(n_positions):
+        target_status = PlanPositionStatus.cancelled if i < cancelled_count else status
         pos = PlanPosition(
             production_plan_id=plan.id,
             product_id=product.id,
@@ -96,7 +101,7 @@ async def make_plan_with_positions(
             source_name=product.name,
             quantity=Decimal("10"),
             source_payload={},
-            status=status,
+            status=target_status,
             validation_status=PlanPositionValidationStatus.valid,
             validation_errors=[],
             period_start=plan.period_start,

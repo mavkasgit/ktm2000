@@ -22,7 +22,7 @@ describe("plan policies", () => {
     it(`${policy} пускает ровно ${allowed.join(", ")}`, () => {
       const check = POLICIES[policy as keyof typeof PLAN_POLICIES];
       for (const role of ROLES) {
-        expect(check(role), `${policy}: ${role}`).toBe(allowed.includes(role as never));
+        expect(check(role), `${policy}: ${role}`).toBe((allowed as readonly string[]).includes(role));
       }
     });
 

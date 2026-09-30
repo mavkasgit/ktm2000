@@ -22,7 +22,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app.api.deps import PLAN_OWNER_ROLES, PLAN_WRITER_ROLES, READER_ROLES
 from app.core.config import settings
 from app.main import app
-from app.models.production_plan import PlanPosition, PlanPositionStatus
+from app.models.production_plan import PlanPositionStatus
 from app.models.user import UserRole
 from tests.helpers.auth import user_headers
 from tests.helpers.plan import make_plan_with_positions
@@ -31,13 +31,8 @@ pytestmark = pytest.mark.asyncio
 
 ADMIN_ONLY = frozenset({UserRole.admin})
 
-# `None` — ручка намеренно открыта любому аутентифицированному (ADR-0056:
-# скрытие батча слабее удаления, ролей не требует). Исключение перечислено
-# явно, чтобы таблица оставалась полной: незагейченный НОВЫЙ путь её не пройдёт.
-ANY_AUTHENTICATED = None
-
 #: Минимально допустимая роль на каждый план-импортный путь. Ключ — (метод, путь).
-EXPECTED_GUARDS: dict[tuple[str, str], frozenset[UserRole] | None] = {
+EXPECTED_GUARDS: dict[tuple[str, str], frozenset[UserRole]] = {
     ("GET", "/api/production-plans"): READER_ROLES,
     ("GET", "/api/production-plans/{production_plan_id}/preview"): READER_ROLES,
     ("GET", "/api/production-plans/{production_plan_id}/positions/{position_id}/history"): READER_ROLES,
@@ -64,7 +59,6 @@ EXPECTED_GUARDS: dict[tuple[str, str], frozenset[UserRole] | None] = {
     ("POST", "/api/production-plans/{production_plan_id}/change-sets/{change_set_id}/rollback"): ADMIN_ONLY,
     ("DELETE", "/api/production-plans/{production_plan_id}/change-sets/{change_set_id}"): ADMIN_ONLY,
     ("DELETE", "/api/production-plans/{production_plan_id}/batches/{batch_id}"): ADMIN_ONLY,
-    ("POST", "/api/production-plans/{production_plan_id}/batches/{batch_id}/hide"): ANY_AUTHENTICATED,
     ("GET", "/api/production-plans/{production_plan_id}/delete-preview"): ADMIN_ONLY,
     ("DELETE", "/api/production-plans/{production_plan_id}"): ADMIN_ONLY,
     ("GET", "/api/production-plans/{production_plan_id}/batches/{batch_id}/force-delete-preview"): ADMIN_ONLY,
@@ -81,9 +75,34 @@ EXPECTED_GUARDS: dict[tuple[str, str], frozenset[UserRole] | None] = {
     ("GET", "/api/imports/files/{file_id}/download"): READER_ROLES,
 }
 
+#: План-импортные ручки, которых в этом коммите ещё нет: их добавляет
+#: параллельная ветка (issue #235 и ADR-0056 пишутся одновременно). Запись
+#: безвредна, пока ручки нет в дереве, и требует ролевого гейта, когда она
+#: появится, — иначе в матрице осталась бы молчаливая дырка.
+PENDING_ROUTES: dict[tuple[str, str], str] = {
+    ("POST", "/api/production-plans/{production_plan_id}/batches/{batch_id}/hide"):
+        "скрытие батча импорта (ADR-0056)",
+}
+
+
+@pytest.fixture(autouse=True)
+def _strict_auth(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Модуль проверяет роли — только strict-режим.
+
+    В dev-ветке запрос без токена достаётся `system@local` (admin), и 401 не
+    отличить от «гейт пропустил».
+    """
+    monkeypatch.setattr(settings, "DEV_BYPASS_AUTH", False)
+
 
 def _iter_api_routes(routes, prefix: str) -> list[tuple[str, APIRoute]]:
-    """Плоский список (полный путь, маршрут) — включённые роутеры лежат вложенно."""
+    """Плоский список (полный путь, маршрут): включённые роутеры лежат вложенно.
+
+    FastAPI 0.142 отдаёт результат `include_router` обёрткой `_IncludedRouter`
+    с полем `original_router` — публичного обхода с готовыми путями нет. При
+    обновлении FastAPI это место проверяется первым: тест упадёт на
+    расхождении таблицы со списком, а не промолчит.
+    """
     out: list[tuple[str, APIRoute]] = []
     for route in routes:
         included = getattr(route, "original_router", None)
@@ -127,30 +146,42 @@ def _collect_guards() -> dict[tuple[str, str], frozenset[UserRole] | None]:
     return guards
 
 
+def _assert_gate_passed(response) -> None:
+    """Ручка дошла до бизнес-слоя: не 401/403 (гейт) и не 5xx (поломка).
+
+    Какой именно бизнес-статус вернулся, решает не этот тест: тела запросов
+    здесь заведомо неполные, и предмет проверки — вход, а не данные.
+    """
+    assert response.status_code not in (401, 403), response.text
+    assert response.status_code < 500, response.text
+
+
 def test_plan_import_route_matrix_is_complete() -> None:
     """Каждый план-импортный путь объявляет минимально допустимую роль.
 
     Таблица `EXPECTED_GUARDS` — не справка, а контракт: расхождение в любую
-    сторону (новый путь без гейта, снятый гейт, чужой набор ролей) валит тест.
+    сторону валит тест — пропавший путь, новый путь без записи, снятый гейт,
+    чужой набор ролей.
     """
     actual = _collect_guards()
 
-    assert set(actual) == set(EXPECTED_GUARDS), (
-        "список план-импортных маршрутов разошёлся с таблицей гейтов: "
-        f"без записи в таблице — {sorted(set(actual) - set(EXPECTED_GUARDS))}, "
-        f"лишние записи — {sorted(set(EXPECTED_GUARDS) - set(actual))}"
-    )
+    missing = set(EXPECTED_GUARDS) - set(actual)
+    assert not missing, f"план-импортный маршрут пропал или переименован: {sorted(missing)}"
+    unlisted = set(actual) - set(EXPECTED_GUARDS) - set(PENDING_ROUTES)
+    assert not unlisted, f"новый план-импортный путь без записи в таблице гейтов: {sorted(unlisted)}"
+
     for key, expected in EXPECTED_GUARDS.items():
         assert actual[key] == expected, f"{key[0]} {key[1]}: ожидался {expected}, объявлен {actual[key]}"
+
+    for key, what in PENDING_ROUTES.items():
+        if key in actual:
+            assert actual[key] is not None, f"{what}: ручка появилась в дереве без ролевого гейта"
 
 
 async def test_anonymous_cannot_reach_plan_and_import_endpoints(
     client: AsyncClient,
-    monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     """Без токена — 401 и на чтении, и на мутации, включая скачивание xlsx."""
-    monkeypatch.setattr(settings, "DEV_BYPASS_AUTH", False)
-
     assert (await client.get("/api/production-plans")).status_code == 401
     assert (await client.get("/api/imports/recent")).status_code == 401
     assert (await client.get("/api/imports/files/1/download")).status_code == 401
@@ -158,30 +189,27 @@ async def test_anonymous_cannot_reach_plan_and_import_endpoints(
     assert (await client.post("/api/production-plans/1/positions/bulk-approve", json={"ids": [1]})).status_code == 401
 
 
-async def test_reader_roles_still_read_plans_and_imports(
+async def test_all_reader_roles_still_read_plans_and_imports(
     client: AsyncClient,
     session: AsyncSession,
-    monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    """Чтение открыто всем шести ролям: viewer видит и планы, и историю импорта."""
-    monkeypatch.setattr(settings, "DEV_BYPASS_AUTH", False)
-    _, headers = await user_headers(session, UserRole.viewer, "plan_reader")
+    """Чтение открыто всем шести ролям: каждая видит и планы, и историю импорта."""
+    for role in READER_ROLES:
+        _, headers = await user_headers(session, role, f"plan_reader_{role.value}")
 
-    assert (await client.get("/api/production-plans", headers=headers)).status_code == 200
-    assert (await client.get("/api/imports/recent", headers=headers)).status_code == 200
+        assert (await client.get("/api/production-plans", headers=headers)).status_code == 200, role
+        assert (await client.get("/api/imports/recent", headers=headers)).status_code == 200, role
 
 
 async def test_viewer_transporter_and_operator_cannot_mutate_plan(
     client: AsyncClient,
     session: AsyncSession,
-    monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     """Мутации плана — не для зрителя, транспортировщика и оператора.
 
     Оператор исключён набором `PLAN_WRITER_ROLES` (issue #235): разделов
     `/planning` и `/execution`, где нарисованы эти кнопки, у него нет.
     """
-    monkeypatch.setattr(settings, "DEV_BYPASS_AUTH", False)
     mutations = [
         ("post", "/api/production-plans/1/positions/1/approve", None),
         ("post", "/api/production-plans/1/positions/1/cancel", None),
@@ -212,14 +240,12 @@ async def test_viewer_transporter_and_operator_cannot_mutate_plan(
 async def test_planner_can_bulk_approve_positions(
     client: AsyncClient,
     session: AsyncSession,
-    monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     """Владелец плана утверждает пачкой: planner получает 200, а не 403.
 
     Одиночная и массовая кнопки утверждения обязаны пускать одну и ту же роль —
     иначе кнопка на экране планировщика обманка (issue #235).
     """
-    monkeypatch.setattr(settings, "DEV_BYPASS_AUTH", False)
     _, headers = await user_headers(session, UserRole.planner, "plan_planner")
     plan, positions, _ = await make_plan_with_positions(session, "FG-AUTH-BULK", 2)
 
@@ -231,46 +257,34 @@ async def test_planner_can_bulk_approve_positions(
 
     assert response.status_code == 200, response.text
     assert {r["status"] for r in response.json()["results"]} == {"success"}
-    refreshed = [p.status for p in positions]
-    assert all(status == PlanPositionStatus.approved for status in refreshed)
+    assert all(p.status == PlanPositionStatus.approved for p in positions)
 
 
 async def test_planner_creates_import_but_does_not_commit_it(
     client: AsyncClient,
     session: AsyncSession,
-    monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     """Мастер импорта — planning-ручка, коммит батча — admin.
 
     Создание батча (`/imports/excel`, `/excel/simulate`) идёт набором владельца
     плана, а `apply`/`rollback`/`discard`/удаление батча — сильнее создания и
-    потому админские (ADR-0057). Здесь проверяется только вход: ответ бизнес-слоя
-    (400/404/422) не предмет этого теста.
+    потому админские (ADR-0057).
     """
-    monkeypatch.setattr(settings, "DEV_BYPASS_AUTH", False)
     _, planner = await user_headers(session, UserRole.planner, "plan_importer")
     _, admin = await user_headers(session, UserRole.admin, "plan_importer_admin")
 
-    simulate = await client.post(
+    _assert_gate_passed(await client.post(
         "/api/imports/excel/simulate",
         json={"rows": [], "template_id": 999999},
         headers=planner,
-    )
-    assert simulate.status_code not in (401, 403), simulate.text
-
-    upload = await client.post(
+    ))
+    _assert_gate_passed(await client.post(
         "/api/imports/excel",
         data={"template_id": "999999"},
         headers=planner,
-    )
-    assert upload.status_code not in (401, 403), upload.text
+    ))
 
-    apply_as_planner = await client.post(
-        "/api/production-plans/1/change-sets/1/apply", headers=planner
-    )
-    assert apply_as_planner.status_code == 403
-
-    apply_as_admin = await client.post(
-        "/api/production-plans/1/change-sets/1/apply", headers=admin
-    )
-    assert apply_as_admin.status_code not in (401, 403), apply_as_admin.text
+    assert (
+        await client.post("/api/production-plans/1/change-sets/1/apply", headers=planner)
+    ).status_code == 403
+    _assert_gate_passed(await client.post("/api/production-plans/1/change-sets/1/apply", headers=admin))
