@@ -51,6 +51,7 @@ npm run test:e2e             # Playwright, отдельный стенд (сво
 | `npm run test:db:cleanup` | Уборка orphan run-DB по TTL (24h) |
 | `npm run test:db:up` / `test:db:wait` | Поднять тестовый Postgres (:5441) |
 | `npm run test:pytest -- --keep-db` | Прогон, который **оставляет** run-DB для разбора (обычный прогон её дропает) |
+| `python scripts/test-db.py drop --force <db>` | Убрать базу без owner-строки (`ktm_mig_*` от прерванного прогона миграционных тестов); отказывает при активных соединениях и на служебных именах |
 
 Оставленную `--keep-db` БД убирают вручную — `python scripts/test-db.py drop <db>`
 (имя печатается в конце прогона) или TTL-уборкой `npm run test:db:cleanup`.

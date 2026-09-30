@@ -5,6 +5,8 @@ The test launcher (scripts/test-run.ps1) owns the lifecycle of a run-DB:
     test-db.py create  <db>    -- create run-DB + record owner row
     test-db.py verify  <db>    -- SELECT 1 against the run-DB
     test-db.py drop    <db>    -- terminate conns, drop run-DB, clear owner row
+    test-db.py drop --force <db> -- drop a DB without an owner row (ktm_mig_* left
+                                  by an interrupted migration test)
     test-db.py cleanup          -- drop orphan run-DBs by TTL (or unowned)
 
 The owner row is written BEFORE ``CREATE DATABASE``, so an interrupted
@@ -12,7 +14,11 @@ launcher always leaves either no DB or a DB with an owner row that the TTL
 cleanup can age. ``drop`` only removes a DB whose owner row matches, and TTL
 cleanup skips any DB with active connections.
 
-Names are strictly validated: only ``ktm2000_test_<12 hex>`` is ever touched.
+Names are strictly validated: without ``--force`` only ``ktm2000_test_<12 hex>``
+is ever touched, with ``--force`` also ``ktm_mig_<10 hex>`` (those DBs are made
+by tests/test_migrations.py directly and never get an owner row, so neither
+``drop`` nor ``cleanup`` could reach them before). Protected names
+(``postgres``/``template0``/``template1``) are refused either way.
 """
 
 from __future__ import annotations
@@ -35,6 +41,13 @@ POSTGRES_ADMIN_DB = os.getenv("TEST_DB_ADMIN_DATABASE", "postgres")
 
 RUN_DB_PREFIX = "ktm2000_test_"
 RUN_DB_RE = re.compile(r"^ktm2000_test_[0-9a-f]{12}$")
+#: Базы миграционных тестов: создаются самими тестами напрямую
+#: (tests/test_migrations.py, tests/test_hanger_norm_key_migration_218.py),
+#: owner-строки не имеют и до появления `drop --force` не убирались ничем.
+MIG_DB_RE = re.compile(r"^ktm_mig_[0-9a-f]{10}$")
+#: Служебные базы: не трогаются даже с --force. Тот же набор, что в
+#: scripts/e2e-db.py (PROTECTED_DB_NAMES).
+PROTECTED_DB_NAMES = frozenset({"postgres", "template0", "template1"})
 OWNER_TABLE = "ktm2000_test_owner"
 DEFAULT_TTL_HOURS = float(os.getenv("TEST_DB_CLEANUP_TTL_HOURS", "24"))
 
@@ -49,6 +62,18 @@ def validate_run_db_name(db_name: str) -> None:
             f"Refusing to touch unsafe database name {db_name!r}: "
             f"must match {RUN_DB_RE.pattern}"
         )
+
+
+def validate_force_db_name(db_name: str) -> None:
+    """Проверка имени для `drop --force`: run-DB или база миграционного теста."""
+    if db_name in PROTECTED_DB_NAMES:
+        raise ValueError(f"Refusing to drop protected database {db_name!r}")
+    if RUN_DB_RE.fullmatch(db_name) or MIG_DB_RE.fullmatch(db_name):
+        return
+    raise ValueError(
+        f"Refusing to touch unsafe database name {db_name!r}: "
+        f"must match {RUN_DB_RE.pattern} or {MIG_DB_RE.pattern}"
+    )
 
 
 async def _admin_conn() -> asyncpg.Connection:
@@ -132,25 +157,61 @@ async def verify(db_name: str) -> None:
     print(f"Verified test database: {db_name}")
 
 
-async def drop(db_name: str) -> None:
-    validate_run_db_name(db_name)
+async def _drop_owned(conn: asyncpg.Connection, db_name: str) -> bool:
+    """Прежний путь: только база, чья owner-строка совпадает с именем."""
     run_id = run_id_from_db_name(db_name)
+    owner = await conn.fetchrow(
+        f"SELECT db_name FROM {OWNER_TABLE} WHERE run_id = $1", run_id
+    )
+    if owner is None or owner["db_name"] != db_name:
+        print(f"Skip drop {db_name}: no matching owner row")
+        return False
+    await _terminate_and_drop(conn, db_name)
+    await conn.execute(f"DELETE FROM {OWNER_TABLE} WHERE run_id = $1", run_id)
+    return True
+
+
+async def _drop_forced(conn: asyncpg.Connection, db_name: str) -> bool:
+    """Уборка базы без owner-строки (`ktm_mig_*` от прерванного прогона).
+
+    Активные соединения — отказ, как и в `cleanup`: живую чужую базу не трогаем.
+    """
+    exists = await conn.fetchval(
+        "SELECT 1 FROM pg_database WHERE datname = $1", db_name
+    )
+    if not exists:
+        print(f"Skip drop {db_name}: no such database")
+        return False
+    active = await conn.fetchval(
+        "SELECT count(*) FROM pg_stat_activity "
+        "WHERE datname = $1 AND pid <> pg_backend_pid()",
+        db_name,
+    )
+    if active:
+        print(f"Skip drop {db_name}: active connections ({active})")
+        return False
+    await _terminate_and_drop(conn, db_name)
+    await conn.execute(f"DELETE FROM {OWNER_TABLE} WHERE db_name = $1", db_name)
+    return True
+
+
+async def drop(db_name: str, force: bool = False) -> None:
+    if force:
+        validate_force_db_name(db_name)
+    else:
+        validate_run_db_name(db_name)
     conn = await _admin_conn()
     try:
         await _ensure_owner_table(conn)
-        owner = await conn.fetchrow(
-            f"SELECT db_name FROM {OWNER_TABLE} WHERE run_id = $1", run_id
-        )
-        if owner is None or owner["db_name"] != db_name:
-            print(f"Skip drop {db_name}: no matching owner row")
-            return
-        await _terminate_and_drop(conn, db_name)
-        await conn.execute(
-            f"DELETE FROM {OWNER_TABLE} WHERE run_id = $1", run_id
+        dropped = (
+            await _drop_forced(conn, db_name)
+            if force
+            else await _drop_owned(conn, db_name)
         )
     finally:
         await conn.close()
-    print(f"Dropped test database: {db_name}")
+    if dropped:
+        print(f"Dropped test database: {db_name}")
 
 
 async def cleanup(ttl_hours: float, dry_run: bool = False) -> None:
@@ -222,6 +283,14 @@ def main() -> None:
 
     p_drop = sub.add_parser("drop", help="drop a run-DB owned by this run")
     p_drop.add_argument("db_name")
+    p_drop.add_argument(
+        "--force",
+        action="store_true",
+        help=(
+            "drop a database that has no owner row (ktm_mig_* left by an "
+            "interrupted migration test); refuses while it has active connections"
+        ),
+    )
 
     p_cleanup = sub.add_parser("cleanup", help="drop orphan run-DBs by TTL")
     p_cleanup.add_argument("--ttl-hours", type=float, default=DEFAULT_TTL_HOURS)
@@ -235,7 +304,7 @@ def main() -> None:
         elif args.command == "verify":
             await verify(args.db_name)
         elif args.command == "drop":
-            await drop(args.db_name)
+            await drop(args.db_name, args.force)
         elif args.command == "cleanup":
             await cleanup(args.ttl_hours, args.dry_run)
         else:  # pragma: no cover

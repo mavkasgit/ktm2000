@@ -58,6 +58,13 @@ Run-DB, осиротевшая из-за убитого прогона, убир
 owner-строку — её убирает либо `python scripts/test-db.py drop <db>` сразу,
 либо тот же TTL-cleanup потом.
 
+Базы миграционных тестов (`ktm_mig_<10 hex>` — их создают
+`test_migrations.py` и `test_hanger_norm_key_migration_218.py` напрямую, без
+owner-строки) в TTL-уборку не попадают: `cleanup` сканирует только
+`ktm2000_test_%`. Осиротевшую после прерванного прогона убирает
+`python scripts/test-db.py drop --force <db>` (отказывает, если у базы есть
+активные соединения, и на служебных именах `postgres`/`template0`/`template1`).
+
 Подробности реализации: [`conftest.py`](conftest.py), [`scripts/test-run.ps1`](../../scripts/test-run.ps1).
 
 ## Правила написания тестов
