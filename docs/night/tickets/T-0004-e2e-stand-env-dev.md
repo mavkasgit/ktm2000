@@ -1,7 +1,7 @@
 # T-0004 — Тест изоляции стенда падает в чистом дереве: требует локальный `.env.dev`
 
 - **Категория:** повторяемость окружения / изоляция
-- **Статус:** PLANNED → IN_PROGRESS
+- **Статус:** DONE (коммит см. `JOURNAL.md`)
 - **Дата:** 2026-10-01, цикл 1
 - **Файл (не в denylist):** `backend/tests/test_e2e_stand.py`
 
@@ -86,5 +86,25 @@ FALLBACK_DEV_ENDPOINTS = {("localhost", 5440), ("127.0.0.1", 5440)}
 
 | Замер | До | После |
 |---|---|---|
-| `test_stand_database_is_not_the_dev_database` | FAILED (FileNotFoundError) | — |
-| Полный прогон | 1 failed, 1941 passed | — |
+| `test_stand_database_is_not_the_dev_database` (без `.env.dev`) | **FAILED** `FileNotFoundError` (3/3 baseline + 5/5 серии) | **PASSED** |
+| Точечный прогон `tests/test_e2e_stand.py` | 1 failed, 2 passed | **6 passed** (`logs/T-0004-targeted.log`) |
+| Полный прогон | `1 failed, 1941 passed, 45→43 warnings` | **`1945 passed, 0 failed, 43 warnings in 366.95s`** (`logs/verify-T0004.log`) |
+| Предупреждений | 43 | 43 (не выросли) |
+
+Проверка, что проверка не стала пустой (guard по-прежнему срабатывает на dev-цель):
+
+```
+$ cd backend && python -c "from tests.test_e2e_stand import _dev_databases; n,e=_dev_databases(); print('ktm2000_dev' in n, ('localhost',5440) in e)"
+True True
+```
+
+Стенд при этом — `('localhost', 5441)`, база `ktm2000_e2e`, то есть проверка
+«стенд ≠ dev» проходит не потому, что набор dev-целей пуст, а потому, что цели
+действительно разные.
+
+## Что было убрано
+
+`_dsn_from_env_file()` (жёсткое чтение `.env.dev`) заменён на `_env_values()` +
+`_required_dsn()` (для стенда) и `_dev_databases()` (fallback + локальный файл).
+Ни одна из прежних проверок не удалена: к трём прежним свойствам добавлены три
+юнит-теста новой логики.
