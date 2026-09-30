@@ -15,7 +15,6 @@ from __future__ import annotations
 from decimal import Decimal
 from io import BytesIO
 
-import pytest
 from httpx import AsyncClient
 from openpyxl import Workbook
 from sqlalchemy import select
@@ -30,7 +29,11 @@ from app.stock.models import QualityState, Reason, StockBalance, StockTransactio
 from app.stock.services import StockCommand, StockCommandService
 from tests.test_integrity_invariants import assert_no_invariants_violations
 
-pytestmark = pytest.mark.asyncio
+# Асинхронные тесты помечает pytest-asyncio сам (`asyncio_mode = auto` в
+# backend/pytest.ini). Модульный `pytestmark = pytest.mark.asyncio` здесь был
+# лишним и заодно вешал маркер на синхронный
+# `test_parse_operations_from_comment_extracts_names` — pytest предупреждал об
+# этом на каждом прогоне.
 
 
 # ─── Helpers ───────────────────────────────────────────────────────────────────
