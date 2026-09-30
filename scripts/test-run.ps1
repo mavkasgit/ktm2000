@@ -117,27 +117,34 @@ try {
 
     Push-Location backend
     try {
+        $LogDir = Join-Path (Split-Path -Parent $PSScriptRoot) "logs"
+        if (-not (Test-Path $LogDir)) { New-Item -ItemType Directory -Path $LogDir | Out-Null }
+        $LogFile = Join-Path $LogDir "pytest-$TestRunId.log"
         Write-Host ""
         Write-Host "[5/6] Running pytest..."
         Write-Host "TEST_DATABASE_URL=$TestDatabaseUrl"
+        Write-Host "Log    : $LogFile"
         Write-Host ""
+        # Output is streamed (Tee) instead of captured: a six-minute run must
+        # show progress, and a hang must be visible where it happens. The log
+        # file keeps the same text for the xdist crash check below.
         if ($FullRun) {
-            $PytestOutput = & python -m pytest @PytestArgs 2>&1
+            & python -m pytest @PytestArgs 2>&1 | Tee-Object -FilePath $LogFile
         } else {
             if ($NumWorkers) {
-                $PytestOutput = & python -m pytest -n $NumWorkers @DistArgs @PytestArgs 2>&1
+                & python -m pytest -n $NumWorkers @DistArgs @PytestArgs 2>&1 | Tee-Object -FilePath $LogFile
             } else {
-                $PytestOutput = & python -m pytest -n auto @DistArgs @PytestArgs 2>&1
+                & python -m pytest -n auto @DistArgs @PytestArgs 2>&1 | Tee-Object -FilePath $LogFile
             }
         }
         $ExitCode = $LASTEXITCODE
         # pytest-xdist may report a worker crash as a successful (0) exit when the
         # suite never actually ran. Detect that and force failure.
+        $PytestOutput = Get-Content -LiteralPath $LogFile -ErrorAction SilentlyContinue
         if ($ExitCode -eq 0 -and ($PytestOutput -match 'node down|maximum crashed workers')) {
             Write-Warning "pytest-xdist workers crashed; forcing failure"
             $ExitCode = 2
         }
-        $PytestOutput | ForEach-Object { Write-Host $_ }
     }
     finally {
         Pop-Location

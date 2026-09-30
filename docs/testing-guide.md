@@ -55,6 +55,10 @@ npm run test:e2e             # Playwright, отдельный стенд (сво
 Оставленную `--keep-db` БД убирают вручную — `python scripts/test-db.py drop <db>`
 (имя печатается в конце прогона) или TTL-уборкой `npm run test:db:cleanup`.
 
+Каждый прогон пишет свой лог в `logs/pytest-<runid>.log` (каталог `logs/` —
+локальный, в git не попадает). Тот же текст идёт на экран **по ходу** прогона,
+а не после его завершения.
+
 `test:db:down` — только ручная остановка; тестовые прогоны его не вызывают.
 
 Тестовая БД: `infra/compose/docker-compose.test.yml` (контейнер общий, run-DB
