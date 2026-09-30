@@ -61,10 +61,24 @@ $PytestArgs = @($args | Where-Object { $_ -notin @("--full", "--mon", "--lf", "-
 if ($Mon) { $PytestArgs += "--testmon" }
 if ($Lf) { $PytestArgs += "--lf" }
 
+# Worker scheduling: one whole module per worker.
+# Measurements (3+3 interleaved runs, workers=4, per-module schema isolation):
+#   --dist load (default): 370.7 / 372.2 / 367.7s
+#   --dist loadfile      : 259.4 / 256.6 / 256.3s   (-31%)
+# Same results (1945 passed). Why: the module schema is created per worker, so
+# under `load` the tests of one module scatter across workers and setup is
+# duplicated (setup sum 327s -> 287s); the heavy tail also packs better.
+# An explicit --dist from the caller wins over this default.
+# NOTE: keep this file ASCII-only - Windows PowerShell reads it as UTF-8 without
+# BOM, so non-ASCII string literals come out garbled in redirected output.
+$DistArgs = @()
+if (-not ($PytestArgs -contains "--dist")) { $DistArgs = @("--dist", "loadfile") }
+
 if ($FullRun) { Write-Host "Mode   : FULL / SERIAL" }
 else {
     if ($NumWorkers) { Write-Host "Mode   : FAST / XDIST (workers=$NumWorkers)" }
     else             { Write-Host "Mode   : FAST / XDIST (auto)" }
+    if ($DistArgs.Count -gt 0) { Write-Host "Dist   : $($DistArgs[1]) (whole module per worker)" }
 }
 if ($KeepDb) { Write-Host "DB     : keep after run (--keep-db)" }
 Write-Host ""
@@ -111,9 +125,9 @@ try {
             $PytestOutput = & python -m pytest @PytestArgs 2>&1
         } else {
             if ($NumWorkers) {
-                $PytestOutput = & python -m pytest -n $NumWorkers @PytestArgs 2>&1
+                $PytestOutput = & python -m pytest -n $NumWorkers @DistArgs @PytestArgs 2>&1
             } else {
-                $PytestOutput = & python -m pytest -n auto @PytestArgs 2>&1
+                $PytestOutput = & python -m pytest -n auto @DistArgs @PytestArgs 2>&1
             }
         }
         $ExitCode = $LASTEXITCODE
