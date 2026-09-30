@@ -153,3 +153,105 @@ describe("PlanImportPreviewTable — колонка «Кол-во» и марш�
     expect(text).not.toContain("15.09.2026");
   });
 });
+
+/** Ячейка сообщений в отрендеренной разметке: `colSpan` и текст без тегов. */
+function messageCell(html: string, tone: "red" | "amber"): { colSpan: number; text: string } | null {
+  const match = html.match(
+    new RegExp(`<td([^>]*)class="([^"]*text-${tone}-600[^"]*)"([^>]*)>(.*?)</td>`),
+  );
+  if (!match) return null;
+  return {
+    // SSR отдаёт атрибут как `colSpan`, поэтому регистр не важен.
+    colSpan: Number(`${match[1]}${match[3]}`.match(/colspan="(\d+)"/i)?.[1] ?? 1),
+    text: match[4].replace(/<!-- -->/g, "").replace(/<[^>]*>/g, " ").trim(),
+  };
+}
+
+/** Пара «Ошибки»/«Предупр.» одной строки в виде `colSpan|текст` либо null. */
+function messageCells(row: Record<string, unknown>): { errors: string | null; warnings: string | null } {
+  const html = renderToStaticMarkup(
+    <PlanImportPreviewTable
+      rows={[
+        {
+          source_row_number: 5,
+          status: "warning",
+          payload: {},
+          after_data: { source_sku: "ЮП-460", source_name: "Профиль", route_name: "ГП - Серебро" },
+          ...row,
+        },
+      ]}
+      expansion={expansionStub}
+      hasActiveFilters={false}
+      onReset={() => {}}
+    />,
+  );
+
+  const errors = messageCell(html, "red");
+  const warnings = messageCell(html, "amber");
+  return {
+    errors: errors && `${errors.colSpan}|${errors.text}`,
+    warnings: warnings && `${warnings.colSpan}|${warnings.text}`,
+  };
+}
+
+/** Разметка строки превью целиком — нужна для `title` и обрезки. */
+function messageRowHtml(row: Record<string, unknown>): string {
+  return renderToStaticMarkup(
+    <PlanImportPreviewTable
+      rows={[
+        {
+          source_row_number: 5,
+          status: "warning",
+          payload: {},
+          after_data: { source_sku: "ЮП-460", source_name: "Профиль", route_name: "ГП - Серебро" },
+          ...row,
+        },
+      ]}
+      expansion={expansionStub}
+      hasActiveFilters={false}
+      onReset={() => {}}
+    />,
+  );
+}
+
+describe("PlanImportPreviewTable — пара «Ошибки»/«Предупр.»", () => {
+  it("только предупреждение занимает обе колонки пары", () => {
+    const cells = messageCells({ errors: [], warnings: ["hanger_quantity_not_set:2.7"] });
+
+    expect(cells.errors).toBeNull();
+    expect(cells.warnings).toMatch(/^2\|/);
+    expect(cells.warnings).toContain("Не задано количество на подвес");
+  });
+
+  it("только ошибка занимает обе колонки пары", () => {
+    const cells = messageCells({ errors: ["product_not_found"], warnings: [] });
+
+    expect(cells.errors).toMatch(/^2\|/);
+    expect(cells.warnings).toBeNull();
+  });
+
+  it("оба типа — по одной колонке, у каждого блока свой title", () => {
+    const html = messageRowHtml({
+      errors: ["product_not_found", "quantity_must_be_positive"],
+      warnings: ["hanger_quantity_not_set:2.7"],
+    });
+
+    const cells = messageCells({
+      errors: ["product_not_found", "quantity_must_be_positive"],
+      warnings: ["hanger_quantity_not_set:2.7"],
+    });
+    expect(cells.errors).toMatch(/^1\|/);
+    expect(cells.warnings).toMatch(/^1\|/);
+
+    // Обрезка двумя строками; полный текст каждого блока — в своём title.
+    expect(html).toContain("line-clamp-2");
+    const titles = [...html.matchAll(/title="([^"]*)"/g)].map((m) => m[1]);
+    const errorTitle = titles.find((t) => t.includes("Продукт не найден"));
+    const warningTitle = titles.find((t) => t.includes("Не задано количество на подвес"));
+    expect(errorTitle).toBeDefined();
+    expect(warningTitle).toBeDefined();
+    // Каждый код — свой элемент блока, оба читаются в обрезанной ячейке.
+    expect(cells.errors).toContain("Продукт не найден");
+    expect(cells.errors).toContain("Количество должно быть положительным");
+  });
+});

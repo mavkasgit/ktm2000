@@ -11,6 +11,7 @@ import {
 
 import { errorLabels as PLAN_IMPORT_ERROR_LABELS, warningLabels } from "@/shared/lib/generated-labels";
 import type { ImportPreviewSortConfig, ImportPreviewSortKey } from "../lib/importPreviewSort";
+import { planPreviewMessageLayout } from "../lib/planPreviewMessageLayout";
 
 export { PLAN_IMPORT_ERROR_LABELS };
 
@@ -22,38 +23,68 @@ const HANGER_SOURCE_CELL_CLASS: Record<string, string> = {
   none: "text-orange-700 border-orange-300",
 };
 
-function translateLabels(
+/**
+ * Подписи кодов сообщений — по одному элементу на код: в ячейке каждый код
+ * печатается своей строкой, иначе обрезка двух строк режет первое сообщение
+ * пополам, а полный список остаётся только в `title`.
+ */
+function translateLabelList(
   codes: string[] | unknown,
   labels: Record<string, string>,
   afterData?: Record<string, unknown>,
-): string {
-  if (!Array.isArray(codes)) return String(codes ?? "");
-  if (codes.length === 0) return "—";
-  return codes
-    .map((c) => {
-      const [code] = String(c).split(":");
-      if (code === "duplicate_sku_due_date" && afterData) {
-        const duplicateRows = afterData.duplicate_rows as number[] | undefined;
-        const duplicateType = String(afterData.duplicate_type ?? "");
-        if (duplicateType === "within_import" && Array.isArray(duplicateRows) && duplicateRows.length > 0) {
-          const rowsList = duplicateRows.map((n) => `#${n}`).join(", ");
-          return `Дубликат строк ${rowsList}`;
-        }
-        if (duplicateType === "against_existing") {
-          const existingRow = afterData.duplicate_existing_row as number | undefined;
-          const existingId = afterData.duplicate_existing_id as number | undefined;
-          if (existingRow != null) {
-            const rowPart = `#${existingRow}`;
-            const idPart = existingId != null ? ` / #${existingId}` : "";
-            return `Дубликат строки ${rowPart}${idPart} из плана`;
-          }
+): string[] {
+  if (!Array.isArray(codes)) {
+    const text = String(codes ?? "").trim();
+    return text ? [text] : [];
+  }
+  if (codes.length === 0) return [];
+  return codes.map((c) => {
+    const [code] = String(c).split(":");
+    if (code === "duplicate_sku_due_date" && afterData) {
+      const duplicateRows = afterData.duplicate_rows as number[] | undefined;
+      const duplicateType = String(afterData.duplicate_type ?? "");
+      if (duplicateType === "within_import" && Array.isArray(duplicateRows) && duplicateRows.length > 0) {
+        const rowsList = duplicateRows.map((n) => `#${n}`).join(", ");
+        return `Дубликат строк ${rowsList}`;
+      }
+      if (duplicateType === "against_existing") {
+        const existingRow = afterData.duplicate_existing_row as number | undefined;
+        const existingId = afterData.duplicate_existing_id as number | undefined;
+        if (existingRow != null) {
+          const rowPart = `#${existingRow}`;
+          const idPart = existingId != null ? ` / #${existingId}` : "";
+          return `Дубликат строки ${rowPart}${idPart} из плана`;
         }
       }
-      const label = labels[code] ?? code;
-      const [, ...rest] = String(c).split(":");
-      return rest.length > 0 ? `${label}: ${rest.join(":")}` : label;
-    })
-    .join(", ");
+    }
+    const label = labels[code] ?? code;
+    const [, ...rest] = String(c).split(":");
+    return rest.length > 0 ? `${label}: ${rest.join(":")}` : label;
+  });
+}
+
+/**
+ * Ячейка сообщений: список кодов, обрезанный двумя строками. Тип виден по
+ * цвету текста, полный список — в `title` по наведению на этот блок.
+ */
+function MessageCell({
+  labels,
+  colSpan,
+  className,
+}: {
+  labels: string[];
+  colSpan: number;
+  className: string;
+}) {
+  return (
+    <td colSpan={colSpan} className={`p-2 align-top ${className}`}>
+      <div className="line-clamp-2" title={labels.join(" · ")}>
+        {labels.map((label, idx) => (
+          <div key={idx}>{label}</div>
+        ))}
+      </div>
+    </td>
+  );
 }
 
 export type PlanImportPreviewTableProps = {
@@ -104,14 +135,14 @@ export function PlanImportPreviewTable({
           </th>
           <th
             onClick={() => onSort?.("source_name")}
-            className="text-left p-2 w-[350px] cursor-pointer select-none whitespace-nowrap"
+            className="text-left p-2 w-[260px] cursor-pointer select-none whitespace-nowrap"
           >
             Наименование
             {sortConfig?.key === "source_name" ? (sortConfig.dir === "asc" ? " ▲" : " ▼") : ""}
           </th>
           <th
             onClick={() => onSort?.("route_name")}
-            className="text-left p-2 w-[280px] cursor-pointer select-none whitespace-nowrap"
+            className="text-left p-2 w-[220px] cursor-pointer select-none whitespace-nowrap"
           >
             Маршрут
             {sortConfig?.key === "route_name" ? (sortConfig.dir === "asc" ? " ▲" : " ▼") : ""}
@@ -125,7 +156,7 @@ export function PlanImportPreviewTable({
           </th>
           <th
             onClick={() => onSort?.("warnings")}
-            className="text-left p-2 w-[250px] cursor-pointer select-none whitespace-nowrap"
+            className="text-left p-2 cursor-pointer select-none whitespace-nowrap"
           >
             Предупр.
             {sortConfig?.key === "warnings" ? (sortConfig.dir === "asc" ? " ▲" : " ▼") : ""}
@@ -140,11 +171,16 @@ export function PlanImportPreviewTable({
         {rows.map((row, idx) => {
           const afterData = (row.after_data as Record<string, unknown> | undefined) ?? {};
           const status = String(row.status ?? "");
-          const errors = translateLabels(row.errors as string[] | undefined, PLAN_IMPORT_ERROR_LABELS, afterData);
-          const warnings = translateLabels(row.warnings as string[] | undefined, warningLabels);
-          const noErrors = errors === "—";
-          const noWarnings = warnings === "—";
-          const routeColSpan = noErrors && noWarnings ? 3 : noWarnings ? 2 : 1;
+          const errorLabels = translateLabelList(
+            row.errors as string[] | undefined,
+            PLAN_IMPORT_ERROR_LABELS,
+            afterData,
+          );
+          const warningLabelsList = translateLabelList(row.warnings as string[] | undefined, warningLabels);
+          const layout = planPreviewMessageLayout(
+            errorLabels.length > 0,
+            warningLabelsList.length > 0,
+          );
           const rowNumbers =
             ((row.payload as Record<string, unknown> | undefined)?.row_numbers as number[] | undefined) ??
             (afterData.source_row_numbers as number[] | undefined);
@@ -189,7 +225,7 @@ export function PlanImportPreviewTable({
           const idDisplayWithDuplicate =
             duplicateExistingId != null ? `${idDisplay} / #${duplicateExistingId}` : idDisplay;
           const isExpanded = isRowExpanded(idx);
-          const detailColSpan = 10 - (noErrors ? 1 : 0) - (noWarnings ? 1 : 0);
+
 
           return (
             <Fragment key={idx}>
@@ -228,7 +264,7 @@ export function PlanImportPreviewTable({
                 <td className="p-2 max-w-[350px] truncate whitespace-nowrap" title={displayName}>
                   {displayName}
                 </td>
-                <td className="p-2 text-xs whitespace-nowrap" colSpan={routeColSpan}>
+                <td className="p-2 text-xs whitespace-nowrap" colSpan={layout.routeColSpan}>
                   {displayRouteName ? (
                     <div className="truncate" title={displayRouteName}>
                       <span className="font-medium">{displayRouteName}</span>
@@ -239,13 +275,21 @@ export function PlanImportPreviewTable({
                     <span className="text-muted-foreground">—</span>
                   )}
                 </td>
-                {noErrors ? null : <td className="p-2 text-red-600">{errors}</td>}
-                {noWarnings ? null : <td className="p-2 text-amber-600">{warnings}</td>}
+                {layout.hasErrors ? (
+                  <MessageCell labels={errorLabels} colSpan={layout.errorsColSpan} className="text-red-600" />
+                ) : null}
+                {layout.hasWarnings ? (
+                  <MessageCell
+                    labels={warningLabelsList}
+                    colSpan={layout.warningsColSpan}
+                    className="text-amber-600"
+                  />
+                ) : null}
                 <TableCornerResetCell />
               </tr>
               {isExpanded && hasRawData ? (
                 <ImportRawRows.Detail
-                  colSpan={detailColSpan}
+                  colSpan={layout.detailColSpan}
                   segments={segments}
                   displayMode="inline"
                 />
