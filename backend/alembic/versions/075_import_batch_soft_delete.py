@@ -22,6 +22,10 @@ import sqlalchemy as sa
 from alembic import op
 
 revision: str = "075_import_batch_soft_delete"
+#: 074 (`stock_balance_completed_operations`, ADR-0055) — предыдущая миграция
+#: в дереве: цепочка линейна, и 075 обязана висеть на нём, иначе у схемы будет
+#: два head. Пока 074 не закоммичена, `upgrade head` из чистого клона падает —
+#: это цена общей очереди миграций, а не свойство этой правки.
 down_revision: Union[str, None] = "074_stock_balance_completed_operations"
 branch_labels: Union[str, Sequence[str], None] = None
 depends_on: Union[str, Sequence[str], None] = None
