@@ -113,8 +113,6 @@ async def test_take_position_to_work_with_dynamic_route(session) -> None:
     session.add(position)
     await session.commit()
 
-    print(f"✅ Position {position.id} created with route_id={route.id}")
-
     # Approve the plan and position (required before release)
     plan.status = ProductionPlanStatus.approved
     position.status = PlanPositionStatus.approved
@@ -133,8 +131,6 @@ async def test_take_position_to_work_with_dynamic_route(session) -> None:
     batch_id = batch_result.get("id")
     assert batch_id is not None
 
-    print(f"✅ Release batch {batch_id} created")
-
     # Verify batch positions have route_id
     batch_positions = await session.execute(
         select(ReleaseBatchPosition).where(ReleaseBatchPosition.release_batch_id == batch_id)
@@ -148,31 +144,37 @@ async def test_take_position_to_work_with_dynamic_route(session) -> None:
     assert batch_pos.route_id is not None, "release_batch_positions.route_id MUST NOT be null!"
     assert batch_pos.route_id == route.id
 
-    print(f"✅ Batch position has route_id={batch_pos.route_id}")
-
     # Verify route_snapshot contains steps
     assert batch_pos.route_snapshot is not None
     assert "steps" in batch_pos.route_snapshot
     assert len(batch_pos.route_snapshot["steps"]) == 3
 
-    print(f"✅ Route snapshot has {len(batch_pos.route_snapshot['steps'])} steps")
-    print(f"   Steps: {[(s['sequence'], s['operation_code']) for s in batch_pos.route_snapshot['steps']]}")
-
 
 @pytest.mark.asyncio
 async def test_take_position_to_work_fails_without_route(session) -> None:
-    """Verify that position WITHOUT route_id cannot be taken to work."""
-    # Create product
-    product = Product(sku="FG-NO-ROUTE-RELEASE", name="No Route Product", type=ProductType.finished_good, unit="pcs")
-    session.add(product)
-    await session.flush()
+    """Позиция без route_id в релиз не уходит: create_release_batch отказывает.
 
-    # Create plan
-    plan = ProductionPlan(plan_no="TEST-NO-ROUTE", name="Test Plan No Route")
+    Сетап доводит план и позицию до состояния «готова к релизу», чтобы
+    единственной причиной отказа было отсутствие маршрута. До правки тест
+    ничего не утверждал: try/except печатал исход, и тест проходил при любом
+    поведении (в т.ч. если бы релиз молча создался).
+    """
+    product = Product(
+        sku="FG-NO-ROUTE-RELEASE",
+        name="No Route Product",
+        type=ProductType.finished_good,
+        unit="pcs",
+    )
+    session.add(product)
+
+    plan = ProductionPlan(
+        plan_no="TEST-NO-ROUTE",
+        name="Test Plan No Route",
+        status=ProductionPlanStatus.approved,
+    )
     session.add(plan)
     await session.flush()
 
-    # Create position WITHOUT route_id
     position = PlanPosition(
         production_plan_id=plan.id,
         product_id=product.id,
@@ -183,22 +185,15 @@ async def test_take_position_to_work_fails_without_route(session) -> None:
         quantity=Decimal("100"),
         route_id=None,  # NO ROUTE!
         route_assigned_at=None,
-        status=PlanPositionStatus.draft,
+        status=PlanPositionStatus.approved,
         validation_status=PlanPositionValidationStatus.valid,
     )
     session.add(position)
-    await session.commit()
+    await session.flush()
 
-    print(f"✅ Position {position.id} created without route_id (as expected)")
-
-    # Try to take to work - should fail or handle gracefully
-    try:
-        batch_result = await create_release_batch(
+    with pytest.raises(ValueError, match="has no route assigned"):
+        await create_release_batch(
             session,
             production_plan_id=plan.id,
             positions=[{"plan_position_id": position.id, "release_quantity": "100"}],
         )
-        # If it doesn't fail, verify the behavior
-        print(f"⚠️  Release batch created without route_id: {batch_result}")
-    except Exception as e:
-        print(f"✅ Release correctly failed without route_id: {type(e).__name__}")
