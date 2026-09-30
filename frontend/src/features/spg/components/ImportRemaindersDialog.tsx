@@ -29,6 +29,7 @@ import {
 import { useFilterableTable } from "@/shared/hooks/useFilterableTable";
 import { usePaginatedTableQuery } from "@/shared/hooks/usePaginatedTableQuery";
 import { buildColumnApiParams } from "@/shared/lib/columnSpecs";
+import { saveBlobAsFile } from "@/shared/lib/downloadFile";
 import { remainderPreviewColumns, remainderPreviewColumnFields } from "../lib/remainderPreviewColumns";
 
 import {
@@ -61,7 +62,6 @@ import { queryKeys } from "@/shared/api/queryKeys";
 import { RouteStepsDisplay } from "@/shared/ui/RouteStepsDisplay";
 import { listSections } from "@/shared/api/sections";
 import type { RemainderImportItem, RemainderSectionMeta } from "@/shared/api/stock";
-import { ImportHistorySection } from "./ImportHistorySection";
 import { useDebouncedValue } from "@/shared/lib/useDebouncedValue";
 import {
   buildRemainderPreviewSortParam,
@@ -487,13 +487,7 @@ export function ImportRemaindersDialog({
     }
     try {
       const blob = await downloadRemaindersImportTemplate(locId);
-      const url = window.URL.createObjectURL(blob);
-      const link = document.createElement("a");
-      link.href = url;
-      link.setAttribute("download", "Шаблон импорта остатков.xlsx");
-      document.body.appendChild(link);
-      link.click();
-      link.parentNode?.removeChild(link);
+      saveBlobAsFile(blob, "Шаблон импорта остатков.xlsx");
     } catch (err) {
       console.error("Не удалось скачать шаблон", err);
       setError("Не удалось загрузить шаблон Excel.");
@@ -1206,14 +1200,6 @@ export function ImportRemaindersDialog({
             </div>
           )}
 
-          {/* ═════════════════ ИСТОРИЯ ИМПОРТОВ ═══════════════════════════ */}
-          {/* Секция живёт в модалке по решению заказчика (#232): историю видно
-              там, где импорт и делают. Плата этого решения — посмотреть
-              прошлый импорт можно только открыв модалку заново; минус
-              зафиксирован в ADR-0052 §Последствия. */}
-          {step === "result" && (
-            <ImportHistorySection />
-          )}
         </div>
 
         {/* ═══════════════════════ FOOTER ═══════════════════════════════ */}

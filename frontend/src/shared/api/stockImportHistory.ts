@@ -11,7 +11,7 @@
 
 import { apiClient } from "./client";
 
-/** Статус батча: `applied` — залит, `rolled_back` — откатан. */
+/** Статус батча: `applied` — залит, `rolled_back` — отменен. */
 export type StockImportBatchStatus = "applied" | "rolled_back";
 
 
@@ -91,7 +91,7 @@ export function importRollbackBlockerLabel(
     case "batch_not_last_for_location":
       return "Откатить можно только последний импорт этого склада";
     case "batch_already_rolled_back":
-      return "Батч уже откатан";
+      return "Батч уже отменен";
     case "batch_location_unknown":
       return "У импорта не сохранился склад — откат недоступен";
     case "batch_hidden":
@@ -143,7 +143,19 @@ export async function hideStockImportBatch(
   return data;
 }
 
-/** URL исходного файла батча. Legacy-батчи файла не имеют — кнопку гасим. */
-export function getStockImportBatchFileUrl(batchId: number): string {
-  return `/api/stock/import/remainders/batches/${batchId}/file`;
+/**
+ * Исходный файл батча. Legacy-батчи файла не имеют — кнопку гасит UI.
+ *
+ * Идёт через `apiClient`, а не ссылкой: авторизация живёт в заголовке
+ * `Authorization`, а голая `<a href>` уводит браузер в навигацию без него,
+ * и пользователь вместо файла получает JSON `401` на весь экран.
+ */
+export async function downloadStockImportBatchFile(
+  batchId: number,
+): Promise<Blob> {
+  const { data } = await apiClient.get<Blob>(
+    `/stock/import/remainders/batches/${batchId}/file`,
+    { responseType: "blob" },
+  );
+  return data;
 }

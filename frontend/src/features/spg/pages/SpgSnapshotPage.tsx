@@ -1,6 +1,7 @@
 import { useState, useMemo } from "react";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
-import { Loader2, Search, Upload } from "lucide-react";
+import { useNavigate } from "react-router-dom";
+import { History, Loader2, RefreshCw, Search, Upload } from "lucide-react";
 
 import {
   getSpgList,
@@ -24,6 +25,7 @@ export function SpgSnapshotPage() {
     sku: string | null;
   } | null>(null);
   const [isImportDialogOpen, setIsImportDialogOpen] = useState(false);
+  const navigate = useNavigate();
   const queryClient = useQueryClient();
 
   const { data: spgs = [], isLoading: loadingList } = useQuery({
@@ -142,13 +144,18 @@ export function SpgSnapshotPage() {
               <Upload className="h-4 w-4 mr-1" />
               Импорт из Excel
             </Button>
-            <button
-              type="button"
-              onClick={handleRefresh}
-              className="rounded-md border border-border px-3 py-1.5 text-sm hover:bg-accent"
+            <Button
+              variant="outline"
+              size="sm"
+              onClick={() => navigate("/spg/import-history")}
             >
+              <History className="h-4 w-4 mr-1" />
+              История импортов
+            </Button>
+            <Button variant="outline" size="sm" onClick={handleRefresh}>
+              <RefreshCw className="h-4 w-4 mr-1" />
               Обновить
-            </button>
+            </Button>
           </div>
         </div>
       )}

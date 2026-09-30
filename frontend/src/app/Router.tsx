@@ -27,6 +27,7 @@ const SectionsTasksPage = lazyPage(() => import("../features/sections/pages/Sect
 const AuditLogsPage = lazyPage(() => import("../features/sections/pages/AuditLogsPage"), "AuditLogsPage")
 const ActionsJournalPage = lazyPage(() => import("../features/reversal/pages/ActionsJournalPage"), "ActionsJournalPage")
 const SpgSnapshotPage = lazyPage(() => import("../features/spg/pages/SpgSnapshotPage"), "SpgSnapshotPage")
+const ImportHistoryPage = lazyPage(() => import("../features/spg/pages/ImportHistoryPage"), "ImportHistoryPage")
 const TransfersPage = lazyPage(() => import("../features/transfers/pages/TransfersPage"), "TransfersPage")
 const SettingsPage = lazyPage(() => import("../features/settings/SettingsPage"), "SettingsPage")
 const BackupsPage = lazyPage(() => import("../features/settings/SettingsBackupsPage"), "BackupsPage")
@@ -76,6 +77,7 @@ export const router = createBrowserRouter([
       { path: "section-tasks", element: <SectionsTasksPage />, errorElement: routeErrorElement },
       { path: "section-tasks/:sectionId", element: <SectionsTasksPage />, errorElement: routeErrorElement },
       { path: "spg", element: <SpgSnapshotPage />, errorElement: routeErrorElement },
+      { path: "spg/import-history", element: <ImportHistoryPage />, errorElement: routeErrorElement },
       { path: "spg/:spgId", element: <SpgSnapshotPage />, errorElement: routeErrorElement },
       { path: "transfers", element: <TransfersPage />, errorElement: routeErrorElement },
       { path: "audit-logs", element: <AuditLogsPage />, errorElement: routeErrorElement },

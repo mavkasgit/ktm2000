@@ -1,4 +1,5 @@
 import { apiClient, getErrorMessage } from "./client";
+import { saveBlobAsFile } from "@/shared/lib/downloadFile";
 
 export { getErrorMessage };
 
@@ -402,14 +403,7 @@ export async function applyCatalogExcel(file: File) {
 /** Скачать xlsx-эндпоинт как файл с заданным именем. */
 async function downloadCatalogFile(path: string, filename: string) {
   const { data } = await apiClient.get<Blob>(path, { responseType: "blob" });
-  const url = URL.createObjectURL(data);
-  const link = document.createElement("a");
-  link.href = url;
-  link.download = filename;
-  document.body.appendChild(link);
-  link.click();
-  link.remove();
-  URL.revokeObjectURL(url);
+  saveBlobAsFile(data, filename);
 }
 
 export async function downloadCatalogTemplate() {

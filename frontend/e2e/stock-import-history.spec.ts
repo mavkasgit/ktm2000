@@ -12,14 +12,15 @@ import {
  *
  * Сетап через API — реальный `POST /api/stock/import/remainders` из буфера
  * обмена: он создаёт настоящий батч (одна строка журнала действий + строки
- * импорта), ровно как импорт из UI. Проверки в UI — экран «Группы хранения и
- * производства» (/spg), секция «История импортов» внутри модалки импорта:
+ * импорта), ровно как импорт из UI. Проверки в UI идут по отдельной странице
+ * «История импортов» (/spg/import-history), в которую ведёт кнопка на экране
+ * «Группы хранения и производства» (/spg):
  *
- * 1. Импорт появляется в истории со статусом «Залит».
+ * 1. Батч виден в истории без нового импорта.
  * 2. «Посмотреть» открывает строки батча с текущим остатком.
  * 3. Второй импорт того же склада гасит кнопку «Откатить» у первого
  *    (LIFO по складу, ADR-0053 п.1).
- * 4. «Откатить» у последнего батча переводит его в «Откатан» и возвращает
+ * 4. «Откатить» у последнего батча переводит его в «Отменен» и возвращает
  *    остаток к состоянию до импорта.
  * 5. «Убрать из списка» прячет запись, не меняя остаток.
  */
@@ -45,8 +46,8 @@ test.describe("@ui История импорта остатков (#232)", () =>
     expect(first.batch_id).toBeGreaterThan(0);
     expect(second.batch_id).toBeGreaterThan(first.batch_id);
     // ── 1. Импорт через UI: вставка из буфера обмена ────────────────────
-    // История видна на шаге «Импорт успешно завершён», поэтому сценарий
-    // идёт настоящим путём: вставить TSV → предпросмотр → загрузить.
+    // Импорт идёт настоящим путём (вставить TSV → предпросмотр → загрузить),
+    // а проверки истории — уже на отдельной странице: она и есть основной вход.
     await authenticatedPage.goto("/spg");
     await expect(
       authenticatedPage.getByRole("heading", { name: "Группы хранения и производства" }),
@@ -77,17 +78,20 @@ test.describe("@ui История импорта остатков (#232)", () =>
     await expect(importButton).toBeVisible({ timeout: 15_000 });
     await importButton.first().click();
 
-    // ── 2. Секция истории на экране результата ──────────────────────────
+    // ── 2. Отдельная страница истории: кнопка с экрана ГХП ──────────────
     await expect(importDialog.getByText("Импорт успешно завершен")).toBeVisible({
       timeout: 20_000,
     });
-    const historyHeading = importDialog.getByRole("heading", { name: "История импортов" });
-    await expect(historyHeading).toBeVisible({ timeout: 10_000 });
-    const importDialog2 = importDialog;
-    await expect(importDialog2.getByRole("button", { name: "Посмотреть" }).first()).toBeVisible();
+    // У модалки две «Закрыть» — кнопка в футере и крестик в шапке.
+    await importDialog.getByRole("button", { name: "Закрыть" }).last().click();
+    await authenticatedPage.getByRole("button", { name: /История импортов/ }).click();
+    await expect(
+      authenticatedPage.getByRole("heading", { name: "История импортов остатков" }),
+    ).toBeVisible({ timeout: 10_000 });
+    await expect(authenticatedPage.getByRole("button", { name: "Посмотреть" }).first()).toBeVisible();
 
     // LIFO по складу: откатываемый батч — ровно один, последний.
-    const rollbackButtons = importDialog2.getByRole("button", { name: "Откатить" });
+    const rollbackButtons = authenticatedPage.getByRole("button", { name: "Откатить" });
     await expect(rollbackButtons.first()).toBeVisible();
     const enabled = await rollbackButtons.evaluateAll(
       (els) => els.filter((el) => !(el as HTMLButtonElement).disabled).length,
@@ -95,7 +99,7 @@ test.describe("@ui История импорта остатков (#232)", () =>
     expect(enabled).toBe(1);
 
     // ── 3. «Посмотреть»: строки батча и текущий остаток ────────────────
-    await importDialog2.getByRole("button", { name: "Посмотреть" }).first().click();
+    await authenticatedPage.getByRole("button", { name: "Посмотреть" }).first().click();
     const detailDialog = authenticatedPage.getByRole("dialog").last();
     await expect(detailDialog.getByText("Текущий остаток")).toBeVisible({ timeout: 5_000 });
     await expect(detailDialog.getByText("загружена").first()).toBeVisible();
@@ -104,7 +108,7 @@ test.describe("@ui История импорта остатков (#232)", () =>
     await authenticatedPage.keyboard.press("Escape");
     // Список отсортирован от новых к старым (batch.id desc), поэтому
     // откатываемый по LIFO батч — первый: у остальных кнопка disabled.
-    await importDialog2.getByRole("button", { name: "Откатить" }).first().click();
+    await authenticatedPage.getByRole("button", { name: "Откатить" }).first().click();
     const confirm = authenticatedPage.getByRole("alertdialog").last();
     await expect(confirm.getByText("Откатить импорт остатков?")).toBeVisible();
     await confirm.getByRole("button", { name: "Откатить" }).click();
