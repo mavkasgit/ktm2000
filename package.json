@@ -43,6 +43,7 @@
     "test:pytest:mon": "powershell -ExecutionPolicy Bypass -File scripts/test-run.ps1 --mon",
     "test:pytest:lf": "powershell -ExecutionPolicy Bypass -File scripts/test-run.ps1 --lf",
     "test:scripts": "node --test \"scripts/**/*.test.js\"",
+    "test:hygiene": "python scripts/check-test-imports.py",
     "test:e2e": "npm --prefix frontend run test:e2e",
     "test:e2e:ui": "npm --prefix frontend run test:e2e:ui",
     "test:e2e:smoke": "npm --prefix frontend run test:e2e:smoke",

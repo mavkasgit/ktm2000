@@ -49,6 +49,7 @@ npm run test:e2e             # Playwright, отдельный стенд (сво
 | `npm run test:pytest:mon` | Только изменённые (testmon; кеш — `backend/.testmondata`, в git не попадает) |
 | `npm run test:pytest:lf` | Только упавшие |
 | `npm run test:db:cleanup` | Уборка orphan run-DB по TTL (24h) |
+| `npm run test:hygiene` | Report-only отчёт по мёртвым импортам в тестах (stdlib, линтера в репозитории нет) |
 | `npm run test:db:up` / `test:db:wait` | Поднять тестовый Postgres (:5441) |
 | `npm run test:pytest -- --keep-db` | Прогон, который **оставляет** run-DB для разбора (обычный прогон её дропает) |
 | `python scripts/test-db.py drop --force <db>` | Убрать базу без owner-строки (`ktm_mig_*` от прерванного прогона миграционных тестов); отказывает при активных соединениях и на служебных именах |
