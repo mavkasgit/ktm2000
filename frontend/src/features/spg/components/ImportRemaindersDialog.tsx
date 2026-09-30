@@ -61,6 +61,7 @@ import { queryKeys } from "@/shared/api/queryKeys";
 import { RouteStepsDisplay } from "@/shared/ui/RouteStepsDisplay";
 import { listSections } from "@/shared/api/sections";
 import type { RemainderImportItem, RemainderSectionMeta } from "@/shared/api/stock";
+import { ImportHistorySection } from "./ImportHistorySection";
 import { useDebouncedValue } from "@/shared/lib/useDebouncedValue";
 import {
   buildRemainderPreviewSortParam,
@@ -1203,6 +1204,15 @@ export function ImportRemaindersDialog({
                 </div>
               )}
             </div>
+          )}
+
+          {/* ═════════════════ ИСТОРИЯ ИМПОРТОВ ═══════════════════════════ */}
+          {/* Секция живёт в модалке по решению заказчика (#232): историю видно
+              там, где импорт и делают. Плата этого решения — посмотреть
+              прошлый импорт можно только открыв модалку заново; минус
+              зафиксирован в ADR-0052 §Последствия. */}
+          {step === "result" && (
+            <ImportHistorySection />
           )}
         </div>
 

@@ -512,6 +512,59 @@ export async function apiAddRemainder(
   return res.json();
 }
 
+/**
+ * @ui — тикет #232: импорт остатков из буфера обмена (TSV), тем же
+ * эндпоинтом `POST /api/stock/import/remainders`, что и UI, но без файла.
+ * Создаёт настоящий батч истории (одна строка журнала + строки импорта),
+ * поэтому годен для сетапа сценариев «посмотреть → откатить».
+ */
+export async function apiImportRemainders(
+  sectionId: number,
+  rows: Array<{ sku: string; quantity: number; comment?: string }>,
+  opts: { clearExisting?: boolean } = {},
+) {
+  const tsv = rows
+    .map((r) => [r.sku, String(r.quantity), r.comment ?? ""].join("\t"))
+    .join("\n");
+  const form = new FormData();
+  form.append("location_id", String(sectionId));
+  form.append("clipboard_text", tsv);
+  form.append("skip_invalid", "true");
+  form.append("clear_existing", String(opts.clearExisting ?? false));
+  const res = await fetch(`${BACKEND_URL}/api/stock/import/remainders`, {
+    method: "POST",
+    headers: await authHeaders(),
+    body: form,
+  });
+  if (!res.ok) {
+    const errText = await res.text();
+    throw new Error(
+      `Import remainders failed: ${res.statusText} (${res.status}) - ${errText}`,
+    );
+  }
+  return res.json() as Promise<{ batch_id: number; imported_count: number }>;
+}
+
+/** @ui — тикет #232: список батчей истории импорта остатков. */
+export async function apiGetImportBatches() {
+  const res = await fetch(
+    `${BACKEND_URL}/api/stock/import/remainders/batches`,
+    { headers: await authHeaders() },
+  );
+  if (!res.ok) {
+    throw new Error(`Get import batches failed: ${res.statusText} (${res.status})`);
+  }
+  return res.json() as Promise<
+    Array<{
+      batch_id: number;
+      status: string;
+      imported_rows: number;
+      can_rollback: boolean;
+      filename: string | null;
+    }>
+  >;
+}
+
 // ─── Тикет #96: кастомный роут с финальной production-стадией ───────────────
 
 export async function apiCreateRoute(name: string) {

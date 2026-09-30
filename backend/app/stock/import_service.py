@@ -36,6 +36,12 @@ from app.models.user import User
 from app.stock.models import QualityState, Reason, StockBalance
 from app.stock.services import StockCommand, StockCommandService
 from app.services.action_journal_service import action_journal_service
+from app.stock.import_models import (
+    StockImportBatch,
+    StockImportBatchStatus,
+    StockImportRow,
+    StockImportRowStatus,
+)
 from app.services.dimension_validation import (
     MissingDimensionsError,
     resolve_product_dimensions,
@@ -129,6 +135,9 @@ class ImportResult:
     transaction_ids: list[int]
     # Id журнального действия (Action.import_remainders), покрывающего батч.
     action_id: int | None = None
+    # Id строки реестра истории импорта (ADR-0052). Без него батч нечем
+    # опознать ни в UI, ни в ссылке: наружу раньше не отдавался.
+    batch_id: int | None = None
 
 
 # ─── Quality value aliases (не относятся к разрешению колонок) ────────────────
@@ -829,7 +838,6 @@ def _resolve_item_quality_state(
         return quality_state_overrides[item.source_row_number]
     return item.quality_state or default_quality_state
 
-
 async def apply_remainders_import(
     db: AsyncSession,
     location_id: int,
@@ -840,7 +848,10 @@ async def apply_remainders_import(
     skip_invalid: bool = True,
     target_section_overrides: dict[int, int] | None = None,
     quality_state_overrides: dict[int, QualityState] | None = None,
+    file_id: int | None = None,
+    sheet_name: str | None = None,
 ) -> ImportResult:
+
     """Apply remainders import: create ``StockTransaction`` records.
 
     This function:
@@ -857,6 +868,10 @@ async def apply_remainders_import(
        If ``item.completed_stages`` is non-empty, appends operation names
        to the transaction comment.
     5. Commits the database session.
+    6. Writes the batch header and per-row records into the import history
+       (``stock_import_batches`` / ``stock_import_rows``, ADR-0052): the
+       batch is the only way to identify this import afterwards, since the
+       journal node itself carries no filename and no per-row verdicts.
 
     Args:
         db: Database session.
@@ -873,9 +888,13 @@ async def apply_remainders_import(
         target_section_overrides: Optional dict mapping ``source_row_number``
             to ``section_id`` for per-row target override.  Takes precedence
             over ``item.target_section_id``.
+        file_id: ``import_files.id`` of the uploaded source, or ``None`` for
+            a clipboard import (there is no file to keep).
+        sheet_name: Name of the source sheet, for display in the history list.
 
     Returns:
-        ``ImportResult`` with success status, counts, errors, and transaction ids.
+        ``ImportResult`` with success status, counts, errors, transaction ids,
+        and ``action_id``/``batch_id`` of the written history records.
     """
     errors: list[str] = []
     transaction_ids: list[int] = []
@@ -966,6 +985,10 @@ async def apply_remainders_import(
 
     # --- Import valid items --------------------------------------------------
     imported_count = 0
+    # Строка импорта → созданная ею проводка (ADR-0052 п.8). Без этой связи
+    # нельзя ни объяснить пропуск строки, ни показать, что именно забирает
+    # компенсация при откате.
+    tx_id_by_row: dict[int, int] = {}
     for item in valid_items:
         # Determine per-row to_location_id
         to_loc: int = location_id
@@ -1008,7 +1031,71 @@ async def apply_remainders_import(
         )
         tx = await svc.record(db, cmd)
         transaction_ids.append(tx.id)
+        tx_id_by_row[item.source_row_number] = tx.id
         imported_count += 1
+
+    # --- История импорта (ADR-0052) ------------------------------------------
+    batch = StockImportBatch(
+        action_id=action.id,
+        file_id=file_id,
+        location_id=location_id,
+        status=StockImportBatchStatus.APPLIED,
+        legacy=False,
+        clear_existing=clear_existing,
+        sheet_name=sheet_name,
+        total_rows=len(items),
+        imported_rows=imported_count,
+        skipped_rows=len(invalid_items),
+        summary={
+            "quality_state": quality_state.value,
+            "source": "clipboard" if file_id is None else "excel",
+        },
+        created_by=user.id if user else None,
+        created_by_name=(
+            (user.full_name or user.username) if user else "system"
+        ),
+    )
+    db.add(batch)
+    await db.flush()
+
+    for item in items:
+        row_quality = _resolve_item_quality_state(
+            item, quality_state, quality_state_overrides
+        )
+        is_valid = item.status == "valid" and item.product_id is not None
+        # Целевой участок повторяет решение фазы заливки, иначе «посмотреть»
+        # покажет склад, отличный от того, куда реально залили.
+        to_loc = location_id
+        if target_section_overrides:
+            to_loc = target_section_overrides.get(item.source_row_number, to_loc)
+        if to_loc == location_id:
+            to_loc = item.target_section_id or location_id
+        db.add(
+            StockImportRow(
+                batch_id=batch.id,
+                source_row_number=item.source_row_number,
+                sku=item.sku or "",
+                matched_sku=item.matched_sku,
+                product_id=item.product_id,
+                quantity=(
+                    Decimal(str(item.quantity))
+                    if is_valid and item.quantity is not None
+                    else None
+                ),
+                dimensions=item.dimensions,
+                target_section_id=to_loc,
+                quality_state=row_quality.value,
+                status=(
+                    StockImportRowStatus.VALID
+                    if is_valid
+                    else StockImportRowStatus.INVALID
+                ),
+                stock_transaction_id=tx_id_by_row.get(item.source_row_number),
+                errors=list(item.errors),
+                warnings=list(item.warnings),
+                raw_values=list(item.raw_values),
+            )
+        )
 
     await db.commit()
 
@@ -1018,6 +1105,7 @@ async def apply_remainders_import(
         errors=errors,
         transaction_ids=transaction_ids,
         action_id=action.id,
+        batch_id=batch.id,
     )
 
 

@@ -64,6 +64,8 @@ const CACHE_DOMAIN_KEYS = {
     ["stock-transactions"],
     ["stock-product-balance"],
     ["stock-remainder-import-operations"],
+    ["stock-import-batches"],
+    ["stock-import-batch"],
   ],
   /** Справочник участков: секции, операции, группы операций, маршруты. */
   sections: [["sections"], ["operations"], ["operation-groups"], ["routes"]],
@@ -125,6 +127,10 @@ export const CACHE_ACTIONS = {
   importTemplatesChanged: ["importTemplates"],
   /** Действие отменено или исправлено. */
   actionReversed: ["actions", "audit", "execution", "shopfloor", "transfers", "stock"],
+  /** Откатан батч импорта остатков: остатки вернулись к состоянию до импорта. */
+  stockImportRolledBack: ["stock", "actions", "audit", "spg", "shopfloor", "transfers", "execution"],
+  /** Батч импорта остатков скрыт из списка: проводки и узел журнала не тронуты. */
+  stockImportHidden: ["stock", "audit"],
   /** Синхронизирован список сотрудников HRMS. */
   employeesSynced: ["employees"],
   /** Изменился бэкап или его конфигурация: список, превью, задания, текущее состояние. */

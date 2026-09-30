@@ -174,6 +174,9 @@ export const queryKeys = {
       ["stock-transactions", params ?? {}] as const,
     productBalance: (productId: number) => ["stock-product-balance", productId] as const,
     remainderImportOperations: () => ["stock-remainder-import-operations"] as const,
+    importBatches: () => ["stock-import-batches"] as const,
+    importBatch: (batchId: number | null) =>
+      ["stock-import-batch", batchId] as const,
   },
   shopfloor: {
     board: (sectionId: number, params?: SectionBoardQueryKeyParams) =>

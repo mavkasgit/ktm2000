@@ -33,6 +33,7 @@ from app.api.backups import router as backups_router
 from app.transfers.api import router as transfers_router
 from app.reversal.api import router as reversal_router
 from app.stock.api import router as stock_router
+from app.stock.import_history_api import router as stock_import_history_router
 from contextlib import asynccontextmanager
 import asyncio
 from typing import Any, cast
@@ -124,6 +125,7 @@ app.include_router(demo_router, prefix="/api")
 app.include_router(backups_router, prefix="/api")
 app.include_router(transfers_router, prefix="/api")
 app.include_router(stock_router, prefix="/api")
+app.include_router(stock_import_history_router, prefix="/api")
 app.include_router(reversal_router, prefix="/api")
 app.include_router(audit_logs_router, prefix="/api")
 app.include_router(notifications_router, prefix="/api")

@@ -22,7 +22,9 @@ Endpoints:
 """
 from __future__ import annotations
 
+import hashlib
 import json
+from pathlib import Path
 from datetime import date, datetime, time
 from typing import Optional
 
@@ -66,6 +68,7 @@ from app.stock.import_service import (
     resolve_target_section,
 )
 from app.stock.import_service import _lookup_products as _lookup_remainder_products
+from app.services.plan_import_service import _get_or_create_import_file
 from fastapi.responses import StreamingResponse
 from io import BytesIO
 
@@ -1129,13 +1132,36 @@ async def import_remainders_excel(
     if location is None:
         raise HTTPException(status_code=404, detail=f"Location id={location_id} not found")
 
-    _sheet_name, _total_rows, items, _summary = await _parse_remainder_import_source(
+    sheet_name, _total_rows, items, _summary = await _parse_remainder_import_source(
         file=file,
         clipboard_text=clipboard_text,
         sheet_index=sheet_index,
         row_selection=row_selection,
         column_mapping=await _load_template_column_mapping(db, template_id),
     )
+
+    # Исходник сохраняем ради кнопки «Скачать» и сверки «вот ты залил не то»
+    # (ADR-0052 п.9). Тот же content-addressed путь, что у импорта плана: файл
+    # один на sha256 и может быть источником нескольких батчей. Из буфера
+    # файла нет — тогда `file_id` остаётся NULL, и UI это показывает.
+    import_file_id: int | None = None
+    if file is not None and file.filename:
+        # Парсер уже прочитал файл до конца, поэтому возвращаем позицию:
+        # повторный read() без seek() дал бы пустой поток, и в хранилище лёг бы
+        # файл нулевой длины с sha256 пустого содержимого.
+        await file.seek(0)
+        content = await file.read()
+        extension = Path(file.filename).suffix or ".xlsx"
+        stored = await _get_or_create_import_file(
+            db,
+            filename=file.filename,
+            content=content,
+            content_type=file.content_type,
+            extension=extension,
+            detected_format="xlsx",
+            file_hash=hashlib.sha256(content).hexdigest(),
+        )
+        import_file_id = stored.id
 
     # Resolve completed stages and target sections before import
     ops_dict = await resolve_operations_dictionary(db)
@@ -1169,6 +1195,8 @@ async def import_remainders_excel(
         skip_invalid=skip_invalid,
         target_section_overrides=parsed_overrides,
         quality_state_overrides=parsed_quality_overrides,
+        file_id=import_file_id,
+        sheet_name=sheet_name,
     )
 
     return {
@@ -1176,4 +1204,6 @@ async def import_remainders_excel(
         "imported_count": result.imported_count,
         "errors": result.errors,
         "transaction_ids": result.transaction_ids,
+        "action_id": result.action_id,
+        "batch_id": result.batch_id,
     }

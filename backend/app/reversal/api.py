@@ -42,6 +42,32 @@ from app.reversal.service import reversal_service
 router = APIRouter(prefix="/actions", tags=["reversal"])
 
 
+
+#: Типы действий, откат которых — отдельное право, а не обычная писательская
+#: операция (ADR-0052 п.6). Откат импорта остатков меняет остатки склада
+#: зеркальными компенсациями по всему батчу, поэтому его правит админ.
+#: Гейт стоит здесь, а не только в эндпоинте истории импорта: иначе он
+#: обходится этим же маршрутом за два клика. Второй, независимый гейт — по
+#: состоянию батча (LIFO по складу) — живёт в компенсаторе.
+ADMIN_ONLY_REVERSE_TYPES: frozenset[str] = frozenset({"import_remainders"})
+
+
+async def _assert_reverse_allowed(
+    db: AsyncSession, action_id: int, current_user: User
+) -> None:
+    """403, если действие откатывается не той ролью."""
+    if current_user.role == UserRole.admin:
+        return
+    action = await db.get(Action, action_id)
+    if action is not None and action.action_type in ADMIN_ONLY_REVERSE_TYPES:
+        raise HTTPException(
+            status_code=403,
+            detail=(
+                f"Откат действия {action.action_type} доступен только "
+                "администратору"
+            ),
+        )
+
 def _node_out(node) -> ActionNodeOut:
     return ActionNodeOut(
         id=node.id,
@@ -155,7 +181,9 @@ async def preview_reverse(
     action_id: int,
     payload: PreviewIn | None = None,
     db: AsyncSession = Depends(get_db),
+    current_user: User = Depends(get_current_user),
 ) -> PreviewOut:
+    await _assert_reverse_allowed(db, action_id, current_user)
     cascade = bool(payload and payload.cascade)
     try:
         preview = await reversal_service.preview_reverse(db, action_id, cascade=cascade)
@@ -184,6 +212,7 @@ async def reverse_action(
     db: AsyncSession = Depends(get_db),
     current_user: User = Depends(get_current_user),
 ) -> ReverseResultOut:
+    await _assert_reverse_allowed(db, action_id, current_user)
     try:
         result = await reversal_service.reverse(
             db,

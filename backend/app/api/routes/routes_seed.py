@@ -174,7 +174,10 @@ async def cleanup_stats_endpoint(
         "plan_change_items", "plan_change_sets", "plan_positions", "import_batches", "production_plans",
         "import_files", "production_routes", "route_stages", "route_operations", "route_rule_profiles",
         "route_selection_rules", "route_matching_rules", "route_rule_conditions", "import_templates",
-        "sections", "section_operations"
+        "sections", "section_operations",
+        # История импорта остатков: строки ссылаются на stock_transactions,
+        # батчи — на import_files, поэтому идут раньше обоих.
+        "stock_import_rows", "stock_import_batches",
     ]
     stats = {}
     for table in tables:
@@ -205,7 +208,8 @@ async def cleanup_endpoint(
         "plan_change_items", "plan_change_sets", "plan_positions", "import_batches", "production_plans",
         "import_files", "production_routes", "route_stages", "route_operations", "route_rule_profiles",
         "route_selection_rules", "route_matching_rules", "route_rule_conditions", "import_templates",
-        "sections", "section_operations"
+        "sections", "section_operations",
+        "stock_import_rows", "stock_import_batches",
     }
 
     invalid_tables = [t for t in payload.tables if t not in allowed_tables]
@@ -227,6 +231,8 @@ async def cleanup_endpoint(
             "rework_tasks",
             "transfer_discrepancies",
             "stock_balances",
+            "stock_import_rows",
+            "stock_import_batches",
             "stock_transactions",
             "transfers",
             "defects",
@@ -268,6 +274,7 @@ async def cleanup_endpoint(
             "stock_transactions": [
                 ("defects", "stock_transaction_id"),
                 ("stock_transactions", "reverses_id"),
+                ("stock_import_rows", "stock_transaction_id"),
             ],
             "work_tasks": [
                 ("defects", "task_id"),
@@ -302,11 +309,15 @@ async def cleanup_endpoint(
                 ("route_rule_profiles", "import_template_id"),
                 ("production_routes", "import_template_id"),
             ],
+            "import_files": [
+                ("stock_import_batches", "file_id"),
+            ],
             "sections": [
                 ("defects", "responsible_section_id"),
                 ("defect_decisions", "target_section_id"),
                 ("route_stages", "section_id"),
                 ("route_stages", "storage_section_id"),
+                ("stock_import_batches", "location_id"),
             ],
         }
 

@@ -98,15 +98,20 @@ export type StockReason =
   | "MANUAL_IN"
   | "MANUAL_OUT";
 
-/** source_ref транзакций импорта остатков из Excel/буфера */
-export const IMPORT_REMAINDERS_SOURCE_REF = "import_remainders_excel";
+/**
+ * Префикс `source_ref` проводок импорта остатков. Бэкенд пишет
+ * `import_remainders:{action_id}` (одна строка журнала на весь батч), а не
+ * фиксированную строку — из-за прежнего сравнения по точному равенству
+ * подпись «Импорт остатков» в журнале проводок не срабатывала никогда.
+ */
+export const IMPORT_REMAINDERS_SOURCE_REF_PREFIX = "import_remainders:";
 
 /** Человекочитаемая причина движения; импорт остатков выделяется отдельно. */
 export function formatStockReasonLabel(
   reason: string,
   sourceRef?: string | null,
 ): string {
-  if (sourceRef === IMPORT_REMAINDERS_SOURCE_REF) {
+  if (sourceRef?.startsWith(IMPORT_REMAINDERS_SOURCE_REF_PREFIX)) {
     return "Импорт остатков";
   }
   return stockReasonLabels[reason] ?? stockReasonLabels[reason.toLowerCase()] ?? reason;

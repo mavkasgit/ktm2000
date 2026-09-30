@@ -37,6 +37,7 @@ from app.reversal.resolver import (
     resolve_action,
 )
 from app.reversal.stock_compensator import MirrorLedgerMixin
+from app.stock.import_history import import_batch_rollback_blockers
 from app.stock.services import StockCommandService
 
 # Доменные action_type с компенсатором (всё из решения 2 спеки, кроме
@@ -101,6 +102,18 @@ class StockActionCompensator(MirrorLedgerMixin):
                     )
                 ],
             )
+        # Батч импорта остатков откатывается не в произвольный момент, а
+        # только последним на своём складе (ADR-0053 п.1). Гейт по состоянию
+        # живёт здесь, рядом с кодом, который зеркалит проводки, а не в API:
+        # сервис отката зовут не только хендлеры. Проверка роли — отдельная,
+        # в API (роли здесь нет, а гейт по типу действия без актора был бы
+        # фикцией).
+        if self.action_type == "import_remainders":
+            batch_blockers = await import_batch_rollback_blockers(db, action.id)
+            if batch_blockers:
+                return ReversalCheck(
+                    node_id=action.id, ok=False, blockers=batch_blockers
+                )
         entries = await self._plan_entries(db, action)
         deficit = await self._coverage_deficit(db, entries)
         if deficit > 0:

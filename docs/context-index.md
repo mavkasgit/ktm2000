@@ -22,5 +22,8 @@
 | [`catalog-excel-format.md`](catalog-excel-format.md) | **Справочник сырья (Excel)** | Формат импорта/выгрузки, round-trip, нормы, «Фото» |
 | [`excel-import-route-passport.md`](excel-import-route-passport.md) | Импорт плана | Парсинг маршрутов из Excel |
 | [`plan-import-spec.md`](plan-import-spec.md) | **Импорт плана** | Спека ускорения/стабилизации импорта, коды строк, apply/rollback |
+| [`stock-import-history-spec.md`](stock-import-history-spec.md) | **Импорт остатков** | Реестр батчей, просмотр, откат, удаление из списка (#232) |
+| [`../CONTEXT.md`](../CONTEXT.md) | **Глоссарий домена** | Термины: батч импорта, строка импорта, импорт остатков, действие |
+| [`agents/domain.md`](agents/domain.md) | Доменные документы | Конвенция `CONTEXT.md` + `docs/adr/` |
 | [`adr/`](adr/) | ADR (решения) | Архитектурные решения: инварианты, откаты, миграции |
 | [`research/`](research/) | Research | Исследования внешних систем (SAP, Odoo MRP/BOM) |

@@ -53,6 +53,12 @@ from app.stock.models import (
     StockBalance,
     StockTransaction,
 )
+from app.stock.import_models import (
+    StockImportBatch,
+    StockImportBatchStatus,
+    StockImportRow,
+    StockImportRowStatus,
+)
 
 __all__ = [
     "Base",
@@ -133,4 +139,8 @@ __all__ = [
     "Reason",
     "StockBalance",
     "StockTransaction",
+    "StockImportBatch",
+    "StockImportBatchStatus",
+    "StockImportRow",
+    "StockImportRowStatus",
 ]
