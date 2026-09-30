@@ -46,7 +46,7 @@ npm run test:e2e             # Playwright, отдельный стенд (сво
 | `npm run test:pytest` | Параллельный прогон всех тестов |
 | `npm run test:pytest:fast` | Алиас `test:pytest` |
 | `npm run test:pytest:full` | Полный прогон в один поток |
-| `npm run test:pytest:mon` | Только изменённые (testmon) |
+| `npm run test:pytest:mon` | Только изменённые (testmon; кеш — `backend/.testmondata`, в git не попадает) |
 | `npm run test:pytest:lf` | Только упавшие |
 | `npm run test:db:cleanup` | Уборка orphan run-DB по TTL (24h) |
 | `npm run test:db:up` / `test:db:wait` | Поднять тестовый Postgres (:5441) |
