@@ -21,26 +21,107 @@ E2E_DB_SCRIPT = REPO_ROOT / "scripts" / "e2e-db.py"
 EXIT_GUARD = 2
 """Код возврата guard'а «стенд нацелен на чужую БД»."""
 
+# Подстраховка на случай, если `.env.dev` локально отсутствует или переименован:
+# файл gitignored (`.gitignore:9 .env.*`) и создаётся руками по
+# docs/GETTING_STARTED.md. Тот же набор, что в `scripts/e2e-db.py` — конвенция
+# на репозиторий одна, а не две.
+FALLBACK_DEV_DB_NAMES = {"ktm2000_dev"}
+FALLBACK_DEV_ENDPOINTS = {("localhost", 5440), ("127.0.0.1", 5440)}
 
-def _dsn_from_env_file(path: Path) -> str:
+
+def _env_values(path: Path) -> dict[str, str]:
+    """Минимальный разбор `KEY=VALUE` (без dotenv: тесту нужны три ключа)."""
+    values: dict[str, str] = {}
     for line in path.read_text(encoding="utf-8").splitlines():
         key, _, value = line.partition("=")
-        if key.strip() == "DATABASE_URL":
-            return value.strip()
-    raise AssertionError(f"{path} не содержит DATABASE_URL")
+        key = key.strip()
+        if key and not key.startswith("#"):
+            values[key] = value.strip()
+    return values
+
+
+def _required_dsn(path: Path) -> str:
+    dsn = _env_values(path).get("DATABASE_URL")
+    if not dsn:
+        raise AssertionError(f"{path} не содержит DATABASE_URL")
+    return dsn
+
+
+def _endpoint(dsn: str) -> tuple[str, int]:
+    parsed = urlparse(dsn)
+    return (parsed.hostname or "localhost", parsed.port or 5432)
+
+
+def _dev_databases(env_file: Path = DEV_ENV_FILE) -> tuple[set[str], set[tuple[str, int]]]:
+    """Имена баз и endpoint'ы, занятые devstack'ом (семантика `dev_databases()`
+    из `scripts/e2e-db.py`): набор начинается с fallback'а и дополняется
+    содержимым `.env.dev`, если файл есть. Отсутствие файла — не ошибка.
+    """
+    names = set(FALLBACK_DEV_DB_NAMES)
+    endpoints = set(FALLBACK_DEV_ENDPOINTS)
+    if not env_file.is_file():
+        return names, endpoints
+    values = _env_values(env_file)
+    dsn = values.get("DATABASE_URL")
+    if dsn:
+        names.add(urlparse(dsn).path.lstrip("/"))
+        endpoints.add(_endpoint(dsn))
+    else:
+        if values.get("POSTGRES_DB"):
+            names.add(values["POSTGRES_DB"])
+        if values.get("DEV_POSTGRES_PORT"):
+            endpoints.add(("localhost", int(values["DEV_POSTGRES_PORT"])))
+    return names, endpoints
 
 
 def test_stand_database_is_not_the_dev_database() -> None:
-    """За-commиченный конфиг стенда обязан указывать на отдельную БД."""
-    stand = urlparse(_dsn_from_env_file(STAND_ENV_FILE))
-    dev = urlparse(_dsn_from_env_file(DEV_ENV_FILE))
-    assert stand.path.lstrip("/"), "DSN стенда без имени базы"
-    assert stand.path.lstrip("/") != dev.path.lstrip("/"), (
-        f"E2E-стенд указывает на общую dev-БД {dev.path!r} — прогон будет задевать чужую работу"
+    """За-commиченный конфиг стенда обязан указывать на отдельную БД.
+
+    Сравнение идёт с набором dev-баз/endpoint'ов (fallback + `.env.dev`, если он
+    есть): без локального `.env.dev` тест не падает, но проверка остаётся.
+    """
+    stand_dsn = _required_dsn(STAND_ENV_FILE)
+    stand = urlparse(stand_dsn)
+    stand_name = stand.path.lstrip("/")
+    assert stand_name, "DSN стенда без имени базы"
+
+    dev_names, dev_endpoints = _dev_databases()
+    assert stand_name not in dev_names, (
+        f"E2E-стенд указывает на общую dev-БД {stand_name!r} — прогон будет задевать чужую работу"
     )
-    assert (stand.port, stand.hostname) != (dev.port, dev.hostname), (
+    assert _endpoint(stand_dsn) not in dev_endpoints, (
         "E2E-стенд и devstack на одном Postgres: изоляция БД неполна"
     )
+
+
+def test_dev_databases_falls_back_without_env_dev(tmp_path: Path) -> None:
+    """Нет `.env.dev` — набор dev-целей не пуст: иначе проверку не с чем делать."""
+    names, endpoints = _dev_databases(tmp_path / ".env.dev")
+    assert names == FALLBACK_DEV_DB_NAMES
+    assert endpoints == FALLBACK_DEV_ENDPOINTS
+
+
+def test_dev_databases_reads_database_url(tmp_path: Path) -> None:
+    """Локальный `.env.dev` расширяет набор, а не заменяет fallback."""
+    env_file = tmp_path / ".env.dev"
+    env_file.write_text(
+        "DATABASE_URL=postgresql+asyncpg://ktm2000_user:ktm2000_pass@127.0.0.1:5440/ktm2000_local\n",
+        encoding="utf-8",
+    )
+    names, endpoints = _dev_databases(env_file)
+    assert "ktm2000_local" in names
+    assert ("127.0.0.1", 5440) in endpoints
+    assert FALLBACK_DEV_DB_NAMES <= names
+    assert FALLBACK_DEV_ENDPOINTS <= endpoints
+
+
+def test_dev_databases_reads_postgres_db_and_port_without_url(tmp_path: Path) -> None:
+    """`.env.dev` без `DATABASE_URL`: имя базы и порт берутся из отдельных ключей."""
+    env_file = tmp_path / ".env.dev"
+    env_file.write_text("POSTGRES_DB=ktm2000_other\nDEV_POSTGRES_PORT=5555\n", encoding="utf-8")
+    names, endpoints = _dev_databases(env_file)
+    assert "ktm2000_other" in names
+    assert ("localhost", 5555) in endpoints
 
 
 def test_ensure_refuses_dev_database(tmp_path: Path) -> None:
