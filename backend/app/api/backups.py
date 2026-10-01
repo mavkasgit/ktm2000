@@ -176,7 +176,10 @@ def _run_postgres_cmd_docker(cmd: list[str], db_name: str | None = None) -> subp
             args.pop(idx)      # remove -f
             args.pop(idx)      # remove filepath
         docker_cmd = docker_base + ["pg_dump"] + args + docker_connection_args
-        result = subprocess.run(docker_cmd, capture_output=True, text=False, timeout=300)
+        result = subprocess.run(
+            docker_cmd, capture_output=True, text=False, timeout=300,
+            check=False,  # returncode разбирает вызывающий, как у обычного subprocess.run
+        )
         if result.returncode == 0 and filepath:
             Path(filepath).write_bytes(result.stdout)
         return subprocess.CompletedProcess(
@@ -195,9 +198,15 @@ def _run_postgres_cmd_docker(cmd: list[str], db_name: str | None = None) -> subp
         docker_cmd = docker_base + ["pg_restore"] + args + docker_connection_args
         if filepath:
             file_bytes = Path(filepath).read_bytes()
-            result = subprocess.run(docker_cmd, input=file_bytes, capture_output=True, text=False, timeout=300)
+            result = subprocess.run(
+                docker_cmd, input=file_bytes, capture_output=True, text=False, timeout=300,
+                check=False,  # returncode разбирает вызывающий, как у обычного subprocess.run
+            )
         else:
-            result = subprocess.run(docker_cmd, capture_output=True, text=False, timeout=300)
+            result = subprocess.run(
+                docker_cmd, capture_output=True, text=False, timeout=300,
+                check=False,  # returncode разбирает вызывающий, как у обычного subprocess.run
+            )
         return subprocess.CompletedProcess(
             args=result.args,
             returncode=result.returncode,
@@ -207,7 +216,10 @@ def _run_postgres_cmd_docker(cmd: list[str], db_name: str | None = None) -> subp
 
     # psql и прочие
     docker_cmd = docker_base + [tool] + cmd[1:] + docker_connection_args
-    result = subprocess.run(docker_cmd, capture_output=True, text=True, encoding="utf-8", errors="replace", timeout=300)
+    result = subprocess.run(
+        docker_cmd, capture_output=True, text=True, encoding="utf-8", errors="replace", timeout=300,
+        check=False,  # returncode разбирает вызывающий, как у обычного subprocess.run
+    )
     return result
 
 

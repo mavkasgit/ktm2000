@@ -166,4 +166,5 @@ def _run_ensure(env_file: Path) -> subprocess.CompletedProcess[str]:
         text=True,
         encoding="utf-8",
         timeout=60,
+        check=False,  # тест сам проверяет result.returncode
     )
