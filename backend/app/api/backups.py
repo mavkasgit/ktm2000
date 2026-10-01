@@ -14,10 +14,9 @@ from pathlib import Path
 from typing import Callable, Dict, List, Optional
 from urllib.parse import unquote, urlparse
 
-from fastapi import APIRouter, Body, Depends, Form, HTTPException, Query, UploadFile, File, status
+from fastapi import APIRouter, Body, Form, HTTPException, Query, UploadFile, File, status
 from fastapi.responses import FileResponse
 from openpyxl import Workbook
-from sqlalchemy import text
 from pydantic import BaseModel
 
 from app.core.config import settings

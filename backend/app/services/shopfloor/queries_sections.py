@@ -7,7 +7,6 @@ from decimal import Decimal
 
 from sqlalchemy import String, case, cast, exists, func, or_, select
 from sqlalchemy.ext.asyncio import AsyncSession
-from sqlalchemy.orm import aliased
 
 from app.core.sorting import SortClause, apply_sort, parse_sort
 from app.domain.dimensions import (
@@ -478,7 +477,6 @@ async def get_section_board(
             is_first_stage=bool(line.sequence == 1),
         )
 
-        display_sku = _compute_display_sku(source_sku or "", output_sku or "")
         fingerprint = _compute_fingerprint(
             source_sku, output_sku, effective_op_code, source_payload
         )
@@ -800,7 +798,6 @@ async def get_warehouse_remainders(
     читался бы как дубль. Суммировать здесь нечего: это перечисление
     физически разных строк, а не «сколько всего на участке».
     """
-    from app.stock.models import QualityState, StockBalance
     from app.stock.services import _format_completed_operations
 
     query = select(

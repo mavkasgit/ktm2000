@@ -199,8 +199,6 @@ async def _make_renamed_import_route(session, position: PlanPosition) -> Product
     ``auto-``-код и продолжает находиться по нему. Именно этот случай
     отличается по сигнатуре, но совпадает по коду.
     """
-    from tests.test_dynamic_route_generation import _make_profile_with_rules, _seed_sections
-
     built = await _built_route(session, position)
     code = auto_route_code(built.signature)
     assert code is not None, "предусловие: у собранного маршрута есть сигнатура"

@@ -3,7 +3,7 @@ import re
 from typing import Any
 
 from sqlalchemy import (
-    Boolean, Enum, Float, Integer, String, text, BigInteger, Identity, ARRAY,
+    Boolean, Enum, Float, String, text, BigInteger, Identity, ARRAY,
     ForeignKey, CheckConstraint, Index, Numeric, UniqueConstraint, select, or_,
 )
 from sqlalchemy.dialects.postgresql import JSONB

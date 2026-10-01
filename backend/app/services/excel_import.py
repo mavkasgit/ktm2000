@@ -102,8 +102,8 @@ def _plan_resolver_mapping(column_mapping: dict[str, Any] | None) -> dict[str, A
     шаблона (тесты); авторитетный источник заголовков/псевдонимов — сид (#15).
     """
     mapping = {field: {"header": header} for field, header in HEADER_ALIASES.items()}
-    for field, cfg in (column_mapping or {}).items():
-        key = str(field).strip()
+    for header_key, cfg in (column_mapping or {}).items():
+        key = str(header_key).strip()
         if not key or is_reserved_key(key):
             continue
         if isinstance(cfg, dict):

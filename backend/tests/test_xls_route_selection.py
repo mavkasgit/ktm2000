@@ -478,7 +478,7 @@ async def test_test_xls_row_2256_with_skip_shot_blast_excludes_shot(client, sess
     В CRM для этого продукта установлен пропуск дробеструя (skip_shot_blast=True).
     Проверяем что SHOT исключается из маршрута.
     """
-    from app.models.product import Product, ProductType, ProcessingFlag, ProductProcessingFlag
+    from app.models.product import ProcessingFlag, ProductProcessingFlag
 
     profile_id = await _seed_full_environment(session)
 

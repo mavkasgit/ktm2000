@@ -16,7 +16,6 @@ Create Date: 2026-08-24
 from typing import Sequence, Union
 
 from alembic import op
-import sqlalchemy as sa
 
 
 revision: str = "045_hard_purge_status_index"

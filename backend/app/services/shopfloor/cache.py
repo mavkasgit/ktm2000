@@ -16,8 +16,6 @@ from app.stock.task_cache import (
     effective_issued_quantity,
 )
 
-from .common import _to_decimal
-
 
 def _compute_available_from_balances(
     *,

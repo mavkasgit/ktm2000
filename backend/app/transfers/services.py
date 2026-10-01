@@ -30,6 +30,7 @@ from __future__ import annotations
 
 from datetime import UTC, datetime
 from decimal import Decimal
+from typing import TYPE_CHECKING
 
 from sqlalchemy import select
 from sqlalchemy.exc import IntegrityError
@@ -78,6 +79,9 @@ from app.services.shopfloor.output_rows import (
     build_task_output_rows,
 )
 from app.transfers.transferable import task_transferable
+
+if TYPE_CHECKING:
+    from app.models.action_journal import Action
 
 _stock_command_service = StockCommandService()
 
@@ -387,7 +391,7 @@ async def transfer_send(
     # TRANSFER_RECEIVE (на приёмной). StockCommandService.record()
     # вызывает StockProjectionManager, который обновляет баланс и
     # cached_transferred_quantity / cached_received_quantity.
-    send_tx = await _record_transfer_send_stock_tx(
+    await _record_transfer_send_stock_tx(
         db,
         transfer=transfer,
         from_task=from_task,
@@ -420,7 +424,7 @@ async def transfer_send(
     # материал на каждой передаче «проходил» бы ещё и операции этапа
     # назначения, которого он ещё не касался.
     completed_operations_through_source = await completed_operations_for_task(db, from_task)
-    receive_tx = await _stock_command_service.record(
+    await _stock_command_service.record(
         db,
         StockCommand(
             product_id=transfer.product_id,
@@ -639,7 +643,7 @@ async def correct_transfer(
     from app.models.section import Section
 
     from_section = await db.get(Section, transfer.from_section_id)
-    to_section = await db.get(Section, transfer.to_section_id)
+    await db.get(Section, transfer.to_section_id)
     product = await db.get(Product, transfer.product_id)
     await log_action(
         db,
@@ -777,7 +781,7 @@ async def cancel_transfer(
     from app.models.section import Section
 
     from_section = await db.get(Section, transfer.from_section_id)
-    to_section = await db.get(Section, transfer.to_section_id)
+    await db.get(Section, transfer.to_section_id)
     product = await db.get(Product, transfer.product_id)
     await log_action(
         db,

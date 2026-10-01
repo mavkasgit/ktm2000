@@ -135,8 +135,8 @@ async def test_revoke_other_sessions_success(client, session, monkeypatch) -> No
     token = await issue_app_token(session, user=user, login_method="oidc")
     
     # 2. Еще две сессии
-    s2 = await issue_session(session, user_id=user.id, login_method="oidc", ttl_minutes=60)
-    s3 = await issue_session(session, user_id=user.id, login_method="oidc", ttl_minutes=60)
+    await issue_session(session, user_id=user.id, login_method="oidc", ttl_minutes=60)
+    await issue_session(session, user_id=user.id, login_method="oidc", ttl_minutes=60)
     await session.commit()
 
     # Проверяем, что в списке 3 активных сессии

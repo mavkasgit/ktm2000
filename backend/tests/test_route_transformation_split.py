@@ -428,7 +428,6 @@ async def test_first_stage_groups_by_sku_only(client, session) -> None:
 
     # На прессе route_history уже не пустой → operationCode разделяет
     press_board = await get_section_board(session, section_id=sections[1].id)
-    press_histories = [tuple(op["operation_code"] for op in t["route_history"]) for t in press_board["tasks"]]
     # Все имеют одинаковую историю [ISSUE_RAW], но разные operation_code
     press_op_codes = set(t["operation_code"] for t in press_board["tasks"])
     assert len(press_op_codes) == 2, f"Expected 2 different operation_codes on press, got {press_op_codes}"

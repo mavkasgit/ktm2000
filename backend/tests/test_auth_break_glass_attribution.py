@@ -171,7 +171,7 @@ async def test_break_glass_without_system_row_fails_explicitly_not_fk(
     await session.commit()
     assert await session.scalar(select(User).where(User.username == "system")) is None
 
-    product = await _make_product(session, "BG-NOSYS-001")
+    await _make_product(session, "BG-NOSYS-001")
     location = await _make_location(session, "BG-NOSYS-LOC")
     await session.commit()
     headers = await _break_glass_headers(client)

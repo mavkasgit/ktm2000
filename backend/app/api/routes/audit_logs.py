@@ -1,12 +1,12 @@
 from datetime import datetime
 from typing import Dict, List, Any
 
-from fastapi import APIRouter, Depends, Query, HTTPException
+from fastapi import APIRouter, Depends, Query
 from pydantic import BaseModel
 from sqlalchemy import func, or_, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.api.deps import READER_ROLES, require_role, get_current_user, get_db
+from app.api.deps import get_current_user, get_db
 from app.core.sorting import SortClause, apply_sort, parse_sort
 from app.models.audit_log import AuditLog
 from app.models.user import User

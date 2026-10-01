@@ -193,7 +193,6 @@ async def test_broken_hop_rejected(session: AsyncSession) -> None:
     )
     await session.commit()
 
-    from app.services.shopfloor.operations_tasks import final_release
     with pytest.raises(ValueError, match="не-складскую секцию"):
         await _run_to_final_release(session, fx)
 
@@ -217,7 +216,6 @@ async def test_no_destination_rejected(session: AsyncSession) -> None:
     fx["fg"].is_output_default = False
     await session.commit()
 
-    from app.services.shopfloor.operations_tasks import final_release
     with pytest.raises(ValueError, match="склад выпуска"):
         await _run_to_final_release(session, fx)
 
@@ -243,7 +241,6 @@ async def test_ambiguous_default_rejected(session: AsyncSession) -> None:
     other.is_output_default = True
     await session.commit()
 
-    from app.services.shopfloor.operations_tasks import final_release
     with pytest.raises(ValueError, match="Неоднозначный склад выпуска"):
         await _run_to_final_release(session, fx)
 

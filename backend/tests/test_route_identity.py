@@ -8,7 +8,6 @@
 from __future__ import annotations
 
 import pytest
-from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.models.route import ProductionRoute
@@ -122,8 +121,6 @@ async def test_order_is_oldest_first(session: AsyncSession) -> None:
 
     by_name = await find_route_by_name(session, "Дубль")
     assert by_name is not None and by_name.id == older.id
-
-    codes = list((await session.scalars(select(ProductionRoute.id))).all())
 
     sql = _sql(route_identity_query(name="Дубль"))
     assert "ORDER BY production_routes.id" in sql

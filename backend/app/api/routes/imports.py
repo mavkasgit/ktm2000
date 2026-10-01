@@ -1,6 +1,5 @@
 import json
 from io import BytesIO
-from decimal import Decimal
 from pathlib import Path
 
 from fastapi import APIRouter, Depends, File, Form, HTTPException, Query, UploadFile, status
@@ -13,7 +12,7 @@ from app.core.database import get_db
 from app.api.deps import PLAN_OWNER_ROLES, READER_ROLES, require_role
 from app.models.user import User
 from app.models.import_template import ImportTemplate
-from app.models.imports import ImportBatch, ImportBatchMode, ImportBatchStatus, ImportFile
+from app.models.imports import ImportBatch, ImportBatchMode, ImportFile
 from app.models.production_plan import (
     PlanChangeSet,
     PlanPosition,
@@ -21,7 +20,7 @@ from app.models.production_plan import (
     require_current_length_model,
 )
 from app.models.product import Product
-from app.models.route import ProductionRoute, RouteRuleProfile
+from app.models.route import RouteRuleProfile
 from app.services.plan_import_service import create_excel_import_change_set
 from app.services.route_matcher import resolve_position_route, make_position_route_cache_key
 

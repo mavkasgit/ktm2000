@@ -155,7 +155,7 @@ async def test_plan_position_can_be_released_after_import(session) -> None:
     assert stages[1].is_significant is True
     assert stages[2].operations[0].operation_code == "PACK_STRETCH"
 
-    print(f"✅ Route stages verified after release")
+    print("✅ Route stages verified after release")
     print(f"   Stages: {[(s.sequence, s.operations[0].operation_code) for s in stages]}")
 
 

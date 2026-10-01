@@ -159,7 +159,7 @@ async def test_notifications_scope_includes_general_and_own(auth_client, session
 @pytest.mark.asyncio
 async def test_notifications_only_unclosed_excludes_closed_by_default(auth_client, session) -> None:
     current_user_id = await _testauth_id(session)
-    notification = await _make_notification(session, user_id=None, title="Открытое")
+    await _make_notification(session, user_id=None, title="Открытое")
     closed = await _make_notification(session, user_id=None, title="Закрытое")
     await _make_state(session, closed.id, current_user_id, read_at=_dt(), closed_at=_dt())
     await session.commit()

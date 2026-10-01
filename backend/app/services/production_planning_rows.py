@@ -18,10 +18,8 @@ from app.models.section import Section
 from app.models.transfer import Transfer
 from app.models.work_task import CLOSED_WORK_TASK_STATUSES, RESOLVED_WORK_TASK_STATUSES, WorkTask, WorkTaskStatus
 from app.stock.ledger import net_quantity_expr
-from app.stock.models import Reason, StockTransaction
 from app.services.plan_position_hanger import position_dimensions_for_task, resolve_positions_hanger
 from app.services.position_remainders import PositionStockFigures
-from app.models.work_task import CLOSED_WORK_TASK_STATUSES
 from app.services.route_matcher import ResolvedRouteInfo, resolve_position_route, make_position_route_cache_key
 
 MANUAL_ROUTE_PASS_PREFIX = "manual_route_pass:"
@@ -926,7 +924,6 @@ async def get_production_planning_row_detail(db: AsyncSession, position_id: int)
 
         # Этап 4: cached_* колонки удалены, агрегация из StockTransaction
         from app.stock.models import StockTransaction, Reason
-        from sqlalchemy import case
 
         # Get all task_ids for this position
         task_in_pos = (await db.execute(

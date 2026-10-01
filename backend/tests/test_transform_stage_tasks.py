@@ -45,12 +45,6 @@ def _rule_assigned_operations() -> set[tuple[str, str]]:
         if action.get("action") == "set_operation" and action.get("operation_code")
     }
 
-from app.services.route_transform import (
-    build_transform_spec,
-    resolve_stage_transforms_dimensions,
-)
-from app.services.shopfloor.queries_sections import get_section_board
-
 
 # --- helpers ---
 

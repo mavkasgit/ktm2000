@@ -361,7 +361,7 @@ async def bulk_complete_tasks(
             results.append(
                 BulkActionResultItem(id=entry.task_id, status="failed", reason=str(exc))
             )
-        except Exception as exc:
+        except Exception:
             logger.exception("bulk_complete_tasks: unexpected error for task %s", entry.task_id)
             results.append(
                 BulkActionResultItem(id=entry.task_id, status="failed", reason="Внутренняя ошибка сервера")

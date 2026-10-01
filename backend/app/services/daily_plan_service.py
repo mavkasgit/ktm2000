@@ -9,7 +9,6 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.models.daily_plan import DailyPlan, DailyPlanItem
 from app.models.internal_plan import SectionPlanLine
-from app.models.product import Product
 from app.models.route import RouteStage
 from app.models.work_task import CLOSED_WORK_TASK_STATUSES, WorkTask
 from app.services.audit_log_service import log_action

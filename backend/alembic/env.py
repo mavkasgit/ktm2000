@@ -1,6 +1,5 @@
 from logging.config import fileConfig
 from asyncio import run
-import os
 
 from app.core.env_file import apply_env_file
 

@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from decimal import Decimal
 
-from sqlalchemy import Integer, case, func, select
+from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.models.product import Product
@@ -12,7 +12,7 @@ from app.models.work_task import RESOLVED_WORK_TASK_STATUSES, WorkTask
 from app.models.internal_plan import SectionPlanLine
 from app.models.production_plan import PlanPosition, PlanPositionStatus
 from app.models.route import RouteStage
-from app.stock.models import QualityState, Reason, StockBalance, StockTransaction
+from app.stock.models import QualityState, StockBalance
 
 
 async def get_spg_snapshot(

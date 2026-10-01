@@ -73,7 +73,6 @@ async def test_list_pagination_slices(session: AsyncSession, auth_client) -> Non
     page2 = await auth_client.get("/api/actions", params={"page": 2, "page_size": 2})
     assert page1.status_code == 200 and page2.status_code == 200
     ids1 = [i["id"] for i in page1.json()["items"]]
-    ids2 = [i["id"] for i in page2.json()["items"]]
     assert len(ids1) == 2
     # page вне допустимых значений → 422
     bad = await auth_client.get("/api/actions", params={"page": 0})

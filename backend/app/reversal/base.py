@@ -8,11 +8,14 @@ from __future__ import annotations
 
 from dataclasses import dataclass, field
 from decimal import Decimal
-from typing import Protocol
+from typing import TYPE_CHECKING, Protocol
 
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.stock.models import QualityState, Reason
+
+if TYPE_CHECKING:
+    from app.models.action_journal import Action
 
 
 @dataclass

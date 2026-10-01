@@ -5,11 +5,12 @@ from pathlib import Path
 from typing import List, Literal
 from fastapi import APIRouter, Depends, File, HTTPException, Query, UploadFile, status, Response
 from pydantic import BaseModel, Field
-from sqlalchemy import case, cast, exists, func, or_, select, type_coerce, delete, Integer, Float
-from sqlalchemy.types import ARRAY, String
+from sqlalchemy import case, cast, exists, func, or_, select, delete, Integer, Float
+from sqlalchemy.types import String
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import selectinload
 
+from app.core.config import settings
 from app.core.database import get_db
 from app.core.sorting import SortClause, apply_sort, parse_sort
 from app.api.deps import REFERENCES_READER_ROLES, REFERENCES_WRITER_ROLES, require_role
@@ -18,7 +19,7 @@ from app.models.dimension import ProductDimension, DimensionType
 from app.models.production_plan import PlanPosition
 from app.models.work_task import WorkTask
 from app.models.internal_plan import SectionPlanLine
-from app.models.route import ProductionRoute, RouteRuleProfile, RouteStage, RouteOperation, SectionOperation
+from app.models.route import ProductionRoute, RouteRuleProfile, RouteStage, SectionOperation
 from app.models.section import Section
 from app.services.route_selection import select_route_for_payload
 from app.models.transfer import Transfer

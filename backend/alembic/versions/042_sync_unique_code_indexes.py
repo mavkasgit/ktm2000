@@ -12,7 +12,6 @@ Create Date: 2026-08-11
 from typing import Sequence, Union
 
 from alembic import op
-import sqlalchemy as sa
 
 revision: str = "042_sync_unique_code_indexes"
 down_revision: Union[str, None] = "041_drop_ostaki_ktm_template"

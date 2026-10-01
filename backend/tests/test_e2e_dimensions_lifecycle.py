@@ -339,7 +339,6 @@ async def test_dimensions_lifecycle_import_to_saw(client, session: AsyncSession)
     anod_sec = sections[2]
     saw_sec = sections[3]   # transforms_dimensions
     pack_sec = sections[4]
-    fg_sec = sections[5]    # finished_stock
 
     await assert_no_invariants_violations(session, context="after-setup")
 
@@ -532,7 +531,6 @@ async def test_dimensions_lifecycle_import_to_saw(client, session: AsyncSession)
 async def test_dimensionless_lifecycle_no_regressions(client, session: AsyncSession) -> None:
     """Безразмерный продукт (dimensions=null) проходит тот же маршрут без регрессий."""
     user = await _make_user(session, email="dimless@local")
-    headers = _auth_headers(user)
 
     # Маршрут без трансформации (transform_stage_sequence=None → ни один этап не трансформирует)
     product, sections, route, stages = await _make_dimensions_route(

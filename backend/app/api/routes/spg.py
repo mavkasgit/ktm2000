@@ -1,7 +1,7 @@
 from decimal import Decimal
 from typing import Any
 
-from fastapi import APIRouter, Depends, HTTPException, status, File, UploadFile, Form
+from fastapi import APIRouter, Depends, HTTPException, status, File, UploadFile
 from pydantic import BaseModel
 from sqlalchemy import delete, select
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -10,13 +10,11 @@ from sqlalchemy.orm import selectinload
 from app.api.deps import READER_ROLES, REFERENCES_WRITER_ROLES, WRITER_ROLES, get_current_user, require_role
 from app.core.database import get_db
 from app.models.product import Product
-from app.models.route import ProductionRoute, RouteStage, RouteRuleProfile, SectionOperation
+from app.models.route import RouteStage
 from app.models.section import Section
 from app.models.spg import SpgSection, StorageProductionGroup
 from app.models.user import User
-from app.services.shopfloor.common import _get_user_snapshot_name
 from app.services.shopfloor.queries_spg import get_spg_snapshot
-from app.services.route_selection import select_route_for_payload
 
 router = APIRouter(prefix="/spg", tags=["spg"])
 

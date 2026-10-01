@@ -141,7 +141,7 @@ async def test_adjustment_out_creates_stock_tx(client: AsyncClient, session: Asy
     location = await _make_location(session)
 
     # Сначала создаём приход, чтобы был баланс
-    product2 = await _make_product(session, "ADJ-PROD2")
+    await _make_product(session, "ADJ-PROD2")
 
     payload_in = {
         "product_id": product.id,

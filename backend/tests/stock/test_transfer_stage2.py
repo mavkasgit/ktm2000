@@ -34,7 +34,9 @@ from tests.test_integrity_invariants import (
     # Реэкспорт для потребителей старого пути импорта
     # (tests/stock/test_stock_dimensions.py берёт его именно отсюда) —
     # не удалять при чистке импортов: сам файл его не вызывает.
-    _release_via_take_to_work,
+    # `X as X` — явный реэкспорт: так имя остаётся публичным и для ruff (F401),
+    # и для читателя, который иначе удалит «неиспользуемый» импорт.
+    _release_via_take_to_work as _release_via_take_to_work,
     assert_no_invariants_violations,
 )
 # Канонические определения фабрик живут в tests/helpers/transfers.py

@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from datetime import UTC, datetime
 from decimal import Decimal
+from typing import TYPE_CHECKING
 
 from sqlalchemy import func, select
 from sqlalchemy.orm import selectinload
@@ -16,7 +17,6 @@ from app.models.production_plan import (
     PlanPositionValidationStatus,
     require_current_length_model,
 )
-from app.models.product import Product
 from app.models.release_batch import ReleaseBatch, ReleaseBatchPosition, ReleaseBatchStatus, ReleaseBatchType
 from app.models.route import ProductionRoute, RouteOperation, RouteStage, SectionOperation
 from app.models.section import Section
@@ -26,6 +26,9 @@ from app.services.action_journal_service import action_journal_service
 from app.services.plan_position_hanger import position_dimensions_for_task
 from app.services.production_plan_service import refresh_plan_status
 from app.services.route_transform import build_transform_spec, raw_input_quantity_for
+
+if TYPE_CHECKING:
+    from app.models.route import RouteRuleProfile
 
 
 def _reject_invalid_validation(

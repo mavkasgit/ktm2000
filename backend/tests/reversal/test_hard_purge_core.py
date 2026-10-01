@@ -18,6 +18,7 @@ import re
 
 import pytest
 from sqlalchemy import event, select
+from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.models.action_journal import Action, ActionStatus
 from app.reversal import errors

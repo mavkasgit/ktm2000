@@ -28,7 +28,6 @@ from collections.abc import Iterable
 from datetime import date
 from decimal import Decimal
 
-import pytest
 from sqlalchemy import text
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -45,7 +44,6 @@ from app.models.production_plan import (
 from app.models.route import ProductionRoute, RouteOperation, RouteStage
 from app.models.section import Section
 from app.models.spg import SpgSection, StorageProductionGroup
-from app.models.transfer import Transfer
 from app.models.user import User, UserRole
 
 

@@ -140,7 +140,7 @@ async def test_get_audit_logs_task_statuses(client, session) -> None:
     await session.commit()
 
     # 2. Сделаем GET запрос к API логов
-    response = await client.get(f"/api/audit-logs?limit=5")
+    response = await client.get("/api/audit-logs?limit=5")
     assert response.status_code == 200
     body = response.json()
     
@@ -154,7 +154,7 @@ async def test_get_audit_logs_task_statuses(client, session) -> None:
     await session.commit()
 
     # 5. Снова запросим логи
-    response = await client.get(f"/api/audit-logs?limit=5")
+    response = await client.get("/api/audit-logs?limit=5")
     assert response.status_code == 200
     body = response.json()
     

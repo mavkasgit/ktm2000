@@ -9,6 +9,7 @@ import pytest
 from decimal import Decimal
 from httpx import AsyncClient
 from sqlalchemy import select
+from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.models import Product, ProductType, Section
 from app.core.security import create_access_token

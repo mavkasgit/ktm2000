@@ -26,7 +26,12 @@ import time
 from datetime import datetime, timedelta, timezone
 from typing import Any
 
-import httpx
+# Импорт не имеет обращений в самом модуле, но это не мёртвый код: тесты
+# подменяют клиент через `patch("app.services.oidc_auth_service.httpx.AsyncClient")`
+# (tests/test_auth_oidc.py), то есть `httpx` — часть публичной поверхности
+# модуля как точка подмены. `import httpx as httpx` помечает его явным
+# реэкспортом — иначе ruff F401 снесёт импорт и тесты упадут на AttributeError.
+import httpx as httpx
 from fastapi import HTTPException, status
 from sqlalchemy import or_, select, text
 from sqlalchemy.exc import IntegrityError

@@ -40,7 +40,6 @@ from app.models.work_task import WorkTask, WorkTaskStatus
 from tests.test_integrity_invariants import _make_user
 
 __all__ = [
-    "StageSpec",
     "build_operation_route",
     "build_plan",
     "build_product",

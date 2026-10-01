@@ -67,10 +67,10 @@ async def _make_link(
 
 @pytest.mark.asyncio
 async def test_product_list_1d_has_no_dimensions(client, session: AsyncSession) -> None:
-    product = await _make_product(session, sku="DIM-1D-001", dimension_state="length")
+    await _make_product(session, sku="DIM-1D-001", dimension_state="length")
     await session.commit()
 
-    response = await client.get(f"/api/products?sku=DIM-1D-001")
+    response = await client.get("/api/products?sku=DIM-1D-001")
     assert response.status_code == 200
     items = response.json()["items"]
     assert len(items) == 1
@@ -91,7 +91,7 @@ async def test_product_list_2d_has_dimensions(client, session: AsyncSession) -> 
     await _make_link(session, product_id=product.id, dimension_type_id=thickness_type.id, default_value=2.0)
     await session.commit()
 
-    response = await client.get(f"/api/products?sku=DIM-2D-001")
+    response = await client.get("/api/products?sku=DIM-2D-001")
     assert response.status_code == 200
     items = response.json()["items"]
     assert len(items) == 1
@@ -112,7 +112,7 @@ async def test_product_list_2d_partial_dimensions(client, session: AsyncSession)
     await _make_link(session, product_id=product.id, dimension_type_id=thickness_type.id, default_value=3.0)
     await session.commit()
 
-    response = await client.get(f"/api/products?sku=DIM-2D-002")
+    response = await client.get("/api/products?sku=DIM-2D-002")
     assert response.status_code == 200
     dims = response.json()["items"][0]["dimensions"]
     assert dims is not None
@@ -131,7 +131,7 @@ async def test_product_list_2d_link_without_value_excluded(client, session: Asyn
     await _make_link(session, product_id=product.id, dimension_type_id=width_type.id, default_value=None)
     await session.commit()
 
-    response = await client.get(f"/api/products?sku=DIM-2D-003")
+    response = await client.get("/api/products?sku=DIM-2D-003")
     assert response.status_code == 200
     dims = response.json()["items"][0]["dimensions"]
     assert dims is not None
@@ -153,7 +153,7 @@ async def test_product_list_3d_has_dimensions(client, session: AsyncSession) -> 
     await _make_link(session, product_id=product.id, dimension_type_id=height_type.id, default_value=500.0)
     await session.commit()
 
-    response = await client.get(f"/api/products?sku=DIM-3D-001")
+    response = await client.get("/api/products?sku=DIM-3D-001")
     assert response.status_code == 200
     dims = response.json()["items"][0]["dimensions"]
     assert dims is not None
@@ -187,7 +187,7 @@ async def test_create_dimension_then_appear_in_list(client, session: AsyncSessio
     assert resp2.status_code == 201
 
     # Проверяем что dimensions в списке
-    response = await client.get(f"/api/products?sku=DIM-CRT-001")
+    response = await client.get("/api/products?sku=DIM-CRT-001")
     assert response.status_code == 200
     dims = response.json()["items"][0]["dimensions"]
     assert dims is not None
@@ -209,7 +209,7 @@ async def test_patch_dimension_reflected_in_list(client, session: AsyncSession) 
     await session.commit()
 
     # Проверяем начальное значение
-    response = await client.get(f"/api/products?sku=DIM-PTC-001")
+    response = await client.get("/api/products?sku=DIM-PTC-001")
     assert response.json()["items"][0]["dimensions"]["length_mm"] == 1000.0
 
     # Обновляем через API
@@ -221,7 +221,7 @@ async def test_patch_dimension_reflected_in_list(client, session: AsyncSession) 
     assert patch_resp.json()["default_value"] == 2500.0
 
     # Проверяем что обновилось в списке
-    response = await client.get(f"/api/products?sku=DIM-PTC-001")
+    response = await client.get("/api/products?sku=DIM-PTC-001")
     assert response.json()["items"][0]["dimensions"]["length_mm"] == 2500.0
 
 
@@ -239,7 +239,7 @@ async def test_delete_dimension_removed_from_list(client, session: AsyncSession)
     await session.commit()
 
     # Проверяем что оба есть
-    response = await client.get(f"/api/products?sku=DIM-DEL-001")
+    response = await client.get("/api/products?sku=DIM-DEL-001")
     dims = response.json()["items"][0]["dimensions"]
     assert "length_mm" in dims
     assert "width_mm" in dims
@@ -249,7 +249,7 @@ async def test_delete_dimension_removed_from_list(client, session: AsyncSession)
     assert del_resp.status_code == 204
 
     # Проверяем что остался только width_mm
-    response = await client.get(f"/api/products?sku=DIM-DEL-001")
+    response = await client.get("/api/products?sku=DIM-DEL-001")
     dims = response.json()["items"][0]["dimensions"]
     assert dims is not None
     assert "length_mm" not in dims
@@ -262,7 +262,7 @@ async def test_delete_dimension_removed_from_list(client, session: AsyncSession)
 @pytest.mark.asyncio
 async def test_mixed_dimension_states_in_list(client, session: AsyncSession) -> None:
     """1D и 2D продукты в одном ответе — каждый со своим dimensions."""
-    prod_1d = await _make_product(session, sku="DIM-MIX-1D", dimension_state="length")
+    await _make_product(session, sku="DIM-MIX-1D", dimension_state="length")
     prod_2d = await _make_product(session, sku="DIM-MIX-2D", dimension_state="area")
     length_type = await _make_dimension_type(session, code="length_mm", name="Длина")
     width_type = await _make_dimension_type(session, code="width_mm", name="Ширина")

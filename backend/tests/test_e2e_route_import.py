@@ -179,7 +179,7 @@ async def test_e2e_excel_import_creates_routes_with_steps(session) -> None:
     """E2E test: Full Excel import creates dynamic routes with steps in database."""
     # Setup
     await _seed_sections(session)
-    product = await _make_product(session, sku="FG-E2E-TEST")
+    await _make_product(session, sku="FG-E2E-TEST")
     template = await _make_template(session)
     profile_id = await _make_profile_with_rules(session, template_id=template.id)
 
@@ -264,7 +264,7 @@ async def test_e2e_excel_import_creates_routes_with_steps(session) -> None:
             select(RouteStage).where(RouteStage.route_id == detail["route_id"]).order_by(RouteStage.sequence)
         )
         steps = steps_result.scalars().all()
-        print(f"  Stage details:")
+        print("  Stage details:")
         for step in steps:
             section = await session.get(Section, step.section_id)
             section_code = section.code if section else "?"
@@ -283,7 +283,6 @@ async def test_e2e_excel_import_creates_routes_with_steps(session) -> None:
         row_num = (row_data.get("source_row_numbers") or ["?"])[0]
         sku = row_data.get("source_sku", "?")
         route_id = row_data.get("route_id")
-        route_name = row_data.get("route_name", "no route")
         payload = row_data.get("source_payload", {})
         color = payload.get("color", "")
         output_kind = payload.get("output_kind", "")
@@ -338,7 +337,7 @@ async def test_e2e_excel_import_multiple_rows_reuse_routes(session) -> None:
     """E2E test: Multiple identical rows reuse same route with steps."""
     # Setup
     await _seed_sections(session)
-    product = await _make_product(session, sku="FG-E2E-REUSE")
+    await _make_product(session, sku="FG-E2E-REUSE")
     template = await _make_template(session)
     profile_id = await _make_profile_with_rules(session, template_id=template.id)
 

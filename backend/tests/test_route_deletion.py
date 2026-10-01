@@ -18,7 +18,9 @@ from __future__ import annotations
 from decimal import Decimal
 
 import pytest
+from httpx import AsyncClient
 from sqlalchemy import func, or_, select, update
+from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.models.internal_plan import InternalPlan, SectionPlanLine
 from app.models.production_plan import PlanPosition

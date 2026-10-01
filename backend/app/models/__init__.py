@@ -2,7 +2,7 @@ from .base import Base
 from .section import Section
 from .user import User, UserRole
 from .user_session import UserSession
-from .product import Product, ProductType, ProductLength, ProcessingFlag, ProductProcessingFlag, ProductComposition, ProductPair
+from .product import Product, ProductType, ProductLength, ProcessingFlag, ProductProcessingFlag, ProductComposition, ProductPair as ProductPair
 from .dimension import DimensionType, ProductDimension
 from .route import ProductionRoute, RouteOperation, RouteRuleProfile, RouteSelectionRule, RouteStage
 from .imports import ImportBatch, ImportBatchMode, ImportBatchStatus, ImportFile

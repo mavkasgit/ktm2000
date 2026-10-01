@@ -255,7 +255,9 @@ async def get_batch_rows(
     from app.models.product import Product
     from app.domain.dimensions import format_dimensions
 
-    batch = await get_batch(db, batch_id)
+    # Проверка существования батча (get_batch бросает not_found) — побочный
+    # эффект сохраняется, результат здесь не нужен.
+    await get_batch(db, batch_id)
     stmt = (
         select(StockImportRow, Product, Section)
         .outerjoin(Product, StockImportRow.product_id == Product.id)

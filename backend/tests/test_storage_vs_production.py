@@ -13,7 +13,6 @@ Covers:
 from __future__ import annotations
 
 import pytest
-import pytest_asyncio
 from httpx import AsyncClient
 from sqlalchemy import select, text
 from sqlalchemy.exc import IntegrityError
@@ -89,7 +88,6 @@ def test_infer_stage_kind():
 def test_stage_display_name():
     drill = _make_section("DRILLING", "production")
     wh = _make_section("RAW_STOCK", "raw_stock")
-    fg = _make_section("FG", "finished_stock")
 
     prod_stage = RouteStage(sequence=1, section_id=drill.id, stage_kind="production")
     prod_stage.section = drill
@@ -249,7 +247,7 @@ async def test_build_completed_stages_json_empty(session: AsyncSession):
 async def test_sections_all_operations_no_synthetic_fallback(client: AsyncClient, session: AsyncSession):
     """When a production section has no operations, the API must return empty list,
     NOT a fabricated SectionOperation with is_significant=True (the old bug)."""
-    sections = await _seed_basic_sections(session)
+    await _seed_basic_sections(session)
     # Make sure DRILL has no operations
     res = await client.get("/api/sections/all/operations")
     assert res.status_code == 200, res.text

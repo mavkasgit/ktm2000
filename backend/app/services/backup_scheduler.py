@@ -2,7 +2,6 @@ import asyncio
 import logging
 from datetime import datetime
 from sqlalchemy import text
-from app.core.config import settings
 from app.core.database import async_session
 from app.api.backups import (
     _create_backup_archive,

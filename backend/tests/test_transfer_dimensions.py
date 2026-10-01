@@ -656,7 +656,7 @@ async def test_transforming_task_cancel_isolation_between_sizes(client, session)
         dimensions={"length_mm": 900},
     )
     await session.commit()
-    t1800 = await transfer_send(
+    await transfer_send(
         session,
         from_task_id=saw_task.id,
         to_task_id=None,

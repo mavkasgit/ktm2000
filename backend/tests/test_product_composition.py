@@ -370,7 +370,7 @@ async def test_list_include_composition_empty_and_stale_component(client, sessio
         }
     ]
 
-    cleared_owner = await _make_product(session, sku="CMP-OWNER-15", type=ProductType.finished_good)
+    await _make_product(session, sku="CMP-OWNER-15", type=ProductType.finished_good)
     await session.commit()
     empty = await client.get(
         "/api/products", params={"include_composition": "true", "sku": "CMP-OWNER-15"}

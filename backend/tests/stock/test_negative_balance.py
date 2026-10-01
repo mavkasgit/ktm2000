@@ -159,7 +159,7 @@ async def test_compensation_bypasses_balance_check(session: AsyncSession):
         created_by=user.id,
     ))
     # Перемещаем 10 на laser
-    tx_send = await svc.record(session, StockCommand(
+    await svc.record(session, StockCommand(
         product_id=product.id,
         from_location_id=raw.id,
         to_location_id=laser.id,

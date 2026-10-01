@@ -72,7 +72,6 @@ async def _get_stock_location(session: AsyncSession, section_id: int) -> int | N
     for subsequent stages, returns WIP_STOCK of the same SPG.
     Returns None if no stock location is found (falls back to the section itself).
     """
-    from app.models.route import RouteStage
     from app.models.section import Section
     from app.services.route_storage_classifier import is_production_section
 

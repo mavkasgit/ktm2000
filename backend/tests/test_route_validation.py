@@ -84,7 +84,6 @@ async def _make_plan_position(
     )
     session.add(plan)
     await session.flush()
-    output_kind_val = source_payload.get("output_kind")
     position = PlanPosition(
         production_plan_id=plan.id,
         product_id=product.id,

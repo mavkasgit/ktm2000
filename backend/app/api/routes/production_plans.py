@@ -30,7 +30,7 @@ from app.models.production_plan import (
 )
 from app.models.audit_log import AuditLog
 from app.api.routes.audit_logs import AuditLogOut
-from app.models.imports import ImportBatch
+from app.models.imports import ImportBatch, ImportFile
 from app.models.product import Product
 from app.models.release_batch import ReleaseBatchType
 from app.models.route import ProductionRoute, RouteRuleProfile, RouteStage
@@ -335,21 +335,23 @@ async def discard_plan_change_set(
         raise HTTPException(status_code=400, detail="Change set does not belong to production plan")
     await _reject_legacy_plan_mutation(db, production_plan_id)
 
-    # Запись лога аудита (отклонение импорта)
-    from app.services.audit_log_service import log_action
-    from app.models.audit_log import AuditAction, AuditEntityType
-    await log_action(
-        db,
-        status="success",
-        title="Импорт плана (отклонен)",
-        message=f"Черновик пакета изменений импорта #{change_set_id} успешно отклонен и удален.",
-        user=current_user,
-        action=AuditAction.CANCEL,
-        entity_type=AuditEntityType.IMPORT_BATCH,
-        entity_id=batch_id,
-    )
-
     batch_id = change_set.import_batch_id
+
+    # Запись лога аудита (отклонение импорта). Без батча записи нет: отклонять
+    # нечего, а строка с `entity_id=NULL` исказила бы реестр импортов.
+    if batch_id is not None:
+        from app.services.audit_log_service import log_action
+        from app.models.audit_log import AuditAction, AuditEntityType
+        await log_action(
+            db,
+            status="success",
+            title="Импорт плана (отклонен)",
+            message=f"Черновик пакета изменений импорта #{change_set_id} успешно отклонен и удален.",
+            user=current_user,
+            action=AuditAction.CANCEL,
+            entity_type=AuditEntityType.IMPORT_BATCH,
+            entity_id=batch_id,
+        )
 
     if change_set.status.value == "applied":
         await rollback_change_set(db, change_set_id)
@@ -760,7 +762,7 @@ async def bulk_approve_positions(
                 "bulk_approve_positions: position %s failed: %s", position_id, exc,
             )
             results.append(BulkActionResultItem(id=position_id, status="failed", reason=str(exc)))
-        except Exception as exc:
+        except Exception:
             logger.exception("bulk_approve_positions: unexpected error for id %s", position_id)
             results.append(
                 BulkActionResultItem(id=position_id, status="failed", reason="Внутренняя ошибка сервера")
@@ -847,7 +849,7 @@ async def bulk_delete_positions(
                 "bulk_delete_positions: position %s failed: %s", position_id, exc,
             )
             results.append(BulkActionResultItem(id=position_id, status="failed", reason=str(exc)))
-        except Exception as exc:
+        except Exception:
             logger.exception("bulk_delete_positions: unexpected error for id %s", position_id)
             results.append(
                 BulkActionResultItem(id=position_id, status="failed", reason="Внутренняя ошибка сервера")
@@ -1134,8 +1136,6 @@ def _plan_files_query(*, include_hidden: bool = False):
     по умолчанию они не видны — в этом и смысл `deleted_at`. Скрытость ортогональна
     статусу, поэтому фильтр не смотрит на `status`.
     """
-    from app.models.imports import ImportFile
-
     stmt = (
         select(ImportBatch, ImportFile, PlanChangeSet.id, PlanChangeSet.applied_at)
         .join(ImportFile, ImportBatch.source_file_id == ImportFile.id)

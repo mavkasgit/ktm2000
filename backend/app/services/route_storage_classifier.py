@@ -27,7 +27,6 @@ from __future__ import annotations
 
 from typing import Iterable
 
-from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.models.route import RouteStage
@@ -204,14 +203,6 @@ async def classify_stages(
     stage_list = list(stages)
     if not stage_list:
         return [], []
-
-    storage_ids = {s.storage_section_id for s in stage_list if s.storage_section_id}
-    storage_sections: dict[int, Section] = {}
-    if storage_ids:
-        rows = (await db.execute(
-            select(Section).where(Section.id.in_(storage_ids))
-        )).scalars().all()
-        storage_sections = {s.id: s for s in rows}
 
     production: list[RouteStage] = []
     transit: list[RouteStage] = []

@@ -1,10 +1,10 @@
-from sqlalchemy import select, delete
+from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.models.defect import Defect
 from app.models.internal_plan import SectionPlanLine
 from app.models.rework_task import ReworkTask
-from app.models.route import ProductionRoute, RouteRuleProfile, RouteStage, RouteOperation, SectionOperation
+from app.models.route import ProductionRoute, RouteRuleProfile, RouteStage, RouteOperation
 from app.models.section import Section
 from app.models.transfer import Transfer
 from app.models.work_task import WorkTask

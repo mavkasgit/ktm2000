@@ -193,7 +193,7 @@ async def test_take_to_work_accepts_partial_release_quantity(client, session) ->
 async def test_take_to_work_does_not_create_task_on_raw_stock(client, session) -> None:
     """WorkTask создаётся только на production-секции, даже если
     в маршруте есть raw_stock (склад)."""
-    user = await _make_user(session)
+    await _make_user(session)
     fx = await _make_raw_stock_to_production_fixture(session, sku="RAWTST", qty=Decimal("5"))
     await _release_via_take_to_work(client, fx["position"].id)
 

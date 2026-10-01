@@ -1,7 +1,5 @@
 """Tests for the unified rule engine with phase support and DSL actions."""
 
-import pytest
-
 from app.services.route_selection import (
     _set_nested,
     _add_to_nested,

@@ -3,7 +3,7 @@ from decimal import Decimal
 from typing import Literal
 from uuid import uuid4
 
-from fastapi import APIRouter, Depends, HTTPException, Query, status
+from fastapi import APIRouter, Depends, HTTPException, Query
 from pydantic import BaseModel, ConfigDict, Field
 from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -19,7 +19,7 @@ from app.models.production_plan import (
     require_current_length_model,
 )
 from app.models.transfer import Transfer
-from app.models.work_task import CLOSED_WORK_TASK_STATUSES, RESOLVED_WORK_TASK_STATUSES, WorkTask, WorkTaskStatus
+from app.models.work_task import RESOLVED_WORK_TASK_STATUSES, WorkTask, WorkTaskStatus
 from app.models.route import ProductionRoute, RouteStage
 from app.models.section import Section
 from app.models.user import User
@@ -33,7 +33,7 @@ from app.services.production_planning_rows import (
     list_production_planning_rows,
 )
 from app.domain.dimensions import DIMENSIONLESS_LABEL, canonicalize_dimensions, format_dimensions
-from app.services.production_plan_service import _refresh_plan_status, restore_plan_position, soft_delete_cancelled_position
+from app.services.production_plan_service import _refresh_plan_status, soft_delete_cancelled_position
 from app.services.plan_generation import create_release_batch, release_batch
 from app.services.plan_position_hanger import task_dimensions_for_plan_line
 from app.services.route_matcher import resolve_position_route, make_position_route_cache_key
@@ -473,8 +473,6 @@ async def get_production_planning_overview(
             .order_by(Section.sort_order)
         )
     ).scalars().all()
-
-    section_map = {s.id: s for s in sections}
 
     # Fetch all section plan lines and work tasks for approved positions
     position_ids = [p.id for p in positions]
@@ -1169,7 +1167,7 @@ async def cancel_positions_batch(
                     pos = await db.get(PlanPosition, position_id)
                     if pos:
                         plan_ids.add(pos.production_plan_id)
-        except Exception as exc:
+        except Exception:
             logger.exception("cancel_positions_batch: unexpected error for id %s", position_id)
             results.append(
                 BatchActionResult(
@@ -1273,7 +1271,7 @@ async def restore_positions_batch(
                     pos = await db.get(PlanPosition, position_id)
                     if pos:
                         plan_ids.add(pos.production_plan_id)
-        except Exception as exc:
+        except Exception:
             logger.exception("restore_positions_batch: unexpected error for id %s", position_id)
             results.append(
                 BatchActionResult(
@@ -1341,7 +1339,7 @@ async def soft_delete_positions_batch(
                 results.append(BatchActionResult(position_id=position_id, status="success"))
         except ValueError as exc:
             results.append(BatchActionResult(position_id=position_id, status="failed", reason=str(exc)))
-        except Exception as exc:
+        except Exception:
             logger.exception("soft_delete_positions_batch: unexpected error for id %s", position_id)
             results.append(
                 BatchActionResult(position_id=position_id, status="failed", reason="Внутренняя ошибка сервера")
@@ -1431,7 +1429,7 @@ async def manual_pass_positions_batch(
             )
         except ValueError as exc:
             results.append(ManualPassBatchResult(position_id=position_id, status="failed", reason=str(exc)))
-        except Exception as exc:
+        except Exception:
             logger.exception("manual_pass_positions_batch: unexpected error for id %s", position_id)
             results.append(
                 ManualPassBatchResult(position_id=position_id, status="failed", reason="Внутренняя ошибка сервера")

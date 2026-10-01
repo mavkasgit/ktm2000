@@ -33,7 +33,7 @@ from app.models.release_batch import ReleaseBatchType
 from app.models.route import RouteRuleProfile, RouteStage
 from app.models.section import Section
 from app.models.user import User
-from app.models.work_task import CLOSED_WORK_TASK_STATUSES, WorkTask, WorkTaskStatus
+from app.models.work_task import WorkTask, WorkTaskStatus
 from app.seeds.canon.registry import build_plant_config
 from app.services.action_journal_service import action_journal_service
 from app.services.shopfloor_service import complete_task
@@ -1072,7 +1072,6 @@ async def _run_route_progress(
                 performed_at = start + timedelta(minutes=index * 15 + stage_index * 3)
                 accounted_at = performed_at + timedelta(minutes=1)
                 key = f"{DEMO_PLAN_MARKER.lower()}:pos{position.id}:stage{stage.sequence}"
-                prev_task = rows[stage_index - 1][0] if stage_index else None
                 # Объём выдачи берётся из факта предыдущей стадии: план по нормам
                 # может требовать больше, чем реально прошло, и выдача «впрок»
                 # упала бы на отрицательном остатке участка-источника.

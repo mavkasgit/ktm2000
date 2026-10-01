@@ -521,7 +521,7 @@ async def test_import_remainders_excel_skip_invalid(
     session: AsyncSession,
 ) -> None:
     """1 валидная + 1 невалидная (пустой SKU) → imported_count=1, errors есть."""
-    product = await _make_product(session, "SKIP-VALID")
+    await _make_product(session, "SKIP-VALID")
     location = await _make_location(session, "SKIP-LOC")
     await session.commit()
 
@@ -555,7 +555,7 @@ async def test_import_remainders_excel_atomic_fail(
     session: AsyncSession,
 ) -> None:
     """skip_invalid=False с невалидной строкой → success=false, ничего не записано."""
-    product = await _make_product(session, "ATOMIC-OK")
+    await _make_product(session, "ATOMIC-OK")
     location = await _make_location(session, "ATOMIC-LOC")
     await session.commit()
 
@@ -774,7 +774,7 @@ async def test_preview_remainders_excel_unknown_quality_state(
     session: AsyncSession,
 ) -> None:
     """Неизвестный статус качества помечает строку invalid."""
-    product = await _make_product(session, "QTY-ERR")
+    await _make_product(session, "QTY-ERR")
     location = await _make_location(session, "QTY-LOC")
     await session.commit()
 
@@ -1172,7 +1172,7 @@ async def test_preview_clipboard_two_columns_without_quantity(
 ) -> None:
     """TSV с артикулом и операциями без колонки количества — qty=1 по умолчанию."""
     await _make_product(session, "ЮП-460")
-    location = await _make_location(session, "CLIP-2COL")
+    await _make_location(session, "CLIP-2COL")
     await session.commit()
 
     clipboard = _make_clipboard_tsv(
@@ -1336,7 +1336,7 @@ async def test_import_per_row_target_creates_distinct_balances(
     session: AsyncSession,
 ) -> None:
     """Per-row target section → разные балансы на разных секциях + integrity (R5)."""
-    product = await _make_product(session, "PER-ROW")
+    await _make_product(session, "PER-ROW")
     # S1 = raw_stock (используется как default location формы)
     s1 = await _make_warehouse_section(
         session, "DEFAULT", "Default Stock", type="raw_stock",

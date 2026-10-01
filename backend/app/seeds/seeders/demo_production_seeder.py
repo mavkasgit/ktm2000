@@ -8,15 +8,11 @@ from sqlalchemy.orm import selectinload
 from app.models.product import Product, ProductLength, ProductType
 from app.models.action_journal import Action
 from app.models.spg import SpgSection, StorageProductionGroup
-from app.models.route import ProductionRoute, RouteStage, RouteOperation, RouteRuleProfile
+from app.models.route import ProductionRoute, RouteStage
 from app.models.section import Section
-from app.models.defect import Defect, DefectItem, DefectStatus, DefectDecision, DefectDecisionType
+from app.models.defect import Defect, DefectItem, DefectStatus
 from app.models.user import User
-from app.services.route_storage_classifier import (
-    STAGE_KIND_PRODUCTION,
-    is_production_stage,
-    is_transit_stage,
-)
+from app.services.route_storage_classifier import is_production_stage
 from app.services.shopfloor.common import build_completed_stages_json
 from app.services.action_journal_service import action_journal_service
 
@@ -173,7 +169,6 @@ async def seed_demo_production(db: AsyncSession) -> dict:
     # 4. Get a user
     user = await db.scalar(select(User).limit(1))
     actor_id = user.id if user else 1
-    actor_name = user.full_name or user.username if user else "system"
 
     # 5. Create remainders
     # Remainder 1: ЮП-100-2700-BL, completed stages through DRILL

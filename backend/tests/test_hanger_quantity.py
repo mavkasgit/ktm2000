@@ -1,7 +1,5 @@
 from decimal import Decimal
 
-import pytest
-
 from app.services.hanger_quantity import adjust_quantity_to_hanger
 
 

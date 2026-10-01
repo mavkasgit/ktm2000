@@ -6,7 +6,7 @@ from sqlalchemy.orm import selectinload
 
 from app.models.product import Product
 from app.models.production_plan import PlanPosition, PlanPositionStatus
-from app.models.route import ProductionRoute, RouteStage
+from app.models.route import RouteStage
 from app.models.section import Section
 from app.services import product_pair_resolver
 from app.services.product_pair_resolver import paired_component_skus

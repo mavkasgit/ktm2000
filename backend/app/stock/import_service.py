@@ -16,7 +16,7 @@ from decimal import Decimal, InvalidOperation
 from functools import lru_cache
 from io import BytesIO
 from pathlib import Path
-from typing import Literal
+from typing import TYPE_CHECKING, Literal
 
 from sqlalchemy import func, or_, select
 
@@ -53,6 +53,9 @@ from app.services.material_operations import (
     format_completed_operations_label,
 )
 from app.services.route_storage_classifier import is_production_section, is_terminal_section
+
+if TYPE_CHECKING:
+    from sqlalchemy.ext.asyncio import AsyncSession
 
 # Дефолтный column_mapping остатков — источник заголовков, псевдонимов и
 # позиций колонок (issue #15). Живёт в JSON-файле ``remainders_columns.json``,
@@ -1372,12 +1375,12 @@ def _preview_matches_column_filters(
     section_names: dict[int, str],
     column_filters: dict[str, str | None],
 ) -> bool:
-    for field, needle in column_filters.items():
+    for field_name, needle in column_filters.items():
         if needle is None or not needle.strip():
             continue
         cell = _preview_cell_value(
             item,
-            field,
+            field_name,
             default_quality_state=default_quality_state,
             target_section_overrides=target_section_overrides,
             quality_state_overrides=quality_state_overrides,

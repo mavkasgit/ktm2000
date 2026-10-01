@@ -1405,7 +1405,7 @@ async def soft_delete_cancelled_position(
     from sqlalchemy import select
 
     from app.models.internal_plan import SectionPlanLine
-    from app.models.work_task import CLOSED_WORK_TASK_STATUSES, WorkTask
+    from app.models.work_task import CLOSED_WORK_TASK_STATUSES, WorkTask, WorkTaskStatus
 
     position = await db.get(PlanPosition, position_id)
     if position is None or position.production_plan_id != production_plan_id:

@@ -157,7 +157,7 @@ def upgrade() -> None:
     # отката у них неизвестна, они откатываются как есть по узлу журнала.
     op.execute(
         sa.text(
-            f"""
+            """
             INSERT INTO stock_import_batches
                 (action_id, file_id, location_id, status, legacy, clear_existing,
                  total_rows, imported_rows, skipped_rows, summary,
@@ -173,7 +173,7 @@ def upgrade() -> None:
                 (SELECT count(*) FROM stock_transactions t
                   WHERE t.action_id = a.id AND t.reason = 'manual_in'),
                 0,
-                '{{}}'::jsonb,
+                '{}'::jsonb,
                 a.actor,
                 a.created_at
             FROM action_journal a

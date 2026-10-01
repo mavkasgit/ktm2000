@@ -140,7 +140,6 @@ async def _collect_footprint(db: AsyncSession, batch_id: int) -> _Footprint:
         )
     ).all()
     fp.line_ids = [line_id for line_id, _ in line_rows]
-    line_to_pos = {line_id: pos_id for line_id, pos_id in line_rows}
 
     if fp.line_ids:
         fp.task_ids = list(

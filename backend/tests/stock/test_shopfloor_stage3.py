@@ -13,7 +13,7 @@ from datetime import date
 from decimal import Decimal
 
 import pytest
-from sqlalchemy import func, select, text, update
+from sqlalchemy import func, select, update
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.models import Product, ProductType, Section, User, UserRole
@@ -361,7 +361,7 @@ async def test_complete_task_with_scrap(session: AsyncSession):
 
     from app.services.shopfloor.operations_tasks import complete_task
     from tests.stock.helpers import FAKE_SCRAP_POLICY
-    result = await complete_task(
+    await complete_task(
         session,
         task_id=task.id,
         good_quantity=Decimal("7"),
@@ -432,7 +432,7 @@ async def test_final_release_creates_stock_tx(session: AsyncSession):
     await session.commit()
 
     from app.services.shopfloor.operations_tasks import final_release
-    result = await final_release(
+    await final_release(
         session,
         task_id=task.id,
         quantity=Decimal("8"),

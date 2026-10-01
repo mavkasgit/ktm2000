@@ -23,7 +23,7 @@ from datetime import datetime
 from decimal import Decimal
 from typing import Any, cast as tcast
 
-from sqlalchemy import Select, cast, delete, func, or_, select, text, update
+from sqlalchemy import Select, cast, delete, func, or_, select, text
 from sqlalchemy.dialects.postgresql import JSONB
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession

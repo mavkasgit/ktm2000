@@ -6,7 +6,7 @@ from pydantic import BaseModel, Field
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.api.deps import READER_ROLES, WRITER_ROLES, get_current_user, get_db, require_role
+from app.api.deps import READER_ROLES, WRITER_ROLES, get_db, require_role
 from app.models.user import User
 from app.services.daily_plan_service import (
     DailyPlanConflict,

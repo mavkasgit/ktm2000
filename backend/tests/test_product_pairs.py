@@ -238,7 +238,7 @@ async def test_pair_auto_only_when_both_auto(client, session: AsyncSession) -> N
     # hanger_mode default 'auto' — движок: by_area = floor(13/0.3305) = 39,
     # by_size = floor(2900/(39.35+40)) = 36 → total = 36.
     await session.commit()
-    pair = await _make_pair(session, a, b)
+    await _make_pair(session, a, b)
     await session.commit()
 
     resp = await client.get(f"/api/products/{a.id}/pairs")
@@ -259,7 +259,7 @@ async def test_pair_lengths_follow_length_changes(client, session: AsyncSession)
     """Длины пары = пересечение живьём: длина ушла из артикула — пара на ней не существует."""
     a = await _make_product(session, sku="PAIR-LEN-A", lengths=_canonical_lengths(2500.0, 2780.0))
     b = await _make_product(session, sku="PAIR-LEN-B", lengths=_canonical_lengths(2500.0))
-    pair = await _make_pair(session, a, b, {"2500": {"auto": None, "manual": 5}})
+    await _make_pair(session, a, b, {"2500": {"auto": None, "manual": 5}})
     await session.commit()
 
     resp = await client.get(f"/api/products/{a.id}/pairs")
@@ -297,7 +297,7 @@ async def test_pair_lengths_follow_length_changes(client, session: AsyncSession)
 async def test_is_paired_profile_derived_from_pairs(client, session: AsyncSession) -> None:
     a = await _make_product(session, sku="PAIR-FLG-A")
     b = await _make_product(session, sku="PAIR-FLG-B")
-    c = await _make_product(session, sku="PAIR-FLG-C")
+    await _make_product(session, sku="PAIR-FLG-C")
     await session.commit()
 
     resp = await client.get("/api/products", params={"sku": "PAIR-FLG"})

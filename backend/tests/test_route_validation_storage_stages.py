@@ -204,7 +204,7 @@ async def test_required_storage_section_absent_from_route_is_reported(session: A
 
     issues = await validate_route_match(session, position)
 
-    assert issues == [f"route_missing_required_step: FG-TRANSIT-NEG-OTHER_STOCK"]
+    assert issues == ["route_missing_required_step: FG-TRANSIT-NEG-OTHER_STOCK"]
 
 
 @pytest.mark.asyncio
