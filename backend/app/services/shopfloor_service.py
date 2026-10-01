@@ -1,4 +1,5 @@
 from app.services.shopfloor import (
+    BOARD_COLUMN_VALUE_FIELDS,
     _refresh_section_plan_line_cache,
     add_defect_item,
     complete_task,
@@ -11,6 +12,7 @@ from app.services.shopfloor import (
     get_rework_details,
     get_route_stage_aggregates_for_plan_position,
     get_section_board,
+    get_section_board_column_values,
     get_section_daily_stats,
     get_sections_summary,
     get_task_details,
@@ -23,6 +25,7 @@ from app.services.shopfloor import (
 )
 
 __all__ = [
+    "BOARD_COLUMN_VALUE_FIELDS",
     "_refresh_section_plan_line_cache",
     "add_defect_item",
     "complete_task",
@@ -35,6 +38,7 @@ __all__ = [
     "get_rework_details",
     "get_route_stage_aggregates_for_plan_position",
     "get_section_board",
+    "get_section_board_column_values",
     "get_section_daily_stats",
     "get_sections_summary",
     "get_task_details",

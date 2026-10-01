@@ -293,6 +293,55 @@ export async function getSectionBoard(
   );
   return data;
 }
+export type SectionBoardColumnValuesParams = {
+  /** Серверная колонка доски; сервер отдаёт справочник только для известных ему. */
+  column: string;
+  date_from?: string;
+  date_to?: string;
+  status?: string;
+  search?: string;
+  product_sku?: string;
+  dimensions?: string;
+  limit?: number;
+};
+
+export type SectionBoardColumnValuesResponse = {
+  column: string;
+  values: string[];
+  limit: number;
+  /** Список обрезан лимитом: значений под фильтрами больше, чем вернулось. */
+  truncated: boolean;
+};
+
+/**
+ * Справочник значений серверной колонки доски (#211, ADR-0044).
+ *
+ * Значения собираются под текущими фильтрами, но фильтр САМОЙ колонки сервер
+ * отбрасывает — иначе список схлопнулся бы к уже выбранному значению. Поэтому
+ * список не зависит от страницы доски: значение с соседней страницы в поповере
+ * видно.
+ */
+export async function getSectionBoardColumnValues(
+  sectionId: number,
+  params: SectionBoardColumnValuesParams,
+  options?: ShopfloorRequestOptions
+): Promise<SectionBoardColumnValuesResponse> {
+  const search = new URLSearchParams();
+  search.set("column", params.column);
+  if (params.date_from) search.set("date_from", params.date_from);
+  if (params.date_to) search.set("date_to", params.date_to);
+  if (params.status) search.set("status", params.status);
+  if (params.search) search.set("search", params.search);
+  if (params.product_sku) search.set("product_sku", params.product_sku);
+  if (params.dimensions) search.set("dimensions", params.dimensions);
+  if (params.limit != null) search.set("limit", String(params.limit));
+  const { data } = await apiClient.get<SectionBoardColumnValuesResponse>(
+    `/shopfloor/sections/${sectionId}/board/column-values?${search.toString()}`,
+    makeRequestConfig(options)
+  );
+  return data;
+}
+
 export async function listDailyPlans(
   sectionId: number,
   options?: ShopfloorRequestOptions,

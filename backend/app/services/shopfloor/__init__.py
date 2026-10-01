@@ -8,10 +8,12 @@ from .operations_defects import (
 from .operations_meta import create_attachment, create_comment, link_attachment
 from .operations_tasks import complete_task, final_release, prepare_section_task
 from .queries import (
+    BOARD_COLUMN_VALUE_FIELDS,
     get_defect_details,
     get_rework_details,
     get_route_stage_aggregates_for_plan_position,
     get_section_board,
+    get_section_board_column_values,
     get_section_daily_stats,
     get_sections_summary,
     get_task_details,
@@ -21,6 +23,7 @@ from .queries import (
 )
 
 __all__ = [
+    "BOARD_COLUMN_VALUE_FIELDS",
     "_refresh_section_plan_line_cache",
     "add_defect_item",
     "complete_task",
@@ -33,6 +36,7 @@ __all__ = [
     "get_rework_details",
     "get_route_stage_aggregates_for_plan_position",
     "get_section_board",
+    "get_section_board_column_values",
     "get_section_daily_stats",
     "get_sections_summary",
     "get_task_details",
