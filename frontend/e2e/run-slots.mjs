@@ -34,6 +34,11 @@ export const DEFAULT_STALE_MS = 40 * 60_000;
 
 const POLL_MS = 3_000;
 
+/** Длительность для сообщений: секунды до минуты, дальше — минуты. */
+function formatDuration(ms) {
+  return ms < 60_000 ? `${Math.round(ms / 1000)} с` : `${Math.round(ms / 60_000)} мин`;
+}
+
 /** Каталог слотов вне репозитория: свой у машины, общий для всех worktree. */
 export function defaultSlotsDir() {
   const base =
@@ -58,8 +63,8 @@ export function slotFile(dir, index) {
   return path.join(dir, `slot-${index}.json`);
 }
 
-/** Живой ли процесс-держатель. Неизвестная ошибка → «жив»: слот не отнимаем. */
-function isAlive(pid) {
+/** Живой ли процесс. Неизвестная ошибка → «жив»: слот не отнимаем. */
+export function isProcessAlive(pid) {
   if (!Number.isInteger(pid) || pid <= 0) return false;
   try {
     process.kill(pid, 0);
@@ -78,7 +83,7 @@ function readHolder(file) {
 }
 
 /** Занять свободный слот или вернуть null, если все заняты. */
-export function tryAcquireSlot(dir, max, payload, { alive = isAlive } = {}) {
+export function tryAcquireSlot(dir, max, payload, { alive = isProcessAlive } = {}) {
   fs.mkdirSync(dir, { recursive: true });
   for (let index = 0; index < max; index += 1) {
     const file = slotFile(dir, index);
@@ -102,7 +107,7 @@ export function releaseSlot(slot) {
 }
 
 /** Кто держит слоты — для строки ожидания. */
-export function describeHolders(dir, max, { alive = isAlive } = {}) {
+export function describeHolders(dir, max, { alive = isProcessAlive } = {}) {
   const holders = [];
   for (let index = 0; index < max; index += 1) {
     const holder = readHolder(slotFile(dir, index));
@@ -124,7 +129,7 @@ export async function acquireSlot({
   staleMs = DEFAULT_STALE_MS,
   pollMs = POLL_MS,
   log = console.log,
-  alive = isAlive,
+  alive = isProcessAlive,
   now = Date.now,
 } = {}) {
   const started = now();
@@ -153,7 +158,7 @@ export async function acquireSlot({
     }
     if (now() - started > waitTimeoutMs) {
       throw new Error(
-        `[e2e:run] не дождался слота семафора за ${Math.round(waitTimeoutMs / 60_000)} мин ` +
+        `[e2e:run] не дождался слота семафора за ${formatDuration(waitTimeoutMs)} ` +
           `(E2E_MAX_PARALLEL_RUNS=${max}); держат: ${JSON.stringify(describeHolders(dir, max, { alive }))}`,
       );
     }
