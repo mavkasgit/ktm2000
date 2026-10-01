@@ -1,5 +1,5 @@
-from logging.config import fileConfig
 from asyncio import run
+from logging.config import fileConfig
 
 from app.core.env_file import apply_env_file
 
@@ -10,14 +10,13 @@ from app.core.env_file import apply_env_file
 apply_env_file()
 
 
-from sqlalchemy import Column, MetaData, PrimaryKeyConstraint, String, Table, pool
-from sqlalchemy.ext.asyncio import async_engine_from_config
+import app.models  # noqa: F401
 from alembic import context
 from alembic.ddl.postgresql import PostgresqlImpl
-
 from app.core.config import settings
 from app.models.base import Base
-import app.models  # noqa: F401
+from sqlalchemy import Column, MetaData, PrimaryKeyConstraint, String, Table, pool
+from sqlalchemy.ext.asyncio import async_engine_from_config
 
 config = context.config
 config.set_main_option("sqlalchemy.url", settings.DATABASE_URL)
@@ -28,10 +27,27 @@ if config.config_file_name is not None:
 target_metadata = Base.metadata
 
 
+#: Служебные таблицы шагов пересчёта. Их создают миграции-пересчёты
+#: (`071_route_code_identity`, `218_hanger_norm_key_normalization` и т.п.) как
+#: временные артефакты, и на них опираются тесты (`tests/test_migrations.py`
+#: читает `hanger_norm_key_migration`). В моделях они не описаны намеренно —
+#: autogenerate не должен предлагать их удаление, иначе `alembic check` красный
+#: всегда (тикет #261).
+MIGRATION_HELPER_TABLES = frozenset(
+    {
+        "route_signature_migration",
+        "route_code_migration",
+        "route_stage_significance_migration",
+        "hanger_norm_key_migration",
+    }
+)
+
+
 def include_object(object, name, type_, reflected, compare_to):
-    if type_ == "table" and name == "alembic_version":
-        return False
-    return True
+    return not (
+        type_ == "table"
+        and (name == "alembic_version" or name in MIGRATION_HELPER_TABLES)
+    )
 
 
 class WideVersionTablePostgresqlImpl(PostgresqlImpl):
