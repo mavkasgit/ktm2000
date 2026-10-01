@@ -74,8 +74,12 @@ async function apiEnsureProduct460(token: string): Promise<{ id: number; sku: st
     // 2,7 м анод. медь матов»). В реестре одна длина: вторая была мусором от
     // прежнего захода, а сырьевая длина по ADR-0028 —
     // отдельный параметр подвеса и в реестр длин не пишется.
-    lengths_mm: [2700],
-    length_mm: 2700,
+    //
+    // Форма реестра — `lengths: [{length_mm, raw_length_mm, is_primary}]`
+    // (`ProductIn`). Плоских `lengths_mm`/`length_mm` схема не знает и молча
+    // игнорирует, поэтому реестр оставался пустым, а импорт плана отклонял
+    // строку как `normal_length_not_found` (#262).
+    lengths: [{ length_mm: 2700, is_primary: true }],
   });
   const created = (await list()).filter((p) => p.sku === SKU);
   expect(created.length, `продукт ${SKU} не создался`).toBe(1);
@@ -91,8 +95,13 @@ async function apiEnsureProduct460(token: string): Promise<{ id: number; sku: st
  */
 async function apiGetProductLengthsMm(token: string, productId: number): Promise<number[]> {
   const body = await apiJson(token, `/api/products/${productId}`);
-  const lengths = Array.isArray(body?.lengths_mm)
-    ? body.lengths_mm.map(Number).filter((n: number) => Number.isFinite(n) && n > 0)
+  // Реестр отдаётся как `lengths: [{length_mm, raw_length_mm, is_primary}]`
+  // (`ProductLengthOut`); плоского `lengths_mm` в ответе нет — тот же разъезд
+  // формы, что и в создании (#262).
+  const lengths = Array.isArray(body?.lengths)
+    ? body.lengths
+        .map((row: { length_mm?: unknown }) => Number(row?.length_mm))
+        .filter((n: number) => Number.isFinite(n) && n > 0)
     : [];
   return lengths.length > 0 ? lengths : [2700];
 }
