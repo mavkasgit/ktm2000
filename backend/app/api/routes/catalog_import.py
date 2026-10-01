@@ -1,3 +1,4 @@
+import asyncio
 import shutil
 import sqlite3
 import zipfile
@@ -104,8 +105,8 @@ async def import_catalog_from_zip(
         raise HTTPException(status_code=400, detail="Only .zip files are accepted")
 
     photo_dir = Path(settings.PRODUCT_PHOTO_DIR)
-    # #267: вынос в `anyio.Path` — отдельной волной (тот же класс, что ASYNC230).
-    photo_dir.mkdir(parents=True, exist_ok=True)  # noqa: ASYNC240 — #267
+    # mkdir блокирует event loop воркера, поэтому уходит в поток (#267).
+    await asyncio.to_thread(photo_dir.mkdir, parents=True, exist_ok=True)
 
     with TemporaryDirectory() as tmpdir:
         tmp_path = Path(tmpdir)

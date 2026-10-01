@@ -1,3 +1,4 @@
+import asyncio
 import base64
 from collections.abc import Sequence
 from pathlib import Path
@@ -1427,7 +1428,8 @@ async def upload_product_photo(
         raise HTTPException(status_code=404, detail="Product not found")
 
     storage_dir = Path(settings.PRODUCT_PHOTO_DIR)
-    storage_dir.mkdir(parents=True, exist_ok=True)  # noqa: ASYNC240 — #267
+    # mkdir блокирует event loop воркера, поэтому уходит в поток (#267).
+    await asyncio.to_thread(storage_dir.mkdir, parents=True, exist_ok=True)
 
     ext = Path(file.filename or "image.jpg").suffix.lstrip(".") or "jpg"
     content = await file.read()

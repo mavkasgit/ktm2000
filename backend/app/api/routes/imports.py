@@ -1,3 +1,4 @@
+import asyncio
 import json
 from io import BytesIO
 from pathlib import Path
@@ -642,7 +643,8 @@ async def download_import_file(file_id: int, db: AsyncSession = Depends(get_db))
         raise HTTPException(status_code=404, detail="File content not available")
 
     path = Path(file.stored_path)
-    if not path.exists():  # noqa: ASYNC240 — #267
+    # exists() блокирует event loop воркера, поэтому уходит в поток (#267).
+    if not await asyncio.to_thread(path.exists):
         raise HTTPException(status_code=404, detail="File not found on disk")
 
     encoded_name = quote(file.original_filename)
