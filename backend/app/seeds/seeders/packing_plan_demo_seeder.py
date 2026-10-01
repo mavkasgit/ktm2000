@@ -3,7 +3,14 @@ from __future__ import annotations
 """Демо-данные «Участков» на основе реального упаковочного плана.
 
 Фикстура ниже — срез реального ``Упаковочный план.xlsx`` (лист ``totalplan``):
-38 реальных строк с артикулами, цветами, раскроем и упаковочными операциями.
+55 реальных строк с артикулами, цветами, раскроем и упаковочными операциями.
+Второй блок, ``PREP_PLAN_ROWS``, добавляет строки участков подготовки
+(сверловка/пресс/дробеструй): у них свои операции, разные длины раскроя и
+повторяющиеся артикулы — чтобы доска показала и обе операции пресса, и
+несколько заданий одного артикула на участке. Третий блок, ``ANOD_PAIR_ROWS``,
+даёт пары анодирования: один артикул двумя строками («П/ф» и «ГП»), которые
+различаются только упаковочной операцией — на печатном листе участка они
+сходятся в одну строку с разбивкой упаковки.
 Файл xlsx остаётся локальным (``.gitignore``), поэтому строки зафиксированы
 здесь как код-данные — по образцу ADR-0004 для канона справочников.
 
@@ -16,6 +23,7 @@ change set → approve → release batch → ``work_tasks``, затем пове
 Запуск: ``npm run db:seed:packing-demo`` (см. ``backend/scripts/seed_packing_demo.py``).
 """
 
+from collections.abc import Iterable, Mapping
 from datetime import UTC, date, datetime, timedelta
 from decimal import ROUND_FLOOR, Decimal
 from io import BytesIO
@@ -56,10 +64,30 @@ from app.transfers.services import transfer_send
 PACKING_SECTION_CODE = "PACKING"
 DEMO_PLAN_MARKER = "DEMO"
 
-# Участки, на которых демо-данные должны быть живыми. Позиции плана делятся
-# между ними по кругу, у каждого своя глубина прогона — так на всех трёх есть и
-# активные задания, и «в ожидании» от предыдущей стадии.
-DEMO_SECTION_CODES = ("SAWING", "PACKING", "ANODIZING")
+# Все производственные участки доски, которые демо обязано оживить. Шесть из
+# шести: пилу/упаковку/анодирование наполняют базовые строки «Упаковочного
+# плана» (``PACKING_PLAN_ROWS``), сверловку/пресс/дробеструй — блок строк
+# подготовки (``PREP_PLAN_ROWS``).
+DEMO_SECTION_CODES = ("DRILLING", "PRESSING", "SHOT_BLAST", "SAWING", "PACKING", "ANODIZING")
+
+# Участки, между которыми по кругу делятся базовые 55 строк фикстуры. Порядок —
+# часть контракта доски: ``_target_section_for`` отсчитывает круг от порядкового
+# номера позиции, поэтому его нельзя менять, не переиграв прогресс всех базовых
+# позиций (историю 55 заданий тест защищает отдельно).
+DEMO_RUN_SECTION_CODES = ("SAWING", "PACKING", "ANODIZING")
+
+# Участки подготовки, между которыми делятся новые строки ``PREP_PLAN_ROWS``.
+# Строки блока идут тройками «сверловка → пресс → дробеструй», и при том же
+# круговом разборе каждая тройка останавливается на своём участке: сверловка не
+# заходит на пресс и наоборот (правила ``drill``/``press_section``), дробеструй
+# же есть в маршруте у всех.
+DEMO_PREP_SECTION_CODES = ("DRILLING", "PRESSING", "SHOT_BLAST")
+
+# Участок прогона пар анодирования. У пары обе строки (спанбонд и стрейч) должны
+# остановиться именно на анодировании: тогда они есть и на доске участка, и в
+# его дневном плане, а печатный лист сводит их в одну строку с разбивкой
+# упаковки. Круг здесь из одного участка — иначе половина пар уехала бы на пилу.
+DEMO_ANOD_SECTION_CODES = ("ANODIZING",)
 
 # Профиль маршрута, по которому демо-позиции собирают этапы. Шаблон листа
 # демо — «Упаковочная карта РП», и разбирать его операции должен тот же профиль,
@@ -775,7 +803,509 @@ PACKING_PLAN_ROWS: tuple[dict[str, object], ...] = (
 )
 
 
-def _plan_workbook(rows: tuple[dict[str, object], ...]) -> bytes:
+# Строки участков подготовки. Блок собран тремя под-кортежами (по одной
+# первичной операции на участок) и перемешан тройками ниже: разбор по кругу
+# (``_target_section_for``) останавливает каждую тройку на её участке, поэтому
+# 10 строк сверловки действительно становятся 10 заданиями сверловки, а не
+# «уезжают» на соседний участок. Артикулы внутри блока повторяются (несколько
+# строк на один артикул) — так на доске видно несколько заданий одного
+# артикула; строки различаются количеством и/или раскроем, иначе импорт счёл бы
+# их дублями.
+#
+# Артикулы — реальные каталожные, и длина строки взята как **нормальная
+# (готовая) длина этого товара** из каталога: ``product_lengths.raw_length_mm IS
+# NULL``. Заготовка (строка, где ``raw_length_mm`` заполнен и равен длине:
+# 2750/1830/3050/2550/2760) длиной изделия не является и в фикстуру не идёт —
+# иначе в плане стояло бы «2,75» вместо дела. Каталог даёт всего 10 подходящих
+# артикулов вне базовых 55, поэтому блоки подготовки делят семь из них, а три
+# остаются парам анодирования.
+#
+# «Пробивка/сверловка»: «сверло» → DRILLING (DRILL), «окно»/«гребенка» →
+# PRESSING (PRESS_WINDOW/PRESS_COMB), пустая → маршрут без первичной операции,
+# но с SHOT_BLAST (дробеструй есть у всех демо-артикулов).
+_PREP_DRILL_ROWS: tuple[dict[str, object], ...] = (
+    {
+        "sku": "ALS1288",
+        "name": "Профиль торцевой",
+        "color": "серебро",
+        "input_length_m": 1.8,
+        "input_quantity": 300,
+        "output_length_m": 1.8,
+        "output_quantity": 300,
+        "operation": "сверло",
+        "packing": "поф, красная этикетка РП 23*150 на каждый профиль и белая этикетка 58*",
+        "kind": "П/ф",
+    },
+    {
+        "sku": "ALS1288",
+        "name": "Профиль торцевой",
+        "color": "серебро",
+        "input_length_m": 1.8,
+        "input_quantity": 150,
+        "output_length_m": 1.8,
+        "output_quantity": 150,
+        "operation": "сверло",
+        "packing": "смотка спанбондом поштучно в пачке 10 штук",
+        "kind": "П/ф",
+    },
+    {
+        "sku": "ALS1288",
+        "name": "Профиль торцевой",
+        "color": "серебро",
+        "input_length_m": 1.8,
+        "input_quantity": 500,
+        "output_length_m": 1.8,
+        "output_quantity": 500,
+        "operation": "сверло",
+        "packing": "поф, красная этикетка РП 23*150 на каждый профиль и белая этикетка 58*",
+        "kind": "П/ф",
+    },
+    {
+        "sku": "ALS1288",
+        "name": "Профиль торцевой",
+        "color": "серебро",
+        "input_length_m": 1.8,
+        "input_quantity": 220,
+        "output_length_m": 0.9,
+        "output_quantity": 440,
+        "operation": "сверло",
+        "packing": "смотка спанбондом поштучно в пачке 10 штук",
+        "kind": "П/ф",
+    },
+    {
+        "sku": "АТ-6323",
+        "name": "Профиль для стеновой панели соединительный",
+        "color": "черный",
+        "input_length_m": 1.8,
+        "input_quantity": 200,
+        "output_length_m": 1.8,
+        "output_quantity": 200,
+        "operation": "сверло",
+        "packing": "смотка спанбондом поштучно в пачке 10 штук",
+        "kind": "П/ф",
+    },
+    {
+        "sku": "АТ-6323",
+        "name": "Профиль для стеновой панели соединительный",
+        "color": "черный",
+        "input_length_m": 1.8,
+        "input_quantity": 700,
+        "output_length_m": 0.9,
+        "output_quantity": 1400,
+        "operation": "сверло",
+        "packing": "поф, красная этикетка РП 23*150 на каждый профиль и белая этикетка 58*",
+        "kind": "П/ф",
+    },
+    {
+        "sku": "АТ-6323",
+        "name": "Профиль для стеновой панели соединительный",
+        "color": "черный",
+        "input_length_m": 1.8,
+        "input_quantity": 260,
+        "output_length_m": 1.35,
+        "output_quantity": 350,
+        "operation": "сверло",
+        "packing": "смотка спанбондом поштучно в пачке 10 штук",
+        "kind": "П/ф",
+    },
+    {
+        "sku": "АТ-6323",
+        "name": "Профиль для стеновой панели соединительный",
+        "color": "черный",
+        "input_length_m": 1.8,
+        "input_quantity": 120,
+        "output_length_m": 1.8,
+        "output_quantity": 120,
+        "operation": "сверло",
+        "packing": "поф, красная этикетка РП 23*150 на каждый профиль и белая этикетка 58*",
+        "kind": "П/ф",
+    },
+    {
+        "sku": "ЮП-2081",
+        "name": "Универсальный стык",
+        "color": "золото",
+        "input_length_m": 1.35,
+        "input_quantity": 400,
+        "output_length_m": 1.35,
+        "output_quantity": 400,
+        "operation": "сверло",
+        "packing": "поф, красная этикетка РП 23*150 на каждый профиль и белая этикетка 58*",
+        "kind": "П/ф",
+    },
+    {
+        "sku": "ЮП-2081",
+        "name": "Универсальный стык",
+        "color": "золото",
+        "input_length_m": 1.35,
+        "input_quantity": 220,
+        "output_length_m": 0.9,
+        "output_quantity": 330,
+        "operation": "сверло",
+        "packing": "смотка спанбондом поштучно в пачке 10 штук",
+        "kind": "П/ф",
+    },
+)
+
+_PREP_PRESS_ROWS: tuple[dict[str, object], ...] = (
+    {
+        "sku": "АТ-6324",
+        "name": "Профиль для стеновой панели торцевой",
+        "color": "серебро",
+        "input_length_m": 2.7,
+        "input_quantity": 240,
+        "output_length_m": 2.7,
+        "output_quantity": 240,
+        "operation": "окно",
+        "packing": "поф, красная этикетка РП 23*150 на каждый профиль и белая этикетка 58*",
+        "kind": "П/ф",
+    },
+    {
+        "sku": "АТ-6324",
+        "name": "Профиль для стеновой панели торцевой",
+        "color": "серебро",
+        "input_length_m": 2.7,
+        "input_quantity": 180,
+        "output_length_m": 2.7,
+        "output_quantity": 180,
+        "operation": "гребенка",
+        "packing": "смотка спанбондом поштучно в пачке 10 штук",
+        "kind": "П/ф",
+    },
+    {
+        "sku": "АТ-6324",
+        "name": "Профиль для стеновой панели торцевой",
+        "color": "серебро",
+        "input_length_m": 2.7,
+        "input_quantity": 600,
+        "output_length_m": 1.8,
+        "output_quantity": 900,
+        "operation": "окно",
+        "packing": "поф, красная этикетка РП 23*150 на каждый профиль и белая этикетка 58*",
+        "kind": "П/ф",
+    },
+    {
+        "sku": "АТ-6324",
+        "name": "Профиль для стеновой панели торцевой",
+        "color": "серебро",
+        "input_length_m": 2.7,
+        "input_quantity": 350,
+        "output_length_m": 1.35,
+        "output_quantity": 700,
+        "operation": "гребенка",
+        "packing": "смотка спанбондом поштучно в пачке 10 штук",
+        "kind": "П/ф",
+    },
+    {
+        "sku": "АТ-6324",
+        "name": "Профиль для стеновой панели торцевой",
+        "color": "серебро",
+        "input_length_m": 2.7,
+        "input_quantity": 280,
+        "output_length_m": 2.7,
+        "output_quantity": 280,
+        "operation": "окно",
+        "packing": "поф, красная этикетка РП 23*150 на каждый профиль и белая этикетка 58*",
+        "kind": "П/ф",
+    },
+    {
+        "sku": "ЮП-2972",
+        "name": "Круглая труба 16мм",
+        "color": "черный",
+        "input_length_m": 3.0,
+        "input_quantity": 900,
+        "output_length_m": 2.7,
+        "output_quantity": 1000,
+        "operation": "гребенка",
+        "packing": "смотка спанбондом поштучно в пачке 10 штук",
+        "kind": "П/ф",
+    },
+    {
+        "sku": "ЮП-2972",
+        "name": "Круглая труба 16мм",
+        "color": "черный",
+        "input_length_m": 3.0,
+        "input_quantity": 450,
+        "output_length_m": 3.0,
+        "output_quantity": 450,
+        "operation": "окно",
+        "packing": "поф, красная этикетка РП 23*150 на каждый профиль и белая этикетка 58*",
+        "kind": "П/ф",
+    },
+    {
+        "sku": "ЮП-2972",
+        "name": "Круглая труба 16мм",
+        "color": "черный",
+        "input_length_m": 3.0,
+        "input_quantity": 160,
+        "output_length_m": 0.9,
+        "output_quantity": 530,
+        "operation": "гребенка",
+        "packing": "смотка спанбондом поштучно в пачке 10 штук",
+        "kind": "П/ф",
+    },
+    {
+        "sku": "ЮП-2972",
+        "name": "Круглая труба 16мм",
+        "color": "черный",
+        "input_length_m": 3.0,
+        "input_quantity": 300,
+        "output_length_m": 1.8,
+        "output_quantity": 500,
+        "operation": "окно",
+        "packing": "поф, красная этикетка РП 23*150 на каждый профиль и белая этикетка 58*",
+        "kind": "П/ф",
+    },
+    {
+        "sku": "ЮП-2972",
+        "name": "Круглая труба 16мм",
+        "color": "черный",
+        "input_length_m": 3.0,
+        "input_quantity": 520,
+        "output_length_m": 3.0,
+        "output_quantity": 520,
+        "operation": "гребенка",
+        "packing": "смотка спанбондом поштучно в пачке 10 штук",
+        "kind": "П/ф",
+    },
+)
+
+_PREP_SHOT_ROWS: tuple[dict[str, object], ...] = (
+    {
+        "sku": "ALS1290",
+        "name": "Профиль угловой",
+        "color": "золото",
+        "input_length_m": 0.9,
+        "input_quantity": 260,
+        "output_length_m": 0.9,
+        "output_quantity": 260,
+        "operation": "",
+        "packing": "смотка спанбондом поштучно в пачке 10 штук",
+        "kind": "П/ф",
+    },
+    {
+        "sku": "ALS1290",
+        "name": "Профиль угловой",
+        "color": "золото",
+        "input_length_m": 0.9,
+        "input_quantity": 190,
+        "output_length_m": 0.9,
+        "output_quantity": 190,
+        "operation": "",
+        "packing": "поф, красная этикетка РП 23*150 на каждый профиль и белая этикетка 58*",
+        "kind": "П/ф",
+    },
+    {
+        "sku": "ALS1290",
+        "name": "Профиль угловой",
+        "color": "золото",
+        "input_length_m": 0.9,
+        "input_quantity": 520,
+        "output_length_m": 0.9,
+        "output_quantity": 520,
+        "operation": "",
+        "packing": "смотка спанбондом поштучно в пачке 10 штук",
+        "kind": "П/ф",
+    },
+    {
+        "sku": "ALS1290",
+        "name": "Профиль угловой",
+        "color": "золото",
+        "input_length_m": 0.9,
+        "input_quantity": 310,
+        "output_length_m": 0.9,
+        "output_quantity": 310,
+        "operation": "",
+        "packing": "поф, красная этикетка РП 23*150 на каждый профиль и белая этикетка 58*",
+        "kind": "П/ф",
+    },
+    {
+        "sku": "ALS1290",
+        "name": "Профиль угловой",
+        "color": "золото",
+        "input_length_m": 0.9,
+        "input_quantity": 140,
+        "output_length_m": 0.9,
+        "output_quantity": 140,
+        "operation": "",
+        "packing": "смотка спанбондом поштучно в пачке 10 штук",
+        "kind": "П/ф",
+    },
+    {
+        "sku": "ЮП-3077",
+        "name": "ЮП-3077",
+        "color": "шампань",
+        "input_length_m": 2.7,
+        "input_quantity": 420,
+        "output_length_m": 2.7,
+        "output_quantity": 420,
+        "operation": "",
+        "packing": "поф, красная этикетка РП 23*150 на каждый профиль и белая этикетка 58*",
+        "kind": "П/ф",
+    },
+    {
+        "sku": "ЮП-3077",
+        "name": "ЮП-3077",
+        "color": "шампань",
+        "input_length_m": 2.7,
+        "input_quantity": 880,
+        "output_length_m": 2.7,
+        "output_quantity": 880,
+        "operation": "",
+        "packing": "смотка спанбондом поштучно в пачке 10 штук",
+        "kind": "П/ф",
+    },
+    {
+        "sku": "ЮП-3077",
+        "name": "ЮП-3077",
+        "color": "шампань",
+        "input_length_m": 2.7,
+        "input_quantity": 150,
+        "output_length_m": 1.35,
+        "output_quantity": 300,
+        "operation": "",
+        "packing": "поф, красная этикетка РП 23*150 на каждый профиль и белая этикетка 58*",
+        "kind": "П/ф",
+    },
+    {
+        "sku": "ЮП-3077",
+        "name": "ЮП-3077",
+        "color": "шампань",
+        "input_length_m": 2.7,
+        "input_quantity": 230,
+        "output_length_m": 0.9,
+        "output_quantity": 690,
+        "operation": "",
+        "packing": "смотка спанбондом поштучно в пачке 10 штук",
+        "kind": "П/ф",
+    },
+    {
+        "sku": "ЮП-3077",
+        "name": "ЮП-3077",
+        "color": "шампань",
+        "input_length_m": 2.7,
+        "input_quantity": 640,
+        "output_length_m": 2.7,
+        "output_quantity": 640,
+        "operation": "",
+        "packing": "поф, красная этикетка РП 23*150 на каждый профиль и белая этикетка 58*",
+        "kind": "П/ф",
+    },
+)
+
+# Перемешивание тройками — часть контракта: ровно так позиции блока разойдутся
+# по трём участкам подготовки при круговом разборе.
+PREP_PLAN_ROWS: tuple[dict[str, object], ...] = tuple(
+    row
+    for triple in zip(_PREP_DRILL_ROWS, _PREP_PRESS_ROWS, _PREP_SHOT_ROWS, strict=True)
+    for row in triple
+)
+
+
+# Пары анодирования: один и тот же реальный артикул двумя строками, чтобы на
+# печатном листе участка они сошлись в одну строку с разбивкой упаковки
+# («Спанбонд 300 · Стрейч 200»). Длина пары — нормальная (готовая) длина
+# артикула из каталога (``raw_length_mm IS NULL``), раскроя у пары нет: обе
+# строки одного размера. Строки пары совпадают артикулом, цветом,
+# длиной и первичной операцией, а различаются видом выпуска: «П/ф» → спанбонд,
+# «ГП» → стрейч. Упаковочная операция выводится именно из вида выпуска —
+# правило ``pack_types`` (``selection_rules.py``, ``lookup_field=output_kind``:
+# «ГП» → ``PACK_STRETCH``, «П/ф» → ``PACK_SPUNBOND``); колонку «Упаковка» здесь
+# никто не читает, поэтому в ней стоит реальный текст настоящего плана для этого
+# же вида выпуска. Вид выпуска задаёт и маршрут: «ГП» заходит на пилу/упаковку,
+# «П/ф» — нет, но анодирование есть в обоих.
+_ANOD_SPUNBOND_ROWS: tuple[dict[str, object], ...] = (
+    {
+        "sku": "ЮП-2256",
+        "name": "РП-АКП-18-10",
+        "color": "золото",
+        "input_length_m": 2.7,
+        "input_quantity": 300,
+        "output_length_m": 2.7,
+        "output_quantity": 300,
+        "operation": "",
+        "packing": "смотка спанбондом поштучно в пачке 10 штук",
+        "kind": "П/ф",
+    },
+    {
+        "sku": "ЮП-2974",
+        "name": "РП-АКП-10-12,5мм",
+        "color": "серебро",
+        "input_length_m": 2.7,
+        "input_quantity": 500,
+        "output_length_m": 2.7,
+        "output_quantity": 500,
+        "operation": "",
+        "packing": "смотка спанбондом поштучно в пачке 10 штук",
+        "kind": "П/ф",
+    },
+    {
+        "sku": "ЮП-2976",
+        "name": "Потайной профиль 8мм",
+        "color": "медь",
+        "input_length_m": 2.5,
+        "input_quantity": 150,
+        "output_length_m": 2.5,
+        "output_quantity": 150,
+        "operation": "",
+        "packing": "смотка спанбондом поштучно в пачке 10 штук",
+        "kind": "П/ф",
+    },
+)
+
+_ANOD_STRETCH_ROWS: tuple[dict[str, object], ...] = (
+    {
+        "sku": "ЮП-2256",
+        "name": "РП-АКП-18-10",
+        "color": "золото",
+        "input_length_m": 2.7,
+        "input_quantity": 200,
+        "output_length_m": 2.7,
+        "output_quantity": 200,
+        "operation": "",
+        "packing": "поф, красная этикетка РП 23*150 на каждый профиль и белая этикетка 58*",
+        "kind": "ГП",
+    },
+    {
+        "sku": "ЮП-2974",
+        "name": "РП-АКП-10-12,5мм",
+        "color": "серебро",
+        "input_length_m": 2.7,
+        "input_quantity": 350,
+        "output_length_m": 2.7,
+        "output_quantity": 350,
+        "operation": "",
+        "packing": "поф, красная этикетка РП 23*150 на каждый профиль и белая этикетка 58*",
+        "kind": "ГП",
+    },
+    {
+        "sku": "ЮП-2976",
+        "name": "Потайной профиль 8мм",
+        "color": "медь",
+        "input_length_m": 2.5,
+        "input_quantity": 260,
+        "output_length_m": 2.5,
+        "output_quantity": 260,
+        "operation": "",
+        "packing": "поф, красная этикетка РП 23*150 на каждый профиль и белая этикетка 58*",
+        "kind": "ГП",
+    },
+)
+
+# Строки пары идут подряд (спанбонд, стрейч) — так их и читает человек в фикстуре.
+ANOD_PAIR_ROWS: tuple[dict[str, object], ...] = tuple(
+    row
+    for pair in zip(_ANOD_SPUNBOND_ROWS, _ANOD_STRETCH_ROWS, strict=True)
+    for row in pair
+)
+
+# Полный вход демо-импорта: базовый «Упаковочный план» + строки подготовки +
+# пары анодирования.
+DEMO_PLAN_ROWS: tuple[dict[str, object], ...] = (
+    PACKING_PLAN_ROWS + PREP_PLAN_ROWS + ANOD_PAIR_ROWS
+)
+
+
+def _plan_workbook(rows: Iterable[Mapping[str, object]]) -> bytes:
     """Собрать «Упаковочный план» в памяти — тот же вход, что у xlsx-импорта."""
     wb = Workbook()
     ws = wb.active
@@ -848,7 +1378,7 @@ async def _ensure_length(db: AsyncSession, product: Product, length_mm: float, *
     return created
 
 
-async def _ensure_products(db: AsyncSession, rows: tuple[dict[str, object], ...]) -> dict[str, int]:
+async def _ensure_products(db: AsyncSession, rows: Iterable[Mapping[str, object]]) -> dict[str, int]:
     """Upsert артикулов плана вместе с их каноном длин (вход + выход раскроя)."""
     stats = {"products": 0, "lengths": 0}
     for row in rows:
@@ -1049,9 +1579,9 @@ async def _run_route_progress(
 ) -> dict[str, object]:
     """Прогнать позиции по маршруту до назначенного участка.
 
-    Позиции делятся между тремя участками: у каждого своя глубина прогона, так
-    что задания есть и в работе, и в ожидании на всех трёх. Стадии до целевой
-    проходятся целиком — иначе задания целевого участка остались бы
+    Позиции делятся между участками своей группы (``target_order``): у каждого
+    своя глубина прогона, так что задания есть и в работе, и в ожидании. Стадии
+    до целевой проходятся целиком — иначе задания целевого участка остались бы
     ``waiting_previous`` и не попали бы в доску под фильтром «Активные».
     """
     stats: dict[str, object] = {"stages": 0, "completed": 0, "partial": 0, "issued": 0, "skipped": []}
@@ -1201,13 +1731,47 @@ async def _run_route_progress(
     return stats
 
 
+def _merge_route_progress(*parts: dict[str, object]) -> dict[str, object]:
+    """Свести отчёты прогонов по группам позиций в один.
+
+    Прогон идёт двумя вызовами (базовые строки и строки подготовки), но
+    потребителю счётчики нужны общие: сколько стадий закрыто, что «в работе», а
+    что выдано. Списки ``skipped`` склеиваются — молча терять пропущенную
+    позицию нельзя.
+    """
+    merged: dict[str, object] = {
+        "stages": 0,
+        "completed": 0,
+        "partial": 0,
+        "issued": 0,
+        "skipped": [],
+    }
+    for part in parts:
+        for key in ("stages", "completed", "partial", "issued"):
+            merged[key] = int(merged[key]) + int(part.get(key) or 0)
+        merged["skipped"] = list(merged["skipped"]) + list(part.get("skipped") or [])
+    return merged
+
+
 async def seed_packing_plan_demo(
-    db: AsyncSession, *, reset: bool = True, run_route: bool = True
+    db: AsyncSession,
+    *,
+    reset: bool = True,
+    run_route: bool = True,
+    rows: Iterable[Mapping[str, object]] | None = None,
 ) -> dict:
     """Наполнить «Участки» реальным упаковочным планом: план → релиз → дневные планы.
 
     ``reset=True`` сносит всю оперативку (как ``db:seed --force``) и собирает
     демо-набор заново, поэтому результат детерминирован и повторяем.
+
+    ``rows`` — строки листа для импорта; по умолчанию вся фикстура
+    (``DEMO_PLAN_ROWS``). Тесты передают срез фикстуры, чтобы прогнать доменный
+    путь целиком (импорт → approve → release → маршрут → задачи → дневные планы)
+    на 3–5 строках вместо всего датасета: срез берётся из ``PACKING_PLAN_ROWS``
+    и/или ``PREP_PLAN_ROWS``, потому что участок прогона и группу дневных планов
+    сид определяет по принадлежности артикула блоку. Строка вне обоих блоков —
+    ошибка: её позиция не попадёт ни в одну группу.
 
     Прод-окружение запрещено: сид сносит планы, задания и проводки, а на проде
     они живые. Проверка — на входе, до любой записи (канон ``routes_seed``:
@@ -1218,6 +1782,11 @@ async def seed_packing_plan_demo(
             f"Демо-сид упаковочного плана запрещён в окружении {settings.ENV}: он сносит "
             "производственные планы, задания и проводки. Запускать только в dev/test."
         )
+    plan_rows: tuple[Mapping[str, object], ...] = (
+        DEMO_PLAN_ROWS if rows is None else tuple(rows)
+    )
+    if not plan_rows:
+        raise RuntimeError("Список строк демо-плана пуст")
     stats: dict[str, object] = {}
     if reset:
         stats["cleared_rows"] = sum((await clear_generated_production_data(db)).values())
@@ -1236,11 +1805,28 @@ async def seed_packing_plan_demo(
     missing = [code for code, section in sections.items() if section is None]
     if missing:
         raise RuntimeError(f"Справочник участков не засеян ({missing}) — выполните `npm run db:seed`")
-    # Глубина прогона по позициям: у каждого участка своя, чтобы задания были
-    # активны везде, а нижестоящие участки копили «в ожидании».
-    target_order = [sections[code].id for code in DEMO_SECTION_CODES]
+    # Прогон идёт двумя независимыми группами: базовые 55 строк делятся между
+    # пилой/упаковкой/анодированием, новые строки подготовки — между
+    # сверловкой/прессом/дробеструем. Группы не пересекаются, поэтому добавление
+    # блока подготовки не переигрывает прогресс базовых позиций. Внутри группы у
+    # каждого участка своя глубина: задания есть и в работе, и «в ожидании».
+    run_target_order = [sections[code].id for code in DEMO_RUN_SECTION_CODES]
+    prep_target_order = [sections[code].id for code in DEMO_PREP_SECTION_CODES]
+    # Дневные планы участка собираются из позиций его группы: иначе строки
+    # подготовки подмешали бы свои «в ожидании» в карточки пилы/упаковки/
+    # анодирования и растасовали бы сложившуюся историю базовых 55 позиций.
+    anod_target_order = [sections[code].id for code in DEMO_ANOD_SECTION_CODES]
+    # Дневные планы участка собираются из позиций его групп: базовые участки —
+    # базовые строки, участки подготовки — свой блок, а анодирование берёт ещё и
+    # пары (ради них они и существуют: обе строки пары должны попасть в дневной
+    # план анодирования).
+    planning_groups_by_section: dict[int, tuple[str, ...]] = {
+        **dict.fromkeys(run_target_order, ("run",)),
+        **dict.fromkeys(prep_target_order, ("prep",)),
+        **dict.fromkeys(anod_target_order, ("run", "anod")),
+    }
 
-    stats.update(await _ensure_products(db, PACKING_PLAN_ROWS))
+    stats.update(await _ensure_products(db, plan_rows))
 
     # Профиль правил обязателен: без него импорт раскладывает все позиции на
     # шаблонный маршрут, где операции — заглушки без кодов, и доска участка
@@ -1259,7 +1845,7 @@ async def seed_packing_plan_demo(
     import_result = await create_excel_import_change_set(
         db,
         filename=f"demo-{DEMO_PLAN_MARKER.lower()}-packing-plan-{date.today().isoformat()}.xlsx",  # noqa: DTZ011 — метка, не инстант
-        content=_plan_workbook(PACKING_PLAN_ROWS),
+        content=_plan_workbook(plan_rows),
         content_type="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
         sheet_index=0,
         mode=ImportBatchMode.create_plan,
@@ -1313,6 +1899,33 @@ async def seed_packing_plan_demo(
     await db.flush()
 
     position_ids = [item.id for item in positions]
+    # Разделение позиций по группам прогона: артикулы блоков фикстуры не
+    # пересекаются (проверяем — иначе позиция одного блока уехала бы на участок
+    # другого), а повтор артикула внутри блока даёт несколько позиций одного
+    # артикула, как и задумано (строки подготовки и пары анодирования).
+    packing_skus = {str(row["sku"]) for row in PACKING_PLAN_ROWS}
+    prep_skus = {str(row["sku"]) for row in PREP_PLAN_ROWS}
+    anod_skus = {str(row["sku"]) for row in ANOD_PAIR_ROWS}
+    overlap = sorted(
+        (packing_skus & prep_skus) | (packing_skus & anod_skus) | (prep_skus & anod_skus)
+    )
+    if overlap:
+        raise RuntimeError(f"Блоки фикстуры делят артикулы: {overlap}")
+    run_positions = [item for item in positions if item.source_sku in packing_skus]
+    prep_positions = [item for item in positions if item.source_sku in prep_skus]
+    anod_positions = [item for item in positions if item.source_sku in anod_skus]
+    if len(run_positions) + len(prep_positions) + len(anod_positions) != len(positions):
+        raise RuntimeError(
+            "Импорт создал позиции вне фикстуры демо: строка листа должна лежать "
+            "в PACKING_PLAN_ROWS, PREP_PLAN_ROWS или ANOD_PAIR_ROWS"
+        )
+    # Позиции группы и участки её кругового разбора.
+    position_groups: dict[str, tuple[list[PlanPosition], list[int]]] = {
+        "run": (run_positions, run_target_order),
+        "prep": (prep_positions, prep_target_order),
+        "anod": (anod_positions, anod_target_order),
+    }
+    all_section_ids = [*run_target_order, *prep_target_order]
     tasks_by_section: dict[int, list[WorkTask]] = {
         section_id: list(
             (
@@ -1327,37 +1940,48 @@ async def seed_packing_plan_demo(
                 )
             ).all()
         )
-        for section_id in target_order
+        for section_id in all_section_ids
     }
     if not any(tasks_by_section.values()):
         raise RuntimeError("Релиз не создал заданий на демо-участках")
     if run_route:
         await db.flush()
-        stats["route_progress"] = await _run_route_progress(
-            db,
-            positions=positions,
-            target_order=target_order,
-            actor_id=actor.id,
-            scrap_policy=build_plant_config().production.scrap_policy,
-            # Демо-время операций: 08:00 UTC текущего дня. Дату берём в UTC, а не
-            # `date.today()`: смешение локальной даты с `tzinfo=UTC` давало
-            # 08:00 UTC «вчерашней» даты на хостах восточнее UTC.
-            start=datetime.now(UTC).replace(hour=8, minute=0, second=0, microsecond=0),
+        # Демо-время операций: 08:00 UTC текущего дня. Дату берём в UTC, а не
+        # `date.today()`: смешение локальной даты с `tzinfo=UTC` давало
+        # 08:00 UTC «вчерашней» даты на хостах восточнее UTC.
+        progress_start = datetime.now(UTC).replace(hour=8, minute=0, second=0, microsecond=0)
+        stats["route_progress"] = _merge_route_progress(
+            *[
+                await _run_route_progress(
+                    db,
+                    positions=group_positions,
+                    target_order=target_order,
+                    actor_id=actor.id,
+                    scrap_policy=build_plant_config().production.scrap_policy,
+                    start=progress_start,
+                )
+                for group_positions, target_order in position_groups.values()
+            ]
         )
 
     # Дневной план не принимает терминальные задания (completed/cancelled) —
     # в реальности в план берут то, что ещё предстоит сделать. Статусы после
     # прогона перечитываем из БД: объекты в сессии устарели.
     plan_ids: list[int] = []
-    open_tasks_count: dict[int, int] = {}
-    for section_id in target_order:
+    planned_tasks_count: dict[int, int] = {}
+    for section_id in all_section_ids:
+        group_position_ids = [
+            item.id
+            for group_name in planning_groups_by_section[section_id]
+            for item in position_groups[group_name][0]
+        ]
         open_tasks = list(
             (
                 await db.scalars(
                     select(WorkTask)
                     .join(SectionPlanLine, SectionPlanLine.id == WorkTask.section_plan_line_id)
                     .where(
-                        SectionPlanLine.plan_position_id.in_(position_ids),
+                        SectionPlanLine.plan_position_id.in_(group_position_ids),
                         WorkTask.section_id == section_id,
                         WorkTask.status.not_in(TERMINAL_TASK_STATUSES),
                     )
@@ -1365,7 +1989,7 @@ async def seed_packing_plan_demo(
                 )
             ).all()
         )
-        open_tasks_count[section_id] = len(open_tasks)
+        planned_tasks_count[section_id] = len(open_tasks)
         # Дата дневного плана — локальный бизнес-день демо (колонка `Date`,
         # инстанта нет). Тест зеркалит эту же шкалу и обязан меняться вместе с
         # ней (`tests/test_packing_plan_demo_seeder.py`).
@@ -1387,7 +2011,7 @@ async def seed_packing_plan_demo(
             "tasks_by_section": {
                 sections[code].code: {
                     "total": len(tasks_by_section[sections[code].id]),
-                    "open": open_tasks_count[sections[code].id],
+                    "planned": planned_tasks_count[sections[code].id],
                 }
                 for code in DEMO_SECTION_CODES
             },
