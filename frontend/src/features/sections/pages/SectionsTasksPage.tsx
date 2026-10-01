@@ -393,6 +393,15 @@ export function SectionsTasksPage() {
       toast({ title: "Не удалось создать план", description: getErrorMessage(error), variant: "destructive" });
     },
   });
+  // Ошибка создания плана относится к прежнему участку: под новым она держала бы
+  // форму создания открытой, потому что панель гасит режим только когда ошибки
+  // нет (ADR-0060 п.1). `reset` берём из ref: эффект не должен зависеть от
+  // объекта мутации, который пересоздаётся на каждом рендере.
+  const resetCreatePlanRef = useRef(createPlanMutation.reset);
+  resetCreatePlanRef.current = createPlanMutation.reset;
+  useEffect(() => {
+    resetCreatePlanRef.current();
+  }, [sectionId]);
   const revokePlanItemsMutation = useMutation({
     mutationFn: async (items: DailyPlanCompositionItem[]) => {
       const results = await Promise.allSettled(
