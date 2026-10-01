@@ -30,6 +30,8 @@ from app.models.work_task import WorkTask
 from app.stock.models import Reason, StockTransaction
 from sqlalchemy import select
 
+from tests.helpers.completed_operations import register_section_operations
+
 
 async def _make_user(session, email: str = "bulk-exec@test.local") -> User:
     user = User(
@@ -117,6 +119,12 @@ async def _make_route(session, sku: str) -> tuple[Product, ProductionRoute, list
                 operation_name=op_code,
             )
         )
+        # Операция этапа обязана быть и в справочнике участка (ADR-0061):
+        # признак «пройденные операции» выводится из операции ЭТАПА, а запись
+        # в ledger проверяет коды по ``section_operations``. Продовый маршрут
+        # собирается из справочника, фикстура объявляет операцию прямо на
+        # этапе — без дубля код отвергли бы как неизвестный.
+        await register_section_operations(session, section.id, [op_code])
         stages.append(stage)
     await session.flush()
     return product, route, stages

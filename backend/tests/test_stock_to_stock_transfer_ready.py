@@ -14,6 +14,8 @@ from app.stock.models import QualityState, Reason, StockBalance
 from app.stock.services import StockCommand, StockCommandService
 from sqlalchemy import select
 
+from tests.helpers.completed_operations import register_section_operations
+
 
 async def _make_user(session, email: str = "fg@local") -> User:
     user = User(
@@ -90,6 +92,11 @@ async def _make_finished_stock_to_shipment_fixture(
         session.add(
             RouteOperation(route_stage_id=st.id, sequence=1, operation_code=code, operation_name=code)
         )
+        # ADR-0061: признак материала выводится из операций ЭТАПА, но
+        # продовый маршрут собирается из справочника участка — дублируем код
+        # операции этапа туда, иначе record() отвергнет признак как
+        # неизвестный (`assert_known_operation_codes`).
+        await register_section_operations(session, sec.id, [code])
 
     await session.flush()
 

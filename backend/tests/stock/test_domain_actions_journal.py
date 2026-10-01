@@ -21,13 +21,14 @@ import pytest
 from app.models.action_journal import Action
 from app.models.work_task import WorkTaskStatus
 from app.seeds.seeders.spgs_seeder import seed_spgs
-from app.services.material_operations import completed_operations_for_task
+from app.services.shopfloor.operations_transform import resolve_consume_operations
 from app.stock import Reason, StockCommand, StockCommandService
 from app.stock.import_service import RemainderItem, apply_remainders_import
 from app.stock.models import StockTransaction
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from tests.helpers.completed_operations import register_section_operations
 from tests.stock.helpers import (
     FAKE_DEFECT_DECISION_MAP,
     FAKE_SCRAP_POLICY,
@@ -40,6 +41,20 @@ pytestmark = pytest.mark.asyncio
 
 
 async def _issue_material(session: AsyncSession, fx: dict, qty: Decimal = Decimal(10)) -> None:
+    # ADR-0061: признак выводится из операций ЭТАПА (`completed_operations_for_task`),
+    # а `_setup_minimal_route` объявляет OP1 прямо на этапе. Продовый маршрут
+    # собирается из справочника участка, поэтому дублируем код туда — иначе
+    # выпуск этапа (COMPLETE) отвергнет выведенный признак как неизвестный.
+    await register_section_operations(session, fx["prod"].id, ["OP1"])
+    # Материал приходит на участок ДО его собственных операций: продовый
+    # TRANSFER_RECEIVE берёт признак у задания-источника, т.е. у предыдущего
+    # этапа (transfers/services.py), и списание входа завершения
+    # (`resolve_consume_operations`) ищет ровно эту группу. Для маршрута из
+    # одного этапа предыдущего нет — группа пустая (`[]`), а не NULL.
+    incoming_ops = await resolve_consume_operations(session, fx["task"])
+    # ADR-0055: списание TRANSFER_RECEIVE идёт по полному ключу остатка,
+    # включая признак операций. MANUAL_IN в другую группу остался бы
+    # невидимым для приёма — значение берём тем же резолвером, что прод.
     await StockCommandService().record(session, StockCommand(
         product_id=fx["product"].id,
         from_location_id=None,
@@ -47,11 +62,7 @@ async def _issue_material(session: AsyncSession, fx: dict, qty: Decimal = Decima
         quantity=Decimal(100),
         reason=Reason.MANUAL_IN,
         created_by=fx["user"].id,
-        # ADR-0055: списание TRANSFER_RECEIVE идёт по полному ключу остатка,
-        # включая признак операций, который record() выводит из маршрута
-        # позиции. MANUAL_IN без признака лёг бы в NULL-группу и остался бы
-        # невидимым для приёма — значение берём тем же резолвером, что прод.
-        completed_operations=await completed_operations_for_task(session, fx["task"]),
+        completed_operations=incoming_ops,
     ))
     await record_transfer_receive(
         session,
@@ -61,6 +72,7 @@ async def _issue_material(session: AsyncSession, fx: dict, qty: Decimal = Decima
         quantity=qty,
         task_id=fx["task"].id,
         created_by=fx["user"].id,
+        completed_operations=incoming_ops,
     )
     fx["task"].status = WorkTaskStatus.in_progress
     await session.commit()
@@ -181,9 +193,22 @@ async def test_defect_decision_creates_action(session: AsyncSession) -> None:
     """defect_decide (scrap) = Action(defect_decision, ref_id=defect.id)."""
     from app.models.defect import Defect, DefectDecisionType
     from app.services.shopfloor.operations_defects import create_defect, defect_decide
+    from app.services.shopfloor.operations_tasks import complete_task
 
     fx = await _setup_minimal_route(session)
     await _issue_material(session, fx)
+    # Зарегистрированный дефект — забракованный ВЫПУСК задания, и решение по
+    # нему списывает группу признака СВОЕГО этапа (ADR-0055): сначала
+    # завершаем порцию, чтобы выпуск лёг в эту группу.
+    await complete_task(
+        session,
+        task_id=fx["task"].id,
+        good_quantity=Decimal(7),
+        defect_quantity=Decimal(0),
+        actor_id=fx["user"].id,
+        **FAKE_SCRAP_POLICY,
+    )
+    await session.commit()
 
     res = await create_defect(
         session,

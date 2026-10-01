@@ -12,7 +12,10 @@ from app.models.production_plan import (
 from app.models.route import ProductionRoute, RouteOperation, RouteStage
 from app.models.section import Section
 from app.models.user import User, UserRole
+from app.services.route_storage_classifier import is_production_section
 from sqlalchemy import select
+
+from tests.helpers.completed_operations import register_section_operations
 
 
 async def _make_demo_product(session, *, sku: str, name: str) -> Product:
@@ -69,14 +72,23 @@ async def _make_demo_route(session, code_prefix: str, step_defs: list[tuple[str,
     await session.flush()
 
     for idx, (suffix, op_code, op_name, is_final) in enumerate(step_defs, start=1):
+        section = sections[idx - 1]
         stage = RouteStage(
             route_id=route.id,
             sequence=idx,
-            section_id=sections[idx - 1].id,
+            section_id=section.id,
             is_final=is_final,
         )
         session.add(stage)
         await session.flush()
+        # Транзитный (складской) этап операции не несёт — так его строит и
+        # продовый конструктор маршрута (``if stage_kind == "production"``).
+        # Операция на транзите попала бы в признак материала (ADR-0061), а
+        # демо-прогон ведёт материал по производственным этапам, минуя склад:
+        # прямая передача через склад несла бы признак до своего этапа и
+        # разошлась бы со списанием следующего участка.
+        if not is_production_section(section):
+            continue
         session.add(
             RouteOperation(
                 route_stage_id=stage.id,
@@ -85,6 +97,12 @@ async def _make_demo_route(session, code_prefix: str, step_defs: list[tuple[str,
                 operation_name=op_name,
             )
         )
+        # Операция этапа обязана быть и в справочнике участка (ADR-0061):
+        # признак «пройденные операции» выводится из операции ЭТАПА, а запись
+        # в ledger проверяет коды по ``section_operations``. Продовый маршрут
+        # собирается из справочника, тестовая фикстура объявляет операцию
+        # прямо на этапе — без дубля код отвергли бы как неизвестный.
+        await register_section_operations(session, section.id, [op_code])
     await session.commit()
     return route
 

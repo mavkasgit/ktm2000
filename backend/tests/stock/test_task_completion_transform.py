@@ -33,6 +33,7 @@ from app.models.spg import SpgSection, StorageProductionGroup
 from app.models.work_task import WorkTask, WorkTaskStatus
 from app.services.material_operations import completed_operations_for_task
 from app.services.shopfloor.operations_tasks import complete_task
+from app.services.shopfloor.operations_transform import resolve_consume_operations
 from app.services.shopfloor.queries_sections import get_section_board
 from app.stock import (
     QualityState,
@@ -51,6 +52,7 @@ from app.stock.services import (
 from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from tests.helpers.completed_operations import register_section_operations
 from tests.stock.helpers import canon_scrap_section_id
 from tests.test_integrity_invariants import (
     assert_no_stock_ledger_invariants_violations,
@@ -133,6 +135,10 @@ async def _make_transform_setup(
     session.add(stage)
     await session.flush()
     session.add(RouteOperation(route_stage_id=stage.id, sequence=1, operation_code="SAW", operation_name="Saw"))
+    # Операция этапа обязана быть и в справочнике участка: признак
+    # «пройденные операции» выводится из операции ЭТАПА (ADR-0061), а запись
+    # в ledger проверяет коды по ``section_operations``.
+    await register_section_operations(session, saw.id, ["SAW"])
 
     await session.flush()
 
@@ -196,7 +202,18 @@ async def _receive_input(
     quantity: Decimal = Decimal(100),
     dims: dict | None = DIMS_IN,
 ) -> None:
-    """Приход входа на пилу: MANUAL_IN на raw + TRANSFER_RECEIVE на участок."""
+    """Приход входа на пилу: MANUAL_IN на raw + TRANSFER_RECEIVE на участок.
+
+    ADR-0055/ADR-0061: вход трансформирующего этапа — материал, пришедший с
+    ПРЕДЫДУЩЕГО этапа маршрута, поэтому и на складе сырья, и на участке он
+    лежит в ops-группе «до своего этапа» (``resolve_consume_operations``) —
+    ровно той, которую спишет ``TRANSFORM_CONSUME``. Признак берём явно по
+    обоим проводкам: у MANUAL_IN нет задания, а plan-driven TRANSFER_RECEIVE
+    без явного значения вывел бы группу СОБСТВЕННОГО этапа задания и не
+    совпал бы со списанием (как это делает реальный TRANSFER_RECEIVE —
+    материал переносит группа ИСТОЧНИКА, а не приёмника).
+    """
+    consume_ops = await resolve_consume_operations(session, fx["task"])
     svc = StockCommandService()
     await svc.record(session, StockCommand(
         product_id=fx["product"].id,
@@ -204,10 +221,7 @@ async def _receive_input(
         quantity=quantity,
         reason=Reason.MANUAL_IN,
         dimensions=dims,
-        # ADR-0055: приход на склад сырья несёт тот же признак операций,
-        # что выведет plan-driven TRANSFER_RECEIVE ниже из маршрута задания,
-        # — иначе списание ищет группу маршрута и находит 0.
-        completed_operations=await completed_operations_for_task(session, fx["task"]),
+        completed_operations=consume_ops,
         created_by=fx["user"].id,
     ))
     await svc.record(session, StockCommand(
@@ -218,6 +232,7 @@ async def _receive_input(
         reason=Reason.TRANSFER_RECEIVE,
         dimensions=dims,
         task_id=fx["task"].id,
+        completed_operations=consume_ops,
         created_by=fx["user"].id,
     ))
     fx["task"].status = WorkTaskStatus.in_progress
@@ -254,13 +269,25 @@ async def _balance(
     return bal.balance_qty if bal else Decimal(0)
 
 
-async def _route_ops(session: AsyncSession, fx: dict) -> list[str]:
-    """Признак операций, который ledger выводит для задания из маршрута.
+async def _route_ops(session: AsyncSession, fx: dict) -> list[str] | None:
+    """Признак ВЫПУСКА задания — операции до его собственного этапа.
 
-    ADR-0055: ось остатка. Материал, идущий по проводке задания, лежит в
-    группе, равной маршруту, — и остаток надо читать именно по ней.
+    ADR-0055/ADR-0061: ``record()`` выводит его по этапу задания, и в этой
+    группе лежит оприходованный выпуск (``COMPLETE``/``TRANSFORM_CONSUME``
+    уже прошли операцию этапа).
     """
     return await completed_operations_for_task(session, fx["task"])
+
+
+async def _input_ops(session: AsyncSession, fx: dict) -> list[str] | None:
+    """Признак ВХОДА задания — операции до ПРЕДЫДУЩЕГО этапа маршрута.
+
+    ADR-0055/ADR-0061: материал на участке пришёл с предыдущего этапа (так
+    его кладёт ``TRANSFER_SEND`` источника), и списание входа
+    (``TRANSFORM_CONSUME``/``SCRAP``) читает именно эту группу — тот же
+    резолвер ``resolve_consume_operations``, что и у прода.
+    """
+    return await resolve_consume_operations(session, fx["task"])
 
 
 async def _tx_sum(
@@ -310,8 +337,9 @@ async def test_full_portion_moves_input_and_all_outputs(session: AsyncSession) -
     # материал задания лежит в группе маршрута, а не в NULL).
     product_id, saw_id = fx["product"].id, fx["saw"].id
     ops = await _route_ops(session, fx)
+    in_ops = await _input_ops(session, fx)
     assert await _balance(
-        session, product_id, saw_id, DIMS_IN, completed_operations=ops,
+        session, product_id, saw_id, DIMS_IN, completed_operations=in_ops,
     ) == Decimal(0)
     assert await _balance(
         session, product_id, saw_id, DIMS_OUT_A, completed_operations=ops,
@@ -344,9 +372,10 @@ async def test_partial_portion_moves_ledger_proportionally(session: AsyncSession
 
     product_id, saw_id = fx["product"].id, fx["saw"].id
     ops = await _route_ops(session, fx)
+    in_ops = await _input_ops(session, fx)
     assert await _tx_sum(session, fx["task"].id, Reason.TRANSFORM_CONSUME, DIMS_IN) == Decimal(50)
     assert await _balance(
-        session, product_id, saw_id, DIMS_IN, completed_operations=ops,
+        session, product_id, saw_id, DIMS_IN, completed_operations=in_ops,
     ) == Decimal(50)
     assert await _balance(
         session, product_id, saw_id, DIMS_OUT_A, completed_operations=ops,
@@ -371,7 +400,7 @@ async def test_partial_portion_moves_ledger_proportionally(session: AsyncSession
 
     assert await _tx_sum(session, fx["task"].id, Reason.TRANSFORM_CONSUME, DIMS_IN) == Decimal(100)
     assert await _balance(
-        session, product_id, saw_id, DIMS_IN, completed_operations=ops,
+        session, product_id, saw_id, DIMS_IN, completed_operations=in_ops,
     ) == Decimal(0)
     assert await _balance(
         session, product_id, saw_id, DIMS_OUT_A, completed_operations=ops,
@@ -440,7 +469,8 @@ async def test_defect_written_with_input_dimensions(session: AsyncSession) -> No
     await session.commit()
 
     product_id, saw_id = fx["product"].id, fx["saw"].id
-    ops = await _route_ops(session, fx)
+    # Списание входа и брак идут из входной группы (до своего этапа).
+    ops = await _input_ops(session, fx)
     # Списание входа только по годным; брак ушёл SCRAP с габаритом входа.
     assert await _tx_sum(session, fx["task"].id, Reason.TRANSFORM_CONSUME, DIMS_IN) == Decimal(90)
     assert await _tx_sum(session, fx["task"].id, Reason.SCRAP, DIMS_IN) == Decimal(10)
@@ -643,11 +673,13 @@ async def test_legacy_material_without_dimensions_consumed_from_null_group(
 
     product_id, saw_id = fx["product"].id, fx["saw"].id
     # «Legacy» здесь — только ось РАЗМЕРОВ (dimensions=None). Ось операций
-    # у материала задания заполнена маршрутом (ADR-0055), как и приход.
+    # у входа задания заполнена маршрутом (ADR-0055), как и приход: вход —
+    # группа ПРЕДЫДУЩЕГО этапа, выпуск — своего.
     ops = await _route_ops(session, fx)
+    in_ops = await _input_ops(session, fx)
     assert await _tx_sum(session, fx["task"].id, Reason.TRANSFORM_CONSUME, None) == Decimal(100)
     assert await _balance(
-        session, product_id, saw_id, None, completed_operations=ops,
+        session, product_id, saw_id, None, completed_operations=in_ops,
     ) == Decimal(0)
     assert await _balance(
         session, product_id, saw_id, DIMS_OUT_A, completed_operations=ops,
@@ -680,7 +712,7 @@ async def test_shortage_fail_rejects_operation_and_names_available(session: Asyn
     assert await _tx_sum(
         session, fx["task"].id, Reason.TRANSFORM_CONSUME, any_dims=True,
     ) == Decimal(0)
-    ops = await _route_ops(session, fx)
+    ops = await _input_ops(session, fx)
     assert await _balance(
         session, fx["product"].id, fx["saw"].id, DIMS_IN, completed_operations=ops,
     ) == Decimal(80)
@@ -703,7 +735,7 @@ async def test_shortage_partial_clamps_to_available_balance(session: AsyncSessio
     await session.commit()
 
     product_id, saw_id = fx["product"].id, fx["saw"].id
-    ops = await _route_ops(session, fx)
+    ops = await _input_ops(session, fx)
     assert await _tx_sum(session, fx["task"].id, Reason.TRANSFORM_CONSUME, DIMS_IN) == Decimal(80)
     assert await _balance(
         session, product_id, saw_id, DIMS_IN, completed_operations=ops,
@@ -735,7 +767,7 @@ async def test_shortage_negative_remainder_drives_input_balance_minus(session: A
     await session.commit()
 
     product_id, saw_id = fx["product"].id, fx["saw"].id
-    ops = await _route_ops(session, fx)
+    ops = await _input_ops(session, fx)
     assert await _tx_sum(session, fx["task"].id, Reason.TRANSFORM_CONSUME, DIMS_IN) == Decimal(100)
     assert await _balance(
         session, product_id, saw_id, DIMS_IN, completed_operations=ops,
@@ -808,7 +840,7 @@ async def test_requires_lot_spg_blocks_negative_remainder_in_complete(session: A
         )
 
     # Минус не создан, ledger без записей порции.
-    ops = await _route_ops(session, fx)
+    ops = await _input_ops(session, fx)
     assert await _balance(
         session, fx["product"].id, fx["saw"].id, DIMS_IN, completed_operations=ops,
     ) == Decimal(80)
@@ -834,7 +866,7 @@ async def test_shortage_strategy_enum_dict_is_single_source(session: AsyncSessio
         shortage_strategy=ShortageStrategy.negative_remainder,
     )
     await session.commit()
-    ops_enum = await _route_ops(session, fx_enum)
+    ops_enum = await _input_ops(session, fx_enum)
     assert await _balance(
         session, fx_enum["product"].id, fx_enum["saw"].id, DIMS_IN,
         completed_operations=ops_enum,

@@ -24,6 +24,8 @@ from app.models.route import ProductionRoute, RouteOperation, RouteStage
 from app.models.section import Section
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from tests.helpers.completed_operations import register_section_operations
+
 
 async def make_route(session: AsyncSession, sku: str) -> tuple[Product, ProductionRoute]:
     """Продукт + маршрут из двух секций (сырьё → готовая продукция)."""
@@ -62,6 +64,7 @@ async def make_route(session: AsyncSession, sku: str) -> tuple[Product, Producti
                 operation_name=op_code,
             )
         )
+        await register_section_operations(session, section.id, [op_code])
     await session.flush()
     return product, route
 

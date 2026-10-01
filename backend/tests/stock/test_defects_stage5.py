@@ -26,6 +26,7 @@ from app.models.route import ProductionRoute, RouteOperation, RouteStage
 from app.models.spg import SpgSection, StorageProductionGroup
 from app.models.work_task import WorkTask, WorkTaskStatus
 from app.services.material_operations import completed_operations_for_task
+from app.services.shopfloor.operations_transform import resolve_consume_operations
 from app.stock import (
     QualityState,
     Reason,
@@ -37,6 +38,7 @@ from app.stock import (
 from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from tests.helpers.completed_operations import register_section_operations
 from tests.stock.helpers import canon_scrap_section_id, record_transfer_receive
 from tests.test_integrity_invariants import assert_no_stock_ledger_invariants_violations
 
@@ -97,7 +99,8 @@ async def _balance(
 
 async def _seed_raw_stock(
     session: AsyncSession, fx: dict, quantity: Decimal = Decimal(100),
-) -> None:
+    *, through_previous_stage: bool = False,
+) -> list[str]:
     """Занести остаток на «Склад сырья» в той же группе, что и списание.
 
     ADR-0055: списание идёт по полному ключу остатка, включая признак
@@ -105,7 +108,24 @@ async def _seed_raw_stock(
     проводки из маршрута позиции. MANUAL_IN без явного значения лёг бы в
     NULL-группу, и TRANSFER_RECEIVE задания её бы не нашёл. Значение берём
     тем же резолвером, что и прод, — без хардкода кодов операций.
+
+    ``through_previous_stage=True`` — материал, который приходит на участок
+    ДО собственных операций этапа (вход выпуска, возврат): ``complete_task``
+    и ``defect_decide(return_previous)`` списывают именно эту группу
+    (``resolve_consume_operations``/``previous_stage_sequence``), а приход
+    ``TRANSFER_SEND`` источника кладёт материал туда же. По умолчанию —
+    группа СВОЕГО этапа: так лежит материал, прошедший выпуск
+    (``defect_decide(scrap|rework_current)`` списывает его).
+
+    Возвращает использованный признак: тот же список нужен приёмной
+    проводке ``record_transfer_receive``, чтобы обе стороны движения
+    сошлись по полному ключу остатка.
     """
+    task = fx["task"]
+    if through_previous_stage:
+        ops = await resolve_consume_operations(session, task)
+    else:
+        ops = await completed_operations_for_task(session, task)
     await StockCommandService().record(session, StockCommand(
         product_id=fx["product"].id,
         from_location_id=None,
@@ -113,8 +133,9 @@ async def _seed_raw_stock(
         quantity=quantity,
         reason=Reason.MANUAL_IN,
         created_by=fx["user"].id,
-        completed_operations=await completed_operations_for_task(session, fx["task"]),
+        completed_operations=ops,
     ))
+    return ops
 
 
 async def _setup_minimal_route(session: AsyncSession, *, sku: str = "DEF5", qty: Decimal = Decimal(10)) -> dict:
@@ -138,6 +159,10 @@ async def _setup_minimal_route(session: AsyncSession, *, sku: str = "DEF5", qty:
     session.add(stage)
     await session.flush()
     session.add(RouteOperation(route_stage_id=stage.id, sequence=1, operation_code="OP1", operation_name="Op1"))
+    # ADR-0061: признак «пройденные операции» выводится из операций ЭТАПА,
+    # но каждая запись в ledger проверяет коды по справочнику участка —
+    # без записи OP1 в section_operations списание и приход отвергаются.
+    await register_section_operations(session, prod.id, ["OP1"])
 
     # Second stage for return_previous tests
     stage2 = RouteStage(route_id=route.id, sequence=2, section_id=scrap_loc.id, is_final=True)
@@ -202,7 +227,10 @@ async def test_complete_task_scrap_links_defect_to_stock_tx(session: AsyncSessio
     fx = await _setup_minimal_route(session)
     task = fx["task"]
 
-    await _seed_raw_stock(session, fx)
+    # Материал на участке до выпуска лежит в группе ПРЕДЫДУЩЕГО этапа
+    # (для первого этапа — «операций не было»): именно её списывает
+    # complete_task (resolve_consume_operations).
+    ops = await _seed_raw_stock(session, fx, through_previous_stage=True)
     await record_transfer_receive(
         session,
         product_id=fx["product"].id,
@@ -211,6 +239,7 @@ async def test_complete_task_scrap_links_defect_to_stock_tx(session: AsyncSessio
         quantity=Decimal(10),
         task_id=task.id,
         created_by=fx["user"].id,
+        completed_operations=ops,
     )
     await session.commit()
 
@@ -255,8 +284,9 @@ async def test_defect_decide_scrap_creates_stock_tx(session: AsyncSession):
     task = fx["task"]
     product = fx["product"]
 
-    # Seed stock
-    await _seed_raw_stock(session, fx)
+    # Seed stock — группа СВОЕГО этапа: defect_decide(scrap) списывает
+    # признак выпуска задания, прошедшего этап.
+    ops = await _seed_raw_stock(session, fx)
     await record_transfer_receive(
         session,
         product_id=product.id,
@@ -265,6 +295,7 @@ async def test_defect_decide_scrap_creates_stock_tx(session: AsyncSession):
         quantity=Decimal(10),
         task_id=task.id,
         created_by=fx["user"].id,
+        completed_operations=ops,
     )
     await session.commit()
 
@@ -329,8 +360,8 @@ async def test_defect_decide_rework_creates_stock_tx(session: AsyncSession):
     fx = await _setup_minimal_route(session)
     task = fx["task"]
 
-    # Seed stock
-    await _seed_raw_stock(session, fx)
+    # Seed stock — группа СВОЕГО этапа (см. scrap-тест выше).
+    ops = await _seed_raw_stock(session, fx)
     await record_transfer_receive(
         session,
         product_id=fx["product"].id,
@@ -339,6 +370,7 @@ async def test_defect_decide_rework_creates_stock_tx(session: AsyncSession):
         quantity=Decimal(10),
         task_id=task.id,
         created_by=fx["user"].id,
+        completed_operations=ops,
     )
     await session.commit()
 
@@ -403,8 +435,9 @@ async def test_defect_decide_return_previous_creates_stock_tx(session: AsyncSess
     fx = await _setup_minimal_route(session)
     task = fx["task"]
 
-    # Seed stock
-    await _seed_raw_stock(session, fx)
+    # Группа ПРЕДЫДУЩЕГО этапа: возврат уводит материал назад по маршруту
+    # именно из неё (defect_decide передаёт completed_operations=through_previous).
+    ops = await _seed_raw_stock(session, fx, through_previous_stage=True)
     await record_transfer_receive(
         session,
         product_id=fx["product"].id,
@@ -413,6 +446,7 @@ async def test_defect_decide_return_previous_creates_stock_tx(session: AsyncSess
         quantity=Decimal(10),
         task_id=task.id,
         created_by=fx["user"].id,
+        completed_operations=ops,
     )
     await session.commit()
 
@@ -467,7 +501,7 @@ async def test_defect_decide_accept_deviation_creates_complete_tx(session: Async
     task = fx["task"]
 
     # Need issued quantity for complete to work
-    await _seed_raw_stock(session, fx)
+    ops = await _seed_raw_stock(session, fx)
     await record_transfer_receive(
         session,
         product_id=fx["product"].id,
@@ -476,6 +510,7 @@ async def test_defect_decide_accept_deviation_creates_complete_tx(session: Async
         quantity=Decimal(10),
         task_id=task.id,
         created_by=fx["user"].id,
+        completed_operations=ops,
     )
     await session.commit()
 
@@ -529,8 +564,8 @@ async def test_defect_decide_idempotent(session: AsyncSession):
     fx = await _setup_minimal_route(session)
     task = fx["task"]
 
-    # Seed stock
-    await _seed_raw_stock(session, fx)
+    # Seed stock — группа СВОЕГО этапа (см. scrap-тест выше).
+    ops = await _seed_raw_stock(session, fx)
     await record_transfer_receive(
         session,
         product_id=fx["product"].id,
@@ -539,6 +574,7 @@ async def test_defect_decide_idempotent(session: AsyncSession):
         quantity=Decimal(10),
         task_id=task.id,
         created_by=fx["user"].id,
+        completed_operations=ops,
     )
     await session.commit()
 

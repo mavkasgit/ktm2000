@@ -1,19 +1,19 @@
-"""Пройденные операции материала (ADR-0043, тикет #207).
+"""Пройденные операции материала (ADR-0043, ADR-0061, тикеты #207, #272).
 
 Признак «какие операции материал уже прошёл» нужен, чтобы отличить
 подготовленное сырьё на «Складе подготовки» от сырья на «Складе сырья»:
 по ``stock_balances`` это неразличимо, а по маршруту — однозначно.
 
-Источник правды — **маршрут позиции**: признак проводки есть объединение
-``section_operations.operation_code`` всех секций этапов маршрута с
-``sequence <=`` заданного. Для маршрута №3 (ЮП-460) это даёт ровно то,
-что описано в тикете::
+Источник правды — **операции этапов маршрута позиции**: признак проводки
+есть объединение ``route_operations.operation_code`` этапов с
+``sequence <=`` заданного (ADR-0061; до него брался справочник участка
+целиком, и один остаток нёс операции, которых не проходил). Для маршрута,
+где пила режет 2,7 м на 1,8 м, признак на выходе пилы — ровно ``SAW_1800``,
+а не все длины раскроя участка.
 
-    этап 1 «Склад сырья»        → ISSUE_RAW
-    этап 2 «Пресс»              → PRESS_COMB, PRESS_WINDOW
-    этап 3 «Дробеструй»         → SHOT
-    этап 4 «Склад подготовки»   → ISSUE_RAW, PRESS_COMB, PRESS_WINDOW,
-                                   SHOT, MOVE_TO_PREP_STOCK
+Транзитные (складские) этапы операций не несут и в признак ничего не
+добавляют: их ``resolver_type``/``ISSUE_RAW``-подобные записи участка —
+не работа с материалом.
 
 Атрибуция не угадывается (ADR-0021): материал на складе может быть
 смешанным, но маршрут позиции известен точно, и признак выводится из
@@ -182,24 +182,30 @@ async def completed_operations_through_stage(
     route_id: int,
     through_sequence: int,
 ) -> list[str]:
-    """Операции всех этапов маршрута с ``sequence <= through_sequence``.
+    """Операции этапов маршрута с ``sequence <= through_sequence``.
 
-    Транзитные (складские) этапы не выбрасываются: их операции —
-    ``ISSUE_RAW``/``MOVE_TO_PREP_STOCK`` — часть фактической истории
-    материала и именно они отличают «Сырьё» от «Подготовлено».
+    Источник — операции САМОГО этапа (``route_operations``), а не справочник
+    участка (ADR-0061): материал проходил конкретную операцию своего этапа
+    (цвет анодирования, длину раскроя, вид упаковки), и объединение операций
+    участка приписало бы ему состояния, которых не было — у баланса 2,7 м
+    появлялись бы «реза на 0,9/1,35/1,8 м», у чёрного профиля — все цвета.
+
+    Транзитные (складские) этапы операций не несут и в признак ничего не
+    добавляют; этап, не назвавший операцию (``operation_code IS NULL`` —
+    заглушка шаблонного маршрута), — тоже.
     """
     if route_id is None or through_sequence is None:
         return []
-    from app.models.route import SectionOperation
+    from app.models.route import RouteOperation
 
     codes = (
         await db.execute(
-            select(SectionOperation.operation_code)
-            .join(RouteStage, RouteStage.section_id == SectionOperation.section_id)
+            select(RouteOperation.operation_code)
+            .join(RouteStage, RouteStage.id == RouteOperation.route_stage_id)
             .where(
                 RouteStage.route_id == route_id,
                 RouteStage.sequence <= through_sequence,
-                SectionOperation.operation_code.isnot(None),
+                RouteOperation.operation_code.isnot(None),
             )
             .distinct()
         )

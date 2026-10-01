@@ -24,6 +24,7 @@ from app.models.production_plan import (
 )
 from app.models.route import ProductionRoute, RouteOperation, RouteStage
 from app.models.work_task import WorkTask, WorkTaskStatus
+from app.services.shopfloor.operations_transform import resolve_consume_operations
 from app.stock import (
     Reason,
     StockCommand,
@@ -34,6 +35,7 @@ from app.stock.services import StockProjectionManager
 from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from tests.helpers.completed_operations import register_section_operations
 from tests.stock.helpers import record_transfer_receive, seed_stock_for_task
 
 pytestmark = pytest.mark.asyncio
@@ -78,6 +80,9 @@ async def _setup_one_task(session: AsyncSession, *, sku: str = "STG4", qty: Deci
     session.add(stage)
     await session.flush()
     session.add(RouteOperation(route_stage_id=stage.id, sequence=1, operation_code="OP1", operation_name="Op1"))
+    # ADR-0061: признак выводится из операций ЭТАПА, а ledger проверяет коды
+    # по справочнику участка (assert_known_operation_codes).
+    await register_section_operations(session, prod.id, ["OP1"])
 
     plan = ProductionPlan(plan_no=f"P-{sku}", name="p", status=ProductionPlanStatus.approved,
                           period_start=date(2026, 7, 1), period_end=date(2026, 7, 31))
@@ -136,6 +141,19 @@ async def _sql_net_transactions(session: AsyncSession, task_id: int, reason: Rea
     return net or Decimal(0)
 
 
+async def _input_ops(session: AsyncSession, task: WorkTask) -> list[str]:
+    """Признак группы, из которой ``complete_task`` списывает вход этапа.
+
+    Материал приходит на участок ДО собственных операций своего этапа и
+    лежит в группе ПРЕДЫДУЩЕГО этапа (для первого — «операций не было»);
+    именно её резолвит ``resolve_consume_operations``. Значение берём тем же
+    резолвером, что прод, — без хардкода кодов операций.
+    """
+    ops = await resolve_consume_operations(session, task)
+    assert ops is not None, "маршрут задания не разрешён в признак операций"
+    return ops
+
+
 # ─── tests ───────────────────────────────────────────────────────────────────
 
 
@@ -144,11 +162,13 @@ async def test_completed_qty_from_ledger(session: AsyncSession):
     fx = await _setup_one_task(session)
     task = fx["task"]
 
+    ops = await _input_ops(session, task)
     await seed_stock_for_task(
         session,
         product_id=fx["product"].id, task=task,
         quantity=Decimal(100), created_by=fx["user"].id,
         location_id=fx["raw"].id,
+        through_previous_stage=True,
     )
     await record_transfer_receive(
         session,
@@ -158,6 +178,7 @@ async def test_completed_qty_from_ledger(session: AsyncSession):
         quantity=Decimal(10),
         task_id=task.id,
         created_by=fx["user"].id,
+        completed_operations=ops,
     )
     task.status = WorkTaskStatus.in_progress
     await session.commit()
@@ -217,6 +238,7 @@ async def test_transferred_qty_net_from_ledger(session: AsyncSession):
     session.add(stage2)
     await session.flush()
     session.add(RouteOperation(route_stage_id=stage2.id, sequence=1, operation_code="OP2", operation_name="Op2"))
+    await register_section_operations(session, prod2.id, ["OP2"])
 
     from app.models.internal_plan import SectionPlanLine as SPL
     orig_line = await session.get(SPL, from_task.section_plan_line_id)

@@ -43,6 +43,7 @@ from app.stock.services import StockCommand, StockCommandService
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from tests.helpers.completed_operations import register_section_operations
 from tests.test_integrity_invariants import (
     _auth_headers,
     _make_user,
@@ -104,6 +105,7 @@ async def _make_two_ghp_setup(
         session.add(st)
         await session.flush()
         session.add(RouteOperation(route_stage_id=st.id, sequence=1, operation_code=code, operation_name=code))
+        await register_section_operations(session, sec.id, [code])
 
     await session.flush()
 
@@ -259,6 +261,7 @@ async def _make_dim_route_fixture(
         session.add(st)
         await session.flush()
         session.add(RouteOperation(route_stage_id=st.id, sequence=1, operation_code=code, operation_name=code))
+        await register_section_operations(session, sec.id, [code])
 
     await session.flush()
 
@@ -304,12 +307,12 @@ async def _make_dim_route_fixture(
 async def _section_route_operations(
     session: AsyncSession, section_id: int
 ) -> list[str] | None:
-    """Признак материала, лежащего на секции — операции её этапа маршрута.
+    """Признак материала, лежащего на секции — операции этапов её маршрута.
 
-    Тот же резолвер, что и у ``record()``: ``SectionOperation`` всех этапов
-    маршрута с ``sequence <=`` этапа этой секции. Нужен сидам, которые
-    заполняют склад ДО появления заданий (take-to-work ещё не вызван),
-    поэтому маршрут берётся по самой секции, а не по заданию.
+    Тот же резолвер, что и у ``record()``: ``route_operations.operation_code``
+    этапов маршрута с ``sequence <=`` этапа этой секции (ADR-0061). Нужен
+    сидам, которые заполняют склад ДО появления заданий (take-to-work ещё не
+    вызван), поэтому маршрут берётся по самой секции, а не по заданию.
 
     ``None`` — секция вне маршрута: признак неизвестен, группа ``NULL``.
     """
@@ -435,6 +438,7 @@ async def _make_transform_route_fixture(
         session.add(st)
         await session.flush()
         session.add(RouteOperation(route_stage_id=st.id, sequence=1, operation_code=code, operation_name=code))
+        await register_section_operations(session, sec.id, [code])
 
     await session.flush()
 

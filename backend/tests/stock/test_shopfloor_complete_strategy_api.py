@@ -26,9 +26,9 @@ from tests.stock.helpers import canon_scrap_section_id
 from tests.stock.test_task_completion_transform import (
     DIMS_IN,
     _balance,
+    _input_ops,
     _make_transform_setup,
     _receive_input,
-    _route_ops,
     _tx_sum,
 )
 
@@ -63,7 +63,7 @@ async def test_api_shortage_fail_returns_400_naming_available(
     ) == Decimal(0)
     assert await _balance(
         session, fx["product"].id, fx["saw"].id, DIMS_IN,
-        completed_operations=await _route_ops(session, fx),
+        completed_operations=await _input_ops(session, fx),
     ) == Decimal(80)
 
 
@@ -88,7 +88,7 @@ async def test_api_shortage_partial_clamps_and_reports_completed_quantity(
     assert await _tx_sum(session, fx["task"].id, Reason.TRANSFORM_CONSUME, DIMS_IN) == Decimal(80)
     assert await _balance(
         session, fx["product"].id, fx["saw"].id, DIMS_IN,
-        completed_operations=await _route_ops(session, fx),
+        completed_operations=await _input_ops(session, fx),
     ) == Decimal(0)
 
     task = await session.get(WorkTask, fx["task"].id)
@@ -117,7 +117,7 @@ async def test_api_negative_remainder_drives_input_balance_minus(
     assert await _tx_sum(session, fx["task"].id, Reason.TRANSFORM_CONSUME, DIMS_IN) == Decimal(100)
     assert await _balance(
         session, fx["product"].id, fx["saw"].id, DIMS_IN,
-        completed_operations=await _route_ops(session, fx),
+        completed_operations=await _input_ops(session, fx),
     ) == Decimal(-20)
 
 
@@ -169,7 +169,7 @@ async def test_api_bulk_entry_without_strategy_is_fail(
     ) == Decimal(0)
     assert await _balance(
         session, fx["product"].id, fx["saw"].id, DIMS_IN,
-        completed_operations=await _route_ops(session, fx),
+        completed_operations=await _input_ops(session, fx),
     ) == Decimal(80)
 
 
@@ -198,7 +198,7 @@ async def test_api_negative_with_defect_both_postings_go_minus(
     assert Decimal(str(data["completed_quantity"])) == Decimal(100)
 
     product_id, saw_id = fx["product"].id, fx["saw"].id
-    ops = await _route_ops(session, fx)
+    ops = await _input_ops(session, fx)
     assert await _tx_sum(session, fx["task"].id, Reason.TRANSFORM_CONSUME, DIMS_IN) == Decimal(90)
     assert await _tx_sum(session, fx["task"].id, Reason.SCRAP, DIMS_IN) == Decimal(10)
     # Обе проводки легли на одну GOOD-группу входа: 80 − 90 − 10 = −20.
@@ -236,7 +236,7 @@ async def test_api_requires_lot_blocks_negative_with_defect_atomically(
     # Атомарность: баланс не тронут, проводок нет, брак не создан.
     assert await _balance(
         session, fx["product"].id, fx["saw"].id, DIMS_IN,
-        completed_operations=await _route_ops(session, fx),
+        completed_operations=await _input_ops(session, fx),
     ) == Decimal(80)
     assert await _tx_sum(
         session, fx["task"].id, Reason.TRANSFORM_CONSUME, any_dims=True,

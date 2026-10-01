@@ -1,17 +1,19 @@
-"""Фабрика маршрута с реальными ``section_operations`` (ADR-0043, #207).
+"""Фабрика маршрута с операциями этапов и справочником участков (ADR-0043, ADR-0061, #207).
 
-Признак «пройденные операции» выводится из справочника ``section_operations``
-по СЕКЦИИ этапа (``completed_operations_through_stage``). Общие фабрики
-``tests/helpers/transfers.py`` заводят только операции уровня этапа
-(``RouteOperation``) — для регрессий #207 этого мало, поэтому здесь
-строится маршрут, у которого есть и этапы, и операции их секций.
+Признак «пройденные операции» выводится из операций ЭТАПА
+(``completed_operations_through_stage`` читает ``route_operations``), поэтому
+здесь строится маршрут, у которого у каждого этапа есть своя операция, а её
+код зарегистрирован и в справочнике ``section_operations`` — запись в ledger
+проверяет коды по нему. У участка дополнительно есть операция, которой на
+этапах нет (``<код>@SECTION``): реализация, которая снова возьмёт справочник
+участка целиком, отдаст лишний код и упадёт на ожидании.
 
 Модуль новый и ничего не меняет в общих фабриках, на которые опираются
 тесты других доменов.
 """
 from __future__ import annotations
 
-from collections.abc import Sequence
+from collections.abc import Iterable, Sequence
 from datetime import date
 from decimal import Decimal
 
@@ -45,7 +47,44 @@ __all__ = [
     "build_product",
     "build_stock_to_shop_route",
     "ops_through",
+    "register_section_operations",
 ]
+
+
+async def register_section_operations(
+    session: AsyncSession, section_id: int, codes: Iterable[str]
+) -> None:
+    """Продублировать коды операций этапа в справочник участка (ADR-0061).
+
+    Продовый маршрут собирается из справочника участка, поэтому код операции
+    этапа там всегда есть. Тестовая фикстура объявляет операцию прямо на
+    этапе; без записи в ``section_operations`` запись в ledger отвергнет
+    признак как неизвестный (``assert_known_operation_codes``), а подпись
+    ячейки и фильтр колонки его не разрешат.
+    """
+    from sqlalchemy.dialects.postgresql import insert
+
+    rows = [
+        {
+            "section_id": section_id,
+            "operation_code": code,
+            "operation_name": code,
+            "is_significant": True,
+            "sort_order": 100 + order,
+        }
+        for order, code in enumerate(sorted(set(codes)))
+    ]
+    if not rows:
+        return
+    # ON CONFLICT DO NOTHING: тот же код фикстура могла объявить рядом с
+    # этапом явно — дубль по ``uq_section_operations`` уронил бы уже не тот
+    # тест, ради которого он написан.
+    await session.execute(
+        insert(SectionOperation)
+        .values(rows)
+        .on_conflict_do_nothing(index_elements=["section_id", "operation_code"])
+    )
+    await session.flush()
 
 
 def ops_through(stages: Sequence[tuple[str, str, Sequence[str]]], through: int) -> list[str]:
@@ -107,13 +146,20 @@ async def build_operation_route(
         session.add(section)
         await session.flush()
         for order, code in enumerate(ops, start=1):
+            # Код операции ЭТАПА регистрируется и в справочнике участка: признак
+            # «пройденные операции» выводится из операций ЭТАПА (ADR-0061), но
+            # каждая запись в ledger проверяет коды по ``section_operations``.
+            await register_section_operations(session, section.id, [code])
+            # Дополнительный код ``@SECTION`` есть только у участка и на этапе
+            # не значится: реализация, которая снова возьмёт операции участка
+            # целиком, отдаст лишний код и упадёт на ожидании.
             session.add(
                 SectionOperation(
                     section_id=section.id,
-                    operation_code=code,
-                    operation_name=code,
+                    operation_code=f"{code}@SECTION",
+                    operation_name=f"{code}@SECTION",
                     is_significant=True,
-                    sort_order=order,
+                    sort_order=200 + order,
                 )
             )
         sections.append(section)
@@ -150,17 +196,15 @@ async def build_operation_route(
         session.add(stage)
         await session.flush()
         for order, code in enumerate(ops, start=1):
-            # Код операции ЭТАПА намеренно отличается от кода операции
-            # СЕКЦИИ: признак «пройденные операции» выводится из
-            # справочника section_operations, и тесты должны отличать
-            # одно от другого, а не сойтись на общих кодах.
-            stage_code = f"{code}@STAGE"
+            # Операция ЭТАПА — тот же код, что объявлен у участка: источник
+            # признака — этап (ADR-0061), и фикстура должна описывать маршрут,
+            # который реально существует (код этапа есть в справочнике).
             session.add(
                 RouteOperation(
                     route_stage_id=stage.id,
                     sequence=order,
-                    operation_code=stage_code,
-                    operation_name=stage_code,
+                    operation_code=code,
+                    operation_name=code,
                 )
             )
         route_stages.append(stage)
@@ -296,6 +340,10 @@ async def build_stock_to_shop_route(
                 route_stage_id=stage.id, sequence=1, operation_code=code, operation_name=code
             )
         )
+        # Операция этапа обязана быть и в справочнике участка: признак
+        # «пройденные операции» выводится из операции ЭТАПА (ADR-0061), а
+        # запись в ledger проверяет коды по ``section_operations``.
+        await register_section_operations(session, section.id, [code])
         stages.append(stage)
     await session.commit()
     return stock, prod, route, stages

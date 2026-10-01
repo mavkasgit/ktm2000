@@ -27,13 +27,14 @@ from app.models.route import ProductionRoute, RouteOperation, RouteStage
 from app.models.spg import SpgSection, StorageProductionGroup
 from app.models.work_task import WorkTask, WorkTaskStatus
 from app.seeds.canon.models import ScrapPolicy
-from app.services.material_operations import completed_operations_for_task
 from app.services.shopfloor.operations_defects import create_defect, defect_decide
 from app.services.shopfloor.operations_tasks import complete_task
+from app.services.shopfloor.operations_transform import resolve_consume_operations
 from app.stock import Reason, StockCommand, StockCommandService, StockTransaction
 from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from tests.helpers.completed_operations import register_section_operations
 from tests.stock.helpers import (
     FAKE_DEFECT_DECISION_MAP,
     FAKE_SCRAP_POLICY,
@@ -82,6 +83,9 @@ async def _make_route_without_scrap(
     session.add(stage)
     await session.flush()
     session.add(RouteOperation(route_stage_id=stage.id, sequence=1, operation_code="OP1", operation_name="Op1"))
+    # ADR-0061: выпуск несёт признак своего этапа (COMPLETE выводит его из
+    # маршрута), а запись в ledger проверяет коды по справочнику участка.
+    await register_section_operations(session, prod.id, ["OP1"])
 
     await session.flush()
 
@@ -129,7 +133,16 @@ async def _make_route_without_scrap(
 
 
 async def _issue_material(session: AsyncSession, fx: dict, *, quantity: Decimal) -> None:
-    """Выдача материала на участок: MANUAL_IN на raw + TRANSFER_RECEIVE на задачу."""
+    """Выдача материала на участок: MANUAL_IN на raw + TRANSFER_RECEIVE на задачу.
+
+    Материал приходит на участок ДО собственных операций этапа, поэтому обе
+    проводки несут признак группы ПРЕДЫДУЩЕГО этапа (для первого этапа —
+    «операций не было»): именно её списывает ``complete_task``
+    (``resolve_consume_operations``). MANUAL_IN без признака лёг бы в
+    NULL-группу и остался бы невидимым для приёма (ADR-0055).
+    """
+    task = fx["task"]
+    ops = await resolve_consume_operations(session, task)
     await StockCommandService().record(session, StockCommand(
         product_id=fx["product"].id,
         from_location_id=None,
@@ -137,22 +150,19 @@ async def _issue_material(session: AsyncSession, fx: dict, *, quantity: Decimal)
         quantity=quantity,
         reason=Reason.MANUAL_IN,
         created_by=fx["user"].id,
-        # ADR-0055: списание TRANSFER_RECEIVE идёт по полному ключу остатка,
-        # включая признак операций, который record() выводит из маршрута
-        # позиции. MANUAL_IN без признака лёг бы в NULL-группу и остался бы
-        # невидимым для приёма — значение берём тем же резолвером, что прод.
-        completed_operations=await completed_operations_for_task(session, fx["task"]),
+        completed_operations=ops,
     ))
     await record_transfer_receive(
         session,
         product_id=fx["product"].id,
         from_location_id=fx["raw"].id,
-        to_location_id=fx["task"].section_id,
+        to_location_id=task.section_id,
         quantity=quantity,
-        task_id=fx["task"].id,
+        task_id=task.id,
         created_by=fx["user"].id,
+        completed_operations=ops,
     )
-    fx["task"].status = WorkTaskStatus.in_progress
+    task.status = WorkTaskStatus.in_progress
     await session.commit()
 
 

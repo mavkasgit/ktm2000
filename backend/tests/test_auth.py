@@ -253,11 +253,11 @@ async def test_transporter_can_manage_transfers_globally_but_not_shopfloor_tasks
     from app.models.internal_plan import SectionPlanLine
     from app.models.section import Section
     from app.models.work_task import WorkTask
-    from app.services.material_operations import completed_operations_for_task
     from app.services.shopfloor.cache import _refresh_section_plan_line_cache
     from app.stock import Reason, StockCommand, StockCommandService
     from sqlalchemy import select
 
+    from tests.helpers.completed_operations import register_section_operations
     from tests.test_plan_generation import _make_plan_position, _make_ready_product
 
     transporter = User(
@@ -270,7 +270,11 @@ async def test_transporter_can_manage_transfers_globally_but_not_shopfloor_tasks
     session.add(transporter)
     await session.commit()
 
-    product, _sections, route = await _make_ready_product(session, "FG-TRANS")
+    product, sections, route = await _make_ready_product(session, "FG-TRANS")
+    # Справочник участка (ADR-0061): признак «пройденные операции» выводится из
+    # операции ЭТАПА, а ``record()`` проверяет коды по ``section_operations``.
+    # ``_make_ready_product`` объявляет операцию только на этапе маршрута.
+    await register_section_operations(session, sections[0].id, ["ISSUE_RAW"])
     plan, pos = await _make_plan_position(session, product, route_id=route.id)
     await session.commit()
 
@@ -308,10 +312,16 @@ async def test_transporter_can_manage_transfers_globally_but_not_shopfloor_tasks
     admin_headers = {"Authorization": f"Bearer {create_access_token(subject=admin_user.username)}"}
 
     svc = StockCommandService()
-    # ADR-0055: приход на склад несёт тот же признак операций, что выведет
-    # plan-driven TRANSFER_RECEIVE ниже из маршрута задания, — иначе списание
-    # ищет группу маршрута и находит 0.
-    seed_ops = await completed_operations_for_task(session, first_task)
+    # ADR-0061: на участке материал лежит в ops-группе ПРЕДЫДУЩЕГО этапа
+    # (``resolve_consume_operations``) — именно её спишет завершение задания.
+    # У первого этапа маршрута предыдущего нет, поэтому группа — пустой список
+    # («операций не было»). Признак задаётся явно на обеих проводках: plan-driven
+    # резолв TRANSFER_RECEIVE взял бы группу СОБСТВЕННОГО этапа задания и
+    # разошёлся бы со списанием (реальный TRANSFER_RECEIVE переносит группу
+    # ИСТОЧНИКА — ``transfer_send`` передаёт её явно).
+    from app.services.shopfloor.operations_transform import resolve_consume_operations
+
+    seed_ops = await resolve_consume_operations(session, first_task)
     await svc.record(
         session,
         StockCommand(
@@ -332,6 +342,7 @@ async def test_transporter_can_manage_transfers_globally_but_not_shopfloor_tasks
             quantity=Decimal(100),
             reason=Reason.TRANSFER_RECEIVE,
             task_id=first_task.id,
+            completed_operations=seed_ops,
             created_by=admin_user.id,
         ),
     )
