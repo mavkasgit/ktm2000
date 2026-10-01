@@ -73,7 +73,10 @@ export const stockBalanceColumns: StockBalanceColumn[] = [
     filterField: "operations",
     sortField: "operations",
     headerClassName: "min-w-[140px]",
-    mapValue: dropDash,
+    // Ячейка печатает `formatCompletedOperationsLabel`: пустое состояние —
+    // «не зафиксировано»/«без операций», а не «—» (#239), и сервер
+    // (`_balance_operations_filter`) понимает обе подписи. Сбрасывать их
+    // значило бы выбрать пустую строку и молча отправить фильтр без значения.
   },
   {
     id: "quality",

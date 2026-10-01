@@ -1012,21 +1012,18 @@ export type ProductWipRemainder = {
    * `null` («не зафиксировано») и `[]` («без операций») — разные значения.
    */
   completed_operations?: string[] | null;
-  /** Подпись оси операций для чтения: имена операций либо её пустое состояние. */
-  completed_ops: string;
+  /**
+   * Этапы оси с иконками — данные для чипов. Подпись пустого состояния
+   * печатает клиент сам (`formatCompletedOperationsLabel`): сервер текстом
+   * не дублирует то, что он же прислал признаком (#242).
+   */
+  completed_stages: ImportOperationStep[];
   spg_icon: string | null;
   spg_icon_color: string | null;
   dimensions: Record<string, unknown> | null;
   dimensions_label: string;
   quantity: number;
   max_completed_seq: number;
-  stages_with_icons: {
-    sequence: number;
-    operation_name?: string;
-    operation_code?: string;
-    op_icon: string | null;
-    op_icon_color: string | null;
-  }[];
 };
 
 export type ProductWipTask = {

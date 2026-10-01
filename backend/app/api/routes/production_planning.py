@@ -1690,18 +1690,17 @@ class ProductWipRemainderOut(BaseModel):
     spg_id: int
     spg_code: str
     spg_name: str
-    # Сам признак оси операций (ADR-0055) и его подпись — разные вещи: `null`
-    # («не зафиксировано») и `[]` («без операций») печатаются по-разному, и
-    # клиент не должен выводить состояние из текста подписи.
+    # Сам признак оси операций (ADR-0055) и её этапы — данные, а не подпись:
+    # `null` («не зафиксировано») и `[]` («без операций») клиент различает сам
+    # (`formatCompletedOperationsLabel`) и не выводит состояние из текста.
     completed_operations: list[str] | None = None
-    completed_ops: str
+    completed_stages: list[dict] = []
     spg_icon: str | None = None
     spg_icon_color: str | None = None
     dimensions: dict | None = None
     dimensions_label: str = DIMENSIONLESS_LABEL
     quantity: float
     max_completed_seq: int = 0
-    stages_with_icons: list[dict] = []
 
 class ProductWipTaskOut(BaseModel):
     section_id: int
@@ -1746,7 +1745,6 @@ async def _product_remainders(db: AsyncSession, product_id: int) -> list[Product
     from app.services.material_operations import (
         canonicalize_completed_operations,
         completed_operation_stages,
-        format_completed_operations_label,
     )
     from app.stock.import_service import resolve_operations_dictionary
     from app.stock.models import QualityState, StockBalance
@@ -1763,7 +1761,8 @@ async def _product_remainders(db: AsyncSession, product_id: int) -> list[Product
         .order_by(StockBalance.refreshed_at)
     )).all()
 
-    # Справочник операций — один на весь ответ: подпись оси собирается из него.
+    # Справочник операций — один на весь ответ: этапы оси берутся из него,
+    # а подпись состояния печатает клиент по общему правилу (#242).
     operations = await resolve_operations_dictionary(db)
 
     # Group by location/SPG + operations + dimensions (ADR-0001, ADR-0055):
@@ -1800,8 +1799,7 @@ async def _product_remainders(db: AsyncSession, product_id: int) -> list[Product
                 "spg_icon": spg_icon,
                 "spg_icon_color": spg_icon_color,
                 "completed_operations": ops,
-                "completed_ops": format_completed_operations_label(ops, stages),
-                "stages_with_icons": stages,
+                "completed_stages": stages,
                 "max_completed_seq": max(
                     (stage["sequence"] for stage in stages), default=0
                 ),
@@ -1818,12 +1816,11 @@ async def _product_remainders(db: AsyncSession, product_id: int) -> list[Product
                 spg_code=val["spg_code"],
                 spg_name=val["spg_name"],
                 completed_operations=val["completed_operations"],
-                completed_ops=val["completed_ops"],
+                completed_stages=val["completed_stages"],
                 spg_icon=val["spg_icon"],
                 spg_icon_color=val["spg_icon_color"],
                 dimensions=val["dimensions"],
                 dimensions_label=val["dimensions_label"],
-                stages_with_icons=val["stages_with_icons"],
                 max_completed_seq=val["max_completed_seq"],
                 quantity=val["quantity"],
             )

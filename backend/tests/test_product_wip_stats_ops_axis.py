@@ -10,8 +10,9 @@
 Проверяем:
 - две ops-группы одного артикула/участка/габарита — две строки, не одна сумма;
 - `NULL` («не зафиксировано») и `[]` («без операций») — разные строки;
-- строку подписывают ИМЕНА операций справочника (и `completed_operations`
-  отдаётся наружу — состояние не выводится из текста подписи);
+- строка несёт ДАННЫЕ оси: `completed_operations` (признак) и
+  `completed_stages` (этапы справочника в порядке маршрута); подпись состояния
+  печатает клиент по общему правилу, сервер текст не дублирует (#242);
 - одинаковые операции и габарит по-прежнему складываются в одну строку.
 """
 from __future__ import annotations
@@ -112,8 +113,8 @@ async def test_remainders_split_by_completed_operations(client, session) -> None
     assert {r["dimensions"]["length_mm"] for r in rows} == {2700}
 
 
-async def test_remainder_label_and_stages_come_from_operations(client, session) -> None:
-    """Подпись строки — имена операций справочника, в порядке маршрута."""
+async def test_remainder_stages_come_from_operations_dictionary(client, session) -> None:
+    """Строка несёт этапы оси из справочника: коды и имена в порядке маршрута."""
     fx = await _fixture(session, "WIP-OPS-2")
     stock = fx["sections"][0]
     await _seed(session, fx, stock=stock, qty="7", ops=ops_through(STAGES, 2))
@@ -125,11 +126,11 @@ async def test_remainder_label_and_stages_come_from_operations(client, session) 
     assert len(rows) == 1
     row = rows[0]
     assert row["completed_operations"] == ["ISSUE_RAW", "PRESS_COMB"]
-    assert row["completed_ops"] == "Выдача сырья, Пресс комбинированный"
     assert [
         (stage["operation_code"], stage["operation_name"])
-        for stage in row["stages_with_icons"]
+        for stage in row["completed_stages"]
     ] == [("ISSUE_RAW", "Выдача сырья"), ("PRESS_COMB", "Пресс комбинированный")]
+    # Клиент печатает имена, а не коды: текст подписи сервер не считает (#242).
 
 
 async def test_remainders_distinguish_null_and_empty_operations(client, session) -> None:
@@ -149,9 +150,12 @@ async def test_remainders_distinguish_null_and_empty_operations(client, session)
         for r in rows
     }
     assert set(by_ops) == {None, ()}
-    assert by_ops[None]["completed_ops"] == "не зафиксировано"
-    assert by_ops[None]["stages_with_icons"] == []
-    assert by_ops[()]["completed_ops"] == "без операций"
+    # Состояние уходит признаком, а не текстом: `null` и `[]` клиент
+    # различает сам и печатает по общему правилу (#242).
+    assert by_ops[None]["completed_operations"] is None
+    assert by_ops[None]["completed_stages"] == []
+    assert by_ops[()]["completed_operations"] == []
+    assert by_ops[()]["completed_stages"] == []
     assert by_ops[()]["quantity"] == 3.0
 
 
@@ -168,4 +172,7 @@ async def test_remainders_merge_same_operations_and_dimensions(client, session) 
 
     assert len(rows) == 1
     assert rows[0]["quantity"] == 100.0
-    assert rows[0]["completed_ops"] == "Выдача сырья"
+    assert rows[0]["completed_operations"] == ["ISSUE_RAW"]
+    assert [stage["operation_name"] for stage in rows[0]["completed_stages"]] == [
+        "Выдача сырья"
+    ]

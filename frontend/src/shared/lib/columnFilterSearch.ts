@@ -33,6 +33,16 @@ export function sortByPartialSearchMatch<T>(
     });
 }
 
+/**
+ * Индикатор «фильтры активны» и кнопка сброса: есть ли в таблице хоть
+ * какой-нибудь выбранный фильтр или введённый поиск.
+ *
+ * Считается по состоянию таблицы, а не по тому, что уехало в запрос: выбор в
+ * `clientOnly`-колонке (в том числе мультивыбор, ADR-0044) включает
+ * индикатор, хотя `pickColumnApiValue` для неё вернёт `undefined`. Это
+ * намеренно — сброс обязан убирать всё выбранное, а не только то, что сервер
+ * понимает как параметр.
+ */
 export function hasActiveColumnFilters<Field extends string>(
   columnFilters: Partial<Record<Field, Set<string>>>,
   columnSearchQueries: Partial<Record<Field, string>>,
@@ -46,7 +56,19 @@ export function hasActiveColumnFilters<Field extends string>(
   return hasSetFilters || hasSearchFilters;
 }
 
-/** Single column filter/search value for server-side ILIKE params (TransfersPage pattern). */
+/**
+ * Одно значение колонки для серверного параметра запроса (ILIKE-поиск или
+ * точный выбор).
+ *
+ * Сервер принимает на колонку одно значение, поэтому в параметр превращается
+ * только одиночный выбор: `size !== 1` → `undefined` — это граница контракта с
+ * сервером, а не «фильтр выключен» (активность считает
+ * `hasActiveColumnFilters`, ему всё равно, что уедет в запрос).
+ *
+ * Мультивыбор сюда по построению не попадает: он разрешён только у
+ * `clientOnly`-колонок, чьи значения в запрос не уезжают
+ * (`multiSelect = clientOnly === true` в `DataTableColumnHeader`, ADR-0044).
+ */
 export function pickColumnApiValue<T extends string>(
   columnFilters: Partial<Record<T, Set<string>>>,
   columnSearchQueries: Partial<Record<T, string>>,
@@ -63,8 +85,12 @@ export function pickColumnApiValue<T extends string>(
 }
 
 /**
- * Single selected value for exact-match columns (dimensions): search query is
- * ignored — the popover search only narrows the value list, it is not a live filter.
+ * Одно выбранное значение колонки точного совпадения (габариты): поиск в
+ * попапере игнорируется — он сужает список значений, но не фильтрует строки.
+ *
+ * Тот же одиночный контракт с сервером, что и у `pickColumnApiValue`:
+ * больше одного значения передать некуда, поэтому `size !== 1` →
+ * `undefined`, а активность состояния считает `hasActiveColumnFilters`.
  */
 export function pickExactMatchColumnValue<T extends string>(
   columnFilters: Partial<Record<T, Set<string>>>,

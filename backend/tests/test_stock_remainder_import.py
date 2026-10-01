@@ -23,16 +23,13 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app.models import Product, ProductType, Section
 from app.models.import_template import ImportTemplate
 from app.models.route import SectionOperation
-from app.stock.import_service import parse_operations_from_comment
 from app.stock.models import QualityState, Reason, StockBalance, StockTransaction
 from app.stock.services import StockCommand, StockCommandService
 from tests.test_integrity_invariants import assert_no_invariants_violations
 
 # Асинхронные тесты помечает pytest-asyncio сам (`asyncio_mode = auto` в
-# backend/pytest.ini). Модульный `pytestmark = pytest.mark.asyncio` здесь был
-# лишним и заодно вешал маркер на синхронный
-# `test_parse_operations_from_comment_extracts_names` — pytest предупреждал об
-# этом на каждом прогоне.
+# backend/pytest.ini): модульный `pytestmark = pytest.mark.asyncio` здесь был
+# бы лишним и вешал маркер на синхронные тесты модуля.
 
 
 # ─── Helpers ───────────────────────────────────────────────────────────────────
@@ -1076,6 +1073,62 @@ async def test_preview_clipboard_text_parses_rows(
     assert item["status"] == "valid"
 
 
+async def test_preview_operations_filter_matches_shared_label(
+    client: AsyncClient,
+    session: AsyncSession,
+) -> None:
+    """Фильтр колонки «Операции» принимает подпись пустого состояния (#242).
+
+    Подпись в предпросмотре собирается тем же правилом, что и на клиенте
+    (`formatCompletedOperationsLabel`), а не «—»: пустая колонка —
+    «не зафиксировано» (ровно то, что уедет в баланс, ADR-0055 п.6), строка
+    с операцией — её имя из справочника. Иначе выбор значения из списка
+    фильтра молча вернул бы ноль строк.
+    """
+    await _make_product(session, "OPS-LBL-001")
+    location = await _make_location(session, "OPS-LBL-LOC")
+    await _make_section_operation(session, location, "Токарная", operation_code="TURN")
+    await session.commit()
+
+    clipboard = _make_clipboard_tsv(
+        [
+            ("OPS-LBL-001", 10, "Токарная"),
+            ("OPS-LBL-001", 20, ""),
+        ],
+        headers=("Артикул", "Количество", "Выполненные операции"),
+    )
+
+    resp = await client.post(
+        "/api/stock/import/remainders/preview", data={"clipboard_text": clipboard}
+    )
+    assert resp.status_code == 200, resp.text
+    items = resp.json()["items"]
+    assert len(items) == 2
+    with_ops, without_ops = items
+    assert [stage["operation_name"] for stage in with_ops["completed_stages"]] == ["Токарная"]
+    assert without_ops["completed_stages"] == []
+
+    # Подпись пустого состояния фильтрует строку, а не «—».
+    resp = await client.post(
+        "/api/stock/import/remainders/preview",
+        data={"clipboard_text": clipboard, "operations": "не зафиксировано"},
+    )
+    assert resp.status_code == 200, resp.text
+    body = resp.json()
+    assert body["items_total"] == 1
+    assert body["items"][0]["quantity"] == 20
+
+    # Строка с операцией находится по имени — тому же, что печатает ячейка.
+    resp = await client.post(
+        "/api/stock/import/remainders/preview",
+        data={"clipboard_text": clipboard, "operations": "Токарная"},
+    )
+    assert resp.status_code == 200, resp.text
+    body = resp.json()
+    assert body["items_total"] == 1
+    assert body["items"][0]["quantity"] == 10
+
+
 async def test_import_clipboard_creates_balance(
     client: AsyncClient,
     session: AsyncSession,
@@ -1412,15 +1465,6 @@ async def test_operations_endpoint_returns_production_significant(
     assert op["section_icon_color"] == "#3B82F6"
     assert op["op_icon"] == "Wrench"
     assert op["op_icon_color"] == "#EF4444"
-
-
-def test_parse_operations_from_comment_extracts_names() -> None:
-    assert parse_operations_from_comment(None) == []
-    assert parse_operations_from_comment("Импорт остатков из Excel") == []
-    assert parse_operations_from_comment("Партия A | операции: Дробеструй, Чёрный") == [
-        "Дробеструй",
-        "Чёрный",
-    ]
 
 
 async def test_preview_remainders_with_custom_template_column_mapping(

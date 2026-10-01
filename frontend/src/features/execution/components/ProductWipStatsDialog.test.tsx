@@ -8,6 +8,7 @@ import type {
   ProductWipRemainder,
   ProductWipStats,
 } from "@/shared/api/productionPlans";
+import type { ImportOperationStep } from "@/shared/api/stock";
 
 // Мокаем API-слой: диалог обязан показывать размер каждой строки из ответа.
 vi.mock("@/shared/api/productionPlans", async (importOriginal) => ({
@@ -20,6 +21,16 @@ import { ProductWipStatsDialog } from "./ProductWipStatsDialog";
 
 (globalThis as Record<string, unknown>).IS_REACT_ACT_ENVIRONMENT = true;
 
+/** Этап оси операций в формате справочника (`RouteStepsDisplay`). */
+const makeStep = (operation_name: string, sequence = 1): ImportOperationStep => ({
+  sequence,
+  section_code: "PROD",
+  section_name: "Участок",
+  operation_code: `OP${sequence}`,
+  operation_name,
+  is_significant: true,
+});
+
 const stats: ProductWipStats = {
   sku: "TEST-SKU",
   product_name: "Тестовое изделие",
@@ -29,27 +40,29 @@ const stats: ProductWipStats = {
       spg_id: 10,
       spg_code: "SPG-A",
       spg_name: "СПГ А",
-      completed_ops: "Сверловка",
+      // Заполненная ось: рисуются чипы этапов.
+      completed_operations: ["OP1"],
+      completed_stages: [makeStep("Сверловка")],
       spg_icon: null,
       spg_icon_color: null,
       dimensions: { length_mm: 2000 },
       dimensions_label: "2 м",
       quantity: 10,
-      max_completed_seq: 0,
-      stages_with_icons: [],
+      max_completed_seq: 1,
     },
     {
       spg_id: 10,
       spg_code: "SPG-A",
       spg_name: "СПГ А",
-      completed_ops: "Сверловка",
+      // Ось не зафиксирована: подпись пустого состояния, а не пустая ячейка.
+      completed_operations: null,
+      completed_stages: [],
       spg_icon: null,
       spg_icon_color: null,
       dimensions: { length_mm: 3000 },
       dimensions_label: "3 м",
       quantity: 4,
       max_completed_seq: 0,
-      stages_with_icons: [],
     },
   ],
   in_work: [
@@ -95,12 +108,13 @@ function pairRemainder(
   return {
     spg_id: 10,
     spg_code: "SPG-A",
-    completed_ops: "Сверловка",
+    // Маршрут пройден, операций не было — третья ветка правила подписи.
+    completed_operations: [],
+    completed_stages: [],
     spg_icon: null,
     spg_icon_color: null,
     dimensions: null,
     max_completed_seq: 0,
-    stages_with_icons: [],
     ...overrides,
   };
 }
@@ -197,6 +211,43 @@ describe("ProductWipStatsDialog", () => {
       // Задачи в работе: размеры из ответа, включая безразмерную строку.
       expect(text).toContain("Сверлить");
       expect(text).toContain("—");
+    } finally {
+      cleanup();
+    }
+  });
+
+  it("печатает три состояния оси операций по общему правилу (#242)", async () => {
+    vi.mocked(getProductWipStats).mockResolvedValue(stats);
+
+    const { cleanup } = mountDialog();
+    try {
+      await vi.waitFor(() => {
+        expect(document.body.textContent).toContain("Тестовое изделие");
+      });
+      const text = document.body.textContent ?? "";
+
+      // Заполненная ось — чипы этапов из ответа, а не серверная строка подписи.
+      expect(text).toContain("Сверловка");
+      // `null` (не зафиксировано) и `[]` (без операций) различимы глазом.
+      expect(text).toContain("не зафиксировано");
+      expect(text).not.toContain("без операций");
+    } finally {
+      cleanup();
+    }
+  });
+
+  it("остаток с пустым списком операций подписан «без операций», а не «не зафиксировано»", async () => {
+    vi.mocked(getProductWipStats).mockResolvedValue(pairStats());
+
+    const { cleanup } = mountDialog("PAIR-AAA+PAIR-BBB");
+    try {
+      await vi.waitFor(() => {
+        expect(componentSection("PAIR-AAA")).not.toBeNull();
+      });
+
+      const a = componentSection("PAIR-AAA");
+      expect(a?.textContent).toContain("без операций");
+      expect(a?.textContent).not.toContain("не зафиксировано");
     } finally {
       cleanup();
     }

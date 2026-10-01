@@ -2,7 +2,7 @@ import { useEffect, useState, useMemo, type ReactNode } from "react";
 import { Dialog, DialogContent, DialogHeader, DialogTitle, Badge, renderIcon, DataTableColumnHeader, TableCornerResetCell, TableCornerResetHeader, DATA_TABLE_STYLES } from "@/shared/ui";
 import { getProductWipStats, ProductWipStats, type ProductWipRemainder, type ProductWipTask } from "@/shared/api/productionPlans";
 import { getErrorMessage } from "@/shared/api/client";
-import { formatDimensionsLabel } from "@/shared/api/stock";
+import { formatDimensionsLabel, formatCompletedOperationsLabel } from "@/shared/api/stock";
 import { errorLabels } from "@/shared/lib/generated-labels";
 import { fmtQty } from "@/shared/lib/quantityFormat";
 import { Loader2, Layers, Package, ClipboardList, AlertCircle } from "lucide-react";
@@ -90,8 +90,8 @@ function RemainderRow({ rem, withResetCell = false }: { rem: ProductWipRemainder
           <div>
             <div className="font-medium text-xs">{rem.spg_name}</div>
             <div className="flex flex-wrap items-center gap-1 mt-0.5">
-              {rem.stages_with_icons?.length ? (
-                rem.stages_with_icons.map((s, idx) => (
+              {rem.completed_stages?.length ? (
+                rem.completed_stages.map((s, idx) => (
                   <span key={idx} className="flex items-center gap-1">
                     {idx > 0 && <span className="text-muted-foreground/40 text-[10px]">›</span>}
                     <span
@@ -111,7 +111,9 @@ function RemainderRow({ rem, withResetCell = false }: { rem: ProductWipRemainder
                   </span>
                 ))
               ) : (
-                <span className="text-[10px] text-muted-foreground">{rem.completed_ops}</span>
+                <span className="text-[10px] text-muted-foreground">
+                  {formatCompletedOperationsLabel(rem.completed_operations, rem.completed_stages)}
+                </span>
               )}
             </div>
           </div>

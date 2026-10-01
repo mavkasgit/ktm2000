@@ -48,10 +48,11 @@ from app.services.dimension_validation import (
 )
 from app.services.excel_import import parse_row_selection
 from app.services.import_column_resolver import detect_header_row, resolve_columns
-from app.services.material_operations import canonicalize_completed_operations
+from app.services.material_operations import (
+    canonicalize_completed_operations,
+    format_completed_operations_label,
+)
 from app.services.route_storage_classifier import is_production_section, is_terminal_section
-
-_OPERATIONS_COMMENT_RE = re.compile(r"операции:\s*([^|]+)", re.IGNORECASE)
 
 # Дефолтный column_mapping остатков — источник заголовков, псевдонимов и
 # позиций колонок (issue #15). Живёт в JSON-файле ``remainders_columns.json``,
@@ -68,16 +69,6 @@ def load_remainders_default_mapping() -> dict:
 
 
 _REMAINDERS_DEFAULT_MAPPING: dict = load_remainders_default_mapping()
-
-
-def parse_operations_from_comment(comment: str | None) -> list[str]:
-    """Извлекает названия операций из комментария транзакции импорта остатков."""
-    if not comment:
-        return []
-    match = _OPERATIONS_COMMENT_RE.search(comment)
-    if not match:
-        return []
-    return [part.strip() for part in re.split(r"[,;|]+", match.group(1).strip()) if part.strip()]
 
 
 # ─── Data classes ──────────────────────────────────────────────────────────────
@@ -1280,10 +1271,18 @@ def _preview_effective_section_id(
 
 
 def _preview_operations_label(item: RemainderItem) -> str:
-    if item.completed_stages:
-        return ", ".join(stage["operation_name"] for stage in item.completed_stages)
-    raw = (item.completed_operations_raw or "").strip()
-    return raw or "—"
+    """Подпись оси операций в предпросмотре — общее правило, а не «—» (#242).
+
+    Значение колонки обязано совпадать с тем, что печатает клиент
+    (``formatCompletedOperationsLabel``), иначе выбор значения из списка
+    фильтра искал бы текста, которого в ячейке нет, и молча вернул бы ноль
+    строк. Ось даёт ``_row_completed_operations`` — ровно то, что уедет в
+    импорт: пустая колонка пишет в баланс ``NULL`` (ADR-0055 п.6), поэтому и
+    подпись её — «не зафиксировано»; имена берутся из разрешённых этапов.
+    """
+    return format_completed_operations_label(
+        _row_completed_operations(item), item.completed_stages
+    )
 
 
 def _preview_quality_label(

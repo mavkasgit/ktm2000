@@ -23,14 +23,16 @@ const remainder = (name: string, quantity: number): ProductWipRemainder => ({
   spg_id: 1,
   spg_code: "SPG-1",
   spg_name: name,
-  completed_ops: "Сверловка",
+  // Ось операций в этих тестах не участвует: фильтр сводки работает по ГХП и
+  // остатку. Состояние «не зафиксировано» (ADR-0055) — самое частое.
+  completed_operations: null,
   spg_icon: null,
   spg_icon_color: null,
   dimensions: null,
   dimensions_label: "—",
   quantity,
   max_completed_seq: 0,
-  stages_with_icons: [],
+  completed_stages: [],
 });
 
 const rows = [remainder("ГХП А", 10), remainder("ГХП Б", 4), remainder("ГХП А", 7)];

@@ -47,6 +47,7 @@ import {
   getRemainderImportOperations,
   formatQualityStateLabel,
   formatDimensionsLabel,
+  formatCompletedOperationsLabel,
   IMPORT_QUALITY_OPTIONS,
   normalizeImportQualityState,
   type QualityState,
@@ -111,12 +112,24 @@ function getEffectiveQualityState(
   return normalizeImportQualityState(item.quality_state);
 }
 
-function getImportItemOperationsLabel(item: RemainderImportItem): string {
-  if (item.completed_stages?.length > 0) {
-    return item.completed_stages.map((stage) => stage.operation_name).join(", ");
-  }
-  const raw = item.completed_operations_raw?.trim();
-  return raw || "—";
+/**
+ * Подпись оси операций строки предпросмотра — единое правило подписи (#242,
+ * ADR-0055 п.5), а не запасной «—».
+ *
+ * Превью не отдаёт ось отдельным полем (в ответе `completed_operations_raw` и
+ * разрешённые `completed_stages`), поэтому правило работает по названиям
+ * этапов: `undefined` — это «ответ без `completed_operations`», ветка,
+ * оставленная для таких ответов. Пустая колонка даёт «не зафиксировано» —
+ * ровно то, что уедет в импорт: пустой признак пишется в баланс `NULL`
+ * (ADR-0055 п.6), и «без операций» (`[]`) в предпросмотре не встречается.
+ *
+ * Значение обязано совпадать с серверной подписью колонки
+ * (`_preview_operations_label` в `stock/import_service.py`): иначе выбор из
+ * списка фильтра искал бы текста, которого нет в ячейке, и молча вернул ноль
+ * строк.
+ */
+export function getImportItemOperationsLabel(item: RemainderImportItem): string {
+  return formatCompletedOperationsLabel(undefined, item.completed_stages);
 }
 
 function getImportItemQualityLabel(
@@ -1077,7 +1090,9 @@ export function ImportRemaindersDialog({
                                     size="sm"
                                   />
                                 ) : (
-                                  <span className="text-muted-foreground">—</span>
+                                  <span className="text-xs text-muted-foreground">
+                                    {getImportItemOperationsLabel(item)}
+                                  </span>
                                 )}
                               </td>
                               <td

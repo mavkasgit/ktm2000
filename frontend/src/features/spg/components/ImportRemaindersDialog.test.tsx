@@ -6,7 +6,7 @@ import { createRoot, type Root } from "react-dom/client";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 
 import type { Section } from "@/shared/api/sections";
-import type { ImportOperationStep } from "@/shared/api/stock";
+import type { ImportOperationStep, RemainderImportItem } from "@/shared/api/stock";
 
 // Мокаем API-слой: диалог обязан брать участки и операции из справочников,
 // а не из литералов в коде.
@@ -22,7 +22,7 @@ vi.mock("@/shared/api/stock", async (importOriginal) => ({
 
 import { listSections } from "@/shared/api/sections";
 import { getRemainderImportOperations } from "@/shared/api/stock";
-import { ImportRemaindersDialog } from "./ImportRemaindersDialog";
+import { ImportRemaindersDialog, getImportItemOperationsLabel } from "./ImportRemaindersDialog";
 
 // Без этого флага React 18 сыплет предупреждения «not configured to support act(...)»
 (globalThis as Record<string, unknown>).IS_REACT_ACT_ENVIRONMENT = true;
@@ -132,5 +132,58 @@ describe("ImportRemaindersDialog", () => {
     } finally {
       cleanup();
     }
+  });
+});
+
+const makeImportItem = (overrides: Partial<RemainderImportItem>): RemainderImportItem => ({
+  source_row_number: 2,
+  sku: "OPS-1",
+  product_id: null,
+  product_name: null,
+  quantity: 10,
+  comment: null,
+  status: "valid",
+  errors: [],
+  matched_sku: null,
+  warnings: [],
+  raw_values: [],
+  completed_operations_raw: null,
+  completed_stages: [],
+  target_section_name: null,
+  target_section_id: null,
+  quality_state_raw: null,
+  quality_state: "good",
+  length_raw: null,
+  dimensions: null,
+  dimensions_label: "—",
+  ...overrides,
+});
+
+// Подпись ячейки «Операции» и подпись в списке фильтра колонки — одно и то же
+// правило (#242): выбор значения обязан находить строки, которые видит глаз.
+describe("подпись «Операции» в предпросмотре импорта", () => {
+  it("пустая колонка подписывается «не зафиксировано», а не «—»", () => {
+    expect(getImportItemOperationsLabel(makeImportItem({}))).toBe("не зафиксировано");
+  });
+
+  it("печатает имена этапов, а не сырой текст колонки", () => {
+    const item = makeImportItem({
+      completed_operations_raw: "СЫРОЙ ТЕКСТ ИЗ EXCEL",
+      completed_stages: [
+        makeOperation({ sequence: 1, operation_code: "DOS", operation_name: "Дробеструй" }),
+        makeOperation({ sequence: 2, operation_code: "BLK", operation_name: "Чёрный" }),
+      ],
+    });
+    expect(getImportItemOperationsLabel(item)).toBe("Дробеструй, Чёрный");
+  });
+
+  it("неразрешённое значение колонки — «не зафиксировано», а не его текст", () => {
+    // Сцена не разрешилась в справочник → в баланс уйдёт NULL (ADR-0055 п.6),
+    // поэтому и подпись пустая: сырой текст в ячейку не попадает.
+    const item = makeImportItem({
+      completed_operations_raw: "Что-то неизвестное",
+      completed_stages: [],
+    });
+    expect(getImportItemOperationsLabel(item)).toBe("не зафиксировано");
   });
 });
