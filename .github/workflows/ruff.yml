@@ -1,0 +1,39 @@
+name: Ruff
+
+# ruff report-only на весь backend. Решения грилла #245: Q5=2 (скоуп backend),
+# Q15=а (отдельный workflow, report-only).
+# continue-on-error: замечания видны в логе и в PR-аннотациях, но merge не
+# блокируют (ruff не входит в required checks). --fix не используется —
+# линтер ничего не меняет, только показывает. Версия закреплена, чтобы отчёт
+# не плыл при обновлениях.
+on:
+  push:
+    branches:
+      - main
+      - master
+  pull_request:
+    branches:
+      - main
+      - master
+  workflow_dispatch:
+
+jobs:
+  ruff:
+    name: ruff
+    runs-on: ubuntu-latest
+    continue-on-error: true
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Install ruff (pinned)
+        run: pip install ruff==0.16.9
+
+      - name: Ruff check backend (report-only)
+        run: ruff check backend

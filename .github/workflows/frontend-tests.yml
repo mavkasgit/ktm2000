@@ -1,0 +1,47 @@
+name: Frontend tests
+
+# tsc + vitest с покрытием на push/PR. Решения грилла #245: Q14=1 (набор в CI),
+# Q4=1 (покрытие меряем), Q22 (typecheck отдельным шагом, vite build не
+# дублируем), Q13 (без порога: первое число frontend-покрытия ещё не снято,
+# гейт — отдельным решением позже).
+# Имя джоба `frontend tests` — оно же имя required check (настройка #254).
+# paths-фильтров нет намеренно: required check не должен висеть, не запустившись.
+on:
+  push:
+    branches:
+      - main
+      - master
+  pull_request:
+    branches:
+      - main
+      - master
+  workflow_dispatch:
+
+jobs:
+  frontend-tests:
+    name: frontend tests
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    defaults:
+      run:
+        working-directory: frontend
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+          cache: npm
+          cache-dependency-path: frontend/package-lock.json
+
+      - name: Install frontend dependencies
+        run: npm ci
+
+      - name: Typecheck (tsc -b)
+        run: npx tsc -b
+
+      - name: Vitest with coverage (report-only, no threshold yet)
+        run: npm test -- --coverage

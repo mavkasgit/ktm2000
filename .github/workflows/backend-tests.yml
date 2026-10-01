@@ -1,16 +1,33 @@
-name: Backend tests (manual)
+name: Backend tests
 
-# Ручной запуск набора backend-тестов на Linux.
+# Полный pytest-набор backend с coverage-гейтом на push/PR.
+# Решения грилла #245: Q1=2 (блокирует PR), Q13=а (гейт backend на 73%),
+# Q21 (coverage==7.16.2 отдельным pip install, requirements/Docker не трогаем),
+# Q23=а (один джоб вместо двух).
 #
-# Почему только `workflow_dispatch`: включение прогона в push/PR — решение про
-# минуты CI и политику, а не техническая мелочь (см. `docs/night/BACKLOG.md`,
-# B-0001). Команды этого workflow проверены локально: тот же набор прогнан в
-# контейнере `python:3.12-slim` против сервиса того же образа Postgres —
-# 1951 passed, 0 failed, 43 warnings (логи ночной сессии, `logs/linux-run.log`).
-# Платформенных падений на Linux нет — набор не зависит от Windows.
+# Прогон серийный, без xdist: под -n воркеры остаются вне замера coverage
+# (controller меряет только главный процесс) и гейт упал бы на ровном месте.
+# -p no:pytest-testmon — testmon не должен пропускать тесты в CI; блокируется
+# по имени entry point (pytest-testmon), а не по имени модуля testmon.
+# Пин 7.16.2 — на нём снят бейзлайн 73% (docs/night/BASELINE.md). Если цифра
+# в CI разойдётся с локальной — сначала разобраться почему, порог не подгонять.
+# Гейт: coverage сравнивает round(total, 0) < fail_under (precision=0 — дефолт,
+# --precision не задан), поэтому реально проходит любой итог >72.5% (72.6
+# округляется вверх до 73); ровно 72.5 падает — round к чётному даёт 72.
 #
-# Пока прогон не включён в обычный CI, красный набор там никого не блокирует.
+# Оговорка Q23: падение serial-прогона на локально-зелёном тесте — сначала
+# проверить зависимость от порядка/общего состояния, и только потом чинить тест.
+# Имя джоба `backend tests` — оно же имя required check (настройка #254):
+# при смене имени обновить branch protection.
 on:
+  push:
+    branches:
+      - main
+      - master
+  pull_request:
+    branches:
+      - main
+      - master
   workflow_dispatch:
 
 jobs:
@@ -51,24 +68,30 @@ jobs:
           cache-dependency-path: backend/requirements.txt
 
       - name: Install backend dependencies
-        run: pip install -r backend/requirements.txt
+        run: |
+          pip install -r backend/requirements.txt
+          pip install coverage==7.16.2
 
       # run-DB создаётся и удаляется тем же скриптом, что и на dev-машине:
       # изоляция прогона остаётся той же, без отдельной CI-обвязки.
-      - name: Run backend test suite
+      - name: Run backend test suite with coverage
         run: |
           RUN_ID=$(python -c "import uuid; print(uuid.uuid4().hex[:12])")
           DB_NAME="ktm2000_test_${RUN_ID}"
-          python scripts/test-db.py create "$DB_NAME"
-          trap 'python scripts/test-db.py drop "$DB_NAME" >/dev/null 2>&1 || true' EXIT
+          python "$GITHUB_WORKSPACE/scripts/test-db.py" create "$DB_NAME"
+          trap 'python "$GITHUB_WORKSPACE/scripts/test-db.py" drop "$DB_NAME" >/dev/null 2>&1 || true' EXIT
           cd backend
           TEST_RUN_ID="$RUN_ID" \
           TEST_DB_NAME="$DB_NAME" \
           TEST_DATABASE_URL="postgresql+asyncpg://ktm2000_user:ktm2000_pass_test@localhost:5212/${DB_NAME}" \
-          python -m pytest -q -n 4 --dist loadfile
+          python -m coverage run --source=app -m pytest -q -p no:xdist -p no:pytest-testmon
+
+      - name: Coverage gate (>= 73%)
+        working-directory: backend
+        run: python -m coverage report --fail-under=73
 
       # Report-only: скрипт по устройству возвращает 0 (см. `--strict` для
-      # будущего включения в блокирующий CI). Линтера в репозитории нет, так что
-      # это единственное место, где отчёт по мёртвым импортам виден автоматически.
+      # будущего включения в блокирующий CI). Рядом живёт ruff.yml — он тоже
+      # report-only, см. решения #245 (Q5=2, Q15=а).
       - name: Test hygiene report (report-only)
         run: python scripts/check-test-imports.py
