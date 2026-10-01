@@ -1,5 +1,5 @@
 import { useEffect, useState, useMemo } from "react";
-import { useMutation, useQueryClient } from "@tanstack/react-query";
+import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { Loader2, Search } from "lucide-react";
 
 import {
@@ -19,9 +19,17 @@ import { listSections } from "@/shared/api/sections";
 import type { Section } from "@/shared/api/sections";
 import { listProducts } from "@/shared/api/products";
 import type { Product } from "@/shared/api/products";
-import { postStockAdjustment } from "@/shared/api/stock";
-import type { QualityState } from "@/shared/api/stock";
+import {
+  formatCompletedOperationsLabel,
+  formatDimensionsLabel,
+  getStockBalances,
+  OPERATIONS_NOT_RECORDED_LABEL,
+  postStockAdjustment,
+} from "@/shared/api/stock";
+import type { QualityState, StockBalanceEntry } from "@/shared/api/stock";
+import { queryKeys } from "@/shared/api/queryKeys";
 import { invalidateAfter } from "@/shared/api/cacheInvalidation";
+import { fmtQty } from "@/shared/lib/quantityFormat";
 
 interface StockAdjustmentDialogProps {
   open: boolean;
@@ -43,6 +51,12 @@ const QUALITY_OPTIONS: { value: QualityState; label: string }[] = [
   { value: "REWORK", label: "Переделка" },
 ];
 
+/** Пункт выбора группы остатка: подпись слева, количество справа. */
+const groupRadioClass = (active: boolean): string =>
+  `w-full flex items-center justify-between gap-2 px-3 py-1.5 text-sm text-left hover:bg-accent${
+    active ? " bg-accent font-medium" : ""
+  }`;
+
 export function StockAdjustmentDialog({ open, onOpenChange }: StockAdjustmentDialogProps) {
   const queryClient = useQueryClient();
 
@@ -53,6 +67,7 @@ export function StockAdjustmentDialog({ open, onOpenChange }: StockAdjustmentDia
   const [selectedSectionId, setSelectedSectionId] = useState<number | null>(null);
   const [operationType, setOperationType] = useState<OperationType>("manual_in");
   const [qualityState, setQualityState] = useState<QualityState>("GOOD");
+  const [selectedGroupId, setSelectedGroupId] = useState<number | null>(null);
   const [quantity, setQuantity] = useState("");
   const [lengthMeters, setLengthMeters] = useState("");
   const [comment, setComment] = useState("");
@@ -72,6 +87,68 @@ export function StockAdjustmentDialog({ open, onOpenChange }: StockAdjustmentDia
       setError(null);
     }
   }, [open]);
+
+  // Выбор группы привязан к осям ключа остатка: смена артикула, участка или
+  // качества делает прежнюю строку чужой (ADR-0055).
+  useEffect(() => {
+    setSelectedGroupId(null);
+  }, [selectedProductId, selectedSectionId, qualityState]);
+
+  const isOut = operationType === "manual_out" || operationType === "adjustment_out";
+
+  // Группы артикула на выбранной локации — существующий эндпоинт балансов
+  // (/stock/balance): он отдаёт строки по полному ключу остатка, включая
+  // completed_operations + completed_stages + quantity. Фильтр по качеству —
+  // не косметика: списание ищет строку с quality_state команды, и группы
+  // другого качества в списке гарантированно недоступны.
+  const groupQueryParams = useMemo(() => {
+    if (selectedProductId === null || selectedSectionId === null) return null;
+    return {
+      product_id: selectedProductId,
+      location_id: selectedSectionId,
+      quality_state: qualityState,
+      limit: 500,
+    };
+  }, [selectedProductId, selectedSectionId, qualityState]);
+
+  // Фабрика ключей типизирует только поля, которые клиент шлёт в query string,
+  // — productId/qualityState в ней не объявлены. Объект собирается в
+  // переменную (excess property check действует только на литерал), чтобы
+  // выбор артикула/качества не схлопывался в один кэш-ключ и диалог не
+  // показывал группы чужого артикула, пока летит рефетч.
+  const groupQueryKeyParams = useMemo(() => {
+    if (groupQueryParams === null) return undefined;
+    return {
+      locationId: groupQueryParams.location_id,
+      productId: groupQueryParams.product_id,
+      qualityState: groupQueryParams.quality_state,
+      limit: groupQueryParams.limit,
+    };
+  }, [groupQueryParams]);
+
+  const {
+    data: groupsData,
+    isPending: groupsPending,
+    isError: groupsFailed,
+  } = useQuery({
+    queryKey: queryKeys.stock.balances(groupQueryKeyParams),
+    queryFn: () => {
+      if (groupQueryParams === null) {
+        throw new Error("группы остатка запрашиваются после выбора артикула и участка");
+      }
+      return getStockBalances(groupQueryParams);
+    },
+    enabled: groupQueryParams !== null,
+  });
+
+  const groups = useMemo(
+    () => groupsData?.balances ?? [],
+    [groupsData],
+  );
+  const selectedGroup = useMemo(
+    () => groups.find((row) => row.id === selectedGroupId) ?? null,
+    [groups, selectedGroupId],
+  );
 
   const filteredProducts = useMemo(() => {
     if (!productSearch.trim()) return products.slice(0, 30);
@@ -93,16 +170,62 @@ export function StockAdjustmentDialog({ open, onOpenChange }: StockAdjustmentDia
     return { length_mm: Math.round(meters * 1000) };
   };
 
+  // «Нет габарита» — это и null из ответа, и пустой объект: ledger хранит
+  // каноническую форму, где {} схлопывается в null.
+  const normalizeDims = (
+    dims: Record<string, unknown> | null | undefined,
+  ): Record<string, unknown> | null =>
+    dims && Object.keys(dims).length > 0 ? dims : null;
+
+  const sameDims = (
+    a: Record<string, unknown>,
+    b: Record<string, unknown>,
+  ): boolean =>
+    JSON.stringify(Object.fromEntries(Object.entries(a).sort())) ===
+    JSON.stringify(Object.fromEntries(Object.entries(b).sort()));
+
+  /**
+   * Габарит проводки при выбранной группе: группа — часть ключа остатка,
+   * поэтому молча создать «та же операция, другой размер» нельзя.
+   * Без введённой длины берётся размер самой группы (иначе списание из
+   * размерной группы не нашло бы строку), с чужой длиной — явный отказ.
+   */
+  const resolveDimensions = (
+    typedDims: Record<string, unknown> | undefined,
+  ): { dims: Record<string, unknown> | undefined } | { error: string } => {
+    if (!selectedGroup) return { dims: typedDims };
+    const rowDims = normalizeDims(selectedGroup.dimensions);
+    const typed = normalizeDims(typedDims);
+    if (typed === null) return { dims: rowDims ?? undefined };
+    if (rowDims === null) {
+      return {
+        error: "Выбранная группа без размера — уберите длину или выберите другую группу",
+      };
+    }
+    if (!sameDims(typed, rowDims)) {
+      return {
+        error: `Длина ${formatDimensionsLabel(typed)} не совпадает с размером выбранной группы (${formatDimensionsLabel(rowDims)})`,
+      };
+    }
+    return { dims: typedDims };
+  };
+
   const saveMutation = useMutation({
     mutationFn: () => {
-      const dims = parseLengthToDimensions();
+      const parsed = parseLengthToDimensions();
+      const resolved = resolveDimensions(parsed === "invalid" ? undefined : parsed);
       return postStockAdjustment({
         product_id: selectedProductId as number,
         location_id: selectedSectionId as number,
         quantity: parseFloat(quantity),
         reason: operationType,
         quality_state: qualityState,
-        dimensions: dims === "invalid" ? undefined : dims,
+        dimensions: "dims" in resolved ? resolved.dims : undefined,
+        // Группа, из которой списываем/в которую кладём (ADR-0055). Без
+        // выбора — null, то есть NULL-группа «не зафиксировано».
+        completed_operations: selectedGroup
+          ? selectedGroup.completed_operations ?? null
+          : null,
         comment: comment || undefined,
       });
     },
@@ -133,8 +256,25 @@ export function StockAdjustmentDialog({ open, onOpenChange }: StockAdjustmentDia
       setError("Количество должно быть положительным числом");
       return;
     }
-    if (parseLengthToDimensions() === "invalid") {
+    const parsedDims = parseLengthToDimensions();
+    if (parsedDims === "invalid") {
       setError("Длина должна быть положительным числом в метрах (например 2,7)");
+      return;
+    }
+    // Списание строго из выбранной группы (ADR-0055 п.3): без выбора
+    // расход пошёл бы в NULL-группу, а она может быть пустой при полном
+    // участке. Для прихода выбор опционален.
+    if (isOut && !selectedGroup) {
+      setError(
+        groups.length > 0
+          ? "Для списания выберите группу операций"
+          : "На участке нет строк остатка этого артикула — списывать нечего",
+      );
+      return;
+    }
+    const resolved = resolveDimensions(parsedDims);
+    if ("error" in resolved) {
+      setError(resolved.error);
       return;
     }
     setError(null);
@@ -260,6 +400,78 @@ export function StockAdjustmentDialog({ open, onOpenChange }: StockAdjustmentDia
               </SelectContent>
             </Select>
           </div>
+
+          {/* Группа операций (ADR-0055 п.3, п.12): из какой группы списывать /
+              в какую класть. Список — строки баланса выбранного артикула на
+              выбранной локации: у каждой видно подпись признака и количество. */}
+          {groupQueryParams !== null && (
+            <div className="space-y-1">
+              <label className="text-sm font-medium">
+                Группа операций{isOut ? "" : " (необязательно)"}
+              </label>
+              <p className="text-xs text-muted-foreground">
+                {isOut
+                  ? "Списание идёт строго из выбранной группы."
+                  : `Без выбора материал ляжет в группу «${OPERATIONS_NOT_RECORDED_LABEL}».`}
+              </p>
+              {groupsPending ? (
+                <div className="flex items-center gap-2 text-xs text-muted-foreground border rounded-md p-2">
+                  <Loader2 className="h-3 w-3 animate-spin" />
+                  Загрузка групп остатка…
+                </div>
+              ) : groupsFailed ? (
+                <div className="text-xs text-destructive border rounded-md p-2">
+                  Не удалось загрузить группы остатка
+                </div>
+              ) : groups.length === 0 ? (
+                <div className="text-xs text-muted-foreground border rounded-md p-2">
+                  На участке нет строк остатка этого артикула
+                </div>
+              ) : (
+                <div
+                  role="radiogroup"
+                  aria-label="Группа операций"
+                  className="max-h-[170px] overflow-y-auto border rounded-md divide-y"
+                >
+                  {!isOut && (
+                    <button
+                      type="button"
+                      role="radio"
+                      aria-checked={selectedGroup === null}
+                      onClick={() => setSelectedGroupId(null)}
+                      className={groupRadioClass(selectedGroup === null)}
+                    >
+                      <span className="truncate">{OPERATIONS_NOT_RECORDED_LABEL}</span>
+                    </button>
+                  )}
+                  {groups.map((row) => {
+                    const dims = normalizeDims(row.dimensions);
+                    return (
+                      <button
+                        key={row.id}
+                        type="button"
+                        role="radio"
+                        aria-checked={selectedGroupId === row.id}
+                        onClick={() => setSelectedGroupId(row.id)}
+                        className={groupRadioClass(selectedGroupId === row.id)}
+                      >
+                        <span className="truncate">
+                          {formatCompletedOperationsLabel(
+                            row.completed_operations,
+                            row.completed_stages,
+                          )}
+                          {dims ? ` · ${formatDimensionsLabel(row.dimensions)}` : ""}
+                        </span>
+                        <span className="whitespace-nowrap font-medium">
+                          {` ${fmtQty(row.balance_qty)} шт`}
+                        </span>
+                      </button>
+                    );
+                  })}
+                </div>
+              )}
+            </div>
+          )}
 
           {/* Quantity */}
           <div className="space-y-1">

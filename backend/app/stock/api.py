@@ -220,6 +220,14 @@ class StockAdjustmentIn(BaseModel):
     ``reason`` определяет направление движения:
     * ``adjustment_in`` / ``manual_in`` — приход на ``location_id`` (to_location)
     * ``adjustment_out`` / ``manual_out`` — расход с ``location_id`` (from_location)
+
+    ``completed_operations`` — признак пройденных операций (ADR-0055 п.3, п.12):
+    группа остатка, которую оператор двигает. Списание ищет строку с тем же
+    признаком, приход кладёт в него. ``None`` (поле не передано) — «состояние
+    не зафиксировано»: расход ищет NULL-группу, приход кладёт в NULL-группу.
+    Канонизация формы и проверка кодов по справочнику — тот же путь
+    ``StockCommandService._resolve_completed_operations``, что и у плановых
+    проводок: неизвестный код → 422 с ``unknown operation_code(s)``.
     """
     product_id: int
     location_id: int
@@ -229,6 +237,9 @@ class StockAdjustmentIn(BaseModel):
     # Габарит (ADR-0001), например {"length_mm": 2700}; некорректная
     # форма → 422 (канонизация в StockCommandService.record()).
     dimensions: dict | None = None
+    # Признак пройденных операций (ADR-0055): None — не зафиксировано,
+    # список (в т.ч. пустой) — состояние известно.
+    completed_operations: list[str] | None = None
     comment: str | None = None
 
 
@@ -841,6 +852,11 @@ async def create_adjustment(
     Создаёт ``StockTransaction`` через ``StockCommandService.record()``
     с автоматическим определением ``from_/to_location_id`` по направлению
     ``reason``.
+
+    Признак операций (ADR-0055 п.12) приходит из payload: для расхода он
+    указывает, из какой группы списывать (без него ищется NULL-группа), для
+    прихода — куда класть. Некорректный код или форма отклоняются тем же
+    путём валидации, что и у плановых проводок (422).
     """
     if payload.reason not in _ADJUSTMENT_REASONS:
         raise HTTPException(
@@ -870,6 +886,7 @@ async def create_adjustment(
         to_location_id=to_location_id,
         dimensions=payload.dimensions,
         quality_state=payload.quality_state,
+        completed_operations=payload.completed_operations,
         comment=payload.comment,
         created_by=user.id,
         created_by_user_name=user.full_name or user.username,

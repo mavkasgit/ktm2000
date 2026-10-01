@@ -284,6 +284,12 @@ export type StockAdjustmentPayload = {
   quality_state?: QualityState;
   /** Габарит движения, например {"length_mm": 2700}; null/отсутствие — безразмерные штуки. */
   dimensions?: Record<string, unknown> | null;
+  /**
+   * Группа остатка по признаку пройденных операций (ADR-0055 п.3, п.12):
+   * списание ищет строку с этим признаком, приход кладёт в него.
+   * `null`/отсутствие — «не зафиксировано»: NULL-группа.
+   */
+  completed_operations?: string[] | null;
   comment?: string;
 };
 
