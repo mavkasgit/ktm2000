@@ -160,7 +160,7 @@ def _verify_raw_token(token: str) -> dict:
             raise TypeError("not a dict")
         return payload
 
-    except Exception as exc:  # noqa: BLE001 — любая порча токена = stale
+    except Exception as exc:
         raise StalePlanToken("plan_token недействителен") from exc
 
 

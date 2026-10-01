@@ -237,7 +237,7 @@ class OidcAuthService:
                 user_agent=user_agent,
                 details={"reason": reason, "method": "oidc"},
             )
-        except Exception:  # noqa: BLE001 — audit must never break auth flow
+        except Exception:
             logger.warning("OIDC failed-login audit record failed", exc_info=True)
 
     # ─── user resolve / link ──────────────────────────────────────────────
@@ -389,7 +389,7 @@ class OidcAuthService:
                 await self.db.commit()
                 await self.db.refresh(user2)
                 return user2
-            except Exception as retry_exc:  # noqa: BLE001
+            except Exception as retry_exc:
                 await self.db.rollback()
                 logger.exception("OIDC JIT retry failed")
                 raise HTTPException(
@@ -535,7 +535,7 @@ class OidcAuthService:
             claims = await self.validate_logout_token(str(logout_token).strip())
         except HTTPException:
             raise
-        except Exception as exc:  # noqa: BLE001
+        except Exception as exc:
             raise HTTPException(
                 status_code=status.HTTP_400_BAD_REQUEST,
                 detail="invalid_logout_token",

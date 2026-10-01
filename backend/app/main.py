@@ -138,7 +138,7 @@ async def health_check() -> dict[str, str]:
         async with async_session() as session:
             await session.execute(text("SELECT 1"))
         return {"status": "ok", "db": "connected"}
-    except Exception:  # noqa: BLE001 — health-probe обязан не падать
+    except Exception:
         # Проба живости: любой сбой (БД, конфиг DSN, сеть) должен вернуть
         # тело, а не 500 — иначе контейнерный healthcheck не отличит
         # «нездоров» от «процесс мёртв». Широкий перехват — контракт endpoint'а,
