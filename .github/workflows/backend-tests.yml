@@ -66,3 +66,9 @@ jobs:
           TEST_DB_NAME="$DB_NAME" \
           TEST_DATABASE_URL="postgresql+asyncpg://ktm2000_user:ktm2000_pass_test@localhost:5212/${DB_NAME}" \
           python -m pytest -q -n 4 --dist loadfile
+
+      # Report-only: скрипт по устройству возвращает 0 (см. `--strict` для
+      # будущего включения в блокирующий CI). Линтера в репозитории нет, так что
+      # это единственное место, где отчёт по мёртвым импортам виден автоматически.
+      - name: Test hygiene report (report-only)
+        run: python scripts/check-test-imports.py
