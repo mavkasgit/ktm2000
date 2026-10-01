@@ -2405,3 +2405,337 @@ async def test_migration_071_assigns_route_codes_and_drops_name_unique(tmp_path:
         async with admin_engine.connect() as conn:
             await conn.execute(text(f'DROP DATABASE IF EXISTS "{db_name}" WITH (FORCE)'))
         await admin_engine.dispose()
+
+
+# ─── 074: completed_operations в ключе stock_balances (ADR-0055) ────────────
+
+_MIG074_PREV = "073_stock_import_rows_tx_set_null"
+_MIG074 = "074_stock_balance_completed_operations"
+# Габарит фикстуры: SQL-литерал с кавычками готов сразу, чтобы не плодить
+# f-строки со вложенными фигурными скобками JSON.
+_MIG074_DIMS = "'" + json.dumps({"length_mm": 2700}) + "'"
+
+
+async def _mig074_make_db() -> tuple[str, str]:
+    """Пустая база под прогон миграции 074: (имя, DSN).
+
+    DSN берётся из ``TEST_DATABASE_URL``, который выставляет лаунчер, иначе —
+    тестовый compose-контракт (:5441): блок обязан подниматься на той же
+    базе, что и остальные миграционные тесты. Имя — ``ktm_mig_`` + 10 hex,
+    как у прочих баз миграционных тестов.
+    """
+    base = os.getenv(
+        "TEST_DATABASE_URL",
+        "postgresql+asyncpg://ktm2000_user:ktm2000_pass_test@localhost:5441/ktm2000_test",
+    ).rsplit("/", 1)[0]
+    db_name = f"ktm_mig_{os.urandom(5).hex()}"
+    admin_engine = create_async_engine(base + "/postgres", isolation_level="AUTOCOMMIT")
+    async with admin_engine.connect() as conn:
+        await conn.execute(text(f'CREATE DATABASE "{db_name}"'))
+    await admin_engine.dispose()
+    return db_name, base + f"/{db_name}"
+
+
+async def _mig074_drop_db(db_name: str) -> None:
+    """Удаляет базу прогона: ``WITH FORCE`` снимает зависшие коннекты."""
+    base = os.getenv(
+        "TEST_DATABASE_URL",
+        "postgresql+asyncpg://ktm2000_user:ktm2000_pass_test@localhost:5441/ktm2000_test",
+    ).rsplit("/", 1)[0]
+    admin_engine = create_async_engine(base + "/postgres", isolation_level="AUTOCOMMIT")
+    async with admin_engine.connect() as conn:
+        await conn.execute(text(f'DROP DATABASE IF EXISTS "{db_name}" WITH (FORCE)'))
+    await admin_engine.dispose()
+
+
+async def _mig074_tx(
+    conn, ids: dict[str, int], code: str, qty: str, ops: list | None,
+    *, dims: str = "NULL",
+) -> None:
+    """Проводка ledger на секцию фикстуры (признак есть уже на 073)."""
+    ops_sql = "NULL" if ops is None else "'" + json.dumps(ops) + "'"
+    await conn.execute(text(
+        "INSERT INTO stock_transactions "
+        "(product_id, to_location_id, quantity, reason, dimensions, "
+        " completed_operations, created_by) "
+        f"VALUES ({ids['product_id']}, {ids[code]}, {qty}, 'manual_in', "
+        f"{dims}::jsonb, {ops_sql}::jsonb, 1)"
+    ))
+
+
+async def _mig074_bal(
+    conn, ids: dict[str, int], code: str, qty: str, *, dims: str = "NULL"
+) -> None:
+    """Строка баланса в четырёхосевом виде — колонки ops ещё нет (073)."""
+    await conn.execute(text(
+        "INSERT INTO stock_balances "
+        "(product_id, location_id, quality_state, balance_qty, dimensions) "
+        f"VALUES ({ids['product_id']}, {ids[code]}, 'good', {qty}, {dims}::jsonb)"
+    ))
+
+
+async def _mig074_bal_split(
+    conn, ids: dict[str, int], code: str, qty: str, ops: list | None,
+    *, dims: str = "NULL",
+) -> None:
+    """Строка баланса в пятиосевом виде — уже после 074."""
+    ops_sql = "NULL" if ops is None else "'" + json.dumps(ops) + "'"
+    await conn.execute(text(
+        "INSERT INTO stock_balances (product_id, location_id, quality_state, "
+        " balance_qty, dimensions, completed_operations) "
+        f"VALUES ({ids['product_id']}, {ids[code]}, 'good', {qty}, "
+        f"{dims}::jsonb, {ops_sql}::jsonb)"
+    ))
+
+
+async def _mig074_seed(conn) -> dict[str, int]:
+    """Фикстура под каждый случай бэкфилла, в состоянии ревизии 073.
+
+    Балансы ещё четырёхосевые, ledger уже несёт признак (миграция 062).
+    Количество в балансе равно сумме ledger: миграция переносит признак,
+    а не пересчитывает остатки.
+    """
+    product_id = (await conn.execute(text(
+        "INSERT INTO products (sku, name, type) "
+        "VALUES ('MIG074', 'MIG074', 'component') RETURNING id"
+    ))).scalar_one()
+
+    ids: dict[str, int] = {"product_id": product_id}
+    for code in (
+        "MIG074-A", "MIG074-B", "MIG074-C", "MIG074-D",
+        "MIG074-E", "MIG074-F", "MIG074-G", "MIG074-H",
+    ):
+        ids[code] = (await conn.execute(text(
+            f"INSERT INTO sections (code, name) VALUES ('{code}', '{code}') "
+            "RETURNING id"
+        ))).scalar_one()
+
+    # A — однозначная группа: в ledger только ["WINDOW"].
+    await _mig074_bal(conn, ids, "MIG074-A", "10")
+    await _mig074_tx(conn, ids, "MIG074-A", "4", ["WINDOW"])
+    await _mig074_tx(conn, ids, "MIG074-A", "6", ["WINDOW"])
+    # B — вторая однозначная группа, на своей секции.
+    await _mig074_bal(conn, ids, "MIG074-B", "30")
+    await _mig074_tx(conn, ids, "MIG074-B", "30", ["SHOT"])
+    # C — два разных признака на одном четырёхосевом ключе: вариантов два,
+    # признак не угадывается и остаётся NULL.
+    await _mig074_bal(conn, ids, "MIG074-C", "50")
+    await _mig074_tx(conn, ids, "MIG074-C", "20", [])
+    await _mig074_tx(conn, ids, "MIG074-C", "30", ["OP_X"])
+    # D — только NULL-проводки: вариантов один, значение NULL.
+    await _mig074_bal(conn, ids, "MIG074-D", "7")
+    await _mig074_tx(conn, ids, "MIG074-D", "7", None)
+    # E — баланс без единой проводки: переносить неоткуда.
+    await _mig074_bal(conn, ids, "MIG074-E", "5")
+    # F — отдельная ось габарита: признак переносится вместе с ней.
+    await _mig074_bal(conn, ids, "MIG074-F", "11", dims=_MIG074_DIMS)
+    await _mig074_tx(conn, ids, "MIG074-F", "11", ["DIMS_OP"], dims=_MIG074_DIMS)
+    return ids
+
+
+async def _mig074_unique_constraints(conn) -> list[str]:
+    return [row[0] for row in (await conn.execute(text(
+        "SELECT conname FROM pg_constraint "
+        "WHERE conrelid = 'stock_balances'::regclass AND contype = 'u' "
+        "ORDER BY conname"
+    ))).all()]
+
+
+async def _mig074_column_count(conn, table: str, column: str) -> int:
+    return (await conn.execute(text(
+        "SELECT count(*) FROM information_schema.columns "
+        "WHERE table_schema = 'public' AND table_name = :table "
+        "AND column_name = :column"
+    ), {"table": table, "column": column})).scalar_one()
+
+
+async def _mig074_rows(conn) -> list[tuple]:
+    """(секция, признак::text, количество, габарит::text) — только на 074+."""
+    rows = (await conn.execute(text(
+        "SELECT s.code, b.completed_operations::text, b.balance_qty, "
+        "       b.dimensions::text "
+        "FROM stock_balances b JOIN sections s ON s.id = b.location_id "
+        "WHERE s.code LIKE 'MIG074-%' ORDER BY s.code, b.id"
+    ))).all()
+    return [tuple(row) for row in rows]
+
+
+async def _mig074_rows_4key(conn) -> list[tuple]:
+    """То же без признака — работает и на 073, и после downgrade."""
+    rows = (await conn.execute(text(
+        "SELECT s.code, b.balance_qty, b.dimensions::text "
+        "FROM stock_balances b JOIN sections s ON s.id = b.location_id "
+        "WHERE s.code LIKE 'MIG074-%' ORDER BY s.code, b.id"
+    ))).all()
+    return [tuple(row) for row in rows]
+
+
+@pytest.mark.asyncio
+async def test_migration_074_splits_balance_by_completed_operations(
+    tmp_path: Path,
+):
+    """#243 (ADR-0055): признак «пройденные операции» входит в ключ остатка.
+
+    Три вещи:
+
+    * бэкфилл берёт признак из ledger и НЕ угадывает там, где вариантов
+      больше одного (или проводок вовсе нет) — строка остаётся с NULL;
+    * повторный прогон (``stamp`` назад + ``upgrade``) идемпотентен и на
+      уже расщеплённых данных: бэкфилл трогает только однозначные группы;
+    * downgrade сворачивает группы обратно в одну строку на
+      четырёхосевой ключ: сначала группы, погасшие в ноль, потом сумма на
+      представителя, потом удаление лишних — и возвращ прежний
+      уникальный индекс.
+    """
+    from decimal import Decimal
+
+    from sqlalchemy.exc import IntegrityError
+
+    db_name, target_url = await _mig074_make_db()
+
+    env = _alembic_env(target_url, tmp_path)
+    engine = create_async_engine(target_url)
+
+    def _run(*args: str) -> None:
+        result = subprocess.run(
+            ["alembic", *args],
+            cwd=BACKEND_DIR,
+            env=env,
+            capture_output=True,
+            text=True,
+            check=False,
+        )
+        assert result.returncode == 0, result.stderr or result.stdout
+
+    try:
+        _run("upgrade", _MIG074_PREV)
+        async with engine.begin() as conn:
+            ids = await _mig074_seed(conn)
+            # До миграции: ни колонки, ни нового ключа.
+            assert await _mig074_column_count(
+                conn, "stock_balances", "completed_operations"
+            ) == 0
+            assert await _mig074_column_count(
+                conn, "stock_import_rows", "completed_operations"
+            ) == 0
+            assert await _mig074_unique_constraints(conn) == [
+                "uq_stock_balances_product_location_quality_dims"
+            ]
+            pre_rows = await _mig074_rows_4key(conn)
+        assert len(pre_rows) == 6, f"шесть четырёхосевых строк: {pre_rows}"
+
+        _run("upgrade", _MIG074)
+        async with engine.connect() as conn:
+            post_rows = await _mig074_rows(conn)
+            constraints = await _mig074_unique_constraints(conn)
+            import_col = await _mig074_column_count(
+                conn, "stock_import_rows", "completed_operations"
+            )
+
+        assert len(post_rows) == 6
+        assert {code: value for code, value, _qty, _dims in post_rows} == {
+            "MIG074-A": '["WINDOW"]',
+            "MIG074-B": '["SHOT"]',
+            # Два варианта признака — признак не переносится.
+            "MIG074-C": None,
+            # Единственный вариант — NULL.
+            "MIG074-D": None,
+            # Проводок нет — переносить неоткуда.
+            "MIG074-E": None,
+            "MIG074-F": '["DIMS_OP"]',
+        }
+        assert constraints == [
+            "uq_stock_balances_product_location_quality_dims_ops"
+        ], "новый ключ обязателен: иначе две операции не разделят строку"
+        assert import_col == 1, "признак строки импорта добавляется тем же ходом"
+
+        # Новый ключ работает: вторая строка на тот же четырёхосевой ключ с
+        # другим признаком.
+        async with engine.begin() as conn:
+            await _mig074_bal_split(conn, ids, "MIG074-B", "3", None)
+        # ...а два NULL не задвоиваются (NULLS NOT DISTINCT): это один ключ.
+        with pytest.raises(IntegrityError):
+            async with engine.begin() as conn:
+                await _mig074_bal_split(conn, ids, "MIG074-B", "4", None)
+        async with engine.begin() as conn:
+            await conn.execute(text(
+                "DELETE FROM stock_balances "
+                "WHERE location_id = :loc AND completed_operations IS NULL"
+            ), {"loc": ids["MIG074-B"]})
+
+        # Идемпотентность на ещё не расщеплённых данных (конвенция 052).
+        async with engine.connect() as conn:
+            before_rerun = await _mig074_rows(conn)
+        _run("stamp", _MIG074_PREV)
+        _run("upgrade", _MIG074)
+        async with engine.connect() as conn:
+            assert await _mig074_rows(conn) == before_rerun
+            assert await _mig074_unique_constraints(conn) == [
+                "uq_stock_balances_product_location_quality_dims_ops"
+            ]
+
+        # Расщеплённое состояние: ledger получил вторую операцию — проекция
+        # вторую строку. Ещё одна группа, чьи ops-строки погасились в ноль:
+        # её представитель получил бы balance_qty = 0 и упал бы на
+        # ck_stock_balances_nonzero, поэтому DROP_ZERO обязан идти раньше
+        # переноса суммы.
+        async with engine.begin() as conn:
+            await _mig074_tx(conn, ids, "MIG074-A", "10", ["OTHER"])
+            await _mig074_bal_split(conn, ids, "MIG074-A", "10", ["OTHER"])
+            await _mig074_bal_split(conn, ids, "MIG074-G", "5", [])
+            await _mig074_bal_split(conn, ids, "MIG074-G", "-5", ["Z"])
+
+        # Идемпотентность на расщеплённых данных: бэкфилл трогает только
+        # однозначные группы и не схлопывает уже разъехавшиеся строки.
+        async with engine.connect() as conn:
+            split_rows = await _mig074_rows(conn)
+        _run("stamp", _MIG074_PREV)
+        _run("upgrade", _MIG074)
+        async with engine.connect() as conn:
+            assert await _mig074_rows(conn) == split_rows
+
+        _run("downgrade", _MIG074_PREV)
+        async with engine.connect() as conn:
+            rows4 = await _mig074_rows_4key(conn)
+            constraints = await _mig074_unique_constraints(conn)
+            bal_col = await _mig074_column_count(
+                conn, "stock_balances", "completed_operations"
+            )
+            import_col = await _mig074_column_count(
+                conn, "stock_import_rows", "completed_operations"
+            )
+            nonzero = (await conn.execute(text(
+                "SELECT count(*) FROM pg_constraint "
+                "WHERE conname = 'ck_stock_balances_nonzero'"
+            ))).scalar_one()
+
+        qty_by_code = {code: qty for code, qty, dims in rows4}
+        assert len(rows4) == 6, f"после сворачивания шесть строк: {rows4}"
+        assert qty_by_code == {
+            "MIG074-A": Decimal("20"),
+            "MIG074-B": Decimal("30"),
+            "MIG074-C": Decimal("50"),
+            "MIG074-D": Decimal("7"),
+            "MIG074-E": Decimal("5"),
+            "MIG074-F": Decimal("11"),
+        }, "суммы обеих ops-групп дошли до представителя"
+        assert "MIG074-G" not in qty_by_code, (
+            "группа, погасшая в ноль, удалена до переноса суммы"
+        )
+        dims_by_code = {code: dims for code, qty, dims in rows4}
+        assert dims_by_code["MIG074-F"] == '{"length_mm": 2700}'
+
+        assert constraints == [
+            "uq_stock_balances_product_location_quality_dims"
+        ], "прежняя уникальность обязана вернуться"
+        assert bal_col == 0, "ось операций убрана из баланса"
+        assert import_col == 0, "ось операций убрана из строк импорта"
+        assert nonzero == 1, "ck_stock_balances_nonzero жив на 073"
+
+        # Прежний четырёхосевой ключ снова запрещает дубль.
+        with pytest.raises(IntegrityError):
+            async with engine.begin() as conn:
+                await _mig074_bal(conn, ids, "MIG074-E", "3")
+    finally:
+        await engine.dispose()
+        await _mig074_drop_db(db_name)
