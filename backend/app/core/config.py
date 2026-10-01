@@ -4,7 +4,7 @@ from pathlib import Path
 import re
 
 from pydantic import model_validator
-from pydantic_settings import BaseSettings
+from pydantic_settings import BaseSettings, SettingsConfigDict
 
 from app.core.env_file import env_file_path
 
@@ -104,12 +104,12 @@ class Settings(BaseSettings):
         """
         resolved = {}
         # Collect all current string values for lookup.
-        for name in self.model_fields:
+        for name in type(self).model_fields:
             val = getattr(self, name, None)
             if isinstance(val, str):
                 resolved[name] = val
                 # Also expose under alias / env-name for robustness.
-        for name in self.model_fields:
+        for name in type(self).model_fields:
             raw = getattr(self, name, None)
             if not isinstance(raw, str):
                 continue
@@ -158,7 +158,11 @@ class Settings(BaseSettings):
             setattr(self, field, str(Path(root) / subdir))
         return self
 
-    model_config = {"env_file": _env_file, "env_file_encoding": "utf-8", "extra": "ignore"}
+    model_config = SettingsConfigDict(
+        env_file=_env_file,
+        env_file_encoding="utf-8",
+        extra="ignore",
+    )
 
 
 settings = Settings()
