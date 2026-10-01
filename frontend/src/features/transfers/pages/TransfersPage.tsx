@@ -696,7 +696,10 @@ export function TransfersPage() {
     queryFn: getSpgList,
   });
 
-  const activeSpgId = showAllSpgs ? null : (spgId ?? spgs?.find((s) => s.is_active)?.id ?? null);
+  // Молчаливого фолбэка на первую активную ГХП нет: под плейсхолдером
+  // «Выберите ГХП» уезжали данные чужого выбора. Пустой выбор так и остаётся
+  // пустым — запросы по нему не идут (ADR-0060 п.3).
+  const activeSpgId = showAllSpgs ? null : spgId;
 
   const allSectionIds = useMemo(() => {
     if (!showAllSpgs) return new Set<number>();
