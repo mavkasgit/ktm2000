@@ -82,6 +82,9 @@ class SectionOut(SectionBase):
     spg_id: int | None = None
     spg_links: list[SpgBriefOut] = []
     operations_count: int = 0
+    # Считается свойством модели по справочнику операций участка
+    # (`Section.has_packaging`), а не колонкой в БД.
+    has_packaging: bool = False
 
 
 class SectionsListOut(BaseModel):

@@ -1091,6 +1091,7 @@ export function SectionsTasksPage() {
                     mode={viewMode}
                     onModeChange={setViewMode}
                     onAction={openActionDialog}
+                    hasPackaging={selectedSection?.has_packaging}
                     showStatusFilters
                     bulkMode={bulkMode || creatingDailyPlan}
                     onBulkModeChange={toggleBulkMode}
@@ -1187,6 +1188,7 @@ export function SectionsTasksPage() {
                     showCompletedStatus={selectedPlanIds.size > 0}
                     onAction={openActionDialog}
                     readOnly={!creatingDailyPlan}
+                    hasPackaging={selectedSection?.has_packaging}
                     profile={profile}
                     bulkMode={creatingDailyPlan ? bulkMode || creatingDailyPlan : false}
                     onBulkModeChange={toggleBulkMode}
@@ -1270,6 +1272,7 @@ export function SectionsTasksPage() {
         sectionId={sectionId ?? 0}
         sectionName={selectedSection?.name || "—"}
         sectionCode={selectedSection?.code || null}
+        hasPackaging={selectedSection?.has_packaging}
         tasks={displayedTasks}
         availableOperations={board?.available_operations || []}
       />

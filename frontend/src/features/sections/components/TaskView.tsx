@@ -87,9 +87,18 @@ export type TaskViewField = {
  * Поля задания в порядке колонок доски. Строка разворачивает список в ячейки,
  * карточка — в подписи со значениями, поэтому новое поле добавляется здесь
  * одно, а не в двух раскладках.
+ *
+ * `hasPackaging` — есть ли у участка упаковочные операции (`Section.has_packaging`).
+ * Поле «Упаковка» живёт здесь наравне с колонкой доски (`requiresPackaging` в
+ * `boardColumns.ts`) и прячется тем же признаком: шапка без ячейки разъехалась
+ * бы с телом строки. Флага нет (`undefined`) — поле остаётся: ошибка
+ * справочника не должна прятать данные.
  */
-export function buildTaskViewFields(task: SectionBoardTask): TaskViewField[] {
-  return [
+export function buildTaskViewFields(
+  task: SectionBoardTask,
+  hasPackaging?: boolean,
+): TaskViewField[] {
+  const fields: TaskViewField[] = [
     {
       key: "dimensions",
       label: "Размер",
@@ -100,9 +109,9 @@ export function buildTaskViewFields(task: SectionBoardTask): TaskViewField[] {
       key: "operation",
       label: "Операция",
       // Трансформирующий этап (ADR-0002, пила) несёт в ячейке размеры —
-      // вход и выходы раскроя (ADR-0058). Нетрансформирующая строка несёт
-      // операции участка списком: на анодировании это цвет, и он и есть
-      // операция участка, а упаковку несёт своя колонка.
+      // вход и выходы раскроя (ADR-0058). Нетрансформирующая строка оставляет
+      // операции участка списком: на анодировании это цвет, он и есть операция
+      // участка, а упаковку несёт своя колонка.
       node: task.transforms_dimensions ? (
         <span className="text-xs">
           <CutLayoutCell
@@ -126,4 +135,7 @@ export function buildTaskViewFields(task: SectionBoardTask): TaskViewField[] {
     { key: "transferred", label: "Передано", node: fmtQty(task.cache.transferred_quantity) },
     { key: "remaining", label: "Остаток", node: fmtQty(task.cache.remaining_quantity) },
   ];
+  return hasPackaging === false
+    ? fields.filter((field) => field.key !== "packaging")
+    : fields;
 }

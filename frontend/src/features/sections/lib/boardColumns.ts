@@ -24,6 +24,13 @@ export type BoardColumn = ColumnSpec<TaskSortField> & {
    * с сервером решается отдельно через `isServerSortField`.
    */
   sortField?: TaskSortField;
+  /**
+   * Колонка применима только к участку с упаковочными операциями
+   * (`Section.has_packaging`). Признак живёт здесь, рядом с колонкой, а не
+   * проверкой в разметке: шапка, число колонок и тело строки обязаны прятать
+   * её в один момент, иначе шапка и ячейки разъезжаются.
+   */
+  requiresPackaging?: boolean;
 };
 
 const left = "text-left";
@@ -53,7 +60,10 @@ export const boardColumns: BoardColumn[] = [
   { id: "operation", label: "Операция", className: left },
   // Упаковка — вторая операция участка. Показывается видом и количеством:
   // колонка клиентская, сервер фильтров по ней не знает.
-  { id: "packaging", label: "Упаковка", className: left },
+  // Есть не везде: у пилы упаковочных операций нет вовсе (см. `has_packaging`
+  // в ответе справочника участков), и пустая колонка на каждой строке читается
+  // как «данные не пришли», а не как «здесь этого не бывает».
+  { id: "packaging", label: "Упаковка", className: left, requiresPackaging: true },
   // Количества и статус доска фильтрует сама, по уже пришедшим строкам:
   // сервер фильтров по ним не знает, и отправка подписанного значения
   // («Годные», «12 шт.») сузила бы выборку до пустой.
@@ -82,3 +92,15 @@ export const boardColumns: BoardColumn[] = [
     className: `${left} w-64`,
   },
 ];
+
+/**
+ * Колонки, применимые к участку: «Упаковка» — только там, где у участка есть
+ * упаковочные операции (`Section.has_packaging`).
+ *
+ * Флага нет (`undefined` — старый кэш, ошибка справочника): не скрываем
+ * ничего. Ошибка справочника не должна прятать данные, а на анодировании в
+ * этой колонке лежит тип упаковки, а не украшение шапки.
+ */
+export function visibleBoardColumns(hasPackaging: boolean | undefined): BoardColumn[] {
+  return boardColumns.filter((column) => !column.requiresPackaging || hasPackaging !== false);
+}

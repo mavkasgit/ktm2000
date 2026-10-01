@@ -20,6 +20,7 @@ import {
   type PlanPreset,
 } from "../lib/planPresets";
 import {
+  PACKAGING_ONLY_COLUMNS,
   PLAN_COLUMNS,
   PRINTABLE_COLUMNS,
   normalizePrintSettings,
@@ -53,6 +54,12 @@ interface PlanModalProps {
   sectionName: string;
   /** Код секции задаёт печатный профиль по умолчанию. */
   sectionCode?: string | null;
+  /**
+   * Есть ли у участка упаковочные операции (`Section.has_packaging`). Лист
+   * печати транслирует доску: на участке без упаковки колонки нет ни в
+   * наборе, ни в кнопках.
+   */
+  hasPackaging?: boolean;
   tasks: SectionBoardTask[];
   availableOperations?: SectionOperation[];
 }
@@ -66,8 +73,18 @@ function readStoredSettings(sectionId: number): Partial<PrintSettings> | null {
   }
 }
 
-function loadPrintSettings(sectionId: number, fallbackColumns: PlanColumnKey[]): PrintSettings {
-  return normalizePrintSettings(readStoredSettings(sectionId), fallbackColumns);
+function loadPrintSettings(
+  sectionId: number,
+  fallbackColumns: PlanColumnKey[],
+  unavailableColumns: readonly PlanColumnKey[],
+): PrintSettings {
+  const settings = normalizePrintSettings(readStoredSettings(sectionId), fallbackColumns);
+  return {
+    ...settings,
+    // Сохранённый набор — тоже: иначе колонка, которой у участка нет,
+    // печаталась бы пустой, и заметить это можно было бы только на бумаге.
+    columns: settings.columns.filter((key) => !unavailableColumns.includes(key)),
+  };
 }
 
 function savePrintSettings(sectionId: number, settings: PrintSettings) {
@@ -83,10 +100,19 @@ export function PlanModal({
   sectionId,
   sectionName,
   sectionCode,
+  hasPackaging,
   tasks,
 }: PlanModalProps) {
+  /**
+   * Колонки, которых у участка не бывает. Флаг не пришёл (`undefined` —
+   * старый кэш, ошибка справочника) — не скрываем ничего: ошибка справочника
+   * не должна прятать данные.
+   */
+  const unavailableColumns: readonly PlanColumnKey[] =
+    hasPackaging === false ? PACKAGING_ONLY_COLUMNS : [];
+
   const [printSettings, setPrintSettings] = useState<PrintSettings>(() =>
-    loadPrintSettings(sectionId, printColumnsFor(sectionCode)),
+    loadPrintSettings(sectionId, printColumnsFor(sectionCode), unavailableColumns),
   );
   const [hiddenGroupKeys, setHiddenGroupKeys] = useState<Set<string>>(() => new Set());
   const [presets, setPresets] = useState<PlanPreset[]>(() => loadPresets(sectionId));
@@ -95,11 +121,14 @@ export function PlanModal({
   const [presetToDelete, setPresetToDelete] = useState<PlanPreset | null>(null);
 
   useEffect(() => {
-    setPrintSettings(loadPrintSettings(sectionId, printColumnsFor(sectionCode)));
+    setPrintSettings(
+      loadPrintSettings(sectionId, printColumnsFor(sectionCode), unavailableColumns),
+    );
     setPresets(loadPresets(sectionId));
     setActivePresetId(null);
     setHiddenGroupKeys(new Set());
-  }, [sectionId, sectionCode]);
+    // `unavailableColumns` выводится из `hasPackaging` — он и в зависимостях.
+  }, [sectionId, sectionCode, hasPackaging]);
 
 
   useEffect(() => {
@@ -140,7 +169,14 @@ export function PlanModal({
   };
 
   const applyPreset = (preset: PlanPreset) => {
-    setPrintSettings(preset.settings);
+    // Пресет (встроенный или сохранённый) мог быть снят на участке с
+    // упаковкой — здесь его набор так же приводится к применимым колонкам.
+    setPrintSettings({
+      ...preset.settings,
+      columns: preset.settings.columns.filter(
+        (key) => !unavailableColumns.includes(key),
+      ),
+    });
     setActivePresetId(preset.id);
   };
 
@@ -222,7 +258,9 @@ export function PlanModal({
 
           <div className="flex flex-wrap items-center gap-1.5 text-xs">
             <span className="font-medium text-muted-foreground">Колонки печати:</span>
-            {PRINTABLE_COLUMNS.map((column) => (
+            {PRINTABLE_COLUMNS.filter(
+              (column) => !unavailableColumns.includes(column.key),
+            ).map((column) => (
               <Button key={column.key} type="button" size="sm" variant={printSettings.columns.includes(column.key) ? "default" : "outline"} onClick={() => toggleColumn(column.key)}>
                 {column.title}
               </Button>
