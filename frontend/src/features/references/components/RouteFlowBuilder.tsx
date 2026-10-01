@@ -540,6 +540,26 @@ export function RouteFlowBuilder({ open, onOpenChange, route, onSave, readOnly =
     }
   }, [open]);
 
+  // Использование участков читается при сборке узлов, но не пересобирает холст:
+  // ответ приходит асинхронно, и пересборка из `route.steps` стёрла бы правки,
+  // сделанные в окне загрузки (ADR-0060 п.2). Пришедшее значение дописывается в
+  // уже стоящие узлы.
+  const sectionUsageRef = useRef(sectionUsage);
+  sectionUsageRef.current = sectionUsage;
+  useEffect(() => {
+    if (!open) return;
+    setNodes((current) => {
+      let changed = false;
+      const next = current.map((node) => {
+        const used = sectionUsage[node.data.section_id] || 1;
+        if (node.data.usedInRoutes === used) return node;
+        changed = true;
+        return { ...node, data: { ...node.data, usedInRoutes: used } };
+      });
+      return changed ? next : current;
+    });
+  }, [sectionUsage, open, setNodes]);
+
   // Load existing route data
   useEffect(() => {
     if (route && open) {
@@ -566,7 +586,7 @@ export function RouteFlowBuilder({ open, onOpenChange, route, onSave, readOnly =
             is_final: step.is_final,
             allow_parallel: step.allow_parallel || false,
             requires_acceptance: step.requires_acceptance || false,
-            usedInRoutes: sectionUsage[step.section_id] || 1,
+            usedInRoutes: sectionUsageRef.current[step.section_id] || 1,
           },
         };
       });
@@ -598,7 +618,7 @@ export function RouteFlowBuilder({ open, onOpenChange, route, onSave, readOnly =
       setSelectedEdgeId(null);
       lastNodeId.current = null;
     }
-  }, [route, open, sectionUsage, getEndNodeId]);
+  }, [route, open, getEndNodeId]);
 
   const onConnect: OnConnect = useCallback(
     (params) => {
