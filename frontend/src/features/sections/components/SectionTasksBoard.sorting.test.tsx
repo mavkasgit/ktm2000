@@ -84,10 +84,20 @@ function renderedSkuOrder(): string[] {
   return renderedColumnOrder("Артикул");
 }
 
+/**
+ * Кнопка сортировки колонки: доступное имя собирается из подписи колонки
+ * (#204), поэтому тест адресует кнопку по машинному полю в `data-sort-field`.
+ */
+function sortButton(field: string): HTMLElement {
+  const button = document.querySelector<HTMLButtonElement>(`button[data-sort-field="${field}"]`);
+  if (!button) throw new Error(`Не найдена кнопка сортировки колонки «${field}»`);
+  return button;
+}
+
 /** Клик по кнопке сортировки колонки. Цикл: нет → убыв. → возр. → снять. */
 function clickSort(field: string) {
   act(() => {
-    screen.getByLabelText(new RegExp(`Сортировка по ${field}`)).click();
+    sortButton(field).click();
   });
 }
 
@@ -212,6 +222,26 @@ describe("SectionTasksBoard: сортировка колонок", () => {
 
     // 900 — первым; затем равные 10: 3 м раньше 2 м.
     expect(renderedSkuOrder()).toEqual(["B", "A", "C"]);
+  });
+
+  it("объявляет состояние сортировки на th, а несортируемая колонка — молчит", () => {
+    // `aria-sort="none"` — «сортировка возможна, порядок не выбран»; его
+    // отсутствие у «Операции» — «колонка не сортируется». Одинаковое молчание
+    // читалось бы скринридером как одна дыра вместо двух (#285).
+    renderBoard([makeTask()]);
+    const headerFor = (label: string) =>
+      [...document.querySelectorAll<HTMLTableCellElement>("thead th")].find((cell) =>
+        cell.textContent?.startsWith(label),
+      )!;
+
+    expect(headerFor("Размер").getAttribute("aria-sort")).toBe("none");
+    expect(headerFor("Операция").hasAttribute("aria-sort")).toBe(false);
+
+    clickSort("dimensions");
+    expect(headerFor("Размер").getAttribute("aria-sort")).toBe("descending");
+
+    clickSort("dimensions");
+    expect(headerFor("Размер").getAttribute("aria-sort")).toBe("ascending");
   });
 });
 

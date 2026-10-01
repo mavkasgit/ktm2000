@@ -6,6 +6,7 @@ import { renderIcon } from "@/shared/ui/EntityDialog";
 import { listSections } from "@/shared/api/sections";
 import { queryKeys } from "@/shared/api/queryKeys";
 import { fmtQty } from "@/shared/lib/quantityFormat";
+import { getAriaSort } from "@/shared/lib/multiSort";
 import { isStorageType } from "@/shared/lib/routeStageClassifier";
 import { type ProductionPlanningStage } from "@/shared/api/productionPlans";
 import { stageStatusLabels } from "@/shared/lib/generated-labels";
@@ -223,6 +224,7 @@ export function ExecutionStagesTable({
                 key={column.id}
                 title={column.title}
                 className={`${headerCellClass} ${column.headerClassName ?? ""}`}
+                aria-sort={column.sortField ? getAriaSort(sortConfigs, column.sortField) : undefined}
               >
                 <DataTableColumnHeader
                   column={column}

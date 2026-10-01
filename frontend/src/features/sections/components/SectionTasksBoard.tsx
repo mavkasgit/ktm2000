@@ -31,6 +31,7 @@ import type { PageLimitOption } from "@/shared/hooks/usePaginatedTableQuery";
 import { useFilterableTable } from "@/shared/hooks/useFilterableTable";
 import { buildColumnFilterPredicate } from "@/shared/lib/columnFilterSearch";
 import { useDebouncedValue } from "@/shared/lib/useDebouncedValue";
+import { getAriaSort } from "@/shared/lib/multiSort";
 import { isFirstRowsLoad } from "@/shared/lib/tableQueryPlaceholder";
 import {
   buildBoardServerQueryParams,
@@ -1032,6 +1033,7 @@ export function SectionTasksBoard({
                     <th
                       key={column.id}
                       className={`${headerCellClass} ${column.className ?? "text-left"}`}
+                      aria-sort={column.sortField ? getAriaSort(sortConfigs, column.sortField) : undefined}
                     >
                       <DataTableColumnHeader
                         column={column}

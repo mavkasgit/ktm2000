@@ -18,6 +18,7 @@ import { DATA_TABLE_STYLES, TABLE_ROW_DENSE } from "@/shared/lib/dataTableStyles
 import { useFilterableTable } from "@/shared/hooks/useFilterableTable";
 import { usePaginatedTableQuery } from "@/shared/hooks/usePaginatedTableQuery";
 import { buildColumnApiParams } from "@/shared/lib/columnSpecs";
+import { getAriaSort } from "@/shared/lib/multiSort";
 import { RouteStepsDisplay } from "./RouteStepsDisplay";
 
 import { buildBalanceSortParam, type BalanceSortField } from "@/shared/lib/stockSortParams";
@@ -260,6 +261,7 @@ export function StockBalancesPanel({
                           <th
                             key={column.id}
                             className={`${headerCellClass} ${column.filterField ? "p-0" : ""} ${column.headerClassName ?? ""}`}
+                            aria-sort={column.sortField ? getAriaSort(sortConfigs, column.sortField) : undefined}
                           >
                             <DataTableColumnHeader
                               column={column}

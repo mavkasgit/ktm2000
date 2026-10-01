@@ -39,6 +39,7 @@ import { HangerConstantsPanel } from "./HangerConstantsPanel";
 import { HangerCalcRowView, type RowSaveState } from "./HangerCalcRowView";
 import { PairedHangerRowView } from "./PairedHangerRowView";
 import { useDebouncedValue } from "@/shared/lib/useDebouncedValue";
+import { getAriaSort } from "@/shared/lib/multiSort";
 import { cn } from "@/shared/utils/cn";
 
 const headerCellClass = `${DATA_TABLE_STYLES.headerRow} ${DATA_TABLE_STYLES.headerCell}`;
@@ -416,7 +417,11 @@ export function HangerCalcTable({
               <thead>
                 <tr>
                   {hangerCalcColumns.map((column) => (
-                    <th key={column.id} className={cn(headerCellClass, column.headerClassName)}>
+                    <th
+                      key={column.id}
+                      className={cn(headerCellClass, column.headerClassName)}
+                      aria-sort={column.sortField ? getAriaSort(sortConfigs, column.sortField) : undefined}
+                    >
                       <DataTableColumnHeader<HangerCalcSortField>
                         column={column}
                         bindColumn={bindColumn}

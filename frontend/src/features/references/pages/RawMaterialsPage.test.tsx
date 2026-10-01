@@ -312,19 +312,23 @@ describe("RawMaterialsPage: сортировка колонок", () => {
     return calls[calls.length - 1]?.[0]?.sort;
   };
 
-  // У активной колонки в aria-label добавляется направление: «Сортировка по sku (desc)».
-  const clickSort = (field: string) =>
-    fireEvent.click(screen.getByRole("button", { name: new RegExp(`^Сортировка по ${field}`) }));
+  // Кнопка адресуется машинным полем (`data-sort-field`): её доступное имя
+  // собирается из подписи колонки (#204) и для поиска больше не годится.
+  function sortButton(field: string): HTMLElement {
+    const button = document.querySelector<HTMLButtonElement>(`button[data-sort-field="${field}"]`);
+    if (!button) throw new Error(`Не найдена кнопка сортировки колонки «${field}»`);
+    return button;
+  }
 
   it("в запрос уходят оба выбранных приоритета в порядке выбора", async () => {
     vi.mocked(fetchAllProducts).mockResolvedValue([product()]);
     renderPage();
-    await screen.findByRole("button", { name: /^Сортировка по sku/ });
+    await waitFor(() => expect(sortButton("sku")).toBeTruthy());
 
-    clickSort("sku");
+    fireEvent.click(sortButton("sku"));
     await waitFor(() => expect(lastSort()).toBe("sku:desc"));
 
-    clickSort("is_laminated");
+    fireEvent.click(sortButton("is_laminated"));
     await waitFor(() => expect(lastSort()).toBe("sku:desc,is_laminated:desc"));
   });
 });

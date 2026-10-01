@@ -16,6 +16,7 @@ import { usePaginatedTableQuery } from "@/shared/hooks/usePaginatedTableQuery";
 import type { SortConfig } from "@/shared/hooks/useTableQueryEngine";
 import { buildSortParam } from "@/shared/lib/sortQueryParam";
 import { buildColumnApiParams } from "@/shared/lib/columnSpecs";
+import { getAriaSort } from "@/shared/lib/multiSort";
 import { useDebouncedValue } from "@/shared/lib/useDebouncedValue";
 import { keepPreviousData } from "@tanstack/react-query";
 import { isFirstRowsLoad } from "@/shared/lib/tableQueryPlaceholder";
@@ -387,6 +388,7 @@ export function AuditLogsPage() {
                     <th
                       key={column.id}
                       className={`${headerCellClass} ${column.headerClassName ?? "text-left"}`}
+                      aria-sort={column.sortField ? getAriaSort(sortConfigs, column.sortField) : undefined}
                     >
                       <DataTableColumnHeader
                         column={column}

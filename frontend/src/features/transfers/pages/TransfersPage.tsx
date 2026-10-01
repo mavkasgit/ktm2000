@@ -71,6 +71,7 @@ import { invalidateAfter } from "@/shared/api/cacheInvalidation";
 import { queryKeys } from "@/shared/api/queryKeys";
 import { formatDimensionsFilterValue, formatDimensionsLabel } from "@/shared/api/stock";
 import { buildColumnApiParams } from "@/shared/lib/columnSpecs";
+import { getAriaSort } from "@/shared/lib/multiSort";
 import { isFirstRowsLoad, keepPreviousDataForScope } from "@/shared/lib/tableQueryPlaceholder";
 import { historyColumns, readyColumns } from "../lib/transferColumns";
 import { TABLE_ROW_COMPACT, TABLE_ROW_DENSE } from "@/shared/lib/dataTableStyles";
@@ -1246,6 +1247,7 @@ export function TransfersPage() {
                     <TableHead
                       key={column.id}
                       className={`${headerCellClass} p-0${column.id === "transferableQty" ? " text-right" : ""}`}
+                      aria-sort={column.sortField ? getAriaSort(readySortConfigs, column.sortField) : undefined}
                     >
                       <DataTableColumnHeader
                         column={column}
@@ -1393,6 +1395,7 @@ export function TransfersPage() {
                           <TableHead
                             key={column.id}
                             className={`${headerCellClass} p-0 ${column.headerClassName ?? ""}`}
+                            aria-sort={column.sortField ? getAriaSort(historySortConfigs, column.sortField) : undefined}
                           >
                             <DataTableColumnHeader
                               column={column}

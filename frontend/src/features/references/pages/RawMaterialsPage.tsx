@@ -38,6 +38,7 @@ import { isLengthState } from "@/shared/lib/dimensionState";
 import { cn } from "@/shared/utils/cn";
 import { useDebouncedValue } from "@/shared/lib/useDebouncedValue";
 import { fmtQtyPrecise } from "@/shared/lib/quantityFormat";
+import { getAriaSort } from "@/shared/lib/multiSort";
 import { isFirstRowsLoad } from "@/shared/lib/tableQueryPlaceholder";
 
 type ViewMode = "grid" | "table" | "calc";
@@ -667,7 +668,11 @@ export function RawMaterialsPage() {
               <tr>
                 <th className={`${headerCellClass} w-16`}>Фото</th>
                 {headerColumns.map((column) => (
-                  <th key={column.id} className={`${headerCellClass} ${column.headerClassName ?? ""}`}>
+                  <th
+                    key={column.id}
+                    className={`${headerCellClass} ${column.headerClassName ?? ""}`}
+                    aria-sort={column.sortField ? getAriaSort(sortConfigs, column.sortField) : undefined}
+                  >
                     <DataTableColumnHeader
                       column={column}
                       bindColumn={bindColumn}

@@ -5,6 +5,7 @@ import { getErrorMessage } from "@/shared/api/client";
 import { formatDimensionsLabel, formatCompletedOperationsLabel } from "@/shared/api/stock";
 import { errorLabels } from "@/shared/lib/generated-labels";
 import { fmtQty } from "@/shared/lib/quantityFormat";
+import { getAriaSort } from "@/shared/lib/multiSort";
 import { Loader2, Layers, Package, ClipboardList, AlertCircle } from "lucide-react";
 import type { SortConfig } from "@/shared/hooks/useTableQueryEngine";
 import { useFilterableTable } from "@/shared/hooks/useFilterableTable";
@@ -412,6 +413,7 @@ export function ProductWipStatsDialog({ sku, open, onOpenChange }: ProductWipSta
                             <th
                               key={column.id}
                               className={`${headerCellClass} ${column.headerClassName ?? ""}`}
+                              aria-sort={column.sortField ? getAriaSort(sortConfigs, column.sortField) : undefined}
                             >
                               <DataTableColumnHeader
                                 column={column}

@@ -8,6 +8,7 @@ import { buildActiveFilterSummary } from "@/shared/ui/buildActiveFilterSummary"
 import { usePaginatedTableQuery } from "@/shared/hooks/usePaginatedTableQuery"
 import { useFilterableTable } from "@/shared/hooks/useFilterableTable"
 import { buildColumnFilterPredicate } from "@/shared/lib/columnFilterSearch"
+import { getAriaSort } from "@/shared/lib/multiSort"
 import { formatDimensionsFilterValue, formatDimensionsLabel } from "@/shared/api/stock"
 import { toast } from "@/shared/ui"
 import { keepPreviousData, useQuery, useQueryClient } from "@tanstack/react-query"
@@ -867,7 +868,11 @@ export function PlanPage() {
                   <thead>
                     <tr>
                       {planColumns.map((column) => (
-                        <th key={column.id} className={headerCellClass}>
+                        <th
+                          key={column.id}
+                          className={headerCellClass}
+                          aria-sort={column.sortField ? getAriaSort(sortConfigs, column.sortField) : undefined}
+                        >
                           <DataTableColumnHeader
                             column={column}
                             bindColumn={bindColumn}

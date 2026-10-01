@@ -31,6 +31,24 @@ export function nextMultiSortConfigs<Field extends string>(
   return next;
 }
 
+/**
+ * Состояние сортировки колонки для `aria-sort` на `<th>` (ADR-0037, #285).
+ *
+ * Формула тривиальная, но она нужна каждой сортируемой таблице — а копия в
+ * каждой шапке расходится с `nextMultiSortConfigs` в тот же день, когда
+ * меняется цикл сортировки. `none` здесь не «нет атрибута»: на сортируемой
+ * колонке это объявление «сортировка возможна, сейчас не выбрана», и его
+ * отсутствие скринридер читает как «колонка не сортируется».
+ */
+export function getAriaSort<Field extends string>(
+  currentSorts: ReadonlyArray<SortConfig<Field>>,
+  field: Field,
+): "none" | "ascending" | "descending" {
+  const active = currentSorts.find((config) => config.field === field);
+  if (!active) return "none";
+  return active.order === "asc" ? "ascending" : "descending";
+}
+
 /** Добавляет сортировку в конец, вытесняя самую старую при переполнении. */
 function appendWithinLimit<Field extends string>(
   prev: SortConfig<Field>[],

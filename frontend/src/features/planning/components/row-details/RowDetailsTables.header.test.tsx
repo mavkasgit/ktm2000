@@ -179,7 +179,7 @@ describe("ExecutionStagesTable: шапка из описания колонок"
     // Исходный порядок — порядок этапов маршрута, а не алфавитный.
     expect(rowTexts(0)[1]).toBe("Сборка");
 
-    const sortButton = within(columnHeader("Участок")).getByRole("button", { name: /Сортировка по section/ });
+    const sortButton = within(columnHeader("Участок")).getByRole("button", { name: /Участок, сортировка/ });
     fireEvent.click(sortButton);
     fireEvent.click(sortButton);
 
@@ -200,7 +200,7 @@ describe("ExecutionStagesTable: шапка из описания колонок"
     renderStages();
     for (const label of ["План", "Получено", "Годные", "Брак", "Выдано", "Остаток", "%", "Этап"]) {
       expect(
-        within(columnHeader(label)).queryByRole("button", { name: /Сортировка по/ }),
+        within(columnHeader(label)).queryByRole("button", { name: /, сортировка/ }),
         `у колонки «${label}» не должно быть кнопки сортировки`,
       ).toBeNull();
     }

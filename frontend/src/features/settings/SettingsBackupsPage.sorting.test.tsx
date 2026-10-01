@@ -39,9 +39,17 @@ const renderPage = () =>
     </MemoryRouter>,
   );
 
-// У активной колонки в aria-label добавляется направление: «Сортировка по size (desc)».
-const clickSort = (field: string) =>
-  fireEvent.click(screen.getByRole("button", { name: new RegExp(`^Сортировка по ${field}`) }));
+/**
+ * Кнопка сортировки колонки: доступное имя собирается из подписи колонки
+ * (#204), поэтому тест адресует кнопку по машинному полю в `data-sort-field`.
+ */
+function sortButton(field: string): HTMLElement {
+  const button = document.querySelector<HTMLButtonElement>(`button[data-sort-field="${field}"]`);
+  if (!button) throw new Error(`Не найдена кнопка сортировки колонки «${field}»`);
+  return button;
+}
+
+const clickSort = (field: string) => fireEvent.click(sortButton(field));
 
 /** Строка `sort` последнего запроса списка бэкапов. */
 const lastSort = () => {

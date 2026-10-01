@@ -17,6 +17,7 @@ import type { useFilterableTable } from "@/shared/hooks/useFilterableTable";
 import { SortConfig } from "@/shared/hooks/useTableQueryEngine";
 import { ExecutionSortField, positionStatusLabels } from "./execution-utils";
 import { fmtQty } from "@/shared/lib/quantityFormat";
+import { getAriaSort } from "@/shared/lib/multiSort";
 import { ExecutionRow } from "./ExecutionRow";
 import { getExecutionTableColumns } from "./execution-table-columns";
 import { TABLE_ROW_COMPACT } from "@/shared/lib/dataTableStyles";
@@ -42,7 +43,6 @@ interface ExecutionTableProps {
   // sorting
   sortConfigs: SortConfig<ExecutionSortField>[];
   handleSortChange: (field: ExecutionSortField) => void;
-  getAriaSort: (field: ExecutionSortField) => "none" | "ascending" | "descending";
   bindColumn: ReturnType<typeof useFilterableTable<ExecutionSortField>>["bindColumn"];
   /**
    * Значения для попапера фильтра — по списку на каждое объявленное
@@ -109,7 +109,6 @@ export function ExecutionTable({
   tableHasActiveFilters,
   sortConfigs,
   handleSortChange,
-  getAriaSort,
   bindColumn,
   uniqueValuesByField,
   bulkSelection,
@@ -294,7 +293,7 @@ export function ExecutionTable({
                     <th
                       key={column.id}
                       className={`${headerCellClass} ${column.headerClassName ?? ""}`}
-                      aria-sort={column.sortField ? getAriaSort(column.sortField) : undefined}
+                      aria-sort={column.sortField ? getAriaSort(sortConfigs, column.sortField) : undefined}
                     >
                       {/* Явный `ExecutionSortField`: конфиг сортировки таблицы
                           шире, чем подмножество серверно-сортируемых полей, на
