@@ -1735,3 +1735,14 @@ def test_row_completed_operations_resolved_codes() -> None:
 def test_row_completed_operations_unmatched_text_is_none() -> None:
     """Текст, не сматчившийся со справочником → состояние неизвестно, не []."""
     assert _row_completed_operations(_ops_item("Что-то стороннее", [])) is None
+
+
+def test_row_completed_operations_whitespace_cell_is_empty_list() -> None:
+    """Ячейка из одних пробелов — тоже «без операций», а не «не зафиксировано».
+
+    Excel охотно отдаёт такие ячейки после правок: «пусто» и «пробел» оператору
+    неразличимы, а для ключа остатка это разные группы, если не срезать пробелы.
+    """
+    assert _row_completed_operations(_ops_item("   ")) == []
+    assert _row_completed_operations(_ops_item("\t")) == []
+    assert _row_completed_operations(_ops_item("  —  ")) == []
