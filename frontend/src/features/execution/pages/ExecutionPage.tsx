@@ -886,12 +886,6 @@ export function ExecutionPage() {
   const releasedRows = rows.filter((r) => r.is_released && !r.is_completed).length;
   const completedRows = rows.filter((r) => r.is_completed).length;
 
-  const getAriaSort = (field: ExecutionSortField): "none" | "ascending" | "descending" => {
-    const active = sortConfigs.find((s) => s.field === field);
-    if (!active) return "none";
-    return active.order === "asc" ? "ascending" : "descending";
-  };
-
   const openDetail = (positionId: number) => {
     setSelectedPositionId(positionId);
     setDrawerOpen(true);
@@ -922,7 +916,6 @@ export function ExecutionPage() {
         tableHasActiveFilters={hasTableFiltersActive}
         sortConfigs={sortConfigs}
         handleSortChange={handleSortWithReset}
-        getAriaSort={getAriaSort}
         page={page}
         totalPages={totalPages}
         total={total}

@@ -223,6 +223,26 @@ describe("SectionTasksBoard: сортировка колонок", () => {
     // 900 — первым; затем равные 10: 3 м раньше 2 м.
     expect(renderedSkuOrder()).toEqual(["B", "A", "C"]);
   });
+
+  it("объявляет состояние сортировки на th, а несортируемая колонка — молчит", () => {
+    // `aria-sort="none"` — «сортировка возможна, порядок не выбран»; его
+    // отсутствие у «Операции» — «колонка не сортируется». Одинаковое молчание
+    // читалось бы скринридером как одна дыра вместо двух (#285).
+    renderBoard([makeTask()]);
+    const headerFor = (label: string) =>
+      [...document.querySelectorAll<HTMLTableCellElement>("thead th")].find((cell) =>
+        cell.textContent?.startsWith(label),
+      )!;
+
+    expect(headerFor("Размер").getAttribute("aria-sort")).toBe("none");
+    expect(headerFor("Операция").hasAttribute("aria-sort")).toBe(false);
+
+    clickSort("dimensions");
+    expect(headerFor("Размер").getAttribute("aria-sort")).toBe("descending");
+
+    clickSort("dimensions");
+    expect(headerFor("Размер").getAttribute("aria-sort")).toBe("ascending");
+  });
 });
 
 describe("SectionTasksBoard: колонки «Операция» и «Упаковка»", () => {

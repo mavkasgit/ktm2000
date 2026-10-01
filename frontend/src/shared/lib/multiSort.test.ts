@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { MAX_SORT_FIELDS, nextMultiSortConfigs } from "./multiSort";
+import { MAX_SORT_FIELDS, getAriaSort, nextMultiSortConfigs } from "./multiSort";
 
 type Field = "id" | "name" | "status" | "extra";
 
@@ -115,5 +115,24 @@ describe("nextMultiSortConfigs", () => {
       { field: "status", order: "desc" },
       { field: "extra", order: "desc" },
     ]);
+  });
+});
+
+describe("getAriaSort", () => {
+  it("несортированная колонка объявляет none, а не отсутствие сортировки", () => {
+    // `none` — «сортировка возможна, сейчас не выбрана»: отсутствие атрибута
+    // скринридер прочитал бы как «колонка не сортируется» (#285).
+    expect(getAriaSort<Field>([], "id")).toBe("none");
+    expect(getAriaSort<Field>([{ field: "name", order: "asc" }], "id")).toBe("none");
+  });
+
+  it("называет направление выбранной колонки", () => {
+    const sorts = [
+      { field: "name" as Field, order: "desc" as const },
+      { field: "id" as Field, order: "asc" as const },
+    ];
+
+    expect(getAriaSort(sorts, "name")).toBe("descending");
+    expect(getAriaSort(sorts, "id")).toBe("ascending");
   });
 });

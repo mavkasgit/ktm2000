@@ -30,11 +30,6 @@ function Harness({ sortConfigs }: { sortConfigs: { field: ExecutionSortField; or
       tableHasActiveFilters={false}
       sortConfigs={sortConfigs}
       handleSortChange={vi.fn()}
-      getAriaSort={(field) => {
-        const active = sortConfigs.find((config) => config.field === field);
-        if (!active) return "none" as const;
-        return active.order === "asc" ? ("ascending" as const) : ("descending" as const);
-      }}
       bindColumn={bindColumn}
       uniqueValuesByField={{
         id: [],

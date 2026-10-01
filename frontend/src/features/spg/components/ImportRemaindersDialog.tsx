@@ -29,6 +29,7 @@ import {
 import { useFilterableTable } from "@/shared/hooks/useFilterableTable";
 import { usePaginatedTableQuery } from "@/shared/hooks/usePaginatedTableQuery";
 import { buildColumnApiParams } from "@/shared/lib/columnSpecs";
+import { getAriaSort } from "@/shared/lib/multiSort";
 import { saveBlobAsFile } from "@/shared/lib/downloadFile";
 import { remainderPreviewColumns, remainderPreviewColumnFields } from "../lib/remainderPreviewColumns";
 
@@ -1024,6 +1025,7 @@ export function ImportRemaindersDialog({
                           <th
                             key={column.id}
                             className={`${headerCellClass} p-0 ${column.headerClassName ?? ""}`}
+                            aria-sort={column.sortField ? getAriaSort(sortConfigs, column.sortField) : undefined}
                           >
                             <DataTableColumnHeader
                               column={column}

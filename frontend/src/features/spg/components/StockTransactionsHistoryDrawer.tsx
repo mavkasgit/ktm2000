@@ -27,6 +27,7 @@ import { queryKeys } from "@/shared/api/queryKeys";
 import { buildColumnApiParams } from "@/shared/lib/columnSpecs";
 import { useDebouncedValue } from "@/shared/lib/useDebouncedValue";
 import { isFirstRowsLoad, keepPreviousDataForScope } from "@/shared/lib/tableQueryPlaceholder";
+import { getAriaSort } from "@/shared/lib/multiSort";
 import { fmtQty } from "@/shared/lib/quantityFormat";
 import {
   buildTransactionSortParam,
@@ -335,6 +336,7 @@ export function StockTransactionsHistoryDrawer({
                         <th
                           key={column.id}
                           className={`${headerCellClass} ${column.headerClassName ?? "text-left"}`}
+                          aria-sort={column.sortField ? getAriaSort(sortConfigs, column.sortField) : undefined}
                         >
                           <DataTableColumnHeader
                             column={column}

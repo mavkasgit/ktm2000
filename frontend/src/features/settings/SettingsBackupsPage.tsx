@@ -9,6 +9,7 @@ import type { SortConfig } from "@/shared/hooks/useTableQueryEngine"
 import { usePaginatedTableQuery } from "@/shared/hooks/usePaginatedTableQuery"
 import { buildColumnApiParams } from "@/shared/lib/columnSpecs"
 import { buildSortParam } from "@/shared/lib/sortQueryParam"
+import { getAriaSort } from "@/shared/lib/multiSort"
 import { fetchBackups } from "@/entities/backup/api"
 import type { ListBackupsParams } from "@/entities/backup/api"
 import {
@@ -748,7 +749,11 @@ export function BackupsPage() {
                 </th>
               )}
               {backupColumns.map((column) => (
-                <th key={column.id} className={`${headerCellClass} ${column.headerClassName ?? "text-left"}`}>
+                <th
+                  key={column.id}
+                  className={`${headerCellClass} ${column.headerClassName ?? "text-left"}`}
+                  aria-sort={column.sortField ? getAriaSort(sortConfigs, column.sortField) : undefined}
+                >
                   <DataTableColumnHeader
                     column={column}
                     bindColumn={bindColumn}

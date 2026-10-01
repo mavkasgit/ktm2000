@@ -2,6 +2,7 @@ import { useMemo } from "react";
 import { Badge, DataTableColumnHeader, TableCornerResetCell, TableCornerResetHeader, DATA_TABLE_STYLES } from "@/shared/ui";
 import { useFilterableTable } from "@/shared/hooks/useFilterableTable";
 import { fmtQty } from "@/shared/lib/quantityFormat";
+import { getAriaSort } from "@/shared/lib/multiSort";
 import { type ProductionPlanningStage, type StatusHistoryEntry } from "@/shared/api/productionPlans";
 import { translateStatusHistoryReason } from "@/features/planning/lib/plan-labels";
 import { statusLabels } from "@/shared/lib/generated-labels";
@@ -197,6 +198,7 @@ export function ExecutionEventsTable({ stages, statusHistory }: ExecutionEventsT
               <th
                 key={column.id}
                 className={`${headerCellClass} ${column.headerClassName ?? ""}`}
+                aria-sort={column.sortField ? getAriaSort(sortConfigs, column.sortField) : undefined}
               >
                 <DataTableColumnHeader
                   column={column}

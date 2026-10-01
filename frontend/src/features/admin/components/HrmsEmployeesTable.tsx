@@ -14,6 +14,7 @@ import { useFilterableTable } from "@/shared/hooks/useFilterableTable"
 import { usePaginatedTableQuery } from "@/shared/hooks/usePaginatedTableQuery"
 import type { SortConfig } from "@/shared/hooks/useTableQueryEngine"
 import { buildColumnApiParams } from "@/shared/lib/columnSpecs"
+import { getAriaSort } from "@/shared/lib/multiSort"
 import { useDebouncedValue } from "@/shared/lib/useDebouncedValue"
 import { buildSortParam } from "@/shared/lib/sortQueryParam"
 import { queryKeys } from "@/shared/api/queryKeys"
@@ -182,6 +183,7 @@ export function HrmsEmployeesTable({
                 <th
                   key={column.id}
                   className={`${headerCellClass} ${column.headerClassName ?? "text-left"}`}
+                  aria-sort={column.sortField ? getAriaSort(sortConfigs, column.sortField) : undefined}
                 >
                   <DataTableColumnHeader<EmployeeSortField>
                     column={column}
