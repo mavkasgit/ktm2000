@@ -80,38 +80,93 @@ def _auth_headers(user: User) -> dict[str, str]:
 # После создания таблиц на Этапе 1 инварианты включаются автоматически.
 
 _STOCK_LEDGER_INVARIANT_QUERIES: list[tuple[str, str]] = [
+    # S1 — проекция баланса сверяется с ledger ПОСЕГМЕНТНО и в обе стороны.
+    #
+    # Старый вариант шёл LEFT JOIN от stock_balances и поэтому видел только
+    # строки, которые проекция создала: потерянный сегмент (оси, которой нет
+    # ни в GROUP BY, ни в WHERE пересчёта) проходил молча. FULL OUTER JOIN
+    # ловит и недостающие строки, и лишние, и сегмент, разъехавшийся по ключу
+    # при совпадающей сумме.
+    #
+    # Терминальные секции (``type='terminal'``, «Отправлено») исключены С
+    # ОБЕИХ сторон: проекция баланс в них не пишет (по ledger там есть
+    # приход, а строки нет — ложное «нет строки остатка» на каждом финальном
+    # выпуске), а legacy-строка, которую тест держит на терминале до
+    # ``rebuild_all_balances``, снимается тем же фильтром. Терминал — вне
+    # оперативных остатков, сверять его значит меряться с тем, что система
+    # намеренно не материализует.
+    #
+    # ``NULL`` и jsonb-``'null'`` — одно и то же состояние «не зафиксировано»:
+    # ORM пишет SQL NULL (``none_as_null=True``), а колонка когда-то могла
+    # получить литерал ``'null'``. Без нормализации два равных состояния
+    # разошлись бы по ключу FULL OUTER JOIN.
     (
         "S1_stock_balance_equals_sum_of_transactions",
         """
-        SELECT sb.product_id, sb.location_id, sb.quality_state, sb.dimensions,
-               sb.completed_operations, sb.balance_qty
-                 - COALESCE(SUM(CASE WHEN st.to_location_id   = sb.location_id
-                                          AND st.to_quality_state   = sb.quality_state
-                                     THEN st.quantity END), 0)
-                 + COALESCE(SUM(CASE WHEN st.from_location_id = sb.location_id
-                                          AND st.from_quality_state = sb.quality_state
-                                     THEN st.quantity END), 0)
-                 AS diff
-        FROM stock_balances sb
-        LEFT JOIN stock_transactions st
-          ON st.product_id = sb.product_id
-         AND st.dimensions IS NOT DISTINCT FROM sb.dimensions
-         -- ADR-0055: пятая ось ключа баланса. Без неё строки одного участка с
-         -- разными операциями сводились бы в один LEFT JOIN и S1 ругался бы на
-         -- ложное нарушение для каждой разделившейся группы.
-         AND (st.completed_operations IS NOT DISTINCT FROM sb.completed_operations
-              OR st.completed_operations = 'null'::jsonb AND sb.completed_operations IS NULL
-              OR sb.completed_operations = 'null'::jsonb AND st.completed_operations IS NULL)
-         AND (st.to_location_id = sb.location_id OR st.from_location_id = sb.location_id)
-        GROUP BY sb.product_id, sb.location_id, sb.quality_state, sb.dimensions,
-                 sb.completed_operations, sb.balance_qty
-        HAVING sb.balance_qty
-                 != COALESCE(SUM(CASE WHEN st.to_location_id   = sb.location_id
-                                          AND st.to_quality_state   = sb.quality_state
-                                     THEN st.quantity END), 0)
-                  - COALESCE(SUM(CASE WHEN st.from_location_id = sb.location_id
-                                          AND st.from_quality_state = sb.quality_state
-                                     THEN st.quantity END), 0)
+        WITH terminal AS (
+            SELECT id FROM sections WHERE type = 'terminal'
+        ),
+        sides AS (
+            SELECT product_id,
+                   to_location_id AS location_id,
+                   to_quality_state AS quality_state,
+                   dimensions,
+                   completed_operations,
+                   quantity AS delta
+            FROM stock_transactions
+            WHERE to_location_id IS NOT NULL
+            UNION ALL
+            SELECT product_id,
+                   from_location_id,
+                   from_quality_state,
+                   dimensions,
+                   completed_operations,
+                   -quantity AS delta
+            FROM stock_transactions
+            WHERE from_location_id IS NOT NULL
+        ),
+        ledger AS (
+            SELECT product_id, location_id, quality_state,
+                   CASE WHEN dimensions IS NULL OR dimensions = 'null'::jsonb
+                        THEN NULL ELSE dimensions END AS dims,
+                   CASE WHEN completed_operations IS NULL
+                             OR completed_operations = 'null'::jsonb
+                        THEN NULL ELSE completed_operations END AS ops,
+                   SUM(delta) AS net
+            FROM sides
+            WHERE location_id NOT IN (SELECT id FROM terminal)
+            GROUP BY 1, 2, 3, 4, 5
+            HAVING SUM(delta) <> 0
+        ),
+        balance AS (
+            SELECT product_id, location_id, quality_state,
+                   CASE WHEN dimensions IS NULL OR dimensions = 'null'::jsonb
+                        THEN NULL ELSE dimensions END AS dims,
+                   CASE WHEN completed_operations IS NULL
+                             OR completed_operations = 'null'::jsonb
+                        THEN NULL ELSE completed_operations END AS ops,
+                   SUM(balance_qty) AS qty,
+                   COUNT(*) AS rows_in_segment
+            FROM stock_balances
+            WHERE location_id NOT IN (SELECT id FROM terminal)
+            GROUP BY 1, 2, 3, 4, 5
+        )
+        SELECT COALESCE(l.product_id, b.product_id) AS product_id,
+               COALESCE(l.location_id, b.location_id) AS location_id,
+               COALESCE(l.quality_state, b.quality_state) AS quality_state,
+               l.dims AS ledger_dims, b.dims AS balance_dims,
+               l.ops AS ledger_ops, b.ops AS balance_ops,
+               l.net AS ledger_net, b.qty AS balance_qty,
+               b.rows_in_segment AS balance_rows
+        FROM ledger l
+        FULL OUTER JOIN balance b
+          ON l.product_id = b.product_id
+         AND l.location_id = b.location_id
+         AND l.quality_state = b.quality_state
+         AND l.dims IS NOT DISTINCT FROM b.dims
+         AND l.ops IS NOT DISTINCT FROM b.ops
+        WHERE l.net IS DISTINCT FROM b.qty
+           OR COALESCE(b.rows_in_segment, 0) > 1
         """,
     ),
     (

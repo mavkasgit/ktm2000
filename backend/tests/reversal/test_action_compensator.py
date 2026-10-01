@@ -8,10 +8,12 @@
 - defect_decision, manual_adjustment (ref_id=None), import_remainders
   (обе фазы одним reverse), final_release/return_to_stock (через цепочку);
 - seed_demo: компенсатора нет → NotAllowed (решение 7);
-- net ≥ 0 до/после + assert_no_invariants_violations в каждом тесте.
+- net ≥ 0 до/после + сверка остатков ПО ГРУППАМ (пятиосевой ключ, ADR-0055)
+  + assert_no_invariants_violations в каждом тесте.
 """
 from __future__ import annotations
 
+import json
 from decimal import Decimal
 
 import pytest
@@ -32,6 +34,13 @@ from tests.test_integrity_invariants import assert_no_invariants_violations
 pytestmark = pytest.mark.asyncio
 
 
+def _snap(value) -> str | None:
+    """Слепок jsonb-оси для ключа сегмента: None — «не зафиксировано»."""
+    if value is None:
+        return None
+    return json.dumps(value, sort_keys=True, ensure_ascii=False)
+
+
 async def _balance(session: AsyncSession, location_id: int, product_id: int) -> Decimal:
     return (await session.scalar(
         select(func.coalesce(func.sum(StockBalance.balance_qty), 0)).where(
@@ -39,6 +48,31 @@ async def _balance(session: AsyncSession, location_id: int, product_id: int) -> 
             StockBalance.product_id == product_id,
         )
     )) or Decimal("0")
+
+
+async def _stock_groups(
+    session: AsyncSession, product_id: int
+) -> dict[tuple, Decimal]:
+    """Все группы остатка артикула по пятиосевому ключу.
+
+    Сверка «после отката» идёт этим словарём, а не суммой: откат, вернувший
+    материал в NULL-группу вместо ``[]`` (или наоборот), дал бы ту же сумму
+    по локации и совершенно другой смысл — крашеный/некрашеный материал в
+    одной куче. ADR-0055 как раз про то, что это разные партии.
+    """
+    rows = (await session.execute(
+        select(
+            StockBalance.location_id,
+            StockBalance.quality_state,
+            StockBalance.dimensions,
+            StockBalance.completed_operations,
+            StockBalance.balance_qty,
+        ).where(StockBalance.product_id == product_id)
+    )).all()
+    return {
+        (loc_id, getattr(qs, "value", qs), _snap(dims), _snap(ops)): qty
+        for loc_id, qs, dims, ops, qty in rows
+    }
 
 
 async def _action_txs(session: AsyncSession, action_id: int) -> list[StockTransaction]:
@@ -119,9 +153,8 @@ async def test_task_complete_reverse_mirrors_entries(session: AsyncSession) -> N
     локации перевёрнуты; остатки возвращаются к состоянию до операции."""
     fx = await _setup_minimal_route(session)
     await _issue_material(session, fx)
-    section_id = fx["task"].section_id
     product_id = fx["product"].id
-    pre_section = await _balance(session, section_id, product_id)
+    pre_groups = await _stock_groups(session, product_id)
 
     action = await _complete_task(session, fx, good=Decimal("7"), scrap=Decimal("3"))
     orig_txs = await _action_txs(session, action.id)
@@ -167,9 +200,81 @@ async def test_task_complete_reverse_mirrors_entries(session: AsyncSession) -> N
     assert refreshed.status == ActionStatus.REVERSED
     assert refreshed.reversed_by_action_id == result.reversal_action_id
 
-    # Остатки: scrap опустел, участок вернулся к состоянию до complete.
+    # Остатки возвращаются к состоянию до complete ПО КАЖДОЙ ГРУППЕ, а не
+    # только по сумме участка (ADR-0055): компенсация, вернувшая материал
+    # в NULL-группу вместо той, из которой он ушёл, дала бы ту же сумму и
+    # неотличимый в UI итог.
+    post_groups = await _stock_groups(session, product_id)
+    assert post_groups == pre_groups, (
+        f"группы до отката: {pre_groups!r}\nгруппы после: {post_groups!r}"
+    )
     assert await _balance(session, scrap_loc, product_id) == Decimal("0")
-    assert await _balance(session, section_id, product_id) == pre_section
+
+async def test_reverse_restores_each_ops_group_separately(
+    session: AsyncSession,
+) -> None:
+    """Откат возвращает материал в ИСХОДНУЮ группу операций, а не просто
+    даёт ту же сумму участка (ADR-0055).
+
+    На одном участке — две группы одного артикула: пришедшая по маршруту и
+    явно приходная с признаком «не зафиксировано». Завершение списывает
+    только входную группу; если компенсация вернёт 10 штук в другую группу,
+    сумма участка совпадёт до единицы, а в UI окажется смешанный материал.
+    """
+    fx = await _setup_minimal_route(session)
+    await _issue_material(session, fx, qty=Decimal("30"))
+    product_id = fx["product"].id
+    section_id = fx["task"].section_id
+
+    existing = await _stock_groups(session, product_id)
+    route_keys = [k for k in existing if k[0] == section_id]
+    assert len(route_keys) == 1, f"до прихода на участке одна группа: {existing!r}"
+    route_key = route_keys[0]
+    # Вторая группа — противоположный признак: NULL против [] (или [] против
+    # маршрутового списка). Иначе приход слился бы с существующей.
+    extra_ops = None if route_key[3] is not None else []
+
+    await StockCommandService().record(session, StockCommand(
+        product_id=product_id,
+        from_location_id=None,
+        to_location_id=section_id,
+        quantity=Decimal("5"),
+        reason=Reason.MANUAL_IN,
+        completed_operations=extra_ops,
+        created_by=fx["user"].id,
+    ))
+    await session.commit()
+
+    before = await _stock_groups(session, product_id)
+    extra_key = (route_key[0], route_key[1], route_key[2], _snap(extra_ops))
+    assert before[route_key] == Decimal("30")
+    assert before[extra_key] == Decimal("5")
+    assert {k: v for k, v in before.items() if k[0] == section_id} == {
+        route_key: Decimal("30"), extra_key: Decimal("5"),
+    }, "на участке обязаны быть ровно две разные группы одного артикула"
+
+    action = await _complete_task(session, fx, good=Decimal("7"), scrap=Decimal("3"))
+    mid = await _stock_groups(session, product_id)
+    assert mid[route_key] != before[route_key], "завершение списало входную группу"
+    assert mid[extra_key] == before[extra_key] == Decimal("5"), (
+        "вторая группа в операции не участвовала"
+    )
+
+    preview = await reversal_service.preview_reverse(session, action.id)
+    assert not preview.blockers
+    await reversal_service.reverse(
+        session, action.id, plan_token=preview.plan_token, actor="tester",
+    )
+    await session.commit()
+    await assert_no_invariants_violations(session, context="ac-groups-restore")
+
+    after = await _stock_groups(session, product_id)
+    assert after == before, (
+        f"группы до: {before!r}\nгруппы после отката: {after!r}"
+    )
+    assert after[route_key] == Decimal("30"), "входная группа восстановлена"
+    assert after[extra_key] == Decimal("5"), "вторая группа не перетекла в первую"
+
 
 async def test_reverse_intermediate_blocked_has_dependents(
     session: AsyncSession,
@@ -207,9 +312,8 @@ async def test_reverse_full_chain_cascade_topological_order(
     порядке; остатки возвращаются к состоянию до цепочки."""
     fx = await _setup_minimal_route(session)
     await _issue_material(session, fx, qty=Decimal("30"))
-    section_id = fx["task"].section_id
     product_id = fx["product"].id
-    pre_section = await _balance(session, section_id, product_id)
+    pre_groups = await _stock_groups(session, product_id)
 
     chain = await _task_chain(session, fx)
     await assert_no_invariants_violations(session, context="ac-chain-before")
@@ -247,7 +351,12 @@ async def test_reverse_full_chain_cascade_topological_order(
         )).scalar_one()
         assert mirrored == len(orig_ids), f"действие #{aid} компенсировано не полностью"
 
-    assert await _balance(session, section_id, product_id) == pre_section
+    # Вся цепочка снята — каждый сегмент каждого участка вернулся к своему
+    # значению, а не только сумма по одному участку.
+    post_groups = await _stock_groups(session, product_id)
+    assert post_groups == pre_groups, (
+        f"группы до цепочки: {pre_groups!r}\nгруппы после отмены: {post_groups!r}"
+    )
 
 
 async def test_defect_decision_reverse(session: AsyncSession) -> None:
@@ -257,12 +366,14 @@ async def test_defect_decision_reverse(session: AsyncSession) -> None:
 
     fx = await _setup_minimal_route(session)
     await _issue_material(session, fx)
+    product_id = fx["product"].id
 
     res = await create_defect(
         session, task_id=fx["task"].id, quantity=Decimal("2"),
         actor_id=fx["user"].id, reason="scratch",
     )
     defect_id = res["defect_id"]
+    pre_groups = await _stock_groups(session, product_id)
     await defect_decide(
         session, defect_id=defect_id, decision_type=DefectDecisionType.scrap,
         quantity=Decimal("2"), actor_id=fx["user"].id,
@@ -277,7 +388,6 @@ async def test_defect_decision_reverse(session: AsyncSession) -> None:
     )).scalar_one()
     orig_txs = await _action_txs(session, action.id)
     scrap_loc = orig_txs[0].to_location_id
-    product_id = fx["product"].id
     assert await _balance(session, scrap_loc, product_id) == Decimal("2")
 
     preview = await reversal_service.preview_reverse(session, action.id)
@@ -294,7 +404,13 @@ async def test_defect_decision_reverse(session: AsyncSession) -> None:
     )).scalar_one()
     assert mirror.from_location_id == scrap_loc
     assert mirror.quantity == orig_txs[0].quantity
-    assert await _balance(session, scrap_loc, product_id) == Decimal("0")
+    # Браковая группа исчезла вместе с проводкой — по всему артикулу, а не
+    # только по сумме scrap-локации.
+    post_groups = await _stock_groups(session, product_id)
+    assert post_groups == pre_groups, (
+        f"группы до решения о браке: {pre_groups!r}\n"
+        f"группы после отката: {post_groups!r}"
+    )
 
 
 async def test_manual_adjustment_reverse(client, session: AsyncSession) -> None:
@@ -309,6 +425,8 @@ async def test_manual_adjustment_reverse(client, session: AsyncSession) -> None:
                        is_active=True, sort_order=0)
     session.add(location)
     await session.commit()
+    pre_groups = await _stock_groups(session, product.id)
+    assert pre_groups == {}
 
     resp = await client.post("/api/stock/adjustment", json={
         "product_id": product.id,
@@ -341,7 +459,10 @@ async def test_manual_adjustment_reverse(client, session: AsyncSession) -> None:
     )).scalar_one()
     assert mirror.from_location_id == location.id
     assert mirror.to_location_id is None
-    assert await _balance(session, location.id, product.id) == Decimal("0")
+    post_groups = await _stock_groups(session, product.id)
+    assert post_groups == pre_groups, (
+        f"группы до корректировки: {pre_groups!r}\nгруппы после отката: {post_groups!r}"
+    )
 
 
 async def test_import_remainders_reverse_both_phases(session: AsyncSession) -> None:
@@ -370,6 +491,7 @@ async def test_import_remainders_reverse_both_phases(session: AsyncSession) -> N
     await session.commit()
     pre = await _balance(session, location.id, product.id)
     assert pre == Decimal("9")
+    pre_groups = await _stock_groups(session, product.id)
 
     items = [
         RemainderItem(
@@ -399,7 +521,12 @@ async def test_import_remainders_reverse_both_phases(session: AsyncSession) -> N
     assert {t.reason for t in orig_txs} == {Reason.ADJUSTMENT_OUT, Reason.MANUAL_IN}
     mirrored = {t.reverses_id for t in await _action_txs(session, rev.reversal_action_id)}
     assert {t.id for t in orig_txs} <= mirrored
-    assert await _balance(session, location.id, product.id) == pre
+    # Обе фазы импорта (очистка + заливка) сняты: остались ровно те же
+    # группы с теми же суммами, что и до импорта.
+    post_groups = await _stock_groups(session, product.id)
+    assert post_groups == pre_groups, (
+        f"группы до импорта: {pre_groups!r}\nгруппы после отката: {post_groups!r}"
+    )
 
 
 async def test_seed_demo_reverse_not_allowed(session: AsyncSession, monkeypatch) -> None:
@@ -473,6 +600,10 @@ async def test_plan_auto_release_tree_preview_reverse(session: AsyncSession) -> 
 
     complete = await _complete_task(session, fx, good=Decimal("7"), scrap=Decimal("0"))
 
+    # Снимок ДО самой план-автозавершающей проводки: откат обязан вернуть
+    # ровно её группы, а не просто сумму участка.
+    pre_groups = await _stock_groups(session, product_id)
+
     action = await action_journal_service.log_task_action(
         session,
         action_type="plan_auto_release",
@@ -520,6 +651,10 @@ async def test_plan_auto_release_tree_preview_reverse(session: AsyncSession) -> 
     assert mirror.quantity == Decimal("3")
     refreshed = await session.get(Action, action.id)
     assert refreshed.status == ActionStatus.REVERSED
+    post_groups = await _stock_groups(session, product_id)
+    assert post_groups == pre_groups, (
+        f"группы до автозавершения: {pre_groups!r}\nгруппы после отката: {post_groups!r}"
+    )
     assert await _balance(session, section_id, product_id) == pre_section
 
 
