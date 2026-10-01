@@ -517,7 +517,7 @@ async def test_demo_seed_fills_daily_plans_on_every_demo_section(session) -> Non
     assert len(plans) == stats["daily_plans"] == 36
     assert {plan.section_id for plan in plans} == {section.id for section in sections.values()}
 
-    today = date.today()
+    today = date.today()  # noqa: DTZ011 — локальный бизнес-день демо, зеркалит date.today() в packing_plan_demo_seeder
     history_window = {today - timedelta(days=offset) for offset in range(8, -1, -1)}
     for code, section in sections.items():
         section_plans = [plan for plan in plans if plan.section_id == section.id]

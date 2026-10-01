@@ -15,7 +15,7 @@ from __future__ import annotations
 
 import asyncio
 from collections.abc import AsyncIterator
-from datetime import datetime
+from datetime import date
 from decimal import Decimal
 
 import pytest
@@ -382,7 +382,7 @@ async def _make_two_stage_setup(factory: async_sessionmaker, schema: str, sku: s
 
         plan = ProductionPlan(
             plan_no=f"P-{sku}", name="p", status=ProductionPlanStatus.approved,
-            period_start=datetime(2026, 6, 1), period_end=datetime(2026, 6, 30),
+            period_start=date(2026, 6, 1), period_end=date(2026, 6, 30),
         )
         s.add(plan)
         await s.flush()

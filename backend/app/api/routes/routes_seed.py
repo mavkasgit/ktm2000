@@ -7,6 +7,7 @@ import logging
 from fastapi import APIRouter, Depends, HTTPException, Query, status
 from pydantic import BaseModel
 from sqlalchemy import text
+from sqlalchemy.exc import SQLAlchemyError
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.api.deps import (
@@ -191,7 +192,7 @@ async def cleanup_stats_endpoint(
         try:
             res = await db.execute(text(f"SELECT COUNT(*) FROM {table}"))
             stats[table] = res.scalar() or 0
-        except Exception as e:
+        except SQLAlchemyError as e:
             logger.warning(f"Failed to get row count for table {table}: {e}")
             stats[table] = 0
     return CleanupStatsResponse(stats=stats)

@@ -792,7 +792,10 @@ def _parse_date(value: Any) -> date | None:
     text = str(value).strip()
     for fmt in ("%Y-%m-%d", "%d.%m.%Y"):
         try:
-            return datetime.strptime(text, fmt).date()
+            # Форматы без времени и пояса — `DTZ007` здесь ложное срабатывание:
+            # из строки берётся только календарная дата (`.date()`), aware-разбор
+            # добавить нечем и незачем.
+            return datetime.strptime(text, fmt).date()  # noqa: DTZ007 — см. выше
         except ValueError:
             continue
     return None

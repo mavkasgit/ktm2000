@@ -1,4 +1,4 @@
-from decimal import Decimal
+from decimal import Decimal, InvalidOperation
 from typing import Any
 
 from fastapi import APIRouter, Depends, File, HTTPException, UploadFile, status
@@ -444,7 +444,7 @@ def _decimal_or_none(value: Any) -> Decimal | None:
         if not normalized:
             return None
         return Decimal(normalized)
-    except Exception:
+    except InvalidOperation:
         return None
 
 
@@ -457,14 +457,14 @@ async def import_defects_excel(
 ) -> dict:
     from io import BytesIO
 
-    from python_calamine import load_workbook
+    from python_calamine import CalamineError, load_workbook
 
     from app.models.defect import Defect, DefectItem, DefectStatus, DefectType
 
     content = await file.read()
     try:
         workbook = load_workbook(BytesIO(content))
-    except Exception as exc:
+    except CalamineError as exc:
         raise HTTPException(status_code=400, detail=f"Invalid Excel file: {exc}")
 
     sheet = workbook.get_sheet_by_index(0)

@@ -1253,9 +1253,12 @@ async def seed_packing_plan_demo(
             f"Профиль маршрута «{DEMO_ROUTE_PROFILE_CODE}» не засеян — выполните `npm run db:seed`"
         )
 
+    # Дата в имени файла — человекочитаемая метка локального дня снятия демо,
+    # а не инстант: в проде контейнер UTC, а смена шкалы развела бы имя файла и
+    # остальные демо-метки.
     import_result = await create_excel_import_change_set(
         db,
-        filename=f"demo-{DEMO_PLAN_MARKER.lower()}-packing-plan-{date.today().isoformat()}.xlsx",
+        filename=f"demo-{DEMO_PLAN_MARKER.lower()}-packing-plan-{date.today().isoformat()}.xlsx",  # noqa: DTZ011 — метка, не инстант
         content=_plan_workbook(PACKING_PLAN_ROWS),
         content_type="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
         sheet_index=0,
@@ -1336,7 +1339,10 @@ async def seed_packing_plan_demo(
             target_order=target_order,
             actor_id=actor.id,
             scrap_policy=build_plant_config().production.scrap_policy,
-            start=datetime.combine(date.today(), datetime.min.time(), tzinfo=UTC).replace(hour=8),
+            # Демо-время операций: 08:00 UTC текущего дня. Дату берём в UTC, а не
+            # `date.today()`: смешение локальной даты с `tzinfo=UTC` давало
+            # 08:00 UTC «вчерашней» даты на хостах восточнее UTC.
+            start=datetime.now(UTC).replace(hour=8, minute=0, second=0, microsecond=0),
         )
 
     # Дневной план не принимает терминальные задания (completed/cancelled) —
@@ -1360,7 +1366,10 @@ async def seed_packing_plan_demo(
             ).all()
         )
         open_tasks_count[section_id] = len(open_tasks)
-        for plan_date, task_ids in _daily_plan_specs(open_tasks, date.today()):
+        # Дата дневного плана — локальный бизнес-день демо (колонка `Date`,
+        # инстанта нет). Тест зеркалит эту же шкалу и обязан меняться вместе с
+        # ней (`tests/test_packing_plan_demo_seeder.py`).
+        for plan_date, task_ids in _daily_plan_specs(open_tasks, date.today()):  # noqa: DTZ011 — бизнес-день демо
             created = await create_plan(
                 db,
                 section_id=section_id,

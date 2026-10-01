@@ -19,7 +19,7 @@ from __future__ import annotations
 
 import json
 from dataclasses import dataclass, field
-from datetime import datetime
+from datetime import UTC, datetime
 from decimal import Decimal
 from typing import Any
 from typing import cast as tcast
@@ -333,12 +333,12 @@ class StockProjectionManager:
                 dimensions=dimensions,
                 completed_operations=completed_operations,
                 balance_qty=balance,
-                refreshed_at=datetime.now(),
+                refreshed_at=datetime.now(UTC),
             )
             session.add(row)
         else:
             row.balance_qty = balance
-            row.refreshed_at = datetime.now()
+            row.refreshed_at = datetime.now(UTC)
 
     async def recompute_balance_key(
         self,
@@ -442,7 +442,7 @@ class StockProjectionManager:
                     dimensions=dims,
                     completed_operations=ops,
                     balance_qty=balance,
-                    refreshed_at=datetime.now(),
+                    refreshed_at=datetime.now(UTC),
                 )
             )
         return len(rows)

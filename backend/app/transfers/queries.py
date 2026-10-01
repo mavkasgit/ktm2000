@@ -15,7 +15,7 @@ from __future__ import annotations
 
 from collections.abc import Callable, Sequence
 from datetime import datetime
-from decimal import Decimal
+from decimal import Decimal, InvalidOperation
 from typing import Any
 from typing import cast as tcast
 
@@ -366,14 +366,14 @@ def _ready_dimensions_length(item: dict) -> float | None:
         return None
     try:
         return float(_to_decimal(raw))
-    except Exception:
+    except InvalidOperation:
         return None
 
 
 def _ready_transferable_qty(item: dict) -> Decimal:
     try:
         return _to_decimal(item.get("transferable_quantity") or "0")
-    except Exception:
+    except InvalidOperation:
         return Decimal(0)
 
 
@@ -699,7 +699,7 @@ def _ready_item_matches_column_filters(
     if transferable_qty is not None:
         try:
             item_qty = _to_decimal(item.get("transferable_quantity"))
-        except Exception:
+        except InvalidOperation:
             return False
         if item_qty != transferable_qty:
             return False
@@ -1002,7 +1002,7 @@ async def list_ready_to_transfer(
     if transferable_qty:
         try:
             parsed_transferable_qty = _to_decimal(transferable_qty)
-        except Exception:
+        except InvalidOperation:
             parsed_transferable_qty = None
 
     # transferable_qty/dimensions применяются по строке в Python (тикет #91):

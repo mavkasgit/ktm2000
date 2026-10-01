@@ -10,12 +10,15 @@ Usage:
 
 from __future__ import annotations
 
+import logging
 import sys
 from pathlib import Path
 
 # Добавляем backend/ в sys.path для импортов app.*
 backend_dir = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(backend_dir))
+
+logger = logging.getLogger(__name__)
 
 
 def main() -> int:
@@ -27,6 +30,10 @@ def main() -> int:
               f"{len(config.display.labels.error_messages)} error messages")
         return 0
     except Exception as exc:
+        # Точка входа CLI: ловим всё, чтобы вернуть ненулевой код вместо
+        # трассировки, но ошибку не глотаем — пишем traceback в лог и сообщение
+        # в stderr.
+        logger.exception("Seed validation FAILED")
         print(f"FAIL: Seed validation FAILED: {exc}", file=sys.stderr)
         return 1
 

@@ -34,7 +34,11 @@ async def run_backup_cycle():
     if not config.get("auto_enabled", False):
         return
 
-    now = datetime.now()
+    # Локальное время контейнера — осознанно: `docs/deployment.md` задаёт
+    # `time_of_day` расписания как местное время контейнера, а TZ намеренно не
+    # переопределяется (в проде контейнер и так UTC). Перевод в UTC сдвинул бы
+    # момент запуска и корзины GFS-ротации (`determine_backup_type`).
+    now = datetime.now()  # noqa: DTZ005 — см. комментарий выше
     time_str = now.strftime("%H:%M")
 
     if time_str != config.get("time_of_day", "23:00"):
@@ -47,7 +51,9 @@ async def run_backup_cycle():
     if latest_backups:
         latest_backup = latest_backups[0]
         try:
-            mtime = datetime.fromtimestamp(latest_backup.stat().st_mtime)
+            # Та же шкала, что у `now` выше (локальное время контейнера): иначе
+            # сравнение «бэкап уже есть за сегодня» поедет на смещение пояса.
+            mtime = datetime.fromtimestamp(latest_backup.stat().st_mtime)  # noqa: DTZ006 — см. выше
             if mtime.date() == now.date():
                 logger.info(
                     "Бэкап на сегодня уже существует (%s). Пропуск автоматического запуска.",
