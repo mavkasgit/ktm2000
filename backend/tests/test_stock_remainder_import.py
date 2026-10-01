@@ -18,6 +18,7 @@ from io import BytesIO
 from app.models import Product, ProductType, Section
 from app.models.import_template import ImportTemplate
 from app.models.route import SectionOperation
+from app.stock.import_service import RemainderItem, _row_completed_operations
 from app.stock.models import QualityState, Reason, StockBalance, StockTransaction
 from app.stock.services import StockCommand, StockCommandService
 from httpx import AsyncClient
@@ -1675,3 +1676,73 @@ async def test_preview_remainders_ignores_legacy_sort_by_form_fields(
     excel_buf.seek(0)
     by_quantity = await _preview_rows(client, excel_buf, {"sort": "quantity:desc", "limit": "50"})
     assert [row["source_row_number"] for row in by_quantity] == [3, 4, 2]
+
+
+# ─── Юнит: признак пройденных операций строки (_row_completed_operations) ─────
+#
+# Четыре различимых состояния (ADR-0055 п.6). Ключевое из них — «колонка есть,
+# ячейка пуста»: именно эту группу (`[]`) читает складской (транзитный) этап
+# маршрута, когда забирает материал в производство. Пока пустая ячейка
+# схлопывалась в NULL вместе с отсутствием колонки, остаток из импорта не мог
+# быть выдан в маршрут.
+
+
+def _ops_item(raw: str | None, stages: list[dict] | None = None) -> RemainderItem:
+    """Строка импорта ровно с тем, что читает резолвер признака."""
+    return RemainderItem(
+        source_row_number=2,
+        sku="IMP-PROD",
+        quantity=1.0,
+        comment=None,
+        product_id=None,
+        product_name=None,
+        status="valid",
+        errors=[],
+        raw_values=[],
+        completed_operations_raw=raw,
+        completed_stages=stages,
+    )
+
+
+def test_row_completed_operations_column_absent_is_none() -> None:
+    """Колонки нет → «состояние не зафиксировано» (NULL-группа)."""
+    assert _row_completed_operations(_ops_item(None)) is None
+
+
+def test_row_completed_operations_empty_cell_is_empty_list() -> None:
+    """Колонка есть, ячейка пуста → «операций не было» (группа [])."""
+    assert _row_completed_operations(_ops_item("")) == []
+
+
+def test_row_completed_operations_dash_cell_is_empty_list() -> None:
+    """Прочерк в ячейке — то же «операций не было», а не «не зафиксировано»."""
+    assert _row_completed_operations(_ops_item("—")) == []
+    assert _row_completed_operations(_ops_item("-")) == []
+
+
+def test_row_completed_operations_resolved_codes() -> None:
+    """Заполненная ячейка → коды разрешённых операций, канонические и без дублей."""
+    stages = [
+        {"operation_code": "SHOT", "operation_name": "Дробеструй"},
+        {"operation_code": "PRESS_WINDOW", "operation_name": "Окно"},
+    ]
+    assert _row_completed_operations(_ops_item("Дробеструй, Окно", stages)) == [
+        "PRESS_WINDOW",
+        "SHOT",
+    ]
+
+
+def test_row_completed_operations_unmatched_text_is_none() -> None:
+    """Текст, не сматчившийся со справочником → состояние неизвестно, не []."""
+    assert _row_completed_operations(_ops_item("Что-то стороннее", [])) is None
+
+
+def test_row_completed_operations_whitespace_cell_is_empty_list() -> None:
+    """Ячейка из одних пробелов — тоже «без операций», а не «не зафиксировано».
+
+    Excel охотно отдаёт такие ячейки после правок: «пусто» и «пробел» оператору
+    неразличимы, а для ключа остатка это разные группы, если не срезать пробелы.
+    """
+    assert _row_completed_operations(_ops_item("   ")) == []
+    assert _row_completed_operations(_ops_item("\t")) == []
+    assert _row_completed_operations(_ops_item("  —  ")) == []

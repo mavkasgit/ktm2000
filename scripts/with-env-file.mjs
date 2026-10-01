@@ -19,7 +19,9 @@ import { dirname, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 
 const REPO_ROOT = resolve(dirname(fileURLToPath(import.meta.url)), "..");
-const DEFAULT_ENV_FILE = resolve(REPO_ROOT, ".env.e2e");
+// Путь к env-файлу переопределяется `E2E_ENV_FILE`: у каждого worktree клона
+// своя БД стенда, иначе параллельные прогоны стирают данные друг друга.
+const DEFAULT_ENV_FILE = resolve(REPO_ROOT, process.env.E2E_ENV_FILE ?? ".env.e2e");
 
 const OPTION_KEYS = { "--env-file": "envFile", "--cwd": "cwd" };
 

@@ -295,14 +295,9 @@ test.describe("@ui @ui-narrow Пила: распил одной задачи н�
     await authenticatedPage.reload();
     await expect(taskRow).toBeVisible({ timeout: 15_000 });
 
-    // Прогресс по выходам: карточка рендерит ОДИН span с текстом
-    // «0,9 м: N/350 · 1,8 м: M/50» (title содержит слэш, в отличие от сводки).
-    const outLengths = [...new Set((task!.outputs ?? []).map((o) => o.dimensions?.length_mm))] as number[];
-    const progressLine = taskRow.locator('span[title*="/"]').first();
-    await expect(progressLine).toBeVisible({ timeout: 15_000 });
-    for (const mm of outLengths) {
-      await expect(progressLine).toContainText(lengthLabel(mm));
-    }
+    // Прогресс по выходам с доски убран (ADR-0058): строку «0,9 м: N/350 · …»
+    // больше не рендерят. Раскрой на доске уже проверен выше (столбик
+    // «<длина>×<кол-во>»), а прогресс — по `outputs_progress` из API ниже.
 
     // Ledger: вход списан на порцию, оба выхода оприходованы пропорционально.
     task = (await boardTasks(sawing.id)).find((t) => t.product_sku === SAW_SKU);

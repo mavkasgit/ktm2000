@@ -174,9 +174,9 @@ describe("StockAdjustmentDialog: группы операций (ADR-0055)", () =
     expect(text).toContain("100 шт");
     expect(text).toContain("40 шт");
     expect(text).toContain("7 шт");
-    // Для прихода синтетический пункт «не зафиксировано» присутствует
-    // (выбор опционален), для групп он не дублируется.
-    expect(screen.getAllByRole("radio")).toHaveLength(BALANCES.length + 1);
+    // Для прихода синтетических пунктов два — «не зафиксировано» и «без
+    // операций» (выбор группы опционален); строки остатка их не дублируют.
+    expect(screen.getAllByRole("radio")).toHaveLength(BALANCES.length + 2);
   });
 
   it("приход без выбора группы уходит с completed_operations: null", async () => {
@@ -230,5 +230,64 @@ describe("StockAdjustmentDialog: группы операций (ADR-0055)", () =
       quantity: 10,
       completed_operations: ["SAW"],
     });
+  });
+
+  it("приход в группу «без операций» передаёт пустой список", async () => {
+    renderDialog();
+    await selectProductAndSection();
+    setQuantity("5");
+
+    fireEvent.click(screen.getByTestId("stock-adjustment-empty-ops"));
+    fireEvent.click(screen.getByRole("button", { name: "Выполнить" }));
+
+    await waitFor(() =>
+      expect(postStockAdjustment).toHaveBeenCalledTimes(1),
+    );
+    expect(vi.mocked(postStockAdjustment).mock.calls[0][0]).toMatchObject({
+      reason: "manual_in",
+      completed_operations: [],
+    });
+  });
+
+  it("«без операций» доступна и когда строк остатка нет", async () => {
+    // Свежий участок: строк этого артикула нет вовсе. Раньше радиогруппа не
+    // рендерилась совсем, и приход можно было завести только в NULL-группу, из
+    // которой маршрут материал не берёт (тикет #266).
+    vi.mocked(getStockBalances).mockResolvedValue({
+      balances: [],
+      total: 0,
+      limit: 500,
+      offset: 0,
+    });
+    renderDialog();
+    await selectProductAndSection();
+    setQuantity("5");
+
+    fireEvent.click(await screen.findByTestId("stock-adjustment-empty-ops"));
+    fireEvent.click(screen.getByRole("button", { name: "Выполнить" }));
+
+    await waitFor(() =>
+      expect(postStockAdjustment).toHaveBeenCalledTimes(1),
+    );
+    expect(vi.mocked(postStockAdjustment).mock.calls[0][0]).toMatchObject({
+      reason: "manual_in",
+      completed_operations: [],
+    });
+  });
+
+  it("переключение на расход снимает «без операций»", async () => {
+    renderDialog();
+    await selectProductAndSection();
+    setQuantity("5");
+    fireEvent.click(screen.getByTestId("stock-adjustment-empty-ops"));
+
+    await openSelect("Приход (manual_in)");
+    await chooseOption(/Расход \(manual_out\)/);
+    fireEvent.click(screen.getByRole("button", { name: "Выполнить" }));
+
+    // Расход без выбранной строки остатка отклоняется локально: группа для
+    // списания обязательна, и выбор прихода туда не переезжает.
+    expect(await screen.findByText("Для списания выберите группу операций")).toBeTruthy();
+    expect(postStockAdjustment).not.toHaveBeenCalled();
   });
 });

@@ -23,6 +23,7 @@ import {
   formatCompletedOperationsLabel,
   formatDimensionsLabel,
   getStockBalances,
+  OPERATIONS_EMPTY_LABEL,
   OPERATIONS_NOT_RECORDED_LABEL,
   postStockAdjustment,
 } from "@/shared/api/stock";
@@ -68,6 +69,10 @@ export function StockAdjustmentDialog({ open, onOpenChange }: StockAdjustmentDia
   const [operationType, setOperationType] = useState<OperationType>("manual_in");
   const [qualityState, setQualityState] = useState<QualityState>("GOOD");
   const [selectedGroupId, setSelectedGroupId] = useState<number | null>(null);
+  // Явный выбор «без операций» (ADR-0055 п.6, п.9): группа `[]` — та самая, из
+  // которой складской (транзитный) этап маршрута забирает материал. При этом
+  // `selectedGroupId === null` значит «не зафиксировано» (NULL-группа).
+  const [emptyOpsSelected, setEmptyOpsSelected] = useState(false);
   const [quantity, setQuantity] = useState("");
   const [lengthMeters, setLengthMeters] = useState("");
   const [comment, setComment] = useState("");
@@ -84,6 +89,8 @@ export function StockAdjustmentDialog({ open, onOpenChange }: StockAdjustmentDia
       setQuantity("");
       setLengthMeters("");
       setComment("");
+      setSelectedGroupId(null);
+      setEmptyOpsSelected(false);
       setError(null);
     }
   }, [open]);
@@ -92,9 +99,17 @@ export function StockAdjustmentDialog({ open, onOpenChange }: StockAdjustmentDia
   // качества делает прежнюю строку чужой (ADR-0055).
   useEffect(() => {
     setSelectedGroupId(null);
+    setEmptyOpsSelected(false);
   }, [selectedProductId, selectedSectionId, qualityState]);
 
   const isOut = operationType === "manual_out" || operationType === "adjustment_out";
+
+  // «Без операций» — опция прихода: у расхода группа обязательна и берётся из
+  // существующих строк. Переключение на расход снимает выбор, иначе в проводку
+  // ушёл бы `[]` вместо выбранной строки списания.
+  useEffect(() => {
+    if (isOut) setEmptyOpsSelected(false);
+  }, [isOut]);
 
   // Группы артикула на выбранной локации — существующий эндпоинт балансов
   // (/stock/balance): он отдаёт строки по полному ключу остатка, включая
@@ -221,11 +236,13 @@ export function StockAdjustmentDialog({ open, onOpenChange }: StockAdjustmentDia
         reason: operationType,
         quality_state: qualityState,
         dimensions: "dims" in resolved ? resolved.dims : undefined,
-        // Группа, из которой списываем/в которую кладём (ADR-0055). Без
-        // выбора — null, то есть NULL-группа «не зафиксировано».
-        completed_operations: selectedGroup
-          ? selectedGroup.completed_operations ?? null
-          : null,
+        // Группа, из которой списываем/в которую кладём (ADR-0055). «Без
+        // операций» — явный пустой список, «не зафиксировано» — null.
+        completed_operations: emptyOpsSelected
+          ? []
+          : selectedGroup
+            ? selectedGroup.completed_operations ?? null
+            : null,
         comment: comment || undefined,
       });
     },
@@ -412,7 +429,7 @@ export function StockAdjustmentDialog({ open, onOpenChange }: StockAdjustmentDia
               <p className="text-xs text-muted-foreground">
                 {isOut
                   ? "Списание идёт строго из выбранной группы."
-                  : `Без выбора материал ляжет в группу «${OPERATIONS_NOT_RECORDED_LABEL}».`}
+                  : `Без выбора материал ляжет в группу «${OPERATIONS_NOT_RECORDED_LABEL}»; «${OPERATIONS_EMPTY_LABEL}» — группа, из которой материал забирает складской этап маршрута.`}
               </p>
               {groupsPending ? (
                 <div className="flex items-center gap-2 text-xs text-muted-foreground border rounded-md p-2">
@@ -423,26 +440,49 @@ export function StockAdjustmentDialog({ open, onOpenChange }: StockAdjustmentDia
                 <div className="text-xs text-destructive border rounded-md p-2">
                   Не удалось загрузить группы остатка
                 </div>
-              ) : groups.length === 0 ? (
-                <div className="text-xs text-muted-foreground border rounded-md p-2">
-                  На участке нет строк остатка этого артикула
-                </div>
               ) : (
                 <div
                   role="radiogroup"
                   aria-label="Группа операций"
                   className="max-h-[170px] overflow-y-auto border rounded-md divide-y"
                 >
+                  {/* Синтетические группы — вне строк остатка: без них на
+                      участке без остатков приход нельзя завести в группу, из
+                      которой его заберёт маршрут (тикет #266). */}
                   {!isOut && (
-                    <button
-                      type="button"
-                      role="radio"
-                      aria-checked={selectedGroup === null}
-                      onClick={() => setSelectedGroupId(null)}
-                      className={groupRadioClass(selectedGroup === null)}
-                    >
-                      <span className="truncate">{OPERATIONS_NOT_RECORDED_LABEL}</span>
-                    </button>
+                    <>
+                      <button
+                        type="button"
+                        role="radio"
+                        aria-checked={!emptyOpsSelected && selectedGroup === null}
+                        onClick={() => {
+                          setSelectedGroupId(null);
+                          setEmptyOpsSelected(false);
+                        }}
+                        className={groupRadioClass(!emptyOpsSelected && selectedGroup === null)}
+                        data-testid="stock-adjustment-not-recorded"
+                      >
+                        <span className="truncate">{OPERATIONS_NOT_RECORDED_LABEL}</span>
+                      </button>
+                      <button
+                        type="button"
+                        role="radio"
+                        aria-checked={emptyOpsSelected}
+                        onClick={() => {
+                          setSelectedGroupId(null);
+                          setEmptyOpsSelected(true);
+                        }}
+                        className={groupRadioClass(emptyOpsSelected)}
+                        data-testid="stock-adjustment-empty-ops"
+                      >
+                        <span className="truncate">{OPERATIONS_EMPTY_LABEL}</span>
+                      </button>
+                    </>
+                  )}
+                  {groups.length === 0 && (
+                    <div className="px-3 py-1.5 text-xs text-muted-foreground">
+                      На участке нет строк остатка этого артикула
+                    </div>
                   )}
                   {groups.map((row) => {
                     const dims = normalizeDims(row.dimensions);
@@ -452,7 +492,10 @@ export function StockAdjustmentDialog({ open, onOpenChange }: StockAdjustmentDia
                         type="button"
                         role="radio"
                         aria-checked={selectedGroupId === row.id}
-                        onClick={() => setSelectedGroupId(row.id)}
+                        onClick={() => {
+                          setSelectedGroupId(row.id);
+                          setEmptyOpsSelected(false);
+                        }}
                         className={groupRadioClass(selectedGroupId === row.id)}
                       >
                         <span className="truncate">

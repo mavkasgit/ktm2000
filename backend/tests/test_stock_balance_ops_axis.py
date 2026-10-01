@@ -148,7 +148,10 @@ async def test_import_splits_balance_by_completed_operations(
     ).all()
     ops_by_qty = {float(tx.quantity): tx.completed_operations for tx in txs}
     assert ops_by_qty[8888.0] == ["WINDOW"]
-    assert ops_by_qty[4500.0] is None
+    # Колонка «Операции» есть, ячейка пуста → «операций не было», то есть группа
+    # `[]`, а не NULL (ADR-0055 п.9): именно из неё складской (транзитный) этап
+    # маршрута забирает материал в производство.
+    assert ops_by_qty[4500.0] == []
 
     # Две строки остатка, а не одна на 13388.
     balances = await _balances(session, product, location)
@@ -156,11 +159,11 @@ async def test_import_splits_balance_by_completed_operations(
         (b.completed_operations, float(b.balance_qty)) for b in balances
     ]
     by_ops = {
-        tuple(b.completed_operations) if b.completed_operations else None:
+        (tuple(b.completed_operations) if b.completed_operations is not None else None):
             float(b.balance_qty)
         for b in balances
     }
-    assert by_ops == {("WINDOW",): 8888.0, None: 4500.0}
+    assert by_ops == {("WINDOW",): 8888.0, (): 4500.0}
 
     await assert_no_invariants_violations(session, context="ops-axis-import")
 

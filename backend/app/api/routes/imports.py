@@ -503,7 +503,12 @@ async def list_recent_imports(
         .join(ImportFile, ImportBatch.source_file_id == ImportFile.id)
         .outerjoin(PlanChangeSet, PlanChangeSet.import_batch_id == ImportBatch.id)
         .where(ProductionPlan.deleted_at.is_(None))
-        .order_by(desc(ImportBatch.created_at))
+        # `id` — тай-брейкер: без него порядок батчей с одинаковым `created_at`
+        # не определён, и список «переезжает» между перерисовками. LIFO-владелец
+        # отката считается по `applied_at` и на равных метках берёт первый в
+        # списке (`frontend/src/features/planning/lib/appliedBatches.ts`), то есть
+        # зависел от этого порядка.
+        .order_by(desc(ImportBatch.created_at), desc(ImportBatch.id))
         .limit(limit)
     )
     items = []
