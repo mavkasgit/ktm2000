@@ -246,3 +246,48 @@ gitignored).
   owner-строки. Исправлено тикетом `T-0007` (`drop --force`).
 - TTL-уборка `npm run test:db:cleanup` покрывает `ktm2000_test_%` и остаётся
   штатным механизмом для run-DB.
+
+---
+
+# Ночь 2026-10-01 / 2026-10-02 — продуктовая очередь
+
+## Окружение и условия
+
+| Что | Значение |
+|---|---|
+| База смены | `main` `63cb2b9` (после коммита унаследованного WIP: `4fd6fd9`, `cc73a8f`, `74d3a7f`, `63cb2b9`) |
+| Деревья | оркестратор в `main` + агенты в `ktm2000-night`, `-b`, `-c`, `-d` (ветки `night/2026-10-01{,-b,-c,-d}`) |
+| Интерпретатор | `C:/Users/LogoPrint/VibeCoding/ktm2000/backend/.venv/Scripts/python.exe` (3.12.10); в ночных worktree `backend/.venv` нет — задаётся `TEST_PYTHON` |
+| Воркеры | оркестратор — 6 (baseline), затем 4; агенты — 3 (машина делится) |
+| Нагрузка | **постоянная**: dev-стек (`:5172`, `:8012`), прод-контейнеры (`:8082`, `ktm2000-postgres-prod`), два-четыре параллельных прогона смены. Все времена — «под нагрузкой», эталоном не называть |
+| E2E-стенд | модель #281: шаблон `<имя>_template` + клон на прогон; у каждого worktree свой namespace (`.env.e2e.*.local`, БД `ktm2000_e2e_night[_b|_c|_d]`) |
+| Alembic | один head — `076_stock_import_batch_fk_types` |
+
+## Прогоны
+
+| Что | Число |
+|---|---|
+| Backend do смены (`main@63cb2b9`, 6 воркеров) | **1993 passed**, 3 warnings, 194.17s |
+| Backend срез A (после #274, 3 воркера) | 2000 passed, 3 warnings, 392.80s |
+| Backend срез B (после #267, 3 воркера) | 1993 passed, 0 failed, 448.14s |
+| Backend после merge всех срезов (`main@1ff72b1`, 4 воркера) | **2000 passed**, 3 warnings, 379.62s |
+| Frontend vitest до смены | 1150 passed / 1 skipped |
+| Frontend vitest после merge | **1169 passed / 1 skipped**, 52.5s |
+| `tsc --noEmit` (после merge) | чисто |
+| `ruff check backend` (после merge) | All checks passed |
+| e2e:prep тёплый (клон шаблона) | 4.3 с; холодный (сборка шаблона) 11.6 с |
+
+Рост набора: backend +7 тестов (3 — #264, 4 — #279), frontend +19 (run-slots, run-lock,
+multiSort, SectionTasksBoard.sorting, planPresets, stockAdjustment). Покрытие frontend не падало
+(гейт `vitest run` — statements/lines 43, branches 72).
+
+## e2e (#281 и приёмка #244)
+
+- Параллельный AC #281: два `ui-e2e` в разных worktree, старт с разницей 28 мс, оба зелёные —
+  `10 passed` (375 с) и `10 passed` (404 с), слоты «2/2» и «1/2» заняты одновременно;
+  `CI` не задан, `workers: 1`, `--retries=0`.
+- Механизм: `run-lock.mjs` (живость держателя) + `run-slots.mjs` (машинный семафор,
+  `E2E_MAX_PARALLEL_RUNS=2`), клон БД и env-файл прогона сносятся в `finalize()`, включая путь
+  «прошлый прогон умер».
+- Времена под нагрузкой (два стенда + pytest + dev-стек) — не эталон: 6 мин на ярус вместо
+  канонических 1–2 мин.
