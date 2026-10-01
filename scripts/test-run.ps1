@@ -30,6 +30,18 @@ $PostgresPassword = if ($env:TEST_DB_PASSWORD) { $env:TEST_DB_PASSWORD } else { 
 # otherwise every run grabs all cores and the machine becomes unresponsive.
 $NumWorkers = $env:PYTEST_NUM_WORKERS
 
+# Interpreter for test-db.py and pytest. Default is `python` from PATH; override
+# with TEST_PYTHON to make the run reproducible when PATH points at a different
+# Python than the one with the dependencies (as of 2026-10-01: PATH has system
+# Python 3.12 with the deps, while backend/.venv is an empty 3.14 - see B-0006).
+$PythonExe = if ($env:TEST_PYTHON) { $env:TEST_PYTHON } else { "python" }
+$pythonOk = $true
+try { & $PythonExe -c "import sys" *> $null } catch { $pythonOk = $false }
+if ($pythonOk -and ($null -ne $LASTEXITCODE) -and $LASTEXITCODE -ne 0) { $pythonOk = $false }
+if (-not $pythonOk) {
+    throw "TEST_PYTHON='$PythonExe' is not a runnable interpreter (set TEST_PYTHON or fix PATH)"
+}
+
 # ------------------------------------------------------------
 # Unique run identity
 # ------------------------------------------------------------
@@ -81,6 +93,7 @@ else {
     if ($DistArgs.Count -gt 0) { Write-Host "Dist   : $($DistArgs[1]) (whole module per worker)" }
 }
 if ($KeepDb) { Write-Host "DB     : keep after run (--keep-db)" }
+Write-Host "Python : $PythonExe"
 Write-Host ""
 
 # ------------------------------------------------------------
@@ -107,12 +120,12 @@ try {
     }
 
     Write-Host "[3/6] Creating isolated database..."
-    & python scripts/test-db.py create $TestDbName
+    & $PythonExe scripts/test-db.py create $TestDbName
     if ($LASTEXITCODE -ne 0) { throw "Failed to create test database: $TestDbName" }
     $DatabaseCreated = $true
 
     Write-Host "[4/6] Verifying database..."
-    & python scripts/test-db.py verify $TestDbName
+    & $PythonExe scripts/test-db.py verify $TestDbName
     if ($LASTEXITCODE -ne 0) { throw "Database verify failed for $TestDbName" }
 
     Push-Location backend
@@ -129,12 +142,12 @@ try {
         # show progress, and a hang must be visible where it happens. The log
         # file keeps the same text for the xdist crash check below.
         if ($FullRun) {
-            & python -m pytest @PytestArgs 2>&1 | Tee-Object -FilePath $LogFile
+            & $PythonExe -m pytest @PytestArgs 2>&1 | Tee-Object -FilePath $LogFile
         } else {
             if ($NumWorkers) {
-                & python -m pytest -n $NumWorkers @DistArgs @PytestArgs 2>&1 | Tee-Object -FilePath $LogFile
+                & $PythonExe -m pytest -n $NumWorkers @DistArgs @PytestArgs 2>&1 | Tee-Object -FilePath $LogFile
             } else {
-                & python -m pytest -n auto @DistArgs @PytestArgs 2>&1 | Tee-Object -FilePath $LogFile
+                & $PythonExe -m pytest -n auto @DistArgs @PytestArgs 2>&1 | Tee-Object -FilePath $LogFile
             }
         }
         $ExitCode = $LASTEXITCODE
@@ -166,7 +179,7 @@ finally {
         else {
             Write-Host ""
             Write-Host "[6/6] Cleaning up database: $TestDbName"
-            & python scripts/test-db.py drop $TestDbName
+            & $PythonExe scripts/test-db.py drop $TestDbName
             if ($LASTEXITCODE -ne 0) {
                 Write-Warning "Failed to cleanup test database: $TestDbName"
             }
