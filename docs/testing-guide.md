@@ -27,8 +27,8 @@ npm run test:e2e             # Playwright, отдельный стенд (сво
 |----------|---------|------------|
 | `migrations.yml` | push, PR | alembic + миграционные тесты + проверки сидов/лейблов |
 | `backend-tests.yml` | push, PR | полный pytest-набор под `coverage` (serial, `-p no:xdist -p no:testmon`) + **гейт `--fail-under=73`** |
-| `frontend-tests.yml` | push, PR | `tsc -b` + vitest с покрытием (без порога — гейт отдельным решением) |
-| `ruff.yml` | push, PR | `ruff check backend` — report-only, merge не блокирует |
+| `frontend-tests.yml` | push, PR | `tsc -b` + vitest с покрытием и **гейтом** `statements/lines ≥ 43`, `branches ≥ 72` (решение Q5=1, замер в `BASELINE.md`) |
+| `ruff.yml` | push, PR | `ruff check backend` — **блокирующая** проверка (pyflakes-ядро `F`, находок 0); стилевые и сигнальные семейства в скоуп не входят |
 
 Гейт покрытия: `coverage==7.16.2` (пин под бейзлайн из `docs/night/BASELINE.md`);
 расхождение CI ↔ локального замера — сначала разбирать, порог не подгонять.
