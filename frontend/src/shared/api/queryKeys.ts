@@ -74,6 +74,7 @@ type AllPlanPositionsQueryKeyParams = {
   has_route?: string;
   has_errors?: string;
   has_warnings?: string;
+  plan_position_id?: number;
 };
 
 type UsersListQueryKeyParams = {

@@ -235,6 +235,8 @@ export type AllPlanPositionsParams = {
   has_warnings?: string;
   /** Фильтр точного совпадения по габариту: JSON-строка (`{"length_mm":2700}`) или `null` для безразмерных. */
   dimensions?: string;
+  /** Точное совпадение по id позиции: догрузка цели перехода по дублю (#270). */
+  plan_position_id?: number;
 };
 
 export type AllPlanPositionsListResponse = {
