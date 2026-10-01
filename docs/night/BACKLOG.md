@@ -13,13 +13,14 @@ IN_PROGRESS / DONE / REJECTED / BLOCKED_NEEDS_HUMAN.
 ## B-0001 — CI прогоняет только миграции, не прогоняет тестовый набор
 
 - **Категория:** CI-эффективность
-- **Статус:** NEW → частично закрыто `T-0015`: набор проверен на Linux
+- **Статус:** DONE (#246, решение #245 Q1=2): включён в push/PR, прогон под
+  `coverage` с гейтом 73% (серийно, без xdist — см. тикет про оговорки).
+  Ранее — частично закрыто `T-0015`: набор проверен на Linux
   (**1951 passed, 0 failed** за 189s в контейнере `python:3.12-slim`, ни одного
-  платформенного падения) и добавлен **ручной** workflow
-  `.github/workflows/backend-tests.yml` (`workflow_dispatch`, блок сервиса
-  Postgres идентичен `migrations.yml`). Осталось решение человека: включать ли
-  джоб в push/PR (минуты CI, политика).
-- **Доказательство:** `.github/workflows/` содержит единственный файл
+  платформенного падения) и добавлен workflow
+  `.github/workflows/backend-tests.yml` (блок сервиса Postgres идентичен
+  `migrations.yml`).
+- **Доказательство:** До #245: `.github/workflows/` содержит единственный файл
   `migrations.yml`. Его шаги: `alembic upgrade head && alembic check`,
   `pytest tests/test_migrations.py`, `scripts/validate_seeds.py`,
   `generate_frontend_labels.py --check`, `verify-profile-settings.py verify --strict`.
@@ -36,8 +37,10 @@ IN_PROGRESS / DONE / REJECTED / BLOCKED_NEEDS_HUMAN.
 ## B-0002 — Покрытие не измеряется ни на backend, ни на frontend
 
 - **Категория:** повторяемость / метрики
-- **Статус:** NEW
-- **Доказательство:** `backend/pytest.ini` содержит только `asyncio_mode`,
+- **Статус:** частично DONE: backend-гейт включён в CI (#246), frontend-набор
+  идёт в CI с `--coverage` без порога (#247). Порог frontend — отдельным
+  решением после первого числа (Q13 в #245). Замер backend 73% — B-0009.
+- **Доказательство:** До #245: `backend/pytest.ini` содержит только `asyncio_mode`,
   `asyncio_default_fixture_loop_scope`, `pythonpath`, `testpaths`, `python_files`,
   `addopts = --durations=10` — флагов покрытия нет. В `package.json` (корень)
   скрипты `test:pytest*` идут через `scripts/test-run.ps1` без `--cov`.
@@ -55,14 +58,15 @@ IN_PROGRESS / DONE / REJECTED / BLOCKED_NEEDS_HUMAN.
 ## B-0003 — Нет ни одного линтера/статического анализа для backend и frontend
 
 - **Категория:** гигиена конфигов
-- **Статус:** NEW (частично закрыто `T-0009`/`T-0012`: мёртвые импорты вычищены
-  и проверяются report-only скриптом `npm run test:hygiene`; полноценный
-  линтер (ruff/eslint) по-прежнему требует решения человека — установка
-  зависимости и правила)
+- **Статус:** частично DONE: ruff включён в CI как report-only на весь
+  `backend` (#248, решения #245 Q5=2 и Q15=а: отдельный workflow, без `--fix`,
+  merge не блокирует). Мёртвые импорты вычищены и проверяются report-only
+  скриптом `npm run test:hygiene` (`T-0009`/`T-0012`). eslint для frontend
+  не обсуждался (вне скоупа грилла).
 - **Доказательство:** в корне и в `frontend/` нет конфигов ruff/flake8/mypy/
   eslint/prettier (проверено листингом корня и `frontend/`, в `frontend/` есть
   только `tsconfig.json`); в `frontend/devDependencies` нет eslint/prettier;
-  в CI нет шага линта; в `package.json` нет скрипта `lint`.
+  до #245: в CI нет шага линта; в `package.json` нет скрипта `lint`.
 - **Эффект:** мёртвый импорт, неиспользуемая фикстура, опечатка в имени теста
   ловятся только глазами; ночной роли нечем подтвердить «гигиену» правок.
 - **Риск:** средний — ввести правило легко, но включение строгих правил на
@@ -75,9 +79,11 @@ IN_PROGRESS / DONE / REJECTED / BLOCKED_NEEDS_HUMAN.
 ## B-0004 — Playwright: `workers: 1`, `fullyParallel: false` — e2e полностью serial
 
 - **Категория:** скорость
-- **Статус:** BLOCKED_NEEDS_HUMAN — ночному агенту e2e запрещён (`AGENTS.md`:
-  агент не запускает `npm run test:e2e`), поэтому критерий «выигрыш подтверждён
-  прогонами» недостижим. Решение и замер — за человеком.
+- **Статус:** решение принято (#245 Q6=2/Q18), исполнение — тикет #253:
+  подмножество `smoke + ui-narrow`, `--workers=2`, 10 прогонов, успех = 0
+  флейков. Запускает человек — ночному агенту e2e запрещён (`AGENTS.md`).
+  Ранее: BLOCKED_NEEDS_HUMAN, т.к. критерий «выигрыш подтверждён прогонами»
+  агенту недостижим.
 - **Доказательство:** `frontend/playwright.config.ts:111-114` —
   `fullyParallel: false`, `workers: 1`, `retries: process.env.CI ? 2 : 0`.
   Тир-проекты `ui-e2e` / `ui-narrow` объявлены через `dependencies: ["smoke"]`
@@ -93,8 +99,10 @@ IN_PROGRESS / DONE / REJECTED / BLOCKED_NEEDS_HUMAN.
 ## B-0005 — Дубликат npm-скрипта `test:pytest:fast`
 
 - **Категория:** гигиена конфигов
-- **Статус:** NEW (низкий приоритет)
-- **Доказательство:** `package.json`: `test:pytest` и `test:pytest:fast` —
+- **Статус:** DONE (#250, решение #245 Q10=1): алиас удалён из `package.json`,
+  строки «Алиас» убраны из `README.md`, `docs/testing-guide.md` и
+  `backend/tests/AGENTS.md`.
+- **Доказательство:** До #245: `package.json`: `test:pytest` и `test:pytest:fast` —
   одинаковая команда `scripts/test-run.ps1`; `docs/testing-guide.md` описывает
   `test:pytest:fast` как «Алиас test:pytest».
 - **Эффект:** микроскопический (ясность). Трогать только вместе с правкой
@@ -106,8 +114,10 @@ IN_PROGRESS / DONE / REJECTED / BLOCKED_NEEDS_HUMAN.
 ## B-0006 — Декларация окружения расходится с фактом (`.venv` 3.14 без зависимостей)
 
 - **Категория:** повторяемость окружения
-- **Статус:** NEW (нужно решение человека)
-- **Доказательство:** `backend/.venv/pyvenv.cfg` → Python **3.14.0**,
+- **Статус:** DONE (#252, решения #245 Q2=1 и Q19=а): `backend/.venv`
+  пересобран на Python 3.12 с зависимостями, launcher по умолчанию берёт
+  интерпретатор из venv (`TEST_PYTHON` перебивает).
+- **Доказательство:** До #245: `backend/.venv/pyvenv.cfg` → Python **3.14.0**,
   `include-system-site-packages = false`; в `backend/.venv/Scripts/` нет
   `pytest.exe`/`uvicorn.exe`; `AGENTS.md` декларирует Python 3.12.
   Фактический тестовый стек — системный Python 3.12.10
@@ -129,7 +139,9 @@ IN_PROGRESS / DONE / REJECTED / BLOCKED_NEEDS_HUMAN.
 - **Статус:** DONE (тикет `T-0007`, коммит `38df604`): добавлен
   `drop --force` для невладелых `ktm_mig_*` (отказ при активных соединениях и
   на служебных именах). Регистрация `ktm_mig_*` в owner-таблице из самих
-  миграционных тестов (34 сайта) осталась как возможное продолжение.
+  миграционных тестов (34 сайта) осталась как возможное продолжение и
+  **оставлена в бэклоге** решением #245 (Q17=2): приоритет низкий,
+  `drop --force` достаточен.
 - **Доказательство:** `scripts/test-db.py:36` `RUN_DB_PREFIX = "ktm2000_test_"`,
   а `cleanup()` сканирует `WHERE datname LIKE 'ktm2000_test_%'` (`:166`).
   Миграционные тесты создают БД с другим префиксом —
@@ -172,8 +184,8 @@ IN_PROGRESS / DONE / REJECTED / BLOCKED_NEEDS_HUMAN.
 - **Категория:** повторяемость / метрики
 - **Статус:** DONE — покрытие измерено: **73%** по `app/` (23 302 инструкции,
   6 267 не покрыто), серийный прогон `1945 passed` за 986s. Отчёт —
-  `logs/coverage-report.txt`, методика и оговорки — в `BASELINE.md`. Порог не
-  вводился: сначала нужно решение человека (B-0002).
+  `logs/coverage-report.txt`, методика и оговорки — в `BASELINE.md`. До #245:
+  порог не вводился: сначала нужно решение человека (B-0002).
 - **Доказательство:** в системном Python 3.12 уже стоит `coverage 7.16.2`
   (`pytest-cov` нет). Значит, отчёт можно получить
   `python -m coverage run -m pytest …` + `coverage report` — без установки
@@ -208,7 +220,10 @@ IN_PROGRESS / DONE / REJECTED / BLOCKED_NEEDS_HUMAN.
 ## B-0011 — `@testing-library/jest-dom` в devDependencies не используется
 
 - **Категория:** гигиена конфигов
-- **Статус:** NEW (решение человека — правка зависимостей)
+- **Статус:** DONE (#249, решение #245 Q12=2): подключён через
+  `setupFiles` в `frontend/vitest.config.ts` — пакет остался в
+  devDependencies и перестал быть мёртвым, матчеры вида `toBeInTheDocument`
+  доступны тестам.
 - **Доказательство:** `frontend/package.json:54` объявляет
   `"@testing-library/jest-dom": "^6.9.1"`, но ни один тест его не импортирует
   (`grep` по `frontend/**/*.{ts,tsx,mjs}` — 0 совпадений вне `package.json`),
@@ -233,8 +248,8 @@ IN_PROGRESS / DONE / REJECTED / BLOCKED_NEEDS_HUMAN.
 ## Порядок работы (указание пользователя на ночь)
 
 1. Сначала тикеты по данным `--durations=0` (самые медленные тесты и фикстуры).
-2. Линтер и coverage — только report-only, только тестовая зона, без падения
-   сборки и без правок продуктового кода под замечания.
+2. До #245: линтер и coverage — только report-only, только тестовая зона, без
+   падения сборки и без правок продуктового кода под замечания.
 3. Правка `sleep`-ов — только если доказано, что ожидание не является частью
    проверяемого поведения.
 4. Файлы из `wip-snapshot-files.txt` (незаконченная работа человека) не

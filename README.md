@@ -60,7 +60,7 @@ npm run dev
 | `npm run db:makemigrate -- "описание"` | Создать миграцию |
 | `npm run db:migrate` | Применить миграции |
 | `npm run db:seed` | Демо-данные |
-| `npm run test:pytest:fast` | Тесты backend (рекомендуется) |
+| `npm run test:pytest` | Тесты backend (рекомендуется; slow пропускаются) |
 | `npm run prod:up` | Production в Docker |
 | `npm run verify:sync` | Принудительно проверить совпадение с `../hrms` |
 

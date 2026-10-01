@@ -13,24 +13,30 @@
 ## Быстрый старт
 
 ```bash
-npm run test:pytest            # backend, параллельно, изолированная per-run БД (по умолчанию)
-npm run test:pytest:full       # backend, серийно
+npm run test:pytest            # backend, параллельно, изолированная per-run БД, без slow
+npm run test:pytest:full       # backend, серийно, весь набор включая slow
 npm --prefix frontend run test    # Vitest
 npm run test:e2e             # Playwright, отдельный стенд (своя БД и порты)
 ```
 
 ## CI
 
-Единственный авто-запускаемый workflow — `migrations.yml` (alembic + миграционные
-тесты + проверки сидов/лейблов). Полный pytest-набор в push/PR **не** запускается:
-это решение про минуты CI, а не техническая мелочь.
+Автоматические workflow (решения грилла #245):
 
-Для ручной проверки добавлен `.github/workflows/backend-tests.yml`
-(триггер `workflow_dispatch`): тот же Postgres-сервис, что в `migrations.yml`,
-`pip install -r backend/requirements.txt` и прогон набора через
-`scripts/test-db.py` + `pytest -n 4 --dist loadfile`. Команды проверены локально
-на Linux (контейнер `python:3.12-slim`): `1951 passed, 0 failed` за 189s —
-платформенных падений у набора нет.
+| Workflow | Триггер | Что делает |
+|----------|---------|------------|
+| `migrations.yml` | push, PR | alembic + миграционные тесты + проверки сидов/лейблов |
+| `backend-tests.yml` | push, PR | полный pytest-набор под `coverage` (serial, `-p no:xdist -p no:testmon`) + **гейт `--fail-under=73`** |
+| `frontend-tests.yml` | push, PR | `tsc -b` + vitest с покрытием (без порога — гейт отдельным решением) |
+| `ruff.yml` | push, PR | `ruff check backend` — report-only, merge не блокирует |
+
+Гейт покрытия: `coverage==7.16.2` (пин под бейзлайн из `docs/night/BASELINE.md`);
+расхождение CI ↔ локального замера — сначала разбирать, порог не подгонять.
+Прогон серийный: под xdist воркеры остаются вне замера coverage.
+
+Branch protection (required checks `migrations`, `backend tests`,
+`frontend tests`, `enforce_admins: false`) включается **после** первого пуша
+workflows и первого зелёного прогона — тикет #254.
 
 ## Стенд E2E
 
@@ -56,16 +62,29 @@ npm run test:e2e             # Playwright, отдельный стенд (сво
 
 | Команда | Назначение |
 |---------|------------|
-| `npm run test:pytest` | Параллельный прогон всех тестов |
-| `npm run test:pytest:fast` | Алиас `test:pytest` |
-| `npm run test:pytest:full` | Полный прогон в один поток |
-| `npm run test:pytest:mon` | Только изменённые (testmon; кеш — `backend/.testmondata`, в git не попадает) |
-| `npm run test:pytest:lf` | Только упавшие |
+| `npm run test:pytest` | Параллельный прогон **без slow-тестов** (см. ниже) |
+| `npm run test:pytest:full` | Полный прогон в один поток (slow-тесты включены) |
+| `npm run test:pytest:mon` | Только изменённые (testmon; кеш — `backend/.testmondata`, в git не попадает), без slow-тестов |
+| `npm run test:pytest:lf` | Только упавшие, без slow-тестов |
 | `npm run test:db:cleanup` | Уборка orphan run-DB по TTL (24h) **и** старых каталогов storage тестов |
-| `npm run test:hygiene` | Report-only отчёт по мёртвым импортам в тестах (stdlib, линтера в репозитории нет) |
+| `npm run test:hygiene` | Report-only отчёт по мёртвым импортам в тестах (stdlib) |
 | `npm run test:db:up` / `test:db:wait` | Поднять тестовый Postgres (:5441) |
 | `npm run test:pytest -- --keep-db` | Прогон, который **оставляет** run-DB для разбора (обычный прогон её дропает) |
 | `python scripts/test-db.py drop --force <db>` | Убрать базу без owner-строки (`ktm_mig_*` от прерванного прогона миграционных тестов); отказывает при активных соединениях и на служебных именах |
+
+### Slow-тесты
+
+Шесть интеграционных тестов демо-сидера (`test_packing_plan_demo_seeder.py`,
+маркер `slow`, ~204s суммарно) в дефолтном прогоне **не выполняются** — они
+гоняются в `--full`, в CI и по явному запросу:
+
+```bash
+npm run test:pytest -- -m slow            # только slow-тесты
+npm run test:pytest -- -m "slow or not slow"   # всё, как в CI
+```
+
+Явный `-m` от вызывающего всегда побеждает — launcher свой фильтр в этом
+случае не добавляет. CI идёт полным набором независимо от лаунчера.
 
 Оставленную `--keep-db` БД убирают вручную — `python scripts/test-db.py drop <db>`
 (имя печатается в конце прогона) или TTL-уборкой `npm run test:db:cleanup`.
