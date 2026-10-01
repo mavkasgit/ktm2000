@@ -6,7 +6,7 @@ import json
 import os
 import socket
 import subprocess
-import uuid
+from decimal import Decimal
 from pathlib import Path
 from urllib.parse import urlparse
 
@@ -21,6 +21,12 @@ from app.services.hanger_quantity_calc import (
     compute_hanger_quantity,
 )
 import app.models  # noqa: F401
+
+from tests.helpers.mig_db import (
+    create_migration_db,
+    drop_migration_db,
+    migration_db_url,
+)
 
 BACKEND_DIR = Path(__file__).resolve().parents[1]
 
@@ -43,22 +49,14 @@ def _alembic_env(target_url: str, tmp_path: Path) -> dict[str, str]:
     }
 
 
-def _test_db_url() -> str:
-    """The pytest postgres (localhost:5441) — not the stale dev default (5432).
-
-    Honors TEST_DATABASE_URL set by the npm scripts; falls back to the test
-    compose contract (port 5441 / ktm2000_pass_test) so the migration test
-    runs against the same server conftest targets.
-    """
-    return os.getenv(
-        "TEST_DATABASE_URL",
-        "postgresql+asyncpg://ktm2000_user:ktm2000_pass_test@localhost:5441/ktm2000_test",
-    )
-
-
 def _db_reachable() -> bool:
-    """Check if the PostgreSQL server is reachable (host:port from DATABASE_URL)."""
-    parsed = urlparse(_test_db_url())
+    """Check if the PostgreSQL server is reachable (host:port from DATABASE_URL).
+
+    DSN — у того же хелпера, что поднимает базы миграционных тестов
+    (``tests/helpers/mig_db.py``): ``TEST_DATABASE_URL`` лаунчера, иначе
+    тестовый compose-контракт (localhost:5441), а не устаревший dev-дефолт.
+    """
+    parsed = urlparse(migration_db_url())
     host = parsed.hostname or "localhost"
     port = parsed.port or 5432
     try:
@@ -76,14 +74,7 @@ pytestmark = pytest.mark.skipif(
 
 @pytest.mark.asyncio
 async def test_alembic_upgrade_head_creates_full_schema(tmp_path: Path):
-    db_name = f"ktm_mig_{uuid.uuid4().hex[:10]}"
-    admin_url = _test_db_url().rsplit("/", 1)[0] + "/postgres"
-    target_url = _test_db_url().rsplit("/", 1)[0] + f"/{db_name}"
-
-    admin_engine = create_async_engine(admin_url, isolation_level="AUTOCOMMIT")
-    async with admin_engine.connect() as conn:
-        await conn.execute(text(f'CREATE DATABASE "{db_name}"'))
-    await admin_engine.dispose()
+    db_name, target_url = await create_migration_db()
 
     env = _alembic_env(target_url, tmp_path)
     try:
@@ -119,10 +110,7 @@ async def test_alembic_upgrade_head_creates_full_schema(tmp_path: Path):
         assert row.username == "system"
         assert row.email == "system@local"
     finally:
-        admin_engine = create_async_engine(admin_url, isolation_level="AUTOCOMMIT")
-        async with admin_engine.connect() as conn:
-            await conn.execute(text(f'DROP DATABASE IF EXISTS "{db_name}" WITH (FORCE)'))
-        await admin_engine.dispose()
+        await drop_migration_db(db_name)
 
 
 @pytest.mark.asyncio
@@ -134,14 +122,7 @@ async def test_migration_054_product_pairs_and_flag_drop(tmp_path: Path):
     product_pairs работают канонический порядок и уникальность неупорядоченной
     пары, ручная N по умолчанию — пустой словарь.
     """
-    db_name = f"ktm_mig_{uuid.uuid4().hex[:10]}"
-    admin_url = _test_db_url().rsplit("/", 1)[0] + "/postgres"
-    target_url = _test_db_url().rsplit("/", 1)[0] + f"/{db_name}"
-
-    admin_engine = create_async_engine(admin_url, isolation_level="AUTOCOMMIT")
-    async with admin_engine.connect() as conn:
-        await conn.execute(text(f'CREATE DATABASE "{db_name}"'))
-    await admin_engine.dispose()
+    db_name, target_url = await create_migration_db()
 
     env = _alembic_env(target_url, tmp_path)
     try:
@@ -212,23 +193,13 @@ async def test_migration_054_product_pairs_and_flag_drop(tmp_path: Path):
                     )
         await engine.dispose()
     finally:
-        admin_engine = create_async_engine(admin_url, isolation_level="AUTOCOMMIT")
-        async with admin_engine.connect() as conn:
-            await conn.execute(text(f'DROP DATABASE IF EXISTS "{db_name}" WITH (FORCE)'))
-        await admin_engine.dispose()
+        await drop_migration_db(db_name)
 
 
 @pytest.mark.asyncio
 async def test_migration_032_scalar_quantity_per_hanger_to_per_length(tmp_path: Path):
     """#60: скаляр quantity_per_hanger в attributes → {первая_длина: {auto, manual}}."""
-    db_name = f"ktm_mig_{uuid.uuid4().hex[:10]}"
-    admin_url = _test_db_url().rsplit("/", 1)[0] + "/postgres"
-    target_url = _test_db_url().rsplit("/", 1)[0] + f"/{db_name}"
-
-    admin_engine = create_async_engine(admin_url, isolation_level="AUTOCOMMIT")
-    async with admin_engine.connect() as conn:
-        await conn.execute(text(f'CREATE DATABASE "{db_name}"'))
-    await admin_engine.dispose()
+    db_name, target_url = await create_migration_db()
 
     env = _alembic_env(target_url, tmp_path)
     try:
@@ -289,23 +260,13 @@ async def test_migration_032_scalar_quantity_per_hanger_to_per_length(tmp_path: 
         # Первая длина по возрастанию = 2800 → ручной fallback туда.
         assert qph == {"2800": {"auto": None, "manual": 25}}
     finally:
-        admin_engine = create_async_engine(admin_url, isolation_level="AUTOCOMMIT")
-        async with admin_engine.connect() as conn:
-            await conn.execute(text(f'DROP DATABASE IF EXISTS "{db_name}" WITH (FORCE)'))
-        await admin_engine.dispose()
+        await drop_migration_db(db_name)
 
 
 @pytest.mark.asyncio
 async def test_migration_036_primary_length_backfill(tmp_path: Path):
     """#81: is_primary на product_lengths — основной становится первая длина по возрастанию."""
-    db_name = f"ktm_mig_{uuid.uuid4().hex[:10]}"
-    admin_url = _test_db_url().rsplit("/", 1)[0] + "/postgres"
-    target_url = _test_db_url().rsplit("/", 1)[0] + f"/{db_name}"
-
-    admin_engine = create_async_engine(admin_url, isolation_level="AUTOCOMMIT")
-    async with admin_engine.connect() as conn:
-        await conn.execute(text(f'CREATE DATABASE "{db_name}"'))
-    await admin_engine.dispose()
+    db_name, target_url = await create_migration_db()
 
     env = _alembic_env(target_url, tmp_path)
     try:
@@ -374,23 +335,13 @@ async def test_migration_036_primary_length_backfill(tmp_path: Path):
             assert [r.length_mm for r in rows] == [2800, 3000]
         await engine.dispose()
     finally:
-        admin_engine = create_async_engine(admin_url, isolation_level="AUTOCOMMIT")
-        async with admin_engine.connect() as conn:
-            await conn.execute(text(f'DROP DATABASE IF EXISTS "{db_name}" WITH (FORCE)'))
-        await admin_engine.dispose()
+        await drop_migration_db(db_name)
 
 
 @pytest.mark.asyncio
 async def test_migration_046_replay_of_action_id_roundtrip(tmp_path: Path):
     """#121: replay_of_action_id + индекс; downgrade снимает их чисто."""
-    db_name = f"ktm_mig_{uuid.uuid4().hex[:10]}"
-    admin_url = _test_db_url().rsplit("/", 1)[0] + "/postgres"
-    target_url = _test_db_url().rsplit("/", 1)[0] + f"/{db_name}"
-
-    admin_engine = create_async_engine(admin_url, isolation_level="AUTOCOMMIT")
-    async with admin_engine.connect() as conn:
-        await conn.execute(text(f'CREATE DATABASE "{db_name}"'))
-    await admin_engine.dispose()
+    db_name, target_url = await create_migration_db()
 
     env = _alembic_env(target_url, tmp_path)
 
@@ -448,10 +399,7 @@ async def test_migration_046_replay_of_action_id_roundtrip(tmp_path: Path):
         assert "ix_action_journal_replay_of_action_id" in indexes
     finally:
         await engine.dispose()
-        admin_engine = create_async_engine(admin_url, isolation_level="AUTOCOMMIT")
-        async with admin_engine.connect() as conn:
-            await conn.execute(text(f'DROP DATABASE IF EXISTS "{db_name}" WITH (FORCE)'))
-        await admin_engine.dispose()
+        await drop_migration_db(db_name)
 
 
 @pytest.mark.asyncio
@@ -469,14 +417,7 @@ async def test_migration_048_product_hanger_mode_backfill(tmp_path: Path):
     как есть (не-числовые ключи не трогаются); (4) повторный запуск 048
     идемпотентен — шаги защищены отсутствием ключа ``hanger_mode``.
     """
-    db_name = f"ktm_mig_{uuid.uuid4().hex[:10]}"
-    admin_url = _test_db_url().rsplit("/", 1)[0] + "/postgres"
-    target_url = _test_db_url().rsplit("/", 1)[0] + f"/{db_name}"
-
-    admin_engine = create_async_engine(admin_url, isolation_level="AUTOCOMMIT")
-    async with admin_engine.connect() as conn:
-        await conn.execute(text(f'CREATE DATABASE "{db_name}"'))
-    await admin_engine.dispose()
+    db_name, target_url = await create_migration_db()
 
     env = _alembic_env(target_url, tmp_path)
 
@@ -669,10 +610,7 @@ async def test_migration_048_product_hanger_mode_backfill(tmp_path: Path):
         attrs_after_rerun = await _fetch_attrs("MIG048-%")
         assert attrs_after_rerun == snapshot_before
     finally:
-        admin_engine = create_async_engine(admin_url, isolation_level="AUTOCOMMIT")
-        async with admin_engine.connect() as conn:
-            await conn.execute(text(f'DROP DATABASE IF EXISTS "{db_name}" WITH (FORCE)'))
-        await admin_engine.dispose()
+        await drop_migration_db(db_name)
 
 
 @pytest.mark.asyncio
@@ -688,14 +626,7 @@ async def test_migration_053_product_composition_schema(tmp_path: Path):
     компонента; (4) CHECK отвергает quantity = 0; (5) FK product_id
     каскадит удаление владельца; (6) повторный прогон 053 безопасен.
     """
-    db_name = f"ktm_mig_{uuid.uuid4().hex[:10]}"
-    admin_url = _test_db_url().rsplit("/", 1)[0] + "/postgres"
-    target_url = _test_db_url().rsplit("/", 1)[0] + f"/{db_name}"
-
-    admin_engine = create_async_engine(admin_url, isolation_level="AUTOCOMMIT")
-    async with admin_engine.connect() as conn:
-        await conn.execute(text(f'CREATE DATABASE "{db_name}"'))
-    await admin_engine.dispose()
+    db_name, target_url = await create_migration_db()
 
     env = _alembic_env(target_url, tmp_path)
 
@@ -812,10 +743,7 @@ async def test_migration_053_product_composition_schema(tmp_path: Path):
         _run("upgrade", "head")
     finally:
         await engine.dispose()
-        admin_engine = create_async_engine(admin_url, isolation_level="AUTOCOMMIT")
-        async with admin_engine.connect() as conn:
-            await conn.execute(text(f'DROP DATABASE IF EXISTS "{db_name}" WITH (FORCE)'))
-        await admin_engine.dispose()
+        await drop_migration_db(db_name)
 
 
 @pytest.mark.asyncio
@@ -840,14 +768,7 @@ async def test_migration_058_product_pair_quantity_norms(tmp_path: Path):
     (5) downgrade очищает словарь ровно тех пар, где стоит записанная
     миграцией норма; чужая норма 99 и пара вне миграции (7) остаются.
     """
-    db_name = f"ktm_mig_{uuid.uuid4().hex[:10]}"
-    admin_url = _test_db_url().rsplit("/", 1)[0] + "/postgres"
-    target_url = _test_db_url().rsplit("/", 1)[0] + f"/{db_name}"
-
-    admin_engine = create_async_engine(admin_url, isolation_level="AUTOCOMMIT")
-    async with admin_engine.connect() as conn:
-        await conn.execute(text(f'CREATE DATABASE "{db_name}"'))
-    await admin_engine.dispose()
+    db_name, target_url = await create_migration_db()
 
     env = _alembic_env(target_url, tmp_path)
 
@@ -1039,23 +960,13 @@ async def test_migration_058_product_pair_quantity_norms(tmp_path: Path):
         assert await _norms_snapshot() == expected_dirty
     finally:
         await engine.dispose()
-        admin_engine = create_async_engine(admin_url, isolation_level="AUTOCOMMIT")
-        async with admin_engine.connect() as conn:
-            await conn.execute(text(f'DROP DATABASE IF EXISTS "{db_name}" WITH (FORCE)'))
-        await admin_engine.dispose()
+        await drop_migration_db(db_name)
 
 
 @pytest.mark.asyncio
 async def test_migration_059_backfills_legacy_linear_length_without_raw(tmp_path: Path):
     """Скаляр 2700 переносится один раз; совпадающий линейный default очищается."""
-    db_name = f"ktm_mig_{uuid.uuid4().hex[:10]}"
-    admin_url = _test_db_url().rsplit("/", 1)[0] + "/postgres"
-    target_url = _test_db_url().rsplit("/", 1)[0] + f"/{db_name}"
-
-    admin_engine = create_async_engine(admin_url, isolation_level="AUTOCOMMIT")
-    async with admin_engine.connect() as conn:
-        await conn.execute(text(f'CREATE DATABASE "{db_name}"'))
-    await admin_engine.dispose()
+    db_name, target_url = await create_migration_db()
 
     env = _alembic_env(target_url, tmp_path)
     engine = create_async_engine(target_url)
@@ -1149,23 +1060,13 @@ async def test_migration_059_backfills_legacy_linear_length_without_raw(tmp_path
                 )
     finally:
         await engine.dispose()
-        admin_engine = create_async_engine(admin_url, isolation_level="AUTOCOMMIT")
-        async with admin_engine.connect() as conn:
-            await conn.execute(text(f'DROP DATABASE IF EXISTS "{db_name}" WITH (FORCE)'))
-        await admin_engine.dispose()
+        await drop_migration_db(db_name)
 
 
 @pytest.mark.asyncio
 async def test_migration_059_stops_on_conflicting_linear_default_until_manual_resolution(tmp_path: Path):
     """Конфликт 2750/2700 откатывается и повторяется только после решения оператора."""
-    db_name = f"ktm_mig_{uuid.uuid4().hex[:10]}"
-    admin_url = _test_db_url().rsplit("/", 1)[0] + "/postgres"
-    target_url = _test_db_url().rsplit("/", 1)[0] + f"/{db_name}"
-
-    admin_engine = create_async_engine(admin_url, isolation_level="AUTOCOMMIT")
-    async with admin_engine.connect() as conn:
-        await conn.execute(text(f'CREATE DATABASE "{db_name}"'))
-    await admin_engine.dispose()
+    db_name, target_url = await create_migration_db()
 
     env = _alembic_env(target_url, tmp_path)
     engine = create_async_engine(target_url)
@@ -1293,10 +1194,7 @@ async def test_migration_059_stops_on_conflicting_linear_default_until_manual_re
         assert all(row.length_mm != 2750.0 for row in lengths)
     finally:
         await engine.dispose()
-        admin_engine = create_async_engine(admin_url, isolation_level="AUTOCOMMIT")
-        async with admin_engine.connect() as conn:
-            await conn.execute(text(f'DROP DATABASE IF EXISTS "{db_name}" WITH (FORCE)'))
-        await admin_engine.dispose()
+        await drop_migration_db(db_name)
 
 
 @pytest.mark.asyncio
@@ -1308,14 +1206,7 @@ async def test_migration_064_adds_overridden_validation_status(tmp_path: Path):
     на изолированной БД тестового сервера, с повторным прогоном (значение
     уже есть → миграция обязана быть no-op, а не падать на дубликате).
     """
-    db_name = f"ktm_mig_{uuid.uuid4().hex[:10]}"
-    admin_url = _test_db_url().rsplit("/", 1)[0] + "/postgres"
-    target_url = _test_db_url().rsplit("/", 1)[0] + f"/{db_name}"
-
-    admin_engine = create_async_engine(admin_url, isolation_level="AUTOCOMMIT")
-    async with admin_engine.connect() as conn:
-        await conn.execute(text(f'CREATE DATABASE "{db_name}"'))
-    await admin_engine.dispose()
+    db_name, target_url = await create_migration_db()
 
     env = _alembic_env(target_url, tmp_path)
     engine = create_async_engine(target_url)
@@ -1356,10 +1247,7 @@ async def test_migration_064_adds_overridden_validation_status(tmp_path: Path):
         assert again.returncode == 0, again.stderr or again.stdout
     finally:
         await engine.dispose()
-        admin_engine = create_async_engine(admin_url, isolation_level="AUTOCOMMIT")
-        async with admin_engine.connect() as conn:
-            await conn.execute(text(f'DROP DATABASE IF EXISTS "{db_name}" WITH (FORCE)'))
-        await admin_engine.dispose()
+        await drop_migration_db(db_name)
 
 
 @pytest.mark.asyncio
@@ -1371,14 +1259,7 @@ async def test_migration_065_normalizes_storage_route_stages_to_transit(tmp_path
     `storage_section_id`, обнуляет `section_id` и не трогает `is_final`
     (правило финальности #176 не менялось). Повторный прогон — no-op.
     """
-    db_name = f"ktm_mig_{uuid.uuid4().hex[:10]}"
-    admin_url = _test_db_url().rsplit("/", 1)[0] + "/postgres"
-    target_url = _test_db_url().rsplit("/", 1)[0] + f"/{db_name}"
-
-    admin_engine = create_async_engine(admin_url, isolation_level="AUTOCOMMIT")
-    async with admin_engine.connect() as conn:
-        await conn.execute(text(f'CREATE DATABASE "{db_name}"'))
-    await admin_engine.dispose()
+    db_name, target_url = await create_migration_db()
 
     env = _alembic_env(target_url, tmp_path)
 
@@ -1471,10 +1352,7 @@ async def test_migration_065_normalizes_storage_route_stages_to_transit(tmp_path
         assert await _stages() == after
     finally:
         await engine.dispose()
-        admin_engine = create_async_engine(admin_url, isolation_level="AUTOCOMMIT")
-        async with admin_engine.connect() as conn:
-            await conn.execute(text(f'DROP DATABASE IF EXISTS "{db_name}" WITH (FORCE)'))
-        await admin_engine.dispose()
+        await drop_migration_db(db_name)
 
 
 @pytest.mark.asyncio
@@ -1484,14 +1362,7 @@ async def test_migration_066_backfills_route_signature_idempotently(tmp_path: Pa
     Этапы не пересобираются, а повторный прогон ничего не меняет. Формат
     совпадает с той, что считает ``app.services.route_signature``.
     """
-    db_name = f"ktm_mig_{uuid.uuid4().hex[:10]}"
-    admin_url = _test_db_url().rsplit("/", 1)[0] + "/postgres"
-    target_url = _test_db_url().rsplit("/", 1)[0] + f"/{db_name}"
-
-    admin_engine = create_async_engine(admin_url, isolation_level="AUTOCOMMIT")
-    async with admin_engine.connect() as conn:
-        await conn.execute(text(f'CREATE DATABASE "{db_name}"'))
-    await admin_engine.dispose()
+    db_name, target_url = await create_migration_db()
 
     env = _alembic_env(target_url, tmp_path)
 
@@ -1607,10 +1478,7 @@ async def test_migration_066_backfills_route_signature_idempotently(tmp_path: Pa
         assert await _state() == after
     finally:
         await engine.dispose()
-        admin_engine = create_async_engine(admin_url, isolation_level="AUTOCOMMIT")
-        async with admin_engine.connect() as conn:
-            await conn.execute(text(f'DROP DATABASE IF EXISTS "{db_name}" WITH (FORCE)'))
-        await admin_engine.dispose()
+        await drop_migration_db(db_name)
 
 
 _MIG066_PREV = "065_route_stage_transit_normalization"
@@ -1764,14 +1632,7 @@ async def test_migration_066_normalizes_hanger_norm_keys_by_article(tmp_path: Pa
     в отчёт как требующий решения оператора. Листы и legacy bare-словарь не
     трогаются. Идемпотентна и имеет downgrade.
     """
-    db_name = f"ktm_mig_{uuid.uuid4().hex[:10]}"
-    admin_url = _test_db_url().rsplit("/", 1)[0] + "/postgres"
-    target_url = _test_db_url().rsplit("/", 1)[0] + f"/{db_name}"
-
-    admin_engine = create_async_engine(admin_url, isolation_level="AUTOCOMMIT")
-    async with admin_engine.connect() as conn:
-        await conn.execute(text(f'CREATE DATABASE "{db_name}"'))
-    await admin_engine.dispose()
+    db_name, target_url = await create_migration_db()
 
     env = _alembic_env(target_url, tmp_path)
     engine = create_async_engine(target_url)
@@ -1867,10 +1728,7 @@ async def test_migration_066_normalizes_hanger_norm_keys_by_article(tmp_path: Pa
         assert report_table_count == 0
     finally:
         await engine.dispose()
-        admin_engine = create_async_engine(admin_url, isolation_level="AUTOCOMMIT")
-        async with admin_engine.connect() as conn:
-            await conn.execute(text(f'DROP DATABASE IF EXISTS "{db_name}" WITH (FORCE)'))
-        await admin_engine.dispose()
+        await drop_migration_db(db_name)
 
 
 _MIG068_PREV = "067_hanger_norm_key_normalization"
@@ -2064,14 +1922,7 @@ async def test_migration_068_recals_significance_then_signature(tmp_path: Path):
     пересчитывает сигнатуры маршрутов по уже исправленным этапам. Порядок
     обязателен: наоборот сигнатуры остались бы посчитаны по прежним данным.
     """
-    db_name = f"ktm_mig_{uuid.uuid4().hex[:10]}"
-    admin_url = _test_db_url().rsplit("/", 1)[0] + "/postgres"
-    target_url = _test_db_url().rsplit("/", 1)[0] + f"/{db_name}"
-
-    admin_engine = create_async_engine(admin_url, isolation_level="AUTOCOMMIT")
-    async with admin_engine.connect() as conn:
-        await conn.execute(text(f'CREATE DATABASE "{db_name}"'))
-    await admin_engine.dispose()
+    db_name, target_url = await create_migration_db()
 
     env = _alembic_env(target_url, tmp_path)
     engine = create_async_engine(target_url)
@@ -2162,10 +2013,7 @@ async def test_migration_068_recals_significance_then_signature(tmp_path: Path):
         assert leftover == 0
     finally:
         await engine.dispose()
-        admin_engine = create_async_engine(admin_url, isolation_level="AUTOCOMMIT")
-        async with admin_engine.connect() as conn:
-            await conn.execute(text(f'DROP DATABASE IF EXISTS "{db_name}" WITH (FORCE)'))
-        await admin_engine.dispose()
+        await drop_migration_db(db_name)
 
 
 _MIG071_PREV = "070_production_plan_archive"
@@ -2295,14 +2143,7 @@ async def test_migration_071_assigns_route_codes_and_drops_name_unique(tmp_path:
     получил, а ограничение уникальности имени снято — иначе второй маршрут
     с тем же именем не создался бы вовсе.
     """
-    db_name = f"ktm_mig_{uuid.uuid4().hex[:10]}"
-    admin_url = _test_db_url().rsplit("/", 1)[0] + "/postgres"
-    target_url = _test_db_url().rsplit("/", 1)[0] + f"/{db_name}"
-
-    admin_engine = create_async_engine(admin_url, isolation_level="AUTOCOMMIT")
-    async with admin_engine.connect() as conn:
-        await conn.execute(text(f'CREATE DATABASE "{db_name}"'))
-    await admin_engine.dispose()
+    db_name, target_url = await create_migration_db()
 
     env = _alembic_env(target_url, tmp_path)
     engine = create_async_engine(target_url)
@@ -2401,10 +2242,7 @@ async def test_migration_071_assigns_route_codes_and_drops_name_unique(tmp_path:
         assert dict(reverted[0])["Сид-маршрут"] == "universal_rp"
     finally:
         await engine.dispose()
-        admin_engine = create_async_engine(admin_url, isolation_level="AUTOCOMMIT")
-        async with admin_engine.connect() as conn:
-            await conn.execute(text(f'DROP DATABASE IF EXISTS "{db_name}" WITH (FORCE)'))
-        await admin_engine.dispose()
+        await drop_migration_db(db_name)
 
 
 # ─── 074: completed_operations в ключе stock_balances (ADR-0055) ────────────
@@ -2419,33 +2257,16 @@ _MIG074_DIMS = "'" + json.dumps({"length_mm": 2700}) + "'"
 async def _mig074_make_db() -> tuple[str, str]:
     """Пустая база под прогон миграции 074: (имя, DSN).
 
-    DSN берётся из ``TEST_DATABASE_URL``, который выставляет лаунчер, иначе —
-    тестовый compose-контракт (:5441): блок обязан подниматься на той же
-    базе, что и остальные миграционные тесты. Имя — ``ktm_mig_`` + 10 hex,
-    как у прочих баз миграционных тестов.
+    Тот же контракт, что у прочих миграционных тестов: ``ktm_mig_<10 hex>``
+    с owner-строкой (``tests/helpers/mig_db.py``), поэтому осиротевшую базу
+    подберёт TTL-уборка ``cleanup``, а ``drop`` сработает без ``--force``.
     """
-    base = os.getenv(
-        "TEST_DATABASE_URL",
-        "postgresql+asyncpg://ktm2000_user:ktm2000_pass_test@localhost:5441/ktm2000_test",
-    ).rsplit("/", 1)[0]
-    db_name = f"ktm_mig_{os.urandom(5).hex()}"
-    admin_engine = create_async_engine(base + "/postgres", isolation_level="AUTOCOMMIT")
-    async with admin_engine.connect() as conn:
-        await conn.execute(text(f'CREATE DATABASE "{db_name}"'))
-    await admin_engine.dispose()
-    return db_name, base + f"/{db_name}"
+    return await create_migration_db()
 
 
 async def _mig074_drop_db(db_name: str) -> None:
-    """Удаляет базу прогона: ``WITH FORCE`` снимает зависшие коннекты."""
-    base = os.getenv(
-        "TEST_DATABASE_URL",
-        "postgresql+asyncpg://ktm2000_user:ktm2000_pass_test@localhost:5441/ktm2000_test",
-    ).rsplit("/", 1)[0]
-    admin_engine = create_async_engine(base + "/postgres", isolation_level="AUTOCOMMIT")
-    async with admin_engine.connect() as conn:
-        await conn.execute(text(f'DROP DATABASE IF EXISTS "{db_name}" WITH (FORCE)'))
-    await admin_engine.dispose()
+    """Удаляет базу прогона и её owner-строку (``WITH FORCE`` внутри)."""
+    await drop_migration_db(db_name)
 
 
 async def _mig074_tx(
@@ -2587,8 +2408,6 @@ async def test_migration_074_splits_balance_by_completed_operations(
       представителя, потом удаление лишних — и возвращ прежний
       уникальный индекс.
     """
-    from decimal import Decimal
-
     from sqlalchemy.exc import IntegrityError
 
     db_name, target_url = await _mig074_make_db()
