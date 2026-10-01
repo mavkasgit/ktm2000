@@ -7,15 +7,18 @@
  * Каждый пресет — это снимок `PrintSettings` (columns, title),
  * который можно применить одним кликом.
  *
- * Встроенные пресеты (BUILTIN_PRESETS) помечены `isBuiltin: true` и
- * не сохраняются в localStorage — они всегда доступны.
+ * Первый в списке — базовый пресет участка (`sectionBasePreset`): его колонки
+ * задаёт профиль печати участка (`PRINT_PROFILES` по коду секции), поэтому
+ * печать плана различается по участкам и открывается уже на своём наборе.
+ * Встроенные пресеты помечены `isBuiltin: true` и не сохраняются в
+ * localStorage — они всегда доступны.
  */
 
 import {
   COMPACT_PRINT_COLUMNS,
   DEFAULT_PRINT_COLUMNS,
   isPlanColumnKey,
-  PRINT_PROFILES,
+  printColumnsFor,
   type PlanColumnKey,
   type PrintSettings,
 } from "./planPrintSettings";
@@ -36,7 +39,61 @@ export interface PlanPreset {
 // ---------------------------------------------------------------------------
 // Встроенные пресеты — не редактируются, не удаляются
 const ALL_COLS: PlanColumnKey[] = [...DEFAULT_PRINT_COLUMNS];
-const SKU_ONLY: PlanColumnKey[] = ["sku"];
+/**
+ * «Только артикулы» — короткий лист мастера: артикул и остаток. Без остатка
+ * строка не отвечает на вопрос, сколько ещё делать, и артикул в ней не с чем
+ * сверить.
+ */
+const SKU_ONLY: PlanColumnKey[] = ["sku", "balance"];
+
+/**
+ * Идентификатор базового пресета участка: он один на все участки, а набор
+ * внутри — профиль печати этого участка.
+ */
+export const SECTION_BASE_PRESET_ID = "builtin-section";
+
+/**
+ * Набор пресета, приведённый к колонкам, которые у участка есть: колонка,
+ * которой у участка не бывает (упаковка без упаковочных операций, ADR-0059),
+ * не должна ни печататься пустой, ни удерживать пресет «неактивным».
+ */
+function narrowToSection(
+  preset: PlanPreset,
+  unavailableColumns: readonly PlanColumnKey[],
+): PlanPreset {
+  return {
+    ...preset,
+    settings: {
+      ...preset.settings,
+      columns: preset.settings.columns.filter((key) => !unavailableColumns.includes(key)),
+    },
+  };
+}
+
+/**
+ * Базовый пресет участка: печать плана под конкретный участок из
+ * `PRINT_PROFILES` (`printColumnsFor`). Стоит первым в списке и открывается
+ * активным: настройки окна берут колонки из того же `printColumnsFor`, поэтому
+ * базовый набор и «что открылось» — один и тот же набор, а не два похожих.
+ *
+ * `unavailableColumns` — колонки, которых у участка не бывает (упаковка без
+ * упаковочных операций, ADR-0059): набор приводится к применимым, иначе пресет
+ * «Базовый» открывался бы неактивным на своём же участке.
+ */
+export function sectionBasePreset(
+  sectionCode?: string | null,
+  unavailableColumns: readonly PlanColumnKey[] = [],
+): PlanPreset {
+  return narrowToSection(
+    {
+      id: SECTION_BASE_PRESET_ID,
+      name: "Базовый",
+      settings: { columns: printColumnsFor(sectionCode), title: "" },
+      isBuiltin: true,
+    },
+    unavailableColumns,
+  );
+}
 
 export const BUILTIN_PRESETS: PlanPreset[] = [
   {
@@ -55,15 +112,6 @@ export const BUILTIN_PRESETS: PlanPreset[] = [
     id: "builtin-compact",
     name: "Компактный",
     settings: { columns: [...COMPACT_PRINT_COLUMNS], title: "" },
-    isBuiltin: true,
-  },
-  {
-    id: "builtin-hangers",
-    name: "С подвесами",
-    settings: {
-      columns: [...(PRINT_PROFILES.ANODIZING ?? DEFAULT_PRINT_COLUMNS)],
-      title: "",
-    },
     isBuiltin: true,
   },
 ];
@@ -115,8 +163,19 @@ function saveCustomPresets(sectionId: number, presets: PlanPreset[]): void {
   } catch {}
 }
 
-export function loadPresets(sectionId: number): PlanPreset[] {
-  return [...BUILTIN_PRESETS, ...loadCustomPresets(sectionId)];
+/** Пресеты участка: первым — базовый набор этого участка, все — по применимым колонкам. */
+export function loadPresets(
+  sectionId: number,
+  sectionCode?: string | null,
+  unavailableColumns: readonly PlanColumnKey[] = [],
+): PlanPreset[] {
+  const presets = [
+    sectionBasePreset(sectionCode),
+    ...BUILTIN_PRESETS,
+    ...loadCustomPresets(sectionId),
+  ];
+  if (unavailableColumns.length === 0) return presets;
+  return presets.map((preset) => narrowToSection(preset, unavailableColumns));
 }
 
 export function addPreset(

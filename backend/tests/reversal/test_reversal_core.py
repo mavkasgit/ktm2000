@@ -25,6 +25,7 @@ from app.models.work_task import WorkTask
 from app.reversal import errors
 from app.reversal.service import Blocker, reversal_service
 from app.services.material_operations import completed_operations_for_task
+from app.services.shopfloor.operations_transform import resolve_consume_operations
 from app.stock import StockCommand, StockCommandService
 from app.stock.models import Reason, StockBalance, StockTransaction
 from app.transfers.services import cancel_transfer, correct_transfer, transfer_send
@@ -296,7 +297,10 @@ async def test_coverage_shortfall_blocks_reverse(
     await session.commit()
 
     to_task = await session.get(WorkTask, ctx["to_task_id"])
-    # Хвост потреблён: 4 из 5 завершены на приёмном участке.
+    # Хвост потреблён: 4 из 5 завершены на приёмном участке. Материал лежит в
+    # группе ПРЕДЫДУЩЕГО этапа — так его кладёт передача источника (ADR-0055),
+    # поэтому и списание идёт из той же группы, а не из группы своего этапа.
+    consume_ops = await resolve_consume_operations(session, to_task)
     svc = StockCommandService()
     await svc.record(
         session,
@@ -307,6 +311,7 @@ async def test_coverage_shortfall_blocks_reverse(
             from_location_id=to_task.section_id,
             to_location_id=None,
             task_id=to_task.id,
+            completed_operations=consume_ops,
             created_by=ctx["user"].id,
         ),
     )

@@ -1,12 +1,15 @@
 /**
- * Печать транслирует доску: колонка «Упаковка» есть только у участка, где в
- * справочнике операций есть упаковочная операция (`Section.has_packaging`).
+ * Окно печати открывается на пресете участка: набор колонок даёт профиль
+ * печати участка (`PRINT_PROFILES`), а колонка «Упаковка» есть только там, где
+ * в справочнике операций участка есть упаковочная операция
+ * (`Section.has_packaging`, ADR-0059).
  *
- * Проверяется через окно печати: и состав печатного набора, и кнопки «Колонки
- * печати» — сохранённый на анодировании набор не должен печатать пустую
- * колонку на пиле.
+ * Проверяется через окно: и состав листа, и кнопки «Колонки печати», и какой
+ * пресет подсвечен активным. Набор прошлого выбора применяется только тогда,
+ * когда он совпал с названным пресетом участка: набор из старой версии
+ * приложения или после ручной правки колонок профиль участка не перекрывает.
  */
-import { render, screen, within } from "@testing-library/react";
+import { fireEvent, render, screen, within } from "@testing-library/react";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
 import type { SectionBoardTask } from "@/shared/api/shopfloor";
@@ -57,62 +60,118 @@ function makeTask(): SectionBoardTask {
   };
 }
 
-function renderModal(hasPackaging: boolean | undefined) {
+function renderModal(opts: { sectionCode: string; hasPackaging?: boolean }) {
   return render(
     <PlanModal
       open
       onOpenChange={vi.fn()}
       sectionId={SECTION_ID}
-      sectionName="Пила"
-      sectionCode="SAWING"
-      hasPackaging={hasPackaging}
+      sectionName="Участок"
+      sectionCode={opts.sectionCode}
+      hasPackaging={opts.hasPackaging}
       tasks={[makeTask()]}
     />,
   );
 }
 
+/** Колонки листа: служебная отметка строки и колонка действий без подписи. */
 function printedColumnTitles(): string[] {
   return within(screen.getByRole("table"))
     .getAllByRole("columnheader")
-    .map((header) => header.textContent ?? "");
+    .map((header) => header.textContent ?? "")
+    .filter((title) => title !== "");
 }
 
-/** Набор, снятый на участке с упаковкой, — с колонкой «Упаковка». */
-function storeSettingsWithPackaging() {
-  localStorage.setItem(
-    STORAGE_KEY,
-    JSON.stringify({ columns: ["sku", "packaging"], title: "" }),
-  );
+/** Активный пресет — единственный вариант кнопки со сплошной заливкой. */
+function isPresetActive(name: RegExp): boolean {
+  return screen.getByRole("button", { name }).className.includes("bg-primary");
 }
 
-describe("окно печати: «Упаковка» только у участка с упаковочными операциями", () => {
+function storeSettings(columns: string[]) {
+  localStorage.setItem(STORAGE_KEY, JSON.stringify({ columns, title: "" }));
+}
+
+describe("Пресеты участка: «Упаковка» только у участка с упаковочными операциями", () => {
   beforeEach(() => {
     localStorage.clear();
   });
 
   it("без упаковочных операций колонки нет ни в листе, ни в кнопках", () => {
-    storeSettingsWithPackaging();
-
-    renderModal(false);
+    renderModal({ sectionCode: "PACKING", hasPackaging: false });
 
     expect(printedColumnTitles()).not.toContain("Упаковка");
     expect(screen.queryByRole("button", { name: "Упаковка" })).toBeNull();
+    expect(isPresetActive(/Базовый/)).toBe(true);
   });
 
-  it("с упаковочными операциями сохранённый набор печатается целиком", () => {
-    storeSettingsWithPackaging();
-
-    renderModal(true);
+  it("с упаковочными операциями набор участка печатается целиком", () => {
+    renderModal({ sectionCode: "PACKING", hasPackaging: true });
 
     expect(printedColumnTitles()).toContain("Упаковка");
     expect(screen.queryByRole("button", { name: "Упаковка" })).not.toBeNull();
+    expect(isPresetActive(/Базовый/)).toBe(true);
   });
 
   it("флаг не пришёл — колонка остаётся: ошибка справочника не прячет данные", () => {
-    storeSettingsWithPackaging();
-
-    renderModal(undefined);
+    renderModal({ sectionCode: "PACKING", hasPackaging: undefined });
 
     expect(printedColumnTitles()).toContain("Упаковка");
+  });
+});
+
+describe("Пресеты участка: что печатается при открытии", () => {
+  beforeEach(() => {
+    localStorage.clear();
+  });
+
+  it("базовый пресет участка открывается активным и совпадает с листом", () => {
+    renderModal({ sectionCode: "SAWING" });
+
+    expect(isPresetActive(/Базовый/)).toBe(true);
+    expect(printedColumnTitles()).toEqual([
+      "Артикул",
+      "Размер",
+      "Пред операции",
+      "Операция",
+      "Осталось",
+    ]);
+  });
+
+  it("набор прошлого выбора применяется, если это названный пресет", () => {
+    storeSettings(["sku", "size", "operation", "balance"]);
+
+    renderModal({ sectionCode: "SAWING" });
+
+    expect(isPresetActive(/Компактный/)).toBe(true);
+    expect(printedColumnTitles()).toEqual([
+      "Артикул",
+      "Размер",
+      "Операция",
+      "Осталось",
+    ]);
+  });
+
+  it("набор без пресета (старая версия, ручная правка) профиль участка не перекрывает", () => {
+    storeSettings(["sku", "packaging"]);
+
+    renderModal({ sectionCode: "SAWING" });
+
+    expect(isPresetActive(/Базовый/)).toBe(true);
+    expect(printedColumnTitles()).toEqual([
+      "Артикул",
+      "Размер",
+      "Пред операции",
+      "Операция",
+      "Осталось",
+    ]);
+  });
+
+  it("пресет «Только артикулы» печатает остаток вместе с артикулом", () => {
+    renderModal({ sectionCode: "SAWING" });
+
+    fireEvent.click(screen.getByRole("button", { name: /Только артикулы/ }));
+
+    expect(isPresetActive(/Только артикулы/)).toBe(true);
+    expect(printedColumnTitles()).toEqual(["Артикул", "Осталось"]);
   });
 });

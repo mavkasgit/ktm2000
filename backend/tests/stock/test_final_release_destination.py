@@ -21,6 +21,7 @@ from app.stock import Reason, StockCommand, StockCommandService, StockTransactio
 from sqlalchemy import func, select, update
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from tests.helpers.completed_operations import register_section_operations
 from tests.stock.helpers import record_transfer_receive
 from tests.stock.test_shopfloor_stage3 import _setup_minimal_route
 from tests.test_integrity_invariants import assert_no_invariants_violations
@@ -33,6 +34,12 @@ async def _run_to_final_release(
 ) -> dict:
     """Довести задание до final_release: issue → receive → complete."""
     task = fx["task"]
+    # ADR-0061: признак выводится из операций ЭТАПА, а фикстура
+    # `_setup_minimal_route` объявляет операцию прямо на этапе. Продовый
+    # маршрут собирается из справочника участка, поэтому дублируем код туда —
+    # иначе record() отвергнет признак как неизвестный и тест упадёт раньше
+    # проверяемой доменной валидации адресата.
+    await register_section_operations(session, fx["prod"].id, ["OP1"])
     svc = StockCommandService()
     await svc.record(session, StockCommand(
         product_id=fx["product"].id,

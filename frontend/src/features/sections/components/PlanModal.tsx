@@ -1,6 +1,13 @@
 /**
  * Окно плана участка.
  *
+ * Печать настраивается по участку: базовый пресет окна — профиль печати
+ * участка (`PRINT_PROFILES` по коду секции). При открытии применяется пресет
+ * прошлого выбора, если он совпал с одним из пресетов участка, иначе — базовый
+ * набор участка; набор без пресета профиль участка не перекрывает. Набор
+ * колонок — единственный источник правды и для листа, и для кнопок «Колонки
+ * печати» (ADR-0042).
+ *
  * Для анодирования показывается единое дерево: предоперации, анодирование и
  * упаковка остаются в строке одного задания. Лист печатается сразу из окна:
  * набор колонок и заголовок задаются в его шапке, печатаются все задания.
@@ -17,6 +24,7 @@ import {
   findMatchingPresetId,
   isSameSettings,
   loadPresets,
+  sectionBasePreset,
   type PlanPreset,
 } from "../lib/planPresets";
 import {
@@ -24,7 +32,6 @@ import {
   PLAN_COLUMNS,
   PRINTABLE_COLUMNS,
   normalizePrintSettings,
-  printColumnsFor,
   type PlanColumnKey,
   type PrintSettings,
 } from "../lib/planPrintSettings";
@@ -64,27 +71,31 @@ interface PlanModalProps {
   availableOperations?: SectionOperation[];
 }
 
-function readStoredSettings(sectionId: number): Partial<PrintSettings> | null {
+/**
+ * Настройки окна на открытии: набор прошлого выбора, если он совпадает с
+ * одним из пресетов участка, иначе — базовый пресет участка. Набор, не
+ * совпавший ни с чем (старая версия приложения, ручная правка колонок),
+ * профиль участка молча не перекрывает: мастер видит ровно тот пресет,
+ * который подсвечен активным.
+ */
+function loadPrintSettings(
+  sectionId: number,
+  presets: PlanPreset[],
+  baseSettings: PrintSettings,
+): PrintSettings {
+  const stored = readStoredSettings(sectionId);
+  return stored && findMatchingPresetId(presets, stored) ? stored : baseSettings;
+}
+
+function readStoredSettings(sectionId: number): PrintSettings | null {
   try {
     const raw = localStorage.getItem(`plan-print-settings-${sectionId}`);
-    return raw ? (JSON.parse(raw) as Partial<PrintSettings>) : null;
+    if (!raw) return null;
+    const settings = normalizePrintSettings(JSON.parse(raw) as Partial<PrintSettings>, []);
+    return settings.columns.length > 0 ? settings : null;
   } catch {
     return null;
   }
-}
-
-function loadPrintSettings(
-  sectionId: number,
-  fallbackColumns: PlanColumnKey[],
-  unavailableColumns: readonly PlanColumnKey[],
-): PrintSettings {
-  const settings = normalizePrintSettings(readStoredSettings(sectionId), fallbackColumns);
-  return {
-    ...settings,
-    // Сохранённый набор — тоже: иначе колонка, которой у участка нет,
-    // печаталась бы пустой, и заметить это можно было бы только на бумаге.
-    columns: settings.columns.filter((key) => !unavailableColumns.includes(key)),
-  };
 }
 
 function savePrintSettings(sectionId: number, settings: PrintSettings) {
@@ -93,6 +104,27 @@ function savePrintSettings(sectionId: number, settings: PrintSettings) {
 
 /** Группировка печатного листа всегда по артикулу и размеру. */
 const GROUPING_MODE: PlanTaskGroupingMode = "article";
+
+/**
+ * Ширина листа в окне: A4 landscape минус поля печати (`10mm 12mm` в стилях
+ * предпросмотра) — 273 мм ≈ 1032 px при 96 dpi. Без потолка окно шириной в
+ * монитор растягивало колонки: три колонки разъезжались на полтора метра, и
+ * пустота внутри таблицы читалась как сломанная вёрстка, хотя на бумаге лист
+ * ровно такой ширины и есть. На печати потолок не мешает: доступная ширина
+ * листа и равна этим 273 мм.
+ */
+const SHEET_WIDTH_CLASS = "mx-auto w-full max-w-[1032px]";
+
+/**
+ * Подсказка пресета — его набор колонок по заголовкам «Колонок печати».
+ * Базовый пресет участка иначе не отличить от остальных: набор у него свой
+ * для каждого участка, а имя одно.
+ */
+function presetColumnTitles(preset: PlanPreset): string {
+  return preset.settings.columns
+    .map((key) => PLAN_COLUMNS.find((column) => column.key === key)?.title ?? key)
+    .join(" · ");
+}
 
 export function PlanModal({
   open,
@@ -111,29 +143,46 @@ export function PlanModal({
   const unavailableColumns: readonly PlanColumnKey[] =
     hasPackaging === false ? PACKAGING_ONLY_COLUMNS : [];
 
+  // Настройки окна на открытии: базовый пресет участка либо названный пресет
+  // прошлого выбора (см. `loadPrintSettings`). Порядок состояний важен: набор
+  // настроек выбирается по уже загруженному списку пресетов.
+  const [presets, setPresets] = useState<PlanPreset[]>(() =>
+    loadPresets(sectionId, sectionCode, unavailableColumns),
+  );
   const [printSettings, setPrintSettings] = useState<PrintSettings>(() =>
-    loadPrintSettings(sectionId, printColumnsFor(sectionCode), unavailableColumns),
+    loadPrintSettings(
+      sectionId,
+      presets,
+      sectionBasePreset(sectionCode, unavailableColumns).settings,
+    ),
   );
   const [hiddenGroupKeys, setHiddenGroupKeys] = useState<Set<string>>(() => new Set());
-  const [presets, setPresets] = useState<PlanPreset[]>(() => loadPresets(sectionId));
   const [activePresetId, setActivePresetId] = useState<string | null>(null);
   const [newPresetName, setNewPresetName] = useState("");
   const [presetToDelete, setPresetToDelete] = useState<PlanPreset | null>(null);
 
   useEffect(() => {
+    const nextPresets = loadPresets(sectionId, sectionCode, unavailableColumns);
+    setPresets(nextPresets);
     setPrintSettings(
-      loadPrintSettings(sectionId, printColumnsFor(sectionCode), unavailableColumns),
+      loadPrintSettings(
+        sectionId,
+        nextPresets,
+        sectionBasePreset(sectionCode, unavailableColumns).settings,
+      ),
     );
-    setPresets(loadPresets(sectionId));
     setActivePresetId(null);
     setHiddenGroupKeys(new Set());
     // `unavailableColumns` выводится из `hasPackaging` — он и в зависимостях.
   }, [sectionId, sectionCode, hasPackaging]);
 
-
   useEffect(() => {
-    savePrintSettings(sectionId, printSettings);
-  }, [sectionId, printSettings]);
+    // Пишем только названный набор: набор без пресета при следующем открытии
+    // всё равно уступает базовому пресету участка, и хранить его незачем.
+    if (findMatchingPresetId(presets, printSettings)) {
+      savePrintSettings(sectionId, printSettings);
+    }
+  }, [sectionId, printSettings, presets]);
 
   useEffect(() => {
     const activePreset = presets.find((preset) => preset.id === activePresetId);
@@ -169,14 +218,9 @@ export function PlanModal({
   };
 
   const applyPreset = (preset: PlanPreset) => {
-    // Пресет (встроенный или сохранённый) мог быть снят на участке с
-    // упаковкой — здесь его набор так же приводится к применимым колонкам.
-    setPrintSettings({
-      ...preset.settings,
-      columns: preset.settings.columns.filter(
-        (key) => !unavailableColumns.includes(key),
-      ),
-    });
+    // Набор пресета уже приведён к применимым колонкам участка (`loadPresets`):
+    // второго места, где список колонок режется, быть не должно.
+    setPrintSettings({ ...preset.settings });
     setActivePresetId(preset.id);
   };
 
@@ -184,7 +228,7 @@ export function PlanModal({
     const name = newPresetName.trim();
     if (!name) return;
     const created = addPreset(sectionId, name, printSettings);
-    setPresets(loadPresets(sectionId));
+    setPresets(loadPresets(sectionId, sectionCode, unavailableColumns));
     setActivePresetId(created.id);
     setNewPresetName("");
   };
@@ -192,7 +236,7 @@ export function PlanModal({
   const confirmDeletePreset = () => {
     if (!presetToDelete) return;
     deletePreset(sectionId, presetToDelete.id);
-    setPresets(loadPresets(sectionId));
+    setPresets(loadPresets(sectionId, sectionCode, unavailableColumns));
     if (activePresetId === presetToDelete.id) setActivePresetId(null);
     setPresetToDelete(null);
   };
@@ -214,7 +258,7 @@ export function PlanModal({
           .print-area { position: static !important; display: block !important; width: auto !important; max-width: none !important; max-height: none !important; overflow: visible !important; transform: none !important; box-shadow: none !important; border: none !important; padding: 0 !important; }
           .print-area > *:not(.print-sheet) { display: none !important; }
           .print-sheet { flex: none !important; overflow: visible !important; height: auto !important; max-height: none !important; padding: 10mm 12mm !important; }
-          .print-sheet .plan-table { overflow: visible !important; }
+          .print-sheet .plan-table { width: 100% !important; max-width: none !important; margin: 0 !important; overflow: visible !important; }
           .print-sheet .no-print-col { display: none !important; }
           .print-sheet table { width: 100% !important; table-layout: fixed; border-collapse: collapse; font-size: 9pt; }
           .print-sheet th, .print-sheet td { padding: 1mm 1.5mm !important; font-size: 9pt; line-height: 1.2; white-space: normal !important; max-width: none !important; overflow-wrap: anywhere; word-break: break-word; }
@@ -241,6 +285,7 @@ export function PlanModal({
                   type="button"
                   size="sm"
                   variant={activePresetId === preset.id ? "default" : "outline"}
+                  title={presetColumnTitles(preset)}
                   onClick={() => applyPreset(preset)}
                 >
                   {preset.isBuiltin ? `★ ${preset.name}` : preset.name}
@@ -269,19 +314,21 @@ export function PlanModal({
         </DialogHeader>
 
         <div className="flex-1 overflow-auto p-4 print-sheet">
-          <div className="mb-4 text-center">
-            <div className="text-sm font-bold uppercase tracking-wide">{sheetTitle}</div>
-            <div className="mt-0.5 text-[10px] text-muted-foreground">
-              Сформировано: {new Date().toLocaleString("ru-RU")}
+          <div className={SHEET_WIDTH_CLASS}>
+            <div className="mb-4 text-center">
+              <div className="text-sm font-bold uppercase tracking-wide">{sheetTitle}</div>
+              <div className="mt-0.5 text-[10px] text-muted-foreground">
+                Сформировано: {new Date().toLocaleString("ru-RU")}
+              </div>
             </div>
+            {hiddenGroupKeys.size > 0 && (
+              <div className="no-print mb-3 flex items-center gap-2 rounded-md border border-amber-300 bg-amber-50 px-3 py-2 text-xs text-amber-900">
+                Скрыто групп: <b>{hiddenGroupKeys.size}</b>
+                <Button type="button" size="sm" variant="outline" className="ml-auto" onClick={() => setHiddenGroupKeys(new Set())}>Показать все</Button>
+              </div>
+            )}
+            <PlanTaskTable tasks={tasks} mode={GROUPING_MODE} hiddenGroupKeys={hiddenGroupKeys} onHideGroup={hideGroup} columns={printSettings.columns} />
           </div>
-          {hiddenGroupKeys.size > 0 && (
-            <div className="no-print mb-3 flex items-center gap-2 rounded-md border border-amber-300 bg-amber-50 px-3 py-2 text-xs text-amber-900">
-              Скрыто групп: <b>{hiddenGroupKeys.size}</b>
-              <Button type="button" size="sm" variant="outline" className="ml-auto" onClick={() => setHiddenGroupKeys(new Set())}>Показать все</Button>
-            </div>
-          )}
-          <PlanTaskTable tasks={tasks} mode={GROUPING_MODE} hiddenGroupKeys={hiddenGroupKeys} onHideGroup={hideGroup} columns={printSettings.columns} />
         </div>
 
         <div className="flex items-center justify-end gap-2 border-t p-4 no-print">

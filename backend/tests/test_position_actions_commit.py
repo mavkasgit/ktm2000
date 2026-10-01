@@ -31,7 +31,12 @@ from app.models.production_plan import (
     ProductionPlan,
     ProductionPlanStatus,
 )
-from app.models.route import ProductionRoute, RouteOperation, RouteStage
+from app.models.route import (
+    ProductionRoute,
+    RouteOperation,
+    RouteStage,
+    SectionOperation,
+)
 from app.models.section import Section
 from httpx import ASGITransport, AsyncClient
 from sqlalchemy import delete, select
@@ -76,6 +81,16 @@ async def _cleanup(
         )
         await db.execute(delete(RouteStage).where(RouteStage.route_id == route_id))
         await db.execute(delete(ProductionRoute).where(ProductionRoute.id == route_id))
+        # Справочник операций участков живёт отдельной таблицей (ADR-0061:
+        # фикстуры регистрируют в нём операции этапов), поэтому секции
+        # убираются не раньше своих операций.
+        await db.execute(
+            delete(SectionOperation).where(
+                SectionOperation.section_id.in_(
+                    select(Section.id).where(Section.code.like(f"{sku}-%"))
+                )
+            )
+        )
         await db.execute(delete(Section).where(Section.code.like(f"{sku}-%")))
         await db.execute(delete(Product).where(Product.id == product_id))
         await db.execute(delete(AuditLog).where(AuditLog.section_id.is_not(None)))

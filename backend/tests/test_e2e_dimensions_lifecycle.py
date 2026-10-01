@@ -39,6 +39,7 @@ from app.models.section import Section
 from app.models.spg import SpgSection, StorageProductionGroup
 from app.models.user import User, UserRole
 from app.models.work_task import WorkTask
+from app.services.shopfloor.operations_transform import resolve_consume_operations
 from app.stock import QualityState, Reason, StockCommand, StockCommandService
 from app.stock.models import StockBalance
 from app.stock.services import dimensions_match_clause
@@ -47,6 +48,7 @@ from openpyxl import Workbook
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from tests.helpers.completed_operations import register_section_operations
 from tests.helpers.transfers import _section_route_operations
 from tests.test_integrity_invariants import assert_no_invariants_violations
 
@@ -181,25 +183,15 @@ async def _make_dimensions_route(
         session.add(stage)
         await session.flush()
         session.add(RouteOperation(route_stage_id=stage.id, sequence=1, operation_code=op_code, operation_name=op_code))
+        # Справочник участка (ADR-0061): признак «пройденные операции» выводится
+        # из операции ЭТАПА, а запись в ledger проверяет коды по
+        # ``section_operations``. Продовый маршрут собирается из справочника,
+        # фикстура объявляет операцию прямо на этапе — без дубля код отвергли
+        # бы как неизвестный (``assert_known_operation_codes``).
+        await register_section_operations(session, sec.id, [op_code])
         stages.append(stage)
     await session.flush()
 
-    # Справочник операций складского участка (ADR-0043): из него выводится
-    # признак «пройденные операции» материала, лежащего на складе. Код берём
-    # у операции первого этапа маршрута — материал на складе её уже прошёл.
-    # Без строки справочника признак выводился бы пустым списком, и импорт
-    # остатков не смог бы заложить сырьё в ту же ops-группу, из которой его
-    # заберёт плановая выдача (ADR-0055).
-    session.add(
-        SectionOperation(
-            section_id=sections[0].id,
-            operation_code=op_codes[0],
-            operation_name=op_codes[0],
-            is_significant=True,
-            sort_order=0,
-        )
-    )
-    await session.flush()
     return product, sections, route, stages
 
 
@@ -408,6 +400,11 @@ async def test_dimensions_lifecycle_import_to_saw(client, session: AsyncSession)
     drill_task = tasks[0]
     # Для первого production-этапа нужно передать материал со склада.
     # Начислим материал на участок через StockCommand (имитация выдачи со склада).
+    # ADR-0061: на участке материал лежит в ops-группе ПРЕДЫДУЩЕГО этапа —
+    # именно её спишет ``complete_task`` (``resolve_consume_operations``).
+    # Проводки ниже задают признак явно: plan-driven резолв взял бы группу
+    # СОБСТВЕННОГО этапа задания и разошёлся бы со списанием.
+    issue_ops = await resolve_consume_operations(session, drill_task)
     svc = StockCommandService()
     await svc.record(session, StockCommand(
         product_id=product.id,
@@ -418,6 +415,7 @@ async def test_dimensions_lifecycle_import_to_saw(client, session: AsyncSession)
         dimensions={"length_mm": 2700},
         quality_state=QualityState.GOOD,
         task_id=drill_task.id,
+        completed_operations=issue_ops,
         created_by=user.id,
         comment="Выдача сырья на сверловку",
     ))
@@ -430,6 +428,7 @@ async def test_dimensions_lifecycle_import_to_saw(client, session: AsyncSession)
         dimensions={"length_mm": 2700},
         quality_state=QualityState.GOOD,
         task_id=drill_task.id,
+        completed_operations=issue_ops,
         created_by=user.id,
         comment="Приём на сверловку",
     ))
@@ -594,6 +593,10 @@ async def test_dimensionless_lifecycle_no_regressions(client, session: AsyncSess
 
     # ── Выдача на сверловку ─────────────────────────────────────────────────
     drill_task = tasks[0]
+    # ADR-0061: группа ВХОДА участка — признак ПРЕДЫДУЩЕГО этапа; её же
+    # спишет ``complete_task``. Plan-driven резолв взял бы группу СОБСТВЕННОГО
+    # этапа задания и разошёлся бы со списанием.
+    nodim_issue_ops = await resolve_consume_operations(session, drill_task)
     await svc.record(session, StockCommand(
         product_id=product.id,
         from_location_id=raw_sec.id,
@@ -603,6 +606,7 @@ async def test_dimensionless_lifecycle_no_regressions(client, session: AsyncSess
         dimensions=None,
         quality_state=QualityState.GOOD,
         task_id=drill_task.id,
+        completed_operations=nodim_issue_ops,
         created_by=user.id,
     ))
     await svc.record(session, StockCommand(
@@ -614,6 +618,7 @@ async def test_dimensionless_lifecycle_no_regressions(client, session: AsyncSess
         dimensions=None,
         quality_state=QualityState.GOOD,
         task_id=drill_task.id,
+        completed_operations=nodim_issue_ops,
         created_by=user.id,
     ))
     bal_drill = await _get_balance(session, product.id, drill_sec.id, None)

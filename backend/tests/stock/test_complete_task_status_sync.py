@@ -26,11 +26,12 @@ from app.models.production_plan import (
 from app.models.route import ProductionRoute, RouteOperation, RouteStage
 from app.models.spg import SpgSection, StorageProductionGroup
 from app.models.work_task import WorkTask, WorkTaskStatus
-from app.services.material_operations import completed_operations_for_task
 from app.services.shopfloor.operations_tasks import complete_task
+from app.services.shopfloor.operations_transform import resolve_consume_operations
 from app.stock import Reason, StockCommand, StockCommandService
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from tests.helpers.completed_operations import register_section_operations
 from tests.stock.helpers import record_transfer_receive
 from tests.test_integrity_invariants import assert_no_stock_ledger_invariants_violations
 
@@ -75,6 +76,9 @@ async def _make_single_stage_setup(
     session.add(stage)
     await session.flush()
     session.add(RouteOperation(route_stage_id=stage.id, sequence=1, operation_code="OP1", operation_name="Op1"))
+    # ADR-0061: COMPLETE выводит признак выпуска из операций ЭТАПА, а ledger
+    # проверяет коды по справочнику участка (assert_known_operation_codes).
+    await register_section_operations(session, prod.id, ["OP1"])
 
     await session.flush()
 
@@ -163,6 +167,9 @@ async def _make_two_ghp_setup(
         session.add(stage)
         await session.flush()
         session.add(RouteOperation(route_stage_id=stage.id, sequence=1, operation_code=code, operation_name=code))
+        # ADR-0061: коды операций этапов обязаны быть и в справочнике
+        # участка — по нему ledger проверяет признак (assert_known_operation_codes).
+        await register_section_operations(session, sec.id, [code])
         stages.append(stage)
 
     await session.flush()
@@ -220,7 +227,15 @@ async def _make_two_ghp_setup(
 
 
 async def _issue_to(session: AsyncSession, fx: dict, task: WorkTask, *, quantity: Decimal) -> None:
-    """Выдача материала на конкретную задачу: MANUAL_IN + TRANSFER_RECEIVE."""
+    """Выдача материала на конкретную задачу: MANUAL_IN + TRANSFER_RECEIVE.
+
+    Материал ещё не прошёл операции своего этапа, поэтому обе проводки несут
+    признак группы ПРЕДЫДУЩЕГО этапа (для первого — «операций не было»):
+    именно её списывает ``complete_task`` (``resolve_consume_operations``).
+    MANUAL_IN без признака лёг бы в NULL-группу и остался бы невидимым для
+    приёма (ADR-0055).
+    """
+    ops = await resolve_consume_operations(session, task)
     svc = StockCommandService()
     await svc.record(session, StockCommand(
         product_id=fx["product"].id,
@@ -229,11 +244,7 @@ async def _issue_to(session: AsyncSession, fx: dict, task: WorkTask, *, quantity
         quantity=quantity,
         reason=Reason.MANUAL_IN,
         created_by=fx["user"].id,
-        # ADR-0055: списание TRANSFER_RECEIVE идёт по полному ключу остатка,
-        # включая признак операций, который record() выводит из маршрута
-        # позиции. MANUAL_IN без признака лёг бы в NULL-группу и остался бы
-        # невидимым для приёма — значение берём тем же резолвером, что прод.
-        completed_operations=await completed_operations_for_task(session, task),
+        completed_operations=ops,
     ))
     await record_transfer_receive(
         session,
@@ -243,6 +254,7 @@ async def _issue_to(session: AsyncSession, fx: dict, task: WorkTask, *, quantity
         quantity=quantity,
         task_id=task.id,
         created_by=fx["user"].id,
+        completed_operations=ops,
     )
     task.status = WorkTaskStatus.in_progress
     await session.commit()

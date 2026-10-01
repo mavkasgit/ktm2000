@@ -21,6 +21,7 @@ from app.stock.services import StockCommand, StockCommandService
 from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from tests.helpers.completed_operations import register_section_operations
 from tests.stock.test_shopfloor_stage3 import _setup_minimal_route
 from tests.test_integrity_invariants import assert_no_invariants_violations
 
@@ -29,6 +30,10 @@ pytestmark = pytest.mark.asyncio
 
 async def _final_release_fixture(session: AsyncSession, sku: str) -> dict:
     fx = await _setup_minimal_route(session, sku=sku, qty=Decimal(10))
+    # ADR-0061: `_setup_minimal_route` объявляет операцию этапа `OP1` только
+    # в `route_operations`; признак выводится из неё, а ledger проверяет коды
+    # по справочнику участка — дублируем код туда.
+    await register_section_operations(session, fx["prod"].id, ["OP1"])
     stock = StockCommandService()
     # ADR-0055: расход точный — материал на участке обязан лежать в той же
     # ops-группе, из которой его заберёт плановая FINAL_RELEASE задания.

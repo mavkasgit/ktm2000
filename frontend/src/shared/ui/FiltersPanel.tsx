@@ -158,6 +158,17 @@ export type FiltersPanelField =
       onChange: (enabled: boolean) => void;
       label?: string;
       layoutSpan?: string;
+    }
+  | {
+      /**
+       * Готовый узел вызывающего экрана: панель не знает, что это за контрол
+       * (печать, фильтр периода), но ставит его в общий ряд полей — в порядке
+       * массива, без разъезда по правому краю.
+       */
+      kind: "custom";
+      key: string;
+      node: ReactNode;
+      layoutSpan?: string;
     };
 
 export interface FiltersPanelProps {
@@ -199,7 +210,9 @@ export function FiltersPanel({
         <div className="flex items-center gap-2 flex-wrap">
           {fields.map((field) => (
             <div key={field.key} className={field.layoutSpan ?? "min-w-[160px] flex-shrink-0"}>
-              {field.kind === "toggle" ? (
+              {field.kind === "custom" ? (
+                field.node
+              ) : field.kind === "toggle" ? (
                 renderToggleField(field)
               ) : field.kind === "bulk" ? (
                 onSelectAll ? renderBulkWithSelectAll(field, onSelectAll, totalRowCount) : renderBulkField(field)
@@ -263,7 +276,9 @@ export function FiltersPanel({
           <div className="grid gap-2 md:grid-cols-2 xl:grid-cols-4 2xl:grid-cols-7">
             {fields.map((field) => (
               <div key={field.key} className={field.layoutSpan}>
-                {field.kind === "toggle" ? (
+                {field.kind === "custom" ? (
+                  field.node
+                ) : field.kind === "toggle" ? (
                   renderToggleField(field)
                 ) : field.kind === "bulk" ? (
                   onSelectAll ? renderBulkWithSelectAll(field, onSelectAll, totalRowCount) : renderBulkField(field)

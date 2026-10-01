@@ -20,6 +20,8 @@ from app.stock.models import QualityState, Reason, StockBalance
 from app.stock.services import StockCommand, StockCommandService
 from sqlalchemy import select
 
+from tests.helpers.completed_operations import register_section_operations
+
 # ─── helpers ─────────────────────────────────────────────────────────────────
 
 
@@ -97,6 +99,9 @@ async def _make_raw_stock_to_production_fixture(
         session.add(st)
         await session.flush()
         session.add(RouteOperation(route_stage_id=st.id, sequence=1, operation_code=code, operation_name=code))
+        # ADR-0061: признак выводится из операции ЭТАПА (`route_operations`),
+        # но ledger проверяет коды по справочнику участка — дублируем.
+        await register_section_operations(session, sec.id, [code])
 
     await session.flush()
 

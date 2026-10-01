@@ -49,6 +49,7 @@ from app.stock.services import completed_operations_match_clause
 from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from tests.helpers.completed_operations import register_section_operations
 from tests.stock.test_shopfloor_stage3 import _setup_minimal_route
 from tests.test_integrity_invariants import assert_no_invariants_violations
 
@@ -302,6 +303,11 @@ async def _terminal_task_with_shipped_material(
     """
     fx = await _setup_minimal_route(session, sku=sku)
     task = fx["task"]
+    # ADR-0061: признак выводится из операций ЭТАПА (`route_operations`), а
+    # фикстура объявляет OP1 прямо на этапе. Продовый маршрут собирается из
+    # справочника участка, поэтому дублируем код туда — иначе COMPLETE и
+    # TRANSFER_SEND отвергнут выведенный признак как неизвестный.
+    await register_section_operations(session, fx["prod"].id, ["OP1"])
     shipped = await _make_location(
         session, code=f"{sku}-SHIPPED", name="Отправлено", loc_type="terminal",
     )

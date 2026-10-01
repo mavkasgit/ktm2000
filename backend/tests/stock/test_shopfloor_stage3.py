@@ -26,7 +26,6 @@ from app.models.production_plan import (
 from app.models.route import ProductionRoute, RouteOperation, RouteStage
 from app.models.spg import SpgSection, StorageProductionGroup
 from app.models.work_task import WorkTask, WorkTaskStatus
-from app.services.material_operations import completed_operations_for_task
 from app.stock import (
     QualityState,
     Reason,
@@ -38,6 +37,7 @@ from app.stock import (
 from sqlalchemy import func, select, update
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from tests.helpers.completed_operations import register_section_operations
 from tests.stock.helpers import record_transfer_receive
 from tests.test_integrity_invariants import assert_no_stock_ledger_invariants_violations
 
@@ -96,16 +96,30 @@ async def _balance(
     return bal.balance_qty if bal else Decimal(0)
 
 
+async def _consume_ops(session: AsyncSession, fx: dict) -> list[str] | None:
+    """Признак входной группы задания — операции до ПРЕДЫДУЩЕГО этапа.
+
+    ADR-0055/ADR-0061: материал на участке пришёл с предыдущего этапа (так
+    его кладёт ``TRANSFER_SEND`` источника), и его читают и списание входа
+    (``complete_task``), и возврат остатка. У участка первого этапа
+    маршрута предыдущего этапа нет — группа пустая (``[]``, «без операций»),
+    а не ``NULL``. Тот же резолвер, что и у прода, — без хардкода кодов.
+    """
+    from app.services.shopfloor.operations_transform import resolve_consume_operations
+
+    return await resolve_consume_operations(session, fx["task"])
+
+
 async def _seed_raw_stock(
     session: AsyncSession, fx: dict, quantity: Decimal = Decimal(100),
 ) -> None:
     """Занести остаток на «Склад сырья» в той же группе, что и списание.
 
     ADR-0055: списание идёт по полному ключу остатка, включая признак
-    «пройденные операции», а ``record()`` выводит этот признак плановой
-    проводки из маршрута позиции. MANUAL_IN без явного значения лёг бы в
-    NULL-группу, и TRANSFER_RECEIVE задания её бы не нашёл. Значение берём
-    тем же резолвером, что и прод, — без хардкода кодов операций.
+    «пройденные операции», а вход задания лежит в группе ПРЕДЫДУЩЕГО этапа
+    (``_consume_ops``). MANUAL_IN без явного значения лёг бы в NULL-группу,
+    и TRANSFER_RECEIVE задания её бы не нашёл. Значение берём тем же
+    резолвером, что и прод, — без хардкода кодов операций.
     """
     await StockCommandService().record(session, StockCommand(
         product_id=fx["product"].id,
@@ -114,7 +128,7 @@ async def _seed_raw_stock(
         quantity=quantity,
         reason=Reason.MANUAL_IN,
         created_by=fx["user"].id,
-        completed_operations=await completed_operations_for_task(session, fx["task"]),
+        completed_operations=await _consume_ops(session, fx),
     ))
 
 
@@ -146,6 +160,10 @@ async def _setup_minimal_route(session: AsyncSession, *, sku: str = "S3", qty: D
     session.add(stage)
     await session.flush()
     session.add(RouteOperation(route_stage_id=stage.id, sequence=1, operation_code="OP1", operation_name="Op1"))
+    # Операция ЭТАПА обязана быть и в справочнике участка: признак
+    # «пройденные операции» выводится из операции ЭТАПА (ADR-0061), а запись
+    # в ledger проверяет коды по ``section_operations``.
+    await register_section_operations(session, prod.id, ["OP1"])
 
     await session.flush()
 
@@ -219,6 +237,7 @@ async def test_transfer_receive_creates_stock_tx(session: AsyncSession):
         to_location_id=task.section_id,
         quantity=Decimal(10),
         task_id=task.id,
+        completed_operations=await _consume_ops(session, fx),
         created_by=fx["user"].id,
     )
     await session.commit()
@@ -249,6 +268,7 @@ async def test_transfer_receive_updates_cache(session: AsyncSession):
         to_location_id=task.section_id,
         quantity=Decimal(7),
         task_id=task.id,
+        completed_operations=await _consume_ops(session, fx),
         created_by=fx["user"].id,
     )
     await session.commit()
@@ -299,6 +319,7 @@ async def test_complete_task_creates_complete_tx(session: AsyncSession):
         to_location_id=task.section_id,
         quantity=Decimal(10),
         task_id=task.id,
+        completed_operations=await _consume_ops(session, fx),
         created_by=fx["user"].id,
     )
     task.status = WorkTaskStatus.in_progress
@@ -354,6 +375,7 @@ async def test_complete_task_with_scrap(session: AsyncSession):
         to_location_id=task.section_id,
         quantity=Decimal(10),
         task_id=task.id,
+        completed_operations=await _consume_ops(session, fx),
         created_by=fx["user"].id,
     )
     task.status = WorkTaskStatus.in_progress
@@ -418,6 +440,7 @@ async def test_final_release_creates_stock_tx(session: AsyncSession):
         to_location_id=task.section_id,
         quantity=Decimal(10),
         task_id=task.id,
+        completed_operations=await _consume_ops(session, fx),
         created_by=fx["user"].id,
     )
     task.status = WorkTaskStatus.in_progress
@@ -481,6 +504,7 @@ async def test_final_release_without_finished_stock_rejected(session: AsyncSessi
         to_location_id=task.section_id,
         quantity=Decimal(10),
         task_id=task.id,
+        completed_operations=await _consume_ops(session, fx),
         created_by=fx["user"].id,
     )
     task.status = WorkTaskStatus.in_progress
@@ -541,6 +565,7 @@ async def test_return_to_stock_endpoint(session: AsyncSession):
         to_location_id=task.section_id,
         quantity=Decimal(10),
         task_id=task.id,
+        completed_operations=await _consume_ops(session, fx),
         created_by=fx["user"].id,
     )
     await session.commit()
@@ -557,6 +582,7 @@ async def test_return_to_stock_endpoint(session: AsyncSession):
         quantity=Decimal(3),
         reason=Rsn.RETURN_TO_STOCK,
         task_id=task.id,
+        completed_operations=await _consume_ops(session, fx),
         created_by=fx["user"].id,
     ))
     await session.commit()
@@ -585,6 +611,7 @@ async def test_no_movement_written_in_shopfloor(session: AsyncSession):
         to_location_id=task.section_id,
         quantity=Decimal(10),
         task_id=task.id,
+        completed_operations=await _consume_ops(session, fx),
         created_by=fx["user"].id,
     )
     task.status = WorkTaskStatus.in_progress

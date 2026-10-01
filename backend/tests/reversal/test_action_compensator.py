@@ -20,6 +20,7 @@ import pytest
 from app.models.action_journal import Action, ActionStatus
 from app.reversal import errors
 from app.reversal.service import _sign_payload, reversal_service
+from app.services.material_operations import completed_operations_for_task
 from app.stock.import_service import RemainderItem, apply_remainders_import
 from app.stock.models import Reason, StockBalance, StockTransaction
 from app.stock.services import StockCommand, StockCommandService
@@ -313,6 +314,26 @@ async def test_reverse_full_chain_cascade_topological_order(
     fx = await _setup_minimal_route(session)
     await _issue_material(session, fx, qty=Decimal(30))
     product_id = fx["product"].id
+    section_id = fx["task"].section_id
+    # Участок уже выпускал раньше: в группе СВОЕГО этапа лежит остаток
+    # предыдущей порции. Без него каскадный откат корня цепочки упирается в
+    # покрытие: preview проверяет каждый узел по ТЕКУЩЕМУ состоянию, и на
+    # момент preview выпуск цепочки (8) в группе своего этапа уже разобран
+    # финальным выпуском (5) — вернёт его только откат зависимого узла,
+    # который проверка покрытия не моделирует. Продовый участок в этот
+    # момент не пуст: порции выпускаются одна за другой. Дефект preview —
+    # тикет #274; обходной путь оператора (откатывать зависимый узел первым)
+    # здесь разыгран посевом остатка.
+    await StockCommandService().record(session, StockCommand(
+        product_id=product_id,
+        from_location_id=None,
+        to_location_id=section_id,
+        quantity=Decimal(5),
+        reason=Reason.MANUAL_IN,
+        completed_operations=await completed_operations_for_task(session, fx["task"]),
+        created_by=fx["user"].id,
+    ))
+    await session.commit()
     pre_groups = await _stock_groups(session, product_id)
 
     chain = await _task_chain(session, fx)
@@ -367,6 +388,10 @@ async def test_defect_decision_reverse(session: AsyncSession) -> None:
     fx = await _setup_minimal_route(session)
     await _issue_material(session, fx)
     product_id = fx["product"].id
+    # Зарегистрированный дефект — забракованный ВЫПУСК задания, и решение по
+    # нему списывает группу признака СВОЕГО этапа (ADR-0055): сначала
+    # завершаем порцию, чтобы выпуск лёг в эту группу.
+    await _complete_task(session, fx, good=Decimal(7), scrap=Decimal(0))
 
     res = await create_defect(
         session, task_id=fx["task"].id, quantity=Decimal(2),

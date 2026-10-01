@@ -7,7 +7,7 @@
  * использует новый groupTasksByProfile вместо BoardRowItem.
  */
 
-import { useMemo, useState, useCallback, useEffect, useRef } from "react";
+import { useMemo, useState, useCallback, useEffect, useRef, type ReactNode } from "react";
 import { ChevronDown, ChevronRight } from "lucide-react";
 import type { SectionBoardQueryParams, SectionBoardTask, TaskGroup } from "@/shared/api/shopfloor";
 import { formatDimensionsFilterValue, formatDimensionsLabel } from "@/shared/api/stock";
@@ -471,6 +471,12 @@ type SectionTasksBoardProps = {
    * карточке — иначе пустая колонка читается как «данные не пришли».
    */
   hasPackaging?: boolean;
+  /**
+   * Узлы вызывающего экрана сразу после поля поиска — фильтр периода и печать.
+   * Место фиксирует доска: справа (в `actions`) они оказываются в стороне от
+   * того, что фильтруют.
+   */
+  toolbar?: ReactNode;
   page: number;
   setPage: (page: number) => void;
   limit: PageLimitOption;
@@ -541,6 +547,7 @@ export function SectionTasksBoard({
   isRevoking = false,
   onCompleteGroup,
   hasPackaging,
+  toolbar,
   page,
   setPage,
   limit,
@@ -774,6 +781,7 @@ export function SectionTasksBoard({
         placeholder: "Поиск",
         layoutSpan: "min-w-[250px]",
       },
+      ...(toolbar ? [{ kind: "custom" as const, key: "toolbar", node: toolbar, layoutSpan: "flex-shrink-0" }] : []),
       ...(readOnly ? [] : [{
         kind: "bulk" as const,
         key: "bulk-mode",
@@ -819,7 +827,7 @@ export function SectionTasksBoard({
       }
     }
     return fields;
-  }, [mode, onModeChange, searchQuery, bulkMode, onBulkModeChange, modeCounts, readOnly, showCompletedStatus, showStatusFilters]);
+  }, [mode, onModeChange, searchQuery, bulkMode, onBulkModeChange, modeCounts, readOnly, showCompletedStatus, showStatusFilters, toolbar]);
 
   const handleResetAllFilters = useCallback(() => {
     setSearchQuery("");

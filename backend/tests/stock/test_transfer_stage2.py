@@ -15,9 +15,6 @@ from decimal import Decimal
 
 import pytest
 from app.models import Product, ProductType, Section
-from app.models.route import (
-    SectionOperation,
-)
 from app.models.transfer import Transfer, TransferStatus
 from app.models.work_task import WorkTask
 from app.services.material_operations import (
@@ -414,20 +411,11 @@ async def test_complete_after_transfer_balance_not_doubled(session: AsyncSession
     при этом не двоится: сколько передали, столько и остаётся.
     """
     setup = await _make_two_ghp_setup(session, sku="T2CMP", qty=Decimal(10))
-    # Секции несут значимые операции своих этапов: без них признак
+    # Секции несут значимые операции своих этапов (`_make_two_ghp_setup`
+    # регистрирует их в справочнике участков, ADR-0061): без них признак
     # «пройденные операции» у обеих сторон пуст, и перенос группы
     # (``[]`` → ``[]``) был бы неотличим от старой net-zero проводки —
     # проверять было бы нечего.
-    for section, code in zip(setup["sections"], ("OP1", "OP2"), strict=True):
-        session.add(SectionOperation(
-            section_id=section.id,
-            operation_code=code,
-            operation_name=code,
-            is_significant=True,
-            operation_type="production",
-            sort_order=10,
-        ))
-    await session.flush()
     ctx = await _make_tasks_transferable(session, client, setup)
 
     xfer_qty = Decimal(10)

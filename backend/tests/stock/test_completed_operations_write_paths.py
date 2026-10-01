@@ -800,17 +800,18 @@ async def test_plan_driven_writes_never_store_null_completed_operations(
     assert null_ops == [], f"плановые проводки без признака: {null_ops}"
 
 
-# ─── источник признака: операции СЕКЦИИ, а не операции этапа ─────────────────
+# ─── источник признака: операции ЭТАПА, а не справочник участка ──────────────
 
 
-async def test_completed_operations_come_from_section_operations(
+async def test_completed_operations_come_from_stage_operations(
     session: AsyncSession,
 ) -> None:
-    """Признак выводится из справочника операций секций (ADR-0021).
+    """Признак выводится из операций этапа маршрута (ADR-0061).
 
-    У каждой секции маршрута в фикстуре есть операции уровня ЭТАПА с
-    другими кодами (``<код>@STAGE``) — если бы резолвер читал ``route_operations``
-    вместо ``section_operations``, проводка получила бы чужие коды.
+    У каждого участка фикстуры есть операция ``<код>@SECTION``, которой на
+    этапах нет. Если бы резолвер снова взял справочник участка целиком, в
+    признак попали бы чужие операции: у 2,7 м появились бы резы на другие
+    длины, у чёрного профиля — все цвета анодирования.
     """
     fx = await build_operation_route(session, sku="REFSRC", stages=TASK_STAGES)
     shot = fx["tasks"][2]
@@ -827,7 +828,7 @@ async def test_completed_operations_come_from_section_operations(
 
     tx = await _only_tx(session, reason=Reason.COMPLETE, task_id=shot.id)
     assert tx.completed_operations == ["ISSUE_RAW", "PRESS_COMB", "PRESS_WINDOW", "SHOT"]
-    assert not any("@STAGE" in code for code in tx.completed_operations)
+    assert not any("@SECTION" in code for code in tx.completed_operations)
 
 
 
