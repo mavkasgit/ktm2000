@@ -409,6 +409,31 @@ export async function apiApplyChangeSet(planId: number, changeSetId: number) {
   return res.json();
 }
 
+/**
+ * «Действие коллеги» для проверок свежести (#206): утвердить позицию плана
+ * напрямую по API — из другого контекста/токена, минуя UI и его кэш. Сначала
+ * без обхода валидации; сервер находит ошибки — повторяем с `force` и причиной
+ * (ADR-0048).
+ */
+export async function apiApprovePosition(planId: number, positionId: number): Promise<void> {
+  let res: Response | null = null;
+  // Первая попытка — обычная; сервер нашёл ошибки валидации — вторая с force.
+  for (const force of [false, true]) {
+    res = await fetch(
+      `${BACKEND_URL}/api/production-plans/${planId}/positions/${positionId}/approve${force ? "?force=true" : ""}`,
+      {
+        method: "POST",
+        headers: await authHeaders({ "Content-Type": "application/json" }),
+        body: JSON.stringify(
+          force ? { reason: `e2e #206: проверка опроса, позиция #${positionId} заведена эталонной` } : {},
+        ),
+      },
+    );
+    if (res.ok) return;
+  }
+  throw new Error(`Approve position failed: ${res!.statusText} (${res!.status}) - ${await res!.text()}`);
+}
+
 export async function apiGetPlanPositions(planId: number) {
   const res = await fetch(`${BACKEND_URL}/api/production-plans/${planId}/all-positions`, {
     headers: await authHeaders(),
