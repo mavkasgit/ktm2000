@@ -1,7 +1,17 @@
 import enum
 from datetime import datetime
 
-from sqlalchemy import BigInteger, DateTime, Enum, ForeignKey, Identity, String, Text, func, text
+from sqlalchemy import (
+    BigInteger,
+    DateTime,
+    Enum,
+    ForeignKey,
+    Identity,
+    String,
+    Text,
+    func,
+    text,
+)
 from sqlalchemy.dialects.postgresql import JSONB
 from sqlalchemy.orm import Mapped, mapped_column
 
@@ -63,6 +73,8 @@ class ImportBatch(Base):
     #: и `stock_import_batches` (ADR-0052 п.5). Ортогонально `status`: скрытым
     #: может быть и применённый, и распознанный, и откаченный батч. Физическое
     #: удаление остаётся отдельным действием (#167 §4.4, #231 force).
-    deleted_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    deleted_at: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True), nullable=True, index=True
+    )
     deleted_by: Mapped[int | None] = mapped_column(ForeignKey("users.id", ondelete="SET NULL"), nullable=True)
     delete_reason: Mapped[str | None] = mapped_column(Text, nullable=True)

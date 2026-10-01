@@ -87,7 +87,7 @@ class StockImportBatch(Base):
         BigInteger, Identity(always=True), primary_key=True, autoincrement=True
     )
     action_id: Mapped[int] = mapped_column(
-        ForeignKey("action_journal.id"), nullable=False, index=True
+        ForeignKey("action_journal.id"), nullable=False
     )
     # NULL у legacy-батчей: склад импорта до миграции не сохранялся (п.7).
     file_id: Mapped[int | None] = mapped_column(

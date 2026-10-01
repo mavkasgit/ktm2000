@@ -2,12 +2,26 @@ import enum
 from datetime import date, datetime
 from decimal import Decimal
 
-from sqlalchemy import BigInteger, Boolean, Date, DateTime, Enum, ForeignKey, Identity, Index, Integer, Numeric, String, Text, func, text
+from sqlalchemy import (
+    BigInteger,
+    Boolean,
+    Date,
+    DateTime,
+    Enum,
+    ForeignKey,
+    Identity,
+    Index,
+    Integer,
+    Numeric,
+    String,
+    Text,
+    func,
+    text,
+)
 from sqlalchemy.dialects.postgresql import JSONB
 from sqlalchemy.orm import Mapped, mapped_column
 
 from app.models.base import Base
-
 
 LENGTH_MODEL_VERSION_CURRENT = 2
 LENGTH_MODEL_VERSION_LEGACY = 1
@@ -119,7 +133,12 @@ class ProductionPlan(Base):
         default=LENGTH_MODEL_VERSION_CURRENT,
     )
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False, server_default=func.now())
-    deleted_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    #: Индекс по `deleted_at` создаёт миграция `070_production_plan_archive` —
+    #: модели обязаны его объявлять, иначе autogenerate предлагает удалить
+    #: (тикет #261).
+    deleted_at: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True), nullable=True, index=True
+    )
     deleted_by: Mapped[int | None] = mapped_column(ForeignKey("users.id", ondelete="SET NULL"), nullable=True)
     delete_reason: Mapped[str | None] = mapped_column(Text, nullable=True)
 
