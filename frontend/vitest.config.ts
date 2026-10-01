@@ -17,6 +17,9 @@ export default defineConfig({
   test: {
     globals: true,
     environment: "happy-dom",
+    // Матчеры @testing-library/jest-dom (toBeInTheDocument и др.) — пакет в
+    // devDependencies с самого начала, подключён решением #245 (Q12).
+    setupFiles: ["@testing-library/jest-dom/vitest"],
     // `e2e/` целиком исключать нельзя: там живёт логика прогона (`pass-cache`),
     // которую нужно тестировать vitest'ом. Исключаем сами спеки Playwright —
     // их имена кончаются на `.spec.ts` и vitest'у они не его.

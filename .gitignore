@@ -76,6 +76,7 @@ test-results/
 # Testing
 .pytest_cache/
 .coverage
+frontend/coverage/
 # Кеш pytest-testmon (`npm run test:pytest:mon`) — локальный, как .pytest_cache
 .testmondata
 .testmondata-journal
