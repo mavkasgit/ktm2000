@@ -623,6 +623,14 @@ def _evaluate_condition_with_diagnostic(context: dict[str, Any], condition: Cond
     field_path = str(condition.get("field_path") or "")
     operator = str(condition.get("operator") or "equals")
     expected = condition.get("value")
+    # `value_from` — ссылка на другое поле того же источника вместо литерала:
+    # «выход не равен входу» литералом не выразить, а сравнение двух полей
+    # строки плана нужно (рез в размер произвольной длины, #277).
+    value_from = condition.get("value_from")
+    if value_from:
+        expected, _expected_lookup = _lookup_context_value_with_details(
+            context, source, str(value_from), condition
+        )
     case_sensitive = bool(condition.get("case_sensitive", False))
     actual, lookup = _lookup_context_value_with_details(context, source, field_path, condition)
     diagnostic: dict[str, Any] = {
@@ -630,6 +638,7 @@ def _evaluate_condition_with_diagnostic(context: dict[str, Any], condition: Cond
         "field_path": field_path,
         "operator": operator,
         "expected": expected,
+        "expected_from": str(value_from) if value_from else None,
         "case_sensitive": case_sensitive,
         "actual": actual,
         "resolved_by": lookup.get("resolved_by"),

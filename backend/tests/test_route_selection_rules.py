@@ -824,3 +824,61 @@ async def test_prep_stock_required_with_shot_when_empty_primary(client, session)
     required_codes = {s["code"] for s in result.required_sections}
     assert "SHOT_BLAST" in required_codes
     assert "PREP_STOCK" in required_codes, f"PREP_STOCK should be required with SHOT, got: {required_codes}"
+
+
+@pytest.mark.asyncio
+async def test_condition_value_from_compares_two_payload_fields(client, session) -> None:
+    """`value_from` — ожидаемое значение из другого поля того же источника (#277).
+
+    Литералом «выход не равен входу» не выразить: два поля одной строки плана.
+    """
+    await _seed_default_sections(session)
+    profile = RouteRuleProfile(
+        code="value_from_rp", name="value_from", is_active=True, priority=1000
+    )
+    session.add(profile)
+    await session.flush()
+    session.add(
+        RouteSelectionRule(
+            code="cut_when_lengths_differ",
+            name="Рез: длина выхода не равна длине входа",
+            profile_id=profile.id,
+            priority=100,
+            is_active=True,
+            phase="resolve_operations",
+            conditions=[
+                {"source": "payload", "field_path": "input_length", "operator": "not_empty", "value": None},
+                {
+                    "source": "payload",
+                    "field_path": "output_length",
+                    "operator": "not_equals",
+                    "value_from": "input_length",
+                },
+            ],
+            actions=[
+                {
+                    "action": "set_operation",
+                    "section_code": "SAWING",
+                    "group_code": "SAWING",
+                    "operation_code": "SAW_CUT",
+                }
+            ],
+        )
+    )
+    await session.commit()
+
+    differs = await select_route_for_payload(
+        session,
+        {"input_length": "2.7", "output_length": "2.25"},
+        profile_id=profile.id,
+    )
+    equal = await select_route_for_payload(
+        session,
+        {"input_length": "2.4", "output_length": "2.4"},
+        profile_id=profile.id,
+    )
+
+    assert differs.resolved_operations.get(("SAWING", "SAWING")) == "SAW_CUT"
+    assert ("SAWING", "SAWING") not in equal.resolved_operations, (
+        f"равные длины — это не рез, got: {equal.resolved_operations}"
+    )

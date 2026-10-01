@@ -71,15 +71,23 @@ def _expected_seed_summary() -> dict[str, int]:
     }
 
 
-#: Пила различает раскрой по целевой длине, упаковка — вид и сборку (#226).
-#: Без этих операций в справочнике строка плана осталась бы с дефолтной
-#: `SAW`/`PACK`, и колонка плана перестала бы что-либо различать.
-SAWING_LENGTH_OPS = {"SAW_0900", "SAW_1350", "SAW_1800", "SAW_2700"}
+#: Пила различает рез по целевой длине и раскрой в несколько длин (#226/#277),
+#: упаковка — вид и сборку (#226). Без этих операций в справочнике строка
+#: плана осталась бы с дефолтной `SAW`/`PACK`, и колонка плана перестала бы
+#: что-либо различать.
+SAWING_LENGTH_OPS = {"SAW_0900", "SAW_1350", "SAW_1800", "SAW_2700", "SAW_MULTI", "SAW_CUT"}
 PACKING_VARIANT_OPS = {"PACK_GLUE", "PACK_LENS"}
 
 #: Правила, которые назначают эти операции и снимают с упаковочной строки
 #: участки, которых на плане нет.
-SAWING_LENGTH_RULES = {"saw_length_0900", "saw_length_1350", "saw_length_1800", "saw_length_2700"}
+SAWING_LENGTH_RULES = {
+    "saw_length_0900",
+    "saw_length_1350",
+    "saw_length_1800",
+    "saw_length_2700",
+    "saw_multi_length",
+    "saw_cut_any_length",
+}
 PACKING_ROUTE_RULES = {"pack_glue_route", "pack_lens_route"}
 PACKING_TYPE_RULES = {"pack_glue_types", "pack_lens_types"}
 

@@ -1,4 +1,4 @@
-"""#226: операции упаковки (склейка, рассеиватель) и пилы по длине раскроя.
+"""#226/#277: операции упаковки (склейка, рассеиватель) и пилы по раскрою.
 
 Три контракта, которые видит потребитель:
 
@@ -8,7 +8,10 @@
   маршрут сверловку с прессом — её маршрут тот же, что у строки без первичной
   операции;
 - «Без рассеивателя» — признак отсутствия: операция не назначается и ошибкой
-  строки импорта не становится, при этом значение узнанным считается (#227).
+  строки импорта не становится, при этом значением узнанным считается (#227);
+- раскрой одной заготовки в несколько длин (2,7 → 1,8 + 0,9) несёт одна
+  `SAW_MULTI` на любой набор длин и любое их число — длины лежат в выходах
+  позиции, а не в коде операции (#277).
 """
 
 from __future__ import annotations
@@ -41,18 +44,31 @@ PACKING_CASES = [
     ("рассеиватель", "PACK_LENS"),
 ]
 
-#: (вход, выход, число выходов, ожидаемая операция пилы). Базовую `SAW` получают
-#: и строки без раскроя (вход = выход), и раскрой на несколько длин (ADR-0003):
-#: одна операция такой раскрой не описывает.
+#: (вход, выходы, ожидаемая операция пилы). Строки без раскроя (вход = выход)
+#: получают базовую `SAW`; рез в одну длину — операцию этой длины; раскрой в
+#: несколько длин (2,7 → 1,8 + 0,9, #277) — одну `SAW_MULTI` на любой набор:
+#: длины и их число живут в выходах позиции, а не в коде операции.
 SAWING_CASES = [
-    ("2.7", "0.9", 1, "SAW_0900"),
-    ("2.7", "1.35", 1, "SAW_1350"),
-    ("2.7", "1.8", 1, "SAW_1800"),
-    ("2.7", "2.7", 1, "SAW"),
-    ("2.4", "2.4", 1, "SAW"),
-    ("2.5", "2.5", 1, "SAW"),
-    ("3.0", "3.0", 1, "SAW"),
-    ("2.7", "0.9", 2, "SAW"),
+    ("2.7", ["0.9"], "SAW_0900"),
+    ("2.7", ["1.35"], "SAW_1350"),
+    ("2.7", ["1.8"], "SAW_1800"),
+    # Любая другая длина реза в один размер — `SAW_CUT`, каталог не расширяем.
+    ("2.7", ["0.45"], "SAW_CUT"),
+    ("2.7", ["2.25"], "SAW_CUT"),
+    ("2.7", ["2.4"], "SAW_CUT"),
+    ("2.7", ["2.7"], "SAW"),
+    ("2.4", ["2.4"], "SAW"),
+    ("2.5", ["2.5"], "SAW"),
+    ("3.0", ["3.0"], "SAW"),
+    # Ваш случай: 2,7 режется на 1,8 и 0,9.
+    ("2.7", ["1.8", "0.9"], "SAW_MULTI"),
+    # Длина вне каталога `SAW_xxxx` — новых кодов операций не требует.
+    ("2.7", ["2.2", "0.5"], "SAW_MULTI"),
+    # Произвольное число выходов: четыре длины одной заготовки.
+    ("2.7", ["1.8", "0.45", "0.3", "0.15"], "SAW_MULTI"),
+    # Два выхода одной длины — раскрой всё равно много-выходной; длины
+    # показывает `cut_layout` (format_cut_layout сливает их в «1,35×2»).
+    ("2.7", ["1.35", "1.35"], "SAW_MULTI"),
 ]
 
 
@@ -61,14 +77,18 @@ def _payload(
     operation: str | None = None,
     input_length: str = "2.7",
     output_length: str = "2.7",
-    outputs: int = 1,
+    output_lengths: list[str] | None = None,
 ) -> dict:
+    """Payload строки плана: вход и список выходов (1..N) в метрах."""
+    lengths = output_lengths if output_lengths is not None else [output_length]
     return {
         "operation": operation,
         "color": "серебро",
         "input_length": input_length,
         "output_length": output_length,
-        "outputs": [{"dimensions": {"length_mm": 2700.0}} for _ in range(outputs)],
+        "outputs": [
+            {"dimensions": {"length_mm": float(length) * 1000}} for length in lengths
+        ],
     }
 
 
@@ -112,12 +132,22 @@ async def test_seed_gives_packing_and_sawing_their_own_operations(session) -> No
         "SAW_1350",
         "SAW_1800",
         "SAW_2700",
+        "SAW_MULTI",
+        "SAW_CUT",
     }
 
     # Резка на конкретную длину трансформирует габариты так же, как «просто резка»:
     # иначе доска участка перестала бы показывать раскрой (ADR-0002).
     transforms = {op.operation_code for op in ops["SAWING"] if op.transforms_dimensions}
-    assert transforms == {"SAW", "SAW_0900", "SAW_1350", "SAW_1800", "SAW_2700"}
+    assert transforms == {
+        "SAW",
+        "SAW_0900",
+        "SAW_1350",
+        "SAW_1800",
+        "SAW_2700",
+        "SAW_MULTI",
+        "SAW_CUT",
+    }
 
     # Дефолт группы — базовая операция: строка, которую ни одно правило не
     # различает, получает «Упаковку»/«Резку на пиле», а не первую по длине.
@@ -157,17 +187,21 @@ async def test_no_lens_value_keeps_default_packing_and_drops_press_sections(sess
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize(
-    ("input_length", "output_length", "outputs", "expected"), SAWING_CASES
+    ("input_length", "output_lengths", "expected"), SAWING_CASES
 )
 async def test_sawing_operation_follows_cut_length(
-    session, input_length: str, output_length: str, outputs: int, expected: str
+    session, input_length: str, output_lengths: list[str], expected: str
 ) -> None:
-    """Пила называет длину раскроя; без раскроя строка остаётся на базовой `SAW`."""
+    """Пила называет длину реза; раскрой в несколько длин — одна `SAW_MULTI` (#277)."""
     await run_full_seed(session, force=True)
 
     ops = await _ops_by_section(
         session,
-        _payload(input_length=input_length, output_length=output_length, outputs=outputs),
+        _payload(
+            input_length=input_length,
+            output_length=output_lengths[0],
+            output_lengths=output_lengths,
+        ),
     )
     assert ops["SAWING"] == expected
 

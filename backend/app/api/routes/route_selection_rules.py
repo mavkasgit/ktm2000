@@ -33,6 +33,8 @@ class RouteSelectionConditionIn(BaseModel):
     excel_header: str | None = None
     operator: RuleOperator
     value: Any = None
+    # Ожидаемое значение — ссылка на другое поле того же источника (#277).
+    value_from: str | None = None
     case_sensitive: bool = False
 
 
@@ -215,7 +217,13 @@ async def _validate_payload(db: AsyncSession, payload: RouteSelectionRuleIn) -> 
                 raise HTTPException(status_code=400, detail="Context condition field_path is required")
         elif not has_field:
             raise HTTPException(status_code=400, detail="Condition field_path is required")
-        if condition.operator in {"equals", "not_equals", "contains", "not_contains", "in", "not_in", "regex"} and condition.value is None:
+        if (
+            condition.operator in {"equals", "not_equals", "contains", "not_contains", "in", "not_in", "regex"}
+            and condition.value is None
+            and not (condition.value_from or "").strip()
+        ):
+            # Текст сообщения — ключ словаря подписей (display_data.py):
+            # `value_from` лишь второй способ задать ожидаемое значение (#277).
             raise HTTPException(status_code=400, detail=f"Condition value is required for {condition.operator}")
 
     section_ids: set[int] = set()

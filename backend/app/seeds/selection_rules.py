@@ -431,9 +431,9 @@ SELECTION_RULES = [
     # ===== Пила: операция по длине раскроя (#226) =====
     # Длина раскроя лежит в payload-полях `input_length`/`output_length`
     # (колонки G и K «Упаковочной карты РП», import_templates.py:22,26) в
-    # метрах строкой. Резать имеет смысл строку с РАЗНЫМИ входом и выходом и
-    # с одним выходом: раскрой на несколько длин (ADR-0003) одной операцией не
-    # описывается, и такие строки остаются на базовой `SAW`.
+    # метрах строкой. Длину в код операции несёт только рез с ОДНИМ выходом:
+    # раскрой в несколько длин (ADR-0003) называет одна `SAW_MULTI` (#277) —
+    # длины и их число там живут в выходах позиции, а не в коде операции.
     {
         "code": "saw_length_0900",
         "name": "Пила: резка на 0,9 м",
@@ -523,6 +523,66 @@ SELECTION_RULES = [
                 "section_code": "SAWING",
                 "group_code": "SAWING",
                 "operation_code": "SAW_2700",
+            },
+        ],
+    },
+    {
+        "code": "saw_multi_length",
+        # Раскрой одной заготовки в несколько длин (2,7 → 1,8 + 0,9, #277).
+        # Признак — второй выход в payload: 59 таких групп в реальном плане
+        # (январь–сентябрь 2026). Длины не перечисляются: их число и значения
+        # произвольные, они лежат в `outputs`/`cut_layout`; операция только
+        # отделяет раскрой от реза в одну длину и от строки без резки.
+        "name": "Пила: резка на несколько длин",
+        "profile_code": "packaging_map_rp",
+        "priority": 90,
+        "is_active": True,
+        "phase": "resolve_operations",
+        "conditions": [
+            {"source": "payload", "field_path": "outputs.1", "operator": "not_empty", "value": None},
+        ],
+        "condition_logic": "and",
+        "actions": [
+            {
+                "action": "set_operation",
+                "section_code": "SAWING",
+                "group_code": "SAWING",
+                "operation_code": "SAW_MULTI",
+            },
+        ],
+    },
+    {
+        "code": "saw_cut_any_length",
+        # Рез в одну длину ЛЮБОЙ длины (0,45, 2,25, …): приоритет выше правил
+        # `saw_length_*`, то есть применяется раньше их — точная длина
+        # перекрывает фолбэк последней записью (resolved_operations, порядок
+        # «приоритет по убыванию»). Новая стандартная длина — просто ещё одно
+        # правило `saw_length_*`, этот фолбэк трогать не нужно.
+        # «Выход не равен входу» — сравнение двух полей строки (`value_from`):
+        # при равенстве резки нет, и строка остаётся на базовой `SAW`.
+        "name": "Пила: резка в размер",
+        "profile_code": "packaging_map_rp",
+        "priority": 95,
+        "is_active": True,
+        "phase": "resolve_operations",
+        "conditions": [
+            {"source": "payload", "field_path": "input_length", "operator": "not_empty", "value": None},
+            {"source": "payload", "field_path": "output_length", "operator": "not_empty", "value": None},
+            {
+                "source": "payload",
+                "field_path": "output_length",
+                "operator": "not_equals",
+                "value_from": "input_length",
+            },
+            {"source": "payload", "field_path": "outputs.1", "operator": "empty", "value": None},
+        ],
+        "condition_logic": "and",
+        "actions": [
+            {
+                "action": "set_operation",
+                "section_code": "SAWING",
+                "group_code": "SAWING",
+                "operation_code": "SAW_CUT",
             },
         ],
     },
