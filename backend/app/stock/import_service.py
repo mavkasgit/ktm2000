@@ -337,11 +337,14 @@ def _parse_remainders_grid(
             if comment_idx is not None and comment_idx < len(row)
             else ""
         )
+        # Колонки нет → None («состояние не зафиксировано», ADR-0055 п.6).
+        # Колонка есть, а ячейка пуста → "": это осмысленное «операций не было»,
+        # и прежний хвост `or None` его как раз и терял.
         completed_ops_raw = (
-            row[completed_ops_idx]
+            (row[completed_ops_idx] or "")
             if completed_ops_idx is not None and completed_ops_idx < len(row)
             else None
-        ) or None
+        )
         target_section_name = (
             row[target_section_idx]
             if target_section_idx is not None and target_section_idx < len(row)
@@ -837,6 +840,13 @@ def _resolve_item_quality_state(
     return item.quality_state or default_quality_state
 
 
+# Значения ячейки «Операции», означающие «прошёл маршрут, операций не было»
+# (ADR-0055 п.6): пустая ячейка и прочерк (типографский или дефисный). Всё
+# остальное, что не сматчилось со справочником, — не пустой список, а
+# неизвестное состояние: угадывать запрещено (ADR-0021).
+_EMPTY_OPERATIONS_CELLS = ("", "—", "-")
+
+
 def _row_completed_operations(item: RemainderItem) -> list[str] | None:
     """Признак пройденных операций строки импорта (ADR-0055).
 
@@ -846,12 +856,25 @@ def _row_completed_operations(item: RemainderItem) -> list[str] | None:
     строке (см. ``resolve_completed_stages``), поэтому признак отражает ровно
     то, что подтверждено справочником.
 
-    ``None`` — колонка пуста: состояние не зафиксировано (операция вне
-    маршрута). Это НЕ то же, что ``[]``: пустая колонка значит «операций не
-    было» только если это явно указано значением, которое резолвится в пустой
-    список; неотличить его от отсутствия колонки нельзя, поэтому неотличимое
-    и отдаётся как ``None``.
+    Исходы:
+
+    * ``None`` — **колонки нет** (``completed_operations_raw is None``):
+      состояние не зафиксировано (операция вне маршрута, legacy-файл без
+      колонки) — группа «не зафиксировано».
+    * ``[]`` — **колонка есть, ячейка пуста или прочерк**: «прошёл маршрут,
+      операций не было». Ровно эту группу читает складской (транзитный) этап
+      маршрута, когда забирает материал в производство: у транзитного этапа
+      ``section_id = NULL``, поэтому ``completed_operations_through_stage``
+      даёт ``[]``. Пока этот случай схлопывался в ``None`` вместе с отсутствием
+      колонки, остаток из импорта не мог быть выдан в маршрут («Insufficient
+      stock … available 0» на полном участке).
+    * список кодов — колонка заполнена, имена сматчились со справочником.
+    * ``None`` — в ячейке текст, который со справочником не сматчился:
+      состояние неизвестно, и подставлять ``[]`` значило бы угадывать.
     """
+    raw = item.completed_operations_raw
+    if raw is not None and raw.strip() in _EMPTY_OPERATIONS_CELLS:
+        return []
     if not item.completed_stages:
         return None
     return canonicalize_completed_operations(
