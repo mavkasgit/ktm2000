@@ -1,11 +1,8 @@
 import pytest
 from uuid import uuid4
-from datetime import UTC, datetime, timedelta
-from jose import jwt
 
 from app.core.config import settings
 from app.models.user import User, UserRole
-from app.models.user_session import UserSession
 from app.services.session_service import issue_app_token, issue_session, get_session_by_id
 
 

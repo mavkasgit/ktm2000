@@ -10,8 +10,6 @@
 """
 from __future__ import annotations
 
-from collections.abc import Sequence
-from datetime import date
 from decimal import Decimal
 
 import pytest
@@ -20,18 +18,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.security import create_access_token
 from app.models.internal_plan import SectionPlanLine
-from app.models.product import Product, ProductType
-from app.models.production_plan import (
-    PlanPosition,
-    PlanPositionStatus,
-    PlanPositionValidationStatus,
-    PlanSourceType,
-    ProductionPlan,
-    ProductionPlanStatus,
-)
-from app.models.route import ProductionRoute, RouteOperation, RouteStage
 from app.models.section import Section
-from app.models.spg import SpgSection, StorageProductionGroup
 from app.models.user import User, UserRole
 from app.models.work_task import WorkTask
 from app.stock.models import QualityState, Reason, StockBalance, StockTransaction

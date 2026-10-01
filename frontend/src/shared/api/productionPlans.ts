@@ -1,5 +1,6 @@
 import { apiClient } from "./client";
 import type { CutLayout } from "./cutLayout";
+import type { ImportOperationStep } from "./stock";
 
 export type PlanStatus = "draft" | "validated" | "approved" | "partially_released" | "released" | "cancelled";
 export type PlanPositionStatus = "draft" | "invalid" | "valid" | "approved" | "released" | "cancelled";
@@ -452,6 +453,10 @@ export type BatchForceDeletePreview = {
     // локации и длины с разными операциями — разные остатки, и свод обязан их
     // различать, иначе сводятся в одну неразличимую строку.
     completed_operations: string[] | null;
+    // Признак, развитый справочником: источник названий для подписи в диалоге
+    // («Пресс (окно)», а не PRESS_WINDOW) — тот же формат, что у доски остатков.
+    // Пусто у обоих пустых состояний: различает их именно completed_operations.
+    completed_stages?: ImportOperationStep[];
     net_delta: string;
     ledger_entries: number;
   }>;

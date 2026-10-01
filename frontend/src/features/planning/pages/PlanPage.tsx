@@ -1,5 +1,6 @@
 import { useEffect, useMemo, useRef, useState } from "react"
-import { FileSpreadsheet, Plus, Upload, ListChecks } from "lucide-react"
+import { FileSpreadsheet, History, Plus, Upload, ListChecks } from "lucide-react"
+import { useNavigate } from "react-router-dom"
 import { ImportWizard } from "../ImportWizard"
 import { ProductWipStatsDialog } from "@/features/execution/components/ProductWipStatsDialog"
 import { Button, Select, SelectContent, SelectItem, SelectTrigger, SelectValue, AlertDialog, AlertDialogContent, AlertDialogHeader, AlertDialogTitle, AlertDialogDescription, AlertDialogFooter, AlertDialogAction, AlertDialogCancel, DataTableColumnHeader, FiltersPanel, TableCornerResetHeader, TablePaginationFooter, DATA_TABLE_STYLES, type FiltersPanelField, Badge } from "@/shared/ui"
@@ -10,7 +11,7 @@ import { buildColumnFilterPredicate } from "@/shared/lib/columnFilterSearch"
 import { formatDimensionsFilterValue, formatDimensionsLabel } from "@/shared/api/stock"
 import { toast } from "@/shared/ui"
 import { keepPreviousData, useQuery, useQueryClient } from "@tanstack/react-query"
-import { allPlanFiles, allPlanPositions, PlanPositionOut, listPlans, batchAssignRouteGlobal, deleteImportBatch, approveProductionPlanPosition, getPlanDuplicates, bulkApprovePositions, bulkDeletePositions, type BatchDeleteConflict } from "@/shared/api/productionPlans"
+import { allPlanPositions, PlanPositionOut, listPlans, batchAssignRouteGlobal, approveProductionPlanPosition, getPlanDuplicates, bulkApprovePositions, bulkDeletePositions } from "@/shared/api/productionPlans"
 import { listRoutes } from "@/shared/api/routes"
 import { listAllImportTemplates } from "@/shared/api/importTemplates"
 import { apiClient, getErrorMessage } from "@/shared/api/client"
@@ -25,10 +26,6 @@ import {
   type BulkActionSummary,
   type BulkRunnerProgress,
 } from "@/shared/bulk"
-import { FileRow } from "../components/PlanFileRow"
-import { findLastAppliedBatchId } from "../lib/appliedBatches"
-import { BatchDeleteBlockersDialog } from "../components/BatchDeleteBlockersDialog"
-import { parseBatchDeleteConflict } from "../lib/batchDeleteConflict"
 import { PositionRow } from "../components/PlanPositionRow"
 import {
   DuplicateConflict,
@@ -67,8 +64,8 @@ type BulkApproveRun = {
 
 export function PlanPage() {
   const [importOpen, setImportOpen] = useState(false)
+  const navigate = useNavigate()
   const queryClient = useQueryClient()
-  const [showAllFiles, setShowAllFiles] = useState(false)
   const bulkSelection = useBulkSelection<number>()
   const [bulkMode, setBulkMode] = useState(false)
   const [bulkApproving, setBulkApproving] = useState(false)
@@ -83,8 +80,6 @@ export function PlanPage() {
   const [detailPosition, setDetailPosition] = useState<PlanPositionOut | null>(null)
   const [detailOpen, setDetailOpen] = useState(false)
   const [wipStatsSku, setWipStatsSku] = useState<string | null>(null)
-  const [deleteConflict, setDeleteConflict] = useState<{ batchId: number; filename: string; conflict: BatchDeleteConflict } | null>(null)
-  const [deletingDrafts, setDeletingDrafts] = useState(false)
   const tableScrollRef = useRef<HTMLDivElement>(null)
 
   const openDetail = (pos: PlanPositionOut) => {
@@ -208,44 +203,6 @@ export function PlanPage() {
       toast({ title: "Позиция удалена", variant: "success" })
     } catch (e) {
       toast({ title: "Ошибка", description: e instanceof Error ? e.message : "Не удалось удалить", variant: "destructive" })
-    }
-  }
-
-  const handleDeleteFile = async (batchId: number) => {
-    if (!activePlan) return
-    try {
-      await deleteImportBatch(activePlan.id, batchId)
-      void invalidateAfter(queryClient, "importDiscarded")
-      toast({ title: "Импорт удалён", variant: "success" })
-    } catch (e) {
-      const conflict = parseBatchDeleteConflict(e)
-      // Действие берём из ответа (safe_action), не хардкодим: неизвестное/отсутствующее
-      // поле парсер уже отсекает в null — экран блокировок тогда не открываем.
-      if (conflict && conflict.safe_action === "delete_drafts_only") {
-        const filename = files?.find(f => f.batch_id === batchId)?.filename ?? `батч #${batchId}`
-        setDeleteConflict({ batchId, filename, conflict })
-        return
-      }
-      toast({ title: "Ошибка", description: e instanceof Error ? e.message : "Не удалось удалить импорт", variant: "destructive" })
-    }
-  }
-
-  const handleConfirmDeleteDrafts = async () => {
-    if (!activePlan || !deleteConflict) return
-    setDeletingDrafts(true)
-    try {
-      const result = await deleteImportBatch(activePlan.id, deleteConflict.batchId, { deleteDraftsOnly: true })
-      void invalidateAfter(queryClient, "importDiscarded")
-      toast({
-        title: result.deleted ? "Импорт удалён" : `Черновики удалены (${result.deleted_drafts ?? 0})`,
-        description: result.deleted ? undefined : "Запущенные позиции, задачи и передачи не тронуты",
-        variant: "success",
-      })
-      setDeleteConflict(null)
-    } catch (e) {
-      toast({ title: "Ошибка", description: e instanceof Error ? e.message : "Не удалось удалить черновики", variant: "destructive" })
-    } finally {
-      setDeletingDrafts(false)
     }
   }
 
@@ -466,21 +423,6 @@ export function PlanPage() {
     bulkSelection.clear()
     setBulkMode(false)
   }
-
-  const { data: allFiles, isLoading: filesLoading } = useQuery({
-    queryKey: queryKeys.plan.allFiles(),
-    queryFn: () => allPlanFiles(),
-  })
-  const files = useMemo(
-    () => allFiles?.filter((file) => file.production_plan_id === activePlan?.id),
-    [allFiles, activePlan],
-  )
-
-  // Откат — LIFO: кнопка доступна только у последнего применённого батча плана (#172).
-  const lastAppliedBatchId = useMemo(
-    () => findLastAppliedBatchId(files ?? [], activePlan?.id),
-    [files, activePlan],
-  )
 
   // Вся выбранная сортировка уезжает одной строкой `sort` по приоритетам;
   // неподдерживаемые сервером колонки (route, warnings) в неё не попадают,
@@ -717,17 +659,15 @@ export function PlanPage() {
     return data
   }, [detailPosition, duplicateConflictsByPosition])
 
-  const fileParsedRows = files?.reduce((sum, f) => sum + f.parsed_rows, 0) ?? 0
-  const displayPositions = activePlan?.total_positions ?? (positionsTotal > 0 ? positionsTotal : fileParsedRows)
-  const displayTotalQty = fileParsedRows > 0 && positionsTotal === 0 ? String(fileParsedRows) : "—"
-  // План без файлов и позиций — пустая оболочка от force-удаления батча (или
-  // от ещё не загруженного импорта). Показывать её нечего, а строка с
-  // нулевым кол-ва сбивает с толку: в БД план есть, в UI его как будто нет.
-  // Данные не успели — показываем старое дерево, а не пустое состояние.
-  const planHasContent =
-    !filesLoading &&
-    !posPending &&
-    ((files?.length ?? 0) > 0 || (activePlan?.total_positions ?? 0) > 0)
+  // Пустой экран — это «в плане нет позиций», а не «отбор ничего не нашёл»:
+  // `positionsTotal` приходит по текущему запросу, поэтому при активных
+  // фильтрах ноль строк — результат фильтра, и подменять его надписью «План
+  // пуст» значило бы соврать о плане. Пока данные не пришли, пустой экран не
+  // показываем — не мигаем им на входе. План без позиций остаётся в БД
+  // пустой оболочкой (force-удаление батча): показывать в нём нечего, но и
+  // молчать нельзя — отсюда подсказка про историю импортов.
+  const planIsEmpty = !posPending && positionsTotal === 0 && !hasTableFiltersActive
+  const showPlanIntro = !activePlan || planIsEmpty
 
   return (
     <>
@@ -747,10 +687,17 @@ export function PlanPage() {
             <Plus className="h-4 w-4 mr-2" />
             Добавить файл
           </Button>
+          {/* История импортов — отдельная страница (ADR-0054): прошлые батчи
+              не верхняя панель рабочего экрана. Кнопки импорта остаются
+              здесь: загрузка файла — действие этого экрана. */}
+          <Button variant="outline" onClick={() => navigate("/planning/import-history")}>
+            <History className="h-4 w-4 mr-2" />
+            История импортов
+          </Button>
         </div>
       </header>
 
-      {(!activePlan || !planHasContent) && (
+      {showPlanIntro && (
         <div className="rounded-lg border border-dashed p-12 text-center">
           <Upload className="h-12 w-12 mx-auto text-muted-foreground mb-3" />
           <h3 className="text-lg font-medium mb-1">
@@ -758,7 +705,7 @@ export function PlanPage() {
           </h3>
           <p className="text-sm text-muted-foreground mb-4">
             {activePlan
-              ? "В текущем плане не осталось ни файлов импорта, ни позиций"
+              ? "В плане нет позиций. Что и когда в него импортировалось — в истории импортов."
               : "Загрузите Excel-файл чтобы создать производственный план"}
           </p>
           <Button onClick={() => setImportOpen(true)}>
@@ -768,75 +715,7 @@ export function PlanPage() {
         </div>
       )}
 
-      {activePlan && planHasContent && (
-        <div className="space-y-6">
-          {/* Unified plan card: two columns */}
-          <div className="rounded-lg border bg-card flex flex-col md:flex-row">
-            {/* Left column: stats */}
-            <div className="p-4 md:w-72 border-b md:border-b-0 md:border-r shrink-0">
-              <h2 className="mb-4 text-lg font-semibold">Общий план</h2>
-              <p className="mb-3 truncate text-xs text-muted-foreground" title={activePlan.name}>
-                {activePlan.plan_no} · {activePlan.name}
-              </p>
-              <div className="space-y-3 text-sm">
-                <div className="flex justify-between">
-                  <span className="text-muted-foreground">Файлов</span>
-                  <strong>{files?.length ?? 0}</strong>
-                </div>
-                <div className="flex justify-between">
-                  <span className="text-muted-foreground">Позиций</span>
-                  <strong>{displayPositions}</strong>
-                </div>
-                <div className="flex justify-between">
-                  <span className="text-muted-foreground">Общее кол-во</span>
-                  <strong>{displayTotalQty}</strong>
-                </div>
-
-              </div>
-            </div>
-
-            {/* Right column: files table */}
-            <div className="flex-1 min-w-0">
-              {filesLoading && <p className="p-4 text-sm text-muted-foreground">Загрузка...</p>}
-              {files && files.length === 0 && (
-                <div className="p-6 text-center text-sm text-muted-foreground">
-                  Файлов пока нет. Нажмите «Добавить файл» чтобы загрузить Excel.
-                </div>
-              )}
-              {files && files.length > 0 && (
-                <div className="overflow-auto">
-                  <table className="w-full">
-                    <thead className="border-b bg-muted/50">
-                      <tr>
-                        <th className="text-left p-3 text-xs font-medium text-muted-foreground">Файл</th>
-                        <th className="text-left p-3 text-xs font-medium text-muted-foreground">Дата загрузки</th>
-                        <th className="text-left p-3 text-xs font-medium text-muted-foreground">Лист</th>
-                        <th className="text-left p-3 text-xs font-medium text-muted-foreground">Строк</th>
-                        <th className="text-left p-3 text-xs font-medium text-muted-foreground">Размер</th>
-                        <th className="text-left p-3 text-xs font-medium text-muted-foreground">Статус</th>
-                        <th className="text-left p-3 text-xs font-medium text-muted-foreground">Действия</th>
-                      </tr>
-                    </thead>
-                    <tbody>
-                      {files.slice(0, showAllFiles ? undefined : 5).map(f => <FileRow key={f.batch_id} file={f} activePlan={activePlan} isLastApplied={f.batch_id === lastAppliedBatchId} onDelete={handleDeleteFile} />)}
-                    </tbody>
-                  </table>
-                  {files.length > 5 && (
-                    <button
-                      onClick={() => setShowAllFiles(!showAllFiles)}
-                      className="w-full text-center py-2 text-sm text-blue-600 hover:bg-muted/50 border-t"
-                    >
-                      {showAllFiles ? `Скрыть (показать 5)` : `Показать ещё ${files.length - 5} файл(ов)`}
-                    </button>
-                  )}
-                </div>
-              )}
-            </div>
-          </div>
-        </div>
-      )}
-
-      {activePlan && (
+      {activePlan && !planIsEmpty && (
         <div>
           {bulkMode && (
             <div className="mb-3 shrink-0">
@@ -1095,22 +974,6 @@ export function PlanPage() {
           if (!open) setWipStatsSku(null)
         }}
       />
-      {deleteConflict && (
-        <BatchDeleteBlockersDialog
-          open
-          onOpenChange={(open) => { if (!open) setDeleteConflict(null) }}
-          filename={deleteConflict.filename}
-          conflict={deleteConflict.conflict}
-          deleting={deletingDrafts}
-          onConfirmDrafts={handleConfirmDeleteDrafts}
-          planId={activePlan?.id ?? 0}
-          batchId={deleteConflict.batchId}
-          onForceDeleted={() => {
-            setDeleteConflict(null)
-            void invalidateAfter(queryClient, "importForceDeleted")
-          }}
-        />
-      )}
     </>
   )
 }

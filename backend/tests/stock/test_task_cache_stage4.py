@@ -26,10 +26,8 @@ from app.models.production_plan import (
     ProductionPlanStatus,
 )
 from app.models.route import ProductionRoute, RouteOperation, RouteStage
-from app.models.spg import SpgSection, StorageProductionGroup
 from app.models.work_task import WorkTask, WorkTaskStatus
 from app.stock import (
-    QualityState,
     Reason,
     StockCommand,
     StockCommandService,

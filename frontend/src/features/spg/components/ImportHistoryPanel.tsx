@@ -46,6 +46,7 @@ import {
 import { saveBlobAsFile } from "@/shared/lib/downloadFile";
 import { useAuth } from "@/features/auth/hooks/useAuth";
 import { fmtQty } from "@/shared/lib/quantityFormat";
+import { formatCompletedOperationsLabel } from "@/shared/api/stock";
 import { POLICIES } from "../../auth/policies";
 import { cn } from "@/shared/utils/cn";
 
@@ -347,6 +348,10 @@ function ImportBatchDetailDialog({
                 складе сейчас.
               </p>
             )}
+            {/* Ось ключа остатка (ADR-0055): без «Операций» две строки одного
+                артикула, склада и размера с разными остатками читаются как
+                дубль. Пустые состояния различимы: `null` — «не зафиксировано»,
+                `[]` — «без операций». */}
             <div className="max-h-[50vh] overflow-y-auto border border-border rounded-lg">
               <table className="w-full caption-bottom text-sm">
                 <thead>
@@ -356,6 +361,7 @@ function ImportBatchDetailDialog({
                     <th className={HEADER_CELL}>Кол-во</th>
                     <th className={HEADER_CELL}>Размер</th>
                     <th className={HEADER_CELL}>Склад</th>
+                    <th className={HEADER_CELL}>Операции</th>
                     <th className={HEADER_CELL}>Текущий остаток</th>
                     <th className={HEADER_CELL}>Вердикт</th>
                   </tr>
@@ -380,6 +386,9 @@ function ImportBatchDetailDialog({
                       <td className={cn(CELL, "tabular-nums")}>{fmtQty(row.quantity)}</td>
                       <td className={CELL}>{row.dimensions_label}</td>
                       <td className={CELL}>{row.target_section_name ?? "—"}</td>
+                      <td className={cn(CELL, "text-muted-foreground")}>
+                        {formatCompletedOperationsLabel(row.completed_operations)}
+                      </td>
                       <td className={cn(CELL, "tabular-nums font-medium")}>
                         {fmtQty(row.current_balance)}
                       </td>

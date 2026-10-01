@@ -10,10 +10,9 @@
 
 import pytest
 from sqlalchemy import select
-from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import selectinload
 
-from app.models.product import Product, ProductLength, ProductType
+from app.models.product import Product, ProductLength
 
 
 def _payload(sku: str, **overrides) -> dict:

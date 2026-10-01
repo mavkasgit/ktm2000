@@ -5,7 +5,6 @@
 - complete_task создаёт COMPLETE/SCRAP транзакции + Defect
 - final_release создаёт FINAL_RELEASE транзакцию
 - return_to_stock через endpoint
-- GET /shopfloor/remainders читает StockBalance, не SpgRemainder
 - Movement-таблица пуста после shopfloor-операций (регресс двойной записи)
 """
 from __future__ import annotations

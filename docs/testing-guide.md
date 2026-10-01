@@ -19,6 +19,19 @@ npm --prefix frontend run test    # Vitest
 npm run test:e2e             # Playwright, отдельный стенд (своя БД и порты)
 ```
 
+## CI
+
+Единственный авто-запускаемый workflow — `migrations.yml` (alembic + миграционные
+тесты + проверки сидов/лейблов). Полный pytest-набор в push/PR **не** запускается:
+это решение про минуты CI, а не техническая мелочь.
+
+Для ручной проверки добавлен `.github/workflows/backend-tests.yml`
+(триггер `workflow_dispatch`): тот же Postgres-сервис, что в `migrations.yml`,
+`pip install -r backend/requirements.txt` и прогон набора через
+`scripts/test-db.py` + `pytest -n 4 --dist loadfile`. Команды проверены локально
+на Linux (контейнер `python:3.12-slim`): `1951 passed, 0 failed` за 189s —
+платформенных падений у набора нет.
+
 ## Стенд E2E
 
 `npm run test:e2e` не трогает devstack: поднимает **свою** БД `ktm2000_e2e`
@@ -46,10 +59,20 @@ npm run test:e2e             # Playwright, отдельный стенд (сво
 | `npm run test:pytest` | Параллельный прогон всех тестов |
 | `npm run test:pytest:fast` | Алиас `test:pytest` |
 | `npm run test:pytest:full` | Полный прогон в один поток |
-| `npm run test:pytest:mon` | Только изменённые (testmon) |
+| `npm run test:pytest:mon` | Только изменённые (testmon; кеш — `backend/.testmondata`, в git не попадает) |
 | `npm run test:pytest:lf` | Только упавшие |
-| `npm run test:db:cleanup` | Уборка orphan run-DB по TTL (24h) |
+| `npm run test:db:cleanup` | Уборка orphan run-DB по TTL (24h) **и** старых каталогов storage тестов |
+| `npm run test:hygiene` | Report-only отчёт по мёртвым импортам в тестах (stdlib, линтера в репозитории нет) |
 | `npm run test:db:up` / `test:db:wait` | Поднять тестовый Postgres (:5441) |
+| `npm run test:pytest -- --keep-db` | Прогон, который **оставляет** run-DB для разбора (обычный прогон её дропает) |
+| `python scripts/test-db.py drop --force <db>` | Убрать базу без owner-строки (`ktm_mig_*` от прерванного прогона миграционных тестов); отказывает при активных соединениях и на служебных именах |
+
+Оставленную `--keep-db` БД убирают вручную — `python scripts/test-db.py drop <db>`
+(имя печатается в конце прогона) или TTL-уборкой `npm run test:db:cleanup`.
+
+Каждый прогон пишет свой лог в `logs/pytest-<runid>.log` (каталог `logs/` —
+локальный, в git не попадает). Тот же текст идёт на экран **по ходу** прогона,
+а не после его завершения.
 
 `test:db:down` — только ручная остановка; тестовые прогоны его не вызывают.
 

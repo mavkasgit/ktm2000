@@ -11,42 +11,29 @@
 """
 from __future__ import annotations
 
-from datetime import UTC, datetime
 from decimal import Decimal
 
 import pytest
 from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.models import Product, ProductType, Section, User, UserRole
-from app.models.internal_plan import SectionPlanLine
-from app.models.production_plan import (
-    PlanPosition,
-    PlanPositionStatus,
-    PlanPositionValidationStatus,
-    PlanSourceType,
-    ProductionPlan,
-    ProductionPlanStatus,
-)
+from app.models import Product, ProductType, Section
 from app.models.route import (
-    ProductionRoute,
-    RouteOperation,
-    RouteStage,
     SectionOperation,
 )
-from app.models.spg import SpgSection, StorageProductionGroup
 from app.models.transfer import Transfer, TransferStatus
-from app.models.work_task import WorkTask, WorkTaskStatus
+from app.models.work_task import WorkTask
 from app.services.material_operations import (
     completed_operations_for_task,
     previous_stage_sequence,
 )
 from app.stock.models import QualityState, Reason, StockBalance, StockTransaction
-from app.stock.services import StockCommand, StockCommandService
 from app.transfers.services import cancel_transfer, correct_transfer, transfer_send
 from tests.test_integrity_invariants import (
     _auth_headers,
-    _make_user,
+    # Реэкспорт для потребителей старого пути импорта
+    # (tests/stock/test_stock_dimensions.py берёт его именно отсюда) —
+    # не удалять при чистке импортов: сам файл его не вызывает.
     _release_via_take_to_work,
     assert_no_invariants_violations,
 )

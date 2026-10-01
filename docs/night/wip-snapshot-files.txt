@@ -1,0 +1,28 @@
+ M backend/app/api/routes/production_planning.py
+ M backend/app/api/routes/shopfloor.py
+ M backend/app/services/import_batch_force_delete.py
+ M backend/app/services/material_operations.py
+ M backend/app/stock/api.py
+ M backend/app/stock/import_history.py
+ M backend/app/stock/import_history_api.py
+ M backend/tests/stock/test_import_history.py
+ M backend/tests/stock/test_shopfloor_stage3.py
+ M backend/tests/test_batch_force_delete.py
+ M backend/tests/test_stock_balances_pagination.py
+ M frontend/e2e/ui-helpers.ts
+ M frontend/src/app/Router.tsx
+ M frontend/src/features/planning/components/BatchForceDeleteDialog.tsx
+ M frontend/src/features/planning/lib/appliedBatches.test.ts
+ M frontend/src/features/planning/lib/appliedBatches.ts
+ M frontend/src/features/planning/pages/PlanPage.tsx
+ M frontend/src/features/spg/components/ImportHistoryPanel.tsx
+ M frontend/src/shared/api/productionPlans.ts
+ M frontend/src/shared/api/stockImportHistory.ts
+?? docs/night/BACKLOG.md
+?? docs/night/BASELINE.md
+?? docs/night/JOURNAL.md
+?? docs/night/MORNING_REPORT.md
+?? docs/night/tickets/T-0000-blocked-active-wip.md
+?? docs/night/wip-snapshot-files.txt
+?? frontend/src/features/planning/components/BatchForceDeleteDialog.test.tsx
+?? frontend/src/features/spg/components/ImportHistoryPanel.test.tsx

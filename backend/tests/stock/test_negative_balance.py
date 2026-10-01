@@ -13,7 +13,6 @@ from app.stock import (
     StockBalance,
     StockCommand,
     StockCommandService,
-    StockTransaction,
     StockValidationError,
 )
 

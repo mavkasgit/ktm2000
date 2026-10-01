@@ -24,7 +24,7 @@ from app.reversal.service import _sign_payload, reversal_service
 from app.stock.import_service import RemainderItem, apply_remainders_import
 from app.stock.models import Reason, StockBalance, StockTransaction
 from app.stock.services import StockCommand, StockCommandService
-from tests.stock.helpers import FAKE_DEFECT_DECISION_MAP, FAKE_SCRAP_POLICY, record_transfer_receive
+from tests.stock.helpers import FAKE_DEFECT_DECISION_MAP, FAKE_SCRAP_POLICY
 from tests.stock.test_domain_actions_journal import _issue_material
 from tests.stock.test_shopfloor_stage3 import _setup_minimal_route
 from tests.test_integrity_invariants import assert_no_invariants_violations
@@ -252,7 +252,7 @@ async def test_reverse_full_chain_cascade_topological_order(
 
 async def test_defect_decision_reverse(session: AsyncSession) -> None:
     """reverse(defect_decision): scrap-проводка компенсируется зеркально."""
-    from app.models.defect import Defect, DefectDecisionType
+    from app.models.defect import DefectDecisionType
     from app.services.shopfloor.operations_defects import create_defect, defect_decide
 
     fx = await _setup_minimal_route(session)

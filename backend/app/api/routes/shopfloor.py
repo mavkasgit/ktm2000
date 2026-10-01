@@ -46,7 +46,6 @@ from app.services.shopfloor_service import (
     get_section_daily_stats,
     get_sections_summary,
     get_task_details,
-    get_warehouse_remainders,
     link_attachment,
     prepare_section_task,
     rework_create,
@@ -868,58 +867,6 @@ async def section_daily_stats(
         date_from=d_from,
         date_to=d_to,
     )
-
-
-@router.get("/remainders", dependencies=[Depends(require_role(list(READER_ROLES)))])
-async def list_warehouse_remainders(
-    section_id: int | None = Query(None),
-    plan_position_id: int | None = Query(None),
-    db: AsyncSession = Depends(get_db),
-) -> dict:
-    """Read available stock from StockBalance projection.
-
-    Returns aggregated balances by (product, location) with quality_state=GOOD.
-    Replaces old SpgRemainder-based endpoint.
-    """
-    from app.models.product import Product
-    from app.models.section import Section
-    from app.stock.models import StockBalance, QualityState
-
-    query = select(
-        StockBalance.product_id,
-        StockBalance.location_id,
-        StockBalance.balance_qty,
-        Product.sku,
-        Product.name,
-        Section.code.label("section_code"),
-        Section.name.label("section_name"),
-    ).join(
-        Product, StockBalance.product_id == Product.id,
-    ).join(
-        Section, StockBalance.location_id == Section.id,
-    ).where(
-        StockBalance.quality_state == QualityState.GOOD,
-        StockBalance.balance_qty > 0,
-    )
-
-    if section_id is not None:
-        query = query.where(StockBalance.location_id == section_id)
-
-    rows = (await db.execute(query)).all()
-
-    remainders = []
-    for product_id, location_id, qty, sku, pname, section_code, section_name in rows:
-        remainders.append({
-            "product_id": product_id,
-            "product_sku": sku,
-            "product_name": pname,
-            "location_id": location_id,
-            "section_code": section_code,
-            "section_name": section_name,
-            "quantity": str(qty),
-        })
-
-    return {"remainders": remainders, "source": "stock_balance"}
 
 
 @router.post("/remainders/return", dependencies=[Depends(require_role(list(WRITER_ROLES)))])

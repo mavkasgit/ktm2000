@@ -13,7 +13,6 @@ This is the correct behavior for sections like Press that have multiple operatio
 from decimal import Decimal
 
 import pytest
-from sqlalchemy import select
 
 from app.models.internal_plan import SectionPlanLine, InternalPlan, InternalPlanStatus
 from app.models.production_plan import ProductionPlan, PlanPositionStatus, PlanPosition, PlanSourceType, PlanPositionValidationStatus

@@ -34,14 +34,12 @@ from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.models.section import Section
-from app.models.user import User
 from app.models.work_task import WorkTask
 from app.stock import Reason, StockCommand, StockCommandService
 from app.transfers.services import transfer_send
 
 from tests.stock.test_transfer_stage2 import _make_two_ghp_setup
 from tests.test_integrity_invariants import (
-    _auth_headers,
     _make_user,
     _release_via_take_to_work,
     assert_no_invariants_violations,

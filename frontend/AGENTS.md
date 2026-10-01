@@ -256,6 +256,10 @@ npm --prefix frontend run test:e2e  # Playwright E2E
 Канон → [`e2e/AGENTS.md`](e2e/AGENTS.md): предусловия, env, фикстуры, спеки.
 
 ```bash
-npm run dev                              # сначала из корня
-npm --prefix frontend run test:e2e
+npm --prefix frontend run test:e2e   # стенд поднимается сам: своя БД и свои порты
 ```
+
+Ручной `npm run dev` для прогона **не нужен** (и не переиспользуется молча:
+`reuseExistingServer: false`). Он требуется только в отладочном сценарии
+`PW_REUSE_STACK=1`, когда прогон идёт против уже поднятого стека — см.
+[`e2e/AGENTS.md`](e2e/AGENTS.md).

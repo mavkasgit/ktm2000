@@ -62,6 +62,13 @@ export type StockImportRow = {
   target_section_id: number | null;
   target_section_name: string | null;
   quality_state: string | null;
+  /**
+   * Пятая ось ключа остатка (ADR-0055): `null` — «не зафиксировано»,
+   * `[]` — «без операций», список — коды пройденных операций. Без неё
+   * две строки одного артикула и склада с разным `current_balance`
+   * выглядят как дубль.
+   */
+  completed_operations: string[] | null;
   status: "valid" | "invalid";
   errors: string[];
   warnings: string[];

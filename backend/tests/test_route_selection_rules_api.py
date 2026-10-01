@@ -13,7 +13,7 @@ from sqlalchemy import select
 from app.models.route import RouteRuleProfile, RouteSelectionRule
 from app.models.section import Section
 
-from tests.test_routes_seed import DEFAULT_SECTIONS, _seed_default_sections
+from tests.test_routes_seed import _seed_default_sections
 
 
 async def _seed_sections_and_profile(session) -> RouteRuleProfile:

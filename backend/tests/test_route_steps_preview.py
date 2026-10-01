@@ -1,7 +1,6 @@
 """Tests for dynamic route stages and operations in import preview."""
 from io import BytesIO
 
-from decimal import Decimal
 
 import pytest
 from openpyxl import Workbook

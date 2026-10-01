@@ -69,6 +69,9 @@ class ImportRowOut(BaseModel):
     target_section_id: int | None
     target_section_name: str | None
     quality_state: str | None
+    #: Пятая ось ключа остатка (ADR-0055): ``None`` — «не зафиксировано»,
+    #: ``[]`` — «без операций», список — коды пройденных операций.
+    completed_operations: list[str] | None
     status: str
     errors: list[str]
     warnings: list[str]
@@ -130,6 +133,7 @@ def _row_out(view: history.RowView) -> ImportRowOut:
         target_section_id=view.target_section_id,
         target_section_name=view.target_section_name,
         quality_state=view.quality_state,
+        completed_operations=view.completed_operations,
         status=view.status,
         errors=view.errors,
         warnings=view.warnings,
@@ -179,6 +183,10 @@ async def get_import_batch(
 
     У откатанного батча строки те же, а ``current_balance`` показывает, что
     осталось на складе сейчас; UI обязан показать плашку «откатан».
+
+    Каждая строка несёт признак операций (``completed_operations``): это ось
+    ключа остатка (ADR-0055), и без неё две строки одного артикула и склада
+    с разными ``current_balance`` выглядят как дубль.
     """
     try:
         batch = await history.get_batch(db, batch_id)

@@ -27,7 +27,10 @@ from app.models.user import UserRole
 from tests.helpers.auth import user_headers
 from tests.helpers.plan import make_plan_with_positions
 
-pytestmark = pytest.mark.asyncio
+# Асинхронные тесты помечает pytest-asyncio сам (`asyncio_mode = auto` в
+# backend/pytest.ini). Модульный `pytestmark = pytest.mark.asyncio` вешал маркер
+# и на синхронный `test_plan_import_route_matrix_is_complete` — pytest
+# предупреждал об этом на каждом прогоне; здесь маркер был лишним.
 
 ADMIN_ONLY = frozenset({UserRole.admin})
 

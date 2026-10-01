@@ -3,7 +3,6 @@ from __future__ import annotations
 import pytest
 from sqlalchemy import select
 
-from app.models.product import Product, ProductType
 from app.models.route import (
     ProductionRoute,
     RouteOperation,

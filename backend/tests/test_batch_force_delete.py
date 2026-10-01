@@ -19,11 +19,19 @@ from app.models.audit_log import AuditLog
 from app.models.imports import ImportBatch, ImportBatchMode
 from app.models.production_plan import PlanChangeSet, PlanPosition, PlanPositionStatus
 from app.models.internal_plan import SectionPlanLine
+from app.models.route import SectionOperation
 from app.models.transfer import Transfer
+from app.models.user import User, UserRole
 from app.models.work_task import WorkTask, WorkTaskStatus
 from app.services.action_journal_service import action_journal_service
 from app.services.import_batch_force_delete import get_batch_force_delete_preview
-from app.stock.models import QualityState, StockBalance, StockTransaction
+from app.services.material_operations import (
+    OPERATIONS_EMPTY_LABEL,
+    OPERATIONS_NOT_RECORDED_LABEL,
+    format_completed_operations_label,
+)
+from app.stock.models import QualityState, Reason, StockBalance, StockTransaction
+from app.stock.services import StockCommand, StockCommandService
 from tests.test_batch_delete_409 import (
     _make_change_set,
     _make_plan_file_batch,
@@ -330,3 +338,165 @@ async def test_force_delete_batch_without_positions_is_400(
     assert resp.status_code == 400
     assert "no positions" in resp.json()["detail"]
     assert await session.get(ImportBatch, batch.id) is not None
+
+
+async def _build_batch_with_ops_axis(
+    session: AsyncSession, tag: str, *, with_named_ops: bool
+) -> dict:
+    """Батч, чей ledger кладёт на один участок несколько групп по оси операций.
+
+    ADR-0055: признак — часть ключа остатка, поэтому своду положено различать
+    ``None`` («не зафиксировано») и ``[]`` («без операций»). Группа с кодами
+    добавляется по флагу: на ней проверяется развёртка справочником.
+    """
+    product = await _make_product(session, tag)
+    plan, batch = await _make_plan_file_batch(session, tag)
+    position = _make_position(
+        session, plan, product, batch, status=PlanPositionStatus.draft, row=2
+    )
+    await session.flush()
+    await _make_position_line(session, plan, product, position, tag=tag)
+    line = (
+        await session.execute(
+            select(SectionPlanLine).where(
+                SectionPlanLine.plan_position_id == position.id
+            )
+        )
+    ).scalar_one()
+    # Справочник: именно он превращает код в «Пресс (окно)» — подпись свода
+    # обязана совпадать с доской остатков.
+    session.add(
+        SectionOperation(
+            section_id=line.section_id,
+            operation_code="PRESS_WINDOW",
+            operation_name="Пресс (окно)",
+            is_significant=True,
+            sort_order=1,
+        )
+    )
+    await session.flush()
+
+    service = StockCommandService()
+    # stock_transactions.created_by NOT NULL — проводка без автора не ложится.
+    user = User(
+        username=f"{tag}-ops", full_name=f"Operator {tag}", role=UserRole.operator
+    )
+    session.add(user)
+    await session.flush()
+
+    async def add_in(ops: list[str] | None, *, allow_unknown: bool) -> None:
+        await service.record(
+            session,
+            StockCommand(
+                product_id=product.id,
+                to_location_id=line.section_id,
+                quantity=Decimal("5"),
+                reason=Reason.MANUAL_IN,
+                completed_operations=ops,
+                # Проводка привязана к строке плана (иначе не попадёт в
+                # footprint), но признака нет. record() закрывает плановый путь
+                # без признака исключением — здесь состояние «не зафиксировано»
+                # подтверждается явно, а не молчаливым NULL.
+                allow_unknown_completed_operations=allow_unknown,
+                section_plan_line_id=line.id,
+                created_by=user.id,
+            ),
+        )
+
+    await add_in(None, allow_unknown=True)
+    await add_in([], allow_unknown=False)
+    if with_named_ops:
+        await add_in(["PRESS_WINDOW"], allow_unknown=False)
+    await session.commit()
+    return {
+        "product": product,
+        "plan": plan,
+        "batch": batch,
+        "line": line,
+    }
+
+
+async def _preview_effects(client, plan_id: int, batch_id: int) -> list[dict]:
+    resp = await client.get(
+        f"/api/production-plans/{plan_id}/batches/{batch_id}/force-delete-preview"
+    )
+    assert resp.status_code == 200, resp.text
+    return resp.json()["stock_effects"]
+
+
+async def test_force_delete_preview_distinguishes_null_and_empty_ops_groups(
+    session: AsyncSession, client
+) -> None:
+    """Две группы одного артикула и участка — две строки с разными подписями.
+
+    ADR-0055 §6: ``None`` и ``[]`` — разные остатки. Свод обязан отдать обе и
+    подписать их по-разному: оператор подтверждает необратимое удаление и не
+    должен видеть одну группу вместо двух.
+    """
+    fx = await _build_batch_with_ops_axis(
+        session, "BFD-OPS-EMPTY", with_named_ops=False
+    )
+    effects = await _preview_effects(client, fx["plan"].id, fx["batch"].id)
+
+    assert len(effects) == 2, effects
+    # Оси совпадают: тот же артикул и участок — различает только признак.
+    assert {e["product_sku"] for e in effects} == {fx["product"].sku}
+    assert len({e["location_id"] for e in effects}) == 1
+
+    null_row = next(e for e in effects if e["completed_operations"] is None)
+    empty_row = next(e for e in effects if e["completed_operations"] == [])
+    # Развивать нечего — обе группы без имён, но подписи обязаны различаться.
+    assert null_row["completed_stages"] == []
+    assert empty_row["completed_stages"] == []
+    labels = [
+        format_completed_operations_label(
+            e["completed_operations"], e["completed_stages"]
+        )
+        for e in effects
+    ]
+    assert set(labels) == {OPERATIONS_NOT_RECORDED_LABEL, OPERATIONS_EMPTY_LABEL}
+
+    # Тот же признак — в самом балансе: две строки остатка, а не одна слитая.
+    balance_ops = list(
+        (
+            await session.execute(
+                select(StockBalance.completed_operations).where(
+                    StockBalance.product_id == fx["product"].id,
+                    StockBalance.location_id == fx["line"].section_id,
+                )
+            )
+        ).scalars()
+    )
+    assert {repr(ops) for ops in balance_ops} == {"None", "[]"}, balance_ops
+
+
+async def test_force_delete_preview_expands_operations_via_dictionary(
+    session: AsyncSession, client
+) -> None:
+    """Подпись свода совпадает с доской остатков: название, а не код."""
+    fx = await _build_batch_with_ops_axis(
+        session, "BFD-OPS-NAME", with_named_ops=True
+    )
+    effects = await _preview_effects(client, fx["plan"].id, fx["batch"].id)
+
+    assert len(effects) == 3, effects
+    named = next(e for e in effects if e["completed_operations"] == ["PRESS_WINDOW"])
+    assert [
+        stage["operation_name"] for stage in named["completed_stages"]
+    ] == ["Пресс (окно)"]
+    assert (
+        format_completed_operations_label(
+            named["completed_operations"], named["completed_stages"]
+        )
+        == "Пресс (окно)"
+    )
+    # Без справочника печатался бы код — ровно тот дефект, ради которого в
+    # ответ добавлен развитый справочником признак (completed_stages).
+    assert (
+        format_completed_operations_label(named["completed_operations"])
+        == "PRESS_WINDOW"
+    )
+
+    await assert_no_invariants_violations(
+        session, context="batch-force-delete-ops-axis"
+    )

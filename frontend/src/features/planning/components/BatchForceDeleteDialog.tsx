@@ -35,6 +35,27 @@ type Props = {
   onForceDeleted: () => void;
 };
 
+type StockEffect = BatchForceDeletePreview["stock_effects"][number];
+
+/**
+ * Ключ строки свода «Как изменятся остатки» — зеркало ключа StockBalance
+ * (ADR-0055).
+ *
+ * Пустые состояния оси обязаны различимы: `null` («не зафиксировано») и `[]`
+ * («без операций») — разные остатки, но прежний `join(",")` склеивал их в одну
+ * строку ключа, а бэкенд в одном ответе отдаёт обе группы. Два одинаковых
+ * ключа в списке — предупреждение React и риск «прилипания» строк в диалоге,
+ * подтверждающем необратимое удаление. Габарит входит в ключ по той же
+ * причине: у одной пары артикул/участок свод различает и его.
+ */
+export function stockEffectRowKey(effect: StockEffect): string {
+  const ops = effect.completed_operations;
+  const opsAxis = ops === null ? "<null>" : `<${[...ops].sort().join(",")}>`;
+  const dimsAxis =
+    effect.dimensions == null ? "<null>" : JSON.stringify(effect.dimensions);
+  return `${effect.product_sku}|${effect.location_id}|${dimsAxis}|${opsAxis}`;
+}
+
 /**
  * Принудительное удаление импорта «поверх» живых данных.
  *
@@ -177,17 +198,20 @@ export function BatchForceDeleteDialog({
                       </thead>
                       <tbody>
                         {preview.stock_effects.map((e) => (
-                          <tr
-                            key={`${e.product_sku}-${e.location_id}-${e.completed_operations?.join(",") ?? ""}`}
-                            className="border-b"
-                          >
+                          <tr key={stockEffectRowKey(e)} className="border-b">
                             <td className="p-2 whitespace-nowrap">{e.product_sku}</td>
                             <td className="p-2 whitespace-nowrap">{e.location_code}</td>
                             {/* ADR-0055: без этой ячейки две строки одного
                                 артикула и участка выглядели бы одинаково —
-                                ключ остатка различает их по операциям. */}
+                                ключ остатка различает их по операциям. Второй
+                                аргумент — признак, развитый справочником: подпись
+                                обязана совпадать с доской остатков, иначе здесь
+                                печатались бы коды (PRESS_WINDOW). */}
                             <td className="p-2 whitespace-nowrap text-muted-foreground">
-                              {formatCompletedOperationsLabel(e.completed_operations)}
+                              {formatCompletedOperationsLabel(
+                                e.completed_operations,
+                                e.completed_stages,
+                              )}
                             </td>
                             <td
                               className={`p-2 text-right whitespace-nowrap tabular-nums ${

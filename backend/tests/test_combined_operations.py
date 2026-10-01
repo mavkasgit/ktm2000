@@ -24,7 +24,6 @@ from app.models.production_plan import (
     ProductionPlan,
     ProductionPlanStatus,
 )
-from app.models.release_batch import ReleaseBatch, ReleaseBatchPosition, ReleaseBatchStatus
 from app.models.route import ProductionRoute, RouteStage, RouteOperation
 from app.models.section import Section
 from app.models.work_task import WorkTask, WorkTaskStatus

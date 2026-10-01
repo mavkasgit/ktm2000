@@ -9,7 +9,6 @@ section_manager, operator); запись — REFERENCES_WRITER_ROLES
 from __future__ import annotations
 
 import pytest
-from httpx import AsyncClient
 from sqlalchemy import text
 from sqlalchemy.ext.asyncio import AsyncSession
 

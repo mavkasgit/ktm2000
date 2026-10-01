@@ -1,8 +1,9 @@
 from __future__ import annotations
 
-from collections.abc import AsyncIterator
+from collections.abc import AsyncIterator, Iterator
 import os
 import re
+import shutil
 import tempfile
 import uuid
 
@@ -17,7 +18,15 @@ os.environ.setdefault("ALLOW_PRODUCTION_RESET", "true")
 # окружения (в т.ч. линуксовых /app/* путей) и дефолтов конфига.
 # Должно быть ДО импорта app.main / app.core.config — иначе import-time
 # mkdir на runner-е упрётся в контейнерный /app (ADR-0026).
-_TEST_STORAGE_ROOT = os.path.join(tempfile.gettempdir(), "ktm2000_pytest_storage")
+#
+# Каталог — свой у каждого прогона: общий путь (без суффикса) делили все
+# прогоны сразу (в т.ч. параллельные агенты), и одинаковые имена файлов из
+# разных прогонов могли мешать друг другу; к тому же каталог никто не убирал
+# (замер 2026-10-01: 25 МБ накопленного мусора в %TEMP%).
+_TEST_RUN_TAG = os.environ.get("TEST_RUN_ID") or uuid.uuid4().hex[:8]
+_TEST_STORAGE_ROOT = os.path.join(
+    tempfile.gettempdir(), f"ktm2000_pytest_storage_{_TEST_RUN_TAG}"
+)
 os.environ["STORAGE_ROOT"] = _TEST_STORAGE_ROOT
 
 import pytest
@@ -292,6 +301,18 @@ async def _install_storage_vs_production_triggers(conn) -> None:
     await driver_conn.execute(f'SET search_path TO "{first_schema}"')
     for stmt in _TRIGGERS_SQL:
         await driver_conn.execute(stmt)
+
+
+@pytest.fixture(scope="session", autouse=True)
+def _clean_test_storage() -> Iterator[None]:
+    """Убирает storage-каталог прогона после его завершения.
+
+    Каталог уникален на прогон (см. `_TEST_STORAGE_ROOT`), поэтому удалять его
+    безопасно: чужие прогоны пишут в свои. Best-effort — на Windows открытые
+    приложением файлы могут не удалиться, и это не должно ронять прогон.
+    """
+    yield
+    shutil.rmtree(_TEST_STORAGE_ROOT, ignore_errors=True)
 
 
 @pytest.fixture(scope="session")

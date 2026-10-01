@@ -286,12 +286,18 @@ def _balance_operations_label_expr():
     Коды строки разворачиваются в элементы jsonb-массива
     (``jsonb_array_elements_text``; в PostgreSQL функция в ``FROM`` неявно
     латеральна, поэтому корреляция на ``stock_balances`` работает) и
-    соединяются со справочником операций. Порядок склейки — тот же, что у
-    ``completed_stages`` в ответе: ``(section.sort_order, operation.sort_order,
-    operation.id)``, то есть маршрут читается слева направо. Отбор операций —
-    тот же, что у ``resolve_operations_dictionary`` (значимые
+    соединяются со справочником операций. Порядок склейки — ровно тот, что у
+    ``resolve_operations_dictionary`` и, следовательно, у ``completed_stages``
+    в ответе: ``(section.sort_order, section.id, operation.sort_order,
+    operation.id)``, то есть маршрут читается слева направо, секции с равным
+    ``sort_order`` — по ``section.id``, операции секции — по ``sort_order`` и
+    ``id``. ``section.id`` здесь обязателен: без него SQL отсортировал бы
+    равносекционные операции по ``operation.sort_order``, а справочник — по
+    ``id`` секции, и подпись в ячейке разошлась бы с подписью в SQL. Отбор
+    операций — тот же, что у ``resolve_operations_dictionary`` (значимые
     производственные): подпись колонки и ``completed_stages`` обязаны
-    показывать одно и то же.
+    показывать одно и то же в одном и том же порядке — иначе фильтр по
+    значению ячейки (ILIKE по этой подписи) молча вернёт ноль строк.
     """
     ops_values = (
         func.jsonb_array_elements_text(StockBalance.completed_operations)
@@ -306,6 +312,7 @@ def _balance_operations_label_expr():
         aggregate_order_by(
             SectionOperation.operation_name,
             Section.sort_order,
+            Section.id,
             SectionOperation.sort_order,
             SectionOperation.id,
         )
@@ -463,6 +470,11 @@ async def _serialize_balances_with_operations(
     проводки не мог различить две строки одного участка с разными операциями —
     обе получили бы подпись одной и той же проводки, и в таблице «Операции»
     не осталось бы ни одного различия.
+
+    Порядок ``completed_stages`` задаёт ``completed_operation_stages`` — позиция
+    этапа в справочнике — и тем самым совпадает с SQL-подписью колонки
+    (``_balance_operations_label_expr``): значение в ячейке, значение в списке
+    фильтра и то, что ищет ``?operations=``, обязаны быть одной строкой.
     """
     if not rows:
         return []
@@ -569,7 +581,16 @@ async def list_balances_by_product(
     db: AsyncSession = Depends(get_db),
     _user: User = Depends(require_role(READER_ROLES)),
 ) -> list[StockBalanceOut]:
-    """Все балансы конкретного продукта по локациям."""
+    """Все балансы конкретного продукта по локациям.
+
+    ORDER BY обязан быть полным: ключ остатка — пять осей (ADR-0055), поэтому
+    строки одного ``location_id`` и ``quality_state``, различающиеся только
+    признаком пройденных операций, без явного tie-breaker'а приходят в
+    недетерминированном порядке — результат менялся бы между прогонами.
+    Уровни: ``location_id → quality_state → completed_operations → id``.
+    ``NULL`` оси («не зафиксировано») идёт в конце, как и любые пустые значения
+    в этой таблице; ``id`` замыкает порядок, делая его линейным.
+    """
     stmt = (
         select(StockBalance, Section.name, Product.sku)
         .outerjoin(Section, Section.id == StockBalance.location_id)
@@ -578,7 +599,12 @@ async def list_balances_by_product(
     )
     if quality_state is not None:
         stmt = stmt.where(StockBalance.quality_state == quality_state)
-    stmt = stmt.order_by(StockBalance.location_id, StockBalance.quality_state)
+    stmt = stmt.order_by(
+        StockBalance.location_id.asc(),
+        StockBalance.quality_state.asc(),
+        StockBalance.completed_operations.asc().nulls_last(),
+        StockBalance.id.asc(),
+    )
     result = await db.execute(stmt)
     return await _serialize_balances_with_operations(db, list(result.all()))
 

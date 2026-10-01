@@ -8,7 +8,6 @@ set, with zero code changes.
 from __future__ import annotations
 
 import pytest
-from sqlalchemy import select
 
 from app.models.product import Product, ProductLength, ProductType
 from app.models.route import RouteRuleProfile, RouteSelectionRule, SectionOperation

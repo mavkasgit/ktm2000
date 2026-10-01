@@ -15,7 +15,7 @@ from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.models import Product, ProductType, Section, User, UserRole
-from app.models.defect import Defect, DefectDecision, DefectDecisionType, DefectStatus
+from app.models.defect import Defect, DefectDecisionType, DefectStatus
 from app.models.internal_plan import InternalPlan, InternalPlanStatus, SectionPlanLine
 from app.models.production_plan import (
     PlanPosition,
