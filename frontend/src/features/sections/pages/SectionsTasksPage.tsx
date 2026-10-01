@@ -12,6 +12,7 @@ import {
   createDailyPlan,
   getDailyPlanComposition,
   getSectionBoard,
+  getSectionBoardColumnValues,
   getSectionDailyStats,
   getSectionsSummary,
   listDailyPlans,
@@ -51,6 +52,12 @@ import {
 } from "../components/SectionPanelToggles";
 import { PRESET_PROFILES, type GroupingProfile } from "../lib/groupingProfiles";
 import {
+  BOARD_SERVER_VALUE_FIELDS,
+  buildBoardColumnValuesParams,
+  type TaskSortField,
+} from "../lib/boardQueryParams";
+import { boardColumns } from "../lib/boardColumns";
+import {
   getCompletionBlockReason,
   groupTasksByBlockReason,
   isTaskCompletable,
@@ -66,7 +73,10 @@ import { fmtQty, toQtyInteger } from "@/shared/lib/quantityFormat";
  * на модуль, а не литерал в теле компонента: он попадает в `resetPageDeps` и в
  * зависимости `useMemo`, где важна идентичность (ADR-0060 п.4).
  */
-type BoardServerQuery = Pick<SectionBoardQueryParams, "search" | "product_sku" | "sort">;
+type BoardServerQuery = Pick<
+  SectionBoardQueryParams,
+  "search" | "product_sku" | "dimensions" | "sort"
+>;
 const EMPTY_SERVER_QUERY: BoardServerQuery = {};
 
 type MeResponse = {
@@ -355,6 +365,38 @@ export function SectionsTasksPage() {
       sectionId,
     ),
   });
+
+  // Справочник значений серверных колонок (#211): поповер не зависит от
+  // страницы, поэтому значения спрашиваются отдельно — по тем же фильтрам, что
+  // и доска. Ключ живёт под префиксом доски, и её инвалидация обновляет
+  // справочник вместе с ней.
+  const boardColumnValuesQueries = useQueries({
+    queries: BOARD_SERVER_VALUE_FIELDS.map((field) => {
+      const column = boardColumns.find((candidate) => candidate.filterField === field);
+      const valuesParams = buildBoardColumnValuesParams({
+        column: column?.apiParam ?? field,
+        filters: boardQueryParams,
+      });
+      return {
+        queryKey: queryKeys.shopfloor.boardColumnValues(sectionId as number, {
+          ...valuesParams,
+          singleSectionLockId: requestOptions?.singleSectionLockId ?? null,
+        }),
+        queryFn: () =>
+          getSectionBoardColumnValues(sectionId as number, valuesParams, requestOptions),
+        enabled: sectionId !== null && me != null,
+        retry: false,
+      };
+    }),
+  });
+  const boardFilterValueOptions = useMemo(() => {
+    const options: Partial<Record<TaskSortField, string[]>> = {};
+    BOARD_SERVER_VALUE_FIELDS.forEach((field, index) => {
+      const values = boardColumnValuesQueries[index]?.data?.values;
+      if (values) options[field] = values;
+    });
+    return options;
+  }, [boardColumnValuesQueries]);
   const { data: dailyPlans, isLoading: dailyPlansLoading } = useQuery({
     queryKey: queryKeys.dailyPlans.list(sectionId as number),
     queryFn: () => listDailyPlans(sectionId as number, requestOptions),
@@ -1147,6 +1189,7 @@ export function SectionsTasksPage() {
                     tasks={displayedTasks}
                     total={displayedTasks.length}
                     isLoading={boardPending || selectedCompositionsLoading}
+                    filterValueOptions={boardFilterValueOptions}
                     mode={viewMode}
                     onModeChange={setViewMode}
                     onAction={openActionDialog}

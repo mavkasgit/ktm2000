@@ -101,6 +101,18 @@ type SectionBoardQueryKeyParams = {
   singleSectionLockId?: number | null;
 };
 
+type SectionBoardColumnValuesQueryKeyParams = {
+  column: string;
+  date_from?: string;
+  date_to?: string;
+  status?: string;
+  search?: string;
+  product_sku?: string;
+  dimensions?: string;
+  limit?: number;
+  singleSectionLockId?: number | null;
+};
+
 type ReadyToTransferQueryKeyParams = {
   limit?: number;
   offset?: number;
@@ -182,6 +194,13 @@ export const queryKeys = {
   shopfloor: {
     board: (sectionId: number, params?: SectionBoardQueryKeyParams) =>
       ["shopfloor-board", sectionId, params ?? {}] as const,
+    /**
+     * Справочник значений серверной колонки (#211). Живёт под префиксом
+     * `shopfloor-board`, потому что меняется вместе с доской: любая
+     * инвалидация `boardAll()` обновляет и его.
+     */
+    boardColumnValues: (sectionId: number, params: SectionBoardColumnValuesQueryKeyParams) =>
+      ["shopfloor-board", "column-values", sectionId, params] as const,
     stats: (sectionId: number) => ["shopfloor-stats", sectionId] as const,
     incomingTransfers: (sectionId: number) => ["shopfloor-incoming-transfers", sectionId] as const,
     summary: () => ["shopfloor-sections-summary"] as const,

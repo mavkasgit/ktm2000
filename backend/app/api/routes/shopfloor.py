@@ -33,6 +33,7 @@ from app.services.action_journal_service import action_journal_service
 from app.services.audit_log_service import log_action
 from app.services.shopfloor.common import _get_user_snapshot_name, _require_mutable_task
 from app.services.shopfloor_service import (
+    BOARD_COLUMN_VALUE_FIELDS,
     add_defect_item,
     complete_task,
     create_attachment,
@@ -44,6 +45,7 @@ from app.services.shopfloor_service import (
     get_rework_details,
     get_route_stage_aggregates_for_plan_position,
     get_section_board,
+    get_section_board_column_values,
     get_section_daily_stats,
     get_sections_summary,
     get_task_details,
@@ -863,6 +865,45 @@ async def section_board(
         sort=sort,
         limit=limit,
         offset=offset,
+    )
+
+
+@router.get("/sections/{section_id}/board/column-values", dependencies=[Depends(require_role(list(READER_ROLES)))])
+async def section_board_column_values(
+    section_id: int,
+    column: str = Query(..., description="Серверная колонка доски, напр. product_sku"),
+    date_from: datetime | None = Query(None),
+    date_to: datetime | None = Query(None),
+    status: str | None = Query(None),
+    search: str | None = Query(None, description="ILIKE: product_sku, task id, operation_name"),
+    product_sku: str | None = Query(None, description="Column filter: ILIKE on product/source/output sku"),
+    dimensions: str | None = Query(None, description="Column filter: exact JSON match on task dimensions"),
+    limit: int = Query(default=50, ge=1, le=500),
+    db: AsyncSession = Depends(get_db),
+    locked_section_id: int | None = Depends(get_single_window_locked_section_id),
+) -> dict:
+    """Справочник значений серверной колонки доски (#211).
+
+    Значения не зависят от текущей страницы доски; фильтр самой колонки
+    отбрасывается, чтобы список не схлопывался к выбранному значению.
+    """
+    _ensure_section_lock(section_id, locked_section_id)
+    if column not in BOARD_COLUMN_VALUE_FIELDS:
+        raise HTTPException(
+            status_code=400,
+            detail=f"колонка {column!r} не отдаёт справочник значений",
+        )
+    return await get_section_board_column_values(
+        db,
+        section_id=section_id,
+        column=column,
+        date_from=_naive_as_utc(date_from) if date_from is not None else None,
+        date_to=_naive_as_utc(date_to) if date_to is not None else None,
+        status=status,
+        search=search,
+        product_sku=product_sku,
+        dimensions=dimensions,
+        limit=limit,
     )
 
 

@@ -618,6 +618,80 @@ async def get_section_board(
     }
 
 
+#: Колонки доски, для которых сервер отдаёт справочник значений (#211).
+#: Ключ — `filterField` описания колонки (он же — параметр фильтра доски),
+#: значение — SQL-выражение ровно того, что видно в колонке: подпись и выбор
+#: в поповере обязаны совпадать, иначе выбранное значение не сузит выборку.
+#:
+#: «Размер» в этот набор НЕ входит: колонка показывает
+#: `input_dimensions` трансформирующих задач, а фильтр доски сравнивает
+#: `WorkTask.dimensions` — значение из справочника не сузило бы выборку.
+#: Разводить эти домены — отдельное решение владельца (тикет #211).
+BOARD_COLUMN_VALUE_FIELDS: frozenset[str] = frozenset({"product_sku"})
+
+
+def _board_value_expression(column: str):
+    if column not in BOARD_COLUMN_VALUE_FIELDS:
+        return None
+    if column == "product_sku":
+        # Артикул строки (см. `effective_display_sku`): у парного профиля
+        # видно собранный «A+B», у обычного — артикул продукта.
+        return case(
+            (PlanPosition.source_sku.like("%+%"), PlanPosition.source_sku),
+            else_=Product.sku,
+        )
+    return None
+
+
+async def get_section_board_column_values(
+    db: AsyncSession,
+    *,
+    section_id: int,
+    column: str,
+    date_from: datetime | None = None,
+    date_to: datetime | None = None,
+    status: str | None = None,
+    search: str | None = None,
+    product_sku: str | None = None,
+    dimensions: str | None = None,
+    limit: int = DEFAULT_BOARD_LIMIT,
+) -> dict:
+    """Различные значения серверной колонки доски под текущими фильтрами.
+
+    Фильтр САМОЙ колонки не применяется: список не должен схлопываться к уже
+    выбранному значению. Прочие фильтры (окно дат, статус, поиск, соседняя
+    колонка) сохраняются — справочник живёт в тех же границах, что и доска.
+    """
+    value_expr = _board_value_expression(column)
+    if value_expr is None:
+        raise ValueError(f"колонка {column!r} не отдаёт справочник значений")
+    limit = min(max(limit, 1), MAX_BOARD_LIMIT)
+    query = _build_section_board_query(
+        section_id=section_id,
+        date_from=date_from,
+        date_to=date_to,
+        status=status,
+        search=search,
+        product_sku=None if column == "product_sku" else product_sku,
+        dimensions=None if column == "dimensions" else dimensions,
+    )
+    stmt = (
+        query.with_only_columns(value_expr, maintain_column_froms=True)
+        .order_by(None)
+        .distinct()
+        .order_by(value_expr)
+        .limit(limit + 1)
+    )
+    rows = (await db.execute(stmt)).scalars().all()
+    values = [value for value in rows[:limit] if value is not None]
+    return {
+        "column": column,
+        "values": values,
+        "limit": limit,
+        "truncated": len(rows) > limit,
+    }
+
+
 async def get_sections_summary(db: AsyncSession) -> dict:
     """Return section counters for quick top-level switching tiles."""
     status_counts = (

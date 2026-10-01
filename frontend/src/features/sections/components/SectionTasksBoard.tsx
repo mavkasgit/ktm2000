@@ -478,6 +478,13 @@ type SectionTasksBoardProps = {
    * того, что фильтруют.
    */
   toolbar?: ReactNode;
+  /**
+   * Значения поповеров из серверного справочника (#211): приходят готовыми от
+   * вызывающего экрана и приоритетнее страничных. Страничные остаются для
+   * колонок, которые фильтрует сам экран (ADR-0044) и для которых справочника
+   * нет — иначе «Нет значений» означало бы «нет на этой странице».
+   */
+  filterValueOptions?: Partial<Record<TaskSortField, string[]>>;
   page: number;
   setPage: (page: number) => void;
   limit: PageLimitOption;
@@ -549,6 +556,7 @@ export function SectionTasksBoard({
   onCompleteGroup,
   hasPackaging,
   toolbar,
+  filterValueOptions,
   page,
   setPage,
   limit,
@@ -1038,7 +1046,11 @@ export function SectionTasksBoard({
                       <DataTableColumnHeader
                         column={column}
                         bindColumn={bindColumn}
-                        values={column.filterField ? uniqueValues[column.filterField] : undefined}
+                        values={
+                          column.filterField
+                            ? filterValueOptions?.[column.filterField] ?? uniqueValues[column.filterField]
+                            : undefined
+                        }
                         currentSorts={sortConfigs}
                         onSortChange={handleSortChange}
                       />
