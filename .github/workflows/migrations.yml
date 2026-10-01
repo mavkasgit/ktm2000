@@ -35,6 +35,12 @@ jobs:
       DATABASE_URL: postgresql+asyncpg://ktm2000_user:ktm2000_pass_test@localhost:5212/ktm2000_test
       TEST_DATABASE_URL: postgresql+asyncpg://ktm2000_user:ktm2000_pass_test@localhost:5212/ktm2000_test
       ENV: test
+      # ADR-0026: `Settings()` падает, если `STORAGE_ROOT` остался контейнерным
+      # (`/app/storage`) при запуске вне контейнера. В CI env-файла нет
+      # (`.env.dev` gitignored), поэтому дефолт не перекрывается и `alembic`
+      # падает на импорте `app.core.config`. Путь задаём явно; рабочая
+      # директория шагов разная (backend / корень), поэтому путь абсолютный.
+      STORAGE_ROOT: ${{ github.workspace }}/data/storage-ci
 
     steps:
       - name: Checkout
