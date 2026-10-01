@@ -845,6 +845,12 @@ async def section_board(
         parse_dimensions_filter(dimensions)
     except DimensionsValidationError as exc:
         raise HTTPException(status_code=422, detail=str(exc)) from exc
+    # Ось дат доски — UTC, как в daily-stats (#259): фронт шлёт наивные
+    # `YYYY-MM-DDTHH:MM:SS`, и без нормализации asyncpg читал бы их как
+    # host-local, уводя окно от `WorkTask.created_at` (timestamptz).
+    # `None` — «фильтра нет», окном дня его не подменяем.
+    date_from = _naive_as_utc(date_from) if date_from is not None else None
+    date_to = _naive_as_utc(date_to) if date_to is not None else None
     return await get_section_board(
         db,
         section_id=section_id,
