@@ -1,5 +1,5 @@
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
-import { fireEvent, render, screen, waitFor } from "@testing-library/react";
+import { fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
 vi.mock("@/shared/api/transfers", async (importOriginal) => ({
@@ -84,5 +84,24 @@ describe("TransfersPage: дефолт «Все ГХП»", () => {
     const ids = vi.mocked(listReadyToTransfer).mock.calls.map((c) => c[0]?.spg_id);
     expect(ids).not.toContain(1);
     expect(ids.every((id) => id === undefined)).toBe(true);
+  });
+
+  it("без выбранной ГХП показывает текст состояния, а не вечную «Загрузку…»", async () => {
+    renderPage();
+    await waitFor(() => expect(listReadyToTransfer).toHaveBeenCalled());
+
+    fireEvent.click(screen.getByRole("combobox"));
+    fireEvent.click(await screen.findByRole("option", { name: "Выберите ГХП" }));
+
+    // Запросы выключены, поэтому `isPending` не разрешается: заглушка загрузки
+    // висела бы вечно. Экран говорит, чего ждёт, а не грузит бесконечно.
+    await waitFor(() => expect(screen.queryByText("Загрузка…")).toBeNull());
+    expect(screen.getAllByText(/Выберите ГХП/).length).toBeGreaterThanOrEqual(2);
+
+    // Журнал передач — второй список с тем же выключенным запросом.
+    fireEvent.click(screen.getByRole("button", { name: /Журнал передач/ }));
+    const journal = await screen.findByRole("dialog");
+    expect(within(journal).queryByText("Загрузка…")).toBeNull();
+    expect(within(journal).getByText(/чтобы увидеть журнал передач/)).toBeTruthy();
   });
 });
