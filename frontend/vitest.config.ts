@@ -24,5 +24,12 @@ export default defineConfig({
     // которую нужно тестировать vitest'ом. Исключаем сами спеки Playwright —
     // их имена кончаются на `.spec.ts` и vitest'у они не его.
     exclude: ["**/node_modules/**", "**/e2e/**/*.spec.ts", "**/dist/**"],
+    // Гейт покрытия: решения грилла #245 (Q13, Q5=1). Первый замер 2026-10-01 —
+    // statements/lines 43.99%, branches 72.66%, functions 44.97% (1093 passed).
+    // Порог — округление вниз: ловит падение покрытия, но не краснеет от мелкой
+    // правки. Гейт блокирующий: падение порога валит `vitest run` (и CI-джоб).
+    coverage: {
+      thresholds: { statements: 43, lines: 43, branches: 72 },
+    },
   },
 })
