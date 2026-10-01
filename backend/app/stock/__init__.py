@@ -23,10 +23,10 @@ __all__ = [
     "QualityState",
     "Reason",
     "StockBalance",
-    "StockTransaction",
     "StockCommand",
     "StockCommandService",
     "StockIdempotencyConflict",
     "StockProjectionManager",
+    "StockTransaction",
     "StockValidationError",
 ]

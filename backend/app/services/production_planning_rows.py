@@ -388,7 +388,7 @@ def _resolve_stage_operation_name(stage: RouteStage, operation_names_by_key: dic
     return " / ".join(op_names) if op_names else ""
 
 
-def _to_float(value: Decimal | int | float | None) -> float:
+def _to_float(value: Decimal | float | None) -> float:
     if value is None:
         return 0.0
     return float(value)

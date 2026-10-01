@@ -804,7 +804,7 @@ def _parse_date(value: Any) -> date | None:
     return None
 
 
-def _excel_date_to_date(serial: int | float) -> date:
+def _excel_date_to_date(serial: float) -> date:
     return date(1899, 12, 30) + timedelta(days=int(serial))
 
 

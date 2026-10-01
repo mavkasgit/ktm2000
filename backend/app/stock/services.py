@@ -449,7 +449,7 @@ class StockProjectionManager:
 
     async def refresh_task_projection(self, session: AsyncSession, tx: StockTransaction) -> None:
         """No-op — cached_* колонки удалены, используйте get_task_cache()."""
-        return None
+        return
 
     async def _compute_task_cache(
         self, session: AsyncSession, task_id: int,
@@ -663,11 +663,11 @@ class StockProjectionManager:
 
     async def refresh_spl_projection(self, session: AsyncSession, tx: StockTransaction) -> None:
         """Этап 4: SectionPlanLine cache из ledger. Пока no-op."""
-        return None
+        return
 
     async def refresh_quality_view(self, session: AsyncSession, tx: StockTransaction) -> None:
         """Этап 5: агрегаты по качеству. Пока no-op."""
-        return None
+        return
 
 
 class StockCommandService:

@@ -20,7 +20,7 @@ from app.models.user import User
 from app.models.work_task import WorkTask
 
 
-def _to_decimal(value: Decimal | int | float | str) -> Decimal:
+def _to_decimal(value: Decimal | float | str) -> Decimal:
     return Decimal(str(value))
 
 def _ensure_positive(value: Decimal, field_name: str) -> None:

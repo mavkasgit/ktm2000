@@ -97,7 +97,7 @@ def require_role(allowed_roles: Sequence[UserRole]) -> Callable:
 
     # Тест-матрица маршрутов (issue #235) читает набор отсюда: иначе минимально
     # допустимую роль на путь пришлось бы выяснять запросами к каждой ручке.
-    setattr(_guard, "allowed_roles", allowed)
+    _guard.allowed_roles = allowed
     return _guard
 
 
