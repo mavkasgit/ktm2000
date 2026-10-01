@@ -88,11 +88,23 @@ function operationsLabel(row: PlanTaskRow): string {
 
 const cellBase = "px-3 py-2";
 
+/**
+ * Служебная колонка отметки строки внутри группы («↳»). Заголовка у неё нет, и
+ * она уже печатных колонок: подпись «Группа» была самой широкой её частью, а
+ * при растяжке таблицы на всю ширину окна забирала больше всех пустого места.
+ *
+ * На печать колонка выводится (`no-print-col` на ней нет): заголовок группы
+ * объединяет метки через `colSpan` и на бумаге считается по тем же колонкам,
+ * что и строки, — спрятанная колонка сдвинула бы итоги группы на колонку
+ * вправо.
+ */
+const GROUP_MARKER_CELL = "w-7 px-1 py-2";
+
 /** Ячейка колонки в строке задания. */
 function rowCell(row: PlanTaskRow, key: PlanColumnKey, single: boolean) {
   switch (key) {
     case "group":
-      return <td key={key} className={cn(cellBase, "text-muted-foreground no-print-col")}>{single ? "" : "↳"}</td>;
+      return <td key={key} className={cn(GROUP_MARKER_CELL, "text-muted-foreground")}>{single ? "" : "↳"}</td>;
     case "sku":
       return <td key={key} className={cn(cellBase, "font-medium break-words")}>{row.productSku}</td>;
     case "size":
@@ -179,23 +191,35 @@ export function PlanTaskTable({
   }
 
   return (
-    <div className="rounded-lg border overflow-x-auto plan-table">
-      <table className="w-full text-sm border-collapse">
+    <div className="mx-auto w-fit max-w-full rounded-lg border overflow-x-auto plan-table">
+      {/* Ширину задаёт содержимое, и растёт она от центра: `w-fit` + `mx-auto`
+          держат таблицу по центру листа, а не прижимают её к левому краю
+          пустой страницы. Набор из двух колонок иначе растягивался на всю
+          ширину окна и разводил артикул и остаток полутора метрами пустоты.
+          Много колонок — блок упирается в ширину листа и прокручивается
+          (`overflow-x-auto`), поэтому `max-w-full`.
+          На печати лист растягивает таблицу сам (`@media print`: `width: 100%`
+          с `table-layout: fixed`) — экран и бумага расходятся только шириной,
+          состав строк и колонок один и тот же. */}
+      <table className="text-sm border-collapse">
         <thead className="bg-gray-50">
           <tr className="border-b">
             {active.map((column) => (
               <th
                 key={column.key}
                 className={cn(
-                  cellBase,
+                  column.key === "group" ? GROUP_MARKER_CELL : cellBase,
                   "font-semibold",
                   column.kind === "number" ? "text-right" : "text-left",
                   column.key === "size" && "whitespace-nowrap",
-                  column.service && "no-print-col",
+                  column.service && column.key !== "group" && "no-print-col",
                   column.key === "actions" && "w-8",
                 )}
               >
-                {column.title}
+                {/* Служебные колонки окна в шапке не подписываются: у «Группы»
+                    заголовок был самой широкой её частью, а сама колонка —
+                    только отметкой строки внутри группы. */}
+                {column.service ? null : column.title}
               </th>
             ))}
           </tr>

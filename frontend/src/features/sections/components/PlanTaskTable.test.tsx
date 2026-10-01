@@ -50,9 +50,10 @@ function makeTask(overrides: Partial<SectionBoardTask> = {}): SectionBoardTask {
 }
 
 /**
- * Печатный лист участка: колонки `sku` + `hangers`. Служебная колонка
- * «Группа» добавляется таблицей сама, поэтому в строке задания третья ячейка
- * — подвесы, а в шапке группы (она объединяет метки через `colSpan`) вторая.
+ * Печатный лист участка: колонки `sku` + `hangers`. Служебная колонка отметки
+ * строки внутри группы добавляется таблицей сама, поэтому в строке задания
+ * третья ячейка — подвесы, а в шапке группы (она объединяет метки через
+ * `colSpan`) вторая.
  */
 const COLUMNS: PlanColumnKey[] = ["sku", "hangers"];
 
@@ -130,6 +131,46 @@ describe("лист плана: колонка «Подвесы» (T17)", () => {
     ]);
 
     expect(cellTexts(row)[2]).toBe("7");
+  });
+});
+
+describe("лист плана: служебная колонка отметки строки", () => {
+  function renderTable(tasks: SectionBoardTask[]) {
+    const host = document.createElement("div");
+    host.innerHTML = renderToStaticMarkup(
+      <PlanTaskTable
+        tasks={tasks}
+        mode="article"
+        hiddenGroupKeys={new Set()}
+        onHideGroup={vi.fn()}
+        columns={COLUMNS}
+      />,
+    );
+    return {
+      headers: Array.from(host.querySelectorAll("thead th")),
+      rows: Array.from(host.querySelectorAll("tbody tr")) as HTMLTableRowElement[],
+    };
+  }
+
+  it("шапка «Группу» не подписывает: колонка — только отметка строки в группе", () => {
+    const { headers } = renderTable([makeTask()]);
+
+    expect(headers[0]?.textContent).toBe("");
+    expect(headers.map((header) => header.textContent)).not.toContain("Группа");
+  });
+
+  it("колонка узкая, а «↳» стоит у строк внутри группы", () => {
+    const { rows } = renderTable([
+      makeTask({ id: 1, operation_name: "Операция 1" }),
+      makeTask({ id: 2, operation_name: "Операция 2" }),
+    ]);
+
+    const markers = rows.slice(1).map((row) => row.querySelector("td"));
+
+    expect(markers.map((cell) => cell?.textContent)).toEqual(["↳", "↳"]);
+    // Ширину задаёт класс колонки: без него подпись «Группа» растягивала её
+    // до половины листа и съедала место у печатных колонок.
+    expect(markers[0]?.className).toContain("w-7");
   });
 });
 

@@ -38,6 +38,12 @@ export interface DateRangePickerProps {
   minDate?: string;
   maxDate?: string;
   numberOfMonths?: 1 | 2;
+  /**
+   * Узкий триггер для ряда фильтров: иконка календаря без текста, а подпись
+   * периода появляется только когда период задан. Значение, попапы и очистка
+   * те же, что у полного триггера.
+   */
+  compact?: boolean;
 }
 
 function isoFromParts(year: number, month: number, day: number): string {
@@ -89,6 +95,7 @@ export function DateRangePicker({
   minDate,
   maxDate,
   numberOfMonths = 2,
+  compact = false,
 }: DateRangePickerProps) {
   const id = useId();
   const [open, setOpen] = useState(false);
@@ -244,7 +251,7 @@ export function DateRangePicker({
   const previewTo = pendingTo || (pendingFrom && hoverIso && !isBeforeIso(hoverIso, pendingFrom) ? hoverIso : "");
 
   return (
-    <div className={cn("relative block w-full sm:w-auto", className)}>
+    <div className={cn("relative", compact ? "inline-block" : "block w-full sm:w-auto", className)}>
       {label && (
         <label htmlFor={id} className="text-sm font-medium whitespace-nowrap">
           {label}
@@ -257,17 +264,21 @@ export function DateRangePicker({
             type="button"
             disabled={disabled}
             aria-label={label || placeholder}
+            title={hasValue ? triggerLabel : placeholder}
             className={cn(
-              "flex h-9 w-full min-w-[180px] items-center gap-2 rounded-md border border-input bg-background px-3 text-sm",
+              "flex h-9 items-center gap-2 rounded-md border border-input bg-background text-sm",
+              compact ? "px-2" : "w-full min-w-[180px] px-3",
               "transition-colors hover:bg-accent/40 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2",
               disabled && "opacity-50 pointer-events-none",
               hasValue && "border-primary/40"
             )}
           >
-            <CalendarRange className="h-4 w-4 shrink-0 text-muted-foreground" />
-            <span className={cn("flex-1 text-left truncate", !hasValue && "text-muted-foreground")}>
-              {triggerLabel || placeholder}
-            </span>
+            <CalendarRange className={cn("h-4 w-4 shrink-0", hasValue ? "text-primary" : "text-muted-foreground")} />
+            {(!compact || hasValue) && (
+              <span className={cn("text-left truncate", !compact && "flex-1", !hasValue && "text-muted-foreground")}>
+                {triggerLabel || placeholder}
+              </span>
+            )}
             {hasValue && (
               <span
                 role="button"

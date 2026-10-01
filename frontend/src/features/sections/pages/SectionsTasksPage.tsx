@@ -29,7 +29,7 @@ import { queryKeys } from "@/shared/api/queryKeys";
 import { usePaginatedTableQuery } from "@/shared/hooks/usePaginatedTableQuery";
 import type { SectionBoardQueryParams } from "@/shared/api/shopfloor";
 import { isFirstRowsLoad, keepPreviousDataForScope } from "@/shared/lib/tableQueryPlaceholder";
-import { DateRangePicker, renderIcon, toast, Button, type DateRangeValue } from "@/shared/ui";
+import { DateRangePicker, renderIcon, toast, type DateRangeValue } from "@/shared/ui";
 import { useBulkSelection } from "@/shared/bulk";
 import { BulkResultsDialog, summarizeBulkResults, type BulkActionResultItem, type BulkActionSummary, type BulkRunnerProgress } from "@/shared/bulk";
 import { isProductionSection } from "@/shared/lib/sectionTypes";
@@ -38,7 +38,8 @@ import { SectionTasksBoard, type TaskActionDialogType, type TaskBoardViewMode } 
 import { TaskActionDrawer } from "../components/TaskActionDrawer";
 import { BulkOperationsPanel } from "../components/BulkOperationsPanel";
 import { DailyPlansPanel } from "../components/DailyPlansPanel";
-import { mergeDailyPlanTasks } from "../lib/dailyPlans";
+import { PlanPrintButton } from "../components/PlanPrintButton";
+import { getDailyPlanCreationCandidates, mergeDailyPlanTasks } from "../lib/dailyPlans";
 import { PlanModal } from "../components/PlanModal";
 import { SectionStockBalances } from "../components/SectionStockBalances";
 import {
@@ -921,6 +922,15 @@ export function SectionsTasksPage() {
     : mergeDailyPlanTasks(selectedPlanQueries.flatMap((query) => (
         query.data ? [query.data.items] : []
       )));
+  // Вкладка «План» без выбранного плана — это «все актуальные задания
+  // участка»: завершённые строки живут только в составе конкретного плана
+  // (docs/daily-plans-spec.md, «Режим `План`»).
+  const planBoardTasks = useMemo(
+    () => (selectedPlanIds.size === 0
+      ? getDailyPlanCreationCandidates(tasks)
+      : displayedTasks),
+    [tasks, displayedTasks, selectedPlanIds],
+  );
   const selectedTasks = useMemo(
     () => tasks.filter((t) => bulkSelection.selectedIds.has(t.id)),
     [tasks, bulkSelection.selectedIds],
@@ -978,6 +988,11 @@ export function SectionsTasksPage() {
   const canToggleSingleWindow = sectionId !== null && !isSingleWindowBlocked;
   const selectedSectionColor = selectedSection?.icon_color || "#1D4ED8";
   const selectedSectionTint = selectedSectionColor.startsWith("#") ? `${selectedSectionColor}1A` : "#DBEAFE";
+
+  // Печать — одна кнопка на обе вкладки, в ряду фильтров сразу после поиска
+  // (слот `toolbar` доски). Что печатается, решает страница: в модальное окно
+  // уходит тот же набор, что видит оператор.
+  const printButton = <PlanPrintButton onClick={() => setPlanModalOpen(true)} />;
 
   return (
     <>
@@ -1112,23 +1127,23 @@ export function SectionsTasksPage() {
                   />
                 )}
 
-                <div className="flex flex-wrap items-center gap-2">
-                  <DateRangePicker
-                    from={dateRange.from}
-                    to={dateRange.to}
-                    onChange={setDateRange}
-                    className="w-full sm:w-auto sm:min-w-[280px] max-w-md"
-                  />
-                  <Button variant="outline" size="sm" onClick={() => setPlanModalOpen(true)}>
-                    Печать плана
-                  </Button>
-                </div>
-
                 <div className="grid grid-cols-1 gap-4 lg:grid-cols-[minmax(0,1fr)_280px]">
                   {/* `key` — чтобы поиск, фильтры и сортировка прежнего участка
                       умирали вместе с ним, а не жили под шапкой нового (ADR-0060 п.1). */}
                   <SectionTasksBoard
                     key={sectionId}
+                    toolbar={
+                      <div className="flex items-center gap-2">
+                        <DateRangePicker
+                          compact
+                          from={dateRange.from}
+                          to={dateRange.to}
+                          onChange={setDateRange}
+                          placeholder="Период"
+                        />
+                        {printButton}
+                      </div>
+                    }
                     tasks={displayedTasks}
                     total={displayedTasks.length}
                     isLoading={boardPending || selectedCompositionsLoading}
@@ -1209,23 +1224,19 @@ export function SectionsTasksPage() {
             {isPlanPanelVisible(sectionContentMode) && (
               <div className="grid grid-cols-1 gap-4 lg:grid-cols-[minmax(0,1fr)_280px]">
                 <div className="min-w-0 space-y-3">
-                  <div className="flex flex-wrap items-center justify-between gap-2">
-                    <div>
-                      <h2 className="text-lg font-semibold">План участка</h2>
-                      <p className="text-sm text-muted-foreground">
-                        {selectedPlanIds.size === 0
-                          ? "Все актуальные задания участка"
-                          : `Выбрано планов: ${selectedPlanIds.size}`}
-                      </p>
-                    </div>
-                    <Button variant="outline" size="sm" onClick={() => setPlanModalOpen(true)}>
-                      Печать выбранного
-                    </Button>
+                  <div>
+                    <h2 className="text-lg font-semibold">План участка</h2>
+                    <p className="text-sm text-muted-foreground">
+                      {selectedPlanIds.size === 0
+                        ? "Все актуальные задания участка"
+                        : `Выбрано планов: ${selectedPlanIds.size}`}
+                    </p>
                   </div>
                   <SectionTasksBoard
                     key={sectionId}
-                    tasks={displayedTasks}
-                    total={displayedTasks.length}
+                    toolbar={printButton}
+                    tasks={planBoardTasks}
+                    total={planBoardTasks.length}
                     isLoading={boardPending || selectedCompositionsLoading}
                     mode={sectionContentMode === "plan" ? { active: true, waiting: true, completed: true } : viewMode}
                     onModeChange={setViewMode}
@@ -1248,7 +1259,7 @@ export function SectionsTasksPage() {
                     limit={boardLimit}
                     setLimit={setBoardLimit}
                     totalPages={1}
-                    rangeLabel={`${displayedTasks.length} заданий`}
+                    rangeLabel={`${planBoardTasks.length} заданий`}
                     onServerQueryChange={handleBoardServerQueryChange}
                   />
                 </div>
@@ -1318,7 +1329,7 @@ export function SectionsTasksPage() {
         sectionName={selectedSection?.name || "—"}
         sectionCode={selectedSection?.code || null}
         hasPackaging={selectedSection?.has_packaging}
-        tasks={displayedTasks}
+        tasks={sectionContentMode === "plan" ? planBoardTasks : displayedTasks}
         availableOperations={board?.available_operations || []}
       />
       {/* Daily plans are created inline in the plans panel. */}
