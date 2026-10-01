@@ -12,7 +12,10 @@
  * Владение прогоном осталось за этим скриптом, но разграничено так:
  *  * `node_modules/.e2e-run/current.lock` — **внутри репозитория**: отчёт
  *    Playwright, коллекция браузеров и `test-results` у дерева одни, второй
- *    прогон в том же worktree их бы перетёр;
+ *    прогон в том же worktree их бы перетёр. Логика лока — в `run-lock.mjs`;
+ *    держатель, чей процесс мёртв (`taskkill`, отмена задачи, падение ОС),
+ *    снимается сразу, а его клон БД сносится этим же скриптом — иначе убитый
+ *    прогон держал бы дерево до `E2E_LOCK_STALE_MS` (40 мин);
  *  * счётный семафор `run-slots.mjs` — **на машине**: не больше
  *    `E2E_MAX_PARALLEL_RUNS` (по умолчанию 2) стендов одновременно, независимо
  *    от числа worktree. Каталог слотов вне репозитория, поэтому виден соседям.
@@ -58,15 +61,23 @@ import {
   releaseSlot,
   resolveMaxRuns,
 } from "./run-slots.mjs";
+import {
+  DEFAULT_LOCK_STALE_MS,
+  DEFAULT_LOCK_TIMEOUT_MS,
+  lockFileIn,
+  readLock,
+  reclaimReason,
+  releaseLock,
+  tryAcquireLock,
+} from "./run-lock.mjs";
 
 const E2E_DIR = path.dirname(fileURLToPath(import.meta.url));
 const FRONTEND_DIR = path.resolve(E2E_DIR, "..");
 const REPO_ROOT = path.resolve(FRONTEND_DIR, "..");
-const LOCK_DIR = path.join(FRONTEND_DIR, "node_modules", ".e2e-run");
-const LOCK_FILE = path.join(LOCK_DIR, "current.lock");
+const LOCK_FILE = lockFileIn(FRONTEND_DIR);
 
-const WAIT_TIMEOUT_MS = Number(process.env.E2E_LOCK_TIMEOUT_MS ?? 30 * 60_000);
-const STALE_MS = Number(process.env.E2E_LOCK_STALE_MS ?? 40 * 60_000);
+const WAIT_TIMEOUT_MS = Number(process.env.E2E_LOCK_TIMEOUT_MS ?? DEFAULT_LOCK_TIMEOUT_MS);
+const STALE_MS = Number(process.env.E2E_LOCK_STALE_MS ?? DEFAULT_LOCK_STALE_MS);
 const POLL_MS = 3_000;
 const SLOT_DIR = process.env.E2E_SEMAPHORE_DIR ?? defaultSlotsDir();
 const MAX_RUNS = resolveMaxRuns();
@@ -101,40 +112,33 @@ const uiMode = extraArgs.some(
 
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 
-/** Пишет лок эксклюзивно; false — лок уже держит кто-то другой. */
-function tryAcquire(payload) {
-  fs.mkdirSync(LOCK_DIR, { recursive: true });
-  try {
-    // "wx" — атомарно: файл создаётся, только если его не было.
-    fs.writeFileSync(LOCK_FILE, JSON.stringify(payload), { flag: "wx" });
-    return true;
-  } catch (err) {
-    if (err.code === "EEXIST") return false;
-    throw err;
-  }
-}
+/** id клона БД, оставшегося от убитого прогона в этом дереве (см. `acquire`). */
+let abandonedRunId = null;
 
-function readLock() {
-  try {
-    return JSON.parse(fs.readFileSync(LOCK_FILE, "utf8"));
-  } catch {
-    return null;
-  }
-}
-
-/** Ждёт свободный лок, показывая, кто держит прошлый. */
+/**
+ * Ждёт свободный лок дерева, показывая, кто держит прошлый.
+ *
+ * Мёртвого держателя (`taskkill`, отмена задачи, падение ОС) снимаем сразу:
+ * иначе убитый прогон держит дерево до `STALE_MS` (40 мин), а следующий
+ * прогон всё это время ждёт «стек занят» и в итоге падает по таймауту (#281).
+ * Его клон БД запоминаем — снести его можно только у мёртвого держателя.
+ */
 async function acquire() {
   const started = Date.now();
   let announced = false;
   for (;;) {
-    const holder = readLock();
+    const holder = readLock(LOCK_FILE);
     const age = holder ? Date.now() - (holder.at ?? Date.now()) : Infinity;
-    if (holder && age > STALE_MS) {
-      console.log(`[e2e:run] лок брошен (${Math.round(age / 60_000)} мин), подбираю себе`);
-      fs.rmSync(LOCK_FILE, { force: true });
+    const reason = reclaimReason(holder, { staleMs: STALE_MS });
+    if (reason) {
+      console.log(`[e2e:run] лок прогона: ${reason.message}`);
+      // Клон сносим только у мёртвого держателя: живой долгий прогон потеряет
+      // лок, но свои данные не отдаст.
+      if (reason.dead) abandonedRunId = holder?.runId ?? null;
+      releaseLock(LOCK_FILE);
       continue;
     }
-    if (tryAcquire({ tier: TIER, pid: process.pid, at: Date.now() })) return;
+    if (tryAcquireLock(LOCK_FILE, { tier: TIER, pid: process.pid, at: Date.now(), runId })) return;
     if (!announced) {
       console.log(
         `[e2e:run] ярус ${TIER} ждёт: стек занят прогоном яруса ${holder?.tier ?? "?"} ` +
@@ -153,7 +157,7 @@ async function acquire() {
 }
 
 function release() {
-  fs.rmSync(LOCK_FILE, { force: true });
+  releaseLock(LOCK_FILE);
 }
 
 // Прогон: id клона БД, его env-файл и занятый слот семафора. Уборка в
@@ -163,28 +167,35 @@ let runEnvFile = null;
 let slot = null;
 let finalized = false;
 
+/** Сносит клон прогона и его env-файл (`db:e2e:drop`, идемпотентно). */
+function dropRunClone(id) {
+  // Скрипт `db:e2e:drop` объявлен в корневом package.json, а не во
+  // frontend-овском: звать его надо из корня репозитория.
+  const drop = spawnSync("npm", ["run", "db:e2e:drop"], {
+    cwd: REPO_ROOT,
+    encoding: "utf8",
+    shell: true,
+    maxBuffer: 8 * 1024 * 1024,
+    env: { ...process.env, E2E_RUN_ID: id },
+  });
+  if ((drop.status ?? 1) !== 0) {
+    console.log(
+      `[e2e:run] клон ${id}: уборка не прошла (код ${drop.status}) — ` +
+        "снесётся следующим prep по возрасту:\n" +
+        `${drop.stdout ?? ""}${drop.stderr ?? ""}`.slice(-800),
+    );
+    return false;
+  }
+  return true;
+}
+
 function finalize() {
   if (finalized) return;
   finalized = true;
   if (runEnvFile) {
     // Клон нужен ровно на время прогона: сносим его здесь же, пока держим
     // слот. Не вышло — клон уберёт `drop --stale-run-minutes` следующего prep.
-    const drop = spawnSync("npm", ["run", "db:e2e:drop"], {
-      // Скрипт `db:e2e:drop` объявлен в корневом package.json, а не во
-      // frontend-овском: звать его надо из корня репозитория.
-      cwd: REPO_ROOT,
-      encoding: "utf8",
-      shell: true,
-      maxBuffer: 8 * 1024 * 1024,
-      env: { ...process.env, E2E_RUN_ID: runId },
-    });
-    if ((drop.status ?? 1) !== 0) {
-      console.log(
-        `[e2e:run] клон ${runId}: уборка не прошла (код ${drop.status}) — ` +
-          "снесётся следующим prep по возрасту:\n" +
-          `${drop.stdout ?? ""}${drop.stderr ?? ""}`.slice(-800),
-      );
-    }
+    dropRunClone(runId);
   }
   releaseSlot(slot);
   slot = null;
@@ -200,6 +211,14 @@ for (const sig of ["SIGINT", "SIGTERM"]) {
 }
 
 await acquire();
+if (abandonedRunId) {
+  console.log(
+    `[e2e:run] прошлый прогон в этом дереве (${abandonedRunId}) не убрал за собой — ` +
+      "сношу его клон, пока держу лок",
+  );
+  dropRunClone(abandonedRunId);
+  abandonedRunId = null;
+}
 slot = await acquireSlot({
   dir: SLOT_DIR,
   max: MAX_RUNS,
