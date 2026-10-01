@@ -34,7 +34,7 @@ BACKEND_DIR = Path(__file__).resolve().parent.parent
 if str(BACKEND_DIR) not in sys.path:
     sys.path.insert(0, str(BACKEND_DIR))
 
-from scripts.check_canon_drift import describe_target, env_file_problem  # noqa: E402
+from scripts.check_canon_drift import describe_target, env_file_problem
 
 
 async def run_cleanup(session, *, execute: bool) -> int:

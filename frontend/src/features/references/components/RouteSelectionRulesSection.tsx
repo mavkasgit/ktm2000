@@ -527,6 +527,10 @@ export function RouteSelectionRulesSection({ refreshKey }: Props) {
   const [deletingRuleId, setDeletingRuleId] = useState<number | null>(null);
   const [scope, setScope] = useState<RuleScope>("global");
   const [selectedProfileId, setSelectedProfileId] = useState<number | null>(null);
+  // Пустой `rules` — это три разных состояния: «ещё грузим», «правил нет» и
+  // «загрузка упала». Менять выбор оператора можно только во втором, поэтому
+  // авто-свитч таба ждёт успешной загрузки (ADR-0060 п.3).
+  const rulesLoadedRef = useRef(false);
 
   const [profileDialogOpen, setProfileDialogOpen] = useState(false);
   const [editingProfile, setEditingProfile] = useState<RoutesAPI.RouteRuleProfile | null>(null);
@@ -626,6 +630,7 @@ export function RouteSelectionRulesSection({ refreshKey }: Props) {
   }, []);
 
   const loadRules = useCallback(async () => {
+    rulesLoadedRef.current = false;
     try {
       const params: { scope: "global" | "profile" | "all"; profile_id?: number } = {
         scope: scope === "global" ? "global" : "profile",
@@ -634,6 +639,7 @@ export function RouteSelectionRulesSection({ refreshKey }: Props) {
         params.profile_id = selectedProfileId;
       }
       const loadedRules = await RoutesAPI.listRouteSelectionRules(params);
+      rulesLoadedRef.current = true;
       setRules(loadedRules);
     } catch (e) {
       toast({ variant: "destructive", title: "Ошибка загрузки правил", description: getErrorMessage(e) });
@@ -702,13 +708,14 @@ export function RouteSelectionRulesSection({ refreshKey }: Props) {
   }, [loadRules, refreshKey]);
 
   useEffect(() => {
-    if (!hasAutoSwitchedRef.current && scope === "global" && rules.length === 0 && profiles.length > 0) {
-      const firstWithRules = profiles.find((p) => p.is_active);
-      if (firstWithRules) {
-        hasAutoSwitchedRef.current = true;
-        setScope("profile");
-        setSelectedProfileId(firstWithRules.id);
-      }
+    if (hasAutoSwitchedRef.current) return;
+    if (!rulesLoadedRef.current) return;
+    if (scope !== "global" || rules.length > 0 || profiles.length === 0) return;
+    const firstWithRules = profiles.find((p) => p.is_active);
+    if (firstWithRules) {
+      hasAutoSwitchedRef.current = true;
+      setScope("profile");
+      setSelectedProfileId(firstWithRules.id);
     }
   }, [rules, profiles, scope]);
 

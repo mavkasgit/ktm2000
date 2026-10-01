@@ -371,7 +371,10 @@ def _merged_cell_anchors(sheet: Any) -> dict[tuple[int, int], int]:
     """
     try:
         ranges = sheet.merged_cell_ranges
-    except Exception:  # pragma: no cover - формат без merged-метаданных
+    except AttributeError:  # pragma: no cover - объект листа без merged-API
+        # calamine `CalamineSheet.merged_cell_ranges` объявлен всегда и для
+        # неподдерживаемых форматов возвращает `None`; отсутствовать атрибут
+        # может только у чужого объекта листа (моки/другие парсеры).
         return {}
     anchors: dict[tuple[int, int], int] = {}
     for cell_range in ranges or []:
@@ -792,13 +795,16 @@ def _parse_date(value: Any) -> date | None:
     text = str(value).strip()
     for fmt in ("%Y-%m-%d", "%d.%m.%Y"):
         try:
-            return datetime.strptime(text, fmt).date()
+            # Форматы без времени и пояса — `DTZ007` здесь ложное срабатывание:
+            # из строки берётся только календарная дата (`.date()`), aware-разбор
+            # добавить нечем и незачем.
+            return datetime.strptime(text, fmt).date()  # noqa: DTZ007 — см. выше
         except ValueError:
             continue
     return None
 
 
-def _excel_date_to_date(serial: int | float) -> date:
+def _excel_date_to_date(serial: float) -> date:
     return date(1899, 12, 30) + timedelta(days=int(serial))
 
 

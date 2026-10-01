@@ -76,7 +76,9 @@ async def break_glass_login(
                 password.encode("utf-8"),
                 settings.BREAK_GLASS_PASSWORD_HASH.encode("utf-8"),
             )
-        except Exception:
+        except (ValueError, TypeError):
+            # Малформед-хэш (`ValueError` от bcrypt) или неверные типы
+            # (`TypeError`) — трактуем как неверный пароль, не 500.
             password_ok = False
 
     if not password_ok:

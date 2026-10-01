@@ -20,8 +20,8 @@ __all__ = [
     "get_section_board",
     "get_section_daily_stats",
     "get_sections_summary",
-    "get_warehouse_remainders",
     "get_task_details",
+    "get_warehouse_remainders",
     "list_entity_attachments",
     "list_entity_comments",
 ]

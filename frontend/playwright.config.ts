@@ -187,8 +187,11 @@ export default defineConfig({
   //  3. `ui-narrow` — узкие доменные сценарии (пила, ЮП-460): долгие,
   //                   зависят от всего предыдущего. Запускаются последними.
   //
-  // Фильтр `--project=ui-e2e` подтягивает зависимости автоматически, поэтому
-  // `test:e2e:ui` остаётся шлюзом «прогнать @ui зелёным».
+  // `dependencies` работают на полном прогоне (`run-tier.mjs all`, он же
+  // `test:e2e`). Ярусные скрипты зовут `run-tier.mjs` с `--no-deps`, поэтому
+  // `test:e2e:ui` — ровно проект `ui-e2e` без smoke, а `test:e2e:ui:narrow` —
+  // ровно `ui-narrow` (см. frontend/e2e/AGENTS.md, «Слои тестов и порядок
+  // прогона»).
   projects: [
     {
       name: "smoke",

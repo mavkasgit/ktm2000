@@ -139,4 +139,9 @@ async def health_check() -> dict[str, str]:
             await session.execute(text("SELECT 1"))
         return {"status": "ok", "db": "connected"}
     except Exception:
+        # Проба живости: любой сбой (БД, конфиг DSN, сеть) должен вернуть
+        # тело, а не 500 — иначе контейнерный healthcheck не отличит
+        # «нездоров» от «процесс мёртв». Широкий перехват — контракт endpoint'а,
+        # но трейс логируем, чтобы не гасить причину.
+        logger.warning("Health check: БД недоступна", exc_info=True)
         return {"status": "ok", "db": "disconnected"}

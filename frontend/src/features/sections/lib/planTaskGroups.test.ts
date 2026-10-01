@@ -4,8 +4,8 @@ import { buildPlanTaskGroups } from "./planTaskGroups";
 import {
   packagingBreakdown,
   packagingBreakdownLabel,
+  taskOperations,
   taskPackaging,
-  taskPrimaryOperation,
 } from "./taskView";
 
 function makeTask(overrides: Partial<SectionBoardTask> = {}): SectionBoardTask {
@@ -174,7 +174,7 @@ describe("buildPlanTaskGroups", () => {
 });
 
 describe("колонки «Операция» и «Упаковка» доски", () => {
-  it("показывает в «Операции» первую операцию, а упаковку — отдельно", () => {
+  it("показывает в «Операции» операции участка, а упаковку — отдельно", () => {
     const task = makeTask({
       operation_code: "ANOD_05",
       operation_name: "Чёрный",
@@ -182,8 +182,20 @@ describe("колонки «Операция» и «Упаковка» доски
       operation_names: ["Чёрный", "Спанбонд"],
     });
 
-    expect(taskPrimaryOperation(task)).toBe("Чёрный");
+    // Упаковочная операция в список «Операции» не входит: её несёт своя колонка.
+    expect(taskOperations(task)).toEqual(["Чёрный"]);
     expect(taskPackaging(task)).toBe("Спанбонд");
+  });
+
+  it("перечисляет несколько операций участка по порядку", () => {
+    const task = makeTask({
+      operation_code: "PRESS_WINDOW",
+      operation_name: "Окно",
+      operation_codes: ["PRESS_WINDOW", "PRESS_COMB", "PACK_STRETCH"],
+      operation_names: ["Окно", "Гребенка", "Стрейч"],
+    });
+
+    expect(taskOperations(task)).toEqual(["Окно", "Гребенка"]);
   });
 
   it("разбивает упаковку слитой строки по видам с количеством", () => {

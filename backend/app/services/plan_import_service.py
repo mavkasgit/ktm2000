@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import logging
 import math
 from collections import Counter
 from datetime import UTC, datetime
@@ -7,6 +8,7 @@ from decimal import Decimal
 from pathlib import Path
 
 from sqlalchemy import func, select
+from sqlalchemy.exc import SQLAlchemyError
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import selectinload
 
@@ -76,6 +78,8 @@ from app.services.route_selection import (
 )
 from app.services.route_signature import auto_route_code, route_signature_conflicts
 from app.services.route_storage_classifier import STAGE_KIND_TRANSIT, is_storage_section
+
+logger = logging.getLogger(__name__)
 
 #: Каталог кодов строк импорта плана (спека docs/plan-import-spec.md §3, карта #157).
 #: Статус строки (правило ниже, plan_import_row_status): есть errors → invalid,
@@ -528,7 +532,7 @@ async def _get_or_create_import_file(
         return existing
 
     storage_dir = Path(settings.IMPORT_STORAGE_DIR)
-    storage_dir.mkdir(parents=True, exist_ok=True)
+    storage_dir.mkdir(parents=True, exist_ok=True)  # noqa: ASYNC240 — #267
     stored_path = storage_dir / f"{file_hash}{extension}"
     stored_path.write_bytes(content)
 
@@ -572,7 +576,8 @@ def _sku_lookup_keys(sku: str) -> set[str]:
         recovered = raw.encode("latin-1").decode("cp1251")
         keys.add(recovered.lower())
         keys.add(_normalize_sku(recovered))
-    except Exception:
+    except UnicodeError:
+        # Строка содержит символы вне Latin-1 — восстановление невозможно.
         pass
     return {k for k in keys if k}
 
@@ -614,7 +619,9 @@ async def _make_change_items(
     for prod in products_by_sku.values():
         try:
             product_is_active_cache[prod.id] = prod.is_active
-        except Exception:
+        except SQLAlchemyError:
+            # Объект удалён/просрочен, либо autoflush при ленивой подгрузке
+            # упал — считаем продукт неактивным, строка получит product_inactive.
             product_is_active_cache[prod.id] = False
     
     # Маршруты, уже найденные или созданные в этом импорте: код -> route_id.
@@ -1095,11 +1102,14 @@ async def _make_change_items(
                         after_data["route_assigned_at"] = datetime.now(UTC).isoformat()
                         after_data["route_match_quality"] = PlanPositionRouteMatchQuality.exact.value
             except Exception:
-                pass  # Silently ignore route building errors for preview
+                # Предпросмотр не должен падать из-за сборки маршрута: те же
+                # ошибки строка покажет после применения (путь записи ниже
+                # логирует их явно), а здесь достаточно debug-трассировки.
+                logger.debug(
+                    "Preview route build failed for row %s", row.source_sku, exc_info=True
+                )
         
         # Build dynamic route and persist as real ProductionRoute (for real import, not preview)
-        import logging
-        logger = logging.getLogger(__name__)
         logger.info(f"Route persistence check: rule_profile_id={rule_profile_id}, change_set_id={change_set_id}")
         
         if batch_profile is not None and change_set_id != 0:
@@ -1115,8 +1125,6 @@ async def _make_change_items(
                     )
                     
                     # Log route building result
-                    import logging
-                    logger = logging.getLogger(__name__)
                     logger.info(f"Built route: name={built_route.name}, error={built_route.error}, steps_count={len(built_route.steps)}")
                     if len(built_route.steps) == 0:
                         logger.warning(f"Built route has NO STEPS! route_sections={built_route.route_sections}, excluded={built_route.excluded_sections}")
@@ -1132,8 +1140,6 @@ async def _make_change_items(
                         route_code = auto_route_code(built_route.signature)
                         cache_key = route_code or built_route.name
 
-                        import logging
-                        logger = logging.getLogger(__name__)
                         logger.info(f"Route cache key: code={route_code}")
 
                         # Нашёлся маршрут, а тождество — нет (#215).
@@ -1208,8 +1214,6 @@ async def _make_change_items(
                                                 )
                                                 sections_by_code_cache[step.section_code] = section
                                             if section is None:
-                                                import logging
-                                                logger = logging.getLogger(__name__)
                                                 logger.warning(f"Section not found for code: {step.section_code}")
                                                 continue
 
@@ -1295,7 +1299,7 @@ async def _make_change_items(
 
                                         await db.flush()
                                         steps_created_successfully = True
-                                except Exception as step_error:
+                                except Exception:
                                     # Savepoint is automatically rolled back
                                     # Check if stages exist (maybe created by concurrent process)
                                     existing_stages_count = await db.scalar(
@@ -1306,9 +1310,7 @@ async def _make_change_items(
                                     if existing_stages_count > 0:
                                         steps_created_successfully = True
                                     else:
-                                        import logging
-                                        logger = logging.getLogger(__name__)
-                                        logger.error(f"Failed to create stages for route {built_route.name}: {step_error}", exc_info=True)
+                                        logger.exception(f"Failed to create stages for route {built_route.name}")
                                         raise
 
                                 if steps_created_successfully:
@@ -1338,13 +1340,10 @@ async def _make_change_items(
                             after_data["route_match_quality"] = PlanPositionRouteMatchQuality.exact.value
             except Exception as route_error:
                 # Log route building errors but don't fail the entire import
-                import logging
-                logger = logging.getLogger(__name__)
                 logger.warning(f"Route building failed for row {row.source_sku}: {route_error}", exc_info=True)
         
         # Log final route_id
-        import logging
-        logging.getLogger(__name__).info(f"Final route_id for row {row.source_sku}: {after_data.get('route_id')}")
+        logger.info(f"Final route_id for row {row.source_sku}: {after_data.get('route_id')}")
 
         # Detect duplicate within this import using fingerprint (full row match)
         fp = row.source_fingerprint

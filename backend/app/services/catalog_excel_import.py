@@ -7,6 +7,7 @@
 
 from __future__ import annotations
 
+import math
 from dataclasses import dataclass, field
 from decimal import Decimal, InvalidOperation
 from io import BytesIO
@@ -82,7 +83,9 @@ def _parse_number(value: Any) -> float | None:
         return None
     if isinstance(value, (int, float)):
         number = float(value)
-        return number if number == number and number not in (float("inf"), float("-inf")) else None
+        if math.isnan(number) or math.isinf(number):
+            return None
+        return number
     text = str(value).replace(" ", "").replace(",", ".").strip()
     if not text:
         return None
@@ -99,7 +102,7 @@ def _parse_int(value: Any) -> int | None:
         return None
     if abs(number - round(number)) > 1e-9:
         return None
-    return int(round(number))
+    return round(number)
 
 
 def _parse_bool(value: Any) -> bool | None:

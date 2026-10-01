@@ -5,6 +5,15 @@ from sqlalchemy.orm import Mapped, mapped_column, relationship
 
 from app.models.base import Base
 
+# Префикс упаковочных операций. Колонка «Упаковка» (доска участка и лист
+# печати) применима только к участкам, у которых такая операция есть в
+# справочнике (`app/seeds/sections.py`: ANODIZING — PACK_STRETCH/PACK_SPUNBOND,
+# PACKING — PACK/PACK_GLUE/PACK_LENS; у SAWING только SAW*). Тот же префикс
+# считает значение ячейки на фронте (`lib/taskView.ts`,
+# PACKAGING_OPERATION_PREFIX): разойдись они — колонка либо исчезнет вместе
+# с данными, либо останется на участке, где упаковки не бывает.
+PACKAGING_OPERATION_PREFIX = "PACK"
+
 
 class Section(Base):
     __tablename__ = "sections"
@@ -47,4 +56,18 @@ class Section(Base):
     @property
     def spg_id(self) -> int | None:
         return self.spg_links[0].id if self.spg_links else None
+
+    @property
+    def has_packaging(self) -> bool:
+        """Есть ли у участка упаковочные операции (префикс — константа выше).
+
+        Читается по `operations`: relationship объявлен `lazy="selectin"`,
+        то есть операции уже загружены вместе с участком — отдельного запроса
+        и скрытого lazy-load здесь нет. Отдаётся фронту в `SectionOut`; по
+        нему доска участка и лист печати скрывают колонку «Упаковка».
+        """
+        return any(
+            (operation.operation_code or "").startswith(PACKAGING_OPERATION_PREFIX)
+            for operation in self.operations
+        )
 

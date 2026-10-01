@@ -620,7 +620,7 @@ from app.services.excel_import import _excel_date_to_date, _parse_date
 
 def test_date_normalization() -> None:
     assert _parse_date(date(2026, 5, 2)) == date(2026, 5, 2)
-    assert _parse_date(datetime(2026, 5, 2, 14, 30)) == date(2026, 5, 2)
+    assert _parse_date(datetime(2026, 5, 2, 14, 30)) == date(2026, 5, 2)  # noqa: DTZ001 — наивный datetime как значение ячейки Excel: парсер нормализует его в дату
     assert _parse_date("2026-05-02") == date(2026, 5, 2)
     assert _parse_date("02.05.2026") == date(2026, 5, 2)
     assert _excel_date_to_date(1) == date(1899, 12, 31)

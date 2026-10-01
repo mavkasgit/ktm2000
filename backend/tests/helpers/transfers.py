@@ -21,7 +21,7 @@
 from __future__ import annotations
 
 from collections.abc import Sequence
-from datetime import date, datetime
+from datetime import date
 from decimal import Decimal
 
 from app.models import Product, ProductType, Section, User
@@ -109,7 +109,7 @@ async def _make_two_ghp_setup(
 
     plan = ProductionPlan(
         plan_no=f"P-{sku}", name="p", status=ProductionPlanStatus.approved,
-        period_start=datetime(2026, 5, 1), period_end=datetime(2026, 5, 31),
+        period_start=date(2026, 5, 1), period_end=date(2026, 5, 31),
     )
     session.add(plan)
     await session.flush()

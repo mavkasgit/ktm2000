@@ -169,3 +169,99 @@ describe("SectionTasksBoard: блок «В ожидании»", () => {
     expect(html).toContain("Выделить все (2)");
   });
 });
+
+describe("SectionTasksBoard: колонка «Операция» несёт размеры, а не имя операции", () => {
+  const boardTask = (overrides: Partial<SectionBoardTask> = {}) =>
+    makeTask({
+      product_sku: "SKU-SAW",
+      operation_code: "SAW",
+      operation_name: "Резка на пиле",
+      operation_codes: ["SAW"],
+      operation_names: ["Резка на пиле"],
+      ...overrides,
+    });
+
+  it("без реальной резки показывает один итоговый размер", () => {
+    const html = renderBoard([
+      boardTask({ transforms_dimensions: true, cut_layout: { input: "2,5 м", outputs: [] } }),
+    ]);
+    const table = html.slice(html.indexOf("<table"), html.indexOf("</table>"));
+
+    expect(table.split("2,5 м").length - 1).toBe(1);
+    expect(table).not.toContain("Резка на пиле");
+  });
+
+  it("с реальной резкой показывает вход, выходы и их количество", () => {
+    const html = renderBoard([
+      boardTask({
+        transforms_dimensions: true,
+        cut_layout: { input: "2,75", outputs: ["0,9×50", "1,35×100"] },
+      }),
+    ]);
+    const table = html.slice(html.indexOf("<table"), html.indexOf("</table>"));
+
+    expect(table).toContain("2,75 →");
+    expect(table).toContain("0,9×50");
+    expect(table).toContain("1,35×100");
+    expect(table).not.toContain("Резка на пиле");
+  });
+
+  it("нетрансформирующее задание несёт операции участка, а не размер", () => {
+    const html = renderBoard([
+      boardTask({
+        operation_code: "ANOD_05",
+        operation_name: "Чёрный",
+        operation_codes: ["ANOD_05", "PACK_SPUNBOND"],
+        operation_names: ["Чёрный", "Спанбонд"],
+        dimensions: { length_mm: 2700 },
+      }),
+    ]);
+    const table = html.slice(html.indexOf("<table"), html.indexOf("</table>"));
+
+    // Цвет — операция участка, упаковка уходит в свою колонку, размер остаётся
+    // только в «Размере».
+    expect(table).toContain("Чёрный");
+    expect(table.split("2,7 м").length - 1).toBe(1);
+  });
+
+  it("несколько операций участка идут списком", () => {
+    const html = renderBoard([
+      boardTask({
+        operation_code: "PRESS_WINDOW",
+        operation_name: "Окно",
+        operation_codes: ["PRESS_WINDOW", "PRESS_COMB", "PACK_STRETCH"],
+        operation_names: ["Окно", "Гребенка", "Стрейч"],
+      }),
+    ]);
+    const table = html.slice(html.indexOf("<table"), html.indexOf("</table>"));
+
+    expect(table).toContain("Окно · Гребенка");
+  });
+
+  it("прогресс по выходам на доске не рисуется", () => {
+    const html = renderBoard([
+      boardTask({
+        transforms_dimensions: true,
+        cut_layout: { input: "2,5 м", outputs: [] },
+        outputs_progress: [
+          { dimensions: { length_mm: 2500 }, quantity: "700", produced_quantity: "0" },
+        ],
+      }),
+    ]);
+    const table = html.slice(html.indexOf("<table"), html.indexOf("</table>"));
+
+    expect(table).not.toContain("0/700");
+  });
+
+  it("свёрнутая группа несёт тот же ярлык в шапке", () => {
+    const html = renderBoard([
+      boardTask({ id: 1, transforms_dimensions: true, cut_layout: { input: "2,5 м", outputs: [] } }),
+      boardTask({ id: 2, transforms_dimensions: true, cut_layout: { input: "2,5 м", outputs: [] } }),
+    ]);
+    const table = html.slice(html.indexOf("<table"), html.indexOf("</table>"));
+
+    // Группы по умолчанию свёрнуты: видна только шапка — и несёт тот же размер.
+    expect(table.split("2,5 м").length - 1).toBe(1);
+    expect(table).not.toContain("Резка на пиле");
+  });
+});

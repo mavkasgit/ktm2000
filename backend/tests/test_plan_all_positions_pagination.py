@@ -505,3 +505,90 @@ async def test_all_positions_rejects_unknown_field_and_direction(client, session
         "/api/production-plans/all-positions?sort=status:sideways"
     )
     assert bad_direction.status_code == 400, bad_direction.text
+
+
+@pytest.mark.asyncio
+async def test_all_positions_finds_position_by_id_beyond_current_page(
+    client, session: AsyncSession
+):
+    """Тикет #270: переход к позиции по дублю догружает цель по id.
+
+    Цель может лежать вне текущей страницы (и под текущим фильтром её нет) —
+    `plan_position_id` должен достать её независимо от пагинации.
+    """
+    _plan, positions = await _seed_planning_positions(session, count=60, sku_prefix="PAGE-JUMP")
+    target = positions[-1]
+
+    # Без фильтра цель на третьей странице и в дефолтную первую не попадает.
+    default_page = await client.get("/api/production-plans/all-positions")
+    assert default_page.status_code == 200, default_page.text
+    assert all(p["id"] != target.id for p in default_page.json()["positions"])
+
+    resp = await client.get(
+        f"/api/production-plans/all-positions?plan_position_id={target.id}"
+    )
+    assert resp.status_code == 200, resp.text
+    body = resp.json()
+    assert body["total"] == 1
+    assert [p["id"] for p in body["positions"]] == [target.id]
+    assert body["positions"][0]["source_sku"] == target.source_sku
+
+
+@pytest.mark.asyncio
+async def test_all_positions_unknown_plan_position_id_returns_empty(
+    client, session: AsyncSession
+):
+    """Неизвестный id — пустой ответ, а не молчаливая первая страница."""
+    _plan, positions = await _seed_planning_positions(session, count=3, sku_prefix="PAGE-MISS")
+    missing = max(p.id for p in positions) + 10_000
+
+    resp = await client.get(
+        f"/api/production-plans/all-positions?plan_position_id={missing}"
+    )
+    assert resp.status_code == 200, resp.text
+    body = resp.json()
+    assert body["total"] == 0
+    assert body["positions"] == []
+
+
+@pytest.mark.asyncio
+async def test_all_positions_plan_position_id_combines_with_other_filters(
+    client, session: AsyncSession
+):
+    """id-фильтр аддитивен: он сужает выборку, а не подменяет остальные фильтры."""
+    _plan, positions = await _seed_planning_positions(session, count=5, sku_prefix="PAGE-COMB")
+    target, other = positions[2], positions[0]
+
+    matched = await client.get(
+        "/api/production-plans/all-positions"
+        f"?plan_position_id={target.id}&search={target.source_sku}"
+    )
+    assert matched.status_code == 200, matched.text
+    assert [p["id"] for p in matched.json()["positions"]] == [target.id]
+
+    # Тот же id, но чужой поиск: условия комбинируются по «И» — пусто.
+    mismatched = await client.get(
+        "/api/production-plans/all-positions"
+        f"?plan_position_id={target.id}&search={other.source_sku}"
+    )
+    assert mismatched.status_code == 200, mismatched.text
+    assert mismatched.json()["positions"] == []
+
+
+@pytest.mark.asyncio
+async def test_all_positions_id_filter_respects_planning_stage_gate(
+    client, session: AsyncSession
+):
+    """id не пробивает гейт «только планируемые статусы»: чужая страница — не повод показать позицию вне планирования."""
+    _plan, positions = await _seed_planning_positions(
+        session,
+        count=1,
+        sku_prefix="PAGE-GATE",
+        status=PlanPositionStatus.approved,
+    )
+
+    resp = await client.get(
+        f"/api/production-plans/all-positions?plan_position_id={positions[0].id}"
+    )
+    assert resp.status_code == 200, resp.text
+    assert resp.json()["positions"] == []

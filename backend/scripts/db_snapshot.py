@@ -63,7 +63,9 @@ def _credentials() -> tuple[str, str]:
 def dump(label: str) -> Path:
     """Снять слепок БД в `data/backups/snapshots/<label>-<timestamp>.sql`."""
     _assert_not_production("dump")
-    stamp = datetime.now().strftime("%Y%m%d-%H%M%S")
+    # Локальное время — осознанно: snapshots — dev-артефакт, имя читает человек
+    # в своём поясе, файлы не сортируются по имени (порядок задаёт label).
+    stamp = datetime.now().strftime("%Y%m%d-%H%M%S")  # noqa: DTZ005
     name = f"{label}-{stamp}"
     user, database = _credentials()
     SNAPSHOT_DIR.mkdir(parents=True, exist_ok=True)
@@ -85,7 +87,7 @@ def dump(label: str) -> Path:
             [
                 f"name={name}",
                 f"label={label}",
-                f"created_at={datetime.now().isoformat(timespec='seconds')}",
+                f"created_at={datetime.now().isoformat(timespec='seconds')}",  # noqa: DTZ005 — см. комментарий в dump()
                 f"database={database}",
                 f"container={_container()}",
                 "",

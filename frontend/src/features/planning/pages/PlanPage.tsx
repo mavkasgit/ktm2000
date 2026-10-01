@@ -80,7 +80,9 @@ export function PlanPage() {
   const [detailPosition, setDetailPosition] = useState<PlanPositionOut | null>(null)
   const [detailOpen, setDetailOpen] = useState(false)
   const [wipStatsSku, setWipStatsSku] = useState<string | null>(null)
+  const [pendingScrollId, setPendingScrollId] = useState<number | null>(null)
   const tableScrollRef = useRef<HTMLDivElement>(null)
+  const ringTimerRef = useRef<number | null>(null)
 
   const openDetail = (pos: PlanPositionOut) => {
     setDetailPosition(pos)
@@ -633,21 +635,70 @@ export function PlanPage() {
     [searchQuery, bulkMode, exitBulkMode, filters.validation_status],
   )
 
+  // Переход к позиции по дублю (#270). Цель может быть не на текущей странице и
+  // не под текущим фильтром: сначала ищем в текущем списке, иначе догружаем её
+  // списочным эндпоинтом по точному id. Пустой ответ догрузки — тост, а не
+  // тишина. Скролл — после отрисовки строки (эффект по `positions`), а не по
+  // `setTimeout(0)`: строка цели могла ещё не приехать.
   const jumpToPosition = (positionId: number) => {
     setFilters(prev => ({ ...prev, status: "all" }))
-    const targetPosition = positions?.find((p) => p.id === positionId)
+    const targetPosition = positions.find((p) => p.id === positionId)
     if (targetPosition) {
-      setDetailPosition(targetPosition)
-      setDetailOpen(true)
+      openDetail(targetPosition)
+      setPendingScrollId(positionId)
+      return
     }
-    setTimeout(() => {
-      const row = document.getElementById(`plan-position-${positionId}`)
-      if (!row) return
-      row.scrollIntoView({ behavior: "smooth", block: "center" })
-      row.classList.add("ring-2", "ring-red-300")
-      setTimeout(() => row.classList.remove("ring-2", "ring-red-300"), 1800)
-    }, 0)
+    setPendingScrollId(null)
+    void (async () => {
+      try {
+        const loaded = await queryClient.fetchQuery({
+          queryKey: queryKeys.plan.allPositions({ plan_position_id: positionId }),
+          queryFn: () => allPlanPositions({ plan_position_id: positionId }),
+        })
+        const fetched = loaded.positions[0]
+        if (!fetched) {
+          toast({
+            title: "Позиция не найдена",
+            description: `Позиция #${positionId} не найдена в плане`,
+            variant: "destructive",
+          })
+          return
+        }
+        openDetail(fetched)
+        setPendingScrollId(positionId)
+      } catch (e) {
+        toast({
+          title: "Не удалось загрузить позицию",
+          description: getErrorMessage(e),
+          variant: "destructive",
+        })
+      }
+    })()
   }
+
+  // Прокрутка к строке цели после её отрисовки: ждём появления
+  // `plan-position-<id>` в DOM, а не одного тика. Если строка не на текущей
+  // странице, прокрутки не будет — карточка уже открыта, тишины нет.
+  useEffect(() => {
+    if (pendingScrollId === null) return
+    const row = document.getElementById(`plan-position-${pendingScrollId}`)
+    if (!row) return
+    setPendingScrollId(null)
+    row.scrollIntoView({ behavior: "smooth", block: "center" })
+    row.classList.add("ring-2", "ring-red-300")
+    if (ringTimerRef.current !== null) window.clearTimeout(ringTimerRef.current)
+    ringTimerRef.current = window.setTimeout(
+      () => row.classList.remove("ring-2", "ring-red-300"),
+      1800,
+    )
+  }, [positions, pendingScrollId])
+
+  useEffect(
+    () => () => {
+      if (ringTimerRef.current !== null) window.clearTimeout(ringTimerRef.current)
+    },
+    [],
+  )
 
   const detailData = useMemo(() => {
     if (!detailPosition) return null

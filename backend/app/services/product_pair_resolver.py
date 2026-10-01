@@ -78,7 +78,7 @@ class PairHangerValue:
     """Разрешённое N пары для длины позиции (аналог ``PositionHangerValue``)."""
 
     quantity_per_hanger: int | None
-    source: Literal["manual", "auto", None]
+    source: Literal["manual", "auto"] | None
     calc_error: bool = False
 
 

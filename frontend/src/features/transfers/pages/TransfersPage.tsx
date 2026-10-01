@@ -696,7 +696,16 @@ export function TransfersPage() {
     queryFn: getSpgList,
   });
 
-  const activeSpgId = showAllSpgs ? null : (spgId ?? spgs?.find((s) => s.is_active)?.id ?? null);
+  // Молчаливого фолбэка на первую активную ГХП нет: под плейсхолдером
+  // «Выберите ГХП» уезжали данные чужого выбора. Пустой выбор так и остаётся
+  // пустым — запросы по нему не идут (ADR-0060 п.3).
+  const activeSpgId = showAllSpgs ? null : spgId;
+
+  // Признак «запрос жив»: либо «Все ГХП», либо выбрана конкретная ГХП. Пока
+  // выбора нет, оба запроса выключены (`enabled`), а `isPending` у выключенного
+  // запроса не разрешается — гейт загрузки висел бы вечно. Это состояние экран
+  // показывает текстом, а не спиннером.
+  const spgScopeSelected = showAllSpgs || activeSpgId != null;
 
   const allSectionIds = useMemo(() => {
     if (!showAllSpgs) return new Set<number>();
@@ -767,7 +776,7 @@ export function TransfersPage() {
         spg_id: showAllSpgs ? undefined : activeSpgId,
         ...readyQueryParams,
       }),
-    enabled: showAllSpgs || activeSpgId != null,
+    enabled: spgScopeSelected,
     placeholderData: keepPreviousDataForScope<ReadyToTransferResponse>(
       (key) => key[1],
       showAllSpgs ? "all" : activeSpgId,
@@ -834,7 +843,7 @@ export function TransfersPage() {
         spg_id: showAllSpgs ? undefined : activeSpgId,
         ...historyQueryParams,
       }),
-    enabled: showAllSpgs || activeSpgId != null,
+    enabled: spgScopeSelected,
     placeholderData: keepPreviousDataForScope<TransferHistoryResponse>(
       (key) => key[1],
       showAllSpgs ? "all" : activeSpgId,
@@ -1194,7 +1203,11 @@ export function TransfersPage() {
           )}
         </CardHeader>
         <CardContent>
-          {isFirstRowsLoad(readyPending, readyItems) ? (
+          {!spgScopeSelected ? (
+            <div className="text-sm text-muted-foreground py-6 text-center">
+              Выберите ГХП, чтобы увидеть задания, готовые к передаче.
+            </div>
+          ) : isFirstRowsLoad(readyPending, readyItems) ? (
             <div className="text-sm text-muted-foreground py-4 text-center">Загрузка…</div>
           ) : readyTotal === 0 && !debouncedReadySearch.trim() && !hasReadyFiltersActive ? (
             <div className="text-sm text-muted-foreground py-6 text-center">
@@ -1356,7 +1369,11 @@ export function TransfersPage() {
             </div>
           </div>
           <div className="flex-1 overflow-auto p-4">
-            {isFirstRowsLoad(historyPending, historyItems) ? (
+            {!spgScopeSelected ? (
+              <div className="text-sm text-muted-foreground py-6 text-center">
+                Выберите ГХП, чтобы увидеть журнал передач.
+              </div>
+            ) : isFirstRowsLoad(historyPending, historyItems) ? (
               <div className="text-sm text-muted-foreground py-4 text-center">Загрузка…</div>
             ) : historyTotal === 0 && !hasHistoryFiltersActive ? (
               <div className="text-sm text-muted-foreground py-6 text-center">

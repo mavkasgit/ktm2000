@@ -48,9 +48,12 @@ import {
   getTaskViewCategory,
   isTaskFullyTransferred,
 } from "../lib/taskStatus";
-import { getTaskGroupHeaderState } from "../lib/taskView";
 import {
-  TaskExtras,
+  getTaskGroupHeaderState,
+  packagingBreakdownLabel,
+  taskOperations,
+} from "../lib/taskView";
+import {
   TaskStatusDot,
   buildTaskViewFields,
   getTaskCardClass,
@@ -61,8 +64,7 @@ import { TABLE_ROW_COMPACT, TABLE_ROW_DENSE } from "@/shared/lib/dataTableStyles
 import { actionReasonText } from "@/shared/lib/actionReasons";
 import { cn } from "@/shared/utils/cn";
 import { fmtQty } from "@/shared/lib/quantityFormat";
-import { packagingBreakdownLabel, taskPrimaryOperation } from "../lib/taskView";
-import { boardColumns } from "../lib/boardColumns";
+import { boardColumns, visibleBoardColumns } from "../lib/boardColumns";
 
 // ---------------------------------------------------------------------------
 // Экспорты для обратной совместимости
@@ -156,15 +158,6 @@ const ROW_CELL_CLASS = TABLE_ROW_DENSE.cell;
 const ROW_ACTION_BUTTON_CLASS = `${TABLE_ROW_DENSE.actionButton} transition-all hover:bg-accent/50`;
 const ROW_BADGE_CLASS = TABLE_ROW_DENSE.badge;
 const ROW_HEIGHT_PX = TABLE_ROW_DENSE.rowHeightPx;
-/**
- * Число колонок доски для полноширинных служебных строк («В ожидании»,
- * пустое состояние, распорки виртуализации).
- *
- * Считается от описания колонок, а не константой: забытое число оставляло
- * служебную строку уже шапки, и полоса обрывалась, не закрывая угол сброса
- * фильтров. `+ 1` — угол `TableCornerResetHeader` рядом с колонками.
- */
-const BOARD_COLSPAN = boardColumns.length + 1;
 
 function renderTaskRow(
   task: SectionBoardTask,
@@ -177,8 +170,9 @@ function renderTaskRow(
   readOnly: boolean,
   isLastInGroup = false,
   isInGroup = false,
+  hasPackaging?: boolean,
 ) {
-  const fields = buildTaskViewFields(task);
+  const fields = buildTaskViewFields(task, hasPackaging);
   const blockReason = getCompletionBlockReason(task);
 
   const handleAction = (type: TaskActionDialogType) => {
@@ -205,9 +199,6 @@ function renderTaskRow(
       {fields.map((field) => (
         <td key={field.key} className={cn(ROW_CELL_CLASS, field.cellClass)}>
           {field.node}
-          {field.key === "operation" && (
-            <TaskExtras task={task} className="block text-xs text-muted-foreground" />
-          )}
         </td>
       ))}
       <td className={ROW_CELL_CLASS}>
@@ -261,9 +252,10 @@ function renderMobileCard(
   isRevoking: boolean,
   isLastInGroup = false,
   readOnly: boolean,
+  hasPackaging?: boolean,
 ) {
   const buttonBase = `flex-1 ${TABLE_ROW_COMPACT.actionButton}`;
-  const fields = buildTaskViewFields(task);
+  const fields = buildTaskViewFields(task, hasPackaging);
   const blockReason = getCompletionBlockReason(task);
   const buttonDefault = "hover:bg-accent/50";
 
@@ -297,9 +289,6 @@ function renderMobileCard(
           </div>
         ))}
       </div>
-
-      <TaskExtras task={task} className="block text-xs text-muted-foreground border-t pt-2" />
-
 
         {onRevokeItem ? (
           <Button
@@ -348,14 +337,17 @@ function TableTaskGroupRow({
   onToggleCollapse,
   onSelectGroup,
   onCompleteGroup,
+  hasPackaging,
 }: {
-  group: ReturnType<typeof groupTasksByProfile>[number];
+  group: TaskGroup;
   isCollapsed: boolean;
   isBulkMode: boolean;
   bulkSelection?: BulkSelectionController;
   onToggleCollapse: () => void;
   onSelectGroup: () => void;
   onCompleteGroup?: (group: TaskGroup) => void;
+  /** Участок без упаковочных операций — ячейки «Упаковка» в шапке группы нет. */
+  hasPackaging?: boolean;
 }) {
   const taskIds = group.tasks.map((t) => t.id);
   const allSelected = bulkSelection?.isAllSelected(taskIds) ?? false;
@@ -396,11 +388,20 @@ function TableTaskGroupRow({
         {formatDimensionsLabel(taskGroupingDimensions(firstTask))}
       </td>
       <td className={`${ROW_CELL_CLASS} text-xs text-slate-500 font-medium`}>
-        {taskPrimaryOperation(firstTask) || "—"}
+        {firstTask.transforms_dimensions ? (
+          <CutLayoutCell
+            layout={firstTask.cut_layout}
+            fallback={formatDimensionsLabel(taskGroupingDimensions(firstTask))}
+          />
+        ) : (
+          taskOperations(firstTask).join(" · ") || "—"
+        )}
       </td>
-      <td className={`${ROW_CELL_CLASS} text-xs text-slate-500 font-medium`}>
-        {packagingBreakdownLabel(group.tasks, fmtQty)}
-      </td>
+      {hasPackaging !== false && (
+        <td className={`${ROW_CELL_CLASS} text-xs text-slate-500 font-medium`}>
+          {packagingBreakdownLabel(group.tasks, fmtQty)}
+        </td>
+      )}
       <td className={`${ROW_CELL_CLASS} text-slate-700`}>{fmtQty(String(group.totalQtyPlan))}</td>
       <td className={`${ROW_CELL_CLASS} text-slate-700`}>{fmtQty(String(group.tasks.reduce((s, t) => s + parseFloat(t.cache.issued_quantity), 0)))}</td>
       <td className={`${ROW_CELL_CLASS} text-slate-700`}>{fmtQty(String(group.totalQtyDone))}</td>
@@ -464,6 +465,12 @@ type SectionTasksBoardProps = {
   onConfirmRevoke?: () => void;
   isRevoking?: boolean;
   onCompleteGroup?: (group: TaskGroup) => void;
+  /**
+   * Есть ли у участка упаковочные операции (`Section.has_packaging`). На
+   * участке без них колонки «Упаковка» нет ни в шапке, ни в строке, ни в
+   * карточке — иначе пустая колонка читается как «данные не пришли».
+   */
+  hasPackaging?: boolean;
   page: number;
   setPage: (page: number) => void;
   limit: PageLimitOption;
@@ -533,6 +540,7 @@ export function SectionTasksBoard({
   onConfirmRevoke,
   isRevoking = false,
   onCompleteGroup,
+  hasPackaging,
   page,
   setPage,
   limit,
@@ -542,6 +550,13 @@ export function SectionTasksBoard({
   onServerQueryChange,
 }: SectionTasksBoardProps) {
   const tableScrollRef = useRef<HTMLDivElement>(null);
+  // Колонки участка: «Упаковка» есть только там, где у участка есть
+  // упаковочные операции. Число колонок служебных строк («В ожидании», пустое
+  // состояние, распорки виртуализации) выводится из них же, а не константой:
+  // забытое число оставляло служебную строку уже шапки, и полоса обрывалась,
+  // не закрывая угол сброса фильтров. `+ 1` — этот угол.
+  const visibleColumns = useMemo(() => visibleBoardColumns(hasPackaging), [hasPackaging]);
+  const boardColspan = visibleColumns.length + 1;
   // Правило заглушки — общее для всех таблиц (ADR-0044), поэтому берётся из
   // shared, а не пишется здесь выражением: тринадцать копий однажды разъедутся.
   const showLoadingPlaceholder = isFirstRowsLoad(isLoading, tasks);
@@ -859,7 +874,7 @@ export function SectionTasksBoard({
 
   const renderWaitingDivider = useCallback((row: Extract<VirtualBoardRow, { kind: "divider" }>) => (
     <tr key={row.key} data-testid="waiting-divider">
-      <td colSpan={BOARD_COLSPAN} className="p-0" style={{ height: ROW_HEIGHT_PX }}>
+      <td colSpan={boardColspan} className="p-0" style={{ height: ROW_HEIGHT_PX }}>
         <div className={`flex ${TABLE_ROW_DENSE.divider} items-center gap-2 border-y border-amber-200 bg-amber-50/70 px-2`}>
           <span className="text-[11px] font-semibold uppercase tracking-wide text-amber-800">
             В ожидании
@@ -869,7 +884,7 @@ export function SectionTasksBoard({
         </div>
       </td>
     </tr>
-  ), []);
+  ), [boardColspan]);
 
   /** Заголовок блока «В ожидании» для мобильных карточек. */
   const renderWaitingDividerMobile = useCallback((key: string, count: number) => (
@@ -895,6 +910,7 @@ export function SectionTasksBoard({
             bulkSelection={bulkSelection}
             onToggleCollapse={() => toggleGroup(row.entryKey)}
             onCompleteGroup={readOnly ? undefined : onCompleteGroup}
+            hasPackaging={hasPackaging}
             onSelectGroup={() => {
               if (!bulkMode || !bulkSelection) return;
               const taskIds = row.group.tasks.map((t) => t.id);
@@ -928,9 +944,10 @@ export function SectionTasksBoard({
         readOnly,
         row.isLastInGroup,
         row.isInGroup,
+        hasPackaging,
       );
     },
-    [bulkMode, bulkSelection, onAction, onCompleteGroup, onRevokeItem, readOnly, renderWaitingDivider, revokeSelection, toggleGroup],
+    [bulkMode, bulkSelection, hasPackaging, onAction, onCompleteGroup, onRevokeItem, readOnly, renderWaitingDivider, revokeSelection, toggleGroup],
   );
 
   const headerCellClass = cn(
@@ -1003,7 +1020,7 @@ export function SectionTasksBoard({
             <table className="w-full border-separate border-spacing-0 text-sm">
               <thead>
                 <tr>
-                  {boardColumns.map((column) => (
+                  {visibleColumns.map((column) => (
                     <th
                       key={column.id}
                       className={`${headerCellClass} ${column.className ?? "text-left"}`}
@@ -1027,7 +1044,7 @@ export function SectionTasksBoard({
               {sortedTasks.length === 0 ? (
                 <tbody>
                   <tr>
-                    <td colSpan={BOARD_COLSPAN} className="p-8 text-center text-sm text-muted-foreground">
+                    <td colSpan={boardColspan} className="p-8 text-center text-sm text-muted-foreground">
                       Нет задач, соответствующих фильтру
                     </td>
                   </tr>
@@ -1036,7 +1053,7 @@ export function SectionTasksBoard({
                 <VirtualizedTableBody
                   rows={virtualRows}
                   rowHeight={ROW_HEIGHT_PX}
-                  colSpan={BOARD_COLSPAN}
+                  colSpan={boardColspan}
                   scrollContainerRef={tableScrollRef}
                   renderRow={(row) => renderVirtualRow(row)}
                 />
@@ -1063,7 +1080,7 @@ export function SectionTasksBoard({
                 const isSelected = revokeSelection
                   ? revokeSelection.isSelected(task.id)
                   : bulkMode && bulkSelection?.isSelected(task.id);
-                return renderMobileCard(task, isSelected, bulkMode, bulkSelection, onAction, onRevokeItem, isRevoking, true, readOnly);
+                return renderMobileCard(task, isSelected, bulkMode, bulkSelection, onAction, onRevokeItem, isRevoking, true, readOnly, hasPackaging);
               }
 
               const mobileHeader = getTaskGroupHeaderState(group, {
@@ -1143,7 +1160,7 @@ export function SectionTasksBoard({
                     const isSelected = revokeSelection
                       ? revokeSelection.isSelected(task.id)
                       : bulkMode && bulkSelection?.isSelected(task.id);
-                    return renderMobileCard(task, isSelected, bulkMode, bulkSelection, onAction, onRevokeItem, isRevoking, isLast, readOnly);
+                    return renderMobileCard(task, isSelected, bulkMode, bulkSelection, onAction, onRevokeItem, isRevoking, isLast, readOnly, hasPackaging);
                   })}</div>}
                 </div>
               );

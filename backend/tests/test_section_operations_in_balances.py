@@ -1,7 +1,7 @@
 """Production-flow tests: completed_stages in GET /api/stock/balance after transfers/complete."""
 from __future__ import annotations
 
-from datetime import datetime
+from datetime import date
 from decimal import Decimal
 
 import pytest
@@ -124,8 +124,8 @@ async def _make_two_section_fixture(
         plan_no=f"P-{sku}",
         name="p",
         status=ProductionPlanStatus.approved,
-        period_start=datetime(2026, 5, 1),
-        period_end=datetime(2026, 5, 31),
+        period_start=date(2026, 5, 1),
+        period_end=date(2026, 5, 31),
     )
     session.add(plan)
     await session.flush()

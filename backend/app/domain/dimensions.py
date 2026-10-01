@@ -97,7 +97,7 @@ def canonicalize_dimensions(raw: Mapping[str, Any] | None) -> dict[str, Any] | N
     return {key: canonical[key] for key in sorted(canonical)}
 
 
-def parse_length_m_to_mm(raw: str | int | float) -> int:
+def parse_length_m_to_mm(raw: str | float) -> int:
     """Распарсить длину из Excel: строка/число в **метрах** → целые **миллиметры**.
 
     Поддерживаются запятая и точка как десятичный разделитель, пробелы
@@ -286,7 +286,7 @@ def _canonicalize_value(key: str, value: Any) -> Any:
     return value
 
 
-def _format_mm_as_meters(mm: int | float | Decimal) -> str:
+def _format_mm_as_meters(mm: float | Decimal) -> str:
     """Миллиметры → строка в метрах без хвостовых нулей, с запятой: 2750 → «2,75»."""
     meters = (Decimal(str(mm)) / Decimal(1000)).normalize()
     return format(meters, "f").replace(".", ",")

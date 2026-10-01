@@ -1095,7 +1095,7 @@ async def take_rows_to_work(
             results.append(TakeToWorkResult(
                 position_id=position_id,
                 status="failed",
-                reason=f"Internal error: {str(exc)}",
+                reason=f"Internal error: {exc!s}",
             ))
 
     # Коммит ДО ответа: `get_db` коммитит после выхода из зависимости, а
@@ -1686,11 +1686,11 @@ async def _process_position_take_to_work(
     except Exception as exc:
         import logging
         logger = logging.getLogger(__name__)
-        logger.exception(f"take-to-work failed for position {position_id}: {exc}")
+        logger.exception("take-to-work failed for position %s", position_id)
         return TakeToWorkResult(
             position_id=position_id,
             status="failed",
-            reason=f"Internal error: {str(exc)}",
+            reason=f"Internal error: {exc!s}",
         )
 
 

@@ -19,7 +19,7 @@ from __future__ import annotations
 
 import json
 from dataclasses import dataclass, field
-from datetime import datetime
+from datetime import UTC, datetime
 from decimal import Decimal
 from typing import Any
 from typing import cast as tcast
@@ -333,12 +333,12 @@ class StockProjectionManager:
                 dimensions=dimensions,
                 completed_operations=completed_operations,
                 balance_qty=balance,
-                refreshed_at=datetime.now(),
+                refreshed_at=datetime.now(UTC),
             )
             session.add(row)
         else:
             row.balance_qty = balance
-            row.refreshed_at = datetime.now()
+            row.refreshed_at = datetime.now(UTC)
 
     async def recompute_balance_key(
         self,
@@ -442,14 +442,14 @@ class StockProjectionManager:
                     dimensions=dims,
                     completed_operations=ops,
                     balance_qty=balance,
-                    refreshed_at=datetime.now(),
+                    refreshed_at=datetime.now(UTC),
                 )
             )
         return len(rows)
 
     async def refresh_task_projection(self, session: AsyncSession, tx: StockTransaction) -> None:
         """No-op — cached_* колонки удалены, используйте get_task_cache()."""
-        return None
+        return
 
     async def _compute_task_cache(
         self, session: AsyncSession, task_id: int,
@@ -663,11 +663,11 @@ class StockProjectionManager:
 
     async def refresh_spl_projection(self, session: AsyncSession, tx: StockTransaction) -> None:
         """Этап 4: SectionPlanLine cache из ledger. Пока no-op."""
-        return None
+        return
 
     async def refresh_quality_view(self, session: AsyncSession, tx: StockTransaction) -> None:
         """Этап 5: агрегаты по качеству. Пока no-op."""
-        return None
+        return
 
 
 class StockCommandService:

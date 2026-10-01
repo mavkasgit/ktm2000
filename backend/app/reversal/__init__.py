@@ -23,14 +23,14 @@ from app.reversal.errors import (
 )
 
 __all__ = [
+    "AlreadyReversed",
     "Compensator",
+    "CoverageShortfall",
+    "HasDependentActions",
+    "NotAllowed",
     "PlannedEntry",
     "ReversalCheck",
     "ReversalPlan",
     "ReversalResult",
-    "AlreadyReversed",
-    "CoverageShortfall",
-    "HasDependentActions",
-    "NotAllowed",
     "StalePlanToken",
 ]

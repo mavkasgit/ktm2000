@@ -533,7 +533,7 @@ class StockCompensator(MirrorLedgerMixin):
         self,
         db: AsyncSession,
         *,
-        action,  # noqa: ANN001 — Action журнала (уже создан ReversalService)
+        action,
         ref_id: int | None,
         changes: dict,
         actor: str,

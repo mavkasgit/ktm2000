@@ -1417,7 +1417,7 @@ async def upload_product_photo(
         raise HTTPException(status_code=404, detail="Product not found")
 
     storage_dir = Path(settings.PRODUCT_PHOTO_DIR)
-    storage_dir.mkdir(parents=True, exist_ok=True)
+    storage_dir.mkdir(parents=True, exist_ok=True)  # noqa: ASYNC240 — #267
 
     ext = Path(file.filename or "image.jpg").suffix.lstrip(".") or "jpg"
     content = await file.read()

@@ -1,7 +1,7 @@
 /**
  * components/TaskView.tsx — раскладки представления задания.
  *
- * Тон, цвет точки, прогресс выходов и состояние шапки группы считаются в
+ * Тон, цвет точки, поля задания и состояние шапки группы считаются в
  * `lib/taskView`; здесь они раскладываются в узлы: строка таблицы, карточка
  * узкого экрана и панель массовых операций берут одни и те же данные.
  */
@@ -15,7 +15,7 @@ import { TABLE_ROW_STYLES } from "@/shared/lib/tableRowStyles";
 import { CutLayoutCell } from "@/shared/ui";
 import { taskGroupingDimensions } from "../lib/groupTasksByProfile";
 import { getStatusLabel } from "../lib/taskStatus";
-import { getStatusDotClass, getTaskOutputsProgressText, getTaskTone, taskPackaging, taskPrimaryOperation, type TaskTone } from "../lib/taskView";
+import { getStatusDotClass, getTaskTone, taskOperations, taskPackaging, type TaskTone } from "../lib/taskView";
 
 const ROW_TONE_CLASS: Record<TaskTone, string> = {
   waiting: "bg-background hover:bg-slate-50 transition-colors border-l-4 border-l-yellow-400 text-slate-800",
@@ -63,30 +63,6 @@ export function TaskStatusDot({ task }: { task: SectionBoardTask }) {
   );
 }
 
-/**
- * Дополнительные сведения к операции: раскрой и прогресс по выходам
- * трансформирующего задания (ADR-0002). Раскладка задаёт только обёртку —
- * содержимое одно, поэтому добавление сведений не расходится по ветвям.
- */
-export function TaskExtras({ task, className }: { task: SectionBoardTask; className: string }) {
-  const outputsText = getTaskOutputsProgressText(task);
-  if (!task.cut_layout && !outputsText) return null;
-  return (
-    <>
-      {task.cut_layout && (
-        <span className={className}>
-          <CutLayoutCell layout={task.cut_layout} />
-        </span>
-      )}
-      {outputsText && (
-        <span className={`${className} tabular-nums`} title={outputsText}>
-          {outputsText}
-        </span>
-      )}
-    </>
-  );
-}
-
 export type TaskViewFieldKey =
   | "dimensions"
   | "operation"
@@ -111,9 +87,18 @@ export type TaskViewField = {
  * Поля задания в порядке колонок доски. Строка разворачивает список в ячейки,
  * карточка — в подписи со значениями, поэтому новое поле добавляется здесь
  * одно, а не в двух раскладках.
+ *
+ * `hasPackaging` — есть ли у участка упаковочные операции (`Section.has_packaging`).
+ * Поле «Упаковка» живёт здесь наравне с колонкой доски (`requiresPackaging` в
+ * `boardColumns.ts`) и прячется тем же признаком: шапка без ячейки разъехалась
+ * бы с телом строки. Флага нет (`undefined`) — поле остаётся: ошибка
+ * справочника не должна прятать данные.
  */
-export function buildTaskViewFields(task: SectionBoardTask): TaskViewField[] {
-  return [
+export function buildTaskViewFields(
+  task: SectionBoardTask,
+  hasPackaging?: boolean,
+): TaskViewField[] {
+  const fields: TaskViewField[] = [
     {
       key: "dimensions",
       label: "Размер",
@@ -123,7 +108,20 @@ export function buildTaskViewFields(task: SectionBoardTask): TaskViewField[] {
     {
       key: "operation",
       label: "Операция",
-      node: <span className="text-xs">{taskPrimaryOperation(task) || "—"}</span>,
+      // Трансформирующий этап (ADR-0002, пила) несёт в ячейке размеры —
+      // вход и выходы раскроя (ADR-0058). Нетрансформирующая строка оставляет
+      // операции участка списком: на анодировании это цвет, он и есть операция
+      // участка, а упаковку несёт своя колонка.
+      node: task.transforms_dimensions ? (
+        <span className="text-xs">
+          <CutLayoutCell
+            layout={task.cut_layout}
+            fallback={formatDimensionsLabel(taskGroupingDimensions(task))}
+          />
+        </span>
+      ) : (
+        <span className="text-xs">{taskOperations(task).join(" · ") || "—"}</span>
+      ),
     },
     {
       key: "packaging",
@@ -137,4 +135,7 @@ export function buildTaskViewFields(task: SectionBoardTask): TaskViewField[] {
     { key: "transferred", label: "Передано", node: fmtQty(task.cache.transferred_quantity) },
     { key: "remaining", label: "Остаток", node: fmtQty(task.cache.remaining_quantity) },
   ];
+  return hasPackaging === false
+    ? fields.filter((field) => field.key !== "packaging")
+    : fields;
 }

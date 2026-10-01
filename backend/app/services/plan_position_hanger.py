@@ -42,7 +42,7 @@ from app.services.hanger_quantity_calc import (
     compute_hanger_quantity,
 )
 
-QuantityPerHangerSource = Literal["auto", "manual", None]
+QuantityPerHangerSource = Literal["auto", "manual"] | None
 
 
 def _position_input_length_mm(position) -> float | None:

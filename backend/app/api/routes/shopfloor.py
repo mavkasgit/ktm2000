@@ -1,9 +1,9 @@
-from datetime import UTC, datetime
+from datetime import UTC, datetime, time
 from decimal import Decimal
 from typing import Literal
 
 from fastapi import APIRouter, Depends, HTTPException, Query, status
-from pydantic import BaseModel, ConfigDict
+from pydantic import BaseModel, ConfigDict, ValidationError
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -58,6 +58,18 @@ from app.transfers.schemas import CreateTransferPayload
 from app.transfers.services import transfer_send
 
 router = APIRouter(prefix="/shopfloor", tags=["sections-operations"])
+
+
+def _naive_as_utc(value: datetime) -> datetime:
+    """Трактует наивную метку клиента как UTC, не трогая aware.
+
+    Ось дат продукта — UTC (прод-контейнеры живут в ``TZ=UTC``,
+    docs/deployment.md), поэтому наивный вход без зоны (так его шлёт
+    фронт, ``YYYY-MM-DDTHH:MM:SS``) читается как UTC, а не как
+    host-local время процесса. Значение со своей зоной уже несёт шкалу —
+    не переводим, чтобы не сдвинуть его дважды.
+    """
+    return value.replace(tzinfo=UTC) if value.tzinfo is None else value
 
 
 class PatchOperationPayload(BaseModel):
@@ -325,7 +337,7 @@ async def bulk_complete_tasks(
     for raw in payload.entries:
         try:
             entry = BulkCompleteEntry.model_validate(raw)
-        except Exception as exc:
+        except ValidationError as exc:
             results.append(
                 BulkActionResultItem(id=0, status="failed", reason=f"Invalid entry: {exc}")
             )
@@ -381,8 +393,11 @@ async def bulk_complete_tasks(
                     total_good += entry.good_quantity
                     total_defect += entry.defect_quantity
                     task_ids.append(entry.task_id)
-            except Exception:
-                pass
+            except ValidationError:
+                # Валидация уже прошла в первом проходе; сюда попадают те же
+                # невалидные записи — пропускаем их, агрегат считается по
+                # успешно завершённым (success_entries).
+                continue
 
         if task_ids:
             first_task = await db.get(WorkTask, task_ids[0])
@@ -425,8 +440,9 @@ async def bulk_complete_tasks(
                                 "before": {"status": "in_progress"},
                                 "after": {"status": "completed", "good_quantity": str(entry.good_quantity), "defect_quantity": str(entry.defect_quantity)}
                             }
-                    except Exception:
-                        pass
+                    except ValidationError:
+                        # Тот же набор невалидных записей, что и в агрегате выше.
+                        continue
 
                 await log_action(
                     db,
@@ -853,12 +869,9 @@ async def section_daily_stats(
     locked_section_id: int | None = Depends(get_single_window_locked_section_id),
 ) -> dict:
     _ensure_section_lock(section_id, locked_section_id)
-    from datetime import datetime as dt
-    from datetime import time
-
-    now = dt.now()
-    d_from = date_from or dt.combine(now.date(), time.min)
-    d_to = date_to or dt.combine(now.date(), time.max)
+    now = datetime.now(UTC)
+    d_from = _naive_as_utc(date_from) if date_from else datetime.combine(now.date(), time.min, tzinfo=UTC)
+    d_to = _naive_as_utc(date_to) if date_to else datetime.combine(now.date(), time.max, tzinfo=UTC)
     return await get_section_daily_stats(
         db,
         section_id=section_id,

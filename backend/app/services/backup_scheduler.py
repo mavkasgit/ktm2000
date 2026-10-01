@@ -34,7 +34,11 @@ async def run_backup_cycle():
     if not config.get("auto_enabled", False):
         return
 
-    now = datetime.now()
+    # Локальное время контейнера — осознанно: `docs/deployment.md` задаёт
+    # `time_of_day` расписания как местное время контейнера, а TZ намеренно не
+    # переопределяется (в проде контейнер и так UTC). Перевод в UTC сдвинул бы
+    # момент запуска и корзины GFS-ротации (`determine_backup_type`).
+    now = datetime.now()  # noqa: DTZ005 — см. комментарий выше
     time_str = now.strftime("%H:%M")
 
     if time_str != config.get("time_of_day", "23:00"):
@@ -47,14 +51,18 @@ async def run_backup_cycle():
     if latest_backups:
         latest_backup = latest_backups[0]
         try:
-            mtime = datetime.fromtimestamp(latest_backup.stat().st_mtime)
+            # Та же шкала, что у `now` выше (локальное время контейнера): иначе
+            # сравнение «бэкап уже есть за сегодня» поедет на смещение пояса.
+            mtime = datetime.fromtimestamp(latest_backup.stat().st_mtime)  # noqa: DTZ006 — см. выше
             if mtime.date() == now.date():
                 logger.info(
                     "Бэкап на сегодня уже существует (%s). Пропуск автоматического запуска.",
                     latest_backup.name,
                 )
                 return
-        except Exception:
+        except (OSError, ValueError, OverflowError):
+            # `stat()` → `OSError`, `fromtimestamp` → `ValueError`/`OverflowError`
+            # (недоступный/битый mtime). Всё остальное не глотаем.
             logger.warning(
                 "Не удалось прочитать mtime последнего бэкапа. Продолжаем проверку."
             )
@@ -83,8 +91,8 @@ async def run_backup_cycle():
             # 4. Выполнение GFS ротации
             rotate_backups()
 
-    except Exception as e:
-        logger.exception("Ошибка при выполнении автоматического бэкапа: %s", e)
+    except Exception:
+        logger.exception("Ошибка при выполнении автоматического бэкапа")
 
 
 def rotate_backups():
@@ -111,8 +119,8 @@ def rotate_backups():
             try:
                 _delete_backup_file(f.name)
                 deleted_count += 1
-            except Exception as e:
-                logger.exception("Ошибка при удалении файла ежедневного бэкапа %s: %s", f.name, e)
+            except Exception:
+                logger.exception("Ошибка при удалении файла ежедневного бэкапа %s", f.name)
 
     # Ротация Weekly (храним 4 последних)
     weekly_list = backups_by_type["weekly"]
@@ -122,8 +130,8 @@ def rotate_backups():
             try:
                 _delete_backup_file(f.name)
                 deleted_count += 1
-            except Exception as e:
-                logger.exception("Ошибка при удалении файла еженедельного бэкапа %s: %s", f.name, e)
+            except Exception:
+                logger.exception("Ошибка при удалении файла еженедельного бэкапа %s", f.name)
 
     # Monthly и Manual не удаляются никогда
     logger.info("Ротация бэкапов завершена. Удалено файлов: %d", deleted_count)
@@ -138,7 +146,7 @@ async def start_backup_scheduler():
     while True:
         try:
             await run_backup_cycle()
-        except Exception as e:
-            logger.exception("Ошибка в цикле планировщика бэкапов: %s", e)
+        except Exception:
+            logger.exception("Ошибка в цикле планировщика бэкапов")
         # Спим 60 секунд.
         await asyncio.sleep(60)

@@ -3,7 +3,6 @@ import type { SectionBoardTask } from "@/shared/api/shopfloor";
 import {
   getStatusDotClass,
   getTaskGroupHeaderState,
-  getTaskOutputsProgressText,
   getTaskTone,
 } from "./taskView";
 
@@ -160,23 +159,5 @@ describe("getTaskGroupHeaderState", () => {
     );
     expect(state.hasCompletable).toBe(false);
     expect(state.completeReason).toBe("group_nothing_to_complete");
-  });
-});
-
-describe("getTaskOutputsProgressText", () => {
-  it("не выдаёт прогресс там, где выходов нет", () => {
-    expect(getTaskOutputsProgressText(makeTask())).toBeNull();
-    expect(getTaskOutputsProgressText(makeTask({ transforms_dimensions: true, outputs_progress: [] }))).toBeNull();
-  });
-
-  it("собирает прогресс по выходам одной строкой (ADR-0002)", () => {
-    const task = makeTask({
-      transforms_dimensions: true,
-      outputs_progress: [
-        { dimensions: { length_mm: 1800 }, quantity: "10", produced_quantity: "4" },
-        { dimensions: { length_mm: 900 }, quantity: "10", produced_quantity: "10" },
-      ],
-    });
-    expect(getTaskOutputsProgressText(task)).toBe("1,8 м: 4/10 · 0,9 м: 10/10");
   });
 });

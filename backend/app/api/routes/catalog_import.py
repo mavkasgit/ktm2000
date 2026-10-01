@@ -104,7 +104,8 @@ async def import_catalog_from_zip(
         raise HTTPException(status_code=400, detail="Only .zip files are accepted")
 
     photo_dir = Path(settings.PRODUCT_PHOTO_DIR)
-    photo_dir.mkdir(parents=True, exist_ok=True)
+    # #267: вынос в `anyio.Path` — отдельной волной (тот же класс, что ASYNC230).
+    photo_dir.mkdir(parents=True, exist_ok=True)  # noqa: ASYNC240 — #267
 
     with TemporaryDirectory() as tmpdir:
         tmp_path = Path(tmpdir)
@@ -181,7 +182,10 @@ async def import_catalog_from_zip(
                         new_full = _normalize_photo_path(
                             str(dst_full.relative_to(Path(settings.PRODUCT_PHOTO_DIR).parent))
                         )
-            except Exception as e:
+            except (OSError, ValueError) as e:
+                # Копирование фото — best-effort: `shutil.copy2` бросает
+                # `OSError` (нет файла/прав, SameFileError), `relative_to` —
+                # `ValueError`. Строка импорта не должна падать из-за фото.
                 errors.append(f"{sku}: photo copy failed - {e}")
 
             if existing:

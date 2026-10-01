@@ -85,6 +85,12 @@ export function SpgSnapshotPage() {
     return selectedSpgs.flatMap((s) => s.sections.map((sec) => sec.section_id));
   }, [spgs, selectedSpgIds]);
 
+  // Выбранные ГХП без участков: пустой список фильтра панель трактует как
+  // «без фильтра» и показывает остатки всего завода. Данные не прячем, но и не
+  // молчим: под шапкой выбранной ГХП ехали бы остатки всех групп (ADR-0060 п.3 —
+  // «данных нет» не выдаётся за содержательный факт).
+  const selectedWithoutSections = selectedSpgIds.length > 0 && activeSectionIds.length === 0;
+
   const handleSelectProduct = (productId: number) => {
     setSelectedProductId(productId);
   };
@@ -126,6 +132,13 @@ export function SpgSnapshotPage() {
             <h2 className="text-lg font-semibold">{headerTitle}</h2>
             {headerDescription && (
               <p className="text-sm text-muted-foreground">{headerDescription}</p>
+            )}
+            {selectedWithoutSections && (
+              <p className="text-sm text-amber-600">
+                {selectedSpgIds.length === 1
+                  ? "У этой ГХП нет участков — показаны остатки по всем группам"
+                  : "У выбранных групп нет участков — показаны остатки по всем группам"}
+              </p>
             )}
           </div>
           <div className="flex items-center gap-2">

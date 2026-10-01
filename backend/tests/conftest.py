@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import logging
 import os
 import re
 import shutil
@@ -45,6 +46,7 @@ from app.models.base import Base
 from httpx import ASGITransport, AsyncClient
 from sqlalchemy import text
 from sqlalchemy.engine import URL, make_url
+from sqlalchemy.exc import SQLAlchemyError
 from sqlalchemy.ext.asyncio import (
     AsyncEngine,
     AsyncSession,
@@ -59,6 +61,8 @@ TEST_SCHEMA_PREFIX = "t_"
 IDENT_RE = re.compile(r"^[a-zA-Z0-9_]+$")
 RUN_DB_RE = re.compile(r"^ktm2000_test_[0-9a-f]{12}$")
 _RUN_ID_ENV = "TEST_RUN_ID"
+
+logger = logging.getLogger(__name__)
 
 # The test launcher (scripts/test-run.ps1) owns the lifecycle of the run
 # database: it creates ktm2000_test_<12 hex>, exports TEST_RUN_ID /
@@ -382,8 +386,13 @@ async def engine(
             try:
                 async with eng.begin() as conn:
                     await conn.execute(text(f"DROP SCHEMA IF EXISTS {_quote_ident(module_schema_name)} CASCADE"))
-            except Exception:
-                pass
+            except SQLAlchemyError:
+                # Best-effort уборка: сбой дропа схемы не должен маскировать
+                # результат тестов, поэтому глотаем только ошибки БД и пишем
+                # их в debug-лог.
+                logger.debug(
+                    "Failed to drop module schema %s", module_schema_name, exc_info=True
+                )
         await eng.dispose()
 
 

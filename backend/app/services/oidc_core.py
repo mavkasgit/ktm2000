@@ -376,7 +376,7 @@ class OidcCore:
 
         try:
             body = resp.json()
-        except Exception as exc:  # noqa: BLE001
+        except Exception as exc:
             raise HTTPException(
                 status_code=status.HTTP_502_BAD_GATEWAY,
                 detail="OIDC token response invalid",
@@ -466,7 +466,7 @@ class OidcCore:
         last_err: Exception | None = None
         try:
             rsa_key = RSAKey(matching, algorithm=alg)
-        except Exception as exc:  # noqa: BLE001
+        except Exception as exc:
             logger.info("OIDC JWKS key load failed: %s", exc)
             raise HTTPException(
                 status_code=status.HTTP_401_UNAUTHORIZED,
@@ -576,7 +576,7 @@ class OidcCore:
         last_err: Exception | None = None
         try:
             rsa_key = RSAKey(matching, algorithm="RS256")
-        except Exception as exc:  # noqa: BLE001
+        except Exception as exc:
             logger.info("OIDC logout_token JWKS key load failed: %s", exc)
             raise HTTPException(
                 status_code=status.HTTP_400_BAD_REQUEST,
@@ -661,7 +661,7 @@ class OidcCore:
                 ip=ip,
                 user_agent=user_agent,
             )
-        except Exception:  # noqa: BLE001 — audit must never break auth flow
+        except Exception:
             logger.exception("OIDC failed-login audit hook error")
 
     async def handle_callback(
@@ -699,14 +699,14 @@ class OidcCore:
 
         try:
             claims = await self.validate_id_token(id_token)
-        except HTTPException as exc:
+        except HTTPException:
             await self._record_failed(
                 reason="invalid_id_token",
                 username_attempted=None,
                 ip=ip,
                 user_agent=user_agent,
             )
-            raise exc
+            raise
 
         resolve_or_provision = self.hooks.resolve_or_provision
         issue_token = self.hooks.issue_token
