@@ -29,7 +29,7 @@ from datetime import date, datetime, time
 from typing import Optional
 
 from fastapi import APIRouter, Depends, File, Form, HTTPException, Query, UploadFile
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, ConfigDict, Field
 from sqlalchemy import cast, func, or_, select, text
 from sqlalchemy.dialects.postgresql import JSONB, aggregate_order_by
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -163,8 +163,7 @@ class StockBalanceOut(BaseModel):
     completed_stages: list[StockBalanceCompletedStageOut] = Field(default_factory=list)
     refreshed_at: str | None = None
 
-    class Config:
-        from_attributes = True
+    model_config = ConfigDict(from_attributes=True)
 
 
 class StockBalancesListResponse(BaseModel):
@@ -210,8 +209,7 @@ class StockTransactionOut(BaseModel):
     is_post_factum: bool
     created_at: str | None
 
-    class Config:
-        from_attributes = True
+    model_config = ConfigDict(from_attributes=True)
 
 
 class StockAdjustmentIn(BaseModel):

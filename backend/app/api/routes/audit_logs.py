@@ -2,7 +2,7 @@ from datetime import datetime
 from typing import Dict, List, Any
 
 from fastapi import APIRouter, Depends, Query
-from pydantic import BaseModel
+from pydantic import BaseModel, ConfigDict
 from sqlalchemy import func, or_, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -122,8 +122,7 @@ class AuditLogOut(BaseModel):
     entity_id: int | None
     changes: Dict[str, Any] | None
 
-    class Config:
-        from_attributes = True
+    model_config = ConfigDict(from_attributes=True)
 
 
 class AuditLogCreate(BaseModel):

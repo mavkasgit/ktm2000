@@ -4,7 +4,7 @@ from pathlib import Path
 
 from fastapi import APIRouter, Depends, File, Form, HTTPException, Query, UploadFile, status
 from openpyxl import Workbook
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, ConfigDict, Field
 from sqlalchemy import desc, func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -477,8 +477,7 @@ class ImportRecentOut(BaseModel):
     route_selection_diagnostics: dict
     created_at: str
 
-    class Config:
-        from_attributes = True
+    model_config = ConfigDict(from_attributes=True)
 
 
 @router.get("/recent", response_model=list[ImportRecentOut], dependencies=[Depends(require_role(list(READER_ROLES)))])
