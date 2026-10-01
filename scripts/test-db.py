@@ -27,8 +27,11 @@ import argparse
 import asyncio
 import datetime
 import os
+import pathlib
 import re
+import shutil
 import sys
+import tempfile
 
 import asyncpg
 
@@ -45,6 +48,9 @@ RUN_DB_RE = re.compile(r"^ktm2000_test_[0-9a-f]{12}$")
 #: (tests/test_migrations.py, tests/test_hanger_norm_key_migration_218.py),
 #: owner-строки не имеют и до появления `drop --force` не убирались ничем.
 MIG_DB_RE = re.compile(r"^ktm_mig_[0-9a-f]{10}$")
+#: Каталог storage тестов (`conftest.py`): `ktm2000_pytest_storage_<tag>`, а у
+#: прогонов до изоляции — общий `ktm2000_pytest_storage`.
+STORAGE_DIR_PREFIX = "ktm2000_pytest_storage"
 #: Служебные базы: не трогаются даже с --force. Тот же набор, что в
 #: scripts/e2e-db.py (PROTECTED_DB_NAMES).
 PROTECTED_DB_NAMES = frozenset({"postgres", "template0", "template1"})
@@ -266,6 +272,34 @@ async def cleanup(ttl_hours: float, dry_run: bool = False) -> None:
     finally:
         await conn.close()
     print(f"Cleanup finished. Dropped {dropped} database(s).")
+    _cleanup_storage_dirs(ttl_hours, dry_run)
+
+
+def _cleanup_storage_dirs(ttl_hours: float, dry_run: bool) -> None:
+    """Убирает каталоги storage тестов старше TTL (те, что оставили прерванные прогоны).
+
+    Каталог у каждого прогона свой (`conftest.py`: `ktm2000_pytest_storage_<tag>`)
+    и удаляется по завершении, но прерванный прогон оставить его может — а
+    старый (до этой изоляции) общий каталог `ktm2000_pytest_storage` не убирался
+    вообще. Возраст берём по mtime каталога: у живого прогона он свежий.
+    """
+    temp_root = pathlib.Path(tempfile.gettempdir())
+    cutoff = datetime.datetime.now().timestamp() - ttl_hours * 3600
+    removed = 0
+    for path in sorted(temp_root.glob(f"{STORAGE_DIR_PREFIX}*")):
+        if not path.is_dir():
+            continue
+        age_ok = path.stat().st_mtime < cutoff
+        if not age_ok:
+            print(f"SKIP  {path.name}: younger than {ttl_hours:g}h TTL")
+            continue
+        if dry_run:
+            print(f"DRY   {path.name}: storage older than {ttl_hours:g}h TTL")
+            continue
+        shutil.rmtree(path, ignore_errors=True)
+        print(f"DROP  {path.name}: storage older than {ttl_hours:g}h TTL")
+        removed += 1
+    print(f"Cleanup finished. Removed {removed} storage dir(s).")
 
 
 def main() -> None:

@@ -64,7 +64,9 @@
 ### Orphan cleanup
 
 Run-DB, осиротевшая из-за убитого прогона, убирается отдельной командой
-(`npm run test:db:cleanup`, TTL 24h). В обычный прогон cleanup не встроен.
+(`npm run test:db:cleanup`, TTL 24h) — та же команда по TTL убирает и старые
+каталоги storage тестов (`ktm2000_pytest_storage*` в `%TEMP%`), оставшиеся от
+прерванных прогонов. В обычный прогон cleanup не встроен.
 БД, оставленная прогоном с `--keep-db` (для разбора падения), сохраняет
 owner-строку — её убирает либо `python scripts/test-db.py drop <db>` сразу,
 либо тот же TTL-cleanup потом.

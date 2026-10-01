@@ -61,7 +61,7 @@ npm run test:e2e             # Playwright, отдельный стенд (сво
 | `npm run test:pytest:full` | Полный прогон в один поток |
 | `npm run test:pytest:mon` | Только изменённые (testmon; кеш — `backend/.testmondata`, в git не попадает) |
 | `npm run test:pytest:lf` | Только упавшие |
-| `npm run test:db:cleanup` | Уборка orphan run-DB по TTL (24h) |
+| `npm run test:db:cleanup` | Уборка orphan run-DB по TTL (24h) **и** старых каталогов storage тестов |
 | `npm run test:hygiene` | Report-only отчёт по мёртвым импортам в тестах (stdlib, линтера в репозитории нет) |
 | `npm run test:db:up` / `test:db:wait` | Поднять тестовый Postgres (:5441) |
 | `npm run test:pytest -- --keep-db` | Прогон, который **оставляет** run-DB для разбора (обычный прогон её дропает) |
