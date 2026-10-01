@@ -427,7 +427,7 @@ async def test_first_stage_groups_by_sku_only(client, session) -> None:
     assert len(unique_histories) == 1, (
         f"Expected 1 unique route_history on first stage, got {unique_histories}"
     )
-    assert list(unique_histories)[0] == (), "First stage route_history should be empty tuple"
+    assert next(iter(unique_histories)) == (), "First stage route_history should be empty tuple"
 
     # На прессе route_history уже не пустой → operationCode разделяет
     press_board = await get_section_board(session, section_id=sections[1].id)

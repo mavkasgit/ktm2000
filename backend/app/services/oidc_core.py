@@ -699,14 +699,14 @@ class OidcCore:
 
         try:
             claims = await self.validate_id_token(id_token)
-        except HTTPException as exc:
+        except HTTPException:
             await self._record_failed(
                 reason="invalid_id_token",
                 username_attempted=None,
                 ip=ip,
                 user_agent=user_agent,
             )
-            raise exc
+            raise
 
         resolve_or_provision = self.hooks.resolve_or_provision
         issue_token = self.hooks.issue_token

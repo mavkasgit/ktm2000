@@ -140,7 +140,7 @@ def require_resolved(
     """Узел для plan()-границы: ``Resolved`` → action; иначе обычный
     ValueError (внешний контракт плана прежний, ADR-0021 п.4)."""
     if isinstance(res, Ambiguous):
-        raise ValueError(ambiguous_detail(action_type, ref_id, res.candidates))
+        raise ValueError(ambiguous_detail(action_type, ref_id, res.candidates))  # noqa: TRY004 — доменный отказ, внешний контракт ValueError (ADR-0021 п.4)
     if isinstance(res, NotFound):
-        raise ValueError(not_found_detail(action_type, ref_id, action_id))
+        raise ValueError(not_found_detail(action_type, ref_id, action_id))  # noqa: TRY004 — доменный отказ, внешний контракт ValueError (ADR-0021 п.4)
     return res.action

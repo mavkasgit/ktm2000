@@ -722,7 +722,7 @@ async def test_replay_payload_chain_all_types(session: AsyncSession) -> None:
     await _issue_material(session, fx, qty=Decimal(30))
     chain = await _task_chain(session, fx)
 
-    for action_type, action in chain.items():
+    for action in chain.values():
         comp = StockActionCompensator(action.action_type)
         payload = await comp.build_replay_payload(session, action)
         assert payload is not None, f"{action.action_type}: payload is None"

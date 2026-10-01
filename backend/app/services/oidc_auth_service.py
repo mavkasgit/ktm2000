@@ -391,7 +391,7 @@ class OidcAuthService:
                 return user2
             except Exception as retry_exc:  # noqa: BLE001
                 await self.db.rollback()
-                logger.exception("OIDC JIT retry failed: %s", retry_exc)
+                logger.exception("OIDC JIT retry failed")
                 raise HTTPException(
                     status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
                     detail="oidc_user_provision_failed",

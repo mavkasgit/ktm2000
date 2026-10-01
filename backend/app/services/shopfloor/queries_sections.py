@@ -353,7 +353,7 @@ async def get_section_board(
     await sync_work_tasks_status_bulk(db, tasks=board_tasks, tasks_cache=tasks_cache)
 
     tasks_data = []
-    for task, line, stage, product_sku, source_ref, source_payload, source_fingerprint, source_sku, output_sku in rows:
+    for task, line, stage, row_sku, source_ref, source_payload, source_fingerprint, source_sku, output_sku in rows:
         # Determine effective operation_code.
         effective_op_code = task.selected_operation_code
         if not effective_op_code:
@@ -487,7 +487,7 @@ async def get_section_board(
         )
 
         is_paired = source_sku and "+" in source_sku
-        effective_display_sku = source_sku if is_paired else (product_sku or "")
+        effective_display_sku = source_sku if is_paired else (row_sku or "")
 
         op_icon_info = icon_by_section_op.get((task.section_id, effective_op_code))
 

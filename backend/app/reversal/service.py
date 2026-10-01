@@ -157,7 +157,7 @@ def _verify_raw_token(token: str) -> dict:
         padded = raw + "=" * (-len(raw) % 4)
         payload = json.loads(base64.urlsafe_b64decode(padded.encode()).decode())
         if not isinstance(payload, dict):
-            raise ValueError("not a dict")
+            raise TypeError("not a dict")
         return payload
 
     except Exception as exc:  # noqa: BLE001 — любая порча токена = stale

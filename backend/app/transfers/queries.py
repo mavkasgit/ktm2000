@@ -1245,7 +1245,7 @@ async def get_section_transfer_history(
     rows = (await db.execute(base_query.offset(offset).limit(limit))).all()
 
     transfers = []
-    for transfer, from_sec, to_sec, src_task, dst_task, src_stage, dst_stage, src_line, product_sku in rows:
+    for transfer, from_sec, to_sec, src_task, dst_task, src_stage, dst_stage, src_line, row_sku in rows:
         sent = _to_decimal(transfer.sent_quantity or 0)
         accepted = _to_decimal(transfer.accepted_quantity or 0)
         rejected = _to_decimal(transfer.rejected_quantity or 0)
@@ -1282,7 +1282,7 @@ async def get_section_transfer_history(
                 "physical_handover_at": transfer.physical_handover_at.isoformat() if transfer.physical_handover_at else None,
                 "from_task_status": src_task.status.value,
                 "to_task_status": dst_task.status.value,
-                "product_sku": product_sku,
+                "product_sku": row_sku,
                 "from_line_id": src_line.id,
                 "from_line_sequence": src_line.sequence,
                 "plan_position_id": src_line.plan_position_id,

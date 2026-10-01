@@ -1299,7 +1299,7 @@ async def _make_change_items(
 
                                         await db.flush()
                                         steps_created_successfully = True
-                                except Exception as step_error:
+                                except Exception:
                                     # Savepoint is automatically rolled back
                                     # Check if stages exist (maybe created by concurrent process)
                                     existing_stages_count = await db.scalar(
@@ -1310,7 +1310,7 @@ async def _make_change_items(
                                     if existing_stages_count > 0:
                                         steps_created_successfully = True
                                     else:
-                                        logger.error(f"Failed to create stages for route {built_route.name}: {step_error}", exc_info=True)
+                                        logger.exception(f"Failed to create stages for route {built_route.name}")
                                         raise
 
                                 if steps_created_successfully:

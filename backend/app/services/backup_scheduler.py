@@ -91,8 +91,8 @@ async def run_backup_cycle():
             # 4. Выполнение GFS ротации
             rotate_backups()
 
-    except Exception as e:
-        logger.exception("Ошибка при выполнении автоматического бэкапа: %s", e)
+    except Exception:
+        logger.exception("Ошибка при выполнении автоматического бэкапа")
 
 
 def rotate_backups():
@@ -119,8 +119,8 @@ def rotate_backups():
             try:
                 _delete_backup_file(f.name)
                 deleted_count += 1
-            except Exception as e:
-                logger.exception("Ошибка при удалении файла ежедневного бэкапа %s: %s", f.name, e)
+            except Exception:
+                logger.exception("Ошибка при удалении файла ежедневного бэкапа %s", f.name)
 
     # Ротация Weekly (храним 4 последних)
     weekly_list = backups_by_type["weekly"]
@@ -130,8 +130,8 @@ def rotate_backups():
             try:
                 _delete_backup_file(f.name)
                 deleted_count += 1
-            except Exception as e:
-                logger.exception("Ошибка при удалении файла еженедельного бэкапа %s: %s", f.name, e)
+            except Exception:
+                logger.exception("Ошибка при удалении файла еженедельного бэкапа %s", f.name)
 
     # Monthly и Manual не удаляются никогда
     logger.info("Ротация бэкапов завершена. Удалено файлов: %d", deleted_count)
@@ -146,7 +146,7 @@ async def start_backup_scheduler():
     while True:
         try:
             await run_backup_cycle()
-        except Exception as e:
-            logger.exception("Ошибка в цикле планировщика бэкапов: %s", e)
+        except Exception:
+            logger.exception("Ошибка в цикле планировщика бэкапов")
         # Спим 60 секунд.
         await asyncio.sleep(60)
