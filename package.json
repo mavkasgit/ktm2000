@@ -22,6 +22,8 @@
     "db:e2e:up": "docker compose --env-file .env.test -f infra/compose/docker-compose.test.yml up -d postgres",
     "db:e2e:wait": "powershell -ExecutionPolicy Bypass -File scripts/wait-for-container-health.ps1 ktm2000-postgres-test",
     "db:e2e:create": "python scripts/e2e-db.py ensure",
+    "db:e2e:prep-db": "python scripts/e2e-db.py prep",
+    "db:e2e:drop": "python scripts/e2e-db.py drop",
     "db:e2e:migrate": "node scripts/with-env-file.mjs --cwd backend -- alembic upgrade head",
     "db:e2e:seed": "node scripts/with-env-file.mjs --cwd backend -- python scripts/seed_all.py --force",
     "db:makemigrate": "cd backend && alembic revision --autogenerate -m",

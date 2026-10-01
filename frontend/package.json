@@ -9,7 +9,7 @@
     "prebuild": "node ../scripts/verify-sync.mjs --other ../hrms --if-enabled",
     "preview": "vite preview",
     "test": "vitest run",
-    "e2e:prep": "node ../scripts/verify-sync.mjs --other ../hrms --if-enabled && npm --prefix .. run db:e2e:up && npm --prefix .. run db:e2e:wait && npm --prefix .. run db:e2e:create && npm --prefix .. run db:e2e:migrate && npm --prefix .. run db:e2e:seed",
+    "e2e:prep": "node ../scripts/verify-sync.mjs --other ../hrms --if-enabled && npm --prefix .. run db:e2e:up && npm --prefix .. run db:e2e:wait && npm --prefix .. run db:e2e:prep-db",
     "e2e:run": "node e2e/run-tier.mjs",
     "test:e2e": "npm run e2e:run -- all",
     "test:e2e:smoke": "npm run e2e:run -- smoke",

@@ -41,6 +41,28 @@ Postgres (5441). Общая dev-БД (5440) принадлежит основн�
 
     python scripts/e2e-db.py ensure [--env-file <path>] [--keep]
 
+Шаблонная БД и клон на прогон (#281)
+------------------------------------
+``ensure`` + ``db:e2e:migrate`` + ``db:e2e:seed`` на каждый прогон — это минуты
+на запуск. ``prep`` делает то же самое **один раз**: собирает шаблонную БД
+(``<база>_template``) с миграциями и сидами и сверяет её с репозиторием теми же
+двумя признаками, что ``ensure`` (head миграций + версия правил маршрута,
+отметка в ``e2e_stand_stamp``). Дальше каждый прогон получает **клон**
+(``CREATE DATABASE … TEMPLATE …``) со своим именем
+``<база>_run_<stamp>_<run-id>`` и своим env-файлом со сменённым ``DATABASE_URL``
+— прогоны больше не делят одну базу, а ``apiResetAll()`` чистит свою.
+
+    python scripts/e2e-db.py prep --run-id <id>     # E2E_RUN_ID
+    python scripts/e2e-db.py drop --run-id <id>
+    python scripts/e2e-db.py drop --stale-run-minutes 180
+
+``prep`` печатает ``E2E_RUN_ENV_FILE=<path>`` — этот файл обёртка прогона
+передаёт дальше как ``E2E_ENV_FILE``. ``drop`` удаляет клон и его env-файл;
+``--stale-run-minutes`` сносит клоны брошенных прогонов по метке времени в
+имени. Брошенный шаблон не пересобирается молча: ``--keep-template``
+(``E2E_TEMPLATE_KEEP=1``) оставляет его как есть, печатая причину, — как
+``--keep`` у ``ensure``.
+
 Составные части DSN (host/port/user/password) берутся из самого ``.env.e2e`` —
 дублировать их в скрипте нечего.
 """
@@ -48,12 +70,15 @@ Postgres (5441). Общая dev-БД (5440) принадлежит основн�
 from __future__ import annotations
 
 import argparse
-import asyncio
 import ast
+import asyncio
 import hashlib
 import os
 import re
+import subprocess
 import sys
+import time
+from datetime import UTC, datetime
 from pathlib import Path
 from urllib.parse import urlparse
 
@@ -436,9 +461,315 @@ async def ensure_database(dsn: str, *, keep: bool = False) -> None:
     )
 
 
+# --- Шаблонная БД и клон на прогон (#281) ---
+
+TEMPLATE_SUFFIX = "_template"
+RUN_INFIX = "_run_"
+RUN_ID_RE = re.compile(r"^[a-z0-9]{4,16}$")
+RUN_STAMP_FORMAT = "%Y%m%d%H%M%S"
+DEFAULT_STALE_RUN_MINUTES = 180
+
+
+class StandRunError(Exception):
+    """Подготовка клона на прогон не удалась — сообщение для человека."""
+
+
+def validate_run_id(raw: str | None) -> str:
+    if not raw or not raw.strip():
+        raise StandRunError(
+            "не указан run-id клона: передай --run-id <id> или задай E2E_RUN_ID"
+        )
+    run_id = raw.strip().lower()
+    if not RUN_ID_RE.match(run_id):
+        raise StandRunError(
+            f"run-id {raw!r} не годится: нужно 4–16 символов [a-z0-9] "
+            "(он попадает в имя БД)"
+        )
+    return run_id
+
+
+def template_db_name(base: str) -> str:
+    return f"{base}{TEMPLATE_SUFFIX}"
+
+
+def run_db_name(base: str, run_id: str, *, stamp: datetime | None = None) -> str:
+    """Имя клона; метка времени внутри имени — по ней `drop --stale` считает возраст."""
+    moment = stamp or datetime.now(tz=UTC)
+    return f"{base}{RUN_INFIX}{moment.strftime(RUN_STAMP_FORMAT)}_{run_id}"
+
+
+def dsn_with_database(dsn: str, name: str) -> str:
+    """Тот же DSN, но с другим именем базы (endpoint и креды те же)."""
+    return urlparse(dsn)._replace(path="/" + name).geturl()
+
+
+def write_env_file_for_database(source: Path, target: Path, dsn: str) -> None:
+    """Копия env-файла стенда, где DSN стенда заменён на DSN клона/шаблона.
+
+    `E2E_TEST_DATABASE_URL` дописывается, если его в файле не было: alembic и
+    сиды читают `DATABASE_URL`, а тесты стенда — вторую переменную.
+    """
+    keys = ("DATABASE_URL", "E2E_TEST_DATABASE_URL")
+    out: list[str] = []
+    replaced: set[str] = set()
+    for line in source.read_text(encoding="utf-8").splitlines():
+        stripped = line.strip()
+        if not stripped or stripped.startswith("#") or "=" not in stripped:
+            out.append(line)
+            continue
+        key = stripped.partition("=")[0].strip()
+        if key in keys:
+            out.append(f"{key}={dsn}")
+            replaced.add(key)
+        else:
+            out.append(line)
+    for key in keys:
+        if key not in replaced:
+            out.append(f"{key}={dsn}")
+    target.write_text("\n".join(out) + "\n", encoding="utf-8")
+
+
+async def _admin_connection(dsn: str) -> asyncpg.Connection:
+    return await asyncpg.connect(
+        _asyncpg_dsn(dsn, ADMIN_DATABASE), timeout=CONNECT_TIMEOUT_SECONDS
+    )
+
+
+async def _drop_database(admin: asyncpg.Connection, name: str) -> None:
+    """Сбросить подключения и снести БД, если она есть.
+
+    `WITH (FORCE)` (PG 13+) снимает чужие сессии сам, но между закрытием
+    webServer и снятием базы процесс стенда успевает открыть новую сессию —
+    поэтому повторяем: молча оставлять клон нельзя, его будет видно в списке
+    баз и он занимает диск.
+    """
+    await admin.execute(
+        """
+        SELECT pg_terminate_backend(pid) FROM pg_stat_activity
+        WHERE datname = $1 AND pid <> pg_backend_pid()
+        """,
+        name,
+    )
+    for attempt in range(1, 4):
+        try:
+            await admin.execute(f'DROP DATABASE IF EXISTS "{name}" WITH (FORCE)')
+            return
+        except asyncpg.PostgresError as exc:
+            if attempt == 3:
+                raise
+            print(
+                f"[e2e-db] {name}: DROP не прошёл ({type(exc).__name__}), "
+                f"повтор {attempt}/3"
+            )
+            await asyncio.sleep(1.0)
+
+
+async def _clone_database(dsn: str, name: str, template: str) -> None:
+    """Клон шаблона: `CREATE DATABASE … TEMPLATE …` (файловая копия, секунды)."""
+    admin = await _admin_connection(dsn)
+    try:
+        # Остаток брошенного прогона с тем же run-id не должен мешать.
+        await _drop_database(admin, name)
+        await admin.execute(f'CREATE DATABASE "{name}" TEMPLATE "{template}"')
+    finally:
+        await admin.close()
+
+
+def _run_npm(script: str, env_file: Path) -> None:
+    """`npm run <script>` с ENV_FILE/E2E_ENV_FILE на файл шаблонной БД.
+
+    Команда идёт через обёртку `scripts/with-env-file.mjs` (её зовут сами
+    npm-скрипты): alembic и сиды перекрывают `DATABASE_URL` содержимым файла
+    (`apply_env_file(override=True)`), поэтому указать им базу можно **только**
+    через env-файл, а не переменной окружения.
+    """
+    env = {**os.environ, "ENV_FILE": str(env_file), "E2E_ENV_FILE": str(env_file)}
+    started = time.monotonic()
+    proc = subprocess.run(
+        f"npm run {script}",
+        cwd=str(REPO_ROOT),
+        env=env,
+        shell=True,
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+    took = time.monotonic() - started
+    print(f"[e2e-db]   {script}: {took:.1f}s (код {proc.returncode})")
+    if proc.returncode != 0:
+        tail = (proc.stdout or "")[-2000:] + (proc.stderr or "")[-1000:]
+        raise StandRunError(f"`npm run {script}` не прошёл (код {proc.returncode}):\n{tail}")
+
+
+async def prepare_run(
+    run_id: str,
+    *,
+    env_file: Path,
+    keep_template: bool = False,
+    stale_run_minutes: int = DEFAULT_STALE_RUN_MINUTES,
+) -> int:
+    """Шаблон + клон под прогон; печатает `E2E_RUN_ENV_FILE` для обёртки."""
+    dsn = resolve_stand_dsn(env_file)
+    base = _db_name(dsn)
+    repo_head = next(iter(repo_alembic_heads()))
+    route_rules = route_rules_digest()
+
+    template = template_db_name(base)
+    template_dsn = dsn_with_database(dsn, template)
+    template_env = env_file.parent / f".env.e2e.template.{base}.local"
+
+    admin = await _admin_connection(dsn)
+    try:
+        template_exists = bool(
+            await admin.fetchval("SELECT 1 FROM pg_database WHERE datname = $1", template)
+        )
+    finally:
+        await admin.close()
+
+    reasons: list[str] = []
+    if not template_exists:
+        reasons.append("шаблонной БД нет")
+    else:
+        reasons = await _drift_reasons(template_dsn, repo_head, route_rules)
+
+    if reasons and keep_template:
+        print(
+            "[e2e-db] шаблон расходится с репозиторием, но взят как есть "
+            "(--keep-template / E2E_TEMPLATE_KEEP=1):"
+        )
+        for reason in reasons:
+            print(f"  • {reason}")
+    elif reasons:
+        print(f"[e2e-db] шаблон {template}: пересборка — {', '.join(reasons)}")
+        started = time.monotonic()
+        admin = await _admin_connection(dsn)
+        try:
+            await _drop_database(admin, template)
+            await admin.execute(f'CREATE DATABASE "{template}"')
+        finally:
+            await admin.close()
+        write_env_file_for_database(env_file, template_env, template_dsn)
+        _run_npm("db:e2e:migrate", template_env)
+        _run_npm("db:e2e:seed", template_env)
+        await _stamp_stand(template_dsn, route_rules)
+        print(f"[e2e-db] шаблон {template}: собран за {time.monotonic() - started:.1f}s")
+    else:
+        print(f"[e2e-db] шаблон {template}: совпадает с репозиторием (head {repo_head}) — не трогаю")
+
+    if not template_env.exists():
+        write_env_file_for_database(env_file, template_env, template_dsn)
+
+    run_db = run_db_name(base, run_id)
+    started = time.monotonic()
+    await _clone_database(dsn, run_db, template)
+    clone_took = time.monotonic() - started
+
+    run_env = env_file.parent / f".env.e2e.run.{run_id}.local"
+    write_env_file_for_database(env_file, run_env, dsn_with_database(dsn, run_db))
+
+    dropped = await _drop_stale_runs(
+        dsn,
+        base,
+        older_than_minutes=stale_run_minutes,
+        env_dir=env_file.parent,
+        keep=run_db,
+    )
+    for name in dropped:
+        print(f"[e2e-db] брошенный клон {name}: снесён (> {stale_run_minutes} мин)")
+
+    print(f"[e2e-db] клон прогона {run_db}: готов за {clone_took:.1f}s")
+    print(f"E2E_RUN_ENV_FILE={run_env}")
+    print(f"E2E_RUN_DB={run_db}")
+    return 0
+
+
+async def _drop_stale_runs(
+    dsn: str,
+    base: str,
+    *,
+    older_than_minutes: int,
+    env_dir: Path,
+    keep: str | None = None,
+) -> list[str]:
+    """Снести клоны `«<база>_run_<stamp>_…»`, старше N минут (по метке в имени)."""
+    if older_than_minutes <= 0:
+        return []
+    admin = await _admin_connection(dsn)
+    dropped: list[str] = []
+    try:
+        names = [
+            row["datname"]
+            for row in await admin.fetch(
+                "SELECT datname FROM pg_database WHERE datname LIKE $1", f"{base}{RUN_INFIX}%"
+            )
+        ]
+        for name in names:
+            if keep is not None and name == keep:
+                continue
+            stamp = name[len(base) + len(RUN_INFIX) :].split("_", 1)[0]
+            try:
+                created = datetime.strptime(stamp, RUN_STAMP_FORMAT).replace(tzinfo=UTC)
+            except ValueError:
+                continue  # имя не наше — руками трогать не будем
+            age_minutes = (datetime.now(tz=UTC) - created).total_seconds() / 60
+            if age_minutes <= older_than_minutes:
+                continue
+            await _drop_database(admin, name)
+            dropped.append(name)
+            env_file = env_dir / f".env.e2e.run.{name.rsplit('_', 1)[-1]}.local"
+            env_file.unlink(missing_ok=True)
+    finally:
+        await admin.close()
+    return dropped
+
+
+async def drop_runs(
+    *,
+    env_file: Path,
+    run_id: str | None,
+    stale_run_minutes: int = DEFAULT_STALE_RUN_MINUTES,
+) -> int:
+    """Удалить клон прогона и/или клоны брошенных прогонов."""
+    dsn = resolve_stand_dsn(env_file)
+    base = _db_name(dsn)
+    if not run_id and stale_run_minutes <= 0:
+        raise StandRunError("нечего удалять: нужен --run-id и/или --stale-run-minutes > 0")
+
+    admin = await _admin_connection(dsn)
+    try:
+        if run_id:
+            name = run_db_name(base, validate_run_id(run_id))
+            # Метка времени в имени — от старта прогона, а не от момента drop,
+            # поэтому точное имя не восстанавливается: ищем по run-id.
+            names = [
+                row["datname"]
+                for row in await admin.fetch(
+                    "SELECT datname FROM pg_database WHERE datname LIKE $1", f"{base}{RUN_INFIX}%_{run_id}"
+                )
+            ]
+            if not names:
+                print(f"[e2e-db] клон прогона {run_id}: не найден (уже удалён?)")
+            for found in names:
+                await _drop_database(admin, found)
+                (env_file.parent / f".env.e2e.run.{run_id}.local").unlink(missing_ok=True)
+                print(f"[e2e-db] клон {found}: удалён")
+    finally:
+        await admin.close()
+
+    for name in await _drop_stale_runs(
+        dsn,
+        base,
+        older_than_minutes=stale_run_minutes,
+        env_dir=env_file.parent,
+        keep=None,
+    ):
+        print(f"[e2e-db] брошенный клон {name}: снесён (> {stale_run_minutes} мин)")
+    return 0
+
+
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(description="Подготовка БД E2E-стенда")
-    parser.add_argument("command", choices=["ensure"])
+    parser.add_argument("command", choices=["ensure", "prep", "drop"])
     parser.add_argument(
         "--env-file",
         type=Path,
@@ -450,6 +781,23 @@ def main(argv: list[str] | None = None) -> int:
         action="store_true",
         default=os.environ.get("E2E_DB_KEEP") == "1",
         help="не пересоздавать БД при расхождении с репозиторием (то же — E2E_DB_KEEP=1)",
+    )
+    parser.add_argument(
+        "--run-id",
+        default=os.environ.get("E2E_RUN_ID"),
+        help="id клона прогона (prep/drop; по умолчанию — E2E_RUN_ID)",
+    )
+    parser.add_argument(
+        "--keep-template",
+        action="store_true",
+        default=os.environ.get("E2E_TEMPLATE_KEEP") == "1",
+        help="не пересобирать расходящийся шаблон (то же — E2E_TEMPLATE_KEEP=1)",
+    )
+    parser.add_argument(
+        "--stale-run-minutes",
+        type=int,
+        default=int(os.environ.get("E2E_STALE_RUN_MINUTES", DEFAULT_STALE_RUN_MINUTES)),
+        help="возраст, после которого клон брошенного прогона сносится",
     )
     args = parser.parse_args(argv)
 
@@ -464,11 +812,28 @@ def main(argv: list[str] | None = None) -> int:
         print(f"[e2e-db] нечем сверять БД стенда с репозиторием: {exc}", file=sys.stderr)
         return EXIT_ERROR
     try:
-        asyncio.run(ensure_database(dsn, keep=args.keep))
+        if args.command == "ensure":
+            asyncio.run(ensure_database(dsn, keep=args.keep))
+            return 0
+        if args.command == "prep":
+            return asyncio.run(
+                prepare_run(
+                    validate_run_id(args.run_id),
+                    env_file=args.env_file,
+                    keep_template=args.keep_template,
+                    stale_run_minutes=args.stale_run_minutes,
+                )
+            )
+        return asyncio.run(
+            drop_runs(
+                env_file=args.env_file,
+                run_id=args.run_id,
+                stale_run_minutes=args.stale_run_minutes,
+            )
+        )
     except Exception as exc:  # noqa: BLE001 — CLI: причина попадает в сообщение
         print(f"[e2e-db] не удалось подготовить БД стенда: {exc}", file=sys.stderr)
         return EXIT_ERROR
-    return 0
 
 
 if __name__ == "__main__":
