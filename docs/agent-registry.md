@@ -49,3 +49,4 @@ MCP-матрица и порты для ИИ-ассистентов. Bootstrap �
 3. FSD на фронтенде — без cross-imports между features.
 4. Edge cases — валидация, ошибки, Excel-импорт.
 5. После правок кода: `npx @colbymchenry/codegraph sync`.
+6. Bootstrap CodeGraph (один раз на машину/harness): индекс — `npx @colbymchenry/codegraph init -y` (`.codegraph/` в `.gitignore`, в git не едет, `sync` без индекса падает с `CodeGraph not initialized`); MCP-сервер — `npx @colbymchenry/codegraph install -t <агент> -l global` (без него в матрице нет `codegraph_explore`). Порядок: `install` → `init` → далее только `sync`.
