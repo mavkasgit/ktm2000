@@ -136,14 +136,17 @@ IN_PROGRESS / DONE / REJECTED / BLOCKED_NEEDS_HUMAN.
 ## B-0007 — Run-DB миграционных тестов не попадают в уборку вообще
 
 - **Категория:** диагностика / гигиена БД
-- **Статус:** DONE (тикет `T-0007`, коммит `38df604`): добавлен
-  `drop --force` для невладелых `ktm_mig_*` (отказ при активных соединениях и
-  на служебных именах). Регистрация `ktm_mig_*` в owner-таблице из самих
-  миграционных тестов (34 сайта) осталась как возможное продолжение и
-  **оставлена в бэклоге** решением #245 (Q17=2): приоритет низкий,
-  `drop --force` достаточен.
+- **Статус:** DONE. Первая часть — тикет `T-0007`, коммит `38df604`
+  (`drop --force` для невладелых `ktm_mig_*`). Вторая часть (регистрация в
+  owner-таблице) — решение #245 (Q17), выполнено 2026-10-01:
+  `ktm_mig_*` создаются helper'ом `tests/helpers/mig_db.py`
+  (`create_migration_db()`/`drop_migration_db()`), DDL owner-таблицы и вывод
+  `run_id` — единый источник `scripts/test_db_owner.py`;
+  `python scripts/test-db.py drop ktm_mig_<10 hex>` работает **без** `--force`;
+  `cleanup` по TTL убирает и зарегистрированные `ktm_mig_*` (легаси-база без
+  owner-строки остаётся за `drop --force`).
 - **Доказательство:** `scripts/test-db.py:36` `RUN_DB_PREFIX = "ktm2000_test_"`,
-  а `cleanup()` сканирует `WHERE datname LIKE 'ktm2000_test_%'` (`:166`).
+  а `cleanup()` сканировал только `WHERE datname LIKE 'ktm2000_test_%'` (`:166`).
   Миграционные тесты создают БД с другим префиксом —
   `tests/test_migrations.py` и `tests/test_hanger_norm_key_migration_218.py`
   (17 мест `CREATE DATABASE`, все `ktm_mig_<uuid10>`), и owner-строку они не

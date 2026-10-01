@@ -19,7 +19,6 @@ from __future__ import annotations
 import os
 import socket
 import subprocess
-import uuid
 from pathlib import Path
 from urllib.parse import urlparse
 
@@ -33,20 +32,20 @@ from app.main import app
 from app.models.product import DimensionState, Product
 from app.services.plan_position_hanger import resolve_position_hanger
 
+from tests.helpers.mig_db import (
+    create_migration_db,
+    drop_migration_db,
+    migration_db_url,
+)
+
 BACKEND_DIR = Path(__file__).resolve().parents[1]
 PREV_REVISION = "066_route_signature_backfill"
 HEAD_REVISION = "067_hanger_norm_key_normalization"
 
 
-def _test_db_url() -> str:
-    return os.getenv(
-        "TEST_DATABASE_URL",
-        "postgresql+asyncpg://ktm2000_user:ktm2000_pass_test@localhost:5441/ktm2000_test",
-    )
-
-
 def _db_reachable() -> bool:
-    parsed = urlparse(_test_db_url())
+    """Тестовый Postgres доступен? DSN — у хелпера миграционных баз."""
+    parsed = urlparse(migration_db_url())
     try:
         with socket.create_connection(
             (parsed.hostname or "localhost", parsed.port or 5432), timeout=2
@@ -163,14 +162,7 @@ async def _seed(session_factory, *, linear_norms: dict, auto_norms: dict) -> dic
 @pytest.mark.asyncio
 async def test_after_migration_card_patch_keeps_norm_and_sheet_fallback_works(tmp_path: Path):
     """Артикул с ключом-сиротой перестаёт блокировать правку; ручная N сохранена."""
-    db_name = f"ktm_mig_{uuid.uuid4().hex[:10]}"
-    admin_url = _test_db_url().rsplit("/", 1)[0] + "/postgres"
-    target_url = _test_db_url().rsplit("/", 1)[0] + f"/{db_name}"
-
-    admin_engine = create_async_engine(admin_url, isolation_level="AUTOCOMMIT")
-    async with admin_engine.connect() as conn:
-        await conn.execute(text(f'CREATE DATABASE "{db_name}"'))
-    await admin_engine.dispose()
+    db_name, target_url = await create_migration_db()
 
     engine = create_async_engine(target_url)
     session_factory = async_sessionmaker(bind=engine, expire_on_commit=False)
@@ -282,9 +274,6 @@ async def test_after_migration_card_patch_keeps_norm_and_sheet_fallback_works(tm
             app.dependency_overrides.clear()
     finally:
         await engine.dispose()
-        admin_engine = create_async_engine(admin_url, isolation_level="AUTOCOMMIT")
-        async with admin_engine.connect() as conn:
-            await conn.execute(text(f'DROP DATABASE IF EXISTS "{db_name}" WITH (FORCE)'))
-        await admin_engine.dispose()
+        await drop_migration_db(db_name)
 
 

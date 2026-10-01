@@ -204,8 +204,12 @@ python -m coverage run --source=app -m pytest -q
 2. В серийном режиме предупреждений 11, а не 43: в параллельном режиме каждый
    воркер печатает свою копию предупреждений, возникших при импорте. Поэтому
    «43» в baseline — это 11 уникальных предупреждений, размноженных по воркерам.
-3. Покрытие frontend (vitest) не замерено: нужен `@vitest/coverage-v8` (новая
-   dev-зависимость — решение человека, B-0002).
+3. Покрытие frontend (vitest) замерено 2026-10-01, после решения Q4=1 грилла
+   #245 (`@vitest/coverage-v8` в devDependencies): **statements/lines 43.99%**
+   (19 659/44 684), **branches 72.66%**, functions 44.97%, при
+   `1093 passed, 1 skipped`. Гейт выставлен решением Q5=1:
+   `frontend/vitest.config.ts` → `coverage.thresholds`
+   (statements/lines ≥ 43, branches ≥ 72).
 
 ## Frontend unit (vitest) — первый замер (`T-0016`)
 

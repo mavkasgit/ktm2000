@@ -57,9 +57,10 @@
 
 ### Storage-каталог тестов
 
-Тесты пишут файлы только в `%TEMP%\ktm2000_pytest_storage_<TEST_RUN_ID>`
+Тесты пишут файлы только в `%TEMP%\ktm2000_pytest_storage_<TEST_RUN_ID>_<worker>`
 (`conftest.py` выставляет `STORAGE_ROOT` до импорта приложения). Каталог **свой
-у каждого прогона** и удаляется по завершении — параллельные прогоны не делят
+у каждого прогона и у каждого воркера xdist** (`gw0`, без xdist — `solo`) и
+удаляется по завершении — параллельные прогоны и соседние воркеры не делят
 файлы, мусор не копится.
 
 ### Проверка нестабильности (flaky)
@@ -96,12 +97,14 @@ Run-DB, осиротевшая из-за убитого прогона, убир
 owner-строку — её убирает либо `python scripts/test-db.py drop <db>` сразу,
 либо тот же TTL-cleanup потом.
 
-Базы миграционных тестов (`ktm_mig_<10 hex>` — их создают
-`test_migrations.py` и `test_hanger_norm_key_migration_218.py` напрямую, без
-owner-строки) в TTL-уборку не попадают: `cleanup` сканирует только
-`ktm2000_test_%`. Осиротевшую после прерванного прогона убирает
-`python scripts/test-db.py drop --force <db>` (отказывает, если у базы есть
-активные соединения, и на служебных именах `postgres`/`template0`/`template1`).
+Базы миграционных тестов (`ktm_mig_<10 hex>`) создаются helper'ом
+[`helpers/mig_db.py`](helpers/mig_db.py) — `create_migration_db()` /
+`drop_migration_db()` — и получают owner-строку в той же таблице, что run-DB
+(DDL и вывод `run_id` — `scripts/test_db_owner.py`). Поэтому `cleanup` по TTL
+убирает и осиротевшие `ktm_mig_*`, а `python scripts/test-db.py drop
+ktm_mig_<10 hex>` работает **без** `--force`. Сам `--force` остался для
+легаси-баз без owner-строки (отказывает, если у базы есть активные соединения,
+и на служебных именах `postgres`/`template0`/`template1`).
 
 Подробности реализации: [`conftest.py`](conftest.py), [`scripts/test-run.ps1`](../../scripts/test-run.ps1).
 

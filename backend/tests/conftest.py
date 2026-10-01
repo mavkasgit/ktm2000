@@ -24,8 +24,15 @@ os.environ.setdefault("ALLOW_PRODUCTION_RESET", "true")
 # разных прогонов могли мешать друг другу; к тому же каталог никто не убирал
 # (замер 2026-10-01: 25 МБ накопленного мусора в %TEMP%).
 _TEST_RUN_TAG = os.environ.get("TEST_RUN_ID") or uuid.uuid4().hex[:8]
+# Воркеров у xdist несколько, а уборка каталога (`_clean_test_storage`) —
+# session-autouse: завершившийся первым воркер снёс бы общий каталог у ещё
+# работающих, и любой тест, который пишет файл и читает его (первым это вскрыл
+# `test_product_photo_upload.py`), падал `FileNotFoundError`. Поэтому каталог
+# свой и на воркер: xdist публикует его имя в `PYTEST_XDIST_WORKER` (`gw0`…),
+# без xdist переменной нет — ветка `solo`.
+_TEST_WORKER_TAG = os.environ.get("PYTEST_XDIST_WORKER") or "solo"
 _TEST_STORAGE_ROOT = os.path.join(
-    tempfile.gettempdir(), f"ktm2000_pytest_storage_{_TEST_RUN_TAG}"
+    tempfile.gettempdir(), f"ktm2000_pytest_storage_{_TEST_RUN_TAG}_{_TEST_WORKER_TAG}"
 )
 os.environ["STORAGE_ROOT"] = _TEST_STORAGE_ROOT
 
@@ -263,8 +270,6 @@ async def _install_precreated_enum_types(conn) -> None:
     build, and every table created after it in the same schema never gets
     created at all.
     """
-    import asyncpg
-
     raw = await conn.get_raw_connection()
     driver_conn = raw.driver_connection
     schema = (await conn.execute(text("SHOW search_path"))).scalar() or "public"
@@ -288,8 +293,6 @@ async def _install_precreated_enum_types(conn) -> None:
 
 
 async def _install_storage_vs_production_triggers(conn) -> None:
-    import asyncpg
-
     raw = await conn.get_raw_connection()
     driver_conn = raw.driver_connection
     # asyncpg's raw connection doesn't honour the SET search_path issued by
@@ -307,9 +310,10 @@ async def _install_storage_vs_production_triggers(conn) -> None:
 def _clean_test_storage() -> Iterator[None]:
     """Убирает storage-каталог прогона после его завершения.
 
-    Каталог уникален на прогон (см. `_TEST_STORAGE_ROOT`), поэтому удалять его
-    безопасно: чужие прогоны пишут в свои. Best-effort — на Windows открытые
-    приложением файлы могут не удалиться, и это не должно ронять прогон.
+    Каталог уникален на прогон и на воркер (см. `_TEST_STORAGE_ROOT`), поэтому
+    удалять его безопасно: чужие прогоны и соседние воркеры пишут в свои.
+    Best-effort — на Windows открытые приложением файлы могут не удалиться, и
+    это не должно ронять прогон.
     """
     yield
     shutil.rmtree(_TEST_STORAGE_ROOT, ignore_errors=True)
