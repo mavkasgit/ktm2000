@@ -9,6 +9,7 @@ import { PlanImportPreviewTable, PLAN_IMPORT_ERROR_LABELS } from "./components/P
 import { ApplyImportConfirmDialog } from "./components/ApplyImportConfirmDialog"
 import { buildActiveFilterSummary } from "shared/ui/buildActiveFilterSummary"
 import { isDuplicateRow, type DuplicateRowSignal } from "./lib/duplicateRows"
+import { useDebouncedValue } from "@/shared/lib/useDebouncedValue"
 import { buildImportRowStats } from "./lib/importRowStats"
 import { useQuery, useQueryClient } from "@tanstack/react-query"
 import { listAllImportTemplates, type ImportTemplate } from "@/shared/api/importTemplates"
@@ -39,6 +40,27 @@ function buildPreviewCacheKey(sheetIdx: number, templateId: number | null, rowSe
   return `${sheetIdx}:${templatePart}:${selection}:${normalizeHanger ? "h" : "n"}`;
 }
 
+/**
+ * Часть ключа, описывающая объект превью — лист, шаблон и режим подвеса, — без
+ * выбора строк. Выбор строк это фильтр того же объекта: пока грузится превью
+ * нового выбора, на экране остаётся превью прежнего (ADR-0060 п.1).
+ */
+function previewObjectKeyOf(cacheKey: string): string {
+  const [sheetIdx, templatePart, , hangerFlag] = cacheKey.split(":");
+  return `${sheetIdx}:${templatePart}:${hangerFlag}`;
+}
+
+/** Сколько превью одного объекта держим: кэш подрезается, а не обнуляется. */
+const PREVIEW_CACHE_PER_OBJECT = 5;
+
+function prunePreviewCache(cache: SheetPreviewCache, objectKey: string, keep: number): SheetPreviewCache {
+  const keys = Object.keys(cache).filter((key) => previewObjectKeyOf(key) === objectKey);
+  if (keys.length <= keep) return cache;
+  const next = { ...cache };
+  for (const key of keys.slice(0, keys.length - keep)) delete next[key];
+  return next;
+}
+
 export function ImportWizard(props: {
   open: boolean
   onClose: () => void
@@ -62,6 +84,7 @@ export function ImportWizard(props: {
   const [result, setResult] = useState<Record<string, unknown> | null>(null)
   const [searchQuery, setSearchQuery] = useState("")
   const [rowSelection, setRowSelection] = useState("")
+  const debouncedRowSelection = useDebouncedValue(rowSelection)
   const [pendingChangeSet, setPendingChangeSet] = useState<{
     planId: string
     changeSetId: string
@@ -101,12 +124,21 @@ export function ImportWizard(props: {
 
   useEffect(() => {
     if (step !== "preview" || !file) return
-    setSheetPreviews({})
-    setPreviewLoading({})
+    // Кэш не обнуляем: превью прежнего выбора строк нужно на экране, пока
+    // грузится новое. Держим по нескольку последних на объект (лист+шаблон+подвес).
+    setSheetPreviews((prev) =>
+      prunePreviewCache(
+        prev,
+        previewObjectKeyOf(buildPreviewCacheKey(selectedSheet, activeTemplateId, "", normalizeHangerQuantity)),
+        PREVIEW_CACHE_PER_OBJECT,
+      ),
+    )
     setPendingChangeSet(null)
-    loadSheetPreview(file, selectedSheet, rowSelection)
+    // Выбор строк уходит на сервер по паузе: иначе каждый символ в поле «Строки»
+    // — отдельный запрос превью.
+    loadSheetPreview(file, selectedSheet, debouncedRowSelection)
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [activeTemplateId, rowSelection])
+  }, [activeTemplateId, debouncedRowSelection])
 
   // Preview for the currently selected sheet
   const currentPreviewKey = useMemo(
@@ -114,6 +146,16 @@ export function ImportWizard(props: {
     [selectedSheet, activeTemplateId, rowSelection, normalizeHangerQuantity],
   )
   const currentPreview = sheetPreviews[currentPreviewKey] ?? null
+  const previewObjectKey = previewObjectKeyOf(currentPreviewKey)
+  // Пока грузится превью нового выбора строк, экран держит прежнюю таблицу того
+  // же листа и шаблона: иначе гейт рендера закрывается, поле «Строки» вместе с
+  // ним размонтируется, и фокус теряется на каждом символе (ADR-0060 п.1).
+  const [lastPreview, setLastPreview] = useState<{ objectKey: string; data: SheetPreviewResponse } | null>(null)
+  useEffect(() => {
+    if (currentPreview) setLastPreview({ objectKey: previewObjectKey, data: currentPreview })
+  }, [currentPreview, previewObjectKey])
+  const shownPreview = currentPreview ?? (lastPreview?.objectKey === previewObjectKey ? lastPreview.data : null)
+  const previewIsStale = shownPreview !== null && shownPreview !== currentPreview
 
   // Timer for loading progress
   useEffect(() => {
@@ -134,7 +176,7 @@ export function ImportWizard(props: {
   }, [loadingStartTime])
 
   const allRows = useMemo(() => {
-    const base = (currentPreview?.items as Record<string, unknown>[]) ?? []
+    const base = (shownPreview?.items as Record<string, unknown>[]) ?? []
     // Compute predicted DB IDs: for rows without persisted plan_position_id,
     // assign sequential IDs starting from max visible DB id.
     let maxId = 0
@@ -152,7 +194,7 @@ export function ImportWizard(props: {
       }
       return r
     })
-  }, [currentPreview])
+  }, [shownPreview])
 
   const filteredRows = useMemo(() => {
     let rows = allRows
@@ -620,8 +662,10 @@ export function ImportWizard(props: {
 
         {step === "preview" && file && sheets.length > 0 && (
           <div className="flex-1 overflow-hidden flex flex-col space-y-3">
-            {/* Loading state: spinner + progress bar */}
-            {previewLoading[currentPreviewKey] && (
+            {/* Loading state: spinner + progress bar. Показывается только когда
+                показать нечего: иначе спиннер закрывал бы таблицу прежнего
+                выбора строк вместе с полем «Строки» и его фокусом. */}
+            {previewLoading[currentPreviewKey] && !shownPreview && (
               <div className="flex-1 flex flex-col items-center justify-center p-8">
                 <div className="w-full max-w-md space-y-6">
                   {/* Spinner */}
@@ -649,7 +693,7 @@ export function ImportWizard(props: {
             )}
 
             {/* Compact horizontal controls */}
-            {currentPreview && (
+            {shownPreview && (
               <>
                 {/* Row 1: Sheet tabs / File / Rows / Template / References */}
                 <div className="flex flex-wrap items-center gap-3 shrink-0">
@@ -664,7 +708,7 @@ export function ImportWizard(props: {
                   />
 
                   <span className="text-xs text-muted-foreground">
-                    {currentPreview.total_rows} строк
+                    {shownPreview.total_rows} строк{previewIsStale ? " · обновление…" : ""}
                   </span>
 
                   <span className="text-xs text-muted-foreground font-medium">Строки:</span>
@@ -716,8 +760,8 @@ export function ImportWizard(props: {
                 <div className="flex flex-wrap items-center gap-x-4 gap-y-2 text-sm shrink-0">
                   <span><strong>Всего:</strong> {summary.total}</span>
                   {(() => {
-                    const qtyTotalRaw = (currentPreview.summary as Record<string, unknown>)?.quantity_total as string | undefined;
-                    const qtyAdjustedTotalRaw = (currentPreview.summary as Record<string, unknown>)?.quantity_adjusted_total as string | undefined;
+                    const qtyTotalRaw = (shownPreview.summary as Record<string, unknown>)?.quantity_total as string | undefined;
+                    const qtyAdjustedTotalRaw = (shownPreview.summary as Record<string, unknown>)?.quantity_adjusted_total as string | undefined;
                     const normalizeQty = (qty: string) => {
                       const n = Number(qty);
                       return Number.isFinite(n) ? (n % 1 === 0 ? String(Math.trunc(n)) : String(n)) : qty;
@@ -885,7 +929,7 @@ export function ImportWizard(props: {
       onOpenChange={setShowApplyConfirm}
       stats={applyStats}
       filename={file?.name ?? ""}
-      sheetName={sheets[selectedSheet] ?? currentPreview?.sheet_name ?? ""}
+      sheetName={sheets[selectedSheet] ?? shownPreview?.sheet_name ?? ""}
       rowsLabel={`Строки: ${rowSelection.trim() || "все"}`}
       planId={pendingChangeSet ? Number(pendingChangeSet.planId) : null}
       batchId={pendingChangeSet?.batchId ?? null}

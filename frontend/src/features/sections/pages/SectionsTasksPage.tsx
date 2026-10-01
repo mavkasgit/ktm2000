@@ -60,6 +60,14 @@ import { createAuditLog, getAuditLogs, type AuditLogEntry } from "@/shared/api/a
 import { isAnyDialogOpen } from "@/shared/lib/dialogOpen";
 import { fmtQty, toQtyInteger } from "@/shared/lib/quantityFormat";
 
+/**
+ * Набор фильтров доски, который страница держит для запроса. Один пустой объект
+ * на модуль, а не литерал в теле компонента: он попадает в `resetPageDeps` и в
+ * зависимости `useMemo`, где важна идентичность (ADR-0060 п.4).
+ */
+type BoardServerQuery = Pick<SectionBoardQueryParams, "search" | "product_sku" | "sort">;
+const EMPTY_SERVER_QUERY: BoardServerQuery = {};
+
 type MeResponse = {
   id: number;
   email: string;
@@ -116,6 +124,14 @@ export function SectionsTasksPage() {
   const lockedSectionId = isSingleWindow && isRequestedSectionIdValid ? (requestedSectionId as number) : null;
 
   const [sectionId, setSectionId] = useState<number | null>(
+    params.sectionId && Number.isFinite(Number(params.sectionId)) ? Number(params.sectionId) : null
+  );
+  // Состояние участка живёт в URL, но может бежать впереди него: плитка
+  // переключает участок локально, а `navigate` в data-router коммитит location
+  // в transition — сразу после клика `params.sectionId` ещё прежний. Параметр
+  // переносим в состояние только когда он сам сменился, иначе синхронизация
+  // откатывала бы участок назад и доска мигала бы «прежний ↔ новый».
+  const urlSectionIdRef = useRef<number | null>(
     params.sectionId && Number.isFinite(Number(params.sectionId)) ? Number(params.sectionId) : null
   );
   const profile = PRESET_PROFILES.find((p) => p.id === "sku+routeHistoryAfter") || PRESET_PROFILES[2];
@@ -252,9 +268,11 @@ export function SectionsTasksPage() {
       return;
     }
     const paramId = params.sectionId ? Number(params.sectionId) : null;
+    const urlSectionIdChanged = paramId !== urlSectionIdRef.current;
+    urlSectionIdRef.current = paramId;
     const validParam = Number.isFinite(paramId) ? sections.find((s) => s.id === paramId) : null;
     if (validParam) {
-      if (sectionId !== validParam.id) setSectionId(validParam.id);
+      if (urlSectionIdChanged && sectionId !== validParam.id) setSectionId(validParam.id);
       return;
     }
     const first =
@@ -274,9 +292,23 @@ export function SectionsTasksPage() {
     [dateFrom, dateTo]
   );
 
-  const [serverQuery, setServerQuery] = useState<
-    Pick<SectionBoardQueryParams, "search" | "product_sku" | "sort">
-  >({});
+  // Поиск, фильтр артикула и сортировка принадлежат участку: набор, который
+  // доска опубликовала для прежнего участка, под новым не применяется — иначе
+  // первый запрос нового участка уходит с чужим фильтром и доска на кадр
+  // показывает пустоту (ADR-0060 п.1-2). Тег дешевле сброса в эффекте: он
+  // закрывает и плитку, и переход по URL, и опоздавшую публикацию старой доски.
+  const [serverQueryFor, setServerQueryFor] = useState<{
+    sectionId: number | null;
+    query: BoardServerQuery;
+  }>({ sectionId: null, query: EMPTY_SERVER_QUERY });
+  const serverQuery = serverQueryFor.sectionId === sectionId ? serverQueryFor.query : EMPTY_SERVER_QUERY;
+  // Обработчик публикации обязан быть стабильным: он стоит в deps эффекта
+  // доски, которая выталкивает наружу свой поиск/фильтры, — инлайновая стрелка
+  // замыкала бы рендер в цикл.
+  const handleBoardServerQueryChange = useCallback(
+    (query: BoardServerQuery) => setServerQueryFor({ sectionId, query }),
+    [sectionId],
+  );
 
   const {
     page: boardPage,
@@ -361,6 +393,15 @@ export function SectionsTasksPage() {
       toast({ title: "Не удалось создать план", description: getErrorMessage(error), variant: "destructive" });
     },
   });
+  // Ошибка создания плана относится к прежнему участку: под новым она держала бы
+  // форму создания открытой, потому что панель гасит режим только когда ошибки
+  // нет (ADR-0060 п.1). `reset` берём из ref: эффект не должен зависеть от
+  // объекта мутации, который пересоздаётся на каждом рендере.
+  const resetCreatePlanRef = useRef(createPlanMutation.reset);
+  resetCreatePlanRef.current = createPlanMutation.reset;
+  useEffect(() => {
+    resetCreatePlanRef.current();
+  }, [sectionId]);
   const revokePlanItemsMutation = useMutation({
     mutationFn: async (items: DailyPlanCompositionItem[]) => {
       const results = await Promise.allSettled(
@@ -1084,7 +1125,10 @@ export function SectionsTasksPage() {
                 </div>
 
                 <div className="grid grid-cols-1 gap-4 lg:grid-cols-[minmax(0,1fr)_280px]">
+                  {/* `key` — чтобы поиск, фильтры и сортировка прежнего участка
+                      умирали вместе с ним, а не жили под шапкой нового (ADR-0060 п.1). */}
                   <SectionTasksBoard
+                    key={sectionId}
                     tasks={displayedTasks}
                     total={displayedTasks.length}
                     isLoading={boardPending || selectedCompositionsLoading}
@@ -1105,7 +1149,7 @@ export function SectionsTasksPage() {
                     setLimit={setBoardLimit}
                     totalPages={selectedPlanIds.size > 0 ? 1 : boardTotalPages}
                     rangeLabel={selectedPlanIds.size > 0 ? `${displayedTasks.length} заданий` : getBoardRangeLabel(tasks.length, boardTotal, { onPage: true })}
-                    onServerQueryChange={setServerQuery}
+                    onServerQueryChange={handleBoardServerQueryChange}
                   />
                   <DailyPlansPanel
                     plans={dailyPlans ?? []}
@@ -1179,6 +1223,7 @@ export function SectionsTasksPage() {
                     </Button>
                   </div>
                   <SectionTasksBoard
+                    key={sectionId}
                     tasks={displayedTasks}
                     total={displayedTasks.length}
                     isLoading={boardPending || selectedCompositionsLoading}
@@ -1204,7 +1249,7 @@ export function SectionsTasksPage() {
                     setLimit={setBoardLimit}
                     totalPages={1}
                     rangeLabel={`${displayedTasks.length} заданий`}
-                    onServerQueryChange={setServerQuery}
+                    onServerQueryChange={handleBoardServerQueryChange}
                   />
                 </div>
                 <DailyPlansPanel

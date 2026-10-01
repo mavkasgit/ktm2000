@@ -1450,6 +1450,7 @@ def _apply_all_positions_filters(
     has_errors: str | None,
     has_warnings: str | None,
     dimensions: str | None = None,
+    plan_position_id: int | None = None,
 ):
     stmt = stmt.join(ProductionPlan, PlanPosition.production_plan_id == ProductionPlan.id).where(
         ProductionPlan.deleted_at.is_(None)
@@ -1458,6 +1459,9 @@ def _apply_all_positions_filters(
         PlanPosition.status.in_(ALL_POSITIONS_PLANNING_STATUSES),
         PlanPosition.deleted_at.is_(None),
     )
+
+    if plan_position_id is not None:
+        stmt = stmt.where(PlanPosition.id == plan_position_id)
 
     if status:
         try:
@@ -1649,6 +1653,10 @@ async def all_plan_positions(
         default=None,
         description='Column filter: exact JSON match on position task dimensions, e.g. {"length_mm":2700} or null',
     ),
+    plan_position_id: int | None = Query(
+        default=None,
+        description="Точное совпадение по id позиции",
+    ),
     sort: str | None = Query(
         default=None,
         description="Comma-separated sort rules: field:asc|desc, e.g. source_row_number:asc,id:asc",
@@ -1676,6 +1684,7 @@ async def all_plan_positions(
         has_errors=has_errors,
         has_warnings=has_warnings,
         dimensions=dimensions,
+        plan_position_id=plan_position_id,
     )
 
     count_stmt = select(sa_func.count()).select_from(stmt.subquery())
