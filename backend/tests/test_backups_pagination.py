@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 import json
-from datetime import datetime, timedelta
+from datetime import UTC, datetime, timedelta
 from pathlib import Path
 
 import pytest
@@ -35,7 +35,7 @@ def backups_dir(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Path:
 
 @pytest.mark.asyncio
 async def test_backups_offset_limit_pagination(client, backups_dir: Path) -> None:
-    now = datetime.now()
+    now = datetime.now(UTC)
     for index in range(6):
         filename = f"backup_ktm2000_test_{(now - timedelta(days=index)).strftime('%Y-%m-%d_%H-%M-%S')}.zip"
         _write_backup(
@@ -66,7 +66,7 @@ async def test_backups_offset_limit_pagination(client, backups_dir: Path) -> Non
 
 @pytest.mark.asyncio
 async def test_backups_backup_type_filter(client, backups_dir: Path) -> None:
-    now = datetime.now()
+    now = datetime.now(UTC)
     _write_backup(
         backups_dir / "backup_ktm2000_test_2026-01-01_10-00-00.zip",
         mtime=now,
@@ -87,7 +87,7 @@ async def test_backups_backup_type_filter(client, backups_dir: Path) -> None:
 
 @pytest.mark.asyncio
 async def test_backups_sort_by_size(client, backups_dir: Path) -> None:
-    now = datetime.now()
+    now = datetime.now(UTC)
     small = backups_dir / "backup_ktm2000_test_2026-01-01_10-00-00.zip"
     large = backups_dir / "backup_ktm2000_test_2026-01-02_10-00-00.zip"
     small.write_bytes(b"x")
@@ -111,7 +111,7 @@ async def test_backups_sort_two_priorities(client, backups_dir: Path) -> None:
     и различается только второй ключ. Сортировка одной колонкой (равные внутри
     групп) такой порядок не даёт.
     """
-    now = datetime.now()
+    now = datetime.now(UTC)
     # Одинаковый размер и разный mtime: tiebreaker обязан разложить группы
     # по имени файла, а не оставить их в порядке обхода каталога.
     for index, (day, backup_type) in enumerate(
@@ -148,7 +148,7 @@ async def test_backups_sort_tiebreaker_keeps_pages_stable(client, backups_dir: P
     уравнивает), поэтому порядок целиком определяет tiebreaker по имени файла —
     и он должен совпадать на первой и на второй странице.
     """
-    now = datetime.now()
+    now = datetime.now(UTC)
     for index in range(6):
         _write_backup(
             backups_dir / f"backup_ktm2000_test_2026-02-{index + 1:02d}_10-00-00.zip",
@@ -169,7 +169,7 @@ async def test_backups_sort_tiebreaker_keeps_pages_stable(client, backups_dir: P
 @pytest.mark.asyncio
 async def test_backups_sort_invalid_field_and_order_400(client, backups_dir: Path) -> None:
     """Молчаливый фолбэк запрещён: поле вне таблицы — 400, не sort по created_at."""
-    now = datetime.now()
+    now = datetime.now(UTC)
     _write_backup(backups_dir / "backup_ktm2000_test_2026-01-01_10-00-00.zip", mtime=now)
 
     unknown_field = await client.get("/api/backups?sort=format:asc")
@@ -187,7 +187,7 @@ async def test_backups_legacy_sort_params_ignored(client, backups_dir: Path) -> 
     фронт, шлёт старую форму, получил бы 200 и тихую сортировку по умолчанию —
     ровно тот молчаливый фолбэк, который запрещён.
     """
-    now = datetime.now()
+    now = datetime.now(UTC)
     for index in range(3):
         path = backups_dir / f"backup_ktm2000_test_2026-03-{index + 1:02d}_10-00-00.zip"
         path.write_bytes(b"x" * (10 - index))
@@ -200,6 +200,58 @@ async def test_backups_legacy_sort_params_ignored(client, backups_dir: Path) -> 
     assert default.status_code == 200, default.text
     assert legacy.status_code == 200, legacy.text
     assert legacy.json()["items"] == default.json()["items"]
+
+
+@pytest.mark.asyncio
+async def test_backups_created_at_filter_roundtrip(client, backups_dir: Path) -> None:
+    """`created_at` из ответа годится фильтром как есть.
+
+    Формат задаёт `_build_backup_list_item` (aware-UTC, `+00:00`), и он же
+    уезжает обратно в `?created_at=`, который сервер сравнивает строками
+    точно. Тест ловит рассинхрон шкал: naive-строку в ответе или формат без
+    оффсета, который фильтр уже не узнаёт.
+    """
+    now = datetime.now(UTC)
+    _write_backup(backups_dir / "backup_ktm2000_test_2026-01-01_10-00-00.zip", mtime=now)
+    _write_backup(
+        backups_dir / "backup_ktm2000_test_2026-01-02_10-00-00.zip",
+        mtime=now - timedelta(hours=1),
+    )
+
+    listed = await client.get("/api/backups?limit=50")
+    assert listed.status_code == 200, listed.text
+    created_at = listed.json()["items"][0]["created_at"]
+    assert created_at.endswith("+00:00")
+
+    # `params=` кодирует «+» как `%2B`; голая подстановка в URL превратила бы
+    # его в пробел, и тест проверял бы не тот сценарий.
+    filtered = await client.get("/api/backups", params={"created_at": created_at, "limit": 50})
+    assert filtered.status_code == 200, filtered.text
+    body = filtered.json()
+    assert body["total"] == 1
+    assert body["items"][0]["created_at"] == created_at
+
+
+@pytest.mark.asyncio
+async def test_backups_delete_older_than_keeps_one_time_scale(client, backups_dir: Path) -> None:
+    """Граница «старше N дней» и mtime сравниваются в одной шкале.
+
+    Правка только одной из этих двух строк даёт `TypeError` naive против
+    aware, поэтому тест держит их вместе и заодно проверяет, что свежий
+    бэкап не попал под удаление.
+    """
+    now = datetime.now(UTC)
+    old = backups_dir / "backup_ktm2000_test_2026-01-01_10-00-00.zip"
+    fresh = backups_dir / "backup_ktm2000_test_2026-01-02_10-00-00.zip"
+    _write_backup(old, mtime=now - timedelta(days=10))
+    _write_backup(fresh, mtime=now - timedelta(days=1))
+
+    response = await client.post("/api/backups/delete-older-than", json={"days": 5})
+    assert response.status_code == 200, response.text
+    body = response.json()
+    assert body["deleted"] == [old.name]
+    assert body["cutoff"].endswith("+00:00")
+    assert fresh.exists()
 
 
 def test_backups_sort_table_keys_match_valid_fields() -> None:

@@ -10,7 +10,7 @@ import threading
 import uuid
 import zipfile
 from collections.abc import Callable
-from datetime import datetime, timedelta
+from datetime import UTC, datetime, timedelta
 from pathlib import Path
 from urllib.parse import unquote, urlparse
 
@@ -127,7 +127,10 @@ def _docker_container_available() -> bool:
             capture_output=True, text=True, check=False, timeout=10
         )
         return settings.POSTGRES_CONTAINER_NAME in result.stdout
-    except Exception:
+    except (OSError, subprocess.SubprocessError):
+        # Нет docker в PATH (OSError) или он не ответил за timeout
+        # (SubprocessError): контейнер считаем недоступным. Широкий
+        # `except Exception` глушил бы и ошибки самого кода.
         return False
 
 
@@ -284,7 +287,10 @@ def _get_current_preview(db_name: str | None = None) -> dict:
             stats[table] = 0
     return {
         "source_db": _get_db_name(),
-        "backup_timestamp": datetime.now().isoformat(),
+        # `backup_timestamp` — одна шкала на все свои сайты (здесь, в
+        # `_preview_dump_file` и в fallback'ах preview): aware-UTC, чтобы
+        # кэш из меты и значение «сейчас» не разъезжались по виду строки.
+        "backup_timestamp": datetime.now(UTC).isoformat(),
         "tables": stats,
         "storage": _storage_summary(),
     }
@@ -329,7 +335,11 @@ def _build_backup_list_item(path: Path) -> dict:
         "filename": path.name,
         "db_name": (meta or {}).get("source_db") or _parse_backup_db_name(path.name),
         "size": path.stat().st_size,
-        "created_at": datetime.fromtimestamp(path.stat().st_mtime).isoformat(),
+        # Единственный источник `created_at`: он же ключ сортировки (строка)
+        # и значение точного строкового фильтра (`_backup_matches_filters`),
+        # поэтому шкала обязана совпадать с той, из которой фильтр пришёл:
+        # фронт шлёт обратно ровно эту строку. Менять вместе с `:1160`.
+        "created_at": datetime.fromtimestamp(path.stat().st_mtime, UTC).isoformat(),
         "comment": meta.get("comment", "") if meta else "",
         "backup_type": (meta or {}).get("backup_type") or "manual",
         "format": (meta or {}).get("format") or ("archive-v2" if _is_archive_backup(path) else "database-dump"),
@@ -720,7 +730,7 @@ def _preview_dump_file(dump_path: Path, source_db: str | None = None) -> dict:
 
         return {
             "source_db": source_db or _get_db_name(),
-            "backup_timestamp": datetime.fromtimestamp(dump_path.stat().st_mtime).isoformat(),
+            "backup_timestamp": datetime.fromtimestamp(dump_path.stat().st_mtime, UTC).isoformat(),
             "tables": stats,
             "cached": False,
         }
@@ -853,7 +863,7 @@ def _set_job_progress(job_id: str, progress: int, stage: str, message: str, **ex
             "progress": max(0, min(100, progress)),
             "stage": stage,
             "message": message,
-            "updated_at": datetime.now().isoformat(),
+            "updated_at": datetime.now(UTC).isoformat(),
             **extra,
         })
 
@@ -865,7 +875,12 @@ def _create_backup_archive(job_id: str | None = None, backup_type: str = "manual
 
     report(5, "preparing", "Подготовка к созданию бэкапа")
     db_name = _get_db_name()
-    timestamp = datetime.now().strftime("%Y-%m-%d_%H-%M-%S")
+    # Осознанно локальное время контейнера, не UTC-сайт: метка входит в имя
+    # файла (`docs/deployment.md` — в проде контейнер TZ=UTC, поэтому имя и
+    # так UTC-шное), но имя нигде не сортируется и не фильтруется — ротация
+    # и порядок списка идут по mtime. Переход на UTC здесь менял бы имена
+    # файлов и ломал бы преемственность с уже созданными бэкапами.
+    timestamp = datetime.now().strftime("%Y-%m-%d_%H-%M-%S")  # noqa: DTZ005
     filename = f"backup_{db_name}_{timestamp}.zip"
     filepath = BACKUPS_DIR / filename
     dump_path = BACKUPS_DIR / f"{filename}.{BACKUP_DUMP_NAME}"
@@ -920,7 +935,9 @@ def _create_backup_archive(job_id: str | None = None, backup_type: str = "manual
         "filename": filename,
         "db_name": db_name,
         "size": filepath.stat().st_size,
-        "created_at": datetime.now().isoformat(),
+        # Та же шкала, что у `:342`: фронт сравнивает это значение и шлёт его
+        # обратно фильтром `created_at`.
+        "created_at": datetime.now(UTC).isoformat(),
         "comment": "",
     }
     report(100, "completed", "Бэкап готов", result=result)
@@ -962,7 +979,7 @@ async def start_backup_job() -> dict:
     """Запустить создание бэкапа в фоне и вернуть job_id для polling."""
     _validate_admin()
     job_id = uuid.uuid4().hex
-    now = datetime.now().isoformat()
+    now = datetime.now(UTC).isoformat()
     with BACKUP_JOBS_LOCK:
         BACKUP_JOBS[job_id] = {
             "job_id": job_id,
@@ -1001,7 +1018,11 @@ def _read_config_json() -> dict:
             "auto_enabled": bool(data.get("auto_enabled", False)),
             "time_of_day": str(data.get("time_of_day", "23:00"))
         }
-    except Exception:
+    except (json.JSONDecodeError, OSError, UnicodeDecodeError):
+        # Битый или нечитаемый config.json — отдаём дефолт: расписанием
+        # управляет человек, падать из-за него API не должен. Узкий набор
+        # вместо `except Exception` — кодировка и I/O покрыты, ошибки кода
+        # (например, AttributeError) больше не прячутся.
         return default_config
 
 
@@ -1153,11 +1174,13 @@ async def delete_older_than(body: dict) -> dict:
     if days is None or not isinstance(days, int) or days < 0:
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Некорректное количество дней")
 
-    cutoff = datetime.now() - timedelta(days=days)
+    # Граница и mtime обязаны жить в одной шкале — одиночная правка любой из
+    # строк даёт `TypeError: can't compare offset-naive and offset-aware`.
+    cutoff = datetime.now(UTC) - timedelta(days=days)
     deleted = []
 
     for f in _iter_backup_files():
-        mtime = datetime.fromtimestamp(f.stat().st_mtime)
+        mtime = datetime.fromtimestamp(f.stat().st_mtime, UTC)
         if mtime < cutoff:
             _delete_backup_file(f.name)
             deleted.append(f.name)
@@ -1179,7 +1202,7 @@ async def preview_backup(filename: str) -> dict:
     if meta and "tables" in meta:
         return {
             "source_db": meta.get("source_db", _get_db_name()),
-            "backup_timestamp": meta.get("backup_timestamp", datetime.fromtimestamp(filepath.stat().st_mtime).isoformat()),
+            "backup_timestamp": meta.get("backup_timestamp", datetime.fromtimestamp(filepath.stat().st_mtime, UTC).isoformat()),
             "tables": meta["tables"],
             "storage": meta.get("storage"),
             "table_exports": meta.get("table_exports"),
@@ -1191,7 +1214,7 @@ async def preview_backup(filename: str) -> dict:
         if manifest and "tables" in manifest:
             return {
                 "source_db": manifest.get("source_db", _parse_backup_db_name(filename)),
-                "backup_timestamp": manifest.get("backup_timestamp", datetime.fromtimestamp(filepath.stat().st_mtime).isoformat()),
+                "backup_timestamp": manifest.get("backup_timestamp", datetime.fromtimestamp(filepath.stat().st_mtime, UTC).isoformat()),
                 "tables": manifest["tables"],
                 "storage": manifest.get("storage"),
                 "table_exports": manifest.get("table_exports"),
@@ -1226,7 +1249,7 @@ async def upload_preview(file: UploadFile = File(...)) -> dict:
             if manifest and "tables" in manifest:
                 return {
                     "source_db": manifest.get("source_db", uploaded_db_name),
-                    "backup_timestamp": manifest.get("backup_timestamp", datetime.fromtimestamp(tmp_path.stat().st_mtime).isoformat()),
+                    "backup_timestamp": manifest.get("backup_timestamp", datetime.fromtimestamp(tmp_path.stat().st_mtime, UTC).isoformat()),
                     "tables": manifest["tables"],
                     "storage": manifest.get("storage"),
                     "table_exports": manifest.get("table_exports"),
