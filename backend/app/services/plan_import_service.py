@@ -532,7 +532,7 @@ async def _get_or_create_import_file(
         return existing
 
     storage_dir = Path(settings.IMPORT_STORAGE_DIR)
-    storage_dir.mkdir(parents=True, exist_ok=True)
+    storage_dir.mkdir(parents=True, exist_ok=True)  # noqa: ASYNC240 — #267
     stored_path = storage_dir / f"{file_hash}{extension}"
     stored_path.write_bytes(content)
 
