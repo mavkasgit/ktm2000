@@ -60,7 +60,9 @@ async def run_backup_cycle():
                     latest_backup.name,
                 )
                 return
-        except Exception:
+        except (OSError, ValueError, OverflowError):
+            # `stat()` → `OSError`, `fromtimestamp` → `ValueError`/`OverflowError`
+            # (недоступный/битый mtime). Всё остальное не глотаем.
             logger.warning(
                 "Не удалось прочитать mtime последнего бэкапа. Продолжаем проверку."
             )

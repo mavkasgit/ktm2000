@@ -4,6 +4,7 @@ from uuid import UUID
 
 from fastapi import Depends, Header, HTTPException, Request, status
 from sqlalchemy import or_, select
+from sqlalchemy.exc import SQLAlchemyError
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.config import settings
@@ -219,7 +220,11 @@ async def _get_current_user_dev(
                 user = await _load_user_by_subject(db, subject)
                 if user:
                     return user
-        except (TokenError, Exception):
+        except (TokenError, SQLAlchemyError):
+            # Dev-escape hatch: невалидный токен или ошибка загрузки пользователя
+            # → падаем на системного `system@local` ниже. Широкий `Exception`
+            # здесь не нужен: `decode_access_token` бросает только `TokenError`,
+            # `_load_user_by_subject` — ошибки SQLAlchemy.
             pass
 
     # Fallback to globally seeded system@local user if present in DB

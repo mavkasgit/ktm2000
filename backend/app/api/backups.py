@@ -14,6 +14,7 @@ from datetime import UTC, datetime, timedelta
 from pathlib import Path
 from urllib.parse import unquote, urlparse
 
+import anyio
 from fastapi import (
     APIRouter,
     Body,
@@ -627,12 +628,17 @@ def _read_zip_manifest(zip_path: Path) -> dict | None:
 
 
 async def _save_upload_file(file: UploadFile, target_path: Path) -> None:
-    with open(target_path, "wb") as target:
+    """Стримит загруженный файл на диск, не блокируя event loop.
+
+    `anyio.open_file` вместо builtin `open`: дамп бэкапа бывает на сотни МБ,
+    синхронные `write` внутри `async def` застопорили бы все запросы воркера.
+    """
+    async with await anyio.open_file(target_path, "wb") as target:
         while True:
             chunk = await file.read(1024 * 1024)
             if not chunk:
                 break
-            target.write(chunk)
+            await target.write(chunk)
 
 
 def _extract_dump_from_archive(zip_path: Path, target_path: Path) -> None:

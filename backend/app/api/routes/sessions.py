@@ -6,7 +6,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.api.deps import get_current_user
 from app.core.database import get_db
-from app.core.security import decode_access_token
+from app.core.security import TokenError, decode_access_token
 from app.models.user import User
 from app.models.user_session import UserSession
 from app.schemas.session import MAX_SESSIONS_SHOWN, SessionListOut, SessionOut
@@ -32,9 +32,10 @@ def get_current_session_id(request: Request) -> UUID | None:
         sid = payload.get("sid")
         if sid:
             return UUID(str(sid))
-    except Exception:
-        pass
-    return None
+    except (TokenError, ValueError):
+        # Токен неверифицируем (`TokenError`) или `sid` не UUID (`ValueError`)
+        # → считаем, что текущей сессии нет. Другие классы не глотаем.
+        return None
 
 
 @router.get("/sessions", response_model=SessionListOut)

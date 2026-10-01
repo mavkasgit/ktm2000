@@ -181,7 +181,10 @@ async def import_catalog_from_zip(
                         new_full = _normalize_photo_path(
                             str(dst_full.relative_to(Path(settings.PRODUCT_PHOTO_DIR).parent))
                         )
-            except Exception as e:
+            except (OSError, ValueError) as e:
+                # Копирование фото — best-effort: `shutil.copy2` бросает
+                # `OSError` (нет файла/прав, SameFileError), `relative_to` —
+                # `ValueError`. Строка импорта не должна падать из-за фото.
                 errors.append(f"{sku}: photo copy failed - {e}")
 
             if existing:

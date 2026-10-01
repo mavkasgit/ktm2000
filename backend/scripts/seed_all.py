@@ -25,7 +25,11 @@ async def main():
             await db.rollback()
             print(f"Seed failed: {e}", file=sys.stderr)
             sys.exit(1)
-        except Exception as e:
+        except Exception as e:  # noqa: BLE001 — верхнеуровневый CLI-барьер
+            # Точка входа CLI (`python scripts/seed_all.py`): ловим всё, что не
+            # поймал сидер, откатываем транзакцию и завершаемся кодом 1, чтобы
+            # не оставить полу-засеянную БД. Узкие классы тут смысла не имеют —
+            # сообщение и exit-code и есть контракт.
             await db.rollback()
             print(f"Unexpected error: {e}", file=sys.stderr)
             sys.exit(1)

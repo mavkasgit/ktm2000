@@ -371,7 +371,10 @@ def _merged_cell_anchors(sheet: Any) -> dict[tuple[int, int], int]:
     """
     try:
         ranges = sheet.merged_cell_ranges
-    except Exception:  # pragma: no cover - формат без merged-метаданных
+    except AttributeError:  # pragma: no cover - объект листа без merged-API
+        # calamine `CalamineSheet.merged_cell_ranges` объявлен всегда и для
+        # неподдерживаемых форматов возвращает `None`; отсутствовать атрибут
+        # может только у чужого объекта листа (моки/другие парсеры).
         return {}
     anchors: dict[tuple[int, int], int] = {}
     for cell_range in ranges or []:

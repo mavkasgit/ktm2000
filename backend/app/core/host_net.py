@@ -134,6 +134,8 @@ def resolve_authentik_origin(
             if host and host not in ("localhost", "127.0.0.1", "::1") and not host.startswith("127."):
                 port = p.port or authentik_http_port()
                 return origin_from_host(host, port=port, scheme=p.scheme or "http")
-        except Exception:
+        except ValueError:
+            # Битый issuer (невалидный IPv6/порт) — происхождение не выводим.
+            # `urlparse`/`.port` бросают только `ValueError`.
             pass
     return None

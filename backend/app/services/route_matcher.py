@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import logging
 from dataclasses import dataclass, field
 from datetime import datetime
 
@@ -24,6 +25,8 @@ from app.services.route_selection import (
     select_route_for_payload,
 )
 from app.services.route_signature import auto_route_code, route_signature_conflicts
+
+logger = logging.getLogger(__name__)
 
 
 class RouteSignatureConflict(Exception):
@@ -319,8 +322,15 @@ async def resolve_position_route(
                     # Ничего не нашли — идём в ветку сохранённого назначения
                     # ниже: там архивный маршрут отсеется, а существующий
                     # вернётся со своим именем и без ошибки.
-            except Exception:
-                pass  # Fall through to stored route_id or auto selection
+            except Exception:  # noqa: BLE001 — best-effort пересборка
+                # Динамический билд — необязательный путь: любая непредвиденная
+                # ошибка (билдер, БД, payload) уводит резолв в сохранённое
+                # назначение ниже. Широкий перехват здесь — часть контракта,
+                # но молчать нельзя: трейс нужен для разбора.
+                logger.debug(
+                    "Динамическая пересборка маршрута не удалась, fallback на сохранённое назначение",
+                    exc_info=True,
+                )
 
     # Stored route_id without dynamic profile (legacy/static assignment).
     if route_id is not None:
