@@ -127,7 +127,10 @@ export function FileRow({
     <>
       {/* Скрытая строка приглушена и помечена: иначе «убранный из списка» батч
           выглядел бы живым импортом, а он всего лишь скрыт (ADR-0056). */}
-      <tr className={file.hidden ? "border-b bg-muted/40 text-muted-foreground" : "border-b"}>
+      <tr
+        data-testid={`plan-import-row-${file.batch_id}`}
+        className={file.hidden ? "border-b bg-muted/40 text-muted-foreground" : "border-b"}
+      >
         <td className="p-3 text-sm text-muted-foreground">
           <span className="block max-w-[220px] truncate" title={planLabel}>{planLabel}</span>
         </td>

@@ -104,23 +104,33 @@ test.describe("@ui История импортов плана", () => {
     });
 
     // ── Список: свежий сверху, статусы различимы ────────────────────────
+    // Строка адресуется по `data-testid` со своим `batch_id`, а не позицией в
+    // таблице: порядок серверный, и при перерисовке строка за `.first()`
+    // менялась — клик по «Откатить» уходил в выключенную кнопку соседнего
+    // батча и висел до таймаута теста (6 минут, прогон 01.10.2026).
     const rows = page.locator("tbody tr");
+    const rowFor = (batchId: number) => page.getByTestId(`plan-import-row-${batchId}`);
     await expect(rows).toHaveCount(2, { timeout: 15_000 });
-    await expect(rows.first()).toContainText("Распознан");
-    await expect(rows.last()).toContainText("Применён");
+    const firstRow = rowFor(first.import_batch_id);
+    const secondRow = rowFor(second.import_batch_id);
+    // «Свежий сверху» по-прежнему проверяем: второй батч создан позже.
+    await expect(rows.first()).toHaveAttribute(
+      "data-testid",
+      `plan-import-row-${second.import_batch_id}`,
+    );
+    await expect(secondRow).toContainText("Распознан");
+    await expect(firstRow).toContainText("Применён");
     // Колонка «План» заполнена у обеих строк (подпись «plan_no · name»):
     // батч без плана в списке выглядел бы как «План #id».
-    for (const row of [rows.first(), rows.last()]) {
+    for (const row of [firstRow, secondRow]) {
       await expect(row.locator("td").first()).toContainText("·");
     }
 
     // ── LIFO до применения второго батча ────────────────────────────────
-    const appliedRow = rows.filter({ hasText: "Применён" });
-    await expect(appliedRow.getByRole("button", { name: "Откатить" })).toBeEnabled();
+    await expect(firstRow.getByRole("button", { name: "Откатить" })).toBeEnabled();
 
     // ── Применение из истории ──────────────────────────────────────────
-    const parsedRow = rows.filter({ hasText: "Распознан" });
-    await parsedRow.getByRole("button", { name: "Применить" }).click();
+    await secondRow.getByRole("button", { name: "Применить" }).click();
     const applyDialog = page.getByRole("alertdialog").last();
     await expect(applyDialog.getByText("Подтвердите применение")).toBeVisible({ timeout: 10_000 });
     await applyDialog.getByRole("button", { name: /^Загрузить( с ошибками)? \(/ }).click();
@@ -128,16 +138,13 @@ test.describe("@ui История импортов плана", () => {
     await expect(page.getByText("Импорт применён", { exact: true })).toBeVisible({ timeout: 15_000 });
 
     // ── LIFO после применения: откат перешёл к свежему батчу ────────────
-    const nowAppliedRow = rows.filter({ hasText: "Применён" }).first();
-    await expect(nowAppliedRow.getByRole("button", { name: "Откатить" })).toBeEnabled({
+    await expect(secondRow.getByRole("button", { name: "Откатить" })).toBeEnabled({
       timeout: 15_000,
     });
-    await expect(
-      rows.filter({ hasText: "Применён" }).last().getByRole("button", { name: "Откатить" }),
-    ).toBeDisabled();
+    await expect(firstRow.getByRole("button", { name: "Откатить" })).toBeDisabled();
 
     // ── Откат из истории возвращает батч в «Отменён» ────────────────────
-    await nowAppliedRow.getByRole("button", { name: "Откатить" }).click();
+    await secondRow.getByRole("button", { name: "Откатить" }).click();
     const rollbackDialog = page.getByRole("alertdialog").last();
     await expect(rollbackDialog.getByText("Откатить импорт?")).toBeVisible({ timeout: 10_000 });
     await rollbackDialog.getByRole("button", { name: "Откатить" }).click();
@@ -149,9 +156,10 @@ test.describe("@ui История импортов плана", () => {
     // «Импорт применён».
     await expect(page.getByText("Импорт откачен", { exact: true })).toBeVisible({ timeout: 15_000 });
     // Отменённый батч снова применим — иначе откат был бы билетом в одну сторону.
-    await expect(
-      rows.filter({ hasText: "Отменён" }).getByRole("button", { name: "Применить" }),
-    ).toBeVisible({ timeout: 15_000 });
+    await expect(secondRow).toContainText("Отменён");
+    await expect(secondRow.getByRole("button", { name: "Применить" })).toBeVisible({
+      timeout: 15_000,
+    });
   });
 
   test("«Убрать из списка» прячет строку, не трогая позиции и остатки", async ({
