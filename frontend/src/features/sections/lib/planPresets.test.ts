@@ -75,4 +75,13 @@ describe("базовый пресет участка", () => {
       expect(loadPresets(1, sectionCode)[0]?.settings.columns).toEqual(columns);
     }
   });
+
+  it("«Подвесы» печатаются только у анодирования (#205)", () => {
+    const profilesWithHangers = Object.entries(PRINT_PROFILES)
+      .filter(([, columns]) => columns.includes("hangers"))
+      .map(([sectionCode]) => sectionCode);
+
+    expect(profilesWithHangers).toEqual(["ANODIZING"]);
+    expect(printColumnsFor("ANODIZING")).toContain("hangers");
+  });
 });
