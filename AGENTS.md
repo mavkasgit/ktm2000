@@ -88,6 +88,8 @@ npm run test:db:cleanup        # Уборка осиротевших тесто�
 - Внешние best practices — **Exa MCP** (`web_search_exa` / `web_search`).
 - Полная матрица MCP → [`docs/agent-registry.md`](docs/agent-registry.md).
 - После значимых правок кода: `npx @colbymchenry/codegraph sync`.
+- Индекс CodeGraph локальный и не в git (`.codegraph/` в `.gitignore`), поэтому на новой машине/клоне — один раз `npx @colbymchenry/codegraph init -y`, и только потом `sync`. `sync` не инициализирует: без индекса он падает с `CodeGraph not initialized`.
+- MCP-сервер ставится отдельно и один раз на harness: `npx @colbymchenry/codegraph install -t <агент> -l global`. Без него `codegraph_explore` в сессии нет, и «код искать только через CodeGraph» невыполнимо.
 
 ## Чужие правки в рабочем дереве
 

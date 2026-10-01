@@ -29,6 +29,8 @@ async def seed_selection_rules(
                 "field_path": cond.field_path,
                 "operator": cond.operator,
                 "value": cond.value,
+                # Ссылка на другое поле того же источника вместо литерала (#277).
+                "value_from": cond.value_from,
                 "case_sensitive": cond.case_sensitive,
             })
 

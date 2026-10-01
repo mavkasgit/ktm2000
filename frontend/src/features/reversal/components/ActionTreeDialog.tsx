@@ -7,6 +7,7 @@ const STATUS_MARK: Record<ActionStatus, string> = {
   active: "🟢",
   reversed: "🔴",
   amended: "✏️",
+  purged: "🗑",
 };
 
 function TreeRow({

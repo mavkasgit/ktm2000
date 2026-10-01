@@ -26,7 +26,17 @@ const STATUS_BADGE: Record<
   active: { label: "Активно", variant: "success" },
   reversed: { label: "Отменено", variant: "secondary" },
   amended: { label: "Изменено", variant: "warning" },
+  purged: { label: "Очищено", variant: "secondary" },
 };
+
+/**
+ * Статус приходит с сервера строкой, а не из закрытого на фронте множества:
+ * без фолбэка незнакомое значение (новый статус в бэке) роняет весь раздел
+ * в errorElement, а не одну ячейку.
+ */
+function statusBadge(status: string) {
+  return STATUS_BADGE[status as ActionStatus] ?? { label: status, variant: "secondary" as const };
+}
 
 function formatDateTime(value: string | null) {
   if (!value) return "—";
@@ -102,6 +112,7 @@ export function ActionsJournalPage() {
             <SelectItem value="active">Активно</SelectItem>
             <SelectItem value="reversed">Отменено</SelectItem>
             <SelectItem value="amended">Изменено</SelectItem>
+            <SelectItem value="purged">Очищено</SelectItem>
           </SelectContent>
         </Select>
       </div>
@@ -133,25 +144,26 @@ export function ActionsJournalPage() {
                 </td>
               </tr>
             ) : (
-              items.map((action: JournalAction) => (
-                <tr key={action.id} data-testid={`action-row-${action.id}`}>
-                  <td className="px-3 py-2 font-mono">{action.id}</td>
-                  <td className="px-3 py-2 font-medium">{action.action_type}</td>
-                  <td className="px-3 py-2">
-                    {action.ref_id != null ? `#${action.ref_id}` : "—"}
-                  </td>
-                  <td className="px-3 py-2">{action.actor ?? "—"}</td>
-                  <td className="px-3 py-2">
-                    <Badge variant={STATUS_BADGE[action.status].variant}>
-                      {STATUS_BADGE[action.status].label}
-                    </Badge>
-                  </td>
-                  <td className="px-3 py-2">{formatDateTime(action.created_at)}</td>
-                  <td className="px-3 py-2 text-right">
-                    <JournalRowOperations action={action} onChanged={refresh} />
-                  </td>
-                </tr>
-              ))
+              items.map((action: JournalAction) => {
+                const badge = statusBadge(action.status);
+                return (
+                  <tr key={action.id} data-testid={`action-row-${action.id}`}>
+                    <td className="px-3 py-2 font-mono">{action.id}</td>
+                    <td className="px-3 py-2 font-medium">{action.action_type}</td>
+                    <td className="px-3 py-2">
+                      {action.ref_id != null ? `#${action.ref_id}` : "—"}
+                    </td>
+                    <td className="px-3 py-2">{action.actor ?? "—"}</td>
+                    <td className="px-3 py-2">
+                      <Badge variant={badge.variant}>{badge.label}</Badge>
+                    </td>
+                    <td className="px-3 py-2">{formatDateTime(action.created_at)}</td>
+                    <td className="px-3 py-2 text-right">
+                      <JournalRowOperations action={action} onChanged={refresh} />
+                    </td>
+                  </tr>
+                );
+              })
             )}
           </tbody>
         </table>

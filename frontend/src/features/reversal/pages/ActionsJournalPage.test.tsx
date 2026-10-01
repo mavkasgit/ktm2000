@@ -66,6 +66,7 @@ beforeEach(() => {
     page: 1,
     page_size: 50,
   });
+
 });
 
 describe("ActionsJournalPage", () => {
@@ -130,5 +131,33 @@ describe("ActionsJournalPage", () => {
     });
     renderPage();
     await screen.findByText("Действия не найдены");
+  });
+
+  it("статус purged (#118) не роняет раздел — бейдж «Очищено»", async () => {
+    vi.mocked(getActions).mockResolvedValue({
+      items: [makeAction({ id: 3, status: "purged" })],
+      total: 1,
+      page: 1,
+      page_size: 50,
+    });
+    renderPage();
+
+    await screen.findByTestId("action-row-3");
+    expect(screen.getByText("Очищено")).toBeTruthy();
+  });
+
+  it("неизвестный статус с сервера показывается как есть, а не роняет раздел", async () => {
+    // Сервер отдаёт status строкой: новый статус в бэке не должен убивать
+    // весь раздел через errorElement.
+    vi.mocked(getActions).mockResolvedValue({
+      items: [makeAction({ id: 4, status: "archived" as JournalAction["status"] })],
+      total: 1,
+      page: 1,
+      page_size: 50,
+    });
+    renderPage();
+
+    await screen.findByTestId("action-row-4");
+    expect(screen.getByText("archived")).toBeTruthy();
   });
 });

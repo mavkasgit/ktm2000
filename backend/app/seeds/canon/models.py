@@ -262,6 +262,10 @@ class RuleCondition(BaseModel):
     excel_header: str | None = None
     operator: ConditionOperator
     value: str | bool | None = None
+    # Ожидаемое значение — ссылка на другое поле того же источника (#277):
+    # сравнение двух полей строки плана («выход не равен входу») литералом
+    # не выразить. Задаётся вместо `value`.
+    value_from: str | None = None
     case_sensitive: bool = False
 
 

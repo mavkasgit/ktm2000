@@ -3,7 +3,10 @@ import { apiClient } from "./client";
 /** Клиент журнала действий /actions (ADR-0019, тикет #117).
  *  Типы зеркальны backend/app/reversal/schemas.py. */
 
-export type ActionStatus = "active" | "reversed" | "amended";
+/** Зеркало `ActionStatus` в `backend/app/models/action_journal.py`.
+ *  `purged` — hard-чистка скомпенсированных пар (#118): проводки физически
+ *  удалены, запись журнала остаётся ради аудита. */
+export type ActionStatus = "active" | "reversed" | "amended" | "purged";
 
 /** Базовый набор типов действий журнала для фильтра страницы (#117).
  *  Amend доступен только transfer_send (_AMEND_FIELDS бэка), остальные —
