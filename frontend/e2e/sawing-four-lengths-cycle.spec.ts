@@ -144,16 +144,6 @@ async function openSawBoard(page: Page): Promise<number> {
   return sectionId;
 }
 
-/** Прогресс по выходам на доске: текст строки «0,9 м: 40/40 · …». */
-async function outputsProgressText(page: Page): Promise<string> {
-  const progress = splitTaskRow(page)
-    .locator("span")
-    .filter({ hasText: /\d+\s*м:\s*\d+\/\d+/ })
-    .first();
-  await expect(progress).toBeVisible({ timeout: 20_000 });
-  return (await progress.textContent()) ?? "";
-}
-
 /**
  * Раскроить позицию P1 порциями через доску пилы.
  *
@@ -273,13 +263,23 @@ async function splitSawIntoLengthsViaUI(page: Page, sectionId: number): Promise<
       continue;
     }
     // Кумулятивная пропорция бэкенда: target_i = total_i × раскроено / вход.
-    const progress = await outputsProgressText(page);
+    // Читаем `outputs_progress` из ответа доски, а не с экрана: строку
+    // прогресса с доски убрали (ADR-0058), данные остались в board-API и в
+    // диалоге завершения (`TaskActionDrawer`).
+    const cumulative = (transformTask?.outputs_progress ?? []) as Array<{
+      dimensions: { length_mm?: number } | null;
+      produced_quantity: number | string;
+      quantity: number | string;
+    }>;
     for (const out of OUTPUTS) {
       const produced = Math.round((out.total * consumed) / INPUT_QTY);
-      await expect(
-        progress,
-        `после ${consumed} заготовок выход ${lengthLabel(out.mm)}: ${produced}/${out.total}`,
-      ).toContain(`${lengthLabel(out.mm)}: ${produced}/${out.total}`);
+      const row = cumulative.find((r) => r.dimensions?.length_mm === out.mm);
+      expect(row, `в board нет выхода ${lengthLabel(out.mm)}`).toBeTruthy();
+      expect(
+        Number(row!.produced_quantity),
+        `после ${consumed} заготовок выход ${lengthLabel(out.mm)}`,
+      ).toBe(produced);
+      expect(Number(row!.quantity)).toBe(out.total);
     }
   }
 
