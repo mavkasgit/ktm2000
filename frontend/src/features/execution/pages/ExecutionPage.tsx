@@ -27,6 +27,7 @@ import { toast } from "@/shared/ui/use-toast";
 import { buildActiveFilterSummary } from "@/shared/ui/buildActiveFilterSummary";
 import { getErrorMessage } from "@/shared/api/client";
 import { invalidateAfter } from "@/shared/api/cacheInvalidation";
+import { operationalPollingOptions } from "@/shared/api/operationalPolling";
 import { queryKeys } from "@/shared/api/queryKeys";
 import {
   BulkResultsDialog,
@@ -166,6 +167,9 @@ export function ExecutionPage() {
     queryKey: queryKeys.execution.rows(rowsQueryParams),
     queryFn: () => listProductionPlanningRows(rowsQueryParams),
     placeholderData: keepPreviousData,
+    // «Чужие действия видны без F5» (#206): строки контроля перечитываются,
+    // пока вкладка в фокусе. См. `operationalPolling.ts` и ADR-0041.
+    ...operationalPollingOptions,
   });
 
   const rows = rowsData?.rows ?? [];

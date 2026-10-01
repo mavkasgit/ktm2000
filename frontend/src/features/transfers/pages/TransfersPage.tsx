@@ -68,6 +68,7 @@ import {
 } from "@/shared/api/transfers";
 import { getErrorMessage } from "@/shared/api/client";
 import { invalidateAfter } from "@/shared/api/cacheInvalidation";
+import { operationalPollingOptions } from "@/shared/api/operationalPolling";
 import { queryKeys } from "@/shared/api/queryKeys";
 import { formatDimensionsFilterValue, formatDimensionsLabel } from "@/shared/api/stock";
 import { buildColumnApiParams } from "@/shared/lib/columnSpecs";
@@ -778,6 +779,10 @@ export function TransfersPage() {
         ...readyQueryParams,
       }),
     enabled: spgScopeSelected,
+    // «Готово к передаче» — очередь действий участка: передача, отправленная
+    // соседом, должна появиться без F5 (#206, ADR-0041). Журнал передач не
+    // опрашивается: это история, а не очередь к действию.
+    ...operationalPollingOptions,
     placeholderData: keepPreviousDataForScope<ReadyToTransferResponse>(
       (key) => key[1],
       showAllSpgs ? "all" : activeSpgId,

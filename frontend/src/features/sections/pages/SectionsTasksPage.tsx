@@ -26,6 +26,7 @@ import {
   type DailyPlanCompositionItem,
 } from "@/shared/api/shopfloor";
 import { invalidateAfter } from "@/shared/api/cacheInvalidation";
+import { operationalPollingOptions } from "@/shared/api/operationalPolling";
 import { queryKeys } from "@/shared/api/queryKeys";
 import { usePaginatedTableQuery } from "@/shared/hooks/usePaginatedTableQuery";
 import type { SectionBoardQueryParams } from "@/shared/api/shopfloor";
@@ -233,6 +234,9 @@ export function SectionsTasksPage() {
     queryFn: getSectionsSummary,
     enabled: me != null,
     retry: false,
+    // Загрузка участков на плитках доски: коллега завершил задачу — счётчик
+    // должен обновиться без F5 (#206, ADR-0041).
+    ...operationalPollingOptions,
   });
 
   const lockedSection = useMemo(() => {
@@ -360,6 +364,9 @@ export function SectionsTasksPage() {
     queryFn: () => getSectionBoard(sectionId as number, boardQueryParams, requestOptions),
     enabled: sectionId !== null && me != null && !isSingleWindowBlocked,
     retry: false,
+    // Доска участка — операционный экран: задания в работе меняют соседи по
+    // смене, и перечитывание по таймеру видно без F5 (#206, ADR-0041).
+    ...operationalPollingOptions,
     placeholderData: keepPreviousDataForScope<SectionBoardResponse>(
       (key) => key[1],
       sectionId,
