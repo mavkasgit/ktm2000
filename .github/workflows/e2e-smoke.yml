@@ -1,0 +1,113 @@
+name: E2E smoke
+
+# Информационный джоб: ярус `@smoke` на изолированной БД прямо в CI.
+#
+# НЕ required: пока не набрана серия зелёных на main, красный здесь не блокирует
+# merge. Критерий перевода в required (и в branch protection) — 10 подряд зелёных
+# прогонов этого джоба на push в main. Пока 10 подряд не набрано, джоб остаётся
+# информационным: его задача — ловить регрессии раньше человека, а не гейтить PR.
+#
+# Почему не `npm run test:e2e:smoke`:
+#   `frontend/e2e/run-tier.mjs` перед прогоном зовёт `e2e:prep`, а тот —
+#   `db:e2e:up`/`db:e2e:wait` (docker compose + `wait-for-container-health.ps1`,
+#   Windows/PowerShell). В CI БД приходит сервисом GitHub, поэтому подготовка
+#   стенда выполняется шагами джоба, а Playwright запускается напрямую через
+#   `frontend/scripts/run-e2e.mjs` — он же выбирает стенду свободные порты.
+#   `.env.e2e` (закоммичен) нацелен на `localhost:5441` — ровно та публикация,
+#   что даёт сервис ниже, отдельный env-файл не нужен.
+#
+# `--retries=0` передан явно: в CI `playwright.config.ts` ставит `retries: 2`, и
+# флейк спрятался бы за ретраем. Трасса пишется всегда (`--trace=on`) и уходит
+# артефактом: без ретраев «падение на первом прогоне» и есть предмет разбора.
+on:
+  push:
+    branches:
+      - main
+      - master
+  pull_request:
+    branches:
+      - main
+      - master
+  workflow_dispatch:
+
+jobs:
+  e2e-smoke:
+    name: e2e smoke
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+
+    # Свой сервис БД в джобе (#269): `ktm2000_test` — служебная БД контейнера,
+    # `ktm2000_e2e` создаёт `scripts/e2e-db.py ensure` из `.env.e2e`.
+    services:
+      postgres:
+        image: postgres:15
+        env:
+          POSTGRES_USER: ktm2000_user
+          POSTGRES_PASSWORD: ktm2000_pass_test
+          POSTGRES_DB: ktm2000_test
+        ports:
+          - 5441:5432
+        options: >-
+          --health-cmd "pg_isready -U ktm2000_user -d ktm2000_test"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 10
+
+    env:
+      # `CI` Actions ставит сам — он нужен `forbidOnly`; retries перебиты флагом.
+      ENV: dev
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+          cache: npm
+          cache-dependency-path: frontend/package-lock.json
+
+      - name: Setup Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: pip
+          cache-dependency-path: backend/requirements.txt
+
+      - name: Install backend dependencies
+        run: pip install -r backend/requirements.txt
+
+      - name: Install frontend dependencies
+        working-directory: frontend
+        run: npm ci
+
+      - name: Install Playwright browser
+        working-directory: frontend
+        run: npx playwright install --with-deps chromium
+
+      # `e2e:prep` без Docker/PowerShell: БД уже поднята сервисом, ждать её не
+      # нужно — health-check сервиса делает это сам.
+      - name: Prepare stand DB (create, migrate, seed)
+        run: |
+          python scripts/e2e-db.py ensure
+          node scripts/with-env-file.mjs --cwd backend -- alembic upgrade head
+          node scripts/with-env-file.mjs --cwd backend -- python scripts/seed_all.py --force
+
+      - name: Run @smoke (workers 1, retries 0, trace on)
+        run: |
+          node frontend/scripts/run-e2e.mjs \
+            --project smoke --no-deps \
+            --retries=0 --trace=on \
+            --reporter=list,./e2e/green-on-retry-reporter.ts
+
+      - name: Upload failure artifacts (trace, screenshot, video, report)
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: e2e-smoke-artifacts
+          path: |
+            frontend/test-results
+            frontend/playwright-report
+          retention-days: 7
+          if-no-files-found: ignore
