@@ -142,7 +142,12 @@ test.describe("@ui История импортов плана", () => {
     await expect(rollbackDialog.getByText("Откатить импорт?")).toBeVisible({ timeout: 10_000 });
     await rollbackDialog.getByRole("button", { name: "Откатить" }).click();
     await expect(rollbackDialog).toBeHidden({ timeout: 30_000 });
-    await expect(page.getByText("Импорт откачен", { exact: false })).toBeVisible({ timeout: 15_000 });
+    // `exact: true` — не придирка: у тоста Radix есть скрытый announcer
+    // (`role="status" aria-live="assertive"`) с текстом «Notification <заголовок>
+    // <описание>». Подстрочный поиск ловил и его тоже — strict mode падал на двух
+    // элементах одного и того же тоста. Так же сформулирована соседняя проверка
+    // «Импорт применён».
+    await expect(page.getByText("Импорт откачен", { exact: true })).toBeVisible({ timeout: 15_000 });
     // Отменённый батч снова применим — иначе откат был бы билетом в одну сторону.
     await expect(
       rows.filter({ hasText: "Отменён" }).getByRole("button", { name: "Применить" }),
