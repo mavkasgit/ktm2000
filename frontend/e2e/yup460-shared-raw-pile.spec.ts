@@ -106,14 +106,6 @@ async function apiGetProductLengthsMm(token: string, productId: number): Promise
   return lengths.length > 0 ? lengths : [2700];
 }
 
-/** Свободный остаток из текста строки плана («[ЮП-460] · 1000 …»). */
-function parseRemainder(rowText: string): number | null {
-  const match = rowText.match(/·\s*(\d+)/);
-  if (!match) return null;
-  const value = Number(match[1]);
-  return Number.isFinite(value) ? value : null;
-}
-
 test.describe("@ui @ui-narrow ЮП-460: окно / гребенка / без пресса делят одну кучу сырья", () => {
   test.beforeEach(async ({ page, loginAsAdmin }) => {
     await loginAsAdmin();
@@ -226,7 +218,7 @@ test.describe("@ui @ui-narrow ЮП-460: окно / гребенка / без п�
     // на бэкенде от остатка склада МИНУС запущенный спрос, и строки приходят
     // перерисовкой после первой загрузки. Раньше остаток читался ОДИН раз сразу
     // после `waitForPlanningTableViaUI`, и на недописанной таблице все три
-    // позиции показывали «· 0» — тест падал на «видит 0, а не общую кучу».
+    // позиции показывали «0» — тест падал на «видит 0, а не общую кучу».
     // Ждём, пока все три строки покажут кучу; значение по-прежнему сверяется
     // ровно, «любое» не подставляем.
     const rowTexts: string[] = [];
@@ -241,9 +233,18 @@ test.describe("@ui @ui-narrow ЮП-460: окно / гребенка / без п�
             rowTexts.push(text);
             expect(text, `строка ${i}: неожиданный артикул`).toContain(SKU);
             expect(text, `строка ${i}: маршрут не назначен`).not.toContain("Не назначен");
-            const remainder = parseRemainder(text);
-            expect(remainder, `строка ${i}: индикатор остатка не читается: ${text}`).not.toBeNull();
-            remainders.push(remainder!);
+            // «Доступно для позиции» (#207) рендерит PositionSkuCell под
+            // `data-testid="position-sku-available"` — просто числом, без
+            // разделителя «·»: читаем значение по testid, а не из текста строки.
+            const remainderText = (
+              await rows.nth(i).getByTestId("position-sku-available").innerText()
+            ).trim();
+            const remainder = Number(remainderText);
+            expect(
+              Number.isFinite(remainder),
+              `строка ${i}: индикатор остатка не читается («${remainderText}»): ${text}`,
+            ).toBe(true);
+            remainders.push(remainder);
           }
           return remainders.join("/");
         },
