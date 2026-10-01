@@ -5,7 +5,7 @@ import json
 from datetime import datetime
 from decimal import Decimal
 
-from sqlalchemy import String, case, cast, exists, func, or_, select
+from sqlalchemy import Date, String, case, cast, exists, func, or_, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.sorting import SortClause, apply_sort, parse_sort
@@ -737,15 +737,23 @@ async def get_section_daily_stats(
     date_from: datetime,
     date_to: datetime,
 ) -> dict:
-    """Return daily statistics for a section, aggregated by created_at date."""
-    from sqlalchemy import Date as SQLADate
-    from sqlalchemy import cast
+    """Return daily statistics for a section, aggregated by created_at date.
+
+    День — UTC, а не TZ сессии БД: окно (``date_from``/``date_to``)
+    вызывающий задаёт в UTC (docs/deployment.md — прод-контейнеры живут в
+    ``TZ=UTC``), поэтому и группировка обязана читаться в той же шкале.
+    """
+    # `timezone('UTC', timestamptz)` возвращает UTC-стенные часы (timestamp
+    # without time zone), `cast(..., Date)` берёт из них дату. Прямой
+    # `CAST(timestamptz AS date)` посчитал бы день в TZ сессии БД и на
+    # не-UTC сервере увёл бы метку дня от окна.
+    stat_date = cast(func.timezone("UTC", StockTransaction.created_at), Date)
 
     # Aggregate by date and reason type from StockTransaction
     rows = (
         await db.execute(
             select(
-                cast(StockTransaction.created_at, SQLADate).label("stat_date"),
+                stat_date.label("stat_date"),
                 StockTransaction.reason,
                 func.count(StockTransaction.id).label("op_count"),
                 func.coalesce(func.sum(StockTransaction.quantity), 0).label("total_qty"),
@@ -756,10 +764,10 @@ async def get_section_daily_stats(
                 StockTransaction.created_at <= date_to,
             )
             .group_by(
-                cast(StockTransaction.created_at, SQLADate),
+                stat_date,
                 StockTransaction.reason,
             )
-            .order_by(cast(StockTransaction.created_at, SQLADate))
+            .order_by(stat_date)
         )
     ).all()
 
