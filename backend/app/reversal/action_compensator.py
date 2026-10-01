@@ -80,7 +80,12 @@ class StockActionCompensator(MirrorLedgerMixin):
         self._commands = command_service or StockCommandService()
 
     async def check(
-        self, db: AsyncSession, ref_id: int | None, *, action_id: int | None = None
+        self,
+        db: AsyncSession,
+        ref_id: int | None,
+        *,
+        action_id: int | None = None,
+        coverage_adjustments: dict | None = None,
     ) -> ReversalCheck:
         res = await resolve_action(
             db, action_type=self.action_type, ref_id=ref_id, action_id=action_id
@@ -115,7 +120,7 @@ class StockActionCompensator(MirrorLedgerMixin):
                     node_id=action.id, ok=False, blockers=batch_blockers
                 )
         entries = await self._plan_entries(db, action)
-        deficit = await self._coverage_deficit(db, entries)
+        deficit = await self._coverage_deficit(db, entries, adjustments=coverage_adjustments)
         if deficit > 0:
             return ReversalCheck(
                 node_id=action.id,

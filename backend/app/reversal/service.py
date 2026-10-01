@@ -323,7 +323,20 @@ class ReversalService:
                 )
             )
 
-        for node in revert_nodes:
+        # Покрытие считается по ВИРТУАЛЬНОМУ состоянию остатков, а не «узел
+        # против снимка до» (#274): компенсации проходятся в обратном
+        # топологическом порядке (зависимые раньше зависимостей — тот же
+        # порядок, в котором каскад исполняется), и эффект каждой уже
+        # пройденной компенсации добавляется к остатку следующего узла.
+        # Иначе корень цепочки упирается в ложный CoverageShortfall: выпуск
+        # его группы ещё не вернул зависимый узел, который откатится первым.
+        order = self._reverse_topological_order(
+            [n.id for n in revert_nodes], await self._deps_index(db)
+        )
+        nodes_by_id = {n.id: n for n in revert_nodes}
+        coverage_adjustments: dict[object, Decimal] = {}
+        for node_id in order:
+            node = nodes_by_id[node_id]
             comp = self._compensator(node.action_type)
             if comp is None:
                 blockers.append(
@@ -334,12 +347,21 @@ class ReversalService:
                     )
                 )
                 continue
-            check = await comp.check(db, node.ref_id, action_id=node.id)
+            check = await comp.check(
+                db,
+                node.ref_id,
+                action_id=node.id,
+                coverage_adjustments=coverage_adjustments,
+            )
             if not check.ok:
                 for cb in check.blockers:
                     blockers.append(
                         Blocker(kind=cb.kind, node_id=node.id, detail=cb.detail, deficit=cb.deficit)
                     )
+                continue
+            plan = await comp.plan(db, node.ref_id, hard=False, action_id=node.id)
+            for key, qty in comp.coverage_effect(plan.entries).items():
+                coverage_adjustments[key] = coverage_adjustments.get(key, Decimal(0)) + qty
 
         # Preview-first: при блокировках план-токен не выдаётся —
         # confirm невозможен до повторного preview.

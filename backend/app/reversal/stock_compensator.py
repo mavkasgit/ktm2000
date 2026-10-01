@@ -179,15 +179,51 @@ class MirrorLedgerMixin:
                 deficit += qty - available
         return deficit
 
+    @staticmethod
+    def coverage_effect(entries: list[PlannedEntry]) -> dict[_CoverageKey, Decimal]:
+        """Чистовой эффект ещё не применённых компенсаций на ключи покрытия:
+        −расход на ``from_location``, +приход на ``to_location`` (геометрия
+        записей уже перевёрнута относительно исходных проводок).
+
+        Нужен там, где компенсации ещё не записаны в ledger, а состояние
+        остатков надо смоделировать: preview_amend (D7-A) и виртуальный
+        проход каскада отката (#274).
+        """
+        effect: dict[_CoverageKey, Decimal] = {}
+        need, _dims_by_key = MirrorLedgerMixin._coverage_needs(entries)
+        for key, qty in need.items():
+            effect[key] = effect.get(key, Decimal(0)) - qty
+        for e in entries:
+            if e.to_location_id is None:
+                continue
+            ckey = (
+                e.product_id,
+                e.to_location_id,
+                e.quality_state,
+                _dims_key(e.dimensions),
+                _ops_key(e.completed_operations),
+            )
+            effect[ckey] = effect.get(ckey, Decimal(0)) + e.quantity
+        return effect
+
     async def _coverage_deficit(
-        self, db: AsyncSession, entries: list[PlannedEntry]
+        self,
+        db: AsyncSession,
+        entries: list[PlannedEntry],
+        *,
+        adjustments: dict[_CoverageKey, Decimal] | None = None,
     ) -> Decimal:
         """Дефицит покрытия: суммарный остаток, которого не хватает на
         складах-источниках компенсаций. Остаток ≥ 0 до и после — инвариант.
         Учётные проводки без геометрии (TRANSFER_RECEIVE) движения не дают
-        и покрытия не требуют."""
+        и покрытия не требуют.
+
+        ``adjustments`` — виртуальное состояние: чистовой эффект ещё не
+        применённых компенсаций каскада (#274), к которому добавляется
+        текущий остаток.
+        """
         need, dims_by_key = self._coverage_needs(entries)
-        return await self._deficit_for(db, need, dims_by_key)
+        return await self._deficit_for(db, need, dims_by_key, adjustments=adjustments)
 
     async def _apply_entries(self, db: AsyncSession, plan: ReversalPlan, actor: str) -> list[int]:
         """Исполнить план: зеркальная проводка на каждую запись плана с
@@ -237,7 +273,12 @@ class StockCompensator(MirrorLedgerMixin):
         self._commands = command_service or StockCommandService()
 
     async def check(
-        self, db: AsyncSession, ref_id: int | None, *, action_id: int | None = None
+        self,
+        db: AsyncSession,
+        ref_id: int | None,
+        *,
+        action_id: int | None = None,
+        coverage_adjustments: dict | None = None,
     ) -> ReversalCheck:
         # Единая политика резолва узла (ADR-0021): id старше пары,
         # угадывание («первый попавшийся») запрещено.
@@ -277,7 +318,7 @@ class StockCompensator(MirrorLedgerMixin):
                 ],
             )
         entries = await self._plan_entries(db, action)
-        deficit = await self._coverage_deficit(db, entries)
+        deficit = await self._coverage_deficit(db, entries, adjustments=coverage_adjustments)
         if deficit > 0:
             return ReversalCheck(
                 node_id=action.id,
@@ -464,24 +505,7 @@ class StockCompensator(MirrorLedgerMixin):
             completed_operations=ops,
         )
         need, dims_by_key = self._coverage_needs([need_fwd])
-        adjustments: dict[_CoverageKey, Decimal] = {}
-        if comp_entries:
-            comp_need, _ = self._coverage_needs(comp_entries)
-            # Чистовый эффект компенсаций: −расход на своём from_location
-            # и +приход на to_location (перевёрнутая геометрия).
-            for key, qty in comp_need.items():
-                adjustments[key] = adjustments.get(key, Decimal(0)) - qty
-            for e in comp_entries:
-                if e.to_location_id is None:
-                    continue
-                ckey = (
-                    e.product_id,
-                    e.to_location_id,
-                    e.quality_state,
-                    _dims_key(e.dimensions),
-                    _ops_key(e.completed_operations),
-                )
-                adjustments[ckey] = adjustments.get(ckey, Decimal(0)) + e.quantity
+        adjustments = self.coverage_effect(comp_entries) if comp_entries else {}
         return await self._deficit_for(db, need, dims_by_key, adjustments=adjustments)
 
     async def check_amend(

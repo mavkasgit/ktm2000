@@ -144,6 +144,130 @@ def test_factory_plan_parser_groups_paired_profiles_and_continuations() -> None:
     assert not any(w.startswith("plan_group_balance_mismatch") for w in group.warnings)
 
 
+_CUT_GROUP_HEADERS = [
+    "Артикул",
+    "пополнение",
+    "Наименование",
+    "остатки сырья на КТМ",
+    "Цвет",
+    "кол-во шт. в 2,7",
+    "Длина, м",
+    "Пробивка/сверловка",
+    "Упаковка",
+    "Примечание ",
+    "Длина после упак, м",
+    "кол-во штук готовой продукции",
+    "Запад",
+    "Восток",
+    "Вид конечного продукта",
+    "Комментарии",
+]
+
+
+def _cut_group_workbook(data_rows: list[list]) -> bytes:
+    """Лист упаковочной карты с раскладкой строк 56–57 реального файла (#279)."""
+    wb = Workbook()
+    ws = wb.active
+    ws.title = "План февраль 26 02"
+    ws.append(["", "", "Комментарий"])
+    ws.append(["Заявка № 02", "февраль"])
+    ws.append([])
+    ws.append(["", "", "", "", "", "", "", "", "", "", "", "", "Формирование ящиков"])
+    ws.append(_CUT_GROUP_HEADERS)
+    for row in data_rows:
+        ws.append(row)
+    out = BytesIO()
+    wb.save(out)
+    return out.getvalue()
+
+
+def test_continuation_with_filled_input_length_joins_group() -> None:
+    """#279: «Длина, м» заполнена у продолжения, но количества нет — та же группа.
+
+    Реальная раскладка строк 56–57 листа «План февраль 26 02»: ЮП-2630 титан,
+    100 шт в 2,7 → выходы 0,9 и 1,8. Раньше строка 57 с заполненной длиной
+    входа становилась второй позицией без наименования.
+    """
+    parsed = parse_factory_plan_workbook(
+        _cut_group_workbook(
+            [
+                ["ЮП-2630", "ТЗ", "Кант 47мм 2,7 титан", 5000, "титан", 100, 2.7, "", "", "", 0.9, 100, "", "", "П/ф"],
+                ["ЮП-2630", None, None, None, None, None, 2.7, "", "", "", 1.8, 100, "", "", "ГП"],
+            ]
+        ),
+        "plan.xlsx",
+    )
+
+    assert [row.source_sku for row in parsed.parsed_rows] == ["ЮП-2630"]
+    group = parsed.parsed_rows[0]
+    assert group.source_row_numbers == [6, 7]
+    assert group.source_ref == "rows:6-7"
+    assert group.input_quantity == 100
+    assert group.input_dimensions == {"length_mm": 2700}
+    assert [(o["quantity"], o["dimensions"]) for o in group.outputs] == [
+        ("100", {"length_mm": 900}),
+        ("100", {"length_mm": 1800}),
+    ]
+    assert "product_name_missing" not in group.warnings
+    # Баланс сходится: 100×2700 = 100×900 + 100×1800.
+    assert not any(w.startswith("plan_group_balance_mismatch") for w in group.warnings)
+
+
+def test_continuation_with_empty_input_length_joins_group() -> None:
+    """#279: вторая форма продолжения (ЮП-081) — обе входные ячейки пусты."""
+    parsed = parse_factory_plan_workbook(
+        _cut_group_workbook(
+            [
+                ["ЮП-081", "ТЗ", "Стык 38мм 2,7 серебро", 4000, "серебро", 160, 2.7, "", "", "", 0.9, 160, "", "", "П/ф"],
+                ["ЮП-081", None, None, None, None, None, None, "", "", "", 1.8, 160, "", "", "ГП"],
+            ]
+        ),
+        "plan.xlsx",
+    )
+
+    assert [row.source_sku for row in parsed.parsed_rows] == ["ЮП-081"]
+    group = parsed.parsed_rows[0]
+    assert group.source_row_numbers == [6, 7]
+    assert group.input_quantity == 160
+    assert group.input_dimensions == {"length_mm": 2700}
+    assert [(o["quantity"], o["dimensions"]) for o in group.outputs] == [
+        ("160", {"length_mm": 900}),
+        ("160", {"length_mm": 1800}),
+    ]
+    assert "product_name_missing" not in group.warnings
+
+
+def test_adjacent_same_sku_with_own_input_quantity_stays_separate_row() -> None:
+    """#279, граница: своё входное количество у соседней строки — отдельная позиция."""
+    parsed = parse_factory_plan_workbook(
+        _cut_group_workbook(
+            [
+                ["ЮП-2630", "ТЗ", "Кант 47мм 2,7 титан", 5000, "титан", 100, 2.7, "", "", "", 0.9, 100, "", "", "П/ф"],
+                ["ЮП-2630", "ТЗ", "Кант 47мм 2,7 титан", 5000, "титан", 120, 2.7, "", "", "", 1.8, 120, "", "", "ГП"],
+            ]
+        ),
+        "plan.xlsx",
+    )
+
+    assert [row.source_row_numbers for row in parsed.parsed_rows] == [[6], [7]]
+    assert [row.input_quantity for row in parsed.parsed_rows] == [100, 120]
+
+
+def test_continuation_with_mismatched_input_length_stays_separate_row() -> None:
+    """#279, граница: длина входа продолжения не равна входу группы — своя позиция."""
+    parsed = parse_factory_plan_workbook(
+        _cut_group_workbook(
+            [
+                ["ЮП-2630", "ТЗ", "Кант 47мм 2,7 титан", 5000, "титан", 100, 2.7, "", "", "", 0.9, 100, "", "", "П/ф"],
+                ["ЮП-2630", None, None, None, None, None, 2.0, "", "", "", 1.8, 100, "", "", "ГП"],
+            ]
+        ),
+        "plan.xlsx",
+    )
+
+    assert [row.source_row_numbers for row in parsed.parsed_rows] == [[6], [7]]
+
+
 def test_parse_row_selection_csv_and_ranges() -> None:
     assert parse_row_selection("5") == {5}
     assert parse_row_selection("5,7,9") == {5, 7, 9}

@@ -419,20 +419,40 @@ def _is_merged_continuation(
 def _is_adjacent_continuation(
     group: ParsedPlanRow, sku: str, raw: dict[str, Any], row_number: int
 ) -> bool:
-    """Соседняя строка того же SKU без собственного входа — ещё один выход.
+    """Соседняя строка того же SKU без своего входного количества — ещё выход.
 
-    Соседние строки того же SKU С собственным входом — отдельные операции
-    (ADR-0003), поэтому требуем пустой вход и непустой вход у открывающей строки.
+    Соседняя строка того же SKU С собственным входным количеством — отдельная
+    операция (ADR-0003), поэтому количество у продолжения обязано быть пустым,
+    а у открывающей строки — заданным. Входная длина продолжению разрешена:
+
+    * пустая — прежнее правило (ЮП-081: обе входные ячейки пусты);
+    * равная длине входа открывающей строки и с выходом другого габарита —
+      так пишет реальный файл (ЮП-2630: «Длина, м» 2,7 в обеих строках
+      группы, выходы 0,9 и 1,8 — #279). Мусор в длине продолжением не делает:
+      строка станет своей позицией с warning, как раньше.
     """
     if group.payload.get("paired_profile"):
-        return False
-    if _has_own_input(raw):
         return False
     if not sku or sku != group.source_sku:
         return False
     if row_number != group.source_row_numbers[-1] + 1:
         return False
-    return group.input_quantity is not None
+    if group.input_quantity is None:
+        return False
+    if _cell_text(raw.get("input_quantity")):
+        return False
+
+    raw_input_dims, input_warning = _parse_length_cell(raw.get("input_length"))
+    if input_warning is not None:
+        return False
+    if raw_input_dims is None:
+        return True
+    group_input_length_mm = (group.input_dimensions or {}).get(LENGTH_MM)
+    if raw_input_dims.get(LENGTH_MM) != group_input_length_mm:
+        return False
+    output_dims, _output_warning = _parse_length_cell(raw.get("output_length"))
+    output_repeats_input = output_dims is not None and output_dims.get(LENGTH_MM) == group_input_length_mm
+    return not output_repeats_input
 
 
 def _parse_length_cell(value: Any) -> tuple[dict[str, Any] | None, str | None]:
