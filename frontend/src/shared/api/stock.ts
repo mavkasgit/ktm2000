@@ -301,7 +301,11 @@ export type StockAdjustmentResponse = {
 };
 
 export async function postStockAdjustment(payload: StockAdjustmentPayload): Promise<StockAdjustmentResponse> {
-  const { data } = await apiClient.post<StockAdjustmentResponse>("/api/stock/adjustment", {
+  // Без ведущего `/api`: `apiClient` уже несёт baseURL с `/api`
+  // (`DEFAULT_API_BASE_URL`, `.env.dev` → `...:8012/api`), поэтому путь
+  // `/api/stock/adjustment` уходил на `/api/api/stock/adjustment` и получал
+  // 404 «Not Found» — диалог ручной операции не мог записать проводку.
+  const { data } = await apiClient.post<StockAdjustmentResponse>("/stock/adjustment", {
     ...payload,
     quality_state: toApiQualityState(payload.quality_state),
   });

@@ -1081,7 +1081,11 @@ async def create_product(
             encoded = base64.b64encode(",".join(activated).encode()).decode()
             response.headers["X-Activated-Aliases"] = encoded
 
-    await db.flush()
+    # Коммит ДО ответа (контракт `get_db`, app/core/database.py): финальный
+    # коммит зависимости уходит уже после отправки ответа, поэтому клиент,
+    # перечитавший список сразу после 201 (react-query refetch), видел БД без
+    # созданного артикула — пустой список до F5.
+    await db.commit()
     await db.refresh(item, attribute_names=["lengths", "processing_flags", "is_paired_profile"])
     return _to_product_out(item)
 
@@ -1238,6 +1242,8 @@ async def patch_product(
             response.headers["X-Activated-Aliases"] = encoded
         await db.flush()
 
+    # Коммит ДО ответа — см. пояснение в create_product.
+    await db.commit()
     await db.refresh(item, attribute_names=["lengths", "processing_flags", "is_paired_profile"])
     return _to_product_out(item, sheet_dims)
 
@@ -1304,7 +1310,10 @@ async def delete_product(product_id: int, db: AsyncSession = Depends(get_db)):
             p.aliases = [a for a in p.aliases if a != item.sku]
 
     await db.delete(item)
-    await db.flush()
+    # Коммит ДО ответа: иначе 204 уходит раньше коммита, а список артикулов
+    # перечитывается клиентом сразу после удаления и может ещё отдавать
+    # удалённую строку (гонка в e2e `catalog-create`, Ref #280 CI).
+    await db.commit()
 
 
 # ─── Состав ГП (#147): нормативные компоненты — чтение/замена ───────────────
@@ -1395,7 +1404,8 @@ async def replace_product_composition(
             quantity=item.quantity,
             unit=item.unit or component.unit,
         ))
-    await db.flush()
+    # Коммит ДО ответа — см. пояснение в create_product.
+    await db.commit()
 
     return CompositionOut(items=await _load_composition(db, product_id))
 
@@ -1433,7 +1443,8 @@ async def upload_product_photo(
         thumb_path.write_bytes(content)
         item.photo_thumb = str(thumb_path.relative_to(storage_dir.parent))
 
-    await db.flush()
+    # Коммит ДО ответа — см. пояснение в create_product.
+    await db.commit()
     await db.refresh(item, attribute_names=["lengths", "processing_flags", "is_paired_profile"])
     return _to_product_out(item)
 
