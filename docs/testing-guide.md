@@ -19,6 +19,19 @@ npm --prefix frontend run test    # Vitest
 npm run test:e2e             # Playwright, отдельный стенд (своя БД и порты)
 ```
 
+## CI
+
+Единственный авто-запускаемый workflow — `migrations.yml` (alembic + миграционные
+тесты + проверки сидов/лейблов). Полный pytest-набор в push/PR **не** запускается:
+это решение про минуты CI, а не техническая мелочь.
+
+Для ручной проверки добавлен `.github/workflows/backend-tests.yml`
+(триггер `workflow_dispatch`): тот же Postgres-сервис, что в `migrations.yml`,
+`pip install -r backend/requirements.txt` и прогон набора через
+`scripts/test-db.py` + `pytest -n 4 --dist loadfile`. Команды проверены локально
+на Linux (контейнер `python:3.12-slim`): `1951 passed, 0 failed` за 189s —
+платформенных падений у набора нет.
+
 ## Стенд E2E
 
 `npm run test:e2e` не трогает devstack: поднимает **свою** БД `ktm2000_e2e`
