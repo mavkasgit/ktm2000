@@ -71,9 +71,9 @@ from app.models.work_task import WorkTask
 from app.services.route_storage_classifier import is_stock_section
 from app.services.shopfloor.operations_transform import (
     get_released_by_task_dimensions_bulk,
+    get_transferred_by_task_dimensions_bulk,
     get_transform_progress,
     get_transform_progress_bulk,
-    get_transferred_by_task_dimensions_bulk,
 )
 from app.services.shopfloor.output_rows import (
     UsedSource,
@@ -119,7 +119,7 @@ def _dec(value: Decimal | int | str | None) -> Decimal:
     if isinstance(value, Decimal):
         return value
     if value is None:
-        return Decimal("0")
+        return Decimal(0)
     return Decimal(str(value))
 
 
@@ -147,7 +147,7 @@ class TransferableLine:
         здесь только выбирается, какая из них применяется к строке.
         """
         if self.kind is BudgetKind.STOCK:
-            plan_remaining = max(Decimal("0"), self.planned - self.used)
+            plan_remaining = max(Decimal(0), self.planned - self.used)
             return budget.remaining_stock(plan_remaining, self.produced)
         if self.is_final:
             return budget.remaining_send(self.produced, self.used)
@@ -237,7 +237,10 @@ async def compute_stock_section_transferable(
     """
     from app.services.material_operations import completed_operations_for_task
     from app.stock.models import QualityState, StockBalance
-    from app.stock.services import completed_operations_match_clause, dimensions_match_clause
+    from app.stock.services import (
+        completed_operations_match_clause,
+        dimensions_match_clause,
+    )
 
     # Размер группы: если явный не передан — берём из задания (канонический
     # габарит плана). None = безразмерная legacy-группа.
@@ -250,7 +253,7 @@ async def compute_stock_section_transferable(
         dims=dims,
     )
 
-    plan_remaining = max(Decimal("0"), _dec(planned_qty) - already_transferred)
+    plan_remaining = max(Decimal(0), _dec(planned_qty) - already_transferred)
 
     # Тот же признак, что запишет TRANSFER_SEND: маршрут исходного задания
     # до его собственного этапа включительно.
@@ -396,7 +399,7 @@ async def transform_point_budget(
             for row in rows
             if dimensions_equal(row.dimensions, dims)
         ),
-        Decimal("0"),
+        Decimal(0),
     )
     transferred = await net_by_reason(
         db, reason=Reason.TRANSFER_SEND, task_id=task.id, dims=dims
@@ -595,13 +598,13 @@ async def task_transferable_lines_bulk(
 
     for task in plain_tasks:
         is_final = _is_final(task)
-        used = (released_total if is_final else sent_total).get(task.id, Decimal("0"))
+        used = (released_total if is_final else sent_total).get(task.id, Decimal(0))
         result[task.id] = [
             TransferableLine(
                 kind=BudgetKind.PLAIN,
                 dims=task.dimensions,
                 planned=_dec(task.planned_quantity),
-                produced=completed_total.get(task.id, Decimal("0")),
+                produced=completed_total.get(task.id, Decimal(0)),
                 used=used,
                 is_final=is_final,
             ),

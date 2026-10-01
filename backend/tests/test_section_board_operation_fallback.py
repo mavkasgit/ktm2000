@@ -13,11 +13,21 @@ This is the correct behavior for sections like Press that have multiple operatio
 from decimal import Decimal
 
 import pytest
-
-from app.models.internal_plan import SectionPlanLine, InternalPlan, InternalPlanStatus
-from app.models.production_plan import ProductionPlan, PlanPositionStatus, PlanPosition, PlanSourceType, PlanPositionValidationStatus
+from app.models.internal_plan import InternalPlan, InternalPlanStatus, SectionPlanLine
 from app.models.product import Product, ProductType
-from app.models.route import ProductionRoute, RouteStage, RouteOperation, SectionOperation
+from app.models.production_plan import (
+    PlanPosition,
+    PlanPositionStatus,
+    PlanPositionValidationStatus,
+    PlanSourceType,
+    ProductionPlan,
+)
+from app.models.route import (
+    ProductionRoute,
+    RouteOperation,
+    RouteStage,
+    SectionOperation,
+)
 from app.models.section import Section
 from app.models.work_task import WorkTask, WorkTaskStatus
 from app.services.shopfloor.queries_sections import get_section_board
@@ -78,7 +88,7 @@ async def _create_task_for_route(session, route, raw_stage, press_route_stage, s
         source_type=PlanSourceType.excel_import,
         source_sku="TEST-PRODUCT",
         output_sku="TEST-PRODUCT",
-        quantity=Decimal("100"),
+        quantity=Decimal(100),
         status=PlanPositionStatus.released,
         validation_status=PlanPositionValidationStatus.valid,
         route_id=route.id,
@@ -95,7 +105,7 @@ async def _create_task_for_route(session, route, raw_stage, press_route_stage, s
         section_id=raw_stage.section_id,
         product_id=product.id,
         sequence=1,
-        planned_quantity=Decimal("100"),
+        planned_quantity=Decimal(100),
     )
     press_line = SectionPlanLine(
         internal_plan_id=internal_plan.id,
@@ -105,7 +115,7 @@ async def _create_task_for_route(session, route, raw_stage, press_route_stage, s
         section_id=press_route_stage.section_id,
         product_id=product.id,
         sequence=2,
-        planned_quantity=Decimal("100"),
+        planned_quantity=Decimal(100),
     )
     session.add_all([raw_line, press_line])
     await session.flush()
@@ -115,7 +125,7 @@ async def _create_task_for_route(session, route, raw_stage, press_route_stage, s
         section_id=raw_line.section_id,
         product_id=product.id,
         route_stage_id=raw_line.route_stage_id,
-        planned_quantity=Decimal("100"),
+        planned_quantity=Decimal(100),
         status=WorkTaskStatus.completed,
     )
     press_task = WorkTask(
@@ -123,7 +133,7 @@ async def _create_task_for_route(session, route, raw_stage, press_route_stage, s
         section_id=press_line.section_id,
         product_id=product.id,
         route_stage_id=press_line.route_stage_id,
-        planned_quantity=Decimal("100"),
+        planned_quantity=Decimal(100),
         status=WorkTaskStatus.ready,
     )
     session.add_all([raw_task, press_task])
@@ -135,14 +145,14 @@ async def _create_task_for_route(session, route, raw_stage, press_route_stage, s
 @pytest.mark.asyncio
 async def test_section_board_uses_source_payload_when_route_step_is_null(session):
     """When route_step.operation_code is NULL, source_payload operation is used."""
-    raw_section, press_section, route, raw_step, press_step = await _setup_press_section_with_null_route_step(session)
+    _raw_section, press_section, route, raw_step, press_step = await _setup_press_section_with_null_route_step(session)
 
     source_payload = {
         "operation_code": "PRESS_WINDOW",
         "operation_name": "Пресс окно",
         "color": "silver",
     }
-    product, pp, raw_task, press_task = await _create_task_for_route(session, route, raw_step, press_step, source_payload)
+    _product, _pp, _raw_task, _press_task = await _create_task_for_route(session, route, raw_step, press_step, source_payload)
 
     board = await get_section_board(session, section_id=press_section.id)
 
@@ -155,14 +165,14 @@ async def test_section_board_uses_source_payload_when_route_step_is_null(session
 @pytest.mark.asyncio
 async def test_section_board_uses_press_comb_from_source_payload(session):
     """Same with PRESS_COMB — operation comes from source_payload."""
-    raw_section, press_section, route, raw_step, press_step = await _setup_press_section_with_null_route_step(session)
+    _raw_section, press_section, route, raw_step, press_step = await _setup_press_section_with_null_route_step(session)
 
     source_payload = {
         "operation_code": "PRESS_COMB",
         "operation_name": "Пресс гребенка",
         "color": "black",
     }
-    product, pp, raw_task, press_task = await _create_task_for_route(session, route, raw_step, press_step, source_payload)
+    _product, _pp, _raw_task, _press_task = await _create_task_for_route(session, route, raw_step, press_step, source_payload)
 
     board = await get_section_board(session, section_id=press_section.id)
 
@@ -175,13 +185,13 @@ async def test_section_board_uses_press_comb_from_source_payload(session):
 @pytest.mark.asyncio
 async def test_section_board_task_override_has_highest_priority(session):
     """task.selected_operation_code overrides source_payload."""
-    raw_section, press_section, route, raw_step, press_step = await _setup_press_section_with_null_route_step(session)
+    _raw_section, press_section, route, raw_step, press_step = await _setup_press_section_with_null_route_step(session)
 
     source_payload = {
         "operation_code": "PRESS_WINDOW",
         "color": "silver",
     }
-    product, pp, raw_task, press_task = await _create_task_for_route(session, route, raw_step, press_step, source_payload)
+    _product, _pp, _raw_task, press_task = await _create_task_for_route(session, route, raw_step, press_step, source_payload)
 
     # Set task override
     press_task.selected_operation_code = "PRESS_COMB"
@@ -198,12 +208,12 @@ async def test_section_board_no_source_payload_uses_step_operation(session):
     """When source_payload has no operation_code and route_step is NULL,
     effective operation_code is NULL and operation_name comes from step.
     """
-    raw_section, press_section, route, raw_step, press_step = await _setup_press_section_with_null_route_step(session)
+    _raw_section, press_section, route, raw_step, press_step = await _setup_press_section_with_null_route_step(session)
 
     source_payload = {
         "color": "silver",
     }
-    product, pp, raw_task, press_task = await _create_task_for_route(session, route, raw_step, press_step, source_payload)
+    _product, _pp, _raw_task, _press_task = await _create_task_for_route(session, route, raw_step, press_step, source_payload)
 
     board = await get_section_board(session, section_id=press_section.id)
 
@@ -269,7 +279,7 @@ async def test_section_board_combined_anod_tasks_have_resolvable_operations(sess
         source_type=PlanSourceType.excel_import,
         source_sku=product.sku,
         output_sku=product.sku,
-        quantity=Decimal("100"),
+        quantity=Decimal(100),
         status=PlanPositionStatus.released,
         validation_status=PlanPositionValidationStatus.valid,
         route_id=route.id,
@@ -282,19 +292,19 @@ async def test_section_board_combined_anod_tasks_have_resolvable_operations(sess
     raw_line = SectionPlanLine(
         internal_plan_id=internal_plan.id, plan_position_id=pp.id, route_id=route.id,
         route_stage_id=raw_stage.id, section_id=raw_section.id, product_id=product.id,
-        sequence=1, planned_quantity=Decimal("100"),
+        sequence=1, planned_quantity=Decimal(100),
     )
     anod_line = SectionPlanLine(
         internal_plan_id=internal_plan.id, plan_position_id=pp.id, route_id=route.id,
         route_stage_id=anod_stage.id, section_id=anod_section.id, product_id=product.id,
-        sequence=2, planned_quantity=Decimal("100"),
+        sequence=2, planned_quantity=Decimal(100),
     )
     session.add_all([raw_line, anod_line])
     await session.flush()
 
     # Create work tasks
-    raw_task = WorkTask(section_plan_line_id=raw_line.id, section_id=raw_section.id, product_id=product.id, route_stage_id=raw_stage.id, planned_quantity=Decimal("100"), status=WorkTaskStatus.completed)
-    anod_task = WorkTask(section_plan_line_id=anod_line.id, section_id=anod_section.id, product_id=product.id, route_stage_id=anod_stage.id, planned_quantity=Decimal("100"), status=WorkTaskStatus.ready)
+    raw_task = WorkTask(section_plan_line_id=raw_line.id, section_id=raw_section.id, product_id=product.id, route_stage_id=raw_stage.id, planned_quantity=Decimal(100), status=WorkTaskStatus.completed)
+    anod_task = WorkTask(section_plan_line_id=anod_line.id, section_id=anod_section.id, product_id=product.id, route_stage_id=anod_stage.id, planned_quantity=Decimal(100), status=WorkTaskStatus.ready)
     session.add_all([raw_task, anod_task])
     await session.commit()
 

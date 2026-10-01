@@ -13,15 +13,14 @@ Revision ID: 045_hard_purge_status_index
 Revises: 044_action_journal_indexes_status
 Create Date: 2026-08-24
 """
-from typing import Sequence, Union
+from collections.abc import Sequence
 
 from alembic import op
 
-
 revision: str = "045_hard_purge_status_index"
-down_revision: Union[str, None] = "044_action_journal_indexes_status"
-branch_labels: Union[str, Sequence[str], None] = None
-depends_on: Union[str, Sequence[str], None] = None
+down_revision: str | None = "044_action_journal_indexes_status"
+branch_labels: str | Sequence[str] | None = None
+depends_on: str | Sequence[str] | None = None
 
 
 def upgrade() -> None:
@@ -40,10 +39,8 @@ def upgrade() -> None:
     )
 
     # --- DATA ---
-    pass
 
     # --- TRIGGERS ---
-    pass
 
 
 def downgrade() -> None:

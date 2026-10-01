@@ -9,14 +9,14 @@ Revision ID: 042_sync_unique_code_indexes
 Revises: 041_drop_ostaki_ktm_template
 Create Date: 2026-08-11
 """
-from typing import Sequence, Union
+from collections.abc import Sequence
 
 from alembic import op
 
 revision: str = "042_sync_unique_code_indexes"
-down_revision: Union[str, None] = "041_drop_ostaki_ktm_template"
-branch_labels: Union[str, Sequence[str], None] = None
-depends_on: Union[str, Sequence[str], None] = None
+down_revision: str | None = "041_drop_ostaki_ktm_template"
+branch_labels: str | Sequence[str] | None = None
+depends_on: str | Sequence[str] | None = None
 
 
 def upgrade() -> None:
@@ -29,10 +29,8 @@ def upgrade() -> None:
     op.create_index(op.f("ix_products_code"), "products", ["code"], unique=True)
 
     # --- DATA ---
-    pass
 
     # --- TRIGGERS ---
-    pass
 
 
 def downgrade() -> None:

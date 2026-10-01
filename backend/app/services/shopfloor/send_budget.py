@@ -57,7 +57,7 @@ async def remaining_send(
         progress = await get_transform_progress(db, task.id)
         produced = progress.produced_by_group.get(
             _dimensions_hash_key(eff_dims)
-        ) or Decimal("0")
+        ) or Decimal(0)
     else:
         eff_dims = eff_dims if eff_dims is not None else task.dimensions
         produced = (
@@ -69,7 +69,7 @@ async def remaining_send(
                     dimensions_match_clause(StockTransaction.dimensions, eff_dims),
                 )
             )
-        ) or Decimal("0")
+        ) or Decimal(0)
 
     # «Уже выпущено» — canonical net FINAL_RELEASE через ledger-примитив
     # (ADR-0018), а не локальная gross-сумма.

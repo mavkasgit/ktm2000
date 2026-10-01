@@ -9,12 +9,16 @@ Covers:
 from __future__ import annotations
 
 import pytest
-from sqlalchemy import select
-
-from app.models.product import Product, ProductType, ProcessingFlag, ProductProcessingFlag
+from app.models.product import (
+    ProcessingFlag,
+    Product,
+    ProductProcessingFlag,
+    ProductType,
+)
 from app.models.route import RouteRuleProfile, RouteSelectionRule
 from app.models.section import Section
 from app.services.route_selection import select_route_for_payload
+from sqlalchemy import select
 
 from tests.test_routes_seed import DEFAULT_SECTIONS, _seed_default_sections
 

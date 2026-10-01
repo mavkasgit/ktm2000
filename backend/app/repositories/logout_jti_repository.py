@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 
 from sqlalchemy import delete, select
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -28,7 +28,7 @@ class LogoutJtiRepository:
         self, db: AsyncSession, *, now: datetime | None = None
     ) -> int:
         """Delete jti with expired token exp (replay after exp is impossible)."""
-        ts = now or datetime.now(timezone.utc)
+        ts = now or datetime.now(UTC)
         result = await db.execute(
             delete(UsedLogoutJti).where(UsedLogoutJti.expires_at <= ts)
         )

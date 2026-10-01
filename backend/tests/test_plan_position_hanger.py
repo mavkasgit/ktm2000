@@ -11,7 +11,7 @@ from datetime import date
 from decimal import Decimal
 
 import pytest
-
+from app.models.product import Product, ProductLength, ProductPair, ProductType
 from app.models.production_plan import (
     PlanPosition,
     PlanPositionStatus,
@@ -19,7 +19,6 @@ from app.models.production_plan import (
     PlanSourceType,
     ProductionPlan,
 )
-from app.models.product import Product, ProductLength, ProductPair, ProductType
 from app.models.route import ProductionRoute, RouteOperation, RouteStage
 from app.models.section import Section
 from app.services.plan_position_hanger import resolve_position_hanger
@@ -60,7 +59,7 @@ async def _make_plan_position(
     *,
     length_mm: float | None = None,
     payload_quantity_per_hanger: int | None = None,
-    quantity: Decimal = Decimal("100"),
+    quantity: Decimal = Decimal(100),
 ) -> tuple[ProductionPlan, PlanPosition]:
     plan = ProductionPlan(
         plan_no=f"PLAN-{product.sku}",
@@ -430,17 +429,17 @@ def test_position_dimensions_for_task_edges() -> None:
     from app.services.plan_position_hanger import position_dimensions_for_task
 
     def make_pos(**overrides) -> PlanPosition:
-        fields: dict = dict(
-            production_plan_id=1,
-            source_type=PlanSourceType.manual,
-            source_sku="EDGE",
-            quantity=Decimal("1"),
-            status=PlanPositionStatus.approved,
-            validation_status=PlanPositionValidationStatus.valid,
-            input_quantity=None,
-            input_dimensions=None,
-            outputs=[],
-        )
+        fields: dict = {
+            "production_plan_id": 1,
+            "source_type": PlanSourceType.manual,
+            "source_sku": "EDGE",
+            "quantity": Decimal(1),
+            "status": PlanPositionStatus.approved,
+            "validation_status": PlanPositionValidationStatus.valid,
+            "input_quantity": None,
+            "input_dimensions": None,
+            "outputs": [],
+        }
         fields.update(overrides)
         return PlanPosition(**fields)
 
@@ -455,7 +454,7 @@ def test_position_dimensions_for_task_edges() -> None:
     # Трансформирующая (есть input_quantity) без длины входа — выход НЕ подставляем.
     assert position_dimensions_for_task(
         make_pos(
-            input_quantity=Decimal("100"),
+            input_quantity=Decimal(100),
             outputs=[{"quantity": "1", "dimensions": {"length_mm": 900}}],
         )
     ) is None
@@ -516,7 +515,7 @@ async def _make_pair_position(
         source_type=PlanSourceType.excel_import,
         source_sku="PAIR-POS",
         source_name="Pair position",
-        quantity=Decimal("100"),
+        quantity=Decimal(100),
         input_dimensions={"length_mm": length_mm},
         source_payload=payload,
         period_start=plan.period_start,

@@ -37,18 +37,16 @@ legacy-данных он лежит под сырьевой: ``2750`` при ``l
 Irreversible: no — downgrade возвращает ключи, записанные в отчёт, и убирает
 таблицу отчёта.
 """
-from typing import Sequence, Union
-
 import json
+from collections.abc import Sequence
 
 import sqlalchemy as sa
 from alembic import op
 
-
 revision: str = "067_hanger_norm_key_normalization"
-down_revision: Union[str, None] = "066_route_signature_backfill"
-branch_labels: Union[str, Sequence[str], None] = None
-depends_on: Union[str, Sequence[str], None] = None
+down_revision: str | None = "066_route_signature_backfill"
+branch_labels: str | Sequence[str] | None = None
+depends_on: str | Sequence[str] | None = None
 
 REPORT_TABLE = "hanger_norm_key_migration"
 

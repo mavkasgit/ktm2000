@@ -2,11 +2,21 @@
 from __future__ import annotations
 
 import pytest
+from app.api.routes.products import (
+    _SORT_COLUMNS,
+    _SORT_NULLS_LAST_FIELDS,
+    VALID_SORT_FIELDS,
+)
+from app.models.product import (
+    ProcessingFlag,
+    Product,
+    ProductLength,
+    ProductPair,
+    ProductProcessingFlag,
+    ProductType,
+)
 from sqlalchemy import text
 from sqlalchemy.ext.asyncio import AsyncSession
-
-from app.api.routes.products import VALID_SORT_FIELDS, _SORT_COLUMNS, _SORT_NULLS_LAST_FIELDS
-from app.models.product import Product, ProductLength, ProcessingFlag, ProductProcessingFlag, ProductPair, ProductType
 
 # Курируемый набор полей сортировки справочника сырья (#76)
 CURATED_SORT_FIELDS = [
@@ -24,7 +34,7 @@ async def _make_product(
     sku: str,
     name: str,
     lengths_mm: list[float] | None = None,
-    paired_with: "Product | None" = None,
+    paired_with: Product | None = None,
     aliases: list[str] | None = None,
     attributes: dict | None = None,
 ) -> Product:
@@ -277,7 +287,7 @@ def test_sort_table_keys_match_valid_fields() -> None:
     либо 400 на существующей колонке, либо поле в контракте без резолва.
     """
     assert set(_SORT_COLUMNS) == VALID_SORT_FIELDS
-    assert VALID_SORT_FIELDS == set(CURATED_SORT_FIELDS)
+    assert set(CURATED_SORT_FIELDS) == VALID_SORT_FIELDS
     assert set(_SORT_NULLS_LAST_FIELDS) <= VALID_SORT_FIELDS
 
 

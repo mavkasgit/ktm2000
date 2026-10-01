@@ -5,16 +5,15 @@ Revises: 030_drop_user_login_tokens
 Create Date: 2026-08-08 00:00:00.000000
 """
 
-from typing import Sequence, Union
+from collections.abc import Sequence
 
-from alembic import op
 import sqlalchemy as sa
-
+from alembic import op
 
 revision: str = "031_users_profile_sync_failed_at"
-down_revision: Union[str, None] = "030_drop_user_login_tokens"
-branch_labels: Union[str, Sequence[str], None] = None
-depends_on: Union[str, Sequence[str], None] = None
+down_revision: str | None = "030_drop_user_login_tokens"
+branch_labels: str | Sequence[str] | None = None
+depends_on: str | Sequence[str] | None = None
 
 
 def upgrade() -> None:

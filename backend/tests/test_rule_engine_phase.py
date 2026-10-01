@@ -1,12 +1,12 @@
 """Tests for the unified rule engine with phase support and DSL actions."""
 
 from app.services.route_selection import (
-    _set_nested,
     _add_to_nested,
-    _remove_from_nested,
     _apply_dsl_action,
     _load_rules_by_phase,
     _normalize_template_mapping,
+    _remove_from_nested,
+    _set_nested,
     build_route_rule_context,
 )
 

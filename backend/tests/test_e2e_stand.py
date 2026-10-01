@@ -111,8 +111,8 @@ def test_dev_databases_reads_database_url(tmp_path: Path) -> None:
     names, endpoints = _dev_databases(env_file)
     assert "ktm2000_local" in names
     assert ("127.0.0.1", 5440) in endpoints
-    assert FALLBACK_DEV_DB_NAMES <= names
-    assert FALLBACK_DEV_ENDPOINTS <= endpoints
+    assert names >= FALLBACK_DEV_DB_NAMES
+    assert endpoints >= FALLBACK_DEV_ENDPOINTS
 
 
 def test_dev_databases_reads_postgres_db_and_port_without_url(tmp_path: Path) -> None:

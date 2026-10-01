@@ -2,27 +2,39 @@ import json
 from io import BytesIO
 from pathlib import Path
 
-from fastapi import APIRouter, Depends, File, Form, HTTPException, Query, UploadFile, status
+from fastapi import (
+    APIRouter,
+    Depends,
+    File,
+    Form,
+    HTTPException,
+    Query,
+    UploadFile,
+    status,
+)
 from openpyxl import Workbook
 from pydantic import BaseModel, ConfigDict, Field
 from sqlalchemy import desc, func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.core.database import get_db
 from app.api.deps import PLAN_OWNER_ROLES, READER_ROLES, require_role
-from app.models.user import User
+from app.core.database import get_db
 from app.models.import_template import ImportTemplate
 from app.models.imports import ImportBatch, ImportBatchMode, ImportFile
+from app.models.product import Product
 from app.models.production_plan import (
     PlanChangeSet,
     PlanPosition,
     ProductionPlan,
     require_current_length_model,
 )
-from app.models.product import Product
 from app.models.route import RouteRuleProfile
+from app.models.user import User
 from app.services.plan_import_service import create_excel_import_change_set
-from app.services.route_matcher import resolve_position_route, make_position_route_cache_key
+from app.services.route_matcher import (
+    make_position_route_cache_key,
+    resolve_position_route,
+)
 
 router = APIRouter(prefix="/imports", tags=["imports"])
 
@@ -614,8 +626,9 @@ async def list_import_positions(batch_id: int, db: AsyncSession = Depends(get_db
 
 @router.get("/files/{file_id}/download", dependencies=[Depends(require_role(list(READER_ROLES)))])
 async def download_import_file(file_id: int, db: AsyncSession = Depends(get_db)):
-    from fastapi.responses import FileResponse
     from urllib.parse import quote
+
+    from fastapi.responses import FileResponse
 
     file = await db.get(ImportFile, file_id)
     if file is None:

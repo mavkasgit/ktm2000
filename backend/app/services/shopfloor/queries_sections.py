@@ -15,14 +15,19 @@ from app.domain.dimensions import (
     parse_dimensions_filter,
 )
 from app.models.internal_plan import SectionPlanLine
-from app.models.production_plan import PlanPosition
 from app.models.product import Product
+from app.models.production_plan import PlanPosition
 from app.models.route import RouteOperation, RouteStage, SectionOperation
 from app.models.section import Section
 from app.models.transfer import Transfer, TransferStatus
-from app.models.work_task import CLOSED_WORK_TASK_STATUSES, RESOLVED_WORK_TASK_STATUSES, WorkTask, WorkTaskStatus
-from app.stock.models import QualityState, Reason, StockBalance, StockTransaction
+from app.models.work_task import (
+    CLOSED_WORK_TASK_STATUSES,
+    RESOLVED_WORK_TASK_STATUSES,
+    WorkTask,
+    WorkTaskStatus,
+)
 from app.services.plan_position_hanger import resolve_positions_hanger
+from app.stock.models import QualityState, Reason, StockBalance, StockTransaction
 
 from .cache import _compute_available_from_balances
 from .common import _to_decimal
@@ -469,11 +474,11 @@ async def get_section_board(
         task_cache = tasks_cache.get(task.id, {})
         available = _compute_available_from_balances(
             planned_quantity=_to_decimal(task.planned_quantity),
-            received_quantity=task_cache.get("received_quantity", Decimal("0")),
-            issued_quantity=task_cache.get("issued_quantity", Decimal("0")),
-            returned_quantity=task_cache.get("returned_quantity", Decimal("0"))
+            received_quantity=task_cache.get("received_quantity", Decimal(0)),
+            issued_quantity=task_cache.get("issued_quantity", Decimal(0)),
+            returned_quantity=task_cache.get("returned_quantity", Decimal(0))
             if "returned_quantity" in task_cache
-            else Decimal("0"),
+            else Decimal(0),
             is_first_stage=bool(line.sequence == 1),
         )
 
@@ -532,7 +537,7 @@ async def get_section_board(
                 for row in rows_by_output
             ]
             input_consumed_quantity = format_quantity(
-                progress.consumed_quantity if progress else Decimal("0")
+                progress.consumed_quantity if progress else Decimal(0)
             )
 
         tasks_data.append({
@@ -733,7 +738,8 @@ async def get_section_daily_stats(
     date_to: datetime,
 ) -> dict:
     """Return daily statistics for a section, aggregated by created_at date."""
-    from sqlalchemy import cast, Date as SQLADate
+    from sqlalchemy import Date as SQLADate
+    from sqlalchemy import cast
 
     # Aggregate by date and reason type from StockTransaction
     rows = (
@@ -774,7 +780,7 @@ async def get_section_daily_stats(
 
         if reason_val == Reason.COMPLETE.value:
             daily_map[day_key]["good_quantity"] = str(_to_decimal(total_qty))
-        elif reason_val in (Reason.SCRAP.value,):
+        elif reason_val == Reason.SCRAP.value:
             daily_map[day_key]["rejected_quantity"] = str(_to_decimal(total_qty))
 
     return {"section_id": section_id, "daily_stats": list(daily_map.values())}

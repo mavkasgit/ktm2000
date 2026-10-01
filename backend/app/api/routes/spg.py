@@ -1,13 +1,19 @@
 from decimal import Decimal
 from typing import Any
 
-from fastapi import APIRouter, Depends, HTTPException, status, File, UploadFile
+from fastapi import APIRouter, Depends, File, HTTPException, UploadFile, status
 from pydantic import BaseModel
 from sqlalchemy import delete, select
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import selectinload
 
-from app.api.deps import READER_ROLES, REFERENCES_WRITER_ROLES, WRITER_ROLES, get_current_user, require_role
+from app.api.deps import (
+    READER_ROLES,
+    REFERENCES_WRITER_ROLES,
+    WRITER_ROLES,
+    get_current_user,
+    require_role,
+)
 from app.core.database import get_db
 from app.models.product import Product
 from app.models.route import RouteStage
@@ -289,7 +295,7 @@ async def get_spg_defects(
         return []
 
     # Get all defects for these sections
-    from app.models.defect import Defect, DefectItem, DefectDecision
+    from app.models.defect import Defect, DefectDecision, DefectItem
     from app.models.product import Product
     from app.models.section import Section
     from app.models.user import User
@@ -449,9 +455,11 @@ async def import_defects_excel(
     db: AsyncSession = Depends(get_db),
     current_user: User = Depends(get_current_user),
 ) -> dict:
-    from python_calamine import load_workbook
     from io import BytesIO
-    from app.models.defect import Defect, DefectItem, DefectType, DefectStatus
+
+    from python_calamine import load_workbook
+
+    from app.models.defect import Defect, DefectItem, DefectStatus, DefectType
 
     content = await file.read()
     try:

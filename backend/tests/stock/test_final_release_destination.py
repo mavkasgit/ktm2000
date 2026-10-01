@@ -12,15 +12,15 @@ from __future__ import annotations
 from decimal import Decimal
 
 import pytest
-from sqlalchemy import func, select, update
-from sqlalchemy.ext.asyncio import AsyncSession
-
 from app.models import Section
 from app.models.action_journal import Action
 from app.models.route import RouteStage
 from app.models.work_task import WorkTaskStatus
-from app.stock import Reason, StockCommand, StockCommandService, StockTransaction
 from app.services.material_operations import completed_operations_for_task
+from app.stock import Reason, StockCommand, StockCommandService, StockTransaction
+from sqlalchemy import func, select, update
+from sqlalchemy.ext.asyncio import AsyncSession
+
 from tests.stock.helpers import record_transfer_receive
 from tests.stock.test_shopfloor_stage3 import _setup_minimal_route
 from tests.test_integrity_invariants import assert_no_invariants_violations
@@ -29,7 +29,7 @@ from tests.test_integrity_invariants import assert_no_invariants_violations
 async def _run_to_final_release(
     session: AsyncSession,
     fx: dict,
-    qty: Decimal = Decimal("8"),
+    qty: Decimal = Decimal(8),
 ) -> dict:
     """Довести задание до final_release: issue → receive → complete."""
     task = fx["task"]
@@ -38,7 +38,7 @@ async def _run_to_final_release(
         product_id=fx["product"].id,
         from_location_id=None,
         to_location_id=fx["raw"].id,
-        quantity=Decimal("100"),
+        quantity=Decimal(100),
         reason=Reason.MANUAL_IN,
         created_by=fx["user"].id,
         # ADR-0055: списание TRANSFER_RECEIVE идёт по полному ключу остатка,
@@ -52,7 +52,7 @@ async def _run_to_final_release(
         product_id=fx["product"].id,
         from_location_id=fx["raw"].id,
         to_location_id=task.section_id,
-        quantity=Decimal("10"),
+        quantity=Decimal(10),
         task_id=task.id,
         created_by=fx["user"].id,
     )

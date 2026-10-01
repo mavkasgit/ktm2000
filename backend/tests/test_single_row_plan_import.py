@@ -1,13 +1,12 @@
 from io import BytesIO
 
 import pytest
-from openpyxl import Workbook
-from sqlalchemy import select
-
 from app.models.import_template import ImportTemplate
 from app.models.product import Product, ProductLength, ProductType
-from app.models.route import ProductionRoute, RouteStage, RouteOperation
+from app.models.route import ProductionRoute, RouteOperation, RouteStage
 from app.models.section import Section
+from openpyxl import Workbook
+from sqlalchemy import select
 
 
 def _single_row_workbook() -> bytes:

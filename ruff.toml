@@ -1,13 +1,63 @@
-# Скоуп ruff для репозитория — решение грилла #245 (Q1=1), тикет #248.
+# Скоуп ruff для репозитория. Точка входа — тикет #248 (pyflakes-ядро, 0 находок),
+# расширение — тикет #260 («механические семейства»): каждое семейство доведено до
+# нуля отдельной волной, с полным прогоном `npm run test:pytest` после волны.
 #
-# Дефолтный набор ruff 0.16.9 даёт в `backend/` 3203 находки, в которых
-# корректностные дефекты тонут среди стилевых семейств: FURB157 1504,
-# I001 425, B008 384, UP007 189 — против ~200 настоящих дефектов
-# (F821 undefined-name 55, F401 82, F841 50, F811 10).
-# Report-only отчёт такого размера никто не читает, поэтому первый заход
-# сужен до pyflakes-ядра: всё, что здесь находит ruff, — дефект кода.
-# Расширение скоупа — отдельным решением.
+# Что вошло (находок до → после):
+#   F         ~200 → 0   pyflakes-ядро (база #248, не сломалась)
+#   I001      421  → 0   сортировка импортов
+#   UP006/7/17/35/37/45  386 → 0  PEP 604/585, снятие deprecated typing, `datetime.UTC`
+#   FURB157   1519 → 0   verbose-decimal-constructor
+#   RUF059    62   → 0   unused-unpacked-variable (ручной rename → `_name`)
+#   PIE       34   → 0   PIE790 + PIE810
+#   C4        20   → 0   C408/C401/C416/C420
+#   SIM       39   → 0   SIM101/102/103/105/108/117/300
+#   B008      384  → 0   не код-фикс: extend-immutable-calls (ниже)
+#
+# НЕ вошли (до нуля не доводятся / вне механики):
+#   UP042 (35, `str`+`Enum` → `StrEnum` — смена семантики `str(member)`)
+#   UP047 (1, PEP 695 generic)
+#   PLR2004 (1868) + PLR09xx (330) и прочие PLR — пороги/магия, не механизируются
+#   RUF001/002/003 (~6000, ambiguous unicode), RUF100 (28, unused-noqa)
+# Из-за UP042/UP047 выбран явный список UP-кодов, а не семейство `UP` целиком.
 target-version = "py312"
 
 [lint]
-select = ["F"]
+select = [
+    "F",
+    "I",
+    "UP006",
+    "UP007",
+    "UP017",
+    "UP035",
+    "UP037",
+    "UP045",
+    "FURB",
+    "RUF059",
+    "PIE",
+    "C4",
+    "SIM",
+    "B008",
+]
+
+[lint.flake8-bugbear]
+# B008: вызовы в дефолтах-зависимостях FastAPI — не дефект. Помимо самого
+# `Depends`, ruff рекурсивно смотрит вложенные вызовы, поэтому сюда же попадает
+# `app.api.deps.require_role(...)` — фабрика зависимости (`Depends(require_role(...))`).
+extend-immutable-calls = [
+    "fastapi.Depends",
+    "fastapi.Query",
+    "fastapi.File",
+    "fastapi.Form",
+    "fastapi.Body",
+    "fastapi.Header",
+    "fastapi.Path",
+    "app.api.deps.require_role",
+]
+
+[lint.per-file-ignores]
+# `app.models.__init__` намеренно импортирует `app.stock.*` ПОСЛЕ моделей:
+# иначе circular import (`app.stock.services` тянет `app.models`). I001 требует
+# обратного порядка — оставляем осознанное исключение для этого модуля.
+"backend/app/models/__init__.py" = ["I001"]
+# Чужой незакоммиченный WIP, вне скоупа #260 — не трогаем (I001 на нём фиксит автор).
+"backend/scripts/repair_route_operations.py" = ["I001"]

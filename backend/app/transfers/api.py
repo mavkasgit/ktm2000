@@ -23,7 +23,6 @@ existing UI keeps functioning during the migration.
 from __future__ import annotations
 
 from datetime import datetime
-from typing import Optional
 
 from fastapi import APIRouter, Depends, HTTPException, Query
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -40,21 +39,20 @@ from app.api.deps import (
 from app.core.database import get_db
 from app.domain.dimensions import DimensionsValidationError
 from app.models.user import User
-
 from app.transfers.queries import (
     get_section_incoming_transfers,
+    get_section_transfer_history,
     get_transfer_details,
     list_ready_to_transfer,
-    get_section_transfer_history,
 )
 from app.transfers.schemas import (
-    CreateTransferPayload,
     CorrectTransferPayload,
+    CreateTransferPayload,
 )
 from app.transfers.services import (
-    transfer_send,
-    correct_transfer,
     cancel_transfer,
+    correct_transfer,
+    transfer_send,
 )
 
 router = APIRouter(prefix="/transfers", tags=["transfers"])
@@ -105,8 +103,8 @@ async def create_transfer(
 
 @router.get("/ready", dependencies=[Depends(require_role(list(READER_ROLES)))])
 async def ready_to_transfer(
-    section_id: Optional[int] = Query(default=None),
-    spg_id: Optional[int] = Query(default=None),
+    section_id: int | None = Query(default=None),
+    spg_id: int | None = Query(default=None),
     limit: int = Query(default=50, ge=1, le=500),
     offset: int = Query(default=0, ge=0),
     search: str | None = Query(default=None),
@@ -180,8 +178,8 @@ async def incoming_transfers(
     dependencies=[Depends(require_role(list(READER_ROLES)))],
 )
 async def transfer_history_generic(
-    section_id: Optional[int] = Query(default=None),
-    spg_id: Optional[int] = Query(default=None),
+    section_id: int | None = Query(default=None),
+    spg_id: int | None = Query(default=None),
     limit: int = Query(default=50, ge=1, le=500),
     offset: int = Query(default=0, ge=0),
     search: str | None = Query(default=None),
@@ -248,7 +246,7 @@ async def correct_transfer_qty(
 @router.post("/{transfer_id}/cancel", dependencies=[Depends(require_role(list(TRANSFER_WRITER_ROLES)))])
 async def cancel_transfer_qty(
     transfer_id: int,
-    comment: Optional[str] = Query(default=None),
+    comment: str | None = Query(default=None),
     db: AsyncSession = Depends(get_db),
     current_user: User = Depends(get_current_user),
 ) -> dict:

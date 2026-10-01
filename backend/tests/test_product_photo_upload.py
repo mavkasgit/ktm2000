@@ -11,10 +11,9 @@ from __future__ import annotations
 from pathlib import Path
 
 import pytest
-from sqlalchemy.ext.asyncio import AsyncSession
-
 from app.core.config import settings
 from app.models.product import Product, ProductType
+from sqlalchemy.ext.asyncio import AsyncSession
 
 pytestmark = pytest.mark.asyncio
 

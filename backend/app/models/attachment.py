@@ -1,6 +1,18 @@
 from datetime import datetime
 
-from sqlalchemy import BigInteger, DateTime, Enum, ForeignKey, Identity, Index, String, Text, UniqueConstraint, func, text
+from sqlalchemy import (
+    BigInteger,
+    DateTime,
+    Enum,
+    ForeignKey,
+    Identity,
+    Index,
+    String,
+    Text,
+    UniqueConstraint,
+    func,
+    text,
+)
 from sqlalchemy.dialects.postgresql import JSONB
 from sqlalchemy.orm import Mapped, mapped_column
 

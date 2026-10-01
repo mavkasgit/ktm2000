@@ -18,29 +18,33 @@ from __future__ import annotations
 from decimal import Decimal
 
 import pytest
-from sqlalchemy import select
-from sqlalchemy.ext.asyncio import AsyncSession
-
 from app.models.action_journal import Action
 from app.models.work_task import WorkTaskStatus
+from app.seeds.seeders.spgs_seeder import seed_spgs
+from app.services.material_operations import completed_operations_for_task
 from app.stock import Reason, StockCommand, StockCommandService
 from app.stock.import_service import RemainderItem, apply_remainders_import
 from app.stock.models import StockTransaction
-from app.seeds.seeders.spgs_seeder import seed_spgs
-from app.services.material_operations import completed_operations_for_task
-from tests.stock.helpers import FAKE_DEFECT_DECISION_MAP, FAKE_SCRAP_POLICY, record_transfer_receive
+from sqlalchemy import select
+from sqlalchemy.ext.asyncio import AsyncSession
+
+from tests.stock.helpers import (
+    FAKE_DEFECT_DECISION_MAP,
+    FAKE_SCRAP_POLICY,
+    record_transfer_receive,
+)
 from tests.stock.test_shopfloor_stage3 import _setup_minimal_route
 from tests.test_integrity_invariants import assert_no_invariants_violations
 
 pytestmark = pytest.mark.asyncio
 
 
-async def _issue_material(session: AsyncSession, fx: dict, qty: Decimal = Decimal("10")) -> None:
+async def _issue_material(session: AsyncSession, fx: dict, qty: Decimal = Decimal(10)) -> None:
     await StockCommandService().record(session, StockCommand(
         product_id=fx["product"].id,
         from_location_id=None,
         to_location_id=fx["raw"].id,
-        quantity=Decimal("100"),
+        quantity=Decimal(100),
         reason=Reason.MANUAL_IN,
         created_by=fx["user"].id,
         # ADR-0055: списание TRANSFER_RECEIVE идёт по полному ключу остатка,
@@ -86,8 +90,8 @@ async def test_complete_task_creates_action(session: AsyncSession) -> None:
     result = await complete_task(
         session,
         task_id=task.id,
-        good_quantity=Decimal("7"),
-        defect_quantity=Decimal("3"),
+        good_quantity=Decimal(7),
+        defect_quantity=Decimal(3),
         actor_id=fx["user"].id,
         defect_reason="test_scrap",
         **FAKE_SCRAP_POLICY,
@@ -133,8 +137,8 @@ async def test_task_chain_depends_on(session: AsyncSession, ) -> None:
     await complete_task(
         session,
         task_id=task.id,
-        good_quantity=Decimal("8"),
-        defect_quantity=Decimal("0"),
+        good_quantity=Decimal(8),
+        defect_quantity=Decimal(0),
         actor_id=fx["user"].id,
     )
     await session.commit()
@@ -142,13 +146,13 @@ async def test_task_chain_depends_on(session: AsyncSession, ) -> None:
     await final_release(
         session,
         task_id=task.id,
-        quantity=Decimal("5"),
+        quantity=Decimal(5),
         actor_id=fx["user"].id,
     )
     await session.commit()
 
     await return_remainder(
-        ReturnRemainderPayload(task_id=task.id, quantity=Decimal("2")),
+        ReturnRemainderPayload(task_id=task.id, quantity=Decimal(2)),
         db=session,
         current_user=fx["user"],
         locked_section_id=None,
@@ -175,8 +179,7 @@ async def test_task_chain_depends_on(session: AsyncSession, ) -> None:
 
 async def test_defect_decision_creates_action(session: AsyncSession) -> None:
     """defect_decide (scrap) = Action(defect_decision, ref_id=defect.id)."""
-    from app.models.defect import Defect
-    from app.models.defect import DefectDecisionType
+    from app.models.defect import Defect, DefectDecisionType
     from app.services.shopfloor.operations_defects import create_defect, defect_decide
 
     fx = await _setup_minimal_route(session)
@@ -185,7 +188,7 @@ async def test_defect_decision_creates_action(session: AsyncSession) -> None:
     res = await create_defect(
         session,
         task_id=fx["task"].id,
-        quantity=Decimal("2"),
+        quantity=Decimal(2),
         actor_id=fx["user"].id,
         reason="scratch",
     )
@@ -195,7 +198,7 @@ async def test_defect_decision_creates_action(session: AsyncSession) -> None:
         session,
         defect_id=defect_id,
         decision_type=DefectDecisionType.scrap,
-        quantity=Decimal("2"),
+        quantity=Decimal(2),
         actor_id=fx["user"].id,
         defect_decision_map=FAKE_DEFECT_DECISION_MAP,
         **FAKE_SCRAP_POLICY,
@@ -273,7 +276,7 @@ async def test_import_remainders_single_action(session: AsyncSession) -> None:
         product_id=product.id,
         from_location_id=None,
         to_location_id=location.id,
-        quantity=Decimal("9"),
+        quantity=Decimal(9),
         reason=Reason.MANUAL_IN,
         created_by=1,
     ))
@@ -320,13 +323,14 @@ async def test_import_remainders_single_action(session: AsyncSession) -> None:
 async def test_seed_demo_creates_one_action(session: AsyncSession, monkeypatch) -> None:
     """Демо-сид: один Action('seed_demo'), все его MANUAL_IN с его action_id
     (решения 2 и 7: компенсатора нет — попытка reverse вернёт NotAllowed)."""
+    from app.models.user import User, UserRole
+    from app.seeds.seeders import demo_production_seeder
+
     from tests.test_prep_stock_seed import (
         _build_route_with_sections,
         _seed_default_sections,
         _spg_defs,
     )
-    from app.seeds.seeders import demo_production_seeder
-    from app.models.user import User, UserRole
 
     actor = User(
         username="aj-seed-actor",
@@ -395,8 +399,8 @@ async def test_plan_auto_release_creates_action(session: AsyncSession) -> None:
     await complete_task(
         session,
         task_id=task.id,
-        good_quantity=Decimal("7"),
-        defect_quantity=Decimal("0"),
+        good_quantity=Decimal(7),
+        defect_quantity=Decimal(0),
         actor_id=fx["user"].id,
         **FAKE_SCRAP_POLICY,
     )
@@ -417,7 +421,7 @@ async def test_plan_auto_release_creates_action(session: AsyncSession) -> None:
         product_id=task.product_id,
         from_location_id=None,
         to_location_id=task.section_id,
-        quantity=Decimal("3"),
+        quantity=Decimal(3),
         reason=Reason.COMPLETE,
         task_id=task.id,
         source_ref="auto_release_remainder",

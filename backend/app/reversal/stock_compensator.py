@@ -15,8 +15,8 @@ from __future__ import annotations
 from decimal import Decimal
 
 from sqlalchemy import exists, func, select
-from sqlalchemy.orm import aliased
 from sqlalchemy.ext.asyncio import AsyncSession
+from sqlalchemy.orm import aliased
 
 from app.models.action_journal import Action, ActionStatus
 from app.models.transfer import Transfer, TransferStatus
@@ -136,7 +136,7 @@ class MirrorLedgerMixin:
                 _ops_key(e.completed_operations),
             )
             dims_by_key.setdefault(_dims_key(e.dimensions), e.dimensions)
-            need[key] = need.get(key, Decimal("0")) + e.quantity
+            need[key] = need.get(key, Decimal(0)) + e.quantity
         return need, dims_by_key
 
     async def _deficit_for(
@@ -157,7 +157,7 @@ class MirrorLedgerMixin:
         числитель и сравнить с потребностью, которая относится к одному
         признаку (ADR-0043 §3).
         """
-        deficit = Decimal("0")
+        deficit = Decimal(0)
         for key, qty in need.items():
             product_id, location_id, qs, dk, ok = key
             available_q = (
@@ -172,8 +172,8 @@ class MirrorLedgerMixin:
                     ),
                 )
             )
-            available = ((await db.scalar(available_q)) or Decimal("0")) + (
-                (adjustments or {}).get(key, Decimal("0"))
+            available = ((await db.scalar(available_q)) or Decimal(0)) + (
+                (adjustments or {}).get(key, Decimal(0))
             )
             if available < qty:
                 deficit += qty - available
@@ -325,7 +325,7 @@ class StockCompensator(MirrorLedgerMixin):
             transfer = await db.get(Transfer, plan.ref_id)
             if transfer is not None and transfer.status == TransferStatus.accepted:
                 transfer.status = TransferStatus.cancelled
-                transfer.accepted_quantity = Decimal("0")
+                transfer.accepted_quantity = Decimal(0)
         return ReversalResult(
             action_id=plan.action_id,
             reversal_action_id=plan.reversal_action_id,
@@ -430,7 +430,7 @@ class StockCompensator(MirrorLedgerMixin):
 
         transfer = await db.get(Transfer, ref_id) if ref_id is not None else None
         if transfer is None:
-            return Decimal("0")
+            return Decimal(0)
         product_id = transfer.product_id
         dims_raw = (
             changes.get("dimensions")
@@ -441,7 +441,7 @@ class StockCompensator(MirrorLedgerMixin):
         from_task_id = changes.get("from_task_id", transfer.from_task_id)
         from_task = await db.get(WorkTask, int(from_task_id))
         if from_task is None:
-            return Decimal("0")
+            return Decimal(0)
         quantity = Decimal(str(changes.get("quantity", transfer.sent_quantity)))
         # Признак операций новой прямой проводки — ровно тот, который
         # разрешит record() для from_task (маршрут позиции). Если он не
@@ -451,7 +451,7 @@ class StockCompensator(MirrorLedgerMixin):
         # (ADR-0021) — дефицит здесь не вычисляется вовсе.
         ops = await completed_operations_for_task(db, from_task)
         if ops is None:
-            return Decimal("0")
+            return Decimal(0)
         need_fwd: PlannedEntry = PlannedEntry(
             source_tx_id=0,
             product_id=product_id,
@@ -470,7 +470,7 @@ class StockCompensator(MirrorLedgerMixin):
             # Чистовый эффект компенсаций: −расход на своём from_location
             # и +приход на to_location (перевёрнутая геометрия).
             for key, qty in comp_need.items():
-                adjustments[key] = adjustments.get(key, Decimal("0")) - qty
+                adjustments[key] = adjustments.get(key, Decimal(0)) - qty
             for e in comp_entries:
                 if e.to_location_id is None:
                     continue
@@ -481,7 +481,7 @@ class StockCompensator(MirrorLedgerMixin):
                     _dims_key(e.dimensions),
                     _ops_key(e.completed_operations),
                 )
-                adjustments[ckey] = adjustments.get(ckey, Decimal("0")) + e.quantity
+                adjustments[ckey] = adjustments.get(ckey, Decimal(0)) + e.quantity
         return await self._deficit_for(db, need, dims_by_key, adjustments=adjustments)
 
     async def check_amend(

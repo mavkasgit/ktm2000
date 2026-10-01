@@ -18,10 +18,6 @@ from __future__ import annotations
 from decimal import Decimal
 
 import pytest
-from httpx import AsyncClient
-from sqlalchemy import func, or_, select, update
-from sqlalchemy.ext.asyncio import AsyncSession
-
 from app.models.internal_plan import InternalPlan, SectionPlanLine
 from app.models.production_plan import PlanPosition
 from app.models.route import (
@@ -35,8 +31,12 @@ from app.models.work_task import WorkTask
 from app.seeds.run_seed import run_full_seed
 from app.services.route_deletion import cleanup_orphan_routes, find_orphan_routes
 from app.services.route_signature import auto_route_code
-from tests.test_integrity_invariants import assert_no_invariants_violations
+from httpx import AsyncClient
+from sqlalchemy import func, or_, select, update
+from sqlalchemy.ext.asyncio import AsyncSession
+
 from tests.stock.test_shopfloor_stage3 import _setup_minimal_route
+from tests.test_integrity_invariants import assert_no_invariants_violations
 
 pytestmark = pytest.mark.asyncio
 
@@ -103,7 +103,7 @@ async def test_delete_linked_route_without_force_returns_409(
     client: AsyncClient, session: AsyncSession
 ) -> None:
     """Связанный маршрут без force → 409, перечисляющий ВСЕ связи, включая задания."""
-    fx = await _setup_minimal_route(session, sku="RD-409", qty=Decimal("10"))
+    fx = await _setup_minimal_route(session, sku="RD-409", qty=Decimal(10))
     route_id = await _route_id(session, "R-RD-409")
     task_id = fx["task"].id
 
@@ -141,7 +141,7 @@ async def test_delete_linked_route_with_force_removes_whole_graph(
     client: AsyncClient, session: AsyncSession
 ) -> None:
     """force=true сносит весь граф: операции этапов и условия правил в том числе."""
-    fx = await _setup_minimal_route(session, sku="RD-FORCE", qty=Decimal("10"))
+    fx = await _setup_minimal_route(session, sku="RD-FORCE", qty=Decimal(10))
     route_id = await _route_id(session, "R-RD-FORCE")
     rule_id, condition_id = await _add_matching_rule(session, route_id)
     await session.commit()
@@ -184,7 +184,7 @@ async def test_orphan_routes_exclude_routes_with_positions(
     session: AsyncSession,
 ) -> None:
     """Сирота — маршрут без позиций плана/строк/заданий; маршрут с позицией плана — не сирота."""
-    fx = await _setup_minimal_route(session, sku="RD-ORPH", qty=Decimal("10"))
+    fx = await _setup_minimal_route(session, sku="RD-ORPH", qty=Decimal(10))
     linked_id = await _route_id(session, "R-RD-ORPH")
     orphan_id = await _make_orphan_route(
         session, name="RD-orphan-1", code=_auto_code("ORPH1"), section_id=fx["prod"].id
@@ -203,7 +203,7 @@ async def test_cleanup_orphan_routes_is_dry_run_by_default_and_executes_on_flag(
     session: AsyncSession,
 ) -> None:
     """Без execute уборка только читает; с execute сносит сирот вместе с этапами."""
-    fx = await _setup_minimal_route(session, sku="RD-DRY", qty=Decimal("10"))
+    fx = await _setup_minimal_route(session, sku="RD-DRY", qty=Decimal(10))
     linked_id = await _route_id(session, "R-RD-DRY")
     dry1 = await _make_orphan_route(
         session, name="RD-dry-1", code=_auto_code("DRY1"), section_id=fx["prod"].id
@@ -306,7 +306,7 @@ async def test_orphan_criterion_skips_archived_import_route(session: AsyncSessio
     Архивный маршрут назначением не считается (``route_matcher``), и удалять
     его — не уборка сирот: за архивирование отвечает человек.
     """
-    fx = await _setup_minimal_route(session, sku="RD-ARCH", qty=Decimal("10"))
+    fx = await _setup_minimal_route(session, sku="RD-ARCH", qty=Decimal(10))
     archived_id = await _make_orphan_route(
         session, name="RD-archived", code=_auto_code("ARCH"), section_id=fx["prod"].id
     )

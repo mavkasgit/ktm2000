@@ -10,8 +10,6 @@ from datetime import UTC, date, datetime
 from decimal import Decimal
 
 import pytest
-from sqlalchemy.ext.asyncio import AsyncSession
-
 from app.models.internal_plan import InternalPlan, SectionPlanLine
 from app.models.product import Product, ProductType
 from app.models.production_plan import (
@@ -28,6 +26,7 @@ from app.models.section import Section
 from app.models.spg import SpgSection, StorageProductionGroup
 from app.models.work_task import WorkTask, WorkTaskStatus
 from app.stock import Reason, StockCommand, StockCommandService
+from sqlalchemy.ext.asyncio import AsyncSession
 
 pytestmark = pytest.mark.asyncio
 
@@ -82,7 +81,7 @@ async def _make_fixture(session: AsyncSession, sku: str) -> dict:
         source_type=PlanSourceType.manual,
         source_sku=product.sku,
         source_name=product.name,
-        quantity=Decimal("100"),
+        quantity=Decimal(100),
         source_payload={},
         period_start=plan.period_start,
         period_end=plan.period_end,
@@ -109,7 +108,7 @@ async def _make_fixture(session: AsyncSession, sku: str) -> dict:
         route_id=route.id,
         route_stage_id=stages[1].id,
         sequence=1,
-        planned_quantity=Decimal("100"),
+        planned_quantity=Decimal(100),
     )
     session.add(line)
     await session.flush()
@@ -154,11 +153,11 @@ async def test_wip_stats_remainders_split_by_dimensions(client, session) -> None
     sku = fx["product"].sku
     await _seed_balance(
         session, location_id=fx["stock"].id, product_id=fx["product"].id,
-        qty=Decimal("10"), dimensions={"length_mm": 2000},
+        qty=Decimal(10), dimensions={"length_mm": 2000},
     )
     await _seed_balance(
         session, location_id=fx["stock"].id, product_id=fx["product"].id,
-        qty=Decimal("4"), dimensions={"length_mm": 3000},
+        qty=Decimal(4), dimensions={"length_mm": 3000},
     )
 
     resp = await client.get(f"/api/production-planning/product-wip-stats/{sku}")
@@ -180,11 +179,11 @@ async def test_wip_stats_remainders_merge_same_dimension(client, session) -> Non
     sku = fx["product"].sku
     await _seed_balance(
         session, location_id=fx["stock"].id, product_id=fx["product"].id,
-        qty=Decimal("10"), dimensions={"length_mm": 2000},
+        qty=Decimal(10), dimensions={"length_mm": 2000},
     )
     await _seed_balance(
         session, location_id=fx["stock"].id, product_id=fx["product"].id,
-        qty=Decimal("4"), dimensions={"length_mm": 2000},
+        qty=Decimal(4), dimensions={"length_mm": 2000},
     )
 
     resp = await client.get(f"/api/production-planning/product-wip-stats/{sku}")
@@ -208,7 +207,7 @@ async def test_wip_stats_in_work_split_by_dimensions(client, session) -> None:
             section_id=fx["prod"].id,
             product_id=fx["product"].id,
             route_stage_id=fx["prod_stage"].id,
-            planned_quantity=Decimal("100"),
+            planned_quantity=Decimal(100),
             dimensions={"length_mm": 2000},
             status=WorkTaskStatus.in_progress,
         ),
@@ -217,7 +216,7 @@ async def test_wip_stats_in_work_split_by_dimensions(client, session) -> None:
             section_id=fx["prod"].id,
             product_id=fx["product"].id,
             route_stage_id=fx["prod_stage"].id,
-            planned_quantity=Decimal("100"),
+            planned_quantity=Decimal(100),
             dimensions={"length_mm": 3000},
             status=WorkTaskStatus.in_progress,
         ),
@@ -248,7 +247,7 @@ async def test_wip_stats_in_work_dimensionless(client, session) -> None:
         section_id=fx["prod"].id,
         product_id=fx["product"].id,
         route_stage_id=fx["prod_stage"].id,
-        planned_quantity=Decimal("100"),
+        planned_quantity=Decimal(100),
         dimensions=None,
         status=WorkTaskStatus.ready,
     )

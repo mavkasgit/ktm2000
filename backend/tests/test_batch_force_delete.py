@@ -11,14 +11,11 @@ from __future__ import annotations
 from decimal import Decimal
 
 import pytest
-from sqlalchemy import func, select
-from sqlalchemy.ext.asyncio import AsyncSession
-
 from app.models.action_journal import Action, ActionStatus
 from app.models.audit_log import AuditLog
 from app.models.imports import ImportBatch, ImportBatchMode
-from app.models.production_plan import PlanChangeSet, PlanPosition, PlanPositionStatus
 from app.models.internal_plan import SectionPlanLine
+from app.models.production_plan import PlanChangeSet, PlanPosition, PlanPositionStatus
 from app.models.route import SectionOperation
 from app.models.transfer import Transfer
 from app.models.user import User, UserRole
@@ -32,6 +29,9 @@ from app.services.material_operations import (
 )
 from app.stock.models import QualityState, Reason, StockBalance, StockTransaction
 from app.stock.services import StockCommand, StockCommandService
+from sqlalchemy import func, select
+from sqlalchemy.ext.asyncio import AsyncSession
+
 from tests.test_batch_delete_409 import (
     _make_change_set,
     _make_plan_file_batch,
@@ -54,7 +54,7 @@ async def _balance(session: AsyncSession, product_id: int, location_id: int) -> 
                 StockBalance.quality_state == QualityState.GOOD,
             )
         )
-    ) or Decimal("0")
+    ) or Decimal(0)
 
 
 async def _balance_locations(session: AsyncSession, product_id: int) -> list[int]:
@@ -265,7 +265,7 @@ async def test_force_delete_refuses_transfer_crossing_batch_boundary(
         section_id=foreign_line.section_id,
         product_id=foreign_product.id,
         route_stage_id=foreign_line.route_stage_id,
-        planned_quantity=Decimal("1"),
+        planned_quantity=Decimal(1),
         status=WorkTaskStatus.ready,
     )
     session.add(foreign_task)
@@ -390,7 +390,7 @@ async def _build_batch_with_ops_axis(
             StockCommand(
                 product_id=product.id,
                 to_location_id=line.section_id,
-                quantity=Decimal("5"),
+                quantity=Decimal(5),
                 reason=Reason.MANUAL_IN,
                 completed_operations=ops,
                 # Проводка привязана к строке плана (иначе не попадёт в

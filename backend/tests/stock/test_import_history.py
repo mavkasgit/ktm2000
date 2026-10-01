@@ -5,14 +5,11 @@
 """
 from __future__ import annotations
 
-import pytest
 from decimal import Decimal
-from httpx import AsyncClient
-from sqlalchemy import select
-from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.models import Product, ProductType, Section
+import pytest
 from app.core.security import create_access_token
+from app.models import Product, ProductType, Section
 from app.models.action_journal import Action
 from app.models.route import SectionOperation
 from app.models.user import User, UserRole
@@ -39,6 +36,10 @@ from app.stock.import_models import (
 from app.stock.import_service import RemainderItem, apply_remainders_import
 from app.stock.models import Reason, StockTransaction
 from app.stock.services import StockCommand, StockCommandService
+from httpx import AsyncClient
+from sqlalchemy import select
+from sqlalchemy.ext.asyncio import AsyncSession
+
 from tests.test_integrity_invariants import assert_no_invariants_violations
 
 
@@ -196,8 +197,8 @@ async def test_view_rows_split_by_operations_axis(
     ]
     assert labels == ["HIST_WINDOW", "HIST_SHOT"]
     assert [v.current_balance for v in views] == [
-        Decimal("8888"),
-        Decimal("4500"),
+        Decimal(8888),
+        Decimal(4500),
     ]
 
     # Уровень API: та же ось и те же подписи в схеме ответа «посмотреть».
@@ -211,8 +212,8 @@ async def test_view_rows_split_by_operations_axis(
         ["HIST_SHOT"],
     ]
     assert [Decimal(r["current_balance"]) for r in rows] == [
-        Decimal("8888"),
-        Decimal("4500"),
+        Decimal(8888),
+        Decimal(4500),
     ]
     assert [
         format_completed_operations_label(r["completed_operations"]) for r in rows
@@ -309,7 +310,7 @@ async def test_rollback_restores_balance_and_keeps_invariants(
     svc = StockCommandService()
     await svc.record(session, StockCommand(
         product_id=product.id, from_location_id=None,
-        to_location_id=section.id, quantity=Decimal("9"),
+        to_location_id=section.id, quantity=Decimal(9),
         reason=Reason.MANUAL_IN, created_by=1,
     ))
     await session.commit()
@@ -356,7 +357,7 @@ async def test_rollback_blocked_when_material_consumed(session: AsyncSession) ->
     svc = StockCommandService()
     await svc.record(session, StockCommand(
         product_id=product.id, from_location_id=section.id,
-        to_location_id=None, quantity=Decimal("5"),
+        to_location_id=None, quantity=Decimal(5),
         reason=Reason.MANUAL_OUT, created_by=1,
     ))
     await session.commit()

@@ -15,8 +15,6 @@ from collections.abc import Sequence
 from datetime import date
 from decimal import Decimal
 
-from sqlalchemy.ext.asyncio import AsyncSession
-
 from app.models.internal_plan import InternalPlan, InternalPlanStatus, SectionPlanLine
 from app.models.product import Product, ProductType
 from app.models.production_plan import (
@@ -37,6 +35,8 @@ from app.models.section import Section
 from app.models.spg import SpgSection, StorageProductionGroup
 from app.models.user import User
 from app.models.work_task import WorkTask, WorkTaskStatus
+from sqlalchemy.ext.asyncio import AsyncSession
+
 from tests.test_integrity_invariants import _make_user
 
 __all__ = [
@@ -70,7 +70,7 @@ async def build_operation_route(
     input_quantity: Decimal | None = None,
     input_dimensions: dict | None = None,
     outputs: list[dict] | None = None,
-    qty: Decimal = Decimal("100"),
+    qty: Decimal = Decimal(100),
     with_plan_lines: bool = True,
     position_input_quantity: Decimal | None = None,
     position_outputs: list[dict] | None = None,

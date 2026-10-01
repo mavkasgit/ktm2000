@@ -23,9 +23,8 @@ def extract_color_from_text(
     for item in tokens:
         token = item.token
         color = item.color
-        if token and color and token in text_lower:
-            if best is None or len(token) > len(best[0]):
-                best = (token, color)
+        if token and color and token in text_lower and (best is None or len(token) > len(best[0])):
+            best = (token, color)
     return best[1] if best else None
 
 

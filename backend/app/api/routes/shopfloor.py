@@ -7,15 +7,10 @@ from pydantic import BaseModel, ConfigDict
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
-# Единый словарь стратегий недостачи (#134) — канон в домене, route-enum
-# удалён; FastAPI декодирует wire-строку прямо в ShortageStrategy.
-from app.domain.shortage import DEFAULT_SHORTAGE_STRATEGY, ShortageStrategy
-
-
 from app.api.deps import (
+    READER_ROLES,
     TRANSFER_WRITER_ROLES,
     WRITER_ROLES,
-    READER_ROLES,
     _ensure_section_lock,
     _ensure_task_lock,
     get_current_user,
@@ -23,6 +18,10 @@ from app.api.deps import (
     require_role,
 )
 from app.core.database import get_db
+
+# Единый словарь стратегий недостачи (#134) — канон в домене, route-enum
+# удалён; FastAPI декодирует wire-строку прямо в ShortageStrategy.
+from app.domain.shortage import DEFAULT_SHORTAGE_STRATEGY, ShortageStrategy
 from app.models.defect import DefectDecisionType
 from app.models.entity_comment import EntityType
 from app.models.route import SectionOperation
@@ -31,6 +30,7 @@ from app.models.work_task import WorkTask
 from app.seeds.canon.dependencies import get_plant_config
 from app.seeds.canon.models import PlantConfig
 from app.services.action_journal_service import action_journal_service
+from app.services.audit_log_service import log_action
 from app.services.shopfloor.common import _get_user_snapshot_name, _require_mutable_task
 from app.services.shopfloor_service import (
     add_defect_item,
@@ -41,24 +41,21 @@ from app.services.shopfloor_service import (
     defect_decide,
     final_release,
     get_defect_details,
+    get_rework_details,
     get_route_stage_aggregates_for_plan_position,
     get_section_board,
     get_section_daily_stats,
     get_sections_summary,
     get_task_details,
     link_attachment,
+    list_entity_attachments,
+    list_entity_comments,
     prepare_section_task,
     rework_create,
 )
 from app.transfers.queries import get_section_incoming_transfers, get_transfer_details
 from app.transfers.schemas import CreateTransferPayload
 from app.transfers.services import transfer_send
-from app.services.shopfloor_service import (
-    get_rework_details,
-    list_entity_comments,
-    list_entity_attachments,
-)
-from app.services.audit_log_service import log_action
 
 router = APIRouter(prefix="/shopfloor", tags=["sections-operations"])
 
@@ -68,8 +65,8 @@ class PatchOperationPayload(BaseModel):
 
 
 class CompletePayload(BaseModel):
-    good_quantity: Decimal = Decimal("0")
-    defect_quantity: Decimal = Decimal("0")
+    good_quantity: Decimal = Decimal(0)
+    defect_quantity: Decimal = Decimal(0)
     defect_reason: str | None = None
     comment: str | None = None
     idempotency_key: str | None = None
@@ -226,9 +223,9 @@ async def complete_task_endpoint(
         # Запись лога аудита
         task = await db.get(WorkTask, task_id)
         if task:
-            from app.models.section import Section
             from app.models.product import Product
             from app.models.route import RouteStage
+            from app.models.section import Section
             section = await db.get(Section, task.section_id)
             product = await db.get(Product, task.product_id)
             route_stage = await db.get(RouteStage, task.route_stage_id)
@@ -279,8 +276,8 @@ async def complete_task_endpoint(
 class BulkCompleteEntry(BaseModel):
     model_config = ConfigDict(extra="forbid")
     task_id: int
-    good_quantity: Decimal = Decimal("0")
-    defect_quantity: Decimal = Decimal("0")
+    good_quantity: Decimal = Decimal(0)
+    defect_quantity: Decimal = Decimal(0)
     defect_reason: str | None = None
     comment: str | None = None
     idempotency_key: str | None = None
@@ -371,8 +368,8 @@ async def bulk_complete_tasks(
     success_entries = [r for r in results if r.status == "success"]
     failed_ids = [r.id for r in results if r.status == "failed"]
     if success_entries:
-        total_good = Decimal("0")
-        total_defect = Decimal("0")
+        total_good = Decimal(0)
+        total_defect = Decimal(0)
         task_ids = []
         product_skus = set()
         operation_names = set()
@@ -390,9 +387,9 @@ async def bulk_complete_tasks(
         if task_ids:
             first_task = await db.get(WorkTask, task_ids[0])
             if first_task:
-                from app.models.section import Section
                 from app.models.product import Product
                 from app.models.route import RouteStage
+                from app.models.section import Section
                 section = await db.get(Section, first_task.section_id)
                 
                 for tid in task_ids:
@@ -856,7 +853,8 @@ async def section_daily_stats(
     locked_section_id: int | None = Depends(get_single_window_locked_section_id),
 ) -> dict:
     _ensure_section_lock(section_id, locked_section_id)
-    from datetime import datetime as dt, time
+    from datetime import datetime as dt
+    from datetime import time
 
     now = dt.now()
     d_from = date_from or dt.combine(now.date(), time.min)
@@ -881,8 +879,8 @@ async def return_remainder(
     Writes StockTransaction(RETURN_TO_STOCK). Checks that quantity
     does not exceed what is available for return on the task.
     """
-    from app.stock import StockCommand, StockCommandService, Reason
     from app.models.work_task import WorkTask
+    from app.stock import Reason, StockCommand, StockCommandService
 
     await _ensure_task_lock(db, payload.task_id, locked_section_id)
     try:
@@ -970,9 +968,10 @@ async def task_spg_available(
     (``task_transferable_lines`` даёт бюджет по каждому размеру), поэтому
     ``available`` — физический остаток группы по всем размерам.
     """
-    from app.stock.models import StockBalance, QualityState
-    from app.stock.services import completed_operations_match_clause
     from sqlalchemy import func
+
+    from app.stock.models import QualityState, StockBalance
+    from app.stock.services import completed_operations_match_clause
 
     task = await db.get(WorkTask, task_id)
     if task is None:

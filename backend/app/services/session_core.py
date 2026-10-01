@@ -15,9 +15,10 @@ record_login) and the single JWT issuance live here only.
 
 from __future__ import annotations
 
+from collections.abc import Callable
 from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
-from typing import Any, Callable
+from typing import Any
 from uuid import UUID
 
 from jose import JWTError, jwt

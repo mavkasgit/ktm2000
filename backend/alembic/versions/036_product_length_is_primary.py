@@ -8,15 +8,15 @@ Revision ID: 036_product_length_is_primary
 Revises: 035_internal_notifications
 Create Date: 2026-08-09 00:00:00.000000
 """
-from typing import Sequence, Union
+from collections.abc import Sequence
 
-from alembic import op
 import sqlalchemy as sa
+from alembic import op
 
 revision: str = "036_product_length_is_primary"
-down_revision: Union[str, None] = "035_internal_notifications"
-branch_labels: Union[str, Sequence[str], None] = None
-depends_on: Union[str, Sequence[str], None] = None
+down_revision: str | None = "035_internal_notifications"
+branch_labels: str | Sequence[str] | None = None
+depends_on: str | Sequence[str] | None = None
 
 
 def upgrade() -> None:

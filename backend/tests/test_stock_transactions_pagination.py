@@ -5,13 +5,12 @@ from datetime import UTC, datetime, timedelta
 from decimal import Decimal
 
 import pytest
-from sqlalchemy import select
-from sqlalchemy.ext.asyncio import AsyncSession
-
 from app.core.security import create_access_token
 from app.models import Product, ProductType, Section, User, UserRole
 from app.stock import Reason, StockCommand, StockCommandService
 from app.stock.models import StockTransaction
+from sqlalchemy import select
+from sqlalchemy.ext.asyncio import AsyncSession
 
 
 async def _make_user(session: AsyncSession) -> User:
@@ -67,7 +66,7 @@ async def _seed_transactions(
         await svc.record(session, StockCommand(
             product_id=product_id,
             to_location_id=location_id,
-            quantity=Decimal("1"),
+            quantity=Decimal(1),
             reason=Reason.MANUAL_IN,
             comment=f"{comment_prefix}-{i:03d}",
             created_by=user_id,
@@ -156,7 +155,7 @@ async def test_transactions_search_finds_record_on_second_page(client, session: 
     await svc.record(session, StockCommand(
         product_id=product.id,
         to_location_id=location.id,
-        quantity=Decimal("1"),
+        quantity=Decimal(1),
         reason=Reason.MANUAL_IN,
         comment="UNIQUE-TX-MARKER-42",
         created_by=user.id,
@@ -193,7 +192,7 @@ async def test_stock_tx_sort_by_quantity(client, session: AsyncSession):
     product = await _make_product(session, sku="TX-SORT-QTY")
     location = await _make_location(session, code="TX-SORT-LOC", name="Sort Warehouse")
     svc = StockCommandService()
-    for qty, marker in ((Decimal("3"), "low"), (Decimal("30"), "high"), (Decimal("7"), "mid")):
+    for qty, marker in ((Decimal(3), "low"), (Decimal(30), "high"), (Decimal(7), "mid")):
         await svc.record(session, StockCommand(
             product_id=product.id,
             to_location_id=location.id,
@@ -227,7 +226,7 @@ async def test_stock_tx_filter_reason(client, session: AsyncSession):
         await svc.record(session, StockCommand(
             product_id=product.id,
             to_location_id=location.id,
-            quantity=Decimal("1"),
+            quantity=Decimal(1),
             reason=Reason.MANUAL_IN,
             comment=f"ordinary-{i:03d}",
             created_by=user.id,
@@ -235,7 +234,7 @@ async def test_stock_tx_filter_reason(client, session: AsyncSession):
     await svc.record(session, StockCommand(
         product_id=product.id,
         to_location_id=location.id,
-        quantity=Decimal("5"),
+        quantity=Decimal(5),
         reason=Reason.ADJUSTMENT_IN,
         comment="special-adjustment-marker",
         created_by=user.id,
@@ -269,7 +268,7 @@ async def test_stock_tx_multi_sort_quantity_then_comment(client, session: AsyncS
         await svc.record(session, StockCommand(
             product_id=product.id,
             to_location_id=location.id,
-            quantity=Decimal("5"),
+            quantity=Decimal(5),
             reason=Reason.MANUAL_IN,
             comment=comment,
             created_by=user.id,
@@ -307,7 +306,7 @@ async def test_stock_tx_default_order_is_created_at_desc(client, session: AsyncS
         await svc.record(session, StockCommand(
             product_id=product.id,
             to_location_id=location.id,
-            quantity=Decimal("1"),
+            quantity=Decimal(1),
             reason=Reason.MANUAL_IN,
             comment=f"tx-def-{idx}",
             created_by=user.id,

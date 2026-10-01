@@ -5,8 +5,8 @@ Revises: 019_drop_hrms_tables
 Create Date: 2026-07-28
 
 """
-from alembic import op
 import sqlalchemy as sa
+from alembic import op
 
 revision: str = "020_create_hrms_employees"
 down_revision: str = "019_drop_hrms_tables"

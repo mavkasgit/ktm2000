@@ -8,7 +8,6 @@
 from __future__ import annotations
 
 import pytest
-
 from app.models.product import Product, ProductLength, ProductPair, ProductType
 from app.models.route import (
     ProductionRoute,
@@ -23,8 +22,14 @@ from app.services.product_pair_resolver import (
     pair_length_candidates,
     resolve_pair_n,
 )
-from app.services.route_builder import build_route_from_profile, load_route_build_batch_cache
-from app.services.route_selection import load_route_selection_batch_cache, select_route_for_payload
+from app.services.route_builder import (
+    build_route_from_profile,
+    load_route_build_batch_cache,
+)
+from app.services.route_selection import (
+    load_route_selection_batch_cache,
+    select_route_for_payload,
+)
 
 R1_NAME = "Маршрут 163 пресс"
 R2_NAME = "Маршрут 163 упаковка"

@@ -16,9 +16,6 @@ from decimal import Decimal
 
 import pytest
 import pytest_asyncio
-from sqlalchemy import select
-from sqlalchemy.ext.asyncio import AsyncSession
-
 from app.models.internal_plan import InternalPlan, SectionPlanLine
 from app.models.product import Product, ProductType
 from app.models.production_plan import (
@@ -36,6 +33,9 @@ from app.models.work_task import WorkTask, WorkTaskStatus
 from app.stock import Reason, StockCommand, StockCommandService
 from app.stock import ledger as tl
 from app.stock.services import _dimensions_hash_key
+from sqlalchemy import select
+from sqlalchemy.ext.asyncio import AsyncSession
+
 from tests.test_integrity_invariants import assert_no_invariants_violations
 
 pytestmark = pytest.mark.asyncio
@@ -77,7 +77,7 @@ async def _make_fixture(session: AsyncSession) -> dict:
     pos = PlanPosition(
         production_plan_id=plan.id, product_id=product.id,
         source_type=PlanSourceType.manual, source_sku=product.sku, source_name=product.name,
-        quantity=Decimal("100"), source_payload={}, status=PlanPositionStatus.approved,
+        quantity=Decimal(100), source_payload={}, status=PlanPositionStatus.approved,
         validation_status=PlanPositionValidationStatus.valid, validation_errors=[],
         period_start=plan.period_start, period_end=plan.period_end,
         has_pack_ops=False, route_id=route.id, route_assigned_at=None,
@@ -92,23 +92,23 @@ async def _make_fixture(session: AsyncSession) -> dict:
     line1 = SectionPlanLine(
         internal_plan_id=internal.id, plan_position_id=pos.id, section_id=sec1.id,
         product_id=product.id, route_id=route.id, route_stage_id=stage1.id,
-        sequence=1, planned_quantity=Decimal("100"),
+        sequence=1, planned_quantity=Decimal(100),
     )
     line2 = SectionPlanLine(
         internal_plan_id=internal.id, plan_position_id=pos.id, section_id=sec2.id,
         product_id=product.id, route_id=route.id, route_stage_id=stage2.id,
-        sequence=2, planned_quantity=Decimal("100"),
+        sequence=2, planned_quantity=Decimal(100),
     )
     session.add_all([line1, line2])
     await session.flush()
 
     task1 = WorkTask(
         section_plan_line_id=line1.id, section_id=sec1.id, product_id=product.id,
-        route_stage_id=stage1.id, planned_quantity=Decimal("100"), status=WorkTaskStatus.ready,
+        route_stage_id=stage1.id, planned_quantity=Decimal(100), status=WorkTaskStatus.ready,
     )
     task2 = WorkTask(
         section_plan_line_id=line2.id, section_id=sec2.id, product_id=product.id,
-        route_stage_id=stage2.id, planned_quantity=Decimal("100"), status=WorkTaskStatus.ready,
+        route_stage_id=stage2.id, planned_quantity=Decimal(100), status=WorkTaskStatus.ready,
     )
     session.add_all([task1, task2])
     await session.commit()
@@ -174,48 +174,48 @@ async def _seed_ledger(session: AsyncSession, fx: dict) -> None:
 
     send1 = await _record(
         session, user_id=user_id, product_id=product_id, reason=Reason.TRANSFER_SEND,
-        quantity=Decimal("10"), task_id=task1.id, line_id=line1.id,
+        quantity=Decimal(10), task_id=task1.id, line_id=line1.id,
         location_id=sec1.id, dims=DIMS_2700,
     )
     await _record(
         session, user_id=user_id, product_id=product_id, reason=Reason.TRANSFER_SEND,
-        quantity=Decimal("10"), task_id=task1.id, line_id=line1.id,
+        quantity=Decimal(10), task_id=task1.id, line_id=line1.id,
         location_id=sec1.id, dims=DIMS_2700, reverses_id=send1.id,
     )
     await _record(
         session, user_id=user_id, product_id=product_id, reason=Reason.TRANSFER_SEND,
-        quantity=Decimal("5"), task_id=task1.id, line_id=line1.id,
+        quantity=Decimal(5), task_id=task1.id, line_id=line1.id,
         location_id=sec1.id, dims=DIMS_900,
     )
     await _record(
         session, user_id=user_id, product_id=product_id, reason=Reason.TRANSFER_SEND,
-        quantity=Decimal("3"), task_id=task1.id, line_id=line1.id,
+        quantity=Decimal(3), task_id=task1.id, line_id=line1.id,
         location_id=sec1.id, dims=None,
     )
     await _record(
         session, user_id=user_id, product_id=product_id, reason=Reason.TRANSFER_SEND,
-        quantity=Decimal("7"), task_id=task2.id, line_id=line2.id,
+        quantity=Decimal(7), task_id=task2.id, line_id=line2.id,
         location_id=sec2.id, dims=DIMS_2700,
     )
 
     recv1 = await _record(
         session, user_id=user_id, product_id=product_id, reason=Reason.TRANSFER_RECEIVE,
-        quantity=Decimal("12"), task_id=task1.id, line_id=line1.id,
+        quantity=Decimal(12), task_id=task1.id, line_id=line1.id,
         location_id=sec1.id, dims=DIMS_2700,
     )
     await _record(
         session, user_id=user_id, product_id=product_id, reason=Reason.TRANSFER_RECEIVE,
-        quantity=Decimal("12"), task_id=task1.id, line_id=line1.id,
+        quantity=Decimal(12), task_id=task1.id, line_id=line1.id,
         location_id=sec1.id, dims=DIMS_2700, reverses_id=recv1.id,
     )
     await _record(
         session, user_id=user_id, product_id=product_id, reason=Reason.TRANSFER_RECEIVE,
-        quantity=Decimal("4"), task_id=task1.id, line_id=line1.id,
+        quantity=Decimal(4), task_id=task1.id, line_id=line1.id,
         location_id=sec1.id, dims=None,
     )
     await _record(
         session, user_id=user_id, product_id=product_id, reason=Reason.TRANSFER_RECEIVE,
-        quantity=Decimal("6"), task_id=task2.id, line_id=line2.id,
+        quantity=Decimal(6), task_id=task2.id, line_id=line2.id,
         location_id=sec2.id, dims=DIMS_900,
     )
     await session.commit()
@@ -249,7 +249,7 @@ async def test_scalar_equals_sql_by_task_id(session: AsyncSession, ledger_fx: di
     )
     sql_value = await _sq_value(session, sq, sq.c.task_id, task1.id)
     # компенсированная строка вычитается: 10 - 10 == 0
-    assert scalar == sql_value == Decimal("0")
+    assert scalar == sql_value == Decimal(0)
 
     scalar_900 = await tl.net_by_reason(
         session, reason=Reason.TRANSFER_SEND, task_id=task1.id, dims=DIMS_900
@@ -258,12 +258,12 @@ async def test_scalar_equals_sql_by_task_id(session: AsyncSession, ledger_fx: di
         Reason.TRANSFER_SEND, alias="ledger_send_900", dims=DIMS_900
     )
     sql_900 = await _sq_value(session, sq_900, sq_900.c.task_id, task1.id)
-    assert scalar_900 == sql_900 == Decimal("5")
+    assert scalar_900 == sql_900 == Decimal(5)
 
     # SQL-форма без dims = total по ключу (dims=None → без dimension-фильтра)
     sq_all = tl.net_by_reason_sq(Reason.TRANSFER_SEND, alias="ledger_send_all")
     sql_all = await _sq_value(session, sq_all, sq_all.c.task_id, task1.id)
-    assert sql_all == Decimal("8")
+    assert sql_all == Decimal(8)
 
 
 async def test_scalar_equals_sql_by_section_plan_line_id(
@@ -280,15 +280,15 @@ async def test_scalar_equals_sql_by_section_plan_line_id(
         alias="ledger_line", task_id=False, section_plan_line_id=True, dims=DIMS_2700,
     )
     sql_value = await _sq_value(session, sq, sq.c.section_plan_line_id, line1.id)
-    assert scalar == sql_value == Decimal("0")
+    assert scalar == sql_value == Decimal(0)
 
     sq_all = tl.net_by_reason_sq(
         Reason.TRANSFER_SEND, alias="ledger_line_all", task_id=False, section_plan_line_id=True
     )
     sql_line1 = await _sq_value(session, sq_all, sq_all.c.section_plan_line_id, line1.id)
     sql_line2 = await _sq_value(session, sq_all, sq_all.c.section_plan_line_id, line2.id)
-    assert sql_line1 == Decimal("8")
-    assert sql_line2 == Decimal("7")
+    assert sql_line1 == Decimal(8)
+    assert sql_line2 == Decimal(7)
 
 
 async def test_grouped_matches_scalars_per_dimension(
@@ -308,29 +308,29 @@ async def test_grouped_matches_scalars_per_dimension(
         )
     assert grouped == expected
     # NULL-группа (строки без dimensions) представлена ключом None
-    assert grouped[None] == Decimal("3")
+    assert grouped[None] == Decimal(3)
     # total по ключу == сумма групп
-    assert sum(grouped.values(), Decimal("0")) == Decimal("8")
+    assert sum(grouped.values(), Decimal(0)) == Decimal(8)
 
 
 async def test_empty_returns_zero(session: AsyncSession) -> None:
     """Пусто (нет транзакций) → Decimal("0") / пустой dict."""
     fx = await _make_fixture(session)
     task1, task2 = fx["tasks"]
-    line1, line2 = fx["lines"]
+    line1, _line2 = fx["lines"]
 
     assert await tl.net_by_reason(
         session, reason=Reason.TRANSFER_SEND, task_id=task1.id
-    ) == Decimal("0")
+    ) == Decimal(0)
     assert await tl.net_by_reason(
         session, reason=Reason.TRANSFER_RECEIVE, task_id=task1.id, dims=None
-    ) == Decimal("0")
+    ) == Decimal(0)
     assert await tl.net_by_reason(
         session, reason=Reason.TRANSFER_SEND, section_plan_line_id=line1.id, dims=DIMS_2700
-    ) == Decimal("0")
+    ) == Decimal(0)
     assert await tl.net_by_reason(
         session, reason=Reason.TRANSFER_RECEIVE, task_id=task2.id, dims=DIMS_900
-    ) == Decimal("0")
+    ) == Decimal(0)
     assert await tl.net_by_reason_by_dimensions(
         session, reason=Reason.TRANSFER_SEND, task_id=task1.id
     ) == {}
@@ -370,27 +370,27 @@ async def test_net_by_reason_final_release_compensation(session: AsyncSession) -
     # скаляр dims=None = безразмерная группа (не total), поэтому dims явный
     assert await tl.net_by_reason(
         session, reason=Reason.FINAL_RELEASE, task_id=task2.id, dims=DIMS_2700
-    ) == Decimal("0")
+    ) == Decimal(0)
 
     rel1 = await _record(
         session, user_id=user_id, product_id=product_id, reason=Reason.FINAL_RELEASE,
-        quantity=Decimal("10"), task_id=task2.id, line_id=line2.id,
+        quantity=Decimal(10), task_id=task2.id, line_id=line2.id,
         location_id=sec2.id, dims=DIMS_2700,
     )
     assert await tl.net_by_reason(
         session, reason=Reason.FINAL_RELEASE, task_id=task2.id, dims=DIMS_2700
-    ) == Decimal("10")
+    ) == Decimal(10)
 
     await _record(
         session, user_id=user_id, product_id=product_id, reason=Reason.FINAL_RELEASE,
-        quantity=Decimal("10"), task_id=task2.id, line_id=line2.id,
+        quantity=Decimal(10), task_id=task2.id, line_id=line2.id,
         location_id=sec2.id, dims=DIMS_2700, reverses_id=rel1.id,
     )
     await session.commit()
     # вычитается, а не исключается: 10 - 10 == 0 (не 10)
     assert await tl.net_by_reason(
         session, reason=Reason.FINAL_RELEASE, task_id=task2.id, dims=DIMS_2700
-    ) == Decimal("0")
+    ) == Decimal(0)
 
 
 async def test_net_by_reason_by_dimensions_final_release(session: AsyncSession) -> None:
@@ -405,12 +405,12 @@ async def test_net_by_reason_by_dimensions_final_release(session: AsyncSession) 
 
     await _record(
         session, user_id=user_id, product_id=product_id, reason=Reason.FINAL_RELEASE,
-        quantity=Decimal("10"), task_id=task2.id, line_id=line2.id,
+        quantity=Decimal(10), task_id=task2.id, line_id=line2.id,
         location_id=sec2.id, dims=DIMS_2700,
     )
     await _record(
         session, user_id=user_id, product_id=product_id, reason=Reason.FINAL_RELEASE,
-        quantity=Decimal("3"), task_id=task2.id, line_id=line2.id,
+        quantity=Decimal(3), task_id=task2.id, line_id=line2.id,
         location_id=sec2.id, dims=None,
     )
     await session.commit()
@@ -419,10 +419,10 @@ async def test_net_by_reason_by_dimensions_final_release(session: AsyncSession) 
         session, reason=Reason.FINAL_RELEASE, task_id=task2.id
     )
     assert grouped == {
-        _dimensions_hash_key(DIMS_2700): Decimal("10"),
-        None: Decimal("3"),
+        _dimensions_hash_key(DIMS_2700): Decimal(10),
+        None: Decimal(3),
     }
-    assert sum(grouped.values(), Decimal("0")) == Decimal("13")
+    assert sum(grouped.values(), Decimal(0)) == Decimal(13)
 
 
 async def test_net_by_reason_reason_separation(session: AsyncSession, ledger_fx: dict) -> None:
@@ -443,7 +443,7 @@ async def test_net_by_reason_reason_separation(session: AsyncSession, ledger_fx:
 
     await _record(
         session, user_id=user_id, product_id=product_id, reason=Reason.FINAL_RELEASE,
-        quantity=Decimal("7"), task_id=task2.id, line_id=line2.id,
+        quantity=Decimal(7), task_id=task2.id, line_id=line2.id,
         location_id=sec2.id, dims=DIMS_2700,
     )
     await session.commit()
@@ -456,4 +456,4 @@ async def test_net_by_reason_reason_separation(session: AsyncSession, ledger_fx:
     ) == before_recv
     assert await tl.net_by_reason(
         session, reason=Reason.FINAL_RELEASE, task_id=task2.id, dims=DIMS_2700
-    ) == Decimal("7")
+    ) == Decimal(7)

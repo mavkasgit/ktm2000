@@ -10,9 +10,6 @@ from __future__ import annotations
 from datetime import date
 
 import pytest
-from sqlalchemy import select
-from sqlalchemy.ext.asyncio import AsyncSession
-
 from app.models.audit_log import AuditEntityType, AuditLog
 from app.models.imports import ImportBatch, ImportBatchMode, ImportFile
 from app.models.production_plan import (
@@ -21,6 +18,8 @@ from app.models.production_plan import (
     ProductionPlan,
     ProductionPlanStatus,
 )
+from sqlalchemy import select
+from sqlalchemy.ext.asyncio import AsyncSession
 
 pytestmark = pytest.mark.asyncio
 

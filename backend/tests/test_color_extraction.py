@@ -3,10 +3,9 @@
 from __future__ import annotations
 
 import pytest
-
 from app.services.color_extraction import extract_color_from_text, resolve_payload_color
-from app.services.route_name_builder import build_route_name
 from app.services.route_builder import _assemble_name_values
+from app.services.route_name_builder import build_route_name
 
 
 @pytest.mark.parametrize(

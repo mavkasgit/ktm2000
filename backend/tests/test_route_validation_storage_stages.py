@@ -32,8 +32,6 @@ from datetime import date
 from decimal import Decimal
 
 import pytest
-from sqlalchemy.ext.asyncio import AsyncSession
-
 from app.models.product import Product, ProductType
 from app.models.production_plan import (
     PlanPosition,
@@ -45,6 +43,7 @@ from app.models.production_plan import (
 from app.models.route import ProductionRoute, RouteSelectionRule, RouteStage
 from app.models.section import Section
 from app.services.route_validation import validate_route_match
+from sqlalchemy.ext.asyncio import AsyncSession
 
 # Типы секций-складов: триггер ``fn_check_route_stage_transit_invariants``
 # допускает складом только raw_stock/wip_stock/finished_stock/scrap/terminal.
@@ -126,7 +125,7 @@ async def _make_position(session: AsyncSession, product: Product, route: Product
         source_type=PlanSourceType.excel_import,
         source_sku=product.sku,
         source_name=product.name,
-        quantity=Decimal("100"),
+        quantity=Decimal(100),
         source_payload={
             "operation_code": "DRILL",
             "output_kind": "finished_good",
@@ -197,7 +196,7 @@ async def test_transit_storage_hop_satisfies_required_section(session: AsyncSess
 @pytest.mark.asyncio
 async def test_required_storage_section_absent_from_route_is_reported(session: AsyncSession) -> None:
     """Негативный контроль: склад, которого в маршруте нет, даёт missing."""
-    product, route, sections = await _make_transit_route(session, "FG-TRANSIT-NEG")
+    product, route, _sections = await _make_transit_route(session, "FG-TRANSIT-NEG")
     position = await _make_position(session, product, route, "FG-TRANSIT-NEG")
     absent = await _add_absent_storage_section(session, "FG-TRANSIT-NEG")
     await _add_rule(session, "FG-TRANSIT-NEG", "require_section", ["OTHER_STOCK"], {"OTHER_STOCK": absent})

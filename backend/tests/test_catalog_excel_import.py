@@ -3,11 +3,6 @@
 from io import BytesIO
 
 import pytest
-from httpx import AsyncClient
-from openpyxl import Workbook, load_workbook
-from sqlalchemy import select
-from sqlalchemy.ext.asyncio import AsyncSession
-
 from app.api.deps import get_current_user
 from app.main import app
 from app.models.product import (
@@ -24,6 +19,10 @@ from app.services.catalog_excel_import import (
     TEMPLATE_HEADERS,
     parse_catalog_excel,
 )
+from httpx import AsyncClient
+from openpyxl import Workbook, load_workbook
+from sqlalchemy import select
+from sqlalchemy.ext.asyncio import AsyncSession
 
 PREVIEW_URL = "/api/catalog-import/preview-excel"
 APPLY_URL = "/api/catalog-import/apply-excel"

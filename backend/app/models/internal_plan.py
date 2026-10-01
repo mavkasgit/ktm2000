@@ -2,7 +2,20 @@ import enum
 from datetime import date, datetime
 from decimal import Decimal
 
-from sqlalchemy import BigInteger, Date, DateTime, Enum, ForeignKey, Identity, Index, Integer, Numeric, UniqueConstraint, func, text
+from sqlalchemy import (
+    BigInteger,
+    Date,
+    DateTime,
+    Enum,
+    ForeignKey,
+    Identity,
+    Index,
+    Integer,
+    Numeric,
+    UniqueConstraint,
+    func,
+    text,
+)
 from sqlalchemy.orm import Mapped, mapped_column
 
 from app.models.base import Base

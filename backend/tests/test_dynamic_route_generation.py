@@ -9,18 +9,22 @@ Verifies that:
 from decimal import Decimal
 
 import pytest
-from sqlalchemy import select
-
 from app.models.import_template import ImportTemplate
 from app.models.product import Product, ProductType
 from app.models.production_plan import (
     PlanChangeItemStatus,
     PlanPositionRouteMatchQuality,
 )
-from app.models.route import ProductionRoute, RouteRuleProfile, RouteSelectionRule, RouteStage, SectionOperation
+from app.models.route import (
+    ProductionRoute,
+    RouteRuleProfile,
+    RouteSelectionRule,
+    RouteStage,
+    SectionOperation,
+)
 from app.models.section import Section
 from app.services.plan_import_service import _make_change_items
-
+from sqlalchemy import select
 
 DEFAULT_SECTIONS = [
     {"code": "RAW_STOCK", "name": "Склад сырья", "sort_order": 10, "type": "raw_stock"},
@@ -210,7 +214,7 @@ async def test_dynamic_route_creates_real_production_route(session) -> None:
         ParsedRow(
             sku=product.sku,
             name=product.name,
-            quantity=Decimal("100"),
+            quantity=Decimal(100),
             payload={
                 "color": "черный",
                 "output_kind": "ГП",
@@ -222,7 +226,7 @@ async def test_dynamic_route_creates_real_production_route(session) -> None:
     products_by_sku = {product.sku.lower(): product}
 
     # change_set_id=1 simulates real import (not preview)
-    items, diagnostics = await _make_change_items(
+    items, _diagnostics = await _make_change_items(
         session,
         change_set_id=1,
         parsed_rows=parsed_rows,
@@ -274,20 +278,20 @@ async def test_dynamic_route_reuses_same_route_within_import(session) -> None:
         ParsedRow(
             sku=product.sku,
             name=product.name,
-            quantity=Decimal("100"),
+            quantity=Decimal(100),
             payload={"color": "черный", "output_kind": "ГП", "operation": ""},
         ),
         ParsedRow(
             sku=product.sku,
             name=product.name,
-            quantity=Decimal("200"),
+            quantity=Decimal(200),
             payload={"color": "черный", "output_kind": "ГП", "operation": ""},
         ),
     ]
 
     products_by_sku = {product.sku.lower(): product}
 
-    items, diagnostics = await _make_change_items(
+    items, _diagnostics = await _make_change_items(
         session,
         change_set_id=2,
         parsed_rows=parsed_rows,
@@ -325,20 +329,20 @@ async def test_different_routes_created_for_different_signatures(session) -> Non
         ParsedRow(
             sku=product.sku,
             name=product.name,
-            quantity=Decimal("100"),
+            quantity=Decimal(100),
             payload={"color": "черный", "output_kind": "ГП", "operation": ""},
         ),
         ParsedRow(
             sku=product.sku,
             name=product.name,
-            quantity=Decimal("150"),
+            quantity=Decimal(150),
             payload={"color": "серебро", "output_kind": "П/Ф", "operation": ""},
         ),
     ]
 
     products_by_sku = {product.sku.lower(): product}
 
-    items, diagnostics = await _make_change_items(
+    items, _diagnostics = await _make_change_items(
         session,
         change_set_id=3,
         parsed_rows=parsed_rows,
@@ -376,7 +380,7 @@ async def test_preview_does_not_create_routes(session) -> None:
         ParsedRow(
             sku=product.sku,
             name=product.name,
-            quantity=Decimal("50"),
+            quantity=Decimal(50),
             payload={"color": "черный", "output_kind": "ГП", "operation": ""},
         ),
     ]
@@ -384,7 +388,7 @@ async def test_preview_does_not_create_routes(session) -> None:
     products_by_sku = {product.sku.lower(): product}
 
     # change_set_id=0 means preview
-    items, diagnostics = await _make_change_items(
+    items, _diagnostics = await _make_change_items(
         session,
         change_set_id=0,
         parsed_rows=parsed_rows,

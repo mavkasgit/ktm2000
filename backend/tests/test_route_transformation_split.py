@@ -22,8 +22,6 @@ from datetime import date
 from decimal import Decimal
 
 import pytest
-from sqlalchemy import select
-
 from app.models.internal_plan import InternalPlan, InternalPlanStatus, SectionPlanLine
 from app.models.product import Product, ProductType
 from app.models.production_plan import (
@@ -35,11 +33,16 @@ from app.models.production_plan import (
     ProductionPlan,
     ProductionPlanStatus,
 )
-from app.models.route import ProductionRoute, RouteStage, RouteOperation, SectionOperation
+from app.models.route import (
+    ProductionRoute,
+    RouteOperation,
+    RouteStage,
+    SectionOperation,
+)
 from app.models.section import Section
 from app.models.work_task import WorkTask, WorkTaskStatus
 from app.services.shopfloor.queries_sections import get_section_board
-
+from sqlalchemy import select
 
 # ---------------------------------------------------------------------------
 # Helpers
@@ -275,7 +278,7 @@ async def test_one_sku_splits_into_six_by_operations(client, session) -> None:
     assert len(raw_tasks) == 6, f"Expected 6 raw tasks, got {len(raw_tasks)}"
 
     total_raw_plan = sum(Decimal(t["planned_quantity"]) for t in raw_tasks)
-    assert total_raw_plan == Decimal("1000"), f"Total raw plan should be 1000, got {total_raw_plan}"
+    assert total_raw_plan == Decimal(1000), f"Total raw plan should be 1000, got {total_raw_plan}"
 
     for task in raw_tasks:
         assert task["route_history"] == [], (
@@ -310,7 +313,7 @@ async def test_one_sku_splits_into_six_by_operations(client, session) -> None:
         assert history[0]["is_significant"] is True
 
     # Разные operation_code на прессе
-    press_op_codes = set(t["operation_code"] for t in press_tasks)
+    press_op_codes = {t["operation_code"] for t in press_tasks}
     assert "PRESS_WINDOW" in press_op_codes, "Expected PRESS_WINDOW in press tasks"
     assert "PRESS_COMB" in press_op_codes, "Expected PRESS_COMB in press tasks"
 
@@ -347,8 +350,8 @@ async def test_one_sku_splits_into_six_by_operations(client, session) -> None:
 
     plan_window = sum(Decimal(t["planned_quantity"]) for t in window_tasks)
     plan_comb = sum(Decimal(t["planned_quantity"]) for t in comb_tasks)
-    assert plan_window == Decimal("530"), f"PRESS_WINDOW plan should be 530, got {plan_window}"  # 200+150+180
-    assert plan_comb == Decimal("470"), f"PRESS_COMB plan should be 470, got {plan_comb}"  # 170+160+140
+    assert plan_window == Decimal(530), f"PRESS_WINDOW plan should be 530, got {plan_window}"  # 200+150+180
+    assert plan_comb == Decimal(470), f"PRESS_COMB plan should be 470, got {plan_comb}"  # 170+160+140
 
     # -----------------------------------------------------------------------
     # 4. Анодирование: 6 задач, route_history = [Выдача сырья]
@@ -397,7 +400,7 @@ async def test_one_sku_splits_into_six_by_operations(client, session) -> None:
     # -----------------------------------------------------------------------
     for stage_name, tasks in [("raw", raw_tasks), ("press", press_tasks), ("anod", anod_tasks), ("fg", fg_tasks)]:
         total = sum(Decimal(t["planned_quantity"]) for t in tasks)
-        assert total == Decimal("1000"), f"Total {stage_name} plan should be 1000, got {total}"
+        assert total == Decimal(1000), f"Total {stage_name} plan should be 1000, got {total}"
 
 
 @pytest.mark.asyncio
@@ -415,7 +418,7 @@ async def test_first_stage_groups_by_sku_only(client, session) -> None:
     raw_board = await get_section_board(session, section_id=sections[0].id)
 
     # Все задачи имеют одинаковый SKU
-    skus = set(t["product_sku"] for t in raw_board["tasks"])
+    skus = {t["product_sku"] for t in raw_board["tasks"]}
     assert len(skus) == 1, f"Expected 1 unique SKU on first stage, got {skus}"
 
     # Все задачи имеют пустой route_history
@@ -429,5 +432,5 @@ async def test_first_stage_groups_by_sku_only(client, session) -> None:
     # На прессе route_history уже не пустой → operationCode разделяет
     press_board = await get_section_board(session, section_id=sections[1].id)
     # Все имеют одинаковую историю [ISSUE_RAW], но разные operation_code
-    press_op_codes = set(t["operation_code"] for t in press_board["tasks"])
+    press_op_codes = {t["operation_code"] for t in press_board["tasks"]}
     assert len(press_op_codes) == 2, f"Expected 2 different operation_codes on press, got {press_op_codes}"

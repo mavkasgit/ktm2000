@@ -9,13 +9,12 @@ section_manager, operator); запись — REFERENCES_WRITER_ROLES
 from __future__ import annotations
 
 import pytest
-from sqlalchemy import text
-from sqlalchemy.ext.asyncio import AsyncSession
-
 from app.api.deps import get_current_user
 from app.main import app
 from app.models.product import Product, ProductType
 from app.models.user import User, UserRole
+from sqlalchemy import text
+from sqlalchemy.ext.asyncio import AsyncSession
 
 
 async def _make_product(

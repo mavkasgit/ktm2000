@@ -2,7 +2,6 @@ from datetime import date
 from decimal import Decimal
 
 import pytest
-
 from app.models.product import Product, ProductType
 from app.models.production_plan import (
     PlanPosition,
@@ -11,7 +10,7 @@ from app.models.production_plan import (
     PlanSourceType,
     ProductionPlan,
 )
-from app.models.route import ProductionRoute, RouteStage, RouteOperation
+from app.models.route import ProductionRoute, RouteOperation, RouteStage
 from app.models.section import Section
 from app.services.plan_validation import validate_plan_position
 
@@ -54,7 +53,7 @@ async def _make_ready_product(session, sku: str = "FG-1") -> tuple[Product, list
 async def _make_plan_position(
     session,
     product: Product,
-    quantity: Decimal = Decimal("100"),
+    quantity: Decimal = Decimal(100),
     **kwargs,
 ) -> tuple[ProductionPlan, PlanPosition]:
     plan = ProductionPlan(
@@ -107,7 +106,7 @@ async def test_validate_position_fails_on_inactive_product(session) -> None:
         source_type=PlanSourceType.manual,
         source_sku=product.sku,
         source_name=product.name,
-        quantity=Decimal("10"),
+        quantity=Decimal(10),
         source_payload={},
         status=PlanPositionStatus.draft,
         validation_status=PlanPositionValidationStatus.pending,
@@ -133,7 +132,7 @@ async def test_validate_position_fails_on_duplicate_sku_due_date(session) -> Non
         source_type=PlanSourceType.manual,
         source_sku=product.sku,
         source_name=product.name,
-        quantity=Decimal("10"),
+        quantity=Decimal(10),
         due_date=date(2026, 5, 15),
         source_payload={},
         source_fingerprint="fp-duplicate-sku",
@@ -150,7 +149,7 @@ async def test_validate_position_fails_on_duplicate_sku_due_date(session) -> Non
         source_type=PlanSourceType.manual,
         source_sku=product.sku,
         source_name=product.name,
-        quantity=Decimal("20"),
+        quantity=Decimal(20),
         due_date=date(2026, 5, 15),
         source_payload={},
         source_fingerprint="fp-duplicate-sku",
@@ -178,7 +177,7 @@ async def test_validate_position_ignores_cancelled_duplicate(session) -> None:
         source_type=PlanSourceType.manual,
         source_sku=product.sku,
         source_name=product.name,
-        quantity=Decimal("10"),
+        quantity=Decimal(10),
         due_date=date(2026, 5, 15),
         source_payload={},
         source_fingerprint="fp-dup-cancelled",
@@ -195,7 +194,7 @@ async def test_validate_position_ignores_cancelled_duplicate(session) -> None:
         source_type=PlanSourceType.manual,
         source_sku=product.sku,
         source_name=product.name,
-        quantity=Decimal("20"),
+        quantity=Decimal(20),
         due_date=date(2026, 5, 15),
         source_payload={},
         source_fingerprint="fp-dup-cancelled",
@@ -213,7 +212,7 @@ async def test_validate_position_ignores_cancelled_duplicate(session) -> None:
 @pytest.mark.asyncio
 async def test_validate_position_passes_on_valid_position(session) -> None:
     product, _, route = await _make_ready_product(session, "FG-OK")
-    plan, position = await _make_plan_position(session, product, route_id=route.id)
+    _plan, position = await _make_plan_position(session, product, route_id=route.id)
     await session.flush()
 
     errors = await validate_plan_position(session, position)
@@ -232,7 +231,7 @@ async def test_validate_position_detects_product_not_found(session) -> None:
         source_type=PlanSourceType.manual,
         source_sku="MISSING",
         source_name="Missing",
-        quantity=Decimal("10"),
+        quantity=Decimal(10),
         source_payload={},
         status=PlanPositionStatus.draft,
         validation_status=PlanPositionValidationStatus.pending,
@@ -294,7 +293,7 @@ async def _make_paired_position(session, sku: str, payload: dict) -> tuple[Produ
         source_type=PlanSourceType.excel_import,
         source_sku=sku,
         source_name=None,
-        quantity=Decimal("100"),
+        quantity=Decimal(100),
         input_dimensions={"length_mm": 2700},
         source_payload=payload,
         status=PlanPositionStatus.draft,
@@ -309,7 +308,7 @@ async def _make_paired_position(session, sku: str, payload: dict) -> tuple[Produ
 @pytest.mark.asyncio
 async def test_validate_paired_position_without_pair_reports_error(session) -> None:
     """Пара не найдена в product_pairs → product_pair_not_found."""
-    plan, position = await _make_paired_position(session, "ЮП-2616+ЮП-2604", _paired_payload())
+    _plan, position = await _make_paired_position(session, "ЮП-2616+ЮП-2604", _paired_payload())
     await session.flush()
 
     errors = await validate_plan_position(session, position)
@@ -320,7 +319,7 @@ async def test_validate_paired_position_without_pair_reports_error(session) -> N
 async def test_validate_paired_position_with_manual_pair_n_passes(session) -> None:
     """Пара найдена, ручная N из словаря пары — ошибок нет."""
     await _make_raw_pair(session, manual_n=8)
-    plan, position = await _make_paired_position(session, "ЮП-2616+ЮП-2604", _paired_payload())
+    _plan, position = await _make_paired_position(session, "ЮП-2616+ЮП-2604", _paired_payload())
     await session.flush()
 
     errors = await validate_plan_position(session, position)
@@ -332,7 +331,7 @@ async def test_validate_paired_position_with_manual_pair_n_passes(session) -> No
 async def test_validate_paired_position_without_n_reports_hanger_calc_zero(session) -> None:
     """Пара найдена, но N невозможна (ручной нет, авто не считается) → hanger_calc_zero."""
     await _make_raw_pair(session)
-    plan, position = await _make_paired_position(session, "ЮП-2616+ЮП-2604", _paired_payload())
+    _plan, position = await _make_paired_position(session, "ЮП-2616+ЮП-2604", _paired_payload())
     await session.flush()
 
     errors = await validate_plan_position(session, position)
@@ -343,7 +342,7 @@ async def test_validate_paired_position_without_n_reports_hanger_calc_zero(sessi
 @pytest.mark.asyncio
 async def test_validate_paired_position_with_snapshot_skips_revalidation(session) -> None:
     """Позиция с непустым снапшотом (product_pair.resolved) не ревалидирует пару и нормы (#142)."""
-    plan, position = await _make_paired_position(session, "ЮП-2616+ЮП-2604", _paired_payload(with_snapshot=True))
+    _plan, position = await _make_paired_position(session, "ЮП-2616+ЮП-2604", _paired_payload(with_snapshot=True))
     await session.flush()
 
     errors = await validate_plan_position(session, position)
@@ -362,7 +361,7 @@ async def test_validate_position_detects_missing_route(session) -> None:
 
     
 
-    plan, position = await _make_plan_position(
+    _plan, position = await _make_plan_position(
         session,
         product,
         has_pack_ops=False,
@@ -385,7 +384,7 @@ async def test_validate_position_detects_empty_route(session) -> None:
     session.add(route)
     await session.flush()
 
-    plan, position = await _make_plan_position(session, product, route_id=route.id)
+    _plan, position = await _make_plan_position(session, product, route_id=route.id)
     await session.flush()
 
     errors = await validate_plan_position(session, position)
@@ -410,7 +409,7 @@ async def test_validate_position_detects_inactive_section(session) -> None:
     session.add(RouteOperation(route_stage_id=stage.id, sequence=1, operation_code=None, operation_name="Cut"))
     await session.flush()
 
-    plan, position = await _make_plan_position(session, product, route_id=route.id)
+    _plan, position = await _make_plan_position(session, product, route_id=route.id)
     await session.flush()
 
     errors = await validate_plan_position(session, position)
@@ -451,7 +450,7 @@ async def test_validate_position_accepts_transit_stage_with_active_storage_secti
     session.add(stage2)
     await session.flush()
 
-    plan, position = await _make_plan_position(session, product, route_id=route.id)
+    _plan, position = await _make_plan_position(session, product, route_id=route.id)
     await session.flush()
 
     errors = await validate_plan_position(session, position)
@@ -482,7 +481,7 @@ async def test_validate_position_rejects_transit_stage_with_inactive_storage_sec
     session.add(stage)
     await session.flush()
 
-    plan, position = await _make_plan_position(session, product, route_id=route.id)
+    _plan, position = await _make_plan_position(session, product, route_id=route.id)
     await session.flush()
 
     errors = await validate_plan_position(session, position)

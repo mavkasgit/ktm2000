@@ -11,12 +11,11 @@ from __future__ import annotations
 from decimal import Decimal
 
 import pytest
-from sqlalchemy import select
-
 from app.models.import_template import ImportTemplate
 from app.models.product import Product, ProductLength, ProductType
 from app.models.route import ProductionRoute, RouteOperation, RouteStage
 from app.models.section import Section
+from sqlalchemy import select
 
 SIMULATE_URL = "/api/imports/excel/simulate"
 
@@ -130,7 +129,7 @@ async def test_simulate_single_row_creates_position(client, session) -> None:
     positions = await _all_positions(client, body["production_plan_id"])
     assert len(positions) == 1
     assert positions[0]["source_sku"] == "SIM-ONE"
-    assert Decimal(positions[0]["quantity"]) == Decimal("150")
+    assert Decimal(positions[0]["quantity"]) == Decimal(150)
 
 
 @pytest.mark.asyncio
@@ -167,7 +166,7 @@ async def test_simulate_cut_group_produces_position_with_multiple_outputs(client
     assert len(positions) == 1
     position = positions[0]
     assert position["source_sku"] == "SIM-CUT"
-    assert Decimal(position["quantity"]) == Decimal("400")
+    assert Decimal(position["quantity"]) == Decimal(400)
     assert [(o["quantity"], o["dimensions"]) for o in position["outputs"]] == [
         ("350", {"length_mm": 900}),
         ("50", {"length_mm": 1800}),

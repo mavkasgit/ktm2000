@@ -4,19 +4,16 @@ from __future__ import annotations
 
 from decimal import Decimal
 
-from sqlalchemy import select
-from sqlalchemy.ext.asyncio import AsyncSession
-
-from app.seeds.canon.models import DefectDecisionDef, ScrapPolicy
 from app.models.section import Section
 from app.models.work_task import WorkTask
+from app.seeds.canon.models import DefectDecisionDef, ScrapPolicy
 from app.services.material_operations import (
     completed_operations_for_task,
     previous_stage_sequence,
 )
 from app.stock import Reason, StockCommand, StockCommandService
-
-
+from sqlalchemy import select
+from sqlalchemy.ext.asyncio import AsyncSession
 
 # Fake canon data (ADR-0007): сервис не резолвит PlantConfig, данные приходят
 # из composition root. Здесь — подмена для прямых вызовов в тестах.

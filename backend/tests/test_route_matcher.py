@@ -1,6 +1,4 @@
 import pytest
-from sqlalchemy import select
-
 from app.models.production_plan import (
     PlanPosition,
     PlanPositionRouteOrigin,
@@ -8,10 +6,17 @@ from app.models.production_plan import (
     PlanPositionValidationStatus,
     PlanSourceType,
 )
-from app.models.route import ProductionRoute, RouteRuleProfile, RouteSelectionRule, RouteStage, RouteOperation
+from app.models.route import (
+    ProductionRoute,
+    RouteOperation,
+    RouteRuleProfile,
+    RouteSelectionRule,
+    RouteStage,
+)
 from app.models.section import Section
 from app.services.route_matcher import resolve_position_route
 from app.services.route_selection import _condition_match, select_route_for_payload
+from sqlalchemy import select
 
 
 @pytest.mark.parametrize(
@@ -309,7 +314,10 @@ async def test_resolve_position_route_manual_has_priority(session) -> None:
 @pytest.mark.asyncio
 async def test_resolve_position_route_rebuilds_dynamic_name_over_wrong_route_id(session) -> None:
     """Plan page must match import preview: dynamic name from payload, not stale route_id."""
-    from tests.test_dynamic_route_generation import _seed_sections, _make_profile_with_rules
+    from tests.test_dynamic_route_generation import (
+        _make_profile_with_rules,
+        _seed_sections,
+    )
 
     await _seed_sections(session)
     profile_id = await _make_profile_with_rules(session)

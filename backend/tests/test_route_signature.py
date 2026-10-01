@@ -11,10 +11,12 @@ from datetime import UTC, date, datetime
 from decimal import Decimal
 
 import pytest
-from sqlalchemy import func, select
-from sqlalchemy.orm import selectinload
-
-from app.models.imports import ImportBatch, ImportBatchMode, ImportBatchStatus, ImportFile
+from app.models.imports import (
+    ImportBatch,
+    ImportBatchMode,
+    ImportBatchStatus,
+    ImportFile,
+)
 from app.models.product import Product, ProductType
 from app.models.production_plan import (
     PlanChangeItemStatus,
@@ -27,7 +29,6 @@ from app.models.production_plan import (
     ProductionPlan,
     ProductionPlanStatus,
 )
-
 from app.models.route import (
     ProductionRoute,
     RouteOperation,
@@ -47,6 +48,8 @@ from app.services.route_signature import (
     signature_for_route_stages,
     signature_steps_from_stages,
 )
+from sqlalchemy import func, select
+from sqlalchemy.orm import selectinload
 
 
 async def _signature_steps(session, route_id: int) -> list:
@@ -183,7 +186,7 @@ async def test_import_writes_stage_significance_by_any_step_of_group(session) ->
     items, _diagnostics = await _make_change_items(
         session,
         change_set_id=1,
-        parsed_rows=[ParsedRow("FG-SIG", "Артикул подписи", Decimal("10"), {"output_kind": "ГП"})],
+        parsed_rows=[ParsedRow("FG-SIG", "Артикул подписи", Decimal(10), {"output_kind": "ГП"})],
         products_by_sku={"fg-sig": product},
         mode=None,
         existing_positions=[],
@@ -302,7 +305,7 @@ async def _make_position_with_route(
         source_type=PlanSourceType.excel_import,
         source_sku=sku,
         source_name="Позиция проверки",
-        quantity=Decimal("10"),
+        quantity=Decimal(10),
         source_payload={"output_kind": "ГП"},
         period_start=plan.period_start,
         period_end=plan.period_end,
@@ -575,7 +578,7 @@ async def _import_one_row(session, profile, product, *, sku: str, payload: dict 
     items, _diagnostics = await _make_change_items(
         session,
         change_set_id=1,
-        parsed_rows=[ParsedRow(sku, "Артикул", Decimal("10"), payload or {"output_kind": "ГП"})],
+        parsed_rows=[ParsedRow(sku, "Артикул", Decimal(10), payload or {"output_kind": "ГП"})],
         products_by_sku={sku.lower(): product},
         mode=None,
         existing_positions=[],
@@ -619,7 +622,7 @@ async def test_import_preview_shows_signature_conflict(session) -> None:
     items, _diagnostics = await _make_change_items(
         session,
         change_set_id=0,
-        parsed_rows=[ParsedRow("FG-PREVIEW", "Артикул", Decimal("10"), {"output_kind": "ГП"})],
+        parsed_rows=[ParsedRow("FG-PREVIEW", "Артикул", Decimal(10), {"output_kind": "ГП"})],
         products_by_sku={"fg-preview": product},
         mode=None,
         existing_positions=[],
@@ -666,8 +669,8 @@ async def test_two_rows_of_one_import_share_the_route(session) -> None:
         session,
         change_set_id=1,
         parsed_rows=[
-            ParsedRow("FG-PAIR-1", "Артикул", Decimal("10"), {"output_kind": "ГП"}),
-            ParsedRow("FG-PAIR-2", "Артикул", Decimal("10"), {"output_kind": "ГП"}),
+            ParsedRow("FG-PAIR-1", "Артикул", Decimal(10), {"output_kind": "ГП"}),
+            ParsedRow("FG-PAIR-2", "Артикул", Decimal(10), {"output_kind": "ГП"}),
         ],
         products_by_sku={"fg-pair-1": first, "fg-pair-2": second},
         mode=None,
@@ -808,8 +811,8 @@ async def test_compositions_with_same_name_get_separate_routes(session) -> None:
         session,
         change_set_id=1,
         parsed_rows=[
-            ParsedRow("FG-PACK-STRETCH", "Артикул", Decimal("10"), {"output_kind": ROUTE_NAME, "pack": "стрейч"}),
-            ParsedRow("FG-PACK-SPUNBOND", "Артикул", Decimal("10"), {"output_kind": ROUTE_NAME, "pack": "спанбонд"}),
+            ParsedRow("FG-PACK-STRETCH", "Артикул", Decimal(10), {"output_kind": ROUTE_NAME, "pack": "стрейч"}),
+            ParsedRow("FG-PACK-SPUNBOND", "Артикул", Decimal(10), {"output_kind": ROUTE_NAME, "pack": "спанбонд"}),
         ],
         products_by_sku={"fg-pack-stretch": first, "fg-pack-spunbond": second},
         mode=None,

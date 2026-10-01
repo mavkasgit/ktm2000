@@ -3,9 +3,6 @@ from __future__ import annotations
 from decimal import Decimal
 
 import pytest
-from sqlalchemy import func, select
-from sqlalchemy.ext.asyncio import AsyncSession
-
 from app.models.action_journal import Action, ActionStatus
 from app.models.audit_log import AuditLog
 from app.models.internal_plan import InternalPlan, SectionPlanLine
@@ -16,11 +13,14 @@ from app.models.production_plan import (
     ProductionPlanStatus,
 )
 from app.models.work_task import WorkTask, WorkTaskStatus
-from app.services.production_plan_service import get_production_plan_delete_preview
 from app.services.action_journal_service import action_journal_service
 from app.services.material_operations import completed_operations_for_task
+from app.services.production_plan_service import get_production_plan_delete_preview
 from app.stock.models import Reason, StockTransaction
 from app.stock.services import StockCommand, StockCommandService
+from sqlalchemy import func, select
+from sqlalchemy.ext.asyncio import AsyncSession
+
 from tests.stock.test_shopfloor_stage3 import _setup_minimal_route
 from tests.test_integrity_invariants import assert_no_invariants_violations
 
@@ -28,7 +28,7 @@ pytestmark = pytest.mark.asyncio
 
 
 async def _final_release_fixture(session: AsyncSession, sku: str) -> dict:
-    fx = await _setup_minimal_route(session, sku=sku, qty=Decimal("10"))
+    fx = await _setup_minimal_route(session, sku=sku, qty=Decimal(10))
     stock = StockCommandService()
     # ADR-0055: расход точный — материал на участке обязан лежать в той же
     # ops-группе, из которой его заберёт плановая FINAL_RELEASE задания.
@@ -39,7 +39,7 @@ async def _final_release_fixture(session: AsyncSession, sku: str) -> dict:
         StockCommand(
             product_id=fx["product"].id,
             to_location_id=fx["prod"].id,
-            quantity=Decimal("10"),
+            quantity=Decimal(10),
             reason=Reason.MANUAL_IN,
             completed_operations=ops,
             created_by=fx["user"].id,
@@ -57,7 +57,7 @@ async def _final_release_fixture(session: AsyncSession, sku: str) -> dict:
             product_id=fx["product"].id,
             from_location_id=fx["prod"].id,
             to_location_id=fx["fg"].id,
-            quantity=Decimal("3"),
+            quantity=Decimal(3),
             reason=Reason.FINAL_RELEASE,
             task_id=fx["task"].id,
             action_id=action.id,

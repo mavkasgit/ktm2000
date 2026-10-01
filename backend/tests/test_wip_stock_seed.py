@@ -1,13 +1,12 @@
 from __future__ import annotations
 
 import pytest
-from sqlalchemy import select
-
 from app.models.section import Section
 from app.models.spg import SpgSection, SpgStorageKind, StorageProductionGroup
-from app.seeds.spgs import SPGS_DATA
-from app.seeds.seeders.spgs_seeder import seed_spgs
 from app.seeds.canon.models import SPGDef
+from app.seeds.seeders.spgs_seeder import seed_spgs
+from app.seeds.spgs import SPGS_DATA
+from sqlalchemy import select
 
 
 def _spg_defs() -> list[SPGDef]:

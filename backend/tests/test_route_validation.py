@@ -2,8 +2,6 @@ from datetime import date
 from decimal import Decimal
 
 import pytest
-from sqlalchemy import select
-
 from app.models.product import Product, ProductType
 from app.models.production_plan import (
     PlanPosition,
@@ -13,10 +11,15 @@ from app.models.production_plan import (
     PlanSourceType,
     ProductionPlan,
 )
-
-from app.models.route import ProductionRoute, RouteSelectionRule, RouteStage, RouteOperation
+from app.models.route import (
+    ProductionRoute,
+    RouteOperation,
+    RouteSelectionRule,
+    RouteStage,
+)
 from app.models.section import Section
 from app.services.route_validation import validate_route_match
+from sqlalchemy import select
 
 
 async def _make_factory_route(
@@ -90,7 +93,7 @@ async def _make_plan_position(
         source_type=PlanSourceType.excel_import,
         source_sku=product.sku,
         source_name=product.name,
-        quantity=Decimal("100"),
+        quantity=Decimal(100),
         source_payload=source_payload,
         status=PlanPositionStatus.draft,
         validation_status=PlanPositionValidationStatus.pending,

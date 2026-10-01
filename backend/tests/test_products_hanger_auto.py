@@ -9,10 +9,9 @@
 """
 
 import pytest
+from app.models.product import Product, ProductLength
 from sqlalchemy import select
 from sqlalchemy.orm import selectinload
-
-from app.models.product import Product, ProductLength
 
 
 def _payload(sku: str, **overrides) -> dict:

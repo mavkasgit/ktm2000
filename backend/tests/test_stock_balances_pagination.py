@@ -4,11 +4,10 @@ from __future__ import annotations
 from decimal import Decimal
 
 import pytest
-from sqlalchemy.ext.asyncio import AsyncSession
-
 from app.core.security import create_access_token
 from app.models import Product, ProductType, Section, User, UserRole
 from app.stock import QualityState, Reason, StockCommand, StockCommandService
+from sqlalchemy.ext.asyncio import AsyncSession
 
 
 async def _make_user(session: AsyncSession) -> User:
@@ -66,7 +65,7 @@ async def _seed_balances(
         await svc.record(session, StockCommand(
             product_id=product.id,
             to_location_id=location_id,
-            quantity=Decimal("10"),
+            quantity=Decimal(10),
             reason=Reason.MANUAL_IN,
             created_by=user_id,
         ))
@@ -148,7 +147,7 @@ async def test_balances_search_finds_record_on_second_page(client, session: Asyn
     await svc.record(session, StockCommand(
         product_id=marker_product.id,
         to_location_id=location.id,
-        quantity=Decimal("5"),
+        quantity=Decimal(5),
         reason=Reason.MANUAL_IN,
         created_by=user.id,
     ))
@@ -187,9 +186,9 @@ async def test_balances_sort_by_quantity(client, session: AsyncSession):
     product_mid = await _make_product(session, sku="BAL-SORT-MID")
     svc = StockCommandService()
     for product, qty in (
-        (product_low, Decimal("3")),
-        (product_high, Decimal("30")),
-        (product_mid, Decimal("7")),
+        (product_low, Decimal(3)),
+        (product_high, Decimal(30)),
+        (product_mid, Decimal(7)),
     ):
         await svc.record(session, StockCommand(
             product_id=product.id,
@@ -221,7 +220,7 @@ async def test_balances_filter_quality_state(client, session: AsyncSession):
     await svc.record(session, StockCommand(
         product_id=product.id,
         to_location_id=location.id,
-        quantity=Decimal("10"),
+        quantity=Decimal(10),
         reason=Reason.MANUAL_IN,
         quality_state=QualityState.GOOD,
         created_by=user.id,
@@ -229,7 +228,7 @@ async def test_balances_filter_quality_state(client, session: AsyncSession):
     await svc.record(session, StockCommand(
         product_id=product.id,
         to_location_id=location.id,
-        quantity=Decimal("4"),
+        quantity=Decimal(4),
         reason=Reason.MANUAL_IN,
         quality_state=QualityState.SCRAP,
         created_by=user.id,
@@ -268,7 +267,7 @@ async def test_balances_location_ids_filter(client, session: AsyncSession):
         await svc.record(session, StockCommand(
             product_id=product.id,
             to_location_id=location.id,
-            quantity=Decimal("1"),
+            quantity=Decimal(1),
             reason=Reason.MANUAL_IN,
             created_by=user.id,
         ))
@@ -301,7 +300,7 @@ async def test_balances_multi_sort_quantity_then_sku(client, session: AsyncSessi
         await svc.record(session, StockCommand(
             product_id=product.id,
             to_location_id=location.id,
-            quantity=Decimal("7"),
+            quantity=Decimal(7),
             reason=Reason.MANUAL_IN,
             created_by=user.id,
         ))
@@ -344,7 +343,7 @@ async def test_balances_grouping_levels_kept_on_ties(client, session: AsyncSessi
             await svc.record(session, StockCommand(
                 product_id=product.id,
                 to_location_id=location.id,
-                quantity=Decimal("4"),
+                quantity=Decimal(4),
                 reason=Reason.MANUAL_IN,
                 created_by=user.id,
             ))
@@ -357,7 +356,7 @@ async def test_balances_grouping_levels_kept_on_ties(client, session: AsyncSessi
     assert resp.status_code == 200, resp.text
     rows = resp.json()["balances"]
     assert len(rows) == 4
-    assert {Decimal(row["balance_qty"]) for row in rows} == {Decimal("4")}
+    assert {Decimal(row["balance_qty"]) for row in rows} == {Decimal(4)}
 
     assert [(row["product_sku"], row["location_id"]) for row in rows] == [
         ("BAL-GRP-1", loc_a.id),
@@ -382,7 +381,7 @@ async def test_balances_default_order_is_sku_asc(client, session: AsyncSession):
         await svc.record(session, StockCommand(
             product_id=product.id,
             to_location_id=location.id,
-            quantity=Decimal("1"),
+            quantity=Decimal(1),
             reason=Reason.MANUAL_IN,
             created_by=user.id,
         ))
@@ -493,7 +492,7 @@ async def _seed_balance_with_ops(
     await StockCommandService().record(session, StockCommand(
         product_id=product.id,
         to_location_id=location_id,
-        quantity=Decimal("10"),
+        quantity=Decimal(10),
         reason=Reason.MANUAL_IN,
         dimensions=dimensions,
         completed_operations=ops,

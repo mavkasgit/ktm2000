@@ -98,7 +98,7 @@ def resolve_transform_spec(task: WorkTask, stage: RouteStage | None) -> Transfor
         key = _dimensions_hash_key(dims)
         if key not in totals:
             order.append(key)
-            totals[key] = Decimal("0")
+            totals[key] = Decimal(0)
             dims_by_key[key] = dims
         totals[key] += quantity
     if not order:
@@ -144,19 +144,19 @@ async def get_transform_progress_bulk(
     scrapped: dict[int, Decimal] = {}
     produced: dict[int, dict[str | None, Decimal]] = {}
     for task_id, reason_val, dims, qty in rows:
-        qty = qty or Decimal("0")
+        qty = qty or Decimal(0)
         if reason_val == Reason.TRANSFORM_CONSUME.value:
-            consumed[task_id] = (consumed.get(task_id) or Decimal("0")) + qty
+            consumed[task_id] = (consumed.get(task_id) or Decimal(0)) + qty
         elif reason_val == Reason.SCRAP.value:
-            scrapped[task_id] = (scrapped.get(task_id) or Decimal("0")) + qty
+            scrapped[task_id] = (scrapped.get(task_id) or Decimal(0)) + qty
         else:
             key = _dimensions_hash_key(dims)
             per_task = produced.setdefault(task_id, {})
-            per_task[key] = (per_task.get(key) or Decimal("0")) + qty
+            per_task[key] = (per_task.get(key) or Decimal(0)) + qty
     return {
         task_id: TransformProgress(
-            consumed_quantity=consumed.get(task_id) or Decimal("0"),
-            scrapped_quantity=scrapped.get(task_id) or Decimal("0"),
+            consumed_quantity=consumed.get(task_id) or Decimal(0),
+            scrapped_quantity=scrapped.get(task_id) or Decimal(0),
             produced_by_group=produced.get(task_id) or {},
         )
         for task_id in {*consumed, *scrapped, *produced}
@@ -168,8 +168,8 @@ async def get_transform_progress(db: AsyncSession, task_id: int) -> TransformPro
     progress = (await get_transform_progress_bulk(db, [task_id])).get(task_id)
     if progress is None:
         return TransformProgress(
-            consumed_quantity=Decimal("0"),
-            scrapped_quantity=Decimal("0"),
+            consumed_quantity=Decimal(0),
+            scrapped_quantity=Decimal(0),
             produced_by_group={},
         )
     return progress
@@ -202,7 +202,7 @@ async def _net_reason_by_task_dimensions_bulk(
     for task_id, dims, qty in rows:
         per_task = result.setdefault(task_id, {})
         key = _dimensions_hash_key(dims)
-        per_task[key] = (per_task.get(key) or Decimal("0")) + (qty or Decimal("0"))
+        per_task[key] = (per_task.get(key) or Decimal(0)) + (qty or Decimal(0))
     return result
 
 
@@ -361,7 +361,7 @@ async def record_transform_portion(
         ).quantize(_QTY_STEP, rounding=ROUND_HALF_UP)
         produced_before = progress.produced_by_group.get(
             _dimensions_hash_key(group.dimensions)
-        ) or Decimal("0")
+        ) or Decimal(0)
         portion = target - produced_before
         if portion <= 0:
             continue
@@ -403,11 +403,11 @@ def build_outputs_progress(
     result: list[dict] = []
     for entry in outputs or []:
         raw_qty = entry.get("quantity")
-        total = Decimal(str(raw_qty)) if raw_qty is not None else Decimal("0")
+        total = Decimal(str(raw_qty)) if raw_qty is not None else Decimal(0)
         dims = canonicalize_dimensions(entry.get("dimensions"))
         key = _dimensions_hash_key(dims)
-        available = remaining.get(key) or Decimal("0")
-        produced = min(total, available) if total > 0 else Decimal("0")
+        available = remaining.get(key) or Decimal(0)
+        produced = min(total, available) if total > 0 else Decimal(0)
         remaining[key] = available - produced
         result.append({
             "row_number": entry.get("row_number"),
@@ -433,11 +433,11 @@ def distribute_output_quantities(
     result: list[Decimal] = []
     for entry in outputs or []:
         raw_qty = entry.get("quantity")
-        total = Decimal(str(raw_qty)) if raw_qty is not None else Decimal("0")
+        total = Decimal(str(raw_qty)) if raw_qty is not None else Decimal(0)
         dims = canonicalize_dimensions(entry.get("dimensions"))
         key = _dimensions_hash_key(dims)
-        available = remaining.get(key) or Decimal("0")
-        distributed = min(total, available) if total > 0 else Decimal("0")
+        available = remaining.get(key) or Decimal(0)
+        distributed = min(total, available) if total > 0 else Decimal(0)
         remaining[key] = available - distributed
         result.append(distributed)
     return result
@@ -471,4 +471,4 @@ async def _group_balance(
 
 def _dec_total(value) -> Decimal:
     """SUM/coalesce может вернуть ``0`` (int) — приводим к Decimal."""
-    return Decimal(value) if value is not None else Decimal("0")
+    return Decimal(value) if value is not None else Decimal(0)

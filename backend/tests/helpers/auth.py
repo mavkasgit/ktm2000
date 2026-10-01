@@ -5,10 +5,9 @@
 """
 from __future__ import annotations
 
-from sqlalchemy.ext.asyncio import AsyncSession
-
 from app.models.user import User, UserRole
 from app.services.session_service import issue_app_token
+from sqlalchemy.ext.asyncio import AsyncSession
 
 
 async def user_headers(

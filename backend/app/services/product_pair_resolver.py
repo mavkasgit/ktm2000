@@ -176,7 +176,7 @@ async def resolve_effective_product_ids(
 
 async def resolve_pair_components_for_sku(
     db: AsyncSession, sku: str
-) -> tuple[list["PairComponent"], str | None]:
+) -> tuple[list[PairComponent], str | None]:
     """Раскрыть составной SKU пары ``A+B`` на компоненты.
 
     Сначала канонический резолв ``product_pairs`` (неупорядоченное совпадение

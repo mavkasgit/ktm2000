@@ -12,10 +12,9 @@ product_dimensions через session (hybrid DB mode).
 from __future__ import annotations
 
 import pytest
+from app.models.dimension import DimensionType, ProductDimension
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
-
-from app.models.dimension import DimensionType, ProductDimension
 
 
 async def _seed_types(session: AsyncSession) -> None:

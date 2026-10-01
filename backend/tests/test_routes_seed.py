@@ -2,16 +2,14 @@ from datetime import UTC, date, datetime
 from decimal import Decimal
 
 import pytest
-from sqlalchemy import func, select
-
 from app.core.config import settings
 from app.models.defect import Defect
 from app.models.internal_plan import InternalPlan, SectionPlanLine
 from app.models.product import Product, ProductType
 from app.models.production_plan import (
     PlanPosition,
-    PlanPositionRouteOrigin,
     PlanPositionRouteMatchQuality,
+    PlanPositionRouteOrigin,
     PlanPositionStatus,
     PlanPositionValidationStatus,
     PlanSourceType,
@@ -28,10 +26,11 @@ from app.seeds.canon.quality_data import DEFECT_TYPES
 from app.seeds.import_templates import IMPORT_TEMPLATES
 from app.seeds.route_rule_profiles import ROUTE_RULE_PROFILES
 from app.seeds.routes import ROUTES
-from app.seeds.selection_rules import SELECTION_RULES
 from app.seeds.sections import SECTION_OPS, SECTIONS_DATA
+from app.seeds.selection_rules import SELECTION_RULES
 from app.services.route_selection import select_route_for_payload
 from app.stock.models import StockBalance, StockTransaction
+from sqlalchemy import func, select
 
 
 def _declared_rule_codes() -> set[str]:
@@ -154,7 +153,7 @@ async def _make_releasable_position(session, route_name: str = "Универса
         source_sku=product.sku,
         output_sku=product.sku,
         source_name=product.name,
-        quantity=Decimal("3021"),
+        quantity=Decimal(3021),
         source_payload={"operation": "", "output_kind": "finished_good", "additional_pack_operations": ["PACK_STRETCH"]},
         period_start=plan.period_start,
         period_end=plan.period_end,
@@ -215,11 +214,11 @@ async def test_seed_lands_the_declared_sawing_and_packing_operations(client, ses
     for section_code, operation_code in await _seeded_operation_codes(session):
         operations_by_section.setdefault(section_code, set()).add(operation_code)
 
-    assert SAWING_LENGTH_OPS <= operations_by_section["SAWING"]
-    assert PACKING_VARIANT_OPS <= operations_by_section["PACKING"]
+    assert operations_by_section["SAWING"] >= SAWING_LENGTH_OPS
+    assert operations_by_section["PACKING"] >= PACKING_VARIANT_OPS
 
     rule_codes = await _seeded_rule_codes(session)
-    assert SAWING_LENGTH_RULES | PACKING_ROUTE_RULES | PACKING_TYPE_RULES <= rule_codes
+    assert rule_codes >= SAWING_LENGTH_RULES | PACKING_ROUTE_RULES | PACKING_TYPE_RULES
 
 
 @pytest.mark.asyncio

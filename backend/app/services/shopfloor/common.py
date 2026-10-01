@@ -1,19 +1,24 @@
 from __future__ import annotations
 
+from collections.abc import Iterable
 from datetime import UTC, datetime
 from decimal import Decimal
-from typing import Iterable
 
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.models.defect import Defect
 from app.models.internal_plan import SectionPlanLine
-from app.models.production_plan import PlanPosition, ProductionPlan, require_current_length_model
+from app.models.production_plan import (
+    PlanPosition,
+    ProductionPlan,
+    require_current_length_model,
+)
 from app.models.route import RouteStage
 from app.models.transfer import Transfer
 from app.models.user import User
 from app.models.work_task import WorkTask
+
 
 def _to_decimal(value: Decimal | int | float | str) -> Decimal:
     return Decimal(str(value))

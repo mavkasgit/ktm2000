@@ -8,14 +8,13 @@
 from __future__ import annotations
 
 import pytest
-from sqlalchemy.ext.asyncio import AsyncSession
-
 from app.models.route import ProductionRoute
 from app.services.route_identity import (
     find_route_by_code,
     find_route_by_name,
     route_identity_query,
 )
+from sqlalchemy.ext.asyncio import AsyncSession
 
 pytestmark = pytest.mark.asyncio
 

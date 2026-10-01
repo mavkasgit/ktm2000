@@ -11,9 +11,6 @@ from datetime import date
 from decimal import Decimal
 
 import pytest
-from sqlalchemy import func, select
-from sqlalchemy.ext.asyncio import AsyncSession
-
 from app.models import Product, ProductType, Section, User, UserRole
 from app.models.defect import Defect, DefectDecisionType, DefectStatus
 from app.models.internal_plan import InternalPlan, InternalPlanStatus, SectionPlanLine
@@ -28,6 +25,7 @@ from app.models.production_plan import (
 from app.models.route import ProductionRoute, RouteOperation, RouteStage
 from app.models.spg import SpgSection, StorageProductionGroup
 from app.models.work_task import WorkTask, WorkTaskStatus
+from app.services.material_operations import completed_operations_for_task
 from app.stock import (
     QualityState,
     Reason,
@@ -36,7 +34,9 @@ from app.stock import (
     StockCommandService,
     StockTransaction,
 )
-from app.services.material_operations import completed_operations_for_task
+from sqlalchemy import func, select
+from sqlalchemy.ext.asyncio import AsyncSession
+
 from tests.stock.helpers import canon_scrap_section_id, record_transfer_receive
 from tests.test_integrity_invariants import assert_no_stock_ledger_invariants_violations
 
@@ -92,11 +92,11 @@ async def _balance(
         )
     )
     bal = row.scalar_one_or_none()
-    return bal.balance_qty if bal else Decimal("0")
+    return bal.balance_qty if bal else Decimal(0)
 
 
 async def _seed_raw_stock(
-    session: AsyncSession, fx: dict, quantity: Decimal = Decimal("100"),
+    session: AsyncSession, fx: dict, quantity: Decimal = Decimal(100),
 ) -> None:
     """Занести остаток на «Склад сырья» в той же группе, что и списание.
 
@@ -117,7 +117,7 @@ async def _seed_raw_stock(
     ))
 
 
-async def _setup_minimal_route(session: AsyncSession, *, sku: str = "DEF5", qty: Decimal = Decimal("10")) -> dict:
+async def _setup_minimal_route(session: AsyncSession, *, sku: str = "DEF5", qty: Decimal = Decimal(10)) -> dict:
     """Minimal topology: raw_stock → production section → scrap."""
     user = await _make_user(session, f"{sku}@local")
 
@@ -208,19 +208,20 @@ async def test_complete_task_scrap_links_defect_to_stock_tx(session: AsyncSessio
         product_id=fx["product"].id,
         from_location_id=fx["raw"].id,
         to_location_id=task.section_id,
-        quantity=Decimal("10"),
+        quantity=Decimal(10),
         task_id=task.id,
         created_by=fx["user"].id,
     )
     await session.commit()
 
     from app.services.shopfloor.operations_tasks import complete_task
+
     from tests.stock.helpers import FAKE_SCRAP_POLICY
     result = await complete_task(
         session,
         task_id=task.id,
-        good_quantity=Decimal("7"),
-        defect_quantity=Decimal("3"),
+        good_quantity=Decimal(7),
+        defect_quantity=Decimal(3),
         actor_id=fx["user"].id,
         defect_reason="test_scrap",
         **FAKE_SCRAP_POLICY,
@@ -242,7 +243,7 @@ async def test_complete_task_scrap_links_defect_to_stock_tx(session: AsyncSessio
     assert tx.reason == Reason.SCRAP
     assert tx.from_quality_state == QualityState.GOOD
     assert tx.to_quality_state == QualityState.SCRAP
-    assert tx.quantity == Decimal("3")
+    assert tx.quantity == Decimal(3)
     assert tx.task_id == task.id
 
     await assert_no_stock_ledger_invariants_violations(session, context="after-complete-scrap")
@@ -261,7 +262,7 @@ async def test_defect_decide_scrap_creates_stock_tx(session: AsyncSession):
         product_id=product.id,
         from_location_id=fx["raw"].id,
         to_location_id=task.section_id,
-        quantity=Decimal("10"),
+        quantity=Decimal(10),
         task_id=task.id,
         created_by=fx["user"].id,
     )
@@ -273,7 +274,7 @@ async def test_defect_decide_scrap_creates_stock_tx(session: AsyncSession):
     defect_resp = await create_defect(
         session,
         task_id=task.id,
-        quantity=Decimal("5"),
+        quantity=Decimal(5),
         actor_id=fx["user"].id,
         reason="test",
         comment="defect for scrap test",
@@ -287,7 +288,7 @@ async def test_defect_decide_scrap_creates_stock_tx(session: AsyncSession):
         session,
         defect_id=defect_id,
         decision_type=DefectDecisionType.scrap,
-        quantity=Decimal("5"),
+        quantity=Decimal(5),
         actor_id=fx["user"].id,
         comment="scrap it",
         idempotency_key="scrap-test-1",
@@ -310,7 +311,7 @@ async def test_defect_decide_scrap_creates_stock_tx(session: AsyncSession):
     assert tx.reason == Reason.SCRAP
     assert tx.from_quality_state == QualityState.GOOD
     assert tx.to_quality_state == QualityState.SCRAP
-    assert tx.quantity == Decimal("5")
+    assert tx.quantity == Decimal(5)
     assert tx.task_id == task.id
     assert tx.product_id == product.id
 
@@ -318,7 +319,7 @@ async def test_defect_decide_scrap_creates_stock_tx(session: AsyncSession):
     # по коду политики (#134), секция фикстуры чужого кода её не подменяет.
     canon_scrap_id = await canon_scrap_section_id(session)
     scrap_bal = await _balance(session, product.id, canon_scrap_id, QualityState.SCRAP)
-    assert scrap_bal == Decimal("5")
+    assert scrap_bal == Decimal(5)
 
     await assert_no_stock_ledger_invariants_violations(session, context="after-defect-scrap")
 
@@ -335,7 +336,7 @@ async def test_defect_decide_rework_creates_stock_tx(session: AsyncSession):
         product_id=fx["product"].id,
         from_location_id=fx["raw"].id,
         to_location_id=task.section_id,
-        quantity=Decimal("10"),
+        quantity=Decimal(10),
         task_id=task.id,
         created_by=fx["user"].id,
     )
@@ -346,7 +347,7 @@ async def test_defect_decide_rework_creates_stock_tx(session: AsyncSession):
     defect_resp = await create_defect(
         session,
         task_id=task.id,
-        quantity=Decimal("3"),
+        quantity=Decimal(3),
         actor_id=fx["user"].id,
         reason="rework_test",
         comment="defect for rework test",
@@ -360,7 +361,7 @@ async def test_defect_decide_rework_creates_stock_tx(session: AsyncSession):
         session,
         defect_id=defect_id,
         decision_type=DefectDecisionType.rework_current,
-        quantity=Decimal("3"),
+        quantity=Decimal(3),
         actor_id=fx["user"].id,
         target_section_id=fx["raw"].id,
         idempotency_key="rework-test-1",
@@ -385,7 +386,7 @@ async def test_defect_decide_rework_creates_stock_tx(session: AsyncSession):
     assert tx.from_location_id == task.section_id
     assert tx.to_location_id == fx["raw"].id
     assert tx.to_quality_state == QualityState.REWORK
-    assert tx.quantity == Decimal("3")
+    assert tx.quantity == Decimal(3)
     assert tx.task_id == task.id
 
     # Verify ReworkTask exists
@@ -409,7 +410,7 @@ async def test_defect_decide_return_previous_creates_stock_tx(session: AsyncSess
         product_id=fx["product"].id,
         from_location_id=fx["raw"].id,
         to_location_id=task.section_id,
-        quantity=Decimal("10"),
+        quantity=Decimal(10),
         task_id=task.id,
         created_by=fx["user"].id,
     )
@@ -420,7 +421,7 @@ async def test_defect_decide_return_previous_creates_stock_tx(session: AsyncSess
     defect_resp = await create_defect(
         session,
         task_id=task.id,
-        quantity=Decimal("4"),
+        quantity=Decimal(4),
         actor_id=fx["user"].id,
         reason="return_test",
     )
@@ -433,7 +434,7 @@ async def test_defect_decide_return_previous_creates_stock_tx(session: AsyncSess
         session,
         defect_id=defect_id,
         decision_type=DefectDecisionType.return_previous,
-        quantity=Decimal("4"),
+        quantity=Decimal(4),
         actor_id=fx["user"].id,
         target_section_id=fx["raw"].id,
         idempotency_key="return-test-1",
@@ -453,7 +454,7 @@ async def test_defect_decide_return_previous_creates_stock_tx(session: AsyncSess
     tx = await session.get(StockTransaction, defect.stock_transaction_id)
     assert tx is not None
     assert tx.reason == Reason.RETURN_TO_PREVIOUS
-    assert tx.quantity == Decimal("4")
+    assert tx.quantity == Decimal(4)
     assert tx.to_location_id == fx["raw"].id
     assert tx.task_id == task.id
 
@@ -472,7 +473,7 @@ async def test_defect_decide_accept_deviation_creates_complete_tx(session: Async
         product_id=fx["product"].id,
         from_location_id=fx["raw"].id,
         to_location_id=task.section_id,
-        quantity=Decimal("10"),
+        quantity=Decimal(10),
         task_id=task.id,
         created_by=fx["user"].id,
     )
@@ -483,7 +484,7 @@ async def test_defect_decide_accept_deviation_creates_complete_tx(session: Async
     defect_resp = await create_defect(
         session,
         task_id=task.id,
-        quantity=Decimal("3"),
+        quantity=Decimal(3),
         actor_id=fx["user"].id,
         reason="accept_test",
     )
@@ -496,7 +497,7 @@ async def test_defect_decide_accept_deviation_creates_complete_tx(session: Async
         session,
         defect_id=defect_id,
         decision_type=DefectDecisionType.accept_with_deviation,
-        quantity=Decimal("3"),
+        quantity=Decimal(3),
         actor_id=fx["user"].id,
         idempotency_key="accept-test-1",
         defect_decision_map=FAKE_DEFECT_DECISION_MAP,
@@ -516,7 +517,7 @@ async def test_defect_decide_accept_deviation_creates_complete_tx(session: Async
     tx = await session.get(StockTransaction, defect.stock_transaction_id)
     assert tx is not None
     assert tx.reason == Reason.COMPLETE
-    assert tx.quantity == Decimal("3")
+    assert tx.quantity == Decimal(3)
     assert tx.task_id == task.id
     assert tx.to_location_id == task.section_id
 
@@ -535,7 +536,7 @@ async def test_defect_decide_idempotent(session: AsyncSession):
         product_id=fx["product"].id,
         from_location_id=fx["raw"].id,
         to_location_id=task.section_id,
-        quantity=Decimal("10"),
+        quantity=Decimal(10),
         task_id=task.id,
         created_by=fx["user"].id,
     )
@@ -546,7 +547,7 @@ async def test_defect_decide_idempotent(session: AsyncSession):
     defect_resp = await create_defect(
         session,
         task_id=task.id,
-        quantity=Decimal("5"),
+        quantity=Decimal(5),
         actor_id=fx["user"].id,
         reason="idemp_test",
     )
@@ -559,7 +560,7 @@ async def test_defect_decide_idempotent(session: AsyncSession):
         session,
         defect_id=defect_id,
         decision_type=DefectDecisionType.scrap,
-        quantity=Decimal("5"),
+        quantity=Decimal(5),
         actor_id=fx["user"].id,
         idempotency_key="idemp-test-scrap-1",
         defect_decision_map=FAKE_DEFECT_DECISION_MAP,
@@ -582,7 +583,7 @@ async def test_defect_decide_idempotent(session: AsyncSession):
         session,
         defect_id=defect_id,
         decision_type=DefectDecisionType.scrap,
-        quantity=Decimal("5"),
+        quantity=Decimal(5),
         actor_id=fx["user"].id,
         idempotency_key="idemp-test-scrap-1",
         defect_decision_map=FAKE_DEFECT_DECISION_MAP,

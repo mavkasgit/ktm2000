@@ -5,7 +5,6 @@ that is not registered in section_operations for the target section.
 """
 
 import pytest
-
 from app.models.route import SectionOperation
 from app.models.section import Section
 

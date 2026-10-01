@@ -15,9 +15,6 @@ Covers:
 from __future__ import annotations
 
 import pytest
-from sqlalchemy import select
-from sqlalchemy.ext.asyncio import AsyncSession
-
 from app.models.route import ProductionRoute, RouteStage
 from app.models.section import Section
 from app.seeds.canon.registry import build_plant_config
@@ -34,6 +31,8 @@ from app.services.route_storage_classifier import (
     is_transit_stage,
 )
 from app.services.shopfloor.common import build_completed_stages_json
+from sqlalchemy import select
+from sqlalchemy.ext.asyncio import AsyncSession
 
 
 async def _seed_sections_only(session: AsyncSession) -> dict[str, Section]:

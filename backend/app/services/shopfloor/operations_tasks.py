@@ -18,8 +18,8 @@ from app.models.route import RouteStage
 from app.models.section import Section
 from app.models.work_task import CLOSED_WORK_TASK_STATUSES, WorkTask, WorkTaskStatus
 from app.seeds.canon.models import ScrapPolicy
-from app.services.plan_position_hanger import position_dimensions_for_task
 from app.services.action_journal_service import action_journal_service
+from app.services.plan_position_hanger import position_dimensions_for_task
 from app.services.route_storage_classifier import (
     SECTION_TYPE_FINISHED_STOCK,
     STAGE_KIND_TRANSIT,
@@ -28,20 +28,23 @@ from app.services.route_storage_classifier import (
 )
 from app.stock import QualityState, Reason, StockCommand, StockCommandService
 from app.stock.models import StockBalance, StockTransaction
-from app.stock.services import completed_operations_match_clause, dimensions_match_clause
+from app.stock.services import (
+    completed_operations_match_clause,
+    dimensions_match_clause,
+)
 
+from . import send_budget
+from .cache import _refresh_section_plan_line_cache
 from .common import (
     _check_idempotency,
     _ensure_positive,
     _get_route_stage,
-    _require_mutable_task,
     _get_task,
     _get_user_snapshot_name,
+    _require_mutable_task,
     _to_decimal,
     enrich_comment_with_route_operations,
 )
-from .cache import _refresh_section_plan_line_cache
-from . import send_budget
 from .operations_transform import (
     TransformProgress,
     TransformSpec,
@@ -440,7 +443,7 @@ async def _resolve_shortage(
         )
     if shortage_strategy is ShortageStrategy.partial:
         clamped_good = min(good_quantity, available)
-        clamped_defect = min(defect_quantity, max(Decimal("0"), available - clamped_good))
+        clamped_defect = min(defect_quantity, max(Decimal(0), available - clamped_good))
         return _ShortageResolution(clamped_good, clamped_defect, False)
     if shortage_strategy is ShortageStrategy.negative_remainder:
         return _ShortageResolution(good_quantity, defect_quantity, True)
@@ -962,9 +965,9 @@ async def _log_final_release_audit(
     обязаны логировать — вынос в роут либо задвоил бы вызов, либо потерял
     audit у планировочного пути.
     """
-    from app.services.audit_log_service import log_action
     from app.models.audit_log import AuditAction, AuditEntityType
     from app.models.product import Product
+    from app.services.audit_log_service import log_action
 
     section = await db.get(Section, task.section_id)
     product = await db.get(Product, task.product_id)

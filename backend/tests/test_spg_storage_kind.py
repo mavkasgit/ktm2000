@@ -1,10 +1,9 @@
 import pytest
-from sqlalchemy import select
-
-from app.models.spg import SpgSection, SpgStorageKind, StorageProductionGroup
 from app.models.product import Product, ProductType
 from app.models.section import Section
+from app.models.spg import SpgSection, SpgStorageKind, StorageProductionGroup
 from app.models.user import User, UserRole
+from sqlalchemy import select
 
 
 @pytest.mark.asyncio

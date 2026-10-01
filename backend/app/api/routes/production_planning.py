@@ -10,7 +10,13 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.api.deps import WRITER_ROLES, get_current_user, require_role
 from app.core.database import get_db
+from app.domain.dimensions import (
+    DIMENSIONLESS_LABEL,
+    canonicalize_dimensions,
+    format_dimensions,
+)
 from app.models.internal_plan import SectionPlanLine
+from app.models.product import Product
 from app.models.production_plan import (
     PlanPosition,
     PlanPositionStatus,
@@ -18,25 +24,29 @@ from app.models.production_plan import (
     ProductionPlanStatus,
     require_current_length_model,
 )
-from app.models.transfer import Transfer
-from app.models.work_task import RESOLVED_WORK_TASK_STATUSES, WorkTask, WorkTaskStatus
 from app.models.route import ProductionRoute, RouteStage
 from app.models.section import Section
-from app.models.user import User
-from app.models.product import Product
 from app.models.spg import SpgSection, StorageProductionGroup
+from app.models.transfer import Transfer
+from app.models.user import User
+from app.models.work_task import RESOLVED_WORK_TASK_STATUSES, WorkTask, WorkTaskStatus
 from app.seeds.canon.dependencies import get_plant_config
 from app.seeds.canon.models import PlantConfig
+from app.services.plan_generation import create_release_batch, release_batch
+from app.services.plan_position_hanger import task_dimensions_for_plan_line
+from app.services.production_plan_service import (
+    _refresh_plan_status,
+    soft_delete_cancelled_position,
+)
 from app.services.production_planning_rows import (
     PlanningRowsQueryParams,
     get_production_planning_row_detail,
     list_production_planning_rows,
 )
-from app.domain.dimensions import DIMENSIONLESS_LABEL, canonicalize_dimensions, format_dimensions
-from app.services.production_plan_service import _refresh_plan_status, soft_delete_cancelled_position
-from app.services.plan_generation import create_release_batch, release_batch
-from app.services.plan_position_hanger import task_dimensions_for_plan_line
-from app.services.route_matcher import resolve_position_route, make_position_route_cache_key
+from app.services.route_matcher import (
+    make_position_route_cache_key,
+    resolve_position_route,
+)
 from app.services.route_storage_classifier import STOCK_TYPES
 from app.services.shopfloor_service import complete_task, final_release
 from app.transfers.services import transfer_send
@@ -544,26 +554,25 @@ async def get_production_planning_overview(
                         )
                     )
 
-            if not work_tasks_out:
+            if not work_tasks_out and route_id is not None:
                 # No work tasks yet — position is in queue for this section
                 # Show it if the route includes this section
-                if route_id is not None:
-                    stages = route_stages_cache.get(route_id, [])
-                    for stage in stages:
-                        if stage.section_id == section.id:
-                            total_steps += 1
-                            work_tasks_out.append(
-                                WorkTaskOut(
-                                    id=0,
-                                    route_stage_id=stage.id,
-                                    operation_name=", ".join(op.operation_name for op in stage.operations) if stage.operations else "",
-                                    operation_code=stage.operations[0].operation_code if stage.operations else None,
-                                    status="waiting",
-                                    planned_quantity=float(pos.quantity),
-                                    completed_quantity=0.0,
-                                    sequence=stage.sequence,
-                                )
+                stages = route_stages_cache.get(route_id, [])
+                for stage in stages:
+                    if stage.section_id == section.id:
+                        total_steps += 1
+                        work_tasks_out.append(
+                            WorkTaskOut(
+                                id=0,
+                                route_stage_id=stage.id,
+                                operation_name=", ".join(op.operation_name for op in stage.operations) if stage.operations else "",
+                                operation_code=stage.operations[0].operation_code if stage.operations else None,
+                                status="waiting",
+                                planned_quantity=float(pos.quantity),
+                                completed_quantity=0.0,
+                                sequence=stage.sequence,
                             )
+                        )
 
             if total_steps == 0:
                 continue  # This position doesn't go through this section
@@ -674,7 +683,7 @@ async def _get_or_create_stock_fake_task(
         .order_by(WorkTask.id.asc())
     )
     if fake_task is None:
-        planned_qty = stock_line.planned_quantity or Decimal("0")
+        planned_qty = stock_line.planned_quantity or Decimal(0)
         fake_task = WorkTask(
             section_plan_line_id=stock_line.id,
             section_id=stock_section.id,
@@ -974,7 +983,7 @@ async def _do_manual_pass(
                         db,
                         task_id=task.id,
                         good_quantity=to_complete,
-                        defect_quantity=Decimal("0"),
+                        defect_quantity=Decimal(0),
                         actor_id=current_user.id,
                         comment=manual_comment,
                         source_ref=source_ref,
@@ -1116,8 +1125,8 @@ async def cancel_position(
     from_status = pos.status.value
     pos.status = PlanPositionStatus.cancelled
 
-    from app.services.audit_log_service import log_action
     from app.models.audit_log import AuditAction, AuditEntityType
+    from app.services.audit_log_service import log_action
     await log_action(
         db,
         status="success",
@@ -1198,8 +1207,9 @@ async def restore_position(
         raise HTTPException(status_code=400, detail=f"Нельзя восстановить позицию со статусом '{pos.status.value}'")
 
     # Find last cancellation history record from audit_logs
-    from app.models.audit_log import AuditLog, AuditAction, AuditEntityType
     from sqlalchemy import select
+
+    from app.models.audit_log import AuditAction, AuditEntityType, AuditLog
     last_cancel = (
         await db.execute(
             select(AuditLog)
@@ -1462,8 +1472,8 @@ async def _process_position_cancel(
     from_status = pos.status.value
     pos.status = PlanPositionStatus.cancelled
 
-    from app.services.audit_log_service import log_action
     from app.models.audit_log import AuditAction, AuditEntityType
+    from app.services.audit_log_service import log_action
     await log_action(
         db,
         status="success",
@@ -1503,7 +1513,7 @@ async def _process_position_restore(
         )
 
     # Find last cancellation history record from audit_logs
-    from app.models.audit_log import AuditLog, AuditAction, AuditEntityType
+    from app.models.audit_log import AuditAction, AuditEntityType, AuditLog
     last_cancel = (
         await db.execute(
             select(AuditLog)

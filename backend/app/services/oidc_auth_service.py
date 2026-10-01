@@ -23,7 +23,7 @@ from __future__ import annotations
 
 import logging
 import time
-from datetime import datetime, timedelta, timezone
+from datetime import UTC, datetime, timedelta
 from typing import Any
 
 # Импорт не имеет обращений в самом модуле, но это не мёртвый код: тесты
@@ -583,9 +583,9 @@ class OidcAuthService:
         # Row lives until token exp — replay after that is impossible by definition.
         if claims.jti:
             exp_dt = (
-                datetime.fromtimestamp(claims.exp, tz=timezone.utc)
+                datetime.fromtimestamp(claims.exp, tz=UTC)
                 if claims.exp
-                else datetime.now(timezone.utc) + timedelta(minutes=10)
+                else datetime.now(UTC) + timedelta(minutes=10)
             )
             try:
                 await mark_logout_jti_used(self.db, claims.jti, expires_at=exp_dt)

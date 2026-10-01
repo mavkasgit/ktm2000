@@ -30,14 +30,17 @@ from __future__ import annotations
 from decimal import Decimal
 
 import pytest
-from sqlalchemy import func, select
-from sqlalchemy.ext.asyncio import AsyncSession
-
 from app.models.section import Section
 from app.models.work_task import WorkTask
 from app.stock import Reason, StockCommand, StockCommandService
 from app.transfers.services import transfer_send
+from sqlalchemy import func, select
+from sqlalchemy.ext.asyncio import AsyncSession
 
+# Каноническое определение _ready_row (и её сантинела _UNSET) живёт в
+# tests/helpers/transfers.py (#131 follow-up); реэкспорт сохраняет старый
+# путь импорта для потребителей.
+from tests.helpers.transfers import _ready_row
 from tests.stock.test_transfer_stage2 import _make_two_ghp_setup
 from tests.test_integrity_invariants import (
     _make_user,
@@ -51,10 +54,6 @@ from tests.test_transfer_dimensions import (
     _seed_balance,
     _tasks_for_position,
 )
-# Каноническое определение _ready_row (и её сантинела _UNSET) живёт в
-# tests/helpers/transfers.py (#131 follow-up); реэкспорт сохраняет старый
-# путь импорта для потребителей.
-from tests.helpers.transfers import _ready_row
 
 pytestmark = pytest.mark.asyncio
 
@@ -95,7 +94,7 @@ async def _read_sql_budgets(session: AsyncSession, task: WorkTask) -> dict[str, 
     )
     row = (await session.execute(stmt)).one_or_none()
     if row is None:
-        return {"transferable": Decimal("0"), "sendable": Decimal("0")}
+        return {"transferable": Decimal(0), "sendable": Decimal(0)}
     return {"transferable": row.transferable_qty, "sendable": row.sendable_qty}
 
 
@@ -126,7 +125,7 @@ async def test_plain_ready_list_and_write_guard_agree_on_transferable(
     участвует в plain-бюджете (T6) — при старой формуле
     (``completed + received − transferred``) было бы 13.
     """
-    setup = await _make_two_ghp_setup(session, sku="TBCPLN", qty=Decimal("10"))
+    setup = await _make_two_ghp_setup(session, sku="TBCPLN", qty=Decimal(10))
     user = setup["user"]
     sec1 = setup["sections"][0]
     sec2 = setup["sections"][1]
@@ -157,7 +156,7 @@ async def test_plain_ready_list_and_write_guard_agree_on_transferable(
             product_id=from_task.product_id,
             from_location_id=None,
             to_location_id=stock.id,
-            quantity=Decimal("10"),
+            quantity=Decimal(10),
             reason=Reason.MANUAL_IN,
             completed_operations=ops,
             created_by=user.id,
@@ -169,7 +168,7 @@ async def test_plain_ready_list_and_write_guard_agree_on_transferable(
             product_id=from_task.product_id,
             from_location_id=stock.id,
             to_location_id=from_task.section_id,
-            quantity=Decimal("10"),
+            quantity=Decimal(10),
             reason=Reason.TRANSFER_RECEIVE,
             task_id=from_task.id,
             created_by=user.id,
@@ -181,7 +180,7 @@ async def test_plain_ready_list_and_write_guard_agree_on_transferable(
             product_id=from_task.product_id,
             from_location_id=from_task.section_id,
             to_location_id=from_task.section_id,
-            quantity=Decimal("5"),
+            quantity=Decimal(5),
             reason=Reason.COMPLETE,
             task_id=from_task.id,
             source_ref="test_seed",
@@ -196,7 +195,7 @@ async def test_plain_ready_list_and_write_guard_agree_on_transferable(
         session,
         from_task_id=from_task.id,
         to_task_id=to_task.id,
-        quantity=Decimal("2"),
+        quantity=Decimal(2),
         actor_id=user.id,
     )
     assert result["status"] == "accepted"
@@ -210,17 +209,17 @@ async def test_plain_ready_list_and_write_guard_agree_on_transferable(
     assert row["transferable_quantity"] == "3"
 
     transferable = await _task_transferable(session, from_task)
-    assert transferable == Decimal("3")
+    assert transferable == Decimal(3)
 
     # Трёхсторонняя сверка (#119): write-guard ≡ read-SQL ≡ pure.
     from app.transfers.budget import remaining_plain
 
     sql_budgets = await _read_sql_budgets(session, from_task)
-    assert sql_budgets["transferable"] == remaining_plain(Decimal("5"), Decimal("2"))
+    assert sql_budgets["transferable"] == remaining_plain(Decimal(5), Decimal(2))
     assert sql_budgets["transferable"] == transferable
     # Бюджет отправки — отдельный столбец: release у нефинальной задачи
     # не вычитается из transferable (read-SQL больше не смешивает семантики).
-    assert sql_budgets["sendable"] == Decimal("5")
+    assert sql_budgets["sendable"] == Decimal(5)
 
 
 # ─── 2. transform: строка выхода резки ───────────────────────────────────────
@@ -239,8 +238,8 @@ async def test_transform_ready_list_and_write_guard_agree_on_transferable(
     fx = await _make_transform_route_fixture(
         session,
         sku="TBCSAW",
-        qty=Decimal("100"),
-        input_quantity=Decimal("100"),
+        qty=Decimal(100),
+        input_quantity=Decimal(100),
         input_dimensions={"length_mm": 2700},
         outputs=[
             {"row_number": 1, "quantity": "100", "dimensions": {"length_mm": 900}},
@@ -256,7 +255,7 @@ async def test_transform_ready_list_and_write_guard_agree_on_transferable(
         session,
         from_task_id=saw_task.id,
         to_task_id=None,
-        quantity=Decimal("40"),
+        quantity=Decimal(40),
         actor_id=user.id,
         dimensions={"length_mm": 900},
     )
@@ -280,10 +279,10 @@ async def test_transform_ready_list_and_write_guard_agree_on_transferable(
 
     assert await _task_transferable(
         session, saw_task, dims={"length_mm": 900}
-    ) == Decimal("60")
+    ) == Decimal(60)
     assert await _task_transferable(
         session, saw_task, dims={"length_mm": 1800}
-    ) == Decimal("100")
+    ) == Decimal(100)
 
 
 # ─── 3. stock: складская строка (section_plan_line_id) ───────────────────────
@@ -299,14 +298,14 @@ async def test_stock_ready_list_and_write_guard_agree_on_transferable(
     физический остаток падают на 40 → ``min(60, 60) = 60``.
     """
     user = await _make_user(session, "tbc-stock@local")
-    fx = await _make_dim_route_fixture(session, sku="TBCSTK", qty=Decimal("100"))
+    fx = await _make_dim_route_fixture(session, sku="TBCSTK", qty=Decimal(100))
     raw_sec = fx["sections"][0]
     await _seed_balance(
         session,
         user_id=user.id,
         location_id=raw_sec.id,
         product_id=fx["product"].id,
-        qty=Decimal("100"),
+        qty=Decimal(100),
         dimensions=None,
     )
     await _release_via_take_to_work(client, fx["position"].id)
@@ -321,7 +320,7 @@ async def test_stock_ready_list_and_write_guard_agree_on_transferable(
         session,
         from_task_id=fake_task_id,
         to_task_id=None,
-        quantity=Decimal("40"),
+        quantity=Decimal(40),
         actor_id=user.id,
     )
     assert result["status"] == "accepted"
@@ -337,7 +336,7 @@ async def test_stock_ready_list_and_write_guard_agree_on_transferable(
 
     fake_task = await session.get(WorkTask, fake_task_id)
     assert fake_task is not None
-    assert await _task_transferable(session, fake_task) == Decimal("60")
+    assert await _task_transferable(session, fake_task) == Decimal(60)
 
 
 # ─── 4. финальный участок: бюджет отправки (sendable) ────────────────────────
@@ -360,8 +359,8 @@ async def test_final_section_three_way_agrees_on_sendable(client, session) -> No
     fx = await _make_transform_route_fixture(
         session,
         sku="TBCFIN",
-        qty=Decimal("100"),
-        input_quantity=Decimal("100"),
+        qty=Decimal(100),
+        input_quantity=Decimal(100),
         input_dimensions={"length_mm": 2700},
         outputs=[{"row_number": 1, "quantity": "100", "dimensions": {"length_mm": 900}}],
         final_transform=True,
@@ -373,7 +372,7 @@ async def test_final_section_three_way_agrees_on_sendable(client, session) -> No
     result = await final_release(
         session,
         task_id=saw_task.id,
-        quantity=Decimal("40"),
+        quantity=Decimal(40),
         actor_id=user.id,
     )
     await session.commit()
@@ -381,10 +380,10 @@ async def test_final_section_three_way_agrees_on_sendable(client, session) -> No
     await assert_no_invariants_violations(session, context="final-send")
 
     # 1. pure: remaining_send клампит в ноль и считает остаток.
-    produced = Decimal("100")
-    released = Decimal("40")
+    produced = Decimal(100)
+    released = Decimal(40)
     expected = remaining_send(produced, released)
-    assert expected == Decimal("60")
+    assert expected == Decimal(60)
 
     # 2. read-SQL: фабрика budget поверх ledger-подзапросов.
     budgets = await _read_sql_budgets(session, saw_task)
@@ -407,7 +406,7 @@ async def test_final_section_three_way_agrees_on_sendable(client, session) -> No
         await final_release(
             session,
             task_id=saw_task.id,
-            quantity=Decimal("61"),
+            quantity=Decimal(61),
             actor_id=user.id,
         )
     assert (

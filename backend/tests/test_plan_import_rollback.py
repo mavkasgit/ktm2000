@@ -16,10 +16,12 @@ from __future__ import annotations
 from datetime import datetime
 
 import pytest
-from sqlalchemy import select
-from sqlalchemy.ext.asyncio import AsyncSession
-
-from app.models.imports import ImportBatch, ImportBatchMode, ImportBatchStatus, ImportFile
+from app.models.imports import (
+    ImportBatch,
+    ImportBatchMode,
+    ImportBatchStatus,
+    ImportFile,
+)
 from app.models.product import Product, ProductType
 from app.models.production_plan import (
     PlanChangeAction,
@@ -32,6 +34,8 @@ from app.models.production_plan import (
     ProductionPlan,
     ProductionPlanStatus,
 )
+from sqlalchemy import select
+from sqlalchemy.ext.asyncio import AsyncSession
 
 
 async def _make_product(session: AsyncSession, sku: str) -> Product:

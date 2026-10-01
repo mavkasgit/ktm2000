@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 from uuid import UUID
 
 from sqlalchemy import select, update
@@ -26,7 +26,7 @@ class SessionRepository:
         last_seen_at: datetime | None = None,
         oidc_sid: str | None = None,
     ) -> UserSession:
-        now = datetime.now(timezone.utc)
+        now = datetime.now(UTC)
         kwargs: dict = {
             "user_id": user_id,
             "expires_at": expires_at,
@@ -52,7 +52,7 @@ class SessionRepository:
 
     async def list_active_for_user(self, db: AsyncSession, user_id: int) -> list[UserSession]:
         """Non-revoked sessions that have not expired yet."""
-        now = datetime.now(timezone.utc)
+        now = datetime.now(UTC)
         result = await db.execute(
             select(UserSession)
             .where(
@@ -77,7 +77,7 @@ class SessionRepository:
             return None
         if session.revoked_at is not None:
             return session
-        session.revoked_at = when or datetime.now(timezone.utc)
+        session.revoked_at = when or datetime.now(UTC)
         session.revoke_reason = reason
         db.add(session)
         await db.flush()
@@ -93,7 +93,7 @@ class SessionRepository:
         when: datetime | None = None,
     ) -> int:
         """Revoke all non-revoked sessions for user; optionally keep except_id. Returns count."""
-        now = when or datetime.now(timezone.utc)
+        now = when or datetime.now(UTC)
         conditions = [
             UserSession.user_id == user_id,
             UserSession.revoked_at.is_(None),
@@ -125,7 +125,7 @@ class SessionRepository:
         Scoped by user_id (defense in depth): sid only matches sessions
         belonging to the user identified by the logout_token's sub.
         """
-        now = when or datetime.now(timezone.utc)
+        now = when or datetime.now(UTC)
         result = await db.execute(
             update(UserSession)
             .where(
@@ -147,7 +147,7 @@ class SessionRepository:
         when: datetime | None = None,
     ) -> None:
         """Unconditional last_seen_at write (throttle lives in service)."""
-        ts = when or datetime.now(timezone.utc)
+        ts = when or datetime.now(UTC)
         await db.execute(
             update(UserSession)
             .where(UserSession.id == session_id)

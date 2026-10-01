@@ -13,9 +13,6 @@ from datetime import date
 from decimal import Decimal
 
 import pytest
-from sqlalchemy import func, select, update
-from sqlalchemy.ext.asyncio import AsyncSession
-
 from app.models import Product, ProductType, Section, User, UserRole
 from app.models.internal_plan import InternalPlan, InternalPlanStatus, SectionPlanLine
 from app.models.production_plan import (
@@ -29,6 +26,7 @@ from app.models.production_plan import (
 from app.models.route import ProductionRoute, RouteOperation, RouteStage
 from app.models.spg import SpgSection, StorageProductionGroup
 from app.models.work_task import WorkTask, WorkTaskStatus
+from app.services.material_operations import completed_operations_for_task
 from app.stock import (
     QualityState,
     Reason,
@@ -37,9 +35,11 @@ from app.stock import (
     StockCommandService,
     StockTransaction,
 )
+from sqlalchemy import func, select, update
+from sqlalchemy.ext.asyncio import AsyncSession
+
 from tests.stock.helpers import record_transfer_receive
 from tests.test_integrity_invariants import assert_no_stock_ledger_invariants_violations
-from app.services.material_operations import completed_operations_for_task
 
 pytestmark = pytest.mark.asyncio
 
@@ -93,11 +93,11 @@ async def _balance(
         )
     )
     bal = row.scalar_one_or_none()
-    return bal.balance_qty if bal else Decimal("0")
+    return bal.balance_qty if bal else Decimal(0)
 
 
 async def _seed_raw_stock(
-    session: AsyncSession, fx: dict, quantity: Decimal = Decimal("100"),
+    session: AsyncSession, fx: dict, quantity: Decimal = Decimal(100),
 ) -> None:
     """Занести остаток на «Склад сырья» в той же группе, что и списание.
 
@@ -118,7 +118,7 @@ async def _seed_raw_stock(
     ))
 
 
-async def _setup_minimal_route(session: AsyncSession, *, sku: str = "S3", qty: Decimal = Decimal("10")) -> dict:
+async def _setup_minimal_route(session: AsyncSession, *, sku: str = "S3", qty: Decimal = Decimal(10)) -> dict:
     """Minimal topology: raw_stock → production section (first route stage).
 
     Returns user, product, task, stock_section, prod_section.
@@ -217,7 +217,7 @@ async def test_transfer_receive_creates_stock_tx(session: AsyncSession):
         product_id=fx["product"].id,
         from_location_id=fx["raw"].id,
         to_location_id=task.section_id,
-        quantity=Decimal("10"),
+        quantity=Decimal(10),
         task_id=task.id,
         created_by=fx["user"].id,
     )
@@ -247,7 +247,7 @@ async def test_transfer_receive_updates_cache(session: AsyncSession):
         product_id=fx["product"].id,
         from_location_id=fx["raw"].id,
         to_location_id=task.section_id,
-        quantity=Decimal("7"),
+        quantity=Decimal(7),
         task_id=task.id,
         created_by=fx["user"].id,
     )
@@ -263,7 +263,7 @@ async def test_transfer_receive_updates_cache(session: AsyncSession):
             StockTransaction.reason == Reason.TRANSFER_RECEIVE,
         )
     )
-    assert cache["issued_quantity"] == sql_sum == Decimal("7")
+    assert cache["issued_quantity"] == sql_sum == Decimal(7)
 
 
 async def test_validation_rejects_issue_to_work_command(session: AsyncSession):
@@ -278,7 +278,7 @@ async def test_validation_rejects_issue_to_work_command(session: AsyncSession):
             product_id=fx["product"].id,
             from_location_id=fx["raw"].id,
             to_location_id=task.section_id,
-            quantity=Decimal("100"),
+            quantity=Decimal(100),
             reason=Reason.ISSUE_TO_WORK,
             task_id=task.id,
             created_by=fx["user"].id,
@@ -297,7 +297,7 @@ async def test_complete_task_creates_complete_tx(session: AsyncSession):
         product_id=fx["product"].id,
         from_location_id=fx["raw"].id,
         to_location_id=task.section_id,
-        quantity=Decimal("10"),
+        quantity=Decimal(10),
         task_id=task.id,
         created_by=fx["user"].id,
     )
@@ -308,8 +308,8 @@ async def test_complete_task_creates_complete_tx(session: AsyncSession):
     result = await complete_task(
         session,
         task_id=task.id,
-        good_quantity=Decimal("8"),
-        defect_quantity=Decimal("0"),
+        good_quantity=Decimal(8),
+        defect_quantity=Decimal(0),
         actor_id=fx["user"].id,
     )
     await session.commit()
@@ -336,7 +336,7 @@ async def test_complete_task_creates_complete_tx(session: AsyncSession):
             StockTransaction.reason == Reason.COMPLETE,
         )
     )
-    assert cache["completed_quantity"] == sql_sum == Decimal("8")
+    assert cache["completed_quantity"] == sql_sum == Decimal(8)
 
     await assert_no_stock_ledger_invariants_violations(session, context="after-complete")
 
@@ -352,7 +352,7 @@ async def test_complete_task_with_scrap(session: AsyncSession):
         product_id=fx["product"].id,
         from_location_id=fx["raw"].id,
         to_location_id=task.section_id,
-        quantity=Decimal("10"),
+        quantity=Decimal(10),
         task_id=task.id,
         created_by=fx["user"].id,
     )
@@ -360,12 +360,13 @@ async def test_complete_task_with_scrap(session: AsyncSession):
     await session.commit()
 
     from app.services.shopfloor.operations_tasks import complete_task
+
     from tests.stock.helpers import FAKE_SCRAP_POLICY
     await complete_task(
         session,
         task_id=task.id,
-        good_quantity=Decimal("7"),
-        defect_quantity=Decimal("3"),
+        good_quantity=Decimal(7),
+        defect_quantity=Decimal(3),
         actor_id=fx["user"].id,
         defect_reason="test_scrap",
         **FAKE_SCRAP_POLICY,
@@ -380,7 +381,7 @@ async def test_complete_task_with_scrap(session: AsyncSession):
             StockTransaction.reason == Reason.COMPLETE,
         )
     )
-    assert complete_sum == Decimal("7")
+    assert complete_sum == Decimal(7)
 
     # Verify StockTransaction(SCRAP)
     scrap_sum = await session.scalar(
@@ -390,7 +391,7 @@ async def test_complete_task_with_scrap(session: AsyncSession):
             StockTransaction.reason == Reason.SCRAP,
         )
     )
-    assert scrap_sum == Decimal("3")
+    assert scrap_sum == Decimal(3)
 
     # Verify Defect created
     from app.models.defect import Defect
@@ -415,7 +416,7 @@ async def test_final_release_creates_stock_tx(session: AsyncSession):
         product_id=fx["product"].id,
         from_location_id=fx["raw"].id,
         to_location_id=task.section_id,
-        quantity=Decimal("10"),
+        quantity=Decimal(10),
         task_id=task.id,
         created_by=fx["user"].id,
     )
@@ -424,7 +425,7 @@ async def test_final_release_creates_stock_tx(session: AsyncSession):
         product_id=fx["product"].id,
         from_location_id=None,
         to_location_id=task.section_id,
-        quantity=Decimal("8"),
+        quantity=Decimal(8),
         reason=Reason.COMPLETE,
         task_id=task.id,
         created_by=fx["user"].id,
@@ -435,7 +436,7 @@ async def test_final_release_creates_stock_tx(session: AsyncSession):
     await final_release(
         session,
         task_id=task.id,
-        quantity=Decimal("8"),
+        quantity=Decimal(8),
         actor_id=fx["user"].id,
     )
     await session.commit()
@@ -478,7 +479,7 @@ async def test_final_release_without_finished_stock_rejected(session: AsyncSessi
         product_id=fx["product"].id,
         from_location_id=fx["raw"].id,
         to_location_id=task.section_id,
-        quantity=Decimal("10"),
+        quantity=Decimal(10),
         task_id=task.id,
         created_by=fx["user"].id,
     )
@@ -487,21 +488,21 @@ async def test_final_release_without_finished_stock_rejected(session: AsyncSessi
         product_id=fx["product"].id,
         from_location_id=None,
         to_location_id=task.section_id,
-        quantity=Decimal("8"),
+        quantity=Decimal(8),
         reason=Reason.COMPLETE,
         task_id=task.id,
         created_by=fx["user"].id,
     ))
     await session.commit()
 
-    from app.services.shopfloor.operations_tasks import final_release
     from app.models.action_journal import Action
+    from app.services.shopfloor.operations_tasks import final_release
 
     with pytest.raises(ValueError, match="склад выпуска"):
         await final_release(
             session,
             task_id=task.id,
-            quantity=Decimal("8"),
+            quantity=Decimal(8),
             actor_id=fx["user"].id,
         )
     await session.commit()
@@ -538,20 +539,22 @@ async def test_return_to_stock_endpoint(session: AsyncSession):
         product_id=fx["product"].id,
         from_location_id=fx["raw"].id,
         to_location_id=task.section_id,
-        quantity=Decimal("10"),
+        quantity=Decimal(10),
         task_id=task.id,
         created_by=fx["user"].id,
     )
     await session.commit()
 
     # Call return endpoint directly
-    from app.stock import StockCommand as SC, StockCommandService as SCS, Reason as Rsn
+    from app.stock import Reason as Rsn
+    from app.stock import StockCommand as SC
+    from app.stock import StockCommandService as SCS
     return_svc = SCS()
     tx = await return_svc.record(session, SC(
         product_id=fx["product"].id,
         from_location_id=task.section_id,
         to_location_id=None,
-        quantity=Decimal("3"),
+        quantity=Decimal(3),
         reason=Rsn.RETURN_TO_STOCK,
         task_id=task.id,
         created_by=fx["user"].id,
@@ -580,7 +583,7 @@ async def test_no_movement_written_in_shopfloor(session: AsyncSession):
         product_id=fx["product"].id,
         from_location_id=fx["raw"].id,
         to_location_id=task.section_id,
-        quantity=Decimal("10"),
+        quantity=Decimal(10),
         task_id=task.id,
         created_by=fx["user"].id,
     )
@@ -589,7 +592,7 @@ async def test_no_movement_written_in_shopfloor(session: AsyncSession):
         product_id=fx["product"].id,
         from_location_id=None,
         to_location_id=task.section_id,
-        quantity=Decimal("8"),
+        quantity=Decimal(8),
         reason=Reason.COMPLETE,
         task_id=task.id,
         created_by=fx["user"].id,

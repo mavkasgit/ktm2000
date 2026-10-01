@@ -3,10 +3,20 @@ from __future__ import annotations
 from sqlalchemy import delete, exists
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.models.defect import Defect, DefectDecision, DefectItem, TransferDiscrepancyDefectItem
+from app.models.defect import (
+    Defect,
+    DefectDecision,
+    DefectItem,
+    TransferDiscrepancyDefectItem,
+)
 from app.models.imports import ImportBatch, ImportFile
 from app.models.internal_plan import InternalPlan, SectionPlanLine
-from app.models.production_plan import PlanChangeItem, PlanChangeSet, PlanPosition, ProductionPlan
+from app.models.production_plan import (
+    PlanChangeItem,
+    PlanChangeSet,
+    PlanPosition,
+    ProductionPlan,
+)
 from app.models.release_batch import ReleaseBatch, ReleaseBatchPosition
 from app.models.rework_task import ReworkTask
 from app.models.transfer import Transfer, TransferDiscrepancy

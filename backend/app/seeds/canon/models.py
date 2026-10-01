@@ -8,9 +8,9 @@ from __future__ import annotations
 
 from typing import Annotated, ClassVar, Literal
 
-from app.models.user import UserRole
 from pydantic import BaseModel, Field, field_validator
 
+from app.models.user import UserRole
 
 # ─── Display canon ────────────────────────────────────────────────────────────
 

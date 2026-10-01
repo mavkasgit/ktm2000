@@ -8,11 +8,11 @@ from __future__ import annotations
 from datetime import date
 
 import pytest
+from app.models.audit_log import AuditLog
+from app.models.work_task import WorkTask, WorkTaskStatus
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.models.audit_log import AuditLog
-from app.models.work_task import WorkTask, WorkTaskStatus
 from tests.stock.test_shopfloor_stage3 import _setup_minimal_route
 
 pytestmark = pytest.mark.asyncio

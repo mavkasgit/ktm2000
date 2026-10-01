@@ -14,12 +14,11 @@
 from __future__ import annotations
 
 import pytest
-from httpx import AsyncClient
-from sqlalchemy.ext.asyncio import AsyncSession
-
 from app.core.config import settings
 from app.models.user import User, UserRole
 from app.services.session_service import issue_app_token
+from httpx import AsyncClient
+from sqlalchemy.ext.asyncio import AsyncSession
 
 pytestmark = pytest.mark.asyncio
 

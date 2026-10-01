@@ -1,9 +1,13 @@
-import pytest
 from uuid import uuid4
 
+import pytest
 from app.core.config import settings
 from app.models.user import User, UserRole
-from app.services.session_service import issue_app_token, issue_session, get_session_by_id
+from app.services.session_service import (
+    get_session_by_id,
+    issue_app_token,
+    issue_session,
+)
 
 
 @pytest.mark.asyncio

@@ -1,8 +1,6 @@
 from __future__ import annotations
 
 import pytest
-from sqlalchemy import select
-
 from app.models.route import (
     ProductionRoute,
     RouteOperation,
@@ -12,15 +10,15 @@ from app.models.route import (
 from app.models.section import Section
 from app.models.spg import SpgSection, SpgStorageKind, StorageProductionGroup
 from app.seeds.canon.models import SPGDef
-from app.seeds.spgs import SPGS_DATA
 from app.seeds.seeders.spgs_seeder import _resolve_storage_kind, seed_spgs
+from app.seeds.spgs import SPGS_DATA
 from app.services.route_storage_classifier import (
     STAGE_KIND_PRODUCTION,
     STAGE_KIND_TRANSIT,
     is_storage_section,
 )
 from app.services.shopfloor.common import build_completed_stages_json
-
+from sqlalchemy import select
 
 DEFAULT_SECTIONS = [
     {"code": "WH", "name": "Склад сырья", "sort_order": 10, "type": "raw_stock"},
@@ -202,8 +200,8 @@ async def test_prep_stock_section_codes_missing_key_is_treated_as_empty(session)
 @pytest.mark.asyncio
 async def test_demo_production_seeder_finds_prep_via_section(session, monkeypatch):
     """Демо-сидер должен находить PREP через секцию PREP_STOCK и класть остатки туда."""
-    from app.seeds.seeders import demo_production_seeder
     from app.models.user import User, UserRole
+    from app.seeds.seeders import demo_production_seeder
 
     actor = User(
         username="seed-actor",
@@ -455,8 +453,8 @@ async def test_build_completed_stages_json_keeps_operation_metadata(session):
 @pytest.mark.asyncio
 async def test_demo_production_seeder_omits_non_significant_stages(session, monkeypatch):
     """Демо-сидер создаёт остатки в PREP через StockTransaction/StockBalance."""
-    from app.seeds.seeders import demo_production_seeder
     from app.models.user import User, UserRole
+    from app.seeds.seeders import demo_production_seeder
     from app.stock import Reason
     from app.stock.models import StockBalance, StockTransaction
 

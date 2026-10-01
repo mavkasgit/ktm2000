@@ -7,7 +7,7 @@ heuristic, JWT claim names and TTL policy.
 
 from __future__ import annotations
 
-from datetime import datetime, timedelta, timezone
+from datetime import UTC, datetime, timedelta
 from uuid import UUID
 
 from sqlalchemy import or_, select
@@ -23,9 +23,9 @@ from app.repositories.login_event_repository import LoginEventRepository
 from app.repositories.logout_jti_repository import LogoutJtiRepository
 from app.repositories.session_repository import SessionRepository
 from app.schemas.session import (
+    MAX_LOGIN_EVENTS_SHOWN,
     LoginEventListOut,
     LoginEventOut,
-    MAX_LOGIN_EVENTS_SHOWN,
 )
 from app.services import session_core
 from app.services.break_glass_service import record_break_glass_event
@@ -244,7 +244,7 @@ async def list_login_events(
     user_id: int,
 ) -> list[UserLoginEvent]:
     """Login history window (retention days) for the user, newest first."""
-    since = datetime.now(timezone.utc) - timedelta(days=settings.LOGIN_EVENTS_RETENTION_DAYS)
+    since = datetime.now(UTC) - timedelta(days=settings.LOGIN_EVENTS_RETENTION_DAYS)
     return await login_event_repo.list_for_user(db, user_id, since=since)
 
 

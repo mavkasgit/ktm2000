@@ -30,6 +30,7 @@ SQL-фабрики (``*_qty_sql``) — те же формулы на уровн�
 Все функции клампят в ноль — бюджет не бывает отрицательным.
 """
 from __future__ import annotations
+
 from decimal import Decimal
 
 from sqlalchemy import func
@@ -38,7 +39,7 @@ from sqlalchemy.sql.elements import ColumnElement
 
 def remaining_plain(completed: Decimal, transferred: Decimal) -> Decimal:
     """Остаток к передаче с обычного задания: ``max(0, completed - transferred)``."""
-    return max(Decimal("0"), completed - transferred)
+    return max(Decimal(0), completed - transferred)
 
 
 def remaining_transform(produced: Decimal, transferred: Decimal) -> Decimal:
@@ -48,7 +49,7 @@ def remaining_transform(produced: Decimal, transferred: Decimal) -> Decimal:
     produced_by_group)`` из ``build_outputs_progress`` — кап здесь не
     дублируется.
     """
-    return max(Decimal("0"), produced - transferred)
+    return max(Decimal(0), produced - transferred)
 
 
 def remaining_send(produced: Decimal, released: Decimal) -> Decimal:
@@ -58,7 +59,7 @@ def remaining_send(produced: Decimal, released: Decimal) -> Decimal:
     (для трансформирующего этапа — закапленный
     ``min(output_quantity, produced_by_group)`` из ``build_outputs_progress``).
     """
-    return max(Decimal("0"), produced - released)
+    return max(Decimal(0), produced - released)
 
 
 def transferable_qty_sql(

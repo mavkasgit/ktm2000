@@ -5,8 +5,8 @@ Revises: 017_users_profile_synced_at
 Create Date: 2026-07-21
 
 """
-from alembic import op
 import sqlalchemy as sa
+from alembic import op
 
 revision: str = "018_remove_hrms_access_level"
 down_revision: str = "017_users_profile_synced_at"

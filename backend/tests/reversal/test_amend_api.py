@@ -9,15 +9,15 @@ from __future__ import annotations
 from decimal import Decimal
 
 import pytest
-from sqlalchemy import select
-from sqlalchemy.ext.asyncio import AsyncSession
-
 from app.models.action_journal import Action, ActionStatus
 from app.models.work_task import WorkTask
 from app.reversal.stock_compensator import StockCompensator
 from app.stock.models import QualityState, Reason
 from app.stock.services import StockCommand, StockCommandService
 from app.transfers.services import transfer_send
+from sqlalchemy import select
+from sqlalchemy.ext.asyncio import AsyncSession
+
 from tests.stock.test_transfer_stage2 import (
     _make_tasks_transferable,
     _make_two_ghp_setup,
@@ -31,9 +31,9 @@ pytestmark = pytest.mark.asyncio
 
 
 async def _setup_action(
-    session: AsyncSession, client, sku: str, *, qty=Decimal("3")
+    session: AsyncSession, client, sku: str, *, qty=Decimal(3)
 ) -> tuple[Action, dict]:
-    setup = await _make_two_ghp_setup(session, sku=sku, qty=Decimal("10"))
+    setup = await _make_two_ghp_setup(session, sku=sku, qty=Decimal(10))
     ctx = await _make_tasks_transferable(session, client, setup)
     result = await transfer_send(
         session,
@@ -141,7 +141,7 @@ async def test_amend_with_reverse_token_maps_409(
 
 
 async def test_amend_unknown_action_maps_404(session: AsyncSession, client) -> None:
-    action, ctx = await _setup_action(session, client, "AMDAP4")
+    _action, ctx = await _setup_action(session, client, "AMDAP4")
     headers = _auth_headers(ctx["user"])
     missing = await client.post(
         "/api/actions/999999/preview-amend",
@@ -187,13 +187,13 @@ async def test_amend_invalid_payload_preview_blocked(
 
 
 async def test_amend_dependents_blocked_via_api(session: AsyncSession, client) -> None:
-    setup = await _make_two_ghp_setup(session, sku="AMDAP6", qty=Decimal("10"))
+    setup = await _make_two_ghp_setup(session, sku="AMDAP6", qty=Decimal(10))
     ctx = await _make_tasks_transferable(session, client, setup)
     r1 = await transfer_send(
         session,
         from_task_id=ctx["from_task_id"],
         to_task_id=ctx["to_task_id"],
-        quantity=Decimal("5"),
+        quantity=Decimal(5),
         actor_id=ctx["user"].id,
         idempotency_key="amdap6:t1",
     )
@@ -206,7 +206,7 @@ async def test_amend_dependents_blocked_via_api(session: AsyncSession, client) -
         session,
         from_task_id=ctx["from_task_id"],
         to_task_id=ctx["to_task_id"],
-        quantity=Decimal("5"),
+        quantity=Decimal(5),
         actor_id=ctx["user"].id,
         idempotency_key="amdap6:t2",
     )
@@ -258,7 +258,7 @@ async def test_amend_confirm_shortfall_reports_real_deficit(
             db,
             StockCommand(
                 product_id=from_task.product_id,
-                quantity=Decimal("7"),
+                quantity=Decimal(7),
                 reason=Reason.TRANSFER_SEND,
                 from_location_id=from_task.section_id,
                 to_location_id=to_task.section_id,
@@ -287,7 +287,7 @@ async def test_amend_confirm_shortfall_reports_real_deficit(
     assert detail["node"] == action.id
     # Источник: было 10−3(отгрузка)=7, гонка −7 → 0; компенсации вернут 3;
     # нужно 9 → реальный дефицит 6.
-    assert Decimal(detail["deficit"]) == Decimal("6")
+    assert Decimal(detail["deficit"]) == Decimal(6)
 
 
 async def test_preview_amend_shows_will_replay_and_amend_reports_ids(
@@ -299,7 +299,7 @@ async def test_preview_amend_shows_will_replay_and_amend_reports_ids(
     from app.models.action_journal import ActionStatus
     from app.transfers.services import transfer_send
 
-    setup = await _make_two_ghp_setup(session, sku="AMDAP8", qty=Decimal("10"))
+    setup = await _make_two_ghp_setup(session, sku="AMDAP8", qty=Decimal(10))
     ctx = await _make_tasks_transferable(session, client, setup)
 
     async def send(qty: Decimal, key: str) -> tuple[Action, int]:
@@ -321,8 +321,8 @@ async def test_preview_amend_shows_will_replay_and_amend_reports_ids(
         ).scalar_one()
         return action, result["transfer_id"]
 
-    a1, _t1 = await send(Decimal("5"), "amdap8:t1")
-    a2, _t2 = await send(Decimal("5"), "amdap8:t2")
+    a1, _t1 = await send(Decimal(5), "amdap8:t1")
+    a2, _t2 = await send(Decimal(5), "amdap8:t2")
     a2.depends_on = [a1.id]
     await session.commit()
     headers = _auth_headers(ctx["user"])

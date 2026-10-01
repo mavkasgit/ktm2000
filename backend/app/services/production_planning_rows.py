@@ -4,23 +4,48 @@ from dataclasses import dataclass
 from decimal import Decimal
 
 from sqlalchemy import String, and_, case, cast, exists, func, or_, select
-from sqlalchemy.orm import selectinload
 from sqlalchemy.ext.asyncio import AsyncSession
+from sqlalchemy.orm import selectinload
 
 from app.core.sorting import SortClause, apply_sort, parse_sort
-from app.domain.dimensions import format_cut_layout, format_dimensions, parse_dimensions_filter
+from app.domain.dimensions import (
+    format_cut_layout,
+    format_dimensions,
+    parse_dimensions_filter,
+)
+from app.models.audit_log import AuditEntityType, AuditLog
 from app.models.internal_plan import SectionPlanLine
 from app.models.product import Product
-from app.models.production_plan import PlanPosition, PlanPositionStatus, PositionStatusHistory
-from app.models.audit_log import AuditLog, AuditEntityType
-from app.models.route import ProductionRoute, RouteOperation, RouteStage, SectionOperation
+from app.models.production_plan import (
+    PlanPosition,
+    PlanPositionStatus,
+    PositionStatusHistory,
+)
+from app.models.route import (
+    ProductionRoute,
+    RouteOperation,
+    RouteStage,
+    SectionOperation,
+)
 from app.models.section import Section
 from app.models.transfer import Transfer
-from app.models.work_task import CLOSED_WORK_TASK_STATUSES, RESOLVED_WORK_TASK_STATUSES, WorkTask, WorkTaskStatus
-from app.stock.ledger import net_quantity_expr
-from app.services.plan_position_hanger import position_dimensions_for_task, resolve_positions_hanger
+from app.models.work_task import (
+    CLOSED_WORK_TASK_STATUSES,
+    RESOLVED_WORK_TASK_STATUSES,
+    WorkTask,
+    WorkTaskStatus,
+)
+from app.services.plan_position_hanger import (
+    position_dimensions_for_task,
+    resolve_positions_hanger,
+)
 from app.services.position_remainders import PositionStockFigures
-from app.services.route_matcher import ResolvedRouteInfo, resolve_position_route, make_position_route_cache_key
+from app.services.route_matcher import (
+    ResolvedRouteInfo,
+    make_position_route_cache_key,
+    resolve_position_route,
+)
+from app.stock.ledger import net_quantity_expr
 
 MANUAL_ROUTE_PASS_PREFIX = "manual_route_pass:"
 
@@ -923,7 +948,7 @@ async def get_production_planning_row_detail(db: AsyncSession, position_id: int)
         }
 
         # Этап 4: cached_* колонки удалены, агрегация из StockTransaction
-        from app.stock.models import StockTransaction, Reason
+        from app.stock.models import Reason, StockTransaction
 
         # Get all task_ids for this position
         task_in_pos = (await db.execute(
@@ -975,11 +1000,11 @@ async def get_production_planning_row_detail(db: AsyncSession, position_id: int)
 
         tx_sums: dict[int, dict[str, Decimal]] = {}
         for tid, reason_val, qty in tx_rows:
-            tx_sums.setdefault(tid, {})[reason_val] = qty or Decimal("0")
+            tx_sums.setdefault(tid, {})[reason_val] = qty or Decimal(0)
 
         net_sums: dict[int, dict[str, Decimal]] = {}
         for tid, reason_val, nq in net_rows:
-            net_sums.setdefault(tid, {})[reason_val] = nq or Decimal("0")
+            net_sums.setdefault(tid, {})[reason_val] = nq or Decimal(0)
 
         task_aggregates_by_stage: dict[int, dict[str, float]] = {}
         task_statuses_by_stage: dict[int, list[str]] = {}
@@ -992,9 +1017,9 @@ async def get_production_planning_row_detail(db: AsyncSession, position_id: int)
                 continue
             sums = tx_sums.get(t.id, {})
             nets = net_sums.get(t.id, {})
-            completed = float(sums.get(Reason.COMPLETE.value, Decimal("0")))
-            transferred = float(nets.get(Reason.TRANSFER_SEND.value, Decimal("0")))
-            rejected = float(sums.get(Reason.SCRAP.value, Decimal("0")))
+            completed = float(sums.get(Reason.COMPLETE.value, Decimal(0)))
+            transferred = float(nets.get(Reason.TRANSFER_SEND.value, Decimal(0)))
+            rejected = float(sums.get(Reason.SCRAP.value, Decimal(0)))
             stage_totals = task_aggregates_by_stage.setdefault(
                 stage_id,
                 {"completed_quantity": 0.0, "transferred_quantity": 0.0, "rejected_quantity": 0.0},

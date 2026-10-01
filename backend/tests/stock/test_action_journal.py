@@ -9,14 +9,17 @@
 from decimal import Decimal
 
 import pytest
-from sqlalchemy import select
-from sqlalchemy.ext.asyncio import AsyncSession
-
 from app.models.action_journal import Action
 from app.stock.models import Reason, StockTransaction
 from app.transfers.services import cancel_transfer, transfer_send
+from sqlalchemy import select
+from sqlalchemy.ext.asyncio import AsyncSession
+
+from tests.stock.test_transfer_stage2 import (
+    _make_tasks_transferable,
+    _make_two_ghp_setup,
+)
 from tests.test_integrity_invariants import assert_no_invariants_violations
-from tests.stock.test_transfer_stage2 import _make_two_ghp_setup, _make_tasks_transferable
 
 _py_test_mark = pytest.mark.asyncio
 
@@ -24,14 +27,14 @@ _py_test_mark = pytest.mark.asyncio
 @_py_test_mark
 async def test_transfer_send_creates_action(session: AsyncSession, client) -> None:
     """transfer_send создаёт Action с ref_id=transfer.id; проводки ссылаются на него."""
-    setup = await _make_two_ghp_setup(session, sku="AJT1", qty=Decimal("10"))
+    setup = await _make_two_ghp_setup(session, sku="AJT1", qty=Decimal(10))
     ctx = await _make_tasks_transferable(session, client, setup)
 
     result = await transfer_send(
         session,
         from_task_id=ctx["from_task_id"],
         to_task_id=ctx["to_task_id"],
-        quantity=Decimal("5"),
+        quantity=Decimal(5),
         actor_id=ctx["user"].id,
         idempotency_key="ajt1:send",
     )
@@ -63,14 +66,14 @@ async def test_transfer_send_creates_action(session: AsyncSession, client) -> No
 async def test_cancel_transfer_creates_action(session: AsyncSession, client) -> None:
     """cancel_transfer через ReversalService создаёт Action (reversal);
     компенсационные проводки ссылаются на него."""
-    setup = await _make_two_ghp_setup(session, sku="AJT2", qty=Decimal("10"))
+    setup = await _make_two_ghp_setup(session, sku="AJT2", qty=Decimal(10))
     ctx = await _make_tasks_transferable(session, client, setup)
 
     send = await transfer_send(
         session,
         from_task_id=ctx["from_task_id"],
         to_task_id=ctx["to_task_id"],
-        quantity=Decimal("5"),
+        quantity=Decimal(5),
         actor_id=ctx["user"].id,
         idempotency_key="ajt2:send",
     )

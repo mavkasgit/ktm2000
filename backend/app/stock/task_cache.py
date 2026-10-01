@@ -22,14 +22,14 @@ def compute_task_available(
     returned_quantity: Decimal,
     is_first_stage: bool,
 ) -> Decimal:
-    base_available = planned_quantity if is_first_stage else Decimal("0")
+    base_available = planned_quantity if is_first_stage else Decimal(0)
     available = base_available + received_quantity + returned_quantity - issued_quantity
-    return available if available > Decimal("0") else Decimal("0")
+    return max(Decimal(0), available)
 
 
 def compute_remaining(*, planned_quantity: Decimal, transferred_quantity: Decimal) -> Decimal:
     remaining = planned_quantity - transferred_quantity
-    return remaining if remaining > Decimal("0") else Decimal("0")
+    return max(Decimal(0), remaining)
 
 
 def resolve_work_task_status(
@@ -53,30 +53,30 @@ def resolve_work_task_status(
     """
     if current_status in ("completed", "cancelled", "skipped"):
         return None
-    if planned_quantity <= Decimal("0"):
+    if planned_quantity <= Decimal(0):
         return None
 
     if transform_input_quantity is not None:
-        processed = transform_processed_quantity or Decimal("0")
+        processed = transform_processed_quantity or Decimal(0)
         if processed >= transform_input_quantity:
             return "completed"
-        if processed > Decimal("0"):
+        if processed > Decimal(0):
             return "partially_completed"
-        if received_quantity > Decimal("0") and current_status == "ready":
+        if received_quantity > Decimal(0) and current_status == "ready":
             return "in_progress"
         return None
     active_statuses = {"ready", "in_progress", "partially_completed"}
     if current_status not in active_statuses:
         return None
 
-    if remaining_quantity <= Decimal("0") and transferred_quantity >= planned_quantity:
+    if remaining_quantity <= Decimal(0) and transferred_quantity >= planned_quantity:
         return "completed"
 
     produced = completed_quantity + rejected_quantity
-    if produced > Decimal("0") and produced < planned_quantity:
+    if produced > Decimal(0) and produced < planned_quantity:
         return "partially_completed"
 
-    if (issued_quantity > Decimal("0") or produced > Decimal("0")) and current_status == "ready":
+    if (issued_quantity > Decimal(0) or produced > Decimal(0)) and current_status == "ready":
         return "in_progress"
 
     return None

@@ -19,10 +19,6 @@ from collections.abc import Sequence
 from decimal import Decimal
 
 import pytest
-from httpx import AsyncClient
-from sqlalchemy import select
-from sqlalchemy.ext.asyncio import AsyncSession
-
 from app.models import Product, ProductType, Section, User, UserRole
 from app.models.work_task import WorkTask
 from app.services.material_operations import completed_operations_for_task
@@ -41,12 +37,16 @@ from app.stock.services import (
     dimensions_match_clause,
 )
 from app.transfers.services import cancel_transfer, transfer_send
-from tests.test_integrity_invariants import (
-    assert_no_stock_ledger_invariants_violations,
-)
+from httpx import AsyncClient
+from sqlalchemy import select
+from sqlalchemy.ext.asyncio import AsyncSession
+
 from tests.stock.test_transfer_stage2 import (
     _make_two_ghp_setup,
     _release_via_take_to_work,
+)
+from tests.test_integrity_invariants import (
+    assert_no_stock_ledger_invariants_violations,
 )
 
 pytestmark = pytest.mark.asyncio
@@ -127,7 +127,7 @@ async def _balance(
         )
     )
     bal = row.scalar_one_or_none()
-    return bal.balance_qty if bal else Decimal("0")
+    return bal.balance_qty if bal else Decimal(0)
 
 
 async def _balance_rows(
@@ -190,7 +190,7 @@ async def test_record_stores_canonical_dimensions(session: AsyncSession) -> None
     assert stored is not None
     assert stored.dimensions == DIMS_27
     assert isinstance(stored.dimensions["length_mm"], int)
-    assert await _balance(session, product.id, stock.id, DIMS_27) == Decimal("10")
+    assert await _balance(session, product.id, stock.id, DIMS_27) == Decimal(10)
 
 
 async def test_record_empty_dict_dimensions_becomes_null(session: AsyncSession) -> None:
@@ -206,7 +206,7 @@ async def test_record_empty_dict_dimensions_becomes_null(session: AsyncSession) 
         qty="5", dims={}, user_id=user.id,
     )
     assert tx.dimensions is None
-    assert await _balance(session, product.id, stock.id, None) == Decimal("5")
+    assert await _balance(session, product.id, stock.id, None) == Decimal(5)
 
 
 async def test_record_rejects_invalid_dimensions(session: AsyncSession) -> None:
@@ -243,9 +243,9 @@ async def test_balance_separates_lengths_and_legacy(session: AsyncSession) -> No
     await _manual_in(session, svc, product_id=product.id, location_id=stock.id,
                      qty="30", dims=None, user_id=user.id)
 
-    assert await _balance(session, product.id, stock.id, DIMS_27) == Decimal("200")
-    assert await _balance(session, product.id, stock.id, DIMS_30) == Decimal("50")
-    assert await _balance(session, product.id, stock.id, None) == Decimal("30")
+    assert await _balance(session, product.id, stock.id, DIMS_27) == Decimal(200)
+    assert await _balance(session, product.id, stock.id, DIMS_30) == Decimal(50)
+    assert await _balance(session, product.id, stock.id, None) == Decimal(30)
 
     # Все приходы здесь вне плана → признак операций NULL у всех трёх
     # групп, и участок держит ровно три строки баланса.
@@ -276,7 +276,7 @@ async def test_writeoff_over_specific_length_rejected(session: AsyncSession) -> 
         await svc.record(session, StockCommand(
             product_id=product.id,
             from_location_id=stock.id,
-            quantity=Decimal("150"),
+            quantity=Decimal(150),
             reason=Reason.MANUAL_OUT,
             dimensions=DIMS_27,
             created_by=user.id,
@@ -286,13 +286,13 @@ async def test_writeoff_over_specific_length_rejected(session: AsyncSession) -> 
     await svc.record(session, StockCommand(
         product_id=product.id,
         from_location_id=stock.id,
-        quantity=Decimal("100"),
+        quantity=Decimal(100),
         reason=Reason.MANUAL_OUT,
         dimensions=DIMS_27,
         created_by=user.id,
     ))
-    assert await _balance(session, product.id, stock.id, DIMS_27) == Decimal("0")
-    assert await _balance(session, product.id, stock.id, DIMS_30) == Decimal("100")
+    assert await _balance(session, product.id, stock.id, DIMS_27) == Decimal(0)
+    assert await _balance(session, product.id, stock.id, DIMS_30) == Decimal(100)
 
 
 async def test_writeoff_with_dims_from_legacy_only_stock_rejected(session: AsyncSession) -> None:
@@ -309,7 +309,7 @@ async def test_writeoff_with_dims_from_legacy_only_stock_rejected(session: Async
         await svc.record(session, StockCommand(
             product_id=product.id,
             from_location_id=stock.id,
-            quantity=Decimal("10"),
+            quantity=Decimal(10),
             reason=Reason.MANUAL_OUT,
             dimensions=DIMS_27,
             created_by=user.id,
@@ -319,12 +319,12 @@ async def test_writeoff_with_dims_from_legacy_only_stock_rejected(session: Async
     await svc.record(session, StockCommand(
         product_id=product.id,
         from_location_id=stock.id,
-        quantity=Decimal("10"),
+        quantity=Decimal(10),
         reason=Reason.MANUAL_OUT,
         dimensions=None,
         created_by=user.id,
     ))
-    assert await _balance(session, product.id, stock.id, None) == Decimal("30")
+    assert await _balance(session, product.id, stock.id, None) == Decimal(30)
 
 
 async def test_rebuild_all_balances_preserves_dimension_groups(session: AsyncSession) -> None:
@@ -343,7 +343,7 @@ async def test_rebuild_all_balances_preserves_dimension_groups(session: AsyncSes
     await svc.record(session, StockCommand(
         product_id=product.id,
         from_location_id=stock.id,
-        quantity=Decimal("50"),
+        quantity=Decimal(50),
         reason=Reason.MANUAL_OUT,
         dimensions=DIMS_27,
         created_by=user.id,
@@ -353,9 +353,9 @@ async def test_rebuild_all_balances_preserves_dimension_groups(session: AsyncSes
     await pm.rebuild_all_balances(session)
     await session.flush()
 
-    assert await _balance(session, product.id, stock.id, DIMS_27) == Decimal("150")
-    assert await _balance(session, product.id, stock.id, DIMS_30) == Decimal("50")
-    assert await _balance(session, product.id, stock.id, None) == Decimal("30")
+    assert await _balance(session, product.id, stock.id, DIMS_27) == Decimal(150)
+    assert await _balance(session, product.id, stock.id, DIMS_30) == Decimal(50)
+    assert await _balance(session, product.id, stock.id, None) == Decimal(30)
     await assert_no_stock_ledger_invariants_violations(session, context="dims-rebuild")
 
 
@@ -430,7 +430,7 @@ async def _make_tasks_transferable_with_dims(
 async def test_transfer_send_preserves_dimensions(session: AsyncSession, client) -> None:
     """SEND и RECEIVE несут один габарит; баланс двигается в группе габарита;
     cancel-компенсация возвращает ту же группу; инварианты проходят."""
-    setup = await _make_two_ghp_setup(session, sku="DIMTR", qty=Decimal("10"))
+    setup = await _make_two_ghp_setup(session, sku="DIMTR", qty=Decimal(10))
     ctx = await _make_tasks_transferable_with_dims(session, client, setup, dims=DIMS_27)
 
     from_task = await session.get(WorkTask, ctx["from_task_id"])
@@ -440,7 +440,7 @@ async def test_transfer_send_preserves_dimensions(session: AsyncSession, client)
         session,
         from_task_id=ctx["from_task_id"],
         to_task_id=ctx["to_task_id"],
-        quantity=Decimal("4"),
+        quantity=Decimal(4),
         actor_id=ctx["user"].id,
         idempotency_key="dimtr:send",
         dimensions={"length_mm": 2700.0},  # неканоническая форма на входе
@@ -463,10 +463,10 @@ async def test_transfer_send_preserves_dimensions(session: AsyncSession, client)
     # исходного задания — обе оси полноправны в ключе баланса (ADR-0055).
     assert await _balance(
         session, from_task.product_id, from_task.section_id, DIMS_27, ops=ctx["ops"],
-    ) == Decimal("6")
+    ) == Decimal(6)
     assert await _balance(
         session, to_task.product_id, to_task.section_id, DIMS_27, ops=ctx["ops"],
-    ) == Decimal("4")
+    ) == Decimal(4)
     await assert_no_stock_ledger_invariants_violations(session, context="dims-transfer")
 
     # Cancel: компенсации гасят ту же габаритную группу.
@@ -488,10 +488,10 @@ async def test_transfer_send_preserves_dimensions(session: AsyncSession, client)
     assert all(tx.completed_operations == ctx["ops"] for tx in comp_txs)
     assert await _balance(
         session, from_task.product_id, from_task.section_id, DIMS_27, ops=ctx["ops"],
-    ) == Decimal("10")
+    ) == Decimal(10)
     assert await _balance(
         session, to_task.product_id, to_task.section_id, DIMS_27, ops=ctx["ops"],
-    ) == Decimal("0")
+    ) == Decimal(0)
     await assert_no_stock_ledger_invariants_violations(session, context="dims-cancel")
 
 
@@ -500,7 +500,7 @@ async def test_transfer_send_over_dims_group_balance_rejected(
 ) -> None:
     """Материал на секции лежит без габарита — отправка с габаритом
     отклоняется проверкой остатка группы."""
-    setup = await _make_two_ghp_setup(session, sku="DIMTX", qty=Decimal("10"))
+    setup = await _make_two_ghp_setup(session, sku="DIMTX", qty=Decimal(10))
     ctx = await _make_tasks_transferable_with_dims(session, client, setup, dims=None)
 
     with pytest.raises(StockValidationError, match="Insufficient stock"):
@@ -508,7 +508,7 @@ async def test_transfer_send_over_dims_group_balance_rejected(
             session,
             from_task_id=ctx["from_task_id"],
             to_task_id=ctx["to_task_id"],
-            quantity=Decimal("4"),
+            quantity=Decimal(4),
             actor_id=ctx["user"].id,
             dimensions=DIMS_30,
         )

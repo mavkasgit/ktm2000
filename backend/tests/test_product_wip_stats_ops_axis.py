@@ -20,13 +20,13 @@ from __future__ import annotations
 from decimal import Decimal
 
 import pytest
-from sqlalchemy import update
-from sqlalchemy.ext.asyncio import AsyncSession
-
 from app.models.route import SectionOperation
 from app.models.section import Section
 from app.stock.models import QualityState, Reason
 from app.stock.services import StockCommand, StockCommandService
+from sqlalchemy import update
+from sqlalchemy.ext.asyncio import AsyncSession
+
 from tests.helpers.completed_operations import build_operation_route, ops_through
 
 pytestmark = pytest.mark.asyncio

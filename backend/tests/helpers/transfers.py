@@ -24,9 +24,6 @@ from collections.abc import Sequence
 from datetime import date, datetime
 from decimal import Decimal
 
-from sqlalchemy import select
-from sqlalchemy.ext.asyncio import AsyncSession
-
 from app.models import Product, ProductType, Section, User
 from app.models.internal_plan import SectionPlanLine
 from app.models.production_plan import (
@@ -43,6 +40,9 @@ from app.models.work_task import WorkTask
 from app.services.material_operations import completed_operations_for_task
 from app.stock.models import Reason
 from app.stock.services import StockCommand, StockCommandService
+from sqlalchemy import select
+from sqlalchemy.ext.asyncio import AsyncSession
+
 from tests.test_integrity_invariants import (
     _auth_headers,
     _make_user,
@@ -70,7 +70,7 @@ async def _make_two_ghp_setup(
     session: AsyncSession,
     *,
     sku: str = "STG2",
-    qty: Decimal = Decimal("10"),
+    qty: Decimal = Decimal(10),
 ) -> dict:
     """Две production-секции в разных GHP с маршрутом из двух этапов.
 
@@ -206,7 +206,7 @@ async def _make_tasks_transferable(
     from app.stock.services import StockProjectionManager
     pm = StockProjectionManager()
     cache = await pm.get_task_cache(session, src.id)
-    assert cache["completed_quantity"] >= Decimal("0")
+    assert cache["completed_quantity"] >= Decimal(0)
 
     return {"from_task_id": src.id, "to_task_id": dst.id, "user": setup["user"]}
 
@@ -508,7 +508,7 @@ async def _complete_saw(session: AsyncSession, *, saw_task: WorkTask, user: User
             product_id=saw_task.product_id,
             from_location_id=None,
             to_location_id=saw_task.section_id,
-            quantity=Decimal("100"),
+            quantity=Decimal(100),
             reason=Reason.MANUAL_IN,
             dimensions={"length_mm": 2700},
             completed_operations=consume_ops,
@@ -519,8 +519,8 @@ async def _complete_saw(session: AsyncSession, *, saw_task: WorkTask, user: User
     await complete_task(
         session,
         task_id=saw_task.id,
-        good_quantity=Decimal("100"),
-        defect_quantity=Decimal("0"),
+        good_quantity=Decimal(100),
+        defect_quantity=Decimal(0),
         actor_id=user.id,
     )
     await session.commit()

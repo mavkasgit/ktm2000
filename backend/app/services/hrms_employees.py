@@ -5,11 +5,12 @@ in the hrms_employees table. No user-linking — pure employee directory.
 """
 from __future__ import annotations
 
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 
 import httpx
 from sqlalchemy import String, cast, delete, func, or_, select
 from sqlalchemy.ext.asyncio import AsyncSession
+
 from app.core.config import settings
 from app.core.sorting import SortClause, apply_sort, parse_sort
 from app.models.hrms_employee import HrmsEmployee
@@ -74,7 +75,7 @@ def _normalize_field(value) -> str | None:
     if isinstance(value, int):
         return str(value)
     s = str(value).strip()
-    return s if s else None
+    return s or None
 
 
 def _build_employees_from_items(raw_items: list[dict], synced_at: datetime) -> list[HrmsEmployee]:
@@ -107,7 +108,7 @@ async def sync_employees(db: AsyncSession) -> tuple[list[HrmsEmployee], datetime
     if not raw_items:
         raise HrmsSyncError("HRMS вернул пустой список сотрудников")
 
-    synced_at = datetime.now(timezone.utc)
+    synced_at = datetime.now(UTC)
     employees = _build_employees_from_items(raw_items, synced_at)
     if not employees:
         raise HrmsSyncError("HRMS вернул данные без валидных сотрудников")
@@ -133,7 +134,7 @@ async def preview_sync(db: AsyncSession) -> SyncPreviewOut:
     if not raw_items:
         raise HrmsSyncError("HRMS вернул пустой список сотрудников")
 
-    synced_at = datetime.now(timezone.utc)
+    synced_at = datetime.now(UTC)
     next_employees = _build_employees_from_items(raw_items, synced_at)
     if not next_employees:
         raise HrmsSyncError("HRMS вернул данные без валидных сотрудников")

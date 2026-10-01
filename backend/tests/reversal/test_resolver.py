@@ -17,9 +17,6 @@ from __future__ import annotations
 from decimal import Decimal
 
 import pytest
-from sqlalchemy import func, select
-from sqlalchemy.ext.asyncio import AsyncSession
-
 from app.models.action_journal import Action, ActionStatus
 from app.reversal import errors
 from app.reversal.resolver import (
@@ -32,6 +29,9 @@ from app.reversal.service import Blocker, reversal_service
 from app.reversal.stock_compensator import StockCompensator
 from app.services.action_journal_service import action_journal_service
 from app.transfers.services import transfer_send
+from sqlalchemy import func, select
+from sqlalchemy.ext.asyncio import AsyncSession
+
 from tests.stock.test_transfer_stage2 import (
     _make_tasks_transferable,
     _make_two_ghp_setup,
@@ -180,9 +180,9 @@ async def test_transfer_pair_single_active_through_reverse(
 ) -> None:
     """Инвариант (ADR-0021): у типа с уникальным ref_id активное действие
     ровно одно на живой паре; после отката — ноль, фолбэк честно NotFound."""
-    setup = await _make_two_ghp_setup(session, sku="RSLVINV", qty=Decimal("10"))
+    setup = await _make_two_ghp_setup(session, sku="RSLVINV", qty=Decimal(10))
     ctx = await _make_tasks_transferable(session, client, setup)
-    tid = await _send(session, ctx, Decimal("3"), "rslvinv:t1")
+    tid = await _send(session, ctx, Decimal(3), "rslvinv:t1")
 
     assert await _active_count(session, "transfer_send", tid) == 1
     res = await resolve_action(
@@ -260,9 +260,9 @@ async def test_duplicate_pair_ambiguous_blocker_and_confirm_blocked(
     check()/plan() — это контракт легаси-caller'ов без id, ради которых
     политика и введена.
     """
-    setup = await _make_two_ghp_setup(session, sku="RSLVDUP", qty=Decimal("10"))
+    setup = await _make_two_ghp_setup(session, sku="RSLVDUP", qty=Decimal(10))
     ctx = await _make_tasks_transferable(session, client, setup)
-    tid = await _send(session, ctx, Decimal("3"), "rslvdup:t1")
+    tid = await _send(session, ctx, Decimal(3), "rslvdup:t1")
     a1 = (
         await session.execute(
             select(Action).where(

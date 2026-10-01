@@ -1,6 +1,6 @@
 """Drop users.password_hash — SSO-only auth, no local passwords (#28)."""
-from alembic import op
 import sqlalchemy as sa
+from alembic import op
 
 revision = "029_drop_users_password_hash"
 down_revision = "028_product_attributes_jsonb"

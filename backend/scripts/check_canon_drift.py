@@ -65,7 +65,6 @@ async def run_check(session: AsyncSession) -> int:
     получает его параметром (ADR-0004 §5).
     """
     from app.seeds.canon import build_plant_config
-
     from app.services.canon_drift import check_canon_drift
 
     report = await check_canon_drift(session, build_plant_config())

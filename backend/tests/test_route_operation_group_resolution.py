@@ -11,14 +11,13 @@
 from __future__ import annotations
 
 import pytest
-from sqlalchemy import select
-from sqlalchemy.ext.asyncio import AsyncSession
-
 from app.models.route import RouteRuleProfile
 from app.seeds.canon.models import SelectionRuleDef
 from app.seeds.canon.registry import build_plant_config, validate_rule_group_codes
 from app.seeds.run_seed import run_full_seed
 from app.services.route_builder import _NAME_VAR_MAPPING, build_route_from_profile
+from sqlalchemy import select
+from sqlalchemy.ext.asyncio import AsyncSession
 
 
 async def _anodizing_steps(session: AsyncSession, payload: dict) -> list[tuple[str, str]]:

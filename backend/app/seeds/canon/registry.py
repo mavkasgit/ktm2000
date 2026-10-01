@@ -7,8 +7,8 @@ build_plant_config() — единственная точка конструир�
 from __future__ import annotations
 
 from app.seeds.canon.models import (
-    ColorToken,
     ColorsCanon,
+    ColorToken,
     DisplayCanon,
     HangerRoundingRule,
     LabelsCanon,
@@ -20,9 +20,9 @@ from app.seeds.canon.models import (
     RolesCanon,
     RouteRuleProfileDef,
     RoutingCanon,
-    SPGDef,
     SectionDef,
     SelectionRuleDef,
+    SPGDef,
     TransformingOpRef,
 )
 
@@ -39,6 +39,7 @@ def build_plant_config() -> PlantConfig:
         ValueError: при нарушении cross-ref правил.
     """
     # RAW-данные (dict-литералы, authoring format)
+    from app.seeds.import_templates import IMPORT_TEMPLATES
     from app.seeds.plant_policies import (
         COLOR_TOKENS,
         HANGER_ROUNDING_RULE,
@@ -46,11 +47,10 @@ def build_plant_config() -> PlantConfig:
         STANDART_PROCESSING_VALUE,
         VALIDATION_ERROR_MESSAGES,
     )
-    from app.seeds.import_templates import IMPORT_TEMPLATES
     from app.seeds.route_rule_profiles import ROUTE_RULE_PROFILES
     from app.seeds.sections import (
-        SECTIONS_DATA,
         SECTION_OPS,
+        SECTIONS_DATA,
         TRANSFORMING_SECTION_OPS,
     )
     from app.seeds.selection_rules import SELECTION_RULES
@@ -107,6 +107,7 @@ def _build_display_canon(
     error_messages: dict[str, str],
 ) -> DisplayCanon:
     """Собирает DisplayCanon (лейблы, роли) и проверяет cross-ref правила 2, 3, 6."""
+    from app.models.user import UserRole
     from app.seeds.canon.display_data import (
         ACTION_LABELS,
         BACKUP_STAGE_LABELS,
@@ -134,7 +135,6 @@ def _build_display_canon(
         VALIDATION_LABELS,
         WARNING_LABELS,
     )
-    from app.models.user import UserRole
 
     role_codes = [r.code.value for r in ROLE_DEFS]
     _validate_unique_codes(role_codes, "role")

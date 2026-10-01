@@ -1,11 +1,12 @@
-from sqlalchemy.ext.asyncio import AsyncSession
-from typing import List, Any, Dict
+from typing import Any
 
-from app.models.audit_log import AuditLog, AuditAction, AuditEntityType
+from sqlalchemy.ext.asyncio import AsyncSession
+
+from app.models.audit_log import AuditAction, AuditEntityType, AuditLog
 from app.models.user import User
 
 
-def compute_changes(before: Dict[str, Any] | None, after: Dict[str, Any] | None) -> Dict[str, Any] | None:
+def compute_changes(before: dict[str, Any] | None, after: dict[str, Any] | None) -> dict[str, Any] | None:
     """
     Вычисляет разницу между двумя состояниями объекта (до и после).
     Возвращает словарь с ключами "before" и "after", содержащими только изменившиеся поля.
@@ -45,7 +46,7 @@ async def log_action(
     section_id: int | None = None,
     section_name: str | None = None,
     section_code: str | None = None,
-    task_ids: List[int] | None = None,
+    task_ids: list[int] | None = None,
     product_sku: str | None = None,
     operation_name: str | None = None,
     qty_text: str | None = None,
@@ -55,7 +56,7 @@ async def log_action(
     action: AuditAction | str | None = None,
     entity_type: AuditEntityType | str | None = None,
     entity_id: int | None = None,
-    changes: Dict[str, Any] | None = None,
+    changes: dict[str, Any] | None = None,
 ) -> AuditLog:
     task_ids_str = None
     if task_ids:

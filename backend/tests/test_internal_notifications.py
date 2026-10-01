@@ -7,14 +7,13 @@
 
 from __future__ import annotations
 
-from datetime import datetime, timedelta, timezone
+from datetime import UTC, datetime, timedelta
 
 import pytest
-from sqlalchemy import select
-
 from app.core.security import create_access_token
 from app.models.notification import Notification, UserNotificationState
 from app.models.user import User, UserRole
+from sqlalchemy import select
 
 NOTIFICATION_FIELDS = {
     "id",
@@ -31,7 +30,7 @@ NOTIFICATION_FIELDS = {
 
 
 def _dt(days_back: int = 0) -> datetime:
-    return datetime.now(timezone.utc) - timedelta(days=days_back)
+    return datetime.now(UTC) - timedelta(days=days_back)
 
 
 async def _make_user(session, *, username: str, role: UserRole = UserRole.viewer) -> User:

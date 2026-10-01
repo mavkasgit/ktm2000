@@ -6,8 +6,8 @@ Create Date: 2026-07-31
 
 """
 
-from alembic import op
 import sqlalchemy as sa
+from alembic import op
 from sqlalchemy.dialects import postgresql
 
 revision = "024_plan_position_dimensions"

@@ -9,14 +9,14 @@
 Констрейнт пересоздаётся, а не правится на месте: 072 уже применена на dev- и
 e2e-БД, и правка применённой миграции их бы не обновила.
 """
-from typing import Sequence, Union
+from collections.abc import Sequence
 
 from alembic import op
 
 revision: str = "073_stock_import_rows_tx_set_null"
-down_revision: Union[str, None] = "072_stock_import_history"
-branch_labels: Union[str, Sequence[str], None] = None
-depends_on: Union[str, Sequence[str], None] = None
+down_revision: str | None = "072_stock_import_history"
+branch_labels: str | Sequence[str] | None = None
+depends_on: str | Sequence[str] | None = None
 
 CONSTRAINT = "fk_stock_import_rows_stock_transaction_id_stock_transactions"
 

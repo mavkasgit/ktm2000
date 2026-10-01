@@ -2,11 +2,13 @@
 from __future__ import annotations
 
 import pytest
-from sqlalchemy.ext.asyncio import AsyncSession
-
 from app.models.dimension import DimensionType, ProductDimension
 from app.models.product import Product, ProductType
-from app.services.dimension_validation import MissingDimensionsError, resolve_product_dimensions
+from app.services.dimension_validation import (
+    MissingDimensionsError,
+    resolve_product_dimensions,
+)
+from sqlalchemy.ext.asyncio import AsyncSession
 
 
 async def _make_product(session: AsyncSession, *, sku: str) -> Product:

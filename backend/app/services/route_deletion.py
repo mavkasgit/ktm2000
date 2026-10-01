@@ -55,8 +55,8 @@ from app.models.route import (
 )
 from app.models.transfer import Transfer, TransferDiscrepancy
 from app.models.work_task import WorkTask
-from app.stock.models import StockTransaction
 from app.services.route_signature import AUTO_CODE_PREFIX
+from app.stock.models import StockTransaction
 
 
 @dataclass(frozen=True)

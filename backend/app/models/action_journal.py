@@ -15,8 +15,8 @@ from datetime import datetime
 from sqlalchemy import (
     BigInteger,
     CheckConstraint,
-    Enum,
     DateTime,
+    Enum,
     ForeignKey,
     Identity,
     String,

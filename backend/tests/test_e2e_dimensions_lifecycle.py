@@ -16,10 +16,6 @@ from decimal import Decimal
 from io import BytesIO
 
 import pytest
-from openpyxl import Workbook
-from sqlalchemy import select
-from sqlalchemy.ext.asyncio import AsyncSession
-
 from app.core.security import create_access_token
 from app.models.dimension import DimensionType, ProductDimension
 from app.models.internal_plan import SectionPlanLine
@@ -33,7 +29,12 @@ from app.models.production_plan import (
     ProductionPlan,
     ProductionPlanStatus,
 )
-from app.models.route import ProductionRoute, RouteOperation, RouteStage, SectionOperation
+from app.models.route import (
+    ProductionRoute,
+    RouteOperation,
+    RouteStage,
+    SectionOperation,
+)
 from app.models.section import Section
 from app.models.spg import SpgSection, StorageProductionGroup
 from app.models.user import User, UserRole
@@ -42,6 +43,9 @@ from app.stock import QualityState, Reason, StockCommand, StockCommandService
 from app.stock.models import StockBalance
 from app.stock.services import dimensions_match_clause
 from app.transfers.services import transfer_send
+from openpyxl import Workbook
+from sqlalchemy import select
+from sqlalchemy.ext.asyncio import AsyncSession
 
 from tests.helpers.transfers import _section_route_operations
 from tests.test_integrity_invariants import assert_no_invariants_violations
@@ -280,7 +284,7 @@ async def _get_balance(
             dimensions_match_clause(StockBalance.dimensions, dims),
         )
     )
-    return bal or Decimal("0")
+    return bal or Decimal(0)
 
 
 async def _do_transfer(
@@ -328,7 +332,7 @@ async def test_dimensions_lifecycle_import_to_saw(client, session: AsyncSession)
     headers = _auth_headers(user)
 
     # ── Шаг 1: Создать продукт с привязкой длины и маршрут ──────────────────
-    product, sections, route, stages = await _make_dimensions_route(
+    product, sections, route, _stages = await _make_dimensions_route(
         session, "DIM-E2E", transform_stage_sequence=4
     )
     await _link_length_dimension(session, product, is_required=True, default_value=2700)
@@ -367,7 +371,7 @@ async def test_dimensions_lifecycle_import_to_saw(client, session: AsyncSession)
 
     # Баланс: 100 × 2700мм на складе сырья
     bal_raw = await _get_balance(session, product.id, raw_sec.id, {"length_mm": 2700})
-    assert bal_raw == Decimal("100")
+    assert bal_raw == Decimal(100)
     await assert_no_invariants_violations(session, context="after-import-remainders")
 
     # ── Шаг 3: Создать позицию плана с outputs и выпустить ──────────────────
@@ -379,8 +383,8 @@ async def test_dimensions_lifecycle_import_to_saw(client, session: AsyncSession)
         session,
         product,
         route,
-        quantity=Decimal("200"),
-        input_quantity=Decimal("100"),
+        quantity=Decimal(200),
+        input_quantity=Decimal(100),
         input_dimensions={"length_mm": 2700},
         outputs=outputs,
     )
@@ -395,7 +399,7 @@ async def test_dimensions_lifecycle_import_to_saw(client, session: AsyncSession)
 
     # Задание пилы несёт спецификацию трансформации
     saw_task = tasks[2]  # SAW — 3-й production этап
-    assert saw_task.input_quantity == Decimal("100")
+    assert saw_task.input_quantity == Decimal(100)
     assert saw_task.input_dimensions == {"length_mm": 2700}
     assert len(saw_task.outputs) == 2
     await assert_no_invariants_violations(session, context="after-release")
@@ -409,7 +413,7 @@ async def test_dimensions_lifecycle_import_to_saw(client, session: AsyncSession)
         product_id=product.id,
         from_location_id=raw_sec.id,
         to_location_id=drill_sec.id,
-        quantity=Decimal("100"),
+        quantity=Decimal(100),
         reason=Reason.TRANSFER_SEND,
         dimensions={"length_mm": 2700},
         quality_state=QualityState.GOOD,
@@ -421,7 +425,7 @@ async def test_dimensions_lifecycle_import_to_saw(client, session: AsyncSession)
         product_id=product.id,
         from_location_id=None,
         to_location_id=None,
-        quantity=Decimal("100"),
+        quantity=Decimal(100),
         reason=Reason.TRANSFER_RECEIVE,
         dimensions={"length_mm": 2700},
         quality_state=QualityState.GOOD,
@@ -432,9 +436,9 @@ async def test_dimensions_lifecycle_import_to_saw(client, session: AsyncSession)
 
     # Баланс: 100 × 2700мм переместилось на сверловку
     bal_drill = await _get_balance(session, product.id, drill_sec.id, {"length_mm": 2700})
-    assert bal_drill == Decimal("100")
+    assert bal_drill == Decimal(100)
     bal_raw_after = await _get_balance(session, product.id, raw_sec.id, {"length_mm": 2700})
-    assert bal_raw_after == Decimal("0")
+    assert bal_raw_after == Decimal(0)
     await assert_no_invariants_violations(session, context="after-transfer-to-drill")
 
     # ── Шаг 5: Завершить сверловку (100 шт) ─────────────────────────────────
@@ -447,14 +451,14 @@ async def test_dimensions_lifecycle_import_to_saw(client, session: AsyncSession)
         session,
         from_task_id=drill_task.id,
         to_task_id=anod_task.id,
-        quantity=Decimal("100"),
+        quantity=Decimal(100),
         actor_id=user.id,
         dimensions={"length_mm": 2700},
     )
 
     # Баланс: 100 × 2700мм на анодировании
     bal_anod = await _get_balance(session, product.id, anod_sec.id, {"length_mm": 2700})
-    assert bal_anod == Decimal("100")
+    assert bal_anod == Decimal(100)
     await assert_no_invariants_violations(session, context="after-transfer-to-anod")
 
     # ── Шаг 7: Завершить анодирование (100 шт) ──────────────────────────────
@@ -466,13 +470,13 @@ async def test_dimensions_lifecycle_import_to_saw(client, session: AsyncSession)
         session,
         from_task_id=anod_task.id,
         to_task_id=saw_task.id,
-        quantity=Decimal("100"),
+        quantity=Decimal(100),
         actor_id=user.id,
         dimensions={"length_mm": 2700},
     )
 
     bal_saw = await _get_balance(session, product.id, saw_sec.id, {"length_mm": 2700})
-    assert bal_saw == Decimal("100")
+    assert bal_saw == Decimal(100)
     await assert_no_invariants_violations(session, context="after-transfer-to-saw")
 
     # ── Шаг 9: Завершить пилу (трансформация 100 × 2,7 → 100 × 0,9 + 100 × 1,8) ──
@@ -482,9 +486,9 @@ async def test_dimensions_lifecycle_import_to_saw(client, session: AsyncSession)
     bal_saw_2700 = await _get_balance(session, product.id, saw_sec.id, {"length_mm": 2700})
     bal_saw_900 = await _get_balance(session, product.id, saw_sec.id, {"length_mm": 900})
     bal_saw_1800 = await _get_balance(session, product.id, saw_sec.id, {"length_mm": 1800})
-    assert bal_saw_2700 == Decimal("0"), f"Expected 0, got {bal_saw_2700}"
-    assert bal_saw_900 == Decimal("100"), f"Expected 100, got {bal_saw_900}"
-    assert bal_saw_1800 == Decimal("100"), f"Expected 100, got {bal_saw_1800}"
+    assert bal_saw_2700 == Decimal(0), f"Expected 0, got {bal_saw_2700}"
+    assert bal_saw_900 == Decimal(100), f"Expected 100, got {bal_saw_900}"
+    assert bal_saw_1800 == Decimal(100), f"Expected 100, got {bal_saw_1800}"
     await assert_no_invariants_violations(session, context="after-saw-transform")
 
     # ── Шаг 10: Перемещение на упаковку (несёт 0,9 + 1,8) ──────────────────
@@ -497,7 +501,7 @@ async def test_dimensions_lifecycle_import_to_saw(client, session: AsyncSession)
             product_id=product.id,
             from_location_id=saw_sec.id,
             to_location_id=pack_sec.id,
-            quantity=Decimal("100"),
+            quantity=Decimal(100),
             reason=Reason.TRANSFER_SEND,
             dimensions=dims_out,
             quality_state=QualityState.GOOD,
@@ -509,7 +513,7 @@ async def test_dimensions_lifecycle_import_to_saw(client, session: AsyncSession)
             product_id=product.id,
             from_location_id=None,
             to_location_id=None,
-            quantity=Decimal("100"),
+            quantity=Decimal(100),
             reason=Reason.TRANSFER_RECEIVE,
             dimensions=dims_out,
             quality_state=QualityState.GOOD,
@@ -520,8 +524,8 @@ async def test_dimensions_lifecycle_import_to_saw(client, session: AsyncSession)
 
     bal_pack_900 = await _get_balance(session, product.id, pack_sec.id, {"length_mm": 900})
     bal_pack_1800 = await _get_balance(session, product.id, pack_sec.id, {"length_mm": 1800})
-    assert bal_pack_900 == Decimal("100")
-    assert bal_pack_1800 == Decimal("100")
+    assert bal_pack_900 == Decimal(100)
+    assert bal_pack_1800 == Decimal(100)
     await assert_no_invariants_violations(session, context="after-transfer-to-pack")
 
 
@@ -533,7 +537,7 @@ async def test_dimensionless_lifecycle_no_regressions(client, session: AsyncSess
     user = await _make_user(session, email="dimless@local")
 
     # Маршрут без трансформации (transform_stage_sequence=None → ни один этап не трансформирует)
-    product, sections, route, stages = await _make_dimensions_route(
+    product, sections, route, _stages = await _make_dimensions_route(
         session, "NODIM-E2E", transform_stage_sequence=99  # нет этапа с маркером
     )
     # Не привязываем length dimension — продукт безразмерный
@@ -550,7 +554,7 @@ async def test_dimensionless_lifecycle_no_regressions(client, session: AsyncSess
     svc = StockCommandService()
     await svc.record(session, StockCommand(
         product_id=product.id,
-        quantity=Decimal("100"),
+        quantity=Decimal(100),
         reason=Reason.MANUAL_IN,
         to_location_id=raw_sec.id,
         quality_state=QualityState.GOOD,
@@ -561,7 +565,7 @@ async def test_dimensionless_lifecycle_no_regressions(client, session: AsyncSess
         comment="Безразмерный остаток",
     ))
     bal_raw = await _get_balance(session, product.id, raw_sec.id, None)
-    assert bal_raw == Decimal("100")
+    assert bal_raw == Decimal(100)
     await assert_no_invariants_violations(session, context="nodim-after-import")
 
     # ── Позиция плана без dimensions ────────────────────────────────────────
@@ -569,7 +573,7 @@ async def test_dimensionless_lifecycle_no_regressions(client, session: AsyncSess
         session,
         product,
         route,
-        quantity=Decimal("100"),
+        quantity=Decimal(100),
         input_quantity=None,
         input_dimensions=None,
         outputs=[],
@@ -594,7 +598,7 @@ async def test_dimensionless_lifecycle_no_regressions(client, session: AsyncSess
         product_id=product.id,
         from_location_id=raw_sec.id,
         to_location_id=drill_sec.id,
-        quantity=Decimal("100"),
+        quantity=Decimal(100),
         reason=Reason.TRANSFER_SEND,
         dimensions=None,
         quality_state=QualityState.GOOD,
@@ -605,7 +609,7 @@ async def test_dimensionless_lifecycle_no_regressions(client, session: AsyncSess
         product_id=product.id,
         from_location_id=None,
         to_location_id=None,
-        quantity=Decimal("100"),
+        quantity=Decimal(100),
         reason=Reason.TRANSFER_RECEIVE,
         dimensions=None,
         quality_state=QualityState.GOOD,
@@ -613,7 +617,7 @@ async def test_dimensionless_lifecycle_no_regressions(client, session: AsyncSess
         created_by=user.id,
     ))
     bal_drill = await _get_balance(session, product.id, drill_sec.id, None)
-    assert bal_drill == Decimal("100")
+    assert bal_drill == Decimal(100)
     await assert_no_invariants_violations(session, context="nodim-after-transfer-drill")
 
     # ── Завершить сверловку ─────────────────────────────────────────────────
@@ -626,13 +630,13 @@ async def test_dimensionless_lifecycle_no_regressions(client, session: AsyncSess
         session,
         from_task_id=drill_task.id,
         to_task_id=anod_task.id,
-        quantity=Decimal("100"),
+        quantity=Decimal(100),
         actor_id=user.id,
         dimensions=None,
     )
 
     bal_anod = await _get_balance(session, product.id, anod_sec.id, None)
-    assert bal_anod == Decimal("100")
+    assert bal_anod == Decimal(100)
     await assert_no_invariants_violations(session, context="nodim-after-transfer-anod")
 
     # ── Завершить анодирование ──────────────────────────────────────────────
@@ -645,13 +649,13 @@ async def test_dimensionless_lifecycle_no_regressions(client, session: AsyncSess
         session,
         from_task_id=anod_task.id,
         to_task_id=saw_task.id,
-        quantity=Decimal("100"),
+        quantity=Decimal(100),
         actor_id=user.id,
         dimensions=None,
     )
 
     bal_saw = await _get_balance(session, product.id, saw_sec.id, None)
-    assert bal_saw == Decimal("100")
+    assert bal_saw == Decimal(100)
     await assert_no_invariants_violations(session, context="nodim-after-transfer-saw")
 
     # ── Завершить пилу (обычное завершение, без трансформации) ──────────────
@@ -660,5 +664,5 @@ async def test_dimensionless_lifecycle_no_regressions(client, session: AsyncSess
     # Баланс на пиле остаётся 100: завершение переносит материал из входной
     # группы в группу своего этапа, а не удваивает его (ADR-0055).
     bal_saw_after = await _get_balance(session, product.id, saw_sec.id, None)
-    assert bal_saw_after == Decimal("100")
+    assert bal_saw_after == Decimal(100)
     await assert_no_invariants_violations(session, context="nodim-after-complete-saw")

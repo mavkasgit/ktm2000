@@ -10,8 +10,6 @@ from datetime import UTC, datetime
 from decimal import Decimal
 
 import pytest
-from sqlalchemy import select
-
 from app.models.product import Product, ProductType
 from app.models.production_plan import (
     PlanPosition,
@@ -24,9 +22,10 @@ from app.models.production_plan import (
     ProductionPlanStatus,
 )
 from app.models.release_batch import ReleaseBatchPosition
-from app.models.route import ProductionRoute, RouteStage, RouteOperation
+from app.models.route import ProductionRoute, RouteOperation, RouteStage
 from app.models.section import Section
 from app.services.plan_generation import create_release_batch
+from sqlalchemy import select
 
 
 @pytest.mark.asyncio
@@ -98,7 +97,7 @@ async def test_take_position_to_work_with_dynamic_route(session) -> None:
         source_sku=product.sku,
         output_sku=product.sku,
         source_name=product.name,
-        quantity=Decimal("500"),
+        quantity=Decimal(500),
         route_id=route.id,  # CRITICAL: Must have route_id!
         route_origin=PlanPositionRouteOrigin.auto.value,
         route_assigned_at=datetime.now(UTC),
@@ -182,7 +181,7 @@ async def test_take_position_to_work_fails_without_route(session) -> None:
         source_sku=product.sku,
         output_sku=product.sku,
         source_name=product.name,
-        quantity=Decimal("100"),
+        quantity=Decimal(100),
         route_id=None,  # NO ROUTE!
         route_assigned_at=None,
         status=PlanPositionStatus.approved,

@@ -21,15 +21,14 @@
 Irreversible: yes — downgrade убирает колонку; сигнатуры выводятся из
 этапов и восстанавливаются повторным upgrade или пересчётом при сборке.
 """
-from typing import Sequence, Union
+from collections.abc import Sequence
 
 from alembic import op
 
-
 revision: str = "066_route_signature_backfill"
-down_revision: Union[str, None] = "065_route_stage_transit_normalization"
-branch_labels: Union[str, Sequence[str], None] = None
-depends_on: Union[str, Sequence[str], None] = None
+down_revision: str | None = "065_route_stage_transit_normalization"
+branch_labels: str | Sequence[str] | None = None
+depends_on: str | Sequence[str] | None = None
 
 
 _BACKFILL = """

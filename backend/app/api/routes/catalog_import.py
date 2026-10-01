@@ -10,9 +10,9 @@ from fastapi import APIRouter, Depends, File, HTTPException, UploadFile
 from fastapi.responses import Response
 from openpyxl import Workbook
 from sqlalchemy import String, cast, select, update
-from sqlalchemy.types import ARRAY
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import selectinload
+from sqlalchemy.types import ARRAY
 
 from app.api.deps import REFERENCES_WRITER_ROLES, require_role
 from app.api.routes.products import (
@@ -22,19 +22,25 @@ from app.api.routes.products import (
 )
 from app.core.config import settings
 from app.core.database import get_db
-from app.models.product import Product, ProductLength, ProductPair, ProductType, _length_key
+from app.models.product import (
+    Product,
+    ProductLength,
+    ProductPair,
+    ProductType,
+    _length_key,
+)
 from app.services.catalog_excel_import import (
     TEMPLATE_HEADERS,
-    parse_catalog_excel,
     ParsedCatalogRow,
-    validate_row_counts,
     build_quantity_dict,
     diff_catalog_row,
     effective_lengths,
     format_lengths_cell,
     format_quantities_cell,
     format_raw_lengths_cell,
+    parse_catalog_excel,
     resolve_raw_lengths,
+    validate_row_counts,
 )
 from app.services.hanger_quantity_calc import (
     DEFAULT_HANGER_SETTINGS,
@@ -307,7 +313,7 @@ async def preview_catalog_from_zip(
         stats = {"total": 0, "create": 0, "update": 0, "skip": 0}
 
         for row in rows:
-            sku, qty, length, notes, photo_thumb, photo_full = row
+            sku, qty, length, _notes, photo_thumb, photo_full = row
             stats["total"] += 1
 
             existing = await db.scalar(
@@ -807,11 +813,10 @@ async def apply_catalog_from_excel(
         if product is None:
             await _create_product_from_row(db, row)
             imported += 1
+        elif await _update_product_from_row(db, product, row):
+            updated += 1
         else:
-            if await _update_product_from_row(db, product, row):
-                updated += 1
-            else:
-                skipped += 1
+            skipped += 1
 
     # Фаза 2: пары — продукты уже записаны и видны в сессии.
     products_by_sku = await _load_products_by_sku(

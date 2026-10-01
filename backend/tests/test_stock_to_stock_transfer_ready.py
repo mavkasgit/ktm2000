@@ -4,8 +4,6 @@ from __future__ import annotations
 from decimal import Decimal
 
 import pytest
-from sqlalchemy import select
-
 from app.core.security import create_access_token
 from app.models.product import Product, ProductType
 from app.models.section import Section
@@ -14,6 +12,7 @@ from app.models.user import User, UserRole
 from app.models.work_task import WorkTask
 from app.stock.models import QualityState, Reason, StockBalance
 from app.stock.services import StockCommand, StockCommandService
+from sqlalchemy import select
 
 
 async def _make_user(session, email: str = "fg@local") -> User:
@@ -41,7 +40,7 @@ async def _make_finished_stock_to_shipment_fixture(
 ) -> dict:
     """FINISHED_STOCK → SHIPMENT в одной ГХП FG (как сид)."""
     from datetime import date
-    from app.models.route import ProductionRoute, RouteStage, RouteOperation
+
     from app.models.production_plan import (
         PlanPosition,
         PlanPositionStatus,
@@ -50,6 +49,7 @@ async def _make_finished_stock_to_shipment_fixture(
         ProductionPlan,
         ProductionPlanStatus,
     )
+    from app.models.route import ProductionRoute, RouteOperation, RouteStage
 
     fg_stock = Section(
         code=f"{sku}-FG",
@@ -170,7 +170,7 @@ async def _stock_balance_qty(session, *, location_id: int, product_id: int) -> D
             StockBalance.quality_state == QualityState.GOOD,
         )
     )
-    return bal or Decimal("0")
+    return bal or Decimal(0)
 
 
 async def _release_via_take_to_work(client, position_id: int) -> None:
@@ -186,8 +186,8 @@ async def test_finished_stock_to_shipment_appears_in_ready_and_transfers(client,
     """FG (одна SPG): FINISHED_STOCK → SHIPMENT в ready и POST /api/transfers."""
     user = await _make_user(session, "fg-xfer@test.local")
     headers = _auth_headers(user)
-    plan_qty = Decimal("50")
-    warehouse_qty = Decimal("200")
+    plan_qty = Decimal(50)
+    warehouse_qty = Decimal(200)
     fx = await _make_finished_stock_to_shipment_fixture(session, sku="FG2SHIP", qty=plan_qty)
     fg_sec = fx["sections"][0]
     ship_sec = fx["sections"][1]
@@ -214,7 +214,7 @@ async def test_finished_stock_to_shipment_appears_in_ready_and_transfers(client,
     assert items[0]["next_section_code"] == ship_sec.code
     task_id = items[0]["task_id"]
 
-    xfer_qty = Decimal("30")
+    xfer_qty = Decimal(30)
     send_resp = await client.post(
         "/api/transfers",
         json={

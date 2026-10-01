@@ -3,7 +3,6 @@ from __future__ import annotations
 from copy import deepcopy
 from typing import Any
 
-
 DEFAULT_IMPORT_NORMALIZATION_RULES: dict[str, Any] = {}
 
 # Варианты написания тире (unicode-дефисы, минус, широкий дефис и т.п.),

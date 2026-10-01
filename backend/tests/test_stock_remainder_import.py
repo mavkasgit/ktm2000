@@ -15,16 +15,16 @@ from __future__ import annotations
 from decimal import Decimal
 from io import BytesIO
 
-from httpx import AsyncClient
-from openpyxl import Workbook
-from sqlalchemy import select
-from sqlalchemy.ext.asyncio import AsyncSession
-
 from app.models import Product, ProductType, Section
 from app.models.import_template import ImportTemplate
 from app.models.route import SectionOperation
 from app.stock.models import QualityState, Reason, StockBalance, StockTransaction
 from app.stock.services import StockCommand, StockCommandService
+from httpx import AsyncClient
+from openpyxl import Workbook
+from sqlalchemy import select
+from sqlalchemy.ext.asyncio import AsyncSession
+
 from tests.test_integrity_invariants import assert_no_invariants_violations
 
 # Асинхронные тесты помечает pytest-asyncio сам (`asyncio_mode = auto` в
@@ -594,7 +594,7 @@ async def test_import_remainders_excel_clear_existing(
     await session.commit()
 
     # Создаём существующий остаток 200 шт
-    await _make_stock_balance(session, product.id, location.id, Decimal("200"))
+    await _make_stock_balance(session, product.id, location.id, Decimal(200))
 
     # Проверяем что баланс есть
     bal_before = await session.execute(
@@ -1163,7 +1163,7 @@ async def test_import_clipboard_creates_balance(
         )
     )
     assert balance is not None
-    assert balance.balance_qty == Decimal("15")
+    assert balance.balance_qty == Decimal(15)
 
 
 async def test_preview_clipboard_two_columns_without_quantity(

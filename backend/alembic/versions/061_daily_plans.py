@@ -3,15 +3,15 @@
 Revision ID: 061_daily_plans
 Revises: 060_length_model_cutover
 """
-from typing import Sequence, Union
+from collections.abc import Sequence
 
 import sqlalchemy as sa
 from alembic import op
 
 revision: str = "061_daily_plans"
-down_revision: Union[str, None] = "060_length_model_cutover"
-branch_labels: Union[str, Sequence[str], None] = None
-depends_on: Union[str, Sequence[str], None] = None
+down_revision: str | None = "060_length_model_cutover"
+branch_labels: str | Sequence[str] | None = None
+depends_on: str | Sequence[str] | None = None
 
 
 def upgrade() -> None:

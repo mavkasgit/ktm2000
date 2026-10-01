@@ -2,8 +2,6 @@ from datetime import date
 from decimal import Decimal
 
 import pytest
-from sqlalchemy import select
-
 from app.models.imports import ImportBatch, ImportBatchMode, ImportFile
 from app.models.internal_plan import SectionPlanLine
 from app.models.product import Product, ProductType
@@ -20,10 +18,10 @@ from app.models.production_plan import (
     ProductionPlanStatus,
 )
 from app.models.release_batch import ReleaseBatchPosition
-from app.models.route import ProductionRoute, RouteStage, RouteOperation
-
+from app.models.route import ProductionRoute, RouteOperation, RouteStage
 from app.models.section import Section
 from app.models.work_task import WorkTask, WorkTaskStatus
+from sqlalchemy import select
 
 
 async def _make_ready_product(session, sku: str = "FG-1") -> tuple[Product, list[Section], ProductionRoute]:
@@ -108,7 +106,7 @@ async def _make_matching_route_product(session, sku: str = "FG-MATCH") -> tuple[
 async def _make_plan_position(
     session,
     product: Product,
-    quantity: Decimal = Decimal("100"),
+    quantity: Decimal = Decimal(100),
     *,
     has_pack_ops: bool = False,
     route_id: int | None = None,
@@ -301,7 +299,7 @@ async def test_apply_change_set_can_be_rolled_back(client, session, tmp_path) ->
 
 @pytest.mark.asyncio
 async def test_apply_change_set_counts_duplicates(client, session, tmp_path) -> None:
-    product, _, route = await _make_ready_product(session, "FG-DUP")
+    product, _, _route = await _make_ready_product(session, "FG-DUP")
     plan = ProductionPlan(plan_no="PLAN-DUP", name="Plan Dup", status=ProductionPlanStatus.draft)
     file = ImportFile(
         original_filename="plan.xlsx",
@@ -446,7 +444,7 @@ async def test_release_resolves_paired_position_effective_product_as_product_a(c
     )
     session.add(pair)
 
-    product, sections, route = await _make_ready_product(session, "FG-PAIR-EFF")
+    _product, _sections, route = await _make_ready_product(session, "FG-PAIR-EFF")
     plan = ProductionPlan(
         plan_no="PLAN-PAIR-EFF",
         name="Plan Pair Eff",
@@ -461,7 +459,7 @@ async def test_release_resolves_paired_position_effective_product_as_product_a(c
         product_id=None,
         source_type=PlanSourceType.excel_import,
         source_sku="PAIR-EFF-B+PAIR-EFF-A",
-        quantity=Decimal("100"),
+        quantity=Decimal(100),
         source_payload={
             "paired_profile": True,
             # Компоненты намеренно в обратном порядке — резолв неупорядоченный.
@@ -514,7 +512,7 @@ async def test_release_uses_pair_snapshot_without_revalidating_pair(client, sess
     raw_b = Product(sku="PAIR-SNAP-B", name="Raw Snap B", type=ProductType.component, unit="pcs")
     session.add_all([raw_a, raw_b])
 
-    product, sections, route = await _make_ready_product(session, "FG-PAIR-SNAP")
+    _product, _sections, route = await _make_ready_product(session, "FG-PAIR-SNAP")
     plan = ProductionPlan(
         plan_no="PLAN-PAIR-SNAP",
         name="Plan Pair Snap",
@@ -529,7 +527,7 @@ async def test_release_uses_pair_snapshot_without_revalidating_pair(client, sess
         product_id=None,
         source_type=PlanSourceType.excel_import,
         source_sku="PAIR-SNAP-A+PAIR-SNAP-B",
-        quantity=Decimal("100"),
+        quantity=Decimal(100),
         source_payload={
             "paired_profile": True,
             "components": [{"sku": "PAIR-SNAP-A"}, {"sku": "PAIR-SNAP-B"}],
@@ -584,7 +582,7 @@ async def test_release_uses_pair_snapshot_without_revalidating_pair(client, sess
 @pytest.mark.asyncio
 async def test_release_quantity_cannot_exceed_approved_quantity(client, session) -> None:
     product, _, route = await _make_ready_product(session, "FG-LIMIT")
-    plan, position = await _make_plan_position(session, product, Decimal("50"), route_id=route.id)
+    plan, position = await _make_plan_position(session, product, Decimal(50), route_id=route.id)
     await session.commit()
 
     response = await client.post(

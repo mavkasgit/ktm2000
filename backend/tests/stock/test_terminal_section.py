@@ -20,9 +20,6 @@ from __future__ import annotations
 from decimal import Decimal
 
 import pytest
-from sqlalchemy import func, select
-from sqlalchemy.ext.asyncio import AsyncSession
-
 from app.models import Product, ProductType, Section, User, UserRole
 from app.models.action_journal import Action
 from app.models.route import SectionOperation
@@ -31,8 +28,8 @@ from app.services.material_operations import completed_operations_for_task
 from app.services.route_storage_classifier import (
     OPERATIONAL_STOCK_TYPES,
     SECTION_TYPE_TERMINAL,
-    STORAGE_TYPES,
     STOCK_TYPES,
+    STORAGE_TYPES,
     TERMINAL_TYPES,
     is_stock_section,
     is_storage_section,
@@ -49,9 +46,11 @@ from app.stock import (
 )
 from app.stock.import_service import resolve_target_section
 from app.stock.services import completed_operations_match_clause
+from sqlalchemy import func, select
+from sqlalchemy.ext.asyncio import AsyncSession
+
 from tests.stock.test_shopfloor_stage3 import _setup_minimal_route
 from tests.test_integrity_invariants import assert_no_invariants_violations
-
 
 # ─── helpers ────────────────────────────────────────────────────────────────
 
@@ -114,7 +113,7 @@ async def _balance(
         )
     )
     bal = row.scalar_one_or_none()
-    return bal.balance_qty if bal else Decimal("0")
+    return bal.balance_qty if bal else Decimal(0)
 
 
 # ─── классификатор ──────────────────────────────────────────────────────────
@@ -123,7 +122,7 @@ async def _balance(
 def test_terminal_section_outside_stock_classifiers() -> None:
     """``terminal`` — не оборачиваемый склад и не storage в смысле остатков."""
     assert SECTION_TYPE_TERMINAL == "terminal"
-    assert TERMINAL_TYPES == frozenset({"terminal"})
+    assert frozenset({"terminal"}) == TERMINAL_TYPES
     assert "terminal" not in STOCK_TYPES
     # «хранение, а не работа»: терминал в storage-наборе,
     # но вне оперативных остатков
@@ -159,7 +158,7 @@ async def test_transfer_to_terminal_writes_ledger_but_no_balance(
     await svc.record(session, StockCommand(
         product_id=product.id,
         to_location_id=finished.id,
-        quantity=Decimal("10"),
+        quantity=Decimal(10),
         reason=Reason.MANUAL_IN,
         created_by=user.id,
     ))
@@ -167,7 +166,7 @@ async def test_transfer_to_terminal_writes_ledger_but_no_balance(
         product_id=product.id,
         from_location_id=finished.id,
         to_location_id=shipped.id,
-        quantity=Decimal("4"),
+        quantity=Decimal(4),
         reason=Reason.TRANSFER_SEND,
         created_by=user.id,
     ))
@@ -181,8 +180,8 @@ async def test_transfer_to_terminal_writes_ledger_but_no_balance(
     assert [t.reason for t in txs] == [Reason.MANUAL_IN, Reason.TRANSFER_SEND]
 
     # Оперативный остаток: склад ГП уменьшился, у «Отправлено» баланса нет.
-    assert (await _balance(session, product.id, finished.id)) == Decimal("6")
-    assert (await _balance(session, product.id, shipped.id)) == Decimal("0")
+    assert (await _balance(session, product.id, finished.id)) == Decimal(6)
+    assert (await _balance(session, product.id, shipped.id)) == Decimal(0)
     assert (await session.execute(
         select(StockBalance).where(StockBalance.location_id == shipped.id)
     )).scalar_one_or_none() is None
@@ -206,7 +205,7 @@ async def test_rebuild_all_balances_skips_terminal(session: AsyncSession) -> Non
     await svc.record(session, StockCommand(
         product_id=product.id,
         to_location_id=finished.id,
-        quantity=Decimal("10"),
+        quantity=Decimal(10),
         reason=Reason.MANUAL_IN,
         created_by=user.id,
     ))
@@ -214,7 +213,7 @@ async def test_rebuild_all_balances_skips_terminal(session: AsyncSession) -> Non
         product_id=product.id,
         from_location_id=finished.id,
         to_location_id=shipped.id,
-        quantity=Decimal("4"),
+        quantity=Decimal(4),
         reason=Reason.TRANSFER_SEND,
         created_by=user.id,
     ))
@@ -226,7 +225,7 @@ async def test_rebuild_all_balances_skips_terminal(session: AsyncSession) -> Non
         product_id=product.id,
         location_id=shipped.id,
         quality_state=QualityState.GOOD,
-        balance_qty=Decimal("4"),
+        balance_qty=Decimal(4),
     ))
     await session.commit()
 
@@ -234,7 +233,7 @@ async def test_rebuild_all_balances_skips_terminal(session: AsyncSession) -> Non
     await pm.rebuild_all_balances(session)
     await session.commit()
 
-    assert (await _balance(session, product.id, finished.id)) == Decimal("6")
+    assert (await _balance(session, product.id, finished.id)) == Decimal(6)
     assert (await session.execute(
         select(StockBalance).where(StockBalance.location_id == shipped.id)
     )).scalar_one_or_none() is None
@@ -312,7 +311,7 @@ async def _terminal_task_with_shipped_material(
         product_id=fx["product"].id,
         from_location_id=None,
         to_location_id=fx["prod"].id,
-        quantity=Decimal("8"),
+        quantity=Decimal(8),
         reason=Reason.COMPLETE,
         task_id=task.id,
         created_by=fx["user"].id,
@@ -321,7 +320,7 @@ async def _terminal_task_with_shipped_material(
         product_id=fx["product"].id,
         from_location_id=fx["prod"].id,
         to_location_id=shipped.id,
-        quantity=Decimal("8"),
+        quantity=Decimal(8),
         reason=Reason.TRANSFER_SEND,
         task_id=task.id,
         created_by=fx["user"].id,
@@ -350,7 +349,7 @@ async def test_final_release_from_terminal_section_rejected(
         await final_release(
             session,
             task_id=task.id,
-            quantity=Decimal("8"),
+            quantity=Decimal(8),
             actor_id=fx["user"].id,
         )
 
@@ -375,7 +374,7 @@ async def test_final_release_from_terminal_section_rejected(
     assert (await session.execute(
         select(StockBalance).where(StockBalance.location_id == shipped.id)
     )).scalar_one_or_none() is None
-    assert (await _balance(session, fx["product"].id, fx["fg"].id)) == Decimal("0")
+    assert (await _balance(session, fx["product"].id, fx["fg"].id)) == Decimal(0)
 
     await assert_no_invariants_violations(session, context="terminal-final-release")
 
@@ -401,7 +400,7 @@ async def test_final_release_from_terminal_with_legacy_balance_rejected(
         product_id=fx["product"].id,
         location_id=shipped.id,
         quality_state=QualityState.GOOD,
-        balance_qty=Decimal("8"),
+        balance_qty=Decimal(8),
         completed_operations=legacy_ops,
     ))
     await session.commit()
@@ -411,7 +410,7 @@ async def test_final_release_from_terminal_with_legacy_balance_rejected(
         await final_release(
             session,
             task_id=task.id,
-            quantity=Decimal("8"),
+            quantity=Decimal(8),
             actor_id=fx["user"].id,
         )
 
@@ -419,11 +418,11 @@ async def test_final_release_from_terminal_with_legacy_balance_rejected(
     assert (await _balance(
         session, fx["product"].id, shipped.id,
         completed_operations=legacy_ops,
-    )) == Decimal("8")
+    )) == Decimal(8)
     assert (await _balance(
         session, fx["product"].id, fx["fg"].id,
         completed_operations=legacy_ops,
-    )) == Decimal("0")
+    )) == Decimal(0)
     assert (await session.execute(
         select(func.count(StockTransaction.id)).where(
             StockTransaction.task_id == task.id,

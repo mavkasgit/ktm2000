@@ -9,7 +9,6 @@ from app.models.internal_plan import SectionPlanLine
 from app.models.work_task import WorkTask
 from app.stock.ledger import net_quantity_expr
 from app.stock.models import Reason, StockTransaction
-
 from app.stock.task_cache import (
     compute_remaining,
     compute_task_available,
@@ -22,7 +21,7 @@ def _compute_available_from_balances(
     planned_quantity: Decimal,
     received_quantity: Decimal,
     issued_quantity: Decimal,
-    returned_quantity: Decimal = Decimal("0"),
+    returned_quantity: Decimal = Decimal(0),
     is_first_stage: bool,
 ) -> Decimal:
     """Compute available quantity from cached balances (pure, no DB)."""
@@ -53,13 +52,13 @@ async def _refresh_section_plan_line_cache(db: AsyncSession, section_plan_line_i
 
     if not task_ids:
         # Обнулить все cached_* на line
-        line.cached_available_quantity = Decimal("0")
-        line.cached_issued_quantity = Decimal("0")
-        line.cached_completed_quantity = Decimal("0")
-        line.cached_transferred_quantity = Decimal("0")
-        line.cached_received_quantity = Decimal("0")
-        line.cached_rejected_quantity = Decimal("0")
-        line.cached_remaining_quantity = Decimal("0")
+        line.cached_available_quantity = Decimal(0)
+        line.cached_issued_quantity = Decimal(0)
+        line.cached_completed_quantity = Decimal(0)
+        line.cached_transferred_quantity = Decimal(0)
+        line.cached_received_quantity = Decimal(0)
+        line.cached_rejected_quantity = Decimal(0)
+        line.cached_remaining_quantity = Decimal(0)
         return
 
     # Прямой SELECT из StockTransaction: sum(quantity) GROUP BY reason для всех task_ids
@@ -73,7 +72,7 @@ async def _refresh_section_plan_line_cache(db: AsyncSession, section_plan_line_i
     )
     sums: dict[str, Decimal] = {}
     for reason_val, qty in tx_rows:
-        sums[reason_val] = qty or Decimal("0")
+        sums[reason_val] = qty or Decimal(0)
 
     # Net для transfer_send/receive с компенсациями — canonical net-выражение
     # ledger (ADR-0018), единая компенсационная семантика.
@@ -90,15 +89,15 @@ async def _refresh_section_plan_line_cache(db: AsyncSession, section_plan_line_i
     )
     net_sums: dict[str, Decimal] = {}
     for reason_val, net in net_rows:
-        net_sums[reason_val] = net or Decimal("0")
+        net_sums[reason_val] = net or Decimal(0)
 
     def _s(reason: Reason) -> Decimal:
-        return sums.get(reason.value) or Decimal("0")
+        return sums.get(reason.value) or Decimal(0)
 
     completed = _s(Reason.COMPLETE)
     scrapped = _s(Reason.SCRAP)
-    transferred = net_sums.get(Reason.TRANSFER_SEND.value) or Decimal("0")
-    received = net_sums.get(Reason.TRANSFER_RECEIVE.value) or Decimal("0")
+    transferred = net_sums.get(Reason.TRANSFER_SEND.value) or Decimal(0)
+    received = net_sums.get(Reason.TRANSFER_RECEIVE.value) or Decimal(0)
     rejected = scrapped
     issued = effective_issued_quantity(received=received)
 

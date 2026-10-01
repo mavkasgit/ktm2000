@@ -1,13 +1,14 @@
+from collections.abc import Callable, Sequence
 from dataclasses import dataclass, field
+from uuid import UUID
+
 from fastapi import Depends, Header, HTTPException, Request, status
 from sqlalchemy import or_, select
 from sqlalchemy.ext.asyncio import AsyncSession
-from typing import Callable, Sequence
-from uuid import UUID
 
 from app.core.config import settings
 from app.core.database import get_db
-from app.core.security import decode_access_token, TokenError
+from app.core.security import TokenError, decode_access_token
 from app.models.user import User, UserRole
 from app.models.user_session import UserSession
 from app.models.work_task import WorkTask

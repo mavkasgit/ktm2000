@@ -6,10 +6,9 @@
 from __future__ import annotations
 
 import pytest
-from sqlalchemy.ext.asyncio import AsyncSession
-
 from app.models.dimension import DimensionType, ProductDimension
-from app.models.product import Product, ProductType, DimensionState
+from app.models.product import DimensionState, Product, ProductType
+from sqlalchemy.ext.asyncio import AsyncSession
 
 
 async def _make_product(

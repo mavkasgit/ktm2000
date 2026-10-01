@@ -18,9 +18,6 @@ from datetime import UTC, datetime
 from decimal import Decimal
 
 import pytest
-from sqlalchemy import func, select
-from sqlalchemy.ext.asyncio import AsyncSession
-
 from app.models.internal_plan import InternalPlan, SectionPlanLine
 from app.models.product import Product
 from app.models.production_plan import (
@@ -40,9 +37,16 @@ from app.services.shopfloor.operations_skipped import (
 )
 from app.stock import Reason, StockCommand, StockCommandService
 from app.stock.models import StockTransaction
+from sqlalchemy import func, select
+from sqlalchemy.ext.asyncio import AsyncSession
+
 from tests.helpers.completed_operations import (
     build_plan as _make_plan,
+)
+from tests.helpers.completed_operations import (
     build_product as _make_product,
+)
+from tests.helpers.completed_operations import (
     build_stock_to_shop_route as _make_route,
 )
 
@@ -171,7 +175,7 @@ async def test_skip_stage_closes_the_task_with_reason_and_writes_no_ledger(
         sections=[stock, prod],
         stages=stages,
         product=product,
-        quantity=Decimal("100"),
+        quantity=Decimal(100),
         task_statuses=[WorkTaskStatus.completed, WorkTaskStatus.ready],
     )
 
@@ -204,7 +208,7 @@ async def test_skip_stage_creates_the_task_when_the_stage_has_none(
         sections=[stock, prod],
         stages=stages,
         product=product,
-        quantity=Decimal("100"),
+        quantity=Decimal(100),
         task_statuses=[WorkTaskStatus.completed, None],
     )
 
@@ -240,7 +244,7 @@ async def test_position_with_completed_and_skipped_stages_reads_as_completed(
         sections=[stock, prod],
         stages=stages,
         product=product,
-        quantity=Decimal("100"),
+        quantity=Decimal(100),
         status=PlanPositionStatus.released,
         task_statuses=[WorkTaskStatus.ready, WorkTaskStatus.ready],
         extra_tasks=[(0, WorkTaskStatus.completed)],
@@ -279,7 +283,7 @@ async def test_skip_stage_rejects_an_already_completed_stage(session: AsyncSessi
         sections=[stock, prod],
         stages=stages,
         product=product,
-        quantity=Decimal("100"),
+        quantity=Decimal(100),
         task_statuses=[WorkTaskStatus.completed, WorkTaskStatus.completed],
     )
 
@@ -304,7 +308,7 @@ async def test_skip_stage_rejects_an_already_cancelled_stage(session: AsyncSessi
         sections=[stock, prod],
         stages=stages,
         product=product,
-        quantity=Decimal("100"),
+        quantity=Decimal(100),
         task_statuses=[WorkTaskStatus.completed, WorkTaskStatus.cancelled],
     )
 
@@ -330,7 +334,7 @@ async def test_skip_stage_requires_a_reason(session: AsyncSession) -> None:
         sections=[stock, prod],
         stages=stages,
         product=product,
-        quantity=Decimal("100"),
+        quantity=Decimal(100),
         task_statuses=[WorkTaskStatus.completed, WorkTaskStatus.ready],
     )
 
@@ -361,7 +365,7 @@ async def test_skipped_stage_does_not_hold_demand_in_the_stock_indicator(
         StockCommand(
             product_id=product.id,
             to_location_id=stock.id,
-            quantity=Decimal("1500"),
+            quantity=Decimal(1500),
             reason=Reason.MANUAL_IN,
             created_by=1,
         ),
@@ -375,7 +379,7 @@ async def test_skipped_stage_does_not_hold_demand_in_the_stock_indicator(
         sections=[stock, prod],
         stages=stages,
         product=product,
-        quantity=Decimal("400"),
+        quantity=Decimal(400),
         status=PlanPositionStatus.released,
         task_statuses=[WorkTaskStatus.completed, WorkTaskStatus.ready],
     )
@@ -387,7 +391,7 @@ async def test_skipped_stage_does_not_hold_demand_in_the_stock_indicator(
         sections=[stock, prod],
         stages=stages,
         product=product,
-        quantity=Decimal("300"),
+        quantity=Decimal(300),
         status=PlanPositionStatus.released,
         task_statuses=[WorkTaskStatus.completed, WorkTaskStatus.ready],
     )
@@ -398,7 +402,7 @@ async def test_skipped_stage_does_not_hold_demand_in_the_stock_indicator(
         sections=[stock, prod],
         stages=stages,
         product=product,
-        quantity=Decimal("100"),
+        quantity=Decimal(100),
         task_statuses=[WorkTaskStatus.completed, WorkTaskStatus.ready],
     )
 

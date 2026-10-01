@@ -81,8 +81,8 @@ def main(argv: list[str] | None = None) -> int:
         return 2
     apply_env_file()
 
-    from app.core.database import async_session
     from app.core.config import settings
+    from app.core.database import async_session
 
     print(f"Проверяем БД: {describe_target(settings.DATABASE_URL)}")
     print("Режим: УДАЛЕНИЕ" if args.execute else "Режим: dry-run (ничего не удаляется)")

@@ -1,9 +1,7 @@
 import pytest
-
 from app.core.security import create_access_token
 from app.models.section import Section
 from app.models.user import User, UserRole
-
 
 # ─── Strict auth tests (DEV_BYPASS_AUTH=False) ───────────────────────
 
@@ -48,9 +46,8 @@ async def test_magic_admin_rejected_when_strict(client, session, monkeypatch) ->
 @pytest.mark.asyncio
 async def test_magic_admin_allowed_when_dev_bypass(client, session, monkeypatch) -> None:
     """Literal Bearer 'admin' works only when DEV_BYPASS_AUTH is true."""
-    from sqlalchemy import select
-
     from app.core.config import settings
+    from sqlalchemy import select
 
     monkeypatch.setattr(settings, "DEV_BYPASS_AUTH", True)
 
@@ -79,8 +76,9 @@ async def test_magic_admin_allowed_when_dev_bypass(client, session, monkeypatch)
 async def test_expired_token_returns_401(client, session, monkeypatch) -> None:
     """Request with an expired token must return 401."""
     from datetime import UTC, datetime, timedelta
-    from jose import jwt
+
     from app.core.config import settings
+    from jose import jwt
 
     monkeypatch.setattr(settings, "DEV_BYPASS_AUTH", False)
 
@@ -252,14 +250,14 @@ async def test_update_user_sections(auth_client, session) -> None:
 async def test_transporter_can_manage_transfers_globally_but_not_shopfloor_tasks(session, client) -> None:
     from decimal import Decimal
 
-    from sqlalchemy import select
-
     from app.models.internal_plan import SectionPlanLine
     from app.models.section import Section
     from app.models.work_task import WorkTask
-    from app.services.shopfloor.cache import _refresh_section_plan_line_cache
     from app.services.material_operations import completed_operations_for_task
-    from app.stock import StockCommand, StockCommandService, Reason
+    from app.services.shopfloor.cache import _refresh_section_plan_line_cache
+    from app.stock import Reason, StockCommand, StockCommandService
+    from sqlalchemy import select
+
     from tests.test_plan_generation import _make_plan_position, _make_ready_product
 
     transporter = User(
@@ -319,7 +317,7 @@ async def test_transporter_can_manage_transfers_globally_but_not_shopfloor_tasks
         StockCommand(
             product_id=first_task.product_id,
             to_location_id=raw_stock.id,
-            quantity=Decimal("100"),
+            quantity=Decimal(100),
             reason=Reason.MANUAL_IN,
             completed_operations=seed_ops,
             created_by=admin_user.id,
@@ -331,7 +329,7 @@ async def test_transporter_can_manage_transfers_globally_but_not_shopfloor_tasks
             product_id=first_task.product_id,
             from_location_id=raw_stock.id,
             to_location_id=first_task.section_id,
-            quantity=Decimal("100"),
+            quantity=Decimal(100),
             reason=Reason.TRANSFER_RECEIVE,
             task_id=first_task.id,
             created_by=admin_user.id,

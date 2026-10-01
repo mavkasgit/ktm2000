@@ -11,10 +11,9 @@ from datetime import date
 from decimal import Decimal
 
 import pytest
-from sqlalchemy import select
-
 from app.core.security import create_access_token
 from app.models.internal_plan import SectionPlanLine
+from app.models.product import Product, ProductType
 from app.models.production_plan import (
     PlanPosition,
     PlanPositionStatus,
@@ -23,13 +22,13 @@ from app.models.production_plan import (
     ProductionPlan,
     ProductionPlanStatus,
 )
-from app.models.product import Product, ProductType
 from app.models.route import ProductionRoute, RouteOperation, RouteStage
 from app.models.section import Section
-from app.stock.models import Reason, StockTransaction
 from app.models.transfer import Transfer
 from app.models.user import User, UserRole
 from app.models.work_task import WorkTask
+from app.stock.models import Reason, StockTransaction
+from sqlalchemy import select
 
 
 async def _make_user(session, email: str = "bulk-exec@test.local") -> User:
@@ -59,7 +58,8 @@ async def _seed_stock_balance(
     с фейкового складского задания) из маршрута. MANUAL_IN без признака лёг
     бы в NULL-группу, и выдача не нашла бы остаток.
     """
-    from app.stock.services import StockCommand, StockCommandService, Reason
+    from app.stock.services import Reason, StockCommand, StockCommandService
+
     from tests.helpers.transfers import _section_route_operations
 
     svc = StockCommandService()
@@ -148,7 +148,7 @@ async def _make_plan_with_positions(
             source_type=PlanSourceType.manual,
             source_sku=product.sku,
             source_name=product.name,
-            quantity=Decimal("10"),
+            quantity=Decimal(10),
             source_payload={},
             status=status,
             validation_status=PlanPositionValidationStatus.valid,
@@ -175,7 +175,7 @@ def _auth_headers(user: User) -> dict[str, str]:
 @pytest.mark.asyncio
 async def test_soft_delete_batch_removes_only_cancelled(client, session) -> None:
     user = await _make_user(session, "soft-del-mixed@test.local")
-    plan, positions, _, _ = await _make_plan_with_positions(
+    _plan, positions, _, _ = await _make_plan_with_positions(
         session, "FG-SDEL-MIXED", 3, status=PlanPositionStatus.cancelled
     )
     # Promote the second position to approved so the bulk endpoint must skip it.
@@ -210,7 +210,7 @@ async def test_soft_delete_batch_removes_only_cancelled(client, session) -> None
 @pytest.mark.asyncio
 async def test_soft_delete_batch_isolates_failures(client, session) -> None:
     user = await _make_user(session, "soft-del-isolate@test.local")
-    plan, positions, _, _ = await _make_plan_with_positions(
+    _plan, positions, _, _ = await _make_plan_with_positions(
         session, "FG-SDEL-ISOLATE", 2, status=PlanPositionStatus.cancelled
     )
     headers = _auth_headers(user)
@@ -233,7 +233,7 @@ async def test_soft_delete_batch_isolates_failures(client, session) -> None:
 @pytest.mark.asyncio
 async def test_cancel_batch_with_mixed_states(client, session) -> None:
     user = await _make_user(session, "cancel-mixed@test.local")
-    plan, positions, _, _ = await _make_plan_with_positions(
+    _plan, positions, _, _ = await _make_plan_with_positions(
         session, "FG-CANCEL-MIX", 3, status=PlanPositionStatus.approved
     )
     # Cancel the second one beforehand to trigger a "skipped" outcome.
@@ -265,7 +265,7 @@ async def test_cancel_batch_with_mixed_states(client, session) -> None:
 @pytest.mark.asyncio
 async def test_restore_batch_after_cancel(client, session) -> None:
     user = await _make_user(session, "restore-after@test.local")
-    plan, positions, _, _ = await _make_plan_with_positions(
+    _plan, positions, _, _ = await _make_plan_with_positions(
         session, "FG-RESTORE", 2, status=PlanPositionStatus.approved
     )
     headers = _auth_headers(user)
@@ -300,7 +300,7 @@ async def test_restore_batch_after_cancel(client, session) -> None:
 @pytest.mark.asyncio
 async def test_manual_pass_batch_full_route(client, session) -> None:
     user = await _make_user(session, "manual-pass@test.local")
-    plan, positions, _, stages = await _make_plan_with_positions(
+    _plan, positions, _, stages = await _make_plan_with_positions(
         session, "FG-MANUAL-PASS", 2, status=PlanPositionStatus.approved
     )
     raw_section_id = stages[0].section_id
@@ -377,13 +377,13 @@ async def test_manual_pass_batch_full_route(client, session) -> None:
                 StockTransaction.reason == Reason.COMPLETE,
             )
         )
-        assert complete_qty == Decimal("10")
+        assert complete_qty == Decimal(10)
 
 
 @pytest.mark.asyncio
 async def test_manual_pass_batch_isolates_failure(client, session) -> None:
     user = await _make_user(session, "manual-pass-isolate@test.local")
-    plan, positions, _, stages = await _make_plan_with_positions(
+    _plan, positions, _, stages = await _make_plan_with_positions(
         session, "FG-MANUAL-ISO", 2, status=PlanPositionStatus.approved
     )
     position_id = positions[0].id

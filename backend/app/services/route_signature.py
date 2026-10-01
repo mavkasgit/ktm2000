@@ -17,8 +17,8 @@
 сравнивает базу саму с собой и собственных потерь при записи не заметит.
 """
 from __future__ import annotations
-import hashlib
 
+import hashlib
 from collections.abc import Iterable, Sequence
 from dataclasses import dataclass
 from typing import TYPE_CHECKING

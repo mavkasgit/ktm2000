@@ -8,8 +8,6 @@ from datetime import UTC, date, datetime
 from decimal import Decimal
 
 import pytest
-from sqlalchemy import select
-
 from app.models.internal_plan import SectionPlanLine
 from app.models.product import Product, ProductType
 from app.models.production_plan import (
@@ -21,7 +19,12 @@ from app.models.production_plan import (
     ProductionPlan,
     ProductionPlanStatus,
 )
-from app.models.route import ProductionRoute, RouteOperation, RouteStage, SectionOperation
+from app.models.route import (
+    ProductionRoute,
+    RouteOperation,
+    RouteStage,
+    SectionOperation,
+)
 from app.models.section import Section
 from app.models.work_task import WorkTask
 from app.seeds.sections import TRANSFORMING_SECTION_OPS
@@ -31,7 +34,7 @@ from app.services.route_transform import (
     resolve_stage_transforms_dimensions,
 )
 from app.services.shopfloor.queries_sections import get_section_board
-
+from sqlalchemy import select
 
 # --- helpers ---
 
@@ -186,8 +189,8 @@ async def test_transforming_stage_task_carries_input_and_multiple_outputs(client
         session,
         product,
         route,
-        quantity=Decimal("300"),
-        input_quantity=Decimal("150"),
+        quantity=Decimal(300),
+        input_quantity=Decimal(150),
         input_dimensions={"length_mm": 2700},
         outputs=MULTI_OUTPUTS,
     )
@@ -200,7 +203,7 @@ async def test_transforming_stage_task_carries_input_and_multiple_outputs(client
 
     transform_task = tasks[2]
     assert transform_task.route_stage_id == stages[2].id
-    assert transform_task.input_quantity == Decimal("150")
+    assert transform_task.input_quantity == Decimal(150)
     assert transform_task.input_dimensions == {"length_mm": 2700}
     assert transform_task.outputs == MULTI_OUTPUTS
 
@@ -213,14 +216,14 @@ async def test_transforming_stage_task_carries_input_and_multiple_outputs(client
 
 @pytest.mark.asyncio
 async def test_transforming_stage_task_single_output(client, session) -> None:
-    product, _, route, stages = await _make_product_with_route(session, "FG-TR-SINGLE", transform_stage_sequence=3)
+    product, _, route, _stages = await _make_product_with_route(session, "FG-TR-SINGLE", transform_stage_sequence=3)
     single = [{"row_number": 6, "quantity": "100", "dimensions": {"length_mm": 900}}]
     plan, position = await _make_position(
         session,
         product,
         route,
-        quantity=Decimal("100"),
-        input_quantity=Decimal("100"),
+        quantity=Decimal(100),
+        input_quantity=Decimal(100),
         input_dimensions={"length_mm": 2700},
         outputs=single,
     )
@@ -230,7 +233,7 @@ async def test_transforming_stage_task_single_output(client, session) -> None:
 
     tasks = await _tasks_by_sequence(session, position)
     transform_task = tasks[2]
-    assert transform_task.input_quantity == Decimal("100")
+    assert transform_task.input_quantity == Decimal(100)
     assert transform_task.input_dimensions == {"length_mm": 2700}
     assert transform_task.outputs == single
 
@@ -238,7 +241,7 @@ async def test_transforming_stage_task_single_output(client, session) -> None:
 @pytest.mark.asyncio
 async def test_position_without_dimensions_creates_plain_tasks(client, session) -> None:
     product, _, route, _ = await _make_product_with_route(session, "FG-TR-PLAIN", transform_stage_sequence=3)
-    plan, position = await _make_position(session, product, route, quantity=Decimal("100"))
+    plan, position = await _make_position(session, product, route, quantity=Decimal(100))
     await session.commit()
 
     await _release(client, plan, position, "100")
@@ -258,8 +261,8 @@ async def test_partial_release_scales_input_and_outputs(client, session) -> None
         session,
         product,
         route,
-        quantity=Decimal("300"),
-        input_quantity=Decimal("150"),
+        quantity=Decimal(300),
+        input_quantity=Decimal(150),
         input_dimensions={"length_mm": 2700},
         outputs=MULTI_OUTPUTS,
     )
@@ -269,7 +272,7 @@ async def test_partial_release_scales_input_and_outputs(client, session) -> None
 
     tasks = await _tasks_by_sequence(session, position)
     transform_task = tasks[2]
-    assert transform_task.input_quantity == Decimal("75")
+    assert transform_task.input_quantity == Decimal(75)
     assert transform_task.input_dimensions == {"length_mm": 2700}
     assert [entry["quantity"] for entry in transform_task.outputs] == ["75", "75"]
     assert [entry["dimensions"] for entry in transform_task.outputs] == [
@@ -286,8 +289,8 @@ async def test_stages_before_transform_planned_in_raw_input_units(client, sessio
         session,
         product,
         route,
-        quantity=Decimal("300"),
-        input_quantity=Decimal("150"),
+        quantity=Decimal(300),
+        input_quantity=Decimal(150),
         input_dimensions={"length_mm": 2700},
         outputs=MULTI_OUTPUTS,
     )
@@ -305,12 +308,12 @@ async def test_stages_before_transform_planned_in_raw_input_units(client, sessio
     assert len(pre_tasks) == len(pre_stage_ids), "каждый этап до пилы получает задание"
     for task in pre_tasks:
         # Сырьё: 150 штук входа, а не 300 штук выходов.
-        assert task.planned_quantity == Decimal("150")
+        assert task.planned_quantity == Decimal(150)
         assert task.input_quantity is None
 
     transform_task = next(task for task in tasks if task.route_stage_id == transform_stage.id)
-    assert transform_task.planned_quantity == Decimal("300")
-    assert transform_task.input_quantity == Decimal("150")
+    assert transform_task.planned_quantity == Decimal(300)
+    assert transform_task.input_quantity == Decimal(150)
 
     post_tasks = [
         task for task in tasks if task.route_stage_id not in (pre_stage_ids | {transform_stage.id})
@@ -318,7 +321,7 @@ async def test_stages_before_transform_planned_in_raw_input_units(client, sessio
     assert len(post_tasks) == 3, "этапы после пилы получают задания"
     for task in post_tasks:
         # Пила и далее — штуки позиции (выходы).
-        assert task.planned_quantity == Decimal("300")
+        assert task.planned_quantity == Decimal(300)
 
 
 @pytest.mark.asyncio
@@ -329,8 +332,8 @@ async def test_partial_release_scales_stages_before_transform(client, session) -
         session,
         product,
         route,
-        quantity=Decimal("300"),
-        input_quantity=Decimal("150"),
+        quantity=Decimal(300),
+        input_quantity=Decimal(150),
         input_dimensions={"length_mm": 2700},
         outputs=MULTI_OUTPUTS,
     )
@@ -346,13 +349,13 @@ async def test_partial_release_scales_stages_before_transform(client, session) -
     for task in tasks:
         if task.route_stage_id in pre_stage_ids:
             # 150 штук входа × (150 / 300) — половина сырья.
-            assert task.planned_quantity == Decimal("75")
+            assert task.planned_quantity == Decimal(75)
         else:
             # Пила и далее — половина штук позиции.
-            assert task.planned_quantity == Decimal("150")
+            assert task.planned_quantity == Decimal(150)
 
     transform_task = next(task for task in tasks if task.route_stage_id == transform_stage.id)
-    assert transform_task.input_quantity == Decimal("75")
+    assert transform_task.input_quantity == Decimal(75)
 
 
 @pytest.mark.asyncio
@@ -360,7 +363,7 @@ async def test_partial_release_scales_stages_before_transform(client, session) -
     ("sku", "transform_stage_sequence", "input_quantity"),
     [
         ("FG-TR-NOINPUT", 3, None),
-        ("FG-TR-NOSAW", None, Decimal("150")),
+        ("FG-TR-NOSAW", None, Decimal(150)),
     ],
     ids=["no_input_quantity", "no_transform_stage"],
 )
@@ -379,7 +382,7 @@ async def test_without_raw_basis_all_stages_planned_in_position_units(
         session,
         product,
         route,
-        quantity=Decimal("300"),
+        quantity=Decimal(300),
         input_quantity=input_quantity,
         input_dimensions={"length_mm": 2700} if input_quantity is not None else None,
         outputs=MULTI_OUTPUTS,
@@ -391,7 +394,7 @@ async def test_without_raw_basis_all_stages_planned_in_position_units(
     tasks = await _tasks_by_sequence(session, position)
     assert len(tasks) == 6
     for task in tasks:
-        assert task.planned_quantity == Decimal("300")
+        assert task.planned_quantity == Decimal(300)
 
 
 # --- доска участка ---
@@ -404,8 +407,8 @@ async def test_section_board_shows_single_card_with_summary(client, session) -> 
         session,
         product,
         route,
-        quantity=Decimal("300"),
-        input_quantity=Decimal("150"),
+        quantity=Decimal(300),
+        input_quantity=Decimal(150),
         input_dimensions={"length_mm": 2700},
         outputs=MULTI_OUTPUTS,
     )
@@ -486,19 +489,19 @@ def _position_stub(quantity: str, input_quantity: str | None, outputs: list[dict
 
 def test_build_transform_spec_empty_outputs_gives_no_fields() -> None:
     position = _position_stub("100", None, [])
-    assert build_transform_spec(position, Decimal("100")) == {}
+    assert build_transform_spec(position, Decimal(100)) == {}
 
 
 def test_build_transform_spec_zero_quantity_gives_no_fields() -> None:
     position = _position_stub("300", "150", list(MULTI_OUTPUTS))
-    assert build_transform_spec(position, Decimal("0")) == {}
+    assert build_transform_spec(position, Decimal(0)) == {}
 
 
 def test_build_transform_spec_does_not_mutate_position_outputs() -> None:
     outputs = [dict(entry) for entry in MULTI_OUTPUTS]
     position = _position_stub("300", "150", outputs)
-    spec = build_transform_spec(position, Decimal("150"))
-    assert spec["input_quantity"] == Decimal("75")
+    spec = build_transform_spec(position, Decimal(150))
+    assert spec["input_quantity"] == Decimal(75)
     assert [entry["quantity"] for entry in spec["outputs"]] == ["75", "75"]
     # Исходные выходы позиции не изменились.
     assert [entry["quantity"] for entry in outputs] == ["150", "150"]

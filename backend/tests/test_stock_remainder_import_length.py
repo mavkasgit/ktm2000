@@ -13,11 +13,6 @@ from __future__ import annotations
 from io import BytesIO
 
 import pytest
-from httpx import AsyncClient
-from openpyxl import Workbook, load_workbook
-from sqlalchemy import select
-from sqlalchemy.ext.asyncio import AsyncSession
-
 from app.models import Product, ProductType, Section
 from app.models.dimension import DimensionType, ProductDimension
 from app.stock.import_service import (
@@ -25,6 +20,11 @@ from app.stock.import_service import (
     parse_remainders_excel,
 )
 from app.stock.models import StockBalance, StockTransaction
+from httpx import AsyncClient
+from openpyxl import Workbook, load_workbook
+from sqlalchemy import select
+from sqlalchemy.ext.asyncio import AsyncSession
+
 from tests.test_integrity_invariants import assert_no_invariants_violations
 
 pytestmark = pytest.mark.asyncio

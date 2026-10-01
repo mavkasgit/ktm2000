@@ -3,15 +3,15 @@
 Revision ID: 064_plan_position_validation_overridden
 Revises: 063_work_task_skipped_stage
 """
-from typing import Sequence, Union
+from collections.abc import Sequence
 
 import sqlalchemy as sa
 from alembic import op
 
 revision: str = "064_plan_position_validation_overridden"
-down_revision: Union[str, None] = "063_work_task_skipped_stage"
-branch_labels: Union[str, Sequence[str], None] = None
-depends_on: Union[str, Sequence[str], None] = None
+down_revision: str | None = "063_work_task_skipped_stage"
+branch_labels: str | Sequence[str] | None = None
+depends_on: str | Sequence[str] | None = None
 
 ENUM_TYPE = "plan_position_validation_status"
 ENUM_VALUE = "overridden"

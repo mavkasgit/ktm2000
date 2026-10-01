@@ -16,8 +16,6 @@ from __future__ import annotations
 from decimal import Decimal
 
 import pytest
-from sqlalchemy.ext.asyncio import AsyncSession
-
 from app.models.section import Section
 from app.services.material_operations import (
     CompletedOperationsError,
@@ -33,8 +31,9 @@ from app.stock import (
     StockCommandService,
     StockValidationError,
 )
-from tests.helpers.completed_operations import build_operation_route
+from sqlalchemy.ext.asyncio import AsyncSession
 
+from tests.helpers.completed_operations import build_operation_route
 
 # ─── 1. Форма ────────────────────────────────────────────────────────────────
 
@@ -106,7 +105,7 @@ async def test_compensation_mirrors_empty_list_of_source(session: AsyncSession) 
         StockCommand(
             product_id=fx["product"].id,
             to_location_id=press.section_id,
-            quantity=Decimal("10"),
+            quantity=Decimal(10),
             reason=Reason.MANUAL_IN,
             task_id=press.id,
             created_by=fx["user"].id,
@@ -120,7 +119,7 @@ async def test_compensation_mirrors_empty_list_of_source(session: AsyncSession) 
             product_id=fx["product"].id,
             from_location_id=press.section_id,
             to_location_id=None,
-            quantity=Decimal("10"),
+            quantity=Decimal(10),
             reason=Reason.MANUAL_IN,
             reverses_id=planned.id,
             created_by=fx["user"].id,
@@ -147,7 +146,7 @@ async def test_compensation_mirrors_null_of_source(session: AsyncSession) -> Non
         StockCommand(
             product_id=fx["product"].id,
             to_location_id=press.section_id,
-            quantity=Decimal("10"),
+            quantity=Decimal(10),
             reason=Reason.MANUAL_IN,
             created_by=fx["user"].id,
         ),
@@ -160,7 +159,7 @@ async def test_compensation_mirrors_null_of_source(session: AsyncSession) -> Non
             product_id=fx["product"].id,
             from_location_id=press.section_id,
             to_location_id=None,
-            quantity=Decimal("10"),
+            quantity=Decimal(10),
             reason=Reason.MANUAL_IN,
             reverses_id=source.id,
             created_by=fx["user"].id,
@@ -188,7 +187,7 @@ async def test_compensation_with_different_operations_is_rejected(
         StockCommand(
             product_id=fx["product"].id,
             to_location_id=press.section_id,
-            quantity=Decimal("10"),
+            quantity=Decimal(10),
             reason=Reason.MANUAL_IN,
             task_id=press.id,
             created_by=fx["user"].id,
@@ -203,7 +202,7 @@ async def test_compensation_with_different_operations_is_rejected(
                 product_id=fx["product"].id,
                 from_location_id=press.section_id,
                 to_location_id=None,
-                quantity=Decimal("10"),
+                quantity=Decimal(10),
                 reason=Reason.MANUAL_IN,
                 completed_operations=["PRESS_COMB"],
                 reverses_id=planned.id,
@@ -231,7 +230,7 @@ async def test_compensation_may_restate_source_operations(
         StockCommand(
             product_id=fx["product"].id,
             to_location_id=press.section_id,
-            quantity=Decimal("10"),
+            quantity=Decimal(10),
             reason=Reason.MANUAL_IN,
             task_id=press.id,
             created_by=fx["user"].id,
@@ -243,7 +242,7 @@ async def test_compensation_may_restate_source_operations(
             product_id=fx["product"].id,
             from_location_id=press.section_id,
             to_location_id=None,
-            quantity=Decimal("10"),
+            quantity=Decimal(10),
             reason=Reason.MANUAL_IN,
             completed_operations=["PRESS_WINDOW", "PRESS_COMB", "ISSUE_RAW"],
             reverses_id=planned.id,
@@ -276,7 +275,7 @@ async def test_plan_write_without_resolvable_route_is_rejected(
             StockCommand(
                 product_id=fx["product"].id,
                 to_location_id=fx["sections"][0].id,
-                quantity=Decimal("10"),
+                quantity=Decimal(10),
                 reason=Reason.MANUAL_IN,
                 section_plan_line_id=fx["plan_lines"][0].id,
                 created_by=fx["user"].id,
@@ -302,7 +301,7 @@ async def test_plan_write_without_route_allowed_to_store_null(
         StockCommand(
             product_id=fx["product"].id,
             to_location_id=fx["sections"][0].id,
-            quantity=Decimal("10"),
+            quantity=Decimal(10),
             reason=Reason.MANUAL_IN,
             section_plan_line_id=fx["plan_lines"][0].id,
             allow_unknown_completed_operations=True,
@@ -338,7 +337,7 @@ async def test_non_plan_write_stores_null(session: AsyncSession) -> None:
         StockCommand(
             product_id=fx["product"].id,
             to_location_id=stock.id,
-            quantity=Decimal("10"),
+            quantity=Decimal(10),
             reason=Reason.MANUAL_IN,
             created_by=fx["user"].id,
         ),
@@ -364,7 +363,7 @@ async def test_plan_write_derives_operations_from_route(
         StockCommand(
             product_id=fx["product"].id,
             to_location_id=press.section_id,
-            quantity=Decimal("10"),
+            quantity=Decimal(10),
             reason=Reason.MANUAL_IN,
             task_id=press.id,
             created_by=fx["user"].id,
@@ -386,7 +385,7 @@ async def test_unknown_operation_code_is_rejected(session: AsyncSession) -> None
             StockCommand(
                 product_id=fx["product"].id,
                 to_location_id=fx["sections"][0].id,
-                quantity=Decimal("10"),
+                quantity=Decimal(10),
                 reason=Reason.MANUAL_IN,
                 completed_operations=["PRESS_СOMB"],
                 created_by=fx["user"].id,

@@ -58,4 +58,4 @@ async def resolve_product_dimensions(
     if missing:
         raise MissingDimensionsError(sorted(missing))
 
-    return result if result else None
+    return result or None

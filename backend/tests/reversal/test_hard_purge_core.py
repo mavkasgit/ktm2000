@@ -12,19 +12,18 @@
 """
 from __future__ import annotations
 
+import re
 from decimal import Decimal
 
-import re
-
 import pytest
-from sqlalchemy import event, select
-from sqlalchemy.ext.asyncio import AsyncSession
-
 from app.models.action_journal import Action, ActionStatus
 from app.reversal import errors
 from app.reversal.service import reversal_service
 from app.stock.models import StockBalance, StockTransaction
 from app.transfers.services import transfer_send
+from sqlalchemy import event, select
+from sqlalchemy.ext.asyncio import AsyncSession
+
 from tests.stock.test_transfer_stage2 import (
     _make_tasks_transferable,
     _make_two_ghp_setup,
@@ -36,13 +35,13 @@ pytestmark = pytest.mark.asyncio
 
 async def _reversed_action(session: AsyncSession, client, sku: str) -> Action:
     """Передача, немедленно скомпенсированная обратной (status='reversed')."""
-    setup = await _make_two_ghp_setup(session, sku=sku, qty=Decimal("10"))
+    setup = await _make_two_ghp_setup(session, sku=sku, qty=Decimal(10))
     ctx = await _make_tasks_transferable(session, client, setup)
     result = await transfer_send(
         session,
         from_task_id=ctx["from_task_id"],
         to_task_id=ctx["to_task_id"],
-        quantity=Decimal("4"),
+        quantity=Decimal(4),
         actor_id=ctx["user"].id,
         idempotency_key=f"{sku}:t1",
     )
@@ -74,10 +73,10 @@ async def _net_by_key(session: AsyncSession) -> dict[tuple[int, int, str], Decim
     for t in txs:
         if t.to_location_id is not None:
             key = (t.product_id, t.to_location_id, str(t.to_quality_state))
-            net[key] = net.get(key, Decimal("0")) + t.quantity
+            net[key] = net.get(key, Decimal(0)) + t.quantity
         if t.from_location_id is not None:
             key = (t.product_id, t.from_location_id, str(t.from_quality_state))
-            net[key] = net.get(key, Decimal("0")) - t.quantity
+            net[key] = net.get(key, Decimal(0)) - t.quantity
     return {k: v for k, v in net.items() if v != 0}
 
 
@@ -92,7 +91,7 @@ async def test_dry_run_report_without_changes(session: AsyncSession, client) -> 
     assert len(report.pairs) == 2
     for pair in report.pairs:
         assert pair.source_tx_id != pair.reverse_tx_id
-        assert pair.quantity == Decimal("4")
+        assert pair.quantity == Decimal(4)
     assert {p.source_tx_id for p in report.pairs}.isdisjoint(
         {p.reverse_tx_id for p in report.pairs}
     )
@@ -187,13 +186,13 @@ async def test_confirm_deletes_compensations_before_sources(
 
 
 async def test_rejects_active_action(session: AsyncSession, client) -> None:
-    setup = await _make_two_ghp_setup(session, sku="HPCORE4", qty=Decimal("10"))
+    setup = await _make_two_ghp_setup(session, sku="HPCORE4", qty=Decimal(10))
     ctx = await _make_tasks_transferable(session, client, setup)
     result = await transfer_send(
         session,
         from_task_id=ctx["from_task_id"],
         to_task_id=ctx["to_task_id"],
-        quantity=Decimal("2"),
+        quantity=Decimal(2),
         actor_id=ctx["user"].id,
         idempotency_key="hpcore4:t1",
     )

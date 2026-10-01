@@ -3,8 +3,6 @@
 from __future__ import annotations
 
 import pytest
-from sqlalchemy.ext.asyncio import AsyncSession
-
 from app.models.product import (
     HANGER_MODE_AUTO,
     HANGER_MODE_MANUAL,
@@ -20,6 +18,7 @@ from app.services.product_pair_resolver import (
     pair_length_candidates,
     resolve_pair_n,
 )
+from sqlalchemy.ext.asyncio import AsyncSession
 
 
 def _single_product(

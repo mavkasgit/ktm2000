@@ -4,17 +4,17 @@ from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import selectinload
 
-from app.models.product import Product
 from app.models.imports import ImportBatch
+from app.models.product import Product
 from app.models.production_plan import PlanPosition
 from app.models.route import RouteStage
 from app.models.section import Section
-from app.services.route_matcher import resolve_position_route
-from app.services.route_selection import select_route_for_payload
 
 # Derived из LabelsCanon (ADR-0004): ключи с префиксом "route_" + route-специфичные.
 # Устраняет мёртвый дубль ключей plant_policies.
 from app.seeds.canon.registry import build_plant_config as _build
+from app.services.route_matcher import resolve_position_route
+from app.services.route_selection import select_route_for_payload
 
 _ROUTE_PREFIXES = ("route_", "no_route_")
 ROUTE_ERROR_CODES: frozenset[str] = frozenset(

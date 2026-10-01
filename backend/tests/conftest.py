@@ -1,11 +1,11 @@
 from __future__ import annotations
 
-from collections.abc import AsyncIterator, Iterator
 import os
 import re
 import shutil
 import tempfile
 import uuid
+from collections.abc import AsyncIterator, Iterator
 
 os.environ.setdefault("DEV_BYPASS_AUTH", "true")
 # `POST /production-plans/reset-all` в бою закрыт флагом (issue #234) и отвечает
@@ -38,17 +38,20 @@ os.environ["STORAGE_ROOT"] = _TEST_STORAGE_ROOT
 
 import pytest
 import pytest_asyncio
-from httpx import ASGITransport, AsyncClient
-from sqlalchemy import text
-from sqlalchemy.engine import URL, make_url
-from sqlalchemy.ext.asyncio import AsyncEngine, AsyncSession, async_sessionmaker, create_async_engine
-from sqlalchemy.pool import NullPool
-
 from app.core.config import settings
 from app.core.database import get_db
 from app.main import app
 from app.models.base import Base
-
+from httpx import ASGITransport, AsyncClient
+from sqlalchemy import text
+from sqlalchemy.engine import URL, make_url
+from sqlalchemy.ext.asyncio import (
+    AsyncEngine,
+    AsyncSession,
+    async_sessionmaker,
+    create_async_engine,
+)
+from sqlalchemy.pool import NullPool
 
 DEFAULT_TEST_DATABASE_URL = "postgresql+asyncpg://ktm2000_user:ktm2000_pass_test@localhost:5441/ktm2000_test"
 DB_MODE_HYBRID = "hybrid"
@@ -436,11 +439,10 @@ async def client(session: AsyncSession) -> AsyncIterator[AsyncClient]:
 @pytest_asyncio.fixture
 async def auth_client(session: AsyncSession) -> AsyncIterator[AsyncClient]:
     """Client with a valid JWT token in Authorization header."""
-    from sqlalchemy import select
-    from sqlalchemy.orm import selectinload
-
     from app.core.security import create_access_token
     from app.models.user import User, UserRole
+    from sqlalchemy import select
+    from sqlalchemy.orm import selectinload
 
     test_user = User(
         username="testauth",

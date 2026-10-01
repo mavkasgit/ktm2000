@@ -3,8 +3,6 @@
 from __future__ import annotations
 
 import pytest
-from sqlalchemy import text
-
 from app.models.section import Section
 from app.models.user import User, UserRole, user_sections
 from app.services.users_queries import (
@@ -13,6 +11,7 @@ from app.services.users_queries import (
     _SORT_NULLS_LAST_FIELDS,
     VALID_SORT_FIELDS,
 )
+from sqlalchemy import text
 
 
 async def _make_user(
@@ -341,8 +340,8 @@ def test_users_sort_table_keys_match_valid_fields() -> None:
     либо 400 на существующей колонке, либо поле в контракте без резолва.
     """
     assert set(_SORT_COLUMNS) == VALID_SORT_FIELDS
-    assert VALID_SORT_FIELDS == {
+    assert {
         "id", "username", "full_name", "email", "role", "is_active", "created_at", "section",
-    }
+    } == VALID_SORT_FIELDS
     assert set(_SORT_NULLS_LAST_FIELDS) <= VALID_SORT_FIELDS
     assert _SORT_DEFAULT.field in VALID_SORT_FIELDS

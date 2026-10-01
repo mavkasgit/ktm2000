@@ -1,11 +1,10 @@
 """GET /auth/me/links and GET /auth/me/login-events — каноничный контракт профиля."""
 
 import pytest
-from sqlalchemy import select
-
 from app.core.config import settings
 from app.models.user import User
 from app.services.session_service import record_login_event
+from sqlalchemy import select
 
 
 @pytest.mark.asyncio

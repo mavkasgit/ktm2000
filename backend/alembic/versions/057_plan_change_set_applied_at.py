@@ -10,15 +10,14 @@ Revision ID: 057_plan_change_set_applied_at
 Revises: 056_action_journal_status_length
 Create Date: 2026-09-12
 """
-from typing import Sequence, Union
+from collections.abc import Sequence
 
 from alembic import op
 
-
 revision: str = "057_plan_change_set_applied_at"
-down_revision: Union[str, None] = "056_action_journal_status_length"
-branch_labels: Union[str, Sequence[str], None] = None
-depends_on: Union[str, Sequence[str], None] = None
+down_revision: str | None = "056_action_journal_status_length"
+branch_labels: str | Sequence[str] | None = None
+depends_on: str | Sequence[str] | None = None
 
 
 def upgrade() -> None:

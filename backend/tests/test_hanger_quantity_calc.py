@@ -5,7 +5,6 @@
 """
 
 import pytest
-
 from app.services.hanger_quantity_calc import (
     DEFAULT_HANGER_SETTINGS,
     HangerCalcResult,

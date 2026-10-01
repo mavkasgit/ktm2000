@@ -9,7 +9,7 @@ from pydantic import BaseModel
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.api.deps import READER_ROLES, require_role, get_db
+from app.api.deps import READER_ROLES, get_db, require_role
 from app.models.route import SectionOperation
 from app.models.section import Section
 

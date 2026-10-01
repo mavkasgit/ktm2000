@@ -8,18 +8,17 @@ Revises:
 Create Date: 2026-07-05 19:00:00.000000
 """
 
-from typing import Sequence, Union
+from collections.abc import Sequence
 
-from alembic import op
 import sqlalchemy as sa
+from alembic import op
 from sqlalchemy import text
 from sqlalchemy.dialects import postgresql
 
-
 revision: str = "001_sections_and_users"
-down_revision: Union[str, None] = None
-branch_labels: Union[str, Sequence[str], None] = None
-depends_on: Union[str, Sequence[str], None] = None
+down_revision: str | None = None
+branch_labels: str | Sequence[str] | None = None
+depends_on: str | Sequence[str] | None = None
 
 
 def upgrade() -> None:
@@ -107,7 +106,6 @@ def upgrade() -> None:
     op.execute(text("SELECT setval(pg_get_serial_sequence('users', 'id'), 100, false)"))
 
     # --- TRIGGERS ---
-    pass
 
 
 def downgrade() -> None:

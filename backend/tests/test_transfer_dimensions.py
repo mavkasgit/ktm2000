@@ -13,9 +13,6 @@ from __future__ import annotations
 from decimal import Decimal
 
 import pytest
-from sqlalchemy import delete, select
-from sqlalchemy.ext.asyncio import AsyncSession
-
 from app.core.security import create_access_token
 from app.models.internal_plan import SectionPlanLine
 from app.models.section import Section
@@ -29,7 +26,9 @@ from app.stock.services import (
     dimensions_match_clause,
 )
 from app.transfers.services import cancel_transfer, correct_transfer, transfer_send
-from tests.test_integrity_invariants import assert_no_invariants_violations
+from sqlalchemy import delete, select
+from sqlalchemy.ext.asyncio import AsyncSession
+
 # Канонические определения фабрик живут в tests/helpers/transfers.py
 # (#131 follow-up); реэкспорт сохраняет старый путь импорта для потребителей.
 from tests.helpers.transfers import (
@@ -39,6 +38,7 @@ from tests.helpers.transfers import (
     _seed_balance,
     _tasks_for_position,
 )
+from tests.test_integrity_invariants import assert_no_invariants_violations
 
 pytestmark = pytest.mark.asyncio
 
@@ -86,7 +86,7 @@ async def _balance_qty(
             dimensions_match_clause(StockBalance.dimensions, dimensions),
         )
     )
-    return bal or Decimal("0")
+    return bal or Decimal(0)
 
 
 async def _stock_ready_task(client, user: User, section_id: int) -> int:
@@ -197,12 +197,12 @@ async def _complete_prod1_task(session: AsyncSession, *, sku: str, task: WorkTas
 async def test_transfer_send_matches_dimension_balance_row(client, session) -> None:
     """transfer_send с длиной списывает только нужную группу остатка."""
     user = await _make_user(session, "dim-match@test.local")
-    fx = await _make_dim_route_fixture(session, sku="DIMMAT", qty=Decimal("50"), length_mm=2000)
+    fx = await _make_dim_route_fixture(session, sku="DIMMAT", qty=Decimal(50), length_mm=2000)
     raw_sec = fx["sections"][0]
     await _seed_balance(session, user_id=user.id, location_id=raw_sec.id,
-                        product_id=fx["product"].id, qty=Decimal("100"), dimensions={"length_mm": 2000})
+                        product_id=fx["product"].id, qty=Decimal(100), dimensions={"length_mm": 2000})
     await _seed_balance(session, user_id=user.id, location_id=raw_sec.id,
-                        product_id=fx["product"].id, qty=Decimal("50"), dimensions={"length_mm": 3000})
+                        product_id=fx["product"].id, qty=Decimal(50), dimensions={"length_mm": 3000})
     await _release_via_take_to_work(client, fx["position"].id)
 
     fake_task_id = await _stock_ready_task(client, user, raw_sec.id)
@@ -211,7 +211,7 @@ async def test_transfer_send_matches_dimension_balance_row(client, session) -> N
         session,
         from_task_id=fake_task_id,
         to_task_id=None,
-        quantity=Decimal("10"),
+        quantity=Decimal(10),
         actor_id=user.id,
         dimensions={"length_mm": 2000},
         allow_over_plan=True,
@@ -220,18 +220,18 @@ async def test_transfer_send_matches_dimension_balance_row(client, session) -> N
     await assert_no_invariants_violations(session, context="match-dimension-transfer")
 
     assert await _balance_qty(session, location_id=raw_sec.id, product_id=fx["product"].id,
-                              dimensions={"length_mm": 2000}) == Decimal("90")
+                              dimensions={"length_mm": 2000}) == Decimal(90)
     assert await _balance_qty(session, location_id=raw_sec.id, product_id=fx["product"].id,
-                              dimensions={"length_mm": 3000}) == Decimal("50")
+                              dimensions={"length_mm": 3000}) == Decimal(50)
 
 
 async def test_transfer_send_wrong_dimension_raises_insufficient_stock(client, session) -> None:
     """Другая длина, которой нет на складе → «Insufficient stock»."""
     user = await _make_user(session, "dim-wrong@test.local")
-    fx = await _make_dim_route_fixture(session, sku="DIMWR", qty=Decimal("50"), length_mm=2000)
+    fx = await _make_dim_route_fixture(session, sku="DIMWR", qty=Decimal(50), length_mm=2000)
     raw_sec = fx["sections"][0]
     await _seed_balance(session, user_id=user.id, location_id=raw_sec.id,
-                        product_id=fx["product"].id, qty=Decimal("100"), dimensions={"length_mm": 2000})
+                        product_id=fx["product"].id, qty=Decimal(100), dimensions={"length_mm": 2000})
     await _release_via_take_to_work(client, fx["position"].id)
 
     fake_task_id = await _stock_ready_task(client, user, raw_sec.id)
@@ -241,7 +241,7 @@ async def test_transfer_send_wrong_dimension_raises_insufficient_stock(client, s
             session,
             from_task_id=fake_task_id,
             to_task_id=None,
-            quantity=Decimal("10"),
+            quantity=Decimal(10),
             actor_id=user.id,
             dimensions={"length_mm": 3000},
             allow_over_plan=True,
@@ -251,10 +251,10 @@ async def test_transfer_send_wrong_dimension_raises_insufficient_stock(client, s
 async def test_transfer_send_falls_back_to_from_task_dimensions(client, session) -> None:
     """Payload без dimensions → берём from_task.dimensions (регрессия тикета)."""
     user = await _make_user(session, "dim-fallback@test.local")
-    fx = await _make_dim_route_fixture(session, sku="DIMFB", qty=Decimal("50"), length_mm=2000)
+    fx = await _make_dim_route_fixture(session, sku="DIMFB", qty=Decimal(50), length_mm=2000)
     raw_sec = fx["sections"][0]
     await _seed_balance(session, user_id=user.id, location_id=raw_sec.id,
-                        product_id=fx["product"].id, qty=Decimal("100"), dimensions={"length_mm": 2000})
+                        product_id=fx["product"].id, qty=Decimal(100), dimensions={"length_mm": 2000})
     await _release_via_take_to_work(client, fx["position"].id)
 
     fake_task_id = await _stock_ready_task(client, user, raw_sec.id)
@@ -263,14 +263,14 @@ async def test_transfer_send_falls_back_to_from_task_dimensions(client, session)
         session,
         from_task_id=fake_task_id,
         to_task_id=None,
-        quantity=Decimal("10"),
+        quantity=Decimal(10),
         actor_id=user.id,
     )
     await session.commit()
     await assert_no_invariants_violations(session, context="fallback-transfer")
 
     assert await _balance_qty(session, location_id=raw_sec.id, product_id=fx["product"].id,
-                              dimensions={"length_mm": 2000}) == Decimal("90")
+                              dimensions={"length_mm": 2000}) == Decimal(90)
 
 
 # ─── Seam 2: ready list (stock transferable + dimensions/dimensions_label) ──
@@ -279,12 +279,12 @@ async def test_transfer_send_falls_back_to_from_task_dimensions(client, session)
 async def test_stock_transferable_limited_to_task_dimension_group(client, session) -> None:
     """Складской ready: transferable ограничен группой длины задания, не всем складом."""
     user = await _make_user(session, "dim-limit@test.local")
-    fx = await _make_dim_route_fixture(session, sku="DIMLIM", qty=Decimal("200"), length_mm=2000)
+    fx = await _make_dim_route_fixture(session, sku="DIMLIM", qty=Decimal(200), length_mm=2000)
     raw_sec = fx["sections"][0]
     await _seed_balance(session, user_id=user.id, location_id=raw_sec.id,
-                        product_id=fx["product"].id, qty=Decimal("100"), dimensions={"length_mm": 2000})
+                        product_id=fx["product"].id, qty=Decimal(100), dimensions={"length_mm": 2000})
     await _seed_balance(session, user_id=user.id, location_id=raw_sec.id,
-                        product_id=fx["product"].id, qty=Decimal("1000"), dimensions={"length_mm": 3000})
+                        product_id=fx["product"].id, qty=Decimal(1000), dimensions={"length_mm": 3000})
     await _release_via_take_to_work(client, fx["position"].id)
 
     resp = await client.get(f"/api/transfers/ready?section_id={raw_sec.id}", headers=_auth_headers(user))
@@ -303,7 +303,7 @@ async def test_stock_transferable_limited_to_task_dimension_group(client, sessio
 async def test_production_ready_row_carries_dimensions(client, session) -> None:
     """Production ready-строка несёт dimensions и dimensions_label из задания."""
     user = await _make_user(session, "dim-prodready@test.local")
-    fx = await _make_dim_route_fixture(session, sku="DIMPRD", qty=Decimal("50"), length_mm=2000)
+    fx = await _make_dim_route_fixture(session, sku="DIMPRD", qty=Decimal(50), length_mm=2000)
     await _release_via_take_to_work(client, fx["position"].id)
 
     tasks = (await session.execute(select(WorkTask).order_by(WorkTask.id))).scalars().all()
@@ -325,7 +325,7 @@ async def test_production_ready_row_carries_dimensions(client, session) -> None:
 
 async def test_release_creates_tasks_with_dimensions_from_plan(client, session) -> None:
     """plan_generation: задания на production-секциях несут длину из плана."""
-    fx = await _make_dim_route_fixture(session, sku="DIMREL", qty=Decimal("50"), length_mm=2000)
+    fx = await _make_dim_route_fixture(session, sku="DIMREL", qty=Decimal(50), length_mm=2000)
     await _release_via_take_to_work(client, fx["position"].id)
 
     tasks = (await session.execute(select(WorkTask).order_by(WorkTask.id))).scalars().all()
@@ -339,7 +339,7 @@ async def test_prepare_section_task_fills_dimensions(client, session) -> None:
     from app.services.shopfloor.operations_tasks import prepare_section_task
 
     user = await _make_user(session, "dim-prepare@test.local")
-    fx = await _make_dim_route_fixture(session, sku="DIMPREP", qty=Decimal("50"), length_mm=2000)
+    fx = await _make_dim_route_fixture(session, sku="DIMPREP", qty=Decimal(50), length_mm=2000)
     await _release_via_take_to_work(client, fx["position"].id)
     await session.execute(delete(WorkTask))
     await session.flush()
@@ -349,7 +349,7 @@ async def test_prepare_section_task_fills_dimensions(client, session) -> None:
         session,
         plan_position_id=fx["position"].id,
         section_id=prod1_sec.id,
-        quantity=Decimal("50"),
+        quantity=Decimal(50),
         actor_id=user.id,
     )
     task = await session.get(WorkTask, result["task_id"])
@@ -362,13 +362,13 @@ async def test_auto_created_to_task_and_stock_fake_task_get_dimensions(client, s
     from app.api.routes.production_planning import _get_or_create_stock_fake_task
 
     user = await _make_user(session, "dim-auto@test.local")
-    fx = await _make_dim_route_fixture(session, sku="DIMAUTO", qty=Decimal("50"), length_mm=2000)
+    fx = await _make_dim_route_fixture(session, sku="DIMAUTO", qty=Decimal(50), length_mm=2000)
     raw_sec = fx["sections"][0]
     await _release_via_take_to_work(client, fx["position"].id)
     await session.execute(delete(WorkTask))
     await session.flush()
     await _seed_balance(session, user_id=user.id, location_id=raw_sec.id,
-                        product_id=fx["product"].id, qty=Decimal("100"), dimensions={"length_mm": 2000})
+                        product_id=fx["product"].id, qty=Decimal(100), dimensions={"length_mm": 2000})
 
     raw_line = (await session.execute(
         select(SectionPlanLine).where(SectionPlanLine.section_id == raw_sec.id)
@@ -385,7 +385,7 @@ async def test_auto_created_to_task_and_stock_fake_task_get_dimensions(client, s
         session,
         from_task_id=fake_task.id,
         to_task_id=None,
-        quantity=Decimal("10"),
+        quantity=Decimal(10),
         actor_id=user.id,
         allow_over_plan=True,
     )
@@ -403,13 +403,13 @@ async def test_auto_created_to_task_carries_sent_dimensions(client, session) -> 
 
     user = await _make_user(session, "dim-sent@test.local")
     # План длины 2000, но оператор передаёт 3000 (другая строка остатка).
-    fx = await _make_dim_route_fixture(session, sku="DIMSENT", qty=Decimal("50"), length_mm=2000)
+    fx = await _make_dim_route_fixture(session, sku="DIMSENT", qty=Decimal(50), length_mm=2000)
     raw_sec = fx["sections"][0]
     await _release_via_take_to_work(client, fx["position"].id)
     await session.execute(delete(WorkTask))
     await session.flush()
     await _seed_balance(session, user_id=user.id, location_id=raw_sec.id,
-                        product_id=fx["product"].id, qty=Decimal("100"), dimensions={"length_mm": 3000})
+                        product_id=fx["product"].id, qty=Decimal(100), dimensions={"length_mm": 3000})
 
     raw_line = (await session.execute(
         select(SectionPlanLine).where(SectionPlanLine.section_id == raw_sec.id)
@@ -426,7 +426,7 @@ async def test_auto_created_to_task_carries_sent_dimensions(client, session) -> 
         session,
         from_task_id=fake_task.id,
         to_task_id=None,
-        quantity=Decimal("10"),
+        quantity=Decimal(10),
         actor_id=user.id,
         dimensions={"length_mm": 3000},
         allow_over_plan=True,
@@ -439,9 +439,9 @@ async def test_auto_created_to_task_carries_sent_dimensions(client, session) -> 
     assert to_task is not None
     assert to_task.dimensions == {"length_mm": 3000}
     assert await _balance_qty(session, location_id=raw_sec.id, product_id=fx["product"].id,
-                              dimensions={"length_mm": 3000}) == Decimal("90")
+                              dimensions={"length_mm": 3000}) == Decimal(90)
     assert await _balance_qty(session, location_id=raw_sec.id, product_id=fx["product"].id,
-                              dimensions={"length_mm": 2000}) == Decimal("0")
+                              dimensions={"length_mm": 2000}) == Decimal(0)
 
 
 # ─── Seam 4 (#90): Transfer.dimensions + guard по паре (задача, размер) ────
@@ -452,10 +452,10 @@ async def test_transfer_send_writes_transfer_dimensions(client, session) -> None
     from app.models.transfer import Transfer
 
     user = await _make_user(session, "dim-xferdims@test.local")
-    fx = await _make_dim_route_fixture(session, sku="DIMDIMS", qty=Decimal("50"), length_mm=2000)
+    fx = await _make_dim_route_fixture(session, sku="DIMDIMS", qty=Decimal(50), length_mm=2000)
     raw_sec = fx["sections"][0]
     await _seed_balance(session, user_id=user.id, location_id=raw_sec.id,
-                        product_id=fx["product"].id, qty=Decimal("100"), dimensions={"length_mm": 2000})
+                        product_id=fx["product"].id, qty=Decimal(100), dimensions={"length_mm": 2000})
     await _release_via_take_to_work(client, fx["position"].id)
 
     fake_task_id = await _stock_ready_task(client, user, raw_sec.id)
@@ -463,7 +463,7 @@ async def test_transfer_send_writes_transfer_dimensions(client, session) -> None
         session,
         from_task_id=fake_task_id,
         to_task_id=None,
-        quantity=Decimal("10"),
+        quantity=Decimal(10),
         actor_id=user.id,
         allow_over_plan=True,
     )
@@ -478,10 +478,10 @@ async def test_transfer_send_writes_transfer_dimensions(client, session) -> None
 async def test_multiple_transfers_same_dimension_allowed_within_transferable(client, session) -> None:
     """Несколько передач одного размера разрешены; суммарно ≤ transferable."""
     user = await _make_user(session, "dim-multisend@test.local")
-    fx = await _make_dim_route_fixture(session, sku="DIMMULTI", qty=Decimal("100"), length_mm=2000)
+    fx = await _make_dim_route_fixture(session, sku="DIMMULTI", qty=Decimal(100), length_mm=2000)
     raw_sec = fx["sections"][0]
     await _seed_balance(session, user_id=user.id, location_id=raw_sec.id,
-                        product_id=fx["product"].id, qty=Decimal("100"), dimensions={"length_mm": 2000})
+                        product_id=fx["product"].id, qty=Decimal(100), dimensions={"length_mm": 2000})
     await _release_via_take_to_work(client, fx["position"].id)
 
     fake_task_id = await _stock_ready_task(client, user, raw_sec.id)
@@ -491,7 +491,7 @@ async def test_multiple_transfers_same_dimension_allowed_within_transferable(cli
         session,
         from_task_id=fake_task_id,
         to_task_id=None,
-        quantity=Decimal("40"),
+        quantity=Decimal(40),
         actor_id=user.id,
     )
     await session.commit()
@@ -502,7 +502,7 @@ async def test_multiple_transfers_same_dimension_allowed_within_transferable(cli
         session,
         from_task_id=fake_task_id,
         to_task_id=None,
-        quantity=Decimal("30"),
+        quantity=Decimal(30),
         actor_id=user.id,
     )
     await session.commit()
@@ -514,7 +514,7 @@ async def test_multiple_transfers_same_dimension_allowed_within_transferable(cli
             session,
             from_task_id=fake_task_id,
             to_task_id=None,
-            quantity=Decimal("31"),
+            quantity=Decimal(31),
             actor_id=user.id,
         )
 
@@ -524,10 +524,10 @@ async def test_multiple_transfers_same_dimension_allowed_within_transferable(cli
 async def test_ready_transferable_decreases_by_dimension_sent(client, session) -> None:
     """ready: transferable по размеру уменьшается на уже переданное по нему."""
     user = await _make_user(session, "dim-transferable@test.local")
-    fx = await _make_dim_route_fixture(session, sku="DIMTRF", qty=Decimal("100"), length_mm=2000)
+    fx = await _make_dim_route_fixture(session, sku="DIMTRF", qty=Decimal(100), length_mm=2000)
     raw_sec = fx["sections"][0]
     await _seed_balance(session, user_id=user.id, location_id=raw_sec.id,
-                        product_id=fx["product"].id, qty=Decimal("100"), dimensions={"length_mm": 2000})
+                        product_id=fx["product"].id, qty=Decimal(100), dimensions={"length_mm": 2000})
     await _release_via_take_to_work(client, fx["position"].id)
 
     fake_task_id = await _stock_ready_task(client, user, raw_sec.id)
@@ -535,7 +535,7 @@ async def test_ready_transferable_decreases_by_dimension_sent(client, session) -
         session,
         from_task_id=fake_task_id,
         to_task_id=None,
-        quantity=Decimal("40"),
+        quantity=Decimal(40),
         actor_id=user.id,
     )
     await session.commit()
@@ -567,8 +567,8 @@ async def test_transforming_task_multi_transfer_within_output_quantity(client, s
     fx = await _make_transform_route_fixture(
         session,
         sku="SAW1",
-        qty=Decimal("100"),
-        input_quantity=Decimal("100"),
+        qty=Decimal(100),
+        input_quantity=Decimal(100),
         input_dimensions={"length_mm": 2700},
         outputs=[
             {"row_number": 1, "quantity": "100", "dimensions": {"length_mm": 900}},
@@ -584,7 +584,7 @@ async def test_transforming_task_multi_transfer_within_output_quantity(client, s
         session,
         from_task_id=saw_task.id,
         to_task_id=None,
-        quantity=Decimal("40"),
+        quantity=Decimal(40),
         actor_id=user.id,
         dimensions={"length_mm": 900},
     )
@@ -595,7 +595,7 @@ async def test_transforming_task_multi_transfer_within_output_quantity(client, s
         session,
         from_task_id=saw_task.id,
         to_task_id=None,
-        quantity=Decimal("30"),
+        quantity=Decimal(30),
         actor_id=user.id,
         dimensions={"length_mm": 900},
     )
@@ -608,7 +608,7 @@ async def test_transforming_task_multi_transfer_within_output_quantity(client, s
             session,
             from_task_id=saw_task.id,
             to_task_id=None,
-            quantity=Decimal("31"),
+            quantity=Decimal(31),
             actor_id=user.id,
             dimensions={"length_mm": 900},
         )
@@ -619,7 +619,7 @@ async def test_transforming_task_multi_transfer_within_output_quantity(client, s
         session,
         from_task_id=saw_task.id,
         to_task_id=None,
-        quantity=Decimal("100"),
+        quantity=Decimal(100),
         actor_id=user.id,
         dimensions={"length_mm": 1800},
     )
@@ -635,8 +635,8 @@ async def test_transforming_task_cancel_isolation_between_sizes(client, session)
     fx = await _make_transform_route_fixture(
         session,
         sku="SAWCL",
-        qty=Decimal("100"),
-        input_quantity=Decimal("100"),
+        qty=Decimal(100),
+        input_quantity=Decimal(100),
         input_dimensions={"length_mm": 2700},
         outputs=[
             {"row_number": 1, "quantity": "100", "dimensions": {"length_mm": 900}},
@@ -651,7 +651,7 @@ async def test_transforming_task_cancel_isolation_between_sizes(client, session)
         session,
         from_task_id=saw_task.id,
         to_task_id=None,
-        quantity=Decimal("40"),
+        quantity=Decimal(40),
         actor_id=user.id,
         dimensions={"length_mm": 900},
     )
@@ -660,7 +660,7 @@ async def test_transforming_task_cancel_isolation_between_sizes(client, session)
         session,
         from_task_id=saw_task.id,
         to_task_id=None,
-        quantity=Decimal("60"),
+        quantity=Decimal(60),
         actor_id=user.id,
         dimensions={"length_mm": 1800},
     )
@@ -670,14 +670,14 @@ async def test_transforming_task_cancel_isolation_between_sizes(client, session)
     await session.commit()
 
     # 900 — снова свободно; 1800 не затронут (60/100 передано).
-    assert await _task_transferable_by_dim(session, saw_task, {"length_mm": 900}) == Decimal("100")
-    assert await _task_transferable_by_dim(session, saw_task, {"length_mm": 1800}) == Decimal("40")
+    assert await _task_transferable_by_dim(session, saw_task, {"length_mm": 900}) == Decimal(100)
+    assert await _task_transferable_by_dim(session, saw_task, {"length_mm": 1800}) == Decimal(40)
 
     r = await transfer_send(
         session,
         from_task_id=saw_task.id,
         to_task_id=None,
-        quantity=Decimal("40"),
+        quantity=Decimal(40),
         actor_id=user.id,
         dimensions={"length_mm": 1800},
     )
@@ -687,7 +687,7 @@ async def test_transforming_task_cancel_isolation_between_sizes(client, session)
         session,
         from_task_id=saw_task.id,
         to_task_id=None,
-        quantity=Decimal("100"),
+        quantity=Decimal(100),
         actor_id=user.id,
         dimensions={"length_mm": 900},
     )
@@ -698,7 +698,7 @@ async def test_transforming_task_cancel_isolation_between_sizes(client, session)
             session,
             from_task_id=saw_task.id,
             to_task_id=None,
-            quantity=Decimal("1"),
+            quantity=Decimal(1),
             actor_id=user.id,
             dimensions={"length_mm": 900},
         )
@@ -713,8 +713,8 @@ async def test_transforming_task_correct_isolation_between_sizes(client, session
     fx = await _make_transform_route_fixture(
         session,
         sku="SAWCR",
-        qty=Decimal("100"),
-        input_quantity=Decimal("100"),
+        qty=Decimal(100),
+        input_quantity=Decimal(100),
         input_dimensions={"length_mm": 2700},
         outputs=[
             {"row_number": 1, "quantity": "100", "dimensions": {"length_mm": 900}},
@@ -729,7 +729,7 @@ async def test_transforming_task_correct_isolation_between_sizes(client, session
         session,
         from_task_id=saw_task.id,
         to_task_id=None,
-        quantity=Decimal("40"),
+        quantity=Decimal(40),
         actor_id=user.id,
         dimensions={"length_mm": 900},
     )
@@ -738,20 +738,20 @@ async def test_transforming_task_correct_isolation_between_sizes(client, session
     await correct_transfer(
         session,
         transfer_id=t900["transfer_id"],
-        new_quantity=Decimal("10"),
+        new_quantity=Decimal(10),
         actor_id=user.id,
     )
     await session.commit()
 
     # 900: 10/100 передано → transferable 90; 1800 не затронут (100).
-    assert await _task_transferable_by_dim(session, saw_task, {"length_mm": 900}) == Decimal("90")
-    assert await _task_transferable_by_dim(session, saw_task, {"length_mm": 1800}) == Decimal("100")
+    assert await _task_transferable_by_dim(session, saw_task, {"length_mm": 900}) == Decimal(90)
+    assert await _task_transferable_by_dim(session, saw_task, {"length_mm": 1800}) == Decimal(100)
 
     r = await transfer_send(
         session,
         from_task_id=saw_task.id,
         to_task_id=None,
-        quantity=Decimal("90"),
+        quantity=Decimal(90),
         actor_id=user.id,
         dimensions={"length_mm": 900},
     )
@@ -762,7 +762,7 @@ async def test_transforming_task_correct_isolation_between_sizes(client, session
             session,
             from_task_id=saw_task.id,
             to_task_id=None,
-            quantity=Decimal("1"),
+            quantity=Decimal(1),
             actor_id=user.id,
             dimensions={"length_mm": 900},
         )
@@ -779,8 +779,8 @@ async def test_final_release_transforming_stage_carries_output_dimensions(client
     fx = await _make_transform_route_fixture(
         session,
         sku="SAWFIN",
-        qty=Decimal("100"),
-        input_quantity=Decimal("100"),
+        qty=Decimal(100),
+        input_quantity=Decimal(100),
         input_dimensions={"length_mm": 2700},
         outputs=[{"row_number": 1, "quantity": "100", "dimensions": {"length_mm": 900}}],
         final_transform=True,
@@ -793,7 +793,7 @@ async def test_final_release_transforming_stage_carries_output_dimensions(client
     result = await final_release(
         session,
         task_id=saw_task.id,
-        quantity=Decimal("100"),
+        quantity=Decimal(100),
         actor_id=user.id,
     )
     await session.commit()
@@ -814,7 +814,7 @@ async def test_final_release_transforming_stage_carries_output_dimensions(client
         await final_release(
             session,
             task_id=saw_task.id,
-            quantity=Decimal("1"),
+            quantity=Decimal(1),
             actor_id=user.id,
             dimensions={"length_mm": 1800},
         )
@@ -828,8 +828,8 @@ async def test_final_release_transforming_stage_multiple_outputs_require_dimensi
     fx = await _make_transform_route_fixture(
         session,
         sku="SAWFIN2",
-        qty=Decimal("100"),
-        input_quantity=Decimal("100"),
+        qty=Decimal(100),
+        input_quantity=Decimal(100),
         input_dimensions={"length_mm": 2700},
         outputs=[
             {"row_number": 1, "quantity": "100", "dimensions": {"length_mm": 900}},
@@ -845,7 +845,7 @@ async def test_final_release_transforming_stage_multiple_outputs_require_dimensi
         await final_release(
             session,
             task_id=saw_task.id,
-            quantity=Decimal("50"),
+            quantity=Decimal(50),
             actor_id=user.id,
         )
 
@@ -853,7 +853,7 @@ async def test_final_release_transforming_stage_multiple_outputs_require_dimensi
     result = await final_release(
         session,
         task_id=saw_task.id,
-        quantity=Decimal("50"),
+        quantity=Decimal(50),
         actor_id=user.id,
         dimensions={"length_mm": 900},
     )
@@ -892,8 +892,8 @@ async def test_ready_cutting_two_output_rows(client, session) -> None:
     fx = await _make_transform_route_fixture(
         session,
         sku="SAWRDY",
-        qty=Decimal("100"),
-        input_quantity=Decimal("100"),
+        qty=Decimal(100),
+        input_quantity=Decimal(100),
         input_dimensions={"length_mm": 2700},
         outputs=[
             {"row_number": 1, "quantity": "100", "dimensions": {"length_mm": 900}},
@@ -925,8 +925,8 @@ async def test_ready_cutting_transferable_decreases_by_size(client, session) -> 
     fx = await _make_transform_route_fixture(
         session,
         sku="SAWTRF",
-        qty=Decimal("100"),
-        input_quantity=Decimal("100"),
+        qty=Decimal(100),
+        input_quantity=Decimal(100),
         input_dimensions={"length_mm": 2700},
         outputs=[
             {"row_number": 1, "quantity": "100", "dimensions": {"length_mm": 900}},
@@ -941,7 +941,7 @@ async def test_ready_cutting_transferable_decreases_by_size(client, session) -> 
         session,
         from_task_id=saw_task.id,
         to_task_id=None,
-        quantity=Decimal("40"),
+        quantity=Decimal(40),
         actor_id=user.id,
         dimensions={"length_mm": 900},
     )
@@ -966,8 +966,8 @@ async def test_ready_cutting_transferable_capped_by_produced(client, session) ->
     fx = await _make_transform_route_fixture(
         session,
         sku="SAWPART",
-        qty=Decimal("100"),
-        input_quantity=Decimal("100"),
+        qty=Decimal(100),
+        input_quantity=Decimal(100),
         input_dimensions={"length_mm": 2700},
         outputs=[
             {"row_number": 1, "quantity": "100", "dimensions": {"length_mm": 900}},
@@ -978,13 +978,13 @@ async def test_ready_cutting_transferable_capped_by_produced(client, session) ->
     saw_task = (await _tasks_for_position(session, fx["position"].id))[0]
 
     await _seed_transform_input(
-        session, task=saw_task, quantity=Decimal("100"), length_mm=2700, user=user
+        session, task=saw_task, quantity=Decimal(100), length_mm=2700, user=user
     )
     await complete_task(
         session,
         task_id=saw_task.id,
-        good_quantity=Decimal("50"),
-        defect_quantity=Decimal("0"),
+        good_quantity=Decimal(50),
+        defect_quantity=Decimal(0),
         actor_id=user.id,
     )
     await session.commit()
@@ -1011,8 +1011,8 @@ async def test_auto_transfer_next_creates_per_output_transfers(client, session) 
     fx = await _make_transform_route_fixture(
         session,
         sku="SAWAUTO",
-        qty=Decimal("100"),
-        input_quantity=Decimal("100"),
+        qty=Decimal(100),
+        input_quantity=Decimal(100),
         input_dimensions={"length_mm": 2700},
         outputs=[
             {"row_number": 1, "quantity": "100", "dimensions": {"length_mm": 900}},
@@ -1024,13 +1024,13 @@ async def test_auto_transfer_next_creates_per_output_transfers(client, session) 
     saw_task = (await _tasks_for_position(session, fx["position"].id))[0]
 
     await _seed_transform_input(
-        session, task=saw_task, quantity=Decimal("100"), length_mm=2700, user=user
+        session, task=saw_task, quantity=Decimal(100), length_mm=2700, user=user
     )
     await complete_task(
         session,
         task_id=saw_task.id,
-        good_quantity=Decimal("100"),
-        defect_quantity=Decimal("0"),
+        good_quantity=Decimal(100),
+        defect_quantity=Decimal(0),
         actor_id=user.id,
         auto_transfer_next=True,
         idempotency_key="auto-saw-per-output",
@@ -1053,8 +1053,8 @@ async def test_auto_transfer_next_creates_per_output_transfers(client, session) 
         if length is not None:
             by_len[int(length)] = transfer
     assert set(by_len) == {900, 1800}
-    assert by_len[900].sent_quantity == Decimal("100")
-    assert by_len[1800].sent_quantity == Decimal("100")
+    assert by_len[900].sent_quantity == Decimal(100)
+    assert by_len[1800].sent_quantity == Decimal(100)
 
 async def test_auto_transfer_next_creates_receiving_task_per_output_dimension(client, session) -> None:
     """SAWING→PACKING: каждый выход резки получает отдельную receiving-задачу по размеру."""
@@ -1070,8 +1070,8 @@ async def test_auto_transfer_next_creates_receiving_task_per_output_dimension(cl
     fx = await _make_transform_route_fixture(
         session,
         sku="SAWPACK4",
-        qty=Decimal("100"),
-        input_quantity=Decimal("100"),
+        qty=Decimal(100),
+        input_quantity=Decimal(100),
         input_dimensions={"length_mm": 2700},
         outputs=output_rows,
         separate_ghps=True,
@@ -1080,13 +1080,13 @@ async def test_auto_transfer_next_creates_receiving_task_per_output_dimension(cl
     saw_task = (await _tasks_for_position(session, fx["position"].id))[0]
 
     await _seed_transform_input(
-        session, task=saw_task, quantity=Decimal("100"), length_mm=2700, user=user
+        session, task=saw_task, quantity=Decimal(100), length_mm=2700, user=user
     )
     await complete_task(
         session,
         task_id=saw_task.id,
-        good_quantity=Decimal("100"),
-        defect_quantity=Decimal("0"),
+        good_quantity=Decimal(100),
+        defect_quantity=Decimal(0),
         actor_id=user.id,
         auto_transfer_next=True,
         idempotency_key="auto-saw-pack-four-outputs",
@@ -1106,12 +1106,12 @@ async def test_auto_transfer_next_creates_receiving_task_per_output_dimension(cl
         for task in receiving_tasks
     }
     assert by_length == {
-        900: Decimal("20"),
-        1350: Decimal("30"),
-        1800: Decimal("30"),
-        2700: Decimal("20"),
+        900: Decimal(20),
+        1350: Decimal(30),
+        1800: Decimal(30),
+        2700: Decimal(20),
     }
-    assert sum((task.planned_quantity for task in receiving_tasks), Decimal("0")) == Decimal("100")
+    assert sum((task.planned_quantity for task in receiving_tasks), Decimal(0)) == Decimal(100)
 
 
 
@@ -1124,8 +1124,8 @@ async def test_auto_transfer_next_duplicate_output_size_does_not_overflow(client
     fx = await _make_transform_route_fixture(
         session,
         sku="SAWDUP",
-        qty=Decimal("100"),
-        input_quantity=Decimal("100"),
+        qty=Decimal(100),
+        input_quantity=Decimal(100),
         input_dimensions={"length_mm": 2700},
         outputs=[
             {"row_number": 1, "quantity": "60", "dimensions": {"length_mm": 900}},
@@ -1137,14 +1137,14 @@ async def test_auto_transfer_next_duplicate_output_size_does_not_overflow(client
     saw_task = (await _tasks_for_position(session, fx["position"].id))[0]
 
     await _seed_transform_input(
-        session, task=saw_task, quantity=Decimal("100"), length_mm=2700, user=user
+        session, task=saw_task, quantity=Decimal(100), length_mm=2700, user=user
     )
     # Частичная порция: раскроено 50 заготовок → произведено 50 × 900.
     await complete_task(
         session,
         task_id=saw_task.id,
-        good_quantity=Decimal("50"),
-        defect_quantity=Decimal("0"),
+        good_quantity=Decimal(50),
+        defect_quantity=Decimal(0),
         actor_id=user.id,
         auto_transfer_next=True,
         idempotency_key="auto-saw-dup",
@@ -1160,7 +1160,7 @@ async def test_auto_transfer_next_duplicate_output_size_does_not_overflow(client
         )
     ).scalars().all()
     # Суммарно передано не больше фактически раскроенного размера (50).
-    assert sum(t.sent_quantity for t in transfers) == Decimal("50")
+    assert sum(t.sent_quantity for t in transfers) == Decimal(50)
     for transfer in transfers:
         assert (transfer.dimensions or {}).get("length_mm") == 900
 
@@ -1186,8 +1186,8 @@ async def test_board_outputs_progress_carries_transferred_by_output(client, sess
     fx = await _make_transform_route_fixture(
         session,
         sku="SAWBTF",
-        qty=Decimal("100"),
-        input_quantity=Decimal("100"),
+        qty=Decimal(100),
+        input_quantity=Decimal(100),
         input_dimensions={"length_mm": 2700},
         outputs=[
             {"row_number": 1, "quantity": "100", "dimensions": {"length_mm": 900}},
@@ -1203,7 +1203,7 @@ async def test_board_outputs_progress_carries_transferred_by_output(client, sess
         session,
         from_task_id=saw_task.id,
         to_task_id=None,
-        quantity=Decimal("40"),
+        quantity=Decimal(40),
         actor_id=user.id,
         dimensions={"length_mm": 900},
     )
@@ -1229,10 +1229,10 @@ async def test_transfer_history_carries_dimensions(client, session) -> None:
     from app.models.transfer import Transfer
 
     user = await _make_user(session, "dim-hxdim@test.local")
-    fx = await _make_dim_route_fixture(session, sku="HXDIM", qty=Decimal("50"), length_mm=2000)
+    fx = await _make_dim_route_fixture(session, sku="HXDIM", qty=Decimal(50), length_mm=2000)
     raw_sec = fx["sections"][0]
     await _seed_balance(session, user_id=user.id, location_id=raw_sec.id,
-                        product_id=fx["product"].id, qty=Decimal("100"), dimensions={"length_mm": 2000})
+                        product_id=fx["product"].id, qty=Decimal(100), dimensions={"length_mm": 2000})
     await _release_via_take_to_work(client, fx["position"].id)
 
     fake_task_id = await _stock_ready_task(client, user, raw_sec.id)
@@ -1240,7 +1240,7 @@ async def test_transfer_history_carries_dimensions(client, session) -> None:
         session,
         from_task_id=fake_task_id,
         to_task_id=None,
-        quantity=Decimal("10"),
+        quantity=Decimal(10),
         actor_id=user.id,
         dimensions={"length_mm": 2000},
         allow_over_plan=True,
@@ -1312,12 +1312,12 @@ async def test_ready_final_plain_row_is_final_with_releasable(client, session) -
     releasable (completed − already released).
     """
     user = await _make_user(session, "dim-finalready@test.local")
-    fx = await _make_dim_route_fixture(session, sku="DIMFRD", qty=Decimal("50"), length_mm=2000)
+    fx = await _make_dim_route_fixture(session, sku="DIMFRD", qty=Decimal(50), length_mm=2000)
     await _release_via_take_to_work(client, fx["position"].id)
 
     tasks = (await session.execute(select(WorkTask).order_by(WorkTask.id))).scalars().all()
     assert len(tasks) == 2
-    prod1_task, prod2_task = tasks
+    _prod1_task, prod2_task = tasks
     await _complete_task_generic(session, task=prod2_task, user=user)
 
     prod2_sec = fx["sections"][2]
@@ -1339,7 +1339,7 @@ async def test_ready_final_plain_row_is_final_with_releasable(client, session) -
     await final_release(
         session,
         task_id=prod2_task.id,
-        quantity=Decimal("30"),
+        quantity=Decimal(30),
         actor_id=user.id,
         dimensions={"length_mm": 2000},
     )
@@ -1367,8 +1367,8 @@ async def test_ready_final_transform_rows_are_final_with_releasable_per_size(cli
     fx = await _make_transform_route_fixture(
         session,
         sku="SAWFINRD",
-        qty=Decimal("100"),
-        input_quantity=Decimal("100"),
+        qty=Decimal(100),
+        input_quantity=Decimal(100),
         input_dimensions={"length_mm": 2700},
         outputs=[
             {"row_number": 1, "quantity": "100", "dimensions": {"length_mm": 900}},
@@ -1398,7 +1398,7 @@ async def test_ready_final_transform_rows_are_final_with_releasable_per_size(cli
     await final_release(
         session,
         task_id=saw_task.id,
-        quantity=Decimal("40"),
+        quantity=Decimal(40),
         actor_id=user.id,
         dimensions={"length_mm": 900},
     )

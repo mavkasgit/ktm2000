@@ -8,8 +8,8 @@
 
 from app.seeds.canon.dependencies import get_display_config, get_plant_config
 from app.seeds.canon.models import (
-    ColorToken,
     ColorsCanon,
+    ColorToken,
     DisplayCanon,
     HangerRoundingRule,
     LabelsCanon,

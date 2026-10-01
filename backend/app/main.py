@@ -1,51 +1,51 @@
-from pathlib import Path
+import asyncio
 import logging
+from contextlib import asynccontextmanager, suppress
+from pathlib import Path
+from typing import Any, cast
 
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.staticfiles import StaticFiles
 from sqlalchemy import text
 
+from app.api.backups import router as backups_router
+from app.api.exception_handlers import ktm_exception_handler
 from app.api.health import router as health_router
+from app.api.routes.audit_logs import router as audit_logs_router
 from app.api.routes.auth import router as auth_router
-from app.api.routes.sessions import router as sessions_router
-from app.api.routes.products import router as products_router
+from app.api.routes.catalog_import import router as catalog_import_router
+from app.api.routes.daily_plans import router as daily_plans_router
+from app.api.routes.demo import router as demo_router
+from app.api.routes.dimensions import router as dimensions_router
+from app.api.routes.employees import router as employees_router
+from app.api.routes.hanger_calc import router as hanger_calc_router
+from app.api.routes.import_templates import router as import_templates_router
+from app.api.routes.imports import router as imports_router
+from app.api.routes.notifications import router as notifications_router
 from app.api.routes.product_pairs import catalog_router as product_pairs_catalog_router
 from app.api.routes.product_pairs import router as product_pairs_router
-from app.api.routes.dimensions import router as dimensions_router
-from app.api.routes.sections import router as sections_router
-from app.api.routes.imports import router as imports_router
-from app.api.routes.production_plans import router as production_plans_router
 from app.api.routes.production_planning import router as production_planning_router
+from app.api.routes.production_plans import router as production_plans_router
+from app.api.routes.products import router as products_router
 from app.api.routes.release_batches import router as release_batches_router
-from app.api.routes.routes import router as routes_router
-from app.api.routes.route_selection_rules import router as route_selection_rules_router
 from app.api.routes.route_rule_profiles import router as route_rule_profiles_router
+from app.api.routes.route_selection_rules import router as route_selection_rules_router
+from app.api.routes.routes import router as routes_router
 from app.api.routes.routes_seed import router as routes_seed_router
-from app.api.routes.import_templates import router as import_templates_router
-from app.api.routes.catalog_import import router as catalog_import_router
-from app.api.routes.hanger_calc import router as hanger_calc_router
+from app.api.routes.sections import router as sections_router
+from app.api.routes.sessions import router as sessions_router
 from app.api.routes.shopfloor import router as shopfloor_router
 from app.api.routes.shopfloor_operations import router as shopfloor_ops_router
 from app.api.routes.spg import router as spg_router
-from app.api.routes.demo import router as demo_router
-from app.api.backups import router as backups_router
-from app.transfers.api import router as transfers_router
-from app.reversal.api import router as reversal_router
-from app.stock.api import router as stock_router
-from app.stock.import_history_api import router as stock_import_history_router
-from contextlib import asynccontextmanager
-import asyncio
-from typing import Any, cast
-from app.api.routes.audit_logs import router as audit_logs_router
-from app.api.routes.notifications import router as notifications_router
 from app.api.routes.users import router as users_router
-from app.api.routes.employees import router as employees_router
-from app.api.routes.daily_plans import router as daily_plans_router
 from app.core.config import settings
 from app.core.database import async_session
 from app.core.exceptions import KTMException
-from app.api.exception_handlers import ktm_exception_handler
+from app.reversal.api import router as reversal_router
+from app.stock.api import router as stock_router
+from app.stock.import_history_api import router as stock_import_history_router
+from app.transfers.api import router as transfers_router
 
 backup_scheduler_task = None
 # Под uvicorn root-логгер не настроен, и INFO от app-логгеров (в т.ч. строка про
@@ -70,10 +70,8 @@ async def lifespan(app: FastAPI):
     yield
     if backup_scheduler_task:
         backup_scheduler_task.cancel()
-        try:
+        with suppress(asyncio.CancelledError):
             await backup_scheduler_task
-        except asyncio.CancelledError:
-            pass
 
 app = FastAPI(
     title="KTM-2000",

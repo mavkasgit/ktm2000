@@ -10,11 +10,10 @@
 from __future__ import annotations
 
 import pytest
-from sqlalchemy import select
-from sqlalchemy.ext.asyncio import AsyncSession
-
 from app.models.dimension import DimensionType, ProductDimension
 from app.models.product import Product
+from sqlalchemy import select
+from sqlalchemy.ext.asyncio import AsyncSession
 
 
 def _payload(sku: str, **overrides) -> dict:

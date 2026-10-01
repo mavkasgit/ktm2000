@@ -9,10 +9,13 @@ from app.seeds.routes import ROUTES
 from app.seeds.seeders.cleanup_seeder import clear_generated_production_data
 from app.seeds.seeders.defect_types_seeder import seed_defect_types
 from app.seeds.seeders.dimension_types_seeder import seed_dimension_types
-from app.seeds.seeders.processing_flags_seeder import seed_processing_flags
 from app.seeds.seeders.import_template_seeder import seed_import_template
+from app.seeds.seeders.processing_flags_seeder import seed_processing_flags
 from app.seeds.seeders.route_rule_profile_seeder import seed_route_rule_profile
-from app.seeds.seeders.routes_seeder import seed_routes, seed_production_routes_from_profiles
+from app.seeds.seeders.routes_seeder import (
+    seed_production_routes_from_profiles,
+    seed_routes,
+)
 from app.seeds.seeders.sections_seeder import seed_section_operations, seed_sections
 from app.seeds.seeders.selection_rules_seeder import seed_selection_rules
 from app.seeds.seeders.spgs_seeder import seed_spgs

@@ -27,16 +27,16 @@
 обе таблицы и индексы создаются с ``IF NOT EXISTS``, бэкфилл защищён
 ``NOT EXISTS`` по ``action_id``.
 """
-from typing import Sequence, Union
+from collections.abc import Sequence
 
 import sqlalchemy as sa
 from alembic import op
 from sqlalchemy.dialects import postgresql
 
 revision: str = "072_stock_import_history"
-down_revision: Union[str, None] = "071_route_code_identity"
-branch_labels: Union[str, Sequence[str], None] = None
-depends_on: Union[str, Sequence[str], None] = None
+down_revision: str | None = "071_route_code_identity"
+branch_labels: str | Sequence[str] | None = None
+depends_on: str | Sequence[str] | None = None
 
 REMAINDER_ACTION_TYPE = "import_remainders"
 

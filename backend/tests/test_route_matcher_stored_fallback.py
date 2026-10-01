@@ -25,8 +25,6 @@
 from __future__ import annotations
 
 import pytest
-from sqlalchemy import select
-
 from app.models.production_plan import (
     PlanPosition,
     PlanPositionRouteOrigin,
@@ -37,8 +35,12 @@ from app.models.production_plan import (
 from app.models.route import ProductionRoute, RouteRuleProfile, RouteStage
 from app.models.section import Section
 from app.services.route_builder import build_route_from_profile
-from app.services.route_matcher import _payload_for_dynamic_build, resolve_position_route
+from app.services.route_matcher import (
+    _payload_for_dynamic_build,
+    resolve_position_route,
+)
 from app.services.route_signature import auto_route_code
+from sqlalchemy import select
 
 # Имя маршрута, сохранённое в позиции до правки: содержит цвет, которого нет
 # в пересобранном имени (шаблон «{output_kind} - {operations}»).
@@ -52,7 +54,10 @@ async def _make_profile_position(session) -> PlanPosition:
     намеренно не совпадает с ``STORED_ROUTE_NAME`` и не существует в БД —
     это и есть вход fallback-ветки.
     """
-    from tests.test_dynamic_route_generation import _make_profile_with_rules, _seed_sections
+    from tests.test_dynamic_route_generation import (
+        _make_profile_with_rules,
+        _seed_sections,
+    )
 
     await _seed_sections(session)
     profile_id = await _make_profile_with_rules(session)
@@ -232,7 +237,10 @@ async def test_route_edited_by_hand_keeps_auto_code_but_signature_is_verified(se
     маршрут чужого состава с ``error=None`` — выглядела назначенной и
     проходила дальше. Ровно тот случай, от которого защищает ADR-0045.
     """
-    from tests.test_dynamic_route_generation import _make_profile_with_rules, _seed_sections
+    from tests.test_dynamic_route_generation import (
+        _make_profile_with_rules,
+        _seed_sections,
+    )
 
     await _seed_sections(session)
     profile_id = await _make_profile_with_rules(session)
@@ -273,7 +281,10 @@ async def test_legacy_name_fallback_resolves_oldest_codeless_route(session) -> N
     созданные импортом до #230) это тихо разные выборки: позиция получала
     другой маршрут, и результат зависел от того, когда строка создана.
     """
-    from tests.test_dynamic_route_generation import _make_profile_with_rules, _seed_sections
+    from tests.test_dynamic_route_generation import (
+        _make_profile_with_rules,
+        _seed_sections,
+    )
 
     await _seed_sections(session)
     profile_id = await _make_profile_with_rules(session)

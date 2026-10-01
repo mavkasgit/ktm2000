@@ -126,7 +126,7 @@ class Compensator(Protocol):
         ...
 
     async def build_replay_payload(
-        self, db: AsyncSession, action: "Action"
+        self, db: AsyncSession, action: Action
     ) -> dict | None:
         """Payload реплея действия (#121, опционально).
 

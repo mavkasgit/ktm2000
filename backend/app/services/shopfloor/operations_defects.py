@@ -7,7 +7,14 @@ from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.idempotency import raise_idempotency_conflict_on_violation
-from app.models.defect import Defect, DefectDecision, DefectDecisionType, DefectItem, DefectStatus, DefectType
+from app.models.defect import (
+    Defect,
+    DefectDecision,
+    DefectDecisionType,
+    DefectItem,
+    DefectStatus,
+    DefectType,
+)
 from app.models.rework_task import ReworkTask, ReworkTaskStatus
 from app.seeds.canon.models import DefectDecisionDef, ScrapPolicy
 from app.services.action_journal_service import action_journal_service
@@ -24,6 +31,7 @@ from .common import (
     _to_decimal,
 )
 from .scrap_policy import find_or_create_scrap_section_id
+
 
 def resolve_defect_status(
     decision: DefectDecisionType, defect_decision_map: dict[str, DefectDecisionDef] | None
@@ -119,10 +127,10 @@ async def create_defect(
     await db.flush()
 
     # Запись лога аудита (регистрация брака)
-    from app.services.audit_log_service import log_action
     from app.models.audit_log import AuditAction, AuditEntityType
-    from app.models.section import Section
     from app.models.product import Product
+    from app.models.section import Section
+    from app.services.audit_log_service import log_action
     
     section = await db.get(Section, sect_id)
     product = await db.get(Product, prod_id)
@@ -421,10 +429,10 @@ async def defect_decide(
     if task:
         await _refresh_section_plan_line_cache(db, task.section_plan_line_id)
 
-    from app.services.audit_log_service import log_action
     from app.models.audit_log import AuditAction, AuditEntityType
-    from app.models.section import Section
     from app.models.product import Product
+    from app.models.section import Section
+    from app.services.audit_log_service import log_action
 
     section = await db.get(Section, defect.section_id)
     product = await db.get(Product, defect.product_id)
@@ -495,10 +503,10 @@ async def rework_create(
     await db.flush()
 
     # Запись лога аудита (задача на переделку)
-    from app.services.audit_log_service import log_action
     from app.models.audit_log import AuditAction, AuditEntityType
-    from app.models.section import Section
     from app.models.product import Product
+    from app.models.section import Section
+    from app.services.audit_log_service import log_action
     
     section = await db.get(Section, section_id)
     product = await db.get(Product, source_task.product_id)

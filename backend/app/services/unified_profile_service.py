@@ -21,13 +21,17 @@ from __future__ import annotations
 
 import logging
 from dataclasses import dataclass
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 from typing import Any
 
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.config import settings
-from app.services.authentik_client import AuthentikAdminError, _request, is_idp_admin_enabled
+from app.services.authentik_client import (
+    AuthentikAdminError,
+    _request,
+    is_idp_admin_enabled,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -310,20 +314,30 @@ def apply_profile_to_user(user: Any, profile: UnifiedProfile) -> bool:
     if profile.avatar_seed != getattr(user, "avatar_seed", None):
         user.avatar_seed = profile.avatar_seed
         changed = True
-    if hasattr(user, "locale") and profile.locale is not None:
-        if profile.locale != getattr(user, "locale", None):
-            user.locale = profile.locale
-            changed = True
-    if hasattr(user, "theme") and profile.theme is not None:
-        if profile.theme != getattr(user, "theme", None):
-            user.theme = profile.theme
-            changed = True
+    if (
+        hasattr(user, "locale")
+        and profile.locale is not None
+        and profile.locale != getattr(user, "locale", None)
+    ):
+        user.locale = profile.locale
+        changed = True
+    if (
+        hasattr(user, "theme")
+        and profile.theme is not None
+        and profile.theme != getattr(user, "theme", None)
+    ):
+        user.theme = profile.theme
+        changed = True
     # Email: only when ORM table has the column (KTM); HRMS User has no email.
     table = getattr(type(user), "__table__", None)
-    if table is not None and "email" in table.c and profile.email is not None:
-        if profile.email != getattr(user, "email", None):
-            user.email = profile.email
-            changed = True
+    if (
+        table is not None
+        and "email" in table.c
+        and profile.email is not None
+        and profile.email != getattr(user, "email", None)
+    ):
+        user.email = profile.email
+        changed = True
     return changed
 
 
@@ -332,7 +346,7 @@ def _ts_utc(value: datetime | None) -> datetime | None:
     if value is None:
         return None
     if value.tzinfo is None:
-        return value.replace(tzinfo=timezone.utc)
+        return value.replace(tzinfo=UTC)
     return value
 
 
@@ -365,7 +379,7 @@ async def ensure_profile_fresh(
     """
     if not getattr(user, "authentik_sub", None) or not profile_sync_enabled():
         return
-    now = datetime.now(timezone.utc)
+    now = datetime.now(UTC)
     ttl = settings.AUTHENTIK_PROFILE_TTL_SECONDS
     if not refresh and ttl > 0:
         for last in (

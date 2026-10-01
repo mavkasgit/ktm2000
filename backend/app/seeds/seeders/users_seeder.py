@@ -3,8 +3,8 @@ from __future__ import annotations
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.models.user import User, UserRole
 from app.models.section import Section
+from app.models.user import User, UserRole
 
 
 async def seed_users(db: AsyncSession) -> dict[int, User]:

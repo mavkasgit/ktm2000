@@ -7,10 +7,9 @@ from decimal import Decimal
 from urllib.parse import quote
 
 import pytest
-from sqlalchemy.ext.asyncio import AsyncSession
-
 from app.core.security import create_access_token
 from app.models.internal_plan import InternalPlan, InternalPlanStatus, SectionPlanLine
+from app.models.product import Product, ProductType
 from app.models.production_plan import (
     PlanPosition,
     PlanPositionStatus,
@@ -18,12 +17,12 @@ from app.models.production_plan import (
     PlanSourceType,
     ProductionPlan,
 )
-from app.models.product import Product, ProductType
 from app.models.route import ProductionRoute, RouteOperation, RouteStage
 from app.models.section import Section
 from app.models.user import User, UserRole
 from app.models.work_task import WorkTask, WorkTaskStatus
 from app.services.shopfloor.queries_sections import get_section_board
+from sqlalchemy.ext.asyncio import AsyncSession
 
 
 async def _make_user(session: AsyncSession) -> User:
@@ -110,7 +109,7 @@ async def _seed_board_tasks(
             source_type=PlanSourceType.excel_import,
             source_sku=sku,
             output_sku=sku,
-            quantity=Decimal("10"),
+            quantity=Decimal(10),
             status=PlanPositionStatus.released,
             validation_status=PlanPositionValidationStatus.valid,
             route_id=route.id,
@@ -127,7 +126,7 @@ async def _seed_board_tasks(
             section_id=raw_stage.section_id,
             product_id=product.id,
             sequence=1,
-            planned_quantity=Decimal("10"),
+            planned_quantity=Decimal(10),
         )
         target_line = SectionPlanLine(
             internal_plan_id=internal_plan.id,
@@ -137,7 +136,7 @@ async def _seed_board_tasks(
             section_id=target_stage.section_id,
             product_id=product.id,
             sequence=2,
-            planned_quantity=Decimal("10"),
+            planned_quantity=Decimal(10),
             due_date=due_date if set_due_date else date(2026, 1, 1 + (i % 28)),
         )
         session.add_all([raw_line, target_line])
@@ -149,7 +148,7 @@ async def _seed_board_tasks(
                 section_id=raw_line.section_id,
                 product_id=product.id,
                 route_stage_id=raw_line.route_stage_id,
-                planned_quantity=Decimal("10"),
+                planned_quantity=Decimal(10),
                 status=WorkTaskStatus.completed,
             ),
             WorkTask(
@@ -157,7 +156,7 @@ async def _seed_board_tasks(
                 section_id=target_line.section_id,
                 product_id=product.id,
                 route_stage_id=target_line.route_stage_id,
-                planned_quantity=Decimal("10"),
+                planned_quantity=Decimal(10),
                 status=WorkTaskStatus.ready,
                 due_date=target_line.due_date,
                 dimensions=dimensions,

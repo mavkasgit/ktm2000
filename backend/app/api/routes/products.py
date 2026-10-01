@@ -1,36 +1,60 @@
 import base64
 from collections.abc import Sequence
 from pathlib import Path
+from typing import Literal
 
-from typing import List, Literal
-from fastapi import APIRouter, Depends, File, HTTPException, Query, UploadFile, status, Response
+from fastapi import (
+    APIRouter,
+    Depends,
+    File,
+    HTTPException,
+    Query,
+    Response,
+    UploadFile,
+    status,
+)
 from pydantic import BaseModel, Field
-from sqlalchemy import case, cast, exists, func, or_, select, delete, Integer, Float
-from sqlalchemy.types import String
+from sqlalchemy import Float, Integer, case, cast, delete, exists, func, or_, select
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import selectinload
+from sqlalchemy.types import String
 
+from app.api.deps import REFERENCES_READER_ROLES, REFERENCES_WRITER_ROLES, require_role
 from app.core.config import settings
 from app.core.database import get_db
 from app.core.sorting import SortClause, apply_sort, parse_sort
-from app.api.deps import REFERENCES_READER_ROLES, REFERENCES_WRITER_ROLES, require_role
-from app.models.product import Product, ProductType, DimensionState, ProductLength, ProcessingFlag, ProductProcessingFlag, ProductComposition, ProductPair, _length_key
-from app.models.dimension import ProductDimension, DimensionType
-from app.models.production_plan import PlanPosition
-from app.models.work_task import WorkTask
-from app.models.internal_plan import SectionPlanLine
-from app.models.route import ProductionRoute, RouteRuleProfile, RouteStage, SectionOperation
-from app.models.section import Section
-from app.services.route_selection import select_route_for_payload
-from app.models.transfer import Transfer
 from app.models.defect import Defect
+from app.models.dimension import DimensionType, ProductDimension
+from app.models.internal_plan import SectionPlanLine
+from app.models.product import (
+    DimensionState,
+    ProcessingFlag,
+    Product,
+    ProductComposition,
+    ProductLength,
+    ProductPair,
+    ProductProcessingFlag,
+    ProductType,
+    _length_key,
+)
+from app.models.production_plan import PlanPosition
 from app.models.rework_task import ReworkTask
+from app.models.route import (
+    ProductionRoute,
+    RouteRuleProfile,
+    RouteStage,
+    SectionOperation,
+)
+from app.models.section import Section
+from app.models.transfer import Transfer
+from app.models.work_task import WorkTask
 from app.services.hanger_quantity_calc import (
     DEFAULT_HANGER_SETTINGS,
     HangerConfigError,
     compute_hanger_quantity,
     compute_sheet_hanger_quantity,
 )
+from app.services.route_selection import select_route_for_payload
 
 router = APIRouter(prefix="/products", tags=["products"])
 
@@ -144,9 +168,9 @@ class ProductIn(BaseModel):
     is_catalog_item: bool = False
     skip_shot_blast: bool = False
     dimension_state: DimensionState = DimensionState.length
-    lengths: List[ProductLengthIn] = []
-    aliases: List[str] = []
-    processing_flag_codes: List[str] = []
+    lengths: list[ProductLengthIn] = []
+    aliases: list[str] = []
+    processing_flag_codes: list[str] = []
     is_laminated: bool = False
 
 
@@ -174,9 +198,9 @@ class ProductPatch(BaseModel):
     is_catalog_item: bool | None = None
     skip_shot_blast: bool | None = None
     dimension_state: DimensionState | None = None
-    lengths: List[ProductLengthIn] | None = None
-    aliases: List[str] | None = None
-    processing_flag_codes: List[str] | None = None
+    lengths: list[ProductLengthIn] | None = None
+    aliases: list[str] | None = None
+    processing_flag_codes: list[str] | None = None
     is_laminated: bool | None = None
 
 
@@ -234,12 +258,12 @@ class ProductOut(BaseModel):
     is_paired_profile: bool
     skip_shot_blast: bool
     dimension_state: DimensionState
-    lengths: List[ProductLengthOut]
-    aliases: List[str]
-    processing_flags: List[ProcessingFlagInfo]
+    lengths: list[ProductLengthOut]
+    aliases: list[str]
+    processing_flags: list[ProcessingFlagInfo]
     is_laminated: bool
     dimensions: dict[str, float] | None = None
-    composition: List[CompositionItemOut] | None = None
+    composition: list[CompositionItemOut] | None = None
 
 
 # ─── Сортировка справочника сырья (#76) ─────────────────────────────────────
@@ -364,7 +388,7 @@ def _any_quantity_in_range(qty_from: int | None, qty_to: int | None):
 
 
 class ProductsListResponse(BaseModel):
-    items: List[ProductOut]
+    items: list[ProductOut]
     total: int
 
 
@@ -1548,14 +1572,13 @@ async def get_product_route_stages(
                                     operation_code=go.operation_code,
                                     operation_name=go.operation_name,
                                 ))
-                    else:
-                        # Если группы нет, добавляем только саму операцию
-                        if not any(added.operation_code == op.operation_code for added in ops_list):
-                            ops_list.append(RouteOperationOut(
-                                id=op.id,
-                                operation_code=op.operation_code,
-                                operation_name=op.operation_name,
-                            ))
+                    # Если группы нет, добавляем только саму операцию
+                    elif not any(added.operation_code == op.operation_code for added in ops_list):
+                        ops_list.append(RouteOperationOut(
+                            id=op.id,
+                            operation_code=op.operation_code,
+                            operation_name=op.operation_name,
+                        ))
         else:
             # Fall back to section operations
             section_ops = section_ops_dict.get(stage.section_id) or []

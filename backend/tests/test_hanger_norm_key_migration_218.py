@@ -23,14 +23,13 @@ from pathlib import Path
 from urllib.parse import urlparse
 
 import pytest
-from httpx import ASGITransport, AsyncClient
-from sqlalchemy import select, text
-from sqlalchemy.ext.asyncio import async_sessionmaker, create_async_engine
-
 from app.core.database import get_db
 from app.main import app
 from app.models.product import DimensionState, Product
 from app.services.plan_position_hanger import resolve_position_hanger
+from httpx import ASGITransport, AsyncClient
+from sqlalchemy import select, text
+from sqlalchemy.ext.asyncio import async_sessionmaker, create_async_engine
 
 from tests.helpers.mig_db import (
     create_migration_db,

@@ -1,10 +1,10 @@
 from __future__ import annotations
 
+import json
 from datetime import UTC, datetime, timedelta
-from decimal import Decimal, ROUND_HALF_UP
+from decimal import ROUND_HALF_UP, Decimal
 from enum import Enum
 from io import BytesIO
-import json
 from pathlib import Path
 from uuid import uuid4
 
@@ -15,9 +15,10 @@ from sqlalchemy import select, text
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.api.deps import get_current_user
+from app.api.routes.production_planning import _ensure_task_issued_via_transfer
 from app.core.database import get_db
-from app.models.internal_plan import SectionPlanLine
 from app.models.imports import ImportBatchMode
+from app.models.internal_plan import SectionPlanLine
 from app.models.product import Product
 from app.models.production_plan import (
     PlanChangeAction,
@@ -36,7 +37,6 @@ from app.services.plan_generation import create_release_batch, release_batch
 from app.services.plan_import_service import create_excel_import_change_set
 from app.services.production_plan_service import apply_change_set, approve_plan_position
 from app.services.route_identity import find_route_by_name
-from app.api.routes.production_planning import _ensure_task_issued_via_transfer
 from app.services.shopfloor_service import complete_task
 from app.transfers.services import transfer_send
 
@@ -54,7 +54,7 @@ class StagePreset(str, Enum):
 
 
 class FullRouteRunRequest(BaseModel):
-    initial_quantity: Decimal = Decimal("100")
+    initial_quantity: Decimal = Decimal(100)
     route_name: str = "Типовой: полный (все участки)"
     route_id: int | None = None
     product_id: int
@@ -194,14 +194,13 @@ def _defect_percent(sequence: int) -> int:
 
 def _compute_defect_qty(input_qty: Decimal, percent: int) -> Decimal:
     if input_qty <= 0:
-        return Decimal("0")
-    raw = (input_qty * Decimal(percent) / Decimal("100"))
+        return Decimal(0)
+    raw = (input_qty * Decimal(percent) / Decimal(100))
     defect = _round_qty(raw)
-    max_defect = max(Decimal("0"), input_qty - THREE_DEC)
-    if defect > max_defect:
-        defect = max_defect
+    max_defect = max(Decimal(0), input_qty - THREE_DEC)
+    defect = min(defect, max_defect)
     if defect < 0:
-        defect = Decimal("0")
+        defect = Decimal(0)
     return defect
 
 

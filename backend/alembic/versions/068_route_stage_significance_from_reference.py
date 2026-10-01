@@ -42,16 +42,15 @@
 
 Irreversible: no — ``downgrade`` возвращает прежние признаки и убирает отчёт.
 """
-from typing import Sequence, Union
+from collections.abc import Sequence
 
 import sqlalchemy as sa
 from alembic import op
 
-
 revision: str = "068_route_stage_significance_from_reference"
-down_revision: Union[str, None] = "067_hanger_norm_key_normalization"
-branch_labels: Union[str, Sequence[str], None] = None
-depends_on: Union[str, Sequence[str], None] = None
+down_revision: str | None = "067_hanger_norm_key_normalization"
+branch_labels: str | Sequence[str] | None = None
+depends_on: str | Sequence[str] | None = None
 
 REPORT_TABLE = "route_stage_significance_migration"
 

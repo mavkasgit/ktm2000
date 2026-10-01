@@ -17,9 +17,6 @@ from io import BytesIO
 from types import SimpleNamespace
 
 import pytest
-from openpyxl import load_workbook
-from sqlalchemy import func, select
-
 from app.core.config import settings
 from app.models.daily_plan import DailyPlan, DailyPlanItem
 from app.models.internal_plan import SectionPlanLine
@@ -45,6 +42,8 @@ from app.services.excel_import import parse_factory_plan_workbook
 from app.services.route_builder import _resolve_operations
 from app.services.shopfloor.queries_sections import get_section_board
 from app.stock.services import StockProjectionManager
+from openpyxl import load_workbook
+from sqlalchemy import func, select
 
 PLAN_ROW_COUNT = 55
 #: Статусы, которые доска участка показывает под фильтром «Активные».

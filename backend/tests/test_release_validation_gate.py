@@ -14,8 +14,6 @@ from datetime import UTC, datetime
 from decimal import Decimal
 
 import pytest
-from sqlalchemy import select
-
 from app.models.audit_log import AuditEntityType, AuditLog
 from app.models.product import Product, ProductType
 from app.models.production_plan import (
@@ -32,8 +30,13 @@ from app.models.route import ProductionRoute, RouteOperation, RouteStage
 from app.models.section import Section
 from app.services.plan_generation import create_release_batch
 from app.services.production_plan_service import approve_plan_position
-from tests.test_bulk_planning import _auth_headers, _make_plan_with_positions, _make_user
+from sqlalchemy import select
 
+from tests.test_bulk_planning import (
+    _auth_headers,
+    _make_plan_with_positions,
+    _make_user,
+)
 
 #: Этапы маршрута: участок, операция, признак значимости.
 _ROUTE_STEPS = (
@@ -113,7 +116,7 @@ async def _seed_position(
         source_sku=product.sku,
         output_sku=product.sku,
         source_name=product.name,
-        quantity=Decimal("100"),
+        quantity=Decimal(100),
         route_id=route.id,
         route_origin=PlanPositionRouteOrigin.auto.value,
         route_match_quality=PlanPositionRouteMatchQuality.exact.value,

@@ -21,14 +21,14 @@ IF NOT EXISTS / DROP COLUMN IF EXISTS; таблица и колонка на в�
 Revises: 053_product_composition
 Create Date: 2026-09-06 00:00:00.000000
 """
-from typing import Sequence, Union
+from collections.abc import Sequence
 
 from alembic import op
 
 revision: str = "054_product_pairs"
-down_revision: Union[str, None] = "053_product_composition"
-branch_labels: Union[str, Sequence[str], None] = None
-depends_on: Union[str, Sequence[str], None] = None
+down_revision: str | None = "053_product_composition"
+branch_labels: str | Sequence[str] | None = None
+depends_on: str | Sequence[str] | None = None
 
 # Имена констрейнтов — по naming_convention Base (models/base.py), чтобы
 # совпадали с метаданными моделей (create_all в тестах).

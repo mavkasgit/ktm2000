@@ -1,13 +1,14 @@
 from __future__ import annotations
 
 from collections import Counter
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 from decimal import Decimal
 
 from sqlalchemy import and_, delete, or_, select, update
 from sqlalchemy import func as sa_func
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from app.models.audit_log import AuditAction, AuditEntityType, AuditLog
 from app.models.imports import ImportBatch, ImportBatchStatus, ImportFile
 from app.models.production_plan import (
     PlanChangeAction,
@@ -26,10 +27,9 @@ from app.models.production_plan import (
     ProductionPlanStatus,
     require_current_length_model,
 )
-from app.models.audit_log import AuditAction, AuditEntityType, AuditLog
-from app.services.plan_validation import validate_plan_position
-from app.services.audit_log_service import log_action
 from app.models.user import User
+from app.services.audit_log_service import log_action
+from app.services.plan_validation import validate_plan_position
 
 
 class PlanDeleteBlocked(Exception):
@@ -60,11 +60,11 @@ async def collect_production_plan_refs(
     db: AsyncSession, production_plan_id: int
 ) -> PlanDeleteRefs:
     from app.models.action_journal import Action, ActionStatus
-    from app.reversal.action_compensator import ACTION_COMPENSABLE_TYPES
-    from app.services.action_journal_service import TASK_ACTION_FAMILY
     from app.models.internal_plan import SectionPlanLine
     from app.models.transfer import Transfer
     from app.models.work_task import WorkTask
+    from app.reversal.action_compensator import ACTION_COMPENSABLE_TYPES
+    from app.services.action_journal_service import TASK_ACTION_FAMILY
     from app.stock.models import StockTransaction
 
     await _require_active_plan(db, production_plan_id)
@@ -117,8 +117,8 @@ async def collect_production_plan_refs(
 async def _preview_plan_reversals(
     db: AsyncSession, refs: PlanDeleteRefs
 ) -> tuple[list[dict], list[int]]:
-    from app.reversal.service import reversal_service
     from app.reversal.errors import ReversalError
+    from app.reversal.service import reversal_service
 
     blockers: list[dict] = []
     plans: list[tuple[int, str]] = []
@@ -155,10 +155,10 @@ async def get_production_plan_delete_preview(
 ) -> dict:
     from app.models.daily_plan import DailyPlanItem
     from app.models.defect import Defect
+    from app.models.internal_plan import SectionPlanLine
     from app.models.product import Product
     from app.models.rework_task import ReworkTask
     from app.models.section import Section
-    from app.models.internal_plan import SectionPlanLine
     from app.models.work_task import WorkTask
     from app.stock.models import Reason, StockTransaction
 
@@ -167,9 +167,8 @@ async def get_production_plan_delete_preview(
     positions = (await db.scalars(select(PlanPosition).where(
         PlanPosition.id.in_(refs.position_ids)
     ).order_by(PlanPosition.id))).all() if refs.position_ids else []
-    task_to_position = {
-        task_id: position_id
-        for task_id, position_id in (
+    task_to_position = dict(
+        (
             await db.execute(
                 select(WorkTask.id, SectionPlanLine.plan_position_id)
                 .join(
@@ -179,7 +178,7 @@ async def get_production_plan_delete_preview(
                 .where(WorkTask.id.in_(refs.task_ids))
             )
         ).all()
-    } if refs.task_ids else {}
+    ) if refs.task_ids else {}
     action_ids_by_task: dict[int, set[int]] = {}
     if refs.task_ids:
         from app.models.action_journal import Action, ActionStatus
@@ -287,8 +286,8 @@ async def delete_production_plan(
     from app.models.rework_task import ReworkTask, ReworkTaskStatus
     from app.models.transfer import Transfer, TransferStatus
     from app.models.work_task import WorkTask, WorkTaskStatus
-    from app.reversal.service import reversal_service
     from app.reversal.errors import ReversalError
+    from app.reversal.service import reversal_service
 
     plan = await _require_active_plan(db, production_plan_id)
     if confirmation != plan.plan_no:
@@ -346,7 +345,7 @@ async def delete_production_plan(
         reversed_action_ids.extend(result.reversed_action_ids)
 
     refs = await collect_production_plan_refs(db, production_plan_id)
-    now = datetime.now(timezone.utc)
+    now = datetime.now(UTC)
     if refs.task_ids:
         await db.execute(delete(DailyPlanItem).where(DailyPlanItem.work_task_id.in_(refs.task_ids)))
         await db.execute(update(WorkTask).where(WorkTask.id.in_(refs.task_ids)).values(status=WorkTaskStatus.cancelled))
@@ -674,7 +673,7 @@ async def apply_change_set(db: AsyncSession, change_set_id: int, *, skip_invalid
     for linked_item, linked_position in pending_position_links:
         linked_item.plan_position_id = linked_position.id
     change_set.status = PlanChangeSetStatus.applied
-    change_set.applied_at = datetime.now(timezone.utc)
+    change_set.applied_at = datetime.now(UTC)
     if change_set.import_batch_id:
         batch = await db.get(ImportBatch, change_set.import_batch_id)
         if batch is not None:
@@ -852,7 +851,7 @@ async def get_batch_delete_blockers(db: AsyncSession, batch_id: int) -> dict:
             select(PlanPosition.id, PlanPosition.status).where(PlanPosition.import_batch_id == batch_id)
         )
     ).all()
-    pos_status = {position_id: st for position_id, st in positions}
+    pos_status = dict(positions)
     blockers = [
         {"position_id": position_id, "reason": "released"}
         for position_id, st in sorted(pos_status.items())
@@ -867,7 +866,7 @@ async def get_batch_delete_blockers(db: AsyncSession, batch_id: int) -> dict:
                 )
             )
         ).all()
-        line_pos = {line_id: pid for line_id, pid in line_rows}
+        line_pos = dict(line_rows)
         task_to_pos: dict[int, int] = {}
         transfer_rows = []
         if line_pos:
@@ -1142,7 +1141,7 @@ async def hide_import_batch(
         raise ValueError(f"Причина скрытия короче {BATCH_HIDE_MIN_REASON_LENGTH} символов")
     if batch.deleted_at is not None:
         return batch
-    batch.deleted_at = datetime.now(timezone.utc)
+    batch.deleted_at = datetime.now(UTC)
     batch.deleted_by = user.id if user else None
     batch.delete_reason = clean_reason
     await db.commit()
@@ -1400,7 +1399,7 @@ async def soft_delete_cancelled_position(
     reason: str | None = None,
 ) -> PlanPosition:
     """Soft-delete a cancelled position. Hides it from all lists while preserving history."""
-    from datetime import datetime, timezone
+    from datetime import datetime
 
     from sqlalchemy import select
 
@@ -1414,7 +1413,7 @@ async def soft_delete_cancelled_position(
     if position.status != PlanPositionStatus.cancelled:
         raise ValueError(f"Можно скрыть только отменённую позицию (текущий статус: '{position.status.value}')")
 
-    position.deleted_at = datetime.now(timezone.utc)
+    position.deleted_at = datetime.now(UTC)
     position.deleted_by = changed_by
     position.delete_reason = reason
 

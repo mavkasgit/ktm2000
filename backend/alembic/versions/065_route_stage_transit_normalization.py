@@ -21,15 +21,14 @@
 
 Irreversible: no — downgrade возвращает ``section_id`` и ``stage_kind``.
 """
-from typing import Sequence, Union
+from collections.abc import Sequence
 
 from alembic import op
 
-
 revision: str = "065_route_stage_transit_normalization"
-down_revision: Union[str, None] = "064_plan_position_validation_overridden"
-branch_labels: Union[str, Sequence[str], None] = None
-depends_on: Union[str, Sequence[str], None] = None
+down_revision: str | None = "064_plan_position_validation_overridden"
+branch_labels: str | Sequence[str] | None = None
+depends_on: str | Sequence[str] | None = None
 
 # Замороженный снимок app.services.route_storage_classifier.STORAGE_TYPES —
 # тот же набор, что проверяет fn_check_route_stage_transit_invariants.

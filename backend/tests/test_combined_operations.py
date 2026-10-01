@@ -11,8 +11,6 @@ from datetime import date
 from decimal import Decimal
 
 import pytest
-from sqlalchemy import select
-
 from app.models.internal_plan import SectionPlanLine
 from app.models.product import Product, ProductType
 from app.models.production_plan import (
@@ -24,9 +22,10 @@ from app.models.production_plan import (
     ProductionPlan,
     ProductionPlanStatus,
 )
-from app.models.route import ProductionRoute, RouteStage, RouteOperation
+from app.models.route import ProductionRoute, RouteOperation, RouteStage
 from app.models.section import Section
 from app.models.work_task import WorkTask, WorkTaskStatus
+from sqlalchemy import select
 
 
 async def _make_combined_route_product(session, sku: str = "COMBO-1") -> tuple[Product, list[Section], ProductionRoute]:
@@ -106,7 +105,7 @@ async def _make_plan_position(
     session,
     product: Product,
     route: ProductionRoute,
-    quantity: Decimal = Decimal("100"),
+    quantity: Decimal = Decimal(100),
 ) -> tuple[ProductionPlan, PlanPosition]:
     from datetime import UTC, datetime
 

@@ -4,53 +4,78 @@ import math
 from collections import Counter
 from datetime import UTC, datetime
 from decimal import Decimal
-
 from pathlib import Path
 
-from sqlalchemy import select, func
+from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import selectinload
 
 from app.core.config import settings
+from app.domain.dimensions import (
+    LENGTH_MM,
+    DimensionsValidationError,
+    canonicalize_dimensions,
+)
 from app.models.imports import ImportBatch, ImportBatchMode, ImportFile
 from app.models.product import Product, _length_key
-from app.services import product_pair_resolver
-from app.services.product_pair_resolver import PairHangerValue, ResolvedPair
 from app.models.production_plan import (
     LENGTH_MODEL_VERSION_CURRENT,
     PlanChangeAction,
     PlanChangeItem,
     PlanChangeItemStatus,
     PlanChangeSet,
+    PlanPosition,
     PlanPositionRouteMatchQuality,
     PlanPositionRouteMatchReason,
     PlanPositionRouteOrigin,
-    PlanPosition,
     PlanPositionStatus,
     ProductionPlan,
     require_current_length_model,
 )
-from app.models.route import ProductionRoute, RouteStage, RouteOperation, RouteRuleProfile, RouteSelectionRule
+from app.models.route import (
+    ProductionRoute,
+    RouteOperation,
+    RouteRuleProfile,
+    RouteSelectionRule,
+    RouteStage,
+)
 from app.models.section import Section
+from app.services import product_pair_resolver
+from app.services.dimension_validation import (
+    MissingDimensionsError,
+    resolve_product_dimensions,
+)
 from app.services.excel_import import (
-    ParsedWorkbook,
     ParsedPlanRow,
+    ParsedWorkbook,
     detect_workbook_format,
     parse_factory_plan_workbook,
     sha256_bytes,
     validate_excel_extension,
 )
-from app.services.route_selection import RouteSelectionResult, load_route_sections, load_selection_rules_for_profile, load_route_selection_batch_cache, select_route_for_payload
-from app.domain.dimensions import LENGTH_MM, DimensionsValidationError, canonicalize_dimensions
-from app.services.dimension_validation import MissingDimensionsError, resolve_product_dimensions
 from app.services.hanger_quantity import adjust_quantity_to_hanger
 from app.services.import_normalization import normalize_sku as _normalize_sku
-from app.services.plan_position_hanger import PositionHangerValue, position_length_mm, resolve_position_hanger
-from app.services.route_builder import BuiltRoute, build_route_from_profile, load_route_build_batch_cache
-from app.services.route_storage_classifier import STAGE_KIND_TRANSIT, is_storage_section
-from app.services.route_signature import auto_route_code, route_signature_conflicts
+from app.services.plan_position_hanger import (
+    PositionHangerValue,
+    position_length_mm,
+    resolve_position_hanger,
+)
+from app.services.product_pair_resolver import PairHangerValue, ResolvedPair
+from app.services.route_builder import (
+    BuiltRoute,
+    build_route_from_profile,
+    load_route_build_batch_cache,
+)
 from app.services.route_identity import find_route_by_code, find_route_by_name
-
+from app.services.route_selection import (
+    RouteSelectionResult,
+    load_route_sections,
+    load_route_selection_batch_cache,
+    load_selection_rules_for_profile,
+    select_route_for_payload,
+)
+from app.services.route_signature import auto_route_code, route_signature_conflicts
+from app.services.route_storage_classifier import STAGE_KIND_TRANSIT, is_storage_section
 
 #: Каталог кодов строк импорта плана (спека docs/plan-import-spec.md §3, карта #157).
 #: Статус строки (правило ниже, plan_import_row_status): есть errors → invalid,
@@ -305,7 +330,7 @@ async def preview_excel_sheet(
     # Добавляем quantity_adjusted_total в summary
     quantity_adjusted_total = sum(
         (Decimal(item.after_data.get("quantity", "0")) for item in item_payloads),
-        start=Decimal("0"),
+        start=Decimal(0),
     )
     summary["quantity_adjusted_total"] = str(quantity_adjusted_total)
 
@@ -424,8 +449,8 @@ async def create_excel_import_change_set(
     await db.flush()
 
     # Запись лога аудита (загрузка черновика импорта)
-    from app.services.audit_log_service import log_action
     from app.models.audit_log import AuditAction, AuditEntityType
+    from app.services.audit_log_service import log_action
     await log_action(
         db,
         status="success",
@@ -483,7 +508,7 @@ async def create_excel_import_change_set(
         "items": [serialize_light_item(item) for item in item_payloads],
         "quantity_adjusted_total": str(sum(
             (Decimal(item.after_data.get("quantity", "0")) for item in item_payloads),
-            start=Decimal("0"),
+            start=Decimal(0),
         )),
     }
 
@@ -774,7 +799,7 @@ async def _make_change_items(
                 inputs = []
                 for comp_product in (resolved_pair.product_a, resolved_pair.product_b):
                     sku_key = comp_product.sku.lower()
-                    available = available_by_sku.get(sku_key, Decimal("0"))
+                    available = available_by_sku.get(sku_key, Decimal(0))
                     inputs.append({
                         "product_id": comp_product.id,
                         "sku": comp_product.sku,
@@ -1013,7 +1038,7 @@ async def _make_change_items(
             "route_match_reason": route_match_reason,
             "route_assigned_at": route_assigned_at,
             "route_manual_confirmed_at": None,
-            "route_profile_id": rule_profile_id if rule_profile_id else None,
+            "route_profile_id": rule_profile_id or None,
             "route_selection": {
                 "matched_rule_ids": selection.matched_rule_ids,
                 "required_sections": selection.required_sections,
@@ -1371,9 +1396,12 @@ async def _make_change_items(
                     plan_position_id = existing_by_fp.id
 
         # Duplicate against existing data
-        if mode != ImportBatchMode.create_plan and fp in existing_fingerprints:
-            if "duplicate_sku_due_date" not in errors:
-                errors.append("duplicate_sku_due_date")
+        if (
+            mode != ImportBatchMode.create_plan
+            and fp in existing_fingerprints
+            and "duplicate_sku_due_date" not in errors
+        ):
+            errors.append("duplicate_sku_due_date")
 
         status = plan_import_row_status(errors, warnings)
         if change_action == PlanChangeAction.mark_possible_duplicate and status == PlanChangeItemStatus.pending:
@@ -1592,12 +1620,12 @@ def _build_available_inputs_by_sku(rows: list[ParsedPlanRow]) -> dict[str, Decim
                 if not sku:
                     continue
                 key = sku.lower()
-                current = totals.get(key, Decimal("0"))
+                current = totals.get(key, Decimal(0))
                 totals[key] = current + row.quantity
             continue
 
         key = row.source_sku.lower()
-        current = totals.get(key, Decimal("0"))
+        current = totals.get(key, Decimal(0))
         totals[key] = current + row.quantity
     return totals
 

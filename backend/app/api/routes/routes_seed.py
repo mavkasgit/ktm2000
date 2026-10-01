@@ -1,6 +1,7 @@
 """Seed endpoint — fills ALL reference data in one shot:
 ImportTemplate + RouteRuleProfile + Routes + SelectionRules."""
 
+import contextlib
 import logging
 
 from fastapi import APIRouter, Depends, HTTPException, Query, status
@@ -8,15 +9,21 @@ from pydantic import BaseModel
 from sqlalchemy import text
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.api.deps import READER_ROLES, REFERENCES_WRITER_ROLES, WRITER_ROLES, get_current_user, require_role
-from app.models.user import User
+from app.api.deps import (
+    READER_ROLES,
+    REFERENCES_WRITER_ROLES,
+    WRITER_ROLES,
+    get_current_user,
+    require_role,
+)
 from app.core.config import settings
 from app.core.database import get_db
-from app.seeds.run_seed import run_full_seed
-from app.seeds.seeders.demo_production_seeder import seed_demo_production
-from app.seeds.seeders.cleanup_seeder import clear_generated_production_data
-from app.services.audit_log_service import log_action
 from app.models.audit_log import AuditAction
+from app.models.user import User
+from app.seeds.run_seed import run_full_seed
+from app.seeds.seeders.cleanup_seeder import clear_generated_production_data
+from app.seeds.seeders.demo_production_seeder import seed_demo_production
+from app.services.audit_log_service import log_action
 
 logger = logging.getLogger(__name__)
 
@@ -57,10 +64,10 @@ async def seed_preview() -> SeedPreview:
     from app.seeds.import_templates import IMPORT_TEMPLATES
     from app.seeds.route_rule_profiles import ROUTE_RULE_PROFILES
     from app.seeds.routes import ROUTES
-    from app.seeds.selection_rules import SELECTION_RULES
 
     # Sections and operations are defined in the authoring module (ADR-0010)
-    from app.seeds.sections import SECTIONS_DATA, SECTION_OPS
+    from app.seeds.sections import SECTION_OPS, SECTIONS_DATA
+    from app.seeds.selection_rules import SELECTION_RULES
 
     # Count total operations (skip None placeholders)
     total_ops = sum(
@@ -324,10 +331,8 @@ async def cleanup_endpoint(
         if "sections" in payload.tables:
             # Разрываем связи с пользователями перед удалением участков
             await db.execute(text("UPDATE users SET section_id = NULL"))
-            try:
+            with contextlib.suppress(Exception):
                 await db.execute(text("DELETE FROM user_sections"))
-            except Exception:
-                pass
 
         deleted_tables: list[str] = []
         for table in ordered_tables:

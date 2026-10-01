@@ -9,8 +9,6 @@ This test verifies:
 """
 
 import pytest
-from sqlalchemy import select
-
 from app.models.import_template import ImportTemplate
 from app.models.product import Product, ProductType
 from app.models.production_plan import (
@@ -18,12 +16,18 @@ from app.models.production_plan import (
     PlanPositionRouteOrigin,
     ProductionPlan,
 )
-from app.models.route import ProductionRoute, RouteRuleProfile, RouteSelectionRule, RouteStage, SectionOperation
+from app.models.route import (
+    ProductionRoute,
+    RouteRuleProfile,
+    RouteSelectionRule,
+    RouteStage,
+    SectionOperation,
+)
 from app.models.section import Section
 from app.services.plan_import_service import create_excel_import_change_set
+from sqlalchemy import select
 
 from tests.plan_sample import build_sample_plan_workbook
-
 
 DEFAULT_SECTIONS = [
     {"code": "RAW_STOCK", "name": "Склад сырья", "sort_order": 10, "type": "raw_stock"},

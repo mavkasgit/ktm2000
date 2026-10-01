@@ -3,9 +3,6 @@ from __future__ import annotations
 from decimal import Decimal
 
 import pytest
-from sqlalchemy import select
-from sqlalchemy.ext.asyncio import AsyncSession
-
 from app.models import Product, ProductType, Section, User, UserRole
 from app.stock import (
     QualityState,
@@ -15,6 +12,8 @@ from app.stock import (
     StockCommandService,
     StockValidationError,
 )
+from sqlalchemy import select
+from sqlalchemy.ext.asyncio import AsyncSession
 
 pytestmark = pytest.mark.asyncio
 
@@ -81,7 +80,7 @@ async def _balance(
         )
     )
     bal = row.scalar_one_or_none()
-    return bal.balance_qty if bal else Decimal("0")
+    return bal.balance_qty if bal else Decimal(0)
 
 
 # ─── tests ──────────────────────────────────────────────────────────────────
@@ -100,7 +99,7 @@ async def test_insufficient_balance_raises_error(session: AsyncSession):
             product_id=product.id,
             from_location_id=raw.id,
             to_location_id=laser.id,
-            quantity=Decimal("10"),
+            quantity=Decimal(10),
             reason=Reason.TRANSFER_SEND,
             created_by=user.id,
         ))
@@ -110,7 +109,7 @@ async def test_insufficient_balance_raises_error(session: AsyncSession):
     await svc.record(session, StockCommand(
         product_id=product.id,
         to_location_id=raw.id,
-        quantity=Decimal("5"),
+        quantity=Decimal(5),
         reason=Reason.MANUAL_IN,
         created_by=user.id,
     ))
@@ -122,7 +121,7 @@ async def test_insufficient_balance_raises_error(session: AsyncSession):
             product_id=product.id,
             from_location_id=raw.id,
             to_location_id=laser.id,
-            quantity=Decimal("10"),
+            quantity=Decimal(10),
             reason=Reason.TRANSFER_SEND,
             created_by=user.id,
         ))
@@ -133,14 +132,14 @@ async def test_insufficient_balance_raises_error(session: AsyncSession):
         product_id=product.id,
         from_location_id=raw.id,
         to_location_id=laser.id,
-        quantity=Decimal("5"),
+        quantity=Decimal(5),
         reason=Reason.TRANSFER_SEND,
         created_by=user.id,
     ))
     await session.commit()
     assert tx.id is not None
-    assert (await _balance(session, product.id, raw.id)) == Decimal("0")
-    assert (await _balance(session, product.id, laser.id)) == Decimal("5")
+    assert (await _balance(session, product.id, raw.id)) == Decimal(0)
+    assert (await _balance(session, product.id, laser.id)) == Decimal(5)
 
 
 async def test_compensation_bypasses_balance_check(session: AsyncSession):
@@ -154,7 +153,7 @@ async def test_compensation_bypasses_balance_check(session: AsyncSession):
     tx_in = await svc.record(session, StockCommand(
         product_id=product.id,
         to_location_id=raw.id,
-        quantity=Decimal("10"),
+        quantity=Decimal(10),
         reason=Reason.MANUAL_IN,
         created_by=user.id,
     ))
@@ -163,7 +162,7 @@ async def test_compensation_bypasses_balance_check(session: AsyncSession):
         product_id=product.id,
         from_location_id=raw.id,
         to_location_id=laser.id,
-        quantity=Decimal("10"),
+        quantity=Decimal(10),
         reason=Reason.TRANSFER_SEND,
         created_by=user.id,
     ))
@@ -176,7 +175,7 @@ async def test_compensation_bypasses_balance_check(session: AsyncSession):
         product_id=product.id,
         from_location_id=raw.id,
         to_location_id=laser.id,
-        quantity=Decimal("10"),
+        quantity=Decimal(10),
         reason=Reason.TRANSFER_SEND,
         reverses_id=tx_in.id,
         created_by=user.id,
@@ -184,7 +183,7 @@ async def test_compensation_bypasses_balance_check(session: AsyncSession):
     await session.commit()
     assert tx_comp.id is not None
     # Баланс стал отрицательным на raw, так как компенсация обошла валидацию баланса!
-    assert (await _balance(session, product.id, raw.id)) == Decimal("-10")
+    assert (await _balance(session, product.id, raw.id)) == Decimal(-10)
 
 
 async def test_manual_in_bypasses_balance_check(session: AsyncSession):
@@ -197,13 +196,13 @@ async def test_manual_in_bypasses_balance_check(session: AsyncSession):
     tx = await svc.record(session, StockCommand(
         product_id=product.id,
         to_location_id=raw.id,
-        quantity=Decimal("100"),
+        quantity=Decimal(100),
         reason=Reason.MANUAL_IN,
         created_by=user.id,
     ))
     await session.commit()
     assert tx.id is not None
-    assert (await _balance(session, product.id, raw.id)) == Decimal("100")
+    assert (await _balance(session, product.id, raw.id)) == Decimal(100)
 
 
 async def test_idempotency_bypasses_balance_check_on_repeat(session: AsyncSession):
@@ -217,7 +216,7 @@ async def test_idempotency_bypasses_balance_check_on_repeat(session: AsyncSessio
     await svc.record(session, StockCommand(
         product_id=product.id,
         to_location_id=raw.id,
-        quantity=Decimal("10"),
+        quantity=Decimal(10),
         reason=Reason.MANUAL_IN,
         created_by=user.id,
     ))
@@ -228,7 +227,7 @@ async def test_idempotency_bypasses_balance_check_on_repeat(session: AsyncSessio
         product_id=product.id,
         from_location_id=raw.id,
         to_location_id=laser.id,
-        quantity=Decimal("10"),
+        quantity=Decimal(10),
         reason=Reason.TRANSFER_SEND,
         idempotency_key="unique-key-123",
         created_by=user.id,
@@ -236,7 +235,7 @@ async def test_idempotency_bypasses_balance_check_on_repeat(session: AsyncSessio
     tx1 = await svc.record(session, cmd)
     await session.commit()
     assert tx1.id is not None
-    assert (await _balance(session, product.id, raw.id)) == Decimal("0")
+    assert (await _balance(session, product.id, raw.id)) == Decimal(0)
 
     # Повторный запрос с тем же idempotency_key должен вернуть ту же транзакцию
     # без ошибки недостатка баланса

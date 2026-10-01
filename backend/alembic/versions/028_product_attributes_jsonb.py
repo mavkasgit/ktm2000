@@ -3,8 +3,8 @@
 Data migration: existing column values are merged into the new attributes JSONB column.
 Then individual columns are dropped.
 """
-from alembic import op
 import sqlalchemy as sa
+from alembic import op
 from sqlalchemy.dialects.postgresql import JSONB
 
 revision = "028_product_attributes_jsonb"

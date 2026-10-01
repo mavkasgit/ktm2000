@@ -17,14 +17,14 @@ Revision ID: 053_product_composition
 Revises: 052_idempotency_backstops
 Create Date: 2026-09-06 00:00:00.000000
 """
-from typing import Sequence, Union
+from collections.abc import Sequence
 
 from alembic import op
 
 revision: str = "053_product_composition"
-down_revision: Union[str, None] = "052_idempotency_backstops"
-branch_labels: Union[str, Sequence[str], None] = None
-depends_on: Union[str, Sequence[str], None] = None
+down_revision: str | None = "052_idempotency_backstops"
+branch_labels: str | Sequence[str] | None = None
+depends_on: str | Sequence[str] | None = None
 
 # Инварианты состава держит один BEFORE-триггер (SQL-констрейнтом не выразить,
 # а API-валидация — не защита от прямых записей):

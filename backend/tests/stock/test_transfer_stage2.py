@@ -14,9 +14,6 @@ from __future__ import annotations
 from decimal import Decimal
 
 import pytest
-from sqlalchemy import func, select
-from sqlalchemy.ext.asyncio import AsyncSession
-
 from app.models import Product, ProductType, Section
 from app.models.route import (
     SectionOperation,
@@ -29,20 +26,24 @@ from app.services.material_operations import (
 )
 from app.stock.models import QualityState, Reason, StockBalance, StockTransaction
 from app.transfers.services import cancel_transfer, correct_transfer, transfer_send
+from sqlalchemy import func, select
+from sqlalchemy.ext.asyncio import AsyncSession
+
+# Канонические определения фабрик живут в tests/helpers/transfers.py
+# (#131 follow-up); реэкспорт сохраняет старый путь импорта для потребителей.
+from tests.helpers.transfers import _make_tasks_transferable, _make_two_ghp_setup
 from tests.test_integrity_invariants import (
     _auth_headers,
+    assert_no_invariants_violations,
+)
+from tests.test_integrity_invariants import (
     # Реэкспорт для потребителей старого пути импорта
     # (tests/stock/test_stock_dimensions.py берёт его именно отсюда) —
     # не удалять при чистке импортов: сам файл его не вызывает.
     # `X as X` — явный реэкспорт: так имя остаётся публичным и для ruff (F401),
     # и для читателя, который иначе удалит «неиспользуемый» импорт.
     _release_via_take_to_work as _release_via_take_to_work,
-    assert_no_invariants_violations,
 )
-# Канонические определения фабрик живут в tests/helpers/transfers.py
-# (#131 follow-up); реэкспорт сохраняет старый путь импорта для потребителей.
-from tests.helpers.transfers import _make_tasks_transferable, _make_two_ghp_setup
-
 
 # ─── helpers ────────────────────────────────────────────────────────────────
 
@@ -82,7 +83,7 @@ async def _balance(
         )
     )
     bal = row.scalar_one_or_none()
-    return bal.balance_qty if bal else Decimal("0")
+    return bal.balance_qty if bal else Decimal(0)
 
 
 # _make_two_ghp_setup / _make_tasks_transferable переехали в канонический
@@ -98,14 +99,14 @@ _py_test_mark = pytest.mark.asyncio
 @_py_test_mark
 async def test_transfer_send_creates_two_stock_tx(session: AsyncSession, client) -> None:
     """После transfer_send() есть 2 StockTransaction (SEND + RECEIVE)."""
-    setup = await _make_two_ghp_setup(session, sku="T2STX", qty=Decimal("10"))
+    setup = await _make_two_ghp_setup(session, sku="T2STX", qty=Decimal(10))
     ctx = await _make_tasks_transferable(session, client, setup)
 
     result = await transfer_send(
         session,
         from_task_id=ctx["from_task_id"],
         to_task_id=ctx["to_task_id"],
-        quantity=Decimal("5"),
+        quantity=Decimal(5),
         actor_id=ctx["user"].id,
         idempotency_key="t2stx:send",
     )
@@ -126,15 +127,15 @@ async def test_transfer_send_creates_two_stock_tx(session: AsyncSession, client)
     assert send_tx.task_id == ctx["from_task_id"]
     assert recv_tx.reason == Reason.TRANSFER_RECEIVE
     assert recv_tx.task_id == ctx["to_task_id"]
-    assert send_tx.quantity == Decimal("5")
-    assert recv_tx.quantity == Decimal("5")
+    assert send_tx.quantity == Decimal(5)
+    assert recv_tx.quantity == Decimal(5)
     assert send_tx.transfer_id == recv_tx.transfer_id
 
 
 @_py_test_mark
 async def test_transfer_send_updates_balance(session: AsyncSession, client) -> None:
     """StockBalance у to_location вырос, у from_location упал."""
-    setup = await _make_two_ghp_setup(session, sku="T2BAL", qty=Decimal("10"))
+    setup = await _make_two_ghp_setup(session, sku="T2BAL", qty=Decimal(10))
     ctx = await _make_tasks_transferable(session, client, setup)
 
     from_task = await session.get(WorkTask, ctx["from_task_id"])
@@ -147,7 +148,7 @@ async def test_transfer_send_updates_balance(session: AsyncSession, client) -> N
         session,
         from_task_id=ctx["from_task_id"],
         to_task_id=ctx["to_task_id"],
-        quantity=Decimal("5"),
+        quantity=Decimal(5),
         actor_id=ctx["user"].id,
     )
     await session.commit()
@@ -156,14 +157,14 @@ async def test_transfer_send_updates_balance(session: AsyncSession, client) -> N
     bal_from = await _balance(session, from_task.product_id, from_task.section_id)
     bal_to = await _balance(session, to_task.product_id, to_task.section_id)
     # TRANSFER_SEND двигает остаток; TRANSFER_RECEIVE — только учёт задачи.
-    assert bal_from == bal_before_from - Decimal("5")
-    assert bal_to == bal_before_to + Decimal("5")
+    assert bal_from == bal_before_from - Decimal(5)
+    assert bal_to == bal_before_to + Decimal(5)
 
 
 @_py_test_mark
 async def test_transfer_send_idempotent(session: AsyncSession, client) -> None:
     """Повторный transfer_send с тем же idempotency_key не создаёт вторую пару."""
-    setup = await _make_two_ghp_setup(session, sku="T2IDM", qty=Decimal("10"))
+    setup = await _make_two_ghp_setup(session, sku="T2IDM", qty=Decimal(10))
     ctx = await _make_tasks_transferable(session, client, setup)
 
     key = "t2idm:unique"
@@ -171,7 +172,7 @@ async def test_transfer_send_idempotent(session: AsyncSession, client) -> None:
         session,
         from_task_id=ctx["from_task_id"],
         to_task_id=ctx["to_task_id"],
-        quantity=Decimal("5"),
+        quantity=Decimal(5),
         actor_id=ctx["user"].id,
         idempotency_key=key,
     )
@@ -179,7 +180,7 @@ async def test_transfer_send_idempotent(session: AsyncSession, client) -> None:
         session,
         from_task_id=ctx["from_task_id"],
         to_task_id=ctx["to_task_id"],
-        quantity=Decimal("5"),
+        quantity=Decimal(5),
         actor_id=ctx["user"].id,
         idempotency_key=key,
     )
@@ -198,14 +199,14 @@ async def test_transfer_send_idempotent(session: AsyncSession, client) -> None:
 @_py_test_mark
 async def test_cancel_transfer_creates_compensation(session: AsyncSession, client) -> None:
     """После отмены есть компенсационные StockTransaction, баланс = 0."""
-    setup = await _make_two_ghp_setup(session, sku="T2CNL", qty=Decimal("10"))
+    setup = await _make_two_ghp_setup(session, sku="T2CNL", qty=Decimal(10))
     ctx = await _make_tasks_transferable(session, client, setup)
 
     send = await transfer_send(
         session,
         from_task_id=ctx["from_task_id"],
         to_task_id=ctx["to_task_id"],
-        quantity=Decimal("5"),
+        quantity=Decimal(5),
         actor_id=ctx["user"].id,
     )
     from_task = await session.get(WorkTask, ctx["from_task_id"])
@@ -218,8 +219,8 @@ async def test_cancel_transfer_creates_compensation(session: AsyncSession, clien
 
     # После компенсации: на секции источника остаётся TRANSFER_RECEIVE (10)
     # минус transfer_send (5) плюс компенсация send (5) = 10
-    assert (await _balance(session, from_task.product_id, from_task.section_id)) == Decimal("10")
-    assert (await _balance(session, to_task.product_id, to_task.section_id)) == Decimal("0")
+    assert (await _balance(session, from_task.product_id, from_task.section_id)) == Decimal(10)
+    assert (await _balance(session, to_task.product_id, to_task.section_id)) == Decimal(0)
 
     # Есть компенсационные записи
     comps = (await session.execute(
@@ -234,14 +235,14 @@ async def test_cancel_transfer_creates_compensation(session: AsyncSession, clien
 @_py_test_mark
 async def test_cancel_transfer_idempotent(session: AsyncSession, client) -> None:
     """Повторная отмена — no-op."""
-    setup = await _make_two_ghp_setup(session, sku="T2CNI", qty=Decimal("10"))
+    setup = await _make_two_ghp_setup(session, sku="T2CNI", qty=Decimal(10))
     ctx = await _make_tasks_transferable(session, client, setup)
 
     send = await transfer_send(
         session,
         from_task_id=ctx["from_task_id"],
         to_task_id=ctx["to_task_id"],
-        quantity=Decimal("5"),
+        quantity=Decimal(5),
         actor_id=ctx["user"].id,
     )
     r1 = await cancel_transfer(
@@ -266,14 +267,14 @@ async def test_cancel_transfer_idempotent(session: AsyncSession, client) -> None
 async def test_correct_transfer_quantity(session: AsyncSession, client) -> None:
     """correct_transfer через ReversalService.amend: старая пара неизменна,
     компенсации под старым Transfer, новая пара — под новым Transfer."""
-    setup = await _make_two_ghp_setup(session, sku="T2COR", qty=Decimal("10"))
+    setup = await _make_two_ghp_setup(session, sku="T2COR", qty=Decimal(10))
     ctx = await _make_tasks_transferable(session, client, setup)
 
     send = await transfer_send(
         session,
         from_task_id=ctx["from_task_id"],
         to_task_id=ctx["to_task_id"],
-        quantity=Decimal("5"),
+        quantity=Decimal(5),
         actor_id=ctx["user"].id,
     )
     await session.commit()
@@ -295,7 +296,7 @@ async def test_correct_transfer_quantity(session: AsyncSession, client) -> None:
     correct_result = await correct_transfer(
         session,
         transfer_id=send["transfer_id"],
-        new_quantity=Decimal("3"),
+        new_quantity=Decimal(3),
         actor_id=ctx["user"].id,
     )
     await session.commit()
@@ -315,13 +316,13 @@ async def test_correct_transfer_quantity(session: AsyncSession, client) -> None:
 
     by_id = {tx.id: tx for tx in old_txs}
     for orig in originals:
-        assert by_id[orig.id].quantity == Decimal("5")
+        assert by_id[orig.id].quantity == Decimal(5)
         assert by_id[orig.id].from_location_id == orig.from_location_id
         assert by_id[orig.id].to_location_id == orig.to_location_id
 
     compensations = [tx for tx in old_txs if tx.reverses_id is not None]
     assert {tx.reverses_id for tx in compensations} == {orig.id for orig in originals}
-    assert all(tx.quantity == Decimal("5") for tx in compensations)
+    assert all(tx.quantity == Decimal(5) for tx in compensations)
 
     # Новый Transfer: 2 проводки с новым quantity.
     new_txs = (await session.execute(
@@ -330,7 +331,7 @@ async def test_correct_transfer_quantity(session: AsyncSession, client) -> None:
         ).order_by(StockTransaction.id)
     )).scalars().all()
     assert len(new_txs) == 2
-    assert all(tx.quantity == Decimal("3") for tx in new_txs)
+    assert all(tx.quantity == Decimal(3) for tx in new_txs)
 
     # Старый Transfer в статусе amended.
     old_transfer = await session.get(Transfer, send["transfer_id"])
@@ -340,7 +341,7 @@ async def test_correct_transfer_quantity(session: AsyncSession, client) -> None:
 @_py_test_mark
 async def test_transfer_send_via_api(session: AsyncSession, client) -> None:
     """POST /api/transfers → 200 + Transfer + 2× StockTransaction."""
-    setup = await _make_two_ghp_setup(session, sku="T2API", qty=Decimal("10"))
+    setup = await _make_two_ghp_setup(session, sku="T2API", qty=Decimal(10))
     ctx = await _make_tasks_transferable(session, client, setup)
     headers = _auth_headers(ctx["user"])
 
@@ -372,21 +373,23 @@ async def test_transfer_send_via_api(session: AsyncSession, client) -> None:
     assert len(txs) == 2
 
     # Проверка Stock Ledger инвариантов
-    from tests.test_integrity_invariants import assert_no_stock_ledger_invariants_violations
+    from tests.test_integrity_invariants import (
+        assert_no_stock_ledger_invariants_violations,
+    )
     await assert_no_stock_ledger_invariants_violations(session, context="api-transfer")
 
 
 @_py_test_mark
 async def test_transfer_send_task_cache_via_ledger(session: AsyncSession, client) -> None:
     """get_task_cache() показывает transferred/received из StockTransaction после transfer_send."""
-    setup = await _make_two_ghp_setup(session, sku="T2TCACHE", qty=Decimal("10"))
+    setup = await _make_two_ghp_setup(session, sku="T2TCACHE", qty=Decimal(10))
     ctx = await _make_tasks_transferable(session, client, setup)
 
     await transfer_send(
         session,
         from_task_id=ctx["from_task_id"],
         to_task_id=ctx["to_task_id"],
-        quantity=Decimal("5"),
+        quantity=Decimal(5),
         actor_id=ctx["user"].id,
     )
     await session.commit()
@@ -396,8 +399,8 @@ async def test_transfer_send_task_cache_via_ledger(session: AsyncSession, client
     from_cache = await pm.get_task_cache(session, ctx["from_task_id"])
     to_cache = await pm.get_task_cache(session, ctx["to_task_id"])
 
-    assert from_cache["transferred_quantity"] == Decimal("5")
-    assert to_cache["received_quantity"] == Decimal("5")
+    assert from_cache["transferred_quantity"] == Decimal(5)
+    assert to_cache["received_quantity"] == Decimal(5)
 
 
 @_py_test_mark
@@ -410,7 +413,7 @@ async def test_complete_after_transfer_balance_not_doubled(session: AsyncSession
     проводкой ``TRANSFORM_CONSUME`` + приход ``COMPLETE``. Баланс участка
     при этом не двоится: сколько передали, столько и остаётся.
     """
-    setup = await _make_two_ghp_setup(session, sku="T2CMP", qty=Decimal("10"))
+    setup = await _make_two_ghp_setup(session, sku="T2CMP", qty=Decimal(10))
     # Секции несут значимые операции своих этапов: без них признак
     # «пройденные операции» у обеих сторон пуст, и перенос группы
     # (``[]`` → ``[]``) был бы неотличим от старой net-zero проводки —
@@ -427,7 +430,7 @@ async def test_complete_after_transfer_balance_not_doubled(session: AsyncSession
     await session.flush()
     ctx = await _make_tasks_transferable(session, client, setup)
 
-    xfer_qty = Decimal("10")
+    xfer_qty = Decimal(10)
     await transfer_send(
         session,
         from_task_id=ctx["from_task_id"],
@@ -448,7 +451,7 @@ async def test_complete_after_transfer_balance_not_doubled(session: AsyncSession
         session,
         task_id=to_task.id,
         good_quantity=xfer_qty,
-        defect_quantity=Decimal("0"),
+        defect_quantity=Decimal(0),
         actor_id=ctx["user"].id,
     )
     await session.commit()
@@ -524,7 +527,7 @@ async def test_correct_then_reverse_balance_restored(
     """
     from app.models.action_journal import Action
 
-    setup = await _make_two_ghp_setup(session, sku="T2CRV", qty=Decimal("10"))
+    setup = await _make_two_ghp_setup(session, sku="T2CRV", qty=Decimal(10))
     ctx = await _make_tasks_transferable(session, client, setup)
     from_task = await session.get(WorkTask, ctx["from_task_id"])
     to_task = await session.get(WorkTask, ctx["to_task_id"])
@@ -534,7 +537,7 @@ async def test_correct_then_reverse_balance_restored(
         session,
         from_task_id=ctx["from_task_id"],
         to_task_id=ctx["to_task_id"],
-        quantity=Decimal("5"),
+        quantity=Decimal(5),
         actor_id=ctx["user"].id,
         idempotency_key="t2crv:send",
     )
@@ -544,7 +547,7 @@ async def test_correct_then_reverse_balance_restored(
     correct_result = await correct_transfer(
         session,
         transfer_id=send["transfer_id"],
-        new_quantity=Decimal("3"),
+        new_quantity=Decimal(3),
         actor_id=ctx["user"].id,
     )
     await session.commit()
@@ -556,10 +559,10 @@ async def test_correct_then_reverse_balance_restored(
     # net по приёмнику = +3 (получено 3).
     assert (await _balance(
         session, from_task.product_id, from_task.section_id,
-    )) == Decimal("7")  # 10 - 3
+    )) == Decimal(7)  # 10 - 3
     assert (await _balance(
         session, to_task.product_id, to_task.section_id,
-    )) == Decimal("3")
+    )) == Decimal(3)
 
     # 3. Reverse (cancel) нового Transfer
     cancel_result = await cancel_transfer(
@@ -575,10 +578,10 @@ async def test_correct_then_reverse_balance_restored(
     # Баланс восстановлен: net=0 по обеим секциям.
     assert (await _balance(
         session, from_task.product_id, from_task.section_id,
-    )) == Decimal("10")  # исходный баланс возвращён
+    )) == Decimal(10)  # исходный баланс возвращён
     assert (await _balance(
         session, to_task.product_id, to_task.section_id,
-    )) == Decimal("0")
+    )) == Decimal(0)
 
     # Старый Transfer = amended, новый = cancelled.
     old_transfer = await session.get(Transfer, send["transfer_id"])
@@ -631,14 +634,14 @@ async def test_cancel_transfer_blocked_when_target_completed_parts(
     Приёмная сторона завершила часть количества (in_work < sent_quantity) —
     cancel_transfer отклоняется ДО вызова reverse, компенсаций нет.
     """
-    setup = await _make_two_ghp_setup(session, sku="T2CNG", qty=Decimal("10"))
+    setup = await _make_two_ghp_setup(session, sku="T2CNG", qty=Decimal(10))
     ctx = await _make_tasks_transferable(session, client, setup)
 
     send = await transfer_send(
         session,
         from_task_id=ctx["from_task_id"],
         to_task_id=ctx["to_task_id"],
-        quantity=Decimal("5"),
+        quantity=Decimal(5),
         actor_id=ctx["user"].id,
         idempotency_key="t2cng:send",
     )
@@ -650,8 +653,8 @@ async def test_cancel_transfer_blocked_when_target_completed_parts(
     await complete_task(
         session,
         task_id=ctx["to_task_id"],
-        good_quantity=Decimal("2"),
-        defect_quantity=Decimal("0"),
+        good_quantity=Decimal(2),
+        defect_quantity=Decimal(0),
         actor_id=ctx["user"].id,
     )
     await session.commit()
@@ -686,14 +689,14 @@ async def test_correct_transfer_reduce_blocked_by_target_in_work(
     Приёмник завершил 3 из 5 (in_work = 2); коррекция 5 → 1 (diff=-4)
     создала бы «фантомный» слив — ValueError до amend, без побочных эффектов.
     """
-    setup = await _make_two_ghp_setup(session, sku="T2CRG", qty=Decimal("10"))
+    setup = await _make_two_ghp_setup(session, sku="T2CRG", qty=Decimal(10))
     ctx = await _make_tasks_transferable(session, client, setup)
 
     send = await transfer_send(
         session,
         from_task_id=ctx["from_task_id"],
         to_task_id=ctx["to_task_id"],
-        quantity=Decimal("5"),
+        quantity=Decimal(5),
         actor_id=ctx["user"].id,
         idempotency_key="t2crg:send",
     )
@@ -704,8 +707,8 @@ async def test_correct_transfer_reduce_blocked_by_target_in_work(
     await complete_task(
         session,
         task_id=ctx["to_task_id"],
-        good_quantity=Decimal("3"),
-        defect_quantity=Decimal("0"),
+        good_quantity=Decimal(3),
+        defect_quantity=Decimal(0),
         actor_id=ctx["user"].id,
     )
     await session.commit()
@@ -714,7 +717,7 @@ async def test_correct_transfer_reduce_blocked_by_target_in_work(
         await correct_transfer(
             session,
             transfer_id=send["transfer_id"],
-            new_quantity=Decimal("1"),
+            new_quantity=Decimal(1),
             actor_id=ctx["user"].id,
         )
     await assert_no_invariants_violations(session, context="t2crg-correct-guard")

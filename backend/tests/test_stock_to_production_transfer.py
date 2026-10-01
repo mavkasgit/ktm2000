@@ -10,8 +10,6 @@ from __future__ import annotations
 from decimal import Decimal
 
 import pytest
-from sqlalchemy import select
-
 from app.core.security import create_access_token
 from app.models.product import Product, ProductType
 from app.models.section import Section
@@ -20,7 +18,7 @@ from app.models.user import User, UserRole
 from app.models.work_task import WorkTask
 from app.stock.models import QualityState, Reason, StockBalance
 from app.stock.services import StockCommand, StockCommandService
-
+from sqlalchemy import select
 
 # ─── helpers ─────────────────────────────────────────────────────────────────
 
@@ -51,7 +49,7 @@ async def _make_raw_stock_to_production_fixture(
 ) -> dict:
     """raw_stock + production в разных ГХП (или одной, если same_ghp=True)."""
     from datetime import date
-    from app.models.route import ProductionRoute, RouteStage, RouteOperation
+
     from app.models.production_plan import (
         PlanPosition,
         PlanPositionStatus,
@@ -60,6 +58,7 @@ async def _make_raw_stock_to_production_fixture(
         ProductionPlan,
         ProductionPlanStatus,
     )
+    from app.models.route import ProductionRoute, RouteOperation, RouteStage
 
     raw_sec = Section(code=f"{sku}-RAW", name="RAW", type="raw_stock", is_active=True, sort_order=0)
     prod_sec = Section(code=f"{sku}-PROD", name="PROD", type="production", is_active=True, sort_order=1)
@@ -160,7 +159,7 @@ async def _stock_balance_qty(session, *, location_id: int, product_id: int) -> D
             StockBalance.quality_state == QualityState.GOOD,
         )
     )
-    return bal or Decimal("0")
+    return bal or Decimal(0)
 
 
 async def _release_via_take_to_work(client, position_id: int) -> None:
@@ -175,7 +174,7 @@ async def test_take_to_work_accepts_partial_release_quantity(client, session) ->
     """Запуск в работу с release_quantity создаёт задачу на указанное количество."""
     from app.models.release_batch import ReleaseBatchPosition
 
-    fx = await _make_raw_stock_to_production_fixture(session, sku="PARTREL", qty=Decimal("216"))
+    fx = await _make_raw_stock_to_production_fixture(session, sku="PARTREL", qty=Decimal(216))
     resp = await client.post(
         "/api/production-planning/rows/take-to-work",
         json={"position_ids": [fx["position"].id], "release_quantity": "100"},
@@ -183,18 +182,18 @@ async def test_take_to_work_accepts_partial_release_quantity(client, session) ->
     assert resp.status_code == 200, resp.text
 
     batch_pos = (await session.execute(select(ReleaseBatchPosition))).scalar_one()
-    assert batch_pos.release_quantity == Decimal("100")
+    assert batch_pos.release_quantity == Decimal(100)
 
     tasks = (await session.execute(select(WorkTask))).scalars().all()
     assert len(tasks) == 1
-    assert tasks[0].planned_quantity == Decimal("100")
+    assert tasks[0].planned_quantity == Decimal(100)
 
 
 async def test_take_to_work_does_not_create_task_on_raw_stock(client, session) -> None:
     """WorkTask создаётся только на production-секции, даже если
     в маршруте есть raw_stock (склад)."""
     await _make_user(session)
-    fx = await _make_raw_stock_to_production_fixture(session, sku="RAWTST", qty=Decimal("5"))
+    fx = await _make_raw_stock_to_production_fixture(session, sku="RAWTST", qty=Decimal(5))
     await _release_via_take_to_work(client, fx["position"].id)
 
     tasks = (await session.execute(select(WorkTask))).scalars().all()
@@ -208,8 +207,8 @@ async def test_manual_stock_transfer_multiple_sends_limited_by_plan_cap(client, 
     суммарно ограничены transferable по размеру."""
     user = await _make_user(session, "manual-xfer@test.local")
     headers = _auth_headers(user)
-    plan_qty = Decimal("100")
-    warehouse_qty = Decimal("4000")
+    plan_qty = Decimal(100)
+    warehouse_qty = Decimal(4000)
     fx = await _make_raw_stock_to_production_fixture(session, sku="MANXFER", qty=plan_qty)
     raw_sec = fx["sections"][0]
 
@@ -282,7 +281,7 @@ async def test_manual_stock_transfer_multiple_sends_limited_by_plan_cap(client, 
         product_id=fx["product"].id,
     )
     # TRANSFER_SEND списывает со склада; TRANSFER_RECEIVE не дублирует движение.
-    assert bal == warehouse_qty - Decimal("50")
+    assert bal == warehouse_qty - Decimal(50)
 
 
 @pytest.mark.asyncio
@@ -294,8 +293,8 @@ async def test_full_stock_transfer_does_not_reappear_in_ready_list(client, sessi
     """
     user = await _make_user(session, "full-xfer@test.local")
     headers = _auth_headers(user)
-    plan_qty = Decimal("100")
-    warehouse_qty = Decimal("4000")
+    plan_qty = Decimal(100)
+    warehouse_qty = Decimal(4000)
     fx = await _make_raw_stock_to_production_fixture(session, sku="FULLXFER", qty=plan_qty)
     raw_sec = fx["sections"][0]
 

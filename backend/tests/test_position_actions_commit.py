@@ -17,28 +17,33 @@ teardown, а `client` переиспользует ту же сессию, по�
 """
 from __future__ import annotations
 
+from collections.abc import AsyncIterator
 from contextlib import asynccontextmanager
-from typing import AsyncIterator
 
 import pytest
-from httpx import ASGITransport, AsyncClient
-from sqlalchemy import delete, func as sa_func, select
-from sqlalchemy.ext.asyncio import AsyncEngine, AsyncSession
-
 from app.core.database import get_db
 from app.main import app
 from app.models.audit_log import AuditAction, AuditEntityType, AuditLog
+from app.models.product import Product
 from app.models.production_plan import (
     PlanPosition,
     PlanPositionStatus,
     ProductionPlan,
     ProductionPlanStatus,
 )
-from app.models.product import Product
 from app.models.route import ProductionRoute, RouteOperation, RouteStage
 from app.models.section import Section
+from httpx import ASGITransport, AsyncClient
+from sqlalchemy import delete, select
+from sqlalchemy import func as sa_func
+from sqlalchemy.ext.asyncio import AsyncEngine, AsyncSession
+
 from tests.test_bulk_approve_commit import _schema_session
-from tests.test_bulk_planning import _auth_headers, _make_plan_with_positions, _make_user
+from tests.test_bulk_planning import (
+    _auth_headers,
+    _make_plan_with_positions,
+    _make_user,
+)
 
 
 async def _cleanup(

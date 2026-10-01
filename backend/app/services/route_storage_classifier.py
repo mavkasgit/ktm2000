@@ -25,13 +25,12 @@ ad-hoc эвристик.
 """
 from __future__ import annotations
 
-from typing import Iterable
+from collections.abc import Iterable
 
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.models.route import RouteStage
 from app.models.section import Section
-
 
 STAGE_KIND_PRODUCTION = "production"
 STAGE_KIND_TRANSIT = "transit"

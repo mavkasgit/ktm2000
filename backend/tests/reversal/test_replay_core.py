@@ -6,12 +6,10 @@ from __future__ import annotations
 
 from decimal import Decimal
 
-import pytest
-from sqlalchemy import func, select
-from sqlalchemy.ext.asyncio import AsyncSession
-
 import app.reversal.stock_compensator as sc_module
+import pytest
 from app.models.action_journal import Action, ActionStatus
+from app.models.internal_plan import SectionPlanLine
 from app.models.section import Section as SectionModel
 from app.models.transfer import Transfer, TransferStatus
 from app.models.work_task import WorkTask
@@ -19,8 +17,10 @@ from app.reversal import errors
 from app.reversal.service import reversal_service
 from app.reversal.stock_compensator import StockCompensator
 from app.stock.models import Reason, StockBalance, StockTransaction
-from app.models.internal_plan import SectionPlanLine
 from app.transfers.services import transfer_send
+from sqlalchemy import func, select
+from sqlalchemy.ext.asyncio import AsyncSession
+
 from tests.stock.test_transfer_stage2 import (
     _make_tasks_transferable,
     _make_two_ghp_setup,
@@ -60,7 +60,7 @@ async def _balance(session: AsyncSession, location_id: int, product_id: int) -> 
                 StockBalance.product_id == product_id,
             )
         )
-    ) or Decimal("0")
+    ) or Decimal(0)
 
 
 async def _sections(session: AsyncSession, ctx: dict) -> tuple[int, int]:
@@ -89,10 +89,10 @@ async def _world_counts(session: AsyncSession) -> tuple[int, int, int]:
 
 
 async def _chain_two(session: AsyncSession, client, sku: str):
-    setup = await _make_two_ghp_setup(session, sku=sku, qty=Decimal("10"))
+    setup = await _make_two_ghp_setup(session, sku=sku, qty=Decimal(10))
     ctx = await _make_tasks_transferable(session, client, setup)
-    a1, _t1 = await _send(session, ctx, qty=Decimal("5"), key=f"{sku}:t1")
-    a2, _t2 = await _send(session, ctx, qty=Decimal("5"), key=f"{sku}:t2")
+    a1, _t1 = await _send(session, ctx, qty=Decimal(5), key=f"{sku}:t1")
+    a2, _t2 = await _send(session, ctx, qty=Decimal(5), key=f"{sku}:t2")
     a2.depends_on = [a1.id]
     await session.commit()
     return a1, a2, ctx
@@ -106,9 +106,9 @@ async def test_replay_payload_from_transactions_not_transfer_row(
 ) -> None:
     """Payload собирается из StockTransaction действия, а НЕ из Transfer:
     работает и после мутаций доменной строки."""
-    setup = await _make_two_ghp_setup(session, sku="RPLPAY", qty=Decimal("10"))
+    setup = await _make_two_ghp_setup(session, sku="RPLPAY", qty=Decimal(10))
     ctx = await _make_tasks_transferable(session, client, setup)
-    action, tid = await _send(session, ctx, qty=Decimal("5"), key="rplpay:t1")
+    action, _tid = await _send(session, ctx, qty=Decimal(5), key="rplpay:t1")
     await session.commit()
 
     send_tx = (
@@ -131,7 +131,7 @@ async def test_replay_payload_from_transactions_not_transfer_row(
     payload = await comp.build_replay_payload(session, action)
 
     assert payload is not None
-    assert payload["quantity"] == Decimal("5")  # из проводки, не 999
+    assert payload["quantity"] == Decimal(5)  # из проводки, не 999
     assert payload["from_task_id"] == send_tx.task_id
     assert payload["to_task_id"] == receive_tx.task_id
     assert payload["dimensions"] == send_tx.dimensions
@@ -150,7 +150,7 @@ async def test_depth3_replays_in_direct_topological_order(
 ) -> None:
     """Реплей транзитивной ветки глубины 3: зависимость раньше потомка."""
     a1, a2, ctx = await _chain_two(session, client, "RPLD3A")
-    await _bump_line_plan(session, ctx, Decimal("30"))
+    await _bump_line_plan(session, ctx, Decimal(30))
 
     # Третий узел — независимая передача (свой склад), объявленная
     # зависимой от a2: транзитивный внук.
@@ -162,9 +162,9 @@ async def test_depth3_replays_in_direct_topological_order(
     stock_sec.code = "RPLD3A-STK"
     await session.commit()
 
-    setup2 = await _make_two_ghp_setup(session, sku="RPLD3AX", qty=Decimal("4"))
+    setup2 = await _make_two_ghp_setup(session, sku="RPLD3AX", qty=Decimal(4))
     ctx2 = await _make_tasks_transferable(session, client, setup2)
-    a3, _t3 = await _send(session, ctx2, qty=Decimal("2"), key="rpld3a:t3")
+    a3, _t3 = await _send(session, ctx2, qty=Decimal(2), key="rpld3a:t3")
     a3.depends_on = [a2.id]
     await session.commit()
 
@@ -209,8 +209,8 @@ async def test_depth3_replays_in_direct_topological_order(
 
     # Нетто: второй сетап сеет ещё 10 в тот же склад (итого 20);
     # после amend корень 3 + реплеи 5 и 2 лежат на приёмной стороне.
-    assert await _balance(session, src_sec, product_id) == Decimal("10")
-    assert await _balance(session, dst_sec, product_id) == Decimal("10")
+    assert await _balance(session, src_sec, product_id) == Decimal(10)
+    assert await _balance(session, dst_sec, product_id) == Decimal(10)
 
 
 # ─── чемпион amend-цепочки ────────────────────────────────────────────────────
@@ -274,8 +274,8 @@ async def test_amended_dependent_replays_champion(
     assert a2.status == ActionStatus.AMENDED  # мёртвое звено не тронуто
     assert champ.status == ActionStatus.REVERSED
 
-    assert await _balance(session, src_sec, product_id) == Decimal("3")
-    assert await _balance(session, dst_sec, product_id) == Decimal("7")
+    assert await _balance(session, src_sec, product_id) == Decimal(3)
+    assert await _balance(session, dst_sec, product_id) == Decimal(7)
 
 
 # ─── не-реплеяемые типы блокируют до изменений ────────────────────────────────
@@ -284,7 +284,7 @@ async def test_amended_dependent_replays_champion(
 async def test_not_replayable_dependent_blocks_before_mutation(
     session: AsyncSession, client
 ) -> None:
-    a1, _a2, ctx = await _chain_two(session, client, "RPLNR")
+    a1, _a2, _ctx = await _chain_two(session, client, "RPLNR")
     dep = Action(
         action_type="seed_demo", ref_id=None, actor="t", depends_on=[a1.id]
     )
@@ -358,8 +358,8 @@ async def test_deep_node_domain_failure_rolls_back_world(
     assert a1_db is not None and a2_db is not None
     assert a1_db.status == ActionStatus.ACTIVE
     assert a2_db.status == ActionStatus.ACTIVE
-    assert await _balance(session, src_sec, product_id) == Decimal("0")
-    assert await _balance(session, dst_sec, product_id) == Decimal("10")
+    assert await _balance(session, src_sec, product_id) == Decimal(0)
+    assert await _balance(session, dst_sec, product_id) == Decimal(10)
     await assert_no_invariants_violations(session, context="rplrbk")
 
 
@@ -449,7 +449,7 @@ async def test_replay_after_domain_mutation_uses_transaction_coords(
 ) -> None:
     """Доменно отменённый Transfer старого корня не мешает реплею:
     координаты берутся из проводок (решение 2 спеки)."""
-    a1, a2, ctx = await _chain_two(session, client, "RPLDMN")
+    a1, _a2, ctx = await _chain_two(session, client, "RPLDMN")
     src_sec, dst_sec = await _sections(session, ctx)
     product_id = (await session.get(WorkTask, ctx["from_task_id"])).product_id
 
@@ -473,5 +473,5 @@ async def test_replay_after_domain_mutation_uses_transaction_coords(
     new_transfer = await session.get(Transfer, rep.ref_id)
     assert new_transfer is not None
     assert new_transfer.status == TransferStatus.accepted
-    assert await _balance(session, src_sec, product_id) == Decimal("0")
-    assert await _balance(session, dst_sec, product_id) == Decimal("10")
+    assert await _balance(session, src_sec, product_id) == Decimal(0)
+    assert await _balance(session, dst_sec, product_id) == Decimal(10)

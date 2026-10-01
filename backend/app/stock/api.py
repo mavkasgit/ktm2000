@@ -24,11 +24,12 @@ from __future__ import annotations
 
 import hashlib
 import json
-from pathlib import Path
 from datetime import date, datetime, time
-from typing import Optional
+from io import BytesIO
+from pathlib import Path
 
 from fastapi import APIRouter, Depends, File, Form, HTTPException, Query, UploadFile
+from fastapi.responses import StreamingResponse
 from pydantic import BaseModel, ConfigDict, Field
 from sqlalchemy import cast, func, or_, select, text
 from sqlalchemy.dialects.postgresql import JSONB, aggregate_order_by
@@ -45,19 +46,13 @@ from app.models.product import Product
 from app.models.route import SectionOperation
 from app.models.section import Section
 from app.models.user import User
-from app.stock.models import (
-    QualityState,
-    Reason,
-    StockBalance,
-    StockTransaction,
-)
-from app.stock.services import StockCommand, StockCommandService, StockValidationError
 from app.services.action_journal_service import action_journal_service
 from app.services.material_operations import (
     OPERATIONS_EMPTY_LABEL,
     OPERATIONS_NOT_RECORDED_LABEL,
     completed_operation_stages,
 )
+from app.services.plan_import_service import _get_or_create_import_file
 from app.stock.import_service import (
     ImportResult,
     RemainderItem,
@@ -73,9 +68,13 @@ from app.stock.import_service import (
     resolve_target_section,
 )
 from app.stock.import_service import _lookup_products as _lookup_remainder_products
-from app.services.plan_import_service import _get_or_create_import_file
-from fastapi.responses import StreamingResponse
-from io import BytesIO
+from app.stock.models import (
+    QualityState,
+    Reason,
+    StockBalance,
+    StockTransaction,
+)
+from app.stock.services import StockCommand, StockCommandService, StockValidationError
 
 router = APIRouter(prefix="/stock", tags=["stock-ledger"])
 
@@ -174,7 +173,7 @@ class StockBalancesListResponse(BaseModel):
 
 
 class StockTransactionsListResponse(BaseModel):
-    transactions: list["StockTransactionOut"]
+    transactions: list[StockTransactionOut]
     total: int
     limit: int
     offset: int
@@ -371,16 +370,16 @@ def _balance_base_stmt():
 def _apply_balance_filters(
     stmt,
     *,
-    product_id: Optional[int],
-    location_id: Optional[int],
-    location_ids: Optional[list[int]],
-    quality_state: Optional[QualityState],
-    search: Optional[str],
-    sku: Optional[str],
-    quantity: Optional[str],
-    quality: Optional[str],
-    location: Optional[str],
-    operations: Optional[str],
+    product_id: int | None,
+    location_id: int | None,
+    location_ids: list[int] | None,
+    quality_state: QualityState | None,
+    search: str | None,
+    sku: str | None,
+    quantity: str | None,
+    quality: str | None,
+    location: str | None,
+    operations: str | None,
 ):
     if product_id is not None:
         stmt = stmt.where(StockBalance.product_id == product_id)
@@ -506,31 +505,31 @@ async def _serialize_balances_with_operations(
 
 @router.get("/balance", response_model=StockBalancesListResponse)
 async def list_balances(
-    product_id: Optional[int] = Query(default=None),
-    location_id: Optional[int] = Query(default=None),
-    location_ids: Optional[list[int]] = Query(default=None),
-    quality_state: Optional[QualityState] = Query(default=None),
-    search: Optional[str] = Query(
+    product_id: int | None = Query(default=None),
+    location_id: int | None = Query(default=None),
+    location_ids: list[int] | None = Query(default=None),
+    quality_state: QualityState | None = Query(default=None),
+    search: str | None = Query(
         default=None,
         description="Поиск по артикулу, product_id, названию участка",
     ),
-    sku: Optional[str] = Query(
+    sku: str | None = Query(
         default=None,
         description="Column filter: ILIKE on product SKU",
     ),
-    quantity: Optional[str] = Query(
+    quantity: str | None = Query(
         default=None,
         description="Column filter: ILIKE on balance quantity",
     ),
-    quality: Optional[str] = Query(
+    quality: str | None = Query(
         default=None,
         description="Column filter: ILIKE on quality_state enum value",
     ),
-    location: Optional[str] = Query(
+    location: str | None = Query(
         default=None,
         description="Column filter: ILIKE on section name or code",
     ),
-    operations: Optional[str] = Query(
+    operations: str | None = Query(
         default=None,
         description=(
             "Column filter: operation name, or the empty-state labels "
@@ -586,7 +585,7 @@ async def list_balances(
 @router.get("/balance/by-product/{product_id}", response_model=list[StockBalanceOut])
 async def list_balances_by_product(
     product_id: int,
-    quality_state: Optional[QualityState] = Query(default=None),
+    quality_state: QualityState | None = Query(default=None),
     db: AsyncSession = Depends(get_db),
     _user: User = Depends(require_role(READER_ROLES)),
 ) -> list[StockBalanceOut]:
@@ -683,43 +682,43 @@ def _serialize_transaction(
 
 @router.get("/transactions", response_model=StockTransactionsListResponse)
 async def list_transactions(
-    product_id: Optional[int] = Query(default=None),
-    transfer_id: Optional[int] = Query(default=None),
-    task_id: Optional[int] = Query(default=None),
-    reason: Optional[str] = Query(
+    product_id: int | None = Query(default=None),
+    transfer_id: int | None = Query(default=None),
+    task_id: int | None = Query(default=None),
+    reason: str | None = Query(
         default=None,
         description="Column filter: ILIKE on reason enum value or label",
     ),
-    from_location: Optional[str] = Query(
+    from_location: str | None = Query(
         default=None,
         description="Column filter: ILIKE on from section name or code",
     ),
-    to_location: Optional[str] = Query(
+    to_location: str | None = Query(
         default=None,
         description="Column filter: ILIKE on to section name or code",
     ),
-    quality_state: Optional[QualityState] = Query(
+    quality_state: QualityState | None = Query(
         default=None,
         description="Column filter: exact match on from/to quality state",
     ),
-    comment: Optional[str] = Query(
+    comment: str | None = Query(
         default=None,
         description="Column filter: ILIKE on comment",
     ),
-    location_id: Optional[int] = Query(
+    location_id: int | None = Query(
         default=None,
         description="Фильтр по участию локации (from или to)",
     ),
-    compensating: Optional[bool] = Query(
+    compensating: bool | None = Query(
         default=None,
         description="True — только компенсации; False — только оригиналы",
     ),
-    search: Optional[str] = Query(
+    search: str | None = Query(
         default=None,
         description="Поиск по комментарию, причине, локациям, source_ref",
     ),
-    date_from: Optional[date] = Query(default=None),
-    date_to: Optional[date] = Query(default=None),
+    date_from: date | None = Query(default=None),
+    date_to: date | None = Query(default=None),
     sort: str = Query(
         default="created_at:desc",
         description="Сортировка через запятую: field:asc|desc, например quantity:desc,created_at:desc",
@@ -1042,7 +1041,7 @@ async def preview_remainders_excel(
         value_parser=lambda value: QualityState(str(value).lower()),
     )
 
-    sheet_name, total_rows, items, summary = await _parse_remainder_import_source(
+    sheet_name, total_rows, items, _summary = await _parse_remainder_import_source(
         file=file,
         clipboard_text=clipboard_text,
         sheet_index=sheet_index,

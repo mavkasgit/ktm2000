@@ -17,16 +17,15 @@
 Irreversible: partially — downgrade очищает словарь норм этих пар, но вернуть
 прежнее содержимое не может (нормы пришли из файла, а не из БД).
 """
-from typing import Sequence, Union
+from collections.abc import Sequence
 
 import sqlalchemy as sa
 from alembic import op
 
-
 revision: str = "058_product_pair_quantity_norms"
-down_revision: Union[str, None] = "057_plan_change_set_applied_at"
-branch_labels: Union[str, Sequence[str], None] = None
-depends_on: Union[str, Sequence[str], None] = None
+down_revision: str | None = "057_plan_change_set_applied_at"
+branch_labels: str | Sequence[str] | None = None
+depends_on: str | Sequence[str] | None = None
 
 _LENGTH_MM = 2750
 

@@ -1,14 +1,14 @@
 from io import BytesIO
 
 import pytest
-from openpyxl import Workbook
-
 from app.core.config import settings
 from app.models.import_template import ImportTemplate
 from app.models.imports import ImportBatch, ImportFile
 from app.models.production_plan import PlanChangeItem, PlanChangeSet, ProductionPlan
 from app.models.route import RouteRuleProfile
 from app.services.excel_import import parse_factory_plan_workbook, parse_row_selection
+from openpyxl import Workbook
+
 from tests.test_integrity_invariants import assert_no_invariants_violations
 
 
@@ -634,7 +634,7 @@ async def test_replace_draft_mode_creates_cancel_for_missing_rows(client, sessio
     monkeypatch.setattr(settings, "IMPORT_STORAGE_DIR", str(tmp_path))
 
     from app.models.product import Product, ProductLength, ProductType
-    from app.models.route import ProductionRoute, RouteStage, RouteOperation
+    from app.models.route import ProductionRoute, RouteOperation, RouteStage
     from app.models.section import Section
 
 
@@ -942,8 +942,7 @@ async def test_import_with_normalize_hanger_quantity_rounds_up(
     monkeypatch.setattr(settings, "IMPORT_STORAGE_DIR", str(tmp_path))
 
     from app.models.product import Product, ProductType
-    from app.models.route import ProductionRoute, RouteStage, RouteOperation
-    
+    from app.models.route import ProductionRoute, RouteOperation, RouteStage
     from app.models.section import Section
 
     product = Product(sku="FG-TEST", name="Test Product", type=ProductType.finished_good, unit="pcs", quantity_per_hanger=5, hanger_mode="manual")
@@ -1014,8 +1013,7 @@ async def test_import_without_normalize_hanger_quantity_keeps_original(
     monkeypatch.setattr(settings, "IMPORT_STORAGE_DIR", str(tmp_path))
 
     from app.models.product import Product, ProductType
-    from app.models.route import ProductionRoute, RouteStage, RouteOperation
-    
+    from app.models.route import ProductionRoute, RouteOperation, RouteStage
     from app.models.section import Section
 
     product = Product(sku="FG-TEST", name="Test Product", type=ProductType.finished_good, unit="pcs", quantity_per_hanger=5, hanger_mode="manual")
@@ -1076,8 +1074,7 @@ async def test_import_product_without_quantity_per_hanger_shows_warning(
     monkeypatch.setattr(settings, "IMPORT_STORAGE_DIR", str(tmp_path))
 
     from app.models.product import Product, ProductType
-    from app.models.route import ProductionRoute, RouteStage, RouteOperation
-    
+    from app.models.route import ProductionRoute, RouteOperation, RouteStage
     from app.models.section import Section
 
     # Продукт БЕЗ quantity_per_hanger
@@ -1139,8 +1136,7 @@ async def test_import_already_multiple_no_warning(
     monkeypatch.setattr(settings, "IMPORT_STORAGE_DIR", str(tmp_path))
 
     from app.models.product import Product, ProductType
-    from app.models.route import ProductionRoute, RouteStage, RouteOperation
-    
+    from app.models.route import ProductionRoute, RouteOperation, RouteStage
     from app.models.section import Section
 
     product = Product(sku="FG-TEST", name="Test Product", type=ProductType.finished_good, unit="pcs", quantity_per_hanger=5, hanger_mode="manual")

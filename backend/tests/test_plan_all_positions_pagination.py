@@ -5,8 +5,6 @@ from datetime import date
 from decimal import Decimal
 
 import pytest
-from sqlalchemy.ext.asyncio import AsyncSession
-
 from app.models.product import Product, ProductType
 from app.models.production_plan import (
     PlanPosition,
@@ -16,6 +14,7 @@ from app.models.production_plan import (
     ProductionPlan,
     ProductionPlanStatus,
 )
+from sqlalchemy.ext.asyncio import AsyncSession
 
 
 async def _make_plan(session: AsyncSession, *, plan_no: str = "PLAN-PAGE") -> ProductionPlan:
@@ -123,7 +122,7 @@ async def test_all_positions_search_finds_record_on_second_page(client, session:
         source_type=PlanSourceType.manual,
         source_sku="UNIQUE-PLAN-MARKER-42",
         source_name="Special marker position",
-        quantity=Decimal("1"),
+        quantity=Decimal(1),
         source_payload={},
         status=PlanPositionStatus.draft,
         validation_status=PlanPositionValidationStatus.valid,
@@ -160,7 +159,7 @@ async def test_all_positions_sort_by_source_sku(client, session: AsyncSession):
                 source_type=PlanSourceType.manual,
                 source_sku=sku,
                 source_name=sku,
-                quantity=Decimal("1"),
+                quantity=Decimal(1),
                 source_payload={},
                 status=PlanPositionStatus.draft,
                 validation_status=PlanPositionValidationStatus.valid,
@@ -204,7 +203,7 @@ async def test_all_positions_sort_by_source_name_id_and_errors(client, session: 
                 source_type=PlanSourceType.manual,
                 source_sku=sku,
                 source_name=name,
-                quantity=Decimal("1"),
+                quantity=Decimal(1),
                 source_payload={},
                 status=PlanPositionStatus.draft,
                 validation_status=PlanPositionValidationStatus.valid,
@@ -303,7 +302,7 @@ async def test_all_positions_excludes_non_planning_statuses(client, session: Asy
                 source_type=PlanSourceType.manual,
                 source_sku=f"SKU-{pos_status.value}",
                 source_name=pos_status.value,
-                quantity=Decimal("1"),
+                quantity=Decimal(1),
                 source_payload={},
                 status=pos_status,
                 validation_status=PlanPositionValidationStatus.valid,
@@ -339,7 +338,7 @@ async def test_all_positions_filter_sort_by_dimensions(client, session: AsyncSes
                 source_type=PlanSourceType.manual,
                 source_sku=sku,
                 source_name=sku,
-                quantity=Decimal("10"),
+                quantity=Decimal(10),
                 input_dimensions={"length_mm": length} if length is not None else None,
                 source_payload={},
                 status=PlanPositionStatus.draft,
@@ -402,7 +401,7 @@ async def test_all_positions_default_order_unchanged(client, session: AsyncSessi
                 source_type=PlanSourceType.manual,
                 source_sku=f"DEF-ORDER-{idx}",
                 source_name=f"DEF-ORDER-{idx}",
-                quantity=Decimal("1"),
+                quantity=Decimal(1),
                 source_payload={},
                 status=PlanPositionStatus.draft,
                 validation_status=PlanPositionValidationStatus.valid,
@@ -457,7 +456,7 @@ async def test_all_positions_multi_sort_priorities(client, session: AsyncSession
                 source_type=PlanSourceType.manual,
                 source_sku=f"MULTI-{row_number}",
                 source_name=name,
-                quantity=Decimal("1"),
+                quantity=Decimal(1),
                 source_payload={},
                 status=PlanPositionStatus.draft,
                 validation_status=PlanPositionValidationStatus.valid,

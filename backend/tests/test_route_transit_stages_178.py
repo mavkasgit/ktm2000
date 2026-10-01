@@ -23,10 +23,6 @@ from __future__ import annotations
 from io import BytesIO
 
 import pytest
-from openpyxl import Workbook
-from sqlalchemy import select
-from sqlalchemy.ext.asyncio import AsyncSession
-
 from app.models.import_template import ImportTemplate
 from app.models.route import (
     ProductionRoute,
@@ -39,11 +35,14 @@ from app.models.section import Section
 from app.seeds.seeders.routes_seeder import seed_production_routes_from_profiles
 from app.services.plan_import_service import create_excel_import_change_set
 from app.services.route_selection import (
-    load_route_selection_batch_cache,
     load_route_sections,
+    load_route_selection_batch_cache,
     select_route_for_payload,
 )
 from app.services.shopfloor.operations_tasks import resolve_final_release_destination
+from openpyxl import Workbook
+from sqlalchemy import select
+from sqlalchemy.ext.asyncio import AsyncSession
 
 from tests.plan_sample import HEADERS, build_sample_plan_rows
 
@@ -225,7 +224,7 @@ async def test_imported_route_stages_match_seeder_for_same_profile(session: Asyn
     imported = await _import_route(session, ctx)
 
     await seed_production_routes_from_profiles(
-        session, {code: section for code, section in ctx.sections.items()}
+        session, dict(ctx.sections)
     )
     seeded = await session.scalar(
         select(ProductionRoute).where(ProductionRoute.name == f"Dynamic: {ctx.profile.name}")

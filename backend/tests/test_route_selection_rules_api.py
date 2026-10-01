@@ -8,10 +8,9 @@ sections / templates.
 from __future__ import annotations
 
 import pytest
-from sqlalchemy import select
-
 from app.models.route import RouteRuleProfile, RouteSelectionRule
 from app.models.section import Section
+from sqlalchemy import select
 
 from tests.test_routes_seed import _seed_default_sections
 

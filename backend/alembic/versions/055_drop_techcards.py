@@ -11,14 +11,14 @@ DROP TABLE IF EXISTS.
 Revises: 054_product_pairs
 Create Date: 2026-09-06 00:00:00.000000
 """
-from typing import Sequence, Union
+from collections.abc import Sequence
 
 from alembic import op
 
 revision: str = "055_drop_techcards"
-down_revision: Union[str, None] = "054_product_pairs"
-branch_labels: Union[str, Sequence[str], None] = None
-depends_on: Union[str, Sequence[str], None] = None
+down_revision: str | None = "054_product_pairs"
+branch_labels: str | Sequence[str] | None = None
+depends_on: str | Sequence[str] | None = None
 
 
 def upgrade() -> None:

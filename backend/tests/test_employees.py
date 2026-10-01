@@ -1,23 +1,21 @@
 """Tests for the employees module (HRMS sync, preview, list)."""
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 from unittest.mock import AsyncMock, patch
 
 import pytest
-from sqlalchemy import func, select, text
-
 from app.models.hrms_employee import HrmsEmployee
 from app.services.hrms_employees import (
-    HrmsSyncError,
     _SORT_COLUMNS,
     _SORT_DEFAULT,
     _SORT_NULLS_LAST_FIELDS,
     VALID_SORT_FIELDS,
+    HrmsSyncError,
     _build_employees_from_items,
     list_employees,
     preview_sync,
     sync_employees,
 )
-
+from sqlalchemy import func, select, text
 
 # ─── Unit: _build_employees_from_items ───────────────────────────────
 
@@ -30,7 +28,7 @@ def test_build_employees_skips_invalid() -> None:
         {"id": 2, "name": ""},
         {"id": 3, "name": "Bob"},
     ]
-    synced_at = datetime(2026, 7, 28, 12, 0, tzinfo=timezone.utc)
+    synced_at = datetime(2026, 7, 28, 12, 0, tzinfo=UTC)
     employees = _build_employees_from_items(raw, synced_at)
     assert len(employees) == 2
     assert employees[0].hrms_id == 1
@@ -47,7 +45,7 @@ def test_build_employees_normalizes_fields() -> None:
             "department": {"id": 2, "name": "Цех АСУ"},
         },
     ]
-    synced_at = datetime(2026, 7, 28, tzinfo=timezone.utc)
+    synced_at = datetime(2026, 7, 28, tzinfo=UTC)
     employees = _build_employees_from_items(raw, synced_at)
     assert len(employees) == 1
     emp = employees[0]
@@ -61,12 +59,12 @@ def test_build_employees_normalizes_fields() -> None:
 
 @pytest.mark.asyncio
 async def test_sync_employees_replaces_cache(session) -> None:
-    session.add(HrmsEmployee(hrms_id=99, name="Old", synced_at=datetime(2020, 1, 1, tzinfo=timezone.utc)))
+    session.add(HrmsEmployee(hrms_id=99, name="Old", synced_at=datetime(2020, 1, 1, tzinfo=UTC)))
     await session.commit()
 
     hrms_items = [{"id": 1, "name": "New Employee"}]
     with patch("app.services.hrms_employees.fetch_employees_from_hrms", new=AsyncMock(return_value=hrms_items)):
-        employees, synced_at = await sync_employees(session)
+        employees, _synced_at = await sync_employees(session)
 
     assert len(employees) == 1
     assert employees[0].hrms_id == 1
@@ -79,16 +77,20 @@ async def test_sync_employees_replaces_cache(session) -> None:
 
 @pytest.mark.asyncio
 async def test_sync_employees_empty_raises(session) -> None:
-    with patch("app.services.hrms_employees.fetch_employees_from_hrms", new=AsyncMock(return_value=[])):
-        with pytest.raises(HrmsSyncError, match="пустой список"):
-            await sync_employees(session)
+    with (
+        patch("app.services.hrms_employees.fetch_employees_from_hrms", new=AsyncMock(return_value=[])),
+        pytest.raises(HrmsSyncError, match="пустой список"),
+    ):
+        await sync_employees(session)
 
 
 @pytest.mark.asyncio
 async def test_sync_employees_all_invalid_raises(session) -> None:
-    with patch("app.services.hrms_employees.fetch_employees_from_hrms", new=AsyncMock(return_value=[{"name": "NoId"}])):
-        with pytest.raises(HrmsSyncError, match="без валидных"):
-            await sync_employees(session)
+    with (
+        patch("app.services.hrms_employees.fetch_employees_from_hrms", new=AsyncMock(return_value=[{"name": "NoId"}])),
+        pytest.raises(HrmsSyncError, match="без валидных"),
+    ):
+        await sync_employees(session)
 
 
 # ─── Integration: preview_sync ───────────────────────────────────────
@@ -96,7 +98,7 @@ async def test_sync_employees_all_invalid_raises(session) -> None:
 
 @pytest.mark.asyncio
 async def test_preview_sync_diff(session) -> None:
-    synced_at = datetime(2026, 7, 1, tzinfo=timezone.utc)
+    synced_at = datetime(2026, 7, 1, tzinfo=UTC)
     session.add(HrmsEmployee(hrms_id=1, name="Alice", synced_at=synced_at))
     session.add(HrmsEmployee(hrms_id=2, name="Bob", synced_at=synced_at))
     await session.commit()
@@ -125,7 +127,7 @@ async def test_preview_sync_diff(session) -> None:
 
 @pytest.mark.asyncio
 async def test_preview_sync_does_not_modify_db(session) -> None:
-    session.add(HrmsEmployee(hrms_id=10, name="Persistent", synced_at=datetime(2026, 7, 1, tzinfo=timezone.utc)))
+    session.add(HrmsEmployee(hrms_id=10, name="Persistent", synced_at=datetime(2026, 7, 1, tzinfo=UTC)))
     await session.commit()
 
     hrms_items = [{"id": 10, "name": "Changed"}]
@@ -150,7 +152,7 @@ async def test_list_employees_empty(session) -> None:
 
 @pytest.mark.asyncio
 async def test_list_employees_with_data(session) -> None:
-    synced_at = datetime(2026, 7, 28, tzinfo=timezone.utc)
+    synced_at = datetime(2026, 7, 28, tzinfo=UTC)
     session.add(HrmsEmployee(hrms_id=1, name="Alice", department="Цех А", synced_at=synced_at))
     session.add(HrmsEmployee(hrms_id=2, name="Bob", department="Цех Б", synced_at=synced_at))
     await session.commit()
@@ -162,7 +164,7 @@ async def test_list_employees_with_data(session) -> None:
 
 @pytest.mark.asyncio
 async def test_list_employees_search(session) -> None:
-    synced_at = datetime(2026, 7, 28, tzinfo=timezone.utc)
+    synced_at = datetime(2026, 7, 28, tzinfo=UTC)
     session.add(HrmsEmployee(hrms_id=1, name="Иванов Иван", synced_at=synced_at))
     session.add(HrmsEmployee(hrms_id=2, name="Петров Пётр", synced_at=synced_at))
     await session.commit()
@@ -174,7 +176,7 @@ async def test_list_employees_search(session) -> None:
 
 @pytest.mark.asyncio
 async def test_list_employees_department_filter(session) -> None:
-    synced_at = datetime(2026, 7, 28, tzinfo=timezone.utc)
+    synced_at = datetime(2026, 7, 28, tzinfo=UTC)
     session.add(HrmsEmployee(hrms_id=1, name="A", department="Цех АСУ", synced_at=synced_at))
     session.add(HrmsEmployee(hrms_id=2, name="B", department="Цех Мех", synced_at=synced_at))
     await session.commit()
@@ -195,7 +197,7 @@ async def test_list_employees_sort_two_priorities(session) -> None:
     и различается только второй ключ. Ни сортировка по одной колонке, ни
     последовательные ``order_by`` такого порядка не дают.
     """
-    synced_at = datetime(2026, 7, 28, tzinfo=timezone.utc)
+    synced_at = datetime(2026, 7, 28, tzinfo=UTC)
     for hrms_id, name, tab_number, department in [
         (1, "Alpha", "T-001", "Цех А"),
         (2, "Bravo", "T-002", "Цех А"),
@@ -222,7 +224,7 @@ async def test_list_employees_sort_tiebreaker_breaks_equal_values(session) -> No
     совпадать с порядком hrms_id, и сортировка без tiebreaker отдаёт его вместо
     возрастающего — именно это ломало переход между страницами.
     """
-    synced_at = datetime(2026, 7, 28, tzinfo=timezone.utc)
+    synced_at = datetime(2026, 7, 28, tzinfo=UTC)
     for index in range(6):
         session.add(HrmsEmployee(
             hrms_id=index + 1, name="Same Name", tab_number=f"T-{index:03d}", synced_at=synced_at,
@@ -248,7 +250,7 @@ async def test_list_employees_sort_nulls_last_in_both_directions(session) -> Non
     В Postgres DESC по умолчанию ставит NULL первым: оператор кликнул
     «спустить», а сотрудники без должности оказывались наверху списка.
     """
-    synced_at = datetime(2026, 7, 28, tzinfo=timezone.utc)
+    synced_at = datetime(2026, 7, 28, tzinfo=UTC)
     for index, position in [(1, "Инженер"), (2, "Мастер"), (3, None), (4, None)]:
         session.add(HrmsEmployee(
             hrms_id=index, name=f"Emp {index}", position=position, synced_at=synced_at,
@@ -258,8 +260,8 @@ async def test_list_employees_sort_nulls_last_in_both_directions(session) -> Non
     for order in ("asc", "desc"):
         employees, total, _ = await list_employees(session, sort=f"position:{order}")
         assert total == 4, order
-        assert set(e.hrms_id for e in employees[-2:]) == {3, 4}, order
-        assert set(e.hrms_id for e in employees[:2]) == {1, 2}, order
+        assert {e.hrms_id for e in employees[-2:]} == {3, 4}, order
+        assert {e.hrms_id for e in employees[:2]} == {1, 2}, order
 
 
 @pytest.mark.asyncio
@@ -305,7 +307,7 @@ def test_employees_sort_table_keys_match_valid_fields() -> None:
     либо 400 на существующей колонке, либо поле в контракте без резолва.
     """
     assert set(_SORT_COLUMNS) == VALID_SORT_FIELDS
-    assert VALID_SORT_FIELDS == {"hrms_id", "name", "tab_number", "position", "department"}
+    assert {"hrms_id", "name", "tab_number", "position", "department"} == VALID_SORT_FIELDS
     assert set(_SORT_NULLS_LAST_FIELDS) <= VALID_SORT_FIELDS
     assert _SORT_DEFAULT.field in VALID_SORT_FIELDS
 

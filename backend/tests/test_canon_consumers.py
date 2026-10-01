@@ -16,7 +16,6 @@ from app.services.color_extraction import extract_color_from_text, resolve_paylo
 from app.services.hanger_quantity import adjust_quantity_to_hanger
 from app.services.plan_validation import format_validation_error
 
-
 # ─── Fake data (отличается от prod) ──────────────────────────────────────────
 
 FAKE_COLOR_TOKENS = [
@@ -67,19 +66,19 @@ class TestHangerQuantityWithFakeConfig:
 
     def test_disabled_rule_returns_quantity_unchanged(self) -> None:
         result = adjust_quantity_to_hanger(
-            Decimal("13"), 5, hanger_rounding=FAKE_HANGER_ROUNDING_DISABLED
+            Decimal(13), 5, hanger_rounding=FAKE_HANGER_ROUNDING_DISABLED
         )
-        assert result == Decimal("13")
+        assert result == Decimal(13)
 
     def test_enabled_rule_rounds_up(self) -> None:
         result = adjust_quantity_to_hanger(
-            Decimal("13"), 5, hanger_rounding=FAKE_HANGER_ROUNDING_ENABLED
+            Decimal(13), 5, hanger_rounding=FAKE_HANGER_ROUNDING_ENABLED
         )
-        assert result == Decimal("15")
+        assert result == Decimal(15)
 
     def test_enabled_rule_already_multiple(self) -> None:
         result = adjust_quantity_to_hanger(
-            Decimal("10"), 5, hanger_rounding=FAKE_HANGER_ROUNDING_ENABLED
+            Decimal(10), 5, hanger_rounding=FAKE_HANGER_ROUNDING_ENABLED
         )
         assert result is None
 

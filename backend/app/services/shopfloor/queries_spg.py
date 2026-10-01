@@ -5,13 +5,13 @@ from decimal import Decimal
 from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.models.product import Product
-from app.models.spg import SpgSection, StorageProductionGroup
-from app.models.section import Section
-from app.models.work_task import RESOLVED_WORK_TASK_STATUSES, WorkTask
 from app.models.internal_plan import SectionPlanLine
+from app.models.product import Product
 from app.models.production_plan import PlanPosition, PlanPositionStatus
 from app.models.route import RouteStage
+from app.models.section import Section
+from app.models.spg import SpgSection, StorageProductionGroup
+from app.models.work_task import RESOLVED_WORK_TASK_STATUSES, WorkTask
 from app.stock.models import QualityState, StockBalance
 
 
@@ -99,18 +99,18 @@ async def get_spg_snapshot(
         # Aggregate per (product_id, section_id) in Python
         from collections import defaultdict
         agg: dict[tuple[int, int], dict[str, Decimal]] = defaultdict(lambda: {
-            "planned": Decimal("0"), "completed": Decimal("0"), "issued": Decimal("0"),
-            "transferred": Decimal("0"), "received": Decimal("0"), "available": Decimal("0"),
+            "planned": Decimal(0), "completed": Decimal(0), "issued": Decimal(0),
+            "transferred": Decimal(0), "received": Decimal(0), "available": Decimal(0),
         })
         for tid, pid, sid, planned_qty, spl_id, seq in task_info:
             key = (pid, sid)
             cache = tasks_cache.get(tid, {})
             agg[key]["planned"] += planned_qty
-            agg[key]["completed"] += cache.get("completed_quantity", Decimal("0"))
-            agg[key]["issued"] += cache.get("issued_quantity", Decimal("0"))
-            agg[key]["transferred"] += cache.get("transferred_quantity", Decimal("0"))
-            agg[key]["received"] += cache.get("received_quantity", Decimal("0"))
-            agg[key]["available"] += cache.get("available_quantity", Decimal("0"))
+            agg[key]["completed"] += cache.get("completed_quantity", Decimal(0))
+            agg[key]["issued"] += cache.get("issued_quantity", Decimal(0))
+            agg[key]["transferred"] += cache.get("transferred_quantity", Decimal(0))
+            agg[key]["received"] += cache.get("received_quantity", Decimal(0))
+            agg[key]["available"] += cache.get("available_quantity", Decimal(0))
 
         # Format as row tuples (matching original structure)
         task_rows = [

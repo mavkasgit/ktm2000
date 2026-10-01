@@ -11,12 +11,11 @@
 from __future__ import annotations
 
 import pytest
-from sqlalchemy import func, select
-
 from app.models.route import SectionOperation
 from app.models.section import Section
 from app.seeds.canon.models import SectionDef
 from app.seeds.upsert import upsert_by_key
+from sqlalchemy import func, select
 
 
 async def _count(session, model) -> int:

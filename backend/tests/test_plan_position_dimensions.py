@@ -8,13 +8,13 @@ from decimal import Decimal
 from io import BytesIO
 
 import pytest
-from openpyxl import Workbook
-
 from app.core.config import settings
 from app.domain.dimensions import format_cut_layout
 from app.models.import_template import ImportTemplate
 from app.models.production_plan import PlanPosition
 from app.services.excel_import import parse_factory_plan_workbook
+from openpyxl import Workbook
+
 from tests.test_integrity_invariants import assert_no_invariants_violations
 
 PLAN_HEADERS = [
@@ -384,8 +384,8 @@ async def test_group_import_apply_and_reimport_idempotency(client, session, tmp_
     position = (
         await session.execute(select(PlanPosition).where(PlanPosition.production_plan_id == plan_id))
     ).scalar_one()
-    assert position.quantity == Decimal("400")
-    assert position.input_quantity == Decimal("150")
+    assert position.quantity == Decimal(400)
+    assert position.input_quantity == Decimal(150)
     assert position.input_dimensions == {"length_mm": 2700}
     assert [(o["quantity"], o["dimensions"]) for o in position.outputs] == [
         ("350", {"length_mm": 900}),

@@ -2,7 +2,19 @@ import enum
 from datetime import date, datetime
 from decimal import Decimal
 
-from sqlalchemy import BigInteger, CheckConstraint, Date, DateTime, Enum, ForeignKey, Identity, Numeric, String, func, text
+from sqlalchemy import (
+    BigInteger,
+    CheckConstraint,
+    Date,
+    DateTime,
+    Enum,
+    ForeignKey,
+    Identity,
+    Numeric,
+    String,
+    func,
+    text,
+)
 from sqlalchemy.dialects.postgresql import JSONB
 from sqlalchemy.orm import Mapped, mapped_column
 

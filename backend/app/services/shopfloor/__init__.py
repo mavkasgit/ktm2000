@@ -1,5 +1,10 @@
 from .cache import _refresh_section_plan_line_cache
-from .operations_defects import add_defect_item, create_defect, defect_decide, rework_create
+from .operations_defects import (
+    add_defect_item,
+    create_defect,
+    defect_decide,
+    rework_create,
+)
 from .operations_meta import create_attachment, create_comment, link_attachment
 from .operations_tasks import complete_task, final_release, prepare_section_task
 from .queries import (

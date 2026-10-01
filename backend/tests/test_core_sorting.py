@@ -1,9 +1,8 @@
 """Общий контракт сортировки: core/sorting.py."""
 
 import pytest
-from fastapi import HTTPException
-
 from app.core.sorting import SortClause, apply_sort, parse_sort, sort_items
+from fastapi import HTTPException
 
 
 def test_parses_multiple_clauses_in_priority_order():

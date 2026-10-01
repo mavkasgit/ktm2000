@@ -14,12 +14,15 @@ from __future__ import annotations
 from decimal import Decimal
 
 import pytest
-from sqlalchemy.ext.asyncio import AsyncSession
-
 from app.stock import Reason, StockCommand, StockCommandService
 from app.stock.services import _dimensions_hash_key
+from sqlalchemy.ext.asyncio import AsyncSession
 
-from tests.test_integrity_invariants import _auth_headers, _make_user, assert_no_invariants_violations
+from tests.test_integrity_invariants import (
+    _auth_headers,
+    _make_user,
+    assert_no_invariants_violations,
+)
 from tests.test_transfer_dimensions import (
     _complete_saw,
     _make_dim_route_fixture,
@@ -108,19 +111,19 @@ async def test_ready_plain_row_net_after_final_release_compensation(client, sess
     already_transferred=0, transferable вернулся к completed."""
     from app.services.shopfloor.operations_tasks import final_release
 
-    seed = await _seed_plain_final_task(client, session, sku="CRPLN", qty=Decimal("8"))
+    seed = await _seed_plain_final_task(client, session, sku="CRPLN", qty=Decimal(8))
     task, user = seed["task"], seed["user"]
     fx = seed["fx"]
     prod2 = fx["sections"][2]
 
-    rel = await final_release(session, task_id=task.id, quantity=Decimal("8"), actor_id=user.id)
+    rel = await final_release(session, task_id=task.id, quantity=Decimal(8), actor_id=user.id)
     await session.commit()
     await _release_and_compensate(
         session,
         user_id=user.id,
         product_id=fx["product"].id,
         task_id=task.id,
-        quantity=Decimal("8"),
+        quantity=Decimal(8),
         section_id=task.section_id,
         dims=task.dimensions,
         release_tx_id=rel["transaction_id"],
@@ -133,7 +136,7 @@ async def test_ready_plain_row_net_after_final_release_compensation(client, sess
     grouped = await net_by_reason_by_dimensions(
         session, reason=Reason.FINAL_RELEASE, task_id=task.id
     )
-    assert grouped.get(None) == Decimal("0")
+    assert grouped.get(None) == Decimal(0)
     await assert_no_invariants_violations(session, context="ready-plain-net")
 
     rows = await _ready_rows(client, user, prod2.id, task.id)
@@ -154,8 +157,8 @@ async def test_ready_production_row_net_after_final_release_compensation(client,
     fx = await _make_transform_route_fixture(
         session,
         sku="CRPRD",
-        qty=Decimal("100"),
-        input_quantity=Decimal("100"),
+        qty=Decimal(100),
+        input_quantity=Decimal(100),
         input_dimensions={"length_mm": 2700},
         outputs=[{"row_number": 1, "quantity": "100", "dimensions": {"length_mm": 900}}],
         final_transform=True,
@@ -165,7 +168,7 @@ async def test_ready_production_row_net_after_final_release_compensation(client,
     await _complete_saw(session, saw_task=saw_task, user=user)
 
     rel = await final_release(
-        session, task_id=saw_task.id, quantity=Decimal("100"), actor_id=user.id
+        session, task_id=saw_task.id, quantity=Decimal(100), actor_id=user.id
     )
     await session.commit()
     await _release_and_compensate(
@@ -173,7 +176,7 @@ async def test_ready_production_row_net_after_final_release_compensation(client,
         user_id=user.id,
         product_id=fx["product"].id,
         task_id=saw_task.id,
-        quantity=Decimal("100"),
+        quantity=Decimal(100),
         section_id=saw_task.section_id,
         dims={"length_mm": 900},
         release_tx_id=rel["transaction_id"],
@@ -186,7 +189,7 @@ async def test_ready_production_row_net_after_final_release_compensation(client,
     grouped = await net_by_reason_by_dimensions(
         session, reason=Reason.FINAL_RELEASE, task_id=saw_task.id
     )
-    assert grouped.get(_dimensions_hash_key({"length_mm": 900})) == Decimal("0")
+    assert grouped.get(_dimensions_hash_key({"length_mm": 900})) == Decimal(0)
     await assert_no_invariants_violations(session, context="ready-prod-net")
 
     saw_sec = fx["sections"][1]
@@ -205,24 +208,24 @@ async def test_compensated_final_release_does_not_block_further_release(client, 
     восстанавливается (write-guard читает canonical net)."""
     from app.services.shopfloor.operations_tasks import final_release
 
-    seed = await _seed_plain_final_task(client, session, sku="CRPLN2", qty=Decimal("8"))
+    seed = await _seed_plain_final_task(client, session, sku="CRPLN2", qty=Decimal(8))
     task, user = seed["task"], seed["user"]
     fx = seed["fx"]
 
-    rel1 = await final_release(session, task_id=task.id, quantity=Decimal("8"), actor_id=user.id)
+    rel1 = await final_release(session, task_id=task.id, quantity=Decimal(8), actor_id=user.id)
     await session.commit()
     await _release_and_compensate(
         session,
         user_id=user.id,
         product_id=fx["product"].id,
         task_id=task.id,
-        quantity=Decimal("8"),
+        quantity=Decimal(8),
         section_id=task.section_id,
         dims=task.dimensions,
         release_tx_id=rel1["transaction_id"],
     )
 
-    rel2 = await final_release(session, task_id=task.id, quantity=Decimal("8"), actor_id=user.id)
+    rel2 = await final_release(session, task_id=task.id, quantity=Decimal(8), actor_id=user.id)
     await session.commit()
     assert rel2["transaction_id"] != rel1["transaction_id"]
     await assert_no_invariants_violations(session, context="compensated-release")

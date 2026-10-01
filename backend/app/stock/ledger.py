@@ -149,7 +149,7 @@ async def net_by_reason(
         section_plan_line_id=section_plan_line_id,
         dims=dims,
     )
-    return (await db.scalar(stmt)) or Decimal("0")
+    return (await db.scalar(stmt)) or Decimal(0)
 
 
 async def net_by_reason_by_dimensions(
@@ -180,7 +180,7 @@ async def net_by_reason_by_dimensions(
     result: dict[str | None, Decimal] = {}
     for dims, net in rows:
         key = _dimensions_hash_key(dims)
-        result[key] = (result.get(key) or Decimal("0")) + (net or Decimal("0"))
+        result[key] = (result.get(key) or Decimal(0)) + (net or Decimal(0))
     return result
 
 

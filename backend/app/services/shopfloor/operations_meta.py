@@ -9,6 +9,7 @@ from app.models.entity_comment import EntityComment, EntityType
 
 from .common import _check_idempotency
 
+
 async def create_comment(
     db: AsyncSession,
     *,

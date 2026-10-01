@@ -53,15 +53,15 @@ Revision ID: 052_idempotency_backstops
 Revises: 051_section_output_default
 Create Date: 2026-09-05 00:00:00.000000
 """
-from typing import Sequence, Union
+from collections.abc import Sequence
 
 import sqlalchemy as sa
 from alembic import op
 
 revision: str = "052_idempotency_backstops"
-down_revision: Union[str, None] = "051_section_output_default"
-branch_labels: Union[str, Sequence[str], None] = None
-depends_on: Union[str, Sequence[str], None] = None
+down_revision: str | None = "051_section_output_default"
+branch_labels: str | Sequence[str] | None = None
+depends_on: str | Sequence[str] | None = None
 
 # (таблица, имя индекса). Прошлых индексов на этих колонках не было —
 # дропать нечего; partial unique обслуживает и replay-поиск по равенству.

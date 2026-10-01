@@ -33,15 +33,7 @@ from app.models.product import Product
 from app.models.route import SectionOperation
 from app.models.section import Section
 from app.models.user import User
-from app.stock.models import QualityState, Reason, StockBalance
-from app.stock.services import StockCommand, StockCommandService
 from app.services.action_journal_service import action_journal_service
-from app.stock.import_models import (
-    StockImportBatch,
-    StockImportBatchStatus,
-    StockImportRow,
-    StockImportRowStatus,
-)
 from app.services.dimension_validation import (
     MissingDimensionsError,
     resolve_product_dimensions,
@@ -52,7 +44,18 @@ from app.services.material_operations import (
     canonicalize_completed_operations,
     format_completed_operations_label,
 )
-from app.services.route_storage_classifier import is_production_section, is_terminal_section
+from app.services.route_storage_classifier import (
+    is_production_section,
+    is_terminal_section,
+)
+from app.stock.import_models import (
+    StockImportBatch,
+    StockImportBatchStatus,
+    StockImportRow,
+    StockImportRowStatus,
+)
+from app.stock.models import QualityState, Reason, StockBalance
+from app.stock.services import StockCommand, StockCommandService
 
 if TYPE_CHECKING:
     from sqlalchemy.ext.asyncio import AsyncSession
@@ -356,7 +359,7 @@ def _parse_remainders_grid(
         ) or None
 
         sku = sku_raw.strip() if sku_raw else ""
-        comment = comment_raw if comment_raw else None
+        comment = comment_raw or None
         parsed_qty = _parse_qty(qty_val)
         if parsed_qty is None and sku:
             qty_missing_or_empty = (
@@ -365,7 +368,7 @@ def _parse_remainders_grid(
                 or not _cell_txt(qty_val).strip()
             )
             if qty_idx is None or (use_positional and qty_missing_or_empty):
-                parsed_qty = Decimal("1")
+                parsed_qty = Decimal(1)
 
         has_raw_content = any(str(v).strip() for v in raw)
 

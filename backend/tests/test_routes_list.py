@@ -1,6 +1,5 @@
 import pytest
-
-from app.models.route import ProductionRoute, RouteStage, RouteOperation
+from app.models.route import ProductionRoute, RouteOperation, RouteStage
 from app.models.section import Section
 
 

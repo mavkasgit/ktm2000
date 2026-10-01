@@ -1,15 +1,17 @@
 import asyncio
 import logging
 from datetime import datetime
+
 from sqlalchemy import text
-from app.core.database import async_session
+
 from app.api.backups import (
     _create_backup_archive,
-    _iter_backup_files,
     _delete_backup_file,
+    _iter_backup_files,
     _read_backup_meta,
     _read_config_json,
 )
+from app.core.database import async_session
 
 logger = logging.getLogger("app.backup_scheduler")
 
@@ -59,28 +61,27 @@ async def run_backup_cycle():
 
     # 2. Пытаемся захватить распределенный лок в PostgreSQL
     try:
-        async with async_session() as session:
-            async with session.begin():
-                logger.debug("Попытка захвата PostgreSQL advisory lock для бэкапа")
-                result = await session.execute(
-                    text("SELECT pg_try_advisory_xact_lock(:id)"),
-                    {"id": BACKUP_SCHEDULER_LOCK_ID},
-                )
-                lock_acquired = result.scalar()
+        async with async_session() as session, session.begin():
+            logger.debug("Попытка захвата PostgreSQL advisory lock для бэкапа")
+            result = await session.execute(
+                text("SELECT pg_try_advisory_xact_lock(:id)"),
+                {"id": BACKUP_SCHEDULER_LOCK_ID},
+            )
+            lock_acquired = result.scalar()
 
-                if not lock_acquired:
-                    logger.info("Другой воркер уже выполняет автоматический бэкап. Пропуск.")
-                    return
+            if not lock_acquired:
+                logger.info("Другой воркер уже выполняет автоматический бэкап. Пропуск.")
+                return
 
-                backup_type = determine_backup_type(now)
-                logger.info("Лок получен. Запуск создания бэкапа типа: %s...", backup_type)
+            backup_type = determine_backup_type(now)
+            logger.info("Лок получен. Запуск создания бэкапа типа: %s...", backup_type)
 
-                # 3. Запуск создания бэкапа в отдельном потоке (sync-to-async wrapper)
-                backup_result = await asyncio.to_thread(_create_backup_archive, None, backup_type)
-                logger.info("Автоматический бэкап успешно создан: %s", backup_result)
+            # 3. Запуск создания бэкапа в отдельном потоке (sync-to-async wrapper)
+            backup_result = await asyncio.to_thread(_create_backup_archive, None, backup_type)
+            logger.info("Автоматический бэкап успешно создан: %s", backup_result)
 
-                # 4. Выполнение GFS ротации
-                rotate_backups()
+            # 4. Выполнение GFS ротации
+            rotate_backups()
 
     except Exception as e:
         logger.exception("Ошибка при выполнении автоматического бэкапа: %s", e)

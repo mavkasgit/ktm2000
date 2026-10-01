@@ -1,6 +1,7 @@
 import csv
 import io
 import json
+import logging
 import os
 import shutil
 import subprocess
@@ -8,13 +9,21 @@ import tempfile
 import threading
 import uuid
 import zipfile
-import logging
+from collections.abc import Callable
 from datetime import datetime, timedelta
 from pathlib import Path
-from typing import Callable, Dict, List, Optional
 from urllib.parse import unquote, urlparse
 
-from fastapi import APIRouter, Body, Form, HTTPException, Query, UploadFile, File, status
+from fastapi import (
+    APIRouter,
+    Body,
+    File,
+    Form,
+    HTTPException,
+    Query,
+    UploadFile,
+    status,
+)
 from fastapi.responses import FileResponse
 from openpyxl import Workbook
 from pydantic import BaseModel
@@ -59,7 +68,7 @@ BACKUP_JOBS_LOCK = threading.Lock()
 # Ключ приводит значение к сравнимому типу ВНУТРИ своего поля: size — int,
 # остальные — str. Между разными полями ключи не сравниваются, каждый
 # приоритет сортируется своим же правилом.
-_SORT_KEYS: dict[str, Callable[[Dict], object]] = {
+_SORT_KEYS: dict[str, Callable[[dict], object]] = {
     "filename": lambda item: str(item.get("filename") or ""),
     "db_name": lambda item: str(item.get("db_name") or ""),
     "backup_type": lambda item: str(item.get("backup_type") or "manual"),
@@ -94,7 +103,7 @@ def _get_project_name() -> str:
     return db_name.split("_")[0]
 
 
-def _get_db_connection(db_name: str | None = None) -> tuple[List[str], Dict[str, str]]:
+def _get_db_connection(db_name: str | None = None) -> tuple[list[str], dict[str, str]]:
     """Возвращает CLI-аргументы подключения и env для PostgreSQL tools."""
     parsed = urlparse(settings.DATABASE_URL.replace("postgresql+asyncpg://", "postgresql://"))
     user = unquote(parsed.username or "")
@@ -122,7 +131,7 @@ def _docker_container_available() -> bool:
         return False
 
 
-def _run_postgres_cmd_docker(cmd: List[str], db_name: str | None = None) -> subprocess.CompletedProcess:
+def _run_postgres_cmd_docker(cmd: list[str], db_name: str | None = None) -> subprocess.CompletedProcess:
     """Fallback: выполняет PostgreSQL-команду через docker exec внутрь контейнера БД."""
     if not _docker_container_available():
         raise HTTPException(
@@ -203,7 +212,7 @@ def _running_inside_docker() -> bool:
     return Path("/.dockerenv").exists()
 
 
-def _run_postgres_cmd(cmd: List[str], db_name: str | None = None) -> subprocess.CompletedProcess:
+def _run_postgres_cmd(cmd: list[str], db_name: str | None = None) -> subprocess.CompletedProcess:
     """Выполняет pg_dump/pg_restore/psql локально или через Docker fallback."""
     if _running_inside_docker():
         parsed = urlparse(settings.DATABASE_URL.replace("postgresql+asyncpg://", "postgresql://"))
@@ -250,7 +259,7 @@ def _run_postgres_cmd(cmd: List[str], db_name: str | None = None) -> subprocess.
         )
 
 
-def _get_all_tables(db_name: str | None = None) -> List[str]:
+def _get_all_tables(db_name: str | None = None) -> list[str]:
     """Возвращает список всех пользовательских таблиц в public-схеме."""
     result = _run_postgres_cmd([
         "psql", "-t", "-A",
@@ -263,10 +272,10 @@ def _get_all_tables(db_name: str | None = None) -> List[str]:
     return tables
 
 
-def _get_current_preview(db_name: str | None = None) -> Dict:
+def _get_current_preview(db_name: str | None = None) -> dict:
     """Анализ текущей БД: считает записи во всех таблицах."""
     tables = _get_all_tables(db_name)
-    stats: Dict[str, int] = {}
+    stats: dict[str, int] = {}
     for table in tables:
         count_result = _run_postgres_cmd(["psql", "-t", "-A", "-c", f"SELECT COUNT(*) FROM \"{table}\";"], db_name)
         try:
@@ -281,13 +290,13 @@ def _get_current_preview(db_name: str | None = None) -> Dict:
     }
 
 
-def _write_backup_meta(filename: str, meta: Dict) -> None:
+def _write_backup_meta(filename: str, meta: dict) -> None:
     """Сохраняет JSON-метаданные рядом с бэкапом."""
     meta_path = BACKUPS_DIR / f"{filename}.json"
     meta_path.write_text(json.dumps(meta, ensure_ascii=False, indent=2), encoding="utf-8")
 
 
-def _read_backup_meta(filename: str) -> Optional[Dict]:
+def _read_backup_meta(filename: str) -> dict | None:
     """Читает JSON-метаданные бэкапа, если они есть."""
     meta_path = BACKUPS_DIR / f"{filename}.json"
     if meta_path.exists():
@@ -314,7 +323,7 @@ def _iter_backup_files() -> list[Path]:
     )
 
 
-def _build_backup_list_item(path: Path) -> Dict:
+def _build_backup_list_item(path: Path) -> dict:
     meta = _read_backup_meta(path.name)
     return {
         "filename": path.name,
@@ -327,7 +336,7 @@ def _build_backup_list_item(path: Path) -> Dict:
     }
 
 
-def _collect_backup_items() -> list[Dict]:
+def _collect_backup_items() -> list[dict]:
     return [_build_backup_list_item(path) for path in _iter_backup_files()]
 
 
@@ -335,7 +344,7 @@ def _contains(value: str, needle: str) -> bool:
     return needle.lower() in value.lower()
 
 
-def _backup_matches_search(item: Dict, search: str) -> bool:
+def _backup_matches_search(item: dict, search: str) -> bool:
     needle = search.strip().lower()
     if not needle:
         return True
@@ -348,7 +357,7 @@ def _backup_matches_search(item: Dict, search: str) -> bool:
 
 
 def _backup_matches_filters(
-    item: Dict,
+    item: dict,
     *,
     search: str | None = None,
     filename: str | None = None,
@@ -370,12 +379,10 @@ def _backup_matches_filters(
         return False
     if comment and not _contains(str(item.get("comment", "")), comment):
         return False
-    if search and not _backup_matches_search(item, search):
-        return False
-    return True
+    return not (search and not _backup_matches_search(item, search))
 
 
-def _backup_tiebreaker_key(item: Dict) -> str:
+def _backup_tiebreaker_key(item: dict) -> str:
     """Tiebreaker: имя файла уникально в пределах списка бэкапов."""
     return str(item.get("filename") or "")
 
@@ -392,7 +399,7 @@ def _list_backups_paginated(
     comment: str | None = None,
     size: int | None = None,
     created_at: str | None = None,
-) -> tuple[list[Dict], int]:
+) -> tuple[list[dict], int]:
     # Сортировка разбирается до обхода списка: неизвестное поле или
     # направление — 400, а не молчаливый фолбэк на created_at.
     clauses = parse_sort(sort, default=_SORT_DEFAULT)
@@ -431,7 +438,7 @@ def _list_backups_paginated(
 
 
 class BackupsListResponse(BaseModel):
-    items: list[Dict]
+    items: list[dict]
     total: int
     limit: int
     offset: int
@@ -453,8 +460,8 @@ def _storage_roots() -> dict[str, Path]:
     return {name: Path(getattr(settings, key)) for name, key in BACKUP_STORAGE_DIRS.items()}
 
 
-def _storage_summary() -> Dict[str, Dict[str, int]]:
-    summary: Dict[str, Dict] = {}
+def _storage_summary() -> dict[str, dict[str, int]]:
+    summary: dict[str, dict] = {}
     for name, root in _storage_roots().items():
         file_count = 0
         total_bytes = 0
@@ -601,11 +608,10 @@ def _write_table_exports_to_zip(
     return exports
 
 
-def _read_zip_manifest(zip_path: Path) -> Optional[Dict]:
+def _read_zip_manifest(zip_path: Path) -> dict | None:
     try:
-        with zipfile.ZipFile(zip_path, "r") as zip_file:
-            with zip_file.open(BACKUP_MANIFEST_NAME) as manifest_file:
-                return json.loads(manifest_file.read().decode("utf-8"))
+        with zipfile.ZipFile(zip_path, "r") as zip_file, zip_file.open(BACKUP_MANIFEST_NAME) as manifest_file:
+            return json.loads(manifest_file.read().decode("utf-8"))
     except (KeyError, OSError, zipfile.BadZipFile, json.JSONDecodeError, UnicodeDecodeError):
         return None
 
@@ -621,9 +627,8 @@ async def _save_upload_file(file: UploadFile, target_path: Path) -> None:
 
 def _extract_dump_from_archive(zip_path: Path, target_path: Path) -> None:
     try:
-        with zipfile.ZipFile(zip_path, "r") as zip_file:
-            with zip_file.open(BACKUP_DUMP_NAME) as dump_file:
-                target_path.write_bytes(dump_file.read())
+        with zipfile.ZipFile(zip_path, "r") as zip_file, zip_file.open(BACKUP_DUMP_NAME) as dump_file:
+            target_path.write_bytes(dump_file.read())
     except (KeyError, OSError, zipfile.BadZipFile) as exc:
         raise HTTPException(
             status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
@@ -687,7 +692,7 @@ def _replace_storage_dirs(extracted_root: Path) -> None:
                 shutil.copy2(child, target)
 
 
-def _preview_dump_file(dump_path: Path, source_db: str | None = None) -> Dict:
+def _preview_dump_file(dump_path: Path, source_db: str | None = None) -> dict:
     preview_db = f"{_get_project_name()}_preview_{uuid.uuid4().hex[:8]}"
     try:
         create_result = _run_postgres_cmd(["psql", "-c", f'CREATE DATABASE "{preview_db}";'], "postgres")
@@ -705,7 +710,7 @@ def _preview_dump_file(dump_path: Path, source_db: str | None = None) -> Dict:
             )
 
         tables = _get_all_tables(preview_db)
-        stats: Dict[str, int] = {}
+        stats: dict[str, int] = {}
         for table in tables:
             count_result = _run_postgres_cmd(["psql", "-t", "-A", "-c", f"SELECT COUNT(*) FROM \"{table}\";"], preview_db)
             try:
@@ -853,7 +858,7 @@ def _set_job_progress(job_id: str, progress: int, stage: str, message: str, **ex
         })
 
 
-def _create_backup_archive(job_id: str | None = None, backup_type: str = "manual") -> Dict:
+def _create_backup_archive(job_id: str | None = None, backup_type: str = "manual") -> dict:
     def report(progress: int, stage: str, message: str, **extra) -> None:
         if job_id:
             _set_job_progress(job_id, progress, stage, message, **extra)
@@ -939,21 +944,21 @@ def _validate_admin(current_user: str = "admin") -> None:
 
 
 @router.get("/current-preview")
-async def current_preview() -> Dict:
+async def current_preview() -> dict:
     """Мгновенный анализ текущей БД (без restore)."""
     _validate_admin()
     return _get_current_preview()
 
 
 @router.post("", status_code=status.HTTP_201_CREATED)
-async def create_backup() -> Dict:
+async def create_backup() -> dict:
     """Создать архивный бэкап текущей БД и файловых storage."""
     _validate_admin()
     return _create_backup_archive()
 
 
 @router.post("/jobs", status_code=status.HTTP_202_ACCEPTED)
-async def start_backup_job() -> Dict:
+async def start_backup_job() -> dict:
     """Запустить создание бэкапа в фоне и вернуть job_id для polling."""
     _validate_admin()
     job_id = uuid.uuid4().hex
@@ -976,7 +981,7 @@ async def start_backup_job() -> Dict:
 
 
 @router.get("/jobs/{job_id}")
-async def get_backup_job(job_id: str) -> Dict:
+async def get_backup_job(job_id: str) -> dict:
     _validate_admin()
     with BACKUP_JOBS_LOCK:
         job = BACKUP_JOBS.get(job_id)
@@ -985,7 +990,7 @@ async def get_backup_job(job_id: str) -> Dict:
         return dict(job)
 
 
-def _read_config_json() -> Dict:
+def _read_config_json() -> dict:
     config_path = BACKUPS_DIR / "config.json"
     default_config = {"auto_enabled": False, "time_of_day": "23:00"}
     if not config_path.exists():
@@ -1000,13 +1005,13 @@ def _read_config_json() -> Dict:
         return default_config
 
 
-def _write_config_json(config: Dict) -> None:
+def _write_config_json(config: dict) -> None:
     config_path = BACKUPS_DIR / "config.json"
     config_path.write_text(json.dumps(config, ensure_ascii=False, indent=2), encoding="utf-8")
 
 
 @router.get("/config")
-async def get_backup_config() -> Dict:
+async def get_backup_config() -> dict:
     """Получить текущие настройки автоматического бэкапа и имя БД."""
     _validate_admin()
     config = _read_config_json()
@@ -1023,7 +1028,7 @@ class BackupConfigUpdate(BaseModel):
 
 
 @router.patch("/config")
-async def update_backup_config(payload: BackupConfigUpdate) -> Dict:
+async def update_backup_config(payload: BackupConfigUpdate) -> dict:
     """Обновить настройки автоматического бэкапа."""
     _validate_admin()
     parts = payload.time_of_day.split(":")
@@ -1094,7 +1099,7 @@ async def download_backup(filename: str) -> FileResponse:
 
 
 @router.patch("/{filename}/comment")
-async def update_backup_comment(filename: str, comment: str = Body(..., embed=True)) -> Dict:
+async def update_backup_comment(filename: str, comment: str = Body(..., embed=True)) -> dict:
     """Обновить комментарий к бэкапу."""
     _validate_admin()
     filepath = BACKUPS_DIR / filename
@@ -1108,7 +1113,7 @@ async def update_backup_comment(filename: str, comment: str = Body(..., embed=Tr
 
 
 @router.delete("/{filename}")
-async def delete_backup(filename: str) -> Dict:
+async def delete_backup(filename: str) -> dict:
     """Удалить бэкап + JSON-метаданные."""
     _validate_admin()
     filepath = BACKUPS_DIR / filename
@@ -1120,7 +1125,7 @@ async def delete_backup(filename: str) -> Dict:
 
 
 @router.post("/bulk-delete")
-async def bulk_delete(body: Dict) -> Dict:
+async def bulk_delete(body: dict) -> dict:
     """Массовое удаление выбранных бэкапов."""
     _validate_admin()
     filenames = body.get("filenames", [])
@@ -1141,7 +1146,7 @@ async def bulk_delete(body: Dict) -> Dict:
 
 
 @router.post("/delete-older-than")
-async def delete_older_than(body: Dict) -> Dict:
+async def delete_older_than(body: dict) -> dict:
     """Удалить бэкапы старше указанного количества дней."""
     _validate_admin()
     days = body.get("days")
@@ -1161,7 +1166,7 @@ async def delete_older_than(body: Dict) -> Dict:
 
 
 @router.post("/{filename}/preview")
-async def preview_backup(filename: str) -> Dict:
+async def preview_backup(filename: str) -> dict:
     """Получить статистику (превью) из существующего бэкапа.
     Сначала ищет JSON-кэш/manifest, если нет — делает restore во временную БД."""
     _validate_admin()
@@ -1201,7 +1206,7 @@ async def preview_backup(filename: str) -> Dict:
 
 
 @router.post("/upload-preview")
-async def upload_preview(file: UploadFile = File(...)) -> Dict:
+async def upload_preview(file: UploadFile = File(...)) -> dict:
     """Загрузить .dump/.zip файл и получить превью статистики."""
     _validate_admin()
     if not file.filename or not file.filename.lower().endswith((".dump", ".zip")):
@@ -1245,7 +1250,7 @@ async def upload_preview(file: UploadFile = File(...)) -> Dict:
 
 
 @router.post("/{filename}/restore")
-async def restore_backup(filename: str, body: Dict) -> Dict:
+async def restore_backup(filename: str, body: dict) -> dict:
     """Восстановить текущую БД и файлы из выбранного бэкапа."""
     _validate_admin()
     db_name = _get_db_name()
@@ -1283,7 +1288,7 @@ async def restore_backup(filename: str, body: Dict) -> Dict:
 
 
 @router.post("/upload-restore")
-async def upload_restore(file: UploadFile = File(...), confirmed_db_name: str = Form(...)) -> Dict:
+async def upload_restore(file: UploadFile = File(...), confirmed_db_name: str = Form(...)) -> dict:
     """Загрузить .dump/.zip файл и восстановить текущую БД и файлы из него."""
     _validate_admin()
     db_name = _get_db_name()

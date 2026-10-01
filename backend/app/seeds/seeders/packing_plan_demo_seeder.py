@@ -24,6 +24,7 @@ from openpyxl import Workbook
 from sqlalchemy import delete, func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from app.core.config import settings
 from app.models.daily_plan import DailyPlan
 from app.models.imports import ImportBatchMode
 from app.models.internal_plan import SectionPlanLine
@@ -35,9 +36,14 @@ from app.models.section import Section
 from app.models.user import User
 from app.models.work_task import WorkTask, WorkTaskStatus
 from app.seeds.canon.registry import build_plant_config
+from app.seeds.seeders.cleanup_seeder import clear_generated_production_data
 from app.services.action_journal_service import action_journal_service
-from app.services.shopfloor_service import complete_task
+from app.services.daily_plan_service import TERMINAL_TASK_STATUSES, create_plan
 from app.services.material_operations import completed_operations_through_stage
+from app.services.plan_generation import create_release_batch, release_batch
+from app.services.plan_import_service import create_excel_import_change_set
+from app.services.production_plan_service import apply_change_set, approve_plan_position
+from app.services.shopfloor_service import complete_task
 from app.stock import QualityState, Reason, StockCommand, StockCommandService
 from app.stock.models import StockBalance
 from app.stock.services import (
@@ -46,13 +52,6 @@ from app.stock.services import (
     dimensions_match_clause,
 )
 from app.transfers.services import transfer_send
-from app.seeds.seeders.cleanup_seeder import clear_generated_production_data
-from app.services.daily_plan_service import TERMINAL_TASK_STATUSES, create_plan
-from app.services.plan_generation import create_release_batch, release_batch
-from app.services.plan_import_service import create_excel_import_change_set
-from app.services.production_plan_service import apply_change_set, approve_plan_position
-from app.core.config import settings
-
 
 PACKING_SECTION_CODE = "PACKING"
 DEMO_PLAN_MARKER = "DEMO"
@@ -1111,7 +1110,7 @@ async def _run_route_progress(
                         db,
                         task_id=task.id,
                         good_quantity=good,
-                        defect_quantity=Decimal("0"),
+                        defect_quantity=Decimal(0),
                         actor_id=actor_id,
                         defect_reason="demo_defect",
                         comment="Демо-выполнение упаковочного плана",
@@ -1161,7 +1160,7 @@ async def _run_route_progress(
                 issued = Decimal(
                     str((await StockProjectionManager().get_task_cache(db, task.id))["issued_quantity"])
                 )
-                share = Decimal("1") if mode == "done" else Decimal("0.6")
+                share = Decimal(1) if mode == "done" else Decimal("0.6")
                 good = min(_whole_pieces(issued * share), _whole_pieces(issued))
                 # На позициях с раскроем материал приходит на участок с
                 # габаритом выхода (например 0,9 м), а задание остаётся с
@@ -1175,11 +1174,11 @@ async def _run_route_progress(
                 # Брак ~1 % выданного, но не меньше штуки: он виден в колонках
                 # доски и означает «в работе». Больше остатка годных — нельзя.
                 defect = (
-                    Decimal("0")
+                    Decimal(0)
                     if split_arrival
                     else min(
                         _whole_pieces(issued - good),
-                        max(_whole_pieces(issued * Decimal("0.01")), Decimal("1")),
+                        max(_whole_pieces(issued * Decimal("0.01")), Decimal(1)),
                     )
                 )
                 await complete_task(

@@ -8,14 +8,14 @@ from __future__ import annotations
 from decimal import Decimal
 
 import pytest
-from sqlalchemy import select
-from sqlalchemy.ext.asyncio import AsyncSession
-
 from app.core.security import create_access_token
 from app.models.action_journal import Action, ActionStatus
 from app.models.user import User, UserRole
 from app.reversal.service import reversal_service
 from app.transfers.services import transfer_send
+from sqlalchemy import select
+from sqlalchemy.ext.asyncio import AsyncSession
+
 from tests.stock.test_transfer_stage2 import (
     _make_tasks_transferable,
     _make_two_ghp_setup,
@@ -30,13 +30,13 @@ def _headers(user: User) -> dict[str, str]:
 
 async def _setup_reversed_action(session: AsyncSession, client, sku: str) -> Action:
     """Передача + обратная (status='reversed') — готова к hard-purge."""
-    setup = await _make_two_ghp_setup(session, sku=sku, qty=Decimal("10"))
+    setup = await _make_two_ghp_setup(session, sku=sku, qty=Decimal(10))
     ctx = await _make_tasks_transferable(session, client, setup)
     result = await transfer_send(
         session,
         from_task_id=ctx["from_task_id"],
         to_task_id=ctx["to_task_id"],
-        quantity=Decimal("4"),
+        quantity=Decimal(4),
         actor_id=ctx["user"].id,
         idempotency_key=f"{sku}:t1",
     )
@@ -116,13 +116,13 @@ async def test_non_admin_writer_forbidden_403(session: AsyncSession, client) -> 
 
 async def test_not_allowed_maps_403(session: AsyncSession, client) -> None:
     """Нарушение условий п.3 спеки (статус не reversed) → 403 даже для admin."""
-    setup = await _make_two_ghp_setup(session, sku="HPAPI3", qty=Decimal("10"))
+    setup = await _make_two_ghp_setup(session, sku="HPAPI3", qty=Decimal(10))
     ctx = await _make_tasks_transferable(session, client, setup)
     result = await transfer_send(
         session,
         from_task_id=ctx["from_task_id"],
         to_task_id=ctx["to_task_id"],
-        quantity=Decimal("1"),
+        quantity=Decimal(1),
         actor_id=ctx["user"].id,
         idempotency_key="hpapi3:t1",
     )

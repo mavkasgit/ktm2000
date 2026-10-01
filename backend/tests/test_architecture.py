@@ -49,6 +49,6 @@ def test_transfer_barrel_is_empty() -> None:
 
 
 def test_dead_lock_helper_removed() -> None:
-    import app.api.deps as deps
+    from app.api import deps
 
     assert not hasattr(deps, "_ensure_transfer_target_lock")

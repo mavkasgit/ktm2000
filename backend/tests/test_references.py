@@ -1,10 +1,9 @@
 import pytest
-from sqlalchemy.exc import IntegrityError
-
 from app.models.product import Product, ProductPair, ProductType
-from app.models.route import ProductionRoute, RouteStage, RouteOperation
+from app.models.route import ProductionRoute, RouteOperation, RouteStage
 from app.models.section import Section
 from app.models.spg import StorageProductionGroup
+from sqlalchemy.exc import IntegrityError
 
 
 @pytest.mark.asyncio

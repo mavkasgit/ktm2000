@@ -98,7 +98,7 @@ class TestHangerRoundingRuleFromData:
         assert HANGER_ROUNDING_RULE == {"enabled": True, "mode": "round_up_to_multiple"}
 
     def test_rounding_behavior_unchanged_for_current_data(self) -> None:
-        assert adjust_quantity_to_hanger(Decimal("12"), 5) == Decimal("15")
-        assert adjust_quantity_to_hanger(Decimal("10"), 5) is None
-        assert adjust_quantity_to_hanger(Decimal("12"), None) is None
-        assert adjust_quantity_to_hanger(Decimal("12.5"), 5) == Decimal("15")
+        assert adjust_quantity_to_hanger(Decimal(12), 5) == Decimal(15)
+        assert adjust_quantity_to_hanger(Decimal(10), 5) is None
+        assert adjust_quantity_to_hanger(Decimal(12), None) is None
+        assert adjust_quantity_to_hanger(Decimal("12.5"), 5) == Decimal(15)

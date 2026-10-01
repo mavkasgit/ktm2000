@@ -6,8 +6,7 @@ from decimal import Decimal
 from urllib.parse import quote
 
 import pytest
-from sqlalchemy.ext.asyncio import AsyncSession
-
+from app.models.product import Product, ProductType
 from app.models.production_plan import (
     PlanPosition,
     PlanPositionStatus,
@@ -16,9 +15,9 @@ from app.models.production_plan import (
     ProductionPlan,
     ProductionPlanStatus,
 )
-from app.models.product import Product, ProductType
 from app.models.route import ProductionRoute, RouteOperation, RouteStage
 from app.models.section import Section
+from sqlalchemy.ext.asyncio import AsyncSession
 
 
 async def _make_route(session: AsyncSession, sku: str) -> tuple[Product, ProductionRoute]:
@@ -92,7 +91,7 @@ async def _seed_positions(
             source_type=PlanSourceType.manual,
             source_sku=sku,
             source_name=f"Product {sku}",
-            quantity=Decimal("10"),
+            quantity=Decimal(10),
             source_payload={},
             status=PlanPositionStatus.approved,
             validation_status=PlanPositionValidationStatus.valid,
@@ -192,7 +191,7 @@ async def test_rows_sort_by_product_sku(client, session: AsyncSession):
                 source_type=PlanSourceType.manual,
                 source_sku=sku,
                 source_name=product.name,
-                quantity=Decimal("10"),
+                quantity=Decimal(10),
                 source_payload={},
                 status=PlanPositionStatus.approved,
                 validation_status=PlanPositionValidationStatus.valid,
@@ -245,7 +244,7 @@ async def test_rows_sort_by_dimensions_desc(client, session: AsyncSession):
                 source_type=PlanSourceType.manual,
                 source_sku=f"DIMSORT-{row_no:03d}",
                 source_name=product.name,
-                quantity=Decimal("10"),
+                quantity=Decimal(10),
                 input_dimensions=dims,
                 source_payload={},
                 status=PlanPositionStatus.approved,
@@ -298,7 +297,7 @@ async def test_rows_filter_by_dimensions_exact(client, session: AsyncSession):
                 source_type=PlanSourceType.manual,
                 source_sku=f"DIMFILT-{row_no:03d}",
                 source_name=product.name,
-                quantity=Decimal("10"),
+                quantity=Decimal(10),
                 input_dimensions=dims,
                 source_payload={},
                 status=PlanPositionStatus.approved,
@@ -347,23 +346,23 @@ async def test_rows_expose_cut_layout_hanger_and_original_quantity(
     await session.flush()
 
     def _position(row_no: int, sku: str, **overrides) -> PlanPosition:
-        fields = dict(
-            production_plan_id=plan.id,
-            product_id=product.id,
-            source_type=PlanSourceType.manual,
-            source_sku=sku,
-            source_name=f"Product {sku}",
-            quantity=Decimal("150"),
-            source_payload={},
-            status=PlanPositionStatus.approved,
-            validation_status=PlanPositionValidationStatus.valid,
-            validation_errors=[],
-            period_start=plan.period_start,
-            period_end=plan.period_end,
-            has_pack_ops=False,
-            route_id=route.id,
-            source_row_number=row_no,
-        )
+        fields = {
+            "production_plan_id": plan.id,
+            "product_id": product.id,
+            "source_type": PlanSourceType.manual,
+            "source_sku": sku,
+            "source_name": f"Product {sku}",
+            "quantity": Decimal(150),
+            "source_payload": {},
+            "status": PlanPositionStatus.approved,
+            "validation_status": PlanPositionValidationStatus.valid,
+            "validation_errors": [],
+            "period_start": plan.period_start,
+            "period_end": plan.period_end,
+            "has_pack_ops": False,
+            "route_id": route.id,
+            "source_row_number": row_no,
+        }
         fields.update(overrides)
         return PlanPosition(**fields)
 
@@ -436,7 +435,7 @@ async def test_rows_default_order_groups_by_plan_then_row_number(client, session
                 source_type=PlanSourceType.manual,
                 source_sku=sku,
                 source_name=sku,
-                quantity=Decimal("10"),
+                quantity=Decimal(10),
                 source_payload={},
                 status=PlanPositionStatus.approved,
                 validation_status=PlanPositionValidationStatus.valid,
@@ -482,7 +481,7 @@ async def test_rows_multi_sort_priorities(client, session: AsyncSession):
     алфавитный, а по двум — алфавитный. Иначе тест не отличает мультисортировку
     от одиночной сортировки по второму полю.
     """
-    product, route = await _make_route(session, "ROWMULTI")
+    _product, route = await _make_route(session, "ROWMULTI")
     plan = ProductionPlan(
         plan_no="PLAN-ROWMULTI",
         name="Plan ROWMULTI",
@@ -504,7 +503,7 @@ async def test_rows_multi_sort_priorities(client, session: AsyncSession):
                 source_type=PlanSourceType.manual,
                 source_sku=sku,
                 source_name=sku,
-                quantity=Decimal("10"),
+                quantity=Decimal(10),
                 source_payload={},
                 status=PlanPositionStatus.approved,
                 validation_status=PlanPositionValidationStatus.valid,

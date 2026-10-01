@@ -55,7 +55,7 @@ def test_row_per_output_with_partial_transfer():
     assert second.dimensions == {"length_mm": 1800}
     assert second.quantity == Decimal("1.8")
     assert second.produced_quantity == Decimal("1.8")
-    assert second.used_quantity == Decimal("0")
+    assert second.used_quantity == Decimal(0)
     assert second.remaining_quantity == Decimal("1.8")
 
 
@@ -69,7 +69,7 @@ def test_final_release_used_per_dimension():
 
     assert [r.remaining_quantity for r in rows] == [
         Decimal("0.9"),
-        Decimal("0"),
+        Decimal(0),
     ]
 
 
@@ -99,7 +99,7 @@ def test_produced_and_used_fill_sequentially_within_same_dimensions():
         Decimal("0.1"),
     ]
     assert [r.remaining_quantity for r in rows] == [
-        Decimal("0"),
+        Decimal(0),
         Decimal("0.2"),
     ]
 
@@ -117,7 +117,7 @@ def test_produced_capped_by_plan_row_quantity():
 def test_remaining_never_negative_when_used_exceeds_produced():
     """Передано/выпущено больше произведённого — остаток клампится в 0."""
     rows = build_output_rows(OUTPUTS, {K09: Decimal("0.9")}, {K09: Decimal("1.5")})
-    assert rows[0].remaining_quantity == Decimal("0")
+    assert rows[0].remaining_quantity == Decimal(0)
 
 
 def test_output_without_quantity_is_zero_row():
@@ -126,7 +126,7 @@ def test_output_without_quantity_is_zero_row():
     rows = build_output_rows(outputs, {}, {})
     assert len(rows) == 1
     row = rows[0]
-    assert row.quantity == Decimal("0")
-    assert row.produced_quantity == Decimal("0")
-    assert row.used_quantity == Decimal("0")
-    assert row.remaining_quantity == Decimal("0")
+    assert row.quantity == Decimal(0)
+    assert row.produced_quantity == Decimal(0)
+    assert row.used_quantity == Decimal(0)
+    assert row.remaining_quantity == Decimal(0)

@@ -6,14 +6,13 @@
 from __future__ import annotations
 
 import pytest
-from httpx import AsyncClient
-from sqlalchemy import select
-from sqlalchemy.ext.asyncio import AsyncSession
-
 from app.core.config import settings
 from app.core.security import create_access_token
 from app.models.notification import Notification, UserNotificationState
 from app.models.user import User, UserRole
+from httpx import AsyncClient
+from sqlalchemy import select
+from sqlalchemy.ext.asyncio import AsyncSession
 
 pytestmark = pytest.mark.asyncio
 

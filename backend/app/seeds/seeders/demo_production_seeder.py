@@ -1,21 +1,21 @@
 from __future__ import annotations
 
 from decimal import Decimal
+
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import selectinload
 
-from app.models.product import Product, ProductLength, ProductType
 from app.models.action_journal import Action
-from app.models.spg import SpgSection, StorageProductionGroup
+from app.models.defect import Defect, DefectItem, DefectStatus
+from app.models.product import Product, ProductLength, ProductType
 from app.models.route import ProductionRoute, RouteStage
 from app.models.section import Section
-from app.models.defect import Defect, DefectItem, DefectStatus
+from app.models.spg import SpgSection, StorageProductionGroup
 from app.models.user import User
+from app.services.action_journal_service import action_journal_service
 from app.services.route_storage_classifier import is_production_stage
 from app.services.shopfloor.common import build_completed_stages_json
-from app.services.action_journal_service import action_journal_service
-
 
 PREP_STOCK_SECTION_CODE = "PREP_STOCK"
 WIP_STOCK_SECTION_CODE = "WIP_STOCK"
@@ -189,7 +189,7 @@ async def seed_demo_production(db: AsyncSession) -> dict:
 
     # SpgRemainder creation removed — table no longer exists.
     # Use StockCommandService.MANUAL_IN for demo stock creation.
-    from app.stock import StockCommand, StockCommandService, Reason, QualityState
+    from app.stock import QualityState, Reason, StockCommand, StockCommandService
     from app.stock.models import StockTransaction
     stock_service = StockCommandService()
 

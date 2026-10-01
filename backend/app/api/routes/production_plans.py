@@ -1,6 +1,6 @@
 import asyncio
-from datetime import UTC, datetime
 import logging
+from datetime import UTC, datetime
 from decimal import Decimal
 from typing import Literal
 
@@ -8,17 +8,20 @@ from fastapi import APIRouter, Depends, HTTPException, Query, status
 from fastapi.responses import JSONResponse
 from pydantic import BaseModel, ConfigDict
 from sqlalchemy import String, cast, exists, or_, select, text
+from sqlalchemy import func as sa_func
+from sqlalchemy.exc import DBAPIError
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import selectinload
-from sqlalchemy.exc import DBAPIError
 
-from sqlalchemy import func as sa_func
-
-from app.api.deps import PLAN_WRITER_ROLES, READER_ROLES, require_role, get_current_user
+from app.api.deps import PLAN_WRITER_ROLES, READER_ROLES, get_current_user, require_role
+from app.api.routes.audit_logs import AuditLogOut
 from app.core.config import settings
 from app.core.database import get_db
 from app.core.sorting import SortClause, apply_sort, parse_sort
 from app.domain.dimensions import format_cut_layout
+from app.models.audit_log import AuditLog
+from app.models.imports import ImportBatch, ImportFile
+from app.models.product import Product
 from app.models.production_plan import (
     PlanChangeItem,
     PlanChangeSet,
@@ -28,45 +31,49 @@ from app.models.production_plan import (
     PlanPositionValidationStatus,
     ProductionPlan,
 )
-from app.models.audit_log import AuditLog
-from app.api.routes.audit_logs import AuditLogOut
-from app.models.imports import ImportBatch, ImportFile
-from app.models.product import Product
 from app.models.release_batch import ReleaseBatchType
 from app.models.route import ProductionRoute, RouteRuleProfile, RouteStage
 from app.models.section import Section
 from app.models.user import User, UserRole
-from app.services.plan_generation import create_release_batch
-from app.services.position_remainders import PositionStockFigures
-from app.services.production_plan_service import (
-    BATCH_DELETE_SAFE_ACTION,
-    BatchDeleteBlocked,
-    _delete_batch_and_orphan_file,
-    apply_change_set,
-    approve_plan_position,
-    cancel_plan_position,
-    delete_import_batch as delete_import_batch_service,
-    delete_production_plan,
-    get_production_plan_delete_preview,
-    PlanDeleteBlocked,
-    get_plan_preview,
-    hide_import_batch as hide_import_batch_service,
-    restore_plan_position,
-    rollback_change_set,
-    require_mutable_plan,
-    soft_delete_cancelled_position,
-)
 from app.services.import_batch_force_delete import (
     BatchForceDeleteBlocked,
     force_delete_import_batch,
     get_batch_force_delete_preview,
 )
-from app.services.route_matcher import resolve_position_route, ResolvedRouteInfo, make_position_route_cache_key
-from app.services.route_signature_check import compare_position_route_signature
-from app.services.route_selection import select_route_for_payload
-from app.services.route_validation import validate_route_match
-from app.services.plan_validation import format_validation_error
+from app.services.plan_generation import create_release_batch
 from app.services.plan_position_hanger import resolve_positions_hanger
+from app.services.plan_validation import format_validation_error
+from app.services.position_remainders import PositionStockFigures
+from app.services.production_plan_service import (
+    BATCH_DELETE_SAFE_ACTION,
+    BatchDeleteBlocked,
+    PlanDeleteBlocked,
+    _delete_batch_and_orphan_file,
+    apply_change_set,
+    approve_plan_position,
+    cancel_plan_position,
+    delete_production_plan,
+    get_plan_preview,
+    get_production_plan_delete_preview,
+    require_mutable_plan,
+    restore_plan_position,
+    rollback_change_set,
+    soft_delete_cancelled_position,
+)
+from app.services.production_plan_service import (
+    delete_import_batch as delete_import_batch_service,
+)
+from app.services.production_plan_service import (
+    hide_import_batch as hide_import_batch_service,
+)
+from app.services.route_matcher import (
+    ResolvedRouteInfo,
+    make_position_route_cache_key,
+    resolve_position_route,
+)
+from app.services.route_selection import select_route_for_payload
+from app.services.route_signature_check import compare_position_route_signature
+from app.services.route_validation import validate_route_match
 
 router = APIRouter(prefix="/production-plans", tags=["production-plans"])
 
@@ -340,8 +347,8 @@ async def discard_plan_change_set(
     # Запись лога аудита (отклонение импорта). Без батча записи нет: отклонять
     # нечего, а строка с `entity_id=NULL` исказила бы реестр импортов.
     if batch_id is not None:
-        from app.services.audit_log_service import log_action
         from app.models.audit_log import AuditAction, AuditEntityType
+        from app.services.audit_log_service import log_action
         await log_action(
             db,
             status="success",
@@ -677,8 +684,8 @@ async def delete_position(
     )
 
     # Запись лога аудита
-    from app.services.audit_log_service import log_action
     from app.models.audit_log import AuditAction, AuditEntityType
+    from app.services.audit_log_service import log_action
     await log_action(
         db,
         status="success",
@@ -828,8 +835,8 @@ async def bulk_delete_positions(
                         )
                     )
                     # Запись лога аудита (удаление позиции)
-                    from app.services.audit_log_service import log_action
                     from app.models.audit_log import AuditAction, AuditEntityType
+                    from app.services.audit_log_service import log_action
                     await log_action(
                         db,
                         status="success",
@@ -1411,12 +1418,16 @@ _ALL_POSITIONS_SORT_DEFAULT = SortClause("source_row_number", "asc")
 # Длина/габарит задания позиции в SQL — общий с execution-страницей:
 # источники — вход позиции, fallback — единственный выход (тикет #92, #95).
 def _position_task_length_mm_expr():
-    from app.services.production_planning_rows import _position_task_length_mm_expr as _impl
+    from app.services.production_planning_rows import (
+        _position_task_length_mm_expr as _impl,
+    )
     return _impl()
 
 
 def _position_task_dimensions_expr():
-    from app.services.production_planning_rows import _position_task_dimensions_expr as _impl
+    from app.services.production_planning_rows import (
+        _position_task_dimensions_expr as _impl,
+    )
     return _impl()
 
 
@@ -1929,8 +1940,8 @@ async def batch_assign_route_global(
             pos.route_manual_confirmed_at = now
 
     # Запись лога аудита (назначение маршрута)
-    from app.services.audit_log_service import log_action
     from app.models.audit_log import AuditAction, AuditEntityType
+    from app.services.audit_log_service import log_action
     route_details = f"маршрут '{route_name}'" if route_name else "автоматический маршрут (сброшен)"
     
     # Для группового действия логируем изменения для каждой позиции
@@ -2011,8 +2022,8 @@ async def batch_assign_route(
             pos.route_manual_confirmed_at = now
 
     # Запись лога аудита (назначение маршрута)
-    from app.services.audit_log_service import log_action
     from app.models.audit_log import AuditAction, AuditEntityType
+    from app.services.audit_log_service import log_action
     route_details = f"маршрут '{route_name}'" if route_name else "автоматический маршрут (сброшен)"
     
     changes_dict = {}
@@ -2257,8 +2268,8 @@ async def reset_all_plans(
     await _truncate_all_production_data(db)
 
     # Запись лога аудита (полный сброс системы)
-    from app.services.audit_log_service import log_action
     from app.models.audit_log import AuditAction
+    from app.services.audit_log_service import log_action
     await log_action(
         db,
         status="success",
@@ -2281,8 +2292,8 @@ async def update_position_quantity(
     current_user: User = Depends(require_role(list(PLAN_WRITER_ROLES))),
 ) -> PlanPositionOut:
     """Update position quantity and optionally quantity_per_hanger in source_payload."""
-    from app.services.plan_validation import validate_plan_position
     from app.models.production_plan import PlanPositionValidationStatus
+    from app.services.plan_validation import validate_plan_position
 
     await _require_visible_plan(db, production_plan_id)
     position = await db.get(PlanPosition, position_id)
@@ -2323,8 +2334,8 @@ async def update_position_quantity(
     )
 
     # Запись лога аудита (изменение количества)
-    from app.services.audit_log_service import log_action
     from app.models.audit_log import AuditAction, AuditEntityType
+    from app.services.audit_log_service import log_action
     await log_action(
         db,
         status="success",

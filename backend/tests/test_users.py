@@ -1,6 +1,6 @@
 import pytest
-from sqlalchemy import select
 from app.models.user import User, UserRole
+from sqlalchemy import select
 
 
 async def _make_user(session, username: str, role: UserRole, tab_number: str | None = None) -> User:

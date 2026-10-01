@@ -10,14 +10,14 @@ Revision ID: 038_paired_techcard_quantity_min
 Revises: 037_notification_state
 Create Date: 2026-08-09 00:00:00.000000
 """
-from typing import Sequence, Union
+from collections.abc import Sequence
 
 from alembic import op
 
 revision: str = "038_paired_techcard_quantity_min"
-down_revision: Union[str, None] = "037_notification_state"
-branch_labels: Union[str, Sequence[str], None] = None
-depends_on: Union[str, Sequence[str], None] = None
+down_revision: str | None = "037_notification_state"
+branch_labels: str | Sequence[str] | None = None
+depends_on: str | Sequence[str] | None = None
 
 
 def upgrade() -> None:

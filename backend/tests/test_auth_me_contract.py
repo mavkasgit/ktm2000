@@ -61,10 +61,9 @@ async def test_me_avatar_null_resets_seed(auth_client) -> None:
 
 async def test_me_login_events_capped_at_10_with_total(auth_client, session) -> None:
     """Канон 2.1.0: /auth/me/login-events отдаёт максимум 10 + total (окно 90 дней)."""
-    from sqlalchemy import select
-
     from app.models.user import User
     from app.services.session_service import record_login_event
+    from sqlalchemy import select
 
     res = await session.execute(select(User).where(User.username == "testauth"))
     user = res.scalar_one()

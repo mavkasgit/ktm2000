@@ -6,7 +6,6 @@
 from __future__ import annotations
 
 import pytest
-
 from app.domain.dimensions import (
     LENGTH_MM,
     DimensionsValidationError,
@@ -16,7 +15,6 @@ from app.domain.dimensions import (
     format_dimensions,
     parse_length_m_to_mm,
 )
-
 
 # ---------------------------------------------------------------------------
 # canonicalize_dimensions

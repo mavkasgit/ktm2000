@@ -14,27 +14,31 @@
 """
 from __future__ import annotations
 
+from collections.abc import AsyncIterator
 from contextlib import asynccontextmanager
-from typing import AsyncIterator
 
 import pytest
-from httpx import ASGITransport, AsyncClient
-from sqlalchemy import delete, select, text
-from sqlalchemy.ext.asyncio import AsyncEngine, AsyncSession, async_sessionmaker
-
 from app.core.database import get_db
 from app.main import app
 from app.models.audit_log import AuditEntityType, AuditLog
+from app.models.product import Product
 from app.models.production_plan import (
     PlanPosition,
     PlanPositionStatus,
     ProductionPlan,
     ProductionPlanStatus,
 )
-from app.models.product import Product
 from app.models.route import ProductionRoute, RouteOperation, RouteStage
 from app.models.section import Section
-from tests.test_bulk_planning import _auth_headers, _make_plan_with_positions, _make_user
+from httpx import ASGITransport, AsyncClient
+from sqlalchemy import delete, select, text
+from sqlalchemy.ext.asyncio import AsyncEngine, AsyncSession, async_sessionmaker
+
+from tests.test_bulk_planning import (
+    _auth_headers,
+    _make_plan_with_positions,
+    _make_user,
+)
 
 
 @asynccontextmanager

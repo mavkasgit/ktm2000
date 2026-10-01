@@ -6,9 +6,6 @@ from datetime import date
 from decimal import Decimal
 
 import pytest
-from sqlalchemy import select
-from sqlalchemy.ext.asyncio import AsyncSession
-
 from app.models.imports import ImportBatch, ImportBatchMode, ImportFile
 from app.models.internal_plan import InternalPlan, InternalPlanStatus, SectionPlanLine
 from app.models.product import Product, ProductType
@@ -28,13 +25,16 @@ from app.models.production_plan import (
 )
 from app.models.route import ProductionRoute, RouteStage
 from app.models.section import Section
-from app.models.work_task import WorkTask, WorkTaskStatus
-from tests.test_integrity_invariants import assert_no_invariants_violations
 from app.models.transfer import Transfer
+from app.models.user import User, UserRole
+from app.models.work_task import WorkTask, WorkTaskStatus
 from app.stock.models import Reason
 from app.stock.services import StockCommand, StockCommandService
-from app.models.user import User, UserRole
 from app.transfers.services import transfer_send
+from sqlalchemy import select
+from sqlalchemy.ext.asyncio import AsyncSession
+
+from tests.test_integrity_invariants import assert_no_invariants_violations
 
 pytestmark = pytest.mark.asyncio
 
@@ -80,7 +80,7 @@ def _make_position(
     pos = PlanPosition(
         production_plan_id=plan.id, product_id=product.id, import_batch_id=batch.id,
         source_type=PlanSourceType.excel_import, source_sku=product.sku, source_name=product.name,
-        quantity=Decimal("10"), source_payload={}, source_row_number=row,
+        quantity=Decimal(10), source_payload={}, source_row_number=row,
         source_fingerprint=f"fp-{batch.id}-{row}", source_row_hash=f"hash-{batch.id}-{row}",
         status=status, validation_status=PlanPositionValidationStatus.valid, validation_errors=[],
         period_start=plan.period_start, period_end=plan.period_end, has_pack_ops=False,
@@ -139,22 +139,22 @@ async def _make_transfer_chain(
     line1 = SectionPlanLine(
         internal_plan_id=internal.id, plan_position_id=pos.id, section_id=sec1.id,
         product_id=product.id, route_id=route.id, route_stage_id=st1.id,
-        sequence=1, planned_quantity=Decimal("10"),
+        sequence=1, planned_quantity=Decimal(10),
     )
     line2 = SectionPlanLine(
         internal_plan_id=internal.id, plan_position_id=pos.id, section_id=sec2.id,
         product_id=product.id, route_id=route.id, route_stage_id=st2.id,
-        sequence=2, planned_quantity=Decimal("10"),
+        sequence=2, planned_quantity=Decimal(10),
     )
     session.add_all([line1, line2])
     await session.flush()
     task1 = WorkTask(
         section_plan_line_id=line1.id, section_id=sec1.id, product_id=product.id,
-        route_stage_id=st1.id, planned_quantity=Decimal("10"), status=WorkTaskStatus.ready,
+        route_stage_id=st1.id, planned_quantity=Decimal(10), status=WorkTaskStatus.ready,
     )
     task2 = WorkTask(
         section_plan_line_id=line2.id, section_id=sec2.id, product_id=product.id,
-        route_stage_id=st2.id, planned_quantity=Decimal("10"), status=WorkTaskStatus.waiting_previous,
+        route_stage_id=st2.id, planned_quantity=Decimal(10), status=WorkTaskStatus.waiting_previous,
     )
     session.add_all([task1, task2])
     await session.flush()
@@ -171,14 +171,14 @@ async def _make_transfer_chain(
             product_id=product.id,
             from_location_id=None,
             to_location_id=sec1.id,
-            quantity=Decimal("5"),
+            quantity=Decimal(5),
             reason=Reason.MANUAL_IN,
             completed_operations=ops,
             created_by=user.id,
         ),
     )
     result = await transfer_send(
-        session, from_task_id=task1.id, to_task_id=task2.id, quantity=Decimal("5"),
+        session, from_task_id=task1.id, to_task_id=task2.id, quantity=Decimal(5),
         actor_id=user.id, allow_over_plan=True,
     )
     transfer = await session.get(Transfer, result["transfer_id"])
@@ -318,7 +318,7 @@ async def _make_position_line(
         SectionPlanLine(
             internal_plan_id=internal.id, plan_position_id=pos.id, section_id=section.id,
             product_id=product.id, route_id=route.id, route_stage_id=stage.id,
-            sequence=1, planned_quantity=Decimal("10"),
+            sequence=1, planned_quantity=Decimal(10),
         )
     )
     await session.flush()

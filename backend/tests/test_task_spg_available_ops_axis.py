@@ -18,11 +18,11 @@ from __future__ import annotations
 from decimal import Decimal
 
 import pytest
-from sqlalchemy.ext.asyncio import AsyncSession
-
 from app.stock.models import QualityState, Reason
 from app.stock.services import StockCommand, StockCommandService
 from app.transfers.transferable import compute_stock_section_transferable
+from sqlalchemy.ext.asyncio import AsyncSession
+
 from tests.helpers.completed_operations import build_operation_route, ops_through
 
 pytestmark = pytest.mark.asyncio
@@ -104,7 +104,7 @@ async def test_available_matches_issuing_write_guard(client, session) -> None:
         )
     )
 
-    assert physical_stock == Decimal("400")
+    assert physical_stock == Decimal(400)
     assert resp.json()["available"] == float(physical_stock)
 
 

@@ -29,16 +29,15 @@
 
 Irreversible: no — ``downgrade`` возвращает прежние сигнатуры и убирает отчёт.
 """
-from typing import Sequence, Union
+from collections.abc import Sequence
 
 import sqlalchemy as sa
 from alembic import op
 
-
 revision: str = "069_route_signature_recalculation"
-down_revision: Union[str, None] = "068_route_stage_significance_from_reference"
-branch_labels: Union[str, Sequence[str], None] = None
-depends_on: Union[str, Sequence[str], None] = None
+down_revision: str | None = "068_route_stage_significance_from_reference"
+branch_labels: str | Sequence[str] | None = None
+depends_on: str | Sequence[str] | None = None
 
 REPORT_TABLE = "route_signature_migration"
 

@@ -21,7 +21,8 @@ import json
 from dataclasses import dataclass, field
 from datetime import datetime
 from decimal import Decimal
-from typing import Any, cast as tcast
+from typing import Any
+from typing import cast as tcast
 
 from sqlalchemy import Select, cast, delete, func, or_, select, text
 from sqlalchemy.dialects.postgresql import JSONB
@@ -38,17 +39,17 @@ from app.domain.dimensions import (
 from app.models import Product, Section
 from app.models.work_task import WorkTask
 from app.services.route_storage_classifier import TERMINAL_TYPES
-from app.stock.task_cache import (
-    compute_remaining,
-    compute_task_available,
-    effective_issued_quantity,
-)
 from app.stock.ledger import net_by_reason_sq
 from app.stock.models import (
     QualityState,
     Reason,
     StockBalance,
     StockTransaction,
+)
+from app.stock.task_cache import (
+    compute_remaining,
+    compute_task_available,
+    effective_issued_quantity,
 )
 
 
@@ -304,8 +305,8 @@ class StockProjectionManager:
                 ),
             )
         )
-        in_sum = sum((r[0] for r in incoming), Decimal("0"))
-        out_sum = sum((r[0] for r in outgoing), Decimal("0"))
+        in_sum = sum((r[0] for r in incoming), Decimal(0))
+        out_sum = sum((r[0] for r in outgoing), Decimal(0))
         balance = in_sum - out_sum
 
         existing = await session.execute(
@@ -416,10 +417,10 @@ class StockProjectionManager:
             ops_by_key.setdefault(ops_key, ops)
             if to_loc is not None:
                 key = (product_id, to_loc, to_qs, dims_key, ops_key)
-                agg[key] = agg.get(key, Decimal("0")) + qty
+                agg[key] = agg.get(key, Decimal(0)) + qty
             if from_loc is not None:
                 key = (product_id, from_loc, from_qs, dims_key, ops_key)
-                agg[key] = agg.get(key, Decimal("0")) - qty
+                agg[key] = agg.get(key, Decimal(0)) - qty
         rows = [
             (
                 product_id,
@@ -476,10 +477,10 @@ class StockProjectionManager:
         )
         sums: dict[str, Decimal] = {}
         for reason_val, qty in rows:
-            sums[reason_val] = (sums.get(reason_val) or Decimal("0")) + qty
+            sums[reason_val] = (sums.get(reason_val) or Decimal(0)) + qty
 
         def _sum_reason(reason: Reason) -> Decimal:
-            return sums.get(reason.value) or Decimal("0")
+            return sums.get(reason.value) or Decimal(0)
 
         # Net transfer_send/receive с учётом компенсаций — примитив stock/ledger.
         # TOTAL по задаче (dims=None → без dimension-фильтра), как было в кэше.
@@ -489,12 +490,12 @@ class StockProjectionManager:
             await session.scalar(
                 select(send_sq.c.net_quantity).where(send_sq.c.task_id == task_id)
             )
-        ) or Decimal("0")
+        ) or Decimal(0)
         received = (
             await session.scalar(
                 select(recv_sq.c.net_quantity).where(recv_sq.c.task_id == task_id)
             )
-        ) or Decimal("0")
+        ) or Decimal(0)
 
         completed = _sum_reason(Reason.COMPLETE)
         scrapped = _sum_reason(Reason.SCRAP)
@@ -532,13 +533,13 @@ class StockProjectionManager:
         result = await self._compute_task_cache(session, task_id)
         if result is None:
             return {
-                "available_quantity": Decimal("0"),
-                "issued_quantity": Decimal("0"),
-                "completed_quantity": Decimal("0"),
-                "transferred_quantity": Decimal("0"),
-                "received_quantity": Decimal("0"),
-                "rejected_quantity": Decimal("0"),
-                "remaining_quantity": Decimal("0"),
+                "available_quantity": Decimal(0),
+                "issued_quantity": Decimal(0),
+                "completed_quantity": Decimal(0),
+                "transferred_quantity": Decimal(0),
+                "received_quantity": Decimal(0),
+                "rejected_quantity": Decimal(0),
+                "remaining_quantity": Decimal(0),
             }
         return result
 
@@ -579,7 +580,7 @@ class StockProjectionManager:
         for tid, reason_val, qty in rows:
             if tid not in sums:
                 sums[tid] = {}
-            sums[tid][reason_val] = (sums[tid].get(reason_val) or Decimal("0")) + qty
+            sums[tid][reason_val] = (sums[tid].get(reason_val) or Decimal(0)) + qty
 
         # Net для transfer_send/receive с compensations — примитив stock/ledger.
         # TOTAL по задачам (dims=None → без dimension-фильтра), один запрос.
@@ -611,13 +612,13 @@ class StockProjectionManager:
             task = task_map.get(tid)
             if task is None:
                 result[tid] = {
-                    "available_quantity": Decimal("0"),
-                    "issued_quantity": Decimal("0"),
-                    "completed_quantity": Decimal("0"),
-                    "transferred_quantity": Decimal("0"),
-                    "received_quantity": Decimal("0"),
-                    "rejected_quantity": Decimal("0"),
-                    "remaining_quantity": Decimal("0"),
+                    "available_quantity": Decimal(0),
+                    "issued_quantity": Decimal(0),
+                    "completed_quantity": Decimal(0),
+                    "transferred_quantity": Decimal(0),
+                    "received_quantity": Decimal(0),
+                    "rejected_quantity": Decimal(0),
+                    "remaining_quantity": Decimal(0),
                 }
                 continue
 
@@ -626,13 +627,13 @@ class StockProjectionManager:
             t_sums = sums.get(tid, {})
 
             def _val(s: dict, key: Reason) -> Decimal:
-                return s.get(key.value) or Decimal("0")
+                return s.get(key.value) or Decimal(0)
 
             completed = _val(t_sums, Reason.COMPLETE)
             scrapped = _val(t_sums, Reason.SCRAP)
             returned = _val(t_sums, Reason.RETURN_TO_STOCK)
-            transferred = send_net_by_task.get(tid, Decimal("0"))
-            received = recv_net_by_task.get(tid, Decimal("0"))
+            transferred = send_net_by_task.get(tid, Decimal(0))
+            received = recv_net_by_task.get(tid, Decimal(0))
             rejected = scrapped
             issued = effective_issued_quantity(received=received)
 
@@ -957,7 +958,7 @@ class StockCommandService:
             )
         )
         balance_row = balance_result.scalar_one_or_none()
-        current_balance = balance_row.balance_qty if balance_row is not None else Decimal("0")
+        current_balance = balance_row.balance_qty if balance_row is not None else Decimal(0)
         if current_balance >= cmd.quantity:
             return
 
@@ -999,11 +1000,10 @@ class StockCommandService:
             )
         if cmd.quantity <= 0:
             raise StockValidationError(f"quantity must be > 0, got {cmd.quantity}")
-        if cmd.from_location_id is None and cmd.to_location_id is None:
-            if cmd.reason != Reason.TRANSFER_RECEIVE:
-                raise StockValidationError(
-                    "at least one of from_location_id / to_location_id must be set"
-                )
+        if cmd.from_location_id is None and cmd.to_location_id is None and cmd.reason != Reason.TRANSFER_RECEIVE:
+            raise StockValidationError(
+                "at least one of from_location_id / to_location_id must be set"
+            )
         # Some reasons are "state changes" on the same location
         # (complete, scrap, rework) — allow same from/to for these.
         _state_change_reasons = {
@@ -1012,16 +1012,16 @@ class StockCommandService:
             Reason.REWORK,
             Reason.FINAL_RELEASE,
         }
-        if cmd.reason not in _state_change_reasons:
-            if (
-                cmd.from_location_id is not None
-                and cmd.to_location_id is not None
-                and cmd.from_location_id == cmd.to_location_id
-            ):
-                raise StockValidationError(
-                    f"from_location_id and to_location_id must differ for reason={cmd.reason.value}, "
-                    f"got {cmd.from_location_id}"
-                )
+        if (
+            cmd.reason not in _state_change_reasons
+            and cmd.from_location_id is not None
+            and cmd.to_location_id is not None
+            and cmd.from_location_id == cmd.to_location_id
+        ):
+            raise StockValidationError(
+                f"from_location_id and to_location_id must differ for reason={cmd.reason.value}, "
+                f"got {cmd.from_location_id}"
+            )
         # Product existence
         prod = await session.get(Product, cmd.product_id)
         if prod is None:

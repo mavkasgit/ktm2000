@@ -10,11 +10,10 @@ import zipfile
 from io import BytesIO
 from pathlib import Path
 
+from app.models.product import Product, ProductLength, ProductType
 from httpx import AsyncClient
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
-
-from app.models.product import Product, ProductLength, ProductType
 
 ZIP_URL = "/api/catalog-import/upload-zip"
 

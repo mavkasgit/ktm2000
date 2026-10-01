@@ -8,13 +8,11 @@ set, with zero code changes.
 from __future__ import annotations
 
 import pytest
-
 from app.models.product import Product, ProductLength, ProductType
 from app.models.route import RouteRuleProfile, RouteSelectionRule, SectionOperation
 from app.models.section import Section
-from app.services.route_selection import select_route_for_payload
 from app.services.route_builder import build_route_from_profile
-
+from app.services.route_selection import select_route_for_payload
 
 # ─── Minimal factory seed: no ANODIZING, no SAWING ────────────────────────────
 

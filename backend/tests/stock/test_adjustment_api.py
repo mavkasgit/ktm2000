@@ -11,17 +11,15 @@
 """
 from __future__ import annotations
 
-
 import json
 
 import pytest
-from httpx import AsyncClient
-from sqlalchemy import select
-from sqlalchemy.ext.asyncio import AsyncSession
-
 from app.models import Product, ProductType, Section
 from app.models.route import SectionOperation
 from app.stock.models import Reason, StockBalance, StockTransaction
+from httpx import AsyncClient
+from sqlalchemy import select
+from sqlalchemy.ext.asyncio import AsyncSession
 
 pytestmark = pytest.mark.asyncio
 

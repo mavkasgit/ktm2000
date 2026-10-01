@@ -21,10 +21,6 @@ from decimal import Decimal
 
 import pytest
 import pytest_asyncio
-from httpx import ASGITransport, AsyncClient
-from sqlalchemy import event, select, text
-from sqlalchemy.ext.asyncio import AsyncEngine, AsyncSession, async_sessionmaker
-
 from app.core.database import get_db
 from app.core.security import create_access_token
 from app.main import app
@@ -35,6 +31,9 @@ from app.stock import (
     StockIdempotencyConflict,
     StockTransaction,
 )
+from httpx import ASGITransport, AsyncClient
+from sqlalchemy import event, select, text
+from sqlalchemy.ext.asyncio import AsyncEngine, AsyncSession, async_sessionmaker
 
 from tests.stock.test_stock_command import _make_location, _make_product, _make_user
 from tests.stock.test_task_completion_transform import (
@@ -111,7 +110,7 @@ async def test_concurrent_same_key_loser_gets_conflict(
         await StockCommandService().record(setup, StockCommand(
             product_id=product.id,
             to_location_id=raw.id,
-            quantity=Decimal("100"),
+            quantity=Decimal(100),
             reason=Reason.MANUAL_IN,
             created_by=user.id,
         ))
@@ -121,7 +120,7 @@ async def test_concurrent_same_key_loser_gets_conflict(
         product_id=product.id,
         from_location_id=raw.id,
         to_location_id=laser.id,
-        quantity=Decimal("10"),
+        quantity=Decimal(10),
         reason=Reason.TRANSFER_RECEIVE,
         created_by=user.id,
         idempotency_key=RACE_KEY,
@@ -173,7 +172,7 @@ async def test_replay_across_connections_returns_prior(
         await StockCommandService().record(setup, StockCommand(
             product_id=product.id,
             to_location_id=raw.id,
-            quantity=Decimal("100"),
+            quantity=Decimal(100),
             reason=Reason.MANUAL_IN,
             created_by=user.id,
         ))
@@ -183,7 +182,7 @@ async def test_replay_across_connections_returns_prior(
         product_id=product.id,
         from_location_id=raw.id,
         to_location_id=laser.id,
-        quantity=Decimal("10"),
+        quantity=Decimal(10),
         reason=Reason.TRANSFER_RECEIVE,
         created_by=user.id,
         idempotency_key="retry-key-1",
@@ -213,7 +212,7 @@ async def test_null_idempotency_key_is_not_idempotent(session: AsyncSession):
     await svc.record(session, StockCommand(
         product_id=product.id,
         to_location_id=raw.id,
-        quantity=Decimal("50"),
+        quantity=Decimal(50),
         reason=Reason.MANUAL_IN,
         created_by=user.id,
     ))
@@ -222,7 +221,7 @@ async def test_null_idempotency_key_is_not_idempotent(session: AsyncSession):
             product_id=product.id,
             from_location_id=raw.id,
             to_location_id=laser.id,
-            quantity=Decimal("5"),
+            quantity=Decimal(5),
             reason=Reason.TRANSFER_RECEIVE,
             created_by=user.id,
             idempotency_key=None,
@@ -284,7 +283,7 @@ async def test_api_double_click_complete_records_single_movement(
         await setup.execute(text(schema))
         await _bump_user_sequence(setup)
         fx = await _make_transform_setup(setup, sku="IDEM-API")
-        await _receive_input(setup, fx, quantity=Decimal("80"))
+        await _receive_input(setup, fx, quantity=Decimal(80))
         await setup.commit()
 
     url = f"/api/shopfloor/tasks/{fx['task'].id}/complete"
@@ -309,4 +308,4 @@ async def test_api_double_click_complete_records_single_movement(
         )
         await assert_no_stock_ledger_invariants_violations(check, context="double-click")
 
-    assert consumed == Decimal("80"), "double-click не должен задваивать списание"
+    assert consumed == Decimal(80), "double-click не должен задваивать списание"

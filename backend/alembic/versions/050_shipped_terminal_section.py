@@ -18,15 +18,14 @@
 Irreversible: partially — downgrade возвращает ``finished_stock``, но
 удалённые строки баланса не восстанавливает (они вычислимы из ledger).
 """
-from typing import Sequence, Union
+from collections.abc import Sequence
 
 from alembic import op
 
-
 revision: str = "050_shipped_terminal_section"
-down_revision: Union[str, None] = "049_stock_idempotency_unique"
-branch_labels: Union[str, Sequence[str], None] = None
-depends_on: Union[str, Sequence[str], None] = None
+down_revision: str | None = "049_stock_idempotency_unique"
+branch_labels: str | Sequence[str] | None = None
+depends_on: str | Sequence[str] | None = None
 
 
 def upgrade() -> None:

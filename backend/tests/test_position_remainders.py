@@ -5,8 +5,6 @@ from __future__ import annotations
 from decimal import Decimal
 
 import pytest
-from sqlalchemy import select
-
 from app.models.internal_plan import InternalPlan, SectionPlanLine
 from app.models.product import Product, ProductType
 from app.models.production_plan import (
@@ -17,12 +15,17 @@ from app.models.production_plan import (
     ProductionPlan,
     ProductionPlanStatus,
 )
-from app.models.release_batch import ReleaseBatch, ReleaseBatchPosition, ReleaseBatchStatus
+from app.models.release_batch import (
+    ReleaseBatch,
+    ReleaseBatchPosition,
+    ReleaseBatchStatus,
+)
 from app.models.route import ProductionRoute, RouteStage
 from app.models.section import Section
 from app.models.work_task import WorkTask, WorkTaskStatus
 from app.services.position_remainders import compute_position_stock_figures
 from app.stock import Reason, StockCommand, StockCommandService
+from sqlalchemy import select
 
 pytestmark = pytest.mark.asyncio
 
@@ -133,7 +136,7 @@ async def _seed_released_position(
 
 
 async def test_free_stock_is_physical_without_committed(session) -> None:
-    product, _ = await _seed_product_stock(session, sku="REM-FREE", stock_qty=Decimal("5000"))
+    product, _ = await _seed_product_stock(session, sku="REM-FREE", stock_qty=Decimal(5000))
 
     figures = await compute_position_stock_figures(session, [(1, [product.id], 100.0)])
 
@@ -144,7 +147,7 @@ async def test_free_stock_is_physical_without_committed(session) -> None:
 
 async def test_other_released_position_lowers_available_but_not_free(session) -> None:
     """Чужая открытая позиция уменьшает «доступно», но не «свободно на складах»."""
-    product, stock = await _seed_product_stock(session, sku="REM-COMMIT", stock_qty=Decimal("5000"))
+    product, stock = await _seed_product_stock(session, sku="REM-COMMIT", stock_qty=Decimal(5000))
     prod = Section(code="REM-PROD", name="Цех", type="production", is_active=True, sort_order=1)
     route = ProductionRoute(name="R-REM", is_active=True)
     session.add_all([prod, route])
@@ -156,7 +159,7 @@ async def test_other_released_position_lowers_available_but_not_free(session) ->
         route=route,
         stock_section=stock,
         prod_section=prod,
-        quantity=Decimal("1200"),
+        quantity=Decimal(1200),
     )
 
     # Индикатор для позиции, которой здесь нет: её собственного спроса в
@@ -173,7 +176,7 @@ async def test_other_released_position_lowers_available_but_not_free(session) ->
 
 
 async def test_available_ignores_completed_positions(session) -> None:
-    product, stock = await _seed_product_stock(session, sku="REM-DONE", stock_qty=Decimal("5000"))
+    product, stock = await _seed_product_stock(session, sku="REM-DONE", stock_qty=Decimal(5000))
     prod = Section(code="REM-DONE-PROD", name="Цех", type="production", is_active=True, sort_order=1)
     route = ProductionRoute(name="R-DONE", is_active=True)
     session.add_all([prod, route])
@@ -185,7 +188,7 @@ async def test_available_ignores_completed_positions(session) -> None:
         route=route,
         stock_section=stock,
         prod_section=prod,
-        quantity=Decimal("1200"),
+        quantity=Decimal(1200),
     )
 
     task = await session.scalar(select(WorkTask).join(SectionPlanLine).where(SectionPlanLine.plan_position_id == position.id))

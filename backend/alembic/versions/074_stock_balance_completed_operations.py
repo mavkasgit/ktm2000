@@ -17,16 +17,16 @@ legacy-группа с NULL-признаком не задвоилась.
 колонки добавляются с ``IF NOT EXISTS``, смена unique-констрейнта — по факту
 наличия старого и отсутствия нового.
 """
-from typing import Sequence, Union
+from collections.abc import Sequence
 
 import sqlalchemy as sa
 from alembic import op
 from sqlalchemy.dialects.postgresql import JSONB
 
 revision: str = "074_stock_balance_completed_operations"
-down_revision: Union[str, None] = "073_stock_import_rows_tx_set_null"
-branch_labels: Union[str, Sequence[str], None] = None
-depends_on: Union[str, Sequence[str], None] = None
+down_revision: str | None = "073_stock_import_rows_tx_set_null"
+branch_labels: str | Sequence[str] | None = None
+depends_on: str | Sequence[str] | None = None
 
 OLD_CONSTRAINT = "uq_stock_balances_product_location_quality_dims"
 NEW_CONSTRAINT = "uq_stock_balances_product_location_quality_dims_ops"

@@ -1,3 +1,8 @@
+# Порядок импортов здесь намеренный, и I001 его не «чинит» по делу: локальные
+# модели идут ПЕРВЫМИ, а `app.stock.*` — последними. `app.stock.services` при
+# импорте тянет `app.models`, поэтому isort-порядок (app.* раньше relative)
+# даёт circular import. Исключение зафиксировано в `ruff.toml`
+# (`[lint.per-file-ignores]`) — правило не забыли, а применили осознанно.
 from .base import Base
 from .section import Section
 from .user import User, UserRole

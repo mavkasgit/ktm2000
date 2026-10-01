@@ -13,13 +13,12 @@
 from __future__ import annotations
 
 import pytest
-from sqlalchemy import select
-from sqlalchemy.ext.asyncio import AsyncSession
-
 from app.models.route import RouteRuleProfile, RouteSelectionRule, SectionOperation
 from app.models.section import Section
 from app.seeds.route_rule_profiles import ROUTE_RULE_PROFILES
 from app.services.route_builder import _NAME_VAR_MAPPING, build_route_from_profile
+from sqlalchemy import select
+from sqlalchemy.ext.asyncio import AsyncSession
 
 # Слоты имени, добавленные ради различия состава (#226).
 PACKING_SLOT = "packing_op"

@@ -24,16 +24,15 @@ Irreversible: partial — ``downgrade`` возвращает прежние ко
 #230 появились два маршрута с одинаковым именем (тогда ``downgrade``
 падает на создании констрейнта — это честный отказ, а не тихая порча).
 """
-from typing import Sequence, Union
+from collections.abc import Sequence
 
 import sqlalchemy as sa
 from alembic import op
 
-
 revision: str = "071_route_code_identity"
-down_revision: Union[str, None] = "070_production_plan_archive"
-branch_labels: Union[str, Sequence[str], None] = None
-depends_on: Union[str, Sequence[str], None] = None
+down_revision: str | None = "070_production_plan_archive"
+branch_labels: str | Sequence[str] | None = None
+depends_on: str | Sequence[str] | None = None
 
 REPORT_TABLE = "route_code_migration"
 

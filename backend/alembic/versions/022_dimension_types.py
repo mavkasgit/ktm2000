@@ -6,8 +6,8 @@ Create Date: 2026-07-30
 
 """
 
-from alembic import op
 import sqlalchemy as sa
+from alembic import op
 
 revision = "022_dimension_types"
 down_revision = "021_backchannel_logout_slo"

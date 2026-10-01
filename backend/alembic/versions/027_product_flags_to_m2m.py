@@ -3,8 +3,8 @@
 Data migration: products with skip_shot_blast=True or is_laminated=True get
 corresponding ProductProcessingFlag links. Then columns are dropped.
 """
-from alembic import op
 import sqlalchemy as sa
+from alembic import op
 
 revision = "027_product_flags_to_m2m"
 down_revision = "026_stock_reason_transform_consume"

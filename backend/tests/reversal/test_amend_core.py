@@ -15,11 +15,8 @@ from __future__ import annotations
 
 from decimal import Decimal
 
-import pytest
-from sqlalchemy import func, select
-from sqlalchemy.ext.asyncio import AsyncSession
-
 import app.reversal.stock_compensator as sc_module
+import pytest
 from app.models.action_journal import Action, ActionStatus
 from app.models.transfer import Transfer, TransferStatus
 from app.models.work_task import WorkTask
@@ -27,6 +24,9 @@ from app.reversal import errors
 from app.reversal.service import reversal_service
 from app.stock.models import Reason, StockBalance, StockTransaction
 from app.transfers.services import transfer_send
+from sqlalchemy import func, select
+from sqlalchemy.ext.asyncio import AsyncSession
+
 from tests.stock.test_transfer_stage2 import (
     _make_tasks_transferable,
     _make_two_ghp_setup,
@@ -71,11 +71,11 @@ async def _balance(session: AsyncSession, location_id: int, product_id: int) -> 
                 StockBalance.product_id == product_id,
             )
         )
-    ) or Decimal("0")
+    ) or Decimal(0)
 
 
-async def _setup(session: AsyncSession, client, sku: str, *, qty=Decimal("5")):
-    setup = await _make_two_ghp_setup(session, sku=sku, qty=Decimal("10"))
+async def _setup(session: AsyncSession, client, sku: str, *, qty=Decimal(5)):
+    setup = await _make_two_ghp_setup(session, sku=sku, qty=Decimal(10))
     ctx = await _make_tasks_transferable(session, client, setup)
     action, transfer_id = await _send_transfer(session, ctx, qty=qty, key=f"{sku}:t1")
     await session.commit()
@@ -137,7 +137,7 @@ async def test_amend_replaces_action_atomically(session: AsyncSession, client) -
     old_transfer = await session.get(Transfer, old_tid)
     assert new_transfer is not None and new_transfer.id != old_tid
     assert new_transfer.status == TransferStatus.accepted
-    assert new_transfer.sent_quantity == Decimal("3")
+    assert new_transfer.sent_quantity == Decimal(3)
     assert old_transfer.status == TransferStatus.cancelled
 
     # Ledger: 2 компенсации + новая пара SEND/RECEIVE от нового действия
@@ -150,12 +150,12 @@ async def test_amend_replaces_action_atomically(session: AsyncSession, client) -
     fwd_txs = [t for t in txs if t.reverses_id is None]
     assert len(comp_txs) == 2
     assert {t.reason for t in fwd_txs} == {Reason.TRANSFER_SEND, Reason.TRANSFER_RECEIVE}
-    assert all(t.quantity == Decimal("3") for t in fwd_txs)
+    assert all(t.quantity == Decimal(3) for t in fwd_txs)
     assert len(result.compensated_tx_ids) == 2
 
     # Нетто-эффект: источник −3, приёмник +3
-    assert await _balance(session, src_sec, product_id) == Decimal("7")
-    assert await _balance(session, dst_sec, product_id) == Decimal("3")
+    assert await _balance(session, src_sec, product_id) == Decimal(7)
+    assert await _balance(session, dst_sec, product_id) == Decimal(3)
 
 
 
@@ -173,7 +173,7 @@ async def test_amend_failure_rolls_back_whole_transaction(
     assert preview.plan_token
 
     async def _boom(self, db, *, action, ref_id, changes, actor, actor_id):
-        raise errors.CoverageShortfall(node=action.amends_action_id, deficit=Decimal("1"))
+        raise errors.CoverageShortfall(node=action.amends_action_id, deficit=Decimal(1))
 
     aid, tid = action.id, old_tid  # plain int: после rollback объекты expired
     monkeypatch.setattr(sc_module.StockCompensator, "apply_forward", _boom)
@@ -197,8 +197,8 @@ async def test_amend_failure_rolls_back_whole_transaction(
     assert orphan is None
     old_transfer = await session.get(Transfer, tid)
     assert old_transfer.status == TransferStatus.accepted
-    assert await _balance(session, src_sec, product_id) == Decimal("5")
-    assert await _balance(session, dst_sec, product_id) == Decimal("5")
+    assert await _balance(session, src_sec, product_id) == Decimal(5)
+    assert await _balance(session, dst_sec, product_id) == Decimal(5)
     await assert_no_invariants_violations(session, context="amd-atom")
 
 
@@ -222,10 +222,10 @@ async def test_preview_amend_blocks_on_forward_coverage_shortfall(
 
 
 async def _chain_of_two(session: AsyncSession, client, sku: str):
-    setup = await _make_two_ghp_setup(session, sku=sku, qty=Decimal("10"))
+    setup = await _make_two_ghp_setup(session, sku=sku, qty=Decimal(10))
     ctx = await _make_tasks_transferable(session, client, setup)
-    a1, t1 = await _send_transfer(session, ctx, qty=Decimal("5"), key=f"{sku}:t1")
-    a2, _t2 = await _send_transfer(session, ctx, qty=Decimal("5"), key=f"{sku}:t2")
+    a1, _t1 = await _send_transfer(session, ctx, qty=Decimal(5), key=f"{sku}:t1")
+    a2, _t2 = await _send_transfer(session, ctx, qty=Decimal(5), key=f"{sku}:t2")
     a2.depends_on = [a1.id]
     await session.commit()
     await assert_no_invariants_violations(session, context=f"{sku}-chain")
@@ -292,11 +292,11 @@ async def test_amend_cascade_replays_dependents(
     assert rep.ref_id is not None  # новый Transfer создан
     new_transfer = await session.get(Transfer, rep.ref_id)
     assert new_transfer is not None
-    assert new_transfer.sent_quantity == Decimal("5")  # координаты из проводок
+    assert new_transfer.sent_quantity == Decimal(5)  # координаты из проводок
 
     # Нетто: погашены обе старые передачи; применены новая на 2 и реплей на 5.
-    assert await _balance(session, src_sec, product_id) == Decimal("3")
-    assert await _balance(session, dst_sec, product_id) == Decimal("7")
+    assert await _balance(session, src_sec, product_id) == Decimal(3)
+    assert await _balance(session, dst_sec, product_id) == Decimal(7)
 
 
 # ─── токены и статусы ────────────────────────────────────────────────────────
@@ -333,7 +333,7 @@ async def test_amend_stale_when_world_changed(session: AsyncSession, client) -> 
         session,
         from_task_id=ctx["from_task_id"],
         to_task_id=ctx["to_task_id"],
-        quantity=Decimal("1"),
+        quantity=Decimal(1),
         actor_id=ctx["user"].id,
         idempotency_key="amdstl:t2",
     )

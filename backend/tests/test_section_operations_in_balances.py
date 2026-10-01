@@ -5,9 +5,6 @@ from datetime import datetime
 from decimal import Decimal
 
 import pytest
-from sqlalchemy import select
-from sqlalchemy.ext.asyncio import AsyncSession
-
 from app.core.security import create_access_token
 from app.models import Product, ProductType, Section, User, UserRole
 from app.models.production_plan import (
@@ -18,7 +15,12 @@ from app.models.production_plan import (
     ProductionPlan,
     ProductionPlanStatus,
 )
-from app.models.route import ProductionRoute, RouteOperation, RouteStage, SectionOperation
+from app.models.route import (
+    ProductionRoute,
+    RouteOperation,
+    RouteStage,
+    SectionOperation,
+)
 from app.models.spg import SpgSection, StorageProductionGroup
 from app.models.work_task import WorkTask, WorkTaskStatus
 from app.services.material_operations import (
@@ -27,6 +29,9 @@ from app.services.material_operations import (
 )
 from app.stock import Reason, StockCommand, StockCommandService
 from app.transfers.services import transfer_send
+from sqlalchemy import select
+from sqlalchemy.ext.asyncio import AsyncSession
+
 from tests.stock.helpers import record_transfer_receive, seed_stock_for_task
 from tests.test_integrity_invariants import _release_via_take_to_work
 
@@ -53,7 +58,7 @@ async def _make_two_section_fixture(
     session: AsyncSession,
     *,
     sku: str = "SECOPS",
-    qty: Decimal = Decimal("10"),
+    qty: Decimal = Decimal(10),
 ) -> dict:
     """Two production sections with significant SectionOperation + two-step route."""
     user = await _make_user(session, f"{sku}@local")
@@ -212,7 +217,7 @@ async def test_transfer_receive_populates_completed_stages_on_destination_balanc
     session: AsyncSession,
 ) -> None:
     """После transfer_send остаток на участке-получателе содержит пройденные операции."""
-    setup = await _make_two_section_fixture(session, sku="XFEROPS", qty=Decimal("10"))
+    setup = await _make_two_section_fixture(session, sku="XFEROPS", qty=Decimal(10))
     ctx = await _prepare_source_task_ready(session, client, setup)
     headers = _auth_headers(ctx["user"])
 
@@ -220,7 +225,7 @@ async def test_transfer_receive_populates_completed_stages_on_destination_balanc
         session,
         from_task_id=ctx["from_task_id"],
         to_task_id=ctx["to_task_id"],
-        quantity=Decimal("5"),
+        quantity=Decimal(5),
         actor_id=ctx["user"].id,
         idempotency_key="xferops:send",
     )
@@ -246,7 +251,7 @@ async def test_complete_task_populates_completed_stages_on_section_balance(
     session: AsyncSession,
 ) -> None:
     """После complete_task с остатком на участке баланс содержит пройденные операции."""
-    setup = await _make_two_section_fixture(session, sku="CMPOPS", qty=Decimal("10"))
+    setup = await _make_two_section_fixture(session, sku="CMPOPS", qty=Decimal(10))
     await _release_via_take_to_work(client, setup["position"].id)
     task = (await session.execute(select(WorkTask).order_by(WorkTask.id))).scalars().first()
     assert task is not None
@@ -290,8 +295,8 @@ async def test_complete_task_populates_completed_stages_on_section_balance(
     await complete_task(
         session,
         task_id=task.id,
-        good_quantity=Decimal("6"),
-        defect_quantity=Decimal("0"),
+        good_quantity=Decimal(6),
+        defect_quantity=Decimal(0),
         actor_id=setup["user"].id,
     )
     await session.commit()
@@ -311,10 +316,10 @@ async def test_complete_task_populates_completed_stages_on_section_balance(
     assert set(by_ops) == {(), ("SAW_CUT",)}, by_ops
 
     released = by_ops[("SAW_CUT",)]
-    assert Decimal(released["balance_qty"]) == Decimal("6")
+    assert Decimal(released["balance_qty"]) == Decimal(6)
     stage_names = [stage["operation_name"] for stage in released["completed_stages"]]
     assert stage_names == ["Пила"]
 
     not_yet = by_ops[()]
-    assert Decimal(not_yet["balance_qty"]) == Decimal("4")
+    assert Decimal(not_yet["balance_qty"]) == Decimal(4)
     assert not_yet["completed_stages"] == []

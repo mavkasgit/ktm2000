@@ -8,9 +8,6 @@ from __future__ import annotations
 from decimal import Decimal
 
 import pytest
-from sqlalchemy import select
-from sqlalchemy.ext.asyncio import AsyncSession
-
 from app.models import Product, ProductType, Section, User, UserRole
 from app.models.route import SectionOperation
 from app.stock import (
@@ -21,8 +18,10 @@ from app.stock import (
     StockCommandService,
 )
 from app.stock.services import completed_operations_match_clause
-from tests.test_integrity_invariants import assert_no_stock_ledger_invariants_violations
+from sqlalchemy import select
+from sqlalchemy.ext.asyncio import AsyncSession
 
+from tests.test_integrity_invariants import assert_no_stock_ledger_invariants_violations
 
 # ─── helpers ────────────────────────────────────────────────────────────────
 
@@ -96,7 +95,7 @@ async def _balance(
         )
     )
     bal = row.scalar_one_or_none()
-    return bal.balance_qty if bal else Decimal("0")
+    return bal.balance_qty if bal else Decimal(0)
 
 
 # ─── tests ──────────────────────────────────────────────────────────────────
@@ -115,14 +114,14 @@ async def test_stock_balance_reflects_manual_in_transaction(session: AsyncSessio
     await svc.record(session, StockCommand(
         product_id=product.id,
         to_location_id=location.id,
-        quantity=Decimal("100"),
+        quantity=Decimal(100),
         reason=Reason.MANUAL_IN,
         created_by=user.id,
     ))
     await session.commit()
 
     bal = await _balance(session, product.id, location.id)
-    assert bal == Decimal("100"), f"Expected 100, got {bal}"
+    assert bal == Decimal(100), f"Expected 100, got {bal}"
 
     await assert_no_stock_ledger_invariants_violations(
         session, context="after-manual-in"
@@ -143,7 +142,7 @@ async def test_stock_balance_aggregates_multiple_transactions(session: AsyncSess
     await svc.record(session, StockCommand(
         product_id=product.id,
         to_location_id=location.id,
-        quantity=Decimal("50"),
+        quantity=Decimal(50),
         reason=Reason.MANUAL_IN,
         created_by=user.id,
     ))
@@ -151,7 +150,7 @@ async def test_stock_balance_aggregates_multiple_transactions(session: AsyncSess
     await svc.record(session, StockCommand(
         product_id=product.id,
         to_location_id=location.id,
-        quantity=Decimal("30"),
+        quantity=Decimal(30),
         reason=Reason.MANUAL_IN,
         created_by=user.id,
     ))
@@ -159,14 +158,14 @@ async def test_stock_balance_aggregates_multiple_transactions(session: AsyncSess
     await svc.record(session, StockCommand(
         product_id=product.id,
         from_location_id=location.id,
-        quantity=Decimal("20"),
+        quantity=Decimal(20),
         reason=Reason.MANUAL_OUT,
         created_by=user.id,
     ))
     await session.commit()
 
     bal = await _balance(session, product.id, location.id)
-    assert bal == Decimal("60"), f"Expected 60, got {bal}"
+    assert bal == Decimal(60), f"Expected 60, got {bal}"
 
     await assert_no_stock_ledger_invariants_violations(
         session, context="after-multi-tx"
@@ -191,7 +190,7 @@ async def test_stock_balance_quality_state_filtering(session: AsyncSession):
     await svc.record(session, StockCommand(
         product_id=product.id,
         to_location_id=location.id,
-        quantity=Decimal("100"),
+        quantity=Decimal(100),
         reason=Reason.MANUAL_IN,
         created_by=user.id,
     ))
@@ -201,7 +200,7 @@ async def test_stock_balance_quality_state_filtering(session: AsyncSession):
         product_id=product.id,
         from_location_id=location.id,
         to_location_id=scrap_location.id,
-        quantity=Decimal("30"),
+        quantity=Decimal(30),
         reason=Reason.SCRAP,
         quality_state=QualityState.GOOD,
         to_quality_state=QualityState.SCRAP,
@@ -210,12 +209,12 @@ async def test_stock_balance_quality_state_filtering(session: AsyncSession):
     await session.commit()
 
     good_bal = await _balance(session, product.id, location.id, QualityState.GOOD)
-    assert good_bal == Decimal("70"), f"Expected 70 GOOD, got {good_bal}"
+    assert good_bal == Decimal(70), f"Expected 70 GOOD, got {good_bal}"
 
     scrap_bal = await _balance(
         session, product.id, scrap_location.id, QualityState.SCRAP
     )
-    assert scrap_bal == Decimal("30"), f"Expected 30 SCRAP, got {scrap_bal}"
+    assert scrap_bal == Decimal(30), f"Expected 30 SCRAP, got {scrap_bal}"
 
     await assert_no_stock_ledger_invariants_violations(
         session, context="after-quality-state"
@@ -240,7 +239,7 @@ async def test_list_stock_balances_endpoint_returns_correct_data(client, session
     await svc.record(session, StockCommand(
         product_id=product.id,
         to_location_id=location.id,
-        quantity=Decimal("75"),
+        quantity=Decimal(75),
         reason=Reason.MANUAL_IN,
         created_by=user.id,
     ))
@@ -311,7 +310,7 @@ async def test_list_stock_balances_returns_completed_operations_from_ledger(
     await svc.record(session, StockCommand(
         product_id=product.id,
         to_location_id=location.id,
-        quantity=Decimal("40"),
+        quantity=Decimal(40),
         reason=Reason.MANUAL_IN,
         completed_operations=["ANOD_BLACK", "SHOT"],
         created_by=user.id,
@@ -358,7 +357,7 @@ async def test_manual_in_comment_does_not_attribute_operations(
     await svc.record(session, StockCommand(
         product_id=product.id,
         to_location_id=location.id,
-        quantity=Decimal("5"),
+        quantity=Decimal(5),
         reason=Reason.MANUAL_IN,
         comment="Партия A | операции: Дробеструй, Чёрный",
         created_by=user.id,
@@ -393,7 +392,7 @@ async def test_list_stock_transactions_serializes_decimal_and_datetime(
     await svc.record(session, StockCommand(
         product_id=product.id,
         to_location_id=location.id,
-        quantity=Decimal("150"),
+        quantity=Decimal(150),
         reason=Reason.MANUAL_IN,
         comment="Импорт остатков",
         source_ref="import_remainders_excel",

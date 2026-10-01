@@ -9,8 +9,6 @@ from datetime import UTC, datetime
 from decimal import Decimal
 
 import pytest
-from sqlalchemy import select
-
 from app.models.product import Product, ProductType
 from app.models.production_plan import (
     PlanPosition,
@@ -21,8 +19,9 @@ from app.models.production_plan import (
     PlanSourceType,
     ProductionPlan,
 )
-from app.models.route import ProductionRoute, RouteStage, RouteOperation
+from app.models.route import ProductionRoute, RouteOperation, RouteStage
 from app.models.section import Section
+from sqlalchemy import select
 
 
 @pytest.mark.asyncio
@@ -99,7 +98,7 @@ async def test_plan_position_can_be_released_after_import(session) -> None:
         source_sku=product.sku,
         output_sku=product.sku,
         source_name=product.name,
-        quantity=Decimal("100"),
+        quantity=Decimal(100),
         route_id=route.id,
         route_origin=PlanPositionRouteOrigin.auto.value,
         route_assigned_at=datetime.now(UTC),  # datetime object, not string
@@ -183,7 +182,7 @@ async def test_position_route_validation_before_release(session) -> None:
         source_sku=product.sku,
         output_sku=product.sku,
         source_name=product.name,
-        quantity=Decimal("50"),
+        quantity=Decimal(50),
         route_id=None,  # No route!
         route_assigned_at=None,
         status=PlanPositionStatus.draft,

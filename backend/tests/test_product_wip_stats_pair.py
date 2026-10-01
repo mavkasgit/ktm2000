@@ -11,8 +11,6 @@ from datetime import UTC, date, datetime
 from decimal import Decimal
 
 import pytest
-from sqlalchemy.ext.asyncio import AsyncSession
-
 from app.models.internal_plan import InternalPlan, SectionPlanLine
 from app.models.product import Product, ProductPair, ProductType
 from app.models.production_plan import (
@@ -28,6 +26,7 @@ from app.models.route import ProductionRoute, RouteOperation, RouteStage
 from app.models.section import Section
 from app.models.work_task import WorkTask, WorkTaskStatus
 from app.stock import Reason, StockCommand, StockCommandService
+from sqlalchemy.ext.asyncio import AsyncSession
 
 pytestmark = pytest.mark.asyncio
 
@@ -127,7 +126,7 @@ async def _add_position_with_task(
     task_status: WorkTaskStatus = WorkTaskStatus.ready,
     with_task: bool = True,
     status: PlanPositionStatus = PlanPositionStatus.approved,
-    quantity: Decimal = Decimal("100"),
+    quantity: Decimal = Decimal(100),
 ) -> PlanPosition:
     """Позиция плана и её активная задача.
 
@@ -240,7 +239,7 @@ async def test_wip_stats_pair_in_work_only_pair_positions(client, session: Async
     попадают в сводку; задача одиночной позиции артикула A — нет, хотя
     ``WorkTask.product_id`` у всех трёх равен product_a.
     """
-    product_a, product_b = await _make_pair_products(
+    product_a, _product_b = await _make_pair_products(
         session, sku_a="WPSW-A", sku_b="WPSW-B", with_pair=True
     )
     _stock, prod, route, stages = await _make_route(session, prefix="WPSW")
@@ -416,7 +415,7 @@ async def test_available_remainder_pair_launch_reduces_both_components(
         effective_product_id=product_a.id,
         source_payload=_pair_payload("WPSL-A", "WPSL-B"),
         status=PlanPositionStatus.released,
-        quantity=Decimal("5"),
+        quantity=Decimal(5),
     )
 
     rows_resp = await client.get("/api/production-planning/rows?limit=500")
@@ -435,7 +434,7 @@ async def test_available_remainder_pair_launch_reduces_both_components(
         position_product_id=product_b.id,
         effective_product_id=product_b.id,
         status=PlanPositionStatus.released,
-        quantity=Decimal("2"),
+        quantity=Decimal(2),
     )
 
     rows_after = await client.get("/api/production-planning/rows?limit=500")
@@ -496,7 +495,7 @@ async def test_available_remainder_unresolvable_pair_still_consumes_line_product
         position_product_id=None,
         effective_product_id=product_a.id,
         status=PlanPositionStatus.released,
-        quantity=Decimal("5"),
+        quantity=Decimal(5),
     )
     single_a = await _add_position_with_task(
         session,
@@ -505,7 +504,7 @@ async def test_available_remainder_unresolvable_pair_still_consumes_line_product
         position_product_id=product_a.id,
         effective_product_id=product_a.id,
         status=PlanPositionStatus.released,
-        quantity=Decimal("2"),
+        quantity=Decimal(2),
     )
     # Не запущена: только читает свободный остаток B.
     single_b = await _add_position_with_task(

@@ -1,6 +1,6 @@
 from fastapi import APIRouter, Depends, HTTPException, Query, status
 from pydantic import BaseModel
-from sqlalchemy import select, delete
+from sqlalchemy import delete, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.api.deps import REFERENCES_WRITER_ROLES, require_role
@@ -143,7 +143,10 @@ async def list_sections_with_operations(
     ``has_real_operations: bool`` плюс вычисляемое ``role`` (production/storage).
     UI решает, как отображать секцию без операций (иконка склада, плейсхолдер и т.п.).
     """
-    from app.services.route_storage_classifier import classify_section_role, is_production_section
+    from app.services.route_storage_classifier import (
+        classify_section_role,
+        is_production_section,
+    )
 
     sections = (
         await db.execute(

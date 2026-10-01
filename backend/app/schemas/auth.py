@@ -1,8 +1,7 @@
 from typing import Literal
 
-from pydantic import BaseModel, ConfigDict, EmailStr, Field
-
 from app.models.user import UserRole
+from pydantic import BaseModel, ConfigDict, EmailStr, Field
 
 
 class BreakGlassLoginRequest(BaseModel):

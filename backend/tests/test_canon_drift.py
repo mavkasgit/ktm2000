@@ -10,8 +10,6 @@
 from __future__ import annotations
 
 import pytest_asyncio
-from sqlalchemy import delete, func, select
-
 from app.models.route import (
     RouteOperation,
     RouteSelectionRule,
@@ -28,6 +26,7 @@ from scripts.check_canon_drift import (
     env_file_problem,
     run_check,
 )
+from sqlalchemy import delete, func, select
 
 # Участок, у которого в каноне есть операция: удаление строки участка тянет
 # за собой удаление его операций (FK), иначе проверка падала бы на ограничении.

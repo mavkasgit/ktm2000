@@ -14,14 +14,13 @@ from __future__ import annotations
 from decimal import Decimal
 
 import pytest
-from sqlalchemy import select
-
 from app.models.work_task import WorkTask
 from app.transfers.transferable import (
     BudgetKind,
     task_transferable,
     task_transferable_lines,
 )
+from sqlalchemy import select
 
 from tests.stock.test_transfer_stage2 import _make_two_ghp_setup
 from tests.test_integrity_invariants import (
@@ -29,6 +28,7 @@ from tests.test_integrity_invariants import (
     _release_via_take_to_work,
     assert_no_invariants_violations,
 )
+from tests.test_transfer_budget_consistency import _ready_row
 from tests.test_transfer_dimensions import (
     _complete_saw,
     _make_dim_route_fixture,
@@ -36,7 +36,6 @@ from tests.test_transfer_dimensions import (
     _seed_balance,
     _tasks_for_position,
 )
-from tests.test_transfer_budget_consistency import _ready_row
 
 pytestmark = pytest.mark.asyncio
 
@@ -50,7 +49,7 @@ async def test_plain_line_and_write_guard_share_sources(client, session) -> None
     ``received`` не входит в бюджет ни в одной из веток шва — бывший T6 теперь
     свойство общей реализации, а не договорённости.
     """
-    setup = await _make_two_ghp_setup(session, sku="TBSEAM", qty=Decimal("10"))
+    setup = await _make_two_ghp_setup(session, sku="TBSEAM", qty=Decimal(10))
     user = setup["user"]
     sec1 = setup["sections"][0]
     sec2 = setup["sections"][1]
@@ -78,7 +77,7 @@ async def test_plain_line_and_write_guard_share_sources(client, session) -> None
             product_id=from_task.product_id,
             from_location_id=None,
             to_location_id=stock_sec.id,
-            quantity=Decimal("10"),
+            quantity=Decimal(10),
             reason=Reason.MANUAL_IN,
             completed_operations=ops,
             created_by=user.id,
@@ -90,7 +89,7 @@ async def test_plain_line_and_write_guard_share_sources(client, session) -> None
             product_id=from_task.product_id,
             from_location_id=stock_sec.id,
             to_location_id=from_task.section_id,
-            quantity=Decimal("10"),
+            quantity=Decimal(10),
             reason=Reason.TRANSFER_RECEIVE,
             task_id=from_task.id,
             created_by=user.id,
@@ -102,7 +101,7 @@ async def test_plain_line_and_write_guard_share_sources(client, session) -> None
             product_id=from_task.product_id,
             from_location_id=from_task.section_id,
             to_location_id=from_task.section_id,
-            quantity=Decimal("5"),
+            quantity=Decimal(5),
             reason=Reason.COMPLETE,
             task_id=from_task.id,
             source_ref="test_seed",
@@ -112,7 +111,7 @@ async def test_plain_line_and_write_guard_share_sources(client, session) -> None
     await session.commit()
 
     result = await _transfer_via_module(
-        session, from_task_id=from_task.id, to_task_id=to_task.id, quantity=Decimal("2"),
+        session, from_task_id=from_task.id, to_task_id=to_task.id, quantity=Decimal(2),
         actor_id=user.id,
     )
     assert result["status"] == "accepted"
@@ -125,13 +124,13 @@ async def test_plain_line_and_write_guard_share_sources(client, session) -> None
     assert line.kind is BudgetKind.PLAIN
     assert line.is_final is False
     assert line.dims == from_task.dimensions
-    assert line.planned == Decimal("10")
-    assert line.produced == Decimal("5")
+    assert line.planned == Decimal(10)
+    assert line.produced == Decimal(5)
     # «Использовано» — net переданное (2), а не полученное (10).
-    assert line.used == Decimal("2")
-    assert line.budget == Decimal("3")
+    assert line.used == Decimal(2)
+    assert line.budget == Decimal(3)
 
-    assert await task_transferable(session, from_task) == Decimal("3")
+    assert await task_transferable(session, from_task) == Decimal(3)
 
 
 # ─── 2. transform: строки по выходам + точечный lookup ──────────────────────
@@ -143,8 +142,8 @@ async def test_transform_lines_and_point_lookup_agree(client, session) -> None:
     fx = await _make_transform_route_fixture(
         session,
         sku="TBSEAMSAW",
-        qty=Decimal("100"),
-        input_quantity=Decimal("100"),
+        qty=Decimal(100),
+        input_quantity=Decimal(100),
         input_dimensions={"length_mm": 2700},
         outputs=[
             {"row_number": 1, "quantity": "100", "dimensions": {"length_mm": 900}},
@@ -156,7 +155,7 @@ async def test_transform_lines_and_point_lookup_agree(client, session) -> None:
     await _complete_saw(session, saw_task=saw_task, user=user)
 
     result = await _transfer_via_module(
-        session, from_task_id=saw_task.id, quantity=Decimal("40"),
+        session, from_task_id=saw_task.id, quantity=Decimal(40),
         actor_id=user.id, dimensions={"length_mm": 900},
     )
     assert result["status"] == "accepted"
@@ -176,23 +175,23 @@ async def test_transform_lines_and_point_lookup_agree(client, session) -> None:
     for line in (line_900, line_1800):
         assert line.kind is BudgetKind.TRANSFORM
         assert line.is_final is False
-        assert line.produced == Decimal("100")
-    assert line_900.used == Decimal("40")
-    assert line_900.budget == Decimal("60")
-    assert line_1800.used == Decimal("0")
-    assert line_1800.budget == Decimal("100")
+        assert line.produced == Decimal(100)
+    assert line_900.used == Decimal(40)
+    assert line_900.budget == Decimal(60)
+    assert line_1800.used == Decimal(0)
+    assert line_1800.budget == Decimal(100)
 
     # Точечный write-guard по тем же строкам produced.
     assert await task_transferable(
         session, saw_task, dimensions={"length_mm": 900}
-    ) == Decimal("60")
+    ) == Decimal(60)
     assert await task_transferable(
         session, saw_task, dimensions={"length_mm": 1800}
-    ) == Decimal("100")
+    ) == Decimal(100)
     # Размер вне спецификации передавать нельзя (инвариант D2).
     assert await task_transferable(
         session, saw_task, dimensions={"length_mm": 500}
-    ) == Decimal("0")
+    ) == Decimal(0)
 
 
 # ─── 3. финальный участок: смысл бюджета — отправка ─────────────────────────
@@ -211,8 +210,8 @@ async def test_final_stage_lines_use_send_semantics(client, session) -> None:
     fx = await _make_transform_route_fixture(
         session,
         sku="TBSEAMFIN",
-        qty=Decimal("100"),
-        input_quantity=Decimal("100"),
+        qty=Decimal(100),
+        input_quantity=Decimal(100),
         input_dimensions={"length_mm": 2700},
         outputs=[{"row_number": 1, "quantity": "100", "dimensions": {"length_mm": 900}}],
         final_transform=True,
@@ -222,7 +221,7 @@ async def test_final_stage_lines_use_send_semantics(client, session) -> None:
     await _complete_saw(session, saw_task=saw_task, user=user)
 
     result = await final_release(
-        session, task_id=saw_task.id, quantity=Decimal("40"), actor_id=user.id,
+        session, task_id=saw_task.id, quantity=Decimal(40), actor_id=user.id,
     )
     await session.commit()
     assert result["transaction_id"]
@@ -232,13 +231,13 @@ async def test_final_stage_lines_use_send_semantics(client, session) -> None:
     line = lines[0]
     assert line.kind is BudgetKind.TRANSFORM
     assert line.is_final is True
-    assert line.produced == Decimal("100")
-    assert line.used == Decimal("40")  # выпущено, не передано
-    assert line.budget == Decimal("60")
+    assert line.produced == Decimal(100)
+    assert line.used == Decimal(40)  # выпущено, не передано
+    assert line.budget == Decimal(60)
 
     assert await send_budget.remaining_send(
         session, task=saw_task, dims={"length_mm": 900}
-    ) == Decimal("60")
+    ) == Decimal(60)
 
 
 # ─── 4. stock: строка складской задачи ──────────────────────────────────────
@@ -247,14 +246,14 @@ async def test_final_stage_lines_use_send_semantics(client, session) -> None:
 async def test_stock_line_tracks_plan_and_physical_stock(client, session) -> None:
     """stock: план 100, остаток 100 → строка 100; после отгрузки 40 → 60."""
     user = await _make_user(session, "tbseam-stock@local")
-    fx = await _make_dim_route_fixture(session, sku="TBSEAMSTK", qty=Decimal("100"))
+    fx = await _make_dim_route_fixture(session, sku="TBSEAMSTK", qty=Decimal(100))
     raw_sec = fx["sections"][0]
     await _seed_balance(
         session,
         user_id=user.id,
         location_id=raw_sec.id,
         product_id=fx["product"].id,
-        qty=Decimal("100"),
+        qty=Decimal(100),
         dimensions=None,
     )
     await _release_via_take_to_work(client, fx["position"].id)
@@ -265,7 +264,7 @@ async def test_stock_line_tracks_plan_and_physical_stock(client, session) -> Non
     assert fake_task is not None
 
     result = await _transfer_via_module(
-        session, from_task_id=fake_task.id, quantity=Decimal("40"), actor_id=user.id,
+        session, from_task_id=fake_task.id, quantity=Decimal(40), actor_id=user.id,
     )
     assert result["status"] == "accepted"
     await session.commit()
@@ -276,12 +275,12 @@ async def test_stock_line_tracks_plan_and_physical_stock(client, session) -> Non
     line = lines[0]
     assert line.kind is BudgetKind.STOCK
     assert line.is_final is False
-    assert line.planned == Decimal("100")
-    assert line.produced == Decimal("60")  # физический остаток после отгрузки
-    assert line.used == Decimal("40")      # уже передано
-    assert line.budget == Decimal("60")    # min(план-остаток, физ. остаток)
+    assert line.planned == Decimal(100)
+    assert line.produced == Decimal(60)  # физический остаток после отгрузки
+    assert line.used == Decimal(40)      # уже передано
+    assert line.budget == Decimal(60)    # min(план-остаток, физ. остаток)
 
-    assert await task_transferable(session, fake_task) == Decimal("60")
+    assert await task_transferable(session, fake_task) == Decimal(60)
 
 
 # ─── helpers ────────────────────────────────────────────────────────────────

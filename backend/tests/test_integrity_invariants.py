@@ -28,9 +28,6 @@ from collections.abc import Iterable
 from datetime import date
 from decimal import Decimal
 
-from sqlalchemy import text
-from sqlalchemy.ext.asyncio import AsyncSession
-
 from app.core.security import create_access_token
 from app.models.product import Product, ProductType
 from app.models.production_plan import (
@@ -45,7 +42,8 @@ from app.models.route import ProductionRoute, RouteOperation, RouteStage
 from app.models.section import Section
 from app.models.spg import SpgSection, StorageProductionGroup
 from app.models.user import User, UserRole
-
+from sqlalchemy import text
+from sqlalchemy.ext.asyncio import AsyncSession
 
 # ─── helpers ────────────────────────────────────────────────────────────────
 

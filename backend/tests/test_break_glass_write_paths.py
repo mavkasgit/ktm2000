@@ -9,21 +9,30 @@ from __future__ import annotations
 from decimal import Decimal
 
 import pytest
-from httpx import AsyncClient
-from sqlalchemy import select
-from sqlalchemy.ext.asyncio import AsyncSession
-
 from app.core.config import settings
 from app.models.attachment import Attachment, AttachmentLink
 from app.models.audit_log import AuditAction, AuditEntityType, AuditLog
-from app.models.defect import Defect, DefectDecision, DefectDecisionType, DefectItem, DefectStatus
+from app.models.defect import (
+    Defect,
+    DefectDecision,
+    DefectDecisionType,
+    DefectItem,
+    DefectStatus,
+)
 from app.models.entity_comment import EntityComment
 from app.models.production_plan import PlanPositionStatus, ProductionPlanStatus
 from app.models.transfer import Transfer, TransferStatus
 from app.models.user import User
 from app.stock.models import Reason, StockTransaction
+from httpx import AsyncClient
+from sqlalchemy import select
+from sqlalchemy.ext.asyncio import AsyncSession
+
 from tests.helpers.transfers import _make_tasks_transferable, _make_two_ghp_setup
-from tests.stock.test_task_completion_transform import _make_transform_setup, _receive_input
+from tests.stock.test_task_completion_transform import (
+    _make_transform_setup,
+    _receive_input,
+)
 from tests.test_integrity_invariants import assert_no_invariants_violations
 
 pytestmark = pytest.mark.asyncio
@@ -58,10 +67,10 @@ async def test_break_glass_shopfloor_completion_defect_and_decision(
     fx = await _make_transform_setup(
         session,
         sku="BG-SHOP-181",
-        planned_quantity=Decimal("100"),
-        input_quantity=Decimal("100"),
+        planned_quantity=Decimal(100),
+        input_quantity=Decimal(100),
     )
-    await _receive_input(session, fx, quantity=Decimal("100"))
+    await _receive_input(session, fx, quantity=Decimal(100))
     seeded_tx_ids = set(
         (
             await session.execute(
@@ -86,7 +95,7 @@ async def test_break_glass_shopfloor_completion_defect_and_decision(
     # поэтому задание завершено. Статус считается по списанному входу, а не по
     # остатку выходов (transform-aware логика, d7fb76c).
     assert body["status"] == "completed"
-    assert Decimal(str(body["completed_quantity"])) == Decimal("100")
+    assert Decimal(str(body["completed_quantity"])) == Decimal(100)
     defect_id = body["defect_id"]
     assert defect_id is not None
 
@@ -147,7 +156,7 @@ async def test_break_glass_transfer_send_and_receive_are_attributed(
     """Передача под break-glass создаёт принятую передачу и обе ledger-проводки."""
     # Build and complete the source task while the fixture's normal dev auth
     # is active; the actual transfer below is the strict break-glass write.
-    setup = await _make_two_ghp_setup(session, sku="BG-XFER-181", qty=Decimal("10"))
+    setup = await _make_two_ghp_setup(session, sku="BG-XFER-181", qty=Decimal(10))
     ctx = await _make_tasks_transferable(session, client, setup)
     monkeypatch.setattr(settings, "DEV_BYPASS_AUTH", False)
     system = await _system_user(session)
@@ -201,7 +210,7 @@ async def test_break_glass_plan_approve_cancel_restore_records_changed_by(
     """Approve/cancel/restore плана доступны и audit changed_by указывает system user."""
     monkeypatch.setattr(settings, "DEV_BYPASS_AUTH", False)
     system = await _system_user(session)
-    setup = await _make_two_ghp_setup(session, sku="BG-PLAN-181", qty=Decimal("1"))
+    setup = await _make_two_ghp_setup(session, sku="BG-PLAN-181", qty=Decimal(1))
     plan = setup["plan"]
     position = setup["position"]
     position.status = PlanPositionStatus.draft

@@ -16,7 +16,11 @@ from app.domain.dimensions import (
     parse_length_m_to_mm,
 )
 from app.services.color_extraction import resolve_payload_color
-from app.services.import_column_resolver import detect_header_row, is_reserved_key, resolve_columns
+from app.services.import_column_resolver import (
+    detect_header_row,
+    is_reserved_key,
+    resolve_columns,
+)
 
 SUPPORTED_EXCEL_EXTENSIONS = {".xls", ".xlsx", ".xlsm", ".xlsb", ".ods"}
 
@@ -510,7 +514,7 @@ def _check_group_balances(parsed: list[ParsedPlanRow]) -> None:
         input_length = row.input_dimensions.get(LENGTH_MM)
         if not isinstance(input_length, (int, float)):
             continue
-        total_out = Decimal("0")
+        total_out = Decimal(0)
         complete = bool(row.outputs)
         for entry in row.outputs:
             out_dims = entry.get("dimensions") or {}

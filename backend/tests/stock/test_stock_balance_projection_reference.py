@@ -30,9 +30,6 @@ import json
 from decimal import Decimal
 
 import pytest
-from sqlalchemy import select
-from sqlalchemy.ext.asyncio import AsyncSession
-
 from app.models.product import Product, ProductType
 from app.models.route import SectionOperation
 from app.models.section import Section
@@ -40,6 +37,9 @@ from app.models.user import User, UserRole
 from app.services.route_storage_classifier import TERMINAL_TYPES
 from app.stock.models import QualityState, Reason, StockBalance, StockTransaction
 from app.stock.services import StockCommand, StockCommandService
+from sqlalchemy import select
+from sqlalchemy.ext.asyncio import AsyncSession
+
 from tests.test_integrity_invariants import assert_no_invariants_violations
 
 pytestmark = pytest.mark.asyncio
@@ -111,10 +111,10 @@ async def ledger_segments(session: AsyncSession) -> dict[Segment, Decimal]:
     for product_id, from_loc, to_loc, from_qs, to_qs, dims, ops, qty in rows:
         if to_loc is not None and to_loc not in terminal:
             key = _segment(product_id, to_loc, to_qs, dims, ops)
-            agg[key] = agg.get(key, Decimal("0")) + qty
+            agg[key] = agg.get(key, Decimal(0)) + qty
         if from_loc is not None and from_loc not in terminal:
             key = _segment(product_id, from_loc, from_qs, dims, ops)
-            agg[key] = agg.get(key, Decimal("0")) - qty
+            agg[key] = agg.get(key, Decimal(0)) - qty
     return {key: net for key, net in agg.items() if net != 0}
 
 
@@ -143,7 +143,7 @@ async def balance_segments(
     out: dict[Segment, tuple[Decimal, int]] = {}
     for product_id, location_id, quality_state, dims, ops, qty in rows:
         key = _segment(product_id, location_id, quality_state, dims, ops)
-        total, count = out.get(key, (Decimal("0"), 0))
+        total, count = out.get(key, (Decimal(0), 0))
         out[key] = (total + qty, count + 1)
     return out
 
@@ -261,44 +261,44 @@ async def test_reference_recompute_matches_on_all_axis_combinations(
 
     # Пять групп на одном (артикул, локация, качество).
     await _record(session, product_id=product.id, to_location_id=raw.id,
-                   quantity=Decimal("100"), reason=Reason.MANUAL_IN,
+                   quantity=Decimal(100), reason=Reason.MANUAL_IN,
                    completed_operations=None, created_by=user.id)
     await _record(session, product_id=product.id, to_location_id=raw.id,
-                   quantity=Decimal("50"), reason=Reason.MANUAL_IN,
+                   quantity=Decimal(50), reason=Reason.MANUAL_IN,
                    completed_operations=[], created_by=user.id)
     await _record(session, product_id=product.id, to_location_id=raw.id,
-                   quantity=Decimal("30"), reason=Reason.MANUAL_IN,
+                   quantity=Decimal(30), reason=Reason.MANUAL_IN,
                    completed_operations=["OP_A"], created_by=user.id)
     await _record(session, product_id=product.id, to_location_id=raw.id,
-                   quantity=Decimal("20"), reason=Reason.MANUAL_IN,
+                   quantity=Decimal(20), reason=Reason.MANUAL_IN,
                    dimensions=dims, completed_operations=["OP_A"],
                    created_by=user.id)
     await _record(session, product_id=product.id, to_location_id=raw.id,
-                   quantity=Decimal("7"), reason=Reason.MANUAL_IN,
+                   quantity=Decimal(7), reason=Reason.MANUAL_IN,
                    completed_operations=["OP_B"], created_by=user.id)
 
     # Расход из NULL-группы: 100 → 60, остальные группы не тронуты.
     await _record(session, product_id=product.id, from_location_id=raw.id,
-                   quantity=Decimal("40"), reason=Reason.MANUAL_OUT,
+                   quantity=Decimal(40), reason=Reason.MANUAL_OUT,
                    completed_operations=None, created_by=user.id)
 
     # Ось качества: брак уходит на scrap-локацию со своим quality_state.
     await _record(session, product_id=product.id, from_location_id=raw.id,
-                   to_location_id=scrap.id, quantity=Decimal("13"),
+                   to_location_id=scrap.id, quantity=Decimal(13),
                    reason=Reason.SCRAP, to_quality_state=QualityState.SCRAP,
                    completed_operations=[], created_by=user.id)
 
     # Терминал: ledger пишет, проекция — нет.
     await _record(session, product_id=product.id, to_location_id=terminal.id,
-                   quantity=Decimal("11"), reason=Reason.MANUAL_IN,
+                   quantity=Decimal(11), reason=Reason.MANUAL_IN,
                    completed_operations=None, created_by=user.id)
 
     # Приход и расход в ноль: строки баланса не остаётся.
     await _record(session, product_id=product.id, to_location_id=other.id,
-                   quantity=Decimal("40"), reason=Reason.MANUAL_IN,
+                   quantity=Decimal(40), reason=Reason.MANUAL_IN,
                    completed_operations=None, created_by=user.id)
     await _record(session, product_id=product.id, from_location_id=other.id,
-                   quantity=Decimal("40"), reason=Reason.MANUAL_OUT,
+                   quantity=Decimal(40), reason=Reason.MANUAL_OUT,
                    completed_operations=None, created_by=user.id)
 
     balance = await balance_segments(session)
@@ -314,11 +314,11 @@ async def test_reference_recompute_matches_on_all_axis_combinations(
         None, _json_key([]), _json_key(["OP_A"]), _json_key(["OP_B"]),
     }
     # NULL и [] — разные группы: 60 и 37, а не 97 одной суммой.
-    assert balance[_segment(product.id, raw.id, QualityState.GOOD, None, None)][0] == Decimal("60")
-    assert balance[_segment(product.id, raw.id, QualityState.GOOD, None, [])][0] == Decimal("37")
+    assert balance[_segment(product.id, raw.id, QualityState.GOOD, None, None)][0] == Decimal(60)
+    assert balance[_segment(product.id, raw.id, QualityState.GOOD, None, [])][0] == Decimal(37)
 
     # Брак и терминал.
-    assert balance[_segment(product.id, scrap.id, QualityState.SCRAP, None, [])][0] == Decimal("13")
+    assert balance[_segment(product.id, scrap.id, QualityState.SCRAP, None, [])][0] == Decimal(13)
     assert not [key for key in balance if key[1] == terminal.id]
     # Нулевая группа не оставила ни строки, ни ожидания в ledger.
     assert not [key for key in balance if key[1] == other.id]
@@ -332,6 +332,7 @@ async def test_reference_recompute_matches_on_demo_data(session: AsyncSession) -
     """Референс совпадает на демо-сидере при нескольких группах одного SKU."""
     from app.seeds.seeders import demo_production_seeder
     from app.seeds.seeders.spgs_seeder import seed_spgs
+
     from tests.test_prep_stock_seed import (
         _build_route_with_sections,
         _seed_default_sections,
@@ -368,7 +369,7 @@ async def test_reference_recompute_matches_on_demo_data(session: AsyncSession) -
         session,
         product_id=seeded.product_id,
         to_location_id=seeded.location_id,
-        quantity=Decimal("3"),
+        quantity=Decimal(3),
         reason=Reason.MANUAL_IN,
         completed_operations=opposite,
         created_by=user.id,
@@ -399,10 +400,10 @@ async def test_reference_detects_lost_segment(session: AsyncSession) -> None:
     await _register_operations(session, raw, "OP_A")
 
     await _record(session, product_id=product.id, to_location_id=raw.id,
-                   quantity=Decimal("10"), reason=Reason.MANUAL_IN,
+                   quantity=Decimal(10), reason=Reason.MANUAL_IN,
                    completed_operations=None, created_by=user.id)
     await _record(session, product_id=product.id, to_location_id=raw.id,
-                   quantity=Decimal("5"), reason=Reason.MANUAL_IN,
+                   quantity=Decimal(5), reason=Reason.MANUAL_IN,
                    completed_operations=["OP_A"], created_by=user.id)
     await assert_projection_matches_ledger(session, context="negative-setup")
 
@@ -415,10 +416,10 @@ async def test_reference_detects_lost_segment(session: AsyncSession) -> None:
         )
     )).scalar_one()
     original = row.balance_qty
-    assert original == Decimal("5")
+    assert original == Decimal(5)
 
     # 1. Сумма разошлась.
-    row.balance_qty = original + Decimal("5")
+    row.balance_qty = original + Decimal(5)
     await session.flush()
     with pytest.raises(AssertionError, match="ledger=5"):
         await assert_projection_matches_ledger(session, context="corrupted-qty")

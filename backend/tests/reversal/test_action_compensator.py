@@ -17,15 +17,15 @@ import json
 from decimal import Decimal
 
 import pytest
-from sqlalchemy import func, select
-from sqlalchemy.ext.asyncio import AsyncSession
-
 from app.models.action_journal import Action, ActionStatus
 from app.reversal import errors
 from app.reversal.service import _sign_payload, reversal_service
 from app.stock.import_service import RemainderItem, apply_remainders_import
 from app.stock.models import Reason, StockBalance, StockTransaction
 from app.stock.services import StockCommand, StockCommandService
+from sqlalchemy import func, select
+from sqlalchemy.ext.asyncio import AsyncSession
+
 from tests.stock.helpers import FAKE_DEFECT_DECISION_MAP, FAKE_SCRAP_POLICY
 from tests.stock.test_domain_actions_journal import _issue_material
 from tests.stock.test_shopfloor_stage3 import _setup_minimal_route
@@ -47,7 +47,7 @@ async def _balance(session: AsyncSession, location_id: int, product_id: int) -> 
             StockBalance.location_id == location_id,
             StockBalance.product_id == product_id,
         )
-    )) or Decimal("0")
+    )) or Decimal(0)
 
 
 async def _stock_groups(
@@ -112,15 +112,15 @@ async def _task_chain(
     from app.api.routes.shopfloor import ReturnRemainderPayload, return_remainder
     from app.services.shopfloor.operations_tasks import final_release
 
-    complete = await _complete_task(session, fx, good=Decimal("8"), scrap=Decimal("0"))
+    complete = await _complete_task(session, fx, good=Decimal(8), scrap=Decimal(0))
 
     await final_release(
-        session, task_id=fx["task"].id, quantity=Decimal("5"), actor_id=fx["user"].id,
+        session, task_id=fx["task"].id, quantity=Decimal(5), actor_id=fx["user"].id,
     )
     await session.commit()
 
     await return_remainder(
-        ReturnRemainderPayload(task_id=fx["task"].id, quantity=Decimal("2")),
+        ReturnRemainderPayload(task_id=fx["task"].id, quantity=Decimal(2)),
         db=session,
         current_user=fx["user"],
         locked_section_id=None,
@@ -156,7 +156,7 @@ async def test_task_complete_reverse_mirrors_entries(session: AsyncSession) -> N
     product_id = fx["product"].id
     pre_groups = await _stock_groups(session, product_id)
 
-    action = await _complete_task(session, fx, good=Decimal("7"), scrap=Decimal("3"))
+    action = await _complete_task(session, fx, good=Decimal(7), scrap=Decimal(3))
     orig_txs = await _action_txs(session, action.id)
     # Завершение пишет три проводки (ADR-0055): списание входной группы,
     # выпуск годного и брак.
@@ -167,7 +167,7 @@ async def test_task_complete_reverse_mirrors_entries(session: AsyncSession) -> N
         Reason.SCRAP,
     }
     scrap_loc = next(t.to_location_id for t in orig_txs if t.reason == Reason.SCRAP)
-    assert await _balance(session, scrap_loc, product_id) == Decimal("3")
+    assert await _balance(session, scrap_loc, product_id) == Decimal(3)
 
     preview = await reversal_service.preview_reverse(session, action.id)
     assert not preview.blockers
@@ -208,7 +208,7 @@ async def test_task_complete_reverse_mirrors_entries(session: AsyncSession) -> N
     assert post_groups == pre_groups, (
         f"группы до отката: {pre_groups!r}\nгруппы после: {post_groups!r}"
     )
-    assert await _balance(session, scrap_loc, product_id) == Decimal("0")
+    assert await _balance(session, scrap_loc, product_id) == Decimal(0)
 
 async def test_reverse_restores_each_ops_group_separately(
     session: AsyncSession,
@@ -222,7 +222,7 @@ async def test_reverse_restores_each_ops_group_separately(
     сумма участка совпадёт до единицы, а в UI окажется смешанный материал.
     """
     fx = await _setup_minimal_route(session)
-    await _issue_material(session, fx, qty=Decimal("30"))
+    await _issue_material(session, fx, qty=Decimal(30))
     product_id = fx["product"].id
     section_id = fx["task"].section_id
 
@@ -238,7 +238,7 @@ async def test_reverse_restores_each_ops_group_separately(
         product_id=product_id,
         from_location_id=None,
         to_location_id=section_id,
-        quantity=Decimal("5"),
+        quantity=Decimal(5),
         reason=Reason.MANUAL_IN,
         completed_operations=extra_ops,
         created_by=fx["user"].id,
@@ -247,16 +247,16 @@ async def test_reverse_restores_each_ops_group_separately(
 
     before = await _stock_groups(session, product_id)
     extra_key = (route_key[0], route_key[1], route_key[2], _snap(extra_ops))
-    assert before[route_key] == Decimal("30")
-    assert before[extra_key] == Decimal("5")
+    assert before[route_key] == Decimal(30)
+    assert before[extra_key] == Decimal(5)
     assert {k: v for k, v in before.items() if k[0] == section_id} == {
-        route_key: Decimal("30"), extra_key: Decimal("5"),
+        route_key: Decimal(30), extra_key: Decimal(5),
     }, "на участке обязаны быть ровно две разные группы одного артикула"
 
-    action = await _complete_task(session, fx, good=Decimal("7"), scrap=Decimal("3"))
+    action = await _complete_task(session, fx, good=Decimal(7), scrap=Decimal(3))
     mid = await _stock_groups(session, product_id)
     assert mid[route_key] != before[route_key], "завершение списало входную группу"
-    assert mid[extra_key] == before[extra_key] == Decimal("5"), (
+    assert mid[extra_key] == before[extra_key] == Decimal(5), (
         "вторая группа в операции не участвовала"
     )
 
@@ -272,8 +272,8 @@ async def test_reverse_restores_each_ops_group_separately(
     assert after == before, (
         f"группы до: {before!r}\nгруппы после отката: {after!r}"
     )
-    assert after[route_key] == Decimal("30"), "входная группа восстановлена"
-    assert after[extra_key] == Decimal("5"), "вторая группа не перетекла в первую"
+    assert after[route_key] == Decimal(30), "входная группа восстановлена"
+    assert after[extra_key] == Decimal(5), "вторая группа не перетекла в первую"
 
 
 async def test_reverse_intermediate_blocked_has_dependents(
@@ -282,7 +282,7 @@ async def test_reverse_intermediate_blocked_has_dependents(
     """Reverse промежуточного узла цепочки → блокер has_dependents
     с полной цепочкой; confirm без cascade невозможен (preview-first)."""
     fx = await _setup_minimal_route(session)
-    await _issue_material(session, fx, qty=Decimal("30"))
+    await _issue_material(session, fx, qty=Decimal(30))
     chain = await _task_chain(session, fx)
 
     preview = await reversal_service.preview_reverse(session, chain["complete"].id)
@@ -311,7 +311,7 @@ async def test_reverse_full_chain_cascade_topological_order(
     """Каскадная отмена всей цепочки задачи в обратном топологическом
     порядке; остатки возвращаются к состоянию до цепочки."""
     fx = await _setup_minimal_route(session)
-    await _issue_material(session, fx, qty=Decimal("30"))
+    await _issue_material(session, fx, qty=Decimal(30))
     product_id = fx["product"].id
     pre_groups = await _stock_groups(session, product_id)
 
@@ -369,14 +369,14 @@ async def test_defect_decision_reverse(session: AsyncSession) -> None:
     product_id = fx["product"].id
 
     res = await create_defect(
-        session, task_id=fx["task"].id, quantity=Decimal("2"),
+        session, task_id=fx["task"].id, quantity=Decimal(2),
         actor_id=fx["user"].id, reason="scratch",
     )
     defect_id = res["defect_id"]
     pre_groups = await _stock_groups(session, product_id)
     await defect_decide(
         session, defect_id=defect_id, decision_type=DefectDecisionType.scrap,
-        quantity=Decimal("2"), actor_id=fx["user"].id,
+        quantity=Decimal(2), actor_id=fx["user"].id,
         defect_decision_map=FAKE_DEFECT_DECISION_MAP, **FAKE_SCRAP_POLICY,
     )
     await session.commit()
@@ -388,7 +388,7 @@ async def test_defect_decision_reverse(session: AsyncSession) -> None:
     )).scalar_one()
     orig_txs = await _action_txs(session, action.id)
     scrap_loc = orig_txs[0].to_location_id
-    assert await _balance(session, scrap_loc, product_id) == Decimal("2")
+    assert await _balance(session, scrap_loc, product_id) == Decimal(2)
 
     preview = await reversal_service.preview_reverse(session, action.id)
     assert not preview.blockers
@@ -443,7 +443,7 @@ async def test_manual_adjustment_reverse(client, session: AsyncSession) -> None:
     )).scalars().one()
     assert action.ref_id is None
     orig_txs = await _action_txs(session, action.id)
-    assert await _balance(session, location.id, product.id) == Decimal("4")
+    assert await _balance(session, location.id, product.id) == Decimal(4)
 
     preview = await reversal_service.preview_reverse(session, action.id)
     assert not preview.blockers
@@ -484,13 +484,13 @@ async def test_import_remainders_reverse_both_phases(session: AsyncSession) -> N
         product_id=product.id,
         from_location_id=None,
         to_location_id=location.id,
-        quantity=Decimal("9"),
+        quantity=Decimal(9),
         reason=Reason.MANUAL_IN,
         created_by=1,
     ))
     await session.commit()
     pre = await _balance(session, location.id, product.id)
-    assert pre == Decimal("9")
+    assert pre == Decimal(9)
     pre_groups = await _stock_groups(session, product.id)
 
     items = [
@@ -506,7 +506,7 @@ async def test_import_remainders_reverse_both_phases(session: AsyncSession) -> N
 
     action = await session.get(Action, result.action_id)
     assert action is not None and action.action_type == "import_remainders"
-    assert await _balance(session, location.id, product.id) == Decimal("5")
+    assert await _balance(session, location.id, product.id) == Decimal(5)
 
     preview = await reversal_service.preview_reverse(session, action.id)
     assert not preview.blockers
@@ -535,6 +535,7 @@ async def test_seed_demo_reverse_not_allowed(session: AsyncSession, monkeypatch)
     from app.models.user import User, UserRole
     from app.seeds.seeders import demo_production_seeder
     from app.seeds.seeders.spgs_seeder import seed_spgs
+
     from tests.test_prep_stock_seed import (
         _build_route_with_sections,
         _seed_default_sections,
@@ -598,7 +599,7 @@ async def test_plan_auto_release_tree_preview_reverse(session: AsyncSession) -> 
     product_id = fx["product"].id
     pre_section = await _balance(session, section_id, product_id)
 
-    complete = await _complete_task(session, fx, good=Decimal("7"), scrap=Decimal("0"))
+    complete = await _complete_task(session, fx, good=Decimal(7), scrap=Decimal(0))
 
     # Снимок ДО самой план-автозавершающей проводки: откат обязан вернуть
     # ровно её группы, а не просто сумму участка.
@@ -615,7 +616,7 @@ async def test_plan_auto_release_tree_preview_reverse(session: AsyncSession) -> 
         product_id=fx["task"].product_id,
         from_location_id=None,
         to_location_id=section_id,
-        quantity=Decimal("3"),
+        quantity=Decimal(3),
         reason=Reason.COMPLETE,
         task_id=fx["task"].id,
         source_ref="auto_release_remainder",
@@ -633,7 +634,7 @@ async def test_plan_auto_release_tree_preview_reverse(session: AsyncSession) -> 
     assert blocked.plan_token is None
     assert "has_dependents" in [b.kind for b in blocked.blockers]
 
-    assert await _balance(session, section_id, product_id) == pre_section + Decimal("3")
+    assert await _balance(session, section_id, product_id) == pre_section + Decimal(3)
     preview = await reversal_service.preview_reverse(session, action.id)
     assert not preview.blockers
     result = await reversal_service.reverse(
@@ -648,7 +649,7 @@ async def test_plan_auto_release_tree_preview_reverse(session: AsyncSession) -> 
     )).scalar_one()
     assert mirror.from_location_id == section_id
     assert mirror.to_location_id is None
-    assert mirror.quantity == Decimal("3")
+    assert mirror.quantity == Decimal(3)
     refreshed = await session.get(Action, action.id)
     assert refreshed.status == ActionStatus.REVERSED
     post_groups = await _stock_groups(session, product_id)
@@ -693,8 +694,8 @@ async def test_replay_payload_task_complete(session: AsyncSession) -> None:
     from app.reversal.action_compensator import StockActionCompensator
 
     fx = await _setup_minimal_route(session)
-    await _issue_material(session, fx, qty=Decimal("20"))
-    action = await _complete_task(session, fx, good=Decimal("7"), scrap=Decimal("3"))
+    await _issue_material(session, fx, qty=Decimal(20))
+    action = await _complete_task(session, fx, good=Decimal(7), scrap=Decimal(3))
 
     comp = StockActionCompensator("task_complete")
     payload = await comp.build_replay_payload(session, action)
@@ -718,7 +719,7 @@ async def test_replay_payload_chain_all_types(session: AsyncSession) -> None:
     from app.reversal.action_compensator import StockActionCompensator
 
     fx = await _setup_minimal_route(session)
-    await _issue_material(session, fx, qty=Decimal("30"))
+    await _issue_material(session, fx, qty=Decimal(30))
     chain = await _task_chain(session, fx)
 
     for action_type, action in chain.items():

@@ -20,15 +20,15 @@ from __future__ import annotations
 from io import BytesIO
 
 import pytest
+from app.core.config import settings
+from app.models import Product, ProductType, Section, User
+from app.stock.models import StockTransaction
 from httpx import AsyncClient
 from openpyxl import Workbook
 from sqlalchemy import delete, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.core.config import settings
-from app.models import Product, ProductType, Section, User
 from tests.test_integrity_invariants import assert_no_invariants_violations
-from app.stock.models import StockTransaction
 
 pytestmark = pytest.mark.asyncio
 

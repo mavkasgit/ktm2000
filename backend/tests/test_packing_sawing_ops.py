@@ -16,18 +16,17 @@ from __future__ import annotations
 from io import BytesIO
 
 import pytest
-from openpyxl import Workbook
-from sqlalchemy import select
-
 from app.models.import_template import ImportTemplate
 from app.models.product import Product, ProductLength, ProductType
 from app.models.production_plan import PlanChangeItem, ProductionPlan
 from app.models.route import RouteRuleProfile, SectionOperation
 from app.models.section import Section
 from app.seeds.run_seed import run_full_seed
-
-from app.services.route_builder import build_route_from_profile
 from app.services.plan_import_service import create_excel_import_change_set
+from app.services.route_builder import build_route_from_profile
+from openpyxl import Workbook
+from sqlalchemy import select
+
 from tests.plan_sample import HEADERS
 
 PROFILE_CODE = "packaging_map_rp"

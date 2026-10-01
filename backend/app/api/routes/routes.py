@@ -1,15 +1,24 @@
 from fastapi import APIRouter, Depends, HTTPException, Query, status
 from pydantic import BaseModel
 from sqlalchemy import select
-from sqlalchemy.orm import selectinload
 from sqlalchemy.ext.asyncio import AsyncSession
+from sqlalchemy.orm import selectinload
 
 from app.api.deps import READER_ROLES, REFERENCES_WRITER_ROLES, require_role
 from app.core.database import get_db
-from app.models.route import ProductionRoute, RouteMatchingRule, RouteStage, RouteOperation, SectionOperation
+from app.models.route import (
+    ProductionRoute,
+    RouteMatchingRule,
+    RouteOperation,
+    RouteStage,
+    SectionOperation,
+)
 from app.models.section import Section
+from app.services.route_deletion import (
+    count_route_relations,
+    delete_route_with_relations,
+)
 from app.services.route_identity import find_route_by_name
-from app.services.route_deletion import count_route_relations, delete_route_with_relations
 from app.services.route_signature import refresh_route_signature
 from app.services.route_transform import resolve_stage_transforms_dimensions
 
@@ -515,10 +524,7 @@ async def create_route_step(route_id: int, payload: StepCreate, db: AsyncSession
     # Сигнатура маршрута (#214) — по этапам, включая только что добавленный.
     await refresh_route_signature(db, route)
 
-    if stage_kind == "transit":
-        section_for_response = storage_section
-    else:
-        section_for_response = section
+    section_for_response = storage_section if stage_kind == "transit" else section
     return StepOut(
         id=stage.id,
         route_id=stage.route_id,
@@ -642,10 +648,7 @@ async def replace_route_steps(route_id: int, payload: list[StepUpdate], db: Asyn
             await db.flush()
         await db.refresh(stage)
 
-        if stage_kind == "transit":
-            section_for_response = storage_section
-        else:
-            section_for_response = section
+        section_for_response = storage_section if stage_kind == "transit" else section
         result.append(StepOut(
             id=stage.id,
             route_id=stage.route_id,

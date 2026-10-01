@@ -1,16 +1,18 @@
 from decimal import Decimal
 
 import pytest
-from sqlalchemy import select
-
 from app.api.routes import demo as demo_routes
 from app.core.security import create_access_token
 from app.models.product import Product, ProductLength, ProductPair, ProductType
-from app.models.production_plan import PlanPosition, ProductionPlan, ProductionPlanStatus
-from app.models.route import ProductionRoute, RouteStage, RouteOperation
-
+from app.models.production_plan import (
+    PlanPosition,
+    ProductionPlan,
+    ProductionPlanStatus,
+)
+from app.models.route import ProductionRoute, RouteOperation, RouteStage
 from app.models.section import Section
 from app.models.user import User, UserRole
+from sqlalchemy import select
 
 
 async def _make_demo_product(session, *, sku: str, name: str) -> Product:
@@ -88,7 +90,7 @@ async def _make_demo_route(session, code_prefix: str, step_defs: list[tuple[str,
 
 
 async def _seed_demo_stock(
-    session, product_id: int, section_id: int, quantity: Decimal = Decimal("100"),
+    session, product_id: int, section_id: int, quantity: Decimal = Decimal(100),
     dimensions: dict | None = None,
 ) -> None:
     """Seed initial stock for demo tests using StockCommandService.
@@ -99,7 +101,8 @@ async def _seed_demo_stock(
     складского задания). Признак берётся из маршрута самой складской
     секции — тот же резолвер, что и у ``record()``.
     """
-    from app.stock import StockCommand, StockCommandService, Reason, QualityState
+    from app.stock import QualityState, Reason, StockCommand, StockCommandService
+
     from tests.helpers.transfers import _section_route_operations
 
     svc = StockCommandService()
@@ -143,7 +146,7 @@ async def test_demo_full_route_run_and_replay(client, session) -> None:
     raw_section = await session.scalar(
         select(Section).where(Section.code == "DEMO-001-ISSUE")
     )
-    await _seed_demo_stock(session, product.id, raw_section.id, Decimal("200"),
+    await _seed_demo_stock(session, product.id, raw_section.id, Decimal(200),
                            dimensions={"length_mm": 2700})
 
     run_id = "demo-run-001"
@@ -219,7 +222,7 @@ async def test_demo_full_route_forks_when_target_plan_released(client, session) 
     raw_section = await session.scalar(
         select(Section).where(Section.code == "DEMO-002-ISSUE")
     )
-    await _seed_demo_stock(session, product.id, raw_section.id, Decimal("200"),
+    await _seed_demo_stock(session, product.id, raw_section.id, Decimal(200),
                            dimensions={"length_mm": 2700})
 
     response = await client.post(
@@ -478,7 +481,7 @@ async def test_demo_stage_preset_to_step_ready_middle_step(client, session) -> N
     raw_section = await session.scalar(
         select(Section).where(Section.code == "DEMO-TSRM-ISSUE")
     )
-    await _seed_demo_stock(session, product.id, raw_section.id, Decimal("200"),
+    await _seed_demo_stock(session, product.id, raw_section.id, Decimal(200),
                            dimensions={"length_mm": 2700})
 
     # Target 3rd production step (SAWING): execute SHOT_BLAST + ANODIZING, leave SAWING ready.
@@ -652,7 +655,7 @@ async def test_demo_picks_active_route_over_archived_with_smaller_id(client, ses
     raw_section = await session.scalar(
         select(Section).where(Section.code == "DEMO-ACT-NEW-ISSUE")
     )
-    await _seed_demo_stock(session, product.id, raw_section.id, Decimal("200"),
+    await _seed_demo_stock(session, product.id, raw_section.id, Decimal(200),
                            dimensions={"length_mm": 2700})
 
     response = await client.post(

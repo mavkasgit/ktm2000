@@ -5,7 +5,6 @@ from __future__ import annotations
 from unittest.mock import AsyncMock, patch
 
 import pytest
-
 from app.core.config import settings
 from app.services import unified_profile_service as ups
 from app.services.unified_profile_service import UnifiedProfile

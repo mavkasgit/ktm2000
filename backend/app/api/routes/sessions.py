@@ -1,5 +1,6 @@
+from datetime import UTC, datetime
 from uuid import UUID
-from datetime import datetime, UTC
+
 from fastapi import APIRouter, Depends, HTTPException, Request, status
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -11,9 +12,9 @@ from app.models.user_session import UserSession
 from app.schemas.session import MAX_SESSIONS_SHOWN, SessionListOut, SessionOut
 from app.services.session_service import (
     list_active_sessions,
+    record_login_event,
     revoke_session,
     revoke_sessions_for_user,
-    record_login_event,
 )
 
 router = APIRouter(prefix="/auth", tags=["auth"])

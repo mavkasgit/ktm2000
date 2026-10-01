@@ -33,7 +33,7 @@ class ActionNodeOut(BaseModel):
 
 
 class TreeNodeOut(ActionNodeOut):
-    children: list["TreeNodeOut"] = Field(default_factory=list)
+    children: list[TreeNodeOut] = Field(default_factory=list)
 
 
 class TreeOut(BaseModel):

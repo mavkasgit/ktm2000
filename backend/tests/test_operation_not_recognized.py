@@ -22,10 +22,6 @@ from __future__ import annotations
 from io import BytesIO
 
 import pytest
-from openpyxl import Workbook
-from sqlalchemy import select
-from sqlalchemy.ext.asyncio import AsyncSession
-
 from app.models.import_template import ImportTemplate
 from app.models.product import Product, ProductLength, ProductType
 from app.models.production_plan import (
@@ -36,9 +32,11 @@ from app.models.production_plan import (
 from app.models.route import RouteRuleProfile, RouteSelectionRule, SectionOperation
 from app.models.section import Section
 from app.services.plan_import_service import create_excel_import_change_set
+from openpyxl import Workbook
+from sqlalchemy import select
+from sqlalchemy.ext.asyncio import AsyncSession
 
 from tests.plan_sample import HEADERS
-
 
 OPERATION_CODE = "route_operation_not_recognized"
 

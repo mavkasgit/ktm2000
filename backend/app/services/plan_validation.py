@@ -8,12 +8,12 @@ from app.models.product import Product
 from app.models.production_plan import PlanPosition, PlanPositionStatus
 from app.models.route import RouteStage
 from app.models.section import Section
-from app.services import product_pair_resolver
-from app.services.product_pair_resolver import paired_component_skus
-from app.services.route_matcher import resolve_position_route
 
 # Типизированные данные из канона (ADR-0004). Сервис не импортирует plant_policies.
 from app.seeds.canon.registry import build_plant_config as _build
+from app.services import product_pair_resolver
+from app.services.product_pair_resolver import paired_component_skus
+from app.services.route_matcher import resolve_position_route
 
 _config = _build()
 _ERROR_MESSAGES: dict[str, str] = _config.display.labels.error_messages
@@ -77,9 +77,8 @@ async def validate_plan_position(
             product_cache[position.product_id] = product
     if product is not None and "lengths" in inspect(product).unloaded:
         await db.refresh(product, attribute_names=["lengths"])
-    if position.product_id is not None:
-        if product is None or not product.is_active:
-            errors.append("product_inactive")
+    if position.product_id is not None and (product is None or not product.is_active):
+        errors.append("product_inactive")
 
     # Парная позиция резолвится из product_pairs (#148). Позиция с непустым
     # снапшотом (product_pair.resolved) — норматив позиции: пара и нормы

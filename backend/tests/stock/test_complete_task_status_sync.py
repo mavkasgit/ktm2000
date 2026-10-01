@@ -13,8 +13,6 @@ from datetime import date
 from decimal import Decimal
 
 import pytest
-from sqlalchemy.ext.asyncio import AsyncSession
-
 from app.models import Product, ProductType, Section, User, UserRole
 from app.models.internal_plan import InternalPlan, InternalPlanStatus, SectionPlanLine
 from app.models.production_plan import (
@@ -28,9 +26,11 @@ from app.models.production_plan import (
 from app.models.route import ProductionRoute, RouteOperation, RouteStage
 from app.models.spg import SpgSection, StorageProductionGroup
 from app.models.work_task import WorkTask, WorkTaskStatus
-from app.stock import Reason, StockCommand, StockCommandService
 from app.services.material_operations import completed_operations_for_task
 from app.services.shopfloor.operations_tasks import complete_task
+from app.stock import Reason, StockCommand, StockCommandService
+from sqlalchemy.ext.asyncio import AsyncSession
+
 from tests.stock.helpers import record_transfer_receive
 from tests.test_integrity_invariants import assert_no_stock_ledger_invariants_violations
 
@@ -41,7 +41,7 @@ pytestmark = pytest.mark.asyncio
 
 
 async def _make_single_stage_setup(
-    session: AsyncSession, *, sku: str = "STAT-S1", qty: Decimal = Decimal("10"),
+    session: AsyncSession, *, sku: str = "STAT-S1", qty: Decimal = Decimal(10),
 ) -> dict:
     """Один этап в одном GHP — без передачи дальше (частичная порция)."""
     user = User(
@@ -122,7 +122,7 @@ async def _make_single_stage_setup(
 
 
 async def _make_two_ghp_setup(
-    session: AsyncSession, *, sku: str = "STAT-X", qty: Decimal = Decimal("10"),
+    session: AsyncSession, *, sku: str = "STAT-X", qty: Decimal = Decimal(10),
 ) -> dict:
     """Два этапа в разных GHP: авто-передача между ними возможна (тикет #91)."""
     user = User(
@@ -254,13 +254,13 @@ async def _issue_to(session: AsyncSession, fx: dict, task: WorkTask, *, quantity
 async def test_complete_task_syncs_status_to_partially_completed(session: AsyncSession):
     """Частичная порция: и ответ complete_task, и задача в partially_completed."""
     fx = await _make_single_stage_setup(session, sku="STAT-PART")
-    await _issue_to(session, fx, fx["task"], quantity=Decimal("10"))
+    await _issue_to(session, fx, fx["task"], quantity=Decimal(10))
 
     result = await complete_task(
         session,
         task_id=fx["task"].id,
-        good_quantity=Decimal("4"),
-        defect_quantity=Decimal("0"),
+        good_quantity=Decimal(4),
+        defect_quantity=Decimal(0),
         actor_id=fx["user"].id,
     )
     await session.commit()
@@ -278,13 +278,13 @@ async def test_completed_requires_transfer_beyond_production(session: AsyncSessi
     partially_completed (частичный — только при produced < planned): статус
     остаётся прежним in_progress. Документирует семантику sync_work_task_status."""
     fx = await _make_single_stage_setup(session, sku="STAT-FULL")
-    await _issue_to(session, fx, fx["task"], quantity=Decimal("10"))
+    await _issue_to(session, fx, fx["task"], quantity=Decimal(10))
 
     await complete_task(
         session,
         task_id=fx["task"].id,
-        good_quantity=Decimal("10"),
-        defect_quantity=Decimal("0"),
+        good_quantity=Decimal(10),
+        defect_quantity=Decimal(0),
         actor_id=fx["user"].id,
     )
     await session.commit()
@@ -299,13 +299,13 @@ async def test_auto_transfer_next_completes_source_task(session: AsyncSession):
     """Полная порция + auto_transfer_next (cross-GHP): источник уходит в completed,
     приёмник — в in_progress; ответ complete_task несёт итоговый статус."""
     fx = await _make_two_ghp_setup(session, sku="STAT-DONE")
-    await _issue_to(session, fx, fx["task_a"], quantity=Decimal("10"))
+    await _issue_to(session, fx, fx["task_a"], quantity=Decimal(10))
 
     result = await complete_task(
         session,
         task_id=fx["task_a"].id,
-        good_quantity=Decimal("10"),
-        defect_quantity=Decimal("0"),
+        good_quantity=Decimal(10),
+        defect_quantity=Decimal(0),
         actor_id=fx["user"].id,
         auto_transfer_next=True,
     )

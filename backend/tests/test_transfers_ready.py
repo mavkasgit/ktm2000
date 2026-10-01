@@ -6,8 +6,6 @@ from decimal import Decimal
 from urllib.parse import quote
 
 import pytest
-from sqlalchemy import select
-
 from app.models.product import Product, ProductType
 from app.models.production_plan import (
     PlanPosition,
@@ -17,9 +15,15 @@ from app.models.production_plan import (
 )
 from app.models.section import Section
 from app.models.work_task import WorkTask
-from app.stock import Reason, StockCommand, StockCommandService
 from app.services.material_operations import completed_operations_for_task
-from tests.helpers.transfers import _make_dim_route_fixture, _make_two_ghp_setup, _seed_balance
+from app.stock import Reason, StockCommand, StockCommandService
+from sqlalchemy import select
+
+from tests.helpers.transfers import (
+    _make_dim_route_fixture,
+    _make_two_ghp_setup,
+    _seed_balance,
+)
 from tests.test_integrity_invariants import _make_user, _release_via_take_to_work
 
 
@@ -92,7 +96,7 @@ async def _complete_source_tasks(session, setup: dict) -> list[int]:
 
 async def _seed_many_ready_tasks(session, client, count: int) -> dict:
     """Create *count* plan positions and complete their source tasks."""
-    setup = await _make_two_ghp_setup(session, sku="RDY-PG", qty=Decimal("1"))
+    setup = await _make_two_ghp_setup(session, sku="RDY-PG", qty=Decimal(1))
     plan = setup["plan"]
     route = setup["route"]
 
@@ -115,7 +119,7 @@ async def _seed_many_ready_tasks(session, client, count: int) -> dict:
                 source_type=PlanSourceType.manual,
                 source_sku=product.sku,
                 source_name=product.name,
-                quantity=Decimal("1"),
+                quantity=Decimal(1),
                 source_payload={},
                 status=PlanPositionStatus.approved,
                 validation_status=PlanPositionValidationStatus.valid,
@@ -317,7 +321,7 @@ async def _seed_dimensioned_ready_tasks(session, client, dims_list: list[dict | 
     Releases every position and completes source-section tasks, so each
     position produces a ready-to-transfer row on the first section.
     """
-    setup = await _make_two_ghp_setup(session, sku="RDY-DIM", qty=Decimal("1"))
+    setup = await _make_two_ghp_setup(session, sku="RDY-DIM", qty=Decimal(1))
     plan = setup["plan"]
     route = setup["route"]
     setup["position"].input_dimensions = dims_list[0]
@@ -337,7 +341,7 @@ async def _seed_dimensioned_ready_tasks(session, client, dims_list: list[dict | 
                 source_type=PlanSourceType.manual,
                 source_sku=product.sku,
                 source_name=product.name,
-                quantity=Decimal("1"),
+                quantity=Decimal(1),
                 input_dimensions=dims_list[i],
                 source_payload={},
                 status=PlanPositionStatus.approved,
@@ -586,7 +590,7 @@ async def test_ready_two_sort_paths_agree(client, session) -> None:
     # заводятся сверху в том же плане.
     skus = ["RDY-2P", "RDY-2P-A", "RDY-2P-B"]
     fx = await _seed_raw_to_prod_route(
-        session, client, sku_prefix="RDY-2P", skus=skus, qty=Decimal("5"),
+        session, client, sku_prefix="RDY-2P", skus=skus, qty=Decimal(5),
     )
     raw_sec, prod1_sec = fx["sections"][0], fx["sections"][1]
 
@@ -600,7 +604,7 @@ async def test_ready_two_sort_paths_agree(client, session) -> None:
             user_id=user.id,
             location_id=raw_sec.id,
             product_id=product.id,
-            qty=Decimal("5"),
+            qty=Decimal(5),
         )
     # Задания prod1 закрыты → производственная ветка даёт строки.
     await _complete_section_tasks(
@@ -676,11 +680,10 @@ def test_ready_sort_tables_agree() -> None:
     Расхождение = одни и те же задания приходят в разном порядке в зависимости
     от ветки (производственная SQL-таблица против общего Python-прохода).
     """
-    from sqlalchemy.orm import aliased
-
     from app.models.internal_plan import SectionPlanLine
     from app.models.route import RouteStage
     from app.transfers import queries as ready_queries
+    from sqlalchemy.orm import aliased
 
     assert set(ready_queries._READY_SORT_KEYS) == set(ready_queries.READY_SORT_FIELDS)
 
@@ -706,7 +709,7 @@ async def test_ready_default_order_is_sequence_asc(client, session) -> None:
     user = await _make_user(session, "rdy-seq@local")
     skus = ["RDY-SEQ-0", "RDY-SEQ-1", "RDY-SEQ-2"]
     fx = await _seed_raw_to_prod_route(
-        session, client, sku_prefix="RDY-SEQ-0", skus=skus, qty=Decimal("5"),
+        session, client, sku_prefix="RDY-SEQ-0", skus=skus, qty=Decimal(5),
     )
     raw_sec, prod1_sec = fx["sections"][0], fx["sections"][1]
 
@@ -719,7 +722,7 @@ async def test_ready_default_order_is_sequence_asc(client, session) -> None:
             user_id=user.id,
             location_id=raw_sec.id,
             product_id=product.id,
-            qty=Decimal("5"),
+            qty=Decimal(5),
         )
     await _complete_section_tasks(
         session, prod1_sec.id, user_id=user.id, stock_code="RDY-SEQ-STK-A",

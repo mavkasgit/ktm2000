@@ -8,16 +8,15 @@ Revises: 001_sections_and_users
 Create Date: 2026-07-05 19:00:00.000000
 """
 
-from typing import Sequence, Union
+from collections.abc import Sequence
 
-from alembic import op
 import sqlalchemy as sa
-
+from alembic import op
 
 revision: str = "002_products_and_techcards"
-down_revision: Union[str, None] = "001_sections_and_users"
-branch_labels: Union[str, Sequence[str], None] = None
-depends_on: Union[str, Sequence[str], None] = None
+down_revision: str | None = "001_sections_and_users"
+branch_labels: str | Sequence[str] | None = None
+depends_on: str | Sequence[str] | None = None
 
 
 def upgrade() -> None:
@@ -107,10 +106,8 @@ def upgrade() -> None:
     )
 
     # --- DATA ---
-    pass
 
     # --- TRIGGERS ---
-    pass
 
 
 def downgrade() -> None:

@@ -20,17 +20,17 @@ from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import selectinload
 
+from app.models.product import Product
+from app.models.production_plan import PlanPosition
 from app.models.route import RouteRuleProfile, SectionOperation
 from app.models.section import Section
-from app.models.production_plan import PlanPosition
-from app.models.product import Product
 from app.services.route_name_builder import build_route_name
 from app.services.route_selection import (
+    _evaluate_condition_with_diagnostic,
+    _load_rules_by_phase,
     apply_normalize_to_payload,
     build_route_rule_context,
     load_selection_rules_for_profile,
-    _load_rules_by_phase,
-    _evaluate_condition_with_diagnostic,
 )
 from app.services.route_signature import signature_from_built_steps
 
@@ -315,7 +315,10 @@ async def build_route_from_profile(
     steps: list[BuiltRouteStep] = []
     sequence = 0
 
-    from app.services.route_storage_classifier import is_storage_section, infer_stage_kind
+    from app.services.route_storage_classifier import (
+        infer_stage_kind,
+        is_storage_section,
+    )
 
     for section_code in filtered_section_codes:
         section = sections_by_code[section_code]
@@ -497,9 +500,8 @@ async def _compute_excluded_sections(
                             sa_select(Section.id).where(Section.code == section_code).limit(1)
                         )
 
-                if resolved_section_id is not None:
-                    if action_kind == "exclude_section":
-                        excluded_ids.add(int(resolved_section_id))
+                if resolved_section_id is not None and action_kind == "exclude_section":
+                    excluded_ids.add(int(resolved_section_id))
                     # Note: require_section is handled similarly if needed
 
     if not excluded_ids:

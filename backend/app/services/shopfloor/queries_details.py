@@ -14,6 +14,7 @@ from app.models.section import Section
 from .cache import _compute_available_from_balances
 from .common import _get_defect, _get_task, _to_decimal
 
+
 async def get_task_details(db: AsyncSession, task_id: int) -> dict:
     task = await _get_task(db, task_id)
     stage = await db.get(RouteStage, task.route_stage_id)

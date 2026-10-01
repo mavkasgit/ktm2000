@@ -10,17 +10,16 @@ from decimal import Decimal
 from pathlib import Path
 from urllib.parse import urlparse
 
+import app.models  # noqa: F401
 import pytest
-from sqlalchemy import inspect, text
-from sqlalchemy.ext.asyncio import create_async_engine
-
 from app.models.base import Base
 from app.models.production_plan import PlanPositionValidationStatus
 from app.services.hanger_quantity_calc import (
     HangerConfigError,
     compute_hanger_quantity,
 )
-import app.models  # noqa: F401
+from sqlalchemy import inspect, text
+from sqlalchemy.ext.asyncio import create_async_engine
 
 from tests.helpers.mig_db import (
     create_migration_db,
@@ -1231,7 +1230,7 @@ async def test_migration_064_adds_overridden_validation_status(tmp_path: Path):
                     )
                 )
             ).scalars().all()
-        assert set(PlanPositionValidationStatus) == {label for label in labels}, (
+        assert set(PlanPositionValidationStatus) == set(labels), (
             "значения модели и PG-типа разошлись — миграция не догнала enum"
         )
 
@@ -2531,12 +2530,12 @@ async def test_migration_074_splits_balance_by_completed_operations(
         qty_by_code = {code: qty for code, qty, dims in rows4}
         assert len(rows4) == 6, f"после сворачивания шесть строк: {rows4}"
         assert qty_by_code == {
-            "MIG074-A": Decimal("20"),
-            "MIG074-B": Decimal("30"),
-            "MIG074-C": Decimal("50"),
-            "MIG074-D": Decimal("7"),
-            "MIG074-E": Decimal("5"),
-            "MIG074-F": Decimal("11"),
+            "MIG074-A": Decimal(20),
+            "MIG074-B": Decimal(30),
+            "MIG074-C": Decimal(50),
+            "MIG074-D": Decimal(7),
+            "MIG074-E": Decimal(5),
+            "MIG074-F": Decimal(11),
         }, "суммы обеих ops-групп дошли до представителя"
         assert "MIG074-G" not in qty_by_code, (
             "группа, погасшая в ноль, удалена до переноса суммы"

@@ -5,9 +5,6 @@ from datetime import date
 from decimal import Decimal
 
 import pytest
-from sqlalchemy import func, select
-from sqlalchemy.ext.asyncio import AsyncSession
-
 from app.models.action_journal import Action
 from app.models.internal_plan import InternalPlan, InternalPlanStatus, SectionPlanLine
 from app.models.product import Product, ProductType
@@ -24,7 +21,8 @@ from app.models.route import ProductionRoute, RouteOperation, RouteStage
 from app.models.section import Section
 from app.models.work_task import WorkTask, WorkTaskStatus
 from app.stock import StockTransaction
-
+from sqlalchemy import func, select
+from sqlalchemy.ext.asyncio import AsyncSession
 
 SIMULATE_URL = "/api/imports/excel/simulate"
 
@@ -319,7 +317,7 @@ async def test_version_one_plan_is_readable_but_all_position_mutations_are_block
         source_type=PlanSourceType.excel_import,
         source_sku="PLAN-CUTOVER-LEGACY-SKU",
         source_name="Legacy profile",
-        quantity=Decimal("10"),
+        quantity=Decimal(10),
         input_dimensions={"length_mm": 2700},
         outputs=[{"quantity": "10", "dimensions": {"length_mm": 2700}}],
         source_payload={},
@@ -472,7 +470,7 @@ async def test_direct_shopfloor_mutations_cannot_change_legacy_plan_task(
         source_type=PlanSourceType.manual,
         source_sku=product.sku,
         source_name=product.name,
-        quantity=Decimal("10"),
+        quantity=Decimal(10),
         source_payload={},
         status=PlanPositionStatus.approved,
         validation_status=PlanPositionValidationStatus.valid,
@@ -495,7 +493,7 @@ async def test_direct_shopfloor_mutations_cannot_change_legacy_plan_task(
         route_id=route.id,
         route_stage_id=stage.id,
         sequence=10,
-        planned_quantity=Decimal("10"),
+        planned_quantity=Decimal(10),
     )
     session.add(line)
     await session.flush()
@@ -504,7 +502,7 @@ async def test_direct_shopfloor_mutations_cannot_change_legacy_plan_task(
         section_id=production.id,
         product_id=product.id,
         route_stage_id=stage.id,
-        planned_quantity=Decimal("10"),
+        planned_quantity=Decimal(10),
         dimensions={"length_mm": 2700},
         status=WorkTaskStatus.ready,
         due_date=plan.period_end,

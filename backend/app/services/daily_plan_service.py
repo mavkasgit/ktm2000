@@ -7,12 +7,12 @@ from typing import Any
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from app.models.audit_log import AuditAction, AuditEntityType
 from app.models.daily_plan import DailyPlan, DailyPlanItem
 from app.models.internal_plan import SectionPlanLine
 from app.models.route import RouteStage
 from app.models.work_task import CLOSED_WORK_TASK_STATUSES, WorkTask
 from app.services.audit_log_service import log_action
-from app.models.audit_log import AuditAction, AuditEntityType
 from app.stock.services import StockProjectionManager
 
 # Задания, которые больше нельзя ставить в дневной план и отзывать из

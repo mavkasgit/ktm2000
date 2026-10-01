@@ -1,11 +1,12 @@
-import pytest
-from datetime import datetime, timezone, timedelta
+from datetime import UTC, datetime, timedelta
 from unittest.mock import AsyncMock, patch
-from sqlalchemy import select
+
+import pytest
 from app.core.config import settings
 from app.models.user import User
 from app.services.authentik_client import AuthentikAdminError
 from app.services.unified_profile_service import UnifiedProfile
+from sqlalchemy import select
 
 
 @pytest.fixture
@@ -126,7 +127,7 @@ async def test_me_stale_cache_pulls(auth_client, session, idp_enabled):
     res = await session.execute(stmt)
     user = res.scalar_one()
     user.authentik_sub = "sub-101112"
-    user.profile_synced_at = datetime.now(timezone.utc) - timedelta(minutes=10)
+    user.profile_synced_at = datetime.now(UTC) - timedelta(minutes=10)
     await session.commit()
 
     mock_profile = UnifiedProfile(
@@ -159,7 +160,7 @@ async def test_me_pull_failure_keeps_cache_and_marks_failed_at(
     user = res.scalar_one()
     user.authentik_sub = "sub-fail-1"
     user.full_name = "Cached Name"
-    user.profile_synced_at = datetime.now(timezone.utc) - timedelta(minutes=30)
+    user.profile_synced_at = datetime.now(UTC) - timedelta(minutes=30)
     synced_before = user.profile_synced_at
     await session.commit()
 
@@ -189,7 +190,7 @@ async def test_me_failure_cooldown_skips_second_pull(auth_client, session, idp_e
     res = await session.execute(stmt)
     user = res.scalar_one()
     user.authentik_sub = "sub-fail-2"
-    user.profile_synced_at = datetime.now(timezone.utc) - timedelta(minutes=30)
+    user.profile_synced_at = datetime.now(UTC) - timedelta(minutes=30)
     await session.commit()
 
     with patch(
@@ -215,7 +216,7 @@ async def test_me_not_found_sets_synced_at_and_skips_second_pull(
     res = await session.execute(stmt)
     user = res.scalar_one()
     user.authentik_sub = "sub-notfound-1"
-    user.profile_synced_at = datetime.now(timezone.utc) - timedelta(minutes=30)
+    user.profile_synced_at = datetime.now(UTC) - timedelta(minutes=30)
     await session.commit()
 
     with patch(
@@ -246,7 +247,7 @@ async def test_me_refresh_recovers_after_failure(auth_client, session, idp_enabl
     res = await session.execute(stmt)
     user = res.scalar_one()
     user.authentik_sub = "sub-recover-1"
-    user.profile_synced_at = datetime.now(timezone.utc) - timedelta(minutes=30)
+    user.profile_synced_at = datetime.now(UTC) - timedelta(minutes=30)
     await session.commit()
 
     mock_profile = UnifiedProfile(

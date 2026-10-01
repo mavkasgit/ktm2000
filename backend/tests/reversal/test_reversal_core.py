@@ -20,9 +20,6 @@ from __future__ import annotations
 from decimal import Decimal
 
 import pytest
-from sqlalchemy import func, select
-from sqlalchemy.ext.asyncio import AsyncSession
-
 from app.models.action_journal import Action, ActionStatus
 from app.models.work_task import WorkTask
 from app.reversal import errors
@@ -31,6 +28,9 @@ from app.services.material_operations import completed_operations_for_task
 from app.stock import StockCommand, StockCommandService
 from app.stock.models import Reason, StockBalance, StockTransaction
 from app.transfers.services import cancel_transfer, correct_transfer, transfer_send
+from sqlalchemy import func, select
+from sqlalchemy.ext.asyncio import AsyncSession
+
 from tests.stock.test_transfer_stage2 import (
     _make_tasks_transferable,
     _make_two_ghp_setup,
@@ -75,15 +75,15 @@ async def _balance(session: AsyncSession, location_id: int, product_id: int) -> 
                 StockBalance.product_id == product_id,
             )
         )
-    ) or Decimal("0")
+    ) or Decimal(0)
 
 
 async def _chain_of_two(session: AsyncSession, client, sku: str) -> dict:
     """Две передачи с одного источника; вторая зависит от первой."""
-    setup = await _make_two_ghp_setup(session, sku=sku, qty=Decimal("10"))
+    setup = await _make_two_ghp_setup(session, sku=sku, qty=Decimal(10))
     ctx = await _make_tasks_transferable(session, client, setup)
-    a1 = await _send_transfer(session, ctx, qty=Decimal("5"), key=f"{sku}:t1")
-    a2 = await _send_transfer(session, ctx, qty=Decimal("5"), key=f"{sku}:t2")
+    a1 = await _send_transfer(session, ctx, qty=Decimal(5), key=f"{sku}:t1")
+    a2 = await _send_transfer(session, ctx, qty=Decimal(5), key=f"{sku}:t2")
     a2.depends_on = [a1.id]
     await session.commit()
     await assert_no_invariants_violations(session, context=f"{sku}-setup")
@@ -126,7 +126,7 @@ async def test_preview_zones_cascade_and_not(session: AsyncSession, client) -> N
 async def test_reverse_cascade_reverse_topological_order(
     session: AsyncSession, client,
 ) -> None:
-    setup = await _make_two_ghp_setup(session, sku="RVORD", qty=Decimal("10"))
+    setup = await _make_two_ghp_setup(session, sku="RVORD", qty=Decimal(10))
     ctx = await _make_tasks_transferable(session, client, setup)
     from_task = await session.get(WorkTask, ctx["from_task_id"])
     to_task = await session.get(WorkTask, ctx["to_task_id"])
@@ -135,8 +135,8 @@ async def test_reverse_cascade_reverse_topological_order(
     bal_dst_before = await _balance(session, to_task.section_id, to_task.product_id)
     assert bal_src_before >= 0 and bal_dst_before >= 0
 
-    a1 = await _send_transfer(session, ctx, qty=Decimal("5"), key="rvord:t1")
-    a2 = await _send_transfer(session, ctx, qty=Decimal("5"), key="rvord:t2")
+    a1 = await _send_transfer(session, ctx, qty=Decimal(5), key="rvord:t1")
+    a2 = await _send_transfer(session, ctx, qty=Decimal(5), key="rvord:t2")
     a2.depends_on = [a1.id]
     await session.commit()
     await assert_no_invariants_violations(session, context="rvord-setup")
@@ -197,10 +197,10 @@ async def test_reverse_skips_already_reversed(session: AsyncSession, client) -> 
 
 
 async def _chain_of_three(session: AsyncSession, client, sku: str) -> dict:
-    setup = await _make_two_ghp_setup(session, sku=sku, qty=Decimal("10"))
+    setup = await _make_two_ghp_setup(session, sku=sku, qty=Decimal(10))
     ctx = await _make_tasks_transferable(session, client, setup)
-    a1 = await _send_transfer(session, ctx, qty=Decimal("5"), key=f"{sku}:t1")
-    a2 = await _send_transfer(session, ctx, qty=Decimal("5"), key=f"{sku}:t2")
+    a1 = await _send_transfer(session, ctx, qty=Decimal(5), key=f"{sku}:t1")
+    a2 = await _send_transfer(session, ctx, qty=Decimal(5), key=f"{sku}:t2")
     a2.depends_on = [a1.id]
     await session.commit()
 
@@ -214,9 +214,9 @@ async def _chain_of_three(session: AsyncSession, client, sku: str) -> dict:
     await session.commit()
 
     # Третья передача — независимая, объявлена зависимой от a2.
-    setup2 = await _make_two_ghp_setup(session, sku=f"{sku}X", qty=Decimal("4"))
+    setup2 = await _make_two_ghp_setup(session, sku=f"{sku}X", qty=Decimal(4))
     ctx2 = await _make_tasks_transferable(session, client, setup2)
-    a3 = await _send_transfer(session, ctx2, qty=Decimal("2"), key=f"{sku}:t3")
+    a3 = await _send_transfer(session, ctx2, qty=Decimal(2), key=f"{sku}:t3")
     a3.depends_on = [a2.id]
     await session.commit()
     await assert_no_invariants_violations(session, context=f"{sku}-chain3")
@@ -268,7 +268,7 @@ async def test_stale_plan_token_when_world_changed(
         session,
         StockCommand(
             product_id=to_task.product_id,
-            quantity=Decimal("1"),
+            quantity=Decimal(1),
             reason=Reason.MANUAL_IN,
             to_location_id=to_task.section_id,
             created_by=ctx["user"].id,
@@ -290,9 +290,9 @@ async def test_stale_plan_token_when_world_changed(
 async def test_coverage_shortfall_blocks_reverse(
     session: AsyncSession, client,
 ) -> None:
-    setup = await _make_two_ghp_setup(session, sku="RVCOV", qty=Decimal("10"))
+    setup = await _make_two_ghp_setup(session, sku="RVCOV", qty=Decimal(10))
     ctx = await _make_tasks_transferable(session, client, setup)
-    action = await _send_transfer(session, ctx, qty=Decimal("5"), key="rvcov:t1")
+    action = await _send_transfer(session, ctx, qty=Decimal(5), key="rvcov:t1")
     await session.commit()
 
     to_task = await session.get(WorkTask, ctx["to_task_id"])
@@ -302,7 +302,7 @@ async def test_coverage_shortfall_blocks_reverse(
         session,
         StockCommand(
             product_id=to_task.product_id,
-            quantity=Decimal("4"),
+            quantity=Decimal(4),
             reason=Reason.COMPLETE,
             from_location_id=to_task.section_id,
             to_location_id=None,
@@ -314,7 +314,7 @@ async def test_coverage_shortfall_blocks_reverse(
 
     preview = await reversal_service.preview_reverse(session, action.id)
     shortfall = next(b for b in preview.blockers if b.kind == "coverage")
-    assert shortfall.deficit == Decimal("4")
+    assert shortfall.deficit == Decimal(4)
     assert shortfall.node_id == action.id
     # Preview-first: токен при блокировке не выдаётся.
     assert preview.plan_token is None
@@ -331,12 +331,12 @@ async def test_coverage_shortfall_blocks_reverse(
                     kind="coverage",
                     node_id=action.id,
                     detail="недостаточно покрытия",
-                    deficit=Decimal("4"),
+                    deficit=Decimal(4),
                 )
             ]
         )
     assert ei.value.node == action.id
-    assert ei.value.deficit == Decimal("4")
+    assert ei.value.deficit == Decimal(4)
 
     # Ничего не отменено: действие всё ещё active, инварианты целы.
     await session.commit()
@@ -346,9 +346,9 @@ async def test_coverage_shortfall_blocks_reverse(
 
 
 async def test_already_reversed(session: AsyncSession, client) -> None:
-    setup = await _make_two_ghp_setup(session, sku="RVALRD", qty=Decimal("10"))
+    setup = await _make_two_ghp_setup(session, sku="RVALRD", qty=Decimal(10))
     ctx = await _make_tasks_transferable(session, client, setup)
-    action = await _send_transfer(session, ctx, qty=Decimal("2"), key="rvalrd:t1")
+    action = await _send_transfer(session, ctx, qty=Decimal(2), key="rvalrd:t1")
     await session.commit()
 
     preview = await reversal_service.preview_reverse(session, action.id)
@@ -365,9 +365,9 @@ async def test_preview_domain_cancelled_transfer_blocked(
 ) -> None:
     """Отменённая через cancel_transfer передача: ReversalService.reverse
     переводит Action в REVERSED; повторный preview → AlreadyReversed."""
-    setup = await _make_two_ghp_setup(session, sku="RVDOMC", qty=Decimal("10"))
+    setup = await _make_two_ghp_setup(session, sku="RVDOMC", qty=Decimal(10))
     ctx = await _make_tasks_transferable(session, client, setup)
-    action = await _send_transfer(session, ctx, qty=Decimal("3"), key="rvdomc:t1")
+    action = await _send_transfer(session, ctx, qty=Decimal(3), key="rvdomc:t1")
     await session.commit()
 
     await cancel_transfer(
@@ -392,7 +392,7 @@ async def test_preview_domain_cancelled_transfer_blocked(
 async def test_not_allowed_for_unknown_action_type(
     session: AsyncSession, client,
 ) -> None:
-    setup = await _make_two_ghp_setup(session, sku="RVNA", qty=Decimal("10"))
+    setup = await _make_two_ghp_setup(session, sku="RVNA", qty=Decimal(10))
     await _make_tasks_transferable(session, client, setup)
     action = Action(action_type="nonexistent_type", ref_id=999999, actor="test")
     session.add(action)
@@ -430,7 +430,7 @@ async def test_correct_transfer_preserves_quality_state(
     from app.models.transfer import Transfer, TransferStatus
     from app.stock.models import QualityState
 
-    setup = await _make_two_ghp_setup(session, sku="RVQ", qty=Decimal("10"))
+    setup = await _make_two_ghp_setup(session, sku="RVQ", qty=Decimal(10))
     ctx = await _make_tasks_transferable(session, client, setup)
     user = ctx["user"]
     from_task = await session.get(WorkTask, ctx["from_task_id"])
@@ -446,7 +446,7 @@ async def test_correct_transfer_preserves_quality_state(
         session,
         StockCommand(
             product_id=from_task.product_id,
-            quantity=Decimal("3"),
+            quantity=Decimal(3),
             reason=Reason.MANUAL_IN,
             to_location_id=from_task.section_id,
             quality_state=QualityState.SCRAP,
@@ -464,8 +464,8 @@ async def test_correct_transfer_preserves_quality_state(
         from_section_id=from_task.section_id,
         to_section_id=to_task.section_id,
         product_id=from_task.product_id,
-        sent_quantity=Decimal("3"),
-        accepted_quantity=Decimal("3"),
+        sent_quantity=Decimal(3),
+        accepted_quantity=Decimal(3),
         status=TransferStatus.accepted,
     )
     session.add(transfer)
@@ -481,7 +481,7 @@ async def test_correct_transfer_preserves_quality_state(
         session,
         StockCommand(
             product_id=from_task.product_id,
-            quantity=Decimal("3"),
+            quantity=Decimal(3),
             reason=Reason.TRANSFER_SEND,
             from_location_id=from_task.section_id,
             to_location_id=to_task.section_id,
@@ -496,7 +496,7 @@ async def test_correct_transfer_preserves_quality_state(
         session,
         StockCommand(
             product_id=from_task.product_id,
-            quantity=Decimal("3"),
+            quantity=Decimal(3),
             reason=Reason.TRANSFER_RECEIVE,
             task_id=to_task.id,
             transfer_id=transfer.id,
@@ -510,7 +510,7 @@ async def test_correct_transfer_preserves_quality_state(
     correct_result = await correct_transfer(
         session,
         transfer_id=transfer.id,
-        new_quantity=Decimal("1"),
+        new_quantity=Decimal(1),
         actor_id=user.id,
     )
     await session.commit()
@@ -542,12 +542,12 @@ async def test_correct_transfer_preserves_quality_state(
         )
     ).scalars().all()
     assert len(new_txs) == 2
-    assert all(tx.quantity == Decimal("1") for tx in new_txs)
+    assert all(tx.quantity == Decimal(1) for tx in new_txs)
     for tx in new_txs:
         assert tx.from_quality_state == QualityState.SCRAP
         assert tx.to_quality_state == QualityState.SCRAP
 
     # Исходные проводки нетронуты.
     orig = await session.get(StockTransaction, send_tx.id)
-    assert orig.quantity == Decimal("3")
+    assert orig.quantity == Decimal(3)
     assert orig.from_quality_state == QualityState.SCRAP

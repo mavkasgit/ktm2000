@@ -7,7 +7,6 @@
 from __future__ import annotations
 
 import pytest
-
 from app.seeds.canon import build_plant_config
 from app.seeds.canon.models import PlantConfig
 
@@ -320,7 +319,11 @@ class TestRoutingCanonFailFast:
         никуда, а шаг маршрута берёт первую операцию — и позиция годами
         показывает чужую операцию (#210).
         """
-        from app.seeds.canon.models import OperationDef, RouteRuleProfileDef, SelectionRuleDef
+        from app.seeds.canon.models import (
+            OperationDef,
+            RouteRuleProfileDef,
+            SelectionRuleDef,
+        )
 
         rule = SelectionRuleDef(
             code="r",
@@ -361,7 +364,6 @@ class TestRoutingCanonFailFast:
     def test_invalid_phase_rejected_by_model(self) -> None:
         """Правило 6: недопустимый phase не проходит pydantic-валидацию."""
         import pydantic
-
         from app.seeds.canon.models import SelectionRuleDef
 
         with pytest.raises(pydantic.ValidationError):

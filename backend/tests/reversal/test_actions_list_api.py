@@ -5,9 +5,8 @@
 from __future__ import annotations
 
 import pytest
-from sqlalchemy.ext.asyncio import AsyncSession
-
 from app.services.action_journal_service import action_journal_service
+from sqlalchemy.ext.asyncio import AsyncSession
 
 pytestmark = pytest.mark.asyncio
 

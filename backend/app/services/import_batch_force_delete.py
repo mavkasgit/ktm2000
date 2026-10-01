@@ -32,7 +32,7 @@
 
 from __future__ import annotations
 
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 from decimal import Decimal
 
 from sqlalchemy import delete, or_, select, update
@@ -45,13 +45,13 @@ from app.models.internal_plan import SectionPlanLine
 from app.models.production_plan import PlanChangeItem, PlanChangeSet, PlanPosition
 from app.models.user import User
 from app.models.work_task import WorkTask
-from app.services.audit_log_service import log_action
 from app.services.action_journal_service import action_journal_service
+from app.services.audit_log_service import log_action
 from app.services.material_operations import completed_operation_stages
 from app.services.production_plan_service import _delete_batch_and_orphan_file
-from app.stock.services import StockProjectionManager
 from app.stock.import_service import resolve_operations_dictionary
 from app.stock.models import QualityState
+from app.stock.services import StockProjectionManager
 
 #: Коды причин, по которым force невозможен даже с подтверждением оператора.
 FORCE_BLOCK_TRANSFER_CROSSES_BATCH = "transfer_crosses_batch"
@@ -260,7 +260,7 @@ def _aggregate_stock_effects(
     counts: dict[tuple[str, int, str | None, str | None], int] = {}
 
     for row in rows:
-        sign = Decimal("-1") if row.reverses_id is not None else Decimal("1")
+        sign = Decimal(-1) if row.reverses_id is not None else Decimal(1)
         for location_id, quality_state in (
             (row.to_location_id, row.to_quality_state),
             (row.from_location_id, row.from_quality_state),
@@ -273,8 +273,8 @@ def _aggregate_stock_effects(
                 _dims_signature(row.dimensions),
                 _ops_signature(row.completed_operations),
             )
-            direction = Decimal("1") if location_id == row.to_location_id else Decimal("-1")
-            deltas[key] = deltas.get(key, Decimal("0")) + direction * sign * row.quantity
+            direction = Decimal(1) if location_id == row.to_location_id else Decimal(-1)
+            deltas[key] = deltas.get(key, Decimal(0)) + direction * sign * row.quantity
             skus[key] = row.sku
             dimensions[key] = row.dimensions
             completed_operations[key] = row.completed_operations
@@ -423,8 +423,8 @@ async def force_delete_import_batch(
     """
     from app.models.defect import Defect, DefectItem, TransferDiscrepancyDefectItem
     from app.models.internal_plan import InternalPlan, InternalPlanStatus
-    from app.models.release_batch import ReleaseBatchPosition
     from app.models.production_plan import PositionStatusHistory
+    from app.models.release_batch import ReleaseBatchPosition
     from app.models.rework_task import ReworkTask
     from app.models.transfer import Transfer, TransferDiscrepancy
     from app.stock.models import StockTransaction
@@ -649,7 +649,7 @@ async def force_delete_import_batch(
             ops_by_signature[ops_signature],
         )
 
-    now = datetime.now(timezone.utc)
+    now = datetime.now(UTC)
     await log_action(
         db,
         status="success",

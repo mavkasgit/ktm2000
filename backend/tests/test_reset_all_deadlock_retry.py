@@ -18,22 +18,21 @@ from __future__ import annotations
 
 import asyncio
 import time
+from collections.abc import AsyncIterator
 from contextlib import asynccontextmanager
-from typing import AsyncIterator
 
 import asyncpg
 import pytest
-from httpx import ASGITransport, AsyncClient
-from sqlalchemy import select, text
-from sqlalchemy.exc import DBAPIError
-from sqlalchemy.ext.asyncio import AsyncEngine, AsyncSession, async_sessionmaker
-
 from app.core.database import get_db
 from app.core.security import create_access_token
 from app.main import app
 from app.models.audit_log import AuditLog
 from app.models.production_plan import ProductionPlan, ProductionPlanStatus
 from app.models.user import User
+from httpx import ASGITransport, AsyncClient
+from sqlalchemy import select, text
+from sqlalchemy.exc import DBAPIError
+from sqlalchemy.ext.asyncio import AsyncEngine, AsyncSession, async_sessionmaker
 
 RESET_ALL_URL = "/api/production-plans/reset-all"
 

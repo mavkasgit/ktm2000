@@ -6,15 +6,18 @@ from datetime import UTC, datetime, timedelta
 from decimal import Decimal
 
 import pytest
-from sqlalchemy import select
-
 from app.models.section import Section
 from app.models.spg import StorageProductionGroup
 from app.models.transfer import Transfer, TransferStatus
 from app.models.work_task import WorkTask
 from app.stock import Reason, StockCommand, StockCommandService
 from app.stock.services import StockProjectionManager
-from tests.stock.test_transfer_stage2 import _make_tasks_transferable, _make_two_ghp_setup
+from sqlalchemy import select
+
+from tests.stock.test_transfer_stage2 import (
+    _make_tasks_transferable,
+    _make_two_ghp_setup,
+)
 from tests.test_integrity_invariants import _release_via_take_to_work
 
 
@@ -82,7 +85,7 @@ async def _make_tasks_transferable_reuse_stock(session, client, setup: dict) -> 
 
     pm = StockProjectionManager()
     cache = await pm.get_task_cache(session, src.id)
-    assert cache["completed_quantity"] >= Decimal("0")
+    assert cache["completed_quantity"] >= Decimal(0)
 
     return {"from_task_id": src.id, "to_task_id": dst.id, "user": setup["user"]}
 
@@ -113,7 +116,7 @@ async def _seed_transfer_records(
             from_section_id=sec1.id,
             to_section_id=sec2.id,
             product_id=setup["product"].id,
-            sent_quantity=Decimal("1"),
+            sent_quantity=Decimal(1),
             status=status,
             sent_by=ctx["user"].id,
             sent_at=base_time - timedelta(seconds=offset_seconds),

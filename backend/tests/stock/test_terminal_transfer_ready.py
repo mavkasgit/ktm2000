@@ -39,9 +39,6 @@ from datetime import date
 from decimal import Decimal
 
 import pytest
-from sqlalchemy import select
-from sqlalchemy.ext.asyncio import AsyncSession
-
 from app.models import Product, ProductType, Section, User, UserRole
 from app.models.internal_plan import InternalPlan, SectionPlanLine
 from app.models.production_plan import (
@@ -65,6 +62,9 @@ from app.stock import (
 )
 from app.transfers.queries import list_ready_to_transfer
 from app.transfers.services import transfer_send
+from sqlalchemy import select
+from sqlalchemy.ext.asyncio import AsyncSession
+
 from tests.test_integrity_invariants import assert_no_invariants_violations
 
 SHIPMENT_CODE = "SHIPMENT"
@@ -219,7 +219,7 @@ async def _balance(session: AsyncSession, product_id: int, location_id: int) -> 
         )
     )
     bal = row.scalars().one_or_none()
-    return bal.balance_qty if bal else Decimal("0")
+    return bal.balance_qty if bal else Decimal(0)
 
 
 # ─── ready-строка в терминал ────────────────────────────────────────────────
@@ -237,7 +237,7 @@ async def test_ready_row_offers_ordinary_transfer_into_terminal(
     адресата ещё не создана — ленивая) строку больше не скрывают. До #176
     оба предиката знали только ``is_stock_section`` — строки не было.
     """
-    fx = await _make_shipment_to_shipped(session, sku="T176R", qty=Decimal("12"))
+    fx = await _make_shipment_to_shipped(session, sku="T176R", qty=Decimal(12))
 
     items = await _ready_items(session, section_id=fx["shipment"].id)
     rows = [item for item in items if item["task_id"] == fx["task"].id]
@@ -253,7 +253,7 @@ async def test_ready_row_offers_ordinary_transfer_into_terminal(
     assert row["next_step_is_final"] is True
     assert row["is_final"] is False
     # Бюджет строки = min(план-остаток, физический остаток) источника.
-    assert Decimal(row["transferable_quantity"]) == Decimal("12")
+    assert Decimal(row["transferable_quantity"]) == Decimal(12)
 
 
 # ─── обычная передача в терминал ────────────────────────────────────────────
@@ -271,12 +271,12 @@ async def test_ordinary_transfer_into_terminal_keeps_ledger_without_balance(
     ``services.py:415`` (TRANSFER_RECEIVE); проекция остатков пропускает
     терминал — ``backend/app/stock/services.py:198,204``.
     """
-    fx = await _make_shipment_to_shipped(session, sku="T176S", qty=Decimal("12"))
+    fx = await _make_shipment_to_shipped(session, sku="T176S", qty=Decimal(12))
 
     result = await transfer_send(
         session,
         from_task_id=fx["task"].id,
-        quantity=Decimal("4"),
+        quantity=Decimal(4),
         actor_id=fx["user"].id,
     )
     await session.commit()
@@ -301,7 +301,7 @@ async def test_ordinary_transfer_into_terminal_keeps_ledger_without_balance(
         select(StockBalance).where(StockBalance.location_id == fx["shipped"].id)
     )).scalar_one_or_none() is None
     # …а остаток источника уменьшился ровно на переданное.
-    assert await _balance(session, fx["product"].id, fx["shipment"].id) == Decimal("8")
+    assert await _balance(session, fx["product"].id, fx["shipment"].id) == Decimal(8)
 
     # Задача на терминале создана лениво — как для складского адресата.
     to_task = await session.get(WorkTask, transfer.to_task_id)
@@ -325,7 +325,7 @@ async def test_ready_row_disappears_after_full_transfer(session: AsyncSession) -
     Передаём ровно ``transferable_quantity`` из строки: read- и write-бюджет
     обязаны совпадать, иначе ``transfer_send`` отклонил бы подачу.
     """
-    fx = await _make_shipment_to_shipped(session, sku="T176F", qty=Decimal("12"))
+    fx = await _make_shipment_to_shipped(session, sku="T176F", qty=Decimal(12))
 
     items = await _ready_items(session, section_id=fx["shipment"].id)
     rows = [item for item in items if item["task_id"] == fx["task"].id]
@@ -358,11 +358,11 @@ async def test_terminal_section_is_never_a_ready_source(session: AsyncSession) -
     ветка только секции типа ``production``. Терминал не проходит ни одну,
     хотя принимает передачу, а его задача живая и этап финальный.
     """
-    fx = await _make_shipment_to_shipped(session, sku="T176T", qty=Decimal("12"))
+    fx = await _make_shipment_to_shipped(session, sku="T176T", qty=Decimal(12))
     await transfer_send(
         session,
         from_task_id=fx["task"].id,
-        quantity=Decimal("4"),
+        quantity=Decimal(4),
         actor_id=fx["user"].id,
     )
     await session.commit()

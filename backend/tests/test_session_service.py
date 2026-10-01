@@ -2,17 +2,16 @@
 
 from __future__ import annotations
 
-from datetime import datetime, timedelta, timezone
+from datetime import UTC, datetime, timedelta
 from uuid import uuid4
 
 import pytest
-from jose import jwt
-from sqlalchemy.ext.asyncio import AsyncSession
-
 from app.core.config import settings
 from app.core.security import TokenError, create_access_token, decode_access_token
 from app.models.user import User, UserRole
 from app.services import session_service
+from jose import jwt
+from sqlalchemy.ext.asyncio import AsyncSession
 
 
 async def _create_user(db: AsyncSession, username: str = "session_user") -> User:
@@ -143,7 +142,7 @@ async def test_logout_jti_replay_protection(session: AsyncSession):
     jti = "jti-123"
     assert await session_service.is_logout_jti_used(session, jti) is False
     await session_service.mark_logout_jti_used(
-        session, jti, expires_at=datetime.now(timezone.utc) + timedelta(minutes=10)
+        session, jti, expires_at=datetime.now(UTC) + timedelta(minutes=10)
     )
     assert await session_service.is_logout_jti_used(session, jti) is True
 
@@ -181,7 +180,7 @@ async def test_expired_session_not_active(session: AsyncSession):
     s = await session_service.issue_session(
         session, user_id=user.id, login_method="oidc", ttl_minutes=1
     )
-    s.expires_at = datetime.now(timezone.utc) - timedelta(seconds=5)
+    s.expires_at = datetime.now(UTC) - timedelta(seconds=5)
     session.add(s)
     await session.flush()
 

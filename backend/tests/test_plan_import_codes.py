@@ -20,7 +20,6 @@ from app.services.plan_import_service import (
     plan_import_row_status,
 )
 
-
 # Спека docs/plan-import-spec.md §3 — эталон, дублирует каталог намеренно:
 # дрейф каталога мимо спеки должен ломать тест.
 SPEC_ERROR_CODES = frozenset(

@@ -16,7 +16,8 @@ from __future__ import annotations
 from collections.abc import Callable, Sequence
 from datetime import datetime
 from decimal import Decimal
-from typing import Any, cast as tcast
+from typing import Any
+from typing import cast as tcast
 
 from fastapi import HTTPException
 from sqlalchemy import String, Subquery, and_, case, cast, func, or_, select
@@ -24,27 +25,26 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import aliased
 
 from app.core.sorting import SortClause, apply_sort, parse_sort, sort_items
+from app.domain.dimensions import format_dimensions, parse_dimensions_filter
 from app.models.defect import DefectItem, TransferDiscrepancyDefectItem
 from app.models.internal_plan import SectionPlanLine
 from app.models.product import Product
-from app.models.route import RouteStage, RouteOperation
+from app.models.route import RouteOperation, RouteStage
 from app.models.section import Section
 from app.models.spg import SpgSection
-from app.services.route_storage_classifier import (
-    SECTION_TYPE_PRODUCTION,
-    STOCK_TYPES,
-    accepts_ordinary_transfer,
-    is_stock_section,
-)
 from app.models.transfer import (
     Transfer,
     TransferDiscrepancy,
     TransferStatus,
 )
 from app.models.work_task import CLOSED_WORK_TASK_STATUSES, WorkTask, WorkTaskStatus
-from app.domain.dimensions import parse_dimensions_filter, format_dimensions
 from app.services.plan_position_hanger import task_dimensions_for_plan_line
-
+from app.services.route_storage_classifier import (
+    SECTION_TYPE_PRODUCTION,
+    STOCK_TYPES,
+    accepts_ordinary_transfer,
+    is_stock_section,
+)
 from app.services.shopfloor.common import _get_transfer, _to_decimal
 from app.transfers.budget import (
     sendable_qty_sql,
@@ -180,7 +180,7 @@ async def get_section_incoming_transfers(
         rejected = _to_decimal(transfer.rejected_quantity or 0)
         remaining = sent - accepted - rejected
         if remaining < 0:
-            remaining = Decimal("0")
+            remaining = Decimal(0)
 
         from_op_name = ", ".join(op.operation_name for op in src_stage.operations) if src_stage and src_stage.operations else ""
         to_op_name = ", ".join(op.operation_name for op in dst_stage.operations) if dst_stage and dst_stage.operations else ""
@@ -374,7 +374,7 @@ def _ready_transferable_qty(item: dict) -> Decimal:
     try:
         return _to_decimal(item.get("transferable_quantity") or "0")
     except Exception:
-        return Decimal("0")
+        return Decimal(0)
 
 
 _READY_SORT_KEYS: dict[str, Callable[[dict], Any]] = {
@@ -814,9 +814,8 @@ async def _fetch_stock_ready_items(
             # поэтому её отсутствие до передачи строку не скрывает.
             destination_accepts_transfer = accepts_ordinary_transfer(next_sec)
 
-            if await sections_share_spg(db, spl.section_id, next_line.section_id):
-                if not destination_accepts_transfer:
-                    continue
+            if await sections_share_spg(db, spl.section_id, next_line.section_id) and not destination_accepts_transfer:
+                continue
 
             next_task = await db.scalar(
                 select(WorkTask).where(
@@ -836,10 +835,10 @@ async def _fetch_stock_ready_items(
                 .order_by(WorkTask.id.asc())
             )
 
-            planned_qty = spl.planned_quantity or Decimal("0")
+            planned_qty = spl.planned_quantity or Decimal(0)
             if planned_qty <= 0:
                 plan_pos = await db.get(PlanPosition, spl.plan_position_id)
-                planned_qty = plan_pos.quantity if plan_pos else Decimal("0")
+                planned_qty = plan_pos.quantity if plan_pos else Decimal(0)
 
             if fake_task is None:
                 if next_task is not None:
@@ -1252,7 +1251,7 @@ async def get_section_transfer_history(
         rejected = _to_decimal(transfer.rejected_quantity or 0)
         remaining = sent - accepted - rejected
         if remaining < 0:
-            remaining = Decimal("0")
+            remaining = Decimal(0)
 
         from_op_name = ", ".join(op.operation_name for op in src_stage.operations) if src_stage and src_stage.operations else ""
         to_op_name = ", ".join(op.operation_name for op in dst_stage.operations) if dst_stage and dst_stage.operations else ""

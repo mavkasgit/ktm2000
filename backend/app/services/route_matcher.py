@@ -1,14 +1,14 @@
 from __future__ import annotations
 
-from datetime import datetime
 from dataclasses import dataclass, field
+from datetime import datetime
 
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import selectinload
 
-from app.models.product import Product
 from app.models.imports import ImportBatch
+from app.models.product import Product
 from app.models.production_plan import (
     PlanPosition,
     PlanPositionRouteMatchQuality,
@@ -18,9 +18,12 @@ from app.models.production_plan import (
 from app.models.route import ProductionRoute, RouteRuleProfile
 from app.services.color_extraction import resolve_payload_color
 from app.services.route_builder import build_route_from_profile
-from app.services.route_selection import RouteCandidateDiagnostic, select_route_for_payload
-from app.services.route_signature import auto_route_code, route_signature_conflicts
 from app.services.route_identity import find_route_by_code, find_route_by_name
+from app.services.route_selection import (
+    RouteCandidateDiagnostic,
+    select_route_for_payload,
+)
+from app.services.route_signature import auto_route_code, route_signature_conflicts
 
 
 class RouteSignatureConflict(Exception):

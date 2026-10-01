@@ -10,8 +10,6 @@ from __future__ import annotations
 from decimal import Decimal
 
 import pytest
-from sqlalchemy import select
-
 from app.models.section import Section
 from app.models.work_task import WorkTask
 from app.stock import Reason, StockCommand, StockCommandService
@@ -22,6 +20,8 @@ from app.transfers.budget import (
     remaining_transform,
 )
 from app.transfers.services import correct_transfer, transfer_send
+from sqlalchemy import select
+
 from tests.stock.test_transfer_stage2 import _make_two_ghp_setup
 from tests.test_integrity_invariants import (
     _release_via_take_to_work,
@@ -32,55 +32,55 @@ from tests.test_integrity_invariants import (
 
 
 def test_remaining_plain_full_budget() -> None:
-    assert remaining_plain(Decimal("5"), Decimal("0")) == Decimal("5")
+    assert remaining_plain(Decimal(5), Decimal(0)) == Decimal(5)
 
 
 def test_remaining_plain_partial_transferred() -> None:
-    assert remaining_plain(Decimal("5"), Decimal("2")) == Decimal("3")
+    assert remaining_plain(Decimal(5), Decimal(2)) == Decimal(3)
 
 
 def test_remaining_plain_clamped_at_zero() -> None:
-    assert remaining_plain(Decimal("5"), Decimal("7")) == Decimal("0")
+    assert remaining_plain(Decimal(5), Decimal(7)) == Decimal(0)
 
 
 def test_remaining_plain_zero_completed() -> None:
-    assert remaining_plain(Decimal("0"), Decimal("0")) == Decimal("0")
+    assert remaining_plain(Decimal(0), Decimal(0)) == Decimal(0)
 
 
 def test_remaining_transform_full_budget() -> None:
-    assert remaining_transform(Decimal("100"), Decimal("0")) == Decimal("100")
+    assert remaining_transform(Decimal(100), Decimal(0)) == Decimal(100)
 
 
 def test_remaining_transform_partial() -> None:
-    assert remaining_transform(Decimal("100"), Decimal("40")) == Decimal("60")
+    assert remaining_transform(Decimal(100), Decimal(40)) == Decimal(60)
 
 
 def test_remaining_transform_clamped_at_zero() -> None:
-    assert remaining_transform(Decimal("5"), Decimal("7")) == Decimal("0")
+    assert remaining_transform(Decimal(5), Decimal(7)) == Decimal(0)
 
 
 def test_remaining_send_full_budget() -> None:
-    assert remaining_send(Decimal("100"), Decimal("0")) == Decimal("100")
+    assert remaining_send(Decimal(100), Decimal(0)) == Decimal(100)
 
 
 def test_remaining_send_partial_released() -> None:
-    assert remaining_send(Decimal("100"), Decimal("40")) == Decimal("60")
+    assert remaining_send(Decimal(100), Decimal(40)) == Decimal(60)
 
 
 def test_remaining_send_clamped_at_zero() -> None:
-    assert remaining_send(Decimal("5"), Decimal("7")) == Decimal("0")
+    assert remaining_send(Decimal(5), Decimal(7)) == Decimal(0)
 
 
 def test_remaining_send_zero_produced() -> None:
-    assert remaining_send(Decimal("0"), Decimal("0")) == Decimal("0")
+    assert remaining_send(Decimal(0), Decimal(0)) == Decimal(0)
 
 
 def test_remaining_stock_limited_by_physical_stock() -> None:
-    assert remaining_stock(Decimal("5"), Decimal("3")) == Decimal("3")
+    assert remaining_stock(Decimal(5), Decimal(3)) == Decimal(3)
 
 
 def test_remaining_stock_limited_by_plan_remaining() -> None:
-    assert remaining_stock(Decimal("2"), Decimal("5")) == Decimal("2")
+    assert remaining_stock(Decimal(2), Decimal(5)) == Decimal(2)
 
 
 # ─── DB-хелперы ─────────────────────────────────────────────────────────────
@@ -164,7 +164,7 @@ async def test_plain_transfer_budget_excludes_received(client, session) -> None:
     transferred = 15, и обе передачи прошли бы.
     """
     ctx = await _make_plain_task_budget(
-        session, client, sku="BUDGBRK", completed=Decimal("5"), received=Decimal("10"),
+        session, client, sku="BUDGBRK", completed=Decimal(5), received=Decimal(10),
     )
 
     # Первая передача 5 — укладывается в новый бюджет (completed 5, transferred 0).
@@ -172,7 +172,7 @@ async def test_plain_transfer_budget_excludes_received(client, session) -> None:
         session,
         from_task_id=ctx["from_task_id"],
         to_task_id=ctx["to_task_id"],
-        quantity=Decimal("5"),
+        quantity=Decimal(5),
         actor_id=ctx["user"].id,
     )
     await session.commit()
@@ -185,7 +185,7 @@ async def test_plain_transfer_budget_excludes_received(client, session) -> None:
             session,
             from_task_id=ctx["from_task_id"],
             to_task_id=ctx["to_task_id"],
-            quantity=Decimal("6"),
+            quantity=Decimal(6),
             actor_id=ctx["user"].id,
         )
     await session.commit()
@@ -206,14 +206,14 @@ async def test_correct_transfer_returns_old_quantity_once(client, session) -> No
     отказ. Если бы old_quantity кредитовался дважды, коррекция до 6 прошла бы.
     """
     ctx = await _make_plain_task_budget(
-        session, client, sku="BUDGCOR", completed=Decimal("10"), received=Decimal("10"),
+        session, client, sku="BUDGCOR", completed=Decimal(10), received=Decimal(10),
     )
 
     r1 = await transfer_send(
         session,
         from_task_id=ctx["from_task_id"],
         to_task_id=ctx["to_task_id"],
-        quantity=Decimal("3"),
+        quantity=Decimal(3),
         actor_id=ctx["user"].id,
     )
     await session.commit()
@@ -221,7 +221,7 @@ async def test_correct_transfer_returns_old_quantity_once(client, session) -> No
     await correct_transfer(
         session,
         transfer_id=r1["transfer_id"],
-        new_quantity=Decimal("5"),
+        new_quantity=Decimal(5),
         actor_id=ctx["user"].id,
     )
     await session.commit()
@@ -231,7 +231,7 @@ async def test_correct_transfer_returns_old_quantity_once(client, session) -> No
         session,
         from_task_id=ctx["from_task_id"],
         to_task_id=ctx["to_task_id"],
-        quantity=Decimal("5"),
+        quantity=Decimal(5),
         actor_id=ctx["user"].id,
     )
     await session.commit()
@@ -242,7 +242,7 @@ async def test_correct_transfer_returns_old_quantity_once(client, session) -> No
             session,
             from_task_id=ctx["from_task_id"],
             to_task_id=ctx["to_task_id"],
-            quantity=Decimal("1"),
+            quantity=Decimal(1),
             actor_id=ctx["user"].id,
         )
 
@@ -252,7 +252,7 @@ async def test_correct_transfer_returns_old_quantity_once(client, session) -> No
         await correct_transfer(
             session,
             transfer_id=r2["transfer_id"],
-            new_quantity=Decimal("6"),
+            new_quantity=Decimal(6),
             actor_id=ctx["user"].id,
         )
     await session.commit()

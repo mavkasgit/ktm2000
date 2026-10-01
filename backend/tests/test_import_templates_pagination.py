@@ -3,7 +3,6 @@
 from __future__ import annotations
 
 import pytest
-
 from app.models.import_template import ImportTemplate
 
 

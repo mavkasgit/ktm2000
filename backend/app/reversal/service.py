@@ -21,6 +21,8 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.config import settings
 from app.models.action_journal import Action, ActionStatus
+from app.reversal.action_compensator import StockActionCompensator
+from app.reversal.base import Compensator, ReversalPlan, ReversalResult
 from app.reversal.errors import (
     AlreadyReversed,
     CoverageShortfall,
@@ -28,11 +30,8 @@ from app.reversal.errors import (
     NotAllowed,
     StalePlanToken,
 )
-from app.reversal.action_compensator import StockActionCompensator
-from app.reversal.base import Compensator, ReversalPlan, ReversalResult
 from app.reversal.stock_compensator import StockCompensator
 from app.stock.models import StockTransaction
-
 
 # ─── Структуры preview/tree ──────────────────────────────────────────────────
 
@@ -48,7 +47,7 @@ class ActionNode:
     depends_on: list[int] = field(default_factory=list)
 
     @classmethod
-    def of(cls, action: Action) -> "ActionNode":
+    def of(cls, action: Action) -> ActionNode:
         return cls(
             id=action.id,
             action_type=action.action_type,
@@ -60,7 +59,7 @@ class ActionNode:
 
 @dataclass
 class TreeNode(ActionNode):
-    children: list["TreeNode"] = field(default_factory=list)
+    children: list[TreeNode] = field(default_factory=list)
 
 
 @dataclass
@@ -652,7 +651,7 @@ class ReversalService:
         will_replay: list[ReplayPlanItem] = []
         if not blockers and cascade:
             will_replay, replay_blockers = await self._build_replay_plan(
-                db, [a for a in cascade_actions]
+                db, list(cascade_actions)
             )
             blockers.extend(replay_blockers)
 
@@ -1016,7 +1015,7 @@ class ReversalService:
             if b.kind == "has_dependents":
                 raise HasDependentActions(chain=list(b.chain or []))
             if b.kind == "coverage":
-                raise CoverageShortfall(node=b.node_id or -1, deficit=b.deficit or Decimal("0"))
+                raise CoverageShortfall(node=b.node_id or -1, deficit=b.deficit or Decimal(0))
             if b.kind == "not_allowed":
                 raise NotAllowed(b.detail)
             if b.kind == "not_found":
@@ -1041,7 +1040,7 @@ class ReversalService:
         Ребро X ≺ d для каждого d ∈ X.depends_on (X отменяется первым).
         """
         node_set = set(nodes)
-        remaining = {n: 0 for n in nodes}
+        remaining = dict.fromkeys(nodes, 0)
         unlocks: dict[int, list[int]] = {n: [] for n in nodes}
         for x in nodes:
             for d in deps.get(x, []):

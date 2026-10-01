@@ -7,8 +7,6 @@ resolve_defect_status читает данные из config (а не хардк�
 from __future__ import annotations
 
 import pytest
-from sqlalchemy import select
-
 from app.models.defect import DefectDecisionType, DefectType
 from app.seeds.canon.models import (
     DefectDecisionDef,
@@ -19,6 +17,7 @@ from app.seeds.canon.models import (
 from app.seeds.canon.registry import build_plant_config
 from app.seeds.seeders.defect_types_seeder import seed_defect_types
 from app.services.shopfloor.operations_defects import resolve_defect_status
+from sqlalchemy import select
 
 
 class TestResolveDefectStatusWithFakeConfig:

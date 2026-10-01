@@ -5,11 +5,11 @@ Covers savepoint-isolated bulk approve and bulk delete on production plans.
 from __future__ import annotations
 
 import pytest
-from sqlalchemy import select
-
 from app.core.security import create_access_token
 from app.models.production_plan import PlanPosition, PlanPositionStatus
 from app.models.user import User, UserRole
+from sqlalchemy import select
+
 from tests.helpers.plan import make_plan_with_positions as _make_plan_with_positions
 
 

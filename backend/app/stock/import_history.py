@@ -21,14 +21,14 @@ from __future__ import annotations
 
 import json
 from dataclasses import dataclass
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 from decimal import Decimal
 
 from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.models.imports import ImportFile
 from app.models.action_journal import Action, ActionStatus
+from app.models.imports import ImportFile
 from app.models.section import Section
 from app.models.user import User
 from app.stock.import_models import (
@@ -252,8 +252,8 @@ async def get_batch_rows(
     одного артикула и склада с разными остатками без оси на экране — два
     неотличимых дубля, а с осью — две разные группы остатка (ADR-0055).
     """
-    from app.models.product import Product
     from app.domain.dimensions import format_dimensions
+    from app.models.product import Product
 
     # Проверка существования батча (get_batch бросает not_found) — побочный
     # эффект сохраняется, результат здесь не нужен.
@@ -472,7 +472,7 @@ async def hide_batch(
             code="reason_too_short",
             status_code=400,
         )
-    batch.deleted_at = datetime.now(timezone.utc)
+    batch.deleted_at = datetime.now(UTC)
     batch.deleted_by = user.id if user else None
     batch.delete_reason = reason
     await db.commit()
@@ -487,7 +487,7 @@ async def mark_rolled_back(
 ) -> StockImportBatch:
     """Перевести батч в ``rolled_back`` после успешной компенсации."""
     batch.status = StockImportBatchStatus.ROLLED_BACK
-    batch.rolled_back_at = datetime.now(timezone.utc)
+    batch.rolled_back_at = datetime.now(UTC)
     batch.rolled_back_by = user.id if user else None
     await db.commit()
     return batch

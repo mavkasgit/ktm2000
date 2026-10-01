@@ -39,7 +39,7 @@ class OutputRow:
     @property
     def remaining_quantity(self) -> Decimal:
         """Остаток выхода: max(0, произведено − использовано)."""
-        return max(Decimal("0"), self.produced_quantity - self.used_quantity)
+        return max(Decimal(0), self.produced_quantity - self.used_quantity)
 
 
 def build_output_rows(

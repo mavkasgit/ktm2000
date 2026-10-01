@@ -3,16 +3,15 @@
 Revision ID: 059_product_length_raw_length
 Revises: 058_product_pair_quantity_norms
 """
-from typing import Sequence, Union
+from collections.abc import Sequence
 
 import sqlalchemy as sa
 from alembic import op
 
-
 revision: str = "059_product_length_raw_length"
-down_revision: Union[str, None] = "058_product_pair_quantity_norms"
-branch_labels: Union[str, Sequence[str], None] = None
-depends_on: Union[str, Sequence[str], None] = None
+down_revision: str | None = "058_product_pair_quantity_norms"
+branch_labels: str | Sequence[str] | None = None
+depends_on: str | Sequence[str] | None = None
 
 CHECK_CONSTRAINT_NAME = "raw_length_mm_at_least_length_mm"
 ORM_CHECK_CONSTRAINT_NAME = "ck_product_lengths_raw_length_mm_at_least_length_mm"

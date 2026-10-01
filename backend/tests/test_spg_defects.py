@@ -1,14 +1,19 @@
 from decimal import Decimal
-import pytest
-from sqlalchemy import select
 
+import pytest
+from app.models.defect import Defect, DefectDecisionType, DefectStatus
 from app.models.product import Product, ProductType
+from app.models.route import (
+    ProductionRoute,
+    RouteOperation,
+    RouteRuleProfile,
+    RouteStage,
+)
 from app.models.section import Section
 from app.models.spg import StorageProductionGroup
-from app.models.route import ProductionRoute, RouteStage, RouteOperation, RouteRuleProfile
-from app.models.defect import Defect, DefectStatus, DefectDecisionType
 from app.models.user import User, UserRole
 from app.stock import Reason, StockCommand, StockCommandService, StockTransaction
+from sqlalchemy import select
 
 
 async def _make_admin(session, email: str = "admin-def@test.local") -> User:
@@ -124,17 +129,18 @@ async def test_get_product_route_stages(client, session):
 @pytest.mark.asyncio
 async def test_get_product_last_completed_operation(client, session):
     """Test last completed operation via StockTransaction."""
-    from app.models.work_task import WorkTask, WorkTaskStatus
-    from app.models.internal_plan import SectionPlanLine, InternalPlan
+    from datetime import date
+
+    from app.models.internal_plan import InternalPlan, SectionPlanLine
     from app.models.production_plan import (
-        ProductionPlan,
         PlanPosition,
-        PlanSourceType,
         PlanPositionStatus,
         PlanPositionValidationStatus,
+        PlanSourceType,
+        ProductionPlan,
     )
     from app.models.route import SectionOperation
-    from datetime import date
+    from app.models.work_task import WorkTask, WorkTaskStatus
 
     admin = await _make_admin(session)
     product = await _make_product(session, "FG-LAST-OP-TEST")
@@ -164,7 +170,7 @@ async def test_get_product_last_completed_operation(client, session):
         source_type=PlanSourceType.manual,
         source_sku=product.sku,
         source_name=product.name,
-        quantity=Decimal("100"),
+        quantity=Decimal(100),
         source_payload={},
         status=PlanPositionStatus.approved,
         validation_status=PlanPositionValidationStatus.valid,
@@ -184,7 +190,7 @@ async def test_get_product_last_completed_operation(client, session):
         route_id=route.id,
         route_stage_id=stage1.id,
         sequence=1,
-        planned_quantity=Decimal("100"),
+        planned_quantity=Decimal(100),
     )
     session.add(line)
     await session.flush()
@@ -194,7 +200,7 @@ async def test_get_product_last_completed_operation(client, session):
         section_id=sec_drill.id,
         product_id=product.id,
         route_stage_id=stage1.id,
-        planned_quantity=Decimal("100"),
+        planned_quantity=Decimal(100),
         status=WorkTaskStatus.completed,
         selected_operation_code="DRILL_OP",
     )
@@ -216,7 +222,7 @@ async def test_get_product_last_completed_operation(client, session):
     await svc.record(session, StockCommand(
         product_id=product.id, task_id=task.id,
         from_location_id=None, to_location_id=sec_drill.id,
-        quantity=Decimal("100"), reason=Reason.COMPLETE,
+        quantity=Decimal(100), reason=Reason.COMPLETE,
         created_by=admin.id,
     ))
     await session.commit()
@@ -413,7 +419,7 @@ async def test_manual_defect_scrap_exceeding_quantity(client, session):
     tx = await session.get(StockTransaction, defect.stock_transaction_id)
     assert tx is not None
     assert tx.reason == Reason.SCRAP
-    assert tx.quantity == Decimal("20")
+    assert tx.quantity == Decimal(20)
 
 
 

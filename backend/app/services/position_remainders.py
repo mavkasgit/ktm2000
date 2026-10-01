@@ -286,7 +286,7 @@ async def compute_position_stock_figures(
 
     result: dict[int, PositionStockFigures] = {}
     for position_id, effective_ids, required_quantity in positions:
-        own_demand = {product_id: required_quantity for product_id in effective_ids}
+        own_demand = dict.fromkeys(effective_ids, required_quantity)
         per_product = {
             product_id: product_stock_figures(
                 product_id=product_id,

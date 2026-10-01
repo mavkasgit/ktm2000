@@ -2,14 +2,13 @@
 from __future__ import annotations
 
 import pytest
+from app.core.config import settings
+from app.models.audit_log import AuditLog
+from app.models.user import User
+from app.services.audit_log_service import log_action
 from httpx import AsyncClient
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
-
-from app.core.config import settings
-from app.services.audit_log_service import log_action
-from app.models.audit_log import AuditLog
-from app.models.user import User
 
 pytestmark = pytest.mark.asyncio
 

@@ -20,12 +20,12 @@ def _status_from_cache(
     return resolve_work_task_status(
         current_status=task.status.value,
         planned_quantity=task.planned_quantity,
-        remaining_quantity=cache.get("remaining_quantity", Decimal("0")),
-        transferred_quantity=cache.get("transferred_quantity", Decimal("0")),
-        completed_quantity=cache.get("completed_quantity", Decimal("0")),
-        rejected_quantity=cache.get("rejected_quantity", Decimal("0")),
-        issued_quantity=cache.get("issued_quantity", Decimal("0")),
-        received_quantity=cache.get("received_quantity", Decimal("0")),
+        remaining_quantity=cache.get("remaining_quantity", Decimal(0)),
+        transferred_quantity=cache.get("transferred_quantity", Decimal(0)),
+        completed_quantity=cache.get("completed_quantity", Decimal(0)),
+        rejected_quantity=cache.get("rejected_quantity", Decimal(0)),
+        issued_quantity=cache.get("issued_quantity", Decimal(0)),
+        received_quantity=cache.get("received_quantity", Decimal(0)),
         transform_input_quantity=transform_input_quantity,
         transform_processed_quantity=transform_processed_quantity,
     )

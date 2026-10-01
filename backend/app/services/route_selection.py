@@ -1,7 +1,7 @@
 from __future__ import annotations
 
-from dataclasses import dataclass, field
 import re
+from dataclasses import dataclass, field
 from typing import Any
 
 from sqlalchemy import func, select
@@ -11,7 +11,6 @@ from app.models.product import Product
 from app.models.route import ProductionRoute, RouteSelectionRule, RouteStage
 from app.models.section import Section
 from app.services.color_extraction import resolve_payload_color
-
 
 Condition = dict[str, Any]
 Action = dict[str, Any]
@@ -474,7 +473,7 @@ async def select_route_for_payload(
             resolved_operations=resolved_operations,
         )
 
-    extra_count, _sort_order, _route_id, selected, _diagnostic = sorted(candidates, key=lambda item: (item[0], item[1], item[2]))[0]
+    extra_count, _sort_order, _route_id, selected, _diagnostic = min(candidates, key=lambda item: (item[0], item[1], item[2]))
     return RouteSelectionResult(
         route=selected,
         matched_rule_ids=matched_rule_ids,
@@ -736,7 +735,7 @@ def _lookup_context_value_with_details(
 def _list_values(value: Any) -> list[Any]:
     if isinstance(value, list):
         return value
-    if isinstance(value, tuple) or isinstance(value, set):
+    if isinstance(value, (tuple, set)):
         return list(value)
     if isinstance(value, str) and "," in value:
         return [part.strip() for part in value.split(",")]
@@ -879,7 +878,7 @@ def _is_empty(value: Any) -> bool:
         return True
     if isinstance(value, str):
         return not value.strip()
-    if isinstance(value, list) or isinstance(value, tuple) or isinstance(value, set) or isinstance(value, dict):
+    if isinstance(value, (list, tuple, set, dict)):
         return len(value) == 0
     return False
 

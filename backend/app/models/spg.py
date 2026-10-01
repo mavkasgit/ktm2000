@@ -1,7 +1,20 @@
 import enum
 from datetime import datetime
 
-from sqlalchemy import BigInteger, Boolean, DateTime, Enum as SAEnum, ForeignKey, Identity, Integer, String, Text, UniqueConstraint, func, text
+from sqlalchemy import (
+    BigInteger,
+    Boolean,
+    DateTime,
+    ForeignKey,
+    Identity,
+    Integer,
+    String,
+    Text,
+    UniqueConstraint,
+    func,
+    text,
+)
+from sqlalchemy import Enum as SAEnum
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
 from app.models.base import Base

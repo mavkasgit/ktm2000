@@ -1,5 +1,6 @@
+import contextlib
 from datetime import datetime
-from typing import Dict, List, Any
+from typing import Any
 
 from fastapi import APIRouter, Depends, Query
 from pydantic import BaseModel, ConfigDict
@@ -120,7 +121,7 @@ class AuditLogOut(BaseModel):
     action: str | None
     entity_type: str | None
     entity_id: int | None
-    changes: Dict[str, Any] | None
+    changes: dict[str, Any] | None
 
     model_config = ConfigDict(from_attributes=True)
 
@@ -132,7 +133,7 @@ class AuditLogCreate(BaseModel):
     section_id: int | None = None
     section_name: str | None = None
     section_code: str | None = None
-    task_ids: List[int] | None = None
+    task_ids: list[int] | None = None
     product_sku: str | None = None
     operation_name: str | None = None
     qty_text: str | None = None
@@ -141,13 +142,13 @@ class AuditLogCreate(BaseModel):
     action: str | None = None
     entity_type: str | None = None
     entity_id: int | None = None
-    changes: Dict[str, Any] | None = None
+    changes: dict[str, Any] | None = None
 
 
 class AuditLogsResponse(BaseModel):
-    items: List[AuditLogOut]
-    task_statuses: Dict[int, str]
-    counts: Dict[str, int]
+    items: list[AuditLogOut]
+    task_statuses: dict[int, str]
+    counts: dict[str, int]
     total: int
 
 
@@ -217,10 +218,8 @@ async def get_audit_logs(
     for log in logs:
         if log.task_ids:
             for tid_str in log.task_ids.split(","):
-                try:
+                with contextlib.suppress(ValueError):
                     all_task_ids.add(int(tid_str.strip()))
-                except ValueError:
-                    pass
 
     task_statuses = {}
     if all_task_ids:
@@ -260,13 +259,13 @@ async def get_audit_logs(
     )
 
 
-@router.get("/entity/{entity_type}/{entity_id}", response_model=List[AuditLogOut])
+@router.get("/entity/{entity_type}/{entity_id}", response_model=list[AuditLogOut])
 async def get_entity_audit_logs(
     entity_type: str,
     entity_id: int,
     db: AsyncSession = Depends(get_db),
     _current_user: User = Depends(get_current_user),
-) -> List[AuditLogOut]:
+) -> list[AuditLogOut]:
     """Получить историю изменений (Timeline) для конкретной сущности."""
     stmt = (
         select(AuditLog)

@@ -19,15 +19,15 @@ from decimal import Decimal
 from io import BytesIO
 
 import pytest
+from app.models import Product, ProductType, Section
+from app.models.route import SectionOperation
+from app.stock.models import QualityState, Reason, StockBalance, StockTransaction
+from app.stock.services import StockCommand, StockCommandService, StockValidationError
 from httpx import AsyncClient
 from openpyxl import Workbook
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.models import Product, ProductType, Section
-from app.models.route import SectionOperation
-from app.stock.models import QualityState, Reason, StockBalance, StockTransaction
-from app.stock.services import StockCommand, StockCommandService, StockValidationError
 from tests.test_integrity_invariants import assert_no_invariants_violations
 
 pytestmark = pytest.mark.asyncio
@@ -180,7 +180,7 @@ async def test_null_and_empty_operations_are_different_balance_rows(
         StockCommand(
             product_id=product.id,
             to_location_id=location.id,
-            quantity=Decimal("100"),
+            quantity=Decimal(100),
             reason=Reason.MANUAL_IN,
             quality_state=QualityState.GOOD,
             completed_operations=None,
@@ -192,7 +192,7 @@ async def test_null_and_empty_operations_are_different_balance_rows(
         StockCommand(
             product_id=product.id,
             to_location_id=location.id,
-            quantity=Decimal("30"),
+            quantity=Decimal(30),
             reason=Reason.MANUAL_IN,
             quality_state=QualityState.GOOD,
             completed_operations=[],
@@ -224,7 +224,7 @@ async def test_write_off_touches_only_matching_operations_row(
     sink = await _make_location(session, "OPS-WRITEOFF-SINK")
 
     svc = StockCommandService()
-    for qty, ops in ((Decimal("500"), ["SHOT"]), (Decimal("200"), None)):
+    for qty, ops in ((Decimal(500), ["SHOT"]), (Decimal(200), None)):
         await svc.record(
             session,
             StockCommand(
@@ -246,7 +246,7 @@ async def test_write_off_touches_only_matching_operations_row(
             product_id=product.id,
             from_location_id=location.id,
             to_location_id=sink.id,
-            quantity=Decimal("100"),
+            quantity=Decimal(100),
             reason=Reason.ADJUSTMENT_OUT,
             quality_state=QualityState.GOOD,
             completed_operations=["SHOT"],
@@ -285,7 +285,7 @@ async def test_write_off_without_matching_operations_row_is_rejected(
         StockCommand(
             product_id=product_id,
             to_location_id=location_id,
-            quantity=Decimal("500"),
+            quantity=Decimal(500),
             reason=Reason.MANUAL_IN,
             quality_state=QualityState.GOOD,
             completed_operations=["SHOT"],
@@ -302,7 +302,7 @@ async def test_write_off_without_matching_operations_row_is_rejected(
                 product_id=product_id,
                 from_location_id=location_id,
                 to_location_id=sink_id,
-                quantity=Decimal("10"),
+                quantity=Decimal(10),
                 reason=Reason.ADJUSTMENT_OUT,
                 quality_state=QualityState.GOOD,
                 completed_operations=None,

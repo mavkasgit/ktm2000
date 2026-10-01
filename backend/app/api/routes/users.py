@@ -1,5 +1,5 @@
-from datetime import datetime
 import logging
+from datetime import datetime
 
 from fastapi import APIRouter, Depends, HTTPException, Query, status
 from pydantic import BaseModel, ConfigDict, EmailStr
@@ -9,8 +9,8 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app.api.deps import require_role
 from app.core.config import settings
 from app.core.database import get_db
-from app.models.user import User, UserRole
 from app.models.section import Section
+from app.models.user import User, UserRole
 from app.services.users_queries import list_users_paginated
 
 router = APIRouter(prefix="/users", tags=["users"])
@@ -125,24 +125,26 @@ async def create_user(
 
     # 2. Проверка уникальности логина
     existing_username = await db.scalar(select(User).where(User.username == payload.username))
-    if existing_username is not None:
+    if existing_username is not None and (
+        not existing_user or existing_username.id != existing_user.id
+    ):
         # Если логин занят другим пользователем (не тем, кого мы мержим)
-        if not existing_user or existing_username.id != existing_user.id:
-            raise HTTPException(
-                status_code=status.HTTP_409_CONFLICT,
-                detail=f"User with username '{payload.username}' already exists",
-            )
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail=f"User with username '{payload.username}' already exists",
+        )
 
     # 3. Проверка уникальности email
     if payload.email:
         existing_email = await db.scalar(select(User).where(User.email == payload.email))
-        if existing_email is not None:
+        if existing_email is not None and (
+            not existing_user or existing_email.id != existing_user.id
+        ):
             # Если email занят другим пользователем (не тем, кого мы мержим)
-            if not existing_user or existing_email.id != existing_user.id:
-                raise HTTPException(
-                    status_code=status.HTTP_409_CONFLICT,
-                    detail=f"User with email '{payload.email}' already exists",
-                )
+            raise HTTPException(
+                status_code=status.HTTP_409_CONFLICT,
+                detail=f"User with email '{payload.email}' already exists",
+            )
 
     section_ids = []
     if payload.section_ids is not None:
@@ -224,12 +226,15 @@ async def update_user(
         )
 
     # When role sync from IdP is active, local role changes are forbidden
-    if payload.role is not None and payload.role != user.role:
-        if settings.AUTH_OIDC_SYNC_ROLE_FROM_IDP:
-            raise HTTPException(
-                status_code=status.HTTP_403_FORBIDDEN,
-                detail="Role is managed by Authentik (ktm_role claim). Local change forbidden.",
-            )
+    if (
+        payload.role is not None
+        and payload.role != user.role
+        and settings.AUTH_OIDC_SYNC_ROLE_FROM_IDP
+    ):
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="Role is managed by Authentik (ktm_role claim). Local change forbidden.",
+        )
 
     if payload.username is not None and payload.username != user.username:
         existing = await db.scalar(select(User).where(User.username == payload.username))

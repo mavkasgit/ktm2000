@@ -5,20 +5,30 @@ from decimal import Decimal
 from typing import TYPE_CHECKING
 
 from sqlalchemy import func, select
-from sqlalchemy.orm import selectinload
 from sqlalchemy.ext.asyncio import AsyncSession
+from sqlalchemy.orm import selectinload
 
 from app.models.internal_plan import InternalPlan, SectionPlanLine
 from app.models.production_plan import (
     PlanPosition,
     PlanPositionStatus,
+    PlanPositionValidationStatus,
     ProductionPlan,
     ProductionPlanStatus,
-    PlanPositionValidationStatus,
     require_current_length_model,
 )
-from app.models.release_batch import ReleaseBatch, ReleaseBatchPosition, ReleaseBatchStatus, ReleaseBatchType
-from app.models.route import ProductionRoute, RouteOperation, RouteStage, SectionOperation
+from app.models.release_batch import (
+    ReleaseBatch,
+    ReleaseBatchPosition,
+    ReleaseBatchStatus,
+    ReleaseBatchType,
+)
+from app.models.route import (
+    ProductionRoute,
+    RouteOperation,
+    RouteStage,
+    SectionOperation,
+)
 from app.models.section import Section
 from app.models.work_task import RESOLVED_WORK_TASK_STATUSES, WorkTask, WorkTaskStatus
 from app.services import product_pair_resolver
@@ -240,7 +250,7 @@ async def release_batch(
                 if transform_seq is not None and step_seq < transform_seq
                 else release_quantity
             )
-            planned_qty = max(Decimal("0"), basis_qty - covered_qty)
+            planned_qty = max(Decimal(0), basis_qty - covered_qty)
             step_planned_quantities.append((step, planned_qty))
             if planned_qty > 0 and first_nonzero_index is None:
                 first_nonzero_index = len(step_planned_quantities) - 1
@@ -311,9 +321,11 @@ async def release_batch(
             await db.flush()
 
             if task_status == WorkTaskStatus.completed:
+                from app.services.shopfloor.cache import (
+                    _refresh_section_plan_line_cache,
+                )
                 from app.services.shopfloor.common import _get_user_snapshot_name
-                from app.services.shopfloor.cache import _refresh_section_plan_line_cache
-                from app.stock import StockCommand, StockCommandService, Reason
+                from app.stock import Reason, StockCommand, StockCommandService
                 actor_id = batch.released_by or batch.created_by or 1
                 actor_name = await _get_user_snapshot_name(db, actor_id)
                 # Журнал действий (#116): автозавершение = Action по
@@ -349,8 +361,8 @@ async def release_batch(
         released_total = await _released_quantity(db, position)
         new_status = PlanPositionStatus.released if released_total >= position.quantity else PlanPositionStatus.approved
         if position.status != new_status and new_status == PlanPositionStatus.released:
-            from app.services.audit_log_service import log_action
             from app.models.audit_log import AuditAction, AuditEntityType
+            from app.services.audit_log_service import log_action
             await log_action(
                 db,
                 status="success",
@@ -538,7 +550,10 @@ async def _route_snapshot(
     position: PlanPosition | None = None,
     operation_names_by_key: dict[tuple[int, str], str] | None = None,
 ) -> dict:
-    from app.services.route_storage_classifier import SECTION_TYPE_WIP_STOCK, is_transit_stage
+    from app.services.route_storage_classifier import (
+        SECTION_TYPE_WIP_STOCK,
+        is_transit_stage,
+    )
 
     op_names = operation_names_by_key or {}
     snapshot_steps = []
@@ -613,7 +628,10 @@ async def _resolve_route_stage_operation_name(
     после baseline 004_routes (storage vs production), но оставлено как defensive fallback) — возвращает
     имя цеха, помеченное суффиксом, чтобы сразу было видно аномалию.
     """
-    from app.services.route_storage_classifier import is_transit_stage, stage_display_name
+    from app.services.route_storage_classifier import (
+        is_transit_stage,
+        stage_display_name,
+    )
 
     if is_transit_stage(stage):
         storage_section = await db.get(Section, stage.storage_section_id) if stage.storage_section_id else None

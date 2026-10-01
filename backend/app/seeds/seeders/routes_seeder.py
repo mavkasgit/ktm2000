@@ -4,18 +4,23 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app.models.defect import Defect
 from app.models.internal_plan import SectionPlanLine
 from app.models.rework_task import ReworkTask
-from app.models.route import ProductionRoute, RouteRuleProfile, RouteStage, RouteOperation
+from app.models.route import (
+    ProductionRoute,
+    RouteOperation,
+    RouteRuleProfile,
+    RouteStage,
+)
 from app.models.section import Section
 from app.models.transfer import Transfer
 from app.models.work_task import WorkTask
 from app.services.route_identity import find_route_by_code, find_route_by_name
-from app.services.route_transform import resolve_stage_transforms_dimensions
+from app.services.route_signature import refresh_route_signature
 from app.services.route_storage_classifier import (
-    is_storage_section,
     STAGE_KIND_PRODUCTION,
     STAGE_KIND_TRANSIT,
+    is_storage_section,
 )
-from app.services.route_signature import refresh_route_signature
+from app.services.route_transform import resolve_stage_transforms_dimensions
 
 # Operations that affect plan grouping (technological)
 SIGNIFICANT_OPS = {

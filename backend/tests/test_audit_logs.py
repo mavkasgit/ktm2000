@@ -1,9 +1,9 @@
 import pytest
-from app.models.work_task import WorkTask, WorkTaskStatus
+from app.models.audit_log import AuditLog
 from app.models.product import Product, ProductType
 from app.models.route import RouteStage
 from app.models.section import Section
-from app.models.audit_log import AuditLog
+from app.models.work_task import WorkTask, WorkTaskStatus
 
 
 @pytest.mark.asyncio
@@ -84,7 +84,13 @@ async def test_get_audit_logs_task_statuses(client, session) -> None:
 
     # Создадим SectionPlanLine
     from app.models.internal_plan import InternalPlan, SectionPlanLine
-    from app.models.production_plan import PlanPosition, ProductionPlan, PlanPositionStatus, PlanPositionValidationStatus, PlanSourceType
+    from app.models.production_plan import (
+        PlanPosition,
+        PlanPositionStatus,
+        PlanPositionValidationStatus,
+        PlanSourceType,
+        ProductionPlan,
+    )
     plan = ProductionPlan(plan_no="PL-T", name="Plan Test")
     session.add(plan)
     await session.flush()

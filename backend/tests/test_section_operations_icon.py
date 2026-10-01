@@ -1,9 +1,8 @@
 """Tests for section operations icon/icon_color CRUD."""
 import pytest
-from sqlalchemy import select
-
 from app.models.route import SectionOperation
 from app.models.section import Section
+from sqlalchemy import select
 
 
 async def _make_section(session, code: str = "TEST-DRILL", name: str = "Drill Test") -> Section:

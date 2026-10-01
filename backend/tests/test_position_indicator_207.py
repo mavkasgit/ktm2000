@@ -19,8 +19,6 @@ from datetime import UTC, datetime
 from decimal import Decimal
 
 import pytest
-from sqlalchemy.ext.asyncio import AsyncSession
-
 from app.models.internal_plan import InternalPlan, SectionPlanLine
 from app.models.production_plan import (
     PlanPosition,
@@ -34,9 +32,15 @@ from app.models.route import ProductionRoute, RouteStage
 from app.models.section import Section
 from app.models.work_task import WorkTask, WorkTaskStatus
 from app.stock import Reason, StockCommand, StockCommandService
+from sqlalchemy.ext.asyncio import AsyncSession
+
 from tests.helpers.completed_operations import (
     build_plan as _make_plan,
+)
+from tests.helpers.completed_operations import (
     build_product as _make_product,
+)
+from tests.helpers.completed_operations import (
     build_stock_to_shop_route as _make_route,
 )
 
@@ -172,7 +176,7 @@ async def test_indicator_does_not_subtract_the_position_own_demand(
         prod_section=prod,
         source_sku=product.sku,
         product_id=product.id,
-        quantity=Decimal("1512"),
+        quantity=Decimal(1512),
         status=PlanPositionStatus.released,
     )
 
@@ -204,7 +208,7 @@ async def test_other_open_position_lowers_available_but_not_free_stock(
         prod_section=prod,
         source_sku=product.sku,
         product_id=product.id,
-        quantity=Decimal("1500"),
+        quantity=Decimal(1500),
         status=PlanPositionStatus.released,
     )
     small = await _add_position(
@@ -215,7 +219,7 @@ async def test_other_open_position_lowers_available_but_not_free_stock(
         prod_section=prod,
         source_sku=product.sku,
         product_id=product.id,
-        quantity=Decimal("400"),
+        quantity=Decimal(400),
         status=PlanPositionStatus.released,
     )
 
@@ -251,7 +255,7 @@ async def test_position_outside_the_demand_does_not_increase_available_stock(
         prod_section=prod,
         source_sku=product.sku,
         product_id=product.id,
-        quantity=Decimal("500"),
+        quantity=Decimal(500),
     )
     released = await _add_position(
         session,
@@ -261,7 +265,7 @@ async def test_position_outside_the_demand_does_not_increase_available_stock(
         prod_section=prod,
         source_sku=product.sku,
         product_id=product.id,
-        quantity=Decimal("300"),
+        quantity=Decimal(300),
         status=PlanPositionStatus.released,
     )
 
@@ -297,7 +301,7 @@ async def test_scrap_balance_is_excluded_and_raw_stock_is_included(
         prod_section=prod,
         source_sku=product.sku,
         product_id=product.id,
-        quantity=Decimal("200"),
+        quantity=Decimal(200),
         status=PlanPositionStatus.released,
     )
     second = await _add_position(
@@ -308,7 +312,7 @@ async def test_scrap_balance_is_excluded_and_raw_stock_is_included(
         prod_section=prod,
         source_sku=product.sku,
         product_id=product.id,
-        quantity=Decimal("300"),
+        quantity=Decimal(300),
         status=PlanPositionStatus.released,
     )
 
@@ -378,7 +382,7 @@ async def test_missing_availability_is_null_and_real_zero_is_zero(
         prod_section=prod,
         source_sku="IND-GHOST-A+IND-GHOST-B",
         product_id=None,
-        quantity=Decimal("100"),
+        quantity=Decimal(100),
         source_payload={
             "paired_profile": True,
             "components": [{"sku": "IND-GHOST-A"}, {"sku": "IND-GHOST-B"}],
@@ -393,7 +397,7 @@ async def test_missing_availability_is_null_and_real_zero_is_zero(
         prod_section=prod,
         source_sku=product.sku,
         product_id=product.id,
-        quantity=Decimal("100"),
+        quantity=Decimal(100),
     )
 
     rows = await _rows_by_id(client)
@@ -431,7 +435,7 @@ async def test_row_list_and_position_card_agree_on_indicator_numbers(
         prod_section=prod,
         source_sku=product.sku,
         product_id=product.id,
-        quantity=Decimal("200"),
+        quantity=Decimal(200),
     )
     released = await _add_position(
         session,
@@ -441,7 +445,7 @@ async def test_row_list_and_position_card_agree_on_indicator_numbers(
         prod_section=prod,
         source_sku=product.sku,
         product_id=product.id,
-        quantity=Decimal("300"),
+        quantity=Decimal(300),
         status=PlanPositionStatus.released,
     )
 

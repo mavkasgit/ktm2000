@@ -37,27 +37,6 @@ from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.idempotency import raise_idempotency_conflict_on_violation
-from app.models.internal_plan import SectionPlanLine
-from app.models.section import Section
-from app.models.transfer import Transfer, TransferStatus
-from app.models.work_task import CLOSED_WORK_TASK_STATUSES, WorkTask, WorkTaskStatus
-
-from app.services.shopfloor.cache import (
-    _refresh_section_plan_line_cache,
-)
-from app.services.shopfloor.common import (
-    _check_idempotency,
-    _ensure_positive,
-    _get_route_stage,
-    _require_mutable_task,
-    _get_task,
-    _get_task_for_update,
-    _get_transfer,
-    _get_user_snapshot_name,
-    _to_decimal,
-    _transfer_no,
-    enrich_comment_with_route_operations,
-)
 
 # ─── Ledger helpers (Этап 2) ─────────────────────────────────────────────────
 # Transfer пишет две StockTransaction (TRANSFER_SEND + TRANSFER_RECEIVE) через
@@ -66,17 +45,37 @@ from app.services.shopfloor.common import (
 # на quantity. Отмена — компенсационные транзакции (append-only).
 # Коррекция — in-place изменение quantity активных транзакций.
 from app.domain.dimensions import canonicalize_dimensions
+from app.models.internal_plan import SectionPlanLine
+from app.models.section import Section
+from app.models.transfer import Transfer, TransferStatus
+from app.models.work_task import CLOSED_WORK_TASK_STATUSES, WorkTask, WorkTaskStatus
 from app.services.action_journal_service import action_journal_service
 from app.services.material_operations import completed_operations_for_task
+from app.services.shopfloor.cache import (
+    _refresh_section_plan_line_cache,
+)
+from app.services.shopfloor.common import (
+    _check_idempotency,
+    _ensure_positive,
+    _get_route_stage,
+    _get_task,
+    _get_task_for_update,
+    _get_transfer,
+    _get_user_snapshot_name,
+    _require_mutable_task,
+    _to_decimal,
+    _transfer_no,
+    enrich_comment_with_route_operations,
+)
+from app.services.shopfloor.output_rows import (
+    UsedSource,
+    build_task_output_rows,
+)
 from app.stock.models import QualityState, Reason, StockTransaction
 from app.stock.services import (
     StockCommand,
     StockCommandService,
     dimensions_match_clause,
-)
-from app.services.shopfloor.output_rows import (
-    UsedSource,
-    build_task_output_rows,
 )
 from app.transfers.transferable import task_transferable
 
@@ -148,7 +147,7 @@ async def _record_transfer_send_stock_tx(
 
 async def _find_transfer_send_action(
     db: AsyncSession, transfer_id: int,
-) -> "Action | None":
+) -> Action | None:
     """Актуальный активный ``transfer_send`` Action для Transfer.
 
     У живого Transfer запись одна; ``order_by(id desc)`` — защита на
@@ -189,7 +188,7 @@ async def transfer_send(
     allow_over_plan: bool = False,
     physical_handover_at: datetime | None = None,
     dimensions: dict | None = None,
-    action: "Action | None" = None,
+    action: Action | None = None,
     quality_state: QualityState = QualityState.GOOD,
 ) -> dict:
     """Send ``quantity`` from a completed SectionTask to the next route step.
@@ -484,9 +483,9 @@ async def transfer_send(
         await _refresh_section_plan_line_cache(db, to_task_after.section_plan_line_id)
 
     # Запись лога аудита (передача)
-    from app.services.audit_log_service import log_action
     from app.models.audit_log import AuditAction, AuditEntityType
     from app.models.product import Product
+    from app.services.audit_log_service import log_action
     
     from_section = await db.get(Section, from_task.section_id)
     to_section = await db.get(Section, to_task.section_id)
@@ -538,7 +537,12 @@ async def correct_transfer(
     API-контракт (breaking, тикет #124): возвращает ``new_transfer_id``
     (голова amend-цепочки) и ``amended_transfer_id`` (списанный Transfer).
     """
-    from app.reversal.errors import AlreadyReversed, CoverageShortfall, NotAllowed, StalePlanToken
+    from app.reversal.errors import (
+        AlreadyReversed,
+        CoverageShortfall,
+        NotAllowed,
+        StalePlanToken,
+    )
     from app.reversal.service import ReversalService
 
     transfer = await _get_transfer(db, transfer_id)
@@ -637,10 +641,10 @@ async def correct_transfer(
     await _refresh_section_plan_line_cache(db, to_task.section_plan_line_id)
 
     # 7. Audit log.
-    from app.services.audit_log_service import log_action
     from app.models.audit_log import AuditAction, AuditEntityType
     from app.models.product import Product
     from app.models.section import Section
+    from app.services.audit_log_service import log_action
 
     from_section = await db.get(Section, transfer.from_section_id)
     await db.get(Section, transfer.to_section_id)
@@ -693,7 +697,12 @@ async def cancel_transfer(
     (приёмная сторона уже завершила часть) — предварительная проверка
     до вызова reverse.
     """
-    from app.reversal.errors import AlreadyReversed, CoverageShortfall, NotAllowed, StalePlanToken
+    from app.reversal.errors import (
+        AlreadyReversed,
+        CoverageShortfall,
+        NotAllowed,
+        StalePlanToken,
+    )
     from app.reversal.service import ReversalService
 
     transfer = await _get_transfer(db, transfer_id)
@@ -775,10 +784,10 @@ async def cancel_transfer(
     await _refresh_section_plan_line_cache(db, to_task.section_plan_line_id)
 
     # Audit log (отмена передачи).
-    from app.services.audit_log_service import log_action
     from app.models.audit_log import AuditAction, AuditEntityType
     from app.models.product import Product
     from app.models.section import Section
+    from app.services.audit_log_service import log_action
 
     from_section = await db.get(Section, transfer.from_section_id)
     await db.get(Section, transfer.to_section_id)

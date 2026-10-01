@@ -1,7 +1,18 @@
 import enum
 from datetime import datetime
 
-from sqlalchemy import BigInteger, DateTime, Enum, ForeignKey, Identity, Index, String, text, Table, Column
+from sqlalchemy import (
+    BigInteger,
+    Column,
+    DateTime,
+    Enum,
+    ForeignKey,
+    Identity,
+    Index,
+    String,
+    Table,
+    text,
+)
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
 from app.models.base import Base
@@ -75,6 +86,7 @@ class User(Base):
 
 
 from sqlalchemy import event
+
 
 @event.listens_for(User, 'before_insert')
 def set_default_username(mapper, connection, target: User):

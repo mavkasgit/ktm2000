@@ -8,11 +8,11 @@ from __future__ import annotations
 from decimal import Decimal
 
 import pytest
+from app.models.action_journal import Action
+from app.transfers.services import transfer_send
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.models.action_journal import Action
-from app.transfers.services import transfer_send
 from tests.stock.test_transfer_stage2 import (
     _make_tasks_transferable,
     _make_two_ghp_setup,
@@ -23,13 +23,13 @@ pytestmark = pytest.mark.asyncio
 
 
 async def _setup_action(session: AsyncSession, client, sku: str) -> tuple[Action, dict]:
-    setup = await _make_two_ghp_setup(session, sku=sku, qty=Decimal("10"))
+    setup = await _make_two_ghp_setup(session, sku=sku, qty=Decimal(10))
     ctx = await _make_tasks_transferable(session, client, setup)
     result = await transfer_send(
         session,
         from_task_id=ctx["from_task_id"],
         to_task_id=ctx["to_task_id"],
-        quantity=Decimal("3"),
+        quantity=Decimal(3),
         actor_id=ctx["user"].id,
         idempotency_key=f"{sku}:t1",
     )
@@ -122,7 +122,7 @@ async def test_reverse_stale_token_maps_409(session: AsyncSession, client) -> No
         session,
         from_task_id=ctx["from_task_id"],
         to_task_id=ctx["to_task_id"],
-        quantity=Decimal("1"),
+        quantity=Decimal(1),
         actor_id=ctx["user"].id,
         idempotency_key="rvapi3:t2",
     )
@@ -137,7 +137,7 @@ async def test_reverse_stale_token_maps_409(session: AsyncSession, client) -> No
 
 
 async def test_not_allowed_preview_blocked(session: AsyncSession, client) -> None:
-    action, ctx = await _setup_action(session, client, "RVAPI4")
+    _action, ctx = await _setup_action(session, client, "RVAPI4")
     unknown = Action(action_type="nonexistent_type", ref_id=999999, actor="test")
     session.add(unknown)
     await session.commit()
@@ -167,13 +167,13 @@ async def test_domain_cancelled_transfer_preview_blocked(
 ) -> None:
     """Отменённая через cancel_transfer передача: Action уже reversed,
     preview-reverse → 409 AlreadyReversed; confirm с подделкой — тоже 409."""
-    setup = await _make_two_ghp_setup(session, sku="RVAPI5", qty=Decimal("10"))
+    setup = await _make_two_ghp_setup(session, sku="RVAPI5", qty=Decimal(10))
     ctx = await _make_tasks_transferable(session, client, setup)
     result = await transfer_send(
         session,
         from_task_id=ctx["from_task_id"],
         to_task_id=ctx["to_task_id"],
-        quantity=Decimal("3"),
+        quantity=Decimal(3),
         actor_id=ctx["user"].id,
         idempotency_key="rvapi5:t1",
     )

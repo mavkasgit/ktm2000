@@ -15,15 +15,15 @@
 from __future__ import annotations
 
 import pytest
-from fastapi.routing import APIRoute
-from httpx import AsyncClient
-from sqlalchemy.ext.asyncio import AsyncSession
-
 from app.api.deps import PLAN_OWNER_ROLES, PLAN_WRITER_ROLES, READER_ROLES
 from app.core.config import settings
 from app.main import app
 from app.models.production_plan import PlanPositionStatus
 from app.models.user import UserRole
+from fastapi.routing import APIRoute
+from httpx import AsyncClient
+from sqlalchemy.ext.asyncio import AsyncSession
+
 from tests.helpers.auth import user_headers
 from tests.helpers.plan import make_plan_with_positions
 
@@ -133,7 +133,7 @@ def _declared_roles(dependant) -> frozenset[UserRole] | None:
 def _collect_guards() -> dict[tuple[str, str], frozenset[UserRole] | None]:
     guards: dict[tuple[str, str], frozenset[UserRole] | None] = {}
     for path, route in _iter_api_routes(app.routes, "/api"):
-        if not (path.startswith("/api/production-plans") or path.startswith("/api/imports")):
+        if not path.startswith(("/api/production-plans", "/api/imports")):
             continue
         for method in sorted(route.methods - {"HEAD", "OPTIONS"}):
             guards[(method, path)] = _declared_roles(route.dependant)

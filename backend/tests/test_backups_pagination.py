@@ -7,7 +7,6 @@ from datetime import datetime, timedelta
 from pathlib import Path
 
 import pytest
-
 from app.api import backups as backups_api
 
 
@@ -210,8 +209,8 @@ def test_backups_sort_table_keys_match_valid_fields() -> None:
     либо 400 на существующем поле, либо поле в контракте без ключа.
     """
     assert set(backups_api._SORT_KEYS) == backups_api.VALID_SORT_FIELDS
-    assert backups_api.VALID_SORT_FIELDS == {
+    assert {
         "filename", "db_name", "backup_type", "size", "created_at", "comment",
-    }
+    } == backups_api.VALID_SORT_FIELDS
     assert set(backups_api._SORT_NULLS_LAST_FIELDS) <= backups_api.VALID_SORT_FIELDS
     assert backups_api._SORT_DEFAULT.field in backups_api.VALID_SORT_FIELDS

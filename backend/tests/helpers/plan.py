@@ -11,8 +11,7 @@ from __future__ import annotations
 from datetime import date
 from decimal import Decimal
 
-from sqlalchemy.ext.asyncio import AsyncSession
-
+from app.models.product import Product, ProductType
 from app.models.production_plan import (
     PlanPosition,
     PlanPositionStatus,
@@ -21,9 +20,9 @@ from app.models.production_plan import (
     ProductionPlan,
     ProductionPlanStatus,
 )
-from app.models.product import Product, ProductType
 from app.models.route import ProductionRoute, RouteOperation, RouteStage
 from app.models.section import Section
+from sqlalchemy.ext.asyncio import AsyncSession
 
 
 async def make_route(session: AsyncSession, sku: str) -> tuple[Product, ProductionRoute]:
@@ -99,7 +98,7 @@ async def make_plan_with_positions(
             source_type=PlanSourceType.manual,
             source_sku=product.sku,
             source_name=product.name,
-            quantity=Decimal("10"),
+            quantity=Decimal(10),
             source_payload={},
             status=target_status,
             validation_status=PlanPositionValidationStatus.valid,

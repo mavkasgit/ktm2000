@@ -15,9 +15,6 @@ from __future__ import annotations
 from decimal import Decimal
 
 import pytest
-from sqlalchemy import select
-from sqlalchemy.ext.asyncio import AsyncSession
-
 from app.models.action_journal import Action
 from app.models.defect import DefectDecisionType
 from app.models.section import Section
@@ -43,13 +40,19 @@ from app.stock import (
     StockTransaction,
 )
 from app.transfers.services import transfer_send
+from sqlalchemy import select
+from sqlalchemy.ext.asyncio import AsyncSession
+
 from tests.helpers.completed_operations import build_operation_route, ops_through
 from tests.stock.helpers import (
     FAKE_DEFECT_DECISION_MAP,
     FAKE_SCRAP_POLICY,
     record_transfer_receive,
 )
-from tests.test_integrity_invariants import _auth_headers, assert_no_invariants_violations
+from tests.test_integrity_invariants import (
+    _auth_headers,
+    assert_no_invariants_violations,
+)
 
 pytestmark = pytest.mark.asyncio
 
@@ -261,7 +264,7 @@ async def test_transfer_out_of_prep_stock_carries_all_route_operations(
         user_id=fx["user"].id,
         product_id=fx["product"].id,
         location_id=prep.section_id,
-        qty=Decimal("100"),
+        qty=Decimal(100),
         ops=await ops_of_task(session, prep),
     )
 
@@ -269,7 +272,7 @@ async def test_transfer_out_of_prep_stock_carries_all_route_operations(
         session,
         from_task_id=prep.id,
         to_task_id=assembly.id,
-        quantity=Decimal("10"),
+        quantity=Decimal(10),
         actor_id=fx["user"].id,
         allow_over_plan=True,
     )
@@ -305,7 +308,7 @@ async def test_transfer_out_of_raw_stock_carries_only_issue_raw(
         user_id=fx["user"].id,
         product_id=fx["product"].id,
         location_id=raw.section_id,
-        qty=Decimal("100"),
+        qty=Decimal(100),
         ops=await ops_of_task(session, raw),
     )
 
@@ -313,7 +316,7 @@ async def test_transfer_out_of_raw_stock_carries_only_issue_raw(
         session,
         from_task_id=raw.id,
         to_task_id=press.id,
-        quantity=Decimal("10"),
+        quantity=Decimal(10),
         actor_id=fx["user"].id,
         allow_over_plan=True,
     )
@@ -341,13 +344,13 @@ async def test_complete_task_good_and_scrap_carry_task_stage_operations(
     """
     fx = await build_operation_route(session, sku="COPTASK", stages=TASK_STAGES)
     press = fx["tasks"][1]
-    await _issue_to_task(session, fx, press, qty=Decimal("100"))
+    await _issue_to_task(session, fx, press, qty=Decimal(100))
 
     result = await complete_task(
         session,
         task_id=press.id,
-        good_quantity=Decimal("7"),
-        defect_quantity=Decimal("3"),
+        good_quantity=Decimal(7),
+        defect_quantity=Decimal(3),
         actor_id=fx["user"].id,
         defect_reason="brak",
         **FAKE_SCRAP_POLICY,
@@ -399,20 +402,20 @@ async def test_defect_decide_carries_expected_operations(
     # (его возвращают назад по маршруту). Обе группы нужны этому тесту,
     # потому что решения по дефекту параметризованы по обоим направлениям.
     await _issue_to_task(
-        session, fx, shot, qty=Decimal("100"),
+        session, fx, shot, qty=Decimal(100),
         ops=await ops_of_task(session, shot),
     )
     await _issue_to_task(
-        session, fx, shot, qty=Decimal("100"),
+        session, fx, shot, qty=Decimal(100),
         ops=await ops_of_task_through_previous(session, shot),
     )
-    defect_id = await _open_defect(session, fx, shot, qty=Decimal("5"))
+    defect_id = await _open_defect(session, fx, shot, qty=Decimal(5))
 
     await defect_decide(
         session,
         defect_id=defect_id,
         decision_type=decision,
-        quantity=Decimal("5"),
+        quantity=Decimal(5),
         actor_id=fx["user"].id,
         idempotency_key=f"k-{decision.value}",
         defect_decision_map=FAKE_DEFECT_DECISION_MAP,
@@ -450,7 +453,7 @@ async def test_return_remainder_carries_previous_stage_operations(
     # Возврат остатка списывает материал, не прошедший «Дробеструй», —
     # группа ДО своего этапа.
     await _issue_to_task(
-        session, fx, shot, qty=Decimal("100"),
+        session, fx, shot, qty=Decimal(100),
         ops=await ops_of_task_through_previous(session, shot),
     )
 
@@ -485,7 +488,7 @@ async def test_transform_consume_and_outputs_carry_stage_appropriate_operations(
         sku="TRFMOPS",
         stages=SAW_STAGES,
         transform_at=2,
-        input_quantity=Decimal("100"),
+        input_quantity=Decimal(100),
         input_dimensions=dict(DIMS_IN),
         outputs=SAW_OUTPUTS,
     )
@@ -495,7 +498,7 @@ async def test_transform_consume_and_outputs_carry_stage_appropriate_operations(
         user_id=fx["user"].id,
         product_id=fx["product"].id,
         location_id=saw.section_id,
-        qty=Decimal("100"),
+        qty=Decimal(100),
         dimensions=dict(DIMS_IN),
         ops=await ops_of_task_through_previous(session, saw),
     )
@@ -503,8 +506,8 @@ async def test_transform_consume_and_outputs_carry_stage_appropriate_operations(
     await complete_task(
         session,
         task_id=saw.id,
-        good_quantity=Decimal("100"),
-        defect_quantity=Decimal("0"),
+        good_quantity=Decimal(100),
+        defect_quantity=Decimal(0),
         actor_id=fx["user"].id,
         **FAKE_SCRAP_POLICY,
     )
@@ -539,7 +542,7 @@ async def test_reverse_transfer_send_mirrors_completed_operations(
         user_id=fx["user"].id,
         product_id=fx["product"].id,
         location_id=prep.section_id,
-        qty=Decimal("100"),
+        qty=Decimal(100),
         ops=await ops_of_task(session, prep),
     )
 
@@ -547,7 +550,7 @@ async def test_reverse_transfer_send_mirrors_completed_operations(
         session,
         from_task_id=prep.id,
         to_task_id=assembly.id,
-        quantity=Decimal("10"),
+        quantity=Decimal(10),
         actor_id=fx["user"].id,
         allow_over_plan=True,
     )
@@ -593,7 +596,7 @@ async def test_amend_transfer_send_mirrors_completed_operations(
         user_id=fx["user"].id,
         product_id=fx["product"].id,
         location_id=prep.section_id,
-        qty=Decimal("100"),
+        qty=Decimal(100),
         ops=await ops_of_task(session, prep),
     )
 
@@ -601,7 +604,7 @@ async def test_amend_transfer_send_mirrors_completed_operations(
         session,
         from_task_id=prep.id,
         to_task_id=assembly.id,
-        quantity=Decimal("10"),
+        quantity=Decimal(10),
         actor_id=fx["user"].id,
         allow_over_plan=True,
     )
@@ -655,12 +658,12 @@ async def test_reverse_task_complete_mirrors_completed_operations(
     """Компенсация task_complete зеркалит признак выпуска."""
     fx = await build_operation_route(session, sku="REVCOMP", stages=TASK_STAGES)
     press = fx["tasks"][1]
-    await _issue_to_task(session, fx, press, qty=Decimal("100"))
+    await _issue_to_task(session, fx, press, qty=Decimal(100))
     await complete_task(
         session,
         task_id=press.id,
-        good_quantity=Decimal("10"),
-        defect_quantity=Decimal("0"),
+        good_quantity=Decimal(10),
+        defect_quantity=Decimal(0),
         actor_id=fx["user"].id,
         **FAKE_SCRAP_POLICY,
     )
@@ -720,12 +723,12 @@ async def test_plan_driven_writes_never_store_null_completed_operations(
     await session.flush()
     fx = await build_operation_route(session, sku="NOINVN", stages=TASK_STAGES)
     press, shot = fx["tasks"][1], fx["tasks"][2]
-    await _issue_to_task(session, fx, press, qty=Decimal("100"))
+    await _issue_to_task(session, fx, press, qty=Decimal(100))
     await complete_task(
         session,
         task_id=press.id,
-        good_quantity=Decimal("10"),
-        defect_quantity=Decimal("0"),
+        good_quantity=Decimal(10),
+        defect_quantity=Decimal(0),
         actor_id=fx["user"].id,
         **FAKE_SCRAP_POLICY,
     )
@@ -733,16 +736,16 @@ async def test_plan_driven_writes_never_store_null_completed_operations(
         session,
         from_task_id=press.id,
         to_task_id=shot.id,
-        quantity=Decimal("5"),
+        quantity=Decimal(5),
         actor_id=fx["user"].id,
         allow_over_plan=True,
     )
-    await _issue_to_task(session, fx, shot, qty=Decimal("5"))
+    await _issue_to_task(session, fx, shot, qty=Decimal(5))
     await complete_task(
         session,
         task_id=shot.id,
-        good_quantity=Decimal("3"),
-        defect_quantity=Decimal("2"),
+        good_quantity=Decimal(3),
+        defect_quantity=Decimal(2),
         actor_id=fx["user"].id,
         defect_reason="brak",
         **FAKE_SCRAP_POLICY,
@@ -750,7 +753,7 @@ async def test_plan_driven_writes_never_store_null_completed_operations(
     await final_release(
         session,
         task_id=shot.id,
-        quantity=Decimal("3"),
+        quantity=Decimal(3),
         actor_id=fx["user"].id,
     )
 
@@ -765,7 +768,7 @@ async def test_plan_driven_writes_never_store_null_completed_operations(
         ],
         transform_at=2,
         with_plan_lines=False,
-        position_input_quantity=Decimal("0"),
+        position_input_quantity=Decimal(0),
         position_outputs=[
             {"row_number": 1, "quantity": "100", "dimensions": {"length_mm": 900}}
         ],
@@ -811,12 +814,12 @@ async def test_completed_operations_come_from_section_operations(
     """
     fx = await build_operation_route(session, sku="REFSRC", stages=TASK_STAGES)
     shot = fx["tasks"][2]
-    await _issue_to_task(session, fx, shot, qty=Decimal("100"))
+    await _issue_to_task(session, fx, shot, qty=Decimal(100))
     await complete_task(
         session,
         task_id=shot.id,
-        good_quantity=Decimal("10"),
-        defect_quantity=Decimal("0"),
+        good_quantity=Decimal(10),
+        defect_quantity=Decimal(0),
         actor_id=fx["user"].id,
         **FAKE_SCRAP_POLICY,
     )
@@ -860,19 +863,19 @@ async def test_final_release_carries_task_stage_operations(
     session.add(output_stock)
     await session.commit()
 
-    await _issue_to_task(session, fx, assembly, qty=Decimal("100"))
+    await _issue_to_task(session, fx, assembly, qty=Decimal(100))
     await complete_task(
         session,
         task_id=assembly.id,
-        good_quantity=Decimal("8"),
-        defect_quantity=Decimal("0"),
+        good_quantity=Decimal(8),
+        defect_quantity=Decimal(0),
         actor_id=fx["user"].id,
         **FAKE_SCRAP_POLICY,
     )
     released = await final_release(
         session,
         task_id=assembly.id,
-        quantity=Decimal("8"),
+        quantity=Decimal(8),
         actor_id=fx["user"].id,
     )
     await session.commit()
@@ -910,7 +913,7 @@ async def test_auto_release_remainder_completion_carries_operations(
         ],
         transform_at=2,
         with_plan_lines=False,
-        position_input_quantity=Decimal("0"),
+        position_input_quantity=Decimal(0),
         position_outputs=[
             {"row_number": 1, "quantity": "100", "dimensions": {"length_mm": 900}}
         ],

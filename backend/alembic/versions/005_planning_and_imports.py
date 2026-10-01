@@ -8,17 +8,16 @@ Revises: 004_routes
 Create Date: 2026-07-05 19:00:00.000000
 """
 
-from typing import Sequence, Union
+from collections.abc import Sequence
 
-from alembic import op
 import sqlalchemy as sa
+from alembic import op
 from sqlalchemy.dialects import postgresql
 
-
 revision: str = "005_planning_and_imports"
-down_revision: Union[str, None] = "004_routes"
-branch_labels: Union[str, Sequence[str], None] = None
-depends_on: Union[str, Sequence[str], None] = None
+down_revision: str | None = "004_routes"
+branch_labels: str | Sequence[str] | None = None
+depends_on: str | Sequence[str] | None = None
 
 
 def upgrade() -> None:
@@ -165,10 +164,8 @@ def upgrade() -> None:
     op.create_index('ix_history_position_status_time', 'position_status_history', ['plan_position_id', 'to_status', 'changed_at'], unique=False)
 
     # --- DATA ---
-    pass
 
     # --- TRIGGERS ---
-    pass
 
 
 def downgrade() -> None:

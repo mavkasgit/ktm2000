@@ -3,11 +3,30 @@ import re
 from typing import Any
 
 from sqlalchemy import (
-    Boolean, Enum, Float, String, text, BigInteger, Identity, ARRAY,
-    ForeignKey, CheckConstraint, Index, Numeric, UniqueConstraint, select, or_,
+    ARRAY,
+    BigInteger,
+    Boolean,
+    CheckConstraint,
+    Enum,
+    Float,
+    ForeignKey,
+    Identity,
+    Index,
+    Numeric,
+    String,
+    UniqueConstraint,
+    or_,
+    select,
+    text,
 )
 from sqlalchemy.dialects.postgresql import JSONB
-from sqlalchemy.orm import Mapped, column_property, declared_attr, mapped_column, relationship
+from sqlalchemy.orm import (
+    Mapped,
+    column_property,
+    declared_attr,
+    mapped_column,
+    relationship,
+)
 from sqlalchemy.orm.attributes import instance_state
 
 from app.models.base import Base

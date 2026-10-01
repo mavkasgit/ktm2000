@@ -17,9 +17,6 @@ from datetime import date
 from decimal import Decimal
 
 import pytest
-from sqlalchemy import func, select
-from sqlalchemy.ext.asyncio import AsyncSession
-
 from app.models import Product, ProductType, Section, User, UserRole
 from app.models.defect import Defect
 from app.models.internal_plan import InternalPlan, InternalPlanStatus, SectionPlanLine
@@ -37,7 +34,6 @@ from app.models.work_task import WorkTask, WorkTaskStatus
 from app.services.material_operations import completed_operations_for_task
 from app.services.shopfloor.operations_tasks import complete_task
 from app.services.shopfloor.queries_sections import get_section_board
-from tests.stock.helpers import canon_scrap_section_id
 from app.stock import (
     QualityState,
     Reason,
@@ -52,6 +48,10 @@ from app.stock.services import (
     completed_operations_match_clause,
     dimensions_match_clause,
 )
+from sqlalchemy import func, select
+from sqlalchemy.ext.asyncio import AsyncSession
+
+from tests.stock.helpers import canon_scrap_section_id
 from tests.test_integrity_invariants import (
     assert_no_stock_ledger_invariants_violations,
 )
@@ -75,8 +75,8 @@ async def _make_transform_setup(
     session: AsyncSession,
     *,
     sku: str,
-    planned_quantity: Decimal = Decimal("200"),
-    input_quantity: Decimal = Decimal("100"),
+    planned_quantity: Decimal = Decimal(200),
+    input_quantity: Decimal = Decimal(100),
     input_dimensions: dict | None = None,
     outputs: list[dict] | None = None,
     spg_requires_lot: bool = False,
@@ -193,7 +193,7 @@ async def _receive_input(
     session: AsyncSession,
     fx: dict,
     *,
-    quantity: Decimal = Decimal("100"),
+    quantity: Decimal = Decimal(100),
     dims: dict | None = DIMS_IN,
 ) -> None:
     """Приход входа на пилу: MANUAL_IN на raw + TRANSFER_RECEIVE на участок."""
@@ -251,7 +251,7 @@ async def _balance(
         )
     )
     bal = row.scalar_one_or_none()
-    return bal.balance_qty if bal else Decimal("0")
+    return bal.balance_qty if bal else Decimal(0)
 
 
 async def _route_ops(session: AsyncSession, fx: dict) -> list[str]:
@@ -277,7 +277,7 @@ async def _tx_sum(
     )
     if not any_dims:
         stmt = stmt.where(dimensions_match_clause(StockTransaction.dimensions, dims))
-    return await session.scalar(stmt) or Decimal("0")
+    return await session.scalar(stmt) or Decimal(0)
 
 
 # ─── полный сценарий тикета: 100 × 2,7 → 100 × 0,9 + 100 × 1,8 ──────────────
@@ -292,17 +292,17 @@ async def test_full_portion_moves_input_and_all_outputs(session: AsyncSession) -
     result = await complete_task(
         session,
         task_id=fx["task"].id,
-        good_quantity=Decimal("100"),
-        defect_quantity=Decimal("0"),
+        good_quantity=Decimal(100),
+        defect_quantity=Decimal(0),
         actor_id=fx["user"].id,
     )
     await session.commit()
 
     # Списание входа: 100 × 2,7 м.
-    assert await _tx_sum(session, fx["task"].id, Reason.TRANSFORM_CONSUME, DIMS_IN) == Decimal("100")
+    assert await _tx_sum(session, fx["task"].id, Reason.TRANSFORM_CONSUME, DIMS_IN) == Decimal(100)
     # Приход обоих выходов: 100 × 0,9 м + 100 × 1,8 м (остаток — автоматически).
-    assert await _tx_sum(session, fx["task"].id, Reason.COMPLETE, DIMS_OUT_A) == Decimal("100")
-    assert await _tx_sum(session, fx["task"].id, Reason.COMPLETE, DIMS_OUT_B) == Decimal("100")
+    assert await _tx_sum(session, fx["task"].id, Reason.COMPLETE, DIMS_OUT_A) == Decimal(100)
+    assert await _tx_sum(session, fx["task"].id, Reason.COMPLETE, DIMS_OUT_B) == Decimal(100)
     # 3 транзакции одной порции: consume + 2 выхода.
     assert len(result["transaction_ids"]) == 3
 
@@ -312,18 +312,18 @@ async def test_full_portion_moves_input_and_all_outputs(session: AsyncSession) -
     ops = await _route_ops(session, fx)
     assert await _balance(
         session, product_id, saw_id, DIMS_IN, completed_operations=ops,
-    ) == Decimal("0")
+    ) == Decimal(0)
     assert await _balance(
         session, product_id, saw_id, DIMS_OUT_A, completed_operations=ops,
-    ) == Decimal("100")
+    ) == Decimal(100)
     assert await _balance(
         session, product_id, saw_id, DIMS_OUT_B, completed_operations=ops,
-    ) == Decimal("100")
+    ) == Decimal(100)
 
     # Проекция задачи: completed = сумма выходов.
     cache = await StockProjectionManager().get_task_cache(session, fx["task"].id)
-    assert cache["completed_quantity"] == Decimal("200")
-    assert cache["issued_quantity"] == Decimal("100")
+    assert cache["completed_quantity"] == Decimal(200)
+    assert cache["issued_quantity"] == Decimal(100)
 
     await assert_no_stock_ledger_invariants_violations(session, context="transform-full")
 
@@ -336,24 +336,24 @@ async def test_partial_portion_moves_ledger_proportionally(session: AsyncSession
     await complete_task(
         session,
         task_id=fx["task"].id,
-        good_quantity=Decimal("50"),
-        defect_quantity=Decimal("0"),
+        good_quantity=Decimal(50),
+        defect_quantity=Decimal(0),
         actor_id=fx["user"].id,
     )
     await session.commit()
 
     product_id, saw_id = fx["product"].id, fx["saw"].id
     ops = await _route_ops(session, fx)
-    assert await _tx_sum(session, fx["task"].id, Reason.TRANSFORM_CONSUME, DIMS_IN) == Decimal("50")
+    assert await _tx_sum(session, fx["task"].id, Reason.TRANSFORM_CONSUME, DIMS_IN) == Decimal(50)
     assert await _balance(
         session, product_id, saw_id, DIMS_IN, completed_operations=ops,
-    ) == Decimal("50")
+    ) == Decimal(50)
     assert await _balance(
         session, product_id, saw_id, DIMS_OUT_A, completed_operations=ops,
-    ) == Decimal("50")
+    ) == Decimal(50)
     assert await _balance(
         session, product_id, saw_id, DIMS_OUT_B, completed_operations=ops,
-    ) == Decimal("50")
+    ) == Decimal(50)
 
     task = await session.get(WorkTask, fx["task"].id)
     assert task.status == WorkTaskStatus.partially_completed
@@ -363,25 +363,25 @@ async def test_partial_portion_moves_ledger_proportionally(session: AsyncSession
     await complete_task(
         session,
         task_id=fx["task"].id,
-        good_quantity=Decimal("50"),
-        defect_quantity=Decimal("0"),
+        good_quantity=Decimal(50),
+        defect_quantity=Decimal(0),
         actor_id=fx["user"].id,
     )
     await session.commit()
 
-    assert await _tx_sum(session, fx["task"].id, Reason.TRANSFORM_CONSUME, DIMS_IN) == Decimal("100")
+    assert await _tx_sum(session, fx["task"].id, Reason.TRANSFORM_CONSUME, DIMS_IN) == Decimal(100)
     assert await _balance(
         session, product_id, saw_id, DIMS_IN, completed_operations=ops,
-    ) == Decimal("0")
+    ) == Decimal(0)
     assert await _balance(
         session, product_id, saw_id, DIMS_OUT_A, completed_operations=ops,
-    ) == Decimal("100")
+    ) == Decimal(100)
     assert await _balance(
         session, product_id, saw_id, DIMS_OUT_B, completed_operations=ops,
-    ) == Decimal("100")
+    ) == Decimal(100)
 
     cache = await StockProjectionManager().get_task_cache(session, fx["task"].id)
-    assert cache["completed_quantity"] == Decimal("200")
+    assert cache["completed_quantity"] == Decimal(200)
     await assert_no_stock_ledger_invariants_violations(session, context="transform-partial-2")
 
 
@@ -398,16 +398,16 @@ async def test_partial_transform_task_remains_visible_on_section_board(
     fx = await _make_transform_setup(
         session,
         sku="TRC-BOARD-PART",
-        planned_quantity=Decimal("250"),
-        input_quantity=Decimal("150"),
+        planned_quantity=Decimal(250),
+        input_quantity=Decimal(150),
         outputs=outputs,
     )
-    await _receive_input(session, fx, quantity=Decimal("150"))
+    await _receive_input(session, fx, quantity=Decimal(150))
     await complete_task(
         session,
         task_id=fx["task"].id,
-        good_quantity=Decimal("75"),
-        defect_quantity=Decimal("0"),
+        good_quantity=Decimal(75),
+        defect_quantity=Decimal(0),
         actor_id=fx["user"].id,
     )
     await session.commit()
@@ -431,8 +431,8 @@ async def test_defect_written_with_input_dimensions(session: AsyncSession) -> No
     result = await complete_task(
         session,
         task_id=fx["task"].id,
-        good_quantity=Decimal("90"),
-        defect_quantity=Decimal("10"),
+        good_quantity=Decimal(90),
+        defect_quantity=Decimal(10),
         actor_id=fx["user"].id,
         defect_reason="saw_jam",
         **FAKE_SCRAP_POLICY,
@@ -442,15 +442,15 @@ async def test_defect_written_with_input_dimensions(session: AsyncSession) -> No
     product_id, saw_id = fx["product"].id, fx["saw"].id
     ops = await _route_ops(session, fx)
     # Списание входа только по годным; брак ушёл SCRAP с габаритом входа.
-    assert await _tx_sum(session, fx["task"].id, Reason.TRANSFORM_CONSUME, DIMS_IN) == Decimal("90")
-    assert await _tx_sum(session, fx["task"].id, Reason.SCRAP, DIMS_IN) == Decimal("10")
+    assert await _tx_sum(session, fx["task"].id, Reason.TRANSFORM_CONSUME, DIMS_IN) == Decimal(90)
+    assert await _tx_sum(session, fx["task"].id, Reason.SCRAP, DIMS_IN) == Decimal(10)
     # Выходы пропорциональны годным: 90 × 0,9 + 90 × 1,8.
-    assert await _tx_sum(session, fx["task"].id, Reason.COMPLETE, DIMS_OUT_A) == Decimal("90")
-    assert await _tx_sum(session, fx["task"].id, Reason.COMPLETE, DIMS_OUT_B) == Decimal("90")
+    assert await _tx_sum(session, fx["task"].id, Reason.COMPLETE, DIMS_OUT_A) == Decimal(90)
+    assert await _tx_sum(session, fx["task"].id, Reason.COMPLETE, DIMS_OUT_B) == Decimal(90)
 
     assert await _balance(
         session, product_id, saw_id, DIMS_IN, completed_operations=ops,
-    ) == Decimal("0")
+    ) == Decimal(0)
     # Брак уходит на каноническую SCRAP-секцию по коду политики (#134):
     # find по code+type, секция чужого кода из фикстуры его не подменяет.
     canon_scrap_id = await canon_scrap_section_id(session)
@@ -458,7 +458,7 @@ async def test_defect_written_with_input_dimensions(session: AsyncSession) -> No
     assert await _balance(
         session, product_id, canon_scrap_id, DIMS_IN, QualityState.SCRAP,
         completed_operations=ops,
-    ) == Decimal("10")
+    ) == Decimal(10)
 
     assert result["defect_id"] is not None
     defect = await session.get(Defect, result["defect_id"])
@@ -472,7 +472,7 @@ async def test_non_one_to_one_outputs_scale_by_input_ratio(session: AsyncSession
     fx = await _make_transform_setup(
         session,
         sku="TRC-RATIO",
-        planned_quantity=Decimal("300"),
+        planned_quantity=Decimal(300),
         outputs=[{"row_number": 1, "quantity": "300", "dimensions": DIMS_OUT_A}],
     )
     await _receive_input(session, fx)
@@ -480,28 +480,28 @@ async def test_non_one_to_one_outputs_scale_by_input_ratio(session: AsyncSession
     await complete_task(
         session,
         task_id=fx["task"].id,
-        good_quantity=Decimal("33"),
-        defect_quantity=Decimal("0"),
+        good_quantity=Decimal(33),
+        defect_quantity=Decimal(0),
         actor_id=fx["user"].id,
     )
     await session.commit()
-    assert await _tx_sum(session, fx["task"].id, Reason.COMPLETE, DIMS_OUT_A) == Decimal("99")
+    assert await _tx_sum(session, fx["task"].id, Reason.COMPLETE, DIMS_OUT_A) == Decimal(99)
 
     # Довершение: суммы сходятся точно к спецификации, без хвостов округления.
     await complete_task(
         session,
         task_id=fx["task"].id,
-        good_quantity=Decimal("67"),
-        defect_quantity=Decimal("0"),
+        good_quantity=Decimal(67),
+        defect_quantity=Decimal(0),
         actor_id=fx["user"].id,
     )
     await session.commit()
-    assert await _tx_sum(session, fx["task"].id, Reason.COMPLETE, DIMS_OUT_A) == Decimal("300")
+    assert await _tx_sum(session, fx["task"].id, Reason.COMPLETE, DIMS_OUT_A) == Decimal(300)
     ops = await _route_ops(session, fx)
     assert await _balance(
         session, fx["product"].id, fx["saw"].id, DIMS_OUT_A,
         completed_operations=ops,
-    ) == Decimal("300")
+    ) == Decimal(300)
     await assert_no_stock_ledger_invariants_violations(session, context="transform-ratio")
 
 
@@ -517,17 +517,17 @@ async def test_portion_over_remaining_input_rejected(session: AsyncSession) -> N
         await complete_task(
             session,
             task_id=fx["task"].id,
-            good_quantity=Decimal("150"),
-            defect_quantity=Decimal("0"),
+            good_quantity=Decimal(150),
+            defect_quantity=Decimal(0),
             actor_id=fx["user"].id,
         )
 
     assert await _tx_sum(
         session, fx["task"].id, Reason.TRANSFORM_CONSUME, any_dims=True,
-    ) == Decimal("0")
+    ) == Decimal(0)
     assert await _tx_sum(
         session, fx["task"].id, Reason.COMPLETE, any_dims=True,
-    ) == Decimal("0")
+    ) == Decimal(0)
 
 
 async def test_portion_over_physical_balance_writes_nothing(session: AsyncSession) -> None:
@@ -535,23 +535,23 @@ async def test_portion_over_physical_balance_writes_nothing(session: AsyncSessio
     ``fail`` (#133) отклоняет операцию целиком, называя доступное количество;
     ledger без частичных записей."""
     fx = await _make_transform_setup(session, sku="TRC-PHYS")
-    await _receive_input(session, fx, quantity=Decimal("50"))
+    await _receive_input(session, fx, quantity=Decimal(50))
 
     with pytest.raises(ValueError, match="доступно 50"):
         await complete_task(
             session,
             task_id=fx["task"].id,
-            good_quantity=Decimal("80"),
-            defect_quantity=Decimal("0"),
+            good_quantity=Decimal(80),
+            defect_quantity=Decimal(0),
             actor_id=fx["user"].id,
         )
 
     assert await _tx_sum(
         session, fx["task"].id, Reason.TRANSFORM_CONSUME, any_dims=True,
-    ) == Decimal("0")
+    ) == Decimal(0)
     assert await _tx_sum(
         session, fx["task"].id, Reason.COMPLETE, any_dims=True,
-    ) == Decimal("0")
+    ) == Decimal(0)
     await assert_no_stock_ledger_invariants_violations(session, context="transform-phys")
 
 
@@ -563,8 +563,8 @@ async def test_idempotent_replay_does_not_duplicate_ledger(session: AsyncSession
     await complete_task(
         session,
         task_id=fx["task"].id,
-        good_quantity=Decimal("50"),
-        defect_quantity=Decimal("0"),
+        good_quantity=Decimal(50),
+        defect_quantity=Decimal(0),
         actor_id=fx["user"].id,
         idempotency_key="trc-idem:1",
     )
@@ -573,16 +573,16 @@ async def test_idempotent_replay_does_not_duplicate_ledger(session: AsyncSession
     replay = await complete_task(
         session,
         task_id=fx["task"].id,
-        good_quantity=Decimal("50"),
-        defect_quantity=Decimal("0"),
+        good_quantity=Decimal(50),
+        defect_quantity=Decimal(0),
         actor_id=fx["user"].id,
         idempotency_key="trc-idem:1",
     )
     await session.commit()
 
     assert replay.get("idempotent_replay") is True
-    assert await _tx_sum(session, fx["task"].id, Reason.TRANSFORM_CONSUME, DIMS_IN) == Decimal("50")
-    assert await _tx_sum(session, fx["task"].id, Reason.COMPLETE, DIMS_OUT_A) == Decimal("50")
+    assert await _tx_sum(session, fx["task"].id, Reason.TRANSFORM_CONSUME, DIMS_IN) == Decimal(50)
+    assert await _tx_sum(session, fx["task"].id, Reason.COMPLETE, DIMS_OUT_A) == Decimal(50)
     await assert_no_stock_ledger_invariants_violations(session, context="transform-idem")
 
 
@@ -598,8 +598,8 @@ async def test_idempotent_replay_keeps_defect_and_scrap_tx(session: AsyncSession
     from tests.stock.helpers import FAKE_SCRAP_POLICY
     kwargs = dict(
         task_id=fx["task"].id,
-        good_quantity=Decimal("50"),
-        defect_quantity=Decimal("10"),
+        good_quantity=Decimal(50),
+        defect_quantity=Decimal(10),
         actor_id=fx["user"].id,
         defect_reason="saw_jam",
         idempotency_key="trc-idem-def:1",
@@ -618,9 +618,9 @@ async def test_idempotent_replay_keeps_defect_and_scrap_tx(session: AsyncSession
     assert set(replay["transaction_ids"]) == set(first["transaction_ids"])
     assert len(replay["transaction_ids"]) > 1
     # Дублей в ledger нет.
-    assert await _tx_sum(session, fx["task"].id, Reason.TRANSFORM_CONSUME, DIMS_IN) == Decimal("50")
-    assert await _tx_sum(session, fx["task"].id, Reason.SCRAP, DIMS_IN) == Decimal("10")
-    assert await _tx_sum(session, fx["task"].id, Reason.COMPLETE, DIMS_OUT_A) == Decimal("50")
+    assert await _tx_sum(session, fx["task"].id, Reason.TRANSFORM_CONSUME, DIMS_IN) == Decimal(50)
+    assert await _tx_sum(session, fx["task"].id, Reason.SCRAP, DIMS_IN) == Decimal(10)
+    assert await _tx_sum(session, fx["task"].id, Reason.COMPLETE, DIMS_OUT_A) == Decimal(50)
     await assert_no_stock_ledger_invariants_violations(session, context="transform-idem-defect")
 
 
@@ -635,8 +635,8 @@ async def test_legacy_material_without_dimensions_consumed_from_null_group(
     await complete_task(
         session,
         task_id=fx["task"].id,
-        good_quantity=Decimal("100"),
-        defect_quantity=Decimal("0"),
+        good_quantity=Decimal(100),
+        defect_quantity=Decimal(0),
         actor_id=fx["user"].id,
     )
     await session.commit()
@@ -645,16 +645,16 @@ async def test_legacy_material_without_dimensions_consumed_from_null_group(
     # «Legacy» здесь — только ось РАЗМЕРОВ (dimensions=None). Ось операций
     # у материала задания заполнена маршрутом (ADR-0055), как и приход.
     ops = await _route_ops(session, fx)
-    assert await _tx_sum(session, fx["task"].id, Reason.TRANSFORM_CONSUME, None) == Decimal("100")
+    assert await _tx_sum(session, fx["task"].id, Reason.TRANSFORM_CONSUME, None) == Decimal(100)
     assert await _balance(
         session, product_id, saw_id, None, completed_operations=ops,
-    ) == Decimal("0")
+    ) == Decimal(0)
     assert await _balance(
         session, product_id, saw_id, DIMS_OUT_A, completed_operations=ops,
-    ) == Decimal("100")
+    ) == Decimal(100)
     assert await _balance(
         session, product_id, saw_id, DIMS_OUT_B, completed_operations=ops,
-    ) == Decimal("100")
+    ) == Decimal(100)
     await assert_no_stock_ledger_invariants_violations(session, context="transform-legacy")
 
 
@@ -664,14 +664,14 @@ async def test_legacy_material_without_dimensions_consumed_from_null_group(
 async def test_shortage_fail_rejects_operation_and_names_available(session: AsyncSession) -> None:
     """fail: ввод 100 / на складе 80 — отказ целиком, ошибка называет «доступно 80»."""
     fx = await _make_transform_setup(session, sku="TRC-SFAIL")
-    await _receive_input(session, fx, quantity=Decimal("80"))
+    await _receive_input(session, fx, quantity=Decimal(80))
 
     with pytest.raises(ValueError, match="введено 100, доступно 80"):
         await complete_task(
             session,
             task_id=fx["task"].id,
-            good_quantity=Decimal("100"),
-            defect_quantity=Decimal("0"),
+            good_quantity=Decimal(100),
+            defect_quantity=Decimal(0),
             actor_id=fx["user"].id,
             shortage_strategy="fail",
         )
@@ -679,24 +679,24 @@ async def test_shortage_fail_rejects_operation_and_names_available(session: Asyn
     # Отказ в _resolve_shortage происходит до любых записей — rollback не нужен.
     assert await _tx_sum(
         session, fx["task"].id, Reason.TRANSFORM_CONSUME, any_dims=True,
-    ) == Decimal("0")
+    ) == Decimal(0)
     ops = await _route_ops(session, fx)
     assert await _balance(
         session, fx["product"].id, fx["saw"].id, DIMS_IN, completed_operations=ops,
-    ) == Decimal("80")
+    ) == Decimal(80)
 
 
 async def test_shortage_partial_clamps_to_available_balance(session: AsyncSession) -> None:
     """partial: проведено 80 из введённых 100; задача частично выполнена,
     ответ содержит факт проведения (completed_quantity)."""
     fx = await _make_transform_setup(session, sku="TRC-SPART")
-    await _receive_input(session, fx, quantity=Decimal("80"))
+    await _receive_input(session, fx, quantity=Decimal(80))
 
     result = await complete_task(
         session,
         task_id=fx["task"].id,
-        good_quantity=Decimal("100"),
-        defect_quantity=Decimal("0"),
+        good_quantity=Decimal(100),
+        defect_quantity=Decimal(0),
         actor_id=fx["user"].id,
         shortage_strategy="partial",
     )
@@ -704,17 +704,17 @@ async def test_shortage_partial_clamps_to_available_balance(session: AsyncSessio
 
     product_id, saw_id = fx["product"].id, fx["saw"].id
     ops = await _route_ops(session, fx)
-    assert await _tx_sum(session, fx["task"].id, Reason.TRANSFORM_CONSUME, DIMS_IN) == Decimal("80")
+    assert await _tx_sum(session, fx["task"].id, Reason.TRANSFORM_CONSUME, DIMS_IN) == Decimal(80)
     assert await _balance(
         session, product_id, saw_id, DIMS_IN, completed_operations=ops,
-    ) == Decimal("0")
-    assert await _tx_sum(session, fx["task"].id, Reason.COMPLETE, DIMS_OUT_A) == Decimal("80")
-    assert await _tx_sum(session, fx["task"].id, Reason.COMPLETE, DIMS_OUT_B) == Decimal("80")
+    ) == Decimal(0)
+    assert await _tx_sum(session, fx["task"].id, Reason.COMPLETE, DIMS_OUT_A) == Decimal(80)
+    assert await _tx_sum(session, fx["task"].id, Reason.COMPLETE, DIMS_OUT_B) == Decimal(80)
 
     task = await session.get(WorkTask, fx["task"].id)
     assert task.status == WorkTaskStatus.partially_completed
     assert result["status"] == "partially_completed"
-    assert result["completed_quantity"] == Decimal("80")
+    assert result["completed_quantity"] == Decimal(80)
 
     await assert_no_stock_ledger_invariants_violations(session, context="shortage-partial")
 
@@ -722,13 +722,13 @@ async def test_shortage_partial_clamps_to_available_balance(session: AsyncSessio
 async def test_shortage_negative_remainder_drives_input_balance_minus(session: AsyncSession) -> None:
     """negative_remainder: полная порция 100 при остатке 80 — баланс входа −20."""
     fx = await _make_transform_setup(session, sku="TRC-SNEG")
-    await _receive_input(session, fx, quantity=Decimal("80"))
+    await _receive_input(session, fx, quantity=Decimal(80))
 
     result = await complete_task(
         session,
         task_id=fx["task"].id,
-        good_quantity=Decimal("100"),
-        defect_quantity=Decimal("0"),
+        good_quantity=Decimal(100),
+        defect_quantity=Decimal(0),
         actor_id=fx["user"].id,
         shortage_strategy="negative_remainder",
     )
@@ -736,14 +736,14 @@ async def test_shortage_negative_remainder_drives_input_balance_minus(session: A
 
     product_id, saw_id = fx["product"].id, fx["saw"].id
     ops = await _route_ops(session, fx)
-    assert await _tx_sum(session, fx["task"].id, Reason.TRANSFORM_CONSUME, DIMS_IN) == Decimal("100")
+    assert await _tx_sum(session, fx["task"].id, Reason.TRANSFORM_CONSUME, DIMS_IN) == Decimal(100)
     assert await _balance(
         session, product_id, saw_id, DIMS_IN, completed_operations=ops,
-    ) == Decimal("-20")
+    ) == Decimal(-20)
     # Выходы приходуются полностью по спецификации.
-    assert await _tx_sum(session, fx["task"].id, Reason.COMPLETE, DIMS_OUT_A) == Decimal("100")
-    assert await _tx_sum(session, fx["task"].id, Reason.COMPLETE, DIMS_OUT_B) == Decimal("100")
-    assert result["completed_quantity"] == Decimal("100")
+    assert await _tx_sum(session, fx["task"].id, Reason.COMPLETE, DIMS_OUT_A) == Decimal(100)
+    assert await _tx_sum(session, fx["task"].id, Reason.COMPLETE, DIMS_OUT_B) == Decimal(100)
+    assert result["completed_quantity"] == Decimal(100)
 
     await assert_no_stock_ledger_invariants_violations(session, context="shortage-negative")
 
@@ -751,20 +751,20 @@ async def test_shortage_negative_remainder_drives_input_balance_minus(session: A
 async def test_default_strategy_is_fail(session: AsyncSession) -> None:
     """Дефолт (#133): вызов complete без явной стратегии ведёт себя как fail."""
     fx = await _make_transform_setup(session, sku="TRC-SDEF")
-    await _receive_input(session, fx, quantity=Decimal("80"))
+    await _receive_input(session, fx, quantity=Decimal(80))
 
     with pytest.raises(ValueError, match="доступно 80"):
         await complete_task(
             session,
             task_id=fx["task"].id,
-            good_quantity=Decimal("100"),
-            defect_quantity=Decimal("0"),
+            good_quantity=Decimal(100),
+            defect_quantity=Decimal(0),
             actor_id=fx["user"].id,
         )
 
     assert await _tx_sum(
         session, fx["task"].id, Reason.TRANSFORM_CONSUME, any_dims=True,
-    ) == Decimal("0")
+    ) == Decimal(0)
 
 
 @pytest.mark.parametrize("strategy", ["fail", "partial", "negative_remainder"])
@@ -774,35 +774,35 @@ async def test_remaining_input_limit_hard_for_every_strategy(
     """Плановый лимит remaining_input жёсткий при любой стратегии: физического
     входа хватает с запасом, но раскроить больше плана нельзя."""
     fx = await _make_transform_setup(session, sku=f"TRC-LIM-{strategy[:4]}")
-    await _receive_input(session, fx, quantity=Decimal("500"))
+    await _receive_input(session, fx, quantity=Decimal(500))
 
     with pytest.raises(ValueError, match="remaining input"):
         await complete_task(
             session,
             task_id=fx["task"].id,
-            good_quantity=Decimal("150"),
-            defect_quantity=Decimal("0"),
+            good_quantity=Decimal(150),
+            defect_quantity=Decimal(0),
             actor_id=fx["user"].id,
             shortage_strategy=strategy,
         )
 
     assert await _tx_sum(
         session, fx["task"].id, Reason.TRANSFORM_CONSUME, any_dims=True,
-    ) == Decimal("0")
+    ) == Decimal(0)
 
 
 async def test_requires_lot_spg_blocks_negative_remainder_in_complete(session: AsyncSession) -> None:
     """СПГ с lot-учётом: negative_remainder отклоняется самим ledger-service,
     минус входной группы не создаётся."""
     fx = await _make_transform_setup(session, sku="TRC-SLOT", spg_requires_lot=True)
-    await _receive_input(session, fx, quantity=Decimal("80"))
+    await _receive_input(session, fx, quantity=Decimal(80))
 
     with pytest.raises(StockValidationError, match="requires_lot"):
         await complete_task(
             session,
             task_id=fx["task"].id,
-            good_quantity=Decimal("100"),
-            defect_quantity=Decimal("0"),
+            good_quantity=Decimal(100),
+            defect_quantity=Decimal(0),
             actor_id=fx["user"].id,
             shortage_strategy="negative_remainder",
         )
@@ -811,10 +811,10 @@ async def test_requires_lot_spg_blocks_negative_remainder_in_complete(session: A
     ops = await _route_ops(session, fx)
     assert await _balance(
         session, fx["product"].id, fx["saw"].id, DIMS_IN, completed_operations=ops,
-    ) == Decimal("80")
+    ) == Decimal(80)
     assert await _tx_sum(
         session, fx["task"].id, Reason.TRANSFORM_CONSUME, any_dims=True,
-    ) == Decimal("0")
+    ) == Decimal(0)
 
 
 async def test_shortage_strategy_enum_dict_is_single_source(session: AsyncSession) -> None:
@@ -824,12 +824,12 @@ async def test_shortage_strategy_enum_dict_is_single_source(session: AsyncSessio
 
     # enum — тот же результат, что строка negative_remainder.
     fx_enum = await _make_transform_setup(session, sku="TRC-SENUM")
-    await _receive_input(session, fx_enum, quantity=Decimal("80"))
+    await _receive_input(session, fx_enum, quantity=Decimal(80))
     await complete_task(
         session,
         task_id=fx_enum["task"].id,
-        good_quantity=Decimal("100"),
-        defect_quantity=Decimal("0"),
+        good_quantity=Decimal(100),
+        defect_quantity=Decimal(0),
         actor_id=fx_enum["user"].id,
         shortage_strategy=ShortageStrategy.negative_remainder,
     )
@@ -838,20 +838,20 @@ async def test_shortage_strategy_enum_dict_is_single_source(session: AsyncSessio
     assert await _balance(
         session, fx_enum["product"].id, fx_enum["saw"].id, DIMS_IN,
         completed_operations=ops_enum,
-    ) == Decimal("-20")
+    ) == Decimal(-20)
 
     # Неизвестная стратегия отклоняется до проводок.
     fx_bad = await _make_transform_setup(session, sku="TRC-SBAD")
-    await _receive_input(session, fx_bad, quantity=Decimal("80"))
+    await _receive_input(session, fx_bad, quantity=Decimal(80))
     with pytest.raises(ValueError, match="bogus"):
         await complete_task(
             session,
             task_id=fx_bad["task"].id,
-            good_quantity=Decimal("100"),
-            defect_quantity=Decimal("0"),
+            good_quantity=Decimal(100),
+            defect_quantity=Decimal(0),
             actor_id=fx_bad["user"].id,
             shortage_strategy="bogus",
         )
     assert await _tx_sum(
         session, fx_bad["task"].id, Reason.TRANSFORM_CONSUME, any_dims=True,
-    ) == Decimal("0")
+    ) == Decimal(0)

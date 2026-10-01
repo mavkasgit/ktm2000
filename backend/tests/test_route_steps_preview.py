@@ -1,18 +1,22 @@
 """Tests for dynamic route stages and operations in import preview."""
 from io import BytesIO
 
-
 import pytest
-from openpyxl import Workbook
-
 from app.core.config import settings
 from app.models.import_template import ImportTemplate
 from app.models.product import Product, ProductType
-from app.models.route import ProductionRoute, RouteRuleProfile, RouteStage, RouteOperation, SectionOperation
+from app.models.route import (
+    ProductionRoute,
+    RouteOperation,
+    RouteRuleProfile,
+    RouteStage,
+    SectionOperation,
+)
 from app.models.section import Section
-from app.seeds.selection_rules import SELECTION_RULES
-from app.seeds.seeders.selection_rules_seeder import seed_selection_rules
 from app.seeds.canon.models import SelectionRuleDef
+from app.seeds.seeders.selection_rules_seeder import seed_selection_rules
+from app.seeds.selection_rules import SELECTION_RULES
+from openpyxl import Workbook
 
 
 def _workbook_with_row(

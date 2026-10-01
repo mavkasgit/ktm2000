@@ -20,11 +20,6 @@ from decimal import Decimal
 
 import pytest
 import pytest_asyncio
-from httpx import ASGITransport, AsyncClient
-from sqlalchemy import event, select, text
-from sqlalchemy.exc import IntegrityError
-from sqlalchemy.ext.asyncio import AsyncEngine, AsyncSession, async_sessionmaker
-
 from app.core.database import get_db
 from app.core.exceptions import IdempotencyConflict
 from app.core.security import create_access_token
@@ -48,6 +43,11 @@ from app.services.shopfloor.operations_defects import create_defect, defect_deci
 from app.services.shopfloor.operations_meta import create_attachment, create_comment
 from app.stock import Reason, StockCommand, StockCommandService
 from app.transfers.services import transfer_send
+from httpx import ASGITransport, AsyncClient
+from sqlalchemy import event, select, text
+from sqlalchemy.exc import IntegrityError
+from sqlalchemy.ext.asyncio import AsyncEngine, AsyncSession, async_sessionmaker
+
 from tests.stock.test_stock_command import _make_location, _make_product, _make_user
 
 pytestmark = [pytest.mark.asyncio, pytest.mark.usefixtures("_pin_search_path")]
@@ -160,7 +160,7 @@ async def test_unique_backstop_rejects_duplicate_keys(
         def add_decision(key: str | None, defect: Defect) -> None:
             s.add(DefectDecision(
                 defect_id=defect.id, decision_type=DefectDecisionType.scrap,
-                quantity=Decimal("1"), decided_by=user.id, idempotency_key=key,
+                quantity=Decimal(1), decided_by=user.id, idempotency_key=key,
             ))
 
         await expect_unique_violation(lambda: add_defect(RACE_KEY))
@@ -195,10 +195,10 @@ async def test_create_defect_race_loser_gets_conflict(
     schema = _schema_sql(module_schema_name)
     fx = await _race_setup(factory, schema, "defect")
 
-    kwargs = dict(
-        product_id=fx["product"].id, section_id=fx["section"].id,
-        quantity=Decimal("3"), actor_id=fx["user"].id, idempotency_key=RACE_KEY,
-    )
+    kwargs = {
+        "product_id": fx["product"].id, "section_id": fx["section"].id,
+        "quantity": Decimal(3), "actor_id": fx["user"].id, "idempotency_key": RACE_KEY,
+    }
     async with factory() as winner:
         await winner.execute(text(schema))
         first = await create_defect(winner, **kwargs)
@@ -248,11 +248,11 @@ async def test_defect_decide_race_loser_gets_conflict(
         )).scalar_one().id
         await s.commit()
 
-    kwargs = dict(
-        defect_id=defect_id,
-        decision_type=DefectDecisionType.accept_with_deviation,
-        quantity=Decimal("1"), actor_id=fx["user"].id, idempotency_key=RACE_KEY,
-    )
+    kwargs = {
+        "defect_id": defect_id,
+        "decision_type": DefectDecisionType.accept_with_deviation,
+        "quantity": Decimal(1), "actor_id": fx["user"].id, "idempotency_key": RACE_KEY,
+    }
     async with factory() as winner:
         await winner.execute(text(schema))
         first = await defect_decide(winner, **kwargs)
@@ -289,10 +289,10 @@ async def test_create_attachment_race_and_replay(
     schema = _schema_sql(module_schema_name)
     fx = await _race_setup(factory, schema, "attach")
 
-    kwargs = dict(
-        original_filename="x.txt", stored_path="/tmp/x.txt",
-        size_bytes=2, actor_id=fx["user"].id, idempotency_key=RACE_KEY,
-    )
+    kwargs = {
+        "original_filename": "x.txt", "stored_path": "/tmp/x.txt",
+        "size_bytes": 2, "actor_id": fx["user"].id, "idempotency_key": RACE_KEY,
+    }
     async with factory() as winner:
         await winner.execute(text(schema))
         first = await create_attachment(winner, **kwargs)
@@ -325,10 +325,10 @@ async def test_create_comment_race_and_replay(
     schema = _schema_sql(module_schema_name)
     fx = await _race_setup(factory, schema, "comment")
 
-    kwargs = dict(
-        entity_type=EntityType.work_task, entity_id=1, body="note",
-        actor_id=fx["user"].id, idempotency_key=RACE_KEY,
-    )
+    kwargs = {
+        "entity_type": EntityType.work_task, "entity_id": 1, "body": "note",
+        "actor_id": fx["user"].id, "idempotency_key": RACE_KEY,
+    }
     async with factory() as winner:
         await winner.execute(text(schema))
         first = await create_comment(winner, **kwargs)
@@ -389,7 +389,7 @@ async def _make_two_stage_setup(factory: async_sessionmaker, schema: str, sku: s
         pos = PlanPosition(
             production_plan_id=plan.id, product_id=product.id,
             source_type=PlanSourceType.manual, source_sku=product.sku,
-            source_name=product.name, quantity=Decimal("10"),
+            source_name=product.name, quantity=Decimal(10),
             source_payload={}, status=PlanPositionStatus.approved,
             validation_status=PlanPositionValidationStatus.valid,
             validation_errors=[],
@@ -405,26 +405,26 @@ async def _make_two_stage_setup(factory: async_sessionmaker, schema: str, sku: s
             internal_plan_id=internal.id, plan_position_id=pos.id,
             section_id=sec1.id, route_stage_id=stage1.id,
             product_id=product.id, route_id=route.id,
-            sequence=1, planned_quantity=Decimal("10"),
+            sequence=1, planned_quantity=Decimal(10),
         )
         line2 = SectionPlanLine(
             internal_plan_id=internal.id, plan_position_id=pos.id,
             section_id=sec2.id, route_stage_id=stage2.id,
             product_id=product.id, route_id=route.id,
-            sequence=2, planned_quantity=Decimal("10"),
+            sequence=2, planned_quantity=Decimal(10),
         )
         s.add_all([line1, line2])
         await s.flush()
         task1 = WorkTask(
             section_plan_line_id=line1.id, section_id=sec1.id,
             product_id=product.id, route_stage_id=stage1.id,
-            planned_quantity=Decimal("10"), status=WorkTaskStatus.ready,
+            planned_quantity=Decimal(10), status=WorkTaskStatus.ready,
             due_date=plan.period_end,
         )
         task2 = WorkTask(
             section_plan_line_id=line2.id, section_id=sec2.id,
             product_id=product.id, route_stage_id=stage2.id,
-            planned_quantity=Decimal("10"), status=WorkTaskStatus.waiting_previous,
+            planned_quantity=Decimal(10), status=WorkTaskStatus.waiting_previous,
             due_date=plan.period_end,
         )
         s.add_all([task1, task2])
@@ -440,18 +440,18 @@ async def _make_two_stage_setup(factory: async_sessionmaker, schema: str, sku: s
         svc = StockCommandService()
         await svc.record(s, StockCommand(
             product_id=product.id, from_location_id=None,
-            to_location_id=stock.id, quantity=Decimal("10"),
+            to_location_id=stock.id, quantity=Decimal(10),
             reason=Reason.MANUAL_IN, completed_operations=ops, created_by=user.id,
         ))
         await svc.record(s, StockCommand(
             product_id=product.id, from_location_id=stock.id,
-            to_location_id=sec1.id, quantity=Decimal("10"),
+            to_location_id=sec1.id, quantity=Decimal(10),
             reason=Reason.TRANSFER_RECEIVE, task_id=task1.id,
             created_by=user.id,
         ))
         await svc.record(s, StockCommand(
             product_id=product.id, from_location_id=sec1.id,
-            to_location_id=sec1.id, quantity=Decimal("10"),
+            to_location_id=sec1.id, quantity=Decimal(10),
             reason=Reason.COMPLETE, task_id=task1.id,
             source_ref="test_seed", created_by=user.id,
         ))
@@ -469,11 +469,11 @@ async def test_transfer_send_race_loser_gets_conflict(
     schema = _schema_sql(module_schema_name)
     setup = await _make_two_stage_setup(factory, schema, "IDEMTR135")
 
-    kwargs = dict(
-        from_task_id=setup["from_task_id"], to_task_id=setup["to_task_id"],
-        quantity=Decimal("5"), actor_id=None,
-        idempotency_key=RACE_KEY,
-    )
+    kwargs = {
+        "from_task_id": setup["from_task_id"], "to_task_id": setup["to_task_id"],
+        "quantity": Decimal(5), "actor_id": None,
+        "idempotency_key": RACE_KEY,
+    }
     # actor_id нужен числом, а объект user не сохранили — читаем по email.
     from app.models.user import User
 

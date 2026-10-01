@@ -13,18 +13,18 @@ Covers:
 from __future__ import annotations
 
 import pytest
-from httpx import AsyncClient
-from sqlalchemy import select, text
-from sqlalchemy.exc import IntegrityError
-from sqlalchemy.ext.asyncio import AsyncSession
-
-from app.models.route import ProductionRoute, RouteStage, RouteOperation, SectionOperation
+from app.models.route import (
+    ProductionRoute,
+    RouteOperation,
+    RouteStage,
+    SectionOperation,
+)
 from app.models.section import Section
 from app.services.route_storage_classifier import (
-    STAGE_KIND_PRODUCTION,
-    STAGE_KIND_TRANSIT,
     OPERATION_TYPE_PRODUCTION,
     OPERATION_TYPE_TRANSPORT,
+    STAGE_KIND_PRODUCTION,
+    STAGE_KIND_TRANSIT,
     classify_section_role,
     classify_stages,
     infer_stage_kind,
@@ -36,7 +36,10 @@ from app.services.route_storage_classifier import (
     stage_display_name,
 )
 from app.services.shopfloor.common import build_completed_stages_json
-
+from httpx import AsyncClient
+from sqlalchemy import select, text
+from sqlalchemy.exc import IntegrityError
+from sqlalchemy.ext.asyncio import AsyncSession
 
 # ---------- Pure classifier tests (no DB) ----------
 

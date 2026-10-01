@@ -7,17 +7,16 @@ import time
 from unittest.mock import MagicMock, patch
 
 import pytest
-from cryptography.hazmat.primitives import serialization
-from cryptography.hazmat.primitives.asymmetric import rsa
-from jose import jwt as jose_jwt
-from jose.utils import base64url_encode
-from sqlalchemy import select
-
 from app.core.config import settings
 from app.models.user import User, UserRole
 from app.models.user_session import UserSession
 from app.services.oidc_auth_service import OidcAuthService
 from app.services.session_service import issue_session
+from cryptography.hazmat.primitives import serialization
+from cryptography.hazmat.primitives.asymmetric import rsa
+from jose import jwt as jose_jwt
+from jose.utils import base64url_encode
+from sqlalchemy import select
 
 ISSUER = "http://localhost:9000/application/o/ktm2000/"
 CLIENT_ID = "ktm2000"
@@ -773,7 +772,7 @@ async def test_backchannel_logout_revokes_all_user_sessions(
     client, session, oidc_enabled
 ) -> None:
     """sub -> users.authentik_sub -> all active sessions revoked."""
-    user, sessions = await _make_linked_user_with_sessions(
+    user, _sessions = await _make_linked_user_with_sessions(
         session, authentik_sub="ak-sub-bcl-revoke", n_sessions=2
     )
     await session.commit()
