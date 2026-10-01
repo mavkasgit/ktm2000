@@ -40,28 +40,19 @@ import { E2E_SKU, confirmForceApproveViaUI, seedReferenceDataViaUI } from "./ui-
  *
  * ## Что считается сработавшей инвалидацией
  *
- * Проверка разная для двух веток, и это два разных наблюдаемых факта, а не
- * один «строка обновилась на месте»:
- *
- * - **Одиночное утверждение** — строка остаётся в сводной таблице, но теряет
- *   кнопку «Утвердить»: `status` стал `approved`, `canApprove` в
- *   `PlanPositionRow` погас. Эта проверка обязана падать, если инвалидация не
- *   сработает: строка осталась бы со статусом `draft` и с кнопкой.
- * - **Массовое утверждение** — строка УХОДИТ из сводной таблицы целиком
- *   (`toHaveCount(0)`). Основание: `_apply_all_positions_filters`
- *   (`backend/app/api/routes/production_plans.py:1165-1168`) жёстко
- *   ограничивает сводную таблицу позициями в статусах `(draft, invalid,
- *   valid)`, а `approve_plan_position`
- *   (`backend/app/services/production_plan_service.py:777`) ставит
- *   `approved`. Утверждённая позиция не может попасть в эту таблицу НИ при
- *   каких фильтрах, поэтому её отсутствие после approve — признак
- *   сработавшей инвалидации, а НЕ потеря данных. Прежнее ожидание «строка
- *   осталась, но потеряла кнопку» в массовой ветке было устаревшим.
- *
- * Почему ветки расходятся по видимому результату при одном и том же
- * `invalidateAfter(..., "positionApproved")` — открытый вопрос к бэкенду.
- * Тест фиксирует наблюдаемое поведение в каждой ветке, а не подгоняет его под
- * одну формулировку: обе проверки обязаны краснеть при сломанной инвалидации.
+ * В обеих ветках наблюдаемый факт один и тот же: строка УХОДИТ из сводной
+ * таблицы целиком (`toHaveCount(0)`). Основание — `_apply_all_positions_filters`
+ * (`backend/app/api/routes/production_plans.py:1441` и константа
+ * `ALL_POSITIONS_PLANNING_STATUSES` там же): сводная таблица ограничена
+ * статусами `(draft, invalid, valid)`, а approve ставит `approved`. Утверждённая
+ * позиция не может попасть в эту таблицу ни при каких фильтрах, поэтому её
+ * отсутствие после approve — признак сработавшей инвалидации, а НЕ потеря
+ * данных. Кэш при этом не патчится локально: и одиночный, и массовый обработчик
+ * зовут один и тот же `invalidateAfter(queryClient, "positionApproved")`
+ * (`PlanPage.tsx`, ключ `["plan", "execution"]` в `shared/api/cacheInvalidation.ts`),
+ * поэтому ветки разойтись по видимому результату не могут. Прежнее ожидание
+ * одиночной ветки («строка осталась, но потеряла кнопку») было невыполнимым:
+ * строка исчезала вместе с кнопкой, и тест краснел на `toBeVisible`.
  *
  * ## Зачем после этого ещё переход на «Контроль выполнения»
  *
@@ -186,13 +177,11 @@ type ApproveFn = (page: Page, row: Locator) => Promise<void>;
  *
  * @param approve     как утверждаем позицию
  * @param staleRowMsg сообщение для шага «контроль выполнения»
- * @param rowLeavesTable строка уходит из сводной таблицы (массовое утверждение)
  */
 async function runApproveFreshnessScenario(
   page: Page,
   approve: ApproveFn,
   staleRowMsg: (positionId: number) => string,
-  rowLeavesTable = false,
 ) {
   // Клик по сайдбару, а не `goto`: `goto` пересоздал бы QueryClient, кэш был бы
   // пуст, и проверять было бы нечего.
@@ -210,18 +199,10 @@ async function runApproveFreshnessScenario(
   // Строка адресуется по `id`, а не фильтром «есть кнопка» — иначе проверка
   // выродилась бы в «отфильтрованный локатор ничего не нашёл».
   const approvedRow = page.locator(`#plan-position-${positionId}`);
-  if (rowLeavesTable) {
-    await expect(
-      approvedRow,
-      `позиция #${positionId} утверждена, но всё ещё висит в сводной таблице плана: инвалидация после approve не сработала`,
-    ).toHaveCount(0, { timeout: 15_000 });
-  } else {
-    await expect(approvedRow).toBeVisible({ timeout: 15_000 });
-    await expect(
-      approvedRow.getByRole("button", { name: "Утвердить", exact: true }),
-      `позиция #${positionId} утверждена, но строка плана всё ещё предлагает «Утвердить»: инвалидация после approve не сработала`,
-    ).toHaveCount(0, { timeout: 15_000 });
-  }
+  await expect(
+    approvedRow,
+    `позиция #${positionId} утверждена, но всё ещё висит в сводной таблице плана: инвалидация после approve не сработала`,
+  ).toHaveCount(0, { timeout: 15_000 });
 
   // ── Сквозная проверка исходного бага: строка видна на контроле ──────────
   await page.getByRole("link", { name: "Контроль выполнения" }).click();
@@ -243,7 +224,7 @@ test.describe("@ui Свежесть после утверждения позиц
     await seedSinglePlannedPosition();
   });
 
-  test("одиночное утверждение: строка обновляется на месте и видна на контроле", async ({ page }) => {
+  test("одиночное утверждение: строка уходит из плана и видна на контроле", async ({ page }) => {
     test.slow();
     await runApproveFreshnessScenario(
       page,
@@ -258,7 +239,6 @@ test.describe("@ui Свежесть после утверждения позиц
       page,
       approveBulkViaUI,
       (id) => `МАССОВОЕ утверждение позиции #${id}: на контроле выполнения строка не появилась`,
-      true,
     );
   });
 });

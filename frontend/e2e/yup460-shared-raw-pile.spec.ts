@@ -74,8 +74,12 @@ async function apiEnsureProduct460(token: string): Promise<{ id: number; sku: st
     // 2,7 м анод. медь матов»). В реестре одна длина: вторая была мусором от
     // прежнего захода, а сырьевая длина по ADR-0028 —
     // отдельный параметр подвеса и в реестр длин не пишется.
-    lengths_mm: [2700],
-    length_mm: 2700,
+    //
+    // Форма реестра — `lengths: [{length_mm, raw_length_mm, is_primary}]`
+    // (`ProductIn`). Плоских `lengths_mm`/`length_mm` схема не знает и молча
+    // игнорирует, поэтому реестр оставался пустым, а импорт плана отклонял
+    // строку как `normal_length_not_found` (#262).
+    lengths: [{ length_mm: 2700, is_primary: true }],
   });
   const created = (await list()).filter((p) => p.sku === SKU);
   expect(created.length, `продукт ${SKU} не создался`).toBe(1);
@@ -91,18 +95,15 @@ async function apiEnsureProduct460(token: string): Promise<{ id: number; sku: st
  */
 async function apiGetProductLengthsMm(token: string, productId: number): Promise<number[]> {
   const body = await apiJson(token, `/api/products/${productId}`);
-  const lengths = Array.isArray(body?.lengths_mm)
-    ? body.lengths_mm.map(Number).filter((n: number) => Number.isFinite(n) && n > 0)
+  // Реестр отдаётся как `lengths: [{length_mm, raw_length_mm, is_primary}]`
+  // (`ProductLengthOut`); плоского `lengths_mm` в ответе нет — тот же разъезд
+  // формы, что и в создании (#262).
+  const lengths = Array.isArray(body?.lengths)
+    ? body.lengths
+        .map((row: { length_mm?: unknown }) => Number(row?.length_mm))
+        .filter((n: number) => Number.isFinite(n) && n > 0)
     : [];
   return lengths.length > 0 ? lengths : [2700];
-}
-
-/** Свободный остаток из текста строки плана («[ЮП-460] · 1000 …»). */
-function parseRemainder(rowText: string): number | null {
-  const match = rowText.match(/·\s*(\d+)/);
-  if (!match) return null;
-  const value = Number(match[1]);
-  return Number.isFinite(value) ? value : null;
 }
 
 test.describe("@ui @ui-narrow ЮП-460: окно / гребенка / без пресса делят одну кучу сырья", () => {
@@ -217,7 +218,7 @@ test.describe("@ui @ui-narrow ЮП-460: окно / гребенка / без п�
     // на бэкенде от остатка склада МИНУС запущенный спрос, и строки приходят
     // перерисовкой после первой загрузки. Раньше остаток читался ОДИН раз сразу
     // после `waitForPlanningTableViaUI`, и на недописанной таблице все три
-    // позиции показывали «· 0» — тест падал на «видит 0, а не общую кучу».
+    // позиции показывали «0» — тест падал на «видит 0, а не общую кучу».
     // Ждём, пока все три строки покажут кучу; значение по-прежнему сверяется
     // ровно, «любое» не подставляем.
     const rowTexts: string[] = [];
@@ -232,9 +233,18 @@ test.describe("@ui @ui-narrow ЮП-460: окно / гребенка / без п�
             rowTexts.push(text);
             expect(text, `строка ${i}: неожиданный артикул`).toContain(SKU);
             expect(text, `строка ${i}: маршрут не назначен`).not.toContain("Не назначен");
-            const remainder = parseRemainder(text);
-            expect(remainder, `строка ${i}: индикатор остатка не читается: ${text}`).not.toBeNull();
-            remainders.push(remainder!);
+            // «Доступно для позиции» (#207) рендерит PositionSkuCell под
+            // `data-testid="position-sku-available"` — просто числом, без
+            // разделителя «·»: читаем значение по testid, а не из текста строки.
+            const remainderText = (
+              await rows.nth(i).getByTestId("position-sku-available").innerText()
+            ).trim();
+            const remainder = Number(remainderText);
+            expect(
+              Number.isFinite(remainder),
+              `строка ${i}: индикатор остатка не читается («${remainderText}»): ${text}`,
+            ).toBe(true);
+            remainders.push(remainder);
           }
           return remainders.join("/");
         },

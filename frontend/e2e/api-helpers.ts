@@ -517,13 +517,24 @@ export async function apiGetSectionByCode(code: string) {
   return section;
 }
 
-/** @smoke — POST /api/stock/adjustment (замена устаревшего spg/manual-operation). */
+/**
+ * @smoke — POST /api/stock/adjustment (замена устаревшего spg/manual-operation).
+ *
+ * `completedOperations` — группа остатка (ADR-0055): приход обязан лечь в ту же
+ * группу, из которой его заберёт списание. Складские (транзитные) этапы маршрута
+ * секции не несут (`route_stages.section_id = NULL`, склад живёт в
+ * `storage_section_id`), поэтому группа склада — «без операций» (`[]`): ровно её
+ * выводит `completed_operations_through_stage` для источника проводки. Без неё
+ * остаток уходит в NULL-группу «не зафиксировано», и выдача материала отвечает
+ * `Insufficient stock … available 0` на полном участке (тикет #262).
+ */
 export async function apiAddRemainder(
   productId: number,
   sectionId: number,
   quantity: number,
   comment: string,
   dimensions?: Record<string, number> | null,
+  completedOperations: string[] | null = [],
 ) {
   const res = await fetch(`${BACKEND_URL}/api/stock/adjustment`, {
     method: "POST",
@@ -534,6 +545,7 @@ export async function apiAddRemainder(
       quantity,
       reason: "manual_in",
       dimensions: dimensions ?? null,
+      completed_operations: completedOperations,
       comment,
     }),
   });
