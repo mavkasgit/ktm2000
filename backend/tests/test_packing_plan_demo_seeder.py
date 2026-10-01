@@ -368,6 +368,7 @@ def test_daily_plan_specs_never_yields_an_empty_card(count: int) -> None:
 # ─── 5. Интеграционный прогон сидера ─────────────────────────────────────────
 
 
+@pytest.mark.slow
 @pytest.mark.asyncio
 async def test_demo_seed_releases_all_plan_positions(session) -> None:
     """Импорт+релиз дают 55 released-позиций с раскроем фикстуры и задание на
@@ -424,6 +425,7 @@ async def test_demo_seed_releases_all_plan_positions(session) -> None:
         str(row["sku"]): round(float(row["input_length_m"]) * 1000) for row in PACKING_PLAN_ROWS
     }
 
+@pytest.mark.slow
 @pytest.mark.asyncio
 async def test_demo_board_carries_each_position_own_operations(session) -> None:
     """Демо-доска показывает операции позиции, а не заглушку шаблонного маршрута.
@@ -503,6 +505,7 @@ async def test_demo_board_carries_each_position_own_operations(session) -> None:
 
 
 
+@pytest.mark.slow
 @pytest.mark.asyncio
 async def test_demo_seed_fills_daily_plans_on_every_demo_section(session) -> None:
     """Каждый участок открывает 12 карточек на 9 дней; задания не терминальные и
@@ -553,6 +556,7 @@ async def test_demo_seed_fills_daily_plans_on_every_demo_section(session) -> Non
     )
 
 
+@pytest.mark.slow
 @pytest.mark.asyncio
 async def test_route_run_leaves_a_live_queue_on_all_three_sections(session) -> None:
     """Прогон по маршруту: ни одной позиции не пропущено, на каждом участке есть и
@@ -605,6 +609,7 @@ async def test_route_run_leaves_a_live_queue_on_all_three_sections(session) -> N
     assert shares[2] == pytest.approx(0.0, abs=0.01)
 
 
+@pytest.mark.slow
 @pytest.mark.asyncio
 async def test_rerun_with_reset_replaces_previous_demo(session) -> None:
     """Повторный прогон с reset пересобирает демо, а не наслаивает второй набор:
@@ -652,6 +657,7 @@ async def test_demo_seed_refuses_to_run_in_prod_env(session, monkeypatch, env_va
         await seed_packing_plan_demo(session, reset=True, run_route=True)
 
 
+@pytest.mark.slow
 @pytest.mark.asyncio
 async def test_prod_guard_fires_before_any_write(session, monkeypatch) -> None:
     """Проверка окружения — до сноса: под продом демо-набор должен остаться нетронутым."""

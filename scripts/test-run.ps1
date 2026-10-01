@@ -3,10 +3,11 @@ $ErrorActionPreference = "Stop"
 # ============================================================
 # Test runner with per-run isolated PostgreSQL database.
 #
-#   npm run test:pytest                parallel (-n auto)
-#   npm run test:pytest:full           serial
-#   npm run test:pytest:mon            parallel + testmon
-#   npm run test:pytest:lf             parallel + last-failed
+#   npm run test:pytest                parallel (-n auto), skips `slow` tests
+#   npm run test:pytest:full           serial, runs everything incl. `slow`
+#   npm run test:pytest:mon            parallel + testmon (skips `slow`)
+#   npm run test:pytest:lf             parallel + last-failed (skips `slow`)
+#   npm run test:pytest -- -m <expr>   caller's own -m wins, no filter added
 #   npm run test:pytest -- --keep-db   leave the run-DB in place (diagnosis)
 #   npm run test:pytest -- -k <expr>   extra pytest args pass through
 #
@@ -15,7 +16,7 @@ $ErrorActionPreference = "Stop"
 # each run creates, uses and drops ONLY its own database.
 # With --keep-db the database survives the run (and its owner row too), so a
 # failure can be inspected; `python scripts/test-db.py drop <db>` removes it
-# right away, `npm run test:db:cleanup` — by TTL.
+# right away, `npm run test:db:cleanup` -- by TTL.
 # ============================================================
 
 # ------------------------------------------------------------
@@ -30,11 +31,14 @@ $PostgresPassword = if ($env:TEST_DB_PASSWORD) { $env:TEST_DB_PASSWORD } else { 
 # otherwise every run grabs all cores and the machine becomes unresponsive.
 $NumWorkers = $env:PYTEST_NUM_WORKERS
 
-# Interpreter for test-db.py and pytest. Default is `python` from PATH; override
-# with TEST_PYTHON to make the run reproducible when PATH points at a different
-# Python than the one with the dependencies (as of 2026-10-01: PATH has system
-# Python 3.12 with the deps, while backend/.venv is an empty 3.14 - see B-0006).
-$PythonExe = if ($env:TEST_PYTHON) { $env:TEST_PYTHON } else { "python" }
+# Interpreter for test-db.py and pytest. Priority: TEST_PYTHON (explicit
+# override), then backend/.venv (the project's declared source of truth since
+# #252: rebuilt on Python 3.12 with requirements installed), then `python`
+# from PATH. The runner still verifies the choice actually starts.
+$VenvPython = Join-Path (Split-Path -Parent $PSScriptRoot) "backend\.venv\Scripts\python.exe"
+$PythonExe = if ($env:TEST_PYTHON) { $env:TEST_PYTHON }
+             elseif (Test-Path -LiteralPath $VenvPython) { $VenvPython }
+             else { "python" }
 $pythonOk = $true
 try { & $PythonExe -c "import sys" *> $null } catch { $pythonOk = $false }
 if ($pythonOk -and ($null -ne $LASTEXITCODE) -and $LASTEXITCODE -ne 0) { $pythonOk = $false }
@@ -73,6 +77,13 @@ $PytestArgs = @($args | Where-Object { $_ -notin @("--full", "--mon", "--lf", "-
 if ($Mon) { $PytestArgs += "--testmon" }
 if ($Lf) { $PytestArgs += "--lf" }
 
+# Slow-marker filter (decision #245 Q3/Q16): the default modes skip tests
+# marked `slow` (~204s of demo-seeder integration); --full and CI run them.
+# A caller's own -m always wins - ours is not appended in that case.
+$CallerHasMarker = @($PytestArgs | Where-Object { $_ -like "-m*" }).Count -gt 0
+$MarkerArgs = @()
+if (-not $FullRun -and -not $CallerHasMarker) { $MarkerArgs = @("-m", "not slow") }
+
 # Worker scheduling: one whole module per worker.
 # Measurements (3+3 interleaved runs, workers=4, per-module schema isolation):
 #   --dist load (default): 370.7 / 372.2 / 367.7s
@@ -91,6 +102,7 @@ else {
     if ($NumWorkers) { Write-Host "Mode   : FAST / XDIST (workers=$NumWorkers)" }
     else             { Write-Host "Mode   : FAST / XDIST (auto)" }
     if ($DistArgs.Count -gt 0) { Write-Host "Dist   : $($DistArgs[1]) (whole module per worker)" }
+    if ($MarkerArgs.Count -gt 0) { Write-Host "Marker : -m 'not slow' (slow tests skipped; pass -m to override)" }
 }
 if ($KeepDb) { Write-Host "DB     : keep after run (--keep-db)" }
 Write-Host "Python : $PythonExe"
@@ -142,12 +154,12 @@ try {
         # show progress, and a hang must be visible where it happens. The log
         # file keeps the same text for the xdist crash check below.
         if ($FullRun) {
-            & $PythonExe -m pytest @PytestArgs 2>&1 | Tee-Object -FilePath $LogFile
+            & $PythonExe -m pytest @MarkerArgs @PytestArgs 2>&1 | Tee-Object -FilePath $LogFile
         } else {
             if ($NumWorkers) {
-                & $PythonExe -m pytest -n $NumWorkers @DistArgs @PytestArgs 2>&1 | Tee-Object -FilePath $LogFile
+                & $PythonExe -m pytest -n $NumWorkers @DistArgs @MarkerArgs @PytestArgs 2>&1 | Tee-Object -FilePath $LogFile
             } else {
-                & $PythonExe -m pytest -n auto @DistArgs @PytestArgs 2>&1 | Tee-Object -FilePath $LogFile
+                & $PythonExe -m pytest -n auto @DistArgs @MarkerArgs @PytestArgs 2>&1 | Tee-Object -FilePath $LogFile
             }
         }
         $ExitCode = $LASTEXITCODE
