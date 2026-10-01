@@ -1,4 +1,5 @@
 import { readFileSync } from "node:fs";
+import { resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import { defineConfig, devices } from "@playwright/test";
 import { isPrivateHost } from "./src/shared/lib/hostGuard";
@@ -7,7 +8,14 @@ import { isPrivateHost } from "./src/shared/lib/hostGuard";
 // них — `.env.e2e` в корне репозитория (та же БД, что поднимает `e2e:prep`),
 // а не константы этого файла: прогон против чужого стека переопределяет
 // значения переменными окружения, и они важнее содержимого файла.
-const STAND_ENV_FILE = fileURLToPath(new URL("../.env.e2e", import.meta.url));
+// Путь переопределяется `E2E_ENV_FILE`: у каждого worktree клона своя БД стенда,
+// иначе параллельные прогоны бьют в одну базу (frontend/e2e/AGENTS.md).
+// Относительное значение считается от корня репозитория: конфиг грузится из
+// `frontend/`, и путь, разрешённый от текущего каталога, не нашёлся бы.
+const REPO_ROOT = fileURLToPath(new URL("..", import.meta.url));
+const STAND_ENV_FILE = process.env.E2E_ENV_FILE
+  ? resolve(REPO_ROOT, process.env.E2E_ENV_FILE)
+  : fileURLToPath(new URL("../.env.e2e", import.meta.url));
 
 function loadStandEnv(file: string): void {
   let content: string;

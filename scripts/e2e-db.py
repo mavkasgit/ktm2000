@@ -60,7 +60,19 @@ from urllib.parse import urlparse
 import asyncpg
 
 REPO_ROOT = Path(__file__).resolve().parents[1]
-DEFAULT_ENV_FILE = REPO_ROOT / ".env.e2e"
+# Переопределяемо через `E2E_ENV_FILE`: у каждого worktree клона должна быть своя
+# БД стенда, иначе параллельные прогоны бьют в одну базу и стирают данные друг
+# друга (см. `frontend/e2e/AGENTS.md`, «Один стенд — один прогон»).
+def _stand_env_file() -> Path:
+    """Env-файл стенда: `E2E_ENV_FILE` (относительный — от корня репозитория)."""
+    raw = os.environ.get("E2E_ENV_FILE")
+    if not raw:
+        return REPO_ROOT / ".env.e2e"
+    path = Path(raw)
+    return path if path.is_absolute() else REPO_ROOT / path
+
+
+DEFAULT_ENV_FILE = _stand_env_file()
 DEV_ENV_FILE = REPO_ROOT / ".env.dev"
 
 # Подстраховка на случай, если `.env.dev` локально отсутствует или переименован.
