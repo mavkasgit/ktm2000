@@ -113,6 +113,10 @@ export function StockBalancesPanel({
     () => (locationIds?.length ? [...locationIds].sort((a, b) => a - b) : undefined),
     [locationIds],
   );
+  // В `resetPageDeps` уходит строка, а не массив: сравнение там по идентичности,
+  // а массив приходит из мемо родителя и пересоздаётся на каждом refetch списка
+  // складов — страница сбрасывалась на первую без смены фильтра (ADR-0060 п.4).
+  const locationIdsKey = normalizedLocationIds?.join(",") ?? "";
 
   const {
     page,
@@ -126,7 +130,7 @@ export function StockBalancesPanel({
   } = usePaginatedTableQuery({
     resetPageDeps: [
       locationId,
-      normalizedLocationIds,
+      locationIdsKey,
       debouncedSearch,
       columnFilters,
       debouncedColumnSearchQueries,
