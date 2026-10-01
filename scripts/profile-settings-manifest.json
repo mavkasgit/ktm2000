@@ -1,5 +1,5 @@
 {
-  "version": "2.1.1",
+  "version": "2.1.2",
   "core": {
     "frontend/src/modules/user-settings/UserSettingsDialog.tsx": "5d0fead26fbc42cd1425d48a3b92d0eb86be216318c1190fb92da01745548874",
     "frontend/src/modules/user-settings/components/ProfilePanel.tsx": "b38a6346dc78df2325d0dbee05410a69d2739bd6200a9c88875ac808d5b90589",
@@ -15,7 +15,7 @@
     "frontend/src/modules/user-settings/lib/device.ts": "46a842d5ff8855a7246dcde9200909b111b95f216f2136d79d778e9f5f17978a",
     "frontend/src/modules/user-settings/i18n/ru.ts": "e82bd92c82af33618896d5892e82da26a979b974c98c3069630d8307287cf638",
     "backend/app/services/authentik_client.py": "a24660ad004c2896f9ed58a9b6bbad6b30258893f0af70634f71ee044979b289",
-    "backend/app/services/unified_profile_service.py": "cbe5f12d515abb5ccc6015e58b4ccfa997b8d1723a5de8e58e3275a80d461d4e"
+    "backend/app/services/unified_profile_service.py": "522135cdad5ac98f039fa8a65839c1ed9452ce82781629e29f0f7a9fc23e4231"
   },
   "exceptions": [
     "backend/app/core/host_net.py",
