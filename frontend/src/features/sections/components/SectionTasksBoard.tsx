@@ -48,9 +48,12 @@ import {
   getTaskViewCategory,
   isTaskFullyTransferred,
 } from "../lib/taskStatus";
-import { getTaskGroupHeaderState } from "../lib/taskView";
 import {
-  TaskExtras,
+  getTaskGroupHeaderState,
+  packagingBreakdownLabel,
+  taskOperations,
+} from "../lib/taskView";
+import {
   TaskStatusDot,
   buildTaskViewFields,
   getTaskCardClass,
@@ -61,7 +64,6 @@ import { TABLE_ROW_COMPACT, TABLE_ROW_DENSE } from "@/shared/lib/dataTableStyles
 import { actionReasonText } from "@/shared/lib/actionReasons";
 import { cn } from "@/shared/utils/cn";
 import { fmtQty } from "@/shared/lib/quantityFormat";
-import { packagingBreakdownLabel, taskPrimaryOperation } from "../lib/taskView";
 import { boardColumns } from "../lib/boardColumns";
 
 // ---------------------------------------------------------------------------
@@ -205,9 +207,6 @@ function renderTaskRow(
       {fields.map((field) => (
         <td key={field.key} className={cn(ROW_CELL_CLASS, field.cellClass)}>
           {field.node}
-          {field.key === "operation" && (
-            <TaskExtras task={task} className="block text-xs text-muted-foreground" />
-          )}
         </td>
       ))}
       <td className={ROW_CELL_CLASS}>
@@ -297,9 +296,6 @@ function renderMobileCard(
           </div>
         ))}
       </div>
-
-      <TaskExtras task={task} className="block text-xs text-muted-foreground border-t pt-2" />
-
 
         {onRevokeItem ? (
           <Button
@@ -396,7 +392,14 @@ function TableTaskGroupRow({
         {formatDimensionsLabel(taskGroupingDimensions(firstTask))}
       </td>
       <td className={`${ROW_CELL_CLASS} text-xs text-slate-500 font-medium`}>
-        {taskPrimaryOperation(firstTask) || "—"}
+        {firstTask.transforms_dimensions ? (
+          <CutLayoutCell
+            layout={firstTask.cut_layout}
+            fallback={formatDimensionsLabel(taskGroupingDimensions(firstTask))}
+          />
+        ) : (
+          taskOperations(firstTask).join(" · ") || "—"
+        )}
       </td>
       <td className={`${ROW_CELL_CLASS} text-xs text-slate-500 font-medium`}>
         {packagingBreakdownLabel(group.tasks, fmtQty)}

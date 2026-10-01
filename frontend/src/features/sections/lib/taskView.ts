@@ -3,7 +3,7 @@
  *
  * Одно решение о состоянии задания, одна раскладка на раскладки: строка
  * таблицы, карточка узкого экрана и панель массовых операций берут здесь и
- * тон, и цвет точки статуса, и подпись группы, и прогресс выходов. Раньше эти
+ * тон, и цвет точки статуса, и подпись группы. Раньше эти
  * решения жили в трёх местах и разошлись: панель массовых операций не считала
  * полностью переданное задание зелёным (#191).
  *
@@ -12,7 +12,6 @@
  */
 
 import type { SectionBoardTask } from "@/shared/api/shopfloor";
-import { formatDimensionsLabel } from "@/shared/api/stock";
 import type { ActionReasonCode } from "@/shared/lib/actionReasons";
 import {
   getReadyStatusLabel,
@@ -20,7 +19,7 @@ import {
   isTaskFullyTransferred,
   getTaskViewCategory,
 } from "./taskStatus";
-import { QTY_EMPTY, fmtQty } from "@/shared/lib/quantityFormat";
+import { QTY_EMPTY } from "@/shared/lib/quantityFormat";
 
 /**
  * Тон задания: «в ожидании», «в работе», «взято в работу», «завершено»,
@@ -57,17 +56,6 @@ export function getStatusDotClass(task: SectionBoardTask): string {
   if (status === "blocked") return "bg-red-500";
   if (["waiting_previous", "pending"].includes(status)) return "bg-yellow-400";
   return "bg-slate-300";
-}
-
-/**
- * Прогресс по выходам трансформирующего задания (ADR-0002) одной строкой.
- * `null` — прогресса нет, раскладка ничего не рисует.
- */
-export function getTaskOutputsProgressText(task: SectionBoardTask): string | null {
-  if (!task.transforms_dimensions || !task.outputs_progress?.length) return null;
-  return task.outputs_progress
-    .map((row) => `${formatDimensionsLabel(row.dimensions)}: ${fmtQty(row.produced_quantity)}/${fmtQty(row.quantity)}`)
-    .join(" · ");
 }
 
 export type TaskGroupHeaderState = {
@@ -129,21 +117,29 @@ export function taskPackaging(task: SectionBoardTask): string | null {
 }
 
 /**
- * Первая операция участка — та, что стоит в колонке «Операция».
+ * Операции участка строки — список для колонки «Операция».
  *
- * Берётся первая операция этапа, а не «эффективная» (`operation_name`): туда
- * попадает и ручной выбор операции, и она может оказаться упаковочной — тогда
- * цвет позиции в «Операции» утонул бы в списке. Упаковочная операция первой в
- * «Операции» не показывается вовсе: её несёт колонка «Упаковка».
+ * Все операции этапа по порядку, а не только первая: на анодировании это цвет,
+ * на прессе — вид обработки. Упаковочные операции в список не входят: их несёт
+ * колонка «Упаковка» (ADR-0058, #210), поэтому строка с одной упаковкой даёт
+ * пустой список — раскладка показывает прочерк. Если операций этапа нет вовсе,
+ * берётся «эффективная» (`operation_name`).
  */
-export function taskPrimaryOperation(task: SectionBoardTask): string {
+export function taskOperations(task: SectionBoardTask): string[] {
   const codes = task.operation_codes ?? [];
   const names = task.operation_names ?? [];
-  const firstCode = codes[0];
-  if (!firstCode || !firstCode.startsWith(PACKAGING_OPERATION_PREFIX)) {
-    return names[0]?.trim() || task.operation_name?.trim() || "";
+  const labels: string[] = [];
+
+  for (const [index, code] of codes.entries()) {
+    if (code && code.startsWith(PACKAGING_OPERATION_PREFIX)) continue;
+    const name = names[index]?.trim();
+    if (name && !labels.includes(name)) labels.push(name);
   }
-  return "";
+
+  if (labels.length > 0) return labels;
+  if (codes.length > 0) return [];
+  const fallback = task.operation_name?.trim();
+  return fallback ? [fallback] : [];
 }
 
 /**
