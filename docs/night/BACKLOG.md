@@ -13,7 +13,12 @@ IN_PROGRESS / DONE / REJECTED / BLOCKED_NEEDS_HUMAN.
 ## B-0001 — CI прогоняет только миграции, не прогоняет тестовый набор
 
 - **Категория:** CI-эффективность
-- **Статус:** NEW
+- **Статус:** NEW → частично закрыто `T-0015`: набор проверен на Linux
+  (**1951 passed, 0 failed** за 189s в контейнере `python:3.12-slim`, ни одного
+  платформенного падения) и добавлен **ручной** workflow
+  `.github/workflows/backend-tests.yml` (`workflow_dispatch`, блок сервиса
+  Postgres идентичен `migrations.yml`). Осталось решение человека: включать ли
+  джоб в push/PR (минуты CI, политика).
 - **Доказательство:** `.github/workflows/` содержит единственный файл
   `migrations.yml`. Его шаги: `alembic upgrade head && alembic check`,
   `pytest tests/test_migrations.py`, `scripts/validate_seeds.py`,
