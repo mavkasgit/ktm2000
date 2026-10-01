@@ -65,9 +65,17 @@ const SETTINGS = { area_limit_m2: 13, rod_length_mm: 1450, gap_mm: 20, rod_count
 const renderTable = () =>
   render(<HangerCalcTable readOnly onEdit={() => {}} />);
 
-// У активной колонки в aria-label добавляется направление: «Сортировка по sku (desc)».
-const clickSort = (field: string) =>
-  fireEvent.click(screen.getByRole("button", { name: new RegExp(`^Сортировка по ${field}`) }));
+/**
+ * Кнопка сортировки колонки. Доступное имя собирается из подписи колонки
+ * (#204), поэтому тест адресует кнопку по машинному полю в `data-sort-field`.
+ */
+function sortButton(field: string): HTMLElement {
+  const button = document.querySelector<HTMLButtonElement>(`button[data-sort-field="${field}"]`);
+  if (!button) throw new Error(`Не найдена кнопка сортировки колонки «${field}»`);
+  return button;
+}
+
+const clickSort = (field: string) => fireEvent.click(sortButton(field));
 
 /** Параметры последнего запроса списка компонентов. */
 const lastParams = () => {
@@ -86,7 +94,7 @@ beforeEach(() => {
 describe("HangerCalcTable: серверная сортировка", () => {
   /** Ждёт отрисовки шапок и возвращает число запросов, сделанных к этому моменту. */
   const waitForTable = async () => {
-    await screen.findByRole("button", { name: /^Сортировка по sku/ });
+    await waitFor(() => expect(sortButton("sku")).toBeTruthy());
     return vi.mocked(listProductsPaginated).mock.calls.length;
   };
 

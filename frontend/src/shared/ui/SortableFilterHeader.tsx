@@ -66,6 +66,11 @@ export interface SortableFilterHeaderProps<Field extends string, SortField exten
  * - Search in popover: partial match + relevance sort; live table filter via
  *   onSearchChange
  *
+ * Доступность (#204): значение фильтра — кнопка с `aria-pressed` (Tab
+ * проходит по значениям, Enter/Space переключает), а `aria-label` кнопки
+ * сортировки собирается из подписи колонки, порядка словами и приоритета
+ * мультисортировки — машинного имени поля в нём нет.
+ *
  * Пока в поповере серверной колонки введён текст, списка значений на экране
  * нет: одно поле — одно действие, и «ищу подстроку» с «выбираю значение» не
  * должны быть двумя молчащими режимами одного контрола. Текст приоритетнее
@@ -123,6 +128,21 @@ export function SortableFilterHeader<Field extends string, SortField extends str
     ? currentSorts.find((s) => (s.field as string) === (field as string))
     : undefined;
   const sortPriority = activeSort ? currentSorts.indexOf(activeSort) + 1 : null;
+
+  // `label` объявлен как `ReactNode`, но у колонок это строка: узел в
+  // `aria-label` не превратить, а машинное имя поля оператору ничего не
+  // говорит — скринридер читал «Сортировка по productSku» (#204).
+  const columnLabel = typeof label === "string" ? label : String(field);
+  const sortOrderLabel = activeSort
+    ? activeSort.order === "asc"
+      ? "по возрастанию"
+      : "по убыванию"
+    : "не задана";
+  const sortPriorityLabel =
+    sortPriority !== null && currentSorts.length > 1
+      ? `, приоритет ${sortPriority} из ${currentSorts.length}`
+      : "";
+  const sortAriaLabel = `${columnLabel}, сортировка ${sortOrderLabel}${sortPriorityLabel}`;
 
   const hasSetFilter = selectedValues.size > 0;
   const hasSearchFilter = searchQuery.trim().length > 0;
@@ -250,10 +270,15 @@ export function SortableFilterHeader<Field extends string, SortField extends str
                   {filteredValues.map((value) => {
                     const isSelected = selectedValues.has(value);
                     return (
-                      <div
+                      // Значение — кнопка, а не `div` с `onClick`: только так до
+                      // него доходят Tab и Enter/Space, а `aria-pressed`
+                      // объявляет скринридеру, выбрано значение или нет (#204).
+                      <button
                         key={value}
+                        type="button"
+                        aria-pressed={isSelected}
                         className={cn(
-                          "px-2 py-1 text-xs cursor-pointer transition-colors truncate",
+                          "block w-full px-2 py-1 text-xs text-left cursor-pointer transition-colors truncate",
                           isSelected
                             ? "bg-primary text-primary-foreground"
                             : "hover:bg-accent text-foreground",
@@ -261,7 +286,7 @@ export function SortableFilterHeader<Field extends string, SortField extends str
                         onClick={() => toggleOne(value)}
                       >
                         {displayLabel(value)}
-                      </div>
+                      </button>
                     );
                   })}
                 </div>
@@ -309,9 +334,12 @@ export function SortableFilterHeader<Field extends string, SortField extends str
           type="button"
           onClick={() => onSortChange(field as unknown as SortField)}
           aria-pressed={activeSort ? "true" : "false"}
-          aria-label={`Сортировка по ${String(field)}${activeSort ? ` (${activeSort.order})` : ""}`}
+          aria-label={sortAriaLabel}
           data-sort-order={activeSort?.order ?? "none"}
           data-sort-priority={sortPriority ?? undefined}
+          // Машинное поле — только здесь: `aria-label` выше собирается из
+          // подписи колонки, а тесты адресуют кнопку по полю (#204).
+          data-sort-field={String(field)}
           className={cn(
             "inline-flex items-center shrink-0 text-muted-foreground hover:text-foreground transition-colors cursor-pointer",
             activeSort && "text-foreground",

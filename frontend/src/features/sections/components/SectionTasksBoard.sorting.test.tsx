@@ -84,10 +84,20 @@ function renderedSkuOrder(): string[] {
   return renderedColumnOrder("Артикул");
 }
 
+/**
+ * Кнопка сортировки колонки: доступное имя собирается из подписи колонки
+ * (#204), поэтому тест адресует кнопку по машинному полю в `data-sort-field`.
+ */
+function sortButton(field: string): HTMLElement {
+  const button = document.querySelector<HTMLButtonElement>(`button[data-sort-field="${field}"]`);
+  if (!button) throw new Error(`Не найдена кнопка сортировки колонки «${field}»`);
+  return button;
+}
+
 /** Клик по кнопке сортировки колонки. Цикл: нет → убыв. → возр. → снять. */
 function clickSort(field: string) {
   act(() => {
-    screen.getByLabelText(new RegExp(`Сортировка по ${field}`)).click();
+    sortButton(field).click();
   });
 }
 

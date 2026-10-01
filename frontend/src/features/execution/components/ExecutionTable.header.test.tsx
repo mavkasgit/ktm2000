@@ -109,7 +109,7 @@ describe("ExecutionTable: сортируемые колонки", () => {
 
     for (const label of UNSORTABLE_LABELS) {
       expect(
-        within(headerCell(label)).queryByRole("button", { name: /Сортировка по/ }),
+        within(headerCell(label)).queryByRole("button", { name: /, сортировка/ }),
         `у колонки «${label}» не должно быть кнопки сортировки`,
       ).toBeNull();
     }
@@ -119,7 +119,7 @@ describe("ExecutionTable: сортируемые колонки", () => {
     render(<Harness sortConfigs={[]} />);
 
     const withSortButton = getExecutionTableColumns()
-      .filter((column) => within(headerCell(column.label)).queryByRole("button", { name: /Сортировка по/ }))
+      .filter((column) => within(headerCell(column.label)).queryByRole("button", { name: /, сортировка/ }))
       .map((column) => column.label);
 
     expect(withSortButton).toEqual(SORTABLE_LABELS);
@@ -129,7 +129,7 @@ describe("ExecutionTable: сортируемые колонки", () => {
     render(<Harness sortConfigs={[{ field: "route", order: "desc" }]} />);
 
     const cell = headerCell("Маршрут");
-    expect(within(cell).queryByRole("button", { name: /Сортировка по/ })).toBeNull();
+    expect(within(cell).queryByRole("button", { name: /, сортировка/ })).toBeNull();
     expect(cell.getAttribute("aria-sort")).toBeNull();
   });
 
@@ -137,7 +137,7 @@ describe("ExecutionTable: сортируемые колонки", () => {
     render(<Harness sortConfigs={[{ field: "sku", order: "asc" }]} />);
 
     const cell = headerCell("Артикул");
-    const sortButton = within(cell).getByRole("button", { name: /Сортировка по sku \(asc\)/ });
+    const sortButton = within(cell).getByRole("button", { name: /Артикул, сортировка по возрастанию/ });
     expect(sortButton.getAttribute("data-sort-order")).toBe("asc");
     expect(cell.getAttribute("aria-sort")).toBe("ascending");
   });

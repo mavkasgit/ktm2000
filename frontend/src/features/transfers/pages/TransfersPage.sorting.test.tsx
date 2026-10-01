@@ -200,11 +200,21 @@ beforeEach(() => {
 });
 
 /**
+ * Кнопка сортировки колонки: доступное имя собирается из подписи колонки
+ * (#204), поэтому тест адресует кнопку по машинному полю в `data-sort-field`.
+ */
+function sortButton(field: string): HTMLElement {
+  const button = document.querySelector<HTMLButtonElement>(`button[data-sort-field="${field}"]`);
+  if (!button) throw new Error(`Не найдена кнопка сортировки колонки «${field}»`);
+  return button;
+}
+
+/**
  * Клик по кнопке сортировки колонки ready-таблицы. Между кликами таблица
  * перезапрашивается, поэтому ждём возврата шапки.
  */
 async function clickReadySort(field: string) {
-  const button = await screen.findByLabelText(new RegExp(`^Сортировка по ${field}`));
+  const button = await waitFor(() => sortButton(field));
   await act(async () => {
     fireEvent.click(button);
   });
@@ -350,7 +360,7 @@ describe("TransfersPage: сортировка таблицы «Готово к �
     renderPage();
     fireEvent.click(await screen.findByTitle("Открыть журнал передач"));
 
-    const header = await screen.findByLabelText(/^Сортировка по quantity/);
+    const header = await waitFor(() => sortButton("quantity"));
     await act(async () => {
       fireEvent.click(header);
     });

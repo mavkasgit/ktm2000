@@ -94,6 +94,78 @@ describe("SortableFilterHeader", () => {
     expect(html).toContain('aria-pressed="true"');
   });
 
+  it("aria-label кнопки сортировки — из подписи колонки, а не из имени поля", () => {
+    const html = renderToStaticMarkup(
+      <SortableFilterHeader
+        field="sku"
+        label="Артикул"
+        currentSorts={[{ field: "sku", order: "asc" }]}
+        onSortChange={vi.fn()}
+        values={[]}
+        selectedValues={new Set()}
+        onFilterChange={vi.fn()}
+      />,
+    );
+
+    expect(html).toContain('aria-label="Артикул, сортировка по возрастанию"');
+    // Машинное имя поля оператору ничего не говорит: скринридер читал
+    // «Сортировка по sku (asc)» (#204).
+    expect(html).not.toContain("Сортировка по sku");
+    expect(html).not.toContain("(asc)");
+  });
+
+  it("aria-label несортированной колонки говорит, что сортировка не задана", () => {
+    const html = renderToStaticMarkup(
+      <SortableFilterHeader
+        field="sku"
+        label="Артикул"
+        currentSorts={[]}
+        onSortChange={vi.fn()}
+        values={[]}
+        selectedValues={new Set()}
+        onFilterChange={vi.fn()}
+      />,
+    );
+
+    expect(html).toContain('aria-label="Артикул, сортировка не задана"');
+  });
+
+  it("приоритет мультисортировки назван в том же aria-label", () => {
+    const html = renderToStaticMarkup(
+      <SortableFilterHeader<"sku", "sku" | "route">
+        field="sku"
+        label="Артикул"
+        currentSorts={[
+          { field: "route", order: "desc" },
+          { field: "sku", order: "asc" },
+        ]}
+        onSortChange={vi.fn()}
+        values={[]}
+        selectedValues={new Set()}
+        onFilterChange={vi.fn()}
+      />,
+    );
+
+    expect(html).toContain('aria-label="Артикул, сортировка по возрастанию, приоритет 2 из 2"');
+  });
+
+  it("у единственной сортировки приоритет не называется: это шум", () => {
+    const html = renderToStaticMarkup(
+      <SortableFilterHeader
+        field="sku"
+        label="Артикул"
+        currentSorts={[{ field: "sku", order: "desc" }]}
+        onSortChange={vi.fn()}
+        values={[]}
+        selectedValues={new Set()}
+        onFilterChange={vi.fn()}
+      />,
+    );
+
+    expect(html).toContain('aria-label="Артикул, сортировка по убыванию"');
+    expect(html).not.toContain("приоритет");
+  });
+
   it("при sortable=false не рендерит кнопку сортировки, но оставляет фильтр", () => {
     const html = renderToStaticMarkup(
       <SortableFilterHeader
@@ -158,6 +230,34 @@ describe("выбор значения в поповере", () => {
     fireEvent.click(screen.getByText("Выбрать все"));
 
     expect(emittedSelections).toEqual([new Set(["ЮП-460", "ABC-100"])]);
+  });
+
+  it("значение — кнопка: попадает в порядок Tab и объявляет выбор через aria-pressed", () => {
+    // `div` с `onClick` имел `tabIndex` −1 и в порядок Tab не попадал вовсе:
+    // выбрать значение клавиатурой было нельзя, а скринридер объявлял пустой
+    // блок текста. Enter/Space на нативной кнопке выполняет браузер — он шлёт
+    // `click`, поэтому переключение проверяется тем же путём (#204).
+    const { emittedSelections } = mountFilterPopover();
+    const value = screen.getByRole("button", { name: "ЮП-460" });
+
+    expect(value.tagName).toBe("BUTTON");
+    expect(value.tabIndex).toBe(0);
+    expect(value.getAttribute("aria-pressed")).toBe("false");
+
+    fireEvent.click(value);
+
+    expect(emittedSelections).toEqual([new Set(["ЮП-460"])]);
+    expect(screen.getByRole("button", { name: "ЮП-460" }).getAttribute("aria-pressed")).toBe("true");
+  });
+
+  it("повторный выбор значения снимает aria-pressed", () => {
+    mountFilterPopover();
+    const value = () => screen.getByRole("button", { name: "ЮП-460" });
+
+    fireEvent.click(value());
+    fireEvent.click(value());
+
+    expect(value().getAttribute("aria-pressed")).toBe("false");
   });
 });
 
