@@ -1,6 +1,6 @@
 from datetime import datetime
 from uuid import UUID
-from pydantic import BaseModel
+from pydantic import BaseModel, ConfigDict
 
 # Сколько последних активных сессий отдаём в GET /auth/sessions
 # (канон user-settings 2.0.0: список не раздувается, счётчик — в total).
@@ -21,8 +21,7 @@ class SessionOut(BaseModel):
     last_seen_at: datetime | None = None
     is_current: bool = False
 
-    class Config:
-        from_attributes = True
+    model_config = ConfigDict(from_attributes=True)
 
 
 class SessionListOut(BaseModel):
@@ -46,8 +45,7 @@ class LoginEventOut(BaseModel):
     created_at: datetime
     failure_reason: str | None = None
 
-    class Config:
-        from_attributes = True
+    model_config = ConfigDict(from_attributes=True)
 
 
 class LoginEventListOut(BaseModel):
