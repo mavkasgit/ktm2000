@@ -133,7 +133,6 @@ async def test_create_rule_valid_returns_201(client, session) -> None:
 async def test_create_rule_with_value_from_keeps_reference(client, session) -> None:
     """`value_from` — ожидаемое значение из другого поля; API не теряет ссылку (#277)."""
     profile = await _seed_sections_and_profile(session)
-    sawing = await session.scalar(select(Section).where(Section.code == "SAWING"))
 
     response = await client.post(
         "/api/route-selection-rules",
