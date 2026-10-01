@@ -20,7 +20,6 @@ import pytest
 from app.models.action_journal import Action, ActionStatus
 from app.reversal import errors
 from app.reversal.service import _sign_payload, reversal_service
-from app.services.material_operations import completed_operations_for_task
 from app.stock.import_service import RemainderItem, apply_remainders_import
 from app.stock.models import Reason, StockBalance, StockTransaction
 from app.stock.services import StockCommand, StockCommandService
@@ -310,30 +309,17 @@ async def test_reverse_full_chain_cascade_topological_order(
     session: AsyncSession,
 ) -> None:
     """Каскадная отмена всей цепочки задачи в обратном топологическом
-    порядке; остатки возвращаются к состоянию до цепочки."""
+    порядке; остатки возвращаются к состоянию до цепочки.
+
+    Никакого остатка в группе своего этапа не засевается: узел ``complete``
+    отдал свой выпуск зависимым (final_release, return_to_stock), и покрытие
+    на его компенсацию возникает только из их отката. Preview обязан
+    смоделировать именно это (виртуальный проход каскада, #274), иначе
+    корень упирается в ложный ``CoverageShortfall``.
+    """
     fx = await _setup_minimal_route(session)
     await _issue_material(session, fx, qty=Decimal(30))
     product_id = fx["product"].id
-    section_id = fx["task"].section_id
-    # Участок уже выпускал раньше: в группе СВОЕГО этапа лежит остаток
-    # предыдущей порции. Без него каскадный откат корня цепочки упирается в
-    # покрытие: preview проверяет каждый узел по ТЕКУЩЕМУ состоянию, и на
-    # момент preview выпуск цепочки (8) в группе своего этапа уже разобран
-    # финальным выпуском (5) — вернёт его только откат зависимого узла,
-    # который проверка покрытия не моделирует. Продовый участок в этот
-    # момент не пуст: порции выпускаются одна за другой. Дефект preview —
-    # тикет #274; обходной путь оператора (откатывать зависимый узел первым)
-    # здесь разыгран посевом остатка.
-    await StockCommandService().record(session, StockCommand(
-        product_id=product_id,
-        from_location_id=None,
-        to_location_id=section_id,
-        quantity=Decimal(5),
-        reason=Reason.MANUAL_IN,
-        completed_operations=await completed_operations_for_task(session, fx["task"]),
-        created_by=fx["user"].id,
-    ))
-    await session.commit()
     pre_groups = await _stock_groups(session, product_id)
 
     chain = await _task_chain(session, fx)
@@ -342,6 +328,8 @@ async def test_reverse_full_chain_cascade_topological_order(
     preview = await reversal_service.preview_reverse(
         session, chain["complete"].id, cascade=True
     )
+    assert not preview.blockers, [b.detail for b in preview.blockers]
+    assert preview.plan_token
     assert {n.id for n in preview.revert} == {
         chain["complete"].id, chain["final_release"].id, chain["return_to_stock"].id,
     }

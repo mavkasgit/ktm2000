@@ -100,13 +100,23 @@ class Compensator(Protocol):
     action_type: str
 
     async def check(
-        self, db: AsyncSession, ref_id: int | None, *, action_id: int | None = None
+        self,
+        db: AsyncSession,
+        ref_id: int | None,
+        *,
+        action_id: int | None = None,
+        coverage_adjustments: dict | None = None,
     ) -> ReversalCheck:
         """Проверить возможность отката без исполнения.
 
         ``action_id`` — id узла журнала (тикет #116): для действий без
         уникального ref_id (напр. manual_adjustment) пара
         (action_type, ref_id) неоднозначна.
+
+        ``coverage_adjustments`` — виртуальное состояние остатков каскада
+        (#274): чистовой эффект компенсаций уже пройденных узлов, к которому
+        добавляется текущий остаток. Один узел, проверенный против снимка
+        «до», даёт ложный ``coverage``, если материал вернёт зависимый узел.
         """
         ...
 
