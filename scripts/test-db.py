@@ -7,12 +7,14 @@ The test launcher (scripts/test-run.ps1) owns the lifecycle of a run-DB:
     test-db.py drop    <db>    -- terminate conns, drop run-DB, clear owner row
     test-db.py drop --force <db> -- drop a DB without an owner row (ktm_mig_* left
                                   by an interrupted migration test)
-    test-db.py cleanup          -- drop orphan run-DBs by TTL (or unowned)
+    test-db.py cleanup          -- drop orphan run-DBs by TTL (or unowned) and
+                                  stale test storage dirs (ktm2000_pytest_storage*)
 
 The owner row is written BEFORE ``CREATE DATABASE``, so an interrupted
 launcher always leaves either no DB or a DB with an owner row that the TTL
 cleanup can age. ``drop`` only removes a DB whose owner row matches, and TTL
-cleanup skips any DB with active connections.
+cleanup skips any DB with active connections; test storage dirs are removed by
+mtime once they are older than the TTL (a live run keeps its dir fresh).
 
 Names are strictly validated: without ``--force`` only ``ktm2000_test_<12 hex>``
 is ever touched, with ``--force`` also ``ktm_mig_<10 hex>`` (those DBs are made
@@ -326,7 +328,10 @@ def main() -> None:
         ),
     )
 
-    p_cleanup = sub.add_parser("cleanup", help="drop orphan run-DBs by TTL")
+    p_cleanup = sub.add_parser(
+        "cleanup",
+        help="drop orphan run-DBs and stale test storage dirs by TTL",
+    )
     p_cleanup.add_argument("--ttl-hours", type=float, default=DEFAULT_TTL_HOURS)
     p_cleanup.add_argument("--dry-run", action="store_true")
 
