@@ -1,4 +1,4 @@
-"""#300: авто-передача при завершении задачи — батчинг цепочки этапов.
+"""#300: авто-передача при завершении задачи — регрессия и замер SQL.
 
 Кейс: маршрут «склад сырья → производственный участок СПГ-1 → производственный
 участок СПГ-2». Выпуск плана создаёт задания на производственных этапах,
@@ -9,14 +9,16 @@
 общий хелпер ``build_operation_route`` кладёт все участки в один СПГ, и с ним
 передачи не бывает вовсе.
 
-Проверяется главное свойство батчинга: число SQL перестаёт зависеть от длины
-цепочки, а созданные передачи (from/to/quantity/dimensions/reason/status) не
-меняются. Ответ до/после сверяется этим же тестом на дереве «до» и «после».
+Снимок цепочки (#300) на этом кейсе измерен и ОТКАЧЕН: 96 → 97 SQL, ответ
+идентичен. Условия выхода цикла и разбор — в
+``docs/night/tickets/T-300-auto-transfer-batching.md``.
 """
 
 from __future__ import annotations
 
+import asyncio
 import json
+import pathlib
 from collections import Counter
 from decimal import Decimal
 
@@ -151,13 +153,13 @@ async def _transfers_payload(session) -> list[dict]:
 async def _run_case(session, *, sku: str) -> tuple[dict, list[dict]]:
     from app.services.shopfloor.operations_tasks import complete_task
 
-    fx, user, _p1, p1_task = await _prepare(session, sku=sku)
+    _fx, user, _p1, p1_task = await _prepare(session, sku=sku)
 
     kinds: Counter[str] = Counter()
     sync_engine = session.bind.sync_engine
 
     @event.listens_for(sync_engine, "before_cursor_execute")
-    def _count(conn, cursor, statement, parameters, context, executemany):  # noqa: ARG001
+    def _count(conn, cursor, statement, parameters, context, executemany):
         kinds[statement.lstrip().split(" ", 1)[0].upper()] += 1
 
     try:
@@ -187,11 +189,14 @@ async def test_measure_auto_transfer_sql(session) -> None:
     print(f"\nT300: {measured} SQL по глаголам")
     for row in payload:
         print(f"   {row}")
-    with open(RESULT_PATH, "w", encoding="utf-8") as fh:
-        json.dump(
+
+    await asyncio.to_thread(
+        pathlib.Path(RESULT_PATH).write_text,
+        json.dumps(
             {"measured": measured, "transfers": payload},
-            fh,
             ensure_ascii=False,
             indent=2,
             default=str,
-        )
+        ),
+        "utf-8",
+    )
