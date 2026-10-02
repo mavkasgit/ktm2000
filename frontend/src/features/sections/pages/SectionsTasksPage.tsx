@@ -926,7 +926,8 @@ export function SectionsTasksPage() {
       )));
   // Вкладка «План» без выбранного плана — это «все актуальные задания
   // участка»: завершённые строки живут только в составе конкретного плана
-  // (docs/daily-plans-spec.md, «Режим `План`»).
+  // (docs/daily-plans-spec.md, «Режим `План`»), а занятые планом скрыты
+  // целиком (#301).
   const planBoardTasks = useMemo(
     () => (selectedPlanIds.size === 0
       ? getDailyPlanCreationCandidates(tasks)
@@ -935,6 +936,20 @@ export function SectionsTasksPage() {
   );
   const selectedTasks = useMemo(
     () => tasks.filter((t) => bulkSelection.selectedIds.has(t.id)),
+    [tasks, bulkSelection.selectedIds],
+  );
+  /**
+   * Отбор режима создания плана — пересечение выбранного с кандидатами (#301).
+   *
+   * `selectedTasks` строятся из полного списка доски: он же нужен массовому
+   * завершению на вкладке «Задания», где скрытия нет. Но в план уходит не он,
+   * а этот список: помеченное задание не должно уйти в `work_task_ids` ни
+   * одним путём, а «Выбрано N» обязан совпадать с числом реально отправленных.
+   * Само по себе скрытие строк этого не даёт — выделение живёт в контроллере
+   * и переживает переключение вкладок.
+   */
+  const planSelectedTasks = useMemo(
+    () => getDailyPlanCreationCandidates(tasks).filter((t) => bulkSelection.selectedIds.has(t.id)),
     [tasks, bulkSelection.selectedIds],
   );
 
@@ -1009,14 +1024,14 @@ export function SectionsTasksPage() {
   }, [revokeSelection, revokePlanItemsMutation, selectedCompositionItems]);
   const handleCreatePlan = useCallback(
     (planDate: string) => {
-      if (sectionId === null || selectedTasks.length === 0) return;
+      if (sectionId === null || planSelectedTasks.length === 0) return;
       createPlanMutation.mutate({
         section_id: sectionId,
         plan_date: planDate,
-        work_task_ids: selectedTasks.map((task) => task.id),
+        work_task_ids: planSelectedTasks.map((task) => task.id),
       });
     },
-    [createPlanMutation, sectionId, selectedTasks],
+    [createPlanMutation, sectionId, planSelectedTasks],
   );
 
   const togglePlanSelection = useCallback((planId: number) => {
@@ -1323,7 +1338,10 @@ export function SectionsTasksPage() {
                 <DailyPlansPanel
                   plans={dailyPlans ?? []}
                   onCreatePlan={handleCreatePlan}
-                  selectedTaskCount={selectedTasks.length}
+                  // Счётчик «Выбрано N» — из отбора создания, а не из полного
+                  // списка доски: он обязан равняться числу уходящих в план
+                  // заданий (#301).
+                  selectedTaskCount={planSelectedTasks.length}
                   onSelectPlan={selectOnlyPlan}
                   selectedPlanIds={selectedPlanIds}
                   onCreateModeChange={handleDailyPlanModeChange}

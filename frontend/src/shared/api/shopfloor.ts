@@ -67,6 +67,10 @@ export type SectionBoardTask = {
   output_kind?: string | null;
   quantity_per_hanger?: number | null;
   hanger_count?: number | null;
+  // Прямое членство в дневном плане (#301): `true` — задание уже занято
+  // планом. Необязательное поле: ответ доски без него (старый кэш, чужая
+  // фикстура) ведёт себя как прежде — задание считается свободным.
+  in_daily_plan?: boolean;
   cache: {
     available_quantity: string;
     issued_quantity: string;
