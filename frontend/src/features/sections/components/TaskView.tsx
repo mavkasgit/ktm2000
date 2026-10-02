@@ -42,7 +42,7 @@ const TONE_STRIPE_CLASS: Record<TaskTone, string> = {
   activeRunning: "border-l-4 border-l-amber-400",
   active: "border-l-4 border-l-blue-400",
   completed: "border-l-4 border-l-emerald-300",
-  plain: "border-l-4 border-l-transparent",
+  plain: TABLE_ROW_STYLES.emptyRail,
 };
 
 const TONE_TEXT_CLASS: Record<TaskTone, string> = {

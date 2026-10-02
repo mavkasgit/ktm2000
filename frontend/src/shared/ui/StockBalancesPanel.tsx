@@ -15,6 +15,8 @@ import { TablePanelHeader } from "./TablePanelHeader";
 import { TableCornerResetCell, TableCornerResetHeader } from "./TableCornerResetHeader";
 import { TablePaginationFooter } from "./TablePaginationFooter";
 import { DATA_TABLE_STYLES, TABLE_ROW_DENSE } from "@/shared/lib/dataTableStyles";
+import { TABLE_ROW_STYLES } from "@/shared/lib/tableRowStyles";
+import { cn } from "@/shared/utils/cn";
 import { useFilterableTable } from "@/shared/hooks/useFilterableTable";
 import { usePaginatedTableQuery } from "@/shared/hooks/usePaginatedTableQuery";
 import { buildColumnApiParams } from "@/shared/lib/columnSpecs";
@@ -28,6 +30,45 @@ import { fmtQty } from "@/shared/lib/quantityFormat";
 
 function getBalanceOperationsLabel(balance: StockBalanceEntry): string {
   return formatCompletedOperationsLabel(balance.completed_operations, balance.completed_stages);
+}
+
+/**
+ * Ключ блока остатков — артикул. Остатки одного артикула приходят несколькими
+ * строками (участок, качество, размеры, операции), и без блока не видно, где
+ * кончается один артикул и начинается другой.
+ */
+function balanceBlockKey(balance: StockBalanceEntry): string {
+  return balance.product_sku || `#${balance.product_id}`;
+}
+
+type BalanceBlockMeta = {
+  /** Строка входит в блок из двух и более строк одного артикула. */
+  inBlock: boolean;
+  /** Строка закрывает блок — на ней 3px-граница. */
+  lastInBlock: boolean;
+};
+
+/**
+ * Разметка блоков по странице остатков. Считается по уже отданной странице:
+ * порядок строк серверный, и это тот же порядок, что видит оператор. Одиночный
+ * артикул блоком не считается — рамка вокруг одной строки шум; то же правило,
+ * что у группы из одного задания на доске (ADR-0065).
+ */
+function buildBalanceBlockMeta(balances: StockBalanceEntry[]): BalanceBlockMeta[] {
+  const meta: BalanceBlockMeta[] = balances.map(() => ({ inBlock: false, lastInBlock: false }));
+  let start = 0;
+  for (let index = 1; index <= balances.length; index += 1) {
+    const continues =
+      index < balances.length && balanceBlockKey(balances[index]) === balanceBlockKey(balances[start]);
+    if (continues) continue;
+    if (index - start > 1) {
+      for (let row = start; row < index; row += 1) {
+        meta[row] = { inBlock: true, lastInBlock: row === index - 1 };
+      }
+    }
+    start = index;
+  }
+  return meta;
 }
 
 function getBalanceCellValue(balance: StockBalanceEntry, field: BalanceSortField): string {
@@ -199,6 +240,7 @@ export function StockBalancesPanel({
   });
 
   const balances = data?.balances ?? [];
+  const balanceBlocks = useMemo(() => buildBalanceBlockMeta(balances), [balances]);
   const total = data?.total ?? 0;
   const totalPages = getTotalPages(total);
 
@@ -294,7 +336,18 @@ export function StockBalancesPanel({
                         </td>
                       </tr>
                     ) : (
-                    balances.map((b) => (
+                    balances.map((b, index) => {
+                      // Блок артикула: подложка одна на все его строки, рельс
+                      // слева, 3px-граница в конце блока. Тот же визуальный
+                      // словарь, что у раскрытой группы на доске (ADR-0065);
+                      // рёбра — на ячейках, а не на `<tr>`: одно правило на два
+                      // экрана дешевле двух.
+                      const block = balanceBlocks[index];
+                      const cellClass = cn(
+                        BALANCE_CELL_CLASS,
+                        block.lastInBlock && TABLE_ROW_STYLES.groupBlockBoundary,
+                      );
+                      return (
                       <tr
                         key={b.id}
                         // Высота закреплена, как на доске: содержимое «Операций»
@@ -302,9 +355,9 @@ export function StockBalancesPanel({
                         // операций схлопывались бы до высоты текста. Ровно 32px
                         // — та же плотность, что на «Заданиях» и «Передачах».
                         style={{ height: TABLE_ROW_DENSE.rowHeightPx }}
-                        className="border-b hover:bg-muted/30"
+                        className={`border-b ${block.inBlock ? TABLE_ROW_STYLES.groupBlock : "hover:bg-muted/30"}`}
                       >
-                        <td className={BALANCE_CELL_CLASS}>
+                        <td className={cn(cellClass, block.inBlock ? TABLE_ROW_STYLES.blockRail : TABLE_ROW_STYLES.emptyRail)}>
                           <button
                             type="button"
                             className="font-medium hover:text-primary transition-colors cursor-pointer"
@@ -314,13 +367,13 @@ export function StockBalancesPanel({
                             {b.product_sku || `#${b.product_id}`}
                           </button>
                         </td>
-                        <td className={`${BALANCE_CELL_CLASS} font-semibold font-mono`}>
+                        <td className={cn(cellClass, "font-semibold font-mono")}>
                           {fmtQty(b.balance_qty)}
                         </td>
-                        <td className={`${BALANCE_CELL_CLASS} text-xs whitespace-nowrap`}>
+                        <td className={cn(cellClass, "text-xs whitespace-nowrap")}>
                           {formatDimensionsLabel(b.dimensions, b.dimensions_label)}
                         </td>
-                        <td className={`${BALANCE_CELL_CLASS} max-w-[280px]`}>
+                        <td className={cn(cellClass, "max-w-[280px]")}>
                           {b.completed_stages && b.completed_stages.length > 0 ? (
                             <RouteStepsDisplay steps={b.completed_stages} compact showIcons={false} />
                           ) : (
@@ -329,17 +382,17 @@ export function StockBalancesPanel({
                             </span>
                           )}
                         </td>
-                        <td className={BALANCE_CELL_CLASS}>
+                        <td className={cellClass}>
                           <span className="text-xs font-medium text-muted-foreground">
                             {formatQualityStateLabel(b.quality_state)}
                           </span>
                         </td>
                         {!hideLocationColumn && (
-                          <td className={`${BALANCE_CELL_CLASS} text-xs`}>
+                          <td className={cn(cellClass, "text-xs")}>
                             {b.location_name || `#${b.location_id}`}
                           </td>
                         )}
-                        <td className={BALANCE_CELL_CLASS}>
+                        <td className={cellClass}>
                           <button
                             type="button"
                             className="text-xs text-muted-foreground hover:text-primary cursor-pointer"
@@ -348,9 +401,12 @@ export function StockBalancesPanel({
                             История
                           </button>
                         </td>
-                        <TableCornerResetCell />
+                        <TableCornerResetCell
+                          className={block.lastInBlock ? TABLE_ROW_STYLES.groupBlockBoundary : undefined}
+                        />
                       </tr>
-                    )))}
+                      );
+                    }))}
                   </tbody>
                 </table>
               </div>

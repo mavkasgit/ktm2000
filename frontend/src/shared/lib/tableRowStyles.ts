@@ -27,6 +27,11 @@ export const TABLE_ROW_STYLES = {
   // Рёбра шапки группы — тоже на ячейках (границы `<tr>` в этой таблице не
   // рисуются): верх блока и линия между шапкой и её строками.
   groupHeaderCell: "border-y border-slate-200 dark:border-slate-700",
+  // Рельс блока — 4px у левой ячейки; тот же край, что у полосы строки доски.
+  blockRail: "border-l-4 border-l-slate-300 dark:border-l-slate-600",
+  // Пустой рельс — у строк без блока: без него ячейка шире на 4px, и колонка
+  // «едет» у каждой второй строки.
+  emptyRail: "border-l-4 border-l-transparent",
 
   // Selected rows (bulk)
   selectedRow: "bg-blue-100 ring-1 ring-blue-300 hover:bg-blue-200/80",
