@@ -44,6 +44,8 @@ from app.services.plan_generation import create_release_batch
 from app.services.plan_position_hanger import resolve_positions_hanger
 from app.services.plan_validation import format_validation_error
 from app.services.position_remainders import PositionStockFigures
+from app.services.position_route_batch import resolve_position_routes_batch
+from app.services.product_pair_resolver import PairResolutionCache
 from app.services.production_plan_service import (
     BATCH_DELETE_SAFE_ACTION,
     BatchDeleteBlocked,
@@ -68,7 +70,6 @@ from app.services.production_plan_service import (
 )
 from app.services.route_matcher import (
     ResolvedRouteInfo,
-    make_position_route_cache_key,
     resolve_position_route,
 )
 from app.services.route_selection import select_route_for_payload
@@ -122,19 +123,29 @@ async def list_plans(db: AsyncSession = Depends(get_db)) -> list[PlanSummaryOut]
             .order_by(ProductionPlan.created_at.desc())
         )
     ).scalars().all()
+    # Счётчики позиций — одним GROUP BY по плану и статусу (#298). Раньше на
+    # каждый план шли два скана (сводка по статусам + общий count), то есть
+    # 2×N_plan SQL. Итог по плану — сумма по его статусам, поэтому отдельный
+    # count не нужен: «нет ни одной позиции» и «0» дают один и тот же ответ.
+    status_counts_by_plan: dict[int, dict[str, int]] = {}
+    if plans:
+        for plan_id, status_value, count in (
+            await db.execute(
+                select(
+                    PlanPosition.production_plan_id,
+                    PlanPosition.status,
+                    sa_func.count(PlanPosition.id),
+                )
+                .where(PlanPosition.production_plan_id.in_([p.id for p in plans]))
+                .group_by(PlanPosition.production_plan_id, PlanPosition.status)
+            )
+        ).all():
+            status_counts_by_plan.setdefault(plan_id, {})[status_value.value] = count
+
     result = []
     for plan in plans:
-        counts = (
-            await db.execute(
-                select(PlanPosition.status, sa_func.count(PlanPosition.id))
-                .where(PlanPosition.production_plan_id == plan.id)
-                .group_by(PlanPosition.status)
-            )
-        ).all()
-        status_map = {s.value: c for s, c in counts}
-        total = (
-            await db.execute(select(sa_func.count(PlanPosition.id)).where(PlanPosition.production_plan_id == plan.id))
-        ).scalar() or 0
+        status_map = status_counts_by_plan.get(plan.id, {})
+        total = sum(status_map.values())
         result.append(
             PlanSummaryOut(
                 id=plan.id,
@@ -1048,20 +1059,16 @@ async def section_totals(
         return SectionTotalsOut(production_plan_id=production_plan_id, totals=[])
 
     totals_by_section: dict[int, dict] = {}
-    route_resolve_cache = {}
     route_stages_cache = {}
+    # Батч-резолв маршрутов (#298): один проход вместо resolve_position_route
+    # на каждую позицию. Этапы уже кэшировались по route_id — это остаётся.
+    route_info_by_id = await resolve_position_routes_batch(db, positions)
 
     for position in positions:
         if position.product_id is None:
             continue
-        
-        cache_key = make_position_route_cache_key(position)
-        if cache_key in route_resolve_cache:
-            route_info = route_resolve_cache[cache_key]
-        else:
-            route_info = await resolve_position_route(db, position)
-            route_resolve_cache[cache_key] = route_info
 
+        route_info = route_info_by_id[position.id]
         if route_info.route_id is None:
             continue
 
@@ -1313,9 +1320,13 @@ async def _compute_position_stock_figures(
         return {}
 
     # Резолвим продукты для каждой позиции (включая оба компонента пары).
-    effective_products_by_id: dict[int, list[int]] = {}
-    for p in positions:
-        effective_products_by_id[p.id] = await _resolve_effective_product_ids(db, p)
+    # Кэш пар общий на вызов (#292/#298): без него каждая парная позиция
+    # без снапшота ходит в resolve_pair_by_component_skus заново.
+    pair_cache = PairResolutionCache()
+    effective_products_by_id: dict[int, list[int]] = {
+        p.id: await _resolve_effective_product_ids(db, p, cache=pair_cache)
+        for p in positions
+    }
 
     # Собираем уникальные route_id'ы.
     unique_route_ids = {
@@ -1551,18 +1562,10 @@ async def _serialize_plan_positions(
         )
     ).scalars().all()
     warnings_by_position = {ci.plan_position_id: ci.warnings for ci in change_items if ci.plan_position_id}
-
-    route_resolve_cache: dict[tuple, ResolvedRouteInfo] = {}
-    route_info_by_id: dict[int, ResolvedRouteInfo] = {}
-
-    for p in positions:
-        cache_key = make_position_route_cache_key(p)
-        if cache_key in route_resolve_cache:
-            route_info = route_resolve_cache[cache_key]
-        else:
-            route_info = await resolve_position_route(db, p)
-            route_resolve_cache[cache_key] = route_info
-        route_info_by_id[p.id] = route_info
+    # Батч-резолв маршрутов (#298) вместо поштучного в цикле: ключ кэша
+    # включает source_payload, поэтому уникален почти всегда и мемоизация
+    # не помогала. Результат тот же — по позиции.
+    route_info_by_id = await resolve_position_routes_batch(db, positions)
 
     stock_figures_by_id = await _compute_position_stock_figures(
         db, positions, route_info_by_id
@@ -1740,18 +1743,8 @@ async def cancelled_positions(db: AsyncSession = Depends(get_db)) -> list[PlanPo
     ).scalars().all()
     warnings_by_position = {ci.plan_position_id: ci.warnings for ci in change_items if ci.plan_position_id}
 
-    route_resolve_cache: dict[tuple, ResolvedRouteInfo] = {}
-    route_info_by_id: dict[int, ResolvedRouteInfo] = {}
-
-    for p in positions:
-        cache_key = make_position_route_cache_key(p)
-        if cache_key in route_resolve_cache:
-            route_info = route_resolve_cache[cache_key]
-        else:
-            route_info = await resolve_position_route(db, p)
-            route_resolve_cache[cache_key] = route_info
-        route_info_by_id[p.id] = route_info
-
+    # Батч-резолв маршрутов (#298) — см. соседний обработчик.
+    route_info_by_id = await resolve_position_routes_batch(db, positions)
     stock_figures_by_id = await _compute_position_stock_figures(
         db, positions, route_info_by_id
     )
@@ -1828,18 +1821,8 @@ async def all_positions(production_plan_id: int, db: AsyncSession = Depends(get_
     ).scalars().all()
     warnings_by_position = {ci.plan_position_id: ci.warnings for ci in change_items if ci.plan_position_id}
 
-    # Cache resolved routes
-    route_resolve_cache: dict[tuple, ResolvedRouteInfo] = {}
-    route_info_by_id: dict[int, ResolvedRouteInfo] = {}
-
-    for p in positions:
-        cache_key = make_position_route_cache_key(p)
-        if cache_key in route_resolve_cache:
-            route_info = route_resolve_cache[cache_key]
-        else:
-            route_info = await resolve_position_route(db, p)
-            route_resolve_cache[cache_key] = route_info
-        route_info_by_id[p.id] = route_info
+    # Батч-резолв маршрутов (#298) — см. соседний обработчик.
+    route_info_by_id = await resolve_position_routes_batch(db, positions)
 
     stock_figures_by_id = await _compute_position_stock_figures(
         db, positions, route_info_by_id

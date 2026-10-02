@@ -8,6 +8,7 @@ from sqlalchemy import (
     Enum,
     ForeignKey,
     Identity,
+    Index,
     Integer,
     String,
     Text,
@@ -115,6 +116,9 @@ class RouteStage(Base):
 
     __table_args__ = (
         UniqueConstraint("route_id", "sequence", name="uq_route_stages_sequence"),
+        # Коррелированный EXISTS «на этой позиции есть задача на участке N»
+        # в /rows (#291): без индекса каждый EXISTS.seq_scan по этапам.
+        Index("ix_route_stages_section_id", "section_id"),
     )
 
     @property

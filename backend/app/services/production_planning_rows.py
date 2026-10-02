@@ -40,9 +40,10 @@ from app.services.plan_position_hanger import (
     resolve_positions_hanger,
 )
 from app.services.position_remainders import PositionStockFigures
+from app.services.position_route_batch import resolve_position_routes_batch
+from app.services.product_pair_resolver import PairResolutionCache
 from app.services.route_matcher import (
     ResolvedRouteInfo,
-    make_position_route_cache_key,
     resolve_position_route,
 )
 from app.stock.ledger import net_quantity_expr
@@ -444,16 +445,25 @@ def _is_manual_route_pass(value: str | None) -> bool:
 
 
 async def _resolve_effective_product_ids(
-    db: AsyncSession, position: PlanPosition
+    db: AsyncSession,
+    position: PlanPosition,
+    *,
+    cache: PairResolutionCache | None = None,
 ) -> list[int]:
     """Все продукты позиции (одиночная — один, парная — оба компонента).
 
     Владелец логики — :mod:`product_pair_resolver` (снапшот → пара → оба
     артикула; одиночная — ``position.product_id``).
+
+    ``cache`` — кэш на один HTTP-запрос (#292): его создаёт вызывающий
+    обработчик списка и передаёт в каждый вызов, иначе резолв пар идёт
+    поштучно. Без кэша поведение прежнее.
     """
     from app.services import product_pair_resolver
 
-    return await product_pair_resolver.resolve_effective_product_ids(db, position)
+    return await product_pair_resolver.resolve_effective_product_ids(
+        db, position, cache=cache
+    )
 
 
 async def _fetch_paginated_positions(
@@ -658,64 +668,80 @@ async def _build_planning_rows_for_positions(db: AsyncSession, positions: list[P
             current_stage_by_position[position_id] = process_row(chosen_row)
 
 
-    route_cache: dict[tuple, ResolvedRouteInfo] = {}
     route_steps_cache: dict[int, list[dict]] = {}
     route_remainder_steps_cache: dict[int, list[dict]] = {}
+    route_info_by_position = await resolve_position_routes_batch(db, positions)
 
-    # Сначала резолвим effective_product_id для каждой позиции и считаем
-    # доступные остатки — одним батчем, без N+1.
+    # Этапы маршрутов — для всех уникальных route_id ОДНИМ запросом по
+    # колонкам. Раньше здесь грузились ORM-объекты RouteStage/Section внутри
+    # цикла, а у Section три связи с lazy="selectin" (users, operations,
+    # spg_links) — каждая загрузка секции стоила ещё трёх запросов. На 91
+    # позиции с 33 маршрутами это давало ~165 запросов вместо двух (#297).
+    unique_route_ids = {
+        info.route_id for info in route_info_by_position.values()
+        if info.route_id is not None
+    }
+    if unique_route_ids:
+        stage_rows = (
+            await db.execute(
+                select(
+                    RouteStage.route_id,
+                    RouteStage.id,
+                    RouteStage.sequence,
+                    RouteStage.section_id,
+                    Section.icon,
+                    Section.icon_color,
+                )
+                .join(Section, RouteStage.section_id == Section.id)
+                .where(RouteStage.route_id.in_(unique_route_ids))
+                .where(Section.is_active == True)
+                .order_by(RouteStage.route_id, RouteStage.sequence)
+            )
+        ).all()
+        ops_by_stage: dict[int, set[str]] = {}
+        stage_ids = {row.id for row in stage_rows}
+        if stage_ids:
+            for op in (
+                await db.execute(
+                    select(RouteOperation.route_stage_id, RouteOperation.operation_code)
+                    .where(RouteOperation.route_stage_id.in_(stage_ids))
+                )
+            ).all():
+                ops_by_stage.setdefault(op.route_stage_id, set()).add(op.operation_code)
+        steps_by_route: dict[int, list[dict]] = {}
+        remainders_by_route: dict[int, list[dict]] = {}
+        for row in stage_rows:
+            steps_by_route.setdefault(row.route_id, []).append({
+                "section_id": row.section_id,
+                "section_icon": row.icon,
+                "section_icon_color": row.icon_color,
+                "sequence": row.sequence,
+            })
+            remainders_by_route.setdefault(row.route_id, []).append({
+                "sequence": row.sequence,
+                "section_id": row.section_id,
+                "operation_codes": ops_by_stage.get(row.id, set()),
+            })
+        route_steps_cache.update(steps_by_route)
+        route_remainder_steps_cache.update(remainders_by_route)
+
+    # Индикатор остатка считает по эффективным продуктам позиции (одиночная —
+    # один, парная — оба компонента). Резолв идёт поштучно, но кэш пар
+    # (#292) общий на запрос: без него каждая парная позиция без снапшота
+    # ходит в resolve_pair_by_component_skus с SELECT * заново.
+    pair_cache = PairResolutionCache()
+    position_effective_product_ids: dict[int, list[int]] = {
+        pos.id: await _resolve_effective_product_ids(db, pos, cache=pair_cache)
+        for pos in positions
+    }
     position_stock_figures: dict[int, PositionStockFigures] = {}
-    position_effective_product_ids: dict[int, list[int]] = {}
-    for pos in positions:
-        position_effective_product_ids[pos.id] = await _resolve_effective_product_ids(db, pos)
-
-    # Вычислить route_remainder_steps для каждого уникального route_id.
-    for pos in positions:
-        cache_key = make_position_route_cache_key(pos)
-        if cache_key in route_cache:
-            route_info = route_cache[cache_key]
-        else:
-            route_info = await resolve_position_route(db, pos)
-            route_cache[cache_key] = route_info
-
-            # Cache route stages for this route
-            if route_info.route_id is not None and route_info.route_id not in route_steps_cache:
-                stages = (
-                    await db.execute(
-                        select(RouteStage, Section)
-                        .options(selectinload(RouteStage.operations))
-                        .join(Section, RouteStage.section_id == Section.id)
-                        .where(RouteStage.route_id == route_info.route_id)
-                        .where(Section.is_active == True)
-                        .order_by(RouteStage.sequence)
-                    )
-                ).all()
-                route_steps_cache[route_info.route_id] = [
-                    {
-                        "section_id": section.id,
-                        "section_icon": section.icon,
-                        "section_icon_color": section.icon_color,
-                        "sequence": stage.sequence,
-                    }
-                    for stage, section in stages
-                ]
-                route_remainder_steps_cache[route_info.route_id] = [
-                    {
-                        "sequence": stage.sequence,
-                        "section_id": section.id,
-                        "operation_codes": {op.operation_code for op in (stage.operations or [])},
-                    }
-                    for stage, section in stages
-                ]
-
-    from app.services.position_remainders import compute_position_stock_figures
 
     # Индикатор (#207): позиция не вычитает сама себя, но чужие позиции
     # того же артикула учитываются. Позиции без маршрута получают три
     # None: данных о наличии нет, и это не то же, что ноль.
     indicator_targets: list[tuple[int, list[int], float]] = []
     for pos in positions:
-        route_info = route_cache[make_position_route_cache_key(pos)]
+        route_info = route_info_by_position[pos.id]
         remainder_steps = (
             route_remainder_steps_cache.get(route_info.route_id)
             if route_info.route_id is not None
@@ -731,6 +757,8 @@ async def _build_planning_rows_for_positions(db: AsyncSession, positions: list[P
                 _to_float(pos.quantity),
             )
         )
+    from app.services.position_remainders import compute_position_stock_figures
+
     position_stock_figures.update(
         await compute_position_stock_figures(db, indicator_targets)
     )
@@ -741,7 +769,7 @@ async def _build_planning_rows_for_positions(db: AsyncSession, positions: list[P
 
     result: list[dict] = []
     for pos in positions:
-        route_info = route_cache[make_position_route_cache_key(pos)]
+        route_info = route_info_by_position[pos.id]
         task_dims = position_dimensions_for_task(pos)
         hanger_value = hanger_values[pos.id]
         source_payload = pos.source_payload or {}

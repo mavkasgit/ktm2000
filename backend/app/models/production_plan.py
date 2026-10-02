@@ -206,6 +206,18 @@ class PlanPosition(Base):
     __table_args__ = (
         Index("ix_plan_positions_import_row", "import_batch_id", "source_row_number", unique=True),
         Index("ix_plan_positions_import_hash", "import_batch_id", "source_row_hash", unique=True),
+        # «Активные, неудалённые» позиции (#291): _active_positions_stmt
+        # и фильтр «не в корзине» в /rows/board/summary. Partial — soft-deleted
+        # позиции в индексе не лежат; deleted_at внутрь ключа не берём,
+        # в partial он константен.
+        Index(
+            "ix_plan_positions_active_status",
+            "status",
+            postgresql_where=text("deleted_at IS NULL"),
+        ),
+        # list_plans / section_totals: агрегаты по плану шли seq scan'ом на
+        # каждый план (2 скана × N планов, #291).
+        Index("ix_plan_positions_production_plan_id", "production_plan_id"),
     )
 
 

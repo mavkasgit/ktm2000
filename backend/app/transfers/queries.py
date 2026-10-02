@@ -89,15 +89,34 @@ async def get_transfer_details(db: AsyncSession, transfer_id: int) -> dict:
             .order_by(TransferDiscrepancy.id)
         )
     ).scalars().all()
-    result_discrepancies = []
-    for d in discrepancies:
-        links = (
+    # Ссылки на дефекты — одним запросом на все расхождения (#294): раньше
+    # на каждое расхождение уходил свой SELECT, и детали передачи с n
+    # расхождениями стоили n+1 запросов. Порядок внутри расхождения задаётся
+    # явно (раньше он был произвольным, без ORDER BY).
+    links_by_discrepancy: dict[int, list] = {}
+    if discrepancies:
+        rows = (
             await db.execute(
                 select(TransferDiscrepancyDefectItem, DefectItem)
                 .join(DefectItem, DefectItem.id == TransferDiscrepancyDefectItem.defect_item_id)
-                .where(TransferDiscrepancyDefectItem.transfer_discrepancy_id == d.id)
+                .where(
+                    TransferDiscrepancyDefectItem.transfer_discrepancy_id.in_(
+                        [d.id for d in discrepancies]
+                    )
+                )
+                .order_by(
+                    TransferDiscrepancyDefectItem.transfer_discrepancy_id,
+                    TransferDiscrepancyDefectItem.id,
+                )
             )
         ).all()
+        for link, item in rows:
+            links_by_discrepancy.setdefault(link.transfer_discrepancy_id, []).append(
+                (link, item)
+            )
+    result_discrepancies = []
+    for d in discrepancies:
+        links = links_by_discrepancy.get(d.id, [])
         result_discrepancies.append(
             {
                 "id": d.id,
