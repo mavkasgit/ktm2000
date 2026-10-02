@@ -887,7 +887,9 @@ export function TransfersPage() {
         spg_id: showAllSpgs ? undefined : activeSpgId,
         ...historyQueryParams,
       }),
-    enabled: spgScopeSelected,
+    // Журнал ленивый (#290): пока панель закрыта, журнал не читаем —
+    // первый fetch случается при открытии окна (спиннер — isFirstRowsLoad).
+    enabled: spgScopeSelected && historyOpen,
     placeholderData: keepPreviousDataForScope<TransferHistoryResponse>(
       (key) => key[1],
       showAllSpgs ? "all" : activeSpgId,
@@ -1038,7 +1040,13 @@ export function TransfersPage() {
 
   function handleRefresh() {
     void refetchReady();
-    void refetchHistory();
+    // Журнал ленивый (#290): выключен, пока панель закрыта, и refetch
+    // выключенного запроса в TanStack форсировал бы fetch — обновляем только
+    // открытое окно. При закрытой панели свежесть вернёт invalidateAfter при
+    // следующем открытии.
+    if (historyOpen) {
+      void refetchHistory();
+    }
   }
 
   // Передача меняет остатки, доску участков и журнал передач — задеты все
