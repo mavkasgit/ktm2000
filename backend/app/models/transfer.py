@@ -57,6 +57,8 @@ class Transfer(Base):
             unique=True,
             postgresql_where=text("idempotency_key IS NOT NULL"),
         ),
+        # Журнал передач (#290): ORDER BY created_at DESC и фильтры дат.
+        Index("ix_transfers_created_at", "created_at"),
     )
 
     id: Mapped[int] = mapped_column(BigInteger, Identity(always=True), primary_key=True)

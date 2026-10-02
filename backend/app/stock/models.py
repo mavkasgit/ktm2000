@@ -130,6 +130,24 @@ class StockTransaction(Base):
             unique=True,
             postgresql_where=text("idempotency_key IS NOT NULL"),
         ),
+        # Агрегаты бюджета (#290): WHERE reason=… GROUP BY task_id —
+        # INCLUDE отдаёт quantity/reverses_id из индекса (без heap-чтения),
+        # а левый префикс покрывает старый ix_stock_transactions_reason:
+        # одиночный индекс по reason дропается миграцией, чтобы не платить
+        # вторую write-цену ledger'у.
+        Index(
+            "ix_stock_transactions_reason_task_id",
+            "reason",
+            "task_id",
+            postgresql_include=["quantity", "reverses_id"],
+        ),
+        # net_by_reason(section_plan_line_id=…) (#290): раньше шёл без
+        # индекса (seq scan по ledger'у на каждую складскую строку).
+        Index(
+            "ix_stock_transactions_reason_section_plan_line_id",
+            "reason",
+            "section_plan_line_id",
+        ),
     )
 
     id: Mapped[int] = mapped_column(
@@ -163,7 +181,7 @@ class StockTransaction(Base):
     )
     reason: Mapped[Reason] = mapped_column(
         Enum(Reason, name="stock_reason", values_callable=lambda x: [e.value for e in x]),
-        nullable=False, index=True,
+        nullable=False,
     )
     # Качество материала на исходной стороне (до перехода).
     # Для SCRAP/REWORK: from_quality_state=good, to_quality_state=scrap/rework.

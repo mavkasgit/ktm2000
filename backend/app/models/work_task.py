@@ -10,6 +10,7 @@ from sqlalchemy import (
     Enum,
     ForeignKey,
     Identity,
+    Index,
     Numeric,
     String,
     func,
@@ -58,6 +59,9 @@ class WorkTask(Base):
     __tablename__ = "work_tasks"
     __table_args__ = (
         CheckConstraint("planned_quantity >= 0", name="planned_quantity_non_negative"),
+        # FK без индекса (#290): все lookup'ы задач по строке плана,
+        # включая prefetch складской ветки ready одним IN.
+        Index("ix_work_tasks_section_plan_line_id", "section_plan_line_id"),
     )
 
     id: Mapped[int] = mapped_column(BigInteger, Identity(always=True), primary_key=True)

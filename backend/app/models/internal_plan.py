@@ -67,4 +67,7 @@ class SectionPlanLine(Base):
 
     __table_args__ = (
         UniqueConstraint("internal_plan_id", "plan_position_id", "route_stage_id", name="uq_section_plan_lines_stage"),
+        # «Следующая строка» маршрута (#290): (plan_position_id, sequence+1)
+        # — внешний join production-ветки ready и prefetch next_line.
+        Index("ix_section_plan_lines_plan_position_id_sequence", "plan_position_id", "sequence"),
     )
