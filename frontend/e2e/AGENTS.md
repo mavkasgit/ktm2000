@@ -120,6 +120,23 @@ devstack (`npm run dev`) агент по-прежнему не поднимае�
   worktree держит не этот лок, а машинный семафор (`E2E_MAX_PARALLEL_RUNS`).
 - В отчёте указывайте SHA, команду, `workers`, `retries` и пуст ли `CI`.
 
+#### Подготовка свежего worktree
+
+В новом worktree до первого прогона не хватает трёх вещей, и все три не
+отслеживаются:
+
+1. `npm ci --prefix frontend` — `node_modules` пуст (см. выше про junction).
+2. `.env.test` — нужен `docker compose --env-file .env.test` для тестового
+   Postgres на 5441. Рядом лежит `.env.test.example`: скопируйте его в
+   `.env.test`. Без файла прогон падает на `couldn't find env file`.
+3. Свой namespace стенда — неотслеживаемый `.env.e2e.<имя>.local` с собственной
+   базой и `STORAGE_ROOT`, запуск с `E2E_ENV_FILE=<файл>`. Общая база стенда
+   у соседей означает общие `apiResetAll()`.
+
+Подробности и список того, чего в дереве ночной смены нет вовсе, —
+[`docs/night/NIGHT-SETUP-NOTES.md`](../../docs/night/NIGHT-SETUP-NOTES.md).
+Здесь только то, без чего стенд не поднимается.
+
 ### 6. Если тест упал
 
 1. Воспроизведите на чистом worktree, по одному тесту:
