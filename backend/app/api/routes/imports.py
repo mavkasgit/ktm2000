@@ -32,10 +32,7 @@ from app.models.production_plan import (
 from app.models.route import RouteRuleProfile
 from app.models.user import User
 from app.services.plan_import_service import create_excel_import_change_set
-from app.services.route_matcher import (
-    make_position_route_cache_key,
-    resolve_position_route,
-)
+from app.services.position_route_batch import resolve_position_routes_batch
 
 router = APIRouter(prefix="/imports", tags=["imports"])
 
@@ -579,28 +576,30 @@ async def list_import_positions(batch_id: int, db: AsyncSession = Depends(get_db
             .order_by(PlanPosition.source_row_number)
         )
     ).scalars().all()
+    # Батч-резолв маршрутов (#292/#296): раньше resolve_position_route звался
+    # на каждую позицию. Ключ локального кэша включает source_payload, поэтому
+    # у реальных строк батча он уникален и мемоизация не помогала — на батче
+    # в 900 строк это десятки тысяч запросов.
+    route_info_by_id = await resolve_position_routes_batch(db, positions)
 
-    # Preload products for route lookup
-    products_cache: dict[int, Product | None] = {}
-    route_resolve_cache: dict[tuple, object] = {}
+    # Имена продуктов — одним запросом по колонке. Ответу нужно только
+    # product.name, поэтому ORM-объекты Product не грузятся: у них есть
+    # column_property с EXISTS по product_pairs и связи processing_flags/
+    # composition, и на каждый продукт это отдельная волна запросов.
+    product_names: dict[int, str | None] = {}
+    product_ids = {pos.product_id for pos in positions if pos.product_id is not None}
+    if product_ids:
+        for pid, pname in (
+            await db.execute(
+                select(Product.id, Product.name).where(Product.id.in_(product_ids))
+            )
+        ).all():
+            product_names[pid] = pname
 
     result = []
     for pos in positions:
-        product = None
-        if pos.product_id:
-            if pos.product_id not in products_cache:
-                products_cache[pos.product_id] = await db.get(Product, pos.product_id)
-            product = products_cache[pos.product_id]
-
-        cache_key = make_position_route_cache_key(pos)
-        if cache_key in route_resolve_cache:
-            route_info = route_resolve_cache[cache_key]
-        else:
-            route_info = await resolve_position_route(db, pos)
-            route_resolve_cache[cache_key] = route_info
-
-        product_name = product.name if product else None
-
+        route_info = route_info_by_id[pos.id]
+        product_name = product_names.get(pos.product_id)
         result.append(
             ImportPositionOut(
                 id=pos.id,
