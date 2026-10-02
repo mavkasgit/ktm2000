@@ -13,7 +13,7 @@
  * набор колонок и заголовок задаются в его шапке, печатаются все задания.
  */
 
-import { useEffect, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import { Printer } from "lucide-react";
 import type { SectionBoardTask, SectionOperation } from "@/shared/api/shopfloor";
 import { PlanTaskTable } from "./PlanTaskTable";
@@ -237,10 +237,16 @@ export function PlanModal({
     printSettings.title ||
     `План: ${sectionName} от ${new Date().toLocaleDateString("ru-RU")}`;
 
+  // Момент формирования листа фиксируется на открытии окна: строка уходит в
+  // колонтитул каждой страницы, и перерисовка (переключение колонок) не должна
+  // менять время на напечатанном листе. Отдельной шапки у листа нет — всю
+  // идентификацию несёт нижний колонтитул.
+  const generatedAt = useMemo(() => new Date().toLocaleString("ru-RU"), [open]);
+
   return (
     <>
       <Dialog open={open} onOpenChange={onOpenChange}>
-      <PrintStyles />
+      <PrintStyles footerPrefix={`${sheetTitle} · сформировано ${generatedAt}`} />
       <DialogContent
         className={cn(
           DIALOG_SIZES.wide.width,
@@ -289,12 +295,6 @@ export function PlanModal({
 
         <div className="flex-1 overflow-auto p-4 print-sheet">
           <div className={PRINT_SHEET_WIDTH_CLASS}>
-            <div className="mb-4 text-center">
-              <div className="text-sm font-bold uppercase tracking-wide">{sheetTitle}</div>
-              <div className="mt-0.5 text-[10px] text-muted-foreground">
-                Сформировано: {new Date().toLocaleString("ru-RU")}
-              </div>
-            </div>
             {hiddenGroupKeys.size > 0 && (
               <div className="no-print mb-3 flex items-center gap-2 rounded-md border border-amber-300 bg-amber-50 px-3 py-2 text-xs text-amber-900">
                 Скрыто групп: <b>{hiddenGroupKeys.size}</b>

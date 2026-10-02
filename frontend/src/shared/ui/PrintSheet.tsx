@@ -10,6 +10,24 @@
  * Ширина таблицы на печати — по содержимому (`fit-table`, см. ниже): превью
  * и бумага показывают одни и те же колонки, просто на листе кегль меньше.
  * План участка и «Передачи» печатаются одинаково — правило одно на оба.
+ *
+ * Многостраничный лист: колонтитул `@page` (`@bottom-center`) печатается на
+ * каждой странице и несёт строку листа (её задаёт окно через
+ * `footerPrefix`) и «Страница N из M». Разорванный лист поэтому не теряет
+ * ни номер плана с датой, ни порядковый номер страницы. Механику считает
+ * сам браузер, DOM о разбивке на страницы не знает.
+ *
+ * Две особенности, обе найдены печатью в Chromium 148, а не размышлением:
+ *
+ * - колонтитулу `@page` нужно поле снизу (здесь 7 мм), при `@page margin: 0`
+ *   он не рисуется вовсе;
+ * - `thead` с двумя строками (строка листа + подписи колонок) при наличии
+ *   колонтитула повторяется только нижней строкой — на странице 2+ пропадает
+ *   именно строка листа. Поэтому повтор шапки таблицы держим одной строкой,
+ *   а идентификацию листа несёт колонтитул.
+ *
+ * Колонтитул `@page` рисуют Chromium/Edge 131+ и новее; Firefox и Safari его
+ * не поддерживают — там лист печатается как раньше, без номеров страниц.
  */
 
 /**
@@ -22,10 +40,36 @@
  */
 export const PRINT_SHEET_WIDTH_CLASS = "mx-auto w-full max-w-[1032px]";
 
-export function PrintStyles() {
+export type PrintStylesProps = {
+  /**
+   * Строка листа для колонтитула каждой страницы: название, участок, дата
+   * формирования. Пустая — в колонтитуле остаётся только номер страницы.
+   */
+  footerPrefix?: string;
+};
+
+/** Значение в строку CSS: кавычки и обратные слэши из названия участка. */
+function cssString(value: string): string {
+  return `"${value.replace(/\\/g, "\\\\").replace(/"/g, '\\"')}"`;
+}
+
+export function PrintStyles({ footerPrefix }: PrintStylesProps = {}) {
+  // Лист идёт в колонтитуле перед номером, поэтому разделитель — часть
+  // значения: без названия (`""`) строка не начинается с висящего «·».
+  const prefix = cssString(footerPrefix ? `${footerPrefix} · ` : "");
+
   return (
     <style>{`
-      @page { size: A4 landscape; margin: 0; }
+      :root { --print-footer-prefix: ${prefix}; }
+      @page {
+        size: A4 landscape;
+        margin: 0 0 7mm 0;
+        @bottom-center {
+          content: var(--print-footer-prefix) "Страница " counter(page) " из " counter(pages);
+          font: 9pt sans-serif;
+          color: #000;
+        }
+      }
       @media print {
         html, body { margin: 0 !important; padding: 0 !important; background: white !important; height: auto !important; overflow: visible !important; }
         body * { visibility: hidden; }

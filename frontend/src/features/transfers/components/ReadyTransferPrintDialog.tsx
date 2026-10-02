@@ -13,6 +13,7 @@
  * центра листа. На печати она остаётся такой же, как в превью: `fit-table`
  * отменяет для неё растяжку листа, колонки не раздвигаются.
  */
+import { useMemo } from "react";
 import { Printer } from "lucide-react";
 import type { ReadyToTransferTask } from "@/shared/api/transfers";
 import {
@@ -70,9 +71,15 @@ export function ReadyTransferPrintDialog({
 }: ReadyTransferPrintDialogProps) {
   const totalQty = rows.reduce((sum, row) => sum + (parseFloat(row.transferable_quantity) || 0), 0);
 
+  // Момент формирования фиксируется на открытии окна: строка уходит в
+  // колонтитул каждой страницы, и перерисовка не должна менять время на
+  // напечатанном листе. Отдельной шапки у листа нет — идентификацию несёт
+  // нижний колонтитул.
+  const generatedAt = useMemo(() => new Date().toLocaleString("ru-RU"), [open]);
+
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>
-      <PrintStyles />
+      <PrintStyles footerPrefix={`Готово к передаче · ${scopeLabel} · сформировано ${generatedAt}`} />
       <DialogContent
         className={cn(
           DIALOG_SIZES.wide.width,
@@ -91,12 +98,6 @@ export function ReadyTransferPrintDialog({
 
         <div className="flex-1 overflow-auto p-4 print-sheet">
           <div className={PRINT_SHEET_WIDTH_CLASS}>
-            <div className="mb-4 text-center">
-              <div className="text-sm font-bold uppercase tracking-wide">Готово к передаче</div>
-              <div className="mt-0.5 text-[10px] text-muted-foreground">
-                {scopeLabel} · сформировано: {new Date().toLocaleString("ru-RU")}
-              </div>
-            </div>
 
             {/* Как у плана участка: ширина от содержимого, растёт от центра
                 листа. `fit-table` держит колонки в ширину превью и на
