@@ -41,6 +41,7 @@ import { SectionTasksBoard, type TaskActionDialogType, type TaskBoardViewMode } 
 import { TaskActionDrawer } from "../components/TaskActionDrawer";
 import { BulkCompleteFooter } from "../components/BulkCompleteFooter";
 import { BulkDraftExitDialog } from "../components/BulkDraftExitDialog";
+import { resolveFactQuantity } from "../lib/factQuantity";
 import {
   draftEntries,
   draftShortage,
@@ -766,19 +767,42 @@ export function SectionsTasksPage() {
     const effectiveAccountedAt = nowLocalDateTime();
     const executorUserId = me?.id;
 
-    const good = toQtyInteger(actionQty || "0");
-    const defect = toQtyInteger(defectQty || "0");
-    if (good + defect <= 0) {
-      toast({ title: "Ошибка", description: "Укажите факт или брак", variant: "destructive" });
-      setConflictHint("Укажите хотя бы одно количество: годные или брак.");
-      return;
-    }
-
     // Трансформация габаритов (ADR-0002, раскрой): факт считается в заготовках
     // ВХОДА, лимит — остаток входа, и стратегия дефицита к ней не применяется
     // вовсе: иначе «в работе» = issued − completed сравнивало бы разные
     // размерности, а бэкенд проверяет остаток входа.
     const isTransformTask = !!task.transforms_dimensions && (task.outputs?.length ?? 0) > 0;
+
+    // Ввод в двух режимах: «+100» — добавить, «500» — факт станет 500. На сервер
+    // уходит порция, а не набранное число: бэкенд кладёт проводку ровно на
+    // введённое количество, и отрицательных он не знает.
+    const recordedGood = isTransformTask
+      ? toQtyInteger(task.input_consumed_quantity ?? "0")
+      : toQtyInteger(task.cache.completed_quantity);
+    const goodResolution = resolveFactQuantity(actionQty, recordedGood);
+    const defectResolution = resolveFactQuantity(
+      defectQty,
+      toQtyInteger(task.cache.rejected_quantity),
+    );
+    const invalidReason =
+      goodResolution.kind === "invalid"
+        ? goodResolution.reason
+        : defectResolution.kind === "invalid"
+          ? defectResolution.reason
+          : null;
+    if (invalidReason) {
+      const text = actionReasonText(invalidReason);
+      toast({ title: "Ошибка", description: text, variant: "destructive" });
+      setConflictHint(text);
+      return;
+    }
+    const good = goodResolution.kind === "write" ? goodResolution.quantity : 0;
+    const defect = defectResolution.kind === "write" ? defectResolution.quantity : 0;
+    if (good + defect <= 0) {
+      toast({ title: "Ошибка", description: "Укажите факт или брак", variant: "destructive" });
+      setConflictHint("Укажите хотя бы одно количество: годные или брак.");
+      return;
+    }
     const inWork = isTransformTask
       ? Math.max(
           0,
@@ -896,8 +920,8 @@ export function SectionsTasksPage() {
     bulkDraftMutation.mutate(
       entries.map((entry) => ({
         task_id: entry.taskId,
-        good_quantity: entry.goodQty,
-        defect_quantity: entry.defectQty,
+        good_quantity: String(entry.good.quantity),
+        defect_quantity: String(entry.defect.quantity),
         comment: bulkComment.trim() || undefined,
         idempotency_key: makeIdempotencyKey(`bulk-complete-${entry.taskId}`),
         executor_user_id: me?.id,
@@ -1304,7 +1328,7 @@ export function SectionsTasksPage() {
 
       <BulkDraftExitDialog
         open={draftExitAction !== null}
-        summary={draftTotals(bulkDraft)}
+        summary={draftTotals(selectedTasks, bulkDraft)}
         onCancel={() => setDraftExitAction(null)}
         onConfirm={() => {
           const action = draftExitAction;

@@ -268,3 +268,103 @@ describe("SectionTasksBoard: массовый ввод факта", () => {
     expect(within(lastRow).getAllByTitle(/Сверх плана/).length).toBeGreaterThan(0);
   });
 });
+
+describe("SectionTasksBoard: два режима ввода факта", () => {
+  const withRecorded = (id: number, completed: string, issued = "1000") =>
+    makeTask({
+      id,
+      product_sku: "SKU-A",
+      cache: { ...makeTask().cache, issued_quantity: issued, completed_quantity: completed },
+    });
+
+  it("«+100» добавляет, «500» ставит факт — режим несёт ведущий «+»", () => {
+    render(<Harness tasks={[withRecorded(1, "400")]} />);
+    fireEvent.click(taskRow("SKU-A"));
+
+    const good = within(desktop()).getByLabelText("SKU-A: годные");
+    fireEvent.change(good, { target: { value: "+100" } });
+    expect(screen.getByTestId("draft").textContent).toBe('{"1":{"good":"+100","defect":""}}');
+
+    fireEvent.change(good, { target: { value: "500" } });
+    expect(screen.getByTestId("draft").textContent).toBe('{"1":{"good":"500","defect":""}}');
+  });
+
+  it("факт меньше записанного: значение остаётся в поле, причина — у поля", () => {
+    render(<Harness tasks={[withRecorded(1, "400")]} />);
+    fireEvent.click(taskRow("SKU-A"));
+
+    const good = within(desktop()).getByLabelText("SKU-A: годные");
+    fireEvent.change(good, { target: { value: "300" } });
+
+    // Значение остаётся в поле: цифру надо добрать посимвольно до допустимой.
+    expect(screen.getByTestId("draft").textContent).toBe('{"1":{"good":"300","defect":""}}');
+    expect(screen.getAllByText(/можно только увеличить/).length).toBeGreaterThan(0);
+    expect(good.getAttribute("aria-invalid")).toBe("true");
+
+    fireEvent.change(good, { target: { value: "500" } });
+    expect(screen.queryAllByText(/можно только увеличить/)).toHaveLength(0);
+    expect(good.getAttribute("aria-invalid")).toBe("false");
+  });
+
+  it("цель в поле группы: строки получают цели, поле показывает их сумму", () => {
+    render(
+      <Harness
+        tasks={[
+          makeTask({ id: 1, product_sku: "SKU-A", cache: { ...makeTask().cache, issued_quantity: "100", completed_quantity: "40" } }),
+          makeTask({ id: 2, product_sku: "SKU-A", cache: { ...makeTask().cache, issued_quantity: "100", completed_quantity: "0" } }),
+        ]}
+      />,
+    );
+
+    fireEvent.change(within(desktop()).getByLabelText("SKU-A: годные группы"), {
+      target: { value: "60" },
+    });
+
+    expect(screen.getByTestId("draft").textContent).toBe('{"1":{"good":"60","defect":""}}');
+    expect(
+      (within(desktop()).getByLabelText("SKU-A: годные группы") as HTMLInputElement).value,
+    ).toBe("60");
+  });
+
+  it("набранное в поле группы остаётся, пока цель не разложена", () => {
+    render(
+      <Harness
+        tasks={[
+          makeTask({ id: 1, product_sku: "SKU-A", cache: { ...makeTask().cache, issued_quantity: "100", completed_quantity: "40" } }),
+          makeTask({ id: 2, product_sku: "SKU-A", cache: { ...makeTask().cache, issued_quantity: "100", completed_quantity: "0" } }),
+        ]}
+      />,
+    );
+
+    const group = within(desktop()).getByLabelText("SKU-A: годные группы");
+    fireEvent.change(group, { target: { value: "20" } });
+
+    // Цель ниже записанного (40) не раскладывается, но набранное видно в поле
+    // группы и причина названа — иначе цифру не добрать посимвольно.
+    expect(screen.getByTestId("draft").textContent).toBe("{}");
+    expect((within(desktop()).getByLabelText("SKU-A: годные группы") as HTMLInputElement).value).toBe("20");
+    expect(screen.getAllByText(/можно только увеличить/).length).toBeGreaterThan(0);
+  });
+
+  it("«+» в поле группы не теряется при посимвольном наборе", () => {
+    render(
+      <Harness
+        tasks={[
+          makeTask({ id: 1, product_sku: "SKU-A", cache: { ...makeTask().cache, issued_quantity: "100" } }),
+          makeTask({ id: 2, product_sku: "SKU-A", cache: { ...makeTask().cache, issued_quantity: "100" } }),
+        ]}
+      />,
+    );
+
+    const group = () => within(desktop()).getByLabelText("SKU-A: годные группы") as HTMLInputElement;
+    // Оператор набирает по символу: «+», «5», «0». Промежуточный «+» — ещё не
+    // ввод, но он обязан остаться в поле, иначе режим добавки не набрать.
+    fireEvent.change(group(), { target: { value: "+" } });
+    expect(group().value).toBe("+");
+    fireEvent.change(group(), { target: { value: "+5" } });
+    fireEvent.change(group(), { target: { value: "+50" } });
+
+    expect(group().value).toBe("+50");
+    expect(screen.getByTestId("draft").textContent).toBe('{"1":{"good":"+50","defect":""}}');
+  });
+});

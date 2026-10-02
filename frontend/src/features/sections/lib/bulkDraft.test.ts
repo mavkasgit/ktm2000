@@ -18,7 +18,11 @@ import {
   draftEntryTotals,
   draftQtyFor,
   draftShortage,
+  draftEntryFieldSummary,
   draftTotals,
+  groupDraftValue,
+  resolveGroupFact,
+  type DraftEntryField,
   EMPTY_DRAFT_QTY,
   distributeSequential,
   isDraftEmpty,
@@ -26,6 +30,11 @@ import {
   withDraftField,
   withoutDraftIds,
 } from "./bulkDraft";
+
+/** Запись по колонке в тестах: порция при записанном факте 0. */
+function entryField(quantity: number, mode: "add" | "set" = "add"): DraftEntryField {
+  return { quantity, mode, recorded: 0, target: quantity };
+}
 
 function makeTask(overrides: Partial<SectionBoardTask> = {}): SectionBoardTask {
   return {
@@ -83,7 +92,7 @@ describe("bulkDraft: черновик по id задачи", () => {
 
   it("пустая строка — отсутствие ввода, а не ноль", () => {
     const filled = withDraftField({}, 1, "good", "0");
-    expect(draftTotals(filled).tasks).toBe(1);
+    expect(draftTotals([makeTask({ id: 1 })], filled).tasks).toBe(1);
 
     const cleared = withDraftField(filled, 1, "good", "");
     expect(cleared).toEqual({});
@@ -100,8 +109,9 @@ describe("bulkDraft: черновик по id задачи", () => {
   it("итоги считают только заполненные задания", () => {
     const draft = withDraftField(withDraftField({}, 1, "good", "5"), 2, "defect", "4");
 
-    expect(draftTotals(draft)).toEqual({ good: 5, defect: 4, tasks: 2 });
-    expect(draftTotals({})).toEqual({ good: 0, defect: 0, tasks: 0 });
+    const tasks = [makeTask({ id: 1 }), makeTask({ id: 2 })];
+    expect(draftTotals(tasks, draft)).toEqual({ good: 5, defect: 4, tasks: 2 });
+    expect(draftTotals(tasks, {})).toEqual({ good: 0, defect: 0, tasks: 0 });
   });
 });
 
@@ -216,7 +226,9 @@ describe("bulkDraft: пачка записей", () => {
     const draft = withDraftField(withDraftField({}, 1, "good", "3"), 2, "defect", "");
 
     expect(draftEntries(tasks, draft)).toEqual({
-      entries: [{ taskId: 1, goodQty: "3", defectQty: "0" }],
+      entries: [
+        { taskId: 1, good: entryField(3, "set"), defect: entryField(0) },
+      ],
       skipped: [],
     });
   });
@@ -235,16 +247,90 @@ describe("bulkDraft: пачка записей", () => {
     );
 
     const { entries, skipped } = draftEntries(tasks, draft);
-    expect(entries).toEqual([{ taskId: 1, goodQty: "2", defectQty: "0" }]);
+    expect(entries).toEqual([{ taskId: 1, good: entryField(2, "set"), defect: entryField(0) }]);
     expect(skipped.map((task) => task.id)).toEqual([2, 3]);
   });
 
   it("итог «к записи» считается по пачке, а не по черновику", () => {
     expect(
       draftEntryTotals([
-        { taskId: 1, goodQty: "3", defectQty: "1" },
-        { taskId: 2, goodQty: "5", defectQty: "0" },
+        { taskId: 1, good: entryField(3), defect: entryField(1) },
+        { taskId: 2, good: entryField(5), defect: entryField(0) },
       ]),
     ).toEqual({ good: 8, defect: 1 });
+  });
+});
+
+describe("bulkDraft: два режима ввода факта", () => {
+  it("«+N» в поле группы раскладывается порциями со знаком", () => {
+    const tasks = [
+      makeTask({ id: 1, cache: { ...makeTask().cache, issued_quantity: "100", completed_quantity: "40" } }),
+      makeTask({ id: 2, cache: { ...makeTask().cache, issued_quantity: "100", completed_quantity: "0" } }),
+    ];
+    const draft = applyGroupField({}, tasks, "good", "+30");
+
+    expect(draftQtyFor(draft, 1).good).toBe("+30");
+    expect(draftQtyFor(draft, 2).good).toBe("");
+    // Поле группы показывает добавку: сумма порций.
+    expect(groupDraftValue(tasks, draft, "good")).toBe("+30");
+  });
+
+  it("цель в поле группы раскладывается целями строк: «факт группы станет N»", () => {
+    const tasks = [
+      makeTask({ id: 1, cache: { ...makeTask().cache, issued_quantity: "100", completed_quantity: "40" } }),
+      makeTask({ id: 2, cache: { ...makeTask().cache, issued_quantity: "100", completed_quantity: "0" } }),
+    ];
+    // Записано 40, цель 60 — разница 20 садится в первую строку.
+    const draft = applyGroupField({}, tasks, "good", "60");
+
+    expect(draftQtyFor(draft, 1).good).toBe("60");
+    expect(draftQtyFor(draft, 2).good).toBe("");
+    // Поле группы показывает цель: сумма целей строк.
+    expect(groupDraftValue(tasks, draft, "good")).toBe("60");
+  });
+
+  it("цель ниже записанного не раскладывается: строки остаются как были", () => {
+    const tasks = [
+      makeTask({ id: 1, cache: { ...makeTask().cache, issued_quantity: "100", completed_quantity: "40" } }),
+    ];
+    const before = applyGroupField({}, tasks, "good", "+5");
+
+    expect(applyGroupField(before, tasks, "good", "10")).toBe(before);
+    expect(resolveGroupFact(tasks, "good", "10").resolution.kind).toBe("invalid");
+  });
+
+  it("порция записи считается от записанного: «500» при 400 — это 100", () => {
+    const task = makeTask({
+      id: 1,
+      cache: { ...makeTask().cache, issued_quantity: "1000", completed_quantity: "400" },
+    });
+    const { entries } = draftEntries([task], withDraftField({}, 1, "good", "500"));
+
+    expect(entries).toEqual([
+      { taskId: 1, good: { quantity: 100, mode: "set", recorded: 400, target: 500 }, defect: entryField(0) },
+    ]);
+  });
+
+  it("показ записи: «+100» для добавки и «400 → 500» для цели", () => {
+    const task = makeTask({
+      id: 1,
+      cache: { ...makeTask().cache, issued_quantity: "1000", completed_quantity: "400" },
+    });
+
+    const added = draftEntries([task], withDraftField({}, 1, "good", "+100")).entries;
+    expect(draftEntryFieldSummary(added, "good")).toBe("+100");
+
+    const set = draftEntries([task], withDraftField({}, 1, "good", "500")).entries;
+    expect(draftEntryFieldSummary(set, "good")).toBe("400 → 500");
+  });
+
+  it("итоги «к записи» считаются порциями, а не набранными числами", () => {
+    const task = makeTask({
+      id: 1,
+      cache: { ...makeTask().cache, issued_quantity: "1000", completed_quantity: "400" },
+    });
+
+    expect(draftTotals([task], withDraftField({}, 1, "good", "500")).good).toBe(100);
+    expect(draftTotals([task], withDraftField({}, 1, "good", "+500")).good).toBe(500);
   });
 });

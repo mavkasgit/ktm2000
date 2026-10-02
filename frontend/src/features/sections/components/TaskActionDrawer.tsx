@@ -2,7 +2,9 @@ import { useState, type Dispatch, type SetStateAction } from "react";
 import { AlertTriangle } from "lucide-react";
 import { cn } from "@/shared/utils/cn";
 import { parseNumericInput } from "@/shared/lib/parseNumericInput";
-import { normalizeQuantityInput, type QuantityInputIssue } from "@/shared/lib/quantityInput";
+import { normalizeQuantityInput, parseQuantityInput, type QuantityInputIssue } from "@/shared/lib/quantityInput";
+import { resolveFactQuantity } from "../lib/factQuantity";
+import { actionReasonText } from "@/shared/lib/actionReasons";
 
 import type { SectionBoardTask, ShortageStrategy } from "@/shared/api/shopfloor";
 import { formatDimensionsLabel } from "@/shared/api/stock";
@@ -103,13 +105,37 @@ export function TaskActionDrawer({
 
   const rejectedQty = task ? Math.round(parseFloat(task.cache.rejected_quantity) || 0) : 0;
 
-  const qtyNum = toNumber(actionQty);
-  const defectNum = toNumber(defectQty);
-  const outOfRange = qtyNum > 0 && maxQty > 0 && qtyNum + defectNum > maxQty;
+  // Записанный факт колонки: у раскроя «годные» — это раскроенные заготовки
+  // входа (ADR-0002), у остальных — записанные годные.
+  const recordedGood = isTransform ? inputConsumed : completedQty;
+  const recordedDefect = rejectedQty;
+
+  // Ввод в двух режимах: «+100» — добавить, «500» — факт станет 500. Дальше
+  // всюду порция, а не набранное число: на сервер уходит порция, и лимиты
+  // считаются по ней.
+  const goodResolution = resolveFactQuantity(actionQty, recordedGood);
+  const defectResolution = resolveFactQuantity(defectQty, recordedDefect);
+  const goodIssue =
+    goodResolution.kind === "invalid" ? actionReasonText(goodResolution.reason) : null;
+  const defectIssue =
+    defectResolution.kind === "invalid" ? actionReasonText(defectResolution.reason) : null;
+  const qtyNum = goodResolution.kind === "write" ? goodResolution.quantity : 0;
+  const defectNum = defectResolution.kind === "write" ? defectResolution.quantity : 0;
+  const outOfRange = qtyNum + defectNum > 0 && maxQty > 0 && qtyNum + defectNum > maxQty;
 
   const factTotal = qtyNum + defectNum;
   // Для трансформации лимит — остаток входа, стратегии дефицита неприменимы.
   const hasShortage = !isTransform && factTotal > maxQty + available;
+
+  // Кнопки заполняют поле в том режиме, в котором оно набрано: «+N» — добавить,
+  // «N» — факт станет N. Иначе «Плановое» в режиме добавки записало бы план как
+  // добавку и удвоило факт.
+  const plannedTarget = isTransform ? inputQty : plannedQty;
+  const addMode = parseQuantityInput(actionQty).mode === "add";
+  const plannedFill = addMode
+    ? `+${Math.max(0, plannedTarget - recordedGood)}`
+    : String(plannedTarget);
+  const maxFill = addMode ? `+${maxQty}` : String(recordedGood + maxQty);
 
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>
@@ -201,7 +227,8 @@ export function TaskActionDrawer({
                 value={actionQty}
                 onChange={(e) => handleQtyChange(e.target.value, setActionQty)}
                 onBlur={() => setIssue(null)}
-                aria-invalid={issue !== null}
+                aria-invalid={issue !== null || goodIssue !== null}
+                title={goodIssue ?? undefined}
                 className="w-[150px] h-8"
               />
             </div>
@@ -215,14 +242,15 @@ export function TaskActionDrawer({
                 value={defectQty}
                 onChange={(e) => handleQtyChange(e.target.value, setDefectQty)}
                 onBlur={() => setIssue(null)}
-                aria-invalid={issue !== null}
+                aria-invalid={issue !== null || defectIssue !== null}
+                title={defectIssue ?? undefined}
                 className="w-[150px] h-8"
               />
             </div>
           </div>
-          {issue && (
+          {(issue?.text || goodIssue || defectIssue) && (
             <div className="mt-1 text-xs text-red-600" role="status">
-              {issue.text}
+              {issue?.text ?? goodIssue ?? defectIssue}
             </div>
           )}
           {outOfRange && (
@@ -238,19 +266,19 @@ export function TaskActionDrawer({
               <Button
                 type="button"
                 variant="outline"
-                onClick={() => setActionQty(String(isTransform ? inputQty : plannedQty))}
+                onClick={() => setActionQty(plannedFill)}
                 className="shrink-0 w-[150px] h-8"
               >
-                Плановое ({isTransform ? inputQty : plannedQty})
+                Плановое ({plannedFill})
               </Button>
             )}
             <Button
               type="button"
               variant="outline"
-              onClick={() => setActionQty(maxQty > 0 ? String(maxQty) : "0")}
+              onClick={() => setActionQty(maxQty > 0 ? maxFill : "0")}
               className="shrink-0 w-[150px] h-8"
             >
-              Максимальное ({maxQty})
+              Максимальное ({maxQty > 0 ? maxFill : "0"})
             </Button>
           </div>
 

@@ -50,6 +50,10 @@ import {
 } from "../lib/taskStatus";
 import {
   applyGroupField,
+  EMPTY_DRAFT_QTY,
+  groupDraftValue as groupDraftValueOf,
+  recordedFact,
+  resolveGroupFact,
   draftQtyFor,
   isTransformTask,
   taskFactCeiling,
@@ -75,6 +79,7 @@ import {
 import { TABLE_ROW_STYLES } from "@/shared/lib/tableRowStyles";
 import { TABLE_ROW_COMPACT, TABLE_ROW_DENSE } from "@/shared/lib/dataTableStyles";
 import { actionReasonText } from "@/shared/lib/actionReasons";
+import { factPortion, resolveFactQuantity } from "../lib/factQuantity";
 import { cn } from "@/shared/utils/cn";
 import { fmtQty, toQtyInteger } from "@/shared/lib/quantityFormat";
 import { boardColumns, visibleBoardColumns } from "../lib/boardColumns";
@@ -215,6 +220,7 @@ function renderDraftCell(
         onChange={(next) => draft.onChange(field, next)}
         recorded={fmtQty(recorded)}
         ariaLabel={`${task.product_sku}: ${label}`}
+        issueText={draft.issue[field]}
         overPlan={overPlan}
       />
       {overPlan &&
@@ -241,11 +247,36 @@ function renderDraftCell(
  * и сортировка по этим колонкам продолжают работать по записанной величине, а
  * черновик их не двигает (#283, п. 1).
  */
+/**
+ * Убирает набранное в поле группы из состояния: поле снова выводится из строк.
+ */
+function forgetGroupInput(
+  inputs: Record<string, DraftQty>,
+  groupKey: string,
+): Record<string, DraftQty> {
+  if (!(groupKey in inputs)) return inputs;
+  const next = { ...inputs };
+  delete next[groupKey];
+  return next;
+}
+
 type RowDraftContext = {
   value: DraftQty;
   overPlan: { good: boolean; defect: boolean };
+  /** Причина домена по колонке: ввод верен синтаксически, но неприменим. */
+  issue: { good: string | null; defect: string | null };
   onChange: (field: DraftField, value: string) => void;
 };
+
+/**
+ * Причина, по которой ввод колонки не применяется, — текст у поля. Синтаксис
+ * проверяет поле (`normalizeQuantityInput`), а «факт меньше записанного» —
+ * домен: бэкенд принимает порцию и отрицательных количеств не знает.
+ */
+function draftFieldIssue(task: SectionBoardTask, value: string, field: DraftField): string | null {
+  const resolution = resolveFactQuantity(value, recordedFact(task, field));
+  return resolution.kind === "invalid" ? actionReasonText(resolution.reason) : null;
+}
 
 function renderTaskRow(
   task: SectionBoardTask,
@@ -490,6 +521,7 @@ function TableTaskGroupRow({
   onSelectGroup,
   hasPackaging,
   groupQty,
+  groupIssue,
   groupOverPlan,
   onGroupQtyChange,
 }: {
@@ -507,6 +539,8 @@ function TableTaskGroupRow({
    * их место занял инпут, а итог «к записи» показывает футер.
    */
   groupQty?: DraftQty;
+  /** Причина домена по колонке: «факт меньше записанного» и подобное. */
+  groupIssue?: { good: string | null; defect: string | null };
   groupOverPlan?: { good: boolean; defect: boolean };
   onGroupQtyChange?: (field: DraftField, value: string) => void;
 }) {
@@ -602,6 +636,7 @@ function TableTaskGroupRow({
               onChange={(value) => onGroupQtyChange?.("good", value)}
               recorded={fmtQty(String(recordedGood))}
               ariaLabel={`${firstTask.product_sku}: годные группы`}
+              issueText={groupIssue?.good ?? null}
               overPlan={overPlan.good}
             />
             {overPlan.good && (
@@ -622,6 +657,7 @@ function TableTaskGroupRow({
               onChange={(value) => onGroupQtyChange?.("defect", value)}
               recorded={fmtQty(String(recordedDefect))}
               ariaLabel={`${firstTask.product_sku}: брак группы`}
+              issueText={groupIssue?.defect ?? null}
               overPlan={overPlan.defect}
             />
             {overPlan.defect && (
@@ -739,6 +775,8 @@ type VirtualBoardRow =
       task: SectionBoardTask;
       isLastInGroup: boolean;
       isInGroup: boolean;
+      /** Ключ группы строки — по нему снимается набранное в её поле. */
+      groupKey?: string;
     }
   | {
       kind: "divider";
@@ -801,6 +839,13 @@ export function SectionTasksBoard({
   // Правило заглушки — общее для всех таблиц (ADR-0044), поэтому берётся из
   // shared, а не пишется здесь выражением: тринадцать копий однажды разъедутся.
   const showLoadingPlaceholder = isFirstRowsLoad(isLoading, tasks);
+  /**
+   * Набранное в поле группы, пока ввод не разложен. Поле группы выводится из
+   * строк, но «факт станет N» при N меньше записанного разложить нельзя — а
+   * набранное обязано остаться в поле, иначе цифру не добрать посимвольно.
+   * Снимается правкой любой строки группы: тогда поле снова выводится из строк.
+   */
+  const [groupInputs, setGroupInputs] = useState<Record<string, DraftQty>>({});
   const [searchQuery, setSearchQuery] = useState("");
   const debouncedSearch = useDebouncedValue(searchQuery);
   const {
@@ -984,7 +1029,10 @@ export function SectionTasksBoard({
    * потолок строки считается `taskFactCeiling`: у раскроя это остаток входа,
    * у остальных — «в работе плюс доступное к довыдаче».
    */
-  const draftContextFor = (task: SectionBoardTask): RowDraftContext | undefined => {
+  const draftContextFor = (
+    task: SectionBoardTask,
+    groupKey?: string,
+  ): RowDraftContext | undefined => {
     if (!bulkMode || !bulkDraft || !onBulkDraftChange || !bulkSelection?.isSelected(task.id)) {
       return undefined;
     }
@@ -992,11 +1040,22 @@ export function SectionTasksBoard({
     const ceiling = taskFactCeiling(task);
     return {
       value,
+      // Превышение считается по порции, а не по набранному числу: «факт станет
+      // 500» при записанных 400 — это порция 100, и потолок ей не 500.
       overPlan: {
-        good: toQtyInteger(value.good) > ceiling,
-        defect: toQtyInteger(value.defect) > ceiling,
+        good: factPortion(value.good, recordedFact(task, "good")) > ceiling,
+        defect: factPortion(value.defect, recordedFact(task, "defect")) > ceiling,
       },
-      onChange: (field, next) => onBulkDraftChange(withDraftField(bulkDraft, task.id, field, next)),
+      issue: {
+        good: draftFieldIssue(task, value.good, "good"),
+        defect: draftFieldIssue(task, value.defect, "defect"),
+      },
+      onChange: (field, next) => {
+        // Правка строки снимает набранное в поле группы: поле выводится из
+        // строк, и оставленное «набранное» разошлось бы с раскладкой.
+        if (groupKey) setGroupInputs((prev) => forgetGroupInput(prev, groupKey));
+        onBulkDraftChange(withDraftField(bulkDraft, task.id, field, next));
+      },
     };
   };
 
@@ -1011,10 +1070,27 @@ export function SectionTasksBoard({
     tasks: SectionBoardTask[],
     field: DraftField,
     value: string,
+    groupKey: string,
   ) => {
     if (!bulkDraft || !onBulkDraftChange) return;
     const completable = tasks.filter((task) => getCompletionBlockReason(task) === null);
-    onBulkDraftChange(applyGroupField(bulkDraft, completable, field, value));
+    const { resolution } = resolveGroupFact(completable, field, value);
+    if (value.trim() === "") {
+      // Очистка поля снимает раскладку: строки возвращаются к плейсхолдерам.
+      setGroupInputs((previous) => forgetGroupInput(previous, groupKey));
+      onBulkDraftChange(applyGroupField(bulkDraft, completable, field, ""));
+    } else if (resolution.kind === "write") {
+      setGroupInputs((previous) => forgetGroupInput(previous, groupKey));
+      onBulkDraftChange(applyGroupField(bulkDraft, completable, field, value));
+    } else {
+      // Ввод ещё не применён (недонабран или неприменим) — набранное остаётся
+      // в поле группы: поле выводится из строк, и без этого «+» терялся бы при
+      // посимвольном наборе, а цель ниже записанного исчезала бы из поля.
+      setGroupInputs((previous) => ({
+        ...previous,
+        [groupKey]: { ...(previous[groupKey] ?? EMPTY_DRAFT_QTY), [field]: value },
+      }));
+    }
     for (const task of completable) {
       bulkSelection?.selectOne(task.id, true);
     }
@@ -1026,24 +1102,26 @@ export function SectionTasksBoard({
    * шапке. Пусто во всех строках — поле показывает плейсхолдер с записанным
    * фактом.
    */
-  const groupDraftValue = (tasks: SectionBoardTask[]): DraftQty => {
-    if (!bulkDraft) return { good: "", defect: "" };
-    let good = 0;
-    let defect = 0;
-    let hasGood = false;
-    let hasDefect = false;
-    for (const task of tasks) {
-      const qty = draftQtyFor(bulkDraft, task.id);
-      if (toQtyInteger(qty.good) > 0 || qty.good.trim() !== "") {
-        hasGood = true;
-        good += toQtyInteger(qty.good);
-      }
-      if (toQtyInteger(qty.defect) > 0 || qty.defect.trim() !== "") {
-        hasDefect = true;
-        defect += toQtyInteger(qty.defect);
-      }
-    }
-    return { good: hasGood ? String(good) : "", defect: hasDefect ? String(defect) : "" };
+  /** Значение поля группы: набранное, пока оно не разложено, иначе — из строк. */
+  const groupFieldValue = (
+    tasks: SectionBoardTask[],
+    field: DraftField,
+    groupKey: string,
+  ): string => {
+    if (!bulkDraft) return "";
+    return groupInputs[groupKey]?.[field] ?? groupDraftValueOf(tasks, bulkDraft, field);
+  };
+
+  /** Причина домена в поле группы — тот же текст, что у поля строки. */
+  const groupFieldIssue = (
+    tasks: SectionBoardTask[],
+    field: DraftField,
+    groupKey: string,
+  ): string | null => {
+    const value = groupFieldValue(tasks, field, groupKey);
+    if (value.trim() === "") return null;
+    const { resolution } = resolveGroupFact(tasks, field, value);
+    return resolution.kind === "invalid" ? actionReasonText(resolution.reason) : null;
   };
 
   const groupOverPlan = (tasks: SectionBoardTask[]): { good: boolean; defect: boolean } => {
@@ -1053,8 +1131,8 @@ export function SectionTasksBoard({
     for (const task of tasks) {
       const qty = draftQtyFor(bulkDraft, task.id);
       const ceiling = taskFactCeiling(task);
-      if (toQtyInteger(qty.good) > ceiling) good = true;
-      if (toQtyInteger(qty.defect) > ceiling) defect = true;
+      if (factPortion(qty.good, recordedFact(task, "good")) > ceiling) good = true;
+      if (factPortion(qty.defect, recordedFact(task, "defect")) > ceiling) defect = true;
     }
     return { good, defect };
   };
@@ -1199,6 +1277,7 @@ export function SectionTasksBoard({
             task,
             isLastInGroup: idx === group.tasks.length - 1,
             isInGroup: true,
+            groupKey: entry.key,
           });
         });
       }
@@ -1248,11 +1327,18 @@ export function SectionTasksBoard({
             bulkSelection={bulkSelection}
             onToggleCollapse={() => toggleGroup(row.entryKey)}
             hasPackaging={hasPackaging}
-            groupQty={groupDraftValue(row.group.tasks)}
+            groupQty={{
+              good: groupFieldValue(row.group.tasks, "good", row.entryKey),
+              defect: groupFieldValue(row.group.tasks, "defect", row.entryKey),
+            }}
+            groupIssue={{
+              good: groupFieldIssue(row.group.tasks, "good", row.entryKey),
+              defect: groupFieldIssue(row.group.tasks, "defect", row.entryKey),
+            }}
             groupOverPlan={groupOverPlan(row.group.tasks)}
             onGroupQtyChange={
               bulkMode && onBulkDraftChange
-                ? (field, value) => handleGroupQtyChange(row.group.tasks, field, value)
+                ? (field, value) => handleGroupQtyChange(row.group.tasks, field, value, row.entryKey)
                 : undefined
             }
             onSelectGroup={() => {
@@ -1289,7 +1375,7 @@ export function SectionTasksBoard({
         row.isLastInGroup,
         row.isInGroup,
         hasPackaging,
-        draftContextFor(row.task),
+        draftContextFor(row.task, row.groupKey),
       );
     },
     [
@@ -1513,7 +1599,7 @@ export function SectionTasksBoard({
                         ["good", "Годные группы"],
                         ["defect", "Брак группы"],
                       ] as const).map(([field, label]) => {
-                        const value = groupDraftValue(group.tasks)[field];
+                        const value = groupFieldValue(group.tasks, field, entry.key);
                         const recorded =
                           field === "good"
                             ? group.tasks.reduce((sum, task) => sum + parseFloat(task.cache.completed_quantity), 0)
@@ -1523,9 +1609,10 @@ export function SectionTasksBoard({
                             {label}
                             <DraftQtyInput
                               value={value}
-                              onChange={(next) => handleGroupQtyChange(group.tasks, field, next)}
+                              onChange={(next) => handleGroupQtyChange(group.tasks, field, next, entry.key)}
                               recorded={fmtQty(String(recorded))}
                               ariaLabel={`${group.label}: ${label}`}
+                              issueText={groupFieldIssue(group.tasks, field, entry.key)}
                               overPlan={groupOverPlan(group.tasks)[field]}
                             />
                           </label>
@@ -1538,7 +1625,7 @@ export function SectionTasksBoard({
                     const isSelected = revokeSelection
                       ? revokeSelection.isSelected(task.id)
                       : bulkMode && bulkSelection?.isSelected(task.id);
-                    return renderMobileCard(task, isSelected, bulkMode, bulkSelection, onAction, onRevokeItem, isRevoking, isLast, readOnly, hasPackaging, draftContextFor(task));
+                    return renderMobileCard(task, isSelected, bulkMode, bulkSelection, onAction, onRevokeItem, isRevoking, isLast, readOnly, hasPackaging, draftContextFor(task, entry.key));
                   })}</div>}
                 </div>
               );

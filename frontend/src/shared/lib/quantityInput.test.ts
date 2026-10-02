@@ -1,11 +1,11 @@
 import { describe, expect, it } from "vitest";
 
-import { normalizeQuantityInput, QUANTITY_INPUT_ISSUE_TEXT } from "./quantityInput";
+import { normalizeQuantityInput, parseQuantityInput, QUANTITY_INPUT_ISSUE_TEXT } from "./quantityInput";
 
 describe("normalizeQuantityInput: обычный ввод", () => {
   it("цифры проходят без причины", () => {
-    expect(normalizeQuantityInput("12")).toEqual({ value: "12", issue: null });
-    expect(normalizeQuantityInput("0")).toEqual({ value: "0", issue: null });
+    expect(normalizeQuantityInput("12")).toEqual({ value: "12", mode: "set", issue: null });
+    expect(normalizeQuantityInput("0")).toEqual({ value: "0", mode: "set", issue: null });
   });
   it("недопустимый символ отделён от допустимых, чтобы вызывающий мог его не применить", () => {
     // Вызывающий не применяет `value`, если `issue` не null: символ не должен
@@ -25,7 +25,7 @@ describe("normalizeQuantityInput: обычный ввод", () => {
   });
 
   it("пустой ввод — отсутствие ввода, а не ноль", () => {
-    expect(normalizeQuantityInput("")).toEqual({ value: "", issue: null });
+    expect(normalizeQuantityInput("")).toEqual({ value: "", mode: "set", issue: null });
   });
 
   it("ведущие нули сохраняются как набраны", () => {
@@ -91,12 +91,60 @@ describe("normalizeQuantityInput: границы", () => {
 
   it("нормализация идемпотентна: результат можно пропустить через себя же", () => {
     const once = normalizeQuantityInput("1,5");
-    expect(normalizeQuantityInput(once.value)).toEqual({ value: "15", issue: null });
+    expect(normalizeQuantityInput(once.value)).toEqual({ value: "15", mode: "set", issue: null });
   });
 
   it("каждая причина — непустой текст", () => {
     for (const text of Object.values(QUANTITY_INPUT_ISSUE_TEXT)) {
       expect(text.length).toBeGreaterThan(0);
     }
+  });
+});
+
+describe("normalizeQuantityInput: ведущий «+» — режим, а не знак числа", () => {
+  it("«+100» — добавление, знак остаётся в значении", () => {
+    expect(normalizeQuantityInput("+100")).toEqual({ value: "+100", mode: "add", issue: null });
+  });
+
+  it("без знака — установка факта", () => {
+    expect(normalizeQuantityInput("500").mode).toBe("set");
+  });
+
+  it("«+» не первым символом — тот же недопустимый символ, что буква", () => {
+    const r = normalizeQuantityInput("1+0");
+    expect(r.value).toBe("10");
+    expect(r.mode).toBe("set");
+    expect(r.issue?.kind).toBe("non-digit");
+  });
+
+  it("второй «+» отбрасывается с причиной, а не читается как знак", () => {
+    const r = normalizeQuantityInput("++100");
+    expect(r.value).toBe("+100");
+    expect(r.mode).toBe("add");
+    expect(r.issue?.kind).toBe("non-digit");
+  });
+
+  it("один знак без цифр — режим набран, числа нет", () => {
+    expect(normalizeQuantityInput("+")).toEqual({ value: "+", mode: "add", issue: null });
+  });
+
+  it("причина называет «+» в начале, а не «только цифры»", () => {
+    expect(QUANTITY_INPUT_ISSUE_TEXT["non-digit"]).toContain("первым символом");
+  });
+});
+
+describe("parseQuantityInput: разбор сохранённого ввода", () => {
+  it("читает режим и число", () => {
+    expect(parseQuantityInput("+100")).toEqual({ mode: "add", quantity: 100 });
+    expect(parseQuantityInput("500")).toEqual({ mode: "set", quantity: 500 });
+  });
+
+  it("пустое поле и один знак — числа нет", () => {
+    expect(parseQuantityInput("")).toEqual({ mode: "set", quantity: null });
+    expect(parseQuantityInput("+")).toEqual({ mode: "add", quantity: null });
+  });
+
+  it("ведущие нули — то же число", () => {
+    expect(parseQuantityInput("007")).toEqual({ mode: "set", quantity: 7 });
   });
 });

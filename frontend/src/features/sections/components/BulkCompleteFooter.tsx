@@ -35,6 +35,7 @@ import { fmtQty } from "@/shared/lib/quantityFormat";
 import { taskOperations } from "../lib/taskView";
 import {
   draftEntries,
+  draftEntryFieldSummary,
   draftEntryTotals,
   type BulkDraft,
   type DraftShortage,
@@ -111,6 +112,10 @@ export function BulkCompleteFooter({
     [selectedTasks, draft],
   );
   const totals = useMemo(() => draftEntryTotals(entries), [entries]);
+  // «+100» — добавка, «400 → 500» — факт станет 500: без этого «просто число»
+  // в поле читалось бы как добавка, и оператор не сверил бы запись.
+  const goodSummary = useMemo(() => draftEntryFieldSummary(entries, "good"), [entries]);
+  const defectSummary = useMemo(() => draftEntryFieldSummary(entries, "defect"), [entries]);
   const outsideFilter = useMemo(
     () => selectedTasks.filter((task) => !visibleTaskIds.has(task.id)),
     [selectedTasks, visibleTaskIds],
@@ -126,8 +131,8 @@ export function BulkCompleteFooter({
               <span className="font-semibold">Массовое завершение</span>
               <span className="text-muted-foreground">
                 Выбрано: {selectedTasks.length} · к записи:{" "}
-                <span className="font-medium text-emerald-700">годные {fmtQty(totals.good)}</span>,{" "}
-                <span className="font-medium text-red-600">брак {fmtQty(totals.defect)}</span>
+                <span className="font-medium text-emerald-700">годные {goodSummary}</span>,{" "}
+                <span className="font-medium text-red-600">брак {defectSummary}</span>
               </span>
               {outsideFilter.length > 0 && (
                 <button

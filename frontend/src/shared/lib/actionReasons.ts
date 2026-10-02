@@ -29,6 +29,7 @@ export type ActionReasonCode =
   | "bulk_nothing_to_complete"
   | "bulk_no_quantity"
   | "no_shortage_strategy"
+  | "fact_below_recorded"
   // Передачи.
   | "zero_quantity"
   | "row_in_flight"
@@ -48,6 +49,7 @@ export const ACTION_REASON_TEXT: Record<ActionReasonCode, string> = {
   bulk_nothing_to_complete: "Нет заданий для завершения",
   bulk_no_quantity: "Введите количество",
   no_shortage_strategy: "Выберите, что делать с излишком",
+  fact_below_recorded: "Факт можно только увеличить: введено меньше записанного. Уменьшение — через отмену действия",
   cancelled: "Задание отменено",
   stage_skipped: "Этап пропущен",
   zero_quantity: "Укажите количество",

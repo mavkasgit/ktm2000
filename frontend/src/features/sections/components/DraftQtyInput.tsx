@@ -33,6 +33,12 @@ export type DraftQtyInputProps = {
   /** Записанный факт (уже отформатированный): плейсхолдер и подсказка. */
   recorded: string;
   ariaLabel: string;
+  /**
+   * Причина домена (ввод синтаксически верен, но неприменим — например «факт
+   * меньше записанного»). Показывается у поля так же, как причина набора:
+   * значение остаётся в поле, иначе цифру не добрать посимвольно.
+   */
+  issueText?: string | null;
   /** Введённое больше доступного на задачу — помечается без наведения. */
   overPlan?: boolean;
   disabled?: boolean;
@@ -44,15 +50,18 @@ export function DraftQtyInput({
   onChange,
   recorded,
   ariaLabel,
+  issueText = null,
   overPlan = false,
   disabled = false,
   className,
 }: DraftQtyInputProps) {
-  const [issue, setIssue] = useState<QuantityInputIssue | null>(null);
+  const [inputIssue, setInputIssue] = useState<QuantityInputIssue | null>(null);
+  // Причина набора старше причины домена: она про только что набранный символ.
+  const shownIssue = inputIssue?.text ?? issueText;
 
   const handleChange = (raw: string) => {
     const result = normalizeQuantityInput(raw);
-    setIssue(result.issue);
+    setInputIssue(result.issue);
     if (!result.issue) onChange(result.value);
   };
 
@@ -61,14 +70,14 @@ export function DraftQtyInput({
     // а не наведением): причина обязана читаться без наведения, а под полем в
     // 32-пиксельной строке для неё места нет.
     <TooltipProvider delayDuration={0}>
-      <Tooltip open={issue !== null}>
+      <Tooltip open={shownIssue !== null}>
         <TooltipTrigger asChild>
           <Input
             type="text"
             inputMode="numeric"
             value={value}
             onChange={(event) => handleChange(event.target.value)}
-            onBlur={() => setIssue(null)}
+            onBlur={() => setInputIssue(null)}
             // Клик и нажатия внутри поля не должны переключать выделение
             // строки: строка выбирается кликом, а поле — часть выделенной строки.
             onClick={(event) => event.stopPropagation()}
@@ -77,25 +86,24 @@ export function DraftQtyInput({
             }}
             placeholder={recorded}
             aria-label={ariaLabel}
-            aria-invalid={issue !== null || overPlan}
+            aria-invalid={shownIssue !== null || overPlan}
             title={
-              issue
-                ? issue.text
-                : overPlan
-                  ? "Сверх плана: больше доступного на задачу"
-                  : `Записано: ${recorded}`
+              shownIssue ??
+              (overPlan
+                ? "Сверх плана: больше доступного на задачу"
+                : `Записано: ${recorded}`)
             }
             disabled={disabled}
             className={cn(
               "h-7 w-16 text-xs",
-              issue !== null && "border-red-500 text-red-700",
-              overPlan && issue === null && "border-amber-500 bg-amber-50 text-amber-800",
+              shownIssue !== null && "border-red-500 text-red-700",
+              overPlan && shownIssue === null && "border-amber-500 bg-amber-50 text-amber-800",
               className,
             )}
           />
         </TooltipTrigger>
         <TooltipContent side="top" className="max-w-[240px] text-xs">
-          {issue?.text}
+          {shownIssue}
         </TooltipContent>
       </Tooltip>
     </TooltipProvider>
