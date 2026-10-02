@@ -69,7 +69,9 @@ import {
   TaskStatusDot,
   buildTaskViewFields,
   getTaskCardClass,
+  getTaskGroupRailClass,
   getTaskRowClass,
+  getTaskStripeClass,
 } from "./TaskView";
 import { TABLE_ROW_STYLES } from "@/shared/lib/tableRowStyles";
 import { TABLE_ROW_COMPACT, TABLE_ROW_DENSE } from "@/shared/lib/dataTableStyles";
@@ -253,6 +255,17 @@ function renderTaskRow(
 ) {
   const fields = buildTaskViewFields(task, hasPackaging);
   const blockReason = getCompletionBlockReason(task);
+  // Рёбра блока живут на ячейках, а не на `<tr>`: таблица объявлена
+  // `border-separate`, и границы строк браузер в ней не рисует вовсе (проверено
+  // пиксельно) — `border-b` на `<tr>` был невидим, как и прежняя граница
+  // `border-b-2 border-blue-300`. Одиночные строки (не группа) остаются без
+  // линий, как и были.
+  const edgeClass = isInGroup
+    ? isLastInGroup
+      ? TABLE_ROW_STYLES.groupBlockBoundary
+      : TABLE_ROW_STYLES.groupChildSeparator
+    : "";
+  const cellClass = edgeClass ? cn(ROW_CELL_CLASS, edgeClass) : ROW_CELL_CLASS;
 
   const handleAction = (type: TaskActionDialogType) => {
     onAction(type, task);
@@ -273,7 +286,7 @@ function renderTaskRow(
       // отрисованным» — единственная честная модель.
       tabIndex={bulkMode ? 0 : undefined}
       aria-selected={bulkMode ? Boolean(isSelected) : undefined}
-      className={`cursor-pointer transition-colors ${getTaskRowClass(task, !!isSelected, isInGroup)} ${isLastInGroup ? "border-b-2 border-blue-300" : "border-b"}`}
+      className={`cursor-pointer transition-colors ${getTaskRowClass(task, !!isSelected, isInGroup)}`}
       onClick={() => {
         if (bulkMode && bulkSelection && task.status !== "waiting_previous") {
           bulkSelection.selectOne(task.id);
@@ -290,23 +303,38 @@ function renderTaskRow(
         if (task.status !== "waiting_previous") bulkSelection.selectOne(task.id);
       }}
     >
-      <td className={`${ROW_CELL_CLASS} text-center`}>
-        <TaskStatusDot task={task} />
+      <td className={cn(cellClass, getTaskStripeClass(task), "relative text-center")}>
+        {/* Направляющая блока: строка связана с шевроном группы и с соседями.
+            У последней строки она обрывается на своей точке — блок имеет конец,
+            а не продолжается в следующую группу. */}
+        {isInGroup && (
+          <span
+            aria-hidden
+            className={cn(
+              "pointer-events-none absolute left-1/2 w-0.5 -translate-x-1/2",
+              TABLE_ROW_STYLES.groupConnector,
+              isLastInGroup ? "top-0 h-1/2" : "inset-y-0",
+            )}
+          />
+        )}
+        <span className="relative z-10 inline-flex">
+          <TaskStatusDot task={task} />
+        </span>
       </td>
-      <td className={`${ROW_CELL_CLASS} font-medium`}>{task.product_sku}</td>
+      <td className={cn(cellClass, "font-medium")}>{task.product_sku}</td>
       {fields.map((field) => (
-        <td key={field.key} className={cn(ROW_CELL_CLASS, field.cellClass)}>
+        <td key={field.key} className={cn(cellClass, field.cellClass)}>
           {draft && (field.key === "completed" || field.key === "rejected")
             ? renderDraftCell(task, field.key, draft, "row")
             : field.node}
         </td>
       ))}
-      <td className={ROW_CELL_CLASS}>
+      <td className={cellClass}>
         <Badge variant="secondary" className={cn(getStatusColor(task), ROW_BADGE_CLASS)}>
           {getStatusLabel(task)}
         </Badge>
       </td>
-      <td className={ROW_CELL_CLASS}>
+      <td className={cellClass}>
         {onRevokeItem ? (
           <Button
             variant={isSelected ? "default" : "outline"}
@@ -337,7 +365,7 @@ function renderTaskRow(
           </ActionWithReason>
         )}
       </td>
-      <TableCornerResetCell />
+      <TableCornerResetCell className={edgeClass || undefined} />
     </tr>
   );
 }
@@ -484,13 +512,17 @@ function TableTaskGroupRow({
   const recordedGood = group.tasks.reduce((sum, task) => sum + parseFloat(task.cache.completed_quantity), 0);
   const recordedDefect = group.tasks.reduce((sum, task) => sum + parseFloat(task.cache.rejected_quantity), 0);
   const overPlan = groupOverPlan ?? { good: false, defect: false };
+  // Рёбра блока — на ячейках: границы `<tr>` в таблице доски (`border-separate`)
+  // браузер не рисует, и `border-y` на строке был невидим.
+  const headerCellClass = cn(ROW_CELL_CLASS, TABLE_ROW_STYLES.groupHeaderCell);
+  const railClass = getTaskGroupRailClass(group.tasks);
 
   return (
     <tr
       style={{ height: ROW_HEIGHT_PX }}
       tabIndex={isBulkMode ? 0 : undefined}
       aria-selected={isBulkMode ? allSelected : undefined}
-      className={`border-y border-slate-200 cursor-pointer transition-colors font-semibold ${isBulkMode && allSelected ? TABLE_ROW_STYLES.selectedGroupHeader : TABLE_ROW_STYLES.defaultGroupHeader}`}
+      className={`cursor-pointer transition-colors font-semibold ${isBulkMode && allSelected ? TABLE_ROW_STYLES.selectedGroupHeader : TABLE_ROW_STYLES.defaultGroupHeader}`}
       onClick={() => {
         if (isBulkMode) onSelectGroup();
         else onToggleCollapse();
@@ -503,10 +535,22 @@ function TableTaskGroupRow({
         onSelectGroup();
       }}
     >
-      <td className={`${ROW_CELL_CLASS} text-center`}>
-        <div className="flex items-center justify-center">
+      <td className={cn(headerCellClass, railClass, "relative text-center")}>
+        {/* Спуск от шеврона к строкам: без него направляющая блока начинается
+            ниоткуда и читается как случайная линия. У свёрнутой группы строк
+            нет — нет и спуска. */}
+        {!isCollapsed && (
+          <span
+            aria-hidden
+            className={cn(
+              "pointer-events-none absolute bottom-0 left-1/2 h-2 w-0.5 -translate-x-1/2",
+              TABLE_ROW_STYLES.groupConnector,
+            )}
+          />
+        )}
+        <div className="relative z-10 flex items-center justify-center">
           <button
-            className="p-0.5 hover:bg-slate-200 rounded transition-colors text-slate-500 hover:text-slate-800"
+            className="p-0.5 hover:bg-slate-200 rounded transition-colors text-slate-500 hover:text-slate-800 dark:text-slate-400 dark:hover:bg-slate-700 dark:hover:text-slate-100"
             onClick={(e) => {
               e.stopPropagation();
               onToggleCollapse();
@@ -521,13 +565,13 @@ function TableTaskGroupRow({
           </button>
         </div>
       </td>
-      <td className={`${ROW_CELL_CLASS} text-slate-900`}>
+      <td className={`${headerCellClass} text-slate-900 dark:text-slate-100`}>
         {firstTask.product_sku}
       </td>
-      <td className={`${ROW_CELL_CLASS} text-xs text-slate-500 font-medium`}>
+      <td className={`${headerCellClass} text-xs text-slate-500 font-medium dark:text-slate-400`}>
         {formatDimensionsLabel(taskGroupingDimensions(firstTask))}
       </td>
-      <td className={`${ROW_CELL_CLASS} text-xs text-slate-500 font-medium`}>
+      <td className={`${headerCellClass} text-xs text-slate-500 font-medium dark:text-slate-400`}>
         {firstTask.transforms_dimensions ? (
           <CutLayoutCell
             layout={firstTask.cut_layout}
@@ -538,13 +582,13 @@ function TableTaskGroupRow({
         )}
       </td>
       {hasPackaging !== false && (
-        <td className={`${ROW_CELL_CLASS} text-xs text-slate-500 font-medium`}>
+        <td className={`${headerCellClass} text-xs text-slate-500 font-medium dark:text-slate-400`}>
           {packagingBreakdownLabel(group.tasks, fmtQty)}
         </td>
       )}
-      <td className={`${ROW_CELL_CLASS} text-slate-700`}>{fmtQty(String(group.totalQtyPlan))}</td>
-      <td className={`${ROW_CELL_CLASS} text-slate-700`}>{fmtQty(String(group.tasks.reduce((s, t) => s + parseFloat(t.cache.issued_quantity), 0)))}</td>
-      <td className={`${ROW_CELL_CLASS} text-slate-700`}>
+      <td className={`${headerCellClass} text-slate-700 dark:text-slate-200`}>{fmtQty(String(group.totalQtyPlan))}</td>
+      <td className={`${headerCellClass} text-slate-700 dark:text-slate-200`}>{fmtQty(String(group.tasks.reduce((s, t) => s + parseFloat(t.cache.issued_quantity), 0)))}</td>
+      <td className={`${headerCellClass} text-slate-700 dark:text-slate-200`}>
         {groupInput ? (
           <span className="flex items-center gap-1">
             <DraftQtyInput
@@ -565,7 +609,7 @@ function TableTaskGroupRow({
           fmtQty(String(group.totalQtyDone))
         )}
       </td>
-      <td className={`${ROW_CELL_CLASS} text-slate-700`}>
+      <td className={`${headerCellClass} text-slate-700 dark:text-slate-200`}>
         {groupInput ? (
           <span className="flex items-center gap-1">
             <DraftQtyInput
@@ -586,9 +630,9 @@ function TableTaskGroupRow({
           fmtQty(String(recordedDefect))
         )}
       </td>
-      <td className={`${ROW_CELL_CLASS} text-slate-700`}>{fmtQty(String(group.tasks.reduce((s, t) => s + parseFloat(t.cache.transferred_quantity), 0)))}</td>
-      <td className={`${ROW_CELL_CLASS} text-slate-700`}>{fmtQty(String(group.tasks.reduce((s, t) => s + parseFloat(t.cache.remaining_quantity), 0)))}</td>
-      <td className={ROW_CELL_CLASS}>
+      <td className={`${headerCellClass} text-slate-700 dark:text-slate-200`}>{fmtQty(String(group.tasks.reduce((s, t) => s + parseFloat(t.cache.transferred_quantity), 0)))}</td>
+      <td className={`${headerCellClass} text-slate-700 dark:text-slate-200`}>{fmtQty(String(group.tasks.reduce((s, t) => s + parseFloat(t.cache.remaining_quantity), 0)))}</td>
+      <td className={headerCellClass}>
         <div className="flex items-center gap-1">
           <Badge variant="secondary" className={`${ROW_BADGE_CLASS} font-bold`}>
             &times;{group.tasks.length}
@@ -598,8 +642,8 @@ function TableTaskGroupRow({
           )}
         </div>
       </td>
-      <td className={`${ROW_CELL_CLASS} ${isBulkMode && allSelected ? TABLE_ROW_STYLES.selectedGroupHeader : TABLE_ROW_STYLES.defaultGroupRow}`} />
-      <TableCornerResetCell />
+      <td className={`${headerCellClass} ${isBulkMode && allSelected ? TABLE_ROW_STYLES.selectedGroupHeader : TABLE_ROW_STYLES.defaultGroupRow}`} />
+      <TableCornerResetCell className={TABLE_ROW_STYLES.groupHeaderCell} />
     </tr>
   );
 }

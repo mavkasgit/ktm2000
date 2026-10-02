@@ -15,14 +15,42 @@ import { TABLE_ROW_STYLES } from "@/shared/lib/tableRowStyles";
 import { CutLayoutCell } from "@/shared/ui";
 import { taskGroupingDimensions } from "../lib/groupTasksByProfile";
 import { getStatusLabel } from "../lib/taskStatus";
-import { getStatusDotClass, getTaskTone, taskOperations, taskPackaging, type TaskTone } from "../lib/taskView";
+import { getGroupTone, getStatusDotClass, getTaskTone, taskOperations, taskPackaging, type TaskTone } from "../lib/taskView";
 
-const ROW_TONE_CLASS: Record<TaskTone, string> = {
-  waiting: "bg-background hover:bg-slate-50 transition-colors border-l-4 border-l-yellow-400 text-slate-800",
-  activeRunning: "bg-amber-50/30 hover:bg-amber-50/70 border-l-4 border-l-amber-400 text-slate-900 font-medium",
-  active: "bg-blue-50/20 hover:bg-blue-50/50 border-l-4 border-l-blue-400 text-slate-900",
+/**
+ * Тон задания разложен на части: заливка, полоса и текст. Части собираются
+ * по-разному для строки вне группы и для строки раскрытой группы, а
+ * разложить их одним классом нельзя — тогда фон строки спорит с фоном блока.
+ */
+const TONE_WASH_CLASS: Record<TaskTone, string> = {
+  waiting: "bg-background hover:bg-slate-50",
+  activeRunning: "bg-amber-50/30 hover:bg-amber-50/70",
+  active: "bg-blue-50/20 hover:bg-blue-50/50",
+  completed: "bg-emerald-50/10 hover:bg-emerald-50/30",
+  plain: "",
+};
+
+/**
+ * Полоса статуса — 4px у левого края первой ячейки. Живёт на ячейке, а не на
+ * `<tr>`: таблица доски объявлена `border-separate`, и границы строк в ней не
+ * рисуются вовсе (проверено пиксельно) — прежние полосы на `<tr>` не были видны.
+ * Полоса есть у всех тонов, у «обычного» — прозрачная: без неё ячейка шире на
+ * 4px, и точка статуса уезжала бы вбок у каждой второй строки.
+ */
+const TONE_STRIPE_CLASS: Record<TaskTone, string> = {
+  waiting: "border-l-4 border-l-yellow-400",
+  activeRunning: "border-l-4 border-l-amber-400",
+  active: "border-l-4 border-l-blue-400",
+  completed: "border-l-4 border-l-emerald-300",
+  plain: "border-l-4 border-l-transparent",
+};
+
+const TONE_TEXT_CLASS: Record<TaskTone, string> = {
+  waiting: "text-slate-800 dark:text-slate-200",
+  activeRunning: "text-slate-900 dark:text-slate-100 font-medium",
+  active: "text-slate-900 dark:text-slate-100",
   completed:
-    "bg-emerald-50/10 text-emerald-700/80 line-through decoration-slate-300 hover:bg-emerald-50/30 border-l-4 border-l-emerald-300 opacity-60",
+    "text-emerald-700/80 dark:text-emerald-300/70 line-through decoration-slate-300 opacity-60",
   plain: "",
 };
 
@@ -35,6 +63,30 @@ const CARD_TONE_CLASS: Record<TaskTone, string> = {
   plain: "border border-slate-200 rounded-lg bg-card text-card-foreground",
 };
 
+/**
+ * Рельс шапки группы — тот же левый край, что у строк блока (4px), поэтому
+ * шапка и её строки читаются одним куском. Цвет — тон группы, а не первой её
+ * строки: блок показывает состояние, но фоном не подменяет статус строк
+ * (на фоне подменялись статусные пилюли).
+ */
+const GROUP_RAIL_CLASS: Record<TaskTone, string> = {
+  waiting: "border-l-4 border-l-yellow-400",
+  activeRunning: "border-l-4 border-l-amber-400",
+  active: "border-l-4 border-l-blue-400",
+  completed: "border-l-4 border-l-emerald-300",
+  plain: "border-l-4 border-l-slate-300 dark:border-l-slate-600",
+};
+
+/** Рельс шапки группы: цвет — по состоянию группы, а не по первой её строке. */
+export function getTaskGroupRailClass(tasks: SectionBoardTask[]): string {
+  return GROUP_RAIL_CLASS[getGroupTone(tasks)];
+}
+
+/** Полоса статуса строки — на первую ячейку строки. */
+export function getTaskStripeClass(task: SectionBoardTask): string {
+  return TONE_STRIPE_CLASS[getTaskTone(task)];
+}
+
 /** Классы строки таблицы: тон задания, а в массовом режиме — выделение. */
 export function getTaskRowClass(
   task: SectionBoardTask,
@@ -42,9 +94,16 @@ export function getTaskRowClass(
   isInGroup: boolean,
 ): string {
   if (isSelected) return TABLE_ROW_STYLES.selectedRow;
-  const toneClass = ROW_TONE_CLASS[getTaskTone(task)];
-  if (toneClass) return toneClass;
-  return isInGroup ? TABLE_ROW_STYLES.defaultGroupRow : TABLE_ROW_STYLES.defaultRow;
+  const tone = getTaskTone(task);
+  // Строка раскрытой группы: подложка одна на блок (её же носит шапка), поэтому
+  // «чей это статус» несут только полоса слева и текст. Свой тон строки остаётся,
+  // но полосой и цветом текста, а не фоном: цветной фон строки делал пилюлю
+  // статуса неразличимой и распадал блок на отдельные строки.
+  if (isInGroup) {
+    return `${TABLE_ROW_STYLES.groupBlock} ${TONE_TEXT_CLASS[tone]} transition-colors`;
+  }
+  const wash = TONE_WASH_CLASS[tone];
+  return wash ? `${wash} ${TONE_TEXT_CLASS[tone]} transition-colors` : TABLE_ROW_STYLES.defaultRow;
 }
 
 /** Классы карточки узкого экрана: тот же тон задания, что и у строки. */

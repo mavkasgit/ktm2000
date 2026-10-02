@@ -37,6 +37,26 @@ export function getTaskTone(task: SectionBoardTask): TaskTone {
 }
 
 /**
+ * Тон группы — один на весь блок: раскрытая группа показывает задания одного
+ * артикула, разрезанные по операциям, и общий фон читается как «одно задание»,
+ * а построчные тона превращали её в набор независимых строк.
+ *
+ * Порядок — «что требует внимания сейчас»: в работе → взято → ожидание →
+ * завершено → обычное. Группа с одной работающей строкой подсвечивается как
+ * работающая: оператор ищет глазами работу, а не большинство.
+ */
+const GROUP_TONE_PRIORITY: TaskTone[] = ["activeRunning", "active", "waiting", "completed", "plain"];
+
+export function getGroupTone(tasks: SectionBoardTask[]): TaskTone {
+  let best = GROUP_TONE_PRIORITY.length - 1;
+  for (const task of tasks) {
+    const rank = GROUP_TONE_PRIORITY.indexOf(getTaskTone(task));
+    if (rank !== -1 && rank < best) best = rank;
+  }
+  return GROUP_TONE_PRIORITY[best];
+}
+
+/**
  * Цвет точки статуса. Полностью переданное задание считается завершённым
  * независимо от флага статуса — иначе доска и карточка показывали одно задание
  * разным цветом.
