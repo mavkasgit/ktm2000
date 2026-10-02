@@ -28,6 +28,7 @@ N пары — единая механика с одиночными норма�
 
 from __future__ import annotations
 
+from collections.abc import Iterable
 from dataclasses import dataclass, field
 from typing import Literal
 
@@ -366,6 +367,65 @@ async def pair_length_candidates(
         )
         for normal_mm in sorted(raw_a.keys() & raw_b.keys())
     ]
+
+
+def _length_candidates_from_rows(
+    resolved: ResolvedPair,
+    raw_by_product: dict[int, dict[float, float]],
+) -> list[PairLengthCandidate]:
+    """Чистая часть ``pair_length_candidates`` — без обращения к БД."""
+    raw_a = raw_by_product.get(resolved.product_a.id, {})
+    raw_b = raw_by_product.get(resolved.product_b.id, {})
+    return [
+        PairLengthCandidate(
+            length_mm=normal_mm,
+            raw_length_a_mm=raw_a[normal_mm],
+            raw_length_b_mm=raw_b[normal_mm],
+        )
+        for normal_mm in sorted(raw_a.keys() & raw_b.keys())
+    ]
+
+
+async def pair_length_candidates_bulk(
+    db: AsyncSession, resolved_pairs: Iterable[ResolvedPair]
+) -> dict[int, list[PairLengthCandidate]]:
+    """Длины-кандидаты сразу по всем парам батча — один запрос (#293).
+
+    Поштучный ``pair_length_candidates`` стоил одного SELECT на пару, а пар на
+    доске столько же, сколько парных позиций. Здесь ``product_lengths``
+    читается один раз на батч, а разбор по парам — та же чистая функция, что и
+    в одиночном пути, поэтому значения совпадают.
+    """
+    unique: dict[int, ResolvedPair] = {}
+    for resolved in resolved_pairs:
+        unique[resolved.pair.id] = resolved
+    if not unique:
+        return {}
+
+    product_ids: set[int] = set()
+    for resolved in unique.values():
+        product_ids.add(resolved.product_a.id)
+        product_ids.add(resolved.product_b.id)
+
+    rows = (
+        await db.execute(
+            select(
+                ProductLength.product_id,
+                ProductLength.length_mm,
+                ProductLength.raw_length_mm,
+            ).where(ProductLength.product_id.in_(product_ids))
+        )
+    ).all()
+    raw_by_product: dict[int, dict[float, float]] = {}
+    for pid, normal, raw in rows:
+        normal_mm = float(normal)
+        effective_raw_mm = float(normal if raw is None else raw)
+        raw_by_product.setdefault(pid, {})[normal_mm] = effective_raw_mm
+
+    return {
+        pair_id: _length_candidates_from_rows(resolved, raw_by_product)
+        for pair_id, resolved in unique.items()
+    }
 
 
 
