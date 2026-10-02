@@ -29,6 +29,10 @@ TEMPLATE_HEADERS = [
     "Ламируется",
     "Эквиваленты",
     "Парный профиль",
+    "Размерность",
+    "Ширина, мм",
+    "Толщина, мм",
+    "Высота, мм",
 ]
 
 _HEADER_FIELDS = {
@@ -44,12 +48,59 @@ _HEADER_FIELDS = {
     "ламируется": "is_laminated",
     "эквиваленты": "aliases",
     "парный профиль": "pair_partners",
+    "размерность": "dimension_state",
+    "ширина, мм": "width_mm",
+    "толщина, мм": "thickness_mm",
+    "высота, мм": "height_mm",
 }
 
 _TEXT_FIELDS = ("name", "notes")
 _NUMBER_FIELDS = ("perimeter_mm", "mount_width_mm")
+
+# Поля размерности (2D/3D) — не колонки Product, а связи product_dimensions,
+# поэтому в `_NUMBER_FIELDS` их нет: иначе diff и правка искали бы на продукте
+# несуществующий атрибут. Их значения разбирает validate_dimensions, а
+# применение идёт через set_dimension_defaults.
 _BOOL_FIELDS = ("skip_shot_blast", "is_laminated")
 _BOOL_HEADERS = {"skip_shot_blast": "Не дробеструится", "is_laminated": "Ламируется"}
+
+# «Размерность» в Excel — человеческие 1D/2D/3D; в домене это DimensionState
+# (`length`/`area`/`volume`, ADR-0012, #79). Токены принимаются в любом регистре:
+# колонку заполняет человек, а «2д» и «2D» у него означают одно и то же.
+DIMENSION_STATE_TOKENS: dict[str, str] = {
+    "1d": "length",
+    "1": "length",
+    "2d": "area",
+    "2": "area",
+    "3d": "volume",
+    "3": "volume",
+}
+
+# Поля размерности, обязательные для каждого состояния. Длина в этот список не
+# входит: для 2D/3D она приходит колонкой «Длины, мм» и обязательна тоже, но
+# проверяется вместе с числом длин.
+DIMENSION_FIELDS_BY_STATE: dict[str, tuple[str, ...]] = {
+    "area": ("width_mm", "thickness_mm"),
+    "volume": ("width_mm", "height_mm"),
+}
+
+# Поля, не относящиеся к размерности. Их значения в строке — ошибка: у 1D
+# габаритов нет, у 2D нет высоты, у 3D нет толщины (ADR-0012).
+DIMENSION_COLUMN_ERROR: dict[str, str] = {
+    "length": "Ширина/толщина/высота не заполняются для линейных (1D) артикулов",
+    "area": "Высота, мм не заполняется для 2D — у плоского изделия есть ширина и толщина",
+    "volume": "Толщина, мм не заполняется для 3D — у объёмного изделия есть ширина и высота",
+}
+
+
+# Числовые колонки размерности: разбираются тем же правилом, что и свойства
+# карточки (число > 0), но в diff карточки не участвуют — таких колонок у
+# Product нет, оси живут в product_dimensions.
+_DIMENSION_NUMBER_FIELDS = ("width_mm", "thickness_mm", "height_mm")
+
+# Подписи размерности для сообщений мастеру: в файле это 1D/2D/3D, в домене —
+# `length`/`area`/`volume`.
+DIMENSION_STATE_LABELS = {"length": "1D", "area": "2D", "volume": "3D"}
 
 
 @dataclass(slots=True)
@@ -180,7 +231,9 @@ def parse_catalog_excel(content: bytes, filename: str) -> tuple[list[ParsedCatal
             if text:
                 fields[key] = text
 
-        for key in _NUMBER_FIELDS:
+        # Числовые колонки: свойства карточки и оси размерности разбираются
+        # одинаково — число > 0, иначе ошибка строки с именем колонки.
+        for key in _NUMBER_FIELDS + _DIMENSION_NUMBER_FIELDS:
             text = _cell_text(cells.get(key))
             if not text:
                 continue
@@ -290,6 +343,22 @@ def parse_catalog_excel(content: bytes, filename: str) -> tuple[list[ParsedCatal
             aliases = [part.strip() for part in aliases_text.split(";")]
             fields["aliases"] = [part for part in aliases if part]
 
+        # Размерность строки: пустая ячейка — «не трогаем» (при create по
+        # умолчанию 1D, как и у новых артикулов до этого). Неизвестный токен —
+        # ошибка строки, а не молчаливый 1D: мастер должен увидеть опечатку.
+        state_text = _cell_text(cells.get("dimension_state"))
+        if state_text:
+            token = state_text.lower().replace("\xa0", " ").replace("д", "d").strip()
+            state = DIMENSION_STATE_TOKENS.get(token)
+            if state is None:
+                row_errors.append(
+                    f"Размерность: ожидается 1D, 2D или 3D, получено «{state_text}»"
+                )
+            else:
+                fields["dimension_state"] = state
+
+        row_errors.extend(validate_dimensions(fields))
+
         if row_errors:
             for message in row_errors:
                 errors.append({"row": row_number, "sku": sku, "message": message})
@@ -301,6 +370,43 @@ def parse_catalog_excel(content: bytes, filename: str) -> tuple[list[ParsedCatal
         parsed.append(row)
 
     return parsed, errors, total_data_rows
+
+def validate_dimensions(fields: dict[str, Any]) -> list[str]:
+    """Проверить размерность строки: чужая колонка и лишние длины.
+
+    Проверяет только то, что видно из самой строки, без знания о том, что уже
+    заведено в карточке. Обязательность полей здесь НЕ проверяется: пустая
+    ячейка при partial update означает «не трогаем», а заведённое значение живёт
+    в карточке, которой парсер не видит. Эту проверку делает
+    :func:`validate_row_counts`, куда вызывающий передаёт текущие значения.
+    """
+    state = fields.get("dimension_state")
+    filled = [key for key in _DIMENSION_NUMBER_FIELDS if fields.get(key) is not None]
+
+    if state is None:
+        # Размерность не объявлена: значения габаритов не относятся ни к одной
+        # размерности, к которой их можно было бы причислить.
+        return [
+            f"{_header_of(key)}: заполняется только вместе с «Размерность» (1D/2D/3D)"
+            for key in filled
+        ]
+
+    if state == "length":
+        return [
+            f"{_header_of(key)}: {DIMENSION_COLUMN_ERROR['length']}"
+            for key in filled
+        ]
+
+    errors: list[str] = []
+    if any(key not in DIMENSION_FIELDS_BY_STATE[state] for key in filled):
+        errors.append(DIMENSION_COLUMN_ERROR[state])
+
+    lengths = fields.get("lengths_mm")
+    if lengths and len(lengths) != 1:
+        errors.append(
+            f"Длины, мм: для размерности {DIMENSION_STATE_LABELS[state]} ожидается ровно одно значение, получено {len(lengths)}"
+        )
+    return errors
 
 
 def _header_of(field_name: str) -> str:
@@ -322,20 +428,34 @@ def validate_row_counts(
     row: ParsedCatalogRow,
     existing_lengths: list[float] | None,
     dimension_state: str | None = None,
+    current_dimension_values: dict[str, float | None] | None = None,
 ) -> list[str]:
-    """Проверить позиционные списки длин, сырьевых длин и норм.
+    """Проверить позиционные списки длин, сырьевых длин, норм и размерности (#87).
 
     Отсутствующая колонка сырьевых длин не участвует в проверке: это
     режим preserve. Присутствующая колонка, включая пустые сегменты,
     должна покрывать ровно список нормальных длин.
+
+    ``current_dimension_values`` — заведённые значения осей артикула: без них
+    обязательность полей 2D/3D пришлось бы требовать от каждой строки заново,
+    и partial update «поправить одну ширину» стал бы невозможен.
     """
+    fields = row.fields
     errors: list[str] = []
+    # Эффективная размерность строки: объявленная в файле имеет приоритет над
+    # тем, что уже заведено в карточке, — иначе смена 1D → 2D валидировалась бы
+    # по старой размерности и пропускала бы лишние длины.
+    effective_state = row.fields.get("dimension_state") or dimension_state
     lengths = row.fields.get("lengths_mm")
     if lengths is None:
         lengths = existing_lengths or None
 
     quantities = row.fields.get("quantities")
-    if quantities is not None:
+    if quantities is not None and effective_state not in (None, "length"):
+        # Нормы подвеса у 2D/3D не настраиваются (ADR-0012): значение из файла
+        # не применяется, но и не отвергает строку.
+        pass
+    elif quantities is not None:
         if lengths is None:
             if len(quantities) != 1:
                 errors.append(
@@ -353,7 +473,7 @@ def validate_row_counts(
             # Пустая raw-колонка без нормальных длин не задаёт mapping;
             # это допустимо для чернового артикула и не ошибка count.
             pass
-        elif dimension_state not in (None, "length"):
+        elif effective_state not in (None, "length"):
             if has_raw_value:
                 errors.append("Сырьевые длины, мм: допустимы только для линейных артикулов")
         elif lengths is None:
@@ -370,6 +490,32 @@ def validate_row_counts(
                     errors.append(
                         f"Сырьевые длины, мм: значение {index} ({_format_number(raw)}) меньше нормальной длины ({_format_number(normal)})"
                     )
+
+    # Обязательность полей размерности — с учётом уже заведённого (#87): пустая
+    # ячейка при partial update не обнуляет значение из карточки, поэтому
+    # обязательным считается объединённое состояние, а не одна строка файла.
+    # Проверяем только когда размерность объявлена строкой: у артикула, уже
+    # переведённого в 2D, строка без «Размерности» просто ничего про оси не
+    # говорит (partial update — «не трогаем»), и требовать их незачем.
+    if fields.get("dimension_state") and effective_state in DIMENSION_FIELDS_BY_STATE:
+        merged = {
+            key: value
+            for key, value in (current_dimension_values or {}).items()
+            if value is not None
+        }
+        merged.update(
+            {key: value for key, value in fields.items() if key in _DIMENSION_NUMBER_FIELDS}
+        )
+        if fields.get("lengths_mm"):
+            merged["length_mm"] = fields["lengths_mm"][0]
+        label = DIMENSION_STATE_LABELS[effective_state]
+        for key in ("length_mm", *DIMENSION_FIELDS_BY_STATE[effective_state]):
+            if merged.get(key) is not None:
+                continue
+            # Длина приходит колонкой «Длины, мм» и в разборе строки лежит под
+            # другим именем пол��, поэтому заголовок берём явно, а не из полей.
+            header = "Длины, мм" if key == "length_mm" else _header_of(key)
+            errors.append(f"{header}: обязательно для размерности {label}")
     return errors
 
 
@@ -440,8 +586,39 @@ def effective_lengths(row: ParsedCatalogRow, existing_lengths: list[float] | Non
         return row.fields["lengths_mm"]
     return existing_lengths or None
 
+def diff_catalog_dimensions(
+    fields: dict[str, Any], current: dict[str, float | None]
+) -> dict[str, float]:
+    """Значения полей размерности, которые применение строки изменит (#87).
 
-def diff_catalog_row(product: Product, row: ParsedCatalogRow) -> dict[str, Any]:
+    Сравниваются только заполненные ячейки: пустая — это «не трогаем», ровно
+    как у остальных колонок при partial update.
+    """
+    changes: dict[str, float] = {}
+    for key in _DIMENSION_NUMBER_FIELDS:
+        value = fields.get(key)
+        if value is None:
+            continue
+        current_value = current.get(key)
+        if current_value is None or float(value) != float(current_value):
+            changes[key] = float(value)
+    # Длина — ось размерности только у 2D/3D. У линейного артикула длина живёт
+    # в реестре длин, и её изменение ловит ветка lengths_mm ниже.
+    if fields.get("dimension_state") in ("area", "volume"):
+        lengths = fields.get("lengths_mm")
+        if lengths and len(lengths) == 1:
+            current_length = current.get("length_mm")
+            if current_length is None or float(lengths[0]) != float(current_length):
+                changes["length_mm"] = float(lengths[0])
+    return changes
+
+
+def diff_catalog_row(
+    product: Product,
+    row: ParsedCatalogRow,
+    *,
+    current_dimension_values: dict[str, float | None] | None = None,
+) -> dict[str, Any]:
     """Какие поля изменились бы применением строки (для preview/счётчиков)."""
     changes: dict[str, Any] = {}
     fields = row.fields
@@ -464,13 +641,28 @@ def diff_catalog_row(product: Product, row: ParsedCatalogRow) -> dict[str, Any]:
         current = getattr(product, key)
         if current is None or float(value) != float(current):
             changes[key] = value
-
+    # Размерность строки (#87): смена 1D → 2D/3D — самостоятельное изменение,
+    # без него preview посчитал бы строку «skip», хотя apply перевёл бы артикул.
+    declared_state = fields.get("dimension_state")
+    if declared_state and declared_state != product.dimension_state.value:
+        changes["dimension_state"] = declared_state
+    # Значения полей размерности (#87): на продукте их нет — они живут в
+    # product_dimensions, поэтому текущие значения передаёт вызывающий (один
+    # запрос на батч). Без них сравнивать нечего, и смена 2D-габарита была бы
+    # для preview «ничего не изменилось».
+    dimension_values = diff_catalog_dimensions(fields, current_dimension_values or {})
+    if dimension_values:
+        changes["dimensions"] = dimension_values
+    # Реестр длин относится только к линейным артикулам: у 2D/3D длина — ось
+    # размерности, и её изменение ловит diff_catalog_dimensions. Иначе строка,
+    # переводящая карточку в 2D, всегда читалась бы как «длины изменились».
     lengths = row_lengths
-    if lengths is not None:
+    effective_state = fields.get("dimension_state") or product.dimension_state.value
+    if effective_state == "length" and lengths is not None:
         current_lengths = sorted(length.length_mm for length in product.lengths)
         if sorted(lengths) != current_lengths:
             changes["lengths_mm"] = lengths
-    if "raw_lengths_mm" in fields:
+    if effective_state == "length" and "raw_lengths_mm" in fields:
         base = lengths if lengths is not None else sorted(length.length_mm for length in product.lengths)
         raw_lengths = resolve_raw_lengths(row, base)
         if base or any(value is not None for value in raw_lengths):

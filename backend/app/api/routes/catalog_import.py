@@ -23,7 +23,9 @@ from app.api.routes.products import (
 )
 from app.core.config import settings
 from app.core.database import get_db
+from app.models.dimension import DimensionType, ProductDimension
 from app.models.product import (
+    DimensionState,
     Product,
     ProductLength,
     ProductPair,
@@ -31,6 +33,7 @@ from app.models.product import (
     _length_key,
 )
 from app.services.catalog_excel_import import (
+    DIMENSION_STATE_LABELS,
     TEMPLATE_HEADERS,
     ParsedCatalogRow,
     build_quantity_dict,
@@ -42,6 +45,10 @@ from app.services.catalog_excel_import import (
     parse_catalog_excel,
     resolve_raw_lengths,
     validate_row_counts,
+)
+from app.services.dimension_state import (
+    migrate_dimensions_for_state,
+    set_dimension_defaults,
 )
 from app.services.hanger_quantity_calc import (
     DEFAULT_HANGER_SETTINGS,
@@ -387,10 +394,13 @@ def _row_count_errors(
     row: ParsedCatalogRow,
     existing_lengths: list[float] | None,
     dimension_state: str | None = None,
+    dimension_values: dict[str, float | None] | None = None,
 ) -> list[dict]:
     return [
         {"row": row.row, "sku": row.sku, "message": message}
-        for message in validate_row_counts(row, existing_lengths, dimension_state)
+        for message in validate_row_counts(
+            row, existing_lengths, dimension_state, dimension_values
+        )
     ]
 
 
@@ -426,6 +436,9 @@ class _ImportBatch:
     partners_by_sku: dict[str, Product]
     existing_pairs: set[tuple[int, int]]
     total_data_rows: int
+    # Текущие значения полей размерности: product_id → {код: default_value} (#87).
+    # Один запрос на весь файл — иначе diff считал бы каждую строку отдельно.
+    dimension_values: dict[int, dict[str, float | None]]
 
 
 def _effective_raw_lengths(
@@ -477,13 +490,35 @@ def _preview_length_records(
     ]
 
 
+def _row_dimension_state(fields: dict) -> DimensionState:
+    """Размерность строки файла; пустая колонка — 1D, как и у новых артикулов."""
+    raw = fields.get("dimension_state")
+    return DimensionState(raw) if raw else DimensionState.length
+
+
+def _dimension_values(fields: dict, lengths: list[float]) -> dict[str, float]:
+    """Значения полей размерности из строки: длина из «Длины, мм» + габариты.
+
+    Длина 2D/3D приходит тем же списком длин, но валидация строки требует
+    ровно одно значение — значит, оно и есть `length_mm`.
+    """
+    values: dict[str, float] = {}
+    if lengths:
+        values["length_mm"] = float(lengths[0])
+    for key in ("width_mm", "thickness_mm", "height_mm"):
+        value = fields.get(key)
+        if value is not None:
+            values[key] = float(value)
+    return values
+
 async def _create_product_from_row(db: AsyncSession, row: ParsedCatalogRow) -> None:
     fields = row.fields
     lengths = fields.get("lengths_mm") or []
     quantities = fields.get("quantities")
     raw_lengths = fields.get("raw_lengths_mm") or []
-    # Черновик без нормальных длин остаётся неактивным и без ProductLength;
-    # Excel-размерность нового артикула всегда 1D (length).
+    # Размерность строки (#87): 1D по умолчанию, 2D/3D — когда мастер указал.
+    # У 2D/3D длина уходит в product_dimensions, а ProductLength не заводится.
+    dimension_state = _row_dimension_state(fields)
     draft = not lengths
     product = Product(
         sku=row.sku,
@@ -494,6 +529,7 @@ async def _create_product_from_row(db: AsyncSession, row: ParsedCatalogRow) -> N
         notes=fields.get("notes"),
         aliases=list(fields.get("aliases") or []),
         source="excel_catalog_import",
+        dimension_state=dimension_state,
     )
     if fields.get("perimeter_mm") is not None:
         product.perimeter_mm = fields["perimeter_mm"]
@@ -508,7 +544,15 @@ async def _create_product_from_row(db: AsyncSession, row: ParsedCatalogRow) -> N
         if fields.get("perimeter_mm") is not None and fields.get("mount_width_mm") is not None
         else "manual"
     )
-    if quantities is not None or product.hanger_mode == "auto":
+    # Нормы подвеса у 2D/3D не настраиваются (ADR-0012): колонка «Кол-во на
+    # подвесе» для них не применяется, о чём говорим мастеру предупреждением.
+    hanger_applicable = dimension_state == DimensionState.length
+    if quantities is not None and not hanger_applicable:
+        row.warnings.append(
+            "Кол-во на подвесе: не применяется для размерности "
+            f"{DIMENSION_STATE_LABELS[dimension_state.value]} (ADR-0012)"
+        )
+    if hanger_applicable and (quantities is not None or product.hanger_mode == "auto"):
         if not lengths:
             row.warnings.append(
                 "Кол-во на подвесе: не сохранено — добавьте нормальную длину"
@@ -543,13 +587,19 @@ async def _create_product_from_row(db: AsyncSession, row: ParsedCatalogRow) -> N
     db.add(product)
     await db.flush()
 
-    for index, length in enumerate(lengths):
-        db.add(ProductLength(
-            product_id=product.id,
-            length_mm=length,
-            raw_length_mm=raw_lengths[index] if index < len(raw_lengths) else None,
-            is_primary=index == 0,
-        ))
+    # Длины 2D/3D живут в product_dimensions, а не в product_lengths: у плоского
+    # и объёмного изделия длина единственная и является габаритом (#87).
+    if dimension_state == DimensionState.length:
+        for index, length in enumerate(lengths):
+            db.add(ProductLength(
+                product_id=product.id,
+                length_mm=length,
+                raw_length_mm=raw_lengths[index] if index < len(raw_lengths) else None,
+                is_primary=index == 0,
+            ))
+    else:
+        await migrate_dimensions_for_state(db, product.id, dimension_state)
+        await set_dimension_defaults(db, product.id, _dimension_values(fields, lengths))
     if fields.get("skip_shot_blast") is not None:
         await _sync_boolean_flag(db, product.id, "skip_shot_blast", fields["skip_shot_blast"])
     if fields.get("is_laminated") is not None:
@@ -563,8 +613,12 @@ async def _update_product_from_row(
     db: AsyncSession,
     product: Product,
     row: ParsedCatalogRow,
+    *,
+    current_dimension_values: dict[str, float | None] | None = None,
 ) -> bool:
-    changes = diff_catalog_row(product, row)
+    changes = diff_catalog_row(
+        product, row, current_dimension_values=current_dimension_values
+    )
     if not changes:
         return False
 
@@ -578,26 +632,44 @@ async def _update_product_from_row(
     for key in ("perimeter_mm", "mount_width_mm"):
         if key in changes:
             setattr(product, key, changes[key])
+    # Размерность строки (#87). Объявленная в файле имеет приоритет над текущей:
+    # колонка «Размерность» — это и есть способ перевести артикул в 2D/3D.
+    declared_state = row.fields.get("dimension_state")
+    if declared_state and declared_state != product.dimension_state.value:
+        product.dimension_state = DimensionState(declared_state)
+
     previous_raw = {
         length.length_mm: length.raw_length_mm
         for length in product.lengths
     }
-    if "lengths_mm" in changes:
-        await _sync_lengths(db, product.id, changes["lengths_mm"])
-        await db.flush()
-    if "raw_lengths_mm" in changes:
-        raw_by_normal = dict(zip(
-            changes["lengths_mm"] if "lengths_mm" in changes else [length.length_mm for length in product.lengths],
-            changes["raw_lengths_mm"],
-            strict=True,
-        ))
-        await _sync_raw_lengths(db, product.id, raw_by_normal)
-    elif "lengths_mm" in changes:
-        await _sync_raw_lengths(
-            db,
-            product.id,
-            {length: previous_raw.get(length) for length in changes["lengths_mm"]},
-        )
+    if product.dimension_state in (DimensionState.area, DimensionState.volume):
+        # Длина 2D/3D — поле размерности, а не запись реестра длин: реестр
+        # чистим, а значения кладём в связи, ровно как карточка (ADR-0012).
+        await _sync_lengths(db, product.id, [])
+        await migrate_dimensions_for_state(db, product.id, product.dimension_state)
+        if not await set_dimension_defaults(
+            db, product.id, _dimension_values(row.fields, row.fields.get("lengths_mm") or [])
+        ):
+            row.warnings.append(
+                "Значения размерности не применены: у артикула нет связей полей размерности"
+            )
+    else:
+        if "lengths_mm" in changes:
+            await _sync_lengths(db, product.id, changes["lengths_mm"])
+            await db.flush()
+        if "raw_lengths_mm" in changes:
+            raw_by_normal = dict(zip(
+                changes["lengths_mm"] if "lengths_mm" in changes else [length.length_mm for length in product.lengths],
+                changes["raw_lengths_mm"],
+                strict=True,
+            ))
+            await _sync_raw_lengths(db, product.id, raw_by_normal)
+        elif "lengths_mm" in changes:
+            await _sync_raw_lengths(
+                db,
+                product.id,
+                {length: previous_raw.get(length) for length in changes["lengths_mm"]},
+            )
     if "quantity_per_hanger" in changes:
         product.quantity_per_hanger = changes["quantity_per_hanger"]
     if "skip_shot_blast" in changes:
@@ -694,6 +766,29 @@ async def _existing_pair_keys(db: AsyncSession, product_ids: list[int]) -> set[t
     return {(p.product_a_id, p.product_b_id) for p in pair_rows}
 
 
+async def _load_dimension_values(
+    db: AsyncSession, product_ids: list[int]
+) -> dict[int, dict[str, float | None]]:
+    """Текущие значения полей размерности по артикулам — один запрос (#87)."""
+    if not product_ids:
+        return {}
+    rows = (
+        await db.execute(
+            select(
+                ProductDimension.product_id,
+                DimensionType.code,
+                ProductDimension.default_value,
+            )
+            .join(DimensionType, ProductDimension.dimension_type_id == DimensionType.id)
+            .where(ProductDimension.product_id.in_(product_ids))
+        )
+    ).all()
+    values: dict[int, dict[str, float | None]] = {}
+    for product_id, code, default_value in rows:
+        values.setdefault(product_id, {})[code] = default_value
+    return values
+
+
 async def _prepare_excel_import(file: UploadFile, db: AsyncSession) -> _ImportBatch:
     """Общая часть preview/apply: парсинг файла + загрузка артикулов."""
     content = await file.read()
@@ -713,6 +808,9 @@ async def _prepare_excel_import(file: UploadFile, db: AsyncSession) -> _ImportBa
         partners_by_sku=partners_by_sku,
         existing_pairs=existing_pairs,
         total_data_rows=total_data_rows,
+        dimension_values=await _load_dimension_values(
+            db, [product.id for product in products.values()]
+        ),
     )
 
 
@@ -736,6 +834,7 @@ async def preview_catalog_from_excel(
             row,
             existing_lengths,
             product.dimension_state.value if product else "length",
+            batch.dimension_values.get(product.id) if product else None,
         )
         if count_errors:
             errors.extend(count_errors)
@@ -751,12 +850,28 @@ async def preview_catalog_from_excel(
         if product is None:
             action = "create"
         else:
-            action = "update" if diff_catalog_row(product, row) else "skip"
+            action = (
+                "update"
+                if diff_catalog_row(
+                    product,
+                    row,
+                    current_dimension_values=batch.dimension_values.get(product.id),
+                )
+                else "skip"
+            )
         stats[action] += 1
         lengths = effective_lengths(row, existing_lengths)
         raw_lengths = _effective_raw_lengths(row, product, lengths)
         quantities = row.fields.get("quantities")
         new_set = set(new_links)
+        # Размерность и оси 2D/3D в предпросмотре (#87): мастер должен видеть
+        # в файле то же, что уйдёт в карточку, а не только счётчики длин.
+        dimension_state = _row_dimension_state(row.fields) if row.fields.get("dimension_state") else (
+            product.dimension_state if product else DimensionState.length
+        )
+        dimension_values = _dimension_values(row.fields, row.fields.get("lengths_mm") or [])
+        if dimension_state == DimensionState.length:
+            dimension_values = {}
         items.append({
             "row": row.row,
             "sku": row.sku,
@@ -765,6 +880,9 @@ async def preview_catalog_from_excel(
             "quantity_per_hanger": quantities[0] if quantities else (product.quantity_per_hanger if product else None),
             "quantities_per_hanger": quantities,
             "draft": is_new and not lengths,
+            "dimension_state": dimension_state.value,
+            "dimension_label": DIMENSION_STATE_LABELS[dimension_state.value],
+            "dimensions": dimension_values,
             "pairs": [{"sku": sku, "create": sku in new_set} for sku in wanted_partners],
             "has_photo": False,
             "action": action,
@@ -802,6 +920,7 @@ async def apply_catalog_from_excel(
             row,
             existing_lengths,
             product.dimension_state.value if product else "length",
+            batch.dimension_values.get(product.id) if product else None,
         )
         if count_errors:
             errors.extend(count_errors)
@@ -818,7 +937,12 @@ async def apply_catalog_from_excel(
         if product is None:
             await _create_product_from_row(db, row)
             imported += 1
-        elif await _update_product_from_row(db, product, row):
+        elif await _update_product_from_row(
+            db,
+            product,
+            row,
+            current_dimension_values=batch.dimension_values.get(product.id),
+        ):
             updated += 1
         else:
             skipped += 1
@@ -917,6 +1041,9 @@ async def export_catalog_excel(db: AsyncSession = Depends(get_db)) -> Response:
         )
     ).scalars().all()
     partners = await _pair_partners_by_id(db)
+    # Оси 2D/3D уезжают в те же колонки, что читает импорт: без них выгрузка
+    # теряла бы размерность при обратной загрузке файла (#87).
+    dimension_values = await _load_dimension_values(db, [product.id for product in products])
 
     workbook = Workbook()
     sheet = workbook.active
@@ -934,12 +1061,15 @@ async def export_catalog_excel(db: AsyncSession = Depends(get_db)) -> Response:
             if lengths
             else product.quantity_per_hanger
         )
+        axes = dimension_values.get(product.id, {})
+        is_sheet = product.dimension_state in (DimensionState.area, DimensionState.volume)
         sheet.append([
             product.sku,
             product.name,
             product.perimeter_mm,
             product.mount_width_mm,
-            format_lengths_cell(lengths),
+            # У 2D/3D длина — ось размерности, а не запись реестра длин.
+            axes.get("length_mm") if is_sheet else format_lengths_cell(lengths),
             format_raw_lengths_cell(lengths, raw_lengths),
             quantities_cell,
             product.notes,
@@ -947,6 +1077,10 @@ async def export_catalog_excel(db: AsyncSession = Depends(get_db)) -> Response:
             "да" if "is_laminated" in flag_codes else "",
             "; ".join(product.aliases or []),
             "; ".join(partners.get(product.id, [])),
+            DIMENSION_STATE_LABELS[product.dimension_state.value],
+            axes.get("width_mm"),
+            axes.get("thickness_mm"),
+            axes.get("height_mm"),
         ])
 
     buffer = BytesIO()

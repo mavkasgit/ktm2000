@@ -25,7 +25,7 @@ from app.core.config import settings
 from app.core.database import get_db
 from app.core.sorting import SortClause, apply_sort, parse_sort
 from app.models.defect import Defect
-from app.models.dimension import DimensionType, ProductDimension
+from app.models.dimension import ProductDimension
 from app.models.internal_plan import SectionPlanLine
 from app.models.product import (
     DimensionState,
@@ -49,6 +49,7 @@ from app.models.route import (
 from app.models.section import Section
 from app.models.transfer import Transfer
 from app.models.work_task import WorkTask
+from app.services.dimension_state import migrate_dimensions_for_state
 from app.services.hanger_quantity_calc import (
     DEFAULT_HANGER_SETTINGS,
     HangerConfigError,
@@ -58,60 +59,6 @@ from app.services.hanger_quantity_calc import (
 from app.services.route_selection import select_route_for_payload
 
 router = APIRouter(prefix="/products", tags=["products"])
-
-
-# Поля размерностей (зеркало DIMENSION_FIELDS на фронте,
-# shared/lib/dimensionState.ts): dimension_state → набор кодов dimension_type.
-# length (1D) не использует product_dimensions — длины живут в product_lengths.
-_DIMENSION_FIELD_CODES: dict[DimensionState, set[str]] = {
-    DimensionState.length: set(),
-    DimensionState.area: {"length_mm", "width_mm", "thickness_mm"},
-    DimensionState.volume: {"length_mm", "width_mm", "height_mm"},
-}
-
-# Все коды полей размерностей — граница для безопасного удаления при
-# переключении (связи неразмерных типов, напр. weight, не трогаются).
-_ALL_DIMENSION_FIELD_CODES = set().union(*_DIMENSION_FIELD_CODES.values())
-
-
-async def _migrate_dimensions_for_state(
-    db: AsyncSession, product_id: int, state: DimensionState
-) -> None:
-    """Привести product_dimensions в соответствие с dimension_state (Ref #72).
-
-    При переключении размерности поля 2D/3D ведутся через product_dimensions:
-    - для целевой размерности создаются недостающие связи (пустые);
-    - связи полей других размерностей удаляются (толщина ↔ высота);
-    - существующие значения полей, входящих в целевую размерность, сохраняются;
-    - связи неразмерных типов (напр. weight_mm) не трогаются.
-    """
-    target_codes = _DIMENSION_FIELD_CODES[state]
-    links = (
-        await db.execute(
-            select(ProductDimension)
-            .options(selectinload(ProductDimension.dimension_type))
-            .where(ProductDimension.product_id == product_id)
-        )
-    ).scalars().all()
-    existing_by_code = {link.dimension_type.code: link for link in links}
-
-    for code, link in existing_by_code.items():
-        if code in _ALL_DIMENSION_FIELD_CODES and code not in target_codes:
-            await db.delete(link)
-
-    missing = target_codes - set(existing_by_code)
-    if missing:
-        dim_types = (
-            await db.execute(select(DimensionType).where(DimensionType.code.in_(missing)))
-        ).scalars().all()
-        type_by_code = {t.code: t for t in dim_types}
-        for code in sorted(missing):
-            dim_type = type_by_code.get(code)
-            if dim_type is None:
-                continue  # тип не в справочнике — пропускаем
-            db.add(ProductDimension(product_id=product_id, dimension_type_id=dim_type.id))
-
-    await db.flush()
 
 
 class ProcessingFlagOut(BaseModel):
@@ -1184,7 +1131,7 @@ async def patch_product(
         setattr(item, key, value)
 
     if payload.dimension_state is not None:
-        await _migrate_dimensions_for_state(db, product_id, payload.dimension_state)
+        await migrate_dimensions_for_state(db, product_id, payload.dimension_state)
 
     if item.dimension_state in (DimensionState.area, DimensionState.volume):
         await _sync_lengths(db, product_id, [], dimension_state=item.dimension_state)
