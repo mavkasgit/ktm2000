@@ -1126,3 +1126,87 @@ async def test_export_excel_preview_is_idempotent(
     assert body["errors"] == []
     assert body["stats"] == {"total": 7, "create": 0, "update": 0, "skip": 7, "errors": 0}
     assert {item["action"] for item in body["items"]} == {"skip"}
+
+
+async def test_export_edited_file_applies_updates_and_reexport_shows_them(
+    client: AsyncClient, session: AsyncSession
+) -> None:
+    """Выгрузка → правка файла → apply → повторная выгрузка (#177).
+
+    Держит контракт живого round-trip'а: правки выгруженного листа (текст,
+    число, норма, флаг) доезжают до БД и видны в повторной выгрузке, новая
+    строка создаётся, а нетронутые строки выгружаются как до правки.
+    """
+    await _seed_export_catalog(session)
+    before_resp, before = await _export(client)
+    sheet = load_workbook(BytesIO(before_resp.content)).active
+    header = [cell.value for cell in sheet[1]]
+    position = {name: index for index, name in enumerate(header)}
+    data_rows = [list(row) for row in sheet.iter_rows(min_row=2, values_only=True)]
+
+    def set_cell(sku: str, column: str, value: object) -> None:
+        for row in data_rows:
+            if row[position["Артикул"]] == sku:
+                row[position[column]] = value
+                return
+        raise AssertionError(f"строка {sku} не найдена в выгрузке")
+
+    set_cell("ЮП-ОДИН", "Периметр, мм", 70)
+    set_cell("ЮП-ОДИН", "Кол-во на подвесе", 90)
+    set_cell("ЮП-ФЛАГ", "Примечания", "правка")
+    set_cell("ЮП-ФЛАГ", "Не дробеструится", "нет")
+    data_rows.append(
+        _row(
+            sku="ЮП-НОВЫЙ",
+            name="Новый 2600/2800",
+            perimeter=100,
+            lengths="2600, 2800",
+            quantities="10, 12",
+        )
+    )
+    data_rows.append(
+        _row(
+            sku="ЮП-НОВЫЙ-2",
+            name="Новый 1500",
+            perimeter=180,
+            lengths="1500",
+            quantities="8",
+        )
+    )
+    edited = _xlsx_bytes(data_rows, headers=header)
+
+    preview = await _upload(client, PREVIEW_URL, edited, filename="final_catalog.xlsx")
+
+    assert preview.status_code == 200, preview.text
+    preview_body = preview.json()
+    assert preview_body["errors"] == []
+    assert preview_body["stats"] == {"total": 9, "create": 2, "update": 2, "skip": 5, "errors": 0}
+    actions = {item["sku"]: item["action"] for item in preview_body["items"]}
+    assert actions["ЮП-НОВЫЙ"] == actions["ЮП-НОВЫЙ-2"] == "create"
+    assert actions["ЮП-ОДИН"] == actions["ЮП-ФЛАГ"] == "update"
+
+    applied = await _upload(client, APPLY_URL, edited, filename="final_catalog.xlsx")
+
+    assert applied.status_code == 200, applied.text
+    assert applied.json() == {
+        "imported": 2,
+        "updated": 2,
+        "skipped": 5,
+        "pairs_created": 0,
+        "errors": [],
+    }
+
+    _, after = await _export(client)
+
+    assert set(after) == set(before) | {"ЮП-НОВЫЙ", "ЮП-НОВЫЙ-2"}
+    assert after["ЮП-ОДИН"]["Периметр, мм"] == pytest.approx(70)
+    assert after["ЮП-ОДИН"]["Кол-во на подвесе"] == 90
+    assert after["ЮП-ФЛАГ"]["Примечания"] == "правка"
+    assert not after["ЮП-ФЛАГ"]["Не дробеструится"]  # явное «нет» снимает флаг
+    assert after["ЮП-НОВЫЙ"]["Наименование"] == "Новый 2600/2800"
+    assert after["ЮП-НОВЫЙ"]["Длины, мм"] == "2600, 2800"
+    assert after["ЮП-НОВЫЙ"]["Кол-во на подвесе"] == "10, 12"
+    assert after["ЮП-НОВЫЙ-2"]["Длины, мм"] == 1500
+    assert after["ЮП-НОВЫЙ-2"]["Кол-во на подвесе"] == 8
+    for sku in set(before) - {"ЮП-ОДИН", "ЮП-ФЛАГ"}:
+        assert after[sku] == before[sku], f"нетронутая строка {sku} изменилась"
