@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 from decimal import Decimal
+from typing import TYPE_CHECKING
 
 from sqlalchemy import String, and_, case, cast, exists, func, or_, select
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -46,6 +47,10 @@ from app.services.route_matcher import (
     resolve_position_route,
 )
 from app.stock.ledger import net_quantity_expr
+
+if TYPE_CHECKING:  # pragma: no cover — импорт только для аннотаций
+    from app.services.product_pair_resolver import PairResolutionCache
+
 
 MANUAL_ROUTE_PASS_PREFIX = "manual_route_pass:"
 
@@ -444,16 +449,25 @@ def _is_manual_route_pass(value: str | None) -> bool:
 
 
 async def _resolve_effective_product_ids(
-    db: AsyncSession, position: PlanPosition
+    db: AsyncSession,
+    position: PlanPosition,
+    *,
+    cache: PairResolutionCache | None = None,
 ) -> list[int]:
     """Все продукты позиции (одиночная — один, парная — оба компонента).
 
     Владелец логики — :mod:`product_pair_resolver` (снапшот → пара → оба
     артикула; одиночная — ``position.product_id``).
+
+    ``cache`` — кэш на один HTTP-запрос (#292): его создаёт вызывающий
+    обработчик списка и передаёт в каждый вызов, иначе резолв пар идёт
+    поштучно. Без кэша поведение прежнее.
     """
     from app.services import product_pair_resolver
 
-    return await product_pair_resolver.resolve_effective_product_ids(db, position)
+    return await product_pair_resolver.resolve_effective_product_ids(
+        db, position, cache=cache
+    )
 
 
 async def _fetch_paginated_positions(
