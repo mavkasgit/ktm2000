@@ -81,9 +81,10 @@ describe("buildPlanRows (выдача)", () => {
     expect(rows[0].ordersCount).toBe(2);
   });
 
-  it("резка (трансформация) — строка по входу, кол-во = план группы", () => {
+  it("резка — строка по входу, кол-во = план группы; размер строки — габарит задания", () => {
     const task = makeTask({
       transforms_dimensions: true,
+      dimensions: { length_mm: 2700 },
       input_dimensions: { length_mm: 3000 },
       planned_quantity: "150",
       outputs: [
@@ -97,7 +98,9 @@ describe("buildPlanRows (выдача)", () => {
     });
     const rows = buildPlanRows(groupTasks([task]), "issue");
     expect(rows).toHaveLength(1);
-    expect(rows[0].dimensions).toEqual({ length_mm: 3000 });
+    // «Выдача» — одна строка на группу по габариту задания; вход этапа
+    // (3000) в размер строки не протекает (#286).
+    expect(rows[0].dimensions).toEqual({ length_mm: 2700 });
     expect(qty(rows[0])).toEqual({ plan: 150, done: 0, transferred: 0, balance: 150 });
   });
 });

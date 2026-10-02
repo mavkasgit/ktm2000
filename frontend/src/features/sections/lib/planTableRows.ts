@@ -3,8 +3,9 @@
  * ====================
  * Разбивка строк таблицы плана (выдача/сдача) — встроенная трансформация.
  *
- * «Выдача» строится по входу: одна строка на группу, кол-во =
- * `planned_quantity` (сумма по задачам группы).
+ * «Выдача» строится по габариту задания (`WorkTask.dimensions`, ADR-0063):
+ * одна строка на группу, кол-во = `planned_quantity` (сумма по задачам
+ * группы).
  * «Сдача» — по выходам: строка на каждый `outputs[i]` трансформирующего
  * задания (ADR-0002), кол-во = `outputs[i].quantity`; прогресс строки —
  * из `outputs_progress[i]` (Сделано = `produced_quantity`, Передано =
@@ -20,14 +21,14 @@ import { taskGroupingDimensions } from "./groupTasksByProfile";
 
 export type PlanTableMode = "issue" | "handover";
 
-/** Строка таблицы плана после разбивки (по входу или по выходу). */
+/** Строка таблицы плана после разбивки (по габариту задания или по выходу). */
 export type PlanRow = {
   key: string;
   /** Ключ группы, из которой разбита строка (для скрытия группы целиком). */
   groupKey: string;
   /** Первая задача группы (для артикула/операции/маршрута). */
   task: SectionBoardTask;
-  /** Габарит строки: вход для «Выдачи», выход для «Сдачи». */
+  /** Габарит строки: габарит задания для «Выдачи», размер выхода для «Сдачи». */
   dimensions: Record<string, unknown> | null;
   /** План по строке. */
   planQty: number;
@@ -70,7 +71,7 @@ function outputProgressAt(
   return undefined;
 }
 
-/** Строки «Выдачи»: одна строка на группу (по входу). */
+/** Строки «Выдачи»: одна строка на группу (по габариту задания). */
 function buildIssueRows(groups: TaskGroup[]): PlanRow[] {
   const rows: PlanRow[] = [];
   for (const group of groups) {

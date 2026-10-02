@@ -22,17 +22,20 @@ import { formatDimensionsLabel } from "@/shared/api/stock";
 const NO_DIMENSIONS_KEY = "__no_dimensions__";
 
 /**
- * Размер задания для группировки (принудительный критерий).
+ * Размер задания для группировки (принудительный критерий) — габарит задания
+ * (`dimensions`, ADR-0001).
  *
- * У резки (трансформирующий этап, ADR-0002) размер — вход
- * (`input_dimensions`); у остальных этапов — габарит задания (`dimensions`).
- * Пары (`source_sku` с `+`) несут в этих полях уже разрешённый размер
- * пересечения компонентов (бэкенд отдаёт его в `dimensions`/`input_dimensions`).
+ * То же поле читают фильтр и сортировка доски (`?dimensions=`,
+ * `WorkTask.dimensions`), поэтому показанное значение всегда сужает выборку
+ * (#286, ADR-0063). У трансформирующего этапа это длина входа, а раскрой
+ * «вход → распилы» несёт колонка «Операция» (ADR-0058).
+ *
+ * Пары (`source_sku` с `+`) несут в `dimensions` уже разрешённый размер
+ * пересечения компонентов.
  */
 export function taskGroupingDimensions(
   task: SectionBoardTask,
 ): Record<string, unknown> | null {
-  if (task.transforms_dimensions) return task.input_dimensions ?? null;
   return task.dimensions ?? null;
 }
 

@@ -23,6 +23,7 @@ from app.models.production_plan import (
     ProductionPlan,
 )
 from app.models.work_task import WorkTask, WorkTaskStatus
+from sqlalchemy import null, select, update
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from tests.test_shopfloor_board_pagination import (
@@ -213,3 +214,109 @@ async def test_column_values_reject_unknown_column(auth_client) -> None:
     )
     assert response.status_code == 400
     assert "справочник" in response.json()["detail"]
+
+
+@pytest.mark.asyncio
+async def test_column_values_dimensions_narrow_the_board(auth_client, session: AsyncSession) -> None:
+    """Значение «Размера» сужает доску, даже если вход этапа — другой (#286).
+
+    Колонка показывает габарит задания (``dimensions``), и справочник обязан
+    отдавать ровно его. До #286 «Размер» в справочник не входил: доска
+    показывала ``input_dimensions`` трансформирующей строки, а фильтр сравнивал
+    ``WorkTask.dimensions`` — выбранное значение дало бы пустую таблицу.
+    """
+    _, target_section, route, raw_stage, target_stage = await _setup_two_stage_route(session)
+    target_stage.transforms_dimensions = True
+    await session.flush()
+    await _seed_board_tasks(
+        session,
+        target_section=target_section,
+        route=route,
+        raw_stage=raw_stage,
+        target_stage=target_stage,
+        count=2,
+        sku_prefix="CV-DIM",
+        dimensions={"length_mm": 2000},
+    )
+    # Вход трансформирующего этапа — другой размер: в колонку он не протекает.
+    await session.execute(
+        update(WorkTask)
+        .where(WorkTask.section_id == target_section.id)
+        .values(input_dimensions={"length_mm": 3000}, input_quantity=Decimal(10))
+    )
+    await session.commit()
+
+    body = (
+        await auth_client.get(
+            f"/api/shopfloor/sections/{target_section.id}/board/column-values",
+            params={"column": "dimensions"},
+        )
+    ).json()
+    assert body["column"] == "dimensions"
+    assert body["values"] == ['{"length_mm":2000}']
+
+    board = (
+        await auth_client.get(
+            f"/api/shopfloor/sections/{target_section.id}/board",
+            params={"dimensions": body["values"][0]},
+        )
+    ).json()
+    assert board["total"] == 2
+
+
+@pytest.mark.asyncio
+async def test_column_values_dimensions_offer_dimensionless(auth_client, session: AsyncSession) -> None:
+    """Безразмерные — одно значение «null»: «—» в поповере выбирается.
+
+    Безразмерное значение хранится и как SQL `NULL`, и как JSON `null` —
+    для `DISTINCT` это два разных значения, для оператора — одно «—».
+    """
+    _, target_section, route, raw_stage, target_stage = await _setup_two_stage_route(session)
+    await _seed_board_tasks(
+        session,
+        target_section=target_section,
+        route=route,
+        raw_stage=raw_stage,
+        target_stage=target_stage,
+        count=2,
+        sku_prefix="CV-DIM-NONE",
+        dimensions=None,
+    )
+    # Одна из безразмерных задач — с SQL NULL вместо JSON `null` (SQLAlchemy
+    # JSONB пишет `None` как JSON `null`; легаси-строки несут SQL NULL).
+    dimensionless_id = await session.scalar(
+        select(WorkTask.id)
+        .where(WorkTask.section_id == target_section.id)
+        .order_by(WorkTask.id)
+        .limit(1)
+    )
+    await session.execute(
+        update(WorkTask).where(WorkTask.id == dimensionless_id).values(dimensions=null())
+    )
+    await session.commit()
+    await _seed_board_tasks(
+        session,
+        target_section=target_section,
+        route=route,
+        raw_stage=raw_stage,
+        target_stage=target_stage,
+        count=1,
+        sku_prefix="CV-DIM-SIZE",
+        dimensions={"length_mm": 2000},
+    )
+
+    body = (
+        await auth_client.get(
+            f"/api/shopfloor/sections/{target_section.id}/board/column-values",
+            params={"column": "dimensions"},
+        )
+    ).json()
+    assert body["values"] == ["null", '{"length_mm":2000}']
+
+    board = (
+        await auth_client.get(
+            f"/api/shopfloor/sections/{target_section.id}/board",
+            params={"dimensions": "null"},
+        )
+    ).json()
+    assert board["total"] == 2

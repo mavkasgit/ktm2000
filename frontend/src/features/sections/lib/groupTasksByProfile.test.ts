@@ -67,13 +67,13 @@ describe("taskGroupingDimensions", () => {
     expect(taskGroupingDimensions(task)).toEqual({ length_mm: 2700 });
   });
 
-  it("резка (transforms_dimensions) — берёт вход (input_dimensions)", () => {
+  it("резка не меняет домен размера: берётся габарит задания", () => {
     const task = makeTask({
       transforms_dimensions: true,
       dimensions: { length_mm: 2700 },
       input_dimensions: { length_mm: 3000 },
     });
-    expect(taskGroupingDimensions(task)).toEqual({ length_mm: 3000 });
+    expect(taskGroupingDimensions(task)).toEqual({ length_mm: 2700 });
   });
 
   it("безразмерные — null", () => {
@@ -150,15 +150,15 @@ describe("groupTasksByProfile", () => {
     expect(keys[1]).toContain("length_mm=3000");
   });
 
-  it("резка группирует по размеру входа (input_dimensions)", () => {
+  it("резка группируется по габариту задания, а не по входу этапа (#286)", () => {
     const tasks = [
       makeTask({ id: 1, transforms_dimensions: true, dimensions: { length_mm: 2700 }, input_dimensions: { length_mm: 3000 } }),
       makeTask({ id: 2, transforms_dimensions: true, dimensions: { length_mm: 3000 }, input_dimensions: { length_mm: 2700 } }),
     ];
     const groups = groupTasksByProfile(tasks, SKU_PROFILE);
     expect(groups).toHaveLength(2);
-    expect(groups[0].label).toBe("ЮП-460 · 3 м");
-    expect(groups[1].label).toBe("ЮП-460 · 2,7 м");
+    expect(groups[0].label).toBe("ЮП-460 · 2,7 м");
+    expect(groups[1].label).toBe("ЮП-460 · 3 м");
   });
 
   it("пара (source_sku с «+») группируется как один артикул по размеру пересечения", () => {

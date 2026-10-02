@@ -623,11 +623,11 @@ async def get_section_board(
 #: значение — SQL-выражение ровно того, что видно в колонке: подпись и выбор
 #: в поповере обязаны совпадать, иначе выбранное значение не сузит выборку.
 #:
-#: «Размер» в этот набор НЕ входит: колонка показывает
-#: `input_dimensions` трансформирующих задач, а фильтр доски сравнивает
-#: `WorkTask.dimensions` — значение из справочника не сузило бы выборку.
-#: Разводить эти домены — отдельное решение владельца (тикет #211).
-BOARD_COLUMN_VALUE_FIELDS: frozenset[str] = frozenset({"product_sku"})
+#: «Размер» — габарит задания (`WorkTask.dimensions`), ровно то поле, что
+#: сравнивает фильтр доски и по которому идёт её сортировка (#286). Вход
+#: трансформирующего этапа (`input_dimensions`) в колонку не протекает: его
+#: раскрой «вход → выходы» несёт колонка «Операция» (ADR-0058, ADR-0063).
+BOARD_COLUMN_VALUE_FIELDS: frozenset[str] = frozenset({"product_sku", "dimensions"})
 
 
 def _board_value_expression(column: str):
@@ -640,6 +640,8 @@ def _board_value_expression(column: str):
             (PlanPosition.source_sku.like("%+%"), PlanPosition.source_sku),
             else_=Product.sku,
         )
+    if column == "dimensions":
+        return WorkTask.dimensions
     return None
 
 
@@ -679,11 +681,28 @@ async def get_section_board_column_values(
         query.with_only_columns(value_expr, maintain_column_froms=True)
         .order_by(None)
         .distinct()
-        .order_by(value_expr)
+        # «—» (безразмерные) — всегда первой строкой списка: безразмерное
+        # значение хранится и как SQL `NULL`, и как JSON `null`, а их
+        # натуральный порядок в Postgres разный (SQL NULL — в конец при ASC).
+        .order_by(value_expr.nulls_first())
         .limit(limit + 1)
     )
     rows = (await db.execute(stmt)).scalars().all()
-    values = [value for value in rows[:limit] if value is not None]
+    if column == "dimensions":
+        # Габарит уезжает в параметр фильтра JSON-строкой — в том же виде, что
+        # собирает страничный список поповера: `{"length_mm":2700}`, у
+        # безразмерных — `null` (отдельное выбираемое значение, «—»).
+        # Безразмерные хранятся и как SQL `NULL`, и как JSON `null`: для
+        # `DISTINCT` это разные значения, для оператора — одно «—», поэтому
+        # сличаем уже сериализованные строки.
+        values = list(
+            dict.fromkeys(
+                json.dumps(value, separators=(",", ":"), ensure_ascii=False)
+                for value in rows
+            )
+        )[:limit]
+    else:
+        values = [value for value in rows[:limit] if value is not None]
     return {
         "column": column,
         "values": values,
