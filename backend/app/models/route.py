@@ -52,8 +52,16 @@ class ProductionRoute(Base):
     # них нет. ``NULL`` — сигнатуры нет (маршрут без этапов).
     route_signature: Mapped[str | None] = mapped_column(Text, nullable=True)
 
-    stages: Mapped[list["RouteStage"]] = relationship("RouteStage", back_populates="route", lazy="selectin")
-    rules: Mapped[list["RouteMatchingRule"]] = relationship("RouteMatchingRule", back_populates="route", lazy="selectin")
+    # `ProductionRoute.rules` — мёртвая eager-связь (#303): потребителей нет,
+    # `routes.py:190` берёт правила отдельным `select(RouteMatchingRule)
+    # .where(route_id=…)`. `stages` остаётся selectin — её читает `routes.py`.
+    # `raise` вместо удаления: будущее чтение падает, а не платит молча.
+    stages: Mapped[list["RouteStage"]] = relationship(
+        "RouteStage", back_populates="route", lazy="selectin"
+    )
+    rules: Mapped[list["RouteMatchingRule"]] = relationship(
+        "RouteMatchingRule", back_populates="route", lazy="raise"
+    )
 
 
 class RouteStage(Base):
@@ -241,6 +249,10 @@ class RouteRuleProfile(Base):
     excel_column_passport: Mapped[list] = mapped_column(JSONB, nullable=False, server_default=text("'[]'::jsonb"), default=list)
     excel_passport_meta: Mapped[dict] = mapped_column(JSONB, nullable=False, server_default=text("'{}'::jsonb"), default=dict)
     created_at: Mapped[datetime] = mapped_column(DateTime, nullable=False, server_default=func.now())
-
-    rules: Mapped[list["RouteSelectionRule"]] = relationship("RouteSelectionRule", back_populates="profile", lazy="selectin")
+    # Мёртвая eager-связь (#303): `RouteRuleProfile.rules` не читается нигде —
+    # `load_selection_rules_for_profile` идёт прямо `WHERE profile_id IN (…)`
+    # и до коллекции профиля не дотягивается. `raise` вместо удаления.
+    rules: Mapped[list["RouteSelectionRule"]] = relationship(
+        "RouteSelectionRule", back_populates="profile", lazy="raise"
+    )
     import_template: Mapped["ImportTemplate | None"] = relationship("ImportTemplate")

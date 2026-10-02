@@ -48,7 +48,13 @@ class StorageProductionGroup(Base):
     icon_color: Mapped[str | None] = mapped_column(String(7), nullable=True)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False, server_default=func.now())
 
-    sections = relationship("Section", secondary="spg_sections", back_populates="spg_links", lazy="selectin")
+    # Мёртвая eager-связь (#303): потребителей `StorageProductionGroup.sections`
+    # нет ни одного — группа читается по коду и id, а список секций приходит
+    # вторым порядком вслед за `Section.spg_links`. `raise` вместо удаления:
+    # если кто-то начнёт её читать, будет падать, а не молча тянуть запрос.
+    sections = relationship(
+        "Section", secondary="spg_sections", back_populates="spg_links", lazy="raise"
+    )
 
 
 class SpgSection(Base):
