@@ -1491,7 +1491,11 @@ export function SectionTasksBoard({
       {showLoadingPlaceholder && <div className="rounded-lg border p-4 text-sm text-muted-foreground">Загрузка задач...</div>}
       {!showLoadingPlaceholder && total === 0 && (
         <div className="rounded-lg border p-4 text-sm text-muted-foreground text-center">
-          Нет задач в выбранном режиме
+          {/* Короткий текст без пояснений (#301): в режиме создания плана сюда
+              попадает и случай «все задания заняты планами» — объяснять это
+              мастеру незачем, он видит планы участка выше. Тем же текстом
+              вкладка «Задания» отвечает на свои пустые состояния. */}
+          Нет заданий
         </div>
       )}
 

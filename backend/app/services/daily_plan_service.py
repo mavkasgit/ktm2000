@@ -157,10 +157,21 @@ async def create_plan(
         raise ValueError("terminal work tasks cannot be added")
     if task_ids:
         existing = (await db.execute(
-            select(DailyPlanItem.work_task_id).where(DailyPlanItem.work_task_id.in_(task_ids))
-        )).scalars().all()
+            select(DailyPlanItem.work_task_id, DailyPlan.plan_date)
+            .join(DailyPlan, DailyPlanItem.daily_plan_id == DailyPlan.id)
+            .where(DailyPlanItem.work_task_id.in_(task_ids))
+            .order_by(DailyPlanItem.work_task_id)
+        )).all()
         if existing:
-            raise DailyPlanConflict("one or more work tasks already belong to a daily plan")
+            # 409 — страховка, а не штатный исход: в режиме создания занятые
+            # задания скрыты (#301), и мастер сюда попадает только при гонке.
+            # Общий текст не говорил, что именно занято; называем первое
+            # конфликтное задание и план, в котором оно уже числится.
+            conflicting_task_id, conflicting_plan_date = existing[0]
+            raise DailyPlanConflict(
+                f"задание {conflicting_task_id} уже в плане от "
+                f"{conflicting_plan_date.strftime('%d.%m.%Y')}"
+            )
     plan = DailyPlan(section_id=section_id, plan_date=plan_date, created_by=created_by)
     db.add(plan)
     await db.flush()

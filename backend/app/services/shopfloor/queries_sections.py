@@ -14,6 +14,7 @@ from app.domain.dimensions import (
     format_quantity,
     parse_dimensions_filter,
 )
+from app.models.daily_plan import DailyPlanItem
 from app.models.internal_plan import SectionPlanLine
 from app.models.product import Product
 from app.models.production_plan import PlanPosition
@@ -31,6 +32,17 @@ from app.stock.models import QualityState, Reason, StockBalance, StockTransactio
 
 from .cache import _compute_available_from_balances
 from .common import _to_decimal
+
+# Прямое членство задания в дневном плане — единственный источник признака
+# «занято» для режима создания плана (#301). Объявлено одним выражением, а не
+# повторяется по запросам: признак не зависит от того, показывается ли задание
+# в составе плана.
+_IN_DAILY_PLAN_EXPR = (
+    select(DailyPlanItem.work_task_id)
+    .where(DailyPlanItem.work_task_id == WorkTask.id)
+    .exists()
+    .label("in_daily_plan")
+)
 
 
 def _compute_display_sku(source_sku: str, output_sku: str) -> str:
@@ -106,6 +118,9 @@ def _build_section_board_query(
         PlanPosition.source_fingerprint,
         PlanPosition.source_sku,
         PlanPosition.output_sku,
+        # Прямое членство в дневном плане (#301): булево без оглядки на то,
+        # показывается ли задание в составе плана.
+        _IN_DAILY_PLAN_EXPR,
     ).join(
         SectionPlanLine, WorkTask.section_plan_line_id == SectionPlanLine.id,
     ).join(
@@ -353,7 +368,18 @@ async def get_section_board(
     await sync_work_tasks_status_bulk(db, tasks=board_tasks, tasks_cache=tasks_cache)
 
     tasks_data = []
-    for task, line, stage, row_sku, source_ref, source_payload, source_fingerprint, source_sku, output_sku in rows:
+    for (
+        task,
+        line,
+        stage,
+        row_sku,
+        source_ref,
+        source_payload,
+        source_fingerprint,
+        source_sku,
+        output_sku,
+        in_daily_plan,
+    ) in rows:
         # Determine effective operation_code.
         effective_op_code = task.selected_operation_code
         if not effective_op_code:
@@ -556,6 +582,9 @@ async def get_section_board(
             "icon_color": op_icon_info["icon_color"] if op_icon_info else None,
             "planned_quantity": str(task.planned_quantity),
             "status": task.status.value,
+            # Прямое членство в дневном плане (#301): этого одного булева
+            # фронту хватает, чтобы не предлагать занятое задание кандидатом.
+            "in_daily_plan": bool(in_daily_plan),
             "cache": {
                 "available_quantity": str(available),
                 "issued_quantity": str(task_cache.get("issued_quantity", "0")),

@@ -6,6 +6,7 @@ as the async-session seam for arranging real WorkTask topology.
 from __future__ import annotations
 
 from datetime import date
+from decimal import Decimal
 
 import pytest
 from app.models.audit_log import AuditLog
@@ -125,6 +126,77 @@ async def test_create_rejects_task_in_another_active_plan(
     assert [item["work_task_id"] for item in first_items.json()["items"]] == [
         fixture["task"].id
     ]
+
+
+async def test_board_marks_task_in_daily_plan(
+    auth_client, session: AsyncSession
+) -> None:
+    """`in_daily_plan` в ответе доски: у задания в плане `true`, у свободного `false`."""
+    fixture = await _setup_minimal_route(session, sku="DP-FLAG")
+    task = fixture["task"]
+    # Второе задание того же участка: план занимает первое, второе остаётся
+    # свободным — оба признака читаются из одного ответа доски.
+    free_task = WorkTask(
+        section_plan_line_id=fixture["task"].section_plan_line_id,
+        section_id=task.section_id,
+        product_id=task.product_id,
+        route_stage_id=task.route_stage_id,
+        planned_quantity=Decimal(10),
+        status=WorkTaskStatus.ready,
+    )
+    session.add(free_task)
+    await session.commit()
+    await _create_plan(auth_client, task.id, task.section_id)
+
+    response = await auth_client.get(f"/api/shopfloor/sections/{task.section_id}/board")
+
+    assert response.status_code == 200, response.text
+    flags = {row["id"]: row["in_daily_plan"] for row in response.json()["tasks"]}
+    assert flags[task.id] is True
+    assert flags[free_task.id] is False
+
+
+async def test_board_flag_is_membership_not_visibility(
+    auth_client, session: AsyncSession
+) -> None:
+    """Задание из плана помечено и после `revoke` снимает признак (#301)."""
+    fixture = await _setup_minimal_route(session, sku="DP-FLAG-REVOKE")
+    plan = await _create_plan(auth_client, fixture["task"].id, fixture["task"].section_id)
+
+    revoke = await auth_client.post(
+        f"/api/daily-plans/{plan['id']}/items/{fixture['task'].id}/revoke"
+    )
+    assert revoke.status_code == 200, revoke.text
+
+    response = await auth_client.get(
+        f"/api/shopfloor/sections/{fixture['task'].section_id}/board"
+    )
+
+    assert response.status_code == 200, response.text
+    assert response.json()["tasks"][0]["in_daily_plan"] is False
+
+
+async def test_conflict_409_names_task_and_plan(
+    auth_client, session: AsyncSession
+) -> None:
+    """409 остаётся страховкой и называет конфликтное задание и план (#301)."""
+    fixture = await _setup_minimal_route(session, sku="DP-CONFLICT-DETAIL")
+    task_id = fixture["task"].id
+    await _create_plan(auth_client, task_id, fixture["task"].section_id)
+
+    response = await auth_client.post(
+        "/api/daily-plans",
+        json={
+            "section_id": fixture["task"].section_id,
+            "plan_date": PLAN_DATE.isoformat(),
+            "work_task_ids": [task_id],
+        },
+    )
+
+    assert response.status_code == 409, response.text
+    detail = response.json()["detail"]
+    assert str(task_id) in detail
+    assert PLAN_DATE.strftime("%d.%m.%Y") in detail
 
 
 async def test_composition_keeps_completed_work_task(
