@@ -7,6 +7,7 @@ from fastapi import APIRouter, Depends, HTTPException, Query
 from pydantic import BaseModel, ConfigDict, Field
 from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
+from sqlalchemy.orm import selectinload
 
 from app.api.deps import WRITER_ROLES, get_current_user, require_role
 from app.core.database import get_db
@@ -34,6 +35,7 @@ from app.seeds.canon.dependencies import get_plant_config
 from app.seeds.canon.models import PlantConfig
 from app.services.plan_generation import create_release_batch, release_batch
 from app.services.plan_position_hanger import task_dimensions_for_plan_line
+from app.services.position_route_batch import resolve_position_routes_batch
 from app.services.production_plan_service import (
     _refresh_plan_status,
     soft_delete_cancelled_position,
@@ -43,10 +45,7 @@ from app.services.production_planning_rows import (
     get_production_planning_row_detail,
     list_production_planning_rows,
 )
-from app.services.route_matcher import (
-    make_position_route_cache_key,
-    resolve_position_route,
-)
+from app.services.route_matcher import resolve_position_route
 from app.services.route_storage_classifier import STOCK_TYPES
 from app.services.shopfloor_service import complete_task, final_release
 from app.transfers.services import transfer_send
@@ -440,17 +439,18 @@ async def get_production_planning_overview(
     if not positions:
         return ProductionPlanningOverview(sections=[])
 
-    # Resolve routes for all positions
-    position_route_map: dict[int, tuple[int | None, str | None, str | None]] = {}
-    route_resolve_cache: dict[tuple, object] = {}
-    for pos in positions:
-        cache_key = make_position_route_cache_key(pos)
-        if cache_key in route_resolve_cache:
-            route_info = route_resolve_cache[cache_key]
-        else:
-            route_info = await resolve_position_route(db, pos)
-            route_resolve_cache[cache_key] = route_info
-        position_route_map[pos.id] = (route_info.route_id, route_info.route_name, route_info.source)
+    # Батч-резолв маршрутов (#292/#298): раньше resolve_position_route звался
+    # на каждую позицию. Ключ кэша включает source_payload, поэтому почти
+    # всегда уникален и мемоизация ничего не давала.
+    route_info_by_position = await resolve_position_routes_batch(db, positions)
+    position_route_map: dict[int, tuple[int | None, str | None, str | None]] = {
+        pos.id: (
+            route_info_by_position[pos.id].route_id,
+            route_info_by_position[pos.id].route_name,
+            route_info_by_position[pos.id].source,
+        )
+        for pos in positions
+    }
 
     # Collect all section IDs from resolved routes
     section_ids: set[int] = set()
@@ -511,6 +511,29 @@ async def get_production_planning_overview(
     for wt in work_tasks:
         line_work_tasks.setdefault(wt.section_plan_line_id, []).append(wt)
 
+    # Кэш задач и этапы — ДО цикла по секциям (#298). Раньше внутри цикла
+    # `sections × positions × lines × tasks` звался scalar get_task_cache
+    # (3 SQL на задачу) и db.get(RouteStage) с ленивой загрузкой operations
+    # — на ~300 задачах это 900+ запросов. Теперь это два батч-вызова на всю
+    # страницу. Порядок вычислений и набор полей не изменились.
+    from app.stock.services import StockProjectionManager
+
+    pm = StockProjectionManager()
+    tasks_cache_bulk = await pm.get_tasks_cache_bulk(db, [wt.id for wt in work_tasks])
+    task_stage_ids = {wt.route_stage_id for wt in work_tasks}
+    stages_by_id: dict[int, RouteStage] = {}
+    if task_stage_ids:
+        stages_by_id = {
+            stage.id: stage
+            for stage in (
+                await db.execute(
+                    select(RouteStage)
+                    .options(selectinload(RouteStage.operations))
+                    .where(RouteStage.id.in_(task_stage_ids))
+                )
+            ).scalars().all()
+        }
+
     # Build result
     result_sections: list[SectionOut] = []
 
@@ -534,13 +557,16 @@ async def get_production_planning_overview(
                     total_steps += 1
                     if wt.status in RESOLVED_WORK_TASK_STATUSES:
                         completed_steps += 1
+                    # Кэш задачи и этап берутся из батчей выше (#298).
+                    wt_cache = tasks_cache_bulk.get(wt.id)
+                    stage = stages_by_id.get(wt.route_stage_id)
+                    if wt_cache is None:
+                        # Задачи вне батча не бывает: список тот же. Молча
+                        # подставлять ноль здесь нельзя — это разные вещи.
+                        raise RuntimeError(
+                            f"task {wt.id} missing from bulk task cache"
+                        )
 
-                    # Get operation info from route stage
-                    from app.stock.services import StockProjectionManager
-                    pm = StockProjectionManager()
-                    wt_cache = await pm.get_task_cache(db, wt.id)
-
-                    stage = await db.get(RouteStage, wt.route_stage_id)
                     work_tasks_out.append(
                         WorkTaskOut(
                             id=wt.id,
