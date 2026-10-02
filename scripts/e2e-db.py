@@ -476,6 +476,8 @@ async def ensure_database(dsn: str, *, keep: bool = False) -> None:
 
 TEMPLATE_SUFFIX = "_template"
 RUN_INFIX = "_run_"
+#: Суффикс клона на воркера Playwright (#289). Один на все номера: `_w0`, `_w1`…
+WORKER_SUFFIX = "_w"
 RUN_ID_RE = re.compile(r"^[a-z0-9]{4,16}$")
 RUN_STAMP_FORMAT = "%Y%m%d%H%M%S"
 DEFAULT_STALE_RUN_MINUTES = 180
@@ -518,14 +520,14 @@ def run_db_name(
     """
     moment = stamp or datetime.now(tz=UTC)
     name = f"{base}{RUN_INFIX}{moment.strftime(RUN_STAMP_FORMAT)}_{run_id}"
-    return f"{name}_w{worker}" if worker is not None else name
+    return f"{name}{WORKER_SUFFIX}{worker}" if worker is not None else name
 
 
 def run_env_file_name(run_id: str, worker: int | None = None) -> str:
     """Имя env-файла клона. Суффикс воркера — как в имени самой БД (#289)."""
     if worker is None:
         return f".env.e2e.run.{run_id}.local"
-    return f".env.e2e.run.{run_id}.w{worker}.local"
+    return f".env.e2e.run.{run_id}{WORKER_SUFFIX}{worker}.local"
 
 
 def split_worker_suffix(db_name: str, base: str, run_id: str) -> int | None:
@@ -806,16 +808,25 @@ async def drop_runs(
         if run_id:
             checked = validate_run_id(run_id)
             # Метка времени в имени — от старта прогона, а не от момента drop,
-            # поэтому точное имя не восстанавливается: ищем по run-id. Шаблон
-            # `LIKE` ловит и клон без суффикса, и все воркерные (`_w0`, `_w1`…),
-            # поэтому уборка прогона снимает ровно его клоны (#289).
-            names = [
-                row["datname"]
-                for row in await admin.fetch(
-                    "SELECT datname FROM pg_database WHERE datname LIKE $1",
-                    f"{base}{RUN_INFIX}%_{checked}",
-                )
-            ]
+            # поэтому точное имя не восстанавливается: ищем по run-id.
+            #
+            # Два шаблона, а не один: клон без суффикса оканчивается на
+            # `<run-id>`, а воркерный — на `<run-id>_w<N>` (#289). Один шаблон
+            # `%_<run-id>` воркерные клоны не ловил **никогда**, и `drop`
+            # молча рапортовал об успехе, ничего не удалив.
+            names = sorted(
+                {
+                    row["datname"]
+                    for pattern in (
+                        f"{base}{RUN_INFIX}%_{checked}",
+                        f"{base}{RUN_INFIX}%_{checked}{WORKER_SUFFIX}%",
+                    )
+                    for row in await admin.fetch(
+                        "SELECT datname FROM pg_database WHERE datname LIKE $1",
+                        pattern,
+                    )
+                }
+            )
             if not names:
                 print(f"[e2e-db] клон прогона {checked}: не найден (уже удалён?)")
             for found in names:
