@@ -7,6 +7,7 @@ from decimal import Decimal
 
 from sqlalchemy import Date, String, case, cast, exists, func, or_, select
 from sqlalchemy.ext.asyncio import AsyncSession
+from sqlalchemy.orm import raiseload
 
 from app.core.sorting import SortClause, apply_sort, parse_sort
 from app.domain.dimensions import (
@@ -839,7 +840,17 @@ async def get_sections_summary(db: AsyncSession) -> dict:
 
     sections = (
         await db.execute(
-            select(Section).where(Section.is_active == True).order_by(Section.sort_order, Section.id)
+            # Только колонки: `users`, `operations` и `spg_links` объявлены
+            # `lazy="selectin"` и грузятся на КАЖДОЕ чтение `Section` — три
+            # лишних SELECT'а на каждый 12-секундный тик, а сводке они не
+            # нужны (#295). `load_only` здесь не помогает: он ограничивает
+            # колонки, а `selectin`-связи всё равно загружаются (проверено
+            # замером). `raiseload("*")` запрещает связи целиком и, в отличие
+            # от молчаливого lean-запроса, громко падает, если кто-то позже
+            # потянет `section.users` в этой функции.
+            select(Section)
+            .options(raiseload("*"))
+            .where(Section.is_active == True).order_by(Section.sort_order, Section.id)
         )
     ).scalars().all()
 
