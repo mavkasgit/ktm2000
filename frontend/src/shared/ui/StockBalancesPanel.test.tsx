@@ -79,3 +79,44 @@ describe("StockBalancesPanel: страница и набор складов", ()
     expect(lastOffset()).toBe(50);
   });
 });
+
+describe("StockBalancesPanel: группы по артикулу", () => {
+  const groupRows = (): StockBalanceEntry[] => [
+    { ...entry(1), product_sku: "SKU-G", balance_qty: "1159" },
+    { ...entry(2), product_sku: "SKU-SOLO", balance_qty: "10" },
+    {
+      ...entry(3),
+      product_sku: "SKU-G",
+      balance_qty: "396",
+      quality_state: "SCRAP",
+      completed_operations: [],
+    },
+  ];
+
+  beforeEach(() => {
+    vi.mocked(getStockBalances).mockResolvedValue({
+      balances: groupRows(),
+      total: 3,
+      limit: 50,
+      offset: 0,
+    });
+  });
+
+  it("сворачивает артикул с несколькими строками в итог и раскрывает его по клику", async () => {
+    renderPanel([1]);
+    const summary = await screen.findByText("SKU-G");
+
+    // Итог: сумма количеств строк артикула и их число.
+    expect(summary.closest("tr")?.textContent).toContain("1555");
+    expect(summary.closest("tr")?.textContent).toContain("×2");
+    // Раскладка качества: свёрнутая группа не прячет брак.
+    expect(summary.closest("tr")?.textContent).toContain("Годный 1 · Брак 1");
+    // Строки артикула спрятаны, одиночный артикул — как был.
+    expect(screen.queryByText("1159")).toBeNull();
+    expect(screen.getByText("SKU-SOLO")).toBeTruthy();
+
+    fireEvent.click(summary);
+    await waitFor(() => expect(screen.getByText("1159")).toBeTruthy());
+    expect(screen.getByText("396")).toBeTruthy();
+  });
+});
