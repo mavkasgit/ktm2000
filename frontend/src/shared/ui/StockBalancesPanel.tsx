@@ -43,6 +43,56 @@ function balanceArticleKey(balance: StockBalanceEntry): string {
   return balance.product_sku || `#${balance.product_id}`;
 }
 
+/**
+ * Подписи операций строки — те же, что в её пилюлях (`RouteStepsDisplay`): имена
+ * операций этапов, а без этапов — подпись строки («без операций»). Сводка группы
+ * обязана читаться так же, как раскрытые строки, иначе итог и дети говорят на
+ * разных языках.
+ */
+function balanceOperationLabels(balance: StockBalanceEntry): string[] {
+  if (balance.completed_stages && balance.completed_stages.length > 0) {
+    return balance.completed_stages.map((step) => step.operation_name || step.section_name);
+  }
+  return [getBalanceOperationsLabel(balance)];
+}
+
+/**
+ * Операции группы — объединение операций её строк без повторов: «Дробеструй ·
+ * Серебро · Стрейч». Пустым итог быть не может, пока в группе есть строки.
+ */
+function summarizeOperations(rows: StockBalanceEntry[], limit: number): GroupSummary {
+  const values = [...new Set(rows.flatMap(balanceOperationLabels))];
+  const full = values.join(" · ");
+  if (values.length <= limit) return { text: full, full };
+  return { text: `${values.slice(0, limit).join(" · ")} +${values.length - limit}`, full };
+}
+
+/** Значение колонки в итоге группы: текст для ячейки и полный список для title. */
+type GroupSummary = {
+  text: string;
+  /** Полный список значений — для `title`, когда текст обрезан. */
+  full: string;
+};
+
+/**
+ * Сводка колонки по строкам группы: одно значение — как есть, несколько —
+ * списком. Пустой ячейки у группы быть не должно: свёрнутая группа прячет свои
+ * строки, и «—» в итоге значило бы «в группе этого нет», хотя оно там есть.
+ *
+ * `limit` — сколько значений влезает в 32-пиксельную строку; остальное уходит
+ * в `title` («+N» в тексте). Порядок значений — как в ответе сервера.
+ */
+function summarizeColumn(
+  rows: StockBalanceEntry[],
+  pick: (balance: StockBalanceEntry) => string,
+  limit = 3,
+): GroupSummary {
+  const values = [...new Set(rows.map(pick))];
+  const full = values.join(" · ");
+  if (values.length <= limit) return { text: full, full };
+  return { text: `${values.slice(0, limit).join(" · ")} +${values.length - limit}`, full };
+}
+
 /** Сводка группы: то, что читается в свёрнутой строке-итоге. */
 type BalanceGroup = {
   key: string;
@@ -50,37 +100,16 @@ type BalanceGroup = {
   rows: StockBalanceEntry[];
   /** Сумма количеств строк группы. */
   totalQty: number;
-  /** Общее значение колонки у всех строк, иначе «—»: у группы не одно значение. */
-  dimensionsLabel: string;
-  operationsLabel: string;
-  locationLabel: string;
+  dimensions: GroupSummary;
+  operations: GroupSummary;
+  location: GroupSummary;
   /**
    * Качество: один статус — его подпись, разные — раскладка «Годный 2 · Брак 1».
-   * Раскладка, а не «—»: свёрнутая группа прячет брак, и итог обязан его назвать.
+   * С числами, а не просто списком: свёрнутая группа прячет брак, и итог обязан
+   * сказать, сколько его.
    */
-  qualityLabel: string;
+  quality: GroupSummary;
 };
-
-const GROUP_MIXED_VALUE = "—";
-
-/** Одно значение на все строки — или «—»: у группы разные значения. */
-function uniformLabel(
-  rows: StockBalanceEntry[],
-  pick: (balance: StockBalanceEntry) => string,
-): string {
-  const first = pick(rows[0]);
-  return rows.every((row) => pick(row) === first) ? first : GROUP_MIXED_VALUE;
-}
-
-function qualitySummary(rows: StockBalanceEntry[]): string {
-  const counts = new Map<string, number>();
-  for (const row of rows) {
-    const label = formatQualityStateLabel(row.quality_state);
-    counts.set(label, (counts.get(label) ?? 0) + 1);
-  }
-  if (counts.size === 1) return [...counts.keys()][0];
-  return [...counts.entries()].map(([label, count]) => `${label} ${count}`).join(" · ");
-}
 
 /**
  * Подсветка итога качества: свёрнутая группа прячет свои строки, поэтому брак
@@ -95,6 +124,19 @@ function qualitySummaryClass(rows: StockBalanceEntry[]): string {
     return "text-amber-700 dark:text-amber-400 font-medium";
   }
   return "text-muted-foreground";
+}
+
+function qualitySummary(rows: StockBalanceEntry[]): GroupSummary {
+  const counts = new Map<string, number>();
+  for (const row of rows) {
+    const label = formatQualityStateLabel(row.quality_state);
+    counts.set(label, (counts.get(label) ?? 0) + 1);
+  }
+  const text =
+    counts.size === 1
+      ? [...counts.keys()][0]
+      : [...counts.entries()].map(([label, count]) => `${label} ${count}`).join(" · ");
+  return { text, full: text };
 }
 
 /**
@@ -118,20 +160,26 @@ function buildBalanceGroups(balances: StockBalanceEntry[]): BalanceGroup[] {
       sku: key,
       rows: [balance],
       totalQty: toQtyInteger(balance.balance_qty),
-      dimensionsLabel: "",
-      operationsLabel: "",
-      locationLabel: "",
-      qualityLabel: "",
+      dimensions: { text: "", full: "" },
+      operations: { text: "", full: "" },
+      location: { text: "", full: "" },
+      quality: { text: "", full: "" },
     });
   }
   return [...groups.values()].map((group) => ({
     ...group,
-    dimensionsLabel: uniformLabel(group.rows, (row) =>
-      formatDimensionsLabel(row.dimensions, row.dimensions_label),
+    dimensions: summarizeColumn(
+      group.rows,
+      (row) => formatDimensionsLabel(row.dimensions, row.dimensions_label),
+      2,
     ),
-    operationsLabel: uniformLabel(group.rows, getBalanceOperationsLabel),
-    locationLabel: uniformLabel(group.rows, (row) => row.location_name || `#${row.location_id}`),
-    qualityLabel: qualitySummary(group.rows),
+    operations: summarizeOperations(group.rows, 3),
+    location: summarizeColumn(
+      group.rows,
+      (row) => row.location_name || `#${row.location_id}`,
+      2,
+    ),
+    quality: qualitySummary(group.rows),
   }));
 }
 
@@ -248,6 +296,13 @@ function BalanceGroupRow({
   onToggle: () => void;
 }) {
   const cellClass = cn(BALANCE_CELL_CLASS, TABLE_ROW_STYLES.groupHeaderCell);
+  // Полный список — в title, но только когда он не влез в ячейку: подсказка,
+  // повторяющая видимый текст, ничего не добавляет.
+  const summaryTitle = (summary: GroupSummary): string | undefined =>
+    summary.full === summary.text ? undefined : summary.full;
+  const dimensionsTitle = summaryTitle(group.dimensions);
+  const operationsTitle = summaryTitle(group.operations);
+  const locationTitle = summaryTitle(group.location);
   return (
     <tr
       style={{ height: TABLE_ROW_DENSE.rowHeightPx }}
@@ -283,17 +338,24 @@ function BalanceGroupRow({
       <td className={cn(cellClass, "font-mono")} title="Сумма по строкам этой страницы">
         {fmtQty(group.totalQty)}
       </td>
-      <td className={cn(cellClass, "text-xs whitespace-nowrap font-normal")}>
-        {group.dimensionsLabel}
+      {/* Сводки обрезаются, а не переносятся: строка итога обязана остаться
+          32px (ADR-0030), иначе таблица теряет ритм. Полный список — в title. */}
+      <td className={cn(cellClass, "max-w-[120px] text-xs font-normal")} title={dimensionsTitle}>
+        <span className="block truncate">{group.dimensions.text}</span>
       </td>
-      <td className={cn(cellClass, "max-w-[280px] text-xs font-normal text-muted-foreground")}>
-        {group.operationsLabel}
+      <td
+        className={cn(cellClass, "max-w-[280px] text-xs font-normal text-muted-foreground")}
+        title={operationsTitle}
+      >
+        <span className="block truncate">{group.operations.text}</span>
       </td>
-      <td className={cn(cellClass, "text-xs", qualitySummaryClass(group.rows))}>
-        {group.qualityLabel}
+      <td className={cn(cellClass, "max-w-[220px] text-xs", qualitySummaryClass(group.rows))}>
+        <span className="block truncate">{group.quality.text}</span>
       </td>
       {!hideLocationColumn && (
-        <td className={cn(cellClass, "text-xs font-normal")}>{group.locationLabel}</td>
+        <td className={cn(cellClass, "max-w-[160px] text-xs font-normal")} title={locationTitle}>
+          <span className="block truncate">{group.location.text}</span>
+        </td>
       )}
       <td className={cellClass} />
       <TableCornerResetCell className={TABLE_ROW_STYLES.groupHeaderCell} />

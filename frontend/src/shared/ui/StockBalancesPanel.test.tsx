@@ -111,6 +111,11 @@ describe("StockBalancesPanel: группы по артикулу", () => {
     expect(summary.closest("tr")?.textContent).toContain("×2");
     // Раскладка качества: свёрнутая группа не прячет брак.
     expect(summary.closest("tr")?.textContent).toContain("Годный 1 · Брак 1");
+    // …и называет его цветом: в свёрнутой строке это единственный признак брака.
+    const qualityCell = Array.from(summary.closest("tr")!.querySelectorAll("td")).find((cell) =>
+      cell.textContent?.includes("Брак"),
+    );
+    expect(qualityCell?.className).toContain("text-red-600");
     // Строки артикула спрятаны, одиночный артикул — как был.
     expect(screen.queryByText("1159")).toBeNull();
     expect(screen.getByText("SKU-SOLO")).toBeTruthy();
