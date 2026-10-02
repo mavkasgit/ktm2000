@@ -61,6 +61,7 @@ import {
   releaseSlot,
   resolveMaxRuns,
 } from "./run-slots.mjs";
+import { cleanupAbandonedRuns } from "./reap-runs.mjs";
 import {
   DEFAULT_LOCK_STALE_MS,
   DEFAULT_LOCK_TIMEOUT_MS,
@@ -230,13 +231,30 @@ if (abandonedRunId) {
   dropRunClone(abandonedRunId);
   abandonedRunId = null;
 }
+// Слоты, чей держатель мёртв, отдаются на уборку клонов: в чужом дереве лок
+// не поможет, а ждать `drop --stale-run-minutes` 180 минут нельзя (#306).
+// Отдаются **только** мёртвые — проверка живости pid уже в `run-slots.mjs`.
+const abandonedHolders = [];
 slot = await acquireSlot({
   dir: SLOT_DIR,
   max: MAX_RUNS,
-  payload: { repo: REPO_ROOT, runId, tier: TIER, pid: process.pid, at: Date.now() },
+  payload: {
+    repo: REPO_ROOT,
+    runId,
+    // env-файл клона: без него уборщик из чужого дерева не знает, какой
+    // namespace сносить (у каждого worktree своя база).
+    envFile: process.env.E2E_ENV_FILE ?? null,
+    tier: TIER,
+    pid: process.pid,
+    at: Date.now(),
+  },
   waitTimeoutMs: SLOT_TIMEOUT_MS,
   log: (line) => console.log(line),
+  onReclaim: (holder) => abandonedHolders.push(holder),
 });
+if (abandonedHolders.length > 0) {
+  cleanupAbandonedRuns(abandonedHolders, { ownRunId: runId, log: console.log });
+}
 console.log(
   `[e2e:run] слот семафора ${slot.index + 1}/${MAX_RUNS} занят (${SLOT_DIR}), ` +
     `клон прогона ${runId}`,
