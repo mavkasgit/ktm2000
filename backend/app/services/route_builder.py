@@ -33,6 +33,7 @@ from app.services.route_selection import (
     load_selection_rules_for_profile,
 )
 from app.services.route_signature import signature_from_built_steps
+from app.services.section_ref import SectionRef, load_section_refs
 
 
 @dataclass
@@ -78,11 +79,11 @@ class RouteBuildBatchCache:
     """
     profile_id: int | None
     rules: list = field(default_factory=list)
-    sections_by_code: dict[str, Section] = field(default_factory=dict)
+    sections_by_code: dict[str, SectionRef] = field(default_factory=dict)
     ops_by_section_group: dict[tuple[int, str | None], list[SectionOperation]] = field(default_factory=dict)
     operation_name_by_code: dict[str, str] = field(default_factory=dict)
     section_id_by_code: dict[str, int] = field(default_factory=dict)
-    sections_by_id: dict[int, Section] = field(default_factory=dict)
+    sections_by_id: dict[int, SectionRef] = field(default_factory=dict)
     payload_signature_fields: tuple[str, ...] = ()
     built_routes: dict[tuple, BuiltRoute] = field(default_factory=dict)
 
@@ -141,9 +142,8 @@ async def load_route_build_batch_cache(
         section_id_by_code = dict(selection_cache.section_id_by_code)
         sections_by_id = dict(selection_cache.sections_by_id)
     else:
-        sections = (await db.execute(select(Section))).scalars().all()
-        sections_by_id = {section.id: section for section in sections}
-        section_id_by_code = {section.code: section.id for section in sections}
+        sections_by_id = await load_section_refs(db)
+        section_id_by_code = {section.code: section.id for section in sections_by_id.values()}
     section_codes = list(profile.route_sections or []) if profile is not None else []
     sections_by_code = {
         code: sections_by_id[sid]
@@ -276,16 +276,12 @@ async def build_route_from_profile(
         }
         ops_by_section_group = batch.ops_by_section_group
     else:
-        # Загрузить все участки из filtered route_sections
-        sections = (await db.execute(
-            select(Section)
-            .where(Section.code.in_(filtered_section_codes))
-            .order_by(Section.sort_order)
-        )).scalars().all()
-        sections_by_code = {s.code: s for s in sections}
+        # Загрузить все участки из filtered route_sections — колонками (#303).
+        refs_by_id = await load_section_refs(db, codes=set(filtered_section_codes))
+        sections_by_code = {ref.code: ref for ref in refs_by_id.values()}
 
         # Загрузить все SectionOperation для этих участков
-        section_ids = [s.id for s in sections]
+        section_ids = [ref.id for ref in refs_by_id.values()]
         all_ops = (await db.execute(
             select(SectionOperation)
             .where(SectionOperation.section_id.in_(section_ids))

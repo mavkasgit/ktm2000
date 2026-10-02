@@ -26,11 +26,19 @@ ad-hoc эвристик.
 from __future__ import annotations
 
 from collections.abc import Iterable
+from typing import TYPE_CHECKING, Union
+
+if TYPE_CHECKING:  # pragma: no cover — только для аннотаций
+    from app.services.section_ref import SectionRef
 
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.models.route import RouteStage
 from app.models.section import Section
+
+#: Что достаточно классификаторам: подходит и ORM-Section, и плоская
+#: проекция SectionRef (#303) — читается только ``.type``.
+SectionLike = Union[Section, "SectionRef"]
 
 STAGE_KIND_PRODUCTION = "production"
 STAGE_KIND_TRANSIT = "transit"
@@ -84,7 +92,7 @@ STOCK_TYPES = frozenset({
 # одном экране два несовпадающих числа по разным правилам.
 
 
-def is_storage_section(section: Section | None) -> bool:
+def is_storage_section(section: SectionLike | None) -> bool:
     """``True`` если секция — это место хранения (склад или терминал), а не цех.
 
     Терминал (#136) — тоже «хранение, а не работа»: маршруты через него
@@ -97,7 +105,7 @@ def is_storage_section(section: Section | None) -> bool:
     return section.type in STORAGE_TYPES
 
 
-def is_stock_section(section: Section | None) -> bool:
+def is_stock_section(section: SectionLike | None) -> bool:
     """``True`` если секция — склад оборачиваемого запаса (raw/wip/finished, без scrap).
 
     Отличается от ``is_storage_section`` тем, что брак (``scrap``) не считается
@@ -108,14 +116,14 @@ def is_stock_section(section: Section | None) -> bool:
     return section.type in STOCK_TYPES
 
 
-def is_production_section(section: Section | None) -> bool:
+def is_production_section(section: SectionLike | None) -> bool:
     """``True`` если секция — это цех (место реальной работы)."""
     if section is None:
         return False
     return section.type == SECTION_TYPE_PRODUCTION
 
 
-def is_terminal_section(section: Section | None) -> bool:
+def is_terminal_section(section: SectionLike | None) -> bool:
     """``True`` если секция — терминальная («Отправлено»): вне остатков (#136).
 
     Терминал принимает проводки в ledger, но ``StockProjectionManager`` не
@@ -127,7 +135,7 @@ def is_terminal_section(section: Section | None) -> bool:
     return section.type in TERMINAL_TYPES
 
 
-def accepts_ordinary_transfer(section: Section | None) -> bool:
+def accepts_ordinary_transfer(section: SectionLike | None) -> bool:
     """``True`` если секция принимает обычную передачу (``Transfer``) по маршруту.
 
     Оборачиваемый склад или терминал: «Отправлено» (#136) принимает материал
@@ -138,7 +146,7 @@ def accepts_ordinary_transfer(section: Section | None) -> bool:
     return is_stock_section(section) or is_terminal_section(section)
 
 
-def classify_section_role(section: Section | None) -> str:
+def classify_section_role(section: SectionLike | None) -> str:
     """Возвращает роль секции: ``'production'`` или ``'storage'``."""
     if is_storage_section(section):
         return "storage"
@@ -159,7 +167,7 @@ def is_production_stage(stage: RouteStage | None) -> bool:
     return stage.stage_kind == STAGE_KIND_PRODUCTION and stage.section_id is not None
 
 
-def stage_display_name(stage: RouteStage, storage_section: Section | None) -> str:
+def stage_display_name(stage: RouteStage, storage_section: SectionLike | None) -> str:
     """Человекочитаемое имя этапа для UI.
 
     Для ``production`` этапов возвращает имя секции (цеха).
@@ -174,7 +182,7 @@ def stage_display_name(stage: RouteStage, storage_section: Section | None) -> st
 
 def infer_stage_kind(
     *,
-    section: Section | None,
+    section: SectionLike | None,
     storage_section_id: int | None = None,
 ) -> str:
     """Определить ``stage_kind`` по секции/контексту (для построения маршрута).

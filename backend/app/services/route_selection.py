@@ -11,6 +11,7 @@ from app.models.product import Product
 from app.models.route import ProductionRoute, RouteSelectionRule, RouteStage
 from app.models.section import Section
 from app.services.color_extraction import resolve_payload_color
+from app.services.section_ref import SectionRef, load_section_refs
 
 Condition = dict[str, Any]
 Action = dict[str, Any]
@@ -56,7 +57,7 @@ class RouteSelectionBatchCache:
     rules: list[RouteSelectionRule] = field(default_factory=list)
     active_routes: list[ProductionRoute] = field(default_factory=list)
     route_sections: dict[int, list[tuple[int, str]]] = field(default_factory=dict)
-    sections_by_id: dict[int, Section] = field(default_factory=dict)
+    sections_by_id: dict[int, SectionRef] = field(default_factory=dict)
     section_id_by_code: dict[str, int] = field(default_factory=dict)
     controlled_section_ids: frozenset[int] = frozenset()
 
@@ -520,11 +521,14 @@ async def load_selection_rules_for_profile(
     )
 
 
-async def _sections_by_id(db: AsyncSession, ids: set[int]) -> dict[int, Section]:
+async def _sections_by_id(
+    db: AsyncSession, ids: set[int]
+) -> dict[int, SectionRef]:
+    """Участки без батч-кэша — тоже колонками (#303): ORM-объект стоил бы
+    четырёх запросов (сам Section плюс три связи с lazy="selectin")."""
     if not ids:
         return {}
-    rows = (await db.execute(select(Section).where(Section.id.in_(ids)))).scalars().all()
-    return {section.id: section for section in rows}
+    return await load_section_refs(db, ids=ids)
 
 
 async def _section_id_by_code(
@@ -548,8 +552,7 @@ async def load_route_selection_batch_cache(
         await db.execute(select(ProductionRoute).where(ProductionRoute.is_active.is_(True)).order_by(ProductionRoute.sort_order, ProductionRoute.id))
     ).scalars().all()
     route_sections = await load_route_sections(db, [route.id for route in routes])
-    sections = (await db.execute(select(Section))).scalars().all()
-    sections_by_id = {section.id: section for section in sections}
+    sections_by_id = await load_section_refs(db)
     controlled = {
         section_id
         for rule in rules
@@ -562,7 +565,7 @@ async def load_route_selection_batch_cache(
         active_routes=list(routes),
         route_sections=route_sections,
         sections_by_id=sections_by_id,
-        section_id_by_code={section.code: section.id for section in sections},
+        section_id_by_code={section.code: section.id for section in sections_by_id.values()},
         controlled_section_ids=frozenset(controlled),
     )
 
@@ -595,7 +598,9 @@ async def load_route_sections(
     return result
 
 
-def _section_dicts(section_ids: set[int], sections_by_id: dict[int, Section]) -> list[dict[str, Any]]:
+def _section_dicts(
+    section_ids: set[int], sections_by_id: dict[int, SectionRef]
+) -> list[dict[str, Any]]:
     result = []
     for section_id in sorted(section_ids):
         section = sections_by_id.get(section_id)
