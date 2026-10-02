@@ -95,7 +95,6 @@ __all__ = [
     "TransferableLine",
     "completed_qty_sq",
     "compute_stock_section_transferable",
-    "plain_line",
     "plain_produced",
     "resolve_budget_kind",
     "stock_line",
@@ -184,18 +183,15 @@ def completed_qty_sq():
 
 
 async def plain_produced(db: AsyncSession, task: WorkTask) -> Decimal:
-    """«Произведено» обычной задачи: gross COMPLETE по задаче (всё, без размеров)."""
+    """«Произведено» обычной задачи: gross COMPLETE по задаче (всё, без размеров).
+
+    Читает write-guard (:func:`task_transferable`). Read-путь берёт то же
+    число групповым ``WHERE IN``-проходом внутри
+    :func:`task_transferable_lines_bulk` — это и есть «шов»: обе стороны
+    считают gross COMPLETE одним примитивом, просто разной формы выбора.
+    """
     sq = completed_qty_sq()
     return _dec(await db.scalar(select(sq.c.completed_qty).where(sq.c.task_id == task.id)))
-
-
-async def _net_used_total(db: AsyncSession, task_id: int, reason: Reason) -> Decimal:
-    """Net использованного по задаче БЕЗ размерного фильтра (total по ключу).
-
-    Тот же ledger-примитив ``net_*_sq``, что подключает read-SQL ready-запроса.
-    """
-    sq = net_by_reason_sq(reason, alias="transferable_net_used_sq")
-    return _dec(await db.scalar(select(sq.c.net_quantity).where(sq.c.task_id == task_id)))
 
 
 async def resolve_budget_kind(
@@ -546,24 +542,6 @@ async def transform_lines(
         )
         for row in rows
     ]
-
-
-async def plain_line(db: AsyncSession, task: WorkTask, *, is_final: bool) -> TransferableLine:
-    """Строка бюджета обычной задачи: одна, с габаритом задания.
-
-    Финальный участок — «использовано» это выпущенное (FINAL_RELEASE),
-    иначе — переданное (TRANSFER_SEND); смысл выбирается здесь же, чтобы
-    потребитель не копировал условие.
-    """
-    reason = Reason.FINAL_RELEASE if is_final else Reason.TRANSFER_SEND
-    return TransferableLine(
-        kind=BudgetKind.PLAIN,
-        dims=task.dimensions,
-        planned=_dec(task.planned_quantity),
-        produced=await plain_produced(db, task),
-        used=await _net_used_total(db, task.id, reason),
-        is_final=is_final,
-    )
 
 
 async def transform_point_budget(
