@@ -39,7 +39,7 @@ from app.models.transfer import (
     TransferStatus,
 )
 from app.models.work_task import CLOSED_WORK_TASK_STATUSES, WorkTask, WorkTaskStatus
-from app.services.plan_position_hanger import task_dimensions_for_plan_line
+from app.services.plan_position_hanger import position_dimensions_for_task
 from app.services.route_storage_classifier import (
     SECTION_TYPE_PRODUCTION,
     STOCK_TYPES,
@@ -924,6 +924,17 @@ async def _fetch_stock_ready_items(
         for task in tasks:
             tasks_by_line.setdefault(task.section_plan_line_id, []).append(task)
 
+    # Габариты заданий — из позиций, которые основной запрос уже принёс
+    # (join `plan_pos` в `line_rows`). Поштучный `task_dimensions_for_plan_line`
+    # делал `db.get(PlanPosition)`, который попадал в identity-map и не стоил
+    # ничего; отдельный bulk-запрос был бы лишним, поэтому берём готовые
+    # объекты (#299).
+    dimensions_by_position: dict[int, dict | None] = {
+        plan_pos.id: position_dimensions_for_task(plan_pos)
+        for plan_pos in {row[1] for row in line_rows}
+        if plan_pos is not None
+    }
+
     prepared: list[_StockReadyCandidate] = []
     for spl, plan_pos, next_l, own_stg, next_stg, next_s, next_spg in line_rows:
         if next_l is None or next_stg is None or next_s is None:
@@ -979,7 +990,7 @@ async def _fetch_stock_ready_items(
                 planned_quantity=planned_qty,
                 status=WorkTaskStatus.ready,
                 due_date=spl.due_date,
-                dimensions=await task_dimensions_for_plan_line(db, spl.plan_position_id),
+                dimensions=dimensions_by_position.get(spl.plan_position_id),
             )
 
         prepared.append(
@@ -1248,6 +1259,13 @@ async def list_ready_to_transfer(
         [row[0] for row in rows],
         sections={row[3].id: row[3] for row in rows},
         stages={row[2].id: row[2] for row in rows},
+        # Строки плана тоже уже в руках: без подсказки складская ветка
+        # добирала их поштучным `db.get` (#299).
+        lines={
+            row[0].section_plan_line_id: row[1]
+            for row in rows
+            if row[0].section_plan_line_id is not None
+        },
     )
     items: list[dict] = []
     for row in rows:
