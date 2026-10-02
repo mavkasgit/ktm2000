@@ -168,10 +168,21 @@ function getTaskCellValue(task: SectionBoardTask, field: TaskSortField): string 
 // с такой же высотой идут «Передачи» и «Остатки».
 // Кнопки задаются без size="sm": у него h-9 (36px), а min-h не уменьшает
 // фиксированную высоту — именно он растягивал строку до 52px.
-const ROW_CELL_CLASS = TABLE_ROW_DENSE.cell;
 const ROW_ACTION_BUTTON_CLASS = `${TABLE_ROW_DENSE.actionButton} transition-all hover:bg-accent/50`;
 const ROW_BADGE_CLASS = TABLE_ROW_DENSE.badge;
 const ROW_HEIGHT_PX = TABLE_ROW_DENSE.rowHeightPx;
+
+/**
+ * Ячейка строки доски. Вертикальный отступ — ноль, а не 4px общего набора:
+ * самое высокое содержимое строки — кнопка действия 24px, и с отступом 4+4px
+ * это давало 32px контента; с границей ячейки (1px, у последней строки блока
+ * 3px) строка вырастала до 33/35px, а виртуализация считает её 32px
+ * (`ROW_HEIGHT_PX`) и разъезжалась с раскладкой. Строка обязана быть ровно
+ * 32px, поэтому отступ убран, а содержимое центрируется `align-middle`.
+ * Уточнение объявлено рядом с доской и развёрнуто поверх общего набора
+ * (ADR-0030).
+ */
+const ROW_CELL_CLASS = cn(TABLE_ROW_DENSE.cell, "py-0 align-middle");
 
 /**
  * Ячейка черновика у выделенной строки: «Годные» и «Брак» становятся полями
@@ -1175,10 +1186,14 @@ export function SectionTasksBoard({
         continue;
       }
 
-      // В массовом режиме группа раскрыта: её строки — то место, куда
-      // раскладывается групповой ввод, и сворачивать их оператору нечем
-      // (шапка в этом режиме выбирает группу, а не сворачивает её, #283).
-      const isCollapsed = bulkMode ? false : collapsedGroups.has(entry.key);
+      // В массовом режиме группа раскрыта, когда в ней есть выделенная строка:
+      // раскрытие — следствие выбора, а не входа в режим. Сам вход в групповые
+      // операции ничего не раскрывает (свёрнутая группа остаётся свёрнутой),
+      // а выделение группы целиком раскрывает её строки; снятие выбора с
+      // последней строки возвращает группу к прежнему состоянию.
+      const hasSelectedRow =
+        bulkMode && group.tasks.some((task) => bulkSelection?.isSelected(task.id) === true);
+      const isCollapsed = hasSelectedRow ? false : collapsedGroups.has(entry.key);
       items.push({
         kind: "group",
         key: `group-${entry.key}`,
@@ -1199,10 +1214,11 @@ export function SectionTasksBoard({
       }
     }
     return items;
-    // `bulkMode` — в зависимостях: в массовом режиме группы раскрыты, и без
-    // него список строк не пересчитался бы при включении режима (строки
-    // остались бы свёрнутыми, и ввод в них был бы недоступен).
-  }, [boardEntries, collapsedGroups, bulkMode]);
+    // `bulkMode` — в зависимостях: в массовом режиме раскрытие группы зависит
+    // от выделения, и без него список строк не пересчитался бы при включении
+    // режима. `bulkSelection` — по той же причине: выделение строки раскрывает
+    // её группу.
+  }, [boardEntries, collapsedGroups, bulkMode, bulkSelection]);
 
   const renderWaitingDivider = useCallback((row: Extract<VirtualBoardRow, { kind: "divider" }>) => (
     <tr key={row.key} data-testid="waiting-divider">

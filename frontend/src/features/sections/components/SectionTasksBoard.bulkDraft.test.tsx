@@ -176,7 +176,7 @@ describe("SectionTasksBoard: массовый ввод факта", () => {
     expect(onIssue).toHaveBeenCalledWith(expect.objectContaining({ text: expect.stringContaining("целое") }));
   });
 
-  it("включение массового режима раскрывает группы — строки доступны для ввода", () => {
+  it("включение массового режима не раскрывает группы: строки открывает выбор группы", () => {
     render(
       <Harness
         tasks={[
@@ -188,15 +188,42 @@ describe("SectionTasksBoard: массовый ввод факта", () => {
 
     // Сначала выходим из режима: группа из двух заданий свёрнута, строк нет.
     fireEvent.click(screen.getByRole("button", { name: "выйти из массового режима" }));
-    expect(within(desktop()).queryByLabelText("SKU-A: годные группы")).toBeNull();
     expect(within(desktop()).queryAllByText("SKU-A")).toHaveLength(1);
 
-    // Включение режима обязано раскрыть группу: её строки — место массового
-    // ввода, а сворачивать их в этом режиме оператору нечем.
+    // Вход в режим ничего не раскрывает: раскрытие — следствие выбора, а не
+    // входа в групповые операции.
     fireEvent.click(screen.getByRole("button", { name: "включить массовый режим" }));
+    expect(within(desktop()).getAllByText("SKU-A")).toHaveLength(1);
+    expect(within(desktop()).queryByLabelText("SKU-A: годные")).toBeNull();
 
-    expect(within(desktop()).getByLabelText("SKU-A: годные группы")).toBeTruthy();
+    // Выбор группы целиком (клик по шапке) раскрывает её строки — и сразу
+    // выделяет все: поля ввода открыты у каждой.
+    fireEvent.click(within(desktop()).getByLabelText("SKU-A: годные группы").closest("tr")!);
     expect(within(desktop()).getAllByText("SKU-A").length).toBeGreaterThan(1);
+    expect(within(desktop()).getAllByLabelText("SKU-A: годные")).toHaveLength(2);
+  });
+
+  it("повторный клик по лишней строке снимает её выбор, а последняя снимает выбор группы", () => {
+    render(
+      <Harness
+        tasks={[
+          makeTask({ id: 1, product_sku: "SKU-A", cache: { ...makeTask().cache, issued_quantity: "10" } }),
+          makeTask({ id: 2, product_sku: "SKU-A", cache: { ...makeTask().cache, issued_quantity: "5" } }),
+        ]}
+      />,
+    );
+
+    fireEvent.click(within(desktop()).getByLabelText("SKU-A: годные группы").closest("tr")!);
+    const rows = within(desktop()).getAllByLabelText("SKU-A: годные").map((input) => input.closest("tr")!);
+    expect(rows).toHaveLength(2);
+
+    // Сняли выбор с одной строки — группа осталась раскрытой: в ней есть выбор.
+    fireEvent.click(rows[0]);
+    expect(within(desktop()).getAllByLabelText("SKU-A: годные")).toHaveLength(1);
+
+    // Сняли с последней — раскрывать нечего, группа вернулась к свёрнутому виду.
+    fireEvent.click(rows[1]);
+    expect(within(desktop()).queryAllByText("SKU-A")).toHaveLength(1);
   });
 
   it("групповое поле раскладывает количество по строкам сверху вниз", () => {
