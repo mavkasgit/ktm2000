@@ -82,14 +82,24 @@ function readHolder(file) {
   }
 }
 
-/** Занять свободный слот или вернуть null, если все заняты. */
-export function tryAcquireSlot(dir, max, payload, { alive = isProcessAlive } = {}) {
+/**
+ * Занять свободный слот или вернуть null, если все заняты.
+ *
+ * `onReclaim(holder)` зовётся для каждого слота, чей держатель **мёртв**,
+ * непосредственно перед удалением файла слота. Это единственный момент, когда
+ * известно, чей прогон оставил клоны: файл слота удаляется, и следующий читатель
+ * уже ничего не увидит (#306, уборка клонов брошенного прогона в чужом
+ * дереве). Возраст слота для этого НЕ годится: вызывающий получит только
+ * умершие держатели.
+ */
+export function tryAcquireSlot(dir, max, payload, { alive = isProcessAlive, onReclaim } = {}) {
   fs.mkdirSync(dir, { recursive: true });
   for (let index = 0; index < max; index += 1) {
     const file = slotFile(dir, index);
     const holder = readHolder(file);
     if (holder && !alive(holder.pid)) {
       // Держатель умер, не достучавшись до `finally` (kill -9, падение ОС).
+      onReclaim?.(holder, { index, reason: "держатель мёртв" });
       fs.rmSync(file, { force: true });
     }
     try {
@@ -129,6 +139,7 @@ export async function acquireSlot({
   staleMs = DEFAULT_STALE_MS,
   pollMs = POLL_MS,
   log = console.log,
+  onReclaim,
   alive = isProcessAlive,
   now = Date.now,
 } = {}) {
@@ -139,15 +150,25 @@ export async function acquireSlot({
       const file = slotFile(dir, index);
       const holder = readHolder(file);
       const age = holder ? now() - (holder.at ?? 0) : 0;
-      if (holder && (age > staleMs || !alive(holder.pid))) {
+      if (holder && !alive(holder.pid)) {
+        log(
+          `[e2e:run] слот ${index}: держатель (pid ${holder.pid ?? "?"}) мёртв — снимаю`,
+        );
+        // Мёртвый держатель — единственный повод отдать его вызывающему:
+        // его прогон не убрал за собой клоны (#306).
+        onReclaim?.(holder, { index, reason: "держатель мёртв" });
+        fs.rmSync(file, { force: true });
+      } else if (holder && age > staleMs) {
+        // Просроченный, но ЖИВОЙ держатель: слот отнимаем, а чужие клоны не
+        // трогаем — прогон идёт, и его данные ещё могут понадобиться.
         log(
           `[e2e:run] слот ${index}: держатель (pid ${holder.pid ?? "?"}, ` +
-            `${Math.round(age / 60_000)} мин) мёртв или просрочен — снимаю`,
+            `${Math.round(age / 60_000)} мин) просрочен, но жив — снимаю без уборки`,
         );
         fs.rmSync(file, { force: true });
       }
     }
-    const slot = tryAcquireSlot(dir, max, payload, { alive });
+    const slot = tryAcquireSlot(dir, max, payload, { alive, onReclaim });
     if (slot) return slot;
     if (!announced) {
       const busy = describeHolders(dir, max, { alive })
