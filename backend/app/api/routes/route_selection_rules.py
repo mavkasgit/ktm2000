@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from dataclasses import dataclass, field
 from typing import Any, Literal
 
 from fastapi import APIRouter, Depends, HTTPException, Query, Response, status
@@ -9,7 +10,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.api.deps import REFERENCES_WRITER_ROLES, require_role
 from app.core.database import get_db
-from app.models.route import RouteRuleProfile, RouteSelectionRule
+from app.models.route import RouteRuleProfile, RouteSelectionRule, SectionOperation
 from app.models.section import Section
 from app.seeds.canon.models import (
     ConditionOperator,
@@ -106,7 +107,7 @@ async def list_route_selection_rules(
         stmt = stmt.where(RouteSelectionRule.profile_id == profile_id)
     stmt = stmt.order_by(RouteSelectionRule.priority.desc(), RouteSelectionRule.id.asc())
     rules = (await db.execute(stmt)).scalars().all()
-    return [await _rule_out(db, rule) for rule in rules]
+    return await _rule_outs(db, rules)
 
 
 @router.post(
@@ -258,28 +259,113 @@ async def _validate_payload(db: AsyncSession, payload: RouteSelectionRuleIn) -> 
             raise HTTPException(status_code=422, detail="Action references unknown section_code")
 
 
-async def _rule_out(db: AsyncSession, rule: RouteSelectionRule) -> RouteSelectionRuleOut:
-    section_ids = {
-        int(action.get("section_id"))
-        for action in (rule.actions or [])
-        if action.get("section_id") is not None
-    }
-    sections = {}
-    if section_ids:
-        rows = (await db.execute(select(Section).where(Section.id.in_(section_ids)))).scalars().all()
-        sections = {section.id: section for section in rows}
 
-    # Load section operations for set_operation actions
-    from app.models.route import SectionOperation
-    section_ops: dict[int, dict[str, str]] = {}  # section_id -> {op_code -> op_name}
-    for action in (rule.actions or []):
-        sid = action.get("section_id")
-        op_code = action.get("operation_code")
-        if sid and op_code and sid not in section_ops:
-            ops = (await db.execute(
-                select(SectionOperation).where(SectionOperation.section_id == sid)
-            )).scalars().all()
-            section_ops[sid] = {o.operation_code: o.operation_name for o in ops}
+@dataclass(slots=True)
+class RuleOutPrefetch:
+    """Справочники для списка правил — по одному запросу на справочник (#294).
+
+    Без него ``_rule_out`` читала участки, операции и профиль на каждое
+    правило: список из n правил стоил до 3n запросов. Заполняется один раз на
+    список, ``_rule_out`` после этого ходит только в память.
+    """
+
+    sections_by_id: dict[int, Section] = field(default_factory=dict)
+    ops_by_section: dict[int, dict[str, str]] = field(default_factory=dict)
+    profiles_by_id: dict[int, RouteRuleProfile] = field(default_factory=dict)
+
+
+async def _load_rule_out_prefetch(
+    db: AsyncSession, rules: list[RouteSelectionRule]
+) -> RuleOutPrefetch:
+    """Собрать снимок участков, операций и профилей для списка правил."""
+    prefetch = RuleOutPrefetch()
+    section_ids: set[int] = set()
+    operation_section_ids: set[int] = set()
+    profile_ids: set[int] = set()
+    for rule in rules:
+        for action in rule.actions or []:
+            sid = action.get("section_id")
+            if sid is not None:
+                section_ids.add(int(sid))
+                if action.get("operation_code"):
+                    operation_section_ids.add(int(sid))
+        if rule.profile_id is not None:
+            profile_ids.add(int(rule.profile_id))
+
+    if section_ids:
+        rows = (
+            await db.execute(select(Section).where(Section.id.in_(section_ids)))
+        ).scalars().all()
+        prefetch.sections_by_id = {row.id: row for row in rows}
+    if operation_section_ids:
+        ops = (
+            await db.execute(
+                select(SectionOperation).where(
+                    SectionOperation.section_id.in_(operation_section_ids)
+                )
+            )
+        ).scalars().all()
+        for op in ops:
+            prefetch.ops_by_section.setdefault(op.section_id, {})[op.operation_code] = op.operation_name
+    if profile_ids:
+        profiles = (
+            await db.execute(
+                select(RouteRuleProfile).where(RouteRuleProfile.id.in_(profile_ids))
+            )
+        ).scalars().all()
+        prefetch.profiles_by_id = {profile.id: profile for profile in profiles}
+    return prefetch
+
+
+async def _rule_outs(
+    db: AsyncSession, rules: list[RouteSelectionRule]
+) -> list[RouteSelectionRuleOut]:
+    """Отдать список правил одним снимком справочников."""
+    prefetch = await _load_rule_out_prefetch(db, rules)
+    return [await _rule_out(db, rule, prefetch=prefetch) for rule in rules]
+
+
+async def _rule_out(
+    db: AsyncSession,
+    rule: RouteSelectionRule,
+    *,
+    prefetch: RuleOutPrefetch | None = None,
+) -> RouteSelectionRuleOut:
+    """Отдать правило; справочники берутся из ``prefetch``, если он задан.
+
+    Без снимка поведение прежнее: правило читает справочники само (так
+    работают одиночные вызовы — создание, правка, одно правило).
+    """
+    if prefetch is not None:
+        sections = {
+            int(action.get("section_id")): prefetch.sections_by_id[int(action.get("section_id"))]
+            for action in (rule.actions or [])
+            if action.get("section_id") is not None
+            and int(action.get("section_id")) in prefetch.sections_by_id
+        }
+        section_ops = prefetch.ops_by_section
+    else:
+        section_ids = {
+            int(action.get("section_id"))
+            for action in (rule.actions or [])
+            if action.get("section_id") is not None
+        }
+        sections = {}
+        if section_ids:
+            rows = (await db.execute(select(Section).where(Section.id.in_(section_ids)))).scalars().all()
+            sections = {section.id: section for section in rows}
+
+        # Load section operations for set_operation actions
+        from app.models.route import SectionOperation
+        section_ops: dict[int, dict[str, str]] = {}  # section_id -> {op_code -> op_name}
+        for action in (rule.actions or []):
+            sid = action.get("section_id")
+            op_code = action.get("operation_code")
+            if sid and op_code and sid not in section_ops:
+                ops = (await db.execute(
+                    select(SectionOperation).where(SectionOperation.section_id == sid)
+                )).scalars().all()
+                section_ops[sid] = {o.operation_code: o.operation_name for o in ops}
 
     actions = []
     for action in rule.actions or []:
@@ -306,7 +392,11 @@ async def _rule_out(db: AsyncSession, rule: RouteSelectionRule) -> RouteSelectio
     profile_code = None
     profile_name = None
     if rule.profile_id is not None:
-        profile = await db.get(RouteRuleProfile, rule.profile_id)
+        profile = (
+            prefetch.profiles_by_id.get(int(rule.profile_id))
+            if prefetch is not None
+            else await db.get(RouteRuleProfile, rule.profile_id)
+        )
         if profile:
             profile_code = profile.code
             profile_name = profile.name
