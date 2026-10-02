@@ -78,7 +78,14 @@ class User(Base):
     )
 
     section = relationship("Section", back_populates="legacy_users")
-    sections = relationship("Section", secondary=user_sections, back_populates="users", lazy="selectin")
+    # НЕ мёртвая связь, в отличие как считала инвентаризация (#303): её читает
+    # свойство `section_ids`, а его отдают `UserOut` и `MeResponse`. Проверено
+    # тестами — с `lazy="raise"` падают 27 тестов (`section_ids` читает
+    # `self.sections`). Остаётся selectin; выигрыш здесь недостижим без смены
+    # формы ответа, а это вне тикета.
+    sections = relationship(
+        "Section", secondary=user_sections, back_populates="users", lazy="selectin"
+    )
 
     @property
     def section_ids(self) -> list[int]:
