@@ -2,6 +2,8 @@ import { execFileSync } from "child_process";
 import fs from "fs";
 import path from "path";
 
+import { workerBackendUrls, workerSlot } from "./worker-slot";
+
 // Без `E2E_API_URL` бьём не в стенд, а в devstack на :8012 — тихий увод
 // прогона в чужую БД. Адрес приходит из обёртки `scripts/run-e2e.mjs`
 // (свободный порт на каждый прогон), поэтому падать здесь безопасно:
@@ -12,7 +14,23 @@ if (!process.env.E2E_API_URL) {
       "Запускай прогон через npm run test:e2e (или test:e2e:smoke / test:e2e:ui).",
   );
 }
-export const BACKEND_URL = process.env.E2E_API_URL.replace(/\/api$/, "");
+
+// Адрес backend'а **слота этого воркера** (#289). Прямые вызовы из Node идут
+// мимо браузера, а значит мимо заголовка `x-e2e-worker`, по которому роутер
+// `/api` выбирает backend: адрес выбирается здесь же, по слоту воркера.
+//
+// Без этого все воркеры сеяли бы в БД backend'а 0, а страница работала бы со
+// своей: тест получал «Готово к передаче» по чужой строке, а набор данных для
+// проверки лежал в другой базе.
+const workerUrls = workerBackendUrls();
+const workerApiUrl = workerUrls[workerSlot()];
+if (!workerApiUrl) {
+  throw new Error(
+    `Слот ${workerSlot()} просит backend, а в прогоне их ${workerUrls.length}: ` +
+      "адреса backend'ов (E2E_WORKER_API_URLS) не совпадают с числом воркеров.",
+  );
+}
+export const BACKEND_URL = workerApiUrl.replace(/\/api$/, "");
 
 /**
  * Bearer стенда для прямых вызовов из Node. Раньше эти вызовы шли анонимом и
@@ -76,10 +94,7 @@ export async function ensureDbBootstrapped(): Promise<void> {
   if (templatesOk && routesOk) {
     return; // БД инициализирована — ничего не перезаписываем
   }
-  const dbUrl =
-    process.env.E2E_TEST_DATABASE_URL ??
-    readStandEnvVar("E2E_TEST_DATABASE_URL") ??
-    process.env.DATABASE_URL;
+  const dbUrl = workerStandEnvVar("DATABASE_URL") ?? workerStandEnvVar("E2E_TEST_DATABASE_URL");
   if (!dbUrl) {
     throw new Error(
       "БД пуста, но URL не задан: установите E2E_TEST_DATABASE_URL или DATABASE_URL в .env.e2e",
@@ -136,10 +151,21 @@ async function hasAnyRoute(): Promise<boolean> {
 }
 
 
-/** Прочитать KEY=VALUE из env-файла стенда (без зависимости от dotenv). */
-function readStandEnvVar(key: string): string | undefined {
+/**
+ * Значение из env-файла клона **этого воркера** (#289).
+ *
+ * `E2E_RUN_ENV_FILES` даёт файлы клонов по воркерам (`run-tier.mjs`),
+ * `E2E_ENV_FILE` — файл воркера 0. Прежний чтец брал `.env.e2e`, а там DSN
+ * **шаблона**: сид ушёл бы в базу, которой тест не касается.
+ */
+function workerStandEnvVar(key: string): string | undefined {
+  const files = process.env.E2E_RUN_ENV_FILES
+    ? (JSON.parse(process.env.E2E_RUN_ENV_FILES) as string[])
+    : [];
+  const file = files[workerSlot()] ?? process.env.E2E_ENV_FILE;
+  if (!file) return undefined;
   try {
-    const text = fs.readFileSync(path.resolve(process.cwd(), "../.env.e2e"), "utf8");
+    const text = fs.readFileSync(file, "utf8");
     return text.match(new RegExp(`^${key}=(.*)$`, "m"))?.[1]?.trim();
   } catch {
     return undefined;

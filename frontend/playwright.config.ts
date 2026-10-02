@@ -81,6 +81,31 @@ if (!frontendPort || !backendPort) {
   );
 }
 
+// Роутер `/api` стенда и список backend'ов по воркерам (#289). Их выдаёт
+// `scripts/run-e2e.mjs` — по одному backend'у на воркер Playwright, у каждого
+// своя БД. Ручной стенд (`PW_REUSE_STACK=1`) их не выдаёт: тогда backend один
+// и `/api` уходит прямо в него, роутер не нужен.
+const workerBackendPorts = process.env.E2E_WORKER_API_URLS
+  ? (JSON.parse(process.env.E2E_WORKER_API_URLS) as string[]).map(
+      (url) => Number(new URL(url).port),
+    )
+  : [backendPort];
+const routerPort = Number(process.env.E2E_ROUTER_PORT ?? backendPort);
+
+// Env-файлы клонов: по одному на воркер. `E2E_RUN_ENV_FILES` даёт
+// `run-tier.mjs` после `e2e:prep`; при одном воркере остаётся файл из
+// `E2E_ENV_FILE`, как и раньше.
+const workerEnvFiles: string[] = process.env.E2E_RUN_ENV_FILES
+  ? (JSON.parse(process.env.E2E_RUN_ENV_FILES) as string[])
+  : [STAND_ENV_FILE];
+if (workerEnvFiles.length !== workerBackendPorts.length) {
+  throw new Error(
+    `Воркерных env-файлов (${workerEnvFiles.length}) и backend'ов ` +
+      `(${workerBackendPorts.length}) поровну не вышло: изоляция БД по воркерам ` +
+      "не собралась (см. docs/night/tickets/T-289-*.md).",
+  );
+}
+
 // Владение dev-стеком — у Playwright, а не у собственных setup/teardown.
 //
 // Что было: `globalSetup` поднимал `npm run dev` через
@@ -136,30 +161,35 @@ export default defineConfig({
     screenshot: "on",
     video: "retain-on-failure",
   },
+  // Backend'ов столько же, сколько воркеров прогона (#289): у каждого своя
+  // БД (клон из `e2e:prep`) и свой порт. `/api` стенда (роутер
+  // `scripts/e2e-api-router.mjs`) выбирает backend по заголовку
+  // `x-e2e-worker`, который ставит фикстура `extraHTTPHeaders`.
   webServer: reuseStack
     ? undefined
     : [
-        {
+        ...workerBackendPorts.map((port, index) => ({
           // БД поднимается до прогона (`npm run e2e:prep`): `webServer`
           // стартует команды параллельно, а `npm run backend` сам Docker не
           // поднимает. ENV_FILE уводит backend на БД стенда (`.env.e2e`),
           // а не на общую dev-БД из `.env.dev`; BACKEND_PORT — на порт стенда,
           // чтобы стек не делил 8012 с работающим devstack.
           command: "npm --prefix .. run backend",
-          url: `http://127.0.0.1:${backendPort}/api/health`,
-          env: { ENV_FILE: STAND_ENV_FILE, BACKEND_PORT: String(backendPort) },
+          url: `http://127.0.0.1:${port}/api/health`,
+          env: { ENV_FILE: workerEnvFiles[index], BACKEND_PORT: String(port) },
           reuseExistingServer: false,
           timeout: 120_000,
           stdout: "pipe" as const,
           stderr: "pipe" as const,
-        },
+        })),
         {
           // Порт стенда задаётся аргументами vite: в конфиге он зашит на 5172
           // (LAN-ссылки devstack), а стенд идёт на своём. VITE_PROXY_TARGET
-          // уводит /api на backend стенда, иначе UI ходил бы в чужой.
+          // уводит /api на роутер стенда, а не на backend напрямую: у
+          // воркеров разные БД, и выбирать их должен роутер.
           command: `npm run dev -- --port ${frontendPort} --strictPort`,
           url: `http://127.0.0.1:${frontendPort}/`,
-          env: { VITE_PROXY_TARGET: `http://127.0.0.1:${backendPort}` },
+          env: { VITE_PROXY_TARGET: `http://127.0.0.1:${routerPort}` },
           reuseExistingServer: false,
           timeout: 120_000,
           stdout: "pipe" as const,

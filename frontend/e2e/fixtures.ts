@@ -2,6 +2,7 @@ import { test as base, expect, type Page } from "@playwright/test";
 
 import { apiStandToken, ensureDbBootstrapped } from "./api-helpers";
 import { passCache, testCacheKey } from "./pass-cache";
+import { workerSlot } from "./worker-slot";
 
 /**
  * Shared fixtures for E2E tests.
@@ -16,6 +17,15 @@ import { passCache, testCacheKey } from "./pass-cache";
  * В `oidc` вход идёт в Authentik на отдельной машине, и его моргание
  * превращало зелёный прогон в прогон «на ретраях». `auto` оставлен для
  * ручной отладки — он читает `/api/auth/oidc/config` и выбирает по факту.
+ *
+ * Изоляция БД по воркерам (#289)
+ * -----------------------------
+ * У каждого воркера Playwright своя БД и свой backend, а `/api` стенда —
+ * общий адрес: роутер `scripts/e2e-api-router.mjs` выбирает backend по
+ * заголовку `x-e2e-worker`. Его и ставит фикстура `extraHTTPHeaders` — по
+ * `workerInfo.workerIndex`, то есть по тому воркеру, который исполняет тест.
+ * Без него запросы ушли бы в backend 0, и `apiResetAll()` одного воркера
+ * по-прежнему сносил бы данные другого.
  */
 
 type AuthMode = "auto" | "break-glass" | "oidc";
@@ -195,7 +205,19 @@ const testWithPassCache = base.extend<{ _passCache: void }>({
   ],
 });
 
-export const test = testWithPassCache.extend<{
+// `extraHTTPHeaders` — опция Playwright, поэтому переопределяется как
+// фикстура: значение считается один раз на воркер, а не на тест. Заголовок
+// уходит со всеми запросами контекста (`page`, `page.request`), и именно по
+// нему роутер `/api` выбирает backend с БД этого воркера (#289).
+const testWithWorkerStand = testWithPassCache.extend<{
+  extraHTTPHeaders: Record<string, string>;
+}>({
+  extraHTTPHeaders: async ({}, use, workerInfo) => {
+    await use({ "x-e2e-worker": String(workerSlot(workerInfo.workerIndex)) });
+  },
+});
+
+export const test = testWithWorkerStand.extend<{
   authenticatedPage: Page;
   loginAsAdmin: () => Promise<void>;
   seedTestData: () => Promise<void>;
