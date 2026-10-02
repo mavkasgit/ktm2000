@@ -25,7 +25,7 @@ from app.models.production_plan import (
     ProductionPlanStatus,
     require_current_length_model,
 )
-from app.models.route import ProductionRoute, RouteStage
+from app.models.route import ProductionRoute, RouteOperation, RouteStage
 from app.models.section import Section
 from app.models.spg import SpgSection, StorageProductionGroup
 from app.models.transfer import Transfer
@@ -451,38 +451,76 @@ async def get_production_planning_overview(
         )
         for pos in positions
     }
-
-    # Collect all section IDs from resolved routes
+    # Этапы маршрутов — ОДНИМ запросом по колонкам для всех уникальных
+    # route_id (#303). Раньше `select(RouteStage)` звался в цикле по каждому
+    # route_id, а ORM-объект RouteStage тянет за собой две selectin-связи
+    # (operations и ProductionRoute.stages через backref) — на 33 маршрутах
+    # это 33 × 3 ≈ 99 запросов вместо одного.
+    #
+    # Берём сразу всё, что нужно обоим потребителям: section_ids — для списка
+    # участков, а (id, section_id, sequence) + имена операций — для ветки
+    # «позиция без задач стоит в очереди». Обе выборки по колонкам, поэтому
+    # selectin не срабатывает нигде.
     section_ids: set[int] = set()
-    route_stages_cache: dict[int, list[RouteStage]] = {}
-    for pos in positions:
-        route_id = position_route_map[pos.id][0]
-        if route_id is not None:
-            if route_id not in route_stages_cache:
-                stages = (
-                    await db.execute(
-                        select(RouteStage)
-                        .where(RouteStage.route_id == route_id)
-                        .join(Section, RouteStage.section_id == Section.id)
-                        .where(Section.is_active == True)
-                        .order_by(RouteStage.sequence)
+    section_ids_by_route: dict[int, list[int]] = {}
+    stages_by_route: dict[int, list[tuple[int, int, int]]] = {}
+    route_ids = {
+        route_id
+        for route_id in (position_route_map[p.id][0] for p in positions)
+        if route_id is not None
+    }
+    if route_ids:
+        stage_rows = (
+            await db.execute(
+                select(
+                    RouteStage.route_id,
+                    RouteStage.id,
+                    RouteStage.section_id,
+                    RouteStage.sequence,
+                )
+                .join(Section, RouteStage.section_id == Section.id)
+                .where(RouteStage.route_id.in_(route_ids))
+                .where(Section.is_active == True)
+                .order_by(RouteStage.route_id, RouteStage.sequence)
+            )
+        ).all()
+        ops_by_stage: dict[int, list[tuple[str, str | None]]] = {}
+        stage_ids = {row.id for row in stage_rows}
+        if stage_ids:
+            for op in (
+                await db.execute(
+                    select(
+                        RouteOperation.route_stage_id,
+                        RouteOperation.operation_name,
+                        RouteOperation.operation_code,
                     )
-                ).scalars().all()
-                route_stages_cache[route_id] = stages
-            for stage in route_stages_cache[route_id]:
-                section_ids.add(stage.section_id)
+                    .where(RouteOperation.route_stage_id.in_(stage_ids))
+                    .order_by(RouteOperation.sequence)
+                )
+            ).all():
+                ops_by_stage.setdefault(op.route_stage_id, []).append(
+                    (op.operation_name, op.operation_code)
+                )
+        for row in stage_rows:
+            section_ids_by_route.setdefault(row.route_id, []).append(row.section_id)
+            stages_by_route.setdefault(row.route_id, []).append(
+                (row.id, row.section_id, row.sequence)
+            )
+            section_ids.add(row.section_id)
 
     if not section_ids:
         return ProductionPlanningOverview(sections=[])
 
-    # Fetch sections
-    sections = (
+    # Секции — колонками, не ORM-объектами (#303): SectionOut отдаёт только
+    # id/code/name/type, а ORM-объект Section тянет три selectin-связи
+    # (users, operations, spg_links) — 4 запроса там, где хватает одного.
+    section_rows = (
         await db.execute(
-            select(Section)
+            select(Section.id, Section.code, Section.name, Section.type)
             .where(Section.id.in_(section_ids), Section.is_active == True)
             .order_by(Section.sort_order)
         )
-    ).scalars().all()
+    ).all()
 
     # Fetch all section plan lines and work tasks for approved positions
     position_ids = [p.id for p in positions]
@@ -537,7 +575,7 @@ async def get_production_planning_overview(
     # Build result
     result_sections: list[SectionOut] = []
 
-    for section in sections:
+    for section_id_, section_code, section_name, section_type in section_rows:
         section_positions: list[PositionOut] = []
         ready_count = 0
         in_progress_count = 0
@@ -547,7 +585,7 @@ async def get_production_planning_overview(
             route_id, route_name, route_source = position_route_map[pos.id]
 
             # Find work tasks for this position in this section
-            lines = pos_section_lines.get((pos.id, section.id), [])
+            lines = pos_section_lines.get((pos.id, section_id_), [])
             work_tasks_out: list[WorkTaskOut] = []
             total_steps = 0
             completed_steps = 0
@@ -579,24 +617,26 @@ async def get_production_planning_overview(
                             sequence=stage.sequence if stage else 0,
                         )
                     )
-
             if not work_tasks_out and route_id is not None:
                 # No work tasks yet — position is in queue for this section
-                # Show it if the route includes this section
-                stages = route_stages_cache.get(route_id, [])
-                for stage in stages:
-                    if stage.section_id == section.id:
+                # Show it if the route includes this section. Этапы берутся из
+                # общей выборки выше, ORM-объекты не материализуются (#303).
+                for stage_id, stage_section_id, stage_sequence in stages_by_route.get(
+                    route_id, []
+                ):
+                    if stage_section_id == section_id_:
+                        stage_ops = ops_by_stage.get(stage_id) or []
                         total_steps += 1
                         work_tasks_out.append(
                             WorkTaskOut(
                                 id=0,
-                                route_stage_id=stage.id,
-                                operation_name=", ".join(op.operation_name for op in stage.operations) if stage.operations else "",
-                                operation_code=stage.operations[0].operation_code if stage.operations else None,
+                                route_stage_id=stage_id,
+                                operation_name=", ".join(name for name, _code in stage_ops),
+                                operation_code=stage_ops[0][1] if stage_ops else None,
                                 status="waiting",
                                 planned_quantity=float(pos.quantity),
                                 completed_quantity=0.0,
-                                sequence=stage.sequence,
+                                sequence=stage_sequence,
                             )
                         )
 
@@ -636,10 +676,10 @@ async def get_production_planning_overview(
 
         result_sections.append(
             SectionOut(
-                section_id=section.id,
-                section_code=section.code,
-                section_name=section.name,
-                section_type=section.type,
+                section_id=section_id_,
+                section_code=section_code,
+                section_name=section_name,
+                section_type=section_type,
                 positions_count=len(section_positions),
                 ready_count=ready_count,
                 in_progress_count=in_progress_count,
