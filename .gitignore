@@ -9,6 +9,7 @@ repomix-output.txt
 .env.*
 !.env.example
 !.env.e2e
+!.env.test.example
 
 
 # Python
