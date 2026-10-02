@@ -181,16 +181,11 @@ async def committed_demand_by_product_ids(
             )
         )
     ).scalars().all()
-    resolved_cache: dict[tuple[str, ...], list[int]] = {}
+    pair_cache = product_pair_resolver.PairResolutionCache()
     for position in pair_positions:
-        resolved_key = product_pair_resolver.pair_component_key(
-            product_pair_resolver.paired_component_skus(position)
+        component_ids = await product_pair_resolver.resolve_effective_product_ids(
+            db, position, cache=pair_cache
         )
-        if resolved_key not in resolved_cache:
-            resolved_cache[resolved_key] = await product_pair_resolver.resolve_effective_product_ids(
-                db, position
-            )
-        component_ids = resolved_cache[resolved_key]
         if not component_ids:
             # Пара не резолвится (нет снапшота и строки в справочнике): списываем
             # с того, что записано в строках позиции, — иначе её запуск не
