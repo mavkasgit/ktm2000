@@ -18,7 +18,10 @@
 - :func:`completed_qty_sq` — SQL-форма «произведено/завершено» для set-based
   потребителей (ready-запрос, оракул консистентности);
 - :func:`compute_stock_section_transferable` — складская ветка (переехала из
-  ``transfers/services`` без изменения семантики).
+  ``transfers/services`` без изменения семантики);
+- :func:`stock_line_bulk` — складская ветка списком: три групповых запроса
+  вместо трёх на строку (тикет #290); :func:`stock_line` — тонкая
+  делегация к ней.
 
 Три ветки живут ТОЛЬКО здесь:
 
@@ -81,12 +84,14 @@ from app.services.shopfloor.output_rows import (
     build_task_output_rows,
 )
 from app.stock import Reason
-from app.stock.ledger import net_by_reason, net_by_reason_sq
+from app.stock.ledger import net_by_reason, net_by_reason_sq, net_quantity_expr
 from app.stock.models import StockTransaction
 from app.transfers import budget
 
 __all__ = [
     "BudgetKind",
+    "StockLineRequest",
+    "StockLineResult",
     "TransferableLine",
     "completed_qty_sq",
     "compute_stock_section_transferable",
@@ -94,6 +99,7 @@ __all__ = [
     "plain_produced",
     "resolve_budget_kind",
     "stock_line",
+    "stock_line_bulk",
     "task_transferable",
     "task_transferable_lines",
     "task_transferable_lines_bulk",
@@ -234,48 +240,16 @@ async def compute_stock_section_transferable(
     100», а ``StockCommandService`` отказал бы — сырьё и подготовленное
     физически разный материал. Строка склада без плановой привязки даёт
     ``None`` → NULL-группа, куда и пишет неplan-driven путь.
+
+    Тонкая делегация к :func:`stock_line_bulk` — числа считает bulk-ядро
+    ветки (#290), второго расчёта здесь нет.
     """
-    from app.services.material_operations import completed_operations_for_task
-    from app.stock.models import QualityState, StockBalance
-    from app.stock.services import (
-        completed_operations_match_clause,
-        dimensions_match_clause,
-    )
-
-    # Размер группы: если явный не передан — берём из задания (канонический
-    # габарит плана). None = безразмерная legacy-группа.
-    dims = dimensions if dimensions is not None else task.dimensions
-
-    already_transferred = await net_by_reason(
+    results = await stock_line_bulk(
         db,
-        reason=Reason.TRANSFER_SEND,
-        section_plan_line_id=task.section_plan_line_id,
-        dims=dims,
+        [StockLineRequest(task=task, section=section, planned_qty=_dec(planned_qty), dims=dimensions)],
     )
-
-    plan_remaining = max(Decimal(0), _dec(planned_qty) - already_transferred)
-
-    # Тот же признак, что запишет TRANSFER_SEND: маршрут исходного задания
-    # до его собственного этапа включительно.
-    consume_ops = await completed_operations_for_task(db, task)
-
-    physical_stock_q = select(func.coalesce(func.sum(StockBalance.balance_qty), 0)).where(
-        StockBalance.location_id == section.id,
-        StockBalance.product_id == task.product_id,
-        StockBalance.balance_qty > 0,
-        StockBalance.quality_state == QualityState.GOOD,
-        completed_operations_match_clause(StockBalance.completed_operations, consume_ops),
-    )
-    # Задание несёт габарит (ADR-0001): остаток считается только по строке
-    # баланса этой размерности. Без длины — legacy-поведение (все группы).
-    if dims is not None:
-        physical_stock_q = physical_stock_q.where(
-            dimensions_match_clause(StockBalance.dimensions, dims)
-        )
-    physical_stock = _dec(await db.scalar(physical_stock_q))
-
-    transferable = budget.remaining_stock(plan_remaining, physical_stock)
-    return transferable, plan_remaining, physical_stock, already_transferred
+    result = results[0]
+    return result.line.budget, result.plan_remaining, result.line.produced, result.line.used
 
 
 async def _stock_planned_qty(db: AsyncSession, task: WorkTask) -> Decimal:
@@ -285,6 +259,231 @@ async def _stock_planned_qty(db: AsyncSession, task: WorkTask) -> Decimal:
     if line is not None and line.planned_quantity:
         planned_qty = _dec(line.planned_quantity)
     return planned_qty
+
+
+@dataclass(frozen=True)
+class StockLineRequest:
+    """Одна складская строка бюджета для bulk-прохода (#290).
+
+    ``dims`` — явный размер передачи (``None`` → габарит задания);
+    ``planned_qty`` — план строки (его резолв — забота вызывающего,
+    как и у :func:`stock_line`).
+    """
+
+    task: WorkTask
+    section: Section
+    planned_qty: Decimal
+    dims: dict | None = None
+
+
+@dataclass(frozen=True)
+class StockLineResult:
+    """Бюджет складской строки вместе с планом, из которого он посчитан."""
+
+    line: TransferableLine
+    plan_remaining: Decimal
+
+
+async def stock_line_bulk(
+    db: AsyncSession,
+    requests: Iterable[StockLineRequest],
+    *,
+    lines: dict[int, SectionPlanLine] | None = None,
+    stages: dict[int, RouteStage] | None = None,
+    consume_ops: dict[tuple[int, int], list[str]] | None = None,
+) -> list[StockLineResult]:
+    """Складские строки бюджета для СПИСКА запросов одним bulk-проходом (#290).
+
+    Одиночный :func:`stock_line` — тонкий делегат сюда, как
+    :func:`task_transferable_lines` делегирует к
+    :func:`task_transferable_lines_bulk`. Три групповых запроса вместо
+    трёх на строку:
+
+    - net ``TRANSFER_SEND`` сгруппирован по
+      ``(section_plan_line_id, dimensions)``; ``dims=None`` у запроса —
+      сумма всех групп ключа, как в ``net_by_reason(dims=None)``;
+    - ``StockBalance`` по (локации, изделию) сгруппирован по
+      (габарит, пройденные операции); совпадение с ключом строки
+      проверяется в Python теми же hash-ключами, которыми группирует
+      ledger (``_dimensions_hash_key`` / ``_completed_operations_hash_key``)
+      — это тот же приём, что уже используют bulk-ветки
+      ``operations_transform`` и пересчёт баланса в ``stock.services``;
+    - «пройденные операции» (ADR-0055) по парам ``(route_id, sequence)``:
+      если вызывающий передал подсказку ``consume_ops``, запроса нет вовсе,
+      без подсказки — та же выборка ``completed_operations_through_stage``.
+
+    Подсказки ``lines``/``stages`` — как у
+    :func:`task_transferable_lines_bulk`: объекты уже загружены основным
+    запросом ready-page; чего не хватает — добирается точечным ``db.get``
+    один раз на РАЗНЫЙ id. Формулы не копируются: строку собирает тот же
+    :class:`TransferableLine`, выбор формулы — в его ``budget``.
+
+    Возвращает результат ТОГО ЖЕ порядка, что и ``requests``.
+    """
+    from app.services.material_operations import completed_operations_through_stage
+    from app.stock.models import QualityState, StockBalance
+    from app.stock.services import (
+        _completed_operations_hash_key,
+        _dimensions_hash_key,
+    )
+
+    req_list = list(requests)
+    if not req_list:
+        return []
+
+    line_hints = dict(lines) if lines else {}
+    stage_hints = dict(stages) if stages else {}
+    ops_hints = dict(consume_ops) if consume_ops else {}
+
+    # ── Строки плана и этапы: подсказки, затем точечный db.get на id ──────
+    line_by_id: dict[int, SectionPlanLine | None] = {}
+    stage_by_id: dict[int, RouteStage | None] = {}
+    for req in req_list:
+        line_id = req.task.section_plan_line_id
+        if line_id not in line_by_id:
+            line_by_id[line_id] = line_hints.get(line_id)
+            if line_by_id[line_id] is None and line_id is not None:
+                line_by_id[line_id] = await db.get(SectionPlanLine, line_id)
+        stage_id = req.task.route_stage_id
+        if stage_id not in stage_by_id:
+            stage_by_id[stage_id] = stage_hints.get(stage_id)
+            if stage_by_id[stage_id] is None and stage_id is not None:
+                stage_by_id[stage_id] = await db.get(RouteStage, stage_id)
+
+    # ── Пройденные операции: подсказка, затем одним запросом на пару ───────
+    ops_by_pair: dict[tuple[int, int], list[str]] = dict(ops_hints)
+    missing_pairs: set[tuple[int, int]] = set()
+    for req in req_list:
+        line = line_by_id.get(req.task.section_plan_line_id)
+        stage = stage_by_id.get(req.task.route_stage_id)
+        if line is None or stage is None:
+            continue  # признак неизвестен → NULL-группа баланса
+        pair = (line.route_id, stage.sequence)
+        if pair not in ops_by_pair:
+            missing_pairs.add(pair)
+    for pair in sorted(missing_pairs):
+        ops_by_pair[pair] = await completed_operations_through_stage(
+            db, route_id=pair[0], through_sequence=pair[1]
+        )
+    ops_by_request: list[list[str] | None] = []
+    for req in req_list:
+        line = line_by_id.get(req.task.section_plan_line_id)
+        stage = stage_by_id.get(req.task.route_stage_id)
+        # Нет привязки к строке/этапу — признак неизвестен (как в
+        # completed_operations_for_task): NULL-группа баланса.
+        ops_by_request.append(
+            None if line is None or stage is None
+            else ops_by_pair[(line.route_id, stage.sequence)]
+        )
+
+    # ── net TRANSFER_SEND: один GROUP BY по (строка плана, габарит) ────────
+    line_ids = {
+        req.task.section_plan_line_id
+        for req in req_list
+        if req.task.section_plan_line_id is not None
+    }
+    net_by_key: dict[tuple[int, str | None], Decimal] = {}
+    net_total_by_line: dict[int, Decimal] = {}
+    if line_ids:
+        net_rows = (
+            await db.execute(
+                select(
+                    StockTransaction.section_plan_line_id,
+                    StockTransaction.dimensions,
+                    func.coalesce(func.sum(net_quantity_expr()), 0).label("net_quantity"),
+                )
+                .where(
+                    StockTransaction.reason == Reason.TRANSFER_SEND,
+                    StockTransaction.section_plan_line_id.in_(line_ids),
+                )
+                .group_by(
+                    StockTransaction.section_plan_line_id,
+                    StockTransaction.dimensions,
+                )
+            )
+        ).all()
+        for spl_id, dims_value, qty in net_rows:
+            amount = _dec(qty)
+            net_by_key[(spl_id, _dimensions_hash_key(dims_value))] = amount
+            net_total_by_line[spl_id] = net_total_by_line.get(spl_id, Decimal(0)) + amount
+
+    # ── Физический остаток: один запрос по (локации, изделия) ─────────────
+    location_ids = {req.section.id for req in req_list}
+    product_ids = {req.task.product_id for req in req_list if req.task.product_id is not None}
+    # (локация, изделие, признак операций) → {габарит: остаток}
+    balance_index: dict[tuple[int, int, str | None], dict[str | None, Decimal]] = {}
+    if location_ids and product_ids:
+        balance_rows = (
+            await db.execute(
+                select(
+                    StockBalance.location_id,
+                    StockBalance.product_id,
+                    StockBalance.completed_operations,
+                    StockBalance.dimensions,
+                    StockBalance.balance_qty,
+                )
+                .where(
+                    StockBalance.location_id.in_(location_ids),
+                    StockBalance.product_id.in_(product_ids),
+                    StockBalance.balance_qty > 0,
+                    StockBalance.quality_state == QualityState.GOOD,
+                )
+            )
+        ).all()
+        for loc_id, prod_id, ops_value, dims_value, qty in balance_rows:
+            key = (
+                loc_id,
+                prod_id,
+                _completed_operations_hash_key(ops_value),
+                _dimensions_hash_key(dims_value),
+            )
+            per_dims = balance_index.setdefault((key[0], key[1], key[2]), {})
+            per_dims[key[3]] = per_dims.get(key[3], Decimal(0)) + _dec(qty)
+
+    # ── Сборка строк: те же источники чисел, что у одиночного пути ─────────
+    results: list[StockLineResult] = []
+    for index, req in enumerate(req_list):
+        # Размер группы: если явный не передан — габарит задания
+        # (канонический габарит плана). None = безразмерная legacy-группа.
+        dims = req.dims if req.dims is not None else req.task.dimensions
+        dims_key = _dimensions_hash_key(dims)
+        # net читается по ключу ЗАДАНИЯ (так же, как net_by_reason(
+        # section_plan_line_id=task.section_plan_line_id)): строка плана
+        # может отсутствовать, а транзакции по её ключу — нет.
+        spl_id = req.task.section_plan_line_id
+        if dims is None:
+            already_transferred = net_total_by_line.get(spl_id, Decimal(0))
+        else:
+            already_transferred = net_by_key.get((spl_id, dims_key), Decimal(0))
+
+        plan_remaining = max(Decimal(0), _dec(req.planned_qty) - already_transferred)
+
+        # Тот же признак, что запишет TRANSFER_SEND: маршрут исходного
+        # задания до его собственного этапа включительно.
+        consume_ops_value = ops_by_request[index]
+        groups = balance_index.get(
+            (req.section.id, req.task.product_id, _completed_operations_hash_key(consume_ops_value))
+        )
+        if groups is None:
+            physical_stock = Decimal(0)
+        elif dims is None:
+            physical_stock = sum(groups.values(), Decimal(0))
+        else:
+            physical_stock = groups.get(dims_key, Decimal(0))
+
+        results.append(
+            StockLineResult(
+                line=TransferableLine(
+                    kind=BudgetKind.STOCK,
+                    dims=dims,
+                    planned=_dec(req.planned_qty),
+                    produced=physical_stock,
+                    used=already_transferred,
+                ),
+                plan_remaining=plan_remaining,
+            )
+        )
+    return results
 
 
 async def stock_line(
@@ -301,25 +500,17 @@ async def stock_line(
     ``planned_qty`` — явный план (``None`` → план строки плана, затем
     задания). И write-guard, и ready-страница со склада получают числа
     отсюда — второй сборки нет ни в services, ни в queries.
+
+    Тонкая делегация к :func:`stock_line_bulk` (#290): одиночный запрос —
+    это частный случай bulk-прохода.
     """
     if planned_qty is None:
         planned_qty = await _stock_planned_qty(db, task)
-    _transferable, _plan_remaining, physical_stock, already_transferred = (
-        await compute_stock_section_transferable(
-            db,
-            task=task,
-            section=section,
-            planned_qty=planned_qty,
-            dimensions=dims,
-        )
+    results = await stock_line_bulk(
+        db,
+        [StockLineRequest(task=task, section=section, planned_qty=planned_qty, dims=dims)],
     )
-    return TransferableLine(
-        kind=BudgetKind.STOCK,
-        dims=dims if dims is not None else task.dimensions,
-        planned=planned_qty,
-        produced=physical_stock,
-        used=already_transferred,
-    )
+    return results[0].line
 
 
 # ─── Ветки transform / plain ────────────────────────────────────────────────

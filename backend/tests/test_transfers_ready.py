@@ -17,7 +17,8 @@ from app.models.section import Section
 from app.models.work_task import WorkTask
 from app.services.material_operations import completed_operations_for_task
 from app.stock import Reason, StockCommand, StockCommandService
-from sqlalchemy import select
+from app.transfers.queries import list_ready_to_transfer
+from sqlalchemy import event, select
 
 from tests.helpers.transfers import (
     _make_dim_route_fixture,
@@ -25,6 +26,10 @@ from tests.helpers.transfers import (
     _seed_balance,
 )
 from tests.test_integrity_invariants import _make_user, _release_via_take_to_work
+from tests.test_stock_to_stock_transfer_ready import (
+    _make_finished_stock_to_shipment_fixture,
+    _seed_stock_balance,
+)
 
 
 async def _complete_source_tasks(session, setup: dict) -> list[int]:
@@ -189,6 +194,50 @@ async def test_ready_offset_limit_pagination(client, session) -> None:
 async def test_ready_limit_max_validation(client, session) -> None:
     response = await client.get("/api/transfers/ready?limit=1000")
     assert response.status_code == 422
+
+
+@pytest.mark.asyncio
+async def test_ready_sql_query_count_bounded(client, session) -> None:
+    """Регрессия N+1 (#290): обе ветки ready — не больше 15 SQL-запросов.
+
+    Замеряется сам ``list_ready_to_transfer`` (без auth/API-слоя): несколько
+    production-позиций и складская строка FG → SHIPMENT. Раньше складская
+    ветка ходила в БД ~7 раз на строку — любая возвратная N+1-петля
+    перешагнёт границу.
+    """
+    seeded = await _seed_many_ready_tasks(session, client, count=3)
+    setup = seeded["setup"]
+
+    fx = await _make_finished_stock_to_shipment_fixture(session, sku="RSQL-FG", qty=Decimal(40))
+    await _seed_stock_balance(
+        session,
+        user_id=setup["user"].id,
+        location_id=fx["sections"][0].id,
+        product_id=fx["product"].id,
+        qty=Decimal(100),
+    )
+    await _release_via_take_to_work(client, fx["position"].id)
+
+    count = 0
+    engine = session.bind.sync_engine
+
+    def _count(conn, cursor, statement, parameters, context, executemany):
+        nonlocal count
+        count += 1
+
+    event.listen(engine, "before_cursor_execute", _count)
+    try:
+        result = await list_ready_to_transfer(session, limit=50, offset=0)
+    finally:
+        event.remove(engine, "before_cursor_execute", _count)
+
+    # Обе ветки действительно дали строки (иначе замер пустой).
+    assert result["total"] >= 4, result["total"]
+    assert any(
+        item["next_section_code"] == fx["sections"][1].code
+        for item in result["items"]
+    ), "складская строка FG → SHIPMENT отсутствует"
+    assert count <= 15, f"list_ready_to_transfer выполнил {count} SQL-запросов (лимит 15)"
 
 
 @pytest.mark.asyncio

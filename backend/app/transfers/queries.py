@@ -14,6 +14,7 @@ dedicated ``/transfers`` UI page.
 from __future__ import annotations
 
 from collections.abc import Callable, Sequence
+from dataclasses import dataclass
 from datetime import datetime
 from decimal import Decimal, InvalidOperation
 from typing import Any
@@ -22,7 +23,7 @@ from typing import cast as tcast
 from fastapi import HTTPException
 from sqlalchemy import String, Subquery, and_, case, cast, func, or_, select
 from sqlalchemy.ext.asyncio import AsyncSession
-from sqlalchemy.orm import aliased
+from sqlalchemy.orm import aliased, lazyload
 
 from app.core.sorting import SortClause, apply_sort, parse_sort, sort_items
 from app.domain.dimensions import format_dimensions, parse_dimensions_filter
@@ -562,6 +563,17 @@ def _build_production_ready_query(
         )
         .outerjoin(next_stage, next_stage.id == next_line.route_stage_id)
         .outerjoin(next_section, next_section.id == next_line.section_id)
+        .options(
+            # ready-строке нужны только code/name/type секций: списки
+            # пользователей, операций и СПГ грузились selectin'ом на КАЖДЫЙ
+            # алиас секции впустую — шесть запросов на каждый проход (#290).
+            lazyload(from_section.users),
+            lazyload(from_section.operations),
+            lazyload(from_section.spg_links),
+            lazyload(next_section.users),
+            lazyload(next_section.operations),
+            lazyload(next_section.spg_links),
+        )
         .where(
             WorkTask.status.notin_(
                 [WorkTaskStatus.cancelled, WorkTaskStatus.waiting_previous]
@@ -715,6 +727,25 @@ def _ready_item_matches_column_filters(
     return True
 
 
+@dataclass(frozen=True)
+class _StockReadyCandidate:
+    """Подготовленная складская строка: объекты уже прочитаны, бюджет ещё нет.
+
+    Порядок обхода — как в построчном цикле (#290): сначала выбор
+    кандидатов (next_line / SPG / next_task / fake task / план), затем
+    бюджет списком, затем фильтры ответа.
+    """
+
+    section: Section
+    spl: SectionPlanLine
+    own_stage: RouteStage | None
+    next_stage: RouteStage
+    next_section: Section
+    task: WorkTask
+    is_new_task: bool
+    planned_qty: Decimal
+
+
 async def _fetch_stock_ready_items(
     db: AsyncSession,
     *,
@@ -730,211 +761,373 @@ async def _fetch_stock_ready_items(
     transferable_qty: Decimal | None = None,
     dimensions: str | None = None,
 ) -> list[dict]:
+    """Складские ready-строки: prefetch списков, те же фильтры в Python (#290).
+
+    Раньше на каждую released-план-строку каждого складского участка уходило
+    ~7 запросов (2836 на страницу из 48 строк). Теперь шесть запросов на
+    всю ветку: секции → план-строки → задачи → операции → изделия →
+    бюджеты списком (:func:`stock_line_bulk`).
+
+    Фильтры и порядок отбора — строка в строку, как в построчном цикле:
+    search-haystack, членство в СПГ ∧ «адресат не принимает обычную
+    передачу», обязательность next_task, цепочка резолва ``product_id``,
+    ``planned_qty <= 0 → PlanPosition.quantity``, бюджет > 0, затем
+    :func:`_ready_item_matches_column_filters`.
+    """
     from app.models.production_plan import PlanPosition
-    from app.transfers.transferable import stock_line
+    from app.transfers.transferable import StockLineRequest, stock_line_bulk
 
-    if spg_id is not None:
-        sections = (
-            await db.execute(
-                select(Section)
-                .join(SpgSection, SpgSection.section_id == Section.id)
-                .where(SpgSection.spg_id == spg_id)
-            )
-        ).scalars().all()
-    elif section_id is not None:
-        sec = await db.get(Section, section_id)
-        sections = [sec] if sec else []
-    else:
-        sections = (
-            await db.execute(
-                select(Section).where(Section.type.in_(STOCK_SECTION_TYPES))
-            )
-        ).scalars().all()
-
-    stock_items: list[dict] = []
     search_like = f"%{search.strip()}%" if search else None
 
-    for sec in sections:
-        if not is_stock_section(sec):
-            continue
-
-        sec_spg_id = await db.scalar(
-            select(SpgSection.spg_id).where(SpgSection.section_id == sec.id)
+    # ── 1. Секции объёма: одна выборка + членство в СПГ подзапросом ───────
+    # «Первое членство» секции — тот же смысл, что db.scalar(spg_id по
+    # секции) в sections_share_spg, только без запроса на секцию.
+    # Явный correlate гасит авто-корреляцию общих FROM: в SPG-ветке внешний
+    # запрос тоже берёт spg_sections, и без неё подзапрос потерял бы свой FROM.
+    own_spg_sq = (
+        select(SpgSection.spg_id)
+        .where(SpgSection.section_id == Section.id)
+        .correlate(Section)
+        .limit(1)
+        .scalar_subquery()
+    )
+    sections_query = select(Section, own_spg_sq.label("spg_id")).options(
+        # Списки пользователей/операций/СПГ ready-строке не нужны: раньше
+        # selectin грузил их на каждую секцию впустую (#290).
+        lazyload(Section.users),
+        lazyload(Section.operations),
+        lazyload(Section.spg_links),
+    )
+    if spg_id is not None:
+        sections_query = (
+            sections_query.join(SpgSection, SpgSection.section_id == Section.id)
+            .where(SpgSection.spg_id == spg_id)
         )
-        if sec_spg_id is None:
-            continue
+    elif section_id is not None:
+        sections_query = sections_query.where(Section.id == section_id)
+    else:
+        sections_query = sections_query.where(Section.type.in_(STOCK_SECTION_TYPES))
 
-        lines_query = (
-            select(SectionPlanLine)
-            .join(PlanPosition, PlanPosition.id == SectionPlanLine.plan_position_id)
-            .join(Product, Product.id == PlanPosition.product_id)
-            .where(
-                SectionPlanLine.section_id == sec.id,
-                PlanPosition.status == "released",
+    scope = [
+        (sec, spg)
+        for sec, spg in (await db.execute(sections_query)).all()
+        # Участок чужого типа и участок без СПГ — не источник ready-строк
+        # (раньше: is_stock_section + «sec_spg_id is None → continue»).
+        if is_stock_section(sec) and spg is not None
+    ]
+    if not scope:
+        return []
+    section_by_id = {sec.id: sec for sec, _spg in scope}
+    own_spg_by_section = {sec.id: spg for sec, spg in scope}
+    section_ids = list(section_by_id)
+
+    # ── 2. Released-план-строки одним запросом ─────────────────────────────
+    next_line = aliased(SectionPlanLine, name="stock_next_line")
+    own_stage = aliased(RouteStage, name="stock_own_stage")
+    next_stage = aliased(RouteStage, name="stock_next_stage")
+    next_sec = aliased(Section, name="stock_next_sec")
+    next_spg_sq = (
+        select(SpgSection.spg_id)
+        .where(SpgSection.section_id == next_line.section_id)
+        .correlate(next_line)
+        .limit(1)
+        .scalar_subquery()
+    )
+    lines_query = (
+        select(
+            SectionPlanLine,
+            PlanPosition,
+            next_line,
+            own_stage,
+            next_stage,
+            next_sec,
+            next_spg_sq.label("next_spg_id"),
+        )
+        .join(PlanPosition, PlanPosition.id == SectionPlanLine.plan_position_id)
+        .join(Product, Product.id == PlanPosition.product_id)
+        .outerjoin(
+            next_line,
+            (next_line.plan_position_id == SectionPlanLine.plan_position_id)
+            & (next_line.sequence == SectionPlanLine.sequence + 1),
+        )
+        .outerjoin(own_stage, own_stage.id == SectionPlanLine.route_stage_id)
+        .outerjoin(next_stage, next_stage.id == next_line.route_stage_id)
+        .outerjoin(next_sec, next_sec.id == next_line.section_id)
+        .where(
+            SectionPlanLine.section_id.in_(section_ids),
+            PlanPosition.status == "released",
+        )
+        .options(
+            # Операции следующего этапа читает общий запрос операций ниже,
+            # членство СПГ — подзапрос next_spg_sq: selectin здесь дал бы
+            # два лишних запроса (и N+1 по lazy, если лезть по одному).
+            lazyload(own_stage.operations),
+            lazyload(next_stage.operations),
+            lazyload(next_sec.users),
+            lazyload(next_sec.operations),
+            lazyload(next_sec.spg_links),
+        )
+    )
+    if search_like:
+        lines_query = lines_query.where(
+            or_(
+                Product.sku.ilike(search_like),
+                cast(SectionPlanLine.plan_position_id, String).ilike(search_like),
             )
         )
-        if search_like:
-            lines_query = lines_query.where(
-                or_(
-                    Product.sku.ilike(search_like),
-                    cast(SectionPlanLine.plan_position_id, String).ilike(search_like),
-                )
-            )
-        elif product_sku:
-            lines_query = lines_query.where(Product.sku.ilike(f"%{product_sku.strip()}%"))
-        if plan_position_id is not None:
-            lines_query = lines_query.where(
-                SectionPlanLine.plan_position_id == plan_position_id
-            )
+    elif product_sku:
+        lines_query = lines_query.where(Product.sku.ilike(f"%{product_sku.strip()}%"))
+    if plan_position_id is not None:
+        lines_query = lines_query.where(
+            SectionPlanLine.plan_position_id == plan_position_id
+        )
 
-        lines = (await db.execute(lines_query)).scalars().all()
+    line_rows = (await db.execute(lines_query)).all()
+    if not line_rows:
+        return []
 
-        for spl in lines:
-            next_line = await db.scalar(
-                select(SectionPlanLine).where(
-                    SectionPlanLine.plan_position_id == spl.plan_position_id,
-                    SectionPlanLine.sequence == spl.sequence + 1,
-                )
-            )
-            if next_line is None:
-                continue
-
-            next_stage = await db.get(RouteStage, next_line.route_stage_id)
-            next_sec = await db.get(Section, next_line.section_id)
-            if next_stage is None or next_sec is None:
-                continue
-
-            from app.services.shopfloor.common import sections_share_spg
-
-            # Адресат передачи со склада — склад оборачиваемого запаса или
-            # терминальная секция (#136): «Отправлено» принимает материал
-            # обычной передачей («Передать»), остатков там не возникает
-            # (StockProjectionManager пропускает терминал). Задача на терминале
-            # появляется лениво — при первой передаче, как на складах (#176),
-            # поэтому её отсутствие до передачи строку не скрывает.
-            destination_accepts_transfer = accepts_ordinary_transfer(next_sec)
-
-            if await sections_share_spg(db, spl.section_id, next_line.section_id) and not destination_accepts_transfer:
-                continue
-
-            next_task = await db.scalar(
-                select(WorkTask).where(
-                    WorkTask.section_plan_line_id == next_line.id,
-                    WorkTask.status.notin_(CLOSED_WORK_TASK_STATUSES),
-                )
-            )
-            if next_task is None and not destination_accepts_transfer:
-                continue
-
-            fake_task = await db.scalar(
+    # ── 3. Задачи-кандидаты (fake/next) для собственных и соседних строк ──
+    own_line_ids = {row[0].id for row in line_rows}
+    next_line_ids = {row[2].id for row in line_rows if row[2] is not None}
+    task_line_ids = own_line_ids | next_line_ids
+    tasks_by_line: dict[int, list[WorkTask]] = {}
+    if task_line_ids:
+        tasks = (
+            await db.execute(
                 select(WorkTask)
                 .where(
-                    WorkTask.section_plan_line_id == spl.id,
+                    WorkTask.section_plan_line_id.in_(task_line_ids),
                     WorkTask.status != WorkTaskStatus.cancelled,
                 )
                 .order_by(WorkTask.id.asc())
             )
+        ).scalars().all()
+        for task in tasks:
+            tasks_by_line.setdefault(task.section_plan_line_id, []).append(task)
 
-            planned_qty = spl.planned_quantity or Decimal(0)
-            if planned_qty <= 0:
-                plan_pos = await db.get(PlanPosition, spl.plan_position_id)
-                planned_qty = plan_pos.quantity if plan_pos else Decimal(0)
+    prepared: list[_StockReadyCandidate] = []
+    for spl, plan_pos, next_l, own_stg, next_stg, next_s, next_spg in line_rows:
+        if next_l is None or next_stg is None or next_s is None:
+            continue
 
-            if fake_task is None:
-                if next_task is not None:
-                    product_id = next_task.product_id
-                else:
-                    product_id = spl.product_id
-                    if product_id is None:
-                        plan_pos = await db.get(PlanPosition, spl.plan_position_id)
-                        product_id = plan_pos.product_id if plan_pos else None
-                    if product_id is None:
-                        continue
-                fake_task = WorkTask(
-                    section_plan_line_id=spl.id,
-                    section_id=sec.id,
-                    product_id=product_id,
-                    route_stage_id=spl.route_stage_id,
-                    planned_quantity=planned_qty,
-                    status=WorkTaskStatus.ready,
-                    due_date=spl.due_date,
-                    dimensions=await task_dimensions_for_plan_line(db, spl.plan_position_id),
-                )
-                db.add(fake_task)
-                await db.flush()
+        sec = section_by_id[spl.section_id]
+        # Адресат передачи со склада — склад оборачиваемого запаса или
+        # терминальная секция (#136): «Отправлено» принимает материал
+        # обычной передачей («Передать»), остатков там не возникает
+        # (StockProjectionManager пропускает терминал). Задача на терминале
+        # появляется лениво — при первой передаче, как на складах (#176),
+        # поэтому её отсутствие до передачи строку не скрывает.
+        destination_accepts_transfer = accepts_ordinary_transfer(next_s)
+        # sections_share_spg по уже прочитанному членству (без запросов).
+        share_spg = spl.section_id == next_l.section_id or (
+            own_spg_by_section[spl.section_id] is not None
+            and own_spg_by_section[spl.section_id] == next_spg
+        )
+        if share_spg and not destination_accepts_transfer:
+            continue
 
-            # Бюджет складской строки — из модуля transferable (#131): тот же
-            # stock_line, что читает write-guard; здесь только выбор
-            # кандидатов (план-строк склада) и отображение.
-            line = await stock_line(
-                db, task=fake_task, section=sec, planned_qty=planned_qty,
-            )
-            transferable = line.budget
-            physical_stock = line.produced
-            transferred = line.used
-            if transferable <= 0:
-                continue
+        next_task = next(
+            (
+                task
+                for task in tasks_by_line.get(next_l.id, ())
+                if task.status not in CLOSED_WORK_TASK_STATUSES
+            ),
+            None,
+        )
+        if next_task is None and not destination_accepts_transfer:
+            continue
 
-            await db.flush()
+        fake_task = next(iter(tasks_by_line.get(spl.id, ())), None)
+        planned_qty = spl.planned_quantity or Decimal(0)
+        if planned_qty <= 0:
+            planned_qty = plan_pos.quantity if plan_pos else Decimal(0)
 
-            product = await db.get(Product, fake_task.product_id)
-            product_sku = product.sku if product else ""
-
-            next_op_name = (
-                ", ".join(op.operation_name for op in next_stage.operations)
-                if next_stage and next_stage.operations
-                else None
-            )
-
-            candidate = {
-                    "task_id": fake_task.id,
-                    "section_id": fake_task.section_id,
-                    "section_code": sec.code,
-                    "section_name": sec.name,
-                    "plan_position_id": spl.plan_position_id,
-                    "route_stage_id": spl.route_stage_id,
-                    "sequence": spl.sequence,
-                    "operation_code": None,
-                    "operation_name": "",
-                    "product_id": fake_task.product_id,
-                    "product_sku": product_sku,
-                    "planned_quantity": _fmt_qty(planned_qty),
-                    "completed_quantity": _fmt_qty(physical_stock),
-                    "already_transferred_quantity": _fmt_qty(transferred),
-                    "transferable_quantity": _fmt_qty(transferable),
-                    "has_next_step": True,
-                    "next_section_id": next_sec.id,
-                    "next_section_code": next_sec.code,
-                    "next_section_name": next_sec.name,
-                    "next_operation_name": next_op_name,
-                    "next_step_sequence": next_stage.sequence,
-                    "next_step_is_final": bool(next_stage.is_final),
-                    "is_final": False,
-                    **_ready_dimensions_fields(fake_task.dimensions),
-                }
-            if search and search.strip():
-                search_lower = search.strip().lower()
-                haystacks = (
-                    candidate.get("product_sku") or "",
-                    candidate.get("operation_name") or "",
-                    str(candidate.get("plan_position_id") or ""),
-                    str(candidate.get("task_id") or ""),
-                )
-                if not any(search_lower in value.lower() for value in haystacks):
+        is_new_task = fake_task is None
+        if is_new_task:
+            if next_task is not None:
+                product_id = next_task.product_id
+            else:
+                product_id = spl.product_id
+                if product_id is None:
+                    product_id = plan_pos.product_id if plan_pos else None
+                if product_id is None:
                     continue
-            if not _ready_item_matches_column_filters(
-                candidate,
-                product_sku=product_sku,
-                operation_name=operation_name,
-                next_operation_name=next_operation_name,
-                next_section_name=next_section_name,
-                task_id=task_id,
-                plan_position_id=plan_position_id,
-                transferable_qty=transferable_qty,
-                dimensions=dimensions,
-            ):
+            fake_task = WorkTask(
+                section_plan_line_id=spl.id,
+                section_id=sec.id,
+                product_id=product_id,
+                route_stage_id=spl.route_stage_id,
+                planned_quantity=planned_qty,
+                status=WorkTaskStatus.ready,
+                due_date=spl.due_date,
+                dimensions=await task_dimensions_for_plan_line(db, spl.plan_position_id),
+            )
+
+        prepared.append(
+            _StockReadyCandidate(
+                section=sec,
+                spl=spl,
+                own_stage=own_stg,
+                next_stage=next_stg,
+                next_section=next_s,
+                task=fake_task,
+                is_new_task=is_new_task,
+                planned_qty=planned_qty,
+            )
+        )
+
+    if not prepared:
+        return []
+
+    # ── 4. Операции: имена следующего шага + пройденные операции ───────────
+    # Один запрос закрывает оба чтения route_operations: имена операций
+    # следующего этапа (как selectin next_stage.operations) и коды
+    # операций маршрута до своего этапа (как completed_operations_*).
+    pairs = {
+        (row.spl.route_id, row.own_stage.sequence)
+        for row in prepared
+        if row.own_stage is not None
+    }
+    next_stage_ids = {row.next_stage.id for row in prepared}
+    op_conditions = []
+    if next_stage_ids:
+        op_conditions.append(RouteOperation.route_stage_id.in_(next_stage_ids))
+    op_conditions.extend(
+        and_(RouteStage.route_id == route_id, RouteStage.sequence <= through_sequence)
+        for route_id, through_sequence in sorted(pairs)
+    )
+    names_by_stage: dict[int, list[str]] = {}
+    ops_by_route: dict[int, list[tuple[int, str]]] = {}
+    if op_conditions:
+        op_rows = (
+            await db.execute(
+                select(
+                    RouteOperation.route_stage_id,
+                    RouteStage.route_id,
+                    RouteStage.sequence.label("stage_sequence"),
+                    RouteOperation.operation_code,
+                    RouteOperation.operation_name,
+                )
+                .join(RouteStage, RouteStage.id == RouteOperation.route_stage_id)
+                .where(or_(*op_conditions))
+                .order_by(RouteOperation.route_stage_id, RouteOperation.sequence)
+            )
+        ).all()
+        for stage_id, route_id, stage_sequence, code, name in op_rows:
+            names_by_stage.setdefault(stage_id, []).append(name)
+            if code:
+                ops_by_route.setdefault(route_id, []).append((stage_sequence, code))
+    next_op_names = {
+        stage_id: ", ".join(names)
+        for stage_id, names in names_by_stage.items()
+        if names
+    }
+    consume_ops = {
+        (route_id, through_sequence): sorted({
+            code
+            for stage_sequence, code in ops_by_route.get(route_id, ())
+            if stage_sequence <= through_sequence
+        })
+        for route_id, through_sequence in sorted(pairs)
+    }
+
+    # ── 5. Изделия для sku (одним IN, без гидрации сущности) ──────────────
+    product_ids = {row.task.product_id for row in prepared if row.task.product_id is not None}
+    skus: dict[int, str] = {}
+    if product_ids:
+        skus = dict(
+            (
+                await db.execute(
+                    select(Product.id, Product.sku).where(Product.id.in_(product_ids))
+                )
+            ).all()
+        )
+
+    # ── 6. Бюджет складских строк — один bulk-проход transferable ──────────
+    budget_results = await stock_line_bulk(
+        db,
+        [
+            StockLineRequest(
+                task=row.task,
+                section=row.section,
+                planned_qty=row.planned_qty,
+            )
+            for row in prepared
+        ],
+        lines={row.spl.id: row.spl for row in prepared},
+        stages={
+            row.spl.route_stage_id: row.own_stage
+            for row in prepared
+            if row.own_stage is not None
+        },
+        consume_ops=consume_ops,
+    )
+
+    passing = [
+        (row, result)
+        for row, result in zip(prepared, budget_results, strict=True)
+        if result.line.budget > 0
+    ]
+    # Запись в read-ручке — одна пачкой и только для строк, прошедших
+    # бюджетный фильтр (раньше db.add + db.flush стояли в цикле до бюджета).
+    new_tasks = [row.task for row, _result in passing if row.is_new_task]
+    if new_tasks:
+        db.add_all(new_tasks)
+        await db.flush()
+
+    stock_items: list[dict] = []
+    for row, result in passing:
+        line = result.line
+        item_sku = skus.get(row.task.product_id) or ""
+        candidate = {
+            "task_id": row.task.id,
+            "section_id": row.task.section_id,
+            "section_code": row.section.code,
+            "section_name": row.section.name,
+            "plan_position_id": row.spl.plan_position_id,
+            "route_stage_id": row.spl.route_stage_id,
+            "sequence": row.spl.sequence,
+            "operation_code": None,
+            "operation_name": "",
+            "product_id": row.task.product_id,
+            "product_sku": item_sku,
+            "planned_quantity": _fmt_qty(row.planned_qty),
+            "completed_quantity": _fmt_qty(line.produced),
+            "already_transferred_quantity": _fmt_qty(line.used),
+            "transferable_quantity": _fmt_qty(line.budget),
+            "has_next_step": True,
+            "next_section_id": row.next_section.id,
+            "next_section_code": row.next_section.code,
+            "next_section_name": row.next_section.name,
+            "next_operation_name": next_op_names.get(row.next_stage.id),
+            "next_step_sequence": row.next_stage.sequence,
+            "next_step_is_final": bool(row.next_stage.is_final),
+            "is_final": False,
+            **_ready_dimensions_fields(row.task.dimensions),
+        }
+        if search and search.strip():
+            search_lower = search.strip().lower()
+            haystacks = (
+                candidate.get("product_sku") or "",
+                candidate.get("operation_name") or "",
+                str(candidate.get("plan_position_id") or ""),
+                str(candidate.get("task_id") or ""),
+            )
+            if not any(search_lower in value.lower() for value in haystacks):
                 continue
-            stock_items.append(candidate)
+        if not _ready_item_matches_column_filters(
+            candidate,
+            product_sku=product_sku,
+            operation_name=operation_name,
+            next_operation_name=next_operation_name,
+            next_section_name=next_section_name,
+            task_id=task_id,
+            plan_position_id=plan_position_id,
+            transferable_qty=transferable_qty,
+            dimensions=dimensions,
+        ):
+            continue
+        stock_items.append(candidate)
 
     return stock_items
 
