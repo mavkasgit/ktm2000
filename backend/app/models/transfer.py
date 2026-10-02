@@ -57,6 +57,13 @@ class Transfer(Base):
             unique=True,
             postgresql_where=text("idempotency_key IS NOT NULL"),
         ),
+        # Журнал передач по участку (#291): OR-фильтр
+        # (from_section_id=…) | (to_section_id=…) плюс ORDER BY created_at DESC.
+        # Одиночных (from_section_id)/(to_section_id) не создаём — их левый
+        # префикс покрыт этими составными.
+        Index("ix_transfers_from_section_id_created_at", "from_section_id", "created_at"),
+        # Сводка участка: GROUP BY to_section_id по открытым передачам.
+        Index("ix_transfers_to_section_id_created_at", "to_section_id", "created_at"),
         # Журнал передач (#290): ORDER BY created_at DESC и фильтры дат.
         Index("ix_transfers_created_at", "created_at"),
     )

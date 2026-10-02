@@ -62,6 +62,11 @@ class WorkTask(Base):
         # FK без индекса (#290): все lookup'ы задач по строке плана,
         # включая prefetch складской ветки ready одним IN.
         Index("ix_work_tasks_section_plan_line_id", "section_plan_line_id"),
+        # Доска участка, summary и ready фильтруют по участку, summary ещё
+        # и группирует по нему (#291): (section_id, status) отдаёт агрегату
+        # пары из индекса, левый префикс покрывает все lookup'ы «задачи
+        # участка». FK на sections без индекса был — отсюда seq scan.
+        Index("ix_work_tasks_section_id_status", "section_id", "status"),
     )
 
     id: Mapped[int] = mapped_column(BigInteger, Identity(always=True), primary_key=True)
