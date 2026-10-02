@@ -84,8 +84,6 @@ export type BulkCompleteFooterProps = {
   pending: boolean;
   onConfirm: () => void;
   onCancel: () => void;
-  /** Причина отклонённого ввода в ячейке — видна текстом, а не в подсказке. */
-  inputIssueText?: string | null;
 };
 
 export function BulkCompleteFooter({
@@ -105,7 +103,6 @@ export function BulkCompleteFooter({
   pending,
   onConfirm,
   onCancel,
-  inputIssueText,
 }: BulkCompleteFooterProps) {
   const [showOutside, setShowOutside] = useState(false);
 
@@ -179,11 +176,6 @@ export function BulkCompleteFooter({
               </div>
             )}
 
-            {inputIssueText && (
-              <div className="text-xs text-red-600" role="status">
-                {inputIssueText}
-              </div>
-            )}
           </div>
 
           <div className="flex flex-col gap-3 lg:flex-row lg:flex-wrap lg:items-end xl:shrink-0">

@@ -67,13 +67,7 @@ function makeTask(overrides: Partial<SectionBoardTask> = {}): SectionBoardTask {
   };
 }
 
-function Harness({
-  tasks,
-  onIssue,
-}: {
-  tasks: SectionBoardTask[];
-  onIssue?: (issue: { text: string } | null) => void;
-}) {
+function Harness({ tasks }: { tasks: SectionBoardTask[] }) {
   const [draft, setDraft] = useState<BulkDraft>({});
   const [bulkMode, setBulkMode] = useState(true);
   const bulkSelection = useBulkSelection<number>();
@@ -94,7 +88,6 @@ function Harness({
         bulkSelection={bulkMode ? bulkSelection : undefined}
         bulkDraft={draft}
         onBulkDraftChange={setDraft}
-        onBulkDraftIssue={onIssue}
         onVisibleTaskIdsChange={vi.fn()}
         page={1}
         setPage={vi.fn()}
@@ -164,19 +157,28 @@ describe("SectionTasksBoard: массовый ввод факта", () => {
     expect(screen.getByTestId("draft").textContent).toBe('{"1":{"good":"4","defect":""}}');
   });
 
-  it("недопустимый символ не подставляется, причина уходит наружу", () => {
-    const onIssue = vi.fn();
-    render(<Harness tasks={[makeTask({ id: 1, product_sku: "SKU-A" })]} onIssue={onIssue} />);
+  it("недопустимый символ не подставляется, причина видна у самого поля", () => {
+    render(<Harness tasks={[makeTask({ id: 1, product_sku: "SKU-A" })]} />);
     fireEvent.click(taskRow("SKU-A"));
 
     const good = within(desktop()).getByLabelText("SKU-A: годные");
+    expect(screen.queryAllByText(/Запятая и точка/)).toHaveLength(0);
+
     fireEvent.change(good, { target: { value: "1" } });
     fireEvent.change(good, { target: { value: "1,5" } });
 
     // Запятая не подставляется: поле остаётся с прежним значением, а причина
-    // уходит наружу — её печатает футер (ADR-0032).
+    // читается у самого поля — подсказкой, раскрытой без наведения (в футер
+    // оператор не смотрит, а под полем в 32-пиксельной строке места нет).
     expect(screen.getByTestId("draft").textContent).toBe('{"1":{"good":"1","defect":""}}');
-    expect(onIssue).toHaveBeenCalledWith(expect.objectContaining({ text: expect.stringContaining("целое") }));
+    // Radix рисует содержимое подсказки дважды: видимое и скрытую копию
+    // для чтения с экрана.
+    expect(screen.getAllByText(/Запятая и точка/).length).toBeGreaterThan(0);
+    expect(good.getAttribute("aria-invalid")).toBe("true");
+
+    // Допустимый ввод снимает причину.
+    fireEvent.change(good, { target: { value: "15" } });
+    expect(screen.queryAllByText(/Запятая и точка/)).toHaveLength(0);
   });
 
   it("включение массового режима не раскрывает группы: строки открывает выбор группы", () => {

@@ -58,7 +58,6 @@ import {
   type DraftField,
   type DraftQty,
 } from "../lib/bulkDraft";
-import type { QuantityInputIssue } from "@/shared/lib/quantityInput";
 import { DraftQtyInput } from "./DraftQtyInput";
 import {
   getTaskGroupHeaderState,
@@ -214,7 +213,6 @@ function renderDraftCell(
       <DraftQtyInput
         value={draft.value[field]}
         onChange={(next) => draft.onChange(field, next)}
-        onIssue={draft.onIssue}
         recorded={fmtQty(recorded)}
         ariaLabel={`${task.product_sku}: ${label}`}
         overPlan={overPlan}
@@ -247,7 +245,6 @@ type RowDraftContext = {
   value: DraftQty;
   overPlan: { good: boolean; defect: boolean };
   onChange: (field: DraftField, value: string) => void;
-  onIssue: (issue: QuantityInputIssue | null) => void;
 };
 
 function renderTaskRow(
@@ -495,7 +492,6 @@ function TableTaskGroupRow({
   groupQty,
   groupOverPlan,
   onGroupQtyChange,
-  onGroupIssue,
 }: {
   group: TaskGroup;
   isCollapsed: boolean;
@@ -513,7 +509,6 @@ function TableTaskGroupRow({
   groupQty?: DraftQty;
   groupOverPlan?: { good: boolean; defect: boolean };
   onGroupQtyChange?: (field: DraftField, value: string) => void;
-  onGroupIssue?: (issue: QuantityInputIssue | null) => void;
 }) {
   const taskIds = group.tasks.map((t) => t.id);
   const allSelected = bulkSelection?.isAllSelected(taskIds) ?? false;
@@ -605,7 +600,6 @@ function TableTaskGroupRow({
             <DraftQtyInput
               value={groupQty?.good ?? ""}
               onChange={(value) => onGroupQtyChange?.("good", value)}
-              onIssue={onGroupIssue}
               recorded={fmtQty(String(recordedGood))}
               ariaLabel={`${firstTask.product_sku}: годные группы`}
               overPlan={overPlan.good}
@@ -626,7 +620,6 @@ function TableTaskGroupRow({
             <DraftQtyInput
               value={groupQty?.defect ?? ""}
               onChange={(value) => onGroupQtyChange?.("defect", value)}
-              onIssue={onGroupIssue}
               recorded={fmtQty(String(recordedDefect))}
               ariaLabel={`${firstTask.product_sku}: брак группы`}
               overPlan={overPlan.defect}
@@ -690,7 +683,6 @@ type SectionTasksBoardProps = {
   bulkDraft?: BulkDraft;
   onBulkDraftChange?: (draft: BulkDraft) => void;
   /** Причина отклонённого ввода — её текстом показывает футер (ADR-0032). */
-  onBulkDraftIssue?: (issue: QuantityInputIssue | null) => void;
   /**
    * id строк, видимых на доске сейчас (фильтр и сортировка применены): по ним
    * футер считает «вне текущего фильтра: N». Доска — единственный, кто знает,
@@ -786,7 +778,6 @@ export function SectionTasksBoard({
   isRevoking = false,
   bulkDraft,
   onBulkDraftChange,
-  onBulkDraftIssue,
   onVisibleTaskIdsChange,
   hasPackaging,
   toolbar,
@@ -1006,7 +997,6 @@ export function SectionTasksBoard({
         defect: toQtyInteger(value.defect) > ceiling,
       },
       onChange: (field, next) => onBulkDraftChange(withDraftField(bulkDraft, task.id, field, next)),
-      onIssue: (issue) => onBulkDraftIssue?.(issue),
     };
   };
 
@@ -1265,7 +1255,6 @@ export function SectionTasksBoard({
                 ? (field, value) => handleGroupQtyChange(row.group.tasks, field, value)
                 : undefined
             }
-            onGroupIssue={(issue) => onBulkDraftIssue?.(issue)}
             onSelectGroup={() => {
               if (!bulkMode || !bulkSelection) return;
               const taskIds = row.group.tasks.map((t) => t.id);
@@ -1311,8 +1300,7 @@ export function SectionTasksBoard({
       handleGroupQtyChange,
       onAction,
       onBulkDraftChange,
-      onBulkDraftIssue,
-      onRevokeItem,
+          onRevokeItem,
       readOnly,
       renderWaitingDivider,
       revokeSelection,
@@ -1536,7 +1524,6 @@ export function SectionTasksBoard({
                             <DraftQtyInput
                               value={value}
                               onChange={(next) => handleGroupQtyChange(group.tasks, field, next)}
-                              onIssue={(issue) => onBulkDraftIssue?.(issue)}
                               recorded={fmtQty(String(recorded))}
                               ariaLabel={`${group.label}: ${label}`}
                               overPlan={groupOverPlan(group.tasks)[field]}

@@ -201,7 +201,6 @@ export function SectionsTasksPage() {
   // Панели массовых операций больше нет: ввод идёт в строках доски, а итог и
   // подтверждение показывает футер.
   const [bulkDraft, setBulkDraft] = useState<BulkDraft>({});
-  const [bulkDraftIssue, setBulkDraftIssue] = useState<string | null>(null);
   const [bulkPerformedDate, setBulkPerformedDate] = useState(() => nowLocalDateTimeParts().date);
   const [bulkPerformedShift, setBulkPerformedShift] = useState<"1" | "2">("1");
   const [bulkComment, setBulkComment] = useState("");
@@ -883,7 +882,6 @@ export function SectionsTasksPage() {
 
   const clearBulkDraft = useCallback(() => {
     setBulkDraft({});
-    setBulkDraftIssue(null);
     setBulkShortageStrategy(null);
     setBulkComment("");
     bulkSelection.clear();
@@ -1138,7 +1136,6 @@ export function SectionsTasksPage() {
                     bulkSelection={bulkMode || creatingDailyPlan ? bulkSelection : undefined}
                     bulkDraft={bulkMode && !creatingDailyPlan ? bulkDraft : undefined}
                     onBulkDraftChange={bulkMode && !creatingDailyPlan ? setBulkDraft : undefined}
-                    onBulkDraftIssue={(issue) => setBulkDraftIssue(issue?.text ?? null)}
                     onVisibleTaskIdsChange={handleVisibleTaskIdsChange}
                     profile={profile}
                     onSelectAllVisible={handleSelectAll}
@@ -1302,7 +1299,6 @@ export function SectionsTasksPage() {
                 setBulkMode(false);
               })
             }
-            inputIssueText={bulkDraftIssue}
           />
         )}
 
@@ -1314,8 +1310,7 @@ export function SectionsTasksPage() {
           const action = draftExitAction;
           setDraftExitAction(null);
           setBulkDraft({});
-          setBulkDraftIssue(null);
-          setBulkShortageStrategy(null);
+                setBulkShortageStrategy(null);
           action?.();
         }}
       />
