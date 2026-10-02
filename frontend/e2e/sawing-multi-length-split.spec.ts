@@ -317,7 +317,11 @@ test.describe("@ui @ui-narrow Пила: распил одной задачи н�
     const rest = inputQty - portion1;
     // Кнопка «Плановое (N)» на трансформации подставляет ПОЛНЫЙ вход, а не
     // остаток — вводим остаток вручную (превышение остатка бракуется бэкендом).
-    await drawer.locator('input[inputmode="numeric"]').first().fill(String(rest));
+    // Вторая порция — только с «+» (`470a9ce`): голое число означало бы «факт
+    // станет 75», то есть уменьшение с уже записанных 75, и сервер отклонил бы
+    // ввод с причиной у поля, оставив диалог открытым. Голым числом в этом
+    // сценарии проверяется первая порция (см. выше), «+» — вторая.
+    await drawer.locator('input[inputmode="numeric"]').first().fill(`+${rest}`);
     await drawer.getByRole("button", { name: "Сохранить" }).click();
     await expect(drawer).not.toBeVisible({ timeout: 15_000 });
 

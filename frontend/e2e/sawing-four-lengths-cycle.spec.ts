@@ -203,7 +203,17 @@ async function splitSawIntoLengthsViaUI(page: Page, sectionId: number): Promise<
     // Поле факта в диалоге — `type="text" inputMode="numeric"` (#192): `type="number"`
     // в `sections/` больше нет ни в одном Input, и такой локатор провисел бы до
     // таймаута теста. Полей два — «Факт (раскроено заготовок)» и «Брак», берём первое.
-    await drawer.locator('input[inputmode="numeric"]').first().fill(String(portion));
+    // Два режима ввода факта (`470a9ce`): голое число — «факт СТАНЕТ N», ведущий
+    // «+» — «добавить N к уже записанному». Первая порция идёт голым числом
+    // (уже записанного факта ноль, оба режима дают 75), вторая и дальше —
+    // только с «+»: голое 75 на второй порции значило бы «сделать факт
+    // равным 75», то есть уменьшение с 75, которое сервер законно
+    // отклоняет (исправление записанного факта живёт в журнале «Отмена
+    // действий»), и диалог остался бы открытым.
+    await drawer
+      .locator('input[inputmode="numeric"]')
+      .first()
+      .fill(alreadyCut === 0 ? String(portion) : `+${portion}`);
     await drawer.getByRole("button", { name: "Сохранить" }).click();
     await expect(drawer).not.toBeVisible({ timeout: 15_000 });
     consumed += portion;
