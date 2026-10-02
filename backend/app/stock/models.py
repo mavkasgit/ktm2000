@@ -148,6 +148,18 @@ class StockTransaction(Base):
             "reason",
             "section_plan_line_id",
         ),
+        # Суточная статистика участка (#291): to_location_id = … AND
+        # created_at BETWEEN …, GROUP BY (дата, reason). Левый префикс покрывает
+        # одиночный ix_stock_transactions_to_location_id — тот дропается
+        # миграцией, ledger не платит за две записи на одну проводку.
+        Index(
+            "ix_stock_transactions_to_location_id_created_at",
+            "to_location_id",
+            "created_at",
+        ),
+        # Фид проводок (#291): ORDER BY created_at и фильтры дат без
+        # привязки к локации.
+        Index("ix_stock_transactions_created_at", "created_at"),
     )
 
     id: Mapped[int] = mapped_column(
@@ -157,8 +169,10 @@ class StockTransaction(Base):
     from_location_id: Mapped[int | None] = mapped_column(
         ForeignKey("sections.id"), nullable=True, index=True
     )
+    # Индекс по to_location_id не одиночный, а составной с created_at
+    # (см. __table_args__ выше, #291) — одиночный дропнут миграцией 078.
     to_location_id: Mapped[int | None] = mapped_column(
-        ForeignKey("sections.id"), nullable=True, index=True
+        ForeignKey("sections.id"), nullable=True
     )
     quantity: Mapped[Decimal] = mapped_column(Numeric(14, 3), nullable=False)
     # Габарит движения (ADR-0001): каноническая форма через
