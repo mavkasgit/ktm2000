@@ -350,9 +350,15 @@ async def get_section_board(
         get_transform_progress_bulk,
     )
     from .output_rows import build_output_rows
+    # Прогресс нужен доске дважды: карточкам (выходы) и синхронизации
+    # статусов. Второй поток смотрит на `input_quantity`+`outputs`, а не на
+    # маркер этапа, поэтому множество id — объединение предикатов (#293).
+    # Набор для вывода не изменился: гейт ниже по-прежнему требует
+    # `transforms_dimensions`.
     transform_task_ids = [
         row[0].id for row in rows
-        if row[2].transforms_dimensions and (row[0].outputs or [])
+        if (row[0].outputs or [])
+        and (row[2].transforms_dimensions or row[0].input_quantity is not None)
     ]
     transform_progress_map = await get_transform_progress_bulk(db, transform_task_ids)
 
@@ -365,7 +371,13 @@ async def get_section_board(
     from .task_status import sync_work_tasks_status_bulk
 
     board_tasks = [row[0] for row in rows]
-    await sync_work_tasks_status_bulk(db, tasks=board_tasks, tasks_cache=tasks_cache)
+    await sync_work_tasks_status_bulk(
+        db,
+        tasks=board_tasks,
+        tasks_cache=tasks_cache,
+        # Карта уже посчитана выше — второй раз её считать незачем (#293).
+        transform_progress=transform_progress_map,
+    )
 
     tasks_data = []
     for (
