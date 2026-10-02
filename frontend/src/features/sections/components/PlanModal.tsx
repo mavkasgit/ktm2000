@@ -50,6 +50,8 @@ import {
   DialogHeader,
   DialogTitle,
   Input,
+  PRINT_SHEET_WIDTH_CLASS,
+  PrintStyles,
 } from "@/shared/ui";
 import { DIALOG_SIZES } from "@/shared/lib/dialogSizes";
 import { cn } from "@/shared/utils/cn";
@@ -104,16 +106,6 @@ function savePrintSettings(sectionId: number, settings: PrintSettings) {
 
 /** Группировка печатного листа всегда по артикулу и размеру. */
 const GROUPING_MODE: PlanTaskGroupingMode = "article";
-
-/**
- * Ширина листа в окне: A4 landscape минус поля печати (`10mm 12mm` в стилях
- * предпросмотра) — 273 мм ≈ 1032 px при 96 dpi. Без потолка окно шириной в
- * монитор растягивало колонки: три колонки разъезжались на полтора метра, и
- * пустота внутри таблицы читалась как сломанная вёрстка, хотя на бумаге лист
- * ровно такой ширины и есть. На печати потолок не мешает: доступная ширина
- * листа и равна этим 273 мм.
- */
-const SHEET_WIDTH_CLASS = "mx-auto w-full max-w-[1032px]";
 
 /**
  * Подсказка пресета — его набор колонок по заголовкам «Колонок печати».
@@ -248,25 +240,7 @@ export function PlanModal({
   return (
     <>
       <Dialog open={open} onOpenChange={onOpenChange}>
-      <style>{`
-        @page { size: A4 landscape; margin: 0; }
-        @media print {
-          html, body { margin: 0 !important; padding: 0 !important; background: white !important; height: auto !important; overflow: visible !important; }
-          body * { visibility: hidden; }
-          .print-area, .print-area * { visibility: visible; }
-          body > *:not(.print-area):not([data-radix-focus-guard]) { display: none !important; }
-          .print-area { position: static !important; display: block !important; width: auto !important; max-width: none !important; max-height: none !important; overflow: visible !important; transform: none !important; box-shadow: none !important; border: none !important; padding: 0 !important; }
-          .print-area > *:not(.print-sheet) { display: none !important; }
-          .print-sheet { flex: none !important; overflow: visible !important; height: auto !important; max-height: none !important; padding: 10mm 12mm !important; }
-          .print-sheet .plan-table { width: 100% !important; max-width: none !important; margin: 0 !important; overflow: visible !important; }
-          .print-sheet .no-print-col { display: none !important; }
-          .print-sheet table { width: 100% !important; table-layout: fixed; border-collapse: collapse; font-size: 9pt; }
-          .print-sheet th, .print-sheet td { padding: 1mm 1.5mm !important; font-size: 9pt; line-height: 1.2; white-space: normal !important; max-width: none !important; overflow-wrap: anywhere; word-break: break-word; }
-          .print-sheet tr { break-inside: avoid; }
-          .print-sheet thead { display: table-header-group; }
-          .no-print { display: none !important; }
-        }
-      `}</style>
+      <PrintStyles />
       <DialogContent
         className={cn(
           DIALOG_SIZES.wide.width,
@@ -314,7 +288,7 @@ export function PlanModal({
         </DialogHeader>
 
         <div className="flex-1 overflow-auto p-4 print-sheet">
-          <div className={SHEET_WIDTH_CLASS}>
+          <div className={PRINT_SHEET_WIDTH_CLASS}>
             <div className="mb-4 text-center">
               <div className="text-sm font-bold uppercase tracking-wide">{sheetTitle}</div>
               <div className="mt-0.5 text-[10px] text-muted-foreground">

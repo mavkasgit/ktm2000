@@ -49,6 +49,9 @@ import {
   formatQualityStateLabel,
   formatDimensionsLabel,
   formatCompletedOperationsLabel,
+  completedOperationsServerLabel,
+  OPERATIONS_EMPTY_LABEL,
+  OPERATIONS_NOT_RECORDED_LABEL,
   IMPORT_QUALITY_OPTIONS,
   normalizeImportQualityState,
   type QualityState,
@@ -114,20 +117,40 @@ function getEffectiveQualityState(
 }
 
 /**
- * Подпись оси операций строки предпросмотра — единое правило подписи (#242,
- * ADR-0055 п.5), а не запасной «—».
+ * Серверная подпись оси операций строки предпросмотра: то, что ждёт
+ * `?operations=` и с чем сравнивает `_preview_operations_label`.
+ *
+ * Правило повторяет `_row_completed_operations` (`stock/import_service.py`):
+ * колонки нет или текст не разрешился в справочник — «не зафиксировано»
+ * (NULL-группа), ячейка есть, но пустая (в т.ч. «—», «-» и пробелы) — «без
+ * операций» (`[]`), разрешённые этапы — их имена. Разбор нужен именно здесь:
+ * в списке фильтра стоят серверные подписи, а ячейка печатает прочерк для
+ * обоих пустых состояний — по прочерку их не различить (ADR-0055 п.5).
+ */
+const EMPTY_OPERATIONS_CELLS = new Set(["", "—", "-"]);
+
+export function getImportItemOperationsServerLabel(item: RemainderImportItem): string {
+  const raw = item.completed_operations_raw;
+  if (raw != null && EMPTY_OPERATIONS_CELLS.has(raw.trim())) return OPERATIONS_EMPTY_LABEL;
+  if (!item.completed_stages.length) return OPERATIONS_NOT_RECORDED_LABEL;
+  return completedOperationsServerLabel(undefined, item.completed_stages);
+}
+
+/**
+ * Подпись оси операций строки предпросмотра в ячейке — единое правило
+ * подписи (#242, ADR-0055 п.5).
  *
  * Превью не отдаёт ось отдельным полем (в ответе `completed_operations_raw` и
  * разрешённые `completed_stages`), поэтому правило работает по названиям
  * этапов: `undefined` — это «ответ без `completed_operations`», ветка,
- * оставленная для таких ответов. Пустая колонка даёт «не зафиксировано» —
- * ровно то, что уедет в импорт: пустой признак пишется в баланс `NULL`
- * (ADR-0055 п.6), и «без операций» (`[]`) в предпросмотре не встречается.
+ * оставленная для таких ответов. Оба пустых состояния — и «колонки нет»
+ * (NULL), и «ячейка пуста» (`[]`) — печатают прочерк, как любая ячейка с
+ * пустым состоянием.
  *
- * Значение обязано совпадать с серверной подписью колонки
- * (`_preview_operations_label` в `stock/import_service.py`): иначе выбор из
- * списка фильтра искал бы текста, которого нет в ячейке, и молча вернул ноль
- * строк.
+ * Список фильтра берёт не эту, а серверную подпись
+ * (`getImportItemOperationsServerLabel` в `getImportItemCellValue`): иначе
+ * выбор значения уехал бы туда, чего в ячейке нет, и молча вернул бы ноль
+ * строк (`_preview_operations_label`, `stock/import_service.py`).
  */
 export function getImportItemOperationsLabel(item: RemainderImportItem): string {
   return formatCompletedOperationsLabel(undefined, item.completed_stages);
@@ -182,7 +205,10 @@ function getImportItemCellValue(
     case "length":
       return formatDimensionsLabel(item.dimensions, item.dimensions_label);
     case "operations":
-      return getImportItemOperationsLabel(item);
+      // Список фильтра — серверные подписи: ячейка печатает прочерк обоим
+      // пустым состояниям, а сервер различает «не зафиксировано» и «без
+      // операций» (ADR-0055 п.5).
+      return getImportItemOperationsServerLabel(item);
     case "quality":
       return getImportItemQualityLabel(item, qualityOverrides);
     case "section":

@@ -350,8 +350,8 @@ function ImportBatchDetailDialog({
             )}
             {/* Ось ключа остатка (ADR-0055): без «Операций» две строки одного
                 артикула, склада и размера с разными остатками читаются как
-                дубль. Пустые состояния различимы: `null` — «не зафиксировано»,
-                `[]` — «без операций». */}
+                дубль. Оба пустых состояния (`null` и `[]`) печатают прочерк:
+                различаются строки, а не их подписи. */}
             <div className="max-h-[50vh] overflow-y-auto border border-border rounded-lg">
               <table className="w-full caption-bottom text-sm">
                 <thead>

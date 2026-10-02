@@ -6,6 +6,7 @@ import { renderIcon } from "@/shared/ui/EntityDialog";
 import { listSections } from "@/shared/api/sections";
 import { queryKeys } from "@/shared/api/queryKeys";
 import { fmtQty } from "@/shared/lib/quantityFormat";
+import { rowToneFill, type RowTone } from "@/shared/lib/rowTones";
 import { getAriaSort } from "@/shared/lib/multiSort";
 import { isStorageType } from "@/shared/lib/routeStageClassifier";
 import { type ProductionPlanningStage } from "@/shared/api/productionPlans";
@@ -19,11 +20,16 @@ import { stageColumns, type StageField } from "./executionStagesColumns";
 
 type StageRowTone = "current" | "completed" | "partial" | "default";
 
-const ROW_TONE_CLASS: Record<StageRowTone, string> = {
-  current: "bg-blue-50/90 hover:bg-blue-50",
-  completed: "bg-emerald-50/70 hover:bg-emerald-50/90",
-  partial: "bg-amber-50/70 hover:bg-amber-50/90",
-  default: "hover:bg-muted/25",
+/**
+ * Тон строки этапа — из общего словаря (`shared/lib/rowTones`), а не свой
+ * набор: свои `bg-blue-50/90 …` были третьей копией палитры, и строка этапа
+ * того же состояния не совпадала по цвету со строкой доски.
+ */
+const STAGE_ROW_TONE: Record<StageRowTone, RowTone> = {
+  current: "active",
+  completed: "completed",
+  partial: "activeRunning",
+  default: "plain",
 };
 
 interface ExecutionStagesTableProps {
@@ -262,7 +268,7 @@ export function ExecutionStagesTable({
             return (
               <tr
                 key={stage.route_step_id}
-                className={`border-b border-border/60 transition-colors ${ROW_TONE_CLASS[tone]}`}
+                className={`border-b border-border/60 transition-colors ${rowToneFill(STAGE_ROW_TONE[tone])}`}
               >
                 <td className="px-2 py-1.5 align-top tabular-nums text-muted-foreground">
                   #{stage.sequence}

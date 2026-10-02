@@ -191,17 +191,18 @@ export function PlanTaskTable({
   }
 
   return (
-    <div className="mx-auto w-fit max-w-full rounded-lg border overflow-x-auto plan-table">
+    <div className="mx-auto w-fit max-w-full rounded-lg border overflow-x-auto">
       {/* Ширину задаёт содержимое, и растёт она от центра: `w-fit` + `mx-auto`
           держат таблицу по центру листа, а не прижимают её к левому краю
           пустой страницы. Набор из двух колонок иначе растягивался на всю
           ширину окна и разводил артикул и остаток полутора метрами пустоты.
           Много колонок — блок упирается в ширину листа и прокручивается
           (`overflow-x-auto`), поэтому `max-w-full`.
-          На печати лист растягивает таблицу сам (`@media print`: `width: 100%`
-          с `table-layout: fixed`) — экран и бумага расходятся только шириной,
-          состав строк и колонок один и тот же. */}
-      <table className="text-sm border-collapse">
+          На печати ширину превью держит `fit-table`: без него лист растягивал
+          таблицу на себя (`width: 100%` с `table-layout: fixed`), и бумага
+          расходилась с окном — колонки в превью стояли по содержимому, на
+          листе разъезжались от края до края. */}
+      <table className="fit-table text-sm border-collapse">
         <thead className="bg-gray-50">
           <tr className="border-b">
             {active.map((column) => (

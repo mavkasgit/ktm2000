@@ -30,7 +30,10 @@ describe("маппер колонок журнала передач", () => {
 
 describe("сборка строки sort", () => {
   it("без выбранных колонок уходит дефолт эндпоинта", () => {
-    expect(buildReadySortParam([])).toBe("sequence:asc");
+    // «Готово к передаче» открывается крупными партиями: пока колонка не
+    // выбрана, страница показывает свёрнутые группы, и порядок строк задаёт
+    // сервер.
+    expect(buildReadySortParam([])).toBe("transferable_qty:desc");
     expect(buildHistorySortParam([])).toBe("created_at:desc");
   });
 

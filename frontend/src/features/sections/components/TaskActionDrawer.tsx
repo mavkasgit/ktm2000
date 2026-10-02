@@ -5,6 +5,7 @@ import { parseNumericInput } from "@/shared/lib/parseNumericInput";
 import { normalizeQuantityInput, parseQuantityInput, type QuantityInputIssue } from "@/shared/lib/quantityInput";
 import { resolveFactQuantity } from "../lib/factQuantity";
 import { actionReasonText } from "@/shared/lib/actionReasons";
+import { groupTasksByBlockReason, isTaskCompletable } from "../lib/taskStatus";
 
 import type { SectionBoardTask, ShortageStrategy } from "@/shared/api/shopfloor";
 import { formatDimensionsLabel } from "@/shared/api/stock";
@@ -40,6 +41,12 @@ type TaskActionDrawerProps = {
   open: boolean;
   onOpenChange: (open: boolean) => void;
   task: SectionBoardTask | null;
+  /**
+   * Задания группы: диалог отвечает за группу целиком — ввод «Факт/Брак» здесь
+   * цель группы, а раскладывает её по строкам страница (`applyGroupField`).
+   * Пусто — диалог одиночного завершения.
+   */
+  tasks?: SectionBoardTask[] | null;
   actionQty: string;
   setActionQty: Dispatch<SetStateAction<string>>;
   defectQty: string;
@@ -61,6 +68,7 @@ export function TaskActionDrawer({
   open,
   onOpenChange,
   task,
+  tasks,
   actionQty,
   setActionQty,
   defectQty,
@@ -87,23 +95,54 @@ export function TaskActionDrawer({
     setIssue(result.issue);
     if (!result.issue) setValue(result.value);
   };
+  // Групповой режим: «Завершить группу» из шапки блока. Числа диалога —
+  // суммы по строкам группы, а раскладка набранного по строкам — дело страницы
+  // (там же живёт домен черновика, `applyGroupField`).
+  const groupTasks = tasks ?? [];
+  const isGroup = groupTasks.length > 0;
+
   // Трансформирующий этап (ADR-0002): факт вводится во входных заготовках,
-  // выходы приходуются автоматически пропорционально порции.
-  const isTransform = !!task?.transforms_dimensions && (task?.outputs?.length ?? 0) > 0;
+  // выходы приходуются автоматически пропорционально порции. У группы строк с
+  // разными входами такого перевода нет — она завершается как обычная.
+  const isTransform =
+    !isGroup && !!task?.transforms_dimensions && (task?.outputs?.length ?? 0) > 0;
   const inputQty = isTransform ? toNumber(task?.input_quantity ?? "0") : 0;
   const inputConsumed = isTransform ? toNumber(task?.input_consumed_quantity ?? "0") : 0;
   const inputRejected = isTransform ? toNumber(task?.cache.rejected_quantity ?? "0") : 0;
   const remainingInput = Math.max(0, inputQty - inputConsumed - inputRejected);
 
-  const maxQty = isTransform ? remainingInput : inWorkQuantity(task);
+  const sumOverGroup = (pick: (groupTask: SectionBoardTask) => string | number | null | undefined) =>
+    Math.round(groupTasks.reduce((sum, groupTask) => sum + toNumber(String(pick(groupTask) ?? 0)), 0));
 
-  const available = task ? Math.round(parseFloat(task.cache.available_quantity) || 0) : 0;
+  const maxQty = isTransform
+    ? remainingInput
+    : isGroup
+      ? groupTasks.reduce((sum, groupTask) => sum + inWorkQuantity(groupTask), 0)
+      : inWorkQuantity(task);
 
-  const plannedQty = task ? Math.round(parseFloat(task.planned_quantity) || 0) : 0;
+  const available = isGroup
+    ? sumOverGroup((groupTask) => groupTask.cache.available_quantity)
+    : task
+      ? Math.round(parseFloat(task.cache.available_quantity) || 0)
+      : 0;
 
-  const completedQty = task ? Math.round(parseFloat(task.cache.completed_quantity) || 0) : 0;
+  const plannedQty = isGroup
+    ? sumOverGroup((groupTask) => groupTask.planned_quantity)
+    : task
+      ? Math.round(parseFloat(task.planned_quantity) || 0)
+      : 0;
 
-  const rejectedQty = task ? Math.round(parseFloat(task.cache.rejected_quantity) || 0) : 0;
+  const completedQty = isGroup
+    ? sumOverGroup((groupTask) => groupTask.cache.completed_quantity)
+    : task
+      ? Math.round(parseFloat(task.cache.completed_quantity) || 0)
+      : 0;
+
+  const rejectedQty = isGroup
+    ? sumOverGroup((groupTask) => groupTask.cache.rejected_quantity)
+    : task
+      ? Math.round(parseFloat(task.cache.rejected_quantity) || 0)
+      : 0;
 
   // Записанный факт колонки: у раскроя «годные» — это раскроенные заготовки
   // входа (ADR-0002), у остальных — записанные годные.
@@ -142,14 +181,28 @@ export function TaskActionDrawer({
       <DialogContent className="!left-auto !right-0 !top-0 !translate-x-0 !translate-y-0 h-screen max-h-screen w-[min(100vw,560px)] max-w-none rounded-none border-l p-0 flex flex-col gap-0">
         <div className="p-6 border-b">
           <DialogHeader>
-            <DialogTitle>Внести факт</DialogTitle>
+            <DialogTitle>{isGroup ? "Завершить группу" : "Внести факт"}</DialogTitle>
             <DialogDescription>
-              {`${task?.operation_name || "—"} — Этап #${task?.sequence}`}
+              {isGroup
+                ? `${groupTasks[0]?.product_sku || ""} · ${groupTasks[0]?.operation_name || "—"} · ${groupTasks.length} заданий`
+                : `${task?.operation_name || "—"} — Этап #${task?.sequence}`}
             </DialogDescription>
           </DialogHeader>
         </div>
 
         <div className="flex-1 overflow-auto p-6 space-y-4">
+          {isGroup && (
+            <div className="rounded-lg border bg-muted/20 p-3 text-xs">
+              <div className="flex flex-row flex-wrap gap-x-4 gap-y-1">
+                <div>Заданий: <span className="font-medium">{groupTasks.length}</span></div>
+                <div>В работе: <span className="font-medium">{maxQty}</span></div>
+                <div>Годные: <span className="font-medium">{completedQty}</span></div>
+                <div>Брак: <span className="font-medium">{rejectedQty}</span></div>
+                <div>План: <span className="font-medium">{plannedQty}</span></div>
+              </div>
+            </div>
+          )}
+
           {task && (
             <div className="rounded-lg border bg-muted/20 p-3 text-xs">
               <div className="flex flex-row flex-wrap gap-x-4 gap-y-1">
@@ -206,6 +259,34 @@ export function TaskActionDrawer({
               })}
             </div>
           )}
+
+          {isGroup && groupTasks.some((groupTask) => !isTaskCompletable(groupTask)) && (() => {
+            const byReason = groupTasksByBlockReason(groupTasks);
+            const total = byReason.reduce((sum, entry) => sum + entry.tasks.length, 0);
+            return (
+              <div className="rounded-lg border border-amber-300 bg-amber-50 p-3 text-sm text-amber-800">
+                <div className="flex items-start gap-2">
+                  <AlertTriangle className="h-4 w-4 mt-0.5 shrink-0" />
+                  <div className="flex-1">
+                    <div className="font-medium">
+                      {total} из {groupTasks.length} задач будут пропущены
+                    </div>
+                    {byReason.map(({ reason, tasks: grouped }) => (
+                      <div className="mt-1 text-xs" key={reason}>
+                        <span className="font-semibold">
+                          {actionReasonText(reason)} ({grouped.length}):
+                        </span>{" "}
+                        {Array.from(new Set(grouped.map((groupTask) => groupTask.product_sku)))
+                          .slice(0, 5)
+                          .join(", ")}
+                        {grouped.length > 5 ? "…" : ""}
+                      </div>
+                    ))}
+                  </div>
+                </div>
+              </div>
+            );
+          })()}
 
           {conflictHint && (
             <div className="rounded-lg border border-amber-300 bg-amber-50 p-3 text-sm text-amber-800">

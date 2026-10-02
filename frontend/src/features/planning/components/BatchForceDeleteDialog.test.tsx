@@ -138,14 +138,19 @@ describe("stockEffectRowKey", () => {
 });
 
 describe("BatchForceDeleteDialog — свод «Как изменятся остатки»", () => {
-  it("две группы одного артикула и участка: разные подписи и разные ключи", async () => {
+  it("две группы одного артикула и участка: прочерк в обеих, но ключи разные", async () => {
     renderDialog([
       effect({ completed_operations: null }),
       effect({ completed_operations: [] }),
     ]);
 
-    await screen.findByText(OPERATIONS_NOT_RECORDED_LABEL);
-    expect(screen.getByText(OPERATIONS_EMPTY_LABEL)).toBeTruthy();
+    // Подпись ячейки одна на оба пустых состояния — прочерк.
+    const opsCells = (await screen.findAllByRole("row"))
+      .filter((row) => row.querySelector("td"))
+      .map((row) => row.querySelectorAll("td")[2]?.textContent);
+    expect(opsCells).toEqual(["—", "—"]);
+    expect(screen.queryByText(OPERATIONS_NOT_RECORDED_LABEL)).toBeNull();
+    expect(screen.queryByText(OPERATIONS_EMPTY_LABEL)).toBeNull();
 
     const rows = screen.getAllByRole("row").filter((row) => row.querySelector("td"));
     expect(rows).toHaveLength(2);

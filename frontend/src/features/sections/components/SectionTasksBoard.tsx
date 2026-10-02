@@ -39,6 +39,7 @@ import {
   type TaskSortField,
 } from "../lib/boardQueryParams";
 import { groupTasksByProfile, sortGroupsByQuantityAndSize, taskGroupingDimensions } from "../lib/groupTasksByProfile";
+import { clusterByArticle } from "@/shared/lib/clusterByArticle";
 import type { GroupingProfile } from "../lib/groupingProfiles";
 import {
   getReadyStatusLabel,
@@ -524,6 +525,7 @@ function TableTaskGroupRow({
   groupIssue,
   groupOverPlan,
   onGroupQtyChange,
+  onCompleteGroup,
 }: {
   group: TaskGroup;
   isCollapsed: boolean;
@@ -543,6 +545,11 @@ function TableTaskGroupRow({
   groupIssue?: { good: string | null; defect: string | null };
   groupOverPlan?: { good: boolean; defect: boolean };
   onGroupQtyChange?: (field: DraftField, value: string) => void;
+  /**
+   * «Завершить группу»: групповой путь завершения — диалог с суммой факта и
+   * брака по всем заданиям группы. Не задан — кнопки нет (вкладка плана).
+   */
+  onCompleteGroup?: (group: TaskGroup) => void;
 }) {
   const taskIds = group.tasks.map((t) => t.id);
   const allSelected = bulkSelection?.isAllSelected(taskIds) ?? false;
@@ -552,6 +559,10 @@ function TableTaskGroupRow({
   const recordedGood = group.tasks.reduce((sum, task) => sum + parseFloat(task.cache.completed_quantity), 0);
   const recordedDefect = group.tasks.reduce((sum, task) => sum + parseFloat(task.cache.rejected_quantity), 0);
   const overPlan = groupOverPlan ?? { good: false, defect: false };
+  // «Завершить группу» доступна, пока в группе есть хоть одно завершаемое
+  // задание: остальные уйдут в пропущенные, и диалог их перечислит.
+  const completableCount = group.tasks.filter((task) => getCompletionBlockReason(task) === null).length;
+  const groupCompleteReason = completableCount > 0 ? null : getCompletionBlockReason(group.tasks[0]);
   // Рёбра блока — на ячейках: границы `<tr>` в таблице доски (`border-separate`)
   // браузер не рисует, и `border-y` на строке был невидим.
   const headerCellClass = cn(ROW_CELL_CLASS, TABLE_ROW_STYLES.groupHeaderCell);
@@ -682,7 +693,28 @@ function TableTaskGroupRow({
           )}
         </div>
       </td>
-      <td className={`${headerCellClass} ${isBulkMode && allSelected ? TABLE_ROW_STYLES.selectedGroupHeader : TABLE_ROW_STYLES.defaultGroupRow}`} />
+      <td className={cn(headerCellClass, isBulkMode && allSelected ? TABLE_ROW_STYLES.selectedGroupHeader : TABLE_ROW_STYLES.defaultGroupRow)}>
+        {onCompleteGroup && (
+          <ActionWithReason reason={groupCompleteReason} layout="row">
+            <Button
+              variant="outline"
+              className={ROW_ACTION_BUTTON_CLASS}
+              onClick={(event) => {
+                event.stopPropagation();
+                onCompleteGroup(group);
+              }}
+              disabled={completableCount === 0}
+              title={
+                groupCompleteReason
+                  ? actionReasonText(groupCompleteReason)
+                  : "Завершить все задания группы: факт и брак раскладываются по строкам"
+              }
+            >
+              Завершить группу
+            </Button>
+          </ActionWithReason>
+        )}
+      </td>
       <TableCornerResetCell className={TABLE_ROW_STYLES.groupHeaderCell} />
     </tr>
   );
@@ -711,6 +743,12 @@ type SectionTasksBoardProps = {
   onRevokeItem?: (taskId: number) => void;
   onConfirmRevoke?: () => void;
   isRevoking?: boolean;
+  /**
+   * «Завершить группу» в шапке блока: диалог с суммой факта и брака по всем
+   * заданиям группы. Не задан — кнопки нет: у вкладки плана свой путь,
+   * и групповое завершение там неуместно.
+   */
+  onCompleteGroup?: (group: TaskGroup) => void;
   /**
    * Массовый ввод факта (#283): черновик страницы. У выделенной строки ячейки
    * «Годные»/«Брак» становятся полями, ввод в шапке группы раскладывается по
@@ -814,6 +852,7 @@ export function SectionTasksBoard({
   onRevokeItem,
   onConfirmRevoke,
   isRevoking = false,
+  onCompleteGroup,
   bulkDraft,
   onBulkDraftChange,
   onVisibleTaskIdsChange,
@@ -969,7 +1008,10 @@ export function SectionTasksBoard({
     const grouped = groupTasksByProfile(sortedTasks, profile);
     if (hasActiveSort) return grouped;
 
-    const ordered = sortGroupsByQuantityAndSize(grouped);
+    const ordered = clusterByArticle(sortGroupsByQuantityAndSize(grouped), {
+      articleOf: (group) => group.tasks[0]?.product_sku ?? "—",
+      quantityOf: (group) => group.totalQtyPlan,
+    });
     for (const g of ordered) {
       g.tasks.sort((a, b) => {
         const pA = getStatusPriority(a);
@@ -1341,6 +1383,7 @@ export function SectionTasksBoard({
                 ? (field, value) => handleGroupQtyChange(row.group.tasks, field, value, row.entryKey)
                 : undefined
             }
+            onCompleteGroup={onCompleteGroup}
             onSelectGroup={() => {
               if (!bulkMode || !bulkSelection) return;
               const taskIds = row.group.tasks.map((t) => t.id);

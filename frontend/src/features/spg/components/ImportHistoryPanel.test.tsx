@@ -177,7 +177,7 @@ describe("ImportHistoryPanel — «посмотреть»", () => {
     expect(second.get("Операции")).not.toBe(first.get("Операции"));
   });
 
-  it("различает два пустых состояния оси: «не зафиксировано» и «без операций»", async () => {
+  it("два пустых состояния оси печатают прочерк, но остаются двумя строками", async () => {
     vi.mocked(getStockImportBatches).mockResolvedValue([batch()]);
     vi.mocked(getStockImportBatch).mockResolvedValue({
       batch: batch(),
@@ -191,7 +191,9 @@ describe("ImportHistoryPanel — «посмотреть»", () => {
     const rows = await openDetail();
 
     expect(rows).toHaveLength(3);
-    expect(cellsByHeader(rows).get("Операции")).toBe("не зафиксировано");
+    // Подпись ячейки одна — прочерк; различаются строки, а не их подписи
+    // (ADR-0055 п.6): `null` и `[]` — разные ключи остатка.
+    expect(cellsByHeader(rows).get("Операции")).toBe("—");
 
     const headerNames = within(rows[0])
       .getAllByRole("columnheader")
@@ -200,6 +202,8 @@ describe("ImportHistoryPanel — «посмотреть»", () => {
     expect(opsIndex).toBeGreaterThanOrEqual(0);
     expect(
       within(rows[2]).getAllByRole("cell")[opsIndex]?.textContent,
-    ).toBe("без операций");
+    ).toBe("—");
+    expect(document.body.textContent).not.toContain("не зафиксировано");
+    expect(document.body.textContent).not.toContain("без операций");
   });
 });

@@ -48,8 +48,18 @@ export function mapHistorySortFieldToApi(field: HistorySortField): string | unde
   return HISTORY_SORT_FIELD_TO_API[field];
 }
 
-/** Порядок «Готово к передаче» по умолчанию: этап маршрута, потом номер задания. */
-export const DEFAULT_READY_SORT = "sequence:asc";
+/**
+ * Порядок «Готово к передаче» по умолчанию: крупные партии первыми.
+ *
+ * Это дефолт **эндпоинта** (`?sort=` не уходит), а не `defaultSort` хука:
+ * пока оператор не выбрал колонку, страница показывает свёрнутые группы
+ * (см. `TransfersPage`, `readySortingActive`), а свёрнутая группа печатает
+ * СУММУ «К передаче» — сортировка по ней не выражала бы порядок строк. В
+ * порядке по количеству сервер отдаёт строки от крупной к мелкой, группы
+ * собираются вокруг своей крупнейшей строки, и первым в списке оказывается
+ * то, что выгоднее отправить первым.
+ */
+export const DEFAULT_READY_SORT = "transferable_qty:desc";
 
 /** Порядок журнала передач по умолчанию: свежие передачи сверху. */
 export const DEFAULT_HISTORY_SORT = "created_at:desc";

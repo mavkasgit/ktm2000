@@ -10,7 +10,7 @@ import {
   type BulkActionSummary,
   type BulkRunnerProgress,
 } from "@/shared/bulk";
-import { isFinalReadyRow } from "./groupReadyTransfers";
+import { isFinalReadyRow, readyRowIdentity } from "./groupReadyTransfers";
 
 export function makeIdempotencyKey(prefix: string): string {
   if (typeof crypto !== "undefined" && "randomUUID" in crypto) {
@@ -67,6 +67,14 @@ export interface TransferBatchOptions {
    * см. `planTransferQuantities`. Без него каждая строка уходит своим количеством.
    */
   totalQuantity?: number;
+  /**
+   * Введённые оператором количества по строкам (ключ — `readyRowIdentity`).
+   * Задано — строка уходит введённым числом, а не своим `transferable`, и
+   * превышение доступного или планового количества разрешается так же, как в
+   * одиночной строке (`allow_over_plan`): то же число, набранное в строке, не
+   * должно вести себя по-разному в зависимости от того, откуда его отправили.
+   */
+  quantities?: Record<string, string>;
   comment?: string;
   /** Только для чекбокс-режима: учёт исполнителя и времени операции. */
   executorUserId?: number;
@@ -74,6 +82,18 @@ export interface TransferBatchOptions {
   physicalHandoverAt?: string;
   postFactum?: boolean;
   onProgress?: (progress: BulkRunnerProgress) => void;
+}
+
+/**
+ * Количество строки массовой передачи: набранное оператором, а иначе — своё
+ * доступное. Одно правило на всех: им считается и раскладка группы
+ * (`planTransferQuantities`), и то, что уедет в пакете, и итог в футере.
+ */
+export function enteredTransferQuantity(
+  row: ReadyToTransferTask,
+  quantities: Record<string, string>,
+): string {
+  return quantities[readyRowIdentity(row)] ?? row.transferable_quantity;
 }
 
 export interface TransferBatchOutcome {
@@ -91,11 +111,16 @@ export interface TransferBatchOutcome {
  * Каждый запрос независим: ошибка одной строки не отменяет остальные, поэтому
  * провал возвращается как `failed` в `results`, а не исключением. Строка, которой
  * не досталось запрошенного количества, не отправляется вовсе (`skipped`).
+ *
+ * Количество строки берётся так: введённое оператором (`quantities`, строки
+ * массового режима), иначе своё `transferable` (чекбокс-режим), иначе —
+ * распределение общего количества группы.
  */
 export async function runTransferBatch({
   rows,
   idempotencyPrefix,
   totalQuantity,
+  quantities,
   comment,
   executorUserId,
   performedAt,
@@ -103,7 +128,7 @@ export async function runTransferBatch({
   postFactum,
   onProgress,
 }: TransferBatchOptions): Promise<TransferBatchOutcome> {
-  const { quantities, undistributed } = planTransferQuantities(rows, totalQuantity);
+  const { quantities: planned, undistributed } = planTransferQuantities(rows, totalQuantity);
   const results: BulkActionResultItem<number>[] = [];
   let completed = 0;
 
@@ -111,7 +136,14 @@ export async function runTransferBatch({
 
   for (const [index, row] of rows.entries()) {
     const label = `Позиция #${row.plan_position_id} (${row.product_sku ?? "—"})`;
-    const quantity = quantities[index];
+    const entered = quantities?.[readyRowIdentity(row)];
+    const quantity = quantities ? enteredTransferQuantity(row, quantities) : planned[index];
+    // Превышение разрешает только введённое оператором число: дефолт
+    // (своё `transferable`) в эту ветку не попадает и ведёт себя как раньше.
+    const allowOverPlan =
+      entered != null &&
+      (toScaledQty(entered) > toScaledQty(row.transferable_quantity) ||
+        toScaledQty(entered) > toScaledQty(row.planned_quantity));
 
     if (toScaledQty(quantity) <= 0) {
       results.push({
@@ -140,6 +172,7 @@ export async function runTransferBatch({
             performed_at: performedAt,
             physical_handover_at: physicalHandoverAt,
             post_factum: postFactum,
+            allow_over_plan: allowOverPlan,
             dimensions: row.dimensions ?? undefined,
           });
         }

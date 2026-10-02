@@ -1,6 +1,14 @@
-import { describe, expect, it } from "vitest";
-import type { ReadyToTransferTask } from "@/shared/api/transfers";
-import { planTransferQuantities } from "./runTransferBatch";
+import { beforeEach, describe, expect, it, vi } from "vitest";
+import type { CreateTransferResponse, ReadyToTransferTask } from "@/shared/api/transfers";
+
+vi.mock("@/shared/api/transfers", () => ({
+  createTransfer: vi.fn(),
+  finalReleaseTask: vi.fn(),
+}));
+
+import { createTransfer, finalReleaseTask } from "@/shared/api/transfers";
+import { planTransferQuantities, runTransferBatch } from "./runTransferBatch";
+import { readyRowIdentity } from "./groupReadyTransfers";
 
 function makeTask(overrides: Partial<ReadyToTransferTask> = {}): ReadyToTransferTask {
   return {
@@ -84,5 +92,67 @@ describe("planTransferQuantities", () => {
 
     expect(plan.quantities).toEqual(["2", "0", "2"]);
     expect(plan.undistributed).toBe(0);
+  });
+});
+
+describe("runTransferBatch: количества, набранные оператором в строках", () => {
+  const createdTransfer: CreateTransferResponse = {
+    transfer_id: 1,
+    transfer_no: "TR-1",
+    status: "accepted",
+    to_task_id: 2,
+  };
+
+  beforeEach(() => {
+    vi.mocked(createTransfer).mockReset().mockResolvedValue(createdTransfer);
+    vi.mocked(finalReleaseTask).mockReset().mockResolvedValue({ transaction_id: 1, task_id: 2 });
+  });
+
+  function calledQuantity(call: number): string | number | undefined {
+    const options = vi.mocked(createTransfer).mock.calls[call]?.[0];
+    return options?.quantity;
+  }
+
+  it("строка уходит набранным числом, а строка без записи — своим доступным", async () => {
+    const rows = rowsWithTransferable("100", "100");
+
+    await runTransferBatch({
+      rows,
+      idempotencyPrefix: "t",
+      quantities: { [readyRowIdentity(rows[0])]: "40" },
+    });
+
+    expect(calledQuantity(0)).toBe("40");
+    expect(calledQuantity(1)).toBe("100");
+  });
+
+  it("превышение доступного разрешает только у набранного числа", async () => {
+    const rows = rowsWithTransferable("100", "100");
+
+    await runTransferBatch({
+      rows,
+      idempotencyPrefix: "t",
+      quantities: { [readyRowIdentity(rows[0])]: "150" },
+    });
+
+    expect(vi.mocked(createTransfer).mock.calls[0]?.[0]?.allow_over_plan).toBe(true);
+    expect(vi.mocked(createTransfer).mock.calls[1]?.[0]?.allow_over_plan).toBe(false);
+  });
+
+  it("обнулённая строка пропускается, остальные уходят", async () => {
+    const rows = rowsWithTransferable("100", "100");
+
+    const outcome = await runTransferBatch({
+      rows,
+      idempotencyPrefix: "t",
+      quantities: {
+        [readyRowIdentity(rows[0])]: "0",
+        [readyRowIdentity(rows[1])]: "70",
+      },
+    });
+
+    expect(calledQuantity(0)).toBe("70");
+    expect(vi.mocked(createTransfer)).toHaveBeenCalledTimes(1);
+    expect(outcome.results.map((result) => result.status)).toEqual(["skipped", "success"]);
   });
 });

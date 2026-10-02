@@ -32,7 +32,6 @@ import {
   TableRow,
   toast,
   SpgSelect,
-  Checkbox,
   AlertDialog,
   AlertDialogContent,
   AlertDialogHeader,
@@ -47,6 +46,10 @@ import {
   DATA_TABLE_STYLES,
   VirtualizedTableBody,
   TablePaginationFooter,
+  FiltersPanel,
+  PrintButton,
+  buildActiveFilterSummary,
+  type FiltersPanelField,
 } from "@/shared/ui";
 import { useFilterableTable } from "@/shared/hooks/useFilterableTable";
 import { usePaginatedTableQuery } from "@/shared/hooks/usePaginatedTableQuery";
@@ -74,9 +77,14 @@ import { formatDimensionsFilterValue, formatDimensionsLabel } from "@/shared/api
 import { buildColumnApiParams } from "@/shared/lib/columnSpecs";
 import { getAriaSort } from "@/shared/lib/multiSort";
 import { isFirstRowsLoad, keepPreviousDataForScope } from "@/shared/lib/tableQueryPlaceholder";
-import { historyColumns, readyColumns } from "../lib/transferColumns";
+import { getReadyCellValue, historyColumns, readyColumns } from "../lib/transferColumns";
 import { TABLE_ROW_COMPACT, TABLE_ROW_DENSE } from "@/shared/lib/dataTableStyles";
 import { TABLE_ROW_STYLES } from "@/shared/lib/tableRowStyles";
+import {
+  ROW_TONE_STRIPE,
+  rowToneFill,
+  type RowTone,
+} from "@/shared/lib/rowTones";
 import { cn } from "@/shared/utils/cn";
 import {
   useBulkSelection,
@@ -89,6 +97,7 @@ import {
   BulkTransferFooter,
   type BulkTransferSubmitData,
 } from "../components/BulkTransferFooter";
+import { ReadyTransferPrintDialog } from "../components/ReadyTransferPrintDialog";
 import {
   dimensionsKey,
   groupReadyTransfers,
@@ -97,8 +106,14 @@ import {
   readyRowIdentity,
   type ReadyTransferGroup,
 } from "../lib/groupReadyTransfers";
-import { makeIdempotencyKey, runTransferBatch } from "../lib/runTransferBatch";
+import {
+  enteredTransferQuantity,
+  makeIdempotencyKey,
+  planTransferQuantities,
+  runTransferBatch,
+} from "../lib/runTransferBatch";
 import { useFlushableDebouncedValue } from "@/shared/lib/useDebouncedValue";
+import { isAnyDialogOpen } from "@/shared/lib/dialogOpen";
 import {
   buildHistorySortParam,
   buildReadySortParam,
@@ -129,6 +144,19 @@ const TRANSFERS_ROW = {
   quantityInput: "h-6",
   rowHeightPx: TABLE_ROW_DENSE.rowHeightPx,
 } as const;
+
+/**
+ * Подсказка у погашенной кнопки строки в массовом режиме. Кнопка остаётся на
+ * месте (колонка «Действия» не меняет ширину и страница не прыгает), но
+ * действие одно — футер: по строке передача не отправляется.
+ */
+const BULK_ROW_ACTION_TITLE = "В массовом режиме отправляет «Передать все» в футере";
+/**
+ * Подсказка у погашенной кнопки финальной строки: её-то футер не отправляет —
+ * финальный выпуск в массовую передачу не берётся, и выпускать его надо вне
+ * режима. Врать «отправит футер» здесь нельзя.
+ */
+const BULK_FINAL_ACTION_TITLE = "Финальный выпуск в массовую передачу не берётся: выйдите из режима";
 
 function conflictHintFromTransferError(message: string): string | null {
   const n = message.toLowerCase();
@@ -185,23 +213,22 @@ function statusBadgeVariant(status: string): StatusBadgeVariant {
   return "outline";
 }
 
-function getReadyCellValue(task: ReadyToTransferTask, field: ReadySortField): string {
-  switch (field) {
-    case "positionId":
-      return String(task.plan_position_id);
-    case "sku":
-      return task.product_sku ?? "—";
-    case "dimensions":
-      return formatDimensionsLabel(task.dimensions, task.dimensions_label);
-    case "stage":
-      return task.operation_name ?? "—";
-    case "transferableQty":
-      return fmtQty(task.transferable_quantity);
-    case "next":
-      return task.has_next_step
-        ? `${task.next_operation_name ?? "—"} / ${task.next_section_code ?? "—"}`
-        : "Финальный";
-  }
+/**
+ * Тон строки журнала — из общего словаря (`shared/lib/rowTones`), как у
+ * «Готово к передаче»: принятая передача — тон `completed` (закрытое дело),
+ * отправленная и частично принятая — `activeRunning` (ещё в пути),
+ * скорректированная — `active` (живая правка), аннулированная — `plain` (её и
+ * так гасит `opacity`).
+ *
+ * Текст строки тоном не перекрашивается: в словаре `completed` несёт
+ * зачёркивание и приглушение — это состояние *задания* на доске, а не
+ * состояние *передачи* в журнале.
+ */
+function historyRowTone(status: string): RowTone {
+  if (status === "cancelled") return "plain";
+  if (status === "amended") return "active";
+  if (status === "sent" || status === "partially_accepted") return "activeRunning";
+  return "completed";
 }
 
 function getHistoryStatusLabel(
@@ -276,6 +303,13 @@ interface ReadyTransferRowProps {
   isInGroup: boolean;
   /** Строка закрывает блок группы — на ней 3px-граница. */
   isLastInGroup: boolean;
+  /**
+   * Количество строки приходит сверху (массовый режим): строки
+   * виртуализированы, и локальное состояние строки терялось бы при прокрутке.
+   * Не задано — строка держит количество сама (обычный режим).
+   */
+  controlledQuantity?: string;
+  onQuantityChange?: (value: string) => void;
   tryAcquire: () => boolean;
   release: () => void;
   invalidateTransferCaches: () => void;
@@ -289,15 +323,19 @@ function ReadyTransferRow({
   isSubmitting,
   isInGroup,
   isLastInGroup,
+  controlledQuantity,
+  onQuantityChange,
   tryAcquire,
   release,
   invalidateTransferCaches,
 }: ReadyTransferRowProps) {
-  const [quantity, setQuantity] = useState(task.transferable_quantity);
+  const [ownQuantity, setOwnQuantity] = useState(task.transferable_quantity);
+  const quantity = controlledQuantity ?? ownQuantity;
+  const setQuantity = onQuantityChange ?? setOwnQuantity;
   const submittingRef = useRef(false);
 
   useEffect(() => {
-    setQuantity(task.transferable_quantity);
+    setOwnQuantity(task.transferable_quantity);
   }, [task.transferable_quantity]);
 
   const mutation = useMutation({
@@ -389,24 +427,16 @@ function ReadyTransferRow({
       // Раскрытая строка группы носит общую подложку блока (ADR-0065):
       // строки одного артикула читаются одним куском, а не списком.
       className={cn(
-        isInGroup ? TABLE_ROW_STYLES.groupBlock : bulkMode ? "cursor-pointer hover:bg-muted/50" : undefined,
+        isSelected
+          ? TABLE_ROW_STYLES.selectedRow
+          : isInGroup
+            ? TABLE_ROW_STYLES.groupBlock
+            : TABLE_ROW_STYLES.defaultRow,
+        bulkMode && "cursor-pointer",
       )}
       onClick={bulkMode ? onSelect : undefined}
     >
-      {bulkMode && (
-        <TableCell
-          className={cn(cellClass, isInGroup ? TABLE_ROW_STYLES.blockRail : TABLE_ROW_STYLES.emptyRail, "w-[40px]")}
-          onClick={(e) => e.stopPropagation()}
-        >
-          <Checkbox
-            checked={isSelected}
-            disabled={isFinalRow}
-            onCheckedChange={onSelect}
-            title={isFinalRow ? actionReasonText("final_release_not_in_bulk") : undefined}
-          />
-        </TableCell>
-      )}
-      <TableCell className={cn(cellClass, isInGroup ? TABLE_ROW_STYLES.blockRail : TABLE_ROW_STYLES.emptyRail, "font-mono text-xs text-muted-foreground")}>#{task.plan_position_id}</TableCell>
+      <TableCell className={cn(cellClass, TABLE_ROW_STYLES.blockRail, "font-mono text-xs text-muted-foreground")}>#{task.plan_position_id}</TableCell>
       <TableCell className={cellClass}>{task.product_sku ?? "—"}</TableCell>
       <TableCell className={`${cellClass} text-xs text-muted-foreground whitespace-nowrap`}>
         {formatDimensionsLabel(task.dimensions, task.dimensions_label)}
@@ -416,10 +446,7 @@ function ReadyTransferRow({
       </TableCell>
       <TableCell className={`${cellClass} text-right tabular-nums`}>
         <div className="whitespace-nowrap">
-          <span className="font-medium">{fmtQty(task.transferable_quantity)} шт.</span>{" "}
-          <span className="text-[11px] text-muted-foreground">
-            (план {fmtQty(task.planned_quantity)})
-          </span>
+          <span className="font-medium">{fmtQty(task.transferable_quantity)} шт.</span>
           {task.dimensions != null && (
             <span className="ml-1 text-[10px] text-muted-foreground" title="Габарит из плана">
               · {formatDimensionsLabel(task.dimensions, task.dimensions_label)}
@@ -444,10 +471,26 @@ function ReadyTransferRow({
           </div>
         )}
       </TableCell>
-      {!bulkMode && (
-        <TableCell className={cellClass} onClick={(e) => e.stopPropagation()}>
-          <div className="flex items-center justify-end gap-2">
+      <TableCell className={cellClass} onClick={(e) => e.stopPropagation()}>
+        <div className="flex items-center justify-end gap-2">
+          {/* Количество и кнопка живут в строке всегда — в массовом режиме
+              кнопка видна, но погашена: отправляет один футер. Прятать её
+              нельзя — колонка «Действия» меняла ширину, и доска прыгала при
+              входе в режим и выходе из него. Финальный выпуск в массовую
+              передачу не берётся: строка не выбирается, и количество ей не
+              нужно. */}
+          {(!bulkMode || !isFinalRow) && (
             <div className="flex items-center gap-1">
+              {/* План — у поля ввода, а не в «К передаче»: подпись «(план N)»
+                  рядом с числом съедала ширину, и колонка количеств не
+                  выстраивалась. Формат «передано/план»: у нетронутой строки
+                  читается «0/3000», как её и просили. */}
+              <span
+                className="text-[11px] text-muted-foreground tabular-nums whitespace-nowrap"
+                title="Уже передано / план задания"
+              >
+                {fmtQty(task.already_transferred_quantity)}/{fmtQty(task.planned_quantity)}
+              </span>
               <Input
                 type="number"
                 step="1"
@@ -465,15 +508,24 @@ function ReadyTransferRow({
                 </Badge>
               )}
             </div>
-            <ActionWithReason reason={quantityReason}>
-              {isFinalRow ? (
-                <Button
-                  size="sm"
-                  className={TRANSFERS_ROW.actionButton}
-                  disabled={isSubmitting || releaseMutation.isPending || quantityReason !== null}
-                  title={quantityReason ? actionReasonText(quantityReason) : "Финальный выпуск готовой продукции"}
-                  onClick={() => {
-                    if (submittingRef.current || isSubmitting || releaseMutation.isPending) return;
+          )}
+          <ActionWithReason reason={bulkMode ? null : quantityReason}>
+            {isFinalRow ? (
+              <Button
+                size="sm"
+                className={TRANSFERS_ROW.actionButton}
+                disabled={bulkMode || isSubmitting || releaseMutation.isPending || quantityReason !== null}
+                title={
+                  bulkMode
+                    ? isFinalRow
+                      ? BULK_FINAL_ACTION_TITLE
+                      : BULK_ROW_ACTION_TITLE
+                    : quantityReason
+                      ? actionReasonText(quantityReason)
+                      : "Финальный выпуск готовой продукции"
+                }
+                onClick={() => {
+                  if (submittingRef.current || isSubmitting || releaseMutation.isPending) return;
                     if (!tryAcquire()) return;
                     submittingRef.current = true;
                     const key = makeIdempotencyKey(`final-release-${task.task_id}`);
@@ -491,8 +543,14 @@ function ReadyTransferRow({
                 <Button
                   size="sm"
                   className={TRANSFERS_ROW.actionButton}
-                  disabled={isSubmitting || mutation.isPending || quantityReason !== null}
-                  title={quantityReason ? actionReasonText(quantityReason) : "Передать на следующий этап"}
+                  disabled={bulkMode || isSubmitting || mutation.isPending || quantityReason !== null}
+                  title={
+                    bulkMode
+                      ? BULK_ROW_ACTION_TITLE
+                      : quantityReason
+                        ? actionReasonText(quantityReason)
+                        : "Передать на следующий этап"
+                  }
                   onClick={() => {
                     if (submittingRef.current || isSubmitting || mutation.isPending) return;
                     if (!tryAcquire()) return;
@@ -510,9 +568,8 @@ function ReadyTransferRow({
                 </Button>
               )}
             </ActionWithReason>
-          </div>
-        </TableCell>
-      )}
+        </div>
+      </TableCell>
       <TableCornerResetCell className={TABLE_ROW_STYLES.groupHeaderCell} />
     </TableRow>
   );
@@ -520,10 +577,14 @@ function ReadyTransferRow({
 
 /**
  * Ряд-заголовок группы ready-строк — строк, неразличимых для передачи: тот же
- * артикул, участок, размер и адресат (см. `groupReadyTransfers`). Группа свёрнута
- * по умолчанию; введённое общее количество распределяется по строкам
- * последовательно (`runTransferBatch`). В чекбокс-режиме группы раскрыты
- * принудительно и групповой кнопки не имеют.
+ * артикул, участок, размер, адресат и операция (см. `groupReadyTransfers`).
+ * Группа свёрнута по умолчанию; введённое общее количество распределяется по
+ * строкам последовательно (`runTransferBatch`).
+ *
+ * В массовом режиме группы раскрыты принудительно, у шапки есть поле общего
+ * количества (раскладывается по строкам — как «Годные» в шапке группы на доске
+ * участка) и выбор: клик по шапке берёт группу целиком, а подложка шапки
+ * окрашивается вместе со строками.
  */
 function ReadyTransferGroupRow({
   group,
@@ -531,6 +592,11 @@ function ReadyTransferGroupRow({
   isCollapsed,
   isSubmitting,
   hasInFlightRow,
+  isAllSelected,
+  isPartiallySelected,
+  controlledQuantity,
+  onQuantityChange,
+  onSelectGroup,
   onToggleCollapse,
   onTransferGroup,
 }: {
@@ -539,13 +605,23 @@ function ReadyTransferGroupRow({
   isCollapsed: boolean;
   isSubmitting: boolean;
   hasInFlightRow: boolean;
+  /** Все строки группы выделены — шапка носит подложку выбора, как её строки. */
+  isAllSelected: boolean;
+  /** Часть строк выделена: клик по шапке снимает выбор со всей группы. */
+  isPartiallySelected: boolean;
+  /** Общее количество группы в массовом режиме: ввод раскладывается по строкам. */
+  controlledQuantity?: string;
+  onQuantityChange?: (value: string) => void;
+  onSelectGroup: () => void;
   onToggleCollapse: () => void;
   onTransferGroup: (group: ReadyTransferGroup, quantity: string) => void;
 }) {
-  const [quantity, setQuantity] = useState(() => fmtQty(group.totalTransferable));
+  const [ownQuantity, setOwnQuantity] = useState(() => fmtQty(group.totalTransferable));
+  const quantity = controlledQuantity ?? ownQuantity;
+  const setQuantity = onQuantityChange ?? setOwnQuantity;
 
   useEffect(() => {
-    setQuantity(fmtQty(group.totalTransferable));
+    setOwnQuantity(fmtQty(group.totalTransferable));
   }, [group.totalTransferable]);
 
   // Ячейка шапки блока: рёбра на ячейках, а не на `<tr>` — одно правило
@@ -570,18 +646,26 @@ function ReadyTransferGroupRow({
     <TableRow
       data-row-kind="ready-group"
       style={{ height: TRANSFERS_ROW.rowHeightPx }}
+      tabIndex={bulkMode ? 0 : undefined}
+      aria-selected={bulkMode ? isAllSelected : undefined}
       className={cn(
         "font-semibold",
         bulkMode ? "" : "cursor-pointer",
-        TABLE_ROW_STYLES.defaultGroupHeader,
+        // Выделенная группа носит подложку выбора — как её строки: иначе
+        // «выбрано» видно на детях, а шапка выглядит невыбранной.
+        bulkMode && isAllSelected
+          ? TABLE_ROW_STYLES.selectedGroupHeader
+          : TABLE_ROW_STYLES.defaultGroupHeader,
       )}
-      onClick={bulkMode ? undefined : onToggleCollapse}
+      onClick={bulkMode ? onSelectGroup : onToggleCollapse}
+      onKeyDown={(event) => {
+        if (!bulkMode) return;
+        if (event.target !== event.currentTarget) return;
+        if (event.key !== "Enter" && event.key !== " ") return;
+        event.preventDefault();
+        onSelectGroup();
+      }}
     >
-      {bulkMode && (
-        <TableCell
-          className={cn(TRANSFERS_ROW.cell, TABLE_ROW_STYLES.groupHeaderCell, TABLE_ROW_STYLES.blockRail, "w-[40px]")}
-        />
-      )}
       <TableCell className={cn(groupHeaderCellClass, TABLE_ROW_STYLES.blockRail, "text-center")}>
         <button
           className="p-1 hover:bg-muted rounded transition-colors text-muted-foreground"
@@ -633,47 +717,60 @@ function ReadyTransferGroupRow({
           <Badge variant="outline">Финальный</Badge>
         )}
       </TableCell>
-      {!bulkMode && (
-        <TableCell className={groupHeaderCellClass} onClick={(e) => e.stopPropagation()}>
-          <div className="flex items-center justify-end gap-2">
-            <div className="flex items-center gap-1">
-              <Input
-                type="number"
-                step="1"
-                min="0"
-                value={quantity}
-                disabled={isSubmitting}
-                className={`w-20 ${TRANSFERS_ROW.quantityInput} text-right px-2 ${
-                  overLimit ? "border-amber-400 focus-visible:ring-amber-400" : ""
-                }`}
-                title={
-                  overLimit
-                    ? `Больше доступного (${fmtQty(group.totalTransferable)} шт.) — излишек не передастся`
-                    : "Общее количество группы: распределится по строкам по порядку"
-                }
-                onChange={(e) => setQuantity(e.target.value)}
-              />
-            </div>
-            <ActionWithReason reason={groupBlockReason}>
-              <Button
-                size="sm"
-                className={TRANSFERS_ROW.actionButton}
-                disabled={isSubmitting || groupBlockReason !== null}
-                title={
-                  groupBlockReason
+      {/* Ячейка «Действия» есть всегда. В массовом режиме это поле общего
+          количества группы (без кнопки: отправляет футер), в обычном — поле и
+          кнопка передачи группы. */}
+      <TableCell className={groupHeaderCellClass} onClick={(e) => e.stopPropagation()}>
+        <div className="flex items-center justify-end gap-2">
+          <div className="flex items-center gap-1">
+            {/* Как у строки: «передано/план» перед полем, только суммами по
+                группе — шапка несёт общее, а не план одной строки. */}
+            <span
+              className="text-[11px] text-muted-foreground tabular-nums whitespace-nowrap"
+              title="Уже передано / план по строкам группы"
+            >
+              {fmtQty(group.totalAlreadyTransferred)}/{fmtQty(group.totalPlanned)}
+            </span>
+            <Input
+              type="number"
+              step="1"
+              min="0"
+              value={quantity}
+              disabled={isSubmitting}
+              className={`w-20 ${TRANSFERS_ROW.quantityInput} text-right px-2 ${
+                overLimit ? "border-amber-400 focus-visible:ring-amber-400" : ""
+              }`}
+              title={
+                overLimit
+                  ? `Больше доступного (${fmtQty(group.totalTransferable)} шт.) — излишек не передастся`
+                  : "Общее количество группы: распределится по строкам по порядку"
+              }
+              onChange={(e) => setQuantity(e.target.value)}
+            />
+          </div>
+          <ActionWithReason reason={bulkMode ? null : groupBlockReason}>
+            <Button
+              size="sm"
+              className={TRANSFERS_ROW.actionButton}
+              disabled={bulkMode || isSubmitting || groupBlockReason !== null}
+              title={
+                bulkMode
+                  ? group.allFinal
+                    ? BULK_FINAL_ACTION_TITLE
+                    : BULK_ROW_ACTION_TITLE
+                  : groupBlockReason
                     ? actionReasonText(groupBlockReason)
                     : group.allFinal
                       ? "Финальный выпуск всех заданий группы"
                       : "Передать на следующий этап все задания группы"
-                }
-                onClick={() => onTransferGroup(group, quantity)}
-              >
-                {isSubmitting ? "Отправка..." : group.allFinal ? "Отправить" : "Передать"}
-              </Button>
-            </ActionWithReason>
-          </div>
-        </TableCell>
-      )}
+              }
+              onClick={() => onTransferGroup(group, quantity)}
+            >
+              {isSubmitting ? "Отправка..." : group.allFinal ? "Отправить" : "Передать"}
+            </Button>
+          </ActionWithReason>
+        </div>
+      </TableCell>
       <TableCornerResetCell />
     </TableRow>
   );
@@ -690,8 +787,7 @@ export function TransfersPage() {
   const { value: debouncedHistorySearch, flush: flushHistorySearch } =
     useFlushableDebouncedValue(historySearch);
   const [readySearch, setReadySearch] = useState("");
-  const { value: debouncedReadySearch, flush: flushReadySearch } =
-    useFlushableDebouncedValue(readySearch);
+  const { value: debouncedReadySearch } = useFlushableDebouncedValue(readySearch);
   // Журнал передач — боковая панель: не отнимает ширину у «Готово к передаче».
   const [historyOpen, setHistoryOpen] = useState(false);
   const historyScrollRef = useRef<HTMLDivElement>(null);
@@ -984,6 +1080,108 @@ export function TransfersPage() {
     resetReadyFiltersBase();
   }, [resetReadyFiltersBase]);
 
+  const [readyPrintOpen, setReadyPrintOpen] = useState(false);
+  /**
+   * Количества строк массового режима, ключ — `readyRowIdentity`. Живут на
+   * странице, а не в строке: строки виртуализированы, и набранное число
+   * пропадало бы при прокрутке. Строка без записи идёт своим `transferable`.
+   */
+  const [bulkQuantities, setBulkQuantities] = useState<Record<string, string>>({});
+  /**
+   * Набранное в шапке группы (ключ — ключ группы). Хранится отдельно от строк,
+   * потому что поле шапки показывает НАБРАННОЕ, а строки — уже разложенное по
+   * ним; без этого ввод обрывался бы на первой же цифре, когда раскладка
+   * упирается в доступное.
+   */
+  const [bulkGroupQuantities, setBulkGroupQuantities] = useState<Record<string, string>>({});
+
+  const setRowBulkQuantity = useCallback(
+    (groupKey: string | null, identity: string, value: string) => {
+      setBulkQuantities((prev) => ({ ...prev, [identity]: value }));
+      // Правка строки снимает набранное в шапке: поле группы выводится из строк,
+      // и оставленный текст показывал бы не то, что уедет.
+      if (!groupKey) return;
+      setBulkGroupQuantities((prev) => {
+        if (!(groupKey in prev)) return prev;
+        const next = { ...prev };
+        delete next[groupKey];
+        return next;
+      });
+    },
+    [],
+  );
+
+  /** Ввод в шапке группы: раскладывается по её строкам тем же правилом, что отправка. */
+  const setGroupBulkQuantity = useCallback(
+    (group: ReadyTransferGroup, value: string) => {
+      setBulkGroupQuantities((prev) => ({ ...prev, [group.key]: value }));
+      setBulkQuantities((prev) => {
+        const next = { ...prev };
+        if (value.trim() === "") {
+          // Очистка снимает раскладку: строки возвращаются к своему доступному.
+          for (const row of group.rows) delete next[readyRowIdentity(row)];
+          return next;
+        }
+        const { quantities } = planTransferQuantities(group.rows, parseFloat(value) || 0);
+        group.rows.forEach((row, index) => {
+          next[readyRowIdentity(row)] = quantities[index];
+        });
+        return next;
+      });
+      // Набранное в шапке — это и выбор группы: иначе число набрано, а строки
+      // в пачку не попали.
+      for (const row of group.rows) {
+        if (!isFinalReadyRow(row)) bulkSelection.selectOne(row.task_id, true);
+      }
+    },
+    [bulkSelection],
+  );
+
+  /** Клик по шапке группы: выделить её строки целиком или снять выбор со всех. */
+  const toggleGroupSelection = useCallback(
+    (taskIds: number[]) => {
+      const allSelected = bulkSelection.isAllSelected(taskIds);
+      const someSelected = bulkSelection.isIndeterminate(taskIds);
+      const next = !(allSelected || someSelected);
+      for (const id of taskIds) bulkSelection.selectOne(id, next);
+    },
+    [bulkSelection],
+  );
+
+  /** Значение поля группы: набранное в шапке, иначе — сумма количеств её строк. */
+  const groupBulkQuantity = useCallback(
+    (group: ReadyTransferGroup): string => {
+      const typed = bulkGroupQuantities[group.key];
+      if (typed !== undefined) return typed;
+      return String(
+        group.rows.reduce(
+          (sum, row) =>
+            sum + (parseFloat(bulkQuantities[readyRowIdentity(row)] ?? row.transferable_quantity) || 0),
+          0,
+        ),
+      );
+    },
+    [bulkGroupQuantities, bulkQuantities],
+  );
+
+  /** Строки, которые оператор может отправить: финальный выпуск — не передача. */
+  const readySelectableIds = useMemo(
+    () => readyItems.filter((task) => !isFinalReadyRow(task)).map((task) => task.task_id),
+    [readyItems],
+  );
+
+  const readyActiveFilterSummary = useMemo(
+    () =>
+      buildActiveFilterSummary(readySearch, readySortConfigs.length, {
+        columnFilters: readyColumnFilters,
+        columnSearchQueries: readyDebouncedColumnSearchQueries,
+        columnLabels: Object.fromEntries(
+          readyColumns.filter((column) => column.filterField).map((column) => [column.filterField, column.label]),
+        ),
+      }),
+    [readySearch, readySortConfigs.length, readyColumnFilters, readyDebouncedColumnSearchQueries],
+  );
+
   const handleHistorySort = useCallback(
     (field: HistorySortField) => {
       applyHistorySort(field);
@@ -1076,8 +1274,71 @@ export function TransfersPage() {
 
   const exitBulkMode = useCallback(() => {
     bulkSelection.clear();
+    // Набранные количества уходят вместе с режимом: в следующий заход строка
+    // снова показывает своё доступное.
+    setBulkQuantities({});
+    setBulkGroupQuantities({});
     setBulkMode(false);
   }, [bulkSelection]);
+
+  /**
+   * Escape выходит из массового режима — то же, что кнопка «Выйти» в футере
+   * (и то же правило, что на доске участка). Окно поверх режима клавишу не
+   * отдаёт: пока открыт диалог, страница её не трогает, иначе второе нажатие
+   * выбрасывало бы из режима вместе с окном. Идущая отправка тоже держит режим:
+   * прогресс виден только в футере.
+   */
+  useEffect(() => {
+    if (!bulkMode) return;
+    const handler = (event: KeyboardEvent) => {
+      if (event.key !== "Escape") return;
+      // Слушатель в фазе перехвата: окно Radix обрабатывает ту же клавишу
+      // раньше (его слушатель на `document` срабатывает до `window`), и к
+      // моменту обычной фазы окно уже закрыто — проверка «открыто ли окно»
+      // видела бы закрытое. В перехвате состояние ещё честное.
+      if (isAnyDialogOpen()) return;
+      if (bulkSubmitting || bulkProgress?.running) return;
+      event.preventDefault();
+      exitBulkMode();
+    };
+    window.addEventListener("keydown", handler, true);
+    return () => window.removeEventListener("keydown", handler, true);
+  }, [bulkMode, bulkSubmitting, bulkProgress?.running, exitBulkMode]);
+
+  // Тот же ряд, что на доске участка: поиск → печать → массовые операции
+  // («Групповые операции» + «Выделить все»). Массовые операции живут здесь, а
+  // не в шапке таблицы: это управление выборкой, а не её данные. Доска
+  // (`SectionTasksBoard`) показывает тот же ряд в том же порядке.
+  const readyToolbarFields = useMemo((): FiltersPanelField[] => {
+    return [
+      {
+        kind: "search",
+        key: "search",
+        value: readySearch,
+        onChange: setReadySearch,
+        placeholder: "Поиск по ID, артикулу, этапу…",
+        layoutSpan: "min-w-[250px]",
+      },
+      {
+        kind: "custom",
+        key: "print",
+        node: (
+          <PrintButton
+            label="Печать списка"
+            disabled={readyTotal === 0}
+            onClick={() => setReadyPrintOpen(true)}
+          />
+        ),
+        layoutSpan: "flex-shrink-0",
+      },
+      {
+        kind: "bulk",
+        key: "bulk-mode",
+        enabled: bulkMode,
+        onChange: (enabled: boolean) => (enabled ? setBulkMode(true) : exitBulkMode()),
+      },
+    ];
+  }, [readySearch, readyTotal, bulkMode, exitBulkMode]);
 
   const selectedReadyTasks = useMemo(
     // Финальные строки (тикет #96) исключаются из групповой передачи:
@@ -1131,14 +1392,22 @@ export function TransfersPage() {
 
   const handleBulkTransferSubmit = useCallback(async (data: BulkTransferSubmitData) => {
     const selectedTasks = readyItems.filter(t => !isFinalReadyRow(t) && bulkSelection.isSelected(t.task_id));
-    if (selectedTasks.length === 0) return;
+    // Нулевые строки (хвост раскладки группы) не отправляются вовсе: правило
+    // то же, что в футере, — `enteredTransferQuantity`.
+    const rowsToSend = selectedTasks.filter(
+      (task) => (parseFloat(enteredTransferQuantity(task, bulkQuantities)) || 0) > 0,
+    );
+    if (rowsToSend.length === 0) return;
 
     setBulkSubmitting(true);
-    setBulkProgress({ total: selectedTasks.length, completed: 0, running: true });
+    setBulkProgress({ total: rowsToSend.length, completed: 0, running: true });
 
     const { results, summary } = await runTransferBatch({
-      rows: selectedTasks,
+      rows: rowsToSend,
       idempotencyPrefix: "transfer-send-bulk",
+      // Количество каждой строки — то, что набрано в её поле, а не своё
+      // `transferable`: в массовом режиме строки редактируются.
+      quantities: bulkQuantities,
       comment: data.comment.trim() || undefined,
       executorUserId: data.executorUserId,
       performedAt: data.performedAt,
@@ -1166,8 +1435,10 @@ export function TransfersPage() {
     }
 
     bulkSelection.clear();
+    setBulkQuantities({});
+    setBulkGroupQuantities({});
     setBulkMode(false);
-  }, [readyItems, bulkSelection, invalidateTransferCaches]);
+  }, [readyItems, bulkSelection, bulkQuantities, invalidateTransferCaches]);
 
   if (spgs !== undefined && spgs.length === 0) {
     return (
@@ -1197,8 +1468,7 @@ export function TransfersPage() {
               setShowAllSpgs(false);
               setSpgId(val);
               setEditTransferRecord(null);
-              bulkSelection.clear();
-              setBulkMode(false);
+              exitBulkMode();
             }}
             placeholder="Выберите ГХП"
             emptyLabel="Выберите ГХП"
@@ -1208,8 +1478,7 @@ export function TransfersPage() {
               setShowAllSpgs(true);
               setSpgId(null);
               setEditTransferRecord(null);
-              bulkSelection.clear();
-              setBulkMode(false);
+              exitBulkMode();
             }}
             className="w-[260px] bg-background h-10 border text-sm"
           />
@@ -1228,43 +1497,22 @@ export function TransfersPage() {
       </header>
 
       <Card>
-        <CardHeader className="flex flex-row items-center justify-between gap-4 space-y-0 pb-3">
-          <CardTitle className="flex items-center gap-2 shrink-0">
+        <CardHeader className="space-y-3 pb-3">
+          <CardTitle className="flex items-center gap-2">
             <Send className="h-4 w-4" />
             Готово к передаче
             {readyTotal > 0 && <Badge variant="secondary">{readyTotal}</Badge>}
           </CardTitle>
-          <div className="relative w-full max-w-sm">
-            <Search className="absolute left-3 top-1/2 -translate-y-1/2 h-4 w-4 text-muted-foreground pointer-events-none" />
-            <Input
-              type="text"
-              placeholder="Поиск по ID, артикулу, этапу…"
-              value={readySearch}
-              onChange={(e) => setReadySearch(e.target.value)}
-              onKeyDown={(e) => {
-                if (e.key === "Enter") {
-                  flushReadySearch();
-                  resetReadyPage();
-                }
-              }}
-              className="pl-9"
-            />
-          </div>
-          {readyTotal > 0 && (
-            <Button
-              variant={bulkMode ? "default" : "outline"}
-              size="sm"
-              onClick={() => {
-                if (bulkMode) {
-                  exitBulkMode();
-                } else {
-                  setBulkMode(true);
-                }
-              }}
-            >
-              Групповые операции
-            </Button>
-          )}
+          <FiltersPanel
+            compact
+            fields={readyToolbarFields}
+            activeSummary={readyActiveFilterSummary}
+            onSelectAll={() => {
+              setBulkMode(true);
+              bulkSelection.selectAll(readySelectableIds);
+            }}
+            totalRowCount={readySelectableIds.length}
+          />
         </CardHeader>
         <CardContent>
           {!spgScopeSelected ? (
@@ -1288,24 +1536,6 @@ export function TransfersPage() {
             <table className="w-full caption-bottom text-sm">
               <TableHeader>
                 <TableRow>
-                  {bulkMode && (
-                    <TableHead className={`${groupHeaderCellClass} w-[40px]`}>
-                      <Checkbox
-                        checked={bulkSelection.isAllSelected(
-                          readyItems.filter((t) => !isFinalReadyRow(t)).map((t) => t.task_id),
-                        )}
-                        onCheckedChange={(checked) => {
-                          if (checked) {
-                            bulkSelection.selectAll(
-                              readyItems.filter((t) => !isFinalReadyRow(t)).map((t) => t.task_id),
-                            );
-                          } else {
-                            bulkSelection.clear();
-                          }
-                        }}
-                      />
-                    </TableHead>
-                  )}
                   {readyColumns.map((column) => (
                     <TableHead
                       key={column.id}
@@ -1321,11 +1551,9 @@ export function TransfersPage() {
                       />
                     </TableHead>
                   ))}
-                  {!bulkMode && (
-                    <TableHead className={groupHeaderCellClass}>
-                      Действия
-                    </TableHead>
-                  )}
+                  <TableHead className={groupHeaderCellClass}>
+                    Действия
+                  </TableHead>
                   <TableCornerResetHeader
                     hasActiveFilters={hasReadyFiltersActive}
                     onReset={resetReadyFilters}
@@ -1337,7 +1565,7 @@ export function TransfersPage() {
                 <TableBody>
                   <TableRow>
                     <TableCell
-                      colSpan={bulkMode ? 8 : 8}
+                      colSpan={8}
                       className={`${TRANSFERS_ROW.cell} py-6 text-center text-sm text-muted-foreground`}
                     >
                       Нет заданий, соответствующих фильтру
@@ -1348,7 +1576,7 @@ export function TransfersPage() {
                 <VirtualizedTableBody
                   rows={readyTableRows}
                   rowHeight={TRANSFERS_ROW.rowHeightPx}
-                  colSpan={bulkMode ? 8 : 8}
+                  colSpan={8}
                   scrollContainerRef={readyScrollRef}
                   renderRow={(row) =>
                     row.kind === "group" ? (
@@ -1363,6 +1591,23 @@ export function TransfersPage() {
                         )}
                         onToggleCollapse={() => toggleGroupCollapse(row.group.key)}
                         onTransferGroup={handleGroupTransfer}
+                        isAllSelected={bulkSelection.isAllSelected(
+                          row.group.rows.filter((task) => !isFinalReadyRow(task)).map((task) => task.task_id),
+                        )}
+                        isPartiallySelected={bulkSelection.isIndeterminate(
+                          row.group.rows.filter((task) => !isFinalReadyRow(task)).map((task) => task.task_id),
+                        )}
+                        controlledQuantity={bulkMode ? groupBulkQuantity(row.group) : undefined}
+                        onQuantityChange={
+                          bulkMode
+                            ? (value: string) => setGroupBulkQuantity(row.group, value)
+                            : undefined
+                        }
+                        onSelectGroup={() =>
+                          toggleGroupSelection(
+                            row.group.rows.filter((task) => !isFinalReadyRow(task)).map((task) => task.task_id),
+                          )
+                        }
                       />
                     ) : (
                       <ReadyTransferRow
@@ -1379,7 +1624,25 @@ export function TransfersPage() {
                         task={row.task}
                         bulkMode={bulkMode}
                         isSelected={bulkSelection.isSelected(row.task.task_id)}
-                        onSelect={() => bulkSelection.selectOne(row.task.task_id)}
+                        controlledQuantity={
+                          bulkMode ? bulkQuantities[readyRowIdentity(row.task)] : undefined
+                        }
+                        onQuantityChange={
+                          bulkMode
+                            ? (value: string) =>
+                                setRowBulkQuantity(
+                                  row.groupKey,
+                                  readyRowIdentity(row.task),
+                                  value,
+                                )
+                            : undefined
+                        }
+                        onSelect={() => {
+                          // Финальный выпуск в массовую передачу не берётся:
+                          // чекбокс строки был выключен на нём, и клик по строке
+                          // обязан вести себя так же.
+                          if (!isFinalReadyRow(row.task)) bulkSelection.selectOne(row.task.task_id);
+                        }}
                         isInGroup={row.groupKey != null}
                         isLastInGroup={row.isLastInGroup}
                         isSubmitting={
@@ -1506,10 +1769,10 @@ export function TransfersPage() {
                           return (
                             <TableRow
                               key={t.transfer_id}
-                              className={`group cursor-pointer hover:bg-muted/50 transition-colors ${isCancelled ? "opacity-60" : ""}`}
+                              className={`group cursor-pointer transition-colors ${rowToneFill(historyRowTone(t.status))} ${isCancelled ? "opacity-60" : ""}`}
                               onClick={() => setEditTransferRecord(t)}
                             >
-                              <TableCell className={`${TRANSFERS_ROW.cell} font-mono text-xs text-muted-foreground`}>
+                              <TableCell className={`${TRANSFERS_ROW.cell} ${ROW_TONE_STRIPE[historyRowTone(t.status)]} font-mono text-xs text-muted-foreground`}>
                                 #{t.plan_position_id}
                               </TableCell>
                               <TableCell className={TRANSFERS_ROW.cell}>
@@ -1606,13 +1869,24 @@ export function TransfersPage() {
       {bulkMode && (
         <BulkTransferFooter
           selectedTasks={selectedReadyTasks}
+          quantities={bulkQuantities}
           onSubmit={handleBulkTransferSubmit}
-          onExit={exitBulkMode}
-          onClearSelection={() => bulkSelection.clear()}
+          onCancel={exitBulkMode}
           pending={bulkSubmitting}
           progress={bulkProgress}
         />
       )}
+
+      <ReadyTransferPrintDialog
+        open={readyPrintOpen}
+        onOpenChange={setReadyPrintOpen}
+        rows={readyItems}
+        scopeLabel={
+          showAllSpgs
+            ? "Все ГХП"
+            : (spgs?.find((spg) => spg.id === spgId)?.name ?? "Выбранная ГХП")
+        }
+      />
 
       <BulkResultsDialog
         open={bulkResultsOpen}

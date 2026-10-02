@@ -7,7 +7,15 @@ vi.mock("@/shared/api/stock", async (importOriginal) => ({
   getStockBalances: vi.fn(),
 }));
 
-import { getStockBalances, type StockBalanceEntry } from "@/shared/api/stock";
+import {
+  getStockBalances,
+  OPERATIONS_EMPTY_LABEL,
+  OPERATIONS_NOT_RECORDED_LABEL,
+  type ImportOperationStep,
+  type StockBalanceEntry,
+} from "@/shared/api/stock";
+import { buildColumnApiParams } from "@/shared/lib/columnSpecs";
+import { stockBalanceColumns } from "@/shared/lib/stockBalanceColumns";
 import { StockBalancesPanel } from "./StockBalancesPanel";
 
 function delay(ms: number): Promise<void> {
@@ -123,5 +131,97 @@ describe("StockBalancesPanel: группы по артикулу", () => {
     fireEvent.click(summary);
     await waitFor(() => expect(screen.getByText("1159")).toBeTruthy());
     expect(screen.getByText("396")).toBeTruthy();
+  });
+});
+
+describe("StockBalancesPanel: подписи операций", () => {
+  /** Этап оси операций в формате справочника. */
+  const stage = (name: string): ImportOperationStep => ({
+    sequence: 10,
+    section_code: "SEC",
+    section_name: "Участок",
+    operation_code: "OP_CODE",
+    operation_name: name,
+    is_significant: true,
+  });
+
+  /** Ячейка «Операций» строки с данным артикулом (колонка четвёртая). */
+  function operationsCell(sku: string): HTMLElement {
+    const row = screen.getByText(sku).closest("tr");
+    expect(row).toBeTruthy();
+    return Array.from(row!.querySelectorAll("td"))[3];
+  }
+
+  beforeEach(() => {
+    vi.mocked(getStockBalances).mockResolvedValue({
+      balances: [
+        { ...entry(1), product_sku: "SKU-SOLO", completed_operations: [] },
+        { ...entry(2), product_sku: "SKU-EMPTY", completed_operations: [] },
+        { ...entry(3), product_sku: "SKU-EMPTY", completed_operations: [] },
+        { ...entry(4), product_sku: "SKU-MIX", completed_operations: [] },
+        { ...entry(5), product_sku: "SKU-MIX", completed_operations: ["op_drill"], completed_stages: [stage("Сверловка")] },
+        { ...entry(6), product_sku: "SKU-NUL", completed_operations: null },
+      ],
+      total: 6,
+      limit: 50,
+      offset: 0,
+    });
+  });
+
+  it("строка без операций печатает прочерк, а не «без операций»", async () => {
+    renderPanel([1]);
+    await screen.findByText("SKU-SOLO");
+
+    expect(operationsCell("SKU-SOLO").textContent).toBe("—");
+    expect(screen.queryByText(OPERATIONS_EMPTY_LABEL)).toBeNull();
+  });
+
+  it("итог группы из одних пустых строк — прочерк", async () => {
+    renderPanel([1]);
+    await screen.findByText("SKU-EMPTY");
+
+    expect(operationsCell("SKU-EMPTY").textContent).toBe("—");
+  });
+
+  it("итог группы с другими операциями не несёт прочерка", async () => {
+    renderPanel([1]);
+    const summary = await screen.findByText("SKU-MIX");
+
+    const text = operationsCell("SKU-MIX").textContent ?? "";
+    expect(text).toContain("Сверловка");
+    expect(text).not.toContain("—");
+    expect(text).not.toContain(OPERATIONS_EMPTY_LABEL);
+    expect(summary).toBeTruthy();
+  });
+
+  it("ячейка печатает прочерк, а список фильтра — серверные подписи", async () => {
+    renderPanel([1]);
+    await screen.findByText("SKU-SOLO");
+
+    // Оба пустых состояния в ячейке — прочерк.
+    expect(operationsCell("SKU-SOLO").textContent).toBe("—");
+    expect(operationsCell("SKU-NUL").textContent).toBe("—");
+
+    // Список фильтра — подписи, которые понимает сервер: двумя прочерками
+    // выбрать разные группы нельзя, а `_balance_operations_filter` прочерка
+    // не знает (ADR-0055 п.5).
+    fireEvent.click(screen.getByText("Операции"));
+    expect(await screen.findByText(OPERATIONS_EMPTY_LABEL)).toBeTruthy();
+    expect(screen.getByText(OPERATIONS_NOT_RECORDED_LABEL)).toBeTruthy();
+
+    expect(
+      buildColumnApiParams(
+        { operations: new Set([OPERATIONS_NOT_RECORDED_LABEL]) },
+        {},
+        stockBalanceColumns,
+      ),
+    ).toEqual({ operations: OPERATIONS_NOT_RECORDED_LABEL });
+    expect(
+      buildColumnApiParams(
+        { operations: new Set([OPERATIONS_EMPTY_LABEL]) },
+        {},
+        stockBalanceColumns,
+      ),
+    ).toEqual({ operations: OPERATIONS_EMPTY_LABEL });
   });
 });

@@ -21,8 +21,18 @@ vi.mock("@/shared/api/stock", async (importOriginal) => ({
 }));
 
 import { listSections } from "@/shared/api/sections";
-import { getRemainderImportOperations } from "@/shared/api/stock";
-import { ImportRemaindersDialog, getImportItemOperationsLabel } from "./ImportRemaindersDialog";
+import {
+  getRemainderImportOperations,
+  OPERATIONS_EMPTY_LABEL,
+  OPERATIONS_NOT_RECORDED_LABEL,
+} from "@/shared/api/stock";
+import { buildColumnApiParams } from "@/shared/lib/columnSpecs";
+import { remainderPreviewColumns } from "../lib/remainderPreviewColumns";
+import {
+  ImportRemaindersDialog,
+  getImportItemOperationsLabel,
+  getImportItemOperationsServerLabel,
+} from "./ImportRemaindersDialog";
 
 // Без этого флага React 18 сыплет предупреждения «not configured to support act(...)»
 (globalThis as Record<string, unknown>).IS_REACT_ACT_ENVIRONMENT = true;
@@ -159,11 +169,13 @@ const makeImportItem = (overrides: Partial<RemainderImportItem>): RemainderImpor
   ...overrides,
 });
 
-// Подпись ячейки «Операции» и подпись в списке фильтра колонки — одно и то же
-// правило (#242): выбор значения обязан находить строки, которые видит глаз.
+// Подпись ячейки «Операции» — общее правило (#242): прочерк обоим пустым
+// состояниям. В запрос фильтра уходит серверная подпись: её собирает
+// `getImportItemOperationsServerLabel`, и по ней же сервер ищет строки —
+// выбор обязан находить то, что видит глаз, а пустых состояний два.
 describe("подпись «Операции» в предпросмотре импорта", () => {
-  it("пустая колонка подписывается «не зафиксировано», а не «—»", () => {
-    expect(getImportItemOperationsLabel(makeImportItem({}))).toBe("не зафиксировано");
+  it("пустая колонка подписывается прочерком", () => {
+    expect(getImportItemOperationsLabel(makeImportItem({}))).toBe("—");
   });
 
   it("печатает имена этапов, а не сырой текст колонки", () => {
@@ -177,13 +189,53 @@ describe("подпись «Операции» в предпросмотре им
     expect(getImportItemOperationsLabel(item)).toBe("Дробеструй, Чёрный");
   });
 
-  it("неразрешённое значение колонки — «не зафиксировано», а не его текст", () => {
+  it("неразрешённое значение колонки — прочерк, а не его текст", () => {
     // Сцена не разрешилась в справочник → в баланс уйдёт NULL (ADR-0055 п.6),
     // поэтому и подпись пустая: сырой текст в ячейку не попадает.
     const item = makeImportItem({
       completed_operations_raw: "Что-то неизвестное",
       completed_stages: [],
     });
-    expect(getImportItemOperationsLabel(item)).toBe("не зафиксировано");
+    expect(getImportItemOperationsLabel(item)).toBe("—");
+  });
+
+  it("список фильтра различает два пустых состояния подписями, а не прочерком", () => {
+    // Перевода «—» → подпись быть не может: ячейка одна у обоих состояний,
+    // а сервер (`_preview_operations_label`) различает их — значит, в список
+    // фильтра идут подписи, собранные по `completed_operations_raw`.
+    const column = remainderPreviewColumns.find((c) => c.id === "operations")!;
+    expect(column.mapValue).toBeUndefined();
+
+    const noColumn = makeImportItem({});
+    const emptyCell = makeImportItem({
+      completed_operations_raw: "  —  ",
+      completed_stages: [],
+    });
+    expect(getImportItemOperationsServerLabel(noColumn)).toBe(
+      OPERATIONS_NOT_RECORDED_LABEL,
+    );
+    expect(getImportItemOperationsServerLabel(emptyCell)).toBe(OPERATIONS_EMPTY_LABEL);
+    expect(getImportItemOperationsServerLabel(noColumn)).not.toBe(
+      getImportItemOperationsServerLabel(emptyCell),
+    );
+
+    // Обе ячейки печатают прочерк — это подпись, а не различие состояний.
+    expect(getImportItemOperationsLabel(noColumn)).toBe("—");
+    expect(getImportItemOperationsLabel(emptyCell)).toBe("—");
+
+    expect(
+      buildColumnApiParams(
+        { operations: new Set([OPERATIONS_EMPTY_LABEL]) },
+        {},
+        remainderPreviewColumns,
+      ),
+    ).toEqual({ operations: OPERATIONS_EMPTY_LABEL });
+    expect(
+      buildColumnApiParams(
+        { operations: new Set([OPERATIONS_NOT_RECORDED_LABEL]) },
+        {},
+        remainderPreviewColumns,
+      ),
+    ).toEqual({ operations: OPERATIONS_NOT_RECORDED_LABEL });
   });
 });

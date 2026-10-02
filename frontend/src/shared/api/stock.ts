@@ -97,8 +97,10 @@ export const OPERATIONS_NOT_RECORDED_LABEL = "не зафиксировано";
 export const OPERATIONS_EMPTY_LABEL = "без операций";
 
 /**
- * Подпись выполненных операций остатка с тремя различимыми состояниями:
- * `null` (не зафиксировано) / `[]` (без операций) / список операций.
+ * Серверная подпись оси операций: фильтр, сортировка и всё, что уходит в
+ * `?operations=`. Бэкенд разбирает обе подписи пустых состояний в явные
+ * предикаты (`_balance_operations_filter`, `_preview_operations_label`),
+ * прочерк он не знает и молча вернул бы ноль строк (ADR-0055 п.5).
  *
  * Пустые состояния определяет `completed_operations` — он и есть ось ключа
  * остатка. Названия же берутся из `completed_stages`: это тот же признак,
@@ -106,7 +108,7 @@ export const OPERATIONS_EMPTY_LABEL = "без операций";
  * фильтром колонки (фильтр работает по `operation_name`). Коды остаются
  * запасным путём для ответов, где `completed_stages` не пришёл.
  */
-export function formatCompletedOperationsLabel(
+export function completedOperationsServerLabel(
   ops: string[] | null | undefined,
   stages?: ImportOperationStep[],
 ): string {
@@ -117,6 +119,26 @@ export function formatCompletedOperationsLabel(
   }
   if (ops.length === 0) return OPERATIONS_EMPTY_LABEL;
   return names.length ? names.join(", ") : ops.join(", ");
+}
+
+/**
+ * Подпись выполненных операций в ячейке: два пустых состояния печатаются
+ * прочерком, список — именами операций.
+ *
+ * `null` и `[]` остаются разными значениями ключа остатка (ADR-0055 п.6):
+ * прочерк — подпись ячейки, а не схлопывание состояний. Где оператору нужно
+ * выбрать состояние (список фильтра, радиогруппа «Группа операций»), стоят
+ * серверные подписи из `completedOperationsServerLabel` — двумя одинаковыми
+ * прочерками выбрать нельзя.
+ */
+export function formatCompletedOperationsLabel(
+  ops: string[] | null | undefined,
+  stages?: ImportOperationStep[],
+): string {
+  const label = completedOperationsServerLabel(ops, stages);
+  return label === OPERATIONS_NOT_RECORDED_LABEL || label === OPERATIONS_EMPTY_LABEL
+    ? "—"
+    : label;
 }
 
 export type StockReason =

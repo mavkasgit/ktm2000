@@ -54,7 +54,8 @@ const stats: ProductWipStats = {
       spg_id: 10,
       spg_code: "SPG-A",
       spg_name: "СПГ А",
-      // Ось не зафиксирована: подпись пустого состояния, а не пустая ячейка.
+      // Ось не зафиксирована: подпись пустого состояния (прочерк), а не
+      // вовсе пустая ячейка — строка остаётся строкой.
       completed_operations: null,
       completed_stages: [],
       spg_icon: null,
@@ -216,7 +217,7 @@ describe("ProductWipStatsDialog", () => {
     }
   });
 
-  it("печатает три состояния оси операций по общему правилу (#242)", async () => {
+  it("печатает ось по общему правилу: заполненная — чипы, пустая — прочерк (#242)", async () => {
     vi.mocked(getProductWipStats).mockResolvedValue(stats);
 
     const { cleanup } = mountDialog();
@@ -228,15 +229,19 @@ describe("ProductWipStatsDialog", () => {
 
       // Заполненная ось — чипы этапов из ответа, а не серверная строка подписи.
       expect(text).toContain("Сверловка");
-      // `null` (не зафиксировано) и `[]` (без операций) различимы глазом.
-      expect(text).toContain("не зафиксировано");
+      // Пустое состояние (`null`) — прочерк, а не «не зафиксировано».
+      const nullAxisRow = Array.from(document.querySelectorAll("tr")).find((row) =>
+        row.textContent?.includes("3 м"),
+      );
+      expect(nullAxisRow?.textContent).toContain("—");
+      expect(text).not.toContain("не зафиксировано");
       expect(text).not.toContain("без операций");
     } finally {
       cleanup();
     }
   });
 
-  it("остаток с пустым списком операций подписан «без операций», а не «не зафиксировано»", async () => {
+  it("остаток с пустым списком операций подписан прочерком", async () => {
     vi.mocked(getProductWipStats).mockResolvedValue(pairStats());
 
     const { cleanup } = mountDialog("PAIR-AAA+PAIR-BBB");
@@ -246,7 +251,10 @@ describe("ProductWipStatsDialog", () => {
       });
 
       const a = componentSection("PAIR-AAA");
-      expect(a?.textContent).toContain("без операций");
+      // Подпись оси и размер («2,7 м») — вся правда о строке: прочерк здесь
+      // может быть только у операций, и это `[]`, а не `null`.
+      expect(a?.textContent).toContain("—");
+      expect(a?.textContent).not.toContain("без операций");
       expect(a?.textContent).not.toContain("не зафиксировано");
     } finally {
       cleanup();

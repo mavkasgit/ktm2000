@@ -9,6 +9,7 @@ import {
   Badge,
 } from "@/shared/ui";
 import {
+  completedOperationsServerLabel,
   formatCompletedOperationsLabel,
   formatDimensionsLabel,
   formatQualityStateLabel,
@@ -66,10 +67,18 @@ const READINESS_META: Record<
   },
 };
 
-function groupBalances(balances: StockBalanceEntry[]) {
+/**
+ * Строки выдачи: одинаковые по участку, качеству, размеру и операциям остатки
+ * складываются в одну строку с суммой.
+ *
+ * Ключ собирается по `opsKey` — серверной подписи оси операций, а не по
+ * подписи ячейки: прочерк в ячейке один у `null` и `[]`, и по подписи ячейки
+ * два разных остатка схлопнулись бы в одну строку выдачи (ADR-0055 п.5).
+ */
+export function groupBalances(balances: StockBalanceEntry[]) {
   const map = new Map<
     string,
-    { location: string; quality: string; dims: string; ops: string; qty: number }
+    { location: string; quality: string; dims: string; ops: string; opsKey: string; qty: number }
   >();
   for (const b of balances) {
     const location = b.location_name || `Участок #${b.location_id}`;
@@ -79,14 +88,17 @@ function groupBalances(balances: StockBalanceEntry[]) {
     // ADR-0055: операции — часть идентичности остатка. Без них в ключе две
     // разные строки складывались бы в одну строку выдачи, и диалог обещал бы
     // материал, который списать нельзя: точное списание идёт по операциям.
+    // Ключу нужна серверная подпись: прочерк в ячейке один у `null` и `[]`,
+    // и по подписи ячейки два разных остатка схлопнулись бы в один.
+    const opsKey = completedOperationsServerLabel(b.completed_operations, b.completed_stages);
     const ops = formatCompletedOperationsLabel(b.completed_operations, b.completed_stages);
-    const key = `${location}\0${quality}\0${dims}\0${ops}`;
+    const key = `${location}\0${quality}\0${dims}\0${opsKey}`;
     const prev = map.get(key);
     const add = Math.round(Number.parseFloat(b.balance_qty) || 0);
     if (prev) {
       prev.qty += add;
     } else {
-      map.set(key, { location, quality, dims, ops, qty: add });
+      map.set(key, { location, quality, dims, ops, opsKey, qty: add });
     }
   }
   return Array.from(map.values()).sort((a, b) => b.qty - a.qty);
@@ -255,7 +267,7 @@ export function RemainderAllocationDialog({
                   <tbody>
                     {groupedBalances.slice(0, 6).map((row) => (
                       <tr
-                        key={`${row.location}-${row.quality}-${row.dims}-${row.ops}`}
+                        key={`${row.location}-${row.quality}-${row.dims}-${row.opsKey}`}
                         className="border-b border-border/50 last:border-0"
                       >
                         <td className="py-1 pr-2">

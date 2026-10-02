@@ -1,5 +1,6 @@
 import type { RouteHistoryOp, SectionBoardTask } from "@/shared/api/shopfloor";
 import { formatDimensionsLabel } from "@/shared/api/stock";
+import { clusterByArticle } from "@/shared/lib/clusterByArticle";
 import { colorNameLabels } from "@/shared/lib/generated-labels";
 import { taskGroupingDimensions } from "./groupTasksByProfile";
 import { taskPackaging } from "./taskView";
@@ -191,7 +192,7 @@ export function buildPlanTaskGroups(
   }
 
   // Итоги группы — сумма по строкам: слитые задания уже учтены в своих строках.
-  return Array.from(groups.values())
+  const sorted = Array.from(groups.values())
     .map((group): PlanTaskGroup => ({
       key: group.key,
       label: group.label,
@@ -205,4 +206,11 @@ export function buildPlanTaskGroups(
       if (b.totalQtyPlan !== a.totalQtyPlan) return b.totalQtyPlan - a.totalQtyPlan;
       return a.label.localeCompare(b.label, "ru");
     });
+
+  // Артикул читается одним куском: группа собирается по артикулу И размеру,
+  // поэтому два размера одного артикула иначе разделяли бы чужие артикулы.
+  return clusterByArticle(sorted, {
+    articleOf: (group) => group.rows[0]?.productSku ?? "—",
+    quantityOf: (group) => group.totalQtyPlan,
+  });
 }

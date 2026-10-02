@@ -102,6 +102,36 @@ describe("groupReadyTransfers", () => {
     expect(groups[1].rows.map((row) => row.task_id)).toEqual([3, 4]);
   });
 
+  it("разделяет разные операции одного артикула, размера и адресата («Окно» против «Гребенки»)", () => {
+    const items = groupReadyTransfers([
+      makeTask({ task_id: 1, operation_name: "Окно" }),
+      makeTask({ task_id: 2, operation_name: "Окно" }),
+      makeTask({ task_id: 3, operation_name: "Гребенка" }),
+      makeTask({ task_id: 4, operation_name: "Гребенка" }),
+    ]);
+
+    const groups = groupsOf(items);
+    expect(groups).toHaveLength(2);
+    // Этап в шапке — общий для группы, а не прочерк: смешанные работы в одной
+    // строке обещали один «Передать» на две разные работы.
+    expect(groups.map((group) => group.common.operationName)).toEqual(["Окно", "Гребенка"]);
+  });
+
+  it("собирает артикулы подряд, а сами артикулы — по сумме «к передаче»", () => {
+    const items = groupReadyTransfers([
+      makeTask({ task_id: 1, product_sku: "АА-1", operation_name: "Окно", transferable_quantity: "100" }),
+      makeTask({ task_id: 2, product_sku: "ББ-2", operation_name: "Пила", transferable_quantity: "900" }),
+      makeTask({ task_id: 3, product_sku: "АА-1", operation_name: "Гребенка", transferable_quantity: "100" }),
+      makeTask({ task_id: 4, product_sku: "ББ-2", operation_name: "Раскрой", transferable_quantity: "900" }),
+    ]);
+
+    // Блоков четыре (по операции на артикул), в ответе они перемешаны; после
+    // раскладки артикул читается одним куском.
+    expect(items.map((item) => (item.kind === "group" ? item.productSku : item.row.product_sku))).toEqual(
+      ["ББ-2", "ББ-2", "АА-1", "АА-1"],
+    );
+  });
+
   it("разделяет разные артикулы одного размера на одном участке", () => {
     const items = groupReadyTransfers([
       makeTask({ task_id: 1, product_sku: "ЮП-2083" }),
@@ -148,6 +178,18 @@ describe("groupReadyTransfers", () => {
     expect(group.totalTransferable).toBe(85);
   });
 
+  it("суммирует план и уже переданное по строкам группы", () => {
+    const items = groupReadyTransfers([
+      makeTask({ task_id: 1, planned_quantity: "100", already_transferred_quantity: "0" }),
+      makeTask({ task_id: 2, planned_quantity: "50", already_transferred_quantity: "10" }),
+      makeTask({ task_id: 3, planned_quantity: "25", already_transferred_quantity: "15" }),
+    ]);
+
+    const [group] = groupsOf(items);
+    expect(group.totalPlanned).toBe(175);
+    expect(group.totalAlreadyTransferred).toBe(25);
+  });
+
   it("помечает группу финальной, только когда финальна каждая её строка", () => {
     const allFinal = groupReadyTransfers([
       makeTask({ task_id: 1, is_final: true, has_next_step: false }),
@@ -169,17 +211,23 @@ describe("groupReadyTransfers", () => {
     expect(groupsOf(noNextStep)[0].allFinal).toBe(true);
   });
 
-  it("отдаёт в common общее значение строк группы, а при расхождении — null", () => {
+  it("сводные значения группы считаются по строкам: расходится следующая операция — прочерк, этап всегда один", () => {
     const items = groupReadyTransfers([
-      makeTask({ task_id: 1, route_stage_id: 131, operation_name: "Пила", sequence: 1 }),
-      makeTask({ task_id: 2, route_stage_id: 147, operation_name: "Раскрой ЧПУ", sequence: 3 }),
+      makeTask({ task_id: 1, next_operation_name: "Дробеструй" }),
+      makeTask({ task_id: 2, next_operation_name: "Дробеструй" }),
+      makeTask({ task_id: 3, next_operation_name: "Дробеструй, П/ф" }),
+      makeTask({ task_id: 4, next_operation_name: "Дробеструй, П/ф" }),
     ]);
 
-    const [group] = groupsOf(items);
-    expect(group.common.operationName).toBeNull();
-    expect(group.common.dimensionsLabel).toBe("2,75 м");
-    expect(group.common.nextOperationName).toBe("Дробеструй");
-    expect(group.common.nextSectionName).toBe("Дробеструй");
+    const groups = groupsOf(items);
+    expect(groups).toHaveLength(1);
+    // Этап — часть ключа, поэтому в сводке он всегда один. Прочерк остаётся у
+    // значений, которые ключ не различает: следующая операция может разойтись
+    // при общем адресате (участок тот же, работа на нём — разная).
+    expect(groups[0].common.operationName).toBe("Пила");
+    expect(groups[0].common.nextOperationName).toBeNull();
+    expect(groups[0].common.dimensionsLabel).toBe("2,75 м");
+    expect(groups[0].common.nextSectionName).toBe("Дробеструй");
   });
 
   it("печатает размер строки, даже если сервер не прислал подпись (#195)", () => {

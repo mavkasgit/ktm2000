@@ -5,6 +5,7 @@ import {
   formatQualityStateLabel,
   formatDimensionsLabel,
   formatCompletedOperationsLabel,
+  completedOperationsServerLabel,
   getStockBalances,
 } from "@/shared/api/stock";
 import type { StockBalanceEntry, StockBalancesListResponse } from "@/shared/api/stock";
@@ -16,6 +17,7 @@ import { TableCornerResetCell, TableCornerResetHeader } from "./TableCornerReset
 import { TablePaginationFooter } from "./TablePaginationFooter";
 import { DATA_TABLE_STYLES, TABLE_ROW_DENSE } from "@/shared/lib/dataTableStyles";
 import { TABLE_ROW_STYLES } from "@/shared/lib/tableRowStyles";
+import { rowToneFill, type RowTone } from "@/shared/lib/rowTones";
 import { cn } from "@/shared/utils/cn";
 import { useFilterableTable } from "@/shared/hooks/useFilterableTable";
 import { usePaginatedTableQuery } from "@/shared/hooks/usePaginatedTableQuery";
@@ -30,8 +32,13 @@ import { fmtQty, toQtyInteger } from "@/shared/lib/quantityFormat";
 import { Badge } from "./badge";
 import { ChevronDown, ChevronRight } from "lucide-react";
 
+/**
+ * Серверная подпись оси — для списка фильтра и значения в запросе: ячейка
+ * печатает прочерк, а `_balance_operations_filter` понимает только подписи
+ * «не зафиксировано» / «без операций» (ADR-0055 п.5).
+ */
 function getBalanceOperationsLabel(balance: StockBalanceEntry): string {
-  return formatCompletedOperationsLabel(balance.completed_operations, balance.completed_stages);
+  return completedOperationsServerLabel(balance.completed_operations, balance.completed_stages);
 }
 
 /**
@@ -45,23 +52,29 @@ function balanceArticleKey(balance: StockBalanceEntry): string {
 
 /**
  * Подписи операций строки — те же, что в её пилюлях (`RouteStepsDisplay`): имена
- * операций этапов, а без этапов — подпись строки («без операций»). Сводка группы
- * обязана читаться так же, как раскрытые строки, иначе итог и дети говорят на
- * разных языках.
+ * операций этапов, а без этапов — подпись строки (прочерк для обоих пустых
+ * состояний). Сводка группы обязана читаться так же, как раскрытые строки,
+ * иначе итог и дети говорят на разных языках.
  */
 function balanceOperationLabels(balance: StockBalanceEntry): string[] {
   if (balance.completed_stages && balance.completed_stages.length > 0) {
     return balance.completed_stages.map((step) => step.operation_name || step.section_name);
   }
-  return [getBalanceOperationsLabel(balance)];
+  return [formatCompletedOperationsLabel(balance.completed_operations, balance.completed_stages)];
 }
 
 /**
  * Операции группы — объединение операций её строк без повторов: «Дробеструй ·
  * Серебро · Стрейч». Пустым итог быть не может, пока в группе есть строки.
+ *
+ * Прочерк пустой строки участвует только пока он один: «Дробеструй · —» ничего
+ * не говорит про дробеструй, а пустоту и так видно по остальным строкам. Есть
+ * другие подписи — прочерк уходит, есть только он — остаётся один.
  */
 function summarizeOperations(rows: StockBalanceEntry[], limit: number): GroupSummary {
-  const values = [...new Set(rows.flatMap(balanceOperationLabels))];
+  const all = [...new Set(rows.flatMap(balanceOperationLabels))];
+  const others = all.filter((value) => value !== "—");
+  const values = others.length > 0 ? others : ["—"];
   const full = values.join(" · ");
   if (values.length <= limit) return { text: full, full };
   return { text: `${values.slice(0, limit).join(" · ")} +${values.length - limit}`, full };
@@ -363,6 +376,19 @@ function BalanceGroupRow({
   );
 }
 
+/**
+ * Тон строки остатка — по качеству, из общего словаря (`shared/lib/rowTones`):
+ * брак красный, переделка янтарная, годное — без тона. Рельс блока в остатках
+ * остаётся нейтральным (ADR-0065): он значит «это один блок», и цвет там не
+ * начал бы значить вторую вещь.
+ */
+function balanceRowTone(qualityState: string): RowTone {
+  const state = qualityState.toUpperCase();
+  if (state === "SCRAP" || state === "FINAL_SCRAP") return "scrap";
+  if (state === "REWORK") return "activeRunning";
+  return "plain";
+}
+
 /** Строка остатка: как была, плюс рёбра блока, когда она раскрыта из группы. */
 function BalanceRow({
   balance,
@@ -386,7 +412,7 @@ function BalanceRow({
       // само задаёт 24px, а строки без операций схлопывались бы до высоты текста.
       // Ровно 32px — та же плотность, что на «Заданиях» и «Передачах».
       style={{ height: TABLE_ROW_DENSE.rowHeightPx }}
-      className={`border-b ${isInGroup ? TABLE_ROW_STYLES.groupBlock : "hover:bg-muted/30"}`}
+      className={`border-b ${isInGroup ? TABLE_ROW_STYLES.groupBlock : rowToneFill(balanceRowTone(balance.quality_state))}`}
     >
       <td className={cn(cellClass, isInGroup ? TABLE_ROW_STYLES.blockRail : TABLE_ROW_STYLES.emptyRail)}>
         <button
@@ -406,7 +432,9 @@ function BalanceRow({
         {balance.completed_stages && balance.completed_stages.length > 0 ? (
           <RouteStepsDisplay steps={balance.completed_stages} compact showIcons={false} />
         ) : (
-          <span className="text-xs text-muted-foreground">{getBalanceOperationsLabel(balance)}</span>
+          <span className="text-xs text-muted-foreground">
+            {formatCompletedOperationsLabel(balance.completed_operations, balance.completed_stages)}
+          </span>
         )}
       </td>
       <td className={cellClass}>

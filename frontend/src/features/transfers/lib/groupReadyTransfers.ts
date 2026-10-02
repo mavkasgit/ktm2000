@@ -1,17 +1,27 @@
 import type { ReadyToTransferTask } from "@/shared/api/transfers";
 import { formatDimensionsLabel } from "@/shared/api/stock";
+import { clusterByArticle } from "@/shared/lib/clusterByArticle";
 
 /**
  * Единица передачи — пара «задание × размер», но оператору удобнее отправить одним
  * действием строки, неразличимые для передачи: тот же артикул, того же размера,
- * с того же участка и в тот же адрес. Такие строки собираются в одну (свёрнутую
- * по умолчанию) группу.
+ * с того же участка, в тот же адрес и та же операция. Такие строки собираются в
+ * одну (свёрнутую по умолчанию) группу.
  *
  * Свёрнутая группа показывает СВОДНЫЕ значения (общий этап, сумма
  * `transferable_quantity`), поэтому порядок групп — порядок первого появления
  * строки — не выражает сортировку ни по одной из этих колонок. Поэтому
  * страница применяет группировку только когда сортировка не выбрана, а при
  * выбранной колонке рисует строки заданий как есть (см. `TransfersPage`).
+ *
+ * Порядок по умолчанию — по количеству, но с оглядкой на артикул: блоки одного
+ * артикула идут подряд, а сами артикулы — по сумме «к передаче» (см.
+ * `clusterBlocksBySku`). Порядок «просто по количеству» ставил один и тот же
+ * артикул в два места списка, и оператор читал знакомые строки вразброс.
+ *
+ * Операция — часть ключа, а не только сводка: на одном артикуле, размере и
+ * адресате стоят разные работы («Окно» и «Гребенка»), и общий «Передать» на них
+ * отправлял бы одним действием то, что оператор считает разным.
  *
  * Участок и адресат обязательны в ключе. Страница грузит ready по ГХП, то есть
  * сразу по нескольким участкам; а ГП и П/ф — разные динамические маршруты
@@ -38,6 +48,10 @@ export type ReadyTransferGroup = {
   rows: ReadyToTransferTask[];
   /** Сумма `transferable_quantity` по строкам группы. */
   totalTransferable: number;
+  /** Сумма `planned_quantity` по строкам группы. */
+  totalPlanned: number;
+  /** Сумма `already_transferred_quantity` по строкам группы. */
+  totalAlreadyTransferred: number;
   /** Все строки группы — финальный выпуск («Отправить» вместо «Передать»). */
   allFinal: boolean;
   hasNextStep: boolean;
@@ -99,6 +113,11 @@ export function readyTransferGroupKey(task: ReadyToTransferTask): string {
     task.section_id,
     dimensionsKey(task.dimensions),
     task.next_section_id ?? "final",
+    // Операция — тоже работа: «Окно» и «Гребенка» на одном артикуле, размере и
+    // адресате — разные передачи. Без неё в ключе группа смешивала их, а этап
+    // в шапке печатался прочерком: сводная строка обещала одну работу, за
+    // которой стояли две.
+    task.operation_name ?? "",
   ].join("|");
 }
 
@@ -121,23 +140,29 @@ export function groupReadyTransfers(items: ReadyToTransferTask[]): ReadyTransfer
     }
   }
 
-  const result: ReadyTransferRowItem[] = [];
+  const blocks: ReadyTransferRowItem[] = [];
 
   for (const [key, rows] of buckets) {
     if (rows.length < 2) {
-      result.push({ kind: "single", row: rows[0] });
+      blocks.push({ kind: "single", row: rows[0] });
       continue;
     }
 
     let totalTransferable = 0;
+    let totalPlanned = 0;
+    let totalAlreadyTransferred = 0;
     let allFinal = true;
     for (const row of rows) {
       const value = parseFloat(row.transferable_quantity);
       if (Number.isFinite(value)) totalTransferable += value;
+      const planned = parseFloat(row.planned_quantity);
+      if (Number.isFinite(planned)) totalPlanned += planned;
+      const transferred = parseFloat(row.already_transferred_quantity);
+      if (Number.isFinite(transferred)) totalAlreadyTransferred += transferred;
       if (!isFinalReadyRow(row)) allFinal = false;
     }
 
-    result.push({
+    blocks.push({
       kind: "group",
       key,
       productSku: rows[0].product_sku,
@@ -145,6 +170,8 @@ export function groupReadyTransfers(items: ReadyToTransferTask[]): ReadyTransfer
       nextSectionId: rows[0].next_section_id,
       rows,
       totalTransferable,
+      totalPlanned,
+      totalAlreadyTransferred,
       allFinal,
       hasNextStep: rows[0].has_next_step,
       common: {
@@ -156,5 +183,16 @@ export function groupReadyTransfers(items: ReadyToTransferTask[]): ReadyTransfer
     });
   }
 
-  return result;
+  return clusterByArticle(blocks, {
+    articleOf: blockSku,
+    quantityOf: (block) =>
+      block.kind === "group"
+        ? block.totalTransferable
+        : parseFloat(block.row.transferable_quantity) || 0,
+  });
+}
+
+/** Артикул блока: у группы он свой, у одиночной строки — из задания. */
+function blockSku(block: ReadyTransferRowItem): string {
+  return block.kind === "group" ? (block.productSku ?? "—") : (block.row.product_sku ?? "—");
 }

@@ -7,8 +7,10 @@
  * `buildHistoryColumnApiParams`, а значение «—» отбрасывалось в шести местах
  * двумя способами, колонка называлась и в разметке шапки, и в сборке.
  */
-import { formatDimensionsFilterValue } from "@/shared/api/stock";
+import { formatDimensionsFilterValue, formatDimensionsLabel } from "@/shared/api/stock";
+import type { ReadyToTransferTask } from "@/shared/api/transfers";
 import type { ColumnSpec } from "@/shared/lib/columnSpecs";
+import { fmtQty } from "@/shared/lib/quantityFormat";
 
 import type { HistorySortField, ReadySortField } from "./transferSortParams";
 
@@ -28,6 +30,31 @@ export type HistoryColumn = ColumnSpec<HistorySortField> & {
 
 /** «—» — это пусто, а не значение: сервер такого не понимает. */
 const dropDash = (value: string) => (value === "—" ? undefined : value);
+
+/**
+ * Значение ячейки «Готово к передаче» так, как его читает оператор: по нему
+ * строится и список значений фильтра колонки, и лист печати. Пока функция
+ * жила в странице, лист печати собирал бы свои значения — и напечатанное
+ * расходилось бы с тем, что видно на экране.
+ */
+export function getReadyCellValue(task: ReadyToTransferTask, field: ReadySortField): string {
+  switch (field) {
+    case "positionId":
+      return String(task.plan_position_id);
+    case "sku":
+      return task.product_sku ?? "—";
+    case "dimensions":
+      return formatDimensionsLabel(task.dimensions, task.dimensions_label);
+    case "stage":
+      return task.operation_name ?? "—";
+    case "transferableQty":
+      return fmtQty(task.transferable_quantity);
+    case "next":
+      return task.has_next_step
+        ? `${task.next_operation_name ?? "—"} / ${task.next_section_code ?? "—"}`
+        : "Финальный";
+  }
+}
 
 /** Ячейка участка хранит операцию вместе с участком: «Пиление / Упаковка». */
 const sectionNameOnly = (cellValue: string): string => cellValue.split(" / ")[0]?.trim() ?? cellValue;

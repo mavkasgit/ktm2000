@@ -1,16 +1,17 @@
 /**
- * Три состояния выполненных операций остатка (ADR-0055) обязаны печатать
- * РАЗНЫЕ подписи: `null` — операции вне маршрута, `[]` — маршрут пройден без
- * операций, список — конкретные операции. Схлопывание любой пары означает, что
- * два разных остатка (разные `completed_operations` → разные строки бэкенда)
- * станут неразличимыми в колонке «Операции», в фильтре и в группировке выдачи
- * остатков.
+ * Два пустых состояния оси (ADR-0055) — РАЗНЫЕ значения ключа остатка, но
+ * ОДНА подпись ячейки: прочерк. Различие держат серверные подписи
+ * (`completedOperationsServerLabel`): их разбирает фильтр, и по ним
+ * различаются группы в списках выбора. Схлопывание серверных подписей
+ * означало бы, что два разных остатка неразличимы в фильтре и в группировке
+ * выдачи остатков; прочерк в ячейке — только глаз оператора.
  */
 import { describe, expect, it } from "vitest";
 
 import {
   OPERATIONS_EMPTY_LABEL,
   OPERATIONS_NOT_RECORDED_LABEL,
+  completedOperationsServerLabel,
   formatCompletedOperationsLabel,
 } from "./stock";
 
@@ -23,17 +24,14 @@ const STAGE = {
   is_significant: true,
 };
 
-describe("formatCompletedOperationsLabel", () => {
-  it("null → операции вне маршрута", () => {
-    expect(formatCompletedOperationsLabel(null)).toBe(OPERATIONS_NOT_RECORDED_LABEL);
-  });
-
-  it("[] → маршрут пройден, операций не было", () => {
-    expect(formatCompletedOperationsLabel([])).toBe(OPERATIONS_EMPTY_LABEL);
-  });
-
-  it("null и [] печатают разные подписи", () => {
-    expect(formatCompletedOperationsLabel(null)).not.toBe(formatCompletedOperationsLabel([]));
+describe("formatCompletedOperationsLabel (ячейка)", () => {
+  it("оба пустых состояния печатают прочерк", () => {
+    expect(formatCompletedOperationsLabel(null)).toBe("—");
+    expect(formatCompletedOperationsLabel([])).toBe("—");
+    expect(formatCompletedOperationsLabel(undefined, [])).toBe("—");
+    // …и при наличии справочника тоже: различает значение, а не подпись.
+    expect(formatCompletedOperationsLabel(null, [STAGE])).toBe("—");
+    expect(formatCompletedOperationsLabel([], [STAGE])).toBe("—");
   });
 
   it("список операций печатается через запятую", () => {
@@ -48,7 +46,7 @@ describe("formatCompletedOperationsLabel", () => {
 
   it("ответ без поля completed_operations откатывается на подписи этапов", () => {
     expect(formatCompletedOperationsLabel(undefined, [STAGE])).toBe("Резка");
-    expect(formatCompletedOperationsLabel(undefined, [])).toBe(OPERATIONS_NOT_RECORDED_LABEL);
+    expect(formatCompletedOperationsLabel(undefined, [])).toBe("—");
   });
 
   it("при наличии справочника печатаются ИМЕНА, а не коды", () => {
@@ -58,9 +56,26 @@ describe("formatCompletedOperationsLabel", () => {
     expect(formatCompletedOperationsLabel(["rezka_code"], [stage])).toBe("Резка");
     expect(formatCompletedOperationsLabel(["rezka_code"])).toBe("rezka_code");
   });
+});
 
-  it("пустые состояния различаются и при наличии справочника", () => {
-    expect(formatCompletedOperationsLabel(null, [STAGE])).toBe(OPERATIONS_NOT_RECORDED_LABEL);
-    expect(formatCompletedOperationsLabel([], [STAGE])).toBe(OPERATIONS_EMPTY_LABEL);
+describe("completedOperationsServerLabel (фильтр и ключ)", () => {
+  it("null → «не зафиксировано», [] → «без операций»", () => {
+    expect(completedOperationsServerLabel(null)).toBe(OPERATIONS_NOT_RECORDED_LABEL);
+    expect(completedOperationsServerLabel([])).toBe(OPERATIONS_EMPTY_LABEL);
+    expect(completedOperationsServerLabel(null, [STAGE])).toBe(OPERATIONS_NOT_RECORDED_LABEL);
+    expect(completedOperationsServerLabel([], [STAGE])).toBe(OPERATIONS_EMPTY_LABEL);
+  });
+
+  it("два пустых состояния различимы — их не схлопывает ни ячейка, ни справочник", () => {
+    expect(completedOperationsServerLabel(null)).not.toBe(completedOperationsServerLabel([]));
+    expect(completedOperationsServerLabel(null, [STAGE])).not.toBe(
+      completedOperationsServerLabel([], [STAGE]),
+    );
+    expect(formatCompletedOperationsLabel(null)).toBe(formatCompletedOperationsLabel([]));
+  });
+
+  it("непустой список печатает имена, а не подписи пустых состояний", () => {
+    expect(completedOperationsServerLabel(["rezka"], [STAGE])).toBe("Резка");
+    expect(formatCompletedOperationsLabel(["rezka"], [STAGE])).toBe("Резка");
   });
 });

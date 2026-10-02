@@ -48,6 +48,12 @@ export const remainderPreviewColumns: RemainderPreviewColumn[] = [
     filterField: "operations",
     sortField: "operations",
     headerClassName: "min-w-[160px]",
+    // Значения списка фильтра — серверные подписи (их собирает
+    // `getImportItemOperationsServerLabel` по `completed_operations_raw` и
+    // этапам), а ячейка печатает прочерк. Переводить нечего: прочерк в
+    // `?operations=` не знает ни `_preview_operations_label`, ни
+    // `_balance_operations_filter`, а два пустых состояния сервер различает
+    // как раз подписями (ADR-0055 п.5).
   },
   {
     id: "quality",

@@ -18,13 +18,16 @@ import {
   getTaskViewCategory,
 } from "./taskStatus";
 import { QTY_EMPTY } from "@/shared/lib/quantityFormat";
+import type { RowTone } from "@/shared/lib/rowTones";
 
 /**
  * Тон задания: «в ожидании», «в работе», «взято в работу», «завершено»,
  * «обычное». Определяется один раз; строка и карточка только раскладывают его
- * в свои классы.
+ * в свои классы. Сам тон — часть общего словаря строк (`shared/lib/rowTones`),
+ * чтобы доска и «Передачи» красились одним набором; `scrap` (брак) из него
+ * исключён: на доске брак — не тон строки, а поле «Брак» и пилюля.
  */
-export type TaskTone = "waiting" | "activeRunning" | "active" | "completed" | "plain";
+export type TaskTone = Exclude<RowTone, "scrap">;
 
 export function getTaskTone(task: SectionBoardTask): TaskTone {
   const category = getTaskViewCategory(task);

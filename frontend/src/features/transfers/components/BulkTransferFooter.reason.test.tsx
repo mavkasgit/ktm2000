@@ -17,6 +17,7 @@ import type { ReadyToTransferTask } from "@/shared/api/transfers";
 import type { BulkRunnerProgress } from "@/shared/bulk";
 import { actionReasonText } from "@/shared/lib/actionReasons";
 import { useAuth, type AuthShellUser } from "@/features/auth/hooks/useAuth";
+import { readyRowIdentity } from "../lib/groupReadyTransfers";
 import { BulkTransferFooter } from "./BulkTransferFooter";
 
 vi.mock("@/features/auth/hooks/useAuth", () => ({ useAuth: vi.fn() }));
@@ -73,16 +74,20 @@ function setUser(user: AuthShellUser | null) {
 
 function renderFooter(
   selectedTasks: ReadyToTransferTask[],
-  options: { pending?: boolean; progress?: BulkRunnerProgress | null } = {},
+  options: {
+    pending?: boolean;
+    progress?: BulkRunnerProgress | null;
+    quantities?: Record<string, string>;
+  } = {},
 ): HTMLElement {
   const client = new QueryClient({ defaultOptions: { queries: { retry: false } } });
   const { container } = render(
     <QueryClientProvider client={client}>
       <BulkTransferFooter
         selectedTasks={selectedTasks}
+        quantities={options.quantities ?? {}}
         onSubmit={vi.fn()}
-        onExit={vi.fn()}
-        onClearSelection={vi.fn()}
+        onCancel={vi.fn()}
         pending={options.pending ?? false}
         progress={options.progress ?? null}
       />
@@ -152,5 +157,49 @@ describe("BulkTransferFooter: причина недоступности «Пер
     // кнопкой был бы шумом.
     const running = within(container).getByRole("button", { name: "Отправка..." });
     expect(reasonTextsBeside(running)).toEqual([]);
+  });
+
+  it("итог считается по введённым количествам, а не по доступным", () => {
+    const task = makeTask({ task_id: 1, transferable_quantity: "100" });
+    const container = renderFooter([task], {
+      quantities: { [readyRowIdentity(task)]: "40" },
+      // Исполнитель подставляется дефолтом: иначе кнопку держит другая причина.
+    });
+
+    // Введённое число, а не доступное: 40, не 100.
+    expect(container.textContent).toContain("40 шт.");
+    expect(container.textContent).not.toContain("100 шт.");
+    expect(submitButton(container).hasAttribute("disabled")).toBe(false);
+  });
+
+  it("строка с нулевым количеством не мешает отправить остальные", () => {
+    const filled = makeTask({ task_id: 1 });
+    const empty = makeTask({ task_id: 2 });
+    const container = renderFooter([filled, empty], {
+      quantities: {
+        [readyRowIdentity(filled)]: "10",
+        [readyRowIdentity(empty)]: "0",
+      },
+    });
+
+    // Ноль — результат раскладки группы, а не ошибка ввода: он просто не уезжает.
+    expect(reasonTextsBesideSubmit(container)).toEqual([]);
+    expect(submitButton(container).textContent).toContain("(1)");
+    expect(submitButton(container).hasAttribute("disabled")).toBe(false);
+  });
+
+  it("когда нули только и есть — «Передать все» держится и говорит причину", () => {
+    const first = makeTask({ task_id: 1 });
+    const second = makeTask({ task_id: 2 });
+    const container = renderFooter([first, second], {
+      quantities: {
+        [readyRowIdentity(first)]: "0",
+        [readyRowIdentity(second)]: "0",
+      },
+    });
+
+    expect(reasonTextsBesideSubmit(container)).toEqual([actionReasonText("zero_quantity")]);
+    expect(submitButton(container).hasAttribute("disabled")).toBe(true);
+    expect(submitButton(container).textContent).toContain("(0)");
   });
 });

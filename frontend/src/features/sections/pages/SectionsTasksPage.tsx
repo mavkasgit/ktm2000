@@ -32,7 +32,7 @@ import { queryKeys } from "@/shared/api/queryKeys";
 import { usePaginatedTableQuery } from "@/shared/hooks/usePaginatedTableQuery";
 import type { SectionBoardQueryParams } from "@/shared/api/shopfloor";
 import { isFirstRowsLoad, keepPreviousDataForScope } from "@/shared/lib/tableQueryPlaceholder";
-import { DateRangePicker, renderIcon, toast, type DateRangeValue } from "@/shared/ui";
+import { DateRangePicker, PrintButton, renderIcon, toast, type DateRangeValue } from "@/shared/ui";
 import { useBulkSelection } from "@/shared/bulk";
 import { BulkResultsDialog, summarizeBulkResults, type BulkActionResultItem, type BulkActionSummary } from "@/shared/bulk";
 import { isProductionSection } from "@/shared/lib/sectionTypes";
@@ -51,8 +51,8 @@ import {
   type BulkDraft,
 } from "../lib/bulkDraft";
 import { DailyPlansPanel } from "../components/DailyPlansPanel";
-import { PlanPrintButton } from "../components/PlanPrintButton";
 import { getDailyPlanCreationCandidates, mergeDailyPlanTasks } from "../lib/dailyPlans";
+import { planGroupComplete } from "../lib/groupComplete";
 import { PlanModal } from "../components/PlanModal";
 import { SectionStockBalances } from "../components/SectionStockBalances";
 import {
@@ -180,10 +180,13 @@ export function SectionsTasksPage() {
     open: boolean;
     type: TaskActionDialogType;
     task: SectionBoardTask | null;
+    /** Задания группы: заполнено — диалог завершает группу целиком. */
+    tasks: SectionBoardTask[] | null;
   }>({
     open: false,
     type: "complete",
     task: null,
+    tasks: null,
   });
   const [actionQty, setActionQty] = useState("");
   const [defectQty, setDefectQty] = useState("");
@@ -204,7 +207,6 @@ export function SectionsTasksPage() {
   const [bulkDraft, setBulkDraft] = useState<BulkDraft>({});
   const [bulkPerformedDate, setBulkPerformedDate] = useState(() => nowLocalDateTimeParts().date);
   const [bulkPerformedShift, setBulkPerformedShift] = useState<"1" | "2">("1");
-  const [bulkComment, setBulkComment] = useState("");
   const [bulkShortageStrategy, setBulkShortageStrategy] = useState<ShortageStrategy | null>(null);
   // Строки, отрисованные доской: по ним футер считает «вне текущего фильтра».
   const [visibleTaskIds, setVisibleTaskIds] = useState<ReadonlySet<number>>(() => new Set());
@@ -564,7 +566,23 @@ export function SectionsTasksPage() {
 
   const openActionDialog = useCallback((_type: TaskActionDialogType, task: SectionBoardTask) => {
     const now = nowLocalDateTimeParts();
-    setActionDialog({ open: true, type: "complete", task });
+    setActionDialog({ open: true, type: "complete", task, tasks: null });
+    setPerformedDate(now.date);
+    setPerformedShift("1");
+    setActionComment("");
+    setConflictHint(null);
+    setActionQty("");
+    setDefectQty("");
+  }, []);
+
+  /**
+   * «Завершить группу» из шапки блока: тот же диалог, но за группу целиком —
+   * «Факт/Брак» здесь цель по группе, страница раскладывает её по строкам
+   * (`applyGroupField`) и отправляет одной пачкой.
+   */
+  const handleCompleteGroup = useCallback((group: TaskGroup) => {
+    const now = nowLocalDateTimeParts();
+    setActionDialog({ open: true, type: "complete", task: null, tasks: group.tasks });
     setPerformedDate(now.date);
     setPerformedShift("1");
     setActionComment("");
@@ -642,7 +660,7 @@ export function SectionsTasksPage() {
   ]);
 
   const closeActionDrawer = useCallback(() => {
-    setActionDialog({ open: false, type: "complete", task: null });
+    setActionDialog({ open: false, type: "complete", task: null, tasks: null });
     setShortageStrategy("fail");
   }, []);
 
@@ -756,16 +774,51 @@ export function SectionsTasksPage() {
   const pendingMutation = completeMutation.isPending;
 
   /**
-   * Одиночное завершение из строки доски (#283): групповой путь ушёл в инлайн
-   * и футер, поэтому диалог отвечает только за одну задачу.
+   * Одиночное завершение из строки доски (#283) и групповое из шапки блока:
+   * у группы «Факт/Брак» — цель по всей группе, и раскладывается по строкам тем
+   * же доменом черновика, что и поле группы на доске (`applyGroupField`).
    */
   const submitAction = useCallback(() => {
-    const task = actionDialog.task;
-    if (!task) return;
-
+    const groupTasks = actionDialog.tasks;
     const effectivePerformedAt = `${performedDate}T${performedShift === "1" ? "08:00" : "20:00"}`;
     const effectiveAccountedAt = nowLocalDateTime();
     const executorUserId = me?.id;
+
+    if (groupTasks && groupTasks.length > 0) {
+      const { entries, skipped } = planGroupComplete(groupTasks, actionQty, defectQty);
+      if (entries.length === 0) {
+        const text = actionReasonText("zero_quantity");
+        toast({ title: "Ошибка", description: text, variant: "destructive" });
+        setConflictHint(text);
+        return;
+      }
+      if (skipped.length > 0) {
+        toast({
+          variant: "default",
+          title: "Часть заданий пропущена",
+          description: `${skipped.length} из ${groupTasks.length} заданий завершить нельзя`,
+        });
+      }
+      bulkDraftMutation.mutate(
+        entries.map((entry) => ({
+          task_id: entry.taskId,
+          good_quantity: String(entry.good.quantity),
+          defect_quantity: String(entry.defect.quantity),
+          comment: actionComment.trim() || undefined,
+          idempotency_key: makeIdempotencyKey(`group-complete-${entry.taskId}`),
+          executor_user_id: executorUserId,
+          performed_at: effectivePerformedAt,
+          accounted_at: effectiveAccountedAt,
+          shortage_strategy: shortageStrategy,
+          auto_transfer_next: true,
+        })),
+      );
+      setActionDialog({ open: false, type: "complete", task: null, tasks: null });
+      return;
+    }
+
+    const task = actionDialog.task;
+    if (!task) return;
 
     // Трансформация габаритов (ADR-0002, раскрой): факт считается в заготовках
     // ВХОДА, лимит — остаток входа, и стратегия дефицита к ней не применяется
@@ -857,6 +910,7 @@ export function SectionsTasksPage() {
     performedShift,
     me?.id,
     completeMutation,
+    bulkDraftMutation,
     actionComment,
     defectQty,
     shortageStrategy,
@@ -907,7 +961,6 @@ export function SectionsTasksPage() {
   const clearBulkDraft = useCallback(() => {
     setBulkDraft({});
     setBulkShortageStrategy(null);
-    setBulkComment("");
     bulkSelection.clear();
   }, [bulkSelection]);
 
@@ -922,7 +975,6 @@ export function SectionsTasksPage() {
         task_id: entry.taskId,
         good_quantity: String(entry.good.quantity),
         defect_quantity: String(entry.defect.quantity),
-        comment: bulkComment.trim() || undefined,
         idempotency_key: makeIdempotencyKey(`bulk-complete-${entry.taskId}`),
         executor_user_id: me?.id,
         performed_at: effectivePerformedAt,
@@ -939,7 +991,6 @@ export function SectionsTasksPage() {
     bulkDraft,
     bulkPerformedDate,
     bulkPerformedShift,
-    bulkComment,
     bulkShortageStrategy,
     bulkDraftMutation,
     me?.id,
@@ -1001,7 +1052,7 @@ export function SectionsTasksPage() {
   // Печать — одна кнопка на обе вкладки, в ряду фильтров сразу после поиска
   // (слот `toolbar` доски). Что печатается, решает страница: в модальное окно
   // уходит тот же набор, что видит оператор.
-  const printButton = <PlanPrintButton onClick={() => setPlanModalOpen(true)} />;
+  const printButton = <PrintButton label="Печать плана" onClick={() => setPlanModalOpen(true)} />;
 
   return (
     <>
@@ -1163,6 +1214,7 @@ export function SectionsTasksPage() {
                     onVisibleTaskIdsChange={handleVisibleTaskIdsChange}
                     profile={profile}
                     onSelectAllVisible={handleSelectAll}
+                    onCompleteGroup={handleCompleteGroup}
                     page={selectedPlanIds.size > 0 ? 1 : boardPage}
                     setPage={selectedPlanIds.size > 0 ? () => {} : setBoardPage}
                     limit={boardLimit}
@@ -1307,8 +1359,6 @@ export function SectionsTasksPage() {
             onPerformedDateChange={setBulkPerformedDate}
             performedShift={bulkPerformedShift}
             onPerformedShiftChange={setBulkPerformedShift}
-            comment={bulkComment}
-            onCommentChange={setBulkComment}
             shortageStrategy={bulkShortageStrategy}
             onShortageStrategyChange={setBulkShortageStrategy}
             shortage={bulkDraftShortage}
@@ -1346,6 +1396,7 @@ export function SectionsTasksPage() {
           else setActionDialog((prev) => ({ ...prev, open }));
         }}
         task={actionDialog.task}
+        tasks={actionDialog.tasks}
         actionQty={actionQty}
         setActionQty={setActionQty}
         defectQty={defectQty}
