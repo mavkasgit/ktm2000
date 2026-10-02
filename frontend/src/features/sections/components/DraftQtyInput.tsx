@@ -10,6 +10,11 @@
  *
  * Ввод нормализует `normalizeQuantityInput` — то же правило целых штук, что и
  * у полей факта в диалоге: своя регулярка рядом с полем разошлась бы с ним.
+ *
+ * Плейсхолдер — **сам записанный факт, без слова** («3», не «сейчас 3»):
+ * полезная ширина поля 38px при 12px шрифте, и «сейчас 3» (47px) обрезалось уже
+ * на однозначном числе, а «сейчас 1234» — на 66px. Смысл подписи несёт
+ * подсказка `title` («Записано: 3»), а не место, которого нет.
  */
 
 import { useState } from "react";
@@ -22,7 +27,8 @@ export type DraftQtyInputProps = {
   onChange: (value: string) => void;
   /** Причина отклонённого ввода — футер показывает её текстом. */
   onIssue?: (issue: QuantityInputIssue | null) => void;
-  placeholder?: string;
+  /** Записанный факт (уже отформатированный): плейсхолдер и подсказка. */
+  recorded: string;
   ariaLabel: string;
   /** Введённое больше доступного на задачу — помечается без наведения. */
   overPlan?: boolean;
@@ -34,7 +40,7 @@ export function DraftQtyInput({
   value,
   onChange,
   onIssue,
-  placeholder,
+  recorded,
   ariaLabel,
   overPlan = false,
   disabled = false,
@@ -65,10 +71,16 @@ export function DraftQtyInput({
       onKeyDown={(event) => {
         if (event.key === "Enter" || event.key === " ") event.stopPropagation();
       }}
-      placeholder={placeholder}
+      placeholder={recorded}
       aria-label={ariaLabel}
       aria-invalid={issue !== null || overPlan}
-      title={issue ? issue.text : overPlan ? "Сверх плана: больше доступного на задачу" : undefined}
+      title={
+        issue
+          ? issue.text
+          : overPlan
+            ? "Сверх плана: больше доступного на задачу"
+            : `Записано: ${recorded}`
+      }
       disabled={disabled}
       className={cn(
         "h-7 w-16 text-xs",

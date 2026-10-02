@@ -215,7 +215,7 @@ function renderDraftCell(
         value={draft.value[field]}
         onChange={(next) => draft.onChange(field, next)}
         onIssue={draft.onIssue}
-        placeholder={`сейчас ${fmtQty(recorded)}`}
+        recorded={fmtQty(recorded)}
         ariaLabel={`${task.product_sku}: ${label}`}
         overPlan={overPlan}
       />
@@ -606,7 +606,7 @@ function TableTaskGroupRow({
               value={groupQty?.good ?? ""}
               onChange={(value) => onGroupQtyChange?.("good", value)}
               onIssue={onGroupIssue}
-              placeholder={`сейчас ${fmtQty(String(recordedGood))}`}
+              recorded={fmtQty(String(recordedGood))}
               ariaLabel={`${firstTask.product_sku}: годные группы`}
               overPlan={overPlan.good}
             />
@@ -627,7 +627,7 @@ function TableTaskGroupRow({
               value={groupQty?.defect ?? ""}
               onChange={(value) => onGroupQtyChange?.("defect", value)}
               onIssue={onGroupIssue}
-              placeholder={`сейчас ${fmtQty(String(recordedDefect))}`}
+              recorded={fmtQty(String(recordedDefect))}
               ariaLabel={`${firstTask.product_sku}: брак группы`}
               overPlan={overPlan.defect}
             />
@@ -1537,7 +1537,7 @@ export function SectionTasksBoard({
                               value={value}
                               onChange={(next) => handleGroupQtyChange(group.tasks, field, next)}
                               onIssue={(issue) => onBulkDraftIssue?.(issue)}
-                              placeholder={`сейчас ${fmtQty(String(recorded))}`}
+                              recorded={fmtQty(String(recorded))}
                               ariaLabel={`${group.label}: ${label}`}
                               overPlan={groupOverPlan(group.tasks)[field]}
                             />

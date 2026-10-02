@@ -154,7 +154,10 @@ describe("SectionTasksBoard: массовый ввод факта", () => {
     fireEvent.click(taskRow("SKU-A"));
 
     const good = within(desktop()).getByLabelText("SKU-A: годные");
-    expect(good.getAttribute("placeholder")).toBe("сейчас 3");
+    // Плейсхолдер — сам записанный факт, без слова: «сейчас 3» не влезало
+    // в поле шириной 38px. Смысл подписи несёт title.
+    expect(good.getAttribute("placeholder")).toBe("3");
+    expect(good.getAttribute("title")).toBe("Записано: 3");
 
     fireEvent.change(good, { target: { value: "4" } });
 
