@@ -123,7 +123,7 @@ export function BulkCompleteFooter({
   return (
     <div className="fixed inset-x-0 bottom-0 z-40 border-t bg-background/95 backdrop-blur shadow-[0_-4px_24px_rgba(0,0,0,0.08)]">
       <div className="w-full px-6 py-3">
-        <div className="flex flex-col gap-3 xl:flex-row xl:items-end xl:justify-between">
+        <div className="flex flex-col gap-3 xl:flex-row xl:items-center xl:justify-between">
           <div className="min-w-0 flex-1 space-y-1.5">
             <div className="flex flex-wrap items-center gap-x-3 gap-y-1 text-sm">
               <span className="font-semibold">Массовое завершение</span>
@@ -248,15 +248,24 @@ export function BulkCompleteFooter({
               />
             </div>
 
-            <div className="flex items-end gap-2">
-              <Button variant="outline" onClick={onCancel} disabled={pending}>
-                Отмена
-              </Button>
-              <ActionWithReason reason={submitBlockReason} layout="column">
-                <Button onClick={onConfirm} disabled={pending || submitBlockReason !== null}>
-                  {pending ? "Запись…" : `Записать (${entries.length})`}
+            {/* Кнопки — на уровне полей: невидимая подпись занимает ту же
+                строку, что «Дата»/«Смена»/«Комментарий», а причина отказа
+                уходит вправо от кнопки, а не под неё (иначе блок кнопок выше
+                остальных и кнопка висит ниже поля). */}
+            <div className="flex flex-col gap-1.5">
+              <span aria-hidden className="invisible text-sm font-medium">
+                Действие
+              </span>
+              <div className="flex h-10 items-center gap-2">
+                <Button variant="outline" onClick={onCancel} disabled={pending}>
+                  Отмена
                 </Button>
-              </ActionWithReason>
+                <ActionWithReason reason={submitBlockReason} layout="row">
+                  <Button onClick={onConfirm} disabled={pending || submitBlockReason !== null}>
+                    {pending ? "Запись…" : `Записать (${entries.length})`}
+                  </Button>
+                </ActionWithReason>
+              </div>
             </div>
           </div>
         </div>

@@ -75,9 +75,13 @@ function Harness({
   onIssue?: (issue: { text: string } | null) => void;
 }) {
   const [draft, setDraft] = useState<BulkDraft>({});
+  const [bulkMode, setBulkMode] = useState(true);
   const bulkSelection = useBulkSelection<number>();
   return (
     <>
+      <button type="button" onClick={() => setBulkMode((prev) => !prev)}>
+        {bulkMode ? "выйти из массового режима" : "включить массовый режим"}
+      </button>
       <SectionTasksBoard
         tasks={tasks}
         total={tasks.length}
@@ -86,8 +90,8 @@ function Harness({
         onModeChange={vi.fn()}
         onAction={vi.fn()}
         profile={PROFILE}
-        bulkMode
-        bulkSelection={bulkSelection}
+        bulkMode={bulkMode}
+        bulkSelection={bulkMode ? bulkSelection : undefined}
         bulkDraft={draft}
         onBulkDraftChange={setDraft}
         onBulkDraftIssue={onIssue}
@@ -170,6 +174,29 @@ describe("SectionTasksBoard: массовый ввод факта", () => {
     // уходит наружу — её печатает футер (ADR-0032).
     expect(screen.getByTestId("draft").textContent).toBe('{"1":{"good":"1","defect":""}}');
     expect(onIssue).toHaveBeenCalledWith(expect.objectContaining({ text: expect.stringContaining("целое") }));
+  });
+
+  it("включение массового режима раскрывает группы — строки доступны для ввода", () => {
+    render(
+      <Harness
+        tasks={[
+          makeTask({ id: 1, product_sku: "SKU-A", cache: { ...makeTask().cache, issued_quantity: "10" } }),
+          makeTask({ id: 2, product_sku: "SKU-A", cache: { ...makeTask().cache, issued_quantity: "5" } }),
+        ]}
+      />,
+    );
+
+    // Сначала выходим из режима: группа из двух заданий свёрнута, строк нет.
+    fireEvent.click(screen.getByRole("button", { name: "выйти из массового режима" }));
+    expect(within(desktop()).queryByLabelText("SKU-A: годные группы")).toBeNull();
+    expect(within(desktop()).queryAllByText("SKU-A")).toHaveLength(1);
+
+    // Включение режима обязано раскрыть группу: её строки — место массового
+    // ввода, а сворачивать их в этом режиме оператору нечем.
+    fireEvent.click(screen.getByRole("button", { name: "включить массовый режим" }));
+
+    expect(within(desktop()).getByLabelText("SKU-A: годные группы")).toBeTruthy();
+    expect(within(desktop()).getAllByText("SKU-A").length).toBeGreaterThan(1);
   });
 
   it("групповое поле раскладывает количество по строкам сверху вниз", () => {

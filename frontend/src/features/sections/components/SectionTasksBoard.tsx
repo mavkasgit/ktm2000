@@ -260,6 +260,9 @@ function renderTaskRow(
   return (
     <tr
       data-row-kind="board-task"
+      // id задачи — адрес строки для e2e массового ввода (#283): строки одного
+      // артикула неразличимы по тексту.
+      data-task-id={task.id}
       key={task.id}
       // Высота задана явно: в readOnly («План») кнопки в строке нет, и без
       // этого строка схлопнулась бы до высоты текста (30px против 32px).
@@ -363,6 +366,7 @@ function renderMobileCard(
   return (
     <div
       key={task.id}
+      data-task-id={task.id}
       tabIndex={bulkMode ? 0 : undefined}
       className={`p-4 space-y-3 cursor-pointer transition-colors ${getTaskCardClass(task, !!isSelected)} ${isLastInGroup ? "border-b-2 border-blue-300 mb-3" : "mb-0"}`}
       onClick={() => {
@@ -1151,7 +1155,10 @@ export function SectionTasksBoard({
       }
     }
     return items;
-  }, [boardEntries, collapsedGroups]);
+    // `bulkMode` — в зависимостях: в массовом режиме группы раскрыты, и без
+    // него список строк не пересчитался бы при включении режима (строки
+    // остались бы свёрнутыми, и ввод в них был бы недоступен).
+  }, [boardEntries, collapsedGroups, bulkMode]);
 
   const renderWaitingDivider = useCallback((row: Extract<VirtualBoardRow, { kind: "divider" }>) => (
     <tr key={row.key} data-testid="waiting-divider">

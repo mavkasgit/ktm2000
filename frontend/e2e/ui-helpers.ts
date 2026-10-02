@@ -724,6 +724,128 @@ export async function completeSectionTaskViaUI(page: Page, sectionId: number, sk
   await expect(drawer).not.toBeVisible({ timeout: 15_000 });
 }
 
+/**
+ * Массовый ввод факта на доске участка (#283): «Выделить все» → в поле
+ * «Годные» каждой доводимой строки — её доступное количество → одно
+ * подтверждение в футере.
+ *
+ * Этим закрывается тот же путь, что проходит оператор: панели массовых
+ * операций и кнопки «Завершить группу» больше нет, а одиночный диалог с
+ * перезагрузкой страницы на каждую задачу не влезал в бюджет полного маршрута.
+ *
+ * Количество берётся из ответа доски и считается тем же правилом, что потолок
+ * строки в UI (`taskFactCeiling`): у обычной задачи — выданное минус годные и
+ * брак, у раскроя — остаток входа. Записывается ровно потолок, поэтому дефицита
+ * нет и стратегия дефицита не требуется.
+ *
+ * Возвращает число задач, по которым отправлен факт (0 — доводимых нет).
+ */
+export async function completeBoardTasksViaBulkUI(page: Page, sku: string): Promise<number> {
+  const sectionId = Number(page.url().match(/\/section-tasks\/(\d+)/)?.[1] ?? 0);
+  if (!sectionId) return 0;
+
+  const board = await fetchBoardViaUI(page, sectionId);
+  const toInt = (value: unknown): number => {
+    const parsed = Math.round(Number(value ?? 0));
+    return Number.isFinite(parsed) ? parsed : 0;
+  };
+
+  const targets: Array<{ id: number; quantity: number }> = [];
+  for (const raw of board.tasks ?? []) {
+    const task = raw as {
+      id?: number;
+      product_sku?: string;
+      status?: string;
+      transforms_dimensions?: boolean;
+      planned_quantity?: string | number | null;
+      input_quantity?: string | number | null;
+      input_consumed_quantity?: string | number | null;
+      cache?: Record<string, string | number | null>;
+    };
+    if (!task.id || task.product_sku !== sku) continue;
+    const cache = task.cache ?? {};
+    const rejected = toInt(cache.rejected_quantity);
+    const inputQuantity = toInt(task.input_quantity);
+    const inputConsumed = toInt(task.input_consumed_quantity);
+    if (task.transforms_dimensions) {
+      // Раскрой: факт считается в заготовках входа (ADR-0002, ADR-0064),
+      // поэтому количество — остаток входа, и довыдачи у него нет. Прежний
+      // путь закрывал такие задачи групповым диалогом; массовый ввод обязан
+      // уметь то же, иначе пила остаётся незакрытой и маршрут встаёт.
+      const quantity = Math.max(0, inputQuantity - inputConsumed - rejected);
+      if (quantity > 0) targets.push({ id: task.id, quantity });
+      continue;
+    }
+    const inWork = Math.max(
+      0,
+      toInt(cache.issued_quantity) - toInt(cache.completed_quantity) - rejected,
+    );
+    const available = Math.max(0, toInt(cache.available_quantity));
+    // Количество = «сколько нужно, чтобы закрыть задачу»: план, но не меньше
+    // того, что уже в работе, и не больше потолка строки (в работе плюс то, что
+    // участок может довыдать). Довыдача здесь обязательна: задача без выданного
+    // материала, но с остатком на складе завершается автовыдачей — этого
+    // прежний путь достигал кнопкой «Плановое», а заполнение одной лишь работы
+    // (issued − годные − брак) оставляло такие задачи незакрытыми и маршрут
+    // вставал.
+    const quantity = Math.max(
+      0,
+      Math.min(Math.max(toInt(task.planned_quantity), inWork), inWork + available),
+    );
+    if (quantity > 0) targets.push({ id: task.id, quantity });
+  }
+  if (targets.length === 0) return 0;
+
+  // «Выделить все» включает массовый режим и выделяет доводимые строки —
+  // отдельного тумблера нажимать не надо.
+  const selectAll = page.getByRole("button", { name: /^Выделить все/ });
+  if (!(await selectAll.isVisible().catch(() => false))) return 0;
+  if (!(await selectAll.isEnabled().catch(() => false))) return 0;
+  await selectAll.click();
+
+  let filled = 0;
+  const missed: number[] = [];
+  for (const target of targets) {
+    // Строку адресуем по id задачи: строки одного артикула по тексту
+    // неразличимы, а виртуализация отдаёт только окно строк.
+    const row = page.locator(`tr[data-task-id="${target.id}"]`);
+    if (!(await row.isVisible().catch(() => false))) {
+      missed.push(target.id);
+      continue;
+    }
+    const good = row.locator('input[inputmode="numeric"]').first();
+    if (!(await good.isVisible().catch(() => false))) {
+      missed.push(target.id);
+      continue;
+    }
+    await good.fill(String(target.quantity));
+    filled++;
+  }
+  console.log(
+    `[bulk] ${sku} @${sectionId}: заполнено ${filled}/${targets.length}${missed.length > 0 ? `, вне окна строк: ${missed.join(",")}` : ""}`,
+  );
+  if (filled === 0) {
+    // Ничего не заполнили — снимаем выделение, чтобы не оставить страницу в
+    // массовом режиме (Escape без черновика именно это и делает).
+    await page.keyboard.press("Escape");
+    return 0;
+  }
+
+  const confirm = page.getByRole("button", { name: /^Записать \(/ });
+  await expect(confirm).toBeEnabled({ timeout: 10_000 });
+  await confirm.click();
+  await expect(page.getByText("Факт записан").first()).toBeVisible({ timeout: 30_000 });
+
+  // Частичный отказ открывает окно результатов: закрываем его, иначе модалка
+  // уедет в следующий шаг маршрута.
+  const resultsDialog = page.getByRole("dialog");
+  if (await resultsDialog.isVisible().catch(() => false)) {
+    await page.keyboard.press("Escape");
+    await expect(resultsDialog).not.toBeVisible({ timeout: 10_000 }).catch(() => {});
+  }
+  return filled;
+}
+
 /** Переход с одной повторной попыткой только для временного обрыва dev-сервера. */
 async function gotoWithTransientRetry(page: Page, url: string): Promise<void> {
   for (let attempt = 0; attempt < 2; attempt++) {
@@ -788,65 +910,27 @@ export async function completeAllSectionTasksViaUI(
 
     await tile.click();
     await expect(page).toHaveURL(/\/section-tasks\/\d+/, { timeout: 15_000 }).catch(() => {});
-    const sectionUrl = page.url();
-    await expandBoardGroupsViaUI(page);
 
-    // Внутри участка завершаем столько задач, сколько доступно за один заход:
-    // после каждой мутации доска не рефетчится — перезагружаем страницу участка.
+    // Внутри участка — массовый ввод факта (#283): одно подтверждение на заход
+    // вместо диалога на задачу с перезагрузкой страницы. Панели массовых
+    // операций и кнопки «Завершить группу» больше нет, поэтому прежний путь
+    // «строка → диалог → перезагрузка» на полный маршрут не влезал в бюджет
+    // теста.
     const rowWaitMs = isBusy(sectionName) ? 6_000 : 2_500;
-    for (let guard = 0; guard < 20; guard++) {
-      const taskRow = page
-        .locator("tr", { hasText: sku })
-        .filter({ has: page.getByRole("button", { name: "Завершить" }) })
-        .first();
-      const found = await taskRow
+    for (let guard = 0; guard < 5; guard++) {
+      const boardReady = await page
+        .locator("tr[data-task-id]")
+        .first()
         .waitFor({ state: "visible", timeout: rowWaitMs })
         .then(() => true, () => false);
-      if (!found) break;
-      const completeBtn = taskRow.getByRole("button", { name: "Завершить" }).first();
-      if (!(await completeBtn.isEnabled().catch(() => false))) break;
-
-      await completeBtn.click();
-      const drawer = page.getByRole("dialog");
-      await expect(drawer).toBeVisible({ timeout: 5_000 });
-
-      // «В работе: N» — выданное на участок количество. Если 0, материал ещё не
-      // пришёл (передача в пути): завершать рано — бэкенд вернёт «Complete quantity
-      // exceeds issued quantity». Закрываем «Отмена» и идём дальше.
-      const inWorkMatch = (await drawer.textContent())?.match(/В работе:\s*(\d+)/);
-      const inWork = inWorkMatch ? Number(inWorkMatch[1]) : 0;
-      if (inWork <= 0) {
-        await drawer.getByRole("button", { name: "Отмена" }).click().catch(() => {});
-        await expect(drawer).not.toBeVisible({ timeout: 8_000 }).catch(() => {});
-        break;
-      }
-
-      const plannedBtn = drawer.getByRole("button", { name: /Плановое \(\d+\)/ });
-      if ((await plannedBtn.count()) > 0) {
-        await plannedBtn.click();
-      } else {
-        // Нет кнопки «Плановое» — берём выданное на участок количество.
-        // Поле факта в TaskActionDrawer — `type="text" inputMode="numeric"`
-        // (не `type="number"`): селектор по type здесь больше ничего не находит.
-        const goodInput = drawer.locator('input[inputmode="numeric"]').first();
-        await goodInput.fill(String(inWork));
-      }
-
-      await drawer.getByRole("button", { name: "Сохранить" }).click();
-      // Страховка: сохранение могло упасть по валидации — закрываем «Отмена» и
-      // не роняем весь проход.
-      const saveOk = await expect(drawer).not.toBeVisible({ timeout: 8_000 }).then(
-        () => true,
-        () => false,
-      );
-      if (!saveOk) {
-        await drawer.getByRole("button", { name: "Отмена" }).click().catch(() => {});
-        await expect(drawer).not.toBeVisible({ timeout: 8_000 }).catch(() => {});
-        break;
-      }
-      completed++;
-      await gotoWithTransientRetry(page, sectionUrl);
-      await expandBoardGroupsViaUI(page);
+      if (!boardReady) break;
+      const written = await completeBoardTasksViaBulkUI(page, sku);
+      if (written === 0) break;
+      completed += written;
+      // Доска перечитывается после записи (`invalidateAfter`), поэтому
+      // перезагрузка страницы между заходами не нужна — ждём только кадр на
+      // обновление списка.
+      await page.waitForTimeout(500);
     }
 
     await gotoWithTransientRetry(page, "/section-tasks");
