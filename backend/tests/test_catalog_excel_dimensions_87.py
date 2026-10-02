@@ -511,3 +511,44 @@ async def test_export_writes_dimension_columns_for_round_trip(
     reimported = await _upload(client, PREVIEW_URL, [[row.get(header) for header in header]])
     assert reimported.status_code == 200, reimported.text
     assert reimported.json()["stats"]["update"] == 0
+
+
+async def test_legacy_file_cannot_silently_drop_a_length_of_a_2d_product(
+    client: AsyncClient, session: AsyncSession
+) -> None:
+    """Старый файл без «Размерности» не должен брать первую длину 2D-артикула.
+
+    Найдено на реальном файле `Каталог E2E.xlsx`: строка с двумя длинами,
+    применённая к 2D-артикулу, молча клала первую длину в ось размера, а вторую
+    теряла. Теперь это ошибка строки — тихо терять длину нельзя ни при каком
+    формате файла.
+    """
+    await _seed_dimension_types(session)
+    await _upload(client, APPLY_URL, [
+        _row(sku="SHEET-LEGACY", lengths=2500, dimension_state="2D", width_mm=1350, thickness_mm=4)
+    ])
+
+    # Тот же артикул старым файлом: две длины, колонок размерности нет.
+    legacy_headers = [
+        header for header in TEMPLATE_HEADERS
+        if header not in NEW_HEADERS
+    ]
+    wb = Workbook()
+    ws = wb.active
+    ws.append(legacy_headers)
+    ws.append(["SHEET-LEGACY", "Лист", "", "", "2500, 2700", "", "", "", "", "", "", ""])
+    buffer = BytesIO()
+    wb.save(buffer)
+
+    preview = await client.post(
+        PREVIEW_URL,
+        files={"file": ("legacy.xlsx", buffer.getvalue(), XLSX_MIME)},
+    )
+
+    assert preview.status_code == 200, preview.text
+    body = preview.json()
+    assert body["items"] == []
+    assert any(
+        "ожидается ровно одно значение, получено 2" in error["message"]
+        for error in body["errors"]
+    ), body["errors"]
