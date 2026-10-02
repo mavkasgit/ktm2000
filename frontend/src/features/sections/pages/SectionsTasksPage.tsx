@@ -23,6 +23,7 @@ import {
   type SectionBoardResponse,
   type TaskGroup,
   type ShortageStrategy,
+  type BulkCompleteEntry,
   type DailyPlanCompositionItem,
 } from "@/shared/api/shopfloor";
 import { invalidateAfter } from "@/shared/api/cacheInvalidation";
@@ -33,12 +34,21 @@ import type { SectionBoardQueryParams } from "@/shared/api/shopfloor";
 import { isFirstRowsLoad, keepPreviousDataForScope } from "@/shared/lib/tableQueryPlaceholder";
 import { DateRangePicker, renderIcon, toast, type DateRangeValue } from "@/shared/ui";
 import { useBulkSelection } from "@/shared/bulk";
-import { BulkResultsDialog, summarizeBulkResults, type BulkActionResultItem, type BulkActionSummary, type BulkRunnerProgress } from "@/shared/bulk";
+import { BulkResultsDialog, summarizeBulkResults, type BulkActionResultItem, type BulkActionSummary } from "@/shared/bulk";
 import { isProductionSection } from "@/shared/lib/sectionTypes";
 import { SectionSwitcherTiles } from "../components/SectionSwitcherTiles";
 import { SectionTasksBoard, type TaskActionDialogType, type TaskBoardViewMode } from "../components/SectionTasksBoard";
 import { TaskActionDrawer } from "../components/TaskActionDrawer";
-import { BulkOperationsPanel } from "../components/BulkOperationsPanel";
+import { BulkCompleteFooter } from "../components/BulkCompleteFooter";
+import { BulkDraftExitDialog } from "../components/BulkDraftExitDialog";
+import {
+  draftEntries,
+  draftShortage,
+  draftTotals,
+  isDraftEmpty,
+  withoutDraftIds,
+  type BulkDraft,
+} from "../lib/bulkDraft";
 import { DailyPlansPanel } from "../components/DailyPlansPanel";
 import { PlanPrintButton } from "../components/PlanPrintButton";
 import { getDailyPlanCreationCandidates, mergeDailyPlanTasks } from "../lib/dailyPlans";
@@ -62,11 +72,11 @@ import {
   getCompletionBlockReason,
   groupTasksByBlockReason,
   isTaskCompletable,
-  getNonCompletableTasks,
 } from "../lib/taskStatus";
-import { actionReasonText } from "@/shared/lib/actionReasons";
+import { actionReasonText, type ActionReasonCode } from "@/shared/lib/actionReasons";
 import { createAuditLog, getAuditLogs, type AuditLogEntry } from "@/shared/api/auditLogs";
 import { isAnyDialogOpen } from "@/shared/lib/dialogOpen";
+import { cn } from "@/shared/utils/cn";
 import { fmtQty, toQtyInteger } from "@/shared/lib/quantityFormat";
 
 /**
@@ -169,12 +179,10 @@ export function SectionsTasksPage() {
     open: boolean;
     type: TaskActionDialogType;
     task: SectionBoardTask | null;
-    tasks: SectionBoardTask[] | null;
   }>({
     open: false,
     type: "complete",
     task: null,
-    tasks: null,
   });
   const [actionQty, setActionQty] = useState("");
   const [defectQty, setDefectQty] = useState("");
@@ -188,13 +196,48 @@ export function SectionsTasksPage() {
   // Bulk mode state. Mass operations stay in the current page and do not
   // activate single-window/fullscreen navigation.
   const [bulkMode, setBulkMode] = useState(searchParams.get("bulk") === "1");
+  // Массовый ввод факта (#283): черновик привязан к id задачи и живёт здесь,
+  // поэтому смена фильтра и сортировки не двигает введённое у своих заданий.
+  // Панели массовых операций больше нет: ввод идёт в строках доски, а итог и
+  // подтверждение показывает футер.
+  const [bulkDraft, setBulkDraft] = useState<BulkDraft>({});
+  const [bulkDraftIssue, setBulkDraftIssue] = useState<string | null>(null);
+  const [bulkPerformedDate, setBulkPerformedDate] = useState(() => nowLocalDateTimeParts().date);
+  const [bulkPerformedShift, setBulkPerformedShift] = useState<"1" | "2">("1");
+  const [bulkComment, setBulkComment] = useState("");
+  const [bulkShortageStrategy, setBulkShortageStrategy] = useState<ShortageStrategy | null>(null);
+  // Строки, отрисованные доской: по ним футер считает «вне текущего фильтра».
+  const [visibleTaskIds, setVisibleTaskIds] = useState<ReadonlySet<number>>(() => new Set());
+  // Выход с непустым черновиком спрашивает подтверждение: действие держим до
+  // ответа оператора, чтобы Escape, тумблер режима и смена участка не теряли
+  // набранное молча.
+  const [draftExitAction, setDraftExitAction] = useState<(() => void) | null>(null);
+  const [bulkResults, setBulkResults] = useState<BulkActionResultItem<number>[]>([]);
+  const [bulkResultsOpen, setBulkResultsOpen] = useState(false);
+  const [bulkSummary, setBulkSummary] = useState<BulkActionSummary | null>(null);
   const revokeSelection = useBulkSelection<number>();
   useEffect(() => {
     setSelectedPlanIds(new Set());
     setCreatingDailyPlan(false);
     revokeSelection.clear();
+    bulkSelection.clear();
+    setBulkDraft({});
+    setBulkShortageStrategy(null);
   }, [sectionId]);
   const bulkSelection = useBulkSelection<number>();
+  // Снятая строка уносит и своё введённое количество: черновик не хранит
+  // значения задач, которых нет в выделении, иначе окно выхода и счётчики
+  // считали бы строку, которой оператор уже не управляет.
+  useEffect(() => {
+    setBulkDraft((previous) => {
+      const stale: number[] = [];
+      for (const key of Object.keys(previous)) {
+        const taskId = Number(key);
+        if (!bulkSelection.selectedIds.has(taskId)) stale.push(taskId);
+      }
+      return stale.length > 0 ? withoutDraftIds(previous, stale) : previous;
+    });
+  }, [bulkSelection.selectedIds]);
   const locationRef = useRef(location);
   locationRef.current = location;
 
@@ -202,22 +245,41 @@ export function SectionsTasksPage() {
     setBulkMode(searchParams.get("bulk") === "1");
   }, [searchParams]);
 
-  const toggleBulkMode = useCallback((force?: boolean) => {
-    setBulkMode((prev) => {
-      const nextBulk = force !== undefined ? force : !prev;
-      if (!nextBulk) bulkSelection.clear();
-      return nextBulk;
-    });
-  }, [bulkSelection]);
+  /**
+   * Действие, которое теряет черновик, спрашивает подтверждение (#283): выход
+   * из режима, Escape и смена участка при непустом черновике — через окно.
+   * Пустой черновик не спрашивает ничего.
+   */
+  const requestDraftGuardedAction = useCallback(
+    (action: () => void) => {
+      if (isDraftEmpty(bulkDraft)) {
+        action();
+        return;
+      }
+      setDraftExitAction(() => action);
+    },
+    [bulkDraft],
+  );
+
+  const toggleBulkMode = useCallback(
+    (force?: boolean) => {
+      const nextBulk = force !== undefined ? force : !bulkMode;
+      if (nextBulk) {
+        setBulkMode(true);
+        return;
+      }
+      requestDraftGuardedAction(() => {
+        setBulkMode(false);
+        setBulkDraft({});
+        setBulkShortageStrategy(null);
+        bulkSelection.clear();
+      });
+    },
+    [bulkMode, bulkSelection, requestDraftGuardedAction],
+  );
   const handleDailyPlanModeChange = useCallback((creating: boolean) => {
     setCreatingDailyPlan(creating);
   }, []);
-  const [bulkProgress, setBulkProgress] = useState<BulkRunnerProgress | null>(null);
-  const [bulkResults, setBulkResults] = useState<BulkActionResultItem<number>[]>([]);
-  const [bulkResultsOpen, setBulkResultsOpen] = useState(false);
-  const [bulkSummary, setBulkSummary] = useState<BulkActionSummary | null>(null);
-  // groupPanelTasks removed, using actionDialog.tasks instead
-  const bulkExecuting = bulkProgress?.running ?? false;
 
   const { data: sections } = useQuery({
     queryKey: queryKeys.sections.all(),
@@ -323,6 +385,19 @@ export function SectionsTasksPage() {
   const handleBoardServerQueryChange = useCallback(
     (query: BoardServerQuery) => setServerQueryFor({ sectionId, query }),
     [sectionId],
+  );
+  // Список отрисованных строк доски: футер считает по нему «вне текущего
+  // фильтра: N» (#283). Обработчик стабильный и **идемпотентный**: доска зовёт
+  // его из эффекта, а `tasks` у неё не всегда стабилен (`board?.tasks || []`
+  // до ответа запроса, `mergeDailyPlanTasks` при выбранном плане) — новый
+  // `Set` на каждый вызов зациклил бы рендер.
+  const handleVisibleTaskIdsChange = useCallback(
+    (ids: number[]) =>
+      setVisibleTaskIds((previous) => {
+        if (previous.size === ids.length && ids.every((id) => previous.has(id))) return previous;
+        return new Set(ids);
+      }),
+    [],
   );
 
   const {
@@ -489,7 +564,7 @@ export function SectionsTasksPage() {
 
   const openActionDialog = useCallback((_type: TaskActionDialogType, task: SectionBoardTask) => {
     const now = nowLocalDateTimeParts();
-    setActionDialog({ open: true, type: "complete", task, tasks: null });
+    setActionDialog({ open: true, type: "complete", task });
     setPerformedDate(now.date);
     setPerformedShift("1");
     setActionComment("");
@@ -533,7 +608,20 @@ export function SectionsTasksPage() {
           }, DOUBLE_ESCAPE_TIMEOUT_MS);
         }
       } else if (bulkMode) {
-        toggleBulkMode();
+        // Escape снимает выделение, а с непустым черновиком — спрашивает, потому
+        // что снятое выделение уносит и набранное количество (#283).
+        if (!isDraftEmpty(bulkDraft)) {
+          setDraftExitAction(() => () => {
+            setBulkMode(false);
+            setBulkDraft({});
+            setBulkShortageStrategy(null);
+            bulkSelection.clear();
+          });
+        } else if (bulkSelection.selectedCount > 0) {
+          bulkSelection.clear();
+        } else {
+          toggleBulkMode();
+        }
       }
     };
     window.addEventListener("keydown", handler);
@@ -543,6 +631,8 @@ export function SectionsTasksPage() {
     };
   }, [
     bulkMode,
+    bulkDraft,
+    bulkSelection,
     isSingleWindow,
     actionDialog.open,
     bulkResultsOpen,
@@ -552,79 +642,60 @@ export function SectionsTasksPage() {
   ]);
 
   const closeActionDrawer = useCallback(() => {
-    setActionDialog({ open: false, type: "complete", task: null, tasks: null });
+    setActionDialog({ open: false, type: "complete", task: null });
     setShortageStrategy("fail");
   }, []);
 
-  const groupCompleteMutation = useMutation({
-    mutationFn: ({ entries }: { entries: Parameters<typeof bulkCompleteTasks>[0]; tasks?: SectionBoardTask[] }) =>
-      bulkCompleteTasks(entries, requestOptions),
-    onSuccess: (response, variables) => {
-      const tasks = variables.tasks || [];
-      const summary = summarizeBulkResults(response.results.map(r => ({ id: r.id, status: r.status, reason: r.reason })));
-      const totalGood = variables.entries.reduce((sum, e) => sum + toQtyInteger(e.good_quantity), 0);
-      const totalDefect = variables.entries.reduce((sum, e) => sum + toQtyInteger(e.defect_quantity || "0"), 0);
-
-      const sectionInfo = selectedSection ? `на участке "${selectedSection.name}" (${selectedSection.code})` : "";
-      const taskInfo = tasks.length > 0
-        ? `для операций: ${tasks.map(t => t.operation_name || t.operation_code).filter(Boolean).join(", ")}`
-        : "";
+  /**
+   * Запись массового ввода (#283): одна entry на задачу через
+   * `bulkCompleteTasks`, `auto_transfer_next: true` — как у одиночного
+   * завершения (#187): передачу создаёт записанный факт, а не отдельная кнопка.
+   * Черновик чистится только после успешной записи: при частичном отказе
+   * оператор видит окно результатов и может повторить, ничего не потеряв.
+   */
+  const bulkDraftMutation = useMutation({
+    mutationFn: (entries: BulkCompleteEntry[]) => bulkCompleteTasks(entries, requestOptions),
+    onSuccess: async (response, entries) => {
+      const results: BulkActionResultItem<number>[] = response.results.map((result) => ({
+        id: result.id,
+        status: result.status,
+        reason: result.reason,
+      }));
+      const summary = summarizeBulkResults(results);
+      const totals = entries.reduce(
+        (acc, entry) => ({
+          good: acc.good + toQtyInteger(entry.good_quantity),
+          defect: acc.defect + toQtyInteger(entry.defect_quantity ?? "0"),
+        }),
+        { good: 0, defect: 0 },
+      );
 
       if (summary.failed > 0) {
+        setBulkResults(results);
+        setBulkSummary(summary);
+        setBulkResultsOpen(true);
         toast({
-          title: "Частичный успех",
+          title: summary.success > 0 ? "Частичный успех" : "Не удалось записать факт",
           description: `${summary.success} успешно, ${summary.failed} ошибок`,
           variant: "destructive",
         });
-        setConflictHint(`Не удалось завершить часть задач: ${response.results.filter(r => r.status === "failed").map(r => r.reason).join(", ")}`);
-        
-        pushActionLog({
-          status: "info",
-          title: "Групповое подтверждение (частично)",
-          message: `Подтверждено в группе: годные = ${totalGood} шт., брак = ${totalDefect} шт. ${sectionInfo} ${taskInfo}. Успешно: ${summary.success}, ошибок: ${summary.failed}.`,
-          taskIds: tasks.map(t => t.id),
-          productSku: Array.from(new Set(tasks.map(t => t.display_sku || t.product_sku).filter(Boolean))).join(", "),
-          operationName: Array.from(new Set(tasks.map(t => t.operation_name || t.operation_code).filter(Boolean))).join(", "),
-          qtyText: `годн: ${totalGood}, брак: ${totalDefect}`,
-          comment: variables.entries[0]?.comment || undefined,
-          errorDetails: `Не удалось завершить часть задач: ${response.results.filter(r => r.status === "failed").map(r => r.reason).join(", ")}`,
-        });
       } else {
-        toast({ title: "Группа завершена", variant: "success" });
-        pushActionLog({
-          status: "success",
-          title: "Группа подтверждена",
-          message: `Группа из ${response.results.length} задач успешно подтверждена ${sectionInfo} ${taskInfo}. Подтверждено всего: годные = ${totalGood} шт., брак = ${totalDefect} шт.`,
-          taskIds: tasks.map(t => t.id),
-          productSku: Array.from(new Set(tasks.map(t => t.display_sku || t.product_sku).filter(Boolean))).join(", "),
-          operationName: Array.from(new Set(tasks.map(t => t.operation_name || t.operation_code).filter(Boolean))).join(", "),
-          qtyText: `годн: ${totalGood}, брак: ${totalDefect}`,
-          comment: variables.entries[0]?.comment || undefined,
+        toast({
+          title: "Факт записан",
+          description: `Заданий: ${summary.success} · годные ${fmtQty(totals.good)}, брак ${fmtQty(totals.defect)}`,
+          variant: "success",
         });
-        closeActionDrawer();
-        setConflictHint(null);
+        clearBulkDraft();
+        setBulkMode(false);
       }
-      void invalidateAfter(queryClient, "sectionTaskChanged");
+      await invalidateAfter(queryClient, "sectionTaskChanged");
     },
-    onError: (err, variables) => {
-      const message = getErrorMessage(err);
-      const tasks = variables.tasks || [];
-      const taskInfo = tasks.length > 0
-        ? `для операций: ${tasks.map(t => t.operation_name || t.operation_code).filter(Boolean).join(", ")}`
-        : "";
-      const sectionInfo = selectedSection ? `на участке "${selectedSection.name}" (${selectedSection.code})` : "";
-
-      toast({ title: "Ошибка завершения группы", description: message, variant: "destructive" });
-      pushActionLog({
-        status: "error",
-        title: "Ошибка завершения группы",
-        message: `Не удалось подтвердить группу задач ${sectionInfo} ${taskInfo}. Причина: ${message}`,
-        taskIds: tasks.map(t => t.id),
-        productSku: Array.from(new Set(tasks.map(t => t.display_sku || t.product_sku).filter(Boolean))).join(", "),
-        operationName: Array.from(new Set(tasks.map(t => t.operation_name || t.operation_code).filter(Boolean))).join(", "),
-        errorDetails: message,
+    onError: (error) => {
+      toast({
+        title: "Не удалось записать факт",
+        description: getErrorMessage(error),
+        variant: "destructive",
       });
-      setConflictHint(message);
     },
   });
 
@@ -682,22 +753,21 @@ export function SectionsTasksPage() {
     },
   });
 
-  const pendingMutation =
-    completeMutation.isPending ||
-    groupCompleteMutation.isPending;
+  const pendingMutation = completeMutation.isPending;
 
+  /**
+   * Одиночное завершение из строки доски (#283): групповой путь ушёл в инлайн
+   * и футер, поэтому диалог отвечает только за одну задачу.
+   */
   const submitAction = useCallback(() => {
     const task = actionDialog.task;
-    const tasks = actionDialog.tasks;
-    const isGroup = !!tasks && tasks.length > 0;
-    if (!task && !isGroup) return;
+    if (!task) return;
 
-    const qty = toQtyInteger(actionQty || "0");
     const effectivePerformedAt = `${performedDate}T${performedShift === "1" ? "08:00" : "20:00"}`;
     const effectiveAccountedAt = nowLocalDateTime();
     const executorUserId = me?.id;
 
-    const good = qty;
+    const good = toQtyInteger(actionQty || "0");
     const defect = toQtyInteger(defectQty || "0");
     if (good + defect <= 0) {
       toast({ title: "Ошибка", description: "Укажите факт или брак", variant: "destructive" });
@@ -705,148 +775,58 @@ export function SectionsTasksPage() {
       return;
     }
 
-    const calcInWork = (t: SectionBoardTask) =>
-      Math.max(0, toQtyInteger(t.cache.issued_quantity) - toQtyInteger(t.cache.completed_quantity) - toQtyInteger(t.cache.rejected_quantity));
-    const inWork = isGroup
-      ? tasks.reduce((sum, t) => sum + calcInWork(t), 0)
-      : calcInWork(task!);
-
-    const available = isGroup
-      ? tasks.reduce((sum, t) => sum + Math.max(0, Math.round(parseFloat(t.cache.available_quantity) || 0)), 0)
-      : (task ? Math.round(parseFloat(task.cache.available_quantity) || 0) : 0);
-
     // Трансформация габаритов (ADR-0002, раскрой): факт считается в заготовках
-    // ВХОДА, а `cache.completed_quantity` — выходные штуки другой размерности.
-    // Поэтому «в работе» = issued − completed для неё бессмысленно, и стратегия
-    // дефицита не применяется вовсе: лимит — остаток входа, его показывает
-    // панель факта (`TaskActionDrawer.maxQty`) и проверяет бэкенд.
-    const isTransformTask =
-      !isGroup && !!task?.transforms_dimensions && (task?.outputs?.length ?? 0) > 0;
+    // ВХОДА, лимит — остаток входа, и стратегия дефицита к ней не применяется
+    // вовсе: иначе «в работе» = issued − completed сравнивало бы разные
+    // размерности, а бэкенд проверяет остаток входа.
+    const isTransformTask = !!task.transforms_dimensions && (task.outputs?.length ?? 0) > 0;
+    const inWork = isTransformTask
+      ? Math.max(
+          0,
+          toQtyInteger(task.input_quantity ?? "0") -
+            toQtyInteger(task.input_consumed_quantity ?? "0") -
+            toQtyInteger(task.cache.rejected_quantity),
+        )
+      : Math.max(
+          0,
+          toQtyInteger(task.cache.issued_quantity) -
+            toQtyInteger(task.cache.completed_quantity) -
+            toQtyInteger(task.cache.rejected_quantity),
+        );
+    const available = isTransformTask ? 0 : Math.max(0, toQtyInteger(task.cache.available_quantity));
+    const isShortage = !isTransformTask && inWork > 0 && good + defect > Math.max(inWork, inWork + available);
 
-    const isShortage = !isTransformTask && good + defect > inWork + available;
-    const isConflict = !isTransformTask && inWork > 0 && good + defect > inWork;
-
-    if (isConflict) {
-      if (isShortage) {
-        if (shortageStrategy === "fail") {
-          setConflictHint(
-            isGroup
-              ? `Сумма факта и брака превышает доступный объем всей группы (${fmtQty(String(inWork + available))}).`
-              : `Сумма факта и брака превышает доступный объем (${fmtQty(String(inWork + available))}).`
-          );
-          return;
-        }
-      }
+    if (isShortage && shortageStrategy === "fail") {
+      setConflictHint(
+        `Сумма факта и брака превышает доступный объем (${fmtQty(String(inWork + available))}).`,
+      );
+      return;
     }
 
-    if (isGroup) {
-      // Фильтруем задачи, которые нельзя завершить (статус «Не передано»,
-      // ожидают передачи, уже завершены). По ним показываем toast и
-      // распределяем ввод только по completable-задачам.
-      const completableTasks = tasks.filter(isTaskCompletable);
-      const skipped = getNonCompletableTasks(tasks);
-
-      if (completableTasks.length === 0) {
-        // Причины — по кодам: у группы они могут быть разными («не передано»,
-        // «отменено», «этап пропущен»), и одна общая фраза врала бы.
-        const reasons = Array.from(new Set(groupTasksByBlockReason(tasks).map((g) => actionReasonText(g.reason))));
-        toast({
-          title: "Нет задач для завершения",
-          description: reasons.join("; "),
-          variant: "destructive",
-        });
-        return;
-      }
-
-      if (skipped.length > 0) {
-        const skus = Array.from(new Set(skipped.map((t) => t.product_sku))).slice(0, 3).join(", ");
-        const more = skipped.length > 3 ? ` и ещё ${skipped.length - 3}` : "";
-        toast({
-          title: "Пропущены недоступные задания",
-          description: `${skipped.length} шт. не будут завершены. Примеры: ${skus}${more}.`,
-          variant: "default",
-        });
-      }
-
-      const entries: Parameters<typeof bulkCompleteTasks>[0] = [];
-
-      // Заполняем задачи по порядку, пока не израсходуем good/defect.
-      // Не пропускаем задачи с in_work=0 — бэкенд сделает auto-issue, если задача
-      // в статусе ready.
-      if (good > 0 || defect > 0) {
-        let remainingGood = good;
-        let remainingDefect = defect;
-
-        for (let i = 0; i < completableTasks.length; i++) {
-          const t = completableTasks[i];
-          const capacity = Math.max(0, toQtyInteger(t.planned_quantity));
-
-          // good: минимум из остатка, planned_quantity и in_work (если in_work>0)
-          const tInWork = calcInWork(t);
-          const goodCapacity = tInWork > 0 ? Math.min(capacity, tInWork) : capacity;
-          const goodQty = Math.min(remainingGood, goodCapacity);
-          remainingGood -= goodQty;
-
-          // defect: до remaining, лимит — capacity - goodQty (или tInWork - goodQty при tInWork>0)
-          const defectLimit = tInWork > 0 ? Math.max(0, tInWork - goodQty) : Math.max(0, capacity - goodQty);
-          const defectQty = Math.min(remainingDefect, defectLimit);
-          remainingDefect -= defectQty;
-
-          if (goodQty > 0 || defectQty > 0) {
-            entries.push({
-              task_id: t.id,
-              good_quantity: String(goodQty),
-              defect_quantity: String(defectQty),
-              comment: actionComment || undefined,
-              idempotency_key: makeIdempotencyKey(`complete-${t.id}`),
-              executor_user_id: executorUserId,
-              performed_at: effectivePerformedAt,
-              accounted_at: effectiveAccountedAt,
-              shortage_strategy: shortageStrategy,
-              auto_transfer_next: true,
-            });
-          }
-
-          if (remainingGood <= 0 && remainingDefect <= 0) break;
-        }
-      }
-
-      if (entries.length === 0) {
-        toast({
-          title: "Нет задач для завершения",
-          description: "Доступные задания не вмещают указанное количество.",
-          variant: "destructive",
-        });
-        return;
-      }
-
-      groupCompleteMutation.mutate({ entries, tasks: completableTasks });
-    } else {
-      const blockReason = getCompletionBlockReason(task!);
-      if (blockReason) {
-        toast({
-          title: "Нельзя завершить задание",
-          description: actionReasonText(blockReason),
-          variant: "destructive",
-        });
-        return;
-      }
-      completeMutation.mutate({
-        taskId: task!.id,
-        task: task!,
-        payload: {
-          good_quantity: String(good),
-          defect_quantity: String(defect),
-          comment: actionComment || undefined,
-          idempotency_key: makeIdempotencyKey("complete"),
-          executor_user_id: executorUserId,
-          performed_at: effectivePerformedAt,
-          accounted_at: effectiveAccountedAt,
-          shortage_strategy: shortageStrategy,
-          auto_transfer_next: true,
-        },
+    const blockReason = getCompletionBlockReason(task);
+    if (blockReason) {
+      toast({
+        title: "Нельзя завершить задание",
+        description: actionReasonText(blockReason),
+        variant: "destructive",
       });
+      return;
     }
+    completeMutation.mutate({
+      taskId: task.id,
+      task,
+      payload: {
+        good_quantity: String(good),
+        defect_quantity: String(defect),
+        comment: actionComment || undefined,
+        idempotency_key: makeIdempotencyKey("complete"),
+        executor_user_id: executorUserId,
+        performed_at: effectivePerformedAt,
+        accounted_at: effectiveAccountedAt,
+        shortage_strategy: shortageStrategy,
+        auto_transfer_next: true,
+      },
+    });
   }, [
     actionDialog,
     actionQty,
@@ -854,118 +834,14 @@ export function SectionsTasksPage() {
     performedShift,
     me?.id,
     completeMutation,
-    groupCompleteMutation,
     actionComment,
     defectQty,
     shortageStrategy,
   ]);
 
-  const finishBulk = useCallback((
-    results: BulkActionResultItem<number>[],
-    totalGood?: number,
-    totalDefect?: number
-  ) => {
-    const summary = summarizeBulkResults(results);
-    setBulkResults(results);
-    setBulkSummary(summary);
-    if (summary.failed > 0) setBulkResultsOpen(true);
-    setBulkProgress(null);
-
-    const sectionInfo = selectedSection ? `на участке "${selectedSection.name}" (${selectedSection.code})` : "";
-    const qtyInfo = (totalGood !== undefined || totalDefect !== undefined)
-      ? ` (введено всего: годные = ${totalGood || 0} шт., брак = ${totalDefect || 0} шт.)`
-      : "";
-
-    const matchedTasks = results
-      .map((r) => board?.tasks?.find((t) => t.id === r.id))
-      .filter(Boolean) as SectionBoardTask[];
-
-    const productSkus = Array.from(new Set(matchedTasks.map((t) => t.display_sku || t.product_sku).filter(Boolean))).join(", ");
-    const operationNames = Array.from(new Set(matchedTasks.map((t) => t.operation_name || t.operation_code).filter(Boolean))).join(", ");
-
-    pushActionLog({
-      status: summary.failed > 0 ? (summary.success > 0 ? "info" : "error") : "success",
-      title: "Массовое подтверждение",
-      message: `Массовое подтверждение ${sectionInfo}: успешно завершено задач: ${summary.success}, ошибок: ${summary.failed}${qtyInfo}.`,
-      taskIds: results.map((r) => r.id),
-      productSku: productSkus || undefined,
-      operationName: operationNames || undefined,
-      qtyText: (totalGood !== undefined || totalDefect !== undefined)
-        ? `годн: ${totalGood || 0}, брак: ${totalDefect || 0}`
-        : undefined,
-    });
-
-    // Don't clear selection — user should see the result
-    toast({
-      title: summary.failed > 0 ? "Частичный успех" : "Массовая операция",
-      description: `${summary.success} успешно, ${summary.failed} ошибок${summary.skipped > 0 ? `, ${summary.skipped} пропущено` : ""}`,
-      variant: summary.failed > 0 ? "destructive" : "success",
-    });
-  }, [bulkSelection, pushActionLog, selectedSection, board]);
-
-  const handleBulkExecuteAll = useCallback(async (data: {
-    completeEntries: { taskId: number; goodQty: string; defectQty: string }[];
-    performedAt?: string;
-    accountedAt?: string;
-  }) => {
-    const total = data.completeEntries.length;
-    const lockOptions = lockedSectionId !== null ? { singleSectionLockId: lockedSectionId } : undefined;
-    setBulkProgress({ total, completed: 0, running: true });
-    const allResults: BulkActionResultItem<number>[] = [];
-
-    const effectivePerformedAt = data.performedAt || nowLocalDateTime();
-    const effectiveAccountedAt = data.accountedAt || effectivePerformedAt;
-
-    const totalGood = data.completeEntries.reduce((sum, e) => sum + toQtyInteger(e.goodQty), 0);
-    const totalDefect = data.completeEntries.reduce((sum, e) => sum + toQtyInteger(e.defectQty), 0);
-
-    if (data.completeEntries.length > 0) {
-      try {
-        const response = await bulkCompleteTasks(
-          data.completeEntries.map((entry) => ({
-            task_id: entry.taskId,
-            good_quantity: entry.goodQty,
-            defect_quantity: entry.defectQty,
-            idempotency_key: makeIdempotencyKey("bulk-complete"),
-            executor_user_id: me?.id,
-            performed_at: effectivePerformedAt,
-            accounted_at: effectiveAccountedAt,
-            // Авто-передача при фиксации факта обязательна (#187):
-            // панель массовых операций — тот же факт, только пачкой.
-            auto_transfer_next: true,
-          })),
-          lockOptions,
-        );
-        for (const r of response.results) {
-          allResults.push({ id: r.id, status: r.status, reason: r.reason });
-        }
-      } catch (e) {
-        const reason = getErrorMessage(e);
-        for (const entry of data.completeEntries) {
-          allResults.push({ id: entry.taskId, status: "failed", reason });
-        }
-      }
-    }
-
-    void invalidateAfter(queryClient, "sectionTaskChanged");
-    setBulkProgress({ total, completed: total, running: false });
-    finishBulk(allResults, totalGood, totalDefect);
-  }, [me?.id, lockedSectionId, finishBulk, queryClient]);
-
-  // Завершить группу: открывает боковую панель завершения группы
-  const handleCompleteGroup = useCallback((group: TaskGroup) => {
-    const now = nowLocalDateTimeParts();
-    setActionDialog({ open: true, type: "complete", task: null, tasks: group.tasks });
-    setPerformedDate(now.date);
-    setPerformedShift("1");
-    setActionComment("");
-    setConflictHint(null);
-    setActionQty("");
-    setDefectQty("");
-  }, []);
-
-
-  const tasks = board?.tasks || [];
+  // Идентичность массива — часть контракта с доской: её эффект публикует
+  // видимые строки, и литерал `[]` на каждый рендер был бы источником цикла.
+  const tasks = useMemo(() => board?.tasks ?? [], [board]);
   const displayedTasks = selectedPlanIds.size === 0
     ? tasks
     : mergeDailyPlanTasks(selectedPlanQueries.flatMap((query) => (
@@ -984,6 +860,68 @@ export function SectionsTasksPage() {
     () => tasks.filter((t) => bulkSelection.selectedIds.has(t.id)),
     [tasks, bulkSelection.selectedIds],
   );
+
+  /**
+   * Итог черновика и причина недоступности подтверждения (#283). Причины — из
+   * общего словаря (#193): «нет заданий для завершения» (введено, но завершать
+   * нечего), «введите количество» (черновик пуст) и «выберите, что делать с
+   * излишком» (дефицит без выбранной стратегии). Панель массовых операций
+   * молчала о третьей и не отправляла стратегию вовсе.
+   */
+  const bulkDraftShortage = useMemo(
+    () => draftShortage(selectedTasks, bulkDraft),
+    [selectedTasks, bulkDraft],
+  );
+  const bulkConfirmBlockReason: ActionReasonCode | null = useMemo(() => {
+    const { entries, skipped } = draftEntries(selectedTasks, bulkDraft);
+    if (entries.length === 0) {
+      return skipped.length > 0 ? "bulk_nothing_to_complete" : "bulk_no_quantity";
+    }
+    if (bulkDraftShortage && !bulkShortageStrategy) return "no_shortage_strategy";
+    return null;
+  }, [selectedTasks, bulkDraft, bulkDraftShortage, bulkShortageStrategy]);
+
+  const clearBulkDraft = useCallback(() => {
+    setBulkDraft({});
+    setBulkDraftIssue(null);
+    setBulkShortageStrategy(null);
+    setBulkComment("");
+    bulkSelection.clear();
+  }, [bulkSelection]);
+
+  /** Запись черновика: одна entry на задачу, стратегия дефицита — из футера. */
+  const confirmBulkDraft = useCallback(() => {
+    if (bulkConfirmBlockReason !== null) return;
+    const { entries } = draftEntries(selectedTasks, bulkDraft);
+    const effectivePerformedAt = `${bulkPerformedDate}T${bulkPerformedShift === "1" ? "08:00" : "20:00"}`;
+    const effectiveAccountedAt = nowLocalDateTime();
+    bulkDraftMutation.mutate(
+      entries.map((entry) => ({
+        task_id: entry.taskId,
+        good_quantity: entry.goodQty,
+        defect_quantity: entry.defectQty,
+        comment: bulkComment.trim() || undefined,
+        idempotency_key: makeIdempotencyKey(`bulk-complete-${entry.taskId}`),
+        executor_user_id: me?.id,
+        performed_at: effectivePerformedAt,
+        accounted_at: effectiveAccountedAt,
+        shortage_strategy: bulkShortageStrategy ?? undefined,
+        // Авто-передача при записи факта обязательна (#187): передачу создаёт
+        // факт, а не отдельная кнопка.
+        auto_transfer_next: true,
+      })),
+    );
+  }, [
+    bulkConfirmBlockReason,
+    selectedTasks,
+    bulkDraft,
+    bulkPerformedDate,
+    bulkPerformedShift,
+    bulkComment,
+    bulkShortageStrategy,
+    bulkDraftMutation,
+    me?.id,
+  ]);
   const handleToggleRevokeItem = useCallback(
     (workTaskId: number) => {
       if (selectedCompositionItems.some((item) => item.work_task_id === workTaskId)) {
@@ -1078,8 +1016,10 @@ export function SectionsTasksPage() {
               summary={summary?.sections || []}
               selectedSectionId={sectionId}
               onSelect={(nextId) => {
-                setSectionId(nextId);
-                navigate(`/section-tasks/${nextId}`);
+                requestDraftGuardedAction(() => {
+                  setSectionId(nextId);
+                  navigate(`/section-tasks/${nextId}`);
+                });
               }}
             />
           </div>
@@ -1167,16 +1107,7 @@ export function SectionsTasksPage() {
           <div className="space-y-4">
             {isTasksPanelVisible(sectionContentMode) && (
               <>
-                {bulkMode && bulkSelection.selectedCount > 0 && (
-                  <BulkOperationsPanel
-                    tasks={selectedTasks}
-                    onExecuteAll={handleBulkExecuteAll}
-                    pending={bulkExecuting}
-                    onDone={() => setBulkMode(false)}
-                  />
-                )}
-
-                <div className="grid grid-cols-1 gap-4 lg:grid-cols-[minmax(0,1fr)_280px]">
+                <div className={cn("grid grid-cols-1 gap-4 lg:grid-cols-[minmax(0,1fr)_280px]", bulkMode && bulkSelection.selectedCount > 0 && !creatingDailyPlan && "pb-44")}>
                   {/* `key` — чтобы поиск, фильтры и сортировка прежнего участка
                       умирали вместе с ним, а не жили под шапкой нового (ADR-0060 п.1). */}
                   <SectionTasksBoard
@@ -1205,9 +1136,12 @@ export function SectionsTasksPage() {
                     bulkMode={bulkMode || creatingDailyPlan}
                     onBulkModeChange={toggleBulkMode}
                     bulkSelection={bulkMode || creatingDailyPlan ? bulkSelection : undefined}
+                    bulkDraft={bulkMode && !creatingDailyPlan ? bulkDraft : undefined}
+                    onBulkDraftChange={bulkMode && !creatingDailyPlan ? setBulkDraft : undefined}
+                    onBulkDraftIssue={(issue) => setBulkDraftIssue(issue?.text ?? null)}
+                    onVisibleTaskIdsChange={handleVisibleTaskIdsChange}
                     profile={profile}
                     onSelectAllVisible={handleSelectAll}
-                    onCompleteGroup={handleCompleteGroup}
                     page={selectedPlanIds.size > 0 ? 1 : boardPage}
                     setPage={selectedPlanIds.size > 0 ? () => {} : setBoardPage}
                     limit={boardLimit}
@@ -1337,6 +1271,55 @@ export function SectionsTasksPage() {
         )}
       </section>
 
+      {/* Панель подтверждения массового ввода (#283): итог «к записи», стратегия
+          дефицита и сама запись. Показывается только в массовом режиме доски
+          задач и не мешает созданию дневного плана. */}
+      {isTasksPanelVisible(sectionContentMode) &&
+        bulkMode &&
+        !creatingDailyPlan &&
+        bulkSelection.selectedCount > 0 && (
+          <BulkCompleteFooter
+            selectedTasks={selectedTasks}
+            visibleTaskIds={visibleTaskIds}
+            draft={bulkDraft}
+            performedDate={bulkPerformedDate}
+            onPerformedDateChange={setBulkPerformedDate}
+            performedShift={bulkPerformedShift}
+            onPerformedShiftChange={setBulkPerformedShift}
+            comment={bulkComment}
+            onCommentChange={setBulkComment}
+            shortageStrategy={bulkShortageStrategy}
+            onShortageStrategyChange={setBulkShortageStrategy}
+            shortage={bulkDraftShortage}
+            submitBlockReason={bulkConfirmBlockReason}
+            pending={bulkDraftMutation.isPending}
+            onConfirm={confirmBulkDraft}
+            onCancel={() =>
+              requestDraftGuardedAction(() => {
+                setBulkDraft({});
+                setBulkShortageStrategy(null);
+                bulkSelection.clear();
+                setBulkMode(false);
+              })
+            }
+            inputIssueText={bulkDraftIssue}
+          />
+        )}
+
+      <BulkDraftExitDialog
+        open={draftExitAction !== null}
+        summary={draftTotals(bulkDraft)}
+        onCancel={() => setDraftExitAction(null)}
+        onConfirm={() => {
+          const action = draftExitAction;
+          setDraftExitAction(null);
+          setBulkDraft({});
+          setBulkDraftIssue(null);
+          setBulkShortageStrategy(null);
+          action?.();
+        }}
+      />
+
       <TaskActionDrawer
         open={actionDialog.open}
         onOpenChange={(open) => {
@@ -1344,7 +1327,6 @@ export function SectionsTasksPage() {
           else setActionDialog((prev) => ({ ...prev, open }));
         }}
         task={actionDialog.task}
-        tasks={actionDialog.tasks}
         actionQty={actionQty}
         setActionQty={setActionQty}
         defectQty={defectQty}

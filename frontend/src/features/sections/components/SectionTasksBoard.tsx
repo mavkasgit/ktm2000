@@ -44,11 +44,22 @@ import {
   getReadyStatusLabel,
   getStatusLabel,
   getStatusColor,
-  isTaskCompletable,
   getCompletionBlockReason,
   getTaskViewCategory,
   isTaskFullyTransferred,
 } from "../lib/taskStatus";
+import {
+  applyGroupField,
+  draftQtyFor,
+  isTransformTask,
+  taskFactCeiling,
+  withDraftField,
+  type BulkDraft,
+  type DraftField,
+  type DraftQty,
+} from "../lib/bulkDraft";
+import type { QuantityInputIssue } from "@/shared/lib/quantityInput";
+import { DraftQtyInput } from "./DraftQtyInput";
 import {
   getTaskGroupHeaderState,
   packagingBreakdownLabel,
@@ -64,7 +75,7 @@ import { TABLE_ROW_STYLES } from "@/shared/lib/tableRowStyles";
 import { TABLE_ROW_COMPACT, TABLE_ROW_DENSE } from "@/shared/lib/dataTableStyles";
 import { actionReasonText } from "@/shared/lib/actionReasons";
 import { cn } from "@/shared/utils/cn";
-import { fmtQty } from "@/shared/lib/quantityFormat";
+import { fmtQty, toQtyInteger } from "@/shared/lib/quantityFormat";
 import { boardColumns, visibleBoardColumns } from "../lib/boardColumns";
 
 // ---------------------------------------------------------------------------
@@ -160,6 +171,72 @@ const ROW_ACTION_BUTTON_CLASS = `${TABLE_ROW_DENSE.actionButton} transition-all 
 const ROW_BADGE_CLASS = TABLE_ROW_DENSE.badge;
 const ROW_HEIGHT_PX = TABLE_ROW_DENSE.rowHeightPx;
 
+/**
+ * Ячейка черновика у выделенной строки: «Годные» и «Брак» становятся полями
+ * ввода (#283). Потолок — доступное на задачу; введённое сверх него помечается
+ * без наведения: в плотной строке — знаком, в карточке — словом.
+ */
+function renderDraftCell(
+  task: SectionBoardTask,
+  cell: "completed" | "rejected",
+  draft: RowDraftContext,
+  variant: "row" | "card",
+) {
+  const field: DraftField = cell === "completed" ? "good" : "defect";
+  const recorded = cell === "completed" ? task.cache.completed_quantity : task.cache.rejected_quantity;
+  // У раскроя факт вводится в заготовках входа (ADR-0002, ADR-0064), поэтому
+  // подпись поля называет именно их: «Годные» для пилы — выходные штуки другой
+  // размерности, и одинаковое имя читалось бы как обещание записать выходы.
+  const transform = isTransformTask(task);
+  const label = cell === "completed"
+    ? transform
+      ? "раскроено заготовок"
+      : "годные"
+    : transform
+      ? "брак заготовок"
+      : "брак";
+  const overPlan = draft.overPlan[field];
+  return (
+    <span className={variant === "card" ? "flex flex-col items-start gap-0.5" : "flex items-center gap-1"}>
+      <DraftQtyInput
+        value={draft.value[field]}
+        onChange={(next) => draft.onChange(field, next)}
+        onIssue={draft.onIssue}
+        placeholder={`сейчас ${fmtQty(recorded)}`}
+        ariaLabel={`${task.product_sku}: ${label}`}
+        overPlan={overPlan}
+      />
+      {overPlan &&
+        (variant === "card" ? (
+          <span className="text-[11px] font-medium leading-none text-amber-700">
+            сверх плана: доступно {fmtQty(taskFactCeiling(task))} шт.
+          </span>
+        ) : (
+          <span
+            aria-hidden
+            className="text-[10px] leading-none text-amber-600"
+            title={`Сверх плана: доступно на задачу ${fmtQty(taskFactCeiling(task))} шт.`}
+          >
+            ▲
+          </span>
+        ))}
+    </span>
+  );
+}
+
+/**
+ * Контекст массового ввода для строки или карточки. `undefined` — строка не
+ * выделена, и ячейки показывают записанный факт как обычно: клиентские фильтр
+ * и сортировка по этим колонкам продолжают работать по записанной величине, а
+ * черновик их не двигает (#283, п. 1).
+ */
+type RowDraftContext = {
+  value: DraftQty;
+  overPlan: { good: boolean; defect: boolean };
+  onChange: (field: DraftField, value: string) => void;
+  onIssue: (issue: QuantityInputIssue | null) => void;
+};
+
 function renderTaskRow(
   task: SectionBoardTask,
   isSelected: boolean | undefined,
@@ -172,6 +249,7 @@ function renderTaskRow(
   isLastInGroup = false,
   isInGroup = false,
   hasPackaging?: boolean,
+  draft?: RowDraftContext,
 ) {
   const fields = buildTaskViewFields(task, hasPackaging);
   const blockReason = getCompletionBlockReason(task);
@@ -186,11 +264,27 @@ function renderTaskRow(
       // Высота задана явно: в readOnly («План») кнопки в строке нет, и без
       // этого строка схлопнулась бы до высоты текста (30px против 32px).
       style={{ height: ROW_HEIGHT_PX }}
+      // Клавиатурная модель массового ввода (#283): Tab по строкам, Enter или
+      // пробел — тумблер выделения, со выделенной строки Tab уходит в её поля.
+      // Сетки (grid) здесь нет намеренно: строки виртуализированы, и «Tab по
+      // отрисованным» — единственная честная модель.
+      tabIndex={bulkMode ? 0 : undefined}
+      aria-selected={bulkMode ? Boolean(isSelected) : undefined}
       className={`cursor-pointer transition-colors ${getTaskRowClass(task, !!isSelected, isInGroup)} ${isLastInGroup ? "border-b-2 border-blue-300" : "border-b"}`}
       onClick={() => {
         if (bulkMode && bulkSelection && task.status !== "waiting_previous") {
           bulkSelection.selectOne(task.id);
         }
+      }}
+      onKeyDown={(event) => {
+        if (!bulkMode || !bulkSelection) return;
+        // Клавиши строки не перехватывают то, что нажато в её кнопке или поле:
+        // Enter на кнопке «Завершить» обязан открыть диалог, а не переключить
+        // выделение.
+        if (event.target !== event.currentTarget) return;
+        if (event.key !== "Enter" && event.key !== " ") return;
+        event.preventDefault();
+        if (task.status !== "waiting_previous") bulkSelection.selectOne(task.id);
       }}
     >
       <td className={`${ROW_CELL_CLASS} text-center`}>
@@ -199,7 +293,9 @@ function renderTaskRow(
       <td className={`${ROW_CELL_CLASS} font-medium`}>{task.product_sku}</td>
       {fields.map((field) => (
         <td key={field.key} className={cn(ROW_CELL_CLASS, field.cellClass)}>
-          {field.node}
+          {draft && (field.key === "completed" || field.key === "rejected")
+            ? renderDraftCell(task, field.key, draft, "row")
+            : field.node}
         </td>
       ))}
       <td className={ROW_CELL_CLASS}>
@@ -254,6 +350,7 @@ function renderMobileCard(
   isLastInGroup = false,
   readOnly: boolean,
   hasPackaging?: boolean,
+  draft?: RowDraftContext,
 ) {
   const buttonBase = `flex-1 ${TABLE_ROW_COMPACT.actionButton}`;
   const fields = buildTaskViewFields(task, hasPackaging);
@@ -266,11 +363,22 @@ function renderMobileCard(
   return (
     <div
       key={task.id}
+      tabIndex={bulkMode ? 0 : undefined}
       className={`p-4 space-y-3 cursor-pointer transition-colors ${getTaskCardClass(task, !!isSelected)} ${isLastInGroup ? "border-b-2 border-blue-300 mb-3" : "mb-0"}`}
       onClick={() => {
         if (bulkMode && bulkSelection && task.status !== "waiting_previous") {
           bulkSelection.selectOne(task.id);
         }
+      }}
+      onKeyDown={(event) => {
+        if (!bulkMode || !bulkSelection) return;
+        // Клавиши строки не перехватывают то, что нажато в её кнопке или поле:
+        // Enter на кнопке «Завершить» обязан открыть диалог, а не переключить
+        // выделение.
+        if (event.target !== event.currentTarget) return;
+        if (event.key !== "Enter" && event.key !== " ") return;
+        event.preventDefault();
+        if (task.status !== "waiting_previous") bulkSelection.selectOne(task.id);
       }}
     >
       <div className="flex items-center justify-between gap-2">
@@ -286,7 +394,10 @@ function renderMobileCard(
       <div className="grid grid-cols-2 gap-2 text-sm">
         {fields.map((field) => (
           <div key={field.key}>
-            <span className="text-muted-foreground">{field.label}:</span> {field.node}
+            <span className="text-muted-foreground">{field.label}:</span>{" "}
+            {draft && (field.key === "completed" || field.key === "rejected")
+              ? renderDraftCell(task, field.key, draft, "card")
+              : field.node}
           </div>
         ))}
       </div>
@@ -337,8 +448,11 @@ function TableTaskGroupRow({
   bulkSelection,
   onToggleCollapse,
   onSelectGroup,
-  onCompleteGroup,
   hasPackaging,
+  groupQty,
+  groupOverPlan,
+  onGroupQtyChange,
+  onGroupIssue,
 }: {
   group: TaskGroup;
   isCollapsed: boolean;
@@ -346,22 +460,43 @@ function TableTaskGroupRow({
   bulkSelection?: BulkSelectionController;
   onToggleCollapse: () => void;
   onSelectGroup: () => void;
-  onCompleteGroup?: (group: TaskGroup) => void;
   /** Участок без упаковочных операций — ячейки «Упаковка» в шапке группы нет. */
   hasPackaging?: boolean;
+  /**
+   * Групповой ввод (#283): в массовом режиме ячейки «Годные»/«Брак» шапки —
+   * поля, и введённое раскладывается по строкам группы. Сумм в шапке тогда нет:
+   * их место занял инпут, а итог «к записи» показывает футер.
+   */
+  groupQty?: DraftQty;
+  groupOverPlan?: { good: boolean; defect: boolean };
+  onGroupQtyChange?: (field: DraftField, value: string) => void;
+  onGroupIssue?: (issue: QuantityInputIssue | null) => void;
 }) {
   const taskIds = group.tasks.map((t) => t.id);
   const allSelected = bulkSelection?.isAllSelected(taskIds) ?? false;
   const firstTask = group.tasks[0];
   const header = getTaskGroupHeaderState(group, { isCollapsed, isBulkMode, allSelected });
+  const groupInput = Boolean(isBulkMode && onGroupQtyChange);
+  const recordedGood = group.tasks.reduce((sum, task) => sum + parseFloat(task.cache.completed_quantity), 0);
+  const recordedDefect = group.tasks.reduce((sum, task) => sum + parseFloat(task.cache.rejected_quantity), 0);
+  const overPlan = groupOverPlan ?? { good: false, defect: false };
 
   return (
     <tr
       style={{ height: ROW_HEIGHT_PX }}
+      tabIndex={isBulkMode ? 0 : undefined}
+      aria-selected={isBulkMode ? allSelected : undefined}
       className={`border-y border-slate-200 cursor-pointer transition-colors font-semibold ${isBulkMode && allSelected ? TABLE_ROW_STYLES.selectedGroupHeader : TABLE_ROW_STYLES.defaultGroupHeader}`}
       onClick={() => {
         if (isBulkMode) onSelectGroup();
         else onToggleCollapse();
+      }}
+      onKeyDown={(event) => {
+        if (!isBulkMode) return;
+        if (event.target !== event.currentTarget) return;
+        if (event.key !== "Enter" && event.key !== " ") return;
+        event.preventDefault();
+        onSelectGroup();
       }}
     >
       <td className={`${ROW_CELL_CLASS} text-center`}>
@@ -405,8 +540,48 @@ function TableTaskGroupRow({
       )}
       <td className={`${ROW_CELL_CLASS} text-slate-700`}>{fmtQty(String(group.totalQtyPlan))}</td>
       <td className={`${ROW_CELL_CLASS} text-slate-700`}>{fmtQty(String(group.tasks.reduce((s, t) => s + parseFloat(t.cache.issued_quantity), 0)))}</td>
-      <td className={`${ROW_CELL_CLASS} text-slate-700`}>{fmtQty(String(group.totalQtyDone))}</td>
-      <td className={`${ROW_CELL_CLASS} text-slate-700`}>{fmtQty(String(group.tasks.reduce((s, t) => s + parseFloat(t.cache.rejected_quantity), 0)))}</td>
+      <td className={`${ROW_CELL_CLASS} text-slate-700`}>
+        {groupInput ? (
+          <span className="flex items-center gap-1">
+            <DraftQtyInput
+              value={groupQty?.good ?? ""}
+              onChange={(value) => onGroupQtyChange?.("good", value)}
+              onIssue={onGroupIssue}
+              placeholder={`сейчас ${fmtQty(String(recordedGood))}`}
+              ariaLabel={`${firstTask.product_sku}: годные группы`}
+              overPlan={overPlan.good}
+            />
+            {overPlan.good && (
+              <span aria-hidden className="text-[10px] leading-none text-amber-600" title="Сверх плана">
+                ▲
+              </span>
+            )}
+          </span>
+        ) : (
+          fmtQty(String(group.totalQtyDone))
+        )}
+      </td>
+      <td className={`${ROW_CELL_CLASS} text-slate-700`}>
+        {groupInput ? (
+          <span className="flex items-center gap-1">
+            <DraftQtyInput
+              value={groupQty?.defect ?? ""}
+              onChange={(value) => onGroupQtyChange?.("defect", value)}
+              onIssue={onGroupIssue}
+              placeholder={`сейчас ${fmtQty(String(recordedDefect))}`}
+              ariaLabel={`${firstTask.product_sku}: брак группы`}
+              overPlan={overPlan.defect}
+            />
+            {overPlan.defect && (
+              <span aria-hidden className="text-[10px] leading-none text-amber-600" title="Сверх плана">
+                ▲
+              </span>
+            )}
+          </span>
+        ) : (
+          fmtQty(String(recordedDefect))
+        )}
+      </td>
       <td className={`${ROW_CELL_CLASS} text-slate-700`}>{fmtQty(String(group.tasks.reduce((s, t) => s + parseFloat(t.cache.transferred_quantity), 0)))}</td>
       <td className={`${ROW_CELL_CLASS} text-slate-700`}>{fmtQty(String(group.tasks.reduce((s, t) => s + parseFloat(t.cache.remaining_quantity), 0)))}</td>
       <td className={ROW_CELL_CLASS}>
@@ -419,24 +594,7 @@ function TableTaskGroupRow({
           )}
         </div>
       </td>
-      <td className={`${ROW_CELL_CLASS} ${isBulkMode && allSelected ? TABLE_ROW_STYLES.selectedGroupHeader : TABLE_ROW_STYLES.defaultGroupRow}`}>
-        {onCompleteGroup && (
-          <ActionWithReason reason={header.completeReason}>
-            <Button
-              variant="outline"
-              className={ROW_ACTION_BUTTON_CLASS}
-              onClick={(e) => {
-                e.stopPropagation();
-                onCompleteGroup(group);
-              }}
-              disabled={!header.hasCompletable}
-              title={header.completeReason ? actionReasonText(header.completeReason) : header.completeHint}
-            >
-              <span>Завершить группу</span>
-            </Button>
-          </ActionWithReason>
-        )}
-      </td>
+      <td className={`${ROW_CELL_CLASS} ${isBulkMode && allSelected ? TABLE_ROW_STYLES.selectedGroupHeader : TABLE_ROW_STYLES.defaultGroupRow}`} />
       <TableCornerResetCell />
     </tr>
   );
@@ -465,7 +623,21 @@ type SectionTasksBoardProps = {
   onRevokeItem?: (taskId: number) => void;
   onConfirmRevoke?: () => void;
   isRevoking?: boolean;
-  onCompleteGroup?: (group: TaskGroup) => void;
+  /**
+   * Массовый ввод факта (#283): черновик страницы. У выделенной строки ячейки
+   * «Годные»/«Брак» становятся полями, ввод в шапке группы раскладывается по
+   * её строкам. Без него доска работает как прежде.
+   */
+  bulkDraft?: BulkDraft;
+  onBulkDraftChange?: (draft: BulkDraft) => void;
+  /** Причина отклонённого ввода — её текстом показывает футер (ADR-0032). */
+  onBulkDraftIssue?: (issue: QuantityInputIssue | null) => void;
+  /**
+   * id строк, видимых на доске сейчас (фильтр и сортировка применены): по ним
+   * футер считает «вне текущего фильтра: N». Доска — единственный, кто знает,
+   * что отрисовано, поэтому публикует список наружу.
+   */
+  onVisibleTaskIdsChange?: (ids: number[]) => void;
   /**
    * Есть ли у участка упаковочные операции (`Section.has_packaging`). На
    * участке без них колонки «Упаковка» нет ни в шапке, ни в строке, ни в
@@ -553,7 +725,10 @@ export function SectionTasksBoard({
   onRevokeItem,
   onConfirmRevoke,
   isRevoking = false,
-  onCompleteGroup,
+  bulkDraft,
+  onBulkDraftChange,
+  onBulkDraftIssue,
+  onVisibleTaskIdsChange,
   hasPackaging,
   toolbar,
   filterValueOptions,
@@ -749,6 +924,92 @@ export function SectionTasksBoard({
     [visibleTasks],
   );
 
+  // Строки, отрисованные сейчас: по ним футер считает «вне текущего фильтра».
+  useEffect(() => {
+    onVisibleTaskIdsChange?.(visibleTasks.map((task) => task.id));
+  }, [visibleTasks, onVisibleTaskIdsChange]);
+
+  /**
+   * Контекст ввода строки. Инпуты живут только у выделенных строк (#283), а
+   * потолок строки считается `taskFactCeiling`: у раскроя это остаток входа,
+   * у остальных — «в работе плюс доступное к довыдаче».
+   */
+  const draftContextFor = (task: SectionBoardTask): RowDraftContext | undefined => {
+    if (!bulkMode || !bulkDraft || !onBulkDraftChange || !bulkSelection?.isSelected(task.id)) {
+      return undefined;
+    }
+    const value = draftQtyFor(bulkDraft, task.id);
+    const ceiling = taskFactCeiling(task);
+    return {
+      value,
+      overPlan: {
+        good: toQtyInteger(value.good) > ceiling,
+        defect: toQtyInteger(value.defect) > ceiling,
+      },
+      onChange: (field, next) => onBulkDraftChange(withDraftField(bulkDraft, task.id, field, next)),
+      onIssue: (issue) => onBulkDraftIssue?.(issue),
+    };
+  };
+
+  /**
+   * Групповой ввод: набранное в шапке раскладывается по строкам группы
+   * последовательно. Раскладываются только доводимые строки — ожидающие и
+   * завершённые ввод не принимают, и без этого дефицит съедал бы строку,
+   * которую всё равно нельзя завершить. Групповое поле — это и выбор группы
+   * целиком: результат виден в строках, а инпуты живут у выделенных строк.
+   */
+  const handleGroupQtyChange = (
+    tasks: SectionBoardTask[],
+    field: DraftField,
+    value: string,
+  ) => {
+    if (!bulkDraft || !onBulkDraftChange) return;
+    const completable = tasks.filter((task) => getCompletionBlockReason(task) === null);
+    onBulkDraftChange(applyGroupField(bulkDraft, completable, field, value));
+    for (const task of completable) {
+      bulkSelection?.selectOne(task.id, true);
+    }
+  };
+
+  /**
+   * Значение группового поля выводится из строк, а не хранится отдельно: так
+   * набранное и разложенное не расходятся, и правка отдельной строки видна в
+   * шапке. Пусто во всех строках — поле показывает плейсхолдер с записанным
+   * фактом.
+   */
+  const groupDraftValue = (tasks: SectionBoardTask[]): DraftQty => {
+    if (!bulkDraft) return { good: "", defect: "" };
+    let good = 0;
+    let defect = 0;
+    let hasGood = false;
+    let hasDefect = false;
+    for (const task of tasks) {
+      const qty = draftQtyFor(bulkDraft, task.id);
+      if (toQtyInteger(qty.good) > 0 || qty.good.trim() !== "") {
+        hasGood = true;
+        good += toQtyInteger(qty.good);
+      }
+      if (toQtyInteger(qty.defect) > 0 || qty.defect.trim() !== "") {
+        hasDefect = true;
+        defect += toQtyInteger(qty.defect);
+      }
+    }
+    return { good: hasGood ? String(good) : "", defect: hasDefect ? String(defect) : "" };
+  };
+
+  const groupOverPlan = (tasks: SectionBoardTask[]): { good: boolean; defect: boolean } => {
+    if (!bulkDraft) return { good: false, defect: false };
+    let good = false;
+    let defect = false;
+    for (const task of tasks) {
+      const qty = draftQtyFor(bulkDraft, task.id);
+      const ceiling = taskFactCeiling(task);
+      if (toQtyInteger(qty.good) > ceiling) good = true;
+      if (toQtyInteger(qty.defect) > ceiling) defect = true;
+    }
+    return { good, defect };
+  };
+
   // Группы по умолчанию свёрнуты; пользователь может раскрыть любую вручную.
   // Сохраняем развёрнутые пользователем ключи, остальные — свернуты.
   const [manuallyExpanded, setManuallyExpanded] = useState<Set<string>>(new Set());
@@ -866,7 +1127,10 @@ export function SectionTasksBoard({
         continue;
       }
 
-      const isCollapsed = collapsedGroups.has(entry.key);
+      // В массовом режиме группа раскрыта: её строки — то место, куда
+      // раскладывается групповой ввод, и сворачивать их оператору нечем
+      // (шапка в этом режиме выбирает группу, а не сворачивает её, #283).
+      const isCollapsed = bulkMode ? false : collapsedGroups.has(entry.key);
       items.push({
         kind: "group",
         key: `group-${entry.key}`,
@@ -926,8 +1190,15 @@ export function SectionTasksBoard({
             isBulkMode={!!bulkMode}
             bulkSelection={bulkSelection}
             onToggleCollapse={() => toggleGroup(row.entryKey)}
-            onCompleteGroup={readOnly ? undefined : onCompleteGroup}
             hasPackaging={hasPackaging}
+            groupQty={groupDraftValue(row.group.tasks)}
+            groupOverPlan={groupOverPlan(row.group.tasks)}
+            onGroupQtyChange={
+              bulkMode && onBulkDraftChange
+                ? (field, value) => handleGroupQtyChange(row.group.tasks, field, value)
+                : undefined
+            }
+            onGroupIssue={(issue) => onBulkDraftIssue?.(issue)}
             onSelectGroup={() => {
               if (!bulkMode || !bulkSelection) return;
               const taskIds = row.group.tasks.map((t) => t.id);
@@ -962,9 +1233,24 @@ export function SectionTasksBoard({
         row.isLastInGroup,
         row.isInGroup,
         hasPackaging,
+        draftContextFor(row.task),
       );
     },
-    [bulkMode, bulkSelection, hasPackaging, onAction, onCompleteGroup, onRevokeItem, readOnly, renderWaitingDivider, revokeSelection, toggleGroup],
+    [
+      bulkMode,
+      bulkSelection,
+      bulkDraft,
+      hasPackaging,
+      handleGroupQtyChange,
+      onAction,
+      onBulkDraftChange,
+      onBulkDraftIssue,
+      onRevokeItem,
+      readOnly,
+      renderWaitingDivider,
+      revokeSelection,
+      toggleGroup,
+    ],
   );
 
   const headerCellClass = cn(
@@ -1093,7 +1379,7 @@ export function SectionTasksBoard({
             ) : boardEntries.map((entry) => {
               if (entry.kind === "divider") return renderWaitingDividerMobile(entry.key, entry.count);
               const group = entry.group;
-              const isCollapsed = collapsedGroups.has(entry.key);
+              const isCollapsed = bulkMode ? false : collapsedGroups.has(entry.key);
               const isSingleTask = group.tasks.length === 1;
 
               // Одна задача — рендерим напрямую без шапки группы
@@ -1102,7 +1388,7 @@ export function SectionTasksBoard({
                 const isSelected = revokeSelection
                   ? revokeSelection.isSelected(task.id)
                   : bulkMode && bulkSelection?.isSelected(task.id);
-                return renderMobileCard(task, isSelected, bulkMode, bulkSelection, onAction, onRevokeItem, isRevoking, true, readOnly, hasPackaging);
+                return renderMobileCard(task, isSelected, bulkMode, bulkSelection, onAction, onRevokeItem, isRevoking, true, readOnly, hasPackaging, draftContextFor(task));
               }
 
               const mobileHeader = getTaskGroupHeaderState(group, {
@@ -1159,30 +1445,46 @@ export function SectionTasksBoard({
                       <Badge variant="secondary" className={`bg-blue-100 text-blue-700 ${TABLE_ROW_COMPACT.badge}`}>
                         &times;{group.tasks.length}
                       </Badge>
-                      {onCompleteGroup && !readOnly && (
-                        <ActionWithReason reason={mobileHeader.completeReason}>
-                          <Button
-                            variant="outline"
-                            className={ROW_ACTION_BUTTON_CLASS}
-                            onClick={(e) => {
-                              e.stopPropagation();
-                              onCompleteGroup(group);
-                            }}
-                            disabled={!mobileHeader.hasCompletable}
-                            title={mobileHeader.completeReason ? actionReasonText(mobileHeader.completeReason) : mobileHeader.completeHint}
-                          >
-                            <span>Завершить группу</span>
-                          </Button>
-                        </ActionWithReason>
-                      )}
                     </div>
                   </div>
+                  {/* Групповой ввод на узком экране — те же два поля, что и в
+                      шапке таблицы: отдельной мобильной модели нет (#283, п. 7). */}
+                  {bulkMode && onBulkDraftChange && !readOnly && (
+                    <div
+                      className="flex flex-wrap items-end gap-3 border-b border-muted px-3 py-2"
+                      onClick={(event) => event.stopPropagation()}
+                    >
+                      {([
+                        ["good", "Годные группы"],
+                        ["defect", "Брак группы"],
+                      ] as const).map(([field, label]) => {
+                        const value = groupDraftValue(group.tasks)[field];
+                        const recorded =
+                          field === "good"
+                            ? group.tasks.reduce((sum, task) => sum + parseFloat(task.cache.completed_quantity), 0)
+                            : group.tasks.reduce((sum, task) => sum + parseFloat(task.cache.rejected_quantity), 0);
+                        return (
+                          <label key={field} className="flex flex-col gap-0.5 text-[11px] text-muted-foreground">
+                            {label}
+                            <DraftQtyInput
+                              value={value}
+                              onChange={(next) => handleGroupQtyChange(group.tasks, field, next)}
+                              onIssue={(issue) => onBulkDraftIssue?.(issue)}
+                              placeholder={`сейчас ${fmtQty(String(recorded))}`}
+                              ariaLabel={`${group.label}: ${label}`}
+                              overPlan={groupOverPlan(group.tasks)[field]}
+                            />
+                          </label>
+                        );
+                      })}
+                    </div>
+                  )}
                   {!isCollapsed && <div className="divide-y divide-muted">{group.tasks.map((task, idx) => {
                     const isLast = idx === group.tasks.length - 1;
                     const isSelected = revokeSelection
                       ? revokeSelection.isSelected(task.id)
                       : bulkMode && bulkSelection?.isSelected(task.id);
-                    return renderMobileCard(task, isSelected, bulkMode, bulkSelection, onAction, onRevokeItem, isRevoking, isLast, readOnly, hasPackaging);
+                    return renderMobileCard(task, isSelected, bulkMode, bulkSelection, onAction, onRevokeItem, isRevoking, isLast, readOnly, hasPackaging, draftContextFor(task));
                   })}</div>}
                 </div>
               );

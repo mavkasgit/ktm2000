@@ -17,11 +17,6 @@ import {
   DialogTitle,
   Input,
 } from "@/shared/ui";
-import {
-  groupTasksByBlockReason,
-  isTaskCompletable,
-} from "../lib/taskStatus";
-import { actionReasonText } from "@/shared/lib/actionReasons";
 import { fmtQty } from "@/shared/lib/quantityFormat";
 
 function toNumber(value: string): number {
@@ -43,7 +38,6 @@ type TaskActionDrawerProps = {
   open: boolean;
   onOpenChange: (open: boolean) => void;
   task: SectionBoardTask | null;
-  tasks?: SectionBoardTask[] | null;
   actionQty: string;
   setActionQty: Dispatch<SetStateAction<string>>;
   defectQty: string;
@@ -65,7 +59,6 @@ export function TaskActionDrawer({
   open,
   onOpenChange,
   task,
-  tasks,
   actionQty,
   setActionQty,
   defectQty,
@@ -92,48 +85,23 @@ export function TaskActionDrawer({
     setIssue(result.issue);
     if (!result.issue) setValue(result.value);
   };
-  const isGroup = !!tasks && tasks.length > 0;
-
   // Трансформирующий этап (ADR-0002): факт вводится во входных заготовках,
   // выходы приходуются автоматически пропорционально порции.
-  const isTransform =
-    !isGroup && !!task?.transforms_dimensions && (task?.outputs?.length ?? 0) > 0;
+  const isTransform = !!task?.transforms_dimensions && (task?.outputs?.length ?? 0) > 0;
   const inputQty = isTransform ? toNumber(task?.input_quantity ?? "0") : 0;
   const inputConsumed = isTransform ? toNumber(task?.input_consumed_quantity ?? "0") : 0;
   const inputRejected = isTransform ? toNumber(task?.cache.rejected_quantity ?? "0") : 0;
   const remainingInput = Math.max(0, inputQty - inputConsumed - inputRejected);
 
-  const maxQty = isTransform
-    ? remainingInput
-    : isGroup
-    ? tasks.reduce(
-        (sum, t) =>
-          sum +
-          Math.max(
-            0,
-            Math.round(parseFloat(t.cache.issued_quantity) || 0) -
-              Math.round(parseFloat(t.cache.completed_quantity) || 0) -
-              Math.round(parseFloat(t.cache.rejected_quantity) || 0),
-          ),
-        0,
-      )
-    : inWorkQuantity(task);
+  const maxQty = isTransform ? remainingInput : inWorkQuantity(task);
 
-  const available = isGroup
-    ? tasks.reduce((sum, t) => sum + Math.max(0, Math.round(parseFloat(t.cache.available_quantity) || 0)), 0)
-    : (task ? Math.round(parseFloat(task.cache.available_quantity) || 0) : 0);
+  const available = task ? Math.round(parseFloat(task.cache.available_quantity) || 0) : 0;
 
-  const plannedQty = isGroup
-    ? tasks.reduce((sum, t) => sum + Math.max(0, Math.round(parseFloat(t.planned_quantity) || 0)), 0)
-    : (task ? Math.round(parseFloat(task.planned_quantity) || 0) : 0);
+  const plannedQty = task ? Math.round(parseFloat(task.planned_quantity) || 0) : 0;
 
-  const completedQty = isGroup
-    ? tasks.reduce((sum, t) => sum + Math.max(0, Math.round(parseFloat(t.cache.completed_quantity) || 0)), 0)
-    : (task ? Math.round(parseFloat(task.cache.completed_quantity) || 0) : 0);
+  const completedQty = task ? Math.round(parseFloat(task.cache.completed_quantity) || 0) : 0;
 
-  const rejectedQty = isGroup
-    ? tasks.reduce((sum, t) => sum + Math.max(0, Math.round(parseFloat(t.cache.rejected_quantity) || 0)), 0)
-    : (task ? Math.round(parseFloat(task.cache.rejected_quantity) || 0) : 0);
+  const rejectedQty = task ? Math.round(parseFloat(task.cache.rejected_quantity) || 0) : 0;
 
   const qtyNum = toNumber(actionQty);
   const defectNum = toNumber(defectQty);
@@ -148,18 +116,15 @@ export function TaskActionDrawer({
       <DialogContent className="!left-auto !right-0 !top-0 !translate-x-0 !translate-y-0 h-screen max-h-screen w-[min(100vw,560px)] max-w-none rounded-none border-l p-0 flex flex-col gap-0">
         <div className="p-6 border-b">
           <DialogHeader>
-            <DialogTitle>{isGroup ? "Завершить группу" : "Внести факт"}</DialogTitle>
+            <DialogTitle>Внести факт</DialogTitle>
             <DialogDescription>
-              {isGroup
-                ? `${tasks[0]?.product_sku || ""} · ${tasks[0]?.operation_name || "—"} · ${tasks.length} заданий`
-                : `${task?.operation_name || "—"} — Этап #${task?.sequence}`
-              }
+              {`${task?.operation_name || "—"} — Этап #${task?.sequence}`}
             </DialogDescription>
           </DialogHeader>
         </div>
 
         <div className="flex-1 overflow-auto p-6 space-y-4">
-          {(task || isGroup) && (
+          {task && (
             <div className="rounded-lg border bg-muted/20 p-3 text-xs">
               <div className="flex flex-row flex-wrap gap-x-4 gap-y-1">
                 {isTransform ? (
@@ -182,7 +147,7 @@ export function TaskActionDrawer({
                   </>
                 )}
               </div>
-              {!isGroup && task && task.operation_names && task.operation_names.length > 1 && (
+              {task && task.operation_names && task.operation_names.length > 1 && (
                 <div className="mt-2">
                   <Badge variant="secondary">Будет выполнено: {task.operation_names.join(" + ")}</Badge>
                 </div>
@@ -224,34 +189,6 @@ export function TaskActionDrawer({
               </div>
             </div>
           )}
-
-          {isGroup && tasks && tasks.some((t) => !isTaskCompletable(t)) && (() => {
-            const byReason = groupTasksByBlockReason(tasks);
-            const total = byReason.reduce((sum, group) => sum + group.tasks.length, 0);
-            return (
-              <div className="rounded-lg border border-amber-300 bg-amber-50 p-3 text-sm text-amber-800">
-                <div className="flex items-start gap-2">
-                  <AlertTriangle className="h-4 w-4 mt-0.5 shrink-0" />
-                  <div className="flex-1">
-                    <div className="font-medium">
-                      {total} из {tasks.length} задач будут пропущены
-                    </div>
-                    {byReason.map(({ reason, tasks: grouped }) => (
-                      <div className="mt-1 text-xs" key={reason}>
-                        <span className="font-semibold">
-                          {actionReasonText(reason)} ({grouped.length}):
-                        </span>{" "}
-                        {Array.from(new Set(grouped.map((t) => t.product_sku)))
-                          .slice(0, 5)
-                          .join(", ")}
-                        {grouped.length > 5 ? "…" : ""}
-                      </div>
-                    ))}
-                  </div>
-                </div>
-              </div>
-            );
-          })()}
 
           <div className="flex flex-row flex-wrap items-end gap-3">
             <div className="flex flex-col gap-1.5">
@@ -297,7 +234,7 @@ export function TaskActionDrawer({
           )}
 
           <div className="flex flex-row flex-wrap gap-2">
-            {(task || isGroup) && (
+            {task && (
               <Button
                 type="button"
                 variant="outline"

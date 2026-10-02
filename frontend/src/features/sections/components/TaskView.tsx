@@ -2,8 +2,8 @@
  * components/TaskView.tsx — раскладки представления задания.
  *
  * Тон, цвет точки, поля задания и состояние шапки группы считаются в
- * `lib/taskView`; здесь они раскладываются в узлы: строка таблицы, карточка
- * узкого экрана и панель массовых операций берут одни и те же данные.
+ * `lib/taskView`; здесь они раскладываются в узлы: строка таблицы и карточка
+ * узкого экрана берут одни и те же данные.
  */
 
 import type { ReactNode } from "react";
@@ -53,7 +53,7 @@ export function getTaskCardClass(task: SectionBoardTask, isSelected: boolean): s
   return CARD_TONE_CLASS[getTaskTone(task)];
 }
 
-/** Точка статуса задания — одна на доску, карточку и панель массовых операций. */
+/** Точка статуса задания — одна на доску и карточку. */
 export function TaskStatusDot({ task }: { task: SectionBoardTask }) {
   return (
     <span

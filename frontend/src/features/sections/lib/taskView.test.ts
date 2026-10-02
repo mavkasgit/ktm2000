@@ -126,20 +126,18 @@ describe("getStatusDotClass", () => {
 });
 
 describe("getTaskGroupHeaderState", () => {
-  it("в обычном режиме группа сворачивается, завершение группы доступно", () => {
+  it("в обычном режиме группа сворачивается", () => {
     const group = { tasks: [completableTask(), completableTask({ id: 2 })] };
     const state = getTaskGroupHeaderState(group, {
       isCollapsed: true,
       isBulkMode: false,
       allSelected: false,
     });
-    expect(state).toMatchObject({
+    expect(state).toEqual({
       isCollapsed: true,
       canCollapse: true,
       collapseTitle: "Раскрыть",
       allSelected: false,
-      hasCompletable: true,
-      completeReason: null,
     });
   });
 
@@ -150,14 +148,5 @@ describe("getTaskGroupHeaderState", () => {
     );
     expect(state.canCollapse).toBe(false);
     expect(state.allSelected).toBe(true);
-  });
-
-  it("называет причину, когда завершать нечего", () => {
-    const state = getTaskGroupHeaderState(
-      { tasks: [makeTask({ status: "completed" })] },
-      { isCollapsed: false, isBulkMode: false, allSelected: false },
-    );
-    expect(state.hasCompletable).toBe(false);
-    expect(state.completeReason).toBe("group_nothing_to_complete");
   });
 });

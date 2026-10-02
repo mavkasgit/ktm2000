@@ -2,20 +2,18 @@
  * lib/taskView.ts — представление задания на доске участка.
  *
  * Одно решение о состоянии задания, одна раскладка на раскладки: строка
- * таблицы, карточка узкого экрана и панель массовых операций берут здесь и
- * тон, и цвет точки статуса, и подпись группы. Раньше эти
- * решения жили в трёх местах и разошлись: панель массовых операций не считала
- * полностью переданное задание зелёным (#191).
+ * таблицы и карточка узкого экрана берут здесь и тон, и цвет точки статуса, и
+ * подпись группы. Раньше эти решения жили в трёх местах и разошлись: панель
+ * массовых операций (удалена в #283, ADR-0064) не считала полностью переданное
+ * задание зелёным (#191).
  *
  * Модуль чистый: без JSX и без стилей. Классы раскладок — в
  * `components/TaskView.tsx`, там же собираются узлы полей.
  */
 
 import type { SectionBoardTask } from "@/shared/api/shopfloor";
-import type { ActionReasonCode } from "@/shared/lib/actionReasons";
 import {
   getReadyStatusLabel,
-  isTaskCompletable,
   isTaskFullyTransferred,
   getTaskViewCategory,
 } from "./taskStatus";
@@ -40,8 +38,8 @@ export function getTaskTone(task: SectionBoardTask): TaskTone {
 
 /**
  * Цвет точки статуса. Полностью переданное задание считается завершённым
- * независимо от флага статуса — иначе доска и панель массовых операций
- * показывали одно задание разным цветом.
+ * независимо от флага статуса — иначе доска и карточка показывали одно задание
+ * разным цветом.
  */
 export function getStatusDotClass(task: SectionBoardTask): string {
   const status = task.status;
@@ -64,30 +62,23 @@ export type TaskGroupHeaderState = {
   canCollapse: boolean;
   collapseTitle: string;
   allSelected: boolean;
-  hasCompletable: boolean;
-  /** Подсказка о том, что делает кнопка, когда действие доступно (#193). */
-  completeHint: string;
-  /**
-   * Причина, по которой завершение группы недоступно: `null` — доступно.
-   * Код из общего словаря причин, а не текст рядом с кнопкой.
-   */
-  completeReason: ActionReasonCode | null;
 };
 
-/** Состояние шапки группы — одно для строки таблицы и для карточки группы. */
+/**
+ * Состояние шапки группы — одно для строки таблицы и для карточки группы.
+ * Причина недоступности завершения здесь больше не считается: кнопки
+ * «Завершить группу» нет, а причина подтверждения живёт в футере и читается
+ * по черновику (`bulkDraft`).
+ */
 export function getTaskGroupHeaderState(
   group: { tasks: SectionBoardTask[] },
   options: { isCollapsed: boolean; isBulkMode: boolean; allSelected: boolean },
 ): TaskGroupHeaderState {
-  const hasCompletable = group.tasks.some(isTaskCompletable);
   return {
     isCollapsed: options.isCollapsed,
     canCollapse: !options.isBulkMode,
     collapseTitle: options.isCollapsed ? "Раскрыть" : "Скрыть",
     allSelected: options.allSelected,
-    hasCompletable,
-    completeHint: "Открыть панель завершения группы",
-    completeReason: hasCompletable ? null : "group_nothing_to_complete",
   };
 }
 

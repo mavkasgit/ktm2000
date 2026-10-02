@@ -2,7 +2,6 @@ import { describe, expect, it } from "vitest";
 import type { SectionBoardTask } from "@/shared/api/shopfloor";
 import {
   getCompletionBlockReason,
-  getNonCompletableTasks,
   getReadyStatusLabel,
   getStatusColor,
   getStatusLabel,
@@ -342,27 +341,6 @@ describe("getTaskViewCategory", () => {
   });
 });
 
-describe("getNonCompletableTasks", () => {
-  it("оставляет только задачи, которые нельзя завершить", () => {
-    const t1 = makeTask({ id: 1, status: "ready" });
-    const t2 = makeTask({
-      id: 2,
-      status: "ready",
-      previous_stage: {
-        section_plan_line_id: 1,
-        completed_quantity: "0",
-        transferred_quantity: "10",
-        received_quantity: "10",
-      },
-    });
-    const t3 = makeTask({ id: 3, status: "completed" });
-    const t4 = makeTask({ id: 4, status: "waiting_previous" });
-
-    const result = getNonCompletableTasks([t1, t2, t3, t4]);
-    expect(result.map((t) => t.id).sort()).toEqual([1, 3, 4]);
-  });
-});
-
 /** Готовое задание: сырьё с предыдущего этапа передано, факт ещё не внесён. */
 function completableTask(overrides: Partial<SectionBoardTask> = {}): SectionBoardTask {
   return makeTask({
@@ -466,7 +444,7 @@ describe("getCompletionBlockReason", () => {
 });
 
 /**
- * Баннер панели массовых операций собирает незавершаемые задания по кодам.
+ * Футер массового ввода собирает незавершаемые задания по кодам.
  * Ошибка здесь — тихая: либо в баннер утечёт доступное задание, либо часть
  * незавершаемых потеряется и оператор посчитает, что завершит больше, чем
  * завершится на самом деле.
@@ -508,7 +486,7 @@ describe("groupTasksByBlockReason", () => {
   });
 
   it("в группе лежат только задания с этой причиной, а их сумма равна числу незавершаемых", () => {
-    const nonCompletable = getNonCompletableTasks(tasks);
+    const nonCompletable = tasks.filter((task) => getCompletionBlockReason(task) !== null);
     const groups = groupTasksByBlockReason(tasks);
 
     for (const group of groups) {
