@@ -6,6 +6,7 @@ from fastapi import APIRouter, Depends, HTTPException, Query, status
 from pydantic import BaseModel, ConfigDict, ValidationError
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
+from sqlalchemy.orm import selectinload
 
 from app.api.deps import (
     READER_ROLES,
@@ -402,20 +403,66 @@ async def bulk_complete_tasks(
                 continue
 
         if task_ids:
-            first_task = await db.get(WorkTask, task_ids[0])
+            from app.models.product import Product
+            from app.models.route import RouteStage
+            from app.models.section import Section
+
+            # Справочники для аудита — по одному запросу на список (#294):
+            # раньше на каждую задачу шли db.get(WorkTask), db.get(Product) и
+            # db.get(RouteStage) с подгрузкой операций, то есть три-четыре
+            # запроса на строку батча — и то же самое во втором проходе.
+            tasks_by_id = {
+                row.id: row
+                for row in (
+                    await db.execute(select(WorkTask).where(WorkTask.id.in_(task_ids)))
+                ).scalars().all()
+            }
+            product_ids = {
+                task.product_id
+                for task in tasks_by_id.values()
+                if task.product_id is not None
+            }
+            products_by_id = (
+                {
+                    row.id: row
+                    for row in (
+                        await db.execute(select(Product).where(Product.id.in_(product_ids)))
+                    ).scalars().all()
+                }
+                if product_ids
+                else {}
+            )
+            stage_ids = {
+                task.route_stage_id
+                for task in tasks_by_id.values()
+                if task.route_stage_id is not None
+            }
+            stages_by_id = (
+                {
+                    row.id: row
+                    for row in (
+                        await db.execute(
+                            select(RouteStage)
+                            .where(RouteStage.id.in_(stage_ids))
+                            .options(selectinload(RouteStage.operations))
+                        )
+                    ).scalars().all()
+                }
+                if stage_ids
+                else {}
+            )
+
+            first_task = tasks_by_id.get(task_ids[0])
             if first_task:
-                from app.models.product import Product
-                from app.models.route import RouteStage
-                from app.models.section import Section
                 section = await db.get(Section, first_task.section_id)
-                
+
                 for tid in task_ids:
-                    t = await db.get(WorkTask, tid)
+                    t = tasks_by_id.get(tid)
                     if t:
-                        p = await db.get(Product, t.product_id)
+                        p = products_by_id.get(t.product_id) if t.product_id is not None else None
                         if p:
                             product_skus.add(p.sku)
-                        rs = await db.get(RouteStage, t.route_stage_id)
+                        rs = stages_by_id.get(t.route_stage_id) if t.route_stage_id is not None else None
                         if rs and rs.operations:
                             for op in rs.operations:
                                 operation_names.add(op.operation_name)
