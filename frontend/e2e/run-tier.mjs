@@ -98,6 +98,17 @@ const projectArgs = TIER === "all" ? [] : ["--project", TIER];
 // чтобы пользовательский флаг перебил дефолтный, а не наоборот.
 const extraArgs = process.argv.slice(3);
 
+// Сколько воркеров Playwright в прогоне (#289). `--workers` — единственный
+// способ задать их: он уходит и в `playwright test`, и в `e2e:prep`, потому
+// что клонов БД должно быть столько же, сколько воркеров. Проценты (`50%`)
+// Playwright считает сам, но клонов под процент не выдать: такой прогон
+// оставляем на одном клоне — как при `workers: 1`.
+const workersArg = extraArgs.find((arg) => arg.startsWith("--workers="))?.slice("--workers=".length);
+const WORKERS = /^\d+$/.test(workersArg ?? "") ? Math.max(1, Number(workersArg)) : 1;
+if (WORKERS > 1) {
+  console.log(`[e2e:run] воркеров в прогоне: ${WORKERS} — столько же клонов БД и backend'ов`);
+}
+
 // Режим UI Playwright (`--ui`, `--ui-host`, `--ui-port`) — интерактивный: он
 // сам поднимает окно и живёт, пока его не закрыли. Два следствия:
 //
@@ -243,7 +254,7 @@ const prep = spawnSync("npm", ["run", "e2e:prep"], {
   encoding: "utf8",
   shell: true,
   maxBuffer: 32 * 1024 * 1024,
-  env: { ...process.env, E2E_RUN_ID: runId },
+  env: { ...process.env, E2E_RUN_ID: runId, E2E_WORKERS: String(WORKERS) },
 });
 if (prep.status !== 0) {
   console.log(`[e2e:run] e2e:prep не прошёл (код ${prep.status}):`);
@@ -251,18 +262,39 @@ if (prep.status !== 0) {
   finalize();
   process.exit(prep.status ?? 1);
 }
-// `prep` печатает env-файл клона — по нему backend стенда узнаёт свою БД
-// (ENV_FILE уходит в `webServer`, см. `playwright.config.ts`).
-runEnvFile = (prep.stdout ?? "").match(/^E2E_RUN_ENV_FILE=(.+)$/m)?.[1]?.trim() ?? null;
+// `prep` печатает env-файлы клонов — по ним backend'ы стенда узнают свои БД
+// (ENV_FILE уходит в `webServer`, см. `playwright.config.ts`). При
+// `workers > 1` их столько же, сколько воркеров (#289): каждому воркеру своя
+// БД, иначе `apiResetAll()` одного сносит данные другого.
+const prepOut = prep.stdout ?? "";
+const workerEnvFiles = JSON.parse(
+  prepOut.match(/^E2E_RUN_ENV_FILES=(.+)$/m)?.[1]?.trim() ?? "[]",
+);
+runEnvFile = prepOut.match(/^E2E_RUN_ENV_FILE=(.+)$/m)?.[1]?.trim() ?? null;
 if (!runEnvFile || !fs.existsSync(runEnvFile)) {
   console.log(
     `[e2e:run] e2e:prep не назвал env-файл клона (E2E_RUN_ENV_FILE):\n` +
-      `${prep.stdout ?? ""}`.slice(-1500),
+      `${prepOut}`.slice(-1500),
   );
   finalize();
   process.exit(1);
 }
-console.log(`[e2e:run] e2e:prep ok (БД-клон прогона: ${path.basename(runEnvFile)})`);
+const missingEnv = workerEnvFiles.filter((file) => !fs.existsSync(file));
+if (missingEnv.length > 0 || workerEnvFiles.length !== WORKERS) {
+  console.log(
+    `[e2e:run] e2e:prep вернул ${workerEnvFiles.length} env-файл(ов) на ` +
+      `${WORKERS} воркер(ов), отсутствуют: ${JSON.stringify(missingEnv)}`,
+  );
+  finalize();
+  process.exit(1);
+}
+console.log(
+  `[e2e:run] e2e:prep ok (БД-клон прогона: ${path.basename(runEnvFile)}` +
+    (workerEnvFiles.length > 1
+      ? ` и ещё ${workerEnvFiles.length - 1} по воркерам`
+      : "") +
+    ")",
+);
 
 // Playwright запускается ЧЕРЕЗ `scripts/run-e2e.mjs`, а не напрямую: обёртка
 // выдаёт стенду свободные порты и прописывает `E2E_API_URL` /
@@ -289,14 +321,14 @@ const result = spawnSync(
         cwd: FRONTEND_DIR,
         shell: false,
         stdio: "inherit",
-        env: { ...process.env, E2E_ENV_FILE: runEnvFile },
+        env: { ...process.env, E2E_ENV_FILE: runEnvFile, E2E_RUN_ENV_FILES: JSON.stringify(workerEnvFiles), E2E_WORKERS: String(WORKERS) },
       }
     : {
         cwd: FRONTEND_DIR,
         encoding: "utf8",
         shell: false,
         maxBuffer: 64 * 1024 * 1024,
-        env: { ...process.env, E2E_ENV_FILE: runEnvFile },
+        env: { ...process.env, E2E_ENV_FILE: runEnvFile, E2E_RUN_ENV_FILES: JSON.stringify(workerEnvFiles), E2E_WORKERS: String(WORKERS) },
       },
 );
 

@@ -55,11 +55,29 @@ function freePort() {
 
 const env = { ...process.env };
 
+// Сколько воркеров Playwright в прогоне: столько же backend'ов и клонов БД
+// (#289). `run-tier.mjs` знает `--workers` и передаёт его через `E2E_WORKERS`.
+const WORKERS = Math.max(1, Number(env.E2E_WORKERS ?? 1) || 1);
+
 if (!env.E2E_API_URL || !env.PLAYWRIGHT_TEST_BASE_URL) {
-  const [backendPort, frontendPort] = await Promise.all([freePort(), freePort()]);
+  // Портов нужно WORKERS + 2: по backend'у на воркера, плюс frontend и роутер
+  // `/api`, который выбирает backend по заголовку `x-e2e-worker`
+  // (`scripts/e2e-api-router.mjs`).
+  const ports = await Promise.all(Array.from({ length: WORKERS + 2 }, freePort));
+  const [backendPorts, routerPort, frontendPort] = [
+    ports.slice(0, WORKERS),
+    ports[WORKERS],
+    ports[WORKERS + 1],
+  ];
   const frontendOrigin = `http://127.0.0.1:${frontendPort}`;
-  env.E2E_API_URL ??= `http://127.0.0.1:${backendPort}/api`;
+  const workerApiUrls = backendPorts.map((port) => `http://127.0.0.1:${port}/api`);
+  // `E2E_API_URL` — воркер 0: одиночный прогон и прямые вызовы из Node
+  // (`api-helpers.ts`) ходят по нему без заголовка.
+  env.E2E_API_URL ??= workerApiUrls[0];
   env.PLAYWRIGHT_TEST_BASE_URL ??= frontendOrigin;
+  // Воркерные адреса нужны и роутеру, и backend'ам конфига (`webServer`).
+  env.E2E_WORKER_API_URLS = JSON.stringify(workerApiUrls);
+  env.E2E_ROUTER_PORT = String(routerPort);
   // CORS проверяет Origin, а не Host, поэтому нужны оба написания адреса.
   // В `.env.e2e` CORS_ORIGINS намеренно не задан (origin заранее неизвестен),
   // а переменная окружения важнее файла — сюда попадает ровно то, что нужно.
@@ -67,8 +85,35 @@ if (!env.E2E_API_URL || !env.PLAYWRIGHT_TEST_BASE_URL) {
     .concat((env.CORS_ORIGINS ?? "").split(",").filter(Boolean))
     .join(",");
   console.log(
-    `[e2e:ports] стенд на свободных портах: backend ${backendPort}, frontend ${frontendPort}`,
+    `[e2e:ports] стенд на свободных портах: frontend ${frontendPort}, ` +
+      `роутер /api ${routerPort}, backend ${backendPorts.join(", ")}` +
+      (WORKERS > 1 ? ` (воркеров: ${WORKERS})` : ""),
   );
+}
+
+// Роутер `/api` живёт ровно столько же, сколько прогон: его поднимаем здесь и
+// снимаем вместе с Playwright (в том числе по SIGINT/SIGTERM — иначе после
+// отмены прогона порт остался бы в LISTENING, а это ровно тот мусор, ради
+// которого обёртка и выдаёт порты заново на каждый запуск).
+//
+// При `PW_REUSE_STACK=1` (ручной стенд) адреса backend'ов не выдавались —
+// роутер не поднимаем, `/api` у стенда и так один.
+let router = null;
+if (env.E2E_WORKER_API_URLS) {
+  const routerCli = fileURLToPath(new URL("./e2e-api-router.mjs", import.meta.url));
+  router = spawn(process.execPath, [routerCli], { stdio: "inherit", env });
+  router.on("error", (error) => {
+    console.error(`[e2e:ports] роутер /api не поднялся: ${error.message}`);
+    process.exit(1);
+  });
+}
+
+function stopRouter() {
+  router?.kill();
+}
+process.on("exit", stopRouter);
+for (const sig of ["SIGINT", "SIGTERM"]) {
+  process.on(sig, stopRouter);
 }
 
 const frontendDir = fileURLToPath(new URL("..", import.meta.url));

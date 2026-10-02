@@ -63,6 +63,16 @@ Postgres (5441). Общая dev-БД (5440) принадлежит основн�
 (``E2E_TEMPLATE_KEEP=1``) оставляет его как есть, печатая причину, — как
 ``--keep`` у ``ensure``.
 
+По клону на воркера (#289)
+--------------------------
+Один клон на прогон закрывает параллельные **прогоны**, но не параллельные
+**воркеры** одного прогона: они делят этот клон, а ``apiResetAll()`` —
+``TRUNCATE … CASCADE``, поэтому воркер сносит данные соседа (и наоборот).
+Поэтому ``prep --workers N`` (он же ``E2E_WORKERS=N``) клонирует шаблон
+``N`` раз: ``<база>_run_<stamp>_<run-id>_w0``, ``_w1``, …, и каждому
+воркеру достаётся своя БД и свой env-файл. При ``N == 1`` имена прежние.
+``drop --run-id`` снимает все клоны прогона разом.
+
 Составные части DSN (host/port/user/password) берутся из самого ``.env.e2e`` —
 дублировать их в скрипте нечего.
 """
@@ -73,6 +83,7 @@ import argparse
 import ast
 import asyncio
 import hashlib
+import json
 import os
 import re
 import subprocess
@@ -492,10 +503,41 @@ def template_db_name(base: str) -> str:
     return f"{base}{TEMPLATE_SUFFIX}"
 
 
-def run_db_name(base: str, run_id: str, *, stamp: datetime | None = None) -> str:
-    """Имя клона; метка времени внутри имени — по ней `drop --stale` считает возраст."""
+def run_db_name(
+    base: str,
+    run_id: str,
+    *,
+    stamp: datetime | None = None,
+    worker: int | None = None,
+) -> str:
+    """Имя клона; метка времени внутри имени — по ней `drop --stale` считает возраст.
+
+    `worker` — номер воркера Playwright внутри прогона (#289): клон на
+    воркера получает суффикс `_w<номер>`. Без суффикса (`worker=None`) имя
+    прежнее, поэтому одиночный прогон и `drop --run-id` не меняются.
+    """
     moment = stamp or datetime.now(tz=UTC)
-    return f"{base}{RUN_INFIX}{moment.strftime(RUN_STAMP_FORMAT)}_{run_id}"
+    name = f"{base}{RUN_INFIX}{moment.strftime(RUN_STAMP_FORMAT)}_{run_id}"
+    return f"{name}_w{worker}" if worker is not None else name
+
+
+def run_env_file_name(run_id: str, worker: int | None = None) -> str:
+    """Имя env-файла клона. Суффикс воркера — как в имени самой БД (#289)."""
+    if worker is None:
+        return f".env.e2e.run.{run_id}.local"
+    return f".env.e2e.run.{run_id}.w{worker}.local"
+
+
+def split_worker_suffix(db_name: str, base: str, run_id: str) -> int | None:
+    """Номер воркера из имени клона (`None`, если клон без суффикса)."""
+    prefix = f"{base}{RUN_INFIX}"
+    if not db_name.startswith(prefix) or f"_{run_id}" not in db_name:
+        return None
+    _, _, tail = db_name.partition(f"_{run_id}")
+    if not tail.startswith("_w"):
+        return None
+    digits = tail[2:]
+    return int(digits) if digits.isdigit() else None
 
 
 def dsn_with_database(dsn: str, name: str) -> str:
@@ -607,8 +649,13 @@ async def prepare_run(
     env_file: Path,
     keep_template: bool = False,
     stale_run_minutes: int = DEFAULT_STALE_RUN_MINUTES,
+    workers: int = 1,
 ) -> int:
-    """Шаблон + клон под прогон; печатает `E2E_RUN_ENV_FILE` для обёртки."""
+    """Шаблон + клон(ы) под прогон; печатает `E2E_RUN_ENV_FILE(S)` для обёртки.
+
+    `workers > 1` — по клону на воркера Playwright (#289): без этого воркеры
+    одного прогона делят базу, и `apiResetAll()` одного сносит данные другого.
+    """
     dsn = resolve_stand_dsn(env_file)
     base = _db_name(dsn)
     repo_head = next(iter(repo_alembic_heads()))
@@ -659,27 +706,42 @@ async def prepare_run(
     if not template_env.exists():
         write_env_file_for_database(env_file, template_env, template_dsn)
 
-    run_db = run_db_name(base, run_id)
+    # По клону на воркера (#289). Внутри одного прогона воркеры Playwright
+    # делят один клон, а `apiResetAll()` — `TRUNCATE … CASCADE` по таблицам:
+    # соседний воркер сносил данные mid-flight. Раздельные клоны это снимают.
+    # При `workers == 1` клон и env-файл остаются прежними (без суффикса).
+    worker_ids: list[int | None] = list(range(workers)) if workers > 1 else [None]
+    run_dbs: list[str] = []
+    run_envs: list[Path] = []
     started = time.monotonic()
-    await _clone_database(dsn, run_db, template)
+    for worker in worker_ids:
+        run_db = run_db_name(base, run_id, worker=worker)
+        await _clone_database(dsn, run_db, template)
+        run_env = env_file.parent / run_env_file_name(run_id, worker)
+        write_env_file_for_database(env_file, run_env, dsn_with_database(dsn, run_db))
+        run_dbs.append(run_db)
+        run_envs.append(run_env)
     clone_took = time.monotonic() - started
-
-    run_env = env_file.parent / f".env.e2e.run.{run_id}.local"
-    write_env_file_for_database(env_file, run_env, dsn_with_database(dsn, run_db))
 
     dropped = await _drop_stale_runs(
         dsn,
         base,
         older_than_minutes=stale_run_minutes,
         env_dir=env_file.parent,
-        keep=run_db,
+        keep=set(run_dbs),
     )
     for name in dropped:
         print(f"[e2e-db] брошенный клон {name}: снесён (> {stale_run_minutes} мин)")
 
-    print(f"[e2e-db] клон прогона {run_db}: готов за {clone_took:.1f}s")
-    print(f"E2E_RUN_ENV_FILE={run_env}")
-    print(f"E2E_RUN_DB={run_db}")
+    for run_db, run_env in zip(run_dbs, run_envs):
+        print(f"[e2e-db] клон прогона {run_db}: готов")
+    print(f"[e2e-db] клоны прогона ({len(run_dbs)}): готовы за {clone_took:.1f}s")
+    # Первый env-файл — прежним ключом: одиночный прогон и отладка его ждут.
+    print(f"E2E_RUN_ENV_FILE={run_envs[0]}")
+    # Все — новым: по ним `run-e2e.mjs` поднимает backend на каждый воркер.
+    print(f"E2E_RUN_ENV_FILES={json.dumps([str(p) for p in run_envs])}")
+    print(f"E2E_RUN_DBS={json.dumps(run_dbs)}")
+    print(f"E2E_RUN_DB={run_dbs[0]}")
     return 0
 
 
@@ -689,7 +751,7 @@ async def _drop_stale_runs(
     *,
     older_than_minutes: int,
     env_dir: Path,
-    keep: str | None = None,
+    keep: set[str] | None = None,
 ) -> list[str]:
     """Снести клоны `«<база>_run_<stamp>_…»`, старше N минут (по метке в имени)."""
     if older_than_minutes <= 0:
@@ -704,7 +766,7 @@ async def _drop_stale_runs(
             )
         ]
         for name in names:
-            if keep is not None and name == keep:
+            if keep is not None and name in keep:
                 continue
             stamp = name[len(base) + len(RUN_INFIX) :].split("_", 1)[0]
             try:
@@ -716,8 +778,12 @@ async def _drop_stale_runs(
                 continue
             await _drop_database(admin, name)
             dropped.append(name)
-            env_file = env_dir / f".env.e2e.run.{name.rsplit('_', 1)[-1]}.local"
-            env_file.unlink(missing_ok=True)
+            # Имя клона: `<база>_run_<stamp>_<run-id>[_w<номер>]`, а env-файл —
+            # по run-id и тому же суффиксу воркера (#289).
+            tail = name[len(base) + len(RUN_INFIX) :].split("_", 1)
+            run_id_part = tail[1].removesuffix("_") if len(tail) > 1 else ""
+            worker = split_worker_suffix(name, base, run_id_part)
+            (env_dir / run_env_file_name(run_id_part, worker)).unlink(missing_ok=True)
     finally:
         await admin.close()
     return dropped
@@ -738,20 +804,24 @@ async def drop_runs(
     admin = await _admin_connection(dsn)
     try:
         if run_id:
-            name = run_db_name(base, validate_run_id(run_id))
+            checked = validate_run_id(run_id)
             # Метка времени в имени — от старта прогона, а не от момента drop,
-            # поэтому точное имя не восстанавливается: ищем по run-id.
+            # поэтому точное имя не восстанавливается: ищем по run-id. Шаблон
+            # `LIKE` ловит и клон без суффикса, и все воркерные (`_w0`, `_w1`…),
+            # поэтому уборка прогона снимает ровно его клоны (#289).
             names = [
                 row["datname"]
                 for row in await admin.fetch(
-                    "SELECT datname FROM pg_database WHERE datname LIKE $1", f"{base}{RUN_INFIX}%_{run_id}"
+                    "SELECT datname FROM pg_database WHERE datname LIKE $1",
+                    f"{base}{RUN_INFIX}%_{checked}",
                 )
             ]
             if not names:
-                print(f"[e2e-db] клон прогона {run_id}: не найден (уже удалён?)")
+                print(f"[e2e-db] клон прогона {checked}: не найден (уже удалён?)")
             for found in names:
                 await _drop_database(admin, found)
-                (env_file.parent / f".env.e2e.run.{run_id}.local").unlink(missing_ok=True)
+                worker = split_worker_suffix(found, base, checked)
+                (env_file.parent / run_env_file_name(checked, worker)).unlink(missing_ok=True)
                 print(f"[e2e-db] клон {found}: удалён")
     finally:
         await admin.close()
@@ -799,6 +869,12 @@ def main(argv: list[str] | None = None) -> int:
         default=int(os.environ.get("E2E_STALE_RUN_MINUTES", DEFAULT_STALE_RUN_MINUTES)),
         help="возраст, после которого клон брошенного прогона сносится",
     )
+    parser.add_argument(
+        "--workers",
+        type=int,
+        default=int(os.environ.get("E2E_WORKERS", "1")),
+        help="сколько воркеров Playwright в прогоне: столько же клонов БД (#289)",
+    )
     args = parser.parse_args(argv)
 
     try:
@@ -822,6 +898,7 @@ def main(argv: list[str] | None = None) -> int:
                     env_file=args.env_file,
                     keep_template=args.keep_template,
                     stale_run_minutes=args.stale_run_minutes,
+                    workers=max(1, args.workers),
                 )
             )
         return asyncio.run(
