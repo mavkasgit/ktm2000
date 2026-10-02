@@ -76,6 +76,7 @@ import { getAriaSort } from "@/shared/lib/multiSort";
 import { isFirstRowsLoad, keepPreviousDataForScope } from "@/shared/lib/tableQueryPlaceholder";
 import { historyColumns, readyColumns } from "../lib/transferColumns";
 import { TABLE_ROW_COMPACT, TABLE_ROW_DENSE } from "@/shared/lib/dataTableStyles";
+import { TABLE_ROW_STYLES } from "@/shared/lib/tableRowStyles";
 import { cn } from "@/shared/utils/cn";
 import {
   useBulkSelection,
@@ -159,7 +160,13 @@ type StatusBadgeVariant = "default" | "destructive" | "outline" | "secondary";
 
 /** Строка таблицы «Готово к передаче»: задание либо заголовок группы заданий. */
 type ReadyTableRow =
-  | { kind: "task"; task: ReadyToTransferTask; groupKey: string | null }
+  | {
+      kind: "task";
+      task: ReadyToTransferTask;
+      groupKey: string | null;
+      /** Строка закрывает блок группы — на ней 3px-граница. */
+      isLastInGroup: boolean;
+    }
   | { kind: "group"; group: ReadyTransferGroup };
 
 function statusBadgeLabel(status: string): string {
@@ -265,6 +272,10 @@ interface ReadyTransferRowProps {
   isSelected: boolean;
   onSelect: () => void;
   isSubmitting: boolean;
+  /** Строка раскрытой группы: носит подложку блока и рельс (ADR-0065). */
+  isInGroup: boolean;
+  /** Строка закрывает блок группы — на ней 3px-граница. */
+  isLastInGroup: boolean;
   tryAcquire: () => boolean;
   release: () => void;
   invalidateTransferCaches: () => void;
@@ -276,6 +287,8 @@ function ReadyTransferRow({
   isSelected,
   onSelect,
   isSubmitting,
+  isInGroup,
+  isLastInGroup,
   tryAcquire,
   release,
   invalidateTransferCaches,
@@ -318,6 +331,14 @@ function ReadyTransferRow({
   });
 
   const isFinalRow = isFinalReadyRow(task);
+  // Рёбра блока — на ячейках, а не на `<tr>`: одно правило с доской и
+  // остатками (ADR-0065). Внутренний разделитель тише обычного, конец блока —
+  // 3px-граница между группами.
+  const cellClass = cn(
+    TRANSFERS_ROW.cell,
+    isInGroup &&
+      (isLastInGroup ? TABLE_ROW_STYLES.groupBlockBoundary : TABLE_ROW_STYLES.groupChildSeparator),
+  );
   const releaseMutation = useMutation({
     mutationFn: (idempotencyKey: string) =>
       finalReleaseTask(task.task_id, {
@@ -365,11 +386,18 @@ function ReadyTransferRow({
       // `border-b` от `TableRow`, то есть 33px вместо общих 32. Ячейки не
       // сжимаются — 24px действия плюс 4px отступа укладываются с запасом.
       style={{ height: TRANSFERS_ROW.rowHeightPx }}
-      className={bulkMode ? "cursor-pointer hover:bg-muted/50" : undefined}
+      // Раскрытая строка группы носит общую подложку блока (ADR-0065):
+      // строки одного артикула читаются одним куском, а не списком.
+      className={cn(
+        isInGroup ? TABLE_ROW_STYLES.groupBlock : bulkMode ? "cursor-pointer hover:bg-muted/50" : undefined,
+      )}
       onClick={bulkMode ? onSelect : undefined}
     >
       {bulkMode && (
-        <TableCell className={`${TRANSFERS_ROW.cell} w-[40px]`} onClick={(e) => e.stopPropagation()}>
+        <TableCell
+          className={cn(cellClass, isInGroup ? TABLE_ROW_STYLES.blockRail : TABLE_ROW_STYLES.emptyRail, "w-[40px]")}
+          onClick={(e) => e.stopPropagation()}
+        >
           <Checkbox
             checked={isSelected}
             disabled={isFinalRow}
@@ -378,15 +406,15 @@ function ReadyTransferRow({
           />
         </TableCell>
       )}
-      <TableCell className={`${TRANSFERS_ROW.cell} font-mono text-xs text-muted-foreground`}>#{task.plan_position_id}</TableCell>
-      <TableCell className={TRANSFERS_ROW.cell}>{task.product_sku ?? "—"}</TableCell>
-      <TableCell className={`${TRANSFERS_ROW.cell} text-xs text-muted-foreground whitespace-nowrap`}>
+      <TableCell className={cn(cellClass, isInGroup ? TABLE_ROW_STYLES.blockRail : TABLE_ROW_STYLES.emptyRail, "font-mono text-xs text-muted-foreground")}>#{task.plan_position_id}</TableCell>
+      <TableCell className={cellClass}>{task.product_sku ?? "—"}</TableCell>
+      <TableCell className={`${cellClass} text-xs text-muted-foreground whitespace-nowrap`}>
         {formatDimensionsLabel(task.dimensions, task.dimensions_label)}
       </TableCell>
-      <TableCell className={`${TRANSFERS_ROW.cell} text-xs whitespace-nowrap`}>
+      <TableCell className={`${cellClass} text-xs whitespace-nowrap`}>
         {task.operation_name ?? "—"}
       </TableCell>
-      <TableCell className={`${TRANSFERS_ROW.cell} text-right tabular-nums`}>
+      <TableCell className={`${cellClass} text-right tabular-nums`}>
         <div className="whitespace-nowrap">
           <span className="font-medium">{fmtQty(task.transferable_quantity)} шт.</span>{" "}
           <span className="text-[11px] text-muted-foreground">
@@ -400,7 +428,7 @@ function ReadyTransferRow({
         </div>
       </TableCell>
       <TableCell
-        className={`${TRANSFERS_ROW.cell} text-xs whitespace-nowrap`}
+        className={`${cellClass} text-xs whitespace-nowrap`}
         title={task.has_next_step ? nextStepLabel(task.next_operation_name, task.next_section_name) : undefined}
       >
         {task.has_next_step ? (
@@ -417,7 +445,7 @@ function ReadyTransferRow({
         )}
       </TableCell>
       {!bulkMode && (
-        <TableCell className={TRANSFERS_ROW.cell} onClick={(e) => e.stopPropagation()}>
+        <TableCell className={cellClass} onClick={(e) => e.stopPropagation()}>
           <div className="flex items-center justify-end gap-2">
             <div className="flex items-center gap-1">
               <Input
@@ -485,7 +513,7 @@ function ReadyTransferRow({
           </div>
         </TableCell>
       )}
-      <TableCornerResetCell />
+      <TableCornerResetCell className={TABLE_ROW_STYLES.groupHeaderCell} />
     </TableRow>
   );
 }
@@ -520,6 +548,10 @@ function ReadyTransferGroupRow({
     setQuantity(fmtQty(group.totalTransferable));
   }, [group.totalTransferable]);
 
+  // Ячейка шапки блока: рёбра на ячейках, а не на `<tr>` — одно правило
+  // с доской участка и остатками (ADR-0065).
+  const groupHeaderCellClass = cn(TRANSFERS_ROW.cell, TABLE_ROW_STYLES.groupHeaderCell);
+
   const { common } = group;
   const qtyNum = parseFloat(quantity || "0");
   const overLimit = Math.round(qtyNum * 1000) > Math.round(group.totalTransferable * 1000);
@@ -538,13 +570,19 @@ function ReadyTransferGroupRow({
     <TableRow
       data-row-kind="ready-group"
       style={{ height: TRANSFERS_ROW.rowHeightPx }}
-      className={`border-y border-border/60 bg-muted/50 font-semibold hover:bg-muted ${
-        bulkMode ? "" : "cursor-pointer"
-      }`}
+      className={cn(
+        "font-semibold",
+        bulkMode ? "" : "cursor-pointer",
+        TABLE_ROW_STYLES.defaultGroupHeader,
+      )}
       onClick={bulkMode ? undefined : onToggleCollapse}
     >
-      {bulkMode && <TableCell className={`${TRANSFERS_ROW.cell} w-[40px]`} />}
-      <TableCell className={`${TRANSFERS_ROW.cell} text-center`}>
+      {bulkMode && (
+        <TableCell
+          className={cn(TRANSFERS_ROW.cell, TABLE_ROW_STYLES.groupHeaderCell, TABLE_ROW_STYLES.blockRail, "w-[40px]")}
+        />
+      )}
+      <TableCell className={cn(groupHeaderCellClass, TABLE_ROW_STYLES.blockRail, "text-center")}>
         <button
           className="p-1 hover:bg-muted rounded transition-colors text-muted-foreground"
           title={bulkMode ? "Группа раскрыта для ручного выбора" : isCollapsed ? "Раскрыть" : "Скрыть"}
@@ -561,7 +599,7 @@ function ReadyTransferGroupRow({
           )}
         </button>
       </TableCell>
-      <TableCell className={TRANSFERS_ROW.cell}>
+      <TableCell className={groupHeaderCellClass}>
         <div className="flex items-center gap-2">
           <span>{group.productSku ?? "—"}</span>
           <Badge variant="secondary" className="font-bold">
@@ -569,13 +607,13 @@ function ReadyTransferGroupRow({
           </Badge>
         </div>
       </TableCell>
-      <TableCell className={`${TRANSFERS_ROW.cell} text-xs text-muted-foreground whitespace-nowrap`}>
+      <TableCell className={cn(groupHeaderCellClass, "text-xs text-muted-foreground whitespace-nowrap")}>
         {common.dimensionsLabel ?? "—"}
       </TableCell>
-      <TableCell className={`${TRANSFERS_ROW.cell} text-xs whitespace-nowrap`}>
+      <TableCell className={cn(groupHeaderCellClass, "text-xs whitespace-nowrap")}>
         {common.operationName ?? "—"}
       </TableCell>
-      <TableCell className={`${TRANSFERS_ROW.cell} text-right tabular-nums`}>
+      <TableCell className={cn(groupHeaderCellClass, "text-right tabular-nums")}>
         {/* Как у одиночной строки: в «К передаче» — текст, редактируемое поле —
             в «Действиях». Сумма по группе, распределяется по строкам. */}
         <div className="whitespace-nowrap">
@@ -586,7 +624,7 @@ function ReadyTransferGroupRow({
         </div>
       </TableCell>
       <TableCell
-        className={`${TRANSFERS_ROW.cell} text-xs whitespace-nowrap`}
+        className={cn(groupHeaderCellClass, "text-xs whitespace-nowrap")}
         title={group.hasNextStep ? nextStepLabel(common.nextOperationName, common.nextSectionName) : undefined}
       >
         {group.hasNextStep ? (
@@ -596,7 +634,7 @@ function ReadyTransferGroupRow({
         )}
       </TableCell>
       {!bulkMode && (
-        <TableCell className={TRANSFERS_ROW.cell} onClick={(e) => e.stopPropagation()}>
+        <TableCell className={groupHeaderCellClass} onClick={(e) => e.stopPropagation()}>
           <div className="flex items-center justify-end gap-2">
             <div className="flex items-center gap-1">
               <Input
@@ -641,7 +679,7 @@ function ReadyTransferGroupRow({
   );
 }
 
-const headerCellClass = cn(DATA_TABLE_STYLES.headerRow, DATA_TABLE_STYLES.headerCell, TABLE_ROW_COMPACT.headerCell);
+const groupHeaderCellClass = cn(DATA_TABLE_STYLES.headerRow, DATA_TABLE_STYLES.headerCell, TABLE_ROW_COMPACT.headerCell);
 
 export function TransfersPage() {
   const queryClient = useQueryClient();
@@ -877,17 +915,29 @@ export function TransfersPage() {
     if (readySortingActive) {
       // Порядок пришёл с сервера и уже отсортирован по выбранной колонке —
       // рендерим строки заданий как есть, без перегруппировки.
-      return readyItems.map((task) => ({ kind: "task" as const, task, groupKey: null }));
+      return readyItems.map((task) => ({
+        kind: "task" as const,
+        task,
+        groupKey: null,
+        isLastInGroup: false,
+      }));
     }
     const rows: ReadyTableRow[] = [];
     for (const item of readyGroupItems) {
       if (item.kind === "single") {
-        rows.push({ kind: "task", task: item.row, groupKey: null });
+        rows.push({ kind: "task", task: item.row, groupKey: null, isLastInGroup: false });
         continue;
       }
       rows.push({ kind: "group", group: item });
       if (bulkMode || expandedGroupKeys.has(item.key)) {
-        for (const task of item.rows) rows.push({ kind: "task", task, groupKey: item.key });
+        item.rows.forEach((task, index) => {
+          rows.push({
+            kind: "task",
+            task,
+            groupKey: item.key,
+            isLastInGroup: index === item.rows.length - 1,
+          });
+        });
       }
     }
     return rows;
@@ -1231,7 +1281,7 @@ export function TransfersPage() {
               <TableHeader>
                 <TableRow>
                   {bulkMode && (
-                    <TableHead className={`${headerCellClass} w-[40px]`}>
+                    <TableHead className={`${groupHeaderCellClass} w-[40px]`}>
                       <Checkbox
                         checked={bulkSelection.isAllSelected(
                           readyItems.filter((t) => !isFinalReadyRow(t)).map((t) => t.task_id),
@@ -1251,7 +1301,7 @@ export function TransfersPage() {
                   {readyColumns.map((column) => (
                     <TableHead
                       key={column.id}
-                      className={`${headerCellClass} p-0${column.id === "transferableQty" ? " text-right" : ""}`}
+                      className={`${groupHeaderCellClass} p-0${column.id === "transferableQty" ? " text-right" : ""}`}
                       aria-sort={column.sortField ? getAriaSort(readySortConfigs, column.sortField) : undefined}
                     >
                       <DataTableColumnHeader
@@ -1264,7 +1314,7 @@ export function TransfersPage() {
                     </TableHead>
                   ))}
                   {!bulkMode && (
-                    <TableHead className={headerCellClass}>
+                    <TableHead className={groupHeaderCellClass}>
                       Действия
                     </TableHead>
                   )}
@@ -1322,6 +1372,8 @@ export function TransfersPage() {
                         bulkMode={bulkMode}
                         isSelected={bulkSelection.isSelected(row.task.task_id)}
                         onSelect={() => bulkSelection.selectOne(row.task.task_id)}
+                        isInGroup={row.groupKey != null}
+                        isLastInGroup={row.isLastInGroup}
                         isSubmitting={
                           isTransferInFlight(row.task.task_id) ||
                           (row.groupKey != null && groupSubmittingKey === row.groupKey)
@@ -1399,7 +1451,7 @@ export function TransfersPage() {
                         {historyColumns.map((column) => (
                           <TableHead
                             key={column.id}
-                            className={`${headerCellClass} p-0 ${column.headerClassName ?? ""}`}
+                            className={`${groupHeaderCellClass} p-0 ${column.headerClassName ?? ""}`}
                             aria-sort={column.sortField ? getAriaSort(historySortConfigs, column.sortField) : undefined}
                           >
                             <DataTableColumnHeader
