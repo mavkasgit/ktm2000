@@ -3,6 +3,7 @@ from __future__ import annotations
 import logging
 from dataclasses import dataclass, field
 from datetime import datetime
+from typing import TYPE_CHECKING
 
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -25,6 +26,9 @@ from app.services.route_selection import (
     select_route_for_payload,
 )
 from app.services.route_signature import auto_route_code, route_signature_conflicts
+
+if TYPE_CHECKING:  # pragma: no cover — импорт только для аннотаций
+    from app.services.position_route_batch import PositionRouteBatchCache
 
 logger = logging.getLogger(__name__)
 
@@ -116,6 +120,31 @@ def _payload_for_dynamic_build(position: PlanPosition) -> dict:
     return payload
 
 
+def _product_for_build(
+    position: PlanPosition,
+    batch: PositionRouteBatchCache | None,
+) -> Product | None:
+    """Продукт позиции для динамической сборки — из снимка, если он есть.
+
+    Повторяет выбор ``build_route_from_profile``: сначала ``product_id``
+    позиции, потом ``product_id`` из payload (путь предпросмотра). Без
+    снимка возвращается ``None``, и сборщик сам идёт в БД, как раньше.
+    """
+    if batch is None:
+        return None
+    if position.product_id:
+        return batch.products_by_id.get(position.product_id)
+    raw = (position.source_payload or {}).get("product_id")
+    if raw:
+        try:
+            return batch.products_by_id.get(int(raw))
+        except (TypeError, ValueError):
+            # Нечисловой product_id: сборщик упал бы на том же int() — пусть
+            # упадёт и здесь, отработает тот же широкий перехват вызывающего.
+            return None
+    return None
+
+
 async def _resolve_route_id_for_dynamic_name(
     db: AsyncSession,
     *,
@@ -123,6 +152,7 @@ async def _resolve_route_id_for_dynamic_name(
     built_signature: str = "",
     stored_route_id: int | None,
     route_cache: dict | None = None,
+    batch: PositionRouteBatchCache | None = None,
 ) -> int | None:
     """`route_id` позиции по пересобранному маршруту; `None` — не нашли.
 
@@ -165,21 +195,27 @@ async def _resolve_route_id_for_dynamic_name(
             return route.id
     built_code = auto_route_code(built_signature)
     if built_code is not None:
-        matched = await find_route_by_code(db, built_code, only_active=True)
+        if batch is not None:
+            matched = batch.route_by_code.get(built_code)
+        else:
+            matched = await find_route_by_code(db, built_code, only_active=True)
         if matched is not None:
             # Код — производная сигнатуры, но пересчёт сигнатуры код не
             # обновляет (`refresh_route_signature`), поэтому маршрут,
             # переписанный руками, сохраняет старый `auto-`-код. Сверка
             # обязательна и здесь, как в импорте (ADR-0051 п.4): иначе
             # позиция получила бы маршрут чужого состава с error=None.
-            if await route_signature_conflicts(db, matched, built_signature):
+            if await _signature_conflicts_cached(db, matched, built_signature, batch):
                 raise RouteSignatureConflict(matched.id)
             return matched.id
     # Fallback по имени — только среди строк без кода (ADR-0051 п. 6), и
     # порядок тот же, что у сида и импорта: самый старый.
-    legacy = await find_route_by_name(
-        db, built_name, legacy_name_only=True, only_active=True
-    )
+    if batch is not None:
+        legacy = batch.legacy_route_by_name.get(built_name)
+    else:
+        legacy = await find_route_by_name(
+            db, built_name, legacy_name_only=True, only_active=True
+        )
     if legacy is not None:
         return legacy.id
     if stored_route_id is not None:
@@ -199,6 +235,27 @@ async def _cached_route(
     if route_cache is not None:
         route_cache[route_id] = route
     return route
+
+
+async def _signature_conflicts_cached(
+    db: AsyncSession,
+    route: ProductionRoute,
+    expected_signature: str,
+    batch: PositionRouteBatchCache | None,
+) -> bool:
+    """Сверка сигнатуры маршрута: из снимка батча, иначе старый поштучный путь.
+
+    Снимок наполняется только для маршрутов без сохранённой сигнатуры —
+    ровно тех, ради которых ``route_signature_conflicts`` читает этапы.
+    Всё остальное уходит в исходную функцию: батч-путь не должен стать
+    вторым определением сверки.
+    """
+    if batch is not None and route.id in batch.signatures_by_route:
+        if not expected_signature:
+            return False
+        actual = batch.signatures_by_route[route.id]
+        return actual is not None and actual != expected_signature
+    return await route_signature_conflicts(db, route, expected_signature)
 
 
 def make_position_route_cache_key(position: PlanPosition) -> tuple:
@@ -231,8 +288,15 @@ async def resolve_position_route(
     position: PlanPosition,
     *,
     route_cache: dict | None = None,
+    batch: PositionRouteBatchCache | None = None,
 ) -> ResolvedRouteInfo:
-    """Resolve route strictly from manual override + canonical position fields."""
+    """Resolve route strictly from manual override + canonical position fields.
+
+    ``batch`` — снимок данных на список позиций (см.
+    :mod:`app.services.position_route_batch`): с ним резолв не ходит в БД
+    по одной позиции. Без снимка поведение прежнее, построчное: все
+    обращения к справочникам идут через параметр ``batch is None``.
+    """
     route_id = position.route_id
     origin = _normalize_origin(position.route_origin)
     quality = _normalize_quality(position.route_match_quality)
@@ -273,11 +337,21 @@ async def resolve_position_route(
 
     # Dynamic profile: rebuild route name from payload (same logic as import preview).
     if position.route_profile_id is not None:
-        profile = await db.get(RouteRuleProfile, position.route_profile_id)
+        if batch is not None:
+            profile = batch.profiles_by_id.get(position.route_profile_id)
+        else:
+            profile = await db.get(RouteRuleProfile, position.route_profile_id)
         if profile is not None and profile.route_sections:
             try:
                 payload = _payload_for_dynamic_build(position)
-                built_route = await build_route_from_profile(db, profile, payload, position)
+                built_route = await build_route_from_profile(
+                    db,
+                    profile,
+                    payload,
+                    position,
+                    product=_product_for_build(position, batch),
+                    batch=batch.build_caches.get(profile.id) if batch is not None else None,
+                )
 
                 if not built_route.error and built_route.name:
                     try:
@@ -287,6 +361,7 @@ async def resolve_position_route(
                             built_signature=built_route.signature,
                             stored_route_id=route_id,
                             route_cache=route_cache,
+                            batch=batch,
                         )
                     except RouteSignatureConflict:
                         # Маршрут с этим кодом переписан руками: подставлять
@@ -366,15 +441,33 @@ async def resolve_position_route(
         )
 
     # No stored route_id - try to resolve from source_payload
-    import_batch = await db.get(ImportBatch, position.import_batch_id) if position.import_batch_id is not None else None
+    import_batch = None
+    if position.import_batch_id is not None:
+        if batch is not None:
+            import_batch = batch.import_batches_by_id.get(position.import_batch_id)
+        else:
+            import_batch = await db.get(ImportBatch, position.import_batch_id)
     rule_profile_id = import_batch.rule_profile_id if import_batch is not None else None
 
-    product = (
-        await db.execute(
-            select(Product).options(selectinload(Product.processing_flags)).where(Product.id == position.product_id)
+    if batch is not None:
+        product = (
+            batch.products_by_id.get(position.product_id)
+            if position.product_id is not None
+            else None
         )
-    ).scalar_one_or_none() if position.product_id is not None else None
-    selection = await select_route_for_payload(db, position.source_payload, product, profile_id=rule_profile_id)
+    else:
+        product = (
+            await db.execute(
+                select(Product).options(selectinload(Product.processing_flags)).where(Product.id == position.product_id)
+            )
+        ).scalar_one_or_none() if position.product_id is not None else None
+    selection = await select_route_for_payload(
+        db,
+        position.source_payload,
+        product,
+        profile_id=rule_profile_id,
+        batch_cache=batch.selection_caches.get(rule_profile_id) if batch is not None else None,
+    )
     if selection.route is None:
         return ResolvedRouteInfo(
             route_id=None,

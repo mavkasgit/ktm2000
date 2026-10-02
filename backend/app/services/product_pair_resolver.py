@@ -28,7 +28,7 @@ N пары — единая механика с одиночными норма�
 
 from __future__ import annotations
 
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from typing import Literal
 
 from sqlalchemy import select
@@ -113,13 +113,108 @@ def pair_component_key(component_skus: list[str]) -> tuple[str, ...]:
     return tuple(sorted(s for s in (_normalize_sku(sku) for sku in component_skus) if s))
 
 
+def effective_product_ids_key(position) -> tuple:
+    """Ключ кэша «все продукты позиции» — нормализованная идентичность.
+
+    Не сырой payload: три исхода различаются по природе (свой
+    ``product_id``, снапшот пары, компоненты SKU), и только последний
+    приводит к запросу. Ключ отражает именно вход резолва, поэтому два
+    вызова одной позиции и две позиции с одинаковым входом делят один
+    результат, а разные входы не делят.
+    """
+    from app.services.position_route_batch import freeze_identity_value
+
+    if position.product_id is not None:
+        return ("single", int(position.product_id))
+    snapshot = pair_snapshot(position.source_payload)
+    if snapshot is not None:
+        return ("snapshot", freeze_identity_value(snapshot))
+    return ("pair", pair_component_key(paired_component_skus(position)))
+
+
+@dataclass(slots=True)
+class PairResolutionCache:
+    """Кэш резолва пар на один HTTP-запрос (#292).
+
+    Закрывает второй раздатчик N+1: ``_resolve_effective_product_ids`` идёт
+    по списку позиций, и на каждой парной позиции без снапшота тянул
+    ``SELECT *`` по ``product_pairs`` и ``products``. Здесь справочник
+    читается один раз, а позиции, которые не резолвятся в пару вовсе,
+    больше не стоят запроса: отрицательный ответ тоже кэшируется.
+
+    Живёт на время одного запроса и переиспользуется вызывающей стороной:
+    создаёт его обработчик, передаёт в ``resolve_effective_product_ids``
+    параметром ``cache``. Привязан к сессии батча — как и прочие снимки
+    этого репозитория.
+    """
+
+    _index: dict[frozenset[str], ResolvedPair] | None = None
+    _resolved: dict[frozenset[str], ResolvedPair | None] = field(default_factory=dict)
+    effective_product_ids: dict[tuple, list[int]] = field(default_factory=dict)
+
+    async def resolve_pair(
+        self, db: AsyncSession, normalized: frozenset[str]
+    ) -> ResolvedPair | None:
+        """Пара по нормализованным SKU компонентов — из кэша или справочника."""
+        if normalized in self._resolved:
+            return self._resolved[normalized]
+        if self._index is None:
+            self._index = await _load_pair_index(db)
+        resolved = self._index.get(normalized)
+        self._resolved[normalized] = resolved
+        return resolved
+
+
+async def _load_pair_index(db: AsyncSession) -> dict[frozenset[str], ResolvedPair]:
+    """Справочник пар целиком: нормализованные SKU компонентов → ResolvedPair.
+
+    Два запроса вместо двух на каждую позицию. Порядок обхода строк —
+    тот же, что в поштучном поиске, поэтому при нескольких парах с
+    одинаковыми SKU побеждает та же, что и раньше.
+    """
+    pairs = (await db.execute(select(ProductPair))).scalars().all()
+    if not pairs:
+        return {}
+    product_ids = {pid for pair in pairs for pid in (pair.product_a_id, pair.product_b_id)}
+    products = (
+        await db.execute(select(Product).where(Product.id.in_(product_ids)))
+    ).scalars().all()
+    skus_by_id = {p.id: p.sku for p in products}
+    products_by_id = {p.id: p for p in products}
+    index: dict[frozenset[str], ResolvedPair] = {}
+    for pair in pairs:
+        sku_a = skus_by_id.get(pair.product_a_id)
+        sku_b = skus_by_id.get(pair.product_b_id)
+        if sku_a is None or sku_b is None:
+            continue
+        key = frozenset({_normalize_sku(sku_a), _normalize_sku(sku_b)})
+        if key in index:
+            continue
+        index[key] = ResolvedPair(
+            pair=pair,
+            product_a=products_by_id[pair.product_a_id],
+            product_b=products_by_id[pair.product_b_id],
+        )
+    return index
+
+
 async def resolve_pair_by_component_skus(
-    db: AsyncSession, component_skus: list[str]
+    db: AsyncSession,
+    component_skus: list[str],
+    *,
+    cache: PairResolutionCache | None = None,
 ) -> ResolvedPair | None:
-    """Найти пару по двум SKU-компонентам (точное неупорядоченное совпадение)."""
+    """Найти пару по двум SKU-компонентам (точное неупорядоченное совпадение).
+
+    С ``cache`` справочник пар читается один раз на запрос, а позиции без
+    пары (в том числе повторные) не стоят ни одного SQL. Без кэша путь
+    прежний, поштучный.
+    """
     normalized = {_normalize_sku(sku) for sku in component_skus if _normalize_sku(sku)}
     if len(normalized) != 2:
         return None
+    if cache is not None:
+        return await cache.resolve_pair(db, frozenset(normalized))
 
     pairs = (await db.execute(select(ProductPair))).scalars().all()
     if not pairs:
@@ -147,7 +242,10 @@ async def resolve_pair_by_component_skus(
 
 
 async def resolve_effective_product_ids(
-    db: AsyncSession, position
+    db: AsyncSession,
+    position,
+    *,
+    cache: PairResolutionCache | None = None,
 ) -> list[int]:
     """Все продукты позиции плана (#148): одиночная — один, парная — оба.
 
@@ -156,7 +254,30 @@ async def resolve_effective_product_ids(
     резолвером — product_a, product_b), пару справочник не переинтерпретирует
     (#142); без снапшота — резолв пары из ``product_pairs`` →
     ``[product_a_id, product_b_id]``. Пустой список — продукт не резолвится.
+
+    С ``cache`` (один на HTTP-запрос, #292) результат кэшируется по
+    нормализованной идентичности позиции: повторная позиция — и позиция
+    без пары — не дают SQL. Возвращается копия: кэш общий, а список у
+    вызывающего должен остаться его собственным.
     """
+    if cache is None:
+        return await _resolve_effective_product_ids(db, position)
+    key = effective_product_ids_key(position)
+    cached = cache.effective_product_ids.get(key)
+    if cached is not None:
+        return list(cached)
+    resolved_ids = await _resolve_effective_product_ids(db, position, cache=cache)
+    cache.effective_product_ids[key] = list(resolved_ids)
+    return resolved_ids
+
+
+async def _resolve_effective_product_ids(
+    db: AsyncSession,
+    position,
+    *,
+    cache: PairResolutionCache | None = None,
+) -> list[int]:
+    """Разрешение без кэша — тело, общее для обоих путей."""
     if position.product_id is not None:
         return [position.product_id]
 
@@ -168,7 +289,9 @@ async def resolve_effective_product_ids(
             if isinstance(item, dict) and item.get("product_id")
         ]
 
-    resolved = await resolve_pair_by_component_skus(db, paired_component_skus(position))
+    resolved = await resolve_pair_by_component_skus(
+        db, paired_component_skus(position), cache=cache
+    )
     if resolved is None:
         return []
     return [resolved.pair.product_a_id, resolved.pair.product_b_id]
