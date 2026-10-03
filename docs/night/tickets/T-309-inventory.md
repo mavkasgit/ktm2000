@@ -234,3 +234,58 @@
   сохраняется без правок теста.
 
 Тикет #309 не закрыт.
+
+---
+
+## 9. Реализовано без мержа среза A (коммит 3f9b58f)
+
+### `features/reversal/lib/actionColumns.ts` (новый, 119 строк)
+
+- `ActionFilterField = "actionType" | "status"`; `ActionColumn = ColumnSpec<ActionFilterField> & { id; label; headerClassName? }` — форма `auditColumns.ts`.
+- 7 колонок: `id / actionType / object / actor / status / createdAt / operations`.
+- `filterField` + `apiParam` только у `actionType` → `action_type` и `status` → `status`; у обеих `exactMatch: true` (оператор выбирает значение из списка, а не ищет подстроку, и поиск в попапере не зажигает счётчик).
+- `sortField` не объявлен ни у одной колонки.
+- `valueLabel`: `actionTypeLabel` (через `actionJournalLabels`) и `statusLabel` («Активно / Отменено / Изменено / Очищено»); обе возвращают неизвестное значение как есть — этот случай держат `ActionsJournalPage.test.tsx:97,176`.
+- `getActionTone(status)`: `active→active`, `amended→activeRunning`, `reversed→completed`, `purged→waiting`, неизвестный → `plain`.
+- Колонка «Операции» объявлена без `filterField`, чтобы `map` по шапке её не потерял.
+
+
+### `JournalRowOperations.tsx` (27 строк изменено)
+
+- Три кнопки: `size="sm"` (h-9 = 36px) убран, добавлен `className={TABLE_ROW_DENSE.actionButton}` (`h-6 px-2 text-xs`) — строка 32px больше не растёт от кнопки (ADR-0030).
+- Иконки `h-4 w-4` → `h-3.5 w-3.5` под кнопку 24px.
+- `actionJournalLabels[action.action_type] ?? action.action_type` в `title` кнопки «Изменить» заменён на `actionTypeLabel(...)` — подпись типа теперь одна.
+- Контракт не тронут: `tree-button-{id}`, `reverse-button-{id}`, `amend-button-{id}`, `tree-dialog`, логика прав (`POLICIES.rollbackImport`, `canReverse`, `canAmend`) без изменений.
+
+
+### `actionColumns.test.ts` (новый, 5 тестов)
+
+
+Проверяет поведение, а не проводку: фильтр объявлен ровно у двух колонок с
+правильными `apiParam`; `sortField` нет ни у одной; `buildColumnApiParams`
+собирает `{ action_type, status }`; неизвестные тип и статус печатаются как есть;
+тон по всем четырём статусам плюс `plain` для неизвестного.
+
+### Числа после правок
+
+| Прогон | Было | Стало |
+|--------|------|-------|
+| `npm --prefix frontend run test` | 156 passed \| 1 skipped (157); 1291 passed \| 1 skipped (1292) | **157 passed \| 1 skipped (158); 1296 passed \| 1 skipped (1297)**; 62.80 s |
+| `npx vitest run src/features/reversal` | 5 files / 28 tests | **6 files / 33 tests**; 8.71 s |
+| `npx tsc -p tsconfig.json --noEmit` | 0 ошибок | **0 ошибок**, exit 0; 15.96 s |
+
+Прирост ровно на новый файл спеки: +1 file, +5 tests. `ActionsJournalPage.test.tsx`
+не редактировался — его 8 тестов зелёные.
+
+ESLint в репозитории не настроен (`frontend` без `eslint.config.*`, exit 2) —
+прогнать нечем; tsc и vitest покрывают проверку.
+
+### Про панель фильтров — решение зафиксировано
+
+`shared/ui/FiltersPanel.tsx` не тронут (чужая зона). У поля `kind: "select"` нет
+`data-testid` — ни в типе (`FiltersPanel.tsx:131-139`), ни в разметке. Контракт
+`filter-type` / `filter-status` держится на собственных `<Select>` страницы.
+Выбран эскап: `FiltersPanel` получает `kind: "custom"` с узлом
+`<Select data-testid="filter-type" …>` (образец — `TransfersPage.tsx:1323`,
+`SectionTasksBoard.tsx:1233`). Так контракт селекторов сохраняется без единой
+правки чужого файла.
