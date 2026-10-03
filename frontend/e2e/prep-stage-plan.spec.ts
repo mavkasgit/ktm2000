@@ -126,8 +126,12 @@ test.describe("@ui План подготовительного участка: �
     // Старт любого подготовительного маршрута — RAW_STOCK: без остатка
     // первая выдача сырья не проходит и цикл передач не начинается.
     const rawStock = await apiGetSectionByCode("RAW_STOCK");
+    // Длина — в ММ, как в каталоге и в остальных спеках (`single-line-cycle`
+    // передаёт `NORMAL_LENGTH_MM`, а не метры). Остаток с неверной длиной не
+    // совпадает с габаритом позиции, и выдача на первый участок не проходит:
+    // задание остаётся `0/300`.
     await apiAddRemainder(product.id, rawStock.id, 600, "E2E остаток подготовки", {
-      length_mm: NORMAL_LENGTH_MM / 1000,
+      length_mm: NORMAL_LENGTH_MM,
     });
     console.log("[step2] остаток на складе сырья готов");
 
