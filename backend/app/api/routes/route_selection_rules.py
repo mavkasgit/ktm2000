@@ -332,39 +332,19 @@ async def _rule_out(
 ) -> RouteSelectionRuleOut:
     """Отдать правило; справочники берутся из ``prefetch``, если он задан.
 
-    Без снимка поведение прежнее: правило читает справочники само (так
-    работают одиночные вызовы — создание, правка, одно правило).
+    Без снимка справочники читаются один раз на это правило — столько же,
+    сколько стоил поштучный обход, поэтому одиночные вызовы (создание,
+    правка, одно правило) не дорожают и не делят код выдачи со списком.
     """
-    if prefetch is not None:
-        sections = {
-            int(action.get("section_id")): prefetch.sections_by_id[int(action.get("section_id"))]
-            for action in (rule.actions or [])
-            if action.get("section_id") is not None
-            and int(action.get("section_id")) in prefetch.sections_by_id
-        }
-        section_ops = prefetch.ops_by_section
-    else:
-        section_ids = {
-            int(action.get("section_id"))
-            for action in (rule.actions or [])
-            if action.get("section_id") is not None
-        }
-        sections = {}
-        if section_ids:
-            rows = (await db.execute(select(Section).where(Section.id.in_(section_ids)))).scalars().all()
-            sections = {section.id: section for section in rows}
-
-        # Load section operations for set_operation actions
-        from app.models.route import SectionOperation
-        section_ops: dict[int, dict[str, str]] = {}  # section_id -> {op_code -> op_name}
-        for action in (rule.actions or []):
-            sid = action.get("section_id")
-            op_code = action.get("operation_code")
-            if sid and op_code and sid not in section_ops:
-                ops = (await db.execute(
-                    select(SectionOperation).where(SectionOperation.section_id == sid)
-                )).scalars().all()
-                section_ops[sid] = {o.operation_code: o.operation_name for o in ops}
+    if prefetch is None:
+        prefetch = await _load_rule_out_prefetch(db, [rule])
+    sections = {
+        int(action.get("section_id")): prefetch.sections_by_id[int(action.get("section_id"))]
+        for action in (rule.actions or [])
+        if action.get("section_id") is not None
+        and int(action.get("section_id")) in prefetch.sections_by_id
+    }
+    section_ops = prefetch.ops_by_section
 
     actions = []
     for action in rule.actions or []:
@@ -391,11 +371,7 @@ async def _rule_out(
     profile_code = None
     profile_name = None
     if rule.profile_id is not None:
-        profile = (
-            prefetch.profiles_by_id.get(int(rule.profile_id))
-            if prefetch is not None
-            else await db.get(RouteRuleProfile, rule.profile_id)
-        )
+        profile = prefetch.profiles_by_id.get(int(rule.profile_id))
         if profile:
             profile_code = profile.code
             profile_name = profile.name

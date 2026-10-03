@@ -553,9 +553,15 @@ async def get_section_board(
         )
 
         # Прогресс по каждому выходу и списанный вход для UI пилы.
+        # Гейт — по МАРКЕРУ ЭТАПА, а не по наличию задания в карте: карта
+        # батча (#293) шире выдачи — в неё входят и задания с
+        # `input_quantity` без `transforms_dimensions` (они нужны синхронизации
+        # статусов), и без маркера этапа карточка выходов не выдаётся.
         outputs_progress = None
         input_consumed_quantity = None
-        if task.id in transform_progress_map or (stage.transforms_dimensions and task_outputs):
+        if stage.transforms_dimensions and (
+            task.id in transform_progress_map or task_outputs
+        ):
             progress = transform_progress_map.get(task.id)
             produced_by_group = progress.produced_by_group if progress else {}
             rows_by_output = build_output_rows(
