@@ -33,6 +33,37 @@ ROUTE_RULE_PROFILES = [
             "synced_at": "2026-05-17T07:35:39.151Z",
         },
     },
+    {
+        # План подготовительного участка (#313): RAW_STOCK → участки подготовки
+        # → PREP_STOCK. `route_sections` — СУПЕРСЕТСТВО всех трёх вариантов:
+        # сверло+дробеструй, пресс+дробеструй, чистый дробеструй. Конкретный
+        # вариант собирают правила `route_select` фазы (`selection_rules.py`),
+        # снимая лишние участки через `exclude_section`.
+        #
+        # Один профиль, а не три: `imports.py::_resolve_template_context` берёт
+        # РОВНО один профиль на шаблон (`.limit(1)`), поэтому три профиля на
+        # одном шаблоне означали бы, что два из них никогда не участвуют в
+        # импорте. Различия вариантов живут в данных правил, а не в профилях.
+        "code": "prep_stage_plan",
+        "name": "План подготовительного участка",
+        "is_active": True,
+        "priority": 900,
+        "route_name_pattern": "{operations} - {shot_op}",
+        "import_template_code": "plan_prep_stage",
+        "route_sections": ["RAW_STOCK", "DRILLING", "PRESSING", "SHOT_BLAST", "PREP_STOCK"],
+        "excel_column_passport": [
+            {"index": 1, "header": "Артикул", "letter": "A", "field_path": "sku"},
+            {"index": 2, "header": "Наименование", "letter": "B", "field_path": "product_name"},
+            {"index": 3, "header": "Цвет", "letter": "C", "field_path": "color"},
+            {"index": 4, "header": "Операция", "letter": "D", "field_path": "operation"},
+            {"index": 5, "header": "Кол-во, шт", "letter": "E", "field_path": "quantity"},
+            {"index": 6, "header": "Примечание", "letter": "F", "field_path": "note"},
+        ],
+        "excel_passport_meta": {
+            "source": "import_template",
+            "synced_at": "2026-10-03T00:00:00.000Z",
+        },
+    },
 ]
 
 # field_map для table-driven upsert (ADR-0010): ORM-атрибут → ключ в строке.
