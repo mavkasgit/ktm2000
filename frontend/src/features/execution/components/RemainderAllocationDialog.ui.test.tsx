@@ -119,15 +119,40 @@ describe("RemainderAllocationDialog: выбор источника (#314)", () =
     const onConfirm = vi.fn();
     await mount(onConfirm);
 
-    // Предвыбран «Склад подготовки» — там 40 шт., план тоже 40: совпадение.
     // Сырьё — 500 шт. при плане 40: отдать 500 нельзя, материал возьмут
-    // столько, сколько нужно на запуск.
+    // столько, сколько нужно на запуск. Выбор сделан явно, иначе предвыбор
+    // был бы подсветкой, а не решением оператора.
+    const raw = document.querySelector<HTMLInputElement>(
+      'input[aria-label="Источник: Склад сырья, операций 0"]',
+    );
+    expect(raw).not.toBeNull();
+    await act(async () => {
+      raw!.click();
+    });
+
     const button = [...document.querySelectorAll("button")].find((b) =>
       b.textContent?.includes("Запустить в работу"),
     );
     await act(async () => {
       button!.click();
     });
-    expect(onConfirm).toHaveBeenCalledWith(false, [{ balance_id: 22, quantity: 40 }]);
+    expect(onConfirm).toHaveBeenCalledWith(false, [{ balance_id: 11, quantity: 40 }]);
+  });
+
+  it("предвыбор без явного выбора источника не выдаёт материал заранее", async () => {
+    const onConfirm = vi.fn();
+    await mount(onConfirm);
+
+    // Решение владельца: предвыбор — подсветка первой строки порядка, а не
+    // команда на выдачу. Без явного выбора запускаем без источника, материал
+    // уходит обычной передачей — иначе ломается двухшаговый ритуал передачи.
+    const button = [...document.querySelectorAll("button")].find((b) =>
+      b.textContent?.includes("Запустить в работу"),
+    );
+    expect(button).toBeDefined();
+    await act(async () => {
+      button!.click();
+    });
+    expect(onConfirm).toHaveBeenCalledWith(false, null);
   });
 });

@@ -153,11 +153,18 @@ export function RemainderAllocationDialog({
   // источника можно (материал выдадут позже), молча подставлять первый
   // остаток вместо явного выбора — нельзя.
   const [selectedBalanceId, setSelectedBalanceId] = useState<number | null>(null);
+  // Предвыбор — подсветка первой строки порядка, а не решение оператора
+  // (#314, решение владельца): без явного выбора источника поведение прежнее,
+  // материал ждёт обычной передачи. Поэтому выдача при запуске отправляется
+  // только когда оператор тронул выбор, и preselect не превращается в
+  // TRANSFER_SEND сам по себе.
+  const [explicitChoice, setExplicitChoice] = useState(false);
   const planQty = Math.round(releaseQuantity);
 
   useEffect(() => {
     if (!open) {
       setBalances([]);
+      setExplicitChoice(false);
       setError(null);
       return;
     }
@@ -333,7 +340,10 @@ export function RemainderAllocationDialog({
                               className={`border-b border-border/50 last:border-0 cursor-pointer ${
                                 selected ? "bg-primary/5" : ""
                               }`}
-                              onClick={() => setSelectedBalanceId(row.balanceId)}
+                              onClick={() => {
+                                setSelectedBalanceId(row.balanceId);
+                                setExplicitChoice(true);
+                              }}
                               data-testid={`source-row-${row.balanceId}`}
                               aria-selected={selected}
                             >
@@ -343,7 +353,10 @@ export function RemainderAllocationDialog({
                                   name="source-balance"
                                   className="accent-primary"
                                   checked={selected}
-                                  onChange={() => setSelectedBalanceId(row.balanceId)}
+                                  onChange={() => {
+                                    setSelectedBalanceId(row.balanceId);
+                                    setExplicitChoice(true);
+                                  }}
                                   aria-label={`Источник: ${row.location}, операций ${row.opsCount}`}
                                 />
                               </td>
@@ -375,7 +388,7 @@ export function RemainderAllocationDialog({
                     </div>
                   )}
                   <p className="text-[11px] text-muted-foreground leading-snug">
-                    {selectedRow
+                    {selectedRow && explicitChoice
                       ? `Выдадим ${fmtQty(Math.min(planQty, selectedRow.qty))} шт. с «${selectedRow.location}». Операций пройдено: ${selectedRow.opsCount} — порядок источников по убыванию операций.`
                       : "Источник не выбран — материал выдадут позже, обычной передачей участку."}
                   </p>
@@ -399,7 +412,7 @@ export function RemainderAllocationDialog({
             onClick={() =>
               onConfirm(
                 false,
-                selectedRow
+                selectedRow && explicitChoice
                   ? [{ balance_id: selectedRow.balanceId, quantity: Math.min(planQty, selectedRow.qty) }]
                   : null,
               )
