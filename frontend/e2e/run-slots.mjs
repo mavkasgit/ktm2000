@@ -104,7 +104,9 @@ export function tryAcquireSlot(dir, max, payload, { alive = isProcessAlive, onRe
     }
     try {
       fs.writeFileSync(file, JSON.stringify(payload), { flag: "wx" });
-      return { index, file };
+      // `pid` в слоте — для `releaseSlot`: он сверяет, что отпускает свой
+      // слот, а не тот, который уже отобран соседу.
+      return { index, file, pid: payload?.pid };
     } catch (err) {
       if (err.code !== "EEXIST") throw err;
     }
@@ -112,8 +114,20 @@ export function tryAcquireSlot(dir, max, payload, { alive = isProcessAlive, onRe
   return null;
 }
 
+/**
+ * Отпускает слот **только если он всё ещё наш**.
+ *
+ * Слот бывает отобран у живого держателя по возрасту (`staleMs`), и новый
+ * прогон занимает тот же файл. Прежний прогон в свой `finally` зовёт
+ * `releaseSlot` для файла, который теперь чужой, — слот исчезает из-под
+ * работающего соседа, и семафор перестаёт считать: следующий занимает его же
+ * (доказано в `docs/night/tickets/R-04.md`). Поэтому сверяем pid держателя.
+ */
 export function releaseSlot(slot) {
-  if (slot?.file) fs.rmSync(slot.file, { force: true });
+  if (!slot?.file) return;
+  const holder = readHolder(slot.file);
+  if (holder && holder.pid !== slot.pid) return;
+  fs.rmSync(slot.file, { force: true });
 }
 
 /** Кто держит слоты — для строки ожидания. */

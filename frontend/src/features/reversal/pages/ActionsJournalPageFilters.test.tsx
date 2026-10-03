@@ -10,6 +10,9 @@ vi.mock("@/features/auth/hooks/useAuth", () => ({ useAuth: vi.fn() }));
 
 import { getActions, type JournalAction } from "@/shared/api/actions";
 import { useAuth, type AuthShellUser } from "@/features/auth/hooks/useAuth";
+import { ROW_TONE_STRIPE, ROW_TONE_WASH } from "@/shared/lib/rowTones";
+import { DATA_TABLE_STYLES, TABLE_ROW_DENSE } from "@/shared/lib/dataTableStyles";
+import { TABLE_CORNER_RESET_TD_CLASS } from "@/shared/ui/TableCornerResetHeader";
 import { ActionsJournalPage } from "./ActionsJournalPage";
 
 /**
@@ -124,5 +127,37 @@ describe("панель фильтров журнала «Отмена дейст
       ),
     );
     await waitFor(() => expect(screen.queryByText(/Активных фильтров/)).toBeNull());
+  });
+});
+
+describe("стиль строк журнала «Отмена действий»", () => {
+  it("строка, ячейки и полоса тона берутся из общего словаря, а не своих классов", async () => {
+    renderPage();
+
+    // Статус `active` — живое, отменяемое действие: тон `active` из словаря.
+    const row = (await screen.findByTestId("action-row-1")) as HTMLElement;
+
+    expect(row.style.height).toBe(`${TABLE_ROW_DENSE.rowHeightPx}px`);
+    expect(row.className).toContain(ROW_TONE_WASH.active);
+
+    // Шапка: три токена, как в «Журнале действий». Возврат своих
+    // `bg-slate-50 uppercase` должен ронять этот файл.
+    const header = row.closest("table")!.querySelector("thead th") as HTMLElement;
+    expect(header.className).toContain(DATA_TABLE_STYLES.headerRow);
+    expect(header.className).toContain(DATA_TABLE_STYLES.headerCell);
+    expect(header.className).toContain(TABLE_ROW_DENSE.headerCell);
+
+    // Ячейки тела: каждая на `TABLE_ROW_DENSE.cell`, полоса тона — на первой.
+    // Полоса именно на ячейке, а не на `<tr>`: таблица на `border-separate`,
+    // и на строке её не видно (это же в комментарии `rowTones.ts`).
+    // Угловая ячейка сброса из проверки исключена — ширина у неё своя.
+    const cells = [...row.querySelectorAll("td")].filter(
+      (cell) => !(cell as HTMLElement).className.includes(TABLE_CORNER_RESET_TD_CLASS),
+    ) as HTMLElement[];
+    expect(cells.length).toBeGreaterThan(0);
+    for (const cell of cells) {
+      expect(cell.className).toContain(TABLE_ROW_DENSE.cell);
+    }
+    expect(cells[0]!.className).toContain(ROW_TONE_STRIPE.active);
   });
 });

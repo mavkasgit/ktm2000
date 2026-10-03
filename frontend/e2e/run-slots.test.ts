@@ -94,6 +94,25 @@ describe("tryAcquireSlot", () => {
     expect(tryAcquireSlot(dir, 1, { pid: process.pid }, { alive: () => true })).toBeNull();
     expect(JSON.parse(fs.readFileSync(slotFile(dir, 0), "utf8"))).toEqual(other);
   });
+
+  it("releaseSlot не сносит слот, уже отобранный соседу по возрасту", () => {
+    // Слот отобран у ЖИВОГО держателя по staleMs: сосед занял тот же файл,
+    // а прежний прогон в свой finally зовёт releaseSlot. Слот соседа должен
+    // уцелеть, иначе семафор перестаёт считать прогоны.
+    const dir = tempDir();
+    const first = tryAcquireSlot(dir, 1, { pid: 111, repo: "a" }, { alive: () => true });
+    fs.writeFileSync(slotFile(dir, 0), JSON.stringify({ pid: 222, repo: "b", at: Date.now() }));
+    releaseSlot(first);
+    expect(fs.existsSync(slotFile(dir, 0))).toBe(true);
+    expect(JSON.parse(fs.readFileSync(slotFile(dir, 0), "utf8")).pid).toBe(222);
+  });
+
+  it("releaseSlot отпускает слот, который всё ещё наш", () => {
+    const dir = tempDir();
+    const slot = tryAcquireSlot(dir, 1, { pid: 333, repo: "a" });
+    releaseSlot(slot);
+    expect(fs.existsSync(slotFile(dir, 0))).toBe(false);
+  });
 });
 
 describe("acquireSlot", () => {

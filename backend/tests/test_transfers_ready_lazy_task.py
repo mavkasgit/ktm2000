@@ -80,7 +80,7 @@ async def _seed_case(session, sku: str):
 @pytest.mark.asyncio
 async def test_ready_creates_task_for_stock_line_without_it(session, sql_counters):
     """Строка без задания появляется в выдаче и получает задание при первом GET."""
-    fx, _source_line = await _seed_case(session, "LAZY-1")
+    await _seed_case(session, "LAZY-1")
     counters, _total = sql_counters
 
     # Счётчик обнуляем перед GET: замер должен показать стоимость ручки, а не

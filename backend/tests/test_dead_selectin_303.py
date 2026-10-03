@@ -20,6 +20,7 @@
 from __future__ import annotations
 
 import re
+
 import pytest
 from app.api.routes import routes as routes_api
 from app.models.route import ProductionRoute, RouteRuleProfile, RouteStage
@@ -121,11 +122,9 @@ async def test_materializing_route_does_not_load_its_rules(
 
     counter, tables, remove = _counting(session)
     try:
-        rows = (
-            await session.scalars(
-                select(ProductionRoute).order_by(ProductionRoute.id).limit(5)
-            )
-        ).all()
+        # Запрос нужен ради счётчика, а не ради строк: результат не используется,
+        # поэтому и не присваивается (ruff F841).
+        await session.scalars(select(ProductionRoute).order_by(ProductionRoute.id).limit(5))
     finally:
         remove()
     # Раньше список маршрутов стоил 4 SELECT: маршруты, `stages`, `operations`
