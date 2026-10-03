@@ -79,6 +79,22 @@ describe("параметры готовых к передаче", () => {
     expect(buildReady({ next: new Set(["Финальный"]) })).toEqual({});
   });
 
+  it("название участка с разделителем не разрывается на два параметра", () => {
+    expect(buildReady({ next: new Set(["Хранение / Склад готовой продукции"]) })).toEqual({
+      next_operation_name: "Хранение",
+      next_section_name: "Склад готовой продукции",
+    });
+  });
+
+  it("прочерк пустой части ячейки в запрос не уезжает", () => {
+    expect(buildReady({ next: new Set(["Пиление / —"]) })).toEqual({
+      next_operation_name: "Пиление",
+    });
+    expect(buildReady({ next: new Set(["— / Упаковка"]) })).toEqual({
+      next_section_name: "Упаковка",
+    });
+  });
+
   it("без фильтров параметров не уезжает", () => {
     expect(buildReady({})).toEqual({});
   });

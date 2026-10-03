@@ -65,9 +65,9 @@ async def _resolve_template_context(
     """
     template = await db.get(ImportTemplate, template_id)
     if template is None:
-        raise HTTPException(status_code=404, detail="Template not found")
+        raise HTTPException(status_code=404, detail="Шаблон не найден")
     if not template.is_active:
-        raise HTTPException(status_code=400, detail="Template is inactive")
+        raise HTTPException(status_code=400, detail="Шаблон неактивен")
 
     resolved_mapping: dict | None = dict(template.column_mapping)
     rule_profile_id = (
@@ -82,9 +82,9 @@ async def _resolve_template_context(
         try:
             parsed_mapping = json.loads(column_mapping)
         except json.JSONDecodeError as exc:
-            raise HTTPException(status_code=400, detail=f"Invalid column_mapping JSON: {exc}") from exc
+            raise HTTPException(status_code=400, detail=f"Некорректный JSON в column_mapping: {exc}") from exc
         if not isinstance(parsed_mapping, dict):
-            raise HTTPException(status_code=400, detail="column_mapping must be a JSON object")
+            raise HTTPException(status_code=400, detail="Поле column_mapping должно быть JSON-объектом")
         resolved_mapping = {**(resolved_mapping or {}), **parsed_mapping}
     return resolved_mapping, rule_profile_id
 
@@ -97,7 +97,7 @@ async def _reject_legacy_plan_mutation(
         return
     plan = await db.get(ProductionPlan, production_plan_id)
     if plan is None:
-        raise HTTPException(status_code=404, detail="Production plan not found")
+        raise HTTPException(status_code=404, detail="Производственный план не найден")
     try:
         require_current_length_model(plan)
     except ValueError as exc:
@@ -118,7 +118,7 @@ async def import_excel_plan(
     current_user: User = Depends(require_role(list(PLAN_OWNER_ROLES))),
 ) -> ImportPreviewOut:
     if template_id is None:
-        raise HTTPException(status_code=400, detail="template_id is required")
+        raise HTTPException(status_code=400, detail="Поле template_id обязательно")
     await _reject_legacy_plan_mutation(db, production_plan_id)
     resolved_mapping, rule_profile_id = await _resolve_template_context(
         db, template_id, column_mapping
@@ -200,9 +200,9 @@ async def preview_excel_sheet_endpoint(
     if template_id is not None:
         template = await db.get(ImportTemplate, template_id)
         if template is None:
-            raise HTTPException(status_code=404, detail="Template not found")
+            raise HTTPException(status_code=404, detail="Шаблон не найден")
         if not template.is_active:
-            raise HTTPException(status_code=400, detail="Template is inactive")
+            raise HTTPException(status_code=400, detail="Шаблон неактивен")
         resolved_mapping = dict(template.column_mapping)
         rule_profile_id = (
             await db.execute(
@@ -425,7 +425,7 @@ async def list_import_batch_items(
         .limit(1)
     )
     if change_set_id is None:
-        raise HTTPException(status_code=404, detail="Change set for batch not found")
+        raise HTTPException(status_code=404, detail="Набор изменений для партии не найден")
     rows = (
         await db.execute(
             select(PlanChangeItem)
@@ -463,7 +463,7 @@ async def get_import_item(
 
     item = await db.get(PlanChangeItem, item_id)
     if item is None:
-        raise HTTPException(status_code=404, detail="Import item not found")
+        raise HTTPException(status_code=404, detail="Элемент импорта не найден")
     return serialize_item(item) if full else serialize_light_item(item)
 
 
@@ -567,7 +567,7 @@ class ImportPositionOut(BaseModel):
 async def list_import_positions(batch_id: int, db: AsyncSession = Depends(get_db)) -> list[ImportPositionOut]:
     batch = await db.get(ImportBatch, batch_id)
     if batch is None:
-        raise HTTPException(status_code=404, detail="Import batch not found")
+        raise HTTPException(status_code=404, detail="Партия импорта не найдена")
 
     positions = (
         await db.execute(
@@ -637,14 +637,14 @@ async def download_import_file(file_id: int, db: AsyncSession = Depends(get_db))
 
     file = await db.get(ImportFile, file_id)
     if file is None:
-        raise HTTPException(status_code=404, detail="File not found")
+        raise HTTPException(status_code=404, detail="Файл не найден")
     if not file.stored_path:
-        raise HTTPException(status_code=404, detail="File content not available")
+        raise HTTPException(status_code=404, detail="Содержимое файла недоступно")
 
     path = Path(file.stored_path)
     # exists() блокирует event loop воркера, поэтому уходит в поток (#267).
     if not await asyncio.to_thread(path.exists):
-        raise HTTPException(status_code=404, detail="File not found on disk")
+        raise HTTPException(status_code=404, detail="Файл не найден на диске")
 
     encoded_name = quote(file.original_filename)
     return FileResponse(

@@ -731,7 +731,7 @@ async def test_demo_archived_only_route_still_answers_inactive(client, session) 
         headers=headers,
     )
     assert by_id.status_code == 400, by_id.text
-    assert by_id.json()["detail"] == "Route is inactive", by_id.text
+    assert by_id.json()["detail"] == "Маршрут неактивен", by_id.text
 
     by_name = await client.post(
         "/api/demo/test-runs/full-route",
@@ -745,4 +745,4 @@ async def test_demo_archived_only_route_still_answers_inactive(client, session) 
         headers=headers,
     )
     assert by_name.status_code == 404, by_name.text
-    assert by_name.json()["detail"] == "Route not found", by_name.text
+    assert by_name.json()["detail"] == "Маршрут не найден", by_name.text

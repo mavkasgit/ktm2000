@@ -57,12 +57,12 @@ function makeTask(overrides: Partial<SectionBoardTask> = {}): SectionBoardTask {
 describe("buildPlanTaskGroups", () => {
   it("группирует по артикулу и размеру, игнорируя цвет анодирования", () => {
     const tasks = [
-      makeTask({ id: 1, product_sku: "ЮП-2083", source_payload: { color: "silver" } }),
-      makeTask({ id: 2, product_sku: "ЮП-2083", source_payload: { color: "black" } }),
+      makeTask({ id: 1, product_sku: "ЮП-2083", source_payload: { color: "серебро" } }),
+      makeTask({ id: 2, product_sku: "ЮП-2083", source_payload: { color: "черный" } }),
       makeTask({
         id: 3,
         product_sku: "ЮП-2083",
-        source_payload: { color: "silver" },
+        source_payload: { color: "серебро" },
         dimensions: { length_mm: 3000 },
       }),
     ];
@@ -77,9 +77,9 @@ describe("buildPlanTaskGroups", () => {
 
   it("объединяет разные артикулы одинакового цвета и размера", () => {
     const tasks = [
-      makeTask({ id: 1, product_sku: "ЮП-2083", source_payload: { color: "silver" } }),
-      makeTask({ id: 2, product_sku: "ЮП-2091", source_payload: { color: "silver" } }),
-      makeTask({ id: 3, product_sku: "ЮП-2122", source_payload: { color: "black" } }),
+      makeTask({ id: 1, product_sku: "ЮП-2083", source_payload: { color: "серебро" } }),
+      makeTask({ id: 2, product_sku: "ЮП-2091", source_payload: { color: "серебро" } }),
+      makeTask({ id: 3, product_sku: "ЮП-2122", source_payload: { color: "черный" } }),
     ];
 
     const groups = buildPlanTaskGroups(tasks, "anodizingColor");
@@ -88,13 +88,13 @@ describe("buildPlanTaskGroups", () => {
     const groupsByLabel = Object.fromEntries(groups.map((group) => [group.label, group]));
     expect(Object.keys(groupsByLabel).sort()).toEqual([
       "серебро · 2,75 м",
-      "чёрный · 2,75 м",
+      "черный · 2,75 м",
     ]);
     expect(groupsByLabel["серебро · 2,75 м"].rows.map((row) => row.productSku)).toEqual([
       "ЮП-2083",
       "ЮП-2091",
     ]);
-    expect(groupsByLabel["чёрный · 2,75 м"].rows.map((row) => row.productSku)).toEqual([
+    expect(groupsByLabel["черный · 2,75 м"].rows.map((row) => row.productSku)).toEqual([
       "ЮП-2122",
     ]);
   });
@@ -154,8 +154,8 @@ describe("buildPlanTaskGroups", () => {
 
   it("не объединяет одинаковый цвет с разными размерами", () => {
     const tasks = [
-      makeTask({ id: 1, source_payload: { color: "silver" }, dimensions: { length_mm: 2750 } }),
-      makeTask({ id: 2, source_payload: { color: "silver" }, dimensions: { length_mm: 3000 } }),
+      makeTask({ id: 1, source_payload: { color: "серебро" }, dimensions: { length_mm: 2750 } }),
+      makeTask({ id: 2, source_payload: { color: "серебро" }, dimensions: { length_mm: 3000 } }),
     ];
 
     const groups = buildPlanTaskGroups(tasks, "anodizingColor");

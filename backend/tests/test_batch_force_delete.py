@@ -277,7 +277,7 @@ async def test_force_delete_refuses_transfer_crossing_batch_boundary(
 
     preview = await get_batch_force_delete_preview(session, batch.id)
     assert any(
-        "transfer-crosses-batch" in b["reason"] for b in preview["blockers"]
+        "передача пересекает границу партии" in b["reason"] for b in preview["blockers"]
     ), preview["blockers"]
 
     resp = await client.request(
@@ -288,7 +288,7 @@ async def test_force_delete_refuses_transfer_crossing_batch_boundary(
     assert resp.status_code == 409, resp.text
     body = resp.json()
     assert body["code"] == "batch_force_delete_blocked"
-    assert any("transfer-crosses-batch" in b["reason"] for b in body["blockers"])
+    assert any("передача пересекает границу партии" in b["reason"] for b in body["blockers"])
     assert await session.get(PlanPosition, position.id) is not None
     assert await session.get(Transfer, fx["transfer"].id) is not None
     assert await session.get(PlanPosition, foreign_position.id) is not None
@@ -336,7 +336,7 @@ async def test_force_delete_batch_without_positions_is_400(
         json={"confirmation": "BFD-404.xlsx", "reason": "нет позиций"},
     )
     assert resp.status_code == 400
-    assert "no positions" in resp.json()["detail"]
+    assert "нет позиций для удаления" in resp.json()["detail"]
     assert await session.get(ImportBatch, batch.id) is not None
 
 

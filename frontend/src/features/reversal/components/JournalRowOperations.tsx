@@ -12,6 +12,7 @@ import {
   DialogHeader,
   DialogTitle,
 } from "@/shared/ui/dialog";
+import { actionJournalLabels } from "@/shared/lib/generated-labels";
 import { useActionTree } from "../hooks/useActions";
 import {
   ActionTreeDialog,
@@ -20,7 +21,7 @@ import { ReversePreviewDialog } from "./ReversePreviewDialog";
 import { AmendDialog } from "./AmendDialog";
 
 /** Операции строки журнала: дерево цепочки / Отменить / Изменить.
- *  «Изменить» — только transfer_send со статусом active (решение 5 спеки #117). */
+ *  «Изменить» — только передача со статусом active (решение 5 спеки #117). */
 export function JournalRowOperations({
   action,
   onChanged,
@@ -82,7 +83,9 @@ export function JournalRowOperations({
         title={
           canAmend
             ? "Изменить передачу"
-            : "Изменение доступно только для активной transfer_send"
+            : `Изменение доступно только для активной ${
+                actionJournalLabels[action.action_type] ?? action.action_type
+              }`
         }
         disabled={!canAmend}
         data-testid={`amend-button-${action.id}`}

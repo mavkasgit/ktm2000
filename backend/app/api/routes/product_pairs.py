@@ -74,14 +74,14 @@ class ProductPairOut(BaseModel):
 async def _get_product_or_404(db: AsyncSession, product_id: int) -> Product:
     product = await db.get(Product, product_id)
     if product is None:
-        raise HTTPException(status_code=404, detail="Product not found")
+        raise HTTPException(status_code=404, detail="Артикул не найден")
     return product
 
 
 async def _get_pair_or_404(db: AsyncSession, product_id: int, pair_id: int) -> ProductPair:
     pair = await db.get(ProductPair, pair_id)
     if pair is None or product_id not in (pair.product_a_id, pair.product_b_id):
-        raise HTTPException(status_code=404, detail="Pair not found for this product")
+        raise HTTPException(status_code=404, detail="Пара для этого артикула не найдена")
     return pair
 
 
@@ -274,7 +274,7 @@ async def create_product_pair(
     product = await _get_product_or_404(db, product_id)
     partner = await db.get(Product, payload.partner_product_id)
     if partner is None:
-        raise HTTPException(status_code=404, detail="Partner product not found")
+        raise HTTPException(status_code=404, detail="Артикул-партнёр не найден")
     if partner.id == product.id:
         raise HTTPException(status_code=422, detail="Нельзя создать пару артикула с самим собой")
 
@@ -327,7 +327,7 @@ async def _load_with_lengths(db: AsyncSession, product_id: int) -> Product:
         )
     ).scalar_one_or_none()
     if product is None:
-        raise HTTPException(status_code=404, detail="Product not found")
+        raise HTTPException(status_code=404, detail="Артикул не найден")
     return product
 
 

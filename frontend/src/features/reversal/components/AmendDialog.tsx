@@ -22,6 +22,7 @@ import {
   DialogHeader,
   DialogTitle,
 } from "@/shared/ui/dialog";
+import { actionJournalLabels } from "@/shared/lib/generated-labels";
 import { PreviewZones } from "./PreviewZones";
 import {
   classifyReversalConflict,
@@ -150,7 +151,8 @@ export function AmendDialog({
       <DialogContent className="max-w-xl" data-testid="amend-dialog">
         <DialogHeader>
           <DialogTitle>
-            Изменить действие #{action.id} (transfer_send)
+            Изменить действие #{action.id} (
+            {actionJournalLabels[action.action_type] ?? action.action_type})
           </DialogTitle>
           <DialogDescription>
             Изменение выполняется компенсацией: старое действие отменится,

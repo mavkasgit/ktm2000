@@ -170,15 +170,15 @@ async def test_composition_db_trigger_backstops_max_two(client, session: AsyncSe
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize(
-    "payload_maker, detail_part",
+    "payload_maker, detail_part, target",
     [
         # quantity <= 0
-        (lambda comp_id: {"items": [{"component_product_id": comp_id, "quantity": 0}]}, None),
-        (lambda comp_id: {"items": [{"component_product_id": comp_id, "quantity": -1}]}, None),
+        (lambda comp_id: {"items": [{"component_product_id": comp_id, "quantity": 0}]}, None, "comp"),
+        (lambda comp_id: {"items": [{"component_product_id": comp_id, "quantity": -1}]}, None, "comp"),
         # несуществующий компонент
-        (lambda comp_id: {"items": [{"component_product_id": 999999, "quantity": 1}]}, "not found"),
-        # самоссылка
-        (lambda comp_id: {"items": [{"component_product_id": comp_id, "quantity": 1}]}, "own component"),
+        (lambda comp_id: {"items": [{"component_product_id": 999999, "quantity": 1}]}, "не найден", "comp"),
+        # самоссылка: компонент — сам артикул-владелец
+        (lambda comp_id: {"items": [{"component_product_id": comp_id, "quantity": 1}]}, "своим же компонентом", "owner"),
         # дубликат компонента
         (
             lambda comp_id: {
@@ -187,16 +187,18 @@ async def test_composition_db_trigger_backstops_max_two(client, session: AsyncSe
                     {"component_product_id": comp_id, "quantity": 2},
                 ]
             },
-            "Duplicate",
+            "Повторяющийся компонент",
+            "comp",
         ),
     ],
 )
-async def test_composition_validation_errors(client, session, payload_maker, detail_part) -> None:
+async def test_composition_validation_errors(client, session, payload_maker, detail_part, target) -> None:
     owner = await _make_product(session, sku="CMP-OWNER-7", type=ProductType.finished_good)
     comp_a = await _make_product(session, sku="CMP-RAW-A7")
     await session.commit()
 
-    payload = payload_maker(owner.id if "own" in (detail_part or "") else comp_a.id)
+    # Самоссылка проверяется на владельце, остальные случаи — на реальном компоненте.
+    payload = payload_maker(owner.id if target == "owner" else comp_a.id)
     response = await client.put(f"/api/products/{owner.id}/composition", json=payload)
     assert response.status_code == 422
     if detail_part:

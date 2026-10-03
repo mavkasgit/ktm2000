@@ -105,7 +105,7 @@ async def delete_session(
     if session is None or session.user_id != current_user.id:
         raise HTTPException(
             status_code=status.HTTP_404_NOT_FOUND,
-            detail="Session not found",
+            detail="Сессия не найдена",
         )
 
     now = datetime.now(UTC)
@@ -116,7 +116,7 @@ async def delete_session(
     if session.revoked_at is not None or expires <= now:
         raise HTTPException(
             status_code=status.HTTP_404_NOT_FOUND,
-            detail="Session not found",
+            detail="Сессия не найдена",
         )
 
     await revoke_session(db, user_id=current_user.id, session_id=session_id, reason="user_revoke")

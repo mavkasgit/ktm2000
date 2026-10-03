@@ -121,12 +121,12 @@ async def create_route_selection_rule(payload: RouteSelectionRuleIn, db: AsyncSe
     if payload.code:
         existing = await db.scalar(select(RouteSelectionRule).where(RouteSelectionRule.code == payload.code))
         if existing is not None:
-            raise HTTPException(status_code=409, detail="Rule with this code already exists")
+            raise HTTPException(status_code=409, detail="Правило с таким кодом уже существует")
 
     if payload.profile_id is not None:
         profile = await db.get(RouteRuleProfile, payload.profile_id)
         if profile is None:
-            raise HTTPException(status_code=422, detail="Invalid profile_id")
+            raise HTTPException(status_code=422, detail="Некорректный profile_id")
 
     rule = RouteSelectionRule(
         code=_clean_code(payload.code),
@@ -156,18 +156,18 @@ async def update_route_selection_rule(
 ) -> RouteSelectionRuleOut:
     rule = await db.get(RouteSelectionRule, rule_id)
     if rule is None:
-        raise HTTPException(status_code=404, detail="Rule not found")
+        raise HTTPException(status_code=404, detail="Правило не найдено")
     await _validate_payload(db, payload)
     clean_code = _clean_code(payload.code)
     if clean_code:
         existing = await db.scalar(select(RouteSelectionRule).where(RouteSelectionRule.code == clean_code, RouteSelectionRule.id != rule_id))
         if existing is not None:
-            raise HTTPException(status_code=409, detail="Rule with this code already exists")
+            raise HTTPException(status_code=409, detail="Правило с таким кодом уже существует")
 
     if payload.profile_id is not None:
         profile = await db.get(RouteRuleProfile, payload.profile_id)
         if profile is None:
-            raise HTTPException(status_code=422, detail="Invalid profile_id")
+            raise HTTPException(status_code=422, detail="Некорректный profile_id")
 
     rule.code = clean_code
     rule.name = payload.name.strip()
@@ -192,16 +192,16 @@ async def update_route_selection_rule(
 async def delete_route_selection_rule(rule_id: int, db: AsyncSession = Depends(get_db)) -> None:
     rule = await db.get(RouteSelectionRule, rule_id)
     if rule is None:
-        raise HTTPException(status_code=404, detail="Rule not found")
+        raise HTTPException(status_code=404, detail="Правило не найдено")
     await db.delete(rule)
     await db.flush()
 
 
 async def _validate_payload(db: AsyncSession, payload: RouteSelectionRuleIn) -> None:
     if not payload.name.strip():
-        raise HTTPException(status_code=400, detail="Rule name is required")
+        raise HTTPException(status_code=400, detail="Требуется название правила")
     if not payload.actions:
-        raise HTTPException(status_code=400, detail="At least one action is required")
+        raise HTTPException(status_code=400, detail="Требуется хотя бы одно действие")
     for condition in payload.conditions:
         has_field = bool(condition.field_path.strip())
         has_excel_binding = (
@@ -210,53 +210,52 @@ async def _validate_payload(db: AsyncSession, payload: RouteSelectionRuleIn) -> 
         )
         if condition.source == "excel":
             if not has_field and not has_excel_binding:
-                raise HTTPException(status_code=400, detail="Excel condition must define field_path or explicit excel column binding")
+                raise HTTPException(status_code=400, detail="Условие Excel должно задавать field_path или явную привязку к колонке Excel")
             if condition.excel_column_index is not None and condition.excel_column_index <= 0:
-                raise HTTPException(status_code=400, detail="excel_column_index must be positive")
+                raise HTTPException(status_code=400, detail="excel_column_index должен быть положительным")
         elif condition.source == "ctx":
             if not has_field:
-                raise HTTPException(status_code=400, detail="Context condition field_path is required")
+                raise HTTPException(status_code=400, detail="Требуется field_path у контекстного условия")
         elif not has_field:
-            raise HTTPException(status_code=400, detail="Condition field_path is required")
+            raise HTTPException(status_code=400, detail="Требуется field_path у условия")
         if (
             condition.operator in {"equals", "not_equals", "contains", "not_contains", "in", "not_in", "regex"}
             and condition.value is None
             and not (condition.value_from or "").strip()
         ):
-            # Текст сообщения — ключ словаря подписей (display_data.py):
-            # `value_from` лишь второй способ задать ожидаемое значение (#277).
-            raise HTTPException(status_code=400, detail=f"Condition value is required for {condition.operator}")
+            # `value_from` — второй способ задать ожидаемое значение (#277).
+            raise HTTPException(status_code=400, detail=f"Для оператора «{condition.operator}» требуется значение условия")
 
     section_ids: set[int] = set()
     section_codes: set[str] = set()
     for action in payload.actions:
         if action.action in {"set", "add", "remove"}:
             if not action.path or not action.path.startswith("ctx."):
-                raise HTTPException(status_code=400, detail="DSL action path must start with 'ctx.'")
+                raise HTTPException(status_code=400, detail="Путь действия DSL должен начинаться с «ctx.»")
         elif action.action in {"require_section", "exclude_section"}:
             if action.section_id is None:
-                raise HTTPException(status_code=400, detail=f"{action.action} requires section_id")
+                raise HTTPException(status_code=400, detail=f"{action.action} требует section_id")
             section_ids.add(action.section_id)
         elif action.action in {"set_operation", "resolve_by_type"}:
             if not action.section_code:
-                raise HTTPException(status_code=400, detail=f"{action.action} requires section_code")
+                raise HTTPException(status_code=400, detail=f"{action.action} требует section_code")
             if not action.group_code:
-                raise HTTPException(status_code=400, detail=f"{action.action} requires group_code")
+                raise HTTPException(status_code=400, detail=f"{action.action} требует group_code")
             if not action.operation_code:
-                raise HTTPException(status_code=400, detail=f"{action.action} requires operation_code")
+                raise HTTPException(status_code=400, detail=f"{action.action} требует operation_code")
             section_codes.add(action.section_code)
         else:
-            raise HTTPException(status_code=400, detail=f"Unknown action type: {action.action}")
+            raise HTTPException(status_code=400, detail=f"Неизвестный тип действия: {action.action}")
 
     if section_ids:
         count = len((await db.execute(select(Section.id).where(Section.id.in_(section_ids)))).scalars().all())
         if count != len(section_ids):
-            raise HTTPException(status_code=422, detail="Action references unknown section")
+            raise HTTPException(status_code=422, detail="Действие ссылается на неизвестный участок")
 
     if section_codes:
         count = len((await db.execute(select(Section.code).where(Section.code.in_(section_codes)))).scalars().all())
         if count != len(section_codes):
-            raise HTTPException(status_code=422, detail="Action references unknown section_code")
+            raise HTTPException(status_code=422, detail="Действие ссылается на неизвестный section_code")
 
 
 

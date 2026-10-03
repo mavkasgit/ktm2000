@@ -66,7 +66,7 @@ const SHORTAGE_OPTIONS: { value: ShortageStrategy; label: string; hint: string }
 
 /** Короткое имя задания для счётчиков и списков футера. */
 function taskLabel(task: SectionBoardTask): string {
-  const operation = task.operation_name || task.operation_code || "Операция";
+  const operation = task.operation_name || "Операция";
   return `${task.display_sku || task.product_sku} · ${operation} · №${task.sequence}`;
 }
 

@@ -28,11 +28,53 @@ export type AuditColumn = ColumnSpec<AuditFilterField> & {
 /** Значение «—» — это пусто, а не значение: сервер такого не понимает. */
 const dropDash = (value: string) => (value === "—" ? undefined : value);
 
-/** «Задание #42» — это вид сущности «Задание», а номер серверу не нужен. */
+
+/**
+ * Подписи типов сущностей журнала (`Задание` вместо `work_task`).
+ *
+ * Перебор живёт в `AuditEntityType` бэкенда и в журнале действий не является
+ * частью производственного канона, поэтому словарь — здесь, рядом с
+ * описанием колонки, которая его печатает и по нему же фильтрует.
+ */
+export const ENTITY_TYPE_LABELS: Record<string, string> = {
+  product: "Артикул",
+  section: "Участок",
+  route: "Маршрут",
+  production_plan: "Производственный план",
+  plan_position: "Позиция плана",
+  work_task: "Задание",
+  rework_task: "Задание на переделку",
+  transfer: "Передача",
+  transfer_discrepancy: "Расхождение передачи",
+  defect: "Брак",
+  defect_item: "Запись о браке",
+  defect_decision: "Решение по браку",
+  import_batch: "Партия импорта",
+  user: "Пользователь",
+  daily_plan: "Суточный план",
+};
+
+/** Подпись типа сущности с номером: «Задание #42». */
+export function entityLabel(entityType: string | null | undefined, entityId: number | null | undefined): string {
+  if (!entityType) return "—";
+  const name = ENTITY_TYPE_LABELS[entityType] ?? entityType;
+  return entityId != null ? `${name} #${entityId}` : name;
+}
+
+const CODE_BY_LABEL: Record<string, string> = Object.fromEntries(
+  Object.entries(ENTITY_TYPE_LABELS).map(([code, label]) => [label, code]),
+);
+
+/**
+ * «Задание #42» — это вид сущности «Задание», а номер серверу не нужен.
+ * Сервер фильтрует по коду, поэтому подпись возвращается в код: иначе выбор
+ * «Задание» в фильтре ушёл бы запросом словом «Задание» и не нашёл ничего.
+ */
 const entityTypeOnly = (value: string) => {
   if (value === "—") return undefined;
   const hashIdx = value.indexOf(" #");
-  return hashIdx >= 0 ? value.slice(0, hashIdx) : value;
+  const label = hashIdx >= 0 ? value.slice(0, hashIdx) : value;
+  return CODE_BY_LABEL[label] ?? label;
 };
 
 const filterable = "p-0 text-left";

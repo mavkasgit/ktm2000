@@ -182,14 +182,3 @@ export function resetSectionProfile(sectionId: number): void {
 
 export { groupingCriterionLabels as CRITERION_LABELS } from "@/shared/lib/generated-labels";
 
-
-export function getProfilePreview(profile: GroupingProfile): string {
-  // Примеры учитывают принудительный критерий «размер»: «артикул · 2,7 м».
-  const examples: Record<string, string> = {
-    "sku":           "ЮП-460 · 2,7 м",
-    "sku+routeHistory": "ЮП-460 · 2,7 м · ISSUE_RAW",
-    "sku+routeHistoryAfter": "ЮП-460 · 2,7 м · ISSUE_RAW→PRESS_WINDOW",
-    "custom":        `ЮП-460 · 2,7 м · ${(profile.customFields ?? []).join(" · ") || "..."}`,
-  };
-  return examples[profile.id] ?? "—";
-}

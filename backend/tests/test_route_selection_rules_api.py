@@ -45,7 +45,7 @@ async def test_create_rule_with_unknown_section_id_returns_422(client, session) 
         },
     )
     assert response.status_code == 422
-    assert "unknown section" in response.json()["detail"]
+    assert "неизвестный участок" in response.json()["detail"]
 
 
 @pytest.mark.asyncio
@@ -71,7 +71,7 @@ async def test_create_rule_with_unknown_section_code_returns_422(client, session
         },
     )
     assert response.status_code == 422
-    assert "unknown section_code" in response.json()["detail"]
+    assert "неизвестный section_code" in response.json()["detail"]
 
 
 @pytest.mark.asyncio
@@ -92,7 +92,7 @@ async def test_create_rule_with_unknown_profile_id_returns_422(client, session) 
         },
     )
     assert response.status_code == 422
-    assert response.json()["detail"] == "Invalid profile_id"
+    assert response.json()["detail"] == "Некорректный profile_id"
 
 
 @pytest.mark.asyncio
@@ -190,7 +190,7 @@ async def test_create_rule_without_value_and_value_from_returns_400(client, sess
         },
     )
     assert response.status_code == 400
-    assert "Condition value is required" in response.json()["detail"]
+    assert "требуется значение условия" in response.json()["detail"]
 
 
 @pytest.mark.asyncio
@@ -207,7 +207,7 @@ async def test_create_profile_with_unknown_route_section_returns_422(client, ses
         },
     )
     assert response.status_code == 422
-    assert "unknown sections" in response.json()["detail"]
+    assert "неизвестные участки" in response.json()["detail"]
 
 
 @pytest.mark.asyncio
@@ -225,7 +225,7 @@ async def test_create_profile_with_unknown_template_id_returns_422(client, sessi
         },
     )
     assert response.status_code == 422
-    assert response.json()["detail"] == "Invalid import_template_id"
+    assert response.json()["detail"] == "Некорректный import_template_id"
 
 
 @pytest.mark.asyncio

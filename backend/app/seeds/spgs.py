@@ -21,7 +21,7 @@ SPGS_DATA = [
     {
         "code": "ANODIZING",
         "name": "Анодирование",
-        "description": "Участок анодирования и склад полуфабриката (wip-секция WIP_WH)",
+        "description": "Участок анодирования и склад полуфабриката",
         "storage_kind": "wip",
         "sort_order": 30,
         "icon": "FlaskConical",

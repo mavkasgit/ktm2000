@@ -43,7 +43,7 @@ export function SectionLocationBadge({
         backgroundColor: `${color}18`,
         color,
       }}
-      title={section ? `${section.code} · ${section.name}` : label}
+      title={section ? section.name : label}
     >
       {section?.icon ? (
         <span className="shrink-0" style={{ color }}>

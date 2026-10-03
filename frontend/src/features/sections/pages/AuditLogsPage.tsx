@@ -20,7 +20,7 @@ import { getAriaSort } from "@/shared/lib/multiSort";
 import { useDebouncedValue } from "@/shared/lib/useDebouncedValue";
 import { keepPreviousData } from "@tanstack/react-query";
 import { isFirstRowsLoad } from "@/shared/lib/tableQueryPlaceholder";
-import { auditColumns, type AuditFilterField } from "../lib/auditColumns";
+import { auditColumns, entityLabel, type AuditFilterField } from "../lib/auditColumns";
 
 type LogFilterField = AuditFilterField;
 type LogField = LogFilterField;
@@ -40,6 +40,7 @@ function formatDateTime(dateStr: string) {
   });
   return `${date} ${time}`;
 }
+
 
 /**
  * Порядок строк по умолчанию: «сначала свежие». Сервер сортирует по нему,
@@ -189,9 +190,7 @@ export function AuditLogsPage() {
       ),
       entityType: [
         ...new Set(
-          parsedLogs.map((entry) =>
-            entry.entity_type ? `${entry.entity_type} #${entry.entity_id}` : "—",
-          ),
+          parsedLogs.map((entry) => entityLabel(entry.entity_type, entry.entity_id)),
         ),
       ].sort((a, b) => a.localeCompare(b, "ru")),
     }),
@@ -450,7 +449,7 @@ export function AuditLogsPage() {
                           {entry.section_name ? (
                             <span
                               className="inline-flex items-center rounded-md px-2.5 py-0.8 text-xs font-semibold bg-slate-100 text-slate-700 border border-slate-200/60 max-w-full truncate"
-                              title={`${entry.section_name} (${entry.section_code})`}
+                              title={entry.section_name}
                             >
                               {entry.section_name}
                             </span>
@@ -504,8 +503,8 @@ export function AuditLogsPage() {
                         {/* Сущность (entity_type) */}
                         <td className="p-3 align-middle text-xs truncate text-slate-600">
                           {entry.entity_type ? (
-                            <span className="font-semibold" title={`${entry.entity_type} #${entry.entity_id}`}>
-                              {entry.entity_type} #{entry.entity_id}
+                            <span className="font-semibold" title={entityLabel(entry.entity_type, entry.entity_id)}>
+                              {entityLabel(entry.entity_type, entry.entity_id)}
                             </span>
                           ) : (
                             <span className="text-slate-400">—</span>
@@ -577,7 +576,7 @@ export function AuditLogsPage() {
                                     <div>
                                       <p className="text-slate-400 uppercase font-bold text-[9px] tracking-wider">Сущность</p>
                                       <p className="text-slate-700 font-semibold bg-slate-50 p-2 rounded border border-slate-100 mt-1">
-                                        {entry.entity_type ? `${entry.entity_type} #${entry.entity_id}` : "—"}
+                                        {entityLabel(entry.entity_type, entry.entity_id)}
                                       </p>
                                     </div>
                                     <div>

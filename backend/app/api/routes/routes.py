@@ -310,7 +310,7 @@ async def list_routes(
 async def get_route(route_id: int, db: AsyncSession = Depends(get_db)) -> RouteDetailOut:
     route = await db.get(ProductionRoute, route_id)
     if route is None:
-        raise HTTPException(status_code=404, detail="Route not found")
+        raise HTTPException(status_code=404, detail="Маршрут не найден")
 
     sections_cache = await _load_sections_cache([route], db)
     return await _build_route_detail(route, db, sections_cache=sections_cache)
@@ -334,7 +334,7 @@ async def create_route(payload: RouteCreate, db: AsyncSession = Depends(get_db))
         db, payload.name, legacy_name_only=False
     )
     if existing:
-        raise HTTPException(status_code=409, detail="Route with this name already exists")
+        raise HTTPException(status_code=409, detail="Маршрут с таким именем уже существует")
     route = ProductionRoute(name=payload.name, description=payload.description, is_active=payload.is_active)
     db.add(route)
     await db.flush()
@@ -346,7 +346,7 @@ async def create_route(payload: RouteCreate, db: AsyncSession = Depends(get_db))
 async def update_route(route_id: int, payload: RouteUpdate, db: AsyncSession = Depends(get_db)) -> RouteOut:
     route = await db.get(ProductionRoute, route_id)
     if route is None:
-        raise HTTPException(status_code=404, detail="Route not found")
+        raise HTTPException(status_code=404, detail="Маршрут не найден")
     if payload.name is not None:
         # Тот же контракт, что в POST: 409 на совпадение имени, включая
         # автомаршрут (см. комментарий выше — фильтра по коду здесь нет).
@@ -354,7 +354,7 @@ async def update_route(route_id: int, payload: RouteUpdate, db: AsyncSession = D
             db, payload.name, legacy_name_only=False, exclude_id=route_id
         )
         if existing:
-            raise HTTPException(status_code=409, detail="Route with this name already exists")
+            raise HTTPException(status_code=409, detail="Маршрут с таким именем уже существует")
         route.name = payload.name
     if payload.description is not None:
         route.description = payload.description
@@ -370,7 +370,7 @@ async def check_route_delete(route_id: int, db: AsyncSession = Depends(get_db)):
     """Check what will be deleted when removing a route"""
     route = await db.get(ProductionRoute, route_id)
     if route is None:
-        raise HTTPException(status_code=404, detail="Route not found")
+        raise HTTPException(status_code=404, detail="Маршрут не найден")
 
     relations = await count_route_relations(db, route_id)
     warning_parts = relations.warning_parts()
@@ -402,7 +402,7 @@ async def delete_route(
 
     route = await db.get(ProductionRoute, route_id)
     if route is None:
-        raise HTTPException(status_code=404, detail="Route not found")
+        raise HTTPException(status_code=404, detail="Маршрут не найден")
 
     # Связи маршрута и порядок их сноса — один источник истины
     # (app/services/route_deletion.py), иначе предупреждение ручки и её
@@ -425,13 +425,13 @@ async def create_route_step(route_id: int, payload: StepCreate, db: AsyncSession
 
     route = await db.get(ProductionRoute, route_id)
     if route is None:
-        raise HTTPException(status_code=404, detail="Route not found")
+        raise HTTPException(status_code=404, detail="Маршрут не найден")
     if payload.sequence <= 0:
-        raise HTTPException(status_code=400, detail="Sequence must be > 0")
+        raise HTTPException(status_code=400, detail="Последовательность должна быть > 0")
 
     stage_kind = payload.stage_kind or "production"
     if stage_kind not in ("production", "transit"):
-        raise HTTPException(status_code=400, detail=f"Unknown stage_kind '{stage_kind}'")
+        raise HTTPException(status_code=400, detail=f"Неизвестный stage_kind «{stage_kind}»")
 
     section: Section | None = None
     storage_section: Section | None = None
@@ -441,32 +441,32 @@ async def create_route_step(route_id: int, payload: StepCreate, db: AsyncSession
         if sid is None:
             raise HTTPException(
                 status_code=400,
-                detail="Transit stage requires storage_section_id (or section_id pointing to a storage section)",
+                detail="Транзитный этап требует storage_section_id (или section_id, указывающий на складской участок)",
             )
         storage_section = await db.get(Section, sid)
         if storage_section is None:
-            raise HTTPException(status_code=404, detail=f"Storage section {sid} not found")
+            raise HTTPException(status_code=404, detail=f"Складской участок {sid} не найден")
         if not storage_section.is_active:
-            raise HTTPException(status_code=400, detail="Inactive storage section cannot be used in route")
+            raise HTTPException(status_code=400, detail="Неактивный складской участок нельзя использовать в маршруте")
         if not is_storage_section(storage_section):
             raise HTTPException(
                 status_code=400,
-                detail=f"Section {sid} (type={storage_section.type}) is not a storage section",
+                detail=f"Участок {sid} (type={storage_section.type}) не является складским",
             )
         if payload.is_final:
-            raise HTTPException(status_code=400, detail="Transit stage cannot be marked as final")
+            raise HTTPException(status_code=400, detail="Транзитный этап нельзя отметить финальным")
     else:
         section = await db.get(Section, payload.section_id)
         if section is None:
-            raise HTTPException(status_code=404, detail="Section not found")
+            raise HTTPException(status_code=404, detail="Участок не найден")
         if not section.is_active:
-            raise HTTPException(status_code=400, detail="Inactive section cannot be used in route")
+            raise HTTPException(status_code=400, detail="Неактивный участок нельзя использовать в маршруте")
         if is_storage_section(section):
             raise HTTPException(
                 status_code=400,
                 detail=(
-                    f"Section {section.id} ({section.code}) is a storage section. "
-                    "To add it as a transit hop set stage_kind='transit'."
+                    f"Участок {section.id} ({section.code}) — складской. "
+                    "Чтобы добавить его как транзитный переход, укажите stage_kind='transit'."
                 ),
             )
 
@@ -480,7 +480,7 @@ async def create_route_step(route_id: int, payload: StepCreate, db: AsyncSession
             if not op_exists:
                 raise HTTPException(
                     status_code=400,
-                    detail=f"Operation '{payload.operation_code}' is not registered for section {payload.section_id}",
+                    detail=f"Операция '{payload.operation_code}' не зарегистрирована для участка {payload.section_id}",
                 )
 
     if payload.is_final:
@@ -488,7 +488,7 @@ async def create_route_step(route_id: int, payload: StepCreate, db: AsyncSession
             select(RouteStage).where(RouteStage.route_id == route_id, RouteStage.is_final.is_(True))
         )
         if final_exists:
-            raise HTTPException(status_code=409, detail="Only one final step allowed")
+            raise HTTPException(status_code=409, detail="Допускается только один финальный этап")
 
     stage = RouteStage(
         route_id=route_id,
@@ -551,7 +551,7 @@ async def replace_route_steps(route_id: int, payload: list[StepUpdate], db: Asyn
 
     route = await db.get(ProductionRoute, route_id)
     if route is None:
-        raise HTTPException(status_code=404, detail="Route not found")
+        raise HTTPException(status_code=404, detail="Маршрут не найден")
 
     existing_stages = (await db.execute(select(RouteStage).where(RouteStage.route_id == route_id))).scalars().all()
     for stage in existing_stages:
@@ -561,10 +561,10 @@ async def replace_route_steps(route_id: int, payload: list[StepUpdate], db: Asyn
     result = []
     for item in payload:
         if item.sequence <= 0:
-            raise HTTPException(status_code=400, detail="Sequence must be > 0")
+            raise HTTPException(status_code=400, detail="Последовательность должна быть > 0")
         stage_kind = item.stage_kind or "production"
         if stage_kind not in ("production", "transit"):
-            raise HTTPException(status_code=400, detail=f"Unknown stage_kind '{stage_kind}'")
+            raise HTTPException(status_code=400, detail=f"Неизвестный stage_kind «{stage_kind}»")
 
         section: Section | None = None
         storage_section: Section | None = None
@@ -574,32 +574,32 @@ async def replace_route_steps(route_id: int, payload: list[StepUpdate], db: Asyn
             if sid is None:
                 raise HTTPException(
                     status_code=400,
-                    detail="Transit stage requires storage_section_id (or section_id pointing to a storage section)",
+                    detail="Транзитный этап требует storage_section_id (или section_id, указывающий на складской участок)",
                 )
             storage_section = await db.get(Section, sid)
             if storage_section is None:
-                raise HTTPException(status_code=404, detail=f"Storage section {sid} not found")
+                raise HTTPException(status_code=404, detail=f"Складской участок {sid} не найден")
             if not storage_section.is_active:
-                raise HTTPException(status_code=400, detail="Inactive storage section cannot be used in route")
+                raise HTTPException(status_code=400, detail="Неактивный складской участок нельзя использовать в маршруте")
             if not is_storage_section(storage_section):
                 raise HTTPException(
                     status_code=400,
-                    detail=f"Section {sid} (type={storage_section.type}) is not a storage section",
+                    detail=f"Участок {sid} (type={storage_section.type}) не является складским",
                 )
             if item.is_final:
-                raise HTTPException(status_code=400, detail="Transit stage cannot be marked as final")
+                raise HTTPException(status_code=400, detail="Транзитный этап нельзя отметить финальным")
         else:
             section = await db.get(Section, item.section_id)
             if section is None:
-                raise HTTPException(status_code=404, detail=f"Section {item.section_id} not found")
+                raise HTTPException(status_code=404, detail=f"Участок {item.section_id} не найден")
             if not section.is_active:
-                raise HTTPException(status_code=400, detail=f"Inactive section {item.section_id}")
+                raise HTTPException(status_code=400, detail=f"Неактивный участок {item.section_id}")
             if is_storage_section(section):
                 raise HTTPException(
                     status_code=400,
                     detail=(
-                        f"Section {section.id} ({section.code}) is a storage section. "
-                        "To add it as a transit hop set stage_kind='transit'."
+                        f"Участок {section.id} ({section.code}) — складской. "
+                        "Чтобы добавить его как транзитный переход, укажите stage_kind='transit'."
                     ),
                 )
 
@@ -613,7 +613,7 @@ async def replace_route_steps(route_id: int, payload: list[StepUpdate], db: Asyn
                 if not op_exists:
                     raise HTTPException(
                         status_code=400,
-                        detail=f"Operation '{item.operation_code}' is not registered for section {item.section_id}",
+                        detail=f"Операция '{item.operation_code}' не зарегистрирована для участка {item.section_id}",
                     )
 
         stage = RouteStage(

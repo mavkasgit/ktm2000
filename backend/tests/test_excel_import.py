@@ -589,7 +589,7 @@ async def test_import_excel_requires_template_id(client, tmp_path, monkeypatch) 
     )
 
     assert response.status_code == 400
-    assert response.json()["detail"] == "template_id is required"
+    assert response.json()["detail"] == "Поле template_id обязательно"
 
 
 def test_factory_plan_parser_with_custom_mapping() -> None:

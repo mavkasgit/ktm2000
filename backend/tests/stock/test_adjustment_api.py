@@ -424,7 +424,7 @@ async def test_adjustment_rejects_unknown_operation_code(
         )
         assert resp.status_code == 422, resp.text
         detail = resp.json()["detail"]
-        assert "unknown operation_code" in detail
+        assert "неизвестные operation_code" in detail
         assert "NOT_A_REAL_OP" in detail
 
     # Ничего не записано: ни проводок, ни строк баланса.

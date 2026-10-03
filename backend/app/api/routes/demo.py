@@ -248,17 +248,17 @@ async def run_full_route_test(
     plant_config: PlantConfig = Depends(get_plant_config),
 ) -> FullRouteRunResponse:
     if payload.initial_quantity <= 0:
-        raise HTTPException(status_code=400, detail="initial_quantity must be > 0")
+        raise HTTPException(status_code=400, detail="Поле initial_quantity должно быть больше 0")
 
     run_id = (payload.run_id or f"run-{datetime.now(UTC).strftime('%Y%m%d%H%M%S')}-{uuid4().hex[:8]}").strip()
     
     # Strict uniqueness: reject duplicate run_id
     if await _check_run_id_exists(db, run_id):
-        raise HTTPException(status_code=409, detail=f"run_id '{run_id}' already exists. Each run_id must be unique.")
+        raise HTTPException(status_code=409, detail=f"Значение run_id '{run_id}' уже существует. Каждый run_id должен быть уникальным.")
 
     # Validate stage_preset requirements
     if payload.stage_preset == StagePreset.to_step_ready and not payload.target_route_stage_id:
-        raise HTTPException(status_code=400, detail="target_route_stage_id is required for 'to_step_ready' preset")
+        raise HTTPException(status_code=400, detail="Для пресета 'to_step_ready' обязателен target_route_stage_id")
 
     start_at = payload.start_performed_at or datetime.now(UTC)
     if start_at.tzinfo is None:
@@ -278,15 +278,15 @@ async def run_full_route_test(
             db, payload.route_name, legacy_name_only=False, only_active=True
         )
     if route is None:
-        raise HTTPException(status_code=404, detail="Route not found")
+        raise HTTPException(status_code=404, detail="Маршрут не найден")
     if not route.is_active:
-        raise HTTPException(status_code=400, detail="Route is inactive")
+        raise HTTPException(status_code=400, detail="Маршрут неактивен")
 
     product = await db.get(Product, payload.product_id)
     if product is None:
-        raise HTTPException(status_code=404, detail="Product not found")
+        raise HTTPException(status_code=404, detail="Артикул не найден")
     if not product.is_active:
-        raise HTTPException(status_code=400, detail="Product is inactive")
+        raise HTTPException(status_code=400, detail="Артикул неактивен")
 
     comments = f"TEST_RUN:{run_id}"
     scenario = None
@@ -294,7 +294,7 @@ async def run_full_route_test(
         scenarios = _scenario_map()
         scenario = scenarios.get(payload.scenario_id)
         if scenario is None:
-            raise HTTPException(status_code=400, detail=f"Unknown scenario_id '{payload.scenario_id}'")
+            raise HTTPException(status_code=400, detail=f"Неизвестный scenario_id '{payload.scenario_id}'")
 
     content = _workbook_for_product(
         sku=(scenario or {}).get("primary_sku", product.sku),
@@ -310,7 +310,7 @@ async def run_full_route_test(
     if target_plan_id is not None:
         target_plan = await db.get(ProductionPlan, target_plan_id)
         if target_plan is None:
-            raise HTTPException(status_code=404, detail="Production plan not found")
+            raise HTTPException(status_code=404, detail="Производственный план не найден")
         # Demo run should always be executable. If selected plan is closed, fork into a new plan.
         if target_plan.status in {ProductionPlanStatus.released, ProductionPlanStatus.cancelled}:
             target_plan_id = None
@@ -339,11 +339,11 @@ async def run_full_route_test(
         ).order_by(PlanChangeItem.id.desc())
     )
     if position_id is None:
-        raise HTTPException(status_code=500, detail="No plan position created for test run")
+        raise HTTPException(status_code=500, detail="Для тестового прогона не создана позиция плана")
 
     position = await db.get(PlanPosition, int(position_id))
     if position is None:
-        raise HTTPException(status_code=500, detail="Created plan position not found")
+        raise HTTPException(status_code=500, detail="Созданная позиция плана не найдена")
 
     payload_json = dict(position.source_payload or {})
     payload_json["test_run_id"] = run_id
@@ -384,7 +384,7 @@ async def run_full_route_test(
             reason=f"Демо-прогон {run_id}: маршрут стенда подставлен принудительно",
         )
     except ValueError as exc:
-        raise HTTPException(status_code=400, detail=f"Approve failed: {exc}") from exc
+        raise HTTPException(status_code=400, detail=f"Не удалось утвердить позицию: {exc}") from exc
 
     # Stop at after_approve: position approved, not released
     if payload.stage_preset == StagePreset.after_approve:
@@ -411,11 +411,11 @@ async def run_full_route_test(
         )
         release_summary = await release_batch(db, batch_summary["id"])
     except ValueError as exc:
-        raise HTTPException(status_code=400, detail=f"Release failed: {exc}") from exc
+        raise HTTPException(status_code=400, detail=f"Не удалось запустить позицию: {exc}") from exc
 
     task_rows = await _collect_tasks_for_position(db, position.id)
     if not task_rows:
-        raise HTTPException(status_code=500, detail="No tasks created for released position")
+        raise HTTPException(status_code=500, detail="Для запущенной позиции не созданы задания")
 
     # Stop at after_release: position released, tasks created, no movements
     if payload.stage_preset == StagePreset.after_release:
@@ -443,7 +443,7 @@ async def run_full_route_test(
                 target_step_index = idx
                 break
         if target_step_index is None:
-            raise HTTPException(status_code=400, detail="target_route_stage_id not found in route steps")
+            raise HTTPException(status_code=400, detail="Поле target_route_stage_id не найдено в шагах маршрута")
 
     # Auto-execute steps with early stop for to_step_ready
     stage_results: list[StageRunResult] = []
@@ -495,7 +495,7 @@ async def run_full_route_test(
                 scrap_policy=plant_config.production.scrap_policy,
             )
         except ValueError as exc:
-            raise HTTPException(status_code=400, detail=f"Task execution failed at step {step.sequence}: {exc}") from exc
+            raise HTTPException(status_code=400, detail=f"Выполнение задания не удалось на шаге {step.sequence}: {exc}") from exc
 
         # Record the completed stage
         stage_results.append(
@@ -538,7 +538,7 @@ async def run_full_route_test(
                     accounted_at=accounted_at,
                 )
             except ValueError as exc:
-                raise HTTPException(status_code=400, detail=f"Transfer failed at step {step.sequence}: {exc}") from exc
+                raise HTTPException(status_code=400, detail=f"Передача не удалась на шаге {step.sequence}: {exc}") from exc
 
     stopped_stage = payload.stage_preset.value
     if payload.stage_preset == StagePreset.to_step_ready:

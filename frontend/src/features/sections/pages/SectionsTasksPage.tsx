@@ -729,10 +729,10 @@ export function SectionsTasksPage() {
       const goodQty = variables.payload.good_quantity;
       const defectQty = variables.payload.defect_quantity;
       const comment = variables.payload.comment;
-      const sectionInfo = selectedSection ? `на участке "${selectedSection.name}" (${selectedSection.code})` : "";
+      const sectionInfo = selectedSection ? `на участке "${selectedSection.name}"` : "";
 
       const taskDetails = task
-        ? `для операции "${task.operation_name || task.operation_code || "Операция"}" (арт. ${task.display_sku || task.product_sku})`
+        ? `для операции "${task.operation_name || "Операция"}" (арт. ${task.display_sku || task.product_sku})`
         : `for task #${variables.taskId}`;
 
       const message = `Успешно подтверждено выполнение ${taskDetails} ${sectionInfo}. Введено: годные = ${goodQty} шт., брак = ${defectQty} шт.${comment ? ` (комментарий: "${comment}")` : ""}.`;
@@ -744,7 +744,7 @@ export function SectionsTasksPage() {
         message,
         taskIds: [variables.taskId],
         productSku: task?.display_sku || task?.product_sku,
-        operationName: task?.operation_name || task?.operation_code || undefined,
+        operationName: task?.operation_name || undefined,
         qtyText: `годн: ${goodQty}, брак: ${defectQty}`,
         comment: comment || undefined,
       });
@@ -755,10 +755,10 @@ export function SectionsTasksPage() {
     onError: (err, variables) => {
       const message = getErrorMessage(err);
       const task = variables.task;
-      const sectionInfo = selectedSection ? `на участке "${selectedSection.name}" (${selectedSection.code})` : "";
+      const sectionInfo = selectedSection ? `на участке "${selectedSection.name}"` : "";
       
       const taskDetails = task
-        ? `для операции "${task.operation_name || task.operation_code || "Операция"}" (арт. ${task.display_sku || task.product_sku})`
+        ? `для операции "${task.operation_name || "Операция"}" (арт. ${task.display_sku || task.product_sku})`
         : `for task #${variables.taskId}`;
 
       toast({ title: "Ошибка", description: message, variant: "destructive" });
@@ -768,7 +768,7 @@ export function SectionsTasksPage() {
         message: `Не удалось подтвердить выполнение ${taskDetails} ${sectionInfo}. Причина: ${message}`,
         taskIds: [variables.taskId],
         productSku: task?.display_sku || task?.product_sku,
-        operationName: task?.operation_name || task?.operation_code || undefined,
+        operationName: task?.operation_name || undefined,
         errorDetails: message,
       });
       setConflictHint(conflictHintFromError(message));

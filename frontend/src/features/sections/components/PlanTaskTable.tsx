@@ -1,7 +1,6 @@
 import { useMemo } from "react";
 import type { SectionBoardTask } from "@/shared/api/shopfloor";
 import { formatDimensionsLabel } from "@/shared/api/stock";
-import { colorNameLabels } from "@/shared/lib/generated-labels";
 import { QTY_EMPTY, fmtQty, fmtQtyPrecise } from "@/shared/lib/quantityFormat";
 import { getQtyPerHanger } from "./PlanHangerDisplay";
 import { countHangers } from "@/shared/lib/hangerCount";
@@ -73,8 +72,7 @@ function perHangerForRow(row: PlanTaskRow): string {
 }
 
 function colorLabel(color: string | null): string {
-  if (!color) return QTY_EMPTY;
-  return colorNameLabels[color] ?? color;
+  return color || QTY_EMPTY;
 }
 
 function operationsLabel(row: PlanTaskRow): string {

@@ -10,7 +10,7 @@
 
 import type { SectionBoardTask, TaskGroup } from "@/shared/api/shopfloor";
 import type { GroupingProfile } from "./groupingProfiles";
-import { colorNameLabels, operationCodeLabels } from "@/shared/lib/generated-labels";
+import { outputKindLabels } from "@/shared/lib/generated-labels";
 import { formatDimensionsLabel } from "@/shared/api/stock";
 
 // ---------------------------------------------------------------------------
@@ -160,15 +160,15 @@ function buildGroupLabel(
         parts.push(`этап ${task.sequence}`);
         break;
 
-      case "operationCode":
-        if (task.operation_code) {
-          parts.push(operationCodeLabels[task.operation_code] ?? task.operation_code);
-        }
+      case "operationCode": {
+        const operation = task.operation_name ?? task.operation_code;
+        if (operation) parts.push(operation);
         break;
+      }
 
       case "outputKind":
         if (task.output_kind) {
-          parts.push(colorNameLabels[task.output_kind] ?? task.output_kind);
+          parts.push(outputKindLabels[task.output_kind] ?? task.output_kind);
         }
         break;
 
@@ -178,10 +178,12 @@ function buildGroupLabel(
         }
         break;
 
-      case "fingerprint":
-        if (task.operation_code) parts.push(task.operation_code);
-        if (task.output_kind) parts.push(task.output_kind);
+      case "fingerprint": {
+        const operation = task.operation_name ?? task.operation_code;
+        if (operation) parts.push(operation);
+        if (task.output_kind) parts.push(outputKindLabels[task.output_kind] ?? task.output_kind);
         break;
+      }
 
       case "routeHistory":
         if (task.route_history_full && task.route_history_full.length > 0) {

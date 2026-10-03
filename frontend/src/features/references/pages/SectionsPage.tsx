@@ -617,10 +617,10 @@ export function SectionsPage() {
     try {
       if (dialogMode === "edit" && editingItem?.id) {
         await apiPatchSection(Number(editingItem.id), payload);
-        toast({ title: "Сохранено", description: `Участок "${payload.name}" (код: ${payload.code}, ID: ${editingItem.id}) успешно обновлён`, variant: "success" });
+        toast({ title: "Сохранено", description: `Участок "${payload.name}" успешно обновлён`, variant: "success" });
       } else {
         await apiCreateSection(payload);
-        toast({ title: "Создано", description: `Участок "${payload.name}" (код: ${payload.code}, тип: ${sectionTypeLabels[payload.type] ?? payload.type}) успешно создан`, variant: "success" });
+        toast({ title: "Создано", description: `Участок "${payload.name}" (${sectionTypeLabels[payload.type] ?? payload.type}) успешно создан`, variant: "success" });
       }
       setDialogOpen(false);
       await invalidateSections();
@@ -634,11 +634,11 @@ export function SectionsPage() {
     if (!editingItem?.id) return;
     try {
       await apiDeleteSection(Number(editingItem.id));
-      toast({ title: "Удалено", description: `Участок "${editingItem.name}" (код: ${editingItem.code}, ID: ${editingItem.id}, тип: ${sectionTypeLabels[editingItem.type ?? "production"] ?? editingItem.type}) успешно удалён`, variant: "success" });
+      toast({ title: "Удалено", description: `Участок "${editingItem.name}" (${sectionTypeLabels[editingItem.type ?? "production"] ?? editingItem.type}) успешно удалён`, variant: "success" });
       setDialogOpen(false);
       await invalidateSections();
     } catch (e) {
-      toast({ title: `Ошибка удаления: ${editingItem.name} (код: ${editingItem.code}, ID: ${editingItem.id})`, description: API.getErrorMessage(e), variant: "destructive" });
+      toast({ title: `Ошибка удаления: ${editingItem.name}`, description: API.getErrorMessage(e), variant: "destructive" });
     } finally {
       setDeleteDialogOpen(false);
     }

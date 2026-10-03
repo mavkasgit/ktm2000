@@ -342,7 +342,7 @@ async def bulk_complete_tasks(
             entry = BulkCompleteEntry.model_validate(raw)
         except ValidationError as exc:
             results.append(
-                BulkActionResultItem(id=0, status="failed", reason=f"Invalid entry: {exc}")
+                BulkActionResultItem(id=0, status="failed", reason=f"Некорректная запись: {exc}")
             )
             continue
         try:
@@ -524,7 +524,7 @@ async def patch_task_operation(
     await _ensure_task_lock(db, task_id, locked_section_id)
     task = await db.get(WorkTask, task_id)
     if not task:
-        raise HTTPException(status_code=404, detail="Task not found")
+        raise HTTPException(status_code=404, detail="Задача не найдена")
     await _require_mutable_task(db, task)
 
     # Validate that the operation exists for this task's section
@@ -537,7 +537,7 @@ async def patch_task_operation(
     if not op:
         raise HTTPException(
             status_code=400,
-            detail=f"Operation '{payload.operation_code}' not found for section {task.section_id}",
+            detail=f"Операция '{payload.operation_code}' не найдена для участка {task.section_id}",
         )
 
     task.selected_operation_code = payload.operation_code
@@ -596,7 +596,7 @@ async def final_release_endpoint(
     try:
         task = await db.get(WorkTask, task_id)
         if task is None:
-            raise ValueError("Task not found")
+            raise ValueError("Задача не найдена")
         await _require_mutable_task(db, task)
         return await final_release(
             db,
@@ -993,11 +993,11 @@ async def return_remainder(
     try:
         quantity = Decimal(str(payload.quantity))
         if quantity <= 0:
-            raise ValueError("Quantity must be > 0")
+            raise ValueError("Количество должно быть > 0")
 
         task = await db.get(WorkTask, payload.task_id)
         if task is None:
-            raise ValueError("Task not found")
+            raise ValueError("Задача не найдена")
         await _require_mutable_task(db, task)
 
         # Available for return = issued - completed - transferred
@@ -1006,9 +1006,11 @@ async def return_remainder(
         cache = await pm.get_task_cache(db, task.id)
         available_for_return = cache["issued_quantity"] - cache["completed_quantity"] - cache["transferred_quantity"]
         if available_for_return <= 0:
-            raise ValueError("No excess quantity available for return")
+            raise ValueError("Нет излишков для возврата на склад")
         if quantity > available_for_return:
-            raise ValueError(f"Return quantity ({quantity}) exceeds available for return ({available_for_return})")
+            raise ValueError(
+                f"Количество возврата ({quantity}) превышает доступное к возврату ({available_for_return})"
+            )
 
         now = datetime.now(UTC)
         svc = StockCommandService()
@@ -1082,7 +1084,7 @@ async def task_spg_available(
 
     task = await db.get(WorkTask, task_id)
     if task is None:
-        raise HTTPException(status_code=404, detail="Task not found")
+        raise HTTPException(status_code=404, detail="Задача не найдена")
 
     # Find stock locations that feed this task's section
     from app.services.shopfloor.operations_tasks import _get_stock_location

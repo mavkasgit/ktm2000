@@ -62,10 +62,10 @@ async def create_dimension_type(
 ) -> DimensionTypeOut:
     code = payload.code.strip()
     if not code:
-        raise HTTPException(status_code=422, detail="code must not be empty")
+        raise HTTPException(status_code=422, detail="Поле code не может быть пустым")
     existing = await db.scalar(select(DimensionType).where(DimensionType.code == code))
     if existing:
-        raise HTTPException(status_code=409, detail="Dimension type code already exists")
+        raise HTTPException(status_code=409, detail="Тип измерения с таким кодом уже существует")
     item = DimensionType(code=code, name=payload.name, unit=payload.unit, value_type=payload.value_type)
     db.add(item)
     await db.flush()
@@ -85,20 +85,20 @@ async def patch_dimension_type(
 ) -> DimensionTypeOut:
     item = await db.get(DimensionType, type_id)
     if item is None:
-        raise HTTPException(status_code=404, detail="Dimension type not found")
+        raise HTTPException(status_code=404, detail="Тип измерения не найден")
 
     patch_data = payload.model_dump(exclude_unset=True)
     new_code = patch_data.pop("code", None)
     if new_code is not None:
         new_code = new_code.strip()
         if not new_code:
-            raise HTTPException(status_code=422, detail="code must not be empty")
+            raise HTTPException(status_code=422, detail="Поле code не может быть пустым")
         if new_code != item.code:
             duplicate = await db.scalar(
                 select(DimensionType).where(DimensionType.code == new_code, DimensionType.id != type_id)
             )
             if duplicate:
-                raise HTTPException(status_code=409, detail="Dimension type code already exists")
+                raise HTTPException(status_code=409, detail="Тип измерения с таким кодом уже существует")
             item.code = new_code
 
     for key, value in patch_data.items():
@@ -116,7 +116,7 @@ async def patch_dimension_type(
 async def delete_dimension_type(type_id: int, db: AsyncSession = Depends(get_db)):
     item = await db.get(DimensionType, type_id)
     if item is None:
-        raise HTTPException(status_code=404, detail="Dimension type not found")
+        raise HTTPException(status_code=404, detail="Тип измерения не найден")
 
     links_count = await db.scalar(
         select(func.count()).select_from(ProductDimension).where(ProductDimension.dimension_type_id == type_id)
@@ -134,7 +134,7 @@ async def delete_dimension_type(type_id: int, db: AsyncSession = Depends(get_db)
 async def _get_product_or_404(db: AsyncSession, product_id: int) -> Product:
     product = await db.get(Product, product_id)
     if product is None:
-        raise HTTPException(status_code=404, detail="Product not found")
+        raise HTTPException(status_code=404, detail="Артикул не найден")
     return product
 
 
@@ -170,7 +170,7 @@ async def create_product_dimension(
 
     dim_type = await db.get(DimensionType, payload.dimension_type_id)
     if dim_type is None:
-        raise HTTPException(status_code=404, detail="Dimension type not found")
+        raise HTTPException(status_code=404, detail="Тип измерения не найден")
 
     existing = await db.scalar(
         select(ProductDimension).where(
@@ -179,7 +179,7 @@ async def create_product_dimension(
         )
     )
     if existing:
-        raise HTTPException(status_code=409, detail="Dimension already linked to this product")
+        raise HTTPException(status_code=409, detail="Измерение уже привязано к этому артикулу")
 
     link = ProductDimension(
         product_id=product_id,
@@ -210,7 +210,7 @@ async def patch_product_dimension(
         .where(ProductDimension.id == link_id, ProductDimension.product_id == product_id)
     )
     if link is None:
-        raise HTTPException(status_code=404, detail="Product dimension not found")
+        raise HTTPException(status_code=404, detail="Измерение артикула не найдено")
 
     patch_data = payload.model_dump(exclude_unset=True)
     for key, value in patch_data.items():
@@ -236,7 +236,7 @@ async def delete_product_dimension(
         )
     )
     if link is None:
-        raise HTTPException(status_code=404, detail="Product dimension not found")
+        raise HTTPException(status_code=404, detail="Измерение артикула не найдено")
 
     await db.delete(link)
     await db.flush()

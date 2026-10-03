@@ -63,7 +63,7 @@ async def test_inactive_section_rejected_in_route_step(client, session) -> None:
         },
     )
     assert add_step.status_code == 400
-    assert "inactive section" in add_step.json()["detail"].lower()
+    assert "неактивный участок" in add_step.json()["detail"].lower()
 
 
 @pytest.mark.asyncio
@@ -161,7 +161,7 @@ async def test_create_patch_section_with_spg(client, session) -> None:
     }
     resp = await client.post("/api/sections", json=invalid_payload)
     assert resp.status_code == 400
-    assert "spg id does not exist" in resp.json()["detail"].lower()
+    assert "не существует" in resp.json()["detail"].lower()
 
 
 @pytest.mark.asyncio

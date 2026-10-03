@@ -58,6 +58,25 @@ const isDslAction = (action: string): boolean => action === "set" || action === 
 const isSectionAction = (action: string): boolean => action === "require_section" || action === "exclude_section";
 const isGroupAction = (action: string): boolean => action === "set_operation" || action === "resolve_by_type";
 
+/**
+ * Подпись действия правила по-русски: название участка и название операции.
+ *
+ * Бейдж в таблице читает человек, а действие ссылается на справочник кодами
+ * (`SAWING → SAW_2700`). Названия приходят в самом действии (`section_name`,
+ * `operation_name`) — это не второй запрос, а разбор справочника сервером.
+ * Код остаётся только там, где названия нет: пустой бейдж читался бы хуже
+ * кода, который хотя бы что-то значит.
+ */
+function actionSummary(action: RoutesAPI.RouteSelectionAction): string {
+  // У действий над контекстом смысл — путь, а не участок.
+  if (isDslAction(action.action)) return action.path ?? "";
+  const operation = action.operation_name ?? action.operation_code;
+  if (isGroupAction(action.action)) return operation ?? "";
+  const section = action.section_name ?? action.section_code ?? action.section_id;
+  if (isSectionAction(action.action) && operation) return `${section} → ${operation}`;
+  return String(section ?? "");
+}
+
 const HEADER_KEY_BY_NAME: Record<string, string> = {
   "артикул": "sku",
   "пополнение": "replenishment",
@@ -1126,7 +1145,6 @@ export function RouteSelectionRulesSection({ refreshKey }: Props) {
                       <Badge variant={rule.phase === "normalize" ? "secondary" : "default"} className="text-[10px] px-1 py-0">
                         {rulePhaseLabels[rule.phase]}
                       </Badge>
-                      {rule.code && <span className="text-xs text-muted-foreground">{rule.code}</span>}
                     </div>
                     {rule.profile_name && <div className="text-xs text-muted-foreground">Группа: {rule.profile_name}</div>}
                   </TableCell>
@@ -1138,7 +1156,7 @@ export function RouteSelectionRulesSection({ refreshKey }: Props) {
                         const isGroup = isGroupAction(action.action);
                         return (
                           <Badge key={`${rule.id}-${index}`} variant={isDsl ? "outline" : (action.action === "require_section" ? "default" : "secondary")}>
-                            {actionLabels[action.action]} {isDsl ? (action.path ?? "") : isGroup ? `${action.section_code ?? ""} / ${action.group_code ?? ""} → ${action.operation_code ?? ""}` : isSection && action.operation_code ? `${action.section_code ?? action.section_id} → ${action.operation_code}` : (action.section_code ?? action.section_id)}
+                            {actionLabels[action.action]} {actionSummary(action)}
                           </Badge>
                         );
                       })}
@@ -1387,7 +1405,7 @@ export function RouteSelectionRulesSection({ refreshKey }: Props) {
                                     <SelectContent>
                                       <SelectItem value="__none__">—</SelectItem>
                                       {sections.filter((s) => s.is_active).map((s) => (
-                                        <SelectItem key={s.code} value={s.code}>{s.name} ({s.code})</SelectItem>
+                                        <SelectItem key={s.code} value={s.code}>{s.name}</SelectItem>
                                       ))}
                                     </SelectContent>
                                   </Select>
@@ -1409,9 +1427,15 @@ export function RouteSelectionRulesSection({ refreshKey }: Props) {
                                         {action.section_code && Array.from(sectionGroupsMap[action.section_code] ?? []).length === 0 && (
                                           <SelectItem value="__empty__" disabled>Нет групп</SelectItem>
                                         )}
-                                        {action.section_code && Array.from(sectionGroupsMap[action.section_code] ?? []).map((gc) => (
-                                          <SelectItem key={gc} value={gc}>{gc}</SelectItem>
-                                        ))}
+                                        {action.section_code && Array.from(sectionGroupsMap[action.section_code] ?? []).map((gc) => {
+                                          const section = sections.find((s) => s.code === action.section_code);
+                                          const groupName = section
+                                            ? (sectionOps[section.id] ?? []).find((o) => o.group_code === gc)?.group_name
+                                            : undefined;
+                                          return (
+                                            <SelectItem key={gc} value={gc}>{groupName || gc}</SelectItem>
+                                          );
+                                        })}
                                       </SelectContent>
                                     </Select>
                                     <Select
@@ -1432,7 +1456,7 @@ export function RouteSelectionRulesSection({ refreshKey }: Props) {
                                           const ops = (sectionOps[section.id] ?? []).filter((o) => o.group_code === action.group_code && !o.operation_code.startsWith("__"));
                                           if (ops.length === 0) return <SelectItem value="__empty__" disabled>Нет операций</SelectItem>;
                                           return ops.map((op) => (
-                                            <SelectItem key={op.operation_code} value={op.operation_code}>{op.operation_name} ({op.operation_code})</SelectItem>
+                                            <SelectItem key={op.operation_code} value={op.operation_code}>{op.operation_name}</SelectItem>
                                           ));
                                         })()}
                                         {(!action.section_code || !action.group_code) && (
@@ -1470,7 +1494,7 @@ export function RouteSelectionRulesSection({ refreshKey }: Props) {
                                       <SelectItem value="__none__">—</SelectItem>
                                       {(sectionOps[action.section_id ?? 0] ?? []).map((op) => (
                                         <SelectItem key={op.operation_code} value={op.operation_code}>
-                                          {op.operation_name} ({op.operation_code})
+                                          {op.operation_name}
                                         </SelectItem>
                                       ))}
                                       {(!action.section_id || !(sectionOps[action.section_id ?? 0]?.length)) && (
@@ -1584,7 +1608,7 @@ export function RouteSelectionRulesSection({ refreshKey }: Props) {
                   <SelectContent>
                     <SelectItem value="__none__">Не выбран</SelectItem>
                     {importTemplates.map((t) => (
-                      <SelectItem key={t.id} value={String(t.id)}>{t.name}{t.code ? ` (${t.code})` : ""}</SelectItem>
+                      <SelectItem key={t.id} value={String(t.id)}>{t.name}</SelectItem>
                     ))}
                   </SelectContent>
                 </Select>

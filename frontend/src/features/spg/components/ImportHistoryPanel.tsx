@@ -46,9 +46,47 @@ import {
 import { saveBlobAsFile } from "@/shared/lib/downloadFile";
 import { useAuth } from "@/features/auth/hooks/useAuth";
 import { fmtQty } from "@/shared/lib/quantityFormat";
-import { formatCompletedOperationsLabel } from "@/shared/api/stock";
+import {
+  formatCompletedOperationsLabel,
+  getRemainderImportOperations,
+  type ImportOperationStep,
+} from "@/shared/api/stock";
 import { POLICIES } from "../../auth/policies";
 import { cn } from "@/shared/utils/cn";
+
+/** Заглушка этапа для кода вне справочника: подписывать его надо, рисуя — нечем. */
+const EMPTY_STEP = {
+  sequence: 0,
+  section_code: "",
+  section_name: "",
+  operation_code: null,
+  operation_name: "",
+  is_significant: true,
+} satisfies ImportOperationStep;
+
+/**
+ * Ответ истории отдаёт коды операций (`completed_operations`), а читает их
+ * оператор по названиям. Справочник `/stock/import/remainders/operations` — тот
+ * же, что и у предпросмотра импорта, поэтому подпись строки истории совпадает
+ * с подписью той же строки в превью. Кода, которого нет в справочнике, молча
+ * терять нельзя — по нему видно, что маршрут не сошёлся, поэтому неизвестный
+ * код печатается сам собой.
+ */
+function operationStagesByCode(
+  ops: string[] | null,
+  reference: ImportOperationStep[] | undefined,
+): ImportOperationStep[] | undefined {
+  if (!ops || !reference) return undefined;
+  const byCode: Record<string, ImportOperationStep> = {};
+  for (const step of reference) {
+    if (step.operation_code) byCode[step.operation_code] = step;
+  }
+  // Порядок подписи — это порядок `completed_operations`, а не справочника.
+  return ops.map((code, sequence) => {
+    const step = byCode[code];
+    return step ?? { ...EMPTY_STEP, sequence, operation_code: code, operation_name: code };
+  });
+}
 
 function fmtDate(value: string | null): string {
   if (!value) return "—";
@@ -321,6 +359,12 @@ function ImportBatchDetailDialog({
     enabled: batchId != null,
   });
 
+  const { data: operations } = useQuery({
+    queryKey: queryKeys.stock.remainderImportOperations(),
+    queryFn: () => getRemainderImportOperations(),
+    enabled: batchId != null,
+  });
+
   return (
     <Dialog open={batchId != null} onOpenChange={onOpenChange}>
       <DialogContent className="max-w-4xl">
@@ -387,7 +431,10 @@ function ImportBatchDetailDialog({
                       <td className={CELL}>{row.dimensions_label}</td>
                       <td className={CELL}>{row.target_section_name ?? "—"}</td>
                       <td className={cn(CELL, "text-muted-foreground")}>
-                        {formatCompletedOperationsLabel(row.completed_operations)}
+                        {formatCompletedOperationsLabel(
+                          row.completed_operations,
+                          operationStagesByCode(row.completed_operations, operations),
+                        )}
                       </td>
                       <td className={cn(CELL, "tabular-nums font-medium")}>
                         {fmtQty(row.current_balance)}

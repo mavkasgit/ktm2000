@@ -11,7 +11,7 @@ import {
   getImportFileDownloadUrl,
   type ImportFullItem,
 } from "@/shared/api/imports"
-import { actionLabels, statusLabels, statusVariant } from "../lib/plan-labels"
+import { actionLabels, errorLabels, statusLabels, statusVariant, warningLabels } from "../lib/plan-labels"
 import { isDuplicateRow } from "../lib/duplicateRows"
 import { buildImportRowStats } from "../lib/importRowStats"
 import { fmtQtyPrecise } from "@/shared/lib/quantityFormat"
@@ -376,8 +376,15 @@ function ItemDetail({ item }: { item: ImportFullItem }) {
   return (
     <div className="space-y-2 text-xs">
       <div className="flex flex-wrap gap-1">
-        {[...item.errors, ...item.warnings].map((code) => (
-          <Badge key={code} variant="outline" className="font-normal">{code}</Badge>
+        {item.errors.map((code) => (
+          <Badge key={code} variant="outline" className="font-normal">
+            {errorLabels[code] ?? code}
+          </Badge>
+        ))}
+        {item.warnings.map((code) => (
+          <Badge key={code} variant="outline" className="font-normal">
+            {warningLabels[code] ?? code}
+          </Badge>
         ))}
         {item.errors.length === 0 && item.warnings.length === 0 && (
           <span className="text-muted-foreground">Без ошибок и предупреждений</span>

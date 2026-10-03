@@ -65,7 +65,7 @@ async def test_create_step_with_unregistered_operation_code(client, session) -> 
         },
     )
     assert step.status_code == 400
-    assert "not registered" in step.json()["detail"].lower()
+    assert "не зарегистрирована" in step.json()["detail"].lower()
 
 
 @pytest.mark.asyncio
@@ -96,7 +96,7 @@ async def test_replace_steps_with_unregistered_operation_code(client, session) -
         ],
     )
     assert result.status_code == 400
-    assert "not registered" in result.json()["detail"].lower()
+    assert "не зарегистрирована" in result.json()["detail"].lower()
 
 
 @pytest.mark.asyncio
@@ -136,7 +136,7 @@ async def test_replace_steps_with_mixed_valid_and_invalid_operation_codes(client
         ],
     )
     assert result.status_code == 400
-    assert "not registered" in result.json()["detail"].lower()
+    assert "не зарегистрирована" in result.json()["detail"].lower()
 
 
 @pytest.mark.asyncio
@@ -169,7 +169,7 @@ async def test_press_section_rejects_press_operation_code(client, session) -> No
         },
     )
     assert step.status_code == 400
-    assert "not registered" in step.json()["detail"].lower()
+    assert "не зарегистрирована" in step.json()["detail"].lower()
 
     # But PRESS_WINDOW should work
     step2 = await client.post(

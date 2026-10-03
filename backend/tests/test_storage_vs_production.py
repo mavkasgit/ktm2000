@@ -302,7 +302,7 @@ async def test_create_route_step_rejects_storage_as_production(client: AsyncClie
         },
     )
     assert res.status_code == 400, res.text
-    assert "storage section" in res.json()["detail"].lower()
+    assert "складской" in res.json()["detail"].lower()
 
 
 async def test_create_route_step_accepts_transit_for_storage(client: AsyncClient, session: AsyncSession):
@@ -355,4 +355,4 @@ async def test_create_route_step_transit_cannot_be_final(client: AsyncClient, se
         },
     )
     assert res.status_code == 400, res.text
-    assert "final" in res.json()["detail"].lower()
+    assert "финальным" in res.json()["detail"].lower()

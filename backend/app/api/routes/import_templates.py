@@ -77,13 +77,13 @@ async def list_templates(
 )
 async def create_template(payload: ImportTemplateIn, db: AsyncSession = Depends(get_db)) -> ImportTemplateOut:
     if not payload.name.strip():
-        raise HTTPException(status_code=400, detail="Template name is required")
+        raise HTTPException(status_code=400, detail="Название шаблона обязательно")
 
     clean_code = _clean_code(payload.code)
     if clean_code:
         existing = await db.scalar(select(ImportTemplate).where(ImportTemplate.code == clean_code))
         if existing is not None:
-            raise HTTPException(status_code=409, detail="Template with this code already exists")
+            raise HTTPException(status_code=409, detail="Шаблон с таким кодом уже существует")
 
     data = payload.model_dump()
     data["code"] = clean_code
@@ -109,16 +109,16 @@ async def update_template(
 ) -> ImportTemplateOut:
     item = await db.get(ImportTemplate, template_id)
     if item is None:
-        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Import template not found")
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Шаблон импорта не найден")
 
     if not payload.name.strip():
-        raise HTTPException(status_code=400, detail="Template name is required")
+        raise HTTPException(status_code=400, detail="Название шаблона обязательно")
 
     clean_code = _clean_code(payload.code)
     if clean_code:
         existing = await db.scalar(select(ImportTemplate).where(ImportTemplate.code == clean_code, ImportTemplate.id != template_id))
         if existing is not None:
-            raise HTTPException(status_code=409, detail="Template with this code already exists")
+            raise HTTPException(status_code=409, detail="Шаблон с таким кодом уже существует")
 
     item.code = clean_code
     item.name = payload.name.strip()
@@ -142,7 +142,7 @@ async def update_template(
 async def delete_template(template_id: int, db: AsyncSession = Depends(get_db)) -> None:
     item = await db.get(ImportTemplate, template_id)
     if item is None:
-        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Import template not found")
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Шаблон импорта не найден")
     await db.delete(item)
     await db.flush()
 

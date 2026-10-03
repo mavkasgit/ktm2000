@@ -349,7 +349,7 @@ async def _force_blockers(db: AsyncSession, fp: _Footprint) -> list[dict]:
         blockers.extend(
             {
                 "position_id": None,
-                "reason": f"transfer-crosses-batch #{transfer_id} {transfer_no}",
+                "reason": f"передача пересекает границу партии #{transfer_id} {transfer_no}",
             }
             for transfer_id, transfer_no in crossing
         )
@@ -367,7 +367,7 @@ async def _force_blockers(db: AsyncSession, fp: _Footprint) -> list[dict]:
         blockers.extend(
             {
                 "position_id": None,
-                "reason": f"compensates-foreign-tx #{tx_id} of #{source_id}",
+                "reason": f"компенсирует чужую проводку #{tx_id} из #{source_id}",
             }
             for tx_id, source_id in foreign
         )
@@ -382,7 +382,7 @@ async def get_batch_force_delete_preview(db: AsyncSession, batch_id: int) -> dic
     """
     batch = await db.get(ImportBatch, batch_id)
     if batch is None:
-        raise ValueError("Import batch not found")
+        raise ValueError("Пакет импорта не найден")
 
     fp = await _collect_footprint(db, batch_id)
     blockers = await _force_blockers(db, fp)
@@ -431,18 +431,18 @@ async def force_delete_import_batch(
 
     batch = await db.get(ImportBatch, batch_id)
     if batch is None:
-        raise ValueError("Import batch not found")
+        raise ValueError("Пакет импорта не найден")
 
     filename = await _batch_filename(db, batch)
     clean_reason = reason.strip()
     if confirmation != filename:
-        raise ValueError("Confirmation must exactly match the file name")
+        raise ValueError("Подтверждение должно в точности совпадать с именем файла")
     if len(clean_reason) < MIN_REASON_LENGTH:
-        raise ValueError("Reason must contain at least 3 characters")
+        raise ValueError("Причина должна содержать не менее 3 символов")
 
     fp = await _collect_footprint(db, batch_id)
     if not fp.position_ids:
-        raise ValueError("Import batch has no positions to delete")
+        raise ValueError("В пакете импорта нет позиций для удаления")
 
     blockers = await _force_blockers(db, fp)
     if blockers:

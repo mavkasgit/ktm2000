@@ -346,7 +346,7 @@ def _validate_linear_lengths(
     """Validate and normalize the canonical linear-length registry."""
     if dimension_state in (DimensionState.area, DimensionState.volume):
         if lengths:
-            raise HTTPException(status_code=422, detail="lengths are only valid for linear products")
+            raise HTTPException(status_code=422, detail="Длины применимы только к линейным изделиям")
         return []
 
     normalized: list[ProductLengthIn] = []
@@ -363,12 +363,12 @@ def _validate_linear_lengths(
     for value in normalized:
         length = float(value.length_mm)
         if length in by_length:
-            raise HTTPException(status_code=422, detail="lengths must contain unique length_mm values")
+            raise HTTPException(status_code=422, detail="Значения length_mm в длинах должны быть уникальными")
         if value.is_primary:
             primary_count += 1
         by_length[length] = value
     if primary_count > 1:
-        raise HTTPException(status_code=422, detail="only one length can be primary")
+        raise HTTPException(status_code=422, detail="Основной может быть только один вариант длины")
     return normalized
 
 
@@ -407,7 +407,7 @@ async def _sync_lengths(
             if not clear_invalid_raw or "raw_length_mm" in value.model_fields_set:
                 raise HTTPException(
                     status_code=422,
-                    detail=f"raw_length_mm must be greater than or equal to length_mm ({length})",
+                    detail=f"Поле raw_length_mm должно быть больше или равно length_mm ({length})",
                 )
             raw = None
         if "raw_length_mm" not in value.model_fields_set and old is not None:
@@ -432,7 +432,7 @@ async def _sync_processing_flags(db: AsyncSession, product_id: int, codes: list[
     known_set = set(known.all())
     unknown = set(codes) - known_set
     if unknown:
-        raise HTTPException(status_code=400, detail=f"Unknown processing flag codes: {', '.join(sorted(unknown))}")
+        raise HTTPException(status_code=400, detail=f"Неизвестные коды флагов обработки: {', '.join(sorted(unknown))}")
     flag_ids = await db.scalars(select(ProcessingFlag.id).where(ProcessingFlag.code.in_(codes)))
     for fid in flag_ids.all():
         db.add(ProductProcessingFlag(product_id=product_id, flag_id=fid))
@@ -976,11 +976,11 @@ async def create_product(
 ) -> ProductOut:
     existing = await db.scalar(select(Product).where(Product.sku == payload.sku))
     if existing:
-        raise HTTPException(status_code=409, detail="SKU already exists")
+        raise HTTPException(status_code=409, detail="Артикул с таким SKU уже существует")
     if payload.code:
         existing_code = await db.scalar(select(Product).where(Product.code == payload.code))
         if existing_code:
-            raise HTTPException(status_code=409, detail="Code already exists")
+            raise HTTPException(status_code=409, detail="Артикул с таким кодом уже существует")
 
     product_data = payload.model_dump(
         exclude={"lengths", "processing_flag_codes", "skip_shot_blast", "is_laminated", "quantity_per_hanger"}
@@ -1062,7 +1062,7 @@ async def get_product(product_id: int, db: AsyncSession = Depends(get_db)) -> Pr
     ).where(Product.id == product_id)
     item = (await db.execute(stmt)).scalar_one_or_none()
     if item is None:
-        raise HTTPException(status_code=404, detail="Product not found")
+        raise HTTPException(status_code=404, detail="Артикул не найден")
     dimensions = None
     if item.dimension_state in (DimensionState.area, DimensionState.volume):
         dimensions = await _sheet_dimension_values(db, product_id) or None
@@ -1082,7 +1082,7 @@ async def patch_product(
 ) -> ProductOut:
     item = await db.get(Product, product_id)
     if item is None:
-        raise HTTPException(status_code=404, detail="Product not found")
+        raise HTTPException(status_code=404, detail="Артикул не найден")
 
     # Целостность пар (ADR-0023, #146): артикул в паре нельзя деактивировать
     # до разрыва пары — явная ошибка, не каскад.
@@ -1106,18 +1106,18 @@ async def patch_product(
             select(Product).where(Product.code == new_code, Product.id != product_id)
         )
         if duplicate_code:
-            raise HTTPException(status_code=409, detail="Code already exists")
+            raise HTTPException(status_code=409, detail="Артикул с таким кодом уже существует")
     new_sku = patch_data.pop("sku", None)
     if new_sku is not None:
         normalized_sku = new_sku.strip()
         if not normalized_sku:
-            raise HTTPException(status_code=422, detail="SKU must not be empty")
+            raise HTTPException(status_code=422, detail="Поле SKU не может быть пустым")
         if normalized_sku != item.sku:
             duplicate = await db.scalar(
                 select(Product).where(Product.sku == normalized_sku, Product.id != product_id)
             )
             if duplicate:
-                raise HTTPException(status_code=409, detail="SKU already exists")
+                raise HTTPException(status_code=409, detail="Артикул с таким SKU уже существует")
             old_sku = item.sku
             item.sku = normalized_sku
             others = (await db.execute(select(Product).where(Product.id != product_id))).scalars().all()
@@ -1204,7 +1204,7 @@ async def patch_product(
 async def delete_product(product_id: int, db: AsyncSession = Depends(get_db)):
     item = await db.get(Product, product_id)
     if item is None:
-        raise HTTPException(status_code=404, detail="Product not found")
+        raise HTTPException(status_code=404, detail="Артикул не найден")
 
     relations: list[str] = []
 
@@ -1299,7 +1299,7 @@ async def get_product_composition(
 ) -> CompositionOut:
     product = await db.get(Product, product_id)
     if product is None:
-        raise HTTPException(status_code=404, detail="Product not found")
+        raise HTTPException(status_code=404, detail="Артикул не найден")
     return CompositionOut(items=await _load_composition(db, product_id))
 
 
@@ -1316,31 +1316,31 @@ async def replace_product_composition(
     """Заменить состав продукта целиком (нормативная связь, #147)."""
     product = await db.get(Product, product_id)
     if product is None:
-        raise HTTPException(status_code=404, detail="Product not found")
+        raise HTTPException(status_code=404, detail="Артикул не найден")
 
     items = payload.items
     components_by_id: dict[int, Product] = {}
     component_ids = [item.component_product_id for item in items]
     if component_ids:
         if len(set(component_ids)) != len(component_ids):
-            raise HTTPException(status_code=422, detail="Duplicate component in composition")
+            raise HTTPException(status_code=422, detail="Повторяющийся компонент в составе")
         components = (
             await db.execute(select(Product).where(Product.id.in_(component_ids)))
         ).scalars().all()
         components_by_id = {c.id: c for c in components}
         for item in items:
             if item.component_product_id == product_id:
-                raise HTTPException(status_code=422, detail="Product cannot be its own component")
+                raise HTTPException(status_code=422, detail="Артикул не может быть своим же компонентом")
             component = components_by_id.get(item.component_product_id)
             if component is None:
                 raise HTTPException(
                     status_code=422,
-                    detail=f"Component {item.component_product_id} not found",
+                    detail=f"Компонент {item.component_product_id} не найден",
                 )
             if component.type != ProductType.component:
                 raise HTTPException(
                     status_code=422,
-                    detail=f"Product {component.sku} must be raw material (type=component)",
+                    detail=f"Артикул {component.sku} должен быть материалом (type=component)",
                 )
 
     await db.execute(delete(ProductComposition).where(ProductComposition.product_id == product_id))
@@ -1372,7 +1372,7 @@ async def upload_product_photo(
     print(f"[DEBUG] upload_product_photo: product_id={product_id}, kind={kind}, filename={file.filename}")
     item = await db.get(Product, product_id)
     if item is None:
-        raise HTTPException(status_code=404, detail="Product not found")
+        raise HTTPException(status_code=404, detail="Артикул не найден")
 
     storage_dir = Path(settings.PRODUCT_PHOTO_DIR)
     # mkdir блокирует event loop воркера, поэтому уходит в поток (#267).
@@ -1425,7 +1425,7 @@ async def get_product_route_stages(
         select(Product).options(selectinload(Product.processing_flags)).where(Product.id == product_id)
     )).scalar_one_or_none()
     if product is None:
-        raise HTTPException(status_code=404, detail="Product not found")
+        raise HTTPException(status_code=404, detail="Артикул не найден")
 
     # 1. Try to find route matching the product across all profiles
     profiles = (
@@ -1474,7 +1474,7 @@ async def get_product_route_stages(
             )
 
     if not matched_route:
-        raise HTTPException(status_code=404, detail="No route found for this product")
+        raise HTTPException(status_code=404, detail="Маршрут для этого артикула не найден")
 
     # Load stages
     stages = (
@@ -1580,7 +1580,7 @@ async def get_product_last_completed_operation(
 ) -> LastCompletedOperationOut:
     product = await db.get(Product, product_id)
     if product is None:
-        raise HTTPException(status_code=404, detail="Product not found")
+        raise HTTPException(status_code=404, detail="Артикул не найден")
 
     # 1. Находим последнюю complete-транзакцию
     from app.stock.models import Reason, StockTransaction

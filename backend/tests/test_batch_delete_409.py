@@ -338,7 +338,7 @@ async def test_delete_batch_wrong_plan_404(session: AsyncSession, client) -> Non
 #: иначе DELETE по произвольному batch_id снёс бы данные другого плана.
     resp = await client.delete(f"/api/production-plans/{other_plan_id}/batches/{batch_id}")
     assert resp.status_code == 404, resp.text
-    assert resp.json()["detail"] == "Import batch not found"
+    assert resp.json()["detail"] == "Партия импорта не найдена"
 
     session.expire_all()
     assert await session.get(ImportBatch, batch_id) is not None

@@ -134,13 +134,13 @@ def canonicalize_completed_operations(
     for raw in values:
         if not isinstance(raw, str):
             raise CompletedOperationsError(
-                f"completed_operations must be a list of operation_code strings, "
-                f"got element of type {type(raw).__name__}"
+                f"completed_operations должен быть списком строк operation_code, "
+                f"получен элемент типа {type(raw).__name__}"
             )
         code = raw.strip()
         if not code:
             raise CompletedOperationsError(
-                "completed_operations must not contain empty operation_code"
+                "completed_operations не должен содержать пустой operation_code"
             )
         codes.add(code)
     return sorted(codes)
@@ -172,7 +172,7 @@ async def assert_known_operation_codes(
     unknown = sorted(set(codes) - known)
     if unknown:
         raise CompletedOperationsError(
-            f"unknown operation_code(s) in completed_operations: {unknown}"
+            f"неизвестные operation_code в completed_operations: {unknown}"
         )
 
 

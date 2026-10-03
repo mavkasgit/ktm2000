@@ -222,8 +222,7 @@ export const RouteTreeOverview = forwardRef<RouteTreeOverviewRef, RouteTreeOverv
                         {/* Tooltip on hover */}
                         <div className="absolute bottom-full left-1/2 -translate-x-1/2 mb-1 hidden group-hover/step:block z-10">
                           <div className="bg-popover text-popover-foreground text-xs rounded-md px-2 py-1 shadow-md border whitespace-nowrap">
-                            {section?.code}: {section?.name || step.operation_name}
-                            {step.operation_code && ` (${step.operation_code})`}
+                            {section?.name || step.operation_name}
                           </div>
                         </div>
                         {/* Connector */}

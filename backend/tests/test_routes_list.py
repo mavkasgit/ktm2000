@@ -144,7 +144,7 @@ async def test_create_route_conflicts_with_import_route_name(client, session) ->
     )
 
     assert created.status_code == 409, created.text
-    assert created.json()["detail"] == "Route with this name already exists"
+    assert created.json()["detail"] == "Маршрут с таким именем уже существует"
 
 
 @pytest.mark.asyncio
@@ -166,7 +166,7 @@ async def test_update_route_conflicts_with_import_route_name(client, session) ->
     )
 
     assert forbidden.status_code == 409, forbidden.text
-    assert forbidden.json()["detail"] == "Route with this name already exists"
+    assert forbidden.json()["detail"] == "Маршрут с таким именем уже существует"
 
     same_name = await client.put(
         f"/api/routes/{manual.id}", json={"name": manual.name}

@@ -94,6 +94,9 @@ ACTION_LABELS = {
     "exclude_section": "Исключить",
     "set": "Установить (set)",
     "add": "Добавить в список (add)",
+    "set_operation_by_mapping": "Операция по значению поля",
+    "set_field": "Установить поле",
+    "set_field_from_color_extraction": "Цвет из наименования",
     "remove": "Удалить из списка (remove)",
     "set_operation": "Установить операцию",
     "resolve_by_type": "Резолв по типу",
@@ -125,6 +128,8 @@ STOCK_REASON_LABELS = {
     "return_to_previous": "Возврат на предыдущий участок",
     "FINAL_RELEASE": "Финальный выпуск",
     "final_release": "Финальный выпуск",
+    "TRANSFORM_CONSUME": "Списание входа трансформации",
+    "transform_consume": "Списание входа трансформации",
     "SCRAP": "Списание в брак",
     "scrap": "Списание в брак",
     "REWORK": "Переделка",
@@ -171,22 +176,29 @@ RULE_OPERATOR_LABELS = {
     "not_in": "не в списке",
     "empty": "пусто",
     "not_empty": "не пусто",
-    "regex": "regex",
+    "regex": "регулярное выражение",
 }
 
-OPERATION_CODE_LABELS = {
-    "press_window": "окно",
-    "press_comb": "гребенка",
-    "anodize": "анодирование",
-    "cut": "порезка",
-}
 
-COLOR_NAME_LABELS = {
-    "silver": "серебро",
-    "black": "чёрный",
-    "bronze": "бронза",
-    "champagne": "шампань",
-    "natural": "натуральный",
+#: Лейблы типов действий журнала отмен (ADR-0019). Ключ — `Action.action_type`.
+#: Те же значения перебирает `ACTION_COMPENSABLE_TYPES` плюс служебные
+#: `transfer_*`, `reversal` и сиды: в журнале пользователь видит все, и без
+#: словаря колонка «Действие» печатала английский код.
+ACTION_JOURNAL_LABELS = {
+    "task_complete": "Завершение операции",
+    "final_release": "Финальный выпуск",
+    "defect_decision": "Решение по браку",
+    "return_to_stock": "Возврат на склад",
+    "manual_adjustment": "Ручная корректировка остатка",
+    "import_remainders": "Импорт остатков",
+    "plan_auto_release": "Автовыпуск плана",
+    "transfer_send": "Передача отправлена",
+    "transfer_cancel": "Передача отменена",
+    "reversal": "Отмена действия",
+    "import_batch_force_delete": "Принудительное удаление импорта",
+    "production_plan_delete": "Удаление производственного плана",
+    "seed_demo": "Демо-данные",
+    "seed_demo_packing_plan": "Демо-план упаковки",
 }
 
 BACKUP_STORAGE_LABELS = {

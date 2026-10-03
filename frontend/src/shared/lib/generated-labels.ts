@@ -121,7 +121,10 @@ export const actionLabels: Record<string, string> = {
   "require_section": "Добавить",
   "resolve_by_type": "Резолв по типу",
   "set": "Установить (set)",
+  "set_field": "Установить поле",
+  "set_field_from_color_extraction": "Цвет из наименования",
   "set_operation": "Установить операцию",
+  "set_operation_by_mapping": "Операция по значению поля",
   "update_draft_position": "Обновить",
 }
 
@@ -359,6 +362,7 @@ export const stockReasonLabels: Record<string, string> = {
   "SCRAP": "Списание в брак",
   "TRANSFER_RECEIVE": "Передача получено",
   "TRANSFER_SEND": "Передача отправлено",
+  "TRANSFORM_CONSUME": "Списание входа трансформации",
   "adjustment_in": "Корректировка +",
   "adjustment_out": "Корректировка −",
   "complete": "Завершено",
@@ -372,6 +376,7 @@ export const stockReasonLabels: Record<string, string> = {
   "scrap": "Списание в брак",
   "transfer_receive": "Передача получено",
   "transfer_send": "Передача отправлено",
+  "transform_consume": "Списание входа трансформации",
 }
 
 // Лейблы типов участков
@@ -410,24 +415,25 @@ export const ruleOperatorLabels: Record<string, string> = {
   "not_empty": "не пусто",
   "not_equals": "не равно",
   "not_in": "не в списке",
-  "regex": "regex",
+  "regex": "регулярное выражение",
 }
 
-// Лейблы кодов операций
-export const operationCodeLabels: Record<string, string> = {
-  "anodize": "анодирование",
-  "cut": "порезка",
-  "press_comb": "гребенка",
-  "press_window": "окно",
-}
-
-// Лейблы названий цветов
-export const colorNameLabels: Record<string, string> = {
-  "black": "чёрный",
-  "bronze": "бронза",
-  "champagne": "шампань",
-  "natural": "натуральный",
-  "silver": "серебро",
+// Лейблы типов действий журнала отмен
+export const actionJournalLabels: Record<string, string> = {
+  "defect_decision": "Решение по браку",
+  "final_release": "Финальный выпуск",
+  "import_batch_force_delete": "Принудительное удаление импорта",
+  "import_remainders": "Импорт остатков",
+  "manual_adjustment": "Ручная корректировка остатка",
+  "plan_auto_release": "Автовыпуск плана",
+  "production_plan_delete": "Удаление производственного плана",
+  "return_to_stock": "Возврат на склад",
+  "reversal": "Отмена действия",
+  "seed_demo": "Демо-данные",
+  "seed_demo_packing_plan": "Демо-план упаковки",
+  "task_complete": "Завершение операции",
+  "transfer_cancel": "Передача отменена",
+  "transfer_send": "Передача отправлена",
 }
 
 // Лейблы хранилищ бэкапов

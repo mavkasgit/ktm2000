@@ -203,7 +203,7 @@ async def list_spgs(db: AsyncSession = Depends(get_db)) -> list[SpgOut]:
 async def get_spg(spg_id: int, db: AsyncSession = Depends(get_db)) -> SpgOut:
     spg = await db.get(StorageProductionGroup, spg_id)
     if spg is None:
-        raise HTTPException(status_code=404, detail="SPG not found")
+        raise HTTPException(status_code=404, detail="СПГ не найден")
     return await _build_spg_out(db, spg)
 
 
@@ -218,7 +218,7 @@ async def create_spg(payload: SpgIn, db: AsyncSession = Depends(get_db)) -> SpgO
         select(StorageProductionGroup).where(StorageProductionGroup.code == payload.code)
     )
     if existing:
-        raise HTTPException(status_code=409, detail="SPG code already exists")
+        raise HTTPException(status_code=409, detail="СПГ с таким кодом уже существует")
 
     spg = StorageProductionGroup(
         code=payload.code,
@@ -246,7 +246,7 @@ async def create_spg(payload: SpgIn, db: AsyncSession = Depends(get_db)) -> SpgO
 async def patch_spg(spg_id: int, payload: SpgPatch, db: AsyncSession = Depends(get_db)) -> SpgOut:
     spg = await db.get(StorageProductionGroup, spg_id)
     if spg is None:
-        raise HTTPException(status_code=404, detail="SPG not found")
+        raise HTTPException(status_code=404, detail="СПГ не найден")
 
     for key, value in payload.model_dump(exclude_unset=True).items():
         if key != "section_ids":
@@ -267,7 +267,7 @@ async def patch_spg(spg_id: int, payload: SpgPatch, db: AsyncSession = Depends(g
 async def delete_spg(spg_id: int, db: AsyncSession = Depends(get_db)):
     spg = await db.get(StorageProductionGroup, spg_id)
     if spg is None:
-        raise HTTPException(status_code=404, detail="SPG not found")
+        raise HTTPException(status_code=404, detail="СПГ не найден")
     await db.execute(delete(SpgSection).where(SpgSection.spg_id == spg.id))
     await db.delete(spg)
     await db.flush()
@@ -277,7 +277,7 @@ async def delete_spg(spg_id: int, db: AsyncSession = Depends(get_db)):
 async def snapshot_spg(spg_id: int, db: AsyncSession = Depends(get_db)):
     spg = await db.get(StorageProductionGroup, spg_id)
     if spg is None:
-        raise HTTPException(status_code=404, detail="SPG not found")
+        raise HTTPException(status_code=404, detail="СПГ не найден")
     return await get_spg_snapshot(db, spg_id=spg_id)
 
 
@@ -465,19 +465,19 @@ async def import_defects_excel(
     try:
         workbook = load_workbook(BytesIO(content))
     except CalamineError as exc:
-        raise HTTPException(status_code=400, detail=f"Invalid Excel file: {exc}")
+        raise HTTPException(status_code=400, detail=f"Некорректный Excel-файл: {exc}")
 
     sheet = workbook.get_sheet_by_index(0)
     rows = list(sheet.iter_rows())
     if not rows:
-        raise HTTPException(status_code=400, detail="Excel sheet is empty")
+        raise HTTPException(status_code=400, detail="Лист Excel пуст")
 
     # Get all sections associated with this SPG
     section_ids = (await db.execute(
         select(SpgSection.section_id).where(SpgSection.spg_id == spg_id)
     )).scalars().all()
     if not section_ids:
-        raise HTTPException(status_code=400, detail="No sections associated with this SPG")
+        raise HTTPException(status_code=400, detail="С этим СПГ не связан ни один участок")
 
     # Find headers
     headers = [str(cell).strip().lower() for cell in rows[0]]

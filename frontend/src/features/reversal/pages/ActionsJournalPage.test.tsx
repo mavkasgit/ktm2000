@@ -75,11 +75,26 @@ describe("ActionsJournalPage", () => {
 
     await screen.findByTestId("action-row-1");
     expect(screen.getByTestId("action-row-2")).toBeTruthy();
-    expect(screen.getByText("transfer_send")).toBeTruthy();
+    expect(screen.getByText("Передача отправлена")).toBeTruthy();
     expect(screen.getByText("Активно")).toBeTruthy();
     expect(screen.getByText("Отменено")).toBeTruthy();
     expect(screen.getByText("#42")).toBeTruthy();
     expect(getActions).toHaveBeenCalledTimes(1);
+  });
+
+  it("неизвестный тип действия с сервера показывается как есть", async () => {
+    // Тип приходит строкой: новый вид действия в бэке не должен ни падать, ни
+    // печататься пустотой — оператор обязан увидеть, что именно пришло.
+    vi.mocked(getActions).mockResolvedValue({
+      items: [makeAction({ id: 9, action_type: "quality_recheck" })],
+      total: 1,
+      page: 1,
+      page_size: 50,
+    });
+    renderPage();
+
+    await screen.findByTestId("action-row-9");
+    expect(screen.getByText("quality_recheck")).toBeTruthy();
   });
 
   it("фильтр по статусу перезапрашивает список со статусом", async () => {

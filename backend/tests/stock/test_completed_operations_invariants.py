@@ -379,7 +379,7 @@ async def test_unknown_operation_code_is_rejected(session: AsyncSession) -> None
         sku="TYPO",
         stages=[("Пресс", SECTION_TYPE_PRODUCTION, ["PRESS_COMB"])],
     )
-    with pytest.raises(StockValidationError, match="unknown operation_code"):
+    with pytest.raises(StockValidationError, match="неизвестные operation_code"):
         await StockCommandService().record(
             session,
             StockCommand(

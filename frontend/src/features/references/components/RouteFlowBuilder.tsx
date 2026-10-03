@@ -1169,7 +1169,6 @@ export function RouteFlowBuilder({ open, onOpenChange, route, onSave, readOnly =
                   >
                     <SectionIconBadge icon={section.icon} iconColor={section.icon_color} />
                     <div className="min-w-0">
-                      <div className="text-xs font-medium text-muted-foreground">{section.code}</div>
                       <div className="text-sm truncate">{section.name}</div>
                     </div>
                   </button>

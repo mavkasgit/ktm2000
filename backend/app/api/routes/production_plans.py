@@ -95,7 +95,7 @@ async def _require_visible_plan(
 ) -> ProductionPlan:
     plan = await db.get(ProductionPlan, production_plan_id)
     if plan is None or plan.deleted_at is not None:
-        raise HTTPException(status_code=404, detail="Production plan not found")
+        raise HTTPException(status_code=404, detail="Производственный план не найден")
     return plan
 
 
@@ -305,9 +305,9 @@ async def apply_plan_change_set(
     await _require_visible_plan(db, production_plan_id)
     change_set = await db.get(PlanChangeSet, change_set_id)
     if change_set is None:
-        raise HTTPException(status_code=404, detail="Change set not found")
+        raise HTTPException(status_code=404, detail="Набор изменений не найден")
     if change_set.production_plan_id != production_plan_id:
-        raise HTTPException(status_code=400, detail="Change set does not belong to production plan")
+        raise HTTPException(status_code=400, detail="Набор изменений не принадлежит этому производственному плану")
     await _reject_legacy_plan_mutation(db, production_plan_id)
     try:
         preview = await apply_change_set(db, change_set_id, skip_invalid=skip_invalid, changed_by=current_user.id)
@@ -326,9 +326,9 @@ async def rollback_plan_change_set(
     change_set = await db.get(PlanChangeSet, change_set_id)
     await _require_visible_plan(db, production_plan_id)
     if change_set is None:
-        raise HTTPException(status_code=404, detail="Change set not found")
+        raise HTTPException(status_code=404, detail="Набор изменений не найден")
     if change_set.production_plan_id != production_plan_id:
-        raise HTTPException(status_code=400, detail="Change set does not belong to production plan")
+        raise HTTPException(status_code=400, detail="Набор изменений не принадлежит этому производственному плану")
     try:
         return await rollback_change_set(db, change_set_id, changed_by=current_user.id)
     except ValueError as exc:
@@ -348,9 +348,9 @@ async def discard_plan_change_set(
 
     change_set = await db.get(PlanChangeSet, change_set_id)
     if change_set is None:
-        raise HTTPException(status_code=404, detail="Change set not found")
+        raise HTTPException(status_code=404, detail="Набор изменений не найден")
     if change_set.production_plan_id != production_plan_id:
-        raise HTTPException(status_code=400, detail="Change set does not belong to production plan")
+        raise HTTPException(status_code=400, detail="Набор изменений не принадлежит этому производственному плану")
     await _reject_legacy_plan_mutation(db, production_plan_id)
 
     batch_id = change_set.import_batch_id
@@ -412,7 +412,7 @@ async def delete_import_batch(
 #: Сверка с планом из URL: чужой батч — как отсутствующий (404), иначе можно
 #: снести данные другого плана по произвольному batch_id.
     if batch is None or batch.production_plan_id != production_plan_id:
-        raise HTTPException(status_code=404, detail="Import batch not found")
+        raise HTTPException(status_code=404, detail="Партия импорта не найдена")
     try:
         return await delete_import_batch_service(
             db, batch_id, delete_drafts_only=delete_drafts_only, changed_by=current_user.id
@@ -456,7 +456,7 @@ async def hide_import_batch(
 #: Сверка с планом из URL: чужой батч — как отсутствующий (404), иначе можно
 #: спрятать импорт другого плана по произвольному batch_id.
     if batch is None or batch.production_plan_id != production_plan_id:
-        raise HTTPException(status_code=404, detail="Import batch not found")
+        raise HTTPException(status_code=404, detail="Партия импорта не найдена")
     try:
         await hide_import_batch_service(
             db, batch_id, user=current_user, reason=payload.reason if payload else None
@@ -486,7 +486,7 @@ async def preview_batch_force_delete(
     await _require_visible_plan(db, production_plan_id)
     batch = await db.get(ImportBatch, batch_id)
     if batch is None or batch.production_plan_id != production_plan_id:
-        raise HTTPException(status_code=404, detail="Import batch not found")
+        raise HTTPException(status_code=404, detail="Партия импорта не найдена")
     try:
         return await get_batch_force_delete_preview(db, batch_id)
     except ValueError as exc:
@@ -507,7 +507,7 @@ async def force_delete_import_batch_route(
     await _require_visible_plan(db, production_plan_id)
     batch = await db.get(ImportBatch, batch_id)
     if batch is None or batch.production_plan_id != production_plan_id:
-        raise HTTPException(status_code=404, detail="Import batch not found")
+        raise HTTPException(status_code=404, detail="Партия импорта не найдена")
     try:
         return await force_delete_import_batch(
             db,
@@ -643,7 +643,7 @@ async def position_history(
     await _require_visible_plan(db, production_plan_id)
     position = await db.get(PlanPosition, position_id)
     if position is None or position.production_plan_id != production_plan_id:
-        raise HTTPException(status_code=404, detail="Position not found")
+        raise HTTPException(status_code=404, detail="Позиция не найдена")
 
     # Получаем историю статусов из аудит-логов
     from app.models.audit_log import AuditEntityType
@@ -671,7 +671,7 @@ async def delete_position(
     await _reject_legacy_plan_mutation(db, production_plan_id)
     position = await db.get(PlanPosition, position_id)
     if position is None or position.production_plan_id != production_plan_id:
-        raise HTTPException(status_code=404, detail="Position not found")
+        raise HTTPException(status_code=404, detail="Позиция не найдена")
 
     if position.status == PlanPositionStatus.cancelled:
         # Soft-delete cancelled positions
@@ -916,9 +916,9 @@ async def route_check(
     await _require_visible_plan(db, production_plan_id)
     position = await db.get(PlanPosition, position_id)
     if position is None:
-        raise HTTPException(status_code=404, detail="Position not found")
+        raise HTTPException(status_code=404, detail="Позиция не найдена")
     if position.production_plan_id != production_plan_id:
-        raise HTTPException(status_code=400, detail="Position does not belong to production plan")
+        raise HTTPException(status_code=400, detail="Позиция не принадлежит этому производственному плану")
 
     import_batch = await db.get(ImportBatch, position.import_batch_id) if position.import_batch_id is not None else None
     rule_profile_id = import_batch.rule_profile_id if import_batch is not None else None
@@ -1894,15 +1894,15 @@ async def batch_assign_route_global(
 ) -> BatchAssignRouteOut:
     """Assign route to positions by their IDs, regardless of which plan they belong to."""
     if not payload.position_ids:
-        raise HTTPException(status_code=400, detail="position_ids must not be empty")
+        raise HTTPException(status_code=400, detail="Поле position_ids не может быть пустым")
 
     route_name = None
     if payload.route_id is not None:
         route = await db.get(ProductionRoute, payload.route_id)
         if route is None:
-            raise HTTPException(status_code=404, detail="Route not found")
+            raise HTTPException(status_code=404, detail="Маршрут не найден")
         if not route.is_active:
-            raise HTTPException(status_code=400, detail="Route is not active")
+            raise HTTPException(status_code=400, detail="Маршрут неактивен")
         route_name = route.name
 
     positions = (
@@ -1974,15 +1974,15 @@ async def batch_assign_route(
     await _reject_legacy_plan_mutation(db, production_plan_id)
 
     if not payload.position_ids:
-        raise HTTPException(status_code=400, detail="position_ids must not be empty")
+        raise HTTPException(status_code=400, detail="Поле position_ids не может быть пустым")
 
     route_name = None
     if payload.route_id is not None:
         route = await db.get(ProductionRoute, payload.route_id)
         if route is None:
-            raise HTTPException(status_code=404, detail="Route not found")
+            raise HTTPException(status_code=404, detail="Маршрут не найден")
         if not route.is_active:
-            raise HTTPException(status_code=400, detail="Route is not active")
+            raise HTTPException(status_code=400, detail="Маршрут неактивен")
         route_name = route.name
 
     positions = (
@@ -1995,7 +1995,7 @@ async def batch_assign_route(
     ).scalars().all()
 
     if len(positions) != len(payload.position_ids):
-        raise HTTPException(status_code=400, detail="Some positions not found or belong to a different plan")
+        raise HTTPException(status_code=400, detail="Некоторые позиции не найдены или принадлежат другому плану")
 
     for pos in positions:
         pos.route_id = payload.route_id
@@ -2112,7 +2112,7 @@ async def batch_preview(production_plan_id: int, batch_id: int, db: AsyncSession
         )
     ).scalar_one_or_none()
     if change_set is None:
-        raise HTTPException(status_code=404, detail="Change set for batch not found")
+        raise HTTPException(status_code=404, detail="Набор изменений для партии не найден")
 
     items = (
         await db.execute(
@@ -2236,7 +2236,7 @@ def _require_production_reset_enabled() -> None:
     ПОСЛЕ ролевой (`require_role`) — иначе аноним получал бы 404 вместо 401.
     """
     if not settings.ALLOW_PRODUCTION_RESET:
-        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Not Found")
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Не найдено")
 
 
 @router.post("/reset-all", status_code=status.HTTP_204_NO_CONTENT)
@@ -2290,7 +2290,7 @@ async def update_position_quantity(
     await _require_visible_plan(db, production_plan_id)
     position = await db.get(PlanPosition, position_id)
     if position is None or position.production_plan_id != production_plan_id:
-        raise HTTPException(status_code=404, detail="Position not found")
+        raise HTTPException(status_code=404, detail="Позиция не найдена")
     await _reject_legacy_plan_mutation(db, production_plan_id)
 
     if position.status not in (PlanPositionStatus.draft, PlanPositionStatus.invalid, PlanPositionStatus.valid):

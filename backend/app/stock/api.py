@@ -88,7 +88,7 @@ async def _load_template_column_mapping(
     template = await db.get(ImportTemplate, template_id)
     if template is None:
         raise HTTPException(
-            status_code=404, detail=f"ImportTemplate id={template_id} not found"
+            status_code=404, detail=f"Шаблон импорта с id={template_id} не найден"
         )
     return dict(template.column_mapping or {})
 
@@ -224,7 +224,7 @@ class StockAdjustmentIn(BaseModel):
     не зафиксировано»: расход ищет NULL-группу, приход кладёт в NULL-группу.
     Канонизация формы и проверка кодов по справочнику — тот же путь
     ``StockCommandService._resolve_completed_operations``, что и у плановых
-    проводок: неизвестный код → 422 с ``unknown operation_code(s)``.
+    проводок: неизвестный код → 422 с ``неизвестные operation_code``.
     """
     product_id: int
     location_id: int
@@ -858,7 +858,7 @@ async def create_adjustment(
     if payload.reason not in _ADJUSTMENT_REASONS:
         raise HTTPException(
             status_code=422,
-            detail=f"reason must be one of {[r.value for r in _ADJUSTMENT_REASONS]}, got {payload.reason.value}",
+            detail=f"reason должен быть одним из {[r.value for r in _ADJUSTMENT_REASONS]}, получено {payload.reason.value}",
         )
     # Журнал действий (#116): ручная корректировка = Action без ref_id.
     action = await action_journal_service.log(
@@ -963,7 +963,7 @@ def _parse_remainder_override_json(
     except (ValueError, TypeError) as exc:
         raise HTTPException(
             status_code=422,
-            detail=f"Invalid {field_name} JSON: {exc}",
+            detail=f"Некорректный JSON в {field_name}: {exc}",
         ) from exc
 
 
@@ -1025,10 +1025,10 @@ async def preview_remainders_excel(
     if location_id is not None:
         location = await db.get(Section, location_id)
         if location is None:
-            raise HTTPException(status_code=404, detail=f"Location id={location_id} not found")
+            raise HTTPException(status_code=404, detail=f"Участок с id={location_id} не найден")
 
     if filter_status not in {"all", "invalid"}:
-        raise HTTPException(status_code=422, detail="filter_status must be 'all' or 'invalid'")
+        raise HTTPException(status_code=422, detail="filter_status должен быть 'all' или 'invalid'")
 
     parsed_target_overrides = _parse_remainder_override_json(
         target_section_overrides,
@@ -1174,7 +1174,7 @@ async def import_remainders_excel(
         except (ValueError, TypeError) as exc:
             raise HTTPException(
                 status_code=422,
-                detail=f"Invalid target_section_overrides JSON: {exc}",
+                detail=f"Некорректный JSON в target_section_overrides: {exc}",
             )
 
     parsed_quality_overrides: dict[int, QualityState] | None = None
@@ -1188,7 +1188,7 @@ async def import_remainders_excel(
         except (ValueError, TypeError) as exc:
             raise HTTPException(
                 status_code=422,
-                detail=f"Invalid quality_state_overrides JSON: {exc}",
+                detail=f"Некорректный JSON в quality_state_overrides: {exc}",
             )
 
     # clear_existing + target_section_overrides is forbidden
@@ -1201,7 +1201,7 @@ async def import_remainders_excel(
     # Validate location
     location = await db.get(Section, location_id)
     if location is None:
-        raise HTTPException(status_code=404, detail=f"Location id={location_id} not found")
+        raise HTTPException(status_code=404, detail=f"Участок с id={location_id} не найден")
 
     sheet_name, _total_rows, items, _summary = await _parse_remainder_import_source(
         file=file,

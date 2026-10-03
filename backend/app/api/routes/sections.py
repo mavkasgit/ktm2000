@@ -248,7 +248,7 @@ async def list_storage_points(
 async def get_section(section_id: int, db: AsyncSession = Depends(get_db)) -> SectionOut:
     item = await db.get(Section, section_id)
     if item is None:
-        raise HTTPException(status_code=404, detail="Section not found")
+        raise HTTPException(status_code=404, detail="Участок не найден")
     return SectionOut.model_validate(item, from_attributes=True)
 
 
@@ -261,14 +261,14 @@ async def get_section(section_id: int, db: AsyncSession = Depends(get_db)) -> Se
 async def create_section(payload: SectionIn, db: AsyncSession = Depends(get_db)) -> SectionOut:
     existing = await db.scalar(select(Section).where(Section.code == payload.code))
     if existing:
-        raise HTTPException(status_code=409, detail="Section code already exists")
+        raise HTTPException(status_code=409, detail="Участок с таким кодом уже существует")
     
     spg_id = payload.spg_id
     data = payload.model_dump(exclude={"spg_id"})
     
     existing_spg = await db.get(StorageProductionGroup, spg_id)
     if existing_spg is None:
-        raise HTTPException(status_code=400, detail="SPG ID does not exist")
+        raise HTTPException(status_code=400, detail="Участок с таким SPG ID не существует")
 
     item = Section(**data)
     db.add(item)
@@ -289,7 +289,7 @@ async def create_section(payload: SectionIn, db: AsyncSession = Depends(get_db))
 async def patch_section(section_id: int, payload: SectionPatch, db: AsyncSession = Depends(get_db)) -> SectionOut:
     item = await db.get(Section, section_id)
     if item is None:
-        raise HTTPException(status_code=404, detail="Section not found")
+        raise HTTPException(status_code=404, detail="Участок не найден")
     
     data = payload.model_dump(exclude_unset=True)
     spg_id = data.pop("spg_id", None)
@@ -297,7 +297,7 @@ async def patch_section(section_id: int, payload: SectionPatch, db: AsyncSession
     if spg_id is not None:
         existing_spg = await db.get(StorageProductionGroup, spg_id)
         if existing_spg is None:
-            raise HTTPException(status_code=400, detail="SPG ID does not exist")
+            raise HTTPException(status_code=400, detail="Участок с таким SPG ID не существует")
 
     for key, value in data.items():
         setattr(item, key, value)
@@ -338,7 +338,7 @@ async def reorder_sections(payload: ReorderSectionsIn, db: AsyncSession = Depend
 async def delete_section(section_id: int, db: AsyncSession = Depends(get_db)):
     item = await db.get(Section, section_id)
     if item is None:
-        raise HTTPException(status_code=404, detail="Section not found")
+        raise HTTPException(status_code=404, detail="Участок не найден")
     # Check if any route stages reference this section
     stages = (await db.execute(select(RouteStage).where(RouteStage.section_id == section_id))).scalars().all()
     if stages:
@@ -385,7 +385,7 @@ async def list_section_operation_groups(section_id: int, db: AsyncSession = Depe
     """List all operation groups for a section, with operations in each group."""
     section = await db.get(Section, section_id)
     if section is None:
-        raise HTTPException(status_code=404, detail="Section not found")
+        raise HTTPException(status_code=404, detail="Участок не найден")
 
     ops = (await db.execute(
         select(SectionOperation)
@@ -439,7 +439,7 @@ async def create_operation_group(
     """
     section = await db.get(Section, section_id)
     if section is None:
-        raise HTTPException(status_code=404, detail="Section not found")
+        raise HTTPException(status_code=404, detail="Участок не найден")
 
     # Check if group_code already exists for this section
     existing = await db.scalar(
@@ -449,7 +449,7 @@ async def create_operation_group(
         ).limit(1)
     )
     if existing:
-        raise HTTPException(status_code=409, detail="Group code already exists for this section")
+        raise HTTPException(status_code=409, detail="Код группы уже существует для этого участка")
 
     # Create a placeholder operation for the group
     op = SectionOperation(
@@ -498,7 +498,7 @@ async def update_operation_group(
     """Update group_name and/or sort_order for all operations in a group."""
     section = await db.get(Section, section_id)
     if section is None:
-        raise HTTPException(status_code=404, detail="Section not found")
+        raise HTTPException(status_code=404, detail="Участок не найден")
 
     ops = (await db.execute(
         select(SectionOperation).where(
@@ -508,7 +508,7 @@ async def update_operation_group(
     )).scalars().all()
 
     if not ops:
-        raise HTTPException(status_code=404, detail="Operation group not found")
+        raise HTTPException(status_code=404, detail="Группа операций не найдена")
 
     for op in ops:
         if payload.group_name is not None:
@@ -551,7 +551,7 @@ async def delete_operation_group(
     """Delete all operations in a group."""
     section = await db.get(Section, section_id)
     if section is None:
-        raise HTTPException(status_code=404, detail="Section not found")
+        raise HTTPException(status_code=404, detail="Участок не найден")
 
     ops = (await db.execute(
         select(SectionOperation).where(
@@ -561,7 +561,7 @@ async def delete_operation_group(
     )).scalars().all()
 
     if not ops:
-        raise HTTPException(status_code=404, detail="Operation group not found")
+        raise HTTPException(status_code=404, detail="Группа операций не найдена")
 
     for op in ops:
         await db.delete(op)
@@ -583,11 +583,11 @@ async def move_operation_to_group(
     """Move an operation to a different group."""
     section = await db.get(Section, section_id)
     if section is None:
-        raise HTTPException(status_code=404, detail="Section not found")
+        raise HTTPException(status_code=404, detail="Участок не найден")
 
     op = await db.get(SectionOperation, operation_id)
     if op is None or op.section_id != section_id:
-        raise HTTPException(status_code=404, detail="Operation not found in this section")
+        raise HTTPException(status_code=404, detail="Операция в этом участке не найдена")
 
     # Check if target group exists (has at least one operation)
     target_group = await db.scalar(
@@ -597,7 +597,7 @@ async def move_operation_to_group(
         ).limit(1)
     )
     if not target_group:
-        raise HTTPException(status_code=400, detail="Target group does not exist")
+        raise HTTPException(status_code=400, detail="Целевая группа не существует")
 
     op.group_code = payload.new_group_code
     op.group_name = target_group.group_name

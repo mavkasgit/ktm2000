@@ -51,7 +51,7 @@ export function getReadyCellValue(task: ReadyToTransferTask, field: ReadySortFie
       return fmtQty(task.transferable_quantity);
     case "next":
       return task.has_next_step
-        ? `${task.next_operation_name ?? "—"} / ${task.next_section_code ?? "—"}`
+        ? `${task.next_operation_name ?? "—"} / ${task.next_section_name ?? "—"}`
         : "Финальный";
   }
 }
@@ -76,13 +76,20 @@ const transferStatusCode = (label: string): string | undefined => {
   }
 };
 
-/** «Пиление / Упаковка» — это операция и участок сразу, в одном значении. */
+/**
+ * «Пиление / Упаковка» — это операция и участок сразу, в одном значении.
+ * Разделитель берётся первый: « / » встречается и внутри названия участка,
+ * а разбор по всем вхождениям отбрасывал бы хвост названия. «—» — пустое
+ * значение, сервер такого не понимает.
+ */
 const splitNext = (value: string): Record<string, string> => {
   if (value === "Финальный") return {};
-  const [operation, section] = value.split(" / ").map((part) => part.trim());
+  const separator = value.indexOf(" / ");
+  const operation = (separator === -1 ? value : value.slice(0, separator)).trim();
+  const section = separator === -1 ? undefined : value.slice(separator + 3).trim();
   const params: Record<string, string> = {};
-  if (operation) params.next_operation_name = operation;
-  if (section) params.next_section_name = section;
+  if (operation && operation !== "—") params.next_operation_name = operation;
+  if (section && section !== "—") params.next_section_name = section;
   return params;
 };
 

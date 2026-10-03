@@ -63,5 +63,5 @@ async def test_profile_rejects_duplicate_passport_indexes(client) -> None:
         },
     )
     assert response.status_code == 400
-    assert "duplicate index" in response.json()["detail"]
+    assert "повторяющиеся значения index" in response.json()["detail"]
 

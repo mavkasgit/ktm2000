@@ -41,8 +41,7 @@ class LabelsCanon(BaseModel):
     rule_phase_labels: dict[str, str] = Field(default_factory=dict)
     rule_source_labels: dict[str, str] = Field(default_factory=dict)
     rule_operator_labels: dict[str, str] = Field(default_factory=dict)
-    operation_code_labels: dict[str, str] = Field(default_factory=dict)
-    color_name_labels: dict[str, str] = Field(default_factory=dict)
+    action_journal_labels: dict[str, str] = Field(default_factory=dict)
     backup_storage_labels: dict[str, str] = Field(default_factory=dict)
     backup_stage_labels: dict[str, str] = Field(default_factory=dict)
     backup_type_labels: dict[str, str] = Field(default_factory=dict)
@@ -67,9 +66,8 @@ class LabelsCanon(BaseModel):
         "section_type_labels",
         "rule_phase_labels",
         "rule_source_labels",
+        "action_journal_labels",
         "rule_operator_labels",
-        "operation_code_labels",
-        "color_name_labels",
         "backup_storage_labels",
         "backup_stage_labels",
         "backup_type_labels",

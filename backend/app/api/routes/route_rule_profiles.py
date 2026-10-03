@@ -72,20 +72,20 @@ async def create_route_rule_profile(
     db: AsyncSession = Depends(get_db),
 ) -> RouteRuleProfileOut:
     if not payload.code.strip():
-        raise HTTPException(status_code=400, detail="Profile code is required")
+        raise HTTPException(status_code=400, detail="Требуется код профиля")
     if not payload.name.strip():
-        raise HTTPException(status_code=400, detail="Profile name is required")
+        raise HTTPException(status_code=400, detail="Требуется название профиля")
 
     existing = await db.scalar(select(RouteRuleProfile).where(RouteRuleProfile.code == payload.code.strip()))
     if existing is not None:
-        raise HTTPException(status_code=409, detail="Profile with this code already exists")
+        raise HTTPException(status_code=409, detail="Профиль с таким кодом уже существует")
 
     passport, meta = _normalize_passport(payload.excel_column_passport, payload.excel_passport_meta)
 
     if payload.import_template_id is not None:
         template = await db.get(ImportTemplate, payload.import_template_id)
         if template is None:
-            raise HTTPException(status_code=422, detail="Invalid import_template_id")
+            raise HTTPException(status_code=422, detail="Некорректный import_template_id")
     await _validate_route_sections(db, payload.route_sections)
 
     profile = RouteRuleProfile(
@@ -116,26 +116,26 @@ async def update_route_rule_profile(
 ) -> RouteRuleProfileOut:
     profile = await db.get(RouteRuleProfile, profile_id)
     if profile is None:
-        raise HTTPException(status_code=404, detail="Profile not found")
+        raise HTTPException(status_code=404, detail="Профиль не найден")
 
     clean_code = payload.code.strip()
     if not clean_code:
-        raise HTTPException(status_code=400, detail="Profile code is required")
+        raise HTTPException(status_code=400, detail="Требуется код профиля")
     if not payload.name.strip():
-        raise HTTPException(status_code=400, detail="Profile name is required")
+        raise HTTPException(status_code=400, detail="Требуется название профиля")
 
     existing = await db.scalar(
         select(RouteRuleProfile).where(RouteRuleProfile.code == clean_code, RouteRuleProfile.id != profile_id)
     )
     if existing is not None:
-        raise HTTPException(status_code=409, detail="Profile with this code already exists")
+        raise HTTPException(status_code=409, detail="Профиль с таким кодом уже существует")
 
     passport, meta = _normalize_passport(payload.excel_column_passport, payload.excel_passport_meta)
 
     if payload.import_template_id is not None:
         template = await db.get(ImportTemplate, payload.import_template_id)
         if template is None:
-            raise HTTPException(status_code=422, detail="Invalid import_template_id")
+            raise HTTPException(status_code=422, detail="Некорректный import_template_id")
     await _validate_route_sections(db, payload.route_sections)
 
     profile.code = clean_code
@@ -161,7 +161,7 @@ async def update_route_rule_profile(
 async def delete_route_rule_profile(profile_id: int, db: AsyncSession = Depends(get_db)) -> None:
     profile = await db.get(RouteRuleProfile, profile_id)
     if profile is None:
-        raise HTTPException(status_code=404, detail="Profile not found")
+        raise HTTPException(status_code=404, detail="Профиль не найден")
 
     rule_ref = (
         await db.execute(
@@ -169,7 +169,7 @@ async def delete_route_rule_profile(profile_id: int, db: AsyncSession = Depends(
         )
     ).scalars().first()
     if rule_ref is not None:
-        raise HTTPException(status_code=409, detail="Cannot delete profile: it is used by route selection rules")
+        raise HTTPException(status_code=409, detail="Нельзя удалить профиль: он используется правилами выбора маршрута")
 
     await db.delete(profile)
     await db.flush()
@@ -188,7 +188,7 @@ async def _validate_route_sections(
     )
     missing = [c for c in dict.fromkeys(codes) if c not in found]
     if missing:
-        raise HTTPException(status_code=422, detail=f"Route sections reference unknown sections: {missing}")
+        raise HTTPException(status_code=422, detail=f"Разделы маршрута ссылаются на неизвестные участки: {missing}")
 
 
 class RouteStepPreview(BaseModel):
@@ -228,10 +228,10 @@ async def preview_profile_route(
     """
     profile = await db.get(RouteRuleProfile, profile_id)
     if profile is None:
-        raise HTTPException(status_code=404, detail="Profile not found")
+        raise HTTPException(status_code=404, detail="Профиль не найден")
 
     if not profile.route_sections:
-        raise HTTPException(status_code=400, detail="Profile has no route_sections defined")
+        raise HTTPException(status_code=400, detail="В профиле не определены разделы маршрута (route_sections)")
 
     route = await build_route_from_profile(db, profile, source_payload=None, position=None)
 
@@ -271,20 +271,20 @@ def _normalize_passport(
     for column in passport:
         index = int(column.index)
         if index <= 0:
-            raise HTTPException(status_code=400, detail="excel_column_passport.index must be positive")
+            raise HTTPException(status_code=400, detail="excel_column_passport.index должен быть положительным")
         if index in seen_indexes:
-            raise HTTPException(status_code=400, detail="excel_column_passport has duplicate index values")
+            raise HTTPException(status_code=400, detail="В excel_column_passport есть повторяющиеся значения index")
         seen_indexes.add(index)
 
         letter = column.letter.strip().upper()
         header = column.header.strip()
         field_path = column.field_path.strip()
         if not letter:
-            raise HTTPException(status_code=400, detail="excel_column_passport.letter is required")
+            raise HTTPException(status_code=400, detail="Требуется excel_column_passport.letter")
         if not header:
-            raise HTTPException(status_code=400, detail="excel_column_passport.header is required")
+            raise HTTPException(status_code=400, detail="Требуется excel_column_passport.header")
         if not field_path:
-            raise HTTPException(status_code=400, detail="excel_column_passport.field_path is required")
+            raise HTTPException(status_code=400, detail="Требуется excel_column_passport.field_path")
 
         normalized.append(
             {

@@ -131,7 +131,7 @@ async def create_user(
         # Если логин занят другим пользователем (не тем, кого мы мержим)
         raise HTTPException(
             status_code=status.HTTP_409_CONFLICT,
-            detail=f"User with username '{payload.username}' already exists",
+            detail=f"Пользователь с логином '{payload.username}' уже существует",
         )
 
     # 3. Проверка уникальности email
@@ -143,7 +143,7 @@ async def create_user(
             # Если email занят другим пользователем (не тем, кого мы мержим)
             raise HTTPException(
                 status_code=status.HTTP_409_CONFLICT,
-                detail=f"User with email '{payload.email}' already exists",
+                detail=f"Пользователь с email '{payload.email}' уже существует",
             )
 
     section_ids = []
@@ -208,21 +208,21 @@ async def update_user(
     if user is None:
         raise HTTPException(
             status_code=status.HTTP_404_NOT_FOUND,
-            detail="User not found",
+            detail="Пользователь не найден",
         )
 
     # Prevent admin from deactivating themselves
     if payload.is_active is False and user.id == current_user.id:
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
-            detail="Cannot deactivate your own account",
+            detail="Нельзя деактивировать свою учётную запись",
         )
 
     # Prevent admin from changing their own role
     if payload.role is not None and user.id == current_user.id and payload.role != current_user.role:
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
-            detail="Cannot change your own role",
+            detail="Нельзя изменить свою роль",
         )
 
     # When role sync from IdP is active, local role changes are forbidden
@@ -233,7 +233,7 @@ async def update_user(
     ):
         raise HTTPException(
             status_code=status.HTTP_403_FORBIDDEN,
-            detail="Role is managed by Authentik (ktm_role claim). Local change forbidden.",
+            detail="Роль управляется через Authentik (claim ktm_role). Локальное изменение запрещено.",
         )
 
     if payload.username is not None and payload.username != user.username:
@@ -241,7 +241,7 @@ async def update_user(
         if existing is not None:
             raise HTTPException(
                 status_code=status.HTTP_409_CONFLICT,
-                detail=f"User with username '{payload.username}' already exists",
+                detail=f"Пользователь с логином '{payload.username}' уже существует",
             )
         user.username = payload.username
 
@@ -253,7 +253,7 @@ async def update_user(
             if dup is not None and dup.id != user.id:
                 raise HTTPException(
                     status_code=status.HTTP_409_CONFLICT,
-                    detail=f"User with email '{payload.email}' already exists",
+                    detail=f"Пользователь с email '{payload.email}' уже существует",
                 )
             user.email = payload.email
 

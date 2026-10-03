@@ -18,6 +18,11 @@ vi.mock("@/features/auth/hooks/useAuth", () => ({
   useAuth: vi.fn(),
 }));
 
+vi.mock("@/shared/api/stock", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("@/shared/api/stock")>()),
+  getRemainderImportOperations: vi.fn(),
+}));
+
 import {
   getStockImportBatches,
   getStockImportBatch,
@@ -28,6 +33,18 @@ import {
 import { useAuth } from "@/features/auth/hooks/useAuth";
 import type { AuthShellUser } from "@/features/auth/hooks/useAuth";
 import { ImportHistoryPanel } from "./ImportHistoryPanel";
+
+import { getRemainderImportOperations, type ImportOperationStep } from "@/shared/api/stock";
+
+const operationStep = (overrides: Partial<ImportOperationStep> = {}): ImportOperationStep => ({
+  sequence: 1,
+  section_code: "PRESSING",
+  section_name: "Прессование",
+  operation_code: "WINDOW",
+  operation_name: "Окно",
+  is_significant: true,
+  ...overrides,
+});
 
 const batch = (overrides: Partial<StockImportBatch> = {}): StockImportBatch => ({
   batch_id: 1,
@@ -127,6 +144,16 @@ function cellsByHeader(rows: HTMLElement[]): Map<string, string> {
 beforeEach(() => {
   vi.clearAllMocks();
   asRole("admin");
+  vi.mocked(getRemainderImportOperations).mockResolvedValue([
+    operationStep(),
+    operationStep({
+      sequence: 2,
+      section_code: "SHOT_BLAST",
+      section_name: "Дробеструй",
+      operation_code: "SHOT",
+      operation_name: "Дробеструйная",
+    }),
+  ]);
 });
 
 afterEach(() => {
@@ -156,7 +183,7 @@ describe("ImportHistoryPanel — «посмотреть»", () => {
     expect(rows).toHaveLength(3);
     const first = cellsByHeader(rows);
     // Шапка несёт колонку и тело отвечает ей же, а не сдвигается на ячейку.
-    expect(first.get("Операции")).toBe("WINDOW");
+    expect(first.get("Операции")).toBe("Окно");
     expect(first.get("Текущий остаток")).toBe("8888");
 
     const headerNames = within(rows[0])
@@ -168,7 +195,7 @@ describe("ImportHistoryPanel — «посмотреть»", () => {
         within(rows[2]).getAllByRole("cell")[index]?.textContent ?? "",
       ]),
     );
-    expect(second.get("Операции")).toBe("SHOT");
+    expect(second.get("Операции")).toBe("Дробеструйная");
     expect(second.get("Текущий остаток")).toBe("4500");
     // Один артикул, склад и размер — различаются ровно осью и остатком.
     expect(second.get("Артикул")).toBe(first.get("Артикул"));

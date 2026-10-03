@@ -96,7 +96,7 @@ async def seed_all(
 ) -> SeedSummary:
     """Seed all reference data: templates, profiles, routes, selection rules."""
     if force and settings.ENV in ("prod", "production"):
-        raise HTTPException(status_code=403, detail="force=true is not allowed in production")
+        raise HTTPException(status_code=403, detail="force=true запрещён на продуктивной среде")
     try:
         result = await run_full_seed(db, force=force)
         await db.commit()

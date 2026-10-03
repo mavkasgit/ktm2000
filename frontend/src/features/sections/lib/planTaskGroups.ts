@@ -1,7 +1,7 @@
 import type { RouteHistoryOp, SectionBoardTask } from "@/shared/api/shopfloor";
 import { formatDimensionsLabel } from "@/shared/api/stock";
 import { clusterByArticle } from "@/shared/lib/clusterByArticle";
-import { colorNameLabels } from "@/shared/lib/generated-labels";
+import { outputKindLabels } from "@/shared/lib/generated-labels";
 import { taskGroupingDimensions } from "./groupTasksByProfile";
 import { taskPackaging } from "./taskView";
 
@@ -51,12 +51,18 @@ function dimensionsKey(task: SectionBoardTask): string {
     .join("|");
 }
 
+/**
+ * Цвет приходит каноническим русским словом из `payload.color`, поэтому здесь
+ * нечего переводить. Запасной путь — `output_kind` — берётся только когда там
+ * не вид выпуска (`ГП`/`П/ф`): это прежнее поведение, просто словарь цветов
+ * уехал в канон имёнем значения.
+ */
 function taskColor(task: SectionBoardTask): string | null {
   const payloadColor = task.source_payload?.color;
   if (typeof payloadColor === "string" && payloadColor.trim()) return payloadColor.trim();
 
   const outputKind = task.output_kind;
-  if (outputKind && colorNameLabels[outputKind]) return outputKind;
+  if (outputKind && !outputKindLabels[outputKind]) return outputKind;
   return null;
 }
 
@@ -70,7 +76,7 @@ function groupKeyForTask(task: SectionBoardTask, mode: PlanTaskGroupingMode): st
 
 function groupLabelForTask(task: SectionBoardTask, mode: PlanTaskGroupingMode): string {
   const color = taskColor(task);
-  const colorLabel = color ? colorNameLabels[color] ?? color : "Без цвета";
+  const colorLabel = color ?? "Без цвета";
   const size = formatDimensionsLabel(taskGroupingDimensions(task));
   return mode === "article"
     ? `${task.product_sku} · ${size}`

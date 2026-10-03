@@ -18,6 +18,7 @@ import {
 import { usePaginatedTableQuery } from "@/shared/hooks/usePaginatedTableQuery";
 import { useActionsList } from "../hooks/useActions";
 import { JournalRowOperations } from "../components/JournalRowOperations";
+import { actionJournalLabels } from "@/shared/lib/generated-labels";
 
 const STATUS_BADGE: Record<
   ActionStatus,
@@ -97,7 +98,7 @@ export function ActionsJournalPage() {
             <SelectItem value="all">Все типы</SelectItem>
             {knownTypes.map((t) => (
               <SelectItem key={t} value={t}>
-                {t}
+                {actionJournalLabels[t] ?? t}
               </SelectItem>
             ))}
           </SelectContent>
@@ -149,7 +150,9 @@ export function ActionsJournalPage() {
                 return (
                   <tr key={action.id} data-testid={`action-row-${action.id}`}>
                     <td className="px-3 py-2 font-mono">{action.id}</td>
-                    <td className="px-3 py-2 font-medium">{action.action_type}</td>
+                    <td className="px-3 py-2 font-medium">
+                      {actionJournalLabels[action.action_type] ?? action.action_type}
+                    </td>
                     <td className="px-3 py-2">
                       {action.ref_id != null ? `#${action.ref_id}` : "—"}
                     </td>

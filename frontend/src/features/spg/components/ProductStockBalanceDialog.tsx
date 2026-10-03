@@ -8,7 +8,11 @@ import {
   DialogTitle,
   Button,
 } from "@/shared/ui";
-import { formatCompletedOperationsLabel, getProductStockBalances } from "@/shared/api/stock";
+import {
+  formatCompletedOperationsLabel,
+  formatQualityStateLabel,
+  getProductStockBalances,
+} from "@/shared/api/stock";
 import { getProduct } from "@/shared/api/products";
 import { queryKeys } from "@/shared/api/queryKeys";
 import { fmtQty } from "@/shared/lib/quantityFormat";
@@ -88,7 +92,9 @@ export function ProductStockBalanceDialog({
                     <tr key={b.id} className="border-b hover:bg-muted/30">
                       <td className="p-2 text-xs">{b.location_name || `#${b.location_id}`}</td>
                       <td className="p-2">
-                        <span className="text-xs font-medium text-muted-foreground">{b.quality_state}</span>
+                        <span className="text-xs font-medium text-muted-foreground">
+                          {formatQualityStateLabel(b.quality_state)}
+                        </span>
                       </td>
                       <td className="p-2 text-xs text-muted-foreground">
                         {formatCompletedOperationsLabel(b.completed_operations, b.completed_stages)}

@@ -109,7 +109,7 @@ async def import_catalog_from_zip(
             SKU.jpg
     """
     if not file.filename or not file.filename.endswith(".zip"):
-        raise HTTPException(status_code=400, detail="Only .zip files are accepted")
+        raise HTTPException(status_code=400, detail="Допускаются только .zip-файлы")
 
     photo_dir = Path(settings.PRODUCT_PHOTO_DIR)
     # mkdir блокирует event loop воркера, поэтому уходит в поток (#267).
@@ -139,7 +139,7 @@ async def import_catalog_from_zip(
                     break
 
         if not db_file.exists():
-            raise HTTPException(status_code=400, detail="profiles.db not found in ZIP")
+            raise HTTPException(status_code=400, detail="Файл profiles.db не найден в архиве ZIP")
 
         images_dir = extract_dir / "images"
 
@@ -303,7 +303,7 @@ async def preview_catalog_from_zip(
 ) -> dict:
     """Upload ZIP and return preview of import changes without writing to DB."""
     if not file.filename or not file.filename.endswith(".zip"):
-        raise HTTPException(status_code=400, detail="Only .zip files are accepted")
+        raise HTTPException(status_code=400, detail="Допускаются только .zip-файлы")
 
     with TemporaryDirectory() as tmpdir:
         tmp_path = Path(tmpdir)
@@ -319,7 +319,7 @@ async def preview_catalog_from_zip(
 
         rows, images_dir = _read_zip_profiles(extract_dir)
         if rows is None:
-            raise HTTPException(status_code=400, detail="profiles.db not found in ZIP")
+            raise HTTPException(status_code=400, detail="Файл profiles.db не найден в архиве ZIP")
 
         items = []
         stats = {"total": 0, "create": 0, "update": 0, "skip": 0}

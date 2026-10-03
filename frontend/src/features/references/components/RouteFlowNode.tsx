@@ -94,9 +94,9 @@ function RouteFlowNodeComponent({ data, selected }: NodeProps<Node<RouteFlowNode
         </div>
       </div>
 
-      {nodeData.operation_code && (
-        <div className="mb-2 rounded bg-muted px-2 py-1 text-xs font-mono">
-          {nodeData.operation_code}
+      {nodeData.operation_name && (
+        <div className="mb-2 rounded bg-muted px-2 py-1 text-xs">
+          {nodeData.operation_name}
         </div>
       )}
 

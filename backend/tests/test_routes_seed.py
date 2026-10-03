@@ -410,7 +410,7 @@ async def test_force_seed_is_forbidden_in_production(client, session, monkeypatc
     response = await client.post("/api/routes-seed?force=true")
 
     assert response.status_code == 403
-    assert response.json()["detail"] == "force=true is not allowed in production"
+    assert response.json()["detail"] == "force=true запрещён на продуктивной среде"
 
 
 @pytest.mark.asyncio
