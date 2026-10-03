@@ -32,10 +32,6 @@ from app.models.route import (
 )
 from app.models.section import Section
 from app.services.position_route_batch import (
-    BRANCH_DYNAMIC,
-    BRANCH_MANUAL,
-    BRANCH_SELECTION,
-    BRANCH_STORED,
     position_route_identity_key,
     resolve_position_routes_batch,
 )
