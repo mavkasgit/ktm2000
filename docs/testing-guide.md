@@ -29,6 +29,7 @@ npm run test:e2e             # Playwright, отдельный стенд (сво
 | `backend-tests.yml` | push, PR | полный pytest-набор под `coverage` (serial, `-p no:xdist -p no:testmon`) + **гейт `--fail-under=73`** |
 | `frontend-tests.yml` | push, PR | `tsc -b` + vitest с покрытием и **гейтом** `statements/lines ≥ 43`, `branches ≥ 72` (решение Q5=1, замер в `BASELINE.md`) |
 | `ruff.yml` | push, PR | `ruff check backend` — **блокирующая** проверка (pyflakes-ядро `F`, находок 0); стилевые и сигнальные семейства в скоуп не входят |
+| `e2e-smoke.yml` | push, PR | ярус `@smoke` на своей БД-сервисе в джобе, `--retries=0`, трасса артефактом; **информационный**, не гейтит merge (перевод в required — после 10 зелёных прогонов на `main`, #276) |
 
 Гейт покрытия: `coverage==7.16.2` (пин под бейзлайн из `docs/night/BASELINE.md`);
 расхождение CI ↔ локального замера — сначала разбирать, порог не подгонять.
