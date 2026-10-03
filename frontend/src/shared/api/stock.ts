@@ -298,42 +298,6 @@ export async function getProductStockBalances(productId: number, qualityState?: 
   return data;
 }
 
-export type StockAdjustmentPayload = {
-  product_id: number;
-  location_id: number;
-  quantity: number;
-  reason: "manual_in" | "manual_out" | "adjustment_in" | "adjustment_out";
-  quality_state?: QualityState;
-  /** Габарит движения, например {"length_mm": 2700}; null/отсутствие — безразмерные штуки. */
-  dimensions?: Record<string, unknown> | null;
-  /**
-   * Группа остатка по признаку пройденных операций (ADR-0055 п.3, п.12):
-   * списание ищет строку с этим признаком, приход кладёт в него.
-   * `null`/отсутствие — «не зафиксировано»: NULL-группа.
-   */
-  completed_operations?: string[] | null;
-  comment?: string;
-};
-
-export type StockAdjustmentResponse = {
-  id: number;
-  reason: StockReason | string;
-  quantity: string;
-  created_at: string | null;
-};
-
-export async function postStockAdjustment(payload: StockAdjustmentPayload): Promise<StockAdjustmentResponse> {
-  // Без ведущего `/api`: `apiClient` уже несёт baseURL с `/api`
-  // (`DEFAULT_API_BASE_URL`, `.env.dev` → `...:8012/api`), поэтому путь
-  // `/api/stock/adjustment` уходил на `/api/api/stock/adjustment` и получал
-  // 404 «Not Found» — диалог ручной операции не мог записать проводку.
-  const { data } = await apiClient.post<StockAdjustmentResponse>("/stock/adjustment", {
-    ...payload,
-    quality_state: toApiQualityState(payload.quality_state),
-  });
-  return data;
-}
-
 export async function getStockTransactions(
   params?: StockTransactionsParams,
 ): Promise<StockTransactionsListResponse> {

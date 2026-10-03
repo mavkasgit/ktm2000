@@ -7,7 +7,6 @@ import {
   getSpgList,
 } from "@/shared/api/spg";
 import { SpgSelector } from "../components/SpgSelector";
-import { StockAdjustmentDialog } from "../components/StockAdjustmentDialog";
 import { ImportRemaindersDialog } from "../components/ImportRemaindersDialog";
 import { ProductStockBalanceDialog } from "../components/ProductStockBalanceDialog";
 import { StockTransactionsHistoryDrawer } from "../components/StockTransactionsHistoryDrawer";
@@ -18,7 +17,6 @@ import { Input, Button, StockBalancesPanel } from "@/shared/ui";
 export function SpgSnapshotPage() {
   const [selectedSpgIds, setSelectedSpgIds] = useState<number[]>([]);
   const [searchQuery, setSearchQuery] = useState("");
-  const [isAdjustmentDialogOpen, setIsAdjustmentDialogOpen] = useState(false);
   const [selectedProductId, setSelectedProductId] = useState<number | null>(null);
   const [historyProduct, setHistoryProduct] = useState<{
     id: number;
@@ -145,13 +143,6 @@ export function SpgSnapshotPage() {
             <Button
               variant="outline"
               size="sm"
-              onClick={() => setIsAdjustmentDialogOpen(true)}
-            >
-              Ручная операция
-            </Button>
-            <Button
-              variant="outline"
-              size="sm"
               onClick={() => setIsImportDialogOpen(true)}
             >
               <Upload className="h-4 w-4 mr-1" />
@@ -198,11 +189,6 @@ export function SpgSnapshotPage() {
           />
         </div>
       )}
-
-      <StockAdjustmentDialog
-        open={isAdjustmentDialogOpen}
-        onOpenChange={setIsAdjustmentDialogOpen}
-      />
 
       <ImportRemaindersDialog
         open={isImportDialogOpen}
