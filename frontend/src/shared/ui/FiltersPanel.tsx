@@ -5,7 +5,7 @@ import { Input } from "./input";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "./select";
 import { cn } from "@/shared/utils/cn";
 
-export type ToggleTone = "neutral" | "red" | "amber" | "violet";
+export type ToggleTone = "neutral" | "red" | "amber" | "emerald" | "violet";
 
 const TOGGLE_TONE_CLASS: Record<
   ToggleTone,
@@ -28,6 +28,12 @@ const TOGGLE_TONE_CLASS: Record<
     unchecked: "border-amber-200 bg-amber-50 text-amber-700 hover:bg-amber-100 hover:text-amber-700",
     badgeChecked: "bg-white/30 text-white",
     badgeUnchecked: "bg-white/80 text-amber-700",
+  },
+  emerald: {
+    checked: "border-emerald-600 bg-emerald-600 text-white hover:bg-emerald-700 hover:text-white",
+    unchecked: "border-emerald-200 bg-emerald-50 text-emerald-700 hover:bg-emerald-100 hover:text-emerald-700",
+    badgeChecked: "bg-white/25 text-white",
+    badgeUnchecked: "bg-white/80 text-emerald-700",
   },
   violet: {
     checked: "border-violet-600 bg-violet-600 text-white hover:bg-violet-700 hover:text-white",
