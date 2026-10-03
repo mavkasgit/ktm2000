@@ -436,6 +436,37 @@ export async function apiApplyChangeSet(planId: number, changeSetId: number) {
 }
 
 /**
+ * Завести пару сырьевых артикулов с ручной N на общих длинах (#312).
+ *
+ * Пара — единственное, что сводит две позиции в один подвес на печати,
+ * поэтому прогон пары обязан завести её настоящей записью справочника,
+ * а не подменять её данными на доске.
+ */
+export async function apiCreateProductPair(
+  productId: number,
+  partnerProductId: number,
+  quantityPerHanger: Record<string, { manual: number | null }>,
+) {
+  const res = await fetch(`${BACKEND_URL}/api/products/${productId}/pairs`, {
+    method: "POST",
+    headers: await authHeaders({ "Content-Type": "application/json" }),
+    body: JSON.stringify({
+      partner_product_id: partnerProductId,
+      quantity_per_hanger: quantityPerHanger,
+    }),
+  });
+  if (!res.ok) {
+    throw new Error(`Create product pair failed: ${res.statusText} (${res.status}) - ${await res.text()}`);
+  }
+  return res.json() as Promise<{
+    id: number;
+    product_a_id: number;
+    product_b_id: number;
+    lengths: number[];
+  }>;
+}
+
+/**
  * «Действие коллеги» для проверок свежести (#206): утвердить позицию плана
  * напрямую по API — из другого контекста/токена, минуя UI и его кэш. Сначала
  * без обхода валидации; сервер находит ошибки — повторяем с `force` и причиной
