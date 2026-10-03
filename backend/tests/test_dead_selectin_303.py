@@ -20,11 +20,15 @@
 from __future__ import annotations
 
 import pytest
-from app.models.route import ProductionRoute, RouteRuleProfile
+from app.api.routes import routes as routes_api
+from app.models.route import ProductionRoute, RouteRuleProfile, RouteStage
+from app.models.section import Section
 from app.models.spg import StorageProductionGroup
 from app.models.user import User
+from app.services.section_ref import SectionRef, load_section_refs
 from sqlalchemy import event, select
 from sqlalchemy.ext.asyncio import AsyncSession
+from sqlalchemy.orm import selectinload
 
 
 def _counting(session: AsyncSession):
@@ -91,3 +95,82 @@ async def test_materializing_route_does_not_load_its_rules(
         remove()
     assert rows is not None
     assert counter["n"] == 2, "потянулись правила маршрутов"
+
+
+async def test_section_ref_does_not_load_section_relationships(
+    session: AsyncSession,
+) -> None:
+    """`SectionRef` не грузит `user_sections`/`spg_sections` — в отличие от Section.
+
+    Проверка намеренно не «число запросов упало»: количество SQL меняется по
+    самым разным причинам и такой тест ничего не защищает. Здесь ловится
+    конкретная связь — если `load_section_refs` снова начнёт отдавать
+    ORM-`Section`, появятся `user_sections` и `spg_sections`, и тест упадёт.
+    """
+    section = Section(
+        code="T303-REF", name="Проба проекции", sort_order=951, type="production"
+    )
+    session.add(section)
+    await session.flush()
+
+    seen: list[str] = []
+
+    def _before(_conn, _cursor, statement, _params, _ctx, _many):
+        flat = " ".join(statement.split())
+        if "FROM user_sections" in flat or "FROM spg_sections" in flat:
+            seen.append(flat[:70])
+
+    sync_engine = session.bind.sync_engine  # type: ignore[union-attr]
+    event.listen(sync_engine, "before_cursor_execute", _before)
+    try:
+        refs = await load_section_refs(session, ids={section.id})
+    finally:
+        event.remove(sync_engine, "before_cursor_execute", _before)
+
+    assert seen == [], f"поехали связи секций: {seen}"
+    ref = refs[section.id]
+    assert (ref.code, ref.name, ref.type) == ("T303-REF", "Проба проекции", "production")
+
+
+async def test_routes_sections_cache_returns_section_refs(
+    session: AsyncSession,
+) -> None:
+    """`routes._load_sections_cache` отдаёт проекцию, а не ORM-объекты.
+
+    Структурная страховка на саму правку #303: если кто-то вернёт туда
+    `select(Section)`, появятся четыре запроса вместо одного. Значения
+    проверяются на равенство — ответ ручки не меняется.
+    """
+    section = Section(
+        code="T303-CACHE", name="Проба кэша", sort_order=952, type="production"
+    )
+    session.add(section)
+    await session.flush()
+    route = ProductionRoute(code="T303-CACHE", name="Проба кэша", sort_order=952)
+    session.add(route)
+    await session.flush()
+    session.add(RouteStage(route_id=route.id, sequence=1, section_id=section.id))
+    await session.commit()
+
+    staged = (
+        await session.scalars(
+            select(ProductionRoute)
+            .where(ProductionRoute.id == route.id)
+            .options(selectinload(ProductionRoute.stages))
+        )
+    ).one()
+
+    cache = await routes_api._load_sections_cache([staged], session)
+    ref = cache[section.id]
+    assert isinstance(ref, SectionRef)
+    assert not isinstance(ref, Section)
+    assert (ref.code, ref.name, ref.type) == ("T303-CACHE", "Проба кэша", "production")
+    # поля ответа карточки маршрута
+    fields = routes_api._section_step_fields(ref)
+    assert fields == {
+        "section_code": "T303-CACHE",
+        "section_name": "Проба кэша",
+        "icon": None,
+        "icon_color": None,
+        "section_type": "production",
+    }
