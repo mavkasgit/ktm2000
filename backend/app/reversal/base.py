@@ -135,6 +135,15 @@ class Compensator(Protocol):
         """Исполнить план атомарно (в текущей транзакции сессии)."""
         ...
 
+    def coverage_effect(self, entries: list[PlannedEntry]) -> dict:
+        """Чистовой эффект компенсаций на ключи покрытия (#274).
+
+        ``preview_reverse`` зовёт его у каждого компенсатора каскада, чтобы
+        моделировать виртуальное состояние остатков. Часть контракта, а не
+        деталь реализации: без него ``AttributeError`` на любом
+        зарегистрированном стороннем компенсаторе.
+        """
+        ...
     async def build_replay_payload(
         self, db: AsyncSession, action: Action
     ) -> dict | None:
