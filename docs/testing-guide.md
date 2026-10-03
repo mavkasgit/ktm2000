@@ -93,7 +93,72 @@ npm run test:pytest -- -m "slow or not slow"   # всё, как в CI
 локальный, в git не попадает). Тот же текст идёт на экран **по ходу** прогона,
 а не после его завершения.
 
-`test:db:down` — только ручная остановка; тестовые прогоны его не вызывают.
+
+## Замер SQL «до/после»
+
+Единый рецепт замера числа SQL на реальной ручке. Правило, **что именно
+измерять** (identity map, «связь не нужна»), живёт в
+[`backend/AGENTS.md`](../backend/AGENTS.md#форма-запросов-identity-map-и-связь-не-нужна) —
+этот раздел только про инструмент.
+
+**Суть:** движок-слушатель считает операторы по глаголам, транзакция всегда
+откатывается, счётчик сбрасывается **до** вызова ручки, а ответ сверяется
+побайтово. Годится и для тестовой БД (кейс в тесте), и для БД владельца
+(read-only + `rollback`).
+
+```python
+import os
+from collections import Counter
+from time import perf_counter
+
+from sqlalchemy import event
+
+os.environ["DATABASE_URL"] = "<dsn>"          # до импорта app.core.config
+from app.core.database import async_session, engine   # noqa: E402
+
+
+async def main() -> None:
+    kinds: Counter[str] = Counter()
+    stack: dict[int, float] = {}
+
+    @event.listens_for(engine.sync_engine, "before_cursor_execute")
+    def before(conn, cursor, statement, parameters, context, executemany):
+        stack[id(conn)] = perf_counter()
+        kinds[statement.lstrip().split(" ", 1)[0].upper()] += 1
+
+    @event.listens_for(engine.sync_engine, "after_cursor_execute")
+    def after(conn, cursor, statement, parameters, context, executemany):
+        stack.pop(id(conn), None)
+
+    from app.transfers.queries import list_ready_to_transfer
+
+    async with async_session() as session:
+        try:
+            counter_reset = sum(kinds.values())   # сброс ДО вызова ручки
+            t0 = perf_counter()
+            result = await list_ready_to_transfer(session, limit=50, offset=0)
+            wall_ms = (perf_counter() - t0) * 1000
+            print(dict(kinds), sum(kinds.values()) - counter_reset, wall_ms)
+            print(result["items"][0])             # сверка ответа
+        finally:
+            await session.rollback()              # транзакция всегда откатывается
+    await engine.dispose()
+```
+
+Чек-лист, без которого замер бесполезен:
+
+1. **Счётчик сбрасывается перед вызовом ручки**, иначе в сумму попадает
+   подготовка (сбор фикстуры, выпуск плана, выпуск материала).
+2. **`rollback` в `finally`**, иначе замер на чужой БД оставляет данные. На БД
+   владельца — только `SELECT`; запись проверяется на своей клон-БД.
+3. **Ответ сверяется, а не только счётчик.** Один и тот же файл запускается на
+   дереве «до» и «после»; `json.dumps(..., sort_keys=True, default=str)`
+   обоих результатов обязан совпасть. Расхождение ответов важнее, чем
+   изменение числа запросов.
+4. **Бюджет времени — вторичен** (под нагрузкой он скачет), решение принимается
+   по числу SQL.
+5. **Проверить, что ветка вообще выполнялась.** Ноль SQL может означать «данных
+   нет», а не «оптимизация сработала» — см. правило про identity map.
 
 Тестовая БД: `infra/compose/docker-compose.test.yml` (контейнер общий, run-DB
 эфемерные). Подробности изоляции, правила написания тестов, Windows warning →
