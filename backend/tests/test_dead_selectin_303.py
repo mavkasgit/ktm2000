@@ -19,6 +19,7 @@
 """
 from __future__ import annotations
 
+import re
 import pytest
 from app.api.routes import routes as routes_api
 from app.models.route import ProductionRoute, RouteRuleProfile, RouteStage
@@ -32,15 +33,30 @@ from sqlalchemy.orm import selectinload
 
 
 def _counting(session: AsyncSession):
-    """Счётчик SQL на время блока."""
+    """Счётчик SELECT вокруг блока — и список загруженных таблиц.
+
+    Считаются только `SELECT`: SAVEPOINT/RELEASE — это работа фикстуры
+    (транзакция на тест), а не запрос ручки. Считать их вместе нельзя —
+    число начинает зависеть от того, сколько savepoint'ов сделала фикстура,
+    а не от того, что читает код под тестом.
+    """
     counter = {"n": 0}
+    tables: list[str] = []
     sync_engine = session.bind.sync_engine  # type: ignore[union-attr]
 
-    def _before(*_args, **_kwargs):
+    def _before(_conn, _cursor, statement, _params, _context, _many):
+        head = statement.lstrip().split(None, 1)[0].upper()
+        if head != "SELECT":
+            return
         counter["n"] += 1
+        m = re.search(r"\bFROM\s+([a-z_]+)", statement)
+        if m:
+            tables.append(m.group(1))
 
     event.listen(sync_engine, "before_cursor_execute", _before)
-    return counter, lambda: event.remove(sync_engine, "before_cursor_execute", _before)
+    return counter, tables, lambda: event.remove(
+        sync_engine, "before_cursor_execute", _before
+    )
 
 
 @pytest.mark.parametrize(
@@ -81,10 +97,29 @@ async def test_materializing_route_does_not_load_its_rules(
 ) -> None:
     """Материализация `ProductionRoute` не тянет правила маршрута.
 
-    Раньше список маршрутов стоил 4 запроса: сам маршрут, `stages` (её читает
-    `routes.py`) и `rules` — а вот `rules` не читал никто. Теперь остаётся два.
+    С `lazy="selectin"` на `rules` список маршрутов стоил 4 SELECT: маршруты,
+    `stages`, `operations` и `rules`. Правила не читал никто — после правки
+    остаётся три, и проверяется это не «число упало», а отсутствие
+    `route_matching_rules` в списке таблиц.
+
+    Маршруты и этапы создаются здесь же: на пустой базе `select` отдаёт ноль
+    строк, selectin не срабатывает, и тест проходит, ничего не проверяя.
     """
-    counter, remove = _counting(session)
+    section = Section(
+        code="T303-RULES", name="Проба правил", sort_order=953, type="production"
+    )
+    session.add(section)
+    await session.flush()
+    for index in range(5):
+        route = ProductionRoute(
+            code=f"T303-RULES-{index}", name="Проба правил", sort_order=953 + index
+        )
+        session.add(route)
+        await session.flush()
+        session.add(RouteStage(route_id=route.id, sequence=1, section_id=section.id))
+    await session.commit()
+
+    counter, tables, remove = _counting(session)
     try:
         rows = (
             await session.scalars(
@@ -93,8 +128,10 @@ async def test_materializing_route_does_not_load_its_rules(
         ).all()
     finally:
         remove()
-    assert rows is not None
-    assert counter["n"] == 2, "потянулись правила маршрутов"
+    # Раньше список маршрутов стоил 4 SELECT: маршруты, `stages`, `operations`
+    # и `rules`. Правила не читал никто — их SELECT'а быть не должно.
+    assert "route_matching_rules" not in tables, f"потянулись правила маршрутов: {tables}"
+    assert counter["n"] == 3, f"ожидались маршруты+stages+operations, получили {tables}"
 
 
 async def test_section_ref_does_not_load_section_relationships(
