@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from dataclasses import dataclass
 from datetime import UTC, datetime
 from decimal import Decimal
 from typing import TYPE_CHECKING
@@ -36,6 +37,8 @@ from app.services.action_journal_service import action_journal_service
 from app.services.plan_position_hanger import position_dimensions_for_task
 from app.services.production_plan_service import refresh_plan_status
 from app.services.route_transform import build_transform_spec, raw_input_quantity_for
+from app.stock import Reason, StockCommand, StockCommandService
+from app.stock.models import QualityState, StockBalance
 
 if TYPE_CHECKING:
     from app.models.route import RouteRuleProfile
@@ -150,6 +153,106 @@ async def create_release_batch(
     return await get_release_batch_summary(db, batch.id)
 
 
+@dataclass(frozen=True)
+class SourceIssue:
+    """Выбранный оператором остаток и этап, на который его надо выдать."""
+
+    balance: StockBalance
+    step: dict
+    quantity: Decimal
+
+
+async def resolve_source_issues(
+    db: AsyncSession,
+    *,
+    route_id: int | None,
+    steps: list[dict],
+    product_id: int,
+    allocation: dict[int, Decimal],
+) -> list[SourceIssue]:
+    """Разрешает выбор оператора в остатки и адресата выдачи (ADR-0055).
+
+    Ключ выбора — ``stock_balances.id``: остаток целиком определяется
+    пятью осями (товар, участок, качество, габарит, операции), и оператор
+    выбирает одну конкретную строку, а не «тип остатка».
+
+    Адресат выдачи — этап, **вход** которого совпадает с признаком
+    операций остатка: материал лежит в группе предыдущего этапа
+    (ADR-0055 п.7), поэтому сырьё со склада уходит на первый
+    производственный этап, а материал, прошедший пресс, — на следующий.
+    Несовпадение — не «выдать куда-нибудь», а отказ с внятной причиной:
+    списание идёт точное (ADR-0055 п.3), и выдача в чужую группу
+    превратилась бы в минус на участке получателя.
+    """
+    from app.services.material_operations import completed_operations_through_stage
+    from app.services.route_storage_classifier import is_production_section
+
+    if not allocation:
+        return []
+    if route_id is None:
+        raise ValueError(
+            "Источник выдачи: у позиции динамический маршрут — выбрать остаток нельзя"
+        )
+
+    rows = (
+        await db.execute(
+            select(StockBalance).where(StockBalance.id.in_(list(allocation.keys())))
+        )
+    ).scalars().all()
+    by_id = {row.id: row for row in rows}
+
+    # Этапы-получатели: производственные секции маршрута, по возрастанию
+    # sequence. Складские этапы пропускаются: на них заданий нет (#: raw_stock).
+    targets: list[tuple[int, dict, list[str]]] = []
+    previous: int | None = None
+    for step in steps:
+        sec_meta = await db.get(Section, step["section_id"])
+        if sec_meta is not None and is_production_section(sec_meta):
+            inputs = await completed_operations_through_stage(
+                db, route_id=route_id, through_sequence=previous
+            )
+            targets.append((step["sequence"], step, inputs))
+        previous = step["sequence"]
+
+    issues: list[SourceIssue] = []
+    for balance_id, requested in allocation.items():
+        balance = by_id.get(balance_id)
+        if balance is None:
+            raise ValueError(f"Источник выдачи: остаток #{balance_id} не найден")
+        if balance.product_id != product_id:
+            raise ValueError(
+                f"Источник выдачи: остаток #{balance_id} — другого товара"
+            )
+        if balance.completed_operations is None:
+            raise ValueError(
+                f"Источник выдачи: у остатка #{balance_id} состояние операций "
+                "не зафиксировано — списать его на этот маршрут нельзя"
+            )
+        available = Decimal(balance.balance_qty)
+        if available <= 0:
+            raise ValueError(f"Источник выдачи: остаток #{balance_id} пуст")
+        match = next(
+            (step for _seq, step, inputs in targets
+             if sorted(balance.completed_operations) == inputs),
+            None,
+        )
+        if match is None:
+            labels = sorted(balance.completed_operations)
+            raise ValueError(
+                f"Источник выдачи: остаток #{balance_id} (операции: "
+                f"{', '.join(labels) if labels else 'нет'}) не подходит маршруту позиции"
+            )
+        issues.append(SourceIssue(
+            balance=balance,
+            step=match,
+            # Заказано больше, чем лежит, — выдаём что есть: остаток плана
+            # закроется обычной выдачей, минус на складе означал бы продажу
+            # несуществующего материала (ADR-0055 п.3).
+            quantity=min(requested, available),
+        ))
+    return issues
+
+
 async def release_batch(
     db: AsyncSession,
     release_batch_id: int,
@@ -200,9 +303,17 @@ async def release_batch(
 
         steps = sorted(batch_position.route_snapshot.get("steps", []), key=lambda step: step["sequence"])
 
-        # ── MRP remainder allocation removed (SpgRemainder deleted) ───────────
-        # Все остатки теперь управляются через StockBalance.
-        # remainder_allocation игнорируется — нет legacy-таблицы для резервации.
+        # ── Выбор источника оператором (ADR-0055) ────────────────────────────
+        # Остатки ведутся в StockBalance (SpgRemainder удалён), поэтому
+        # выбор — это id конкретной строки остатка, а выдача идёт проводкой
+        # на участок этапа, вход которого совпадает с признаком операций.
+        source_issues = await resolve_source_issues(
+            db,
+            route_id=batch_position.route_id,
+            steps=steps,
+            product_id=effective_product_id,
+            allocation=remainder_allocation or {},
+        )
         release_quantity = batch_position.release_quantity
         remainder_max_seq: list[tuple[int, int, Decimal]] = []
 
@@ -325,7 +436,6 @@ async def release_batch(
                     _refresh_section_plan_line_cache,
                 )
                 from app.services.shopfloor.common import _get_user_snapshot_name
-                from app.stock import Reason, StockCommand, StockCommandService
                 actor_id = batch.released_by or batch.created_by or 1
                 actor_name = await _get_user_snapshot_name(db, actor_id)
                 # Журнал действий (#116): автозавершение = Action по
@@ -357,6 +467,43 @@ async def release_batch(
             created_tasks.append(task)
             tasks_created += 1
             line_index += 1
+
+
+        # ── Выдача выбранного источника ───────────────────────────────────────
+        # Задание на адресата уже создано: проводка идёт после цикла, иначе
+        # не на что повесить task_id. Материал списывается С ВЫБРАННОЙ
+        # строки остатка и приходит на участок этапа, вход которого эта
+        # строка закрывает (ADR-0055 п.7) — выбор оператора физически
+        # меняет, откуда взялся материал, а не остаётся записью в payload.
+        for issue in source_issues:
+            target = tasks_by_seq.get(issue.step["sequence"])
+            if target is None:
+                raise ValueError(
+                    f"Источник выдачи: этап {issue.step['sequence']} не попал в задания"
+                )
+            quality = QualityState(issue.balance.quality_state)
+            now = datetime.now(UTC)
+            await StockCommandService().record(db, StockCommand(
+                product_id=effective_product_id,
+                from_location_id=issue.balance.location_id,
+                to_location_id=target.section_id,
+                quantity=issue.quantity,
+                reason=Reason.TRANSFER_SEND,
+                dimensions=issue.balance.dimensions,
+                quality_state=quality,
+                to_quality_state=quality,
+                # task_id/transfer_id не проставляются: остаток снят со
+                # склада ДО появления задания, у проводки нет ни одной из
+                # этих сторон, и её нельзя приписывать ни выходу задания
+                # (иначе вырастет «передано» в бюджете участка), ни
+                # существующему Transfer (S1/S6 сверяют остаток по ledger).
+                completed_operations=list(issue.balance.completed_operations),
+                source_ref="take_to_work_source",
+                comment="Источник выбран оператором при взятии задания в работу",
+                created_by=batch.released_by or batch.created_by or 1,
+                performed_at=now,
+                accounted_at=now,
+            ))
 
         released_total = await _released_quantity(db, position)
         new_status = PlanPositionStatus.released if released_total >= position.quantity else PlanPositionStatus.approved

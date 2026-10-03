@@ -27,6 +27,7 @@ import json
 from datetime import date, datetime, time
 from io import BytesIO
 from pathlib import Path
+from typing import Literal
 
 from fastapi import APIRouter, Depends, File, Form, HTTPException, Query, UploadFile
 from fastapi.responses import StreamingResponse
@@ -582,22 +583,50 @@ async def list_balances(
     )
 
 
+# Порядок строк остатка по товару. ``key`` — порядок полного ключа
+# (ADR-0055 п.11, значение по умолчанию и контракт ADR); ``operations`` —
+# порядок кандидатов выдачи для взятия задания в работу.
+BalanceOrder = Literal["key", "operations"]
+
+
+def _balance_operations_count_expr():
+    """Число пройденных операций остатка — «близость» материала к выдаче.
+
+    ``coalesce`` обязателен: ``NULL`` оси (состояние не зафиксировано)
+    не «минус бесконечность операций», а отсутствие признака, и в
+    ``DESC`` без него PostgreSQL поставил бы такие строки ВПЕРЁД всех —
+    на ровном месте предвыбор уехал бы на неучтённый материал.
+    """
+    return func.coalesce(
+        func.jsonb_array_length(StockBalance.completed_operations), 0
+    )
+
+
 @router.get("/balance/by-product/{product_id}", response_model=list[StockBalanceOut])
 async def list_balances_by_product(
     product_id: int,
     quality_state: QualityState | None = Query(default=None),
+    order: BalanceOrder = Query(default="key"),
     db: AsyncSession = Depends(get_db),
     _user: User = Depends(require_role(READER_ROLES)),
 ) -> list[StockBalanceOut]:
     """Все балансы конкретного продукта по локациям.
 
-    ORDER BY обязан быть полным: ключ остатка — пять осей (ADR-0055), поэтому
-    строки одного ``location_id`` и ``quality_state``, различающиеся только
-    признаком пройденных операций, без явного tie-breaker'а приходят в
-    недетерминированном порядке — результат менялся бы между прогонами.
-    Уровни: ``location_id → quality_state → completed_operations → id``.
-    ``NULL`` оси («не зафиксировано») идёт в конце, как и любые пустые значения
-    в этой таблице; ``id`` замыкает порядок, делая его линейным.
+    ``order=key`` (по умолчанию) — порядок полного ключа остатка:
+    ``location_id → quality_state → completed_operations NULLS LAST → id``
+    (ADR-0055 п.11). Без tie-breaker'а по пятой оси строки одного участка и
+    качества, различавшиеся только операциями, приходили в порядке кучи и
+    менялись между прогонами.
+
+    ``order=operations`` — порядок КАНДИДАТОВ ВЫДАЧИ: по убыванию числа
+    пройденных операций, то есть подготовительный склад выше сырьевого.
+    Признак операций — пятая ось ключа остатка (ADR-0055), и «больше
+    операций» значит «ближе к следующему этапу маршрута», поэтому такой
+    порядок и есть порядок предвыбора источника. Уровни после него —
+    те же, что у ``key``: ``location_id → quality_state → id``, порядок
+    линеен и не зависит от кучи в БД. Незафиксированное состояние
+    (``NULL``) операций не имеет и уходит вниз, как и пустые значения в
+    этой таблице.
     """
     stmt = (
         select(StockBalance, Section.name, Product.sku)
@@ -607,12 +636,20 @@ async def list_balances_by_product(
     )
     if quality_state is not None:
         stmt = stmt.where(StockBalance.quality_state == quality_state)
-    stmt = stmt.order_by(
-        StockBalance.location_id.asc(),
-        StockBalance.quality_state.asc(),
-        StockBalance.completed_operations.asc().nulls_last(),
-        StockBalance.id.asc(),
-    )
+    if order == "operations":
+        stmt = stmt.order_by(
+            _balance_operations_count_expr().desc(),
+            StockBalance.location_id.asc(),
+            StockBalance.quality_state.asc(),
+            StockBalance.id.asc(),
+        )
+    else:
+        stmt = stmt.order_by(
+            StockBalance.location_id.asc(),
+            StockBalance.quality_state.asc(),
+            StockBalance.completed_operations.asc().nulls_last(),
+            StockBalance.id.asc(),
+        )
     result = await db.execute(stmt)
     return await _serialize_balances_with_operations(db, list(result.all()))
 
