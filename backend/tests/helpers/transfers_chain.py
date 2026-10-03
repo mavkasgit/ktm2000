@@ -32,19 +32,17 @@ from __future__ import annotations
 
 from decimal import Decimal
 
-from sqlalchemy import select
-from sqlalchemy.ext.asyncio import AsyncSession
-
-from app.models.production_plan import PlanPositionStatus
+from app.services.material_operations import completed_operations_through_stage
+from app.services.plan_generation import create_release_batch, release_batch
 from app.services.route_storage_classifier import (
     SECTION_TYPE_FINISHED_STOCK,
     SECTION_TYPE_RAW_STOCK,
     SECTION_TYPE_WIP_STOCK,
 )
-from app.services.material_operations import completed_operations_through_stage
-from app.services.plan_generation import create_release_batch, release_batch
-from app.stock.models import Reason, QualityState
+from app.stock.models import QualityState, Reason
 from app.stock.services import StockCommand, StockCommandService
+from sqlalchemy import select
+from sqlalchemy.ext.asyncio import AsyncSession
 
 from tests.helpers.completed_operations import build_operation_route
 
@@ -158,7 +156,6 @@ __all__ = [
     "ISSUE_RAW_OP",
     "PROD_START_OP",
     "SECTION_TYPE_FINISHED_STOCK",
-    "SECTION_TYPE_PRODUCTION",
     "WIP_CONSUME_OP",
     "WIP_ISSUE_OP",
     "build_released_stock_lines",

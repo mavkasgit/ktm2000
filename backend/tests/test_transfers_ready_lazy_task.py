@@ -20,11 +20,10 @@ from collections import Counter
 from decimal import Decimal
 
 import pytest
+from app.transfers.queries import list_ready_to_transfer
 from sqlalchemy import event
 
-from app.transfers.queries import list_ready_to_transfer
 from tests.helpers.transfers_chain import (
-    ISSUE_RAW_OP,
     build_released_stock_lines,
     seed_manual_in,
 )
@@ -83,7 +82,7 @@ async def _seed_case(session, sku: str):
 @pytest.mark.asyncio
 async def test_ready_creates_task_for_stock_line_without_it(session, sql_counters):
     """Строка без задания появляется в выдаче и получает задание при первом GET."""
-    fx, source_line = await _seed_case(session, "LAZY-1")
+    fx, _source_line = await _seed_case(session, "LAZY-1")
     counters, _total = sql_counters
 
     # Счётчик обнуляем перед GET: замер должен показать стоимость ручки, а не
@@ -118,7 +117,7 @@ async def test_ready_creates_task_for_stock_line_without_it(session, sql_counter
 @pytest.mark.asyncio
 async def test_ready_response_fields_survive_lazy_creation(session, sql_counters):
     """JSON-сверка: поля ответа не зависят от того, создано задание или нет."""
-    fx, source_line = await _seed_case(session, "LAZY-2")
+    _fx, _source_line = await _seed_case(session, "LAZY-2")
 
     result = await list_ready_to_transfer(session, limit=POSITIONS * 4)
     rows = result["items"] if isinstance(result, dict) else result
