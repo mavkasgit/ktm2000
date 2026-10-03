@@ -1,5 +1,5 @@
 import { test, expect, type Page } from "./fixtures";
-import path from "path";
+import { fileURLToPath } from "url";
 import {
   apiAddRemainder,
   apiGetProductBySku,
@@ -41,6 +41,9 @@ const PREP_TEMPLATE_NAME = "План подготовительного учас
 const PREP_STOCK_SECTION = "Склад подготовки";
 const NORMAL_LENGTH_MM = 3000;
 
+// ESM: `__dirname` не существует — каталог берём из `import.meta.url`,
+// тем же приёмом, что в `ui-helpers.ts`.
+const __dirname = path.dirname(fileURLToPath(import.meta.url));
 // Фикстура и загрузчик живут ЗДЕСЬ, а не в `ui-helpers.ts`: тот файл правит
 // параллельный срез (#312), и общая правка разошлась бы при слиянии. Обе
 // вещи нужны только этому сценарию.
