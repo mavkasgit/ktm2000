@@ -52,10 +52,11 @@ test.describe("@smoke Отмена действий — журнал /reversal (
       authenticatedPage.getByRole("heading", { name: "Отмена действий" }),
     ).toBeVisible({ timeout: 10_000 });
 
-    // 2. Строка manual_adjustment в журнале.
+    // 2. Строка ручной корректировки: тип в UI показан локализованной
+    // подписью (сырых кодов в интерфейсе больше нет), ищем строку по ней.
     const row = authenticatedPage
       .getByTestId(/action-row-\d+/)
-      .filter({ hasText: "manual_adjustment" })
+      .filter({ hasText: "Ручная корректировка остатка" })
       .first();
     await expect(row).toBeVisible({ timeout: 10_000 });
     await expect(row.getByText("Активно")).toBeVisible();
