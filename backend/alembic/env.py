@@ -42,12 +42,18 @@ MIGRATION_HELPER_TABLES = frozenset(
     }
 )
 
+#: Служебные таблицы самого e2e-стенда. Их создаёт `scripts/e2e-db.py`
+#: (`_write_stamp`) мимо Alembic и мимо моделей: это отметки версии
+#: репозитория в БД клона прогона, а не продукт. В моделях они не описаны
+#: намеренно, поэтому autogenerate видел в БД стенда «лишнюю» таблицу и
+#: предлагал `remove_table` — на стенде `alembic check` был красным всегда и
+#: врал о наличии незамигрированных изменений.
+STAND_SERVICE_TABLES = frozenset({"e2e_stand_stamp"})
+
 
 def include_object(object, name, type_, reflected, compare_to):
-    return not (
-        type_ == "table"
-        and (name == "alembic_version" or name in MIGRATION_HELPER_TABLES)
-    )
+    ignored_tables = MIGRATION_HELPER_TABLES | STAND_SERVICE_TABLES
+    return not (type_ == "table" and (name == "alembic_version" or name in ignored_tables))
 
 
 class WideVersionTablePostgresqlImpl(PostgresqlImpl):
