@@ -49,15 +49,15 @@ ROUTE_RULE_PROFILES = [
         "is_active": True,
         "priority": 900,
         "route_name_pattern": "{operations} - {shot_op}",
-        "import_template_code": "plan_prep_stage",
         "route_sections": ["RAW_STOCK", "DRILLING", "PRESSING", "SHOT_BLAST", "PREP_STOCK"],
         "excel_column_passport": [
             {"index": 1, "header": "Артикул", "letter": "A", "field_path": "sku"},
             {"index": 2, "header": "Наименование", "letter": "B", "field_path": "product_name"},
             {"index": 3, "header": "Цвет", "letter": "C", "field_path": "color"},
             {"index": 4, "header": "Операция", "letter": "D", "field_path": "operation"},
-            {"index": 5, "header": "Кол-во, шт", "letter": "E", "field_path": "quantity"},
-            {"index": 6, "header": "Примечание", "letter": "F", "field_path": "note"},
+            {"index": 5, "header": "Длина, м", "letter": "E", "field_path": "output_length"},
+            {"index": 6, "header": "Кол-во, шт", "letter": "F", "field_path": "quantity"},
+            {"index": 7, "header": "Примечание", "letter": "G", "field_path": "note"},
         ],
         "excel_passport_meta": {
             "source": "import_template",

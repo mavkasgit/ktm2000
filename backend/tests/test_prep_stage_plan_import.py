@@ -31,10 +31,9 @@ from sqlalchemy import select
 
 TEMPLATE_CODE = "plan_prep_stage"
 PROFILE_CODE = "prep_stage_plan"
-
 #: Заголовки файла «Плана подготовительного участка» — те же, что в сиде
 #: шаблона (`IMPORT_TEMPLATES`), в порядке колонок A..F.
-HEADERS = ["Артикул", "Наименование", "Цвет", "Операция", "Кол-во, шт", "Примечание"]
+HEADERS = ["Артикул", "Наименование", "Цвет", "Операция", "Длина, м", "Кол-во, шт", "Примечание"]
 
 #: Три варианта подготовительного маршрута и ожидаемый состав участков.
 #: Старт у всех — RAW_STOCK, финиш — PREP_STOCK (#313). «Окно» и «гребенка» —
@@ -64,16 +63,20 @@ def _profile_seed() -> dict:
     raise AssertionError(f"профиль {PROFILE_CODE} не найден в сидах")
 
 
-def _prep_workbook(rows: list[tuple[str, str, str, str, int]]) -> bytes:
-    """Книга в структуре нового шаблона: три пустые строки, затем шапка."""
+def _prep_workbook(rows: list[tuple[str, str, str, str, float, int]]) -> bytes:
+    """Книга в структуре нового шаблона: три пустые строки, затем шапка.
+
+    Длина в метрах — колонка `output_length` шаблона; без неё позиция
+    остаётся без габаритов и не находит остаток на складе сырья.
+    """
     wb = Workbook()
     ws = wb.active
     ws.title = "prepplan"
     for _ in range(3):
         ws.append([])
     ws.append(HEADERS)
-    for sku, name, color, operation, quantity in rows:
-        ws.append([sku, name, color, operation, quantity, "E2E подготовка"])
+    for sku, name, color, operation, length_m, quantity in rows:
+        ws.append([sku, name, color, operation, length_m, quantity, "E2E подготовка"])
     out = BytesIO()
     wb.save(out)
     return out.getvalue()
@@ -174,7 +177,7 @@ def test_prep_profile_route_sections_start_raw_and_finish_prep() -> None:
 
 def test_prep_workbook_parsed_by_common_parser_with_template_mapping() -> None:
     """Общий парсер разбирает файл нового шаблона — свой парсер не нужен."""
-    content = _prep_workbook([("ЮП-900", "Уголок 15*15", "черный", "сверловка", 120)])
+    content = _prep_workbook([("ЮП-900", "Уголок 15*15", "черный", "сверловка", 3, 120)])
     parsed = parse_factory_plan_workbook(
         content, "План подготовительного участка.xlsx", column_mapping=_template_mapping()
     )
@@ -185,6 +188,23 @@ def test_prep_workbook_parsed_by_common_parser_with_template_mapping() -> None:
     assert row.payload["operation"] == "сверловка"
     assert row.payload["source_name"] == "Уголок 15*15"
     assert float(row.quantity) == 120
+
+
+def test_prep_row_carries_length_so_stock_can_be_issued() -> None:
+    """Строка несёт габарит: без длины остаток на сырье её не находит.
+
+    Регресс из e2e: колонки длины в шаблоне не было, позиция импортировалась
+    с `outputs[0].dimensions = None`, и первая выдача сырья на DRILLING не
+    проходила — задание висело `0/300`, круг передач не стартовал. Проверка
+    на данных парсера, а не на UI: дефект был в СИДЕ шаблона.
+    """
+    content = _prep_workbook([("ЮП-905", "Уголок 15*15", "серебро", "сверловка", 3, 120)])
+    parsed = parse_factory_plan_workbook(
+        content, "План подготовительного участка.xlsx", column_mapping=_template_mapping()
+    )
+    dimensions = parsed.parsed_rows[0].outputs[0]["dimensions"]
+    assert dimensions, "позиция без габаритов не найдёт остаток на складе сырья"
+    assert dimensions.get("length_mm") == 3000
 
 
 # ─── 2. Три ветки правил подбора маршрута ────────────────────────────────────
@@ -261,9 +281,9 @@ async def test_prep_import_creates_positions_with_prep_routes(session) -> None:
 
     content = _prep_workbook(
         [
-            ("ЮП-901", "Уголок 15*15", "черный", "сверловка", 120),
-            ("ЮП-902", "Плинтус 16", "серебро", "окно", 80),
-            ("ЮП-903", "Кант 47", "черный", "", 60),
+            ("ЮП-901", "Уголок 15*15", "черный", "сверловка", 3, 120),
+            ("ЮП-902", "Плинтус 16", "серебро", "окно", 3, 80),
+            ("ЮП-903", "Кант 47", "черный", "", 3, 60),
         ]
     )
     result = await create_excel_import_change_set(
@@ -321,7 +341,7 @@ async def test_prep_import_position_quantity_comes_from_file(session) -> None:
     result = await create_excel_import_change_set(
         session,
         filename="План подготовительного участка.xlsx",
-        content=_prep_workbook([("ЮП-904", "Уголок 20", "серый", "сверловка", 137)]),
+        content=_prep_workbook([("ЮП-904", "Уголок 20", "серый", "сверловка", 3, 137)]),
         content_type="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
         production_plan_id=plan.id,
         template_id=template.id,
