@@ -23,8 +23,11 @@
  * Как выбирается backend
  * ---------------------
  * По заголовку `x-e2e-worker` (его ставит фикстура `extraHTTPHeaders` в
- * `e2e/fixtures.ts` значение `workerInfo.workerIndex`). Без заголовка — backend
- * 0: одиночный прогон и ручной стенд (`PW_REUSE_STACK=1`) не меняются.
+ * `e2e/fixtures.ts` значение `workerSlot(workerInfo.workerIndex)` — слот по
+ * модулю `E2E_WORKERS`, а не сам `workerIndex`: тот сквозной и на прогоне
+ * `--workers=2` доходит до 4, см. `e2e/worker-slot.ts`). Без заголовка —
+ * backend 0: одиночный прогон и ручной стенд (`PW_REUSE_STACK=1`) не
+ * меняются.
  *
  * Что проксируется
  * ----------------
