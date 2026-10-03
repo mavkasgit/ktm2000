@@ -55,7 +55,15 @@ MANUAL_ROUTE_PASS_PREFIX = "manual_route_pass:"
 
 
 class RemainderAllocationItem(BaseModel):
-    remainder_id: int
+    """Выбранный оператором источник выдачи.
+
+    ``balance_id`` — id строки ``stock_balances``. Legacy-имя ``remainder_id``
+    ссылалось на удалённую ``SpgRemainder``: остаток, который оператор
+    выбирает, — это строка остатка целиком, со всеми пятью осями ключа
+    (ADR-0055), и по одному «номеру остатка» её не адресовать.
+    """
+
+    balance_id: int
     quantity: Decimal
 
 
@@ -1131,7 +1139,15 @@ async def take_rows_to_work(
 
     allocation_dict = None
     if payload.remainder_allocation:
-        allocation_dict = {item.remainder_id: item.quantity for item in payload.remainder_allocation}
+        allocation_dict = {item.balance_id: item.quantity for item in payload.remainder_allocation}
+        # Источник выдачи — решение для конкретной позиции: у нескольких
+        # позиций маршруты и планы разные, и один остаток не может быть
+        # источником для всех. Раньше выбор молча уходил в никуда.
+        if len(payload.position_ids) != 1:
+            raise HTTPException(
+                status_code=422,
+                detail="remainder_allocation поддерживается только для одной позиции",
+            )
 
     if payload.release_quantity is not None:
         if len(payload.position_ids) != 1:

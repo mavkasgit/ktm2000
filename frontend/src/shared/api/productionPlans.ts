@@ -825,12 +825,18 @@ export type ManualPassResponse = {
 
 export async function takeToWork(
   positionIds: number[],
-  remainderAllocation?: Array<{ remainder_id: number; quantity: number }>,
+  /**
+   * Выбранный оператором источник выдачи: `balance_id` — строка
+   * `stock_balances` (#314). Бэкенд списывает её и выдаёт материал на этап
+   * маршрута, чей вход совпадает с признаком операций этой строки.
+   * Поддерживается только для одной позиции в запросе.
+   */
+  remainderAllocation?: Array<{ balance_id: number; quantity: number }>,
   releaseQuantity?: number,
 ) {
   const payload: {
     position_ids: number[];
-    remainder_allocation?: Array<{ remainder_id: number; quantity: number }>;
+    remainder_allocation?: Array<{ balance_id: number; quantity: number }>;
     release_quantity?: number;
   } = {
     position_ids: positionIds,
