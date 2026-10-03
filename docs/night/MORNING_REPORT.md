@@ -37,7 +37,8 @@
 
 | Метрика | До смены | После смены |
 |---|---|---|
-| Backend-набор (параллельно) | **2011 passed**, 3 warnings, 299 с (baseline, 6 воркеров, под нагрузкой) | **2075 passed**, 2 skipped, 3 warnings, ~500 с (`PYTEST_NUM_WORKERS=2`) |
+| Backend-набор (параллельно) | **2011 passed**, 3 warnings, 299 с (baseline, 6 воркеров, под нагрузкой) | **2076 passed**, 2 skipped, 3 warnings, 457 с (`PYTEST_NUM_WORKERS=2`, срез C на итоговом дереве) |
+| `vitest` по `e2e/` | — | **33 passed** (тесты семафора, лока, уборки клонов) |
 | Frontend vitest | 1176 passed / 1 skipped (отчёт прошлой ночи) | **1277 passed / 1 skipped**, 97 с |
 | `tsc --noEmit` | чисто | чисто (проверено правильно, с `-p`) |
 | `ruff check backend` | All checks passed | All checks passed (после того, как я починил 8 замечаний в слитой фикстуре — см. инциденты) |
