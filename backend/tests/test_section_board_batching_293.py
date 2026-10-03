@@ -165,6 +165,130 @@ async def _make_transform_section(session, *, tasks: int, paired: bool, prefix: 
     return section
 
 
+async def _make_non_transform_section_with_stale_input(session, *, prefix: str) -> Section:
+    """Участок с НЕ-трансформирующим этапом, но заданием с `input_quantity`.
+
+    Так бывает, когда маркер этапа сняли после создания задания: задание
+    сохраняет вход и выходы, а `transforms_dimensions` у этапа уже `False`.
+    """
+    section = Section(code=f"B923-{prefix}", name="Не пиление", type="production")
+    session.add(section)
+    await session.flush()
+
+    product = Product(sku=f"B923-SKU-{prefix}", name="SKU", type=ProductType.finished_good, unit="pcs")
+    session.add(product)
+    await session.flush()
+
+    route = ProductionRoute(name=f"B923-ROUTE-{prefix}", is_active=True)
+    session.add(route)
+    await session.flush()
+
+    stage = RouteStage(
+        route_id=route.id,
+        sequence=1,
+        section_id=section.id,
+        is_final=True,
+        transforms_dimensions=False,
+    )
+    session.add(stage)
+    await session.flush()
+    session.add(RouteOperation(route_stage_id=stage.id, sequence=1, operation_code="OP1", operation_name="Оп1"))
+    await session.flush()
+
+    plan = ProductionPlan(
+        plan_no=f"B923-P-{prefix}", name="p", status=ProductionPlanStatus.approved,
+        period_start=date(2026, 6, 1), period_end=date(2026, 6, 30),
+    )
+    session.add(plan)
+    await session.flush()
+    internal = InternalPlan(production_plan_id=plan.id, status=InternalPlanStatus.active)
+    session.add(internal)
+    await session.flush()
+
+    position = PlanPosition(
+        production_plan_id=plan.id,
+        product_id=product.id,
+        source_type=PlanSourceType.manual,
+        source_sku=product.sku,
+        source_name=product.name,
+        quantity=Decimal(10),
+        source_payload={},
+        status=PlanPositionStatus.approved,
+        validation_status=PlanPositionValidationStatus.valid,
+        validation_errors=[],
+        period_start=plan.period_start,
+        period_end=plan.period_end,
+        has_pack_ops=False,
+        route_id=route.id,
+    )
+    session.add(position)
+    await session.flush()
+    line = SectionPlanLine(
+        internal_plan_id=internal.id,
+        plan_position_id=position.id,
+        section_id=section.id,
+        route_stage_id=stage.id,
+        product_id=product.id,
+        route_id=route.id,
+        sequence=1,
+        planned_quantity=Decimal(10),
+    )
+    session.add(line)
+    await session.flush()
+    task = WorkTask(
+        section_plan_line_id=line.id,
+        section_id=section.id,
+        product_id=product.id,
+        route_stage_id=stage.id,
+        planned_quantity=Decimal(10),
+        input_quantity=Decimal(10),
+        input_dimensions={"length_mm": 2750},
+        outputs=CONSUMED_OUTPUTS,
+        status=WorkTaskStatus.in_progress,
+    )
+    session.add(task)
+    await session.flush()
+    # Движение по ledger есть — значит задание попадёт в карту прогресса.
+    session.add(
+        StockTransaction(
+            task_id=task.id,
+            product_id=product.id,
+            created_by=1,
+            from_location_id=section.id,
+            reason=Reason.TRANSFORM_CONSUME,
+            quantity=Decimal(5),
+            dimensions={"length_mm": 2750},
+        )
+    )
+    # `id` читаем ДО commit: после commit атрибуты истёкли, а ленивая
+    # перечитка после `rollback` в async-сессии даёт MissingGreenlet.
+    task_id = task.id
+    section_id = section.id
+    await session.commit()
+    return section_id, task_id
+
+
+async def test_board_hides_output_card_on_non_transform_stage(engine, session) -> None:
+    """Карточка выходов — по маркеру этапа, а не по наличию id в карте (#293).
+
+    Карта прогресса батча шире выдачи: в неё входят задания с
+    `input_quantity` даже без `transforms_dimensions` — они нужны
+    синхронизации статусов. Пока карта была единственным гейтом, такое
+    задание получало `outputs_progress` на не-трансформирующем этапе.
+    """
+    section_id, task_id = await _make_non_transform_section_with_stale_input(session, prefix="NOGATE")
+    await session.rollback()
+
+    board = await get_section_board(session, section_id=section_id, limit=500, offset=0)
+
+    row = next(r for r in board["tasks"] if r["id"] == task_id)
+    assert row["outputs_progress"] is None, (
+        "не-трансформирующий этап не должен отдавать карточку выходов: "
+        f"{row['outputs_progress']}"
+    )
+    assert row["input_consumed_quantity"] is None
+
+
 async def _board_sql(engine, session, section_id: int) -> SqlRecorder:
     recorder = SqlRecorder(engine)
     with recorder:

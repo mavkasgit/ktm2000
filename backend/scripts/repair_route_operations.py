@@ -38,24 +38,28 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
-from sqlalchemy import select  # noqa: E402
-from sqlalchemy.orm import selectinload  # noqa: E402
-
-from app.core.database import async_session  # noqa: E402
-from app.models.product import Product  # noqa: E402
-from app.models.production_plan import PlanPosition  # noqa: E402
-from app.models.route import ProductionRoute, RouteOperation, RouteStage, RouteRuleProfile  # noqa: E402
-from app.services.route_builder import (  # noqa: E402
+from app.core.database import async_session
+from app.models.product import Product
+from app.models.production_plan import PlanPosition
+from app.models.route import (
+    ProductionRoute,
+    RouteOperation,
+    RouteRuleProfile,
+    RouteStage,
+)
+from app.services.route_builder import (
     RouteBuildBatchCache,
     build_route_from_profile,
     load_route_build_batch_cache,
 )
-from app.services.route_signature import (  # noqa: E402
+from app.services.route_signature import (
     auto_route_code,
     encode_signature,
     refresh_route_signature,
     signature_steps_from_stages,
 )
+from sqlalchemy import select
+from sqlalchemy.orm import selectinload
 
 
 @dataclass

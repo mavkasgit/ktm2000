@@ -748,6 +748,14 @@ async def resolve_operations_dictionary(db: AsyncSession) -> list[dict]:
     ]
 
 
+# Значения ячейки «Операции», означающие «прошёл маршрут, операций не было»
+# (ADR-0055 п.6): пустая ячейка и прочерк (типографский или дефисный). Всё
+# остальное, что не сматчился со справочником, — не пустой список, а
+# неизвестное состояние: угадывать запрещено (ADR-0021).
+_EMPTY_OPERATIONS_CELLS = ("", "—", "-")
+
+
+
 async def resolve_completed_stages(
     db: AsyncSession,
     raw_ops_str: str | None,
@@ -848,6 +856,7 @@ def _resolve_item_quality_state(
     if quality_state_overrides and item.source_row_number in quality_state_overrides:
         return quality_state_overrides[item.source_row_number]
     return item.quality_state or default_quality_state
+
 
 
 def _row_completed_operations(item: RemainderItem) -> list[str] | None:
