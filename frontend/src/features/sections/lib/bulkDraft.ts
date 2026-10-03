@@ -59,6 +59,17 @@ export function recordedFact(task: SectionBoardTask, field: DraftField): number 
   );
 }
 
+/**
+ * Записанный факт группы по колонке. Единственное место, где факт группы
+ * считается: от него зависят и плейсхолдер поля («сейчас N»), и разбор ввода
+ * («факт станет N»). Две разные базы читались бы как две правды — плейсхолдер
+ * «сейчас 3» при фактически записанных 2 отправляет оператора в цель, которую
+ * сервер отвергнет.
+ */
+export function groupRecordedFact(tasks: SectionBoardTask[], field: DraftField): number {
+  return tasks.reduce((sum, task) => sum + recordedFact(task, field), 0);
+}
+
 /** Разрешение ввода строки по колонке: порция, режим, записанное и итог. */
 export function resolveDraftField(
   task: SectionBoardTask,
@@ -210,7 +221,7 @@ export function resolveGroupFact(
   field: DraftField,
   input: string,
 ): { recorded: number; resolution: FactQuantityResolution } {
-  const recorded = tasks.reduce((sum, task) => sum + recordedFact(task, field), 0);
+  const recorded = groupRecordedFact(tasks, field);
   return { recorded, resolution: resolveFactQuantity(input, recorded) };
 }
 
@@ -277,8 +288,12 @@ export function applyGroupField(
         : `+${row.value}`;
     // Строка, которой ничего не досталось, остаётся пустой: «0» — это
     // записанный факт, и заводить его там, где оператор ничего не вводил,
-    // значило бы показать в поле группы ноль вместо плейсхолдера.
-    next = withDraftField(next, row.taskId, field, total === 0 || row.value > 0 ? value : "");
+    // значило бы показать в поле группы ноль вместо плейсхолдера. Порция, равная
+    // нулю (набрано «+0» или цель, совпавшая с записанным), ввода не создаёт
+    // вовсе: черновик без записи иначе просил бы подтверждение выхода из
+    // режима ради пустоты, а футер отвечал бы «введите количество» при
+    // заполненных полях.
+    next = withDraftField(next, row.taskId, field, row.value > 0 ? value : "");
   }
   return next;
 }
