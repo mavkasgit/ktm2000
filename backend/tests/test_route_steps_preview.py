@@ -183,9 +183,14 @@ async def _seed_infrastructure(session, profile: RouteRuleProfile):
         sort_order=20, is_significant=True,
     )
     
-    # Seed selection rules
+    # Seed selection rules — ТОЛЬКО своего профиля. Список `SELECTION_RULES`
+    # общий на все профили, и правила чужого профиля, попав сюда, меняли бы
+    # маршрут этой сборки: без фильтра `prep_core_sections` (#313) исключал
+    # ANODIZING, и превью теряло этап анодирования (2 красных теста).
+    own_rules = [d for d in SELECTION_RULES if d["profile_code"] == profile.code]
+    assert own_rules, f"в сидах нет правил профиля {profile.code!r}"
     await seed_selection_rules(
-        session, [SelectionRuleDef.model_validate(d) for d in SELECTION_RULES], profile, section_map
+        session, [SelectionRuleDef.model_validate(d) for d in own_rules], profile, section_map
     )
     
     # Create product + route so route resolution works
