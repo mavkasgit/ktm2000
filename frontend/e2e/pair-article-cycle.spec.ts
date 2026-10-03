@@ -127,7 +127,7 @@ test.describe("@ui Пара 2604/2616: сквозной маршрут разд�
     await apiApplyChangeSet(importRes.production_plan_id, importRes.change_set_id);
 
     await page.goto("/planning");
-    await expect(page.getByRole("heading", { name: "План", { exact: true })).toBeVisible({
+    await expect(page.getByRole("heading", { name: "План", exact: true })).toBeVisible({
       timeout: 10_000,
     });
     await waitForPlanningTableViaUI(page);
