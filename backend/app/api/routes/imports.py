@@ -145,6 +145,12 @@ async def import_excel_plan(
         raise HTTPException(status_code=400, detail=str(exc)) from exc
     except RuntimeError as exc:
         raise HTTPException(status_code=500, detail=str(exc)) from exc
+    # Коммит ДО формирования ответа: в ответе уходят `production_plan_id` и
+    # `change_set_id`, по которым клиент сразу бьёт `apply`. Коммит `get_db`
+    # выполняется после отправки ответа (см. докстринг `core/database.py`),
+    # поэтому без этого плана ещё нет в БД к моменту, когда клиент его ищет —
+    # 404 «Производственный план не найден» в `apply` (тикет #287).
+    await db.commit()
     return ImportPreviewOut(**result)
 
 
@@ -358,6 +364,9 @@ async def import_simulated_excel(
         raise HTTPException(status_code=400, detail=str(exc)) from exc
     except RuntimeError as exc:
         raise HTTPException(status_code=500, detail=str(exc)) from exc
+    # Коммит ДО ответа — тот же контракт, что у `/excel` (#287): клиент сразу
+    # после 201 приходит за change set / apply по отданным в ответе id.
+    await db.commit()
     return ImportPreviewOut(**result)
 
 
