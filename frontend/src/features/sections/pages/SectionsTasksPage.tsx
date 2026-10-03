@@ -51,7 +51,11 @@ import {
   type BulkDraft,
 } from "../lib/bulkDraft";
 import { DailyPlansPanel } from "../components/DailyPlansPanel";
-import { getDailyPlanCreationCandidates, mergeDailyPlanTasks } from "../lib/dailyPlans";
+import {
+  getCurrentSectionTasks,
+  getDailyPlanCreationCandidates,
+  mergeDailyPlanTasks,
+} from "../lib/dailyPlans";
 import { planGroupComplete } from "../lib/groupComplete";
 import { PlanModal } from "../components/PlanModal";
 import { SectionStockBalances } from "../components/SectionStockBalances";
@@ -924,15 +928,17 @@ export function SectionsTasksPage() {
     : mergeDailyPlanTasks(selectedPlanQueries.flatMap((query) => (
         query.data ? [query.data.items] : []
       )));
-  // Вкладка «План» без выбранного плана — это «все актуальные задания
-  // участка»: завершённые строки живут только в составе конкретного плана
-  // (docs/daily-plans-spec.md, «Режим `План`»), а занятые планом скрыты
-  // целиком (#301).
+  // Вкладка «План» без выбранного плана — «все актуальные задания участка»
+  // (docs/daily-plans-spec.md, «Режим `План`»): завершённые строки видны
+  // только в составе конкретного плана. Занятые планом задания в просмотре
+  // остаются — это картина участка, и «Все задания участка» обязана её
+  // показывать. Их прячет только режим создания (#301), поэтому фильтр
+  // кандидатов включается по `creatingDailyPlan`, а не всегда.
   const planBoardTasks = useMemo(
     () => (selectedPlanIds.size === 0
-      ? getDailyPlanCreationCandidates(tasks)
+      ? (creatingDailyPlan ? getDailyPlanCreationCandidates(tasks) : getCurrentSectionTasks(tasks))
       : displayedTasks),
-    [tasks, displayedTasks, selectedPlanIds],
+    [tasks, displayedTasks, selectedPlanIds, creatingDailyPlan],
   );
   const selectedTasks = useMemo(
     () => tasks.filter((t) => bulkSelection.selectedIds.has(t.id)),

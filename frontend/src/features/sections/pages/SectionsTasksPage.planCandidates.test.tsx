@@ -233,6 +233,21 @@ async function openPlanCreationMode() {
   fireEvent.click(await screen.findByRole("button", { name: "начать создание" }));
 }
 
+describe("SectionsTasksPage: вкладка «План» в режиме просмотра", () => {
+  it("показывает и занятое планом задание — скрытие принадлежит только созданию", async () => {
+    renderPage();
+    await waitFor(() => expect(getSectionBoard).toHaveBeenCalledWith(2, expect.anything(), undefined));
+
+    // Вкладка «План» без выбранного плана — «все актуальные задания участка»
+    // (docs/daily-plans-spec.md, «Режим `План`»). Регресс: скрытие занятых
+    // из #301 применялось и здесь, и «Все задания участка» показывала только
+    // свободные строки — половина картины участка пропадала без причины.
+    fireEvent.click(screen.getByRole("button", { name: "План" }));
+
+    await waitFor(() => expect(renderedIds()).toEqual([FREE_TASK.id, TAKEN_TASK.id]));
+  });
+});
+
 describe("SectionsTasksPage: кандидаты дневного плана", () => {
   it("в режиме создания скрывает задание, уже включённое в план", async () => {
     await openPlanCreationMode();

@@ -1,7 +1,7 @@
 import { describe, expect, it } from "vitest";
 
 import type { SectionBoardTask } from "@/shared/api/shopfloor";
-import { getDailyPlanCreationCandidates } from "./dailyPlans";
+import { getCurrentSectionTasks, getDailyPlanCreationCandidates } from "./dailyPlans";
 
 function makeTask(overrides: Partial<SectionBoardTask> = {}): SectionBoardTask {
   return {
@@ -46,6 +46,41 @@ function makeTask(overrides: Partial<SectionBoardTask> = {}): SectionBoardTask {
   };
 }
 
+/** Завершённое задание: терминальный статус плюс полный факт. */
+function completedTask(id: number): SectionBoardTask {
+  return makeTask({
+    id,
+    status: "completed",
+    cache: {
+      available_quantity: "0",
+      issued_quantity: "10",
+      completed_quantity: "10",
+      transferred_quantity: "10",
+      received_quantity: "10",
+      rejected_quantity: "0",
+      remaining_quantity: "0",
+    },
+  });
+}
+
+describe("getCurrentSectionTasks", () => {
+  it("оставляет задание, занятое планом: просмотр — это картина участка, а не кандидаты", () => {
+    const free = makeTask({ id: 1 });
+    const taken = makeTask({ id: 2, in_daily_plan: true });
+
+    const ids = getCurrentSectionTasks([free, taken]).map((task) => task.id);
+
+    expect(ids).toEqual([1, 2]);
+  });
+
+  it("прячет завершённые — они видны только в составе выбранного плана", () => {
+    const active = makeTask({ id: 1 });
+
+    const ids = getCurrentSectionTasks([active, completedTask(2)]).map((task) => task.id);
+
+    expect(ids).toEqual([1]);
+  });
+});
 describe("getDailyPlanCreationCandidates", () => {
   it("прячет задание, уже включённое в дневной план", () => {
     const free = makeTask({ id: 1 });
