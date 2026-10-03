@@ -9,6 +9,7 @@ import {
   Badge,
 } from "@/shared/ui";
 import {
+  completedOperationsCount,
   completedOperationsServerLabel,
   formatCompletedOperationsLabel,
   formatDimensionsLabel,
@@ -26,6 +27,9 @@ import {
   Loader2,
   Package,
 } from "lucide-react";
+/** Выбранный оператором источник: строка остатка + сколько с неё берём. */
+export type SourceAllocation = { balance_id: number; quantity: number };
+
 
 interface RemainderAllocationDialogProps {
   open: boolean;
@@ -34,7 +38,7 @@ interface RemainderAllocationDialogProps {
   positionSku: string;
   positionName: string;
   releaseQuantity: number;
-  onConfirm: (autoConsume: boolean) => void;
+  onConfirm: (autoConsume: boolean, allocation: SourceAllocation[] | null) => void;
   pending: boolean;
 }
 
@@ -74,12 +78,26 @@ const READINESS_META: Record<
  * Ключ собирается по `opsKey` — серверной подписи оси операций, а не по
  * подписи ячейки: прочерк в ячейке один у `null` и `[]`, и по подписи ячейки
  * два разных остатка схлопнулись бы в одну строку выдачи (ADR-0055 п.5).
+ *
+ * Порядок — по убыванию числа пройденных операций (#314): подготовительный
+ * склад (ближе к следующему этапу маршрута) выше сырья. При равенстве —
+ * `location` → `quality` → `dims`, чтобы предвыбор не зависел от порядка
+ * строк в ответе. `balanceId` — id строки `stock_balances`, он и уходит в
+ * `take-to-work` как выбранный источник.
  */
-export function groupBalances(balances: StockBalanceEntry[]) {
-  const map = new Map<
-    string,
-    { location: string; quality: string; dims: string; ops: string; opsKey: string; qty: number }
-  >();
+export type SourceRow = {
+  location: string;
+  quality: string;
+  dims: string;
+  ops: string;
+  opsKey: string;
+  opsCount: number;
+  qty: number;
+  balanceId: number;
+};
+
+export function groupBalances(balances: StockBalanceEntry[]): SourceRow[] {
+  const map = new Map<string, SourceRow>();
   for (const b of balances) {
     const location = b.location_name || `Участок #${b.location_id}`;
     const quality = formatQualityStateLabel(b.quality_state);
@@ -98,10 +116,25 @@ export function groupBalances(balances: StockBalanceEntry[]) {
     if (prev) {
       prev.qty += add;
     } else {
-      map.set(key, { location, quality, dims, ops, opsKey, qty: add });
+      map.set(key, {
+        location,
+        quality,
+        dims,
+        ops,
+        opsKey,
+        opsCount: completedOperationsCount(b.completed_operations, b.completed_stages),
+        qty: add,
+        balanceId: b.id,
+      });
     }
   }
-  return Array.from(map.values()).sort((a, b) => b.qty - a.qty);
+  return Array.from(map.values()).sort(
+    (a, b) =>
+      b.opsCount - a.opsCount ||
+      a.location.localeCompare(b.location) ||
+      a.quality.localeCompare(b.quality) ||
+      a.dims.localeCompare(b.dims),
+  );
 }
 
 export function RemainderAllocationDialog({
@@ -116,6 +149,10 @@ export function RemainderAllocationDialog({
   const [balances, setBalances] = useState<StockBalanceEntry[]>([]);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  // Выбранный источник. null = оператор снял выбор осознанно; запустить без
+  // источника можно (материал выдадут позже), молча подставлять первый
+  // остаток вместо явного выбора — нельзя.
+  const [selectedBalanceId, setSelectedBalanceId] = useState<number | null>(null);
   const planQty = Math.round(releaseQuantity);
 
   useEffect(() => {
@@ -136,7 +173,9 @@ export function RemainderAllocationDialog({
           products.find((p) => p.sku.trim().toLowerCase() === normalizedSku) ??
           (products.length === 1 ? products[0] : undefined);
         const productId = product?.id ?? 0;
-        const allBalances = await getProductStockBalances(productId);
+        // `order=operations` — тот же порядок, что предвыбор на бэкенде
+        // (#314): больше пройденных операций = ближе к следующему этапу.
+        const allBalances = await getProductStockBalances(productId, undefined, "operations");
         if (isMounted) {
           setBalances(allBalances.filter((b) => b.balance_qty !== "0"));
         }
@@ -175,6 +214,21 @@ export function RemainderAllocationDialog({
   const meta = READINESS_META[readiness];
   const reserveDelta = totalAvailable - planQty;
   const groupedBalances = useMemo(() => groupBalances(balances), [balances]);
+
+
+  // Предвыбор — первая строка порядка (максимум операций). Пропадает, если
+  // оператор снял выбор: эффект не должен воскресить его молча.
+  useEffect(() => {
+    if (selectedBalanceId !== null && groupedBalances.some((r) => r.balanceId === selectedBalanceId)) {
+      return;
+    }
+    setSelectedBalanceId(groupedBalances[0]?.balanceId ?? null);
+  }, [groupedBalances, selectedBalanceId]);
+
+  const selectedRow = useMemo(
+    () => groupedBalances.find((r) => r.balanceId === selectedBalanceId) ?? null,
+    [groupedBalances, selectedBalanceId],
+  );
 
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>
@@ -256,47 +310,78 @@ export function RemainderAllocationDialog({
               </div>
 
               {groupedBalances.length > 0 ? (
-                <table className="w-full text-xs">
-                  <thead>
-                    <tr className="text-muted-foreground border-b">
-                      <th className="text-left font-medium py-1 pr-2">Склад</th>
-                      <th className="text-right font-medium py-1 w-16">Кол-во</th>
-                      <th className="text-right font-medium py-1 pl-2 w-24">Качество</th>
-                    </tr>
-                  </thead>
-                  <tbody>
-                    {groupedBalances.slice(0, 6).map((row) => (
-                      <tr
-                        key={`${row.location}-${row.quality}-${row.dims}-${row.opsKey}`}
-                        className="border-b border-border/50 last:border-0"
-                      >
-                        <td className="py-1 pr-2">
-                          <div className="truncate max-w-[140px]" title={row.location}>
-                            {row.location}
-                          </div>
-                          <div className="text-muted-foreground truncate max-w-[140px]" title={row.ops}>
-                            {row.ops}
-                          </div>
-                        </td>
-                        <td className="py-1 text-right font-mono tabular-nums whitespace-nowrap">
-                          {fmtQty(row.qty)}
-                          {row.dims !== "—" && (
-                            <span className="text-muted-foreground"> × {row.dims}</span>
-                          )}
-                        </td>
-                        <td className="py-1 pl-2 text-right text-muted-foreground">{row.quality}</td>
-                      </tr>
-                    ))}
-                  </tbody>
-                </table>
+                <>
+                  <fieldset className="space-y-1">
+                    <legend className="text-[11px] font-medium uppercase tracking-wide text-muted-foreground">
+                      Источник выдачи
+                    </legend>
+                    <table className="w-full text-xs">
+                      <thead>
+                        <tr className="text-muted-foreground border-b">
+                          <th className="text-left font-medium py-1 pr-2 w-6" />
+                          <th className="text-left font-medium py-1 pr-2">Склад</th>
+                          <th className="text-right font-medium py-1 w-16">Кол-во</th>
+                          <th className="text-right font-medium py-1 pl-2 w-24">Качество</th>
+                        </tr>
+                      </thead>
+                      <tbody>
+                        {groupedBalances.slice(0, 6).map((row) => {
+                          const selected = row.balanceId === selectedBalanceId;
+                          return (
+                            <tr
+                              key={`${row.location}-${row.quality}-${row.dims}-${row.opsKey}`}
+                              className={`border-b border-border/50 last:border-0 cursor-pointer ${
+                                selected ? "bg-primary/5" : ""
+                              }`}
+                              onClick={() => setSelectedBalanceId(row.balanceId)}
+                              data-testid={`source-row-${row.balanceId}`}
+                              aria-selected={selected}
+                            >
+                              <td className="py-1 pr-2">
+                                <input
+                                  type="radio"
+                                  name="source-balance"
+                                  className="accent-primary"
+                                  checked={selected}
+                                  onChange={() => setSelectedBalanceId(row.balanceId)}
+                                  aria-label={`Источник: ${row.location}, операций ${row.opsCount}`}
+                                />
+                              </td>
+                              <td className="py-1 pr-2">
+                                <div className="truncate max-w-[140px]" title={row.location}>
+                                  {row.location}
+                                </div>
+                                <div className="text-muted-foreground truncate max-w-[140px]" title={row.ops}>
+                                  {row.ops}
+                                  <span className="ml-1">({row.opsCount})</span>
+                                </div>
+                              </td>
+                              <td className="py-1 text-right font-mono tabular-nums whitespace-nowrap">
+                                {fmtQty(row.qty)}
+                                {row.dims !== "—" && (
+                                  <span className="text-muted-foreground"> × {row.dims}</span>
+                                )}
+                              </td>
+                              <td className="py-1 pl-2 text-right text-muted-foreground">{row.quality}</td>
+                            </tr>
+                          );
+                        })}
+                      </tbody>
+                    </table>
+                  </fieldset>
+                  {groupedBalances.length > 6 && (
+                    <div className="text-[11px] text-muted-foreground">
+                      + ещё {groupedBalances.length - 6} склад(ов)
+                    </div>
+                  )}
+                  <p className="text-[11px] text-muted-foreground leading-snug">
+                    {selectedRow
+                      ? `Выдадим ${fmtQty(Math.min(planQty, selectedRow.qty))} шт. с «${selectedRow.location}». Операций пройдено: ${selectedRow.opsCount} — порядок источников по убыванию операций.`
+                      : "Источник не выбран — материал выдадут позже, обычной передачей участку."}
+                  </p>
+                </>
               ) : (
                 <div className="text-xs text-muted-foreground py-1">Нет записей на складах</div>
-              )}
-
-              {groupedBalances.length > 6 && (
-                <div className="text-[11px] text-muted-foreground">
-                  + ещё {groupedBalances.length - 6} склад(ов)
-                </div>
               )}
 
               <p className="text-[11px] text-muted-foreground leading-snug">{meta.hint}</p>
@@ -309,7 +394,18 @@ export function RemainderAllocationDialog({
           <Button variant="outline" size="sm" onClick={() => onOpenChange(false)}>
             Отмена
           </Button>
-          <Button size="sm" onClick={() => onConfirm(false)} disabled={loading || pending}>
+          <Button
+            size="sm"
+            onClick={() =>
+              onConfirm(
+                false,
+                selectedRow
+                  ? [{ balance_id: selectedRow.balanceId, quantity: Math.min(planQty, selectedRow.qty) }]
+                  : null,
+              )
+            }
+            disabled={loading || pending}
+          >
             {pending ? "Запуск…" : "Запустить в работу"}
           </Button>
         </DialogFooter>

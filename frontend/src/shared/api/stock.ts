@@ -141,6 +141,23 @@ export function formatCompletedOperationsLabel(
     : label;
 }
 
+/**
+ * Число пройденных операций остатка — «близость» материала к выдаче.
+ *
+ * Порядок кандидатов выдачи (взятие задания в работу, #314) идёт по
+ * убыванию этого числа: чем больше операций уже пройдено, тем ближе
+ * материал к следующему этапу маршрута. Незафиксированное состояние
+ * (`null`) операций не имеет и считается нулём — тем же, что и пустое
+ * состояние `[]`: на бэкенде оба считаются через `coalesce(..., 0)`.
+ */
+export function completedOperationsCount(
+  ops: string[] | null | undefined,
+  stages?: ImportOperationStep[],
+): number {
+  if (Array.isArray(ops)) return ops.length;
+  return stages?.length ?? 0;
+}
+
 export type StockReason =
   | "ISSUE_TO_WORK"
   | "COMPLETE"
@@ -290,10 +307,18 @@ export async function getStockBalances(
   return data;
 }
 
-export async function getProductStockBalances(productId: number, qualityState?: QualityState): Promise<StockBalanceEntry[]> {
-  const search = qualityState ? `?quality_state=${toApiQualityState(qualityState)}` : "";
+export async function getProductStockBalances(
+  productId: number,
+  qualityState?: QualityState,
+  /** `operations` — порядок кандидатов выдачи: больше операций выше (#314). */
+  order?: "key" | "operations",
+): Promise<StockBalanceEntry[]> {
+  const params = new URLSearchParams();
+  if (qualityState) params.set("quality_state", toApiQualityState(qualityState));
+  if (order) params.set("order", order);
+  const qs = params.toString();
   const { data } = await apiClient.get<StockBalanceEntry[]>(
-    `/stock/balance/by-product/${productId}${search}`,
+    `/stock/balance/by-product/${productId}${qs ? `?${qs}` : ""}`,
   );
   return data;
 }
