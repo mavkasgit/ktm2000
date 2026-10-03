@@ -688,11 +688,18 @@ async def task_transferable_lines_bulk(
 
     result: dict[int, list[TransferableLine]] = {t.id: [] for t in task_list}
 
-    # ── stock: сборка построчная, но строки плана — одним запросом (#299) ──
+    # ── stock: строки плана — одним `IN`, расчёт — одним bulk-проходом (#299) ─
     # Раньше на каждую складскую задачу уходили два `db.get` самой строки
     # плана: в `_stock_planned_qty` и снова внутри `stock_line_bulk`. Здесь
     # сначала берётся подсказка вызывающего (`lines`), добираются только
     # недостающие строки — одним `IN`.
+    #
+    # И сам `stock_line_bulk` вызывается ОДИН раз на всю складскую выборку,
+    # а не по разу на задачу: bulk-ядро внутри всё равно делает по одному
+    # запросу на пройденные операции, на net TRANSFER_SEND и на остатки, и
+    # вызов со списком из одного элемента покупал ровно те же три запроса
+    # на КАЖДУЮ задачу — то есть ветка «bulk» линейно росла вместе с
+    # числом складских строк (замер: 9 SQL на задачу, N=1/2/4 → 9/18/36).
     stock_lines_by_id: dict[int, SectionPlanLine] = dict(lines) if lines else {}
     missing_stock_lines = {
         t.section_plan_line_id
@@ -713,28 +720,29 @@ async def task_transferable_lines_bulk(
                 ).scalars().all()
             }
         )
-    for task in stock_tasks:
-        plan_line = stock_lines_by_id.get(task.section_plan_line_id)
-        planned_qty = (
-            _dec(plan_line.planned_quantity)
-            if plan_line is not None and plan_line.planned_quantity
-            else _dec(task.planned_quantity)
-        )
-        result[task.id] = [
-            (
-                await stock_line_bulk(
-                    db,
-                    [
-                        StockLineRequest(
-                            task=task,
-                            section=sec_hints.get(task.section_id),
-                            planned_qty=planned_qty,
-                        )
-                    ],
-                    lines=stock_lines_by_id,
+    if stock_tasks:
+        stock_requests: list[StockLineRequest] = []
+        for task in stock_tasks:
+            plan_line = stock_lines_by_id.get(task.section_plan_line_id)
+            planned_qty = (
+                _dec(plan_line.planned_quantity)
+                if plan_line is not None and plan_line.planned_quantity
+                else _dec(task.planned_quantity)
+            )
+            stock_requests.append(
+                StockLineRequest(
+                    task=task,
+                    section=sec_hints.get(task.section_id),
+                    planned_qty=planned_qty,
                 )
-            )[0].line
-        ]
+            )
+        stock_results = await stock_line_bulk(
+            db,
+            stock_requests,
+            lines=stock_lines_by_id,
+        )
+        for task, stock_result in zip(stock_tasks, stock_results, strict=True):
+            result[task.id] = [stock_result.line]
 
     # ── transform: два bulk-прохода + чистая сборка строк ───────────────────
     final_transform = [t for t in transform_tasks if _is_final(t)]
