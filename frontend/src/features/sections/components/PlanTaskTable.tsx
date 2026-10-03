@@ -6,6 +6,7 @@ import { getQtyPerHanger } from "./PlanHangerDisplay";
 import { countHangers } from "@/shared/lib/hangerCount";
 import {
   buildPlanTaskGroups,
+  type PlanPairIndex,
   type PlanTaskGroup,
   type PlanTaskGroupingMode,
   type PlanTaskRow,
@@ -21,6 +22,9 @@ interface PlanTaskTableProps {
   onHideGroup: (groupKey: string) => void;
   /** Печатный набор колонок; служебные колонки окна добавляются автоматически. */
   columns: PlanColumnKey[];
+  /** Пары сырьевых артикулов по `product_id` (#312): строки одной пары печатаются
+   *  единым подвесом. Не передан — печать как раньше, каждая позиция своя. */
+  pairs?: PlanPairIndex;
 }
 
 /**
@@ -147,6 +151,10 @@ function aggregateCell(
  * Подвесы группы — сумма по строкам. Строка с пропуском делает сумму группы
  * неизвестной: частичный итог в шапке читался бы как настоящий, но был бы
  * занижен. Все строки известны — сумма; хотя бы одна нет — `—`.
+ *
+ * Группа пары — исключение: обе позиции печатаются ОДНИМ подвесом (#312),
+ * поэтому подвесы не складываются, а берутся у пары. Сумма дала бы удвоенный
+ * итог и на бумаге вышел бы подвес, которого физически нет.
  */
 function sumHangers(rows: PlanTaskRow[]): number | null {
   if (rows.length === 0) return null;
@@ -159,16 +167,45 @@ function sumHangers(rows: PlanTaskRow[]): number | null {
   return total;
 }
 
+/**
+ * Подвесы группы. Группа пары — исключение: обе позиции печатаются ОДНИМ
+ * подвесом (#312), поэтому подвесы не складываются, а берутся у пары. Сумма
+ * дала бы удвоенный итог, и на бумаге вышел бы подвес, которого нет.
+ */
+function groupHangers(group: PlanTaskGroup): number | null {
+  if (group.pair) {
+    const perHanger = group.pair.quantityPerHanger;
+    if (perHanger != null && perHanger > 0) {
+      // Подвес заполняется парой целиком, поэтому количество берётся по
+      // большей из позиций: лишнее место второй позиции подвес не занимает.
+      const quantity = Math.max(...group.rows.map((row) => row.planQty), 0);
+      if (quantity > 0) return Math.ceil(quantity / perHanger);
+    }
+    return null;
+  }
+  return sumHangers(group.rows);
+}
+
+/** Норма на подвес группы пары: `N×A + N×B`, иначе — нормы строк. */
+function groupPerHanger(group: PlanTaskGroup): string {
+  if (group.pair?.quantityPerHanger != null && group.pair.quantityPerHanger > 0) {
+    const n = fmtQtyPrecise(group.pair.quantityPerHanger);
+    return group.pair.skus.map((sku) => `${n}×${sku}`).join(" + ");
+  }
+  return perHangerForRows(group.rows);
+}
+
 export function PlanTaskTable({
   tasks,
   mode,
   hiddenGroupKeys,
   onHideGroup,
   columns,
+  pairs,
 }: PlanTaskTableProps) {
   const groups = useMemo(
-    () => buildPlanTaskGroups(tasks, mode).filter((group) => !hiddenGroupKeys.has(group.key)),
-    [tasks, mode, hiddenGroupKeys],
+    () => buildPlanTaskGroups(tasks, mode, pairs).filter((group) => !hiddenGroupKeys.has(group.key)),
+    [tasks, mode, hiddenGroupKeys, pairs],
   );
 
   /** Выбранные печатные колонки + служебные колонки окна, в порядке определения. */
@@ -269,7 +306,7 @@ function PlanGroupRows({
             .map((column) => {
               switch (column.key) {
                 case "hangers": {
-                  const hangers = sumHangers(group.rows);
+                  const hangers = groupHangers(group);
                   return (
                     <td key={column.key} className={cn(cellBase, "text-right font-semibold")}>
                       {hangers ?? QTY_EMPTY}
@@ -279,7 +316,7 @@ function PlanGroupRows({
                 case "perHanger":
                   return (
                     <td key={column.key} className={cn(cellBase, "text-right font-semibold whitespace-nowrap")}>
-                      {perHangerForRows(group.rows)}
+                      {groupPerHanger(group)}
                     </td>
                   );
                 case "issued":

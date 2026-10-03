@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
 import type { SectionBoardTask } from "@/shared/api/shopfloor";
-import { buildPlanTaskGroups } from "./planTaskGroups";
+import { buildPlanPairIndex, buildPlanTaskGroups } from "./planTaskGroups";
+import type { ProductPairCatalogEntry } from "@/shared/api/products";
 import {
   packagingBreakdown,
   packagingBreakdownLabel,
@@ -170,6 +171,82 @@ describe("buildPlanTaskGroups", () => {
       { label: "серебро · 3 м", taskIds: [[2]] },
       { label: "серебро · 2,75 м", taskIds: [[1]] },
     ]));
+  });
+});
+
+describe("пара на печати анодирования (#312)", () => {
+  /** Пара 2604/2616: id артикулов 11 и 12, ручная N=8 на длине 2700. */
+  const PAIR: ProductPairCatalogEntry = {
+    id: 7,
+    product_a_id: 11,
+    product_b_id: 12,
+    lengths: [2700],
+    quantity_per_hanger: { "2700": { auto: null, manual: 8 } },
+  };
+
+  function pairTasks(): SectionBoardTask[] {
+    return [
+      makeTask({ id: 1, product_id: 11, product_sku: "ЮП-2604", dimensions: { length_mm: 2700 } }),
+      makeTask({ id: 2, product_id: 12, product_sku: "ЮП-2616", dimensions: { length_mm: 2700 } }),
+    ];
+  }
+
+  it("две позиции пары печатаются одной группой с обоими артикулами", () => {
+    const groups = buildPlanTaskGroups(pairTasks(), "article", buildPlanPairIndex([PAIR]));
+
+    expect(groups).toHaveLength(1);
+    expect(groups[0].label).toBe("ЮП-2604+ЮП-2616 · 2,7 м");
+    // Строки не слиты: работа идёт по каждому артикулу отдельно.
+    expect(groups[0].rows.map((row) => row.productSku)).toEqual(["ЮП-2604", "ЮП-2616"]);
+    expect(groups[0].pair).toMatchObject({
+      id: 7,
+      skus: ["ЮП-2604", "ЮП-2616"],
+      quantityPerHanger: 8,
+    });
+  });
+
+  it("без каталога пар позиции печатаются раздельно, как раньше", () => {
+    const groups = buildPlanTaskGroups(pairTasks(), "article");
+
+    expect(groups).toHaveLength(2);
+    expect(groups.map((group) => group.pair)).toEqual([null, null]);
+  });
+
+  it("пара не склеивает строки разных размеров", () => {
+    const tasks = [
+      ...pairTasks(),
+      makeTask({ id: 3, product_id: 11, product_sku: "ЮП-2604", dimensions: { length_mm: 3000 } }),
+    ];
+
+    const groups = buildPlanTaskGroups(tasks, "article", buildPlanPairIndex([PAIR]));
+
+    expect(groups.map((group) => group.label).sort()).toEqual([
+      "ЮП-2604 · 3 м",
+      "ЮП-2604+ЮП-2616 · 2,7 м",
+    ]);
+  });
+
+  it("в режиме цвета пара не влияет на группировку", () => {
+    const groups = buildPlanTaskGroups(
+      pairTasks().map((task) => ({ ...task, source_payload: { color: "серебро" } })),
+      "anodizingColor",
+      buildPlanPairIndex([PAIR]),
+    );
+
+    expect(groups).toHaveLength(1);
+    expect(groups[0].label).toBe("серебро · 2,7 м");
+    expect(groups[0].pair).toBeNull();
+  });
+
+  it("норма пары на другой длине не подставляется молча", () => {
+    const tasks = [
+      makeTask({ id: 1, product_id: 11, product_sku: "ЮП-2604", dimensions: { length_mm: 3000 } }),
+      makeTask({ id: 2, product_id: 12, product_sku: "ЮП-2616", dimensions: { length_mm: 3000 } }),
+    ];
+
+    const groups = buildPlanTaskGroups(tasks, "article", buildPlanPairIndex([PAIR]));
+
+    expect(groups[0].pair?.quantityPerHanger).toBeNull();
   });
 });
 

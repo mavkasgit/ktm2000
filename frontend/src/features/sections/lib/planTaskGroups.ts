@@ -1,9 +1,55 @@
 import type { RouteHistoryOp, SectionBoardTask } from "@/shared/api/shopfloor";
+import type { ProductPairCatalogEntry } from "@/shared/api/products";
 import { formatDimensionsLabel } from "@/shared/api/stock";
 import { clusterByArticle } from "@/shared/lib/clusterByArticle";
+import { lengthKey } from "@/shared/lib/hangerQuantity";
 import { outputKindLabels } from "@/shared/lib/generated-labels";
 import { taskGroupingDimensions } from "./groupTasksByProfile";
 import { taskPackaging } from "./taskView";
+
+/**
+ * Пара, в которую входит артикул, и её норма на подвес для конкретной длины.
+ *
+ * После снятия склейки (#312) пара — это две независимые позиции, поэтому
+ * на печати их нужно снова свести вместе: обе строки печатаются одним
+ * подвесом с обоими артикулами. Источник — каталог пар `/product-pairs`,
+ * тот же, что у витрины расчёта подвесов.
+ */
+export type PlanPairIndex = Map<number, ProductPairCatalogEntry>;
+
+/** Индекс пар по ``product_id`` артикула: обе позиции пары попадают в один ключ. */
+export function buildPlanPairIndex(pairs: ProductPairCatalogEntry[]): PlanPairIndex {
+  const index: PlanPairIndex = new Map();
+  for (const pair of pairs) {
+    index.set(Number(pair.product_a_id), pair);
+    index.set(Number(pair.product_b_id), pair);
+  }
+  return index;
+}
+
+/**
+ * Норма пары на длине строки: ручное значение пары приоритетнее авто,
+ * иначе берётся авто. Нет ни того, ни другого — нормы нет.
+ */
+function pairQuantityPerHanger(pair: ProductPairCatalogEntry, lengthMm: number | null): number | null {
+  if (lengthMm == null) return null;
+  const entry = pair.quantity_per_hanger?.[lengthKey(lengthMm)];
+  if (!entry) return null;
+  if (typeof entry.manual === "number" && entry.manual > 0) return entry.manual;
+  if (typeof entry.auto === "number" && entry.auto > 0) return entry.auto;
+  return null;
+}
+
+function taskLengthMm(task: SectionBoardTask): number | null {
+  const length = taskGroupingDimensions(task)?.length_mm;
+  return typeof length === "number" && length > 0 ? length : null;
+}
+
+/** Пара задания по его артикулу; `null` — артикул непарный или каталог не загружен. */
+function taskPair(task: SectionBoardTask, pairs: PlanPairIndex | undefined): ProductPairCatalogEntry | null {
+  if (!pairs) return null;
+  return pairs.get(Number(task.product_id)) ?? null;
+}
 
 /** Режим верхней группировки строк плана анодирования. */
 export type PlanTaskGroupingMode = "article" | "anodizingColor";
@@ -35,6 +81,20 @@ export type PlanTaskGroup = {
   totalQtyDone: number;
   totalQtyIssued: number;
   totalQtyTransferred: number;
+  /** Пара, если группа собрана из двух позиций одного подвеса (#312). */
+  pair: PlanTaskGroupPair | null;
+};
+
+/**
+ * Подвес пары: обе позиции печатаются вместе, поэтому у группы одна норма
+ * и один счёт подвесов, а не сумма по артикулам.
+ */
+export type PlanTaskGroupPair = {
+  id: number;
+  /** SKU компонентов пары — строки группы. */
+  skus: string[];
+  /** Норма пары на длине группы; `null` — норма не задана. */
+  quantityPerHanger: number | null;
 };
 
 function toNumber(value: string | number | null | undefined): number {
@@ -67,20 +127,63 @@ function taskColor(task: SectionBoardTask): string | null {
 }
 
 
-function groupKeyForTask(task: SectionBoardTask, mode: PlanTaskGroupingMode): string {
+/**
+ * Ключ верхней группы. Режим ``article`` у парных строк ключуется по паре,
+ * а не по своему артикулу: обе позиции печатаются одним подвесом, поэтому
+ * они обязаны попасть в одну группу, иначе на подвес уедут две строки с
+ * половинной нормой (#312). Артикул при этом остаётся в подписи строки —
+ * работа идёт по каждому артикулу отдельно.
+ */
+function groupKeyForTask(
+  task: SectionBoardTask,
+  mode: PlanTaskGroupingMode,
+  pairs: PlanPairIndex | undefined,
+): string {
   const size = dimensionsKey(task);
-  return mode === "article"
-    ? `${task.product_sku}__${size}`
-    : `${taskColor(task) ?? "__no_color__"}__${size}`;
+  if (mode === "anodizingColor") {
+    return `${taskColor(task) ?? "__no_color__"}__${size}`;
+  }
+  const pair = taskPair(task, pairs);
+  return pair ? `pair_${pair.id}__${size}` : `${task.product_sku}__${size}`;
 }
 
-function groupLabelForTask(task: SectionBoardTask, mode: PlanTaskGroupingMode): string {
-  const color = taskColor(task);
-  const colorLabel = color ?? "Без цвета";
+/**
+ * SKU заданий пары — по ключу группы (пара + размер), а не по паре целиком:
+ * артикулы одной пары на разных длинах печатаются разными подвесами, и в
+ * подписи должен быть тот состав, который реально на листе.
+ */
+function pairSkusForGroup(
+  tasks: SectionBoardTask[],
+  pairs: PlanPairIndex | undefined,
+): Map<string, Set<string>> {
+  const byGroup = new Map<string, Set<string>>();
+  if (!pairs) return byGroup;
+  for (const task of tasks) {
+    const key = groupKeyForTask(task, "article", pairs);
+    const skus = byGroup.get(key) ?? new Set<string>();
+    skus.add(task.product_sku);
+    byGroup.set(key, skus);
+  }
+  return byGroup;
+}
+
+/**
+ * Подпись группы: пара подписывается теми артикулами, что есть на листе, —
+ * «A+B · размер». Одиночная позиция пары подписывается своим артикулом.
+ */
+function groupLabelForTask(
+  task: SectionBoardTask,
+  mode: PlanTaskGroupingMode,
+  pairs: PlanPairIndex | undefined,
+  pairSkus: Map<string, Set<string>>,
+): string {
   const size = formatDimensionsLabel(taskGroupingDimensions(task));
-  return mode === "article"
-    ? `${task.product_sku} · ${size}`
-    : `${colorLabel} · ${size}`;
+  if (mode === "anodizingColor") {
+    return `${taskColor(task) ?? "Без цвета"} · ${size}`;
+  }
+  const key = groupKeyForTask(task, "article", pairs);
+  const skus = Array.from(pairSkus.get(key) ?? []).sort();
+  return skus.length > 1 ? `${skus.join("+")} · ${size}` : `${task.product_sku} · ${size}`;
 }
 
 /** Подпись строки: задания сливаются, только если совпадает всё, что в колонках. */
@@ -150,20 +253,26 @@ function sumRows(rows: PlanTaskRow[], field: "planQty" | "issuedQty" | "doneQty"
 }
 
 /**
- * Строит дерево плана: верхняя группа — артикул или цвет анодирования,
+ * Строит дерево плана: верхняя группа — артикул, цвет анодирования или пара,
  * внутри — одна строка на набор заданий с одинаковыми операциями. Задания,
  * отличающиеся только упаковкой, сливаются в строку: количество и подвесы
  * общие, упаковка показана разбивкой «Спанбонд 300 · Стрейч 200».
+ *
+ * `pairs` — индекс пар по `product_id` (#312). В режиме ``article`` строки
+ * одной пары попадают в одну группу с общей нормой подвеса: работа при этом
+ * идёт по каждой позиции отдельно, строки не сливаются.
  */
 export function buildPlanTaskGroups(
   tasks: SectionBoardTask[],
   mode: PlanTaskGroupingMode,
+  pairs?: PlanPairIndex,
 ): PlanTaskGroup[] {
-  const groups = new Map<string, { key: string; label: string; rows: PlanTaskRow[] }>();
+  const pairSkus = pairSkusForGroup(tasks, pairs);
+  const groups = new Map<string, { key: string; label: string; rows: PlanTaskRow[]; pair: ProductPairCatalogEntry | null }>();
   const rowsByGroup = new Map<string, Map<string, PlanTaskRow>>();
 
   for (const task of tasks) {
-    const key = groupKeyForTask(task, mode);
+    const key = groupKeyForTask(task, mode, pairs);
     const preOperations = (task.route_history ?? []).filter((operation) => operation.is_significant);
     const signature = rowSignature(task, preOperations);
 
@@ -186,7 +295,12 @@ export function buildPlanTaskGroups(
     if (group) {
       group.rows.push(row);
     } else {
-      groups.set(key, { key, label: groupLabelForTask(task, mode), rows: [row] });
+      groups.set(key, {
+        key,
+        label: groupLabelForTask(task, mode, pairs, pairSkus),
+        rows: [row],
+        pair: mode === "article" ? taskPair(task, pairs) : null,
+      });
     }
   }
 
@@ -207,6 +321,19 @@ export function buildPlanTaskGroups(
       totalQtyDone: sumRows(group.rows, "doneQty"),
       totalQtyIssued: sumRows(group.rows, "issuedQty"),
       totalQtyTransferred: sumRows(group.rows, "transferredQty"),
+      // Подвес пары — один на обе позиции, поэтому группа помечается парой
+      // только когда обе строки на листе действительно есть.
+      pair:
+        group.pair && (pairSkus.get(group.key)?.size ?? 0) > 1
+          ? {
+              id: group.pair.id,
+              skus: Array.from(pairSkus.get(group.key) ?? []).sort(),
+              quantityPerHanger: pairQuantityPerHanger(
+                group.pair,
+                group.rows[0] ? taskLengthMm(group.rows[0].tasks[0]) : null,
+              ),
+            }
+          : null,
     }))
     .sort((a, b) => {
       if (b.totalQtyPlan !== a.totalQtyPlan) return b.totalQtyPlan - a.totalQtyPlan;

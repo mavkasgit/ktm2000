@@ -101,7 +101,7 @@ async def _create_template(session, *, name: str, code: str) -> ImportTemplate:
     return template
 
 
-def test_factory_plan_parser_groups_paired_profiles_and_continuations() -> None:
+def test_factory_plan_parser_keeps_pair_rows_apart_and_groups_continuations() -> None:
     parsed = parse_factory_plan_workbook(_workbook_bytes(), "plan.xlsx")
 
     assert parsed.sheet_name == "План май 26 05"
@@ -109,27 +109,32 @@ def test_factory_plan_parser_groups_paired_profiles_and_continuations() -> None:
     # Период больше не парсится: ParsedWorkbook и строки не несут period_start/end.
     assert not hasattr(parsed, "period_start")
     assert not hasattr(parsed, "period_end")
-    assert len(parsed.parsed_rows) == 2
+    # Склейки пары больше нет (#312): строки 6 и 7 — две позиции, а строка
+    # 8-9 (тот же SKU без собственного входа) — по-прежнему одна операция.
+    assert len(parsed.parsed_rows) == 3
     for row in parsed.parsed_rows:
         assert "period_start" not in row.payload
         assert "period_end" not in row.payload
 
-    paired = parsed.parsed_rows[0]
-    assert paired.source_row_numbers == [6, 7]
-    assert paired.source_sku == "ЮП-2616+ЮП-2604"
-    assert paired.quantity == 300
-    assert paired.payload["paired_profile"] is True
-    assert [component["sku"] for component in paired.payload["components"]] == ["ЮП-2616", "ЮП-2604"]
-    assert paired.payload["raw_columns_meta"][0]["index"] == 1
-    assert paired.payload["raw_columns_meta"][0]["letter"] == "A"
-    assert paired.payload["raw_columns_meta"][0]["header"] == "Артикул"
-    assert paired.payload["raw_columns_meta"][7]["index"] == 8
-    assert paired.payload["raw_columns_meta"][7]["letter"] == "H"
-    assert paired.payload["raw_columns_meta"][7]["header"] == "Пробивка/сверловка"
+    first, second = parsed.parsed_rows[0], parsed.parsed_rows[1]
+    assert first.source_row_numbers == [6]
+    assert first.source_sku == "ЮП-2616"
+    assert second.source_row_numbers == [7]
+    assert second.source_sku == "ЮП-2604"
+    for row in (first, second):
+        assert row.quantity == 300
+        assert row.payload["paired_profile"] is False
+        assert [component["sku"] for component in row.payload["components"]] == [row.source_sku]
+        assert row.payload["raw_columns_meta"][0]["index"] == 1
+        assert row.payload["raw_columns_meta"][0]["letter"] == "A"
+        assert row.payload["raw_columns_meta"][0]["header"] == "Артикул"
+        assert row.payload["raw_columns_meta"][7]["index"] == 8
+        assert row.payload["raw_columns_meta"][7]["letter"] == "H"
+        assert row.payload["raw_columns_meta"][7]["header"] == "Пробивка/сверловка"
 
     # Строка того же SKU без собственного входа — ещё один выход той же
     # операции (ADR-0003): группа строк 8-9 = одна позиция.
-    group = parsed.parsed_rows[1]
+    group = parsed.parsed_rows[2]
     assert group.source_row_numbers == [8, 9]
     assert group.source_ref == "rows:8-9"
     assert group.source_name == "Стык 38 мм. 2,7 анод.серебро, матовый"
@@ -282,14 +287,16 @@ def test_parse_row_selection_invalid(value: str) -> None:
         parse_row_selection(value)
 
 
-def test_factory_plan_parser_row_selection_auto_includes_pair() -> None:
+def test_factory_plan_parser_row_selection_keeps_only_selected_pair_row() -> None:
+    """Строки 6 и 7 — разные позиции, выбор строки тянет только её (#312)."""
     parsed = parse_factory_plan_workbook(_workbook_bytes(), "plan.xlsx", row_selection="6")
     assert len(parsed.parsed_rows) == 1
     row = parsed.parsed_rows[0]
-    assert row.source_row_numbers == [6, 7]
-    assert any(w.startswith("paired_row_auto_included:") for w in row.warnings)
+    assert row.source_row_numbers == [6]
+    assert row.source_sku == "ЮП-2616"
+    assert not any(w.startswith("paired_row_auto_included:") for w in row.warnings)
     assert parsed.selected_row_numbers == [6]
-    assert parsed.auto_included_row_numbers == [7]
+    assert parsed.auto_included_row_numbers is None
 
 
 @pytest.mark.asyncio
@@ -311,20 +318,22 @@ async def test_import_excel_creates_batch_and_change_set(client, session, tmp_pa
 
     assert response.status_code == 201
     body = response.json()
-    assert body["summary"]["total_positions"] == 2
-    assert body["summary"]["paired_profile_positions"] == 1
-    assert len(body["items"]) == 2
-    assert body["items"][0]["source_sku"] == "ЮП-2616+ЮП-2604"
-    assert "paired_profile_product_unmapped" in body["items"][0]["codes"]
-    # Пара ЮП-2616+ЮП-2604 не создана в справочнике сырья
-    assert "product_pair_not_found" in body["items"][0]["codes"]
-    # ЮП-2083 not seeded in tests, so product_not_found is expected
+    # Пара больше не склеивается (#312): строки 6 и 7 дают две позиции,
+    # плюс группа 8-9 — третья.
+    assert body["summary"]["total_positions"] == 3
+    assert body["summary"]["paired_profile_positions"] == 0
+    assert len(body["items"]) == 3
+    assert [item["source_sku"] for item in body["items"]] == ["ЮП-2616", "ЮП-2604", "ЮП-2083"]
+    # ЮП-2616/ЮП-2604 не заведены в справочнике сырья тестовой БД.
+    assert "product_not_found" in body["items"][0]["codes"]
     assert "product_not_found" in body["items"][1]["codes"]
+    # ЮП-2083 not seeded in tests, so product_not_found is expected
+    assert "product_not_found" in body["items"][2]["codes"]
     # Полный after_data — лениво, одной строкой (§4.3)
     full = (await client.get(f"/api/imports/items/{body['items'][0]['item_id']}?full=1")).json()
-    assert full["after_data"]["source_sku"] == "ЮП-2616+ЮП-2604"
+    assert full["after_data"]["source_sku"] == "ЮП-2616"
     assert full["after_data"]["has_pack_ops"] is False
-    assert full["warnings"] == ["paired_profile_product_unmapped"]
+    assert full["after_data"]["source_payload"]["paired_profile"] is False
 
     assert await session.get(ImportFile, body["import_file_id"]) is not None
     assert await session.get(ImportBatch, body["import_batch_id"]) is not None
@@ -354,11 +363,11 @@ async def test_import_excel_returns_light_items_and_summary(client, session, tmp
     body = response.json()
 
     summary = body["summary"]
-    assert summary["total"] == len(body["items"]) == 2
+    assert summary["total"] == len(body["items"]) == 3
     assert summary["valid"] + summary["warning"] + summary["invalid"] == summary["total"]
-    assert summary["invalid"] == 2
+    assert summary["invalid"] == 3
     assert summary["duplicates"] == 0
-    assert summary["errors"]["product_not_found"] == 1
+    assert summary["errors"]["product_not_found"] == 3
 
     for item in body["items"]:
         assert "after_data" not in item
@@ -372,10 +381,18 @@ async def test_import_excel_returns_light_items_and_summary(client, session, tmp
             "codes",
         }
     by_sku = {item["source_sku"]: item for item in body["items"]}
-    assert by_sku["ЮП-2616+ЮП-2604"]["codes"] == [
-        "product_pair_not_found",
+    assert by_sku["ЮП-2616"]["codes"] == [
+        "product_not_found",
         "no_route_candidate",
-        "paired_profile_product_unmapped",
+        "hanger_quantity_not_set:продукт не найден",
+    ]
+    # У ЮП-2604 в листе нет наименования: это своя позиция, и собственное
+    # предупреждение строки больше не снимается склейкой пары.
+    assert by_sku["ЮП-2604"]["codes"] == [
+        "product_not_found",
+        "no_route_candidate",
+        "product_name_missing",
+        "hanger_quantity_not_set:продукт не найден",
     ]
 
 
@@ -468,17 +485,13 @@ async def test_preview_excel_resolves_paired_profile_when_pair_exists(
 
     assert response.status_code == 200
     body = response.json()
-    paired_item = body["items"][0]
-    assert paired_item["source_sku"] == "ЮП-2616+ЮП-2604"
-    assert "paired_profile_product_unmapped" not in paired_item["warnings"]
-    snapshot = paired_item["after_data"]["source_payload"]["product_pair"]
-    assert snapshot["resolved"] is True
-    assert [entry["sku"] for entry in snapshot["inputs"]] == ["ЮП-2616", "ЮП-2604"]
-    assert snapshot["inputs"][0]["quantity_per_hanger"] == "8"
-    assert snapshot["quantity_per_hanger"] == 8
-    assert snapshot["source"] == "manual"
-    assert paired_item["after_data"]["quantity_per_hanger"] == 8
-    assert paired_item["after_data"]["hanger_source"] == "manual"
+    # Пара не склеена: две позиции, у каждой своя N — парная (#312).
+    assert [item["source_sku"] for item in body["items"]] == ["ЮП-2616", "ЮП-2604", "ЮП-2083"]
+    for item in body["items"][:2]:
+        assert "paired_profile_product_unmapped" not in item["warnings"]
+        assert item["after_data"]["quantity_per_hanger"] == 8, item["source_sku"]
+        assert item["after_data"]["hanger_source"] == "manual"
+        assert item["after_data"]["source_payload"]["paired_profile"] is False
 
 
 @pytest.mark.asyncio
@@ -522,9 +535,10 @@ async def test_apply_paired_import_does_not_cache_hanger_override(
 
 
 @pytest.mark.asyncio
-async def test_import_excel_with_row_selection_filters_rows_and_reports_pair_autoinclude(
+async def test_import_excel_with_row_selection_takes_only_selected_pair_row(
     client, session, tmp_path, monkeypatch
 ) -> None:
+    """Выбор строки пары не тянет вторую: это отдельная позиция (#312)."""
     monkeypatch.setattr(settings, "IMPORT_STORAGE_DIR", str(tmp_path))
     template = await _create_template(session, name="Rows Template", code="rows-template")
     await session.commit()
@@ -546,9 +560,9 @@ async def test_import_excel_with_row_selection_filters_rows_and_reports_pair_aut
     assert body["summary"]["total_positions"] == 1
     assert body["summary"]["row_selection"] == "6"
     assert body["summary"]["selected_row_numbers"] == [6]
-    assert body["summary"]["auto_included_row_numbers"] == [7]
-    assert body["items"][0]["source_sku"] == "ЮП-2616+ЮП-2604"
-    assert any(w.startswith("paired_row_auto_included:") for w in body["items"][0]["codes"])
+    assert not body["summary"]["auto_included_row_numbers"]
+    assert body["items"][0]["source_sku"] == "ЮП-2616"
+    assert not any(w.startswith("paired_row_auto_included:") for w in body["items"][0]["codes"])
 
 
 @pytest.mark.asyncio
@@ -1601,10 +1615,14 @@ async def _make_product_pair(
 
 
 @pytest.mark.asyncio
-async def test_import_paired_profile_rounds_by_pair_manual_n(
+async def test_import_pair_components_round_by_pair_manual_n(
     client, session, tmp_path, monkeypatch
 ) -> None:
-    """N пары из ручной нормы product_pairs округляет количество позиции (#67: инвариант равенства)."""
+    """Обе позиции пары округляются по N пары (#312, #67: инвариант равенства).
+
+    Склейки больше нет: ``ЮП-PAIR-A`` и ``ЮП-PAIR-B`` — две позиции, но
+    норма у обеих парная, потому что на подвесе едут оба компонента.
+    """
     monkeypatch.setattr(settings, "IMPORT_STORAGE_DIR", str(tmp_path))
 
     await _make_product_pair(
@@ -1628,21 +1646,27 @@ async def test_import_paired_profile_rounds_by_pair_manual_n(
 
     assert response.status_code == 200
     body = response.json()
-    paired_item = body["items"][0]
-
-    # 10 → кратно N=8: количество позиции пары, как у одиночных подвесных позиций
-    assert paired_item["after_data"]["quantity"] == "16"
-    assert paired_item["after_data"]["original_quantity"] in ("10", "10.0")
-    assert paired_item["after_data"]["hanger_count"] == 2
-    # Округление молчаливое — текстового предупреждения нет
-    assert not any("paired_hanger_adjusted" in w for w in paired_item["warnings"])
+    assert [item["source_sku"] for item in body["items"]] == ["ЮП-PAIR-A", "ЮП-PAIR-B"]
+    for item in body["items"]:
+        after_data = item["after_data"]
+        # 10 → кратно N=8 у каждой позиции пары
+        assert after_data["quantity"] == "16", item["source_sku"]
+        assert after_data["original_quantity"] in ("10", "10.0")
+        assert after_data["quantity_per_hanger"] == 8
+        assert after_data["hanger_count"] == 2
+        # Округление молчаливое — текстового предупреждения нет
+        assert not any("paired_hanger_adjusted" in w for w in item["warnings"])
 
 
 @pytest.mark.asyncio
-async def test_import_paired_profile_without_pair_n_reports_hanger_calc_zero(
+async def test_import_pair_component_without_pair_n_falls_back_to_single_norm(
     client, session, tmp_path, monkeypatch
 ) -> None:
-    """Пара есть, но N невозможна (ручной нет, авто не считается) → hanger_calc_zero."""
+    """Пара есть, но N невозможна → одиночная норма артикула, позиция не блокируется.
+
+    Позиция-компонент больше не склеена, поэтому неразрешимая норма пары не
+    должна запрещать утверждение отдельной позиции (#312).
+    """
     monkeypatch.setattr(settings, "IMPORT_STORAGE_DIR", str(tmp_path))
 
     await _make_product_pair(
@@ -1665,21 +1689,21 @@ async def test_import_paired_profile_without_pair_n_reports_hanger_calc_zero(
 
     assert response.status_code == 200
     body = response.json()
-    paired_item = body["items"][0]
+    for item in body["items"]:
+        after_data = item["after_data"]
+        # Количество не округлено (Decimal строка): нормы нет ни у пары, ни у артикула
+        assert after_data["quantity"] in ("10", "10.0"), item["source_sku"]
+        assert after_data["original_quantity"] in ("10", "10.0")
+        assert after_data["quantity_per_hanger"] is None
+        assert "hanger_calc_zero" not in item["errors"]
+        assert any(w.startswith("hanger_quantity_not_set") for w in item["warnings"])
 
-    # Quantity не изменился (Decimal строка)
-    assert paired_item["after_data"]["quantity"] in ("10", "10.0")
-    assert paired_item["after_data"]["original_quantity"] in ("10", "10.0")
-
-    # Пара резолвится, но N невозможна → блокирующая ошибка
-    assert "hanger_calc_zero" in paired_item["errors"]
-    assert paired_item["after_data"]["source_payload"]["product_pair"]["resolved"] is True
 
 @pytest.mark.asyncio
-async def test_import_paired_profile_keeps_normal_length_with_mismatched_raw(
+async def test_import_pair_component_keeps_normal_length_with_mismatched_raw(
     client, session, tmp_path, monkeypatch
 ) -> None:
-    """Общая normal 2700 остаётся входом; ручная N работает при разных raw A/B."""
+    """Общая normal 2700 остаётся входом; ручная N пары работает при разных raw A/B."""
     monkeypatch.setattr(settings, "IMPORT_STORAGE_DIR", str(tmp_path))
 
     await _make_product_pair(
@@ -1709,22 +1733,26 @@ async def test_import_paired_profile_keeps_normal_length_with_mismatched_raw(
     )
 
     assert response.status_code == 200, response.text
-    item = response.json()["items"][0]
-    assert "normal_length_not_found" not in item["errors"]
-    assert "hanger_calc_zero" not in item["errors"]
-    after_data = item["after_data"]
-    assert after_data["input_dimensions"] == {"length_mm": 2700}
-    assert after_data["outputs"][0]["dimensions"] == {"length_mm": 2700}
-    assert after_data["quantity_per_hanger"] == 8
-    assert after_data["quantity"] == "16"
-    assert after_data["hanger_count"] == 2
+    for item in response.json()["items"]:
+        assert "normal_length_not_found" not in item["errors"]
+        assert "hanger_calc_zero" not in item["errors"]
+        after_data = item["after_data"]
+        assert after_data["input_dimensions"] == {"length_mm": 2700}
+        assert after_data["outputs"][0]["dimensions"] == {"length_mm": 2700}
+        assert after_data["quantity_per_hanger"] == 8
+        assert after_data["quantity"] == "16"
+        assert after_data["hanger_count"] == 2
 
 
 @pytest.mark.asyncio
-async def test_import_paired_profile_unknown_normal_length_is_position_error(
+async def test_import_pair_component_unknown_normal_length_is_position_error(
     client, session, tmp_path, monkeypatch
 ) -> None:
-    """Нормальная длина вне пересечения пары даёт normal_length_not_found без подстановки."""
+    """Нормальная длина вне пересечения пары — обычная ошибка позиции (#312).
+
+    Раньше это была спецпроверка склеенной пары; у позиции-компонента
+    работает общий путь: длина входа сверяется с реестром артикула.
+    """
     monkeypatch.setattr(settings, "IMPORT_STORAGE_DIR", str(tmp_path))
 
     await _make_product_pair(
@@ -1754,10 +1782,11 @@ async def test_import_paired_profile_unknown_normal_length_is_position_error(
     )
 
     assert response.status_code == 200, response.text
-    item = response.json()["items"][0]
-    assert "normal_length_not_found" in item["errors"]
-    assert item["after_data"]["input_dimensions"] == {"length_mm": 2700}
-    assert item["after_data"]["source_payload"]["product_pair"]["resolved"] is True
+    items = response.json()["items"]
+    assert "normal_length_not_found" in items[0]["errors"]
+    assert items[0]["after_data"]["input_dimensions"] == {"length_mm": 2700}
+    # У ЮП-PAIR-B реестровая длина 2600, а вход 2700 — своя ошибка позиции.
+    assert "normal_length_not_found" in items[1]["errors"]
 
 
 @pytest.mark.asyncio
@@ -1780,16 +1809,28 @@ async def test_batch_items_cursor_paging_returns_light_rows(client, session, tmp
     batch_id = created.json()["import_batch_id"]
 
     first = (await client.get(f"/api/imports/batches/{batch_id}/items?limit=1")).json()
-    assert first["total"] == 2
+    assert first["total"] == 3
     assert len(first["items"]) == 1
     assert "after_data" not in first["items"][0]
     assert first["next_cursor"] is not None
 
-    second = (await client.get(f"/api/imports/batches/{batch_id}/items?cursor={first['next_cursor']}")).json()
+    second = (
+        await client.get(
+            f"/api/imports/batches/{batch_id}/items?cursor={first['next_cursor']}&limit=1"
+        )
+    ).json()
     assert len(second["items"]) == 1
-    assert second["total"] == 2  # total — размер change set, курсор на него не влияет
-    assert second["next_cursor"] is None
+    assert second["total"] == 3  # total — размер change set, курсор на него не влияет
+    assert second["next_cursor"] is not None
     assert second["items"][0]["item_id"] != first["items"][0]["item_id"]
+
+    third = (
+        await client.get(
+            f"/api/imports/batches/{batch_id}/items?cursor={second['next_cursor']}&limit=1"
+        )
+    ).json()
+    assert len(third["items"]) == 1
+    assert third["next_cursor"] is None
 
     missing = await client.get("/api/imports/batches/999999999/items")
     assert missing.status_code == 404
@@ -1819,7 +1860,7 @@ async def test_import_item_full_returns_after_data(client, session, tmp_path, mo
     assert light["item_id"] == item_id
 
     full = (await client.get(f"/api/imports/items/{item_id}?full=1")).json()
-    assert full["after_data"]["source_sku"] == "ЮП-2616+ЮП-2604"
+    assert full["after_data"]["source_sku"] == "ЮП-2616"
 
     missing = await client.get("/api/imports/items/999999999?full=1")
     assert missing.status_code == 404
@@ -1922,7 +1963,7 @@ async def test_preview_single_hanger_source_missing_product(
 
 
 @pytest.mark.asyncio
-async def test_preview_paired_hanger_source_missing_pair(
+async def test_preview_pair_component_hanger_source_missing_product(
     client, session, tmp_path, monkeypatch
 ) -> None:
     """Парная строка без записи product_pairs → missing_product + product_pair_not_found."""
@@ -1941,16 +1982,21 @@ async def test_preview_paired_hanger_source_missing_pair(
     )
 
     assert response.status_code == 200
-    item = response.json()["items"][0]
-    assert item["after_data"]["hanger_source"] == "missing_product"
-    assert "product_pair_not_found" in item["errors"]
+    items = response.json()["items"]
+    # Строки пары больше не склеены, поэтому отсутствие записи product_pairs
+    # выглядит как обычные одиночные позиции с незаведённым артикулом.
+    assert [item["source_sku"] for item in items] == ["ЮП-PAIR-A", "ЮП-PAIR-B"]
+    for item in items:
+        assert item["after_data"]["hanger_source"] == "missing_product"
+        assert "product_not_found" in item["errors"]
+        assert item["after_data"]["quantity_per_hanger"] is None
 
 
 @pytest.mark.asyncio
-async def test_preview_paired_hanger_source_manual_n(
+async def test_preview_pair_component_hanger_source_manual_n(
     client, session, tmp_path, monkeypatch
 ) -> None:
-    """Парная строка с ручной N пары → источник manual (source из PairHangerValue)."""
+    """Обе позиции-компонента с ручной N пары → источник manual (#312)."""
     monkeypatch.setattr(settings, "IMPORT_STORAGE_DIR", str(tmp_path))
 
     await _make_product_pair(
@@ -1975,6 +2021,9 @@ async def test_preview_paired_hanger_source_manual_n(
     )
 
     assert response.status_code == 200
-    item = response.json()["items"][0]
-    assert item["after_data"]["hanger_source"] == "manual"
-    assert item["after_data"]["hanger_count"] == 2
+    items = response.json()["items"]
+    assert [item["source_sku"] for item in items] == ["ЮП-PAIR-A", "ЮП-PAIR-B"]
+    for item in items:
+        assert item["after_data"]["hanger_source"] == "manual"
+        assert item["after_data"]["quantity_per_hanger"] == 8
+        assert item["after_data"]["hanger_count"] == 2

@@ -636,6 +636,9 @@ async def _make_change_items(
     pair_cache = {}                   # tuple(component_skus) -> ResolvedPair | None
     pair_n_cache = {}                 # (pair.id, length_key) -> PairHangerValue
     pair_candidates_cache: dict[int, list[product_pair_resolver.PairLengthCandidate]] = {}
+    # Позиция-компонент пары (#312): справочник пар по product_id читается
+    # один раз на импорт, а не по SELECT на каждую строку.
+    pair_resolver_cache = product_pair_resolver.PairResolutionCache()
     select_route_cache = {}           # tuple_key -> RouteSelectionResult
     route_stages_cache = {}           # route.id -> list[RouteStage]
     sections_by_id_cache = {}         # section_id -> Section
@@ -950,13 +953,34 @@ async def _make_change_items(
             # N вычисляется по нормальной длине позиции; effective raw внутри
             # резолвера влияет только на формулу и не меняет dimensions.
             length_mm = (row.input_dimensions or {}).get(LENGTH_MM)
-            hanger_value = (
-                resolve_position_hanger(
-                    product, length_mm=length_mm, payload_quantity_per_hanger=None
-                )
-                if product is not None
-                else PositionHangerValue(None, None)
-            )
+            # Артикул может входить в пару: после снятия склейки (#312) пара —
+            # это две отдельные позиции, но на подвесе они едут вместе, поэтому
+            # норма берётся у пары. Артикул вне пары — прежняя одиночная механика.
+            hanger_value = PositionHangerValue(None, None)
+            if product is not None:
+                resolved_pair = await pair_resolver_cache.resolve_pair_by_product(db, product.id)
+                if resolved_pair is not None:
+                    pair_id = resolved_pair.pair.id
+                    if pair_id not in pair_candidates_cache:
+                        pair_candidates_cache[pair_id] = (
+                            await product_pair_resolver.pair_length_candidates(db, resolved_pair)
+                        )
+                    pair_value = await product_pair_resolver.resolve_pair_n(
+                        db,
+                        resolved_pair,
+                        length_mm=length_mm,
+                        length_candidates=pair_candidates_cache[pair_id],
+                    )
+                else:
+                    pair_value = None
+                if pair_value is not None and not pair_value.calc_error:
+                    hanger_value = PositionHangerValue(
+                        pair_value.quantity_per_hanger, pair_value.source
+                    )
+                else:
+                    hanger_value = resolve_position_hanger(
+                        product, length_mm=length_mm, payload_quantity_per_hanger=None
+                    )
             product_hanger_qty = hanger_value.quantity_per_hanger
 
             # Источник для подсветки артикула в предпросмотре: значение и его

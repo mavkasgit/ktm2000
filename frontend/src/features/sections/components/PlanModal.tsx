@@ -17,7 +17,8 @@ import { useEffect, useMemo, useState } from "react";
 import { Printer } from "lucide-react";
 import type { SectionBoardTask, SectionOperation } from "@/shared/api/shopfloor";
 import { PlanTaskTable } from "./PlanTaskTable";
-import type { PlanTaskGroupingMode } from "../lib/planTaskGroups";
+import { buildPlanPairIndex, type PlanTaskGroupingMode } from "../lib/planTaskGroups";
+import { listProductPairCatalog, type ProductPairCatalogEntry } from "@/shared/api/products";
 import {
   addPreset,
   deletePreset,
@@ -152,6 +153,27 @@ export function PlanModal({
   const [activePresetId, setActivePresetId] = useState<string | null>(null);
   const [newPresetName, setNewPresetName] = useState("");
   const [presetToDelete, setPresetToDelete] = useState<PlanPreset | null>(null);
+
+  // Пары сырьевых артикулов для печати (#312): позиции пары идут раздельно,
+  // но на подвесе едут вместе, поэтому лист сводит их в один подвес.
+  // Справочник не пришёл или пришёл с ошибкой — печать работает как раньше,
+  // каждая позиция своим подвесом: лишний запрос не должен ломать лист.
+  const [pairCatalog, setPairCatalog] = useState<ProductPairCatalogEntry[] | null>(null);
+  useEffect(() => {
+    if (!open) return;
+    let cancelled = false;
+    listProductPairCatalog()
+      .then((pairs) => {
+        if (!cancelled) setPairCatalog(pairs);
+      })
+      .catch(() => {
+        if (!cancelled) setPairCatalog(null);
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [open]);
+  const pairIndex = useMemo(() => buildPlanPairIndex(pairCatalog ?? []), [pairCatalog]);
 
   useEffect(() => {
     const nextPresets = loadPresets(sectionId, sectionCode, unavailableColumns);
@@ -301,7 +323,7 @@ export function PlanModal({
                 <Button type="button" size="sm" variant="outline" className="ml-auto" onClick={() => setHiddenGroupKeys(new Set())}>Показать все</Button>
               </div>
             )}
-            <PlanTaskTable tasks={tasks} mode={GROUPING_MODE} hiddenGroupKeys={hiddenGroupKeys} onHideGroup={hideGroup} columns={printSettings.columns} />
+            <PlanTaskTable tasks={tasks} mode={GROUPING_MODE} hiddenGroupKeys={hiddenGroupKeys} onHideGroup={hideGroup} columns={printSettings.columns} pairs={pairCatalog ? pairIndex : undefined} />
           </div>
         </div>
 
