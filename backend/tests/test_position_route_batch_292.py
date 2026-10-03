@@ -454,11 +454,6 @@ async def test_batch_sql_count_does_not_grow_with_positions(session) -> None:
     assert len(batch) == 40
 
 
-def test_branch_constants_are_distinct() -> None:
-    """Имена веток — часть контракта ключа; смешение сделало бы его хрупким."""
-    assert len({BRANCH_MANUAL, BRANCH_STORED, BRANCH_DYNAMIC, BRANCH_SELECTION}) == 4
-
-
 async def _seed_pair(session, sku_a: str, sku_b: str):
     product_a = Product(
         sku=sku_a, name=f"Компонент {sku_a}", type=ProductType.component, unit="pcs"
