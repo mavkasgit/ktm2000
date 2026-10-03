@@ -21,6 +21,7 @@ import {
   draftEntryFieldSummary,
   draftTotals,
   groupDraftValue,
+  groupRecordedFact,
   resolveGroupFact,
   type DraftEntryField,
   EMPTY_DRAFT_QTY,
@@ -187,6 +188,32 @@ describe("bulkDraft: последовательная раскладка", () =>
     expect(filled[2]).toEqual({ good: "5", defect: "" });
 
     expect(applyGroupField(filled, tasks, "good", "")).toEqual({});
+  });
+
+  it("порция, равная нулю, ввода не создаёт: черновик остаётся пустым", () => {
+    const tasks = [
+      makeTask({ id: 1, cache: { ...makeTask().cache, issued_quantity: "10", completed_quantity: "40" } }),
+      makeTask({ id: 2, cache: { ...makeTask().cache, issued_quantity: "10", completed_quantity: "20" } }),
+    ];
+    // Цель равна записанному: записывать нечего, и строки не должны выглядеть
+    // заполненными — иначе выход из режима спрашивает подтверждение выхода
+    // ради черновика, который ничего не уедет.
+    expect(applyGroupField({}, tasks, "good", "60")).toEqual({});
+    expect(applyGroupField({}, tasks, "good", "+0")).toEqual({});
+  });
+});
+
+describe("bulkDraft: записанный факт группы", () => {
+  it("плейсхолдер поля и разбор ввода считаются от одной базы", () => {
+    const tasks = [
+      makeTask({ id: 1, cache: { ...makeTask().cache, issued_quantity: "10", completed_quantity: "2.4" } }),
+      makeTask({ id: 2, cache: { ...makeTask().cache, issued_quantity: "10", completed_quantity: "0.4" } }),
+    ];
+    // Дробный остаток от разбора: сумма записанного по строкам — целые штуки
+    // (2 + 0), а не «2,8». Плейсхолдер «сейчас 3» отправляет оператора в цель,
+    // которую сервер отвергнет как меньшую записанного.
+    expect(groupRecordedFact(tasks, "good")).toBe(2);
+    expect(resolveGroupFact(tasks, "good", "3").recorded).toBe(groupRecordedFact(tasks, "good"));
   });
 });
 
