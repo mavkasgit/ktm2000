@@ -157,6 +157,9 @@ async function acquire() {
       // Клон сносим только у мёртвого держателя: живой долгий прогон потеряет
       // лок, но свои данные не отдаст.
       if (reason.dead) abandonedRunId = holder?.runId ?? null;
+      // Лок снимаем принудительно: он отобран по `reason`, и сверять
+      // принадлежность нельзя — следующая итерация цикла всё равно займёт
+      // файл заново.
       releaseLock(LOCK_FILE);
       continue;
     }
@@ -179,7 +182,9 @@ async function acquire() {
 }
 
 function release() {
-  releaseLock(LOCK_FILE);
+  // С `runId`: лок, отобранный соседу по возрасту, нам не принадлежит —
+  // сносить его нельзя (`run-lock.mjs`, `releaseLock`).
+  releaseLock(LOCK_FILE, runId);
 }
 
 // Прогон: id клона БД, его env-файл и занятый слот семафора. Уборка в
