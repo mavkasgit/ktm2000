@@ -23,14 +23,19 @@ from tests.test_transfer_dimensions import _make_dim_route_fixture, _seed_balanc
 
 pytestmark = pytest.mark.asyncio
 
-
 def _count_sql(session):
-    """Счётчик SQL на время блока с ``try/finally`` — по образцу тестов #290."""
-    counter = {"n": 0}
+    """Счётчик SQL на время блока с ``try/finally`` — по образцу тестов #290.
+
+    ``sql`` — сами начала запросов: регресс ниже считает не «сколько всего»,
+    а «сколько раз понадобился вот этот запрос», и общее число тут обманчиво
+    (на N задач прибавляются ещё и чтения секций).
+    """
+    counter = {"n": 0, "sql": []}
     sync_engine = session.bind.sync_engine
 
     def _count(conn, cursor, statement, parameters, context, executemany):
         counter["n"] += 1
+        counter["sql"].append(" ".join(statement.split()))
 
     event.listen(sync_engine, "before_cursor_execute", _count)
     return counter, lambda: event.remove(sync_engine, "before_cursor_execute", _count)
@@ -100,6 +105,60 @@ async def test_lines_hint_removes_per_task_plan_line_reads(client, session) -> N
         "подсказка не даёт эффекта"
     )
     assert hinted == cold
+
+
+@pytest.mark.asyncio
+async def test_stock_branch_scales_sublinearly(client, session) -> None:
+    """Складская ветка не растёт по числу задач: `stock_line_bulk` — один вызов.
+
+    Регресс #299 (найдено на ревью среза R10): подсказка `lines` убрала
+    повторные `db.get` строки плана, но сам bulk-ядро вызывался ПО ОДНОМУ
+    разу на задачу, списком из одного элемента. Внутри ядра на каждый такой
+    выходятся свои запросы — операции этапа, net TRANSFER_SEND и остатки, —
+    поэтому «bulk»-ветка линейно росла вместе с числом складских строк
+    (замер: 9 SQL на задачу, N=1/2/4 → 9/18/36).
+
+    Проверка не по «всего SQL», а по тому, сколько раз понадобился КАЖДЫЙ из
+    трёх запросов ядра: на старом коде их было бы по два на две задачи, здесь
+    — по одному. Общее число запросов для такой проверки не годится: оно
+    линейно растёт из-за чтений секций и это нормально.
+    """
+    from app.transfers.transferable import task_transferable_lines_bulk
+
+    tasks: list[WorkTask] = []
+    line_hints: dict[int, SectionPlanLine] = {}
+    for i in range(2):
+        task, _section = await _one_stock_task(client, session, sku=f"T299SCALE{i}")
+        plan_line = (
+            await session.execute(
+                select(SectionPlanLine).where(
+                    SectionPlanLine.id == task.section_plan_line_id
+                )
+            )
+        ).scalar_one()
+        tasks.append(task)
+        line_hints[plan_line.id] = plan_line
+
+    # Холодная карта сессии: иначе identity-map съел бы те самые чтения,
+    # ради которых ветка и батчится, и замер вышел бы нулевым на обоих кодах.
+    session.expunge_all()
+    counter, remove = _count_sql(session)
+    try:
+        bulk = await task_transferable_lines_bulk(session, tasks, lines=line_hints)
+    finally:
+        remove()
+
+    assert set(bulk) == {task.id for task in tasks}
+    ops = [s for s in counter["sql"] if "route_operations" in s and "DISTINCT" in s]
+    net = [s for s in counter["sql"] if "FROM stock_transactions" in s]
+    balances = [s for s in counter["sql"] if "FROM stock_balances" in s]
+    # Две строки плана — две пары (route_id, sequence), и операции этапа
+    # читаются по одной на пару: это ожидаемо, ядро их кэширует на вызов.
+    assert len(ops) == 2, f"операции этапов прочитаны {len(ops)} раз, ожидалось 2"
+    # А вот эти два — на ВСЮ выборку: по запросу на задачу означало бы, что
+    # ядро вызвалось поштучно.
+    assert len(net) == 1, f"net TRANSFER_SEND прочитан {len(net)} раз, ожидался 1"
+    assert len(balances) == 1, f"остатки прочитаны {len(balances)} раз, ожидался 1"
 
 
 @pytest.mark.asyncio
