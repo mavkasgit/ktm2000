@@ -70,7 +70,7 @@ export function reclaimReason(
   holder,
   {
     staleMs = DEFAULT_LOCK_STALE_MS,
-    now = Date.now(),
+    now = () => Date.now(),
     alive = isProcessAlive,
   } = {},
 ) {

@@ -10,7 +10,7 @@ import {
 import { useQuery } from "@tanstack/react-query";
 import { getAuditLogs, type AuditLogEntry, type GetAuditLogsParams } from "@/shared/api/auditLogs";
 import { queryKeys } from "@/shared/api/queryKeys";
-import { DateRangePicker, DataTableColumnHeader, TableCornerResetHeader, TableCornerResetCell, TablePaginationFooter, DATA_TABLE_STYLES } from "@/shared/ui";
+import { DateRangePicker, DataTableColumnHeader, TableCornerResetHeader, TableCornerResetCell, TablePaginationFooter, DATA_TABLE_STYLES, JournalTabs } from "@/shared/ui";
 import { useFilterableTable } from "@/shared/hooks/useFilterableTable";
 import { usePaginatedTableQuery } from "@/shared/hooks/usePaginatedTableQuery";
 import type { SortConfig } from "@/shared/hooks/useTableQueryEngine";
@@ -224,6 +224,9 @@ export function AuditLogsPage() {
           <p className="page-subtitle">
             Централизованный лог действий. Поддерживается мгновенный поиск по тексту сообщений, названию операций, SKU и ID заданий.
           </p>
+          <div className="mt-3">
+            <JournalTabs />
+          </div>
         </div>
       </header>
 

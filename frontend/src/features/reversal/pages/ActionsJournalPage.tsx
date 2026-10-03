@@ -1,4 +1,5 @@
 import { useState } from "react";
+import { useInRouterContext } from "react-router-dom";
 import { useQueryClient } from "@tanstack/react-query";
 import {
   AMENDABLE_ACTION_TYPES,
@@ -7,6 +8,8 @@ import {
 } from "@/shared/api/actions";
 import { invalidateAfter } from "@/shared/api/cacheInvalidation";
 import {
+  BackButton,
+  JournalTabs,
   Badge,
   Select,
   SelectContent,
@@ -54,6 +57,9 @@ export function ActionsJournalPage() {
       resetPageDeps: [typeFilter, statusFilter],
     });
   const queryClient = useQueryClient();
+  // `BackButton` зовёт `useNavigate`, который вне контекста роутера бросает
+  // инвариант: в unit-тестах страницы роутера нет, а проверять там нечего.
+  const inRouter = useInRouterContext();
 
   const params = {
     page,
@@ -81,13 +87,19 @@ export function ActionsJournalPage() {
   ).sort();
 
   return (
-    <div className="space-y-4 p-6" data-testid="actions-journal-page">
-      <div>
-        <h1 className="text-xl font-bold text-slate-800">Отмена действий</h1>
-        <p className="text-sm text-slate-500">
-          Журнал обратимых операций (ADR-0019)
-        </p>
-      </div>
+    <div className="space-y-6" data-testid="actions-journal-page">
+      <header className="page-header">
+        <div className="flex items-start gap-2">
+          {inRouter && <BackButton to="/audit-logs" title="К журналу действий" />}
+          <div>
+            <h1 className="page-title">Отмена действий</h1>
+            <p className="page-subtitle">Журнал обратимых операций (ADR-0019)</p>
+            <div className="mt-3">
+              <JournalTabs />
+            </div>
+          </div>
+        </div>
+      </header>
 
       <div className="flex flex-wrap items-center gap-3">
         <Select value={typeFilter} onValueChange={setTypeFilter}>
