@@ -1,38 +1,34 @@
-"""#300: авто-передача при завершении задачи — регрессия и замер SQL.
+"""#300: авто-передача при завершении задачи — проверка поведения.
 
-Кейс: маршрут «склад сырья → производственный участок СПГ-1 → производственный
-участок СПГ-2». Выпуск плана создаёт задания на производственных этапах,
-материал заводится приёмом на первый участок, затем ``complete_task
-(auto_transfer_next=True)`` порождает авто-передачу на второй.
+Завершение задания на производственном участке переносит факт на следующий
+участок ДРУГОГО СПГ: создаётся передача, факт уходит, ledger сходится.
 
-Разные СПГ — обязательное условие цикла (``sections_share_spg`` → break):
-общий хелпер ``build_operation_route`` кладёт все участки в один СПГ, и с ним
-передачи не бывает вовсе.
+Тест ловит все условия выхода цикла
+``auto_create_transfer_after_complete``: без разнесённых по СПГ участков
+(``sections_share_spg`` рвёт цикл), без приёма на участок
+(``issued_quantity``) и без ``auto_transfer_next`` передачи не будет вовсе.
 
-Снимок цепочки (#300) на этом кейсе измерен и ОТКАЧЕН: 96 → 97 SQL, ответ
-идентичен. Условия выхода цикла и разбор — в
-``docs/night/tickets/T-300-auto-transfer-batching.md``.
+Числа SQL на этом кейсе измерены **отдельно** (96 → 97 при батчинге, ответ
+идентичен, батчинг откачен) — см. ``docs/night/logs/measure_300_*.json`` и
+``docs/night/tickets/T-300-auto-transfer-batching.md``. Здесь измерений нет:
+тест проверяет результат и ничего не пишет на диск.
 """
 
 from __future__ import annotations
 
-import asyncio
-import json
-import pathlib
-from collections import Counter
 from decimal import Decimal
 
 import pytest
 from app.models.spg import SpgSection, StorageProductionGroup
 from app.models.transfer import Transfer
-from app.models.work_task import WorkTask, WorkTaskStatus
+from app.models.work_task import WorkTask
 from app.services.material_operations import completed_operations_through_stage
 from app.services.plan_generation import create_release_batch, release_batch
 from app.services.route_storage_classifier import (
     SECTION_TYPE_PRODUCTION,
     SECTION_TYPE_RAW_STOCK,
 )
-from sqlalchemy import event, select
+from sqlalchemy import select
 
 from tests.helpers.completed_operations import build_operation_route
 from tests.helpers.transfers_chain import seed_manual_in
@@ -45,13 +41,9 @@ from tests.test_integrity_invariants import (
 
 pytestmark = pytest.mark.asyncio
 
-RESULT_PATH = (
-    r"C:\Users\LogoPrint\VibeCoding\ktm2000-night-a\docs\night\logs\measure_300_result.json"
-)
 
-
-async def _seed_chain(session, *, sku: str):
-    """RAW → P1 → P2, причём P1 и P2 в РАЗНЫХ СПГ."""
+async def _prepare(session, *, sku: str) -> tuple[dict, object, object, WorkTask]:
+    """Цепочка RAW → P1 → P2 с материалом на первом участке."""
     fx = await build_operation_route(
         session,
         sku=sku,
@@ -62,9 +54,9 @@ async def _seed_chain(session, *, sku: str):
             (f"{sku}-P2", SECTION_TYPE_PRODUCTION, ["P2_OP"]),
         ],
     )
-    raw, p1, p2 = fx["sections"]
-    # Вынос P2 в отдельный СПГ: иначе sections_share_spg(P1, P2) истинен и цикл
-    # авто-передачи выходит на первом же шаге.
+    raw, _p1, p2 = fx["sections"]
+    # Разные СПГ — обязательное условие цикла: build_operation_route кладёт все
+    # участки в один СПГ, и sections_share_spg рвёт авто-передачу на первом шаге.
     other_spg = StorageProductionGroup(
         code=f"{sku}-SPG2", name="СПГ 2", is_active=True, sort_order=1
     )
@@ -80,12 +72,7 @@ async def _seed_chain(session, *, sku: str):
         session, production_plan_id=fx["plan"].id, positions=None
     )
     await release_batch(session, released["id"])
-    return fx, raw, p1, p2
 
-
-async def _prepare(session, *, sku: str):
-    """Цепочка + материал, заведённый приёмом на первый участок."""
-    fx, raw, p1, _p2 = await _seed_chain(session, sku=sku)
     user = await _make_user(session, f"{sku.lower()}@local")
     ops_raw = await completed_operations_through_stage(
         session, route_id=fx["route"].id, through_sequence=1
@@ -98,105 +85,95 @@ async def _prepare(session, *, sku: str):
         quantity=Decimal(100),
         completed_operations=ops_raw,
     )
-    p1_task = (
-        (
-            await session.execute(
-                select(WorkTask).where(
-                    WorkTask.section_id == p1.id,
-                    WorkTask.status == WorkTaskStatus.ready,
-                )
-            )
-        )
-        .scalars()
-        .first()
-    )
-    assert p1_task is not None, "на производственном участке должно быть задание"
-    # Приём заводит issued_quantity задания (без task_id complete_task падает)
-    # и кладёт остаток в ops-группе «до своего этапа», откуда его и возьмёт
-    # TRANSFER_SEND. Подпись — по этапу ИСТОЧНИКА: она описывает, что уходит
-    # из сырья, а не что приходит на участок (ADR-0055).
+    p1_task = await _first_task(session, _p1)
+    # Приём заводит issued_quantity задания и кладёт остаток в ops-группе
+    # «до своего этапа», откуда его возьмёт TRANSFER_SEND. Подпись — по этапу
+    # ИСТОЧНИКА: она описывает, что уходит, а не что приходит (ADR-0055).
     await record_transfer_receive(
         session,
         product_id=fx["product"].id,
         from_location_id=raw.id,
-        to_location_id=p1.id,
+        to_location_id=_p1.id,
         quantity=Decimal(100),
         task_id=p1_task.id,
         created_by=user.id,
         completed_operations=ops_raw,
     )
-    return fx, user, p1, p1_task
+    return fx, user, p1_task, p2
 
 
-async def _transfers_payload(session) -> list[dict]:
-    rows = (
-        (await session.execute(select(Transfer).order_by(Transfer.id))).scalars().all()
+async def _first_task(session, section) -> WorkTask:
+    task = (
+        (await session.execute(select(WorkTask).where(WorkTask.section_id == section.id)))
+        .scalars()
+        .first()
     )
-    return [
-        {
-            "from_task_id": t.from_task_id,
-            "to_task_id": t.to_task_id,
-            "quantity": str(t.sent_quantity),
-            "dimensions": t.dimensions,
-            "accepted_quantity": (
-                str(t.accepted_quantity) if t.accepted_quantity is not None else None
-            ),
-            "rejected_quantity": (
-                str(t.rejected_quantity) if t.rejected_quantity is not None else None
-            ),
-            "status": getattr(t.status, "value", t.status),
-        }
-        for t in rows
-    ]
-
-
-async def _run_case(session, *, sku: str) -> tuple[dict, list[dict]]:
-    from app.services.shopfloor.operations_tasks import complete_task
-
-    _fx, user, _p1, p1_task = await _prepare(session, sku=sku)
-
-    kinds: Counter[str] = Counter()
-    sync_engine = session.bind.sync_engine
-
-    @event.listens_for(sync_engine, "before_cursor_execute")
-    def _count(conn, cursor, statement, parameters, context, executemany):
-        kinds[statement.lstrip().split(" ", 1)[0].upper()] += 1
-
-    try:
-        await complete_task(
-            session,
-            task_id=p1_task.id,
-            good_quantity=Decimal(100),
-            defect_quantity=Decimal(0),
-            actor_id=user.id,
-            comment="T300",
-            auto_transfer_next=True,
-        )
-    finally:
-        event.remove(sync_engine, "before_cursor_execute", _count)
-
-    payload = await _transfers_payload(session)
-    await assert_no_invariants_violations(session, context=sku)
-    await assert_no_stock_ledger_invariants_violations(session, context=sku)
-    return {"kinds": dict(kinds), "total": sum(kinds.values())}, payload
+    assert task is not None, "на производственном участке должно быть задание"
+    return task
 
 
 @pytest.mark.asyncio
-async def test_measure_auto_transfer_sql(session) -> None:
-    """Замер: SQL по глаголам и созданные передачи (вход для сверки)."""
-    measured, payload = await _run_case(session, sku="T300")
-    assert payload, "кейс обязан породить авто-передачу, иначе он пустой"
-    print(f"\nT300: {measured} SQL по глаголам")
-    for row in payload:
-        print(f"   {row}")
+async def test_complete_creates_auto_transfer_to_next_group(session) -> None:
+    """Завершение задания переносит факт на участок следующего СПГ."""
+    from app.services.shopfloor.operations_tasks import complete_task
 
-    await asyncio.to_thread(
-        pathlib.Path(RESULT_PATH).write_text,
-        json.dumps(
-            {"measured": measured, "transfers": payload},
-            ensure_ascii=False,
-            indent=2,
-            default=str,
-        ),
-        "utf-8",
+    _fx, user, p1_task, p2_section = await _prepare(session, sku="T300")
+    await complete_task(
+        session,
+        task_id=p1_task.id,
+        good_quantity=Decimal(100),
+        defect_quantity=Decimal(0),
+        actor_id=user.id,
+        comment="авто-передача",
+        auto_transfer_next=True,
     )
+
+    transfers = (
+        (await session.execute(select(Transfer).order_by(Transfer.id))).scalars().all()
+    )
+    assert len(transfers) == 1, f"ожидалась одна авто-передача, создано {len(transfers)}"
+    transfer = transfers[0]
+    assert transfer.from_task_id == p1_task.id
+    assert transfer.to_task_id is not None, "у авто-передачи есть получатель"
+    receiving = await session.get(WorkTask, transfer.to_task_id)
+    assert receiving is not None and receiving.section_id == p2_section.id, (
+        "факт ушёл не на участок СПГ-2"
+    )
+    assert transfer.sent_quantity == Decimal(100)
+    assert getattr(transfer.status, "value", transfer.status) == "accepted"
+    assert transfer.rejected_quantity is None
+
+    await assert_no_invariants_violations(session, context="T300")
+    await assert_no_stock_ledger_invariants_violations(session, context="T300")
+
+
+@pytest.mark.asyncio
+async def test_completed_task_does_not_double_transfer_on_replay(session) -> None:
+    """Повторное завершение не создаёт вторую передачу на тот же факт.
+
+    Идемпотентность авто-передачи: тот же `idempotency_key` на втором
+    `complete_task` не должен удваивать движение в ledger'е.
+    """
+    from app.services.shopfloor.operations_tasks import complete_task
+
+    _fx, user, p1_task, _p2 = await _prepare(session, sku="T300IDEM")
+    payload = {
+        "task_id": p1_task.id,
+        "good_quantity": Decimal(100),
+        "defect_quantity": Decimal(0),
+        "actor_id": user.id,
+        "idempotency_key": "t300-idem",
+        "auto_transfer_next": True,
+    }
+    await complete_task(session, **payload)
+    await complete_task(session, **payload)
+
+    transfers = (
+        (await session.execute(select(Transfer).order_by(Transfer.id))).scalars().all()
+    )
+    assert len(transfers) == 1, (
+        f"повторное завершение создало {len(transfers)} передач вместо одной"
+    )
+
+    await assert_no_invariants_violations(session, context="T300IDEM")
+    await assert_no_stock_ledger_invariants_violations(session, context="T300IDEM")
