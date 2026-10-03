@@ -1,16 +1,10 @@
 import { useState, useMemo, Fragment } from "react";
-import {
-  CheckCircle2,
-  AlertCircle,
-  Info,
-  Search,
-  X,
-  Clock,
-} from "lucide-react";
+import { Clock } from "lucide-react";
 import { useQuery } from "@tanstack/react-query";
 import { getAuditLogs, type AuditLogEntry, type GetAuditLogsParams } from "@/shared/api/auditLogs";
 import { queryKeys } from "@/shared/api/queryKeys";
-import { DateRangePicker, DataTableColumnHeader, TableCornerResetHeader, TableCornerResetCell, TablePaginationFooter, DATA_TABLE_STYLES } from "@/shared/ui";
+import { DateRangePicker, DataTableColumnHeader, TableCornerResetHeader, TableCornerResetCell, TablePaginationFooter, DATA_TABLE_STYLES, FiltersPanel, JournalTabs, Badge, Button, TABLE_ROW_DENSE, type FiltersPanelField } from "@/shared/ui";
+import type { BadgeProps } from "@/shared/ui/badge";
 import { useFilterableTable } from "@/shared/hooks/useFilterableTable";
 import { usePaginatedTableQuery } from "@/shared/hooks/usePaginatedTableQuery";
 import type { SortConfig } from "@/shared/hooks/useTableQueryEngine";
@@ -20,10 +14,34 @@ import { getAriaSort } from "@/shared/lib/multiSort";
 import { useDebouncedValue } from "@/shared/lib/useDebouncedValue";
 import { keepPreviousData } from "@tanstack/react-query";
 import { isFirstRowsLoad } from "@/shared/lib/tableQueryPlaceholder";
+import { TABLE_ROW_STYLES } from "@/shared/lib/tableRowStyles";
+import { rowToneFill, ROW_TONE_STRIPE, type RowTone } from "@/shared/lib/rowTones";
+import { cn } from "@/shared/utils/cn";
 import { auditColumns, entityLabel, type AuditFilterField } from "../lib/auditColumns";
 
 type LogFilterField = AuditFilterField;
 type LogField = LogFilterField;
+
+type AuditStatus = AuditLogEntry["status"];
+
+/**
+ * Статус записи журнала — одним местом в три вида: подпись бейджа, его тон и
+ * тон строки. Раньше это были три независимые тернарника в разметке, и
+ * подпись («Успешно») жила ещё и в `auditColumns` для попапера фильтра.
+ *
+ * Тон строки `success` — `ok`, а не `completed`: у `completed` зачёркивание
+ * значит «дело закрыто и неактуально», а успешная запись журнала — живое
+ * подтверждение, к которому возвращаются. `info` — обычная строка: отметка о
+ * ходе работы, а не состояние, требующее внимания.
+ */
+const STATUS_PRESENTATION: Record<
+  AuditStatus,
+  { label: string; badgeVariant: BadgeProps["variant"]; rowTone: RowTone }
+> = {
+  success: { label: "Успешно", badgeVariant: "success", rowTone: "ok" },
+  error: { label: "Ошибка", badgeVariant: "destructive", rowTone: "scrap" },
+  info: { label: "Информация", badgeVariant: "outline", rowTone: "plain" },
+};
 
 function formatDateTime(dateStr: string) {
   const d = new Date(dateStr);
@@ -209,10 +227,91 @@ export function AuditLogsPage() {
     });
   };
 
-  const headerCellClass = `${DATA_TABLE_STYLES.headerRow} ${DATA_TABLE_STYLES.headerCell}`;
+  /**
+   * Панель фильтров журнала: поиск → период → четыре переключателя статуса со
+   * счётчиками. Раньше это был свой блок на своих классах; тот же ряд на общих
+   * полях читается как остальные таблицы приложения, а «Сбросить период» ушёл
+   * в общий сброс — отдельная кнопка сбрасывала половину фильтров и оставляла
+   * оператора гадать, почему список не тот.
+   */
+  const filterFields = useMemo((): FiltersPanelField[] => {
+    const countOf = (key: string) => Number(counts[key] ?? 0);
+    return [
+      {
+        kind: "search",
+        key: "search",
+        value: search,
+        onChange: setSearch,
+        placeholder: "Поиск по сообщениям, операциям, SKU и ID заданий…",
+        layoutSpan: "min-w-[280px]",
+      },
+      {
+        kind: "custom",
+        key: "date-range",
+        node: (
+          <DateRangePicker
+            from={dateFrom}
+            to={dateTo}
+            onChange={(range) => {
+              setDateFrom(range.from || "");
+              setDateTo(range.to || "");
+            }}
+            placeholder="Выберите период логов"
+            align="start"
+          />
+        ),
+        layoutSpan: "min-w-[260px]",
+      },
+      {
+        kind: "toggle",
+        key: "status-all",
+        label: "Все записи",
+        checked: statusFilter === "all",
+        onChange: () => setStatusFilter("all"),
+        badgeCount: countOf("all"),
+        hideIcon: true,
+      },
+      {
+        kind: "toggle",
+        key: "status-success",
+        label: "Успешные",
+        checked: statusFilter === "success",
+        onChange: () => setStatusFilter("success"),
+        badgeCount: countOf("success"),
+        tone: "emerald",
+        hideIcon: true,
+      },
+      {
+        kind: "toggle",
+        key: "status-error",
+        label: "Ошибки",
+        checked: statusFilter === "error",
+        onChange: () => setStatusFilter("error"),
+        badgeCount: countOf("error"),
+        tone: "red",
+        hideIcon: true,
+      },
+      {
+        kind: "toggle",
+        key: "status-info",
+        label: "Инфо",
+        checked: statusFilter === "info",
+        onChange: () => setStatusFilter("info"),
+        badgeCount: countOf("info"),
+        tone: "neutral",
+        hideIcon: true,
+      },
+    ];
+  }, [search, dateFrom, dateTo, statusFilter, counts]);
+
+  /** Шапка таблицы — плотная, как тело: 32px обе. */
+  const headerCellClass = cn(DATA_TABLE_STYLES.headerRow, DATA_TABLE_STYLES.headerCell, TABLE_ROW_DENSE.headerCell);
+
+  /** Число колонок журнала + служебный угол сброса — для строк `colSpan`. */
+  const columnCount = auditColumns.length + 1;
 
   return (
-    <div className="space-y-6">
+    <div className="space-y-3">
       <header className="page-header">
         <div>
           <div className="flex items-center gap-2">
@@ -224,410 +323,289 @@ export function AuditLogsPage() {
           <p className="page-subtitle">
             Централизованный лог действий. Поддерживается мгновенный поиск по тексту сообщений, названию операций, SKU и ID заданий.
           </p>
+          <div className="mt-3">
+            <JournalTabs />
+          </div>
         </div>
       </header>
 
-      <div className="bg-white rounded-xl shadow-sm border border-slate-200 overflow-hidden flex flex-col">
-        {/* Базовая панель фильтров */}
-        <div className="p-4 border-b border-slate-200 bg-slate-50/50 space-y-3">
-          <div className="flex flex-wrap items-end gap-4">
-            {/* Поиск */}
-            <div className="space-y-1.5 w-[300px]">
-              <label className="block text-xs font-bold text-slate-500 uppercase tracking-wider mb-1">Поиск</label>
-              <div className="relative">
-                <Search className="absolute left-3 top-1/2 -translate-y-1/2 h-4 w-4 text-slate-400 pointer-events-none" />
-                <input
-                  type="text"
-                  placeholder="Поиск..."
-                  value={search}
-                  onChange={(e) => setSearch(e.target.value)}
-                  className="w-full pl-10 pr-9 py-2 text-sm rounded-lg border border-slate-200 focus:outline-none focus:ring-2 focus:ring-indigo-500/20 focus:border-indigo-500 bg-white text-slate-800 placeholder-slate-400 transition-all h-9"
-                />
-                {search && (
-                  <button
-                    onClick={() => setSearch("")}
-                    className="absolute right-3 top-1/2 -translate-y-1/2 text-slate-400 hover:text-slate-600 transition-colors"
-                  >
-                    <X className="h-4 w-4" />
-                  </button>
-                )}
-              </div>
-            </div>
-
-            {/* Диапазон дат с помощью DateRangePicker */}
-            <div className="space-y-1.5 w-[280px]">
-              <label className="block text-xs font-bold text-slate-500 uppercase tracking-wider mb-1">Диапазон дат</label>
-              <DateRangePicker
-                from={dateFrom}
-                to={dateTo}
-                onChange={(range) => {
-                  setDateFrom(range.from || "");
-                  setDateTo(range.to || "");
-                }}
-                className="w-full"
-                placeholder="Выберите период логов"
-                align="start"
-              />
-            </div>
-          </div>
-
-          {/* Переключатели базовых статусов (success/error/info) */}
-          <div className="flex flex-wrap items-center justify-between gap-2 pt-1">
-            <div className="flex flex-wrap gap-1.5">
-              <button
-                onClick={() => setStatusFilter("all")}
-                className={`px-3.5 py-1.5 rounded-lg text-xs font-semibold transition-all flex items-center gap-1.5 ${
-                  statusFilter === "all"
-                    ? "bg-slate-800 text-white shadow-sm"
-                    : "bg-white border border-slate-200 text-slate-600 hover:bg-slate-50"
-                }`}
-              >
-                Все записи
-                <span
-                  className={`text-[10px] px-1.5 py-0.2 rounded-full ${
-                    statusFilter === "all" ? "bg-white/20 text-white" : "bg-slate-100 text-slate-600"
-                  }`}
+      <FiltersPanel
+        compact
+        fields={filterFields}
+        onReset={resetAll}
+        hasActiveFilters={hasActiveFilters}
+      />
+      {/* Таблица. Пусто и загрузка — строками `tbody`: колонки журнала заданы
+          описанием, и поплавок над таблицей убирал бы шапку целиком. */}
+      <div className={DATA_TABLE_STYLES.container}>
+        <table className="w-full border-separate border-spacing-0 text-sm">
+          <thead>
+            <tr>
+              {auditColumns.map((column) => (
+                <th
+                  key={column.id}
+                  className={`${headerCellClass} ${column.headerClassName ?? "text-left"}`}
+                  aria-sort={column.sortField ? getAriaSort(sortConfigs, column.sortField) : undefined}
                 >
-                  {counts.all}
-                </span>
-              </button>
-
-              <button
-                onClick={() => setStatusFilter("success")}
-                className={`px-3.5 py-1.5 rounded-lg text-xs font-semibold transition-all flex items-center gap-1.5 ${
-                  statusFilter === "success"
-                    ? "bg-emerald-600 text-white shadow-sm"
-                    : "bg-white border border-slate-200 text-slate-600 hover:border-emerald-200 hover:bg-emerald-50/20"
-                }`}
-              >
-                Успешные
-                <span
-                  className={`text-[10px] px-1.5 py-0.2 rounded-full ${
-                    statusFilter === "success" ? "bg-white/25 text-white" : "bg-emerald-50 text-emerald-700"
-                  }`}
-                >
-                  {counts.success}
-                </span>
-              </button>
-
-              <button
-                onClick={() => setStatusFilter("error")}
-                className={`px-3.5 py-1.5 rounded-lg text-xs font-semibold transition-all flex items-center gap-1.5 ${
-                  statusFilter === "error"
-                    ? "bg-red-600 text-white shadow-sm"
-                    : "bg-white border border-slate-200 text-slate-600 hover:border-red-200 hover:bg-red-50/20"
-                }`}
-              >
-                Ошибки
-                <span
-                  className={`text-[10px] px-1.5 py-0.2 rounded-full ${
-                    statusFilter === "error" ? "bg-white/25 text-white" : "bg-red-50 text-red-700"
-                  }`}
-                >
-                  {counts.error}
-                </span>
-              </button>
-
-              <button
-                onClick={() => setStatusFilter("info")}
-                className={`px-3.5 py-1.5 rounded-lg text-xs font-semibold transition-all flex items-center gap-1.5 ${
-                  statusFilter === "info"
-                    ? "bg-blue-600 text-white shadow-sm"
-                    : "bg-white border border-slate-200 text-slate-600 hover:border-blue-200 hover:bg-blue-50/20"
-                }`}
-              >
-                Инфо
-                <span
-                  className={`text-[10px] px-1.5 py-0.2 rounded-full ${
-                    statusFilter === "info" ? "bg-white/25 text-white" : "bg-blue-50 text-blue-700"
-                  }`}
-                >
-                  {counts.info}
-                </span>
-              </button>
-            </div>
-
-            {hasActiveExtraFilters && (
-              <button
-                onClick={() => {
-                  setDateFrom("");
-                  setDateTo("");
-                }}
-                className="text-xs text-red-600 hover:text-red-800 font-bold"
-              >
-                Сбросить период
-              </button>
-            )}
-          </div>
-        </div>
-
-        {/* Таблица */}
-        <div className={DATA_TABLE_STYLES.container}>
-          {isFirstRowsLoad(isPending, parsedLogs) ? (
-            <div className="flex items-center justify-center py-20 text-slate-400 text-sm">
-              Загрузка журнала аудита...
-            </div>
-          ) : parsedLogs.length === 0 ? (
-            <div className="flex flex-col items-center justify-center py-16 text-center">
-              <div className="h-14 w-14 rounded-full bg-slate-100 flex items-center justify-center text-slate-400 mb-4">
-                <Clock className="h-7 w-7" />
-              </div>
-              <p className="text-slate-600 font-semibold text-sm">Логи не найдены</p>
-              <p className="text-xs text-slate-400 mt-1.5 max-w-sm px-4">
-                {counts.all === 0
-                  ? "История событий пуста."
-                  : "Нет записей, соответствующих заданным фильтрам и поисковому запросу."}
-              </p>
-            </div>
-          ) : (
-            <table className="w-full border-separate border-spacing-0 text-sm">
-              <thead>
-                <tr>
-                  {auditColumns.map((column) => (
-                    <th
-                      key={column.id}
-                      className={`${headerCellClass} ${column.headerClassName ?? "text-left"}`}
-                      aria-sort={column.sortField ? getAriaSort(sortConfigs, column.sortField) : undefined}
-                    >
-                      <DataTableColumnHeader
-                        column={column}
-                        bindColumn={bindColumn}
-                        values={column.filterField ? uniqueValues[column.filterField] : undefined}
-                        currentSorts={sortConfigs}
-                        onSortChange={handleSortChange}
-                      />
-                    </th>
-                  ))}
-                  <TableCornerResetHeader
-                    hasActiveFilters={hasActiveFilters}
-                    onReset={resetAll}
-                    dataTableHeader
+                  <DataTableColumnHeader
+                    column={column}
+                    bindColumn={bindColumn}
+                    values={column.filterField ? uniqueValues[column.filterField] : undefined}
+                    currentSorts={sortConfigs}
+                    onSortChange={handleSortChange}
                   />
-                </tr>
-              </thead>
-              <tbody className="divide-y divide-slate-100 bg-white">
-                {parsedLogs.map((entry) => {
-                  const isSuccess = entry.status === "success";
-                  const isError = entry.status === "error";
-                  const isInfo = entry.status === "info";
-                  const isExpanded = expandedRows.has(entry.id);
-                  const taskIdsArray = entry.task_ids
-                    ? entry.task_ids.split(",").map((id) => Number(id.trim())).filter((id) => !isNaN(id))
-                    : [];
+                </th>
+              ))}
+              <TableCornerResetHeader
+                hasActiveFilters={hasActiveFilters}
+                onReset={resetAll}
+                dataTableHeader
+              />
+            </tr>
+          </thead>
+          <tbody>
+            {isFirstRowsLoad(isPending, parsedLogs) ? (
+              <tr>
+                <td colSpan={columnCount} className={cn(TABLE_ROW_DENSE.cell, "text-center text-slate-400")}>
+                  Загрузка журнала аудита...
+                </td>
+              </tr>
+            ) : parsedLogs.length === 0 ? (
+              <tr>
+                <td colSpan={columnCount} className={cn(TABLE_ROW_DENSE.cell, "py-10 text-center")}>
+                  <div className="flex flex-col items-center justify-center text-center">
+                    <div className="h-14 w-14 rounded-full bg-slate-100 flex items-center justify-center text-slate-400 mb-4">
+                      <Clock className="h-7 w-7" />
+                    </div>
+                    <p className="text-slate-600 font-semibold text-sm">Логи не найдены</p>
+                    {/* Два разных текста: «пусто» и «ничего не подошло» отвечают
+                        на разные вопросы, и подмена одного другим сбивала бы с толку. */}
+                    <p className="text-xs text-slate-400 mt-1.5 max-w-sm px-4">
+                      {counts.all === 0
+                        ? "История событий пуста."
+                        : "Нет записей, соответствующих заданным фильтрам и поисковому запросу."}
+                    </p>
+                  </div>
+                </td>
+              </tr>
+            ) : (
+              parsedLogs.map((entry) => {
+                const status = STATUS_PRESENTATION[entry.status];
+                const isExpanded = expandedRows.has(entry.id);
+                const taskIdsArray = entry.task_ids
+                  ? entry.task_ids.split(",").map((id) => Number(id.trim())).filter((id) => !isNaN(id))
+                  : [];
 
-                  return (
-                    <Fragment key={entry.id}>
-                      <tr
-                        className="hover:bg-slate-50/60 transition-colors group relative cursor-pointer font-medium"
-                        onClick={() => toggleRow(entry.id)}
-                      >
-                        {/* Статус */}
-                        <td className="p-3 text-left align-middle">
+                return (
+                  <Fragment key={entry.id}>
+                    <tr
+                      data-testid={`audit-row-${entry.id}`}
+                      style={{ height: TABLE_ROW_DENSE.rowHeightPx }}
+                      className={cn(rowToneFill(status.rowTone), TABLE_ROW_STYLES.defaultRow, "cursor-pointer")}
+                      onClick={() => toggleRow(entry.id)}
+                    >
+                      {/* Статус — бейджем: кружок-иконка 28px в строку 32px не
+                          влезал, а без подписи журнал читался по одному цвету. */}
+                      {/* Полоса тона — на этой же ячейке: таблица на
+                          `border-separate`, границы строк в ней не рисуются,
+                          и на `<tr>` полоса была бы не видна. */}
+                      <td className={cn(TABLE_ROW_DENSE.cell, ROW_TONE_STRIPE[status.rowTone], "align-middle")}>
+                        <Badge variant={status.badgeVariant} className={TABLE_ROW_DENSE.badge}>
+                          {status.label}
+                        </Badge>
+                      </td>
+
+                      {/* Время */}
+                      <td className={cn(TABLE_ROW_DENSE.cell, "align-middle font-mono text-xs text-slate-500")}>
+                        {formatDateTime(entry.created_at)}
+                      </td>
+
+                      {/* Участок */}
+                      <td className={cn(TABLE_ROW_DENSE.cell, "align-middle truncate")}>
+                        {entry.section_name ? (
                           <span
-                            className={`inline-flex items-center justify-center h-7 w-7 rounded-full border shadow-sm ${
-                              isSuccess
-                                ? "border-emerald-50 bg-emerald-500 text-white"
-                                : isError
-                                ? "border-red-50 bg-red-500 text-white"
-                                : "border-blue-50 bg-blue-500 text-white"
-                            }`}
-                            title={isSuccess ? "Успешно" : isError ? "Ошибка" : "Информация"}
+                            className="inline-flex items-center rounded-md px-2 py-0.5 text-xs font-semibold bg-slate-100 text-slate-700 border border-slate-200/60 max-w-full truncate"
+                            title={entry.section_name}
                           >
-                            {isSuccess && <CheckCircle2 className="h-4 w-4" />}
-                            {isError && <AlertCircle className="h-4 w-4" />}
-                            {isInfo && <Info className="h-4 w-4" />}
+                            {entry.section_name}
                           </span>
-                        </td>
+                        ) : (
+                          <span className="text-slate-400">—</span>
+                        )}
+                      </td>
 
-                        {/* Время */}
-                        <td className="p-3 text-xs font-mono font-medium text-slate-650 text-slate-500 align-middle">
-                          {formatDateTime(entry.created_at)}
-                        </td>
+                      {/* Задания */}
+                      <td className={cn(TABLE_ROW_DENSE.cell, "align-middle truncate")}>
+                        {taskIdsArray.length > 0 ? (
+                          <div className="flex flex-wrap gap-1">
+                            {taskIdsArray.map((id) => {
+                              const isDeleted = taskStatuses[id] === "deleted";
+                              return (
+                                <span
+                                  key={id}
+                                  className={`px-1.5 py-0.5 rounded text-[10.5px] border font-mono ${
+                                    isDeleted
+                                      ? "bg-red-50 border-red-200 text-red-600 line-through font-normal opacity-85"
+                                      : "bg-slate-50 border-slate-200 text-slate-600"
+                                  }`}
+                                  title={isDeleted ? "Задание удалено и неактуально" : undefined}
+                                >
+                                  #{id}
+                                </span>
+                              );
+                            })}
+                          </div>
+                        ) : (
+                          <span className="text-slate-400">—</span>
+                        )}
+                      </td>
 
-                        {/* Участок */}
-                        <td className="p-3 align-middle truncate">
-                          {entry.section_name ? (
-                            <span
-                              className="inline-flex items-center rounded-md px-2.5 py-0.8 text-xs font-semibold bg-slate-100 text-slate-700 border border-slate-200/60 max-w-full truncate"
-                              title={entry.section_name}
-                            >
-                              {entry.section_name}
-                            </span>
-                          ) : (
-                            <span className="text-slate-400">—</span>
-                          )}
-                        </td>
+                      {/* SKU */}
+                      <td className={cn(TABLE_ROW_DENSE.cell, "align-middle truncate font-mono text-xs text-slate-600")}>
+                        {entry.product_sku || <span className="text-slate-400">—</span>}
+                      </td>
 
-                        {/* Задания */}
-                        <td className="p-3 align-middle font-mono text-xs font-semibold text-slate-500 truncate">
-                          {taskIdsArray.length > 0 ? (
-                            <div className="flex flex-wrap gap-1">
-                              {taskIdsArray.map((id) => {
-                                const isDeleted = taskStatuses[id] === "deleted";
-                                return (
-                                  <span
-                                    key={id}
-                                    className={`px-1.5 py-0.5 rounded text-[10.5px] border ${
-                                      isDeleted
-                                        ? "bg-red-50 border-red-200 text-red-600 line-through font-normal opacity-85"
-                                        : "bg-slate-50 border-slate-200 text-slate-600"
-                                    }`}
-                                    title={isDeleted ? "Задание удалено и неактуально" : undefined}
-                                  >
-                                    #{id}
-                                  </span>
-                                );
-                              })}
+                      {/* Действие (action) */}
+                      <td className={cn(TABLE_ROW_DENSE.cell, "align-middle truncate")}>
+                        {entry.action ? (
+                          <span className="px-1.5 py-0.5 rounded bg-indigo-50 border border-indigo-100 text-indigo-700 text-[10px] uppercase truncate inline-block max-w-full align-middle">
+                            {entry.action}
+                          </span>
+                        ) : (
+                          <span className="text-slate-400">—</span>
+                        )}
+                      </td>
+
+                      {/* Сущность (entity_type) */}
+                      <td className={cn(TABLE_ROW_DENSE.cell, "align-middle truncate text-xs text-slate-600")}>
+                        {entry.entity_type ? (
+                          <span title={entityLabel(entry.entity_type, entry.entity_id)}>
+                            {entityLabel(entry.entity_type, entry.entity_id)}
+                          </span>
+                        ) : (
+                          <span className="text-slate-400">—</span>
+                        )}
+                      </td>
+
+                      {/* Описание / действия */}
+                      <td className={cn(TABLE_ROW_DENSE.cell, "align-middle relative")}>
+                        <div className="flex items-center justify-between gap-2">
+                          <span className="text-slate-500 text-xs truncate" title={`${entry.title}: ${entry.message}`}>
+                            {entry.title}: {entry.message}
+                          </span>
+                          <Button
+                            type="button"
+                            variant="ghost"
+                            size="sm"
+                            className={cn(TABLE_ROW_DENSE.actionButton, "shrink-0")}
+                            onClick={(e) => {
+                              e.stopPropagation();
+                              toggleRow(entry.id);
+                            }}
+                          >
+                            {isExpanded ? "Скрыть" : "Подробнее"}
+                          </Button>
+                        </div>
+                      </td>
+                      <TableCornerResetCell />
+                    </tr>
+
+                    {/* Детали раскрытой строки: высота по содержимому, а основная
+                        строка при этом остаётся 32px. */}
+                    {isExpanded && (
+                      <tr data-testid={`audit-detail-row-${entry.id}`} className="bg-muted/30">
+                        <td colSpan={columnCount} className="border-b border-slate-200 p-4">
+                          <div className="space-y-3 text-xs text-slate-700">
+                            <div className="flex items-center justify-between border-b border-slate-100 pb-2 mb-1">
+                              <span className="text-sm text-slate-800">Детали события: {entry.title}</span>
+                              <span className="text-slate-400 font-mono text-[10px]">ID: {entry.id}</span>
                             </div>
-                          ) : (
-                            <span className="text-slate-400">—</span>
-                          )}
-                        </td>
-
-                        {/* SKU */}
-                        <td className="p-3 align-middle font-mono text-xs font-semibold text-slate-600 truncate">
-                          {entry.product_sku || <span className="text-slate-400">—</span>}
-                        </td>
-
-                        {/* Действие (action) */}
-                        <td className="p-3 align-middle text-xs truncate">
-                          {entry.action ? (
-                            <span className="px-2 py-0.5 font-bold rounded bg-indigo-50 border border-indigo-100 text-indigo-700 text-[10px] uppercase">
-                              {entry.action}
-                            </span>
-                          ) : (
-                            <span className="text-slate-400">—</span>
-                          )}
-                        </td>
-
-                        {/* Сущность (entity_type) */}
-                        <td className="p-3 align-middle text-xs truncate text-slate-600">
-                          {entry.entity_type ? (
-                            <span className="font-semibold" title={entityLabel(entry.entity_type, entry.entity_id)}>
-                              {entityLabel(entry.entity_type, entry.entity_id)}
-                            </span>
-                          ) : (
-                            <span className="text-slate-400">—</span>
-                          )}
-                        </td>
-
-                        {/* Описание / действия */}
-                        <td className="p-3 align-middle relative pr-4">
-                          <div className="flex items-center justify-between gap-2">
-                            <span className="text-slate-500 text-xs truncate max-w-[200px]" title={entry.message}>
-                              {entry.title}: {entry.message}
-                            </span>
-                            <button
-                              type="button"
-                              className="px-2 py-1 text-xs text-indigo-600 font-bold hover:bg-slate-100 rounded transition-colors shrink-0"
-                              onClick={(e) => {
-                                e.stopPropagation();
-                                toggleRow(entry.id);
-                              }}
-                            >
-                              {isExpanded ? "Скрыть" : "Подробнее"}
-                            </button>
+                            <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+                              <div className="space-y-3">
+                                <div>
+                                  <p className="text-slate-400 uppercase font-bold text-[9px] tracking-wider">Полное сообщение</p>
+                                  <p className="whitespace-pre-wrap leading-relaxed text-slate-700 bg-muted/30 p-2.5 rounded border border-slate-100">{entry.message}</p>
+                                </div>
+                                {entry.changes && (
+                                  <div>
+                                    <p className="text-slate-400 uppercase font-bold text-[9px] tracking-wider mb-1">Изменения полей (дифф)</p>
+                                    <div className="bg-muted/30 border border-slate-100 rounded p-2.5 space-y-1.5 font-mono text-[11px] text-slate-700">
+                                      <div className="grid grid-cols-3 font-bold border-b border-slate-200/60 pb-1 text-[9px] uppercase tracking-wider text-slate-400">
+                                        <span>Поле</span>
+                                        <span>Было</span>
+                                        <span>Стало</span>
+                                      </div>
+                                      {Object.keys({ ...(entry.changes.before || {}), ...(entry.changes.after || {}) }).map((key) => {
+                                        const valBefore = entry.changes?.before?.[key] !== undefined ? String(entry.changes.before[key]) : "—";
+                                        const valAfter = entry.changes?.after?.[key] !== undefined ? String(entry.changes.after[key]) : "—";
+                                        return (
+                                          <div key={key} className="grid grid-cols-3 py-0.5 border-b border-slate-100/60 last:border-0 items-center">
+                                            <span className="text-slate-600 truncate pr-1" title={key}>{key}</span>
+                                            <span className="text-red-650 bg-red-50 px-1 rounded truncate mr-1" title={valBefore}>{valBefore}</span>
+                                            <span className="text-emerald-700 bg-emerald-50 px-1 rounded truncate" title={valAfter}>{valAfter}</span>
+                                          </div>
+                                        );
+                                      })}
+                                    </div>
+                                  </div>
+                                )}
+                              </div>
+                              <div className="space-y-3 md:border-l md:border-slate-100 md:pl-4">
+                                <div className="grid grid-cols-2 gap-2">
+                                  <div>
+                                    <p className="text-slate-400 uppercase font-bold text-[9px] tracking-wider">Сущность</p>
+                                    <p className="text-slate-700 bg-muted/30 p-2 rounded border border-slate-100 mt-1">
+                                      {entityLabel(entry.entity_type, entry.entity_id)}
+                                    </p>
+                                  </div>
+                                  <div>
+                                    <p className="text-slate-400 uppercase font-bold text-[9px] tracking-wider">Действие</p>
+                                    <p className="text-slate-700 bg-muted/30 p-2 rounded border border-slate-100 mt-1">
+                                      {entry.action || "—"}
+                                    </p>
+                                  </div>
+                                </div>
+                                <div>
+                                  <p className="text-slate-400 uppercase font-bold text-[9px] tracking-wider">Пользователь</p>
+                                  <p className="text-slate-700 bg-muted/30 p-2 rounded border border-slate-100 mt-1">👤 {entry.user_name || "—"}</p>
+                                </div>
+                                {entry.comment && (
+                                  <div>
+                                    <p className="text-slate-400 uppercase font-bold text-[9px] tracking-wider">Комментарий исполнителя</p>
+                                    <p className="text-slate-700 italic bg-muted/30 p-2.5 rounded border border-slate-100 mt-1">💬 {entry.comment}</p>
+                                  </div>
+                                )}
+                                {entry.error_details && (
+                                  <div>
+                                    <p className="text-slate-400 uppercase font-bold text-[9px] tracking-wider">Сведения об ошибке</p>
+                                    <p className="text-red-600 bg-red-50/40 p-2.5 rounded border border-red-100 mt-1">⚠️ {entry.error_details}</p>
+                                  </div>
+                                )}
+                              </div>
+                            </div>
                           </div>
                         </td>
-                        <TableCornerResetCell />
                       </tr>
-
-                      {/* Детали раскрытой строки */}
-                      {isExpanded && (
-                        <tr className="bg-slate-50/50">
-                          <td colSpan={9} className="p-4 border-b border-slate-200">
-                            <div className="bg-white rounded-lg border border-slate-200 p-4 shadow-sm space-y-3 text-xs text-slate-700">
-                              <div className="flex items-center justify-between border-b border-slate-100 pb-2 mb-1">
-                                <span className="font-bold text-slate-800 text-sm">Детали события: {entry.title}</span>
-                                <span className="text-slate-400 font-mono text-[10px]">ID: {entry.id}</span>
-                              </div>
-                              <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-                                <div className="space-y-3">
-                                  <div>
-                                    <p className="text-slate-400 uppercase font-bold text-[9px] tracking-wider">Полное сообщение</p>
-                                    <p className="whitespace-pre-wrap leading-relaxed text-slate-700 font-medium bg-slate-5/50 bg-slate-50/50 p-2.5 rounded border border-slate-100">{entry.message}</p>
-                                  </div>
-                                  {entry.changes && (
-                                    <div>
-                                      <p className="text-slate-400 uppercase font-bold text-[9px] tracking-wider mb-1">Изменения полей (дифф)</p>
-                                      <div className="bg-slate-50 border border-slate-100 rounded p-2.5 space-y-1.5 font-mono text-[11px] text-slate-700">
-                                        <div className="grid grid-cols-3 font-bold border-b border-slate-200/60 pb-1 text-[9px] uppercase tracking-wider text-slate-400">
-                                          <span>Поле</span>
-                                          <span>Было</span>
-                                          <span>Стало</span>
-                                        </div>
-                                        {Object.keys({ ...(entry.changes.before || {}), ...(entry.changes.after || {}) }).map((key) => {
-                                          const valBefore = entry.changes?.before?.[key] !== undefined ? String(entry.changes.before[key]) : "—";
-                                          const valAfter = entry.changes?.after?.[key] !== undefined ? String(entry.changes.after[key]) : "—";
-                                          return (
-                                            <div key={key} className="grid grid-cols-3 py-0.5 border-b border-slate-100/60 last:border-0 items-center">
-                                              <span className="font-semibold text-slate-650 text-slate-600 truncate pr-1" title={key}>{key}</span>
-                                              <span className="text-red-650 bg-red-50 px-1 rounded truncate mr-1" title={valBefore}>{valBefore}</span>
-                                              <span className="text-emerald-700 bg-emerald-50 px-1 rounded truncate" title={valAfter}>{valAfter}</span>
-                                            </div>
-                                          );
-                                        })}
-                                      </div>
-                                    </div>
-                                  )}
-                                </div>
-                                <div className="space-y-3 md:border-l md:border-slate-100 md:pl-4">
-                                  <div className="grid grid-cols-2 gap-2">
-                                    <div>
-                                      <p className="text-slate-400 uppercase font-bold text-[9px] tracking-wider">Сущность</p>
-                                      <p className="text-slate-700 font-semibold bg-slate-50 p-2 rounded border border-slate-100 mt-1">
-                                        {entityLabel(entry.entity_type, entry.entity_id)}
-                                      </p>
-                                    </div>
-                                    <div>
-                                      <p className="text-slate-400 uppercase font-bold text-[9px] tracking-wider">Действие</p>
-                                      <p className="text-slate-700 font-semibold bg-slate-50 p-2 rounded border border-slate-100 mt-1">
-                                        {entry.action || "—"}
-                                      </p>
-                                    </div>
-                                  </div>
-                                  <div>
-                                    <p className="text-slate-400 uppercase font-bold text-[9px] tracking-wider">Пользователь</p>
-                                    <p className="text-slate-700 font-semibold bg-slate-50 p-2 rounded border border-slate-100 mt-1">👤 {entry.user_name || "—"}</p>
-                                  </div>
-                                  {entry.comment && (
-                                    <div>
-                                      <p className="text-slate-400 uppercase font-bold text-[9px] tracking-wider">Комментарий исполнителя</p>
-                                      <p className="text-slate-700 font-semibold italic bg-slate-50 p-2.5 rounded border border-slate-100 mt-1">💬 {entry.comment}</p>
-                                    </div>
-                                  )}
-                                  {entry.error_details && (
-                                    <div>
-                                      <p className="text-slate-400 uppercase font-bold text-[9px] tracking-wider">Сведения об ошибке</p>
-                                      <p className="text-red-600 font-semibold bg-red-50/40 p-2.5 rounded border border-red-100 mt-1">⚠️ {entry.error_details}</p>
-                                    </div>
-                                  )}
-                                </div>
-                              </div>
-                            </div>
-                          </td>
-                        </tr>
-                      )}
-                    </Fragment>
-                  );
-                })}
-              </tbody>
-            </table>
-          )}
-        </div>
-
-        <TablePaginationFooter
-          page={page}
-          totalPages={totalPages}
-          total={total}
-          shownCount={parsedLogs.length}
-          limit={limit}
-          limitOptions={[...limitOptions]}
-          onPageChange={setPage}
-          onLimitChange={setLimit}
-          rangeLabel={getRangeLabel(parsedLogs.length, total)}
-        />
+                    )}
+                  </Fragment>
+                );
+              })
+            )}
+          </tbody>
+        </table>
       </div>
+
+      <TablePaginationFooter
+        page={page}
+        totalPages={totalPages}
+        total={total}
+        shownCount={parsedLogs.length}
+        limit={limit}
+        limitOptions={[...limitOptions]}
+        onPageChange={setPage}
+        onLimitChange={setLimit}
+        rangeLabel={getRangeLabel(parsedLogs.length, total)}
+      />
     </div>
   );
 }
