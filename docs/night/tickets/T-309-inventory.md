@@ -289,3 +289,72 @@ ESLint в репозитории не настроен (`frontend` без `eslin
 `<Select data-testid="filter-type" …>` (образец — `TransfersPage.tsx:1323`,
 `SectionTasksBoard.tsx:1233`). Так контракт селекторов сохраняется без единой
 правки чужого файла.
+
+---
+
+## 10. Правка страницы после мержа среза A (коммит be7bd67)
+
+`git merge main` прошёл чисто (`fb37ece`), принёс `922b52c` — вкладки журнала и
+починку `run-lock.mjs`.
+
+### `ActionsJournalPage.tsx` (290 строк изменено)
+
+| Было | Стало |
+|------|-------|
+| `overflow-hidden rounded-xl border border-slate-200 bg-white shadow-sm` | `DATA_TABLE_STYLES.container` + `bg-white` |
+| `bg-slate-50 text-left text-xs uppercase tracking-wide text-slate-500` | `cn(DATA_TABLE_STYLES.headerRow, DATA_TABLE_STYLES.headerCell, TABLE_ROW_DENSE.headerCell)` |
+| семь `<th>px-3 py-2` руками | `actionColumns.map` → `DataTableColumnHeader` |
+| — | `TableCornerResetHeader` / `TableCornerResetCell` |
+| `<td className="px-3 py-2">` × 7 | `TABLE_ROW_DENSE.cell` |
+| высота строки не задана | `style={{ height: TABLE_ROW_DENSE.rowHeightPx }}` (32 px) |
+| своих высот и цветов строк нет | `rowToneFill(getActionTone(status))` + `ROW_TONE_TEXT`, полоса `ROW_TONE_STRIPE` на первой ячейке |
+| `STATUS_BADGE` и `statusBadge()` в странице | уехали в `lib/actionColumns.ts` |
+| `actionJournalLabels[...] ?? …` в ячейке | `actionTypeLabel(...)` |
+| два `<Select>` в `<div className="flex flex-wrap items-center gap-3">` | `FiltersPanel` с двумя `kind: "custom"`-полями |
+| `useState` × 2 + ручная сборка `params` | `useFilterableTable<ActionFilterField>` + `buildColumnApiParams` |
+| `resetPageDeps: [typeFilter, statusFilter]` | `resetPageDeps: [debouncedColumnSearchQueries]` |
+
+Шапку из среза A (`page-header`, `BackButton`, `JournalTabs`) не тронула.
+
+Панель фильтров и счётчик: `FiltersPanel` получает `onReset={resetAll}`,
+`hasActiveFilters` и `activeSummary` из `buildActiveFilterSummary`. Оба селекта
+пишут в то же состояние колонок, что и попаперы в шапке, поэтому панель,
+попапер и угол сброса не могут разойтись. Поиска нет — `GET /api/actions` его
+не принимает.
+
+### Проверка поведения панели
+
+Отдельным прогоном подтверждено: `kind: "custom"` рендерится в общем ряду
+панели и сохраняет `data-testid`; выбор статуса уезжает как `status`,
+выбор типа — как `action_type`; без выбора сервер получает `null` в обоих
+(а не «all»); счётчик показывает «Активных фильтров: 1» **один раз** на выбор
+из панели; сброс гасит и счётчик, и параметры. Четыре из этих проверок вошли
+в постоянный `ActionsJournalPageFilters.test.tsx`, временный файл удалён.
+
+Кнопок сброса на экране две — в панели и угол таблицы; обе ведут в `resetAll`,
+это не расхождение, а тест взял первую.
+
+### Контрактные селекторы
+
+Ни один не «разводился» правкой страницы; тест человека не редактировался.
+Проверено и в тестах, и в дампе реальной разметки: `action-row-{id}`,
+`filter-type`, `filter-status`, `reverse-button-{id}`, `amend-button-{id}`,
+`tree-button-{id}`, `actions-journal-page`, тексты «Активно / Отменено /
+Изменено / Очищено», «Действия не найдены», «Загрузка…», `role="option"` в
+попаперах Radix (8 тестов `ActionsJournalPage.test.tsx`, зелёные без правок).
+
+### Приёмка
+
+| Прогон | Результат |
+|--------|-----------|
+| `npx tsc -p tsconfig.json --noEmit` | **0 ошибок**, exit 0; 23.10 s |
+| `npm --prefix frontend run test` | Test Files **158 passed \| 1 skipped** (159); Tests **1300 passed \| 1 skipped** (1301); **0 failed**; 60.50 s |
+| `npx vitest run src/features/reversal` | **7 files / 37 tests passed**; 11.44 s |
+| `cd backend && ruff check .` | **All checks passed!** (регресс-контроль, Python не трогал) |
+| e2e `reversal-journal.spec.ts` | **1 passed (35.5 s)**, ярус smoke, код 0; SHA `fb37ece`; `CI=` пустым, `E2E_MAX_PARALLEL_RUNS=3`, `--retries=0`, `--workers=1` |
+
+Числа выросли именно на новые спеки: 1291 → 1300 (`actionColumns` +5,
+панель фильтров +4). Ни один тест не удалён и не ослаблен.
+
+Живой запрос в e2e-логе: `GET /api/actions?page=1&page_size=50` — при пустых
+фильтрах лишних параметров в URL нет.
