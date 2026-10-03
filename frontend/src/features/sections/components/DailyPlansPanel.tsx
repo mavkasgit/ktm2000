@@ -5,11 +5,16 @@ import { Button, DatePicker, Input, formatDateRu } from "@/shared/ui";
 import { cn } from "@/shared/utils/cn";
 
 import type { DailyPlanListEntry } from "../lib/dailyPlanList";
-import { PLAN_SHOW_MORE_STEP, buildPlanEntries, buildPlanListBlocks } from "../lib/dailyPlanList";
+import { PLAN_SHOW_MORE_STEP, buildPlanEntries, buildPlanList } from "../lib/dailyPlanList";
 
 /**
  * Панель дневных планов: заголовок с переходом на «Задания», форма создания,
  * поиск и потолок видимых карточек.
+ *
+ * Выбор план не переставляет: список всегда идёт по дате, выбранная карточка
+ * помечается на месте, а ярлыки выбранных собираются в полосу «Выбрано» над
+ * списком (там же снимаются). Раньше выбранное всплывало отдельным блоком
+ * наверх, и карточка перескакивала через пол-панели на каждый клик.
  *
  * Высота — от экрана (`lg:h-[calc(100vh-2rem)]`), а не от колонки грида: раньше
  * список обрывался на `max-h-96` (384 px), а когда панель растянули до колонки,
@@ -75,6 +80,10 @@ export function DailyPlansPanel({
 
   const startCreating = () => {
     if (!onCreatePlan) return;
+    // Создание идёт по заданиям участка, а не по составу выбранного плана:
+    // с оставленным фильтром доска показывала бы состав прежнего плана,
+    // а кандидатов нового — нет.
+    onClearPlans();
     setPlanDate(localToday());
     setCreating(true);
   };
@@ -92,21 +101,16 @@ export function DailyPlansPanel({
   const hasSelectedTasks = selectedTaskCount > 0;
   const hasActivePlans = selectedPlanIds.size > 0;
 
-  // Список планов: выбранные всплывают наверх, остальные по дате,
-  // выбранные вне поисковой строки — в хвосте, чтобы доска не
-  // показывала задания плана, которого в панели не видно.
-  const { selectedEntries, otherEntries, outOfSearchEntries, hiddenCount } = useMemo(() => {
-    const blocks = buildPlanListBlocks(
-      buildPlanEntries(plans),
-      selectedPlanIds,
-      search,
-      extraVisible,
-    );
+  // Список планов — всегда по дате: выбор его не переставляет. Выбранные
+  // планы живут ярлыками в полосе «Выбрано» над списком, поэтому выбранный
+  // план виден и когда его отсеял поиск, и когда он за потолком карточек.
+  const { visibleEntries, selectedEntries, hiddenCount } = useMemo(() => {
+    const entries = buildPlanEntries(plans);
+    const list = buildPlanList(entries, search, extraVisible);
     return {
-      selectedEntries: blocks.selected,
-      otherEntries: blocks.others,
-      outOfSearchEntries: blocks.selectedOutOfSearch,
-      hiddenCount: blocks.hiddenCount,
+      visibleEntries: list.visible,
+      selectedEntries: entries.filter((entry) => selectedPlanIds.has(entry.plan.id)),
+      hiddenCount: list.hiddenCount,
     };
   }, [extraVisible, plans, search, selectedPlanIds]);
 
@@ -202,6 +206,54 @@ export function DailyPlansPanel({
         </Button>
       </div>
 
+      {/* Полоса выбранных: ярлык на каждый выбранный план. Список ниже порядок
+          не меняет — выбранная карточка помечается на месте, а её ярлык живёт
+          здесь. Поэтому выбранный план виден и когда его отсеял поиск, и когда
+          он за потолком карточек. Высота полосы анимируется, чтобы список под
+          ней сдвигался плавно. */}
+      <div
+        className={cn(
+          "grid transition-[grid-template-rows,opacity] duration-300 ease-out",
+          hasActivePlans ? "grid-rows-[1fr] opacity-100" : "grid-rows-[0fr] opacity-0",
+        )}
+      >
+        <div className="overflow-hidden">
+          {hasActivePlans && (
+            <div className="space-y-1 rounded-md border border-blue-200 bg-blue-50/60 p-2">
+              <div className="text-[11px] font-semibold uppercase tracking-wide text-slate-500">
+                Выбрано ({selectedEntries.length})
+              </div>
+              <div className="flex flex-wrap gap-1">
+                {selectedEntries.map((entry) => (
+                  <span
+                    key={entry.plan.id}
+                    className="inline-flex items-center gap-1 rounded-full border border-blue-300 bg-white px-2 py-0.5 text-[11px] text-blue-900"
+                  >
+                    <button
+                      type="button"
+                      onClick={() => onSelectPlan(entry.plan.id)}
+                      title="Показать только этот план"
+                      className="max-w-[9rem] truncate"
+                    >
+                      План №{entry.number} · {formatDateRu(entry.plan.plan_date)}
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => onTogglePlan(entry.plan.id)}
+                      aria-label="Убрать план из выбранных"
+                      title="Убрать план из выбранных"
+                      className="text-blue-700 hover:text-blue-900"
+                    >
+                      ✕
+                    </button>
+                  </span>
+                ))}
+              </div>
+            </div>
+          )}
+        </div>
+      </div>
+
       <div className="flex min-h-0 flex-1 flex-col space-y-1.5">
         <div className="px-1 text-[11px] font-semibold uppercase tracking-wide text-slate-500">
           Недавние планы
@@ -228,50 +280,21 @@ export function DailyPlansPanel({
                 `min-h-0` обязателен, иначе flex-ребёнок не даёт прокрутке ужать
                 список. */}
             <div className="min-h-0 flex-1 space-y-1.5 overflow-y-auto pr-0.5">
-              {selectedEntries.length > 0 && (
-                <>
-                  <PlanGroupTitle>Выбрано ({selectedEntries.length})</PlanGroupTitle>
-                  {selectedEntries.map((entry) => (
-                    <PlanCard
-                      key={entry.plan.id}
-                      entry={entry}
-                      selected={true}
-                      onlySelected={selectedPlanIds.size === 1}
-                      onSelectPlan={onSelectPlan}
-                      onTogglePlan={onTogglePlan}
-                    />
-                  ))}
-                </>
-              )}
-              {otherEntries.map((entry) => (
-                <PlanCard
-                  key={entry.plan.id}
-                  entry={entry}
-                  selected={false}
-                  onlySelected={false}
-                  onSelectPlan={onSelectPlan}
-                  onTogglePlan={onTogglePlan}
-                />
-              ))}
-              {otherEntries.length === 0 && selectedEntries.length === 0 && (
+              {visibleEntries.map((entry) => {
+                const selected = selectedPlanIds.has(entry.plan.id);
+                return (
+                  <PlanCard
+                    key={entry.plan.id}
+                    entry={entry}
+                    selected={selected}
+                    onlySelected={selected && selectedPlanIds.size === 1}
+                    onSelectPlan={onSelectPlan}
+                    onTogglePlan={onTogglePlan}
+                  />
+                );
+              })}
+              {visibleEntries.length === 0 && (
                 <p className="px-1 py-2 text-xs text-slate-500">Ничего не найдено</p>
-              )}
-              {outOfSearchEntries.length > 0 && (
-                <>
-                  <PlanGroupTitle>
-                    Не найдено среди выбранных ({outOfSearchEntries.length})
-                  </PlanGroupTitle>
-                  {outOfSearchEntries.map((entry) => (
-                    <PlanCard
-                      key={entry.plan.id}
-                      entry={entry}
-                      selected={true}
-                      onlySelected={selectedPlanIds.size === 1}
-                      onSelectPlan={onSelectPlan}
-                      onTogglePlan={onTogglePlan}
-                    />
-                  ))}
-                </>
               )}
             </div>
             {hiddenCount > 0 && (
@@ -340,16 +363,11 @@ function PlanCard({ entry, selected, onlySelected, onSelectPlan, onTogglePlan }:
           </span>
           <span className="shrink-0 text-xs font-semibold tabular-nums">{plan.progress_percent}%</span>
         </div>
-        <div className="mt-1 text-xs text-slate-500">{plan.item_count} заданий</div>
+        <div className="mt-1 flex items-center gap-1.5 text-xs text-slate-500">
+          <span>{plan.item_count} заданий</span>
+          {selected && <span className="font-semibold text-blue-700">· выбрано</span>}
+        </div>
       </button>
-    </div>
-  );
-}
-
-function PlanGroupTitle({ children }: { children: React.ReactNode }) {
-  return (
-    <div className="px-1 pt-1.5 text-[11px] font-semibold uppercase tracking-wide text-slate-500">
-      {children}
     </div>
   );
 }

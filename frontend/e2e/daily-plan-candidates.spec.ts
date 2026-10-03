@@ -221,7 +221,9 @@ test.describe("@ui Дневной план: занятое задание не �
       { timeout: 5_000 },
     );
     await page.getByRole("button", { name: "Подтвердить", exact: true }).click();
-    await expect(page.getByText("План №1", { exact: false })).toBeVisible({
+    // Созданный план виден и карточкой в списке, и ярлыком в полосе «Выбрано» —
+    // берём первый: проверка о факте появления плана, а не о числе совпадений.
+    await expect(page.getByText("План №1", { exact: false }).first()).toBeVisible({
       timeout: 15_000,
     });
 
@@ -246,13 +248,11 @@ test.describe("@ui Дневной план: занятое задание не �
 
     // ── Шаг 2: режим создания плана — занятое задание не кандидат ────────
     //
-    // Сначала снимаем выбор плана кнопкой «Все задания участка»: после
-    // создания плана приложение выбирает его, и тогда вкладка «План» показывает
-    // состав ЭТОГО плана, а не кандидатов (`planBoardTasks` в
-    // `SectionsTasksPage`: кандидаты — только когда ни один план не выбран).
-    // Это и есть путь мастера: чтобы завести второй план, он сперва вернулся
-    // к списку заданий участка.
-    await page.getByRole("button", { name: "Все задания участка", exact: true }).click();
+    // «Создать план» сам снимает фильтр выбранного плана: после создания
+    // плана приложение выбирает его, и вкладка «План» показывает состав ЭТОГО
+    // плана, а не кандидатов (`planBoardTasks` в `SectionsTasksPage`).
+    // Отдельный клик «Все задания участка» для этого больше не нужен — и без
+    // него режим создания обязан показать кандидатов участка.
     await page.getByRole("button", { name: "Создать план", exact: true }).click();
     await fillPlanDate(page);
     await expandBoardGroupsViaUI(page);
@@ -284,7 +284,7 @@ test.describe("@ui Дневной план: занятое задание не �
       }
     });
     await page.getByRole("button", { name: "Подтвердить", exact: true }).click();
-    await expect(page.getByText("План №2", { exact: false })).toBeVisible({
+    await expect(page.getByText("План №2", { exact: false }).first()).toBeVisible({
       timeout: 15_000,
     });
     expect(conflicts, "подтверждение из показанных строк не должно дать 409").toEqual([]);

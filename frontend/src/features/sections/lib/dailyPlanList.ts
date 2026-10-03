@@ -8,17 +8,13 @@ import type { DailyPlanSummary } from "@/shared/api/shopfloor";
  * created_at DESC`), поэтому ограничение и поиск живут здесь, на
  * клиенте: данные уже загружены, второй запрос ничего бы не купил.
  *
- * Порядок вывода — три блока:
- *   1. «Выбрано (N)» — выбранные планы, подходящие под поиск;
- *   2. обычные совпадения, по дате;
- *   3. «Не найдено среди выбранных (N)» — выбранные, которые поиск
- *      отсеял. Без этого блока выбранный план исчезал бы из панели
- *      при любом запросе, хотя доска продолжала показывать его
- *      задания.
- *
- * Потолок видимых карточек считается по сумме блоков 1 и 2: третий
- * блок показывается целиком, иначе скрытый выбранный план снова
- * стал бы невидимым.
+ * Порядок списка — всегда по дате, **независимо от выбора**: выбранный
+ * план помечается на месте, а его ярлык живёт в полосе «Выбрано» над
+ * списком. Раньше выбранное всплывало в отдельный блок наверху, и
+ * карточка перескакивала через пол-панели на каждый клик — следить за
+ * списком было нельзя. Ярлыки выбранных показываются целиком, поэтому
+ * выбранный план не может пропасть из панели ни из-за поиска, ни из-за
+ * потолка карточек.
  */
 
 /**
@@ -39,11 +35,10 @@ export type DailyPlanListEntry = {
   number: number;
 };
 
-export type DailyPlanListBlocks = {
-  selected: DailyPlanListEntry[];
-  others: DailyPlanListEntry[];
-  selectedOutOfSearch: DailyPlanListEntry[];
-  /** Сколько карточек скрыто под кнопкой «Показать ещё». */
+export type DailyPlanList = {
+  /** Совпадения с поиском в порядке дат, обрезанные потолком. */
+  visible: DailyPlanListEntry[];
+  /** Сколько совпадений скрыто под кнопкой «Показать ещё». */
   hiddenCount: number;
 };
 
@@ -102,40 +97,18 @@ export function planMatchesQuery(entry: DailyPlanListEntry, query: string): bool
 }
 
 /**
- * Раскладывает планы по блокам панели с учётом выбора и потолка
- * видимых карточек.
+ * Совпадения с поиском в порядке дат, обрезанные потолком видимых
+ * карточек. Выбор здесь не участвует: он ничего не переставляет, а
+ * выбранные планы показывает полоса ярлыков.
  */
-export function buildPlanListBlocks(
+export function buildPlanList(
   entries: DailyPlanListEntry[],
-  selectedPlanIds: Set<number>,
   query: string,
   extraVisible: number,
-): DailyPlanListBlocks {
+): DailyPlanList {
   const hasQuery = parseQueryParts(query) !== null;
-  const selected: DailyPlanListEntry[] = [];
-  const others: DailyPlanListEntry[] = [];
-  const selectedOutOfSearch: DailyPlanListEntry[] = [];
-  for (const entry of entries) {
-    const isSelected = selectedPlanIds.has(entry.plan.id);
-    const matches = planMatchesQuery(entry, query);
-    if (isSelected && matches) {
-      selected.push(entry);
-    } else if (!isSelected && matches) {
-      others.push(entry);
-    } else if (isSelected) {
-      selectedOutOfSearch.push(entry);
-    }
-  }
-
+  const matching = entries.filter((entry) => planMatchesQuery(entry, query));
   const limit = (hasQuery ? SEARCH_PLAN_LIMIT : DEFAULT_PLAN_LIMIT) + extraVisible;
-  const visibleSelected = selected.slice(0, limit);
-  const visibleOthers = others.slice(0, Math.max(0, limit - visibleSelected.length));
-  const hiddenCount = selected.length + others.length - visibleSelected.length - visibleOthers.length;
-
-  return {
-    selected: visibleSelected,
-    others: visibleOthers,
-    selectedOutOfSearch,
-    hiddenCount,
-  };
+  const visible = matching.slice(0, limit);
+  return { visible, hiddenCount: matching.length - visible.length };
 }

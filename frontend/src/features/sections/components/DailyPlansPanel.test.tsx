@@ -55,32 +55,95 @@ function search(value: string): void {
   fireEvent.change(screen.getByLabelText("Поиск дневных планов"), { target: { value } });
 }
 
-describe("DailyPlansPanel: порядок блоков", () => {
-  it("ставит «Выбрано» сверху, обычные ниже, «Не найдено среди выбранных» в хвост", () => {
-    // 26.09 выбран и подходит под «26», 26.10 обычный и подходит,
-    // 15.10 выбран, но под «26» не подходит.
+describe("DailyPlansPanel: выбор не переставляет список", () => {
+  it("порядок карточек не меняется, выбранная помечается на месте", () => {
+    const plans = backendOrder(planSeries(3));
+    const { container, rerender } = render(
+      <DailyPlansPanel
+        plans={plans}
+        selectedPlanIds={new Set()}
+        onSelectPlan={vi.fn()}
+        onTogglePlan={vi.fn()}
+        onClearPlans={vi.fn()}
+      />,
+    );
+    const before = visibleTitles(container);
+    expect(before).toEqual([3, 2, 1].map((n) => `План №${n} · 26.09.2026`));
+
+    rerender(
+      <DailyPlansPanel
+        plans={plans}
+        selectedPlanIds={new Set([1])}
+        onSelectPlan={vi.fn()}
+        onTogglePlan={vi.fn()}
+        onClearPlans={vi.fn()}
+      />,
+    );
+
+    expect(visibleTitles(container), "выбор не переставляет карточки").toEqual(before);
+    expect(container.textContent, "выбранная помечена на месте").toContain("· выбрано");
+    expect(container.textContent, "ярлык собран в полосе «Выбрано»").toContain("Выбрано (1)");
+  });
+
+  it("крестик ярлыка снимает выбор именно с этого плана", () => {
+    const onTogglePlan = vi.fn();
+    // Ярлыки идут в порядке дат: id 2, затем id 1.
+    render(
+      <DailyPlansPanel
+        plans={backendOrder(planSeries(3))}
+        selectedPlanIds={new Set([1, 2])}
+        onSelectPlan={vi.fn()}
+        onTogglePlan={onTogglePlan}
+        onClearPlans={vi.fn()}
+      />,
+    );
+
+    expect(screen.getByText("Выбрано (2)")).toBeTruthy();
+    const undoChips = screen.getAllByRole("button", { name: "Убрать план из выбранных" });
+    expect(undoChips).toHaveLength(2);
+
+    fireEvent.click(undoChips[0]);
+
+    expect(onTogglePlan).toHaveBeenCalledTimes(1);
+    expect(onTogglePlan).toHaveBeenCalledWith(2);
+  });
+
+  it("поиск отсеивает карточку выбранного плана, но ярлык остаётся", () => {
+    // Доска показывает задания выбранного плана и при отсеянной поиском
+    // карточке — ярлык в полосе это и обеспечивает.
     const { container } = renderPanel(
       [
-        makePlan({ id: 1, plan_date: "2026-09-26", created_at: "2026-09-26T08:00:00" }),
+        makePlan({ id: 1, plan_date: "2026-10-15", created_at: "2026-10-15T08:00:00" }),
         makePlan({ id: 2, plan_date: "2026-10-26", created_at: "2026-10-26T08:00:00" }),
-        makePlan({ id: 3, plan_date: "2026-10-15", created_at: "2026-10-15T08:00:00" }),
       ],
-      [1, 3],
+      [1],
     );
     search("26");
 
-    const text = container.textContent ?? "";
-    const selectedTitleAt = text.indexOf("Выбрано (1)");
-    const selectedCardAt = text.indexOf("26.09.2026");
-    const otherCardAt = text.indexOf("26.10.2026");
-    const outOfSearchTitleAt = text.indexOf("Не найдено среди выбранных (1)");
-    const outOfSearchCardAt = text.indexOf("15.10.2026");
+    expect(visibleTitles(container)).toEqual(["План №1 · 26.10.2026"]);
+    expect(container.textContent).toContain("Выбрано (1)");
+    expect(container.textContent, "ярлык отсеянного выбранного плана на месте").toContain(
+      "15.10.2026",
+    );
+  });
 
-    expect(selectedTitleAt).toBeGreaterThan(-1);
-    expect(selectedCardAt).toBeGreaterThan(selectedTitleAt);
-    expect(otherCardAt).toBeGreaterThan(selectedCardAt);
-    expect(outOfSearchTitleAt).toBeGreaterThan(otherCardAt);
-    expect(outOfSearchCardAt).toBeGreaterThan(outOfSearchTitleAt);
+  it("«Все задания участка» и ✕ очищают выбор целиком", () => {
+    const onClearPlans = vi.fn();
+    render(
+      <DailyPlansPanel
+        plans={backendOrder(planSeries(3))}
+        selectedPlanIds={new Set([1])}
+        onSelectPlan={vi.fn()}
+        onTogglePlan={vi.fn()}
+        onClearPlans={onClearPlans}
+      />,
+    );
+
+    fireEvent.click(screen.getByRole("button", { name: "Все задания участка" }));
+    expect(onClearPlans).toHaveBeenCalledTimes(1);
+
+    fireEvent.click(screen.getByRole("button", { name: "Выключить все планы" }));
+    expect(onClearPlans).toHaveBeenCalledTimes(2);
   });
 
   it("клик по чекбоксу карточки сообщает id именно этой карточки", () => {
@@ -154,12 +217,38 @@ describe("DailyPlansPanel: потолок и «Показать ещё»", () =>
     expect(visibleTitles(container)).toHaveLength(8);
   });
 
-  it("выбранный план за пределом потолка остаётся на экране", () => {
+  it("выбранный план за потолком виден ярлыком, а не карточкой", () => {
     const { container } = renderPanel(backendOrder(planSeries(25)), [1]);
     const text = container.textContent ?? "";
 
     expect(text).toContain("Выбрано (1)");
+    expect(text, "ярлык выбранного плана на месте").toContain("План №1 · 26.09.2026");
     expect(visibleTitles(container)).toHaveLength(8);
-    expect(visibleTitles(container)).toContain("План №1 · 26.09.2026");
+    expect(visibleTitles(container), "карточка не вытесняет соседей наверх").not.toContain(
+      "План №1 · 26.09.2026",
+    );
+  });
+});
+
+describe("DailyPlansPanel: создание плана", () => {
+  it("«Создать план» снимает фильтр выбранных планов", () => {
+    const onClearPlans = vi.fn();
+    render(
+      <DailyPlansPanel
+        plans={backendOrder(planSeries(3))}
+        selectedPlanIds={new Set([1])}
+        onSelectPlan={vi.fn()}
+        onTogglePlan={vi.fn()}
+        onClearPlans={onClearPlans}
+        onCreatePlan={vi.fn()}
+      />,
+    );
+
+    fireEvent.click(screen.getByRole("button", { name: "Создать план" }));
+
+    // Иначе доска осталась бы на составе прежнего плана, а кандидатов нового
+    // не показала: режим создания выбирает задания участка.
+    expect(onClearPlans).toHaveBeenCalledTimes(1);
+    expect(screen.getByRole("textbox", { name: "Дата плана" })).toBeTruthy();
   });
 });

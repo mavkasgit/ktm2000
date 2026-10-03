@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import type { DailyPlanSummary } from "@/shared/api/shopfloor";
-import { buildPlanEntries, buildPlanListBlocks, planMatchesQuery } from "./dailyPlanList";
+import { buildPlanEntries, buildPlanList, planMatchesQuery } from "./dailyPlanList";
 
 function makePlan(overrides: Partial<DailyPlanSummary> = {}): DailyPlanSummary {
   return {
@@ -92,14 +92,14 @@ describe("buildPlanEntries", () => {
     const entries = buildPlanEntries(plans);
 
     // Без поиска потолок — 8 карточек из 12; номера остаются 12…5.
-    const capped = buildPlanListBlocks(entries, new Set(), "", 0);
-    expect(numbers(capped.others)).toEqual([12, 11, 10, 9, 8, 7, 6, 5]);
+    const capped = buildPlanList(entries, "", 0);
+    expect(numbers(capped.visible)).toEqual([12, 11, 10, 9, 8, 7, 6, 5]);
     expect(capped.hiddenCount).toBe(4);
 
     // Раскрытие показывает добавленные карточки с их настоящими номерами,
     // а не с «№1» и «№2» заново.
-    const expanded = buildPlanListBlocks(entries, new Set(), "", 20);
-    expect(numbers(expanded.others)).toEqual([12, 11, 10, 9, 8, 7, 6, 5, 4, 3, 2, 1]);
+    const expanded = buildPlanList(entries, "", 20);
+    expect(numbers(expanded.visible)).toEqual([12, 11, 10, 9, 8, 7, 6, 5, 4, 3, 2, 1]);
     expect(expanded.hiddenCount).toBe(0);
   });
 
@@ -168,128 +168,80 @@ describe("planMatchesQuery", () => {
 });
 
 // ---------------------------------------------------------------------------
-// buildPlanListBlocks — потолок видимых
+// buildPlanList — потолок видимых
 // ---------------------------------------------------------------------------
 
-describe("buildPlanListBlocks: потолок", () => {
+describe("buildPlanList: потолок", () => {
   it("без поиска показывает 8 карточек, с поиском — 20", () => {
     const entries = buildPlanEntries(backendOrder(planSeries(25)));
 
-    const plain = buildPlanListBlocks(entries, new Set(), "", 0);
-    expect(plain.others).toHaveLength(8);
+    const plain = buildPlanList(entries, "", 0);
+    expect(plain.visible).toHaveLength(8);
     expect(plain.hiddenCount).toBe(17);
 
-    const searched = buildPlanListBlocks(entries, new Set(), "09", 0);
-    expect(searched.others).toHaveLength(20);
+    const searched = buildPlanList(entries, "09", 0);
+    expect(searched.visible).toHaveLength(20);
     expect(searched.hiddenCount).toBe(5);
   });
 
   it("extraVisible доклеивает по шагу 20 и снимает кнопку", () => {
     const entries = buildPlanEntries(backendOrder(planSeries(25)));
 
-    const once = buildPlanListBlocks(entries, new Set(), "09", 20);
-    expect(once.others).toHaveLength(25);
+    const once = buildPlanList(entries, "09", 20);
+    expect(once.visible).toHaveLength(25);
     expect(once.hiddenCount).toBe(0);
   });
 
   it("когда всё помещается, скрытых нет", () => {
     const entries = buildPlanEntries(backendOrder(planSeries(3)));
-    const blocks = buildPlanListBlocks(entries, new Set(), "", 0);
+    const list = buildPlanList(entries, "", 0);
 
-    expect(blocks.others).toHaveLength(3);
-    expect(blocks.hiddenCount).toBe(0);
+    expect(list.visible).toHaveLength(3);
+    expect(list.hiddenCount).toBe(0);
   });
 
   it("строка из одних разделителей — это отсутствие запроса: потолок 8", () => {
     const entries = buildPlanEntries(backendOrder(planSeries(25)));
-    const blocks = buildPlanListBlocks(entries, new Set(), " . / - ", 0);
+    const list = buildPlanList(entries, " . / - ", 0);
 
-    expect(blocks.others).toHaveLength(8);
-    expect(blocks.hiddenCount).toBe(17);
+    expect(list.visible).toHaveLength(8);
+    expect(list.hiddenCount).toBe(17);
   });
 
   it("запрос без чисел даёт пустую выборку, а не полный список", () => {
     const entries = buildPlanEntries(backendOrder(planSeries(25)));
-    const blocks = buildPlanListBlocks(entries, new Set([1]), "абв", 0);
+    const list = buildPlanList(entries, "абв", 0);
 
-    expect(blocks.others).toEqual([]);
-    expect(blocks.hiddenCount).toBe(0);
-    expect(planIds(blocks.selectedOutOfSearch)).toEqual([1]);
+    expect(list.visible).toEqual([]);
+    expect(list.hiddenCount).toBe(0);
   });
 
   it("цифра среди мусора включает потолок 20", () => {
     const entries = buildPlanEntries(backendOrder(planSeries(25)));
-    const blocks = buildPlanListBlocks(entries, new Set(), "09 хвост", 0);
+    const list = buildPlanList(entries, "09 хвост", 0);
 
-    expect(blocks.others).toHaveLength(20);
-    expect(blocks.hiddenCount).toBe(5);
-  });
-});
-
-// ---------------------------------------------------------------------------
-// buildPlanListBlocks — выбранные
-// ---------------------------------------------------------------------------
-
-describe("buildPlanListBlocks: выбранные", () => {
-  it("выбранный план за пределами потолка остаётся видимым, остальные уступают ему место", () => {
-    const plans = backendOrder(planSeries(25));
-    const entries = buildPlanEntries(plans);
-    // №1 — последний в выдаче, за горизонтом из 8 карточек.
-    const lastDisplayed = entries[entries.length - 1];
-    expect(lastDisplayed.number).toBe(1);
-
-    const blocks = buildPlanListBlocks(entries, new Set([lastDisplayed.plan.id]), "", 0);
-
-    expect(planIds(blocks.selected)).toEqual([lastDisplayed.plan.id]);
-    expect(blocks.others).toHaveLength(7);
-    expect(blocks.hiddenCount).toBe(17);
+    expect(list.visible).toHaveLength(20);
+    expect(list.hiddenCount).toBe(5);
   });
 
-  it("выбранные, отсечённые поиском, уходят в отдельный блок и не попадают в обычные", () => {
-    const plans = [
-      ...backendOrder(planSeries(25)),
-      makePlan({ id: 100, plan_date: "2026-10-05", created_at: "2026-10-05T08:00:00" }),
-    ];
-    const blocks = buildPlanListBlocks(buildPlanEntries(plans), new Set([100]), "26", 0);
+  it("выбор порядка не меняет: список — это совпадения по датам", () => {
+    const entries = buildPlanEntries(backendOrder(planSeries(12)));
 
-    expect(blocks.selected).toEqual([]);
-    expect(planIds(blocks.selectedOutOfSearch)).toEqual([100]);
-    expect(blocks.others.map((entry) => entry.plan.id)).not.toContain(100);
+    // Ни выбранного id, ни набора выбранных функция не принимает — выбор
+    // живёт в полосе ярлыков, а не в порядке карточек.
+    expect(planIds(buildPlanList(entries, "", 0).visible)).toEqual([
+      12, 11, 10, 9, 8, 7, 6, 5,
+    ]);
   });
 
-  it("блок «не найдено среди выбранных» не отнимает место у потолка", () => {
-    const plans = [
-      ...backendOrder(planSeries(25)),
-      makePlan({ id: 100, plan_date: "2026-10-05", created_at: "2026-10-05T08:00:00" }),
-    ];
-    const blocks = buildPlanListBlocks(buildPlanEntries(plans), new Set([100]), "26", 0);
+  it("выбранный план за потолком остаётся в списке скрытым, а не поднимается наверх", () => {
+    const entries = buildPlanEntries(backendOrder(planSeries(12)));
+    const oldest = entries[entries.length - 1];
+    expect(oldest.number).toBe(1);
 
-    expect(blocks.others).toHaveLength(20);
-    // 25 совпадений, из них 20 показаны: спрятан только блок 1 и 2-хвост,
-    // отсечённый выбранный в счёт не идёт.
-    expect(blocks.hiddenCount).toBe(5);
-  });
+    const list = buildPlanList(entries, "", 0);
 
-  it("блок обычных не содержит выбранных, а выбранные разведены по двум блокам", () => {
-    const plans = [
-      makePlan({ id: 1, plan_date: "2026-09-26", created_at: "2026-09-26T08:00:00" }),
-      makePlan({ id: 2, plan_date: "2026-09-26", created_at: "2026-09-26T09:00:00" }),
-      makePlan({ id: 3, plan_date: "2026-10-05", created_at: "2026-10-05T08:00:00" }),
-      makePlan({ id: 4, plan_date: "2026-10-15", created_at: "2026-10-15T08:00:00" }),
-    ];
-    const blocks = buildPlanListBlocks(buildPlanEntries(plans), new Set([1, 3]), "26", 0);
-
-    expect(planIds(blocks.selected)).toEqual([1]);
-    expect(planIds(blocks.selectedOutOfSearch)).toEqual([3]);
-    expect(planIds(blocks.others)).toEqual([2]);
-  });
-
-  it("потолок общий для выбранных и обычных, а не на каждый блок свой", () => {
-    const plans = backendOrder(planSeries(15));
-    const blocks = buildPlanListBlocks(buildPlanEntries(plans), new Set([1, 2, 3]), "", 0);
-
-    expect(blocks.selected).toHaveLength(3);
-    expect(blocks.others).toHaveLength(5);
-    expect(blocks.hiddenCount).toBe(7);
+    expect(planIds(list.visible)).not.toContain(oldest.plan.id);
+    expect(list.hiddenCount).toBe(4);
   });
 });
