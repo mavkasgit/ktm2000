@@ -428,7 +428,6 @@ async def pair_length_candidates_bulk(
     }
 
 
-
 async def resolve_pair_n(
     db: AsyncSession,
     resolved: ResolvedPair,
