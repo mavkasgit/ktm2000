@@ -368,3 +368,31 @@ describe("SectionTasksBoard: два режима ввода факта", () => {
     expect(screen.getByTestId("draft").textContent).toBe('{"1":{"good":"+50","defect":""}}');
   });
 });
+
+/**
+ * Отбор строки — не действие над заданием: «ожидает предыдущего участка» —
+ * допустимый кандидат дневного плана (в плане запрещены только терминальные
+ * задания), и шапка группы такие строки выделяла всегда. Клик по одиночной
+ * строке их не выделял — половина кандидатов участка оставалась недоступной.
+ */
+describe("SectionTasksBoard: отбор строки в статусе «ожидает предыдущего участка»", () => {
+  const waitingTask = () =>
+    makeTask({ id: 1, product_sku: "SKU-WAIT", status: "waiting_previous" });
+
+  it("клик по одиночной строке выделяет её", () => {
+    render(<Harness tasks={[waitingTask()]} />);
+    expect(taskRow("SKU-WAIT").getAttribute("aria-selected")).toBe("false");
+
+    fireEvent.click(taskRow("SKU-WAIT"));
+
+    expect(taskRow("SKU-WAIT").getAttribute("aria-selected")).toBe("true");
+  });
+
+  it("клавиатура выделяет такую строку тем же правилом", () => {
+    render(<Harness tasks={[waitingTask()]} />);
+
+    fireEvent.keyDown(taskRow("SKU-WAIT"), { key: "Enter" });
+
+    expect(taskRow("SKU-WAIT").getAttribute("aria-selected")).toBe("true");
+  });
+});

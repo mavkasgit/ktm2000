@@ -328,7 +328,12 @@ function renderTaskRow(
       aria-selected={bulkMode ? Boolean(isSelected) : undefined}
       className={`cursor-pointer transition-colors ${getTaskRowClass(task, !!isSelected, isInGroup)}`}
       onClick={() => {
-        if (bulkMode && bulkSelection && task.status !== "waiting_previous") {
+        // Статус отбор не ограничивает: «ожидает предыдущего участка» —
+        // допустимый кандидат дневного плана (в плане запрещены только
+        // терминальные задания), и шапка группы такие строки уже выделяет.
+        // Незавершаемые строки массовый ввод пропускает сам — их отсеивает
+        // `isTaskCompletable` в черновике.
+        if (bulkMode && bulkSelection) {
           bulkSelection.selectOne(task.id);
         }
       }}
@@ -340,7 +345,7 @@ function renderTaskRow(
         if (event.target !== event.currentTarget) return;
         if (event.key !== "Enter" && event.key !== " ") return;
         event.preventDefault();
-        if (task.status !== "waiting_previous") bulkSelection.selectOne(task.id);
+        bulkSelection.selectOne(task.id);
       }}
     >
       <td className={cn(cellClass, getTaskStripeClass(task), "relative text-center")}>
@@ -438,7 +443,12 @@ function renderMobileCard(
       tabIndex={bulkMode ? 0 : undefined}
       className={`p-4 space-y-3 cursor-pointer transition-colors ${getTaskCardClass(task, !!isSelected)} ${isLastInGroup ? "border-b-2 border-blue-300 mb-3" : "mb-0"}`}
       onClick={() => {
-        if (bulkMode && bulkSelection && task.status !== "waiting_previous") {
+        // Статус отбор не ограничивает: «ожидает предыдущего участка» —
+        // допустимый кандидат дневного плана (в плане запрещены только
+        // терминальные задания), и шапка группы такие строки уже выделяет.
+        // Незавершаемые строки массовый ввод пропускает сам — их отсеивает
+        // `isTaskCompletable` в черновике.
+        if (bulkMode && bulkSelection) {
           bulkSelection.selectOne(task.id);
         }
       }}
@@ -450,7 +460,7 @@ function renderMobileCard(
         if (event.target !== event.currentTarget) return;
         if (event.key !== "Enter" && event.key !== " ") return;
         event.preventDefault();
-        if (task.status !== "waiting_previous") bulkSelection.selectOne(task.id);
+        bulkSelection.selectOne(task.id);
       }}
     >
       <div className="flex items-center justify-between gap-2">
