@@ -54,6 +54,7 @@ import {
   EMPTY_DRAFT_QTY,
   groupDraftValue as groupDraftValueOf,
   recordedFact,
+  groupRecordedFact,
   resolveGroupFact,
   draftQtyFor,
   isTransformTask,
@@ -566,8 +567,8 @@ function TableTaskGroupRow({
   const firstTask = group.tasks[0];
   const header = getTaskGroupHeaderState(group, { isCollapsed, isBulkMode, allSelected });
   const groupInput = Boolean(isBulkMode && onGroupQtyChange);
-  const recordedGood = group.tasks.reduce((sum, task) => sum + parseFloat(task.cache.completed_quantity), 0);
-  const recordedDefect = group.tasks.reduce((sum, task) => sum + parseFloat(task.cache.rejected_quantity), 0);
+  const recordedGood = groupRecordedFact(group.tasks, "good");
+  const recordedDefect = groupRecordedFact(group.tasks, "defect");
   const overPlan = groupOverPlan ?? { good: false, defect: false };
   // «Завершить группу» доступна, пока в группе есть хоть одно завершаемое
   // задание: остальные уйдут в пропущенные, и диалог их перечислит.
@@ -1657,10 +1658,7 @@ export function SectionTasksBoard({
                         ["defect", "Брак группы"],
                       ] as const).map(([field, label]) => {
                         const value = groupFieldValue(group.tasks, field, entry.key);
-                        const recorded =
-                          field === "good"
-                            ? group.tasks.reduce((sum, task) => sum + parseFloat(task.cache.completed_quantity), 0)
-                            : group.tasks.reduce((sum, task) => sum + parseFloat(task.cache.rejected_quantity), 0);
+                        const recorded = groupRecordedFact(group.tasks, field);
                         return (
                           <label key={field} className="flex flex-col gap-0.5 text-[11px] text-muted-foreground">
                             {label}
