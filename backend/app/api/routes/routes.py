@@ -21,6 +21,7 @@ from app.services.route_deletion import (
 from app.services.route_identity import find_route_by_name
 from app.services.route_signature import refresh_route_signature
 from app.services.route_transform import resolve_stage_transforms_dimensions
+from app.services.section_ref import SectionRef, load_section_refs
 
 router = APIRouter(prefix="/routes", tags=["routes"])
 
@@ -118,7 +119,7 @@ class ReorderRoutesIn(BaseModel):
     ids: list[int]
 
 
-def _section_step_fields(section: Section | None) -> dict[str, str | None]:
+def _section_step_fields(section: SectionRef | None) -> dict[str, str | None]:
     if section is None:
         return {
             "section_code": None,
@@ -138,8 +139,8 @@ def _section_step_fields(section: Section | None) -> dict[str, str | None]:
 
 def _resolve_section_for_stage(
     stage: RouteStage,
-    sections_cache: dict[int, Section] | None,
-) -> Section | None:
+    sections_cache: dict[int, SectionRef] | None,
+) -> SectionRef | None:
     if stage.stage_kind == "transit":
         section_id = stage.storage_section_id
     else:
@@ -153,7 +154,7 @@ def _resolve_section_for_stage(
 
 def _build_route_steps(
     route: ProductionRoute,
-    sections_cache: dict[int, Section] | None = None,
+    sections_cache: dict[int, SectionRef] | None = None,
 ) -> list[StepOut]:
     steps: list[StepOut] = []
     sorted_stages = sorted(route.stages, key=lambda s: s.sequence)
@@ -205,7 +206,7 @@ async def _load_route_rules(route_id: int, db: AsyncSession) -> list[RuleOut]:
 async def _build_route_detail(
     route: ProductionRoute,
     db: AsyncSession,
-    sections_cache: dict[int, Section] | None = None,
+    sections_cache: dict[int, SectionRef] | None = None,
     rules: list[RuleOut] | None = None,
 ) -> RouteDetailOut:
     steps = _build_route_steps(route, sections_cache)
@@ -224,7 +225,7 @@ async def _build_route_detail(
 async def _load_sections_cache(
     routes: list[ProductionRoute],
     db: AsyncSession,
-) -> dict[int, Section]:
+) -> dict[int, SectionRef]:
     section_ids: set[int] = set()
     for route in routes:
         for stage in route.stages:
@@ -234,8 +235,11 @@ async def _load_sections_cache(
                 section_ids.add(stage.section_id)
     if not section_ids:
         return {}
-    sections_result = await db.execute(select(Section).where(Section.id.in_(section_ids)))
-    return {section.id: section for section in sections_result.scalars().all()}
+    # Участки — колонками через SectionRef (#303). ORM-объект Section тянет
+    # три связи с lazy="selectin" (users, operations, spg_links), то есть
+    # четыре запроса там, где хватает одного. Ответу нужны только code,
+    # name, icon, icon_color и type — см. _section_step_fields.
+    return await load_section_refs(db, ids=section_ids)
 
 
 async def _load_rules_by_route(
