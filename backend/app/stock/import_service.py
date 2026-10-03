@@ -738,6 +738,14 @@ async def resolve_operations_dictionary(db: AsyncSession) -> list[dict]:
     ]
 
 
+# Значения ячейки «Операции», означающие «прошёл маршрут, операций не было»
+# (ADR-0055 п.6): пустая ячейка и прочерк (типографский или дефисный). Всё
+# остальное, что не сматчился со справочником, — не пустой список, а
+# неизвестное состояние: угадывать запрещено (ADR-0021).
+_EMPTY_OPERATIONS_CELLS = ("", "—", "-")
+
+
+
 async def resolve_completed_stages(
     db: AsyncSession,
     raw_ops_str: str | None,
@@ -756,7 +764,7 @@ async def resolve_completed_stages(
     - Operation not found in dictionary → optional warning appended to ``errors``,
       item is **not** invalidated.
     """
-    if not raw_ops_str or raw_ops_str.strip() in ("", "—", "-"):
+    if not raw_ops_str or raw_ops_str.strip() in _EMPTY_OPERATIONS_CELLS:
         return []
 
     parts = [p.strip().lower() for p in re.split(r"[,;|]+", raw_ops_str) if p.strip()]
@@ -840,12 +848,6 @@ def _resolve_item_quality_state(
     return item.quality_state or default_quality_state
 
 
-# Значения ячейки «Операции», означающие «прошёл маршрут, операций не было»
-# (ADR-0055 п.6): пустая ячейка и прочерк (типографский или дефисный). Всё
-# остальное, что не сматчилось со справочником, — не пустой список, а
-# неизвестное состояние: угадывать запрещено (ADR-0021).
-_EMPTY_OPERATIONS_CELLS = ("", "—", "-")
-
 
 def _row_completed_operations(item: RemainderItem) -> list[str] | None:
     """Признак пройденных операций строки импорта (ADR-0055).
@@ -880,6 +882,7 @@ def _row_completed_operations(item: RemainderItem) -> list[str] | None:
     return canonicalize_completed_operations(
         stage["operation_code"] for stage in item.completed_stages
     )
+
 
 async def apply_remainders_import(
     db: AsyncSession,
