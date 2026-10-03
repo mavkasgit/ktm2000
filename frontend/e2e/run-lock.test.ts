@@ -59,6 +59,24 @@ describe("tryAcquireLock / releaseLock", () => {
     expect(tryAcquireLock(file, { tier: "smoke", pid: 2, at: 2, runId: "bbbb2222" })).toBe(true);
   });
 
+  it("releaseLock чужого лока не сносит — лок отобран соседу по возрасту", () => {
+    // Держатель живой, но лок старше staleMs: сосед занял файл, прежний
+    // прогон в свой finally зовёт releaseLock. Соседский лок должен уцелеть.
+    const file = lockFileIn(tempDir());
+    tryAcquireLock(file, { tier: "ui-e2e", pid: 111, at: 1, runId: "aaaa1111" });
+    // Занятый лок второй раз не пишется — подменяем содержимое файла.
+    fs.writeFileSync(file, JSON.stringify({ tier: "smoke", pid: 222, at: 2, runId: "bbbb2222" }));
+    releaseLock(file, "aaaa1111");
+    expect(readLock(file)?.runId).toBe("bbbb2222");
+  });
+
+  it("releaseLock своего лока снимает файл", () => {
+    const file = lockFileIn(tempDir());
+    tryAcquireLock(file, { tier: "smoke", pid: 1, at: 1, runId: "aaaa1111" });
+    releaseLock(file, "aaaa1111");
+    expect(readLock(file)).toBeNull();
+  });
+
   it("битый файл лока считается свободным, а не роняет чтение", () => {
     const file = lockFileIn(tempDir());
     fs.mkdirSync(path.dirname(file), { recursive: true });
