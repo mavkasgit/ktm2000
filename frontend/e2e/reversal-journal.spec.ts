@@ -12,7 +12,7 @@ import {
  * Сетап через API (manual_in-остаток создаёт действие manual_adjustment
  * в журнале /actions), проверки в UI:
  *
- * 1. Пункт навигации «Отмена действий» открывает страницу журнала.
+ * 1. Пункт меню «Журнал» и вкладка «Отмена действий» открывают /reversal (#308).
  * 2. Таблица содержит созданное действие manual_adjustment.
  * 3. Кнопка дерева открывает диалог цепочки с узлом действия.
  * 4. Для manual_adjustment кнопка «Изменить» недоступна (только transfer_send).
@@ -35,20 +35,28 @@ test.describe("@smoke Отмена действий — журнал /reversal (
     const comment = `E2E-REVERSAL-${Date.now()}`;
     await apiAddRemainder(product.id, raw.id, 5, comment);
 
-    // 1. Навигация: клик по пункту меню «Отмена действий».
+    // 1. Навигация: пункт меню «Журнал» → вкладка «Отмена действий».
     await authenticatedPage.goto("/");
-    const navLink = authenticatedPage.getByRole("link", { name: "Отмена действий" });
-    await expect(navLink).toBeVisible({ timeout: 15_000 });
-    await navLink.click();
+    const journalNavLink = authenticatedPage
+      .getByRole("navigation", { name: "Основная навигация" })
+      .getByRole("link", { name: "Журнал" });
+    await expect(journalNavLink).toBeVisible({ timeout: 15_000 });
+    await journalNavLink.click();
+    await expect(authenticatedPage).toHaveURL(/\/audit-logs$/);
+    const reversalTab = authenticatedPage
+      .getByRole("navigation", { name: "Разделы журнала" })
+      .getByRole("link", { name: "Отмена действий" });
+    await reversalTab.click();
     await expect(authenticatedPage).toHaveURL(/\/reversal$/);
     await expect(
       authenticatedPage.getByRole("heading", { name: "Отмена действий" }),
     ).toBeVisible({ timeout: 10_000 });
 
-    // 2. Строка manual_adjustment в журнале.
+    // 2. Строка ручной корректировки: тип в UI показан локализованной
+    // подписью (сырых кодов в интерфейсе больше нет), ищем строку по ней.
     const row = authenticatedPage
       .getByTestId(/action-row-\d+/)
-      .filter({ hasText: "manual_adjustment" })
+      .filter({ hasText: "Ручная корректировка остатка" })
       .first();
     await expect(row).toBeVisible({ timeout: 10_000 });
     await expect(row.getByText("Активно")).toBeVisible();

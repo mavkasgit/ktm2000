@@ -48,6 +48,7 @@ export { PrintButton } from "./PrintButton";
 export type { PrintButtonProps } from "./PrintButton";
 export { PrintStyles, PRINT_SHEET_WIDTH_CLASS } from "./PrintSheet";
 export { BackButton } from "./BackButton";
+export { JournalTabs } from "./JournalTabs";
 export { DATA_TABLE_STYLES, TABLE_ROW_COMPACT, TABLE_ROW_DENSE } from "@/shared/lib/dataTableStyles";
 export type { TableCornerResetHeaderProps } from "./TableCornerResetHeader";
 export { FiltersPanel, type FiltersPanelProps, type FiltersPanelField, type FiltersPanelOption } from "./FiltersPanel";
