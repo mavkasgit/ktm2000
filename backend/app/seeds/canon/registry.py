@@ -109,8 +109,8 @@ def _build_display_canon(
     """Собирает DisplayCanon (лейблы, роли) и проверяет cross-ref правила 2, 3, 6."""
     from app.models.user import UserRole
     from app.seeds.canon.display_data import (
-        ACTION_LABELS,
         ACTION_JOURNAL_LABELS,
+        ACTION_LABELS,
         BACKUP_STAGE_LABELS,
         BACKUP_STORAGE_LABELS,
         BACKUP_TYPE_LABELS,
