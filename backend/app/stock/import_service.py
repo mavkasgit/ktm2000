@@ -162,6 +162,16 @@ _QUALITY_VALUE_MAP: dict[str, QualityState] = {
     "ok": QualityState.GOOD,
 }
 
+# Значения ячейки, означающие «значения нет»: пустая ячейка и прочерк
+# (типографский или дефисный). Правило одно для всех колонок остатка
+# (качество, длина, операции, участок) — иначе правка одной колонки
+# расходится с остальными, а оператор получает «пусто» в одном поле и
+# ошибку в соседнем. ADR-0055 п.9: для операций пустая ячейка значит
+# «без операций» (`[]`), а не «не зафиксировано» (`None`); всё, что не
+# сматчилось со справочником, — неизвестное состояние, угадывать запрещено
+# (ADR-0021).
+_EMPTY_CELL_VALUES = ("", "—", "-")
+
 
 def _norm_hdr(value: str) -> str:
     """Normalise a header string for comparison (lowercase, collapse whitespace)."""
@@ -201,7 +211,7 @@ def parse_quality_state_cell(
 
     Empty cells use ``default``. Unknown values return an error message.
     """
-    if not value or value.strip() in ("", "—", "-"):
+    if not value or value.strip() in _EMPTY_CELL_VALUES:
         return default, None
     norm = _norm_hdr(value)
     if norm in _FINAL_SCRAP_ALIASES:
@@ -391,7 +401,7 @@ def _parse_remainders_grid(
         # Колонка «Длина»: метры («2,7») → мм (2700); пусто/«—» = не указана,
         # мусор — invalid строка (ADR-0003, п. 3).
         row_dimensions: dict | None = None
-        if length_raw is not None and length_raw.strip() not in ("", "—", "-"):
+        if length_raw is not None and length_raw.strip() not in _EMPTY_CELL_VALUES:
             try:
                 row_dimensions = {LENGTH_MM: parse_length_m_to_mm(length_raw)}
             except DimensionsValidationError as exc:
@@ -738,6 +748,14 @@ async def resolve_operations_dictionary(db: AsyncSession) -> list[dict]:
     ]
 
 
+# Значения ячейки «Операции», означающие «прошёл маршрут, операций не было»
+# (ADR-0055 п.6): пустая ячейка и прочерк (типографский или дефисный). Всё
+# остальное, что не сматчился со справочником, — не пустой список, а
+# неизвестное состояние: угадывать запрещено (ADR-0021).
+_EMPTY_OPERATIONS_CELLS = ("", "—", "-")
+
+
+
 async def resolve_completed_stages(
     db: AsyncSession,
     raw_ops_str: str | None,
@@ -756,7 +774,7 @@ async def resolve_completed_stages(
     - Operation not found in dictionary → optional warning appended to ``errors``,
       item is **not** invalidated.
     """
-    if not raw_ops_str or raw_ops_str.strip() in ("", "—", "-"):
+    if not raw_ops_str or raw_ops_str.strip() in _EMPTY_CELL_VALUES:
         return []
 
     parts = [p.strip().lower() for p in re.split(r"[,;|]+", raw_ops_str) if p.strip()]
@@ -795,7 +813,7 @@ async def resolve_target_section(
     Returns ``(None, None)`` if not found or type is ``production``/``terminal``,
     with a warning appended to ``item_errors`` (if provided).
     """
-    if not name or name.strip() in ("", "—", "-"):
+    if not name or name.strip() in _EMPTY_CELL_VALUES:
         return (None, None)
 
     norm_name = name.strip()
@@ -840,12 +858,6 @@ def _resolve_item_quality_state(
     return item.quality_state or default_quality_state
 
 
-# Значения ячейки «Операции», означающие «прошёл маршрут, операций не было»
-# (ADR-0055 п.6): пустая ячейка и прочерк (типографский или дефисный). Всё
-# остальное, что не сматчилось со справочником, — не пустой список, а
-# неизвестное состояние: угадывать запрещено (ADR-0021).
-_EMPTY_OPERATIONS_CELLS = ("", "—", "-")
-
 
 def _row_completed_operations(item: RemainderItem) -> list[str] | None:
     """Признак пройденных операций строки импорта (ADR-0055).
@@ -873,13 +885,14 @@ def _row_completed_operations(item: RemainderItem) -> list[str] | None:
       состояние неизвестно, и подставлять ``[]`` значило бы угадывать.
     """
     raw = item.completed_operations_raw
-    if raw is not None and raw.strip() in _EMPTY_OPERATIONS_CELLS:
+    if raw is not None and raw.strip() in _EMPTY_CELL_VALUES:
         return []
     if not item.completed_stages:
         return None
     return canonicalize_completed_operations(
         stage["operation_code"] for stage in item.completed_stages
     )
+
 
 async def apply_remainders_import(
     db: AsyncSession,

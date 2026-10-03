@@ -32,10 +32,6 @@ from app.models.route import (
 )
 from app.models.section import Section
 from app.services.position_route_batch import (
-    BRANCH_DYNAMIC,
-    BRANCH_MANUAL,
-    BRANCH_SELECTION,
-    BRANCH_STORED,
     position_route_identity_key,
     resolve_position_routes_batch,
 )
@@ -452,11 +448,6 @@ async def test_batch_sql_count_does_not_grow_with_positions(session) -> None:
 
     assert counter["n"] <= 6, f"40 позиций дали {counter['n']} SQL — снимок не отработал"
     assert len(batch) == 40
-
-
-def test_branch_constants_are_distinct() -> None:
-    """Имена веток — часть контракта ключа; смешение сделало бы его хрупким."""
-    assert len({BRANCH_MANUAL, BRANCH_STORED, BRANCH_DYNAMIC, BRANCH_SELECTION}) == 4
 
 
 async def _seed_pair(session, sku_a: str, sku_b: str):

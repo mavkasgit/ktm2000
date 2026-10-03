@@ -21,8 +21,9 @@ vi.mock("@/shared/api/auditLogs", async (importOriginal) => ({
 }));
 
 import { getAuditLogs, type AuditLogEntry, type AuditLogsResponse } from "@/shared/api/auditLogs";
-import { ROW_TONE_WASH } from "@/shared/lib/rowTones";
-import { TABLE_ROW_DENSE } from "@/shared/lib/dataTableStyles";
+import { ROW_TONE_STRIPE, ROW_TONE_WASH } from "@/shared/lib/rowTones";
+import { DATA_TABLE_STYLES, TABLE_ROW_DENSE } from "@/shared/lib/dataTableStyles";
+import { TABLE_CORNER_RESET_TD_CLASS } from "@/shared/ui/TableCornerResetHeader";
 import { AuditLogsPage } from "./AuditLogsPage";
 
 const makeEntry = (overrides: Partial<AuditLogEntry> = {}): AuditLogEntry => ({
@@ -102,6 +103,34 @@ describe("AuditLogsPage", () => {
     expect(within(successRow).getByText("Успешно")).toBeTruthy();
     expect(within(errorRow).getByText("Ошибка")).toBeTruthy();
     expect(within(infoRow).getByText("Информация")).toBeTruthy();
+  });
+
+  it("шапка и ячейки журнала берут размеры из общего словаря, а не свои", async () => {
+    renderPage();
+
+    const row = (await screen.findByTestId("audit-row-1")) as HTMLElement;
+
+    // Шапка: `headerRow` + `headerCell` + плотный `headerCell`. Проверяем по
+    // словарю, а не литералом класса — смена словаря не должна ронять тест,
+    // а вот возврат к своим `bg-slate-100 uppercase p-3` должен.
+    const header = row.closest("table")!.querySelector("thead th") as HTMLElement;
+    expect(header.className).toContain(DATA_TABLE_STYLES.headerRow);
+    expect(header.className).toContain(DATA_TABLE_STYLES.headerCell);
+    expect(header.className).toContain(TABLE_ROW_DENSE.headerCell);
+
+    // Ячейки тела: каждая на `TABLE_ROW_DENSE.cell`, полоса тона — на первой.
+    // Именно эти две проверки роняют страницу, если `p-3` вернётся в разметку
+    // или полоса тона переедет на `<tr>`, где при `border-separate` её не видно.
+    // Угловая ячейка сброса — не содержимое: ширина у неё своя
+    // (`TABLE_CORNER_RESET_TD_CLASS`), и в общий словарь она не входит.
+    const cells = [...row.querySelectorAll("td")].filter(
+      (cell) => !(cell as HTMLElement).className.includes(TABLE_CORNER_RESET_TD_CLASS),
+    ) as HTMLElement[];
+    expect(cells.length).toBeGreaterThan(0);
+    for (const cell of cells) {
+      expect(cell.className).toContain(TABLE_ROW_DENSE.cell);
+    }
+    expect(cells[0]!.className).toContain(ROW_TONE_STRIPE.ok);
   });
 
   it("фильтр статуса уезжает в параметры запроса", async () => {

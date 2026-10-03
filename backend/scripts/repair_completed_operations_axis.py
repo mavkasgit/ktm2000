@@ -283,9 +283,19 @@ async def run_repair(session: AsyncSession, *, execute: bool) -> int:
             continue
         resolved[tx.id] = resolve_plan_driven(tx)
 
+    # Только ИСХОДНЫЕ отправки: компенсация отменённой передачи — тоже
+    # `TRANSFER_SEND` с тем же `transfer_id`, но её `reverses_id` не пуст,
+    # в `resolved` она не попала, и она затирала значение исходной отправки
+    # пустым списком (строки идут по id, компенсация позже). Приём такой
+    # передачи тогда получал пустой признак вместо зеркала отправки —
+    # тихо и неверно (ADR-0021).
     sends_by_transfer: dict[int, list[str]] = {}
     for tx in txs:
-        if tx.reason == Reason.TRANSFER_SEND and tx.transfer_id is not None:
+        if (
+            tx.reason == Reason.TRANSFER_SEND
+            and tx.transfer_id is not None
+            and tx.reverses_id is None
+        ):
             sends_by_transfer[tx.transfer_id] = list(resolved.get(tx.id) or [])
     for tx in receives:
         stored = list(tx.completed_operations or [])

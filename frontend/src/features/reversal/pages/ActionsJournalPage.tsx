@@ -222,7 +222,7 @@ export function ActionsJournalPage() {
         activeSummary={activeSummary}
       />
 
-      <div className={cn(DATA_TABLE_STYLES.container, "bg-white")}>
+      <div className={DATA_TABLE_STYLES.container}>
         <table className="w-full border-separate border-spacing-0 text-sm">
           <thead>
             <tr>
@@ -245,7 +245,7 @@ export function ActionsJournalPage() {
               />
             </tr>
           </thead>
-          <tbody className="divide-y divide-slate-100">
+          <tbody>
             {isLoading && items.length === 0 ? (
               <tr>
                 <td

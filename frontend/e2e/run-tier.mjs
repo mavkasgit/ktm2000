@@ -44,6 +44,14 @@
  * `--headed`, `-g`, путь к спеке. Наш дефолт `--reporter=list` в UI-режиме
  * не добавляется — там репортер задаёт сам Playwright.
  *
+ * `--workers` (короткая форма `-j`) — единственный аргумент, который
+ * разбирает сам этот скрипт: по нему он поднимает столько же клонов БД и
+ * backend'ов. Принимаются `--workers=2`, `--workers 2` и `-j 2`; всё
+ * остальное (`50%`, голый `--workers` без значения, мусор) — ошибка с
+ * текстом, а не один воркер: молчаливый откат дал бы Playwright'у N
+ * воркеров на одном клоне, а это неразделённые данные между ними (#289).
+ * Разбор — `run-workers.mjs`, тесты — `run-workers.test.ts`.
+ *
  * Лок-файл: `node_modules/.e2e-run/current.lock` (в `.gitignore` через
  * node_modules). Прежняя шапка называла `node_modules/.e2e-run.lock` — этого
  * пути в коде нет.
@@ -71,6 +79,7 @@ import {
   releaseLock,
   tryAcquireLock,
 } from "./run-lock.mjs";
+import { parseWorkersArg } from "./run-workers.mjs";
 
 const E2E_DIR = path.dirname(fileURLToPath(import.meta.url));
 const FRONTEND_DIR = path.resolve(E2E_DIR, "..");
@@ -99,13 +108,14 @@ const projectArgs = TIER === "all" ? [] : ["--project", TIER];
 // чтобы пользовательский флаг перебил дефолтный, а не наоборот.
 const extraArgs = process.argv.slice(3);
 
-// Сколько воркеров Playwright в прогоне (#289). `--workers` — единственный
-// способ задать их: он уходит и в `playwright test`, и в `e2e:prep`, потому
-// что клонов БД должно быть столько же, сколько воркеров. Проценты (`50%`)
-// Playwright считает сам, но клонов под процент не выдать: такой прогон
-// оставляем на одном клоне — как при `workers: 1`.
-const workersArg = extraArgs.find((arg) => arg.startsWith("--workers="))?.slice("--workers=".length);
-const WORKERS = /^\d+$/.test(workersArg ?? "") ? Math.max(1, Number(workersArg)) : 1;
+// Сколько воркеров Playwright в прогоне (#289). `--workers` (или его короткая
+// форма `-j`) — единственный способ задать их: значение уходит и в
+// `playwright test`, и в `e2e:prep`, потому что клонов БД должно быть
+// столько же, сколько воркеров. Разбор — в `run-workers.mjs`, и форма,
+// из которой нельзя получить точный счёт, там падает, а не тихо даёт 1:
+// один клон на N воркеров — это неразделённые данные между ними, то есть
+// тот же `TRUNCATE … CASCADE`, который #289 убирает.
+const WORKERS = parseWorkersArg(extraArgs);
 if (WORKERS > 1) {
   console.log(`[e2e:run] воркеров в прогоне: ${WORKERS} — столько же клонов БД и backend'ов`);
 }
@@ -147,6 +157,9 @@ async function acquire() {
       // Клон сносим только у мёртвого держателя: живой долгий прогон потеряет
       // лок, но свои данные не отдаст.
       if (reason.dead) abandonedRunId = holder?.runId ?? null;
+      // Лок снимаем принудительно: он отобран по `reason`, и сверять
+      // принадлежность нельзя — следующая итерация цикла всё равно займёт
+      // файл заново.
       releaseLock(LOCK_FILE);
       continue;
     }
@@ -169,7 +182,9 @@ async function acquire() {
 }
 
 function release() {
-  releaseLock(LOCK_FILE);
+  // С `runId`: лок, отобранный соседу по возрасту, нам не принадлежит —
+  // сносить его нельзя (`run-lock.mjs`, `releaseLock`).
+  releaseLock(LOCK_FILE, runId);
 }
 
 // Прогон: id клона БД, его env-файл и занятый слот семафора. Уборка в

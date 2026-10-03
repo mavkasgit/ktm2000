@@ -470,7 +470,6 @@ async def get_production_planning_overview(
     # «позиция без задач стоит в очереди». Обе выборки по колонкам, поэтому
     # selectin не срабатывает нигде.
     section_ids: set[int] = set()
-    section_ids_by_route: dict[int, list[int]] = {}
     stages_by_route: dict[int, list[tuple[int, int, int]]] = {}
     route_ids = {
         route_id
@@ -510,7 +509,6 @@ async def get_production_planning_overview(
                     (op.operation_name, op.operation_code)
                 )
         for row in stage_rows:
-            section_ids_by_route.setdefault(row.route_id, []).append(row.section_id)
             stages_by_route.setdefault(row.route_id, []).append(
                 (row.id, row.section_id, row.sequence)
             )
