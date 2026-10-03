@@ -77,6 +77,15 @@ describe("reclaimReason", () => {
     expect(reason?.message).toContain("мёртв");
   });
 
+  it("дефолтный now — живой держатель со свежим локом не считается просроченным", () => {
+    // Регресс на реальный баг: дефолт был `now = Date.now()` (число), а код
+    // звал `now()` — `TypeError: now is not a function` на любом прогоне.
+    // Тест зовёт reclaimReason без явного `now`, то есть по умолчанию.
+    expect(
+      reclaimReason({ tier: "ui-e2e", pid: process.pid, at: Date.now(), runId: "dflt1234" }, { alive: () => true }),
+    ).toBeNull();
+  });
+
   it("живой держатель со свежим локом — не трогаем", () => {
     expect(
       reclaimReason(
