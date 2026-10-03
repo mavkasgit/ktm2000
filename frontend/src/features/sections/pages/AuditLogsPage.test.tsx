@@ -1,13 +1,15 @@
 /**
- * Каркас #310: тест написан до правки `AuditLogsPage.tsx` и на текущей
- * раскладке падает красным — он фиксирует контракт, к которому страница
- * обязана прийти (плотные строки 32px с тонами, статус-Badge, FiltersPanel,
- * пустое состояние строкой `colSpan`).
+ * Журнал действий: строки, фильтры, пустые состояния и раскрытие.
+ *
+ * Файл написан до правки `AuditLogsPage.tsx` и на старой раскладке падал
+ * красным — это был эталон, к которому страница пришла: плотные строки 32px с
+ * тонами, статус подписью, панель-`FiltersPanel`, пустое состояние строкой
+ * `colSpan` внутри `tbody`.
  *
  * Контракт, который держат тесты: `audit-row-{id}`, `audit-detail-row-{id}`,
- * `filter-status-{all|success|error|info}`, тексты пустых состояний
- * «История событий пуста.» и «Нет записей, соответствующих заданным фильтрам
- * и поисковому запросу.».
+ * тексты пустых состояний «История событий пуста.» и «Нет записей,
+ * соответствующих заданным фильтрам и поисковому запросу.». Тумблеры
+ * статуса находятся по подписи кнопки — у поля `FiltersPanel` нет testid.
  */
 import { fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import { beforeEach, describe, expect, it, vi } from "vitest";
@@ -106,14 +108,17 @@ describe("AuditLogsPage", () => {
     renderPage();
     await screen.findByTestId("audit-row-1");
 
-    fireEvent.click(screen.getByTestId("filter-status-error"));
+    // Тумблеры — кнопки панели, и находятся по подписи, а не по testid:
+    // `FiltersPanel` не принимает testid у поля, и ради одного экрана
+    // расширять общий контракт панели незачем.
+    fireEvent.click(screen.getByRole("button", { name: /^Ошибки/ }));
 
     await waitFor(() => {
       expect(getAuditLogs).toHaveBeenLastCalledWith(expect.objectContaining({ status: "error" }));
     });
 
     // «Все записи» снимает фильтр: без этого журнал нечем вернуть в обзор.
-    fireEvent.click(screen.getByTestId("filter-status-all"));
+    fireEvent.click(screen.getByRole("button", { name: /^Все записи/ }));
     await waitFor(() => {
       expect(getAuditLogs).toHaveBeenLastCalledWith(
         expect.objectContaining({ status: undefined }),
