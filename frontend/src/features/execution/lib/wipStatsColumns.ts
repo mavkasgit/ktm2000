@@ -45,19 +45,19 @@ export const wipStatsColumns: WipStatsColumn[] = [
     label: "ГХП (выполненные операции)",
     filterField: "name",
     sortField: "name",
-    headerClassName: filtered,
+    headerClassName: `${filtered} max-w-[280px]`,
     clientOnly: true,
   },
   // Служебная колонка: «Размер» выводится из габаритов строки, фильтровать его
   // нечем (значения в поповере пришлось бы собирать из подписи размера), и в
   // запрос колонка не уезжает.
-  { id: "dimensions", label: "Размер", headerClassName: "px-2 w-[100px]" },
+  { id: "dimensions", label: "Размер", headerClassName: "px-2 w-[90px]" },
   {
     id: "qty",
     label: "Остаток (шт.)",
     filterField: "qty",
     sortField: "qty",
-    headerClassName: `${filtered} w-[180px] text-right`,
+    headerClassName: `${filtered} w-[120px] text-right`,
     clientOnly: true,
   },
 ];

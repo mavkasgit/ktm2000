@@ -46,7 +46,7 @@ from app.services.production_planning_rows import (
     list_production_planning_rows,
 )
 from app.services.route_matcher import resolve_position_route
-from app.services.route_storage_classifier import STOCK_TYPES
+from app.services.route_storage_classifier import SECTION_TYPE_PRODUCTION, STOCK_TYPES
 from app.services.shopfloor_service import complete_task, final_release
 from app.transfers.services import transfer_send
 
@@ -1912,7 +1912,13 @@ async def _work_rows(
     product_id: int | None = None,
     position_skus: set[str] | None = None,
 ) -> list:
-    """Активные задачи (ready/in_progress): по продукту либо по артикулам позиций."""
+    """Активные задачи (ready/in_progress): по продукту либо по артикулам позиций.
+
+    Только производственные секции: у складских задач (``ready``-источники
+    для Transfer, которые создают ``transfer_send`` и экран «Передачи») этап
+    маршрута транзитный и операций не имеет — в «в работе» им не место,
+    остатки по складам отдаёт левая колонка.
+    """
     from sqlalchemy.orm import selectinload
 
     work_q = (
@@ -1920,7 +1926,10 @@ async def _work_rows(
         .join(Section, WorkTask.section_id == Section.id)
         .join(RouteStage, WorkTask.route_stage_id == RouteStage.id)
         .options(selectinload(RouteStage.operations))
-        .where(WorkTask.status.in_([WorkTaskStatus.ready, WorkTaskStatus.in_progress]))
+        .where(
+            WorkTask.status.in_([WorkTaskStatus.ready, WorkTaskStatus.in_progress]),
+            Section.type == SECTION_TYPE_PRODUCTION,
+        )
         .order_by(RouteStage.sequence)
     )
     if product_id is not None:

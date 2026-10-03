@@ -188,6 +188,59 @@ function componentSection(sku: string): HTMLElement | null {
   );
 }
 
+/** Названия ГХП в порядке отрисовки внутри блока компонента. */
+function componentSpgNames(sku: string): (string | null)[] {
+  const section = componentSection(sku);
+  if (!section) return [];
+  return Array.from(section.querySelectorAll("tbody tr")).map(
+    (row) => row.querySelector("td .font-medium")?.textContent ?? null,
+  );
+}
+
+/** Кнопка сортировки колонки внутри блока компонента. */
+function componentSortButton(sku: string, field: string): HTMLButtonElement | null {
+  const section = componentSection(sku);
+  if (!section) return null;
+  return section.querySelector<HTMLButtonElement>(`button[data-sort-field="${field}"]`);
+}
+
+/** Блок «В реальной работе»: операторские строки с их шапкой. */
+function inWorkSection(): HTMLElement | null {
+  return (
+    Array.from(document.querySelectorAll("section")).find(
+      (section) =>
+        section.textContent?.includes("В реальной работе") === true,
+    ) ?? null
+  );
+}
+
+/** Операции строк блока «в работе» в порядке отрисовки. */
+function inWorkOperations(): (string | null)[] {
+  const section = inWorkSection();
+  if (!section) return [];
+  return Array.from(section.querySelectorAll("tbody tr")).map(
+    (row) => row.querySelector("td .font-medium")?.textContent ?? null,
+  );
+}
+
+/** Кнопка сортировки колонки блока «в работе». */
+function inWorkSortButton(field: string): HTMLButtonElement | null {
+  const section = inWorkSection();
+  if (!section) return null;
+  return section.querySelector<HTMLButtonElement>(`button[data-sort-field="${field}"]`);
+}
+
+/** Кнопка-подпись колонки «Операция (участок)» — триггер попапера фильтра. */
+function inWorkFilterTrigger(): HTMLButtonElement | null {
+  const section = inWorkSection();
+  if (!section) return null;
+  return (
+    Array.from(section.querySelectorAll<HTMLButtonElement>("thead button")).find(
+      (button) => button.textContent?.includes("Операция") === true,
+    ) ?? null
+  );
+}
+
 afterEach(() => {
   vi.clearAllMocks();
 });
@@ -274,21 +327,21 @@ describe("ProductWipStatsDialog", () => {
     }
   });
 
-  it("раскрывает пару: подпись «Артикулы пары», имена компонентов и оба SKU", async () => {
+  it("раскрывает пару: имена компонентов в шапке и оба SKU в своих блоках", async () => {
     vi.mocked(getProductWipStats).mockResolvedValue(pairStats());
 
     const { cleanup } = mountDialog("PAIR-AAA+PAIR-BBB");
     try {
       await vi.waitFor(() => {
-        expect(document.body.textContent).toContain("Артикулы пары");
+        expect(document.body.textContent).toContain("Профиль А + Профиль Б");
       });
       const text = document.body.textContent ?? "";
 
-      // Парный ответ не должен схлопываться в одиночную сводку.
-      expect(text).not.toContain("Наименование изделия");
-      expect(text).toContain("Профиль А + Профиль Б");
+      // Название пары стоит в шапке рядом с составным артикулом, а
+      // раскрытие — по компонентам в своих блоках.
       expect(text).toContain("PAIR-AAA");
       expect(text).toContain("PAIR-BBB");
+      expect(componentSection("PAIR-AAA")?.textContent).toContain("ГХП А");
     } finally {
       cleanup();
     }
@@ -377,6 +430,121 @@ describe("ProductWipStatsDialog", () => {
 
       // Соседний компонент продолжает показывать свою таблицу остатков.
       expect(componentSection("PAIR-AAA")?.textContent).toContain("ГХП А");
+    } finally {
+      cleanup();
+    }
+  });
+
+  it("блок «в работе» сортируется по колонке, а не остаётся плоским списком", async () => {
+    vi.mocked(getProductWipStats).mockResolvedValue({
+      ...stats,
+      in_work: [
+        { ...stats.in_work[0], operation_name: "Шлифовка", dimensions: null, dimensions_label: "—", planned_qty: 5 },
+        { ...stats.in_work[0], operation_name: "Анодирование", dimensions: null, dimensions_label: "—", planned_qty: 50 },
+      ],
+    });
+
+    const { cleanup } = mountDialog();
+    try {
+      await vi.waitFor(() => {
+        expect(inWorkSortButton("plan")).not.toBeNull();
+      });
+
+      // Порядок до клика — как отдал сервер (порядок этапов маршрута).
+      expect(inWorkOperations()).toEqual(["Шлифовка", "Анодирование"]);
+
+      act(() => {
+        inWorkSortButton("plan")?.click();
+      });
+      // Первый клик — по убыванию: 50 раньше 5.
+      expect(inWorkOperations()).toEqual(["Анодирование", "Шлифовка"]);
+
+      act(() => {
+        inWorkSortButton("plan")?.click();
+      });
+      expect(inWorkOperations()).toEqual(["Шлифовка", "Анодирование"]);
+    } finally {
+      cleanup();
+    }
+  });
+
+  it("выбор в колонке «Операция» сужает блок «в работе»", async () => {
+    vi.mocked(getProductWipStats).mockResolvedValue({
+      ...stats,
+      in_work: [
+        { ...stats.in_work[0], operation_name: "Шлифовка", dimensions: null, dimensions_label: "—" },
+        { ...stats.in_work[0], operation_name: "Анодирование", dimensions: null, dimensions_label: "—" },
+      ],
+    });
+
+    const { cleanup } = mountDialog();
+    try {
+      await vi.waitFor(() => {
+        expect(inWorkSection()).not.toBeNull();
+      });
+      expect(inWorkOperations()).toEqual(["Шлифовка", "Анодирование"]);
+
+      // Попапер открывает кнопка-подпись колонки, а не кнопка сортировки.
+      act(() => {
+        inWorkFilterTrigger()?.click();
+      });
+      // Попапер рендерится в портале, поэтому значения ищем в документе.
+      const valueButton = Array.from(
+        document.querySelectorAll<HTMLButtonElement>("button[aria-pressed]"),
+      ).find((button) => button.textContent?.trim() === "Анодирование");
+      expect(valueButton, "в поповере нет значения «Анодирование»").toBeDefined();
+
+      act(() => {
+        valueButton?.click();
+      });
+      expect(inWorkOperations()).toEqual(["Анодирование"]);
+    } finally {
+      cleanup();
+    }
+  });
+
+  it("таблица остатков компонента пары сортируется сама, без общего фильтра диалога", async () => {
+    vi.mocked(getProductWipStats).mockResolvedValue(
+      pairStats({
+        components: [
+          {
+            sku: "PAIR-AAA",
+            product_id: 11,
+            product_name: "Профиль А",
+            remainders: [
+              pairRemainder({ spg_name: "ГХП А1", dimensions_label: "2,7 м", quantity: 5 }),
+              pairRemainder({ spg_name: "ГХП А2", dimensions_label: "3,2 м", quantity: 50 }),
+            ],
+          },
+          {
+            sku: "PAIR-BBB",
+            product_id: 22,
+            product_name: "Профиль Б",
+            remainders: [pairRemainder({ spg_name: "ГХП Б", dimensions_label: "4 м", quantity: 7 })],
+          },
+        ],
+      }),
+    );
+
+    const { cleanup } = mountDialog("PAIR-AAA+PAIR-BBB");
+    try {
+      await vi.waitFor(() => {
+        expect(componentSortButton("PAIR-AAA", "qty")).not.toBeNull();
+      });
+
+      // Порядок по умолчанию — по убыванию остатка: 50 раньше 5.
+      expect(componentSpgNames("PAIR-AAA")).toEqual(["ГХП А2", "ГХП А1"]);
+      expect(componentSpgNames("PAIR-BBB")).toEqual(["ГХП Б"]);
+
+      // Сортировка у каждой таблицы своя: щелчки по «ГХП» в блоке PAIR-AAA
+      // не переставляют строки соседнего блока PAIR-BBB. Общее состояние в
+      // диалоге сужало бы все компоненты пары одним фильтром.
+      for (let click = 0; click < 4; click += 1) {
+        act(() => {
+          componentSortButton("PAIR-AAA", "name")?.click();
+        });
+      }
+      expect(componentSpgNames("PAIR-BBB")).toEqual(["ГХП Б"]);
     } finally {
       cleanup();
     }
