@@ -12,13 +12,22 @@ import {
   DialogHeader,
   DialogTitle,
 } from "@/shared/ui/dialog";
-import { actionJournalLabels } from "@/shared/lib/generated-labels";
+import { actionTypeLabel } from "../lib/actionColumns";
+import { TABLE_ROW_DENSE } from "@/shared/lib/dataTableStyles";
 import { useActionTree } from "../hooks/useActions";
 import {
   ActionTreeDialog,
 } from "./ActionTreeDialog";
 import { ReversePreviewDialog } from "./ReversePreviewDialog";
 import { AmendDialog } from "./AmendDialog";
+
+/**
+ * Кнопки строки — плотные, как во всех остальных таблицах журнала: штатный
+ * `size="sm"` даёт h-9 (36px), и строка в 32px (`TABLE_ROW_DENSE.rowHeightPx`)
+ * от кнопки растёт — колонка «Операции» выходит выше соседних строк (ADR-0030).
+ */
+const ACTION_BUTTON_CLASS = TABLE_ROW_DENSE.actionButton;
+const ACTION_ICON_CLASS = "h-3.5 w-3.5";
 
 /** Операции строки журнала: дерево цепочки / Отменить / Изменить.
  *  «Изменить» — только передача со статусом active (решение 5 спеки #117). */
@@ -54,7 +63,7 @@ export function JournalRowOperations({
     <div className="flex items-center justify-end gap-1">
       <Button
         variant="outline"
-        size="sm"
+        className={ACTION_BUTTON_CLASS}
         title="Дерево цепочки"
         data-testid={`tree-button-${action.id}`}
         onClick={() => {
@@ -63,35 +72,33 @@ export function JournalRowOperations({
           setTreeOpen(true);
         }}
       >
-        <GitBranch className="h-4 w-4" />
+        <GitBranch className={ACTION_ICON_CLASS} />
       </Button>
       {!reverseByRoleForbidden && (
         <Button
           variant="outline"
-          size="sm"
+          className={ACTION_BUTTON_CLASS}
           title={canReverse ? "Отменить действие" : "Только активные действия"}
           disabled={!canReverse}
           data-testid={`reverse-button-${action.id}`}
           onClick={() => setReverseOpen(true)}
         >
-          <Undo2 className="h-4 w-4" />
+          <Undo2 className={ACTION_ICON_CLASS} />
         </Button>
       )}
       <Button
         variant="outline"
-        size="sm"
+        className={ACTION_BUTTON_CLASS}
         title={
           canAmend
             ? "Изменить передачу"
-            : `Изменение доступно только для активной ${
-                actionJournalLabels[action.action_type] ?? action.action_type
-              }`
+            : `Изменение доступно только для активной ${actionTypeLabel(action.action_type)}`
         }
         disabled={!canAmend}
         data-testid={`amend-button-${action.id}`}
         onClick={() => setAmendOpen(true)}
       >
-        <Pencil className="h-4 w-4" />
+        <Pencil className={ACTION_ICON_CLASS} />
       </Button>
 
       <Dialog open={treeOpen} onOpenChange={setTreeOpen}>

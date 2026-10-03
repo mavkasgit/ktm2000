@@ -17,6 +17,7 @@ import {
   type ProductionPlanningRowDetail,
 } from "@/shared/api/productionPlans";
 import { RemainderAllocationDialog } from "../components/RemainderAllocationDialog";
+import type { SourceAllocation } from "../components/RemainderAllocationDialog";
 import { listSections } from "@/shared/api/sections";
 import { useFilterableTable } from "@/shared/hooks/useFilterableTable";
 import { usePaginatedTableQuery } from "@/shared/hooks/usePaginatedTableQuery";
@@ -252,8 +253,13 @@ export function ExecutionPage() {
   });
 
   const takeToWorkMutation = useMutation({
-    mutationFn: ({ positionIds }: { positionIds: number[] }) =>
-      takeToWork(positionIds),
+    mutationFn: ({
+      positionIds,
+      remainderAllocation,
+    }: {
+      positionIds: number[];
+      remainderAllocation?: Array<{ balance_id: number; quantity: number }>;
+    }) => takeToWork(positionIds, remainderAllocation),
     onSuccess: (data) => {
       const results = data.results.map<BulkActionResultItem<number>>((result) => ({
         id: result.position_id,
@@ -394,9 +400,14 @@ export function ExecutionPage() {
   }, [launchDialog.positionIds, takeToWorkMutation]);
 
   const confirmLaunchWithAutoConsume = useCallback(
-    (_autoConsume: boolean) => {
+    (_autoConsume: boolean, allocation: SourceAllocation[] | null) => {
       if (!remainderDialog.positionId) return;
-      takeToWorkMutation.mutate({ positionIds: [remainderDialog.positionId] });
+      takeToWorkMutation.mutate({
+        positionIds: [remainderDialog.positionId],
+        // Выбранный источник едет в take-to-work и списывается бэкендом
+        // (#314). null = оператор снял выбор: запуск без источника.
+        remainderAllocation: allocation ?? undefined,
+      });
       setRemainderDialog((prev) => ({ ...prev, open: false }));
     },
     [remainderDialog.positionId, takeToWorkMutation],
