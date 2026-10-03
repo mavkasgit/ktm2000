@@ -59,7 +59,7 @@ def include_object(object, name, type_, reflected, compare_to):
 |---|---|
 | `alembic check` на стенде (`ktm2000_e2e_nighta`) после правки | `No new upgrade operations detected.` — код возврата 0 |
 | Реальное расхождение всё ещё ловится | добавлен обратимый `ALTER TABLE sections ADD COLUMN t308_probe integer` → `Detected removed column 'sections.t308_probe'` + `FAILED: New upgrade operations detected: [('remove_column', ...)]`. Колонка убрана, повторный `check` снова `No new upgrade operations detected.` |
-| `alembic check` на dev-БД | **не выполнялся**: `.env.dev` — контейнерная конфигурация (`STORAGE_ROOT=/app/storage`), процесс на хосте падает в `Settings` (ADR-0026). По указанию оркестратора добиваться зелёного на dev-БД не нужно; расхождений с этой правкой dev-БД не касается — исключён ровно один ненайденный в моделях ненайденный объект |
+| `alembic check` на dev-БД | **не выполнялся**: `.env.dev` — контейнерная конфигурация (`STORAGE_ROOT=/app/storage`), процесс на хосте падает в `Settings` (ADR-0026). По указанию оркестратора добиваться зелёного на dev-БД не нужно; правка касается одного объекта, которого нет в моделях, — на продуктовое расхождение dev-БД она не влияет |
 | `cd backend && ruff check .` | `All checks passed!` |
 | `npm run test:pytest -- tests/test_migrations.py -q` | `17 passed in 147.59s` |
 
