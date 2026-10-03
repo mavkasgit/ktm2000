@@ -132,4 +132,34 @@ describe("cleanupAbandonedRuns", () => {
     expect(result.cleaned).toEqual([]);
     expect(result.failed).toEqual(["abcd12"]);
   });
+
+  it("относительный env-файл ищет в корне ЧУЖОГО дерева, а не в текущем", () => {
+    // Регресс на реальный баг #306: `E2E_ENV_FILE` по конвенции относителен
+    // и отсчитывается от корня репозитория (`e2e/AGENTS.md`), то есть от
+    // `repo` отобранного слота. Проверка «env-файл есть» смотрела в текущем
+    // каталоге уборщика, где чужого файла нет, — и уборка молча пропускалась
+    // целиком, то есть ровно тот случай, ради которого модуль написан.
+    const foreign = tempRepo();
+    standEnv(foreign);
+    const { calls, run } = stubRun();
+
+    // Текущий каталог уборщика — отдельное дерево без `.env.e2e.local`.
+    const reaper = tempRepo();
+    const previousCwd = process.cwd();
+    process.chdir(reaper);
+    try {
+      const result = cleanupAbandonedRuns(
+        [{ repo: foreign, runId: "bead34", envFile: ".env.e2e.local", pid: 999999 }],
+        { ownRunId: "myOwnRun", run, log: () => {} },
+      );
+
+      expect(result.cleaned).toEqual(["bead34"]);
+      expect(result.skipped).toEqual([]);
+      expect(calls).toHaveLength(1);
+      // Скрипту уходит путь в его собственном дереве, а не путь уборщика.
+      expect(calls[0].args).toContain(path.join(foreign, ".env.e2e.local"));
+    } finally {
+      process.chdir(previousCwd);
+    }
+  });
 });

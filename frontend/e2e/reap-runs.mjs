@@ -57,13 +57,19 @@ export function cleanupAbandonedRuns(holders, { ownRunId, log = console.log, run
       result.skipped.push(`runId ${runId}: нет ${script} — нечего убирать`);
       continue;
     }
-    if (envFile && !fs.existsSync(envFile)) {
-      result.skipped.push(`runId ${runId}: env-файл ${envFile} не найден — нечего убирать`);
+    // `E2E_ENV_FILE` по конвенции относителен и отсчитывается от корня
+    // репозитория (см. `e2e/AGENTS.md`), то есть от `repo` отобранного слота,
+    // а не от текущего каталога. Проверять его как есть — значит смотреть не
+    // туда: у чужого worktree файл лежит в его корне, и уборка молча
+    // пропускалась целиком (#306).
+    const standEnv = envFile ? path.resolve(repo, envFile) : null;
+    if (standEnv && !fs.existsSync(standEnv)) {
+      result.skipped.push(`runId ${runId}: env-файл ${standEnv} не найден — нечего убирать`);
       continue;
     }
 
     const args = [script, "drop", "--run-id", runId];
-    if (envFile) args.push("--env-file", envFile);
+    if (standEnv) args.push("--env-file", standEnv);
     const dropped = run("python", args, {
       cwd: repo,
       encoding: "utf8",
