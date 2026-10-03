@@ -1,13 +1,13 @@
-# T-310 (подготовительный блок) — shared-тон `ok`, зелёный `ToggleTone`, red-каркас `AuditLogsPage.test.tsx`
+# T-310 — журнал действий в общий стиль таблиц
 
 Тикет: https://github.com/mavkasgit/ktm2000/issues/310
 Ветка: `night/2026-10-03-c`, worktree `C:/Users/LogoPrint/VibeCoding/ktm2000-night-c`
-База: `99b9902`.
+База: `99b9902`; слияния `main`: `c5f15bd` (срез A, `922b52c`) и `1945f83`.
 
-Это **первый из двух проходов** по #310. Содержательная часть (строки, ячейки,
-`Badge`, панель фильтров в `AuditLogsPage.tsx`) намеренно не сделана: она
-пересекается с зоной среза A по шапке/заголовку того же файла и идёт после
-слияния A. Тикет **не закрыт**.
+Тикет выполнен **в два прохода**. Первый — shared-правки и red-каркас теста
+(содержательная часть страницы тогда пересекалась с зоной среза A по шапке).
+Второй — сама страница, после слияния A. Итог: каркас зелёный, полный
+прогон без падений.
 
 ## Что сделано
 
@@ -108,7 +108,9 @@ npx vitest run src/shared/ui/FiltersPanel.test.tsx src/features/sections/lib/tas
 — расширение `RowTone` меняет этот тип, и доска участков берёт из него и заливку,
 и полосу, и карточку. Тесты тона доски зелёные.
 
-### Полный прогон фронта
+### Полный прогон после первого прохода (каркас красный — так и задумано)
+
+Состояние на тот момент; итоговое число — в разделе «Второй проход».
 
 ```
 npm --prefix frontend run test
@@ -126,29 +128,77 @@ npm --prefix frontend run test
 красной. Число тестов не уменьшилось — оно выросло на 5 относительно базовых
 1292 (1291 passed + 1 skipped) добавленными кейсами.
 
-## Что НЕ сделано (заблокировано слиянием среза A)
+## Второй проход: правка `AuditLogsPage.tsx`
 
-Не тронуто в `AuditLogsPage.tsx` **ничего** — ни шапки (зона A), ни тела:
+Коммит `250444a`. Срез A слит (`c5f15bd`), шапку не трогал — её добавил он.
 
-- карточка-обёртка `bg-white rounded-xl shadow-sm border` (AC 1);
-- панель на `FiltersPanel` с четырьмя toggle и `onReset` (AC 2);
-- шапка `DATA_TABLE_STYLES.headerRow/headerCell + TABLE_ROW_DENSE.headerCell` (AC 4);
-- строки 32px, `TABLE_ROW_DENSE.cell`, `TABLE_ROW_STYLES.defaultRow`, тона
-  `ok`/`scrap`/`plain` по статусу, `Badge` вместо кружка-иконки (AC 5);
-- пусто/загрузка внутрь `tbody` `colSpan`-строкой (AC 6);
-- фон детальной строки `bg-muted/30` (AC 7);
-- введение `data-testid` `audit-row-{id}` / `audit-detail-row-{id}` /
-  `filter-status-*`, без которых каркас остаётся красным.
+### Правки прода по AC
 
-`backend/app/api/routes/audit_logs.py` и `features/sections/lib/auditColumns.ts`
-не читались на предмет правок — они готовы по тикету.
+| AC | что сделано |
+|---|---|
+| 1 | Раскладка `page-header` → `FiltersPanel` → `DATA_TABLE_STYLES.container`; карточка `bg-white rounded-xl shadow-sm border` убрана |
+| 2 | Панель — `FiltersPanel`: `search` → `custom` с `DateRangePicker` → четыре `toggle` со счётчиками из `counts`, общий `onReset`; «Сбросить период», печать и bulk убраны |
+| 3 | Тон `ok` и зелёный `ToggleTone` — см. первый проход |
+| 4 | Шапка `cn(DATA_TABLE_STYLES.headerRow, DATA_TABLE_STYLES.headerCell, TABLE_ROW_DENSE.headerCell)` |
+| 5 | Строки `style={{height: TABLE_ROW_DENSE.rowHeightPx}}`, `TABLE_ROW_STYLES.defaultRow`, ячейки `TABLE_ROW_DENSE.cell`, `font-medium` снят; статус — `Badge` (`TABLE_ROW_DENSE.badge`), кружок-иконка 28px убран; тона `success → ok`, `error → scrap`, `info → plain`, полоса `ROW_TONE_STRIPE` на первой ячейке |
+| 6 | Загрузка и пусто — строки `tbody` с `colSpan`; оба текста сохранены дословно |
+| 7 | Детальная строка — `colSpan`, авто-высота, `bg-muted/30`; основная строка осталась 32px |
 
-## Следующий шаг
+Полоса тона лежит на **первой ячейке**, а не на `<tr>`: таблица объявлена
+`border-separate`, границы строк в ней не рисуются — на `<tr>` полоса была бы
+не видна (то же наблюдение зафиксировано в `TaskView.tsx`).
 
-После `git merge main` (в `main` к этому моменту сольётся срез A) — довести
-`AuditLogsPage.tsx` по AC 1–7 так, чтобы 5 тестов каркаса стали зелёными.
+Заливка строки, подпись бейджа и тон вынесены в один словарь
+`STATUS_PRESENTATION`: раньше это были три независимых тернарника в разметке,
+и подпись статуса жила ещё и отдельно в `auditColumns` для попапера фильтра.
+
+`data-testid`: `audit-row-{id}` и `audit-detail-row-{id}` на строках. У тумблеров
+`filter-status-*` в каркасе **не вводились** — у поля `FiltersPanel` нет
+testid, и ради одного экрана расширять общий контракт панели незачем; тумблеры
+находятся по подписи кнопки (`getByRole("button", { name: /^Ошибки/ })`).
+
+### Финальные прогоны
+
+```
+cd frontend && npx tsc -p tsconfig.json --noEmit   → 0 ошибок (exit 0)
+
+vitest AuditLogsPage.test.tsx
+  → Test Files  1 passed (1)
+    Tests       5 passed (5)          ← было 5 failed на старой раскладке
+
+npm --prefix frontend run test
+  → Test Files  157 passed | 1 skipped (158)
+    Tests       1297 passed | 1 skipped (1298)
+    Duration    57.58s
+
+cd backend && ruff check .           → All checks passed!
+```
+
+Эталон в `main` — 1291 passed / 1 skipped / 0 failed. Стало 1297 passed:
+прибавились 5 кейсов каркаса и один новый файл `run-lock.test.ts`, пришедший из
+`main` слиянием. Падений нет, число зелёных не уменьшилось.
+
+### Правка подтверждена разбором отрендеренного DOM
+
+Не «по коду видно» — вывод отрендеренной разметки:
+
+* карточки-обёртки в DOM нет: `container.innerHTML.includes("rounded-xl")` → `false`;
+* `class="p-3"` в DOM остался ровно один — от самой `FiltersPanel` (`rounded-lg border bg-card/60 p-3`), в файле страницы `p-3` не встречается вовсе;
+* строка успеха: `<tr data-testid="audit-row-1" style="height: 32px;" class="bg-emerald-50/20 hover:!bg-emerald-50/40 hover:bg-accent/60 …">` — тон `ok` и 32px в разметке;
+* ячейка статуса: `px-2 py-1 border-l-4 border-l-emerald-400` + `Badge` с текстом «Успешно»;
+* пустое состояние: `<tbody><tr><td colspan="9" class="px-2 py-10 text-center">…История событий пуста.</td></tr></tbody>` — внутри таблицы, а не поплавком;
+* детальная строка: `<tr data-testid="audit-detail-row-1" class="bg-muted/30"><td colspan="9" …>`.
+
+Разбор был разовым (черновик-скрипт) и удалён; в набор тестов не попал.
+
+## Что НЕ делалось
+
+- `backend/app/api/routes/audit_logs.py` и `features/sections/lib/auditColumns.ts` — по тикету готовы, не трогались;
+- печать и массовые операции в панели — по AC их нет (выбирать нечего);
+- e2e-спека на аудит — по плану §3.1 не плодится;
+- правки навигации журнала (`Layout.tsx`, `JournalTabs`, меню) — зона среза A.
 
 ## Откат
 
-`git revert <sha>` — два коммита: shared-правки (аддитивны, откатываются
-чисто) и тестовый файл (новый файл, откатывается удалением).
+`git revert 250444a` — страница и правка каркаса. Shared-правки откатываются
+`git revert 0845a86`, каркас как новый файл — `git revert 0f02c58`.
