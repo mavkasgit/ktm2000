@@ -7,6 +7,16 @@ import { cn } from "@/shared/utils/cn";
 import type { DailyPlanListEntry } from "../lib/dailyPlanList";
 import { PLAN_SHOW_MORE_STEP, buildPlanEntries, buildPlanListBlocks } from "../lib/dailyPlanList";
 
+/**
+ * Панель дневных планов: заголовок с переходом на «Задания», форма создания,
+ * поиск и потолок видимых карточек.
+ *
+ * Высота — от экрана (`lg:h-[calc(100vh-2rem)]`), а не от колонки грида: раньше
+ * список обрывался на `max-h-96` (384 px), а когда панель растянули до колонки,
+ * колонку задавала доска — и на пустой доске панель сжималась до высоты пары
+ * карточек, а на длинной уезжала ниже экрана. Потолок карточек выведен отсюда
+ * же: восемь штук помещаются вместе с кнопкой «Показать ещё».
+ */
 type DailyPlansPanelProps = {
   plans: DailyPlanSummary[];
   selectedPlanIds: Set<number>;
@@ -101,7 +111,7 @@ export function DailyPlansPanel({
   }, [extraVisible, plans, search, selectedPlanIds]);
 
   return (
-    <aside className="space-y-3 rounded-lg border border-slate-200 bg-white p-3 shadow-sm">
+    <aside className="flex flex-col space-y-3 rounded-lg border border-slate-200 bg-white p-3 shadow-sm lg:h-[calc(100vh-2rem)]">
       <div className="flex items-center justify-between gap-2">
         <button
           type="button"
@@ -192,7 +202,7 @@ export function DailyPlansPanel({
         </Button>
       </div>
 
-      <div className="space-y-1.5">
+      <div className="flex min-h-0 flex-1 flex-col space-y-1.5">
         <div className="px-1 text-[11px] font-semibold uppercase tracking-wide text-slate-500">
           Недавние планы
         </div>
@@ -212,7 +222,12 @@ export function DailyPlansPanel({
               placeholder="Поиск: дата или №"
               className="h-8 text-xs"
             />
-            <div className="max-h-96 space-y-1.5 overflow-y-auto pr-0.5">
+            {/* Список занимает остаток панели и прокручивается сам: кнопка
+                «Показать ещё» внутри него уезжала под последнюю карточку, и
+                мастер её просто не видел — а она и есть весь смысл потолка.
+                `min-h-0` обязателен, иначе flex-ребёнок не даёт прокрутке ужать
+                список. */}
+            <div className="min-h-0 flex-1 space-y-1.5 overflow-y-auto pr-0.5">
               {selectedEntries.length > 0 && (
                 <>
                   <PlanGroupTitle>Выбрано ({selectedEntries.length})</PlanGroupTitle>
@@ -258,17 +273,17 @@ export function DailyPlansPanel({
                   ))}
                 </>
               )}
-              {hiddenCount > 0 && (
-                <Button
-                  variant="outline"
-                  size="sm"
-                  className="w-full"
-                  onClick={() => setExtraVisible((value) => value + PLAN_SHOW_MORE_STEP)}
-                >
-                  Показать ещё
-                </Button>
-              )}
             </div>
+            {hiddenCount > 0 && (
+              <Button
+                variant="outline"
+                size="sm"
+                className="shrink-0"
+                onClick={() => setExtraVisible((value) => value + PLAN_SHOW_MORE_STEP)}
+              >
+                Показать ещё
+              </Button>
+            )}
           </>
         )}
       </div>

@@ -106,11 +106,11 @@ describe("DailyPlansPanel: порядок блоков", () => {
 });
 
 describe("DailyPlansPanel: потолок и «Показать ещё»", () => {
-  it("без поиска показывает 10 из 12, раскрытие показывает остаток с настоящими номерами", () => {
+  it("без поиска показывает 8 из 12, раскрытие показывает остаток с настоящими номерами", () => {
     const { container } = renderPanel(backendOrder(planSeries(12)));
 
     expect(visibleTitles(container)).toEqual(
-      [12, 11, 10, 9, 8, 7, 6, 5, 4, 3].map((n) => `План №${n} · 26.09.2026`),
+      [12, 11, 10, 9, 8, 7, 6, 5].map((n) => `План №${n} · 26.09.2026`),
     );
     const showMore = screen.getByRole("button", { name: "Показать ещё" });
     fireEvent.click(showMore);
@@ -121,15 +121,26 @@ describe("DailyPlansPanel: потолок и «Показать ещё»", () =>
     expect(screen.queryByRole("button", { name: "Показать ещё" })).toBeNull();
   });
 
+  it("восемь планов помещаются в панель целиком, без «Показать ещё»", () => {
+    const { container } = renderPanel(backendOrder(planSeries(8)));
+
+    // Потолок выведен из высоты панели: восемь карточек — это ровно то, что
+    // влезает вместе с заголовком, поиском и кнопкой. Девятый план уже
+    // требовал бы прокрутки внутри списка.
+    expect(visibleTitles(container)).toHaveLength(8);
+    expect(screen.queryByRole("button", { name: "Показать ещё" })).toBeNull();
+  });
+
+
   it("кнопки нет, когда все планы помещаются в потолок", () => {
     renderPanel(backendOrder(planSeries(4)));
 
     expect(screen.queryByRole("button", { name: "Показать ещё" })).toBeNull();
   });
 
-  it("поиск возвращает к потолку 20, а его сброс — к 10", () => {
+  it("поиск возвращает к потолку 20, а его сброс — к 8", () => {
     const { container } = renderPanel(backendOrder(planSeries(25)));
-    expect(visibleTitles(container)).toHaveLength(10);
+    expect(visibleTitles(container)).toHaveLength(8);
 
     fireEvent.click(screen.getByRole("button", { name: "Показать ещё" }));
     expect(visibleTitles(container)).toHaveLength(25);
@@ -140,7 +151,7 @@ describe("DailyPlansPanel: потолок и «Показать ещё»", () =>
     expect(screen.getByRole("button", { name: "Показать ещё" })).toBeTruthy();
 
     search("");
-    expect(visibleTitles(container)).toHaveLength(10);
+    expect(visibleTitles(container)).toHaveLength(8);
   });
 
   it("выбранный план за пределом потолка остаётся на экране", () => {
@@ -148,7 +159,7 @@ describe("DailyPlansPanel: потолок и «Показать ещё»", () =>
     const text = container.textContent ?? "";
 
     expect(text).toContain("Выбрано (1)");
-    expect(visibleTitles(container)).toHaveLength(10);
+    expect(visibleTitles(container)).toHaveLength(8);
     expect(visibleTitles(container)).toContain("План №1 · 26.09.2026");
   });
 });
