@@ -15,7 +15,6 @@
 
 from __future__ import annotations
 
-import re
 from collections import Counter
 from decimal import Decimal
 
@@ -57,7 +56,6 @@ def sql_counters(engine):
 
 
 async def _seed_case(session, sku: str):
-    """Один кейс: released-строка складского этапа без задания + остаток."""
     """Released-строки складского этапа без задания + остаток под бюджет.
 
     Приём идёт с подписью операций, полученной от резолвера: с чужой подписью
@@ -111,20 +109,34 @@ async def test_ready_creates_task_for_stock_line_without_it(session, sql_counter
     )
     print(f"[304] второй GET: {dict(counters)}")
     assert counters["INSERT"] == 0, "повторный GET не должен ничего писать"
-    assert fx["product"].id  # фикстура живая
+
 
 
 @pytest.mark.asyncio
-async def test_ready_response_fields_survive_lazy_creation(session, sql_counters):
-    """JSON-сверка: поля ответа не зависят от того, создано задание или нет."""
-    _fx, _source_line = await _seed_case(session, "LAZY-2")
+async def test_ready_response_identical_before_and_after_lazy_creation(
+    session, sql_counters
+):
+    """JSON-сверка (#304, п.4): ответ не зависит от того, создано задание или нет.
 
-    result = await list_ready_to_transfer(session, limit=POSITIONS * 4)
-    rows = result["items"] if isinstance(result, dict) else result
-    shape = sorted(re.findall(r'"([a-z_]+)":', str(sorted(rows[0].keys()))) if rows else [])
-    print(f"\n[304] поля строки выдачи: {shape}")
+    Первый GET создаёт задание лениво, второй — уже ничего не пишет. Если
+    ответ хоть чем-то отличается (task_id, dimensions, transferable_quantity,
+    сортировка, состав строк), ленивое создание что-то исказило.
+    """
+    await _seed_case(session, "LAZY-2")
+
+    first = await list_ready_to_transfer(session, limit=POSITIONS * 4)
+    rows = first["items"] if isinstance(first, dict) else first
+    assert rows, "кейс не построился: выдача пуста, сравнивать нечего"
+
+    second = await list_ready_to_transfer(session, limit=POSITIONS * 4)
+    rows_after = second["items"] if isinstance(second, dict) else second
+
+    print(f"\n[304] поля строки выдачи: {sorted(rows[0])}")
+    assert rows == rows_after, "ответ /transfers/ready изменился после ленивого создания"
+    # Ключи, которые AC #304 называет поимённо.
     for row in rows:
         assert "task_id" in row
+        assert "dimensions" in row
         assert "transferable_quantity" in row
 
 @pytest.mark.asyncio
