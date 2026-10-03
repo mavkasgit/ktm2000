@@ -56,7 +56,18 @@ export function tryAcquireLock(file, payload) {
   }
 }
 
-export function releaseLock(file) {
+/**
+ * Снимает лок, **только если он всё ещё наш**.
+ *
+ * Лок отбирается у живого держателя по возрасту (`staleMs`): следующий прогон
+ * занимает тот же файл, а прежний в свой `finally` (`finalize()` в
+ * `run-tier.mjs`) зовёт `releaseLock` — и сносит лок из-под работающего.
+ * Сверка по `runId` (а не по `pid`) спасает и случай «тот же pid, новый
+ * прогон»: `runId` у каждого прогона свой.
+ */
+export function releaseLock(file, runId) {
+  const holder = readLock(file);
+  if (holder && runId !== undefined && holder.runId !== runId) return;
   fs.rmSync(file, { force: true });
 }
 
