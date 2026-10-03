@@ -69,6 +69,30 @@ export function getActionTone(status: string): RowTone {
 }
 
 /**
+ * Вариант бейджа статуса. Подпись и цвет живут рядом по одной причине: в
+ * журнале их читали в двух разных словарях, и «Очищено» могло оказаться
+ * зелёным рядом с «Активно».
+ */
+const STATUS_BADGE_VARIANTS: Record<string, "success" | "secondary" | "warning"> = {
+  active: "success",
+  amended: "warning",
+  reversed: "secondary",
+  purged: "secondary",
+};
+
+/**
+ * Бейдж статуса строки. Статус приходит с сервера строкой: без фолбэка
+ * незнакомое значение (новый статус в бэке) уронило бы весь раздел в
+ * errorElement, а не одну ячейку.
+ */
+export function statusBadge(status: string): {
+  label: string;
+  variant: "success" | "secondary" | "warning";
+} {
+  return { label: statusLabel(status), variant: STATUS_BADGE_VARIANTS[status] ?? "secondary" };
+}
+
+/**
  * Общий кусок класса шапки для колонок с фильтром: попапер занимает всю
  * ячейку, и штатный отступ `p-2` из `DATA_TABLE_STYLES.headerCell` развёл бы
  * его с подписью соседних колонок.
