@@ -64,6 +64,24 @@ Ruff блокирует merge в CI, поэтому красное дерево 
 без **явного** выбора источника поведение прежнее. Правка `123d27be`,
 регресс-тест в `RemainderAllocationDialog.ui.test.tsx`.
 
+### Сторожевые тесты из ревью (R15)
+
+Вердикты R15 по восьми тикетам без коммитов опирались на код, а не на слово. Три
+из них держатся на тестах — прогнаны на итоговом дереве, чтобы «уже сделано» было
+доказано числом, а не чтением:
+
+| Тест | Что сторожит | Прогон |
+|---|---|---|
+| `test_packing_sawing_ops.py` | матрица `SAW_MULTI`/`SAW_CUT`/`SAW` (#277) | 36 passed (40.00s), launcher |
+| `test_ready_sql_query_count_bounded` | предел 15 SQL в `/transfers/ready` (#290) | там же |
+| `test_plan_all_positions_pagination.py` | четыре теста на `plan_position_id` (#271, флейк не воспроизводится) | там же |
+
+Вердикты R15: #270, #277, #290 — `already-done`; #271 — `already-done`; #268 —
+`partly-done` (импортная семантика жива, UI ручной операции из кода исчез: в
+`frontend/src/features/spg/components/` нет `StockAdjustmentDialog`, эндпоинт
+`backend/app/stock/api.py:877-881` жив); #282 и #307 — `still-live`; #313 —
+`still-live`, не начат.
+
 ## Условия замеров (смена 2026-10-02)
 
 | Параметр | Значение |
