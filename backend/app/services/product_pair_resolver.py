@@ -150,8 +150,17 @@ class PairResolutionCache:
     """
 
     _index: dict[frozenset[str], ResolvedPair] | None = None
+    _index_by_product: dict[int, ResolvedPair | None] | None = None
     _resolved: dict[frozenset[str], ResolvedPair | None] = field(default_factory=dict)
     effective_product_ids: dict[tuple, list[int]] = field(default_factory=dict)
+
+    async def resolve_pair_by_product(
+        self, db: AsyncSession, product_id: int
+    ) -> ResolvedPair | None:
+        """Пара по одному ``product_id`` — из кэша или справочника."""
+        if self._index_by_product is None:
+            self._index_by_product = await _load_pair_index_by_product(db)
+        return self._index_by_product.get(int(product_id))
 
     async def resolve_pair(
         self, db: AsyncSession, normalized: frozenset[str]
@@ -196,6 +205,36 @@ async def _load_pair_index(db: AsyncSession) -> dict[frozenset[str], ResolvedPai
             product_a=products_by_id[pair.product_a_id],
             product_b=products_by_id[pair.product_b_id],
         )
+    return index
+
+
+async def _load_pair_index_by_product(db: AsyncSession) -> dict[int, ResolvedPair | None]:
+    """Справочник пар целиком, разложенный по ``product_id`` компонента.
+
+    Тот же два запроса, что у :func:`_load_pair_index`, но ключ — id
+    артикула: позиция после снятия склейки (#312) знает только свой
+    ``product_id``. Первая пара в справочнике побеждает, как и в
+    SKU-индексе, поэтому порядок обхода строк тот же.
+    """
+    pairs = (await db.execute(select(ProductPair))).scalars().all()
+    if not pairs:
+        return {}
+    product_ids = {pid for pair in pairs for pid in (pair.product_a_id, pair.product_b_id)}
+    products = (
+        await db.execute(select(Product).where(Product.id.in_(product_ids)))
+    ).scalars().all()
+    products_by_id = {p.id: p for p in products}
+    index: dict[int, ResolvedPair | None] = {}
+    for pair in pairs:
+        product_a = products_by_id.get(pair.product_a_id)
+        product_b = products_by_id.get(pair.product_b_id)
+        resolved = (
+            ResolvedPair(pair=pair, product_a=product_a, product_b=product_b)
+            if product_a is not None and product_b is not None
+            else None
+        )
+        for pid in (pair.product_a_id, pair.product_b_id):
+            index.setdefault(pid, resolved)
     return index
 
 
@@ -484,3 +523,73 @@ async def resolve_pair_n(
             return PairHangerValue(None, None, calc_error=True)
 
     return PairHangerValue(None, None, calc_error=True)
+
+
+async def resolve_pair_by_product_id(
+    db: AsyncSession,
+    product_id: int,
+    *,
+    cache: PairResolutionCache | None = None,
+) -> ResolvedPair | None:
+    """Пара, в которую входит артикул, по одному ``product_id``.
+
+    Обратное направление к :func:`resolve_pair_by_component_skus`: после
+    снятия склейки (#312) позиция плана несёт один артикул, но её норма
+    «количество на подвес» — парная, ведь физически на подвесе едут оба
+    компонента. Справочник пар читается один раз на вызов через
+    ``cache`` — как и в остальных резолвах этого модуля.
+    """
+    if cache is not None:
+        return await cache.resolve_pair_by_product(db, int(product_id))
+
+    pairs = (await db.execute(select(ProductPair))).scalars().all()
+    if not pairs:
+        return None
+
+    product_ids = {pid for pair in pairs for pid in (pair.product_a_id, pair.product_b_id)}
+    products = (
+        await db.execute(select(Product).where(Product.id.in_(product_ids)))
+    ).scalars().all()
+    products_by_id = {p.id: p for p in products}
+
+    for pair in pairs:
+        if product_id not in (pair.product_a_id, pair.product_b_id):
+            continue
+        product_a = products_by_id.get(pair.product_a_id)
+        product_b = products_by_id.get(pair.product_b_id)
+        if product_a is None or product_b is None:
+            continue
+        return ResolvedPair(pair=pair, product_a=product_a, product_b=product_b)
+    return None
+
+
+async def resolve_pair_n_for_product(
+    db: AsyncSession,
+    product: Product,
+    *,
+    length_mm: float | None,
+    cache: PairResolutionCache | None = None,
+    manual_override: int | None = None,
+    length_candidates: dict[int, list[PairLengthCandidate]] | None = None,
+) -> PairHangerValue | None:
+    """N пары для позиции одного артикула; ``None`` — артикул непарный.
+
+    Позиция после снятия склейки (#312) несёт один ``product_id``, но
+    артикул может входить в пару: тогда на подвесе едут оба компонента и
+    норма берётся у пары (``compute_paired_hanger_quantity``), а не у
+    одиночного артикула. Артикул вне пары — ``None``, вызывающий код
+    остаётся на прежней одиночной механике.
+    """
+    resolved = await resolve_pair_by_product_id(db, product.id, cache=cache)
+    if resolved is None:
+        return None
+    candidates = None
+    if length_candidates is not None:
+        candidates = length_candidates.get(resolved.pair.id)
+    return await resolve_pair_n(
+        db,
+        resolved,
+        length_mm=length_mm,
+        length_candidates=candidates,
+        manual_override=manual_override,
+    )

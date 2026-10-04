@@ -348,10 +348,10 @@ def _parse_rows(
             inherited,
         )
 
-        if parsed and _can_join_as_paired_profile(parsed[-1], candidate):
-            _join_paired_component(parsed[-1], candidate)
-            open_group, open_group_raws = None, []
-            continue
+        # Артикулы пары не склеиваются (#312): каждая строка листа — своя
+        # позиция плана со своим артикулом и своими заданиями на каждом участке
+        # маршрута, включая анодирование. Сближение пары — только на печати:
+        # две строки печатаются единым подвесом с обоими артикулами.
 
         parsed.append(candidate)
         open_group = candidate
@@ -727,40 +727,6 @@ def _excel_column_letter(index: int) -> str:
     return "".join(reversed(letters))
 
 
-def _can_join_as_paired_profile(previous: ParsedPlanRow, current: ParsedPlanRow) -> bool:
-    if previous.payload.get("paired_profile"):
-        return False
-    if previous.source_sku == current.source_sku:
-        return False
-    if current.source_name:
-        return False
-
-    comparable_fields = ("color", "output_length", "output_kind")
-    same_output = all(previous.payload.get(field) == current.payload.get(field) for field in comparable_fields)
-    same_quantity = previous.quantity == current.quantity
-    return same_output and same_quantity
-
-
-def _join_paired_component(previous: ParsedPlanRow, current: ParsedPlanRow) -> None:
-    previous.source_row_numbers.extend(current.source_row_numbers)
-    previous.payload["row_numbers"] = previous.source_row_numbers
-    previous.payload["components"].extend(current.payload["components"])
-    previous.payload["paired_profile"] = True
-    raw_columns_by_row = dict(previous.payload.get("raw_columns_by_row") or {})
-    raw_columns_by_row[str(previous.source_row_numbers[0])] = previous.payload.get("raw_columns") or {}
-    raw_columns_by_row[str(current.source_row_numbers[0])] = current.payload.get("raw_columns") or {}
-    previous.payload["raw_columns_by_row"] = raw_columns_by_row
-    raw_columns_meta_by_row = dict(previous.payload.get("raw_columns_meta_by_row") or {})
-    raw_columns_meta_by_row[str(previous.source_row_numbers[0])] = previous.payload.get("raw_columns_meta") or []
-    raw_columns_meta_by_row[str(current.source_row_numbers[0])] = current.payload.get("raw_columns_meta") or []
-    previous.payload["raw_columns_meta_by_row"] = raw_columns_meta_by_row
-    previous.source_sku = "+".join(component["sku"] for component in previous.payload["components"])
-    previous.source_ref = f"rows:{previous.source_row_numbers[0]}-{previous.source_row_numbers[-1]}"
-    previous.warnings = [warning for warning in previous.warnings if warning != "product_name_missing"]
-    if "paired_profile_product_unmapped" not in previous.warnings:
-        previous.warnings.append("paired_profile_product_unmapped")
-    previous.source_fingerprint = _hash_json(_fingerprint_payload(previous.source_sku, previous.quantity, previous.payload))
-    previous.source_row_hash = _hash_json({"row_numbers": previous.source_row_numbers, "payload": previous.payload})
 
 
 def _cell(row: list[Any], index: int) -> Any:

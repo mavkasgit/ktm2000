@@ -534,12 +534,11 @@ async def test_demo_stage_preset_to_step_ready_middle_step(client, session) -> N
     assert len(body["stage_results"]) == 2
     assert body["stage_results"][0]["section_code"] == "DEMO-TSRM-SHOT_BLAST"
 
-
 @pytest.mark.asyncio
-async def test_demo_paired_profile_scenario_imports_as_paired_row(
+async def test_demo_paired_profile_scenario_imports_as_two_positions(
     client, session, monkeypatch
 ) -> None:
-    """Демо-прогон по сценарию парного профиля даёт позицию с двумя компонентами.
+    """Демо-прогон по сценарию парного профиля даёт две позиции, не одну склейку.
 
     Сценарий подставляется прямо здесь: справочник сценариев лежит в
     ``backend/data/`` — каталоге рантайма (``.gitignore``), которого нет в
@@ -629,13 +628,18 @@ async def test_demo_paired_profile_scenario_imports_as_paired_row(
 
     position = await session.get(PlanPosition, body["plan_position_id"])
     assert position is not None
+    # Склейки пары больше нет (#312): артикулы идут раздельно, каждый со
+    # своим payload и одним компонентом.
     source_payload = position.source_payload or {}
-    assert source_payload.get("paired_profile") is True
+    assert source_payload.get("paired_profile") is False
     components = source_payload.get("components") or []
-    assert len(components) == 2
-    component_skus = [component.get("sku") for component in components]
-    assert "ЮП-2616" in component_skus
-    assert "ЮП-2604" in component_skus
+    assert len(components) == 1
+
+    positions = (
+        await client.get(f"/api/production-plans/{body['production_plan_id']}/all-positions")
+    ).json()
+    pair_positions = [item for item in positions if item["source_sku"] in ("ЮП-2616", "ЮП-2604")]
+    assert {item["source_sku"] for item in pair_positions} == {"ЮП-2616", "ЮП-2604"}
 
 
 @pytest.mark.asyncio

@@ -4,6 +4,8 @@ import { describe, expect, it, vi } from "vitest";
 import type { SectionBoardTask } from "@/shared/api/shopfloor";
 import { QTY_EMPTY } from "@/shared/lib/quantityFormat";
 import { PlanTaskTable } from "./PlanTaskTable";
+import { buildPlanPairIndex, type PlanPairIndex } from "../lib/planTaskGroups";
+import type { ProductPairCatalogEntry } from "@/shared/api/products";
 import type { PlanColumnKey } from "../lib/planPrintSettings";
 
 function makeTask(overrides: Partial<SectionBoardTask> = {}): SectionBoardTask {
@@ -57,7 +59,10 @@ function makeTask(overrides: Partial<SectionBoardTask> = {}): SectionBoardTask {
  */
 const COLUMNS: PlanColumnKey[] = ["sku", "hangers"];
 
-function render(tasks: SectionBoardTask[]): HTMLTableRowElement[] {
+function render(
+  tasks: SectionBoardTask[],
+  pairs?: PlanPairIndex,
+): HTMLTableRowElement[] {
   const host = document.createElement("div");
   host.innerHTML = renderToStaticMarkup(
     <PlanTaskTable
@@ -66,6 +71,7 @@ function render(tasks: SectionBoardTask[]): HTMLTableRowElement[] {
       hiddenGroupKeys={new Set()}
       onHideGroup={vi.fn()}
       columns={COLUMNS}
+      pairs={pairs}
     />,
   );
   return Array.from(host.querySelectorAll("tbody tr"));
@@ -210,5 +216,75 @@ describe("лист плана: шапка группы и пропуск в су
     // … и шапка не выдаёт за сумму только известные строки.
     expect(cellTexts(header)[1]).toBe(QTY_EMPTY);
     expect(cellTexts(header)[1]).not.toBe("2");
+  });
+});
+
+describe("лист плана: единый подвес пары (#312)", () => {
+  /** Пара 2604/2616 (id артикулов 11 и 12), ручная N=8 на длине 2700. */
+  const PAIR: ProductPairCatalogEntry = {
+    id: 7,
+    product_a_id: 11,
+    product_b_id: 12,
+    lengths: [2700],
+    quantity_per_hanger: { "2700": { auto: null, manual: 8 } },
+  };
+  const pairs: PlanPairIndex = buildPlanPairIndex([PAIR]);
+
+  function pairTasks(): SectionBoardTask[] {
+    return [
+      makeTask({
+        id: 1,
+        product_id: 11,
+        product_sku: "ЮП-2604",
+        operation_name: "Анодирование",
+        dimensions: { length_mm: 2700 },
+        hanger_count: 19,
+        quantity_per_hanger: 8,
+        planned_quantity: "150",
+      }),
+      makeTask({
+        id: 2,
+        product_id: 12,
+        product_sku: "ЮП-2616",
+        operation_name: "Анодирование",
+        dimensions: { length_mm: 2700 },
+        hanger_count: 19,
+        quantity_per_hanger: 8,
+        planned_quantity: "150",
+      }),
+    ];
+  }
+
+  it("шапка группы печатает один подвес на пару, а не сумму по артикулам", () => {
+    const [header] = render(pairTasks(), pairs);
+
+    // 150 ÷ 8 = 18,75 → 19 подвесов. Сумма по строкам дала бы 38 — подвеса,
+    // которого физически нет: на крюке едут оба артикула сразу.
+    expect(cellTexts(header)[1]).toBe("19");
+    expect(cellTexts(header)[0]).toContain("ЮП-2604+ЮП-2616");
+  });
+
+  it("колонка «Кол-во на подвес» печатает норму с обоими артикулами", () => {
+    const host = document.createElement("div");
+    host.innerHTML = renderToStaticMarkup(
+      <PlanTaskTable
+        tasks={pairTasks()}
+        mode="article"
+        hiddenGroupKeys={new Set()}
+        onHideGroup={vi.fn()}
+        columns={["sku", "hangers", "perHanger"]}
+        pairs={pairs}
+      />,
+    );
+
+    const header = host.querySelector("tbody tr") as HTMLTableRowElement;
+    expect(cellTexts(header)[2]).toBe("8×ЮП-2604 + 8×ЮП-2616");
+  });
+
+  it("без каталога пар строки печатаются раздельно и суммируются как раньше", () => {
+    const [headerA, headerB] = render(pairTasks());
+
+    expect(cellTexts(headerA).slice(0, 3)).toEqual(["", "ЮП-2604", "19"]);
+    expect(cellTexts(headerB).slice(0, 3)).toEqual(["", "ЮП-2616", "19"]);
   });
 });

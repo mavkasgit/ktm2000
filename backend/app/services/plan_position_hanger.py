@@ -226,14 +226,17 @@ async def resolve_positions_hanger(
 ) -> dict[int, PositionHangerValue]:
     """Batch-резолв значений для списка позиций.
 
-    Одиночные позиции: один запрос продуктов на весь вызов. Парные
-    (payload ``paired_profile``): приоритет override из payload → снапшот
-    ``product_pair`` → резолв пары владельцем-модулем
-    (``product_pair_resolver``). Всё, что осталось за этими быстрыми путями,
-    резолвится пакетами: справочник пар читается один раз на вызов
-    (``PairResolutionCache``), длины всех нужных пар — одним SELECT
-    (``pair_length_candidates_bulk``) (#293). Возвращает ровно по одной записи
-    на позицию.
+    Позиция-компонент пары (собственный ``product_id``, но артикул входит в
+    ``product_pairs``): норма — парная, на подвесе едут оба компонента
+    сразу (#312). Артикул вне пары и ручной override из payload — прежняя
+    одиночная механика. Склеенные позиции (payload ``paired_profile``,
+    планы до #312): override → снапшот ``product_pair`` → резолв пары
+    владельцем-модулем (``product_pair_resolver``).
+
+    Всё, что осталось за этими быстрыми путями, резолвится пакетами:
+    справочник пар читается один раз на вызов (``PairResolutionCache``),
+    длины всех нужных пар — одним SELECT (``pair_length_candidates_bulk``)
+    (#293). Возвращает ровно по одной записи на позицию.
     """
     product_ids = {p.product_id for p in positions if p.product_id is not None}
     products: dict[int, Product] = {}
@@ -248,18 +251,25 @@ async def resolve_positions_hanger(
         products = {p.id: p for p in rows}
 
     result: dict[int, PositionHangerValue] = {}
-    # Парные позиции батча: справочник пар и их длины читаются по одному разу
-    # на вызов, а не по два SELECT на пару (#293). Порядок обхода позиций тот
-    # же, поэтому при нескольких парах с одинаковыми SKU побеждает та же.
+    # Позиции-компоненты пары: позиция несёт один артикул, но норма
+    # «количество на подвес» — парная, ведь на подвесе едут оба
+    # компонента сразу (#312). Артикул вне пары считается как раньше.
+    pair_component_positions: list[tuple[object, Product]] = []
+    # Позиции склеенной пары (payload ``paired_profile``) — прежний путь,
+    # он остаётся валидным для планов, импортированных до #312.
     pending: list[tuple[object, list[str]]] = []
     for position in positions:
         if not (position.source_payload or {}).get("paired_profile"):
             product = products.get(position.product_id) if position.product_id is not None else None
-            result[position.id] = resolve_position_hanger(
-                product,
-                length_mm=position_length_mm(position),
-                payload_quantity_per_hanger=payload_quantity_per_hanger(position),
-            )
+            override = payload_quantity_per_hanger(position)
+            if product is None or (override is not None and override > 0):
+                result[position.id] = resolve_position_hanger(
+                    product,
+                    length_mm=position_length_mm(position),
+                    payload_quantity_per_hanger=override,
+                )
+                continue
+            pair_component_positions.append((position, product))
             continue
         override = payload_quantity_per_hanger(position)
         if override is not None and override > 0:
@@ -271,10 +281,49 @@ async def resolve_positions_hanger(
             continue
         pending.append((position, product_pair_resolver.paired_component_skus(position)))
 
+    pair_cache = product_pair_resolver.PairResolutionCache()
+
+    if pair_component_positions:
+        pairs_by_position = {
+            position.id: await pair_cache.resolve_pair_by_product(db, product.id)
+            for position, product in pair_component_positions
+        }
+        candidates_by_pair = await product_pair_resolver.pair_length_candidates_bulk(
+            db, [pair for pair in pairs_by_position.values() if pair is not None]
+        )
+        for position, product in pair_component_positions:
+            resolved = pairs_by_position[position.id]
+            if resolved is None:
+                # Артикул вне пары — прежняя одиночная механика.
+                result[position.id] = resolve_position_hanger(
+                    product,
+                    length_mm=position_length_mm(position),
+                    payload_quantity_per_hanger=None,
+                )
+                continue
+            pair_n = await product_pair_resolver.resolve_pair_n(
+                db,
+                resolved,
+                length_mm=position_length_mm(position),
+                length_candidates=candidates_by_pair.get(resolved.pair.id, []),
+            )
+            if pair_n.calc_error or pair_n.quantity_per_hanger is None:
+                # Пара не разрешилась на этой длине — одиночная норма
+                # артикула остаётся осмысленным значением, блокировать
+                # позицию из-за чужой пары нельзя.
+                result[position.id] = resolve_position_hanger(
+                    product,
+                    length_mm=position_length_mm(position),
+                    payload_quantity_per_hanger=None,
+                )
+            else:
+                result[position.id] = PositionHangerValue(
+                    pair_n.quantity_per_hanger, pair_n.source
+                )
+
     if not pending:
         return result
 
-    pair_cache = product_pair_resolver.PairResolutionCache()
     resolved_by_position: dict[int, product_pair_resolver.ResolvedPair | None] = {
         position.id: await product_pair_resolver.resolve_pair_by_component_skus(
             db, component_skus, cache=pair_cache
