@@ -47,7 +47,11 @@ const BALANCES: StockBalanceEntry[] = [
 let container: HTMLDivElement;
 let root: Root;
 
-async function mount(onConfirm: (a: boolean, alloc: unknown) => void) {
+async function mount(
+  onConfirm: (a: boolean, alloc: unknown) => void,
+  balances: StockBalanceEntry[] = BALANCES,
+) {
+  vi.mocked(getProductStockBalances).mockResolvedValue(balances);
   await act(async () => {
     root.render(
       <RemainderAllocationDialog
@@ -117,26 +121,36 @@ describe("RemainderAllocationDialog: выбор источника (#314)", () =
 
   it("количество источника не превышает остаток на нём", async () => {
     const onConfirm = vi.fn();
-    await mount(onConfirm);
+    // Склад подготовки — 12 шт. при плане 40: отдать 40 нельзя, материал
+    // возьмут столько, сколько на нём есть. Выбор сделан явно, иначе
+    // предвыбор был бы подсветкой, а не решением оператора.
+    await mount(onConfirm, [
+      balance({ id: 11, location_name: "Склад сырья", completed_operations: [], balance_qty: "500" }),
+      balance({
+        id: 22,
+        location_name: "Склад подготовки",
+        completed_operations: ["PRESS"],
+        balance_qty: "12",
+      }),
+    ]);
 
-    // Сырьё — 500 шт. при плане 40: отдать 500 нельзя, материал возьмут
-    // столько, сколько нужно на запуск. Выбор сделан явно, иначе предвыбор
-    // был бы подсветкой, а не решением оператора.
-    const raw = document.querySelector<HTMLInputElement>(
-      'input[aria-label="Источник: Склад сырья, операций 0"]',
+    const prep = document.querySelector<HTMLInputElement>(
+      'input[aria-label="Источник: Склад подготовки, операций 1"]',
     );
-    expect(raw).not.toBeNull();
+    expect(prep).not.toBeNull();
     await act(async () => {
-      raw!.click();
+      prep!.click();
     });
 
     const button = [...document.querySelectorAll("button")].find((b) =>
       b.textContent?.includes("Запустить в работу"),
     );
+    expect(button).toBeDefined();
     await act(async () => {
       button!.click();
     });
-    expect(onConfirm).toHaveBeenCalledWith(false, [{ balance_id: 11, quantity: 40 }]);
+    // 12, а не 40: остаток — потолок выдачи с этой строки (ADR-0055 п.3).
+    expect(onConfirm).toHaveBeenCalledWith(false, [{ balance_id: 22, quantity: 12 }]);
   });
 
   it("предвыбор без явного выбора источника не выдаёт материал заранее", async () => {

@@ -316,7 +316,7 @@ export function AuditLogsPage() {
         <div>
           <div className="flex items-center gap-2">
             <h1 className="page-title">Журнал действий</h1>
-            <span className="bg-slate-100 text-slate-650 text-xs font-bold px-2 py-0.5 rounded-full">
+            <span className="bg-slate-100 text-slate-600 text-xs font-bold px-2 py-0.5 rounded-full">
               {counts.all}
             </span>
           </div>
@@ -541,7 +541,7 @@ export function AuditLogsPage() {
                                         return (
                                           <div key={key} className="grid grid-cols-3 py-0.5 border-b border-slate-100/60 last:border-0 items-center">
                                             <span className="text-slate-600 truncate pr-1" title={key}>{key}</span>
-                                            <span className="text-red-650 bg-red-50 px-1 rounded truncate mr-1" title={valBefore}>{valBefore}</span>
+                                            <span className="text-red-600 bg-red-50 px-1 rounded truncate mr-1" title={valBefore}>{valBefore}</span>
                                             <span className="text-emerald-700 bg-emerald-50 px-1 rounded truncate" title={valAfter}>{valAfter}</span>
                                           </div>
                                         );

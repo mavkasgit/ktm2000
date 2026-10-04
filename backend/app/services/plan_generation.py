@@ -504,6 +504,39 @@ async def release_batch(
                 performed_at=now,
                 accounted_at=now,
             ))
+            # Вторая половина выдачи — приём на ЗАДАНИИ (#315).
+            #
+            # `TRANSFER_SEND` выше двигает только остаток: склада → участок.
+            # Проекция задания (`stock/services.py::_compute_task_cache`)
+            # считает выданным только `TRANSFER_RECEIVE` по `task_id`
+            # (`effective_issued_quantity` = received), поэтому без второй
+            # проводки задание оставалось с `issued = 0` и `available = 0`
+            # — доска не давала завершить его никогда, маршрут вставал на
+            # первом же участке. Ровно так же записывается приём обычной
+            # передачи (`transfers/services.py::_record_...`): локаций нет,
+            # учёт идёт по `task_id` + `section_plan_line_id`.
+            #
+            # Признак операций — от СВЫБРАННОГО остатка: материал пришёл с
+            # prep-склада уже пройденным, и приём относится к этапу-получателю
+            # (ADR-0043), как и в обычной передаче.
+            await StockCommandService().record(db, StockCommand(
+                product_id=effective_product_id,
+                from_location_id=None,
+                to_location_id=None,
+                quantity=issue.quantity,
+                reason=Reason.TRANSFER_RECEIVE,
+                dimensions=issue.balance.dimensions,
+                quality_state=quality,
+                to_quality_state=quality,
+                task_id=target.id,
+                section_plan_line_id=target.section_plan_line_id,
+                completed_operations=list(issue.balance.completed_operations),
+                source_ref="take_to_work_source",
+                comment="Источник выбран оператором: приём на задание",
+                created_by=batch.released_by or batch.created_by or 1,
+                performed_at=now,
+                accounted_at=now,
+            ))
 
         released_total = await _released_quantity(db, position)
         new_status = PlanPositionStatus.released if released_total >= position.quantity else PlanPositionStatus.approved

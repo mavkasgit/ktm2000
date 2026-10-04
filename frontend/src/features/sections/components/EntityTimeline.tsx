@@ -79,7 +79,7 @@ export function EntityTimeline({ entityType, entityId, historyLogs }: EntityTime
           return (
             <div key={key} className="grid grid-cols-3 py-0.5 border-b border-slate-100/60 last:border-0 items-center">
               <span className="font-semibold text-slate-600 truncate pr-1" title={key}>{key}</span>
-              <span className="text-red-650 bg-red-50 px-1 rounded truncate mr-1" title={valBefore}>{valBefore}</span>
+              <span className="text-red-600 bg-red-50 px-1 rounded truncate mr-1" title={valBefore}>{valBefore}</span>
               <span className="text-emerald-700 bg-emerald-50 px-1 rounded truncate" title={valAfter}>{valAfter}</span>
             </div>
           );

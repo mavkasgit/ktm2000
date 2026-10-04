@@ -586,4 +586,183 @@ SELECTION_RULES = [
             },
         ],
     },
+
+    # ===== План подготовительного участка (#313) =====
+    # Профиль `prep_stage_plan`, шаблон `plan_prep_stage`. Ровно ТРИ варианта
+    # маршрута, и вместе они не встречаются:
+    #   1) сверло + дробеструй — DRILLING, SHOT_BLAST
+    #   2) пресс + дробеструй  — PRESSING, SHOT_BLAST
+    #   3) чистый дробеструй    — SHOT_BLAST
+    # Старт у всех один — RAW_STOCK, финиш один — PREP_STOCK.
+    # Различие несёт колонка «Операция» файла: `exclude_section` снимает
+    # участок, которого на строке нет. `require_section` нужен не для
+    # подбора (его `build_route_from_profile` не читает), а чтобы
+    # `validate_route_match` проверяла требуемое против записанных этапов.
+    {
+        "code": "prep_core_sections",
+        "name": "Подготовка: базовые участки",
+        "profile_code": "prep_stage_plan",
+        "priority": 1000,
+        "is_active": True,
+        "phase": "route_select",
+        "conditions": [],
+        "actions": [
+            {"action": "require_section", "section_code": "RAW_STOCK"},
+            {"action": "require_section", "section_code": "SHOT_BLAST"},
+            {"action": "require_section", "section_code": "PREP_STOCK"},
+            # Участки основного маршрута до подготовки не доходят: без
+            # исключения строка подготовительного плана матчилась бы на
+            # универсальный маршрут `universal_rp`, который содержит их все.
+            {"action": "exclude_section", "section_code": "ANODIZING"},
+            {"action": "exclude_section", "section_code": "WIP_STOCK"},
+            {"action": "exclude_section", "section_code": "SAWING"},
+            {"action": "exclude_section", "section_code": "PACKING"},
+            {"action": "exclude_section", "section_code": "FINISHED_STOCK"},
+            {"action": "exclude_section", "section_code": "SHIPMENT"},
+            {"action": "exclude_section", "section_code": "SHIPPED"},
+        ],
+    },
+    {
+        # Вариант 1: в колонке «Операция» сверловка. Пресс снимаем — на
+        # этой строке его нет.
+        "code": "prep_drill_shot",
+        "name": "Подготовка: сверло + дробеструй",
+        "profile_code": "prep_stage_plan",
+        "priority": 900,
+        "is_active": True,
+        "phase": "route_select",
+        "conditions": [
+            {"source": "payload", "field_path": "operation", "operator": "contains", "value": "сверл"},
+        ],
+        "actions": [
+            {"action": "require_section", "section_code": "DRILLING"},
+            {"action": "exclude_section", "section_code": "PRESSING"},
+        ],
+    },
+    {
+        # Вариант 2: пресс. Два правила — по окну и по гребёнке: операции
+        # пресса в справочнике разные (`PRESS_WINDOW` / `PRESS_COMB`), и
+        # колонка файла различает их так же, как на упаковочной карте.
+        # `not_contains "сверл"` — пресс строки со сверловкой не бывает,
+        # и без этого проверки обе ветки сошлись бы на одной строке.
+        "code": "prep_press_window_shot",
+        "name": "Подготовка: пресс (окно) + дробеструй",
+        "profile_code": "prep_stage_plan",
+        "priority": 890,
+        "is_active": True,
+        "phase": "route_select",
+        "conditions": [
+            {"source": "payload", "field_path": "operation", "operator": "contains", "value": "окн"},
+            {"source": "payload", "field_path": "operation", "operator": "not_contains", "value": "сверл"},
+        ],
+        "condition_logic": "and",
+        "actions": [
+            {"action": "require_section", "section_code": "PRESSING"},
+            {"action": "exclude_section", "section_code": "DRILLING"},
+        ],
+    },
+    {
+        "code": "prep_press_comb_shot",
+        "name": "Подготовка: пресс (гребенка) + дробеструй",
+        "profile_code": "prep_stage_plan",
+        "priority": 890,
+        "is_active": True,
+        "phase": "route_select",
+        "conditions": [
+            {"source": "payload", "field_path": "operation", "operator": "contains", "value": "греб"},
+            {"source": "payload", "field_path": "operation", "operator": "not_contains", "value": "сверл"},
+        ],
+        "condition_logic": "and",
+        "actions": [
+            {"action": "require_section", "section_code": "PRESSING"},
+            {"action": "exclude_section", "section_code": "DRILLING"},
+        ],
+    },
+    {
+        # Вариант 3: чистый дробеструй. Колонка «Операция» пуста — дробеструй
+        # в маршруте есть всегда (вариант не «без дробеструя», а «без
+        # сверла и пресса»), а участки подготовки без вторичной операции
+        # не заводятся.
+        "code": "prep_shot_only",
+        "name": "Подготовка: только дробеструй",
+        "profile_code": "prep_stage_plan",
+        "priority": 880,
+        "is_active": True,
+        "phase": "route_select",
+        "conditions": [
+            {"source": "payload", "field_path": "operation", "operator": "empty", "value": None},
+        ],
+        "actions": [
+            {"action": "exclude_section", "section_code": "DRILLING"},
+            {"action": "exclude_section", "section_code": "PRESSING"},
+        ],
+    },
+    {
+        # Операция строки — из колонки файла (как `pack_type` в тестах
+        # импорта): `resolve_operations` адресует группу своего участка.
+        "code": "prep_drill_operation",
+        "name": "Подготовка: операция сверловки",
+        "profile_code": "prep_stage_plan",
+        "priority": 100,
+        "is_active": True,
+        "phase": "resolve_operations",
+        "conditions": [
+            {"source": "payload", "field_path": "operation", "operator": "contains", "value": "сверл"},
+        ],
+        "actions": [
+            {
+                "action": "set_operation",
+                "section_code": "DRILLING",
+                "group_code": "DRILLING",
+                "operation_code": "DRILL",
+            },
+        ],
+    },
+    {
+        # Два вида пресса различаются словом в той же колонке. Промах
+        # mapping'а не страшен: у участка PRESSING в справочнике есть
+        # группы, и `build_route_from_profile` берёт первую операцию группы
+        # (fallback участка).
+        "code": "prep_press_operation",
+        "name": "Подготовка: операция пресса",
+        "profile_code": "prep_stage_plan",
+        "priority": 100,
+        "is_active": True,
+        "phase": "resolve_operations",
+        "conditions": [
+            {"source": "payload", "field_path": "operation", "operator": "not_contains", "value": "сверл"},
+            {"source": "payload", "field_path": "operation", "operator": "not_empty", "value": None},
+        ],
+        "condition_logic": "and",
+        "actions": [
+            {
+                "action": "set_operation_by_mapping",
+                "section_code": "PRESSING",
+                "group_code": "PRESSING",
+                "lookup_field": "operation",
+                "mapping": [
+                    {"keyword": "окн", "operation_code": "PRESS_WINDOW"},
+                    {"keyword": "греб", "operation_code": "PRESS_COMB"},
+                ],
+            },
+        ],
+    },
+    {
+        # Имя маршрута различает варианты: слоты операций пусты у
+        # невключённых участков, а `build_route_name` выбрасывает пустые
+        # части. `shot_op` ставит правило ниже — без него все три варианта
+        # назывались бы одинаково и делили один маршрут по сигнатуре.
+        "code": "prep_shot_signature",
+        "name": "Подготовка: подпись дробеструя в имени",
+        "profile_code": "prep_stage_plan",
+        "priority": 100,
+        "is_active": True,
+        "phase": "resolve_signatures",
+        "conditions": [
+            {"source": "ctx", "field_path": "included_sections", "operator": "contains", "value": "SHOT_BLAST"},
+        ],
+        "actions": [
+            {"action": "set_field", "path": "payload.shot_op", "value": "Дробеструй"},
+        ],
+    },
 ]
