@@ -138,6 +138,56 @@ async def test_source_issues_to_stage_whose_input_matches_operations(client, ses
     assert left.balance_qty == Decimal(60)
     await assert_no_invariants_violations(session)
     await assert_no_stock_ledger_invariants_violations(session)
+ 
+ 
+async def test_chosen_source_is_received_by_the_target_task(client, session) -> None:
+    """Выданный материал ПРИНЯТ заданием: без этого доска не даёт его закрыть.
+
+    Регресс #315. ``release_batch`` писал только ``TRANSFER_SEND`` (остаток со
+    склада на участок), а проекция задания считает выданным ``TRANSFER_RECEIVE``
+    по ``task_id`` (``effective_issued_quantity``). Без второй половины
+    задание оставалось с ``issued = 0`` / ``available = 0``, и маршрут вставал
+    на первом участке: доска не давала завершить задание, у которого не
+    выдано ни одной штуки.
+    """
+    from app.stock.services import StockProjectionManager
+
+    fx = await _make_dim_route_fixture(session, sku="SRC-RECV", qty=Decimal(100))
+    raw, p1, _p2 = fx["sections"]
+    balance = await _balance(
+        session,
+        product_id=fx["product"].id,
+        location_id=raw.id,
+        qty=Decimal(100),
+        ops=RAW_OPS,
+    )
+
+    user = await _make_user(session, "src-recv@local")
+    result = await _take(
+        client,
+        fx["position"].id,
+        user,
+        [{"balance_id": balance.id, "quantity": "40"}],
+    )
+    assert result["status"] == "success", result
+
+    task = (
+        await session.execute(select(WorkTask).where(WorkTask.section_id == p1.id))
+    ).scalar_one()
+    cache = await StockProjectionManager().get_task_cache(session, task.id)
+    assert cache["received_quantity"] == Decimal(40), (
+        "выбранный источник обязан быть принят заданием-получателем"
+    )
+    assert cache["issued_quantity"] == Decimal(40)
+    # Первая выдача не «передача дальше»: бюджет участка-источника не растёт.
+    assert cache["transferred_quantity"] == Decimal(0)
+
+    # Приём — учётная проводка без локаций, поэтому остаток по ledger не
+    # задваивается: 100 − 40 на prep-складе и 40 на участке.
+    await session.refresh(balance)
+    assert balance.balance_qty == Decimal(60)
+    await assert_no_invariants_violations(session)
+    await assert_no_stock_ledger_invariants_violations(session)
 
 
 async def test_prep_stock_source_skips_stage_its_operations_cleared(client, session) -> None:
