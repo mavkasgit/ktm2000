@@ -68,15 +68,19 @@ Ruff блокирует merge в CI, поэтому красное дерево 
 
 | Набор | Команда | Результат | Время |
 |---|---|---|---|
-| Backend (полный) | `npm run test:pytest`, launcher, `PYTEST_NUM_WORKERS=2` | **2091 passed**, 0 failed, 3 warnings | 627.53s |
+| Backend (полный, финальный) | `npm run test:pytest`, launcher, `PYTEST_NUM_WORKERS=2` | **2108 passed**, 0 failed, 3 warnings | 450.25s |
 | Frontend (полный) | `npm --prefix frontend run test` | **1332 passed** / 1 skipped (1333), 0 failed | 52.99s |
-| e2e (полный, ярус all) | `npm run test:e2e`, `retries=0`, `workers=1`, `CI` пуст, `E2E_MAX_PARALLEL_RUNS=3` | **23 passed**, код 0 | 584s |
+| e2e (полный, ярус all, финальный) | `npm run test:e2e`, `retries=0`, `workers=1`, `CI` пуст, `E2E_MAX_PARALLEL_RUNS=3`, SHA `8e6b40e3` | **25 passed**, код 0 | 636s |
 | Типы | `npx tsc -p tsconfig.json --noEmit` | 0 ошибок | — |
 | Линтер | `cd backend && ruff check .` | All checks passed | — |
 
-Backend-прогон сделан **до** слияния R14; его правка — один тестовый файл, полный
-перегон потребовал бы десяти минут ради одного теста. Целевая проверка после R14:
-`RemainderAllocationDialog` — 11 passed.
+Все три финальных прогона сделаны на дереве `8e6b40e3` — после слияния всех
+срезов, включая #315. Backend и e2e прогнаны в worktree среза #315 после его
+fast-forward на `main`: это то же дерево, отдельный namespace — как требует регламент
+для e2e.
+
+Прирост e2e относительно промежуточного прогона (23) — две новые спеки:
+`pair-article-cycle` (#312) и `prep-stock-source-cycle` (#315).
 
 **Динамика фронта за ночь:** 1291 → 1332 (+41). Весь прирост — новые спеки:
 
