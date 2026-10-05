@@ -132,8 +132,8 @@ ktm_mig_<10 hex>` работает **без** `--force`. Сам `--force` ост
 
 ### Slow-тесты (маркер `slow`)
 
-Шесть интеграционных тестов демо-сидера в `test_packing_plan_demo_seeder.py`
-(суммарно ~204s, см. T-0001) помечены `@pytest.mark.slow`. Дефолтные режимы
+Девять интеграционных тестов демо-сидера в `test_packing_plan_demo_seeder.py`
+(см. T-0001) помечены `@pytest.mark.slow`. Дефолтные режимы
 лаунчера (`test:pytest`, `:mon`, `:lf`) добавляют `-m "not slow"`; `--full` и
 CI гоняют полный набор. Маркер регистрирован в `pytest.ini`.
 
