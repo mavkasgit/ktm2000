@@ -20,6 +20,7 @@ import { RemainderAllocationDialog } from "../components/RemainderAllocationDial
 import type { SourceAllocation } from "../components/RemainderAllocationDialog";
 import { listSections } from "@/shared/api/sections";
 import { useFilterableTable } from "@/shared/hooks/useFilterableTable";
+import type { SortConfig } from "@/shared/hooks/useTableQueryEngine";
 import { usePaginatedTableQuery } from "@/shared/hooks/usePaginatedTableQuery";
 import { formatDimensionsFilterValue } from "@/shared/api/stock";
 
@@ -59,6 +60,23 @@ import { useDebouncedValue } from "@/shared/lib/useDebouncedValue";
 import { buildColumnApiParams } from "@/shared/lib/columnSpecs";
 import { executionTableColumns } from "../components/execution-table-columns";
 import { isFirstRowsLoad } from "@/shared/lib/tableQueryPlaceholder";
+
+
+/**
+ * Порядок строк до первого клика по шапке: сперва утверждённые позиции плана,
+ * внутри них — от большего количества к меньшему, дальше то, что уже в работе,
+ * и последними отменённые. Второй приоритет сортирует количество внутри каждой
+ * группы статусов, а не только внутри утверждённых: иначе работающие позиции
+ * оказывались бы в случайном порядке.
+ *
+ * Статус сервер сравнивает по порядку значений enum `plan_position_status`, а не
+ * по строке, поэтому `status:asc` и есть нужная очередь (см.
+ * `_sort_columns` в `production_planning_rows.py`).
+ */
+const EXECUTION_DEFAULT_SORT: SortConfig<ExecutionSortField>[] = [
+  { field: "status", order: "asc" },
+  { field: "qty", order: "desc" },
+];
 
 /**
  * Параметры запроса по отфильтрованным колонкам — из описания колонок, а не
@@ -114,6 +132,7 @@ export function ExecutionPage() {
     resetColumnFilters,
     hasActiveFilters: hasTableFiltersActive,
   } = useFilterableTable<ExecutionSortField>({
+    defaultSort: EXECUTION_DEFAULT_SORT,
     extraHasActive: searchQuery.trim().length > 0,
   });
 

@@ -66,6 +66,13 @@ def _sort_columns(product, route) -> dict[str, object]:
     return {
         "row_number": PlanPosition.source_row_number,
         "product_sku": func.coalesce(product.sku, PlanPosition.source_sku),
+        # Порядок статусов — по порядку значений в типе `plan_position_status`
+        # (enum в Postgres сравнивается по нему, а не по строке): draft, invalid,
+        # valid, approved, released, cancelled. Для страницы контроля это и есть
+        # очередь операций — сперва утверждённые, потом то, что в работе, потом
+        # отменённые. Перестановка значений в enum (нужна миграция с ALTER TYPE)
+        # сломала бы и этот порядок: `test_rows_sort_by_status_queue_then_qty_desc`
+        # фиксирует результат.
         "status": PlanPosition.status,
         "planned_qty": PlanPosition.quantity,
         "completed_qty": lambda: _completed_qty_subquery(),

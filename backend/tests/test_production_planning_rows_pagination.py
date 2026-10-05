@@ -474,6 +474,76 @@ async def test_rows_default_order_groups_by_plan_then_row_number(client, session
 
 
 @pytest.mark.asyncio
+async def test_rows_sort_by_status_queue_then_qty_desc(client, session: AsyncSession):
+    """`sort=status:asc,planned_qty:desc` — порядок страницы контроля.
+
+    Статус сравнивается по порядку значений в типе `plan_position_status`
+    (enum в Postgres), а не по строке: approved → released → cancelled, то есть
+    очередь операций. По алфавиту `cancelled` встал бы между утверждёнными и
+    работающими, а в середине списка отменённая позиция читается как «что-то
+    в работе». Второй приоритет — количество по убыванию внутри группы
+    статусов (у работающей позиции количество больше всех, иначе этот
+    приоритет не проверяется).
+    """
+    product, route = await _make_route(session, "STATUSQ")
+    plan = ProductionPlan(
+        plan_no="PLAN-STATUSQ",
+        name="Plan STATUSQ",
+        status=ProductionPlanStatus.approved,
+        period_start=date(2026, 5, 1),
+        period_end=date(2026, 5, 31),
+    )
+    session.add(plan)
+    await session.flush()
+
+    for row_no, (suffix, status, quantity) in enumerate(
+        (
+            ("APPROVED-SMALL", PlanPositionStatus.approved, 5),
+            ("RELEASED", PlanPositionStatus.released, 100),
+            ("APPROVED-BIG", PlanPositionStatus.approved, 30),
+            ("CANCELLED", PlanPositionStatus.cancelled, 999),
+        ),
+        start=1,
+    ):
+        session.add(
+            PlanPosition(
+                production_plan_id=plan.id,
+                product_id=product.id,
+                source_type=PlanSourceType.manual,
+                source_sku=f"STATUSQ-{suffix}",
+                source_name=product.name,
+                quantity=Decimal(quantity),
+                source_payload={},
+                status=status,
+                validation_status=PlanPositionValidationStatus.valid,
+                validation_errors=[],
+                period_start=plan.period_start,
+                period_end=plan.period_end,
+                has_pack_ops=False,
+                route_id=route.id,
+                source_row_number=row_no,
+            )
+        )
+    await session.commit()
+
+    resp = await client.get(
+        "/api/production-planning/rows?sort=status:asc,planned_qty:desc&limit=50"
+    )
+    assert resp.status_code == 200, resp.text
+    skus = [
+        row["source_sku"]
+        for row in resp.json()["rows"]
+        if row["source_sku"].startswith("STATUSQ-")
+    ]
+    assert skus == [
+        "STATUSQ-APPROVED-BIG",
+        "STATUSQ-APPROVED-SMALL",
+        "STATUSQ-RELEASED",
+        "STATUSQ-CANCELLED",
+    ]
+
+
+@pytest.mark.asyncio
 async def test_rows_multi_sort_priorities(client, session: AsyncSession):
     """Два приоритета: сначала количество, потом артикул.
 
