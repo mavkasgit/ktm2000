@@ -252,8 +252,11 @@ async def resolve_positions_hanger(
 
     result: dict[int, PositionHangerValue] = {}
     # Позиции-компоненты пары: позиция несёт один артикул, но норма
-    # «количество на подвес» — парная, ведь на подвесе едут оба
-    # компонента сразу (#312). Артикул вне пары считается как раньше.
+    # «количество на подвес» — парная, ведь на подвесе едут оба компонента
+    # сразу (#312). Сюда доходят только позиции без признака от импорта: план,
+    # импортированный после правила «пара — соседние строки», всегда несёт
+    # ``product_pair`` в payload (``resolved`` — пара или одиночка), и решает
+    # его, а не справочник пар. Здесь — старые планы и строки без признака.
     pair_component_positions: list[tuple[object, Product]] = []
     # Позиции склеенной пары (payload ``paired_profile``) — прежний путь,
     # он остаётся валидным для планов, импортированных до #312.
@@ -267,6 +270,22 @@ async def resolve_positions_hanger(
                     product,
                     length_mm=position_length_mm(position),
                     payload_quantity_per_hanger=override,
+                )
+                continue
+            # Признак пары от импорта: пара — не свойство артикула, а факт плана
+            # (строки-соседи одного импорта). ``resolved=False`` — одиночная
+            # строка артикула пары: «нет парного задания» — считается своей
+            # нормой. Ключа нет — план импортирован до этого правила, и решает
+            # справочник пар, как раньше.
+            marker = (position.source_payload or {}).get("product_pair")
+            if isinstance(marker, dict):
+                snapshot_value = (
+                    _snapshot_pair_hanger(position) if marker.get("resolved") is True else None
+                )
+                result[position.id] = snapshot_value or resolve_position_hanger(
+                    product,
+                    length_mm=position_length_mm(position),
+                    payload_quantity_per_hanger=None,
                 )
                 continue
             pair_component_positions.append((position, product))

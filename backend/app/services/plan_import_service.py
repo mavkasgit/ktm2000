@@ -728,6 +728,10 @@ async def _make_change_items(
     # and repeated references to the same source row are ignored.
     import_fingerprints: dict[str, dict[str, set[str] | set[int]]] = {}
 
+    # Строки этого импорта по «артикул + длина»: по ним решается, пришла ли
+    # позиция в паре (см. ``_pair_partner_row_is_adjacent``).
+    sheet_rows_by_sku_length = _sheet_rows_by_sku_length(parsed_rows)
+
     for row in parsed_rows:
         warnings = list(row.warnings)
         errors = list(row.errors)
@@ -955,11 +959,25 @@ async def _make_change_items(
             length_mm = (row.input_dimensions or {}).get(LENGTH_MM)
             # Артикул может входить в пару: после снятия склейки (#312) пара —
             # это две отдельные позиции, но на подвесе они едут вместе, поэтому
-            # норма берётся у пары. Артикул вне пары — прежняя одиночная механика.
+            # норму пары берёт та позиция, которая пришла в паре (см.
+            # ``_pair_partner_row_is_adjacent``). Одинокая строка артикула пары
+            # («нет парного задания») считается обычной позицией по своей норме,
+            # и решение импорта уезжает в payload ключом ``product_pair`` —
+            # планировщик, доска и печать читают его, а не справочник пар.
             hanger_value = PositionHangerValue(None, None)
             if product is not None:
                 resolved_pair = await pair_resolver_cache.resolve_pair_by_product(db, product.id)
+                pair_partner_adjacent = False
                 if resolved_pair is not None:
+                    partner_sku = (
+                        resolved_pair.product_b.sku
+                        if resolved_pair.product_a.id == product.id
+                        else resolved_pair.product_a.sku
+                    )
+                    pair_partner_adjacent = _pair_partner_row_is_adjacent(
+                        row, partner_sku, sheet_rows_by_sku_length
+                    )
+                if resolved_pair is not None and pair_partner_adjacent:
                     pair_id = resolved_pair.pair.id
                     if pair_id not in pair_candidates_cache:
                         pair_candidates_cache[pair_id] = (
@@ -977,10 +995,33 @@ async def _make_change_items(
                     hanger_value = PositionHangerValue(
                         pair_value.quantity_per_hanger, pair_value.source
                     )
+                    row.payload["product_pair"] = {
+                        "resolved": True,
+                        "reason": None,
+                        "pair_id": pair_id,
+                        "pair_name": f"{resolved_pair.product_a.sku}+{resolved_pair.product_b.sku}",
+                        "quantity_per_hanger": pair_value.quantity_per_hanger,
+                        "source": pair_value.source,
+                    }
                 else:
                     hanger_value = resolve_position_hanger(
                         product, length_mm=length_mm, payload_quantity_per_hanger=None
                     )
+                    if resolved_pair is not None:
+                        # Артикул в паре, но пары строк (или её нормы на этой
+                        # длине) в плане нет — позиция одиночная.
+                        row.payload["product_pair"] = {
+                            "resolved": False,
+                            "reason": (
+                                "no_paired_row"
+                                if not pair_partner_adjacent
+                                else "pair_hanger_not_found"
+                            ),
+                            "pair_id": resolved_pair.pair.id,
+                            "pair_name": f"{resolved_pair.product_a.sku}+{resolved_pair.product_b.sku}",
+                            "quantity_per_hanger": None,
+                            "source": None,
+                        }
             product_hanger_qty = hanger_value.quantity_per_hanger
 
             # Источник для подсветки артикула в предпросмотре: значение и его
@@ -1653,6 +1694,51 @@ def _build_available_inputs_by_sku(rows: list[ParsedPlanRow]) -> dict[str, Decim
         current = totals.get(key, Decimal(0))
         totals[key] = current + row.quantity
     return totals
+
+
+def _sheet_rows_by_sku_length(rows: list[ParsedPlanRow]) -> dict[tuple[str, str | None], list[int]]:
+    """Строки листа по «нормализованный SKU + нормальная длина» → номера строк.
+
+    По этому индексу решается, пришла ли позиция в паре: нужна строка второго
+    компонента на ту же длину и соседним номером строки листа.
+    """
+    index: dict[tuple[str, str | None], list[int]] = {}
+    for row in rows:
+        length_mm = position_length_mm(row)
+        key = (
+            _normalize_sku(row.source_sku),
+            _length_key(length_mm) if length_mm is not None else None,
+        )
+        index.setdefault(key, []).extend(row.source_row_numbers)
+    return index
+
+
+def _pair_partner_row_is_adjacent(
+    row: ParsedPlanRow,
+    partner_sku: str,
+    sheet_rows: dict[tuple[str, str | None], list[int]],
+) -> bool:
+    """Строка второго компонента пары есть в этом же импорте и стоит рядом.
+
+    Пара — не свойство артикула, а факт плана: на подвесе едут оба компонента,
+    поэтому норму пары берёт только позиция, у которой в этом же плане есть
+    парная строка — второй компонент на ту же нормальную длину, следующей или
+    предыдущей строкой листа (так эта пара и записана в файле заказчика:
+    2616 с наименованием и 2604 под ней). Одинокая строка артикула пары
+    (первая строка месячного плана без партнёра, вторая партия без пары)
+    считается обычной позицией — по собственной норме.
+    """
+    length_mm = position_length_mm(row)
+    key = (
+        _normalize_sku(partner_sku),
+        _length_key(length_mm) if length_mm is not None else None,
+    )
+    partner_rows = sheet_rows.get(key) or []
+    return any(
+        abs(partner_row - own_row) == 1
+        for own_row in row.source_row_numbers
+        for partner_row in partner_rows
+    )
 
 
 def _make_plan_no(sheet_name: str) -> str:

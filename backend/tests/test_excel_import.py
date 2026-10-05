@@ -1538,13 +1538,32 @@ async def test_import_single_auto_norm_without_geometry_warns(
 
 
 
-def _workbook_paired(length_m: float = 2.7, output_length_m: float | None = None) -> bytes:
-    """Создаёт Excel с парой профилей.
+_PLAN_SHEET_HEADERS: list[object] = [
+    "Артикул",
+    "пополнение",
+    "Наименование",
+    "остатки сырья на КТМ",
+    "Цвет",
+    "кол-во шт. в 2,7",
+    "Длина, м",
+    "Пробивка/сверловка",
+    "Упаковка",
+    "Примечание ",
+    "Длина после упак, м",
+    "кол-во штук готовой продукции",
+    "Запад",
+    "Восток",
+    "Вид конечного продукта",
+    "Комментарии",
+    "",
+    "",
+    "Упаковка в 1,8",
+    "добавить",
+]
 
-    ``output_length_m`` отличается от ``length_m`` в кейсе резки
-    («Длина, м» 2,7 → «Длина после упак, м» 0,9).
-    """
-    out_length = length_m if output_length_m is None else output_length_m
+
+def _workbook_with_data_rows(data_rows: list[list[object]]) -> bytes:
+    """Лист «Упаковочной карты РП»: шапка как в реальном файле + строки данных."""
     wb = Workbook()
     ws = wb.active
     ws.title = "План май 26 05"
@@ -1552,36 +1571,27 @@ def _workbook_paired(length_m: float = 2.7, output_length_m: float | None = None
     ws.append(["Заявка № 05", "май"])
     ws.append([])
     ws.append(["", "", "", "", "", "", "", "", "", "", "", "", "Формирование ящиков"])
-    ws.append(
-        [
-            "Артикул",
-            "пополнение",
-            "Наименование",
-            "остатки сырья на КТМ",
-            "Цвет",
-            "кол-во шт. в 2,7",
-            "Длина, м",
-            "Пробивка/сверловка",
-            "Упаковка",
-            "Примечание ",
-            "Длина после упак, м",
-            "кол-во штук готовой продукции",
-            "Запад",
-            "Восток",
-            "Вид конечного продукта",
-            "Комментарии",
-            "",
-            "",
-            "Упаковка в 1,8",
-            "добавить",
-        ]
-    )
-    # Парная строка 1 и 2 — вторая с пустым name как в оригинале
-    ws.append(["ЮП-PAIR-A", "ТЗ", "Paired Profile", 100, "black", 10, length_m, "", "", "", out_length, 10, "", 10, "П/ф"])
-    ws.append(["ЮП-PAIR-B", "ТЗ", "", 100, "black", 10, length_m, "", "", "", out_length, 10, "", 10, "П/ф"])
+    ws.append(list(_PLAN_SHEET_HEADERS))
+    for row in data_rows:
+        ws.append(row)
     out = BytesIO()
     wb.save(out)
     return out.getvalue()
+
+
+def _workbook_paired(length_m: float = 2.7, output_length_m: float | None = None) -> bytes:
+    """Создаёт Excel с парой профилей.
+
+    ``output_length_m`` отличается от ``length_m`` в кейсе резки
+    («Длина, м» 2,7 → «Длина после упак, м» 0,9).
+    """
+    out_length = length_m if output_length_m is None else output_length_m
+
+    def pair_row(sku: str, name: str) -> list[object]:
+        return [sku, "ТЗ", name, 100, "black", 10, length_m, "", "", "", out_length, 10, "", 10, "П/ф"]
+
+    # Парная строка 1 и 2 — вторая с пустым name как в оригинале
+    return _workbook_with_data_rows([pair_row("ЮП-PAIR-A", "Paired Profile"), pair_row("ЮП-PAIR-B", "")])
 
 
 async def _make_product_pair(
@@ -1656,6 +1666,56 @@ async def test_import_pair_components_round_by_pair_manual_n(
         assert after_data["hanger_count"] == 2
         # Округление молчаливое — текстового предупреждения нет
         assert not any("paired_hanger_adjusted" in w for w in item["warnings"])
+
+
+@pytest.mark.asyncio
+async def test_import_lone_pair_row_is_not_counted_as_pair(
+    client, session, tmp_path, monkeypatch
+) -> None:
+    """Одинокая строка артикула пары — не пара: «нет парного задания».
+
+    Норму пары берёт только позиция, которая пришла в паре — строка второго
+    компонента на ту же нормальную длину соседним номером строки листа (та же
+    пара строк округляется по N=8 в ``test_import_pair_components_round_by_pair_manual_n``).
+    Без партнёра норма пары не подставляется, количество по ней не округляется,
+    а позиция несёт признак ``product_pair.resolved=false``: план и печать читают
+    решение импорта, а не справочник пар.
+    """
+    monkeypatch.setattr(settings, "IMPORT_STORAGE_DIR", str(tmp_path))
+
+    await _make_product_pair(
+        session,
+        "ЮП-PAIR-A",
+        "ЮП-PAIR-B",
+        manual_n=8,
+        length={"length_mm": 2700, "is_primary": True},
+    )
+    await session.commit()
+
+    template = await _create_template(session, name="Lone Pair Template", code="lone-pair-template")
+    await session.commit()
+
+    def row(sku: str, name: str) -> list[object]:
+        return [sku, "ТЗ", name, 100, "black", 10, 2.7, "", "", "", 2.7, 10, "", 10, "П/ф"]
+
+    # Второго компонента пары в листе нет: соседи одинокой строки — чужой артикул.
+    wb = _workbook_with_data_rows([row("ЮП-SOLO", "Solo Profile"), row("ЮП-PAIR-A", "Paired Profile")])
+    response = await client.post(
+        f"/api/imports/excel/preview?template_id={template.id}",
+        data={"normalize_hanger_quantity": "true"},
+        files={"file": ("lone-pair.xlsx", wb, "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet")},
+    )
+
+    assert response.status_code == 200, response.text
+    item = next(item for item in response.json()["items"] if item["source_sku"] == "ЮП-PAIR-A")
+    after_data = item["after_data"]
+    assert after_data["quantity"] in ("10", "10.0"), "количество округлено по норме пары"
+    assert after_data["original_quantity"] in ("10", "10.0")
+    assert after_data["quantity_per_hanger"] is None
+    assert "hanger_calc_zero" not in item["errors"]
+    marker = after_data["source_payload"]["product_pair"]
+    assert marker["resolved"] is False, marker
+    assert marker["reason"] == "no_paired_row", marker
 
 
 @pytest.mark.asyncio
