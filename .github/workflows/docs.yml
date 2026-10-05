@@ -1,0 +1,46 @@
+name: Docs
+
+# Ссылки в документации — блокирующая проверка.
+#
+# Что именно в скоупе — `scripts/check-doc-links-core.js`, а не этот комментарий:
+# инвариант один, каждая относительная ссылка в `.md` резолвится в файл из
+# `git ls-files`. Якоря, схемы и внешние URL выведены из скоупа там же.
+#
+# Зачем отдельный workflow: остальные проверяют код (ruff, tsc, vitest, pytest,
+# alembic). Переименование документа оставляет все их зелёными — ловит только
+# этот джоб. Три ссылки на ADR в `docs/plan-import-spec.md` висели битыми до его
+# появления.
+#
+# Локальный запуск — та же команда: `npm run check:docs` из корня.
+# `test:scripts` едет сюда же: у скриптов есть тесты, и без этого джоба они
+# никогда не исполнялись в CI.
+on:
+  push:
+    branches:
+      - main
+      - master
+  pull_request:
+    branches:
+      - main
+      - master
+  workflow_dispatch:
+
+jobs:
+  docs:
+    name: docs
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+
+      - name: Doc links
+        run: npm run check:docs
+
+      - name: Script tests
+        run: npm run test:scripts

@@ -89,12 +89,12 @@ frontend стенд **не имеет** — [`frontend/scripts/run-e2e.mjs`](fro
 
 ## Разведка
 
-- Код, символы, flow — **CodeGraph MCP** (`codegraph_explore`). Не использовать `list_dir` / `grep` для поиска символов.
+- Поиск кода и символов — **CodeGraph**, когда в сессии есть `codegraph_explore` (MCP подключён, строка 97). Инструмента нет — работайте обычным поиском по файлам, это полноценная замена для точечных вопросов; CodeGraph выигрывает на кросс-файловых разведках («кто вызывает», «что тянет»), а не на поиске строки.
 - Внешние best practices — **Exa MCP** (`web_search_exa` / `web_search`).
 - Полная матрица MCP → [`docs/agent-registry.md`](docs/agent-registry.md).
-- После значимых правок кода: `npx @colbymchenry/codegraph sync`.
+- После значимых правок кода: `npx @colbymchenry/codegraph sync`. Индекс стареет незаметно — ответы по коду, изменённому после последнего `sync`, берутся из устаревшей выдачи, и это выглядит как правда. Сверить возраст: индекс лежит в `.codegraph/codegraph.db`, если он старше последнего коммита — `sync` ещё не делали.
 - Индекс CodeGraph локальный и не в git (`.codegraph/` в `.gitignore`), поэтому на новой машине/клоне — один раз `npx @colbymchenry/codegraph init -y`, и только потом `sync`. `sync` не инициализирует: без индекса он падает с `CodeGraph not initialized`.
-- MCP-сервер ставится отдельно и один раз на harness: `npx @colbymchenry/codegraph install -t <агент> -l global`. Без него `codegraph_explore` в сессии нет, и «код искать только через CodeGraph» невыполнимо.
+- MCP-сервер ставится отдельно и один раз на harness: `npx @colbymchenry/codegraph install -t <агент> -l global`. Пока он не установлен, `codegraph_explore` в сессии не будет — это состояние, а не правило; CLI (`npx @colbymchenry/codegraph query <символ>`) работает и без MCP, даёт тот же индекс.
 
 ## Чужие правки в рабочем дереве
 
