@@ -32,7 +32,7 @@ from collections.abc import Iterable
 from dataclasses import dataclass, field
 from typing import Literal
 
-from sqlalchemy import select
+from sqlalchemy import Select, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.models.product import (
@@ -175,6 +175,18 @@ class PairResolutionCache:
         return resolved
 
 
+def _pairs_in_stable_order() -> Select:
+    """Пары в порядке ``id``.
+
+    «Первая пара побеждает» — правило без ``ORDER BY`` не правило: Postgres
+    отдаёт строки в произвольном порядке, и артикул, состоящий в нескольких
+    парах (у ЮП-2616 их три), получал то свою норму подвеса, то чужую — в
+    зависимости от плана запроса. Порядок по ``id`` делает выбор
+    воспроизводимым и совпадающим с порядком вставки пары.
+    """
+    return select(ProductPair).order_by(ProductPair.id)
+
+
 async def _load_pair_index(db: AsyncSession) -> dict[frozenset[str], ResolvedPair]:
     """Справочник пар целиком: нормализованные SKU компонентов → ResolvedPair.
 
@@ -182,7 +194,7 @@ async def _load_pair_index(db: AsyncSession) -> dict[frozenset[str], ResolvedPai
     тот же, что в поштучном поиске, поэтому при нескольких парах с
     одинаковыми SKU побеждает та же, что и раньше.
     """
-    pairs = (await db.execute(select(ProductPair))).scalars().all()
+    pairs = (await db.execute(_pairs_in_stable_order())).scalars().all()
     if not pairs:
         return {}
     product_ids = {pid for pair in pairs for pid in (pair.product_a_id, pair.product_b_id)}
@@ -216,7 +228,7 @@ async def _load_pair_index_by_product(db: AsyncSession) -> dict[int, ResolvedPai
     ``product_id``. Первая пара в справочнике побеждает, как и в
     SKU-индексе, поэтому порядок обхода строк тот же.
     """
-    pairs = (await db.execute(select(ProductPair))).scalars().all()
+    pairs = (await db.execute(_pairs_in_stable_order())).scalars().all()
     if not pairs:
         return {}
     product_ids = {pid for pair in pairs for pid in (pair.product_a_id, pair.product_b_id)}
@@ -256,7 +268,7 @@ async def resolve_pair_by_component_skus(
     if cache is not None:
         return await cache.resolve_pair(db, frozenset(normalized))
 
-    pairs = (await db.execute(select(ProductPair))).scalars().all()
+    pairs = (await db.execute(_pairs_in_stable_order())).scalars().all()
     if not pairs:
         return None
 
@@ -542,7 +554,7 @@ async def resolve_pair_by_product_id(
     if cache is not None:
         return await cache.resolve_pair_by_product(db, int(product_id))
 
-    pairs = (await db.execute(select(ProductPair))).scalars().all()
+    pairs = (await db.execute(_pairs_in_stable_order())).scalars().all()
     if not pairs:
         return None
 
