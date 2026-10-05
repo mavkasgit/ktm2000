@@ -8,7 +8,7 @@
 
 - ``released`` — canonical net FINAL_RELEASE через ledger-примитив
   ``app.stock.ledger.net_by_reason`` (ADR-0018), а не локальная gross-сумма;
-- ``produced`` — «произведено по размеру» (CONTEXT.md), два adapter'а:
+- ``produced`` — «произведено по размеру» (GLOSSARY.md), два adapter'а:
   трансформирующее задание — ``get_transform_progress().produced_by_group``
   (уже закаплено ``min(output_quantity, produced_by_group)``), обычное —
   gross SUM ``Reason.COMPLETE`` по (задача, размер);

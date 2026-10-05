@@ -6,7 +6,7 @@
 `docker inspect` контейнеров `ktm2000-backend-prod` / `ktm2000-postgres{,*-prod}`,
 `nginx`-лог живого прод-трафика, сверка ссылок `products.photo_*` и
 `import_files.file_sha256` с файлами на диске
-Связанные: ADR-0016 (тестовые БД), `docs/deployment.md`, `CONTEXT.md`
+Связанные: ADR-0016 (тестовые БД), `docs/deployment.md`, `GLOSSARY.md`
 
 ## Контекст
 

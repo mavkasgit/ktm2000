@@ -37,7 +37,7 @@ React 18.3 + TypeScript + Vite + Tailwind CSS + shadcn/ui + TanStack Query/Virtu
   в ещё не загруженный раздел — синхронное обновление, React прячет прежний
   раздел вместе с фокусом и рисует фолбэк вместо него.
 - Термин и правило — [ADR-0039](../docs/adr/0039-stranica-razdela-prishodit-svoim-chankom.md)
-  и [CONTEXT.md](../CONTEXT.md).
+  и [GLOSSARY.md](../GLOSSARY.md).
 
 ## Свежесть данных
 
@@ -69,7 +69,7 @@ React 18.3 + TypeScript + Vite + Tailwind CSS + shadcn/ui + TanStack Query/Virtu
   разворачивает поверх (`{ ...TABLE_ROW_COMPACT, ...overrides }`).
   Свои `p-2`, `size="sm"` и `rowHeight={…}` рядом с таблицей — нельзя.
   Термин и правило — [ADR-0030](../docs/adr/0030-komaktnaya-stroka-i-utochneniya-tablits.md)
-  и [CONTEXT.md](../CONTEXT.md).
+  и [GLOSSARY.md](../GLOSSARY.md).
 
 - **Кнопка возврата** — `BackButton` из
   [`src/shared/ui/BackButton.tsx`](src/shared/ui/BackButton.tsx): безымянная
@@ -182,7 +182,7 @@ React 18.3 + TypeScript + Vite + Tailwind CSS + shadcn/ui + TanStack Query/Virtu
   как «—» против «2,75 м» в соседних экранах.
 - «—» означает, что габарита действительно нет. Термин и правило —
   [ADR-0035](../docs/adr/0035-edinoe-imenovanie-razmera.md) и
-  [CONTEXT.md](../CONTEXT.md).
+  [GLOSSARY.md](../GLOSSARY.md).
 
 ## Ввод количества
 
@@ -200,7 +200,7 @@ React 18.3 + TypeScript + Vite + Tailwind CSS + shadcn/ui + TanStack Query/Virtu
   оператора, а не в вычислениях. Значения из БД вида `200.0` читаются как есть.
 - Кнопку подтверждения дизейблить нельзя: причина должна быть видна без
   наведения. Термин и правило — [ADR-0032](../docs/adr/0032-edinoe-pravilo-vvoda-kolichestva.md)
-  и [CONTEXT.md](../CONTEXT.md).
+  и [GLOSSARY.md](../GLOSSARY.md).
 
 ### Правка записанного факта
 
@@ -219,7 +219,7 @@ React 18.3 + TypeScript + Vite + Tailwind CSS + shadcn/ui + TanStack Query/Virtu
   предпросмотр, а лимит задачи уже давал ложные отказы на трансформирующих
   этапах (`allow_over_plan`).
 - [ADR-0036](../docs/adr/0036-pravilo-vvoda-kolichestva-pri-pravke-fakta.md)
-  и [CONTEXT.md](../CONTEXT.md).
+  и [GLOSSARY.md](../GLOSSARY.md).
 
 ## Вывод количества
 
@@ -254,7 +254,7 @@ React 18.3 + TypeScript + Vite + Tailwind CSS + shadcn/ui + TanStack Query/Virtu
   то, чего в данных нет. Ячейка и значение фильтра берут один форматтер, иначе
   один столбец показывает в двух местах разные числа.
 - [ADR-0040](../docs/adr/0040-edinyy-format-vyvoda-kolichestva.md)
-  и [CONTEXT.md](../CONTEXT.md).
+  и [GLOSSARY.md](../GLOSSARY.md).
 
 ## Окна
 
@@ -278,7 +278,7 @@ React 18.3 + TypeScript + Vite + Tailwind CSS + shadcn/ui + TanStack Query/Virtu
   состояния: перечисление окон флагами забывает новое окно, и `Escape` начинает
   работать поверх открытого окна.
 - Термин и правило — [ADR-0033](../docs/adr/0033-obshchiy-karkas-modalnyh-okon.md)
-  и [CONTEXT.md](../CONTEXT.md).
+  и [GLOSSARY.md](../GLOSSARY.md).
 
 ## Команды
 

@@ -56,7 +56,7 @@
 - Create: `docs/adr/0029-vremennaya-priostanovka-syncgate-hrms-ktm.md`
 - Modify: `docs/adr/0007-shared-auth-shell-unified-style.md`
 - Modify: `docs/adr/0011-auth-backend-host-adapter-sync.md`
-- Modify: `CONTEXT.md:357-362`
+- Modify: `GLOSSARY.md:357-362`
 - Modify: `README.md:53-66`
 
 **Interfaces:**
@@ -65,7 +65,7 @@
 
 - [ ] Добавить ADR-0029 с решением, альтернативами и последствиями.
 - [ ] Отметить ADR-0007/0011 как принятые, но с приостановленным обязательным enforcement со ссылкой на ADR-0029.
-- [ ] Убрать из `CONTEXT.md` утверждение об обязательной байтовой синхронизации.
+- [ ] Убрать из `GLOSSARY.md` утверждение об обязательной байтовой синхронизации.
 - [ ] Добавить в README команды включения Syncgate и принудительной ручной проверки.
 
 ### Task 4: Проверка

@@ -8,7 +8,7 @@
 
 **Tech Stack:** Python 3.12, FastAPI, SQLAlchemy async, Alembic, PostgreSQL 15; React 18.3, TypeScript, TanStack Query, Vitest.
 
-**Spec:** `docs/adr/0028-normalnaya-i-syrevaa-dlina-podvesa.md`, `CONTEXT.md`.
+**Spec:** `docs/adr/0028-normalnaya-i-syrevaa-dlina-podvesa.md`, `GLOSSARY.md`.
 
 ## Global Constraints
 

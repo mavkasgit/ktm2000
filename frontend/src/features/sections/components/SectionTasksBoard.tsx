@@ -986,7 +986,7 @@ export function SectionTasksBoard({
   // status/dimensions) уже пришли в нужном порядке с сервера, остальные
   // клиент упорядочивает здесь, поверх ответа и до группировки. Без сортировки
   // действует дефолт «количество убыв., размер убыв.», а внутри группы —
-  // «статус, затем sequence» (CONTEXT.md, раздел «Сортировка строк по размеру»).
+  // «статус, затем sequence» (GLOSSARY.md, раздел «Сортировка строк по размеру»).
   const hasActiveSort = sortConfigs.length > 0;
   const clientSortConfigs = useMemo(
     () => sortConfigs.filter((config) => !isServerSortField(config.field)),

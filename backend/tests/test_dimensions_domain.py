@@ -1,7 +1,7 @@
 """Чистые unit-тесты доменного модуля габаритов (app.domain.dimensions).
 
 Без БД, без async-фикстур приложения — только чистые функции.
-Термины и контракт: CONTEXT.md → «Габариты», ADR-0001.
+Термины и контракт: GLOSSARY.md → «Габариты», ADR-0001.
 """
 from __future__ import annotations
 

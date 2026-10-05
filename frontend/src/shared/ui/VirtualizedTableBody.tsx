@@ -31,7 +31,7 @@ const VIRTUALIZATION_THRESHOLD = 300;
  *
  * Row height: `rowHeight` is the starting estimate (taken from the shared
  * «компактная строка» rule), the real height is measured from the first
- * rendered row. Rows of one table share the same height (CONTEXT.md,
+ * rendered row. Rows of one table share the same height (GLOSSARY.md,
  * ADR-0030), so a single measurement is enough — and a table with taller
  * content (e.g. the two-line cells of «Передачи») stops lying to the
  * virtualizer.

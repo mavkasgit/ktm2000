@@ -3,7 +3,7 @@
 Тикет: [#232](https://github.com/mavkasgit/ktm2000/issues/232)
 Решения: [ADR-0052](../docs/adr/0052-istoriya-importa-ostatkov.md),
 [ADR-0053](../docs/adr/0053-otkat-importa-ostatkov-lifo-po-skladu.md)
-Термины: [`CONTEXT.md`](../CONTEXT.md) — «Импорт остатков», «Батч импорта»,
+Термины: [`GLOSSARY.md`](../GLOSSARY.md) — «Импорт остатков», «Батч импорта»,
 «Строка импорта», «Файл импорта».
 
 ## Проблема

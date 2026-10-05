@@ -175,4 +175,4 @@ Default five-role vocabulary (needs-triage, needs-info, ready-for-agent, ready-f
 
 ### Domain docs
 
-Single-context layout — one `CONTEXT.md` + `docs/adr/` at root. See `docs/agents/domain.md`.
+Single-context layout — one `GLOSSARY.md` + `docs/adr/` at root. See `docs/agents/domain.md`.

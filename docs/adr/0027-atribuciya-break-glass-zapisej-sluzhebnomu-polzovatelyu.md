@@ -7,7 +7,7 @@
 `backend/tests/test_auth.py`
 Связанные: ADR-0005 §3 (break-glass не пишет в `users`), ADR-0006 §2
 (break glass не несёт `sid`), ADR-0023 (одна служебная сущность вместо двух);
-`CONTEXT.md` — «Служебный пользователь», «Break glass», «Автор проводки»
+`GLOSSARY.md` — «Служебный пользователь», «Break glass», «Автор проводки»
 
 ## Контекст
 

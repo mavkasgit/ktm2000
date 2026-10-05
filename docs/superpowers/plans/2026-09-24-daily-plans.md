@@ -39,7 +39,7 @@
 - Modify: `frontend/src/features/sections/components/DailyPlansPanel.tsx` — real summaries, selection, create/revoke callbacks.
 - Modify: `frontend/src/features/sections/pages/SectionsTasksPage.tsx` — queries, mutations, composition merge, read-only plan mode, printing.
 - Delete: `frontend/src/features/sections/lib/dailyPlanPrototype.ts` — obsolete fixture.
-- Modify: `CONTEXT.md` — glossary terms only.
+- Modify: `GLOSSARY.md` — glossary terms only.
 - Create: `docs/adr/0027-daily-plans-as-live-task-groupings.md` — only if the decision remains a real hard-to-reverse boundary.
 
 ## Public Interfaces
@@ -89,7 +89,7 @@ DailyPlan response fields: `id`, `section_id`, `plan_date`, `created_at`, `creat
 ### Task 4: Verification and documentation
 
 - [ ] Pass `PlanModal` the current displayed tasks so print output follows selected plans.
-- [ ] Update `CONTEXT.md` with `DailyPlan` and `DailyPlanItem` terms; do not add implementation details.
+- [ ] Update `GLOSSARY.md` with `DailyPlan` and `DailyPlanItem` terms; do not add implementation details.
 - [ ] Add ADR only if the hard-to-reverse/surprising/tradeoff criteria remain true.
 - [ ] Run focused backend tests via launcher, frontend build/unit tests, and authenticated UI smoke.
 
