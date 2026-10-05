@@ -21,6 +21,7 @@ from app.models.release_batch import ReleaseBatch, ReleaseBatchPosition
 from app.models.rework_task import ReworkTask
 from app.models.transfer import Transfer, TransferDiscrepancy
 from app.models.work_task import WorkTask
+from app.stock.import_models import StockImportBatch
 from app.stock.models import StockBalance, StockTransaction
 
 
@@ -56,9 +57,14 @@ async def clear_generated_production_data(db: AsyncSession) -> dict[str, int]:
     await execute_delete(ImportBatch, "import_batches")
     await execute_delete(ProductionPlan, "production_plans")
 
+    # На ``import_files`` ссылаются две таблицы: план импорта и журнал импорта
+    # остатков. Раньше здесь учитывался только план, и демо-сид падал на FK
+    # ``fk_stock_import_batches_file_id_import_files``, если в базе была хотя бы
+    # одна загрузка остатков: весь прогон откатывался и план не появлялся.
     result = await db.execute(
         delete(ImportFile).where(
-            ~exists().where(ImportBatch.source_file_id == ImportFile.id)
+            ~exists().where(ImportBatch.source_file_id == ImportFile.id),
+            ~exists().where(StockImportBatch.file_id == ImportFile.id),
         )
     )
     deleted["orphan_import_files"] = result.rowcount or 0
