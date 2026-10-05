@@ -287,4 +287,38 @@ describe("лист плана: единый подвес пары (#312)", () =>
     expect(cellTexts(headerA).slice(0, 3)).toEqual(["", "ЮП-2604", "19"]);
     expect(cellTexts(headerB).slice(0, 3)).toEqual(["", "ЮП-2616", "19"]);
   });
+
+  it("строка со своей нормой печатается своей строкой, а не парой", () => {
+    // Ручной override позиции (то же поле, что пишет экран «План»): норма своя,
+    // подвесы считаются по ней, и в группу пары строка не попадает — ровно так
+    // же её считает резолвер, который ставит override выше пары.
+    const [headerA, headerB] = render([
+      makeTask({
+        id: 1,
+        product_id: 11,
+        product_sku: "ЮП-2604",
+        operation_name: "Анодирование",
+        dimensions: { length_mm: 2700 },
+        hanger_count: 5,
+        planned_quantity: "270",
+        source_payload: { quantity_per_hanger: 60 },
+      }),
+      makeTask({
+        id: 2,
+        product_id: 12,
+        product_sku: "ЮП-2616",
+        operation_name: "Анодирование",
+        dimensions: { length_mm: 2700 },
+        hanger_count: 4,
+        planned_quantity: "210",
+        source_payload: { quantity_per_hanger: 62 },
+      }),
+    ], pairs);
+
+    // Две отдельные строки: пары в шапке нет, счёт у каждой свой.
+    expect(cellTexts(headerA).slice(0, 3)).toEqual(["", "ЮП-2604", "5"]);
+    expect(cellTexts(headerB).slice(0, 3)).toEqual(["", "ЮП-2616", "4"]);
+    expect(cellTexts(headerA)[0]).not.toContain("+");
+    expect(cellTexts(headerB)[0]).not.toContain("+");
+  });
 });

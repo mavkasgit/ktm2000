@@ -45,8 +45,48 @@ function taskLengthMm(task: SectionBoardTask): number | null {
   return typeof length === "number" && length > 0 ? length : null;
 }
 
-/** Пара задания по его артикулу; `null` — артикул непарный или каталог не загружен. */
+/**
+ * Своя норма строки — ручной override позиции из payload (то же поле, что
+ * пишет экран «План» в поле «Кол-во на подвес»). Положительная своя норма
+ * означает, что строка нормируется сама: бэкенд-резолвер ставит override выше
+ * пары (#312), поэтому и печать не имеет права считать её парой.
+ */
+function ownHangerNorm(task: SectionBoardTask): number | null {
+  const raw = task.source_payload?.quantity_per_hanger;
+  const value = typeof raw === "number" ? raw : Number(raw ?? Number.NaN);
+  return Number.isFinite(value) && value > 0 ? value : null;
+}
+
+/** Снапшот пары из payload задачи (``product_pair``) — решение импорта о паре. */
+type ImportPairMarker = {
+  resolved?: boolean;
+  quantity_per_hanger?: string | number | null;
+};
+
+function importPairMarker(task: SectionBoardTask): ImportPairMarker | null {
+  const marker = task.source_payload?.product_pair;
+  return marker && typeof marker === "object" ? (marker as ImportPairMarker) : null;
+}
+
+/** Норма пары, зафиксированная импортом на этой длине; `null` — импорт её не дал. */
+function importPairNorm(task: SectionBoardTask): number | null {
+  const marker = importPairMarker(task);
+  if (marker?.resolved !== true) return null;
+  const value = Number(marker.quantity_per_hanger);
+  return Number.isFinite(value) && value > 0 ? value : null;
+}
+
+/**
+ * Пара задания по его артикулу; `null` — строка считается одиночной.
+ *
+ * Одиночной она бывает по трём причинам: у неё своя норма подвеса (ручной
+ * override позиции); импорт пометил её как непришедшую в паре (``resolved:
+ * false`` — «нет парного задания»: пара — это строки-соседи одного импорта, а
+ * не свойство артикула); каталог пар не загружен или артикул вне пары.
+ */
 function taskPair(task: SectionBoardTask, pairs: PlanPairIndex | undefined): ProductPairCatalogEntry | null {
+  if (ownHangerNorm(task) !== null) return null;
+  if (importPairMarker(task)?.resolved === false) return null;
   if (!pairs) return null;
   return pairs.get(Number(task.product_id)) ?? null;
 }
@@ -322,16 +362,23 @@ export function buildPlanTaskGroups(
       totalQtyIssued: sumRows(group.rows, "issuedQty"),
       totalQtyTransferred: sumRows(group.rows, "transferredQty"),
       // Подвес пары — один на обе позиции, поэтому группа помечается парой
-      // только когда обе строки на листе действительно есть.
+      // только когда обе строки на листе действительно есть. Норму берём у
+      // импорта (снапшот ``product_pair`` — он решил пару на этой длине), а
+      // справочник оставляем запасным путём для планов до этого правила.
       pair:
         group.pair && (pairSkus.get(group.key)?.size ?? 0) > 1
           ? {
               id: group.pair.id,
               skus: Array.from(pairSkus.get(group.key) ?? []).sort(),
-              quantityPerHanger: pairQuantityPerHanger(
-                group.pair,
-                group.rows[0] ? taskLengthMm(group.rows[0].tasks[0]) : null,
-              ),
+              quantityPerHanger:
+                group.rows
+                  .flatMap((row) => row.tasks)
+                  .map(importPairNorm)
+                  .find((value) => value !== null) ??
+                pairQuantityPerHanger(
+                  group.pair,
+                  group.rows[0] ? taskLengthMm(group.rows[0].tasks[0]) : null,
+                ),
             }
           : null,
     }))

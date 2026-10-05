@@ -248,6 +248,93 @@ describe("пара на печати анодирования (#312)", () => {
 
     expect(groups[0].pair?.quantityPerHanger).toBeNull();
   });
+
+  it("строка со своей нормой подвеса в группу пары не входит", () => {
+    // Своя норма — ручной override позиции (то же поле, что пишет экран «План»):
+    // бэкенд-резолвер ставит его выше пары, значит и печать не считает строку парой.
+    const tasks = [
+      makeTask({ id: 1, product_id: 11, product_sku: "ЮП-2604", dimensions: { length_mm: 2700 } }),
+      makeTask({
+        id: 2,
+        product_id: 12,
+        product_sku: "ЮП-2616",
+        dimensions: { length_mm: 2700 },
+        source_payload: { quantity_per_hanger: 62 },
+      }),
+    ];
+
+    const groups = buildPlanTaskGroups(tasks, "article", buildPlanPairIndex([PAIR]));
+
+    expect(groups.map((group) => group.label).sort()).toEqual([
+      "ЮП-2604 · 2,7 м",
+      "ЮП-2616 · 2,7 м",
+    ]);
+    const ownNorm = groups.find((group) => group.label.startsWith("ЮП-2616"));
+    expect(ownNorm?.pair).toBeNull();
+    expect(ownNorm?.rows).toHaveLength(1);
+  });
+
+  it("неположительный override своей нормой не считается", () => {
+    const tasks = pairTasks().map((task) => ({
+      ...task,
+      source_payload: { quantity_per_hanger: 0 },
+    }));
+
+    const groups = buildPlanTaskGroups(tasks, "article", buildPlanPairIndex([PAIR]));
+
+    expect(groups).toHaveLength(1);
+    expect(groups[0].pair).toMatchObject({ id: 7, quantityPerHanger: 8 });
+  });
+
+  it("строка, которую импорт не счёл парой, в группу пары не входит", () => {
+    // Импорт решает пару по строкам-соседям: у базовой строки 2616 партнёра в
+    // плане нет, значит и подвеса пары у неё нет — своя строка, своя норма.
+    const tasks = [
+      makeTask({
+        id: 1,
+        product_id: 11,
+        product_sku: "ЮП-2604",
+        dimensions: { length_mm: 2700 },
+        source_payload: { product_pair: { resolved: true, quantity_per_hanger: 8 } },
+      }),
+      makeTask({
+        id: 2,
+        product_id: 12,
+        product_sku: "ЮП-2616",
+        dimensions: { length_mm: 2700 },
+        source_payload: { product_pair: { resolved: false, reason: "no_paired_row" } },
+      }),
+    ];
+
+    const groups = buildPlanTaskGroups(tasks, "article", buildPlanPairIndex([PAIR]));
+
+    expect(groups.map((group) => group.label).sort()).toEqual([
+      "ЮП-2604 · 2,7 м",
+      "ЮП-2616 · 2,7 м",
+    ]);
+    // Подвес пары — один на обе позиции: у одинокой строки пары нет вовсе.
+    expect(groups.map((group) => group.pair)).toEqual([null, null]);
+  });
+
+  it("норма пары берётся из снапшота импорта, а не из справочника", () => {
+    const marked = (overrides: Partial<SectionBoardTask>) =>
+      makeTask({
+        dimensions: { length_mm: 2700 },
+        source_payload: { product_pair: { resolved: true, quantity_per_hanger: 30 } },
+        ...overrides,
+      });
+    const tasks = [
+      marked({ id: 1, product_id: 11, product_sku: "ЮП-2604" }),
+      marked({ id: 2, product_id: 12, product_sku: "ЮП-2616" }),
+    ];
+
+    const groups = buildPlanTaskGroups(tasks, "article", buildPlanPairIndex([PAIR]));
+
+    expect(groups).toHaveLength(1);
+    expect(groups[0].label).toBe("ЮП-2604+ЮП-2616 · 2,7 м");
+    // В справочнике на этой длине 8 — импорт зафиксировал 30, печать идёт за импортом.
+    expect(groups[0].pair?.quantityPerHanger).toBe(30);
+  });
 });
 
 describe("колонки «Операция» и «Упаковка» доски", () => {
