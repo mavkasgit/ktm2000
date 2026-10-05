@@ -20,6 +20,7 @@ import {
   DuplicateConflict,
 } from "../lib/plan-labels"
 import { messagePairLayout } from "../lib/messageColumns"
+import type { PlanRowLink } from "../lib/planRowLinks"
 
 /**
  * Признак «маршрут не назначен» (#229): при `route_id = null` имя пересобрано
@@ -40,7 +41,7 @@ function ExpectedRouteMarker() {
   )
 }
 
-export function PositionRow({ pos, onApprove, onDelete, selected, routes, onAssignRoute, onOpenDetail, duplicateConflict, onJumpToPosition, onSelect, onSkuClick }: {
+export function PositionRow({ pos, onApprove, onDelete, selected, routes, onAssignRoute, onOpenDetail, duplicateConflict, onJumpToPosition, onSelect, onSkuClick, rowLink }: {
   pos: PlanPositionOut;
   onApprove: (id: number, planId?: number, force?: boolean, reason?: string) => Promise<void>;
   onDelete: (id: number, planId?: number) => void;
@@ -52,6 +53,8 @@ export function PositionRow({ pos, onApprove, onDelete, selected, routes, onAssi
   onJumpToPosition?: (id: number) => void;
   onSelect?: (id: number) => void;
   onSkuClick?: (sku: string) => void;
+  /** Связь с соседними строками (пара или распил); нет — строка сама по себе. */
+  rowLink?: PlanRowLink
 }) {
   const hasErrors = pos.errors && pos.errors.length > 0
   const hasWarnings = pos.warnings && pos.warnings.length > 0
@@ -244,9 +247,20 @@ export function PositionRow({ pos, onApprove, onDelete, selected, routes, onAssi
       }}
     >
       <td className={cellClass}>
-        <span className="inline-flex items-center gap-1">
-          {routeNameIsExpected && <ExpectedRouteMarker />}
-          <span className="text-muted-foreground">#{pos.id}</span>
+        <span className="inline-flex flex-col items-start gap-0.5">
+          <span className="inline-flex items-center gap-1">
+            {routeNameIsExpected && <ExpectedRouteMarker />}
+            <span className="text-muted-foreground">#{pos.id}</span>
+          </span>
+          {rowLink && (
+            <span
+              data-pair-link
+              title={rowLink.title}
+              className="inline-flex items-center rounded bg-muted px-1 text-[10px] leading-tight text-muted-foreground"
+            >
+              {rowLink.ordinal}/{rowLink.total}
+            </span>
+          )}
         </span>
       </td>
       <td className={`${cellClass} font-medium`}>{rowNum}</td>

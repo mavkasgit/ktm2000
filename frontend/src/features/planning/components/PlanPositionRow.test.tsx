@@ -367,3 +367,41 @@ describe("PositionRow — пара «Ошибки»/«Предупр.»", () => 
   })
 })
 
+describe("PositionRow — связь пары в ячейке «Id»", () => {
+  const link = (ordinal: number, total: number) => ({
+    title: "Пара ЮП-2604+ЮП-2616 · 30 шт на подвес",
+    ordinal,
+    total,
+  })
+
+  /** Ячейка «Id» строки: в таблице это первая. */
+  function idCell(props: Partial<ComponentProps<typeof PositionRow>>): HTMLElement {
+    return cells(renderRow(position({}), props))[0]
+  }
+
+  it("показывает номер строки в паре и подпись пары в подсказке", () => {
+    const badge = idCell({ rowLink: link(2, 2) }).querySelector("[data-pair-link]")
+
+    expect(badge?.textContent).toBe("2/2")
+    expect(badge?.getAttribute("title")).toContain("ЮП-2604+ЮП-2616")
+    expect(badge?.getAttribute("title")).toContain("30 шт на подвес")
+  })
+
+  it("строка вне пары остаётся с голым номером", () => {
+    // Пары нет — значит, связывать не с чем, а пустая ячейка с номером
+    // читается как «здесь ничего особенного».
+    const cell = idCell({})
+
+    expect(cell.querySelector("[data-pair-link]")).toBeNull()
+    expect(cell.textContent).toContain("#5633")
+  })
+
+  it("метка пары не вытесняет номер позиции", () => {
+    // Номер позиции нужен оператору всегда: по нему открывают детали и по
+    // нему же утверждают. Метка пары — дописка под ним, а не вместо него.
+    const cell = idCell({ rowLink: link(1, 2) })
+
+    expect(cell.textContent).toContain("#5633")
+    expect(cell.textContent).toContain("1/2")
+  })
+})

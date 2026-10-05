@@ -36,6 +36,7 @@ import {
 } from "../lib/plan-labels"
 import { buildPlanColumnApiParams, buildPlanPositionsQuery, buildPlanSortParam } from "../lib/planApiParams"
 import { planColumnLabels, planColumns, PLAN_ACTIONS_COLUMN_WIDTH, PLAN_TABLE_MIN_WIDTH, PLAN_CLIENT_FILTER_FIELDS, isRouteFilterClientSide } from "../lib/planColumns"
+import { planRowLinks } from "../lib/planRowLinks"
 import { useDebouncedValue } from "@/shared/lib/useDebouncedValue";
 import { TABLE_ROW_COMPACT } from "@/shared/lib/dataTableStyles"
 
@@ -557,6 +558,9 @@ export function PlanPage() {
     if (!clientOnlyFilterPredicate) return positions
     return positions.filter(clientOnlyFilterPredicate)
   }, [positions, clientOnlyFilterPredicate])
+  // Связи строим по видимым строкам: сортировка и фильтр меняют состав списка,
+  // и нумерация «2/2» должна считать именно то, что оператор видит.
+  const rowLinks = useMemo(() => planRowLinks(processedRows), [processedRows])
   const filteredPositionIds = useMemo(() => processedRows.map((p) => p.id), [processedRows])
   const activeFilterSummary = useMemo(
     () =>
@@ -907,6 +911,7 @@ export function PlanPage() {
                         onJumpToPosition={jumpToPosition}
                         onSelect={bulkMode ? toggleSelect : undefined}
                         onSkuClick={setWipStatsSku}
+                        rowLink={rowLinks.get(p.id)}
                       />
                     ))}
                   </tbody>
