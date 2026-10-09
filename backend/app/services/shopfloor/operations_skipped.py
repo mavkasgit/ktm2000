@@ -12,6 +12,11 @@
   в готовом виде»), и он закрывает позицию наравне с выполненным;
 * **никаких проводок ledger не создаётся** — по skipped-этапу материала
   нет и никогда не было, писать движение значило бы выдумать его;
+* статус пишется **прямо, мимо ``sync_work_task_status``** (п.4 #320):
+  ``skipped`` терминален для проекции (``resolve_work_task_status``,
+  ``app/stock/task_cache.py`` — при ``current_status in (completed,
+  cancelled, skipped)`` возвращает ``None``), а фактов в ledger у этапа
+  нет вовсе — синхронизировать нечего и незачем;
 * этап нельзя пропустить, если он уже выполнен или отменён: пропуск —
   не отмена и не переделка.
 
@@ -86,6 +91,9 @@ async def skip_stage(
         task.status = WorkTaskStatus.skipped
         task.skip_reason = reason.strip()
 
+    # ``_refresh_section_plan_line_cache`` пересчитывает кэш СТРОКИ участка;
+    # статус задания синхронизировать не нужно: ``skipped`` терминален для
+    # проекции и она его не перезапишет (разбор — в шапке модуля, п.4 #320).
     await db.flush()
     await _refresh_section_plan_line_cache(db, line.id)
     return task

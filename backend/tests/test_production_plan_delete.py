@@ -15,7 +15,10 @@ from app.models.production_plan import (
 from app.models.work_task import WorkTask, WorkTaskStatus
 from app.services.action_journal_service import action_journal_service
 from app.services.material_operations import completed_operations_for_task
-from app.services.production_plan_service import get_production_plan_delete_preview
+from app.services.production_plan_service import (
+    get_production_plan_delete_preview,
+    soft_delete_cancelled_position,
+)
 from app.stock.models import Reason, StockTransaction
 from app.stock.services import StockCommand, StockCommandService
 from sqlalchemy import func, select
@@ -198,3 +201,58 @@ async def test_delete_wrong_confirmation_does_not_mutate(
     assert plan.deleted_at is None
     assert plan.status == ProductionPlanStatus.approved
     assert await session.scalar(select(func.count(Action.id))) == action_count
+
+
+async def test_soft_delete_cancelled_position_cancels_open_tasks_only(
+    session: AsyncSession,
+) -> None:
+    """Прямая отмена WorkTask при скрытии позиции (``production_plan_service.py:1452``, п.4 #320).
+
+    Скрытие отменённой позиции — доменное решение, статус пишется мимо
+    ``sync_work_task_status``: проекция терминал не переигрывает
+    (``resolve_work_task_status`` для ``current_status == "cancelled"`` →
+    ``None``). Тест — сторож самой ветки: снимаются только ОТКРЫТЫЕ задания
+    (``notin_`` CLOSED_WORK_TASK_STATUSES), закрытые остаются нетронутыми.
+    """
+    fx = await _setup_minimal_route(session, sku="PD-SOFTDEL", qty=Decimal(10))
+    open_task = fx["task"]
+    position_id, plan_id = (
+        await session.execute(
+            select(SectionPlanLine.plan_position_id, InternalPlan.production_plan_id)
+            .join(InternalPlan, SectionPlanLine.internal_plan_id == InternalPlan.id)
+            .where(SectionPlanLine.id == open_task.section_plan_line_id)
+        )
+    ).one()
+    plan = await session.get(ProductionPlan, plan_id)
+    position = await session.get(PlanPosition, position_id)
+    position.status = PlanPositionStatus.cancelled
+    closed_task = WorkTask(
+        section_plan_line_id=open_task.section_plan_line_id,
+        section_id=open_task.section_id,
+        product_id=open_task.product_id,
+        route_stage_id=open_task.route_stage_id,
+        planned_quantity=Decimal(10),
+        status=WorkTaskStatus.completed,
+    )
+    session.add(closed_task)
+    await session.commit()
+    open_task_id, closed_task_id = open_task.id, closed_task.id
+
+    await soft_delete_cancelled_position(
+        session,
+        plan.id,
+        position_id,
+        changed_by=fx["user"].id,
+        reason="уборка",
+    )
+    await session.flush()
+
+    # Bulk ``update()`` не проходит через identity map — читаем статусы запросом.
+    async def _stored_status(task_id: int) -> WorkTaskStatus:
+        return (await session.execute(
+            select(WorkTask.status).where(WorkTask.id == task_id)
+        )).scalar_one()
+
+    assert await _stored_status(open_task_id) == WorkTaskStatus.cancelled
+    assert await _stored_status(closed_task_id) == WorkTaskStatus.completed
+
