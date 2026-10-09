@@ -7,10 +7,16 @@
 """
 from __future__ import annotations
 
+import ast
+from pathlib import Path
+
 import pytest
 from app.models.route import ProductionRoute
 from app.services.route_identity import (
+    MATCH_BY_CODE,
+    MATCH_BY_LEGACY_NAME,
     find_route_by_code,
+    find_route_by_identity,
     find_route_by_name,
     route_identity_query,
 )
@@ -154,3 +160,135 @@ async def test_query_always_limits_to_one_row(session: AsyncSession) -> None:
     stmt = route_identity_query(name="Дубль")
     assert "LIMIT" in _sql(stmt)
     assert await find_route_by_name(session, "Дубль") is not None
+
+
+# --- #326: порядок поиска тождества объявлен один раз -----------------------
+
+
+async def test_identity_order_prefers_code_over_legacy_name(session: AsyncSession) -> None:
+    """Сначала код: одноимённый legacy-маршрут не подменяет найденный по коду.
+
+    Ровно это расхождение и лечится: имя — подпись, и два разных маршрута
+    законно носят одно имя (ADR-0045). Найденный по имени (без кода) не
+    должен забирать строку, у которой есть код.
+    """
+    coded = await _route(session, name="Общее имя", code="auto-abc")
+    await _route(session, name="Общее имя", code=None)
+    await session.commit()
+
+    match = await find_route_by_identity(session, code="auto-abc", name="Общее имя")
+
+    assert match is not None
+    assert match.route.id == coded.id
+    assert match.matched_by == MATCH_BY_CODE
+
+
+async def test_identity_order_falls_back_to_legacy_name(session: AsyncSession) -> None:
+    """Кода нет или по коду пусто — тогда, и только тогда, ищем по имени.
+
+    По имени находятся лишь строки без кода: маршрут с кодом — чужой
+    (ADR-0051 п. 3), и подставлять его по подписи нельзя.
+    """
+    legacy = await _route(session, name="Легаси", code=None)
+    await _route(session, name="С кодом", code="auto-coded")
+    await session.commit()
+
+    by_missing_code = await find_route_by_identity(
+        session, code="auto-none", name="Легаси"
+    )
+    assert by_missing_code is not None
+    assert by_missing_code.route.id == legacy.id
+    assert by_missing_code.matched_by == MATCH_BY_LEGACY_NAME
+
+    without_code = await find_route_by_identity(session, code=None, name="Легаси")
+    assert without_code is not None and without_code.route.id == legacy.id
+
+    assert await find_route_by_identity(session, code=None, name="С кодом") is None
+    assert await find_route_by_identity(session, code="auto-none", name=None) is None
+
+
+async def test_identity_order_respects_only_active(session: AsyncSession) -> None:
+    """`only_active` действует на обе ступени: архивный — не назначение.
+
+    Автоматчик ищет назначение с этим флагом; без него архивный маршрут
+    выглядел бы назначенным и падал бы позже, в take-to-work.
+    """
+    archived_coded = await _route(
+        session, name="Архивный код", code="auto-arch", is_active=False
+    )
+    legacy = await _route(session, name="Архивный код", code=None)
+    await session.commit()
+
+    assert (await find_route_by_identity(session, code="auto-arch", name=None)).route.id == archived_coded.id
+    active_only = await find_route_by_identity(
+        session, code="auto-arch", name="Архивный код", only_active=True
+    )
+    assert active_only is not None and active_only.route.id == legacy.id
+
+    legacy.is_active = False
+    await session.flush()
+    assert (
+        await find_route_by_identity(
+            session, code="auto-arch", name="Архивный код", only_active=True
+        )
+        is None
+    )
+
+
+async def test_identity_caches_memoize_both_misses_and_hits(session: AsyncSession) -> None:
+    """Кэш вызывающего — «уже искали», в том числе для промаха (``None``).
+
+    Без записи ``None`` батч импорта повторял бы запрос на каждой строке с
+    тем же кодом/именем, а снимок батча позиций не сохранял бы «нет такого».
+    """
+    route = await _route(session, name="Кэш", code="auto-cache")
+    await session.commit()
+    code_cache: dict[str, ProductionRoute | None] = {}
+    name_cache: dict[str, ProductionRoute | None] = {}
+
+    first = await find_route_by_identity(
+        session, code="auto-cache", name="Кэш", code_cache=code_cache, name_cache=name_cache
+    )
+    assert first is not None and first.route.id == route.id
+    assert code_cache == {"auto-cache": route}
+    assert name_cache == {}, "по имени не искали: код нашёлся"
+
+    miss = await find_route_by_identity(
+        session,
+        code="auto-missing",
+        name="Нет такого",
+        code_cache=code_cache,
+        name_cache=name_cache,
+    )
+    assert miss is None
+    assert code_cache["auto-missing"] is None
+    assert name_cache["Нет такого"] is None
+
+
+IDENTITY_CALLERS = (
+    Path("app") / "services" / "plan_import_service.py",
+    Path("app") / "services" / "route_matcher.py",
+    Path("app") / "services" / "position_route_batch.py",
+    Path("app") / "seeds" / "seeders" / "routes_seeder.py",
+)
+
+
+async def test_identity_order_is_called_not_recopied() -> None:
+    """Порядок объявлен один раз: вызывающие зовут `find_route_by_identity`.
+
+    Импорт, автоматчик, сид и батч-снимок обязаны ходить в общую функцию.
+    Прямой `find_route_by_code`/`find_route_by_name` в них означает, что
+    порядок «код → legacy-имя» снова собирают на месте, и он разойдётся.
+    """
+    app_root = Path(__file__).resolve().parent.parent
+    offenders: list[str] = []
+    for relative in IDENTITY_CALLERS:
+        tree = ast.parse((app_root / relative).read_text(encoding="utf-8"))
+        for node in ast.walk(tree):
+            if not isinstance(node, ast.Call):
+                continue
+            func = node.func
+            name = func.id if isinstance(func, ast.Name) else getattr(func, "attr", "")
+            if name in {"find_route_by_code", "find_route_by_name"}:
+                offenders.append(f"{relative.as_posix()}:{node.lineno}: {name}")
+    assert offenders == [], "Порядок тождества собран заново:\n" + "\n".join(offenders)
