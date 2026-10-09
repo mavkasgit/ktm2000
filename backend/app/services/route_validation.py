@@ -98,9 +98,13 @@ async def validate_route_match(
             template_column_mapping=template_column_mapping
         )
 
+    # Коды собираются в `errors` через append — как в импортной стороне:
+    # сторож tests/test_plan_import_codes.py сканирует append'ы обеих сторон
+    # (#327), а литерал в `return [...]` от него уходил бы.
+    errors: list[str] = []
     if selection.error == "route_rule_conflict":
-        return ["route_rule_conflict"]
-
+        errors.append("route_rule_conflict")
+        return errors
     if route_stages_cache is not None and route_info.route_id in route_stages_cache:
         steps = route_stages_cache[route_info.route_id]
     else:
@@ -130,16 +134,15 @@ async def validate_route_match(
     }
     required_ids = set(selection.required_section_ids)
     excluded_ids = set(selection.excluded_section_ids)
-    issues: list[str] = []
 
     missing_required = sorted(required_ids - active_section_ids)
     excluded_present = sorted(excluded_ids & active_section_ids)
     if missing_required:
-        issues.append("route_missing_required_step: " + ", ".join(await _section_codes(db, missing_required, sections_cache)))
+        errors.append("route_missing_required_step: " + ", ".join(await _section_codes(db, missing_required, sections_cache)))
     if excluded_present:
-        issues.append("route_contains_excluded_step: " + ", ".join(await _section_codes(db, excluded_present, sections_cache)))
+        errors.append("route_contains_excluded_step: " + ", ".join(await _section_codes(db, excluded_present, sections_cache)))
 
-    return issues
+    return errors
 
 
 async def _section_codes(db: AsyncSession, section_ids: list[int], sections_cache: dict | None = None) -> list[str]:

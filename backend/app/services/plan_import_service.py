@@ -69,7 +69,7 @@ from app.services.route_builder import (
     build_route_from_profile,
     load_route_build_batch_cache,
 )
-from app.services.route_identity import find_route_by_code, find_route_by_name
+from app.services.route_identity import find_route_by_identity
 from app.services.route_selection import (
     RouteSelectionResult,
     load_route_sections,
@@ -82,13 +82,17 @@ from app.services.route_storage_classifier import STAGE_KIND_TRANSIT, is_storage
 
 logger = logging.getLogger(__name__)
 
-#: Каталог кодов строк импорта плана (спека docs/plan-import-spec.md §3, карта #157).
+#: Каталог кодов строк плана (спека docs/plan-import-spec.md §3, карта #157).
 #: Статус строки (правило ниже, plan_import_row_status): есть errors → invalid,
 #: иначе warnings → warning, иначе pending.
-#: Новый код — только с явной классификацией error/warning в этом списке:
-#: сторож-тест tests/test_plan_import_codes.py сканирует errors.append /
-#: warnings.append в plan_import_service.py и excel_import.py и падает на
+#:
+#: Каталог — один на обе стороны (#327): импортную (plan_import_service.py,
+#: excel_import.py) и валидационную (plan_validation.py, route_validation.py).
+#: Классификация error/warning живёт только здесь: сторож-тест
+#: tests/test_plan_import_codes.py сканирует все четыре файла и падает на
 #: неклассифицированном коде. При добавлении кода обновить список + тест.
+#: Имя историческое (на него ссылается docs/adr/0045): набор описывает не
+#: только импорт.
 PLAN_IMPORT_ERROR_CODES: frozenset[str] = frozenset(
     {
         "product_not_found",
@@ -106,6 +110,17 @@ PLAN_IMPORT_ERROR_CODES: frozenset[str] = frozenset(
 #: профиля его не узнало — раньше строка молча получала чужую операцию из
 #: группы (см. _operation_value_recognized). Пустое значение ошибки не даёт.
         "route_operation_not_recognized",
+#: ── Валидационная сторона (#327) ─────────────────────────────────────────
+#: Эти коды добавляет валидация позиции (plan_validation.py) и проверка
+#: состава маршрута (route_validation.py); класс у них тот же — error.
+#: `route_not_found`/`manual_route_not_found` приходят значением
+#: `ResolvedRouteInfo.error` (route_matcher.py), остальные — литералами.
+        "quantity_must_be_positive",
+        "route_not_found",
+        "manual_route_not_found",
+        "route_sequence_invalid",
+        "route_missing_required_step",
+        "route_contains_excluded_step",
     }
 )
 #: Точные warning-коды без параметров.
@@ -643,8 +658,10 @@ async def _make_change_items(
     route_stages_cache = {}           # route.id -> list[RouteStage]
     sections_by_id_cache = {}         # section_id -> Section
     sections_by_code_cache = {}       # section_code -> Section
-    existing_route_by_code_cache: dict[str, ProductionRoute] = {}  # code -> ProductionRoute
-    legacy_route_by_name_cache: dict[str, ProductionRoute] = {}     # имя -> маршрут без кода
+    # Кэши поиска тождества маршрута: ``None`` под ключом — «искали, нет»
+    # (find_route_by_identity), поэтому тип допускает None.
+    existing_route_by_code_cache: dict[str, ProductionRoute | None] = {}  # code -> ProductionRoute
+    legacy_route_by_name_cache: dict[str, ProductionRoute | None] = {}     # имя -> маршрут без кода
     typical_dimensions_cache: dict[int, dict | None] = {}  # product.id -> типовой размер либо None
 
     # Межстрочные кэши подбора/сборки маршрута (спека §4.1, #163): снимок
@@ -661,29 +678,6 @@ async def _make_change_items(
         else None
     )
 
-    async def find_route_by_code_cached(code: str) -> ProductionRoute | None:
-        """Маршрут с таким кодом, без повторного запроса на том же коде."""
-        if code in existing_route_by_code_cache:
-            return existing_route_by_code_cache[code]
-        found = await find_route_by_code(db, code)
-        existing_route_by_code_cache[code] = found
-        return found
-
-    async def find_legacy_route_by_name(name: str) -> ProductionRoute | None:
-        """Маршрут БЕЗ кода с таким именем — переходное состояние базы.
-
-        Такой маршрут создан импортом до #230: кода у него нет, и иначе он
-        стал бы недостижим (поиск теперь по коду). Именно поэтому ищем
-        только среди строк с ``code IS NULL`` — маршрут с кодом, пусть и с
-        тем же именем, уже имеет собственную идентичность и чужим составом
-        быть не может.
-        """
-        if name in legacy_route_by_name_cache:
-            return legacy_route_by_name_cache[name]
-        found = await find_route_by_name(db, name, legacy_name_only=True)
-        legacy_route_by_name_cache[name] = found
-        return found
-
     async def signature_conflicts_with(route: ProductionRoute | None, built: BuiltRoute) -> bool:
         """Конфликт сигнатур (#215, ADR-0045): нашёлся маршрут, а тождество — нет."""
         if route is None or not built.name:
@@ -693,28 +687,27 @@ async def _make_change_items(
     async def resolve_route_for_build(built: BuiltRoute) -> tuple[ProductionRoute | None, bool]:
         """Маршрут импорта для собранного маршрута: (маршрут, конфликт).
 
-        Порядок (#230, ADR-0051): сначала код из сигнатуры — он и есть
-        идентичность. Если по коду ничего нет, ищем по имени среди строк
-        БЕЗ кода: их создал импорт до #230, и иначе они стали бы
-        недостижимыми. Маршрут, найденный по имени с кодом, — не наш: у него
-        своя идентичность, и по подписи его опознавать нельзя.
+        Порядок поиска — общий (#326): ``find_route_by_identity`` ищет
+        сначала по коду из сигнатуры (он и есть идентичность), и лишь затем
+        по имени среди строк БЕЗ кода: их создал импорт до #230, и иначе они
+        стали бы недостижимыми. Маршрут, найденный по имени с кодом, — не
+        наш: у него своя идентичность, и по подписи его опознавать нельзя.
 
         Конфликт сигнатур (ADR-0045) проверяется в обоих случаях: маршрут,
         найденный по коду, мог быть переписан руками, а найденный по имени —
         тем более, его создал старый импорт и сверить его состав необходимо,
         прежде чем подставлять.
         """
-        code = auto_route_code(built.signature)
-        if code is not None:
-            found = await find_route_by_code_cached(code)
-            if found is not None:
-                return found, await signature_conflicts_with(found, built)
-        # Код не найден (или сигнатуры нет — маршрут без этапов): ищем по
-        # имени среди строк без кода.
-        legacy = await find_legacy_route_by_name(built.name) if built.name else None
-        if legacy is None:
+        match = await find_route_by_identity(
+            db,
+            code=auto_route_code(built.signature),
+            name=built.name,
+            code_cache=existing_route_by_code_cache,
+            name_cache=legacy_route_by_name_cache,
+        )
+        if match is None:
             return None, False
-        return legacy, await signature_conflicts_with(legacy, built)
+        return match.route, await signature_conflicts_with(match.route, built)
 
     def make_hashable(val):
         if isinstance(val, dict):

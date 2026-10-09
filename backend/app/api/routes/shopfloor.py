@@ -30,9 +30,9 @@ from app.models.user import User
 from app.models.work_task import WorkTask
 from app.seeds.canon.dependencies import get_plant_config
 from app.seeds.canon.models import PlantConfig
-from app.services.action_journal_service import action_journal_service
 from app.services.audit_log_service import log_action
-from app.services.shopfloor.common import _get_user_snapshot_name, _require_mutable_task
+from app.services.shopfloor.common import _require_mutable_task
+from app.services.shopfloor.operations_tasks import return_remainder_to_stock
 from app.services.shopfloor_service import (
     BOARD_COLUMN_VALUE_FIELDS,
     add_defect_item,
@@ -983,76 +983,22 @@ async def return_remainder(
 ) -> dict:
     """Return excess quantity from a task to warehouse stock.
 
-    Writes StockTransaction(RETURN_TO_STOCK). Checks that quantity
-    does not exceed what is available for return on the task.
+    Проводка, проекция строки участка и статус задания — в сервисе
+    ``return_remainder_to_stock`` (#320): роут не пишет ledger сам.
     """
-    from app.models.work_task import WorkTask
-    from app.stock import Reason, StockCommand, StockCommandService
-
     await _ensure_task_lock(db, payload.task_id, locked_section_id)
     try:
-        quantity = Decimal(str(payload.quantity))
-        if quantity <= 0:
-            raise ValueError("Количество должно быть > 0")
-
-        task = await db.get(WorkTask, payload.task_id)
-        if task is None:
-            raise ValueError("Задача не найдена")
-        await _require_mutable_task(db, task)
-
-        # Available for return = issued - completed - transferred
-        from app.stock.services import StockProjectionManager
-        pm = StockProjectionManager()
-        cache = await pm.get_task_cache(db, task.id)
-        available_for_return = cache["issued_quantity"] - cache["completed_quantity"] - cache["transferred_quantity"]
-        if available_for_return <= 0:
-            raise ValueError("Нет излишков для возврата на склад")
-        if quantity > available_for_return:
-            raise ValueError(
-                f"Количество возврата ({quantity}) превышает доступное к возврату ({available_for_return})"
-            )
-
-        now = datetime.now(UTC)
-        svc = StockCommandService()
-        # Журнал действий (#116): Action по цепочке задачи; actor —
-        # снимок имени пользователя, как в complete_task/defect_decide.
-        action = await action_journal_service.log_task_action(
+        return await return_remainder_to_stock(
             db,
-            action_type="return_to_stock",
-            ref_id=task.id,
-            actor=await _get_user_snapshot_name(db, current_user.id),
-        )
-        # Признак «пройденные операции» (ADR-0043): возвращается в запас
-        # необработанный остаток задания, поэтому он несёт операции до
-        # ПРЕДЫДУЩЕГО этапа, а не пройденные операции своего.
-        from app.services.material_operations import (
-            completed_operations_for_task,
-            previous_stage_sequence,
-        )
-
-        previous_sequence = await previous_stage_sequence(db, task)
-        through_previous = await completed_operations_for_task(
-            db, task, through_sequence=previous_sequence or 0
-        )
-        # return_to_stock: material removed from section (to_location=None for now)
-        tx = await svc.record(db, StockCommand(
-            product_id=task.product_id,
-            from_location_id=task.section_id,
-            to_location_id=None,
-            quantity=quantity,
-            reason=Reason.RETURN_TO_STOCK,
-            task_id=task.id,
-            completed_operations=through_previous,
+            task_id=payload.task_id,
+            quantity=Decimal(str(payload.quantity)),
+            actor_id=current_user.id,
             comment=payload.comment,
             idempotency_key=payload.idempotency_key,
-            created_by=current_user.id,
-            executor_user_id=payload.executor_user_id or current_user.id,
-            performed_at=payload.performed_at or now,
-            accounted_at=payload.accounted_at or now,
-            action_id=action.id,
-        ))
-
-        return {"transaction_id": tx.id, "task_id": task.id}
+            executor_user_id=payload.executor_user_id,
+            performed_at=payload.performed_at,
+            accounted_at=payload.accounted_at,
+        )
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
 

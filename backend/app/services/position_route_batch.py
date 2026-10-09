@@ -118,6 +118,11 @@ class PositionRouteBatchCache:
     ``signatures_by_route`` — фактические сигнатуры маршрутов, посчитанные
     по этапам; туда попадают только те маршруты, у которых сохранённой
     сигнатуры нет (именно их ``route_signature_conflicts`` читает поштучно).
+
+    ``route_by_code``/``legacy_route_by_name`` — снимок для поиска по
+    идентичности: те же словари отдаются ``find_route_by_identity`` как
+    кэши, поэтому ``None`` под ключом означает «в снимке нет» и повторного
+    запроса в БД не будет.
     """
 
     routes_by_id: dict[int, ProductionRoute] = field(default_factory=dict)
@@ -126,8 +131,8 @@ class PositionRouteBatchCache:
     import_batches_by_id: dict[int, ImportBatch] = field(default_factory=dict)
     selection_caches: dict[int | None, RouteSelectionBatchCache] = field(default_factory=dict)
     build_caches: dict[int, RouteBuildBatchCache] = field(default_factory=dict)
-    route_by_code: dict[str, ProductionRoute] = field(default_factory=dict)
-    legacy_route_by_name: dict[str, ProductionRoute] = field(default_factory=dict)
+    route_by_code: dict[str, ProductionRoute | None] = field(default_factory=dict)
+    legacy_route_by_name: dict[str, ProductionRoute | None] = field(default_factory=dict)
     signatures_by_route: dict[int, str | None] = field(default_factory=dict)
 
 

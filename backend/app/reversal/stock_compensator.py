@@ -515,14 +515,19 @@ class StockCompensator(MirrorLedgerMixin):
         changes: dict,
         *,
         action_id: int | None = None,
+        coverage_adjustments: dict | None = None,
     ) -> ReversalCheck:
         """Полная preflight-проверка amend: базовый check отката + валидация
         payload + покрытие новой прямой записи (с учётом компенсаций).
 
         ADR-0021: ``action_id`` (target-узел) пробрасывается в резолв —
         проверка ведётся строго по указанному узлу, а не по «первому».
+        ``coverage_adjustments`` — виртуальный эффект уже пройденных
+        компенсаций каскада (#274/#321); передаётся в базовый check.
         """
-        base = await self.check(db, ref_id, action_id=action_id)
+        base = await self.check(
+            db, ref_id, action_id=action_id, coverage_adjustments=coverage_adjustments
+        )
         if not base.ok:
             return base
         blockers = await self.validate_amend_changes(db, ref_id, changes)

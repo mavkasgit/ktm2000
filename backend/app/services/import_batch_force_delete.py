@@ -50,6 +50,7 @@ from app.services.audit_log_service import log_action
 from app.services.material_operations import completed_operation_stages
 from app.services.production_plan_service import _delete_batch_and_orphan_file
 from app.stock.import_service import resolve_operations_dictionary
+from app.stock.ledger import net_quantity_expr
 from app.stock.models import QualityState
 from app.stock.services import StockProjectionManager
 
@@ -187,7 +188,6 @@ async def _collect_footprint(db: AsyncSession, batch_id: int) -> _Footprint:
         await db.execute(
             select(
                 StockTransaction.id,
-                StockTransaction.reverses_id,
                 StockTransaction.product_id,
                 StockTransaction.from_location_id,
                 StockTransaction.to_location_id,
@@ -195,7 +195,10 @@ async def _collect_footprint(db: AsyncSession, batch_id: int) -> _Footprint:
                 StockTransaction.to_quality_state,
                 StockTransaction.dimensions,
                 StockTransaction.completed_operations,
-                StockTransaction.quantity,
+                # Знак компенсации берётся из ledger (ADR-0017): знание о
+                # reverses_id живёт только в net_quantity_expr(), здесь оно
+                # не пересчитывается (#317).
+                net_quantity_expr().label("signed_quantity"),
                 StockTransaction.action_id,
                 Product.sku,
             )
@@ -236,8 +239,10 @@ def _aggregate_stock_effects(
     """Свод по проводкам батча: чистый эффект на каждый ключ остатка.
 
     Это ровно то изменение остатка, которое увидит склад после удаления:
-    входящие плюсуются, исходящие вычитаются, компенсации (reverses_id)
-    сокращают эффект до нуля естественным сложением.
+    входящие плюсуются, исходящие вычитаются. Знак компенсации приходит
+    из ledger — колонка ``signed_quantity`` есть ``net_quantity_expr()``
+    (ADR-0017), поэтому «сокращение эффекта до нуля» следует из единой
+    нетто-семантики, а не пересчитывается здесь по ``reverses_id`` (#317).
 
     Ключ повторяет ключ StockBalance, иначе свод врёт: остатки одного
     артикула и участка, но разной длины и разного признака операций —
@@ -260,7 +265,6 @@ def _aggregate_stock_effects(
     counts: dict[tuple[str, int, str | None, str | None], int] = {}
 
     for row in rows:
-        sign = Decimal(-1) if row.reverses_id is not None else Decimal(1)
         for location_id, quality_state in (
             (row.to_location_id, row.to_quality_state),
             (row.from_location_id, row.from_quality_state),
@@ -274,7 +278,9 @@ def _aggregate_stock_effects(
                 _ops_signature(row.completed_operations),
             )
             direction = Decimal(1) if location_id == row.to_location_id else Decimal(-1)
-            deltas[key] = deltas.get(key, Decimal(0)) + direction * sign * row.quantity
+            deltas[key] = (
+                deltas.get(key, Decimal(0)) + direction * row.signed_quantity
+            )
             skus[key] = row.sku
             dimensions[key] = row.dimensions
             completed_operations[key] = row.completed_operations

@@ -711,6 +711,31 @@ async def _register_scrap_and_defect(
     return scrap_ids, defect.id
 
 
+async def apply_ledger_portion(
+    db: AsyncSession,
+    task: WorkTask,
+    *,
+    cache: dict | None = None,
+) -> None:
+    """Единственная точка «применить порцию факта» (#320, ADR-0017/0019).
+
+    После любой проводки по заданию (завершение, возврат остатка, выпуск,
+    решение по браку) обязательны ровно два шага и в этом порядке: проекция
+    строки участка из ledger (``_refresh_section_plan_line_cache``), затем
+    статус задания из той же проекции (``sync_work_task_status``). Статус
+    выводится из уже записанного факта, а не из запрошенной порции.
+
+    ``cache`` — проекция задания, прочитанная вызывающим ПОСЛЕ проводок
+    (у ``complete_task`` чтений два: до — для лимитов порции, после — для
+    статуса); без неё проекция читается здесь.
+    """
+    await _refresh_section_plan_line_cache(db, task.section_plan_line_id)
+
+    from .task_status import sync_work_task_status
+
+    await sync_work_task_status(db, task, cache=cache)
+
+
 async def complete_task(
     db: AsyncSession,
     *,
@@ -847,14 +872,11 @@ async def complete_task(
     )
     tx_ids.extend(scrap_tx_ids)
 
-    await _refresh_section_plan_line_cache(db, task.section_plan_line_id)
-
     # Второе чтение task-cache — ПОСЛЕ проводок: статус выводится из факта
-    # ledger, уже включающего эту порцию.
-    from .task_status import sync_work_task_status
-
+    # ledger, уже включающего эту порцию. Шаги «проекция → статус» — общая
+    # точка apply_ledger_portion (#320).
     cache_after = await pm.get_task_cache(db, task.id)
-    await sync_work_task_status(db, task, cache=cache_after)
+    await apply_ledger_portion(db, task, cache=cache_after)
 
     # Авто-передача следует за фактом: передаётся только реально проведённая
     # годная часть порции (#133), а не запрошенная оператором.
@@ -1107,7 +1129,13 @@ async def final_release(
         action_id=action.id,
     ))
 
-    await _refresh_section_plan_line_cache(db, task.section_plan_line_id)
+    # Проекция + статус — общей точкой «применить порцию» (#320).
+    # FINAL_RELEASE в проекцию СТАТУСА не входит: remaining/transferred
+    # считаются по TRANSFER_SEND, completed — по COMPLETE, rejected — по
+    # SCRAP (app/stock/task_cache.py, _refresh_section_plan_line_cache),
+    # поэтому доменно выпуск статус не меняет и синхронизация здесь —
+    # no-op, зафиксированный тестом, а не «на всякий случай».
+    await apply_ledger_portion(db, task)
 
     # Аудит-запись — хелпер _log_final_release_audit (К5, #134): живёт в
     # сервисе, чтобы покрыть оба call-site (shopfloor и production_planning).
@@ -1116,6 +1144,89 @@ async def final_release(
     )
 
     return {"transaction_id": tx.id, "task_id": task.id}
+
+
+async def return_remainder_to_stock(
+    db: AsyncSession,
+    *,
+    task_id: int,
+    quantity: Decimal,
+    actor_id: int,
+    comment: str | None = None,
+    idempotency_key: str | None = None,
+    executor_user_id: int | None = None,
+    performed_at: datetime | None = None,
+    accounted_at: datetime | None = None,
+) -> dict:
+    """Вернуть необработанный остаток задания на склад (RETURN_TO_STOCK).
+
+    Тело перенесено из роута в пакет (#320): проводка ledger, проекция строки
+    участка и статус задания — той же последовательностью, что в complete_task
+    (``apply_ledger_portion``). Признак «пройденные операции» (ADR-0043) —
+    операции до ПРЕДЫДУЩЕГО этапа: остаток уходит необработанным.
+    """
+    task = await _get_task(db, task_id)
+    await _require_mutable_task(db, task)
+
+    if quantity <= 0:
+        raise ValueError("Количество должно быть > 0")
+
+    # Доступно к возврату = выдано − завершено − передано: вернуть можно
+    # только то, что ещё лежит на участке необработанным.
+    from app.stock.services import StockProjectionManager
+
+    cache = await StockProjectionManager().get_task_cache(db, task.id)
+    available_for_return = (
+        cache["issued_quantity"] - cache["completed_quantity"] - cache["transferred_quantity"]
+    )
+    if available_for_return <= 0:
+        raise ValueError("Нет излишков для возврата на склад")
+    if quantity > available_for_return:
+        raise ValueError(
+            f"Количество возврата ({quantity}) превышает доступное к возврату ({available_for_return})"
+        )
+
+    now = datetime.now(UTC)
+    svc = StockCommandService()
+    # Журнал действий (#116): Action по цепочке задачи; actor — снимок имени
+    # пользователя, как в complete_task/defect_decide.
+    action = await action_journal_service.log_task_action(
+        db,
+        action_type="return_to_stock",
+        ref_id=task.id,
+        actor=await _get_user_snapshot_name(db, actor_id),
+    )
+
+    from app.services.material_operations import (
+        completed_operations_for_task,
+        previous_stage_sequence,
+    )
+
+    previous_sequence = await previous_stage_sequence(db, task)
+    through_previous = await completed_operations_for_task(
+        db, task, through_sequence=previous_sequence or 0
+    )
+    # return_to_stock: материал уходит с участка (to_location=None).
+    tx = await svc.record(db, StockCommand(
+        product_id=task.product_id,
+        from_location_id=task.section_id,
+        to_location_id=None,
+        quantity=quantity,
+        reason=Reason.RETURN_TO_STOCK,
+        task_id=task.id,
+        completed_operations=through_previous,
+        comment=comment,
+        idempotency_key=idempotency_key,
+        created_by=actor_id,
+        executor_user_id=executor_user_id or actor_id,
+        performed_at=performed_at or now,
+        accounted_at=accounted_at or now,
+        action_id=action.id,
+    ))
+
+    await apply_ledger_portion(db, task)
+
+    return {"transaction_id": tx.id, "task_id": task.id, "status": task.status.value}
 
 
 async def prepare_section_task(
@@ -1191,6 +1302,9 @@ async def prepare_section_task(
         product_id=line.product_id,
         route_stage_id=line.route_stage_id,
         planned_quantity=quantity,
+        # Начальный статус задания выбирает домен, а не ledger: у нового
+        # задания фактов ещё нет, resolve_work_task_status на пустой проекции
+        # возвращает None (#320, п.4).
         status=WorkTaskStatus.ready,
         due_date=line.due_date,
         dimensions=position_dimensions_for_task(pos),

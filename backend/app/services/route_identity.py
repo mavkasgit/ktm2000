@@ -27,10 +27,18 @@ ADR-0051 объявил идентичность маршрута единой: 
 свежего» при ``limit(1)`` давал бы разные ответы на одних и тех же данных
 и тихо менял бы результат на дублях.
 
+Порядок поиска (сначала код, и лишь затем legacy-имя) объявлен тоже здесь —
+в :func:`find_route_by_identity` (#326): это то же понятие тождества, что и
+условия запроса, а не отдельная политика вызывающего. Импорт, автоматчик,
+сид и батч-снимок зовут её, отличаясь только фильтрами и кэшами.
+
 Сверки сигнатуры здесь нет и быть не должно: она требует чтения этапов и
 живёт отдельным явным шагом у вызывающего (ADR-0051 п. 4).
 """
 from __future__ import annotations
+
+from collections.abc import MutableMapping
+from dataclasses import dataclass
 
 from sqlalchemy import Select, select
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -38,10 +46,32 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app.models.route import ProductionRoute
 
 __all__ = [
+    "MATCH_BY_CODE",
+    "MATCH_BY_LEGACY_NAME",
+    "RouteIdentityMatch",
     "find_route_by_code",
+    "find_route_by_identity",
     "find_route_by_name",
     "route_identity_query",
 ]
+
+#: Чем маршрут опознан в порядке тождества: по коду (идентичность) либо по
+#: legacy-имени (подпись в переходном состоянии базы).
+MATCH_BY_CODE = "code"
+MATCH_BY_LEGACY_NAME = "legacy_name"
+
+
+@dataclass(frozen=True, slots=True)
+class RouteIdentityMatch:
+    """Найденный маршрут и то, чем он опознан.
+
+    ``matched_by`` нужен вызывающим, которые продолжают работу по-разному:
+    конфликт сигнатуры — шаг только для кода (ADR-0051 п. 4), а найденное по
+    коду и найденное по имени нельзя перепутать местами.
+    """
+
+    route: ProductionRoute
+    matched_by: str
 
 
 def route_identity_query(
@@ -106,3 +136,61 @@ async def find_route_by_name(
             exclude_id=exclude_id,
         )
     )
+
+
+async def find_route_by_identity(
+    db: AsyncSession,
+    *,
+    code: str | None,
+    name: str | None,
+    only_active: bool = False,
+    code_cache: MutableMapping[str, ProductionRoute | None] | None = None,
+    name_cache: MutableMapping[str, ProductionRoute | None] | None = None,
+    cache_is_snapshot: bool = False,
+) -> RouteIdentityMatch | None:
+    """Маршрут по порядку тождества: сначала код, затем legacy-имя (#326).
+
+    Порядок объявлен здесь один раз, и это часть тождества, а не политика
+    вызывающего: код идентифицирует маршрут, имя — подпись (ADR-0051).
+    Импорт, автоматчик и сид зовут эту функцию, отличаясь только
+    ``only_active`` и кэшами; батч-снимок передаёт свои словари, поэтому
+    повторяет тот же порядок, не повторяя его код.
+
+    По коду ищется всегда, по имени — только если по коду ничего нет (или
+    кода нет вовсе, например у пересборки без этапов). Имя берётся среди
+    строк без кода: у маршрута с кодом своя идентичность, и опознавать его
+    подписью нельзя (ADR-0051 п. 3).
+
+    ``code_cache``/``name_cache`` — мемоизация вызывающего на батч. Значение
+    под ключом, в том числе ``None``, означает «уже искали, результата нет»:
+    повторного запроса в БД не будет. Отсутствие ключа — поиск с записью
+    результата.
+
+    ``cache_is_snapshot`` — кэш является полным снимком искомого множества
+    (``PositionRouteBatchCache`` собирается одним запросом по всем маршрутам):
+    тогда отсутствие ключа значит «в снимке нет», запрос в БД не делается и
+    снимок не дописывается. Иначе список позиций с новыми составами дал бы
+    по запросу на каждый промах — ровно тот N+1, ради снятия которого снимок
+    и заведён. Кэш импорта — мемоизация, а не снимок: у него флаг снят.
+    """
+    if code is not None:
+        if code_cache is not None and (cache_is_snapshot or code in code_cache):
+            found = code_cache.get(code)
+        else:
+            found = await find_route_by_code(db, code, only_active=only_active)
+            if code_cache is not None:
+                code_cache[code] = found
+        if found is not None:
+            return RouteIdentityMatch(found, MATCH_BY_CODE)
+    if name:
+        if name_cache is not None and (cache_is_snapshot or name in name_cache):
+            found = name_cache.get(name)
+        else:
+            found = await find_route_by_name(
+                db, name, legacy_name_only=True, only_active=only_active
+            )
+            if name_cache is not None:
+                name_cache[name] = found
+        if found is not None:
+            return RouteIdentityMatch(found, MATCH_BY_LEGACY_NAME)
+    return None

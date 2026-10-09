@@ -1,8 +1,11 @@
-"""Сторож каталога кодов строк импорта плана (issue #166, спека §3).
+"""Сторож каталога кодов строк плана (issue #166, спека §3; #327).
 
 Фиксирует классификацию error/warning рядом с правилом статуса
 (plan_import_service.plan_import_row_status): новый errors.append /
 warnings.append без записи в каталог ломает test_source_appends_classified.
+С #327 сторож смотрит на обе стороны — импортную (plan_import_service.py,
+excel_import.py) и валидационную (plan_validation.py, route_validation.py):
+каталог у них один.
 """
 
 from __future__ import annotations
@@ -38,6 +41,19 @@ SPEC_ERROR_CODES = frozenset(
         "route_operation_not_recognized",
     }
 )
+# Валидационная сторона (#327): коды, которые добавляют plan_validation.py и
+# route_validation.py. Список дублирует каталог намеренно — как и SPEC_*.
+VALIDATION_ERROR_CODES = frozenset(
+    {
+        "quantity_must_be_positive",
+        "route_not_found",
+        "manual_route_not_found",  # значение ResolvedRouteInfo.error (route_matcher.py)
+        "route_sequence_invalid",
+        "route_missing_required_step",
+        "route_contains_excluded_step",
+    }
+)
+CATALOG_ERROR_CODES = SPEC_ERROR_CODES | VALIDATION_ERROR_CODES
 SPEC_WARNING_BASES = frozenset(
     {
         "hanger_quantity_not_set",
@@ -54,16 +70,24 @@ SPEC_WARNING_BASES = frozenset(
 )
 
 SERVICES_DIR = Path(__file__).resolve().parent.parent / "app" / "services"
-SCANNED_FILES = ("plan_import_service.py", "excel_import.py")
+# Импортная сторона — append'ы кодов; валидационная — те же append'ы (#327).
+SCANNED_FILES = (
+    "plan_import_service.py",
+    "excel_import.py",
+    "plan_validation.py",
+    "route_validation.py",
+)
 ERROR_ATTRS = {"errors"}
 WARNING_ATTRS = {"warnings"}
 # Динамические passthrough с классификацией вне append-строки:
-# selection.error — RouteSelectionResult.error (значения в ERROR_CODES).
-ALLOWED_DYNAMIC_ERRORS = {"selection.error"}
+# selection.error — RouteSelectionResult.error (значения в ERROR_CODES);
+# route_info.error — ResolvedRouteInfo.error (значения проверяет
+# test_error_values_are_classified по литералам route_matcher.py).
+ALLOWED_DYNAMIC_ERRORS = {"selection.error", "route_info.error"}
 
 
 def test_error_catalog_matches_spec():
-    assert PLAN_IMPORT_ERROR_CODES == SPEC_ERROR_CODES
+    assert PLAN_IMPORT_ERROR_CODES == CATALOG_ERROR_CODES
 
 
 def test_warning_catalog_matches_spec():
@@ -74,12 +98,12 @@ def test_every_error_code_has_operator_text():
     """У каждого кода ошибки строки есть текст в каноне подписей: иначе
     оператор в колонке «Ошибки» и в деталях строки увидит сам код, а текст
     до фронта не доедет — лейблы генерируются из этого канона."""
-    without_text = sorted(code for code in SPEC_ERROR_CODES if not VALIDATION_ERROR_MESSAGES.get(code))
+    without_text = sorted(code for code in CATALOG_ERROR_CODES if not VALIDATION_ERROR_MESSAGES.get(code))
     assert without_text == []
 
 
 def test_classify_errors():
-    for code in SPEC_ERROR_CODES:
+    for code in CATALOG_ERROR_CODES:
         assert classify_plan_import_code(code) == "error", code
 
 
@@ -124,6 +148,9 @@ def _static_head(node: ast.AST) -> str | None:
             else:
                 break
         return "".join(parts) or None
+    # Конкатенация литерала с параметрами: "route_missing_required_step: " + ...
+    if isinstance(node, ast.BinOp) and isinstance(node.op, ast.Add):
+        return _static_head(node.left)
     return None
 
 
@@ -134,9 +161,15 @@ def _iter_appends(tree: ast.AST):
         func = node.func
         if not isinstance(func, ast.Attribute) or func.attr != "append":
             continue
-        if not isinstance(func.value, ast.Attribute):
+        # Список — либо локальная переменная (`errors.append` в валидации),
+        # либо поле объекта (`row.errors.append` в импорте): обе формы несут
+        # коды строк, и обе обязаны быть классифицированы (#327).
+        if isinstance(func.value, ast.Attribute):
+            attr = func.value.attr
+        elif isinstance(func.value, ast.Name):
+            attr = func.value.id
+        else:
             continue
-        attr = func.value.attr
         if attr in ERROR_ATTRS:
             side: str | None = "error"
         elif attr in WARNING_ATTRS:
@@ -149,15 +182,24 @@ def _iter_appends(tree: ast.AST):
 
 
 def _dynamic_names(node: ast.AST) -> set[str]:
+    """Имена, от которых зависит значение append'а.
+
+    Имя, служащее базой атрибута (`selection` в `selection.error`), само по
+    себе не добавляется: иначе разрешённый passthrough `selection.error` не
+    прошёл бы проверку из-за лишнего `selection` в наборе.
+    """
     names: set[str] = set()
+    attribute_bases: set[int] = set()
     for child in ast.walk(node):
-        if isinstance(child, ast.Name):
-            names.add(child.id)
-        elif isinstance(child, ast.Attribute):
+        if isinstance(child, ast.Attribute):
             if isinstance(child.value, ast.Name):
                 names.add(f"{child.value.id}.{child.attr}")
+                attribute_bases.add(id(child.value))
             else:
                 names.add(child.attr)
+    for child in ast.walk(node):
+        if isinstance(child, ast.Name) and id(child) not in attribute_bases:
+            names.add(child.id)
     return names
 
 
@@ -206,3 +248,29 @@ def test_source_appends_classified():
                 var_statics=var_statics, unclassified=unclassified,
             )
     assert not unclassified, "Неклассифицированные коды строк импорта:\n" + "\n".join(unclassified)
+
+
+#: Файлы, где код ошибки задаётся значением `ResolvedRouteInfo.error` /
+#: `RouteSelectionResult.error`, а не append'ом строки.
+ERROR_VALUE_FILES = ("route_matcher.py", "route_selection.py")
+
+
+def test_error_values_are_classified():
+    """Литералы `error="..."` классифицированы: passthrough'ы вроде
+    `route_info.error` не проходят через append, и без этой проверки новый
+    код ошибки маршрута остался бы вне каталога (#327)."""
+    unclassified: list[str] = []
+    for filename in ERROR_VALUE_FILES:
+        tree = ast.parse((SERVICES_DIR / filename).read_text(encoding="utf-8"))
+        for node in ast.walk(tree):
+            if not isinstance(node, ast.Call):
+                continue
+            for keyword in node.keywords:
+                if keyword.arg != "error":
+                    continue
+                head = _static_head(keyword.value)
+                if head is None:
+                    continue  # динамический passthrough (route_info.error и т.п.)
+                if classify_plan_import_code(head) != "error":
+                    unclassified.append(f"{filename}:{node.lineno}: {head!r}")
+    assert not unclassified, "Неклассифицированные значения error:\n" + "\n".join(unclassified)
