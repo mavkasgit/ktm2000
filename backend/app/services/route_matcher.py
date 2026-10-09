@@ -20,7 +20,10 @@ from app.models.production_plan import (
 from app.models.route import ProductionRoute, RouteRuleProfile
 from app.services.color_extraction import resolve_payload_color
 from app.services.route_builder import build_route_from_profile
-from app.services.route_identity import find_route_by_code, find_route_by_name
+from app.services.route_identity import (
+    MATCH_BY_CODE,
+    find_route_by_identity,
+)
 from app.services.route_selection import (
     RouteCandidateDiagnostic,
     select_route_for_payload,
@@ -156,8 +159,9 @@ async def _resolve_route_id_for_dynamic_name(
 ) -> int | None:
     """`route_id` позиции по пересобранному маршруту; `None` — не нашли.
 
-    Порядок: сохранённое назначение (если имя совпало) → поиск по коду из
-    сигнатуры → поиск по имени → сохранённое назначение как последний выход.
+    Порядок: сохранённое назначение (если имя совпало) → поиск по
+    идентичности (код, затем имя — общий порядок, ``find_route_by_identity``)
+    → сохранённое назначение как последний выход.
     Имя пересборки берётся из шаблона профиля (`{output_kind} - {operations}`),
     и на части позиций оно не совпадает с сохранённым. Раньше это обнуляло
     назначение: позиция отдавала `route_not_found`, а take-to-work отказывал
@@ -194,30 +198,31 @@ async def _resolve_route_id_for_dynamic_name(
         if route is not None and route.name == built_name and route.is_active:
             return route.id
     built_code = auto_route_code(built_signature)
-    if built_code is not None:
-        if batch is not None:
-            matched = batch.route_by_code.get(built_code)
-        else:
-            matched = await find_route_by_code(db, built_code, only_active=True)
-        if matched is not None:
-            # Код — производная сигнатуры, но пересчёт сигнатуры код не
-            # обновляет (`refresh_route_signature`), поэтому маршрут,
-            # переписанный руками, сохраняет старый `auto-`-код. Сверка
-            # обязательна и здесь, как в импорте (ADR-0051 п.4): иначе
-            # позиция получила бы маршрут чужого состава с error=None.
-            if await _signature_conflicts_cached(db, matched, built_signature, batch):
-                raise RouteSignatureConflict(matched.id)
-            return matched.id
+    # Порядок поиска — общий (#326): код, затем legacy-имя. Снимок батча
+    # отдаётся как кэши, поэтому батч-форма повторяет тот же порядок, не
+    # повторяя его код.
+    match = await find_route_by_identity(
+        db,
+        code=built_code,
+        name=built_name,
+        only_active=True,
+        code_cache=batch.route_by_code if batch is not None else None,
+        name_cache=batch.legacy_route_by_name if batch is not None else None,
+        cache_is_snapshot=batch is not None,
+    )
+    if match is not None and match.matched_by == MATCH_BY_CODE:
+        # Код — производная сигнатуры, но пересчёт сигнатуры код не
+        # обновляет (`refresh_route_signature`), поэтому маршрут,
+        # переписанный руками, сохраняет старый `auto-`-код. Сверка
+        # обязательна и здесь, как в импорте (ADR-0051 п.4): иначе
+        # позиция получила бы маршрут чужого состава с error=None.
+        if await _signature_conflicts_cached(db, match.route, built_signature, batch):
+            raise RouteSignatureConflict(match.route.id)
+        return match.route.id
     # Fallback по имени — только среди строк без кода (ADR-0051 п. 6), и
     # порядок тот же, что у сида и импорта: самый старый.
-    if batch is not None:
-        legacy = batch.legacy_route_by_name.get(built_name)
-    else:
-        legacy = await find_route_by_name(
-            db, built_name, legacy_name_only=True, only_active=True
-        )
-    if legacy is not None:
-        return legacy.id
+    if match is not None:
+        return match.route.id
     if stored_route_id is not None:
         stored = await _cached_route(db, stored_route_id, route_cache)
         if stored is not None and stored.is_active:
