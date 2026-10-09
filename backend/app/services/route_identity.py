@@ -146,6 +146,7 @@ async def find_route_by_identity(
     only_active: bool = False,
     code_cache: MutableMapping[str, ProductionRoute | None] | None = None,
     name_cache: MutableMapping[str, ProductionRoute | None] | None = None,
+    cache_is_snapshot: bool = False,
 ) -> RouteIdentityMatch | None:
     """Маршрут по порядку тождества: сначала код, затем legacy-имя (#326).
 
@@ -163,12 +164,18 @@ async def find_route_by_identity(
     ``code_cache``/``name_cache`` — мемоизация вызывающего на батч. Значение
     под ключом, в том числе ``None``, означает «уже искали, результата нет»:
     повторного запроса в БД не будет. Отсутствие ключа — поиск с записью
-    результата. Кэш — не второй источник истины, а только снимок ответов
-    этой функции на время батча.
+    результата.
+
+    ``cache_is_snapshot`` — кэш является полным снимком искомого множества
+    (``PositionRouteBatchCache`` собирается одним запросом по всем маршрутам):
+    тогда отсутствие ключа значит «в снимке нет», запрос в БД не делается и
+    снимок не дописывается. Иначе список позиций с новыми составами дал бы
+    по запросу на каждый промах — ровно тот N+1, ради снятия которого снимок
+    и заведён. Кэш импорта — мемоизация, а не снимок: у него флаг снят.
     """
     if code is not None:
-        if code_cache is not None and code in code_cache:
-            found = code_cache[code]
+        if code_cache is not None and (cache_is_snapshot or code in code_cache):
+            found = code_cache.get(code)
         else:
             found = await find_route_by_code(db, code, only_active=only_active)
             if code_cache is not None:
@@ -176,8 +183,8 @@ async def find_route_by_identity(
         if found is not None:
             return RouteIdentityMatch(found, MATCH_BY_CODE)
     if name:
-        if name_cache is not None and name in name_cache:
-            found = name_cache[name]
+        if name_cache is not None and (cache_is_snapshot or name in name_cache):
+            found = name_cache.get(name)
         else:
             found = await find_route_by_name(
                 db, name, legacy_name_only=True, only_active=only_active

@@ -208,6 +208,7 @@ async def _resolve_route_id_for_dynamic_name(
         only_active=True,
         code_cache=batch.route_by_code if batch is not None else None,
         name_cache=batch.legacy_route_by_name if batch is not None else None,
+        cache_is_snapshot=batch is not None,
     )
     if match is not None and match.matched_by == MATCH_BY_CODE:
         # Код — производная сигнатуры, но пересчёт сигнатуры код не

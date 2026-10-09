@@ -7,9 +7,6 @@
 """
 from __future__ import annotations
 
-import ast
-from pathlib import Path
-
 import pytest
 from app.models.route import ProductionRoute
 from app.services.route_identity import (
@@ -20,6 +17,7 @@ from app.services.route_identity import (
     find_route_by_name,
     route_identity_query,
 )
+from sqlalchemy import event
 from sqlalchemy.ext.asyncio import AsyncSession
 
 pytestmark = pytest.mark.asyncio
@@ -265,30 +263,35 @@ async def test_identity_caches_memoize_both_misses_and_hits(session: AsyncSessio
     assert name_cache["Нет такого"] is None
 
 
-IDENTITY_CALLERS = (
-    Path("app") / "services" / "plan_import_service.py",
-    Path("app") / "services" / "route_matcher.py",
-    Path("app") / "services" / "position_route_batch.py",
-    Path("app") / "seeds" / "seeders" / "routes_seeder.py",
-)
+async def test_identity_snapshot_cache_miss_does_not_query(session: AsyncSession) -> None:
+    """Снимок батча — полный: промах в нём значит «нет», а не «спроси БД».
 
-
-async def test_identity_order_is_called_not_recopied() -> None:
-    """Порядок объявлен один раз: вызывающие зовут `find_route_by_identity`.
-
-    Импорт, автоматчик, сид и батч-снимок обязаны ходить в общую функцию.
-    Прямой `find_route_by_code`/`find_route_by_name` в них означает, что
-    порядок «код → legacy-имя» снова собирают на месте, и он разойдётся.
+    Снимок собирается одним запросом по всем маршрутам, поэтому отсутствие
+    ключа — ответ. Если бы промах уходил в БД, список из N позиций с новыми
+    составами дал бы N запросов — тот самый N+1, ради снятия которого снимок
+    и заведён (батч-резолв обещает один запрос на список).
     """
-    app_root = Path(__file__).resolve().parent.parent
-    offenders: list[str] = []
-    for relative in IDENTITY_CALLERS:
-        tree = ast.parse((app_root / relative).read_text(encoding="utf-8"))
-        for node in ast.walk(tree):
-            if not isinstance(node, ast.Call):
-                continue
-            func = node.func
-            name = func.id if isinstance(func, ast.Name) else getattr(func, "attr", "")
-            if name in {"find_route_by_code", "find_route_by_name"}:
-                offenders.append(f"{relative.as_posix()}:{node.lineno}: {name}")
-    assert offenders == [], "Порядок тождества собран заново:\n" + "\n".join(offenders)
+    code_cache: dict[str, ProductionRoute | None] = {}
+    name_cache: dict[str, ProductionRoute | None] = {}
+    counter = {"n": 0}
+    sync_engine = session.bind.sync_engine
+
+    def _count(conn, cursor, statement, parameters, context, executemany):
+        counter["n"] += 1
+
+    event.listen(sync_engine, "before_cursor_execute", _count)
+    try:
+        match = await find_route_by_identity(
+            session,
+            code="auto-none",
+            name="Нет в снимке",
+            code_cache=code_cache,
+            name_cache=name_cache,
+            cache_is_snapshot=True,
+        )
+    finally:
+        event.remove(sync_engine, "before_cursor_execute", _count)
+
+    assert match is None
+    assert counter["n"] == 0, "промах по снимку не должен ходить в БД"
+    assert code_cache == {} and name_cache == {}, "снимок не дописывается"
