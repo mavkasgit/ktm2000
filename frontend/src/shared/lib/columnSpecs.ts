@@ -102,6 +102,26 @@ export type ColumnSpec<
    */
   cellValue?: (row: Row) => string;
   /**
+   * Объявленный домен значений колонки: список попапера целиком, от строк не
+   * зависящий (#322). Нужен колонкам, у которых набор значений один и тот же
+   * на всех строках, а читать в строке нечего: «Парный» — это всегда
+   * «Да»/«Нет». Без такого объявления экран выводил бы список из строк второй
+   * картой, то есть держал бы семантику колонки вне описания — ровно то, от
+   * чего уводит #322.
+   *
+   * Домен объявляет только список. Строки колонка отсеивает по `cellValue`:
+   * без читателя значения строки в предикате ей взять неоткуда, и
+   * `selected.has("")` не должен выбрасывать все строки.
+   */
+  filterValues?: readonly string[];
+  /**
+   * Значения строки для многозначной колонки (#322): «Размеры» кладут в строку
+   * несколько длин, и список попапера — их объединение по строкам без повторов.
+   * Заменяет `cellValue` там, где значение строки не одно: предикат пропускает
+   * строку, если совпал хотя бы один её размер.
+   */
+  filterValuesFrom?: (row: Row) => readonly string[];
+  /**
    * Порядок списка значений попапера. Нет — порядок появления в строках.
    * Нужен там, где значения — не текст, а код (габариты): без него список
    * читался бы в порядке строк доски.
@@ -247,13 +267,18 @@ function toParamKind(
   return undefined;
 }
 
-/** Читатели значений по полю колонки: только у колонок, которые их объявили. */
-function cellReaders<T, Field extends string, SortField extends string>(
+/**
+ * Читатели значений по полю колонки: только у колонок, которые их объявили.
+ * `filterValues` читателем не является — он объявляет список целиком и в
+ * строках не нуждается.
+ */
+function rowValuesReaders<T, Field extends string, SortField extends string>(
   columns: ReadonlyArray<ColumnSpec<Field, SortField, T>>,
-): Partial<Record<Field, (row: T) => string>> {
-  const readers: Partial<Record<Field, (row: T) => string>> = {};
+): Partial<Record<Field, (row: T) => string | readonly string[]>> {
+  const readers: Partial<Record<Field, (row: T) => string | readonly string[]>> = {};
   for (const column of columns) {
-    if (column.filterField && column.cellValue) readers[column.filterField] = column.cellValue;
+    const read = column.filterValuesFrom ?? column.cellValue;
+    if (column.filterField && read) readers[column.filterField] = read;
   }
   return readers;
 }
@@ -268,7 +293,9 @@ function cellReaders<T, Field extends string, SortField extends string>(
  * берут его оттуда.
  *
  * Колонка без читателя в предикат не входит: значения для неё никто не
- * объявил, и `selected.has("")` не должен отсеивать все строки.
+ * объявил, и `selected.has("")` не должен отсеивать все строки. Многозначная
+ * колонка (`filterValuesFrom`) пропускает строку, если совпал хотя бы один её
+ * размер: список и фильтр берут один читатель, поэтому разойтись не могут.
  */
 export function buildColumnFilterPredicate<T, Field extends string, SortField extends string>(
   columnFilters: Partial<Record<Field, Set<string>>>,
@@ -276,7 +303,7 @@ export function buildColumnFilterPredicate<T, Field extends string, SortField ex
   columns: ReadonlyArray<ColumnSpec<Field, SortField, T>>,
 ): ((row: T) => boolean) | null {
   if (!hasActiveColumnFilters(columnFilters, columnSearchQueries)) return null;
-  const readers = cellReaders(columns);
+  const readers = rowValuesReaders(columns);
 
   return (row: T) => {
     const fields = new Set<Field>([
@@ -289,14 +316,22 @@ export function buildColumnFilterPredicate<T, Field extends string, SortField ex
       if (!read) continue;
       const search = columnSearchQueries[field]?.trim();
       const selected = columnFilters[field];
-      const cellValue = read(row);
+      const value = read(row);
 
-      if (search) {
-        if (!matchesPartialSearch(cellValue, search)) return false;
+      if (typeof value === "string") {
+        if (search) {
+          if (!matchesPartialSearch(value, search)) return false;
+          continue;
+        }
+        if (selected && selected.size > 0 && !selected.has(value)) return false;
         continue;
       }
 
-      if (selected && selected.size > 0 && !selected.has(cellValue)) {
+      if (search) {
+        if (!value.some((candidate) => matchesPartialSearch(candidate, search))) return false;
+        continue;
+      }
+      if (selected && selected.size > 0 && !value.some((candidate) => selected.has(candidate))) {
         return false;
       }
     }
@@ -305,14 +340,17 @@ export function buildColumnFilterPredicate<T, Field extends string, SortField ex
 }
 
 /**
- * Список значений попапера — из описания: перебор уже загруженных строк.
+ * Список значений попапера — из описания.
  *
- * Экран собирал его картой `uniqueValues`, повторяя читателя значения второй
- * раз (и третьим способом — в печатном листе). Здесь тот же `cellValue`, что и
- * в предикате, поэтому список значений и фильтр не могут разойтись.
+ * Источника два, и колонка объявляет один из них: `filterValues` — готовый
+ * домен, от строк не зависящий («Парный» — всегда «Да»/«Нет»);
+ * `cellValue`/`filterValuesFrom` — значения строк, объединяемые без повторов
+ * (`filterValuesFrom` — многозначная «Размеры»). Оба берутся из описания, а не
+ * из карты `uniqueValues` на экране, поэтому список значений и фильтр не могут
+ * разойтись, а домен, не равный строкам, больше не живёт вне колонки.
  *
- * Колонка без читателя или без `filterField` в результат не попадает: попапера
- * у неё нет.
+ * Колонка без объявления или без `filterField` в результат не попадает:
+ * попапера у неё нет.
  */
 export function buildColumnFilterValues<T, Field extends string, SortField extends string>(
   rows: readonly T[],
@@ -320,14 +358,29 @@ export function buildColumnFilterValues<T, Field extends string, SortField exten
 ): Partial<Record<Field, string[]>> {
   const values: Partial<Record<Field, string[]>> = {};
   for (const column of columns) {
-    const read = column.cellValue;
-    if (!column.filterField || !read) continue;
+    if (!column.filterField) continue;
+    const read = column.filterValuesFrom ?? column.cellValue;
+    if (!column.filterValues && !read) continue;
+
     const unique = new Set<string>();
-    for (const row of rows) {
-      const value = read(row);
-      if (column.skipEmptyValues && value === "") continue;
+    const add = (value: string) => {
+      if (column.skipEmptyValues && value === "") return;
       unique.add(value);
+    };
+
+    if (column.filterValues) {
+      for (const value of column.filterValues) add(value);
+    } else if (read) {
+      for (const row of rows) {
+        const value = read(row);
+        if (typeof value === "string") {
+          add(value);
+          continue;
+        }
+        for (const candidate of value) add(candidate);
+      }
     }
+
     const list = [...unique];
     values[column.filterField] = column.sortValues ? list.sort(column.sortValues) : list;
   }

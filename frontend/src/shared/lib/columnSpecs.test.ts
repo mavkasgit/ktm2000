@@ -201,4 +201,59 @@ describe("buildColumnFilterPredicate и buildColumnFilterValues", () => {
 
     expect(buildColumnFilterValues(ROWS, columns)).toEqual({});
   });
+
+  it("объявленный домен берётся как есть и от строк не зависит", () => {
+    const columns: ColumnSpec<"sku", "sku", Row>[] = [
+      { filterField: "sku", clientOnly: true, filterValues: ["Да", "Нет"] },
+    ];
+
+    // Ни в одной строке нет «Нет», но домен колонки объявлен, а не выведен из
+    // выборки: значение не должно пропадать на странице, где его не встретилось.
+    expect(buildColumnFilterValues([{ sku: "Да", qty: 1 }], columns)).toEqual({ sku: ["Да", "Нет"] });
+  });
+
+  it("многозначная колонка даёт объединение значений строк без повторов", () => {
+    type MultiRow = { sizes: number[] };
+    const columns: ColumnSpec<"sizes", "sizes", MultiRow>[] = [
+      {
+        filterField: "sizes",
+        clientOnly: true,
+        filterValuesFrom: (row) => row.sizes.map(String),
+        sortValues: (a, b) => Number(a) - Number(b),
+      },
+    ];
+    const rows: MultiRow[] = [{ sizes: [2700, 900] }, { sizes: [900] }, { sizes: [1200] }];
+
+    expect(buildColumnFilterValues(rows, columns)).toEqual({ sizes: ["900", "1200", "2700"] });
+  });
+
+  it("многозначная колонка в предикате пропускает строку по любому своему значению", () => {
+    type MultiRow = { sizes: number[] };
+    const columns: ColumnSpec<"sizes", "sizes", MultiRow>[] = [
+      { filterField: "sizes", clientOnly: true, filterValuesFrom: (row) => row.sizes.map(String) },
+    ];
+    const predicate = buildColumnFilterPredicate<MultiRow, "sizes", "sizes">(
+      { sizes: new Set(["900"]) },
+      {},
+      columns,
+    );
+
+    expect(predicate!({ sizes: [2700, 900] })).toBe(true);
+    expect(predicate!({ sizes: [1200] })).toBe(false);
+  });
+
+  it("объявленный домен список объявляет, но строки не отсеивает: читателя у колонки нет", () => {
+    const columns: ColumnSpec<"sku", "sku", Row>[] = [
+      { filterField: "sku", clientOnly: true, filterValues: ["Да", "Нет"] },
+    ];
+    const predicate = buildColumnFilterPredicate<Row, "sku", "sku">(
+      { sku: new Set(["Да"]) },
+      {},
+      columns,
+    );
+
+    // Без `cellValue` значение строки взять неоткуда: `selected.has("")` не
+    // должен выбросить все строки.
+    expect(predicate!({ sku: "Нет", qty: 1 })).toBe(true);
+  });
 });

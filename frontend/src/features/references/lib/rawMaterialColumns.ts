@@ -21,8 +21,16 @@
  * Диапазоны «Длина от/до» и «Кол-во от/до» — не колонки, а поля панели
  * фильтров: попапера в шапке у них нет, значения они принимают не из списка,
  * а вводом, и в описание колонок не входят. Их состояние живёт на экране.
+ *
+ * Список значений попапера тоже объявлен здесь (#322): у колонок-флагов —
+ * готовым доменом `filterValues` («Да»/«Нет» не зависят от строк), у
+ * «Размеров» — читателем строк `filterValuesFrom` (у артикула несколько длин),
+ * у остальных — читателем значения `cellValue`. Поэтому экран больше не держит
+ * карту `uniqueValues` и не перечисляет колонки ради попапера.
  */
-import type { ProductFilters } from "@/shared/api/products";
+import type { Product, ProductFilters } from "@/shared/api/products";
+import { primaryHangerValue, productLengths } from "@/shared/lib/hangerQuantity";
+import { fmtQtyPrecise } from "@/shared/lib/quantityFormat";
 import { buildTypedColumnApiParams, type ColumnSpec } from "@/shared/lib/columnSpecs";
 
 /** Поля, по которым экран фильтрует колонки и строит сортировку. */
@@ -36,11 +44,11 @@ export type RawMaterialColumnField =
 
 /**
  * Идентификатор колонки совпадает с полем фильтра: у всех шести колонок
- * фильтр есть, и `values` для попапера берутся из списка по этому же имени.
+ * фильтр есть, и значения попапера берутся из описания по этому же имени.
  */
 export type RawMaterialColumnId = RawMaterialColumnField;
 
-export type RawMaterialColumn = ColumnSpec<RawMaterialColumnField> & {
+export type RawMaterialColumn = ColumnSpec<RawMaterialColumnField, RawMaterialColumnField, Product> & {
   id: RawMaterialColumnId;
   label: string;
   /** Класс `<th>` сверх общего: попапер фильтра занимает ячейку целиком. */
@@ -82,6 +90,26 @@ const qtyRange = (value: string): Record<string, number> => {
 };
 
 /**
+ * Домен трёх колонок-флагов: набор значений один и тот же на всех строках,
+ * поэтому он объявлен в описании, а не выведен перебором строк. Вывод из строк
+ * терял бы значения, которых нет на текущей странице, и менял бы порядок.
+ */
+const yesNoValues: readonly string[] = ["Да", "Нет"];
+
+/**
+ * Порядок значения «Кол-во на подвесе»: числа по возрастанию, «—» в конце.
+ * Значение уже отформатировано (`fmtQtyPrecise`), поэтому десятичный разделитель
+ * — запятая, и сравнивать сырым `parseFloat` нельзя: «2,5» дало бы 2.
+ */
+const compareHangerQty = (a: string, b: string): number => {
+  const left = Number.parseFloat(a.replace(",", "."));
+  const right = Number.parseFloat(b.replace(",", "."));
+  if (Number.isNaN(left)) return Number.isNaN(right) ? 0 : 1;
+  if (Number.isNaN(right)) return -1;
+  return left - right;
+};
+
+/**
  * Порядок колонок совпадает с порядком в шапке и в теле таблицы.
  *
  * Подпись «Пропуск участка» подставляет страница: это название участка из
@@ -94,6 +122,10 @@ export const rawMaterialColumns: RawMaterialColumn[] = [
     headerClassName: "p-0 w-48",
     filterField: "sku",
     sortField: "sku",
+    cellValue: (product) => product.sku,
+    // Порядок артикулов — как у `Array.prototype.sort()` по умолчанию: коды
+    // UTF-16, а не локаль. Экран сортировал именно так.
+    sortValues: (a, b) => (a < b ? -1 : a > b ? 1 : 0),
   },
   {
     id: "quantity_per_hanger",
@@ -103,6 +135,11 @@ export const rawMaterialColumns: RawMaterialColumn[] = [
     sortField: "quantity_per_hanger",
     toParams: qtyRange,
     paramKind: "number",
+    // Значение — основная длина: серверный фильтр `qty_from/qty_to` и сортировка
+    // считают по ней, и ячейка печатает её же (спека #59 п. 25). Нет значения —
+    // «—», как и в ячейке, а не «0».
+    cellValue: (product) => fmtQtyPrecise(primaryHangerValue(product)?.value ?? null),
+    sortValues: compareHangerQty,
   },
   {
     id: "length_mm",
@@ -113,6 +150,10 @@ export const rawMaterialColumns: RawMaterialColumn[] = [
     toParams: lengthRange,
     paramKind: "number",
     valueLabel: (value) => `${value} мм`,
+    // «Размеры» многозначны: у артикула несколько длин, и список попапера — их
+    // объединение по строкам.
+    filterValuesFrom: (product) => productLengths(product).map(String),
+    sortValues: (a, b) => Number(a) - Number(b),
   },
   {
     id: "is_paired_profile",
@@ -122,6 +163,7 @@ export const rawMaterialColumns: RawMaterialColumn[] = [
     sortField: "is_paired_profile",
     mapValue: yesNoFlag,
     paramKind: "boolean",
+    filterValues: yesNoValues,
   },
   {
     id: "skip_shot_blast",
@@ -131,6 +173,7 @@ export const rawMaterialColumns: RawMaterialColumn[] = [
     sortField: "skip_shot_blast",
     mapValue: yesNoFlag,
     paramKind: "boolean",
+    filterValues: yesNoValues,
   },
   {
     id: "is_laminated",
@@ -140,6 +183,7 @@ export const rawMaterialColumns: RawMaterialColumn[] = [
     sortField: "is_laminated",
     mapValue: yesNoFlag,
     paramKind: "boolean",
+    filterValues: yesNoValues,
   },
 ];
 
@@ -170,6 +214,8 @@ export function buildRawMaterialColumnApiParams(
 ): RawMaterialColumnApiParams {
   return buildTypedColumnApiParams<
     RawMaterialColumnField,
-    RawMaterialColumnApiParams
+    RawMaterialColumnApiParams,
+    RawMaterialColumnField,
+    Product
   >(columnFilters, columnSearchQueries, rawMaterialColumns);
 }
