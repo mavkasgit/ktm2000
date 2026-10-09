@@ -81,7 +81,8 @@ export const boardColumns: BoardColumn[] = [
     sortField: "status",
     clientOnly: true,
     // Значения статуса уже подписаны при сборе: `uniqueValues.status`
-    // строится через `getStatusLabel`, поэтому переподписывать их нечего.
+    // строится через `getTaskRowState(task).label`, поэтому переподписывать
+    // их нечего.
   },
   {
     id: "actions",

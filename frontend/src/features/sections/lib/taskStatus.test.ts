@@ -3,12 +3,12 @@ import type { SectionBoardTask } from "@/shared/api/shopfloor";
 import {
   getCompletionBlockReason,
   getReadyStatusLabel,
-  getStatusColor,
-  getStatusLabel,
-  getTaskViewCategory,
+  getTaskRowState,
   isTaskCompletable,
   isTaskFullyTransferred,
   groupTasksByBlockReason,
+  type TaskTone,
+  type TaskViewCategory,
 } from "./taskStatus";
 
 function makeTask(overrides: Partial<SectionBoardTask> = {}): SectionBoardTask {
@@ -87,7 +87,7 @@ describe("getReadyStatusLabel", () => {
   });
 });
 
-describe("getStatusLabel", () => {
+describe("getTaskRowState: подпись", () => {
   it("полностью переданная ready-задача → «Завершен»", () => {
     const task = makeTask({
       status: "ready",
@@ -101,7 +101,7 @@ describe("getStatusLabel", () => {
         remaining_quantity: "0",
       },
     });
-    expect(getStatusLabel(task)).toBe("Завершен");
+    expect(getTaskRowState(task).label).toBe("Завершен");
   });
 
   it("для ready подставляет «Передано»/«Не передано»", () => {
@@ -114,18 +114,18 @@ describe("getStatusLabel", () => {
         received_quantity: "10",
       },
     });
-    expect(getStatusLabel(transferred)).toBe("Передано");
-    expect(getStatusLabel(makeTask({ status: "ready" }))).toBe("Не передано");
+    expect(getTaskRowState(transferred).label).toBe("Передано");
+    expect(getTaskRowState(makeTask({ status: "ready" })).label).toBe("Не передано");
   });
 
   it("для остальных статусов использует карту лейблов", () => {
-    expect(getStatusLabel(makeTask({ status: "in_progress" }))).toBe("В работе");
-    expect(getStatusLabel(makeTask({ status: "completed" }))).toBe("Завершен");
-    expect(getStatusLabel(makeTask({ status: "cancelled" }))).toBe("Отменен");
+    expect(getTaskRowState(makeTask({ status: "in_progress" })).label).toBe("В работе");
+    expect(getTaskRowState(makeTask({ status: "completed" })).label).toBe("Завершен");
+    expect(getTaskRowState(makeTask({ status: "cancelled" })).label).toBe("Отменен");
   });
 });
 
-describe("getStatusColor", () => {
+describe("getTaskRowState: класс пилюли", () => {
   it("ready + Передано → синий", () => {
     const t = makeTask({
       status: "ready",
@@ -136,15 +136,15 @@ describe("getStatusColor", () => {
         received_quantity: "5",
       },
     });
-    expect(getStatusColor(t)).toContain("blue");
+    expect(getTaskRowState(t).badgeClass).toContain("blue");
   });
 
   it("ready + Не передано → серый", () => {
-    expect(getStatusColor(makeTask({ status: "ready" }))).toContain("slate");
+    expect(getTaskRowState(makeTask({ status: "ready" })).badgeClass).toContain("slate");
   });
 
   it("in_progress → янтарный", () => {
-    expect(getStatusColor(makeTask({ status: "in_progress" }))).toContain("amber");
+    expect(getTaskRowState(makeTask({ status: "in_progress" })).badgeClass).toContain("amber");
   });
 });
 
@@ -241,7 +241,7 @@ describe("isTaskFullyTransferred", () => {
       },
     });
     expect(isTaskFullyTransferred(task)).toBe(false);
-    expect(getTaskViewCategory(task)).toBe("active");
+    expect(getTaskRowState(task).category).toBe("active");
   });
 
   it("completed → не считается «переданным без закрытия»", () => {
@@ -261,7 +261,7 @@ describe("isTaskFullyTransferred", () => {
   });
 });
 
-describe("getTaskViewCategory", () => {
+describe("getTaskRowState: категория", () => {
   it("полностью переданная ready-задача → completed", () => {
     const task = makeTask({
       status: "ready",
@@ -281,11 +281,11 @@ describe("getTaskViewCategory", () => {
         received_quantity: "216",
       },
     });
-    expect(getTaskViewCategory(task)).toBe("completed");
+    expect(getTaskRowState(task).category).toBe("completed");
   });
 
   it("ready с остатком → active", () => {
-    expect(getTaskViewCategory(makeTask({ status: "ready" }))).toBe("active");
+    expect(getTaskRowState(makeTask({ status: "ready" })).category).toBe("active");
   });
 
   it("полностью обработанное задание без передачи → completed", () => {
@@ -301,7 +301,7 @@ describe("getTaskViewCategory", () => {
         remaining_quantity: "200",
       },
     });
-    expect(getTaskViewCategory(task)).toBe("completed");
+    expect(getTaskRowState(task).category).toBe("completed");
   });
 
   it("частично обработанное задание → active", () => {
@@ -317,7 +317,7 @@ describe("getTaskViewCategory", () => {
         remaining_quantity: "200",
       },
     });
-    expect(getTaskViewCategory(task)).toBe("active");
+    expect(getTaskRowState(task).category).toBe("active");
   });
 
   it("частично обработанное задание → completable", () => {
@@ -337,7 +337,96 @@ describe("getTaskViewCategory", () => {
   });
 
   it("waiting_previous → waiting", () => {
-    expect(getTaskViewCategory(makeTask({ status: "waiting_previous" }))).toBe("waiting");
+    expect(getTaskRowState(makeTask({ status: "waiting_previous" })).category).toBe("waiting");
+  });
+});
+
+/**
+ * Таблица состояний: одно утверждение на статус, и оно сразу про категорию, тон,
+ * подпись, пилюлю и точку (#324). Раньше это были пять функций с независимыми
+ * ветвями и три маршрута к «ready»; новый статус требовал правки в каждом. Теперь
+ * новый статус — строка в этой таблице и ветвь в `getTaskRowState`.
+ *
+ * Точка статуса у «отменено»/«пропущено» серая (`bg-slate-300`) при красной и
+ * серой пилюлях — так было до этого модуля, вид доски не меняется; в таблице это
+ * зафиксировано явно, чтобы расхождение нельзя было принять за новую регрессию.
+ */
+describe("getTaskRowState: состояние строки целиком", () => {
+  const rows: [
+    SectionBoardTask["status"],
+    TaskViewCategory,
+    TaskTone,
+    string,
+    string,
+    string,
+  ][] = [
+    ["waiting_previous", "waiting", "waiting", "Ожидает", "bg-gray-100 text-gray-600", "bg-yellow-400"],
+    ["pending", "waiting", "waiting", "Ожидает", "bg-gray-100 text-gray-600", "bg-yellow-400"],
+    ["blocked", "waiting", "waiting", "Блокировка", "bg-red-100 text-red-600", "bg-red-500"],
+    ["ready", "active", "active", "Не передано", "bg-slate-100 text-slate-600", "bg-slate-400"],
+    ["in_progress", "active", "activeRunning", "В работе", "bg-amber-100 text-amber-700", "bg-amber-500 animate-pulse"],
+    ["in_work", "active", "activeRunning", "В работе", "bg-amber-100 text-amber-700", "bg-amber-500 animate-pulse"],
+    ["partially_completed", "active", "active", "Частично", "bg-orange-100 text-orange-700", "bg-blue-500"],
+    ["partially", "active", "active", "Частично", "bg-orange-100 text-orange-700", "bg-blue-500"],
+    ["completed", "completed", "completed", "Завершен", "bg-emerald-100 text-emerald-700", "bg-emerald-500"],
+    ["done", "completed", "completed", "Завершен", "bg-emerald-100 text-emerald-700", "bg-emerald-500"],
+    ["cancelled", "completed", "completed", "Отменен", "bg-red-100 text-red-600", "bg-slate-300"],
+    ["skipped", "completed", "completed", "Пропущено", "bg-slate-100 text-slate-600", "bg-slate-300"],
+  ];
+
+  it.each(rows)(
+    "%s → категория, тон, подпись, пилюля и точка одним решением",
+    (status, category, tone, label, badgeClass, dotClass) => {
+      expect(getTaskRowState(makeTask({ status }))).toEqual({
+        category,
+        isComplete: false,
+        isRawTransferred: false,
+        tone,
+        label,
+        badgeClass,
+        dotClass,
+      });
+    },
+  );
+
+  it("ready с переданным сырьём: та же запись, но подпись и цвета «Передано»", () => {
+    const task = makeTask({
+      status: "ready",
+      previous_stage: {
+        section_plan_line_id: 1,
+        completed_quantity: "0",
+        transferred_quantity: "10",
+        received_quantity: "10",
+      },
+    });
+    expect(getTaskRowState(task)).toEqual({
+      category: "active",
+      isComplete: false,
+      isRawTransferred: true,
+      tone: "active",
+      label: "Передано",
+      badgeClass: "bg-blue-100 text-blue-700",
+      dotClass: "bg-blue-500",
+    });
+  });
+
+  it("факт обработан — это «готово», но не «сырьё передано»", () => {
+    const task = makeTask({
+      status: "in_progress",
+      cache: {
+        available_quantity: "0",
+        issued_quantity: "200",
+        completed_quantity: "200",
+        transferred_quantity: "0",
+        received_quantity: "0",
+        rejected_quantity: "0",
+        remaining_quantity: "200",
+      },
+    });
+    const state = getTaskRowState(task);
+    expect(state.isComplete).toBe(true);
+    expect(state.isRawTransferred).toBe(false);
+    expect(state.label).toBe("Завершен");
   });
 });
 

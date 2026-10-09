@@ -1,9 +1,8 @@
 import { describe, expect, it } from "vitest";
 import type { SectionBoardTask } from "@/shared/api/shopfloor";
+import { getTaskRowState } from "./taskStatus";
 import {
-  getStatusDotClass,
   getTaskGroupHeaderState,
-  getTaskTone,
 } from "./taskView";
 
 function cache(overrides: Partial<SectionBoardTask["cache"]> = {}) {
@@ -69,12 +68,12 @@ function completableTask(overrides: Partial<SectionBoardTask> = {}): SectionBoar
   });
 }
 
-describe("getTaskTone", () => {
+describe("getTaskRowState: тон", () => {
   it("различает ожидание, работу, взято в работу и завершение", () => {
-    expect(getTaskTone(makeTask({ status: "waiting_previous" }))).toBe("waiting");
-    expect(getTaskTone(makeTask({ status: "in_progress" }))).toBe("activeRunning");
-    expect(getTaskTone(makeTask({ status: "ready" }))).toBe("active");
-    expect(getTaskTone(makeTask({ status: "completed" }))).toBe("completed");
+    expect(getTaskRowState(makeTask({ status: "waiting_previous" })).tone).toBe("waiting");
+    expect(getTaskRowState(makeTask({ status: "in_progress" })).tone).toBe("activeRunning");
+    expect(getTaskRowState(makeTask({ status: "ready" })).tone).toBe("active");
+    expect(getTaskRowState(makeTask({ status: "completed" })).tone).toBe("completed");
   });
 
   it("считает полностью переданное задание завершённым", () => {
@@ -82,7 +81,7 @@ describe("getTaskTone", () => {
       status: "ready",
       cache: cache({ transferred_quantity: "100", remaining_quantity: "0" }),
     });
-    expect(getTaskTone(task)).toBe("completed");
+    expect(getTaskRowState(task).tone).toBe("completed");
   });
 
   it("не считает завершённой трансформацию с нулевым остатком выхода", () => {
@@ -91,24 +90,24 @@ describe("getTaskTone", () => {
       transforms_dimensions: true,
       cache: cache({ transferred_quantity: "100", remaining_quantity: "0" }),
     });
-    expect(getTaskTone(task)).toBe("active");
+    expect(getTaskRowState(task).tone).toBe("active");
   });
 });
 
-describe("getStatusDotClass", () => {
+describe("getTaskRowState: цвет точки", () => {
   it("красит полностью переданное задание как завершённое — копии точек разошлись", () => {
     const task = makeTask({
       status: "ready",
       cache: cache({ transferred_quantity: "100", remaining_quantity: "0" }),
     });
-    expect(getStatusDotClass(task)).toBe("bg-emerald-500");
+    expect(getTaskRowState(task).dotClass).toBe("bg-emerald-500");
   });
 
   it("различает статусы работы, готовности, блокировки и ожидания", () => {
-    expect(getStatusDotClass(makeTask({ status: "in_progress" }))).toBe("bg-amber-500 animate-pulse");
-    expect(getStatusDotClass(makeTask({ status: "ready" }))).toBe("bg-slate-400");
-    expect(getStatusDotClass(makeTask({ status: "blocked" }))).toBe("bg-red-500");
-    expect(getStatusDotClass(makeTask({ status: "waiting_previous" }))).toBe("bg-yellow-400");
+    expect(getTaskRowState(makeTask({ status: "in_progress" })).dotClass).toBe("bg-amber-500 animate-pulse");
+    expect(getTaskRowState(makeTask({ status: "ready" })).dotClass).toBe("bg-slate-400");
+    expect(getTaskRowState(makeTask({ status: "blocked" })).dotClass).toBe("bg-red-500");
+    expect(getTaskRowState(makeTask({ status: "waiting_previous" })).dotClass).toBe("bg-yellow-400");
   });
 
   it("красит готовое задание с переданным входом в синий, а не в серый", () => {
@@ -121,7 +120,7 @@ describe("getStatusDotClass", () => {
         received_quantity: "0",
       },
     });
-    expect(getStatusDotClass(task)).toBe("bg-blue-500");
+    expect(getTaskRowState(task).dotClass).toBe("bg-blue-500");
   });
 });
 

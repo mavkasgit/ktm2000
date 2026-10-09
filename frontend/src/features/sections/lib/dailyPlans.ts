@@ -1,5 +1,5 @@
 import type { DailyPlanCompositionItem, SectionBoardTask } from "@/shared/api/shopfloor";
-import { getTaskViewCategory } from "./taskStatus";
+import { getTaskRowState } from "./taskStatus";
 
 /**
  * Актуальные задания участка — то, что показывает вкладка «План» без
@@ -12,7 +12,7 @@ import { getTaskViewCategory } from "./taskStatus";
  * `getDailyPlanCreationCandidates`.
  */
 export function getCurrentSectionTasks(tasks: SectionBoardTask[]): SectionBoardTask[] {
-  return tasks.filter((task) => getTaskViewCategory(task) !== "completed");
+  return tasks.filter((task) => getTaskRowState(task).category !== "completed");
 }
 
 /**
@@ -28,7 +28,7 @@ export function getCurrentSectionTasks(tasks: SectionBoardTask[]): SectionBoardT
  */
 export function getDailyPlanCreationCandidates(tasks: SectionBoardTask[]): SectionBoardTask[] {
   return tasks.filter(
-    (task) => task.in_daily_plan !== true && getTaskViewCategory(task) !== "completed",
+    (task) => task.in_daily_plan !== true && getTaskRowState(task).category !== "completed",
   );
 }
 
