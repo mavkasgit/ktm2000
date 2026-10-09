@@ -1,20 +1,14 @@
 from __future__ import annotations
 
-import hashlib
 import json
 from datetime import datetime
-from decimal import Decimal
 
 from sqlalchemy import Date, String, case, cast, exists, func, or_, select
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import raiseload
 
 from app.core.sorting import SortClause, apply_sort, parse_sort
-from app.domain.dimensions import (
-    format_cut_layout,
-    format_quantity,
-    parse_dimensions_filter,
-)
+from app.domain.dimensions import parse_dimensions_filter
 from app.models.daily_plan import DailyPlanItem
 from app.models.internal_plan import SectionPlanLine
 from app.models.product import Product
@@ -28,10 +22,9 @@ from app.models.work_task import (
     WorkTask,
     WorkTaskStatus,
 )
-from app.services.plan_position_hanger import resolve_positions_hanger
 from app.stock.models import QualityState, Reason, StockBalance, StockTransaction
 
-from .cache import _compute_available_from_balances
+from .board_row import BoardRowContext, build_board_task_row
 from .common import _to_decimal
 
 # Прямое членство задания в дневном плане — единственный источник признака
@@ -44,26 +37,6 @@ _IN_DAILY_PLAN_EXPR = (
     .exists()
     .label("in_daily_plan")
 )
-
-
-def _compute_display_sku(source_sku: str, output_sku: str) -> str:
-    return output_sku
-
-
-def _compute_fingerprint(
-    source_sku: str | None,
-    output_sku: str | None,
-    operation_code: str | None,
-    source_payload: dict | None,
-) -> str:
-    payload = {
-        "input_sku": source_sku or "",
-        "output_sku": output_sku or "",
-        "operation_code": operation_code or "",
-        **(source_payload or {}),
-    }
-    canonical = json.dumps(payload, sort_keys=True, ensure_ascii=True)
-    return hashlib.sha256(canonical.encode()).hexdigest()[:16]
 
 
 # Единая таблица «поле ?sort= → выражение SQL» для доски. Она же — источник
@@ -250,67 +223,17 @@ async def get_section_board(
             "offset": offset,
         }
 
-    # --- Batched loading to fix N+1 ---
-    route_ids: set[int] = set()
-    plan_position_ids: set[int] = set()
-    for row in rows:
-        line = row[1]  # SectionPlanLine
-        stage = row[2]  # RouteStage
-        route_ids.add(stage.route_id)
-        plan_position_ids.add(line.plan_position_id)
+    # Справочники страницы собираются батчево одним контекстом (#293, fix
+    # N+1). Контекст строит тот же код, которым пользуется ручка задания,
+    # поэтому форму строки обе ручки берут из одной функции (ADR-0031, #319).
+    ctx = await BoardRowContext.load(
+        db,
+        tasks=[row[0] for row in rows],
+        lines=[row[1] for row in rows],
+        section_id=section_id,
+    )
 
-    # Load all route stages for involved routes
-    all_stages = (await db.execute(
-        select(RouteStage).where(RouteStage.route_id.in_(route_ids))
-    )).scalars().all()
-    stages_by_route: dict[int, list[RouteStage]] = {}
-    for s in all_stages:
-        stages_by_route.setdefault(s.route_id, []).append(s)
-
-    # Load all SectionPlanLine for prev/next lookup
-    all_lines = (await db.execute(
-        select(SectionPlanLine).where(
-            SectionPlanLine.plan_position_id.in_(plan_position_ids)
-        )
-    )).scalars().all()
-    lines_by_pos_seq: dict[tuple[int, int], SectionPlanLine] = {}
-    for line in all_lines:
-        lines_by_pos_seq[(line.plan_position_id, line.sequence)] = line
-
-    # Load PlanPosition for source_payload lookup
-    all_positions = (await db.execute(
-        select(PlanPosition).where(PlanPosition.id.in_(plan_position_ids))
-    )).scalars().all()
-    position_by_id: dict[int, PlanPosition] = {p.id: p for p in all_positions}
-    hanger_values = await resolve_positions_hanger(db, all_positions)
-
-    # Load all WorkTask for next task lookup AND for previous stages operation lookup
-    next_line_ids = [line.id for line in all_lines]
-    all_tasks = (await db.execute(
-        select(WorkTask).where(WorkTask.section_plan_line_id.in_(next_line_ids))
-    )).scalars().all()
-    # For each line, keep the latest task (highest id)
-    tasks_by_line: dict[int, WorkTask] = {}
-    for t in all_tasks:
-        existing = tasks_by_line.get(t.section_plan_line_id)
-        if existing is None or t.id > existing.id:
-            tasks_by_line[t.section_plan_line_id] = t
-
-    # Collect all section_ids from route stages
-    all_section_ids = set()
-    for s in all_stages:
-        all_section_ids.add(s.section_id)
-    all_section_ids.add(section_id)  # Ensure current section is included
-
-    # Load section operations for ALL sections involved in the routes
-    all_section_ops = (await db.execute(
-        select(SectionOperation)
-        .where(SectionOperation.section_id.in_(all_section_ids))
-        .order_by(SectionOperation.operation_code)
-    )).scalars().all()
-
-    # Also load for current section dropdown
-    section_ops = [op for op in all_section_ops if op.section_id == section_id]
+    # Справочник операций текущего участка для дропдауна доски.
     available_operations = [
         {
             "id": op.id,
@@ -321,53 +244,9 @@ async def get_section_board(
             "icon_color": op.icon_color,
             "group_code": op.group_code,
         }
-        for op in section_ops
+        for op in ctx.section_ops
+        if op.section_id == section_id
     ]
-
-    # Build lookup: section_id -> {operation_code -> operation_name} for ALL sections
-    op_name_by_section: dict[int, dict[str, str]] = {}
-    for op in all_section_ops:
-        op_name_by_section.setdefault(op.section_id, {})[op.operation_code] = op.operation_name
-
-    # Build lookup: (section_id, operation_code) -> {icon, icon_color} for ALL sections
-    icon_by_section_op: dict[tuple[int, str], dict] = {}
-    for op in all_section_ops:
-        if op.icon or op.icon_color:
-            icon_by_section_op[(op.section_id, op.operation_code)] = {
-                "icon": op.icon,
-                "icon_color": op.icon_color,
-            }
-
-    # Load tasks cache (Этап 4: вычисляем из StockTransaction ledger)
-    from app.stock.services import StockProjectionManager
-    pm = StockProjectionManager()
-    all_task_ids = [row[0].id for row in rows]
-    tasks_cache = await pm.get_tasks_cache_bulk(db, all_task_ids)
-
-    # Прогресс трансформации (ADR-0002) для карточек трансформирующих
-    # этапов: списано входа и оприходовано по каждому выходу.
-    from .operations_transform import (
-        get_transferred_by_task_dimensions_bulk,
-        get_transform_progress_bulk,
-    )
-    from .output_rows import build_output_rows
-    # Прогресс нужен доске дважды: карточкам (выходы) и синхронизации
-    # статусов. Второй поток смотрит на `input_quantity`+`outputs`, а не на
-    # маркер этапа, поэтому множество id — объединение предикатов (#293).
-    # Набор для вывода не изменился: гейт ниже по-прежнему требует
-    # `transforms_dimensions`.
-    transform_task_ids = [
-        row[0].id for row in rows
-        if (row[0].outputs or [])
-        and (row[2].transforms_dimensions or row[0].input_quantity is not None)
-    ]
-    transform_progress_map = await get_transform_progress_bulk(db, transform_task_ids)
-
-    # Нетто-переданное по каждому габариту трансформирующих заданий —
-    # для учётной колонки «Передано» строки «Сдачи» плана (тикет #95).
-    transferred_by_task = await get_transferred_by_task_dimensions_bulk(
-        db, transform_task_ids,
-    )
 
     from .task_status import sync_work_tasks_status_bulk
 
@@ -375,286 +254,28 @@ async def get_section_board(
     await sync_work_tasks_status_bulk(
         db,
         tasks=board_tasks,
-        tasks_cache=tasks_cache,
-        # Карта уже посчитана выше — второй раз её считать незачем (#293).
-        transform_progress=transform_progress_map,
+        tasks_cache=ctx.tasks_cache,
+        # Карта прогресса уже посчитана в контексте — второй раз её считать
+        # незачем (#293).
+        transform_progress=ctx.transform_progress_map,
     )
 
     tasks_data = []
-    for (
-        task,
-        line,
-        stage,
-        row_sku,
-        source_ref,
-        source_payload,
-        source_fingerprint,
-        source_sku,
-        output_sku,
-        in_daily_plan,
-    ) in rows:
-        # Determine effective operation_code.
-        effective_op_code = task.selected_operation_code
-        if not effective_op_code:
-            src_op = (source_payload or {}).get("operation_code")
-            if src_op and src_op in op_name_by_section.get(task.section_id, {}):
-                effective_op_code = src_op
-            else:
-                effective_op_code = stage.operations[0].operation_code if stage.operations else None
-
-        stage_primary_op_name = stage.operations[0].operation_name if stage.operations else ""
-        effective_op_name = op_name_by_section.get(task.section_id, {}).get(effective_op_code) or stage_primary_op_name
-        effective_is_significant = False
-        for op in all_section_ops:
-            if op.section_id == task.section_id and op.operation_code == effective_op_code:
-                effective_is_significant = op.is_significant
-                break
-
-        route_stages = stages_by_route.get(line.route_id, [])
-
-        route_history = []
-        route_history_full = []
-        for s in route_stages:
-            if s.sequence < stage.sequence:
-                prev_line = lines_by_pos_seq.get((line.plan_position_id, s.sequence))
-                prev_work_task = tasks_by_line.get(prev_line.id) if prev_line else None
-
-                if prev_work_task:
-                    prev_position = position_by_id.get(prev_line.plan_position_id) if prev_line else None
-                    prev_source_payload = (prev_position.source_payload or {}) if prev_position else {}
-
-                    prev_eff_op_code = prev_work_task.selected_operation_code
-                    if not prev_eff_op_code:
-                        prev_src_op = prev_source_payload.get("operation_code")
-                        if prev_src_op and prev_src_op in op_name_by_section.get(prev_work_task.section_id, {}):
-                            prev_eff_op_code = prev_src_op
-                        else:
-                            prev_eff_op_code = s.operations[0].operation_code if s.operations else None
-
-                    prev_primary_op_name = s.operations[0].operation_name if s.operations else ""
-                    prev_op_name = op_name_by_section.get(s.section_id, {}).get(prev_eff_op_code) or prev_primary_op_name
-
-                    prev_is_significant = False
-                    for op in all_section_ops:
-                        if op.section_id == s.section_id and op.operation_code == prev_eff_op_code:
-                            prev_is_significant = op.is_significant
-                            break
-
-                    prev_icon = icon_by_section_op.get((s.section_id, prev_eff_op_code))
-                else:
-                    prev_eff_op_code = s.operations[0].operation_code if s.operations else None
-                    prev_op_name = s.operations[0].operation_name if s.operations else ""
-                    prev_is_significant = False
-                    for op in all_section_ops:
-                        if op.section_id == s.section_id and op.operation_code == (prev_eff_op_code or ""):
-                            prev_is_significant = op.is_significant
-                            break
-                    prev_icon = icon_by_section_op.get((s.section_id, prev_eff_op_code))
-
-                op_obj = {
-                    "operation_code": prev_eff_op_code or "",
-                    "operation_name": prev_op_name,
-                    "is_significant": prev_is_significant,
-                    "icon": prev_icon["icon"] if prev_icon else None,
-                    "icon_color": prev_icon["icon_color"] if prev_icon else None,
-                }
-                route_history_full.append(op_obj)
-                if prev_is_significant:
-                    route_history.append(op_obj)
-
-        if stage.operations and stage.operations[0].operation_code:
-            after_op_code = stage.operations[0].operation_code
-            after_op_name = stage.operations[0].operation_name
-            after_is_significant = effective_is_significant
-            after_icon = icon_by_section_op.get((task.section_id, stage.operations[0].operation_code))
-        else:
-            after_op_code = effective_op_code or ""
-            after_op_name = effective_op_name
-            after_is_significant = effective_is_significant
-            after_icon = icon_by_section_op.get((task.section_id, effective_op_code))
-
-        current_op_obj = {
-            "operation_code": after_op_code,
-            "operation_name": after_op_name,
-            "is_significant": after_is_significant,
-            "icon": after_icon["icon"] if after_icon else None,
-            "icon_color": after_icon["icon_color"] if after_icon else None,
-        }
-        route_history_after = route_history + [current_op_obj] if current_op_obj["operation_code"] else route_history
-        route_history_after_full = route_history_full + [current_op_obj] if current_op_obj["operation_code"] else route_history_full
-        prev_stage = next((s for s in route_stages if s.sequence == stage.sequence - 1), None)
-
-        prev_stage_info = None
-        if prev_stage:
-            prev_line = lines_by_pos_seq.get((line.plan_position_id, prev_stage.sequence))
-            if prev_line:
-                prev_stage_info = {
-                    "section_plan_line_id": prev_line.id,
-                    "completed_quantity": str(prev_line.cached_completed_quantity),
-                    "transferred_quantity": str(prev_line.cached_transferred_quantity),
-                    "received_quantity": str(prev_line.cached_received_quantity),
-                }
-
-        # Next line — dict lookup
-        next_line = lines_by_pos_seq.get((line.plan_position_id, stage.sequence + 1))
-        next_task_id: int | None = None
-        next_task_status: str | None = None
-        next_operation_name: str | None = None
-        if next_line:
-            next_task = tasks_by_line.get(next_line.id)
-            if next_task:
-                next_task_id = next_task.id
-                next_task_status = next_task.status.value
-            next_route_stages = stages_by_route.get(next_line.route_id, [])
-            next_stage = next((s for s in next_route_stages if s.id == next_line.route_stage_id), None)
-            if next_stage:
-                next_operation_name = ", ".join(op.operation_name for op in next_stage.operations) if next_stage.operations else ""
-
-        task_cache = tasks_cache.get(task.id, {})
-        available = _compute_available_from_balances(
-            planned_quantity=_to_decimal(task.planned_quantity),
-            received_quantity=task_cache.get("received_quantity", Decimal(0)),
-            issued_quantity=task_cache.get("issued_quantity", Decimal(0)),
-            returned_quantity=task_cache.get("returned_quantity", Decimal(0))
-            if "returned_quantity" in task_cache
-            else Decimal(0),
-            is_first_stage=bool(line.sequence == 1),
-        )
-
-        fingerprint = _compute_fingerprint(
-            source_sku, output_sku, effective_op_code, source_payload
-        )
-
-        is_paired = source_sku and "+" in source_sku
-        effective_display_sku = source_sku if is_paired else (row_sku or "")
-
-        op_icon_info = icon_by_section_op.get((task.section_id, effective_op_code))
-
-        # Determine all operations for the task/stage
-        operation_codes = []
-        operation_names = []
-
-        if stage.operations:
-            for op in stage.operations:
-                op_code = op.operation_code
-                if not op_code:
-                    op_code = effective_op_code
-                op_name = op_name_by_section.get(task.section_id, {}).get(op_code) or op.operation_name
-                operation_codes.append(op_code)
-                operation_names.append(op_name)
-
-        # Трансформирующий этап (ADR-0002): одна позиция плана = одна
-        # карточка «вход → все выходы»: «2,75 → 0,9×50 + 1,35×100».
-        task_outputs = list(task.outputs or [])
-        cut_layout = (
-            format_cut_layout(task.input_dimensions, task_outputs)
-            if stage.transforms_dimensions
-            else None
-        )
-
-        # Прогресс по каждому выходу и списанный вход для UI пилы.
-        # Гейт — по МАРКЕРУ ЭТАПА, а не по наличию задания в карте: карта
-        # батча (#293) шире выдачи — в неё входят и задания с
-        # `input_quantity` без `transforms_dimensions` (они нужны синхронизации
-        # статусов), и без маркера этапа карточка выходов не выдаётся.
-        outputs_progress = None
-        input_consumed_quantity = None
-        if stage.transforms_dimensions and (
-            task.id in transform_progress_map or task_outputs
-        ):
-            progress = transform_progress_map.get(task.id)
-            produced_by_group = progress.produced_by_group if progress else {}
-            rows_by_output = build_output_rows(
-                task_outputs,
-                produced_by_group,
-                transferred_by_task.get(task.id) or {},
+    for row in rows:
+        tasks_data.append(
+            build_board_task_row(
+                row[0],
+                row[1],
+                row[2],
+                row_sku=row[3],
+                source_ref=row[4],
+                source_payload=row[5],
+                source_sku=row[7],
+                output_sku=row[8],
+                in_daily_plan=row[9],
+                ctx=ctx,
             )
-            outputs_progress = [
-                {
-                    "row_number": row.row_number,
-                    "dimensions": row.dimensions,
-                    "quantity": format_quantity(row.quantity),
-                    "produced_quantity": format_quantity(row.produced_quantity),
-                    # Нетто-переданное по (задача, размер выхода) из ledger —
-                    # учётная колонка «Передано» строки «Сдачи» плана.
-                    "transferred_quantity": format_quantity(row.used_quantity),
-                }
-                for row in rows_by_output
-            ]
-            input_consumed_quantity = format_quantity(
-                progress.consumed_quantity if progress else Decimal(0)
-            )
-
-        tasks_data.append({
-            "id": task.id,
-            "section_id": task.section_id,
-            "product_id": task.product_id,
-            "product_sku": effective_display_sku,
-            "section_plan_line_id": line.id,
-            "plan_position_id": line.plan_position_id,
-            "route_step_id": stage.id,
-            "sequence": stage.sequence,
-            "operation_code": effective_op_code,
-            "operation_name": effective_op_name,
-            "is_significant": effective_is_significant,
-            "icon": op_icon_info["icon"] if op_icon_info else None,
-            "icon_color": op_icon_info["icon_color"] if op_icon_info else None,
-            "planned_quantity": str(task.planned_quantity),
-            "status": task.status.value,
-            # Прямое членство в дневном плане (#301): этого одного булева
-            # фронту хватает, чтобы не предлагать занятое задание кандидатом.
-            "in_daily_plan": bool(in_daily_plan),
-            "cache": {
-                "available_quantity": str(available),
-                "issued_quantity": str(task_cache.get("issued_quantity", "0")),
-                "completed_quantity": str(task_cache.get("completed_quantity", "0")),
-                "transferred_quantity": str(task_cache.get("transferred_quantity", "0")),
-                "received_quantity": str(task_cache.get("received_quantity", "0")),
-                "rejected_quantity": str(task_cache.get("rejected_quantity", "0")),
-                "remaining_quantity": str(task_cache.get("remaining_quantity", "0")),
-            },
-            "previous_stage": prev_stage_info,
-            "next_task_id": next_task_id,
-            "next_task_status": next_task_status,
-            "next_operation_name": next_operation_name,
-            "source_ref": source_ref,
-            "source_payload": source_payload or {},
-            "source_fingerprint": fingerprint,
-            # Размер задания (ADR-0001): габарит материала на этом этапе.
-            # У трансформирующих этапов вход/выходы уже несут input_dimensions
-            # и outputs — здесь только «размер» нетрансформирующего этапа.
-            "dimensions": task.dimensions,
-            "input_sku": source_sku or "",
-            "output_sku": output_sku or "",
-            "display_sku": effective_display_sku,
-            "route_history": route_history,
-            "route_history_after": route_history_after,
-            "route_history_full": route_history_full,
-            "route_history_after_full": route_history_after_full,
-            "operation_codes": operation_codes,
-            "quantity_per_hanger": (
-                hanger_values[position_by_id[line.plan_position_id].id].quantity_per_hanger
-                if position_by_id.get(line.plan_position_id)
-                else None
-            ),
-            "hanger_count": (
-                int(
-                    (Decimal(task.planned_quantity) / hanger_values[position_by_id[line.plan_position_id].id].quantity_per_hanger).to_integral_value(rounding="ROUND_CEILING")
-                )
-                if position_by_id.get(line.plan_position_id)
-                and hanger_values[position_by_id[line.plan_position_id].id].quantity_per_hanger
-                else None
-            ),
-            "operation_names": operation_names,
-            # —— трансформация габаритов (ADR-0002) ——
-            "transforms_dimensions": stage.transforms_dimensions,
-            "input_quantity": format_quantity(task.input_quantity) if task.input_quantity is not None else None,
-            "input_dimensions": task.input_dimensions,
-            "outputs": task_outputs,
-            "cut_layout": cut_layout,
-            "outputs_progress": outputs_progress,
-            "input_consumed_quantity": input_consumed_quantity,
-        })
+        )
 
     return {
         "section_id": section_id,

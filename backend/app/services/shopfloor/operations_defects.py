@@ -20,7 +20,6 @@ from app.seeds.canon.models import DefectDecisionDef, ScrapPolicy
 from app.services.action_journal_service import action_journal_service
 from app.stock import QualityState, Reason, StockCommand, StockCommandService
 
-from .cache import _refresh_section_plan_line_cache
 from .common import (
     _check_idempotency,
     _ensure_positive,
@@ -30,6 +29,7 @@ from .common import (
     _require_mutable_task,
     _to_decimal,
 )
+from .operations_tasks import apply_ledger_portion
 from .scrap_policy import find_or_create_scrap_section_id
 
 
@@ -427,7 +427,11 @@ async def defect_decide(
         defect.status = _decision_status
 
     if task:
-        await _refresh_section_plan_line_cache(db, task.section_plan_line_id)
+        # Проекция + статус — общей точкой «применить порцию» (#320). Решения
+        # по браку пишут SCRAP/REWORK/COMPLETE, а completed/rejected входят в
+        # проекцию статуса задания (app/stock/task_cache.py), поэтому статус
+        # здесь пересчитывается по факту, а не «на всякий случай».
+        await apply_ledger_portion(db, task)
 
     from app.models.audit_log import AuditAction, AuditEntityType
     from app.models.product import Product

@@ -7,30 +7,62 @@ from app.models.attachment import Attachment, AttachmentLink
 from app.models.defect import DefectDecision, DefectItem
 from app.models.entity_comment import EntityComment, EntityType
 from app.models.internal_plan import SectionPlanLine
+from app.models.product import Product
 from app.models.rework_task import ReworkTask
 from app.models.route import RouteStage
 from app.models.section import Section
 
-from .cache import _compute_available_from_balances
-from .common import _get_defect, _get_task, _to_decimal
+from .board_row import (
+    BoardRowContext,
+    build_board_task_row,
+    build_task_details_payload,
+)
+from .common import _get_defect, _get_task
 
 
 async def get_task_details(db: AsyncSession, task_id: int) -> dict:
+    """Задание в форме ручки: та же строка доски, спроецированная пост-полями.
+
+    Строку собирает единственная функция ``board_row.build_board_task_row``
+    (ADR-0031, #319); отличия формы этой ручки — в
+    ``build_task_details_payload``. Контекст строки берётся тем же батчевым
+    кодом, что и на доске, поэтому задания в обеих ручках представлены
+    одинаково.
+    """
     task = await _get_task(db, task_id)
     stage = await db.get(RouteStage, task.route_stage_id)
-    is_first_stage = bool(stage and stage.sequence == 1)
+
+    ctx = await BoardRowContext.load(db, tasks=[task], section_id=task.section_id)
+    line = ctx.lines_by_id[task.section_plan_line_id]
+    position = ctx.position_by_id.get(line.plan_position_id)
+    product = await db.get(Product, task.product_id)
+
+    from app.models.daily_plan import DailyPlanItem
+
+    # Прямое членство в дневном плане (#301) — то же поле, что несёт доска.
+    in_daily_plan = (
+        await db.scalar(
+            select(DailyPlanItem.work_task_id)
+            .where(DailyPlanItem.work_task_id == task.id)
+            .limit(1)
+        )
+        is not None
+    )
+
+    row = build_board_task_row(
+        task,
+        line,
+        stage,
+        row_sku=product.sku if product else None,
+        source_ref=position.source_ref if position else None,
+        source_payload=position.source_payload if position else None,
+        source_sku=position.source_sku if position else None,
+        output_sku=position.output_sku if position else None,
+        in_daily_plan=in_daily_plan,
+        ctx=ctx,
+    )
 
     from app.stock.models import StockTransaction
-    from app.stock.services import StockProjectionManager
-    pm = StockProjectionManager()
-    cache = await pm.get_task_cache(db, task.id)
-
-    available = _compute_available_from_balances(
-        planned_quantity=_to_decimal(task.planned_quantity),
-        received_quantity=cache["received_quantity"],
-        issued_quantity=cache["issued_quantity"],
-        is_first_stage=is_first_stage,
-    )
 
     txs = (
         await db.execute(
@@ -40,27 +72,10 @@ async def get_task_details(db: AsyncSession, task_id: int) -> dict:
         )
     ).scalars().all()
 
-    return {
-        "id": task.id,
-        "status": task.status.value,
-        "planned_quantity": str(task.planned_quantity),
-        "cache": {
-            "available_quantity": str(available),
-            "issued_quantity": str(cache["issued_quantity"]),
-            "completed_quantity": str(cache["completed_quantity"]),
-            "transferred_quantity": str(cache["transferred_quantity"]),
-            "received_quantity": str(cache["received_quantity"]),
-            "rejected_quantity": str(cache["rejected_quantity"]),
-            "remaining_quantity": str(cache["remaining_quantity"]),
-        },
-        "route_step": {
-            "id": stage.id if stage else None,
-            "sequence": stage.sequence if stage else None,
-            "operation_code": stage.operations[0].operation_code if stage and stage.operations else None,
-            "operation_name": ", ".join(op.operation_name for op in stage.operations) if stage and stage.operations else None,
-            "is_final": stage.is_final if stage else None,
-        },
-        "stock_transactions": [
+    return build_task_details_payload(
+        row,
+        stage=stage,
+        stock_transactions=[
             {
                 "id": tx.id,
                 "reason": tx.reason.value,
@@ -72,7 +87,7 @@ async def get_task_details(db: AsyncSession, task_id: int) -> dict:
             }
             for tx in txs
         ],
-    }
+    )
 
 async def get_defect_details(db: AsyncSession, defect_id: int) -> dict:
     defect = await _get_defect(db, defect_id)

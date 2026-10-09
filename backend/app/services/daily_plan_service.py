@@ -9,8 +9,6 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.models.audit_log import AuditAction, AuditEntityType
 from app.models.daily_plan import DailyPlan, DailyPlanItem
-from app.models.internal_plan import SectionPlanLine
-from app.models.route import RouteStage
 from app.models.work_task import CLOSED_WORK_TASK_STATUSES, WorkTask
 from app.services.audit_log_service import log_action
 from app.stock.services import StockProjectionManager
@@ -41,33 +39,6 @@ async def _task_progress(db: AsyncSession, tasks: list[WorkTask]) -> dict[int, i
         else:
             result[task.id] = max(0, min(100, int(completed / planned * 100)))
     return result
-
-
-def _task_dict(task: WorkTask, line: SectionPlanLine, stage: RouteStage, product_sku: str, progress: int) -> dict[str, Any]:
-    operation = task.selected_operation_code
-    operation_name = next(
-        (op.operation_name for op in stage.operations if op.operation_code == operation),
-        stage.operations[0].operation_name if stage.operations else None,
-    )
-    return {
-        "id": task.id,
-        "section_id": task.section_id,
-        "product_id": task.product_id,
-        "product_sku": product_sku,
-        "section_plan_line_id": line.id,
-        "plan_position_id": line.plan_position_id,
-        "route_step_id": stage.id,
-        "sequence": stage.sequence,
-        "operation_code": operation or (stage.operations[0].operation_code if stage.operations else None),
-        "operation_name": operation_name,
-        "planned_quantity": str(task.planned_quantity),
-        "status": task.status.value,
-        "dimensions": task.dimensions,
-        "input_quantity": str(task.input_quantity) if task.input_quantity is not None else None,
-        "input_dimensions": task.input_dimensions,
-        "outputs": task.outputs or [],
-        "progress_percent": progress,
-    }
 
 
 async def _composition(db: AsyncSession, plan: DailyPlan) -> list[dict[str, Any]]:
