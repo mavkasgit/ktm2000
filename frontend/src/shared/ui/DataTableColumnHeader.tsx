@@ -33,8 +33,12 @@ type BoundColumn<Field extends string> = {
   onApplySearch?: () => void;
 };
 
-export interface DataTableColumnHeaderProps<Field extends string, SortField extends string = Field> {
-  column: ColumnSpec<Field, SortField> & { label: React.ReactNode };
+export interface DataTableColumnHeaderProps<
+  Field extends string,
+  SortField extends string = Field,
+  Row = unknown,
+> {
+  column: ColumnSpec<Field, SortField, Row> & { label: React.ReactNode };
   /** Связь состояния таблицы с колонкой. Нужна только фильтруемым колонкам. */
   bindColumn?: (field: Field) => BoundColumn<Field>;
   /** Значения для списка фильтра. Только для фильтруемых колонок. */
@@ -43,13 +47,13 @@ export interface DataTableColumnHeaderProps<Field extends string, SortField exte
   onSortChange?: (field: SortField) => void;
 }
 
-export function DataTableColumnHeader<Field extends string, SortField extends string = Field>({
+export function DataTableColumnHeader<Field extends string, SortField extends string = Field, Row = unknown>({
   column,
   bindColumn,
   values,
   currentSorts,
   onSortChange,
-}: DataTableColumnHeaderProps<Field, SortField>) {
+}: DataTableColumnHeaderProps<Field, SortField, Row>) {
   const { filterField, sortField, exactMatch, clientOnly, valueLabel, label } = column;
   const filterable = filterField !== undefined;
   const sortable = sortField !== undefined;

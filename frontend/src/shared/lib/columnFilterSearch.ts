@@ -101,6 +101,15 @@ export function pickExactMatchColumnValue<T extends string>(
   return [...selected][0];
 }
 
+/**
+ * Предикат по читателю значения, объявленному экраном.
+ *
+ * Оставлен для экранов, у которых читатель значения ещё живёт в компоненте
+ * (сводка НЗП, журнал событий, этапы, расчёт подвесов) — их перевод на
+ * `cellValue` из описания колонки (#322) не закончен. Предикат, собранный из
+ * описания, — `buildColumnFilterPredicate` в `columnSpecs.ts`; экраны без
+ * своего читателя обязаны идти через него.
+ */
 export function buildColumnFilterPredicate<T, Field extends string>(opts: {
   columnFilters: Partial<Record<Field, Set<string>>>;
   columnSearchQueries: Partial<Record<Field, string>>;

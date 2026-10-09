@@ -29,7 +29,10 @@ import {
 import type { ColumnSortDef } from "@/shared/hooks/useTableQueryEngine";
 import type { PageLimitOption } from "@/shared/hooks/usePaginatedTableQuery";
 import { useFilterableTable } from "@/shared/hooks/useFilterableTable";
-import { buildColumnFilterPredicate } from "@/shared/lib/columnFilterSearch";
+import {
+  buildColumnFilterPredicate,
+  buildColumnFilterValues,
+} from "@/shared/lib/columnSpecs";
 import { useDebouncedValue } from "@/shared/lib/useDebouncedValue";
 import { getAriaSort } from "@/shared/lib/multiSort";
 import { isFirstRowsLoad } from "@/shared/lib/tableQueryPlaceholder";
@@ -146,21 +149,6 @@ function getStatusPriority(task: SectionBoardTask): number {
   if (category === "waiting") return 1;
   if (category === "completed") return 2;
   return 3;
-}
-
-function getTaskCellValue(task: SectionBoardTask, field: TaskSortField): string {
-  switch (field) {
-    case "sequence": return String(task.sequence);
-    case "productSku": return task.product_sku;
-    case "dimensions": return formatDimensionsLabel(taskGroupingDimensions(task));
-    case "status": return getTaskRowState(task).label;
-    case "plannedQty": return fmtQty(task.planned_quantity);
-    case "issuedQty": return fmtQty(task.cache.issued_quantity);
-    case "completedQty": return fmtQty(task.cache.completed_quantity);
-    case "transferredQty": return fmtQty(task.cache.transferred_quantity);
-    case "rejectedQty": return fmtQty(task.cache.rejected_quantity);
-    case "remainingQty": return fmtQty(task.cache.remaining_quantity);
-  }
 }
 
 // ---------------------------------------------------------------------------
@@ -928,10 +916,11 @@ export function SectionTasksBoard({
 
   const clientFilterPredicate = useMemo(
     () =>
-      buildColumnFilterPredicate({
-        ...clientFilterState,
-        getCellValue: getTaskCellValue,
-      }),
+      buildColumnFilterPredicate(
+        clientFilterState.columnFilters,
+        clientFilterState.columnSearchQueries,
+        boardColumns,
+      ),
     [clientFilterState],
   );
 
@@ -965,20 +954,12 @@ export function SectionTasksBoard({
     [sortDefs],
   );
 
-  const uniqueValues = useMemo(() => ({
-    sequence: [...new Set(visibleTasks.map((t) => String(t.sequence)))],
-    productSku: [...new Set(visibleTasks.map((t) => t.product_sku))],
-    dimensions: [...new Set(visibleTasks.map((t) => JSON.stringify(taskGroupingDimensions(t) ?? null)))].sort(
-      (a, b) => formatDimensionsFilterValue(a).localeCompare(formatDimensionsFilterValue(b), "ru"),
-    ),
-    status: [...new Set(visibleTasks.map((t) => getTaskRowState(t).label))],
-    plannedQty: [...new Set(visibleTasks.map((t) => fmtQty(t.planned_quantity)))],
-    issuedQty: [...new Set(visibleTasks.map((t) => fmtQty(t.cache.issued_quantity)))],
-    completedQty: [...new Set(visibleTasks.map((t) => fmtQty(t.cache.completed_quantity)))],
-    transferredQty: [...new Set(visibleTasks.map((t) => fmtQty(t.cache.transferred_quantity)))],
-    rejectedQty: [...new Set(visibleTasks.map((t) => fmtQty(t.cache.rejected_quantity)))],
-    remainingQty: [...new Set(visibleTasks.map((t) => fmtQty(t.cache.remaining_quantity)))],
-  }), [visibleTasks]);
+  // Список значений попапера — из описания колонок: читатель значения у
+  // попапера и у клиентского предиката один и тот же (`cellValue`).
+  const uniqueValues = useMemo(
+    () => buildColumnFilterValues(visibleTasks, boardColumns),
+    [visibleTasks],
+  );
 
   // Порядок строк доски. Колонки серверной сортировки (sequence/productSku/
   // status/dimensions) уже пришли в нужном порядке с сервера, остальные

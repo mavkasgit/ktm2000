@@ -5,7 +5,12 @@
  */
 import { describe, expect, it } from "vitest";
 
-import { buildColumnApiParams, type ColumnSpec } from "./columnSpecs";
+import {
+  buildColumnApiParams,
+  buildColumnFilterPredicate,
+  buildColumnFilterValues,
+  type ColumnSpec,
+} from "./columnSpecs";
 
 type ParamField = "sku" | "dimensions" | "errors" | "rowNum" | "next";
 
@@ -104,3 +109,96 @@ describe("buildColumnApiParams", () => {
   });
 });
 
+
+/**
+ * Значение колонки читается из описания (#322): клиентский предикат и список
+ * значений попапера берут один и тот же `cellValue`, поэтому «показывает одно,
+ * фильтрует по другому» перестаёт быть возможным.
+ */
+describe("buildColumnFilterPredicate и buildColumnFilterValues", () => {
+  type Row = { sku: string; qty: number };
+
+  const CLIENT_COLUMNS: ColumnSpec<"sku" | "qty", "sku" | "qty", Row>[] = [
+    { filterField: "sku", sortField: "sku", clientOnly: true, cellValue: (row) => row.sku },
+    { filterField: "qty", sortField: "qty", clientOnly: true, cellValue: (row) => String(row.qty) },
+  ];
+
+  const ROWS: Row[] = [
+    { sku: "ЮП-460", qty: 12 },
+    { sku: "ABC-100", qty: 3 },
+    { sku: "ЮП-460", qty: 12 },
+  ];
+
+  it("поиск в поповере фильтрует строки значением из описания", () => {
+    const predicate = buildColumnFilterPredicate<Row, "sku" | "qty", "sku" | "qty">(
+      {},
+      { sku: "юп" },
+      CLIENT_COLUMNS,
+    );
+
+    expect(predicate).not.toBeNull();
+    expect(predicate!({ sku: "ЮП-460", qty: 12 })).toBe(true);
+    expect(predicate!({ sku: "ABC-100", qty: 3 })).toBe(false);
+  });
+
+  it("выбранное значение (в том числе мультивыбор) сужает строки", () => {
+    const predicate = buildColumnFilterPredicate<Row, "sku" | "qty", "sku" | "qty">(
+      { sku: new Set(["ЮП-460", "ABC-100"]) },
+      {},
+      CLIENT_COLUMNS,
+    );
+
+    expect(predicate!({ sku: "ЮП-460", qty: 12 })).toBe(true);
+    expect(predicate!({ sku: "ABC-100", qty: 3 })).toBe(true);
+    expect(predicate!({ sku: "ЮП-200", qty: 1 })).toBe(false);
+  });
+
+  it("колонка без читателя не отсеивает строки", () => {
+    const columns: ColumnSpec<"sku" | "qty", "sku" | "qty", Row>[] = [
+      { filterField: "sku", clientOnly: true, cellValue: (row) => row.sku },
+    ];
+    const predicate = buildColumnFilterPredicate<Row, "sku" | "qty", "sku" | "qty">(
+      { qty: new Set(["12"]) },
+      {},
+      columns,
+    );
+
+    // Значения для `qty` никто не объявил: `selected.has("")` не должен
+    // выбросить все строки.
+    expect(predicate!({ sku: "ABC-100", qty: 3 })).toBe(true);
+  });
+
+  it("без активных фильтров предиката нет", () => {
+    expect(
+      buildColumnFilterPredicate<Row, "sku" | "qty", "sku" | "qty">({}, {}, CLIENT_COLUMNS),
+    ).toBeNull();
+  });
+
+  it("список значений собирается по читателям описания, без повторов", () => {
+    expect(buildColumnFilterValues(ROWS, CLIENT_COLUMNS)).toEqual({
+      sku: ["ЮП-460", "ABC-100"],
+      qty: ["12", "3"],
+    });
+  });
+
+  it("порядок списка значений объявляет колонка", () => {
+    const columns: ColumnSpec<"sku" | "qty", "sku" | "qty", Row>[] = [
+      {
+        filterField: "qty",
+        clientOnly: true,
+        cellValue: (row) => String(row.qty),
+        sortValues: (a, b) => Number(a) - Number(b),
+      },
+    ];
+
+    expect(buildColumnFilterValues(ROWS, columns).qty).toEqual(["3", "12"]);
+  });
+
+  it("колонка без читателя в список значений не попадает: попапера у неё нет", () => {
+    const columns: ColumnSpec<"sku" | "qty", "sku" | "qty", Row>[] = [
+      { filterField: "sku", clientOnly: true },
+    ];
+
+    expect(buildColumnFilterValues(ROWS, columns)).toEqual({});
+  });
+});
