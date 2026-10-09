@@ -127,7 +127,14 @@ async def _sql_sum_transactions(session: AsyncSession, task_id: int, reason: Rea
 
 
 async def _sql_net_transactions(session: AsyncSession, task_id: int, reason: Reason) -> Decimal:
-    """Net sum with compensation handling."""
+    """Net sum with compensation handling.
+
+    Независимый оракул: нетто-формула намеренно продублирована сырым CASE, а
+    не взята из ``net_quantity_expr()`` — тест сверяет кэш с внешним счётом, а
+    не с кодом под тестом (принцип #111, как в ``test_integrity_invariants``).
+    Держать в синхроне с ledger при смене нетто-семантики; это НЕ потребитель
+    примитива.
+    """
     from sqlalchemy import case
     net = await session.scalar(
         select(func.coalesce(func.sum(

@@ -643,7 +643,19 @@ class ReversalService:
                 )
             )
 
-        for node in revert_nodes:
+        # Покрытие считается по ВИРТУАЛЬНОМУ состоянию остатков, как в
+        # preview_reverse (#274/#321): компенсации проходятся в обратном
+        # топологическом порядке (dependents раньше зависимости — тот же
+        # порядок, в котором исполняется amend), и эффект каждой уже
+        # пройденной компенсации добавляется к остатку следующего узла.
+        # Иначе корень каскада упирается в ложный CoverageShortfall.
+        order = self._reverse_topological_order(
+            [n.id for n in revert_nodes], await self._deps_index(db)
+        )
+        nodes_by_id = {n.id: n for n in revert_nodes}
+        coverage_adjustments: dict[object, Decimal] = {}
+        for node_id in order:
+            node = nodes_by_id[node_id]
             node_comp = (
                 comp if node.id == target.id else self._compensator(node.action_type)
             )
@@ -660,15 +672,28 @@ class ReversalService:
                 # ADR-0021: target-узел передаётся в резолв — проверка
                 # строго по этому узлу, а не по «первому» по паре.
                 check = await node_comp.check_amend(
-                    db, node.ref_id, changes, action_id=node.id
+                    db,
+                    node.ref_id,
+                    changes,
+                    action_id=node.id,
+                    coverage_adjustments=coverage_adjustments,
                 )
             else:
-                check = await node_comp.check(db, node.ref_id, action_id=node.id)
+                check = await node_comp.check(
+                    db,
+                    node.ref_id,
+                    action_id=node.id,
+                    coverage_adjustments=coverage_adjustments,
+                )
             if not check.ok:
                 for cb in check.blockers:
                     blockers.append(
                         Blocker(kind=cb.kind, node_id=node.id, detail=cb.detail, deficit=cb.deficit)
                     )
+                continue
+            plan = await node_comp.plan(db, node.ref_id, hard=False, action_id=node.id)
+            for key, qty in node_comp.coverage_effect(plan.entries).items():
+                coverage_adjustments[key] = coverage_adjustments.get(key, Decimal(0)) + qty
 
         will_replay: list[ReplayPlanItem] = []
         if not blockers and cascade:
