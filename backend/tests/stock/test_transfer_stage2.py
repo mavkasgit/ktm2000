@@ -16,12 +16,14 @@ from decimal import Decimal
 import pytest
 from app.models import Product, ProductType, Section
 from app.models.transfer import Transfer, TransferStatus
-from app.models.work_task import WorkTask
+from app.models.work_task import WorkTask, WorkTaskStatus
 from app.services.material_operations import (
     completed_operations_for_task,
     previous_stage_sequence,
 )
 from app.stock.models import QualityState, Reason, StockBalance, StockTransaction
+from app.stock.services import StockProjectionManager
+from app.stock.task_cache import resolve_work_task_status
 from app.transfers.services import cancel_transfer, correct_transfer, transfer_send
 from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -374,6 +376,67 @@ async def test_transfer_send_via_api(session: AsyncSession, client) -> None:
         assert_no_stock_ledger_invariants_violations,
     )
     await assert_no_stock_ledger_invariants_violations(session, context="api-transfer")
+
+
+def _projected_status(task: WorkTask, cache: dict) -> str | None:
+    """Целевой статус задачи по снимку кэша — та же проекция, что у синхронизации."""
+    return resolve_work_task_status(
+        current_status=task.status.value,
+        planned_quantity=task.planned_quantity,
+        remaining_quantity=cache["remaining_quantity"],
+        transferred_quantity=cache["transferred_quantity"],
+        completed_quantity=cache["completed_quantity"],
+        rejected_quantity=cache["rejected_quantity"],
+        issued_quantity=cache["issued_quantity"],
+        received_quantity=cache["received_quantity"],
+    )
+
+
+@_py_test_mark
+async def test_transfer_send_destination_status_comes_from_projection(
+    session: AsyncSession, client,
+) -> None:
+    """Итоговый статус задачи-получателя считает проекция, а не мост (п.4 #320).
+
+    ``transfer_send`` пишет ``waiting_previous -> ready`` напрямую (мост) и
+    лишь затем синхронизирует статус по записанному ledger. Проверяется:
+
+    * до передачи из ``waiting_previous`` проекция задачу не поднимает
+      (``resolve_work_task_status`` → ``None``: статуса нет среди
+      ``active_statuses``) — значит, прямой записи ``ready`` избежать нельзя,
+      она делает задачу выводимой из проекции;
+    * после передачи статус равен ``in_progress`` (материал сразу в работе),
+      и по свежему кэшу проекция на нём же снова возвращает ``None`` —
+      висящего перехода нет, запись и проекция согласованы.
+    """
+    setup = await _make_two_ghp_setup(session, sku="T2PRJ", qty=Decimal(10))
+    ctx = await _make_tasks_transferable(session, client, setup)
+
+    pm = StockProjectionManager()
+    to_task = await session.get(WorkTask, ctx["to_task_id"])
+    assert to_task.status == WorkTaskStatus.waiting_previous, "приёмная задача ждёт передачу"
+
+    cache_before = await pm.get_task_cache(session, to_task.id)
+    assert _projected_status(to_task, cache_before) is None, (
+        "из waiting_previous проекция не поднимает задачу — мост `ready` обязателен"
+    )
+
+    await transfer_send(
+        session,
+        from_task_id=ctx["from_task_id"],
+        to_task_id=ctx["to_task_id"],
+        quantity=Decimal(5),
+        actor_id=ctx["user"].id,
+        idempotency_key="t2prj:send",
+    )
+    await session.flush()
+
+    to_task = await session.get(WorkTask, ctx["to_task_id"])
+    assert to_task.status == WorkTaskStatus.in_progress
+    cache_after = await pm.get_task_cache(session, to_task.id)
+    assert _projected_status(to_task, cache_after) is None, (
+        "статус после передачи обязан совпадать с тем, что считает проекция"
+    )
 
 
 @_py_test_mark

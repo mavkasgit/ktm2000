@@ -1,5 +1,6 @@
 from decimal import Decimal
 
+import pytest
 from app.stock.task_cache import (
     compute_task_available,
     effective_issued_quantity,
@@ -70,3 +71,32 @@ def test_available_after_transfer_receive_on_second_stage():
         is_first_stage=False,
     )
     assert available == Decimal(0)
+
+
+# ─── Прямые записи терминальных статусов (п.4 #320) ─────────────────────────
+#
+# ``cancelled`` (``production_plan_service.py:351`` — удаление плана, ``:1452``
+# — скрытие отменённой позиции) и ``skipped`` (``operations_skipped.py:86``)
+# пишутся мимо ``sync_work_task_status``, потому что проекция их не выводит:
+# терминальное состояние — доменное решение, а не факт ledger. Тест — сторож
+# этого гейта: если ``resolve_work_task_status`` перестанет исключать
+# терминальные статусы, он вернёт «продвигающий» переход и тест упадёт.
+
+
+@pytest.mark.parametrize("terminal", ["completed", "cancelled", "skipped"])
+def test_resolve_work_task_status_never_rewrites_terminal_statuses(terminal: str) -> None:
+    """Из терминального статуса проекция всегда возвращает ``None``.
+
+    Кэш намеренно «продвигающий»: полная передача (remaining 0,
+    transferred == planned) для активного статуса дала бы ``completed``.
+    """
+    assert resolve_work_task_status(
+        current_status=terminal,
+        planned_quantity=Decimal(100),
+        remaining_quantity=Decimal(0),
+        transferred_quantity=Decimal(100),
+        completed_quantity=Decimal(100),
+        rejected_quantity=Decimal(0),
+        issued_quantity=Decimal(100),
+        received_quantity=Decimal(100),
+    ) is None

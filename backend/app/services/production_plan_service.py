@@ -348,6 +348,11 @@ async def delete_production_plan(
     now = datetime.now(UTC)
     if refs.task_ids:
         await db.execute(delete(DailyPlanItem).where(DailyPlanItem.work_task_id.in_(refs.task_ids)))
+        # ``cancelled`` пишется прямо, мимо ``sync_work_task_status`` (п.4 #320):
+        # отмена плана — доменное решение, а не факт ledger. В проекции
+        # ``resolve_work_task_status`` (``app/stock/task_cache.py``) при
+        # ``current_status == "cancelled"`` возвращает ``None``: отмена
+        # терминальна, статус не переигрывается ни фактами, ни кэшем строки.
         await db.execute(update(WorkTask).where(WorkTask.id.in_(refs.task_ids)).values(status=WorkTaskStatus.cancelled))
     if refs.transfer_ids:
         await db.execute(update(Transfer).where(Transfer.id.in_(refs.transfer_ids)).values(status=TransferStatus.cancelled))
@@ -1445,6 +1450,12 @@ async def soft_delete_cancelled_position(
     ).scalars().all()
 
     if line_ids_result:
+        # Скрытие позиции отменяет только ОТКРЫТЫЕ задания (``notin_``
+        # CLOSED_WORK_TASK_STATUSES): закрытые уже не числятся на доске.
+        # ``cancelled`` — прямо, мимо ``sync_work_task_status`` (п.4 #320):
+        # отмена — доменное решение, а не факт ledger; ``resolve_work_task_status``
+        # (``app/stock/task_cache.py``) для ``cancelled`` возвращает ``None`` и
+        # не переигрывает терминал.
         await db.execute(
             WorkTask.__table__.update()
             .where(WorkTask.section_plan_line_id.in_(line_ids_result))
