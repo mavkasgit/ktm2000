@@ -82,13 +82,17 @@ from app.services.route_storage_classifier import STAGE_KIND_TRANSIT, is_storage
 
 logger = logging.getLogger(__name__)
 
-#: Каталог кодов строк импорта плана (спека docs/plan-import-spec.md §3, карта #157).
+#: Каталог кодов строк плана (спека docs/plan-import-spec.md §3, карта #157).
 #: Статус строки (правило ниже, plan_import_row_status): есть errors → invalid,
 #: иначе warnings → warning, иначе pending.
-#: Новый код — только с явной классификацией error/warning в этом списке:
-#: сторож-тест tests/test_plan_import_codes.py сканирует errors.append /
-#: warnings.append в plan_import_service.py и excel_import.py и падает на
+#:
+#: Каталог — один на обе стороны (#327): импортную (plan_import_service.py,
+#: excel_import.py) и валидационную (plan_validation.py, route_validation.py).
+#: Классификация error/warning живёт только здесь: сторож-тест
+#: tests/test_plan_import_codes.py сканирует все четыре файла и падает на
 #: неклассифицированном коде. При добавлении кода обновить список + тест.
+#: Имя историческое (на него ссылается docs/adr/0045): набор описывает не
+#: только импорт.
 PLAN_IMPORT_ERROR_CODES: frozenset[str] = frozenset(
     {
         "product_not_found",
@@ -106,6 +110,17 @@ PLAN_IMPORT_ERROR_CODES: frozenset[str] = frozenset(
 #: профиля его не узнало — раньше строка молча получала чужую операцию из
 #: группы (см. _operation_value_recognized). Пустое значение ошибки не даёт.
         "route_operation_not_recognized",
+#: ── Валидационная сторона (#327) ─────────────────────────────────────────
+#: Эти коды добавляет валидация позиции (plan_validation.py) и проверка
+#: состава маршрута (route_validation.py); класс у них тот же — error.
+#: `route_not_found`/`manual_route_not_found` приходят значением
+#: `ResolvedRouteInfo.error` (route_matcher.py), остальные — литералами.
+        "quantity_must_be_positive",
+        "route_not_found",
+        "manual_route_not_found",
+        "route_sequence_invalid",
+        "route_missing_required_step",
+        "route_contains_excluded_step",
     }
 )
 #: Точные warning-коды без параметров.
