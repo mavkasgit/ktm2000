@@ -13,7 +13,7 @@ import {
 import { useFilterableTable } from "@/shared/hooks/useFilterableTable"
 import { usePaginatedTableQuery } from "@/shared/hooks/usePaginatedTableQuery"
 import type { SortConfig } from "@/shared/hooks/useTableQueryEngine"
-import { buildColumnApiParams } from "@/shared/lib/columnSpecs"
+import { buildColumnApiParams, buildColumnFilterValues } from "@/shared/lib/columnSpecs"
 import { getAriaSort } from "@/shared/lib/multiSort"
 import { useDebouncedValue } from "@/shared/lib/useDebouncedValue"
 import { buildSortParam } from "@/shared/lib/sortQueryParam"
@@ -135,12 +135,8 @@ export function HrmsEmployeesTable({
    * остальные четыре колонки сервер не фильтрует (см. `employeeColumns`), и
    * список их значений был бы посчитан и ни разу не показан.
    */
-  const uniqueValues = useMemo<Partial<Record<EmployeeSortField, string[]>>>(
-    () => ({
-      department: [...new Set(employees.map((e) => e.department ?? "—"))].sort((a, b) =>
-        a.localeCompare(b, "ru"),
-      ),
-    }),
+  const uniqueValues = useMemo(
+    () => buildColumnFilterValues(employees, employeeColumns),
     [employees],
   )
 
@@ -185,7 +181,7 @@ export function HrmsEmployeesTable({
                   className={`${headerCellClass} ${column.headerClassName ?? "text-left"}`}
                   aria-sort={column.sortField ? getAriaSort(sortConfigs, column.sortField) : undefined}
                 >
-                  <DataTableColumnHeader<EmployeeSortField>
+                  <DataTableColumnHeader<EmployeeSortField, EmployeeSortField, Employee>
                     column={column}
                     bindColumn={bindColumn}
                     values={uniqueValues[column.id]}

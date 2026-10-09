@@ -14,12 +14,60 @@
  */
 import type { ColumnSpec } from "@/shared/lib/columnSpecs";
 import type { TransactionSortField } from "@/shared/lib/stockSortParams";
+import {
+  formatQualityStateLabel,
+  formatStockReasonLabel,
+  type StockTransactionEntry,
+} from "@/shared/api/stock";
+import { fmtQty } from "@/shared/lib/quantityFormat";
 
-export type TransactionColumn = ColumnSpec<TransactionSortField> & {
+export type TransactionColumn = ColumnSpec<
+  TransactionSortField,
+  TransactionSortField,
+  StockTransactionEntry
+> & {
   id: string;
   label: string;
   headerClassName?: string;
 };
+
+/** Подпись даты движения — и в ячейке, и в читателе значения колонки. */
+export function formatTxDate(createdAt: string | null): string {
+  if (!createdAt) return "—";
+  return new Date(createdAt).toLocaleString("ru-RU");
+}
+
+/** Качество печатается переходом, когда состояние изменилось. */
+export function formatTxQuality(tx: StockTransactionEntry): string {
+  if (tx.from_quality_state !== tx.to_quality_state) {
+    return `${formatQualityStateLabel(tx.from_quality_state)} → ${formatQualityStateLabel(tx.to_quality_state)}`;
+  }
+  return formatQualityStateLabel(tx.from_quality_state);
+}
+
+/**
+ * Значение ячейки строки движения (#322): читатель значения объявлен в
+ * описании колонки (`cellValue`), а разметка тела берёт то же значение — иначе
+ * список попапера и фильтр могли бы показать не то, что напечатано в строке.
+ */
+export function getTxCellValue(tx: StockTransactionEntry, field: TransactionSortField): string {
+  switch (field) {
+    case "date":
+      return formatTxDate(tx.created_at);
+    case "reason":
+      return formatStockReasonLabel(String(tx.reason), tx.source_ref);
+    case "from":
+      return tx.from_location_name || (tx.from_location_id ? `#${tx.from_location_id}` : "—");
+    case "to":
+      return tx.to_location_name || (tx.to_location_id ? `#${tx.to_location_id}` : "—");
+    case "quantity":
+      return fmtQty(tx.quantity);
+    case "quality":
+      return formatTxQuality(tx);
+    case "comment":
+      return tx.comment || "—";
+  }
+}
 
 /** Пусто — не значение: сервер такого не понимает. */
 const dropDash = (value: string) => (value === "—" ? undefined : value);
@@ -69,6 +117,7 @@ export const transactionColumns: TransactionColumn[] = [
     filterField: "reason",
     sortField: "reason",
     mapValue: dropDash,
+    cellValue: (tx) => getTxCellValue(tx, "reason"),
   },
   {
     id: "from",
@@ -78,6 +127,7 @@ export const transactionColumns: TransactionColumn[] = [
     sortField: "from",
     apiParam: "from_location",
     mapValue: dropDash,
+    cellValue: (tx) => getTxCellValue(tx, "from"),
   },
   {
     id: "to",
@@ -87,6 +137,7 @@ export const transactionColumns: TransactionColumn[] = [
     sortField: "to",
     apiParam: "to_location",
     mapValue: dropDash,
+    cellValue: (tx) => getTxCellValue(tx, "to"),
   },
   {
     id: "quantity",
@@ -106,6 +157,7 @@ export const transactionColumns: TransactionColumn[] = [
     exactMatch: true,
     apiParam: "quality_state",
     mapValue: qualityStateCode,
+    cellValue: (tx) => getTxCellValue(tx, "quality"),
   },
   {
     id: "comment",
@@ -114,5 +166,6 @@ export const transactionColumns: TransactionColumn[] = [
     filterField: "comment",
     sortField: "comment",
     mapValue: dropDash,
+    cellValue: (tx) => getTxCellValue(tx, "comment"),
   },
 ];

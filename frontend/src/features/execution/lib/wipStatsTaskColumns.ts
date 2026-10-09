@@ -15,7 +15,6 @@
  * `clientOnly`.
  */
 import type { ProductWipTask } from "@/shared/api/productionPlans";
-import { fmtQty } from "@/shared/lib/quantityFormat";
 import type { ColumnSpec } from "@/shared/lib/columnSpecs";
 
 /** Поля фильтра и сортировки блока «в работе». */
@@ -27,7 +26,7 @@ export type WipStatsTaskField =
   | "issued"
   | "completed";
 
-export type WipStatsTaskColumn = ColumnSpec<WipStatsTaskField> & {
+export type WipStatsTaskColumn = ColumnSpec<WipStatsTaskField, WipStatsTaskField, ProductWipTask> & {
   id: string;
   label: string;
   /** Класс `<th>` сверх общего: `p-0` у колонки с поповером и ширина. */
@@ -53,6 +52,8 @@ export const wipStatsTaskColumns: WipStatsTaskColumn[] = [
     // числовых: под четыре цифры хватает 70px.
     headerClassName: `${filtered} min-w-[150px] max-w-[220px]`,
     clientOnly: true,
+    cellValue: (row) => row.operation_name,
+    sortValues: (a, b) => a.localeCompare(b, "ru"),
   },
   // Служебная колонка: «Размер» выводится из габаритов строки, фильтровать
   // его нечем (значения в поповере пришлось бы собирать из подписи размера),
@@ -63,28 +64,6 @@ export const wipStatsTaskColumns: WipStatsTaskColumn[] = [
   { id: "issued", label: "Выдано", sortField: "issued", headerClassName: "w-[70px] text-right" },
   { id: "completed", label: "Завершено", sortField: "completed", headerClassName: "w-[80px] text-right" },
 ];
-
-/**
- * Значение ячейки, по которому работает клиентский фильтр. Числа отдаются
- * тем же форматтером, что печатает ячейка: иначе попапер предлагал бы
- * оператору значение, которого в строке нет.
- */
-export function wipStatsTaskCellValue(row: ProductWipTask, field: WipStatsTaskField): string {
-  switch (field) {
-    case "operation":
-      return row.operation_name;
-    case "dimensions":
-      return row.dimensions_label;
-    case "tasks":
-      return fmtQty(row.active_tasks_count);
-    case "plan":
-      return fmtQty(row.planned_qty);
-    case "issued":
-      return fmtQty(row.issued_qty);
-    case "completed":
-      return fmtQty(row.completed_qty);
-  }
-}
 
 /**
  * Значение для сортировки. Количества остаются числами: сравнение строк дало

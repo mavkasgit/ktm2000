@@ -7,7 +7,7 @@ import { TableCornerResetCell, TableCornerResetHeader, TablePaginationFooter, Da
 import { useFilterableTable } from "@/shared/hooks/useFilterableTable"
 import type { SortConfig } from "@/shared/hooks/useTableQueryEngine"
 import { usePaginatedTableQuery } from "@/shared/hooks/usePaginatedTableQuery"
-import { buildColumnApiParams } from "@/shared/lib/columnSpecs"
+import { buildColumnApiParams, buildColumnFilterValues } from "@/shared/lib/columnSpecs"
 import { buildSortParam } from "@/shared/lib/sortQueryParam"
 import { getAriaSort } from "@/shared/lib/multiSort"
 import { fetchBackups } from "@/entities/backup/api"
@@ -191,19 +191,13 @@ export function BackupsPage() {
     }))
   }
 
-  // Значения для поповеров фильтра — по одному ключу на колонку, иначе `map`
-  // по описанию не смог бы достать список своей колонке.
-  const uniqueValues = useMemo<Record<BackupSortField, string[]>>(() => {
-    const items = displayedBackups
-    return {
-      filename: [...new Set(items.map(b => b.filename))].sort(),
-      db_name: [...new Set(items.map(b => b.db_name))].sort(),
-      backup_type: [...new Set(items.map(b => b.backup_type || "manual"))].sort(),
-      size: [...new Set(items.map(b => String(b.size)))].sort((a, b) => Number(a) - Number(b)),
-      created_at: [...new Set(items.map(b => b.created_at))].sort((a, b) => new Date(a).getTime() - new Date(b).getTime()),
-      comment: [...new Set(items.map(b => b.comment || "—"))].sort(),
-    }
-  }, [displayedBackups])
+  // Значения для поповеров фильтра — из описания колонок: читатель значения
+  // объявлен в самой колонке (`cellValue`), поэтому список и фильтр берут одно
+  // значение (#322).
+  const uniqueValues = useMemo(
+    () => buildColumnFilterValues(displayedBackups, backupColumns),
+    [displayedBackups],
+  )
 
   const { data: config, isLoading: isConfigLoading } = useBackupConfig()
   const dbName = config?.db_name || "unknown"

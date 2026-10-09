@@ -11,36 +11,12 @@ import {
   type ColumnSortDef,
 } from "@/shared/hooks/useTableQueryEngine";
 
-import { eventColumns, type EventField } from "./executionEventsColumns";
-
-export type ExecutionEventRow = {
-  id: string;
-  event_at: string | null;
-  event_type: "status" | "operation";
-  event_type_label: string;
-  label: string;
-  from_section_name: string;
-  to_section_name: string;
-  quantity: string;
-  details: string;
-};
+import { eventColumns, fmtEventAt, type EventField, type ExecutionEventRow } from "./executionEventsColumns";
+import { buildColumnFilterValues } from "@/shared/lib/columnSpecs";
 
 interface ExecutionEventsTableProps {
   stages: ProductionPlanningStage[];
   statusHistory: StatusHistoryEntry[];
-}
-
-function fmtEventAt(value: string | null | undefined): string {
-  if (!value) return "—";
-  const dt = new Date(value);
-  if (Number.isNaN(dt.getTime())) return "—";
-  return dt.toLocaleString("ru-RU", {
-    day: "2-digit",
-    month: "2-digit",
-    year: "2-digit",
-    hour: "2-digit",
-    minute: "2-digit",
-  });
 }
 
 function buildEventRows(
@@ -97,23 +73,6 @@ function buildEventRows(
   return rows;
 }
 
-function getCellValue(row: ExecutionEventRow, field: EventField): string {
-  switch (field) {
-    case "date":
-      return fmtEventAt(row.event_at);
-    case "type":
-      return row.event_type_label;
-    case "event":
-      return row.label;
-    case "from":
-      return row.from_section_name;
-    case "to":
-      return row.to_section_name;
-    case "quantity":
-      return row.quantity;
-  }
-}
-
 const headerCellClass = `${DATA_TABLE_STYLES.headerRow} ${DATA_TABLE_STYLES.headerCell}`;
 
 export function ExecutionEventsTable({ stages, statusHistory }: ExecutionEventsTableProps) {
@@ -147,30 +106,14 @@ export function ExecutionEventsTable({ stages, statusHistory }: ExecutionEventsT
   ], []);
 
   const filterPredicate = useMemo(
-    () => buildFilterPredicate(getCellValue),
+    () => buildFilterPredicate(eventColumns),
     [buildFilterPredicate],
   );
 
-  const uniqueValues = useMemo((): Record<EventField, string[]> => ({
-    date: [...new Set(eventRows.map((row) => getCellValue(row, "date")))].sort((a, b) =>
-      a.localeCompare(b, "ru"),
-    ),
-    type: [...new Set(eventRows.map((row) => getCellValue(row, "type")))].sort((a, b) =>
-      a.localeCompare(b, "ru"),
-    ),
-    event: [...new Set(eventRows.map((row) => getCellValue(row, "event")))].sort((a, b) =>
-      a.localeCompare(b, "ru"),
-    ),
-    from: [...new Set(eventRows.map((row) => getCellValue(row, "from")))].sort((a, b) =>
-      a.localeCompare(b, "ru"),
-    ),
-    to: [...new Set(eventRows.map((row) => getCellValue(row, "to")))].sort((a, b) =>
-      a.localeCompare(b, "ru"),
-    ),
-    quantity: [...new Set(eventRows.map((row) => getCellValue(row, "quantity")))].sort(
-      (a, b) => (Number.parseFloat(a) || 0) - (Number.parseFloat(b) || 0),
-    ),
-  }), [eventRows]);
+  const uniqueValues = useMemo(
+    () => buildColumnFilterValues(eventRows, eventColumns),
+    [eventRows],
+  );
 
   const { rows: filteredRows } = useTableQueryEngine({
     rows: eventRows,

@@ -19,21 +19,18 @@ import { usePaginatedTableQuery } from "@/shared/hooks/usePaginatedTableQuery";
 import {
   getStockTransactions,
   formatDimensionsLabel,
-  formatQualityStateLabel,
-  formatStockReasonLabel,
 } from "@/shared/api/stock";
-import type { StockTransactionEntry, StockTransactionsListResponse, StockTransactionsParams } from "@/shared/api/stock";
+import type { StockTransactionsListResponse, StockTransactionsParams } from "@/shared/api/stock";
 import { queryKeys } from "@/shared/api/queryKeys";
-import { buildColumnApiParams } from "@/shared/lib/columnSpecs";
+import { buildColumnApiParams, buildColumnFilterValues } from "@/shared/lib/columnSpecs";
 import { useDebouncedValue } from "@/shared/lib/useDebouncedValue";
 import { isFirstRowsLoad, keepPreviousDataForScope } from "@/shared/lib/tableQueryPlaceholder";
 import { getAriaSort } from "@/shared/lib/multiSort";
-import { fmtQty } from "@/shared/lib/quantityFormat";
 import {
   buildTransactionSortParam,
   type TransactionSortField,
 } from "@/shared/lib/stockSortParams";
-import { transactionColumns } from "../lib/transactionColumns";
+import { getTxCellValue, transactionColumns } from "../lib/transactionColumns";
 
 interface StockTransactionsHistoryDrawerProps {
   productId?: number;
@@ -43,37 +40,6 @@ interface StockTransactionsHistoryDrawerProps {
   onOpenChange: (open: boolean) => void;
 }
 
-
-function formatTxDate(createdAt: string | null): string {
-  if (!createdAt) return "—";
-  return new Date(createdAt).toLocaleString("ru-RU");
-}
-
-function formatTxQuality(tx: StockTransactionEntry): string {
-  if (tx.from_quality_state !== tx.to_quality_state) {
-    return `${formatQualityStateLabel(tx.from_quality_state)} → ${formatQualityStateLabel(tx.to_quality_state)}`;
-  }
-  return formatQualityStateLabel(tx.from_quality_state);
-}
-
-function getTxCellValue(tx: StockTransactionEntry, field: TransactionSortField): string {
-  switch (field) {
-    case "date":
-      return formatTxDate(tx.created_at);
-    case "reason":
-      return formatStockReasonLabel(String(tx.reason), tx.source_ref);
-    case "from":
-      return tx.from_location_name || (tx.from_location_id ? `#${tx.from_location_id}` : "—");
-    case "to":
-      return tx.to_location_name || (tx.to_location_id ? `#${tx.to_location_id}` : "—");
-    case "quantity":
-      return fmtQty(tx.quantity);
-    case "quality":
-      return formatTxQuality(tx);
-    case "comment":
-      return tx.comment || "—";
-  }
-}
 
 /**
  * Параметры колоночных фильтров, приведённые к контракту запроса.
@@ -246,25 +212,13 @@ export function StockTransactionsHistoryDrawer({
   const total = data?.total ?? 0;
   const totalPages = getTotalPages(total);
 
-  // Значения для попаперов фильтра. Колонки без фильтра («Дата», «Кол-во»)
-  // списка не собирают: их шапка рисует одну подпись.
-  const uniqueValues: Partial<Record<TransactionSortField, string[]>> = useMemo(() => ({
-    reason: [...new Set(transactions.map((tx) => getTxCellValue(tx, "reason")))].sort((a, b) =>
-      a.localeCompare(b, "ru"),
-    ),
-    from: [...new Set(transactions.map((tx) => getTxCellValue(tx, "from")))].sort((a, b) =>
-      a.localeCompare(b, "ru"),
-    ),
-    to: [...new Set(transactions.map((tx) => getTxCellValue(tx, "to")))].sort((a, b) =>
-      a.localeCompare(b, "ru"),
-    ),
-    quality: [...new Set(transactions.map((tx) => getTxCellValue(tx, "quality")))].sort((a, b) =>
-      a.localeCompare(b, "ru"),
-    ),
-    comment: [...new Set(transactions.map((tx) => getTxCellValue(tx, "comment")))].sort((a, b) =>
-      a.localeCompare(b, "ru"),
-    ),
-  }), [transactions]);
+  // Значения для попаперов фильтра — из описания колонок: читатель значения
+  // объявлен в самой колонке (`cellValue`), поэтому список и фильтр берут одно
+  // значение (#322). Колонки без фильтра («Дата», «Кол-во») списка не собирают.
+  const uniqueValues: Partial<Record<TransactionSortField, string[]>> = useMemo(
+    () => buildColumnFilterValues(transactions, transactionColumns),
+    [transactions],
+  );
 
   if (!open) return null;
 
@@ -365,7 +319,7 @@ export function StockTransactionsHistoryDrawer({
                     transactions.map((tx) => (
                       <tr key={tx.id} className="border-b hover:bg-muted/30">
                         <td className="p-2 text-xs whitespace-nowrap">
-                          {formatTxDate(tx.created_at)}
+                          {getTxCellValue(tx, "date")}
                         </td>
                         <td className="p-2 text-xs font-medium">
                           {getTxCellValue(tx, "reason")}

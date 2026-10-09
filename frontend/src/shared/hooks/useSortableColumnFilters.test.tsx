@@ -10,6 +10,7 @@ import { act } from "react";
 import { createRoot, type Root } from "react-dom/client";
 
 import { SEARCH_DEBOUNCE_MS } from "@/shared/lib/useDebouncedValue";
+import type { ColumnSpec } from "@/shared/lib/columnSpecs";
 
 import { useSortableColumnFilters } from "./useSortableColumnFilters";
 
@@ -117,7 +118,7 @@ describe("useSortableColumnFilters", () => {
     harness.unmount();
   });
 
-  it("buildFilterPredicate can omit fields from predicate", () => {
+  it("buildFilterPredicate собирается из описания колонок", () => {
     const harness = mountHarness();
 
     act(() => {
@@ -127,14 +128,16 @@ describe("useSortableColumnFilters", () => {
     });
 
     type Row = { name: string; status: string };
-    const predicate = harness.getResult().buildFilterPredicate<Row>(
-      (row, field) => (field === "name" ? row.name : row.status),
-      ["status"],
-    );
+    const columns: ColumnSpec<Field, Field, Row>[] = [
+      { filterField: "name", cellValue: (row) => row.name },
+      { filterField: "status", cellValue: (row) => row.status },
+    ];
+    const predicate = harness.getResult().buildFilterPredicate(columns);
 
     expect(predicate).not.toBeNull();
-    expect(predicate!({ name: "abc", status: "closed" })).toBe(true);
-    expect(predicate!({ name: "xyz", status: "closed" })).toBe(false);
+    expect(predicate!({ name: "abc", status: "open" })).toBe(true);
+    // Выбор в колонке «Статус» сужает строки по её же значению.
+    expect(predicate!({ name: "abc", status: "closed" })).toBe(false);
 
     harness.unmount();
   });

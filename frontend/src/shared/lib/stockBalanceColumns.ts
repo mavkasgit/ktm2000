@@ -15,8 +15,18 @@
  */
 import type { ColumnSpec } from "@/shared/lib/columnSpecs";
 import type { BalanceSortField } from "@/shared/lib/stockSortParams";
+import {
+  completedOperationsServerLabel,
+  formatQualityStateLabel,
+  type StockBalanceEntry,
+} from "@/shared/api/stock";
+import { fmtQty } from "@/shared/lib/quantityFormat";
 
-export type StockBalanceColumn = ColumnSpec<BalanceSortField> & {
+export type StockBalanceColumn = ColumnSpec<
+  BalanceSortField,
+  BalanceSortField,
+  StockBalanceEntry
+> & {
   id: string;
   label: string;
   headerClassName?: string;
@@ -58,6 +68,8 @@ export const stockBalanceColumns: StockBalanceColumn[] = [
     filterField: "sku",
     sortField: "sku",
     mapValue: dropNumericPlaceholder,
+    cellValue: (balance) => balance.product_sku || `#${balance.product_id}`,
+    sortValues: (a, b) => a.localeCompare(b, "ru"),
   },
   {
     id: "quantity",
@@ -65,6 +77,8 @@ export const stockBalanceColumns: StockBalanceColumn[] = [
     filterField: "quantity",
     sortField: "quantity",
     mapValue: dropDash,
+    cellValue: (balance) => fmtQty(balance.balance_qty),
+    sortValues: (a, b) => (Number.parseFloat(a) || 0) - (Number.parseFloat(b) || 0),
   },
   { id: "dimensions", label: "Размеры", headerClassName: "px-2" },
   {
@@ -79,6 +93,9 @@ export const stockBalanceColumns: StockBalanceColumn[] = [
     // что выбрано — `_balance_operations_filter` разбирает обе подписи в явные
     // предикаты, прочерк он не знает. Сбрасывать их значило бы выбрать пустую
     // строку и молча отправить фильтр без значения.
+    cellValue: (balance) =>
+      completedOperationsServerLabel(balance.completed_operations, balance.completed_stages),
+    sortValues: (a, b) => a.localeCompare(b, "ru"),
   },
   {
     id: "quality",
@@ -86,6 +103,8 @@ export const stockBalanceColumns: StockBalanceColumn[] = [
     filterField: "quality",
     sortField: "quality",
     mapValue: qualityStateCode,
+    cellValue: (balance) => formatQualityStateLabel(balance.quality_state),
+    sortValues: (a, b) => a.localeCompare(b, "ru"),
   },
   {
     id: "location",
@@ -94,5 +113,7 @@ export const stockBalanceColumns: StockBalanceColumn[] = [
     sortField: "location",
     hideWhenNoLocation: true,
     mapValue: dropNumericPlaceholder,
+    cellValue: (balance) => balance.location_name || `#${balance.location_id}`,
+    sortValues: (a, b) => a.localeCompare(b, "ru"),
   },
 ];

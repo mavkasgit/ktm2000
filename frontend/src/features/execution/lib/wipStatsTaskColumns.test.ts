@@ -8,11 +8,9 @@
 import { describe, expect, it } from "vitest";
 
 import type { ProductWipTask } from "@/shared/api/productionPlans";
-import { buildColumnFilterPredicate } from "@/shared/lib/columnFilterSearch";
-import { buildColumnApiParams } from "@/shared/lib/columnSpecs";
+import { buildColumnApiParams, buildColumnFilterPredicate } from "@/shared/lib/columnSpecs";
 
 import {
-  wipStatsTaskCellValue,
   wipStatsTaskColumns,
   wipStatsTaskSortValue,
   type WipStatsTaskField,
@@ -39,12 +37,12 @@ const rows: ProductWipTask[] = [
   task({ operation_name: "Анодирование", planned_qty: 4, completed_qty: 4 }),
 ];
 
+/** Значение колонки — из описания, как у попапера и клиентского предиката (#322). */
+const columnValue = (row: ProductWipTask, field: WipStatsTaskField) =>
+  wipStatsTaskColumns.find((column) => column.filterField === field)!.cellValue!(row);
+
 const predicateFor = (columnFilters: Partial<Record<WipStatsTaskField, Set<string>>>) =>
-  buildColumnFilterPredicate({
-    columnFilters,
-    columnSearchQueries: {},
-    getCellValue: wipStatsTaskCellValue,
-  });
+  buildColumnFilterPredicate(columnFilters, {}, wipStatsTaskColumns);
 
 describe("описание колонок блока «в работе»", () => {
   it("порядок колонок совпадает с порядком ячеек в теле таблицы", () => {
@@ -102,11 +100,7 @@ describe("фильтры блока «в работе» не уезжают в �
   });
 
   it("поиск в поповере сужает по подстроке, как и выбор", () => {
-    const predicate = buildColumnFilterPredicate({
-      columnFilters: {},
-      columnSearchQueries: { operation: "Шамп" },
-      getCellValue: wipStatsTaskCellValue,
-    });
+    const predicate = buildColumnFilterPredicate({}, { operation: "Шамп" }, wipStatsTaskColumns);
     expect(predicate ? rows.filter(predicate).map((row) => row.operation_name) : []).toEqual([
       "Шампань",
     ]);
@@ -123,12 +117,13 @@ describe("сортировка блока «в работе»", () => {
   });
 
   it("значение попапера совпадает с напечатанным в ячейке", () => {
-    // Попапер отдаёт `wipStatsTaskCellValue`, ячейка печатает `fmtQty`.
-    // Строка дробная: 2,5 округляется до «3», и попапер обязан предлагать
-    // именно «3» — иначе выбор в нём не находил бы напечатанную строку.
-    const fractional = task({ completed_qty: 2.5 });
-    expect(wipStatsTaskCellValue(fractional, "completed")).toBe("3");
-    const predicate = predicateFor({ completed: new Set(["3"]) });
-    expect(predicate ? [fractional].filter(predicate) : []).toHaveLength(1);
+    // Ячейка «Операция» печатает `row.operation_name`, попапер берёт то же
+    // значение из описания колонки (`cellValue`) — иначе выбор в нём не находил
+    // бы напечатанную строку (#322). Числовые колонки попапера не имеют, и их
+    // значение из описания не читается.
+    const [first] = rows;
+    expect(columnValue(first, "operation")).toBe(first.operation_name);
+    const predicate = predicateFor({ operation: new Set([first.operation_name]) });
+    expect(predicate ? rows.filter(predicate) : []).toHaveLength(1);
   });
 });

@@ -1,8 +1,9 @@
 import { useCallback, useMemo, useState } from "react";
+import { hasActiveColumnFilters } from "@/shared/lib/columnFilterSearch";
 import {
   buildColumnFilterPredicate,
-  hasActiveColumnFilters,
-} from "@/shared/lib/columnFilterSearch";
+  type ColumnSpec,
+} from "@/shared/lib/columnSpecs";
 import { useFlushableDebouncedValue } from "@/shared/lib/useDebouncedValue";
 
 /**
@@ -53,17 +54,12 @@ export function useSortableColumnFilters<Field extends string>() {
     [columnFilters, columnSearchQueries],
   );
 
+  // Предикат собирается из описания колонок: читатель значения объявлен в
+  // самой колонке (`cellValue`), поэтому шапка, попапер и фильтр строк берут
+  // одно значение (#322). Поля, у которых читателя нет, строк не отсеивают.
   const buildFilterPredicate = useCallback(
-    <T>(getCellValue: (row: T, field: Field) => string, omit: Field[] = []) => {
-      const omitted = new Set(omit);
-      const filters = Object.fromEntries(
-        Object.entries(columnFilters).filter(([key]) => !omitted.has(key as Field)),
-      ) as Partial<Record<Field, Set<string>>>;
-      const searches = Object.fromEntries(
-        Object.entries(columnSearchQueries).filter(([key]) => !omitted.has(key as Field)),
-      ) as Partial<Record<Field, string>>;
-      return buildColumnFilterPredicate({ columnFilters: filters, columnSearchQueries: searches, getCellValue });
-    },
+    <T, SortField extends string>(columns: ReadonlyArray<ColumnSpec<Field, SortField, T>>) =>
+      buildColumnFilterPredicate(columnFilters, columnSearchQueries, columns),
     [columnFilters, columnSearchQueries],
   );
 

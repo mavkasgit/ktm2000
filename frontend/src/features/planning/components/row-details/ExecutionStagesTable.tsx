@@ -10,13 +10,18 @@ import { rowToneFill, type RowTone } from "@/shared/lib/rowTones";
 import { getAriaSort } from "@/shared/lib/multiSort";
 import { isStorageType } from "@/shared/lib/routeStageClassifier";
 import { type ProductionPlanningStage } from "@/shared/api/productionPlans";
-import { stageStatusLabels } from "@/shared/lib/generated-labels";
 import {
   useTableQueryEngine,
   type ColumnSortDef,
 } from "@/shared/hooks/useTableQueryEngine";
 
-import { stageColumns, type StageField } from "./executionStagesColumns";
+import {
+  getStageSectionLabel,
+  getStageStatusLabel,
+  stageColumns,
+  type StageField,
+} from "./executionStagesColumns";
+import { buildColumnFilterValues } from "@/shared/lib/columnSpecs";
 
 type StageRowTone = "current" | "completed" | "partial" | "default";
 
@@ -36,15 +41,6 @@ interface ExecutionStagesTableProps {
   stages: ProductionPlanningStage[];
   currentStageSectionId?: number | null;
   currentStageSequence?: number | null;
-}
-
-function getStageSectionLabel(stage: ProductionPlanningStage): string {
-  return stage.section_name || stage.section_code || "—";
-}
-
-function getStageStatusLabel(stage: ProductionPlanningStage, isFinalStage: boolean): string {
-  const base = stageStatusLabels[stage.task_status] || stage.task_status;
-  return isFinalStage ? `${base} (финальный этап)` : base;
 }
 
 function getStageRowTone(
@@ -173,34 +169,19 @@ export function ExecutionStagesTable({
     [stages, currentStageSectionId, currentStageSequence],
   );
 
-  const getCellValue = useCallback(
-    (row: (typeof stageRows)[number], field: StageField): string => {
-      if (field === "section") return getStageSectionLabel(row.stage);
-      return getStageStatusLabel(row.stage, row.isFinalStage);
-    },
-    [],
-  );
-
   const sortDefs = useMemo((): ColumnSortDef<(typeof stageRows)[number], StageField>[] => [
-    { field: "section", getSortValue: (row) => getCellValue(row, "section") },
-    { field: "status", getSortValue: (row) => getCellValue(row, "status") },
-  ], [getCellValue]);
+    { field: "section", getSortValue: (row) => getStageSectionLabel(row.stage) },
+    { field: "status", getSortValue: (row) => getStageStatusLabel(row.stage, row.isFinalStage) },
+  ], []);
 
   const filterPredicate = useMemo(
-    () => buildFilterPredicate(getCellValue),
-    [buildFilterPredicate, getCellValue],
+    () => buildFilterPredicate(stageColumns),
+    [buildFilterPredicate],
   );
 
   const uniqueValues = useMemo(
-    (): Record<StageField, string[]> => ({
-      section: [...new Set(stageRows.map((row) => getCellValue(row, "section")))].sort((a, b) =>
-        a.localeCompare(b, "ru"),
-      ),
-      status: [...new Set(stageRows.map((row) => getCellValue(row, "status")))].sort((a, b) =>
-        a.localeCompare(b, "ru"),
-      ),
-    }),
-    [stageRows, getCellValue],
+    () => buildColumnFilterValues(stageRows, stageColumns),
+    [stageRows],
   );
 
   const { rows: filteredRows } = useTableQueryEngine({
