@@ -70,6 +70,7 @@ import {
   type TransferHistoryResponse,
 } from "@/shared/api/transfers";
 import { getErrorMessage } from "@/shared/api/client";
+import { getErrorHint } from "@/shared/api/errorMessages";
 import { invalidateAfter } from "@/shared/api/cacheInvalidation";
 import { operationalPollingOptions } from "@/shared/api/operationalPolling";
 import { queryKeys } from "@/shared/api/queryKeys";
@@ -157,32 +158,6 @@ const BULK_ROW_ACTION_TITLE = "В массовом режиме отправля
  * режима. Врать «отправит футер» здесь нельзя.
  */
 const BULK_FINAL_ACTION_TITLE = "Финальный выпуск в массовую передачу не берётся: выйдите из режима";
-
-function conflictHintFromTransferError(message: string): string | null {
-  const n = message.toLowerCase();
-  if (n.includes("превышает доступный к передаче")) {
-    return "Количество больше доступного к передаче.";
-  }
-  if (n.includes("следующим этапом маршрута")) {
-    return "Передавать можно только на следующий этап маршрута.";
-  }
-  if (n.includes("превышает доступный к передаче объём исходной задачи")) {
-    return "Скорректированное количество превышает доступный к передаче объём исходной задачи.";
-  }
-  if (n.includes("нельзя уменьшить передачу")) {
-    return "Нельзя уменьшить передачу: целевая задача уже использовала материалы.";
-  }
-  if (n.includes("уже есть активная передача")) {
-    return "По этому заданию передача уже создана — измените количество в журнале.";
-  }
-  if (n.includes("exceeds releasable quantity")) {
-    return "Количество больше доступного к выпуску.";
-  }
-  if (n.includes("only for final route stage")) {
-    return "Финальный выпуск доступен только на финальном этапе маршрута.";
-  }
-  return null;
-}
 
 type StatusBadgeVariant = "default" | "destructive" | "outline" | "secondary";
 
@@ -359,7 +334,7 @@ function ReadyTransferRow({
     },
     onError: (err: unknown) => {
       const message = getErrorMessage(err);
-      const hint = conflictHintFromTransferError(message);
+      const hint = getErrorHint(message);
       toast({
         variant: "destructive",
         title: "Ошибка передачи",
@@ -395,7 +370,7 @@ function ReadyTransferRow({
     },
     onError: (err: unknown) => {
       const message = getErrorMessage(err);
-      const hint = conflictHintFromTransferError(message);
+      const hint = getErrorHint(message);
       toast({
         variant: "destructive",
         title: "Ошибка выпуска",

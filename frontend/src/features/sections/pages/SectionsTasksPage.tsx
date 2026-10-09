@@ -4,6 +4,7 @@ import { useLocation, useNavigate, useParams, useSearchParams } from "react-rout
 
 
 import { apiClient, getErrorMessage } from "@/shared/api/client";
+import { getErrorHint } from "@/shared/api/errorMessages";
 import type { UserRole } from "@/features/auth/api";
 import { listSections } from "@/shared/api/sections";
 import {
@@ -125,18 +126,6 @@ function makeIdempotencyKey(prefix: string): string {
     return `${prefix}-${crypto.randomUUID()}`;
   }
   return `${prefix}-${Date.now()}-${Math.floor(Math.random() * 1_000_000)}`;
-}
-
-function conflictHintFromError(message: string): string | null {
-  const normalized = message.toLowerCase();
-  if (normalized.includes("exceeds available")) return "Количество больше доступного для выдачи. Проверьте поле 'Доступно'.";
-  if (normalized.includes("exceeds quantity in work")) return "Количество факта больше объема 'В работе'. Сначала уменьшите факт или довыдайте в работу.";
-  if (normalized.includes("exceeds transferable")) return "Количество передачи больше доступного к передаче. Проверьте 'Факт - Передано'.";
-  if (normalized.includes("must be sent")) return "Передача уже обработана. Обновите список входящих передач.";
-  if (normalized.includes("accepted + rejected exceeds sent")) return "Сумма принятого и отклоненного превышает отправленное количество.";
-  if (normalized.includes("next route step")) return "Передавать можно только на следующий этап маршрута.";
-  if (normalized.includes("locked to single-window context")) return "Режим одного окна разрешает работу только с текущим участком.";
-  return null;
 }
 
 export function SectionsTasksPage() {
@@ -771,7 +760,7 @@ export function SectionsTasksPage() {
         operationName: task?.operation_name || undefined,
         errorDetails: message,
       });
-      setConflictHint(conflictHintFromError(message));
+      setConflictHint(getErrorHint(message));
     },
   });
 
