@@ -9,7 +9,7 @@ import { useFilterableTable } from "@/shared/hooks/useFilterableTable";
 import { usePaginatedTableQuery } from "@/shared/hooks/usePaginatedTableQuery";
 import type { SortConfig } from "@/shared/hooks/useTableQueryEngine";
 import { buildSortParam } from "@/shared/lib/sortQueryParam";
-import { buildColumnApiParams } from "@/shared/lib/columnSpecs";
+import { buildColumnApiParams, buildColumnFilterValues } from "@/shared/lib/columnSpecs";
 import { getAriaSort } from "@/shared/lib/multiSort";
 import { useDebouncedValue } from "@/shared/lib/useDebouncedValue";
 import { keepPreviousData } from "@tanstack/react-query";
@@ -194,24 +194,11 @@ export function AuditLogsPage() {
   const totalPages = getTotalPages(total);
   const counts = data?.counts || { all: 0, success: 0, error: 0, info: 0 };
   const taskStatuses = data?.task_statuses || {};
+  // Список значений попапера — из описания колонок: читатель значения объявлен
+  // в самой колонке (`cellValue`), поэтому список и фильтр берут одно значение
+  // (#322).
   const uniqueValues: Partial<Record<AuditFilterField, string[]>> = useMemo(
-    () => ({
-      status: [...new Set(parsedLogs.map((entry) => entry.status))].sort(),
-      sectionName: [...new Set(parsedLogs.map((entry) => entry.section_name || "—"))].sort((a, b) =>
-        a.localeCompare(b, "ru"),
-      ),
-      productSku: [...new Set(parsedLogs.map((entry) => entry.product_sku || "—"))].sort((a, b) =>
-        a.localeCompare(b, "ru"),
-      ),
-      action: [...new Set(parsedLogs.map((entry) => entry.action || "—"))].sort((a, b) =>
-        a.localeCompare(b, "ru"),
-      ),
-      entityType: [
-        ...new Set(
-          parsedLogs.map((entry) => entityLabel(entry.entity_type, entry.entity_id)),
-        ),
-      ].sort((a, b) => a.localeCompare(b, "ru")),
-    }),
+    () => buildColumnFilterValues(parsedLogs, auditColumns),
     [parsedLogs],
   );
 

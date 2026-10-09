@@ -7,9 +7,8 @@ import { Button, Select, SelectContent, SelectItem, SelectTrigger, SelectValue, 
 import { buildActiveFilterSummary } from "@/shared/ui/buildActiveFilterSummary"
 import { usePaginatedTableQuery } from "@/shared/hooks/usePaginatedTableQuery"
 import { useFilterableTable } from "@/shared/hooks/useFilterableTable"
-import { buildColumnFilterPredicate } from "@/shared/lib/columnFilterSearch"
+import { buildColumnFilterPredicate, buildColumnFilterValues } from "@/shared/lib/columnSpecs"
 import { getAriaSort } from "@/shared/lib/multiSort"
-import { formatDimensionsFilterValue, formatDimensionsLabel } from "@/shared/api/stock"
 import { toast } from "@/shared/ui"
 import { keepPreviousData, useQuery, useQueryClient } from "@tanstack/react-query"
 import { allPlanPositions, PlanPositionOut, listPlans, batchAssignRouteGlobal, approveProductionPlanPosition, getPlanDuplicates, bulkApprovePositions, bulkDeletePositions } from "@/shared/api/productionPlans"
@@ -481,26 +480,6 @@ export function PlanPage() {
     return map
   }, [duplicateGroupsByPlan])
 
-  const getPlanCellValue = (row: PlanPositionOut, field: PlanSortField): string => {
-    switch (field) {
-      case "id": return String(row.id)
-      case "rowNum": {
-        const numbers = Array.isArray(row.source_row_numbers)
-          ? row.source_row_numbers.filter((v): v is number => typeof v === "number")
-          : []
-        return String(numbers.length > 0 ? Math.min(...numbers) : (row.source_row_number ?? 0))
-      }
-      case "sku": return row.source_sku
-      case "name": return row.source_name ?? ""
-      case "qty": return String(Number(row.quantity || 0))
-      case "route": return row.route_name ?? "Не назначен"
-      case "dimensions": return formatDimensionsLabel(row.dimensions, row.dimensions_label)
-      case "errors": return String(row.errors?.length ?? 0)
-      case "warnings": return String(row.warnings?.length ?? 0)
-      default: return ""
-    }
-  }
-
   // Список клиентских колонок и решение «уходит ли маршрут на клиент» — из
   // описания колонок: пока они перечислялись здесь, переименование колонки
   // ломало бы фильтрацию молча.
@@ -538,11 +517,11 @@ export function PlanPage() {
       predicates.push((row) => !duplicateConflictsByPosition.has(row.id))
     }
 
-    const columnPredicate = buildColumnFilterPredicate({
-      columnFilters: clientOnlyColumnFilters,
-      columnSearchQueries: clientOnlyColumnSearch,
-      getCellValue: getPlanCellValue,
-    })
+    const columnPredicate = buildColumnFilterPredicate(
+      clientOnlyColumnFilters,
+      clientOnlyColumnSearch,
+      planColumns,
+    )
     if (columnPredicate) predicates.push(columnPredicate)
 
     if (predicates.length === 0) return null
@@ -581,27 +560,12 @@ export function PlanPage() {
     [filters, searchQuery, sortConfigs.length, columnFilters, columnSearchQueries],
   )
 
-  const uniqueValuesByField: Partial<Record<PlanSortField, string[]>> = useMemo(() => {
-    const allRows = positions
-    return {
-      id: [...new Set(allRows.map((p) => String(p.id)))],
-      rowNum: [...new Set(allRows.map((p) => {
-        const numbers = Array.isArray(p.source_row_numbers)
-          ? p.source_row_numbers.filter((v): v is number => typeof v === "number")
-          : []
-        return String(numbers.length > 0 ? Math.min(...numbers) : (p.source_row_number ?? 0))
-      }))],
-      sku: [...new Set(allRows.map((p) => p.source_sku))],
-      name: [...new Set(allRows.map((p) => p.source_name ?? "").filter(Boolean))],
-      qty: [...new Set(allRows.map((p) => String(Number(p.quantity || 0))))],
-      route: [...new Set(allRows.map((p) => p.route_name ?? "Не назначен"))],
-      dimensions: [...new Set(allRows.map((p) => JSON.stringify(p.dimensions ?? null)))].sort(
-        (a, b) => formatDimensionsFilterValue(a).localeCompare(formatDimensionsFilterValue(b), "ru"),
-      ),
-      errors: [...new Set(allRows.map((p) => String(p.errors?.length ?? 0)))],
-      warnings: [...new Set(allRows.map((p) => String(p.warnings?.length ?? 0)))],
-    }
-  }, [positions])
+  // Список значений попапера — из описания колонок: тот же `cellValue`, что и у
+  // клиентского предиката, поэтому список и фильтр не расходятся (#322).
+  const uniqueValuesByField = useMemo(
+    () => buildColumnFilterValues(positions, planColumns),
+    [positions],
+  )
   const filterFields = useMemo<FiltersPanelField[]>(
     () => [
       {

@@ -28,10 +28,10 @@ import {
 } from "@/shared/ui";
 import { useFilterableTable } from "@/shared/hooks/useFilterableTable";
 import { usePaginatedTableQuery } from "@/shared/hooks/usePaginatedTableQuery";
-import { buildColumnApiParams } from "@/shared/lib/columnSpecs";
+import { buildColumnApiParams, buildColumnFilterValues } from "@/shared/lib/columnSpecs";
 import { getAriaSort } from "@/shared/lib/multiSort";
 import { saveBlobAsFile } from "@/shared/lib/downloadFile";
-import { remainderPreviewColumns, remainderPreviewColumnFields } from "../lib/remainderPreviewColumns";
+import { remainderPreviewColumns } from "../lib/remainderPreviewColumns";
 
 import {
   useImportRowExpansion,
@@ -636,16 +636,19 @@ export function ImportRemaindersDialog({
   const previewItemsTotal = previewData?.items_total ?? 0;
   const previewTotalPages = getTotalPages(previewItemsTotal);
 
-  const uniqueValues = useMemo(() => {
-    // Список колонок — из описания, а не перечислением: пока он стоял
-    // отдельно от шапки и от сборки параметров, девятая колонка появлялась
-    // в одном месте из трёх.
-    const fields = remainderPreviewColumnFields;
-    const result = {} as Record<RemainderPreviewSortField, string[]>;
-    for (const field of fields) {
-      result[field] = [
-        ...new Set(
-          previewItems.map((item) =>
+  // Читатели значения колонок зависят от состояния диалога (переопределения
+  // участка и качества, справочник участков), поэтому описание колонок с
+  // читателями собирается здесь, а список значений — общим сборщиком из
+  // описания. Перебора полей вручную нет: девятая колонка не потребует правки
+  // ни здесь, ни в шапке (#322).
+  const previewColumns = useMemo(
+    () =>
+      remainderPreviewColumns.map((column) => {
+        const field = column.filterField;
+        if (!field) return column;
+        return {
+          ...column,
+          cellValue: (item: RemainderImportItem) =>
             getImportItemCellValue(
               item,
               field,
@@ -653,17 +656,15 @@ export function ImportRemaindersDialog({
               qualityStateOverrides,
               importableSections,
             ),
-          ),
-        ),
-      ].sort((a, b) => {
-        if (field === "row" || field === "quantity") {
-          return (Number.parseFloat(a) || 0) - (Number.parseFloat(b) || 0);
-        }
-        return a.localeCompare(b, "ru");
-      });
-    }
-    return result;
-  }, [previewItems, targetSectionOverrides, qualityStateOverrides, importableSections]);
+        };
+      }),
+    [targetSectionOverrides, qualityStateOverrides, importableSections],
+  );
+
+  const uniqueValues = useMemo(
+    () => buildColumnFilterValues(previewItems, previewColumns),
+    [previewItems, previewColumns],
+  );
 
   const stats = useMemo(() => {
     if (!previewData) return { total: 0, valid: 0, invalid: 0, qty: 0 };

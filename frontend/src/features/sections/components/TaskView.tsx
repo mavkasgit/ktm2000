@@ -14,8 +14,8 @@ import { fmtQty } from "@/shared/lib/quantityFormat";
 import { TABLE_ROW_STYLES } from "@/shared/lib/tableRowStyles";
 import { CutLayoutCell } from "@/shared/ui";
 import { taskGroupingDimensions } from "../lib/groupTasksByProfile";
-import { getStatusLabel } from "../lib/taskStatus";
-import { getGroupTone, getStatusDotClass, getTaskTone, taskOperations, taskPackaging } from "../lib/taskView";
+import { getTaskRowState } from "../lib/taskStatus";
+import { getGroupTone, taskOperations, taskPackaging } from "../lib/taskView";
 import {
   ROW_TONE_CARD,
   ROW_TONE_GROUP_RAIL,
@@ -49,7 +49,7 @@ export function getTaskGroupRailClass(tasks: SectionBoardTask[]): string {
  * 4px, и точка статуса уезжала бы вбок у каждой второй строки.
  */
 export function getTaskStripeClass(task: SectionBoardTask): string {
-  return ROW_TONE_STRIPE[getTaskTone(task)];
+  return ROW_TONE_STRIPE[getTaskRowState(task).tone];
 }
 
 /** Классы строки таблицы: тон задания, а в массовом режиме — выделение. */
@@ -59,7 +59,7 @@ export function getTaskRowClass(
   isInGroup: boolean,
 ): string {
   if (isSelected) return TABLE_ROW_STYLES.selectedRow;
-  const tone = getTaskTone(task);
+  const tone = getTaskRowState(task).tone;
   // Строка раскрытой группы: подложка одна на блок (её же носит шапка), поэтому
   // «чей это статус» несут только полоса слева и текст. Свой тон строки остаётся,
   // но полосой и цветом текста, а не фоном: цветной фон строки делал пилюлю
@@ -73,15 +73,16 @@ export function getTaskRowClass(
 /** Классы карточки узкого экрана: тот же тон задания, что и у строки. */
 export function getTaskCardClass(task: SectionBoardTask, isSelected: boolean): string {
   if (isSelected) return TABLE_ROW_STYLES.selectedMobileCard;
-  return ROW_TONE_CARD[getTaskTone(task)];
+  return ROW_TONE_CARD[getTaskRowState(task).tone];
 }
 
 /** Точка статуса задания — одна на доску и карточку. */
 export function TaskStatusDot({ task }: { task: SectionBoardTask }) {
+  const { dotClass, label } = getTaskRowState(task);
   return (
     <span
-      className={`inline-block h-2.5 w-2.5 rounded-full ${getStatusDotClass(task)}`}
-      title={getStatusLabel(task)}
+      className={`inline-block h-2.5 w-2.5 rounded-full ${dotClass}`}
+      title={label}
     />
   );
 }

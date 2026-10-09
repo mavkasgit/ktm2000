@@ -9,6 +9,7 @@
  * бы правки сборщика.
  */
 import type { ColumnSpec } from "@/shared/lib/columnSpecs";
+import type { AuditLogEntry } from "@/shared/api/auditLogs";
 
 export type AuditFilterField =
   | "createdAt"
@@ -18,7 +19,7 @@ export type AuditFilterField =
   | "action"
   | "entityType";
 
-export type AuditColumn = ColumnSpec<AuditFilterField> & {
+export type AuditColumn = ColumnSpec<AuditFilterField, AuditFilterField, AuditLogEntry> & {
   id: string;
   label: string;
   /** Класс `<th>` сверх общего: ширина колонки. */
@@ -95,6 +96,8 @@ export const auditColumns: AuditColumn[] = [
     // видит «Успешно»: подпись живёт здесь, а не тернарником в шапке.
     valueLabel: (value) =>
       value === "success" ? "Успешно" : value === "error" ? "Ошибка" : "Информация",
+    cellValue: (entry) => entry.status,
+    sortValues: (a, b) => a.localeCompare(b, "ru"),
   },
   {
     id: "createdAt",
@@ -114,6 +117,8 @@ export const auditColumns: AuditColumn[] = [
     sortField: "sectionName",
     apiParam: "section_name",
     mapValue: dropDash,
+    cellValue: (entry) => entry.section_name || "—",
+    sortValues: (a, b) => a.localeCompare(b, "ru"),
   },
   { id: "task", label: "Задание", headerClassName: "w-[12%]" },
   {
@@ -124,6 +129,8 @@ export const auditColumns: AuditColumn[] = [
     sortField: "productSku",
     apiParam: "product_sku",
     mapValue: dropDash,
+    cellValue: (entry) => entry.product_sku || "—",
+    sortValues: (a, b) => a.localeCompare(b, "ru"),
   },
   {
     id: "action",
@@ -133,6 +140,8 @@ export const auditColumns: AuditColumn[] = [
     sortField: "action",
     apiParam: "action",
     mapValue: dropDash,
+    cellValue: (entry) => entry.action || "—",
+    sortValues: (a, b) => a.localeCompare(b, "ru"),
   },
   {
     id: "entityType",
@@ -142,6 +151,8 @@ export const auditColumns: AuditColumn[] = [
     sortField: "entityType",
     apiParam: "entity_type",
     mapValue: entityTypeOnly,
+    cellValue: (entry) => entityLabel(entry.entity_type, entry.entity_id),
+    sortValues: (a, b) => a.localeCompare(b, "ru"),
   },
   { id: "details", label: "Подробности", headerClassName: "w-[12%]" },
 ];

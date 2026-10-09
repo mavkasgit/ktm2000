@@ -8,7 +8,8 @@
  * сборщика параметров и там терялся: страница перечисляла поля запроса руками
  * и `dimensions` среди них не было. Фильтр был виден и не работал.
  */
-import { formatDimensionsFilterValue } from "@/shared/api/stock";
+import { formatDimensionsFilterValue, formatDimensionsLabel } from "@/shared/api/stock";
+import type { PlanPositionOut } from "@/shared/api/productionPlans";
 import type { ColumnSpec } from "@/shared/lib/columnSpecs";
 
 import type { PlanSortField } from "./plan-labels";
@@ -25,7 +26,7 @@ import type { PlanSortField } from "./plan-labels";
  * объявляется здесь, одна на колонку, и применяется к шапке и строкам из
  * одного описания.
  */
-export type PlanColumn = ColumnSpec<PlanSortField> & {
+export type PlanColumn = ColumnSpec<PlanSortField, PlanSortField, PlanPositionOut> & {
   id: string;
   label: string;
   filterField: PlanSortField;
@@ -36,15 +37,27 @@ export type PlanColumn = ColumnSpec<PlanSortField> & {
   width: string;
 };
 
+/**
+ * Номер строки источника — минимум из `source_row_numbers` (#322: раньше его
+ * считали в двух местах страницы, и колонка «Строка» могла показать одно,
+ * а фильтр — другое).
+ */
+function sourceRowNumber(row: PlanPositionOut): number {
+  const numbers = Array.isArray(row.source_row_numbers)
+    ? row.source_row_numbers.filter((value): value is number => typeof value === "number")
+    : [];
+  return numbers.length > 0 ? Math.min(...numbers) : (row.source_row_number ?? 0);
+}
+
 /** «Не назначен» и пустое значение — разные вещи, и «—» сервер не понимает. */
 const toYesNo = (empty: string) => (value: string) =>
   value === "" ? undefined : value === empty ? "no" : "yes";
 
 export const planColumns: PlanColumn[] = [
-  { id: "id", label: "Id", filterField: "id", sortField: "id", clientOnly: true, width: "64px" },
-  { id: "rowNum", label: "Строка", filterField: "rowNum", sortField: "rowNum", clientOnly: true, width: "72px" },
-  { id: "sku", label: "Артикул", filterField: "sku", sortField: "sku", apiParam: "source_sku", width: "200px" },
-  { id: "qty", label: "Кол-во", filterField: "qty", sortField: "qty", clientOnly: true, width: "160px" },
+  { id: "id", label: "Id", filterField: "id", sortField: "id", clientOnly: true, width: "64px", cellValue: (row) => String(row.id) },
+  { id: "rowNum", label: "Строка", filterField: "rowNum", sortField: "rowNum", clientOnly: true, width: "72px", cellValue: (row) => String(sourceRowNumber(row)) },
+  { id: "sku", label: "Артикул", filterField: "sku", sortField: "sku", apiParam: "source_sku", width: "200px", cellValue: (row) => row.source_sku },
+  { id: "qty", label: "Кол-во", filterField: "qty", sortField: "qty", clientOnly: true, width: "160px", cellValue: (row) => String(Number(row.quantity || 0)) },
   {
     id: "dimensions",
     label: "Размер",
@@ -56,8 +69,13 @@ export const planColumns: PlanColumn[] = [
     // Раскрой печатается в несколько строк (вход, стрелка, каждый распил), и
     // это осознанный перенос, а не обрезок: резать список распилов нельзя.
     width: "120px",
+    // Значение колонки — сериализованный габарит: он же уезжает параметром
+    // запроса и он же лежит в списке попапера. Подпись для показа считает
+    // ячейка (`formatDimensionsLabel`), а не фильтр.
+    cellValue: (row) => JSON.stringify(row.dimensions ?? null),
+    sortValues: (a, b) => formatDimensionsFilterValue(a).localeCompare(formatDimensionsFilterValue(b), "ru"),
   },
-  { id: "name", label: "Наименование", filterField: "name", sortField: "name", apiParam: "source_name", width: "320px" },
+  { id: "name", label: "Наименование", filterField: "name", sortField: "name", apiParam: "source_name", width: "320px", cellValue: (row) => row.source_name ?? "", skipEmptyValues: true },
   {
     id: "route",
     label: "Маршрут",
@@ -65,6 +83,7 @@ export const planColumns: PlanColumn[] = [
     apiParam: "has_route",
     mapValue: toYesNo("Не назначен"),
     width: "260px",
+    cellValue: (row) => row.route_name ?? "Не назначен",
     // Маршрут собирается в Python и не выводится в SQL: подставлять вместо
     // него другое поле молча нельзя, поэтому иконки сортировки нет.
     //
@@ -85,6 +104,7 @@ export const planColumns: PlanColumn[] = [
     apiParam: "has_errors",
     mapValue: toYesNo("0"),
     width: "220px",
+    cellValue: (row) => String(row.errors?.length ?? 0),
   },
   {
     id: "warnings",
@@ -93,6 +113,7 @@ export const planColumns: PlanColumn[] = [
     apiParam: "has_warnings",
     mapValue: toYesNo("0"),
     width: "180px",
+    cellValue: (row) => String(row.warnings?.length ?? 0),
     // Предупреждения берутся из последнего PlanChangeItem позиции, а не из
     // агрегата, и в ORDER BY не выражаются.
   },

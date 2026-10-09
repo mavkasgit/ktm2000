@@ -14,11 +14,14 @@
 import type { ExecutionSortableField } from "../lib/executionSortMapping";
 import { formatDimensionsFilterValue } from "@/shared/api/stock";
 import type { ColumnSpec } from "@/shared/lib/columnSpecs";
+import { fmtQty } from "@/shared/lib/quantityFormat";
+import type { ProductionPlanningRow } from "@/shared/api/productionPlans";
 import { positionStatusLabels, type ExecutionSortField } from "./execution-utils";
 
 export type ExecutionColumnId = ExecutionSortField | "actions";
 
-export interface ExecutionTableColumn extends ColumnSpec<ExecutionSortField, ExecutionSortableField> {
+export interface ExecutionTableColumn
+  extends ColumnSpec<ExecutionSortField, ExecutionSortableField, ProductionPlanningRow> {
   id: ExecutionColumnId;
   label: string;
   width: string;
@@ -50,6 +53,7 @@ export const executionTableColumns: ExecutionTableColumn[] = [
     colClassName: serviceColClass,
     headerClassName: serviceCellClass,
     cellClassName: `${serviceCellClass} font-mono text-muted-foreground`,
+    cellValue: (row) => String(row.plan_position_id),
   },
   {
     id: "row",
@@ -61,6 +65,7 @@ export const executionTableColumns: ExecutionTableColumn[] = [
     colClassName: serviceColClass,
     headerClassName: serviceCellClass,
     cellClassName: serviceCellClass,
+    cellValue: (row) => String(row.source_row_number ?? ""),
   },
   {
     id: "sku",
@@ -71,6 +76,7 @@ export const executionTableColumns: ExecutionTableColumn[] = [
     // `source_sku` — алиас того же фильтра; каноническое имя в API другое.
     apiParam: "product_sku",
     cellClassName: "font-mono",
+    cellValue: (row) => row.source_sku,
   },
   {
     id: "qty",
@@ -79,6 +85,7 @@ export const executionTableColumns: ExecutionTableColumn[] = [
     filterField: "qty",
     sortField: "qty",
     apiParam: "quantity",
+    cellValue: (row) => fmtQty(row.quantity),
   },
   {
     id: "dimensions",
@@ -92,6 +99,8 @@ export const executionTableColumns: ExecutionTableColumn[] = [
     colClassName: "hidden min-[600px]:table-column",
     headerClassName: "hidden min-[600px]:table-cell",
     cellClassName: "hidden min-[600px]:table-cell",
+    cellValue: (row) => JSON.stringify(row.dimensions ?? null),
+    sortValues: (a, b) => formatDimensionsFilterValue(a).localeCompare(formatDimensionsFilterValue(b), "ru"),
   },
   {
     id: "name",
@@ -99,6 +108,8 @@ export const executionTableColumns: ExecutionTableColumn[] = [
     width: "auto",
     filterField: "name",
     apiParam: "source_name",
+    cellValue: (row) => row.source_name || "",
+    skipEmptyValues: true,
   },
   {
     id: "route",
@@ -110,6 +121,7 @@ export const executionTableColumns: ExecutionTableColumn[] = [
     colClassName: "hidden min-[820px]:table-column",
     headerClassName: "hidden min-[820px]:table-cell",
     cellClassName: "hidden min-[820px]:table-cell",
+    cellValue: (row) => row.route_name || "Не назначен",
   },
   {
     id: "status",
@@ -118,6 +130,7 @@ export const executionTableColumns: ExecutionTableColumn[] = [
     filterField: "status",
     sortField: "status",
     valueLabel: (value: string) => positionStatusLabels[value] ?? value,
+    cellValue: (row) => (row.is_completed ? "completed" : row.position_status),
   },
   {
     id: "stage",
@@ -130,6 +143,7 @@ export const executionTableColumns: ExecutionTableColumn[] = [
     colClassName: "hidden min-[700px]:table-column",
     headerClassName: "hidden min-[700px]:table-cell",
     cellClassName: "hidden min-[700px]:table-cell",
+    cellValue: (row) => row.current_stage_section_name || "—",
   },
   {
     id: "actions",

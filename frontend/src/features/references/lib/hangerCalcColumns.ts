@@ -38,16 +38,15 @@ import {
   type PairedHangerCalcRow,
 } from "./hangerCalcRows";
 
-export type HangerCalcColumn = ColumnSpec<HangerCalcSortField> & {
+export type HangerCalcColumn = ColumnSpec<
+  HangerCalcSortField,
+  HangerCalcSortField,
+  HangerCalcRow | PairedHangerCalcRow
+> & {
   id: string;
   label: string;
   /** Класс `<th>` сверх общего: ширина колонки. */
   headerClassName?: string;
-  /**
-   * Порядок значений в поповере фильтра. Без него значения шли бы в порядке
-   * строк таблицы, и список «Итогов» начинался бы с произвольного числа.
-   */
-  sortValues?: (a: string, b: string) => number;
 };
 
 /**
@@ -61,16 +60,6 @@ export type HangerCalcColumn = ColumnSpec<HangerCalcSortField> & {
  */
 export function hangerCalcTotalText(row: HangerCalcRow | PairedHangerCalcRow): string {
   return row.total != null ? fmtQtyPrecise(row.total) : QTY_EMPTY;
-}
-
-/** Значение ячейки: и в списке фильтра, и в ключе клиентской выборки. */
-export function hangerCalcCellValue(
-  row: HangerCalcRow | PairedHangerCalcRow,
-  field: HangerCalcSortField,
-): string {
-  if (field === "sku") return rowSku(row);
-  if (field === "total") return hangerCalcTotalText(row);
-  return row.limiter ? LIMITER_LABELS[row.limiter] : "—";
 }
 
 /**
@@ -104,6 +93,7 @@ export const hangerCalcColumns: HangerCalcColumn[] = [
     filterField: "sku",
     sortField: "sku",
     clientOnly: true,
+    cellValue: (row) => rowSku(row),
   },
   { id: "perimeter", label: "Периметр", headerClassName: "w-28" },
   { id: "mountWidth", label: "Габарит", headerClassName: "w-28" },
@@ -128,6 +118,7 @@ export const hangerCalcColumns: HangerCalcColumn[] = [
     clientOnly: true,
     // Числа по возрастанию, «—» (нет значения) в конец.
     sortValues: compareHangerCalcTotals,
+    cellValue: (row) => hangerCalcTotalText(row),
   },
   {
     id: "limiter",
@@ -137,6 +128,7 @@ export const hangerCalcColumns: HangerCalcColumn[] = [
     // Тоже клиентская сортировка: лимитер выводится из результата расчёта.
     sortField: "limiter",
     clientOnly: true,
+    cellValue: (row) => (row.limiter ? LIMITER_LABELS[row.limiter] : "—"),
   },
   { id: "areaM2", label: "м² на подвес", headerClassName: "w-28" },
 ];

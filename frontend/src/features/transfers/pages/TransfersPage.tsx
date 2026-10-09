@@ -70,6 +70,7 @@ import {
   type TransferHistoryResponse,
 } from "@/shared/api/transfers";
 import { getErrorMessage } from "@/shared/api/client";
+import { getErrorHint } from "@/shared/api/errorMessages";
 import { invalidateAfter } from "@/shared/api/cacheInvalidation";
 import { operationalPollingOptions } from "@/shared/api/operationalPolling";
 import { queryKeys } from "@/shared/api/queryKeys";
@@ -106,12 +107,16 @@ import {
   readyRowIdentity,
   type ReadyTransferGroup,
 } from "../lib/groupReadyTransfers";
+import { makeIdempotencyKey, runTransferBatch } from "../lib/runTransferBatch";
 import {
-  enteredTransferQuantity,
-  makeIdempotencyKey,
-  planTransferQuantities,
-  runTransferBatch,
-} from "../lib/runTransferBatch";
+  draftGroupQuantity,
+  draftRowInput,
+  draftRowsToSend,
+  EMPTY_TRANSFER_DRAFT,
+  withGroupInput,
+  withRowInput,
+  type TransferDraft,
+} from "../lib/transferDraft";
 import { useFlushableDebouncedValue } from "@/shared/lib/useDebouncedValue";
 import { isAnyDialogOpen } from "@/shared/lib/dialogOpen";
 import {
@@ -157,32 +162,6 @@ const BULK_ROW_ACTION_TITLE = "В массовом режиме отправля
  * режима. Врать «отправит футер» здесь нельзя.
  */
 const BULK_FINAL_ACTION_TITLE = "Финальный выпуск в массовую передачу не берётся: выйдите из режима";
-
-function conflictHintFromTransferError(message: string): string | null {
-  const n = message.toLowerCase();
-  if (n.includes("превышает доступный к передаче")) {
-    return "Количество больше доступного к передаче.";
-  }
-  if (n.includes("следующим этапом маршрута")) {
-    return "Передавать можно только на следующий этап маршрута.";
-  }
-  if (n.includes("превышает доступный к передаче объём исходной задачи")) {
-    return "Скорректированное количество превышает доступный к передаче объём исходной задачи.";
-  }
-  if (n.includes("нельзя уменьшить передачу")) {
-    return "Нельзя уменьшить передачу: целевая задача уже использовала материалы.";
-  }
-  if (n.includes("уже есть активная передача")) {
-    return "По этому заданию передача уже создана — измените количество в журнале.";
-  }
-  if (n.includes("exceeds releasable quantity")) {
-    return "Количество больше доступного к выпуску.";
-  }
-  if (n.includes("only for final route stage")) {
-    return "Финальный выпуск доступен только на финальном этапе маршрута.";
-  }
-  return null;
-}
 
 type StatusBadgeVariant = "default" | "destructive" | "outline" | "secondary";
 
@@ -359,7 +338,7 @@ function ReadyTransferRow({
     },
     onError: (err: unknown) => {
       const message = getErrorMessage(err);
-      const hint = conflictHintFromTransferError(message);
+      const hint = getErrorHint(message);
       toast({
         variant: "destructive",
         title: "Ошибка передачи",
@@ -395,7 +374,7 @@ function ReadyTransferRow({
     },
     onError: (err: unknown) => {
       const message = getErrorMessage(err);
-      const hint = conflictHintFromTransferError(message);
+      const hint = getErrorHint(message);
       toast({
         variant: "destructive",
         title: "Ошибка выпуска",
@@ -1082,31 +1061,16 @@ export function TransfersPage() {
 
   const [readyPrintOpen, setReadyPrintOpen] = useState(false);
   /**
-   * Количества строк массового режима, ключ — `readyRowIdentity`. Живут на
-   * странице, а не в строке: строки виртуализированы, и набранное число
-   * пропадало бы при прокрутке. Строка без записи идёт своим `transferable`.
+   * Черновик массового режима: набранное в строках и в шапках групп, раскладка
+   * группы по строкам и снятие нулевых строк — в модуле `transferDraft` (#325).
+   * Ключ строки — `readyRowIdentity`: строки виртуализированы, и набранное не
+   * должно пропадать при прокрутке.
    */
-  const [bulkQuantities, setBulkQuantities] = useState<Record<string, string>>({});
-  /**
-   * Набранное в шапке группы (ключ — ключ группы). Хранится отдельно от строк,
-   * потому что поле шапки показывает НАБРАННОЕ, а строки — уже разложенное по
-   * ним; без этого ввод обрывался бы на первой же цифре, когда раскладка
-   * упирается в доступное.
-   */
-  const [bulkGroupQuantities, setBulkGroupQuantities] = useState<Record<string, string>>({});
+  const [transferDraft, setTransferDraft] = useState<TransferDraft>(EMPTY_TRANSFER_DRAFT);
 
   const setRowBulkQuantity = useCallback(
-    (groupKey: string | null, identity: string, value: string) => {
-      setBulkQuantities((prev) => ({ ...prev, [identity]: value }));
-      // Правка строки снимает набранное в шапке: поле группы выводится из строк,
-      // и оставленный текст показывал бы не то, что уедет.
-      if (!groupKey) return;
-      setBulkGroupQuantities((prev) => {
-        if (!(groupKey in prev)) return prev;
-        const next = { ...prev };
-        delete next[groupKey];
-        return next;
-      });
+    (groupKey: string | null, row: ReadyToTransferTask, value: string) => {
+      setTransferDraft((prev) => withRowInput(prev, groupKey, row, value));
     },
     [],
   );
@@ -1114,20 +1078,7 @@ export function TransfersPage() {
   /** Ввод в шапке группы: раскладывается по её строкам тем же правилом, что отправка. */
   const setGroupBulkQuantity = useCallback(
     (group: ReadyTransferGroup, value: string) => {
-      setBulkGroupQuantities((prev) => ({ ...prev, [group.key]: value }));
-      setBulkQuantities((prev) => {
-        const next = { ...prev };
-        if (value.trim() === "") {
-          // Очистка снимает раскладку: строки возвращаются к своему доступному.
-          for (const row of group.rows) delete next[readyRowIdentity(row)];
-          return next;
-        }
-        const { quantities } = planTransferQuantities(group.rows, parseFloat(value) || 0);
-        group.rows.forEach((row, index) => {
-          next[readyRowIdentity(row)] = quantities[index];
-        });
-        return next;
-      });
+      setTransferDraft((prev) => withGroupInput(prev, group, value));
       // Набранное в шапке — это и выбор группы: иначе число набрано, а строки
       // в пачку не попали.
       for (const row of group.rows) {
@@ -1150,18 +1101,8 @@ export function TransfersPage() {
 
   /** Значение поля группы: набранное в шапке, иначе — сумма количеств её строк. */
   const groupBulkQuantity = useCallback(
-    (group: ReadyTransferGroup): string => {
-      const typed = bulkGroupQuantities[group.key];
-      if (typed !== undefined) return typed;
-      return String(
-        group.rows.reduce(
-          (sum, row) =>
-            sum + (parseFloat(bulkQuantities[readyRowIdentity(row)] ?? row.transferable_quantity) || 0),
-          0,
-        ),
-      );
-    },
-    [bulkGroupQuantities, bulkQuantities],
+    (group: ReadyTransferGroup): string => draftGroupQuantity(transferDraft, group),
+    [transferDraft],
   );
 
   /** Строки, которые оператор может отправить: финальный выпуск — не передача. */
@@ -1276,8 +1217,7 @@ export function TransfersPage() {
     bulkSelection.clear();
     // Набранные количества уходят вместе с режимом: в следующий заход строка
     // снова показывает своё доступное.
-    setBulkQuantities({});
-    setBulkGroupQuantities({});
+    setTransferDraft(EMPTY_TRANSFER_DRAFT);
     setBulkMode(false);
   }, [bulkSelection]);
 
@@ -1392,11 +1332,9 @@ export function TransfersPage() {
 
   const handleBulkTransferSubmit = useCallback(async (data: BulkTransferSubmitData) => {
     const selectedTasks = readyItems.filter(t => !isFinalReadyRow(t) && bulkSelection.isSelected(t.task_id));
-    // Нулевые строки (хвост раскладки группы) не отправляются вовсе: правило
-    // то же, что в футере, — `enteredTransferQuantity`.
-    const rowsToSend = selectedTasks.filter(
-      (task) => (parseFloat(enteredTransferQuantity(task, bulkQuantities)) || 0) > 0,
-    );
+    // Нулевые строки (хвост раскладки группы) не отправляются вовсе — правило
+    // то же, что в футере (см. `draftRowsToSend`).
+    const rowsToSend = draftRowsToSend(transferDraft, selectedTasks);
     if (rowsToSend.length === 0) return;
 
     setBulkSubmitting(true);
@@ -1407,7 +1345,7 @@ export function TransfersPage() {
       idempotencyPrefix: "transfer-send-bulk",
       // Количество каждой строки — то, что набрано в её поле, а не своё
       // `transferable`: в массовом режиме строки редактируются.
-      quantities: bulkQuantities,
+      quantities: transferDraft.rowQuantities,
       comment: data.comment.trim() || undefined,
       executorUserId: data.executorUserId,
       performedAt: data.performedAt,
@@ -1435,10 +1373,9 @@ export function TransfersPage() {
     }
 
     bulkSelection.clear();
-    setBulkQuantities({});
-    setBulkGroupQuantities({});
+    setTransferDraft(EMPTY_TRANSFER_DRAFT);
     setBulkMode(false);
-  }, [readyItems, bulkSelection, bulkQuantities, invalidateTransferCaches]);
+  }, [readyItems, bulkSelection, transferDraft, invalidateTransferCaches]);
 
   if (spgs !== undefined && spgs.length === 0) {
     return (
@@ -1625,16 +1562,12 @@ export function TransfersPage() {
                         bulkMode={bulkMode}
                         isSelected={bulkSelection.isSelected(row.task.task_id)}
                         controlledQuantity={
-                          bulkMode ? bulkQuantities[readyRowIdentity(row.task)] : undefined
+                          bulkMode ? draftRowInput(transferDraft, row.task) : undefined
                         }
                         onQuantityChange={
                           bulkMode
                             ? (value: string) =>
-                                setRowBulkQuantity(
-                                  row.groupKey,
-                                  readyRowIdentity(row.task),
-                                  value,
-                                )
+                                setRowBulkQuantity(row.groupKey, row.task, value)
                             : undefined
                         }
                         onSelect={() => {
@@ -1869,7 +1802,7 @@ export function TransfersPage() {
       {bulkMode && (
         <BulkTransferFooter
           selectedTasks={selectedReadyTasks}
-          quantities={bulkQuantities}
+          quantities={transferDraft.rowQuantities}
           onSubmit={handleBulkTransferSubmit}
           onCancel={exitBulkMode}
           pending={bulkSubmitting}

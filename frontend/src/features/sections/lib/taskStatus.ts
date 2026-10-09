@@ -1,5 +1,6 @@
 import type { SectionBoardTask } from "@/shared/api/shopfloor";
 import type { ActionReasonCode } from "@/shared/lib/actionReasons";
+import type { RowTone } from "@/shared/lib/rowTones";
 import { taskStatusLabels } from "@/shared/lib/generated-labels";
 
 export { taskStatusLabels };
@@ -12,7 +13,19 @@ const ACTIVE_STATUSES = new Set([
   "partially",
 ]);
 
+/** Статусы, которые закрывают строку сами по себе, без оглядки на количества. */
+const CLOSED_STATUSES = ["completed", "cancelled", "done", "skipped"];
+const WAITING_STATUSES = ["waiting_previous", "pending", "blocked"];
+const RUNNING_STATUSES = ["in_progress", "in_work"];
+
 export type TaskViewCategory = "active" | "waiting" | "completed";
+
+/**
+ * Тон строки — часть общего словаря `shared/lib/rowTones`, его же берут
+ * «Передачи». `scrap` (брак) из тонов исключён: на доске брак — поле и пилюля,
+ * а не тон строки.
+ */
+export type TaskTone = Exclude<RowTone, "scrap">;
 
 /** Задание, по которому весь выданный материал обработан. */
 export function isTaskExecutionComplete(task: SectionBoardTask): boolean {
@@ -41,18 +54,8 @@ export function isTaskFullyTransferred(task: SectionBoardTask): boolean {
   return remaining <= 0;
 }
 
-/** Категория для фильтров «Активные / Ожидают / Завершенные» на доске участка. */
-export function getTaskViewCategory(task: SectionBoardTask): TaskViewCategory {
-  // skipped — закрытый этап (#207): материал подан в готовом виде, этап
-  // не выполнялся, но он и не отменён.
-  if (["completed", "cancelled", "done", "skipped"].includes(task.status)) return "completed";
-  if (isTaskExecutionComplete(task) || isTaskFullyTransferred(task)) return "completed";
-  if (["waiting_previous", "pending", "blocked"].includes(task.status)) return "waiting";
-  if (ACTIVE_STATUSES.has(task.status)) return "active";
-  return "active";
-}
-
-export const taskStatusColor: Record<string, string> = {
+/** Цвета пилюль по статусу. Владелец один — `getTaskRowState`. */
+const taskStatusColor: Record<string, string> = {
   waiting_previous: "bg-gray-100 text-gray-600",
   ready: "bg-blue-100 text-blue-700",
   in_progress: "bg-amber-100 text-amber-700",
@@ -67,6 +70,10 @@ export const taskStatusColor: Record<string, string> = {
   blocked: "bg-red-100 text-red-600",
 };
 
+const BADGE_COMPLETE = "bg-emerald-100 text-emerald-700";
+const BADGE_TRANSFERRED = "bg-blue-100 text-blue-700";
+const BADGE_NOT_TRANSFERRED = "bg-slate-100 text-slate-600";
+
 // Для статуса "ready" отображаем фактическое состояние передачи сырья
 // с предыдущего участка, а не обобщённое "К выдаче".
 // Если с предыдущего этапа уже передано > 0 — "Передано",
@@ -78,22 +85,76 @@ export function getReadyStatusLabel(task: SectionBoardTask): "Передано" 
   return transferred > 0 ? "Передано" : "Не передано";
 }
 
-export function getStatusLabel(task: SectionBoardTask): string {
-  if (isTaskExecutionComplete(task) || isTaskFullyTransferred(task)) return "Завершен";
-  if (task.status === "ready") return getReadyStatusLabel(task);
-  return taskStatusLabels[task.status] || task.status;
-}
+/**
+ * Состояние строки задания — одно решение на строку (#324).
+ *
+ * Категория (фильтры), тон (заливка строки и карточки), подпись, класс пилюли и
+ * класс точки статуса считаются здесь вместе, потому что считают одно и то же
+ * состояние. Раньше это были пять соседних функций с независимыми ветвями по
+ * одним и тем же статусам и тремя маршрутами к «ready»: подпись шла через
+ * `getReadyStatusLabel`, пилюля и точка — каждая своим бранчем. Значения
+ * сходились, но шаг в сторону у любой из копий менял поведение одного места
+ * (так было в ADR-0031: панель массовых операций не считала полностью
+ * переданное задание завершённым).
+ *
+ * `isComplete` и `isRawTransferred` отдаются наружу: это те два вопроса, из
+ * которых выведено всё остальное, и раскладке иногда нужен ответ без разбора
+ * класса.
+ *
+ * Точка статуса — известное исключение: она зелёная по `isFullyTransferred`, но
+ * не по `isTaskExecutionComplete`, то есть строка со внесённым фактом и статусом
+ * «в работе» несёт подпись «Завершен» и жёлтую точку. Так было до этого модуля,
+ * вид доски здесь не меняется — расхождение оставлено явным, а не растворено в
+ * ветвях.
+ */
+export type TaskRowState = {
+  category: TaskViewCategory;
+  /** Факт обработан или план передан целиком — «готово» строки. */
+  isComplete: boolean;
+  /** Сырьё с предыдущего этапа передано (вопрос строки `ready`). */
+  isRawTransferred: boolean;
+  tone: TaskTone;
+  label: string;
+  badgeClass: string;
+  dotClass: string;
+};
 
-export function getStatusColor(task: SectionBoardTask): string {
-  if (isTaskExecutionComplete(task) || isTaskFullyTransferred(task) || ["completed", "done"].includes(task.status)) {
-    return "bg-emerald-100 text-emerald-700";
-  }
-  if (task.status === "ready") {
-    return getReadyStatusLabel(task) === "Передано"
-      ? "bg-blue-100 text-blue-700"
-      : "bg-slate-100 text-slate-600";
-  }
-  return taskStatusColor[task.status] || "";
+export function getTaskRowState(task: SectionBoardTask): TaskRowState {
+  const status = task.status;
+  const isFullyTransferred = isTaskFullyTransferred(task);
+  const isComplete = isTaskExecutionComplete(task) || isFullyTransferred;
+  const isRawTransferred = status === "ready" && getReadyStatusLabel(task) === "Передано";
+
+  let category: TaskViewCategory = "active";
+  if (CLOSED_STATUSES.includes(status) || isComplete) category = "completed";
+  else if (WAITING_STATUSES.includes(status)) category = "waiting";
+
+  let tone: TaskTone = "active";
+  if (category === "completed") tone = "completed";
+  else if (category === "waiting") tone = "waiting";
+  else if (RUNNING_STATUSES.includes(status)) tone = "activeRunning";
+
+  let label: string;
+  if (isComplete) label = "Завершен";
+  else if (status === "ready") label = isRawTransferred ? "Передано" : "Не передано";
+  else label = taskStatusLabels[status] || status;
+
+  let badgeClass: string;
+  if (isComplete || status === "completed" || status === "done") badgeClass = BADGE_COMPLETE;
+  else if (status === "ready") {
+    badgeClass = isRawTransferred ? BADGE_TRANSFERRED : BADGE_NOT_TRANSFERRED;
+  } else badgeClass = taskStatusColor[status] || "";
+
+  let dotClass = "bg-slate-300";
+  if (isFullyTransferred) dotClass = "bg-emerald-500";
+  else if (RUNNING_STATUSES.includes(status)) dotClass = "bg-amber-500 animate-pulse";
+  else if (["ready", "partially_completed", "partially"].includes(status)) {
+    dotClass = status === "ready" && !isRawTransferred ? "bg-slate-400" : "bg-blue-500";
+  } else if (["completed", "done"].includes(status)) dotClass = "bg-emerald-500";
+  else if (status === "blocked") dotClass = "bg-red-500";
+  else if (["waiting_previous", "pending"].includes(status)) dotClass = "bg-yellow-400";
+
+  return { category, isComplete, isRawTransferred, tone, label, badgeClass, dotClass };
 }
 
 /**

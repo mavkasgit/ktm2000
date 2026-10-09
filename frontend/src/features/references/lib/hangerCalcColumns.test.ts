@@ -19,10 +19,13 @@ import {
   buildHangerCalcSortParam,
   compareHangerCalcTotals,
   hangerCalcColumns,
-  hangerCalcCellValue,
   hangerCalcTotalText,
 } from "./hangerCalcColumns";
 import type { HangerCalcRow, HangerCalcSortField, HangerLengthLine } from "./hangerCalcRows";
+
+/** Значение колонки — из описания, как у попапера и клиентского предиката (#322). */
+const columnValue = (row: HangerCalcRow, field: HangerCalcSortField) =>
+  hangerCalcColumns.find((column) => column.filterField === field)!.cellValue!(row);
 
 /** Фильтруемые колонки описания: ровно они попадают в попапер фильтра. */
 const filterFields = hangerCalcColumns
@@ -152,12 +155,12 @@ describe("«Итог»: ячейка и попапер печатают одно
     // «2.5», тогда как в строке было «2,5».
     const fractional = row(2.5);
     expect(hangerCalcTotalText(fractional)).toBe("2,5");
-    expect(hangerCalcCellValue(fractional, "total")).toBe(hangerCalcTotalText(fractional));
+    expect(columnValue(fractional, "total")).toBe(hangerCalcTotalText(fractional));
   });
 
   it("попапер не отдаёт строку, которой в таблице нет", () => {
     const fractional = row(2.5);
-    expect(String(fractional.total)).not.toBe(hangerCalcCellValue(fractional, "total"));
+    expect(String(fractional.total)).not.toBe(columnValue(fractional, "total"));
   });
 
   it("ячейка и попапер берут итог строки — по основной длине, а не по любой подстроке", () => {
@@ -172,20 +175,20 @@ describe("«Итог»: ячейка и попапер печатают одно
       ],
     });
     expect(hangerCalcTotalText(multi)).toBe("40");
-    expect(hangerCalcCellValue(multi, "total")).toBe("40");
+    expect(columnValue(multi, "total")).toBe("40");
   });
 
   it("итог без значения печатается «—» в обоих местах", () => {
     const empty = row(null);
     expect(hangerCalcTotalText(empty)).toBe("—");
-    expect(hangerCalcCellValue(empty, "total")).toBe("—");
+    expect(columnValue(empty, "total")).toBe("—");
   });
 
   it("значения попапера сортируются так, как они напечатаны", () => {
     // Старый `Number(a) - Number(b)` на «2,5» давал NaN, и дробные значения
     // вставали в произвольном месте списка.
     const values = [row(10), row(4), row(2.5), row(7), row(null)].map((item) =>
-      hangerCalcCellValue(item, "total"),
+      columnValue(item, "total"),
     );
     expect([...values].sort(compareHangerCalcTotals)).toEqual(["2,5", "4", "7", "10", "—"]);
   });

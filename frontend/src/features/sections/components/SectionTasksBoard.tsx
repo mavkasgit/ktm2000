@@ -29,7 +29,10 @@ import {
 import type { ColumnSortDef } from "@/shared/hooks/useTableQueryEngine";
 import type { PageLimitOption } from "@/shared/hooks/usePaginatedTableQuery";
 import { useFilterableTable } from "@/shared/hooks/useFilterableTable";
-import { buildColumnFilterPredicate } from "@/shared/lib/columnFilterSearch";
+import {
+  buildColumnFilterPredicate,
+  buildColumnFilterValues,
+} from "@/shared/lib/columnSpecs";
 import { useDebouncedValue } from "@/shared/lib/useDebouncedValue";
 import { getAriaSort } from "@/shared/lib/multiSort";
 import { isFirstRowsLoad } from "@/shared/lib/tableQueryPlaceholder";
@@ -42,12 +45,8 @@ import { groupTasksByProfile, sortGroupsByQuantityAndSize, taskGroupingDimension
 import { clusterByArticle } from "@/shared/lib/clusterByArticle";
 import type { GroupingProfile } from "../lib/groupingProfiles";
 import {
-  getReadyStatusLabel,
-  getStatusLabel,
-  getStatusColor,
   getCompletionBlockReason,
-  getTaskViewCategory,
-  isTaskFullyTransferred,
+  getTaskRowState,
 } from "../lib/taskStatus";
 import {
   applyGroupField,
@@ -137,7 +136,7 @@ function pickClientFilterState<Field extends string>(
 }
 
 function isTaskVisible(task: SectionBoardTask, mode: TaskBoardViewMode): boolean {
-  const category = getTaskViewCategory(task);
+  const category = getTaskRowState(task).category;
   if (mode.active && category === "active") return true;
   if (mode.waiting && category === "waiting") return true;
   if (mode.completed && category === "completed") return true;
@@ -145,26 +144,11 @@ function isTaskVisible(task: SectionBoardTask, mode: TaskBoardViewMode): boolean
 }
 
 function getStatusPriority(task: SectionBoardTask): number {
-  const category = getTaskViewCategory(task);
+  const category = getTaskRowState(task).category;
   if (category === "active") return 0;
   if (category === "waiting") return 1;
   if (category === "completed") return 2;
   return 3;
-}
-
-function getTaskCellValue(task: SectionBoardTask, field: TaskSortField): string {
-  switch (field) {
-    case "sequence": return String(task.sequence);
-    case "productSku": return task.product_sku;
-    case "dimensions": return formatDimensionsLabel(taskGroupingDimensions(task));
-    case "status": return getStatusLabel(task);
-    case "plannedQty": return fmtQty(task.planned_quantity);
-    case "issuedQty": return fmtQty(task.cache.issued_quantity);
-    case "completedQty": return fmtQty(task.cache.completed_quantity);
-    case "transferredQty": return fmtQty(task.cache.transferred_quantity);
-    case "rejectedQty": return fmtQty(task.cache.rejected_quantity);
-    case "remainingQty": return fmtQty(task.cache.remaining_quantity);
-  }
 }
 
 // ---------------------------------------------------------------------------
@@ -307,6 +291,7 @@ function renderTaskRow(
       : TABLE_ROW_STYLES.groupChildSeparator
     : "";
   const cellClass = edgeClass ? cn(ROW_CELL_CLASS, edgeClass) : ROW_CELL_CLASS;
+  const rowState = getTaskRowState(task);
 
   const handleAction = (type: TaskActionDialogType) => {
     onAction(type, task);
@@ -376,8 +361,8 @@ function renderTaskRow(
         </td>
       ))}
       <td className={cellClass}>
-        <Badge variant="secondary" className={cn(getStatusColor(task), ROW_BADGE_CLASS)}>
-          {getStatusLabel(task)}
+        <Badge variant="secondary" className={cn(rowState.badgeClass, ROW_BADGE_CLASS)}>
+          {rowState.label}
         </Badge>
       </td>
       <td className={cellClass}>
@@ -432,6 +417,7 @@ function renderMobileCard(
   const buttonBase = `flex-1 ${TABLE_ROW_COMPACT.actionButton}`;
   const fields = buildTaskViewFields(task, hasPackaging);
   const blockReason = getCompletionBlockReason(task);
+  const rowState = getTaskRowState(task);
   const buttonDefault = "hover:bg-accent/50";
 
   const handleAction = (type: TaskActionDialogType) => {
@@ -469,8 +455,8 @@ function renderMobileCard(
           <TaskStatusDot task={task} />
           <span className="text-sm font-medium">{task.product_sku}</span>
         </div>
-        <Badge variant="secondary" className={cn(getStatusColor(task), TABLE_ROW_COMPACT.badge)}>
-          {getStatusLabel(task)}
+        <Badge variant="secondary" className={cn(rowState.badgeClass, TABLE_ROW_COMPACT.badge)}>
+          {rowState.label}
         </Badge>
       </div>
 
@@ -930,10 +916,11 @@ export function SectionTasksBoard({
 
   const clientFilterPredicate = useMemo(
     () =>
-      buildColumnFilterPredicate({
-        ...clientFilterState,
-        getCellValue: getTaskCellValue,
-      }),
+      buildColumnFilterPredicate(
+        clientFilterState.columnFilters,
+        clientFilterState.columnSearchQueries,
+        boardColumns,
+      ),
     [clientFilterState],
   );
 
@@ -967,20 +954,12 @@ export function SectionTasksBoard({
     [sortDefs],
   );
 
-  const uniqueValues = useMemo(() => ({
-    sequence: [...new Set(visibleTasks.map((t) => String(t.sequence)))],
-    productSku: [...new Set(visibleTasks.map((t) => t.product_sku))],
-    dimensions: [...new Set(visibleTasks.map((t) => JSON.stringify(taskGroupingDimensions(t) ?? null)))].sort(
-      (a, b) => formatDimensionsFilterValue(a).localeCompare(formatDimensionsFilterValue(b), "ru"),
-    ),
-    status: [...new Set(visibleTasks.map((t) => getStatusLabel(t)))],
-    plannedQty: [...new Set(visibleTasks.map((t) => fmtQty(t.planned_quantity)))],
-    issuedQty: [...new Set(visibleTasks.map((t) => fmtQty(t.cache.issued_quantity)))],
-    completedQty: [...new Set(visibleTasks.map((t) => fmtQty(t.cache.completed_quantity)))],
-    transferredQty: [...new Set(visibleTasks.map((t) => fmtQty(t.cache.transferred_quantity)))],
-    rejectedQty: [...new Set(visibleTasks.map((t) => fmtQty(t.cache.rejected_quantity)))],
-    remainingQty: [...new Set(visibleTasks.map((t) => fmtQty(t.cache.remaining_quantity)))],
-  }), [visibleTasks]);
+  // Список значений попапера — из описания колонок: читатель значения у
+  // попапера и у клиентского предиката один и тот же (`cellValue`).
+  const uniqueValues = useMemo(
+    () => buildColumnFilterValues(visibleTasks, boardColumns),
+    [visibleTasks],
+  );
 
   // Порядок строк доски. Колонки серверной сортировки (sequence/productSku/
   // status/dimensions) уже пришли в нужном порядке с сервера, остальные
@@ -1068,7 +1047,7 @@ export function SectionTasksBoard({
 
   // Задания, доступные для группового выбора: ожидающие в выделение не попадают.
   const selectableTaskIds = useMemo(
-    () => visibleTasks.filter((t) => getTaskViewCategory(t) !== "waiting").map((t) => t.id),
+    () => visibleTasks.filter((t) => getTaskRowState(t).category !== "waiting").map((t) => t.id),
     [visibleTasks],
   );
 
@@ -1216,9 +1195,9 @@ export function SectionTasksBoard({
   const statusLabel = (label: string) => label;
 
   const modeCounts = useMemo(() => ({
-    active: tasks.filter((t) => getTaskViewCategory(t) === "active").length,
-    waiting: tasks.filter((t) => getTaskViewCategory(t) === "waiting").length,
-    completed: tasks.filter((t) => getTaskViewCategory(t) === "completed").length,
+    active: tasks.filter((t) => getTaskRowState(t).category === "active").length,
+    waiting: tasks.filter((t) => getTaskRowState(t).category === "waiting").length,
+    completed: tasks.filter((t) => getTaskRowState(t).category === "completed").length,
   }), [tasks]);
 
   const modeFields = useMemo((): FiltersPanelField[] => {

@@ -28,8 +28,8 @@ import {
   buildRawMaterialColumnApiParams,
   rawMaterialColumns,
   type RawMaterialColumnField,
-  type RawMaterialColumnId,
 } from "../lib/rawMaterialColumns";
+import { buildColumnFilterValues } from "@/shared/lib/columnSpecs";
 import { skipShotBlastSectionLabel } from "../lib/skipShotBlastLabel";
 import { HangerCalcTable } from "../components/HangerCalcTable";
 import { ProductWipStatsDialog } from "@/features/execution/components/ProductWipStatsDialog";
@@ -441,30 +441,6 @@ export function RawMaterialsPage() {
   };
 
 
-  // Список значений для попаперов: ключ — идентификатор колонки, он же поле
-  // фильтра, поэтому шапка берёт значения по `column.id` и не перечисляет
-  // колонки руками.
-  const uniqueValues = useMemo<Record<RawMaterialColumnId, string[]>>(() => ({
-    sku: [...new Set(items.map((p) => p.sku))].sort(),
-    // Попапер колонки «Кол-во на подвесе» — это значения **основной** длины:
-    // серверный фильтр `qty_from/qty_to` и сортировка считают по ней, и ячейка
-    // печатает её же (спека #59 п. 25).
-    quantity_per_hanger: [
-      ...new Set(items.map((p) => primaryHangerValue(p)?.value ?? null)),
-    ]
-      .sort((a, b) => (a === null ? 1 : b === null ? -1 : a - b))
-      .map((value) => (value === null ? "—" : fmtQtyPrecise(value))),
-    length_mm: [...new Set(items.flatMap((p) => productLengths(p).map(String)))]
-      .sort((a, b) => Number(a) - Number(b)),
-    is_paired_profile: ["Да", "Нет"],
-    skip_shot_blast: ["Да", "Нет"],
-    is_laminated: ["Да", "Нет"],
-  }), [items]);
-
-  const activeFiltersCount = [lengthFrom, lengthTo, qtyFrom, qtyTo].filter(Boolean).length +
-    Object.values(columnFilters).reduce((acc, set) => acc + (set?.size ?? 0), 0) +
-    Object.values(columnSearchQueries).filter((q) => q?.trim()).length;
-
   /**
    * Описание колонок с подписью «Пропуск участка» из правил выбора маршрута:
    * она лежит в БД, поэтому подставляется здесь, а не литералом в описании.
@@ -477,6 +453,18 @@ export function RawMaterialsPage() {
       ),
     [skipSectionLabel],
   );
+
+  // Список значений попаперов — из описания колонок: домен-флаги, объединение
+  // размеров по строкам и читатель значения берутся из `rawMaterialColumns`
+  // (#322). Экран карту `uniqueValues` больше не держит.
+  const filterValues = useMemo(
+    () => buildColumnFilterValues(items, headerColumns),
+    [items, headerColumns],
+  );
+
+  const activeFiltersCount = [lengthFrom, lengthTo, qtyFrom, qtyTo].filter(Boolean).length +
+    Object.values(columnFilters).reduce((acc, set) => acc + (set?.size ?? 0), 0) +
+    Object.values(columnSearchQueries).filter((q) => q?.trim()).length;
 
 
   return (
@@ -676,7 +664,7 @@ export function RawMaterialsPage() {
                     <DataTableColumnHeader
                       column={column}
                       bindColumn={bindColumn}
-                      values={uniqueValues[column.id]}
+                      values={filterValues[column.id]}
                       currentSorts={sortConfigs}
                       onSortChange={handleSort}
                     />

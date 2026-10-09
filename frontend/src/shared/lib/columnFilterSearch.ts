@@ -100,35 +100,3 @@ export function pickExactMatchColumnValue<T extends string>(
   if (!selected || selected.size !== 1) return undefined;
   return [...selected][0];
 }
-
-export function buildColumnFilterPredicate<T, Field extends string>(opts: {
-  columnFilters: Partial<Record<Field, Set<string>>>;
-  columnSearchQueries: Partial<Record<Field, string>>;
-  getCellValue: (row: T, field: Field) => string;
-}): ((row: T) => boolean) | null {
-  const { columnFilters, columnSearchQueries, getCellValue } = opts;
-  if (!hasActiveColumnFilters(columnFilters, columnSearchQueries)) return null;
-
-  return (row: T) => {
-    const fields = new Set<Field>([
-      ...(Object.keys(columnFilters) as Field[]),
-      ...(Object.keys(columnSearchQueries) as Field[]),
-    ]);
-
-    for (const field of fields) {
-      const search = columnSearchQueries[field]?.trim();
-      const selected = columnFilters[field];
-      const cellValue = getCellValue(row, field);
-
-      if (search) {
-        if (!matchesPartialSearch(cellValue, search)) return false;
-        continue;
-      }
-
-      if (selected && selected.size > 0 && !selected.has(cellValue)) {
-        return false;
-      }
-    }
-    return true;
-  };
-}

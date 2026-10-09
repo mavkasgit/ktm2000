@@ -10,13 +10,13 @@ import { Loader2, Layers, Package, ClipboardList, AlertCircle } from "lucide-rea
 import type { SortConfig } from "@/shared/hooks/useTableQueryEngine";
 import { useFilterableTable } from "@/shared/hooks/useFilterableTable";
 
-import { wipStatsColumns, wipStatsCellValue, wipStatsQtyCompare, wipStatsQtyText, wipStatsSortValue, type WipStatsField } from "../lib/wipStatsColumns";
+import { wipStatsColumns, wipStatsQtyText, wipStatsSortValue, type WipStatsField } from "../lib/wipStatsColumns";
 import {
-  wipStatsTaskCellValue,
   wipStatsTaskColumns,
   wipStatsTaskSortValue,
   type WipStatsTaskField,
 } from "../lib/wipStatsTaskColumns";
+import { buildColumnFilterValues } from "@/shared/lib/columnSpecs";
 
 /**
  * Порядок строк по мультисортировке — тот же цикл, что у остальных
@@ -104,16 +104,13 @@ function RemaindersTable({ rows }: { rows: ProductWipRemainder[] }) {
     resetAll,
   } = useFilterableTable<WipStatsField>({ defaultSort: DEFAULT_WIP_SORT });
 
-  const uniqueValues = useMemo<Record<WipStatsField, string[]>>(
-    () => ({
-      name: Array.from(new Set(rows.map((row) => row.spg_name))).sort(),
-      qty: Array.from(new Set(rows.map((row) => wipStatsQtyText(row)))).sort(wipStatsQtyCompare),
-    }),
+  const uniqueValues = useMemo(
+    () => buildColumnFilterValues(rows, wipStatsColumns),
     [rows],
   );
 
   const filterPredicate = useMemo(
-    () => buildFilterPredicate(wipStatsCellValue),
+    () => buildFilterPredicate(wipStatsColumns),
     [buildFilterPredicate],
   );
 
@@ -286,13 +283,13 @@ function InWorkTable({ tasks }: { tasks: ProductWipTask[] }) {
     resetAll,
   } = useFilterableTable<WipStatsTaskField>();
 
-  const operationValues = useMemo(
-    () => Array.from(new Set(tasks.map((task) => task.operation_name))).sort(),
+  const uniqueValues = useMemo(
+    () => buildColumnFilterValues(tasks, wipStatsTaskColumns),
     [tasks],
   );
 
   const filterPredicate = useMemo(
-    () => buildFilterPredicate(wipStatsTaskCellValue),
+    () => buildFilterPredicate(wipStatsTaskColumns),
     [buildFilterPredicate],
   );
 
@@ -315,7 +312,7 @@ function InWorkTable({ tasks }: { tasks: ProductWipTask[] }) {
                 <DataTableColumnHeader
                   column={column}
                   bindColumn={bindColumn}
-                  values={column.filterField === "operation" ? operationValues : undefined}
+                  values={column.filterField ? uniqueValues[column.filterField] : undefined}
                   currentSorts={sortConfigs}
                   onSortChange={handleSort}
                 />

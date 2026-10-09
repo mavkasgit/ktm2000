@@ -1,43 +1,20 @@
 /**
  * lib/taskView.ts — представление задания на доске участка.
  *
- * Одно решение о состоянии задания, одна раскладка на раскладки: строка
- * таблицы и карточка узкого экрана берут здесь и тон, и цвет точки статуса, и
- * подпись группы. Раньше эти решения жили в трёх местах и разошлись: панель
- * массовых операций (удалена в #283, ADR-0064) не считала полностью переданное
- * задание зелёным (#191).
+ * Раньше этот модуль держал и решение о состоянии задания, и раскладку: строка,
+ * карточка и подпись группы брали отсюда тон и цвет точки. С #324 решение
+ * переехало в `getTaskRowState` (`lib/taskStatus.ts`) — одно место на категорию,
+ * тон, подпись и оба класса; здесь остаётся раскладка (тон группы, операции,
+ * упаковка). История расхождения — панель массовых операций (удалена в #283,
+ * ADR-0064) не считала полностью переданное задание зелёным (#191).
  *
  * Модуль чистый: без JSX и без стилей. Классы раскладок — в
  * `components/TaskView.tsx`, там же собираются узлы полей.
  */
 
 import type { SectionBoardTask } from "@/shared/api/shopfloor";
-import {
-  getReadyStatusLabel,
-  isTaskFullyTransferred,
-  getTaskViewCategory,
-} from "./taskStatus";
+import { getTaskRowState, type TaskTone } from "./taskStatus";
 import { QTY_EMPTY } from "@/shared/lib/quantityFormat";
-import type { RowTone } from "@/shared/lib/rowTones";
-
-/**
- * Тон задания: «в ожидании», «в работе», «взято в работу», «завершено»,
- * «обычное». Определяется один раз; строка и карточка только раскладывают его
- * в свои классы. Сам тон — часть общего словаря строк (`shared/lib/rowTones`),
- * чтобы доска и «Передачи» красились одним набором; `scrap` (брак) из него
- * исключён: на доске брак — не тон строки, а поле «Брак» и пилюля.
- */
-export type TaskTone = Exclude<RowTone, "scrap">;
-
-export function getTaskTone(task: SectionBoardTask): TaskTone {
-  const category = getTaskViewCategory(task);
-  if (category === "waiting") return "waiting";
-  if (category === "completed") return "completed";
-  if (category === "active") {
-    return ["in_progress", "in_work"].includes(task.status) ? "activeRunning" : "active";
-  }
-  return "plain";
-}
 
 /**
  * Тон группы — один на весь блок: раскрытая группа показывает задания одного
@@ -53,30 +30,10 @@ const GROUP_TONE_PRIORITY: TaskTone[] = ["activeRunning", "active", "waiting", "
 export function getGroupTone(tasks: SectionBoardTask[]): TaskTone {
   let best = GROUP_TONE_PRIORITY.length - 1;
   for (const task of tasks) {
-    const rank = GROUP_TONE_PRIORITY.indexOf(getTaskTone(task));
+    const rank = GROUP_TONE_PRIORITY.indexOf(getTaskRowState(task).tone);
     if (rank !== -1 && rank < best) best = rank;
   }
   return GROUP_TONE_PRIORITY[best];
-}
-
-/**
- * Цвет точки статуса. Полностью переданное задание считается завершённым
- * независимо от флага статуса — иначе доска и карточка показывали одно задание
- * разным цветом.
- */
-export function getStatusDotClass(task: SectionBoardTask): string {
-  const status = task.status;
-  if (isTaskFullyTransferred(task)) return "bg-emerald-500";
-  if (["in_progress", "in_work"].includes(status)) return "bg-amber-500 animate-pulse";
-  if (["ready", "partially_completed", "partially"].includes(status)) {
-    return status === "ready" && getReadyStatusLabel(task) === "Не передано"
-      ? "bg-slate-400"
-      : "bg-blue-500";
-  }
-  if (["completed", "done"].includes(status)) return "bg-emerald-500";
-  if (status === "blocked") return "bg-red-500";
-  if (["waiting_previous", "pending"].includes(status)) return "bg-yellow-400";
-  return "bg-slate-300";
 }
 
 export type TaskGroupHeaderState = {

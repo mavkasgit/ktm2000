@@ -1,7 +1,7 @@
 /**
  * Описание колонок маршрутных этапов — единственное место, где объявляется,
  * что это за колонка, как она фильтруется, сортируется, выровнена и что
- * написано на её подсказке (#198, ADR-0038).
+ * написано на её подсказке (#198, ADR-0038; #322).
  *
  * Пока шапка собиралась одиннадцатью блоками `<th>` руками, ширина, выравнивание
  * и подсказка «Пришло с предыдущего этапа» жили в разметке, а набор фильтруемых
@@ -12,13 +12,39 @@
  * каждой фильтруемой колонки проставлен `clientOnly` — иначе объявление
  * выглядело бы как обычная серверная колонка, и добавление серверной выборки
  * молча увезло бы фильтр по участку на сервер под именем колонки.
+ *
+ * Читатели значения колонок («Участок», «Статус этапа») живут здесь же: и
+ * клиентский фильтр, и список попапера берут ту же подпись, что печатает
+ * ячейка, — иначе выбор значения не находил бы напечатанную строку (#322).
  */
 import type { ColumnSpec } from "@/shared/lib/columnSpecs";
+import type { ProductionPlanningStage } from "@/shared/api/productionPlans";
+import { stageStatusLabels } from "@/shared/lib/generated-labels";
 
 /** Поля фильтра и сортировки этапов: обе связи у колонок совпадают. */
 export type StageField = "section" | "status";
 
-export type StageColumn = ColumnSpec<StageField> & {
+/**
+ * Строка таблицы этапов: этап и признак «последний в маршруте». Остальные
+ * поля строки (текущий этап, тон) нужны только разметке и в значение не входят.
+ */
+export interface StageTableRow {
+  stage: ProductionPlanningStage;
+  isFinalStage: boolean;
+}
+
+/** Подпись участка этапа — та же, что печатает ячейка. */
+export function getStageSectionLabel(stage: ProductionPlanningStage): string {
+  return stage.section_name || stage.section_code || "—";
+}
+
+/** Подпись статуса этапа — с пометкой у финального этапа. */
+export function getStageStatusLabel(stage: ProductionPlanningStage, isFinalStage: boolean): string {
+  const base = stageStatusLabels[stage.task_status] || stage.task_status;
+  return isFinalStage ? `${base} (финальный этап)` : base;
+}
+
+export type StageColumn = ColumnSpec<StageField, StageField, StageTableRow> & {
   id: string;
   label: string;
   /** Класс `<th>` сверх общего: ширина и выравнивание. */
@@ -47,6 +73,8 @@ export const stageColumns: StageColumn[] = [
     sortField: "section",
     headerClassName: `${filtered} min-w-[140px]`,
     clientOnly: true,
+    cellValue: (row) => getStageSectionLabel(row.stage),
+    sortValues: (a, b) => a.localeCompare(b, "ru"),
   },
   {
     id: "status",
@@ -55,6 +83,8 @@ export const stageColumns: StageColumn[] = [
     sortField: "status",
     headerClassName: `${filtered} min-w-[120px]`,
     clientOnly: true,
+    cellValue: (row) => getStageStatusLabel(row.stage, row.isFinalStage),
+    sortValues: (a, b) => a.localeCompare(b, "ru"),
   },
   { id: "planned", label: "План", headerClassName: num },
   {

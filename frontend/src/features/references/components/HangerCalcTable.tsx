@@ -32,9 +32,9 @@ import {
 } from "../lib/hangerCalcRows";
 import {
   buildHangerCalcSortParam,
-  hangerCalcCellValue,
   hangerCalcColumns,
 } from "../lib/hangerCalcColumns";
+import { buildColumnFilterValues } from "@/shared/lib/columnSpecs";
 import { HangerConstantsPanel } from "./HangerConstantsPanel";
 import { HangerCalcRowView, type RowSaveState } from "./HangerCalcRowView";
 import { PairedHangerRowView } from "./PairedHangerRowView";
@@ -342,19 +342,13 @@ export function HangerCalcTable({
   // Список значений каждой фильтруемой колонки берётся из описания: перебор
   // полей здесь означал бы, что шапка и список значений живут отдельно и
   // могут разойтись при добавлении колонки.
-  const columnValues = useMemo(() => {
-    const result: Partial<Record<HangerCalcSortField, string[]>> = {};
-    for (const column of hangerCalcColumns) {
-      const field = column.filterField;
-      if (!field) continue;
-      const values = [...new Set(allRows.map((row) => hangerCalcCellValue(row, field)))];
-      result[field] = column.sortValues ? values.sort(column.sortValues) : values;
-    }
-    return result;
-  }, [allRows]);
+  const columnValues = useMemo(
+    () => buildColumnFilterValues(allRows, hangerCalcColumns),
+    [allRows],
+  );
 
   const predicate = useMemo(
-    () => buildFilterPredicate<HangerCalcRow | PairedHangerCalcRow>(hangerCalcCellValue),
+    () => buildFilterPredicate(hangerCalcColumns),
     [buildFilterPredicate],
   );
 
@@ -422,7 +416,7 @@ export function HangerCalcTable({
                       className={cn(headerCellClass, column.headerClassName)}
                       aria-sort={column.sortField ? getAriaSort(sortConfigs, column.sortField) : undefined}
                     >
-                      <DataTableColumnHeader<HangerCalcSortField>
+                      <DataTableColumnHeader<HangerCalcSortField, HangerCalcSortField, HangerCalcRow | PairedHangerCalcRow>
                         column={column}
                         bindColumn={bindColumn}
                         values={column.filterField ? columnValues[column.filterField] : undefined}

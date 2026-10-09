@@ -7,11 +7,9 @@
 import { describe, expect, it } from "vitest";
 
 import type { ProductWipRemainder } from "@/shared/api/productionPlans";
-import { buildColumnFilterPredicate } from "@/shared/lib/columnFilterSearch";
-import { buildColumnApiParams } from "@/shared/lib/columnSpecs";
+import { buildColumnApiParams, buildColumnFilterPredicate } from "@/shared/lib/columnSpecs";
 
 import {
-  wipStatsCellValue,
   wipStatsColumns,
   wipStatsSortValue,
   wipStatsQtyCompare,
@@ -40,9 +38,13 @@ const rows = [remainder("ГХП А", 10), remainder("ГХП Б", 4), remainder("
 /** Дробный остаток: именно он раньше расходился между ячейкой и попапером. */
 const fractional = remainder("ГХП В", 2.5);
 
+/** Значение колонки — из описания, как у попапера и клиентского предиката (#322). */
+const columnValue = (row: ProductWipRemainder, field: WipStatsField) =>
+  wipStatsColumns.find((column) => column.filterField === field)!.cellValue!(row);
+
 /** Клиентский предикат диалога: тот же, что собирает `useFilterableTable`. */
 const predicateFor = (columnFilters: Partial<Record<WipStatsField, Set<string>>>) =>
-  buildColumnFilterPredicate({ columnFilters, columnSearchQueries: {}, getCellValue: wipStatsCellValue });
+  buildColumnFilterPredicate(columnFilters, {}, wipStatsColumns);
 
 const keptNames = (predicate: ((row: ProductWipRemainder) => boolean) | null) =>
   predicate ? rows.filter(predicate).map((row) => `${row.spg_name} ${row.quantity}`) : rows.map((row) => `${row.spg_name} ${row.quantity}`);
@@ -70,11 +72,7 @@ describe("фильтры сводки незавершённого произв�
   });
 
   it("поиск в поповере сужает по подстроке, как и выбор", () => {
-    const predicate = buildColumnFilterPredicate({
-      columnFilters: {},
-      columnSearchQueries: { name: "Б" },
-      getCellValue: wipStatsCellValue,
-    });
+    const predicate = buildColumnFilterPredicate({}, { name: "Б" }, wipStatsColumns);
     expect(keptNames(predicate)).toEqual(["ГХП Б 4"]);
   });
 });
@@ -112,23 +110,23 @@ describe("«Остаток»: ячейка и попапер печатают о
     // Попапер отдаёт `wipStatsCellValue`, ячейка печатает `wipStatsQtyText`.
     // Строка дробная: 2,5 округляется до «3», и расхождение видно сразу.
     expect(wipStatsQtyText(fractional)).toBe("3");
-    expect(wipStatsCellValue(fractional, "qty")).toBe(wipStatsQtyText(fractional));
+    expect(columnValue(fractional, "qty")).toBe(wipStatsQtyText(fractional));
   });
 
   it("выбор в поповере по дробному остатку находит строку, напечатанную в ячейке", () => {
     // Старый попапер отдавал `String(quantity)` → «2.5»; выбор «2.5» находил
     // строку, в таблице напечатанную как «3», и наоборот выбор «3» её терял.
-    const predicate = buildColumnFilterPredicate({
-      columnFilters: { qty: new Set([wipStatsQtyText(fractional)]) },
-      columnSearchQueries: {},
-      getCellValue: wipStatsCellValue,
-    });
+    const predicate = buildColumnFilterPredicate(
+      { qty: new Set([wipStatsQtyText(fractional)]) },
+      {},
+      wipStatsColumns,
+    );
     if (!predicate) throw new Error("предикат по «Остатку» должен быть построен");
     expect([fractional].filter((item) => predicate(item)).map((row) => row.spg_name)).toEqual(["ГХП В"]);
   });
 
   it("попапер не отдаёт дробное значение, которого в таблице нет", () => {
-    expect(String(fractional.quantity)).not.toBe(wipStatsCellValue(fractional, "qty"));
+    expect(String(fractional.quantity)).not.toBe(columnValue(fractional, "qty"));
   });
 
   it("значения попапера сортируются так, как они напечатаны", () => {

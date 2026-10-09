@@ -13,6 +13,7 @@
  * сервер понимает не то, что видит оператор в поповере фильтра.
  */
 import type { ColumnSpec } from "@/shared/lib/columnSpecs";
+import type { BackupInfo } from "@/entities/backup/types";
 import { backupTypeLabels } from "@/shared/lib/generated-labels";
 
 /**
@@ -30,7 +31,7 @@ export type BackupSortField =
   | "created_at"
   | "comment";
 
-export type BackupColumn = ColumnSpec<BackupSortField> & {
+export type BackupColumn = ColumnSpec<BackupSortField, BackupSortField, BackupInfo> & {
   id: string;
   label: string;
   /** Класс `<th>` сверх общего: поповер фильтра рисует отступы сам. */
@@ -96,6 +97,8 @@ export const backupColumns: BackupColumn[] = [
     filterField: "filename",
     sortField: "filename",
     headerClassName: filtered,
+    cellValue: (backup) => backup.filename,
+    sortValues: (a, b) => a.localeCompare(b, "ru"),
   },
   {
     id: "db_name",
@@ -103,6 +106,8 @@ export const backupColumns: BackupColumn[] = [
     filterField: "db_name",
     sortField: "db_name",
     headerClassName: filtered,
+    cellValue: (backup) => backup.db_name,
+    sortValues: (a, b) => a.localeCompare(b, "ru"),
   },
   {
     id: "backup_type",
@@ -112,6 +117,8 @@ export const backupColumns: BackupColumn[] = [
     headerClassName: filtered,
     // видит «Ежемесячный», а сервер ждёт код `monthly`
     valueLabel: (value) => backupTypeLabels[value] || value,
+    cellValue: (backup) => backup.backup_type || "manual",
+    sortValues: (a, b) => a.localeCompare(b, "ru"),
   },
   {
     id: "size",
@@ -121,6 +128,8 @@ export const backupColumns: BackupColumn[] = [
     headerClassName: filtered,
     mapValue: sizeBytes,
     valueLabel: (value) => formatBytes(Number(value)),
+    cellValue: (backup) => String(backup.size),
+    sortValues: (a, b) => Number(a) - Number(b),
   },
   {
     id: "created_at",
@@ -129,6 +138,8 @@ export const backupColumns: BackupColumn[] = [
     sortField: "created_at",
     headerClassName: filtered,
     valueLabel: formatDate,
+    cellValue: (backup) => backup.created_at,
+    sortValues: (a, b) => new Date(a).getTime() - new Date(b).getTime(),
   },
   {
     id: "comment",
@@ -137,5 +148,7 @@ export const backupColumns: BackupColumn[] = [
     sortField: "comment",
     headerClassName: filtered,
     mapValue: dropDash,
+    cellValue: (backup) => backup.comment || "—",
+    sortValues: (a, b) => a.localeCompare(b, "ru"),
   },
 ];

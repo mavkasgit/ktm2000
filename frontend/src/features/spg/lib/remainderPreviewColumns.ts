@@ -9,8 +9,13 @@
  */
 import type { ColumnSpec } from "@/shared/lib/columnSpecs";
 import type { RemainderPreviewSortField } from "@/shared/lib/stockSortParams";
+import type { RemainderImportItem } from "@/shared/api/stock";
 
-export type RemainderPreviewColumn = ColumnSpec<RemainderPreviewSortField> & {
+export type RemainderPreviewColumn = ColumnSpec<
+  RemainderPreviewSortField,
+  RemainderPreviewSortField,
+  RemainderImportItem
+> & {
   id: string;
   label: string;
   /** Класс `<th>` сверх общего: выравнивание и ширина. */
@@ -32,22 +37,45 @@ const errorValueOnly = (value: string) =>
  * Порядок колонок совпадает с шапкой и с телом таблицы предпросмотра.
  */
 export const remainderPreviewColumns: RemainderPreviewColumn[] = [
-  { id: "row", label: "#", filterField: "row", sortField: "row", headerClassName: "w-10" },
-  { id: "sku", label: "Артикул", filterField: "sku", sortField: "sku", headerClassName: "w-24" },
+  {
+    id: "row",
+    label: "#",
+    filterField: "row",
+    sortField: "row",
+    headerClassName: "w-10",
+    sortValues: (a, b) => (Number.parseFloat(a) || 0) - (Number.parseFloat(b) || 0),
+  },
+  {
+    id: "sku",
+    label: "Артикул",
+    filterField: "sku",
+    sortField: "sku",
+    headerClassName: "w-24",
+    sortValues: (a, b) => a.localeCompare(b, "ru"),
+  },
   {
     id: "quantity",
     label: "Кол-во",
     filterField: "quantity",
     sortField: "quantity",
     headerClassName: "w-14 text-right",
+    sortValues: (a, b) => (Number.parseFloat(a) || 0) - (Number.parseFloat(b) || 0),
   },
-  { id: "length", label: "Длина", filterField: "length", sortField: "length", headerClassName: "w-16" },
+  {
+    id: "length",
+    label: "Длина",
+    filterField: "length",
+    sortField: "length",
+    headerClassName: "w-16",
+    sortValues: (a, b) => a.localeCompare(b, "ru"),
+  },
   {
     id: "operations",
     label: "Операции",
     filterField: "operations",
     sortField: "operations",
     headerClassName: "min-w-[160px]",
+    sortValues: (a, b) => a.localeCompare(b, "ru"),
     // Значения списка фильтра — серверные подписи (их собирает
     // `getImportItemOperationsServerLabel` по `completed_operations_raw` и
     // этапам), а ячейка печатает прочерк. Переводить нечего: прочерк в
@@ -61,6 +89,7 @@ export const remainderPreviewColumns: RemainderPreviewColumn[] = [
     filterField: "quality",
     sortField: "quality",
     headerClassName: "w-24",
+    sortValues: (a, b) => a.localeCompare(b, "ru"),
   },
   {
     id: "section",
@@ -68,6 +97,7 @@ export const remainderPreviewColumns: RemainderPreviewColumn[] = [
     filterField: "section",
     sortField: "section",
     headerClassName: "min-w-[150px]",
+    sortValues: (a, b) => a.localeCompare(b, "ru"),
   },
   {
     id: "errors",
@@ -76,6 +106,7 @@ export const remainderPreviewColumns: RemainderPreviewColumn[] = [
     sortField: "errors",
     headerClassName: "min-w-[140px]",
     mapValue: errorValueOnly,
+    sortValues: (a, b) => a.localeCompare(b, "ru"),
   },
 ];
 

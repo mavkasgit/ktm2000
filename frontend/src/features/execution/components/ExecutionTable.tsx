@@ -298,7 +298,7 @@ export function ExecutionTable({
                       {/* Явный `ExecutionSortField`: конфиг сортировки таблицы
                           шире, чем подмножество серверно-сортируемых полей, на
                           котором объявлены колонки. */}
-                      <DataTableColumnHeader<ExecutionSortField>
+                      <DataTableColumnHeader<ExecutionSortField, ExecutionSortField, ProductionPlanningRow>
                         column={column}
                         bindColumn={bindColumn}
                         values={column.filterField ? uniqueValuesByField[column.filterField] : undefined}

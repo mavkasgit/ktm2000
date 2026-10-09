@@ -8,12 +8,16 @@
  * остальных, и это отличие жило в разметке. Описание переносит его в данные:
  * добавление колонки или смена её семантики больше не трогает шапку.
  */
+import type { SectionBoardTask } from "@/shared/api/shopfloor";
 import type { ColumnSpec } from "@/shared/lib/columnSpecs";
 import { formatDimensionsFilterValue } from "@/shared/api/stock";
+import { fmtQty } from "@/shared/lib/quantityFormat";
+import { getTaskRowState } from "./taskStatus";
+import { taskGroupingDimensions } from "./groupTasksByProfile";
 
 import type { TaskSortField } from "./boardQueryParams";
 
-export type BoardColumn = ColumnSpec<TaskSortField> & {
+export type BoardColumn = ColumnSpec<TaskSortField, TaskSortField, SectionBoardTask> & {
   id: string;
   label: string;
   /** Класс `<th>`: выравнивание и служебные колонки. */
@@ -46,6 +50,7 @@ export const boardColumns: BoardColumn[] = [
     // Поле доски `productSku`, а параметр запроса — `product_sku`: имя
     // перекодировки объявлено здесь, а не в сборщике параметров.
     apiParam: "product_sku",
+    cellValue: (task) => task.product_sku,
   },
   {
     id: "dimensions",
@@ -56,6 +61,11 @@ export const boardColumns: BoardColumn[] = [
     // «Размер» — выбор габарита из списка, а не поиск подстроки в подписи.
     exactMatch: true,
     valueLabel: formatDimensionsFilterValue,
+    // Значение колонки — сериализованный габарит: он же уезжает параметром
+    // запроса и он же лежит в списке попапера. Подпись (`formatDimensionsLabel`)
+    // — только для показа, у колонки с ячейкой `CutLayoutCell`.
+    cellValue: (task) => JSON.stringify(taskGroupingDimensions(task) ?? null),
+    sortValues: (a, b) => formatDimensionsFilterValue(a).localeCompare(formatDimensionsFilterValue(b), "ru"),
   },
   { id: "operation", label: "Операция", className: left },
   // Упаковка — вторая операция участка. Показывается видом и количеством:
@@ -67,12 +77,12 @@ export const boardColumns: BoardColumn[] = [
   // Количества и статус доска фильтрует сама, по уже пришедшим строкам:
   // сервер фильтров по ним не знает, и отправка подписанного значения
   // («Годные», «12 шт.») сузила бы выборку до пустой.
-  { id: "plannedQty", label: "План", className: left, filterField: "plannedQty", sortField: "plannedQty", clientOnly: true },
-  { id: "issuedQty", label: "Выдано", className: left, filterField: "issuedQty", sortField: "issuedQty", clientOnly: true },
-  { id: "completedQty", label: "Годные", className: left, filterField: "completedQty", sortField: "completedQty", clientOnly: true },
-  { id: "rejectedQty", label: "Брак", className: left, filterField: "rejectedQty", sortField: "rejectedQty", clientOnly: true },
-  { id: "transferredQty", label: "Передано", className: left, filterField: "transferredQty", sortField: "transferredQty", clientOnly: true },
-  { id: "remainingQty", label: "Остаток", className: left, filterField: "remainingQty", sortField: "remainingQty", clientOnly: true },
+  { id: "plannedQty", label: "План", className: left, filterField: "plannedQty", sortField: "plannedQty", clientOnly: true, cellValue: (task) => fmtQty(task.planned_quantity) },
+  { id: "issuedQty", label: "Выдано", className: left, filterField: "issuedQty", sortField: "issuedQty", clientOnly: true, cellValue: (task) => fmtQty(task.cache.issued_quantity) },
+  { id: "completedQty", label: "Годные", className: left, filterField: "completedQty", sortField: "completedQty", clientOnly: true, cellValue: (task) => fmtQty(task.cache.completed_quantity) },
+  { id: "rejectedQty", label: "Брак", className: left, filterField: "rejectedQty", sortField: "rejectedQty", clientOnly: true, cellValue: (task) => fmtQty(task.cache.rejected_quantity) },
+  { id: "transferredQty", label: "Передано", className: left, filterField: "transferredQty", sortField: "transferredQty", clientOnly: true, cellValue: (task) => fmtQty(task.cache.transferred_quantity) },
+  { id: "remainingQty", label: "Остаток", className: left, filterField: "remainingQty", sortField: "remainingQty", clientOnly: true, cellValue: (task) => fmtQty(task.cache.remaining_quantity) },
   {
     id: "status",
     label: "Статус",
@@ -80,8 +90,9 @@ export const boardColumns: BoardColumn[] = [
     filterField: "status",
     sortField: "status",
     clientOnly: true,
-    // Значения статуса уже подписаны при сборе: `uniqueValues.status`
-    // строится через `getStatusLabel`, поэтому переподписывать их нечего.
+    // Значение — та же подпись, что в пилюле строки (`getTaskRowState`), поэтому
+    // список попапера и фильтр читают одно решение, а не собирают своё.
+    cellValue: (task) => getTaskRowState(task).label,
   },
   {
     id: "actions",

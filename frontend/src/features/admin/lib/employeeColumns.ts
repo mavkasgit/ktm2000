@@ -31,6 +31,7 @@
  * сортировки и бейдж приоритета не рисовались бы никогда.
  */
 import type { ColumnSpec } from "@/shared/lib/columnSpecs";
+import type { Employee } from "../api";
 
 /** Поля колонок: так их зовёт шапка и так их зовёт состояние таблицы. */
 export type EmployeeSortField = "hrmsId" | "name" | "tabNumber" | "position" | "department";
@@ -57,7 +58,7 @@ export const EMPLOYEE_SORT_FIELD_TO_API: Record<EmployeeSortField, EmployeeSortA
   department: "department",
 };
 
-export type EmployeeColumn = ColumnSpec<EmployeeSortField> & {
+export type EmployeeColumn = ColumnSpec<EmployeeSortField, EmployeeSortField, Employee> & {
   /**
    * Совпадает с полем колонки: по нему берутся значения поповера, и совпадение
    * проверяется тестом — иначе `map` по шапке потерял бы колонку молча.
@@ -90,5 +91,7 @@ export const employeeColumns: EmployeeColumn[] = [
     sortField: "department",
     mapValue: dropDash,
     headerClassName: headerBase,
+    cellValue: (employee) => employee.department ?? "—",
+    sortValues: (a, b) => a.localeCompare(b, "ru"),
   },
 ];

@@ -24,7 +24,7 @@ import type { ColumnSpec } from "@/shared/lib/columnSpecs";
 /** Поля фильтра и сортировки сводки: обе связи у колонок совпадают. */
 export type WipStatsField = "name" | "qty";
 
-export type WipStatsColumn = ColumnSpec<WipStatsField> & {
+export type WipStatsColumn = ColumnSpec<WipStatsField, WipStatsField, ProductWipRemainder> & {
   id: string;
   label: string;
   /** Класс `<th>` сверх общего: `p-0` у колонок с поповером и ширина колонки. */
@@ -47,6 +47,8 @@ export const wipStatsColumns: WipStatsColumn[] = [
     sortField: "name",
     headerClassName: `${filtered} max-w-[280px]`,
     clientOnly: true,
+    cellValue: (row) => row.spg_name,
+    sortValues: (a, b) => a.localeCompare(b, "ru"),
   },
   // Служебная колонка: «Размер» выводится из габаритов строки, фильтровать его
   // нечем (значения в поповере пришлось бы собирать из подписи размера), и в
@@ -59,6 +61,8 @@ export const wipStatsColumns: WipStatsColumn[] = [
     sortField: "qty",
     headerClassName: `${filtered} w-[120px] text-right`,
     clientOnly: true,
+    cellValue: (row) => wipStatsQtyText(row),
+    sortValues: wipStatsQtyCompare,
   },
 ];
 
@@ -84,17 +88,6 @@ export function wipStatsQtyCompare(a: string, b: string): number {
   if (!Number.isFinite(numA)) return Number.isFinite(numB) ? 1 : 0;
   if (!Number.isFinite(numB)) return -1;
   return numA - numB;
-}
-
-/**
- * Значение ячейки, по которому работает клиентский фильтр колонки. Поля
- * названы здесь же: пока предикат сравнивал поле строкой, новое поле можно
- * было забыть, и фильтр по нему молча ничего не сужал. «Остаток» берёт
- * тот же форматтер, что и ячейка, — иначе попапер показывал бы оператору
- * число, которого в строке нет.
- */
-export function wipStatsCellValue(row: ProductWipRemainder, field: WipStatsField): string {
-  return field === "name" ? row.spg_name : wipStatsQtyText(row);
 }
 
 /**

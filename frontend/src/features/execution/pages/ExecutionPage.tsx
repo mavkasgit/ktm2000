@@ -22,7 +22,6 @@ import { listSections } from "@/shared/api/sections";
 import { useFilterableTable } from "@/shared/hooks/useFilterableTable";
 import type { SortConfig } from "@/shared/hooks/useTableQueryEngine";
 import { usePaginatedTableQuery } from "@/shared/hooks/usePaginatedTableQuery";
-import { formatDimensionsFilterValue } from "@/shared/api/stock";
 
 
 import { toast } from "@/shared/ui/use-toast";
@@ -54,10 +53,9 @@ import {
   getSoftDeleteBlockReason,
   getManualPassBlockReason,
 } from "../components/execution-utils";
-import { fmtQty } from "@/shared/lib/quantityFormat";
 import { buildExecutionSortParam } from "../lib/executionSortMapping";
 import { useDebouncedValue } from "@/shared/lib/useDebouncedValue";
-import { buildColumnApiParams } from "@/shared/lib/columnSpecs";
+import { buildColumnApiParams, buildColumnFilterValues } from "@/shared/lib/columnSpecs";
 import { executionTableColumns } from "../components/execution-table-columns";
 import { isFirstRowsLoad } from "@/shared/lib/tableQueryPlaceholder";
 
@@ -695,21 +693,13 @@ export function ExecutionPage() {
     },
   ], [searchQuery, bulkMode, exitBulkMode]);
 
-  const uniqueValuesByField = useMemo(() => {
-    return {
-      id: [...new Set(rows.map((r) => String(r.plan_position_id)))],
-      row: [...new Set(rows.map((r) => String(r.source_row_number ?? "")))],
-      sku: [...new Set(rows.map((r) => r.source_sku))],
-      name: [...new Set(rows.map((r) => r.source_name || "").filter(Boolean))],
-      qty: [...new Set(rows.map((r) => fmtQty(r.quantity)))],
-      route: [...new Set(rows.map((r) => r.route_name || "Не назначен"))],
-      status: [...new Set(rows.map((r) => (r.is_completed ? "completed" : r.position_status)))],
-      stage: [...new Set(rows.map((r) => r.current_stage_section_name || "—"))],
-      dimensions: [...new Set(rows.map((r) => JSON.stringify(r.dimensions ?? null)))].sort(
-        (a, b) => formatDimensionsFilterValue(a).localeCompare(formatDimensionsFilterValue(b), "ru"),
-      ),
-    };
-  }, [rows]);
+  // Список значений попапера — из описания колонок: читатель значения объявлен
+  // в самой колонке (`cellValue`), поэтому список и фильтр берут одно значение
+  // (#322).
+  const uniqueValuesByField = useMemo(
+    () => buildColumnFilterValues(rows, executionTableColumns),
+    [rows],
+  );
 
   const handleSelectAll = useCallback(() => {
     const pageIds = rows.map((r) => r.plan_position_id);

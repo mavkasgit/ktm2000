@@ -1,6 +1,5 @@
 import { describe, expect, it } from "vitest";
 import {
-  buildColumnFilterPredicate,
   hasActiveColumnFilters,
   matchesPartialSearch,
   pickColumnApiValue,
@@ -29,31 +28,6 @@ describe("columnFilterSearch", () => {
     );
     expect(sorted).toEqual(["ЮП-460", "Деталь ЮП-12"]);
   });
-
-  it("buildColumnFilterPredicate uses partial search when query is set", () => {
-    type Row = { sku: string };
-    const predicate = buildColumnFilterPredicate<Row, "sku">({
-      columnFilters: {},
-      columnSearchQueries: { sku: "юп" },
-      getCellValue: (row, field) => (field === "sku" ? row.sku : ""),
-    });
-
-    expect(predicate).not.toBeNull();
-    expect(predicate!({ sku: "ЮП-460" })).toBe(true);
-    expect(predicate!({ sku: "ABC-100" })).toBe(false);
-  });
-
-  it("buildColumnFilterPredicate falls back to Set when search is empty", () => {
-    type Row = { sku: string };
-    const predicate = buildColumnFilterPredicate<Row, "sku">({
-      columnFilters: { sku: new Set(["ЮП-460"]) },
-      columnSearchQueries: {},
-      getCellValue: (row, field) => (field === "sku" ? row.sku : ""),
-    });
-
-    expect(predicate!({ sku: "ЮП-460" })).toBe(true);
-    expect(predicate!({ sku: "ABC-100" })).toBe(false);
-  });
 });
 
 /**
@@ -61,8 +35,6 @@ describe("columnFilterSearch", () => {
  * только у `clientOnly`-колонок (ADR-0044), сервер принимает одно значение.
  */
 describe("мультивыбор и граница с сервером", () => {
-  type Row = { sku: string };
-
   it("несколько выбранных значений в параметр запроса не превращаются", () => {
     // `size !== 1` → undefined: серверу одиночного значения не уходит ни один
     // из двух выборов, а не «первый попавшийся».
@@ -85,15 +57,7 @@ describe("мультивыбор и граница с сервером", () => {
     expect(pickColumnApiValue(columnFilters, {}, "sku")).toBeUndefined();
     // …но индикатор «фильтры активны» включён: сброс обязан убрать и этот выбор.
     expect(hasActiveColumnFilters(columnFilters, {})).toBe(true);
-    // И предикат реально сужает — мультивыбор работает по уже загруженным строкам.
-    const predicate = buildColumnFilterPredicate<Row, "sku">({
-      columnFilters,
-      columnSearchQueries: {},
-      getCellValue: (row, field) => (field === "sku" ? row.sku : ""),
-    });
-    expect(predicate!({ sku: "ЮП-460" })).toBe(true);
-    expect(predicate!({ sku: "ABC-100" })).toBe(true);
-    expect(predicate!({ sku: "ЮП-200" })).toBe(false);
+    // Сам предикат живёт в описании колонок: его проверка — в columnSpecs.test.ts.
   });
 
   it("индикатор отражает состояние таблицы, а не отправленный параметр", () => {

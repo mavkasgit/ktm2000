@@ -9,7 +9,12 @@
  * фильтром требовало правки в каждом из этих мест.
  */
 
-import { pickColumnApiValue, pickExactMatchColumnValue } from "./columnFilterSearch";
+import {
+  hasActiveColumnFilters,
+  matchesPartialSearch,
+  pickColumnApiValue,
+  pickExactMatchColumnValue,
+} from "./columnFilterSearch";
 
 /**
  * Род значения, которое колонка кладёт в запрос.
@@ -30,6 +35,7 @@ export type ColumnParamValue = string | number | boolean;
 export type ColumnSpec<
   Field extends string,
   SortField extends string = Field,
+  Row = unknown,
 > = {
   /** Поле фильтра колонки. Отсутствует — колонка без фильтра. */
   filterField?: Field;
@@ -84,6 +90,50 @@ export type ColumnSpec<
    * клиентских колонок не расходился с шапкой.
    */
   clientOnly?: boolean;
+  /**
+   * Значение колонки для строки (#322). Из него собираются и клиентский
+   * предикат (`buildColumnFilterPredicate`), и список значений попапера
+   * (`buildColumnFilterValues`), поэтому «колонка показывает одно, а фильтрует
+   * по другому» перестаёт быть возможным: читатель значения один.
+   *
+   * Нет читателя — нет и попапера: у колонки, которую фильтрует сервер,
+   * значение всё равно должен кто-то прочитать перед отправкой, а у колонки без
+   * фильтра (`filterField` не объявлен) попапера нет по ADR-0038 §4.
+   */
+  cellValue?: (row: Row) => string;
+  /**
+   * Объявленный домен значений колонки: список попапера целиком, от строк не
+   * зависящий (#322). Нужен колонкам, у которых набор значений один и тот же
+   * на всех строках, а читать в строке нечего: «Парный» — это всегда
+   * «Да»/«Нет». Без такого объявления экран выводил бы список из строк второй
+   * картой, то есть держал бы семантику колонки вне описания — ровно то, от
+   * чего уводит #322.
+   *
+   * Домен объявляет только список. Строки колонка отсеивает по `cellValue`:
+   * без читателя значения строки в предикате ей взять неоткуда, и
+   * `selected.has("")` не должен выбрасывать все строки.
+   */
+  filterValues?: readonly string[];
+  /**
+   * Значения строки для многозначной колонки (#322): «Размеры» кладут в строку
+   * несколько длин, и список попапера — их объединение по строкам без повторов.
+   * Заменяет `cellValue` там, где значение строки не одно: предикат пропускает
+   * строку, если совпал хотя бы один её размер.
+   */
+  filterValuesFrom?: (row: Row) => readonly string[];
+  /**
+   * Порядок списка значений попапера. Нет — порядок появления в строках.
+   * Нужен там, где значения — не текст, а код (габариты): без него список
+   * читался бы в порядке строк доски.
+   */
+  sortValues?: (a: string, b: string) => number;
+  /**
+   * Пустое значение (`""`) в список попапера не попадает. Нужен колонкам, где
+   * пустота — «в строке этого нет», а не значение: пустая кнопка в списке
+   * неотличима от «ничего не выбрано». Фильтровать по ней всё равно нечего —
+   * выбор пустой строки и отсутствие выбора выглядели бы одинаково.
+   */
+  skipEmptyValues?: boolean;
 };
 
 /**
@@ -105,10 +155,10 @@ export type ColumnSpec<
  * нём не было проверки `clientOnly`, которую имеет `readColumnValue`. Экраны
  * зовут эти две функции.
  */
-export function buildColumnApiParams<Field extends string>(
+export function buildColumnApiParams<Field extends string, SortField extends string = Field, Row = unknown>(
   columnFilters: Partial<Record<Field, Set<string>>>,
   columnSearchQueries: Partial<Record<Field, string>>,
-  columns: ReadonlyArray<ColumnSpec<Field>>,
+  columns: ReadonlyArray<ColumnSpec<Field, SortField, Row>>,
 ): Record<string, string> {
   const params: Record<string, string> = {};
   for (const column of columns) {
@@ -152,10 +202,10 @@ export function buildColumnApiParams<Field extends string>(
  * а приведение делает сборщик. Экран получает ровно свой тип — `Pick` от
  * контракта запроса, без `as` и без послаблений.
  */
-export function buildTypedColumnApiParams<Field extends string, Params>(
+export function buildTypedColumnApiParams<Field extends string, Params, SortField extends string = Field, Row = unknown>(
   columnFilters: Partial<Record<Field, Set<string>>>,
   columnSearchQueries: Partial<Record<Field, string>>,
-  columns: ReadonlyArray<ColumnSpec<Field>>,
+  columns: ReadonlyArray<ColumnSpec<Field, SortField, Row>>,
 ): Partial<Params> {
   const params: Record<string, ColumnParamValue> = {};
   for (const column of columns) {
@@ -184,8 +234,8 @@ export function buildTypedColumnApiParams<Field extends string, Params>(
  * Значение колонки из состояния таблицы: выбранное значение, а для точной
  * колонки — только оно, без результата поиска в поповере.
  */
-function readColumnValue<Field extends string>(
-  column: ColumnSpec<Field>,
+function readColumnValue<Field extends string, SortField extends string, Row>(
+  column: ColumnSpec<Field, SortField, Row>,
   columnFilters: Partial<Record<Field, Set<string>>>,
   columnSearchQueries: Partial<Record<Field, string>>,
 ): string | undefined {
@@ -215,4 +265,124 @@ function toParamKind(
   if (value === "true") return true;
   if (value === "false") return false;
   return undefined;
+}
+
+/**
+ * Читатели значений по полю колонки: только у колонок, которые их объявили.
+ * `filterValues` читателем не является — он объявляет список целиком и в
+ * строках не нуждается.
+ */
+function rowValuesReaders<T, Field extends string, SortField extends string>(
+  columns: ReadonlyArray<ColumnSpec<Field, SortField, T>>,
+): Partial<Record<Field, (row: T) => string | readonly string[]>> {
+  const readers: Partial<Record<Field, (row: T) => string | readonly string[]>> = {};
+  for (const column of columns) {
+    const read = column.filterValuesFrom ?? column.cellValue;
+    if (column.filterField && read) readers[column.filterField] = read;
+  }
+  return readers;
+}
+
+/**
+ * Клиентский предикат фильтра колонок — из описания (#322).
+ *
+ * Раньше значение строки читал экран: у предиката был свой `getCellValue`, у
+ * попапера — свой перебор строк, а у печатного листа — третий. Одна колонка
+ * могла показывать одно, фильтровать по другому, а печатать третье. Теперь
+ * читатель значения объявлен в самой колонке (`cellValue`), и оба потребителя
+ * берут его оттуда.
+ *
+ * Колонка без читателя в предикат не входит: значения для неё никто не
+ * объявил, и `selected.has("")` не должен отсеивать все строки. Многозначная
+ * колонка (`filterValuesFrom`) пропускает строку, если совпал хотя бы один её
+ * размер: список и фильтр берут один читатель, поэтому разойтись не могут.
+ */
+export function buildColumnFilterPredicate<T, Field extends string, SortField extends string>(
+  columnFilters: Partial<Record<Field, Set<string>>>,
+  columnSearchQueries: Partial<Record<Field, string>>,
+  columns: ReadonlyArray<ColumnSpec<Field, SortField, T>>,
+): ((row: T) => boolean) | null {
+  if (!hasActiveColumnFilters(columnFilters, columnSearchQueries)) return null;
+  const readers = rowValuesReaders(columns);
+
+  return (row: T) => {
+    const fields = new Set<Field>([
+      ...(Object.keys(columnFilters) as Field[]),
+      ...(Object.keys(columnSearchQueries) as Field[]),
+    ]);
+
+    for (const field of fields) {
+      const read = readers[field];
+      if (!read) continue;
+      const search = columnSearchQueries[field]?.trim();
+      const selected = columnFilters[field];
+      const value = read(row);
+
+      if (typeof value === "string") {
+        if (search) {
+          if (!matchesPartialSearch(value, search)) return false;
+          continue;
+        }
+        if (selected && selected.size > 0 && !selected.has(value)) return false;
+        continue;
+      }
+
+      if (search) {
+        if (!value.some((candidate) => matchesPartialSearch(candidate, search))) return false;
+        continue;
+      }
+      if (selected && selected.size > 0 && !value.some((candidate) => selected.has(candidate))) {
+        return false;
+      }
+    }
+    return true;
+  };
+}
+
+/**
+ * Список значений попапера — из описания.
+ *
+ * Источника два, и колонка объявляет один из них: `filterValues` — готовый
+ * домен, от строк не зависящий («Парный» — всегда «Да»/«Нет»);
+ * `cellValue`/`filterValuesFrom` — значения строк, объединяемые без повторов
+ * (`filterValuesFrom` — многозначная «Размеры»). Оба берутся из описания, а не
+ * из карты `uniqueValues` на экране, поэтому список значений и фильтр не могут
+ * разойтись, а домен, не равный строкам, больше не живёт вне колонки.
+ *
+ * Колонка без объявления или без `filterField` в результат не попадает:
+ * попапера у неё нет.
+ */
+export function buildColumnFilterValues<T, Field extends string, SortField extends string>(
+  rows: readonly T[],
+  columns: ReadonlyArray<ColumnSpec<Field, SortField, T>>,
+): Partial<Record<Field, string[]>> {
+  const values: Partial<Record<Field, string[]>> = {};
+  for (const column of columns) {
+    if (!column.filterField) continue;
+    const read = column.filterValuesFrom ?? column.cellValue;
+    if (!column.filterValues && !read) continue;
+
+    const unique = new Set<string>();
+    const add = (value: string) => {
+      if (column.skipEmptyValues && value === "") return;
+      unique.add(value);
+    };
+
+    if (column.filterValues) {
+      for (const value of column.filterValues) add(value);
+    } else if (read) {
+      for (const row of rows) {
+        const value = read(row);
+        if (typeof value === "string") {
+          add(value);
+          continue;
+        }
+        for (const candidate of value) add(candidate);
+      }
+    }
+
+    const list = [...unique];
+    values[column.filterField] = column.sortValues ? list.sort(column.sortValues) : list;
+  }
+  return values;
 }

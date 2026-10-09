@@ -5,7 +5,6 @@ import {
   formatQualityStateLabel,
   formatDimensionsLabel,
   formatCompletedOperationsLabel,
-  completedOperationsServerLabel,
   getStockBalances,
 } from "@/shared/api/stock";
 import type { StockBalanceEntry, StockBalancesListResponse } from "@/shared/api/stock";
@@ -21,7 +20,7 @@ import { rowToneFill, type RowTone } from "@/shared/lib/rowTones";
 import { cn } from "@/shared/utils/cn";
 import { useFilterableTable } from "@/shared/hooks/useFilterableTable";
 import { usePaginatedTableQuery } from "@/shared/hooks/usePaginatedTableQuery";
-import { buildColumnApiParams } from "@/shared/lib/columnSpecs";
+import { buildColumnApiParams, buildColumnFilterValues } from "@/shared/lib/columnSpecs";
 import { getAriaSort } from "@/shared/lib/multiSort";
 import { RouteStepsDisplay } from "./RouteStepsDisplay";
 
@@ -31,15 +30,6 @@ import { useDebouncedValue } from "@/shared/lib/useDebouncedValue";
 import { fmtQty, toQtyInteger } from "@/shared/lib/quantityFormat";
 import { Badge } from "./badge";
 import { ChevronDown, ChevronRight } from "lucide-react";
-
-/**
- * Серверная подпись оси — для списка фильтра и значения в запросе: ячейка
- * печатает прочерк, а `_balance_operations_filter` понимает только подписи
- * «не зафиксировано» / «без операций» (ADR-0055 п.5).
- */
-function getBalanceOperationsLabel(balance: StockBalanceEntry): string {
-  return completedOperationsServerLabel(balance.completed_operations, balance.completed_stages);
-}
 
 /**
  * Ключ группы остатков — артикул. Остатки одного артикула приходят несколькими
@@ -243,21 +233,6 @@ function buildBalanceDisplayItems(
     });
   }
   return items;
-}
-
-function getBalanceCellValue(balance: StockBalanceEntry, field: BalanceSortField): string {
-  switch (field) {
-    case "sku":
-      return balance.product_sku || `#${balance.product_id}`;
-    case "quantity":
-      return fmtQty(balance.balance_qty);
-    case "operations":
-      return getBalanceOperationsLabel(balance);
-    case "quality":
-      return formatQualityStateLabel(balance.quality_state);
-    case "location":
-      return balance.location_name || `#${balance.location_id}`;
-  }
 }
 
 function buildBalanceColumnApiParams(
@@ -604,23 +579,13 @@ export function StockBalancesPanel({
   const total = data?.total ?? 0;
   const totalPages = getTotalPages(total);
 
-  const uniqueValues: Partial<Record<BalanceSortField, string[]>> = useMemo(() => ({
-    sku: [...new Set(balances.map((b) => getBalanceCellValue(b, "sku")))].sort((a, b) =>
-      a.localeCompare(b, "ru"),
-    ),
-    quantity: [...new Set(balances.map((b) => getBalanceCellValue(b, "quantity")))].sort(
-      (a, b) => (Number.parseFloat(a) || 0) - (Number.parseFloat(b) || 0),
-    ),
-    operations: [...new Set(balances.map((b) => getBalanceOperationsLabel(b)))].sort((a, b) =>
-      a.localeCompare(b, "ru"),
-    ),
-    quality: [...new Set(balances.map((b) => getBalanceCellValue(b, "quality")))].sort((a, b) =>
-      a.localeCompare(b, "ru"),
-    ),
-    location: [...new Set(balances.map((b) => getBalanceCellValue(b, "location")))].sort((a, b) =>
-      a.localeCompare(b, "ru"),
-    ),
-  }), [balances]);
+  // Список значений попапера — из описания колонок: читатель значения объявлен
+  // в самой колонке (`cellValue`), поэтому список и фильтр берут одно значение
+  // (#322).
+  const uniqueValues: Partial<Record<BalanceSortField, string[]>> = useMemo(
+    () => buildColumnFilterValues(balances, stockBalanceColumns),
+    [balances],
+  );
 
   const columnCount = hideLocationColumn ? 7 : 8;
 
