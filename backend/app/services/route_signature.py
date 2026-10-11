@@ -203,6 +203,8 @@ async def route_signature_conflicts(
     db: AsyncSession,
     route: ProductionRoute,
     expected_signature: str,
+    *,
+    signature_cache: dict[int, str | None] | None = None,
 ) -> bool:
     """Расходится ли сигнатура маршрута с ожидаемой (#215, ADR-0045).
 
@@ -213,6 +215,16 @@ async def route_signature_conflicts(
 
     Отсутствие сигнатуры (нет и сохранённой, и этапов) — не конфликт:
     сравнивать не с чем, и маршрут переиспользуется как раньше.
+
+    ``signature_cache`` — кэш фактической сигнатуры ``route_id -> signature``
+    на время одного батча импорта (та же семантика, что
+    ``PositionRouteBatchCache.signatures_by_route``). Без сохранённой
+    сигнатуры её пересчёт по этапам стоит четырёх запросов, а сверяется один
+    и тот же маршрут много раз — по разу на строку предпросмотра и записи.
+    Кэш обязан быть явным и коротким: он живёт ровно один импорт, поэтому
+    здесь нет ``lru_cache`` (он пережил бы запрос и протух бы на чужих данных).
+    Ключ — ``route_id``, а не ``(route_id, expected)``: чтение этапов дорогое
+    ровно по маршруту, а сравнение дальше идёт по уже посчитанной сигнатуре.
     """
     if not expected_signature:
         return False
@@ -224,10 +236,16 @@ async def route_signature_conflicts(
         # `AttributeError: 'RouteStage' object has no attribute 'encode'`.
         # Вызывающий резолв глотал это общим `except Exception`, и конфликт
         # молча не проверялся вовсе.
-        stages = await load_route_stages(db, route.id)
-        actual = (
-            encode_signature(signature_steps_from_stages(stages)) if stages else None
-        )
+        if signature_cache is not None and route.id in signature_cache:
+            # `None` под ключом — «маршрут без этапов», это тоже результат.
+            actual = signature_cache[route.id]
+        else:
+            stages = await load_route_stages(db, route.id)
+            actual = (
+                encode_signature(signature_steps_from_stages(stages)) if stages else None
+            )
+            if signature_cache is not None:
+                signature_cache[route.id] = actual
     return actual is not None and actual != expected_signature
 
 

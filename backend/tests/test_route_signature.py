@@ -935,3 +935,80 @@ async def test_signature_conflict_verified_against_stages_when_not_saved(session
     assert await route_signature_conflicts(session, route, FOREIGN_SIGNATURE) is True
     # Пустая ожидаемая сигнатура — сравнивать не с чем.
     assert await route_signature_conflicts(session, route, "") is False
+
+
+@pytest.mark.asyncio
+async def test_signature_conflicts_cache_reads_stages_once_per_route(
+    session, monkeypatch
+) -> None:
+    """Кэш батча сверяет маршрут по одной читке его этапов.
+
+    ``signature_cache`` (``route_id -> фактическая сигнатура``) создаёт цикл
+    импорта и живёт ровно один батч: без сохранённой сигнатуры сверка стоит
+    четырёх запросов, а в импорте один маршрут сверяется по строке
+    предпросмотра и записи. Повторные сверки идут по кэшу, но вердикты
+    обязаны совпадать с путём без кэша — иначе импорт менял бы свои
+    valid/invalid в зависимости от порядка строк.
+    """
+    from app.services import route_signature as route_signature_module
+    from app.services.route_signature import route_signature_conflicts
+
+    await _seed_sections(session)
+    route = await _make_route_with_signature(session, ROUTE_NAME, MATCHED_SIGNATURE)
+    # Гасим сохранённую сигнатуру — читать этапы обязательно.
+    route.route_signature = None
+    await session.flush()
+
+    real_load = route_signature_module.load_route_stages
+    loaded_route_ids: list[int] = []
+
+    async def counting_load(db, route_id):
+        loaded_route_ids.append(route_id)
+        return await real_load(db, route_id)
+
+    monkeypatch.setattr(route_signature_module, "load_route_stages", counting_load)
+
+    cache: dict[int, str | None] = {}
+    assert (
+        await route_signature_conflicts(
+            session, route, FOREIGN_SIGNATURE, signature_cache=cache
+        )
+        is True
+    )
+    assert (
+        await route_signature_conflicts(
+            session, route, MATCHED_SIGNATURE, signature_cache=cache
+        )
+        is False
+    )
+    # Вторая сверка того же маршрута — по кэшу: этапы прочитаны один раз.
+    assert loaded_route_ids == [route.id]
+    assert cache[route.id] == MATCHED_SIGNATURE
+
+    # Тот же маршрут БЕЗ кэша даёт те же вердикты — кэш сверку не подменяет,
+    # и каждая такая сверка снова читает этапы.
+    assert await route_signature_conflicts(session, route, FOREIGN_SIGNATURE) is True
+    assert await route_signature_conflicts(session, route, MATCHED_SIGNATURE) is False
+    assert loaded_route_ids == [route.id, route.id, route.id]
+
+    # Маршрут без этапов: ``None`` под ключом — тоже результат, а не «нет в
+    # кэше», и перечитываться он не должен.
+    stageless = ProductionRoute(name="Без этапов", is_active=True)
+    session.add(stageless)
+    await session.flush()
+
+    stageless_cache: dict[int, str | None] = {}
+    assert (
+        await route_signature_conflicts(
+            session, stageless, MATCHED_SIGNATURE, signature_cache=stageless_cache
+        )
+        is False
+    )
+    assert stageless_cache[stageless.id] is None
+    assert (
+        await route_signature_conflicts(
+            session, stageless, MATCHED_SIGNATURE, signature_cache=stageless_cache
+        )
+        is False
+    )
+    assert loaded_route_ids == [route.id, route.id, route.id, stageless.id]

@@ -302,7 +302,11 @@ async def preview_excel_sheet(
     normalize_hanger_quantity: bool = True,
 ) -> dict:
     """Parse an Excel sheet and return full preview checks without creating DB records."""
-    parsed = parse_factory_plan_workbook(
+    # Разбор — синхронный CPU-пусть (calamine + материализация строк) на десятки
+    # и сотни мс: в async-ручке он держал бы event loop (#267, тот же приём,
+    # что у mkdir ниже).
+    parsed = await asyncio.to_thread(
+        parse_factory_plan_workbook,
         content,
         filename,
         sheet_index=sheet_index,
@@ -382,7 +386,9 @@ async def create_excel_import_change_set(
     extension = validate_excel_extension(filename)
     file_hash = sha256_bytes(content)
     detected_format = detect_workbook_format(content, filename)
-    parsed = parse_factory_plan_workbook(
+    # См. preview_excel_sheet: разбор уходит в поток, loop не блокируется.
+    parsed = await asyncio.to_thread(
+        parse_factory_plan_workbook,
         content,
         filename,
         sheet_index=sheet_index,
@@ -551,7 +557,8 @@ async def _get_or_create_import_file(
     # mkdir блокирует event loop воркера, поэтому уходит в поток (#267).
     await asyncio.to_thread(storage_dir.mkdir, parents=True, exist_ok=True)
     stored_path = storage_dir / f"{file_hash}{extension}"
-    stored_path.write_bytes(content)
+    # Запись файла — I/O, как и mkdir выше, поэтому тоже в потоке.
+    await asyncio.to_thread(stored_path.write_bytes, content)
 
     import_file = ImportFile(
         original_filename=filename,
@@ -663,6 +670,11 @@ async def _make_change_items(
     existing_route_by_code_cache: dict[str, ProductionRoute | None] = {}  # code -> ProductionRoute
     legacy_route_by_name_cache: dict[str, ProductionRoute | None] = {}     # имя -> маршрут без кода
     typical_dimensions_cache: dict[int, dict | None] = {}  # product.id -> типовой размер либо None
+    # Фактические сигнатуры маршрутов без сохранённой (#215): route_id ->
+    # посчитанная по этапам. Сверка стоит четырёх запросов на маршрут, а
+    # сверяется он много раз — по строке предпросмотра и записи. Живёт ровно
+    # один батч импорта (см. route_signature_conflicts).
+    signature_conflicts_cache: dict[int, str | None] = {}
 
     # Межстрочные кэши подбора/сборки маршрута (спека §4.1, #163): снимок
     # справочников на батч — правила, активные маршруты, join этапов,
@@ -682,7 +694,9 @@ async def _make_change_items(
         """Конфликт сигнатур (#215, ADR-0045): нашёлся маршрут, а тождество — нет."""
         if route is None or not built.name:
             return False
-        return await route_signature_conflicts(db, route, built.signature)
+        return await route_signature_conflicts(
+            db, route, built.signature, signature_cache=signature_conflicts_cache
+        )
 
     async def resolve_route_for_build(built: BuiltRoute) -> tuple[ProductionRoute | None, bool]:
         """Маршрут импорта для собранного маршрута: (маршрут, конфликт).
