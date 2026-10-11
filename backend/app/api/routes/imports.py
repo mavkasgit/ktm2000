@@ -565,6 +565,9 @@ class ImportPositionOut(BaseModel):
     status: str
     validation_status: str
     validation_errors: list
+    # Предупреждения импорта, персистированные на позиции (#328) — сырые
+    # коды, как и в PlanPositionOut.validation_warnings.
+    validation_warnings: list
     import_batch_id: int | None
 
 
@@ -631,6 +634,7 @@ async def list_import_positions(batch_id: int, db: AsyncSession = Depends(get_db
                 status=pos.status.value,
                 validation_status=pos.validation_status.value,
                 validation_errors=pos.validation_errors or [],
+                validation_warnings=pos.validation_warnings or [],
                 import_batch_id=pos.import_batch_id,
             )
         )

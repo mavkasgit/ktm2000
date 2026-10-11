@@ -20,6 +20,7 @@ function position(overrides: Partial<PlanPositionOut>): PlanPositionOut {
     validation_status: "valid",
     errors: [],
     warnings: [],
+    validation_warnings: [],
     source_row_number: 5,
     product_id: 10,
     route_id: null,
@@ -278,6 +279,26 @@ describe("PositionRow — пара «Ошибки»/«Предупр.»", () => 
     expect(pair).toHaveLength(1)
     expect(pair[0].getAttribute("colspan")).toBe("2")
     expect(pair[0].textContent).toContain("Продукт не найден")
+  })
+
+  it("предупреждение читается с позиции (#328), а не с последнего change item", () => {
+    const { row, pair } = messageCells(
+      position({ warnings: [], validation_warnings: ["hanger_quantity_not_set:2.7"] }),
+    )
+
+    expect(pair).toHaveLength(1)
+    expect(pair[0].textContent).toContain("Не задано количество на подвес")
+    // Тон предупреждения — амбер, а не тон брака: позиция остаётся валидной.
+    expect(row.className).toContain("bg-amber-50")
+    expect(row.className).not.toContain("bg-red-50")
+  })
+
+  it("предупреждение не красит строку в брак, пока нет ошибок", () => {
+    const { row } = messageCells(
+      position({ errors: [], validation_warnings: ["product_name_missing"] }),
+    )
+
+    expect(row.className).not.toContain("bg-red-50")
   })
 
   it("оба типа — по одной колонке, у каждого блока свой title", () => {

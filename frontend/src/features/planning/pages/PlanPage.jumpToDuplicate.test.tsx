@@ -69,6 +69,7 @@ function position(overrides: Partial<PlanPositionOut>): PlanPositionOut {
     validation_status: "valid",
     errors: [],
     warnings: [],
+    validation_warnings: [],
     source_row_number: 5,
     product_id: 10,
     route_id: null,
@@ -124,8 +125,8 @@ beforeEach(() => {
     {
       source_fingerprint: "fp-1",
       positions: [
-        { id: 1, source_sku: "A", source_name: "A", quantity: "1", source_row_number: 1, status: "draft", validation_errors: [] },
-        { id: 2, source_sku: "B", source_name: "B", quantity: "1", source_row_number: 2, status: "draft", validation_errors: [] },
+        { id: 1, source_sku: "A", source_name: "A", quantity: "1", source_row_number: 1, status: "draft", validation_errors: [], validation_warnings: [] },
+        { id: 2, source_sku: "B", source_name: "B", quantity: "1", source_row_number: 2, status: "draft", validation_errors: [], validation_warnings: [] },
       ],
     },
   ]);

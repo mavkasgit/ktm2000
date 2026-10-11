@@ -20,6 +20,7 @@ import {
   DuplicateConflict,
 } from "../lib/plan-labels"
 import { messagePairLayout } from "../lib/messageColumns"
+import { positionWarnings } from "../lib/planWarnings"
 import type { PlanRowLink } from "../lib/planRowLinks"
 
 /**
@@ -57,13 +58,15 @@ export function PositionRow({ pos, onApprove, onDelete, selected, routes, onAssi
   rowLink?: PlanRowLink
 }) {
   const hasErrors = pos.errors && pos.errors.length > 0
-  const hasWarnings = pos.warnings && pos.warnings.length > 0
+  // Предупреждения читаются с позиции (#328), а не с последнего change item.
+  const warnings = positionWarnings(pos)
+  const hasWarnings = warnings.length > 0
   const noErrors = !hasErrors && !duplicateConflict
   const noWarnings = !hasWarnings
   const originalQuantity = (pos.payload?.original_quantity ?? null) as string | number | null
   const translatedErrors = hasErrors ? pos.errors.map((e) => translateLabel(e, errorLabels)) : []
   const validationOverridden = pos.validation_status === "overridden"
-  const translatedWarnings = hasWarnings ? pos.warnings.map((w) => translateLabel(w, warningLabels)) : []
+  const translatedWarnings = hasWarnings ? warnings.map((w) => translateLabel(w, warningLabels)) : []
   const rowNum = (() => {
     const numbers = Array.isArray(pos.source_row_numbers)
       ? pos.source_row_numbers.filter((v): v is number => typeof v === "number")

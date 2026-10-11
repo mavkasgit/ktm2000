@@ -598,6 +598,11 @@ async def apply_change_set(db: AsyncSession, change_set_id: int, *, skip_invalid
                     )
 
                     position.validation_errors = validation_errors
+                    # Предупреждения — с элемента сета, не пересчётом (#328):
+                    # валидация их и не считает (ADR-0066). Пустой список
+                    # элемента гасит предупреждения — позиция отражает
+                    # последнее применение, а не накопленное.
+                    position.validation_warnings = list(item.warnings or [])
                     position.validation_status = (
                         PlanPositionValidationStatus.invalid if validation_errors else PlanPositionValidationStatus.valid
                     )
@@ -646,6 +651,7 @@ async def apply_change_set(db: AsyncSession, change_set_id: int, *, skip_invalid
                 "status": PlanPositionStatus.invalid if validation_errors else PlanPositionStatus.draft,
                 "validation_status": PlanPositionValidationStatus.invalid if validation_errors else PlanPositionValidationStatus.valid,
                 "validation_errors": validation_errors,
+                "validation_warnings": list(item.warnings or []),
             }
             # Повторный apply откаченного сета (#172): своя отменённая строка
             # переиспользуется, а не вставляется второй раз — пара
@@ -1498,6 +1504,7 @@ async def get_plan_preview(db: AsyncSession, production_plan_id: int, extra: dic
                 "status": position.status.value,
                 "validation_status": position.validation_status.value,
                 "validation_errors": position.validation_errors,
+                "validation_warnings": position.validation_warnings,
             }
             for position in positions
         ],

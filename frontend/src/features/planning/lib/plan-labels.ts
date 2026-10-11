@@ -3,6 +3,8 @@ import type { BadgeProps } from "@/shared/ui/badge"
 import type { FiltersPanelOption } from "@/shared/ui"
 import { errorLabels, errorPhraseTranslations, statusLabels, validationLabels, warningLabels } from "@/shared/lib/generated-labels"
 
+import { positionWarnings } from "./planWarnings"
+
 export { errorLabels, statusLabels, warningLabels }
 export { actionLabels } from "@/shared/lib/generated-labels"
 export { errorLabels as routeErrorLabels } from "@/shared/lib/generated-labels"
@@ -40,7 +42,8 @@ export function isRiskyForApprove(pos: PlanPositionOut, duplicateConflict?: Dupl
     (pos.route_match_reason !== null &&
       pos.route_match_reason !== "selection_rules" &&
       pos.route_match_reason !== "wildcard_rule") ||
-    (pos.warnings && pos.warnings.length > 0) ||
+    // Риск для утверждения дают и предупреждения — берутся с позиции (#328).
+    positionWarnings(pos).length > 0 ||
     (pos.errors && pos.errors.length > 0)
   return hasRouteProblems || Boolean(duplicateConflict && duplicateConflict.conflictIds.length > 0)
 }

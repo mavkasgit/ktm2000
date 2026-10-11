@@ -28,6 +28,8 @@ export type ApprovePositionResponse = {
   status: PlanPositionStatus;
   validation_status: string;
   validation_errors: Record<string, unknown> | null;
+  /** Предупреждения позиции (#328) — сырые коды, статус не меняют. */
+  validation_warnings: string[];
 };
 
 export type CreateReleaseBatchPositionInput = {
@@ -148,6 +150,12 @@ export type PlanPositionOut = {
   validation_status: string;
   errors: string[];
   warnings: string[];
+  /**
+   * Предупреждения импорта, персистированные на позиции (#328): пишутся при
+   * применении change-set. `warnings` — прежнее поле из последнего
+   * PlanChangeItem, для позиций до миграции 079 остаётся источником показа.
+   */
+  validation_warnings: string[];
   source_row_number: number | null;
   source_row_numbers?: number[] | null;
   source_ref?: string | null;
@@ -279,6 +287,7 @@ export type PlanDuplicateGroup = {
     source_row_number: number | null;
     status: string;
     validation_errors: string[];
+    validation_warnings: string[];
     source_fingerprint?: string | null;
     source_row_hash?: string | null;
   }[];

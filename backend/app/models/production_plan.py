@@ -196,6 +196,10 @@ class PlanPosition(Base):
         nullable=False,
     )
     validation_errors: Mapped[list] = mapped_column(JSONB, nullable=False, server_default=text("'[]'::jsonb"), default=list)
+    # Предупреждения импорта (#328): пишутся с элемента change-set при
+    # применении, а не пересчитываются валидацией (ADR-0066). На
+    # `validation_status` не влияют — предупреждение остаётся предупреждением.
+    validation_warnings: Mapped[list] = mapped_column(JSONB, nullable=False, server_default=text("'[]'::jsonb"), default=list)
     approved_by: Mapped[int | None] = mapped_column(ForeignKey("users.id"), nullable=True)
     approved_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
     released_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)

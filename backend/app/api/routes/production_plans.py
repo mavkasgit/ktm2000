@@ -573,6 +573,7 @@ async def approve_position(
         "status": position.status.value,
         "validation_status": position.validation_status.value,
         "validation_errors": position.validation_errors,
+        "validation_warnings": position.validation_warnings,
     }
 
 
@@ -1215,6 +1216,13 @@ class PlanPositionOut(BaseModel):
     validation_status: str
     errors: list
     warnings: list
+    # Предупреждения, персистированные на самой позиции (#328): пишутся при
+    # применении change-set и переживают любые изменения элементов сета.
+    # `warnings` — прежнее поле из последнего PlanChangeItem, оставлено для
+    # совместимости и для позиций, созданных до миграции 079 (бэкфилла нет).
+    # Сырые коды: предупреждения переводит фронт (`warningLabels`), а
+    # `format_validation_error` для `code:detail` отбрасывает базовый код.
+    validation_warnings: list
     source_row_number: int | None
     source_row_numbers: list[int] | None = None
     source_ref: str | None = None
@@ -1593,6 +1601,7 @@ async def _serialize_plan_positions(
                 status=p.status.value,
                 validation_status=p.validation_status.value,
                 errors=[format_validation_error(e) for e in (p.validation_errors or [])],
+                validation_warnings=p.validation_warnings or [],
                 source_row_number=p.source_row_number,
                 source_row_numbers=_source_row_numbers_from_position(p),
                 source_ref=p.source_ref,
@@ -1767,6 +1776,7 @@ async def cancelled_positions(db: AsyncSession = Depends(get_db)) -> list[PlanPo
                 status=p.status.value,
                 validation_status=p.validation_status.value,
                 errors=[format_validation_error(e) for e in (p.validation_errors or [])],
+                validation_warnings=p.validation_warnings or [],
                 source_row_number=p.source_row_number,
                 source_row_numbers=_source_row_numbers_from_position(p),
                 source_ref=p.source_ref,
@@ -1846,6 +1856,7 @@ async def all_positions(production_plan_id: int, db: AsyncSession = Depends(get_
                 status=p.status.value,
                 validation_status=p.validation_status.value,
                 errors=[format_validation_error(e) for e in (p.validation_errors or [])],
+                validation_warnings=p.validation_warnings or [],
                 source_row_number=p.source_row_number,
                 source_row_numbers=_source_row_numbers_from_position(p),
                 source_ref=p.source_ref,
@@ -2081,6 +2092,7 @@ async def find_plan_duplicates(production_plan_id: int, db: AsyncSession = Depen
             "source_row_number": p.source_row_number,
             "status": p.status.value,
             "validation_errors": p.validation_errors or [],
+            "validation_warnings": p.validation_warnings or [],
             "source_fingerprint": p.source_fingerprint,
             "source_row_hash": p.source_row_hash,
         })
@@ -2363,6 +2375,7 @@ async def update_position_quantity(
         validation_status=position.validation_status.value,
         errors=[format_validation_error(e) for e in (position.validation_errors or [])],
         warnings=[],
+        validation_warnings=position.validation_warnings or [],
         source_row_number=position.source_row_number,
         source_row_numbers=_source_row_numbers_from_position(position),
         source_ref=position.source_ref,

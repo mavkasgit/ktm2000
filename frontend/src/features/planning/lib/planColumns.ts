@@ -13,6 +13,7 @@ import type { PlanPositionOut } from "@/shared/api/productionPlans";
 import type { ColumnSpec } from "@/shared/lib/columnSpecs";
 
 import type { PlanSortField } from "./plan-labels";
+import { positionWarnings } from "./planWarnings";
 
 /**
  * Все колонки плана фильтруемые, в том числе клиентские: `filterField`
@@ -113,9 +114,11 @@ export const planColumns: PlanColumn[] = [
     apiParam: "has_warnings",
     mapValue: toYesNo("0"),
     width: "180px",
-    cellValue: (row) => String(row.warnings?.length ?? 0),
-    // Предупреждения берутся из последнего PlanChangeItem позиции, а не из
-    // агрегата, и в ORDER BY не выражаются.
+    // Счётчик берётся из персистированных предупреждений позиции (#328),
+    // с фолбэком на последний PlanChangeItem для строк до миграции 079 —
+    // как и фильтр `has_warnings`, который сервер считает по change items.
+    cellValue: (row) => String(positionWarnings(row).length),
+    // В ORDER BY не выражается: сервер сортирует только по ошибкам.
   },
 ];
 
