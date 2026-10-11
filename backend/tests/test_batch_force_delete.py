@@ -17,11 +17,15 @@ from app.models.imports import ImportBatch, ImportBatchMode
 from app.models.internal_plan import SectionPlanLine
 from app.models.production_plan import PlanChangeSet, PlanPosition, PlanPositionStatus
 from app.models.route import SectionOperation
-from app.models.transfer import Transfer
+from app.models.transfer import Transfer, TransferStatus
 from app.models.user import User, UserRole
 from app.models.work_task import WorkTask, WorkTaskStatus
 from app.services.action_journal_service import action_journal_service
-from app.services.import_batch_force_delete import get_batch_force_delete_preview
+from app.services.import_batch_force_delete import (
+    _dims_signature,
+    _ops_signature,
+    get_batch_force_delete_preview,
+)
 from app.services.material_operations import (
     OPERATIONS_EMPTY_LABEL,
     OPERATIONS_NOT_RECORDED_LABEL,
@@ -137,6 +141,145 @@ async def test_force_delete_preview_counts_footprint_and_stock_effects(
     deltas = {e["location_id"]: e["net_delta"] for e in body["stock_effects"]}
     assert sorted(deltas.values()) == ["-5.000", "5.000"], body["stock_effects"]
     assert await _balance(session, product.id, next(iter(deltas))) is not None
+
+
+async def _balances_by_key(
+    session: AsyncSession, product_id: int
+) -> dict[tuple, Decimal]:
+    """Остатки артикула, ключ — тот же, что у строк ``stock_effects`` превью."""
+    rows = (
+        (
+            await session.execute(
+                select(StockBalance).where(StockBalance.product_id == product_id)
+            )
+        )
+        .scalars()
+        .all()
+    )
+    return {
+        (
+            int(row.location_id),
+            _dims_signature(row.dimensions),
+            _ops_signature(row.completed_operations),
+        ): Decimal(row.balance_qty)
+        for row in rows
+    }
+
+
+def _effect_key(effect: dict) -> tuple:
+    return (
+        int(effect["location_id"]),
+        _dims_signature(effect["dimensions"]),
+        _ops_signature(effect["completed_operations"]),
+    )
+
+
+async def test_force_delete_preview_compensation_matches_balance_projection(
+    session: AsyncSession, client
+) -> None:
+    """Превью с компенсацией сходится с фактическим пересчётом баланса (#329).
+
+    Батч содержит проводку отмены (``reverses_id`` на SEND передачи, зеркальная
+    геометрия) и незакомпенсированный вход. Свод обязан отдать дельты, равные
+    ``balance_до − balance_после`` ПО ТОМУ ЖЕ КЛЮЧУ: пара «SEND + отмена» гаснет
+    в ноль (баланс под ней не меняется), а обычный вход остаётся ровно на свою
+    величину. Сверка идёт с реальными строками StockBalance до/после
+    force-удаления (баланс пересчитывает сам force), а не с собственной
+    формулой свода.
+    """
+    fx = await _build_released_batch_with_transfer(session, "BFD-COMP")
+    product, plan, batch, transfer = (
+        fx["product"],
+        fx["plan"],
+        fx["batch"],
+        fx["transfer"],
+    )
+    send = (
+        await session.execute(
+            select(StockTransaction).where(
+                StockTransaction.transfer_id == transfer.id,
+                StockTransaction.reason == Reason.TRANSFER_SEND,
+            )
+        )
+    ).scalar_one()
+
+    # Проводка отмены создаётся вручную: зеркальная геометрия + reverses_id
+    # на SEND. record() — единственный путь записи в ledger: он же зеркалит
+    # признак операций и обновляет баланс так, как это сделала бы доменная
+    # отмена передачи.
+    await StockCommandService().record(
+        session,
+        StockCommand(
+            product_id=send.product_id,
+            quantity=send.quantity,
+            reason=send.reason,
+            from_location_id=send.to_location_id,
+            to_location_id=send.from_location_id,
+            dimensions=send.dimensions,
+            quality_state=send.to_quality_state,
+            to_quality_state=send.from_quality_state,
+            task_id=send.task_id,
+            transfer_id=send.transfer_id,
+            section_plan_line_id=send.section_plan_line_id,
+            reverses_id=send.id,
+            created_by=send.created_by,
+        ),
+    )
+    # S6 сверяет нетто transfer_send с sent_quantity, кроме отменённых передач:
+    # отмена и оставляет такую компенсацию, поэтому переводим передачу в
+    # cancelled — то же состояние, что ставит StockCompensator.apply.
+    transfer.status = TransferStatus.cancelled
+
+    # Вторая проводка батча — обычный вход: без него компенсированная пара
+    # свелась бы превью к пустому списку, и сверка не доказывала бы ничего.
+    await StockCommandService().record(
+        session,
+        StockCommand(
+            product_id=product.id,
+            to_location_id=send.from_location_id,
+            quantity=Decimal(7),
+            reason=Reason.MANUAL_IN,
+            section_plan_line_id=send.section_plan_line_id,
+            allow_unknown_completed_operations=True,
+            created_by=send.created_by,
+        ),
+    )
+    await session.commit()
+
+    resp = await client.get(
+        f"/api/production-plans/{plan.id}/batches/{batch.id}/force-delete-preview"
+    )
+    assert resp.status_code == 200, resp.text
+    preview = resp.json()
+    assert preview["blockers"] == []
+    # SEND + RECEIVE + отмена + вход: компенсация внутри батча, а не чужая
+    # (иначе _force_blockers вернул бы blocker, а не превью).
+    assert preview["ledger_entries"] == 4, preview
+    preview_deltas = {
+        _effect_key(e): Decimal(e["net_delta"]) for e in preview["stock_effects"]
+    }
+
+    before = await _balances_by_key(session, product.id)
+    delete = await client.request(
+        "DELETE",
+        f"/api/production-plans/{plan.id}/batches/{batch.id}/force",
+        json={"confirmation": "BFD-COMP.xlsx", "reason": "снос с компенсацией"},
+    )
+    assert delete.status_code == 200, delete.text
+    after = await _balances_by_key(session, product.id)
+
+    expected = {
+        key: before.get(key, Decimal(0)) - after.get(key, Decimal(0))
+        for key in set(before) | set(after)
+    }
+    expected = {key: delta for key, delta in expected.items() if delta != 0}
+    # Тест обязан иметь и ненулевой ключ — иначе сверка пуста по построению.
+    assert expected, (before, after, preview_deltas)
+    assert preview_deltas == expected, (preview_deltas, expected)
+
+    await assert_no_invariants_violations(
+        session, context="batch-force-delete-compensation"
+    )
 
 
 async def test_force_delete_removes_graph_and_returns_stock_to_pre_import(
