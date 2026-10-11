@@ -83,6 +83,10 @@ export function ImportWizard(props: {
   const [error, setError] = useState<string | null>(null)
   const [result, setResult] = useState<Record<string, unknown> | null>(null)
   const [searchQuery, setSearchQuery] = useState("")
+  // Фильтр поиска по превью идёт по паузе, как и выбор строк: иначе каждый
+  // символ пересобирает фильтр и сортировку по всей выборке строк. Поле
+  // показывает введённое сразу — задержка только у запроса фильтра.
+  const debouncedSearchQuery = useDebouncedValue(searchQuery)
   const [rowSelection, setRowSelection] = useState("")
   const debouncedRowSelection = useDebouncedValue(rowSelection)
   const [pendingChangeSet, setPendingChangeSet] = useState<{
@@ -236,8 +240,8 @@ export function ImportWizard(props: {
           (filterDuplicates && isDuplicateRow(r as DuplicateRowSignal)),
       )
     }
-    if (searchQuery.trim()) {
-      const q = searchQuery.trim().toLowerCase()
+    if (debouncedSearchQuery.trim()) {
+      const q = debouncedSearchQuery.trim().toLowerCase()
       rows = rows.filter((r) => {
         const rowNum = String(r.source_row_number ?? (r.after_data as any)?.source_row_numbers?.[0] ?? "")
         const planPosId = String(r.plan_position_id ?? "")
@@ -248,7 +252,7 @@ export function ImportWizard(props: {
       })
     }
     return sortImportPreviewRows(rows, sortConfig)
-  }, [allRows, filterErrors, filterWarnings, filterDuplicates, sortConfig, rowSelection, searchQuery])
+  }, [allRows, filterErrors, filterWarnings, filterDuplicates, sortConfig, rowSelection, debouncedSearchQuery])
 
   const summary = useMemo(() => {
     const total = allRows.length

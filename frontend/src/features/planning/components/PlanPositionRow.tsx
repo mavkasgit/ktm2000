@@ -1,4 +1,4 @@
-import { useMemo, useState } from "react"
+import { memo, useMemo, useState } from "react"
 import { AlertTriangle, Route } from "lucide-react"
 import { useQuery, useQueryClient } from "@tanstack/react-query"
 import { validationLabels } from "@/shared/lib/generated-labels"
@@ -42,14 +42,22 @@ function ExpectedRouteMarker() {
   )
 }
 
-export function PositionRow({ pos, onApprove, onDelete, selected, routes, onAssignRoute, onOpenDetail, duplicateConflict, onJumpToPosition, onSelect, onSkuClick, rowLink }: {
+/**
+ * Строка таблицы плана под `React.memo`: страница рисует их сотнями, и без
+ * мемоизации любой рендер (ввод в поиске, изменение одной строки) пересобирал
+ * бы все строки. Мемо держится на стабильных пропсах страницы: обработчики в
+ * `PlanPage` закреплены `useCallback`, `routes` — `useMemo`, `pos` приходит
+ * из кэша TanStack тем же объектом, пока данные не поменялись.
+ */
+export const PositionRow = memo(function PositionRow({ pos, onApprove, onDelete, selected, routes, onAssignRoute, onOpenDetail, duplicateConflict, onJumpToPosition, onSelect, onSkuClick, rowLink }: {
   pos: PlanPositionOut;
   onApprove: (id: number, planId?: number, force?: boolean, reason?: string) => Promise<void>;
   onDelete: (id: number, planId?: number) => void;
   selected?: boolean;
   routes?: ProductionRoute[];
   onAssignRoute?: (positionId: number, routeId: number | null) => void;
-  onOpenDetail?: () => void;
+  /** Передаёт позицию, а не вызывается замыканием строки: замыкание создаёт новую ссылку на каждый рендер и обнуляет `memo`. */
+  onOpenDetail?: (pos: PlanPositionOut) => void;
   duplicateConflict?: DuplicateConflict;
   onJumpToPosition?: (id: number) => void;
   onSelect?: (id: number) => void;
@@ -245,7 +253,7 @@ export function PositionRow({ pos, onApprove, onDelete, selected, routes, onAssi
           e.stopPropagation()
           onSelect(pos.id)
         } else {
-          onOpenDetail?.()
+          onOpenDetail?.(pos)
         }
       }}
     >
@@ -535,4 +543,4 @@ export function PositionRow({ pos, onApprove, onDelete, selected, routes, onAssi
     </AlertDialog>
     </>
   )
-}
+})

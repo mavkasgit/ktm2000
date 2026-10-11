@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useRef, useState } from "react"
+import { useCallback, useEffect, useMemo, useRef, useState } from "react"
 import { FileSpreadsheet, History, Plus, Upload, ListChecks } from "lucide-react"
 import { useNavigate } from "react-router-dom"
 import { ImportWizard } from "../ImportWizard"
@@ -85,16 +85,20 @@ export function PlanPage() {
   const tableScrollRef = useRef<HTMLDivElement>(null)
   const ringTimerRef = useRef<number | null>(null)
 
-  const openDetail = (pos: PlanPositionOut) => {
+  // `useCallback`: `openDetail` уходит в строку таблицы пропом, и новая
+  // ссылка на каждом рендере сводила бы `React.memo` у строки к нулю.
+  const openDetail = useCallback((pos: PlanPositionOut) => {
     setDetailPosition(pos)
     setDetailOpen(true)
-  }
+  }, [])
 
   const { data: plans } = useQuery({ queryKey: queryKeys.execution.plans(), queryFn: listPlans })
   const activePlan = plans && plans.length > 0 ? plans[0] : null
 
   const { data: routes } = useQuery({ queryKey: queryKeys.routes.all(), queryFn: () => listRoutes() })
-  const activeRoutes = routes?.filter(r => r.is_active) ?? []
+  // Мемо той же причины, что у `openDetail`: `routes?.filter(...) ?? []`
+  // создавал новый массив на каждом рендере и переходил в каждую строку.
+  const activeRoutes = useMemo(() => routes?.filter(r => r.is_active) ?? [], [routes])
 
   const { data: templates } = useQuery({ queryKey: queryKeys.importTemplates.all(), queryFn: listAllImportTemplates })
   const activeTemplates = (templates ?? []).filter(t => t.is_active).sort((a, b) => a.sort_order - b.sort_order)
@@ -175,29 +179,7 @@ export function PlanPage() {
     void invalidateAfter(queryClient, "importApplied")
   }
 
-  const handleApprove = async (positionId: number, planId?: number, force = false, reason?: string) => {
-    const targetPlanId = planId || activePlan?.id
-    if (!targetPlanId) return
-    try {
-      await approveProductionPlanPosition(targetPlanId, positionId, { force, reason })
-      void invalidateAfter(queryClient, "positionApproved")
-      toast({ title: "Позиция утверждена", variant: "success" })
-    } catch (e) {
-      const msg = getErrorMessage(e)
-      const duplicateConflict = duplicateConflictsByPosition.get(positionId)
-      const duplicateLinksPrefix =
-        duplicateConflict && duplicateConflict.conflictIds.length > 0
-          ? `Конфликтующие позиции: ${duplicateConflict.conflictIds.map((id) => `#${id}`).join(", ")}. `
-          : ""
-      toast({
-        title: "Ошибка валидации",
-        description: `${duplicateLinksPrefix}${msg}`,
-        variant: "destructive",
-      })
-    }
-  }
-
-  const handleDelete = async (positionId: number, planId?: number) => {
+  const handleDelete = useCallback(async (positionId: number, planId?: number) => {
     const targetPlanId = planId || activePlan?.id
     if (!targetPlanId) return
     try {
@@ -207,11 +189,14 @@ export function PlanPage() {
     } catch (e) {
       toast({ title: "Ошибка", description: e instanceof Error ? e.message : "Не удалось удалить", variant: "destructive" })
     }
-  }
+  }, [activePlan, queryClient])
 
-  const toggleSelect = (id: number) => {
+  // Зависим от `bulkSelection.selectOne` (стабильный `useCallback` в контроллере),
+  // а не от всего `bulkSelection`: объект пересобирается при изменении выделения,
+  // и новый обработчик пересоздал бы все строки таблицы без нужды.
+  const toggleSelect = useCallback((id: number) => {
     bulkSelection.selectOne(id)
-  }
+  }, [bulkSelection.selectOne])
 
   const selectAll = () => {
     if (bulkSelection.isAllSelected(filteredPositionIds)) {
@@ -228,7 +213,7 @@ export function PlanPage() {
     setBulkMode(false)
   }
 
-  const handleAssignRouteSingle = async (positionId: number, routeId: number | null) => {
+  const handleAssignRouteSingle = useCallback(async (positionId: number, routeId: number | null) => {
     try {
       const rid = (routeId === null || Number.isNaN(routeId)) ? null : routeId
       await batchAssignRouteGlobal([positionId], rid)
@@ -240,12 +225,12 @@ export function PlanPage() {
         variant: "destructive",
       })
     }
-  }
+  }, [queryClient])
 
-  const exitBulkMode = () => {
+  const exitBulkMode = useCallback(() => {
     bulkSelection.clear()
     setBulkMode(false)
-  }
+  }, [bulkSelection])
 
   useEffect(() => {
     if (!bulkMode) return
@@ -254,7 +239,7 @@ export function PlanPage() {
     }
     window.addEventListener("keydown", handler)
     return () => window.removeEventListener("keydown", handler)
-  }, [bulkMode])
+  }, [bulkMode, exitBulkMode])
 
   const canApprovePosition = (pos: PlanPositionOut) =>
     (pos.status === 'draft' || pos.status === 'valid') &&
@@ -452,14 +437,17 @@ export function PlanPage() {
   // `placeholderData: keepPreviousData` держит дерево на смене параметров
   // запроса: без него `isLoading` гасит таблицу целиком вместе с открытым
   // поповером фильтра, и набранный текст теряется на ровном месте (ADR-0044).
+  // Без `enabled`: эндпоинт принимает фильтры страницы, а не id плана, поэтому
+  // раньше `!!activePlan` ставил позиции второй ступенькой за списком планов —
+  // они ждали план и приезжали последними. Пустой ответ без планов экран уже
+  // читает как «нет активного плана», отдельной задержки здесь не нужно.
   const { data: positionsData, isPending: posPending } = useQuery({
     queryKey: queryKeys.plan.allPositions(positionsQueryParams),
     queryFn: () => allPlanPositions(positionsQueryParams),
-    enabled: !!activePlan,
     placeholderData: keepPreviousData,
   })
 
-  const positions = positionsData?.positions ?? []
+  const positions = useMemo(() => positionsData?.positions ?? [], [positionsData])
   const positionsTotal = positionsData?.total ?? 0
   const positionsTotalPages = pagination.getTotalPages(positionsTotal)
 
@@ -479,6 +467,35 @@ export function PlanPage() {
     }
     return map
   }, [duplicateGroupsByPlan])
+
+  // Здесь, а не выше в обработчиках: тост об ошибке утверждения сводит
+  // конфликт дубликатов по `duplicateConflictsByPosition`, а зависимость по
+  // имени осталась бы в TDZ до объявления карты. `useCallback` нужен строке
+  // таблицы — пропом по той же причине, что и у `openDetail`.
+  const handleApprove = useCallback(
+    async (positionId: number, planId?: number, force = false, reason?: string) => {
+      const targetPlanId = planId || activePlan?.id
+      if (!targetPlanId) return
+      try {
+        await approveProductionPlanPosition(targetPlanId, positionId, { force, reason })
+        void invalidateAfter(queryClient, "positionApproved")
+        toast({ title: "Позиция утверждена", variant: "success" })
+      } catch (e) {
+        const msg = getErrorMessage(e)
+        const duplicateConflict = duplicateConflictsByPosition.get(positionId)
+        const duplicateLinksPrefix =
+          duplicateConflict && duplicateConflict.conflictIds.length > 0
+            ? `Конфликтующие позиции: ${duplicateConflict.conflictIds.map((id) => `#${id}`).join(", ")}. `
+            : ""
+        toast({
+          title: "Ошибка валидации",
+          description: `${duplicateLinksPrefix}${msg}`,
+          variant: "destructive",
+        })
+      }
+    },
+    [activePlan, duplicateConflictsByPosition, queryClient],
+  )
 
   // Список клиентских колонок и решение «уходит ли маршрут на клиент» — из
   // описания колонок: пока они перечислялись здесь, переименование колонки
@@ -609,7 +626,7 @@ export function PlanPage() {
   // списочным эндпоинтом по точному id. Пустой ответ догрузки — тост, а не
   // тишина. Скролл — после отрисовки строки (эффект по `positions`), а не по
   // `setTimeout(0)`: строка цели могла ещё не приехать.
-  const jumpToPosition = (positionId: number) => {
+  const jumpToPosition = useCallback((positionId: number) => {
     setFilters(prev => ({ ...prev, status: "all" }))
     const targetPosition = positions.find((p) => p.id === positionId)
     if (targetPosition) {
@@ -643,7 +660,7 @@ export function PlanPage() {
         })
       }
     })()
-  }
+  }, [openDetail, positions, queryClient])
 
   // Прокрутка к строке цели после её отрисовки: ждём появления
   // `plan-position-<id>` в DOM, а не одного тика. Если строка не на текущей
@@ -870,7 +887,7 @@ export function PlanPage() {
                         selected={bulkSelection.isSelected(p.id)}
                         routes={activeRoutes}
                         onAssignRoute={handleAssignRouteSingle}
-                        onOpenDetail={() => openDetail(p)}
+                        onOpenDetail={openDetail}
                         duplicateConflict={duplicateConflictsByPosition.get(p.id)}
                         onJumpToPosition={jumpToPosition}
                         onSelect={bulkMode ? toggleSelect : undefined}
