@@ -50,7 +50,6 @@ from app.services.audit_log_service import log_action
 from app.services.material_operations import completed_operation_stages
 from app.services.production_plan_service import _delete_batch_and_orphan_file
 from app.stock.import_service import resolve_operations_dictionary
-from app.stock.ledger import net_quantity_expr
 from app.stock.models import QualityState
 from app.stock.services import StockProjectionManager
 
@@ -195,10 +194,7 @@ async def _collect_footprint(db: AsyncSession, batch_id: int) -> _Footprint:
                 StockTransaction.to_quality_state,
                 StockTransaction.dimensions,
                 StockTransaction.completed_operations,
-                # Знак компенсации берётся из ledger (ADR-0017): знание о
-                # reverses_id живёт только в net_quantity_expr(), здесь оно
-                # не пересчитывается (#317).
-                net_quantity_expr().label("signed_quantity"),
+                StockTransaction.quantity,
                 StockTransaction.action_id,
                 Product.sku,
             )
@@ -236,13 +232,21 @@ async def _collect_footprint(db: AsyncSession, batch_id: int) -> _Footprint:
 def _aggregate_stock_effects(
     rows, locations: dict[int, str], operations: list[dict]
 ) -> list[dict]:
-    """Свод по проводкам батча: чистый эффект на каждый ключ остатка.
+    """Свод по проводкам батча: вклад удаляемых проводок в баланс остатка.
 
-    Это ровно то изменение остатка, которое увидит склад после удаления:
-    входящие плюсуются, исходящие вычитаются. Знак компенсации приходит
-    из ledger — колонка ``signed_quantity`` есть ``net_quantity_expr()``
-    (ADR-0017), поэтому «сокращение эффекта до нуля» следует из единой
-    нетто-семантики, а не пересчитывается здесь по ``reverses_id`` (#317).
+    Свод считается по геометрии проводки: вход (``to_location_id``) плюсует
+    ``quantity``, выход (``from_location_id``) вычитает. Это ровно та же
+    арифметика, что у материализованной баланс-проекции:
+    ``StockProjectionManager._recompute_balance`` считает ``SUM(quantity)`` по
+    обеим сторонам и никакой отдельной колонки знака не читает, поэтому свод
+    совпадает с балансом по построению, а не совпадением знаков (#329).
+
+    Компенсация гасит эффект зеркальной геометрией: проводка отмены
+    переворачивает ``from``/``to`` относительно исходной, её плечо
+    противоположно исходному, и полностью скомпенсированная пара сводится к
+    нулю (нулевые ключи отфильтровываются), а не к удвоенному эффекту. Файл
+    признак отмены не интерпретирует: знак строки берётся только из
+    геометрии и её ``quantity``.
 
     Ключ повторяет ключ StockBalance, иначе свод врёт: остатки одного
     артикула и участка, но разной длины и разного признака операций —
@@ -279,7 +283,7 @@ def _aggregate_stock_effects(
             )
             direction = Decimal(1) if location_id == row.to_location_id else Decimal(-1)
             deltas[key] = (
-                deltas.get(key, Decimal(0)) + direction * row.signed_quantity
+                deltas.get(key, Decimal(0)) + direction * row.quantity
             )
             skus[key] = row.sku
             dimensions[key] = row.dimensions

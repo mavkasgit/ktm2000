@@ -1,26 +1,22 @@
-"""Свод эффектов force-delete: знак компенсации — из ledger (#317, DoD #110).
+"""Свод эффектов force-delete: знак — из геометрии проводки (#329, DoD #110).
 
 ``_aggregate_stock_effects`` — чистая функция над строками проекции из
 ``_collect_footprint``. Тест кормит её фиктивными строками и сверяет ТОЧНЫЕ
-числа по каждому ключу (не «не пусто»), чем и делает проверяемым пункт DoD
-«итоги превью force-delete на фикстуре с компенсациями не изменились»:
-колонка ``signed_quantity`` (= ``net_quantity_expr()``) подставляется туда,
-где раньше стоял питоновский ``sign``, а ``sign * quantity == signed_quantity``
-построчно — поэтому числа прежние.
+числа по каждому ключу (не «не пусто»).
 
-Компенсированная строка несёт ``signed_quantity = -quantity`` (ADR-0017), и это
-значение умножается на приход/расход ОБЕИХ локаций так же, как раньше
-умножался ``sign`` — именно эту проводку знака фиксирует тест.
+Свод считает по геометрии: вход (``to_location_id``) плюсует ``quantity``,
+выход (``from_location_id``) вычитает — та же арифметика, что у
+материализованной баланс-проекции (``SUM(quantity)`` по обеим сторонам,
+``app/stock/services.py::StockProjectionManager._recompute_balance``). Строка
+несёт ``quantity``; отдельной колонки знака нет, признак отмены свод не
+читает вообще — поэтому ключ строки с зеркальной геометрией даёт
+противоположное плечо и гасит исходное.
 
-ВАЖНО, зафиксировано честно: полностью компенсированная ПАРА в этом своде
-суммируется в ±2·quantity, а не в ноль. Компенсация записана с зеркальной
-геометрией (``from``/``to`` перевёрнуты) И отрицательным ``signed_quantity``,
-поэтому свод «снимает и переворачивает» дважды. Баланс-проекция считает иначе —
-``SUM(quantity по to) − SUM(quantity по from)``, без ``reverses_id``
-(``app/stock/services.py::StockProjectionManager.refresh_balance``) — и для
-пары даёт ноль. Расхождение предсуществующее: #317 его не менял (числа до и
-после правки требуются одинаковыми), правка семантики свода — вне скоупа
-#317 и не принимается здесь молча.
+Полностью компенсированная ПАРА даёт пустой свод: компенсация записана с
+зеркальной геометрией (``from``/``to`` перевёрнуты), плечо переворачивается
+один раз — ровно как в баланс-проекции. Раньше свод применял ledger-знак к
+уже перевёрнутой геометрии и получал ±2·quantity вместо нуля (#329); числа
+ниже — зелёное ожидание «ноль/пусто».
 """
 from __future__ import annotations
 
@@ -31,9 +27,19 @@ import pytest
 from app.services.import_batch_force_delete import _aggregate_stock_effects
 
 
-def _row(*, loc_from: int | None, loc_to: int | None, signed: str) -> SimpleNamespace:
-    """Строка проекции ``_collect_footprint``: несёт ``signed_quantity`` из ledger."""
-    return SimpleNamespace(
+def _row(
+    *,
+    loc_from: int | None,
+    loc_to: int | None,
+    quantity: str,
+    reverses_id: int | None = None,
+) -> SimpleNamespace:
+    """Строка проекции ``_collect_footprint``: несёт ``quantity`` ledger.
+
+    ``reverses_id`` по умолчанию не передаётся — свод обязан работать без
+    него; переданный значение игнорирует (знак даёт только геометрия).
+    """
+    row = SimpleNamespace(
         sku="SKU",
         from_location_id=loc_from,
         to_location_id=loc_to,
@@ -41,8 +47,11 @@ def _row(*, loc_from: int | None, loc_to: int | None, signed: str) -> SimpleName
         to_quality_state="good",
         dimensions=None,
         completed_operations=None,
-        signed_quantity=Decimal(signed),
+        quantity=Decimal(quantity),
     )
+    if reverses_id is not None:
+        row.reverses_id = reverses_id
+    return row
 
 
 def _deltas(rows) -> dict[int, str]:
@@ -53,54 +62,60 @@ def _deltas(rows) -> dict[int, str]:
 
 
 def test_original_row_moves_material_source_to_target() -> None:
-    assert _deltas([_row(loc_from=1, loc_to=2, signed="10")]) == {
+    assert _deltas([_row(loc_from=1, loc_to=2, quantity="10")]) == {
         1: "-10",
         2: "10",
     }
 
 
-def test_compensation_row_sign_comes_from_ledger() -> None:
-    """``signed_quantity=-q`` (компенсация) даёт то же плечо, что старый ``sign``."""
-    assert _deltas([_row(loc_from=2, loc_to=1, signed="-10")]) == {
-        1: "-10",
-        2: "10",
+def test_compensation_row_mirror_geometry_flips_the_leg() -> None:
+    """Компенсация (зеркальная геометрия) даёт противоположное плечо."""
+    assert _deltas([_row(loc_from=2, loc_to=1, quantity="10")]) == {
+        1: "10",
+        2: "-10",
     }
+
+
+def test_full_compensation_pair_is_empty() -> None:
+    """Полностью компенсированная пара гасится в ноль, а не даёт ±2·q.
+
+    Свод совпадает с баланс-проекцией: там пара тоже даёт ноль, потому что
+    компенсация записана зеркальной геометрией (#329).
+    """
+    rows = [
+        _row(loc_from=1, loc_to=2, quantity="10"),
+        _row(loc_from=2, loc_to=1, quantity="10"),
+    ]
+    assert _aggregate_stock_effects(rows, {}, []) == []
+    assert _deltas(rows) == {}
 
 
 def test_half_compensation_pair_exact_numbers() -> None:
     """Полукомпенсированная пара: ровно половина плеча оригинала (числа)."""
     assert _deltas(
         [
-            _row(loc_from=1, loc_to=2, signed="10"),
-            _row(loc_from=2, loc_to=1, signed="-5"),
+            _row(loc_from=1, loc_to=2, quantity="10"),
+            _row(loc_from=2, loc_to=1, quantity="5"),
         ]
-    ) == {1: "-15", 2: "15"}
-
-
-def test_full_compensation_pair_not_zero_pre_existing() -> None:
-    """Полная компенсация даёт ±2·q, НЕ ноль.
-
-    Это поведение #317 сохраняет 1:1 (было ``direction * sign * quantity``,
-    стало ``direction * signed_quantity`` — то же число). Расхождение с
-    баланс-проекцией (там ноль) — предсуществующее и вне скоупа #317; тест
-    фиксирует факт, чтобы правка семантики была явным отдельным решением.
-    """
-    assert _deltas(
-        [
-            _row(loc_from=1, loc_to=2, signed="10"),
-            _row(loc_from=2, loc_to=1, signed="-10"),
-        ]
-    ) == {1: "-20", 2: "20"}
+    ) == {1: "-5", 2: "5"}
 
 
 def test_aggregate_no_longer_reads_reverses_id() -> None:
-    """Свод берёт знак из колонки, а не пересчитывает его по ``reverses_id``.
+    """Свод читает ``quantity`` и не читает признак отмены вообще.
 
-    Строки без атрибута ``reverses_id`` обрабатываются; строка с ``reverses_id``
-    но без ``signed_quantity`` — падает (нет возврата к пересчёту знака).
+    Строки несут ``quantity`` (без колонки знака) и обрабатываются; строка с
+    переданным ``reverses_id`` даёт тот же результат, что и без него — знак
+    определяется только геометрией. Обратная проба: строка с колонкой знака,
+    но без ``quantity``, падает — свод не имеет запасного источника знака.
     """
-    assert _deltas([_row(loc_from=1, loc_to=2, signed="10")]) == {1: "-10", 2: "10"}
-    legacy = SimpleNamespace(
+    plain = _row(loc_from=1, loc_to=2, quantity="10")
+    assert _deltas([plain]) == {1: "-10", 2: "10"}
+    assert _deltas([_row(loc_from=1, loc_to=2, quantity="10", reverses_id=777)]) == {
+        1: "-10",
+        2: "10",
+    }
+
+    signed_only = SimpleNamespace(
         sku="SKU",
         from_location_id=1,
         to_location_id=2,
@@ -108,8 +123,7 @@ def test_aggregate_no_longer_reads_reverses_id() -> None:
         to_quality_state="good",
         dimensions=None,
         completed_operations=None,
-        reverses_id=None,
-        quantity=Decimal(10),
+        signed_quantity=Decimal(10),
     )
     with pytest.raises(AttributeError):
-        _aggregate_stock_effects([legacy], {}, [])
+        _aggregate_stock_effects([signed_only], {}, [])
