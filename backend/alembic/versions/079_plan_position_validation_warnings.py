@@ -14,6 +14,10 @@
 
 Правило статуса не меняется: ``validation_status`` считается только по
 ошибкам — колонка предупреждений на него не влияет.
+
+``if_not_exists``/``if_exists``: конвенция цепочки (049, 052, 054, 072,
+074, 077, 078) — тесты миграций делают ``alembic stamp <старая>`` +
+``upgrade head`` и повторно проходят последние миграции по живой схеме.
 """
 from collections.abc import Sequence
 
@@ -37,8 +41,9 @@ def upgrade() -> None:
             server_default=sa.text("'[]'::jsonb"),
             nullable=False,
         ),
+        if_not_exists=True,
     )
 
 
 def downgrade() -> None:
-    op.drop_column("plan_positions", "validation_warnings")
+    op.drop_column("plan_positions", "validation_warnings", if_exists=True)
