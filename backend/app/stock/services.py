@@ -18,10 +18,11 @@ command→event→subscribers шиной и прямолинейными cascade
 from __future__ import annotations
 
 import json
+from collections.abc import Sequence
 from dataclasses import dataclass, field
 from datetime import UTC, datetime
 from decimal import Decimal
-from typing import Any
+from typing import TYPE_CHECKING, Any
 from typing import cast as tcast
 
 from sqlalchemy import Select, cast, delete, func, or_, select, text
@@ -51,6 +52,9 @@ from app.stock.task_cache import (
     compute_task_available,
     effective_issued_quantity,
 )
+
+if TYPE_CHECKING:  # pragma: no cover — импорт только для аннотаций
+    from app.models.internal_plan import SectionPlanLine
 
 
 class StockValidationError(ValueError):
@@ -280,33 +284,41 @@ class StockProjectionManager:
         Считаем SUM(incoming) - SUM(outgoing) по ledger для данного ключа
         (габарит + признак пройденных операций, ADR-0055; NULL по каждой оси —
         отдельная legacy-группа). Если 0 — удаляем строку; иначе UPSERT.
+
+        Суммы считаются в SQL одним скалярным ``SUM`` на сторону: в сессию
+        приходит одна строка, а не все проводки ключа. Фильтры — те же
+        ``dimensions_match_clause`` / ``completed_operations_match_clause``,
+        что и раньше (NULL ≠ [] сохраняется, ADR-0055); знаковая логика
+        не менялась — ``incoming - outgoing``.
         """
-        incoming = await session.execute(
-            select(StockTransaction.quantity)
-            .where(
-                StockTransaction.product_id == product_id,
-                StockTransaction.to_location_id == location_id,
-                StockTransaction.to_quality_state == quality_state,
-                dimensions_match_clause(StockTransaction.dimensions, dimensions),
-                completed_operations_match_clause(
-                    StockTransaction.completed_operations, completed_operations
-                ),
+        in_sum = (
+            await session.scalar(
+                select(func.coalesce(func.sum(StockTransaction.quantity), 0)).where(
+                    StockTransaction.product_id == product_id,
+                    StockTransaction.to_location_id == location_id,
+                    StockTransaction.to_quality_state == quality_state,
+                    dimensions_match_clause(StockTransaction.dimensions, dimensions),
+                    completed_operations_match_clause(
+                        StockTransaction.completed_operations, completed_operations
+                    ),
+                )
             )
+            or Decimal(0)
         )
-        outgoing = await session.execute(
-            select(StockTransaction.quantity)
-            .where(
-                StockTransaction.product_id == product_id,
-                StockTransaction.from_location_id == location_id,
-                StockTransaction.from_quality_state == quality_state,
-                dimensions_match_clause(StockTransaction.dimensions, dimensions),
-                completed_operations_match_clause(
-                    StockTransaction.completed_operations, completed_operations
-                ),
+        out_sum = (
+            await session.scalar(
+                select(func.coalesce(func.sum(StockTransaction.quantity), 0)).where(
+                    StockTransaction.product_id == product_id,
+                    StockTransaction.from_location_id == location_id,
+                    StockTransaction.from_quality_state == quality_state,
+                    dimensions_match_clause(StockTransaction.dimensions, dimensions),
+                    completed_operations_match_clause(
+                        StockTransaction.completed_operations, completed_operations
+                    ),
+                )
             )
+            or Decimal(0)
         )
-        in_sum = sum((r[0] for r in incoming), Decimal(0))
-        out_sum = sum((r[0] for r in outgoing), Decimal(0))
         balance = in_sum - out_sum
 
         existing = await session.execute(
@@ -543,26 +555,50 @@ class StockProjectionManager:
             }
         return result
 
-    async def get_tasks_cache_bulk(self, session: AsyncSession, task_ids: list[int]) -> dict[int, dict]:
+    async def get_tasks_cache_bulk(
+        self,
+        session: AsyncSession,
+        task_ids: list[int],
+        *,
+        tasks: Sequence[WorkTask] | None = None,
+        lines: Sequence[SectionPlanLine] | None = None,
+    ) -> dict[int, dict]:
         """Вернуть dict {task_id: cache_dict} для списка задач, один GROUP BY запрос.
 
         Для bulk-запросов (queries_sections, queries_spg).
+
+        ``tasks`` / ``lines`` — уже загруженные в этой же сессии объекты
+        (backend/AGENTS.md: identity map делает повторный SELECT по ним
+        лишним SQL). Переданы — выборка соответствующей сущности
+        пропускается; не переданы (``None``) — прежнее поведение: две
+        выборки по id. Оба аргумента keyword-only, чтобы старые вызывающие
+        не менялись.
         """
         if not task_ids:
             return {}
 
         # Загружаем задачи и линии
-        tasks = (await session.execute(
-            select(WorkTask).where(WorkTask.id.in_(task_ids))
-        )).scalars().all()
+        if tasks is None:
+            tasks = (await session.execute(
+                select(WorkTask).where(WorkTask.id.in_(task_ids))
+            )).scalars().all()
         task_map = {t.id: t for t in tasks}
 
         from app.models.internal_plan import SectionPlanLine
-        lines = (await session.execute(
-            select(SectionPlanLine).where(
-                SectionPlanLine.id.in_([t.section_plan_line_id for t in tasks])
-            )
-        )).scalars().all()
+        if lines is None:
+            line_ids = [
+                t.section_plan_line_id
+                for t in tasks
+                if t.section_plan_line_id is not None
+            ]
+            if line_ids:
+                lines = (await session.execute(
+                    select(SectionPlanLine).where(
+                        SectionPlanLine.id.in_(line_ids)
+                    )
+                )).scalars().all()
+            else:
+                lines = ()
         line_map = {l.id: l for l in lines}
 
         # GROUP BY reason, task_id
@@ -675,7 +711,9 @@ class StockCommandService:
 
     Все бизнес-операции (issue, complete, return, transfer, scrap, rework)
     подготавливают ``StockCommand`` и вызывают ``record()``. Никаких
-    прямых INSERT в StockTransaction вне этого сервиса.
+    прямых INSERT в StockTransaction вне этого сервиса. ``record()`` же
+    доводит статус задания до проекции ledger в своей транзакции
+    (ADR-0041): опрос доски статусы не пишет.
     """
 
     def __init__(self, projection_manager: StockProjectionManager | None = None) -> None:
@@ -703,6 +741,11 @@ class StockCommandService:
            текущей транзакции откатываются вместе с ней.
         6. ``projection_manager.stock_changed(tx)`` — синхронно в той же
            транзакции.
+        7. Синхронизация статуса задания (``cmd.task_id``) из уже
+           записанного ledger — тоже в той же транзакции. Свежесть статуса
+           принадлежит write-path (ADR-0041): доска (GET) статусы читает,
+           но не обновляет, поэтому каждый путь, меняющий ledger-факты
+           задания, обязан довести статус до проекции сам.
 
         Возвращает созданную (или существующую по идемпотентности)
         транзакцию.
@@ -767,7 +810,27 @@ class StockCommandService:
                 raise StockIdempotencyConflict(cmd.idempotency_key) from exc
 
         await self._projection_manager.stock_changed(session, tx)
+        # Статус задания из УЖЕ записанного ledger — в этой же транзакции
+        # (ADR-0041): свежестью статуса владеет write-path, а не опрос доски.
+        if cmd.task_id is not None:
+            await self._sync_task_status(session, cmd.task_id)
         return tx
+
+    @staticmethod
+    async def _sync_task_status(session: AsyncSession, task_id: int) -> None:
+        """Довести ``WorkTask.status`` до проекции ledger (та же транзакция).
+
+        Импорт локальный: ``task_status`` тянет ``operations_transform``,
+        который сам импортирует ``app.stock.services`` — на уровне модуля
+        здесь был бы цикл. Задания, уже закрытого/отменённого/пропущенного
+        или в ``waiting_previous``, проекция не трогает — как и раньше.
+        """
+        from app.services.shopfloor.task_status import sync_work_task_status
+
+        task = await session.get(WorkTask, task_id)
+        if task is None:
+            return
+        await sync_work_task_status(session, task)
 
     async def _resolve_completed_operations(
         self, session: AsyncSession, cmd: StockCommand

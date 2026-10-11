@@ -5,9 +5,11 @@
 - число SQL на доске не растёт с числом трансформирующих заданий и с числом
   парных позиций (было +1 на задание и +2 на пару);
 - ответ доски при этом прежний: задачи, статусы и прогресс те же;
-- статусы всё так же синхронизируются по ledger — прогресс трансформации
-  приходит из карты батча, а не из поштучного запроса;
-- запись статусов в GET-ручке остаётся одним flush на доску.
+- прогресс трансформации приходит из карты батча, а не из поштучного запроса;
+- доска — чистое чтение: ни одного UPDATE и ни одного flush на доску.
+  Свежестью статуса владеет write-path (``StockCommandService.record``,
+  ADR-0041), а не опрос: проводка доводит статус до проекции в своей же
+  транзакции, доска его только читает.
 """
 
 from __future__ import annotations
@@ -35,8 +37,9 @@ from app.models.route import (
 from app.models.section import Section
 from app.models.work_task import WorkTask, WorkTaskStatus
 from app.services.shopfloor.queries_sections import get_section_board
-from app.stock.models import Reason, StockTransaction
-from sqlalchemy import event, select
+from app.stock.models import QualityState, Reason, StockTransaction
+from app.stock.services import StockCommand, StockCommandService
+from sqlalchemy import event, select, text
 
 pytestmark = pytest.mark.asyncio
 
@@ -289,11 +292,16 @@ async def test_board_hides_output_card_on_non_transform_stage(engine, session) -
     assert row["input_consumed_quantity"] is None
 
 
-async def _board_sql(engine, session, section_id: int) -> SqlRecorder:
+async def _board_sql(engine, session, section_id: int) -> tuple[SqlRecorder, dict]:
+    """GET-доска под записью SQL; возвращает и счётчик, и ответ доски."""
+    # После rollback/commit сессия открывает свежий savepoint на первом же
+    # SQL — служебный маркер своей транзакции, а не flush доски. Прогоняем
+    # его ДО записи, чтобы счётчик flush'ей доски был честным.
+    await session.execute(text("SELECT 1"))
     recorder = SqlRecorder(engine)
     with recorder:
-        await get_section_board(session, section_id=section_id, limit=500, offset=0)
-    return recorder
+        board = await get_section_board(session, section_id=section_id, limit=500, offset=0)
+    return recorder, board
 
 
 async def test_board_sql_does_not_grow_with_transform_tasks(engine, session) -> None:
@@ -302,8 +310,8 @@ async def test_board_sql_does_not_grow_with_transform_tasks(engine, session) -> 
     large = await _make_transform_section(session, tasks=100, paired=False, prefix="LARGE")
     await session.rollback()
 
-    small_sql = await _board_sql(engine, session, small.id)
-    large_sql = await _board_sql(engine, session, large.id)
+    small_sql, _ = await _board_sql(engine, session, small.id)
+    large_sql, _ = await _board_sql(engine, session, large.id)
 
     # Инвариант тикета — «не растёт», а не «одинаковое число»: на малом
     # участке часть батчей не нужна, и лишний запрос там просто не возникает.
@@ -318,28 +326,41 @@ async def test_board_sql_does_not_grow_with_paired_positions(engine, session) ->
     many = await _make_transform_section(session, tasks=100, paired=True, prefix="MANY")
     await session.rollback()
 
-    few_sql = await _board_sql(engine, session, few.id)
-    many_sql = await _board_sql(engine, session, many.id)
+    few_sql, _ = await _board_sql(engine, session, few.id)
+    many_sql, _ = await _board_sql(engine, session, many.id)
 
     assert many_sql.queries <= few_sql.queries, (
         f"5 парных позиций → {few_sql.queries} SQL, 100 → {many_sql.queries} SQL"
     )
 
 
-async def test_board_still_flushes_status_writes_once_per_board(engine, session) -> None:
-    """Запись статусов в GET-ручке — один flush на доску, а не на задание (#293)."""
+async def test_board_get_writes_nothing(engine, session) -> None:
+    """Доска — чистое чтение: ни одного UPDATE и ни одного flush на доску.
+
+    Раньше опрос доски сам синхронизировал статусы (один flush на доску,
+    но UPDATE со строки на строку с каждого терминала каждые 12 с). Теперь
+    свежестью владеет write-path, и GET не пишет вообще (#293, ADR-0041).
+    """
     section = await _make_transform_section(session, tasks=20, paired=False, prefix="FLUSH")
-    # Разные пары в справочнике не нужны: flush считается по savepoint'ам.
+    # Разные пары в справочнике не нужны: записи видны по savepoint'ам и DML.
     await session.rollback()
 
-    recorder = await _board_sql(engine, session, section.id)
+    recorder, _ = await _board_sql(engine, session, section.id)
 
-    assert recorder.flushes <= 1, f"{recorder.flushes} flush на доску из 20 заданий"
+    writes = [s for s in recorder.statements if s.startswith(("INSERT", "UPDATE", "DELETE"))]
+    assert recorder.flushes == 0, f"{recorder.flushes} flush на доску из 20 заданий"
+    assert writes == [], f"доска пишет в БД: {writes[:5]}"
 
 
-async def test_board_syncs_transform_status_from_ledger(engine, session) -> None:
-    """Прогресс трансформации из карты батча даёт тот же статус, что и поштучный запрос."""
-    section = await _make_transform_section(session, tasks=1, paired=False, prefix="SYNC")
+async def test_board_returns_stored_status_without_ledger_recompute(engine, session) -> None:
+    """Доска отдаёт статус из БД, а не пересчитывает его по ledger.
+
+    Устаревший статус в БД при полном списании входа в ledger — состояние,
+    которое доска больше не чинит: чинка — работа write-path, а не опроса
+    (ADR-0041). Здесь оно воспроизводится сырой вставкой мимо record() и
+    документируется как read-only ответ доски.
+    """
+    section = await _make_transform_section(session, tasks=1, paired=False, prefix="STALE")
     tasks = (
         await session.execute(
             select(WorkTask).where(WorkTask.section_id == section.id)
@@ -348,7 +369,8 @@ async def test_board_syncs_transform_status_from_ledger(engine, session) -> None
     assert len(tasks) == 1
     task = tasks[0]
 
-    # Списан весь вход → статус должен стать completed по правилу трансформации.
+    # Списан весь вход — но проводка вставлена мимо write-path, и статус в
+    # БД так и остался in_progress.
     session.add(
         StockTransaction(
             task_id=task.id,
@@ -361,9 +383,67 @@ async def test_board_syncs_transform_status_from_ledger(engine, session) -> None
         )
     )
     await session.commit()
+    task_id = task.id
+    section_id = section.id
     assert task.status == WorkTaskStatus.in_progress
 
-    board = await get_section_board(session, section_id=section.id, limit=500, offset=0)
+    recorder, board = await _board_sql(engine, session, section_id)
 
     statuses = {row["id"]: row["status"] for row in board["tasks"]}
-    assert statuses[task.id] == WorkTaskStatus.completed.value
+    assert statuses[task_id] == WorkTaskStatus.in_progress.value
+    writes = [s for s in recorder.statements if s.startswith(("INSERT", "UPDATE", "DELETE"))]
+    assert writes == [], f"доска чинит статус сама: {writes[:5]}"
+
+
+async def test_record_write_path_syncs_status_for_board(engine, session) -> None:
+    """Свежесть статуса без F5 (ADR-0041): проводка через record() доводит
+    статус до проекции в своей транзакции, а доска его только читает."""
+    section = await _make_transform_section(session, tasks=1, paired=False, prefix="WPATH")
+    tasks = (
+        await session.execute(
+            select(WorkTask).where(WorkTask.section_id == section.id)
+        )
+    ).scalars().all()
+    assert len(tasks) == 1
+    task = tasks[0]
+    task_id = task.id
+    section_id = section.id
+
+    svc = StockCommandService()
+    # Вход на участке — приход до операции (та же пустая группа признака,
+    # которую спросит списание ниже).
+    await svc.record(session, StockCommand(
+        product_id=task.product_id,
+        from_location_id=None,
+        to_location_id=section_id,
+        quantity=Decimal(10),
+        reason=Reason.MANUAL_IN,
+        dimensions={"length_mm": 2750},
+        completed_operations=[],
+        created_by=1,
+    ))
+    # Весь вход списан операцией — ровно ту проводку пишет complete_task.
+    await svc.record(session, StockCommand(
+        product_id=task.product_id,
+        from_location_id=section_id,
+        to_location_id=None,
+        quantity=Decimal(10),
+        reason=Reason.TRANSFORM_CONSUME,
+        quality_state=QualityState.GOOD,
+        dimensions={"length_mm": 2750},
+        completed_operations=[],
+        task_id=task_id,
+        created_by=1,
+    ))
+    await session.commit()
+    # Статус уже в БД до всякого чтения доски — его записал write-path.
+    refreshed = await session.get(WorkTask, task_id)
+    assert refreshed.status == WorkTaskStatus.completed
+
+    recorder, board = await _board_sql(engine, session, section_id)
+
+    statuses = {row["id"]: row["status"] for row in board["tasks"]}
+    assert statuses[task_id] == WorkTaskStatus.completed.value
+    assert recorder.flushes == 0, f"{recorder.flushes} flush на доску после проводки"
+    writes = [s for s in recorder.statements if s.startswith(("INSERT", "UPDATE", "DELETE"))]
+    assert writes == [], f"доска пишет в БД: {writes[:5]}"

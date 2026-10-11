@@ -414,7 +414,11 @@ async def test_dimensions_lifecycle_import_to_saw(client, session: AsyncSession)
         reason=Reason.TRANSFER_SEND,
         dimensions={"length_mm": 2700},
         quality_state=QualityState.GOOD,
-        task_id=drill_task.id,
+        # Отправитель — склад сырья, у которого нет задания: SEND несёт
+        # id ЗАДАНИЯ-ОТПРАВИТЕЛЯ (как в transfer_send), иначе выдача
+        # вычитается как «задание сверловки передало 100 дальше» и статус
+        # выводится completed ещё до завершения.
+        task_id=None,
         completed_operations=issue_ops,
         created_by=user.id,
         comment="Выдача сырья на сверловку",
@@ -605,7 +609,9 @@ async def test_dimensionless_lifecycle_no_regressions(client, session: AsyncSess
         reason=Reason.TRANSFER_SEND,
         dimensions=None,
         quality_state=QualityState.GOOD,
-        task_id=drill_task.id,
+        # Отправитель — склад сырья без задания: SEND несёт id задания-
+        # отправителя, как в transfer_send (см. шаг 4 сценария с габаритами).
+        task_id=None,
         completed_operations=nodim_issue_ops,
         created_by=user.id,
     ))

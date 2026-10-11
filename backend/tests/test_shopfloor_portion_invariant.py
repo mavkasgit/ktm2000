@@ -71,13 +71,17 @@ async def test_return_remainder_updates_line_cache_and_status(
 ) -> None:
     """Возврат остатка обновляет проекцию строки участка и статус задания.
 
-    До вызова статус задания — ``ready`` при выданных 10: его никто не
-    пересчитывал, потому что возврат остатка шёл из роута мимо инварианта.
+    До вызова статус задания — ``in_progress``: выдача (``record`` с
+    ``task_id``) уже синхронизировала его в своей транзакции. Возврат же
+    остатка шёл из роута мимо ``apply_ledger_portion`` — теперь статус
+    выводится из ledger и здесь.
     """
     fx = await _task_with_issued(session, sku="RTR320", issued=Decimal(10))
     task = fx["task"]
     line = await session.get(SectionPlanLine, task.section_plan_line_id)
-    assert task.status == WorkTaskStatus.ready, "исходим из несинхронизированного статуса"
+    assert task.status == WorkTaskStatus.in_progress, (
+        "выдача через write-path синхронизирует статус сама"
+    )
 
     resp = await auth_client.post(
         "/api/shopfloor/remainders/return",
@@ -120,12 +124,15 @@ async def test_defect_decide_syncs_task_status(session: AsyncSession) -> None:
     Ветка ``accept_with_deviation`` пишет COMPLETE — это ``completed_quantity``
     проекции задания, то есть вход ``resolve_work_task_status``; остальные три
     ветки меняют rejected/rework тем же способом. До решения статус задания
-    не пересчитывался вовсе (``defect_decide`` звал только проекцию строки).
+    был ``in_progress`` (выдача синхронизировала его в write-path), а
+    ``defect_decide`` звал только проекцию строки.
     """
     fx = await _task_with_issued(session, sku="DDS320", issued=Decimal(10))
     task = fx["task"]
     line = await session.get(SectionPlanLine, task.section_plan_line_id)
-    assert task.status == WorkTaskStatus.ready, "исходим из несинхронизированного статуса"
+    assert task.status == WorkTaskStatus.in_progress, (
+        "выдача через write-path синхронизирует статус сама"
+    )
 
     created = await create_defect(
         session,

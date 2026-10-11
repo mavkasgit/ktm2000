@@ -248,17 +248,12 @@ async def get_section_board(
         if op.section_id == section_id
     ]
 
-    from .task_status import sync_work_tasks_status_bulk
-
-    board_tasks = [row[0] for row in rows]
-    await sync_work_tasks_status_bulk(
-        db,
-        tasks=board_tasks,
-        tasks_cache=ctx.tasks_cache,
-        # Карта прогресса уже посчитана в контексте — второй раз её считать
-        # незачем (#293).
-        transform_progress=ctx.transform_progress_map,
-    )
+    # Статусы здесь НЕ синхронизируются: доска — чистое чтение. Свежесть
+    # статуса (ADR-0041, «без F5 после чужой передачи») принадлежит
+    # write-path: ``StockCommandService.record`` доводит статус до проекции
+    # в той же транзакции, что и проводка. Раньше опрос доски сам писал
+    # статусы (UPDATE + commit каждые 12 с с каждого терминала) — это и был
+    # write-on-read, который сняла эта правка.
 
     tasks_data = []
     for row in rows:

@@ -88,8 +88,9 @@ async def sync_work_tasks_status_bulk(
     Карта обязана быть посчитана по всем заданиям батча, которым нужен
     прогресс: ``get_transform_progress_bulk`` не возвращает задания без
     движений, и в батче это значит «нули», а не «не спросили». Один
-    ``flush`` на весь батч: запись статусов внутри GET-ручки не должна
-    доходить до flush на задание.
+    ``flush`` на весь батч. Вызывается из write-path (пакетная запись
+    статусов); опрос доски статусы больше не пишет (ADR-0041): свежестью
+    владеет ``StockCommandService.record``.
     """
     needs_transform = {
         task.id for task in tasks if task.input_quantity is not None and task.outputs
