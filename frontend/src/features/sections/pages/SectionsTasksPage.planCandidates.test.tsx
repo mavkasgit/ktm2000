@@ -13,6 +13,23 @@ vi.mock("@/shared/api/client", () => ({
   getErrorMessage: (e: unknown) => String(e),
 }));
 
+// Профиль оператора страница берёт из AuthProvider (`useAuth`), а не своим
+// запросом `/auth/me`; в тесте провайдера нет — подменяем хук готовым
+// пользователем, иначе `enabled`-гейты доски не откроются.
+vi.mock("@/features/auth/hooks/useAuth", () => ({
+  useAuth: () => ({
+    user: { id: 1, username: "op", full_name: "Оператор", role: "admin" },
+    rolesCatalog: [],
+    roleLabel: (role: string) => role,
+    roleSections: () => [],
+    isAuthenticated: true,
+    isLoading: false,
+    loginWithToken: async () => {},
+    logout: () => {},
+    refreshUser: async () => {},
+  }),
+}));
+
 vi.mock("@/shared/api/sections", async (importOriginal) => ({
   ...(await importOriginal<typeof import("@/shared/api/sections")>()),
   listSections: vi.fn(),
@@ -229,7 +246,9 @@ beforeEach(() => {
 async function openPlanCreationMode() {
   renderPage();
   await waitFor(() => expect(getSectionBoard).toHaveBeenCalledWith(2, expect.anything(), undefined));
-  fireEvent.click(screen.getByRole("button", { name: "План" }));
+  // Вкладка рисуется после загрузки участков, строки доски — после данных
+  // доски: `findByRole` ждёт оба, `getByRole` кликал в гонке.
+  fireEvent.click(await screen.findByRole("button", { name: "План" }));
   fireEvent.click(await screen.findByRole("button", { name: "начать создание" }));
 }
 
@@ -242,7 +261,7 @@ describe("SectionsTasksPage: вкладка «План» в режиме про�
     // (docs/daily-plans-spec.md, «Режим `План`»). Регресс: скрытие занятых
     // из #301 применялось и здесь, и «Все задания участка» показывала только
     // свободные строки — половина картины участка пропадала без причины.
-    fireEvent.click(screen.getByRole("button", { name: "План" }));
+    fireEvent.click(await screen.findByRole("button", { name: "План" }));
 
     await waitFor(() => expect(renderedIds()).toEqual([FREE_TASK.id, TAKEN_TASK.id]));
   });
@@ -294,8 +313,8 @@ describe("SectionsTasksPage: кандидаты дневного плана", ()
     // мог отметить его чекбоксом. Выбор живёт в контроллере и переживает
     // переключение вкладок: на вкладке «План» строки уже нет, а выделение —
     // есть.
-    fireEvent.click(screen.getByRole("button", { name: `строка ${TAKEN_TASK.id}` }));
-    fireEvent.click(screen.getByRole("button", { name: "План" }));
+    fireEvent.click(await screen.findByRole("button", { name: `строка ${TAKEN_TASK.id}` }));
+    fireEvent.click(await screen.findByRole("button", { name: "План" }));
     fireEvent.click(await screen.findByRole("button", { name: "начать создание" }));
 
     expect(renderedIds()).toEqual([FREE_TASK.id]);

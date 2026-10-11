@@ -12,6 +12,23 @@ vi.mock("@/shared/api/client", () => ({
   getErrorMessage: (e: unknown) => String(e),
 }));
 
+// Профиль оператора страница берёт из AuthProvider (`useAuth`), а не своим
+// запросом `/auth/me`; в тесте провайдера нет — подменяем хук готовым
+// пользователем, иначе `enabled`-гейты доски не откроются.
+vi.mock("@/features/auth/hooks/useAuth", () => ({
+  useAuth: () => ({
+    user: { id: 1, username: "op", full_name: "Оператор", role: "admin" },
+    rolesCatalog: [],
+    roleLabel: (role: string) => role,
+    roleSections: () => [],
+    isAuthenticated: true,
+    isLoading: false,
+    loginWithToken: async () => {},
+    logout: () => {},
+    refreshUser: async () => {},
+  }),
+}));
+
 vi.mock("@/shared/api/sections", async (importOriginal) => ({
   ...(await importOriginal<typeof import("@/shared/api/sections")>()),
   listSections: vi.fn(),
@@ -172,8 +189,9 @@ describe("SectionsTasksPage: ошибка создания плана", () => {
     await waitFor(() => expect(getSectionBoard).toHaveBeenCalledWith(2, expect.anything(), undefined));
 
     // Форма создания живёт на вкладке «План» — там панель получает onCreatePlan.
-    fireEvent.click(screen.getByRole("button", { name: "План" }));
-    fireEvent.click(screen.getByRole("button", { name: "начать создание" }));
+    // Вкладка рисуется после загрузки участков — ждём её, а не кликаем вслепую.
+    fireEvent.click(await screen.findByRole("button", { name: "План" }));
+    fireEvent.click(await screen.findByRole("button", { name: "начать создание" }));
     fireEvent.click(screen.getAllByRole("button", { name: "выбрать задание" })[0]!);
     fireEvent.click(await screen.findByRole("button", { name: "создать план" }));
     await waitFor(() =>

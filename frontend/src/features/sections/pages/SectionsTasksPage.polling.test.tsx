@@ -23,6 +23,23 @@ vi.mock("@/shared/api/client", () => ({
   getErrorMessage: (e: unknown) => String(e),
 }));
 
+// Профиль оператора страница берёт из AuthProvider (`useAuth`), а не своим
+// запросом `/auth/me`; в тесте провайдера нет — подменяем хук готовым
+// пользователем, иначе `enabled`-гейты доски не откроются.
+vi.mock("@/features/auth/hooks/useAuth", () => ({
+  useAuth: () => ({
+    user: { id: 1, username: "op", full_name: "Оператор", role: "admin" },
+    rolesCatalog: [],
+    roleLabel: (role: string) => role,
+    roleSections: () => [],
+    isAuthenticated: true,
+    isLoading: false,
+    loginWithToken: async () => {},
+    logout: () => {},
+    refreshUser: async () => {},
+  }),
+}));
+
 vi.mock("@/shared/api/sections", async (importOriginal) => ({
   ...(await importOriginal<typeof SectionsApi>()),
   listSections: vi.fn(),

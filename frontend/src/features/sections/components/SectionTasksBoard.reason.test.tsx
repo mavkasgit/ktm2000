@@ -11,12 +11,13 @@
  */
 
 import { render, within } from "@testing-library/react";
-import { describe, expect, it, vi } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import type { SectionBoardTask } from "@/shared/api/shopfloor";
 import type { PageLimitOption } from "@/shared/hooks/usePaginatedTableQuery";
 import { getCompletionBlockReason } from "../lib/taskStatus";
 import type { GroupingProfile } from "../lib/groupingProfiles";
 import { ACTION_REASON_TEXT, actionReasonText } from "@/shared/lib/actionReasons";
+import { stubViewportWidth } from "@/shared/lib/testViewport";
 import { SectionTasksBoard, type TaskBoardViewMode } from "./SectionTasksBoard";
 
 const PROFILE: GroupingProfile = {
@@ -108,6 +109,12 @@ function renderBoard(tasks: SectionBoardTask[]): HTMLElement {
   return container;
 }
 
+// Мобильная ветка рендерится только на узкой ширине (гейт доски); ширина
+// ставится тестом перед `render`, здесь — снимается.
+afterEach(() => {
+  vi.restoreAllMocks();
+});
+
 /** Строка таблицы доски — десктопный экран. */
 function tableRow(container: HTMLElement): HTMLElement {
   const table = container.querySelector("table");
@@ -164,6 +171,7 @@ describe("SectionTasksBoard: причина недоступности «Зав�
   });
 
   it("та же причина видна и на мобильной карточке", () => {
+    stubViewportWidth(375);
     const task = makeTask({ status: "waiting_previous" });
     const expected = actionReasonText(getCompletionBlockReason(task));
     if (!expected) throw new Error("у заблокированного задания должен быть код причины");
@@ -178,6 +186,8 @@ describe("SectionTasksBoard: причина недоступности «Зав�
     const task = makeTask({ status: "in_progress" });
     expect(getCompletionBlockReason(task)).toBeNull();
 
+    // Гейт доски рисует экран по отдельности: контракт проверяем двумя
+    // рендерами — десктопная строка и мобильная карточка.
     const container = renderBoard([task]);
     const row = tableRow(container);
     const button = completeButton(row);
@@ -191,7 +201,8 @@ describe("SectionTasksBoard: причина недоступности «Зав�
     }
 
     // Тот же контракт на втором экране доски.
-    const mobileButton = completeButton(mobileBlock(container));
+    stubViewportWidth(375);
+    const mobileButton = completeButton(mobileBlock(renderBoard([task])));
     expect(reasonTextsBeside(mobileButton)).toEqual([]);
     expect((mobileButton as HTMLButtonElement).disabled).toBe(false);
   });

@@ -8,10 +8,11 @@
  * единственный способ сломать правку незаметно.
  */
 
-import { describe, expect, it, vi } from "vitest";
-import { render, screen } from "@testing-library/react";
+import { afterEach, describe, expect, it, vi } from "vitest";
+import { cleanup, render, screen } from "@testing-library/react";
 import type { SectionBoardTask } from "@/shared/api/shopfloor";
 import type { PageLimitOption } from "@/shared/hooks/usePaginatedTableQuery";
+import { stubViewportWidth } from "@/shared/lib/testViewport";
 import { SectionTasksBoard } from "./SectionTasksBoard";
 import type { GroupingProfile } from "../lib/groupingProfiles";
 
@@ -84,6 +85,21 @@ function renderBoard(hasPackaging: boolean | undefined) {
   );
 }
 
+afterEach(() => {
+  cleanup();
+  vi.restoreAllMocks();
+});
+
+/**
+ * Доска под гейтом рисует один экран за раз: по умолчанию в тестах десктоп
+ * (happy-dom — 1024px), мобильный — после `stubViewportWidth` перед рендером.
+ */
+function renderMobileBoard(hasPackaging: boolean | undefined) {
+  cleanup();
+  stubViewportWidth(375);
+  return renderBoard(hasPackaging);
+}
+
 function bodyCells(selector: string): HTMLTableCellElement[][] {
   return [...document.querySelectorAll(selector)]
     .map((row) => [...row.querySelectorAll("td")])
@@ -96,21 +112,32 @@ describe("SectionTasksBoard: «Упаковка» только у участка
 
     expect(screen.queryByText(/Упаковка/)).toBeNull();
     expect(screen.queryByText("Склейка")).toBeNull();
+
+    renderMobileBoard(false);
+
+    expect(screen.queryByText(/Упаковка/)).toBeNull();
+    expect(screen.queryByText("Склейка")).toBeNull();
   });
 
-  it("с упаковочными операциями шапка, строка задания и шапка группы несут значение", () => {
+  it("с упаковочными операциями шапка и строка задания несут значение на обоих экранах", () => {
+    // Десктоп: колонка в шапке таблицы и значение в строке задания
+    // (у одиночной группы шапки группы нет — ни на одном экране).
     renderBoard(true);
-
     expect(screen.getAllByText(/Упаковка/).length).toBeGreaterThan(0);
-    // Значение есть и в строке задания, и в шапке группы (одна группа — одна
-    // строка задания и одна шапка), поэтому вхождений больше одного.
-    expect(screen.getAllByText("Склейка").length).toBe(2);
+    expect(screen.getAllByText("Склейка").length).toBe(1);
+
+    // Мобильный: та же колонка в карточке задания.
+    renderMobileBoard(true);
+    expect(screen.getAllByText(/Упаковка/).length).toBeGreaterThan(0);
+    expect(screen.getAllByText("Склейка").length).toBe(1);
   });
 
   it("флаг не пришёл — колонка остаётся: ошибка справочника не прячет данные", () => {
     renderBoard(undefined);
+    expect(screen.getAllByText("Склейка").length).toBe(1);
 
-    expect(screen.getAllByText("Склейка").length).toBe(2);
+    renderMobileBoard(undefined);
+    expect(screen.getAllByText("Склейка").length).toBe(1);
   });
 
   it("число ячеек строки совпадает с шапкой при любом флаге", () => {

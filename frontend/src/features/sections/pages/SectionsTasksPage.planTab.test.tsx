@@ -13,6 +13,23 @@ vi.mock("@/shared/api/client", () => ({
   getErrorMessage: (e: unknown) => String(e),
 }));
 
+// Профиль оператора страница берёт из AuthProvider (`useAuth`), а не своим
+// запросом `/auth/me`; в тесте провайдера нет — подменяем хук готовым
+// пользователем, иначе `enabled`-гейты доски не откроются.
+vi.mock("@/features/auth/hooks/useAuth", () => ({
+  useAuth: () => ({
+    user: { id: 1, username: "op", full_name: "Оператор", role: "admin" },
+    rolesCatalog: [],
+    roleLabel: (role: string) => role,
+    roleSections: () => [],
+    isAuthenticated: true,
+    isLoading: false,
+    loginWithToken: async () => {},
+    logout: () => {},
+    refreshUser: async () => {},
+  }),
+}));
+
 vi.mock("@/shared/api/sections", async (importOriginal) => ({
   ...(await importOriginal<typeof import("@/shared/api/sections")>()),
   listSections: vi.fn(),
@@ -178,7 +195,9 @@ function renderPage() {
 async function openPlanTab() {
   renderPage();
   await waitFor(() => expect(getSectionBoard).toHaveBeenCalledWith(2, expect.anything(), undefined));
-  fireEvent.click(screen.getByRole("button", { name: "План" }));
+  // Вкладка «План» рисуется после загрузки списка участков: раньше её кликали
+  // сразу за вызовом доски, и гонка с `listSections` роняла тест.
+  fireEvent.click(await screen.findByRole("button", { name: "План" }));
   await waitFor(() => expect(screen.getAllByTestId("board").length).toBeGreaterThan(0));
 }
 

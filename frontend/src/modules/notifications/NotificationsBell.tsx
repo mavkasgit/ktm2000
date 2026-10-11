@@ -32,6 +32,12 @@ export function NotificationsBell({
   // Поллинг не должен пересекаться с длинным запросом.
   const inFlightRef = useRef(false)
 
+  // Свёрнутая вкладка не должна ходить на сервер: оператор всё равно не видит
+  // бейдж, а 30-секундный тик на каждую открытую вкладку — это трафик впустую.
+  const [isHidden, setIsHidden] = useState(
+    () => typeof document !== "undefined" && document.visibilityState === "hidden",
+  )
+
   const load = useCallback(async () => {
     if (inFlightRef.current) return
     inFlightRef.current = true
@@ -48,10 +54,21 @@ export function NotificationsBell({
   }, [api])
 
   useEffect(() => {
-    load()
+    const handleVisibilityChange = () =>
+      setIsHidden(document.visibilityState === "hidden")
+    document.addEventListener("visibilitychange", handleVisibilityChange)
+    return () => document.removeEventListener("visibilitychange", handleVisibilityChange)
+  }, [])
+
+  // Возврат на вкладку перезапускает эффект, а тот сначала дозагружает список
+  // и только потом ставит тикер — бейдж на месте сразу после возврата, без
+  // ожидания следующего интервала.
+  useEffect(() => {
+    if (isHidden) return
+    void load()
     const timer = setInterval(load, pollIntervalMs)
     return () => clearInterval(timer)
-  }, [load, pollIntervalMs])
+  }, [load, pollIntervalMs, isHidden])
 
   // Непрочитанные помечаем прочитанными при открытии попапа. Набор
   // попыток в ref'е не даёт зациклиться: дозагрузка новых items после

@@ -34,6 +34,7 @@ import {
   buildColumnFilterValues,
 } from "@/shared/lib/columnSpecs";
 import { useDebouncedValue } from "@/shared/lib/useDebouncedValue";
+import { useMediaQuery } from "@/shared/lib/useMediaQuery";
 import { getAriaSort } from "@/shared/lib/multiSort";
 import { isFirstRowsLoad } from "@/shared/lib/tableQueryPlaceholder";
 import {
@@ -1445,6 +1446,15 @@ export function SectionTasksBoard({
     [searchQuery, sortConfigs.length, columnFilters, columnSearchQueries],
   );
 
+  /**
+   * Один экран за раз. Обе ветки (десктопная таблица и мобильные карточки)
+   * строились одновременно и прятались только классами — двойная работа на
+   * каждом кадре и дубли в дереве (одно и то же задание рисовалось дважды).
+   * Порог совпадает с Tailwind `md`: ровно то, что решают классы
+   * `hidden md:block` / `md:hidden`.
+   */
+  const isDesktopViewport = useMediaQuery("(min-width: 768px)");
+
   return (
     <div className="space-y-3">
       <FiltersPanel
@@ -1491,180 +1501,184 @@ export function SectionTasksBoard({
 
       {!showLoadingPlaceholder && total > 0 && (
         <>
-          {/* Desktop table */}
-          <div className={`hidden md:block ${DATA_TABLE_STYLES.container}`}>
-            <div
-              ref={tableScrollRef}
-              className="overflow-auto"
-              style={{ maxHeight: "70vh" }}
-            >
-            <table className="w-full border-separate border-spacing-0 text-sm">
-              <thead>
-                <tr>
-                  {visibleColumns.map((column) => (
-                    <th
-                      key={column.id}
-                      className={`${headerCellClass} ${column.className ?? "text-left"}`}
-                      aria-sort={column.sortField ? getAriaSort(sortConfigs, column.sortField) : undefined}
-                    >
-                      <DataTableColumnHeader
-                        column={column}
-                        bindColumn={bindColumn}
-                        values={
-                          column.filterField
-                            ? filterValueOptions?.[column.filterField] ?? uniqueValues[column.filterField]
-                            : undefined
-                        }
-                        currentSorts={sortConfigs}
-                        onSortChange={handleSortChange}
-                      />
-                    </th>
-                  ))}
-                  <TableCornerResetHeader
-                    hasActiveFilters={hasTableFiltersActive}
-                    onReset={handleResetAllFilters}
-                    dataTableHeader
-                  />
-                </tr>
-              </thead>
-              {sortedTasks.length === 0 ? (
-                <tbody>
+          {/* Десктопная таблица — только на ширине md и выше. */}
+          {isDesktopViewport && (
+            <div className={`hidden md:block ${DATA_TABLE_STYLES.container}`}>
+              <div
+                ref={tableScrollRef}
+                className="overflow-auto"
+                style={{ maxHeight: "70vh" }}
+              >
+              <table className="w-full border-separate border-spacing-0 text-sm">
+                <thead>
                   <tr>
-                    <td colSpan={boardColspan} className="p-8 text-center text-sm text-muted-foreground">
-                      Нет задач, соответствующих фильтру
-                    </td>
+                    {visibleColumns.map((column) => (
+                      <th
+                        key={column.id}
+                        className={`${headerCellClass} ${column.className ?? "text-left"}`}
+                        aria-sort={column.sortField ? getAriaSort(sortConfigs, column.sortField) : undefined}
+                      >
+                        <DataTableColumnHeader
+                          column={column}
+                          bindColumn={bindColumn}
+                          values={
+                            column.filterField
+                              ? filterValueOptions?.[column.filterField] ?? uniqueValues[column.filterField]
+                              : undefined
+                          }
+                          currentSorts={sortConfigs}
+                          onSortChange={handleSortChange}
+                        />
+                      </th>
+                    ))}
+                    <TableCornerResetHeader
+                      hasActiveFilters={hasTableFiltersActive}
+                      onReset={handleResetAllFilters}
+                      dataTableHeader
+                    />
                   </tr>
-                </tbody>
-              ) : (
-                <VirtualizedTableBody
-                  rows={virtualRows}
-                  rowHeight={ROW_HEIGHT_PX}
-                  colSpan={boardColspan}
-                  scrollContainerRef={tableScrollRef}
-                  renderRow={(row) => renderVirtualRow(row)}
-                />
-              )}
-            </table>
-            </div>
-          </div>
-
-          {/* Mobile cards */}
-          <div className="md:hidden space-y-3">
-            {sortedTasks.length === 0 ? (
-              <div className="rounded-lg border p-4 text-sm text-muted-foreground text-center">
-                Нет задач, соответствующих фильтру
+                </thead>
+                {sortedTasks.length === 0 ? (
+                  <tbody>
+                    <tr>
+                      <td colSpan={boardColspan} className="p-8 text-center text-sm text-muted-foreground">
+                        Нет задач, соответствующих фильтру
+                      </td>
+                    </tr>
+                  </tbody>
+                ) : (
+                  <VirtualizedTableBody
+                    rows={virtualRows}
+                    rowHeight={ROW_HEIGHT_PX}
+                    colSpan={boardColspan}
+                    scrollContainerRef={tableScrollRef}
+                    renderRow={(row) => renderVirtualRow(row)}
+                  />
+                )}
+              </table>
               </div>
-            ) : boardEntries.map((entry) => {
-              if (entry.kind === "divider") return renderWaitingDividerMobile(entry.key, entry.count);
-              const group = entry.group;
-              const isCollapsed = bulkMode ? false : collapsedGroups.has(entry.key);
-              const isSingleTask = group.tasks.length === 1;
+            </div>
+          )}
 
-              // Одна задача — рендерим напрямую без шапки группы
-              if (isSingleTask) {
-                const task = group.tasks[0];
-                const isSelected = revokeSelection
-                  ? revokeSelection.isSelected(task.id)
-                  : bulkMode && bulkSelection?.isSelected(task.id);
-                return renderMobileCard(task, isSelected, bulkMode, bulkSelection, onAction, onRevokeItem, isRevoking, true, readOnly, hasPackaging, draftContextFor(task));
-              }
+          {/* Мобильные карточки — только на узкой ширине. */}
+          {!isDesktopViewport && (
+            <div className="md:hidden space-y-3">
+              {sortedTasks.length === 0 ? (
+                <div className="rounded-lg border p-4 text-sm text-muted-foreground text-center">
+                  Нет задач, соответствующих фильтру
+                </div>
+              ) : boardEntries.map((entry) => {
+                if (entry.kind === "divider") return renderWaitingDividerMobile(entry.key, entry.count);
+                const group = entry.group;
+                const isCollapsed = bulkMode ? false : collapsedGroups.has(entry.key);
+                const isSingleTask = group.tasks.length === 1;
 
-              const mobileHeader = getTaskGroupHeaderState(group, {
-                isCollapsed,
-                isBulkMode: Boolean(bulkMode),
-                allSelected: Boolean(bulkMode && bulkSelection?.isAllSelected(group.tasks.map((t) => t.id))),
-              });
-              return (
-                <div key={entry.key} className={`rounded-lg overflow-hidden transition-colors ${bulkMode && bulkSelection?.isAllSelected(group.tasks.map(t => t.id)) ? TABLE_ROW_STYLES.selectedGroupContainer : TABLE_ROW_STYLES.defaultGroupContainer}`}>
-                  <div
-                    className="p-3 flex items-center justify-between gap-2 border-b border-muted cursor-pointer"
-                    onClick={() => {
-                      if (bulkMode && bulkSelection) {
-                        const taskIds = group.tasks.map((t) => t.id);
-                        const allSelected = bulkSelection.isAllSelected(taskIds);
-                        const someSelected = bulkSelection.isIndeterminate(taskIds);
-                        if (allSelected || someSelected) {
-                          for (const id of taskIds) {
-                            bulkSelection.selectOne(id, false);
+                // Одна задача — рендерим напрямую без шапки группы
+                if (isSingleTask) {
+                  const task = group.tasks[0];
+                  const isSelected = revokeSelection
+                    ? revokeSelection.isSelected(task.id)
+                    : bulkMode && bulkSelection?.isSelected(task.id);
+                  return renderMobileCard(task, isSelected, bulkMode, bulkSelection, onAction, onRevokeItem, isRevoking, true, readOnly, hasPackaging, draftContextFor(task));
+                }
+
+                const mobileHeader = getTaskGroupHeaderState(group, {
+                  isCollapsed,
+                  isBulkMode: Boolean(bulkMode),
+                  allSelected: Boolean(bulkMode && bulkSelection?.isAllSelected(group.tasks.map((t) => t.id))),
+                });
+                return (
+                  <div key={entry.key} className={`rounded-lg overflow-hidden transition-colors ${bulkMode && bulkSelection?.isAllSelected(group.tasks.map(t => t.id)) ? TABLE_ROW_STYLES.selectedGroupContainer : TABLE_ROW_STYLES.defaultGroupContainer}`}>
+                    <div
+                      className="p-3 flex items-center justify-between gap-2 border-b border-muted cursor-pointer"
+                      onClick={() => {
+                        if (bulkMode && bulkSelection) {
+                          const taskIds = group.tasks.map((t) => t.id);
+                          const allSelected = bulkSelection.isAllSelected(taskIds);
+                          const someSelected = bulkSelection.isIndeterminate(taskIds);
+                          if (allSelected || someSelected) {
+                            for (const id of taskIds) {
+                              bulkSelection.selectOne(id, false);
+                            }
+                          } else {
+                            for (const id of taskIds) {
+                              bulkSelection.selectOne(id, true);
+                            }
                           }
                         } else {
-                          for (const id of taskIds) {
-                            bulkSelection.selectOne(id, true);
-                          }
-                        }
-                      } else {
-                        toggleGroup(entry.key);
-                      }
-                    }}
-                  >
-                    <div className="flex items-center gap-2 min-w-0">
-                      <button
-                        className="p-0.5 hover:bg-muted/50 rounded transition-colors cursor-pointer"
-                        onClick={(e) => {
-                          e.stopPropagation();
                           toggleGroup(entry.key);
-                        }}
-                        title={mobileHeader.collapseTitle}
-                      >
-                        {mobileHeader.isCollapsed ? (
-                          <ChevronRight className="h-4 w-4 text-muted-foreground" />
-                        ) : (
-                          <ChevronDown className="h-4 w-4 text-muted-foreground" />
-                        )}
-                      </button>
-                      <span className="font-semibold text-sm truncate">
-                        {group.label}
-                      </span>
-                      {bulkMode && mobileHeader.allSelected && (
-                        <span className={`text-xs ${TABLE_ROW_STYLES.selectedLabel} ml-1`}>выбрано</span>
-                      )}
-                    </div>
-                    <div className="flex items-center gap-2 shrink-0">
-                      <Badge variant="secondary" className={`bg-blue-100 text-blue-700 ${TABLE_ROW_COMPACT.badge}`}>
-                        &times;{group.tasks.length}
-                      </Badge>
-                    </div>
-                  </div>
-                  {/* Групповой ввод на узком экране — те же два поля, что и в
-                      шапке таблицы: отдельной мобильной модели нет (#283, п. 7). */}
-                  {bulkMode && onBulkDraftChange && !readOnly && (
-                    <div
-                      className="flex flex-wrap items-end gap-3 border-b border-muted px-3 py-2"
-                      onClick={(event) => event.stopPropagation()}
+                        }
+                      }}
                     >
-                      {([
-                        ["good", "Годные группы"],
-                        ["defect", "Брак группы"],
-                      ] as const).map(([field, label]) => {
-                        const value = groupFieldValue(group.tasks, field, entry.key);
-                        const recorded = groupRecordedFact(group.tasks, field);
-                        return (
-                          <label key={field} className="flex flex-col gap-0.5 text-[11px] text-muted-foreground">
-                            {label}
-                            <DraftQtyInput
-                              value={value}
-                              onChange={(next) => handleGroupQtyChange(group.tasks, field, next, entry.key)}
-                              recorded={fmtQty(String(recorded))}
-                              ariaLabel={`${group.label}: ${label}`}
-                              issueText={groupFieldIssue(group.tasks, field, entry.key)}
-                              overPlan={groupOverPlan(group.tasks)[field]}
-                            />
-                          </label>
-                        );
-                      })}
+                      <div className="flex items-center gap-2 min-w-0">
+                        <button
+                          className="p-0.5 hover:bg-muted/50 rounded transition-colors cursor-pointer"
+                          onClick={(e) => {
+                            e.stopPropagation();
+                            toggleGroup(entry.key);
+                          }}
+                          title={mobileHeader.collapseTitle}
+                        >
+                          {mobileHeader.isCollapsed ? (
+                            <ChevronRight className="h-4 w-4 text-muted-foreground" />
+                          ) : (
+                            <ChevronDown className="h-4 w-4 text-muted-foreground" />
+                          )}
+                        </button>
+                        <span className="font-semibold text-sm truncate">
+                          {group.label}
+                        </span>
+                        {bulkMode && mobileHeader.allSelected && (
+                          <span className={`text-xs ${TABLE_ROW_STYLES.selectedLabel} ml-1`}>выбрано</span>
+                        )}
+                      </div>
+                      <div className="flex items-center gap-2 shrink-0">
+                        <Badge variant="secondary" className={`bg-blue-100 text-blue-700 ${TABLE_ROW_COMPACT.badge}`}>
+                          &times;{group.tasks.length}
+                        </Badge>
+                      </div>
                     </div>
-                  )}
-                  {!isCollapsed && <div className="divide-y divide-muted">{group.tasks.map((task, idx) => {
-                    const isLast = idx === group.tasks.length - 1;
-                    const isSelected = revokeSelection
-                      ? revokeSelection.isSelected(task.id)
-                      : bulkMode && bulkSelection?.isSelected(task.id);
-                    return renderMobileCard(task, isSelected, bulkMode, bulkSelection, onAction, onRevokeItem, isRevoking, isLast, readOnly, hasPackaging, draftContextFor(task, entry.key));
-                  })}</div>}
-                </div>
-              );
-            })}
-          </div>
+                    {/* Групповой ввод на узком экране — те же два поля, что и в
+                        шапке таблицы: отдельной мобильной модели нет (#283, п. 7). */}
+                    {bulkMode && onBulkDraftChange && !readOnly && (
+                      <div
+                        className="flex flex-wrap items-end gap-3 border-b border-muted px-3 py-2"
+                        onClick={(event) => event.stopPropagation()}
+                      >
+                        {([
+                          ["good", "Годные группы"],
+                          ["defect", "Брак группы"],
+                        ] as const).map(([field, label]) => {
+                          const value = groupFieldValue(group.tasks, field, entry.key);
+                          const recorded = groupRecordedFact(group.tasks, field);
+                          return (
+                            <label key={field} className="flex flex-col gap-0.5 text-[11px] text-muted-foreground">
+                              {label}
+                              <DraftQtyInput
+                                value={value}
+                                onChange={(next) => handleGroupQtyChange(group.tasks, field, next, entry.key)}
+                                recorded={fmtQty(String(recorded))}
+                                ariaLabel={`${group.label}: ${label}`}
+                                issueText={groupFieldIssue(group.tasks, field, entry.key)}
+                                overPlan={groupOverPlan(group.tasks)[field]}
+                              />
+                            </label>
+                          );
+                        })}
+                      </div>
+                    )}
+                    {!isCollapsed && <div className="divide-y divide-muted">{group.tasks.map((task, idx) => {
+                      const isLast = idx === group.tasks.length - 1;
+                      const isSelected = revokeSelection
+                        ? revokeSelection.isSelected(task.id)
+                        : bulkMode && bulkSelection?.isSelected(task.id);
+                      return renderMobileCard(task, isSelected, bulkMode, bulkSelection, onAction, onRevokeItem, isRevoking, isLast, readOnly, hasPackaging, draftContextFor(task, entry.key));
+                    })}</div>}
+                  </div>
+                );
+              })}
+            </div>
+          )}
 
           <TablePaginationFooter
             page={page}

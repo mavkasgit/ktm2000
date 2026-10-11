@@ -3,9 +3,8 @@ import { keepPreviousData, useMutation, useQueries, useQuery, useQueryClient } f
 import { useLocation, useNavigate, useParams, useSearchParams } from "react-router-dom";
 
 
-import { apiClient, getErrorMessage } from "@/shared/api/client";
+import { getErrorMessage } from "@/shared/api/client";
 import { getErrorHint } from "@/shared/api/errorMessages";
-import type { UserRole } from "@/features/auth/api";
 import { listSections } from "@/shared/api/sections";
 import {
   bulkCompleteTasks,
@@ -82,6 +81,7 @@ import {
 import { actionReasonText, type ActionReasonCode } from "@/shared/lib/actionReasons";
 import { createAuditLog, getAuditLogs, type AuditLogEntry } from "@/shared/api/auditLogs";
 import { isAnyDialogOpen } from "@/shared/lib/dialogOpen";
+import { useAuth } from "@/features/auth/hooks/useAuth";
 import { cn } from "@/shared/utils/cn";
 import { fmtQty, toQtyInteger } from "@/shared/lib/quantityFormat";
 
@@ -95,15 +95,6 @@ type BoardServerQuery = Pick<
   "search" | "product_sku" | "dimensions" | "sort"
 >;
 const EMPTY_SERVER_QUERY: BoardServerQuery = {};
-
-type MeResponse = {
-  id: number;
-  email: string;
-  full_name: string;
-  role: UserRole;
-  section_id: number | null;
-  is_active: boolean;
-};
 
 
 function nowLocalDateTime(): string {
@@ -162,11 +153,12 @@ export function SectionsTasksPage() {
   const dateTo = dateRange.to;
   const [conflictHint, setConflictHint] = useState<string | null>(null);
 
-  const { data: me } = useQuery({
-    queryKey: queryKeys.auth.me(),
-    queryFn: async () => (await apiClient.get<MeResponse>("/auth/me")).data,
-    retry: false,
-  });
+  // Профиль оператора — из AuthProvider: он тянет `/auth/me` один раз на
+  // сессию. Свой `useQuery` здесь был вторым источником того же запроса —
+  // каждое открытие доски добавляло лишний вызов и параллельный ответ, а
+  // идентичность объекта нужна странице только как «авторизация готова» и
+  // `id` исполнителя.
+  const { user: me } = useAuth();
 
 
   const [actionDialog, setActionDialog] = useState<{
@@ -485,19 +477,28 @@ export function SectionsTasksPage() {
     () => [...selectedPlanIds].sort((left, right) => left - right),
     [selectedPlanIds],
   );
-  const selectedPlanQueries = useQueries({
+  /**
+   * Состав выбранных планов одним значением. `combine` здесь не украшение:
+   * без него `useQueries` отдаёт новый массив результатов на каждый рендер,
+   * и вся цепочка ниже (состав → `displayedTasks` → доска) пересчитывалась бы
+   * заново, а идентичность строк для доски была бы пустой. С `combine`
+   * TanStack возвращает прежнюю ссылку, пока состав ключей и данные не
+   * изменились (`replaceEqualDeep`).
+   */
+  const selectedPlanComposition = useQueries({
     queries: selectedPlanIdList.map((planId) => ({
       queryKey: queryKeys.dailyPlans.composition(planId),
       queryFn: () => getDailyPlanComposition(planId, requestOptions),
       enabled: me != null && !isSingleWindowBlocked,
       retry: false,
     })),
+    combine: (results) => ({
+      items: results.flatMap((query) => query.data?.items ?? []),
+      isLoading: results.some((query) => query.isLoading),
+    }),
   });
-  const selectedCompositionsLoading = selectedPlanQueries.some((query) => query.isLoading);
-  const selectedCompositionItems = useMemo(
-    () => selectedPlanQueries.flatMap((query) => query.data?.items ?? []),
-    [selectedPlanQueries],
-  );
+  const selectedCompositionsLoading = selectedPlanComposition.isLoading;
+  const selectedCompositionItems = selectedPlanComposition.items;
   const createPlanMutation = useMutation({
     mutationFn: (payload: CreateDailyPlanInput) => createDailyPlan(payload, requestOptions),
     onSuccess: async (plan) => {
@@ -775,7 +776,9 @@ export function SectionsTasksPage() {
     const groupTasks = actionDialog.tasks;
     const effectivePerformedAt = `${performedDate}T${performedShift === "1" ? "08:00" : "20:00"}`;
     const effectiveAccountedAt = nowLocalDateTime();
-    const executorUserId = me?.id;
+    // `id` из AuthShellUser опционален и может быть `null` — контракт факта
+    // ждёт `number | undefined`, поэтому `null` не уходит на сервер.
+    const executorUserId = me?.id ?? undefined;
 
     if (groupTasks && groupTasks.length > 0) {
       const { entries, skipped } = planGroupComplete(groupTasks, actionQty, defectQty);
@@ -912,11 +915,20 @@ export function SectionsTasksPage() {
   // Идентичность массива — часть контракта с доской: её эффект публикует
   // видимые строки, и литерал `[]` на каждый рендер был бы источником цикла.
   const tasks = useMemo(() => board?.tasks ?? [], [board]);
-  const displayedTasks = selectedPlanIds.size === 0
-    ? tasks
-    : mergeDailyPlanTasks(selectedPlanQueries.flatMap((query) => (
-        query.data ? [query.data.items] : []
-      )));
+  /**
+   * Строки, которые доска рисует сейчас: либо страницу доски, либо состав
+   * выбранных планов. `useMemo` — контракт с доской: она публикует по
+   * идентичности массива видимые строки, а новый массив на каждый рендер
+   * страницы (ввод поиска, тик опроса) гонял бы её строки без изменения
+   * данных. Зависимости — только стабильные источники: `tasks` и результат
+   * `useQueries` с `combine`.
+   */
+  const displayedTasks = useMemo(
+    () => (selectedPlanIds.size === 0
+      ? tasks
+      : mergeDailyPlanTasks([selectedPlanComposition.items])),
+    [selectedPlanIds, tasks, selectedPlanComposition],
+  );
   // Вкладка «План» без выбранного плана — «все актуальные задания участка»
   // (docs/daily-plans-spec.md, «Режим `План`»): завершённые строки видны
   // только в составе конкретного плана. Занятые планом задания в просмотре
@@ -986,7 +998,7 @@ export function SectionsTasksPage() {
         good_quantity: String(entry.good.quantity),
         defect_quantity: String(entry.defect.quantity),
         idempotency_key: makeIdempotencyKey(`bulk-complete-${entry.taskId}`),
-        executor_user_id: me?.id,
+        executor_user_id: me?.id ?? undefined,
         performed_at: effectivePerformedAt,
         accounted_at: effectiveAccountedAt,
         shortage_strategy: bulkShortageStrategy ?? undefined,
