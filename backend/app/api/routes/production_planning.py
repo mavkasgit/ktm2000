@@ -563,7 +563,14 @@ async def get_production_planning_overview(
     from app.stock.services import StockProjectionManager
 
     pm = StockProjectionManager()
-    tasks_cache_bulk = await pm.get_tasks_cache_bulk(db, [wt.id for wt in work_tasks])
+    # work_tasks и section_plan_lines уже прочитаны выше — передаём их, чтобы
+    # bulk не грузил те же строки повторным SELECT (identity map).
+    tasks_cache_bulk = await pm.get_tasks_cache_bulk(
+        db,
+        [wt.id for wt in work_tasks],
+        tasks=work_tasks,
+        lines=section_plan_lines,
+    )
     task_stage_ids = {wt.route_stage_id for wt in work_tasks}
     stages_by_id: dict[int, RouteStage] = {}
     if task_stage_ids:
@@ -910,8 +917,6 @@ async def _manual_pass_counts(
     position_id: int,
     source_ref: str,
 ) -> tuple[int, int]:
-    import logging as _log
-    _logger = _log.getLogger(__name__)
     from app.stock.models import StockTransaction
     tx_count = await db.scalar(
         select(func.count(StockTransaction.id))
@@ -924,17 +929,6 @@ async def _manual_pass_counts(
     )
     transfer_keys = await _position_transfer_idempotency_keys(db, position_id)
     transfers_count = sum(1 for key in transfer_keys if key is not None and key.startswith(f"{source_ref}:"))
-    _logger.warning("DEBUG _manual_pass_counts: position_id=%s source_ref=%s tx_count=%s transfers_count=%s", position_id, source_ref, tx_count, transfers_count)
-    # Debug: print all StockTransaction source_refs for this position
-    all_tx = await db.execute(
-        select(StockTransaction.id, StockTransaction.source_ref, StockTransaction.reason, StockTransaction.task_id)
-        .join(WorkTask, WorkTask.id == StockTransaction.task_id)
-        .join(SectionPlanLine, SectionPlanLine.id == WorkTask.section_plan_line_id)
-        .where(SectionPlanLine.plan_position_id == position_id)
-        .order_by(StockTransaction.id)
-    )
-    for row in all_tx:
-        _logger.warning("DEBUG   TX id=%s source_ref=%s reason=%s task_id=%s", row.id, row.source_ref, row.reason, row.task_id)
     return int(tx_count or 0), transfers_count
 
 

@@ -811,75 +811,129 @@ async def bulk_delete_positions(
 
     Cancelled positions are soft-deleted; all other eligible positions
     are hard-deleted together with their related ``PlanChangeItem`` rows.
-    Each item runs in a savepoint.
+
+    Батч частичный (per-item ``success``/``failed``/``skipped``), но проверки
+    идут ДО мутаций: одна выборка классифицирует все id, поэтому «не нашёл»
+    и «нельзя удалять утверждённую» не требуют savepoint'ов. Мутации идут
+    группами: soft-delete — по одному сервисному вызову (у каждой позиции
+    свой аудит, пишет сервис), hard-delete — одним ``DELETE ... WHERE id IN
+    (...)`` и ОДНОЙ сводной записью аудита со списком id.
     """
     import logging
     logger = logging.getLogger(__name__)
 
-    results: list[BulkActionResultItem] = []
-    for position_id in payload.ids:
-        try:
-            async with db.begin_nested():
-                position = await db.get(PlanPosition, position_id)
-                if position is None or position.production_plan_id != production_plan_id:
-                    raise ValueError("Position not found")
-                if position.deleted_at is not None:
-                    results.append(
-                        BulkActionResultItem(id=position_id, status="skipped", reason="Позиция уже удалена")
+    unique_ids = list(dict.fromkeys(payload.ids))
+    results_by_id: dict[int, BulkActionResultItem] = {}
+    soft_delete_ids: list[int] = []
+    hard_delete_ids: list[int] = []
+
+    if unique_ids:
+        # Один SELECT вместо per-id db.get: и снапшот для аудита, и классификация.
+        positions_by_id = {
+            position.id: position
+            for position in (
+                await db.execute(
+                    select(PlanPosition).where(
+                        PlanPosition.id.in_(unique_ids),
+                        PlanPosition.production_plan_id == production_plan_id,
                     )
-                    continue
-                if position.status == PlanPositionStatus.cancelled:
-                    await soft_delete_cancelled_position(
-                        db,
-                        production_plan_id,
-                        position_id,
-                        changed_by=current_user.id,
-                        reason=payload.reason or "Удалена из списка",
-                    )
-                elif position.status in {PlanPositionStatus.approved, PlanPositionStatus.released}:
-                    raise ValueError(
-                        "Нельзя удалить утверждённую или запущенную позицию. Используйте отмену."
-                    )
-                else:
-                    await db.execute(
-                        PlanChangeItem.__table__.delete().where(
-                            PlanChangeItem.plan_position_id == position_id
-                        )
-                    )
-                    # Запись лога аудита (удаление позиции)
-                    from app.models.audit_log import AuditAction, AuditEntityType
-                    from app.services.audit_log_service import log_action
-                    await log_action(
-                        db,
-                        status="success",
-                        title="Удаление позиции (жесткое)",
-                        message=f"Позиция плана #{position_id} (арт. {position.source_sku}) жестко удалена из системы.",
-                        user=current_user,
-                        product_sku=position.source_sku,
-                        action=AuditAction.DELETE,
-                        entity_type=AuditEntityType.PLAN_POSITION,
-                        entity_id=position_id,
-                        changes={"before": {"status": position.status.value}, "after": None},
-                    )
-                    await db.delete(position)
-                results.append(BulkActionResultItem(id=position_id, status="success"))
-        except ValueError as exc:
-            logger.warning(
-                "bulk_delete_positions: position %s failed: %s", position_id, exc,
+                )
+            ).scalars().all()
+        }
+        for position_id in unique_ids:
+            position = positions_by_id.get(position_id)
+            if position is None:
+                results_by_id[position_id] = BulkActionResultItem(
+                    id=position_id, status="failed", reason="Position not found"
+                )
+            elif position.deleted_at is not None:
+                results_by_id[position_id] = BulkActionResultItem(
+                    id=position_id, status="skipped", reason="Позиция уже удалена"
+                )
+            elif position.status == PlanPositionStatus.cancelled:
+                soft_delete_ids.append(position_id)
+            elif position.status in {PlanPositionStatus.approved, PlanPositionStatus.released}:
+                results_by_id[position_id] = BulkActionResultItem(
+                    id=position_id,
+                    status="failed",
+                    reason="Нельзя удалить утверждённую или запущенную позицию. Используйте отмену.",
+                )
+            else:
+                hard_delete_ids.append(position_id)
+
+        for position_id in soft_delete_ids:
+            try:
+                await soft_delete_cancelled_position(
+                    db,
+                    production_plan_id,
+                    position_id,
+                    changed_by=current_user.id,
+                    reason=payload.reason or "Удалена из списка",
+                )
+                results_by_id[position_id] = BulkActionResultItem(id=position_id, status="success")
+            except ValueError as exc:
+                logger.warning(
+                    "bulk_delete_positions: position %s failed: %s", position_id, exc,
+                )
+                results_by_id[position_id] = BulkActionResultItem(
+                    id=position_id, status="failed", reason=str(exc)
+                )
+
+        if hard_delete_ids:
+            hard_positions = [positions_by_id[position_id] for position_id in hard_delete_ids]
+            # Связанные строки change-set'а — до удаления позиций (FK).
+            await db.execute(
+                PlanChangeItem.__table__.delete().where(
+                    PlanChangeItem.plan_position_id.in_(hard_delete_ids)
+                )
             )
-            results.append(BulkActionResultItem(id=position_id, status="failed", reason=str(exc)))
-        except Exception:
-            logger.exception("bulk_delete_positions: unexpected error for id %s", position_id)
-            results.append(
-                BulkActionResultItem(id=position_id, status="failed", reason="Внутренняя ошибка сервера")
+            # ОДНА сводная запись аудита на группу: id и статусы уже сняты со
+            # снапшота до DELETE. Журнал не изобретаем — тот же log_action.
+            from app.models.audit_log import AuditAction, AuditEntityType
+            from app.services.audit_log_service import log_action
+            ids_text = ", ".join(str(position_id) for position_id in hard_delete_ids)
+            await log_action(
+                db,
+                status="success",
+                title="Удаление позиций (жесткое)",
+                message=(
+                    f"Из плана #{production_plan_id} жёстко удалено позиций: "
+                    f"{len(hard_delete_ids)} (ids: {ids_text})."
+                ),
+                user=current_user,
+                comment=payload.reason,
+                action=AuditAction.DELETE,
+                entity_type=AuditEntityType.PRODUCTION_PLAN,
+                entity_id=production_plan_id,
+                changes={
+                    "before": {
+                        "position_ids": list(hard_delete_ids),
+                        "statuses": {str(p.id): p.status.value for p in hard_positions},
+                        "source_skus": {str(p.id): p.source_sku for p in hard_positions},
+                    },
+                    "after": None,
+                },
             )
+            # Один grouped DELETE вместо per-id db.delete в цикле.
+            await db.execute(
+                PlanPosition.__table__.delete().where(PlanPosition.id.in_(hard_delete_ids))
+            )
+            # Core-DELETE не трогает identity map: снимаем снапшот сессии,
+            # иначе db.get по уже удалённой строке вернул бы устаревший объект.
+            for position in hard_positions:
+                db.expunge(position)
+            for position_id in hard_delete_ids:
+                results_by_id[position_id] = BulkActionResultItem(id=position_id, status="success")
+
     # Коммит ДО формирования ответа — ровно как в `bulk_approve_positions` (:535).
-    # Внутри цикла только savepoint'ы (`begin_nested`), а `get_db` коммитит уже
-    # после ответа: клиент получил бы 200 со списком успехов и перечитал план,
-    # где удаления и скрытия ещё не сохранены. Один коммит закрывает весь
-    # батч — включая hard-delete, `deleted_at` и записи аудита из savepoint'ов.
+    # Мутации выше идут без savepoint'ов (классификация уже отсеяла отказы), а
+    # `get_db` коммитит уже после ответа: клиент получил бы 200 со списком
+    # успехов и перечитал план, где удаления и скрытия ещё не сохранены. Один
+    # коммит закрывает весь батч — включая hard-delete, `deleted_at` и записи аудита.
     await db.commit()
-    return BulkActionResponse(results=results)
+    return BulkActionResponse(
+        results=[results_by_id[position_id] for position_id in payload.ids]
+    )
 
 
 @router.post(
