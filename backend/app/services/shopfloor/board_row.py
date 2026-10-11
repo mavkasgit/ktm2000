@@ -312,8 +312,10 @@ class BoardRowContext:
 
         from app.stock.services import StockProjectionManager
 
+        # tasks и lines уже в этой сессии — передаём их, чтобы bulk не читал
+        # те же строки повторным SELECT (identity map, backend/AGENTS.md).
         tasks_cache = await StockProjectionManager().get_tasks_cache_bulk(
-            db, [task.id for task in tasks]
+            db, [task.id for task in tasks], tasks=tasks, lines=lines
         )
 
         # Прогресс нужен доске дважды: карточкам (выходы) и синхронизации

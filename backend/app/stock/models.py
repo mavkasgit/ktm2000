@@ -160,6 +160,23 @@ class StockTransaction(Base):
         # Фид проводок (#291): ORDER BY created_at и фильтры дат без
         # привязки к локации.
         Index("ix_stock_transactions_created_at", "created_at"),
+        # Оси ledger в фильтре пересчёта баланса (#080):
+        # dimensions — GIN jsonb_ops. Честно: сам dimensions_match_clause
+        # сравнивает jsonb через «=», а GIN обслуживает только containment
+        # (@>, ?, ?|, ?&) — равенство он НЕ ускоряет; индекс даёт базу под
+        # containment-предикаты, если появятся.
+        Index(
+            "ix_stock_transactions_dimensions_gin",
+            "dimensions",
+            postgresql_using="gin",
+            postgresql_ops={"dimensions": "jsonb_ops"},
+        ),
+        # completed_operations — btree по самой колонке: это и есть выражение
+        # completed_operations_match_clause для непустого списка (jsonb «=»);
+        # ветка None (IS NULL OR = 'null'::jsonb) обслуживается тем же
+        # индексом поэлементно. Обе ветки — btree-равенство, GIN здесь
+        # ничего не дал бы.
+        Index("ix_stock_transactions_completed_operations", "completed_operations"),
     )
 
     id: Mapped[int] = mapped_column(
