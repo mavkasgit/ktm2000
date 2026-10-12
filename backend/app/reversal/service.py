@@ -1012,7 +1012,9 @@ class ReversalService:
         dry_run=False: подтверждение по токену — удаление компенсаций,
         затем исходных проводок (FK reverses_id → источник) и смена статуса
         на 'purged' в одной транзакции сессии. Записи action_journal не
-        удаляются (аудит).
+        удаляются (аудит). Purge идёт мимо ``record()``, поэтому статусы
+        заданий затронутых проводок здесь доводятся до проекции остатка
+        ledger отдельным шагом (ADR-0041, свежестью владеет write-path).
         """
         target = await db.get(Action, action_id)
         if target is None:
@@ -1041,12 +1043,36 @@ class ReversalService:
 
         comp_ids = [p.reverse_tx_id for p in pairs]
         source_ids = [p.source_tx_id for p in pairs]
+        # Статусы заданий, чьи факты сейчас исчезают: purge идёт мимо
+        # ``StockCommandService.record`` (удаление строк ledger напрямую),
+        # поэтому свежестью статуса владеем мы. Собираем task_id ДО удаления
+        # (bounded список пар), после flush доводим каждый статус до
+        # проекции оставшегося ledger.
+        purged_task_ids = sorted({
+            int(tid)
+            for tid in (await db.execute(
+                select(StockTransaction.task_id).where(
+                    StockTransaction.id.in_(comp_ids + source_ids),
+                    StockTransaction.task_id.is_not(None),
+                )
+            )).scalars()
+        })
         # Порядок п.4 спеки: сначала компенсации (их reverses_id ссылается
         # на исходные), затем исходные. Одна транзакция со сменой статуса.
         await db.execute(delete(StockTransaction).where(StockTransaction.id.in_(comp_ids)))
         await db.execute(delete(StockTransaction).where(StockTransaction.id.in_(source_ids)))
         target.status = ActionStatus.PURGED
         await db.flush()
+        # Purge не «понижает» статус: ``resolve_work_task_status`` не выходит
+        # из терминальных и из ``partially_completed`` назад — после удаления
+        # пары проводок задание получает статус, выводимый из остатка ledger.
+        from app.models.work_task import WorkTask
+        from app.services.shopfloor.task_status import sync_work_task_status
+
+        for task_id in purged_task_ids:
+            task = await db.get(WorkTask, task_id)
+            if task is not None:
+                await sync_work_task_status(db, task)
         return PurgePlan(
             action_id=action_id,
             pairs=pairs,

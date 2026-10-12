@@ -1,7 +1,8 @@
 """Прямой статус-ассерт после complete_task (тикет #132).
 
-``sync_work_task_status`` — ЯВНЫЙ шаг оркестратора complete_task (без
-event-bus). Здесь проверяется результат синхронизации по факту ledger:
+Статус задания пишет ``StockCommandService.record`` в своей транзакции
+(``cmd.task_id``), оркестратор его не пересчитывает (ADR-0041). Здесь
+проверяется результат синхронизации по факту ledger:
 - частичная порция → ``partially_completed``;
 - полная порция с авто-передачей на следующий участок (cross-GHP) →
   ``completed``: transferred >= planned после transfer_send внутри

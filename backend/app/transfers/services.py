@@ -9,7 +9,8 @@ write path: it creates the ``Transfer`` row and two
 
 The destination ``WorkTask`` flips from ``waiting_previous`` to
 ``ready`` — промежуточный мост, делающий задачу выводимой проекцией, — а
-затем ``sync_work_task_status`` по паре проводок доводит её до проекции
+затем ``sync_work_task_status`` ВНУТРИ ``StockCommandService.record``
+по паре проводок доводит обе задачи до проекции
 (``in_progress``, «материал сразу в работе»);
 ``TRANSFER_RECEIVE`` автоматически попадает в
 ``issued_quantity`` (колонка «Выдано») — единственный канал выдачи
@@ -387,10 +388,12 @@ async def transfer_send(
     # терминальных, и из него проекция возвращает ``None`` — сама она снять
     # «ожидание предыдущего этапа» не может, факта об этом в ledger нет.
     # Поэтому запись здесь — предусловие для ``sync_work_task_status`` по паре
-    # проводок ledger НИЖЕ: она делает задачу выводимой из проекции, а
-    # итоговый статус (``in_progress`` — материал сразу в работе, GLOSSARY
-    # «Авто-приём») считает уже синхронизация. Правка без последующей
-    # синхронизации оставила бы задачу в ``ready`` вопреки факту прихода.
+    # проводок ledger НИЖЕ (она выполняется внутри
+    # ``StockCommandService.record``, ADR-0041): мост делает задачу
+    # выводимой из проекции, а итоговый статус (``in_progress`` — материал
+    # сразу в работе, GLOSSARY «Авто-приём») считает уже синхронизация.
+    # Правка без последующей синхронизации оставила бы задачу в ``ready``
+    # вопреки факту прихода.
     transfer.status = TransferStatus.accepted
     transfer.accepted_quantity = quantity
     transfer.accepted_by = actor_id
@@ -475,17 +478,10 @@ async def transfer_send(
     await _refresh_section_plan_line_cache(db, from_task.section_plan_line_id)
     await _refresh_section_plan_line_cache(db, to_task.section_plan_line_id)
 
-    # Итоговый статус обеих задач считает проекция по уже записанному ledger
-    # (п.4 #320): мост ``waiting_previous -> ready`` выше только делает задачу
-    # выводимой, состояние задаёт этот шаг после проводок.
-    from app.services.shopfloor.task_status import sync_work_task_status
-
-    from_task_after = await db.get(WorkTask, from_task.id)
-    to_task_after = await db.get(WorkTask, to_task.id)
-    if from_task_after:
-        await sync_work_task_status(db, from_task_after)
-    if to_task_after:
-        await sync_work_task_status(db, to_task_after)
+    # Итоговый статус обеих задач уже посчитан синхронизацией внутри
+    # record() на каждой проводке (мост ``waiting_previous -> ready`` выше
+    # только делает задачу выводимой) — ADR-0041, отдельный
+    # ``sync_work_task_status`` здесь был бы повтором того же шага.
 
     # If cumulative received quantity now exceeds the task's planned quantity
     # (i.e., over-plan material was transferred), expand planned_quantity so

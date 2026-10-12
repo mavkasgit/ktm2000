@@ -714,26 +714,18 @@ async def _register_scrap_and_defect(
 async def apply_ledger_portion(
     db: AsyncSession,
     task: WorkTask,
-    *,
-    cache: dict | None = None,
 ) -> None:
     """Единственная точка «применить порцию факта» (#320, ADR-0017/0019).
 
     После любой проводки по заданию (завершение, возврат остатка, выпуск,
-    решение по браку) обязательны ровно два шага и в этом порядке: проекция
-    строки участка из ledger (``_refresh_section_plan_line_cache``), затем
-    статус задания из той же проекции (``sync_work_task_status``). Статус
-    выводится из уже записанного факта, а не из запрошенной порции.
-
-    ``cache`` — проекция задания, прочитанная вызывающим ПОСЛЕ проводок
-    (у ``complete_task`` чтений два: до — для лимитов порции, после — для
-    статуса); без неё проекция читается здесь.
+    решение по браку) обязателен шаг «проекция строки участка из ledger»
+    (``_refresh_section_plan_line_cache``). Статусом задания этот шаг НЕ
+    владеет: его в той же транзакции пишет ``StockCommandService.record``
+    при ``cmd.task_id`` (ADR-0041), поэтому отдельный
+    ``sync_work_task_status`` здесь был бы повторной синхронизацией того же
+    задания по тому же ledger.
     """
     await _refresh_section_plan_line_cache(db, task.section_plan_line_id)
-
-    from .task_status import sync_work_task_status
-
-    await sync_work_task_status(db, task, cache=cache)
 
 
 async def complete_task(
@@ -784,7 +776,8 @@ async def complete_task(
     await _require_mutable_task(db, task)
 
     # Этапы оркестратора: replay → guard/лимиты → проводки good/scrap →
-    # статус → авто-передача. Статус и передача — ЯВНЫЕ вызовы, без event-bus.
+    # проекция строки → авто-передача. Статус на каждой проводке пишет
+    # record() (ADR-0041); передача — ЯВНЫЙ вызов, без event-bus.
     replay = await _replay_existing_completion(db, task=task, idempotency_key=idempotency_key)
     if replay is not None:
         return replay
@@ -792,9 +785,10 @@ async def complete_task(
     _ensure_task_completable(task)
     good_quantity, defect_quantity, total = _normalize_quantities(good_quantity, defect_quantity)
 
-    # Task-cache читается дважды намеренно: ЗДЕСЬ — до проводок, для лимитов
-    # порции (issued/in_work в состоянии до неё); ниже — после проводок, для
-    # синхронизации статуса по факту ledger, уже включающему эту порцию.
+    # Task-cache читается ЗДЕСЬ — до проводок, для лимитов порции
+    # (issued/in_work в состоянии до неё). Статус после проводок считает
+    # сам ``StockCommandService.record`` (``cmd.task_id``) — отдельного
+    # чтения «после» для синхронизации не требуется.
     from app.stock.services import StockProjectionManager
     pm = StockProjectionManager()
     cache = await pm.get_task_cache(db, task.id)
@@ -872,11 +866,10 @@ async def complete_task(
     )
     tx_ids.extend(scrap_tx_ids)
 
-    # Второе чтение task-cache — ПОСЛЕ проводок: статус выводится из факта
-    # ledger, уже включающего эту порцию. Шаги «проекция → статус» — общая
-    # точка apply_ledger_portion (#320).
-    cache_after = await pm.get_task_cache(db, task.id)
-    await apply_ledger_portion(db, task, cache=cache_after)
+    # Проекция строки участка — общей точкой «применить порцию» (#320).
+    # Статус задания уже синхронизирован внутри record() на последней
+    # проводке порции (ADR-0041).
+    await apply_ledger_portion(db, task)
 
     # Авто-передача следует за фактом: передаётся только реально проведённая
     # годная часть порции (#133), а не запрошенная оператором.
@@ -1129,12 +1122,13 @@ async def final_release(
         action_id=action.id,
     ))
 
-    # Проекция + статус — общей точкой «применить порцию» (#320).
+    # Проекция строки участка — общей точкой «применить порцию» (#320).
     # FINAL_RELEASE в проекцию СТАТУСА не входит: remaining/transferred
     # считаются по TRANSFER_SEND, completed — по COMPLETE, rejected — по
     # SCRAP (app/stock/task_cache.py, _refresh_section_plan_line_cache),
-    # поэтому доменно выпуск статус не меняет и синхронизация здесь —
-    # no-op, зафиксированный тестом, а не «на всякий случай».
+    # поэтому доменно выпуск статус не меняет, а синхронизация внутри
+    # record() здесь — no-op, зафиксированный тестом, а не «на всякий
+    # случай».
     await apply_ledger_portion(db, task)
 
     # Аудит-запись — хелпер _log_final_release_audit (К5, #134): живёт в
@@ -1160,9 +1154,10 @@ async def return_remainder_to_stock(
 ) -> dict:
     """Вернуть необработанный остаток задания на склад (RETURN_TO_STOCK).
 
-    Тело перенесено из роута в пакет (#320): проводка ledger, проекция строки
-    участка и статус задания — той же последовательностью, что в complete_task
-    (``apply_ledger_portion``). Признак «пройденные операции» (ADR-0043) —
+    Тело перенесено из роута в пакет (#320): проводка ledger и проекция
+    строки участка — той же последовательностью, что в complete_task
+    (``apply_ledger_portion``); статус задания синхронизирует сам
+    ``record()``. Признак «пройденные операции» (ADR-0043) —
     операции до ПРЕДЫДУЩЕГО этапа: остаток уходит необработанным.
     """
     task = await _get_task(db, task_id)
