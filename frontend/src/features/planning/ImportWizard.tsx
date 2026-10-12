@@ -269,14 +269,14 @@ export function ImportWizard(props: {
 
   const previewActiveFilterSummary = useMemo(
     () =>
-      buildActiveFilterSummary(searchQuery, sortConfig ? 1 : 0, {
+      buildActiveFilterSummary(debouncedSearchQuery, sortConfig ? 1 : 0, {
         panelFilters: {
           has_errors: filterErrors,
           has_warnings: filterWarnings,
           has_duplicates: filterDuplicates,
         },
       }),
-    [filterErrors, filterWarnings, filterDuplicates, searchQuery, sortConfig],
+    [filterErrors, filterWarnings, filterDuplicates, debouncedSearchQuery, sortConfig],
   )
   const resetPreviewFilters = useCallback(() => {
     setSearchQuery("")

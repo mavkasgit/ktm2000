@@ -140,9 +140,6 @@ type ReadyToTransferQueryKeyParams = {
  */
 
 export const queryKeys = {
-  auth: {
-    me: () => ["auth-me"] as const,
-  },
   sections: {
     all: () => ["sections"] as const,
     /** Справочник участков с параметрами экрана (поиск, сортировка). */
