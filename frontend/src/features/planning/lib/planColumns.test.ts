@@ -47,7 +47,7 @@ describe("колонка «Предупр.» (#328)", () => {
   it("стоит рядом с «Ошибками” и объявлена один раз в описании", () => {
     const ids = planColumns.map((spec) => spec.id);
     expect(ids.indexOf("warnings")).toBe(ids.indexOf("errors") + 1);
-    expect(column("warnings")?.label).toBe("Предупр.");
+    expect(column("warnings")?.label).toBe("Предупреждения");
   });
 
   it("считает предупреждения персистированные на позиции", () => {

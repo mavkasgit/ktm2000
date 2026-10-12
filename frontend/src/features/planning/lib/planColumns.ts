@@ -109,7 +109,7 @@ export const planColumns: PlanColumn[] = [
   },
   {
     id: "warnings",
-    label: "Предупр.",
+    label: "Предупреждения",
     filterField: "warnings",
     apiParam: "has_warnings",
     mapValue: toYesNo("0"),
