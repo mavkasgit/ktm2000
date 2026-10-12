@@ -806,7 +806,6 @@ async def bulk_delete_positions(
     db: AsyncSession = Depends(get_db),
     current_user: User = Depends(get_current_user),
 ) -> BulkActionResponse:
-    await _reject_legacy_plan_mutation(db, production_plan_id)
     """Delete multiple plan positions in a single request.
 
     Cancelled positions are soft-deleted; all other eligible positions
@@ -818,10 +817,21 @@ async def bulk_delete_positions(
     группами: soft-delete — по одному сервисному вызову (у каждой позиции
     свой аудит, пишет сервис), hard-delete — одним ``DELETE ... WHERE id IN
     (...)`` и ОДНОЙ сводной записью аудита со списком id.
+
+    Изоляция сбоев: unexpected-исключение в soft-delete помечает только свой
+    id (безопасное сообщение, текст исключения наружу не уходит). Группа
+    hard-delete целиком внутри ОДНОГО savepoint: сбой группы (например,
+    IntegrityError по TOCTOU между классификацией и DELETE) откатывается к
+    savepoint'у, hard-id помечаются failed, а выполненные ДО него soft-delete
+    переживают откат и уезжают общим коммитом.
     """
+    await _reject_legacy_plan_mutation(db, production_plan_id)
+
     import logging
     logger = logging.getLogger(__name__)
 
+    # Дедупликация намеренная: каждый id классифицируется ровно один раз,
+    # дубль в payload не получает второй попытки и не падает как «not found».
     unique_ids = list(dict.fromkeys(payload.ids))
     results_by_id: dict[int, BulkActionResultItem] = {}
     soft_delete_ids: list[int] = []
@@ -878,58 +888,85 @@ async def bulk_delete_positions(
                 results_by_id[position_id] = BulkActionResultItem(
                     id=position_id, status="failed", reason=str(exc)
                 )
+            except Exception:
+                # Unexpected-ошибка (в т.ч. IntegrityError по TOCTOU): отказ
+                # изолируется по id, остальной батч продолжает работу. Текст
+                # исключения наружу не уходит.
+                logger.exception("bulk_delete_positions: unexpected error for id %s", position_id)
+                results_by_id[position_id] = BulkActionResultItem(
+                    id=position_id, status="failed", reason="Внутренняя ошибка сервера"
+                )
 
         if hard_delete_ids:
             hard_positions = [positions_by_id[position_id] for position_id in hard_delete_ids]
-            # Связанные строки change-set'а — до удаления позиций (FK).
-            await db.execute(
-                PlanChangeItem.__table__.delete().where(
-                    PlanChangeItem.plan_position_id.in_(hard_delete_ids)
+            try:
+                # Один savepoint на всю группу: сбой группы (например, FK
+                # IntegrityError из-за TOCTOU между классификацией и DELETE)
+                # откатывается к savepoint'у, а soft-delete, выполненные ДО
+                # него, переживают откат и уезжают общим коммитом.
+                async with db.begin_nested():
+                    # Связанные строки change-set'а — до удаления позиций (FK).
+                    await db.execute(
+                        PlanChangeItem.__table__.delete().where(
+                            PlanChangeItem.plan_position_id.in_(hard_delete_ids)
+                        )
+                    )
+                    # ОДНА сводная запись аудита на группу: id и статусы уже сняты со
+                    # снапшота до DELETE. Журнал не изобретаем — тот же log_action.
+                    from app.models.audit_log import AuditAction, AuditEntityType
+                    from app.services.audit_log_service import log_action
+                    ids_text = ", ".join(str(position_id) for position_id in hard_delete_ids)
+                    await log_action(
+                        db,
+                        status="success",
+                        title="Удаление позиций (жесткое)",
+                        message=(
+                            f"Из плана #{production_plan_id} жёстко удалено позиций: "
+                            f"{len(hard_delete_ids)} (ids: {ids_text})."
+                        ),
+                        user=current_user,
+                        comment=payload.reason,
+                        action=AuditAction.DELETE,
+                        entity_type=AuditEntityType.PRODUCTION_PLAN,
+                        entity_id=production_plan_id,
+                        changes={
+                            "before": {
+                                "position_ids": list(hard_delete_ids),
+                                "statuses": {str(p.id): p.status.value for p in hard_positions},
+                                "source_skus": {str(p.id): p.source_sku for p in hard_positions},
+                            },
+                            "after": None,
+                        },
+                    )
+                    # Один grouped DELETE вместо per-id db.delete в цикле.
+                    await db.execute(
+                        PlanPosition.__table__.delete().where(PlanPosition.id.in_(hard_delete_ids))
+                    )
+                    # Core-DELETE не трогает identity map: снимаем снапшот сессии,
+                    # иначе db.get по уже удалённой строке вернул бы устаревший объект.
+                    for position in hard_positions:
+                        db.expunge(position)
+            except Exception:
+                # Группа упала целиком: savepoint откатан, строки позиций на
+                # месте. hard-id помечаем failed; текст исключения наружу не
+                # уходит. Success-результаты группы не выставлялись до отката.
+                logger.exception(
+                    "bulk_delete_positions: hard-delete group failed for ids %s", hard_delete_ids,
                 )
-            )
-            # ОДНА сводная запись аудита на группу: id и статусы уже сняты со
-            # снапшота до DELETE. Журнал не изобретаем — тот же log_action.
-            from app.models.audit_log import AuditAction, AuditEntityType
-            from app.services.audit_log_service import log_action
-            ids_text = ", ".join(str(position_id) for position_id in hard_delete_ids)
-            await log_action(
-                db,
-                status="success",
-                title="Удаление позиций (жесткое)",
-                message=(
-                    f"Из плана #{production_plan_id} жёстко удалено позиций: "
-                    f"{len(hard_delete_ids)} (ids: {ids_text})."
-                ),
-                user=current_user,
-                comment=payload.reason,
-                action=AuditAction.DELETE,
-                entity_type=AuditEntityType.PRODUCTION_PLAN,
-                entity_id=production_plan_id,
-                changes={
-                    "before": {
-                        "position_ids": list(hard_delete_ids),
-                        "statuses": {str(p.id): p.status.value for p in hard_positions},
-                        "source_skus": {str(p.id): p.source_sku for p in hard_positions},
-                    },
-                    "after": None,
-                },
-            )
-            # Один grouped DELETE вместо per-id db.delete в цикле.
-            await db.execute(
-                PlanPosition.__table__.delete().where(PlanPosition.id.in_(hard_delete_ids))
-            )
-            # Core-DELETE не трогает identity map: снимаем снапшот сессии,
-            # иначе db.get по уже удалённой строке вернул бы устаревший объект.
-            for position in hard_positions:
-                db.expunge(position)
-            for position_id in hard_delete_ids:
-                results_by_id[position_id] = BulkActionResultItem(id=position_id, status="success")
+                for position_id in hard_delete_ids:
+                    results_by_id[position_id] = BulkActionResultItem(
+                        id=position_id, status="failed", reason="Внутренняя ошибка сервера"
+                    )
+            else:
+                for position_id in hard_delete_ids:
+                    results_by_id[position_id] = BulkActionResultItem(id=position_id, status="success")
 
-    # Коммит ДО формирования ответа — ровно как в `bulk_approve_positions` (:535).
-    # Мутации выше идут без savepoint'ов (классификация уже отсеяла отказы), а
-    # `get_db` коммитит уже после ответа: клиент получил бы 200 со списком
-    # успехов и перечитал план, где удаления и скрытия ещё не сохранены. Один
-    # коммит закрывает весь батч — включая hard-delete, `deleted_at` и записи аудита.
+    # Коммит ДО формирования ответа — ровно как в `bulk_approve_positions`.
+    # `get_db` коммитит уже после ответа, а FastAPI 0.106+ отдаёт ответ
+    # раньше: клиент получил бы 200 со списком успехов и перечитал план,
+    # где удаления и скрытия ещё не сохранены. Один коммит закрывает весь
+    # батч — включая hard-delete, `deleted_at` и записи аудита; hard-id,
+    # помеченные failed после отката savepoint'а, в коммит не попадают.
     await db.commit()
     return BulkActionResponse(
         results=[results_by_id[position_id] for position_id in payload.ids]

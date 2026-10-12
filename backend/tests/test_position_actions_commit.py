@@ -39,9 +39,9 @@ from app.models.route import (
 )
 from app.models.section import Section
 from httpx import ASGITransport, AsyncClient
-from sqlalchemy import delete, select
+from sqlalchemy import delete, select, text
 from sqlalchemy import func as sa_func
-from sqlalchemy.ext.asyncio import AsyncEngine, AsyncSession
+from sqlalchemy.ext.asyncio import AsyncEngine, AsyncSession, async_sessionmaker
 
 from tests.test_bulk_approve_commit import _schema_session
 from tests.test_bulk_planning import (
@@ -110,6 +110,50 @@ async def _non_committing_client(
     async def override_get_db() -> AsyncIterator[AsyncSession]:
         async with _schema_session(engine, schema) as db:
             yield db
+
+    app.dependency_overrides[get_db] = override_get_db
+    try:
+        transport = ASGITransport(app=app)
+        async with AsyncClient(transport=transport, base_url="http://test") as ac:
+            yield ac
+    finally:
+        app.dependency_overrides.pop(get_db, None)
+
+
+@asynccontextmanager
+async def _client_with_failing_hard_delete(
+    engine: AsyncEngine, schema: str
+) -> AsyncIterator[AsyncClient]:
+    """Клиент, чья сессия роняет каждый DELETE по ``plan_positions``.
+
+    Имитирует IntegrityError группового hard-delete (TOCTOU между
+    классификацией и DELETE): savepoint группы обязан откатиться, API —
+    ответить 200 с failed на hard-id, а soft-delete того же батча —
+    закоммитить.
+    """
+
+    class _FailingHardDeleteSession(AsyncSession):
+        async def execute(self, statement, *args, **kwargs):
+            if (
+                getattr(statement, "is_delete", False)
+                and getattr(getattr(statement, "table", None), "name", None)
+                == PlanPosition.__tablename__
+            ):
+                raise RuntimeError("forced plan_positions DELETE failure")
+            return await super().execute(statement, *args, **kwargs)
+
+    async def override_get_db() -> AsyncIterator[AsyncSession]:
+        async with engine.connect() as conn:
+            await conn.execute(text(f'SET search_path TO "{schema}"'))
+            await conn.commit()
+            factory = async_sessionmaker(
+                bind=conn, class_=_FailingHardDeleteSession, expire_on_commit=False
+            )
+            async with factory() as db:
+                try:
+                    yield db
+                finally:
+                    await db.rollback()
 
     app.dependency_overrides[get_db] = override_get_db
     try:
@@ -361,7 +405,8 @@ async def test_bulk_delete_positions_commits_successes_despite_failed_item(
         headers = _auth_headers(user)
 
     try:
-        # 999_999 не существует -> ValueError внутри savepoint'а.
+        # 999_999 не существует: классификация (один SELECT до мутаций)
+        # помечает его failed — без исключения и без savepoint'а.
         async with _non_committing_client(engine, module_schema_name) as ac:
             response = await ac.post(
                 f"/api/production-plans/{plan_id}/positions/bulk-delete",
@@ -378,6 +423,69 @@ async def test_bulk_delete_positions_commits_successes_despite_failed_item(
 
         committed = await _read_committed(engine, module_schema_name, position_ids)
         assert committed == []
+    finally:
+        await _cleanup(
+            engine,
+            module_schema_name,
+            plan_id=plan_id,
+            position_ids=position_ids,
+            route_id=route_id,
+            product_id=product_id,
+            user_id=user_id,
+            sku=sku,
+        )
+
+
+@pytest.mark.asyncio
+async def test_bulk_delete_positions_hard_group_failure_keeps_soft_results(
+    engine: AsyncEngine, module_schema_name: str
+) -> None:
+    """Сбой hard-группы не должен уносить soft-delete того же батча.
+
+    Групповой DELETE по ``plan_positions`` замокан на исключение (аналог
+    IntegrityError по TOCTOU между классификацией и DELETE). Контракт:
+    savepoint группы откатывается, hard-id помечаются failed с безопасным
+    сообщением (текст исключения наружу не течёт), а soft-delete,
+    выполненный ДО savepoint'а, уезжает общим коммитом.
+    """
+    sku = "FG-BULKDELETE-HARDFAIL"
+    async with _schema_session(engine, module_schema_name) as setup:
+        user = await _make_user(setup, "bulk-delete-hardfail@test.local")
+        plan, positions, route = await _make_plan_with_positions(
+            setup, sku, 2, cancelled_count=1
+        )
+        await setup.commit()
+        plan_id = plan.id
+        position_ids = [p.id for p in positions]
+        route_id = route.id
+        product_id = positions[0].product_id
+        user_id = user.id
+        headers = _auth_headers(user)
+
+    try:
+        # `cancelled_count=1`: первая позиция — cancelled (soft), вторая —
+        # черновик (hard); DELETE по plan_positions упадёт внутри savepoint'а.
+        async with _client_with_failing_hard_delete(engine, module_schema_name) as ac:
+            response = await ac.post(
+                f"/api/production-plans/{plan_id}/positions/bulk-delete",
+                json={"ids": position_ids, "reason": "сбой hard-группы"},
+                headers=headers,
+            )
+        assert response.status_code == 200, response.text
+        by_id = {item["id"]: item for item in response.json()["results"]}
+        assert by_id[position_ids[0]]["status"] == "success", by_id
+        assert by_id[position_ids[1]]["status"] == "failed", by_id
+        # Текст исключения наружу не течёт.
+        assert by_id[position_ids[1]]["reason"] == "Внутренняя ошибка сервера"
+
+        committed = await _read_committed(engine, module_schema_name, position_ids)
+        by_committed = {pid: (status, deleted_at) for pid, status, deleted_at in committed}
+        # Soft-delete пережил откат savepoint'а hard-группы и закоммичен.
+        assert by_committed[position_ids[0]][0] == PlanPositionStatus.cancelled.value
+        assert by_committed[position_ids[0]][1] is not None
+        # Hard-delete откатан: черновик на месте, без скрытия.
+        assert by_committed[position_ids[1]][0] == PlanPositionStatus.draft.value
+        assert by_committed[position_ids[1]][1] is None
     finally:
         await _cleanup(
             engine,
