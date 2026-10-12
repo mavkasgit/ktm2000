@@ -554,11 +554,13 @@ async def _get_or_create_import_file(
         return existing
 
     storage_dir = Path(settings.IMPORT_STORAGE_DIR)
-    # mkdir блокирует event loop воркера, поэтому уходит в поток (#267).
-    await asyncio.to_thread(storage_dir.mkdir, parents=True, exist_ok=True)
     stored_path = storage_dir / f"{file_hash}{extension}"
-    # Запись файла — I/O, как и mkdir выше, поэтому тоже в потоке.
-    await asyncio.to_thread(stored_path.write_bytes, content)
+
+    def _save_file() -> None:
+        storage_dir.mkdir(parents=True, exist_ok=True)
+        stored_path.write_bytes(content)
+
+    await asyncio.to_thread(_save_file)
 
     import_file = ImportFile(
         original_filename=filename,
