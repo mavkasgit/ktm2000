@@ -2,7 +2,7 @@ import asyncio
 import logging
 from datetime import UTC, datetime
 from decimal import Decimal
-from typing import Literal
+from typing import Any, Literal
 
 from fastapi import APIRouter, Depends, HTTPException, Query, status
 from fastapi.responses import JSONResponse
@@ -1645,6 +1645,55 @@ def _apply_all_positions_filters(
 
 
 
+def _build_plan_position_out(
+    p: PlanPosition,
+    route_info: Any,
+    hanger_value: Any,
+    figures: PositionStockFigures,
+    warnings: list,
+) -> PlanPositionOut:
+    from app.domain.dimensions import format_dimensions
+    from app.services.plan_position_hanger import position_dimensions_for_task
+
+    task_dims = position_dimensions_for_task(p)
+    return PlanPositionOut(
+        id=p.id,
+        production_plan_id=p.production_plan_id,
+        source_sku=p.source_sku,
+        source_name=p.source_name,
+        quantity=str(p.quantity),
+        status=p.status.value,
+        validation_status=p.validation_status.value,
+        errors=[format_validation_error(e) for e in (p.validation_errors or [])],
+        validation_warnings=p.validation_warnings or [],
+        source_row_number=p.source_row_number,
+        source_row_numbers=_source_row_numbers_from_position(p),
+        source_ref=p.source_ref,
+        warnings=warnings,
+        product_id=p.product_id,
+        route_id=route_info.route_id,
+        route_profile_id=p.route_profile_id,
+        route_name=route_info.route_name,
+        route_source=route_info.source,
+        route_origin=route_info.route_origin,
+        route_match_quality=route_info.route_match_quality,
+        route_match_reason=route_info.route_match_reason,
+        route_assigned_at=route_info.route_assigned_at.isoformat() if route_info.route_assigned_at else None,
+        route_manual_confirmed_at=(
+            route_info.route_manual_confirmed_at.isoformat() if route_info.route_manual_confirmed_at else None
+        ),
+        route_error=route_info.error,
+        raw_excel_row=(p.source_payload or {}).get("raw_excel_row"),
+        payload=p.source_payload,
+        **figures.as_fields(),
+        quantity_per_hanger=hanger_value.quantity_per_hanger,
+        quantity_per_hanger_source=hanger_value.source,
+        dimensions=task_dims,
+        dimensions_label=format_dimensions(task_dims),
+        **_position_operation_fields(p),
+    )
+
+
 async def _serialize_plan_positions(
     db: AsyncSession,
     positions: list[PlanPosition],
@@ -1656,9 +1705,11 @@ async def _serialize_plan_positions(
 
     change_items = (
         await db.execute(
-            select(PlanChangeItem).where(
+            select(PlanChangeItem)
+            .where(
                 PlanChangeItem.plan_position_id.in_([p.id for p in positions])
             )
+            .order_by(PlanChangeItem.id.asc())
         )
     ).scalars().all()
     warnings_by_position = {ci.plan_position_id: ci.warnings for ci in change_items if ci.plan_position_id}
@@ -1672,53 +1723,20 @@ async def _serialize_plan_positions(
     )
     hanger_values = await resolve_positions_hanger(db, positions)
 
-    from app.domain.dimensions import format_dimensions
-    from app.services.plan_position_hanger import position_dimensions_for_task
-
     result: list[PlanPositionOut] = []
     for p in positions:
         route_info = route_info_by_id[p.id]
         hanger_value = hanger_values[p.id]
-        task_dims = position_dimensions_for_task(p)
         figures = stock_figures_by_id.get(
             p.id, PositionStockFigures(None, None, None)
         )
         result.append(
-            PlanPositionOut(
-                id=p.id,
-                production_plan_id=p.production_plan_id,
-                source_sku=p.source_sku,
-                source_name=p.source_name,
-                quantity=str(p.quantity),
-                status=p.status.value,
-                validation_status=p.validation_status.value,
-                errors=[format_validation_error(e) for e in (p.validation_errors or [])],
-                validation_warnings=p.validation_warnings or [],
-                source_row_number=p.source_row_number,
-                source_row_numbers=_source_row_numbers_from_position(p),
-                source_ref=p.source_ref,
+            _build_plan_position_out(
+                p=p,
+                route_info=route_info,
+                hanger_value=hanger_value,
+                figures=figures,
                 warnings=warnings_by_position.get(p.id, []) or [],
-                product_id=p.product_id,
-                route_id=route_info.route_id,
-                route_profile_id=p.route_profile_id,
-                route_name=route_info.route_name,
-                route_source=route_info.source,
-                route_origin=route_info.route_origin,
-                route_match_quality=route_info.route_match_quality,
-                route_match_reason=route_info.route_match_reason,
-                route_assigned_at=route_info.route_assigned_at.isoformat() if route_info.route_assigned_at else None,
-                route_manual_confirmed_at=(
-                    route_info.route_manual_confirmed_at.isoformat() if route_info.route_manual_confirmed_at else None
-                ),
-                route_error=route_info.error,
-                raw_excel_row=(p.source_payload or {}).get("raw_excel_row"),
-                payload=p.source_payload,
-                **figures.as_fields(),
-                quantity_per_hanger=hanger_value.quantity_per_hanger,
-                quantity_per_hanger_source=hanger_value.source,
-                dimensions=task_dims,
-                dimensions_label=format_dimensions(task_dims),
-                **_position_operation_fields(p),
             )
         )
     return result
@@ -1822,8 +1840,6 @@ async def all_plan_positions(
 )
 async def cancelled_positions(db: AsyncSession = Depends(get_db)) -> list[PlanPositionOut]:
     """Return cancelled positions (for execution history/audit view)."""
-    from app.models.production_plan import PlanChangeItem
-
     positions = (
         await db.execute(
             select(PlanPosition)
@@ -1835,73 +1851,12 @@ async def cancelled_positions(db: AsyncSession = Depends(get_db)) -> list[PlanPo
         )
     ).scalars().all()
 
-    change_items = (
-        await db.execute(
-            select(PlanChangeItem).where(
-                PlanChangeItem.plan_position_id.in_([p.id for p in positions])
-            )
-        )
-    ).scalars().all()
-    warnings_by_position = {ci.plan_position_id: ci.warnings for ci in change_items if ci.plan_position_id}
-
-    # Батч-резолв маршрутов (#298) — см. соседний обработчик.
-    route_info_by_id = await resolve_position_routes_batch(db, positions)
-    stock_figures_by_id = await _compute_position_stock_figures(
-        db, positions, route_info_by_id
-    )
-    hanger_values = await resolve_positions_hanger(db, positions)
-
-    result = []
-    for p in positions:
-        route_info = route_info_by_id[p.id]
-        hanger_value = hanger_values[p.id]
-        figures = stock_figures_by_id.get(
-            p.id, PositionStockFigures(None, None, None)
-        )
-        result.append(
-            PlanPositionOut(
-                id=p.id,
-                production_plan_id=p.production_plan_id,
-                source_sku=p.source_sku,
-                source_name=p.source_name,
-                quantity=str(p.quantity),
-                status=p.status.value,
-                validation_status=p.validation_status.value,
-                errors=[format_validation_error(e) for e in (p.validation_errors or [])],
-                validation_warnings=p.validation_warnings or [],
-                source_row_number=p.source_row_number,
-                source_row_numbers=_source_row_numbers_from_position(p),
-                source_ref=p.source_ref,
-                warnings=warnings_by_position.get(p.id, []) or [],
-                product_id=p.product_id,
-                route_id=route_info.route_id,
-                route_profile_id=p.route_profile_id,
-                route_name=route_info.route_name,
-                route_source=route_info.source,
-                route_origin=route_info.route_origin,
-                route_match_quality=route_info.route_match_quality,
-                route_match_reason=route_info.route_match_reason,
-                route_assigned_at=route_info.route_assigned_at.isoformat() if route_info.route_assigned_at else None,
-                route_manual_confirmed_at=(
-                    route_info.route_manual_confirmed_at.isoformat() if route_info.route_manual_confirmed_at else None
-                ),
-                route_error=route_info.error,
-                raw_excel_row=(p.source_payload or {}).get("raw_excel_row"),
-                payload=p.source_payload,
-                **figures.as_fields(),
-                quantity_per_hanger=hanger_value.quantity_per_hanger,
-                quantity_per_hanger_source=hanger_value.source,
-                **_position_operation_fields(p),
-            )
-        )
-
-    return result
+    return await _serialize_plan_positions(db, positions)
 
 
 @router.get("/{production_plan_id}/all-positions", dependencies=[Depends(require_role(list(READER_ROLES)))])
 async def all_positions(production_plan_id: int, db: AsyncSession = Depends(get_db)) -> list[PlanPositionOut]:
     await _require_visible_plan(db, production_plan_id)
-    from app.models.production_plan import PlanChangeItem
 
     positions = (
         await db.execute(
@@ -1913,69 +1868,7 @@ async def all_positions(production_plan_id: int, db: AsyncSession = Depends(get_
         )
     ).scalars().all()
 
-    # Gather warnings from change items
-    change_items = (
-        await db.execute(
-            select(PlanChangeItem).where(
-                PlanChangeItem.plan_position_id.in_([p.id for p in positions])
-            )
-        )
-    ).scalars().all()
-    warnings_by_position = {ci.plan_position_id: ci.warnings for ci in change_items if ci.plan_position_id}
-
-    # Батч-резолв маршрутов (#298) — см. соседний обработчик.
-    route_info_by_id = await resolve_position_routes_batch(db, positions)
-
-    stock_figures_by_id = await _compute_position_stock_figures(
-        db, positions, route_info_by_id
-    )
-    hanger_values = await resolve_positions_hanger(db, positions)
-
-    result = []
-    for p in positions:
-        route_info = route_info_by_id[p.id]
-        hanger_value = hanger_values[p.id]
-        figures = stock_figures_by_id.get(
-            p.id, PositionStockFigures(None, None, None)
-        )
-        result.append(
-            PlanPositionOut(
-                id=p.id,
-                production_plan_id=p.production_plan_id,
-                source_sku=p.source_sku,
-                source_name=p.source_name,
-                quantity=str(p.quantity),
-                status=p.status.value,
-                validation_status=p.validation_status.value,
-                errors=[format_validation_error(e) for e in (p.validation_errors or [])],
-                validation_warnings=p.validation_warnings or [],
-                source_row_number=p.source_row_number,
-                source_row_numbers=_source_row_numbers_from_position(p),
-                source_ref=p.source_ref,
-                warnings=warnings_by_position.get(p.id, []) or [],
-                product_id=p.product_id,
-                route_id=route_info.route_id,
-                route_profile_id=p.route_profile_id,
-                route_name=route_info.route_name,
-                route_source=route_info.source,
-                route_origin=route_info.route_origin,
-                route_match_quality=route_info.route_match_quality,
-                route_match_reason=route_info.route_match_reason,
-                route_assigned_at=route_info.route_assigned_at.isoformat() if route_info.route_assigned_at else None,
-                route_manual_confirmed_at=(
-                    route_info.route_manual_confirmed_at.isoformat() if route_info.route_manual_confirmed_at else None
-                ),
-                route_error=route_info.error,
-                raw_excel_row=(p.source_payload or {}).get("raw_excel_row"),
-                payload=p.source_payload,
-                **figures.as_fields(),
-                quantity_per_hanger=hanger_value.quantity_per_hanger,
-                quantity_per_hanger_source=hanger_value.source,
-                **_position_operation_fields(p),
-            )
-        )
-
-    return result
+    return await _serialize_plan_positions(db, positions)
 
 
 class BatchAssignRouteIn(BaseModel):
@@ -2449,45 +2342,5 @@ async def update_position_quantity(
     await db.commit()
     await db.refresh(position)
 
-    route_info = await resolve_position_route(db, position)
-    hanger_value = (await resolve_positions_hanger(db, [position]))[position.id]
-    # Индикатор после правки количества — пересчитываем, а не гасим:
-    # именно этой правкой меняется «дефицит позиции» (#207).
-    stock_figures = (
-        await _compute_position_stock_figures(db, [position], {position.id: route_info})
-    ).get(position.id, PositionStockFigures(None, None, None))
-
-    return PlanPositionOut(
-        id=position.id,
-        production_plan_id=position.production_plan_id,
-        source_sku=position.source_sku,
-        source_name=position.source_name,
-        quantity=str(position.quantity),
-        status=position.status.value,
-        validation_status=position.validation_status.value,
-        errors=[format_validation_error(e) for e in (position.validation_errors or [])],
-        warnings=[],
-        validation_warnings=position.validation_warnings or [],
-        source_row_number=position.source_row_number,
-        source_row_numbers=_source_row_numbers_from_position(position),
-        source_ref=position.source_ref,
-        product_id=position.product_id,
-        route_id=route_info.route_id,
-        route_profile_id=position.route_profile_id,
-        route_name=route_info.route_name,
-        route_source=route_info.source,
-        route_origin=route_info.route_origin,
-        route_match_quality=route_info.route_match_quality,
-        route_match_reason=route_info.route_match_reason,
-        route_assigned_at=route_info.route_assigned_at.isoformat() if route_info.route_assigned_at else None,
-        route_manual_confirmed_at=(
-            route_info.route_manual_confirmed_at.isoformat() if route_info.route_manual_confirmed_at else None
-        ),
-        route_error=route_info.error,
-        raw_excel_row=(position.source_payload or {}).get("raw_excel_row"),
-        payload=position.source_payload,
-        **stock_figures.as_fields(),
-        quantity_per_hanger=hanger_value.quantity_per_hanger,
-        quantity_per_hanger_source=hanger_value.source,
-        **_position_operation_fields(position),
-    )
+    serialized = await _serialize_plan_positions(db, [position])
+    return serialized[0]
