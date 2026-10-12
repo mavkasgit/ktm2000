@@ -873,13 +873,14 @@ async def bulk_delete_positions(
 
         for position_id in soft_delete_ids:
             try:
-                await soft_delete_cancelled_position(
-                    db,
-                    production_plan_id,
-                    position_id,
-                    changed_by=current_user.id,
-                    reason=payload.reason or "Удалена из списка",
-                )
+                async with db.begin_nested():
+                    await soft_delete_cancelled_position(
+                        db,
+                        production_plan_id,
+                        position_id,
+                        changed_by=current_user.id,
+                        reason=payload.reason or "Удалена из списка",
+                    )
                 results_by_id[position_id] = BulkActionResultItem(id=position_id, status="success")
             except ValueError as exc:
                 logger.warning(
