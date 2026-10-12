@@ -291,33 +291,28 @@ class StockProjectionManager:
         что и раньше (NULL ≠ [] сохраняется, ADR-0055); знаковая логика
         не менялась — ``incoming - outgoing``.
         """
-        in_sum = (
-            await session.scalar(
-                select(func.coalesce(func.sum(StockTransaction.quantity), 0)).where(
-                    StockTransaction.product_id == product_id,
-                    StockTransaction.to_location_id == location_id,
-                    StockTransaction.to_quality_state == quality_state,
-                    dimensions_match_clause(StockTransaction.dimensions, dimensions),
-                    completed_operations_match_clause(
-                        StockTransaction.completed_operations, completed_operations
-                    ),
-                )
+        # coalesce отдаёт 0 при пустой выборке — вторая страховка не нужна.
+        in_sum = await session.scalar(
+            select(func.coalesce(func.sum(StockTransaction.quantity), 0)).where(
+                StockTransaction.product_id == product_id,
+                StockTransaction.to_location_id == location_id,
+                StockTransaction.to_quality_state == quality_state,
+                dimensions_match_clause(StockTransaction.dimensions, dimensions),
+                completed_operations_match_clause(
+                    StockTransaction.completed_operations, completed_operations
+                ),
             )
-            or Decimal(0)
         )
-        out_sum = (
-            await session.scalar(
-                select(func.coalesce(func.sum(StockTransaction.quantity), 0)).where(
-                    StockTransaction.product_id == product_id,
-                    StockTransaction.from_location_id == location_id,
-                    StockTransaction.from_quality_state == quality_state,
-                    dimensions_match_clause(StockTransaction.dimensions, dimensions),
-                    completed_operations_match_clause(
-                        StockTransaction.completed_operations, completed_operations
-                    ),
-                )
+        out_sum = await session.scalar(
+            select(func.coalesce(func.sum(StockTransaction.quantity), 0)).where(
+                StockTransaction.product_id == product_id,
+                StockTransaction.from_location_id == location_id,
+                StockTransaction.from_quality_state == quality_state,
+                dimensions_match_clause(StockTransaction.dimensions, dimensions),
+                completed_operations_match_clause(
+                    StockTransaction.completed_operations, completed_operations
+                ),
             )
-            or Decimal(0)
         )
         balance = in_sum - out_sum
 
@@ -569,37 +564,52 @@ class StockProjectionManager:
 
         ``tasks`` / ``lines`` — уже загруженные в этой же сессии объекты
         (backend/AGENTS.md: identity map делает повторный SELECT по ним
-        лишним SQL). Переданы — выборка соответствующей сущности
-        пропускается; не переданы (``None``) — прежнее поведение: две
-        выборки по id. Оба аргумента keyword-only, чтобы старые вызывающие
-        не менялись.
+        лишним SQL). Не переданы (``None``) — прежнее поведение: две
+        выборки по id. Переданы частично (не покрывают все ``task_ids`` /
+        все ``section_plan_line_id`` задач) — **merge path**: пропущенные
+        id дозакрываются точечным SELECT только по gap. Молчаливое
+        доверие полноте переданного покрытия было бы ловушкой: пропущенная
+        задача тихо получала бы нулевой кэш, пропущенная линия —
+        ``is_first_stage=False``. Оба аргумента keyword-only.
         """
         if not task_ids:
             return {}
 
-        # Загружаем задачи и линии
+        # Загружаем задачи и линии: переданное — первый источник, gap —
+        # точечный SELECT только по недостающим id.
         if tasks is None:
             tasks = (await session.execute(
                 select(WorkTask).where(WorkTask.id.in_(task_ids))
             )).scalars().all()
         task_map = {t.id: t for t in tasks}
+        missing_task_ids = [
+            tid for tid in dict.fromkeys(task_ids) if tid not in task_map
+        ]
+        if missing_task_ids:
+            for t in (await session.execute(
+                select(WorkTask).where(WorkTask.id.in_(missing_task_ids))
+            )).scalars().all():
+                task_map[t.id] = t
 
         from app.models.internal_plan import SectionPlanLine
         if lines is None:
-            line_ids = [
-                t.section_plan_line_id
-                for t in tasks
-                if t.section_plan_line_id is not None
-            ]
-            if line_ids:
-                lines = (await session.execute(
-                    select(SectionPlanLine).where(
-                        SectionPlanLine.id.in_(line_ids)
-                    )
-                )).scalars().all()
-            else:
-                lines = ()
+            lines = ()
         line_map = {l.id: l for l in lines}
+        line_ids = [
+            t.section_plan_line_id
+            for t in task_map.values()
+            if t.section_plan_line_id is not None
+        ]
+        missing_line_ids = [
+            lid for lid in dict.fromkeys(line_ids) if lid not in line_map
+        ]
+        if missing_line_ids:
+            for line in (await session.execute(
+                select(SectionPlanLine).where(
+                    SectionPlanLine.id.in_(missing_line_ids)
+                )
+            )).scalars().all():
+                line_map[line.id] = line
 
         # GROUP BY reason, task_id
         rows = await session.execute(
@@ -742,10 +752,12 @@ class StockCommandService:
         6. ``projection_manager.stock_changed(tx)`` — синхронно в той же
            транзакции.
         7. Синхронизация статуса задания (``cmd.task_id``) из уже
-           записанного ledger — тоже в той же транзакции. Свежесть статуса
-           принадлежит write-path (ADR-0041): доска (GET) статусы читает,
-           но не обновляет, поэтому каждый путь, меняющий ledger-факты
-           задания, обязан довести статус до проекции сам.
+            записанного ledger — тоже в той же транзакции, но только когда
+            ``cmd.task_id`` задан: без привязки к заданию проводка статуса
+            не касается. Свежесть статуса принадлежит write-path (ADR-0041):
+            доска (GET) статусы читает, но не обновляет, поэтому каждый
+            путь, меняющий ledger-факты задания через ``record()``, получает
+            синхронизацию здесь, без отдельного шага у оркестратора.
 
         Возвращает созданную (или существующую по идемпотентности)
         транзакцию.

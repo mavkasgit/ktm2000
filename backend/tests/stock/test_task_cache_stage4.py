@@ -384,6 +384,59 @@ async def test_get_tasks_cache_bulk(session: AsyncSession):
     assert bulk[fx2["task"].id]["issued_quantity"] == Decimal(20)
 
 
+async def test_get_tasks_cache_bulk_partial_preloads_fill_gap(session: AsyncSession):
+    """Частичные tasks=/lines= не зануляют кэш: недостающие id грузятся точечным SELECT.
+
+    Merge path (контракт get_tasks_cache_bulk): переданный tasks/lines —
+    первый источник, gap — SELECT только по пропущенным id. Без дозагрузки
+    пропущенная задача тихо получала бы нулевой кэш, а пропущенная линия —
+    ``is_first_stage=False`` (доступ без плановой базы).
+    """
+    fx1 = await _setup_one_task(session, sku="BULKP1", qty=Decimal(10))
+    fx2 = await _setup_one_task(session, sku="BULKP2", qty=Decimal(20))
+    for fx in [fx1, fx2]:
+        await seed_stock_for_task(
+            session,
+            product_id=fx["product"].id, task=fx["task"],
+            quantity=Decimal(100), created_by=fx["user"].id,
+            location_id=fx["raw"].id,
+        )
+        await record_transfer_receive(
+            session,
+            product_id=fx["product"].id,
+            from_location_id=fx["raw"].id,
+            to_location_id=fx["task"].section_id,
+            quantity=fx["task"].planned_quantity,
+            task_id=fx["task"].id,
+            created_by=fx["user"].id,
+        )
+        fx["task"].status = WorkTaskStatus.in_progress
+    await session.commit()
+
+    task1 = await session.get(WorkTask, fx1["task"].id)
+    task2 = await session.get(WorkTask, fx2["task"].id)
+    line1 = await session.get(SectionPlanLine, task1.section_plan_line_id)
+    task_ids = [task1.id, task2.id]
+    pm = StockProjectionManager()
+
+    # tasks=[только первая]: вторая — gap-SELECT, не нулевой кэш.
+    bulk = await pm.get_tasks_cache_bulk(session, task_ids, tasks=[task1])
+    assert bulk[task2.id]["issued_quantity"] == Decimal(20)
+    assert bulk[task1.id]["issued_quantity"] == Decimal(10)
+
+    # lines=[только первая]: is_first_stage второй восстанавливается
+    # gap-SELECT'ом линии (received == planned → first-stage available == planned).
+    bulk = await pm.get_tasks_cache_bulk(session, task_ids, tasks=[task1, task2], lines=[line1])
+    assert bulk[task1.id]["available_quantity"] == Decimal(10)
+    assert bulk[task2.id]["available_quantity"] == Decimal(20)
+
+    # Полное покрытие — старый путь: результаты те же.
+    line2 = await session.get(SectionPlanLine, task2.section_plan_line_id)
+    bulk = await pm.get_tasks_cache_bulk(session, task_ids, tasks=[task1, task2], lines=[line1, line2])
+    assert bulk[task1.id]["available_quantity"] == Decimal(10)
+    assert bulk[task2.id]["available_quantity"] == Decimal(20)
+
+
 async def test_zero_cache_for_unknown_task(session: AsyncSession):
     """get_task_cache для несуществующей задачи возвращает нули."""
     pm = StockProjectionManager()
