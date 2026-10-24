@@ -14,7 +14,7 @@ vi.mock("@/shared/api/stockImportHistory", async (importOriginal) => ({
   getStockImportBatch: vi.fn(),
 }));
 
-vi.mock("@/features/auth/hooks/useAuth", () => ({
+vi.mock("@/entities/auth/hooks/useAuth", () => ({
   useAuth: vi.fn(),
 }));
 
@@ -30,8 +30,7 @@ import {
   type StockImportBatchDetail,
   type StockImportRow,
 } from "@/shared/api/stockImportHistory";
-import { useAuth } from "@/features/auth/hooks/useAuth";
-import type { AuthShellUser } from "@/features/auth/hooks/useAuth";
+import { useAuth, type AuthShellUser } from "@/entities/auth";
 import { ImportHistoryPanel } from "./ImportHistoryPanel";
 
 import { getRemainderImportOperations, type ImportOperationStep } from "@/shared/api/stock";

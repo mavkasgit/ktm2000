@@ -49,7 +49,7 @@ import {
 import type { BackupPreview } from "@/entities/backup/types"
 import { toast } from "@/shared/ui/use-toast"
 import { getErrorMessage } from "@/shared/api/client"
-import { usePermission } from "@/features/auth/hooks/usePermission"
+import { usePermission } from "@/entities/auth"
 import { backupStageLabels, backupStorageLabels } from "@/shared/lib/generated-labels"
 import { isFirstRowsLoad } from "@/shared/lib/tableQueryPlaceholder"
 import {

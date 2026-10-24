@@ -3,8 +3,7 @@ import { GitBranch, Pencil, Undo2 } from "lucide-react";
 import type { ActionTreeNode, JournalAction } from "@/shared/api/actions";
 import { ADMIN_ONLY_REVERSE_ACTION_TYPES } from "@/shared/api/actions";
 import { Button } from "@/shared/ui";
-import { useAuth } from "@/features/auth/hooks/useAuth";
-import { POLICIES } from "@/features/auth/policies";
+import { usePermission } from "@/entities/auth";
 import {
   Dialog,
   DialogContent,
@@ -47,7 +46,7 @@ export function JournalRowOperations({
   const [activeId, setActiveId] = useState(action.id);
   const tree = useActionTree(treeOpen ? activeId : null);
 
-  const { user } = useAuth();
+  const { canRollbackImport } = usePermission();
   // Откат импорта остатков — отдельное право админа (ADR-0052 п.6):
   // сервер ответит 403, поэтому кнопка не показывается вовсе, а не ведёт
   // зрителя в ошибку. Неактивное действие (status ≠ active) — напротив,
@@ -55,7 +54,7 @@ export function JournalRowOperations({
   const reverseByRoleForbidden =
     ADMIN_ONLY_REVERSE_ACTION_TYPES.includes(
       action.action_type as (typeof ADMIN_ONLY_REVERSE_ACTION_TYPES)[number],
-    ) && !POLICIES.rollbackImport(user?.role);
+    ) && !canRollbackImport;
   const canReverse = action.status === "active";
   const canAmend = action.action_type === "transfer_send" && action.status === "active";
 

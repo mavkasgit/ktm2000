@@ -11,7 +11,7 @@ import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { MemoryRouter } from "react-router-dom";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
-vi.mock("@/features/auth/hooks/usePermission", () => ({
+vi.mock("@/entities/auth/hooks/usePermission", () => ({
   usePermission: vi.fn(),
 }));
 
@@ -22,11 +22,10 @@ vi.mock("@/entities/backup/api", async (importOriginal) => ({
   fetchCurrentPreview: vi.fn(),
 }));
 
-import { usePermission } from "@/features/auth/hooks/usePermission";
+import { usePermission, type UsePermissionResult } from "@/entities/auth";
 import { fetchBackupConfig, fetchBackups, fetchCurrentPreview } from "@/entities/backup/api";
 import { BackupsPage } from "./SettingsBackupsPage";
 
-import type { UsePermissionResult } from "@/features/auth/hooks/usePermission";
 import type { BackupPreview } from "@/entities/backup/types";
 // `MemoryRouter` обязателен: кнопка возврата ходит через `useNavigate`, как и
 // любая другая маршрутная навигация.

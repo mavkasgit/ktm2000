@@ -9,7 +9,14 @@
 import { useState, useEffect, useRef, type FormEvent } from "react"
 import { Navigate } from "react-router-dom"
 import { ExternalLink, Loader2, LogIn, Shield } from "lucide-react"
-import { useAuth } from "../hooks/useAuth"
+import {
+  fetchOidcConfig,
+  OIDC_ERROR_CODES,
+  resolveOidcErrorText,
+  startOidcLogin,
+  useAuth,
+  type OidcConfig,
+} from "@/entities/auth"
 import {
   API_BASE_URL,
   AUTH_ERROR_CODES,
@@ -17,13 +24,6 @@ import {
   resolveAuthShellError,
 } from "@/shared/api/client"
 import { authHostConfig } from "@/shared/api/authHostConfig"
-import {
-  fetchOidcConfig,
-  OIDC_ERROR_CODES,
-  resolveOidcErrorText,
-  startOidcLogin,
-  type OidcConfig,
-} from "../api/oidcAuth"
 
 /** Версия auth-shell-модуля — синхронизируется verify-sync (режим content + version). */
 export const AUTH_SHELL_VERSION = "1.1.0"

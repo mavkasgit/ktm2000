@@ -8,7 +8,7 @@ import { RouteFlowBuilder } from "../components/RouteFlowBuilder";
 import { RouteSelectionRulesSection } from "../components/RouteSelectionRulesSection";
 import { RouteTreeOverview, type RouteTreeOverviewRef } from "../components/RouteTreeOverview";
 import { ImportTemplatesPage } from "./ImportTemplatesPage";
-import { usePermission } from "@/features/auth/hooks/usePermission";
+import { usePermission } from "@/entities/auth";
 
 type TabKey = "routes" | "templates";
 

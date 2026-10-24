@@ -1,7 +1,7 @@
 import { useEffect } from "react"
 import { Navigate } from "react-router-dom"
 import { Loader2 } from "lucide-react"
-import { useAuth } from "../hooks/useAuth"
+import { useAuth } from "@/entities/auth"
 import { toast } from "@/shared/ui"
 import type { ReactNode } from "react"
 

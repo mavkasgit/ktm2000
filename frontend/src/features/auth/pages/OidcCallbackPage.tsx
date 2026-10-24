@@ -8,12 +8,12 @@ import {
   mapIdpRedirectError,
   OIDC_ERROR_CODES,
   OidcAuthError,
+  oidcHostConfig,
   resolveOidcErrorText,
   tryForceOidcRelogin,
   type OidcDisplayInfo,
   type OidcErrorInfo,
-} from "../api/oidcAuth"
-import { oidcHostConfig } from "../api/oidcHostConfig"
+} from "@/entities/auth"
 
 /** Версия OIDC-модуля — синхронизируется verify-sync (режим content + version). */
 export const OIDC_MODULE_VERSION = "1.2.0"

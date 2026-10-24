@@ -43,7 +43,7 @@ import {
 } from "@/shared/bulk";
 import { ExecutionTable } from "../components/ExecutionTable";
 import { ExecutionDialogs } from "../components/ExecutionDialogs";
-import { ProductWipStatsDialog } from "../components/ProductWipStatsDialog";
+import { ProductWipStatsDialog } from "@/entities/planning";
 import {
   ExecutionSortField,
   positionStatusLabels,

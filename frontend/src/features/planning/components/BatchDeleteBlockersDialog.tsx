@@ -2,7 +2,7 @@ import { useState } from "react"
 import { AlertTriangle, Ban, Zap } from "lucide-react"
 import { Badge, Button, Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle } from "@/shared/ui"
 import type { BatchDeleteConflict } from "@/shared/api/productionPlans"
-import { usePermission } from "@/features/auth/hooks/usePermission"
+import { usePermission } from "@/entities/auth"
 import { blockerReasonLabel } from "../lib/batchDeleteConflict"
 import { BatchForceDeleteDialog } from "./BatchForceDeleteDialog"
 

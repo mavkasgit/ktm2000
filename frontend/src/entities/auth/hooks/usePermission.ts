@@ -8,6 +8,7 @@ export function usePermission() {
     canEditReferences: POLICIES.editReferences(user?.role),
     canEditSettings: POLICIES.editSettings(user?.role),
     canForceDeleteImport: POLICIES.forceDeleteImport(user?.role),
+    canRollbackImport: POLICIES.rollbackImport(user?.role),
     canEditPlan: POLICIES.editPlan(user?.role),
     canCreatePlanImport: POLICIES.createPlanImport(user?.role),
     canManagePlanImport: POLICIES.managePlanImport(user?.role),

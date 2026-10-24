@@ -18,7 +18,7 @@ import {
   AUTH_ERROR_CODES,
   type AuthShellRoleCatalogEntry,
 } from "@/shared/api/client"
-import { fetchOidcLogoutUrl } from "../api/oidcAuth"
+import { fetchOidcLogoutUrl } from "../oidc/oidcAuth"
 
 /** Версия auth-shell-модуля — синхронизируется verify-sync (режим content + version). */
 export const AUTH_SHELL_VERSION = "1.1.0"

@@ -2,7 +2,7 @@ import { useCallback, useMemo, useState } from "react";
 import { useQuery } from "@tanstack/react-query";
 import { Send, X } from "lucide-react";
 
-import { useAuth } from "@/features/auth/hooks/useAuth";
+import { useAuth } from "@/entities/auth";
 import { listUsers, type UserListItem } from "@/shared/api/users";
 import type { ReadyToTransferTask } from "@/shared/api/transfers";
 import { Button, ActionWithReason, BulkActionBar, DatePicker } from "@/shared/ui";

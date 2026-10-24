@@ -26,9 +26,9 @@ vi.mock("@/shared/api/spg", async (importOriginal) => ({
 
 // Футер массового режима читает профиль оператора (`useAuth`); страница живёт
 // внутри провайдера приложения, в тесте его подменяем.
-vi.mock("@/features/auth/hooks/useAuth", () => ({ useAuth: vi.fn() }));
+vi.mock("@/entities/auth/hooks/useAuth", () => ({ useAuth: vi.fn() }));
 
-import { useAuth, type AuthShellUser } from "@/features/auth/hooks/useAuth";
+import { useAuth, type AuthShellUser } from "@/entities/auth";
 
 import { getSpgList } from "@/shared/api/spg";
 import {

@@ -17,7 +17,7 @@ vi.mock("@/shared/api/importTemplates", async (importOriginal) => ({
   listAllImportTemplates: vi.fn(),
 }));
 
-vi.mock("@/features/auth/hooks/usePermission", () => ({
+vi.mock("@/entities/auth/hooks/usePermission", () => ({
   usePermission: () => ({ canEditReferences: true }),
 }));
 

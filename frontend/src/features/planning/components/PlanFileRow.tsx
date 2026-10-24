@@ -18,8 +18,7 @@ import { fmtQtyPrecise } from "@/shared/lib/quantityFormat"
 import { invalidateAfter } from "@/shared/api/cacheInvalidation"
 import { queryKeys } from "@/shared/api/queryKeys"
 import { applyChangeSet, rollbackChangeSet } from "../api"
-import { POLICIES } from "@/features/auth/policies"
-import { useAuth } from "@/features/auth/hooks/useAuth"
+import { usePermission } from "@/entities/auth"
 import { ApplyImportConfirmDialog } from "./ApplyImportConfirmDialog"
 
 /**
@@ -59,8 +58,7 @@ export function FileRow({
   // Сервер отдаёт 403 всем, кроме admin (ADR-0057); кнопка скрытия рисуется по
   // той же политике, что и apply/rollback/DELETE батча, — «убрать из списка»
   // не должна быть доступнее, чем удаление.
-  const { user } = useAuth()
-  const canHide = POLICIES.managePlanImport(user?.role)
+  const { canManagePlanImport: canHide } = usePermission()
   const [previewOpen, setPreviewOpen] = useState(false)
   const [deleteDialogOpen, setDeleteDialogOpen] = useState(false)
   const [hideDialogOpen, setHideDialogOpen] = useState(false)

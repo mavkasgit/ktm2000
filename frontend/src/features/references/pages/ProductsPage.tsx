@@ -11,7 +11,7 @@ import { invalidateAfter } from "@/shared/api/cacheInvalidation";
 import { Badge } from "@/shared/ui/badge";
 import { Input } from "@/shared/ui/input";
 import { DATA_TABLE_STYLES } from "@/shared/ui";
-import { usePermission } from "@/features/auth/hooks/usePermission";
+import { usePermission } from "@/entities/auth";
 import { ProductPhoto } from "../components/ProductPhoto";
 import { ProductCardDialog } from "../components/ProductCardDialog";
 import { fmtQtyPrecise } from "@/shared/lib/quantityFormat";

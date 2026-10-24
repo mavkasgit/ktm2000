@@ -21,7 +21,7 @@ import { CatalogForm, type CatalogFormRef, type FieldChange } from "../component
 import { CatalogCard } from "../components/CatalogCard";
 import { getPhotoUrl } from "../components/getPhotoUrl";
 import type { Product, CreateProductInput, PatchProductInput, CatalogPreview } from "@/shared/api/products";
-import { usePermission } from "@/features/auth/hooks/usePermission";
+import { usePermission } from "@/entities/auth";
 import { TableCornerResetCell, TableCornerResetHeader, DATA_TABLE_STYLES, PositionSkuCell, DropdownMenu, DropdownMenuTrigger, DropdownMenuContent, DropdownMenuItem, DataTableColumnHeader } from "@/shared/ui";
 import { useFilterableTable } from "@/shared/hooks/useFilterableTable";
 import {
@@ -32,7 +32,7 @@ import {
 import { buildColumnFilterValues } from "@/shared/lib/columnSpecs";
 import { skipShotBlastSectionLabel } from "../lib/skipShotBlastLabel";
 import { HangerCalcTable } from "../components/HangerCalcTable";
-import { ProductWipStatsDialog } from "@/features/execution/components/ProductWipStatsDialog";
+import { ProductWipStatsDialog } from "@/entities/planning";
 import { primaryHangerValue, primaryLength, effectiveForLength, effectiveForMode, productLengths, sheetHangerEntry, type EffectiveHangerValue } from "@/shared/lib/hangerQuantity";
 import { isLengthState } from "@/shared/lib/dimensionState";
 import { cn } from "@/shared/utils/cn";

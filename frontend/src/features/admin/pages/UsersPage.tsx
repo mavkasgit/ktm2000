@@ -1,7 +1,7 @@
 import { useEffect, useState } from "react"
 import { ExternalLink, Users } from "lucide-react"
 import { Card, Button } from "@/shared/ui"
-import { fetchOidcConfig } from "@/features/auth/api/oidcAuth"
+import { fetchOidcConfig } from "@/entities/auth"
 
 export function UsersPage() {
   const [adminUrl, setAdminUrl] = useState<string | null>(null)

@@ -4,7 +4,7 @@ import { useFilterableTable } from "@/shared/hooks/useFilterableTable";
 import { fmtQty } from "@/shared/lib/quantityFormat";
 import { getAriaSort } from "@/shared/lib/multiSort";
 import { type ProductionPlanningStage, type StatusHistoryEntry } from "@/shared/api/productionPlans";
-import { translateStatusHistoryReason } from "@/features/planning/lib/plan-labels";
+import { translateStatusHistoryReason } from "@/shared/lib/statusHistoryReason";
 import { statusLabels } from "@/shared/lib/generated-labels";
 import {
   useTableQueryEngine,

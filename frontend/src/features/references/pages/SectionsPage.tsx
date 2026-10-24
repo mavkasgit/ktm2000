@@ -2,7 +2,7 @@ import React, { useCallback, useMemo, useState } from "react";
 import { Plus, ArrowUp, ArrowDown, Settings, X, Pencil, Trash2, Move, Layers, ChevronRight, Warehouse, Factory, Search } from "lucide-react";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import * as API from "shared/api";
-import { usePermission } from "@/features/auth/hooks/usePermission";
+import { usePermission } from "@/entities/auth";
 import * as SectionsAPI from "shared/api/sections";
 import * as ShopfloorAPI from "shared/api/shopfloor";
 import * as SpgAPI from "shared/api/spg";

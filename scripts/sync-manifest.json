@@ -22,7 +22,7 @@
       "mode": "content"
     },
     {
-      "path": "frontend/src/features/auth/api/oidcAuth.ts",
+      "path": "frontend/src/entities/auth/oidc/oidcAuth.ts",
       "mode": "content",
       "version": true
     },
@@ -179,7 +179,7 @@
       "version": true
     },
     {
-      "path": "frontend/src/features/auth/hooks/useAuth.tsx",
+      "path": "frontend/src/entities/auth/hooks/useAuth.tsx",
       "mode": "content",
       "version": true
     },

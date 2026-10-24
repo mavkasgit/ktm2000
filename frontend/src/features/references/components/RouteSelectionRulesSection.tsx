@@ -15,7 +15,7 @@ import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@
 import { SectionSelect } from "@/shared/ui/SectionSelect";
 import { Table, TableBody, TableCell, TableContainer, TableHead, TableHeader, TableRow } from "@/shared/ui/table";
 import { toast } from "@/shared/ui/use-toast";
-import { usePermission } from "@/features/auth/hooks/usePermission";
+import { usePermission } from "@/entities/auth";
 import {
   actionLabels,
   ruleOperatorLabels,

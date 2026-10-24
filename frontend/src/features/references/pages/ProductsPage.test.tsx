@@ -10,7 +10,7 @@ vi.mock("@/shared/api/products", async (importOriginal) => ({
   getProductRouteStages: vi.fn(),
 }));
 
-vi.mock("@/features/auth/hooks/usePermission", () => ({
+vi.mock("@/entities/auth/hooks/usePermission", () => ({
   usePermission: vi.fn(),
 }));
 
@@ -27,7 +27,7 @@ import {
   type Product,
   type ProductRouteStageOut,
 } from "@/shared/api/products";
-import { usePermission } from "@/features/auth/hooks/usePermission";
+import { usePermission } from "@/entities/auth";
 import { toast } from "@/shared/ui/use-toast";
 import { ProductsPage } from "./ProductsPage";
 
@@ -97,6 +97,7 @@ beforeEach(() => {
     canEditReferences: true,
     canEditSettings: false,
     canForceDeleteImport: false,
+    canRollbackImport: false,
     canEditPlan: false,
     canCreatePlanImport: false,
     canManagePlanImport: false,
@@ -175,6 +176,7 @@ describe("ProductsPage", () => {
       canEditReferences: false,
       canEditSettings: false,
       canForceDeleteImport: false,
+      canRollbackImport: false,
       canEditPlan: false,
       canCreatePlanImport: false,
       canManagePlanImport: false,

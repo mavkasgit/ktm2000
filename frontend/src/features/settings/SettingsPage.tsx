@@ -1,7 +1,7 @@
 import { HardDrive, Database, Users, Wrench, Contact } from "lucide-react"
 import { useNavigate } from "react-router-dom"
 import { Button } from "@/shared/ui/button"
-import { usePermission } from "@/features/auth/hooks/usePermission"
+import { usePermission } from "@/entities/auth"
 
 export function SettingsPage() {
   const { canEditSettings } = usePermission()

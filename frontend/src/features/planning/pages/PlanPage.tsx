@@ -2,7 +2,7 @@ import { useCallback, useEffect, useMemo, useRef, useState } from "react"
 import { FileSpreadsheet, History, Plus, Upload, ListChecks } from "lucide-react"
 import { useNavigate } from "react-router-dom"
 import { ImportWizard } from "../ImportWizard"
-import { ProductWipStatsDialog } from "@/features/execution/components/ProductWipStatsDialog"
+import { ProductWipStatsDialog } from "@/entities/planning"
 import { Button, Select, SelectContent, SelectItem, SelectTrigger, SelectValue, AlertDialog, AlertDialogContent, AlertDialogHeader, AlertDialogTitle, AlertDialogDescription, AlertDialogFooter, AlertDialogAction, AlertDialogCancel, DataTableColumnHeader, FiltersPanel, TableCornerResetHeader, TablePaginationFooter, DATA_TABLE_STYLES, type FiltersPanelField, Badge } from "@/shared/ui"
 import { buildActiveFilterSummary } from "@/shared/ui/buildActiveFilterSummary"
 import { usePaginatedTableQuery } from "@/shared/hooks/usePaginatedTableQuery"
@@ -17,7 +17,7 @@ import { listAllImportTemplates } from "@/shared/api/importTemplates"
 import { apiClient, getErrorMessage } from "@/shared/api/client"
 import { queryKeys } from "@/shared/api/queryKeys"
 import { invalidateAfter } from "@/shared/api/cacheInvalidation"
-import { RowDetailsSidePanel, adaptPlanPositionOut } from "../components/row-details"
+import { RowDetailsSidePanel, adaptPlanPositionOut } from "@/entities/planning"
 import {
   BulkResultsDialog,
   summarizeBulkResults,

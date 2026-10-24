@@ -44,14 +44,13 @@ import {
   type StockImportBatch,
 } from "@/shared/api/stockImportHistory";
 import { saveBlobAsFile } from "@/shared/lib/downloadFile";
-import { useAuth } from "@/features/auth/hooks/useAuth";
+import { usePermission } from "@/entities/auth";
 import { fmtQty } from "@/shared/lib/quantityFormat";
 import {
   formatCompletedOperationsLabel,
   getRemainderImportOperations,
   type ImportOperationStep,
 } from "@/shared/api/stock";
-import { POLICIES } from "../../auth/policies";
 import { cn } from "@/shared/utils/cn";
 
 /** Заглушка этапа для кода вне справочника: подписывать его надо, рисуя — нечем. */
@@ -119,8 +118,7 @@ const ROW_ACTION = TABLE_ROW_DENSE.actionButton;
 
 export function ImportHistoryPanel() {
   const queryClient = useQueryClient();
-  const { user } = useAuth();
-  const canRollback = POLICIES.rollbackImport(user?.role);
+  const { canRollbackImport: canRollback } = usePermission();
 
   const [detailId, setDetailId] = useState<number | null>(null);
   const [rollbackTarget, setRollbackTarget] = useState<StockImportBatch | null>(null);

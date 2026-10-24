@@ -2,9 +2,9 @@ import { render, screen } from "@testing-library/react";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 
-vi.mock("@/features/auth/hooks/useAuth", () => ({ useAuth: vi.fn() }));
+vi.mock("@/entities/auth/hooks/useAuth", () => ({ useAuth: vi.fn() }));
 
-import { useAuth, type AuthShellUser } from "@/features/auth/hooks/useAuth";
+import { useAuth, type AuthShellUser } from "@/entities/auth";
 import type { JournalAction } from "@/shared/api/actions";
 import { JournalRowOperations } from "./JournalRowOperations";
 

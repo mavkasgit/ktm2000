@@ -12,7 +12,7 @@ import { listAllImportTemplates } from "@/shared/api/importTemplates"
 import { invalidateEverything } from "@/shared/api/cacheInvalidation"
 import { listSections } from "@/shared/api/sections"
 import { queryKeys } from "@/shared/api/queryKeys"
-import { usePermission } from "@/features/auth/hooks/usePermission"
+import { usePermission } from "@/entities/auth"
 
 function useCurrentData() {
   const routes = useQuery({ queryKey: queryKeys.routes.all(), queryFn: () => listRoutes() })

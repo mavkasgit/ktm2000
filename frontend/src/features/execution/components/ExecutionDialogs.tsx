@@ -1,7 +1,7 @@
 import { ProductionPlanningRowDetail } from "@/shared/api/productionPlans";
 import { Button, Dialog, DialogContent, DialogDescription, DialogHeader, DialogTitle, Input, Select, SelectContent, SelectItem, SelectTrigger, SelectValue, AlertDialog, AlertDialogContent, AlertDialogHeader, AlertDialogTitle, AlertDialogDescription, AlertDialogFooter, AlertDialogAction, AlertDialogCancel } from "@/shared/ui";
 import { BulkResultsDialog, type BulkActionResultItem, type BulkActionSummary } from "@/shared/bulk";
-import { RowDetailsSidePanel, adaptExecutionDetail } from "@/features/planning/components/row-details";
+import { RowDetailsSidePanel, adaptExecutionDetail } from "@/entities/planning";
 
 interface ExecutionDialogsProps {
   // Row details

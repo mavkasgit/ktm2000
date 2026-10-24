@@ -8,8 +8,8 @@ import {
 } from "@/shared/api/spg";
 import { SpgSelector } from "../components/SpgSelector";
 import { ImportRemaindersDialog } from "../components/ImportRemaindersDialog";
-import { ProductStockBalanceDialog } from "../components/ProductStockBalanceDialog";
-import { StockTransactionsHistoryDrawer } from "../components/StockTransactionsHistoryDrawer";
+import { ProductStockBalanceDialog } from "@/entities/stock";
+import { StockTransactionsHistoryDrawer } from "@/entities/stock";
 import { invalidateAfter } from "@/shared/api/cacheInvalidation";
 import { queryKeys } from "@/shared/api/queryKeys";
 import { Input, Button, StockBalancesPanel } from "@/shared/ui";

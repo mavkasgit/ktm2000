@@ -81,7 +81,7 @@ import {
 import { actionReasonText, type ActionReasonCode } from "@/shared/lib/actionReasons";
 import { createAuditLog, getAuditLogs, type AuditLogEntry } from "@/shared/api/auditLogs";
 import { isAnyDialogOpen } from "@/shared/lib/dialogOpen";
-import { useAuth } from "@/features/auth/hooks/useAuth";
+import { useAuth } from "@/entities/auth";
 import { cn } from "@/shared/utils/cn";
 import { fmtQty, toQtyInteger } from "@/shared/lib/quantityFormat";
 

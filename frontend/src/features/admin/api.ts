@@ -1,5 +1,5 @@
 import { apiClient } from "@/shared/api/client"
-import type { User, UserRole } from "@/features/auth/api"
+import type { User, UserRole } from "@/entities/auth"
 
 export interface CreateUserInput {
   username: string

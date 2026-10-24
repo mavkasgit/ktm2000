@@ -12,7 +12,7 @@ vi.mock("@/shared/api/stockImportHistory", async (importOriginal) => ({
   hideStockImportBatch: vi.fn(),
 }));
 
-vi.mock("@/features/auth/hooks/useAuth", () => ({
+vi.mock("@/entities/auth/hooks/useAuth", () => ({
   useAuth: vi.fn(),
 }));
 
@@ -21,8 +21,7 @@ import {
   hideStockImportBatch,
   type StockImportBatch,
 } from "@/shared/api/stockImportHistory";
-import { useAuth } from "@/features/auth/hooks/useAuth";
-import type { AuthShellUser } from "@/features/auth/hooks/useAuth";
+import { useAuth, type AuthShellUser } from "@/entities/auth";
 import { ImportHistoryPage } from "./ImportHistoryPage";
 
 const batch = (overrides: Partial<StockImportBatch> = {}): StockImportBatch => ({

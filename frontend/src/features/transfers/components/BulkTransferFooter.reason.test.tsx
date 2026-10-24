@@ -16,11 +16,11 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { ReadyToTransferTask } from "@/shared/api/transfers";
 import type { BulkRunnerProgress } from "@/shared/bulk";
 import { actionReasonText } from "@/shared/lib/actionReasons";
-import { useAuth, type AuthShellUser } from "@/features/auth/hooks/useAuth";
+import { useAuth, type AuthShellUser } from "@/entities/auth";
 import { readyRowIdentity } from "../lib/groupReadyTransfers";
 import { BulkTransferFooter } from "./BulkTransferFooter";
 
-vi.mock("@/features/auth/hooks/useAuth", () => ({ useAuth: vi.fn() }));
+vi.mock("@/entities/auth/hooks/useAuth", () => ({ useAuth: vi.fn() }));
 
 vi.mock("@/shared/api/users", async (importOriginal) => ({
   ...(await importOriginal<typeof import("@/shared/api/users")>()),

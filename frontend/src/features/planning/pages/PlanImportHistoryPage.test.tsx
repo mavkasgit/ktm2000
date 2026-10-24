@@ -17,7 +17,7 @@ vi.mock("@/shared/api/productionPlans", async (importOriginal) => ({
 
 // Кнопка «Убрать из списка» рисуется по роли (ADR-0057), поэтому роль в тестах
 // задаёт мок `useAuth` — так же, как на странице истории остатков.
-vi.mock("@/features/auth/hooks/useAuth", () => ({
+vi.mock("@/entities/auth/hooks/useAuth", () => ({
   useAuth: vi.fn(),
 }));
 
@@ -30,8 +30,7 @@ import {
   type PlanSummary,
 } from "@/shared/api/productionPlans";
 import { PlanImportHistoryPage } from "./PlanImportHistoryPage";
-import { useAuth } from "@/features/auth/hooks/useAuth";
-import type { AuthShellUser } from "@/features/auth/hooks/useAuth";
+import { useAuth, type AuthShellUser } from "@/entities/auth";
 
 const asRole = (role: string) => {
   const user: AuthShellUser = { username: "u", full_name: "U", role };

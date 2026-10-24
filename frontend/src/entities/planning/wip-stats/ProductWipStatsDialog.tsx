@@ -10,12 +10,12 @@ import { Loader2, Layers, Package, ClipboardList, AlertCircle } from "lucide-rea
 import type { SortConfig } from "@/shared/hooks/useTableQueryEngine";
 import { useFilterableTable } from "@/shared/hooks/useFilterableTable";
 
-import { wipStatsColumns, wipStatsQtyText, wipStatsSortValue, type WipStatsField } from "../lib/wipStatsColumns";
+import { wipStatsColumns, wipStatsQtyText, wipStatsSortValue, type WipStatsField } from "./wipStatsColumns";
 import {
   wipStatsTaskColumns,
   wipStatsTaskSortValue,
   type WipStatsTaskField,
-} from "../lib/wipStatsTaskColumns";
+} from "./wipStatsTaskColumns";
 import { buildColumnFilterValues } from "@/shared/lib/columnSpecs";
 
 /**

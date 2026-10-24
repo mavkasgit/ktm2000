@@ -1,7 +1,7 @@
 import { useState, useEffect, useRef } from "react"
 import { NavLink, Outlet, useLocation } from "react-router-dom"
 import { Boxes, ClipboardList, Gauge, Factory, Cog, Wrench, Layers, Menu, X, ArrowRightLeft, History, LogOut, Terminal } from "lucide-react"
-import { useAuth } from "@/features/auth/hooks/useAuth"
+import { useAuth } from "@/entities/auth"
 import { toast } from "@/shared/ui"
 import { UserAvatar, getUserSeed } from "@user/ui"
 import { KtmUserSettingsDialog } from "@/features/user-settings/KtmUserSettingsDialog"

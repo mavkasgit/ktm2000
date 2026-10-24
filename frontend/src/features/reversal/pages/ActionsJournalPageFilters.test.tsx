@@ -6,10 +6,10 @@ vi.mock("@/shared/api/actions", async (importOriginal) => ({
   ...(await importOriginal<typeof import("@/shared/api/actions")>()),
   getActions: vi.fn(),
 }));
-vi.mock("@/features/auth/hooks/useAuth", () => ({ useAuth: vi.fn() }));
+vi.mock("@/entities/auth/hooks/useAuth", () => ({ useAuth: vi.fn() }));
 
 import { getActions, type JournalAction } from "@/shared/api/actions";
-import { useAuth, type AuthShellUser } from "@/features/auth/hooks/useAuth";
+import { useAuth, type AuthShellUser } from "@/entities/auth";
 import { ROW_TONE_STRIPE, ROW_TONE_WASH } from "@/shared/lib/rowTones";
 import { DATA_TABLE_STYLES, TABLE_ROW_DENSE } from "@/shared/lib/dataTableStyles";
 import { TABLE_CORNER_RESET_TD_CLASS } from "@/shared/ui/TableCornerResetHeader";

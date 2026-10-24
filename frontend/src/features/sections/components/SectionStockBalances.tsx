@@ -2,8 +2,8 @@ import { useState } from "react";
 import { Search } from "lucide-react";
 
 import { Input, StockBalancesPanel } from "@/shared/ui";
-import { ProductStockBalanceDialog } from "@/features/spg/components/ProductStockBalanceDialog";
-import { StockTransactionsHistoryDrawer } from "@/features/spg/components/StockTransactionsHistoryDrawer";
+import { ProductStockBalanceDialog } from "@/entities/stock";
+import { StockTransactionsHistoryDrawer } from "@/entities/stock";
 
 type SectionStockBalancesProps = {
   sectionId: number;

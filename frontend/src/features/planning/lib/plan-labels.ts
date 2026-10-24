@@ -1,9 +1,9 @@
 import { PlanPositionOut } from "@/shared/api/productionPlans"
 import type { BadgeProps } from "@/shared/ui/badge"
 import type { FiltersPanelOption } from "@/shared/ui"
-import { errorLabels, errorPhraseTranslations, statusLabels, validationLabels, warningLabels } from "@/shared/lib/generated-labels"
+import { errorLabels, statusLabels, validationLabels, warningLabels } from "@/shared/lib/generated-labels"
 
-import { positionWarnings } from "./planWarnings"
+import { positionWarnings } from "@/shared/lib/planWarnings"
 
 export { errorLabels, statusLabels, warningLabels }
 export { actionLabels } from "@/shared/lib/generated-labels"
@@ -71,26 +71,3 @@ export const validationFilterOptions: FiltersPanelOption[] = [
     label: validationLabels[value],
   })),
 ]
-
-const STATUS_HISTORY_REASON_EXACT: Record<string, string> =
-  errorPhraseTranslations
-
-const STATUS_TOKEN_IN_QUOTES_RE = /'([a-z_]+)'/gi
-
-function translateEmbeddedStatusToken(status: string): string {
-  return statusLabels[status] || planStatusLabels[status] || status
-}
-
-/** Переводит reason/message из истории смен статуса для UI. */
-export function translateStatusHistoryReason(reason: string | null | undefined): string {
-  if (!reason?.trim()) return "—"
-
-  const trimmed = reason.trim()
-  const exact = STATUS_HISTORY_REASON_EXACT[trimmed]
-  if (exact) return exact
-
-  return trimmed.replace(STATUS_TOKEN_IN_QUOTES_RE, (_match, status: string) => {
-    const normalized = status.toLowerCase()
-    return `'${translateEmbeddedStatusToken(normalized)}'`
-  })
-}

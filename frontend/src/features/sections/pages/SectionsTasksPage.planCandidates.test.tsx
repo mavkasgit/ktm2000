@@ -5,6 +5,7 @@ import type { ReactNode } from "react";
 import { RouterProvider, createMemoryRouter } from "react-router-dom";
 
 vi.mock("@/shared/api/client", () => ({
+  API_BASE_URL: "/api",
   apiClient: {
     get: vi.fn().mockResolvedValue({
       data: { id: 1, email: "a@b.c", full_name: "A", role: "admin", section_id: null, is_active: true },
@@ -16,7 +17,7 @@ vi.mock("@/shared/api/client", () => ({
 // Профиль оператора страница берёт из AuthProvider (`useAuth`), а не своим
 // запросом `/auth/me`; в тесте провайдера нет — подменяем хук готовым
 // пользователем, иначе `enabled`-гейты доски не откроются.
-vi.mock("@/features/auth/hooks/useAuth", () => ({
+vi.mock("@/entities/auth/hooks/useAuth", () => ({
   useAuth: () => ({
     user: { id: 1, username: "op", full_name: "Оператор", role: "admin" },
     rolesCatalog: [],

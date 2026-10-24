@@ -1,8 +1,8 @@
 import { type PlanPositionOut, type ProductionPlanningRowDetail, type ProductionPlanningStage } from "@/shared/api/productionPlans"
 import { type RowDetailsData } from "./types"
 import { routeOrigin } from "@/shared/lib/routeMeta"
+import { positionWarnings } from "@/shared/lib/planWarnings"
 import { errorLabels, warningLabels } from "@/shared/lib/generated-labels"
-import { positionWarnings } from "../../lib/planWarnings"
 
 // ─── Helpers ─────────────────────────────────────────────────────────────────
 
@@ -59,7 +59,7 @@ export function adaptPlanPositionOut(pos: PlanPositionOut): RowDetailsData {
       route_assigned_at: pos.route_assigned_at,
     }),
     errors: translateLabels(pos.errors, errorLabels),
-    // Предупреждения — с позиции (#328), а не с последнего change item.
+    // Предупреждения — с позиции (#328), по одному правилу с features.
     warnings: translateLabels(positionWarnings(pos), warningLabels),
     productionPlanId: pos.production_plan_id,
     routeCheckIssues: [],

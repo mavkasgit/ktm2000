@@ -18,7 +18,7 @@ vi.mock("@/shared/api/routes", async (importOriginal) => ({
   listRouteSelectionRules: vi.fn(),
 }));
 
-vi.mock("@/features/auth/hooks/usePermission", () => ({
+vi.mock("@/entities/auth/hooks/usePermission", () => ({
   usePermission: vi.fn(),
 }));
 
@@ -52,7 +52,7 @@ import type { Product } from "@/shared/api/products";
 import { calcHanger, calcPairedHanger } from "@/shared/api/hangerCalc";
 import { listDimensionTypes, listProductDimensions } from "../api";
 import { listRouteSelectionRules } from "@/shared/api/routes";
-import { usePermission } from "@/features/auth/hooks/usePermission";
+import { usePermission } from "@/entities/auth";
 import { toast } from "@/shared/ui/use-toast";
 import { RawMaterialsPage } from "./RawMaterialsPage";
 
@@ -102,6 +102,7 @@ beforeEach(() => {
     canEditReferences: true,
     canEditSettings: false,
     canForceDeleteImport: false,
+    canRollbackImport: false,
     canEditPlan: false,
     canCreatePlanImport: false,
     canManagePlanImport: false,
@@ -213,6 +214,7 @@ describe("RawMaterialsPage: меню «Операции»", () => {
       canEditReferences: false,
       canEditSettings: false,
       canForceDeleteImport: false,
+      canRollbackImport: false,
       canEditPlan: false,
       canCreatePlanImport: false,
       canManagePlanImport: false,
