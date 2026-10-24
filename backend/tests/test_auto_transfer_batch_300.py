@@ -21,6 +21,7 @@
 
 from __future__ import annotations
 
+import json
 from decimal import Decimal
 
 import pytest
@@ -325,6 +326,50 @@ async def test_completed_task_does_not_double_transfer_on_replay(session) -> Non
 
 
 @pytest.mark.asyncio
+async def test_section_in_two_spgs_shares_any_membership(session) -> None:
+    """Участок в двух СПГ: общий СПГ определяется пересечением членств (#307).
+
+    ``uq_spg_sections`` уникален по паре (СПГ, участок), поэтому участок
+    может состоять в нескольких группах. Если следующий участок делит с ним
+    хотя бы одну, авто-передача не создаётся. Точечное чтение брало
+    произвольную строку членства; снимок отвечает по факту.
+    """
+    from app.services.shopfloor.operations_tasks import complete_task
+
+    _fx, user, p1_task, p2_section = await _prepare(session, sku="T307MULTI")
+    p2_link = await session.scalar(
+        select(SpgSection).where(SpgSection.section_id == p2_section.id)
+    )
+    assert p2_link is not None
+    session.add(
+        SpgSection(
+            spg_id=p2_link.spg_id,
+            section_id=p1_task.section_id,
+            sort_order=0,
+        )
+    )
+    await session.flush()
+
+    await complete_task(
+        session,
+        task_id=p1_task.id,
+        good_quantity=Decimal(100),
+        defect_quantity=Decimal(0),
+        actor_id=user.id,
+        comment="участки делят второй СПГ",
+        auto_transfer_next=True,
+    )
+
+    transfers = (
+        (await session.execute(select(Transfer).order_by(Transfer.id))).scalars().all()
+    )
+    assert transfers == [], "общий СПГ (хотя бы один) должен останавливать авто-передачу"
+
+    await assert_no_invariants_violations(session, context="T307MULTI")
+    await assert_no_stock_ledger_invariants_violations(session, context="T307MULTI")
+
+
+@pytest.mark.asyncio
 async def test_long_chain_creates_three_transfers(session) -> None:
     """P1 → W1 → W2 → P2: авто-передача проходит по всей длинной цепочке."""
     from app.services.shopfloor.operations_tasks import complete_task
@@ -484,6 +529,9 @@ async def _measure_completion(session, monkeypatch, fx: dict) -> dict:
             "completed_quantity": str(response["completed_quantity"]),
             "transactions": len(response["transaction_ids"]),
         },
+        # Полный ответ — для сверки «до/после» по рецепту docs/testing-guide.md
+        # (json.dumps(..., sort_keys=True, default=str)).
+        "response_full": json.dumps(response, sort_keys=True, default=str),
     }
 
 
@@ -501,11 +549,38 @@ async def test_long_chain_sql_budget(session, monkeypatch) -> None:
     # фиксированный снимок: строки позиции, этапы (+selectin операций), СПГ,
     # открытые задачи и два db.get созданных транзитных задач. UPDATE —
     # flush кэша строки плана из write-path, читающих запросов он не добавляет.
-    assert metrics["loop_kinds"].get("SELECT", 0) <= 8, metrics
-    assert metrics["loop"] <= 10, metrics
+    # Нижняя граница ловит поломку атрибуции фаз (иначе «0 ≤ 8» пройдёт).
+    assert 5 <= metrics["loop_kinds"].get("SELECT", 0) <= 8, metrics
+    assert 6 <= metrics["loop"] <= 10, metrics
     # Ответ не зависит от формы чтения цепочки: та же задача, тот же факт.
     assert metrics["response"] == {
         "task_id": fx["p1_task"].id,
+        "status": "completed",
+        "completed_quantity": "100",
+        "transactions": 2,
+    }, metrics
+
+
+@pytest.mark.asyncio
+async def test_short_chain_sql_budget(session, monkeypatch) -> None:
+    """Короткая цепочка (#300): снимок стоит одного лишнего SELECT.
+
+    Границы — не «число ради числа»: верхняя не даёт вернуться пошаговым
+    чтениям, нижняя ловит поломку атрибуции фаз (иначе «0 ≤ 6» пройдёт).
+    """
+    _fx, user, p1_task, _p2 = await _prepare(session, sku="T307SHORT")
+    await session.flush()
+
+    metrics = await _measure_completion(
+        session, monkeypatch, {"p1_task": p1_task, "user": user}
+    )
+    print("MEASURE307SHORT", metrics)
+
+    assert metrics["send_calls"] == 1
+    assert 4 <= metrics["loop_kinds"].get("SELECT", 0) <= 6, metrics
+    assert 5 <= metrics["loop"] <= 7, metrics
+    assert metrics["response"] == {
+        "task_id": p1_task.id,
         "status": "completed",
         "completed_quantity": "100",
         "transactions": 2,

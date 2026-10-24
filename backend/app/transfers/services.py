@@ -917,9 +917,9 @@ async def auto_create_transfer_after_complete(
     #   * открытые задачи всех строк — одним select(WorkTask), сопоставление
     #     габаритов — в Python по правилу dimensions_match_clause.
     #
-    # Порядок строк — по id: при дублях sequence (в тестовой фикстуре строка
-    # могла быть создана дважды) «первая» остаётся той же, что вернул бы
-    # db.scalar до батчинга (порядок вставки).
+    # Порядок строк — по id. Прежний пошаговый scalar тоже не задавал ORDER BY,
+    # поэтому при дублях sequence «первая» строка не была гарантирована;
+    # снимок фиксирует выбор (наименьший id) и не зависит от heap order.
     from app.models.spg import SpgSection
 
     position_lines = (
@@ -959,19 +959,16 @@ async def auto_create_transfer_after_complete(
         for line in position_lines
         if (stage := stages_by_id.get(line.route_stage_id)) is not None
     }
-    spg_by_section = (
-        dict(
-            (
-                await db.execute(
-                    select(SpgSection.section_id, SpgSection.spg_id).where(
-                        SpgSection.section_id.in_(section_ids)
-                    )
+    spg_ids_by_section: dict[int, set[int]] = {}
+    if section_ids:
+        for section_id, spg_id in (
+            await db.execute(
+                select(SpgSection.section_id, SpgSection.spg_id).where(
+                    SpgSection.section_id.in_(section_ids)
                 )
-            ).all()
-        )
-        if section_ids
-        else {}
-    )
+            )
+        ).all():
+            spg_ids_by_section.setdefault(section_id, set()).add(spg_id)
 
     tasks_by_line: dict[int, list[WorkTask]] = {}
     line_ids = [line.id for line in position_lines]
@@ -994,11 +991,19 @@ async def auto_create_transfer_after_complete(
             tasks_by_line.setdefault(task.section_plan_line_id, []).append(task)
 
     def _share_spg(left_id: int, right_id: int) -> bool:
-        """Python-эквивалент ``sections_share_spg`` на снимке членства."""
+        """«Общий СПГ» на снимке членства.
+
+        Участок может состоять в нескольких СПГ (``uq_spg_sections`` — на
+        пару, не на участок), поэтому отношение — пересечение множеств.
+        Точечный ``sections_share_spg`` читал одну произвольную строку
+        (``db.scalar`` без ``ORDER BY``), то есть на таких данных отвечал
+        недетерминированно; снимок отвечает по факту членства.
+        """
         if left_id == right_id:
             return True
-        left_spg = spg_by_section.get(left_id)
-        return left_spg is not None and left_spg == spg_by_section.get(right_id)
+        return not spg_ids_by_section.get(left_id, set()).isdisjoint(
+            spg_ids_by_section.get(right_id, set())
+        )
 
     def _first_open_task(
         line_id: int, dims: dict | None, *, match_dimensions: bool
