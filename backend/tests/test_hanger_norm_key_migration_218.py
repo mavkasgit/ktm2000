@@ -16,11 +16,7 @@
 """
 from __future__ import annotations
 
-import os
-import socket
-import subprocess
 from pathlib import Path
-from urllib.parse import urlparse
 
 import pytest
 from app.core.database import get_db
@@ -32,55 +28,25 @@ from sqlalchemy import select, text
 from sqlalchemy.ext.asyncio import async_sessionmaker, create_async_engine
 
 from tests.helpers.mig_db import (
+    alembic_env,
     create_migration_db,
     drop_migration_db,
-    migration_db_url,
+    migration_db_reachable,
+    run_alembic,
 )
 
-BACKEND_DIR = Path(__file__).resolve().parents[1]
 PREV_REVISION = "066_route_signature_backfill"
 HEAD_REVISION = "067_hanger_norm_key_normalization"
 
-
-def _db_reachable() -> bool:
-    """Тестовый Postgres доступен? DSN — у хелпера миграционных баз."""
-    parsed = urlparse(migration_db_url())
-    try:
-        with socket.create_connection(
-            (parsed.hostname or "localhost", parsed.port or 5432), timeout=2
-        ):
-            return True
-    except OSError:
-        return False
-
-
 pytestmark = pytest.mark.skipif(
-    not _db_reachable(),
+    not migration_db_reachable(),
     reason="PostgreSQL server not reachable for migration test",
 )
 
 
 def _alembic(target_url: str, tmp_path: Path, *args: str) -> None:
-    """Запустить alembic в подпроцессе с DSN тестовой БД (5441), не трогая dev.
-
-    ``ENV_FILE`` указывает на несуществующий путь внутри ``tmp_path``:
-    ``alembic/env.py`` по умолчанию перекрывает ``DATABASE_URL`` содержимым
-    ``$ENV_FILE`` (по умолчанию ``<repo>/.env.dev``), а на отсутствующем файле
-    ``apply_env_file()`` — no-op, так что DSN остаётся тем, что дал тест.
-    """
-    result = subprocess.run(
-        ["alembic", *args],
-        cwd=BACKEND_DIR,
-        env={
-            **os.environ,
-            "DATABASE_URL": target_url,
-            "ENV_FILE": str(tmp_path / "absent.env"),
-        },
-        capture_output=True,
-        text=True,
-        check=False,
-    )
-    assert result.returncode == 0, result.stderr or result.stdout
+    """Alembic на тестовой БД (5441), не трогая dev: env — из общего хелпера."""
+    run_alembic(args, alembic_env(target_url, tmp_path))
 
 
 async def _seed(session_factory, *, linear_norms: dict, auto_norms: dict) -> dict:

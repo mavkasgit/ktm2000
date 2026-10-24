@@ -3,12 +3,9 @@
 from __future__ import annotations
 
 import json
-import os
-import socket
 import subprocess
 from decimal import Decimal
 from pathlib import Path
-from urllib.parse import urlparse
 
 import app.models  # noqa: F401
 import pytest
@@ -22,51 +19,16 @@ from sqlalchemy import inspect, text
 from sqlalchemy.ext.asyncio import create_async_engine
 
 from tests.helpers.mig_db import (
+    BACKEND_DIR,
+    alembic_command,
+    alembic_env,
     create_migration_db,
     drop_migration_db,
-    migration_db_url,
+    migration_db_reachable,
 )
 
-BACKEND_DIR = Path(__file__).resolve().parents[1]
-
-
-# ``alembic/env.py`` вызывает ``apply_env_file()``, а тот по умолчанию
-# перекрывает переменные процесса содержимым ``$ENV_FILE`` (по умолчанию
-# ``<repo>/.env.dev``). Поэтому переданный тестом ``DATABASE_URL`` до alembic
-# не доходил: он уезжал на DSN из env-файла, миграции накатывались на чужую БД и
-# возвращался 0 — тест видел пустую базу и падал на «relation ... does not
-# exist». ``$ENV_FILE`` указываем на несуществующий путь внутри ``tmp_path``:
-# ``apply_env_file()`` на отсутствующем файле — документированный no-op, DSN
-# остаётся тем, что дал тест, и на диск (в т.ч. в общий ``gettempdir()``)
-# не пишется ничего.
-def _alembic_env(target_url: str, tmp_path: Path) -> dict[str, str]:
-    """Окружение подпроцесса alembic: целевая БД и несуществующий env-файл."""
-    return {
-        **os.environ,
-        "DATABASE_URL": target_url,
-        "ENV_FILE": str(tmp_path / "absent.env"),
-    }
-
-
-def _db_reachable() -> bool:
-    """Check if the PostgreSQL server is reachable (host:port from DATABASE_URL).
-
-    DSN — у того же хелпера, что поднимает базы миграционных тестов
-    (``tests/helpers/mig_db.py``): ``TEST_DATABASE_URL`` лаунчера, иначе
-    тестовый compose-контракт (localhost:5441), а не устаревший dev-дефолт.
-    """
-    parsed = urlparse(migration_db_url())
-    host = parsed.hostname or "localhost"
-    port = parsed.port or 5432
-    try:
-        with socket.create_connection((host, port), timeout=2):
-            return True
-    except OSError:
-        return False
-
-
 pytestmark = pytest.mark.skipif(
-    not _db_reachable(),
+    not migration_db_reachable(),
     reason="PostgreSQL server not reachable for migration test",
 )
 
@@ -75,10 +37,10 @@ pytestmark = pytest.mark.skipif(
 async def test_alembic_upgrade_head_creates_full_schema(tmp_path: Path):
     db_name, target_url = await create_migration_db()
 
-    env = _alembic_env(target_url, tmp_path)
+    env = alembic_env(target_url, tmp_path)
     try:
         result = subprocess.run(
-            ["alembic", "upgrade", "head"],
+            alembic_command("upgrade", "head"),
             cwd=BACKEND_DIR,
             env=env,
             capture_output=True,
@@ -123,10 +85,10 @@ async def test_migration_054_product_pairs_and_flag_drop(tmp_path: Path):
     """
     db_name, target_url = await create_migration_db()
 
-    env = _alembic_env(target_url, tmp_path)
+    env = alembic_env(target_url, tmp_path)
     try:
         result = subprocess.run(
-            ["alembic", "upgrade", "head"],
+            alembic_command("upgrade", "head"),
             cwd=BACKEND_DIR,
             env=env,
             capture_output=True,
@@ -200,11 +162,11 @@ async def test_migration_032_scalar_quantity_per_hanger_to_per_length(tmp_path: 
     """#60: скаляр quantity_per_hanger в attributes → {первая_длина: {auto, manual}}."""
     db_name, target_url = await create_migration_db()
 
-    env = _alembic_env(target_url, tmp_path)
+    env = alembic_env(target_url, tmp_path)
     try:
         # 1. До нужной ревизии (031) — скалярная форма ещё актуальна.
         result = subprocess.run(
-            ["alembic", "upgrade", "031_users_profile_sync_failed_at"],
+            alembic_command("upgrade", "031_users_profile_sync_failed_at"),
             cwd=BACKEND_DIR,
             env=env,
             capture_output=True,
@@ -236,7 +198,7 @@ async def test_migration_032_scalar_quantity_per_hanger_to_per_length(tmp_path: 
 
         # 3. Upgrade до head → скаляр мигрируется в {первая_длина: {auto, manual}}.
         result = subprocess.run(
-            ["alembic", "upgrade", "head"],
+            alembic_command("upgrade", "head"),
             cwd=BACKEND_DIR,
             env=env,
             capture_output=True,
@@ -267,11 +229,11 @@ async def test_migration_036_primary_length_backfill(tmp_path: Path):
     """#81: is_primary на product_lengths — основной становится первая длина по возрастанию."""
     db_name, target_url = await create_migration_db()
 
-    env = _alembic_env(target_url, tmp_path)
+    env = alembic_env(target_url, tmp_path)
     try:
         # 1. До 036 (035) — колонки is_primary ещё нет.
         result = subprocess.run(
-            ["alembic", "upgrade", "035_internal_notifications"],
+            alembic_command("upgrade", "035_internal_notifications"),
             cwd=BACKEND_DIR,
             env=env,
             capture_output=True,
@@ -310,7 +272,7 @@ async def test_migration_036_primary_length_backfill(tmp_path: Path):
 
         # 3. Upgrade до head → основная = первая длина по возрастанию (2800, 3000).
         result = subprocess.run(
-            ["alembic", "upgrade", "head"],
+            alembic_command("upgrade", "head"),
             cwd=BACKEND_DIR,
             env=env,
             capture_output=True,
@@ -342,7 +304,7 @@ async def test_migration_046_replay_of_action_id_roundtrip(tmp_path: Path):
     """#121: replay_of_action_id + индекс; downgrade снимает их чисто."""
     db_name, target_url = await create_migration_db()
 
-    env = _alembic_env(target_url, tmp_path)
+    env = alembic_env(target_url, tmp_path)
 
     async def _columns_and_indexes(engine):
         async with engine.connect() as conn:
@@ -357,7 +319,7 @@ async def test_migration_046_replay_of_action_id_roundtrip(tmp_path: Path):
     engine = create_async_engine(target_url)
     try:
         result = subprocess.run(
-            ["alembic", "upgrade", "head"],
+            alembic_command("upgrade", "head"),
             cwd=BACKEND_DIR,
             env=env,
             capture_output=True,
@@ -371,7 +333,7 @@ async def test_migration_046_replay_of_action_id_roundtrip(tmp_path: Path):
 
         # downgrade до 045: колонки и индекс быть не должно.
         result = subprocess.run(
-            ["alembic", "downgrade", "045_hard_purge_status_index"],
+            alembic_command("downgrade", "045_hard_purge_status_index"),
             cwd=BACKEND_DIR,
             env=env,
             capture_output=True,
@@ -385,7 +347,7 @@ async def test_migration_046_replay_of_action_id_roundtrip(tmp_path: Path):
 
         # повторный upgrade: колонка и индекс возвращаются.
         result = subprocess.run(
-            ["alembic", "upgrade", "head"],
+            alembic_command("upgrade", "head"),
             cwd=BACKEND_DIR,
             env=env,
             capture_output=True,
@@ -418,7 +380,7 @@ async def test_migration_048_product_hanger_mode_backfill(tmp_path: Path):
     """
     db_name, target_url = await create_migration_db()
 
-    env = _alembic_env(target_url, tmp_path)
+    env = alembic_env(target_url, tmp_path)
 
     def _expected_auto(perimeter_mm: float, mount_width_mm: float, length_mm: float):
         """Ожидаемый auto по независимому движку (#62): total или None.
@@ -456,7 +418,7 @@ async def test_migration_048_product_hanger_mode_backfill(tmp_path: Path):
     try:
         # 1. До 048 (047) — ключа hanger_mode ещё нет в цепочке.
         result = subprocess.run(
-            ["alembic", "upgrade", "047_transfer_status_amended"],
+            alembic_command("upgrade", "047_transfer_status_amended"),
             cwd=BACKEND_DIR,
             env=env,
             capture_output=True,
@@ -517,7 +479,7 @@ async def test_migration_048_product_hanger_mode_backfill(tmp_path: Path):
 
         # 3. Upgrade до head → 048 проставляет режимы и досчитывает словари.
         result = subprocess.run(
-            ["alembic", "upgrade", "head"],
+            alembic_command("upgrade", "head"),
             cwd=BACKEND_DIR,
             env=env,
             capture_output=True,
@@ -588,7 +550,7 @@ async def test_migration_048_product_hanger_mode_backfill(tmp_path: Path):
         # (шаги защищены отсутствием ключа hanger_mode).
         snapshot_before = attrs_by_sku
         result = subprocess.run(
-            ["alembic", "stamp", "047_transfer_status_amended"],
+            alembic_command("stamp", "047_transfer_status_amended"),
             cwd=BACKEND_DIR,
             env=env,
             capture_output=True,
@@ -597,7 +559,7 @@ async def test_migration_048_product_hanger_mode_backfill(tmp_path: Path):
         )
         assert result.returncode == 0, result.stderr or result.stdout
         result = subprocess.run(
-            ["alembic", "upgrade", "head"],
+            alembic_command("upgrade", "head"),
             cwd=BACKEND_DIR,
             env=env,
             capture_output=True,
@@ -627,11 +589,11 @@ async def test_migration_053_product_composition_schema(tmp_path: Path):
     """
     db_name, target_url = await create_migration_db()
 
-    env = _alembic_env(target_url, tmp_path)
+    env = alembic_env(target_url, tmp_path)
 
     def _run(*args: str) -> None:
         result = subprocess.run(
-            ["alembic", *args],
+            alembic_command(*args),
             cwd=BACKEND_DIR,
             env=env,
             capture_output=True,
@@ -769,7 +731,7 @@ async def test_migration_058_product_pair_quantity_norms(tmp_path: Path):
     """
     db_name, target_url = await create_migration_db()
 
-    env = _alembic_env(target_url, tmp_path)
+    env = alembic_env(target_url, tmp_path)
 
     # (SKU A, SKU B, ручная N на 2750 мм) — значения из файла справочника (#177).
     norms: list[tuple[str, str, int]] = [
@@ -795,7 +757,7 @@ async def test_migration_058_product_pair_quantity_norms(tmp_path: Path):
 
     def _run(*args: str) -> None:
         result = subprocess.run(
-            ["alembic", *args],
+            alembic_command(*args),
             cwd=BACKEND_DIR,
             env=env,
             capture_output=True,
@@ -967,11 +929,11 @@ async def test_migration_059_backfills_legacy_linear_length_without_raw(tmp_path
     """Скаляр 2700 переносится один раз; совпадающий линейный default очищается."""
     db_name, target_url = await create_migration_db()
 
-    env = _alembic_env(target_url, tmp_path)
+    env = alembic_env(target_url, tmp_path)
     engine = create_async_engine(target_url)
     try:
         upgraded = subprocess.run(
-            ["alembic", "upgrade", "058_product_pair_quantity_norms"],
+            alembic_command("upgrade", "058_product_pair_quantity_norms"),
             cwd=BACKEND_DIR,
             env=env,
             capture_output=True,
@@ -1008,7 +970,7 @@ async def test_migration_059_backfills_legacy_linear_length_without_raw(tmp_path
             )
 
         upgraded = subprocess.run(
-            ["alembic", "upgrade", "head"],
+            alembic_command("upgrade", "head"),
             cwd=BACKEND_DIR,
             env=env,
             capture_output=True,
@@ -1067,11 +1029,11 @@ async def test_migration_059_stops_on_conflicting_linear_default_until_manual_re
     """Конфликт 2750/2700 откатывается и повторяется только после решения оператора."""
     db_name, target_url = await create_migration_db()
 
-    env = _alembic_env(target_url, tmp_path)
+    env = alembic_env(target_url, tmp_path)
     engine = create_async_engine(target_url)
     try:
         upgraded = subprocess.run(
-            ["alembic", "upgrade", "058_product_pair_quantity_norms"],
+            alembic_command("upgrade", "058_product_pair_quantity_norms"),
             cwd=BACKEND_DIR,
             env=env,
             capture_output=True,
@@ -1108,7 +1070,7 @@ async def test_migration_059_stops_on_conflicting_linear_default_until_manual_re
             )
 
         failed = subprocess.run(
-            ["alembic", "upgrade", "head"],
+            alembic_command("upgrade", "head"),
             cwd=BACKEND_DIR,
             env=env,
             capture_output=True,
@@ -1166,7 +1128,7 @@ async def test_migration_059_stops_on_conflicting_linear_default_until_manual_re
             assert resolved.rowcount == 1
 
         upgraded = subprocess.run(
-            ["alembic", "upgrade", "head"],
+            alembic_command("upgrade", "head"),
             cwd=BACKEND_DIR,
             env=env,
             capture_output=True,
@@ -1207,11 +1169,11 @@ async def test_migration_064_adds_overridden_validation_status(tmp_path: Path):
     """
     db_name, target_url = await create_migration_db()
 
-    env = _alembic_env(target_url, tmp_path)
+    env = alembic_env(target_url, tmp_path)
     engine = create_async_engine(target_url)
     try:
         upgraded = subprocess.run(
-            ["alembic", "upgrade", "head"],
+            alembic_command("upgrade", "head"),
             cwd=BACKEND_DIR,
             env=env,
             capture_output=True,
@@ -1236,7 +1198,7 @@ async def test_migration_064_adds_overridden_validation_status(tmp_path: Path):
 
         # Повторный прогон: значение уже добавлено, миграция обязана быть no-op.
         again = subprocess.run(
-            ["alembic", "upgrade", "head"],
+            alembic_command("upgrade", "head"),
             cwd=BACKEND_DIR,
             env=env,
             capture_output=True,
@@ -1260,11 +1222,11 @@ async def test_migration_065_normalizes_storage_route_stages_to_transit(tmp_path
     """
     db_name, target_url = await create_migration_db()
 
-    env = _alembic_env(target_url, tmp_path)
+    env = alembic_env(target_url, tmp_path)
 
     def _run(*args: str) -> None:
         result = subprocess.run(
-            ["alembic", *args],
+            alembic_command(*args),
             cwd=BACKEND_DIR,
             env=env,
             capture_output=True,
@@ -1363,11 +1325,11 @@ async def test_migration_066_backfills_route_signature_idempotently(tmp_path: Pa
     """
     db_name, target_url = await create_migration_db()
 
-    env = _alembic_env(target_url, tmp_path)
+    env = alembic_env(target_url, tmp_path)
 
     def _run(*args: str) -> None:
         result = subprocess.run(
-            ["alembic", *args],
+            alembic_command(*args),
             cwd=BACKEND_DIR,
             env=env,
             capture_output=True,
@@ -1633,12 +1595,12 @@ async def test_migration_066_normalizes_hanger_norm_keys_by_article(tmp_path: Pa
     """
     db_name, target_url = await create_migration_db()
 
-    env = _alembic_env(target_url, tmp_path)
+    env = alembic_env(target_url, tmp_path)
     engine = create_async_engine(target_url)
 
     def _run(*args: str) -> None:
         result = subprocess.run(
-            ["alembic", *args],
+            alembic_command(*args),
             cwd=BACKEND_DIR,
             env=env,
             capture_output=True,
@@ -1923,12 +1885,12 @@ async def test_migration_068_recals_significance_then_signature(tmp_path: Path):
     """
     db_name, target_url = await create_migration_db()
 
-    env = _alembic_env(target_url, tmp_path)
+    env = alembic_env(target_url, tmp_path)
     engine = create_async_engine(target_url)
 
     def _run(*args: str) -> None:
         result = subprocess.run(
-            ["alembic", *args],
+            alembic_command(*args),
             cwd=BACKEND_DIR,
             env=env,
             capture_output=True,
@@ -2144,12 +2106,12 @@ async def test_migration_071_assigns_route_codes_and_drops_name_unique(tmp_path:
     """
     db_name, target_url = await create_migration_db()
 
-    env = _alembic_env(target_url, tmp_path)
+    env = alembic_env(target_url, tmp_path)
     engine = create_async_engine(target_url)
 
     def _run(*args: str) -> None:
         result = subprocess.run(
-            ["alembic", *args],
+            alembic_command(*args),
             cwd=BACKEND_DIR,
             env=env,
             capture_output=True,
@@ -2411,12 +2373,12 @@ async def test_migration_074_splits_balance_by_completed_operations(
 
     db_name, target_url = await _mig074_make_db()
 
-    env = _alembic_env(target_url, tmp_path)
+    env = alembic_env(target_url, tmp_path)
     engine = create_async_engine(target_url)
 
     def _run(*args: str) -> None:
         result = subprocess.run(
-            ["alembic", *args],
+            alembic_command(*args),
             cwd=BACKEND_DIR,
             env=env,
             capture_output=True,

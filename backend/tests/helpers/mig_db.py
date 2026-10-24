@@ -27,15 +27,21 @@ from __future__ import annotations
 
 import importlib
 import os
+import socket
+import subprocess
 import sys
 import uuid
 from pathlib import Path
 from typing import TYPE_CHECKING
+from urllib.parse import urlparse
 
 import asyncpg
 
 if TYPE_CHECKING:
     from types import ModuleType
+
+#: Корень backend: из него запускается alembic (там `alembic.ini`).
+BACKEND_DIR = Path(__file__).resolve().parents[2]
 
 # `scripts/` — не пакет (CLI там называется `test-db.py`, имя с дефисом), а
 # pytest запускается с `backend/` в sys.path: ни корень репозитория, ни
@@ -60,6 +66,58 @@ def migration_db_url() -> str:
     подходит под ``test*``, — импортированное имя иначе стало бы «тестом».
     """
     return os.getenv("TEST_DATABASE_URL", DEFAULT_TEST_DATABASE_URL)
+
+
+def alembic_command(*args: str) -> list[str]:
+    """Команда alembic из интерпретатора теста, а не из PATH.
+
+    ``alembic`` в PATH может оказаться чужим или устаревшим (системный Python
+    без актуальной версии alembic), и тест упадёт на верном коде.
+    ``sys.executable -m alembic`` гарантирует то же окружение, что у тестов.
+    """
+    return [sys.executable, "-m", "alembic", *args]
+
+
+def alembic_env(target_url: str, tmp_path: Path) -> dict[str, str]:
+    """Окружение подпроцесса alembic: целевая БД и несуществующий env-файл.
+
+    ``alembic/env.py`` вызывает ``apply_env_file()``, а тот по умолчанию
+    перекрывает ``DATABASE_URL`` содержимым ``$ENV_FILE`` (по умолчанию
+    ``<repo>/.env.dev``): переданный тестом DSN уехал бы на dev-базу.
+    Отсутствующий путь внутри ``tmp_path`` — документированный no-op, DSN
+    остаётся тем, что дал тест, и на диск ничего не пишется.
+    """
+    return {
+        **os.environ,
+        "DATABASE_URL": target_url,
+        "ENV_FILE": str(tmp_path / "absent.env"),
+    }
+
+
+def migration_db_reachable() -> bool:
+    """Тестовый Postgres доступен? Host/port — из ``TEST_DATABASE_URL``."""
+    parsed = urlparse(migration_db_url())
+    host = parsed.hostname or "localhost"
+    port = parsed.port or 5432
+    try:
+        with socket.create_connection((host, port), timeout=2):
+            return True
+    except OSError:
+        return False
+
+
+def run_alembic(args: tuple[str, ...], env: dict[str, str]) -> subprocess.CompletedProcess[str]:
+    """Запустить alembic в подпроцессе и упасть на ненулевом коде."""
+    result = subprocess.run(
+        alembic_command(*args),
+        cwd=BACKEND_DIR,
+        env=env,
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+    assert result.returncode == 0, result.stderr or result.stdout
+    return result
 
 
 def _admin_dsn() -> str:
