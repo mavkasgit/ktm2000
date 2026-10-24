@@ -184,18 +184,25 @@ def _current_stage_section_name_exists(section_name_like: str):
 
 
 def _position_is_completed_condition():
-    has_tasks = exists(
+    # Условие повторяет агрегат ``is_completed`` списка строк: есть хотя бы
+    # одно задание, все задания закрыты результатом (completed/skipped), либо
+    # закрыт финальный этап. Позиция со строками плана без заданий (одни
+    # склады) выполнением не считается — она не начата.
+    has_work_tasks = exists(
         select(1)
         .select_from(SectionPlanLine)
+        .join(WorkTask, WorkTask.section_plan_line_id == SectionPlanLine.id)
         .where(SectionPlanLine.plan_position_id == PlanPosition.id)
     )
-    no_open_tasks = ~exists(
+    # Отмена результатом не является (см. ``RESOLVED_WORK_TASK_STATUSES``):
+    # позиция с отменённым заданием выполненной не становится.
+    no_unresolved_tasks = ~exists(
         select(1)
         .select_from(SectionPlanLine)
         .join(WorkTask, WorkTask.section_plan_line_id == SectionPlanLine.id)
         .where(
             SectionPlanLine.plan_position_id == PlanPosition.id,
-            WorkTask.status.notin_(CLOSED_WORK_TASK_STATUSES),
+            WorkTask.status.notin_(RESOLVED_WORK_TASK_STATUSES),
         )
     )
     final_stage_completed = exists(
@@ -209,7 +216,7 @@ def _position_is_completed_condition():
             RouteStage.is_final.is_(True),
         )
     )
-    return or_(and_(has_tasks, no_open_tasks), final_stage_completed)
+    return or_(and_(has_work_tasks, no_unresolved_tasks), final_stage_completed)
 
 
 def _completed_qty_subquery():
@@ -507,52 +514,56 @@ async def _build_planning_rows_for_positions(db: AsyncSession, positions: list[P
         return []
 
     position_ids = [pos.id for pos in positions]
-    has_tasks_rows = (
-        await db.execute(
-            select(SectionPlanLine.plan_position_id)
-            .where(SectionPlanLine.plan_position_id.in_(position_ids))
-            .group_by(SectionPlanLine.plan_position_id)
-        )
-    ).all()
-    has_tasks_set = {row[0] for row in has_tasks_rows}
-
-    # Count total and completed tasks per position to detect fully completed positions
-    task_counts = (
+    # Три признака позиции — «есть строки плана», «все задания закрыты
+    # результатом» и «финальный этап закрыт результатом» — считаются одним
+    # агрегатом. Раньше это были три отдельных SELECT'а по тем же таблицам
+    # (лишние два запроса на каждый тик). LEFT JOIN сохраняет позиции без
+    # заданий: ``total_tasks = 0``, а сам факт строки в результате и есть
+    # «есть строки плана» — группировка идёт по строкам плана.
+    task_aggregates = (
         await db.execute(
             select(
                 SectionPlanLine.plan_position_id,
                 func.count(WorkTask.id).label("total_tasks"),
                 func.sum(
-                    case((WorkTask.status.in_(RESOLVED_WORK_TASK_STATUSES), 1), else_=0)
+                    case(
+                        (WorkTask.status.in_(RESOLVED_WORK_TASK_STATUSES), 1),
+                        else_=0,
+                    )
                 ).label("completed_tasks"),
+                func.sum(
+                    case(
+                        (
+                            and_(
+                                RouteStage.is_final.is_(True),
+                                WorkTask.status.in_(RESOLVED_WORK_TASK_STATUSES),
+                            ),
+                            1,
+                        ),
+                        else_=0,
+                    )
+                ).label("final_resolved_tasks"),
             )
-            .join(WorkTask, WorkTask.section_plan_line_id == SectionPlanLine.id)
+            .select_from(SectionPlanLine)
+            .outerjoin(WorkTask, WorkTask.section_plan_line_id == SectionPlanLine.id)
+            .outerjoin(RouteStage, RouteStage.id == SectionPlanLine.route_stage_id)
             .where(SectionPlanLine.plan_position_id.in_(position_ids))
             .group_by(SectionPlanLine.plan_position_id)
         )
     ).all()
+    has_tasks_set = {row.plan_position_id for row in task_aggregates}
     completed_set = {
         row.plan_position_id
-        for row in task_counts
+        for row in task_aggregates
         if row.total_tasks > 0 and row.completed_tasks == row.total_tasks
     }
-
-    # Also treat position as completed when the final route stage task is completed.
-    final_step_completed_rows = (
-        await db.execute(
-            select(SectionPlanLine.plan_position_id)
-            .join(WorkTask, WorkTask.section_plan_line_id == SectionPlanLine.id)
-            .join(RouteStage, RouteStage.id == SectionPlanLine.route_stage_id)
-            .where(
-                SectionPlanLine.plan_position_id.in_(position_ids),
-                WorkTask.status.in_(RESOLVED_WORK_TASK_STATUSES),
-                RouteStage.is_final.is_(True),
-            )
-            .group_by(SectionPlanLine.plan_position_id)
-        )
-    ).all()
-    final_step_completed_set = {row[0] for row in final_step_completed_rows}
-    completed_set |= final_step_completed_set
+    # Позиция выполнена и тогда, когда закрыт финальный этап, даже если
+    # предыдущие задания ещё открыты (#207).
+    completed_set |= {
+        row.plan_position_id
+        for row in task_aggregates
+        if row.final_resolved_tasks > 0
+    }
 
     # Fetch current stage info: first in_progress or ready task per position
     current_stage_rows = (
