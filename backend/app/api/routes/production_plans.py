@@ -2,7 +2,7 @@ import asyncio
 import logging
 from datetime import UTC, datetime
 from decimal import Decimal
-from typing import Any, Literal
+from typing import Any, Literal, NamedTuple
 
 from fastapi import APIRouter, Depends, HTTPException, Query, status
 from fastapi.responses import JSONResponse
@@ -1136,6 +1136,15 @@ async def route_check(
     )
 
 
+class StageSection(NamedTuple):
+    """Этап маршрута вместе с его участком для сводки по участкам."""
+
+    section_id: int
+    section_code: str
+    section_name: str
+    section_type: str
+
+
 @router.get("/{production_plan_id}/section-totals", dependencies=[Depends(require_role(list(READER_ROLES)))])
 async def section_totals(
     production_plan_id: int,
@@ -1152,40 +1161,60 @@ async def section_totals(
         return SectionTotalsOut(production_plan_id=production_plan_id, totals=[])
 
     totals_by_section: dict[int, dict] = {}
-    route_stages_cache = {}
     # Батч-резолв маршрутов (#298): один проход вместо resolve_position_route
-    # на каждую позицию. Этапы уже кэшировались по route_id — это остаётся.
+    # на каждую позицию. Этапы всех найденных маршрутов читаются одним
+    # joined-запросом ниже.
     route_info_by_id = await resolve_position_routes_batch(db, positions)
 
-    for position in positions:
-        if position.product_id is None:
-            continue
+    # Позиции, которые вообще попадут в сводку: есть продукт и есть маршрут.
+    # Условие задано один раз — дальше цикл идёт по этому словарю.
+    route_id_by_position = {
+        position.id: route_info_by_id[position.id].route_id
+        for position in positions
+        if position.product_id is not None
+        and route_info_by_id[position.id].route_id is not None
+    }
 
-        route_info = route_info_by_id[position.id]
-        if route_info.route_id is None:
-            continue
-
-        if route_info.route_id in route_stages_cache:
-            stages = route_stages_cache[route_info.route_id]
-        else:
-            stages = (
-                await db.execute(
-                    select(RouteStage, Section)
-                    .join(Section, RouteStage.section_id == Section.id)
-                    .where(RouteStage.route_id == route_info.route_id)
-                    .order_by(RouteStage.sequence)
+    # Этап → участок одним запросом на все маршруты плана (#298). Проекция,
+    # а не ORM-сущности: `RouteStage.operations` и связи `Section`
+    # (`users`/`operations`/`spg_links`) объявлены `lazy="selectin"` и на
+    # материализации тащили по пять SELECT'ов на каждый уникальный маршрут.
+    # Inner join тот же, что был у per-route запроса: транзитный этап без
+    # `section_id` в сводку не попадает. Порядок этапов не нужен — учёт идёт
+    # множествами, а строки ответа сортируются по коду участка.
+    stages_by_route: dict[int, list[StageSection]] = {}
+    if route_id_by_position:
+        stage_rows = (
+            await db.execute(
+                select(
+                    RouteStage.route_id,
+                    Section.id,
+                    Section.code,
+                    Section.name,
+                    Section.type,
                 )
-            ).all()
-            route_stages_cache[route_info.route_id] = stages
+                .join(Section, RouteStage.section_id == Section.id)
+                .where(RouteStage.route_id.in_(set(route_id_by_position.values())))
+            )
+        ).all()
+        for route_id, section_id, section_code, section_name, section_type in stage_rows:
+            stages_by_route.setdefault(route_id, []).append(
+                StageSection(section_id, section_code, section_name, section_type)
+            )
 
-        for _, section in stages:
+    for position in positions:
+        route_id = route_id_by_position.get(position.id)
+        if route_id is None:
+            continue
+
+        for stage in stages_by_route.get(route_id, ()):
             bucket = totals_by_section.setdefault(
-                section.id,
+                stage.section_id,
                 {
-                    "section_id": section.id,
-                    "section_code": section.code,
-                    "section_name": section.name,
-                    "section_type": section.type,
+                    "section_id": stage.section_id,
+                    "section_code": stage.section_code,
+                    "section_name": stage.section_name,
+                    "section_type": stage.section_type,
                     "positions": set(),
                     "input": 0,
                     "output": 0,
