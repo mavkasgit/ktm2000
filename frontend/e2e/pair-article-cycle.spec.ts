@@ -30,7 +30,7 @@ import {
  *      `ЮП-2616+ЮП-2604`. Артикулы не пересекаются до самого конца.
  *   2. Обе позиции идут раздельно по всем участкам маршрута и всем передачам,
  *      финиш — `SHIPPED`.
- *   3. На печати анодирования две строки сходятся в ОДИН подвес: в шапке группы
+ *   3. На печати плана участка две строки сходятся в ОДИН подвес: в шапке группы
  *      один счёт подвесов и норма вида `N×A + N×B`, а не сумма по артикулам.
  *
  * Данные строк плана имитируются через `/imports/excel/simulate` — конкретный
@@ -163,7 +163,85 @@ test.describe("@ui Пара 2604/2616: сквозной маршрут разд�
     }
     console.log("[step6] обе позиции запущены");
 
-    // ── ШАГ 7. Маршрут: передачи ↔ участки, по каждому артикулу ─────────
+    // ── ШАГ 7. Печать плана участка: пара — ОДИН подвес ─────────────────
+    // Задачи пары уже созданы на первом шаге маршрута. Участок ищем по живым
+    // заданиям обоих артикулов, а не по имени: маршрут задаёт справочник, и
+    // хардкод участка в спеке разошёлся бы с сидами.
+    await page.goto("/section-tasks");
+    await expect(page.getByRole("heading", { name: "Участки", exact: true })).toBeVisible({
+      timeout: 10_000,
+    });
+    const sectionTiles = page.getByRole("button").filter({ hasText: /ОЖ:|ВР:/ });
+    await expect(sectionTiles.first()).toBeVisible({ timeout: 20_000 });
+
+    let pairSectionFound = false;
+    const tileCount = await sectionTiles.count();
+    for (let i = 0; i < tileCount; i++) {
+      await sectionTiles.nth(i).click();
+      await expect(page).toHaveURL(/\/section-tasks\/\d+/, { timeout: 15_000 });
+      const boardRows = page.locator("tr[data-task-id]");
+      const boardReady = await boardRows
+        .first()
+        .waitFor({ state: "visible", timeout: 5_000 })
+        .then(() => true, () => false);
+      if (!boardReady) continue;
+      const boardText = (await boardRows.allInnerTexts()).join(" | ");
+      if (!boardText.includes(SKU_A) || !boardText.includes(SKU_B)) continue;
+      pairSectionFound = true;
+      break;
+    }
+    expect(pairSectionFound, "не нашли участок с заданиями обоих артикулов пары").toBe(true);
+
+    await page.getByRole("button", { name: "Печать плана" }).click();
+    const planSheet = page.getByRole("dialog", { name: /^План:/ });
+    await expect(planSheet).toBeVisible({ timeout: 10_000 });
+
+    // Обе колонки нужны для проверки свёртки: «Подвесы» считаются один раз
+    // на пару, «Кол-во на подвес» показывает `N×A + N×B`. Профиль печати
+    // участка может их не включать, поэтому включаем кнопками окна.
+    for (const column of ["Подвесы", "Кол-во на подвес"]) {
+      if ((await planSheet.getByRole("columnheader", { name: column, exact: true }).count()) === 0) {
+        await planSheet.getByRole("button", { name: column, exact: true }).click();
+        await expect(
+          planSheet.getByRole("columnheader", { name: column, exact: true }),
+        ).toBeVisible();
+      }
+    }
+
+    // Шапка группы пары: `A+B · размер`, один счёт подвесов и норма пары.
+    const groupHeader = planSheet
+      .locator("tbody tr")
+      .filter({ hasText: `${SKU_A}+${SKU_B}` });
+    await expect(groupHeader).toHaveCount(1);
+    await expect(groupHeader).toContainText(new RegExp(`${SKU_A}\\+${SKU_B} · \\d`));
+    // Колонки группы: [метки через colSpan], затем числовые в порядке
+    // PLAN_COLUMNS — подвесы, норма, остаток, действия.
+    const groupHangers = Number((await groupHeader.locator("td").nth(1).innerText()).trim());
+    const groupPerHanger = (await groupHeader.locator("td").nth(2).innerText()).trim();
+    expect(groupPerHanger).toBe(`${PAIR_N}×${SKU_A} + ${PAIR_N}×${SKU_B}`);
+
+    const headers = (await planSheet.locator("thead th").allInnerTexts()).map((text) => text.trim());
+    const hangersColumn = headers.indexOf("Подвесы");
+    expect(hangersColumn, "в печати нет колонки «Подвесы»").toBeGreaterThanOrEqual(0);
+    const hangersOf = async (sku: string) => {
+      const row = planSheet
+        .locator("tbody tr")
+        .filter({ hasText: sku, hasNotText: "+" });
+      await expect(row).toHaveCount(1);
+      return Number((await row.locator("td").nth(hangersColumn).innerText()).trim());
+    };
+    const hangersA = await hangersOf(SKU_A);
+    const hangersB = await hangersOf(SKU_B);
+
+    // ЭТАЛОН №3: подвес пары посчитан один раз, а не суммой двух строк.
+    expect(hangersA, "строка пары без подвесов").toBeGreaterThan(0);
+    expect(groupHangers, "подвесы группы не совпали с подвесами строки").toBe(hangersA);
+    expect(groupHangers, "подвесы пары сложились по строкам").not.toBe(hangersA + hangersB);
+    console.log(
+      `[step7] печать: ${SKU_A}+${SKU_B} → ${groupHangers} подвес(ов), ${groupPerHanger}`,
+    );
+
+    // ── ШАГ 8. Маршрут: передачи ↔ участки, по каждому артикулу ─────────
     // Передачи отправляются по ОДНОМУ артикулу за раунд: так видно, что
     // материал двух позиций идёт раздельно, а не одной строкой. Маршрут не
     // хардкодится — следующий участок берётся из «Журнала передач».
@@ -182,7 +260,7 @@ test.describe("@ui Пара 2604/2616: сквозной маршрут разд�
         const currentSection = routeChain[routeChain.length - 1];
         const completed = await completeAllSectionTasksViaUI(page, sku, [currentSection]);
         console.log(
-          `[step7] ${sku} раунд ${round}: передано ${sent}, до «${currentSection}» (шагов ${routeChain.length}), завершено ${completed}`,
+          `[step8] ${sku} раунд ${round}: передано ${sent}, до «${currentSection}» (шагов ${routeChain.length}), завершено ${completed}`,
         );
 
         if (sent === 0 && completed === 0) {
@@ -193,7 +271,7 @@ test.describe("@ui Пара 2604/2616: сквозной маршрут разд�
       }
       // ЭТАЛОН №2: материал этой позиции дошёл до «Отправлено».
       await expectShippedViaUI(page, sku, [positionId]);
-      console.log(`[step7] ${sku} отгружен`);
+      console.log(`[step8] ${sku} отгружен`);
     }
     expect(transferred, "маршрут не прошёл ни одной передачи").toBeGreaterThan(0);
   });
