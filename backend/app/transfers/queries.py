@@ -22,6 +22,7 @@ from typing import cast as tcast
 
 from fastapi import HTTPException
 from sqlalchemy import String, Subquery, and_, case, cast, func, or_, select
+from sqlalchemy.dialects.postgresql import aggregate_order_by
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import aliased, lazyload
 
@@ -164,6 +165,12 @@ async def get_section_incoming_transfers(
     to_stage = aliased(RouteStage)
     from_line = aliased(SectionPlanLine)
 
+    # Имена операций этапов нужны только строкой ответа: ORM-коллекции
+    # `RouteStage.operations` здесь не читаются вовсе. Два агрегата в самой
+    # выборке заменяют selectin-догрузку операций обоих этапов (#295).
+    from_op_names_sq = _operation_names_subquery(name="from_op_names_sq", ordered=True)
+    to_op_names_sq = _operation_names_subquery(name="to_op_names_sq", ordered=True)
+
     rows = (
         await db.execute(
             select(
@@ -172,10 +179,10 @@ async def get_section_incoming_transfers(
                 to_section,
                 from_task,
                 to_task,
-                from_stage,
-                to_stage,
                 from_line,
                 Product.sku,
+                from_op_names_sq.c.operation_names.label("from_operation_names"),
+                to_op_names_sq.c.operation_names.label("to_operation_names"),
             )
             .join(from_section, from_section.id == Transfer.from_section_id)
             .join(to_section, to_section.id == Transfer.to_section_id)
@@ -185,16 +192,29 @@ async def get_section_incoming_transfers(
             .join(to_stage, to_stage.id == to_task.route_stage_id)
             .join(from_line, from_line.id == from_task.section_plan_line_id)
             .join(Product, Product.id == from_task.product_id)
+            .outerjoin(from_op_names_sq, from_op_names_sq.c.route_stage_id == from_stage.id)
+            .outerjoin(to_op_names_sq, to_op_names_sq.c.route_stage_id == to_stage.id)
             .where(
                 Transfer.to_section_id == section_id,
                 Transfer.status.in_([TransferStatus.sent, TransferStatus.partially_accepted]),
             )
             .order_by(Transfer.sent_at.desc().nullslast(), Transfer.id.desc())
+            .options(*_section_relation_lazyload(from_section, to_section))
         )
     ).all()
 
     transfers = []
-    for transfer, from_sec, to_sec, src_task, dst_task, src_stage, dst_stage, src_line, product_sku in rows:
+    for (
+        transfer,
+        from_sec,
+        to_sec,
+        src_task,
+        dst_task,
+        src_line,
+        product_sku,
+        from_op_names,
+        to_op_names,
+    ) in rows:
         sent = _to_decimal(transfer.sent_quantity or 0)
         accepted = _to_decimal(transfer.accepted_quantity or 0)
         rejected = _to_decimal(transfer.rejected_quantity or 0)
@@ -202,8 +222,8 @@ async def get_section_incoming_transfers(
         if remaining < 0:
             remaining = Decimal(0)
 
-        from_op_name = ", ".join(op.operation_name for op in src_stage.operations) if src_stage and src_stage.operations else ""
-        to_op_name = ", ".join(op.operation_name for op in dst_stage.operations) if dst_stage and dst_stage.operations else ""
+        from_op_name = from_op_names or ""
+        to_op_name = to_op_names or ""
 
         transfers.append(
             {
@@ -249,14 +269,53 @@ async def get_section_incoming_transfers(
 STOCK_SECTION_TYPES = STOCK_TYPES
 
 
-def _operation_names_subquery():
+def _section_relation_lazyload(*sections):
+    """Не грузить связи Section (users/operations/spg_links), которых нет в ответе.
+
+    Связи объявлены ``lazy="selectin"``: без явного ``lazyload`` материализация
+    алиаса тянет по три SELECT'а на каждую секцию (#290/#295).
+    """
+    options = []
+    for section in sections:
+        options.extend(
+            (
+                lazyload(section.users),
+                lazyload(section.operations),
+                lazyload(section.spg_links),
+            )
+        )
+    return options
+
+
+def _operation_names_subquery(*, name: str = "op_names_sq", ordered: bool = False):
+    """Имена операций этапа строкой — та же склейка, что у связи.
+
+    ``ordered=True`` собирает имена по ``sequence`` — для строк ответа
+    журнала/входящих, где порядок операций виден пользователю.
+    ``ordered=False`` (по умолчанию) оставляет прежний ``string_agg``:
+    ready-ветка использует агрегат только в фильтрах по имени, и лишняя
+    сортировка там не нужна.
+    """
+    names_expr = (
+        func.array_to_string(
+            func.array_agg(
+                aggregate_order_by(
+                    RouteOperation.operation_name,
+                    RouteOperation.sequence,
+                )
+            ),
+            ", ",
+        )
+        if ordered
+        else func.string_agg(RouteOperation.operation_name, ", ")
+    )
     return (
         select(
             RouteOperation.route_stage_id,
-            func.string_agg(RouteOperation.operation_name, ", ").label("operation_names"),
+            names_expr.label("operation_names"),
         )
         .group_by(RouteOperation.route_stage_id)
-        .subquery("op_names_sq")
+        .subquery(name)
     )
 
 
@@ -582,17 +641,10 @@ def _build_production_ready_query(
         )
         .outerjoin(next_stage, next_stage.id == next_line.route_stage_id)
         .outerjoin(next_section, next_section.id == next_line.section_id)
-        .options(
-            # ready-строке нужны только code/name/type секций: списки
-            # пользователей, операций и СПГ грузились selectin'ом на КАЖДЫЙ
-            # алиас секции впустую — шесть запросов на каждый проход (#290).
-            lazyload(from_section.users),
-            lazyload(from_section.operations),
-            lazyload(from_section.spg_links),
-            lazyload(next_section.users),
-            lazyload(next_section.operations),
-            lazyload(next_section.spg_links),
-        )
+        # ready-строке нужны только code/name/type секций: списки
+        # пользователей, операций и СПГ грузились selectin'ом на каждый алиас
+        # секции впустую — шесть запросов на проход (#290).
+        .options(*_section_relation_lazyload(from_section, next_section))
         .where(
             WorkTask.status.notin_(
                 [WorkTaskStatus.cancelled, WorkTaskStatus.waiting_previous]
@@ -813,9 +865,7 @@ async def _fetch_stock_ready_items(
     sections_query = select(Section, own_spg_sq.label("spg_id")).options(
         # Списки пользователей/операций/СПГ ready-строке не нужны: раньше
         # selectin грузил их на каждую секцию впустую (#290).
-        lazyload(Section.users),
-        lazyload(Section.operations),
-        lazyload(Section.spg_links),
+        *_section_relation_lazyload(Section),
     )
     if spg_id is not None:
         sections_query = (
@@ -1392,8 +1442,6 @@ async def get_section_transfer_history(
             to_section,
             from_task,
             to_task,
-            from_stage,
-            to_stage,
             from_line,
             Product.sku,
         )
@@ -1467,6 +1515,23 @@ async def get_section_transfer_history(
     count_stmt = select(func.count()).select_from(base_query.subquery())
     total = (await db.execute(count_stmt)).scalar() or 0
 
+    # Имена операций обоих этапов — агрегаты в самой выборке (#295). Раньше
+    # журнал дотягивал ORM-коллекции `RouteStage.operations` двумя
+    # selectin'ами, то есть стоил 4 SQL на вызов; теперь — 2. Связи секций
+    # (users/operations/spg_links) не читаются: lazyload вместо selectin'а.
+    from_op_names_sq = _operation_names_subquery(name="history_from_op_names_sq", ordered=True)
+    to_op_names_sq = _operation_names_subquery(name="history_to_op_names_sq", ordered=True)
+    base_query = (
+        base_query
+        .add_columns(
+            from_op_names_sq.c.operation_names.label("from_operation_names"),
+            to_op_names_sq.c.operation_names.label("to_operation_names"),
+        )
+        .outerjoin(from_op_names_sq, from_op_names_sq.c.route_stage_id == from_stage.id)
+        .outerjoin(to_op_names_sq, to_op_names_sq.c.route_stage_id == to_stage.id)
+        .options(*_section_relation_lazyload(from_section, to_section))
+    )
+
     # Приоритеты слева направо, в конце tiebreaker по PK.
     base_query = apply_sort(
         base_query, sort_clauses, sort_columns, tiebreaker=Transfer.id,
@@ -1475,7 +1540,17 @@ async def get_section_transfer_history(
     rows = (await db.execute(base_query.offset(offset).limit(limit))).all()
 
     transfers = []
-    for transfer, from_sec, to_sec, src_task, dst_task, src_stage, dst_stage, src_line, row_sku in rows:
+    for (
+        transfer,
+        from_sec,
+        to_sec,
+        src_task,
+        dst_task,
+        src_line,
+        row_sku,
+        from_op_name,
+        to_op_name,
+    ) in rows:
         sent = _to_decimal(transfer.sent_quantity or 0)
         accepted = _to_decimal(transfer.accepted_quantity or 0)
         rejected = _to_decimal(transfer.rejected_quantity or 0)
@@ -1483,8 +1558,8 @@ async def get_section_transfer_history(
         if remaining < 0:
             remaining = Decimal(0)
 
-        from_op_name = ", ".join(op.operation_name for op in src_stage.operations) if src_stage and src_stage.operations else ""
-        to_op_name = ", ".join(op.operation_name for op in dst_stage.operations) if dst_stage and dst_stage.operations else ""
+        from_op_name = from_op_name or ""
+        to_op_name = to_op_name or ""
 
         transfers.append(
             {
