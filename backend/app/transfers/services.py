@@ -89,6 +89,24 @@ if TYPE_CHECKING:
 _stock_command_service = StockCommandService()
 
 
+def _dimensions_equal(left: dict | None, right: dict | None) -> bool:
+    """Python-эквивалент ``dimensions_match_clause`` (#307).
+
+    ``None`` — безразмерные штуки: в SQL это и ``IS NULL``, и JSON ``null``
+    (asyncpg хранит явный ``None`` в JSONB как ``'null'``), а при чтении оба
+    варианта приходят в Python как ``None``. Поэтому сравнение — только
+    ``None is None``; пустой dict, если он когда-нибудь попадёт в строку,
+    остаётся отдельным значением, как и в SQL-условии.
+
+    Габариты в обеих сравниваемых строках канонические
+    (``canonicalize_dimensions``: сортировка ключей, int вместо ``2700.0``),
+    поэтому равенство dict'ов совпадает с равенством JSONB.
+    """
+    if left is None or right is None:
+        return left is None and right is None
+    return left == right
+
+
 async def _record_transfer_send_stock_tx(
     db: AsyncSession,
     *,
@@ -854,9 +872,7 @@ async def auto_create_transfer_after_complete(
     задачу. Возвращает результат **первой** ``transfer_send`` (или ``None``,
     когда хелпер решает пропустить).
     """
-    from app.models.internal_plan import SectionPlanLine
     from app.models.route import RouteStage
-    from app.services.shopfloor.common import sections_share_spg
 
     from_line = await db.get(SectionPlanLine, from_task.section_plan_line_id)
     if from_line is None:
@@ -890,24 +906,121 @@ async def auto_create_transfer_after_complete(
     if not pairs:
         return None
 
+    # ─── Снимок цепочки одним проходом (#307) ───────────────────────────────
+    # Пошаговые чтения в цикле ниже стоили O(steps) SELECT'ов: строка плана,
+    # следующая строка, два этапа, членство в СПГ и задача-адресат. На длинной
+    # цепочке (несколько транзитных хопов) это весь смысл выигрыша, поэтому
+    # всё, что не зависит от создаваемых задач, читается здесь:
+    #   * строки позиции — одним запросом (в цикле остаётся поиск по sequence);
+    #   * этапы по id — одним IN;
+    #   * членство секций в СПГ — одним запросом на все секции цепочки;
+    #   * открытые задачи всех строк — одним select(WorkTask), сопоставление
+    #     габаритов — в Python по правилу dimensions_match_clause.
+    #
+    # Порядок строк — по id: при дублях sequence (в тестовой фикстуре строка
+    # могла быть создана дважды) «первая» остаётся той же, что вернул бы
+    # db.scalar до батчинга (порядок вставки).
+    from app.models.spg import SpgSection
+
+    position_lines = (
+        (
+            await db.execute(
+                select(SectionPlanLine)
+                .where(SectionPlanLine.plan_position_id == from_line.plan_position_id)
+                .order_by(SectionPlanLine.id)
+            )
+        )
+        .scalars()
+        .all()
+    )
+    lines_by_id = {line.id: line for line in position_lines}
+    lines_by_sequence: dict[int, SectionPlanLine] = {}
+    for line in position_lines:
+        lines_by_sequence.setdefault(line.sequence, line)
+
+    stage_ids = {line.route_stage_id for line in position_lines}
+    stages_by_id = (
+        {
+            stage.id: stage
+            for stage in (
+                await db.execute(select(RouteStage).where(RouteStage.id.in_(stage_ids)))
+            )
+            .scalars()
+            .all()
+        }
+        if stage_ids
+        else {}
+    )
+
+    # Секция шага: у транзитного хопа материал лежит на складе хопа, а не на
+    # секции этапа (у транзита section_id пуст).
+    section_ids = {
+        stage.storage_section_id if stage.is_transit else line.section_id
+        for line in position_lines
+        if (stage := stages_by_id.get(line.route_stage_id)) is not None
+    }
+    spg_by_section = (
+        dict(
+            (
+                await db.execute(
+                    select(SpgSection.section_id, SpgSection.spg_id).where(
+                        SpgSection.section_id.in_(section_ids)
+                    )
+                )
+            ).all()
+        )
+        if section_ids
+        else {}
+    )
+
+    tasks_by_line: dict[int, list[WorkTask]] = {}
+    line_ids = [line.id for line in position_lines]
+    if line_ids:
+        open_tasks = (
+            (
+                await db.execute(
+                    select(WorkTask)
+                    .where(
+                        WorkTask.section_plan_line_id.in_(line_ids),
+                        WorkTask.status.notin_(CLOSED_WORK_TASK_STATUSES),
+                    )
+                    .order_by(WorkTask.id)
+                )
+            )
+            .scalars()
+            .all()
+        )
+        for task in open_tasks:
+            tasks_by_line.setdefault(task.section_plan_line_id, []).append(task)
+
+    def _share_spg(left_id: int, right_id: int) -> bool:
+        """Python-эквивалент ``sections_share_spg`` на снимке членства."""
+        if left_id == right_id:
+            return True
+        left_spg = spg_by_section.get(left_id)
+        return left_spg is not None and left_spg == spg_by_section.get(right_id)
+
+    def _first_open_task(
+        line_id: int, dims: dict | None, *, match_dimensions: bool
+    ) -> WorkTask | None:
+        for task in tasks_by_line.get(line_id, ()):
+            if not match_dimensions or _dimensions_equal(task.dimensions, dims):
+                return task
+        return None
+
     first_result = None
     current_task = from_task
 
     while True:
-        current_line = await db.get(SectionPlanLine, current_task.section_plan_line_id)
+        current_line = lines_by_id.get(current_task.section_plan_line_id)
         if current_line is None:
             break
 
-        next_line = await db.scalar(
-            select(SectionPlanLine).where(
-                SectionPlanLine.plan_position_id == current_line.plan_position_id,
-                SectionPlanLine.sequence == current_line.sequence + 1,
-            )
-        )
+        next_line = lines_by_sequence.get(current_line.sequence + 1)
         if next_line is None:
             break
 
-        current_stage = await db.get(RouteStage, current_line.route_stage_id)
+        current_stage = stages_by_id.get(current_line.route_stage_id)
         if current_stage is None:
             break
 
@@ -917,20 +1030,17 @@ async def auto_create_transfer_after_complete(
             else current_line.section_id
         )
 
-        if await sections_share_spg(db, current_section_id, next_line.section_id):
+        if _share_spg(current_section_id, next_line.section_id):
             break
 
-        next_stage = await db.get(RouteStage, next_line.route_stage_id)
+        next_stage = stages_by_id.get(next_line.route_stage_id)
         if next_stage is None:
             break
 
         next_task = None
         if next_stage.is_transit:
-            next_task = await db.scalar(
-                select(WorkTask).where(
-                    WorkTask.section_plan_line_id == next_line.id,
-                    WorkTask.status.notin_(CLOSED_WORK_TASK_STATUSES),
-                )
+            next_task = _first_open_task(
+                next_line.id, None, match_dimensions=False
             )
         step_idx = next_line.sequence - from_line.sequence
         for pair_idx, (qty, dims) in enumerate(pairs):
@@ -941,12 +1051,8 @@ async def auto_create_transfer_after_complete(
             )
             target_task = next_task
             if not next_stage.is_transit:
-                target_task = await db.scalar(
-                    select(WorkTask).where(
-                        WorkTask.section_plan_line_id == next_line.id,
-                        WorkTask.status.notin_(CLOSED_WORK_TASK_STATUSES),
-                        dimensions_match_clause(WorkTask.dimensions, dims),
-                    )
+                target_task = _first_open_task(
+                    next_line.id, dims, match_dimensions=True
                 )
 
             result = await transfer_send(
@@ -968,6 +1074,12 @@ async def auto_create_transfer_after_complete(
                 if receiving_task is not None:
                     receiving_task.planned_quantity = qty
                     await db.flush()
+                    # Приёмная задача видна следующим парам/шагам так же, как
+                    # её увидел бы точечный SELECT: задача, созданная текущей
+                    # передачей, в снимок не попадала.
+                    bucket = tasks_by_line.setdefault(next_line.id, [])
+                    if receiving_task not in bucket:
+                        bucket.append(receiving_task)
 
         if not next_stage.is_transit:
             break
@@ -975,15 +1087,13 @@ async def auto_create_transfer_after_complete(
         if next_task is not None:
             current_task = next_task
         else:
-            created_task = await db.scalar(
-                select(WorkTask).where(
-                    WorkTask.section_plan_line_id == next_line.id,
-                    WorkTask.status.notin_(CLOSED_WORK_TASK_STATUSES),
-                )
+            # Задача транзитного хопа создана передачей выше; продолжаем
+            # цепочку с неё, не перечитывая строку.
+            current_task = _first_open_task(
+                next_line.id, None, match_dimensions=False
             )
-            if created_task is None:
+            if current_task is None:
                 break
-            current_task = created_task
 
     return first_result
 
