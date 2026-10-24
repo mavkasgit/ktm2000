@@ -43,8 +43,8 @@ describe("mapPlanSortFieldToApi", () => {
   });
 
   it("неподдерживаемые сервером поля дают undefined, а не чужое поле", () => {
-    // route собирается в Python (resolve_position_route), warnings — из
-    // последнего PlanChangeItem позиции; в SQL ORDER BY они не выражаются.
+    // route собирается в Python (resolve_position_route), warnings сервер
+    // в ORDER BY не выражает; оба поля не сортируются.
     expect(mapPlanSortFieldToApi("route")).toBeUndefined();
     expect(mapPlanSortFieldToApi("warnings")).toBeUndefined();
   });

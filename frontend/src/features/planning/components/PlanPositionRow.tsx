@@ -20,7 +20,7 @@ import {
   DuplicateConflict,
 } from "../lib/plan-labels"
 import { messagePairLayout } from "../lib/messageColumns"
-import { positionWarnings } from "../lib/planWarnings"
+import { positionWarnings } from "@/shared/lib/planWarnings"
 import type { PlanRowLink } from "../lib/planRowLinks"
 
 /**

@@ -68,7 +68,6 @@ function position(overrides: Partial<PlanPositionOut>): PlanPositionOut {
     status: "draft",
     validation_status: "valid",
     errors: [],
-    warnings: [],
     validation_warnings: [],
     source_row_number: 5,
     product_id: 10,

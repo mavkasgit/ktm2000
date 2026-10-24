@@ -23,7 +23,6 @@ const position = (overrides: Partial<PlanPositionOut>): PlanPositionOut => ({
   status: "draft",
   validation_status: "valid",
   errors: [],
-  warnings: [],
   validation_warnings: [],
   source_row_number: 5,
   product_id: 10,
@@ -61,10 +60,15 @@ describe("колонка «Предупр.» (#328)", () => {
     expect(column("warnings")?.cellValue!(position({}))).toBe("0");
   });
 
-  it("строка до миграции 079 (бэкфилла нет) читает warnings change item", () => {
-    const row = position({ warnings: ["hanger_quantity_not_set:2.7"], validation_warnings: [] });
+  it("legacy-поле warnings из старого ответа не читается (#334)", () => {
+    // Бэкфилл 082 закрыл исторические строки; если старое поле всё же
+    // придёт в ответе, счётчик не должен снова на него опираться.
+    const row = {
+      ...position({ validation_warnings: [] }),
+      warnings: ["hanger_quantity_not_set:2.7"],
+    } as PlanPositionOut;
 
-    expect(column("warnings")?.cellValue!(row)).toBe("1");
+    expect(column("warnings")?.cellValue!(row)).toBe("0");
   });
 
   it("уезжает в запрос параметром has_warnings — тем же, что у фильтра", () => {

@@ -19,7 +19,6 @@ function position(overrides: Partial<PlanPositionOut>): PlanPositionOut {
     status: "draft",
     validation_status: "valid",
     errors: [],
-    warnings: [],
     validation_warnings: [],
     source_row_number: 5,
     product_id: 10,
@@ -266,7 +265,7 @@ const PLAN_TABLE_COLUMNS = planColumns.length + 2
 
 describe("PositionRow — пара «Ошибки»/«Предупр.»", () => {
   it("только предупреждение занимает обе колонки пары", () => {
-    const { pair } = messageCells(position({ warnings: ["hanger_quantity_not_set:2.7"] }))
+    const { pair } = messageCells(position({ validation_warnings: ["hanger_quantity_not_set:2.7"] }))
 
     expect(pair).toHaveLength(1)
     expect(pair[0].getAttribute("colspan")).toBe("2")
@@ -283,7 +282,7 @@ describe("PositionRow — пара «Ошибки»/«Предупр.»", () => 
 
   it("предупреждение читается с позиции (#328), а не с последнего change item", () => {
     const { row, pair } = messageCells(
-      position({ warnings: [], validation_warnings: ["hanger_quantity_not_set:2.7"] }),
+      position({ validation_warnings: ["hanger_quantity_not_set:2.7"] }),
     )
 
     expect(pair).toHaveLength(1)
@@ -305,7 +304,7 @@ describe("PositionRow — пара «Ошибки»/«Предупр.»", () => 
     const { pair } = messageCells(
       position({
         errors: ["product_not_found", "quantity_must_be_positive"],
-        warnings: ["hanger_quantity_not_set:2.7"],
+        validation_warnings: ["hanger_quantity_not_set:2.7"],
       }),
     )
 
@@ -333,9 +332,9 @@ describe("PositionRow — пара «Ошибки»/«Предупр.»", () => 
   it("строка занимает все колонки при любом наборе сообщений", () => {
     const cases: Partial<PlanPositionOut>[] = [
       {},
-      { warnings: ["hanger_quantity_not_set:2.7"] },
+      { validation_warnings: ["hanger_quantity_not_set:2.7"] },
       { errors: ["product_not_found"] },
-      { errors: ["product_not_found"], warnings: ["hanger_quantity_not_set:2.7"] },
+      { errors: ["product_not_found"], validation_warnings: ["hanger_quantity_not_set:2.7"] },
       {
         status: "approved",
         validation_status: "overridden",
@@ -361,7 +360,7 @@ describe("PositionRow — пара «Ошибки»/«Предупр.»", () => 
 
   it("дубликат строки Excel печатается в ячейке пары и тянет её на обе колонки", () => {
     const { pair } = messageCells(
-      position({ status: "invalid", errors: [], warnings: [] }),
+      position({ status: "invalid", errors: [], validation_warnings: [] }),
       {
         duplicateConflict: { fingerprint: "abc", conflictIds: [99] },
         onJumpToPosition: vi.fn(),

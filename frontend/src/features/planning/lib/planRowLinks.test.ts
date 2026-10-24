@@ -12,7 +12,7 @@ function row(overrides: Partial<PlanPositionOut>): PlanPositionOut {
     status: "draft",
     validation_status: "valid",
     errors: [],
-    warnings: [],
+    validation_warnings: [],
     ...overrides,
   } as PlanPositionOut
 }

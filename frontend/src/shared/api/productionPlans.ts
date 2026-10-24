@@ -149,11 +149,11 @@ export type PlanPositionOut = {
   status: string;
   validation_status: string;
   errors: string[];
-  warnings: string[];
   /**
    * Предупреждения импорта, персистированные на позиции (#328): пишутся при
-   * применении change-set. `warnings` — прежнее поле из последнего
-   * PlanChangeItem, для позиций до миграции 079 остаётся источником показа.
+   * применении change-set. Единственный источник предупреждений в ответе
+   * (#334): legacy-поле `warnings` из PlanChangeItem API не отдаёт, а
+   * исторические строки закрыл бэкфилл миграции 082.
    */
   validation_warnings: string[];
   source_row_number: number | null;

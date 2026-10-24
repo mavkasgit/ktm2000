@@ -7,7 +7,7 @@ from typing import Any, Literal, NamedTuple
 from fastapi import APIRouter, Depends, HTTPException, Query, status
 from fastapi.responses import JSONResponse
 from pydantic import BaseModel, ConfigDict
-from sqlalchemy import String, cast, exists, or_, select, text
+from sqlalchemy import String, cast, or_, select, text
 from sqlalchemy import func as sa_func
 from sqlalchemy.exc import DBAPIError
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -1336,11 +1336,11 @@ class PlanPositionOut(BaseModel):
     status: str
     validation_status: str
     errors: list
-    warnings: list
     # Предупреждения, персистированные на самой позиции (#328): пишутся при
     # применении change-set и переживают любые изменения элементов сета.
-    # `warnings` — прежнее поле из последнего PlanChangeItem, оставлено для
-    # совместимости и для позиций, созданных до миграции 079 (бэкфилла нет).
+    # Единственный источник предупреждений в ответе (#334): legacy-поле
+    # `warnings` из PlanChangeItem больше не отдаётся — исторические строки
+    # закрывает бэкфилл миграции 082.
     # Сырые коды: предупреждения переводит фронт (`warningLabels`), а
     # `format_validation_error` для `code:detail` отбрасывает базовый код.
     validation_warnings: list
@@ -1645,17 +1645,11 @@ def _apply_all_positions_filters(
     elif has_errors == "no":
         stmt = stmt.where(errors_len == 0)
 
-    if has_warnings in {"yes", "no"}:
-        warnings_exists = (
-            select(PlanChangeItem.id)
-            .where(PlanChangeItem.plan_position_id == PlanPosition.id)
-            .where(sa_func.coalesce(sa_func.jsonb_array_length(PlanChangeItem.warnings), 0) > 0)
-            .correlate(PlanPosition)
-        )
-        if has_warnings == "yes":
-            stmt = stmt.where(exists(warnings_exists))
-        else:
-            stmt = stmt.where(~exists(warnings_exists))
+    warnings_len = sa_func.coalesce(sa_func.jsonb_array_length(PlanPosition.validation_warnings), 0)
+    if has_warnings == "yes":
+        stmt = stmt.where(warnings_len > 0)
+    elif has_warnings == "no":
+        stmt = stmt.where(warnings_len == 0)
 
     if search:
         search_like = f"%{search}%"
@@ -1679,7 +1673,6 @@ def _build_plan_position_out(
     route_info: Any,
     hanger_value: Any,
     figures: PositionStockFigures,
-    warnings: list,
 ) -> PlanPositionOut:
     from app.domain.dimensions import format_dimensions
     from app.services.plan_position_hanger import position_dimensions_for_task
@@ -1698,7 +1691,6 @@ def _build_plan_position_out(
         source_row_number=p.source_row_number,
         source_row_numbers=_source_row_numbers_from_position(p),
         source_ref=p.source_ref,
-        warnings=warnings,
         product_id=p.product_id,
         route_id=route_info.route_id,
         route_profile_id=p.route_profile_id,
@@ -1727,21 +1719,9 @@ async def _serialize_plan_positions(
     db: AsyncSession,
     positions: list[PlanPosition],
 ) -> list[PlanPositionOut]:
-    from app.models.production_plan import PlanChangeItem
-
     if not positions:
         return []
 
-    change_items = (
-        await db.execute(
-            select(PlanChangeItem)
-            .where(
-                PlanChangeItem.plan_position_id.in_([p.id for p in positions])
-            )
-            .order_by(PlanChangeItem.id.asc())
-        )
-    ).scalars().all()
-    warnings_by_position = {ci.plan_position_id: ci.warnings for ci in change_items if ci.plan_position_id}
     # Батч-резолв маршрутов (#298) вместо поштучного в цикле: ключ кэша
     # включает source_payload, поэтому уникален почти всегда и мемоизация
     # не помогала. Результат тот же — по позиции.
@@ -1765,7 +1745,6 @@ async def _serialize_plan_positions(
                 route_info=route_info,
                 hanger_value=hanger_value,
                 figures=figures,
-                warnings=warnings_by_position.get(p.id, []) or [],
             )
         )
     return result

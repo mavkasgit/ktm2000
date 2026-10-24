@@ -8,7 +8,7 @@
 """
 from __future__ import annotations
 
-from datetime import date
+from datetime import UTC, date, datetime
 from decimal import Decimal
 
 import pytest
@@ -19,6 +19,7 @@ from app.models.production_plan import (
     PlanChangeItem,
     PlanChangeItemStatus,
     PlanChangeSet,
+    PlanChangeSetStatus,
     PlanPosition,
     PlanPositionStatus,
     PlanPositionValidationStatus,
@@ -418,3 +419,104 @@ async def test_import_positions_api_returns_validation_warnings(client, session,
     assert body[0]["validation_warnings"] == [WARNING_CODE]
     assert body[0]["validation_errors"] == []
     assert body[0]["validation_status"] == PlanPositionValidationStatus.valid.value
+
+
+async def _make_manual_position(
+    session: AsyncSession,
+    plan: ProductionPlan,
+    *,
+    sku: str,
+    row_number: int,
+    validation_warnings: list[str],
+) -> PlanPosition:
+    position = PlanPosition(
+        production_plan_id=plan.id,
+        source_type=PlanSourceType.manual,
+        source_sku=sku,
+        source_name=sku,
+        quantity=Decimal(5),
+        source_payload={},
+        period_start=plan.period_start,
+        period_end=plan.period_end,
+        status=PlanPositionStatus.draft,
+        validation_status=PlanPositionValidationStatus.valid,
+        validation_errors=[],
+        validation_warnings=validation_warnings,
+        source_row_number=row_number,
+        has_pack_ops=False,
+    )
+    session.add(position)
+    await session.flush()
+    return position
+
+
+@pytest.mark.asyncio
+async def test_has_warnings_filter_reads_position_column_only(client, session, tmp_path) -> None:
+    """Фильтр `has_warnings` считает validation_warnings позиции, а не change items.
+
+    Позиция с пустой колонкой не попадает в «есть предупреждения», даже если
+    у её последнего change item предупреждения остались: легаси-источник из
+    ответа убран (#334), источник правды — колонка позиции.
+    """
+    plan, batch = await _make_plan_with_batch(session, "PLAN-WARN-FILTER", tmp_path)
+    warned = await _make_manual_position(
+        session, plan, sku="WARN-FILTER-YES", row_number=1, validation_warnings=[WARNING_CODE]
+    )
+    legacy_only = await _make_manual_position(
+        session, plan, sku="WARN-FILTER-LEGACY", row_number=2, validation_warnings=[]
+    )
+
+    change_set = PlanChangeSet(
+        production_plan_id=plan.id,
+        import_batch_id=batch.id,
+        status=PlanChangeSetStatus.applied,
+        summary={},
+        applied_at=datetime.now(UTC),
+    )
+    session.add(change_set)
+    await session.flush()
+    session.add(
+        PlanChangeItem(
+            change_set_id=change_set.id,
+            plan_position_id=legacy_only.id,
+            source_row_number=2,
+            source_ref="rows:2",
+            change_action=PlanChangeAction.update_draft_position,
+            before_data=None,
+            after_data={},
+            status=PlanChangeItemStatus.applied,
+            warnings=[WARNING_CODE],
+            errors=[],
+        )
+    )
+    await session.commit()
+
+    yes = await client.get("/api/production-plans/all-positions?has_warnings=yes&limit=50")
+    assert yes.status_code == 200, yes.text
+    yes_body = yes.json()
+    assert yes_body["total"] == 1
+    assert {position["id"] for position in yes_body["positions"]} == {warned.id}
+    # Legacy-поля в ответе больше нет: предупреждения только в validation_warnings.
+    assert "warnings" not in yes_body["positions"][0]
+
+    no = await client.get("/api/production-plans/all-positions?has_warnings=no&limit=50")
+    assert no.status_code == 200, no.text
+    no_body = no.json()
+    assert no_body["total"] == 1
+    assert {position["id"] for position in no_body["positions"]} == {legacy_only.id}
+
+
+@pytest.mark.asyncio
+async def test_plan_positions_response_has_no_legacy_warnings_field(client, session, tmp_path) -> None:
+    """`all-positions` плана отдаёт предупреждения только в validation_warnings."""
+    plan, _batch = await _make_plan_with_batch(session, "PLAN-WARN-NO-LEGACY", tmp_path)
+    position = await _make_manual_position(
+        session, plan, sku="WARN-NO-LEGACY", row_number=1, validation_warnings=[WARNING_CODE]
+    )
+    await session.commit()
+
+    positions = await _positions_from_api(client, plan)
+    assert len(positions) == 1
+    assert positions[0]["id"] == position.id
+    assert positions[0]["validation_warnings"] == [WARNING_CODE]
+    assert "warnings" not in positions[0]
