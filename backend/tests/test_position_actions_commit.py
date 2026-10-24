@@ -530,6 +530,7 @@ async def test_bulk_delete_positions_soft_delete_db_error_isolates_and_commits(
     - вся пачка успешно коммитится, а сессия не уходит в InFailedSqlTransaction.
     """
     import logging
+
     import app.api.routes.production_plans as prod_plans_route
 
     caplog.set_level(logging.ERROR)
