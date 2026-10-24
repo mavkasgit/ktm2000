@@ -843,6 +843,12 @@ export async function takeToWork(
   remainderAllocation?: Array<{ balance_id: number; quantity: number }>,
   releaseQuantity?: number,
 ) {
+  // Источник — решение одной позиции: массовый путь его не выбирает
+  // (`ExecutionDialogs` объясняет это оператору). Бэкенд отвечает 422, но
+  // локальная ошибка говорит то же самое без бесполезного HTTP-статуса.
+  if (remainderAllocation && remainderAllocation.length > 0 && positionIds.length !== 1) {
+    throw new Error("Источник выдачи выбирается только для одной позиции");
+  }
   const payload: {
     position_ids: number[];
     remainder_allocation?: Array<{ balance_id: number; quantity: number }>;
