@@ -9,6 +9,7 @@
     "prebuild": "node scripts/verify-sync.mjs --other ../hrms --if-enabled",
     "dev": "concurrently --names \"DB,BACKEND,FRONTEND\" -c \"blue,green,yellow\" \"npm run db:logs\" \"npm run backend\" \"npm run frontend\"",
     "frontend": "npm --prefix frontend run dev",
+    "lint": "npm --prefix frontend run lint",
     "backend": "cd backend && python scripts/dev_server.py",
     "dev:ports": "node scripts/ensure-dev-ports.js --check",
     "dev:kill": "node scripts/ensure-dev-ports.js --kill",

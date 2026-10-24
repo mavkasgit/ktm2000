@@ -1,9 +1,10 @@
 name: Frontend tests
 
-# tsc + vitest с покрытием на push/PR. Решения грилла #245: Q14=1 (набор в CI),
-# Q4=1 (покрытие меряем), Q22 (typecheck отдельным шагом, vite build не
-# дублируем), Q13 (без порога: первое число frontend-покрытия ещё не снято,
-# гейт — отдельным решением позже).
+# tsc + ESLint + vitest с покрытием на push/PR. Решения грилла #245: Q14=1
+# (набор в CI), Q4=1 (покрытие меряем), Q22 (typecheck отдельным шагом, vite
+# build не дублируем), Q13 (без порога: первое число frontend-покрытия ещё не
+# снято, гейт — отдельным решением позже). ESLint добавлен в набор ради
+# архитектурных границ FSD (#333): tsc их не видит.
 # Имя джоба `frontend tests` — оно же имя required check (настройка #254).
 # paths-фильтров нет намеренно: required check не должен висеть, не запустившись.
 on:
@@ -42,6 +43,9 @@ jobs:
 
       - name: Typecheck (tsc -b)
         run: npx tsc -b
+
+      - name: ESLint (архитектурные границы FSD)
+        run: npm run lint
 
       - name: Vitest with coverage (report-only, no threshold yet)
         run: npm test -- --coverage

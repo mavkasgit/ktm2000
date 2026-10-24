@@ -30,6 +30,9 @@ export function SectionSwitcherTiles({
   headerContent,
 }: SectionSwitcherTilesProps) {
   const [search, setSearch] = useState("");
+  // Хук вызывается всегда: в popover-варианте он управляет поповером,
+  // в expanded — просто не используется. Условный вызов нарушал порядок хуков.
+  const [open, setOpen] = useState(false);
   const summaryBySectionId = useMemo(() => {
     const map = new Map<number, SectionSummary>();
     summary.forEach((row) => map.set(row.section_id, row));
@@ -118,8 +121,6 @@ export function SectionSwitcherTiles({
   );
 
   if (variant === "popover") {
-    const [open, setOpen] = useState(false);
-
     const handleSelect = (sectionId: number) => {
       setOpen(false);
       setSearch("");

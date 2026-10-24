@@ -287,6 +287,7 @@ React 18.3 + TypeScript + Vite + Tailwind CSS + shadcn/ui + TanStack Query/Virtu
 ```bash
 npm --prefix frontend run dev       # :5172
 npm --prefix frontend run build
+npm --prefix frontend run lint      # ESLint (в т.ч. архитектурные границы FSD)
 npm --prefix frontend run test      # Vitest unit-тесты
 npm --prefix frontend run test:e2e  # Playwright E2E
 ```
