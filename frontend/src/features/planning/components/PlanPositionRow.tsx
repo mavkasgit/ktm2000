@@ -49,7 +49,7 @@ function ExpectedRouteMarker() {
  * `PlanPage` закреплены `useCallback`, `routes` — `useMemo`, `pos` приходит
  * из кэша TanStack тем же объектом, пока данные не поменялись.
  */
-export const PositionRow = memo(function PositionRow({ pos, onApprove, onDelete, selected, routes, onAssignRoute, onOpenDetail, duplicateConflict, onJumpToPosition, onSelect, onSkuClick, rowLink }: {
+export const PositionRow = memo(function PositionRow({ pos, onApprove, onDelete, selected, routes, onAssignRoute, onOpenDetail, duplicateConflict, onJumpToPosition, onJumpToRow, onSelect, onSkuClick, rowLink }: {
   pos: PlanPositionOut;
   onApprove: (id: number, planId?: number, force?: boolean, reason?: string) => Promise<void>;
   onDelete: (id: number, planId?: number) => void;
@@ -60,6 +60,8 @@ export const PositionRow = memo(function PositionRow({ pos, onApprove, onDelete,
   onOpenDetail?: (pos: PlanPositionOut) => void;
   duplicateConflict?: DuplicateConflict;
   onJumpToPosition?: (id: number) => void;
+  /** Прокрутка к строке без открытия карточки: переход по бейджу пары. */
+  onJumpToRow?: (id: number) => void;
   onSelect?: (id: number) => void;
   onSkuClick?: (sku: string) => void;
   /** Связь с соседними строками (пара или распил); нет — строка сама по себе. */
@@ -247,7 +249,8 @@ export const PositionRow = memo(function PositionRow({ pos, onApprove, onDelete,
     <>
     <tr
       id={`plan-position-${pos.id}`}
-      className={`border-b ${hasErrors || hasDuplicateConflict ? "bg-red-50" : hasWarnings ? "bg-amber-50" : ""} ${selected ? TABLE_ROW_STYLES.selectedRow : ""} cursor-pointer hover:bg-accent hover:ring-1 hover:ring-ring/20 transition-colors`}
+      tabIndex={-1}
+      className={`border-b ${hasErrors || hasDuplicateConflict ? "bg-red-50" : hasWarnings ? "bg-amber-50" : ""} ${selected ? TABLE_ROW_STYLES.selectedRow : ""} cursor-pointer hover:bg-accent hover:ring-1 hover:ring-ring/20 transition-colors focus:outline-none`}
       onClick={(e) => {
         if (onSelect) {
           e.stopPropagation()
@@ -264,13 +267,20 @@ export const PositionRow = memo(function PositionRow({ pos, onApprove, onDelete,
             <span className="text-muted-foreground">#{pos.id}</span>
           </span>
           {rowLink && (
-            <span
+            <button
+              type="button"
               data-pair-link
               title={rowLink.title}
-              className="inline-flex items-center rounded bg-muted px-1 text-[10px] leading-tight text-muted-foreground"
+              aria-label={`${rowLink.title}, позиция ${rowLink.ordinal} из ${rowLink.total} — перейти к парной строке`}
+              className="inline-flex items-center rounded bg-muted px-1 text-[10px] leading-tight text-muted-foreground hover:bg-accent hover:text-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
+              onClick={(e) => {
+                // Бейдж не выбирает строку и не открывает карточку: только переход.
+                e.stopPropagation()
+                onJumpToRow?.(rowLink.linkId)
+              }}
             >
               {rowLink.ordinal}/{rowLink.total}
-            </span>
+            </button>
           )}
         </span>
       </td>

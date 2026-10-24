@@ -50,8 +50,9 @@ describe("planRowLinks", () => {
       title: "Пара ЮП-2604+ЮП-2616 · 30 шт на подвес",
       ordinal: 1,
       total: 2,
+      linkId: 1447,
     })
-    expect(links.get(1447)).toMatchObject({ ordinal: 2, total: 2 })
+    expect(links.get(1447)).toMatchObject({ ordinal: 2, total: 2, linkId: 1446 })
   })
 
   it("одиночная позиция пары не связывается: связывать не с чем", () => {

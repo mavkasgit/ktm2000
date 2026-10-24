@@ -39,6 +39,11 @@ export type PlanRowLink = {
   ordinal: number
   /** Сколько связанных позиций видно сейчас. */
   total: number
+  /**
+   * Позиция, к которой ведёт бейдж. У пары из двух строк это партнёр; если
+   * импорт свёл в группу больше двух строк, переход идёт по кругу.
+   */
+  linkId: number
 }
 
 /**
@@ -94,6 +99,7 @@ export function planRowLinks(rows: PlanPositionOut[]): Map<number, PlanRowLink> 
         title: member.title,
         ordinal: index + 1,
         total: members.length,
+        linkId: members[(index + 1) % members.length].id,
       })
     })
   }

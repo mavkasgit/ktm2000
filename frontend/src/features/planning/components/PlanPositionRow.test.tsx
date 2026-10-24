@@ -1,6 +1,6 @@
 import type { ComponentProps } from "react"
 
-import { render, screen } from "@testing-library/react"
+import { fireEvent, render, screen } from "@testing-library/react"
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query"
 import { describe, expect, it, vi } from "vitest"
 
@@ -388,10 +388,11 @@ describe("PositionRow — пара «Ошибки»/«Предупр.»", () => 
 })
 
 describe("PositionRow — связь пары в ячейке «Id»", () => {
-  const link = (ordinal: number, total: number) => ({
+  const link = (ordinal: number, total: number, linkId = 1447) => ({
     title: "Пара ЮП-2604+ЮП-2616 · 30 шт на подвес",
     ordinal,
     total,
+    linkId,
   })
 
   /** Ячейка «Id» строки: в таблице это первая. */
@@ -405,6 +406,38 @@ describe("PositionRow — связь пары в ячейке «Id»", () => {
     expect(badge?.textContent).toBe("2/2")
     expect(badge?.getAttribute("title")).toContain("ЮП-2604+ЮП-2616")
     expect(badge?.getAttribute("title")).toContain("30 шт на подвес")
+  })
+
+  it("бейдж — кнопка с доступным именем и ведёт к парной строке", () => {
+    const onJumpToRow = vi.fn()
+    renderRow(position({}), { rowLink: link(1, 2, 1447), onJumpToRow })
+
+    const badge = screen.getByRole("button", {
+      name: "Пара ЮП-2604+ЮП-2616 · 30 шт на подвес, позиция 1 из 2 — перейти к парной строке",
+    })
+    fireEvent.click(badge)
+
+    expect(onJumpToRow).toHaveBeenCalledWith(1447)
+  })
+
+  it("переход по бейджу не выбирает строку и не открывает карточку", () => {
+    const onJumpToRow = vi.fn()
+    const onSelect = vi.fn()
+    const onOpenDetail = vi.fn()
+    const badge = idCell({ rowLink: link(1, 2, 1447), onJumpToRow, onSelect, onOpenDetail })
+      .querySelector("[data-pair-link]") as HTMLElement
+
+    fireEvent.click(badge)
+
+    expect(onJumpToRow).toHaveBeenCalledTimes(1)
+    expect(onSelect).not.toHaveBeenCalled()
+    expect(onOpenDetail).not.toHaveBeenCalled()
+  })
+
+  it("строка принимает программный фокус, но не попадает в Tab-порядок", () => {
+    const row = renderRow(position({}))
+
+    expect(row.getAttribute("tabindex")).toBe("-1")
   })
 
   it("строка вне пары остаётся с голым номером", () => {

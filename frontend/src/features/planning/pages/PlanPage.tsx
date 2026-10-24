@@ -84,6 +84,7 @@ export function PlanPage() {
   const [pendingScrollId, setPendingScrollId] = useState<number | null>(null)
   const tableScrollRef = useRef<HTMLDivElement>(null)
   const ringTimerRef = useRef<number | null>(null)
+  const pairRingTimerRef = useRef<number | null>(null)
 
   // `useCallback`: `openDetail` уходит в строку таблицы пропом, и новая
   // ссылка на каждом рендере сводила бы `React.memo` у строки к нулю.
@@ -662,6 +663,22 @@ export function PlanPage() {
     })()
   }, [openDetail, positions, queryClient])
 
+  // Переход по бейджу пары: обе строки уже в списке (связи строятся по
+  // видимым строкам), поэтому фильтры и сортировку не трогаем и карточку не
+  // открываем — оператор читает пару рядом, а не в деталях.
+  const jumpToRow = useCallback((positionId: number) => {
+    const row = document.getElementById(`plan-position-${positionId}`)
+    if (!row) return
+    row.scrollIntoView({ behavior: "smooth", block: "center" })
+    row.focus({ preventScroll: true })
+    row.classList.add("ring-2", "ring-ring")
+    if (pairRingTimerRef.current !== null) window.clearTimeout(pairRingTimerRef.current)
+    pairRingTimerRef.current = window.setTimeout(
+      () => row.classList.remove("ring-2", "ring-ring"),
+      1800,
+    )
+  }, [])
+
   // Прокрутка к строке цели после её отрисовки: ждём появления
   // `plan-position-<id>` в DOM, а не одного тика. Если строка не на текущей
   // странице, прокрутки не будет — карточка уже открыта, тишины нет.
@@ -680,9 +697,10 @@ export function PlanPage() {
   }, [positions, pendingScrollId])
 
   useEffect(
-    () => () => {
-      if (ringTimerRef.current !== null) window.clearTimeout(ringTimerRef.current)
-    },
+        () => {
+          if (ringTimerRef.current !== null) window.clearTimeout(ringTimerRef.current)
+          if (pairRingTimerRef.current !== null) window.clearTimeout(pairRingTimerRef.current)
+        },
     [],
   )
 
@@ -890,6 +908,7 @@ export function PlanPage() {
                         onOpenDetail={openDetail}
                         duplicateConflict={duplicateConflictsByPosition.get(p.id)}
                         onJumpToPosition={jumpToPosition}
+                        onJumpToRow={jumpToRow}
                         onSelect={bulkMode ? toggleSelect : undefined}
                         onSkuClick={setWipStatsSku}
                         rowLink={rowLinks.get(p.id)}
