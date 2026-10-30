@@ -61,7 +61,7 @@ services:
       AUTH_OIDC_ALLOW_JIT: 'true'
       AUTH_OIDC_DEFAULT_ROLE: admin
       # HRMS employee sync
-      HRMS_BASE_URL: http://host.docker.internal:8081
+      HRMS_BASE_URL: http://host.docker.internal:8086
     expose:
       - "8000"
     volumes:
