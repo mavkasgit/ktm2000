@@ -12,6 +12,7 @@
     "lint": "npm --prefix frontend run lint",
     "backend": "cd backend && python scripts/dev_server.py",
     "dev:ports": "node scripts/ensure-dev-ports.js --check",
+    "ports:check": "node ../_ports/check-ports.mjs",
     "dev:kill": "node scripts/ensure-dev-ports.js --kill",
     "devkill": "npm run dev:kill",
     "devrestart": "npm run dev:kill && npm run dev",

@@ -1,0 +1,61 @@
+{
+  "project": "ktm2000",
+  "title": "KTM-2000 — MES (планирование, shopfloor, склад)",
+  "ports": [
+    {
+      "port": 8082,
+      "env": "prod",
+      "service": "nginx",
+      "container": "ktm2000-nginx-prod",
+      "purpose": "веб-интерфейс прода",
+      "source": "infra/compose/docker-compose.prod.yml"
+    },
+    {
+      "port": 5172,
+      "env": "dev",
+      "service": "vite",
+      "process": "node",
+      "purpose": "фронтенд dev (strictPort: другой порт не берётся)",
+      "source": "frontend/vite.config.ts"
+    },
+    {
+      "port": 8012,
+      "env": "dev",
+      "service": "backend",
+      "process": "python",
+      "purpose": "API dev",
+      "source": ".env.dev"
+    },
+    {
+      "port": 5440,
+      "env": "dev",
+      "service": "postgres",
+      "container": "ktm2000-postgres",
+      "purpose": "БД dev",
+      "source": "infra/compose/docker-compose.dev.yml"
+    },
+    {
+      "port": 5441,
+      "env": "test",
+      "service": "postgres",
+      "container": "ktm2000-postgres-test",
+      "purpose": "БД test/e2e (клон шаблона)",
+      "source": "infra/compose/docker-compose.test.yml"
+    },
+    {
+      "port": 8100,
+      "env": "test",
+      "service": "frontend",
+      "container": "ktm2000-frontend-test",
+      "purpose": "стенд test (`npm run test:up`)",
+      "source": ".env.test"
+    }
+  ],
+  "dynamic": [
+    {
+      "env": "e2e",
+      "service": "backend+frontend",
+      "purpose": "Playwright берёт свободные порты у ОС на каждый прогон"
+    }
+  ]
+}
