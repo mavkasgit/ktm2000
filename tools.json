@@ -8,7 +8,10 @@
       "category": "language",
       "version": "24",
       "pinned_in": ".nvmrc",
-      "runs_at": ["gate", "ci"],
+      "runs_at": [
+        "gate",
+        "ci"
+      ],
       "blocking": true,
       "last_reviewed": "2026-11-03",
       "rationale": "Единый источник версии Node для локального гейта и CI; раньше 20 и 22 были разбросаны по workflow."
@@ -20,7 +23,10 @@
       "category": "language",
       "version": "3.12",
       "pinned_in": ".python-version",
-      "runs_at": ["gate", "ci"],
+      "runs_at": [
+        "gate",
+        "ci"
+      ],
       "blocking": true,
       "last_reviewed": "2026-11-03",
       "rationale": "Backend и скрипты проверки сидов идут на 3.12; дублирование python-version по пяти workflow — источник расхождений."
@@ -32,7 +38,10 @@
       "category": "dev-tool",
       "version": ">=10",
       "pinned_in": "package.json",
-      "runs_at": ["gate", "ci"],
+      "runs_at": [
+        "gate",
+        "ci"
+      ],
       "blocking": true,
       "last_reviewed": "2026-11-03",
       "rationale": "Все точки входа — npm-скрипты; минимальную версию задаёт engines в корневом package.json."
@@ -43,11 +52,14 @@
       "repo": "astral-sh/ruff",
       "category": "linter",
       "version": "0.16.9",
-      "pinned_in": ".github/workflows/ruff.yml",
-      "runs_at": ["gate", "ci"],
+      "pinned_in": "backend/requirements-dev.txt",
+      "runs_at": [
+        "gate",
+        "ci"
+      ],
       "blocking": true,
       "last_reviewed": "2026-11-03",
-      "rationale": "Единственный линтер backend; закреплён точкой в CI, локально должен совпадать с ним."
+      "rationale": "Единственный линтер backend; после #377 пин живёт в requirements-dev.txt, workflow лишь устанавливает его."
     },
     {
       "id": "coverage",
@@ -55,11 +67,13 @@
       "repo": "coveragepy/coveragepy",
       "category": "coverage",
       "version": "7.16.2",
-      "pinned_in": ".github/workflows/backend-tests.yml",
-      "runs_at": ["ci"],
+      "pinned_in": "backend/requirements-dev.txt",
+      "runs_at": [
+        "ci"
+      ],
       "blocking": true,
       "last_reviewed": "2026-11-03",
-      "rationale": "Порог coverage --fail-under=73 краснеет только в CI; в requirements.txt намеренно не лежит."
+      "rationale": "Порог coverage --fail-under=73 краснеет только в CI, но версия часть замера: бейзлайн снят именно на 7.16.2."
     },
     {
       "id": "typescript",
@@ -68,7 +82,11 @@
       "category": "typechecker",
       "version": "^5.7.2",
       "pinned_in": "frontend/package.json",
-      "runs_at": ["commit", "gate", "ci"],
+      "runs_at": [
+        "commit",
+        "gate",
+        "ci"
+      ],
       "blocking": true,
       "last_reviewed": "2026-11-03",
       "rationale": "tsc -b — самая дорогая часть gate:fast, и именно он краснеет после сломанных типов.",
@@ -81,7 +99,10 @@
       "category": "linter",
       "version": "^9.39.5",
       "pinned_in": "frontend/package.json",
-      "runs_at": ["gate", "ci"],
+      "runs_at": [
+        "gate",
+        "ci"
+      ],
       "blocking": true,
       "last_reviewed": "2026-11-03",
       "rationale": "Вместе с eslint-plugin-boundaries держит правила FSD; без него границы feature режутся молча.",
@@ -94,7 +115,10 @@
       "category": "test-runner",
       "version": "^3.2.7",
       "pinned_in": "frontend/package.json",
-      "runs_at": ["gate", "ci"],
+      "runs_at": [
+        "gate",
+        "ci"
+      ],
       "blocking": true,
       "last_reviewed": "2026-11-03",
       "rationale": "Юниты frontend; в gate входит ярусом full.",
@@ -107,7 +131,9 @@
       "category": "coverage",
       "version": "^3.2.7",
       "pinned_in": "frontend/package.json",
-      "runs_at": ["ci"],
+      "runs_at": [
+        "ci"
+      ],
       "blocking": false,
       "last_reviewed": "2026-11-03",
       "rationale": "report-only: порога coverage у frontend пока нет — блокировать нечего.",
@@ -120,7 +146,10 @@
       "category": "e2e",
       "version": "^1.60.0",
       "pinned_in": "frontend/package.json",
-      "runs_at": ["gate", "ci"],
+      "runs_at": [
+        "gate",
+        "ci"
+      ],
       "blocking": true,
       "last_reviewed": "2026-11-03",
       "rationale": "E2E-канон; отдельный ярус gate:e2e, потому что прогон берёт слот семафора и свой клон БД.",
@@ -131,45 +160,56 @@
       "name": "pytest",
       "repo": "pytest-dev/pytest",
       "category": "test-runner",
-      "version": ">=7.4.0",
-      "pinned_in": "backend/requirements.txt",
-      "runs_at": ["gate", "ci"],
+      "version": "9.1.1",
+      "pinned_in": "backend/requirements-dev.txt",
+      "runs_at": [
+        "gate",
+        "ci"
+      ],
       "blocking": true,
       "last_reviewed": "2026-11-03",
-      "rationale": "Канон backend-тестов; закреплён нижней границей, точный пиннинг — вне этого реестра."
+      "rationale": "Канон backend-тестов; в requirements.txt остаётся нижняя граница, точный пин — в dev-слое (#377)."
     },
     {
       "id": "pytest-xdist",
       "name": "pytest-xdist",
       "repo": "pytest-dev/pytest-xdist",
       "category": "test-runner",
-      "version": ">=3.5.0",
-      "pinned_in": "backend/requirements.txt",
-      "runs_at": ["gate", "ci"],
+      "version": "3.8.0",
+      "pinned_in": "backend/requirements-dev.txt",
+      "runs_at": [
+        "gate",
+        "ci"
+      ],
       "blocking": true,
       "last_reviewed": "2026-11-03",
-      "rationale": "Launcher test-run.ps1 зовёт -n с --dist loadfile; без плагина прогон не стартует."
+      "rationale": "launcher test-run.ps1 зовёт -n с --dist loadfile; без плагина прогон не стартует."
     },
     {
       "id": "pytest-asyncio",
       "name": "pytest-asyncio",
       "repo": "pytest-dev/pytest-asyncio",
       "category": "test-runner",
-      "version": ">=0.21.0",
-      "pinned_in": "backend/requirements.txt",
-      "runs_at": ["gate", "ci"],
+      "version": "1.4.0",
+      "pinned_in": "backend/requirements-dev.txt",
+      "runs_at": [
+        "gate",
+        "ci"
+      ],
       "blocking": true,
       "last_reviewed": "2026-11-03",
-      "rationale": "Все async-тесты backend идут через него."
+      "rationale": "Все async-тесты backend идут через него; версия закреплена в dev-слое."
     },
     {
       "id": "pytest-testmon",
       "name": "pytest-testmon",
       "repo": "tarpas/pytest-testmon",
       "category": "test-runner",
-      "version": ">=2.1.0",
-      "pinned_in": "backend/requirements.txt",
-      "runs_at": ["manual"],
+      "version": "2.2.0",
+      "pinned_in": "backend/requirements-dev.txt",
+      "runs_at": [
+        "manual"
+      ],
       "blocking": false,
       "last_reviewed": "2026-11-03",
       "rationale": "Только test:pytest:mon (--testmon); в гейте и CI не участвует."
@@ -181,7 +221,10 @@
       "category": "migration",
       "version": ">=1.13.0",
       "pinned_in": "backend/requirements.txt",
-      "runs_at": ["ci", "manual"],
+      "runs_at": [
+        "ci",
+        "manual"
+      ],
       "blocking": true,
       "last_reviewed": "2026-11-03",
       "rationale": "alembic check живёт в CI; локально в гейте не запускается — накатывает миграции на живую dev-БД."
@@ -193,7 +236,11 @@
       "category": "database",
       "version": "15-alpine",
       "pinned_in": "infra/compose",
-      "runs_at": ["gate", "ci", "manual"],
+      "runs_at": [
+        "gate",
+        "ci",
+        "manual"
+      ],
       "blocking": true,
       "last_reviewed": "2026-11-03",
       "rationale": "Один образ на dev/test/прод-контейнер; тесты и e2e без него не поднимаются."
@@ -205,7 +252,9 @@
       "category": "dev-tool",
       "version": "^9.1.2",
       "pinned_in": "package.json",
-      "runs_at": ["manual"],
+      "runs_at": [
+        "manual"
+      ],
       "blocking": false,
       "last_reviewed": "2026-11-03",
       "rationale": "npm run dev поднимает стек тремя процессами; к проверкам отношения не имеет.",
@@ -218,7 +267,9 @@
       "category": "dev-tool",
       "version": "^7.0.3",
       "pinned_in": "package.json",
-      "runs_at": ["manual"],
+      "runs_at": [
+        "manual"
+      ],
       "blocking": false,
       "last_reviewed": "2026-11-03",
       "rationale": "Переносит окружение между скриптами на Windows и Linux.",
@@ -231,7 +282,10 @@
       "category": "dev-tool",
       "version": "^8.20.0",
       "pinned_in": "package.json",
-      "runs_at": ["gate", "ci"],
+      "runs_at": [
+        "gate",
+        "ci"
+      ],
       "blocking": true,
       "last_reviewed": "2026-11-03",
       "rationale": "Исполняет tools.schema.json: реестр без валидации схемы — просто текст.",
@@ -244,7 +298,9 @@
       "category": "ci-action",
       "version": "@v4",
       "pinned_in": ".github/workflows",
-      "runs_at": ["ci"],
+      "runs_at": [
+        "ci"
+      ],
       "blocking": true,
       "last_reviewed": "2026-11-03",
       "rationale": "Закреплён во всех шести workflow; тег мажора — это и есть пин."
@@ -256,7 +312,9 @@
       "category": "ci-action",
       "version": "@v4",
       "pinned_in": ".github/workflows",
-      "runs_at": ["ci"],
+      "runs_at": [
+        "ci"
+      ],
       "blocking": true,
       "last_reviewed": "2026-11-03",
       "rationale": "Ставит Node в CI; версию обязан брать из .nvmrc (#362)."
@@ -268,7 +326,9 @@
       "category": "ci-action",
       "version": "@v5",
       "pinned_in": ".github/workflows",
-      "runs_at": ["ci"],
+      "runs_at": [
+        "ci"
+      ],
       "blocking": true,
       "last_reviewed": "2026-11-03",
       "rationale": "Ставит Python в CI; версию обязан брать из .python-version (#362)."
@@ -280,7 +340,9 @@
       "category": "ci-action",
       "version": "@v4",
       "pinned_in": ".github/workflows",
-      "runs_at": ["ci"],
+      "runs_at": [
+        "ci"
+      ],
       "blocking": false,
       "last_reviewed": "2026-11-03",
       "rationale": "Отчёты Playwright; падение шага артефактов не отменяет вердикт теста."
