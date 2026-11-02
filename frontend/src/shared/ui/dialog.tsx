@@ -38,6 +38,17 @@ const DialogOverlay = React.forwardRef<
 ))
 DialogOverlay.displayName = DialogPrimitive.Overlay.displayName
 
+/**
+ * Потолок высоты и внутренняя прокрутка — в базовом наборе (ADR-0033).
+ *
+ * На телефоне окно без потолка уходит нижним краем за экран, а прокрутить
+ * страницу под ним нельзя: Radix блокирует прокрутку `body`. Поэтому
+ * `max-h-[calc(100dvh-2rem)]` (экран минус поля) и `overflow-y-auto` стоят
+ * здесь, а не в каждом окне. `cn` = `clsx` + `tailwind-merge`: окно,
+ * которому нужен другой потолок (`max-h-screen` у шторки, `DIALOG_SIZES`,
+ * собственное `overflow-hidden` с прокруткой внутри), перекрывает их своими
+ * классами — инлайновый стиль так перекрыть было бы нельзя.
+ */
 const DialogContent = React.forwardRef<
   React.ElementRef<typeof DialogPrimitive.Content>,
   React.ComponentPropsWithoutRef<typeof DialogPrimitive.Content>
@@ -77,7 +88,7 @@ const DialogContent = React.forwardRef<
       <DialogPrimitive.Content
         ref={attachContent}
         className={cn(
-          "fixed left-[50%] top-[50%] z-50 grid w-auto translate-x-[-50%] translate-y-[-50%] gap-4 border bg-background p-6 shadow-lg sm:rounded-lg",
+          "fixed left-[50%] top-[50%] z-50 grid w-auto translate-x-[-50%] translate-y-[-50%] gap-4 border bg-background p-6 shadow-lg sm:rounded-lg max-h-[calc(100dvh-2rem)] overflow-y-auto",
           className
         )}
         {...rest}

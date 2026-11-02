@@ -1,5 +1,7 @@
 import { Badge, Button, Dialog, DialogContent, DialogDescription, DialogHeader, DialogTitle } from "@/shared/ui";
 import { bulkStatusLabels } from "@/shared/lib/generated-labels";
+import { DIALOG_SIZES } from "@/shared/lib/dialogSizes";
+import { cn } from "@/shared/utils/cn";
 import type { BulkActionResultItem, BulkActionSummary } from "./bulkRunner";
 import type { BulkId } from "./selection";
 
@@ -20,7 +22,7 @@ export function BulkResultsDialog<TId extends BulkId>({
 }: BulkResultsDialogProps<TId>) {
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>
-      <DialogContent className="sm:max-w-[560px]">
+      <DialogContent className={cn(DIALOG_SIZES.md.width, DIALOG_SIZES.md.height)}>
         <DialogHeader>
           <DialogTitle>{title}</DialogTitle>
           <DialogDescription>
