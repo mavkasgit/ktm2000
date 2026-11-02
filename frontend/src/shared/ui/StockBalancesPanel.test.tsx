@@ -176,7 +176,8 @@ describe("StockBalancesPanel: порядок по умолчанию", () => {
   }
 
   function sortRequested(): string | undefined {
-    return vi.mocked(getStockBalances).mock.calls.at(-1)?.[0]?.sort;
+    const calls = vi.mocked(getStockBalances).mock.calls;
+    return calls[calls.length - 1]?.[0]?.sort;
   }
 
   beforeEach(() => {
