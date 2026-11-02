@@ -23,7 +23,7 @@ from app.models.transfer import Transfer, TransferDiscrepancy
 from app.models.work_task import WorkTask
 from app.stock.import_models import StockImportBatch
 from app.stock.models import StockBalance, StockTransaction
-from app.services.import_storage import schedule_import_file_purge
+from app.services.import_storage import pinned_rows_clause, schedule_import_file_purge
 
 
 async def clear_generated_production_data(db: AsyncSession) -> dict[str, int]:
@@ -68,11 +68,19 @@ async def clear_generated_production_data(db: AsyncSession) -> dict[str, int]:
     # строки, пережившие очистку (например, под батчами остатков), остаются
     # со своими файлами. Стирание байтов — на коммите вызывающей транзакции
     # (слушатель ``import_storage``), поэтому откат сида ничего не теряет.
+    #
+    # Защищённые оригиналы (#288 п.6, «План февраль 26 02») из-под очистки
+    # ИСКЛЮЧЕНЫ: батча под ними нет, но это единственный экземпляр исходного
+    # плана заказчика — запись (а значит и байты по правилу «записи нет — файла
+    # нет») не сносим. Запись держит этот предикат, байты дополнительно сторожит
+    # ``_purge_reported_paths``.
+    not_pinned = ~pinned_rows_clause()
     doomed_paths = (
         await db.execute(
             select(ImportFile.stored_path).where(
                 ~exists().where(ImportBatch.source_file_id == ImportFile.id),
                 ~exists().where(StockImportBatch.file_id == ImportFile.id),
+                not_pinned,
             )
         )
     ).scalars().all()
@@ -81,6 +89,7 @@ async def clear_generated_production_data(db: AsyncSession) -> dict[str, int]:
         delete(ImportFile).where(
             ~exists().where(ImportBatch.source_file_id == ImportFile.id),
             ~exists().where(StockImportBatch.file_id == ImportFile.id),
+            not_pinned,
         )
     )
     deleted["orphan_import_files"] = result.rowcount or 0

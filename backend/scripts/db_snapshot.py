@@ -22,6 +22,11 @@ import sys
 from datetime import datetime
 from pathlib import Path
 
+# app.services.import_pinned — лист-константа без зависимостей от settings/ORM
+# (см. файл), поэтому импорт лёгкий и не тянет конфигурацию приложения.
+sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
+from app.services.import_pinned import is_pinned_stored_path  # noqa: E402
+
 ROOT = Path(__file__).resolve().parents[2]
 ENV_FILE = ROOT / ".env.dev"
 SNAPSHOT_DIR = ROOT / "data" / "backups" / "snapshots"
@@ -141,9 +146,15 @@ def _purge_wiped_import_files(before: set[str], after: set[str]) -> list[str]:
     ссылается восстановленная база, не трогаются никогда; файлы без записи,
     но чьей записи не было и до restore (исторические сироты), остаются на
     усмотрение планировщика уборки — скрипт не подменяет её суточный порог.
+
+    Защищённые оригиналы (#288 п.6, «План февраль 26 02») не удаляются даже
+    если их записи не было в слепке: единственный экземпляр исходного плана
+    заказчика, запись ему вернёт штатный db:seed.
     """
     removed: list[str] = []
     for raw in sorted(before - after):
+        if is_pinned_stored_path(raw):
+            continue
         path = Path(raw)
         try:
             path.unlink(missing_ok=True)

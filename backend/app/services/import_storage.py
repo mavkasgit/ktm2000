@@ -23,6 +23,7 @@
 from __future__ import annotations
 
 import asyncio
+import hashlib
 import logging
 import os
 from collections.abc import Iterable
@@ -30,12 +31,17 @@ from datetime import UTC, datetime, timedelta
 from pathlib import Path
 from typing import Any
 
-from sqlalchemy import event, select
+from sqlalchemy import event, false, or_, select
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import Session as SyncSession
 
 from app.core.config import settings
 from app.models.imports import ImportFile
+from app.services.import_pinned import (
+    PINNED_IMPORT_ORIGINALS,
+    PINNED_SHA_PREFIXES,
+    is_pinned_stored_path,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -100,7 +106,18 @@ def remove_import_files_sync(paths: Iterable[str]) -> tuple[list[str], list[str]
 def _purge_reported_paths(paths: set[str], origin: str) -> None:
     if not paths:
         return
-    removed, failed = remove_import_files_sync(paths)
+    # #288 п.6: защищённые оригиналы (лист «План февраль 26 02») не удаёт ни
+    # одна автоматическая ветка — seeder/«Очистить»/TRUNCATE/snapshot-restore.
+    # Запись им вернёт штатный db:seed; байты — единственный экземпляр #279.
+    purgeable = {path for path in paths if not is_pinned_stored_path(path)}
+    skipped = len(paths) - len(purgeable)
+    if skipped:
+        logger.info(
+            "#288 %s: защищённых оригиналов не тронуто: %d", origin, skipped
+        )
+    if not purgeable:
+        return
+    removed, failed = remove_import_files_sync(purgeable)
     logger.info(
         "#288 %s: удалено импорт-файлов без записи: %d; сбоев: %d; список: %s",
         origin,
@@ -146,6 +163,9 @@ class SweepReport:
         self.kept_young: list[str] = []
         #: Файлы под живыми записями — не удаляются ни при каком возрасте.
         self.kept_recorded: int = 0
+        #: Защищённые оригиналы (#288 п.6) — не удаляются ни при каком возрасте
+        #: и ни при каком наличии записи.
+        self.kept_pinned: int = 0
         #: Сбои unlink (файл держит открытое скачивание и т.п.) — добирает
         #: следующий проход sweep после порога.
         self.failed: list[str] = []
@@ -156,6 +176,7 @@ class SweepReport:
             "removed": list(self.removed),
             "kept_young": list(self.kept_young),
             "kept_recorded": self.kept_recorded,
+            "kept_pinned": self.kept_pinned,
             "failed": list(self.failed),
         }
 
@@ -163,7 +184,7 @@ class SweepReport:
         return (
             f"scanned={self.scanned} removed={len(self.removed)} "
             f"kept_young={len(self.kept_young)} kept_recorded={self.kept_recorded} "
-            f"failed={len(self.failed)}"
+            f"kept_pinned={self.kept_pinned} failed={len(self.failed)}"
         )
 
 
@@ -216,6 +237,11 @@ async def sweep_orphan_import_files(
     orphan_candidates: list[str] = []
     for entry in files:
         report.scanned += 1
+        # Защищённый оригинал (#288 п.6) не удаляется уборкой никогда — даже
+        # если строка import_files под ним по какой-то причине пропала.
+        if is_pinned_stored_path(entry):
+            report.kept_pinned += 1
+            continue
         if _normalize_path(entry) in recorded_norm:
             # Живой импорт: «запись есть — файл скачивается всегда».
             report.kept_recorded += 1
@@ -244,3 +270,91 @@ async def sweep_orphan_import_files(
             "; ".join(removed),
         )
     return report
+
+
+def pinned_rows_clause():
+    """SQL-условие «строка import_files — защищённый оригинал» (#288 п.6).
+
+    Возвращает ``OR(file_sha256 LIKE 'префикс%', …)``. Точки массового стирания
+    строк (cleanup-сидер) обязаны добавлять ``~pinned_rows_clause()``, чтобы не
+    снести запись единственного экземпляра; байты дополнительно сторожит
+    :func:`_purge_reported_paths`.
+    """
+    if not PINNED_SHA_PREFIXES:
+        return false()
+    return or_(*[ImportFile.file_sha256.like(f"{prefix}%") for prefix in PINNED_SHA_PREFIXES])
+
+
+def _pinned_content_type(extension: str) -> str:
+    return {
+        ".xls": "application/vnd.ms-excel",
+        ".xlsx": "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+    }.get(extension.lower(), "application/octet-stream")
+
+
+async def restore_pinned_import_records(
+    db: AsyncSession,
+) -> list[ImportFile]:
+    """Вернуть запись ``import_files`` защищённым оригиналам с диска (#288 п.6).
+
+    Идемпотентно и безопасно на чужих машинах: файл заказчика лежит только в
+    dev-хранилище владельца, поэтому если файла на диске нет — функция молча
+    пропускает (не создаёт битую запись в никуда). Если строка под файлом уже
+    есть — тоже ничего не делает. Возвращает список СОЗДАННЫХ строк.
+
+    Вызывается штатным ``db:seed`` (``run_full_seed``) после cleanup-шага:
+    «db:seed --force»/snapshot-restore могли стереть запись, а байты
+    защищённого оригинала не трогались — здесь запись возвращается, и «Скачать»
+    снова работает по ``file_id``, а не перебором каталога.
+    """
+    # Ленивый импорт: excel_import — парсер, он не нужен на пути обычной
+    # уборки/purge, и так избегаем любого порядка импорта при регистрации
+    # слушателей в main.lifespan.
+    from app.services.excel_import import detect_workbook_format, validate_excel_extension
+
+    storage_dir = Path(settings.IMPORT_STORAGE_DIR)
+    created: list[ImportFile] = []
+    for prefix, _declared_ext, display_name in PINNED_IMPORT_ORIGINALS:
+        existing = (
+            await db.execute(
+                select(ImportFile).where(ImportFile.file_sha256.like(f"{prefix}%"))
+            )
+        ).scalars().first()
+        if existing is not None:
+            continue
+        if not storage_dir.is_dir():
+            continue
+        match = next(
+            (p for p in storage_dir.glob(f"{prefix}*") if p.is_file()), None
+        )
+        if match is None:
+            # Файла на этой машине нет — нечего и возвращать.
+            continue
+        content = await asyncio.to_thread(match.read_bytes)
+        # Имя файла на диске — полный sha256 содержимого (так его пишет
+        # ``_get_or_create_import_file``). Берём sha из имени, сверяя с
+        # фактическим содержимым: при расхождении доверяем имени (оно и есть
+        # канонический ключ хранилища), иначе дедуп по хешу разъедется с файлом.
+        stem_sha = match.stem.lower()
+        actual_sha = hashlib.sha256(content).hexdigest()
+        file_sha256 = stem_sha if stem_sha.startswith(prefix) else actual_sha
+        extension = validate_excel_extension(display_name)
+        import_file = ImportFile(
+            original_filename=display_name,
+            stored_path=str(match),
+            content_type=_pinned_content_type(extension),
+            file_extension=extension,
+            detected_format=detect_workbook_format(content, display_name),
+            file_sha256=file_sha256,
+            size_bytes=len(content),
+        )
+        db.add(import_file)
+        created.append(import_file)
+    if created:
+        await db.flush()
+        logger.info(
+            "#288: возвращено записей защищённых оригиналов: %d (%s)",
+            len(created),
+            "; ".join(f.original_filename for f in created),
+        )
+    return created

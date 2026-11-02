@@ -20,6 +20,7 @@ from app.seeds.seeders.sections_seeder import seed_section_operations, seed_sect
 from app.seeds.seeders.selection_rules_seeder import seed_selection_rules
 from app.seeds.seeders.spgs_seeder import seed_spgs
 from app.seeds.seeders.users_seeder import seed_users
+from app.services.import_storage import restore_pinned_import_records
 
 
 async def run_full_seed(
@@ -123,5 +124,13 @@ async def run_full_seed(
             raise RuntimeError(f"Profile '{pcode}' not found for selection rules")
         total_rules += await seed_selection_rules(db, profile_rules, target_profile, sections_map)
     result["selection_rules"] = total_rules
+
+    # #288 п.6: вернуть запись защищённым оригиналам с диска (лист «План
+    # февраль 26 02»). Идемпотентно и тихо, если файла на этой машине нет
+    # (данные заказчика вне git). Держим в конце: cleanup выше мог стереть
+    # запись, а байты защищённого оригинала не трогались.
+    result["pinned_import_files_restored"] = len(
+        await restore_pinned_import_records(db)
+    )
 
     return result
