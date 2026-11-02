@@ -42,6 +42,7 @@ import {
   isServerSortField,
   type TaskSortField,
 } from "../lib/boardQueryParams";
+import { toggleSelectionOnRowKey } from "../lib/boardRowKeydown";
 import { groupTasksByProfile, sortGroupsByQuantityAndSize, taskGroupingDimensions } from "../lib/groupTasksByProfile";
 import { clusterByArticle } from "@/shared/lib/clusterByArticle";
 import type { GroupingProfile } from "../lib/groupingProfiles";
@@ -326,13 +327,7 @@ function renderTaskRow(
       }}
       onKeyDown={(event) => {
         if (!bulkMode || !bulkSelection) return;
-        // Клавиши строки не перехватывают то, что нажато в её кнопке или поле:
-        // Enter на кнопке «Завершить» обязан открыть диалог, а не переключить
-        // выделение.
-        if (event.target !== event.currentTarget) return;
-        if (event.key !== "Enter" && event.key !== " ") return;
-        event.preventDefault();
-        bulkSelection.selectOne(task.id);
+        toggleSelectionOnRowKey(event, () => bulkSelection.selectOne(task.id));
       }}
     >
       <td className={cn(cellClass, getTaskStripeClass(task), "relative text-center")}>
@@ -442,13 +437,7 @@ function renderMobileCard(
       }}
       onKeyDown={(event) => {
         if (!bulkMode || !bulkSelection) return;
-        // Клавиши строки не перехватывают то, что нажато в её кнопке или поле:
-        // Enter на кнопке «Завершить» обязан открыть диалог, а не переключить
-        // выделение.
-        if (event.target !== event.currentTarget) return;
-        if (event.key !== "Enter" && event.key !== " ") return;
-        event.preventDefault();
-        bulkSelection.selectOne(task.id);
+        toggleSelectionOnRowKey(event, () => bulkSelection.selectOne(task.id));
       }}
     >
       <div className="flex items-center justify-between gap-2">
@@ -578,10 +567,7 @@ function TableTaskGroupRow({
       }}
       onKeyDown={(event) => {
         if (!isBulkMode) return;
-        if (event.target !== event.currentTarget) return;
-        if (event.key !== "Enter" && event.key !== " ") return;
-        event.preventDefault();
-        onSelectGroup();
+        toggleSelectionOnRowKey(event, onSelectGroup);
       }}
     >
       <td className={cn(headerCellClass, railClass, "relative text-center")}>
@@ -1129,12 +1115,6 @@ export function SectionTasksBoard({
     }
   };
 
-  /**
-   * Значение группового поля выводится из строк, а не хранится отдельно: так
-   * набранное и разложенное не расходятся, и правка отдельной строки видна в
-   * шапке. Пусто во всех строках — поле показывает плейсхолдер с записанным
-   * фактом.
-   */
   /** Значение поля группы: набранное, пока оно не разложено, иначе — из строк. */
   const groupFieldValue = (
     tasks: SectionBoardTask[],
