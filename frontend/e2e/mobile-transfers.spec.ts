@@ -11,6 +11,13 @@ import {
   apiSeedData,
 } from "./api-helpers";
 import { MOBILE_USE } from "./mobile-project.mjs";
+import {
+  dragTable,
+  expectInsideViewport,
+  readScrollLeft,
+  scrollMetrics,
+  tableScroller,
+} from "./mobile-table-helpers";
 
 /**
  * @mobile — «Передачи» с телефона.
@@ -42,49 +49,12 @@ import { MOBILE_USE } from "./mobile-project.mjs";
  * БД выдаёт обёртка прогона.
  */
 
-const VIEWPORT_WIDTH = MOBILE_USE.viewport.width;
-
-/**
- * Скролл-контейнер готовой таблицы. Атрибут ставит общий примитив
- * `MobileScrollTable` — им же будет пользоваться доска участка (#345).
- */
-function readyScroller(page: Page) {
-  return page.locator("[data-mobile-scroll-table]").first();
-}
-
 /** Готовая таблица: из двух таблиц её выдаёт колонка «К передаче». */
 function readyTable(page: Page) {
   return page
     .locator("table")
     .filter({ has: page.getByRole("columnheader").filter({ hasText: "К передаче" }) })
     .first();
-}
-
-/**
- * Закреплённая ячейка обязана быть целиком в кадре телефона: половина
- * «Артикула» под краем — это та же недоступная колонка, что и до #343.
- * Допуск 0,5px — субпиксельная раскладка.
- */
-function expectInsideViewport(box: { x: number; width: number } | null, what: string) {
-  expect(box, `${what}: геометрия посчитана (элемент отрисован)`).not.toBeNull();
-  const { x, width } = box as { x: number; width: number };
-  expect(x, `${what}: левый край в кадре`).toBeGreaterThanOrEqual(-0.5);
-  expect(x + width, `${what}: правый край в кадре`).toBeLessThanOrEqual(VIEWPORT_WIDTH + 0.5);
-}
-
-/**
- * Перетаскивание мышью: браузер сам не листает overflow-контейнер мышью,
- * поэтому это ровно тот жест, который реализует примитив. Шаги дробим, чтобы
- * порог жеста (8px) был пройден не одним прыжком, как у настоящей руки.
- */
-async function dragTable(page: Page, fromX: number, y: number, dx: number) {
-  const steps = 12;
-  await page.mouse.move(fromX, y);
-  await page.mouse.down();
-  for (let i = 1; i <= steps; i += 1) {
-    await page.mouse.move(fromX + (dx * i) / steps, y);
-  }
-  await page.mouse.up();
 }
 
 /**
@@ -189,12 +159,9 @@ test.describe("@mobile Передачи на телефоне: закреплё�
     // 7. Таблица шире окна телефона — свайпу есть что прокручивать. Без
     //    минимальной ширины семь колонок сжимались в 320px и переполнения не
     //    возникало вовсе.
-    const scroller = readyScroller(page);
+    const scroller = tableScroller(page);
     await expect(scroller).toBeVisible();
-    const metrics = await scroller.evaluate((el) => ({
-      scrollWidth: el.scrollWidth,
-      clientWidth: el.clientWidth,
-    }));
+    const metrics = await scrollMetrics(scroller);
     expect(metrics.scrollWidth, "таблица шире окна — есть что листать").toBeGreaterThan(
       metrics.clientWidth,
     );
@@ -237,12 +204,12 @@ test.describe("@mobile Передачи на телефоне: закреплё�
     const dragFromX = gapRight - gapLeft >= 4 ? (gapLeft + gapRight) / 2 : actions.x + 8;
     const dragY = profile.y + profile.height / 2;
 
-    const scrollLeftBefore = await scroller.evaluate((el) => el.scrollLeft);
+    const scrollLeftBefore = await readScrollLeft(scroller);
     expect(scrollLeftBefore, "до жеста таблица не прокручена").toBe(0);
 
     await dragTable(page, dragFromX, dragY, -120);
 
-    const scrollLeftAfter = await scroller.evaluate((el) => el.scrollLeft);
+    const scrollLeftAfter = await readScrollLeft(scroller);
     expect(scrollLeftAfter, "перетаскивание мышью прокручивает таблицу влево").toBeGreaterThan(
       50,
     );

@@ -115,3 +115,44 @@ export const boardColumns: BoardColumn[] = [
 export function visibleBoardColumns(hasPackaging: boolean | undefined): BoardColumn[] {
   return boardColumns.filter((column) => !column.requiresPackaging || hasPackaging !== false);
 }
+
+/**
+ * Порядок колонок на телефоне (#345): то, что оператор должен видеть, не
+ * уводя таблицу вбок, — первым, вторичное — дальше по свайпу.
+ *
+ * «SKU/профиль» закреплён слева, «Действия» — справа (правит раскладка), но
+ * между ними порядок тоже несёт смысл: размер, остаток и план, затем поля
+ * «Годные»/«Брак» — это работа оператора в строке. Операция, упаковка,
+ * «Выдано»/«Передано» и статус-пилюля читаются реже и уезжают вправо.
+ * Точка статуса стоит последней: цвет строки уже несёт полоса у профиля.
+ */
+const MOBILE_COLUMN_ORDER = [
+  "productSku",
+  "dimensions",
+  "remainingQty",
+  "plannedQty",
+  "completedQty",
+  "rejectedQty",
+  "actions",
+  "issuedQty",
+  "transferredQty",
+  "status",
+  "operation",
+  "packaging",
+  "statusDot",
+] as const;
+
+/**
+ * Колонки телефонной таблицы: тот же набор описаний, что у десктопа (фильтр,
+ * сортировка и подпись значений не переписываются), но в порядке оператора.
+ * «Упаковка» прячется тем же признаком участка, что и в шапке десктопа.
+ */
+export function mobileBoardColumns(hasPackaging: boolean | undefined): BoardColumn[] {
+  const byId = new Map(boardColumns.map((column) => [column.id, column]));
+  return MOBILE_COLUMN_ORDER.flatMap((id) => {
+    const column = byId.get(id);
+    if (!column) return [];
+    if (column.requiresPackaging && hasPackaging === false) return [];
+    return [column];
+  });
+}

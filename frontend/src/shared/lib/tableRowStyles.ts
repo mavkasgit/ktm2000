@@ -8,7 +8,6 @@ export const TABLE_ROW_STYLES = {
   defaultGroupRow: "hover:bg-accent/40 hover:outline hover:outline-1 hover:outline-ring/20",
   defaultGroupHeader:
     "bg-slate-100/70 hover:bg-slate-100 hover:outline hover:outline-1 hover:outline-slate-200 dark:bg-slate-800/50 dark:hover:bg-slate-800/80 dark:outline-slate-700",
-  defaultGroupContainer: "bg-slate-50/30 dark:bg-slate-900/30",
 
   // Раскрытая группа на доске: строки внутри блока связаны, блоки разделены.
   // Внутренний разделитель тише обычного `border-b`, низ блока — заметнее:
@@ -35,7 +34,6 @@ export const TABLE_ROW_STYLES = {
 
   // Selected rows (bulk)
   selectedRow: "bg-blue-100 ring-1 ring-blue-300 hover:bg-blue-200/80",
-  selectedMobileCard: "bg-blue-100 border border-blue-300",
 
   // Selected group header
   selectedGroupHeader: "bg-blue-100/90 hover:bg-blue-200/70",
