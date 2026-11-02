@@ -2,8 +2,8 @@
  * components/TaskView.tsx — раскладки представления задания.
  *
  * Тон, цвет точки, поля задания и состояние шапки группы считаются в
- * `lib/taskView`; здесь они раскладываются в узлы: строка таблицы и карточка
- * узкого экрана берут одни и те же данные.
+ * `lib/taskView`; здесь они раскладываются в узлы строки таблицы. Таблица одна
+ * на оба экрана (#345): на телефоне меняется только набор и порядок колонок.
  */
 
 import type { ReactNode } from "react";
@@ -17,7 +17,6 @@ import { taskGroupingDimensions } from "../lib/groupTasksByProfile";
 import { getTaskRowState } from "../lib/taskStatus";
 import { getGroupTone, taskOperations, taskPackaging } from "../lib/taskView";
 import {
-  ROW_TONE_CARD,
   ROW_TONE_GROUP_RAIL,
   ROW_TONE_STRIPE,
   ROW_TONE_TEXT,
@@ -70,13 +69,7 @@ export function getTaskRowClass(
   return `${rowToneFill(tone)} ${ROW_TONE_TEXT[tone]} transition-colors`;
 }
 
-/** Классы карточки узкого экрана: тот же тон задания, что и у строки. */
-export function getTaskCardClass(task: SectionBoardTask, isSelected: boolean): string {
-  if (isSelected) return TABLE_ROW_STYLES.selectedMobileCard;
-  return ROW_TONE_CARD[getTaskRowState(task).tone];
-}
-
-/** Точка статуса задания — одна на доску и карточку. */
+/** Точка статуса задания — одна на всю доску. */
 export function TaskStatusDot({ task }: { task: SectionBoardTask }) {
   const { dotClass, label } = getTaskRowState(task);
   return (
@@ -100,17 +93,15 @@ export type TaskViewFieldKey =
 
 export type TaskViewField = {
   key: TaskViewFieldKey;
-  /** Подпись поля: в строке она живёт в шапке таблицы, в карточке — рядом со значением. */
-  label: string;
   node: ReactNode;
-  /** Классы ячейки строки; карточка их игнорирует. */
+  /** Классы ячейки строки. */
   cellClass?: string;
 };
 
 /**
  * Поля задания в порядке колонок доски. Строка разворачивает список в ячейки,
- * карточка — в подписи со значениями, поэтому новое поле добавляется здесь
- * одно, а не в двух раскладках.
+ * подпись печатает шапка таблицы, поэтому новое поле добавляется здесь одно,
+ * а не в двух местах.
  *
  * `hasPackaging` — есть ли у участка упаковочные операции (`Section.has_packaging`).
  * Поле «Упаковка» живёт здесь наравне с колонкой доски (`requiresPackaging` в
@@ -125,13 +116,11 @@ export function buildTaskViewFields(
   const fields: TaskViewField[] = [
     {
       key: "dimensions",
-      label: "Размер",
       node: formatDimensionsLabel(taskGroupingDimensions(task)),
       cellClass: "text-xs text-muted-foreground",
     },
     {
       key: "operation",
-      label: "Операция",
       // Трансформирующий этап (ADR-0002, пила) несёт в ячейке размеры —
       // вход и выходы раскроя (ADR-0058). Нетрансформирующая строка оставляет
       // операции участка списком: на анодировании это цвет, он и есть операция
@@ -149,15 +138,14 @@ export function buildTaskViewFields(
     },
     {
       key: "packaging",
-      label: "Упаковка",
       node: <span className="text-xs">{taskPackaging(task) ?? "—"}</span>,
     },
-    { key: "planned", label: "План", node: fmtQty(task.planned_quantity) },
-    { key: "issued", label: "Выдано", node: fmtQty(task.cache.issued_quantity) },
-    { key: "completed", label: "Годные", node: fmtQty(task.cache.completed_quantity) },
-    { key: "rejected", label: "Брак", node: fmtQty(task.cache.rejected_quantity) },
-    { key: "transferred", label: "Передано", node: fmtQty(task.cache.transferred_quantity) },
-    { key: "remaining", label: "Остаток", node: fmtQty(task.cache.remaining_quantity) },
+    { key: "planned", node: fmtQty(task.planned_quantity) },
+    { key: "issued", node: fmtQty(task.cache.issued_quantity) },
+    { key: "completed", node: fmtQty(task.cache.completed_quantity) },
+    { key: "rejected", node: fmtQty(task.cache.rejected_quantity) },
+    { key: "transferred", node: fmtQty(task.cache.transferred_quantity) },
+    { key: "remaining", node: fmtQty(task.cache.remaining_quantity) },
   ];
   return hasPackaging === false
     ? fields.filter((field) => field.key !== "packaging")

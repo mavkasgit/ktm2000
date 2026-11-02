@@ -104,9 +104,9 @@ function Harness({ tasks }: { tasks: SectionBoardTask[] }) {
 }
 
 /**
- * Десктопная таблица доски. Запросы идут только по ней: узкий экран рисуется
- * вторым деревом (карточки) в том же DOM, и одинаковые подписи полей были бы
- * неразличимы.
+ * Таблица доски на десктопной ширине. Запросы идут только по ней: тесты
+ * массового ввода намеренно не меняют ширину, а телефонная раскладка той же
+ * строки проверена `SectionTasksBoard.mobileTable.test.tsx`.
  */
 function desktop(): HTMLElement {
   const table = document.querySelector("table");
@@ -399,25 +399,25 @@ describe("SectionTasksBoard: отбор строки в статусе «ожи�
 });
 
 /**
- * Одно правило клавиатуры на строку таблицы, карточку узкого экрана и шапку
- * группы (#283, ревью п. 5): Enter и пробел — тумблер выделения, клавиша из
- * поля внутри строки — не тумблер.
+ * Одно правило клавиатуры на строку таблицы (оба экрана — одна таблица, #345)
+ * и шапку группы (#283, ревью п. 5): Enter и пробел — тумблер выделения,
+ * клавиша из поля внутри строки — не тумблер.
  */
-describe("SectionTasksBoard: клавиатура выбора на всех трёх носителях", () => {
-  // Мобильная ветка рендерится только на узкой ширине; ширина ставится тестом
-  // перед `render`, здесь — снимается.
+describe("SectionTasksBoard: клавиатура выбора на строке таблицы и шапке группы", () => {
+  // Узкая ширина меняет набор колонок, но не носитель строки; ширина
+  // ставится тестом перед `render`, здесь — снимается.
   afterEach(() => {
     vi.restoreAllMocks();
   });
 
-  it("пробел на карточке узкого экрана выделяет её", () => {
+  it("пробел на строке узкого экрана выделяет её", () => {
     stubViewportWidth(375);
     render(<Harness tasks={[makeTask({ id: 1, product_sku: "SKU-A" })]} />);
 
-    const card = document.querySelector('div[data-task-id="1"]') as HTMLElement;
-    fireEvent.keyDown(card, { key: " " });
+    const row = document.querySelector('tr[data-task-id="1"]') as HTMLElement;
+    fireEvent.keyDown(row, { key: " " });
 
-    expect(within(card).getByLabelText("SKU-A: годные")).toBeTruthy();
+    expect(within(row).getByLabelText("SKU-A: годные")).toBeTruthy();
   });
 
   it("Enter на шапке группы выбирает группу целиком", () => {
