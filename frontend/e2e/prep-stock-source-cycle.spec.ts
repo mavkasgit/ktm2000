@@ -91,9 +91,16 @@ type TxRow = {
   dimensions: Record<string, unknown> | null;
   reason: string;
   source_ref: string | null;
+  // Шаг 5 проверяет привязку приёма к заданию (`receives[0].task_id`); поле
+  // отдаёт сервер (`StockTransactionOut.task_id`), в локальном типе его не
+  // было — TS2339 на `tsc -p tsconfig.e2e.json` (#371).
+  task_id: number | null;
 };
 
 type BalanceRow = {
+  // Строка остатка читается по id (`takeToWorkFromPrepStockViaUI(..., prepBalance.id)`
+  // и лог шага 2): `StockBalanceOut.id` есть на сервере, в типе его не было.
+  id: number;
   product_id: number;
   location_id: number;
   quality_state: string;

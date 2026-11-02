@@ -518,17 +518,39 @@ export async function apiGetAllPlanPositions() {
 }
 
 /**
+ * Строка остатка из `GET /api/stock/balance/by-product/{id}`.
+ *
+ * Поля — ровно `backend/app/stock/api.py::StockBalanceOut` (канон e2e: форму
+ * ответа типизировать из контракта сервера, а не оставлять `any`): `res.json()`
+ * без типа давал `any`, и `b.id` / `b.location_id` в спеках не проверялись
+ * совсем. `quantity` на выводе — строка Decimal, поэтому `balance_qty: string`.
+ */
+export type StockBalanceRow = {
+  id: number;
+  product_id: number;
+  product_sku?: string | null;
+  location_id: number;
+  location_name?: string | null;
+  quality_state: string;
+  balance_qty: string;
+  dimensions?: Record<string, unknown> | null;
+  dimensions_label?: string;
+  completed_operations?: string[] | null;
+  refreshed_at?: string | null;
+};
+
+/**
  * @ui — снимок остатков артикула для проверок «скрытие ничего не двигает»
  * (#233): список строк баланса по всем локациям, как его отдаёт API.
  */
-export async function apiGetStockBalances(productId: number) {
+export async function apiGetStockBalances(productId: number): Promise<StockBalanceRow[]> {
   const res = await fetch(`${BACKEND_URL}/api/stock/balance/by-product/${productId}`, {
     headers: await authHeaders(),
   });
   if (!res.ok) {
     throw new Error(`Get stock balances failed: ${res.statusText} (${res.status})`);
   }
-  return res.json();
+  return (await res.json()) as StockBalanceRow[];
 }
 
 export async function apiGetActiveRoutes() {
@@ -591,7 +613,12 @@ export async function apiGetSectionByCode(code: string) {
   if (!res.ok) {
     throw new Error(`Get sections failed: ${res.statusText} (${res.status})`);
   }
-  const sections = unwrapItems<{ id: number; code: string }>(await res.json());
+  // Тип объявлен с `name`, потому что `stock-import-history.spec.ts` печатает
+  // имя участка в столбец «Участок» TSV-буфера (`raw.name`): серверное поле
+  // есть (`backend/app/api/routes/sections.py::SectionOut.name`), а в локальном
+  // типе его не было — `tsc -p tsconfig.e2e.json` красил TS2339. Раньше поле
+  // просто не проверялось типами.
+  const sections = unwrapItems<{ id: number; code: string; name: string }>(await res.json());
   const section = sections.find((s) => s.code === code);
   if (!section) {
     throw new Error(`Section not found with code: ${code}`);
