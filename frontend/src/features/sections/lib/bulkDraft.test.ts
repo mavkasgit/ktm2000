@@ -27,9 +27,12 @@ import {
   EMPTY_DRAFT_QTY,
   distributeSequential,
   isDraftEmpty,
+  resolveBulkConfirmReason,
   taskFactCeiling,
   withDraftField,
   withoutDraftIds,
+  type BulkDraft,
+  type DraftShortage,
 } from "./bulkDraft";
 
 /** Запись по колонке в тестах: порция при записанном факте 0. */
@@ -359,5 +362,69 @@ describe("bulkDraft: два режима ввода факта", () => {
 
     expect(draftTotals([task], withDraftField({}, 1, "good", "500")).good).toBe(100);
     expect(draftTotals([task], withDraftField({}, 1, "good", "+500")).good).toBe(500);
+  });
+});
+
+/**
+ * Причина недоступности подтверждения (#283, ревью п. 4). Набранное, которое
+ * даёт нулевую порцию, — не то же самое, что пустой черновик и не то же самое,
+ * что «завершать нечего»: оператор ввёл число и ждёт, что футер скажет, почему
+ * оно не уедет.
+ */
+describe("bulkDraft: причина недоступности подтверждения", () => {
+  const reason = (
+    tasks: SectionBoardTask[],
+    draft: BulkDraft,
+    options: { shortage?: DraftShortage | null; strategy?: boolean } = {},
+  ) =>
+    resolveBulkConfirmReason({
+      tasks,
+      draft,
+      shortage: options.shortage ?? null,
+      hasShortageStrategy: options.strategy ?? false,
+    });
+
+  it("набрано «+0» — нулевая порция, а не «нет заданий для завершения»", () => {
+    const tasks = [makeTask({ id: 1 })];
+
+    expect(reason(tasks, withDraftField({}, 1, "good", "+0"))).toBe("bulk_zero_quantity");
+  });
+
+  it("цель совпала с записанным — та же нулевая порция", () => {
+    const task = makeTask({
+      id: 1,
+      cache: { ...makeTask().cache, issued_quantity: "10", completed_quantity: "4" },
+    });
+
+    expect(reason([task], withDraftField({}, 1, "good", "4"))).toBe("bulk_zero_quantity");
+  });
+
+  it("ввода нет вовсе — «введите количество»", () => {
+    expect(reason([makeTask({ id: 1 })], {})).toBe("bulk_no_quantity");
+  });
+
+  it("ввод есть у незавершаемого задания — «нет заданий для завершения»", () => {
+    const tasks = [makeTask({ id: 1, status: "waiting_previous" })];
+
+    expect(reason(tasks, withDraftField({}, 1, "good", "5"))).toBe("bulk_nothing_to_complete");
+  });
+
+  it("нулевая порция у незавершаемого задания — всё равно нулевая порция", () => {
+    // «Нет заданий для завершения» здесь неправда: оператор набрал число, и
+    // причина должна говорить о числе, а не о статусе строки.
+    const tasks = [makeTask({ id: 1, status: "waiting_previous" })];
+
+    expect(reason(tasks, withDraftField({}, 1, "good", "+0"))).toBe("bulk_zero_quantity");
+  });
+
+  it("дефицит без стратегии — прежняя причина, стратегия обязательна", () => {
+    // Потолок строки 10 (в работе), ввод «+20» — дефицит на 10.
+    const tasks = [makeTask({ id: 1 })];
+    const draft = withDraftField({}, 1, "good", "+20");
+    const shortage = draftShortage(tasks, draft);
+
+    expect(shortage?.excess).toBe(10);
+    expect(reason(tasks, draft, { shortage })).toBe("no_shortage_strategy");
+    expect(reason(tasks, draft, { shortage, strategy: true })).toBeNull();
   });
 });
