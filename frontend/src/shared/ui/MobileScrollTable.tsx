@@ -64,6 +64,25 @@ function isInteractiveTarget(target: EventTarget | null): boolean {
 
 export type StickySide = "left" | "right";
 
+/** Тон строки, под который закреплённая ячейка берёт непрозрачную подложку. */
+export type StickyCellTone = "row" | "group" | "selected" | "header";
+
+/**
+ * Подложка закреплённой ячейки: один набор на проект (#341, ревью 9).
+ *
+ * Под липкую ячейку уезжает остальная таблица, поэтому фон обязан быть
+ * непрозрачным: полупрозрачные тона строк (`bg-slate-100/70`,
+ * `bg-blue-100/90`, ADR-0065) просвечивали чужими числами. Доска участка и
+ * «Передачи» описывали эти же классы каждая своим набором — теперь набор один,
+ * а странице остаётся выбрать тон и дописать своё (`className`).
+ */
+export const STICKY_CELL_FILLS: Record<StickyCellTone, string> = {
+  row: "max-md:bg-card",
+  group: "max-md:bg-slate-100 dark:max-md:bg-slate-800",
+  selected: "max-md:bg-blue-100 dark:max-md:bg-blue-950",
+  header: "max-md:bg-muted",
+};
+
 export interface StickyCellOptions {
   /** Имя закреплённой колонки: попадает в `data-sticky` (E2E и «Участки»). */
   name: string;
@@ -74,6 +93,8 @@ export interface StickyCellOptions {
    * строка тела перекрывает заголовок.
    */
   header?: boolean;
+  /** Тон строки: даёт непрозрачную подложку из `STICKY_CELL_FILLS`. */
+  fill?: StickyCellTone;
   /** Непрозрачная подложка и прочие уточнения страницы (тон строки, отступы). */
   className?: string;
 }
@@ -84,18 +105,20 @@ export interface StickyCellProps {
 }
 
 /**
- * Свойства закреплённой ячейки: имя для E2E, сторона и уровень.
+ * Свойства закреплённой ячейки: имя для E2E, сторона, уровень и подложка.
  *
- * Подложку приносит страница (`className`): примитив не знает, в каком тоне
- * нарисована строка, но требование у него одно — фон обязан быть непрозрачным,
- * иначе под липкую ячейку видно уезжающее содержимое.
+ * Тон строки страница называет через `fill` (набор один — `STICKY_CELL_FILLS`),
+ * а уточнения (ширина колонки, отступы) — через `className`. Требование
+ * примитива одно: под липкой ячейкой обязан быть непрозрачный фон, иначе под
+ * неё видно уезжающее содержимое.
  */
-export function stickyCell({ name, side, header = false, className }: StickyCellOptions): StickyCellProps {
+export function stickyCell({ name, side, header = false, fill, className }: StickyCellOptions): StickyCellProps {
   return {
     "data-sticky": name,
     className: cn(
       side === "left" ? "max-md:sticky max-md:left-0" : "max-md:sticky max-md:right-0",
       header ? "max-md:z-30" : "max-md:z-10",
+      fill ? STICKY_CELL_FILLS[fill] : undefined,
       className,
     ),
   };

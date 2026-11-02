@@ -51,6 +51,7 @@ import {
   buildActiveFilterSummary,
   MobileScrollTable,
   MOBILE_TABLE_MIN_WIDTH_CLASS,
+  STICKY_CELL_FILLS,
   stickyCell,
   type FiltersPanelField,
 } from "@/shared/ui";
@@ -212,17 +213,11 @@ const ACTIONS_HEADER_STICKY = stickyCell({
 });
 
 /**
- * Непрозрачная подложка закреплённых ячеек на телефоне.
- *
- * Под липкую ячейку уезжает остальная таблица: полупрозрачный тон строки
- * (`bg-slate-100/70`, `bg-blue-100/90`) просвечивал бы чужими числами.
- * Значения — те же тона, но без alpha; на десктопе классов нет вовсе.
+ * Непрозрачная подложка закреплённых ячеек на телефоне — общий набор тонов
+ * (`STICKY_CELL_FILLS`, ADR-0067): под липкую ячейку уезжает остальная таблица,
+ * и полупрозрачный тон строки (`bg-slate-100/70`, `bg-blue-100/90`) просвечивал
+ * бы чужими числами. Здесь только выбор тона; на десктопе классов нет вовсе.
  */
-const STICKY_FILL = {
-  default: "max-md:bg-card",
-  group: "max-md:bg-slate-100 dark:max-md:bg-slate-800",
-  selected: "max-md:bg-blue-100 dark:max-md:bg-blue-950",
-} as const;
 
 type StatusBadgeVariant = "default" | "destructive" | "outline" | "secondary";
 
@@ -473,10 +468,10 @@ function ReadyTransferRow({
   const nextPoint = stagePointLabel(task.next_section_name, task.next_operation_name);
   /** Непрозрачная подложка закреплённых ячеек — в тон строки (телефон). */
   const stickyFill = isSelected
-    ? STICKY_FILL.selected
+    ? STICKY_CELL_FILLS.selected
     : isInGroup
-      ? STICKY_FILL.group
-      : STICKY_FILL.default;
+      ? STICKY_CELL_FILLS.group
+      : STICKY_CELL_FILLS.row;
 
   return (
     <TableRow
@@ -710,7 +705,7 @@ function ReadyTransferGroupRow({
   const sourcePoint = stagePointLabel(common.sectionName, common.operationName);
   const nextPoint = stagePointLabel(common.nextSectionName, common.nextOperationName);
   /** Непрозрачная подложка закреплённых ячеек — в тон шапки группы (телефон). */
-  const groupStickyFill = isAllSelected ? STICKY_FILL.selected : STICKY_FILL.group;
+  const groupStickyFill = isAllSelected ? STICKY_CELL_FILLS.selected : STICKY_CELL_FILLS.group;
   const qtyNum = parseFloat(quantity || "0");
   const overLimit = Math.round(qtyNum * 1000) > Math.round(group.totalTransferable * 1000);
   /**

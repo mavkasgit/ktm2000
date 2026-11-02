@@ -7,7 +7,13 @@ import { fireEvent } from "@testing-library/react";
 
 import { stubViewportWidth } from "@/shared/lib/testViewport";
 
-import { DRAG_THRESHOLD_PX, MobileScrollTable, stickyCell, useTableSwipe } from "./MobileScrollTable";
+import {
+  DRAG_THRESHOLD_PX,
+  MobileScrollTable,
+  stickyCell,
+  useTableSwipe,
+  type StickyCellTone,
+} from "./MobileScrollTable";
 
 (globalThis as Record<string, unknown>).IS_REACT_ACT_ENVIRONMENT = true;
 
@@ -235,6 +241,50 @@ describe("stickyCell", () => {
 
     expect(cell.className).toContain("max-md:bg-card");
     expect(cell.className).toContain("max-md:left-0");
+  });
+
+  /**
+   * Подложка закреплённой ячейки — одна палитра на проект (#341, ревью 9).
+   *
+   * Доска участка и «Передачи» писали одни и те же тональные классы каждая
+   * своя:
+   * расходился только тон строки, а требование одно — фон непрозрачен, иначе
+   * под липкую ячейку видно уезжающие числа. Набор живёт рядом со `stickyCell`,
+   * страницы выбирают тон и дописывают своё через `className`.
+   */
+  it("тон закреплённой ячейки берётся из общего набора и остаётся непрозрачным", () => {
+    const tones: Array<[StickyCellTone, string]> = [
+      ["row", "max-md:bg-card"],
+      ["group", "max-md:bg-slate-100 dark:max-md:bg-slate-800"],
+      ["selected", "max-md:bg-blue-100 dark:max-md:bg-blue-950"],
+      ["header", "max-md:bg-muted"],
+    ];
+
+    for (const [tone, classes] of tones) {
+      const cell = stickyCell({ name: "profile", side: "left", fill: tone });
+      expect(cell.className, `тон ${tone}`).toContain(classes.split(" ")[0]);
+      expect(cell.className, `тёмная тема тона ${tone}`).toContain(classes.split(" ")[1] ?? "");
+      expect(cell.className, "полупрозрачный тон просвечивает чужими числами").not.toMatch(/bg-\S+\//);
+      expect(cell.className, "подложка только на телефоне").not.toMatch(/(^| )bg-/);
+    }
+  });
+
+  it("уточнение страницы не спорит с общим тоном", () => {
+    const cell = stickyCell({
+      name: "actions",
+      side: "right",
+      header: true,
+      fill: "group",
+      className: "max-md:w-px max-md:bg-card",
+    });
+
+    // `cn` = tailwind-merge: страница перекрывает тон своей подложкой,
+    // механика закрепления остаётся.
+    expect(cell.className).toContain("max-md:bg-card");
+    expect(cell.className).not.toContain("max-md:bg-slate-100");
+    expect(cell.className).toContain("max-md:right-0");
+    expect(cell.className).toContain("max-md:z-30");
+    expect(cell.className).toContain("max-md:w-px");
   });
 });
 

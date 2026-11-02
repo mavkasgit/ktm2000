@@ -28,6 +28,7 @@ import {
   buildActiveFilterSummary,
   stickyCell,
   type FiltersPanelField,
+  type StickyCellTone,
 } from "@/shared/ui";
 import type { ColumnSortDef } from "@/shared/hooks/useTableQueryEngine";
 import type { PageLimitOption } from "@/shared/hooks/usePaginatedTableQuery";
@@ -318,21 +319,18 @@ const MOBILE_PROFILE_WIDTH_CLASS =
 const MOBILE_ACTIONS_WIDTH_CLASS = "max-md:w-px max-md:px-1";
 
 /**
- * Непрозрачная подложка закреплённых ячеек: под липкую ячейку уезжает остальная
- * таблица, и полупрозрачный тон строки (`bg-blue-50/20`, `bg-amber-50/30`)
- * просвечивал бы чужими числами. На десктопе классов нет вовсе.
+ * Закрепление колонки: только на телефоне — на десктопе раскладка прежняя.
+ *
+ * Подложка берётся из общего набора тонов (`stickyCell({ fill })`):
+ * полупрозрачный тон строки (`bg-blue-50/20`, `bg-amber-50/30`) под липкую
+ * ячейку просвечивал бы чужими числами, а набор тонов на проект один (#341,
+ * ревью 9). Здесь — только выбор тона и ширина колонки.
  */
-const STICKY_HEADER_FILL = "max-md:bg-muted";
-const STICKY_ROW_FILL = "max-md:bg-card";
-const STICKY_GROUP_FILL = "max-md:bg-slate-100 dark:max-md:bg-slate-800";
-const STICKY_SELECTED_FILL = "max-md:bg-blue-100 dark:max-md:bg-blue-950";
-
-/** Закрепление колонки: только на телефоне — на десктопе раскладка прежняя. */
 function mobileStickyProps(
   columnId: string,
   variant: BoardTableVariant,
   header: boolean,
-  fill: string,
+  fill: StickyCellTone,
 ) {
   if (variant !== "mobile") return undefined;
   if (columnId === "productSku") {
@@ -340,7 +338,8 @@ function mobileStickyProps(
       name: "profile",
       side: "left",
       header,
-      className: cn(MOBILE_PROFILE_WIDTH_CLASS, fill),
+      fill,
+      className: MOBILE_PROFILE_WIDTH_CLASS,
     });
   }
   if (columnId === "actions") {
@@ -348,7 +347,8 @@ function mobileStickyProps(
       name: "actions",
       side: "right",
       header,
-      className: cn(MOBILE_ACTIONS_WIDTH_CLASS, fill),
+      fill,
+      className: MOBILE_ACTIONS_WIDTH_CLASS,
     });
   }
   return undefined;
@@ -417,8 +417,8 @@ function renderTaskRow(
     : "";
   const cellClass = edgeClass ? cn(ROW_CELL_CLASS, edgeClass) : ROW_CELL_CLASS;
   const rowState = getTaskRowState(task);
-  const stickyFill =
-    bulkMode && isSelected ? STICKY_SELECTED_FILL : isInGroup ? STICKY_GROUP_FILL : STICKY_ROW_FILL;
+  const stickyFill: StickyCellTone =
+    bulkMode && isSelected ? "selected" : isInGroup ? "group" : "row";
 
   const handleAction = (type: TaskActionDialogType) => {
     onAction(type, task);
@@ -619,7 +619,7 @@ function BoardTaskGroupRow({
   // Рёбра блока — на ячейках: границы `<tr>` в таблице доски (`border-separate`)
   // браузер не рисует, и `border-y` на строке был невидим.
   const headerCellClass = cn(ROW_CELL_CLASS, TABLE_ROW_STYLES.groupHeaderCell);
-  const stickyFill = isBulkMode && view.allSelected ? STICKY_SELECTED_FILL : STICKY_GROUP_FILL;
+  const stickyFill: StickyCellTone = isBulkMode && view.allSelected ? "selected" : "group";
   const railClass = getTaskGroupRailClass(group.tasks);
   const captionClass = "text-xs font-medium text-slate-500 dark:text-slate-400";
 
@@ -1604,7 +1604,7 @@ export function SectionTasksBoard({
               <thead>
                 <tr>
                   {columns.map((column) => {
-                    const sticky = mobileStickyProps(column.id, variant, true, STICKY_HEADER_FILL);
+                    const sticky = mobileStickyProps(column.id, variant, true, "header");
                     return (
                       <th
                         key={column.id}
