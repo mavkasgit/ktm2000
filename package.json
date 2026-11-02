@@ -2,8 +2,16 @@
   "name": "ktm-2000",
   "private": true,
   "version": "1.0.0",
+  "engines": {
+    "node": ">=24",
+    "npm": ">=10"
+  },
   "scripts": {
     "setup": "npm install && npm install --prefix frontend && echo 'Не забудьте установить зависимости Python!'",
+    "gate": "node scripts/gate.mjs",
+    "gate:fast": "node scripts/gate.mjs --fast",
+    "gate:e2e": "node scripts/gate.mjs --e2e",
+    "check:registry": "node scripts/check-registry.mjs",
     "verify:sync": "node scripts/verify-sync.mjs --other ../hrms",
     "predev": "node scripts/verify-sync.mjs --other ../hrms --if-enabled && node scripts/ensure-dev-ports.js --kill && npm run db:up && npm run db:wait && npm run db:migrate",
     "prebuild": "node scripts/verify-sync.mjs --other ../hrms --if-enabled",
@@ -59,6 +67,7 @@
     "prod:tunnel:up": "docker compose --env-file .env.prod -f infra/compose/docker-compose.prod.yml --profile tunnel up -d --build"
   },
   "devDependencies": {
+    "ajv": "^8.20.0",
     "concurrently": "^9.1.2",
     "cross-env": "^7.0.3"
   }
