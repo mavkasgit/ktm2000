@@ -1,5 +1,6 @@
 import * as React from "react";
 
+import { DESKTOP_VIEWPORT_QUERY, useMediaQuery } from "@/shared/lib/useMediaQuery";
 import { cn } from "@/shared/utils/cn";
 
 /**
@@ -16,10 +17,12 @@ import { cn } from "@/shared/utils/cn";
  * колонка без непрозрачной подложки просвечивает уезжающими числами. Оба
  * правила живут здесь один раз.
  *
- * Ниже 768px (`max-md:`) — граница телефона в проекте: у доски участка это
- * `useMediaQuery("(min-width: 768px)")`, у шапки — `.page-header sm:flex-row`.
- * Классы с этим префиксом на десктоп не применяются вовсе, поэтому раскладка
- * большого экрана остаётся прежней.
+ * Ниже 768px (`max-md:`) — граница телефона в проекте: у доски участка и у
+ * этого примитива это `DESKTOP_VIEWPORT_QUERY`, у шапки — `.page-header
+ * sm:flex-row`. Классы с этим префиксом на десктоп не применяются вовсе, а
+ * жест дополнительно выключается хуком: на большом экране таблица бывает
+ * шире контейнера, и без этого мышь по строке превращалась в перетаскивание
+ * таблицы вместо выделения текста и нажатия (#341, ревью 1).
  */
 
 /**
@@ -101,6 +104,15 @@ export function stickyCell({ name, side, header = false, className }: StickyCell
 export interface TableSwipeOptions {
   /** Порог жеста в пикселях; по умолчанию `DRAG_THRESHOLD_PX`. */
   thresholdPx?: number;
+  /**
+   * Жест включён; по умолчанию `true`.
+   *
+   * Выключают хук там, где свайп не принадлежит экрану: `MobileScrollTable`
+   * подаёт границу телефона проекта, потому что на десктопе мышью водят по
+   * строке, чтобы выделить текст и нажать её, и `scrollWidth > clientWidth`
+   * от этого не защищает — широкая таблица переполняет контейнер и там.
+   */
+  enabled?: boolean;
 }
 
 export interface TableSwipeHandlers {
@@ -145,8 +157,11 @@ interface DragState {
  *    отпускание пальца за пределами строки «нажимало» бы то, что под ним.
  * 3. Поля ввода, кнопки и селекты не перехватываются вовсе: оператор обязан
  *    попасть в поле количества и набрать число.
+ *
+ * Четвёртое — экран: `enabled: false` снимает жест целиком, даже когда
+ * переполнение есть (см. `TableSwipeOptions`).
  */
-export function useTableSwipe({ thresholdPx = DRAG_THRESHOLD_PX }: TableSwipeOptions = {}): TableSwipe {
+export function useTableSwipe({ thresholdPx = DRAG_THRESHOLD_PX, enabled = true }: TableSwipeOptions = {}): TableSwipe {
   const dragRef = React.useRef<DragState | null>(null);
   const suppressClickRef = React.useRef(false);
   const [isDragging, setIsDragging] = React.useState(false);
@@ -157,10 +172,12 @@ export function useTableSwipe({ thresholdPx = DRAG_THRESHOLD_PX }: TableSwipeOpt
     // закончившегося вне таблицы, мог не прийти вовсе.
     suppressClickRef.current = false;
     if (event.button !== 0) return;
+    // Жест не принадлежит этому экрану: ни движения, ни подавления клика.
+    if (!enabled) return;
     // Панораму тача делает браузер (см. шапку хука).
     if (event.pointerType === "touch") return;
-    // Тащить нечего: на десктопе таблица укладывается в ширину, и жест там
-    // не должен даже начинаться — иначе он трогал бы выделение текста.
+    // Тащить нечего: без горизонтального переполнения жест не нужен даже
+    // там, где он включён.
     if (element.scrollWidth <= element.clientWidth) return;
     if (isInteractiveTarget(event.target)) return;
 
@@ -171,12 +188,18 @@ export function useTableSwipe({ thresholdPx = DRAG_THRESHOLD_PX }: TableSwipeOpt
       startScrollLeft: element.scrollLeft,
       moved: false,
     };
-  }, []);
+  }, [enabled]);
 
   const onPointerMove = React.useCallback<React.PointerEventHandler<HTMLElement>>(
     (event) => {
       const drag = dragRef.current;
       if (!drag || event.pointerId !== drag.pointerId) return;
+      // Экран сменился посреди жеста (окно растянули): недоделанный свайп
+      // снимается, а не дотягивается до чужого экрана.
+      if (!enabled) {
+        dragRef.current = null;
+        return;
+      }
       const dx = event.clientX - drag.startX;
       const dy = event.clientY - drag.startY;
 
@@ -198,7 +221,7 @@ export function useTableSwipe({ thresholdPx = DRAG_THRESHOLD_PX }: TableSwipeOpt
       event.preventDefault();
       event.currentTarget.scrollLeft = drag.startScrollLeft - dx;
     },
-    [thresholdPx],
+    [thresholdPx, enabled],
   );
 
   const endDrag = React.useCallback<React.PointerEventHandler<HTMLElement>>((event) => {
@@ -248,7 +271,12 @@ export interface MobileScrollTableProps extends React.HTMLAttributes<HTMLDivElem
  * примитив не знает ни колонок, ни строк.
  */
 export function MobileScrollTable({ scrollRef, className, children, ...rest }: MobileScrollTableProps) {
-  const swipe = useTableSwipe();
+  // Жест — только ниже границы телефона: на десктопе таблица тоже может
+  // переполнять контейнер (широкая шапка страницы, `overflow:auto` у
+  // обёртки), а мышью по строке водят затем, чтобы выделить текст и нажать
+  // её. Порог держит здесь, а не в хуке: хук остаётся переносимым.
+  const isDesktop = useMediaQuery(DESKTOP_VIEWPORT_QUERY);
+  const swipe = useTableSwipe({ enabled: !isDesktop });
 
   return (
     <div

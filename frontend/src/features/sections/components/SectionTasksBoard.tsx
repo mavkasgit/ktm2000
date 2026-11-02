@@ -37,7 +37,7 @@ import {
   buildColumnFilterValues,
 } from "@/shared/lib/columnSpecs";
 import { useDebouncedValue } from "@/shared/lib/useDebouncedValue";
-import { useMediaQuery } from "@/shared/lib/useMediaQuery";
+import { DESKTOP_VIEWPORT_QUERY, useMediaQuery } from "@/shared/lib/useMediaQuery";
 import { getAriaSort } from "@/shared/lib/multiSort";
 import { isFirstRowsLoad } from "@/shared/lib/tableQueryPlaceholder";
 import {
@@ -951,7 +951,7 @@ export function SectionTasksBoard({
    * одновременно и прятались классами: двойная работа на каждом кадре и дубли
    * в дереве (одно задание рисовалось дважды).
    */
-  const isDesktopViewport = useMediaQuery("(min-width: 768px)");
+  const isDesktopViewport = useMediaQuery(DESKTOP_VIEWPORT_QUERY);
   const variant: BoardTableVariant = isDesktopViewport ? "desktop" : "mobile";
   /**
    * Колонки участка: «Упаковка» есть только там, где у неё есть упаковочные
