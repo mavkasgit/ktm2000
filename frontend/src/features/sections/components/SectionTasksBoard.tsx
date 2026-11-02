@@ -373,6 +373,7 @@ function groupChevron(
         onToggleCollapse();
       }}
       title={view.collapseTitle}
+      aria-label={view.collapseTitle}
     >
       {view.isCollapsed ? (
         <ChevronRight

@@ -5,6 +5,7 @@ import {
   Inbox,
   RefreshCw,
   AlertCircle,
+  ArrowRight,
   ChevronRight,
   ChevronDown,
   Search,
@@ -212,6 +213,22 @@ const ACTIONS_HEADER_STICKY = stickyCell({
   header: true,
   className: "max-md:w-px max-md:px-1",
 });
+
+/**
+ * Подпись закреплённого действия на телефоне — пиктограмма (#341, п. 2, то же
+ * правило, что у доски участка в #345 и в ADR-0067).
+ *
+ * Замер в кадре 390px: закреплённый «Артикул» занимает 104px, а «Действия» с
+ * написанной подписью «Передать» и текстом причины — 284,8px. Вместе 388,8px:
+ * полосы прокрутки не остаётся (−66,8px), и закреплённые колонки наезжают друг
+ * на друга. Пиктограмма отнимает у кнопки ~46px, и жесту снова есть место.
+ *
+ * Сворачивается только подпись кнопки. Текст причины недоступности остаётся
+ * напечатанным и не обрезается: #193 запрещает прятать причину в подсказку, а
+ * «Укажите…» с многоточием — ровно то же самое.
+ */
+const ROW_ACTION_LABEL_CLASS = "max-md:hidden";
+const ROW_ACTION_ICON_CLASS = "h-4 w-4 shrink-0 md:hidden";
 
 /**
  * Непрозрачная подложка закреплённых ячеек на телефоне — общий набор тонов
@@ -598,6 +615,9 @@ function ReadyTransferRow({
                       ? actionReasonText(quantityReason)
                       : "Финальный выпуск готовой продукции"
                 }
+                aria-label={
+                  releaseMutation.isPending || isSubmitting ? "Отправка..." : "Отправить"
+                }
                 onClick={() => {
                   if (submittingRef.current || isSubmitting || releaseMutation.isPending) return;
                     if (!tryAcquire()) return;
@@ -611,7 +631,13 @@ function ReadyTransferRow({
                     });
                   }}
                 >
-                  {releaseMutation.isPending || isSubmitting ? "Отправка..." : "Отправить"}
+                  {/* На телефоне подпись свёрнута в пиктограмму (#341, п. 2,
+                      ADR-0067): с текстом причины колонка «Действия» не
+                      оставляет полосы прокрутки. Слово живёт в `aria-label`. */}
+                  <Send className={ROW_ACTION_ICON_CLASS} aria-hidden />
+                  <span className={ROW_ACTION_LABEL_CLASS}>
+                    {releaseMutation.isPending || isSubmitting ? "Отправка..." : "Отправить"}
+                  </span>
                 </Button>
               ) : (
                 <Button
@@ -624,6 +650,9 @@ function ReadyTransferRow({
                       : quantityReason
                         ? actionReasonText(quantityReason)
                         : "Передать на следующий этап"
+                  }
+                  aria-label={
+                    mutation.isPending || isSubmitting ? "Отправка..." : "Передать"
                   }
                   onClick={() => {
                     if (submittingRef.current || isSubmitting || mutation.isPending) return;
@@ -638,7 +667,10 @@ function ReadyTransferRow({
                     });
                   }}
                 >
-                  {mutation.isPending || isSubmitting ? "Отправка..." : "Передать"}
+                  <ArrowRight className={ROW_ACTION_ICON_CLASS} aria-hidden />
+                  <span className={ROW_ACTION_LABEL_CLASS}>
+                    {mutation.isPending || isSubmitting ? "Отправка..." : "Передать"}
+                  </span>
                 </Button>
               )}
             </ActionWithReason>
@@ -646,6 +678,44 @@ function ReadyTransferRow({
       </TableCell>
       <TableCornerResetCell className={cn(TABLE_ROW_STYLES.groupHeaderCell, "max-md:hidden")} />
     </TableRow>
+  );
+}
+
+/**
+ * Шеврон раскрытия группы. На телефоне он живёт в закреплённом профиле (#341,
+ * п. 4): колонка-рельс слева от профиля на телефоне скрыта, и без шеврона
+ * единственным способом раскрыть группу оставался тап по всей шапке — жест,
+ * который ничего не обещает и не именуется. Тот же порядок, что у доски
+ * участка (#345).
+ */
+function groupChevron(
+  isCollapsed: boolean,
+  bulkMode: boolean,
+  onToggleCollapse: () => void,
+  tone: "desktop" | "mobile",
+) {
+  const label = bulkMode ? "Группа раскрыта для ручного выбора" : isCollapsed ? "Раскрыть" : "Скрыть";
+  return (
+    <button
+      type="button"
+      className={cn(
+        "p-1 hover:bg-muted rounded transition-colors text-muted-foreground",
+        tone === "mobile" && "md:hidden",
+      )}
+      title={label}
+      aria-label={label}
+      disabled={bulkMode}
+      onClick={(event) => {
+        event.stopPropagation();
+        onToggleCollapse();
+      }}
+    >
+      {isCollapsed ? (
+        <ChevronRight className="h-4 w-4 shrink-0" />
+      ) : (
+        <ChevronDown className="h-4 w-4 shrink-0" />
+      )}
+    </button>
   );
 }
 
@@ -717,6 +787,12 @@ function ReadyTransferGroupRow({
   const groupBlockReason: ActionReasonCode | null = hasInFlightRow
     ? "row_in_flight"
     : zeroQuantityReason(qtyNum);
+  /**
+   * Имя и подпись кнопки группы — одно слово на обеих ширинах: на телефоне
+   * подпись сворачивается в пиктограмму, и слово обязано остаться в
+   * `aria-label` (#341, п. 2).
+   */
+  const groupActionLabel = isSubmitting ? "Отправка..." : group.allFinal ? "Отправить" : "Передать";
 
   return (
     <TableRow
@@ -743,21 +819,7 @@ function ReadyTransferGroupRow({
       }}
     >
       <TableCell className={cn(groupHeaderCellClass, TABLE_ROW_STYLES.blockRail, "text-center max-md:hidden")}>
-        <button
-          className="p-1 hover:bg-muted rounded transition-colors text-muted-foreground"
-          title={bulkMode ? "Группа раскрыта для ручного выбора" : isCollapsed ? "Раскрыть" : "Скрыть"}
-          disabled={bulkMode}
-          onClick={(e) => {
-            e.stopPropagation();
-            onToggleCollapse();
-          }}
-        >
-          {isCollapsed ? (
-            <ChevronRight className="h-4 w-4 shrink-0" />
-          ) : (
-            <ChevronDown className="h-4 w-4 shrink-0" />
-          )}
-        </button>
+        {groupChevron(isCollapsed, bulkMode, onToggleCollapse, "desktop")}
       </TableCell>
       {/* «Профиль» и «Действия» закреплены на телефоне так же, как у строк
           (ADR-0067): шапка группы несёт общее количество и кнопку, и они
@@ -768,6 +830,10 @@ function ReadyTransferGroupRow({
         title={group.productSku ?? undefined}
       >
         <div className="flex items-center gap-2 max-md:truncate">
+          {/* На телефоне шеврон — здесь, в закреплённой ячейке: тап по шапке
+              сворачивает группу, но именованной кнопки без колонки-рельса не
+              было бы (#341, п. 4). */}
+          {groupChevron(isCollapsed, bulkMode, onToggleCollapse, "mobile")}
           <span className="max-md:truncate">{group.productSku ?? "—"}</span>
           <Badge variant="secondary" className="font-bold max-md:shrink-0">
             &times;{group.rows.length}
@@ -851,9 +917,15 @@ function ReadyTransferGroupRow({
                       ? "Финальный выпуск всех заданий группы"
                       : "Передать на следующий этап все задания группы"
               }
+              aria-label={groupActionLabel}
               onClick={() => onTransferGroup(group, quantity)}
             >
-              {isSubmitting ? "Отправка..." : group.allFinal ? "Отправить" : "Передать"}
+              {group.allFinal ? (
+                <Send className={ROW_ACTION_ICON_CLASS} aria-hidden />
+              ) : (
+                <ArrowRight className={ROW_ACTION_ICON_CLASS} aria-hidden />
+              )}
+              <span className={ROW_ACTION_LABEL_CLASS}>{groupActionLabel}</span>
             </Button>
           </ActionWithReason>
         </div>
@@ -1619,6 +1691,8 @@ export function TransfersPage() {
             compact
             fields={readyToolbarFields}
             activeSummary={readyActiveFilterSummary}
+            onReset={resetReadyFilters}
+            hasActiveFilters={hasReadyFiltersActive}
             onSelectAll={() => {
               setBulkMode(true);
               bulkSelection.selectAll(readySelectableIds);

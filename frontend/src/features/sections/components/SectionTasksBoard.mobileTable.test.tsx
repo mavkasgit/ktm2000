@@ -294,11 +294,14 @@ describe("SectionTasksBoard: сброс фильтров в ряду фильт�
     const { container } = renderMobile([makeTask({ id: 1, product_sku: "SKU-A" })]);
     const search = within(container).getByPlaceholderText("Поиск") as HTMLInputElement;
 
-    expect(within(container).getByRole("button", { name: /Сбросить/ })).toBeTruthy();
+    // Имя точное: у скрытой на телефоне колонки сброса в шапке таблицы имя
+    // «Сбросить фильтры», и подстрокой тест прошёл бы по ней, а не по ряду
+    // фильтров (#341, п. 3).
+    expect(within(container).getByRole("button", { name: "Сбросить" })).toBeTruthy();
     fireEvent.change(search, { target: { value: "SKU-A" } });
     expect(search.value).toBe("SKU-A");
 
-    fireEvent.click(within(container).getByRole("button", { name: /Сбросить/ }));
+    fireEvent.click(within(container).getByRole("button", { name: "Сбросить" }));
     expect(search.value).toBe("");
   });
 });
