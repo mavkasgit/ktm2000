@@ -90,6 +90,7 @@ import {
   type RowTone,
 } from "@/shared/lib/rowTones";
 import { cn } from "@/shared/utils/cn";
+import { DIALOG_SIZES } from "@/shared/lib/dialogSizes";
 import {
   useBulkSelection,
   BulkResultsDialog,
@@ -2108,7 +2109,7 @@ function EditTransferDialog({
 
   return (
     <Dialog open onOpenChange={(open) => !open && onClose()}>
-      <DialogContent className="max-w-md">
+      <DialogContent className={cn(DIALOG_SIZES.sm.width, DIALOG_SIZES.sm.height)}>
         <DialogHeader>
           <DialogTitle>
             {isCancelled ? "Детали передачи" : "Управление передачей"}
@@ -2203,7 +2204,10 @@ function EditTransferDialog({
                 </div>
               )}
 
-              <div className="flex justify-between items-center pt-2 gap-2">
+              {/* Кнопки переносятся по строкам: на телефоне три штуки в ряд не
+                  умещаются и уводили содержимое окна вбок (#344). На широком
+                  экране всё влезает в одну строку, раскладка не меняется. */}
+              <div className="flex flex-wrap justify-between items-center pt-2 gap-2">
                 <div>
                   {!isCancelled && (
                     <Button
@@ -2214,7 +2218,7 @@ function EditTransferDialog({
                     </Button>
                   )}
                 </div>
-                <div className="flex gap-2">
+                <div className="flex flex-wrap gap-2">
                   <Button variant="outline" onClick={onClose}>
                     {isCancelled ? "Закрыть" : "Отмена"}
                   </Button>
