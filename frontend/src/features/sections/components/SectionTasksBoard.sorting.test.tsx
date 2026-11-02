@@ -291,7 +291,10 @@ describe("SectionTasksBoard: сортировка колонок", () => {
       }),
     ]);
 
-    expect(renderedGroupColumnOrder("Артикул")).toEqual(["A"]);
+    // #345: шапка группы названа артикулом и счётчиком строк в ОДНОЙ ячейке
+    // («A×2») — на телефоне профиль закреплён, и количество группы обязано
+    // оставаться в кадре вместе с артикулом.
+    expect(renderedGroupColumnOrder("Артикул")).toEqual(["A×2"]);
     expandFirstGroup();
     expect(renderedColumnOrder("План")).toEqual(["700", "10"]);
   });
