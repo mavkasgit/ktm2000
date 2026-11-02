@@ -60,6 +60,22 @@ export { PageLimitSelect } from "./PageLimitSelect";
 export type { PageLimitSelectProps } from "./PageLimitSelect";
 export { VirtualizedTableBody } from "./VirtualizedTableBody";
 export type { VirtualizedTableBodyProps } from "./VirtualizedTableBody";
+export {
+  MobileScrollTable,
+  useTableSwipe,
+  stickyCell,
+  MOBILE_TABLE_MIN_WIDTH_CLASS,
+  DRAG_THRESHOLD_PX,
+} from "./MobileScrollTable";
+export type {
+  MobileScrollTableProps,
+  StickyCellOptions,
+  StickyCellProps,
+  StickySide,
+  TableSwipe,
+  TableSwipeHandlers,
+  TableSwipeOptions,
+} from "./MobileScrollTable";
 export { RouteStepsDisplay } from "./RouteStepsDisplay";
 export type { RouteStepsDisplayProps } from "./RouteStepsDisplay";
 export { SectionLocationBadge } from "./SectionLocationBadge";

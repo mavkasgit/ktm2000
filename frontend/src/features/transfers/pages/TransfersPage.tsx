@@ -49,6 +49,9 @@ import {
   FiltersPanel,
   PrintButton,
   buildActiveFilterSummary,
+  MobileScrollTable,
+  MOBILE_TABLE_MIN_WIDTH_CLASS,
+  stickyCell,
   type FiltersPanelField,
 } from "@/shared/ui";
 import { useFilterableTable } from "@/shared/hooks/useFilterableTable";
@@ -166,6 +169,60 @@ const BULK_ROW_ACTION_TITLE = "В массовом режиме отправля
  * режима. Врать «отправит футер» здесь нельзя.
  */
 const BULK_FINAL_ACTION_TITLE = "Финальный выпуск в массовую передачу не берётся: выйдите из режима";
+
+/**
+ * Закреплённые колонки «Готово к передаче» на телефоне (#343, ADR-0067).
+ *
+ * «Профиль» строки — артикул — стоит слева, «Действия» справа: количество и
+ * кнопка обязаны быть на экране без свайпа, а строку надо узнавать, не уводя
+ * таблицу вбок. Всё, что между ними (размер, количества, адреса), уезжает под
+ * горизонтальный скролл; служебный «#ID» на телефоне скрыт — иначе артикул
+ * оказывается вторым, и при `scrollLeft = 0` его накрывают «Действия».
+ *
+ * Механика — `stickyCell` из `shared/ui`: здесь только имена колонок и
+ * телефонная ширина. Ширины объявлены явно, потому что «липкая» ячейка
+ * фиксируется краем, а не содержимым: без ширины длинный артикул растянул бы
+ * левую колонку на пол-экрана и вытеснил «Действия».
+ */
+const PROFILE_STICKY = stickyCell({
+  name: "profile",
+  side: "left",
+  className: "max-md:w-[104px] max-md:min-w-[104px] max-md:max-w-[104px]",
+});
+const PROFILE_HEADER_STICKY = stickyCell({
+  name: "profile",
+  side: "left",
+  header: true,
+  className: "max-md:w-[104px] max-md:min-w-[104px] max-md:max-w-[104px]",
+});
+const ACTIONS_STICKY = stickyCell({
+  name: "actions",
+  side: "right",
+  // `w-px` — приём auto-раскладки: явная крошечная ширина не растягивает
+  // колонку, а заставляет её сжаться до содержимого (остальное забирают
+  // прокручиваемые колонки). Без него таблица раздавала «Действиям» лишние
+  // ~60px, и закреплённые ячейки наезжали друг на друга при `scrollLeft = 0`.
+  className: "max-md:w-px max-md:px-1",
+});
+const ACTIONS_HEADER_STICKY = stickyCell({
+  name: "actions",
+  side: "right",
+  header: true,
+  className: "max-md:w-px max-md:px-1",
+});
+
+/**
+ * Непрозрачная подложка закреплённых ячеек на телефоне.
+ *
+ * Под липкую ячейку уезжает остальная таблица: полупрозрачный тон строки
+ * (`bg-slate-100/70`, `bg-blue-100/90`) просвечивал бы чужими числами.
+ * Значения — те же тона, но без alpha; на десктопе классов нет вовсе.
+ */
+const STICKY_FILL = {
+  default: "max-md:bg-card",
+  group: "max-md:bg-slate-100 dark:max-md:bg-slate-800",
+  selected: "max-md:bg-blue-100 dark:max-md:bg-blue-950",
+} as const;
 
 type StatusBadgeVariant = "default" | "destructive" | "outline" | "secondary";
 
@@ -414,6 +471,12 @@ function ReadyTransferRow({
   /** Пункт выдачи и пункт назначения: оператор несёт материал по адресу, а не по коду этапа. */
   const sourcePoint = stagePointLabel(task.section_name, task.operation_name);
   const nextPoint = stagePointLabel(task.next_section_name, task.next_operation_name);
+  /** Непрозрачная подложка закреплённых ячеек — в тон строки (телефон). */
+  const stickyFill = isSelected
+    ? STICKY_FILL.selected
+    : isInGroup
+      ? STICKY_FILL.group
+      : STICKY_FILL.default;
 
   return (
     <TableRow
@@ -440,8 +503,15 @@ function ReadyTransferRow({
       )}
       onClick={bulkMode ? onSelect : undefined}
     >
-      <TableCell className={cn(cellClass, TABLE_ROW_STYLES.blockRail, "font-mono text-xs text-muted-foreground")}>#{task.plan_position_id}</TableCell>
-      <TableCell className={cellClass}>{task.product_sku ?? "—"}</TableCell>
+      <TableCell className={cn(cellClass, TABLE_ROW_STYLES.blockRail, "font-mono text-xs text-muted-foreground max-md:hidden")}>#{task.plan_position_id}</TableCell>
+      {/* «Профиль» строки: на телефоне закреплён слева (ADR-0067). */}
+      <TableCell
+        {...PROFILE_STICKY}
+        className={cn(cellClass, PROFILE_STICKY.className, stickyFill)}
+        title={task.product_sku ?? undefined}
+      >
+        <div className="max-md:truncate">{task.product_sku ?? "—"}</div>
+      </TableCell>
       <TableCell className={`${cellClass} text-xs text-muted-foreground whitespace-nowrap`}>
         {formatDimensionsLabel(task.dimensions, task.dimensions_label)}
       </TableCell>
@@ -475,7 +545,11 @@ function ReadyTransferRow({
           </div>
         )}
       </TableCell>
-      <TableCell className={cellClass} onClick={(e) => e.stopPropagation()}>
+      <TableCell
+        {...ACTIONS_STICKY}
+        className={cn(cellClass, ACTIONS_STICKY.className, stickyFill)}
+        onClick={(e) => e.stopPropagation()}
+      >
         <div className="flex items-center justify-end gap-2">
           {/* Количество и кнопка живут в строке всегда — в массовом режиме
               кнопка видна, но погашена: отправляет один футер. Прятать её
@@ -500,7 +574,7 @@ function ReadyTransferRow({
                 step="1"
                 min="0"
                 value={quantity}
-                className={`w-20 ${TRANSFERS_ROW.quantityInput} text-right px-2 ${
+                className={`w-20 max-md:w-16 ${TRANSFERS_ROW.quantityInput} text-right px-2 ${
                   overLimit ? "border-amber-400 focus-visible:ring-amber-400" : ""
                 }`}
                 title={overLimit ? `Превышает доступное (${fmtQty(task.transferable_quantity)} шт.)` : undefined}
@@ -574,7 +648,7 @@ function ReadyTransferRow({
             </ActionWithReason>
         </div>
       </TableCell>
-      <TableCornerResetCell className={TABLE_ROW_STYLES.groupHeaderCell} />
+      <TableCornerResetCell className={cn(TABLE_ROW_STYLES.groupHeaderCell, "max-md:hidden")} />
     </TableRow>
   );
 }
@@ -635,6 +709,8 @@ function ReadyTransferGroupRow({
   const { common } = group;
   const sourcePoint = stagePointLabel(common.sectionName, common.operationName);
   const nextPoint = stagePointLabel(common.nextSectionName, common.nextOperationName);
+  /** Непрозрачная подложка закреплённых ячеек — в тон шапки группы (телефон). */
+  const groupStickyFill = isAllSelected ? STICKY_FILL.selected : STICKY_FILL.group;
   const qtyNum = parseFloat(quantity || "0");
   const overLimit = Math.round(qtyNum * 1000) > Math.round(group.totalTransferable * 1000);
   /**
@@ -672,7 +748,7 @@ function ReadyTransferGroupRow({
         onSelectGroup();
       }}
     >
-      <TableCell className={cn(groupHeaderCellClass, TABLE_ROW_STYLES.blockRail, "text-center")}>
+      <TableCell className={cn(groupHeaderCellClass, TABLE_ROW_STYLES.blockRail, "text-center max-md:hidden")}>
         <button
           className="p-1 hover:bg-muted rounded transition-colors text-muted-foreground"
           title={bulkMode ? "Группа раскрыта для ручного выбора" : isCollapsed ? "Раскрыть" : "Скрыть"}
@@ -689,10 +765,17 @@ function ReadyTransferGroupRow({
           )}
         </button>
       </TableCell>
-      <TableCell className={groupHeaderCellClass}>
-        <div className="flex items-center gap-2">
-          <span>{group.productSku ?? "—"}</span>
-          <Badge variant="secondary" className="font-bold">
+      {/* «Профиль» и «Действия» закреплены на телефоне так же, как у строк
+          (ADR-0067): шапка группы несёт общее количество и кнопку, и они
+          обязаны быть видны без свайпа. */}
+      <TableCell
+        {...PROFILE_STICKY}
+        className={cn(groupHeaderCellClass, PROFILE_STICKY.className, groupStickyFill)}
+        title={group.productSku ?? undefined}
+      >
+        <div className="flex items-center gap-2 max-md:truncate">
+          <span className="max-md:truncate">{group.productSku ?? "—"}</span>
+          <Badge variant="secondary" className="font-bold max-md:shrink-0">
             &times;{group.rows.length}
           </Badge>
         </div>
@@ -726,7 +809,11 @@ function ReadyTransferGroupRow({
       {/* Ячейка «Действия» есть всегда. В массовом режиме это поле общего
           количества группы (без кнопки: отправляет футер), в обычном — поле и
           кнопка передачи группы. */}
-      <TableCell className={groupHeaderCellClass} onClick={(e) => e.stopPropagation()}>
+      <TableCell
+        {...ACTIONS_STICKY}
+        className={cn(groupHeaderCellClass, ACTIONS_STICKY.className, groupStickyFill)}
+        onClick={(e) => e.stopPropagation()}
+      >
         <div className="flex items-center justify-end gap-2">
           <div className="flex items-center gap-1">
             {/* Как у строки: «передано/план» перед полем, только суммами по
@@ -743,7 +830,7 @@ function ReadyTransferGroupRow({
               min="0"
               value={quantity}
               disabled={isSubmitting}
-              className={`w-20 ${TRANSFERS_ROW.quantityInput} text-right px-2 ${
+              className={`w-20 max-md:w-16 ${TRANSFERS_ROW.quantityInput} text-right px-2 ${
                 overLimit ? "border-amber-400 focus-visible:ring-amber-400" : ""
               }`}
               title={
@@ -777,7 +864,7 @@ function ReadyTransferGroupRow({
           </ActionWithReason>
         </div>
       </TableCell>
-      <TableCornerResetCell />
+      <TableCornerResetCell className="max-md:hidden" />
     </TableRow>
   );
 }
@@ -1488,7 +1575,10 @@ export function TransfersPage() {
             фактически выполненное количество, ожидающее отправки.
           </p>
         </div>
-        <div className="flex items-center gap-2">
+        {/* Телефон: селект ГХП занимает свою строку, «Журнал» и «Обновить»
+            переносятся под него. Ряд без `flex-wrap` и `w-[260px]` у селекта
+            обрезались `overflow-x-hidden` у `.main-area` (#343). */}
+        <div className="flex flex-wrap items-center gap-2 max-md:w-full">
           <SpgSelect
             spgs={spgs ?? []}
             value={showAllSpgs ? null : spgId}
@@ -1508,7 +1598,7 @@ export function TransfersPage() {
               setEditTransferRecord(null);
               exitBulkMode();
             }}
-            className="w-[260px] bg-background h-10 border text-sm"
+            className="w-[260px] max-md:w-full bg-background h-10 border text-sm"
           />
           <Button
             variant="outline"
@@ -1542,7 +1632,7 @@ export function TransfersPage() {
             totalRowCount={readySelectableIds.length}
           />
         </CardHeader>
-        <CardContent>
+        <CardContent className="max-md:px-2">
           {!spgScopeSelected ? (
             <div className="text-sm text-muted-foreground py-6 text-center">
               Выберите ГХП, чтобы увидеть задания, готовые к передаче.
@@ -1556,36 +1646,55 @@ export function TransfersPage() {
             </div>
           ) : (
             <>
-            <div
-              ref={readyScrollRef}
+            <MobileScrollTable
+              scrollRef={readyScrollRef}
               className={DATA_TABLE_STYLES.container}
               style={{ maxHeight: "70vh", overflow: "auto" }}
             >
-            <table className="w-full caption-bottom text-sm">
+            {/* Телефон: таблица не сжимается в 320px — иначе колонки squeeze,
+                а свайпу нечего прокручивать. Ширина из общего примитива. */}
+            <table className={cn("w-full caption-bottom text-sm", MOBILE_TABLE_MIN_WIDTH_CLASS)}>
               <TableHeader>
                 <TableRow>
-                  {readyColumns.map((column) => (
-                    <TableHead
-                      key={column.id}
-                      className={`${groupHeaderCellClass} p-0${column.id === "transferableQty" ? " text-right" : ""}`}
-                      aria-sort={column.sortField ? getAriaSort(readySortConfigs, column.sortField) : undefined}
-                    >
-                      <DataTableColumnHeader
-                        column={column}
-                        bindColumn={bindReadyColumn}
-                        values={readyUniqueValues[column.filterField] ?? []}
-                        currentSorts={readySortConfigs}
-                        onSortChange={handleReadySort}
-                      />
-                    </TableHead>
-                  ))}
-                  <TableHead className={groupHeaderCellClass}>
+                  {readyColumns.map((column) => {
+                    // «Профиль» (артикул) закреплён и в шапке: заголовок обязан
+                    // ехать вместе со своей колонкой (ADR-0067).
+                    const sticky = column.id === "sku" ? PROFILE_HEADER_STICKY : null;
+                    // Служебный «ID» на телефоне скрыт: иначе закреплённый
+                    // «Артикул» начинается не от левого края, и «Действия»
+                    // наезжают на него. Строка узнаётся по артикулу (ADR-0067).
+                    return (
+                      <TableHead
+                        key={column.id}
+                        {...sticky}
+                        className={cn(
+                          `${groupHeaderCellClass} p-0${column.id === "transferableQty" ? " text-right" : ""}`,
+                          column.id === "positionId" && "max-md:hidden",
+                          sticky?.className,
+                        )}
+                        aria-sort={column.sortField ? getAriaSort(readySortConfigs, column.sortField) : undefined}
+                      >
+                        <DataTableColumnHeader
+                          column={column}
+                          bindColumn={bindReadyColumn}
+                          values={readyUniqueValues[column.filterField] ?? []}
+                          currentSorts={readySortConfigs}
+                          onSortChange={handleReadySort}
+                        />
+                      </TableHead>
+                    );
+                  })}
+                  <TableHead {...ACTIONS_HEADER_STICKY} className={cn(groupHeaderCellClass, ACTIONS_HEADER_STICKY.className)}>
                     Действия
                   </TableHead>
+                  {/* Столбец сброса фильтров на телефоне скрыт: он оказался бы
+                      под закреплёнными «Действиями» и не попадал бы под палец.
+                      Сброс там же, где поиск, — в ряду фильтров (ADR-0067). */}
                   <TableCornerResetHeader
                     hasActiveFilters={hasReadyFiltersActive}
                     onReset={resetReadyFilters}
                     dataTableHeader
+                    className="max-md:hidden"
                   />
                 </TableRow>
               </TableHeader>
@@ -1702,7 +1811,7 @@ export function TransfersPage() {
                 />
               )}
             </table>
-            </div>
+            </MobileScrollTable>
             <TablePaginationFooter
               page={readyPage}
               totalPages={readyTotalPages}
