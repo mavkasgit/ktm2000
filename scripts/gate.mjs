@@ -36,6 +36,14 @@ const STEPS = [
     what: " реестр инструментов против схем и закреплений",
   },
   {
+    name: "codegraph-age",
+    tier: "fast",
+    command: "node scripts/codegraph-age.mjs",
+    honorsStrict: true,
+    ci: null,
+    what: " возраст codegraph-индекса против HEAD",
+  },
+  {
     name: "docs-links",
     tier: "fast",
     command: "npm run check:docs",
@@ -293,7 +301,7 @@ function reconcile(names) {
   return { status: "ok", detail: `${listed.size} шагов сверены с ${GATES_SHEET}` };
 }
 
-function runStep(step, infraUp) {
+function runStep(step, infraUp, strict) {
   if (step.check) {
     const started = Date.now();
     const { ok, detail } = step.check();
@@ -316,7 +324,8 @@ function runStep(step, infraUp) {
     return { status: "missing", seconds: 0, reason: `${step.tool} не установлен локально` };
   }
   const started = Date.now();
-  const { code, out, error } = shell(step.command, step.cwd, step.env || {});
+  const command = step.command + (strict && step.honorsStrict ? " --strict" : "");
+  const { code, out, error } = shell(command, step.cwd, step.env || {});
   const seconds = (Date.now() - started) / 1000;
   if (error) return { status: "fail", seconds, reason: String(error.message), output: tail(out) };
   return code === 0
@@ -358,7 +367,7 @@ function main() {
   const infraUp = probeInfra();
   const results = [];
   for (const step of steps) {
-    const r = runStep(step, infraUp);
+    const r = runStep(step, infraUp, args.strict);
     results.push({ ...r, name: step.name, what: step.what.trim(), ci: step.ci ? ciPresence(step) : null });
     if (r.status === "fail" && !args.keepGoing) break;
   }
