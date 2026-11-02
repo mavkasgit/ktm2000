@@ -1,4 +1,4 @@
-import type { Locator, Page } from "@playwright/test";
+import type { Page } from "@playwright/test";
 
 import { expect, test } from "./fixtures";
 import {
@@ -22,10 +22,9 @@ import {
 } from "./api-helpers";
 import { MOBILE_USE } from "./mobile-project.mjs";
 import {
-  dragTable,
   expectInsideViewport,
-  readScrollLeft,
   scrollMetrics,
+  swipeAcrossRow,
   tableScroller,
 } from "./mobile-table-helpers";
 
@@ -245,100 +244,10 @@ async function openPackingBoard(page: Page, packing: { id: number; name: string 
 }
 
 /**
- * Минимальная полоса между закреплёнными колонками: жест мышью начинается по
- * прокручиваемой таблице, и если обе липкие колонки съели кадр, вести его не по
- * чему — точкой жеста окажется либо кнопка, либо чужая закреплённая ячейка.
- *
- * 16px — не круглая цифра «на глаз»: полоса обязана быть вдвое длиннее порога
- * свайпа примитива (8px, `DRAG_THRESHOLD_PX` в `MobileScrollTable`), иначе
- * жест, начатый в ней, рисковал бы не набрать ход. Фактические ширины
- * закреплённых колонок попадают в сообщение о падении — если раскладка
- * поедет, полосы будут перед собой, а не «придётся замерять заново».
+ * Минимальная полоса между закреплёнными колонками и свайп по ней — общий
+ * контракт `mobile-table-helpers.ts` (`stickyCells`, `swipeAcrossRow`): та же
+ * рамка кадра и та же полоса прокрутки у «Передач», поэтому проверка одна.
  */
-const MIN_DRAG_STRIP_PX = 16;
-
-type RowBox = { x: number; y: number; width: number; height: number };
-
-/**
- * Геометрия закреплённых ячеек строки доски — один контракт для строки задания
- * и для шапки группы: обе целиком в кадре 390px, не наезжают друг на друга и
- * оставляют полосу прокручиваемой таблицы. В сообщении о падении — измеренные
- * ширины: «не сходится в кадр» без чисел пришлось бы замерять заново.
- *
- * Строку нужно довести в кадр по вертикали до замера: доска прокручивается
- * (`maxHeight: 70vh`), и у строки ниже экрана координаты формально есть, а
- * попадание мышью — нет.
- */
-async function stickyCells(row: Locator, what: string) {
-  const profileCell = row.locator('[data-sticky="profile"]');
-  const actionsCell = row.locator('[data-sticky="actions"]');
-  await expect(profileCell, `закреплённый «Артикул» ${what}`).toBeVisible();
-  await expect(actionsCell, `закреплённые «Действия» ${what}`).toBeVisible();
-
-  const profileBox = await profileCell.boundingBox();
-  const actionsBox = await actionsCell.boundingBox();
-  expectInsideViewport(profileBox, `закреплённый «Артикул» ${what}`);
-  expectInsideViewport(actionsBox, `закреплённые «Действия» ${what}`);
-  const profile = profileBox as RowBox;
-  const actions = actionsBox as RowBox;
-  const strip = actions.x - (profile.x + profile.width);
-
-  expect(
-    strip,
-    `«Артикул» ${what} не заезжает под «Действия»: профиль ${profile.width.toFixed(1)}px, ` +
-      `действия ${actions.width.toFixed(1)}px, полосы осталось ${strip.toFixed(1)}px`,
-  ).toBeGreaterThanOrEqual(MIN_DRAG_STRIP_PX);
-
-  return { profileCell, actionsCell, profile, actions, strip };
-}
-
-/**
- * Свайп по полосе между закреплёнными колонками: жест мышью прокручивает
- * таблицу, а закреплённое стоит на месте — оператор не теряет, о каком
- * задании идёт речь.
- *
- * Правило одно для строки задания и для шапки группы: у шапки кнопки длиннее,
- * и если обе липкие колонки съедают кадр, жест исчезает именно на ней.
- */
-async function swipeAcrossRow(page: Page, row: Locator, what: string) {
-  const scroller = tableScroller(page);
-  // Доска прокручивается по вертикали (`maxHeight: 70vh`): без доводки строки
-  // в кадр мышь бьёт по пустоте под экраном, и жест «не работает» не из-за
-  // свайпа, а из-за координаты. Горизаль после доводки снова обнуляется.
-  await row.scrollIntoViewIfNeeded();
-  await scroller.evaluate((el) => {
-    el.scrollLeft = 0;
-  });
-
-  const { profileCell, actionsCell, profile, actions, strip } = await stickyCells(row, what);
-  const dragFromX = profile.x + profile.width + strip / 2;
-  const dragY = profile.y + profile.height / 2;
-  expect(
-    dragY,
-    `жест ${what} начинается внутри кадра телефона`,
-  ).toBeLessThanOrEqual(MOBILE_USE.viewport.height);
-
-  const scrollLeftBefore = await readScrollLeft(scroller);
-  expect(scrollLeftBefore, `до жеста ${what} таблица не прокручена`).toBe(0);
-
-  await dragTable(page, dragFromX, dragY, -120);
-
-  const scrollLeftAfter = await readScrollLeft(scroller);
-  expect(scrollLeftAfter, `перетаскивание мышью прокручивает ${what}`).toBeGreaterThan(50);
-
-  const profileAfter = await profileCell.boundingBox();
-  const actionsAfter = await actionsCell.boundingBox();
-  expectInsideViewport(profileAfter, `${what}: «Артикул» после свайпа`);
-  expectInsideViewport(actionsAfter, `${what}: «Действия» после свайпа`);
-  expect(
-    Math.abs((profileAfter as { x: number }).x - profile.x),
-    `${what}: «Артикул» не сдвинулся при прокрутке`,
-  ).toBeLessThanOrEqual(1);
-  expect(
-    Math.abs((actionsAfter as { x: number }).x - actions.x),
-    `${what}: «Действия» не сдвинулись при прокрутке`,
-  ).toBeLessThanOrEqual(1);
-}
 
 test.describe("@mobile Участки на телефоне: доска задания таблицей (#342, #345)", () => {
   test.beforeEach(async () => {

@@ -12,10 +12,11 @@ import {
 } from "./api-helpers";
 import { MOBILE_USE } from "./mobile-project.mjs";
 import {
-  dragTable,
   expectInsideViewport,
-  readScrollLeft,
+  primeRowForMeasure,
   scrollMetrics,
+  stickyCells,
+  swipeAcrossRow,
   tableScroller,
 } from "./mobile-table-helpers";
 
@@ -30,6 +31,14 @@ import {
  * проверяет не классы, а геометрию: обе закреплённые ячейки целиком в кадре
  * 390px, поле количества и «Передать» видны до любой прокрутки, а
  * перетаскивание мышью меняет `scrollLeft`, не сдвигая закреплённые ячейки.
+ * Контракт строки один на два экрана и живёт в `mobile-table-helpers.ts`
+ * (`stickyCells`, `swipeAcrossRow`): между закреплёнными колонками обязана
+ * остаться полоса прокрутки, а измеренные ширины уходят в текст падения.
+ *
+ * Ревью #341 (п. 2): самое широкое содержимое «Действий» — не доступная кнопка,
+ * а погашенная с напечатанной причиной («Укажите количество», #193). Отдельный
+ * тест ставит строку ровно в это состояние и меряет кадр целиком.
+ *
  * Шапка страницы на телефоне переносится (ГХП своей строкой, «Журнал» и
  * «Обновить» — следующей) и ничего не обрезает.
  *
@@ -166,28 +175,12 @@ test.describe("@mobile Передачи на телефоне: закреплё�
       metrics.clientWidth,
     );
 
-    // 8. Строка в кадре: горизонтальное перетаскивание меряем по её ячейкам.
-    const profileCell = readyRow.locator('[data-sticky="profile"]');
-    const actionsCell = readyRow.locator('[data-sticky="actions"]');
-    await expect(profileCell).toBeVisible();
-    await expect(actionsCell).toBeVisible();
-    await qtyInput.scrollIntoViewIfNeeded();
-    // `scrollIntoViewIfNeeded` мог подвинуть контейнер по горизонтали —
-    // начинаем жест с нуля, чтобы геометрия была предсказуемой.
-    await scroller.evaluate((el) => {
-      el.scrollLeft = 0;
-    });
-
-    const profileBox = await profileCell.boundingBox();
-    const actionsBox = await actionsCell.boundingBox();
-    expectInsideViewport(profileBox, "закреплённый «Артикул» (профиль)");
-    expectInsideViewport(actionsBox, "закреплённые «Действия»");
-    const profile = profileBox as { x: number; width: number; y: number; height: number };
-    const actions = actionsBox as { x: number; width: number; y: number; height: number };
-    expect(
-      profile.x + profile.width,
-      "закреплённый «Артикул» не заезжает под «Действия»",
-    ).toBeLessThanOrEqual(actions.x + 0.5);
+    // 8. Один контракт с доской участка (#345): закреплённые «Артикул» и
+    //    «Действия» целиком в кадре 390px, не наезжают друг на друга и
+    //    оставляют полосу прокручиваемой таблицы. Измеренные ширины попадают в
+    //    сообщение о падении — «не влезло» без чисел замерять заново.
+    await primeRowForMeasure(page, readyRow);
+    await stickyCells(readyRow, "строки «Передать»");
 
     // 9. Поле количества, «передано/план» и «Передать» видны целиком до
     //    прокрутки: это и есть смысл закреплённых «Действий».
@@ -196,38 +189,11 @@ test.describe("@mobile Передачи на телефоне: закреплё�
     await expect(planLabel).toBeInViewport({ ratio: 1 });
     await expect(transferButton).toBeInViewport({ ratio: 1 });
 
-    // 10. Свайп по всей поверхности: жест начинается между закреплёнными
-    //     ячейками (там лежит обычная прокручиваемая ячейка), а не в поле
-    //     ввода и не в кнопке.
-    const gapLeft = profile.x + profile.width;
-    const gapRight = actions.x;
-    const dragFromX = gapRight - gapLeft >= 4 ? (gapLeft + gapRight) / 2 : actions.x + 8;
-    const dragY = profile.y + profile.height / 2;
-
-    const scrollLeftBefore = await readScrollLeft(scroller);
-    expect(scrollLeftBefore, "до жеста таблица не прокручена").toBe(0);
-
-    await dragTable(page, dragFromX, dragY, -120);
-
-    const scrollLeftAfter = await readScrollLeft(scroller);
-    expect(scrollLeftAfter, "перетаскивание мышью прокручивает таблицу влево").toBeGreaterThan(
-      50,
-    );
-
-    // 11. Закреплённые ячейки при этом стоят на месте: «Артикул» у левого
-    //     края, «Действия» у правого, поле и кнопка по-прежнему в кадре.
-    const profileAfter = await profileCell.boundingBox();
-    const actionsAfter = await actionsCell.boundingBox();
-    expectInsideViewport(profileAfter, "«Артикул» после свайпа");
-    expectInsideViewport(actionsAfter, "«Действия» после свайпа");
-    expect(
-      Math.abs((profileAfter as { x: number }).x - profile.x),
-      "«Артикул» не сдвинулся при прокрутке",
-    ).toBeLessThanOrEqual(1);
-    expect(
-      Math.abs((actionsAfter as { x: number }).x - actions.x),
-      "«Действия» не сдвинулись при прокрутке",
-    ).toBeLessThanOrEqual(1);
+    // 10–11. Свайп по полосе между закреплёнными колонками: жест мышью
+    //        прокручивает таблицу (порог 8px набирается дробными шагами), а
+    //        закреплённые ячейки стоят на месте — оператор не теряет, о какой
+    //        передаче речь, и поле с кнопкой остаются в кадре.
+    await swipeAcrossRow(page, readyRow, "строки «Передать»");
     await expect(qtyInput).toBeInViewport({ ratio: 1 });
     await expect(transferButton).toBeInViewport({ ratio: 1 });
 
@@ -282,6 +248,82 @@ test.describe("@mobile Передачи на телефоне: закреплё�
     await searchInput.scrollIntoViewIfNeeded();
     await expect(searchInput).toBeInViewport({ ratio: 1 });
     await expect(bulkToggle).toBeInViewport({ ratio: 1 });
+  });
+
+  test("строка без количества: причина напечатана и закреплённые «Действия» с ней влезают в 390px", async ({
+    authenticatedPage,
+  }) => {
+    test.slow();
+    const page = authenticatedPage;
+    expect(page.viewportSize()).toEqual(MOBILE_USE.viewport);
+
+    const token = await apiAccessTokenFromPage(page);
+    expect(token).toBeTruthy();
+
+    const sku = `E2E-MOB-REASON-${Date.now()}`;
+    const { product, route } = await seedTransitRoute(sku);
+    const run = await apiRunDemoFullRoute(token, {
+      stage_preset: "after_release",
+      initial_quantity: "40",
+      route_id: route.id,
+      product_id: product.id,
+      run_id: `e2e-mobile-transfers-reason-${Date.now()}`,
+    });
+    expect(run.stopped_at_stage).toBe("released");
+
+    await page.goto("/transfers");
+    const table = readyTable(page);
+    await expect(table).toBeVisible({ timeout: 15_000 });
+    const readyRow = table.locator("tr", { hasText: sku }).first();
+    await expect(readyRow, "строка артикула в «Готово к передаче»").toBeVisible({
+      timeout: 15_000,
+    });
+
+    // Состояние «нечего передавать»: оператор обнулил количество. Кнопка
+    // гаснет, и причина обязана быть напечатана рядом (#193) — на сенсорном
+    // экране `title` не читается, а без слова рядом оператор не понял бы, что
+    // кнопка сломалась.
+    const qtyInput = readyRow.locator('input[type="number"]').first();
+    await qtyInput.fill("0");
+    const transferButton = readyRow.getByRole("button", { name: "Передать" });
+    await expect(transferButton).toBeDisabled();
+    const reason = readyRow.getByText("Укажите количество", { exact: true });
+    await expect(reason, "причина недоступности напечатана текстом (#193)").toBeVisible();
+
+    // Та же строка в том же контракте, что доска участка (#345): обе
+    // закреплённые ячейки целиком в кадре 390px и между ними остаётся полоса
+    // прокрутки. Измеренные ширины — в тексте падения: «Действия» с текстом
+    // причины шире обычной строки, и если кадр разъехался, числа нужны сразу.
+    await primeRowForMeasure(page, readyRow);
+    const { actions } = await stickyCells(readyRow, "строки с напечатанной причиной");
+
+    // Текст причины не съехался за край и не обрезан: целиком в кадре и
+    // целиком внутри закреплённой ячейки. #193 запрещает прятать причину в
+    // подсказку, а «Укажите…» с многоточием — ровно то же самое.
+    await expect(reason).toBeInViewport({ ratio: 1 });
+    const reasonBox = (await reason.boundingBox()) as {
+      x: number;
+      width: number;
+      y: number;
+      height: number;
+    };
+    expectInsideViewport(reasonBox, "напечатанная причина строки");
+    expect(
+      reasonBox.x + reasonBox.width,
+      `причина не вылезла за границы закреплённых «Действий»: ячейка ${actions.width.toFixed(
+        1,
+      )}px, текст кончается на ${(reasonBox.x + reasonBox.width).toFixed(1)}px, ` +
+        `правый край ячейки ${(actions.x + actions.width).toFixed(1)}px`,
+    ).toBeLessThanOrEqual(actions.x + actions.width + 0.5);
+    const clipped = await reason.evaluate((el) => el.scrollWidth - el.clientWidth);
+    expect(clipped, "текст причины не срезан переполнением").toBeLessThanOrEqual(1);
+
+    // Свайп по полосе остаётся: количество и кнопка с причиной не уезжают, а
+    // вторичные колонки листаются.
+    await swipeAcrossRow(page, readyRow, "строки с напечатанной причиной");
+    await expect(qtyInput).toBeInViewport({ ratio: 1 });
+    await expect(transferButton).toBeInViewport({ ratio: 1 });
+    await expect(reason).toBeInViewport({ ratio: 1 });
   });
 
   test("финальная строка держит «Отправить» на телефоне и не уходит в групповой режим", async ({
