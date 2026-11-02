@@ -16,6 +16,11 @@ name: Ruff
 # `ruff.toml` автоматически. Откат к report-only — одна строка
 # `continue-on-error: true`. --fix не используется: линтер ничего не меняет.
 # Версия закреплена (0.16.9) — на ней снят ноль находок и посчитан скоуп.
+#
+# #361 concurrency: группа на (workflow, PR/ветка), отмена устаревшего прогона
+# (кроме push в main). Path scope — шагом внутри джоба, а не `paths` уровня
+# workflow: `ruff` входит в required contexts (gh api branches/main/protection),
+# а отфильтрованный по путям workflow оставил бы required check в "Pending".
 on:
   push:
     branches:
@@ -27,6 +32,10 @@ on:
       - master
   workflow_dispatch:
 
+concurrency:
+  group: ci-${{ github.workflow }}-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' || github.ref != 'refs/heads/main' }}
+
 jobs:
   ruff:
     name: ruff
@@ -36,13 +45,51 @@ jobs:
       - name: Checkout
         uses: actions/checkout@v4
 
+      # #361: скоуп = то, что реально читает `ruff check backend` + конфиг + сам workflow.
+      - name: Path scope (зона ruff)
+        id: scope
+        shell: bash
+        env:
+          KTM_BASE: ${{ github.event.pull_request.base.sha }}
+          KTM_HEAD: ${{ github.event.pull_request.head.sha }}
+          KTM_EVENT: ${{ github.event_name }}
+        run: |
+          set -euo pipefail
+          PATTERN='^backend/|^ruff\.toml$|^\.github/workflows/ruff\.yml$'
+          say() {
+            echo "relevant=$1" >> "$GITHUB_OUTPUT"
+          }
+          if [ "$KTM_EVENT" != "pull_request" ]; then
+            echo "event=$KTM_EVENT — скоуп не применяется, прогон полный"
+            say true; exit 0
+          fi
+          # base может отсутствовать в shallow-checkout: сначала дозапрос,
+          # потом дифф; fail-open только если дифф посчитать нечем.
+          git fetch --no-tags --depth=1 origin "$KTM_BASE" >/dev/null 2>&1 ||
+            echo "fetch $KTM_BASE не удался — полагаюсь на локальные объекты"
+          if ! CHANGED=$(git diff --name-only "$KTM_BASE" "$KTM_HEAD" 2>/dev/null); then
+            echo "diff $KTM_BASE..$KTM_HEAD недоступен — прогон полный (fail-open)"
+            say true; exit 0
+          fi
+          printf 'Изменённые файлы PR:\n%s\n' "$CHANGED"
+          if [ -z "$CHANGED" ] || printf '%s\n' "$CHANGED" | grep -qE "$PATTERN"; then
+            echo "Зона ruff затронута — прогон полный"
+            say true
+          else
+            echo "Ни одного python-файла скоупа ruff не изменено — pip install и check пропускаем"
+            say false
+          fi
+
       - name: Setup Python
+        if: steps.scope.outputs.relevant == 'true'
         uses: actions/setup-python@v5
         with:
           python-version: "3.12"
 
       - name: Install ruff (pinned)
+        if: steps.scope.outputs.relevant == 'true'
         run: pip install ruff==0.16.9
 
       - name: Ruff check backend
+        if: steps.scope.outputs.relevant == 'true'
         run: ruff check backend

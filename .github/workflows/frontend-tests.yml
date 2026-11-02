@@ -6,7 +6,12 @@ name: Frontend tests
 # снято, гейт — отдельным решением позже). ESLint добавлен в набор ради
 # архитектурных границ FSD (#333): tsc их не видит.
 # Имя джоба `frontend tests` — оно же имя required check (настройка #254).
-# paths-фильтров нет намеренно: required check не должен висеть, не запустившись.
+# #361: скоуп по путям считается шагом внутри джоба (не фильтром `paths` уровня
+# workflow) — required check от workflow-фильтра повис бы в "Pending" и
+# заблокировал merge (документация GitHub, `on.<push|pull_request>`). Поэтому
+# первоначальная договорённость «фильтров нет намеренно» сохранена по смыслу:
+# джоб запускается всегда, а дорогой набор пропускается только когда в PR нет
+# ни одного файла зоны frontend.
 on:
   push:
     branches:
@@ -17,6 +22,10 @@ on:
       - main
       - master
   workflow_dispatch:
+
+concurrency:
+  group: ci-${{ github.workflow }}-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' || github.ref != 'refs/heads/main' }}
 
 jobs:
   frontend-tests:
@@ -31,7 +40,44 @@ jobs:
       - name: Checkout
         uses: actions/checkout@v4
 
+      # #361: зона фронта = frontend/** + корневые npm-файлы + сам workflow.
+      # Невозможность посчитать diff → relevant=true (fail-open).
+      - name: Path scope (зона frontend)
+        id: scope
+        shell: bash
+        env:
+          KTM_BASE: ${{ github.event.pull_request.base.sha }}
+          KTM_HEAD: ${{ github.event.pull_request.head.sha }}
+          KTM_EVENT: ${{ github.event_name }}
+        run: |
+          set -euo pipefail
+          PATTERN='^frontend/|^package(-lock)?\.json$|^\.github/workflows/frontend-tests\.yml$'
+          say() {
+            echo "relevant=$1" >> "$GITHUB_OUTPUT"
+          }
+          if [ "$KTM_EVENT" != "pull_request" ]; then
+            echo "event=$KTM_EVENT — скоуп не применяется, прогон полный"
+            say true; exit 0
+          fi
+          # base может отсутствовать в shallow-checkout: сначала дозапрос,
+          # потом дифф; fail-open только если дифф посчитать нечем.
+          git fetch --no-tags --depth=1 origin "$KTM_BASE" >/dev/null 2>&1 ||
+            echo "fetch $KTM_BASE не удался — полагаюсь на локальные объекты"
+          if ! CHANGED=$(git diff --name-only "$KTM_BASE" "$KTM_HEAD" 2>/dev/null); then
+            echo "diff $KTM_BASE..$KTM_HEAD недоступен — прогон полный (fail-open)"
+            say true; exit 0
+          fi
+          printf 'Изменённые файлы PR:\n%s\n' "$CHANGED"
+          if [ -z "$CHANGED" ] || printf '%s\n' "$CHANGED" | grep -qE "$PATTERN"; then
+            echo "Зона frontend затронута — прогон полный"
+            say true
+          else
+            echo "Ни одного файла зоны frontend не изменено — tsc/eslint/vitest пропускаем"
+            say false
+          fi
+
       - name: Setup Node
+        if: steps.scope.outputs.relevant == 'true'
         uses: actions/setup-node@v4
         with:
           node-version: "20"
@@ -39,13 +85,17 @@ jobs:
           cache-dependency-path: frontend/package-lock.json
 
       - name: Install frontend dependencies
+        if: steps.scope.outputs.relevant == 'true'
         run: npm ci
 
       - name: Typecheck (tsc -b)
+        if: steps.scope.outputs.relevant == 'true'
         run: npx tsc -b
 
       - name: ESLint (архитектурные границы FSD)
+        if: steps.scope.outputs.relevant == 'true'
         run: npm run lint
 
       - name: Vitest with coverage (report-only, no threshold yet)
+        if: steps.scope.outputs.relevant == 'true'
         run: npm test -- --coverage

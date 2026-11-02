@@ -19,6 +19,20 @@ name: Backend tests
 # проверить зависимость от порядка/общего состояния, и только потом чинить тест.
 # Имя джоба `backend tests` — оно же имя required check (настройка #254):
 # при смене имени обновить branch protection.
+#
+# #361 concurrency: одна группа на (workflow, PR или ветка), устаревший прогон
+# отменяется. На push в main `cancel-in-progress` выключен: каждый коммит main
+# должен быть проверен до конца (на нём держатся серия зелёных для промоушена
+# e2e-smoke и история coverage-гейта 73%).
+# #361 path scope: скоуп считается шагом внутри джоба, а НЕ фильтром `paths`
+# уровня workflow. Причина числом из документации GitHub (workflow-syntax,
+# раздел `on.<push|pull_request>.<branches>`): «If a workflow is skipped due to
+# branch filtering, path filtering, or a commit message, then checks associated
+# with that workflow will remain in a "Pending" state. A pull request that
+# requires those checks to be successful will be blocked from merging».
+# `backend tests` — required (gh api branches/main/protection → contexts),
+# поэтому workflow-фильтр на нём запрещён; пропуск дорогих шагов внутри
+# всегда запускающегося джоба даёт skipped/success и branch protection не вешает.
 on:
   push:
     branches:
@@ -29,6 +43,10 @@ on:
       - main
       - master
   workflow_dispatch:
+
+concurrency:
+  group: ci-${{ github.workflow }}-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' || github.ref != 'refs/heads/main' }}
 
 jobs:
   backend-tests:
@@ -60,7 +78,47 @@ jobs:
       - name: Checkout
         uses: actions/checkout@v4
 
+      # #361: дешёвый определитель «есть ли в PR изменения в зоне backend».
+      # Считает по `git diff base..head`; при любой невозможности посчитать —
+      # relevant=true (fail-open: дороже прогнать набор, чем пропустить его).
+      # Локальная проверка той же логики — `npm run ci:scope:check`-подобный
+      # разбор по истории репозитория, см. комментарий в issue #361.
+      - name: Path scope (зона backend)
+        id: scope
+        shell: bash
+        env:
+          KTM_BASE: ${{ github.event.pull_request.base.sha }}
+          KTM_HEAD: ${{ github.event.pull_request.head.sha }}
+          KTM_EVENT: ${{ github.event_name }}
+        run: |
+          set -euo pipefail
+          PATTERN='^(backend|scripts|infra)/|^package(-lock)?\.json$|^ports\.json$|^ruff\.toml$|^\.github/workflows/backend-tests\.yml$'
+          say() {
+            echo "relevant=$1" >> "$GITHUB_OUTPUT"
+          }
+          if [ "$KTM_EVENT" != "pull_request" ]; then
+            echo "event=$KTM_EVENT — скоуп не применяется, прогон полный"
+            say true; exit 0
+          fi
+          # base может отсутствовать в shallow-checkout: сначала дозапрос,
+          # потом дифф; fail-open только если дифф посчитать нечем.
+          git fetch --no-tags --depth=1 origin "$KTM_BASE" >/dev/null 2>&1 ||
+            echo "fetch $KTM_BASE не удался — полагаюсь на локальные объекты"
+          if ! CHANGED=$(git diff --name-only "$KTM_BASE" "$KTM_HEAD" 2>/dev/null); then
+            echo "diff $KTM_BASE..$KTM_HEAD недоступен — прогон полный (fail-open)"
+            say true; exit 0
+          fi
+          printf 'Изменённые файлы PR:\n%s\n' "$CHANGED"
+          if [ -z "$CHANGED" ] || printf '%s\n' "$CHANGED" | grep -qE "$PATTERN"; then
+            echo "Зона backend затронута (или изменений нет — на всякий случай гоняем)"
+            say true
+          else
+            echo "Зона backend не затронута ни одним изменённым файлом — дорогие шаги пропускаем"
+            say false
+          fi
+
       - name: Setup Python
+        if: steps.scope.outputs.relevant == 'true'
         uses: actions/setup-python@v5
         with:
           python-version: "3.12"
@@ -68,6 +126,7 @@ jobs:
           cache-dependency-path: backend/requirements.txt
 
       - name: Install backend dependencies
+        if: steps.scope.outputs.relevant == 'true'
         run: |
           pip install -r backend/requirements.txt
           pip install coverage==7.16.2
@@ -75,6 +134,7 @@ jobs:
       # run-DB создаётся и удаляется тем же скриптом, что и на dev-машине:
       # изоляция прогона остаётся той же, без отдельной CI-обвязки.
       - name: Run backend test suite with coverage
+        if: steps.scope.outputs.relevant == 'true'
         run: |
           RUN_ID=$(python -c "import uuid; print(uuid.uuid4().hex[:12])")
           DB_NAME="ktm2000_test_${RUN_ID}"
@@ -87,6 +147,7 @@ jobs:
           python -m coverage run --source=app -m pytest -q -p no:xdist -p no:pytest-testmon
 
       - name: Coverage gate (>= 73%)
+        if: steps.scope.outputs.relevant == 'true'
         working-directory: backend
         run: python -m coverage report --fail-under=73
 
@@ -94,4 +155,5 @@ jobs:
       # будущего включения в блокирующий CI). Рядом живёт ruff.yml — он тоже
       # report-only, см. решения #245 (Q5=2, Q15=а).
       - name: Test hygiene report (report-only)
+        if: steps.scope.outputs.relevant == 'true'
         run: python scripts/check-test-imports.py

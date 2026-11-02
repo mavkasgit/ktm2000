@@ -14,16 +14,41 @@ name: Docs
 # Локальный запуск — та же команда: `npm run check:docs` из корня.
 # `test:scripts` едет сюда же: у скриптов есть тесты, и без этого джоба они
 # никогда не исполнялись в CI.
+#
+# #361: джоб `docs` НЕ входит в required contexts (проверено чтением
+# `gh api repos/mavkasgit/ktm2000/branches/main/protection` — contexts =
+# migrations, backend tests, frontend tests, ruff). Только поэтому здесь
+# разрешён фильтр `paths` уровня workflow: его срабатывание не оставит
+# required check в "Pending". Меняется состав required-проверок —
+# фильтр надо снимать (иначе правки вне скоупа молча не проверяются).
 on:
   push:
     branches:
       - main
       - master
+    paths:
+      - '**.md'
+      - 'docs/**'
+      - 'scripts/**'
+      - 'package.json'
+      - 'package-lock.json'
+      - '.github/workflows/docs.yml'
   pull_request:
     branches:
       - main
       - master
+    paths:
+      - '**.md'
+      - 'docs/**'
+      - 'scripts/**'
+      - 'package.json'
+      - 'package-lock.json'
+      - '.github/workflows/docs.yml'
   workflow_dispatch:
+
+concurrency:
+  group: ci-${{ github.workflow }}-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' || github.ref != 'refs/heads/main' }}
 
 jobs:
   docs:

@@ -1,5 +1,12 @@
 name: Migrations
 
+# #361 concurrency + path scope. Требуемый required check `migrations`
+# (gh api branches/main/protection → contexts), поэтому скоуп считается шагом
+# внутри джоба, а не фильтром `paths` уровня workflow: по документации GitHub
+# workflow, отфильтрованный по путям, оставляет required check в состоянии
+# "Pending" и блокирует merge. Пропущенные шаги внутри запущенного джоба дают
+# skipped/success — branch protection не виснет.
+# На push в main cancel-in-progress выключен: каждый коммит main проверяется до конца.
 on:
   push:
     branches:
@@ -9,6 +16,10 @@ on:
     branches:
       - main
       - master
+
+concurrency:
+  group: ci-${{ github.workflow }}-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' || github.ref != 'refs/heads/main' }}
 
 jobs:
   migrations:
@@ -46,13 +57,51 @@ jobs:
       - name: Checkout
         uses: actions/checkout@v4
 
+      # #361: дешёвый определитель «есть ли в PR изменения в зоне миграций».
+      # Любая невозможность посчитать diff → relevant=true (fail-open).
+      - name: Path scope (зона миграций)
+        id: scope
+        shell: bash
+        env:
+          KTM_BASE: ${{ github.event.pull_request.base.sha }}
+          KTM_HEAD: ${{ github.event.pull_request.head.sha }}
+          KTM_EVENT: ${{ github.event_name }}
+        run: |
+          set -euo pipefail
+          PATTERN='^(backend|scripts|infra)/|^package(-lock)?\.json$|^ports\.json$|^\.github/workflows/migrations\.yml$'
+          say() {
+            echo "relevant=$1" >> "$GITHUB_OUTPUT"
+          }
+          if [ "$KTM_EVENT" != "pull_request" ]; then
+            echo "event=$KTM_EVENT — скоуп не применяется, прогон полный"
+            say true; exit 0
+          fi
+          # base может отсутствовать в shallow-checkout: сначала дозапрос,
+          # потом дифф; fail-open только если дифф посчитать нечем.
+          git fetch --no-tags --depth=1 origin "$KTM_BASE" >/dev/null 2>&1 ||
+            echo "fetch $KTM_BASE не удался — полагаюсь на локальные объекты"
+          if ! CHANGED=$(git diff --name-only "$KTM_BASE" "$KTM_HEAD" 2>/dev/null); then
+            echo "diff $KTM_BASE..$KTM_HEAD недоступен — прогон полный (fail-open)"
+            say true; exit 0
+          fi
+          printf 'Изменённые файлы PR:\n%s\n' "$CHANGED"
+          if [ -z "$CHANGED" ] || printf '%s\n' "$CHANGED" | grep -qE "$PATTERN"; then
+            echo "Зона миграций затронута — прогон полный"
+            say true
+          else
+            echo "Ни одного файла зоны миграций не изменено — дорогие шаги пропускаем"
+            say false
+          fi
+
       - name: Setup Node.js
+        if: steps.scope.outputs.relevant == 'true'
         uses: actions/setup-node@v4
         with:
           node-version: "20"
           cache: npm
 
       - name: Setup Python
+        if: steps.scope.outputs.relevant == 'true'
         uses: actions/setup-python@v5
         with:
           python-version: "3.12"
@@ -60,15 +109,19 @@ jobs:
           cache-dependency-path: backend/requirements.txt
 
       - name: Install npm dependencies
+        if: steps.scope.outputs.relevant == 'true'
         run: npm ci
 
       - name: Install backend dependencies
+        if: steps.scope.outputs.relevant == 'true'
         run: pip install -r backend/requirements.txt
 
       - name: Run Alembic migrate and drift check
+        if: steps.scope.outputs.relevant == 'true'
         run: cd backend && alembic upgrade head && alembic check
 
       - name: Run migration tests
+        if: steps.scope.outputs.relevant == 'true'
         env:
           TEST_DB_PORT: 5212
         run: |
@@ -80,8 +133,10 @@ jobs:
           TEST_DATABASE_URL="postgresql+asyncpg://ktm2000_user:ktm2000_pass_test@localhost:5212/${DB_NAME}" pytest tests/test_migrations.py -v
 
       - name: Validate seeds and generated labels
+        if: steps.scope.outputs.relevant == 'true'
         run: cd backend && python scripts/validate_seeds.py && python scripts/generate_frontend_labels.py --check
 
       - name: Verify profile-settings manifest (strict)
+        if: steps.scope.outputs.relevant == 'true'
         working-directory: .
         run: python scripts/verify-profile-settings.py verify --strict
