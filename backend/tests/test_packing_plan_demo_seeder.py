@@ -429,10 +429,10 @@ def _expected_stage_tasks_by_section(rows: Sequence[Mapping[str, object]]) -> di
 #: расходится по участкам круговым разбором, а повторный артикул встаёт
 #: четвёртым и снова попадает на сверловку — отдельным заданием.
 DEMO_SLICE_ROWS: tuple[dict[str, object], ...] = (
-    PREP_PLAN_ROWS[0],  # ALS1288, «сверло» → DRILLING
+    PREP_PLAN_ROWS[0],  # ALS-1288, «сверло» → DRILLING
     PREP_PLAN_ROWS[4],  # АТ-6324, «гребенка» → PRESSING / PRESS_COMB
-    PREP_PLAN_ROWS[2],  # ALS1290, пустая операция → SHOT_BLAST
-    PREP_PLAN_ROWS[3],  # повторный ALS1288 → отдельное задание DRILLING
+    PREP_PLAN_ROWS[2],  # ALS-1290, пустая операция → SHOT_BLAST
+    PREP_PLAN_ROWS[3],  # повторный ALS-1288 → отдельное задание DRILLING
     PACKING_PLAN_ROWS[1],  # базовая упаковочная группа (ГП) → SAWING
     PACKING_PLAN_ROWS[0],  # одинокая строка артикула пары (2616, 300) → своя норма
     ANOD_PAIR_ROWS[2],  # ЮП-2974 «П/ф» → ANODIZING, бакет «закрыто»
@@ -1358,7 +1358,7 @@ async def test_slice_seed_walks_the_domain_path(demo_seed: dict, demo_db: AsyncS
             demo_db, WorkTask, WorkTask.section_id == section.id
         ) == expected_by_section[code]
 
-    # Нормативная длина — вход последней строки артикула (у ALS1288 их две,
+    # Нормативная длина — вход последней строки артикула (у ALS-1288 их две,
     # и у пары ЮП-2256 тоже).
     assert await _demo_product_lengths(demo_db, DEMO_SLICE_ROWS) == _expected_primary_lengths(
         DEMO_SLICE_ROWS
@@ -1463,7 +1463,7 @@ async def test_slice_sections_carry_their_own_operations(demo_db: AsyncSession, 
     drill_tasks = [
         await _target_task(demo_db, position.id, sections["DRILLING"].id)
         for position in positions
-        if position.source_sku == "ALS1288"
+        if position.source_sku == "ALS-1288"
     ]
     assert len({task.id for task in drill_tasks}) == 2, "повтор артикула не дал двух заданий"
 

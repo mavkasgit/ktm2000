@@ -627,7 +627,7 @@ PACKING_PLAN_ROWS: tuple[dict[str, object], ...] = (
         "kind": "П/ф",
     },
     {
-        "sku": "ALS1360",
+        "sku": "ALS-1360",
         "name": "Плинтус алюм под светодиодную ленту JD 22-60мм led 2,5м анод черный матовый в компл рассеив 1шт.",
         "color": "черный",
         "input_length_m": 2.5,
@@ -795,7 +795,7 @@ PACKING_PLAN_ROWS: tuple[dict[str, object], ...] = (
         "kind": "ГП",
     },
     {
-        "sku": "ALS798",
+        "sku": "ALS-798",
         "name": "Плинтус алюминиевый 17 мм 2,5м анод.серебро матовый",
         "color": "серебро",
         "input_length_m": 2.5,
@@ -807,7 +807,7 @@ PACKING_PLAN_ROWS: tuple[dict[str, object], ...] = (
         "kind": "ГП",
     },
     {
-        "sku": "ALS1103",
+        "sku": "ALS-1103",
         "name": "Плинтус алюминиевый 40 мм 2,5м анод. серебро матовый",
         "color": "серебро",
         "input_length_m": 2.5,
@@ -819,7 +819,7 @@ PACKING_PLAN_ROWS: tuple[dict[str, object], ...] = (
         "kind": "П/Ф",
     },
     {
-        "sku": "ALS1320",
+        "sku": "ALS-1320",
         "name": "Плинтус алюм под светодиодную ленту JD 21-60мм led 2,5м анод черный матовый",
         "color": "черный",
         "input_length_m": 2.5,
@@ -843,7 +843,7 @@ PACKING_PLAN_ROWS: tuple[dict[str, object], ...] = (
         "kind": "П/Ф",
     },
     {
-        "sku": "ALS917",
+        "sku": "ALS-917",
         "name": "Алюминиевая декоративная вставка 5,3*6 ZU2.0-5.5 T1.8L 2,7м анодированный черный матовый",
         "color": "черный",
         "input_length_m": 2.7,
@@ -879,7 +879,7 @@ PACKING_PLAN_ROWS: tuple[dict[str, object], ...] = (
 # но с SHOT_BLAST (дробеструй есть у всех демо-артикулов).
 _PREP_DRILL_ROWS: tuple[dict[str, object], ...] = (
     {
-        "sku": "ALS1288",
+        "sku": "ALS-1288",
         "name": "Профиль торцевой",
         "color": "серебро",
         "input_length_m": 1.8,
@@ -891,7 +891,7 @@ _PREP_DRILL_ROWS: tuple[dict[str, object], ...] = (
         "kind": "П/ф",
     },
     {
-        "sku": "ALS1288",
+        "sku": "ALS-1288",
         "name": "Профиль торцевой",
         "color": "серебро",
         "input_length_m": 1.8,
@@ -903,7 +903,7 @@ _PREP_DRILL_ROWS: tuple[dict[str, object], ...] = (
         "kind": "П/ф",
     },
     {
-        "sku": "ALS1288",
+        "sku": "ALS-1288",
         "name": "Профиль торцевой",
         "color": "серебро",
         "input_length_m": 1.8,
@@ -915,7 +915,7 @@ _PREP_DRILL_ROWS: tuple[dict[str, object], ...] = (
         "kind": "П/ф",
     },
     {
-        "sku": "ALS1288",
+        "sku": "ALS-1288",
         "name": "Профиль торцевой",
         "color": "серебро",
         "input_length_m": 1.8,
@@ -1125,7 +1125,7 @@ _PREP_PRESS_ROWS: tuple[dict[str, object], ...] = (
 
 _PREP_SHOT_ROWS: tuple[dict[str, object], ...] = (
     {
-        "sku": "ALS1290",
+        "sku": "ALS-1290",
         "name": "Профиль угловой",
         "color": "золото",
         "input_length_m": 0.9,
@@ -1137,7 +1137,7 @@ _PREP_SHOT_ROWS: tuple[dict[str, object], ...] = (
         "kind": "П/ф",
     },
     {
-        "sku": "ALS1290",
+        "sku": "ALS-1290",
         "name": "Профиль угловой",
         "color": "золото",
         "input_length_m": 0.9,
@@ -1149,7 +1149,7 @@ _PREP_SHOT_ROWS: tuple[dict[str, object], ...] = (
         "kind": "П/ф",
     },
     {
-        "sku": "ALS1290",
+        "sku": "ALS-1290",
         "name": "Профиль угловой",
         "color": "золото",
         "input_length_m": 0.9,
@@ -1161,7 +1161,7 @@ _PREP_SHOT_ROWS: tuple[dict[str, object], ...] = (
         "kind": "П/ф",
     },
     {
-        "sku": "ALS1290",
+        "sku": "ALS-1290",
         "name": "Профиль угловой",
         "color": "золото",
         "input_length_m": 0.9,
@@ -1173,7 +1173,7 @@ _PREP_SHOT_ROWS: tuple[dict[str, object], ...] = (
         "kind": "П/ф",
     },
     {
-        "sku": "ALS1290",
+        "sku": "ALS-1290",
         "name": "Профиль угловой",
         "color": "золото",
         "input_length_m": 0.9,
@@ -1733,7 +1733,7 @@ _PREP_STAGE_HEADERS = [
 # это те же профисы, просто план ведётся другим листом и до отгрузки не идёт.
 PREP_STAGE_PLAN_ROWS: tuple[dict[str, object], ...] = (
     {
-        "sku": "ALS1288",
+        "sku": "ALS-1288",
         "name": "Профиль торцевой",
         "color": "серебро",
         "operation": "сверло",
@@ -1771,7 +1771,7 @@ PREP_STAGE_PLAN_ROWS: tuple[dict[str, object], ...] = (
     {
         # Пустая операция — вариант «только дробеструй»: маршрут без сверловки
         # и без пресса. Позиция остаётся неутверждённой, как свежий импорт.
-        "sku": "ALS1290",
+        "sku": "ALS-1290",
         "name": "Профиль угловой",
         "color": "золото",
         "operation": "",
