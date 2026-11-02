@@ -10,6 +10,7 @@ import type { BulkRunnerProgress } from "@/shared/bulk";
 import { fmtQty } from "@/shared/lib/quantityFormat";
 import type { ActionReasonCode } from "@/shared/lib/actionReasons";
 import { enteredTransferQuantity } from "../lib/runTransferBatch";
+import { zeroQuantityReason } from "../lib/transferReasons";
 
 function nowLocalDateParts(): string {
   const d = new Date();
@@ -115,18 +116,18 @@ export function BulkTransferFooter({
   /**
    * Причина, по которой «Передать все» не нажимается (#193). Временные
    * состояния (`pending`, `running`) причиной не считаются: о них говорит
-   * надпись на кнопке.
+   * надпись на кнопке. «Нечего передавать» — общее правило со строкой и шапкой
+   * группы (`zeroQuantityReason`): сумма по строкам, которые уедут, нулевая
+   * ровно тогда, когда ни одна выбранная строка не получила положительного
+   * числа, поэтому `totalQty` сюда приходит уже сведённым.
    */
   const submitBlockReason: ActionReasonCode | null =
     pending || running
       ? null
       : selectedTasks.length === 0
         ? "no_tasks_selected"
-        : sendableTasks.length === 0
-          ? "zero_quantity"
-          : defaultExecutorId != null
-            ? null
-            : "no_executor";
+        : zeroQuantityReason(totalQty) ??
+          (defaultExecutorId != null ? null : "no_executor");
 
   const handleConfirm = () => {
     if (!canSubmit || defaultExecutorId == null) return;

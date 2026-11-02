@@ -1,10 +1,19 @@
 // @vitest-environment happy-dom
 
-import { describe, expect, it, vi } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import { act } from "react";
 import { createRoot, type Root } from "react-dom/client";
+import { fireEvent } from "@testing-library/react";
 
-import { DRAG_THRESHOLD_PX, MobileScrollTable, stickyCell, useTableSwipe } from "./MobileScrollTable";
+import { stubViewportWidth } from "@/shared/lib/testViewport";
+
+import {
+  DRAG_THRESHOLD_PX,
+  MobileScrollTable,
+  stickyCell,
+  useTableSwipe,
+  type StickyCellTone,
+} from "./MobileScrollTable";
 
 (globalThis as Record<string, unknown>).IS_REACT_ACT_ENVIRONMENT = true;
 
@@ -66,7 +75,7 @@ function pointerEvent(
   } as unknown as React.PointerEvent<HTMLElement>;
 }
 
-function mountSwipe(options?: { thresholdPx?: number }) {
+function mountSwipe(options?: { thresholdPx?: number; enabled?: boolean }) {
   const container = document.createElement("div");
   const root: Root = createRoot(container);
   const state: { current: ReturnType<typeof useTableSwipe> | null } = { current: null };
@@ -233,6 +242,50 @@ describe("stickyCell", () => {
     expect(cell.className).toContain("max-md:bg-card");
     expect(cell.className).toContain("max-md:left-0");
   });
+
+  /**
+   * Подложка закреплённой ячейки — одна палитра на проект (#341, ревью 9).
+   *
+   * Доска участка и «Передачи» писали одни и те же тональные классы каждая
+   * своя:
+   * расходился только тон строки, а требование одно — фон непрозрачен, иначе
+   * под липкую ячейку видно уезжающие числа. Набор живёт рядом со `stickyCell`,
+   * страницы выбирают тон и дописывают своё через `className`.
+   */
+  it("тон закреплённой ячейки берётся из общего набора и остаётся непрозрачным", () => {
+    const tones: Array<[StickyCellTone, string]> = [
+      ["row", "max-md:bg-card"],
+      ["group", "max-md:bg-slate-100 dark:max-md:bg-slate-800"],
+      ["selected", "max-md:bg-blue-100 dark:max-md:bg-blue-950"],
+      ["header", "max-md:bg-muted"],
+    ];
+
+    for (const [tone, classes] of tones) {
+      const cell = stickyCell({ name: "profile", side: "left", fill: tone });
+      expect(cell.className, `тон ${tone}`).toContain(classes.split(" ")[0]);
+      expect(cell.className, `тёмная тема тона ${tone}`).toContain(classes.split(" ")[1] ?? "");
+      expect(cell.className, "полупрозрачный тон просвечивает чужими числами").not.toMatch(/bg-\S+\//);
+      expect(cell.className, "подложка только на телефоне").not.toMatch(/(^| )bg-/);
+    }
+  });
+
+  it("уточнение страницы не спорит с общим тоном", () => {
+    const cell = stickyCell({
+      name: "actions",
+      side: "right",
+      header: true,
+      fill: "group",
+      className: "max-md:w-px max-md:bg-card",
+    });
+
+    // `cn` = tailwind-merge: страница перекрывает тон своей подложкой,
+    // механика закрепления остаётся.
+    expect(cell.className).toContain("max-md:bg-card");
+    expect(cell.className).not.toContain("max-md:bg-slate-100");
+    expect(cell.className).toContain("max-md:right-0");
+    expect(cell.className).toContain("max-md:z-30");
+    expect(cell.className).toContain("max-md:w-px");
+  });
 });
 
 describe("MobileScrollTable", () => {
@@ -265,5 +318,162 @@ describe("MobileScrollTable", () => {
 
     act(() => root.unmount());
     host.remove();
+  });
+});
+
+/**
+ * Экран и переполнение (#341, ревью 1): жест — только телефон.
+ *
+ * Обе страницы кладут внутрь `style={{maxHeight:"70vh", overflow:"auto"}}`, и
+ * широкая таблица на десктопе тоже переполняет контейнер, поэтому одной
+ * проверки «есть что тащить» не хватает: на большом экране мышью водят по
+ * строке, чтобы выделить текст и нажать её. Тест рендерит примитив целиком и
+ * смотрит единственное, что видно снаружи: сдвинулся ли `scrollLeft`, появился
+ * ли `data-dragging` и дошёл ли клик до кнопки строки.
+ */
+
+interface RenderedTable {
+  container: HTMLElement;
+  cell: HTMLElement;
+  action: HTMLElement;
+  clicks: number;
+  unmount: () => void;
+}
+
+/** Ширина экрана и переполнение под ним: тест задаёт их вместе. */
+const DESKTOP_VIEWPORT = { width: 1280, clientWidth: 1200, scrollWidth: 1600 };
+const PHONE_VIEWPORT = { width: 390, clientWidth: 340, scrollWidth: 720 };
+
+function renderTable(viewport: typeof DESKTOP_VIEWPORT): RenderedTable {
+  stubViewportWidth(viewport.width);
+  const host = document.createElement("div");
+  document.body.appendChild(host);
+  const root = createRoot(host);
+  const scrollRef = { current: null as HTMLDivElement | null };
+  const state = { clicks: 0 };
+
+  function Row() {
+    const onClick = () => {
+      state.clicks += 1;
+    };
+    return (
+      <MobileScrollTable scrollRef={scrollRef} style={{ maxHeight: "70vh", overflow: "auto" }}>
+        <table>
+          <tbody>
+            <tr>
+              <td data-testid="cell">артикул</td>
+              <td>
+                <button type="button" data-testid="action" onClick={onClick}>
+                  Завершить
+                </button>
+              </td>
+            </tr>
+          </tbody>
+        </table>
+      </MobileScrollTable>
+    );
+  }
+
+  act(() => root.render(<Row />));
+
+  const container = scrollRef.current;
+  if (!container) throw new Error("скролл-контейнер не смонтирован");
+  // Раскладки в happy-dom нет: переполнение задаёт сам тест, ровно то условие,
+  // при котором примитив сегодня решает «есть что тащить».
+  let scrollLeft = 0;
+  Object.defineProperty(container, "clientWidth", { value: viewport.clientWidth, configurable: true });
+  Object.defineProperty(container, "scrollWidth", { value: viewport.scrollWidth, configurable: true });
+  Object.defineProperty(container, "scrollLeft", {
+    get: () => scrollLeft,
+    set: (value: number) => {
+      scrollLeft = value;
+    },
+    configurable: true,
+  });
+
+  return {
+    container,
+    cell: container.querySelector("[data-testid='cell']") as HTMLElement,
+    action: container.querySelector("[data-testid='action']") as HTMLElement,
+    get clicks() {
+      return state.clicks;
+    },
+    unmount: () => {
+      act(() => root.unmount());
+      host.remove();
+    },
+  };
+}
+
+/** Тот же жест мышью, что делает оператор: нажал, повёл, отпустил, кликнули. */
+function pointer(table: RenderedTable, el: HTMLElement, type: "pointerdown" | "pointermove" | "pointerup", clientX: number) {
+  act(() => {
+    fireEvent(el, new window.PointerEvent(type, { bubbles: true, cancelable: true, clientX, clientY: 42, pointerId: 1, pointerType: "mouse", button: 0 }));
+  });
+}
+
+function dragOnTable(table: RenderedTable, from: number, delta: number) {
+  pointer(table, table.cell, "pointerdown", from);
+  pointer(table, table.cell, "pointermove", from - delta);
+}
+
+function clickAction(table: RenderedTable) {
+  act(() => {
+    fireEvent.click(table.action);
+  });
+}
+
+describe("MobileScrollTable: жест только на телефоне", () => {
+  afterEach(() => {
+    vi.restoreAllMocks();
+  });
+
+  it("на десктопе переполненная таблица не тащится, не «схватывается» и клик не гаснет", () => {
+    const table = renderTable(DESKTOP_VIEWPORT);
+
+    dragOnTable(table, 500, DRAG_THRESHOLD_PX * 4);
+    pointer(table, table.cell, "pointerup", 500 - DRAG_THRESHOLD_PX * 4);
+    clickAction(table);
+
+    expect(table.container.scrollLeft, "жест мышью не двигает десктопную таблицу").toBe(0);
+    expect(table.container.hasAttribute("data-dragging"), "таблица не в состоянии «схватил»").toBe(false);
+    expect(table.clicks, "клик доходит до строки").toBe(1);
+    table.unmount();
+  });
+
+  it("на телефоне тот же жест листает таблицу, а клик после свайпа гасится", () => {
+    const table = renderTable(PHONE_VIEWPORT);
+
+    dragOnTable(table, 300, 60);
+    expect(table.container.scrollLeft).toBe(60);
+    expect(table.container.getAttribute("data-dragging")).toBe("");
+
+    pointer(table, table.cell, "pointerup", 240);
+    clickAction(table);
+    expect(table.clicks, "синтетический клик после свайпа не нажимает строку").toBe(0);
+
+    // Обычное нажатие после свайпа снова работает.
+    clickAction(table);
+    expect(table.clicks).toBe(1);
+    table.unmount();
+  });
+
+  it("хук умеет выключаться явно: обработчики не двигают, не глушат и не отменяют событие", () => {
+    const mounted = mountSwipe({ enabled: false });
+    const container = makeContainer();
+    const move = pointerEvent(container, { clientX: 100 });
+    const click = { preventDefault: vi.fn(), stopPropagation: vi.fn() };
+
+    act(() => mounted.swipe.handlers.onPointerDown(pointerEvent(container)));
+    act(() => mounted.swipe.handlers.onPointerMove(move));
+    act(() => mounted.swipe.handlers.onPointerUp(pointerEvent(container, { clientX: 100 })));
+    act(() => mounted.swipe.handlers.onClickCapture(click as unknown as React.MouseEvent<HTMLElement>));
+
+    expect(container.scrollLeft).toBe(0);
+    expect(container.setPointerCapture).not.toHaveBeenCalled();
+    expect(move.preventDefault).not.toHaveBeenCalled();
+    expect(mounted.swipe.isDragging).toBe(false);
+    expect(click.preventDefault).not.toHaveBeenCalled();
+    mounted.unmount();
   });
 });

@@ -64,6 +64,7 @@ export {
   MobileScrollTable,
   useTableSwipe,
   stickyCell,
+  STICKY_CELL_FILLS,
   MOBILE_TABLE_MIN_WIDTH_CLASS,
   DRAG_THRESHOLD_PX,
 } from "./MobileScrollTable";
@@ -71,6 +72,7 @@ export type {
   MobileScrollTableProps,
   StickyCellOptions,
   StickyCellProps,
+  StickyCellTone,
   StickySide,
   TableSwipe,
   TableSwipeHandlers,

@@ -1,5 +1,6 @@
 import * as React from "react";
 
+import { DESKTOP_VIEWPORT_QUERY, useMediaQuery } from "@/shared/lib/useMediaQuery";
 import { cn } from "@/shared/utils/cn";
 
 /**
@@ -16,10 +17,12 @@ import { cn } from "@/shared/utils/cn";
  * колонка без непрозрачной подложки просвечивает уезжающими числами. Оба
  * правила живут здесь один раз.
  *
- * Ниже 768px (`max-md:`) — граница телефона в проекте: у доски участка это
- * `useMediaQuery("(min-width: 768px)")`, у шапки — `.page-header sm:flex-row`.
- * Классы с этим префиксом на десктоп не применяются вовсе, поэтому раскладка
- * большого экрана остаётся прежней.
+ * Ниже 768px (`max-md:`) — граница телефона в проекте: у доски участка и у
+ * этого примитива это `DESKTOP_VIEWPORT_QUERY`, у шапки — `.page-header
+ * sm:flex-row`. Классы с этим префиксом на десктоп не применяются вовсе, а
+ * жест дополнительно выключается хуком: на большом экране таблица бывает
+ * шире контейнера, и без этого мышь по строке превращалась в перетаскивание
+ * таблицы вместо выделения текста и нажатия (#341, ревью 1).
  */
 
 /**
@@ -61,6 +64,25 @@ function isInteractiveTarget(target: EventTarget | null): boolean {
 
 export type StickySide = "left" | "right";
 
+/** Тон строки, под который закреплённая ячейка берёт непрозрачную подложку. */
+export type StickyCellTone = "row" | "group" | "selected" | "header";
+
+/**
+ * Подложка закреплённой ячейки: один набор на проект (#341, ревью 9).
+ *
+ * Под липкую ячейку уезжает остальная таблица, поэтому фон обязан быть
+ * непрозрачным: полупрозрачные тона строк (`bg-slate-100/70`,
+ * `bg-blue-100/90`, ADR-0065) просвечивали чужими числами. Доска участка и
+ * «Передачи» описывали эти же классы каждая своим набором — теперь набор один,
+ * а странице остаётся выбрать тон и дописать своё (`className`).
+ */
+export const STICKY_CELL_FILLS: Record<StickyCellTone, string> = {
+  row: "max-md:bg-card",
+  group: "max-md:bg-slate-100 dark:max-md:bg-slate-800",
+  selected: "max-md:bg-blue-100 dark:max-md:bg-blue-950",
+  header: "max-md:bg-muted",
+};
+
 export interface StickyCellOptions {
   /** Имя закреплённой колонки: попадает в `data-sticky` (E2E и «Участки»). */
   name: string;
@@ -71,6 +93,8 @@ export interface StickyCellOptions {
    * строка тела перекрывает заголовок.
    */
   header?: boolean;
+  /** Тон строки: даёт непрозрачную подложку из `STICKY_CELL_FILLS`. */
+  fill?: StickyCellTone;
   /** Непрозрачная подложка и прочие уточнения страницы (тон строки, отступы). */
   className?: string;
 }
@@ -81,18 +105,20 @@ export interface StickyCellProps {
 }
 
 /**
- * Свойства закреплённой ячейки: имя для E2E, сторона и уровень.
+ * Свойства закреплённой ячейки: имя для E2E, сторона, уровень и подложка.
  *
- * Подложку приносит страница (`className`): примитив не знает, в каком тоне
- * нарисована строка, но требование у него одно — фон обязан быть непрозрачным,
- * иначе под липкую ячейку видно уезжающее содержимое.
+ * Тон строки страница называет через `fill` (набор один — `STICKY_CELL_FILLS`),
+ * а уточнения (ширина колонки, отступы) — через `className`. Требование
+ * примитива одно: под липкой ячейкой обязан быть непрозрачный фон, иначе под
+ * неё видно уезжающее содержимое.
  */
-export function stickyCell({ name, side, header = false, className }: StickyCellOptions): StickyCellProps {
+export function stickyCell({ name, side, header = false, fill, className }: StickyCellOptions): StickyCellProps {
   return {
     "data-sticky": name,
     className: cn(
       side === "left" ? "max-md:sticky max-md:left-0" : "max-md:sticky max-md:right-0",
       header ? "max-md:z-30" : "max-md:z-10",
+      fill ? STICKY_CELL_FILLS[fill] : undefined,
       className,
     ),
   };
@@ -101,6 +127,15 @@ export function stickyCell({ name, side, header = false, className }: StickyCell
 export interface TableSwipeOptions {
   /** Порог жеста в пикселях; по умолчанию `DRAG_THRESHOLD_PX`. */
   thresholdPx?: number;
+  /**
+   * Жест включён; по умолчанию `true`.
+   *
+   * Выключают хук там, где свайп не принадлежит экрану: `MobileScrollTable`
+   * подаёт границу телефона проекта, потому что на десктопе мышью водят по
+   * строке, чтобы выделить текст и нажать её, и `scrollWidth > clientWidth`
+   * от этого не защищает — широкая таблица переполняет контейнер и там.
+   */
+  enabled?: boolean;
 }
 
 export interface TableSwipeHandlers {
@@ -145,8 +180,11 @@ interface DragState {
  *    отпускание пальца за пределами строки «нажимало» бы то, что под ним.
  * 3. Поля ввода, кнопки и селекты не перехватываются вовсе: оператор обязан
  *    попасть в поле количества и набрать число.
+ *
+ * Четвёртое — экран: `enabled: false` снимает жест целиком, даже когда
+ * переполнение есть (см. `TableSwipeOptions`).
  */
-export function useTableSwipe({ thresholdPx = DRAG_THRESHOLD_PX }: TableSwipeOptions = {}): TableSwipe {
+export function useTableSwipe({ thresholdPx = DRAG_THRESHOLD_PX, enabled = true }: TableSwipeOptions = {}): TableSwipe {
   const dragRef = React.useRef<DragState | null>(null);
   const suppressClickRef = React.useRef(false);
   const [isDragging, setIsDragging] = React.useState(false);
@@ -157,10 +195,12 @@ export function useTableSwipe({ thresholdPx = DRAG_THRESHOLD_PX }: TableSwipeOpt
     // закончившегося вне таблицы, мог не прийти вовсе.
     suppressClickRef.current = false;
     if (event.button !== 0) return;
+    // Жест не принадлежит этому экрану: ни движения, ни подавления клика.
+    if (!enabled) return;
     // Панораму тача делает браузер (см. шапку хука).
     if (event.pointerType === "touch") return;
-    // Тащить нечего: на десктопе таблица укладывается в ширину, и жест там
-    // не должен даже начинаться — иначе он трогал бы выделение текста.
+    // Тащить нечего: без горизонтального переполнения жест не нужен даже
+    // там, где он включён.
     if (element.scrollWidth <= element.clientWidth) return;
     if (isInteractiveTarget(event.target)) return;
 
@@ -171,12 +211,18 @@ export function useTableSwipe({ thresholdPx = DRAG_THRESHOLD_PX }: TableSwipeOpt
       startScrollLeft: element.scrollLeft,
       moved: false,
     };
-  }, []);
+  }, [enabled]);
 
   const onPointerMove = React.useCallback<React.PointerEventHandler<HTMLElement>>(
     (event) => {
       const drag = dragRef.current;
       if (!drag || event.pointerId !== drag.pointerId) return;
+      // Экран сменился посреди жеста (окно растянули): недоделанный свайп
+      // снимается, а не дотягивается до чужого экрана.
+      if (!enabled) {
+        dragRef.current = null;
+        return;
+      }
       const dx = event.clientX - drag.startX;
       const dy = event.clientY - drag.startY;
 
@@ -198,7 +244,7 @@ export function useTableSwipe({ thresholdPx = DRAG_THRESHOLD_PX }: TableSwipeOpt
       event.preventDefault();
       event.currentTarget.scrollLeft = drag.startScrollLeft - dx;
     },
-    [thresholdPx],
+    [thresholdPx, enabled],
   );
 
   const endDrag = React.useCallback<React.PointerEventHandler<HTMLElement>>((event) => {
@@ -248,7 +294,12 @@ export interface MobileScrollTableProps extends React.HTMLAttributes<HTMLDivElem
  * примитив не знает ни колонок, ни строк.
  */
 export function MobileScrollTable({ scrollRef, className, children, ...rest }: MobileScrollTableProps) {
-  const swipe = useTableSwipe();
+  // Жест — только ниже границы телефона: на десктопе таблица тоже может
+  // переполнять контейнер (широкая шапка страницы, `overflow:auto` у
+  // обёртки), а мышью по строке водят затем, чтобы выделить текст и нажать
+  // её. Порог держит здесь, а не в хуке: хук остаётся переносимым.
+  const isDesktop = useMediaQuery(DESKTOP_VIEWPORT_QUERY);
+  const swipe = useTableSwipe({ enabled: !isDesktop });
 
   return (
     <div

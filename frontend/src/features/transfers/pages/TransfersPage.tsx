@@ -5,6 +5,7 @@ import {
   Inbox,
   RefreshCw,
   AlertCircle,
+  ArrowRight,
   ChevronRight,
   ChevronDown,
   Search,
@@ -51,6 +52,7 @@ import {
   buildActiveFilterSummary,
   MobileScrollTable,
   MOBILE_TABLE_MIN_WIDTH_CLASS,
+  STICKY_CELL_FILLS,
   stickyCell,
   type FiltersPanelField,
 } from "@/shared/ui";
@@ -134,6 +136,7 @@ import {
 } from "../lib/transferSortParams";
 import { fmtQty } from "@/shared/lib/quantityFormat";
 import { actionReasonText, type ActionReasonCode } from "@/shared/lib/actionReasons";
+import { zeroQuantityReason } from "../lib/transferReasons";
 
 /**
  * Плотность строки «Передачи» — общий уточнённый набор 32px (ADR-0033), тот
@@ -212,17 +215,30 @@ const ACTIONS_HEADER_STICKY = stickyCell({
 });
 
 /**
- * Непрозрачная подложка закреплённых ячеек на телефоне.
+ * Подпись закреплённого действия на телефоне — пиктограмма (#341, п. 2, то же
+ * правило, что у доски участка в #345 и в ADR-0067).
  *
- * Под липкую ячейку уезжает остальная таблица: полупрозрачный тон строки
- * (`bg-slate-100/70`, `bg-blue-100/90`) просвечивал бы чужими числами.
- * Значения — те же тона, но без alpha; на десктопе классов нет вовсе.
+ * Замер в кадре 390px: «Действия» с написанной подписью «Передать» и текстом
+ * причины — 284,8px против 104px закреплённого «Артикул». Пиктограмма снимает у
+ * кнопки ~46px (оставшиеся 247,2px — это поле количества 64px, отметка
+ * «передано/план» 22,1px, сама кнопка 32px и причина 103,1px). Одной
+ * пиктограммы мало: полосе свайпа нужно 16px, а карточка с отступами оставляла
+ * 322px области прокрутки — поэтому таблица на телефоне ещё и идёт от края до
+ * края (см. `Card` ниже, ADR-0067).
+ *
+ * Сворачивается только подпись кнопки. Текст причины недоступности остаётся
+ * напечатанным и не обрезается: #193 запрещает прятать причину в подсказку, а
+ * «Укажите…» с многоточием — ровно то же самое.
  */
-const STICKY_FILL = {
-  default: "max-md:bg-card",
-  group: "max-md:bg-slate-100 dark:max-md:bg-slate-800",
-  selected: "max-md:bg-blue-100 dark:max-md:bg-blue-950",
-} as const;
+const ROW_ACTION_LABEL_CLASS = "max-md:hidden";
+const ROW_ACTION_ICON_CLASS = "h-4 w-4 shrink-0 md:hidden";
+
+/**
+ * Непрозрачная подложка закреплённых ячеек на телефоне — общий набор тонов
+ * (`STICKY_CELL_FILLS`, ADR-0067): под липкую ячейку уезжает остальная таблица,
+ * и полупрозрачный тон строки (`bg-slate-100/70`, `bg-blue-100/90`) просвечивал
+ * бы чужими числами. Здесь только выбор тона; на десктопе классов нет вовсе.
+ */
 
 type StatusBadgeVariant = "default" | "destructive" | "outline" | "secondary";
 
@@ -467,16 +483,16 @@ function ReadyTransferRow({
   const overLimit = qtyNum > maxQty;
   const isOverPlan = qtyNum > parseFloat(task.planned_quantity);
   /** Количество не введено или обнулено — передавать нечего (#193). */
-  const quantityReason: ActionReasonCode | null = qtyNum > 0 ? null : "zero_quantity";
+  const quantityReason = zeroQuantityReason(qtyNum);
   /** Пункт выдачи и пункт назначения: оператор несёт материал по адресу, а не по коду этапа. */
   const sourcePoint = stagePointLabel(task.section_name, task.operation_name);
   const nextPoint = stagePointLabel(task.next_section_name, task.next_operation_name);
   /** Непрозрачная подложка закреплённых ячеек — в тон строки (телефон). */
   const stickyFill = isSelected
-    ? STICKY_FILL.selected
+    ? STICKY_CELL_FILLS.selected
     : isInGroup
-      ? STICKY_FILL.group
-      : STICKY_FILL.default;
+      ? STICKY_CELL_FILLS.group
+      : STICKY_CELL_FILLS.row;
 
   return (
     <TableRow
@@ -602,6 +618,9 @@ function ReadyTransferRow({
                       ? actionReasonText(quantityReason)
                       : "Финальный выпуск готовой продукции"
                 }
+                aria-label={
+                  releaseMutation.isPending || isSubmitting ? "Отправка..." : "Отправить"
+                }
                 onClick={() => {
                   if (submittingRef.current || isSubmitting || releaseMutation.isPending) return;
                     if (!tryAcquire()) return;
@@ -615,7 +634,13 @@ function ReadyTransferRow({
                     });
                   }}
                 >
-                  {releaseMutation.isPending || isSubmitting ? "Отправка..." : "Отправить"}
+                  {/* На телефоне подпись свёрнута в пиктограмму (#341, п. 2,
+                      ADR-0067): с текстом причины колонка «Действия» не
+                      оставляет полосы прокрутки. Слово живёт в `aria-label`. */}
+                  <Send className={ROW_ACTION_ICON_CLASS} aria-hidden />
+                  <span className={ROW_ACTION_LABEL_CLASS}>
+                    {releaseMutation.isPending || isSubmitting ? "Отправка..." : "Отправить"}
+                  </span>
                 </Button>
               ) : (
                 <Button
@@ -628,6 +653,9 @@ function ReadyTransferRow({
                       : quantityReason
                         ? actionReasonText(quantityReason)
                         : "Передать на следующий этап"
+                  }
+                  aria-label={
+                    mutation.isPending || isSubmitting ? "Отправка..." : "Передать"
                   }
                   onClick={() => {
                     if (submittingRef.current || isSubmitting || mutation.isPending) return;
@@ -642,7 +670,10 @@ function ReadyTransferRow({
                     });
                   }}
                 >
-                  {mutation.isPending || isSubmitting ? "Отправка..." : "Передать"}
+                  <ArrowRight className={ROW_ACTION_ICON_CLASS} aria-hidden />
+                  <span className={ROW_ACTION_LABEL_CLASS}>
+                    {mutation.isPending || isSubmitting ? "Отправка..." : "Передать"}
+                  </span>
                 </Button>
               )}
             </ActionWithReason>
@@ -650,6 +681,44 @@ function ReadyTransferRow({
       </TableCell>
       <TableCornerResetCell className={cn(TABLE_ROW_STYLES.groupHeaderCell, "max-md:hidden")} />
     </TableRow>
+  );
+}
+
+/**
+ * Шеврон раскрытия группы. На телефоне он живёт в закреплённом профиле (#341,
+ * п. 4): колонка-рельс слева от профиля на телефоне скрыта, и без шеврона
+ * единственным способом раскрыть группу оставался тап по всей шапке — жест,
+ * который ничего не обещает и не именуется. Тот же порядок, что у доски
+ * участка (#345).
+ */
+function groupChevron(
+  isCollapsed: boolean,
+  bulkMode: boolean,
+  onToggleCollapse: () => void,
+  tone: "desktop" | "mobile",
+) {
+  const label = bulkMode ? "Группа раскрыта для ручного выбора" : isCollapsed ? "Раскрыть" : "Скрыть";
+  return (
+    <button
+      type="button"
+      className={cn(
+        "p-1 hover:bg-muted rounded transition-colors text-muted-foreground",
+        tone === "mobile" && "md:hidden",
+      )}
+      title={label}
+      aria-label={label}
+      disabled={bulkMode}
+      onClick={(event) => {
+        event.stopPropagation();
+        onToggleCollapse();
+      }}
+    >
+      {isCollapsed ? (
+        <ChevronRight className="h-4 w-4 shrink-0" />
+      ) : (
+        <ChevronDown className="h-4 w-4 shrink-0" />
+      )}
+    </button>
   );
 }
 
@@ -710,7 +779,7 @@ function ReadyTransferGroupRow({
   const sourcePoint = stagePointLabel(common.sectionName, common.operationName);
   const nextPoint = stagePointLabel(common.nextSectionName, common.nextOperationName);
   /** Непрозрачная подложка закреплённых ячеек — в тон шапки группы (телефон). */
-  const groupStickyFill = isAllSelected ? STICKY_FILL.selected : STICKY_FILL.group;
+  const groupStickyFill = isAllSelected ? STICKY_CELL_FILLS.selected : STICKY_CELL_FILLS.group;
   const qtyNum = parseFloat(quantity || "0");
   const overLimit = Math.round(qtyNum * 1000) > Math.round(group.totalTransferable * 1000);
   /**
@@ -720,9 +789,13 @@ function ReadyTransferGroupRow({
    */
   const groupBlockReason: ActionReasonCode | null = hasInFlightRow
     ? "row_in_flight"
-    : qtyNum > 0
-      ? null
-      : "zero_quantity";
+    : zeroQuantityReason(qtyNum);
+  /**
+   * Имя и подпись кнопки группы — одно слово на обеих ширинах: на телефоне
+   * подпись сворачивается в пиктограмму, и слово обязано остаться в
+   * `aria-label` (#341, п. 2).
+   */
+  const groupActionLabel = isSubmitting ? "Отправка..." : group.allFinal ? "Отправить" : "Передать";
 
   return (
     <TableRow
@@ -749,21 +822,7 @@ function ReadyTransferGroupRow({
       }}
     >
       <TableCell className={cn(groupHeaderCellClass, TABLE_ROW_STYLES.blockRail, "text-center max-md:hidden")}>
-        <button
-          className="p-1 hover:bg-muted rounded transition-colors text-muted-foreground"
-          title={bulkMode ? "Группа раскрыта для ручного выбора" : isCollapsed ? "Раскрыть" : "Скрыть"}
-          disabled={bulkMode}
-          onClick={(e) => {
-            e.stopPropagation();
-            onToggleCollapse();
-          }}
-        >
-          {isCollapsed ? (
-            <ChevronRight className="h-4 w-4 shrink-0" />
-          ) : (
-            <ChevronDown className="h-4 w-4 shrink-0" />
-          )}
-        </button>
+        {groupChevron(isCollapsed, bulkMode, onToggleCollapse, "desktop")}
       </TableCell>
       {/* «Профиль» и «Действия» закреплены на телефоне так же, как у строк
           (ADR-0067): шапка группы несёт общее количество и кнопку, и они
@@ -774,6 +833,10 @@ function ReadyTransferGroupRow({
         title={group.productSku ?? undefined}
       >
         <div className="flex items-center gap-2 max-md:truncate">
+          {/* На телефоне шеврон — здесь, в закреплённой ячейке: тап по шапке
+              сворачивает группу, но именованной кнопки без колонки-рельса не
+              было бы (#341, п. 4). */}
+          {groupChevron(isCollapsed, bulkMode, onToggleCollapse, "mobile")}
           <span className="max-md:truncate">{group.productSku ?? "—"}</span>
           <Badge variant="secondary" className="font-bold max-md:shrink-0">
             &times;{group.rows.length}
@@ -857,9 +920,15 @@ function ReadyTransferGroupRow({
                       ? "Финальный выпуск всех заданий группы"
                       : "Передать на следующий этап все задания группы"
               }
+              aria-label={groupActionLabel}
               onClick={() => onTransferGroup(group, quantity)}
             >
-              {isSubmitting ? "Отправка..." : group.allFinal ? "Отправить" : "Передать"}
+              {group.allFinal ? (
+                <Send className={ROW_ACTION_ICON_CLASS} aria-hidden />
+              ) : (
+                <ArrowRight className={ROW_ACTION_ICON_CLASS} aria-hidden />
+              )}
+              <span className={ROW_ACTION_LABEL_CLASS}>{groupActionLabel}</span>
             </Button>
           </ActionWithReason>
         </div>
@@ -1614,7 +1683,15 @@ export function TransfersPage() {
         </div>
       </header>
 
-      <Card>
+      {/* Телефон: карточка «Готово к передаче» идёт от края до края (#341, п. 2).
+          Закреплённые колонки с полем количества, пиктограммой действия и
+          напечатанной причиной занимают 104 + 247px, а область прокрутки внутри
+          обычной карточки — 322px: полосе свайпа не остаётся места вовсе, и
+          колонки наезжают друг на друга. Отступ страницы (`p-6` у `.main-area`)
+          и поля карточки съедают 68px кадра, а на телефоне таблица и так
+          листается горизонтально. Ряд фильтров остаётся с внутренним отступом
+          карточки: ему край экрана не нужен. */}
+      <Card className="max-md:-mx-6 max-md:rounded-none">
         <CardHeader className="space-y-3 pb-3">
           <CardTitle className="flex items-center gap-2">
             <Send className="h-4 w-4" />
@@ -1625,6 +1702,8 @@ export function TransfersPage() {
             compact
             fields={readyToolbarFields}
             activeSummary={readyActiveFilterSummary}
+            onReset={resetReadyFilters}
+            hasActiveFilters={hasReadyFiltersActive}
             onSelectAll={() => {
               setBulkMode(true);
               bulkSelection.selectAll(readySelectableIds);
@@ -1632,7 +1711,7 @@ export function TransfersPage() {
             totalRowCount={readySelectableIds.length}
           />
         </CardHeader>
-        <CardContent className="max-md:px-2">
+        <CardContent className="max-md:px-0">
           {!spgScopeSelected ? (
             <div className="text-sm text-muted-foreground py-6 text-center">
               Выберите ГХП, чтобы увидеть задания, готовые к передаче.

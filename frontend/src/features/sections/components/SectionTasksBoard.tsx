@@ -28,6 +28,7 @@ import {
   buildActiveFilterSummary,
   stickyCell,
   type FiltersPanelField,
+  type StickyCellTone,
 } from "@/shared/ui";
 import type { ColumnSortDef } from "@/shared/hooks/useTableQueryEngine";
 import type { PageLimitOption } from "@/shared/hooks/usePaginatedTableQuery";
@@ -37,7 +38,7 @@ import {
   buildColumnFilterValues,
 } from "@/shared/lib/columnSpecs";
 import { useDebouncedValue } from "@/shared/lib/useDebouncedValue";
-import { useMediaQuery } from "@/shared/lib/useMediaQuery";
+import { DESKTOP_VIEWPORT_QUERY, useMediaQuery } from "@/shared/lib/useMediaQuery";
 import { getAriaSort } from "@/shared/lib/multiSort";
 import { isFirstRowsLoad } from "@/shared/lib/tableQueryPlaceholder";
 import {
@@ -241,12 +242,6 @@ function renderDraftCell(
 }
 
 /**
- * Контекст массового ввода для выделенной строки. `undefined` — строка не
- * выделена, и ячейки показывают записанный факт как обычно: клиентские фильтр
- * и сортировка по этим колонкам продолжают работать по записанной величине, а
- * черновик их не двигает (#283, п. 1).
- */
-/**
  * Убирает набранное в поле группы из состояния: поле снова выводится из строк.
  */
 function forgetGroupInput(
@@ -259,6 +254,12 @@ function forgetGroupInput(
   return next;
 }
 
+/**
+ * Контекст массового ввода для выделенной строки. `undefined` — строка не
+ * выделена, и ячейки показывают записанный факт как обычно: клиентские фильтр
+ * и сортировка по этим колонкам продолжают работать по записанной величине, а
+ * черновик их не двигает (#283, п. 1).
+ */
 type RowDraftContext = {
   value: DraftQty;
   overPlan: { good: boolean; defect: boolean };
@@ -318,21 +319,18 @@ const MOBILE_PROFILE_WIDTH_CLASS =
 const MOBILE_ACTIONS_WIDTH_CLASS = "max-md:w-px max-md:px-1";
 
 /**
- * Непрозрачная подложка закреплённых ячеек: под липкую ячейку уезжает остальная
- * таблица, и полупрозрачный тон строки (`bg-blue-50/20`, `bg-amber-50/30`)
- * просвечивал бы чужими числами. На десктопе классов нет вовсе.
+ * Закрепление колонки: только на телефоне — на десктопе раскладка прежняя.
+ *
+ * Подложка берётся из общего набора тонов (`stickyCell({ fill })`):
+ * полупрозрачный тон строки (`bg-blue-50/20`, `bg-amber-50/30`) под липкую
+ * ячейку просвечивал бы чужими числами, а набор тонов на проект один (#341,
+ * ревью 9). Здесь — только выбор тона и ширина колонки.
  */
-const STICKY_HEADER_FILL = "max-md:bg-muted";
-const STICKY_ROW_FILL = "max-md:bg-card";
-const STICKY_GROUP_FILL = "max-md:bg-slate-100 dark:max-md:bg-slate-800";
-const STICKY_SELECTED_FILL = "max-md:bg-blue-100 dark:max-md:bg-blue-950";
-
-/** Закрепление колонки: только на телефоне — на десктопе раскладка прежняя. */
 function mobileStickyProps(
   columnId: string,
   variant: BoardTableVariant,
   header: boolean,
-  fill: string,
+  fill: StickyCellTone,
 ) {
   if (variant !== "mobile") return undefined;
   if (columnId === "productSku") {
@@ -340,7 +338,8 @@ function mobileStickyProps(
       name: "profile",
       side: "left",
       header,
-      className: cn(MOBILE_PROFILE_WIDTH_CLASS, fill),
+      fill,
+      className: MOBILE_PROFILE_WIDTH_CLASS,
     });
   }
   if (columnId === "actions") {
@@ -348,7 +347,8 @@ function mobileStickyProps(
       name: "actions",
       side: "right",
       header,
-      className: cn(MOBILE_ACTIONS_WIDTH_CLASS, fill),
+      fill,
+      className: MOBILE_ACTIONS_WIDTH_CLASS,
     });
   }
   return undefined;
@@ -373,6 +373,7 @@ function groupChevron(
         onToggleCollapse();
       }}
       title={view.collapseTitle}
+      aria-label={view.collapseTitle}
     >
       {view.isCollapsed ? (
         <ChevronRight
@@ -417,8 +418,8 @@ function renderTaskRow(
     : "";
   const cellClass = edgeClass ? cn(ROW_CELL_CLASS, edgeClass) : ROW_CELL_CLASS;
   const rowState = getTaskRowState(task);
-  const stickyFill =
-    bulkMode && isSelected ? STICKY_SELECTED_FILL : isInGroup ? STICKY_GROUP_FILL : STICKY_ROW_FILL;
+  const stickyFill: StickyCellTone =
+    bulkMode && isSelected ? "selected" : isInGroup ? "group" : "row";
 
   const handleAction = (type: TaskActionDialogType) => {
     onAction(type, task);
@@ -619,7 +620,7 @@ function BoardTaskGroupRow({
   // Рёбра блока — на ячейках: границы `<tr>` в таблице доски (`border-separate`)
   // браузер не рисует, и `border-y` на строке был невидим.
   const headerCellClass = cn(ROW_CELL_CLASS, TABLE_ROW_STYLES.groupHeaderCell);
-  const stickyFill = isBulkMode && view.allSelected ? STICKY_SELECTED_FILL : STICKY_GROUP_FILL;
+  const stickyFill: StickyCellTone = isBulkMode && view.allSelected ? "selected" : "group";
   const railClass = getTaskGroupRailClass(group.tasks);
   const captionClass = "text-xs font-medium text-slate-500 dark:text-slate-400";
 
@@ -951,7 +952,7 @@ export function SectionTasksBoard({
    * одновременно и прятались классами: двойная работа на каждом кадре и дубли
    * в дереве (одно задание рисовалось дважды).
    */
-  const isDesktopViewport = useMediaQuery("(min-width: 768px)");
+  const isDesktopViewport = useMediaQuery(DESKTOP_VIEWPORT_QUERY);
   const variant: BoardTableVariant = isDesktopViewport ? "desktop" : "mobile";
   /**
    * Колонки участка: «Упаковка» есть только там, где у неё есть упаковочные
@@ -1604,7 +1605,7 @@ export function SectionTasksBoard({
               <thead>
                 <tr>
                   {columns.map((column) => {
-                    const sticky = mobileStickyProps(column.id, variant, true, STICKY_HEADER_FILL);
+                    const sticky = mobileStickyProps(column.id, variant, true, "header");
                     return (
                       <th
                         key={column.id}
