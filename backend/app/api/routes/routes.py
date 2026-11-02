@@ -271,7 +271,7 @@ async def reorder_routes(payload: ReorderRoutesIn, db: AsyncSession = Depends(ge
         await db.execute(
             update(ProductionRoute).where(ProductionRoute.id == route_id).values(sort_order=idx * 10)
         )
-    await db.flush()
+    await db.commit()
 
 
 # --- Endpoints ---
@@ -339,6 +339,11 @@ async def create_route(payload: RouteCreate, db: AsyncSession = Depends(get_db))
     db.add(route)
     await db.flush()
     await db.refresh(route)
+    # Коммит до ответа: следующий запрос клиента (например, добавление этапа
+    # в только что созданный маршрут) обязан увидеть строку. Коммит из
+    # `get_db` случается уже после отправки ответа — это гонка (упал E2E
+    # final-release в CI: 201 на создание, 404 на первом этапе).
+    await db.commit()
     return RouteOut.model_validate(route, from_attributes=True)
 
 
@@ -362,6 +367,7 @@ async def update_route(route_id: int, payload: RouteUpdate, db: AsyncSession = D
         route.is_active = payload.is_active
     await db.flush()
     await db.refresh(route)
+    await db.commit()
     return RouteOut.model_validate(route, from_attributes=True)
 
 
@@ -416,7 +422,7 @@ async def delete_route(
         )
 
     await delete_route_with_relations(db, route, relations)
-    await db.flush()
+    await db.commit()
 
 
 @router.post("/{route_id}/steps", response_model=StepOut, status_code=status.HTTP_201_CREATED, dependencies=[Depends(require_role(list(REFERENCES_WRITER_ROLES)))])
@@ -527,6 +533,9 @@ async def create_route_step(route_id: int, payload: StepCreate, db: AsyncSession
     await db.refresh(stage)
     # Сигнатура маршрута (#214) — по этапам, включая только что добавленный.
     await refresh_route_signature(db, route)
+    # Коммит до ответа: следующий запрос клиента (или демо-прогон по роуту)
+    # обязан увидеть только что добавленный этап.
+    await db.commit()
 
     section_for_response = storage_section if stage_kind == "transit" else section
     return StepOut(
@@ -669,4 +678,5 @@ async def replace_route_steps(route_id: int, payload: list[StepUpdate], db: Asyn
         ))
     # Сигнатура маршрута (#214) — по этапам, которые оператор только что задал.
     await refresh_route_signature(db, route)
+    await db.commit()
     return result
