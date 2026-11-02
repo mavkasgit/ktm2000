@@ -2153,6 +2153,10 @@ async def test_preview_compound_sku_binds_by_second_part(client, session, tmp_pa
     # Привязанный по части артикул активен: ложный product_inactive означал бы,
     # что кэш активности не видит продукты, найденные не по точному SKU.
     assert "product_inactive" not in item["errors"]
+    # Статус не проверяется: у тестового шаблона нет ни профиля маршрутов, ни
+    # нормы длины, поэтому no_route_candidate и normal_length_not_found делают
+    # строку invalid по причинам, к артикулу не относящимся. Что именно этот
+    # код — warning, а не error, сторожит test_plan_import_codes.py.
 
 
 @pytest.mark.asyncio
@@ -2183,6 +2187,8 @@ async def test_preview_compound_sku_ambiguous_part_is_not_bound(
     )
 
     item = items[0]
+    # Привязки нет: в отличие от строки выше, error здесь приносит и сам артикул
+    # (статус обеих строк и так invalid из-за маршрутов, поэтому проверяется код).
     assert item["after_data"]["product_id"] is None
     assert "product_not_found" in item["errors"]
     assert [w for w in item["warnings"] if w.startswith("sku_matched_by_part")] == []
