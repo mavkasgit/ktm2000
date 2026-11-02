@@ -22,11 +22,16 @@ export type ClusterByArticleOptions<T> = {
   articleOf: (block: T) => string;
   /** Количество блока: по сумме артикулов и строится порядок. */
   quantityOf: (block: T) => number;
+  /**
+   * Порядок артикулов при равной сумме. Не задан — сохраняется порядок
+   * первого появления (устойчивая сортировка).
+   */
+  compareArticles?: (a: string, b: string) => number;
 };
 
 export function clusterByArticle<T>(
   blocks: readonly T[],
-  { articleOf, quantityOf }: ClusterByArticleOptions<T>,
+  { articleOf, quantityOf, compareArticles }: ClusterByArticleOptions<T>,
 ): T[] {
   const byArticle = new Map<string, T[]>();
   const totals = new Map<string, number>();
@@ -45,6 +50,10 @@ export function clusterByArticle<T>(
   }
 
   return [...byArticle.keys()]
-    .sort((a, b) => (totals.get(b) ?? 0) - (totals.get(a) ?? 0))
+    .sort((a, b) => {
+      const quantityDiff = (totals.get(b) ?? 0) - (totals.get(a) ?? 0);
+      if (quantityDiff !== 0) return quantityDiff;
+      return compareArticles ? compareArticles(a, b) : 0;
+    })
     .flatMap((article) => byArticle.get(article) ?? []);
 }

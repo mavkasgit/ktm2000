@@ -121,6 +121,8 @@ export type PlanTaskGroup = {
   totalQtyDone: number;
   totalQtyIssued: number;
   totalQtyTransferred: number;
+  /** Сумма остатков строк (план − годные). */
+  totalQtyRemaining: number;
   /** Пара, если группа собрана из двух позиций одного подвеса (#312). */
   pair: PlanTaskGroupPair | null;
 };
@@ -288,7 +290,7 @@ function sortPackaging(row: PlanTaskRow): void {
   row.packaging.sort((a, b) => b.qty - a.qty || a.label.localeCompare(b.label, "ru"));
 }
 
-function sumRows(rows: PlanTaskRow[], field: "planQty" | "issuedQty" | "doneQty" | "transferredQty"): number {
+function sumRows(rows: PlanTaskRow[], field: "planQty" | "issuedQty" | "doneQty" | "transferredQty" | "balanceQty"): number {
   return rows.reduce((total, row) => total + row[field], 0);
 }
 
@@ -349,6 +351,9 @@ export function buildPlanTaskGroups(
       row.balanceQty = Math.max(0, row.planQty - row.doneQty);
       sortPackaging(row);
     }
+    // Остаток убыв.; при равенстве сохраняется порядок входа — сортировка
+    // устойчива.
+    group.rows.sort((a, b) => b.balanceQty - a.balanceQty);
   }
 
   // Итоги группы — сумма по строкам: слитые задания уже учтены в своих строках.
@@ -361,6 +366,7 @@ export function buildPlanTaskGroups(
       totalQtyDone: sumRows(group.rows, "doneQty"),
       totalQtyIssued: sumRows(group.rows, "issuedQty"),
       totalQtyTransferred: sumRows(group.rows, "transferredQty"),
+      totalQtyRemaining: sumRows(group.rows, "balanceQty"),
       // Подвес пары — один на обе позиции, поэтому группа помечается парой
       // только когда обе строки на листе действительно есть. Норму берём у
       // импорта (снапшот ``product_pair`` — он решил пару на этой длине), а
@@ -383,7 +389,9 @@ export function buildPlanTaskGroups(
           : null,
     }))
     .sort((a, b) => {
-      if (b.totalQtyPlan !== a.totalQtyPlan) return b.totalQtyPlan - a.totalQtyPlan;
+      if (b.totalQtyRemaining !== a.totalQtyRemaining) {
+        return b.totalQtyRemaining - a.totalQtyRemaining;
+      }
       return a.label.localeCompare(b.label, "ru");
     });
 
@@ -391,6 +399,7 @@ export function buildPlanTaskGroups(
   // поэтому два размера одного артикула иначе разделяли бы чужие артикулы.
   return clusterByArticle(sorted, {
     articleOf: (group) => group.rows[0]?.productSku ?? "—",
-    quantityOf: (group) => group.totalQtyPlan,
+    quantityOf: (group) => group.totalQtyRemaining,
+    compareArticles: (a, b) => a.localeCompare(b, "ru"),
   });
 }

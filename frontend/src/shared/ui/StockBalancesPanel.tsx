@@ -24,7 +24,7 @@ import { buildColumnApiParams, buildColumnFilterValues } from "@/shared/lib/colu
 import { getAriaSort } from "@/shared/lib/multiSort";
 import { RouteStepsDisplay } from "./RouteStepsDisplay";
 
-import { buildBalanceSortParam, type BalanceSortField } from "@/shared/lib/stockSortParams";
+import { buildBalanceSortParam, DEFAULT_BALANCE_SORT, type BalanceSortField } from "@/shared/lib/stockSortParams";
 import { stockBalanceColumns } from "@/shared/lib/stockBalanceColumns";
 import { useDebouncedValue } from "@/shared/lib/useDebouncedValue";
 import { fmtQty, toQtyInteger } from "@/shared/lib/quantityFormat";
@@ -256,6 +256,11 @@ export interface StockBalancesPanelProps {
   hideLocationColumn?: boolean;
   title?: string;
   enabled?: boolean;
+  /**
+   * `?sort=` при отсутствии ручной сортировки. По умолчанию — `sku:asc`
+   * (дефолт эндпоинта); вкладка участка передаёт `quantity:desc`.
+   */
+  defaultSort?: string;
 }
 
 /**
@@ -448,6 +453,7 @@ export function StockBalancesPanel({
   hideLocationColumn = false,
   title = "Наличие на участках",
   enabled = true,
+  defaultSort = DEFAULT_BALANCE_SORT,
 }: StockBalancesPanelProps) {
   const [isExpanded, setIsExpanded] = useState(true);
   const debouncedSearch = useDebouncedValue(searchQuery);
@@ -470,7 +476,7 @@ export function StockBalancesPanel({
     [columnFilters, debouncedColumnSearchQueries],
   );
 
-  const sort = buildBalanceSortParam(sortConfigs);
+  const sort = buildBalanceSortParam(sortConfigs, defaultSort);
   const normalizedLocationIds = useMemo(
     () => (locationIds?.length ? [...locationIds].sort((a, b) => a - b) : undefined),
     [locationIds],
@@ -560,7 +566,17 @@ export function StockBalancesPanel({
   });
 
   const balances = data?.balances ?? [];
-  const balanceGroups = useMemo(() => buildBalanceGroups(balances), [balances]);
+  // Ручная сортировка по колонке главнее дефолта; без неё — общее количество
+  // по убыванию, а внутри артикула строки того же порядка.
+  const hasActiveSort = sortConfigs.length > 0;
+  const balanceGroups = useMemo(() => {
+    const groups = buildBalanceGroups(balances);
+    if (hasActiveSort) return groups;
+    for (const group of groups) {
+      group.rows.sort((a, b) => toQtyInteger(b.balance_qty) - toQtyInteger(a.balance_qty));
+    }
+    return groups.sort((a, b) => b.totalQty - a.totalQty || a.sku.localeCompare(b.sku, "ru"));
+  }, [balances, hasActiveSort]);
   // Раскрытые артикулы — по ключу группы: смена страницы и сортировки не
   // захлопывает то, что оператор раскрыл.
   const [expandedArticles, setExpandedArticles] = useState<Set<string>>(() => new Set());

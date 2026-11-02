@@ -43,7 +43,7 @@ import {
   type TaskSortField,
 } from "../lib/boardQueryParams";
 import { toggleSelectionOnRowKey } from "../lib/boardRowKeydown";
-import { groupTasksByProfile, sortGroupsByQuantityAndSize, taskGroupingDimensions } from "../lib/groupTasksByProfile";
+import { groupTasksByProfile, sortGroupsByRemaining, taskGroupingDimensions } from "../lib/groupTasksByProfile";
 import { clusterByArticle } from "@/shared/lib/clusterByArticle";
 import type { GroupingProfile } from "../lib/groupingProfiles";
 import {
@@ -951,8 +951,8 @@ export function SectionTasksBoard({
   // Порядок строк доски. Колонки серверной сортировки (sequence/productSku/
   // status/dimensions) уже пришли в нужном порядке с сервера, остальные
   // клиент упорядочивает здесь, поверх ответа и до группировки. Без сортировки
-  // действует дефолт «количество убыв., размер убыв.», а внутри группы —
-  // «статус, затем sequence» (GLOSSARY.md, раздел «Сортировка строк по размеру»).
+  // действует дефолт «остаток убыв.» (GLOSSARY.md, раздел «Сортировка строк
+  // по остатку»).
   const hasActiveSort = sortConfigs.length > 0;
   const clientSortConfigs = useMemo(
     () => sortConfigs.filter((config) => !isServerSortField(config.field)),
@@ -985,17 +985,19 @@ export function SectionTasksBoard({
     const grouped = groupTasksByProfile(sortedTasks, profile);
     if (hasActiveSort) return grouped;
 
-    const ordered = clusterByArticle(sortGroupsByQuantityAndSize(grouped), {
+    const ordered = clusterByArticle(sortGroupsByRemaining(grouped), {
       articleOf: (group) => group.tasks[0]?.product_sku ?? "—",
-      quantityOf: (group) => group.totalQtyPlan,
+      quantityOf: (group) => group.totalRemaining,
+      compareArticles: (a, b) => a.localeCompare(b, "ru"),
     });
     for (const g of ordered) {
-      g.tasks.sort((a, b) => {
-        const pA = getStatusPriority(a);
-        const pB = getStatusPriority(b);
-        if (pA !== pB) return pA - pB;
-        return a.sequence - b.sequence;
-      });
+      // Остаток убыв.; при равенстве сохраняется порядок сервера — сортировка
+      // устойчива.
+      g.tasks.sort(
+        (a, b) =>
+          (parseFloat(b.cache.remaining_quantity) || 0) -
+          (parseFloat(a.cache.remaining_quantity) || 0),
+      );
     }
 
     return ordered;
