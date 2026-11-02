@@ -200,21 +200,27 @@ async def build_issue_plan(
             deficit=required,
         )
 
+    # Подбор и подсказки — по всем качествам одного ключа (товар, склад):
+    # источники — только GOOD (брак НЕ является источником, #282), а
+    # подсказка «на Хранилище Б 20 шт. браком» считается именно по
+    # бракованным строкам, которые GOOD-фильтр сюда бы не пустил.
     balances = (
         await db.execute(
             select(StockBalance).where(
                 StockBalance.product_id == product_id,
                 StockBalance.location_id.in_(location_names.keys()),
-                StockBalance.quality_state == QualityState.GOOD,
                 StockBalance.balance_qty > 0,
             )
         )
     ).scalars().all()
 
-    # Кандидаты: строгий размер (Q7), признак операций зафиксирован и
-    # встречается на маршруте, склад не исключён явным списком selected.
+    # Кандидаты: годный остаток, строгий размер (Q7), признак операций
+    # зафиксирован и встречается на маршруте, склад не исключён явным
+    # списком selected.
     raw_candidates: list[tuple[int, int, str, dict | None, list[str] | None, Decimal, int]] = []
     for balance in balances:
+        if balance.quality_state != QualityState.GOOD:
+            continue
         if selected is not None and balance.id not in selected:
             continue
         if not dimensions_equal(balance.dimensions, required_dims):
@@ -236,30 +242,33 @@ async def build_issue_plan(
 
     # Legacy-форма явного выбора: отказ на неподходящем остатке — тот же,
     # что давал ``resolve_source_issues`` (#314/#55), а не тихий пропуск:
-    # оператор указал склад руками, молчание хуже отказа.
+    # оператор указал склад руками, молчание хуже отказа. Название склада
+    # вместо ``#id`` — отказ читается по-русски и без цифровых id (#282).
     if selected is not None:
         chosen = {c[0] for c in raw_candidates}
         for balance_id in sorted(selected - chosen):
             balance = await db.get(StockBalance, balance_id)
             if balance is None:
-                raise ValueError(f"Источник выдачи: остаток #{balance_id} не найден")
+                raise ValueError("Источник выдачи: выбранный складской остаток не найден")
+            location = location_names.get(balance.location_id, "")
+            label = f"«{location}»"
             if balance.product_id != product_id:
-                raise ValueError(f"Источник выдачи: остаток #{balance_id} — другого товара")
+                raise ValueError(f"Источник выдачи: материал на {label} — другого артикула")
             if balance.completed_operations is None:
                 raise ValueError(
-                    f"Источник выдачи: у остатка #{balance_id} состояние операций "
-                    "не зафиксировано — списать его на этот маршрут нельзя"
+                    f"Источник выдачи: на {label} состояние операций "
+                    "не зафиксировано — списать этот материал на данный маршрут нельзя"
                 )
             if Decimal(balance.balance_qty) <= 0:
-                raise ValueError(f"Источник выдачи: остаток #{balance_id} пуст")
+                raise ValueError(f"Источник выдачи: на {label} материал закончился")
             if not dimensions_equal(balance.dimensions, required_dims):
                 raise ValueError(
-                    f"Источник выдачи: остаток #{balance_id} — размер "
+                    f"Источник выдачи: на {label} лежит "
                     f"{format_dimensions(balance.dimensions)}, нужен "
                     f"{format_dimensions(required_dims)}"
                 )
             raise ValueError(
-                f"Источник выдачи: остаток #{balance_id} (операции: "
+                f"Источник выдачи: материал на {label} (пройдено: "
                 f"{', '.join(sorted(balance.completed_operations))}) "
                 "не подходит маршруту позиции"
             )
@@ -275,14 +284,21 @@ async def build_issue_plan(
     remaining = required
     collected = ZERO
     for order, (balance_id, location_id, location_name, dims, ops, available, target_seq) in enumerate(raw_candidates):
-        included = balance_id not in excluded and remaining > 0
-        take = min(remaining, available) if included else ZERO
-        if included:
+        # «included» — состояние галочки, а не факт вычерпывания: склад,
+        # до которого очередь не дошла (потребность закрыта раньше), остаётся
+        # включённым и видимым отмеченным (#282: подсказки и снятие галочки
+        # живут по включённым складам). Очередь решает только `take`.
+        included = selected is not None or balance_id not in excluded
+        take = min(remaining, available) if included and remaining > 0 else ZERO
+        if take > 0:
             remaining -= take
             collected += take
-        remaining_after = (available - take) if included and take > 0 else None
-        if included and take > 0 and remaining_after == 0:
-            remaining_after = ZERO  # пустеющий склад показывает 0, не прочерк
+        # «Остаток после»: 0 — склад вычерпан целиком; None — прочерк
+        # (галочка снята или очередь до склада не дошла).
+        if included and take > 0:
+            remaining_after = available - take
+        else:
+            remaining_after = None
         candidates.append(
             IssueCandidate(
                 balance_id=balance_id,
@@ -294,7 +310,7 @@ async def build_issue_plan(
                 available=available,
                 take=take,
                 remaining_after=remaining_after,
-                included=included and take > 0,
+                included=included,
                 target_sequence=target_seq,
                 order=order,
             )

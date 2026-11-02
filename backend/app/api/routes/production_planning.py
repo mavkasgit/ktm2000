@@ -16,6 +16,7 @@ from app.domain.dimensions import (
     canonicalize_dimensions,
     format_dimensions,
 )
+from app.domain.shortage import ShortageStrategy
 from app.models.internal_plan import SectionPlanLine
 from app.models.product import Product
 from app.models.production_plan import (
@@ -48,6 +49,11 @@ from app.services.production_planning_rows import (
 from app.services.route_matcher import resolve_position_route
 from app.services.route_storage_classifier import SECTION_TYPE_PRODUCTION, STOCK_TYPES
 from app.services.shopfloor_service import complete_task, final_release
+from app.stock.models import StockBalance
+from app.stock.services import (
+    completed_operations_match_clause,
+    dimensions_match_clause,
+)
 from app.transfers.services import transfer_send
 
 router = APIRouter(prefix="/production-planning", tags=["execution-control"])
@@ -67,11 +73,64 @@ class RemainderAllocationItem(BaseModel):
     quantity: Decimal
 
 
+class IssueSelection(BaseModel):
+    """Выбор оператора в окне «Взять в работу» для автоподбора (#282).
+
+    Порядок и количества считает сервер (``source_selection.build_issue_plan``)
+    — в payload нет ни количества по складу, ни «добавленного» склада:
+    можно только снять галочку (``excluded_balance_ids``) и выбрать стратегию
+    недостачи. Снятая галочка живёт ровно один вызов — она не сохраняется
+    ни в журнал, ни на следующую выдачу.
+    """
+
+    model_config = ConfigDict(extra="forbid")
+
+    excluded_balance_ids: list[int] = []
+    shortage_strategy: ShortageStrategy = ShortageStrategy.partial
+    #: Групповой запуск: галочек нет, подбор идёт сам, итог — один общий.
+    auto: bool = False
+    idempotency_key: str | None = None
+
+
+class IssueTransferSummary(BaseModel):
+    transfer_id: int
+    transfer_no: str
+    from_location_name: str | None = None
+    to_location_name: str | None = None
+    target_sequence: int | None = None
+    quantity: str
+
+
+class IssueSkippedStageSummary(BaseModel):
+    task_id: int
+    sequence: int
+    stage_name: str | None = None
+
+
+class IssueSummary(BaseModel):
+    """Итог выдачи для одного запуска позиции (#282).
+
+    ``issue_no = None`` — общий итог группового запуска: там несколько выдач
+    с разными номерами, и оператору показывается одна сводка по позициям.
+    """
+
+    issue_no: str | None = None
+    required: str | None = None
+    collected: str | None = None
+    deficit: str | None = None
+    transfers: list[IssueTransferSummary] = []
+    skipped_stages: list[IssueSkippedStageSummary] = []
+
+
 class TakeToWorkRequest(BaseModel):
     model_config = ConfigDict(extra="forbid")
     position_ids: list[int]
     remainder_allocation: list[RemainderAllocationItem] | None = None
     release_quantity: Decimal | None = None
+    #: Автоподбор источника выдачи (#282). Для нескольких позиций — только
+    #: ``auto`` (подбор без галочек); выбор склада руками принадлежит
+    #: конкретной позиции, как и ``remainder_allocation``.
+    issue: IssueSelection | None = None
 
 
 
@@ -131,10 +190,16 @@ class TakeToWorkResult(BaseModel):
     release_batch_id: int | None = None
     internal_plan_id: int | None = None
     tasks_created: int | None = None
+    #: Итог выдачи (#282): номер выдачи, сколько собрали и какой дефицит,
+    #: сколько передач создали и какие этапы помечены пропущенными.
+    issue: IssueSummary | None = None
 
 
 class TakeToWorkResponse(BaseModel):
     results: list[TakeToWorkResult]
+    #: Один общий итог группового запуска (#282): позиции считаются вместе,
+    #: чтобы оператор видел «собрано X из Y, дефицит Z» по всему запуску.
+    issue_summary: IssueSummary | None = None
 
 
 class WorkTaskOut(BaseModel):
@@ -727,20 +792,58 @@ async def _find_preceding_stock_line(
     *,
     plan_position_id: int,
     before_sequence: int,
+    product_id: int | None = None,
+    dimensions: dict | None = None,
+    completed_operations: list[str] | None = None,
 ) -> tuple[SectionPlanLine, Section] | None:
-    row = (
-        await db.execute(
-            select(SectionPlanLine, Section)
-            .join(Section, Section.id == SectionPlanLine.section_id)
-            .where(
-                SectionPlanLine.plan_position_id == plan_position_id,
-                SectionPlanLine.sequence < before_sequence,
-                Section.type.in_(_STOCK_SECTION_TYPES),
-            )
-            .order_by(SectionPlanLine.sequence.desc())
-            .limit(1)
+    """Складская строка плана, откуда реально можно взять материал.
+
+    Без фильтров это был ``limit(1)`` «самая поздняя складская строка этого
+    маршрута» — одна попытка, и та брала склад вслепую (#282). Теперь
+    опциональные оси выбора (продукт, размер, пройденные операции) сравниваются
+    со строкой ``StockBalance``: склад подходит, только если на нём есть
+    остаток с этим ключом. Оси — ровно те же, по которым списание точное
+    (ADR-0055), поэтому ``dimensions``/``completed_operations`` сравниваются
+    теми же SQL-клаузами, что и ledger-проверки.
+
+    ``product_id``/``dimensions``/``completed_operations`` не заданы —
+    прежнее поведение (любая складская строка раньше этапа): вызовы, которым
+    ось не известна, не ломаются.
+    """
+    query = (
+        select(SectionPlanLine, Section)
+        .join(Section, Section.id == SectionPlanLine.section_id)
+        .where(
+            SectionPlanLine.plan_position_id == plan_position_id,
+            SectionPlanLine.sequence < before_sequence,
+            Section.type.in_(_STOCK_SECTION_TYPES),
         )
-    ).first()
+        .order_by(SectionPlanLine.sequence.desc())
+    )
+    if product_id is not None:
+        # Остаток должен лежать ИМЕННО на этом складе: строка плана сама по
+        # себе про продукт ничего не утверждает (у складской линии product_id
+        # плановый, а фактический остаток — в stock_balances).
+        balance_exists = (
+            select(StockBalance.id)
+            .where(
+                StockBalance.location_id == SectionPlanLine.section_id,
+                StockBalance.product_id == product_id,
+                StockBalance.balance_qty > 0,
+            )
+        )
+        if dimensions is not None:
+            balance_exists = balance_exists.where(
+                dimensions_match_clause(StockBalance.dimensions, dimensions)
+            )
+        if completed_operations is not None:
+            balance_exists = balance_exists.where(
+                completed_operations_match_clause(
+                    StockBalance.completed_operations, completed_operations
+                )
+            )
+        query = query.where(balance_exists.exists())
+    row = (await db.execute(query.limit(1))).first()
     if row is None:
         return None
     return row[0], row[1]
@@ -811,10 +914,21 @@ async def _ensure_task_issued_via_transfer(
     if prev_task is not None:
         from_task_id = prev_task.id
     else:
+        # Оси выбора склада (#282): продукт, размер и пройденные операции —
+        # ровно тот ключ, по которому списание точное (ADR-0055). Вход этапа =
+        # операции маршрута до ПРЕДЫДУЩЕГО этапа включительно.
+        from app.services.material_operations import completed_operations_through_stage
+
+        input_ops = await completed_operations_through_stage(
+            db, route_id=line.route_id, through_sequence=max(line.sequence - 1, 0)
+        )
         stock_pair = await _find_preceding_stock_line(
             db,
             plan_position_id=line.plan_position_id,
             before_sequence=line.sequence,
+            product_id=task.product_id,
+            dimensions=task.dimensions,
+            completed_operations=input_ops,
         )
         if stock_pair is None:
             raise ValueError(
@@ -1150,21 +1264,73 @@ async def take_rows_to_work(
         if payload.release_quantity <= 0:
             raise HTTPException(status_code=422, detail="release_quantity must be > 0")
 
+    # Выбор склада (снятые галочки, стратегия недостачи) принадлежит конкретной
+    # позиции — как remainder_allocation. Групповой запуск умеет только
+    # автоподбор без галочек (`auto`), с одним общим итогом (#282).
+    issue_selection = payload.issue
+    if issue_selection is not None and len(payload.position_ids) != 1 and not issue_selection.auto:
+        raise HTTPException(
+            status_code=422,
+            detail=(
+                "Автоподбор источника выдачи с снятыми галочками доступен для одной "
+                "позиции; для группового запуска подбор идёт без галочек (auto)"
+            ),
+        )
+    if issue_selection is not None and payload.remainder_allocation:
+        raise HTTPException(
+            status_code=422,
+            detail=(
+                "Источник выдачи выбирается один раз: либо автоподбор (#282), "
+                "либо явный выбор остатка (remainder_allocation)"
+            ),
+        )
+
     for position_id in payload.position_ids:
-        try:
-            result = await _process_position_take_to_work(
-                db,
-                position_id,
-                remainder_allocation=allocation_dict if len(payload.position_ids) == 1 else None,
-                release_quantity=payload.release_quantity if len(payload.position_ids) == 1 else None,
+        selection = None
+        if issue_selection is not None:
+            selection = issue_selection.model_copy(
+                update={
+                    "idempotency_key": (
+                        f"{issue_selection.idempotency_key}:{position_id}"
+                        if issue_selection.idempotency_key
+                        else None
+                    ),
+                    # Снятными галочками управляет окно одной позиции; при
+                    # автоподборе (group launch) их нет вовсе.
+                    "excluded_balance_ids": (
+                        [] if issue_selection.auto else issue_selection.excluded_balance_ids
+                    ),
+                }
             )
+        try:
+            # Savepoint на позицию: неудачная позиция откатывается сама,
+            # уже выпущенные остаются в transaksi роута (раньше db.rollback()
+            # съедал и их).
+            async with db.begin_nested():
+                result = await _process_position_take_to_work(
+                    db,
+                    position_id,
+                    remainder_allocation=allocation_dict if len(payload.position_ids) == 1 else None,
+                    release_quantity=payload.release_quantity if len(payload.position_ids) == 1 else None,
+                    issue=selection,
+                    current_user_id=current_user.id,
+                )
             results.append(result)
+        except ValueError as exc:
+            # Отказ подбора/выдачи (#282): позиция откатана savepoint'ом,
+            # оператору — русский текст причины без цифровых id.
+            import logging
+            logging.getLogger(__name__).warning(
+                "take-to-work issue refused for position %s: %s", position_id, exc
+            )
+            results.append(TakeToWorkResult(position_id=position_id, status="failed", reason=str(exc)))
         except Exception as exc:
             import logging
             logger = logging.getLogger(__name__)
             logger.exception(f"take-to-work failed for position {position_id}")
-            # Сессия после исключения непригодна для следующей позиции:
-            # откатываем только неудачную, уже выпущенные позиции сохраняются.
+            # Исключение из-за пределов savepoint'а (например откат самой
+            # вложенной транзакции): позицию фиксируем неудачной, остальные
+            # уже выпущенные позиции сохраняются.
             await db.rollback()
             results.append(TakeToWorkResult(
                 position_id=position_id,
@@ -1176,7 +1342,38 @@ async def take_rows_to_work(
     # FastAPI 0.106+ отдаёт ответ раньше. Без этого клиент, получив 200,
     # перечитывает строки контроля и видит позицию ещё не запущенной.
     await db.commit()
-    return TakeToWorkResponse(results=results)
+    return TakeToWorkResponse(results=results, issue_summary=_group_issue_summary(results))
+
+
+def _group_issue_summary(results: list[TakeToWorkResult]) -> IssueSummary | None:
+    """Один общий итог подбора по всем позициям запуска (#282).
+
+    Групповой «Взять в работу» не показывает галочки по каждой позиции —
+    вместо них сводка «собрано X из Y, дефицит Z» на весь запуск.
+    """
+    issued = [item.issue for item in results if item.issue is not None]
+    if not issued:
+        return None
+
+    def _to_decimal(value: str | None) -> Decimal | None:
+        return None if not value else Decimal(value.replace(",", "."))
+
+    def _sum(values: list[Decimal | None]) -> Decimal:
+        return sum((v for v in values if v is not None), Decimal(0))
+
+    required = [_to_decimal(item.required) for item in issued]
+    collected = _sum([_to_decimal(item.collected) for item in issued])
+    deficit = _sum([_to_decimal(item.deficit) for item in issued])
+    from app.services.shopfloor.common import format_quantity
+
+    return IssueSummary(
+        issue_no=None,
+        required=format_quantity(_sum(required)) if any(v is not None for v in required) else None,
+        collected=format_quantity(collected),
+        deficit=format_quantity(deficit),
+        transfers=[t for item in issued for t in item.transfers],
+        skipped_stages=[s for item in issued for s in item.skipped_stages],
+    )
 
 
 
@@ -1634,6 +1831,8 @@ async def _process_position_take_to_work(
     position_id: int,
     remainder_allocation: dict[int, Decimal] | None = None,
     release_quantity: Decimal | None = None,
+    issue: IssueSelection | None = None,
+    current_user_id: int = 1,
 ) -> TakeToWorkResult:
     """Process a single position: validate and release into production."""
     # Check position exists
@@ -1744,7 +1943,7 @@ async def _process_position_take_to_work(
         )
         release_summary = await release_batch(db, batch_summary["id"], remainder_allocation=remainder_allocation)
 
-        return TakeToWorkResult(
+        result = TakeToWorkResult(
             position_id=position_id,
             status="success",
             release_batch_id=batch_summary["id"],
@@ -1766,6 +1965,59 @@ async def _process_position_take_to_work(
             status="failed",
             reason=f"Internal error: {exc!s}",
         )
+
+    # ── Автоподбор источника выдачи (#282) ──────────────────────────────────
+    # Вне блока ниже: сбой выдачи обязан ОТКАТИТЬ запуск позиции целиком
+    # (savepoint вызывающего роута), а не превратиться в «failed» с уже
+    # созданным релизом. Исключение уходит наружу русским текстом причины.
+    if issue is not None and result.status == "success":
+        result.issue = await _execute_take_to_work_issue(
+            db,
+            position=pos,
+            required=release_quantity if release_quantity is not None else pos.quantity,
+            selection=issue,
+            actor_id=current_user_id,
+        )
+    return result
+
+
+async def _execute_take_to_work_issue(
+    db: AsyncSession,
+    *,
+    position: PlanPosition,
+    required: Decimal,
+    selection: IssueSelection,
+    actor_id: int,
+) -> IssueSummary:
+    """Подбор + выдача для одной позиции при взятии в работу (#282).
+
+    Ключ идемпотентности — один на операцию; суффиксы шагов (``:0``,
+    ``:0:stock-send`` …) наращивает ``issue_service``. Если клиент ключа не
+    прислал, генерируем уникальный: повтор без ключа не должен выглядеть
+    как replay.
+    """
+    from app.services import product_pair_resolver
+    from app.transfers.issue_service import (
+        execute_issue,
+        issue_summary_payload,
+    )
+
+    effective_ids = await product_pair_resolver.resolve_effective_product_ids(db, position)
+    if not effective_ids:
+        raise ValueError("Источник выдачи: для позиции не определён артикул материала")
+
+    base_key = selection.idempotency_key or f"take-to-work:{position.id}:{uuid4().hex}"
+    result = await execute_issue(
+        db,
+        position=position,
+        product_id=effective_ids[0],
+        required=Decimal(str(required)),
+        actor_id=actor_id,
+        idempotency_key=base_key,
+        excluded_balance_ids=set(selection.excluded_balance_ids) if not selection.auto else set(),
+        shortage_strategy=selection.shortage_strategy,
+    )
+    return IssueSummary(**issue_summary_payload(result))
 
 
 class ProductWipRemainderOut(BaseModel):

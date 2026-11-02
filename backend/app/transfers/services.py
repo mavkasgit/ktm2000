@@ -70,6 +70,8 @@ from app.services.shopfloor.common import (
     _to_decimal,
     _transfer_no,
     enrich_comment_with_route_operations,
+    format_quantity,
+    get_section_name,
 )
 from app.services.shopfloor.output_rows import (
     UsedSource,
@@ -336,10 +338,16 @@ async def transfer_send(
 
     if not post_factum and not allow_over_plan:
         # Лимит источника — публичный шов глубокого модуля transferable (#131):
-        # тот же интерфейс, что читают гидраторы ready-page.
+        # тот же интерфейс, что читают гидраторы ready-page. Отказ — по-русски
+        # и без числовых id склада/артикула (#282): оператор видит название
+        # участка, нужное и доступное количество.
         transferable = await task_transferable(db, from_task, dimensions=dimensions)
         if quantity > transferable:
-            raise ValueError("Transfer quantity exceeds transferable amount")
+            source_section = await get_section_name(db, from_task.section_id)
+            raise ValueError(
+                f"Нужно {format_quantity(quantity)} шт., на «{source_section}» осталось "
+                f"{format_quantity(transferable)} шт. — передавать нельзя"
+            )
 
     now = datetime.now(UTC)
     eff_performed = physical_handover_at or performed_at or now
@@ -596,22 +604,32 @@ async def correct_transfer(
             "quantity": str(transfer.sent_quantity),
         }
 
-    from_task = await _get_task(db, transfer.from_task_id)
+    from_task = (
+        await _get_task(db, transfer.from_task_id)
+        if transfer.from_task_id is not None
+        else None
+    )
     to_task = await _get_task(db, transfer.to_task_id)
-    await _require_mutable_task(db, from_task)
+    if from_task is not None:
+        await _require_mutable_task(db, from_task)
 
     # 1. Domain-guard: источник имеет достаточно transferable (с учётом
     # возврата старого количества после компенсации). Лимит — через модуль
-    # transferable (#131), как и в transfer_send.
-    transferable = (
-        await task_transferable(db, from_task, dimensions=transfer.dimensions)
-        + old_quantity
-    )
-    if new_quantity > transferable:
-        raise ValueError(
-            f"Corrected quantity exceeds transferable amount of source task. "
-            f"Available to transfer: {transferable}"
+    # transferable (#131), как и в transfer_send. У передачи, порождённой
+    # автоподбором источника выдачи (#282), задания-источника нет: остаток
+    # склада проверяет сам StockCommandService на шаге записи проводок
+    # (`_ensure_sufficient_balance`), поэтому task-level лимит здесь неприменим.
+    if from_task is not None:
+        transferable = (
+            await task_transferable(db, from_task, dimensions=transfer.dimensions)
+            + old_quantity
         )
+        if new_quantity > transferable:
+            source_section = await get_section_name(db, from_task.section_id)
+            raise ValueError(
+                f"Нужно {format_quantity(new_quantity)} шт., на «{source_section}» осталось "
+                f"{format_quantity(transferable)} шт. — корректировать передачу нельзя"
+            )
 
     # 2. Domain-guard: приёмная сторона. При reduce (diff < 0) — in_work
     # баланс защищает от «фантомного» слива уже завершённого/отклонённого.
@@ -668,7 +686,8 @@ async def correct_transfer(
     await db.flush()
 
     # 6. Refresh проекций/кэшей для обеих сторон (отправка + приём).
-    await _refresh_section_plan_line_cache(db, from_task.section_plan_line_id)
+    if from_task is not None:
+        await _refresh_section_plan_line_cache(db, from_task.section_plan_line_id)
     await _refresh_section_plan_line_cache(db, to_task.section_plan_line_id)
 
     # 7. Audit log.
@@ -749,9 +768,14 @@ async def cancel_transfer(
     if transfer.status != TransferStatus.accepted:
         raise ValueError("Only accepted transfers can be cancelled")
 
-    from_task = await _get_task(db, transfer.from_task_id)
+    from_task = (
+        await _get_task(db, transfer.from_task_id)
+        if transfer.from_task_id is not None
+        else None
+    )
+    if from_task is not None:
+        await _require_mutable_task(db, from_task)
     to_task = await _get_task(db, transfer.to_task_id)
-    await _require_mutable_task(db, from_task)
 
     # Domain-guard: приёмная сторона не должна иметь завершённых/отклонённых
     # частей сверх sent_quantity; иначе cancel создал бы отрицательный баланс.
@@ -811,7 +835,8 @@ async def cancel_transfer(
     await db.flush()
 
     # Refresh проекций/кэшей после компенсации (net=0).
-    await _refresh_section_plan_line_cache(db, from_task.section_plan_line_id)
+    if from_task is not None:
+        await _refresh_section_plan_line_cache(db, from_task.section_plan_line_id)
     await _refresh_section_plan_line_cache(db, to_task.section_plan_line_id)
 
     # Audit log (отмена передачи).
