@@ -614,7 +614,7 @@ def test_anod_pair_fixture_is_built_for_merging() -> None:
 
 
 def test_fixture_blocks_use_real_skus_and_stay_recognizable() -> None:
-    """Артикулы блоков — реальные каталожные (``ЮП-…``/``АТ-…``/``ALS…`` с живым
+    """Артикулы блоков — реальные каталожные (``ЮП-…``/``АТ-…``/``ALS-…`` с живым
     именем товара), а не выдуманные коды: демо показывает заводскую номенклатур
     и не плодит фейковые карточки товара.
 
@@ -641,7 +641,9 @@ def test_fixture_blocks_use_real_skus_and_stay_recognizable() -> None:
     ):
         for row in block:
             sku = str(row["sku"])
-            assert re.match(r"^(ЮП|АТ|ALS)-?\d", sku), f"{sku}: не каталожный формат артикула"
+            # Дефис обязателен: слитная форма (``ALS1290``) — легаси, от которого
+            # прод ушёл вместе с миграцией 083.
+            assert re.match(r"^(ЮП|АТ|ALS)-\d", sku), f"{sku}: не каталожный формат артикула"
             assert len(str(row["name"])) >= 5, f"{sku}: пустое имя товара"
     invented = sorted(
         str(row["sku"])
