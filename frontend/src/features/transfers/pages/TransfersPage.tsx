@@ -135,6 +135,7 @@ import {
 } from "../lib/transferSortParams";
 import { fmtQty } from "@/shared/lib/quantityFormat";
 import { actionReasonText, type ActionReasonCode } from "@/shared/lib/actionReasons";
+import { zeroQuantityReason } from "../lib/transferReasons";
 
 /**
  * Плотность строки «Передачи» — общий уточнённый набор 32px (ADR-0033), тот
@@ -462,7 +463,7 @@ function ReadyTransferRow({
   const overLimit = qtyNum > maxQty;
   const isOverPlan = qtyNum > parseFloat(task.planned_quantity);
   /** Количество не введено или обнулено — передавать нечего (#193). */
-  const quantityReason: ActionReasonCode | null = qtyNum > 0 ? null : "zero_quantity";
+  const quantityReason = zeroQuantityReason(qtyNum);
   /** Пункт выдачи и пункт назначения: оператор несёт материал по адресу, а не по коду этапа. */
   const sourcePoint = stagePointLabel(task.section_name, task.operation_name);
   const nextPoint = stagePointLabel(task.next_section_name, task.next_operation_name);
@@ -715,9 +716,7 @@ function ReadyTransferGroupRow({
    */
   const groupBlockReason: ActionReasonCode | null = hasInFlightRow
     ? "row_in_flight"
-    : qtyNum > 0
-      ? null
-      : "zero_quantity";
+    : zeroQuantityReason(qtyNum);
 
   return (
     <TableRow
