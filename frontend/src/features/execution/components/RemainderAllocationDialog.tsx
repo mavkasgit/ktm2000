@@ -239,7 +239,11 @@ export function RemainderAllocationDialog({
 
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>
-      <DialogContent className="max-w-md gap-0 p-0 overflow-hidden">
+      {/* `overflow-hidden` тут закрывал бы нижний край окна: своего
+          прокручиваемого тела у окна нет (шапка и футер — часть потока), и на
+          телефоне ряд источников уводил «Запустить в работу» за экран без
+          возможности долистать. По горизонтали обрезка остаётся. */}
+      <DialogContent className="max-w-md gap-0 p-0 overflow-x-hidden overflow-y-auto">
         <DialogHeader className="px-5 pt-5 pb-3 border-b bg-muted/30">
           <DialogTitle className="flex items-center gap-2 text-base font-semibold">
             <Layers className="h-4 w-4 text-primary shrink-0" />
