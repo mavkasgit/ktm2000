@@ -8,6 +8,9 @@ Mounted at ``/transfers``.  Provides:
   * ``GET  /transfers/sections/{id}/incoming``   — incoming open transfers for a section
   * ``PUT  /transfers/{id}``                     — correct an accepted transfer
   * ``POST /transfers/{id}/cancel``               — cancel an accepted transfer
+  * ``GET  /transfers/issues/{issue_no}/cancel-preview`` — что вернёт отмена
+    выдачи целиком (#282)
+  * ``POST /transfers/issues/{issue_no}/cancel``   — отмена выдачи целиком
 
 Under the explicit-transfer model, ``POST /transfers`` is the single
 write path. The auto-accept (receive) is part of the service itself,
@@ -25,6 +28,7 @@ from __future__ import annotations
 from datetime import datetime
 
 from fastapi import APIRouter, Depends, HTTPException, Query
+from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.api.deps import (
@@ -38,7 +42,12 @@ from app.api.deps import (
 )
 from app.core.database import get_db
 from app.domain.dimensions import DimensionsValidationError
+from app.models.transfer import Transfer
 from app.models.user import User
+from app.transfers.issue_service import (
+    cancel_issue,
+    preview_issue_cancellation,
+)
 from app.transfers.queries import (
     get_section_incoming_transfers,
     get_section_transfer_history,
@@ -259,6 +268,61 @@ async def cancel_transfer_qty(
         )
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+
+@router.get(
+    "/issues/{issue_no}/cancel-preview",
+    dependencies=[Depends(require_role(list(READER_ROLES)))],
+)
+async def issue_cancel_preview(issue_no: str, db: AsyncSession = Depends(get_db)) -> dict:
+    """Что вернёт отмена выдачи целиком (#282, п.8) — только чтение.
+
+    Ответ: ``returns`` (что и куда вернётся), ``stages`` (какие пропущенные
+    этапы снова пойдут в работу), ``can_cancel`` + ``reason`` (почему нельзя,
+    если хоть одна передача уже принята в смысле фактов исполнения) и
+    ``summary`` — готовая human-readable строка «вернём 40 на „Хранилище Б“,
+    12 на „В“, этапы 2–4 снова в работу». Числовых id склада в тексте нет:
+    только имена.
+    """
+    try:
+        return await preview_issue_cancellation(db, issue_no=issue_no)
+    except ValueError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+
+
+@router.post(
+    "/issues/{issue_no}/cancel",
+    dependencies=[Depends(require_role(list(TRANSFER_WRITER_ROLES)))],
+)
+async def issue_cancel(
+    issue_no: str,
+    comment: str | None = Query(default=None),
+    db: AsyncSession = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+) -> dict:
+    """Отмена выдачи целиком: все передачи одного ``issue_no`` + свои пропуски.
+
+    Каждая передача откатывается через собственный ``transfer_send`` Action
+    (ADR-0019), поэтому штучная отмена в «Отмене действий» остаётся
+    возможной. Снимаются только пропуски с ``skipped_by_issue_no`` этого
+    номера — чужие пропуски не трогаются (#282, п.6 и п.8).
+    """
+    exists = await db.scalar(
+        select(Transfer.id).where(Transfer.issue_no == issue_no).limit(1)
+    )
+    if exists is None:
+        raise HTTPException(status_code=404, detail="Выдача с таким номером не найдена")
+    try:
+        result = await cancel_issue(
+            db, issue_no=issue_no, actor_id=current_user.id, comment=comment
+        )
+    except ValueError as exc:
+        # Блокировка (часть уже принята или отработана) — отказ русским текстом.
+        await db.rollback()
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    # Коммит ДО ответа: `get_db` коммитит только после выхода зависимости.
+    await db.commit()
+    return result
 
 
 

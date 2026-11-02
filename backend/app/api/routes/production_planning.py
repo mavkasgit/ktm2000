@@ -9,7 +9,7 @@ from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import selectinload
 
-from app.api.deps import WRITER_ROLES, get_current_user, require_role
+from app.api.deps import READER_ROLES, WRITER_ROLES, get_current_user, require_role
 from app.core.database import get_db
 from app.domain.dimensions import (
     DIMENSIONLESS_LABEL,
@@ -120,6 +120,69 @@ class IssueSummary(BaseModel):
     deficit: str | None = None
     transfers: list[IssueTransferSummary] = []
     skipped_stages: list[IssueSkippedStageSummary] = []
+
+
+class IssuePreviewCandidate(BaseModel):
+    """Одна строка списка «откуда брать» в окне «Взять в работу» (#282).
+
+    Порядок и ``take`` считает сервер: UI обязан отобразить строки по полю
+    ``order`` и не даёт оператору вводить количество или добавлять склад.
+    ``remaining_after`` — ``None`` означает прочерк («не доходила очередь»
+    или снята галочка), ``"0"`` — склад вычерпан целиком.
+    """
+
+    balance_id: int
+    location_id: int
+    location_name: str
+    dimensions: dict | None = None
+    completed_operations: list[str] | None = None
+    ops_count: int
+    available: str
+    take: str
+    remaining_after: str | None = None
+    included: bool
+    target_sequence: int
+    order: int
+
+
+class IssuePreviewHint(BaseModel):
+    """Подсказка по включённым складам: «брак» / «есть другой размер» (#282)."""
+
+    kind: str
+    location_id: int
+    location_name: str
+    quantity: str
+    text: str
+
+
+class IssuePreviewOut(BaseModel):
+    """Ответ предпросмотра подбора — единственный источник порядка (#282)."""
+
+    position_id: int
+    product_id: int
+    required: str
+    required_dimensions: dict | None = None
+    required_dimensions_label: str | None = None
+    collected: str
+    deficit: str
+    candidates: list[IssuePreviewCandidate] = []
+    hints: list[IssuePreviewHint] = []
+
+
+class IssuePreviewRequest(BaseModel):
+    """Запрос предпросмотра: только снятые галочки и количество к выпуску.
+
+    ``release_quantity`` по умолчанию равен количеству позиции — это та же
+    величина, что подставляется при «Взять в работу» без изменения нормы.
+    ``product_id`` — для позиции из пары компонентов; по умолчанию берётся
+    эффективный артикул материала (``resolve_effective_product_ids``).
+    """
+
+    model_config = ConfigDict(extra="forbid")
+
+    excluded_balance_ids: list[int] = []
+    release_quantity: Decimal | None = None
+    product_id: int | None = None
 
 
 class TakeToWorkRequest(BaseModel):
@@ -931,8 +994,12 @@ async def _ensure_task_issued_via_transfer(
             completed_operations=input_ops,
         )
         if stock_pair is None:
+            # Отказ по-русски и без id (#282, п.5): пользователь видит, что
+            # склад-источник не найден именно по осям «размер + пройденные
+            # операции», а не «вообще нет склада на маршруте».
             raise ValueError(
-                "Cannot issue material: no preceding stock section and no previous production task"
+                "Источник выдачи: нет склада-источника с материалом нужного "
+                "размера и состояния операций — передавать нечего"
             )
         stock_line, stock_section = stock_pair
         fake_task = await _get_or_create_stock_fake_task(
@@ -1232,6 +1299,64 @@ async def _do_manual_pass(
         transfers_created=transfers_created,
         skipped_stages=stages_to_execute,
     )
+
+
+@router.post(
+    "/rows/{position_id}/issue-preview",
+    response_model=IssuePreviewOut,
+    dependencies=[Depends(require_role(list(READER_ROLES)))],
+)
+async def issue_source_preview(
+    position_id: int,
+    payload: IssuePreviewRequest,
+    db: AsyncSession = Depends(get_db),
+) -> IssuePreviewOut:
+    """Предпросмотр автоподбора источника выдачи (#282, п.1).
+
+    Порядок, количества и дефицит считает сервер: ответ — единственное,
+    чем окно «Взять в работу» заполняет список складов. Снятая галочка
+    приходит ``excluded_balance_ids`` и живёт ровно этот вызов: сервер ничего
+    не запоминает, склад нельзя ни «добавить», ни пересортировать руками.
+    Вызов не мутирует БД — можно дёргать при каждом изменении галочек,
+    чтобы UI пересчитал «остаток после» и итог.
+    """
+    from app.services import product_pair_resolver
+    from app.transfers.issue_service import build_issue_preview_payload
+
+    position = await db.get(PlanPosition, position_id)
+    if position is None:
+        raise HTTPException(status_code=404, detail="Позиция плана не найдена")
+
+    product_id = payload.product_id
+    if product_id is None:
+        effective_ids = await product_pair_resolver.resolve_effective_product_ids(db, position)
+        if not effective_ids:
+            raise HTTPException(
+                status_code=422,
+                detail="Источник выдачи: для позиции не определён артикул материала",
+            )
+        product_id = effective_ids[0]
+
+    required = (
+        payload.release_quantity
+        if payload.release_quantity is not None
+        else position.quantity
+    )
+    if required is None or Decimal(str(required)) <= 0:
+        raise HTTPException(status_code=422, detail="release_quantity must be > 0")
+
+    try:
+        data = await build_issue_preview_payload(
+            db,
+            position=position,
+            product_id=product_id,
+            required=Decimal(str(required)),
+            excluded_balance_ids=set(payload.excluded_balance_ids),
+        )
+    except ValueError as exc:
+        # например «у позиции динамический маршрут — подбор не применим»
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    return IssuePreviewOut(**data)
 
 
 @router.post("/rows/take-to-work", response_model=TakeToWorkResponse, dependencies=[Depends(require_role(list(WRITER_ROLES)))])
