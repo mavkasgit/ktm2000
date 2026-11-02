@@ -50,20 +50,73 @@ concurrency:
   group: ci-${{ github.workflow }}-${{ github.event.pull_request.number || github.ref }}
   cancel-in-progress: ${{ github.event_name == 'pull_request' || github.ref != 'refs/heads/main' }}
 
+# #363 [missing-permissions]: по умолчанию GITHUB_TOKEN получает запись во все скоупы
+# репозитория. Здесь читаем — поэтому верхний уровень только `contents: read`.
+permissions:
+  contents: read
+
 jobs:
   docs:
     name: docs
     runs-on: ubuntu-latest
+    # #363 [missing-timeout]: замера не было вовсе. По `jactionlint --suggest-timeouts`
+    # (13 успешных прогонов, 2026-10-07…2026-11-02): min 0.1, медиана 0.1, max 0.2 мин.
+    # 10 минут — запас на npm-установку без кеша.
+    timeout-minutes: 10
 
     steps:
       - name: Checkout
-        uses: actions/checkout@v4
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+        with:
+          # #363 [artipacked]: checkout иначе пишет GITHUB_TOKEN в .git/config workspace,
+          # откуда его может увести любой последующий шаг (upload-artifact и т. п.).
+          # Ни один шаг этих джобов не пушит: push — действие человека/оркестратора.
+          persist-credentials: false
+
+      # #362: версии языка берутся из pin-файлов репозитория (#355 оркестратора:
+      # `.nvmrc`, `.python-version`). Файла нет — шаг материализует временный
+      # `.ci-*-version` в workspace прогона (в git не попадает) со значением, которое
+      # стояло в этом workflow до волны, и печатает WARNING. Прогон зелёный уже
+      # сегодня; когда pin-файлы появятся, правки в workflow не нужны — тот же путь,
+      # другое содержимое.
+      - name: Toolchain pin (#362)
+        id: toolchain
+        shell: bash
+        env:
+          KTM_NODE_FALLBACK: '22'
+          KTM_USE_NODE: 'yes'
+          KTM_USE_PY: 'no'
+        run: |
+          set -euo pipefail
+          pick() {
+            local src="$1" fb="$2" dst="$3" raw
+            if [ -f "$src" ]; then
+              raw=$(tr -d ' \t\r\n' < "$src")
+              echo "$src -> $raw (pin-файл репозитория)"
+            else
+              raw="$fb"
+              echo "WARNING: pin-файла $src нет (#355 не влит) — беру литерал workflow $raw"
+            fi
+            if [ -z "$raw" ]; then
+              echo "Пустая версия языка ($src/$fb) — падаю, а не ставлю тихий дефолт" >&2
+              exit 1
+            fi
+            printf '%s\n' "${raw#v}" > "$dst"
+            echo "$dst: $(cat "$dst")"
+          }
+          if [ "$KTM_USE_NODE" = yes ]; then
+            pick .nvmrc "$KTM_NODE_FALLBACK" .ci-node-version
+            echo "node_file=.ci-node-version" >> "$GITHUB_OUTPUT"
+          fi
+          if [ "$KTM_USE_PY" = yes ]; then
+            pick .python-version "$KTM_PY_FALLBACK" .ci-python-version
+            echo "python_file=.ci-python-version" >> "$GITHUB_OUTPUT"
+          fi
 
       - name: Setup Node
-        uses: actions/setup-node@v4
+        uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4.4.0
         with:
-          node-version: "22"
-
+          node-version-file: ${{ steps.toolchain.outputs.node_file }}
       - name: Doc links
         run: npm run check:docs
 
