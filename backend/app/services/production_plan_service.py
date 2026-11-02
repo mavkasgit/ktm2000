@@ -29,6 +29,7 @@ from app.models.production_plan import (
 )
 from app.models.user import User
 from app.services.audit_log_service import log_action
+from app.services.import_storage import schedule_import_file_purge
 from app.services.plan_validation import validate_plan_position
 
 
@@ -782,6 +783,10 @@ async def _delete_batch_and_orphan_file(db: AsyncSession, batch_id: int) -> bool
 #: и скрытому батчу — по «Скачать» и предпросмотру, иначе скрытие сделало бы
 #: ссылку битой, а физическое удаление соседнего батча — «убило» файл из-под
 #: скрытого.
+#: Правила #288: вместе со строкой `import_files` уходит и байт с диска —
+#: «записи нет — файла нет». Файл стирается на коммите этой транзакции
+#: (`import_storage`), поэтому откат/409 оставляют и запись, и файл целыми;
+#: если файла на диске уже нет — идемпотентно, ручку не роняет.
     batch = await db.get(ImportBatch, batch_id)
     if batch is None:
         return False
@@ -797,6 +802,7 @@ async def _delete_batch_and_orphan_file(db: AsyncSession, batch_id: int) -> bool
         if refs_count == 0:
             import_file = await db.get(ImportFile, source_file_id)
             if import_file is not None:
+                schedule_import_file_purge(db, [import_file.stored_path])
                 await db.delete(import_file)
                 await db.flush()
     return True

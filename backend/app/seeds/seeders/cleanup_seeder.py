@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from sqlalchemy import delete, exists
+from sqlalchemy import delete, exists, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.models.defect import (
@@ -23,6 +23,7 @@ from app.models.transfer import Transfer, TransferDiscrepancy
 from app.models.work_task import WorkTask
 from app.stock.import_models import StockImportBatch
 from app.stock.models import StockBalance, StockTransaction
+from app.services.import_storage import schedule_import_file_purge
 
 
 async def clear_generated_production_data(db: AsyncSession) -> dict[str, int]:
@@ -61,6 +62,21 @@ async def clear_generated_production_data(db: AsyncSession) -> dict[str, int]:
     # остатков. Раньше здесь учитывался только план, и демо-сид падал на FK
     # ``fk_stock_import_batches_file_id_import_files``, если в базе была хотя бы
     # одна загрузка остатков: весь прогон откатывался и план не появлялся.
+    #
+    # #288: вместе со строкой уходит и файл с диска («записи нет — файла нет»).
+    # Пути снимаем ДО удаления и по тому же предикату, что и сам DELETE:
+    # строки, пережившие очистку (например, под батчами остатков), остаются
+    # со своими файлами. Стирание байтов — на коммите вызывающей транзакции
+    # (слушатель ``import_storage``), поэтому откат сида ничего не теряет.
+    doomed_paths = (
+        await db.execute(
+            select(ImportFile.stored_path).where(
+                ~exists().where(ImportBatch.source_file_id == ImportFile.id),
+                ~exists().where(StockImportBatch.file_id == ImportFile.id),
+            )
+        )
+    ).scalars().all()
+    schedule_import_file_purge(db, doomed_paths)
     result = await db.execute(
         delete(ImportFile).where(
             ~exists().where(ImportBatch.source_file_id == ImportFile.id),
