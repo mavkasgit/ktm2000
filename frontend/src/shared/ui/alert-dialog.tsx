@@ -23,6 +23,19 @@ const AlertDialogOverlay = React.forwardRef<
 ))
 AlertDialogOverlay.displayName = AlertDialogPrimitive.Overlay.displayName
 
+/**
+ * Каркас подтверждения — тот же каркас, что и `Dialog` (ADR-0033, #344).
+ *
+ * Потолок высоты и внутренняя прокрутка стояли только в `Dialog`, из-за чего
+ * любое `AlertDialog` на телефоне рос сколько хотел: кнопки «Отмена»/«Удалить»
+ * оказывались под нижним краем экрана, а `body` под оверлеем Radix не
+ * прокручивается. Теперь умолчание общее, и перекрывается оно классами
+ * вызывающего так же, как у `Dialog` (`cn` = `clsx` + `tailwind-merge`):
+ * своему окну с внутренней прокруткой достаточно `overflow-hidden` со своим
+ * `max-h-*`. Возврат фокуса на триггер, который делает `Dialog`, сюда не
+ * перенесён: `AlertDialog` не закрывается ни кликом мимо, ни `Escape` —
+ * ответ всегда даётся кнопкой внутри окна, и окно не исчезает без ответа.
+ */
 const AlertDialogContent = React.forwardRef<
   React.ElementRef<typeof AlertDialogPrimitive.Content>,
   React.ComponentPropsWithoutRef<typeof AlertDialogPrimitive.Content>
@@ -32,7 +45,7 @@ const AlertDialogContent = React.forwardRef<
     <AlertDialogPrimitive.Content
       ref={ref}
       className={cn(
-        "fixed left-[50%] top-[50%] z-50 grid w-full max-w-lg translate-x-[-50%] translate-y-[-50%] gap-4 border bg-background p-6 shadow-lg duration-200 data-[state=open]:animate-in data-[state=closed]:animate-out data-[state=closed]:fade-out-0 data-[state=open]:fade-in-0 data-[state=closed]:zoom-out-95 data-[state=open]:zoom-in-95 data-[state=closed]:slide-out-to-left-1/2 data-[state=closed]:slide-out-to-top-[48%] data-[state=open]:slide-in-from-left-1/2 data-[state=open]:slide-in-from-top-[48%] sm:rounded-lg",
+        "fixed left-[50%] top-[50%] z-50 grid w-full max-w-lg translate-x-[-50%] translate-y-[-50%] gap-4 border bg-background p-6 shadow-lg duration-200 data-[state=open]:animate-in data-[state=closed]:animate-out data-[state=closed]:fade-out-0 data-[state=open]:fade-in-0 data-[state=closed]:zoom-out-95 data-[state=open]:zoom-in-95 data-[state=closed]:slide-out-to-left-1/2 data-[state=closed]:slide-out-to-top-[48%] data-[state=open]:slide-in-from-left-1/2 data-[state=open]:slide-in-from-top-[48%] sm:rounded-lg max-h-[calc(100dvh-2rem)] overflow-y-auto",
         className
       )}
       {...props}

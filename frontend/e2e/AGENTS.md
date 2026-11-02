@@ -217,9 +217,17 @@ devstack (`npm run dev`) агент по-прежнему не поднимае�
 `@mobile` — **другой ярус, а не другой viewport у `ui-narrow`**: `ui-narrow`
 это доменный сценарий (пила, ЮП-460), он идёт широким окном, как и остальные.
 Мобильный проект гоняет короткие smoke-проверки тех же экранов при 390×844;
-десктопные ярусы исключают его тегом (`grepInvert: /@mobile/` у `smoke`,
-`/@ui-narrow|@mobile/` у `ui-e2e`), поэтому сочетание тегов `@smoke @mobile`
-на одной спеке не прогнало бы её дважды.
+десктопные ярусы исключают его тегом (`grepInvert` от `MOBILE_TAG_RE` у `smoke`
+и `ui-narrow`, `tagRe("@ui-narrow", "@mobile")` у `ui-e2e`), поэтому сочетание
+тегов `@smoke @mobile` на одной спеке не прогнало бы её дважды.
+
+**Тег — токен, а не подстрока (#342, ревью 5).** Все `grep`/`grepInvert`
+в конфиге собираются из `tagRe(...)` (`e2e/mobile-project.mjs`), и тот же
+шаблон читает отчёт прогона (`selectMobileSpecs`). Подстрочный `/@mobile/`
+утащил бы спеку с `@mobile-wide` в мобильный прогон, которого его же отчёт не
+назвал бы: «что прогналось» и «что напечатано» разошлись бы молча. Проверка
+расхождения — `--list`: `npx playwright test --list --no-deps
+--project=<ярус>` против строк `[e2e:run] ярус mobile: …` из прогона.
 
 ```bash
 npm --prefix frontend run test:e2e:smoke      # ТОЛЬКО ярус 1 (smoke)
@@ -754,14 +762,17 @@ set E2E_SKIP_PASSED=1
 - `use`: `baseURL` из `PLAYWRIGHT_TEST_BASE_URL`, `trace: "on-first-retry"`,
   `screenshot: "on"` (снимок всегда, а не только при падении),
   `video: "retain-on-failure"`
-- Проекты (порядок и fail-fast — через `dependencies`): `smoke`
-  (`grep: /@smoke/`, `grepInvert: /@mobile/`, таймаут дефолтный 30 c) →
-  `ui-e2e` (`grep: /@ui/`, `grepInvert: /@ui-narrow|@mobile/`,
-  `timeout: 120_000`, зависит от `smoke`) → `ui-narrow` (`grep: /@ui-narrow/`,
-  `timeout: 120_000`, зависит от `ui-e2e`) → `mobile` (`grep: /@mobile/`,
+- Проекты (порядок и fail-fast — через `dependencies`; все `grep`/`grepInvert`
+  собирает `tagRe` из `e2e/mobile-project.mjs`, тег матчится как токен):
+  `smoke` (`grep: tagRe("@smoke")`, `grepInvert: MOBILE_TAG_RE`, таймаут
+  дефолтный 30 c) → `ui-e2e` (`grep: tagRe("@ui")`,
+  `grepInvert: tagRe("@ui-narrow", "@mobile")`, `timeout: 120_000`, зависит от
+  `smoke`) → `ui-narrow` (`grep: tagRe("@ui-narrow")`,
+  `grepInvert: MOBILE_TAG_RE`, `timeout: 120_000`, зависит от `ui-e2e`) →
+  `mobile` (`grep: MOBILE_TAG_RE`,
   окно 390×844 + `isMobile`/`hasTouch`/`deviceScaleFactor: 2` из
   `e2e/mobile-project.mjs`, без `dependencies` — мобильный ярус вне цепочки)
-  → `tmp` (`grep: /@tmp/`, таймаут дефолтный), только при заданном `E2E_TMP`
+  → `tmp` (`grep: tagRe("@tmp")`, таймаут дефолтный), только при заданном `E2E_TMP`
   и вне цепочки зависимостей
 - `webServer`: `npm --prefix .. run backend`
   (`http://127.0.0.1:<порт>/api/health`) и `npm run dev`
