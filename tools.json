@@ -292,53 +292,69 @@
       "npm_package": "ajv"
     },
     {
+      "id": "lefthook",
+      "name": "Lefthook",
+      "repo": "evilmartians/lefthook",
+      "category": "hook",
+      "version": "2.2.2",
+      "pinned_in": "package.json",
+      "runs_at": [
+        "commit",
+        "push"
+      ],
+      "blocking": true,
+      "last_reviewed": "2026-11-03",
+      "rationale": "Хуки по staged-файлам: ответ до коммита. Ничего нового не проверяет — каждый command уже живёт в gate и CI, поэтому отсутствие хуков не делает дерево менее проверенным (docs/quality/hooks.md).",
+      "npm_package": "lefthook"
+    },
+    {
       "id": "action-checkout",
       "name": "actions/checkout",
       "repo": "actions/checkout",
       "category": "ci-action",
-      "version": "@v4",
+      "version": "@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0",
       "pinned_in": ".github/workflows",
       "runs_at": [
         "ci"
       ],
       "blocking": true,
       "last_reviewed": "2026-11-03",
-      "rationale": "Закреплён во всех шести workflow; тег мажора — это и есть пин."
+      "rationale": "Закреплён полным SHA во всех шести workflow, тег — комментарием: dependabot (#367) обновляет именно SHA, а «@v4» позволил бы мажору уехать без изменения файла."
     },
     {
       "id": "action-setup-node",
       "name": "actions/setup-node",
       "repo": "actions/setup-node",
       "category": "ci-action",
-      "version": "@v4",
+      "version": "@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4.4.0",
       "pinned_in": ".github/workflows",
       "runs_at": [
         "ci"
       ],
       "blocking": true,
       "last_reviewed": "2026-11-03",
-      "rationale": "Ставит Node в CI; версию обязан брать из .nvmrc (#362)."
+      "rationale": "Ставит Node; сама версия берётся из pin-файлов репозитория, не из литерала workflow (#362)."
     },
     {
       "id": "action-setup-python",
       "name": "actions/setup-python",
       "repo": "actions/setup-python",
       "category": "ci-action",
-      "version": "@v5",
+      "version": "@a26af69be951a213d495a4c3e4e4022e16d87065 # v5.6.0",
       "pinned_in": ".github/workflows",
       "runs_at": [
         "ci"
       ],
       "blocking": true,
       "last_reviewed": "2026-11-03",
-      "rationale": "Ставит Python в CI; версию обязан брать из .python-version (#362)."
+      "rationale": "Ставит Python; версия из .python-version (#362)."
     },
     {
       "id": "action-upload-artifact",
       "name": "actions/upload-artifact",
       "repo": "actions/upload-artifact",
       "category": "ci-action",
-      "version": "@v4",
+      "version": "@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2",
       "pinned_in": ".github/workflows",
       "runs_at": [
         "ci"
