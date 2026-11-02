@@ -141,8 +141,26 @@ export function describeHolders(dir, max, { alive = isProcessAlive } = {}) {
 }
 
 /**
+ * @typedef {Object} AcquireSlotOptions
+ * @property {string} [dir] каталог слотов (вне репозитория — видит вся машина)
+ * @property {number} [max] число слотов (`E2E_MAX_PARALLEL_RUNS`)
+ * @property {Record<string, *>} [payload] содержимое файла слота: `repo`, `runId`,
+ *   `envFile`, `tier`, `pid`, `at`. Без описания в JSDoc тип выводится из
+ *   значения по умолчанию `{}` и `payload` в него не попадает — вызывающий
+ *   (`run-slots.test.ts`) падает на TS2353, хотя аргумент обязательный по смыслу.
+ * @property {number} [waitTimeoutMs] сколько ждать свободный слот
+ * @property {number} [staleMs] возраст слота, после которого он просрочен
+ * @property {number} [pollMs] шаг опроса
+ * @property {(line: string) => void} [log]
+ * @property {(holder: Record<string, *>, info: {index: number, reason: string}) => void} [onReclaim]
+ * @property {(pid: number) => boolean} [alive] чем проверять живость держателя
+ * @property {() => number} [now] часы (для тестов)
+ */
+
+/**
  * Ждать свободный слот, показывая, что занято.
  *
+ * @param {AcquireSlotOptions} [options]
  * @returns {Promise<{index: number, file: string}>}
  */
 export async function acquireSlot({
