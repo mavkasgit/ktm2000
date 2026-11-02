@@ -15,6 +15,7 @@
  */
 
 import type { SectionBoardTask } from "@/shared/api/shopfloor";
+import type { ActionReasonCode } from "@/shared/lib/actionReasons";
 import { fmtQty, toQtyInteger } from "@/shared/lib/quantityFormat";
 import { parseQuantityInput, type QuantityInputMode } from "@/shared/lib/quantityInput";
 
@@ -428,4 +429,49 @@ export function draftEntryTotals(entries: DraftEntry[]): { good: number; defect:
     defect += entry.defect.quantity;
   }
   return { good, defect };
+}
+
+/** Ввод есть, но ни одна порция не положительна: «+0» или цель = записанное. */
+function isDraftPortionless(tasks: SectionBoardTask[], draft: BulkDraft): boolean {
+  let sawInput = false;
+  for (const task of tasks) {
+    const qty = draftQtyFor(draft, task.id);
+    if (!hasValue(qty)) continue;
+    sawInput = true;
+    if (factPortion(qty.good, recordedFact(task, "good")) > 0) return false;
+    if (factPortion(qty.defect, recordedFact(task, "defect")) > 0) return false;
+  }
+  return sawInput;
+}
+
+/**
+ * Причина недоступности подтверждения массового ввода (#283, ревью п. 4).
+ *
+ * Пустой черновик, черновик из нулевых порций и «завершать нечего» — три
+ * разных разговора с оператором. Нулевая порция («+0» или цель, совпавшая с
+ * записанным) — это ввод, который есть, но ничего не записывает: «нет заданий
+ * для завершения» здесь неправда, а «введите количество» звучит так, будто
+ * полей не касались. Причина нулевой порции побеждает и статус строки: если
+ * набрано число, разговор идёт о числе, а не о том, что задание незавершаемо.
+ */
+export function resolveBulkConfirmReason({
+  tasks,
+  draft,
+  shortage,
+  hasShortageStrategy,
+}: {
+  tasks: SectionBoardTask[];
+  draft: BulkDraft;
+  /** Дефицит `draftShortage` — считается страницей, здесь только решается причина. */
+  shortage: DraftShortage | null;
+  hasShortageStrategy: boolean;
+}): ActionReasonCode | null {
+  const { entries, skipped } = draftEntries(tasks, draft);
+  if (entries.length === 0) {
+    if (isDraftEmpty(draft)) return "bulk_no_quantity";
+    if (isDraftPortionless(tasks, draft)) return "bulk_zero_quantity";
+    return skipped.length > 0 ? "bulk_nothing_to_complete" : "bulk_no_quantity";
+  }
+  if (shortage && !hasShortageStrategy) return "no_shortage_strategy";
+  return null;
 }

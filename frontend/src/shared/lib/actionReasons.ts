@@ -28,6 +28,7 @@ export type ActionReasonCode =
   | "fact_entered"
   | "bulk_nothing_to_complete"
   | "bulk_no_quantity"
+  | "bulk_zero_quantity"
   | "no_shortage_strategy"
   | "fact_below_recorded"
   // Передачи.
@@ -48,6 +49,10 @@ export const ACTION_REASON_TEXT: Record<ActionReasonCode, string> = {
   fact_entered: "Факт уже внесён",
   bulk_nothing_to_complete: "Нет заданий для завершения",
   bulk_no_quantity: "Введите количество",
+  // Набрано «+0» или цель, совпавшая с записанным: поля заполнены, но порции к
+  // записи нет. «Введите количество» здесь звучало бы так, будто полей не
+  // касались, а «нет заданий для завершения» — неправда.
+  bulk_zero_quantity: "Введите количество больше записанного",
   no_shortage_strategy: "Выберите, что делать с излишком",
   fact_below_recorded: "Факт можно только увеличить: введено меньше записанного. Уменьшение — через отмену действия",
   cancelled: "Задание отменено",

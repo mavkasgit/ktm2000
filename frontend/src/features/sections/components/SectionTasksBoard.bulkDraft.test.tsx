@@ -10,9 +10,10 @@
 
 import { useState } from "react";
 import { fireEvent, render, screen, within } from "@testing-library/react";
-import { describe, expect, it, vi } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import type { SectionBoardTask } from "@/shared/api/shopfloor";
 import type { PageLimitOption } from "@/shared/hooks/usePaginatedTableQuery";
+import { stubViewportWidth } from "@/shared/lib/testViewport";
 import { useBulkSelection } from "@/shared/bulk";
 import type { GroupingProfile } from "../lib/groupingProfiles";
 import type { BulkDraft } from "../lib/bulkDraft";
@@ -394,5 +395,62 @@ describe("SectionTasksBoard: отбор строки в статусе «ожи�
     fireEvent.keyDown(taskRow("SKU-WAIT"), { key: "Enter" });
 
     expect(taskRow("SKU-WAIT").getAttribute("aria-selected")).toBe("true");
+  });
+});
+
+/**
+ * Одно правило клавиатуры на строку таблицы, карточку узкого экрана и шапку
+ * группы (#283, ревью п. 5): Enter и пробел — тумблер выделения, клавиша из
+ * поля внутри строки — не тумблер.
+ */
+describe("SectionTasksBoard: клавиатура выбора на всех трёх носителях", () => {
+  // Мобильная ветка рендерится только на узкой ширине; ширина ставится тестом
+  // перед `render`, здесь — снимается.
+  afterEach(() => {
+    vi.restoreAllMocks();
+  });
+
+  it("пробел на карточке узкого экрана выделяет её", () => {
+    stubViewportWidth(375);
+    render(<Harness tasks={[makeTask({ id: 1, product_sku: "SKU-A" })]} />);
+
+    const card = document.querySelector('div[data-task-id="1"]') as HTMLElement;
+    fireEvent.keyDown(card, { key: " " });
+
+    expect(within(card).getByLabelText("SKU-A: годные")).toBeTruthy();
+  });
+
+  it("Enter на шапке группы выбирает группу целиком", () => {
+    render(
+      <Harness
+        tasks={[
+          makeTask({ id: 1, product_sku: "SKU-A", cache: { ...makeTask().cache, issued_quantity: "10" } }),
+          makeTask({ id: 2, product_sku: "SKU-A", cache: { ...makeTask().cache, issued_quantity: "5" } }),
+        ]}
+      />,
+    );
+    const header = within(desktop()).getByLabelText("SKU-A: годные группы").closest("tr")!;
+    expect(header.getAttribute("aria-selected")).toBe("false");
+
+    fireEvent.keyDown(header, { key: "Enter" });
+
+    expect(header.getAttribute("aria-selected")).toBe("true");
+  });
+
+  it("Enter внутри поля группы не переключает выбор группы", () => {
+    render(
+      <Harness
+        tasks={[
+          makeTask({ id: 1, product_sku: "SKU-A", cache: { ...makeTask().cache, issued_quantity: "10" } }),
+          makeTask({ id: 2, product_sku: "SKU-A", cache: { ...makeTask().cache, issued_quantity: "5" } }),
+        ]}
+      />,
+    );
+    const input = within(desktop()).getByLabelText("SKU-A: годные группы");
+    const header = input.closest("tr")!;
+
+    fireEvent.keyDown(input, { key: "Enter" });
+
+    expect(header.getAttribute("aria-selected")).toBe("false");
   });
 });
