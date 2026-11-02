@@ -48,6 +48,7 @@ from app.stock.import_history_api import router as stock_import_history_router
 from app.transfers.api import router as transfers_router
 
 backup_scheduler_task = None
+import_orphan_sweep_task = None
 # Под uvicorn root-логгер не настроен, и INFO от app-логгеров (в т.ч. строка про
 # корень хранилища, ADR-0026) молча терялся. basicConfig — no-op, если root уже
 # с handlers, и не трогает логгеры uvicorn.
@@ -56,7 +57,7 @@ logger = logging.getLogger(__name__)
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
-    global backup_scheduler_task
+    global backup_scheduler_task, import_orphan_sweep_task
     from app.seeds.canon import build_plant_config
     from app.services.backup_scheduler import start_backup_scheduler
 
@@ -67,7 +68,21 @@ async def lifespan(app: FastAPI):
     logger.info("storage root: %s", settings.STORAGE_ROOT)
 
     backup_scheduler_task = asyncio.create_task(start_backup_scheduler())
+    # #288: файлы в imports/ без строки import_files сутки и дольше убираются
+    # автоматически (порог и отчёт — import_storage/import_orphan_scheduler).
+    # Импорт модуля регистрирует session-слушателя «запись удалена — файл
+    # удалён» на все коммиты; без него purge работал бы только в процессах,
+    # импортировавших сервис случайно.
+    from app.services import import_storage  # noqa: F401 — side-effect: слушатели событий
+    from app.services.import_orphan_scheduler import start_import_orphan_scheduler
+
+    if settings.IMPORT_ORPHAN_SWEEP_ENABLED:
+        import_orphan_sweep_task = asyncio.create_task(start_import_orphan_scheduler())
     yield
+    if import_orphan_sweep_task:
+        import_orphan_sweep_task.cancel()
+        with suppress(asyncio.CancelledError):
+            await import_orphan_sweep_task
     if backup_scheduler_task:
         backup_scheduler_task.cancel()
         with suppress(asyncio.CancelledError):

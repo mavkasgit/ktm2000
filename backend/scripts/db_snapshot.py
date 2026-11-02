@@ -22,6 +22,11 @@ import sys
 from datetime import datetime
 from pathlib import Path
 
+# app.services.import_pinned — лист-константа без зависимостей от settings/ORM
+# (см. файл), поэтому импорт лёгкий и не тянет конфигурацию приложения.
+sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
+from app.services.import_pinned import is_pinned_stored_path  # noqa: E402
+
 ROOT = Path(__file__).resolve().parents[2]
 ENV_FILE = ROOT / ".env.dev"
 SNAPSHOT_DIR = ROOT / "data" / "backups" / "snapshots"
@@ -99,6 +104,66 @@ def dump(label: str) -> Path:
     return target
 
 
+def _psql_scalar_rows(database: str, sql: str) -> set[str]:
+    """Строки ``psql -t -A`` по базе ``database``; ошибка — пустое множество.
+
+    Используется для снимка ``import_files.stored_path`` до и после restore.
+    Таблицы может не быть (база без миграций) — это не повод валить восстановление
+    слепка: пустое множество означается «стирать нечего».
+    """
+    user, _database = _credentials()
+    result = subprocess.run(
+        [
+            "docker", "exec", "-i", _container(),
+            "psql", "-t", "-A", "-v", "ON_ERROR_STOP=1",
+            "-U", user, "-d", database, "-c", sql,
+        ],
+        check=False,
+        capture_output=True,
+        text=True,
+    )
+    if result.returncode != 0:
+        print(
+            f"db_snapshot: запрос к {database} не удался ({result.stderr.strip()}); "
+            "файлы импортов не убираются",
+            file=sys.stderr,
+        )
+        return set()
+    return {line.strip() for line in result.stdout.splitlines() if line.strip()}
+
+
+#: Снимок путей файлов реестра импортов (#288).
+IMPORT_FILE_PATHS_SQL = (
+    "SELECT stored_path FROM import_files WHERE stored_path IS NOT NULL"
+)
+
+
+def _purge_wiped_import_files(before: set[str], after: set[str]) -> list[str]:
+    """Удалить файлы, чьи записи исчезли вместе с базой (before − after).
+
+    Правило #288: restore пересоздаёт базу — строки ``import_files``, которых
+    нет в слепке, стираются, и байты должны уйти с ними. Файлы, на которые
+    ссылается восстановленная база, не трогаются никогда; файлы без записи,
+    но чьей записи не было и до restore (исторические сироты), остаются на
+    усмотрение планировщика уборки — скрипт не подменяет её суточный порог.
+
+    Защищённые оригиналы (#288 п.6, «План февраль 26 02») не удаляются даже
+    если их записи не было в слепке: единственный экземпляр исходного плана
+    заказчика, запись ему вернёт штатный db:seed.
+    """
+    removed: list[str] = []
+    for raw in sorted(before - after):
+        if is_pinned_stored_path(raw):
+            continue
+        path = Path(raw)
+        try:
+            path.unlink(missing_ok=True)
+            removed.append(raw)
+        except OSError as exc:
+            print(f"db_snapshot: не удалось удалить {raw}: {exc}", file=sys.stderr)
+    return removed
+
+
 def restore(name: str) -> None:
     """Залить слепок обратно в dev-БД (база сносится и собирается заново)."""
     _assert_not_production("restore")
@@ -107,6 +172,11 @@ def restore(name: str) -> None:
         available = ", ".join(sorted(path.stem for path in SNAPSHOT_DIR.glob("*.sql"))) or "—"
         raise SystemExit(f"Снапшот {name} не найден. Доступны: {available}")
     user, database = _credentials()
+    # #288: до пересоздания базы — снимок записей импортов; после — сравнение.
+    # Скрипту доступен тот же CWD, что и backend-процессу (npm ведёт его как
+    # `cd backend && python scripts/db_snapshot.py`), поэтому относительные
+    # stored_path резолвятся одинаково.
+    paths_before = _psql_scalar_rows(database, IMPORT_FILE_PATHS_SQL)
     with source.open("rb") as stream:
         subprocess.run(
             [
@@ -117,7 +187,15 @@ def restore(name: str) -> None:
             check=True,
             stdin=stream,
         )
+    paths_after = _psql_scalar_rows(database, IMPORT_FILE_PATHS_SQL)
+    removed = _purge_wiped_import_files(paths_before, paths_after)
     print(f"Снапшот {name} восстановлен в БД {database}")
+    if removed:
+        print(
+            f"#288: вместе со стёртыми записями удалено импорт-файлов: {len(removed)}"
+        )
+        for path in removed:
+            print(f"  - {path}")
 
 
 def main() -> None:

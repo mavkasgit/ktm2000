@@ -92,6 +92,17 @@ class Settings(BaseSettings):
     # Login history window for /auth/me/login-events (days).
     LOGIN_EVENTS_RETENTION_DAYS: int = 90
 
+    # #288: уборка каталога ``imports/``. Файл без строки в ``import_files``
+    # удаляется, только пролежал без записи дольше порога: байты ложатся на
+    # диск раньше, чем строка встаёт в базу, — уборка без порога съела бы
+    # свежий импорт. Файлы под записью не удаляются ни при каком возрасте.
+    IMPORT_ORPHAN_TTL_HOURS: int = 24
+    # Период фоновой уборки (lifespan-задача в app.main).
+    IMPORT_ORPHAN_SWEEP_INTERVAL_MINUTES: int = 60
+    # Выключается на стендах, где каталог делят параллельные прогоны, или при
+    # ручном управлении (`npm run imports:sweep`).
+    IMPORT_ORPHAN_SWEEP_ENABLED: bool = True
+
     @model_validator(mode="after")
     def _resolve_variable_interpolation(self) -> "Settings":
         """Resolve ${VAR} references in string fields using already-loaded values.

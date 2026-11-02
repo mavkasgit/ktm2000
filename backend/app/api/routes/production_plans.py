@@ -40,6 +40,10 @@ from app.services.import_batch_force_delete import (
     force_delete_import_batch,
     get_batch_force_delete_preview,
 )
+from app.services.import_storage import (
+    collect_recorded_import_paths,
+    schedule_import_file_purge,
+)
 from app.services.plan_generation import create_release_batch
 from app.services.plan_position_hanger import resolve_positions_hanger
 from app.services.plan_validation import format_validation_error
@@ -2215,6 +2219,13 @@ async def _truncate_all_production_data(db: AsyncSession) -> None:
     for attempt in range(1, _TRUNCATE_ATTEMPTS + 1):
         try:
             await db.execute(text(f"SET LOCAL lock_timeout = '{_TRUNCATE_LOCK_TIMEOUT}'"))
+            # #288: TRUNCATE стирает и `import_files` — снимаем снимок путей ДО
+            # него, чтобы на коммите файлы ушли вместе с записями («записи нет —
+            # файла нет»). Снимок на каждую попытку: откат при конфликте
+            # блокировок сбрасывает предыдущую очередь (слушатель
+            # `import_storage`), а записи после отката живы — их надо заново
+            # увидеть и записать.
+            schedule_import_file_purge(db, await collect_recorded_import_paths(db))
             await db.execute(_TRUNCATE_ALL_PRODUCTION_DATA)
             return
         except DBAPIError as exc:

@@ -25,6 +25,10 @@ from app.seeds.run_seed import run_full_seed
 from app.seeds.seeders.cleanup_seeder import clear_generated_production_data
 from app.seeds.seeders.demo_production_seeder import seed_demo_production
 from app.services.audit_log_service import log_action
+from app.services.import_storage import (
+    collect_recorded_import_paths,
+    schedule_import_file_purge,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -336,6 +340,13 @@ async def cleanup_endpoint(
                 await db.execute(text("DELETE FROM user_sections"))
 
         deleted_tables: list[str] = []
+        # #288: «записи нет — файла нет». `DELETE FROM import_files` стирает
+        # все строки реестра — снимаем их пути ДО удаления, чтобы на коммите
+        # файлы ушли вместе с записями. Остальные таблицы (batchи, планы) без
+        # `import_files` записи строк реестра не трогают: файлы остаются
+        # живыми, и это осознанно — «запись есть — файл скачивается всегда».
+        if "import_files" in payload.tables:
+            schedule_import_file_purge(db, await collect_recorded_import_paths(db))
         for table in ordered_tables:
             if table not in payload.tables:
                 continue
