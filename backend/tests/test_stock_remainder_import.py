@@ -466,19 +466,8 @@ async def test_exact_sku_has_no_partial_match_warning(
 
 async def _preview_single_sku(client: AsyncClient, sku_cell: str) -> dict:
     """Предпросмотр листа остатков из одной строки с данным артикулом."""
-    resp = await client.post(
-        "/api/stock/import/remainders/preview",
-        files={
-            "file": (
-                "test.xlsx",
-                _make_excel([(sku_cell, 5, None)]),
-                "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
-            )
-        },
-        data={"sheet_index": "0"},
-    )
-    assert resp.status_code == 200, resp.text
-    return resp.json()["items"][0]
+    items = await _preview_rows(client, _make_excel([(sku_cell, 5, None)]), {})
+    return items[0]
 
 
 async def test_compound_sku_binds_first_part(
@@ -551,6 +540,27 @@ async def test_compound_sku_with_typographic_dash_binds(
 
     assert item["status"] == "valid"
     assert item["product_id"] == second.id
+
+
+async def test_compound_sku_binds_catalog_sku_with_typographic_dash(
+    client: AsyncClient,
+    session: AsyncSession,
+) -> None:
+    """Типографское тире в артикуле СПРАВОЧНИКА: кандидат обязан приехать из базы.
+
+    Предфильтр SELECT сравнивает не «как написано», а так же, как Python: без
+    нормализации на стороне SQL «ЮП–1875» не подошёл бы ни под «= 1875», ни под
+    «%-1875», и строка потерялась бы ещё до каскада.
+    """
+    product = await _make_product(session, "ЮП\u20131875")
+    await session.commit()
+
+    item = await _preview_single_sku(client, "ЮП-3658/1875")
+
+    assert item["status"] == "valid"
+    assert item["product_id"] == product.id
+    assert item["matched_sku"] == "ЮП\u20131875"
+    assert any("по части" in warning for warning in item["warnings"])
 
 
 async def test_catalog_sku_with_slash_matches_exactly_before_parts(

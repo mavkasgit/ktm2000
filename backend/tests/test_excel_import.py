@@ -2094,63 +2094,40 @@ async def test_preview_pair_component_hanger_source_manual_n(
 
 
 async def _seed_products(session, *skus: str) -> list:
-    products = []
-    for sku in skus:
-        from app.models.product import Product, ProductType
+    from app.models.product import Product, ProductType
 
-        product = Product(
+    products = [
+        Product(
             sku=sku,
             name=f"Тест {sku}",
             type=ProductType.finished_good,
             unit="pcs",
             is_active=True,
         )
-        session.add(product)
-        products.append(product)
+        for sku in skus
+    ]
+    session.add_all(products)
     await session.flush()
     return products
+
+
+def _compound_workbook(cells: list[str]) -> bytes:
+    """Лист «Упаковочной карты РП»: строки с артикулами из ``cells`` (#347)."""
+    return _workbook_with_data_rows([
+        [cell, "ТЗ", "Кант", 0, "", 10, 2.7, "", "", "", 2.7, 10, "", 10, "ГП"]
+        for cell in cells
+    ])
 
 
 async def _preview_compound_rows(client, session, *, code: str, cells: list[str]):
     template = await _create_template(session, name=f"{code} Template", code=code)
     await session.commit()
-    wb = Workbook()
-    ws = wb.active
-    ws.title = "План май 26 05"
-    ws.append(["", "", "Комментарий"])
-    ws.append(["Заявка № 05", "май"])
-    ws.append([])
-    ws.append(["", "", "", "", "", "", "", "", "", "", "", "", "Формирование ящиков"])
-    ws.append(
-        [
-            "Артикул",
-            "пополнение",
-            "Наименование",
-            "остатки сырья на КТМ",
-            "Цвет",
-            "кол-во шт. в 2,7",
-            "Длина, м",
-            "Пробивка/сверловка",
-            "Упаковка",
-            "Примечание ",
-            "Длина после упак, м",
-            "кол-во штук готовой продукции",
-            "Запад",
-            "Восток",
-            "Вид конечного продукта",
-            "Комментарии",
-        ]
-    )
-    for cell in cells:
-        ws.append([cell, "ТЗ", "Кант", 0, "", 10, 2.7, "", "", "", 2.7, 10, "", 10, "ГП"])
-    out = BytesIO()
-    wb.save(out)
     response = await client.post(
         f"/api/imports/excel/preview?template_id={template.id}",
         files={
             "file": (
                 "compound.xlsx",
-                out.getvalue(),
+                _compound_workbook(cells),
                 "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
             )
         },
@@ -2224,6 +2201,69 @@ async def test_preview_exact_sku_gets_no_part_warning(client, session, tmp_path,
     item = items[0]
     assert item["after_data"]["product_id"] == product.id
     assert [w for w in item["warnings"] if w.startswith("sku_matched_by_part")] == []
+
+
+@pytest.mark.asyncio
+async def test_preview_compound_sku_matches_catalog_typographic_dash(
+    client, session, tmp_path, monkeypatch
+) -> None:
+    """Артикул справочника набран типографским тире — часть привязывается всё равно (#347).
+
+    Хвост считается после нормализации, поэтому «ЮП–1875» и «ЮП-1875» для
+    каскада — один и тот же артикул.
+    """
+    monkeypatch.setattr(settings, "IMPORT_STORAGE_DIR", str(tmp_path))
+
+    (product,) = await _seed_products(session, "ЮП\u20131875")
+    items = await _preview_compound_rows(
+        client, session, code="compound-typo-dash", cells=["ЮП-3616/1875"]
+    )
+
+    item = items[0]
+    assert item["after_data"]["product_id"] == product.id
+    assert "sku_matched_by_part:1875" in item["warnings"]
+
+
+@pytest.mark.asyncio
+async def test_apply_compound_sku_position_points_at_part_bound_product(
+    client, session, tmp_path, monkeypatch
+) -> None:
+    """Apply привязки по части создаёт позицию на найденном артикуле, а не на первом (#347).
+
+    Предпросмотр — только взгляд оператора; проверка на уровне записи доказывает,
+    что предупреждение не decoration: в план уходит product_id найденного SKU.
+    """
+    monkeypatch.setattr(settings, "IMPORT_STORAGE_DIR", str(tmp_path))
+
+    (product,) = await _seed_products(session, "ЮП-1875")
+    template = await _create_template(
+        session, name="Compound Apply Template", code="compound-apply-template"
+    )
+    await session.commit()
+
+    response = await client.post(
+        f"/api/imports/excel?template_id={template.id}",
+        files={
+            "file": (
+                "compound.xlsx",
+                _compound_workbook(["ЮП-3616/1875"]),
+                "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+            )
+        },
+    )
+    assert response.status_code == 201, response.text
+    body = response.json()
+
+    applied = await client.post(
+        f"/api/production-plans/{body['production_plan_id']}"
+        f"/change-sets/{body['change_set_id']}/apply"
+    )
+    assert applied.status_code == 200, applied.text
+
+    positions = (
+        await client.get(f"/api/production-plans/{body['production_plan_id']}/all-positions")
+    ).json()
+    assert [p["product_id"] for p in positions] == [product.id]
 
 
 @pytest.mark.asyncio

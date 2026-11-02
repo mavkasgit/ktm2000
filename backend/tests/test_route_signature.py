@@ -39,7 +39,7 @@ from app.models.route import (
 )
 from app.models.section import Section
 from app.seeds.run_seed import run_full_seed
-from app.services.plan_import_service import _make_change_items
+from app.services.plan_import_service import SkuIndex, _make_change_items
 from app.services.production_plan_service import apply_change_set
 from app.services.route_builder import build_route_from_profile
 from app.services.route_signature import (
@@ -187,7 +187,7 @@ async def test_import_writes_stage_significance_by_any_step_of_group(session) ->
         session,
         change_set_id=1,
         parsed_rows=[ParsedRow("FG-SIG", "Артикул подписи", Decimal(10), {"output_kind": "ГП"})],
-        products_by_sku={"fg-sig": product},
+        sku_index=SkuIndex.from_products([product]),
         mode=None,
         existing_positions=[],
         rule_profile_id=profile.id,
@@ -579,7 +579,7 @@ async def _import_one_row(session, profile, product, *, sku: str, payload: dict 
         session,
         change_set_id=1,
         parsed_rows=[ParsedRow(sku, "Артикул", Decimal(10), payload or {"output_kind": "ГП"})],
-        products_by_sku={sku.lower(): product},
+        sku_index=SkuIndex.from_products([product]),
         mode=None,
         existing_positions=[],
         rule_profile_id=profile.id,
@@ -623,7 +623,7 @@ async def test_import_preview_shows_signature_conflict(session) -> None:
         session,
         change_set_id=0,
         parsed_rows=[ParsedRow("FG-PREVIEW", "Артикул", Decimal(10), {"output_kind": "ГП"})],
-        products_by_sku={"fg-preview": product},
+        sku_index=SkuIndex.from_products([product]),
         mode=None,
         existing_positions=[],
         rule_profile_id=profile.id,
@@ -672,7 +672,7 @@ async def test_two_rows_of_one_import_share_the_route(session) -> None:
             ParsedRow("FG-PAIR-1", "Артикул", Decimal(10), {"output_kind": "ГП"}),
             ParsedRow("FG-PAIR-2", "Артикул", Decimal(10), {"output_kind": "ГП"}),
         ],
-        products_by_sku={"fg-pair-1": first, "fg-pair-2": second},
+        sku_index=SkuIndex.from_products([first, second]),
         mode=None,
         existing_positions=[],
         rule_profile_id=profile.id,
@@ -814,7 +814,7 @@ async def test_compositions_with_same_name_get_separate_routes(session) -> None:
             ParsedRow("FG-PACK-STRETCH", "Артикул", Decimal(10), {"output_kind": ROUTE_NAME, "pack": "стрейч"}),
             ParsedRow("FG-PACK-SPUNBOND", "Артикул", Decimal(10), {"output_kind": ROUTE_NAME, "pack": "спанбонд"}),
         ],
-        products_by_sku={"fg-pack-stretch": first, "fg-pack-spunbond": second},
+        sku_index=SkuIndex.from_products([first, second]),
         mode=None,
         existing_positions=[],
         rule_profile_id=(await session.scalar(

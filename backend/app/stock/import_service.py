@@ -41,9 +41,11 @@ from app.services.dimension_validation import (
 from app.services.excel_import import parse_row_selection
 from app.services.import_column_resolver import detect_header_row, resolve_columns
 from app.services.import_normalization import (
-    normalize_sku,
+    SKU_DASH_VARIANTS,
+    SkuEntry,
+    match_sku_cell,
     sku_compound_parts,
-    sku_tail,
+    sku_entry,
 )
 from app.services.material_operations import (
     canonicalize_completed_operations,
@@ -610,77 +612,48 @@ def _like_escape(value: str) -> str:
     return value.replace("\\", "\\\\").replace("%", "\\%").replace("_", "\\_")
 
 
+def _normalized_catalog_sku() -> object:
+    """SQL-аналог ``normalize_sku`` для стороны справочника (#347).
+
+    Без этого артикул «ЮП–1875» (типографское тире) не был бы кандидатом ячейки
+    «ЮП-3658/1875»: предфильтр обязан быть надстройкой над тем же правилом
+    сравнения, по которому решение принимает Python.
+    """
+    dashed = func.translate(
+        func.lower(Product.sku), SKU_DASH_VARIANTS, "-" * len(SKU_DASH_VARIANTS)
+    )
+    return func.replace(func.replace(dashed, " ", ""), "\u00A0", "")
+
+
 def _sku_candidate_conditions(sku: str) -> list[object]:
     """Условия выборки кандидатов справочника для одной ячейки (#347).
 
     Вхождения SKU в текст строки недостаточно: артикул «ЮП-1875» не является
     подстрокой ячейки «ЮП-3658/1875», а привязывается именно её хвостом — без
-    этих условий кандидат просто не приехал бы из базы.
+    этих условий кандидат просто не приехал бы из базы. Это предфильтр:
+    окончательное решение принимает ``match_sku_cell``.
     """
+    normalized_sku = _normalized_catalog_sku()
     conditions = [_product_sku_contained_in_input(sku)]
     for part in sku_compound_parts(sku):
-        conditions.append(func.lower(Product.sku) == part)
-        conditions.append(
-            Product.sku.ilike(f"%-{_like_escape(part)}", escape="\\")
-        )
+        conditions.append(normalized_sku == part)
+        conditions.append(normalized_sku.like(f"%-{_like_escape(part)}", escape="\\"))
     return conditions
 
 
-def _normalized_catalog(products: list[Product]) -> list[tuple[Product, str, str]]:
-    """(продукт, нормализованный SKU, хвост после тире) — один раз на батч."""
-    catalog: list[tuple[Product, str, str]] = []
-    for product in products:
-        normalized = normalize_sku(product.sku or "")
-        if normalized:
-            catalog.append((product, normalized, sku_tail(product.sku or "")))
-    return catalog
+@dataclass(frozen=True, slots=True)
+class _SkuRow:
+    """Записка справочника для сопоставления ячейки (#347)."""
+
+    product: Product
+    entry: SkuEntry
 
 
-@dataclass(slots=True)
-class _ArticleMatch:
-    """Исход сопоставления целой ячейки и её частей по «/» (#347).
-
-    ``product`` задан — привязка найдена (``part`` пуст для точного совпадения
-    всей ячейки). ``ambiguous`` непуст — часть подходит нескольким артикулам,
-    и привязку надо запретить, а не выбирать молча.
-    """
-
-    product: Product | None = None
-    part: str | None = None
-    ambiguous: tuple[str, ...] = ()
-
-    @property
-    def rejected(self) -> bool:
-        return bool(self.ambiguous)
-
-
-def _match_article_cell(
-    cell: str,
-    catalog: list[tuple[Product, str, str]],
-) -> _ArticleMatch:
-    """Целая ячейка → части по «/», в порядке ячейки (#347, ADR-0067).
-
-    Часть ищется как точный SKU справочника и как его хвост после тире, поэтому
-    голый сегмент «1875» находит «ЮП-1875». Вторая часть рассматривается только
-    когда первая ни к чему не привязалась. Неоднозначность останавливает поиск,
-    а не переходит к следующей части: иначе строка уехала бы на молча выбранном
-    артикуле, и оператор этого не заметил бы.
-    """
-    for product, normalized, _tail in catalog:
-        if normalized == cell:
-            return _ArticleMatch(product=product)
-
-    for part in sku_compound_parts(cell):
-        candidates = [
-            product
-            for product, normalized, tail in catalog
-            if part in (normalized, tail)
-        ]
-        if len(candidates) == 1:
-            return _ArticleMatch(product=candidates[0], part=part)
-        if len(candidates) > 1:
-            return _ArticleMatch(ambiguous=tuple(sorted(str(p.sku) for p in candidates)))
-    return _ArticleMatch()
+def _sku_rows(products: list[Product]) -> list[_SkuRow]:
+    return [
+        _SkuRow(product=product, entry=sku_entry(product.sku or ""))
+        for product in products
+    ]
 
 
 def _attach_remainder_product(
@@ -746,35 +719,40 @@ async def _lookup_products(db: AsyncSession, items: list[RemainderItem]) -> None
         )
         .order_by(Product.id)
     )
-    catalog = _normalized_catalog(list(result.scalars().all()))
-    products = [product for product, _normalized, _tail in catalog]
+    rows = _sku_rows(list(result.scalars().all()))
+    entries = [row.entry for row in rows]
 
     for item in items:
         if item.status != "valid" or not item.sku:
             continue
 
-        match = _match_article_cell(normalize_sku(item.sku), catalog)
+        match = match_sku_cell(item.sku, entries)
         if match.rejected:
+            ambiguous = ", ".join(
+                str(rows[index].product.sku) for index in match.ambiguous_indexes
+            )
             item.status = "invalid"
             item.errors.append(
-                f"SKU '{item.sku}' неоднозначен: часть подходит к "
-                f"{', '.join(match.ambiguous)} — уточните артикул в файле"
+                f"SKU '{item.sku}' неоднозначен: часть «{match.part}» "
+                f"подходит к {ambiguous} — уточните артикул в файле"
             )
             continue
-        if match.product is not None:
+        if match.found:
+            product = rows[match.index].product
             _attach_remainder_product(
                 item,
-                match.product,
+                product,
                 warning=None
                 if match.part is None
                 else (
                     "Артикул сопоставлен по части: "
-                    f"в строке '{item.sku}' найден SKU '{match.product.sku}'"
+                    f"в строке '{item.sku}' найден SKU '{product.sku}'"
                 ),
             )
             continue
 
-        _attach_contained_product(item, products)
+        _attach_contained_product(item, [row.product for row in rows])
+
 
 def _missing_dimensions_message(missing_codes: list[str]) -> str:
     """Понятная ошибка предпросмотра для обязательных измерений без значения."""

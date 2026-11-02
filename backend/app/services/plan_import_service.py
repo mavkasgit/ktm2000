@@ -7,6 +7,7 @@ from collections import Counter
 from datetime import UTC, datetime
 from decimal import Decimal
 from pathlib import Path
+from typing import NamedTuple
 
 from sqlalchemy import func, select
 from sqlalchemy.exc import SQLAlchemyError
@@ -57,8 +58,8 @@ from app.services.excel_import import (
     validate_excel_extension,
 )
 from app.services.hanger_quantity import adjust_quantity_to_hanger
+from app.services.import_normalization import SkuEntry, match_sku_parts, sku_entry
 from app.services.import_normalization import normalize_sku as _normalize_sku
-from app.services.import_normalization import sku_compound_parts, sku_tail
 from app.services.plan_position_hanger import (
     PositionHangerValue,
     position_length_mm,
@@ -140,8 +141,9 @@ PLAN_IMPORT_WARNING_PREFIXES: tuple[str, ...] = (
     "paired_row_auto_included",
     "row_selection_applied",
     "row_selection_auto_included",
-#: #347 (ADR-0067): строка привязана к артикулу не целой ячейкой, а её частью по
-#: «/» — «ЮП-3658/1875» при SKU «ЮП-1875» в справочнике. Параметр — сама часть.
+    #: #347 (ADR-0067): строка привязана к артикулу не целой ячейкой, а её частью
+    #: по «/» — «ЮП-3658/1875» при SKU «ЮП-1875» в справочнике.
+    #: Параметр — сама часть.
     "sku_matched_by_part",
 #: Баланс группы вход×длина = Σ(выход×длина) (excel_import._check_group_balances):
 #: фактический row-warning вне списка спеки §3, зафиксирован здесь же,
@@ -342,12 +344,12 @@ async def preview_excel_sheet(
             )
         ).scalars().all()
 
-    products_by_sku = await _load_products_by_sku(db)
+    sku_index = await _load_products_by_sku(db)
     item_payloads, _route_selection_diagnostics = await _make_change_items(
         db,
         0,  # dry-run preview, no persisted change set
         parsed.parsed_rows,
-        products_by_sku,
+        sku_index,
         mode,
         existing_positions,
         rule_profile_id,
@@ -503,12 +505,12 @@ async def create_excel_import_change_set(
             )
         ).scalars().all()
 
-    products_by_sku = await _load_products_by_sku(db)
+    sku_index = await _load_products_by_sku(db)
     item_payloads, route_selection_diagnostics = await _make_change_items(
         db,
         change_set.id,
         parsed.parsed_rows,
-        products_by_sku,
+        sku_index,
         mode,
         existing_positions,
         rule_profile_id,
@@ -580,18 +582,46 @@ async def _get_or_create_import_file(
     return import_file
 
 
-async def _load_products_by_sku(db: AsyncSession) -> dict[str, Product]:
-    products = (await db.execute(
+class SkuIndex(NamedTuple):
+    """Снимок справочника артикулов для импорта плана (#347, ADR-0067).
+
+    ``by_sku`` — ключи поиска → продукт; ``products`` — полный список справочника
+    в порядке загрузки. Полагаться только на словарь нельзя: ключи двух артикулов
+    могут совпасть («ЮП-1875» и «ЮП–1875» после нормализации — один и тот же
+    текст), и один из продуктов в словаре не появится. Если бы хвосты и
+    активность считались по словарю, настоящая неоднозначность превращалась бы в
+    молчаливую привязку, а пропавший артикул — в ложный ``product_inactive``.
+    """
+
+    by_sku: dict[str, Product]
+    products: list[Product]
+
+    @classmethod
+    def from_products(cls, products: list[Product]) -> SkuIndex:
+        """Снимок справочника: ключи поиска — из каждого SKU, записи — из списка целиком."""
+        by_sku: dict[str, Product] = {}
+        for product in products:
+            for key in _sku_lookup_keys(product.sku):
+                by_sku[key] = product
+        return cls(by_sku=by_sku, products=products)
+
+    def entries(self) -> list[SkuEntry]:
+        """Записи каскада по частям — по каждому продукту, без потерь."""
+        entries: list[SkuEntry] = []
+        for product in self.products:
+            sku = product.sku or ""
+            entries.append(sku_entry(sku, _sku_lookup_keys(sku)))
+        return entries
+
+
+async def _load_products_by_sku(db: AsyncSession) -> SkuIndex:
+    products = list((await db.execute(
         select(Product).options(
             selectinload(Product.processing_flags),
             selectinload(Product.lengths),
         )
-    )).scalars().all()
-    result: dict[str, Product] = {}
-    for product in products:
-        for key in _sku_lookup_keys(product.sku):
-            result[key] = product
-    return result
+    )).scalars().all())
+    return SkuIndex.from_products(products)
 
 
 def _sku_lookup_keys(sku: str) -> set[str]:
@@ -612,51 +642,11 @@ def _sku_lookup_keys(sku: str) -> set[str]:
     return {k for k in keys if k}
 
 
-def _build_sku_tail_index(products: list[Product]) -> dict[str, list[Product]]:
-    """Хвосты артикулов после тире → продукты, для привязки по части (#347).
-
-    Индекс строится по уже загруженному справочнику, поэтому новый SELECT не
-    появляется. Список, а не один продукт: хвост «1875» подходит и к «ЮП-1875»,
-    и к «АТ-1875» — неоднозначность должна быть видна резолверу.
-    """
-    index: dict[str, list[Product]] = {}
-    for product in products:
-        tail = sku_tail(product.sku or "")
-        if tail:
-            index.setdefault(tail, []).append(product)
-    return index
-
-
-def _resolve_product_by_sku_part(
-    source_sku: str,
-    products_by_sku: dict[str, Product],
-    products_by_tail: dict[str, list[Product]],
-) -> tuple[Product | None, str | None, bool]:
-    """Привязка строки по части составного артикула «ЮП-3658/1875» (#347).
-
-    Части разбираются по «/» в порядке ячейки, первая привязка останавливает
-    поиск. Часть ищется как точный SKU справочника и как его хвост после тире,
-    поэтому голый сегмент «1875» находит «ЮП-1875». Возврат ``(продукт, часть,
-    неоднозначно)``: если хвост подходит нескольким артикулам, привязки нет —
-    молча выбрать первый было бы хуже ошибки, оператор получил бы чужую позицию.
-    """
-    for part in sku_compound_parts(source_sku):
-        product = products_by_sku.get(part)
-        if product is not None:
-            return product, part, False
-        candidates = products_by_tail.get(part, [])
-        if len(candidates) == 1:
-            return candidates[0], part, False
-        if len(candidates) > 1:
-            return None, part, True
-    return None, None, False
-
-
 async def _make_change_items(
     db: AsyncSession,
     change_set_id: int,
     parsed_rows: list[ParsedPlanRow],
-    products_by_sku: dict[str, Product],
+    sku_index: SkuIndex,
     mode: ImportBatchMode,
     existing_positions: list[PlanPosition],
     rule_profile_id: int | None = None,
@@ -686,8 +676,8 @@ async def _make_change_items(
     
     # Cache product.is_active to prevent autoflush when accessing expired objects
     product_is_active_cache: dict[int, bool] = {}
-    index_products = list(dict.fromkeys(products_by_sku.values()))
-    for prod in index_products:
+    sku_entries = sku_index.entries()
+    for prod in sku_index.products:
         try:
             product_is_active_cache[prod.id] = prod.is_active
         except SQLAlchemyError:
@@ -695,10 +685,6 @@ async def _make_change_items(
             # упал — считаем продукт неактивным, строка получит product_inactive.
             product_is_active_cache[prod.id] = False
 
-    # Хвосты артикулов для привязки по части составного артикула (#347):
-    # снимок того же справочника, новых запросов не появляется.
-    products_by_tail = _build_sku_tail_index(index_products)
-    
     # Маршруты, уже найденные или созданные в этом импорте: код -> route_id.
     # Ключ — код, а не имя: одинаковый состав даёт одинаковый код при любом
     # имени, а разный состав с тем же именем обязан получить свой маршрут
@@ -795,20 +781,17 @@ async def _make_change_items(
         errors = list(row.errors)
         product = None
         for key in _sku_lookup_keys(row.source_sku):
-            product = products_by_sku.get(key)
+            product = sku_index.by_sku.get(key)
             if product is not None:
                 break
 
         if product is None:
             # Целой ячейки в справочнике нет: составной артикул вида
             # «ЮП-3658/1875» привязывается по её части (#347).
-            product, matched_part, _ambiguous = _resolve_product_by_sku_part(
-                row.source_sku,
-                products_by_sku,
-                products_by_tail,
-            )
-            if product is not None:
-                warnings.append(f"sku_matched_by_part:{matched_part}")
+            match = match_sku_parts(row.source_sku, sku_entries)
+            if match.found:
+                product = sku_index.products[match.index]
+                warnings.append(f"sku_matched_by_part:{match.part}")
 
         resolved_pair: ResolvedPair | None = None
         pair_n: PairHangerValue | None = None
