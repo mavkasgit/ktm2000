@@ -10,6 +10,19 @@ services:
       POSTGRES_DB: ${POSTGRES_DB:-ktm2000_dev}
     ports:
       - "127.0.0.1:${DEV_POSTGRES_PORT:-5440}:5432"
+    # Потолок лога (#380) — то же правило, что для прод-файла в AGENTS.md:
+    # без него json-лог растёт неограниченно, а хостового logrotate на машине нет.
+    # Блок вступит в силу на следующем `npm run dev`/`db:up` (пересоздание
+    # контейнера), сейчас его не трогаем: данные на bind-mount, пересоздание не уносит БД.
+    logging:
+      driver: json-file
+      options:
+        max-size: "20m"
+        max-file: "3"
+    # Dev-стек поднимается скриптами (`npm run dev`), поэтому `unless-stopped`,
+    # а не `always`: ручной `docker compose stop` остаётся ручным и не будет
+    # оспорен автозапуском Docker после перезагрузки хоста.
+    restart: unless-stopped
     volumes:
       # Путь задан здесь, а не в .env (ADR-0026): он резолвится от каталога
       # compose-файла, и переменная из .env.dev давала другую базу отсчёта.
