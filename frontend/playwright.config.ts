@@ -3,7 +3,13 @@ import { resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import { defineConfig, devices } from "@playwright/test";
 import { isPrivateHost } from "./src/shared/lib/hostGuard";
-import { MOBILE_PROJECT, MOBILE_USE } from "./e2e/mobile-project.mjs";
+import {
+  MOBILE_PROJECT,
+  MOBILE_TAG,
+  MOBILE_TAG_RE,
+  MOBILE_USE,
+  tagRe,
+} from "./e2e/mobile-project.mjs";
 
 // Стенд E2E — отдельная БД и отдельные порты (#220). Источник правды для
 // них — `.env.e2e` в корне репозитория (та же БД, что поднимает `e2e:prep`),
@@ -233,28 +239,39 @@ export default defineConfig({
   //
   // `@mobile` исключён из десктопных ярусов инвертом (`grepInvert`), а не
   // отсутствием совпадения: тег `@smoke @mobile` на одной спеке иначе
-  // прогнался бы дважды — узким окном и телефоном.
+  // прогнался бы дважды — узким окном и телефоном. Инверт есть у каждого
+  // десктопного яруса, включая `ui-narrow`: без него спека с `@ui-narrow
+  // @mobile` уехала бы в два яруса на одном полном прогоне.
+  //
+  // Тег во всех `grep`/`grepInvert` — токен из `tagRe` (`e2e/mobile-project.mjs`),
+  // а не подстрока: тот же шаблон читает отчёт прогона (`selectMobileSpecs`),
+  // поэтому «что прогналось» и «что напечатано в отчёте» — одно множество.
+  // Подстрочный `/@mobile/` пускал в ярус `@mobile-wide`, которого отчёт не
+  // знал, а `/@ui/` — любой чужой `@ui-*`.
   projects: [
     {
       name: "smoke",
-      grep: /@smoke/,
-      grepInvert: /@mobile/,
+      grep: tagRe("@smoke"),
+      grepInvert: MOBILE_TAG_RE,
       use: { ...devices["Desktop Chrome"] },
     },
     {
       name: "ui-e2e",
-      grep: /@ui/,
+      grep: tagRe("@ui"),
       // `@ui-narrow` — тоже `@ui`, без инверта спека попала бы в оба яруса
       // и прогонялась дважды. `@mobile` — по той же причине: мобильные спеки
       // идут своим проектом.
-      grepInvert: /@ui-narrow|@mobile/,
+      grepInvert: tagRe("@ui-narrow", MOBILE_TAG),
       timeout: 120_000,
       dependencies: ["smoke"],
       use: { ...devices["Desktop Chrome"] },
     },
     {
       name: "ui-narrow",
-      grep: /@ui-narrow/,
+      grep: tagRe("@ui-narrow"),
+      // Доменный тир, а не viewport: телефон идёт своим проектом, и без
+      // инверта одна спека с двумя тегами отработала бы дважды.
+      grepInvert: MOBILE_TAG_RE,
       timeout: 120_000,
       dependencies: ["ui-e2e"],
       use: { ...devices["Desktop Chrome"] },
@@ -265,7 +282,7 @@ export default defineConfig({
       // печатает отчёт прогона (`run-tier.mjs`): две копии цифр разошлись бы
       // молча, и отчёт утверждал бы одно окно, а проект гонял другое.
       name: MOBILE_PROJECT,
-      grep: /@mobile/,
+      grep: MOBILE_TAG_RE,
       use: { ...devices["Desktop Chrome"], ...MOBILE_USE },
     },
     // Разовые (временные) спеки с тегом `@tmp`: в регулярных прогонах не
@@ -276,7 +293,7 @@ export default defineConfig({
       ? [
           {
             name: "tmp",
-            grep: /@tmp/,
+            grep: tagRe("@tmp"),
             use: { ...devices["Desktop Chrome"] },
           },
         ]

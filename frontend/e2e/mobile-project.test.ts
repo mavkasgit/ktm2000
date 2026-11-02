@@ -21,6 +21,7 @@ import {
   MOBILE_USE,
   formatMobileReport,
   selectMobileSpecs,
+  tagRe,
 } from "./mobile-project.mjs";
 
 /** Спеки мобильного яруса, как их видит каталог `e2e/`. */
@@ -81,5 +82,59 @@ describe("MOBILE_USE — цифры тикета #342", () => {
       deviceScaleFactor: 2,
     });
     expect(MOBILE_TAG).toBe("@mobile");
+  });
+});
+
+/**
+ * `tagRe` — единственный шаблон ярусного тега (#342, ревью 5).
+ *
+ * Ярусы сходятся в трёх местах: `grep` проекта, `grepInvert` соседних проектов
+ * и список спеков в отчёте прогона. Когда отбор считает тег подстрокой, а
+ * отчёт — токеном, спек `@mobile-smoke` уходит в мобильный прогон и не
+ * появляется в его списке: зелёный отчёт враньё про состав яруса. Поэтому и
+ * отбор, и инверт, и отчёт берут шаблон отсюда.
+ */
+describe("tagRe — тег как токен, а не как подстрока", () => {
+  it("свой тег совпадает с заголовком, где он стоит первым или вторым", () => {
+    expect(tagRe(MOBILE_TAG).test("@mobile Участки на телефоне")).toBe(true);
+    expect(tagRe(MOBILE_TAG).test("@ui @mobile Участки")).toBe(true);
+  });
+
+  it("чужой тег с тем же началом в ярус не попадает", () => {
+    // `@mobile-smoke` — другой ярус: подстрочный `grep: /@mobile/` утащил бы
+    // его в мобильный прогон, а отчёт (`selectMobileSpecs`) его бы не назвал.
+    expect(tagRe(MOBILE_TAG).test("@mobile-smoke Быстрый дым")).toBe(false);
+  });
+
+  it("`@ui` не совпадает с `@ui-narrow`: узкий тег не протечёт в широкий ярус", () => {
+    expect(tagRe("@ui").test("@ui Полный цикл")).toBe(true);
+    expect(tagRe("@ui").test("@ui-narrow Пила")).toBe(false);
+  });
+
+  it("инверт на несколько тегов снимает оба яруса", () => {
+    const invert = tagRe("@ui-narrow", MOBILE_TAG);
+
+    expect(invert.test("@ui @ui-narrow Пила")).toBe(true);
+    expect(invert.test("@smoke @mobile Передачи")).toBe(true);
+    expect(invert.test("@ui Полноцикловая спека")).toBe(false);
+    // Подстрочная форма (`@ui-narrowish`) остаётся чужой — иначе инверт
+    // снимал бы спеки, которых в ярусе нет.
+    expect(invert.test("@ui-narrowish Пила")).toBe(false);
+  });
+
+  it("отбор яруса и список в отчёте совпадают по построению", () => {
+    // Тот же предикат с обеих сторон: `grep` проекта и `selectMobileSpecs`.
+    const titles = [
+      { file: "a.spec.ts", content: 'test.describe("@mobile Участки")' },
+      { file: "b.spec.ts", content: 'test.describe("@mobile-smoke Дым")' },
+      { file: "c.spec.ts", content: 'test.describe("@ui Цикл")' },
+    ];
+    const listed = selectMobileSpecs(titles);
+    const selected = titles
+      .filter((entry) => tagRe(MOBILE_TAG).test(entry.content))
+      .map((entry) => entry.file);
+
+    expect(listed).toEqual(selected);
+    expect(listed).toEqual(["a.spec.ts"]);
   });
 });
