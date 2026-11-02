@@ -47,6 +47,8 @@ export type TaskGroup = {
   tasks: SectionBoardTask[];
   totalQtyPlan: number;
   totalQtyDone: number;
+  /** Сумма остатков заданий группы (план − передано). */
+  totalRemaining: number;
 };
 
 export type SectionBoardTask = {

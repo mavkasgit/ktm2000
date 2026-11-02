@@ -56,6 +56,21 @@ function renderPanel(locationIds: number[]) {
   );
 }
 
+/** Панель вкладки участка: серверный дефолт — количество по убыванию (#346). */
+function renderSectionPanel() {
+  const client = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+  return render(
+    <QueryClientProvider client={client}>
+      <StockBalancesPanel
+        locationId={1}
+        defaultSort="quantity:desc"
+        onSelectProduct={vi.fn()}
+        onShowHistory={vi.fn()}
+      />
+    </QueryClientProvider>,
+  );
+}
+
 beforeEach(() => {
   vi.clearAllMocks();
   vi.mocked(getStockBalances).mockResolvedValue({
@@ -131,6 +146,87 @@ describe("StockBalancesPanel: группы по артикулу", () => {
     fireEvent.click(summary);
     await waitFor(() => expect(screen.getByText("1159")).toBeTruthy());
     expect(screen.getByText("396")).toBeTruthy();
+  });
+});
+
+describe("StockBalancesPanel: порядок по умолчанию", () => {
+  const sortedRows: StockBalanceEntry[] = [
+    { ...entry(1), product_sku: "SKU-BIG", balance_qty: "396" },
+    { ...entry(2), product_sku: "SKU-BIG", balance_qty: "1159" },
+    { ...entry(3), product_sku: "SKU-SMALL", balance_qty: "10" },
+    { ...entry(4), product_sku: "SKU-MID", balance_qty: "800" },
+  ];
+
+  /** Артикулы тела таблицы: строка группы держит артикул в span, строка — в кнопке. */
+  function articleOrder(): string[] {
+    return [...document.querySelectorAll("tbody tr")]
+      .map((row) => {
+        const cell = row.querySelector("td");
+        const article = cell?.querySelector("span") ?? cell;
+        return article?.textContent?.trim() ?? "";
+      })
+      .filter(Boolean);
+  }
+
+  /** Количества второй колонки — суммы групп и строки после раскрытия. */
+  function quantityOrder(): string[] {
+    return [...document.querySelectorAll("tbody tr")]
+      .map((row) => row.querySelectorAll("td")[1]?.textContent?.trim() ?? "")
+      .filter(Boolean);
+  }
+
+  function sortRequested(): string | undefined {
+    return vi.mocked(getStockBalances).mock.calls.at(-1)?.[0]?.sort;
+  }
+
+  beforeEach(() => {
+    vi.mocked(getStockBalances).mockResolvedValue({
+      balances: sortedRows,
+      total: 4,
+      limit: 50,
+      offset: 0,
+    });
+  });
+
+  it("без ручной сортировки — группы по общему количеству убыв., строки артикула — того же порядка", async () => {
+    renderPanel([1]);
+    await screen.findByText("SKU-BIG");
+
+    expect(articleOrder()).toEqual(["SKU-BIG", "SKU-MID", "SKU-SMALL"]);
+    expect(quantityOrder()).toEqual(["1555", "800", "10"]);
+
+    fireEvent.click(screen.getByText("SKU-BIG"));
+    await waitFor(() => expect(screen.getByText("1159")).toBeTruthy());
+    expect(quantityOrder()).toEqual(["1555", "1159", "396", "800", "10"]);
+  });
+
+  it("панель участка просит серверные остатки по количеству убыв.", async () => {
+    renderSectionPanel();
+    await screen.findByText("SKU-BIG");
+
+    expect(sortRequested()).toBe("quantity:desc");
+  });
+
+  it("без переданного дефолта панель остаётся при артикуле по возрастанию", async () => {
+    renderPanel([1]);
+    await screen.findByText("SKU-BIG");
+
+    expect(sortRequested()).toBe("sku:asc");
+  });
+
+  it("ручная сортировка по колонке отключает клиентский дефолт", async () => {
+    renderSectionPanel();
+    await screen.findByText("SKU-BIG");
+
+    const button = document.querySelector<HTMLButtonElement>('button[data-sort-field="quantity"]');
+    expect(button).toBeTruthy();
+    fireEvent.click(button!);
+    await waitFor(() => expect(sortRequested()).toBe("quantity:desc"));
+
+    // Выбор оператора главнее: порядок берётся из ответа сервера, своя
+    // раскладка по сумме групп больше не накладывается.
+    expect(articleOrder()).toEqual(["SKU-BIG", "SKU-SMALL", "SKU-MID"]);
+    expect(quantityOrder()).toEqual(["1555", "10", "800"]);
   });
 });
 

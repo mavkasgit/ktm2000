@@ -22,6 +22,7 @@ from app.models.section import Section
 from app.models.user import User, UserRole
 from app.models.work_task import WorkTask, WorkTaskStatus
 from app.services.shopfloor.queries_sections import get_section_board
+from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 
@@ -431,15 +432,20 @@ async def test_board_limit_max_validation(client, session: AsyncSession):
 
 
 @pytest.mark.asyncio
-async def test_board_default_order_unchanged(client, session: AsyncSession):
-    """Без параметра сортировки доска идёт по sequence, как и до перехода на ?sort=."""
+async def test_board_default_order_by_remaining_desc(client, session: AsyncSession):
+    """Без параметра сортировки доска идёт по остатку по убыванию."""
     user = await _make_user(session)
     token = create_access_token(subject=user.email)
     client.headers["Authorization"] = f"Bearer {token}"
 
     _, target_section, route, raw_stage, target_stage = await _setup_two_stage_route(session)
-    # Одинаковый sequence у всех задач: порядок целиком определяет tiebreaker.
-    for sku in ("ZZZ-LAST", "AAA-FIRST", "MMM-MID"):
+    # Одинаковый sequence у всех задач: порядок целиком определяет остаток.
+    remaining_by_sku = {
+        "AAA-FIRST": Decimal(5),
+        "MMM-MID": Decimal(30),
+        "ZZZ-LAST": Decimal(10),
+    }
+    for sku, remaining in remaining_by_sku.items():
         await _seed_board_tasks(
             session,
             target_section=target_section,
@@ -450,21 +456,38 @@ async def test_board_default_order_unchanged(client, session: AsyncSession):
             sku_prefix=sku,
             plan_no=f"BOARD-DEF-{uuid.uuid4().hex[:8]}",
         )
+        line = (
+            await session.execute(
+                select(SectionPlanLine)
+                .join(Product, Product.id == SectionPlanLine.product_id)
+                .where(
+                    SectionPlanLine.section_id == target_section.id,
+                    Product.sku == f"{sku}-0000",
+                )
+            )
+        ).scalar_one()
+        line.cached_remaining_quantity = remaining
+    await session.flush()
 
     board = await get_section_board(session, section_id=target_section.id, limit=50)
-    task_ids = [task["id"] for task in board["tasks"]]
-    assert len(task_ids) == 3
-    assert task_ids == sorted(task_ids), "tiebreaker по id должен быть возрастающим"
+    assert [task["product_sku"] for task in board["tasks"]] == [
+        "MMM-MID-0000",
+        "ZZZ-LAST-0000",
+        "AAA-FIRST-0000",
+    ]
 
     # Явный дефолт даёт тот же порядок, что и отсутствие параметра.
     explicit = await get_section_board(
-        session, section_id=target_section.id, sort="sequence:asc", limit=50
+        session, section_id=target_section.id, sort="remaining:desc", limit=50
     )
-    assert [task["id"] for task in explicit["tasks"]] == task_ids
+    assert [task["product_sku"] for task in explicit["tasks"]] == [
+        "MMM-MID-0000",
+        "ZZZ-LAST-0000",
+        "AAA-FIRST-0000",
+    ]
 
     # Дефолт не «просто любой»: сортировка по не-дефолтному полю переставляет
-    # строки. На HEAD, где параметра sort нет, остался бы исходный порядок —
-    # этот assert ловит именно перевод на общий контракт.
+    # строки.
     by_sku = await get_section_board(
         session, section_id=target_section.id, sort="product_sku:asc", limit=50
     )

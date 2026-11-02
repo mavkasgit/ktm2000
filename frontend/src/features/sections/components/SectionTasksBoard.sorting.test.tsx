@@ -101,6 +101,15 @@ function clickSort(field: string) {
   });
 }
 
+/** Раскрыть первую свёрнутую группу: многострочные группы по умолчанию прячут строки. */
+function expandFirstGroup() {
+  const button = document.querySelector<HTMLButtonElement>('button[title="Раскрыть"]');
+  if (!button) throw new Error("На доске нет свёрнутой группы");
+  act(() => {
+    button.click();
+  });
+}
+
 /**
  * Значения колонки по её заголовку, только по строкам заданий.
  *
@@ -213,15 +222,78 @@ describe("SectionTasksBoard: сортировка колонок", () => {
     expect(renderedSkuOrder()).toEqual(["C", "B", "A"]);
   });
 
-  it("без сортировки — дефолт: количество убыв., при равных размер убыв.", () => {
+  it("без сортировки — дефолт: остаток убыв., при равных — артикул по алфавиту", () => {
     renderBoard([
-      makeTask({ id: 1, product_sku: "A", planned_quantity: "10", dimensions: { length_mm: 3000 } }),
-      makeTask({ id: 2, product_sku: "B", planned_quantity: "900", dimensions: { length_mm: 1000 } }),
-      makeTask({ id: 3, product_sku: "C", planned_quantity: "10", dimensions: { length_mm: 2000 } }),
+      makeTask({
+        id: 1,
+        product_sku: "A",
+        planned_quantity: "10",
+        dimensions: { length_mm: 3000 },
+        cache: { ...makeTask().cache, remaining_quantity: "10" },
+      }),
+      makeTask({
+        id: 2,
+        product_sku: "B",
+        planned_quantity: "900",
+        dimensions: { length_mm: 1000 },
+        cache: { ...makeTask().cache, remaining_quantity: "900" },
+      }),
+      makeTask({
+        id: 3,
+        product_sku: "C",
+        planned_quantity: "10",
+        dimensions: { length_mm: 2000 },
+        cache: { ...makeTask().cache, remaining_quantity: "10" },
+      }),
     ]);
 
-    // 900 — первым; затем равные 10: 3 м раньше 2 м.
+    // Остаток 900 — первым; равные 10 — артикул по алфавиту, размер больше не решает.
     expect(renderedSkuOrder()).toEqual(["B", "A", "C"]);
+  });
+
+  it("дефолт считает остаток, а не план: большое почти переданное задание уходит вниз", () => {
+    renderBoard([
+      makeTask({
+        id: 1,
+        product_sku: "NEAR-DONE",
+        planned_quantity: "900",
+        cache: {
+          ...makeTask().cache,
+          transferred_quantity: "860",
+          remaining_quantity: "40",
+        },
+      }),
+      makeTask({
+        id: 2,
+        product_sku: "LIVE",
+        planned_quantity: "50",
+        cache: { ...makeTask().cache, remaining_quantity: "50" },
+      }),
+    ]);
+
+    expect(renderedSkuOrder()).toEqual(["LIVE", "NEAR-DONE"]);
+  });
+
+  it("внутри группы строки идут по остатку убыв.", () => {
+    // Один артикул и один размер — одна группа; порядок строк внутри неё.
+    renderBoard([
+      makeTask({
+        id: 1,
+        product_sku: "A",
+        planned_quantity: "10",
+        cache: { ...makeTask().cache, remaining_quantity: "10" },
+      }),
+      makeTask({
+        id: 2,
+        product_sku: "A",
+        planned_quantity: "700",
+        cache: { ...makeTask().cache, remaining_quantity: "700" },
+      }),
+    ]);
+
+    expect(renderedGroupColumnOrder("Артикул")).toEqual(["A"]);
+    expandFirstGroup();
+    expect(renderedColumnOrder("План")).toEqual(["700", "10"]);
   });
 
   it("объявляет состояние сортировки на th, а несортируемая колонка — молчит", () => {

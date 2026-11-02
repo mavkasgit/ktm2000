@@ -91,11 +91,14 @@ export const DEFAULT_REMAINDER_PREVIEW_SORT = "row:asc";
 
 /**
  * Строка `?sort=` по всем выбранным приоритетам, от старшего к младшему.
- * Пустой набор сортировок даёт дефолт эндпоинта: сортировки нет — действует
- * то, что сервер и так вернул бы.
+ * Пустой набор сортировок даёт переданный дефолт (по умолчанию — артикул
+ * по возрастанию, как у эндпоинта).
  */
-export function buildBalanceSortParam(sortConfigs: SortConfig<BalanceSortField>[]): string {
-  return buildSortParam(sortConfigs, mapBalanceSortFieldToApi) ?? DEFAULT_BALANCE_SORT;
+export function buildBalanceSortParam(
+  sortConfigs: SortConfig<BalanceSortField>[],
+  defaultSort: string = DEFAULT_BALANCE_SORT,
+): string {
+  return buildSortParam(sortConfigs, mapBalanceSortFieldToApi) ?? defaultSort;
 }
 
 export function buildTransactionSortParam(

@@ -48,6 +48,7 @@ _IN_DAILY_PLAN_EXPR = (
 _BOARD_SORT_COLUMNS: dict[str, object] = {
     "sequence": SectionPlanLine.sequence,
     "task_id": WorkTask.id,
+    "remaining": SectionPlanLine.cached_remaining_quantity,
     "product_sku": Product.sku,
     "status": WorkTask.status,
     "due_date": WorkTask.due_date,
@@ -63,9 +64,10 @@ BOARD_SORT_FIELDS = frozenset(_BOARD_SORT_COLUMNS)
 # ставит NULL первым — оператор кликнул «спустить», а пустые уехали наверх).
 _BOARD_SORT_NULLS_LAST_FIELDS = ("due_date", "dimensions")
 
-# Сортировка по умолчанию — порядок строк маршрута (тот же, что был до
-# перехода на общий контракт ``?sort=``).
-_BOARD_SORT_DEFAULT = SortClause("sequence", "asc")
+# Сортировка по умолчанию — остаток по убыванию: на первой странице должны
+# стоять задания, где работы осталось больше всего. `cached_remaining_quantity`
+# не бывает NULL (server_default 0), поэтому NULLS LAST для него не нужен.
+_BOARD_SORT_DEFAULT = SortClause("remaining", "desc")
 
 DEFAULT_BOARD_LIMIT = 50
 MAX_BOARD_LIMIT = 500

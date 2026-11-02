@@ -174,6 +174,76 @@ describe("buildPlanTaskGroups", () => {
   });
 });
 
+describe("печать плана: порядок по «Осталось»", () => {
+  it("группы идут по остатку убыв.; при равных — артикул по алфавиту", () => {
+    const tasks = [
+      makeTask({ id: 1, product_sku: "ЮП-100", planned_quantity: "100" }),
+      makeTask({ id: 2, product_sku: "АБ-050", planned_quantity: "100" }),
+      makeTask({
+        id: 3,
+        product_sku: "ЮП-200",
+        planned_quantity: "500",
+        cache: { ...makeTask().cache, completed_quantity: "450" },
+      }),
+    ];
+
+    const groups = buildPlanTaskGroups(tasks, "article");
+
+    // Равный остаток 100 — АБ-050 раньше ЮП-100; остаток 50 (500 − 450 годных) — последним.
+    expect(groups.map((group) => group.label)).toEqual([
+      "АБ-050 · 2,75 м",
+      "ЮП-100 · 2,75 м",
+      "ЮП-200 · 2,75 м",
+    ]);
+    expect(groups.map((group) => group.totalQtyRemaining)).toEqual([100, 100, 50]);
+  });
+
+  it("остаток группы — сумма строк, а не план", () => {
+    const groups = buildPlanTaskGroups(
+      [
+        makeTask({
+          id: 1,
+          planned_quantity: "900",
+          cache: { ...makeTask().cache, completed_quantity: "900" },
+        }),
+        makeTask({ id: 2, planned_quantity: "10" }),
+      ],
+      "article",
+    );
+
+    // Одна группа (один артикул и размер): план 910, осталось 10.
+    expect(groups).toHaveLength(1);
+    expect(groups[0].totalQtyPlan).toBe(910);
+    expect(groups[0].totalQtyRemaining).toBe(10);
+  });
+
+  it("строки одной группы идут по остатку убыв.", () => {
+    const groups = buildPlanTaskGroups(
+      [
+        makeTask({
+          id: 1,
+          planned_quantity: "300",
+          operation_code: "ANOD_01",
+          operation_name: "Серебро",
+          cache: { ...makeTask().cache, completed_quantity: "290" },
+        }),
+        makeTask({
+          id: 2,
+          planned_quantity: "300",
+          operation_code: "ANOD_05",
+          operation_name: "Чёрный",
+        }),
+      ],
+      "article",
+    );
+
+    expect(groups).toHaveLength(1);
+    // Операция «Серебро» почти закрыта (осталось 10) — ниже строки «Чёрный» (300).
+    expect(groups[0].rows.map((row) => row.operationName)).toEqual(["Чёрный", "Серебро"]);
+    expect(groups[0].rows.map((row) => row.balanceQty)).toEqual([300, 10]);
+  });
+});
+
 describe("пара на печати анодирования (#312)", () => {
   /** Пара 2604/2616: id артикулов 11 и 12, ручная N=8 на длине 2700. */
   const PAIR: ProductPairCatalogEntry = {
