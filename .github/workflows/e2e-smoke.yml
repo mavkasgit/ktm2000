@@ -19,16 +19,37 @@ name: E2E smoke
 # `--retries=0` передан явно: в CI `playwright.config.ts` ставит `retries: 2`, и
 # флейк спрятался бы за ретраем. Трасса пишется всегда (`--trace=on`) и уходит
 # артефактом: без ретраев «падение на первом прогоне» и есть предмет разбора.
+#
+# #361 concurrency. Отменять прошлый прогон здесь безопасно именно в CI:
+# джоб поднимает СВОЙ контейнер postgres (services.postgres, публикация :5441
+# внутри runner'а), а не работает с общим шаблоном/клоном `ktm2000_e2e_template`,
+# как локальный стенд через счётный семафор. Убийства чужого прогона на чужом
+# клоне БД поэтому нет. На push в main отмена выключена: красное/зелёное здесь
+# — материал для критерия промоушена «10 подряд зелёных на main», обрывать
+# уже идущий прогон mean терять измерение серии.
+# #361 paths-ignore: джоб не required (см. gh api branches/main/protection),
+# поэтому фильтр уровня workflow безопасен. Правки только документации не
+# могут сломать Playwright-набор, а прогоны на main от них не нужны.
 on:
   push:
     branches:
       - main
       - master
+    paths-ignore:
+      - 'docs/**'
+      - '**.md'
   pull_request:
     branches:
       - main
       - master
+    paths-ignore:
+      - 'docs/**'
+      - '**.md'
   workflow_dispatch:
+
+concurrency:
+  group: ci-${{ github.workflow }}-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' || github.ref != 'refs/heads/main' }}
 
 jobs:
   e2e-smoke:
