@@ -3,6 +3,7 @@ import { resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import { defineConfig, devices } from "@playwright/test";
 import { isPrivateHost } from "./src/shared/lib/hostGuard";
+import { MOBILE_PROJECT, MOBILE_USE } from "./e2e/mobile-project.mjs";
 
 // Стенд E2E — отдельная БД и отдельные порты (#220). Источник правды для
 // них — `.env.e2e` в корне репозитория (та же БД, что поднимает `e2e:prep`),
@@ -216,24 +217,37 @@ export default defineConfig({
   //                   одна строка плана). Читает то, что проверяет smoke.
   //  3. `ui-narrow` — узкие доменные сценарии (пила, ЮП-460): долгие,
   //                   зависят от всего предыдущего. Запускаются последними.
+  //  4. `mobile`    — те же экраны на телефоне (окно 390×844, `isMobile`,
+  //                   `hasTouch`). Это **не** сужение десктопного окна и не
+  //                   `@ui-narrow`: там доменный сценарий, здесь — раскладка
+  //                   под тач-экран. Вне цепочки `dependencies`: мобильный
+  //                   прогон не предусловие десктопных и не их следствие,
+  //                   поэтому он не может ни остановить, ни быть остановлен
+  //                   ими (свой ярусный скрипт `test:e2e:mobile`).
   //
   // `dependencies` работают на полном прогоне (`run-tier.mjs all`, он же
   // `test:e2e`). Ярусные скрипты зовут `run-tier.mjs` с `--no-deps`, поэтому
   // `test:e2e:ui` — ровно проект `ui-e2e` без smoke, а `test:e2e:ui:narrow` —
   // ровно `ui-narrow` (см. frontend/e2e/AGENTS.md, «Слои тестов и порядок
   // прогона»).
+  //
+  // `@mobile` исключён из десктопных ярусов инвертом (`grepInvert`), а не
+  // отсутствием совпадения: тег `@smoke @mobile` на одной спеке иначе
+  // прогнался бы дважды — узким окном и телефоном.
   projects: [
     {
       name: "smoke",
       grep: /@smoke/,
+      grepInvert: /@mobile/,
       use: { ...devices["Desktop Chrome"] },
     },
     {
       name: "ui-e2e",
       grep: /@ui/,
       // `@ui-narrow` — тоже `@ui`, без инверта спека попала бы в оба яруса
-      // и прогонялась дважды.
-      grepInvert: /@ui-narrow/,
+      // и прогонялась дважды. `@mobile` — по той же причине: мобильные спеки
+      // идут своим проектом.
+      grepInvert: /@ui-narrow|@mobile/,
       timeout: 120_000,
       dependencies: ["smoke"],
       use: { ...devices["Desktop Chrome"] },
@@ -244,6 +258,15 @@ export default defineConfig({
       timeout: 120_000,
       dependencies: ["ui-e2e"],
       use: { ...devices["Desktop Chrome"] },
+    },
+    {
+      // Телефон: окно 390×844 (iPhone 12/13/14), мобильные ветки вёрстки и
+      // тач. Габариты и флаги — из `e2e/mobile-project.mjs`, откуда их же
+      // печатает отчёт прогона (`run-tier.mjs`): две копии цифр разошлись бы
+      // молча, и отчёт утверждал бы одно окно, а проект гонял другое.
+      name: MOBILE_PROJECT,
+      grep: /@mobile/,
+      use: { ...devices["Desktop Chrome"], ...MOBILE_USE },
     },
     // Разовые (временные) спеки с тегом `@tmp`: в регулярных прогонах не
     // участвуют — проекта нет, пока не задан `E2E_TMP`. Вне цепочки
