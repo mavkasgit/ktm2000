@@ -40,6 +40,11 @@ from app.services.dimension_validation import (
 )
 from app.services.excel_import import parse_row_selection
 from app.services.import_column_resolver import detect_header_row, resolve_columns
+from app.services.import_normalization import (
+    normalize_sku,
+    sku_compound_parts,
+    sku_tail,
+)
 from app.services.material_operations import (
     canonicalize_completed_operations,
     format_completed_operations_label,
@@ -600,12 +605,129 @@ def _product_sku_contained_in_input(input_sku: str) -> object:
     return func.strpos(func.lower(input_sku), func.lower(Product.sku)) > 0
 
 
-async def _lookup_products(db: AsyncSession, items: list[RemainderItem]) -> None:
-    """Batch-lookup products by full SKU, then by SKU contained in the input text.
+def _like_escape(value: str) -> str:
+    r"""Экранирование спецсимволов LIKE: часть артикула — данные, а не шаблон."""
+    return value.replace("\\", "\\\\").replace("%", "\\%").replace("_", "\\_")
 
-    Exact matches always win. If no exact SKU exists, the first product by id
-    whose full SKU is contained in the source text is selected and a warning is
-    attached to the row.
+
+def _sku_candidate_conditions(sku: str) -> list[object]:
+    """Условия выборки кандидатов справочника для одной ячейки (#347).
+
+    Вхождения SKU в текст строки недостаточно: артикул «ЮП-1875» не является
+    подстрокой ячейки «ЮП-3658/1875», а привязывается именно её хвостом — без
+    этих условий кандидат просто не приехал бы из базы.
+    """
+    conditions = [_product_sku_contained_in_input(sku)]
+    for part in sku_compound_parts(sku):
+        conditions.append(func.lower(Product.sku) == part)
+        conditions.append(
+            Product.sku.ilike(f"%-{_like_escape(part)}", escape="\\")
+        )
+    return conditions
+
+
+def _normalized_catalog(products: list[Product]) -> list[tuple[Product, str, str]]:
+    """(продукт, нормализованный SKU, хвост после тире) — один раз на батч."""
+    catalog: list[tuple[Product, str, str]] = []
+    for product in products:
+        normalized = normalize_sku(product.sku or "")
+        if normalized:
+            catalog.append((product, normalized, sku_tail(product.sku or "")))
+    return catalog
+
+
+@dataclass(slots=True)
+class _ArticleMatch:
+    """Исход сопоставления целой ячейки и её частей по «/» (#347).
+
+    ``product`` задан — привязка найдена (``part`` пуст для точного совпадения
+    всей ячейки). ``ambiguous`` непуст — часть подходит нескольким артикулам,
+    и привязку надо запретить, а не выбирать молча.
+    """
+
+    product: Product | None = None
+    part: str | None = None
+    ambiguous: tuple[str, ...] = ()
+
+    @property
+    def rejected(self) -> bool:
+        return bool(self.ambiguous)
+
+
+def _match_article_cell(
+    cell: str,
+    catalog: list[tuple[Product, str, str]],
+) -> _ArticleMatch:
+    """Целая ячейка → части по «/», в порядке ячейки (#347, ADR-0067).
+
+    Часть ищется как точный SKU справочника и как его хвост после тире, поэтому
+    голый сегмент «1875» находит «ЮП-1875». Вторая часть рассматривается только
+    когда первая ни к чему не привязалась. Неоднозначность останавливает поиск,
+    а не переходит к следующей части: иначе строка уехала бы на молча выбранном
+    артикуле, и оператор этого не заметил бы.
+    """
+    for product, normalized, _tail in catalog:
+        if normalized == cell:
+            return _ArticleMatch(product=product)
+
+    for part in sku_compound_parts(cell):
+        candidates = [
+            product
+            for product, normalized, tail in catalog
+            if part in (normalized, tail)
+        ]
+        if len(candidates) == 1:
+            return _ArticleMatch(product=candidates[0], part=part)
+        if len(candidates) > 1:
+            return _ArticleMatch(ambiguous=tuple(sorted(str(p.sku) for p in candidates)))
+    return _ArticleMatch()
+
+
+def _attach_remainder_product(
+    item: RemainderItem,
+    product: Product,
+    warning: str | None,
+) -> None:
+    item.product_id = product.id
+    item.product_name = product.name
+    item.matched_sku = product.sku
+    if warning is not None:
+        item.warnings.append(warning)
+
+
+def _attach_contained_product(item: RemainderItem, products: list[Product]) -> None:
+    """Финальный fallback: SKU целиком встречается в тексте строки.
+
+    Порядок выбора (позиция в строке, длина SKU, id) и текст предупреждения —
+    прежние: на них опираются листы вида «PART-001, поставка».
+    """
+    input_sku = item.sku.casefold()
+    candidates = [p for p in products if p.sku and p.sku.casefold() in input_sku]
+    if not candidates:
+        item.status = "invalid"
+        item.errors.append(f"SKU '{item.sku}' not found in database")
+        return
+    product = min(
+        candidates,
+        key=lambda p: (input_sku.find(p.sku.casefold()), -len(p.sku), p.id),
+    )
+    _attach_remainder_product(
+        item,
+        product,
+        warning=(
+            "Артикул сопоставлен частично: "
+            f"в строке '{item.sku}' найден SKU '{product.sku}'"
+        ),
+    )
+
+
+async def _lookup_products(db: AsyncSession, items: list[RemainderItem]) -> None:
+    """Привязать строку листа к артикулу справочника (#347, ADR-0067).
+
+    Порядок: целая ячейка → части составного артикула по «/» → вхождение SKU в
+    текст строки. Точное совпадение выигрывает всегда; привязка по части или по
+    вхождению остаётся валидной строкой, но с видимым предупреждением, а
+    неоднозначная часть строку блокирует.
     """
     skus = list(dict.fromkeys(
         it.sku for it in items if it.status == "valid" and it.sku
@@ -615,49 +737,44 @@ async def _lookup_products(db: AsyncSession, items: list[RemainderItem]) -> None
 
     result = await db.execute(
         select(Product)
-        .where(or_(*(_product_sku_contained_in_input(sku) for sku in skus)))
+        .where(
+            or_(*(
+                condition
+                for sku in skus
+                for condition in _sku_candidate_conditions(sku)
+            ))
+        )
         .order_by(Product.id)
     )
-    products = list(result.scalars().all())
+    catalog = _normalized_catalog(list(result.scalars().all()))
+    products = [product for product, _normalized, _tail in catalog]
 
     for item in items:
         if item.status != "valid" or not item.sku:
             continue
-        input_sku = item.sku.casefold()
-        exact_product = next(
-            (p for p in products if p.sku and p.sku.casefold() == input_sku),
-            None,
-        )
-        product = exact_product
-        is_partial = False
-        if product is None:
-            candidates = [
-                p for p in products
-                if p.sku and p.sku.casefold() in input_sku
-            ]
-            if candidates:
-                product = min(
-                    candidates,
-                    key=lambda p: (
-                        input_sku.find(p.sku.casefold()),
-                        -len(p.sku),
-                        p.id,
-                    ),
-                )
-                is_partial = True
 
-        if product is not None:
-            item.product_id = product.id
-            item.product_name = product.name
-            item.matched_sku = product.sku
-            if is_partial:
-                item.warnings.append(
-                    "Артикул сопоставлен частично: "
-                    f"в строке '{item.sku}' найден SKU '{product.sku}'"
-                )
-        else:
+        match = _match_article_cell(normalize_sku(item.sku), catalog)
+        if match.rejected:
             item.status = "invalid"
-            item.errors.append(f"SKU '{item.sku}' not found in database")
+            item.errors.append(
+                f"SKU '{item.sku}' неоднозначен: часть подходит к "
+                f"{', '.join(match.ambiguous)} — уточните артикул в файле"
+            )
+            continue
+        if match.product is not None:
+            _attach_remainder_product(
+                item,
+                match.product,
+                warning=None
+                if match.part is None
+                else (
+                    "Артикул сопоставлен по части: "
+                    f"в строке '{item.sku}' найден SKU '{match.product.sku}'"
+                ),
+            )
+            continue
+
+        _attach_contained_product(item, products)
 
 def _missing_dimensions_message(missing_codes: list[str]) -> str:
     """Понятная ошибка предпросмотра для обязательных измерений без значения."""

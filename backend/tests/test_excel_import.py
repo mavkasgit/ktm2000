@@ -9,6 +9,7 @@ from app.models.route import RouteRuleProfile
 from app.services.excel_import import parse_factory_plan_workbook, parse_row_selection
 from openpyxl import Workbook
 
+from tests.helpers.sql_counter import SqlRecorder
 from tests.test_integrity_invariants import assert_no_invariants_violations
 
 
@@ -2087,3 +2088,165 @@ async def test_preview_pair_component_hanger_source_manual_n(
         assert item["after_data"]["hanger_source"] == "manual"
         assert item["after_data"]["quantity_per_hanger"] == 8
         assert item["after_data"]["hanger_count"] == 2
+
+
+# ─── Составной артикул: привязка по части (#347, ADR-0067) ────────────────────
+
+
+async def _seed_products(session, *skus: str) -> list:
+    products = []
+    for sku in skus:
+        from app.models.product import Product, ProductType
+
+        product = Product(
+            sku=sku,
+            name=f"Тест {sku}",
+            type=ProductType.finished_good,
+            unit="pcs",
+            is_active=True,
+        )
+        session.add(product)
+        products.append(product)
+    await session.flush()
+    return products
+
+
+async def _preview_compound_rows(client, session, *, code: str, cells: list[str]):
+    template = await _create_template(session, name=f"{code} Template", code=code)
+    await session.commit()
+    wb = Workbook()
+    ws = wb.active
+    ws.title = "План май 26 05"
+    ws.append(["", "", "Комментарий"])
+    ws.append(["Заявка № 05", "май"])
+    ws.append([])
+    ws.append(["", "", "", "", "", "", "", "", "", "", "", "", "Формирование ящиков"])
+    ws.append(
+        [
+            "Артикул",
+            "пополнение",
+            "Наименование",
+            "остатки сырья на КТМ",
+            "Цвет",
+            "кол-во шт. в 2,7",
+            "Длина, м",
+            "Пробивка/сверловка",
+            "Упаковка",
+            "Примечание ",
+            "Длина после упак, м",
+            "кол-во штук готовой продукции",
+            "Запад",
+            "Восток",
+            "Вид конечного продукта",
+            "Комментарии",
+        ]
+    )
+    for cell in cells:
+        ws.append([cell, "ТЗ", "Кант", 0, "", 10, 2.7, "", "", "", 2.7, 10, "", 10, "ГП"])
+    out = BytesIO()
+    wb.save(out)
+    response = await client.post(
+        f"/api/imports/excel/preview?template_id={template.id}",
+        files={
+            "file": (
+                "compound.xlsx",
+                out.getvalue(),
+                "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+            )
+        },
+    )
+    assert response.status_code == 200, response.text
+    return response.json()["items"]
+
+
+@pytest.mark.asyncio
+async def test_preview_compound_sku_binds_by_second_part(client, session, tmp_path, monkeypatch) -> None:
+    """«ЮП-3616/1875» при артикуле «ЮП-1875» в справочнике: привязка хвостом части (#347)."""
+    monkeypatch.setattr(settings, "IMPORT_STORAGE_DIR", str(tmp_path))
+
+    (product,) = await _seed_products(session, "ЮП-1875")
+    items = await _preview_compound_rows(
+        client, session, code="compound-second-part", cells=["ЮП-3616/1875"]
+    )
+
+    item = items[0]
+    assert item["after_data"]["product_id"] == product.id
+    assert "sku_matched_by_part:1875" in item["warnings"]
+    assert "product_not_found" not in item["errors"]
+    # Привязанный по части артикул активен: ложный product_inactive означал бы,
+    # что кэш активности не видит продукты, найденные не по точному SKU.
+    assert "product_inactive" not in item["errors"]
+
+
+@pytest.mark.asyncio
+async def test_preview_compound_sku_prefers_first_part(client, session, tmp_path, monkeypatch) -> None:
+    """Обе части есть в справочнике: привязывается первая по порядку ячейки (#347)."""
+    monkeypatch.setattr(settings, "IMPORT_STORAGE_DIR", str(tmp_path))
+
+    first, _second = await _seed_products(session, "ЮП-3658", "ЮП-1875")
+    items = await _preview_compound_rows(
+        client, session, code="compound-first-part", cells=["ЮП-3658/1875"]
+    )
+
+    item = items[0]
+    assert item["after_data"]["product_id"] == first.id
+    assert "sku_matched_by_part:юп-3658" in item["warnings"]
+
+
+@pytest.mark.asyncio
+async def test_preview_compound_sku_ambiguous_part_is_not_bound(
+    client, session, tmp_path, monkeypatch
+) -> None:
+    """Хвост подходит двум артикулам: привязки нет, строка остаётся ошибкой (#347)."""
+    monkeypatch.setattr(settings, "IMPORT_STORAGE_DIR", str(tmp_path))
+
+    await _seed_products(session, "ЮП-1875", "АТ-1875")
+    items = await _preview_compound_rows(
+        client, session, code="compound-ambiguous", cells=["ХХ-9999/1875"]
+    )
+
+    item = items[0]
+    assert item["after_data"]["product_id"] is None
+    assert "product_not_found" in item["errors"]
+    assert [w for w in item["warnings"] if w.startswith("sku_matched_by_part")] == []
+
+
+@pytest.mark.asyncio
+async def test_preview_exact_sku_gets_no_part_warning(client, session, tmp_path, monkeypatch) -> None:
+    """Целая ячейка найдена: предупреждения о части нет — каскад к ней не доходит."""
+    monkeypatch.setattr(settings, "IMPORT_STORAGE_DIR", str(tmp_path))
+
+    (product,) = await _seed_products(session, "ЮП-1875")
+    items = await _preview_compound_rows(
+        client, session, code="compound-exact", cells=["ЮП-1875"]
+    )
+
+    item = items[0]
+    assert item["after_data"]["product_id"] == product.id
+    assert [w for w in item["warnings"] if w.startswith("sku_matched_by_part")] == []
+
+
+@pytest.mark.asyncio
+async def test_preview_compound_sku_does_not_add_queries_per_row(
+    engine, client, session, tmp_path, monkeypatch
+) -> None:
+    """Привязка по части не добавляет запросов на строку: индекс хвостов — снимок
+    уже загруженного справочника, а не SELECT на артикул (#347)."""
+    monkeypatch.setattr(settings, "IMPORT_STORAGE_DIR", str(tmp_path))
+
+    await _seed_products(session, "ЮП-1875", "ЮП-3658", "АТ-1875")
+    cells = ["ЮП-3616/1875", "ЮП-3658/1234", "ХХ-9999/1875"]
+
+    product_selects_per_run: list[int] = []
+    for index, _cell in enumerate(cells):
+        with SqlRecorder(engine) as recorder:
+            items = await _preview_compound_rows(
+                client, session, code=f"compound-sql-{index}", cells=cells[: index + 1]
+            )
+        assert len(items) == index + 1
+        product_selects_per_run.append(len(recorder.touching(("products",))))
+
+    assert len(set(product_selects_per_run)) == 1, (
+        "число SELECT к products растёт с числом строк листа: "
+        f"{product_selects_per_run}"
+    )

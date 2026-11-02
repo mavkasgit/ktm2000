@@ -50,7 +50,9 @@ Warnings (не блокируют): `paired_hanger_adjusted`,
 `hanger_quantity_not_set`, `input_dimensions_unresolved`, `product_name_missing`,
 `invalid_input_length` / `invalid_output_length`, `paired_row_auto_included:*`,
 `row_selection_applied:*` / `row_selection_auto_included:*`,
-`paired_profile_product_unmapped`.
+`paired_profile_product_unmapped`,
+`sku_matched_by_part:*` (#347, ADR-0067: целая ячейка не найдена, позиция
+привязана к артикулу по части составного «ЮП-3658/1875»; параметр — сама часть).
 
 `raw_length_not_found`, `raw_length_substituted` и правило «ближайшая сверху»
 не входят в runtime-контракт плана: длина из Excel — нормальная длина каталога,

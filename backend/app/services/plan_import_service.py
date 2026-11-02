@@ -58,6 +58,7 @@ from app.services.excel_import import (
 )
 from app.services.hanger_quantity import adjust_quantity_to_hanger
 from app.services.import_normalization import normalize_sku as _normalize_sku
+from app.services.import_normalization import sku_compound_parts, sku_tail
 from app.services.plan_position_hanger import (
     PositionHangerValue,
     position_length_mm,
@@ -139,6 +140,9 @@ PLAN_IMPORT_WARNING_PREFIXES: tuple[str, ...] = (
     "paired_row_auto_included",
     "row_selection_applied",
     "row_selection_auto_included",
+#: #347 (ADR-0067): строка привязана к артикулу не целой ячейкой, а её частью по
+#: «/» — «ЮП-3658/1875» при SKU «ЮП-1875» в справочнике. Параметр — сама часть.
+    "sku_matched_by_part",
 #: Баланс группы вход×длина = Σ(выход×длина) (excel_import._check_group_balances):
 #: фактический row-warning вне списка спеки §3, зафиксирован здесь же,
 #: чтобы сторож ловил действительно новые коды, а не этот известный.
@@ -608,6 +612,46 @@ def _sku_lookup_keys(sku: str) -> set[str]:
     return {k for k in keys if k}
 
 
+def _build_sku_tail_index(products: list[Product]) -> dict[str, list[Product]]:
+    """Хвосты артикулов после тире → продукты, для привязки по части (#347).
+
+    Индекс строится по уже загруженному справочнику, поэтому новый SELECT не
+    появляется. Список, а не один продукт: хвост «1875» подходит и к «ЮП-1875»,
+    и к «АТ-1875» — неоднозначность должна быть видна резолверу.
+    """
+    index: dict[str, list[Product]] = {}
+    for product in products:
+        tail = sku_tail(product.sku or "")
+        if tail:
+            index.setdefault(tail, []).append(product)
+    return index
+
+
+def _resolve_product_by_sku_part(
+    source_sku: str,
+    products_by_sku: dict[str, Product],
+    products_by_tail: dict[str, list[Product]],
+) -> tuple[Product | None, str | None, bool]:
+    """Привязка строки по части составного артикула «ЮП-3658/1875» (#347).
+
+    Части разбираются по «/» в порядке ячейки, первая привязка останавливает
+    поиск. Часть ищется как точный SKU справочника и как его хвост после тире,
+    поэтому голый сегмент «1875» находит «ЮП-1875». Возврат ``(продукт, часть,
+    неоднозначно)``: если хвост подходит нескольким артикулам, привязки нет —
+    молча выбрать первый было бы хуже ошибки, оператор получил бы чужую позицию.
+    """
+    for part in sku_compound_parts(source_sku):
+        product = products_by_sku.get(part)
+        if product is not None:
+            return product, part, False
+        candidates = products_by_tail.get(part, [])
+        if len(candidates) == 1:
+            return candidates[0], part, False
+        if len(candidates) > 1:
+            return None, part, True
+    return None, None, False
+
+
 async def _make_change_items(
     db: AsyncSession,
     change_set_id: int,
@@ -642,13 +686,18 @@ async def _make_change_items(
     
     # Cache product.is_active to prevent autoflush when accessing expired objects
     product_is_active_cache: dict[int, bool] = {}
-    for prod in products_by_sku.values():
+    index_products = list(dict.fromkeys(products_by_sku.values()))
+    for prod in index_products:
         try:
             product_is_active_cache[prod.id] = prod.is_active
         except SQLAlchemyError:
             # Объект удалён/просрочен, либо autoflush при ленивой подгрузке
             # упал — считаем продукт неактивным, строка получит product_inactive.
             product_is_active_cache[prod.id] = False
+
+    # Хвосты артикулов для привязки по части составного артикула (#347):
+    # снимок того же справочника, новых запросов не появляется.
+    products_by_tail = _build_sku_tail_index(index_products)
     
     # Маршруты, уже найденные или созданные в этом импорте: код -> route_id.
     # Ключ — код, а не имя: одинаковый состав даёт одинаковый код при любом
@@ -750,11 +799,25 @@ async def _make_change_items(
             if product is not None:
                 break
 
+        if product is None:
+            # Целой ячейки в справочнике нет: составной артикул вида
+            # «ЮП-3658/1875» привязывается по её части (#347).
+            product, matched_part, _ambiguous = _resolve_product_by_sku_part(
+                row.source_sku,
+                products_by_sku,
+                products_by_tail,
+            )
+            if product is not None:
+                warnings.append(f"sku_matched_by_part:{matched_part}")
+
         resolved_pair: ResolvedPair | None = None
         pair_n: PairHangerValue | None = None
 
         if product is None:
             if not row.payload.get("paired_profile"):
+                # Неоднозначная часть (хвост подходит нескольким артикулам)
+                # попадает сюда же: новый error-код не вводится, но и молча
+                # выбрать первый артикул нельзя.
                 errors.append("product_not_found")
         else:
             # Use cached value to avoid triggering autoflush
