@@ -563,6 +563,27 @@ async def test_compound_sku_binds_catalog_sku_with_typographic_dash(
     assert any("по части" in warning for warning in item["warnings"])
 
 
+async def test_plain_sku_with_typographic_dash_matches_exactly(
+    client: AsyncClient,
+    session: AsyncSession,
+) -> None:
+    """«ЮП–1875» в ячейке без слэша: точное совпадение, а не «не найдено».
+
+    Каскад сравнивает нормализованные написания, но решение может принять только
+    над тем, что приехало из базы: `strpos` на разных тире даёт ноль, и без
+    условия по нормализованной ячейке артикул не стал бы кандидатом (#347).
+    """
+    product = await _make_product(session, "ЮП-1875")
+    await session.commit()
+
+    item = await _preview_single_sku(client, "ЮП\u20131875")
+
+    assert item["status"] == "valid"
+    assert item["product_id"] == product.id
+    assert item["matched_sku"] == "ЮП-1875"
+    assert item["warnings"] == []
+
+
 async def test_catalog_sku_with_slash_matches_exactly_before_parts(
     client: AsyncClient,
     session: AsyncSession,

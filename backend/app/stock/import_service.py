@@ -44,6 +44,7 @@ from app.services.import_normalization import (
     SKU_DASH_VARIANTS,
     SkuEntry,
     match_sku_cell,
+    normalize_sku,
     sku_compound_parts,
     sku_entry,
 )
@@ -628,13 +629,18 @@ def _normalized_catalog_sku() -> object:
 def _sku_candidate_conditions(sku: str) -> list[object]:
     """Условия выборки кандидатов справочника для одной ячейки (#347).
 
-    Вхождения SKU в текст строки недостаточно: артикул «ЮП-1875» не является
-    подстрокой ячейки «ЮП-3658/1875», а привязывается именно её хвостом — без
-    этих условий кандидат просто не приехал бы из базы. Это предфильтр:
-    окончательное решение принимает ``match_sku_cell``.
+    Вхождения SKU в текст строки недостаточно дважды. Во-первых, целая ячейка
+    может отличаться от справочника только написанием («ЮП–3098» против
+    «ЮП-3098»): `strpos` на таких символах ноль, и точное совпадение стало бы
+    недостижимым — кандидат просто не приехал бы. Во-вторых, «ЮП-1875» не является
+    подстрокой ячейки «ЮП-3658/1875», а привязывается именно её хвостом. Это
+    предфильтр: окончательное решение принимает ``match_sku_cell``.
     """
     normalized_sku = _normalized_catalog_sku()
-    conditions = [_product_sku_contained_in_input(sku)]
+    conditions = [
+        _product_sku_contained_in_input(sku),
+        normalized_sku == normalize_sku(sku),
+    ]
     for part in sku_compound_parts(sku):
         conditions.append(normalized_sku == part)
         conditions.append(normalized_sku.like(f"%-{_like_escape(part)}", escape="\\"))
