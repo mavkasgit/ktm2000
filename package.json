@@ -32,6 +32,7 @@
     "db:seed": "cd backend && python scripts/seed_all.py",
     "db:seed:packing-demo": "cd backend && python scripts/seed_packing_demo.py",
     "db:snapshot": "cd backend && python scripts/db_snapshot.py",
+    "imports:sweep": "cd backend && python scripts/import_orphan_sweep.py",
     "gen:labels": "cd backend && python scripts/generate_frontend_labels.py",
     "gen:labels:check": "cd backend && python scripts/generate_frontend_labels.py --check",
     "test:up": "docker compose --env-file .env.test -f infra/compose/docker-compose.test.yml up -d --build",
