@@ -1,16 +1,17 @@
 /**
- * Колонка «Следующий» таблицы «Готово к передаче» — одна строка по-русски.
+ * Колонки «Откуда» и «Куда» таблицы «Готово к передаче» — пункты одной строкой.
  *
- * Регресс: ячейка печатала адресата двумя строками — операция и отдельно
- * `КОД_УЧАСТКА #N` (`next_section_code` + `next_step_sequence`). Оператору нужен
- * адрес, а не идентификатор маршрута, поэтому в ячейке остаётся только
- * `nextStepLabel(операция, участок)`: операция приоритетнее названия участка
- * («Хранение: Склад готовой продукции»), а у складских этапов операций нет —
- * там подписью остаётся название участка.
+ * Регресс: ячейка «Следующий» печатала адресата двумя строками — операция и
+ * отдельно `КОД_УЧАСТКА #N` (`next_section_code` + `next_step_sequence`), а
+ * пункт выдачи вовсе не показывался: оператор видел операцию, но не место, откуда
+ * забирать материал. Теперь обе ячейки берут `stagePointLabel(участок,
+ * операция)`: участок первичен, операция — уточнение, если не называет пункт
+ * сама («Хранение: Склад готовой продукции»). Коды и номера этапов в подписи
+ * не попадают — это идентификаторы маршрута, а не адрес.
  *
- * Проверяем текст ОТРИСОВАННОЙ ячейки: он и есть контракт для оператора.
- * Позиция ячейки берётся из шапки по подписи «Следующий», а не зашитым
- * индексом — иначе тест проверял бы вёрстку, а не подпись.
+ * Проверяем текст ОТРИСОВАННЫХ ячеек: он и есть контракт для оператора.
+ * Позиция колонки берётся из шапки по подписи, а не зашитым индексом — иначе
+ * тест проверял бы вёрстку, а не подпись.
  */
 
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
@@ -94,17 +95,17 @@ function mockReadyItems(items: ReadyToTransferTask[]) {
   }));
 }
 
-/** Индекс колонки «Следующий» в строке: подпись ищется в шапке, а не зашивается. */
-function nextColumnIndex(): number {
+/** Индекс колонки по подписи в шапке: подпись ищется, а не зашивается. */
+function columnIndex(label: string): number {
   const headers = [...document.querySelectorAll("thead th")];
-  const index = headers.findIndex((th) => (th.textContent ?? "").trim() === "Следующий");
-  expect(index, "в шапке ready-таблицы нет колонки «Следующий»").toBeGreaterThanOrEqual(0);
+  const index = headers.findIndex((th) => (th.textContent ?? "").trim() === label);
+  expect(index, `в шапке ready-таблицы нет колонки «${label}»`).toBeGreaterThanOrEqual(0);
   return index;
 }
 
-/** Подписи колонки «Следующий» отрисованных строк готовых передач. */
-function renderedNextLabels(kind: "ready-task" | "ready-group"): string[] {
-  const index = nextColumnIndex();
+/** Подписи колонки отрисованных строк готовых передач. */
+function renderedColumnLabels(label: string, kind: "ready-task" | "ready-group"): string[] {
+  const index = columnIndex(label);
   return [...document.querySelectorAll(`tbody tr[data-row-kind="${kind}"]`)].map(
     (row) => (row.querySelectorAll("td")[index]?.textContent ?? "").trim(),
   );
@@ -151,14 +152,19 @@ beforeEach(() => {
   } satisfies TransferHistoryResponse);
 });
 
-describe("TransfersPage: колонка «Следующий»", () => {
+describe("TransfersPage: колонка «Куда»", () => {
   it.each<
     [string, Pick<ReadyToTransferTask, "next_operation_name" | "next_section_name">, string]
   >([
     [
-      "операция есть — печатается только она",
+      "операция называет участок — печатается только она",
       { next_operation_name: NEXT_OPERATION_NAME, next_section_name: NEXT_SECTION_NAME },
       NEXT_OPERATION_NAME,
+    ],
+    [
+      "операция дополняет участок — печатаются оба, пункт первичен",
+      { next_operation_name: "Пиление", next_section_name: "Упаковка" },
+      "Упаковка · Пиление",
     ],
     [
       "операции нет (складской этап) — печатается название участка",
@@ -177,7 +183,7 @@ describe("TransfersPage: колонка «Следующий»", () => {
     renderPage();
     await waitForReadyRows("ready-task", 1);
 
-    const [label] = renderedNextLabels("ready-task");
+    const [label] = renderedColumnLabels("Куда", "ready-task");
     // Точное равенство, а не «содержит»: код участка `FINISHED_STOCK` и номер
     // этапа `#2` в подписи быть не должны.
     expect(label).toBe(expected);
@@ -187,7 +193,7 @@ describe("TransfersPage: колонка «Следующий»", () => {
 
   it("в строке-заголовке группы подпись общая на всю группу", async () => {
     // Три строки одного артикула/участка/размера/адресата — они сворачиваются
-    // в группу, и ячейку «Следующий» рисует уже строка-заголовок.
+    // в группу, и ячейку «Куда» рисует уже строка-заголовок.
     mockReadyItems(
       [1, 2, 3].map((taskId) =>
         makeTask({
@@ -202,7 +208,7 @@ describe("TransfersPage: колонка «Следующий»", () => {
     renderPage();
     await waitForReadyRows("ready-group", 1);
 
-    const [label] = renderedNextLabels("ready-group");
+    const [label] = renderedColumnLabels("Куда", "ready-group");
     expect(label).toBe(NEXT_OPERATION_NAME);
     expect(label).not.toContain(NEXT_SECTION_CODE);
     expect(label).not.toContain(`#${NEXT_STEP_SEQUENCE}`);
@@ -210,7 +216,7 @@ describe("TransfersPage: колонка «Следующий»", () => {
 
   it("в строке-заголовке группы складского этапа печатается название участка", async () => {
     // Общий `next_operation_name` у строк группы — `null`: складских операций
-    // в маршруте нет, и приоритет операции оставляет только название участка.
+    // в маршруте нет, и остаётся только название участка.
     mockReadyItems(
       [1, 2].map((taskId) =>
         makeTask({
@@ -226,6 +232,56 @@ describe("TransfersPage: колонка «Следующий»", () => {
     renderPage();
     await waitForReadyRows("ready-group", 1);
 
-    expect(renderedNextLabels("ready-group")).toEqual(["Склад полуфабриката"]);
+    expect(renderedColumnLabels("Куда", "ready-group")).toEqual(["Склад полуфабриката"]);
+  });
+});
+
+describe("TransfersPage: колонка «Откуда»", () => {
+  it.each<
+    [string, Pick<ReadyToTransferTask, "section_name" | "operation_name">, string]
+  >([
+    [
+      "участок и операция совпадают — печатается пункт один раз",
+      { section_name: "Пила", operation_name: "Пила" },
+      "Пила",
+    ],
+    [
+      "операция уточняет участок — печатаются оба, пункт первичен",
+      { section_name: "Пила", operation_name: "Пиление" },
+      "Пила · Пиление",
+    ],
+    [
+      "операции нет — печатается только участок",
+      { section_name: "Склад подготовки", operation_name: null },
+      "Склад подготовки",
+    ],
+  ])("в строке задания %s", async (_case, source, expected) => {
+    mockReadyItems([makeTask(source)]);
+
+    renderPage();
+    await waitForReadyRows("ready-task", 1);
+
+    expect(renderedColumnLabels("Откуда", "ready-task")).toEqual([expected]);
+  });
+
+  it("в строке-заголовке группы пункт общий на всю группу", async () => {
+    mockReadyItems(
+      [1, 2].map((taskId) =>
+        makeTask({
+          task_id: taskId,
+          plan_position_id: taskId,
+          transferable_quantity: "10",
+          section_name: "Склад подготовки",
+          operation_name: "Хранение: Склад подготовки",
+        }),
+      ),
+    );
+
+    renderPage();
+    await waitForReadyRows("ready-group", 1);
+
+    expect(renderedColumnLabels("Откуда", "ready-group")).toEqual([
+      "Хранение: Склад подготовки",
+    ]);
   });
 });

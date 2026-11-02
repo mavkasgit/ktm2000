@@ -102,10 +102,13 @@ import { ReadyTransferPrintDialog } from "../components/ReadyTransferPrintDialog
 import {
   dimensionsKey,
   groupReadyTransfers,
+  groupReadyTransfersBySpg,
   isFinalReadyRow,
-  nextStepLabel,
   readyRowIdentity,
+  stagePointLabel,
   type ReadyTransferGroup,
+  type ReadyTransferRowItem,
+  type ReadyTransferSpg,
 } from "../lib/groupReadyTransfers";
 import { makeIdempotencyKey, runTransferBatch } from "../lib/runTransferBatch";
 import {
@@ -165,6 +168,23 @@ const BULK_FINAL_ACTION_TITLE = "Финальный выпуск в массов
 
 type StatusBadgeVariant = "default" | "destructive" | "outline" | "secondary";
 
+/**
+ * Запасные цвета шапки ГХП: у ГХП из справочника цвет берётся из `icon_color`,
+ * а это — только когда цвет не задан. Позиция в палитре стабильна (индекс
+ * ГХП в справочнике), поэтому блок не меняет цвет между страницами.
+ */
+const SPG_HEADER_FALLBACK_COLORS = [
+  "#0284C7",
+  "#D97706",
+  "#059669",
+  "#7C3AED",
+  "#E11D48",
+  "#0D9488",
+] as const;
+
+/** «Без ГХП» — нейтральный цвет: это не группа справочника, а остаток. */
+const SPG_HEADER_UNKNOWN_COLOR = "#64748B";
+
 /** Строка таблицы «Готово к передаче»: задание либо заголовок группы заданий. */
 type ReadyTableRow =
   | {
@@ -174,7 +194,8 @@ type ReadyTableRow =
       /** Строка закрывает блок группы — на ней 3px-граница. */
       isLastInGroup: boolean;
     }
-  | { kind: "group"; group: ReadyTransferGroup };
+  | { kind: "group"; group: ReadyTransferGroup }
+  | { kind: "spg"; key: string; name: string; color: string };
 
 function statusBadgeLabel(status: string): string {
   // Under the explicit-transfer model, transfer_send auto-accepts the
@@ -389,6 +410,9 @@ function ReadyTransferRow({
   const isOverPlan = qtyNum > parseFloat(task.planned_quantity);
   /** Количество не введено или обнулено — передавать нечего (#193). */
   const quantityReason: ActionReasonCode | null = qtyNum > 0 ? null : "zero_quantity";
+  /** Пункт выдачи и пункт назначения: оператор несёт материал по адресу, а не по коду этапа. */
+  const sourcePoint = stagePointLabel(task.section_name, task.operation_name);
+  const nextPoint = stagePointLabel(task.next_section_name, task.next_operation_name);
 
   return (
     <TableRow
@@ -420,9 +444,6 @@ function ReadyTransferRow({
       <TableCell className={`${cellClass} text-xs text-muted-foreground whitespace-nowrap`}>
         {formatDimensionsLabel(task.dimensions, task.dimensions_label)}
       </TableCell>
-      <TableCell className={`${cellClass} text-xs whitespace-nowrap`}>
-        {task.operation_name ?? "—"}
-      </TableCell>
       <TableCell className={`${cellClass} text-right tabular-nums`}>
         <div className="whitespace-nowrap">
           <span className="font-medium">{fmtQty(task.transferable_quantity)} шт.</span>
@@ -433,12 +454,15 @@ function ReadyTransferRow({
           )}
         </div>
       </TableCell>
+      <TableCell className={`${cellClass} text-xs whitespace-nowrap`} title={sourcePoint}>
+        {sourcePoint}
+      </TableCell>
       <TableCell
         className={`${cellClass} text-xs whitespace-nowrap`}
-        title={task.has_next_step ? nextStepLabel(task.next_operation_name, task.next_section_name) : undefined}
+        title={task.has_next_step ? nextPoint : undefined}
       >
         {task.has_next_step ? (
-          nextStepLabel(task.next_operation_name, task.next_section_name)
+          nextPoint
         ) : (
           <div>
             <Badge variant="outline">Финальный</Badge>
@@ -608,6 +632,8 @@ function ReadyTransferGroupRow({
   const groupHeaderCellClass = cn(TRANSFERS_ROW.cell, TABLE_ROW_STYLES.groupHeaderCell);
 
   const { common } = group;
+  const sourcePoint = stagePointLabel(common.sectionName, common.operationName);
+  const nextPoint = stagePointLabel(common.nextSectionName, common.nextOperationName);
   const qtyNum = parseFloat(quantity || "0");
   const overLimit = Math.round(qtyNum * 1000) > Math.round(group.totalTransferable * 1000);
   /**
@@ -673,9 +699,6 @@ function ReadyTransferGroupRow({
       <TableCell className={cn(groupHeaderCellClass, "text-xs text-muted-foreground whitespace-nowrap")}>
         {common.dimensionsLabel ?? "—"}
       </TableCell>
-      <TableCell className={cn(groupHeaderCellClass, "text-xs whitespace-nowrap")}>
-        {common.operationName ?? "—"}
-      </TableCell>
       <TableCell className={cn(groupHeaderCellClass, "text-right tabular-nums")}>
         {/* Как у одиночной строки: в «К передаче» — текст, редактируемое поле —
             в «Действиях». Сумма по группе, распределяется по строкам. */}
@@ -686,12 +709,15 @@ function ReadyTransferGroupRow({
           </span>
         </div>
       </TableCell>
+      <TableCell className={cn(groupHeaderCellClass, "text-xs whitespace-nowrap")} title={sourcePoint}>
+        {sourcePoint}
+      </TableCell>
       <TableCell
         className={cn(groupHeaderCellClass, "text-xs whitespace-nowrap")}
-        title={group.hasNextStep ? nextStepLabel(common.nextOperationName, common.nextSectionName) : undefined}
+        title={group.hasNextStep ? nextPoint : undefined}
       >
         {group.hasNextStep ? (
-          nextStepLabel(common.nextOperationName, common.nextSectionName)
+          nextPoint
         ) : (
           <Badge variant="outline">Финальный</Badge>
         )}
@@ -974,7 +1000,24 @@ export function TransfersPage() {
   const readyItems = readyData?.items ?? [];
   const readyTotal = readyData?.total ?? 0;
 
-  const readyGroupItems = useMemo(() => groupReadyTransfers(readyItems), [readyItems]);
+  /** Участок → его ГХП. Справочник упорядочен сервером (`sort_order`, id). */
+  const spgBySectionId = useMemo(() => {
+    const bySection = new Map<number, ReadyTransferSpg>();
+    spgs?.forEach((spg, index) => {
+      const scope: ReadyTransferSpg = {
+        key: `spg:${spg.id}`,
+        name: spg.name,
+        sortOrder: index,
+        color: spg.icon_color,
+      };
+      for (const section of spg.sections) {
+        // Участок в нескольких ГХП — берём первое членство: порядок справочника
+        // стабилен, и блок не перескакивает между запросами.
+        if (!bySection.has(section.section_id)) bySection.set(section.section_id, scope);
+      }
+    });
+    return bySection;
+  }, [spgs]);
 
   // Свёрнутая группа и сортировка по колонке несовместимы: в шапке группы
   // печатается общий этап и СУММА «К передаче», а порядок групп — порядок
@@ -983,6 +1026,25 @@ export function TransfersPage() {
   // свёрнутыми. Как только оператор выбрал колонку, рисуем строки заданий
   // как есть: тогда порядок строк совпадает с тем, что напечатано в ячейке.
   const readySortingActive = readySortConfigs.length > 0;
+
+  // «Все ГХП»: строки разных ГХП перемешаны этапом маршрута, поэтому
+  // раскладываем их блоками по ГХП. При выбранной ГХП и при сортировке по
+  // колонке порядок задаёт сервер — раскладка не нужна.
+  const readySpgSections = useMemo(() => {
+    if (readySortingActive || !showAllSpgs || spgs === undefined) return null;
+    return groupReadyTransfersBySpg(
+      readyItems,
+      (task) => spgBySectionId.get(task.section_id) ?? null,
+    );
+  }, [readySortingActive, showAllSpgs, spgs, readyItems, spgBySectionId]);
+
+  const readyGroupItems = useMemo<ReadyTransferRowItem[]>(
+    () =>
+      readySpgSections
+        ? readySpgSections.flatMap((section) => section.items)
+        : groupReadyTransfers(readyItems),
+    [readySpgSections, readyItems],
+  );
 
   // Строки таблицы «Готово к передаче» = свёрнутые группы (только заголовки) +
   // дети раскрытых + одиночные строки. В чекбокс-режиме группы раскрыты
@@ -1000,25 +1062,53 @@ export function TransfersPage() {
       }));
     }
     const rows: ReadyTableRow[] = [];
-    for (const item of readyGroupItems) {
-      if (item.kind === "single") {
-        rows.push({ kind: "task", task: item.row, groupKey: null, isLastInGroup: false });
-        continue;
-      }
-      rows.push({ kind: "group", group: item });
-      if (bulkMode || expandedGroupKeys.has(item.key)) {
-        item.rows.forEach((task, index) => {
-          rows.push({
-            kind: "task",
-            task,
-            groupKey: item.key,
-            isLastInGroup: index === item.rows.length - 1,
+    const pushItems = (items: ReadyTransferRowItem[]) => {
+      for (const item of items) {
+        if (item.kind === "single") {
+          rows.push({ kind: "task", task: item.row, groupKey: null, isLastInGroup: false });
+          continue;
+        }
+        rows.push({ kind: "group", group: item });
+        if (bulkMode || expandedGroupKeys.has(item.key)) {
+          item.rows.forEach((task, index) => {
+            rows.push({
+              kind: "task",
+              task,
+              groupKey: item.key,
+              isLastInGroup: index === item.rows.length - 1,
+            });
           });
-        });
+        }
       }
+    };
+
+    // Шапка ГХП нужна только смешанному списку: у единственной группы она
+    // повторяла бы выбор селектора и занимала строку без пользы.
+    if (readySpgSections && readySpgSections.length > 1) {
+      for (const section of readySpgSections) {
+        rows.push({
+          kind: "spg",
+          key: section.spg.key,
+          name: section.spg.name,
+          // Справочный цвет важнее палитры: «Анодирование» светло-голубое и
+          // должно остаться таким. Запасной цвет выбирается по позиции в
+          // справочнике, а не в выборке, — иначе одна и та же ГХП красилась бы
+          // по-разному на соседних страницах.
+          color:
+            section.spg.color ??
+            (Number.isFinite(section.spg.sortOrder)
+              ? SPG_HEADER_FALLBACK_COLORS[
+                  section.spg.sortOrder % SPG_HEADER_FALLBACK_COLORS.length
+                ]
+              : SPG_HEADER_UNKNOWN_COLOR),
+        });
+        pushItems(section.items);
+      }
+    } else {
+      pushItems(readyGroupItems);
     }
     return rows;
-  }, [bulkMode, readyGroupItems, readyItems, expandedGroupKeys, readySortingActive]);
+  }, [bulkMode, readyGroupItems, readyItems, expandedGroupKeys, readySortingActive, readySpgSections]);
 
   const historyItems = historyData?.transfers ?? [];
   const historyTotal = historyData?.total ?? 0;
@@ -1516,7 +1606,27 @@ export function TransfersPage() {
                   colSpan={8}
                   scrollContainerRef={readyScrollRef}
                   renderRow={(row) =>
-                    row.kind === "group" ? (
+                    row.kind === "spg" ? (
+                      <TableRow
+                        key={row.key}
+                        data-row-kind="ready-spg"
+                        style={{
+                          height: TRANSFERS_ROW.rowHeightPx,
+                          // Тот же цвет, что у ГХП в справочнике: подложка —
+                          // его светлый тон (alpha `1F`), рельс — сам цвет.
+                          backgroundColor: `${row.color}1F`,
+                        }}
+                        className="font-semibold"
+                      >
+                        <TableCell
+                          colSpan={readyColumns.length + 2}
+                          style={{ borderLeft: `4px solid ${row.color}` }}
+                          className={cn(TRANSFERS_ROW.cell, "text-xs")}
+                        >
+                          {row.name}
+                        </TableCell>
+                      </TableRow>
+                    ) : row.kind === "group" ? (
                       <ReadyTransferGroupRow
                         key={row.group.key}
                         group={row.group}

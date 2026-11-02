@@ -224,7 +224,7 @@ async function clickReadySort(field: string) {
 function renderedReadyRows(): Array<{ id: string; qty: string }> {
   return [...document.querySelectorAll('tbody tr[data-row-kind="ready-task"]')].map((row) => {
     const cells = row.querySelectorAll("td");
-    const qtyText = cells[4]?.textContent ?? "";
+    const qtyText = cells[3]?.textContent ?? "";
     return {
       id: (cells[0]?.textContent ?? "").trim(),
       qty: qtyText.split("шт.")[0]?.trim() ?? "",
@@ -235,7 +235,7 @@ function renderedReadyRows(): Array<{ id: string; qty: string }> {
 /** Значения «К передаче» ready-таблицы в порядке строк (группы и одиночные). */
 function renderedReadyQtyOrder(): string[] {
   return [...document.querySelectorAll("tbody tr[data-row-kind]")].map(
-    (row) => (row.querySelectorAll("td")[4]?.textContent ?? "").split("шт.")[0]?.trim() ?? "",
+    (row) => (row.querySelectorAll("td")[3]?.textContent ?? "").split("шт.")[0]?.trim() ?? "",
   );
 }
 
@@ -305,13 +305,23 @@ describe("TransfersPage: сортировка таблицы «Готово к �
     expect(renderedReadyQtyOrder()).toEqual(["150"]);
   });
 
-  it("сортировка по «Этап» упорядочивает строки заданий", async () => {
+  it("сортировка по «Откуда» упорядочивает строки заданий", async () => {
     vi.mocked(listReadyToTransfer).mockImplementation(async (params = {}) => {
       const items = serverSort(
         [
-          makeTask({ task_id: 1, plan_position_id: 7, operation_name: "Анодирование" }),
-          makeTask({ task_id: 2, plan_position_id: 3, operation_name: "Дробеструй" }),
-          makeTask({ task_id: 3, plan_position_id: 5, operation_name: "Пила" }),
+          makeTask({
+            task_id: 1,
+            plan_position_id: 7,
+            section_name: "Анодирование",
+            operation_name: "Анодирование",
+          }),
+          makeTask({
+            task_id: 2,
+            plan_position_id: 3,
+            section_name: "Дробеструй",
+            operation_name: "Дробеструй",
+          }),
+          makeTask({ task_id: 3, plan_position_id: 5, section_name: "Пила", operation_name: "Пила" }),
         ],
         params,
       );
@@ -331,7 +341,7 @@ describe("TransfersPage: сортировка таблицы «Готово к �
 
     await waitForReadyTaskRows(3);
     const stageColumn = [...document.querySelectorAll('tbody tr[data-row-kind="ready-task"]')].map(
-      (row) => (row.querySelectorAll("td")[3]?.textContent ?? "").split("#")[0]?.trim() ?? "",
+      (row) => (row.querySelectorAll("td")[4]?.textContent ?? "").split("#")[0]?.trim() ?? "",
     );
     expect(stageColumn).toEqual(["Пила", "Дробеструй", "Анодирование"]);
   });

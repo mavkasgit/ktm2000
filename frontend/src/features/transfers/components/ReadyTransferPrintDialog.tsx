@@ -30,7 +30,7 @@ import { fmtQty } from "@/shared/lib/quantityFormat";
 import { cn } from "@/shared/utils/cn";
 
 import { getReadyCellValue, readyColumns, type ReadyColumn } from "../lib/transferColumns";
-import { nextStepLabel, readyRowIdentity } from "../lib/groupReadyTransfers";
+import { readyRowIdentity, stagePointLabel } from "../lib/groupReadyTransfers";
 
 /**
  * Колонки листа: на бумаге ID строки не нужен — оператор ищет по артикулу,
@@ -39,16 +39,18 @@ import { nextStepLabel, readyRowIdentity } from "../lib/groupReadyTransfers";
 const printColumns: ReadyColumn[] = readyColumns.filter((column) => column.id !== "positionId");
 
 /**
- * Значение ячейки листа. Отличие от экрана одно: у колонки «Следующий» на экране
- * печатается адресат одним словом (`nextStepLabel`), а в общем правиле ячейки
- * операция и участок стоят рядом — эта форма нужна фильтру колонки
- * (`splitNext` разбирает «операция / участок»). На бумаге лишний кусок подписи
- * только шумит, поэтому лист берёт ту же короткую подпись, что и экран.
+ * Значение ячейки листа. «Откуда» и «Куда» печатаются теми же пунктами, что и
+ * на экране (`stagePointLabel`). Общее правило ячейки для них другое: форма
+ * «операция / участок» нужна фильтру колонки (`splitNext`), а на бумаге она
+ * стояла бы рядом с уже показанным пунктом.
  */
 function printCellValue(row: ReadyToTransferTask, column: ReadyColumn): string {
+  if (column.id === "stage") {
+    return stagePointLabel(row.section_name, row.operation_name);
+  }
   if (column.id === "next") {
     return row.has_next_step
-      ? nextStepLabel(row.next_operation_name, row.next_section_name)
+      ? stagePointLabel(row.next_section_name, row.next_operation_name)
       : "Финальный";
   }
   return column.sortField ? getReadyCellValue(row, column.sortField) : "—";

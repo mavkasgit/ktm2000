@@ -33,6 +33,7 @@ import { clusterByArticle } from "@/shared/lib/clusterByArticle";
 export type ReadyTransferGroupCommon = {
   /** Подпись размера, общая для группы; `null` — строки группы не совпали (в UI «—»). */
   dimensionsLabel: string | null;
+  sectionName: string | null;
   operationName: string | null;
   nextOperationName: string | null;
   nextSectionName: string | null;
@@ -65,17 +66,51 @@ export type ReadyTransferSingle = {
 
 export type ReadyTransferRowItem = ReadyTransferGroup | ReadyTransferSingle;
 
+/** Группа хранения и производства, к которой относится участок готовой строки. */
+export type ReadyTransferSpg = {
+  /** Стабильный ключ блока — он же React-ключ шапки ГХП. */
+  key: string;
+  /** Название ГХП для шапки блока. */
+  name: string;
+  /** Порядок блока в списке — порядок ГХП в справочнике. */
+  sortOrder: number;
+  /** Цвет ГХП из справочника (`icon_color`); `null` — цвета нет. */
+  color: string | null;
+};
+
+/** Блок списка «Готово к передаче»: ГХП и разложенные по нему строки. */
+export type ReadyTransferSpgSection = {
+  spg: ReadyTransferSpg;
+  items: ReadyTransferRowItem[];
+};
+
+/** Участок без ГХП: такие строки идут отдельным блоком в конце списка. */
+const UNKNOWN_SPG: ReadyTransferSpg = {
+  key: "spg:none",
+  name: "Без ГХП",
+  sortOrder: Number.POSITIVE_INFINITY,
+  color: null,
+};
+
 /**
- * Подпись адресата передачи для колонки «Следующий» — одна строка по-русски.
+ * Пункт этапа — участок и операция одной строкой: «Пила · Окно».
  *
- * Код участка (`FINISHED_STOCK`) и номер этапа маршрута в таблице не печатаются:
- * оператору нужен адрес, а не идентификатор. Операция приоритетнее названия
- * участка, потому что в маршрутах она уже уточняет адрес («Хранение: Склад
- * готовой продукции»), но у складских этапов операций нет — там остаётся
- * название участка.
+ * Оператору нужен физический адрес: откуда забрать материал и куда его нести,
+ * поэтому участок первичен, а операция — уточнение. Коды (`FINISHED_STOCK`) и
+ * номера этапов маршрута в таблицу не попадают: это идентификаторы, а не адрес.
+ *
+ * Операция не повторяет участок: «Хранение: Склад готовой продукции» уже
+ * содержит пункт назначения и печатается одна; совпадающие названия тоже не
+ * удваиваются. У складских этапов операций нет — остаётся название участка.
  */
-export function nextStepLabel(operationName: string | null, sectionName: string | null): string {
-  return operationName || sectionName || "—";
+export function stagePointLabel(sectionName: string | null, operationName: string | null): string {
+  const section = sectionName?.trim() || "";
+  const operation = operationName?.trim() || "";
+  if (!section && !operation) return "—";
+  if (!section) return operation;
+  if (!operation || operation === section) return section;
+  if (operation.toLowerCase().includes(section.toLowerCase())) return operation;
+  return `${section} · ${operation}`;
 }
 
 /** Строка в ready-списке = финальный выпуск, а не передача на следующий этап. */
@@ -176,6 +211,7 @@ export function groupReadyTransfers(items: ReadyToTransferTask[]): ReadyTransfer
       hasNextStep: rows[0].has_next_step,
       common: {
         dimensionsLabel: sameValue(rows, (row) => formatDimensionsLabel(row.dimensions, row.dimensions_label)),
+        sectionName: sameValue(rows, (row) => row.section_name),
         operationName: sameValue(rows, (row) => row.operation_name),
         nextOperationName: sameValue(rows, (row) => row.next_operation_name),
         nextSectionName: sameValue(rows, (row) => row.next_section_name),
@@ -190,6 +226,40 @@ export function groupReadyTransfers(items: ReadyToTransferTask[]): ReadyTransfer
         ? block.totalTransferable
         : parseFloat(block.row.transferable_quantity) || 0,
   });
+}
+
+/**
+ * Раскладка ready-списка по ГХП: строки одного ГХП идут подряд, внутри ГХП
+ * сохраняется обычная группировка (`groupReadyTransfers`).
+ *
+ * Нужна режиму «Все ГХП»: сервер сортирует ready по `sequence` маршрута, и
+ * строки разных ГХП перемешиваются — одинаковые этапы стоят рядом, хотя
+ * относятся к разным группам. Артикульный порядок внутри ГХП остаётся:
+ * одинаковые артикулы по-прежнему читаются одним куском, но не перетягивают
+ * строки через границу ГХП.
+ *
+ * Участок без ГХП получает отдельный блок «Без ГХП» и уходит в конец, чтобы
+ * не вклиниваться между известными группами.
+ */
+export function groupReadyTransfersBySpg(
+  items: ReadyToTransferTask[],
+  spgOf: (task: ReadyToTransferTask) => ReadyTransferSpg | null,
+): ReadyTransferSpgSection[] {
+  const buckets = new Map<string, { spg: ReadyTransferSpg; rows: ReadyToTransferTask[] }>();
+
+  for (const task of items) {
+    const spg = spgOf(task) ?? UNKNOWN_SPG;
+    const bucket = buckets.get(spg.key);
+    if (bucket) {
+      bucket.rows.push(task);
+    } else {
+      buckets.set(spg.key, { spg, rows: [task] });
+    }
+  }
+
+  return [...buckets.values()]
+    .sort((a, b) => a.spg.sortOrder - b.spg.sortOrder)
+    .map(({ spg, rows }) => ({ spg, items: groupReadyTransfers(rows) }));
 }
 
 /** Артикул блока: у группы он свой, у одиночной строки — из задания. */

@@ -2,8 +2,9 @@
  * Лист печати «Готово к передаче»: что печатается и в каком виде.
  *
  * Экран и бумага расходятся осознанно: на листе нет колонки ID строки (оператор
- * ищет по артикулу, размеру и адресату), а код участка латиницей («/ WIP_STOCK»)
- * заменён названием — то же, что читает оператор в колонке «Следующий».
+ * ищет по артикулу, размеру и адресату), а коды участков латиницей («WIP_STOCK»)
+ * заменены названиями пунктов — то же, что читает оператор в колонках «Откуда»
+ * и «Куда».
  */
 
 import { render, screen, within } from "@testing-library/react";
@@ -57,11 +58,12 @@ function renderSheet(rows: ReadyToTransferTask[]) {
 }
 
 describe("ReadyTransferPrintDialog", () => {
-  it("печатает адресата названием, без кода участка", () => {
+  it("печатает пункты «откуда» и «куда» названиями, без кодов участков", () => {
     const { bodyRows } = renderSheet([makeTask()]);
 
     const cells = within(bodyRows[0]).getAllByRole("cell").map((cell) => cell.textContent?.trim());
-    expect(cells).toContain("Дробеструй");
+    expect(cells).toContain("Пила · Окно");
+    expect(cells).toContain("Склад незавершённого производства · Дробеструй");
     expect(cells.join(" | ")).not.toContain("WIP_STOCK");
   });
 

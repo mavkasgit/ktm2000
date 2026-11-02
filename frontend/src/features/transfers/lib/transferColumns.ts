@@ -122,14 +122,6 @@ export const readyColumns: ReadyColumn[] = [
     valueLabel: formatDimensionsFilterValue,
   },
   {
-    id: "stage",
-    label: "Этап",
-    filterField: "stage",
-    sortField: "stage",
-    apiParam: "operation_name",
-    mapValue: dropDash,
-  },
-  {
     id: "transferableQty",
     label: "К передаче",
     filterField: "transferableQty",
@@ -137,7 +129,15 @@ export const readyColumns: ReadyColumn[] = [
     apiParam: "transferable_qty",
     valueLabel: (value) => `${value} шт.`,
   },
-  { id: "next", label: "Следующий", filterField: "next", sortField: "next", toParams: splitNext },
+  {
+    id: "stage",
+    label: "Откуда",
+    filterField: "stage",
+    sortField: "stage",
+    apiParam: "operation_name",
+    mapValue: dropDash,
+  },
+  { id: "next", label: "Куда", filterField: "next", sortField: "next", toParams: splitNext },
 ];
 
 /**
