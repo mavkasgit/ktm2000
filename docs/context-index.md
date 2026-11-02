@@ -15,7 +15,7 @@
 | [`auth-oidc.md`](auth-oidc.md) | **Auth / OIDC** | Authentik bridge, link order, dual-run, logout, env |
 | [`GETTING_STARTED.md`](GETTING_STARTED.md) | Установка | Развёртывание с нуля, seed, troubleshooting |
 | [`testing-guide.md`](testing-guide.md) | Тестирование | Маршрутизатор → AGENTS.md в backend/frontend |
-| [`deployment.md`](deployment.md) | Деплой | Production, .env-файлы, бэкапы |
+| [`deployment.md`](deployment.md) | Деплой | Production, .env-файлы, бэкапы, хранение файлов и уборка сирот `imports/` (#288) |
 | [`agent-registry.md`](agent-registry.md) | ИИ-агенты | Порты и MCP-матрица скаутов |
 | [`bulk-operations-core-v1.md`](bulk-operations-core-v1.md) | Пакетные операции | Bulk approve/delete |
 | [`excel-import-10-unique-scenarios.md`](excel-import-10-unique-scenarios.md) | Импорт Excel | Сценарии и валидация |

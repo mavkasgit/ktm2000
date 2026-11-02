@@ -16,6 +16,7 @@ npm run db:migrate             # Применить миграции
 npm run db:seed                # Справочники (участки, маршруты, шаблоны импорта)
 npm run db:seed:packing-demo   # Демо-доска «Участков»: два набора планов (упаковочный + «План подготовительного участка») на шести участках, парные артикулы, их непарный вариант и незакрытые позиции + дневные планы
 npm run db:snapshot -- dump <label> / restore <name>   # Слепок dev-БД в data/backups/snapshots
+npm run imports:sweep        # Ручная уборка сирот в imports/ (файлы без строки import_files старше порога 24ч; фоновый планировщик выключен на e2e — .env.e2e)
 npm run test:pytest            # Тесты backend (параллельно, дефолт; slow пропускаются)
 npm run test:pytest:full       # Полный прогон в один поток
 npm run test:pytest:mon        # Только изменённые тесты
