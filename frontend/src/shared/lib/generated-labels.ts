@@ -65,6 +65,7 @@ export const warningLabels: Record<string, string> = {
   "route_auto_fallback": "Маршрут скорректирован автоматически — проверьте корректность",
   "row_selection_applied": "Применён фильтр строк",
   "row_selection_auto_included": "Автодобавлены парные строки",
+  "sku_matched_by_part": "Артикул сопоставлен по части составного артикула — проверьте привязку",
 }
 
 // Лейблы статуса валидации позиции

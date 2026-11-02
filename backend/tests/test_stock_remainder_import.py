@@ -461,6 +461,163 @@ async def test_exact_sku_has_no_partial_match_warning(
     assert item["errors"] == []
 
 
+# ─── Tests: составной артикул «A/B» (#347, ADR-0067) ───────────────────────────
+
+
+async def _preview_single_sku(client: AsyncClient, sku_cell: str) -> dict:
+    """Предпросмотр листа остатков из одной строки с данным артикулом."""
+    items = await _preview_rows(client, _make_excel([(sku_cell, 5, None)]), {})
+    return items[0]
+
+
+async def test_compound_sku_binds_first_part(
+    client: AsyncClient,
+    session: AsyncSession,
+) -> None:
+    """Обе части в справочнике → привязка к ПЕРВОЙ, порядок ячейки не спорит с длиной SKU."""
+    first = await _make_product(session, "ЮП-3658")
+    second = await _make_product(session, "ЮП-1875")
+    await session.commit()
+
+    item = await _preview_single_sku(client, "ЮП-3658/1875")
+
+    assert item["status"] == "valid"
+    assert item["product_id"] == first.id
+    assert item["product_id"] != second.id
+    assert item["matched_sku"] == "ЮП-3658"
+    assert any("по части" in warning for warning in item["warnings"])
+    assert item["errors"] == []
+
+
+async def test_compound_sku_second_part_binds_by_tail(
+    client: AsyncClient,
+    session: AsyncSession,
+) -> None:
+    """Первой части в справочнике нет → вторая, найденная голым хвостом «1875».
+
+    Без хвостового правила эта связка была бы невозможна: «юп-1875» не является
+    подстрокой ячейки «ЮП-3658/1875», поэтому прежний поиск по вхождению её не
+    находил.
+    """
+    second = await _make_product(session, "ЮП-1875")
+    await _make_product(session, "ЮП-9999")
+    await session.commit()
+
+    item = await _preview_single_sku(client, "ЮП-3658/1875")
+
+    assert item["status"] == "valid"
+    assert item["product_id"] == second.id
+    assert item["matched_sku"] == "ЮП-1875"
+    assert any("по части" in warning for warning in item["warnings"])
+
+
+async def test_compound_sku_ambiguous_part_blocks_row(
+    client: AsyncClient,
+    session: AsyncSession,
+) -> None:
+    """Хвост «1875» подходит двум артикулам → строка блокируется, а не угадывается."""
+    await _make_product(session, "ЮП-1875")
+    await _make_product(session, "АТ-1875")
+    await session.commit()
+
+    item = await _preview_single_sku(client, "ЮП-3658/1875")
+
+    assert item["status"] == "invalid"
+    assert item["product_id"] is None
+    assert any("неоднозначен" in error for error in item["errors"])
+    assert item["warnings"] == []
+
+
+async def test_compound_sku_with_typographic_dash_binds(
+    client: AsyncClient,
+    session: AsyncSession,
+) -> None:
+    """Типографское тире в ячейке не ломает привязку по части."""
+    second = await _make_product(session, "ЮП-1875")
+    await session.commit()
+
+    item = await _preview_single_sku(client, "ЮП–3658/1875")
+
+    assert item["status"] == "valid"
+    assert item["product_id"] == second.id
+
+
+async def test_compound_sku_binds_catalog_sku_with_typographic_dash(
+    client: AsyncClient,
+    session: AsyncSession,
+) -> None:
+    """Типографское тире в артикуле СПРАВОЧНИКА: кандидат обязан приехать из базы.
+
+    Предфильтр SELECT сравнивает не «как написано», а так же, как Python: без
+    нормализации на стороне SQL «ЮП–1875» не подошёл бы ни под «= 1875», ни под
+    «%-1875», и строка потерялась бы ещё до каскада.
+    """
+    product = await _make_product(session, "ЮП\u20131875")
+    await session.commit()
+
+    item = await _preview_single_sku(client, "ЮП-3658/1875")
+
+    assert item["status"] == "valid"
+    assert item["product_id"] == product.id
+    assert item["matched_sku"] == "ЮП\u20131875"
+    assert any("по части" in warning for warning in item["warnings"])
+
+
+async def test_plain_sku_with_typographic_dash_matches_exactly(
+    client: AsyncClient,
+    session: AsyncSession,
+) -> None:
+    """«ЮП–1875» в ячейке без слэша: точное совпадение, а не «не найдено».
+
+    Каскад сравнивает нормализованные написания, но решение может принять только
+    над тем, что приехало из базы: `strpos` на разных тире даёт ноль, и без
+    условия по нормализованной ячейке артикул не стал бы кандидатом (#347).
+    """
+    product = await _make_product(session, "ЮП-1875")
+    await session.commit()
+
+    item = await _preview_single_sku(client, "ЮП\u20131875")
+
+    assert item["status"] == "valid"
+    assert item["product_id"] == product.id
+    assert item["matched_sku"] == "ЮП-1875"
+    assert item["warnings"] == []
+
+
+async def test_catalog_sku_with_slash_matches_exactly_before_parts(
+    client: AsyncClient,
+    session: AsyncSession,
+) -> None:
+    """Артикул со слэшем в справочнике — точное совпадение целой ячейки, частей не касаемся."""
+    compound = await _make_product(session, "ЮП-3658/1875")
+    await _make_product(session, "ЮП-3658")
+    await session.commit()
+
+    item = await _preview_single_sku(client, "ЮП-3658/1875")
+
+    assert item["status"] == "valid"
+    assert item["product_id"] == compound.id
+    assert item["matched_sku"] == "ЮП-3658/1875"
+    assert item["warnings"] == []
+    assert item["errors"] == []
+
+
+async def test_trailing_slash_is_not_a_compound_sku(
+    client: AsyncClient,
+    session: AsyncSession,
+) -> None:
+    """«ЮП-3658/» — одна часть: ложного «матча по части» и лишнего предупреждения нет."""
+    product = await _make_product(session, "ЮП-3658")
+    await session.commit()
+
+    item = await _preview_single_sku(client, "ЮП-3658/")
+
+    assert item["status"] == "valid"
+    assert item["product_id"] == product.id
+    assert any("частично" in warning for warning in item["warnings"])
+    assert not any("по части" in warning for warning in item["warnings"])
+
+
 # ─── Tests: Import ─────────────────────────────────────────────────────────────
 
 

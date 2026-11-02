@@ -74,6 +74,7 @@ from app.seeds.seeders.packing_plan_demo_seeder import (
     PREP_STAGE_PLAN_ROWS,
     UNPAIRED_PAIR_ROWS,
     _daily_plan_specs,
+    _fold_row_groups,
     _lifecycle_of,
     _plan_workbook,
     _prep_stage_workbook,
@@ -1010,16 +1011,38 @@ def test_fixture_cutting_rows_keep_output_not_longer_than_input() -> None:
     assert not impossible, f"выход длиннее входа: {impossible}"
 
 
-def test_fixture_cutting_rows_do_not_shrink_piece_count() -> None:
-    """Раскрой 2,7 → 0,9 даёт больше кусков, а не меньше: просадка количества на
-    режущей позиции обрушила бы выдачу следующей стадии."""
-    shrunk = [
-        (row["sku"], row["input_quantity"], row["output_quantity"])
-        for row in DEMO_PLAN_ROWS
-        if float(row["output_length_m"]) < float(row["input_length_m"])
-        and float(row["output_quantity"]) < float(row["input_quantity"])
-    ]
-    assert not shrunk, f"раскрой уменьшает количество: {shrunk}"
+def test_fixture_cutting_rows_match_whole_bar_yield() -> None:
+    """Целый прут режется на целое число деталей, а не на доли.
+
+    ``2,7 → 1,8`` даёт одну деталь и обрезок 0,9 м, поэтому из 600 заготовок
+    выходит 600 деталей, а не 900: 900 получилось делением метров, и на доске
+    такая строка рисует deficit, которого в физике нет. Одиночная режущая строка
+    обязана использовать прут целиком (``выход = вход × целых деталей из прута``);
+    группа распила на несколько длин — съесть метры без остатка.
+    """
+    for group in _fold_row_groups(DEMO_PLAN_ROWS):
+        head = group[0]
+        input_length = float(head["input_length_m"])
+        input_quantity = int(head["input_quantity"])
+        outputs = [
+            (float(row["output_length_m"]), int(row["output_quantity"])) for row in group
+        ]
+        if len(outputs) > 1:
+            produced = sum(length * quantity for length, quantity in outputs)
+            assert produced == input_length * input_quantity, (
+                f"{head['sku']}: группа распил {outputs} съедает {input_length * input_quantity} м"
+                f" заготовки, а даёт {produced} м"
+            )
+            continue
+        output_length, output_quantity = outputs[0]
+        if output_length == input_length:
+            continue
+        pieces_per_bar = int(input_length // output_length)
+        assert output_quantity == input_quantity * pieces_per_bar, (
+            f"{head['sku']}: {input_length} м × {input_quantity} режется на "
+            f"{pieces_per_bar} шт по {output_length} м — должно быть "
+            f"{input_quantity * pieces_per_bar}, в фикстуре {output_quantity}"
+        )
 
 
 # ─── 2. Сборка xlsx для импорта ─────────────────────────────────────────────
