@@ -12,6 +12,7 @@
     "gate:fast": "node scripts/gate.mjs --fast",
     "gate:e2e": "node scripts/gate.mjs --e2e",
     "check:registry": "node scripts/check-registry.mjs",
+    "doctor": "node scripts/doctor.mjs",
     "verify:sync": "node scripts/verify-sync.mjs --other ../hrms",
     "predev": "node scripts/verify-sync.mjs --other ../hrms --if-enabled && node scripts/ensure-dev-ports.js --kill && npm run db:up && npm run db:wait && npm run db:migrate",
     "prebuild": "node scripts/verify-sync.mjs --other ../hrms --if-enabled",
