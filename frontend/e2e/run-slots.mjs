@@ -12,8 +12,11 @@
  *
  * Здесь — машинный (не репозиторный) счётчик: каталог слотов живёт вне
  * репозитория, поэтому виден всем worktree. Свободный слот занимается
- * атомарно (`wx`), освобождается в `finally`; чужой слот подбирается, если
- * процесс-держатель умер или слот висит дольше `staleMs`.
+ * атомарно (`wx`), освобождается в `finally`; чужой слот подбирается, только
+ * если процесс-держатель умер. Возраст сам по себе слот не освобождает (#375):
+ * просроченный, но ЖИВОЙ держатель — это долгий прогон, а отняв слот у него,
+ * сосед начинает второй стенд на той же машине, и перестают читаться вердикты
+ * обоих. Такой держатель виден в логе ожидания как предупреждение.
  *
  * Каталог слотов: `%LOCALAPPDATA%\ktm2000-e2e\slots` (Windows) или
  * `$XDG_STATE_HOME/ktm2000-e2e/slots` (иначе). Переопределяется
@@ -30,6 +33,10 @@ import path from "node:path";
 
 export const DEFAULT_MAX_RUNS = 2;
 export const DEFAULT_WAIT_TIMEOUT_MS = 30 * 60_000;
+/**
+ * С какого возраста ЖИВОГО держателя считать его подозреваемым в зависании.
+ * Слот по этому порогу не освобождается (#375) — только называется в логе.
+ */
 export const DEFAULT_STALE_MS = 40 * 60_000;
 
 const POLL_MS = 3_000;
@@ -117,11 +124,11 @@ export function tryAcquireSlot(dir, max, payload, { alive = isProcessAlive, onRe
 /**
  * Отпускает слот **только если он всё ещё наш**.
  *
- * Слот бывает отобран у живого держателя по возрасту (`staleMs`), и новый
- * прогон занимает тот же файл. Прежний прогон в свой `finally` зовёт
- * `releaseSlot` для файла, который теперь чужой, — слот исчезает из-под
- * работающего соседа, и семафор перестаёт считать: следующий занимает его же
- * (доказано в `docs/night/tickets/R-04.md`). Поэтому сверяем pid держателя.
+ * Файл слота бывает чужим к моменту `finally`: мёртвого держателя снимают, и
+ * сосед занимает тот же индекс. Прежний прогон зовёт `releaseSlot` для файла,
+ * который ему уже не принадлежит, — слот исчез бы из-под работающего соседа, и
+ * семафор перестал бы считать (доказано в `docs/night/tickets/R-04.md`).
+ * Поэтому сверяем pid держателя.
  */
 export function releaseSlot(slot) {
   if (!slot?.file) return;
@@ -130,12 +137,19 @@ export function releaseSlot(slot) {
   fs.rmSync(slot.file, { force: true });
 }
 
-/** Кто держит слоты — для строки ожидания. */
-export function describeHolders(dir, max, { alive = isProcessAlive } = {}) {
+/** Кто держит слоты — для строки ожидания. `ageMs` — сколько висит этот слот. */
+export function describeHolders(dir, max, { alive = isProcessAlive, now = Date.now } = {}) {
   const holders = [];
   for (let index = 0; index < max; index += 1) {
     const holder = readHolder(slotFile(dir, index));
-    if (holder) holders.push({ index, holder, alive: alive(holder.pid) });
+    if (holder) {
+      holders.push({
+        index,
+        holder,
+        alive: alive(holder.pid),
+        ageMs: now() - (holder.at ?? now()),
+      });
+    }
   }
   return holders;
 }
@@ -149,7 +163,8 @@ export function describeHolders(dir, max, { alive = isProcessAlive } = {}) {
  *   значения по умолчанию `{}` и `payload` в него не попадает — вызывающий
  *   (`run-slots.test.ts`) падает на TS2353, хотя аргумент обязательный по смыслу.
  * @property {number} [waitTimeoutMs] сколько ждать свободный слот
- * @property {number} [staleMs] возраст слота, после которого он просрочен
+ * @property {number} [staleMs] возраст, с которого живой держатель называется в
+ *   логе как подозреваемый в зависании; слот по нему НЕ освобождается (#375)
  * @property {number} [pollMs] шаг опроса
  * @property {(line: string) => void} [log]
  * @property {(holder: Record<string, *>, info: {index: number, reason: string}) => void} [onReclaim]
@@ -177,42 +192,59 @@ export async function acquireSlot({
 } = {}) {
   const started = now();
   let announced = false;
+  let warned = false;
   for (;;) {
     for (let index = 0; index < max; index += 1) {
       const file = slotFile(dir, index);
       const holder = readHolder(file);
-      const age = holder ? now() - (holder.at ?? 0) : 0;
-      if (holder && !alive(holder.pid)) {
+      if (!holder) continue;
+      if (!alive(holder.pid)) {
         log(
           `[e2e:run] слот ${index}: держатель (pid ${holder.pid ?? "?"}) мёртв — снимаю`,
         );
-        // Мёртвый держатель — единственный повод отдать его вызывающему:
+        // Мёртвый держатель — единственный повод отдать его слот вызывающему:
         // его прогон не убрал за собой клоны (#306).
         onReclaim?.(holder, { index, reason: "держатель мёртв" });
         fs.rmSync(file, { force: true });
-      } else if (holder && age > staleMs) {
-        // Просроченный, но ЖИВОЙ держатель: слот отнимаем, а чужие клоны не
-        // трогаем — прогон идёт, и его данные ещё могут понадобиться.
+        continue;
+      }
+      const age = now() - (holder.at ?? now());
+      if (age > staleMs && !warned) {
+        // Держатель жив: слот НЕ отнимаем. Возраст — не право отбора, а вопрос
+        // человеку: долгий прогон и зависший выглядят одинаково, пока не назван
+        // возраст.
+        warned = true;
         log(
-          `[e2e:run] слот ${index}: держатель (pid ${holder.pid ?? "?"}, ` +
-            `${Math.round(age / 60_000)} мин) просрочен, но жив — снимаю без уборки`,
+          `[e2e:run] слот ${index}: держатель жив (pid ${holder.pid ?? "?"}, ` +
+            `${Math.round(age / 60_000)} мин, репозиторий ${holder.repo ?? "?"}) — ` +
+            `слот не отнимаю; порог подозрения ${Math.round(staleMs / 60_000)} мин`,
         );
-        fs.rmSync(file, { force: true });
       }
     }
     const slot = tryAcquireSlot(dir, max, payload, { alive, onReclaim });
     if (slot) return slot;
     if (!announced) {
-      const busy = describeHolders(dir, max, { alive })
-        .map(({ index, holder }) => `слот ${index}: ${holder.repo ?? "?"} (pid ${holder.pid ?? "?"})`)
+      const busy = describeHolders(dir, max, { alive, now })
+        .map(
+          ({ index, holder, ageMs }) =>
+            `слот ${index}: ${holder.repo ?? "?"} (pid ${holder.pid ?? "?"}, ${formatDuration(ageMs)})`,
+        )
         .join(", ");
       log(`[e2e:run] жду слот: занято ${max}/${max} — ${busy}`);
       announced = true;
     }
     if (now() - started > waitTimeoutMs) {
+      const held = describeHolders(dir, max, { alive, now })
+        .map(
+          ({ index, holder, ageMs, alive: isAlive }) =>
+            `слот ${index}: ${holder.repo ?? "?"} (pid ${holder.pid ?? "?"}, ` +
+            `${isAlive ? "жив" : "мёртв"}, ${formatDuration(ageMs)})`,
+        )
+        .join("; ");
       throw new Error(
         `[e2e:run] не дождался слота семафора за ${formatDuration(waitTimeoutMs)} ` +
-          `(E2E_MAX_PARALLEL_RUNS=${max}); держат: ${JSON.stringify(describeHolders(dir, max, { alive }))}`,
+          `(E2E_MAX_PARALLEL_RUNS=${max}); держат: ${held}. ` +
+          "Живой держатель слота не уступает по возрасту — если прогон завис, решать надо по pid",
       );
     }
     await new Promise((resolve) => setTimeout(resolve, pollMs));
