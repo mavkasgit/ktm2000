@@ -1,0 +1,36 @@
+{
+  "measuredAt": "2026-11-03",
+  "command": "node scripts/lint-ratchet.mjs --update",
+  "eslintVersion": "9.39.5",
+  "total": 47,
+  "byRule": {
+    "react-hooks/exhaustive-deps": 47
+  },
+  "byFile": {
+    "src/entities/stock/components/StockTransactionsHistoryDrawer.tsx": 1,
+    "src/features/admin/components/HrmsEmployeesTable.tsx": 1,
+    "src/features/execution/components/ExecutionTable.tsx": 1,
+    "src/features/execution/pages/ExecutionPage.tsx": 8,
+    "src/features/planning/components/PlanFileRow.tsx": 1,
+    "src/features/planning/components/PlanPositionRow.tsx": 2,
+    "src/features/planning/pages/PlanPage.tsx": 1,
+    "src/features/references/components/CatalogForm.tsx": 4,
+    "src/features/references/components/ProductDimensionsSection.tsx": 1,
+    "src/features/references/components/RouteFlowBuilder.tsx": 1,
+    "src/features/references/pages/ImportTemplatesPage.tsx": 1,
+    "src/features/reversal/pages/ActionsJournalPage.tsx": 1,
+    "src/features/sections/components/PlanModal.tsx": 2,
+    "src/features/sections/components/SectionTasksBoard.tsx": 1,
+    "src/features/sections/pages/AuditLogsPage.tsx": 2,
+    "src/features/sections/pages/SectionsTasksPage.tsx": 1,
+    "src/features/settings/SettingsBackupsPage.tsx": 1,
+    "src/features/spg/components/ImportRemaindersDialog.tsx": 2,
+    "src/features/transfers/components/ReadyTransferPrintDialog.tsx": 1,
+    "src/features/transfers/pages/TransfersPage.tsx": 8,
+    "src/modules/user-settings/components/AvatarPickerDialog.tsx": 1,
+    "src/shared/hooks/useFilterableTable.ts": 1,
+    "src/shared/hooks/useTableQueryEngine.ts": 1,
+    "src/shared/ui/EntityDialog.tsx": 1,
+    "src/shared/ui/StockBalancesPanel.tsx": 2
+  }
+}

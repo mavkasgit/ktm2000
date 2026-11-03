@@ -25,6 +25,8 @@
     "dev": "concurrently --names \"DB,BACKEND,FRONTEND\" -c \"blue,green,yellow\" \"npm run db:logs\" \"npm run backend\" \"npm run frontend\"",
     "frontend": "npm --prefix frontend run dev",
     "lint": "npm --prefix frontend run lint",
+    "lint:ratchet": "npm --prefix frontend run lint:ratchet",
+    "lint:strict": "npm --prefix frontend run lint:strict",
     "backend": "cd backend && python scripts/dev_server.py",
     "dev:ports": "node scripts/ensure-dev-ports.js --check",
     "ports:check": "node ../_ports/check-ports.mjs",

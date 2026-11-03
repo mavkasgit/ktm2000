@@ -301,6 +301,8 @@ React 18.3 + TypeScript + Vite + Tailwind CSS + shadcn/ui + TanStack Query/Virtu
 npm --prefix frontend run dev       # :5172
 npm --prefix frontend run build
 npm --prefix frontend run lint      # ESLint (в т.ч. архитектурные границы FSD)
+npm --prefix frontend run lint:ratchet  # ESLint + потолок предупреждений (то, что зовёт гейт, #372)
+npm --prefix frontend run lint:strict   # eslint . --max-warnings=0 (цель, пока красный: 47 предупреждений)
 npm --prefix frontend run test      # Vitest unit-тесты
 npm --prefix frontend run test:e2e  # Playwright E2E
 ```
