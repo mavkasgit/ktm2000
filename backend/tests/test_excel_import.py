@@ -2175,6 +2175,61 @@ async def test_preview_compound_sku_prefers_first_part(client, session, tmp_path
 
 
 @pytest.mark.asyncio
+async def test_preview_compound_sku_alias_duplicates_use_meaningful_product(
+    client, session, tmp_path, monkeypatch
+) -> None:
+    """Части — взаимные алиасы: берётся содержательный дубль, а не голый SKU.
+
+    «ЮП-3485/АТ-4893» — не комплект: в справочнике это один и тот же артикул,
+    задвоенный двумя карточками. Импорт обязан выбрать карточку с настоящим
+    наименованием и предупредить, что целой ячейки не было.
+    """
+    monkeypatch.setattr(settings, "IMPORT_STORAGE_DIR", str(tmp_path))
+
+    generic, meaningful = await _seed_products(session, "ЮП-3485", "АТ-4893")
+    generic.name = "ЮП-3485"
+    generic.aliases = ["АТ-4893"]
+    meaningful.name = "РП-АКП-11,12"
+    meaningful.aliases = ["ЮП-3485"]
+    await session.flush()
+
+    items = await _preview_compound_rows(
+        client, session, code="compound-alias-duplicates", cells=["ЮП-3485/АТ-4893"]
+    )
+
+    item = items[0]
+    assert item["after_data"]["product_id"] == meaningful.id
+    assert "sku_matched_by_alias:АТ-4893" in item["warnings"]
+    assert "product_not_found" not in item["errors"]
+    assert "product_inactive" not in item["errors"]
+
+
+@pytest.mark.asyncio
+async def test_preview_compound_sku_alias_duplicate_skips_inactive_stub(
+    client, session, tmp_path, monkeypatch
+) -> None:
+    """Неактивный дубль с точным SKU не перебивает активный алиас."""
+    monkeypatch.setattr(settings, "IMPORT_STORAGE_DIR", str(tmp_path))
+
+    stub, canonical = await _seed_products(session, "ЮП-3658", "ЮП-1875")
+    stub.name = "ЮП-3658"
+    stub.is_active = False
+    canonical.name = "Плинтус 60 мм"
+    canonical.aliases = ["ЮП-3658"]
+    await session.flush()
+
+    items = await _preview_compound_rows(
+        client, session, code="compound-alias-stub", cells=["ЮП-3658/1875"]
+    )
+
+    item = items[0]
+    assert item["after_data"]["product_id"] == canonical.id
+    assert "sku_matched_by_alias:ЮП-1875" in item["warnings"]
+    assert "product_inactive" not in item["errors"]
+    assert "product_not_found" not in item["errors"]
+
+
+@pytest.mark.asyncio
 async def test_preview_compound_sku_ambiguous_part_is_not_bound(
     client, session, tmp_path, monkeypatch
 ) -> None:
