@@ -6,7 +6,7 @@ from typing import Any, Literal, NamedTuple
 
 from fastapi import APIRouter, Depends, HTTPException, Query, status
 from fastapi.responses import JSONResponse
-from pydantic import BaseModel, ConfigDict
+from pydantic import BaseModel, ConfigDict, Field
 from sqlalchemy import String, cast, or_, select, text
 from sqlalchemy import func as sa_func
 from sqlalchemy.exc import DBAPIError
@@ -1374,6 +1374,8 @@ class PlanPositionOut(BaseModel):
     free_stock_quantity: float | None = None
     available_remainder_quantity: float | None = None
     deficit_quantity: float | None = None
+    # Расшифровка группы эквивалентов по SKU (#394).
+    free_stock_breakdown: list[dict] = Field(default_factory=list)
     # Авторасчёт «количество на подвес» (#66): расчёт на лету по длине позиции.
     quantity_per_hanger: int | None = None
     quantity_per_hanger_source: str | None = None  # "auto" | "manual" | null

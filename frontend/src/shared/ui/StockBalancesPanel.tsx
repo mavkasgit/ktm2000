@@ -1,13 +1,18 @@
-import { useCallback, useEffect, useMemo, useState } from "react";
+import { useCallback, useMemo, useState } from "react";
 import { useQuery } from "@tanstack/react-query";
 
 import {
   formatQualityStateLabel,
   formatDimensionsLabel,
   formatCompletedOperationsLabel,
+  formatBalanceGroupLabel,
   getStockBalances,
 } from "@/shared/api/stock";
-import type { StockBalanceEntry, StockBalancesListResponse } from "@/shared/api/stock";
+import type {
+  StockBalanceEntry,
+  StockBalanceItem,
+  StockBalancesListResponse,
+} from "@/shared/api/stock";
 import { isFirstRowsLoad, keepPreviousDataForScope } from "@/shared/lib/tableQueryPlaceholder";
 import { queryKeys } from "@/shared/api/queryKeys";
 import { DataTableColumnHeader } from "./DataTableColumnHeader";
@@ -27,191 +32,70 @@ import { RouteStepsDisplay } from "./RouteStepsDisplay";
 import { buildBalanceSortParam, DEFAULT_BALANCE_SORT, type BalanceSortField } from "@/shared/lib/stockSortParams";
 import { stockBalanceColumns } from "@/shared/lib/stockBalanceColumns";
 import { useDebouncedValue } from "@/shared/lib/useDebouncedValue";
-import { fmtQty, toQtyInteger } from "@/shared/lib/quantityFormat";
+import { fmtQty } from "@/shared/lib/quantityFormat";
 import { Badge } from "./badge";
 import { ChevronDown, ChevronRight } from "lucide-react";
 
 /**
- * Ключ группы остатков — артикул. Остатки одного артикула приходят несколькими
- * строками (участок, качество, размеры, операции), и оператору нужен один
- * артикул с итогом, а не список строк, где артикул повторяется.
- */
-function balanceArticleKey(balance: StockBalanceEntry): string {
-  return balance.product_sku || `#${balance.product_id}`;
-}
-
-/**
- * Подписи операций строки — те же, что в её пилюлях (`RouteStepsDisplay`): имена
- * операций этапов, а без этапов — подпись строки (прочерк для обоих пустых
- * состояний). Сводка группы обязана читаться так же, как раскрытые строки,
- * иначе итог и дети говорят на разных языках.
- */
-function balanceOperationLabels(balance: StockBalanceEntry): string[] {
-  if (balance.completed_stages && balance.completed_stages.length > 0) {
-    return balance.completed_stages.map((step) => step.operation_name || step.section_name);
-  }
-  return [formatCompletedOperationsLabel(balance.completed_operations, balance.completed_stages)];
-}
-
-/**
- * Операции группы — объединение операций её строк без повторов: «Дробеструй ·
- * Серебро · Стрейч». Пустым итог быть не может, пока в группе есть строки.
+ * Строки одной кучи. Сервер уже сгруппировал эквивалентные артикулы по осям
+ * `(участок, качество, размер, операции)` и отдал раскрытие в `items[]`;
+ * клиент не строит групп и не складывает количества — иначе сумма «одной
+ * кучи» разошлась бы с пагинацией и сортировкой, которые считает сервер.
  *
- * Прочерк пустой строки участвует только пока он один: «Дробеструй · —» ничего
- * не говорит про дробеструй, а пустоту и так видно по остальным строкам. Есть
- * другие подписи — прочерк уходит, есть только он — остаётся один.
+ * `items` нет только у ответа SKU-уровня (`by-product`): там куча — одна
+ * строка, и панель показывает её так же, как одиночную группу.
  */
-function summarizeOperations(rows: StockBalanceEntry[], limit: number): GroupSummary {
-  const all = [...new Set(rows.flatMap(balanceOperationLabels))];
-  const others = all.filter((value) => value !== "—");
-  const values = others.length > 0 ? others : ["—"];
-  const full = values.join(" · ");
-  if (values.length <= limit) return { text: full, full };
-  return { text: `${values.slice(0, limit).join(" · ")} +${values.length - limit}`, full };
-}
-
-/** Значение колонки в итоге группы: текст для ячейки и полный список для title. */
-type GroupSummary = {
-  text: string;
-  /** Полный список значений — для `title`, когда текст обрезан. */
-  full: string;
-};
-
-/**
- * Сводка колонки по строкам группы: одно значение — как есть, несколько —
- * списком. Пустой ячейки у группы быть не должно: свёрнутая группа прячет свои
- * строки, и «—» в итоге значило бы «в группе этого нет», хотя оно там есть.
- *
- * `limit` — сколько значений влезает в 32-пиксельную строку; остальное уходит
- * в `title` («+N» в тексте). Порядок значений — как в ответе сервера.
- */
-function summarizeColumn(
-  rows: StockBalanceEntry[],
-  pick: (balance: StockBalanceEntry) => string,
-  limit = 3,
-): GroupSummary {
-  const values = [...new Set(rows.map(pick))];
-  const full = values.join(" · ");
-  if (values.length <= limit) return { text: full, full };
-  return { text: `${values.slice(0, limit).join(" · ")} +${values.length - limit}`, full };
-}
-
-/** Сводка группы: то, что читается в свёрнутой строке-итоге. */
-type BalanceGroup = {
-  key: string;
-  sku: string;
-  rows: StockBalanceEntry[];
-  /** Сумма количеств строк группы. */
-  totalQty: number;
-  dimensions: GroupSummary;
-  operations: GroupSummary;
-  location: GroupSummary;
-  /**
-   * Качество: один статус — его подпись, разные — раскладка «Годный 2 · Брак 1».
-   * С числами, а не просто списком: свёрнутая группа прячет брак, и итог обязан
-   * сказать, сколько его.
-   */
-  quality: GroupSummary;
-};
-
-/**
- * Подсветка итога качества: свёрнутая группа прячет свои строки, поэтому брак
- * в ней обязан читаться в итоге — цветом, а не только словом.
- */
-function qualitySummaryClass(rows: StockBalanceEntry[]): string {
-  const states = rows.map((row) => row.quality_state.toUpperCase());
-  if (states.some((state) => state === "SCRAP" || state === "FINAL_SCRAP")) {
-    return "text-red-600 dark:text-red-400 font-medium";
-  }
-  if (states.some((state) => state === "REWORK")) {
-    return "text-amber-700 dark:text-amber-400 font-medium";
-  }
-  return "text-muted-foreground";
-}
-
-function qualitySummary(rows: StockBalanceEntry[]): GroupSummary {
-  const counts = new Map<string, number>();
-  for (const row of rows) {
-    const label = formatQualityStateLabel(row.quality_state);
-    counts.set(label, (counts.get(label) ?? 0) + 1);
-  }
-  const text =
-    counts.size === 1
-      ? [...counts.keys()][0]
-      : [...counts.entries()].map(([label, count]) => `${label} ${count}`).join(" · ");
-  return { text, full: text };
+function balanceItems(balance: StockBalanceEntry): StockBalanceItem[] {
+  if (balance.items?.length) return balance.items;
+  return [
+    {
+      balance_id: balance.id,
+      product_id: balance.product_id,
+      sku: balance.product_sku,
+      quantity: balance.balance_qty,
+    },
+  ];
 }
 
 /**
- * Группы остатков по артикулу — по всей отданной странице, а не по соседним
- * строкам: сортировка серверная, и при сортировке по количеству строки одного
- * артикула стоят вразброс, но группой остаются. Порядок групп — по первому
- * появлению артикула в ответе, то есть по тому же порядку, что видит оператор.
+ * Ключ раскрытия группы — `id` строки, то есть минимальный `balance_id` кучи:
+ * сервер отдаёт его стабильно, и смена страницы/сортировки не захлопывает
+ * то, что оператор раскрыл.
  */
-function buildBalanceGroups(balances: StockBalanceEntry[]): BalanceGroup[] {
-  const groups = new Map<string, BalanceGroup>();
-  for (const balance of balances) {
-    const key = balanceArticleKey(balance);
-    const existing = groups.get(key);
-    if (existing) {
-      existing.rows.push(balance);
-      existing.totalQty += toQtyInteger(balance.balance_qty);
-      continue;
-    }
-    groups.set(key, {
-      key,
-      sku: key,
-      rows: [balance],
-      totalQty: toQtyInteger(balance.balance_qty),
-      dimensions: { text: "", full: "" },
-      operations: { text: "", full: "" },
-      location: { text: "", full: "" },
-      quality: { text: "", full: "" },
-    });
-  }
-  return [...groups.values()].map((group) => ({
-    ...group,
-    dimensions: summarizeColumn(
-      group.rows,
-      (row) => formatDimensionsLabel(row.dimensions, row.dimensions_label),
-      2,
-    ),
-    operations: summarizeOperations(group.rows, 3),
-    location: summarizeColumn(
-      group.rows,
-      (row) => row.location_name || `#${row.location_id}`,
-      2,
-    ),
-    quality: qualitySummary(group.rows),
-  }));
+function balanceGroupKey(balance: StockBalanceEntry): string {
+  return String(balance.id);
 }
 
 /**
- * Строка таблицы: шапка группы (артикул с итогом) или остаток. Одиночный
- * артикул шапки не получает — раскрывать нечего, и рамка вокруг одной строки
- * шум; то же правило, что у группы из одного задания на доске (ADR-0065).
+ * Строка таблицы: шапка группы (несколько SKU в одной куче) или фактическая
+ * SKU-строка. Одиночная куча шапки не получает — раскрывать нечего, и рамка
+ * вокруг одной строки шум (то же правило, что у группы из одного задания на
+ * доске, ADR-0065).
  */
 type BalanceDisplayItem =
-  | { kind: "group"; key: string; group: BalanceGroup; isCollapsed: boolean }
+  | { kind: "group"; key: string; group: StockBalanceEntry; isCollapsed: boolean }
   | {
-      kind: "balance";
+      kind: "item";
       key: string;
-      balance: StockBalanceEntry;
+      group: StockBalanceEntry;
+      item: StockBalanceItem;
       isInGroup: boolean;
       isLastInGroup: boolean;
     };
 
 function buildBalanceDisplayItems(
-  groups: BalanceGroup[],
-  expandedArticles: Set<string>,
+  balances: StockBalanceEntry[],
+  expandedGroups: Set<string>,
 ): BalanceDisplayItem[] {
   const items: BalanceDisplayItem[] = [];
-  for (const group of groups) {
-    if (group.rows.length === 1) {
+  for (const balance of balances) {
+    const groupItems = balanceItems(balance);
+    if (groupItems.length <= 1) {
       items.push({
-        kind: "balance",
-        key: `balance-${group.rows[0].id}`,
-        balance: group.rows[0],
+        kind: "item",
+        key: `balance-${groupItems[0].balance_id}`,
+        group: balance,
+        item: groupItems[0],
         isInGroup: false,
         isLastInGroup: false,
       });
@@ -219,16 +103,18 @@ function buildBalanceDisplayItems(
     }
     // Группа свёрнута по умолчанию: раскрытие — осознанное действие оператора,
     // иначе список из 50 строк читается как прежде.
-    const isCollapsed = !expandedArticles.has(group.key);
-    items.push({ kind: "group", key: `group-${group.key}`, group, isCollapsed });
+    const groupKey = balanceGroupKey(balance);
+    const isCollapsed = !expandedGroups.has(groupKey);
+    items.push({ kind: "group", key: `group-${groupKey}`, group: balance, isCollapsed });
     if (isCollapsed) continue;
-    group.rows.forEach((balance, index) => {
+    groupItems.forEach((item, index) => {
       items.push({
-        kind: "balance",
-        key: `balance-${balance.id}`,
-        balance,
+        kind: "item",
+        key: `balance-${item.balance_id}`,
+        group: balance,
+        item,
         isInGroup: true,
-        isLastInGroup: index === group.rows.length - 1,
+        isLastInGroup: index === groupItems.length - 1,
       });
     });
   }
@@ -273,9 +159,50 @@ const BALANCE_CELL_CLASS = "px-2 py-0.5";
 const headerCellClass = `${DATA_TABLE_STYLES.headerRow} ${DATA_TABLE_STYLES.headerCell} ${TABLE_ROW_DENSE.headerCell}`;
 
 /**
- * Строка-итог группы: артикул, сумма количеств, число строк и раскрытие.
- * Тот же словарь, что у шапки группы на доске (ADR-0065): подложка, рельс
- * слева, 1px сверху и под шапкой.
+ * Тон строки остатка — по качеству, из общего словаря (`shared/lib/rowTones`):
+ * брак красный, переделка янтарная, годное — без тона. Рельс блока в остатках
+ * остаётся нейтральным (ADR-0065): он значит «это один блок», и цвет там не
+ * начал бы значить вторую вещь.
+ */
+function balanceRowTone(qualityState: string): RowTone {
+  const state = qualityState.toUpperCase();
+  if (state === "SCRAP" || state === "FINAL_SCRAP") return "scrap";
+  if (state === "REWORK") return "activeRunning";
+  return "plain";
+}
+
+/** Подсветка статуса качества: брак обязан читаться цветом, а не только словом. */
+function balanceQualityClass(qualityState: string): string {
+  const state = qualityState.toUpperCase();
+  if (state === "SCRAP" || state === "FINAL_SCRAP") {
+    return "text-red-600 dark:text-red-400 font-medium";
+  }
+  if (state === "REWORK") {
+    return "text-amber-700 dark:text-amber-400 font-medium";
+  }
+  return "text-muted-foreground";
+}
+
+/**
+ * Операции строки — те же, что в её пилюлях (`RouteStepsDisplay`): имена
+ * операций этапов, а без этапов — подпись строки (прочерк для обоих пустых
+ * состояний). Все SKU одной кучи делят эту ось, поэтому значение одно.
+ */
+function BalanceOperationsCell({ balance }: { balance: StockBalanceEntry }) {
+  if (balance.completed_stages && balance.completed_stages.length > 0) {
+    return <RouteStepsDisplay steps={balance.completed_stages} compact showIcons={false} />;
+  }
+  return (
+    <span className="text-xs text-muted-foreground">
+      {formatCompletedOperationsLabel(balance.completed_operations, balance.completed_stages)}
+    </span>
+  );
+}
+
+/**
+ * Строка-итог группы эквивалентов: подпись «A, B (эквиваленты)», сумма кучи,
+ * число SKU и раскрытие. Тот же словарь, что у шапки группы на доске
+ * (ADR-0065): подложка, рельс слева, 1px сверху и под шапкой.
  */
 function BalanceGroupRow({
   group,
@@ -283,21 +210,18 @@ function BalanceGroupRow({
   hideLocationColumn,
   onToggle,
 }: {
-  group: BalanceGroup;
+  group: StockBalanceEntry;
   isCollapsed: boolean;
   hideLocationColumn: boolean;
   onToggle: () => void;
 }) {
   const cellClass = cn(BALANCE_CELL_CLASS, TABLE_ROW_STYLES.groupHeaderCell);
-  // Полный список — в title, но только когда он не влез в ячейку: подсказка,
-  // повторяющая видимый текст, ничего не добавляет.
-  const summaryTitle = (summary: GroupSummary): string | undefined =>
-    summary.full === summary.text ? undefined : summary.full;
-  const dimensionsTitle = summaryTitle(group.dimensions);
-  const operationsTitle = summaryTitle(group.operations);
-  const locationTitle = summaryTitle(group.location);
+  const itemsCount = balanceItems(group).length;
   return (
     <tr
+      // Стабильный ключ строки для E2E: `id` группы — минимальный
+      // `balance_id` кучи, он же ключ раскрытия (#398).
+      data-testid={`stock-balance-group-${group.id}`}
       style={{ height: TABLE_ROW_DENSE.rowHeightPx }}
       aria-expanded={!isCollapsed}
       className={`cursor-pointer font-semibold ${TABLE_ROW_STYLES.defaultGroupHeader}`}
@@ -320,34 +244,39 @@ function BalanceGroupRow({
               <ChevronDown className="h-4 w-4 shrink-0" />
             )}
           </button>
-          <span>{group.sku}</span>
+          <span>{formatBalanceGroupLabel(group)}</span>
           <Badge variant="secondary" className={`${TABLE_ROW_DENSE.badge} font-bold`}>
-            &times;{group.rows.length}
+            &times;{itemsCount}
           </Badge>
         </div>
       </td>
-      {/* Итог — по строкам этой страницы: остатки одного артикула могут лежать на
-          двух страницах, и «сумма по всему заводу» здесь была бы неправдой. */}
-      <td className={cn(cellClass, "font-mono")} title="Сумма по строкам этой страницы">
-        {fmtQty(group.totalQty)}
-      </td>
-      {/* Сводки обрезаются, а не переносятся: строка итога обязана остаться
-          32px (ADR-0030), иначе таблица теряет ритм. Полный список — в title. */}
-      <td className={cn(cellClass, "max-w-[120px] text-xs font-normal")} title={dimensionsTitle}>
-        <span className="block truncate">{group.dimensions.text}</span>
-      </td>
+      {/* Сумма — серверная: группа уже не разрезана страницей, и складывать
+          клиенту нечего. */}
       <td
-        className={cn(cellClass, "max-w-[280px] text-xs font-normal text-muted-foreground")}
-        title={operationsTitle}
+        className={cn(cellClass, "font-mono")}
+        title="Сумма по группе эквивалентов"
+        data-testid="stock-balance-group-qty"
       >
-        <span className="block truncate">{group.operations.text}</span>
+        {fmtQty(group.balance_qty)}
       </td>
-      <td className={cn(cellClass, "max-w-[220px] text-xs", qualitySummaryClass(group.rows))}>
-        <span className="block truncate">{group.quality.text}</span>
+      <td className={cn(cellClass, "max-w-[120px] text-xs font-normal")}>
+        <span className="block truncate">
+          {formatDimensionsLabel(group.dimensions, group.dimensions_label)}
+        </span>
+      </td>
+      <td className={cn(cellClass, "max-w-[280px] text-xs font-normal text-muted-foreground")}>
+        <span className="block truncate">
+          {formatCompletedOperationsLabel(group.completed_operations, group.completed_stages)}
+        </span>
+      </td>
+      <td className={cn(cellClass, "max-w-[220px] text-xs", balanceQualityClass(group.quality_state))}>
+        <span className="block truncate">{formatQualityStateLabel(group.quality_state)}</span>
       </td>
       {!hideLocationColumn && (
-        <td className={cn(cellClass, "max-w-[160px] text-xs font-normal")} title={locationTitle}>
-          <span className="block truncate">{group.location.text}</span>
+        <td className={cn(cellClass, "max-w-[160px] text-xs font-normal")}>
+          <span className="block truncate">
+            {group.location_name || `#${group.location_id}`}
+          </span>
         </td>
       )}
       <td className={cellClass} />
@@ -357,28 +286,21 @@ function BalanceGroupRow({
 }
 
 /**
- * Тон строки остатка — по качеству, из общего словаря (`shared/lib/rowTones`):
- * брак красный, переделка янтарная, годное — без тона. Рельс блока в остатках
- * остаётся нейтральным (ADR-0065): он значит «это один блок», и цвет там не
- * начал бы значить вторую вещь.
+ * Фактическая SKU-строка: одиночная куча или ребёнок раскрытой группы.
+ * Участок, качество, размер и операции берутся у группы — это её оси, все
+ * строки кучи их делят; «История» — по `product_id` самой строки.
  */
-function balanceRowTone(qualityState: string): RowTone {
-  const state = qualityState.toUpperCase();
-  if (state === "SCRAP" || state === "FINAL_SCRAP") return "scrap";
-  if (state === "REWORK") return "activeRunning";
-  return "plain";
-}
-
-/** Строка остатка: как была, плюс рёбра блока, когда она раскрыта из группы. */
-function BalanceRow({
-  balance,
+function BalanceItemRow({
+  group,
+  item,
   isInGroup,
   isLastInGroup,
   hideLocationColumn,
   onSelectProduct,
   onShowHistory,
 }: {
-  balance: StockBalanceEntry;
+  group: StockBalanceEntry;
+  item: StockBalanceItem;
   isInGroup: boolean;
   isLastInGroup: boolean;
   hideLocationColumn: boolean;
@@ -388,50 +310,52 @@ function BalanceRow({
   const cellClass = cn(BALANCE_CELL_CLASS, isLastInGroup && TABLE_ROW_STYLES.groupBlockBoundary);
   return (
     <tr
+      // Фактическая SKU-строка адресуется по `balance_id`: у группы может быть
+      // несколько строк одного артикула, и `product_id` их не различит (#398).
+      data-testid={`stock-balance-item-${item.balance_id}`}
       // Высота закреплена, как на доске: содержимое «Операций» (RouteStepsDisplay)
       // само задаёт 24px, а строки без операций схлопывались бы до высоты текста.
       // Ровно 32px — та же плотность, что на «Заданиях» и «Передачах».
       style={{ height: TABLE_ROW_DENSE.rowHeightPx }}
-      className={`border-b ${isInGroup ? TABLE_ROW_STYLES.groupBlock : rowToneFill(balanceRowTone(balance.quality_state))}`}
+      className={`border-b ${isInGroup ? TABLE_ROW_STYLES.groupBlock : rowToneFill(balanceRowTone(group.quality_state))}`}
     >
       <td className={cn(cellClass, isInGroup ? TABLE_ROW_STYLES.blockRail : TABLE_ROW_STYLES.emptyRail)}>
         <button
           type="button"
           className="font-medium hover:text-primary transition-colors cursor-pointer"
-          onClick={() => onSelectProduct(balance.product_id)}
+          onClick={() => onSelectProduct(item.product_id)}
           title="Показать детальные остатки"
         >
-          {balance.product_sku || `#${balance.product_id}`}
+          {item.sku || `#${item.product_id}`}
         </button>
       </td>
-      <td className={cn(cellClass, "font-semibold font-mono")}>{fmtQty(balance.balance_qty)}</td>
+      <td
+        className={cn(cellClass, "font-semibold font-mono")}
+        data-testid="stock-balance-item-qty"
+      >
+        {fmtQty(item.quantity)}
+      </td>
       <td className={cn(cellClass, "text-xs whitespace-nowrap")}>
-        {formatDimensionsLabel(balance.dimensions, balance.dimensions_label)}
+        {formatDimensionsLabel(group.dimensions, group.dimensions_label)}
       </td>
       <td className={cn(cellClass, "max-w-[280px]")}>
-        {balance.completed_stages && balance.completed_stages.length > 0 ? (
-          <RouteStepsDisplay steps={balance.completed_stages} compact showIcons={false} />
-        ) : (
-          <span className="text-xs text-muted-foreground">
-            {formatCompletedOperationsLabel(balance.completed_operations, balance.completed_stages)}
-          </span>
-        )}
+        <BalanceOperationsCell balance={group} />
       </td>
       <td className={cellClass}>
         <span className="text-xs font-medium text-muted-foreground">
-          {formatQualityStateLabel(balance.quality_state)}
+          {formatQualityStateLabel(group.quality_state)}
         </span>
       </td>
       {!hideLocationColumn && (
         <td className={cn(cellClass, "text-xs")}>
-          {balance.location_name || `#${balance.location_id}`}
+          {group.location_name || `#${group.location_id}`}
         </td>
       )}
       <td className={cellClass}>
         <button
           type="button"
           className="text-xs text-muted-foreground hover:text-primary cursor-pointer"
-          onClick={() => onShowHistory(balance.product_id, balance.product_sku)}
+          onClick={() => onShowHistory(item.product_id, item.sku)}
         >
           История
         </button>
@@ -565,27 +489,18 @@ export function StockBalancesPanel({
     ),
   });
 
+  // Порядок строк — серверный: сортировка и пагинация считаются по группам,
+  // и клиентская перестановка развела бы порядок с `total` и страницами.
   const balances = data?.balances ?? [];
-  // Ручная сортировка по колонке главнее дефолта; без неё — общее количество
-  // по убыванию, а внутри артикула строки того же порядка.
-  const hasActiveSort = sortConfigs.length > 0;
-  const balanceGroups = useMemo(() => {
-    const groups = buildBalanceGroups(balances);
-    if (hasActiveSort) return groups;
-    for (const group of groups) {
-      group.rows.sort((a, b) => toQtyInteger(b.balance_qty) - toQtyInteger(a.balance_qty));
-    }
-    return groups.sort((a, b) => b.totalQty - a.totalQty || a.sku.localeCompare(b.sku, "ru"));
-  }, [balances, hasActiveSort]);
-  // Раскрытые артикулы — по ключу группы: смена страницы и сортировки не
+  // Раскрытые группы — по ключу строки: смена страницы и сортировки не
   // захлопывает то, что оператор раскрыл.
-  const [expandedArticles, setExpandedArticles] = useState<Set<string>>(() => new Set());
+  const [expandedGroups, setExpandedGroups] = useState<Set<string>>(() => new Set());
   const displayItems = useMemo(
-    () => buildBalanceDisplayItems(balanceGroups, expandedArticles),
-    [balanceGroups, expandedArticles],
+    () => buildBalanceDisplayItems(balances, expandedGroups),
+    [balances, expandedGroups],
   );
-  const toggleArticle = useCallback((key: string) => {
-    setExpandedArticles((previous) => {
+  const toggleGroup = useCallback((key: string) => {
+    setExpandedGroups((previous) => {
       const next = new Set(previous);
       if (next.has(key)) next.delete(key);
       else next.add(key);
@@ -596,8 +511,8 @@ export function StockBalancesPanel({
   const totalPages = getTotalPages(total);
 
   // Список значений попапера — из описания колонок: читатель значения объявлен
-  // в самой колонке (`cellValue`), поэтому список и фильтр берут одно значение
-  // (#322).
+  // в самой колонке (`cellValue`/`filterValuesFrom`), поэтому список и фильтр
+  // берут одно значение (#322).
   const uniqueValues: Partial<Record<BalanceSortField, string[]>> = useMemo(
     () => buildColumnFilterValues(balances, stockBalanceColumns),
     [balances],
@@ -684,12 +599,13 @@ export function StockBalancesPanel({
                           group={item.group}
                           isCollapsed={item.isCollapsed}
                           hideLocationColumn={hideLocationColumn}
-                          onToggle={() => toggleArticle(item.group.key)}
+                          onToggle={() => toggleGroup(balanceGroupKey(item.group))}
                         />
                       ) : (
-                        <BalanceRow
+                        <BalanceItemRow
                           key={item.key}
-                          balance={item.balance}
+                          group={item.group}
+                          item={item.item}
                           isInGroup={item.isInGroup}
                           isLastInGroup={item.isLastInGroup}
                           hideLocationColumn={hideLocationColumn}

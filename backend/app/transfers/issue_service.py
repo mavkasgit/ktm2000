@@ -21,12 +21,12 @@ ops-ось, а «передавать» пришлось бы через лим�
 
 Что делает ``execute_issue``:
 
-1. **блокирует FOR UPDATE все строки баланса этого артикула на складах**
-   (ключ ``артикул × склад`` — шире, чем любой возможный план подбора) и
-   только после этого подбирает план ровно один раз — иначе две
-   одновременные выдачи одного склада вычерпали бы его дважды, а
-   предвыборка-пересчёт в той же сессии вернула бы устаревшие copies
-   из identity map;
+1. **блокирует FOR UPDATE все строки баланса группы эквивалентов на
+   складах** (ключ ``группа × склад`` — шире, чем любой возможный план
+   подбора; ADR-0073) и только после этого подбирает план ровно один раз —
+   иначе две одновременные выдачи на разные SKU одной группы вычерпали бы
+   одну кучу дважды, а предвыборка-пересчёт в той же сессии вернула бы
+   устаревшие copies из identity map;
 2. пишет N передач в одной сессии: непредвиденная техническая ошибка на
    середине откатывает операцию целиком, а «собрано меньше» — исход, а не
    ошибка (стратегии ``shortage_strategy``);
@@ -56,6 +56,7 @@ from app.models.section import Section
 from app.models.transfer import Transfer, TransferStatus
 from app.models.work_task import CLOSED_WORK_TASK_STATUSES, WorkTask, WorkTaskStatus
 from app.services.action_journal_service import action_journal_service
+from app.services.product_alias_groups import AliasGroupCache, load_alias_groups
 from app.services.route_storage_classifier import SECTION_TYPE_PRODUCTION, STOCK_TYPES
 from app.services.shopfloor.cache import _refresh_section_plan_line_cache
 from app.services.shopfloor.common import (
@@ -121,13 +122,20 @@ async def build_issue_preview_payload(
     Ответ сервера — единственный источник порядка и количеств: оператор не
     вводит их руками и не может добавить склад, который система не позвала
     (#282). Строки отсортированы по полю ``order``.
+
+    Справочник групп читается один раз на запрос (``AliasGroupCache``) и
+    передаётся в подбор готовым — второй SELECT групп на строку баланса не
+    появляется.
     """
+    cache = AliasGroupCache()
+    alias_groups = await load_alias_groups(db, {product_id}, cache=cache)
     plan = await build_issue_plan(
         db,
         position=position,
         product_id=product_id,
         required=required,
         excluded_balance_ids=excluded_balance_ids or set(),
+        alias_groups=alias_groups,
     )
     return serialize_issue_plan(plan)
 
@@ -137,6 +145,8 @@ def serialize_issue_plan(plan: IssuePlan) -> dict[str, Any]:
     return {
         "position_id": plan.position_id,
         "product_id": plan.product_id,
+        "group_key": plan.group_key,
+        "group_skus": list(plan.group_skus),
         "required": _fmt_qty(plan.required),
         "required_dimensions": plan.required_dimensions,
         "required_dimensions_label": (
@@ -151,6 +161,9 @@ def serialize_issue_plan(plan: IssuePlan) -> dict[str, Any]:
                 "balance_id": c.balance_id,
                 "location_id": c.location_id,
                 "location_name": c.location_name,
+                "group_key": c.group_key,
+                "product_id": c.product_id,
+                "sku": c.sku,
                 "dimensions": c.dimensions,
                 "completed_operations": c.completed_operations,
                 "ops_count": c.ops_count,
@@ -280,17 +293,25 @@ async def _record_issue_transfer(
     idempotency_key: str,
     now: datetime,
     allow_negative: bool,
+    source_sku: str | None = None,
 ) -> dict[str, Any]:
-    """Одна передача выдачи: Transfer + Action + пара проводок ledger."""
+    """Одна передача выдачи: Transfer + Action + пара проводок ledger.
+
+    Канонизация на границе выдачи (ADR-0073 п.5): ``TRANSFER_SEND`` несёт
+    фактический SKU источника, ``TRANSFER_RECEIVE`` — артикул задания;
+    ``Transfer`` и создаваемое задание живут под артикулом задания.
+    """
     dimensions = balance.dimensions
     completed_ops = list(balance.completed_operations or [])
     quality = balance.quality_state
+    source_product_id = balance.product_id
+    target_product_id = product_id
 
     task, line = await _target_task_for_sequence(
         db,
         position=position,
         sequence=target_sequence,
-        product_id=product_id,
+        product_id=target_product_id,
         dimensions=dimensions,
         planned_qty=quantity,
         actor_id=actor_id,
@@ -306,6 +327,10 @@ async def _record_issue_transfer(
         f"Автоподбор источника выдачи {issue_no}: «{location_name}» "
         f"({_fmt_qty(quantity)} шт.{size_label})"
     )
+    # Источник называем, только когда он не совпадает с артикулом задания:
+    # у группы из одного продукта комментарий остаётся прежним.
+    if source_product_id != target_product_id and source_sku:
+        comment += f", источник: {source_sku} (эквивалент)"
 
     transfer = Transfer(
         transfer_no=_transfer_no(),
@@ -313,7 +338,7 @@ async def _record_issue_transfer(
         to_task_id=task.id,
         from_section_id=balance.location_id,
         to_section_id=task.section_id,
-        product_id=product_id,
+        product_id=target_product_id,
         sent_quantity=quantity,
         status=TransferStatus.sent,
         sent_by=actor_id,
@@ -346,14 +371,23 @@ async def _record_issue_transfer(
         task.status = WorkTaskStatus.ready
         await db.flush()
 
+    # Канонизация на участке (ADR-0073 п.5): когда источник — эквивалент,
+    # физический остаток участка обязан быть под артикулом задания. Иначе
+    # send с `to_location` положил бы на участок SKU источника (B), а приём
+    # остался бы только учётным (`task_id` без локаций), и следующая выдача
+    # или завершение искали бы материал не под тем артикулом. Поэтому при
+    # source != target send двигает только расход склада, а receive — приход
+    # на участок под target. Для группы из одного продукта форма прежняя:
+    # send «склад → участок», receive — учёт задания (S1/S6 не меняются).
+    canonicalize_on_section = source_product_id != target_product_id
     await _stock_command_service.record(
         db,
         StockCommand(
-            product_id=product_id,
+            product_id=source_product_id,
             quantity=quantity,
             reason=Reason.TRANSFER_SEND,
             from_location_id=balance.location_id,
-            to_location_id=task.section_id,
+            to_location_id=None if canonicalize_on_section else task.section_id,
             dimensions=dimensions,
             quality_state=quality,
             to_quality_state=quality,
@@ -378,11 +412,13 @@ async def _record_issue_transfer(
     await _stock_command_service.record(
         db,
         StockCommand(
-            product_id=product_id,
+            product_id=target_product_id,
             quantity=quantity,
             reason=Reason.TRANSFER_RECEIVE,
             from_location_id=None,
-            to_location_id=None,
+            # Приход на участок несёт артикул задания, если источник —
+            # эквивалент; иначе приём остаётся учётным (без локаций).
+            to_location_id=task.section_id if canonicalize_on_section else None,
             dimensions=dimensions,
             quality_state=quality,
             to_quality_state=quality,
@@ -541,19 +577,20 @@ async def execute_issue(
             "skipped_stages": [],
         }
 
-    # 1. Замок — ВСЕ строки баланса этого артикула на складах в системном
-    # порядке, план считается ровно один раз и только ПОСЛЕ лока.
-    # Замок шире кандидатов: подбор отсекает строки в SQL по `balance_qty > 0`,
-    # а размер/признак операций фильтрует на python-стороне, поэтому строка,
+    # 1. Группа — один раз на вызов (кэш справочника), затем замок ВСЕХ
+    # строк баланса группы на складах в системном порядке. Замок шире
+    # кандидатов: подбор отсекает строки в SQL по `balance_qty > 0`, а
+    # размер/признак операций фильтрует на python-стороне, поэтому строка,
     # пустая или ушедшая в минус на момент подбора (минус легален после
     # `negative_remainder`/`allow_negative`), может быть наполнена параллельной
     # операцией и войти в план. Залоченным должен быть весь ключ, по которому
-    # план вообще способен ходить (артикул × складские секции), а не только
-    # предыдущая выборка кандидатов — иначе такая строка вычерпывается без
-    # лока. Размер/признак в замок не уточняем: их python-канонизация живёт в
-    # source_selection, и повторять её в SQL означало бы разъезд фильтров замка
-    # и плана. Порядок — по id: детерминирован для обеих сторон гонки,
-    # взаимных блокировок не допускает.
+    # план вообще способен ходить (группа эквивалентов × складские секции), а
+    # не только предыдущая выборка кандидатов — иначе такая строка
+    # вычерпывается без лока, а две выдачи на разные SKU одной группы
+    # вычерпают одну кучу дважды (ADR-0073 §6). Размер/признак в замок не
+    # уточняем: их python-канонизация живёт в source_selection, и повторять её
+    # в SQL означало бы разъезд фильтров замка и плана. Порядок — по id:
+    # детерминирован для обеих сторон гонки, взаимных блокировок не допускает.
     # План — один раз, под замком: повторный SELECT через ту же сессию не
     # перезаписывает атрибуты строк, уже лежащих в identity map, и «пересчёт
     # плана» посчитал бы количества первого прохода — двойное вычерпывание
@@ -561,6 +598,11 @@ async def execute_issue(
     # фактические `balance_qty` в сессию (в том числе для строк, прочитанных
     # вызывающим кодом до выдачи), поэтому и подбор, и последующее чтение
     # вычерпываемых балансов работают на свежих строках.
+    cache = AliasGroupCache()
+    alias_groups = await load_alias_groups(db, {product_id}, cache=cache)
+    group = alias_groups.group_for(product_id)
+    group_ids = group.product_ids if group is not None else (int(product_id),)
+
     stock_location_ids = (
         await db.execute(select(Section.id).where(Section.type.in_(STOCK_TYPES)))
     ).scalars().all()
@@ -568,7 +610,7 @@ async def execute_issue(
         await db.execute(
             select(StockBalance)
             .where(
-                StockBalance.product_id == product_id,
+                StockBalance.product_id.in_(group_ids),
                 StockBalance.location_id.in_(stock_location_ids),
             )
             .order_by(StockBalance.id)
@@ -581,6 +623,8 @@ async def execute_issue(
         product_id=product_id,
         required=required,
         excluded_balance_ids=excluded,
+        group_ids=group_ids,
+        alias_groups=alias_groups,
     )
 
     if plan.collected <= ZERO:
@@ -588,8 +632,8 @@ async def execute_issue(
             names = [c.location_name for c in plan.candidates]
             raise ValueError(_shortage_reason(names, ZERO, required))
         raise ValueError(
-            "Источник выдачи: ни на одном складе нет этого артикула в нужном "
-            "размере — выдавать нечего"
+            "Источник выдачи: ни на одном складе нет материала группы "
+            "эквивалентов в нужном размере — выдавать нечего"
         )
 
     if plan.deficit > ZERO and strategy is ShortageStrategy.fail:
@@ -633,6 +677,7 @@ async def execute_issue(
             idempotency_key=f"{idempotency_key}:{index}",
             now=now,
             allow_negative=(negative_index is not None and index == negative_index),
+            source_sku=candidate.sku,
         )
         created.append(result)
 

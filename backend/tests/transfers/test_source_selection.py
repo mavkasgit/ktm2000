@@ -16,7 +16,9 @@ from __future__ import annotations
 from decimal import Decimal
 
 import pytest
+from app.models.product import Product, ProductType
 from app.models.section import Section
+from app.services.product_alias_groups import AliasGroups
 from app.stock.models import QualityState, StockBalance
 from app.transfers.source_selection import build_issue_plan
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -57,9 +59,10 @@ async def _seed(
     ops: list[str] | None,
     dims: dict | None = DIM,
     quality: QualityState = QualityState.GOOD,
+    product_id: int | None = None,
 ) -> StockBalance:
     balance = StockBalance(
-        product_id=fx["product"].id,
+        product_id=product_id if product_id is not None else fx["product"].id,
         location_id=location.id,
         quality_state=quality,
         dimensions=dims,
@@ -69,6 +72,22 @@ async def _seed(
     session.add(balance)
     await session.flush()
     return balance
+
+
+async def _equivalent(session: AsyncSession, fx: dict, sku: str) -> Product:
+    """Эквивалент артикула задания: alias-ребро в одну сторону (#394)."""
+    product = Product(
+        sku=sku,
+        name=sku,
+        type=ProductType.component,
+        unit="pcs",
+        is_active=True,
+    )
+    session.add(product)
+    await session.flush()
+    fx["product"].aliases = [sku]
+    await session.commit()
+    return product
 
 
 async def _plan(session: AsyncSession, fx: dict, required, **kwargs):
@@ -238,3 +257,164 @@ async def test_empty_stock_key_yields_no_candidates(session: AsyncSession, seed_
     assert plan.collected == Decimal(0)
     assert plan.deficit == Decimal(60)
     assert not plan.hints
+
+
+# ─── Общий пул эквивалентов (#393/#395) ────────────────────────────────────
+
+
+async def test_equivalent_balance_becomes_candidate(session: AsyncSession):
+    """Остаток эквивалента — такой же источник выдачи, как артикул задания."""
+    fx = await _route(session, "SEL-EQ")
+    stock1 = fx["sections"][0]
+    equivalent = await _equivalent(session, fx, "SEL-EQ-B")
+
+    balance = await _seed(
+        session, fx, stock1, qty=50, ops=["STORE"], product_id=equivalent.id
+    )
+
+    plan = await _plan(session, fx, 30)
+
+    assert [c.balance_id for c in plan.candidates] == [balance.id]
+    candidate = plan.candidates[0]
+    assert candidate.product_id == equivalent.id
+    assert candidate.sku == equivalent.sku
+    assert candidate.is_task_product is False
+    assert candidate.group_key == min(fx["product"].id, equivalent.id)
+    assert plan.group_key == min(fx["product"].id, equivalent.id)
+    assert plan.group_skus == (fx["product"].sku, equivalent.sku)
+    assert candidate.take == Decimal(30)
+    assert plan.collected == Decimal(30)
+
+
+async def test_task_product_is_exhausted_before_better_equivalent(
+    session: AsyncSession,
+):
+    """Артикул задания — первый ключ даже против более близкого эквивалента."""
+    fx = await _route(session, "SEL-TASKFIRST")
+    stock1 = fx["sections"][0]
+    extra = await _add_stock_section(session, "SEL-TASKFIRST-W", "Склад-3")
+    equivalent = await _equivalent(session, fx, "SEL-TASKFIRST-B")
+
+    task_balance = await _seed(session, fx, extra, qty=30, ops=["STORE"])  # цель 2
+    equivalent_balance = await _seed(
+        session, fx, stock1, qty=100, ops=["CUT", "STORE"], product_id=equivalent.id
+    )  # цель 3 — ближе к адресату
+
+    plan = await _plan(session, fx, 50)
+    by_order = sorted(plan.candidates, key=lambda c: c.order)
+
+    assert [c.balance_id for c in by_order] == [
+        task_balance.id,
+        equivalent_balance.id,
+    ]
+    assert by_order[0].is_task_product is True
+    assert by_order[1].is_task_product is False
+    assert [c.take for c in by_order] == [Decimal(30), Decimal(20)]
+
+
+async def test_manual_selection_accepts_equivalent(session: AsyncSession):
+    """Ручной выбор принимает остаток любого члена группы."""
+    fx = await _route(session, "SEL-SEL-EQ")
+    stock1 = fx["sections"][0]
+    equivalent = await _equivalent(session, fx, "SEL-SEL-EQ-B")
+    balance = await _seed(
+        session, fx, stock1, qty=50, ops=["STORE"], product_id=equivalent.id
+    )
+
+    plan = await _plan(session, fx, 20, selected_balance_ids={balance.id})
+
+    assert [c.balance_id for c in plan.candidates] == [balance.id]
+    assert plan.candidates[0].take == Decimal(20)
+
+
+async def test_manual_selection_rejects_foreign_product(session: AsyncSession):
+    """Чужой артикул (вне группы) — отказ про группу эквивалентов."""
+    fx = await _route(session, "SEL-SEL-FOREIGN")
+    stock1 = fx["sections"][0]
+    foreign = Product(
+        sku="SEL-SEL-FOREIGN-X",
+        name="foreign",
+        type=ProductType.component,
+        unit="pcs",
+        is_active=True,
+    )
+    session.add(foreign)
+    await session.flush()
+    balance = await _seed(
+        session, fx, stock1, qty=50, ops=["STORE"], product_id=foreign.id
+    )
+
+    with pytest.raises(ValueError, match="не из группы эквивалентов"):
+        await _plan(session, fx, 20, selected_balance_ids={balance.id})
+
+
+async def test_hints_count_equivalent_stock(session: AsyncSession):
+    """Брак и чужой размер эквивалента — подсказка, а не источник."""
+    fx = await _route(session, "SEL-EQ-HINTS")
+    stock1 = fx["sections"][0]
+    extra = await _add_stock_section(session, "SEL-EQ-HINTS-W", "Склад-И")
+    equivalent = await _equivalent(session, fx, "SEL-EQ-HINTS-B")
+
+    await _seed(session, fx, stock1, qty=150, ops=["STORE"])  # закрывает потребность
+    await _seed(
+        session, fx, extra, qty=10, ops=["STORE"], product_id=equivalent.id
+    )  # включён, очередь не дошла
+    await _seed(
+        session, fx, extra, qty=20, ops=["STORE"], quality=QualityState.SCRAP,
+        product_id=equivalent.id,
+    )
+    await _seed(
+        session, fx, extra, qty=30, ops=["STORE"], dims=OTHER_DIM,
+        product_id=equivalent.id,
+    )
+
+    plan = await _plan(session, fx, 100)
+
+    kinds = {(h.kind, h.location_id) for h in plan.hints}
+    assert kinds == {("defect", extra.id), ("other_size", extra.id)}
+    defect = next(h for h in plan.hints if h.kind == "defect")
+    other = next(h for h in plan.hints if h.kind == "other_size")
+    assert defect.quantity == Decimal(20)
+    assert other.quantity == Decimal(30)
+
+
+async def test_group_of_one_keeps_previous_behaviour(session: AsyncSession):
+    """Группа из одного продукта — прежние поля и порядок, только с ключом."""
+    fx = await _route(session, "SEL-ONE")
+    stock1 = fx["sections"][0]
+    balance = await _seed(session, fx, stock1, qty=40, ops=["STORE"])
+
+    plan = await _plan(session, fx, 20)
+
+    assert plan.group_key == fx["product"].id
+    assert plan.group_skus == (fx["product"].sku,)
+    candidate = plan.candidates[0]
+    assert candidate.balance_id == balance.id
+    assert candidate.group_key == fx["product"].id
+    assert candidate.product_id == fx["product"].id
+    assert candidate.sku == fx["product"].sku
+    assert candidate.is_task_product is True
+
+
+async def test_unresolved_group_falls_back_to_single_product(
+    session: AsyncSession,
+):
+    """Группа не резолвится — ведём себя как с группой из одного продукта."""
+    fx = await _route(session, "SEL-NOGROUP")
+    stock1 = fx["sections"][0]
+    balance = await _seed(session, fx, stock1, qty=40, ops=["STORE"])
+
+    plan = await build_issue_plan(
+        session,
+        position=fx["position"],
+        product_id=fx["product"].id,
+        required=Decimal(20),
+        alias_groups=AliasGroups(()),
+        group_ids=[fx["product"].id],
+    )
+
+    assert plan.group_key == fx["product"].id
+    assert plan.group_skus == ()
+    candidate = next(c for c in plan.candidates if c.balance_id == balance.id)
+    assert candidate.sku is None
+    assert candidate.is_task_product is True

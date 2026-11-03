@@ -36,6 +36,7 @@ from app.models.work_task import RESOLVED_WORK_TASK_STATUSES, WorkTask, WorkTask
 from app.services import product_pair_resolver
 from app.services.action_journal_service import action_journal_service
 from app.services.plan_position_hanger import position_dimensions_for_task
+from app.services.product_alias_groups import load_alias_groups
 from app.services.production_plan_service import refresh_plan_status
 from app.services.route_transform import build_transform_spec, raw_input_quantity_for
 from app.stock import Reason, StockCommand, StockCommandService
@@ -161,6 +162,8 @@ class SourceIssue:
     balance: StockBalance
     step: dict
     quantity: Decimal
+    #: SKU фактического источника, если он отличается от артикула задания
+    source_sku: str | None = None
 
 
 async def _source_balance_label(db: AsyncSession, balance: StockBalance) -> str:
@@ -209,6 +212,15 @@ async def resolve_source_issues(
             "Источник выдачи: у позиции динамический маршрут — выбрать остаток нельзя"
         )
 
+    # Группа эквивалентов — один раз на вызов (ADR-0073): остаток любого её
+    # члена законен, чужой артикул — нет.
+    alias_groups = await load_alias_groups(db, {product_id})
+    group = alias_groups.group_for(product_id)
+    member_ids = set(group.product_ids) if group is not None else {int(product_id)}
+    sku_by_id = (
+        dict(zip(group.product_ids, group.skus)) if group is not None else {}
+    )
+
     rows = (
         await db.execute(
             select(StockBalance).where(StockBalance.id.in_(list(allocation.keys())))
@@ -235,8 +247,10 @@ async def resolve_source_issues(
         if balance is None:
             raise ValueError("Источник выдачи: выбранный складской остаток не найден")
         label = await _source_balance_label(db, balance)
-        if balance.product_id != product_id:
-            raise ValueError(f"Источник выдачи: материал на {label} — другого артикула")
+        if balance.product_id not in member_ids:
+            raise ValueError(
+                f"Источник выдачи: материал на {label} — не из группы эквивалентов"
+            )
         if balance.completed_operations is None:
             raise ValueError(
                 f"Источник выдачи: на {label} состояние операций не зафиксировано — "
@@ -264,6 +278,7 @@ async def resolve_source_issues(
             # закроется обычной выдачей, минус на складе означал бы продажу
             # несуществующего материала (ADR-0055 п.3).
             quantity=min(requested, available),
+            source_sku=sku_by_id.get(balance.product_id),
         ))
     return issues
 
@@ -498,10 +513,26 @@ async def release_batch(
                 )
             quality = QualityState(issue.balance.quality_state)
             now = datetime.now(UTC)
+            # Канонизация на границе выдачи (ADR-0073 п.5): send несёт
+            # фактический SKU источника, receive — артикул задания. Комментарий
+            # называет источник, когда он отличается, — журнал читается без
+            # цифровых id.
+            source_product_id = issue.balance.product_id
+            source_label = (
+                f" (источник: {issue.source_sku})"
+                if source_product_id != effective_product_id and issue.source_sku
+                else ""
+            )
+            # Канонизация на участке (ADR-0073 п.5): при источнике-эквиваленте
+            # send списывает только склад, а receive приходит на участок под
+            # артикулом задания. Иначе остаток участка остался бы под SKU
+            # источника, и следующая операция искала бы материал не под тем
+            # артикулом. Для одного продукта форма прежняя (#315).
+            canonicalize_on_section = source_product_id != effective_product_id
             await StockCommandService().record(db, StockCommand(
-                product_id=effective_product_id,
+                product_id=source_product_id,
                 from_location_id=issue.balance.location_id,
-                to_location_id=target.section_id,
+                to_location_id=None if canonicalize_on_section else target.section_id,
                 quantity=issue.quantity,
                 reason=Reason.TRANSFER_SEND,
                 dimensions=issue.balance.dimensions,
@@ -514,7 +545,10 @@ async def release_batch(
                 # существующему Transfer (S1/S6 сверяют остаток по ledger).
                 completed_operations=list(issue.balance.completed_operations),
                 source_ref="take_to_work_source",
-                comment="Источник выбран оператором при взятии задания в работу",
+                comment=(
+                    "Источник выбран оператором при взятии задания в работу"
+                    + source_label
+                ),
                 created_by=batch.released_by or batch.created_by or 1,
                 performed_at=now,
                 accounted_at=now,
@@ -537,7 +571,9 @@ async def release_batch(
             await StockCommandService().record(db, StockCommand(
                 product_id=effective_product_id,
                 from_location_id=None,
-                to_location_id=None,
+                # Приход на участок под артикулом задания — только когда
+                # источник был эквивалентом; иначе приём учётный (#315).
+                to_location_id=target.section_id if canonicalize_on_section else None,
                 quantity=issue.quantity,
                 reason=Reason.TRANSFER_RECEIVE,
                 dimensions=issue.balance.dimensions,
@@ -547,7 +583,9 @@ async def release_batch(
                 section_plan_line_id=target.section_plan_line_id,
                 completed_operations=list(issue.balance.completed_operations),
                 source_ref="take_to_work_source",
-                comment="Источник выбран оператором: приём на задание",
+                comment=(
+                    "Источник выбран оператором: приём на задание" + source_label
+                ),
                 created_by=batch.released_by or batch.created_by or 1,
                 performed_at=now,
                 accounted_at=now,

@@ -1,7 +1,8 @@
-import { useEffect, useMemo, useState } from "react";
+import { Fragment, useEffect, useMemo, useState } from "react";
 import { keepPreviousData, useQuery } from "@tanstack/react-query";
-import { AlertCircle, Layers, Loader2, Package } from "lucide-react";
+import { AlertCircle, ChevronDown, ChevronRight, Layers, Loader2, Package } from "lucide-react";
 import {
+  Badge,
   Button,
   Checkbox,
   Dialog,
@@ -27,12 +28,15 @@ import { fmtServerQty } from "@/shared/lib/quantityFormat";
 import {
   ISSUE_DEFAULT_STRATEGY,
   ISSUE_SHORTAGE_OPTIONS,
+  buildIssueCandidateGroups,
   buildIssueSelection,
+  groupCheckState,
   isCandidateChecked,
   issueCollectLine,
   issueConfirmBlockReason,
   remainingAfterCell,
   toggleBalanceExcluded,
+  toggleGroupExcluded,
   visibleIssueHints,
 } from "../lib/issueSource";
 
@@ -73,11 +77,13 @@ export function IssueSourceDialog({
   // Снятые галочки живут ровно этот вызов: они не сохраняются и не едут на
   // следующую выдачу, поэтому при закрытии окна сбрасываются.
   const [excludedBalanceIds, setExcludedBalanceIds] = useState<number[]>([]);
+  const [expandedGroupKeys, setExpandedGroupKeys] = useState<string[]>([]);
   const [strategy, setStrategy] = useState<ShortageStrategy>(ISSUE_DEFAULT_STRATEGY);
 
   useEffect(() => {
     if (!open) {
       setExcludedBalanceIds([]);
+      setExpandedGroupKeys([]);
       setStrategy(ISSUE_DEFAULT_STRATEGY);
     }
   }, [open]);
@@ -105,6 +111,17 @@ export function IssueSourceDialog({
   });
 
   const candidates = preview?.candidates ?? [];
+  // Строка — группа эквивалентов на осях склада (склад + размер + операции).
+  // `buildIssueCandidateGroups` только складывает серверные числа и сохраняет
+  // серверный `order`; своего сравнения и пересчёта здесь нет.
+  const groups = useMemo(
+    () => buildIssueCandidateGroups(preview?.candidates ?? [], preview?.product_id),
+    [preview?.candidates, preview?.product_id],
+  );
+  const toggleGroupExpanded = (key: string) =>
+    setExpandedGroupKeys((prev) =>
+      prev.includes(key) ? prev.filter((item) => item !== key) : [...prev, key],
+    );
   const hints = visibleIssueHints(preview?.hints ?? [], candidates);
   const blockReason = issueConfirmBlockReason({
     preview: preview ?? null,
@@ -128,8 +145,8 @@ export function IssueSourceDialog({
           </DialogTitle>
           <DialogDescription>
             {positionName
-              ? `${positionName}: откуда брать материал считает сервер — снять можно только галочку склада.`
-              : "Откуда брать материал считает сервер — снять можно только галочку склада."}
+              ? `${positionName}: откуда брать материал считает сервер — снять можно только галочку строки выдачи.`
+              : "Откуда брать материал считает сервер — снять можно только галочку строки выдачи."}
           </DialogDescription>
         </DialogHeader>
 
@@ -174,70 +191,211 @@ export function IssueSourceDialog({
                       <tr className="border-b text-left text-muted-foreground">
                         <th className={`${ROW.headerCell} w-6`} />
                         <th className={ROW.headerCell}>Склад</th>
+                        <th className={ROW.headerCell}>Артикул</th>
                         <th className={`${ROW.headerCell} text-right`}>Остаток</th>
                         <th className={`${ROW.headerCell} text-right`}>Возьмём</th>
                         <th className={`${ROW.headerCell} text-right`}>Останется после</th>
                       </tr>
                     </thead>
                     <tbody>
-                      {candidates.map((candidate) => {
-                        const checked = isCandidateChecked(candidate, excludedBalanceIds);
-                        const remaining = remainingAfterCell(candidate.remaining_after);
+                      {groups.map((group) => {
+                        const expanded = expandedGroupKeys.includes(group.key);
+                        const expandable = group.balanceIds.length > 1;
+                        const remaining = remainingAfterCell(group.remainingAfter);
+                        // В строке нет артикула задания, но материал — его
+                        // эквивалент: оператор должен видеть, что берёт «не тот»
+                        // SKU законно (ADR-0073 п.5).
+                        const hasEquivalent =
+                          preview?.product_id != null &&
+                          group.candidates.some(
+                            (candidate) => candidate.product_id !== preview.product_id,
+                          );
                         return (
-                          <tr
-                            key={candidate.balance_id}
-                            data-testid={`issue-candidate-row-${candidate.balance_id}`}
-                            className="border-b border-border/50 last:border-0"
-                          >
-                            <td className={ROW.cell}>
-                              <Checkbox
-                                checked={checked}
-                                aria-label={`Брать со склада «${candidate.location_name}»`}
-                                onCheckedChange={(next) =>
-                                  setExcludedBalanceIds((prev) =>
-                                    toggleBalanceExcluded(prev, candidate.balance_id, next === true),
-                                  )
-                                }
-                              />
-                            </td>
-                            <td className={ROW.cell}>
-                              <div className="max-w-[180px] truncate font-medium" title={candidate.location_name}>
-                                {candidate.location_name}
-                              </div>
-                              <div
-                                className="text-muted-foreground max-w-[180px] truncate"
-                                title={formatCompletedOperationsLabel(candidate.completed_operations)}
-                              >
-                                {formatCompletedOperationsLabel(candidate.completed_operations)}
-                                <span className="ml-1">({candidate.ops_count})</span>
-                                <span className="ml-1 text-muted-foreground/70">
-                                  · {formatDimensionsLabel(candidate.dimensions)}
+                          <Fragment key={group.key}>
+                            <tr
+                              data-testid={`issue-candidate-group-${group.groupKey}-${group.locationId}-${group.order}`}
+                              aria-expanded={expandable ? expanded : undefined}
+                              className="border-b border-border/50 last:border-0"
+                            >
+                              <td className={ROW.cell}>
+                                <div className="flex items-center gap-1">
+                                  {expandable ? (
+                                    <button
+                                      type="button"
+                                      data-testid={`issue-candidate-expand-${group.groupKey}-${group.locationId}-${group.order}`}
+                                      className="rounded p-0.5 text-muted-foreground transition-colors hover:bg-slate-200 hover:text-slate-800 dark:hover:bg-slate-700 dark:hover:text-slate-100"
+                                      onClick={() => toggleGroupExpanded(group.key)}
+                                      title={expanded ? "Скрыть артикулы" : "Показать артикулы"}
+                                      aria-label={expanded ? "Скрыть артикулы" : "Показать артикулы"}
+                                    >
+                                      {expanded ? (
+                                        <ChevronDown className="h-3.5 w-3.5 shrink-0" />
+                                      ) : (
+                                        <ChevronRight className="h-3.5 w-3.5 shrink-0" />
+                                      )}
+                                    </button>
+                                  ) : (
+                                    <span className="inline-block w-[18px]" aria-hidden="true" />
+                                  )}
+                                  <Checkbox
+                                    checked={groupCheckState(group.balanceIds, excludedBalanceIds)}
+                                    aria-label={`Брать со склада «${group.locationName}»`}
+                                    onCheckedChange={(next) =>
+                                      setExcludedBalanceIds((prev) =>
+                                        toggleGroupExcluded(prev, group.balanceIds, next === true),
+                                      )
+                                    }
+                                  />
+                                </div>
+                              </td>
+                              <td className={ROW.cell}>
+                                <div className="max-w-[180px] truncate font-medium" title={group.locationName}>
+                                  {group.locationName}
+                                </div>
+                                <div
+                                  className="text-muted-foreground max-w-[180px] truncate"
+                                  title={formatCompletedOperationsLabel(group.completedOperations)}
+                                >
+                                  {formatCompletedOperationsLabel(group.completedOperations)}
+                                  <span className="ml-1">({group.opsCount})</span>
+                                  <span className="ml-1 text-muted-foreground/70">
+                                    · {formatDimensionsLabel(group.dimensions)}
+                                  </span>
+                                </div>
+                              </td>
+                              <td className={ROW.cell}>
+                                <div className="flex items-center gap-1.5">
+                                  <span
+                                    className="font-mono"
+                                    // Одиночная строка — это и есть SKU-строка: старый
+                                    // id сохраняется, раскрытия у неё нет.
+                                    data-testid={
+                                      expandable ? undefined : `issue-candidate-row-${group.balanceIds[0]}`
+                                    }
+                                  >
+                                    {group.skuLabel}
+                                  </span>
+                                  {group.hasTaskProduct ? (
+                                    <Badge
+                                      variant="secondary"
+                                      className="shrink-0 text-[10px] font-normal"
+                                      title="В строке есть артикул задания — эквивалент не ошибка"
+                                    >
+                                      артикул задания
+                                    </Badge>
+                                  ) : hasEquivalent ? (
+                                    <Badge
+                                      variant="outline"
+                                      className="shrink-0 text-[10px] font-normal"
+                                      title="Материал другого SKU той же группы эквивалентов"
+                                    >
+                                      эквивалент
+                                    </Badge>
+                                  ) : null}
+                                </div>
+                              </td>
+                              <td className={`${ROW.cell} text-right font-mono tabular-nums`}>
+                                {group.available}
+                              </td>
+                              <td className={`${ROW.cell} text-right font-mono tabular-nums`}>
+                                {group.take}
+                              </td>
+                              <td className={`${ROW.cell} text-right font-mono tabular-nums`}>
+                                <span
+                                  data-testid={`issue-remaining-group-${group.groupKey}-${group.locationId}-${group.order}`}
+                                  className={
+                                    remaining.drawnOut
+                                      ? "text-amber-700 dark:text-amber-400"
+                                      : "text-muted-foreground"
+                                  }
+                                  title={
+                                    remaining.drawnOut
+                                      ? "Склад вычерпан целиком"
+                                      : remaining.notReached
+                                        ? "Не доходила очередь"
+                                        : undefined
+                                  }
+                                >
+                                  {remaining.text}
+                                  {remaining.drawnOut ? " — вычерпан" : ""}
                                 </span>
-                              </div>
-                            </td>
-                            <td className={`${ROW.cell} text-right font-mono tabular-nums`}>
-                              {fmtServerQty(candidate.available)}
-                            </td>
-                            <td className={`${ROW.cell} text-right font-mono tabular-nums`}>
-                              {fmtServerQty(candidate.take)}
-                            </td>
-                            <td className={`${ROW.cell} text-right font-mono tabular-nums`}>
-              <span
-                data-testid={`issue-remaining-${candidate.balance_id}`}
-                className={remaining.drawnOut ? "text-amber-700 dark:text-amber-400" : "text-muted-foreground"}
-                title={
-                  remaining.drawnOut
-                    ? "Склад вычерпан целиком"
-                    : remaining.notReached
-                      ? "Не доходила очередь"
-                      : undefined
-                }
-              >
-                              {remaining.text}
-                              {remaining.drawnOut ? " — вычерпан" : ""}
-              </span>
-                            </td>
-                          </tr>
+                              </td>
+                            </tr>
+                            {expanded &&
+                              group.candidates.map((candidate) => {
+                                const candidateRemaining = remainingAfterCell(
+                                  candidate.remaining_after,
+                                );
+                                return (
+                                  <tr
+                                    key={candidate.balance_id}
+                                    data-testid={`issue-candidate-row-${candidate.balance_id}`}
+                                    className="border-b border-border/50 bg-muted/20 last:border-0"
+                                  >
+                                    <td className={ROW.cell}>
+                                      <div className="pl-[22px]">
+                                        <Checkbox
+                                          checked={isCandidateChecked(candidate, excludedBalanceIds)}
+                                          aria-label={`Брать ${candidate.sku ?? "артикул"} со склада «${candidate.location_name}»`}
+                                          onCheckedChange={(next) =>
+                                            setExcludedBalanceIds((prev) =>
+                                              toggleBalanceExcluded(
+                                                prev,
+                                                candidate.balance_id,
+                                                next === true,
+                                              ),
+                                            )
+                                          }
+                                        />
+                                      </div>
+                                    </td>
+                                    <td className={ROW.cell} />
+                                    <td className={ROW.cell}>
+                                      <div className="flex items-center gap-1.5">
+                                        <span className="font-mono">
+                                          {candidate.sku ?? `#${candidate.product_id}`}
+                                        </span>
+                                        {candidate.product_id === preview?.product_id ? (
+                                          <Badge
+                                            variant="secondary"
+                                            className="shrink-0 text-[10px] font-normal"
+                                            title="Это артикул задания, а не эквивалент"
+                                          >
+                                            артикул задания
+                                          </Badge>
+                                        ) : null}
+                                      </div>
+                                    </td>
+                                    <td className={`${ROW.cell} text-right font-mono tabular-nums`}>
+                                      {fmtServerQty(candidate.available)}
+                                    </td>
+                                    <td className={`${ROW.cell} text-right font-mono tabular-nums`}>
+                                      {fmtServerQty(candidate.take)}
+                                    </td>
+                                    <td className={`${ROW.cell} text-right font-mono tabular-nums`}>
+                                      <span
+                                        data-testid={`issue-remaining-${candidate.balance_id}`}
+                                        className={
+                                          candidateRemaining.drawnOut
+                                            ? "text-amber-700 dark:text-amber-400"
+                                            : "text-muted-foreground"
+                                        }
+                                        title={
+                                          candidateRemaining.drawnOut
+                                            ? "Склад вычерпан целиком"
+                                            : candidateRemaining.notReached
+                                              ? "Не доходила очередь"
+                                              : undefined
+                                        }
+                                      >
+                                        {candidateRemaining.text}
+                                        {candidateRemaining.drawnOut ? " — вычерпан" : ""}
+                                      </span>
+                                    </td>
+                                  </tr>
+                                );
+                              })}
+                          </Fragment>
                         );
                       })}
                     </tbody>

@@ -894,7 +894,7 @@ const ROUTE_HEADINGS: Record<RouteUrl, string> = {
  * выносит вердикт, поэтому падение по-прежнему читается как «заголовок не
  * виден», а не как «хелпер не доехал».
  */
-async function arriveAtRoute(page: Page, url: RouteUrl): Promise<void> {
+export async function arriveAtRoute(page: Page, url: RouteUrl): Promise<void> {
   const heading = page.getByRole("heading", { name: ROUTE_HEADINGS[url] });
   await gotoRoute(page, url, {
     waitForRoute: (budgetMs) =>

@@ -290,6 +290,7 @@ export const PositionRow = memo(function PositionRow({ pos, onApprove, onDelete,
           sku={pos.source_sku}
           deficitQuantity={pos.deficit_quantity}
           availableQuantity={pos.available_remainder_quantity}
+          freeStockBreakdown={pos.free_stock_breakdown}
           onClick={onSkuClick}
         />
       </td>

@@ -1,11 +1,12 @@
 """Автоподбор источника выдачи (#282): оракул «откуда брать материал».
 
 Правило Q1/Q2 из #207, реализованное здесь: источник выдачи — ЛЮБОЙ
-склад-хранилище, где есть этот артикул в этом размере, годный и с
-признаком операций, который маршрут позиции умеет принять. Порядок
-считает систему: ближайший назад по маршруту (этап-адресат дальше по
-маршруту — склад ближе), склад вычерпывается целиком, материал без
-обработок идёт последним, размер — строгое совпадение (Q7).
+склад-хранилище, где есть материал группы эквивалентов (ADR-0073) в этом
+размере, годный и с признаком операций, который маршрут позиции умеет
+принять. Порядок считает система: артикул задания раньше эквивалентов,
+затем ближайший назад по маршруту (этап-адресат дальше по маршруту —
+склад ближе), склад вычерпывается целиком, материал без обработок идёт
+последним, размер — строгое совпадение (Q7).
 
 Что этот модуль НЕ делает:
 
@@ -40,6 +41,7 @@ from app.models.route import RouteStage
 from app.models.section import Section
 from app.services.material_operations import completed_operations_through_stage
 from app.services.plan_position_hanger import position_dimensions_for_task
+from app.services.product_alias_groups import AliasGroups, load_alias_groups
 from app.services.route_storage_classifier import SECTION_TYPE_PRODUCTION, STOCK_TYPES
 from app.stock.models import QualityState, StockBalance
 
@@ -78,6 +80,15 @@ class IssueCandidate:
     target_sequence: int
     #: позиция в системном порядке (0 — первый вычерпываемый)
     order: int
+    #: группа эквивалентов строки (``min(product_id)``; для неразрешённой
+    #: группы — сам артикул задания)
+    group_key: int = 0
+    #: фактический артикул строки остатка (может быть эквивалентом)
+    product_id: int = 0
+    #: SKU фактического артикула; None — справочник не дал SKU
+    sku: str | None = None
+    #: строка принадлежит артикулу задания (первый ключ порядка, ADR-0073)
+    is_task_product: bool = False
 
 
 @dataclass(frozen=True)
@@ -107,8 +118,29 @@ class IssuePlan:
     required: Decimal
     collected: Decimal
     deficit: Decimal
+    #: ключ группы эквивалентов (``min(product_id)``); для неразрешённой
+    #: группы — сам артикул задания (поведение группы из одного)
+    group_key: int | None = None
+    #: SKU группы по возрастанию id — подпись «A, B (эквиваленты)»
+    group_skus: tuple[str, ...] = ()
     candidates: Sequence[IssueCandidate] = field(default_factory=tuple)
     hints: Sequence[IssueHint] = field(default_factory=tuple)
+
+
+@dataclass(frozen=True)
+class _RawCandidate:
+    """Промежуточная строка подбора: остаток прошёл все фильтры."""
+
+    balance_id: int
+    location_id: int
+    location_name: str
+    product_id: int
+    sku: str | None
+    dimensions: dict | None
+    completed_operations: list[str] | None
+    available: Decimal
+    target_sequence: int
+    is_task_product: bool
 
 
 async def _route_targets(
@@ -166,6 +198,8 @@ async def build_issue_plan(
     required: Decimal,
     excluded_balance_ids: Iterable[int] = (),
     selected_balance_ids: Iterable[int] | None = None,
+    group_ids: Iterable[int] | None = None,
+    alias_groups: AliasGroups | None = None,
 ) -> IssuePlan:
     """Один проход подбора: все склады-хранилища, системный порядок, дефицит.
 
@@ -174,6 +208,12 @@ async def build_issue_plan(
     системном порядке). ``excluded_balance_ids`` — снятые галочки окна:
     они не участвуют в вычерпывании, но остаются видны в списке (прочерк
     в колонке «остаток после»).
+
+    Пул — группа эквивалентов (ADR-0073): остаток любого её члена годится в
+    источник. ``group_ids``/``alias_groups`` — готовые члены и справочник
+    (кэш одного запроса); без них группа резолвится здесь один раз на вызов,
+    а не на строку баланса. Если продукт не попал в справочник, работаем как
+    с группой из одного ``product_id`` — прежнее поведение не падает.
     """
     if position.route_id is None:
         raise ValueError(
@@ -183,6 +223,24 @@ async def build_issue_plan(
     required = Decimal(str(required))
     excluded = {int(bid) for bid in excluded_balance_ids}
     selected = None if selected_balance_ids is None else {int(b) for b in selected_balance_ids}
+
+    if alias_groups is None:
+        alias_groups = await load_alias_groups(db, {product_id})
+    group = alias_groups.group_for(product_id)
+    if group_ids is not None:
+        members = tuple(sorted({int(gid) for gid in group_ids}))
+    elif group is not None:
+        members = group.product_ids
+    else:
+        members = (int(product_id),)
+    if not members:
+        members = (int(product_id),)
+    member_set = set(members)
+    group_key = group.key if group is not None else int(product_id)
+    group_skus = group.skus if group is not None else ()
+    sku_by_id = (
+        dict(zip(group.product_ids, group.skus)) if group is not None else {}
+    )
 
     targets = await _route_targets(db, route_id=position.route_id)
     required_dims = canonicalize_dimensions(position_dimensions_for_task(position))
@@ -202,16 +260,18 @@ async def build_issue_plan(
             required=required,
             collected=ZERO,
             deficit=required,
+            group_key=group_key,
+            group_skus=group_skus,
         )
 
-    # Подбор и подсказки — по всем качествам одного ключа (товар, склад):
+    # Подбор и подсказки — по всем качествам одной группы (товар, склад):
     # источники — только GOOD (брак НЕ является источником, #282), а
     # подсказка «на Хранилище Б 20 шт. браком» считается именно по
     # бракованным строкам, которые GOOD-фильтр сюда бы не пустил.
     balances = (
         await db.execute(
             select(StockBalance).where(
-                StockBalance.product_id == product_id,
+                StockBalance.product_id.in_(members),
                 StockBalance.location_id.in_(location_names.keys()),
                 StockBalance.balance_qty > 0,
             )
@@ -221,7 +281,7 @@ async def build_issue_plan(
     # Кандидаты: годный остаток, строгий размер (Q7), признак операций
     # зафиксирован и встречается на маршруте, склад не исключён явным
     # списком selected.
-    raw_candidates: list[tuple[int, int, str, dict | None, list[str] | None, Decimal, int]] = []
+    raw_candidates: list[_RawCandidate] = []
     for balance in balances:
         if balance.quality_state != QualityState.GOOD:
             continue
@@ -233,14 +293,17 @@ async def build_issue_plan(
         if target_sequence is None:
             continue
         raw_candidates.append(
-            (
-                balance.id,
-                balance.location_id,
-                location_names[balance.location_id],
-                balance.dimensions,
-                balance.completed_operations,
-                Decimal(balance.balance_qty),
-                target_sequence,
+            _RawCandidate(
+                balance_id=balance.id,
+                location_id=balance.location_id,
+                location_name=location_names[balance.location_id],
+                product_id=balance.product_id,
+                sku=sku_by_id.get(balance.product_id),
+                dimensions=balance.dimensions,
+                completed_operations=balance.completed_operations,
+                available=Decimal(balance.balance_qty),
+                target_sequence=target_sequence,
+                is_task_product=balance.product_id == product_id,
             )
         )
 
@@ -248,16 +311,19 @@ async def build_issue_plan(
     # что давал ``resolve_source_issues`` (#314/#55), а не тихий пропуск:
     # оператор указал склад руками, молчание хуже отказа. Название склада
     # вместо ``#id`` — отказ читается по-русски и без цифровых id (#282).
+    # Проверка артикула — по группе: эквивалент законен, чужой — нет.
     if selected is not None:
-        chosen = {c[0] for c in raw_candidates}
+        chosen = {c.balance_id for c in raw_candidates}
         for balance_id in sorted(selected - chosen):
             balance = await db.get(StockBalance, balance_id)
             if balance is None:
                 raise ValueError("Источник выдачи: выбранный складской остаток не найден")
             location = location_names.get(balance.location_id, "")
             label = f"«{location}»"
-            if balance.product_id != product_id:
-                raise ValueError(f"Источник выдачи: материал на {label} — другого артикула")
+            if balance.product_id not in member_set:
+                raise ValueError(
+                    f"Источник выдачи: материал на {label} — не из группы эквивалентов"
+                )
             if balance.completed_operations is None:
                 raise ValueError(
                     f"Источник выдачи: на {label} состояние операций "
@@ -277,43 +343,54 @@ async def build_issue_plan(
                 "не подходит маршруту позиции"
             )
 
-    # Системный порядок: ближайший назад по маршруту (этап-адресат дальше —
-    # склад ближе), материал без обработок последним; ничья — по id склада,
-    # чтобы предвыбор не зависел от порядка строк в ответе.
+    # Системный порядок: артикул задания — всегда первым (даже если
+    # эквивалент ближе по маршруту), затем ближайший назад по маршруту,
+    # материал без обработок последним; ничья — по id склада, чтобы
+    # предвыбор не зависел от порядка строк в ответе (ADR-0073 §5).
     raw_candidates.sort(
-        key=lambda c: (-c[6], -len(c[4] or []), c[1], c[0])
+        key=lambda c: (
+            not c.is_task_product,
+            -c.target_sequence,
+            -len(c.completed_operations or []),
+            c.location_id,
+            c.balance_id,
+        )
     )
 
     candidates: list[IssueCandidate] = []
     remaining = required
     collected = ZERO
-    for order, (balance_id, location_id, location_name, dims, ops, available, target_seq) in enumerate(raw_candidates):
+    for order, raw in enumerate(raw_candidates):
         # «included» — состояние галочки, а не факт вычерпывания: склад,
         # до которого очередь не дошла (потребность закрыта раньше), остаётся
         # включённым и видимым отмеченным (#282: подсказки и снятие галочки
         # живут по включённым складам). Очередь решает только `take`.
-        included = selected is not None or balance_id not in excluded
-        take = min(remaining, available) if included and remaining > 0 else ZERO
+        included = selected is not None or raw.balance_id not in excluded
+        take = min(remaining, raw.available) if included and remaining > 0 else ZERO
         if take > 0:
             remaining -= take
             collected += take
         # «Остаток после»: 0 — склад вычерпан целиком; None — прочерк
         # (галочка снята или очередь до склада не дошла).
-        remaining_after = available - take if included and take > 0 else None
+        remaining_after = raw.available - take if included and take > 0 else None
         candidates.append(
             IssueCandidate(
-                balance_id=balance_id,
-                location_id=location_id,
-                location_name=location_name,
-                dimensions=dims,
-                completed_operations=ops,
-                ops_count=len(ops or []),
-                available=available,
+                balance_id=raw.balance_id,
+                location_id=raw.location_id,
+                location_name=raw.location_name,
+                dimensions=raw.dimensions,
+                completed_operations=raw.completed_operations,
+                ops_count=len(raw.completed_operations or []),
+                available=raw.available,
                 take=take,
                 remaining_after=remaining_after,
                 included=included,
-                target_sequence=target_seq,
+                target_sequence=raw.target_sequence,
                 order=order,
+                group_key=group_key,
+                product_id=raw.product_id,
+                sku=raw.sku,
+                is_task_product=raw.is_task_product,
             )
         )
     # Снятый галочкой склад остаётся в списке (оператор видит, что снял),
@@ -322,7 +399,7 @@ async def build_issue_plan(
         if any(c.balance_id == balance_id for c in candidates):
             continue
         balance = await db.get(StockBalance, balance_id)
-        if balance is None or balance.product_id != product_id:
+        if balance is None or balance.product_id not in member_set:
             continue
         target_sequence = _match_target(targets, balance.completed_operations)
         if target_sequence is None:
@@ -341,6 +418,10 @@ async def build_issue_plan(
                 included=False,
                 target_sequence=target_sequence,
                 order=len(candidates),
+                group_key=group_key,
+                product_id=balance.product_id,
+                sku=sku_by_id.get(balance.product_id),
+                is_task_product=balance.product_id == product_id,
             )
         )
 
@@ -359,6 +440,8 @@ async def build_issue_plan(
         required=required,
         collected=collected,
         deficit=max(ZERO, required - collected),
+        group_key=group_key,
+        group_skus=group_skus,
         candidates=tuple(candidates),
         hints=hints,
     )

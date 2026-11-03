@@ -40,6 +40,195 @@ export function isCandidateChecked(
   return !excluded.includes(candidate.balance_id);
 }
 
+/**
+ * Строка выдачи — группа эквивалентов на осях склада:
+ * `(group_key, location_id, dimensions, completed_operations)` (#396).
+ *
+ * Один `group_key` — ещё не строка: остатки группы на разных складах,
+ * размерах или операциях — разные строки выдачи. Внутри строки кандидаты
+ * идут по серверному `order`, строки — по минимальному `order` своих
+ * кандидатов. Клиент ничего не переставляет и не пересчитывает: только
+ * складывает уже посчитанные сервером `available`/`take`.
+ */
+export type IssueCandidateGroup = {
+  /** Стабильный ключ строки для раскрытия. */
+  key: string;
+  groupKey: number;
+  locationId: number;
+  locationName: string;
+  dimensions: Record<string, unknown> | null;
+  completedOperations: string[] | null;
+  opsCount: number;
+  /** Кандидаты строки в серверном порядке `order`. */
+  candidates: IssuePreviewCandidate[];
+  /** Минимальный `order` строки — место строки в списке. */
+  order: number;
+  /** Сумма серверных `available` (уже в формате сервера). */
+  available: string;
+  /** Сумма серверных `take` (уже в формате сервера). */
+  take: string;
+  /** `null` — все строки без значения; иначе сумма не-null значений. */
+  remainingAfter: string | null;
+  balanceIds: number[];
+  /** «A» или «A, B (эквиваленты)». */
+  skuLabel: string;
+  /** В строке есть артикул задания (эквивалент — не ошибка). */
+  hasTaskProduct: boolean;
+};
+
+function stableDimensionsKey(dimensions: Record<string, unknown> | null): string {
+  if (dimensions === null) return "null";
+  return JSON.stringify(
+    Object.entries(dimensions).sort(([left], [right]) => left.localeCompare(right)),
+  );
+}
+
+function candidateGroupKey(candidate: IssuePreviewCandidate): string {
+  const operations =
+    candidate.completed_operations === null
+      ? "null"
+      : JSON.stringify([...candidate.completed_operations].sort());
+  return [
+    candidate.group_key,
+    candidate.location_id,
+    stableDimensionsKey(candidate.dimensions),
+    operations,
+  ].join("|");
+}
+
+function sumServerQty(values: readonly (string | null)[]): string {
+  const total = values.reduce((sum, value) => sum + (parseServerQty(value) ?? 0), 0);
+  return fmtServerQty(total);
+}
+
+/**
+ * «Останется после» строки группы: `null`, только если `null` у всех строк.
+ * Складываем лишь не-null значения — прочерк не превращается в ноль.
+ */
+export function groupRemainingAfter(
+  candidates: readonly IssuePreviewCandidate[],
+): string | null {
+  const values = candidates
+    .map((candidate) => parseServerQty(candidate.remaining_after))
+    .filter((value): value is number => value !== null);
+  if (values.length === 0) return null;
+  return fmtServerQty(values.reduce((sum, value) => sum + value, 0));
+}
+
+/** Подпись артикулов строки: уникальные SKU по возрастанию `product_id`. */
+function groupSkuLabel(candidates: readonly IssuePreviewCandidate[]): string {
+  const seen = new Set<string>();
+  const skus: string[] = [];
+  for (const candidate of [...candidates].sort((left, right) => left.product_id - right.product_id)) {
+    if (candidate.sku && !seen.has(candidate.sku)) {
+      seen.add(candidate.sku);
+      skus.push(candidate.sku);
+    }
+  }
+  if (skus.length === 0) return "—";
+  return skus.length === 1 ? skus[0] : `${skus.join(", ")} (эквиваленты)`;
+}
+
+/**
+ * Свернуть плоский список кандидатов сервера в строки групп. Порядок
+ * кандидатов внутри строки и порядок строк — только серверный `order`.
+ */
+export function buildIssueCandidateGroups(
+  candidates: readonly IssuePreviewCandidate[],
+  taskProductId?: number | null,
+): IssueCandidateGroup[] {
+  const groups = new Map<string, IssueCandidateGroup>();
+  for (const candidate of candidates) {
+    const key = candidateGroupKey(candidate);
+    const existing = groups.get(key);
+    if (existing) {
+      existing.candidates.push(candidate);
+      existing.order = Math.min(existing.order, candidate.order);
+      continue;
+    }
+    groups.set(key, {
+      key,
+      groupKey: candidate.group_key,
+      locationId: candidate.location_id,
+      locationName: candidate.location_name,
+      dimensions: candidate.dimensions,
+      completedOperations: candidate.completed_operations,
+      opsCount: candidate.ops_count,
+      candidates: [candidate],
+      order: candidate.order,
+      available: "",
+      take: "",
+      remainingAfter: null,
+      balanceIds: [],
+      skuLabel: "",
+      hasTaskProduct: false,
+    });
+  }
+
+  return [...groups.values()]
+    .map((group) => {
+      const sorted = [...group.candidates].sort((left, right) => left.order - right.order);
+      return {
+        ...group,
+        candidates: sorted,
+        available: sumServerQty(sorted.map((candidate) => candidate.available)),
+        take: sumServerQty(sorted.map((candidate) => candidate.take)),
+        remainingAfter: groupRemainingAfter(sorted),
+        balanceIds: groupBalanceIds(sorted),
+        skuLabel: groupSkuLabel(sorted),
+        hasTaskProduct:
+          taskProductId != null &&
+          sorted.some((candidate) => candidate.product_id === taskProductId),
+      };
+    })
+    .sort((left, right) => left.order - right.order);
+}
+
+/** `balance_id` строки группы — для галочки всей строки. */
+export function groupBalanceIds(
+  candidates: readonly IssuePreviewCandidate[],
+): number[] {
+  return candidates.map((candidate) => candidate.balance_id);
+}
+
+/** Строка включена, пока снята не вся: сняты ВСЕ — галочка снята. */
+export function isGroupChecked(
+  balanceIds: readonly number[],
+  excluded: readonly number[],
+): boolean {
+  return balanceIds.some((id) => !excluded.includes(id));
+}
+
+/** Снята часть строки — промежуточное состояние галочки группы. */
+export function isGroupIndeterminate(
+  balanceIds: readonly number[],
+  excluded: readonly number[],
+): boolean {
+  const excludedCount = balanceIds.filter((id) => excluded.includes(id)).length;
+  return excludedCount > 0 && excludedCount < balanceIds.length;
+}
+
+/** Состояние галочки группы для `Checkbox`. */
+export function groupCheckState(
+  balanceIds: readonly number[],
+  excluded: readonly number[],
+): boolean | "indeterminate" {
+  if (isGroupIndeterminate(balanceIds, excluded)) return "indeterminate";
+  return isGroupChecked(balanceIds, excluded);
+}
+
+/** Галочка группы: включить — убрать все её `balance_id`, выключить — добавить все. */
+export function toggleGroupExcluded(
+  excluded: readonly number[],
+  balanceIds: readonly number[],
+  checked: boolean,
+): number[] {
+  const groupIds = new Set(balanceIds);
+  const without = excluded.filter((id) => !groupIds.has(id));
+  if (checked) return without;
+  return [...without, ...new Set(balanceIds)];
+}
+
 export type RemainingAfterCell = {
   /** «—» — значения нет; «0» — ноль. Никогда не одна и та же печать. */
   text: string;
@@ -114,7 +303,7 @@ export function issueConfirmBlockReason(args: {
   if (args.errorText) return args.errorText;
   if (!args.preview) return "Подбор склада не посчитан";
   if (args.preview.candidates.length === 0) {
-    return "Источник выдачи: ни на одном складе нет этого артикула в нужном размере — выдавать нечего";
+    return "Источник выдачи: ни на одном складе нет материала группы эквивалентов в нужном размере — выдавать нечего";
   }
   const collected = parseServerQty(args.preview.collected);
   if (collected === null || collected <= 0) {

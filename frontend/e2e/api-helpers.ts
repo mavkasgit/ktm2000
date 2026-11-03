@@ -373,6 +373,13 @@ export async function apiEnsureCatalogProduct(spec: {
   mountWidthMm?: number;
   quantityPerHanger?: number;
   type?: string;
+  /**
+   * Эквивалентные артикулы (ADR-0073). Передаются в PATCH/POST как есть:
+   * сервер (`_enforce_bidirectional_aliases`) сам дописывает обратный алиас,
+   * если продукт-партнёр уже существует. Поэтому пару заводят двумя
+   * вызовами: сначала оба продукта, затем повторный вызов с `aliases`.
+   */
+  aliases?: string[];
 }) {
   const primary = spec.lengthsMm[0];
   const hanger =
@@ -393,6 +400,9 @@ export async function apiEnsureCatalogProduct(spec: {
     perimeter_mm: spec.perimeterMm ?? null,
     mount_width_mm: spec.mountWidthMm ?? null,
     quantity_per_hanger: hanger,
+    // `undefined` JSON.stringify отбрасывает: без явного aliases PATCH не
+    // трогает существующий список эквивалентов.
+    aliases: spec.aliases,
   };
   const search = unwrapItems<{ id: number; sku: string }>(
     await (await fetch(`${BACKEND_URL}/api/products?q=${encodeURIComponent(spec.sku)}`)).json(),
@@ -551,6 +561,113 @@ export async function apiGetStockBalances(productId: number): Promise<StockBalan
     throw new Error(`Get stock balances failed: ${res.statusText} (${res.status})`);
   }
   return (await res.json()) as StockBalanceRow[];
+}
+
+/**
+ * Строка списка `GET /api/stock/balance` — группа эквивалентов на осях
+ * `(участок, качество, размер, операции)` (спека §8, ADR-0073).
+ *
+ * `balance_qty` — сумма группы, `items` — её фактические SKU-строки. Форма
+ * повторяет `backend/app/stock/api.py::StockBalanceGroupOut`; SKU-уровень
+ * остаётся у `apiGetStockBalances` (`by-product`).
+ */
+export type StockBalanceGroupRow = StockBalanceRow & {
+  alias_group_key: number;
+  alias_group_skus: string[];
+  items: Array<{
+    balance_id: number;
+    product_id: number;
+    sku: string | null;
+    quantity: string;
+  }>;
+};
+
+/** Группы остатков с серверной суммой и раскрытием до SKU. */
+export async function apiGetStockBalanceGroups(
+  params: { search?: string; productId?: number; locationId?: number; limit?: number; offset?: number } = {},
+): Promise<{ balances: StockBalanceGroupRow[]; total: number; limit: number; offset: number }> {
+  const query = new URLSearchParams();
+  if (params.search) query.set("search", params.search);
+  if (params.productId !== undefined) query.set("product_id", String(params.productId));
+  if (params.locationId !== undefined) query.set("location_id", String(params.locationId));
+  query.set("limit", String(params.limit ?? 500));
+  query.set("offset", String(params.offset ?? 0));
+  const res = await fetch(`${BACKEND_URL}/api/stock/balance?${query.toString()}`, {
+    headers: await authHeaders(),
+  });
+  if (!res.ok) {
+    throw new Error(`Get stock balance groups failed: ${res.statusText} (${res.status})`);
+  }
+  return res.json() as Promise<{
+    balances: StockBalanceGroupRow[];
+    total: number;
+    limit: number;
+    offset: number;
+  }>;
+}
+
+/** Проводка ledger (`GET /api/stock/transactions`). */
+export type StockTransactionRow = {
+  id: number;
+  product_id: number;
+  from_location_id: number | null;
+  to_location_id: number | null;
+  quantity: string;
+  reason: string;
+  transfer_id: number | null;
+  task_id: number | null;
+  source_ref: string | null;
+  dimensions: Record<string, unknown> | null;
+  comment: string | null;
+};
+
+export async function apiGetStockTransactions(productId: number): Promise<StockTransactionRow[]> {
+  const res = await fetch(
+    `${BACKEND_URL}/api/stock/transactions?product_id=${productId}&limit=500`,
+    { headers: await authHeaders() },
+  );
+  if (!res.ok) {
+    throw new Error(`Get stock transactions failed: ${res.statusText} (${res.status})`);
+  }
+  const body = (await res.json()) as { transactions: StockTransactionRow[]; total: number };
+  if (body.total > 500) {
+    throw new Error(`Stock transactions page is incomplete: total=${body.total}, limit=500`);
+  }
+  return body.transactions;
+}
+
+/** Строка журнала передач: `GET /api/transfers/history`. */
+export type TransferHistoryRow = {
+  transfer_id: number;
+  transfer_no: string;
+  issue_no: string | null;
+  status: string;
+  product_sku: string;
+  sent_quantity: string;
+  comment: string | null;
+  from_section_name: string;
+  to_section_name: string;
+};
+
+/**
+ * Журнал передач (без фильтра по участку — все записи стенда).
+ * `Transfer.product_id` читается здесь как `product_sku`: запись передачи
+ * несёт артикул задания, а не фактический SKU источника (ADR-0073 п.5).
+ */
+export async function apiGetTransferHistory(search?: string): Promise<TransferHistoryRow[]> {
+  const query = new URLSearchParams({ limit: "500" });
+  if (search) query.set("search", search);
+  const res = await fetch(`${BACKEND_URL}/api/transfers/history?${query.toString()}`, {
+    headers: await authHeaders(),
+  });
+  if (!res.ok) {
+    throw new Error(`Get transfer history failed: ${res.statusText} (${res.status})`);
+  }
+  const body = (await res.json()) as { transfers: TransferHistoryRow[]; total: number };
+  if (body.total > 500) {
+    throw new Error(`Transfer history page is incomplete: total=${body.total}, limit=500`);
+  }
+  return body.transfers;
 }
 
 export async function apiGetActiveRoutes() {

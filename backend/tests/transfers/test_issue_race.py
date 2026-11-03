@@ -23,6 +23,7 @@ from decimal import Decimal
 import pytest
 import pytest_asyncio
 from app.domain.shortage import ShortageStrategy
+from app.models.product import Product, ProductType
 from app.models.production_plan import PlanPosition
 from app.models.section import Section
 from app.stock.models import QualityState, Reason, StockBalance
@@ -95,6 +96,52 @@ async def _setup_warehouse(engine: AsyncEngine, *, sku: str, stock_qty: Decimal)
         return {
             "position_id": fx["position"].id,
             "product_id": fx["product"].id,
+            "stock_location_id": fx["sections"][0].id,
+            "user_id": fx["user"].id,
+        }
+
+
+async def _setup_group_warehouse(
+    engine: AsyncEngine,
+    *,
+    sku: str,
+    equivalent_sku: str,
+    stock_qty: Decimal,
+) -> dict:
+    """Коммит-сетап группы: маршрут и позиция на A, вся куча лежит под B.
+
+    ``SETVAL`` поднимает последовательность пользователей, чтобы коммитимая
+    фикстура не занимала низкие id. Возвращает плоские id: позиция,
+    артикул задания (A), фактический SKU кучи (B).
+    """
+    factory = async_sessionmaker(bind=engine, expire_on_commit=False)
+    async with factory() as db:
+        await _bump_user_sequence(db)
+        fx = await build_operation_route(db, sku=sku, stages=STAGES, input_dimensions=DIMS)
+        equivalent = Product(
+            sku=equivalent_sku,
+            name=equivalent_sku,
+            type=ProductType.component,
+            unit="pcs",
+            is_active=True,
+        )
+        db.add(equivalent)
+        await db.flush()
+        fx["product"].aliases = [equivalent_sku]
+        await StockCommandService().record(db, StockCommand(
+            product_id=equivalent.id,
+            to_location_id=fx["sections"][0].id,
+            quantity=stock_qty,
+            reason=Reason.MANUAL_IN,
+            dimensions=DIMS,
+            completed_operations=OPS,
+            created_by=fx["user"].id,
+        ))
+        await db.commit()
+        return {
+            "position_id": fx["position"].id,
+            "task_product_id": fx["product"].id,
+            "equivalent_product_id": equivalent.id,
             "stock_location_id": fx["sections"][0].id,
             "user_id": fx["user"].id,
         }
@@ -287,3 +334,69 @@ async def test_lock_covers_whole_key_including_negative_rows(engine: AsyncEngine
         # Тестирующая выдача не коммитится — остальной модуль стартует с
         # чистого склада.
         await db_a.rollback()
+
+
+async def test_parallel_issue_on_group_members_cannot_overdraw_one_pile(
+    engine: AsyncEngine,
+):
+    """Позиции на A и B делят кучу: групповой замок не даёт вычерпать её дважды.
+
+    Остаток лежит под B (эквивалент A). Без ``product_id.in_(group_ids)``
+    выдача на A не залочила бы ни одной строки, обе выдачи прочли бы 100 и
+    списали по 60 — 120 из 100.
+    """
+    factory = async_sessionmaker(bind=engine, expire_on_commit=False)
+    ids = await _setup_group_warehouse(
+        engine,
+        sku="RACE-GRP-A",
+        equivalent_sku="RACE-GRP-B",
+        stock_qty=Decimal(100),
+    )
+
+    async def _issue_b() -> dict:
+        async with factory() as db_b:
+            position = await db_b.get(PlanPosition, ids["position_id"])
+            res = await execute_issue(
+                db_b,
+                position=position,
+                product_id=ids["equivalent_product_id"],
+                required=Decimal(60),
+                actor_id=ids["user_id"],
+                idempotency_key="race-group-B",
+                shortage_strategy=ShortageStrategy.partial,
+            )
+            await db_b.commit()
+            return res
+
+    async with factory() as db_a:
+        position_a = await db_a.get(PlanPosition, ids["position_id"])
+        res_a = await execute_issue(
+            db_a,
+            position=position_a,
+            product_id=ids["task_product_id"],
+            required=Decimal(60),
+            actor_id=ids["user_id"],
+            idempotency_key="race-group-A",
+            shortage_strategy=ShortageStrategy.partial,
+        )
+        task_b = asyncio.create_task(_issue_b())
+        # B читает кучу до коммита A и обязана упереться в групповой замок:
+        # после коммита она увидит фактический остаток, а не свои 100.
+        await asyncio.sleep(0.5)
+        await db_a.commit()
+        res_b = await task_b
+
+    assert res_a["collected"] == Decimal(60)
+    assert res_a["collected"] + res_b["collected"] == Decimal(100), (
+        "две выдачи на разные SKU одной группы не могут вычерпать кучу дважды"
+    )
+    assert res_b["deficit"] == Decimal(20)
+
+    async with factory() as check:
+        qty = await check.scalar(
+            select(StockBalance.balance_qty).where(
+                StockBalance.product_id == ids["equivalent_product_id"],
+                StockBalance.location_id == ids["stock_location_id"],
+            )
+        )
+        assert qty is None or qty >= 0

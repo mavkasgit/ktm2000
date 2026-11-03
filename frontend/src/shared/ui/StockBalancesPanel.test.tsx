@@ -1,4 +1,4 @@
-import { fireEvent, render, screen, waitFor } from "@testing-library/react";
+import { fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 
@@ -13,8 +13,9 @@ import {
   OPERATIONS_NOT_RECORDED_LABEL,
   type ImportOperationStep,
   type StockBalanceEntry,
+  type StockBalanceItem,
 } from "@/shared/api/stock";
-import { buildColumnApiParams } from "@/shared/lib/columnSpecs";
+import { buildColumnApiParams, buildColumnFilterValues } from "@/shared/lib/columnSpecs";
 import { stockBalanceColumns } from "@/shared/lib/stockBalanceColumns";
 import { StockBalancesPanel } from "./StockBalancesPanel";
 
@@ -22,17 +23,40 @@ function delay(ms: number): Promise<void> {
   return new Promise((resolve) => setTimeout(resolve, ms));
 }
 
-const entry = (id: number): StockBalanceEntry => ({
-  id,
-  product_id: id,
-  product_sku: `SKU-${id}`,
-  location_id: 1,
-  location_name: "Участок",
-  quality_state: "GOOD",
-  balance_qty: "10",
-  completed_operations: [],
-  refreshed_at: null,
-});
+function item(balanceId: number, overrides: Partial<StockBalanceItem> = {}): StockBalanceItem {
+  return {
+    balance_id: balanceId,
+    product_id: balanceId,
+    sku: `SKU-${balanceId}`,
+    quantity: "10",
+    ...overrides,
+  };
+}
+
+/**
+ * Строка ответа сервера: группа эквивалентов на осях участок/качество/размер/
+ * операции. Одиночная куча — группа из одного SKU, `items` из одной строки.
+ */
+function entry(id: number, overrides: Partial<StockBalanceEntry> = {}): StockBalanceEntry {
+  const productSku = overrides.product_sku ?? `SKU-${id}`;
+  const rows =
+    overrides.items ?? [item(id, { product_id: overrides.product_id ?? id, sku: productSku })];
+  return {
+    id,
+    product_id: id,
+    product_sku: productSku,
+    location_id: 1,
+    location_name: "Участок",
+    quality_state: "GOOD",
+    balance_qty: "10",
+    completed_operations: [],
+    refreshed_at: null,
+    alias_group_key: id,
+    alias_group_skus: rows.map((row) => row.sku ?? `#${row.product_id}`),
+    items: rows,
+    ...overrides,
+  };
+}
 
 function offsetsRequested(): number[] {
   return vi.mocked(getStockBalances).mock.calls.map(([params]) => params?.offset ?? -1);
@@ -43,14 +67,22 @@ function lastOffset(): number {
   return offsets[offsets.length - 1] ?? -1;
 }
 
-function renderPanel(locationIds: number[]) {
+function sortRequested(): string | undefined {
+  const calls = vi.mocked(getStockBalances).mock.calls;
+  return calls[calls.length - 1]?.[0]?.sort;
+}
+
+function renderPanel(locationIds: number[], handlers: {
+  onSelectProduct?: (productId: number) => void;
+  onShowHistory?: (productId: number, productSku?: string | null) => void;
+} = {}) {
   const client = new QueryClient({ defaultOptions: { queries: { retry: false } } });
   return render(
     <QueryClientProvider client={client}>
       <StockBalancesPanel
         locationIds={locationIds}
-        onSelectProduct={vi.fn()}
-        onShowHistory={vi.fn()}
+        onSelectProduct={handlers.onSelectProduct ?? vi.fn()}
+        onShowHistory={handlers.onShowHistory ?? vi.fn()}
       />
     </QueryClientProvider>,
   );
@@ -69,6 +101,16 @@ function renderSectionPanel() {
       />
     </QueryClientProvider>,
   );
+}
+
+function articleOrder(): string[] {
+  return [...document.querySelectorAll("tbody tr")]
+    .map((row) => {
+      const cell = row.querySelector("td");
+      const article = cell?.querySelector("span") ?? cell;
+      return article?.textContent?.trim() ?? "";
+    })
+    .filter(Boolean);
 }
 
 beforeEach(() => {
@@ -103,102 +145,144 @@ describe("StockBalancesPanel: страница и набор складов", ()
   });
 });
 
-describe("StockBalancesPanel: группы по артикулу", () => {
-  const groupRows = (): StockBalanceEntry[] => [
-    { ...entry(1), product_sku: "SKU-G", balance_qty: "1159" },
-    { ...entry(2), product_sku: "SKU-SOLO", balance_qty: "10" },
-    {
-      ...entry(3),
-      product_sku: "SKU-G",
-      balance_qty: "396",
-      quality_state: "SCRAP",
-      completed_operations: [],
-    },
+describe("StockBalancesPanel: группы эквивалентов приходят с сервера", () => {
+  /** Куча A+B: сумма 1555, две фактические SKU-строки. */
+  const pair = entry(1, {
+    product_id: 1,
+    product_sku: "SKU-A",
+    balance_qty: "1555",
+    alias_group_key: 1,
+    alias_group_skus: ["SKU-A", "SKU-B"],
+    items: [
+      item(1, { product_id: 1, sku: "SKU-A", quantity: "1159" }),
+      item(2, { product_id: 2, sku: "SKU-B", quantity: "396" }),
+    ],
+  });
+
+  const solo = entry(3, {
+    product_sku: "SKU-SOLO",
+    balance_qty: "10",
+    alias_group_skus: ["SKU-SOLO"],
+    items: [item(3, { sku: "SKU-SOLO", quantity: "10" })],
+  });
+
+  beforeEach(() => {
+    vi.mocked(getStockBalances).mockResolvedValue({
+      balances: [pair, solo],
+      total: 2,
+      limit: 50,
+      offset: 0,
+    });
+  });
+
+  it("рисует группу одной строкой-итогом, а одиночный SKU — обычной строкой", async () => {
+    renderPanel([1]);
+    const summary = await screen.findByText("SKU-A, SKU-B (эквиваленты)");
+    // E2E читает показания по data-testid (#398), а не по тексту строки.
+    const groupRow = screen.getByTestId("stock-balance-group-1");
+    expect(groupRow).toBe(summary.closest("tr"));
+    expect(within(groupRow).getByTestId("stock-balance-group-qty").textContent).toBe("1555");
+
+    // Итог: серверная сумма кучи и число фактических SKU.
+    expect(summary.closest("tr")?.textContent).toContain("1555");
+    expect(summary.closest("tr")?.textContent).toContain("×2");
+    // Раскрытие свёрнуто: строк кучи не видно.
+    expect(screen.queryByText("1159")).toBeNull();
+    expect(screen.queryByText("396")).toBeNull();
+
+    // Одиночная куча — без шапки-раскрытия и без пометки «эквиваленты».
+    const soloRow = screen.getByText("SKU-SOLO").closest("tr");
+    expect(soloRow?.textContent).toContain("10");
+    expect(screen.getAllByText(/эквиваленты/)).toHaveLength(1);
+  });
+
+  it("раскрывает группу до фактических SKU с их количествами", async () => {
+    renderPanel([1]);
+    fireEvent.click(await screen.findByText("SKU-A, SKU-B (эквиваленты)"));
+
+    await waitFor(() => expect(screen.getByText("1159")).toBeTruthy());
+    expect(screen.getByText("396")).toBeTruthy();
+    expect(screen.getByText("SKU-A")).toBeTruthy();
+    expect(screen.getByText("SKU-B")).toBeTruthy();
+  });
+
+  it("«История» и детализация раскрытой SKU-строки — по её product_id", async () => {
+    const onSelectProduct = vi.fn();
+    const onShowHistory = vi.fn();
+    renderPanel([1], { onSelectProduct, onShowHistory });
+    fireEvent.click(await screen.findByText("SKU-A, SKU-B (эквиваленты)"));
+    await waitFor(() => expect(screen.getByText("SKU-B")).toBeTruthy());
+
+    const itemRow = screen.getByText("SKU-B").closest("tr")!;
+    fireEvent.click(within(itemRow).getByText("История"));
+    expect(onShowHistory).toHaveBeenCalledWith(2, "SKU-B");
+
+    fireEvent.click(screen.getByText("SKU-B"));
+    expect(onSelectProduct).toHaveBeenCalledWith(2);
+  });
+
+  it("куча из одного SKU без раскрытия показывает артикул-представитель", async () => {
+    // Группа эквивалентов из двух артикулов, но на этих осях лежит только A:
+    // раскрывать нечего, и шапки «(эквиваленты)» быть не должно.
+    const single = entry(5, {
+      product_id: 5,
+      product_sku: "SKU-ONLY-A",
+      balance_qty: "7",
+      alias_group_skus: ["SKU-ONLY-A", "SKU-ONLY-B"],
+      items: [item(5, { product_id: 5, sku: "SKU-ONLY-A", quantity: "7" })],
+    });
+    vi.mocked(getStockBalances).mockResolvedValue({
+      balances: [single],
+      total: 1,
+      limit: 50,
+      offset: 0,
+    });
+
+    renderPanel([1]);
+    await screen.findByText("SKU-ONLY-A");
+    expect(screen.queryByText(/эквиваленты/)).toBeNull();
+    expect(screen.queryByText("×1")).toBeNull();
+  });
+
+  it("список фильтра «Артикул» — отдельные SKU группы, а не склеенная подпись", async () => {
+    const rows = [pair, solo];
+    expect(buildColumnFilterValues(rows, stockBalanceColumns).sku).toEqual([
+      "SKU-A",
+      "SKU-B",
+      "SKU-SOLO",
+    ]);
+    // В запрос уходит член группы: сервер ищет `?sku=` по строкам кучи.
+    expect(buildColumnApiParams({ sku: new Set(["SKU-B"]) }, {}, stockBalanceColumns)).toEqual({
+      sku: "SKU-B",
+    });
+  });
+});
+
+describe("StockBalancesPanel: порядок по умолчанию", () => {
+  /** Сервер отдал порядок, который клиент НЕ должен переставлять. */
+  const serverRows: StockBalanceEntry[] = [
+    entry(1, { product_sku: "SKU-BIG", balance_qty: "396" }),
+    entry(2, { product_sku: "SKU-SMALL", balance_qty: "10" }),
+    entry(3, { product_sku: "SKU-MID", balance_qty: "800" }),
   ];
 
   beforeEach(() => {
     vi.mocked(getStockBalances).mockResolvedValue({
-      balances: groupRows(),
+      balances: serverRows,
       total: 3,
       limit: 50,
       offset: 0,
     });
   });
 
-  it("сворачивает артикул с несколькими строками в итог и раскрывает его по клику", async () => {
-    renderPanel([1]);
-    const summary = await screen.findByText("SKU-G");
-
-    // Итог: сумма количеств строк артикула и их число.
-    expect(summary.closest("tr")?.textContent).toContain("1555");
-    expect(summary.closest("tr")?.textContent).toContain("×2");
-    // Раскладка качества: свёрнутая группа не прячет брак.
-    expect(summary.closest("tr")?.textContent).toContain("Годный 1 · Брак 1");
-    // …и называет его цветом: в свёрнутой строке это единственный признак брака.
-    const qualityCell = Array.from(summary.closest("tr")!.querySelectorAll("td")).find((cell) =>
-      cell.textContent?.includes("Брак"),
-    );
-    expect(qualityCell?.className).toContain("text-red-600");
-    // Строки артикула спрятаны, одиночный артикул — как был.
-    expect(screen.queryByText("1159")).toBeNull();
-    expect(screen.getByText("SKU-SOLO")).toBeTruthy();
-
-    fireEvent.click(summary);
-    await waitFor(() => expect(screen.getByText("1159")).toBeTruthy());
-    expect(screen.getByText("396")).toBeTruthy();
-  });
-});
-
-describe("StockBalancesPanel: порядок по умолчанию", () => {
-  const sortedRows: StockBalanceEntry[] = [
-    { ...entry(1), product_sku: "SKU-BIG", balance_qty: "396" },
-    { ...entry(2), product_sku: "SKU-BIG", balance_qty: "1159" },
-    { ...entry(3), product_sku: "SKU-SMALL", balance_qty: "10" },
-    { ...entry(4), product_sku: "SKU-MID", balance_qty: "800" },
-  ];
-
-  /** Артикулы тела таблицы: строка группы держит артикул в span, строка — в кнопке. */
-  function articleOrder(): string[] {
-    return [...document.querySelectorAll("tbody tr")]
-      .map((row) => {
-        const cell = row.querySelector("td");
-        const article = cell?.querySelector("span") ?? cell;
-        return article?.textContent?.trim() ?? "";
-      })
-      .filter(Boolean);
-  }
-
-  /** Количества второй колонки — суммы групп и строки после раскрытия. */
-  function quantityOrder(): string[] {
-    return [...document.querySelectorAll("tbody tr")]
-      .map((row) => row.querySelectorAll("td")[1]?.textContent?.trim() ?? "")
-      .filter(Boolean);
-  }
-
-  function sortRequested(): string | undefined {
-    const calls = vi.mocked(getStockBalances).mock.calls;
-    return calls[calls.length - 1]?.[0]?.sort;
-  }
-
-  beforeEach(() => {
-    vi.mocked(getStockBalances).mockResolvedValue({
-      balances: sortedRows,
-      total: 4,
-      limit: 50,
-      offset: 0,
-    });
-  });
-
-  it("без ручной сортировки — группы по общему количеству убыв., строки артикула — того же порядка", async () => {
+  it("строки идут в серверном порядке: клиент группы не сортирует", async () => {
     renderPanel([1]);
     await screen.findByText("SKU-BIG");
 
-    expect(articleOrder()).toEqual(["SKU-BIG", "SKU-MID", "SKU-SMALL"]);
-    expect(quantityOrder()).toEqual(["1555", "800", "10"]);
-
-    fireEvent.click(screen.getByText("SKU-BIG"));
-    await waitFor(() => expect(screen.getByText("1159")).toBeTruthy());
-    expect(quantityOrder()).toEqual(["1555", "1159", "396", "800", "10"]);
+    // Количества намеренно не по убыванию: клиентская пересортировка
+    // переставила бы строки и разошлась бы с `total`/страницами сервера.
+    expect(articleOrder()).toEqual(["SKU-BIG", "SKU-SMALL", "SKU-MID"]);
+    expect(sortRequested()).toBe("sku:asc");
   });
 
   it("панель участка просит серверные остатки по количеству убыв.", async () => {
@@ -215,7 +299,7 @@ describe("StockBalancesPanel: порядок по умолчанию", () => {
     expect(sortRequested()).toBe("sku:asc");
   });
 
-  it("ручная сортировка по колонке отключает клиентский дефолт", async () => {
+  it("ручная сортировка по колонке уходит на сервер и не переставляет строки на клиенте", async () => {
     renderSectionPanel();
     await screen.findByText("SKU-BIG");
 
@@ -224,10 +308,9 @@ describe("StockBalancesPanel: порядок по умолчанию", () => {
     fireEvent.click(button!);
     await waitFor(() => expect(sortRequested()).toBe("quantity:desc"));
 
-    // Выбор оператора главнее: порядок берётся из ответа сервера, своя
-    // раскладка по сумме групп больше не накладывается.
+    // Порядок берётся из ответа сервера, своя раскладка по сумме групп
+    // больше не накладывается.
     expect(articleOrder()).toEqual(["SKU-BIG", "SKU-SMALL", "SKU-MID"]);
-    expect(quantityOrder()).toEqual(["1555", "10", "800"]);
   });
 });
 
@@ -252,14 +335,21 @@ describe("StockBalancesPanel: подписи операций", () => {
   beforeEach(() => {
     vi.mocked(getStockBalances).mockResolvedValue({
       balances: [
-        { ...entry(1), product_sku: "SKU-SOLO", completed_operations: [] },
-        { ...entry(2), product_sku: "SKU-EMPTY", completed_operations: [] },
-        { ...entry(3), product_sku: "SKU-EMPTY", completed_operations: [] },
-        { ...entry(4), product_sku: "SKU-MIX", completed_operations: [] },
-        { ...entry(5), product_sku: "SKU-MIX", completed_operations: ["op_drill"], completed_stages: [stage("Сверловка")] },
-        { ...entry(6), product_sku: "SKU-NUL", completed_operations: null },
+        entry(1, { product_sku: "SKU-SOLO", completed_operations: [] }),
+        entry(2, {
+          product_sku: "SKU-MIX",
+          completed_operations: ["op_drill"],
+          completed_stages: [stage("Сверловка")],
+          alias_group_skus: ["SKU-MIX", "SKU-MIX-2"],
+          items: [
+            item(2, { sku: "SKU-MIX", quantity: "4" }),
+            item(3, { sku: "SKU-MIX-2", quantity: "6" }),
+          ],
+          balance_qty: "10",
+        }),
+        entry(4, { product_sku: "SKU-NUL", completed_operations: null }),
       ],
-      total: 6,
+      total: 3,
       limit: 50,
       offset: 0,
     });
@@ -273,22 +363,21 @@ describe("StockBalancesPanel: подписи операций", () => {
     expect(screen.queryByText(OPERATIONS_EMPTY_LABEL)).toBeNull();
   });
 
-  it("итог группы из одних пустых строк — прочерк", async () => {
+  it("итог группы печатает прочерк для пустого состояния оси", async () => {
     renderPanel([1]);
-    await screen.findByText("SKU-EMPTY");
+    await screen.findByText("SKU-NUL");
 
-    expect(operationsCell("SKU-EMPTY").textContent).toBe("—");
+    expect(operationsCell("SKU-NUL").textContent).toBe("—");
   });
 
-  it("итог группы с другими операциями не несёт прочерка", async () => {
+  it("итог группы называет операции, когда они есть", async () => {
     renderPanel([1]);
-    const summary = await screen.findByText("SKU-MIX");
+    await screen.findByText("SKU-MIX, SKU-MIX-2 (эквиваленты)");
 
-    const text = operationsCell("SKU-MIX").textContent ?? "";
+    const text = operationsCell("SKU-MIX, SKU-MIX-2 (эквиваленты)").textContent ?? "";
     expect(text).toContain("Сверловка");
     expect(text).not.toContain("—");
     expect(text).not.toContain(OPERATIONS_EMPTY_LABEL);
-    expect(summary).toBeTruthy();
   });
 
   it("ячейка печатает прочерк, а список фильтра — серверные подписи", async () => {
