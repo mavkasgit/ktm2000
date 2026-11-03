@@ -23,6 +23,7 @@
 | [`excel-import-route-passport.md`](excel-import-route-passport.md) | Импорт плана | Парсинг маршрутов из Excel |
 | [`plan-import-spec.md`](plan-import-spec.md) | **Импорт плана** | Спека ускорения/стабилизации импорта, коды строк, apply/rollback |
 | [`stock-import-history-spec.md`](stock-import-history-spec.md) | **Импорт остатков** | Реестр батчей, просмотр, откат, удаление из списка (#232) |
+| [`equivalents-pool-spec.md`](equivalents-pool-spec.md) | **Эквивалентные артикулы** | Общий пул сырья: наличие, выдача, операторский слой (ADR-0073) |
 | [`../GLOSSARY.md`](../GLOSSARY.md) | **Глоссарий домена** | Термины: батч импорта, строка импорта, импорт остатков, действие |
 | [`quality/gates.md`](quality/gates.md) | **Карта гейтов** | Шаг → что ловит → где выполняется → чем доказан красный ход |
 | [`quality/criteria.md`](quality/criteria.md) | Приём инструментов | Восемь критериев; «новый инструмент не принимается потому, что он хороший» |
