@@ -1,0 +1,77 @@
+# mise.toml — единственный источник версий всех инструментов, node и python в том
+# числе. Точность фиксирует mise.lock (запросы здесь — префиксы, не диапазоны).
+# Старые параллельные источники (.nvmrc, .python-version, пины в requirements-dev.txt
+# и devDependencies для этих инструментов) удаляются по шагу 5 плана переезда.
+#
+# Не объявлено сознательно:
+#   pkl           — hk v2 встраивает собственный pkl-оценщик, отдельный бинарь не нужен
+#   import-linter — бэкенд pypi требует uv/pipx, которых на машине нет; библиотека
+#                   связана с кодом backend и остаётся в backend/requirements-dev.txt
+#   vitest / @playwright/test / pytest-плагины / typescript — их импортирует код
+#                   проекта, они привязаны к node_modules/venv, а не к PATH
+
+[settings]
+lockfile = true
+lockfile_platforms = ["windows-x64", "linux-x64"]
+
+[env]
+# директива mise, не переменная: `.env*` остаются источником правды для DATABASE_URL и
+# секретов; venv нужен потому, что python-зависимости проекта лежат в backend/.venv
+_.python.venv = "backend/.venv"
+
+[tools]
+node = "24"
+python = "3.12"
+hk = "2.11.0"
+
+# линтеры и форматтеры
+ruff = "0.16.9"
+oxlint = "1.90.0"
+oxfmt = "0.75.0"
+"npm:knip" = "6.44.1"
+"npm:dependency-cruiser" = "18.7.1"
+
+# секреты, зависимости, инфраструктура
+betterleaks = "1.9.0"
+osv-scanner = "2.7.0"
+hadolint = "2.15.1"
+jactionlint = "2.4.0"
+ast-grep = "0.51.1"
+"github:agent-sh/agnix" = "0.60.2"
+
+# текст и ссылки в документации
+typos = "1.52.0"
+lychee = "0.24.2"
+rumdl = "0.3.2"
+
+[tasks.check]
+run = "npm run gate -- --strict"
+description = "Все проверки одним вызовом; точка входа для хука и CI (с шагов 2–3 — hk check --all)"
+
+[tasks.gate]
+run = "npm run gate"
+description = "Локальный гейт: быстрые шаги + тесты backend и frontend"
+
+[tasks.gate-fast]
+run = "npm run gate:fast"
+description = "Быстрые шаги гейта (бюджет pre-push)"
+
+[tasks.e2e]
+run = "npm run test:e2e"
+description = "Playwright на изолированном стенде"
+
+[tasks.pytest]
+run = "npm run test:pytest"
+description = "Тесты backend через launcher с собственной БД"
+
+[tasks.scripts-tests]
+run = "npm run test:scripts"
+description = "Тесты скриптов гейта"
+
+[tasks.doctor]
+run = "npm run doctor"
+description = "Предпроверка дерева: GO/NO-GO"
+
+[tasks.dev]
+run = "npm run dev"
+description = "Postgres + backend + frontend"
