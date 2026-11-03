@@ -175,4 +175,29 @@ describe("ActionsJournalPage", () => {
     await screen.findByTestId("action-row-4");
     expect(screen.getByText("archived")).toBeTruthy();
   });
+
+  it("#282: строка выдачи печатает № передачи, количество и номер выдачи", async () => {
+    // Без них «Отмены действий» показывали строку «Передача» без цифр и без
+    // группировки выдач. Сервер дополняет `transfer_send` эти поля.
+    vi.mocked(getActions).mockResolvedValue({
+      items: [
+        makeAction({
+          id: 20,
+          action_type: "transfer_send",
+          quantity: "12",
+          transfer_no: "T-20",
+          issue_no: "ISSUE-9",
+        }),
+      ],
+      total: 1,
+      page: 1,
+      page_size: 50,
+    });
+    renderPage();
+
+    await screen.findByTestId("action-row-20");
+    expect(screen.getByTestId("action-transfer-no-20").textContent).toContain("T-20");
+    expect(screen.getByTestId("action-quantity-20").textContent).toContain("12");
+    expect(screen.getByTestId("action-issue-no-20").textContent).toContain("ISSUE-9");
+  });
 });

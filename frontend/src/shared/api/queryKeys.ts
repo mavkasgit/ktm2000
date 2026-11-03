@@ -247,6 +247,14 @@ export const queryKeys = {
         to_section_name?: string;
       },
     ) => ["transfers-history", "all", params ?? {}] as const,
+    /**
+      * Превью отмены выдачи целиком (#282). Только чтение, поэтому ключ один
+      * на номер: после самой отмены превью обязан пересчитаться (домен
+      * `transfers` в матрице сброса).
+      */
+    issueCancelPreview: (issueNo: string) =>
+      ["transfers-issue-cancel-preview", issueNo] as const,
+    issueCancelPreviewAll: () => ["transfers-issue-cancel-preview"] as const,
   },
   plan: {
     allPositions: (params?: AllPlanPositionsQueryKeyParams) =>
@@ -276,6 +284,15 @@ export const queryKeys = {
     rows: (params?: ExecutionRowsQueryKeyParams) =>
       ["production-planning-rows", params ?? {}] as const,
     rowDetail: (positionId: number) => ["production-planning-row-detail", positionId] as const,
+    /**
+     * Предпросмотр подбора источника (#282): снятые галочки и количество —
+     * часть ключа, потому что они меняют состав строк, а не только выборку.
+     */
+    issuePreview: (
+      positionId: number,
+      params?: { excluded_balance_ids?: number[]; release_quantity?: string | number | null },
+    ) => ["production-planning-issue-preview", positionId, params ?? {}] as const,
+    issuePreviewAll: () => ["production-planning-issue-preview"] as const,
     plans: () => ["plans"] as const,
     rowDetailAll: () => ["production-planning-row-detail"] as const,
   },

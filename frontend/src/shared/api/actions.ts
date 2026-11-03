@@ -35,6 +35,14 @@ export type JournalAction = {
   status: ActionStatus;
   depends_on: number[];
   created_at: string | null;
+  /**
+   * #282: строка `transfer_send` сервер дополняет количеством, номером
+   * передачи и номером выдачи — без них «Отмены действий» показывали строку
+   * «Передача» без цифр и без группировки выдач. У прочих типов — `null`/нет.
+   */
+  quantity?: string | null;
+  transfer_no?: string | null;
+  issue_no?: string | null;
 };
 
 export type GetActionsParams = {

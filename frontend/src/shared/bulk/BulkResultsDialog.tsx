@@ -11,6 +11,12 @@ interface BulkResultsDialogProps<TId extends BulkId> {
   title: string;
   summary: BulkActionSummary | null;
   results: BulkActionResultItem<TId>[];
+  /**
+   * Общая строка на весь результат (#282: «собрано X из Y шт., дефицит Z»
+   * группового запуска). По позициям она не раскладывается: итог один, а
+   * выдач в запуске несколько.
+   */
+  overallNote?: string | null;
 }
 
 export function BulkResultsDialog<TId extends BulkId>({
@@ -19,6 +25,7 @@ export function BulkResultsDialog<TId extends BulkId>({
   title,
   summary,
   results,
+  overallNote,
 }: BulkResultsDialogProps<TId>) {
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>
@@ -30,6 +37,11 @@ export function BulkResultsDialog<TId extends BulkId>({
               ? `${summary.success} успешно, ${summary.skipped} пропущено, ${summary.failed} ошибок`
               : "Нет результатов"}
           </DialogDescription>
+          {overallNote ? (
+            <p className="text-sm font-medium tabular-nums" data-testid="bulk-overall-note">
+              {overallNote}
+            </p>
+          ) : null}
         </DialogHeader>
         <div className="max-h-[320px] space-y-2 overflow-auto">
           {results.map((result) => (
@@ -43,6 +55,11 @@ export function BulkResultsDialog<TId extends BulkId>({
               {result.reason && <div className="mt-1 text-xs text-muted-foreground">{result.reason}</div>}
               {result.meta?.tasks_created != null && (
                 <div className="mt-1 text-xs text-muted-foreground">Задач создано: {String(result.meta.tasks_created)}</div>
+              )}
+              {result.meta?.issue_line != null && (
+                <div className="mt-1 text-xs text-muted-foreground" data-testid={`bulk-issue-line-${result.id}`}>
+                  {String(result.meta.issue_line)}
+                </div>
               )}
             </div>
           ))}
