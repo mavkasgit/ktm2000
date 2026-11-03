@@ -70,14 +70,41 @@ export async function fetchBoardViaUI(page: Page, sectionId: number) {
     tasks: Array<Record<string, unknown>>;
   };
 }
-/** Подтвердить диалог «Запуск в производство» после «Взять в работу». */
+/**
+ * Подтвердить запуск после «Взять в работу» — в том окне, которое открылось.
+ *
+ * Продукт с #282 ведёт основной путь через окно подбора источника
+ * (`IssueSourceDialog`, заголовок «Взять в работу <SKU>»): сервер сам считает,
+ * с каких складов брать материал, а запуск подтверждает кнопка «Взять в работу»
+ * в этом окне. Прежнее окно «Запуск в производство»
+ * (`RemainderAllocationDialog`) осталось alternate-путём #314 — в него ведёт
+ * кнопка «Выбрать один остаток». Хелпер ждёт **любое из двух** и подтверждает в
+ * открывшемся; проверка результата не ослаблена: `takeToWorkViaUI` после этого
+ * требует, чтобы строка стала «Запущен».
+ *
+ * Почему не только «Запуск в производство», как было: на базе с UI #282
+ * (`c2107f4f`) это окно не открывается вовсе, и `sawing-four-lengths-cycle`
+ * падал детерминированно (не флейк изоляции #289).
+ */
 export async function confirmProductionLaunchViaUI(page: Page) {
-  const launchDialog = page.getByRole("dialog").filter({ hasText: "Запуск в производство" });
-  await expect(launchDialog).toBeVisible({ timeout: 10_000 });
-  const launchBtn = launchDialog.getByRole("button", { name: "Запустить в работу" });
+  const issueDialog = page.getByRole("dialog").filter({ hasText: "Взять в работу" });
+  const allocationDialog = page.getByRole("dialog").filter({ hasText: "Запуск в производство" });
+  await expect(issueDialog.or(allocationDialog)).toBeVisible({ timeout: 10_000 });
+
+  if (await issueDialog.isVisible().catch(() => false)) {
+    // Кнопка задизейблена, пока не пришёл предпросмотр подбора: ждём именно
+    // «включилась», иначе клик уйдёт в no-op и следующий шаг повиснет.
+    const confirmIssue = issueDialog.getByTestId("issue-confirm-launch");
+    await expect(confirmIssue).toBeEnabled({ timeout: 20_000 });
+    await confirmIssue.click();
+    await expect(issueDialog).not.toBeVisible({ timeout: 15_000 });
+    return;
+  }
+
+  const launchBtn = allocationDialog.getByRole("button", { name: "Запустить в работу" });
   await expect(launchBtn).toBeEnabled({ timeout: 10_000 });
   await launchBtn.click();
-  await expect(launchDialog).not.toBeVisible({ timeout: 15_000 });
+  await expect(allocationDialog).not.toBeVisible({ timeout: 15_000 });
 }
 
 /** Открыть диалог создания артикула и дождаться его формы. */
