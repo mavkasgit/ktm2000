@@ -235,6 +235,14 @@ async function openPackingBoard(page: Page, packing: { id: number; name: string 
   });
   await expect(page.getByText("Выберите рабочий участок")).toBeVisible();
 
+  // Список сам выбирает первый участок и коммитит выбор переходом data-router
+  // (`SectionsTasksPage`: пока в URL нет `:sectionId`, эффект ставит первый).
+  // Клик по плитке в это окно терялся: эффект видел ещё пустой параметр,
+  // возвращал выбранный участок на первый и уводил URL туда же. Наблюдено под
+  // двумя воркерами на полном прогоне: плитка в фокусе, `aria-pressed="false"`,
+  // активна «Сверловка». Поэтому клик — только после того, как выбор лёг в URL.
+  await expect(page).toHaveURL(/\/section-tasks\/\d+$/, { timeout: 15_000 });
+
   const tile = sectionTile(page, packing.name).first();
   await expect(tile, "плитка участка «Упаковка» в списке").toBeVisible({ timeout: 15_000 });
   await tile.click();

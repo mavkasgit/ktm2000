@@ -10,6 +10,7 @@ import {
   MOBILE_USE,
   tagRe,
 } from "./e2e/mobile-project.mjs";
+import { DEFAULT_WORKERS } from "./e2e/run-workers.mjs";
 
 // Стенд E2E — отдельная БД и отдельные порты (#220). Источник правды для
 // них — `.env.e2e` в корне репозитория (та же БД, что поднимает `e2e:prep`),
@@ -44,6 +45,33 @@ function loadStandEnv(file: string): void {
 }
 
 loadStandEnv(STAND_ENV_FILE);
+
+// Сколько воркеров Playwright — и, значит, сколько клонов БД и backend'ов стенда
+// (#289). Обычный путь: `run-tier.mjs` кладёт сюда `E2E_WORKERS` и там же
+// передаёт `--workers=N`, а без флага число берётся из `DEFAULT_WORKERS`
+// (`e2e/run-workers.mjs` — один источник для конфига, разбора `--workers` и
+// клонов). `E2E_WORKERS` важнее дефолта, потому что обёртка
+// `scripts/run-e2e.mjs` поднимает ровно столько backend'ов и env-файлов,
+// сколько назвала: прямой вызов обёртки (джоб `e2e smoke` в CI идёт мимо
+// `run-tier.mjs` и клонов на воркера не нарезает) не должен получить двух
+// воркеров на одном клоне. Мусор в переменной — ошибка, а не тихий дефолт:
+// молча угаданное число разошлось бы с числом клонов.
+// Ручной стенд (`PW_REUSE_STACK=1`) — один воркер и без переменной: клонов и
+// backend'ов под него не выдают, второй воркер делил бы одну БД (то же правило
+// `run-tier.mjs` передаёт сюда явным `E2E_WORKERS=1`).
+const rawWorkers = process.env.E2E_WORKERS;
+if (rawWorkers !== undefined && !/^[1-9]\d*$/.test(rawWorkers)) {
+  throw new Error(
+    `E2E_WORKERS должен быть целым числом ≥ 1 (получено: ${JSON.stringify(rawWorkers)}). ` +
+      "Клонов БД и backend'ов стенда должно быть столько же, сколько воркеров (#289).",
+  );
+}
+const WORKERS =
+  rawWorkers === undefined
+    ? process.env.PW_REUSE_STACK === "1"
+      ? 1
+      : DEFAULT_WORKERS
+    : Number(rawWorkers);
 
 // Портов у стенда нет: их на каждый прогон берёт обёртка
 // `scripts/run-e2e.mjs` (`listen(0)`) и кладёт в эти две переменные. Статика в
@@ -151,7 +179,16 @@ export default defineConfig({
   fullyParallel: false,
   forbidOnly: !!process.env.CI,
   retries: process.env.CI ? 2 : 0,
-  workers: 1,
+  // Два воркера — по клону БД и по backend'у на каждого (#289): `e2e:prep`
+  // нарезает столько клонов, `run-e2e.mjs` поднимает столько backend'ов, а
+  // `x-e2e-worker` уводит запрос в свой. Число — одно на всё дерево: `WORKERS`
+  // выше (из `E2E_WORKERS` обёртки либо `DEFAULT_WORKERS` из
+  // `e2e/run-workers.mjs`, откуда же его берут разбор `--workers` и
+  // `run-tier.mjs`). Второй источник цифры разъехался бы молча.
+  // `fullyParallel: false` оставляет последовательность внутри файла: спека
+  // по-прежнему видит только свои шаги, а файлы Playwright разводит по
+  // воркерам с их собственными клонами.
+  workers: WORKERS,
   // `list` идёт первым, чтобы сводка репортера о зелёных не с первой попытки
   // печаталась в конце вывода, а не пряталась среди строк тестов.
   reporter: [

@@ -171,7 +171,9 @@ push/PR, поднимает свой контейнер Postgres на runner'е 
 
 ### 6. Если тест упал
 
-1. Воспроизведите на чистом worktree, по одному тесту:
+1. Воспроизведите на чистом worktree, по одному тесту, **на одном воркере**
+   (это флаг разбора, а не дефолт прогона: без `--workers=1` Playwright возьмёт
+   два из конфига):
    `--workers=1 --retries=0 --trace=on -g "<имя>"`.
 2. Соберите доказательства: шаг падения, ответы API, логи backend, состояние БД.
 3. Только потом правьте. Ассерты не ослаблять, тесты не пропускать. Один коммит
@@ -233,9 +235,16 @@ push/PR, поднимает свой контейнер Postgres на runner'е 
   Одна строка `[e2e:worker] слот=… parallelIndex=… workerIndex=… pid=…` на
   процесс печатается в лог прогона — по ней видно, что слоты разошлись;
   маппинг закрыт `e2e/worker-slot.test.ts`.
-  **`workers: 1` в `playwright.config.ts` остаётся**: переключение — отдельное
-  решение владельца, изоляция лишь сняла блокер. Полный прогон и его остаток —
-  в новом тикете (см. T-289, «Слот по `parallelIndex`»).
+  **Дефолт — два воркера** (#376, 2026-11-04): `workers: DEFAULT_WORKERS` в
+  `playwright.config.ts`, а `DEFAULT_WORKERS = 2` объявлено **один раз** в
+  `e2e/run-workers.mjs`. Оттуда число берут и конфиг, и разбор `--workers`, и
+  `e2e/run-tier.mjs` (он передаёт `--workers=N` в Playwright, если человек флаг
+  не задал): два источника одного числа разъехались бы молча — Playwright взял
+  бы одно, а `e2e:prep` нарезал бы клонов по другому. Ручной стенд
+  (`PW_REUSE_STACK=1`) остаётся на одном воркере: клонов и backend'ов под него
+  не выдают. `fullyParallel: false` при этом не менялся — параллельность идёт
+  по файлам, внутри файла шаги по-прежнему последовательны. Замер `--workers`
+  по ярусам и его числа — `docs/night/tickets/T-376-e2e-workers.md`.
   Разбор `--workers` живёт в `e2e/run-workers.mjs` и **отказывает, а не гадает**
   (#289, 2026-10-04): принимаются `--workers=N`, `--workers N`, `-j N`, `-j=N`.
   Всё остальное — `--workers=50%`, голый `--workers`, `-j2`, `--workers2`, `0` —
@@ -530,9 +539,12 @@ Smoke отдельно: ярусный скрипт его не подтягив
   длины продукта читаются из БД с откатом на 2700
   (:86-98), то же в [`full-cycle.spec.ts`](full-cycle.spec.ts):143-144 и
   [`single-line-cycle.spec.ts`](single-line-cycle.spec.ts):167-168.
-  Порядок прогона фиксирован: `workers: 1`, `fullyParallel: false`
+  Порядок прогона фиксирован: `workers: DEFAULT_WORKERS` (2), `fullyParallel: false`
   ([`playwright.config.ts`](../playwright.config.ts)), `--shuffle` в репозитории
-  не используется, а `run-tier.mjs` держит лок на весь прогон.
+  не используется, а `run-tier.mjs` держит лок на весь прогон. `fullyParallel: false`
+  оставляет последовательность внутри файла; параллельность идёт по файлам, и у
+  каждого воркера свой клон с своим backend'ом, поэтому «своё» у спеки — свой
+  клон, а не «мои строки в общей таблице».
 - **Чем это оплачено: красный по вине данных стенда, а не кода.** Реальный
   случай (2026-09-29, комментарий в #225): точечный прогон
   `test:e2e:ui -- e2e/route-workflow.spec.ts` дал **13 позиций** с
@@ -785,6 +797,7 @@ node -e "console.log(require('fs').readFileSync('frontend/.playwright/e2e-passed
 | `E2E_API_URL` | обёртка (`listen(0)`) — в `.env.e2e` адреса **нет** | API для `@smoke`; в конфиге — ещё и порт backend в `webServer` |
 | `E2E_TEST_DATABASE_URL` | DSN клона прогона (`<база>_run_<stamp>_<run-id>` на `:5441`) | БД стенда для `ensureDbBootstrapped` (достраивает справочники сам) |
 | `PW_REUSE_STACK` | — | `1` — стек поднят руками, Playwright его не трогает и не поднимает свой |
+| `E2E_WORKERS` | `run-tier.mjs` (из `--workers`, иначе `DEFAULT_WORKERS` = 2) | сколько воркеров Playwright, клонов БД и backend'ов стенда (#289, #376); конфиг читает то же число, поэтому прямой вызов `run-e2e.mjs` не разъедется с числом backend'ов. В CI-джобе `e2e smoke` — `1`: БД одна |
 | `E2E_SKIP_PASSED` | — | `1` — пропускать тесты, уже прошедшие на этой версии кода |
 | `E2E_MAX_PARALLEL_RUNS` | — | сколько e2e-прогонов пускать на машине одновременно (по умолчанию 2) |
 | `E2E_SEMAPHORE_DIR` | — | каталог слотов семафора; по умолчанию `%LOCALAPPDATA%\ktm2000-e2e\slots` |
@@ -807,7 +820,8 @@ set E2E_SKIP_PASSED=1
 
 [`playwright.config.ts`](../playwright.config.ts):
 - `testDir: ./e2e`
-- `workers: 1`, `fullyParallel: false`
+- `workers: DEFAULT_WORKERS` (`2`, значение — в
+  [`run-workers.mjs`](run-workers.mjs); `PW_REUSE_STACK=1` — 1), `fullyParallel: false`
 - `retries: process.env.CI ? 2 : 0` — локально ретраев нет ни одного
 - `forbidOnly: !!process.env.CI`
 - `reporter`: `html` (в `playwright-report/`) + `list` +
@@ -961,7 +975,9 @@ npm --prefix frontend run test:e2e:ui-mode   # UI mode целиком
 
 ### Если тест упал
 
-1. Воспроизведи по одному тесту, без ретраев и на одном воркере:
+1. Воспроизведи по одному тесту, без ретраев и на одном воркере
+   (`--workers=1` — флаг этого разбора, а не дефолт прогона: без него конфиг
+   даст два воркера и две БД):
    ```bash
    npm --prefix frontend run test:e2e:ui -- e2e/<файл>.spec.ts \
      --retries=0 --workers=1 -g "<имя теста>"

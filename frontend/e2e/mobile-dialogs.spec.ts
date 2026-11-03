@@ -65,6 +65,23 @@ function dialogByTitle(page: import("@playwright/test").Page, title: string) {
  */
 async function expectCloseReachable(dialog: import("@playwright/test").Locator) {
   const close = dialog.getByRole("button", { name: "Закрыть", exact: true });
+
+  // Прокрутку в спеке ставят программно (`el.scrollTop = scrollHeight`), а
+  // событие `scroll` доставляется следующим кадром. Без ожидания геометрия
+  // читалась бы ДО того, как каркас догнал прокрутку: в полном прогоне
+  // 2026-11-03 так и вышло — ✕ на -546px, хотя каркас её двигает (#344).
+  // Это не ослабление проверки: то же условие, но с бюджетом на доставку
+  // события; если компенсация не сработает вовсе, poll упадёт по таймауту.
+  await expect
+    .poll(
+      async () => {
+        const current = await close.boundingBox();
+        return current ? current.y : Number.NEGATIVE_INFINITY;
+      },
+      { message: "✕ догнала прокрутку и вернулась в кадр", timeout: 5_000 },
+    )
+    .toBeGreaterThanOrEqual(0);
+
   const box = await close.boundingBox();
   expect(box, "у ✕ есть габариты").not.toBeNull();
   const frameBox = await dialog.boundingBox();
