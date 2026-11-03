@@ -368,6 +368,10 @@ class PlanningRowOut(BaseModel):
     free_stock_quantity: float | None = None
     available_remainder_quantity: float | None = None
     deficit_quantity: float | None = None
+    # Расшифровка группы эквивалентов по SKU (#394): [{product_id, sku,
+    # quantity}]. Сумма quantity сходится с free_stock_quantity; для «нет
+    # данных» — пустой список.
+    free_stock_breakdown: list[dict] = Field(default_factory=list)
 
 
 class PlanningRouteSnapshotStepOut(BaseModel):
@@ -487,6 +491,7 @@ class PlanningRowDetailOut(BaseModel):
     free_stock_quantity: float | None = None
     available_remainder_quantity: float | None = None
     deficit_quantity: float | None = None
+    free_stock_breakdown: list[dict] = Field(default_factory=list)
 
 
 @router.get("/rows", response_model=PlanningRowsListResponse)
