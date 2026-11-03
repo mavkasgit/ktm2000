@@ -95,10 +95,10 @@ describe("tryAcquireSlot", () => {
     expect(JSON.parse(fs.readFileSync(slotFile(dir, 0), "utf8"))).toEqual(other);
   });
 
-  it("releaseSlot не сносит слот, уже отобранный соседу по возрасту", () => {
-    // Слот отобран у ЖИВОГО держателя по staleMs: сосед занял тот же файл,
-    // а прежний прогон в свой finally зовёт releaseSlot. Слот соседа должен
-    // уцелеть, иначе семафор перестаёт считать прогоны.
+  it("releaseSlot не сносит слот, уже занятый соседом", () => {
+    // Слот перешёл к другому прогону (мёртвый держатель снят, сосед занял тот
+    // же файл), а прежний прогон в свой finally зовёт releaseSlot. Слот соседа
+    // должен уцелеть, иначе семафор перестаёт считать прогоны.
     const dir = tempDir();
     const first = tryAcquireSlot(dir, 1, { pid: 111, repo: "a" }, { alive: () => true });
     fs.writeFileSync(slotFile(dir, 0), JSON.stringify({ pid: 222, repo: "b", at: Date.now() }));
@@ -116,24 +116,35 @@ describe("tryAcquireSlot", () => {
 });
 
 describe("acquireSlot", () => {
-  it("подбирает просроченный слот и логирует это", async () => {
+  it("живой держатель старше staleMs — слот НЕ отбираем, падаем по таймауту (#375)", async () => {
+    // Былое правило: возраст слота сам по себе позволял снять слот у ЖИВОГО
+    // прогона. При `waitTimeoutMs < staleMs` это означало, что претендент,
+    // дождавшийся своего таймаута, выкидывает соседа, который ещё идёт:
+    // семафор перестаёт считать, и два стенда делят CPU и браузеры. Теперь
+    // возрастной порог — только предупреждение; снимается мёртвый держатель.
     const dir = tempDir();
     fs.mkdirSync(dir, { recursive: true });
     fs.writeFileSync(
       slotFile(dir, 0),
-      JSON.stringify({ pid: process.pid, at: Date.now() - 10 * 60_000, repo: "старый" }),
+      JSON.stringify({ pid: process.pid, at: Date.now() - 10 * 60_000, repo: "долгий" }),
     );
     const lines: string[] = [];
-    const slot = await acquireSlot({
-      dir,
-      max: 1,
-      payload: { pid: process.pid, repo: "новый" },
-      staleMs: 5 * 60_000,
-      log: (line: string) => lines.push(line),
-    });
-    expect(slot.index).toBe(0);
-    expect(lines.join("\n")).toContain("просрочен");
-    expect(JSON.parse(fs.readFileSync(slotFile(dir, 0), "utf8")).repo).toBe("новый");
+    await expect(
+      acquireSlot({
+        dir,
+        max: 1,
+        payload: { pid: 424242, repo: "ждущий" },
+        staleMs: 5 * 60_000,
+        waitTimeoutMs: 25,
+        pollMs: 5,
+        log: (line: string) => lines.push(line),
+      }),
+    ).rejects.toThrow(/не дождался слота/);
+    expect(JSON.parse(fs.readFileSync(slotFile(dir, 0), "utf8")).repo).toBe("долгий");
+    expect(lines.join("\n")).toContain("держатель жив");
+    // Предупреждение — одно на ожидание, а не на каждый шаг опроса: пять
+    // повторов превратили бы лог прогона в шум, в котором не видно ничего.
+    expect(lines.filter((line) => line.includes("держатель жив"))).toHaveLength(1);
   });
 
   it("ждёт освобождения, показывает держателя и падает по таймауту", async () => {

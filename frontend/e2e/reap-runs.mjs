@@ -32,10 +32,31 @@ import fs from "node:fs";
 import path from "node:path";
 
 /**
+ * Результат запуска команды уборки — ровно то, что модуль из него читает
+ * (`status`, `stdout`, `stderr`). `spawnSync` отдаёт больше (`pid`, `output`,
+ * `signal`), и требовать это у подмены в тестах значило бы описывать не
+ * зависимость модуля, а весь Node-контракт.
+ *
+ * @typedef {Object} SpawnLikeResult
+ * @property {number|null} [status]
+ * @property {*} [stdout]
+ * @property {*} [stderr]
+ */
+
+/**
+ * @typedef {Object} CleanupOptions
+ * @property {string|null} [ownRunId] `runId` текущего прогона — его клоны не трогаем
+ * @property {(msg: string) => void} [log]
+ * @property {(command: string, args: string[], options?: any) => SpawnLikeResult} [run]
+ *   чем сносить (`spawnSync` по умолчанию; в тестах — подмена)
+ */
+
+/**
  * Снести клоны прогонов, чьи слоты были отобраны как мёртвые.
  *
- * @param holders записи слотов в форме `{ repo, runId, envFile, pid }`
- * @param ownRunId `runId` текущего прогона — его клоны не трогаем
+ * @param {Array<{repo?: string, runId?: string, envFile?: string|null, pid?: number}>} holders
+ *   записи слотов в форме `{ repo, runId, envFile, pid }`
+ * @param {CleanupOptions} [options]
  * @returns {{cleaned: string[], skipped: string[], failed: string[]}}
  */
 export function cleanupAbandonedRuns(holders, { ownRunId, log = console.log, run = spawnSync } = {}) {
