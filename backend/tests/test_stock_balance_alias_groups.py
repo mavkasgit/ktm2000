@@ -314,10 +314,15 @@ async def test_filter_by_member_product_id_shows_group_sum(
     assert len(body["balances"][0]["items"]) == 2
 
 
-async def test_filter_by_quantity_member_shows_group_sum(
+async def test_filter_by_quantity_matches_group_sum(
     client: AsyncClient, session: AsyncSession,
 ) -> None:
-    """Фильтр «Количество» — по фактическим строкам, сумма — по всей куче."""
+    """Фильтр «Количество» сверяется с видимой суммой группы, а не со строкой.
+
+    Раньше совпадение искалось в ``balance_qty`` каждого члена: запрос
+    ``?quantity=111`` возвращал группу, в колонке которой стоит 116. Колонка
+    и фильтр обязаны говорить об одном числе.
+    """
     user = await _make_user(session)
     _auth(client, user)
     location = await _make_location(session, code="ALIAS-FILTER-QTY")
@@ -326,9 +331,12 @@ async def test_filter_by_quantity_member_shows_group_sum(
     await _seed(session, product=product_a, location=location, quantity=111, user_id=user.id)
     await _seed(session, product=product_b, location=location, quantity=5, user_id=user.id)
 
-    body = await _list_balances(client, location_id=location.id, quantity="111")
-    assert body["total"] == 1
-    assert Decimal(body["balances"][0]["balance_qty"]) == Decimal(116)
+    by_total = await _list_balances(client, location_id=location.id, quantity="116")
+    assert by_total["total"] == 1
+    assert Decimal(by_total["balances"][0]["balance_qty"]) == Decimal(116)
+
+    by_member = await _list_balances(client, location_id=location.id, quantity="111")
+    assert by_member["total"] == 0
 
 
 async def test_pagination_and_total_are_by_group(

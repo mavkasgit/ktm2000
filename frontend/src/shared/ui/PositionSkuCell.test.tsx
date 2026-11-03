@@ -88,7 +88,7 @@ describe("PositionSkuCell — индикатор остатка", () => {
     // Число остаётся групповым (его посчитал сервер), а расшифровка — в
     // title и в отдельном читаемом элементе, не вторым столбцом чисел.
     expect(screen.getByTestId("position-sku-available").getAttribute("title")).toBe(
-      "Доступно для позиции КП-460: 350 шт. (КП-460: 100, КП-461: 250)",
+      "Доступно для позиции КП-460: 350 шт. Свободно на складах: КП-460: 100, КП-461: 250",
     );
     expect(screen.getByTestId("position-sku-breakdown").textContent).toBe(
       "КП-460: 100, КП-461: 250",
