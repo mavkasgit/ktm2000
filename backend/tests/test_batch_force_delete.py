@@ -438,6 +438,54 @@ async def test_force_delete_refuses_transfer_crossing_batch_boundary(
     await assert_no_invariants_violations(session, context="batch-force-delete-crossing")
 
 
+async def test_force_delete_refuses_auto_source_issue_transfer_boundary(
+    session: AsyncSession, client
+) -> None:
+    """#231-регрессия #282: передача автоподбора (``from_task_id IS NULL``)
+    обязана считаться пересекающей границу партии.
+
+    Автоподбор источника выдачи пишет ``Transfer(from_task_id=None,
+    from_section_id=location_баланса, issue_no=...)`` — у склада-источника
+    нет задания. Старая XOR-формула ``from_in XOR to_in`` на ``NULL IN ids``
+    отдаёт UNKNOWN, и ``or_(UNKNOWN, FALSE)`` тоже UNKNOWN → WHERE отсекает
+    строку, блок не срабатывает, force сносит задание-приёмник и молча
+    отматывает чужой складской остаток (SEND-проводка выдачи живёт вне
+    поддерева батча).
+
+    Тест перешивает готовую передачу фикстуры в форму автоподбора:
+    ``to_task_id`` остаётся внутри батча, ``from_task_id`` обнуляется.
+    Без фикса предпросмотр возвращает пустой список блокеров и DELETE
+    проходит 200 — ровно то, чего #231 обещал не допускать.
+    """
+    fx = await _build_released_batch_with_transfer(session, "BFD-AS")
+    plan, batch, position = fx["plan"], fx["batch"], fx["position"]
+    transfer = await session.get(Transfer, fx["transfer"].id)
+    # Форма #282: источник — баланс склада, не задание.
+    transfer.from_task_id = None
+    transfer.issue_no = "AS-BFD-1"
+    await session.commit()
+
+    preview = await get_batch_force_delete_preview(session, batch.id)
+    assert any(
+        "передача пересекает границу партии" in b["reason"] for b in preview["blockers"]
+    ), preview["blockers"]
+
+    resp = await client.request(
+        "DELETE",
+        f"/api/production-plans/{plan.id}/batches/{batch.id}/force",
+        json={"confirmation": "BFD-AS.xlsx", "reason": "снос приёмника выдачи"},
+    )
+    assert resp.status_code == 409, resp.text
+    body = resp.json()
+    assert body["code"] == "batch_force_delete_blocked"
+    assert any("передача пересекает границу партии" in b["reason"] for b in body["blockers"])
+    # Ни батч, ни передача не тронуты: блок обязан сработать ДО каскада.
+    assert await session.get(PlanPosition, position.id) is not None
+    assert await session.get(ImportBatch, batch.id) is not None
+    assert await session.get(Transfer, transfer.id) is not None
+    await assert_no_invariants_violations(session, context="batch-force-delete-auto-source")
+
+
 async def test_force_delete_marks_batch_actions_purged_but_keeps_journal(
     session: AsyncSession, client
 ) -> None:

@@ -35,7 +35,7 @@ from __future__ import annotations
 from datetime import UTC, datetime
 from decimal import Decimal
 
-from sqlalchemy import delete, or_, select, update
+from sqlalchemy import and_, delete, or_, select, update
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.models.action_journal import Action, ActionStatus
@@ -344,7 +344,17 @@ async def _force_blockers(db: AsyncSession, fp: _Footprint) -> list[dict]:
 
     blockers: list[dict] = []
     if fp.task_ids:
-        from_in = Transfer.from_task_id.in_(fp.task_ids)
+        # ``NULL IN (ids)`` в SQL — UNKNOWN, и переносит всю пару в UNKNOWN,
+        # поэтому «обычная» форма ``Transfer.from_task_id.in_(ids)`` делает
+        # автоподбор-передачу (#282, ``from_task_id IS NULL``) невидимой для
+        # XOR-проверки: ``~from_in`` тоже UNKNOWN, и ``or_`` не даёт TRUE.
+        # Явно разделяем «есть задание-источник» и «источник внутри батча»:
+        # ``NULL`` из отсечки означает «вне батча», и передача выдачи со
+        # складским «откуда» корректно считается пересекающей границу.
+        from_in = and_(
+            Transfer.from_task_id.is_not(None),
+            Transfer.from_task_id.in_(fp.task_ids),
+        )
         to_in = Transfer.to_task_id.in_(fp.task_ids)
         # Пересечение границы батча = ровно один конец внутри (XOR). Такая
         # передача связывает батч с чужим импортом: снести её — значит
