@@ -226,7 +226,18 @@ async function takeToWorkFromPrepStockViaUI(
   );
   await execRow.getByRole("button", { name: "Взять в работу" }).click();
 
-  const dialog = page.getByRole("dialog").filter({ hasText: "Запуск в производство" });
+  // #396: «Взять в работу» сначала открывает подбор источника (строки групп),
+  // а явный выбор одного остатка — его alternate-путь «Выбрать один остаток».
+  // Без этого шага ожидание «Запуск в производство» смотрело бы в окно,
+  // которое уже не открывается первым.
+  const issueDialog = page.getByRole("dialog").filter({ hasText: "Взять в работу" });
+  const allocationDialog = page.getByRole("dialog").filter({ hasText: "Запуск в производство" });
+  await expect(issueDialog.or(allocationDialog)).toBeVisible({ timeout: 10_000 });
+  if (await issueDialog.isVisible().catch(() => false)) {
+    await issueDialog.getByRole("button", { name: "Выбрать один остаток" }).click();
+  }
+
+  const dialog = allocationDialog;
   await expect(dialog).toBeVisible({ timeout: 10_000 });
 
   const sourceRow = dialog.locator(`[data-testid="source-row-${prepBalanceId}"]`);

@@ -202,6 +202,14 @@ export function IssueSourceDialog({
                         const expanded = expandedGroupKeys.includes(group.key);
                         const expandable = group.balanceIds.length > 1;
                         const remaining = remainingAfterCell(group.remainingAfter);
+                        // В строке нет артикула задания, но материал — его
+                        // эквивалент: оператор должен видеть, что берёт «не тот»
+                        // SKU законно (ADR-0073 п.5).
+                        const hasEquivalent =
+                          preview?.product_id != null &&
+                          group.candidates.some(
+                            (candidate) => candidate.product_id !== preview.product_id,
+                          );
                         return (
                           <Fragment key={group.key}>
                             <tr
@@ -274,6 +282,14 @@ export function IssueSourceDialog({
                                       title="В строке есть артикул задания — эквивалент не ошибка"
                                     >
                                       артикул задания
+                                    </Badge>
+                                  ) : hasEquivalent ? (
+                                    <Badge
+                                      variant="outline"
+                                      className="shrink-0 text-[10px] font-normal"
+                                      title="Материал другого SKU той же группы эквивалентов"
+                                    >
+                                      эквивалент
                                     </Badge>
                                   ) : null}
                                 </div>

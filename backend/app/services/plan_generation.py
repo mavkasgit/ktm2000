@@ -523,10 +523,16 @@ async def release_batch(
                 if source_product_id != effective_product_id and issue.source_sku
                 else ""
             )
+            # Канонизация на участке (ADR-0073 п.5): при источнике-эквиваленте
+            # send списывает только склад, а receive приходит на участок под
+            # артикулом задания. Иначе остаток участка остался бы под SKU
+            # источника, и следующая операция искала бы материал не под тем
+            # артикулом. Для одного продукта форма прежняя (#315).
+            canonicalize_on_section = source_product_id != effective_product_id
             await StockCommandService().record(db, StockCommand(
                 product_id=source_product_id,
                 from_location_id=issue.balance.location_id,
-                to_location_id=target.section_id,
+                to_location_id=None if canonicalize_on_section else target.section_id,
                 quantity=issue.quantity,
                 reason=Reason.TRANSFER_SEND,
                 dimensions=issue.balance.dimensions,
@@ -565,7 +571,9 @@ async def release_batch(
             await StockCommandService().record(db, StockCommand(
                 product_id=effective_product_id,
                 from_location_id=None,
-                to_location_id=None,
+                # Приход на участок под артикулом задания — только когда
+                # источник был эквивалентом; иначе приём учётный (#315).
+                to_location_id=target.section_id if canonicalize_on_section else None,
                 quantity=issue.quantity,
                 reason=Reason.TRANSFER_RECEIVE,
                 dimensions=issue.balance.dimensions,

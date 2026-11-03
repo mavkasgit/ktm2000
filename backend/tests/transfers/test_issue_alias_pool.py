@@ -114,14 +114,27 @@ async def test_issue_from_equivalent_pool_and_cancel_restores_source(
     assert len(sends) == 1 and len(receives) == 1
     assert sends[0].product_id == equivalent.id, "send — фактический SKU источника"
     assert receives[0].product_id == fx["product"].id, "receive — артикул задания"
+    # Канонизация на участке (ADR-0073 п.5): расход склада — у send, приход
+    # участка — у receive. Иначе на участке остался бы SKU источника B, хотя
+    # учёт задания уже под A, и следующая операция искала бы не тот артикул.
+    assert sends[0].to_location_id is None, "send не должен класть эквивалент на участок"
 
     task = await session.get(WorkTask, transfer.to_task_id)
     assert task is not None and task.product_id == fx["product"].id
+    assert receives[0].to_location_id == task.section_id, (
+        "receive приходит на участок задания под его артикулом"
+    )
     cache = await StockProjectionManager().get_task_cache(session, task.id)
     assert cache["received_quantity"] == Decimal(60), (
         "на задании материал учтён под артикулом задания"
     )
     assert await _balance_qty(session, product_id=equivalent.id, location_id=raw.id) == Decimal(0)
+    assert await _balance_qty(
+        session, product_id=fx["product"].id, location_id=task.section_id
+    ) == Decimal(60), "на участке материал лежит под артикулом задания A"
+    assert await _balance_qty(
+        session, product_id=equivalent.id, location_id=task.section_id
+    ) == Decimal(0), "на участке не должно быть SKU источника B"
     await assert_no_invariants_violations(session, context="issue equivalent")
     await assert_no_stock_ledger_invariants_violations(
         session, context="issue equivalent"
@@ -139,6 +152,12 @@ async def test_issue_from_equivalent_pool_and_cancel_restores_source(
     assert await _balance_qty(
         session, product_id=equivalent.id, location_id=raw.id
     ) == Decimal(60), "отмена вернула фактический SKU источника на склад"
+    assert await _balance_qty(
+        session, product_id=fx["product"].id, location_id=task.section_id
+    ) == Decimal(0), "отмена сняла артикул задания с участка"
+    assert await _balance_qty(
+        session, product_id=equivalent.id, location_id=task.section_id
+    ) == Decimal(0), "на участке не осталось SKU источника"
     cache = await StockProjectionManager().get_task_cache(session, task.id)
     assert cache["received_quantity"] == Decimal(0), "приём снят с задания"
     await assert_no_invariants_violations(session, context="cancel equivalent")
