@@ -653,7 +653,7 @@ async def correct_transfer(
     send_action = await _find_transfer_send_action(db, transfer.id)
     if send_action is None:
         raise ValueError(
-            f"Transfer #{transfer.id}: исходное действие transfer_send не найдено или уже отменено"
+            f"Передача {transfer.transfer_no}: исходное действие отправки не найдено или уже отменено"
         )
 
     # 4. Preview → amend (одна транзакция, preview-first ADR-0019).
@@ -663,7 +663,7 @@ async def correct_transfer(
     preview = await svc.preview_amend(db, send_action.id, changes, cascade=True)
     if preview.blockers:
         detail = "; ".join(b.detail for b in preview.blockers)
-        raise ValueError(f"correct_transfer blocked: {detail}")
+        raise ValueError(f"Скорректировать передачу нельзя: {detail}")
     assert preview.plan_token is not None  # блокеров нет → токен выдан
     try:
         amend_result = await svc.amend(
@@ -800,8 +800,8 @@ async def cancel_transfer(
         # журнала действий либо гонка с другой транзакцией. Тихий no-op
         # здесь солгал бы об успехе — требуем явного разбора.
         raise ValueError(
-            f"Transfer #{transfer.id}: исходное действие transfer_send не найдено "
-            f"(уже отменено или запись до внедрения журнала действий)"
+            f"Передача {transfer.transfer_no}: исходное действие отправки не найдено "
+            "(уже отменено или запись до внедрения журнала действий)"
         )
 
     # Preview → reverse (preview-first ADR-0019).
@@ -810,7 +810,7 @@ async def cancel_transfer(
     preview = await svc.preview_reverse(db, send_action.id, cascade=True)
     if preview.blockers:
         detail = "; ".join(b.detail for b in preview.blockers)
-        raise ValueError(f"cancel_transfer blocked: {detail}")
+        raise ValueError(f"Отменить передачу нельзя: {detail}")
     assert preview.plan_token is not None
     try:
         await svc.reverse(

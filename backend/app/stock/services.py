@@ -146,6 +146,20 @@ def _format_completed_operations(ops: list | None) -> str:
     return ",".join(ops)
 
 
+#: Качество — подписью, а не ``state.value``: оператор читает отказ текстом,
+#: а не enumer-код (#282, п.9).
+_QUALITY_LABELS: dict[QualityState, str] = {
+    QualityState.GOOD: "годный",
+    QualityState.SCRAP: "брак",
+    QualityState.REWORK: "в переделке",
+    QualityState.FINAL_SCRAP: "окончательный брак",
+}
+
+
+def _quality_label(state: QualityState) -> str:
+    return _QUALITY_LABELS.get(state, state.value)
+
+
 @dataclass
 class StockCommand:
     """Интент записи движения материала в ledger.
@@ -1042,11 +1056,11 @@ class StockCommandService:
         # блокируется всегда (правило «lot-required блокирует минус»).
         if cmd.allow_negative:
             if await self._location_requires_lot(session, cmd.from_location_id):
+                sku, location = await self._operator_labels(session, cmd)
                 raise StockValidationError(
-                    f"Negative remainder blocked for product_id={cmd.product_id} "
-                    f"at location_id={cmd.from_location_id}: storage group "
-                    f"requires lot accounting (requires_lot): "
-                    f"required {cmd.quantity}, available {current_balance}"
+                    f"Минус на складе запрещён: «{sku}» на «{location}» — склад этой группы "
+                    f"ведётся по партиям, уходить в минус нельзя: нужно {cmd.quantity} шт., "
+                    f"доступно {current_balance} шт."
                 )
             # Иначе — осознанный минус: баланс уходит в минус до
             # закрытия последующей выдачей.
@@ -1061,12 +1075,29 @@ class StockCommandService:
             else "без указания длины"
         )
         ops_label = _format_completed_operations(cmd.completed_operations)
+        sku, location = await self._operator_labels(session, cmd)
         raise StockValidationError(
-            f"Insufficient stock for product_id={cmd.product_id} at location_id={cmd.from_location_id} "
-            f"(quality={cmd.quality_state.value}, dimensions={dims_label}, "
-            f"completed_operations={ops_label}): "
-            f"required {cmd.quantity}, available {current_balance}"
+            f"Недостаточный остаток: «{sku}» на складе «{location}» — "
+            f"нужно {cmd.quantity} шт., доступно {current_balance} шт. "
+            f"(качество: {_quality_label(cmd.quality_state)}, размер: {dims_label}, "
+            f"пройденные операции: {ops_label})"
         )
+
+    async def _operator_labels(self, session: AsyncSession, cmd: StockCommand) -> tuple[str, str]:
+        """Артикул и имя склада для текста отказа (#282, п.9).
+
+        ``product_id=7 location_id=47`` оператору ничего не говорит: он мыслит
+        артикулом и названием склада. id в текст не попадают даже в отказе.
+        """
+        product = await session.get(Product, cmd.product_id)
+        location = (
+            await session.get(Section, cmd.from_location_id)
+            if cmd.from_location_id is not None
+            else None
+        )
+        sku = product.sku if product is not None else "артикул не определён"
+        name = location.name if location is not None else "склад не указан"
+        return sku, name
 
     async def _validate(self, session: AsyncSession, cmd: StockCommand) -> None:
         if cmd.reason == Reason.ISSUE_TO_WORK:
@@ -1074,7 +1105,9 @@ class StockCommandService:
                 "reason=issue_to_work is no longer allowed; use TRANSFER_SEND/TRANSFER_RECEIVE"
             )
         if cmd.quantity <= 0:
-            raise StockValidationError(f"quantity must be > 0, got {cmd.quantity}")
+            raise StockValidationError(
+                f"Количество должно быть больше нуля, получено {cmd.quantity}"
+            )
         if cmd.from_location_id is None and cmd.to_location_id is None and cmd.reason != Reason.TRANSFER_RECEIVE:
             raise StockValidationError(
                 "at least one of from_location_id / to_location_id must be set"

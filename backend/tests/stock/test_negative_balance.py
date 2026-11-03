@@ -103,7 +103,7 @@ async def test_insufficient_balance_raises_error(session: AsyncSession):
             reason=Reason.TRANSFER_SEND,
             created_by=user.id,
         ))
-    assert "Insufficient stock" in str(exc.value)
+    assert "Недостаточный остаток" in str(exc.value)
 
     # Пополняем до 5
     await svc.record(session, StockCommand(
@@ -125,7 +125,7 @@ async def test_insufficient_balance_raises_error(session: AsyncSession):
             reason=Reason.TRANSFER_SEND,
             created_by=user.id,
         ))
-    assert "Insufficient stock" in str(exc.value)
+    assert "Недостаточный остаток" in str(exc.value)
 
     # Списание 5 -> успешно
     tx = await svc.record(session, StockCommand(

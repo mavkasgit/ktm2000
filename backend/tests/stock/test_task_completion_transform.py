@@ -829,7 +829,7 @@ async def test_requires_lot_spg_blocks_negative_remainder_in_complete(session: A
     fx = await _make_transform_setup(session, sku="TRC-SLOT", spg_requires_lot=True)
     await _receive_input(session, fx, quantity=Decimal(80))
 
-    with pytest.raises(StockValidationError, match="requires_lot"):
+    with pytest.raises(StockValidationError, match="Минус на складе запрещён"):
         await complete_task(
             session,
             task_id=fx["task"].id,

@@ -236,7 +236,7 @@ async def test_transfer_send_wrong_dimension_raises_insufficient_stock(client, s
 
     fake_task_id = await _stock_ready_task(client, user, raw_sec.id)
 
-    with pytest.raises(StockValidationError, match="Insufficient stock"):
+    with pytest.raises(StockValidationError, match="Недостаточный остаток"):
         await transfer_send(
             session,
             from_task_id=fake_task_id,

@@ -313,7 +313,7 @@ class StockCompensator(MirrorLedgerMixin):
                 blockers=[
                     CheckBlocker(
                         kind="already_reversed",
-                        detail=f"передача #{ref_id} уже отменена в домене (status=cancelled)",
+                        detail="эта передача уже отменена (статус «отменена»)",
                     )
                 ],
             )
@@ -407,7 +407,7 @@ class StockCompensator(MirrorLedgerMixin):
             return blockers or [
                 CheckBlocker(
                     kind="not_found",
-                    detail=f"{self.action_type}: Transfer с ref_id={ref_id} не найден",
+                    detail="передача, зафиксированная этим действием, не найдена",
                 )
             ]
 

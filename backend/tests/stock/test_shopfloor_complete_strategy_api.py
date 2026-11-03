@@ -231,7 +231,7 @@ async def test_api_requires_lot_blocks_negative_with_defect_atomically(
         headers=_auth_headers(fx),
     )
     assert resp.status_code == 400, resp.text
-    assert "requires_lot" in resp.json()["detail"]
+    assert "Минус на складе запрещён" in resp.json()["detail"]
 
     # Атомарность: баланс не тронут, проводок нет, брак не создан.
     assert await _balance(

@@ -340,7 +340,7 @@ async def test_adjustment_out_from_other_group_rejected(
     )
     assert out_null.status_code == 422, out_null.text
     detail = out_null.json()["detail"]
-    assert "completed_operations" in detail
+    assert "пройденные операции" in detail
     assert "не зафиксирован" in detail
 
     # Признак «маршрут пройден, операций не было» — тоже своя группа.
@@ -353,7 +353,7 @@ async def test_adjustment_out_from_other_group_rejected(
     )
     assert out_empty.status_code == 422, out_empty.text
     detail = out_empty.json()["detail"]
-    assert "completed_operations" in detail
+    assert "пройденные операции" in detail
     assert "операций не было" in detail
 
     # Остаток именованной группы не тронут.
@@ -395,8 +395,8 @@ async def test_adjustment_out_insufficient_in_selected_group(
     assert out.status_code == 422, out.text
     detail = out.json()["detail"]
     assert "SAW" in detail
-    assert "required 30" in detail
-    assert "available 10" in detail
+    assert "нужно 30" in detail
+    assert "доступно 10" in detail
 
     rows = await _balance_rows(session, product)
     named_row = _row_by_ops(rows, ["SAW"])
