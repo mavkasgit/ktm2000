@@ -252,3 +252,10 @@ export const test = testWithWorkerStand.extend<{
 });
 
 export { expect };
+// `Page` переэкспортируется: спеки (`mobile-transfers`, `prep-stage-plan`,
+// `prep-stock-source-cycle`) берут тип страницы отсюда, а не из
+// `@playwright/test` напрямую. Без этого `tsc -p tsconfig.e2e.json` даёт
+// TS2459 «Module declares 'Page' locally, but it is not exported», тип
+// страницы становится ошибочным, и за ним молча теряются все типы коллбэков
+// (`(r) => r.url()` — implicit any).
+export type { Page };

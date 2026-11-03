@@ -94,3 +94,21 @@ per-row `db.get`/`scalar` в цикле часто даёт **нулевую и�
 ## Тесты
 
 Канон pytest → [`tests/AGENTS.md`](tests/AGENTS.md).
+
+## Dev-инструменты: версии (#377)
+
+`requirements-dev.txt` — единственный источник правды для версий **тем, чем
+проверяют, а не на чём крутится приложение**: `ruff`, `coverage`, pytest и его
+плагины (`xdist`, `asyncio`, `testmon`). Runtime-слой (`fastapi`, `sqlalchemy`,
+`alembic`, …) остаётся с нижними границами в `requirements.txt` — его
+перепинивание требует отдельного тикета, потому что это изменение деплоя.
+
+- CI обязан брать эти пины, а не дублировать литералы (`ruff.yml`,
+  `backend-tests.yml` до #377 держали `ruff==0.16.9` и `coverage==7.16.2` в
+  своих телах).
+- Пины совпадают с `backend/.venv` машины (проверка без установки:
+  `python -m pip install --dry-run -r backend/requirements-dev.txt` ⇒
+  `Would install ruff-0.16.9`, остальное — `already satisfied`).
+- Проверка лока против пина: `ruff --version` и
+  `python -m coverage --version` против строк этого файла; расходимость — баг,
+  а не «у меня другая версия».

@@ -1,0 +1,40 @@
+# Хуки — удобство, не гейт.
+#
+# Всё, что запускается здесь, уже живёт в `npm run gate` и в CI: хук лишь даёт
+# ответ до коммита, а не новую проверку. Проверка, существующая только в хуке,
+# не считается существующей (принцип #382). Единственное исключение —
+# `guard-tree`: у него нет гейт-эквивалента, потому что вне момента коммита
+# вопрос «не чужое ли дерево трогается» не задан; второй дом для него — `doctor`.
+#
+# `stage_fixed` выключен и `--fix` нет нигде: править чужое рабочее дерево из-под
+# хука — это то, что потом невозможно объяснить в истории коммита.
+#
+# Пропустить хук: `LEFTHOOK=0 git commit ...` или `git commit --no-verify`.
+# Когда это разрешено, а когда запрещено — docs/quality/hooks.md.
+
+pre-commit:
+  parallel: true
+  commands:
+    guard-tree:
+      # Единственная команда здесь, которой нет в гейте: вопрос «в чужое ли дерево
+      # пишет этот коммит» имеет смысл только в момент коммита, а не прогона тестов.
+      run: node scripts/guard-tree.mjs
+    ruff:
+      glob: "*.py"
+      exclude:
+        - "(^|/)(\\.venv|node_modules)/.+"
+      run: ruff check --no-fix {staged_files}
+    eslint:
+      glob: "*.{ts,tsx}"
+      root: frontend
+      exclude:
+        - "(^|/)(node_modules|dist|playwright-report)/.+"
+      run: npx eslint --no-warn-ignored {staged_files}
+    docs-links:
+      glob: "*.md"
+      run: npm run check:docs
+
+pre-push:
+  commands:
+    gate-fast:
+      run: npm run gate:fast

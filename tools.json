@@ -1,0 +1,367 @@
+{
+  "updated": "2026-11-03",
+  "tools": [
+    {
+      "id": "node",
+      "name": "Node.js",
+      "repo": "nodejs/node",
+      "category": "language",
+      "version": "24",
+      "pinned_in": ".nvmrc",
+      "runs_at": [
+        "gate",
+        "ci"
+      ],
+      "blocking": true,
+      "last_reviewed": "2026-11-03",
+      "rationale": "Единый источник версии Node для локального гейта и CI; раньше 20 и 22 были разбросаны по workflow."
+    },
+    {
+      "id": "python",
+      "name": "Python",
+      "repo": "python/cpython",
+      "category": "language",
+      "version": "3.12",
+      "pinned_in": ".python-version",
+      "runs_at": [
+        "gate",
+        "ci"
+      ],
+      "blocking": true,
+      "last_reviewed": "2026-11-03",
+      "rationale": "Backend и скрипты проверки сидов идут на 3.12; дублирование python-version по пяти workflow — источник расхождений."
+    },
+    {
+      "id": "npm",
+      "name": "npm",
+      "repo": "npm/cli",
+      "category": "dev-tool",
+      "version": ">=10",
+      "pinned_in": "package.json",
+      "runs_at": [
+        "gate",
+        "ci"
+      ],
+      "blocking": true,
+      "last_reviewed": "2026-11-03",
+      "rationale": "Все точки входа — npm-скрипты; минимальную версию задаёт engines в корневом package.json."
+    },
+    {
+      "id": "ruff",
+      "name": "Ruff",
+      "repo": "astral-sh/ruff",
+      "category": "linter",
+      "version": "0.16.9",
+      "pinned_in": "backend/requirements-dev.txt",
+      "runs_at": [
+        "gate",
+        "ci"
+      ],
+      "blocking": true,
+      "last_reviewed": "2026-11-03",
+      "rationale": "Единственный линтер backend; после #377 пин живёт в requirements-dev.txt, workflow лишь устанавливает его."
+    },
+    {
+      "id": "coverage",
+      "name": "coverage.py",
+      "repo": "coveragepy/coveragepy",
+      "category": "coverage",
+      "version": "7.16.2",
+      "pinned_in": "backend/requirements-dev.txt",
+      "runs_at": [
+        "ci"
+      ],
+      "blocking": true,
+      "last_reviewed": "2026-11-03",
+      "rationale": "Порог coverage --fail-under=73 краснеет только в CI, но версия часть замера: бейзлайн снят именно на 7.16.2."
+    },
+    {
+      "id": "typescript",
+      "name": "TypeScript",
+      "repo": "microsoft/TypeScript",
+      "category": "typechecker",
+      "version": "^5.7.2",
+      "pinned_in": "frontend/package.json",
+      "runs_at": [
+        "commit",
+        "gate",
+        "ci"
+      ],
+      "blocking": true,
+      "last_reviewed": "2026-11-03",
+      "rationale": "tsc -b — самая дорогая часть gate:fast, и именно он краснеет после сломанных типов.",
+      "npm_package": "typescript"
+    },
+    {
+      "id": "eslint",
+      "name": "ESLint",
+      "repo": "eslint/eslint",
+      "category": "linter",
+      "version": "^9.39.5",
+      "pinned_in": "frontend/package.json",
+      "runs_at": [
+        "gate",
+        "ci"
+      ],
+      "blocking": true,
+      "last_reviewed": "2026-11-03",
+      "rationale": "Вместе с eslint-plugin-boundaries держит правила FSD; без него границы feature режутся молча.",
+      "npm_package": "eslint"
+    },
+    {
+      "id": "vitest",
+      "name": "Vitest",
+      "repo": "vitest-dev/vitest",
+      "category": "test-runner",
+      "version": "^3.2.7",
+      "pinned_in": "frontend/package.json",
+      "runs_at": [
+        "gate",
+        "ci"
+      ],
+      "blocking": true,
+      "last_reviewed": "2026-11-03",
+      "rationale": "Юниты frontend; в gate входит ярусом full.",
+      "npm_package": "vitest"
+    },
+    {
+      "id": "vitest-coverage-v8",
+      "name": "@vitest/coverage-v8",
+      "repo": "vitest-dev/vitest",
+      "category": "coverage",
+      "version": "^3.2.7",
+      "pinned_in": "frontend/package.json",
+      "runs_at": [
+        "ci"
+      ],
+      "blocking": false,
+      "last_reviewed": "2026-11-03",
+      "rationale": "report-only: порога coverage у frontend пока нет — блокировать нечего.",
+      "npm_package": "@vitest/coverage-v8"
+    },
+    {
+      "id": "playwright",
+      "name": "Playwright",
+      "repo": "microsoft/playwright",
+      "category": "e2e",
+      "version": "^1.60.0",
+      "pinned_in": "frontend/package.json",
+      "runs_at": [
+        "gate",
+        "ci"
+      ],
+      "blocking": true,
+      "last_reviewed": "2026-11-03",
+      "rationale": "E2E-канон; отдельный ярус gate:e2e, потому что прогон берёт слот семафора и свой клон БД.",
+      "npm_package": "@playwright/test"
+    },
+    {
+      "id": "pytest",
+      "name": "pytest",
+      "repo": "pytest-dev/pytest",
+      "category": "test-runner",
+      "version": "9.1.1",
+      "pinned_in": "backend/requirements-dev.txt",
+      "runs_at": [
+        "gate",
+        "ci"
+      ],
+      "blocking": true,
+      "last_reviewed": "2026-11-03",
+      "rationale": "Канон backend-тестов; в requirements.txt остаётся нижняя граница, точный пин — в dev-слое (#377)."
+    },
+    {
+      "id": "pytest-xdist",
+      "name": "pytest-xdist",
+      "repo": "pytest-dev/pytest-xdist",
+      "category": "test-runner",
+      "version": "3.8.0",
+      "pinned_in": "backend/requirements-dev.txt",
+      "runs_at": [
+        "gate",
+        "ci"
+      ],
+      "blocking": true,
+      "last_reviewed": "2026-11-03",
+      "rationale": "launcher test-run.ps1 зовёт -n с --dist loadfile; без плагина прогон не стартует."
+    },
+    {
+      "id": "pytest-asyncio",
+      "name": "pytest-asyncio",
+      "repo": "pytest-dev/pytest-asyncio",
+      "category": "test-runner",
+      "version": "1.4.0",
+      "pinned_in": "backend/requirements-dev.txt",
+      "runs_at": [
+        "gate",
+        "ci"
+      ],
+      "blocking": true,
+      "last_reviewed": "2026-11-03",
+      "rationale": "Все async-тесты backend идут через него; версия закреплена в dev-слое."
+    },
+    {
+      "id": "pytest-testmon",
+      "name": "pytest-testmon",
+      "repo": "tarpas/pytest-testmon",
+      "category": "test-runner",
+      "version": "2.2.0",
+      "pinned_in": "backend/requirements-dev.txt",
+      "runs_at": [
+        "manual"
+      ],
+      "blocking": false,
+      "last_reviewed": "2026-11-03",
+      "rationale": "Только test:pytest:mon (--testmon); в гейте и CI не участвует."
+    },
+    {
+      "id": "alembic",
+      "name": "Alembic",
+      "repo": "sqlalchemy-org/alembic",
+      "category": "migration",
+      "version": ">=1.13.0",
+      "pinned_in": "backend/requirements.txt",
+      "runs_at": [
+        "ci",
+        "manual"
+      ],
+      "blocking": true,
+      "last_reviewed": "2026-11-03",
+      "rationale": "alembic check живёт в CI; локально в гейте не запускается — накатывает миграции на живую dev-БД."
+    },
+    {
+      "id": "postgres",
+      "name": "PostgreSQL",
+      "repo": "postgres/postgres",
+      "category": "database",
+      "version": "15-alpine",
+      "pinned_in": "infra/compose",
+      "runs_at": [
+        "gate",
+        "ci",
+        "manual"
+      ],
+      "blocking": true,
+      "last_reviewed": "2026-11-03",
+      "rationale": "Один образ на dev/test/прод-контейнер; тесты и e2e без него не поднимаются."
+    },
+    {
+      "id": "concurrently",
+      "name": "concurrently",
+      "repo": "open-cli-tools/concurrently",
+      "category": "dev-tool",
+      "version": "^9.1.2",
+      "pinned_in": "package.json",
+      "runs_at": [
+        "manual"
+      ],
+      "blocking": false,
+      "last_reviewed": "2026-11-03",
+      "rationale": "npm run dev поднимает стек тремя процессами; к проверкам отношения не имеет.",
+      "npm_package": "concurrently"
+    },
+    {
+      "id": "cross-env",
+      "name": "cross-env",
+      "repo": "kentcdodds/cross-env",
+      "category": "dev-tool",
+      "version": "^7.0.3",
+      "pinned_in": "package.json",
+      "runs_at": [
+        "manual"
+      ],
+      "blocking": false,
+      "last_reviewed": "2026-11-03",
+      "rationale": "Переносит окружение между скриптами на Windows и Linux.",
+      "npm_package": "cross-env"
+    },
+    {
+      "id": "ajv",
+      "name": "Ajv",
+      "repo": "ajv-validator/ajv",
+      "category": "dev-tool",
+      "version": "^8.20.0",
+      "pinned_in": "package.json",
+      "runs_at": [
+        "gate",
+        "ci"
+      ],
+      "blocking": true,
+      "last_reviewed": "2026-11-03",
+      "rationale": "Исполняет tools.schema.json: реестр без валидации схемы — просто текст.",
+      "npm_package": "ajv"
+    },
+    {
+      "id": "lefthook",
+      "name": "Lefthook",
+      "repo": "evilmartians/lefthook",
+      "category": "hook",
+      "version": "2.2.2",
+      "pinned_in": "package.json",
+      "runs_at": [
+        "commit",
+        "push"
+      ],
+      "blocking": true,
+      "last_reviewed": "2026-11-03",
+      "rationale": "Хуки по staged-файлам: ответ до коммита. Ничего нового не проверяет — каждый command уже живёт в gate и CI, поэтому отсутствие хуков не делает дерево менее проверенным (docs/quality/hooks.md).",
+      "npm_package": "lefthook"
+    },
+    {
+      "id": "action-checkout",
+      "name": "actions/checkout",
+      "repo": "actions/checkout",
+      "category": "ci-action",
+      "version": "@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0",
+      "pinned_in": ".github/workflows",
+      "runs_at": [
+        "ci"
+      ],
+      "blocking": true,
+      "last_reviewed": "2026-11-03",
+      "rationale": "Закреплён полным SHA во всех шести workflow, тег — комментарием: dependabot (#367) обновляет именно SHA, а «@v4» позволил бы мажору уехать без изменения файла."
+    },
+    {
+      "id": "action-setup-node",
+      "name": "actions/setup-node",
+      "repo": "actions/setup-node",
+      "category": "ci-action",
+      "version": "@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4.4.0",
+      "pinned_in": ".github/workflows",
+      "runs_at": [
+        "ci"
+      ],
+      "blocking": true,
+      "last_reviewed": "2026-11-03",
+      "rationale": "Ставит Node; сама версия берётся из pin-файлов репозитория, не из литерала workflow (#362)."
+    },
+    {
+      "id": "action-setup-python",
+      "name": "actions/setup-python",
+      "repo": "actions/setup-python",
+      "category": "ci-action",
+      "version": "@a26af69be951a213d495a4c3e4e4022e16d87065 # v5.6.0",
+      "pinned_in": ".github/workflows",
+      "runs_at": [
+        "ci"
+      ],
+      "blocking": true,
+      "last_reviewed": "2026-11-03",
+      "rationale": "Ставит Python; версия из .python-version (#362)."
+    },
+    {
+      "id": "action-upload-artifact",
+      "name": "actions/upload-artifact",
+      "repo": "actions/upload-artifact",
+      "category": "ci-action",
+      "version": "@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2",
+      "pinned_in": ".github/workflows",
+      "runs_at": [
+        "ci"
+      ],
+      "blocking": false,
+      "last_reviewed": "2026-11-03",
+      "rationale": "Отчёты Playwright; падение шага артефактов не отменяет вердикт теста."
+    }
+  ]
+}

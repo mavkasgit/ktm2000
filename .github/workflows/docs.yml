@@ -1,10 +1,22 @@
 name: Docs
 
-# Ссылки в документации — блокирующая проверка.
+# Статус для merge: ИНФОРМАЦИОННЫЙ. Джоб `docs` не входит в required checks
+# (замер: `gh api repos/mavkasgit/ktm2000/branches/main/protection`), поэтому
+# красное здесь merge не блокирует. Состав блокирующих живёт вне этого файла —
+# таблица `docs/testing-guide.md` (§CI). #370.
+#
+# Ссылки в документации — блокирующая проверка *своего прогона*: скрипт падает с
+# ненулевым кодом, а не пишет предупреждение. Для merge он не гейтит (см. выше).
 #
 # Что именно в скоупе — `scripts/check-doc-links-core.js`, а не этот комментарий:
 # инвариант один, каждая относительная ссылка в `.md` резолвится в файл из
 # `git ls-files`. Якоря, схемы и внешние URL выведены из скоупа там же.
+#
+# Второй скоуп джоба — `adr-index` (`scripts/check-adr-core.js`): уникальность
+# номеров ADR, форма заголовка, «Дата:»/«Статус:». Коллизия двух файлов с номером
+# 0067 не видна ни одной другой проверке: ссылки резолвятся, потому что оба файла
+# существуют (#390). Исключения формата — датированный список
+# `docs/quality/adr-legacy.json`, а не молчание скрипта.
 #
 # Зачем отдельный workflow: остальные проверяют код (ruff, tsc, vitest, pytest,
 # alembic). Переименование документа оставляет все их зелёными — ловит только
@@ -14,33 +26,116 @@ name: Docs
 # Локальный запуск — та же команда: `npm run check:docs` из корня.
 # `test:scripts` едет сюда же: у скриптов есть тесты, и без этого джоба они
 # никогда не исполнялись в CI.
+#
+# #361: джоб `docs` НЕ входит в required contexts (проверено чтением
+# `gh api repos/mavkasgit/ktm2000/branches/main/protection` — contexts =
+# migrations, backend tests, frontend tests, ruff). Только поэтому здесь
+# разрешён фильтр `paths` уровня workflow: его срабатывание не оставит
+# required check в "Pending". Меняется состав required-проверок —
+# фильтр надо снимать (иначе правки вне скоупа молча не проверяются).
 on:
   push:
     branches:
       - main
       - master
+    paths:
+      - '**.md'
+      - 'docs/**'
+      - 'scripts/**'
+      - 'package.json'
+      - 'package-lock.json'
+      - '.github/workflows/docs.yml'
   pull_request:
     branches:
       - main
       - master
+    paths:
+      - '**.md'
+      - 'docs/**'
+      - 'scripts/**'
+      - 'package.json'
+      - 'package-lock.json'
+      - '.github/workflows/docs.yml'
   workflow_dispatch:
+
+concurrency:
+  group: ci-${{ github.workflow }}-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' || github.ref != 'refs/heads/main' }}
+
+# #363 [missing-permissions]: по умолчанию GITHUB_TOKEN получает запись во все скоупы
+# репозитория. Здесь читаем — поэтому верхний уровень только `contents: read`.
+permissions:
+  contents: read
 
 jobs:
   docs:
     name: docs
     runs-on: ubuntu-latest
+    # #363 [missing-timeout]: замера не было вовсе. По `jactionlint --suggest-timeouts`
+    # (13 успешных прогонов, 2026-10-07…2026-11-02): min 0.1, медиана 0.1, max 0.2 мин.
+    # 10 минут — запас на npm-установку без кеша.
+    timeout-minutes: 10
 
     steps:
       - name: Checkout
-        uses: actions/checkout@v4
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+        with:
+          # #363 [artipacked]: checkout иначе пишет GITHUB_TOKEN в .git/config workspace,
+          # откуда его может увести любой последующий шаг (upload-artifact и т. п.).
+          # Ни один шаг этих джобов не пушит: push — действие человека/оркестратора.
+          persist-credentials: false
+
+      # #362: версии языка берутся из pin-файлов репозитория (#355 оркестратора:
+      # `.nvmrc`, `.python-version`). Файла нет — шаг материализует временный
+      # `.ci-*-version` в workspace прогона (в git не попадает) со значением, которое
+      # стояло в этом workflow до волны, и печатает WARNING. Прогон зелёный уже
+      # сегодня; когда pin-файлы появятся, правки в workflow не нужны — тот же путь,
+      # другое содержимое.
+      - name: Toolchain pin (#362)
+        id: toolchain
+        shell: bash
+        env:
+          KTM_NODE_FALLBACK: '22'
+          KTM_USE_NODE: 'yes'
+          KTM_USE_PY: 'no'
+        run: |
+          set -euo pipefail
+          pick() {
+            local src="$1" fb="$2" dst="$3" raw
+            if [ -f "$src" ]; then
+              raw=$(tr -d ' \t\r\n' < "$src")
+              echo "$src -> $raw (pin-файл репозитория)"
+            else
+              raw="$fb"
+              echo "WARNING: pin-файла $src нет (#355 не влит) — беру литерал workflow $raw"
+            fi
+            if [ -z "$raw" ]; then
+              echo "Пустая версия языка ($src/$fb) — падаю, а не ставлю тихий дефолт" >&2
+              exit 1
+            fi
+            printf '%s\n' "${raw#v}" > "$dst"
+            echo "$dst: $(cat "$dst")"
+          }
+          if [ "$KTM_USE_NODE" = yes ]; then
+            pick .nvmrc "$KTM_NODE_FALLBACK" .ci-node-version
+            echo "node_file=.ci-node-version" >> "$GITHUB_OUTPUT"
+          fi
+          if [ "$KTM_USE_PY" = yes ]; then
+            pick .python-version "$KTM_PY_FALLBACK" .ci-python-version
+            echo "python_file=.ci-python-version" >> "$GITHUB_OUTPUT"
+          fi
 
       - name: Setup Node
-        uses: actions/setup-node@v4
+        uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4.4.0
         with:
-          node-version: "22"
-
+          node-version-file: ${{ steps.toolchain.outputs.node_file }}
       - name: Doc links
         run: npm run check:docs
+
+      # Коллизия номеров ADR не видна ни в одной другой проверке: оба файла
+      # существуют, ссылка резолвится. Ловит только этот шаг (#390).
+      - name: ADR index
+        run: npm run check:adr
 
       - name: Script tests
         run: npm run test:scripts

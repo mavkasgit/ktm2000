@@ -51,7 +51,7 @@ Warnings (не блокируют): `paired_hanger_adjusted`,
 `invalid_input_length` / `invalid_output_length`, `paired_row_auto_included:*`,
 `row_selection_applied:*` / `row_selection_auto_included:*`,
 `paired_profile_product_unmapped`,
-`sku_matched_by_part:*` (#347, ADR-0067: целая ячейка не найдена, позиция
+`sku_matched_by_part:*` (#347, ADR-0068: целая ячейка не найдена, позиция
 привязана к артикулу по части составного «ЮП-3658/1875»; параметр — сама часть).
 
 `raw_length_not_found`, `raw_length_substituted` и правило «ближайшая сверху»
