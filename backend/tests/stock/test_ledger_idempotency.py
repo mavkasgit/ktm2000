@@ -32,9 +32,10 @@ from app.stock import (
     StockTransaction,
 )
 from httpx import ASGITransport, AsyncClient
-from sqlalchemy import event, select, text
-from sqlalchemy.ext.asyncio import AsyncEngine, AsyncSession, async_sessionmaker
+from sqlalchemy import select
+from sqlalchemy.ext.asyncio import AsyncSession
 
+from tests import dbcleaner
 from tests.stock.test_stock_command import _make_location, _make_product, _make_user
 from tests.stock.test_task_completion_transform import (
     _make_transform_setup,
@@ -45,43 +46,9 @@ from tests.test_integrity_invariants import assert_no_stock_ledger_invariants_vi
 
 RACE_KEY = "race-key-1"
 
-
-@pytest_asyncio.fixture(scope="module", loop_scope="module")
-async def _pin_search_path(engine: AsyncEngine, module_schema_name: str):
-    """Каждое новое соединение движка сразу получает search_path модуля.
-
-    Engine на NullPool: после любого commit соединение закрывается, и
-    следующий запрос уходит на свежее соединение — per-session SET перед
-    коммитом недостаточно (сетап трансформации коммитит внутри себя).
-    """
-    def _set_path(dbapi_conn, _record):
-        cur = dbapi_conn.cursor()
-        cur.execute(f'SET search_path TO "{module_schema_name}"')
-        cur.close()
-
-    event.listen(engine.sync_engine, "connect", _set_path)
-    yield
-    event.remove(engine.sync_engine, "connect", _set_path)
-
-
-pytestmark = [pytest.mark.asyncio, pytest.mark.usefixtures("_pin_search_path")]
-
-
-def _schema_sql(module_schema_name: str) -> str:
-    return f'SET search_path TO "{module_schema_name}"'
-
-
-async def _bump_user_sequence(session: AsyncSession) -> None:
-    """Поднимает users-последовательность выше постоянного пола (900k).
-
-    Фикстура ``session`` перезапускает последовательность с 1 на каждый
-    тест; закоммиченные этим модулем пользователи не должны занимать
-    низкие id — иначе system_user следующего теста упрётся в PK.
-    """
-    await session.execute(text(
-        "SELECT setval(pg_get_serial_sequence('users', 'id'), "
-        "GREATEST((SELECT COALESCE(MAX(id), 0) FROM users), 900000) + 1, false)"
-    ))
+# Гонки идут на своих соединениях -> изоляция коммитами + TRUNCATE после теста.
+DB_STRATEGY = dbcleaner.STRATEGY_TRUNCATION
+pytestmark = [pytest.mark.asyncio, pytest.mark.usefixtures("cleaner_reset")]
 
 
 def _auth_headers(fx: dict) -> dict[str, str]:
@@ -93,16 +60,11 @@ def _auth_headers(fx: dict) -> dict[str, str]:
 
 
 async def test_concurrent_same_key_loser_gets_conflict(
-    engine: AsyncEngine, module_schema_name: str,
+    cleaner: dbcleaner.Cleaner,
 ):
     """Два конкурентных record() с одним ключом: ровно одна проводка,
     проигравший получает StockIdempotencyConflict (409), а не дубль."""
-    factory = async_sessionmaker(bind=engine, expire_on_commit=False)
-    schema = _schema_sql(module_schema_name)
-
-    async with factory() as setup:
-        await setup.execute(text(schema))
-        await _bump_user_sequence(setup)
+    async with cleaner.session() as setup:
         user = await _make_user(setup, "idem-race")
         product = await _make_product(setup, "IDEM-RACE")
         raw = await _make_location(setup, code="IDEMRAW", name="IdemRaw", loc_type="raw_stock")
@@ -127,12 +89,10 @@ async def test_concurrent_same_key_loser_gets_conflict(
     )
     svc = StockCommandService()
 
-    async with factory() as winner:
-        await winner.execute(text(schema))
+    async with cleaner.session() as winner:
         first = await svc.record(winner, cmd)  # INSERT прошёл, НЕ закоммичен
 
-        async with factory() as loser:
-            await loser.execute(text(schema))
+        async with cleaner.session() as loser:
             task = asyncio.create_task(svc.record(loser, cmd))
             # Проигравший проходит replay-SELECT (пусто: INSERT победителя
             # ещё не закоммичен) и зависает на flush — ждёт исхода победителя.
@@ -141,8 +101,7 @@ async def test_concurrent_same_key_loser_gets_conflict(
             with pytest.raises(StockIdempotencyConflict):
                 await task
 
-    async with factory() as check:
-        await check.execute(text(schema))
+    async with cleaner.session() as check:
         rows = (
             await check.execute(
                 select(StockTransaction).where(StockTransaction.idempotency_key == RACE_KEY)
@@ -155,16 +114,11 @@ async def test_concurrent_same_key_loser_gets_conflict(
 
 
 async def test_replay_across_connections_returns_prior(
-    engine: AsyncEngine, module_schema_name: str,
+    cleaner: dbcleaner.Cleaner,
 ):
     """Повтор операции с тем же ключом на новом соединении (реальный retry
     клиента после 409/таймаута) возвращает проводку победителя."""
-    factory = async_sessionmaker(bind=engine, expire_on_commit=False)
-    schema = _schema_sql(module_schema_name)
-
-    async with factory() as setup:
-        await setup.execute(text(schema))
-        await _bump_user_sequence(setup)
+    async with cleaner.session() as setup:
         user = await _make_user(setup, "idem-retry")
         product = await _make_product(setup, "IDEM-RETRY")
         raw = await _make_location(setup, code="IDEMRAW2", name="IdemRaw", loc_type="raw_stock")
@@ -189,13 +143,11 @@ async def test_replay_across_connections_returns_prior(
     )
     svc = StockCommandService()
 
-    async with factory() as first_conn:
-        await first_conn.execute(text(schema))
+    async with cleaner.session() as first_conn:
         first = await svc.record(first_conn, cmd)
         await first_conn.commit()
 
-    async with factory() as retry_conn:
-        await retry_conn.execute(text(schema))
+    async with cleaner.session() as retry_conn:
         replayed = await svc.record(retry_conn, cmd)
 
     assert replayed.id == first.id
@@ -245,18 +197,15 @@ async def test_null_idempotency_key_is_not_idempotent(session: AsyncSession):
 
 @pytest_asyncio.fixture
 async def isolated_client(
-    engine: AsyncEngine, module_schema_name: str,
+    cleaner: dbcleaner.Cleaner,
 ) -> AsyncIterator[AsyncClient]:
-    """API-клиент, где каждый запрос получает СВОЁ соединение из engine.
+    """API-клиент, где каждый запрос получает СВОЁ соединение от Cleaner'а.
 
     Общая фикстура ``client`` подсовывает всем запросам один session —
     параллельный double-click через неё невоспроизводим.
     """
-    factory = async_sessionmaker(bind=engine, expire_on_commit=False)
-
     async def override_get_db() -> AsyncIterator[AsyncSession]:
-        async with factory() as db:
-            await db.execute(text(_schema_sql(module_schema_name)))
+        async with cleaner.session() as db:
             try:
                 yield db
                 await db.commit()
@@ -272,16 +221,11 @@ async def isolated_client(
 
 
 async def test_api_double_click_complete_records_single_movement(
-    isolated_client: AsyncClient, engine: AsyncEngine, module_schema_name: str,
+    isolated_client: AsyncClient, cleaner: dbcleaner.Cleaner,
 ):
     """Double-click «Завершить»: {200, 409} или {200, 200-по-replay},
     но проводка списания ровно одна и инварианты ledger целы."""
-    factory = async_sessionmaker(bind=engine, expire_on_commit=False)
-    schema = _schema_sql(module_schema_name)
-
-    async with factory() as setup:
-        await setup.execute(text(schema))
-        await _bump_user_sequence(setup)
+    async with cleaner.session() as setup:
         fx = await _make_transform_setup(setup, sku="IDEM-API")
         await _receive_input(setup, fx, quantity=Decimal(80))
         await setup.commit()
@@ -301,8 +245,7 @@ async def test_api_double_click_complete_records_single_movement(
             assert resp.json()["error_code"] == "stock_idempotency_conflict"
     assert 200 in (r1.status_code, r2.status_code), "хотя бы одна подача проходит"
 
-    async with factory() as check:
-        await check.execute(text(schema))
+    async with cleaner.session() as check:
         consumed = await _tx_sum(
             check, fx["task"].id, Reason.TRANSFORM_CONSUME, any_dims=True,
         )

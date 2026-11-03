@@ -1,6 +1,5 @@
 from __future__ import annotations
 
-import logging
 import os
 import re
 import shutil
@@ -46,14 +45,9 @@ from app.models.base import Base
 from httpx import ASGITransport, AsyncClient
 from sqlalchemy import text
 from sqlalchemy.engine import URL, make_url
-from sqlalchemy.exc import SQLAlchemyError
-from sqlalchemy.ext.asyncio import (
-    AsyncEngine,
-    AsyncSession,
-    async_sessionmaker,
-    create_async_engine,
-)
-from sqlalchemy.pool import NullPool
+from sqlalchemy.ext.asyncio import AsyncConnection, AsyncEngine, AsyncSession
+
+from tests import dbcleaner
 
 DEFAULT_TEST_DATABASE_URL = "postgresql+asyncpg://ktm2000_user:ktm2000_pass_test@localhost:5441/ktm2000_test"
 DB_MODE_HYBRID = "hybrid"
@@ -62,18 +56,12 @@ IDENT_RE = re.compile(r"^[a-zA-Z0-9_]+$")
 RUN_DB_RE = re.compile(r"^ktm2000_test_[0-9a-f]{12}$")
 _RUN_ID_ENV = "TEST_RUN_ID"
 
-logger = logging.getLogger(__name__)
-
 # The test launcher (scripts/test-run.ps1) owns the lifecycle of the run
 # database: it creates ktm2000_test_<12 hex>, exports TEST_RUN_ID /
 # TEST_DB_NAME / TEST_DATABASE_URL, runs pytest and drops the DB in a
 # finally. This module never creates or drops databases — it only connects
-# to the run-DB the launcher provided and isolates per-module schemas
-# (t_<uuid8>) inside it.
-
-
-def _quote_ident(name: str) -> str:
-    return '"' + name.replace('"', '""') + '"'
+# to the run-DB the launcher provided and hands `tests.dbcleaner.Cleaner`
+# the per-module schema (t_<uuid8>) to own.
 
 
 def _validate_ident(name: str, *, required_prefix: str) -> None:
@@ -81,12 +69,6 @@ def _validate_ident(name: str, *, required_prefix: str) -> None:
         raise RuntimeError(f"Unsafe identifier '{name}': expected prefix '{required_prefix}'.")
     if not IDENT_RE.fullmatch(name):
         raise RuntimeError(f"Unsafe identifier '{name}': only [a-zA-Z0-9_] is allowed.")
-
-
-def _safe_schema_name() -> str:
-    schema_name = f"{TEST_SCHEMA_PREFIX}{uuid.uuid4().hex[:8]}"
-    _validate_ident(schema_name, required_prefix=TEST_SCHEMA_PREFIX)
-    return schema_name
 
 
 def _ensure_hybrid_mode() -> str:
@@ -350,82 +332,87 @@ def module_schema_name() -> str:
     return schema_name
 
 
+async def baseline_setup(conn: AsyncConnection) -> None:
+    """Базовая линия пакета — «миграции» для Cleaner'а.
+
+    Схема пакета уже создана и стоит в `search_path` соединения (его задаёт
+    `Cleaner`), поэтому типы, таблицы и триггеры строятся прямо в ней.
+    Выполняется один раз на пакет и коммитится — как `WithSetup` у dbcleaner.
+    """
+    await _install_precreated_enum_types(conn)
+    await conn.run_sync(Base.metadata.create_all)
+    await _install_storage_vs_production_triggers(conn)
+
+
+@pytest.fixture(scope="module")
+def db_strategy(request: pytest.FixtureRequest) -> str:
+    """Стратегия отката пакета: `DB_STRATEGY` модуля или `transaction`.
+
+    Модуль объявляет её одной строкой на уровне файла; по умолчанию —
+    транзакция, как у dbcleaner.
+    """
+    return getattr(request.module, "DB_STRATEGY", dbcleaner.STRATEGY_TRANSACTION)
+
+
 @pytest_asyncio.fixture(scope="module", loop_scope="module")
-async def engine(
+async def cleaner(
     base_test_db_url: URL,
     module_schema_name: str,
-) -> AsyncIterator[AsyncEngine]:
-    """Engine on the launcher-provided run-DB with a fresh schema per module.
+    db_strategy: str,
+) -> AsyncIterator[dbcleaner.Cleaner]:
+    """Один Cleaner на пакет: базовая линия + выдача сессий (`cleaner.DB(t)`).
 
-    The run-DB is owned by the launcher and is deliberately NOT dropped here:
-    dropping it in any single module's teardown would break the parallel
-    xdist workers sharing it (the InvalidCatalogNameError this file used to
-    guard against). The module schema (t_<uuid8>) is also left in place for
-    launcher-owned run-DBs: they are dropped whole by the launcher (or reaped
-    by `npm run test:db:cleanup` if a run is killed), so a per-module
-    DROP SCHEMA CASCADE (~0.25s × module) is pure overhead. The module schema
-    is dropped only in manual debug mode on the shared static DB, so it does
-    not accumulate there.
+    `drop_schema` включается только для ручного режима на общей статичной
+    базе: run-DB launcher'а падает целиком, и per-module `DROP SCHEMA` там —
+    чистые расходы (~0.25s × модуль).
     """
-    eng = create_async_engine(
-        base_test_db_url.render_as_string(hide_password=False), poolclass=NullPool
+    db_name = (base_test_db_url.database or "").lower()
+    test_cleaner = dbcleaner.Cleaner(
+        base_test_db_url,
+        module_schema_name,
+        setup=baseline_setup,
+        strategy=db_strategy,
+        drop_schema=not RUN_DB_RE.fullmatch(db_name),
     )
-    async with eng.begin() as conn:
-        await conn.execute(text(f"CREATE SCHEMA IF NOT EXISTS {_quote_ident(module_schema_name)}"))
-        await conn.execute(text(f"SET search_path TO {_quote_ident(module_schema_name)}"))
-        await _install_precreated_enum_types(conn)
-        await conn.run_sync(Base.metadata.create_all)
-        await _install_storage_vs_production_triggers(conn)
+    await test_cleaner.start()
     try:
-        yield eng
+        yield test_cleaner
     finally:
-        db_name = (base_test_db_url.database or "").lower()
-        if not RUN_DB_RE.fullmatch(db_name):
-            # Manual debug on the shared static DB — drop the module schema so
-            # t_<uuid8> schemas do not accumulate in the persistent DB.
-            try:
-                async with eng.begin() as conn:
-                    await conn.execute(text(f"DROP SCHEMA IF EXISTS {_quote_ident(module_schema_name)} CASCADE"))
-            except SQLAlchemyError:
-                # Best-effort уборка: сбой дропа схемы не должен маскировать
-                # результат тестов, поэтому глотаем только ошибки БД и пишем
-                # их в debug-лог.
-                logger.debug(
-                    "Failed to drop module schema %s", module_schema_name, exc_info=True
-                )
-        await eng.dispose()
+        await test_cleaner.stop()
+
+
+@pytest_asyncio.fixture(scope="module", loop_scope="module")
+async def engine(cleaner: dbcleaner.Cleaner) -> AsyncEngine:
+    """Движок пакета: его соединения попадают в схему пакета."""
+    return cleaner.engine
 
 
 @pytest_asyncio.fixture
-async def session(engine: AsyncEngine, module_schema_name: str) -> AsyncIterator[AsyncSession]:
-    async with engine.connect() as conn:
-        transaction = await conn.begin()
-        await conn.execute(text(f"SET search_path TO {_quote_ident(module_schema_name)}"))
-        # Сброс генератора ID, чтобы system_user всегда получал id = 1
-        await conn.execute(text("ALTER TABLE users ALTER COLUMN id RESTART WITH 1"))
-        session_factory = async_sessionmaker(
-            bind=conn,
-            class_=AsyncSession,
-            expire_on_commit=False,
-            join_transaction_mode="create_savepoint"
-        )
-        async with session_factory() as db:
+async def cleaner_reset(cleaner: dbcleaner.Cleaner) -> AsyncIterator[None]:
+    """Откат после теста для коммитящих стратегий (для `transaction` — no-op)."""
+    yield
+    await cleaner.reset()
+
+
+@pytest_asyncio.fixture
+async def session(cleaner: dbcleaner.Cleaner) -> AsyncIterator[AsyncSession]:
+    async with cleaner.session() as db:
+        if cleaner.strategy == dbcleaner.STRATEGY_TRANSACTION:
+            # Сброс генератора ID, чтобы system_user всегда получал id = 1
+            await db.execute(text("ALTER TABLE users ALTER COLUMN id RESTART WITH 1"))
             from app.models.user import User, UserRole
-            system_user = User(
-                username="system",
-                email="system@local",
-                role=UserRole.admin,
-                full_name="System User",
-                is_active=True,
+
+            db.add(
+                User(
+                    username="system",
+                    email="system@local",
+                    role=UserRole.admin,
+                    full_name="System User",
+                    is_active=True,
+                )
             )
-            db.add(system_user)
             await db.commit()
-            try:
-                yield db
-            finally:
-                await db.rollback()
-                await transaction.rollback()
-        await conn.execute(text("SET search_path TO public"))
+        yield db
 
 
 @pytest_asyncio.fixture

@@ -96,13 +96,13 @@ from app.stock.models import StockBalance
 from app.stock.services import StockProjectionManager
 from openpyxl import load_workbook
 from sqlalchemy import func, select
-from sqlalchemy.ext.asyncio import (
-    AsyncEngine,
-    AsyncSession,
-    async_sessionmaker,
-    create_async_engine,
-)
-from sqlalchemy.pool import NullPool
+from sqlalchemy.ext.asyncio import AsyncSession
+
+from tests import dbcleaner
+
+#: Срез демо-сида закоммичен один раз на модуль и только читается —
+#: dbcleaner'у тут откатывать нечего (`Null`).
+DB_STRATEGY = dbcleaner.STRATEGY_NULL
 
 #: Базовый блок фикстуры — «Упаковочный план» с уникальными артикулами.
 PLAN_ROW_COUNT = 55
@@ -456,45 +456,16 @@ DEMO_STAGE_SLICE_ROWS: tuple[dict[str, object], ...] = tuple(
 )
 
 
-def _demo_session_factory(engine: AsyncEngine) -> async_sessionmaker[AsyncSession]:
-    return async_sessionmaker(
-        bind=engine,
-        class_=AsyncSession,
-        expire_on_commit=False,
-    )
-
-
 @pytest_asyncio.fixture(scope="module", loop_scope="module")
-async def demo_engine(
-    engine: AsyncEngine, base_test_db_url, module_schema_name: str
-) -> AsyncIterator[AsyncEngine]:
-    """Engine модуля демо-среза с схемой в ``search_path`` на уровне соединения.
-
-    ``SET search_path``, выполненный в транзакции, откатывается вместе с ней —
-    а демо-сид коммитит и откатывает внутри себя. Настройка соединения
-    (``server_settings``) переживает любые транзакции, поэтому её и берём.
-    Схему к этому моменту создаёт штатный ``engine`` conftest.
-    """
-    _ = engine
-    demo = create_async_engine(
-        base_test_db_url.render_as_string(hide_password=False),
-        poolclass=NullPool,
-        connect_args={"server_settings": {"search_path": module_schema_name}},
-    )
-    try:
-        yield demo
-    finally:
-        await demo.dispose()
-
-
-@pytest_asyncio.fixture(scope="module", loop_scope="module")
-async def demo_seed(demo_engine: AsyncEngine) -> dict:
+async def demo_seed(cleaner: dbcleaner.Cleaner) -> dict:
     """Единственный тяжёлый прогон на модуль: доменный путь на срезе фикстуры.
 
     Сессия фикстуры коммитит по-настоящему (без внешней транзакции), поэтому
-    данные видны читающим сессиям тестов; схема модуля живёт до конца модуля.
+    данные видны читающим сессиям тестов. `STRATEGY_NULL` — срез живёт до
+    конца модуля и ничем не откатывается: это `WithSetup` dbcleaner, а не
+    данные отдельного теста.
     """
-    async with _demo_session_factory(demo_engine)() as db:
+    async with cleaner.session() as db:
         await run_full_seed(db, force=True)
         return await seed_packing_plan_demo(
             db,
@@ -506,9 +477,9 @@ async def demo_seed(demo_engine: AsyncEngine) -> dict:
 
 
 @pytest_asyncio.fixture
-async def demo_db(demo_engine: AsyncEngine) -> AsyncIterator[AsyncSession]:
+async def demo_db(cleaner: dbcleaner.Cleaner) -> AsyncIterator[AsyncSession]:
     """Сессия теста к засеянному срезу (своё соединение, свой цикл)."""
-    async with _demo_session_factory(demo_engine)() as db:
+    async with cleaner.session() as db:
         yield db
 
 

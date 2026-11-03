@@ -46,6 +46,32 @@
 3. **Сброс sequence users**: перед каждым тестом
    `ALTER TABLE users ALTER COLUMN id RESTART WITH 1` — `system_user` всегда `id = 1`.
 
+### Cleaner: один на пакет, `cleaner.session()` вместо ручных транзакций
+
+Изоляцию владеет [`dbcleaner.py`](dbcleaner.py) — порт
+[mokevnin/dbcleaner](https://github.com/mokevnin/dbcleaner). Один `Cleaner`
+на модуль строит базовую линию (`setup` = схема, enum-типы, `create_all`,
+триггеры) и выдаёт сессии.
+
+- **Тест, который трогает базу, берёт сессию у Cleaner'а** —
+  `async with cleaner.session() as db` (или фикстуры `session`/`client`,
+  которые уже это делают). Свою транзакцию `await conn.begin()` для изоляции
+  не открывать: это работа Cleaner'а, и вторая транзакция ломает вложенные
+  `commit()` приложения.
+- Стратегия по умолчанию — `Transaction` (откат всего теста). Пакет
+  объявляет другую строкой `DB_STRATEGY = dbcleaner.STRATEGY_…` на уровне
+  модуля, и только если код под тестом ходит в базу **своим соединением**
+  (второй пул, отдельный процесс, `LISTEN/NOTIFY`), — тогда `TRUNCATION`
+  (или `DELETION`, если `TRUNCATE` недоступен). `STRATEGY_NULL` — для
+  среза, закоммиченного один раз на модуль (демо-сидер).
+- После теста коммитящую стратегию откатывает фикстура `cleaner_reset`
+  (`pytest.mark.usefixtures`). Ручные `_cleanup()`-простыни с `DELETE`
+  по списку таблиц больше не нужны: `TRUNCATE … RESTART IDENTITY CASCADE`
+  возвращает и данные, и последовательности.
+- Контракт самого Cleaner'а (guard, `Truncation`, `Deletion`, `Null`) покрыт
+  [`test_dbcleaner.py`](test_dbcleaner.py); `Transaction` — ещё и
+  [`test_hybrid_db_isolation.py`](test_hybrid_db_isolation.py).
+
 Режим: `PYTEST_DB_MODE=hybrid` (единственный поддерживаемый).
 
 ### Контракт `TEST_DATABASE_URL`
@@ -111,7 +137,7 @@ ktm_mig_<10 hex>` работает **без** `--force`. Сам `--force` ост
 ## Правила написания тестов
 
 - **Динамические ID** — не полагайтесь на `id = 1, 2, 3`; читайте `product.id`, `task.id` из объекта.
-- **Изоляция транзакций** — `session.commit()` в тесте фиксирует только savepoint, не основную транзакцию.
+- **Изоляция базы** — сессию берём у Cleaner'а (`async with cleaner.session() as db`); руками транзакцию для изоляции теста не открываем. `session.commit()` в тесте фиксирует только savepoint, не основную транзакцию (стратегия `Transaction`).
 - **Не мутируйте module-scope данные** — общие фикстуры `scope="module"` только для чтения.
 - **Integrity helper** — после Transfer/StockTransaction:
   ```python
