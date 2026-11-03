@@ -1,11 +1,17 @@
 name: Frontend tests
 
+# Статус для merge: БЛОКИРУЕТ. Required check называется `frontend tests` — ровно
+# `name:` джоба ниже, а не `name:` workflow. Состав блокирующих проверок живёт вне
+# этого файла: сверять чтением `gh api repos/mavkasgit/ktm2000/branches/main/protection`
+# и таблицей `docs/testing-guide.md` (§CI). #370.
+
 # tsc + ESLint + vitest с покрытием на push/PR. Решения грилла #245: Q14=1
 # (набор в CI), Q4=1 (покрытие меряем), Q22 (typecheck отдельным шагом, vite
-# build не дублируем), Q13 (без порога: первое число frontend-покрытия ещё не
-# снято, гейт — отдельным решением позже). ESLint добавлен в набор ради
-# архитектурных границ FSD (#333): tsc их не видит.
-# Имя джоба `frontend tests` — оно же имя required check (настройка #254).
+# build не дублируем). ESLint добавлен в набор ради архитектурных границ FSD
+# (#333): tsc их не видит.
+# Пороги покрытия включены (решение #245, Q5=1) по первому замеру 2026-10-01:
+# statements/lines 43, branches 72; `functions` 49 добавлен в #373. Сами числа —
+# `frontend/vitest.config.ts`, не этот комментарий.
 # #361: скоуп по путям считается шагом внутри джоба (не фильтром `paths` уровня
 # workflow) — required check от workflow-фильтра повис бы в "Pending" и
 # заблокировал merge (документация GitHub, `on.<push|pull_request>`). Поэтому

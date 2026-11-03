@@ -1,5 +1,10 @@
 name: Backend tests
 
+# Статус для merge: БЛОКИРУЕТ. Required check называется `backend tests` — ровно
+# `name:` джоба ниже, а не `name:` workflow. Состав блокирующих проверок живёт вне
+# этого файла: сверять чтением `gh api repos/mavkasgit/ktm2000/branches/main/protection`
+# и таблицей `docs/testing-guide.md` (§CI). #370.
+
 # Полный pytest-набор backend с coverage-гейтом на push/PR.
 # Решения грилла #245: Q1=2 (блокирует PR), Q13=а (гейт backend на 73%),
 # Q21 (coverage==7.16.2 отдельным pip install, requirements/Docker не трогаем),

@@ -1,5 +1,10 @@
 name: Migrations
 
+# Статус для merge: БЛОКИРУЕТ. Required check называется `migrations` — ровно
+# `name:` джоба ниже, а не `name:` workflow. Состав блокирующих проверок живёт вне
+# этого файла: сверять чтением `gh api repos/mavkasgit/ktm2000/branches/main/protection`
+# и таблицей `docs/testing-guide.md` (§CI). #370.
+
 # #361 concurrency + path scope. Требуемый required check `migrations`
 # (gh api branches/main/protection → contexts), поэтому скоуп считается шагом
 # внутри джоба, а не фильтром `paths` уровня workflow: по документации GitHub

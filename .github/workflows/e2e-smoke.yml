@@ -1,5 +1,11 @@
 name: E2E smoke
 
+# Статус для merge: ИНФОРМАЦИОННЫЙ. Имя джоба — `e2e smoke`; в required checks его
+# нет (замер: `gh api repos/mavkasgit/ktm2000/branches/main/protection`).
+# Перевод в required — после 10 зелёных прогонов подряд на push в `main` (#276);
+# серию смотреть `gh run list --branch main --workflow e2e-smoke.yml`. Таблица
+# всех CI-проверок и их статусов — `docs/testing-guide.md` (§CI). #370.
+
 # Информационный джоб: ярус `@smoke` на изолированной БД прямо в CI.
 #
 # НЕ required: пока не набрана серия зелёных на main, красный здесь не блокирует
