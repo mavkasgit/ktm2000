@@ -31,8 +31,6 @@ import re
 from datetime import UTC, datetime
 from decimal import Decimal
 
-from sqlalchemy import func, select
-
 from app.models.action_journal import Action
 from app.models.internal_plan import SectionPlanLine
 from app.models.production_plan import PlanPosition, PlanPositionStatus
@@ -40,6 +38,8 @@ from app.models.section import Section
 from app.models.transfer import Transfer, TransferStatus
 from app.models.work_task import WorkTask, WorkTaskStatus
 from app.stock.models import QualityState, Reason, StockBalance, StockTransaction
+from sqlalchemy import func, select
+
 from tests.helpers.transfers import _make_dim_route_fixture, _seed_balance
 from tests.test_integrity_invariants import (
     _auth_headers,
