@@ -79,7 +79,7 @@ import {
   stallNotice,
   tryAcquireLock,
 } from "./run-lock.mjs";
-import { parseWorkersArg } from "./run-workers.mjs";
+import { DEFAULT_WORKERS, hasWorkersArg, parseWorkersArg } from "./run-workers.mjs";
 import { MOBILE_PROJECT, formatMobileReport, selectMobileSpecs } from "./mobile-project.mjs";
 
 const E2E_DIR = path.dirname(fileURLToPath(import.meta.url));
@@ -132,7 +132,13 @@ function mobileSpecs() {
 // из которой нельзя получить точный счёт, там падает, а не тихо даёт 1:
 // один клон на N воркеров — это неразделённые данные между ними, то есть
 // тот же `TRUNCATE … CASCADE`, который #289 убирает.
-const WORKERS = parseWorkersArg(extraArgs);
+const WORKERS = parseWorkersArg(
+  extraArgs,
+  // Ручной стенд (`PW_REUSE_STACK=1`) ничего не клонирует и не поднимает:
+  // одного воркера там даёт сам конфиг, а второй упирался бы в отсутствие
+  // клона БД и backend'а.
+  process.env.PW_REUSE_STACK === "1" ? 1 : DEFAULT_WORKERS,
+);
 if (WORKERS > 1) {
   console.log(`[e2e:run] воркеров в прогоне: ${WORKERS} — столько же клонов БД и backend'ов`);
 }
@@ -380,6 +386,11 @@ const result = spawnSync(
     path.join(FRONTEND_DIR, "scripts", "run-e2e.mjs"),
     ...projectArgs,
     ...(TIER === "all" ? [] : ["--no-deps"]),
+    // Число воркеров передаём сами, если его не задал человек: иначе Playwright
+    // возьмёт `workers` из конфига, а клоны БД и backend'ы нарезаны по
+    // `WORKERS`. Совпадать они обязаны (#289): воркер без своего клона сеет
+    // чужую БД.
+    ...(hasWorkersArg(extraArgs) ? [] : [`--workers=${WORKERS}`]),
     // Репортер зелёных не с первой попытки — в списке CLI, а не только в
     // конфиге: `--reporter` заменяет конфиговый список целиком, и без этой
     // строки сводка по флейкам не дошла бы ни до одного прогона отсюда.

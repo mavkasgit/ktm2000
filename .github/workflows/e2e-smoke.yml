@@ -97,6 +97,12 @@ jobs:
     env:
       # `CI` Actions ставит сам — он нужен `forbidOnly`; retries перебиты флагом.
       ENV: dev
+      # Один воркер в джобе (#376): клонов на воркера здесь нет (джоб идёт мимо
+      # `run-tier.mjs`, БД — одна), и это же число берут `run-e2e.mjs` и
+      # `playwright.config.ts`. Флаг `--workers=1` в шаге ниже говорит то же
+      # самое явно; два места намеренно, чтобы снятие одного не включило
+      # молчаливые два воркера на одном клоне.
+      E2E_WORKERS: '1'
 
     steps:
       - name: Checkout
@@ -181,10 +187,17 @@ jobs:
           node scripts/with-env-file.mjs --cwd backend -- alembic upgrade head
           node scripts/with-env-file.mjs --cwd backend -- python scripts/seed_all.py --force
 
+      # `--workers=1` здесь обязателен (#376): дефолт конфига — два воркера
+      # (`DEFAULT_WORKERS` в `frontend/e2e/run-workers.mjs`), а джоб идёт мимо
+      # `run-tier.mjs` и клонов на воркера не нарезает: одна БД, один backend,
+      # один env-файл (`run-e2e.mjs`, `E2E_WORKERS` по умолчанию 1). Два
+      # воркера Playwright на одном клоне — это ровно тот `TRUNCATE CASCADE`
+      # соседа, ради которого #289 и делался, и он был бы здесь молчаливым.
       - name: Run @smoke (workers 1, retries 0, trace on)
         run: |
           node frontend/scripts/run-e2e.mjs \
             --project smoke --no-deps \
+            --workers=1 \
             --retries=0 --trace=on \
             --reporter=list,./e2e/green-on-retry-reporter.ts
 

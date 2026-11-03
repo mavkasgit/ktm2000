@@ -13,12 +13,31 @@
  */
 import { describe, expect, it } from "vitest";
 
-import { parseWorkersArg } from "./run-workers.mjs";
+import { DEFAULT_WORKERS, hasWorkersArg, parseWorkersArg } from "./run-workers.mjs";
+
+describe("hasWorkersArg", () => {
+  it("видит все распознанные формы", () => {
+    expect(hasWorkersArg(["--workers=2"])).toBe(true);
+    expect(hasWorkersArg(["--workers", "2"])).toBe(true);
+    expect(hasWorkersArg(["-j", "2"])).toBe(true);
+    expect(hasWorkersArg(["-j=2"])).toBe(true);
+  });
+
+  it("без флага — false: тогда run-tier подставляет своё --workers=N", () => {
+    expect(hasWorkersArg([])).toBe(false);
+    expect(hasWorkersArg(["--headed", "-g", "смена"])).toBe(false);
+  });
+});
 
 describe("parseWorkersArg — формы, которые Playwright понимает целиком", () => {
-  it("без --workers — один воркер (дефолт конфига)", () => {
-    expect(parseWorkersArg([])).toBe(1);
-    expect(parseWorkersArg(["--headed", "-g", "смена"])).toBe(1);
+  it("без --workers — дефолт конфига (DEFAULT_WORKERS = 2)", () => {
+    expect(parseWorkersArg([])).toBe(DEFAULT_WORKERS);
+    expect(parseWorkersArg(["--headed", "-g", "смена"])).toBe(DEFAULT_WORKERS);
+    expect(DEFAULT_WORKERS).toBe(2);
+  });
+
+  it("дефолт переопределяется вызывающим: ручной стенд — один воркер", () => {
+    expect(parseWorkersArg([], 1)).toBe(1);
   });
 
   it("читает `--workers=N` — основная форма ночных прогонов", () => {
