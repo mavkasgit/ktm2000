@@ -827,6 +827,10 @@ async def cancel_issue(
     if not transfers:
         raise ValueError("Выдача с таким номером не найдена")
     live = [t for t in transfers if t.status != TransferStatus.cancelled]
+    if not live:
+        # Явный отказ вместо тихого no-op: «отменить ещё раз» не должно
+        # выглядеть как успех, даже когда удвоенного возврата уже нет (#282).
+        raise ValueError(f"Выдача {issue_no} уже отменена — повторная отмена невозможна")
 
     blockers: list[str] = []
     for transfer in live:
