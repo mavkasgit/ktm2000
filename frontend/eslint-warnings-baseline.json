@@ -1,0 +1,9 @@
+{
+  "measuredAt": "2026-11-03",
+  "command": "node scripts/lint-ratchet.mjs --update",
+  "eslintVersion": "9.39.5",
+  "total": 48,
+  "byRule": {
+    "react-hooks/exhaustive-deps": 48
+  }
+}
