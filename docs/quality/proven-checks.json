@@ -94,6 +94,11 @@
       "proven_at": "2026-11-03",
       "note": "реестр ссылается на несуществующее закрепление; без --strict шаг не блокирует",
       "how": "npm run prove-checks -- --only=freshness"
+    },
+    "dev-deps": {
+      "proven_at": "2026-11-03",
+      "note": "в devDependencies появляется пакет, который никто не зовёт: проверка обязана назвать его и показать охват просмотра",
+      "how": "npm run prove-checks -- --only=dev-deps"
     }
   },
   "exempt": {
