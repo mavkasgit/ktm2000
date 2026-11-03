@@ -31,6 +31,7 @@ import { useFilterableTable } from "@/shared/hooks/useFilterableTable";
 import { usePaginatedTableQuery } from "@/shared/hooks/usePaginatedTableQuery";
 import { buildColumnApiParams } from "@/shared/lib/columnSpecs";
 import { ROW_TONE_STRIPE, ROW_TONE_TEXT, rowToneFill } from "@/shared/lib/rowTones";
+import { fmtServerQty } from "@/shared/lib/quantityFormat";
 import { cn } from "@/shared/utils/cn";
 import { useActionsList } from "../hooks/useActions";
 import { JournalRowOperations } from "../components/JournalRowOperations";
@@ -282,7 +283,31 @@ export function ActionsJournalPage() {
                       {actionTypeLabel(action.action_type)}
                     </td>
                     <td className={cn(TABLE_ROW_DENSE.cell, "font-mono text-xs text-muted-foreground")}>
-                      {action.ref_id != null ? `#${action.ref_id}` : "—"}
+                      {/* #282: передача в журнале была строкой «Передача» без цифр и
+                          без группировки выдач. Сервер дополняет строку `transfer_send`
+                          количеством, номером передачи и номером выдачи — печатаем
+                          серверное количество через общий форматтер, своих чисел тут
+                          нет. */}
+                      <div>{action.ref_id != null ? `#${action.ref_id}` : "—"}</div>
+                      {(action.transfer_no || action.issue_no || action.quantity != null) && (
+                        <div className="mt-0.5 space-y-0.5 text-[10px] leading-tight">
+                          {action.transfer_no ? (
+                            <div data-testid={`action-transfer-no-${action.id}`}>
+                              № {action.transfer_no}
+                            </div>
+                          ) : null}
+                          {action.quantity != null ? (
+                            <div data-testid={`action-quantity-${action.id}`}>
+                              {fmtServerQty(action.quantity)} шт.
+                            </div>
+                          ) : null}
+                          {action.issue_no ? (
+                            <div data-testid={`action-issue-no-${action.id}`}>
+                              выдача {action.issue_no}
+                            </div>
+                          ) : null}
+                        </div>
+                      )}
                     </td>
                     <td className={cn(TABLE_ROW_DENSE.cell, "text-xs")}>
                       {action.actor ?? "—"}

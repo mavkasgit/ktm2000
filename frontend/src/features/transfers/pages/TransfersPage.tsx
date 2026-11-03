@@ -105,6 +105,10 @@ import {
   type BulkTransferSubmitData,
 } from "../components/BulkTransferFooter";
 import { ReadyTransferPrintDialog } from "../components/ReadyTransferPrintDialog";
+// Окно отмены выдачи целиком (#282) живёт в `shared`: entry point у него два —
+// журнал передач (эта фича) и «Отмена действий» (`features/reversal`), а
+// соседние фичи по границам FSD друг друга не видят.
+import { IssueCancelDialog } from "@/shared/issue/IssueCancelDialog";
 import {
   dimensionsKey,
   groupReadyTransfers,
@@ -1308,6 +1312,13 @@ export function TransfersPage() {
 
   const [readyPrintOpen, setReadyPrintOpen] = useState(false);
   /**
+   * Выдача, для которой оператор открыл «Отменить выдачу целиком» (#282).
+   * `null` — окно закрыто. Номер приходит из журнала передач: у обычной
+   * ручной передачи `issue_no` нет, и кнопка входа на такой строке не
+   * показывается.
+   */
+  const [cancelIssueNo, setCancelIssueNo] = useState<string | null>(null);
+  /**
    * Черновик массового режима: набранное в строках и в шапках групп, раскладка
    * группы по строкам и снятие нулевых строк — в модуле `transferDraft` (#325).
    * Ключ строки — `readyRowIdentity`: строки виртуализированы, и набранное не
@@ -2036,6 +2047,42 @@ export function TransfersPage() {
                                       {statusBadge.label}
                                     </Badge>
                                   </div>
+                                  {/* #282: номер передачи и номер выдачи. Одна выдача —
+                                      N передач с общим `issue_no`; у обычной ручной
+                                      передачи его нет, и входа «отменить выдачу» на
+                                      такой строке не появляется. */}
+                                  <div
+                                    className="font-mono text-[10px] leading-tight text-muted-foreground"
+                                    data-testid={`history-transfer-no-${t.transfer_id}`}
+                                  >
+                                    № {t.transfer_no}
+                                  </div>
+                                  {t.issue_no ? (
+                                    <div className="flex flex-wrap items-center gap-1">
+                                      <span
+                                        className="font-mono text-[10px] leading-tight text-muted-foreground"
+                                        data-testid={`history-issue-no-${t.transfer_id}`}
+                                      >
+                                        выдача {t.issue_no}
+                                      </span>
+                                      <Button
+                                        size="sm"
+                                        variant="outline"
+                                        className={TRANSFERS_ROW.actionButton}
+                                        title="Отменить выдачу целиком"
+                                        data-testid={`history-cancel-issue-${t.transfer_id}`}
+                                        onClick={(event) => {
+                                          // Клик по кнопке не должен открывать окно
+                                          // правки передачи — на этом же месте строка
+                                          // reactive'ит на выбор записи.
+                                          event.stopPropagation();
+                                          setCancelIssueNo(t.issue_no ?? null);
+                                        }}
+                                      >
+                                        Отменить выдачу
+                                      </Button>
+                                    </div>
+                                  ) : null}
                                   {t.is_post_factum && (
                                     <Badge
                                       variant="secondary"
@@ -2126,6 +2173,16 @@ export function TransfersPage() {
         title="Результаты групповой передачи"
         summary={bulkSummary}
         results={bulkResults}
+      />
+
+      {/* Отмена выдачи целиком (#282): предпросмотр «что вернётся» и причина
+          отказа — серверные; окно живёт в `shared` и вызывается из журнала. */}
+      <IssueCancelDialog
+        open={cancelIssueNo !== null}
+        onOpenChange={(open) => {
+          if (!open) setCancelIssueNo(null);
+        }}
+        issueNo={cancelIssueNo}
       />
     </div>
   );

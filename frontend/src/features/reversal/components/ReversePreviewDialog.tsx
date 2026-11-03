@@ -18,6 +18,8 @@ import {
   DialogHeader,
   DialogTitle,
 } from "@/shared/ui/dialog";
+import { fmtServerQty } from "@/shared/lib/quantityFormat";
+import { IssueCancelDialog } from "@/shared/issue/IssueCancelDialog";
 import { PreviewZones } from "./PreviewZones";
 import {
   classifyReversalConflict,
@@ -30,12 +32,15 @@ export function ReversePreviewDialog({
   onOpenChange,
   onReversed,
 }: {
-  action: Pick<JournalAction, "id" | "action_type" | "status"> | null;
+  action: JournalAction | null;
   open: boolean;
   onOpenChange: (open: boolean) => void;
   onReversed?: () => void;
 }) {
   const [cascade, setCascade] = useState(false);
+  // Отмена выдачи целиком (#282) — отдельное окно из `shared`: оно своё
+  // предпросмотр-превью и свою блокировку по серверной `reason`.
+  const [cancelIssueOpen, setCancelIssueOpen] = useState(false);
   const queryClient = useQueryClient();
   const [preview, setPreview] = useState<PreviewResponse | null>(null);
   const [loading, setLoading] = useState(false);
@@ -72,6 +77,7 @@ export function ReversePreviewDialog({
       setLoadError(null);
       setCascade(false);
       setRefreshNonce(0);
+      setCancelIssueOpen(false);
     }
   }, [open]);
 
@@ -120,6 +126,7 @@ export function ReversePreviewDialog({
   const blocked = !preview || preview.blockers.length > 0 || !preview?.plan_token;
 
   return (
+    <>
     <Dialog open={open} onOpenChange={onOpenChange}>
       <DialogContent className="max-w-xl" data-testid="reverse-preview-dialog">
         <DialogHeader>
@@ -142,6 +149,39 @@ export function ReversePreviewDialog({
             blockers={preview.blockers}
             will_replay={preview.will_replay}
           />
+        ) : null}
+
+        {/* #282: строка `transfer_send` в журнале несёт количество, номер
+            передачи и номер выдачи. Откат одного действия и отмена всей
+            выдачи (N передач с общим `issue_no`) — разные операции, поэтому
+            вход в окно отмены выдачи здесь отдельный. */}
+        {action.transfer_no || action.issue_no || action.quantity != null ? (
+          <div
+            className="mt-3 flex flex-wrap items-center gap-x-3 gap-y-1 text-xs text-muted-foreground"
+            data-testid="reverse-issue-details"
+          >
+            {action.transfer_no ? (
+              <span data-testid="reverse-transfer-no">Передача № {action.transfer_no}</span>
+            ) : null}
+            {action.quantity != null ? (
+              <span data-testid="reverse-quantity">{fmtServerQty(action.quantity)} шт.</span>
+            ) : null}
+            {action.issue_no ? (
+              <span data-testid="reverse-issue-no">Выдача {action.issue_no}</span>
+            ) : null}
+          </div>
+        ) : null}
+        {action.issue_no ? (
+          <div className="mt-2">
+            <Button
+              variant="outline"
+              size="sm"
+              data-testid="reverse-open-cancel-issue"
+              onClick={() => setCancelIssueOpen(true)}
+            >
+              Отменить выдачу целиком
+            </Button>
+          </div>
         ) : null}
 
       <input
@@ -167,5 +207,13 @@ export function ReversePreviewDialog({
         </DialogFooter>
       </DialogContent>
     </Dialog>
+      {/* Отмена выдачи целиком (#282): своё превью и серверная причина отказа. */}
+      <IssueCancelDialog
+        open={cancelIssueOpen}
+        onOpenChange={setCancelIssueOpen}
+        issueNo={action.issue_no ?? null}
+        onCancelled={onReversed}
+      />
+    </>
   );
 }
