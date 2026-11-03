@@ -1,3 +1,4 @@
+import type { FreeStockBreakdownLine } from "@/shared/api/productionPlans";
 import { fmtQty } from "@/shared/lib/quantityFormat";
 
 export type PositionSkuCellProps = {
@@ -13,6 +14,12 @@ export type PositionSkuCellProps = {
    * позиции. `0`/null — дефицита нет.
    */
   deficitQuantity?: number | null;
+  /**
+   * Расшифровка группового остатка по SKU (backend #394): число остаётся
+   * групповым, а состав читается в подсказке/скрытом списке, не вторым
+   * столбцом чисел.
+   */
+  freeStockBreakdown?: FreeStockBreakdownLine[];
   /**
    * Если передан — артикул рендерится как кликабельная кнопка, открывающая
    * сводную информацию (ProductWipStatsDialog).
@@ -40,11 +47,20 @@ export function PositionSkuCell({
   sku,
   availableQuantity,
   deficitQuantity,
+  freeStockBreakdown,
   onClick,
   title,
 }: PositionSkuCellProps) {
   const showQuantity = typeof availableQuantity === "number";
   const hasDeficit = typeof deficitQuantity === "number" && deficitQuantity > 0;
+  const breakdown = freeStockBreakdown ?? [];
+  const breakdownText = breakdown
+    .map((line) => `${line.sku ?? `#${line.product_id}`}: ${fmtQty(line.quantity)}`)
+    .join(", ");
+  const availableTitle =
+    breakdown.length > 0
+      ? `Доступно для позиции ${sku}: ${fmtQty(availableQuantity as number)} шт. (${breakdownText})`
+      : `Доступно для позиции ${sku}: ${fmtQty(availableQuantity as number)} шт.`;
 
   const skuElement = onClick ? (
     <button
@@ -74,10 +90,15 @@ export function PositionSkuCell({
           <span
             className="font-mono text-xs text-muted-foreground shrink-0"
             data-testid="position-sku-available"
-            title={`Доступно для позиции ${sku}: ${fmtQty(availableQuantity as number)} шт.`}
+            title={availableTitle}
           >
             {fmtQty(availableQuantity as number)}
           </span>
+          {breakdown.length > 0 && (
+            <span className="sr-only" data-testid="position-sku-breakdown">
+              {breakdownText}
+            </span>
+          )}
           {hasDeficit && (
             <span
               className="font-mono text-xs text-amber-600 shrink-0"

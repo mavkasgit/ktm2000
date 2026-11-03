@@ -72,4 +72,43 @@ describe("PositionSkuCell — индикатор остатка", () => {
       "Не хватает 12 шт. до планового количества",
     );
   });
+
+  it("расшифровывает групповой остаток по SKU в title и читаемом элементе", () => {
+    render(
+      <PositionSkuCell
+        sku="КП-460"
+        availableQuantity={350}
+        freeStockBreakdown={[
+          { product_id: 1, sku: "КП-460", quantity: 100 },
+          { product_id: 2, sku: "КП-461", quantity: 250 },
+        ]}
+      />,
+    );
+
+    // Число остаётся групповым (его посчитал сервер), а расшифровка — в
+    // title и в отдельном читаемом элементе, не вторым столбцом чисел.
+    expect(screen.getByTestId("position-sku-available").getAttribute("title")).toBe(
+      "Доступно для позиции КП-460: 350 шт. (КП-460: 100, КП-461: 250)",
+    );
+    expect(screen.getByTestId("position-sku-breakdown").textContent).toBe(
+      "КП-460: 100, КП-461: 250",
+    );
+  });
+
+  it("пустой или отсутствующий breakdown — прежнее поведение без расшифровки", () => {
+    const { rerender } = render(
+      <PositionSkuCell sku="КП-460" availableQuantity={350} freeStockBreakdown={[]} />,
+    );
+
+    expect(screen.queryByTestId("position-sku-breakdown")).toBeNull();
+    expect(screen.getByTestId("position-sku-available").getAttribute("title")).toBe(
+      "Доступно для позиции КП-460: 350 шт.",
+    );
+
+    rerender(<PositionSkuCell sku="КП-460" availableQuantity={350} />);
+    expect(screen.queryByTestId("position-sku-breakdown")).toBeNull();
+    expect(screen.getByTestId("position-sku-available").getAttribute("title")).toBe(
+      "Доступно для позиции КП-460: 350 шт.",
+    );
+  });
 });
