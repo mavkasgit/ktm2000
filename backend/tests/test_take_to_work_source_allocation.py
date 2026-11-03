@@ -300,7 +300,7 @@ async def test_source_of_another_product_is_rejected(client, session) -> None:
     )
 
     assert result["status"] == "failed", result
-    assert "другого товара" in (result["reason"] or "")
+    assert "другого артикула" in (result["reason"] or "")
     assert await _sends(session) == []
 
 

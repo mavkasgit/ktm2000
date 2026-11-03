@@ -278,7 +278,7 @@ async def test_manual_stock_transfer_multiple_sends_limited_by_plan_cap(client, 
         headers=headers,
     )
     assert over_resp.status_code == 400
-    assert "transferable" in over_resp.json()["detail"].lower()
+    assert "передавать нельзя" in over_resp.json()["detail"]
 
     bal = await _stock_balance_qty(
         session,
@@ -350,7 +350,7 @@ async def test_full_stock_transfer_does_not_reappear_in_ready_list(client, sessi
         headers=headers,
     )
     assert dup_resp.status_code == 400
-    assert "transferable" in dup_resp.json()["detail"].lower()
+    assert "передавать нельзя" in dup_resp.json()["detail"]
 
     tasks = (
         await session.execute(

@@ -298,7 +298,7 @@ async def test_write_off_without_matching_operations_row_is_rejected(
     await session.commit()
 
     # Признак расхода — NULL, а весь остаток лежит в группе ["SHOT"].
-    with pytest.raises(StockValidationError, match="completed_operations"):
+    with pytest.raises(StockValidationError, match="Недостаточный остаток"):
         await svc.record(
             session,
             StockCommand(
