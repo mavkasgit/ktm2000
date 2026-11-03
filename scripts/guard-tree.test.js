@@ -21,15 +21,32 @@ const { join } = require("node:path");
 
 const GUARD = join(__dirname, "guard-tree.mjs");
 
-function scratchRepo() {
+/**
+ * Хуки (lefthook) экспортируют GIT_DIR/GIT_WORK_TREE на реальное дерево, и
+ * унаследованное окружение уводит `git init/add/commit` временного репозитория
+ * в чужой `.git` — ровно тот баг, который тест должен ловить, а не провоцировать.
+ * Поэтому каждый запуск получает чистое от GIT_* окружение; тест сам решает,
+ * какой GIT_DIR подложить.
+ */
+function cleanGitEnv(extra = {}) {
+  const env = { ...process.env };
+  for (const key of Object.keys(env)) {
+    if (key.startsWith("GIT_")) delete env[key];
+  }
+  return { ...env, ...extra };
+}
+
+function scratchRepo(message = "probe") {
   const root = mkdtempSync(join(tmpdir(), "guard-probe-"));
   const repo = join(root, "repo");
-  spawnSync("git", ["init", "-q", repo], { encoding: "utf8" });
+  spawnSync("git", ["init", "-q", repo], { encoding: "utf8", env: cleanGitEnv() });
   writeFileSync(join(repo, "tracked.txt"), "ok\n");
-  spawnSync("git", ["-C", repo, "add", "tracked.txt"], { encoding: "utf8" });
-  spawnSync("git", ["-C", repo, "-c", "user.email=t@t", "-c", "user.name=t", "commit", "-qm", "probe"], {
-    encoding: "utf8",
-  });
+  spawnSync("git", ["-C", repo, "add", "tracked.txt"], { encoding: "utf8", env: cleanGitEnv() });
+  spawnSync(
+    "git",
+    ["-C", repo, "-c", "user.email=t@t", "-c", "user.name=t", "commit", "-qm", message],
+    { encoding: "utf8", env: cleanGitEnv() },
+  );
   return { root, repo };
 }
 
@@ -37,7 +54,7 @@ function runGuard(cwd, env) {
   const r = spawnSync(process.execPath, [GUARD, "--json"], {
     cwd,
     encoding: "utf8",
-    env: { ...process.env, ...env },
+    env: cleanGitEnv(env),
   });
   let json = null;
   try {
@@ -51,7 +68,7 @@ function runGuard(cwd, env) {
 test("KTM_WORKTREE не задан — явный no-op с текстом, а не молчаливый успех", () => {
   const { root, repo } = scratchRepo();
   try {
-    const env = { ...process.env };
+    const env = cleanGitEnv();
     delete env.KTM_WORKTREE;
     const r = spawnSync(process.execPath, [GUARD], { cwd: repo, encoding: "utf8", env });
     assert.equal(r.status, 0, `no-op обязан выйти нулём: ${r.stderr}`);
@@ -104,5 +121,37 @@ test("несуществующий KTM_WORKTREE — красное сообще�
     assert.match(r.err, /такого каталога нет/);
   } finally {
     rmSync(root, { recursive: true, force: true });
+  }
+});
+
+test("GIT_DIR из-под хука не уводит пробник в чужое дерево (регрессия core.bare)", () => {
+  const victim = scratchRepo("base");
+  const saved = { GIT_DIR: process.env.GIT_DIR, GIT_WORK_TREE: process.env.GIT_WORK_TREE };
+  process.env.GIT_DIR = join(victim.repo, ".git");
+  delete process.env.GIT_WORK_TREE;
+  let probe = null;
+  try {
+    probe = scratchRepo("probe");
+    const victimLog = spawnSync("git", ["-C", victim.repo, "log", "--format=%s"], {
+      encoding: "utf8",
+      env: cleanGitEnv(),
+    });
+    assert.deepEqual(
+      victimLog.stdout.trim().split("\n"),
+      ["base"],
+      `чужое дерево получило коммит от пробника: ${victimLog.stdout}`,
+    );
+    const probeLog = spawnSync("git", ["-C", probe.repo, "log", "--format=%s"], {
+      encoding: "utf8",
+      env: cleanGitEnv(),
+    });
+    assert.deepEqual(probeLog.stdout.trim().split("\n"), ["probe"], "свой репозиторий обязан получить свой коммит");
+  } finally {
+    if (saved.GIT_DIR === undefined) delete process.env.GIT_DIR;
+    else process.env.GIT_DIR = saved.GIT_DIR;
+    if (saved.GIT_WORK_TREE === undefined) delete process.env.GIT_WORK_TREE;
+    else process.env.GIT_WORK_TREE = saved.GIT_WORK_TREE;
+    if (probe) rmSync(probe.root, { recursive: true, force: true });
+    rmSync(victim.root, { recursive: true, force: true });
   }
 });

@@ -20,6 +20,7 @@ import {
   Button,
   Dialog,
   DialogContent,
+  DialogDescription,
   DialogHeader,
   DialogTitle,
   PRINT_SHEET_WIDTH_CLASS,
@@ -92,10 +93,10 @@ export function ReadyTransferPrintDialog({
       >
         <DialogHeader className="space-y-1 border-b p-4 text-left no-print">
           <DialogTitle className="text-lg font-semibold">Печать: готово к передаче</DialogTitle>
-          <p className="text-xs text-muted-foreground">
+          <DialogDescription className="text-xs text-muted-foreground">
             {scopeLabel} · записей {rows.length} · к передаче {fmtQty(totalQty)} шт. —
             печатается текущая выборка (поиск, фильтры и порядок колонки).
-          </p>
+          </DialogDescription>
         </DialogHeader>
 
         <div className="flex-1 overflow-auto p-4 print-sheet">

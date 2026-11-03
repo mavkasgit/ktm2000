@@ -222,8 +222,12 @@ if (registry && !problems.length) {
       docStatus = "нет маркеров";
       fail(`${DOC}: нет блока <!-- tools:start --> / <!-- tools:end -->`);
     } else {
-      const inDoc = block[1].trim();
-      const fresh = renderTable().trim();
+      // Windows-чекаут с core.autocrlf=true даёт CRLF в рабочем файле; таблица
+      // генерируется с LF. Сверяем содержимое, а не EOL: иначе шаг краснеет на
+      // верном документе и учит игнорировать проверку.
+      const normalizeEol = (text) => text.replace(/\r\n/g, "\n");
+      const inDoc = normalizeEol(block[1]).trim();
+      const fresh = normalizeEol(renderTable()).trim();
       if (inDoc === fresh) {
         docStatus = "совпадает";
       } else if (writeDoc) {
