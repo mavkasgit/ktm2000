@@ -224,8 +224,14 @@ if (registry && !problems.length) {
     } else {
       const inDoc = block[1].trim();
       const fresh = renderTable().trim();
-      docStatus = inDoc === fresh ? "совпадает" : "расходится";
-      if (inDoc !== fresh) {
+      if (inDoc === fresh) {
+        docStatus = "совпадает";
+      } else if (writeDoc) {
+        // Расхождение в ветке генерации — ожидаемое состояние, а не нарушение:
+        // ниже документ будет перезаписан из реестра.
+        docStatus = "расходится — пересобираем";
+      } else {
+        docStatus = "расходится";
         const listed = new Set([...block[1].matchAll(/\| `([a-z0-9._-]+)`/g)].map((m) => m[1]));
         const ids = new Set(registry.tools.map((t) => t.id));
         const gone = [...listed].filter((id) => !ids.has(id));

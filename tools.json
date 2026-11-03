@@ -2,19 +2,33 @@
   "updated": "2026-11-03",
   "tools": [
     {
+      "id": "mise",
+      "name": "mise-en-place",
+      "repo": "jdx/mise",
+      "category": "dev-tool",
+      "version": "2026.10.12",
+      "pinned_in": "mise.toml",
+      "runs_at": [
+        "manual"
+      ],
+      "blocking": false,
+      "last_reviewed": "2026-11-03",
+      "rationale": "Единый источник версий инструментов по решению владельца (#391): сам бинарь не участвует в шагах гейта (пока идут через npm), но нижний порог зафиксирован в шапке mise.toml — старее CI не прочитает lockfile v3 (шаг 3)."
+    },
+    {
       "id": "node",
       "name": "Node.js",
       "repo": "nodejs/node",
       "category": "language",
       "version": "24",
-      "pinned_in": ".nvmrc",
+      "pinned_in": "mise.toml",
       "runs_at": [
         "gate",
         "ci"
       ],
       "blocking": true,
       "last_reviewed": "2026-11-03",
-      "rationale": "Единый источник версии Node для локального гейта и CI; раньше 20 и 22 были разбросаны по workflow."
+      "rationale": "Источником версии стал mise.toml/mise.lock (#391). Поток: шаг 3 переводит CI на mise, шаг 5 удаляет .nvmrc — до сих пор .nvmrc остаётся совместимым дублем."
     },
     {
       "id": "python",
@@ -22,14 +36,14 @@
       "repo": "python/cpython",
       "category": "language",
       "version": "3.12",
-      "pinned_in": ".python-version",
+      "pinned_in": "mise.toml",
       "runs_at": [
         "gate",
         "ci"
       ],
       "blocking": true,
       "last_reviewed": "2026-11-03",
-      "rationale": "Backend и скрипты проверки сидов идут на 3.12; дублирование python-version по пяти workflow — источник расхождений."
+      "rationale": "Источником версии стал mise.toml/mise.lock (#391); venv привязан через [env] _.python.venv. Поток: шаг 3 переводит CI на mise, шаг 5 удаляет .python-version — до сих пор он остаётся совместимым дублем."
     },
     {
       "id": "npm",
