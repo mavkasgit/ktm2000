@@ -10,12 +10,18 @@ import { QTY_EMPTY } from "@/shared/lib/quantityFormat";
 import {
   ISSUE_DEFAULT_STRATEGY,
   buildAutoIssueSelection,
+  buildIssueCandidateGroups,
   buildIssueSelection,
+  groupBalanceIds,
+  groupRemainingAfter,
   isCandidateChecked,
+  isGroupChecked,
+  isGroupIndeterminate,
   issueCollectLine,
   issueConfirmBlockReason,
   remainingAfterCell,
   toggleBalanceExcluded,
+  toggleGroupExcluded,
   visibleIssueHints,
 } from "./issueSource";
 
@@ -23,6 +29,9 @@ const candidate = (over: Partial<IssuePreviewCandidate>): IssuePreviewCandidate 
   balance_id: 1,
   location_id: 1,
   location_name: "Склад",
+  group_key: 0,
+  product_id: 0,
+  sku: null,
   dimensions: null,
   completed_operations: [],
   ops_count: 0,
@@ -103,6 +112,148 @@ describe("issueSource: подсказки только по включённым
   });
 });
 
+describe("issueSource: строка группы эквивалентов на осях склада", () => {
+  it("складывает серверные available/take, а строки ставит по минимальному order", () => {
+    const groups = buildIssueCandidateGroups(
+      [
+        candidate({
+          balance_id: 1,
+          location_id: 10,
+          location_name: "Склад",
+          group_key: 5,
+          product_id: 100,
+          sku: "A",
+          available: "10",
+          take: "10",
+          remaining_after: "0",
+          order: 3,
+        }),
+        candidate({
+          balance_id: 2,
+          location_id: 10,
+          location_name: "Склад",
+          group_key: 5,
+          product_id: 200,
+          sku: "B",
+          available: "5",
+          take: "5",
+          remaining_after: "2",
+          order: 0,
+        }),
+        candidate({
+          balance_id: 3,
+          location_id: 20,
+          location_name: "Другой",
+          group_key: 5,
+          product_id: 100,
+          sku: "A",
+          available: "7",
+          take: "0",
+          remaining_after: null,
+          order: 1,
+        }),
+      ],
+      100,
+    );
+
+    // Строка — (group_key, location, dimensions, operations), не один group_key:
+    // остатки группы на разных складах — разные строки выдачи.
+    expect(groups.map((group) => group.locationId)).toEqual([10, 20]);
+    expect(groups[0].available).toBe("15");
+    expect(groups[0].take).toBe("15");
+    // Внутри строки кандидаты идут по `order`, а не по порядку массива.
+    expect(groups[0].candidates.map((row) => row.order)).toEqual([0, 3]);
+    expect(groups[0].balanceIds).toEqual([2, 1]);
+    expect(groups[0].skuLabel).toBe("A, B (эквиваленты)");
+    expect(groups[0].hasTaskProduct).toBe(true);
+    expect(groups[1].skuLabel).toBe("A");
+  });
+
+  it("разные размеры и операции одной группы — разные строки", () => {
+    const groups = buildIssueCandidateGroups(
+      [
+        candidate({
+          balance_id: 1,
+          location_id: 10,
+          group_key: 5,
+          product_id: 100,
+          sku: "A",
+          dimensions: { length_mm: 1000 },
+          completed_operations: ["CUT"],
+          order: 0,
+        }),
+        candidate({
+          balance_id: 2,
+          location_id: 10,
+          group_key: 5,
+          product_id: 200,
+          sku: "B",
+          dimensions: { length_mm: 2000 },
+          completed_operations: ["CUT"],
+          order: 1,
+        }),
+        candidate({
+          balance_id: 3,
+          location_id: 10,
+          group_key: 5,
+          product_id: 100,
+          sku: "A",
+          dimensions: { length_mm: 1000 },
+          completed_operations: ["CUT", "PAINT"],
+          order: 2,
+        }),
+      ],
+      100,
+    );
+
+    expect(groups).toHaveLength(3);
+  });
+
+  it("remaining_after группы: все null → null, иначе сумма только не-null значений", () => {
+    expect(
+      groupRemainingAfter([
+        candidate({ remaining_after: null }),
+        candidate({ remaining_after: null }),
+      ]),
+    ).toBeNull();
+    expect(
+      groupRemainingAfter([
+        candidate({ remaining_after: null }),
+        candidate({ remaining_after: "2,5" }),
+      ]),
+    ).toBe("2,5");
+    expect(
+      groupRemainingAfter([
+        candidate({ remaining_after: "0" }),
+        candidate({ remaining_after: "2" }),
+      ]),
+    ).toBe("2");
+  });
+});
+
+describe("issueSource: галочка группы эквивалентов", () => {
+  it("группа снята, только когда сняты ВСЕ её balance_id; часть — indeterminate", () => {
+    const ids = groupBalanceIds([
+      candidate({ balance_id: 1 }),
+      candidate({ balance_id: 2 }),
+    ]);
+    expect(ids).toEqual([1, 2]);
+    expect(isGroupChecked(ids, [])).toBe(true);
+    expect(isGroupIndeterminate(ids, [])).toBe(false);
+    expect(isGroupChecked(ids, [1])).toBe(true);
+    expect(isGroupIndeterminate(ids, [1])).toBe(true);
+    expect(isGroupChecked(ids, [1, 2])).toBe(false);
+    expect(isGroupIndeterminate(ids, [1, 2])).toBe(false);
+  });
+
+  it("toggleGroupExcluded включает/выключает все balance_id строки без дублей", () => {
+    const ids = [1, 2, 3];
+    expect(toggleGroupExcluded([], ids, false)).toEqual([1, 2, 3]);
+    expect(toggleGroupExcluded([1, 2, 3, 9], ids, true)).toEqual([9]);
+    expect(toggleGroupExcluded([1], ids, false)).toEqual([1, 2, 3]);
+  });
+});
+
 describe("issueSource: итог «собрано X из Y, дефицит Z»", () => {
   it("одна строка для предпросмотра и итога, количество — серверный формат", () => {
     expect(
@@ -115,6 +266,8 @@ describe("issueSource: кнопка подтверждается только к
   const preview = (over: Partial<IssuePreviewOut>): IssuePreviewOut => ({
     position_id: 1,
     product_id: 1,
+    group_key: 1,
+    group_skus: ["SKU-1"],
     required: "10",
     required_dimensions: null,
     required_dimensions_label: null,
@@ -141,6 +294,9 @@ describe("issueSource: кнопка подтверждается только к
       errorText: null,
     });
     expect(reason).toMatch(/выдавать нечего/);
+    // Текст серверный (#395): отказ говорит про группу эквивалентов, а не
+    // про один артикул задания.
+    expect(reason).toContain("материала группы эквивалентов в нужном размере");
   });
 
   it("собрано 0 при непустых кандидатах — тоже блокировка", () => {

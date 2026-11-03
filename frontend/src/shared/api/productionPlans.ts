@@ -181,6 +181,8 @@ export type PlanPositionOut = {
   free_stock_quantity?: number | null;
   available_remainder_quantity?: number | null;
   deficit_quantity?: number | null;
+  /** Расшифровка группового остатка по SKU (backend #394). */
+  free_stock_breakdown?: FreeStockBreakdownLine[];
   // Авторасчёт «количество на подвес» (#66): расчёт на лету по длине позиции.
   quantity_per_hanger?: number | null;
   quantity_per_hanger_source?: "auto" | "manual" | null;
@@ -573,6 +575,8 @@ export type ProductionPlanningRow = {
   free_stock_quantity?: number | null;
   available_remainder_quantity?: number | null;
   deficit_quantity?: number | null;
+  /** Расшифровка группового остатка по SKU (backend #394). */
+  free_stock_breakdown?: FreeStockBreakdownLine[];
 };
 
 export type ProductionPlanningRouteSnapshotStep = {
@@ -683,6 +687,8 @@ export type ProductionPlanningRowDetail = {
   free_stock_quantity?: number | null;
   available_remainder_quantity?: number | null;
   deficit_quantity?: number | null;
+  /** Расшифровка группового остатка по SKU (backend #394). */
+  free_stock_breakdown?: FreeStockBreakdownLine[];
 };
 
 export type ListProductionPlanningRowsParams = {
@@ -810,6 +816,11 @@ export type IssuePreviewCandidate = {
   balance_id: number;
   location_id: number;
   location_name: string;
+  /** Ключ группы эквивалентов: клиент агрегирует по нему, не меняя порядок. */
+  group_key: number;
+  /** Фактический артикул строки остатка (может быть эквивалентом задания). */
+  product_id: number;
+  sku: string | null;
   dimensions: Record<string, unknown> | null;
   completed_operations: string[] | null;
   ops_count: number;
@@ -819,6 +830,13 @@ export type IssuePreviewCandidate = {
   included: boolean;
   target_sequence: number;
   order: number;
+};
+
+/** Расшифровка группового остатка по SKU (backend #394). */
+export type FreeStockBreakdownLine = {
+  product_id: number;
+  sku: string | null;
+  quantity: number;
 };
 
 /** Подсказка по включённым складам: «брак» / «есть другой размер». */
@@ -833,6 +851,10 @@ export type IssuePreviewHint = {
 export type IssuePreviewOut = {
   position_id: number;
   product_id: number;
+  /** Группа эквивалентов позиции; `null` — группа не разрешена (из одного). */
+  group_key: number | null;
+  /** SKU группы по возрастанию id — подпись «A, B (эквиваленты)». */
+  group_skus: string[];
   required: string;
   required_dimensions: Record<string, unknown> | null;
   required_dimensions_label: string | null;

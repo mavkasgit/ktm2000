@@ -101,6 +101,7 @@ export function ExecutionRow({
             sku={row.source_sku}
             deficitQuantity={row.deficit_quantity}
             availableQuantity={row.available_remainder_quantity}
+            freeStockBreakdown={row.free_stock_breakdown}
             onClick={onSkuClick}
           />
         );
