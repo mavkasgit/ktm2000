@@ -33,6 +33,7 @@ from sqlalchemy import event, select, text
 from sqlalchemy.exc import DBAPIError
 from sqlalchemy.ext.asyncio import AsyncEngine, AsyncSession, async_sessionmaker
 
+from tests import dbcleaner
 from tests.helpers.completed_operations import build_operation_route
 from tests.test_integrity_invariants import assert_no_stock_ledger_invariants_violations
 
@@ -44,6 +45,9 @@ STAGES = [
 DIMS = {"length_mm": 2750}
 OPS = ["STORE"]
 
+# Гонки идут на своих соединениях из engine -> коммиты видны конкурентам,
+# поэтому изоляция — коммитами + TRUNCATE после теста (канон tests/AGENTS.md).
+DB_STRATEGY = dbcleaner.STRATEGY_TRUNCATION
 pytestmark = pytest.mark.usefixtures("_pin_search_path")
 
 

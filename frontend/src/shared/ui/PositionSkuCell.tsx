@@ -57,9 +57,13 @@ export function PositionSkuCell({
   const breakdownText = breakdown
     .map((line) => `${line.sku ?? `#${line.product_id}`}: ${fmtQty(line.quantity)}`)
     .join(", ");
+  // Раскладка — это СВОБОДНО на складах (free_stock_breakdown), а рядом
+  // стоит «доступно» за вычетом чужих позиций: подписываем состав явно,
+  // иначе при чужом спросе подсказка противоречила бы числу.
   const availableTitle =
     breakdown.length > 0
-      ? `Доступно для позиции ${sku}: ${fmtQty(availableQuantity as number)} шт. (${breakdownText})`
+      ? `Доступно для позиции ${sku}: ${fmtQty(availableQuantity as number)} шт. `
+        + `Свободно на складах: ${breakdownText}`
       : `Доступно для позиции ${sku}: ${fmtQty(availableQuantity as number)} шт.`;
 
   const skuElement = onClick ? (

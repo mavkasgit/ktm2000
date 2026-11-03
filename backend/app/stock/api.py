@@ -590,10 +590,15 @@ def _balance_group_matches(
         if not any(needle in (row.product_sku or "").lower() for row in group.rows):
             return False
     if quantity is not None:
+        # Колонка показывает СУММУ группы, поэтому и фильтр сверяется с ней:
+        # построчное совпадение вернуло бы строку с видимым числом, которого
+        # нет в запросе (60 + 40 = 100, а ?quantity=100 искал бы «100» в
+        # каждой из двух строк и не нашёл бы группу).
         needle = quantity.lower()
-        if not any(
-            needle in str(row.balance.balance_qty).lower() for row in group.rows
-        ):
+        total = sum(
+            (Decimal(row.balance.balance_qty) for row in group.rows), Decimal(0)
+        )
+        if needle not in str(total).lower():
             return False
     if search:
         needle = search.lower()
