@@ -52,6 +52,13 @@ const STEPS = [
     what: " битые ссылки и карды документации",
   },
   {
+    name: "adr-index",
+    tier: "fast",
+    command: "npm run check:adr",
+    ci: "docs.yml",
+    what: " номера ADR уникальны, у каждого — Дата и Статус",
+  },
+  {
     name: "scripts-tests",
     tier: "fast",
     command: "npm run test:scripts",

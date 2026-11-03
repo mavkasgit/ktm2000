@@ -17,6 +17,7 @@
 | `registry` | fast | реестр инструментов против схем и закреплений | pre-push, локальный гейт | да | prove-checks 2026-11-03 |
 | `codegraph-age` | fast | возраст codegraph-индекса против HEAD | локальный гейт | только в strict | prove-checks 2026-11-03 |
 | `docs-links` | fast | битые ссылки и карды документации | pre-commit, CI docs.yml | да | prove-checks 2026-11-03 |
+| `adr-index` | fast | уникальность номеров ADR, шаблон заголовка, Дата/Статус | CI docs.yml | да | prove-checks 2026-11-03 |
 | `scripts-tests` | fast | юнит-тесты node-скриптов корня | CI docs.yml | да | prove-checks 2026-11-03 |
 | `labels-check` | fast | сгенерированные подписи фронта сверены с бэкендом | CI migrations.yml | да | prove-checks 2026-11-03 |
 | `seeds-validate` | fast | сиды справочников внутренне непротиворечивы | CI migrations.yml | да | prove-checks 2026-11-03 |

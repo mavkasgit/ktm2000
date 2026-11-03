@@ -84,6 +84,11 @@
       "proven_at": "2026-11-03",
       "note": "минимум vitest-набора завышен — рэтчет красный (сбор списка занимает минуту)",
       "how": "npm run prove-checks -- --heavy (полный прогон)"
+    },
+    "adr-index": {
+      "proven_at": "2026-11-03",
+      "note": "второй файл с занятым номером — проверка обязана назвать оба",
+      "how": "npm run prove-checks -- --only=adr-index"
     }
   },
   "exempt": {

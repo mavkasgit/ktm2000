@@ -28,6 +28,7 @@
 | [`quality/criteria.md`](quality/criteria.md) | Приём инструментов | Восемь критериев; «новый инструмент не принимается потому, что он хороший» |
 | [`quality/not-adopted.md`](quality/not-adopted.md) | Отказы и незакрытые дыры | Почему не приняли, что изменит ответ, чего у нас нет вообще |
 | [`quality/hooks.md`](quality/hooks.md) | Хуки до коммита | lefthook: установка, скоупы, политика пропуска, запрет автоправок |
+| [`quality/adr-legacy.json`](quality/adr-legacy.json) | Датированное исключение ADR | Восемь решений до единого шаблона; новый файл туда не добавляется молча |
 | [`toolchain.md`](toolchain.md) | **Тулчейн (генерируемый)** | Инструменты из `tools.json`; расхождение ловит `npm run check:registry` |
 | [`agents/domain.md`](agents/domain.md) | Доменные документы | Конвенция `GLOSSARY.md` + `docs/adr/` |
 | [`adr/`](adr/) | ADR (решения) | Архитектурные решения: инварианты, откаты, миграции |
