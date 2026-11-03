@@ -231,13 +231,13 @@
     },
     "frontend": {
       "collector": "vitest list",
-      "total": 1537,
+      "total": 1531,
       "by_file": {
         "e2e/mobile-project.test.ts": 11,
         "e2e/pass-cache.test.ts": 6,
         "e2e/reap-runs.test.ts": 7,
-        "e2e/run-lock.test.ts": 12,
-        "e2e/run-slots.test.ts": 14,
+        "e2e/run-lock.test.ts": 14,
+        "e2e/run-slots.test.ts": 6,
         "e2e/run-workers.test.ts": 9,
         "scripts/verify-sync.test.mjs": 22,
         "src/app/lazyRoute.test.tsx": 3,

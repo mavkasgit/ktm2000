@@ -48,7 +48,7 @@ RACE_KEY = "race-key-1"
 
 # Гонки идут на своих соединениях -> изоляция коммитами + TRUNCATE после теста.
 DB_STRATEGY = dbcleaner.STRATEGY_TRUNCATION
-pytestmark = [pytest.mark.asyncio, pytest.mark.usefixtures("cleaner_reset")]
+pytestmark = pytest.mark.asyncio
 
 
 def _auth_headers(fx: dict) -> dict[str, str]:

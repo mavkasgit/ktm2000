@@ -20,6 +20,8 @@ const assert = require("node:assert/strict");
 
 const {
   inspectDevDependencies,
+  isCodeFile,
+  withoutComments,
   withoutDependencyDeclarations,
 } = require("./check-dev-deps-core");
 
@@ -171,4 +173,27 @@ test("не-манифест и битый JSON проходят без изме�
   assert.equal(withoutDependencyDeclarations('import "x";'), 'import "x";');
   const broken = '{"scripts": {"a": "b"},';
   assert.equal(withoutDependencyDeclarations(broken), broken);
+});
+
+test("комментарий в корневом скрипте — не использование", () => {
+  // Иначе проверка читает свои же объяснения и чужие магические строки как
+  // вызовы. Комментарии вырезаются только для root-скана (см. CLI).
+  assert.equal(
+    withoutComments("// @vitest/coverage-v8\nconst x = 1;", "a.js"),
+    "\nconst x = 1;",
+  );
+  assert.match(withoutComments("const u = 'https://x';", "a.js"), /https:\/\/x/);
+});
+
+test("Markdown не считается использованием пакета", () => {
+  // Имя пакета в README/AGENTS — проза: иначе проверка оставляла бы мёртвый
+  // пакет живым ровно потому, что о нём кто-то написал.
+  assert.equal(isCodeFile("frontend/AGENTS.md"), false);
+  assert.equal(isCodeFile("docs/quality/gates.md"), false);
+  assert.equal(isCodeFile("README.md"), false);
+  // Код и конфиги — считаются, включая extensionless Dockerfile.
+  assert.equal(isCodeFile("frontend/vitest.config.ts"), true);
+  assert.equal(isCodeFile("package.json"), true);
+  assert.equal(isCodeFile("mise.toml"), true);
+  assert.equal(isCodeFile("Dockerfile"), true);
 });

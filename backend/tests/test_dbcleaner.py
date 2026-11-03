@@ -66,11 +66,23 @@ def _with_database(url: URL, database: str) -> URL:
 
 
 @pytest.mark.parametrize("strategy", sorted(dbcleaner.COMMITTING_STRATEGIES))
-@pytest.mark.parametrize("database", ["ktm2000_dev", "app", "production"])
+@pytest.mark.parametrize(
+    "database",
+    [
+        "ktm2000_dev",
+        "app",
+        "production",
+        # Подстрока «test» есть, токена нет: промах DSN на такую базу обязан
+        # останавливать уборку, а не вычищать её.
+        "latest",
+        "contest",
+        "attest",
+    ],
+)
 def test_committing_strategy_refuses_database_without_marker(
     base_test_db_url: URL, strategy: str, database: str
 ) -> None:
-    """Имя без `test`/`e2e`/`scratch` — промах DSN, а не повод вычистить базу."""
+    """Имя без токена `test`/`e2e`/`scratch` — промах DSN, а не повод вычистить базу."""
     with pytest.raises(RuntimeError, match="must contain one of"):
         dbcleaner.Cleaner(
             _with_database(base_test_db_url, database),
@@ -81,7 +93,10 @@ def test_committing_strategy_refuses_database_without_marker(
 
 
 @pytest.mark.parametrize("strategy", sorted(dbcleaner.COMMITTING_STRATEGIES))
-@pytest.mark.parametrize("database", ["ktm2000_test", "app_e2e", "scratch_pad"])
+@pytest.mark.parametrize(
+    "database",
+    ["ktm2000_test", "app_e2e", "scratch_pad", "test", "my_test_db"],
+)
 def test_committing_strategy_accepts_marked_database(
     base_test_db_url: URL, strategy: str, database: str
 ) -> None:
@@ -153,6 +168,12 @@ async def test_deletion_removes_children_before_parents(
     async with deletion_cleaner.session() as db:
         product = Product(sku="DBCLEAN-DEL", name="Del", type=ProductType.finished_good)
         db.add(product)
+        db.add_all(
+            [
+                Section(code="DBCLEAN-DEL-1", name="Del 1"),
+                Section(code="DBCLEAN-DEL-2", name="Del 2"),
+            ]
+        )
         await db.flush()
         product_id = product.id
         db.add(ProductLength(product_id=product_id, length_mm=1000, is_primary=True))
@@ -163,6 +184,12 @@ async def test_deletion_removes_children_before_parents(
     async with deletion_cleaner.session() as db:
         assert await db.scalar(select(func.count()).select_from(Product)) == 0
         assert await db.scalar(select(func.count()).select_from(ProductLength)) == 0
+        # `DELETE` не трогает последовательности — их обязан вернуть reset(),
+        # иначе первый id после уборки продолжает счёт, и «id = 1» ложно.
+        fresh = Section(code="DBCLEAN-DEL-AFTER", name="Del after")
+        db.add(fresh)
+        await db.commit()
+        assert fresh.id == 1
 
 
 # ─── Null: чистки нет, данные живут до конца пакета ────────────────────────

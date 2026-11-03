@@ -124,7 +124,7 @@ const STEPS = [
   {
     name: "ruff",
     tier: "fast",
-    command: "ruff check backend",
+    command: "node scripts/heavy.mjs -- ruff check backend",
     tool: "ruff",
     ci: "ruff.yml",
     what: " линтер backend",
@@ -132,7 +132,7 @@ const STEPS = [
   {
     name: "frontend-types",
     tier: "fast",
-    command: "npx tsc -b",
+    command: "npm run typecheck",
     cwd: "frontend",
     ci: "frontend-tests.yml",
     what: " типы продакшн-кода фронта",
@@ -140,7 +140,7 @@ const STEPS = [
   {
     name: "frontend-types-e2e",
     tier: "fast",
-    command: "npx tsc -p tsconfig.e2e.json --noEmit",
+    command: "npm run typecheck:e2e",
     cwd: "frontend",
     file: "frontend/tsconfig.e2e.json",
     ci: "frontend-tests.yml",

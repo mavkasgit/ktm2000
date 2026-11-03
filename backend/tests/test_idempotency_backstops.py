@@ -53,7 +53,7 @@ from tests.stock.test_stock_command import _make_location, _make_product, _make_
 
 # Гонки идут на своих соединениях -> изоляция коммитами + TRUNCATE после теста.
 DB_STRATEGY = dbcleaner.STRATEGY_TRUNCATION
-pytestmark = [pytest.mark.asyncio, pytest.mark.usefixtures("cleaner_reset")]
+pytestmark = pytest.mark.asyncio
 
 RACE_KEY = "race-key-135"
 
@@ -70,8 +70,9 @@ def _make_defect(session: AsyncSession, *, product_id: int, section_id: int,
 async def _race_setup(cleaner: dbcleaner.Cleaner, tag: str) -> dict:
     """Закоммиченный базовый сетап: пользователь, продукт, участок.
 
-    ``tag`` уникален на тест: строки коммятся мимо savepoint-изоляции и
-    живут весь модуль (как в test_ledger_idempotency).
+    ``tag`` уникален на тест: строки коммитятся мимо savepoint-изоляции и
+    живут до конца теста — autouse-фикстура `cleaner_reset` вычищает их
+    после каждого теста (`TRUNCATE … RESTART IDENTITY CASCADE`).
     """
     async with cleaner.session() as s:
         user = await _make_user(s, f"idem135-{tag}")

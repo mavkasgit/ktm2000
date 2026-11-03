@@ -11,6 +11,8 @@
  * запись не пересматривали), а не два сообщения подряд об одном и том же.
  */
 
+const { isoDate } = require("./format-utils");
+
 const DEFAULT_THRESHOLDS = { push: 90, review: 180, release: 365 };
 
 const DAY_MS = 86400000;
@@ -84,7 +86,7 @@ function distNameFromPin(text, version) {
  */
 function inspectFreshness(entries, thresholds = DEFAULT_THRESHOLDS, now) {
   const findings = [];
-  const today = now || new Date().toISOString().slice(0, 10);
+  const today = now || isoDate();
 
   for (const e of entries) {
     const label = e.name || e.id;

@@ -30,7 +30,7 @@
 import fs from "node:fs";
 import path from "node:path";
 
-import { isProcessAlive } from "./run-slots.mjs";
+import { isProcessAlive } from "../../scripts/heavy-core.mjs";
 
 export const DEFAULT_LOCK_TIMEOUT_MS = 30 * 60_000;
 /**

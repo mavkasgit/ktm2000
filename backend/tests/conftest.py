@@ -387,11 +387,24 @@ async def engine(cleaner: dbcleaner.Cleaner) -> AsyncEngine:
     return cleaner.engine
 
 
-@pytest_asyncio.fixture
-async def cleaner_reset(cleaner: dbcleaner.Cleaner) -> AsyncIterator[None]:
-    """Откат после теста для коммитящих стратегий (для `transaction` — no-op)."""
+@pytest_asyncio.fixture(autouse=True)
+async def cleaner_reset(
+    request: pytest.FixtureRequest, db_strategy: str
+) -> AsyncIterator[None]:
+    """Откат после теста для коммитящих стратегий (для `transaction` — no-op).
+
+    Фикстура **autouse**: пакет объявляет стратегию одной строкой
+    `DB_STRATEGY`, и уборка включается сама. Маркер `usefixtures` был бы
+    opt-in — новый пакет с `TRUNCATION` без него тихо тёк бы между тестами,
+    и этого не ловил ни guard, ни тест.
+
+    `cleaner` запрашивается только для коммитящей стратегии: остальным
+    модулям (включая миграционные пакеты со своей базой) схема не нужна.
+    """
     yield
-    await cleaner.reset()
+    if db_strategy in dbcleaner.COMMITTING_STRATEGIES:
+        test_cleaner = request.getfixturevalue("cleaner")
+        await test_cleaner.reset()
 
 
 @pytest_asyncio.fixture

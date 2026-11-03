@@ -54,6 +54,18 @@ const DOC_HEADER = `# Тулчейн: чем проверяется и где з
 /** Пути в реестре записываются прямыми слешами; на Windows join() даёт обратные. */
 const norm = (p) => p.replaceAll("\\", "/");
 
+/**
+ * Текст без строк-комментариев: закрепление, названное только в комментарии, —
+ * не закрепление. Иначе `2026.10.12` проходил проверку по пояснению в
+ * `mise.toml`, где настоящего пина не было.
+ */
+function withoutCommentLines(text) {
+  return text
+    .split(/\r?\n/)
+    .filter((line) => !/^\s*#/.test(line))
+    .join("\n");
+}
+
 const args = process.argv.slice(2);
 const jsonOut = args.includes("--json");
 const emitTable = args.includes("--emit-table");
@@ -152,14 +164,14 @@ if (registry) {
     if (statSync(abs).isDirectory()) {
       const files = readdirSync(abs)
         .filter((name) => /\.(yml|yaml)$/.test(name))
-        .map((name) => readFileSync(join(abs, name), "utf8"));
+        .map((name) => withoutCommentLines(readFileSync(join(abs, name), "utf8")));
       if (!files.length) {
         fail(`${tool.id}: в каталоге ${where} нет *.yml — где искать закрепление?`);
         continue;
       }
       haystack = files.join("\n");
     } else {
-      const text = readFileSync(abs, "utf8");
+      const text = withoutCommentLines(readFileSync(abs, "utf8"));
       const lines = text.split(/\r?\n/).filter((l) => l.trim() !== "");
       // Файл-пин (.nvmrc, .python-version): версия обязана совпадать целиком,
       // иначе «24» пройдёт в файле, где написано «240».

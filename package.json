@@ -56,11 +56,11 @@
     "test:db:wait": "powershell -ExecutionPolicy Bypass -File scripts/wait-for-container-health.ps1 ktm2000-postgres-test",
     "test:db:down": "docker compose --env-file .env.test -f infra/compose/docker-compose.test.yml stop postgres",
     "test:db:cleanup": "python scripts/test-db.py cleanup",
-    "test:pytest": "powershell -ExecutionPolicy Bypass -File scripts/test-run.ps1",
-    "test:pytest:full": "powershell -ExecutionPolicy Bypass -File scripts/test-run.ps1 --full",
-    "test:pytest:mon": "powershell -ExecutionPolicy Bypass -File scripts/test-run.ps1 --mon",
-    "test:pytest:lf": "powershell -ExecutionPolicy Bypass -File scripts/test-run.ps1 --lf",
-    "test:scripts": "node --test \"scripts/**/*.test.js\"",
+    "test:pytest": "node scripts/heavy.mjs -- powershell -ExecutionPolicy Bypass -File scripts/test-run.ps1",
+    "test:pytest:full": "node scripts/heavy.mjs -- powershell -ExecutionPolicy Bypass -File scripts/test-run.ps1 --full",
+    "test:pytest:mon": "node scripts/heavy.mjs -- powershell -ExecutionPolicy Bypass -File scripts/test-run.ps1 --mon",
+    "test:pytest:lf": "node scripts/heavy.mjs -- powershell -ExecutionPolicy Bypass -File scripts/test-run.ps1 --lf",
+    "test:scripts": "node scripts/heavy.mjs -- node --test \"scripts/**/*.test.js\"",
     "check:docs": "node scripts/check-doc-links.js",
     "check:adr": "node scripts/check-adr.js",
     "check:dev-deps": "node scripts/check-dev-deps.js",
@@ -79,7 +79,6 @@
   "devDependencies": {
     "ajv": "^8.20.0",
     "concurrently": "^9.1.2",
-    "cross-env": "^7.0.3",
     "lefthook": "^2.2.2"
   }
 }

@@ -29,6 +29,7 @@
 from __future__ import annotations
 
 import logging
+import re
 from collections.abc import AsyncIterator, Awaitable, Callable
 from contextlib import asynccontextmanager
 
@@ -61,9 +62,14 @@ Setup = Callable[[AsyncConnection], Awaitable[None]]
 
 
 def _default_guard(database_name: str) -> bool:
-    """Имя базы похоже на тестовую? (аналог `WithGuard` по умолчанию)."""
-    lowered = (database_name or "").lower()
-    return any(marker in lowered for marker in GUARD_MARKERS)
+    """Имя базы похоже на тестовую? (аналог `WithGuard` по умолчанию).
+
+    Маркер — **токен**, а не подстрока: `latest`, `contest` и `attest`
+    содержат `test`, но это имена чужих баз, и промах DSN на них обязан
+    останавливать коммитящую стратегию, а не вычищать базу.
+    """
+    tokens = set(re.split(r"[^a-z0-9]+", (database_name or "").lower()))
+    return any(marker in tokens for marker in GUARD_MARKERS)
 
 
 def _quote_ident(name: str) -> str:
@@ -77,7 +83,6 @@ class Cleaner:
     :param schema: схема пакета — «своя база на процесс».
     :param setup: базовая линия: выполняется один раз, коммитится.
     :param strategy: как откатывать тест; по умолчанию ``transaction``.
-    :param guard: проверка имени базы для коммитящих стратегий.
     :param drop_schema: дропнуть схему в `stop()` (ручной режим на общей
         статичной базе; в launcher-режиме run-DB падает целиком).
     """
@@ -89,7 +94,6 @@ class Cleaner:
         *,
         setup: Setup,
         strategy: str = STRATEGY_TRANSACTION,
-        guard: Callable[[str], bool] | None = None,
         drop_schema: bool = False,
     ) -> None:
         if strategy not in {
@@ -104,13 +108,23 @@ class Cleaner:
         self._schema = schema
         self._setup = setup
         self._strategy = strategy
-        self._guard = guard or _default_guard
         self._drop_schema = drop_schema
         self._engine: AsyncEngine | None = None
+        # Один выбор стратегии вместо двух каскадов `if` в `session()` и
+        # `reset()`: новая стратегия добавляется в одном месте.
+        self._session_impl = (
+            self._transactional_session
+            if strategy == STRATEGY_TRANSACTION
+            else self._plain_session
+        )
+        self._reset_impl = {
+            STRATEGY_TRUNCATION: self._truncate,
+            STRATEGY_DELETION: self._delete,
+        }.get(strategy)
 
         if strategy in COMMITTING_STRATEGIES:
             database_name = self._url.database or ""
-            if not self._guard(database_name):
+            if not _default_guard(database_name):
                 raise RuntimeError(
                     f"Refusing {strategy!r} cleanup on database {database_name!r}: "
                     f"the name must contain one of {GUARD_MARKERS}. "
@@ -125,18 +139,10 @@ class Cleaner:
         return self._strategy
 
     @property
-    def schema(self) -> str:
-        return self._schema
-
-    @property
     def engine(self) -> AsyncEngine:
         if self._engine is None:
             raise RuntimeError("Cleaner is not started: call `await cleaner.start()`.")
         return self._engine
-
-    def url(self) -> str:
-        """DSN для кода, который открывает соединения сам."""
-        return self._url.render_as_string(hide_password=False)
 
     # ── жизненный цикл ──────────────────────────────────────────────────
 
@@ -182,12 +188,8 @@ class Cleaner:
         self, *, session_cls: type[AsyncSession] = AsyncSession
     ) -> AsyncIterator[AsyncSession]:
         """Сессия на базовой линии; изоляция — по стратегии пакета."""
-        if self._strategy == STRATEGY_TRANSACTION:
-            async with self._transactional_session(session_cls) as db:
-                yield db
-        else:
-            async with self._plain_session(session_cls) as db:
-                yield db
+        async with self._session_impl(session_cls) as db:
+            yield db
 
     @asynccontextmanager
     async def _transactional_session(
@@ -226,10 +228,8 @@ class Cleaner:
 
     async def reset(self) -> None:
         """Вернуть базу к базовой линии (no-op для транзакции и `null`)."""
-        if self._strategy == STRATEGY_TRUNCATION:
-            await self._truncate()
-        elif self._strategy == STRATEGY_DELETION:
-            await self._delete()
+        if self._reset_impl is not None:
+            await self._reset_impl()
 
     def _sorted_tables(self) -> list[Table]:
         # Ленивый импорт: модуль не тянет модели при импорте тестов.
@@ -248,10 +248,41 @@ class Cleaner:
             )
 
     async def _delete(self) -> None:
+        tables = self._sorted_tables()
         async with self.engine.begin() as conn:
             # `sorted_tables` — от родителей к детям, удаляем наоборот.
-            for table in reversed(self._sorted_tables()):
+            for table in reversed(tables):
                 await conn.execute(text(f"DELETE FROM {_quote_ident(table.name)}"))
+            await self._restart_sequences(conn, [table.name for table in tables])
+
+    async def _restart_sequences(
+        self, conn: AsyncConnection, table_names: list[str]
+    ) -> None:
+        """Вернуть последовательности к 1: `DELETE` их не трогает.
+
+        Без этого `Deletion` оставляет id, уехавшие за время пакета, — ровно
+        то, ради чего раньше жил `_bump_user_sequence`, и тест, полагающийся
+        на «первая строка получает id = 1», падал бы только в конце пакета.
+        """
+        if not table_names:
+            return
+        rows = await conn.execute(
+            text(
+                "SELECT DISTINCT seq.relname "
+                "FROM pg_class tbl "
+                "JOIN pg_namespace ns ON ns.oid = tbl.relnamespace "
+                "JOIN pg_depend dep ON dep.refobjid = tbl.oid "
+                "  AND dep.refobjsubid > 0 AND dep.deptype IN ('a', 'i') "
+                "JOIN pg_class seq ON seq.oid = dep.objid AND seq.relkind = 'S' "
+                "WHERE ns.nspname = current_schema() "
+                "  AND tbl.relname = ANY(:tables)"
+            ),
+            {"tables": table_names},
+        )
+        for (sequence_name,) in rows:
+            await conn.execute(
+                text(f"ALTER SEQUENCE {_quote_ident(sequence_name)} RESTART WITH 1")
+            )
 
     def __repr__(self) -> str:  # pragma: no cover — только для отладки
         return (

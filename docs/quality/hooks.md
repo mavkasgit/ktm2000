@@ -16,7 +16,13 @@
 | `pre-commit` | `ruff check --no-fix {staged_files}` | шаг `ruff` гейта, `ruff.yml` в CI |
 | `pre-commit` | `eslint {staged_files}` | шаг `frontend-lint` гейта, `frontend-tests.yml` |
 | `pre-commit` | `npm run check:docs` | шаг `docs-links` гейта, `docs.yml` |
-| `pre-push` | `npm run gate:fast` | `npm run gate` целиком, все CI-workflow |
+| `pre-push` | `node scripts/heavy.mjs --timeout 300 --on-timeout run -- npm run gate:fast` | `npm run gate` целиком, все CI-workflow |
+
+Слот машинного семафора берёт только `pre-push` (см. корневой `AGENTS.md`,
+«Тяжёлые команды»): на занятой машине хук ждёт до 300 с, а потом выполняет
+проверку без слота — хук остаётся удобством и не валит push из-за чужой
+нагрузки. `pre-commit` слот не берёт: ruff/eslint по staged-файлам и
+`check:docs` — быстрые проверки.
 
 Единственное исключение в таблице — `guard-tree` (#354). У него нет гейт-эквивалента,
 потому что вопрос «не чужое ли дерево трогает этот коммит» ставится только в момент

@@ -275,21 +275,6 @@
       "npm_package": "concurrently"
     },
     {
-      "id": "cross-env",
-      "name": "cross-env",
-      "repo": "kentcdodds/cross-env",
-      "category": "dev-tool",
-      "version": "^7.0.3",
-      "pinned_in": "package.json",
-      "runs_at": [
-        "manual"
-      ],
-      "blocking": false,
-      "last_reviewed": "2026-11-03",
-      "rationale": "Переносит окружение между скриптами на Windows и Linux.",
-      "npm_package": "cross-env"
-    },
-    {
       "id": "ajv",
       "name": "Ajv",
       "repo": "ajv-validator/ajv",

@@ -44,7 +44,6 @@ LOCK_TIMEOUT = "2s"
 
 # Своё соединение у кода под тестом -> изоляция коммитами + TRUNCATE после теста.
 DB_STRATEGY = dbcleaner.STRATEGY_TRUNCATION
-pytestmark = pytest.mark.usefixtures("cleaner_reset")
 
 
 async def _seed_admin(cleaner: dbcleaner.Cleaner, email: str) -> User:

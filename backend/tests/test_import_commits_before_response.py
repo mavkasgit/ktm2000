@@ -37,7 +37,6 @@ SKU = "ЮП-COMMIT-287"
 
 # Своё соединение у кода под тестом -> изоляция коммитами + TRUNCATE после теста.
 DB_STRATEGY = dbcleaner.STRATEGY_TRUNCATION
-pytestmark = pytest.mark.usefixtures("cleaner_reset")
 
 
 async def _seed(cleaner: dbcleaner.Cleaner) -> str:

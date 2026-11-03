@@ -49,7 +49,6 @@ from tests.test_bulk_planning import (
 
 # Своё соединение у кода под тестом -> изоляция коммитами + TRUNCATE после теста.
 DB_STRATEGY = dbcleaner.STRATEGY_TRUNCATION
-pytestmark = pytest.mark.usefixtures("cleaner_reset")
 
 
 @asynccontextmanager

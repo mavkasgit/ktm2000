@@ -89,10 +89,21 @@ e2e и backend-тесты агент запускает сам: `npm --prefix fr
 Канон pytest → [`backend/tests/AGENTS.md`](backend/tests/AGENTS.md).
 
 - Каждый прогон идёт через launcher `scripts/test-run.ps1`: он создаёт свою БД `ktm2000_test_<runid>` и в `finally` дропает только её. Параллельные прогоны не видят и не удаляют чужие БД.
-- При нескольких параллельных агентах задавайте `PYTEST_NUM_WORKERS` (например `4`): иначе каждый `-n auto` захватит все ядра и машина перестанет отвечать.
+- При нескольких параллельных агентах задавайте `PYTEST_NUM_WORKERS` (например `4`): иначе каждый `-n auto` захватит все ядра и машина перестанет отвечать. Слот heavy сериализует целые прогоны, но не воркеры внутри прогона.
 - Отдельный тест — через launcher (изолированная БД): `npm run test:pytest -- -k shopflow`.
 - Отладка без изоляции (serial, общая статичная БД, только отладка): `cd backend && python -m pytest tests/test_shopfloor_api.py::test_name -v`.
 - `test:db:down` из тестовых launcher'ов не использовать.
+
+## Тяжёлые команды — через семафор `heavy`
+
+`scripts/heavy.mjs` — машинный счётный семафор (контракт [mokevnin/heavy](https://github.com/mokevnin/heavy), реализация на Node: у heavy нет сборок под Windows, и `mise install` на windows-x64 падает). N слотов общие для всех worktree и агентов: команда, которой не досталось слота, ждёт, а не отбирает CPU у соседа.
+
+- Тесты, типы, линтеры и сборки запускать **только через задачи**: `npm run gate`, `npm run test:pytest`, `npm run test:scripts`, `npm run --prefix frontend run typecheck|lint|test|build`. Они уже обёрнуты (включая шаг `ruff` гейта), отдельно `heavy` звать не нужно.
+- Голая тяжёлая команда без задачи — только `node scripts/heavy.mjs -- <команда>` (так же в скриптах и хуках).
+- Хук `pre-push` берёт слот с `--timeout 300 --on-timeout run`: занятая машина замедляет хук, но не валит его. `pre-commit` слот не берёт — там быстрые проверки по staged-файлам.
+- Кто держит слоты: `node scripts/heavy.mjs --status`. Пул `default` — тесты, типы, линтеры, сборки; стенды Playwright считаются тем же ядром отдельно (`frontend/e2e/run-slots.mjs`, каталог `E2E_SEMAPHORE_DIR`, лимит `E2E_MAX_PARALLEL_RUNS`).
+- Настройки: `HEAVY_SLOTS` (по умолчанию четверть ядер), `HEAVY_DIR`, `HEAVY_POOL` (по умолчанию `default`), `HEAVY_TIMEOUT` (секунды), `HEAVY_ON_TIMEOUT` (`fail`/`run`), `HEAVY_LOG` (JSON-строка на ожидание). Вложенный вызов того же пула видит `HEAVY_HELD` и очередь не берёт; занятый слот называет `HEAVY_SLOT`.
+- В CI (`CI` задан и не равен `0`/`false`; пустая строка — тоже «локальная машина») очередь пропускается.
 
 ## Разведка
 
@@ -133,7 +144,7 @@ e2e и backend-тесты агент запускает сам: `npm --prefix fr
 4. Коммиты — conventional commits на русском (`feat: …`, `fix: …`).
 5. Stock ledger — `StockTransaction` единый источник правды; детали → `docs/project-overview.md`.
 6. Transfer ↔ StockTransaction integrity — `assert_no_invariants_violations` в тестах.
-7. Тесты, которые трогают БД, берут сессию у Cleaner'а пакета (`async with cleaner.session() as db` либо фикстуры `session`/`client`) и **не открывают транзакцию руками** для изоляции: стратегии и guard → [`backend/tests/AGENTS.md`](backend/tests/AGENTS.md), решение → [ADR-0071](docs/adr/0071-izolyaciyu-testovoy-bd-derzhit-cleaner.md).
+7. Тесты, которые трогают БД, берут сессию у Cleaner'а пакета (`async with cleaner.session() as db` либо фикстуры `session`/`client`) и **не открывают транзакцию руками** для изоляции: стратегии и guard → [`backend/tests/AGENTS.md`](backend/tests/AGENTS.md), решение → [ADR-0071](docs/adr/0071-izolyaciyu-testovoy-bd-derzhit-cleaner.md). Исключение — миграционные пакеты (`test_migrations.py`, `test_hanger_norm_key_migration_218.py`): они гоняют alembic на своей базе `ktm_mig_*` и открывают транзакции сами, это роль `ScratchDatabase`, а не изоляция теста.
 
 ## Документация (указатели)
 

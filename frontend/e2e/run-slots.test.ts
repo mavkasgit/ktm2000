@@ -1,25 +1,19 @@
 /**
- * Счётный семафор прогонов E2E (#281): слоты, ожидание, подбор чужих слотов.
+ * Адаптер семафора E2E (#281): дефолты прогона и префикс строк ожидания.
  *
- * Семафор живёт в `run-slots.mjs` — модуле, а не внутри `run-tier.mjs`, ровно
- * ради этих тестов: логика «сколько прогонов пускать и что делать с чужим
- * слотом» обязана быть проверяемой без запуска Playwright.
+ * Механика самих слотов (`tryAcquireSlot`/`releaseSlot`/`describeHolders`)
+ * живёт в `scripts/heavy-core.mjs` и проверяется там же,
+ * `scripts/heavy-core.test.js`: второй раннер тех же проверок здесь означал бы,
+ * что поведение слота описано дважды и разъедется при первой правке.
  */
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 
-import { afterEach, describe, expect, it, vi } from "vitest";
+import { afterEach, describe, expect, it } from "vitest";
 
-import {
-  acquireSlot,
-  defaultSlotsDir,
-  describeHolders,
-  releaseSlot,
-  resolveMaxRuns,
-  slotFile,
-  tryAcquireSlot,
-} from "./run-slots.mjs";
+import { releaseSlot, tryAcquireSlot } from "../../scripts/heavy-core.mjs";
+import { acquireSlot, defaultSlotsDir, resolveMaxRuns } from "./run-slots.mjs";
 
 const dirs: string[] = [];
 
@@ -59,97 +53,23 @@ describe("defaultSlotsDir", () => {
   });
 });
 
-describe("tryAcquireSlot", () => {
-  it("занимает слоты по одному и упирается в лимит", () => {
-    const dir = tempDir();
-    const first = tryAcquireSlot(dir, 2, { pid: process.pid, repo: "a" });
-    const second = tryAcquireSlot(dir, 2, { pid: process.pid, repo: "b" });
-    expect(first?.index).toBe(0);
-    expect(second?.index).toBe(1);
-    expect(tryAcquireSlot(dir, 2, { pid: process.pid, repo: "c" })).toBeNull();
-  });
-
-  it("освобождённый слот снова свободен", () => {
-    const dir = tempDir();
-    const slot = tryAcquireSlot(dir, 1, { pid: process.pid });
-    expect(slot).not.toBeNull();
-    releaseSlot(slot);
-    expect(tryAcquireSlot(dir, 1, { pid: process.pid })?.index).toBe(0);
-  });
-
-  it("слот мёртвого держателя занимается сразу", () => {
-    const dir = tempDir();
-    fs.mkdirSync(dir, { recursive: true });
-    fs.writeFileSync(slotFile(dir, 0), JSON.stringify({ pid: 424242, at: Date.now() }));
-    const slot = tryAcquireSlot(dir, 1, { pid: process.pid }, { alive: () => false });
-    expect(slot?.index).toBe(0);
-    expect(JSON.parse(fs.readFileSync(slotFile(dir, 0), "utf8")).pid).toBe(process.pid);
-  });
-
-  it("живой чужой слот не отнимается", () => {
-    const dir = tempDir();
-    fs.mkdirSync(dir, { recursive: true });
-    const other = { pid: 424242, at: Date.now() };
-    fs.writeFileSync(slotFile(dir, 0), JSON.stringify(other));
-    expect(tryAcquireSlot(dir, 1, { pid: process.pid }, { alive: () => true })).toBeNull();
-    expect(JSON.parse(fs.readFileSync(slotFile(dir, 0), "utf8"))).toEqual(other);
-  });
-
-  it("releaseSlot не сносит слот, уже занятый соседом", () => {
-    // Слот перешёл к другому прогону (мёртвый держатель снят, сосед занял тот
-    // же файл), а прежний прогон в свой finally зовёт releaseSlot. Слот соседа
-    // должен уцелеть, иначе семафор перестаёт считать прогоны.
-    const dir = tempDir();
-    const first = tryAcquireSlot(dir, 1, { pid: 111, repo: "a" }, { alive: () => true });
-    fs.writeFileSync(slotFile(dir, 0), JSON.stringify({ pid: 222, repo: "b", at: Date.now() }));
-    releaseSlot(first);
-    expect(fs.existsSync(slotFile(dir, 0))).toBe(true);
-    expect(JSON.parse(fs.readFileSync(slotFile(dir, 0), "utf8")).pid).toBe(222);
-  });
-
-  it("releaseSlot отпускает слот, который всё ещё наш", () => {
-    const dir = tempDir();
-    const slot = tryAcquireSlot(dir, 1, { pid: 333, repo: "a" });
-    releaseSlot(slot);
-    expect(fs.existsSync(slotFile(dir, 0))).toBe(false);
-  });
-});
-
 describe("acquireSlot", () => {
-  it("живой держатель старше staleMs — слот НЕ отбираем, падаем по таймауту (#375)", async () => {
-    // Былое правило: возраст слота сам по себе позволял снять слот у ЖИВОГО
-    // прогона. При `waitTimeoutMs < staleMs` это означало, что претендент,
-    // дождавшийся своего таймаута, выкидывает соседа, который ещё идёт:
-    // семафор перестаёт считать, и два стенда делят CPU и браузеры. Теперь
-    // возрастной порог — только предупреждение; снимается мёртвый держатель.
+  it("берёт свободный слот молча и отпускает его", async () => {
     const dir = tempDir();
-    fs.mkdirSync(dir, { recursive: true });
-    fs.writeFileSync(
-      slotFile(dir, 0),
-      JSON.stringify({ pid: process.pid, at: Date.now() - 10 * 60_000, repo: "долгий" }),
-    );
-    const lines: string[] = [];
-    await expect(
-      acquireSlot({
-        dir,
-        max: 1,
-        payload: { pid: 424242, repo: "ждущий" },
-        staleMs: 5 * 60_000,
-        waitTimeoutMs: 25,
-        pollMs: 5,
-        log: (line: string) => lines.push(line),
-      }),
-    ).rejects.toThrow(/не дождался слота/);
-    expect(JSON.parse(fs.readFileSync(slotFile(dir, 0), "utf8")).repo).toBe("долгий");
-    expect(lines.join("\n")).toContain("держатель жив");
-    // Предупреждение — одно на ожидание, а не на каждый шаг опроса: пять
-    // повторов превратили бы лог прогона в шум, в котором не видно ничего.
-    expect(lines.filter((line) => line.includes("держатель жив"))).toHaveLength(1);
+    const log: string[] = [];
+    const slot = await acquireSlot({
+      dir,
+      payload: { pid: process.pid },
+      log: (line: string) => log.push(line),
+    });
+    expect(slot.index).toBe(0);
+    expect(log).toEqual([]);
+    releaseSlot(slot);
   });
 
-  it("ждёт освобождения, показывает держателя и падает по таймауту", async () => {
+  it("помечает строки ожидания префиксом [e2e:run]", async () => {
     const dir = tempDir();
-    tryAcquireSlot(dir, 1, { pid: 424242, at: Date.now(), repo: "чужой" });
+    tryAcquireSlot(dir, 1, { pid: process.pid, repo: "чужой" });
     const lines: string[] = [];
     await expect(
       acquireSlot({
@@ -162,24 +82,8 @@ describe("acquireSlot", () => {
         log: (line: string) => lines.push(line),
       }),
     ).rejects.toThrow(/не дождался слота/);
+    expect(lines.length).toBeGreaterThan(0);
+    expect(lines.every((line) => line.startsWith("[e2e:run] "))).toBe(true);
     expect(lines.join("\n")).toContain("чужой");
-  });
-
-  it("немедленно отдаёт слот, когда он свободен", async () => {
-    const dir = tempDir();
-    const log = vi.fn();
-    const slot = await acquireSlot({ dir, max: 2, payload: { pid: process.pid }, log });
-    expect(slot.index).toBe(0);
-    expect(log).not.toHaveBeenCalled();
-    releaseSlot(slot);
-  });
-
-  it("describeHolders показывает только занятые слоты", () => {
-    const dir = tempDir();
-    tryAcquireSlot(dir, 2, { pid: 7, repo: "a" });
-    const holders = describeHolders(dir, 2, { alive: () => true });
-    expect(holders).toHaveLength(1);
-    expect(holders[0].holder.repo).toBe("a");
-    expect(holders[0].index).toBe(0);
   });
 });
