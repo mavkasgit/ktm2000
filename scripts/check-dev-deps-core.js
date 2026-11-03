@@ -18,14 +18,40 @@
 
 "use strict";
 
-/** Русская форма счётного слова. */
-function plural(count, one, few, many) {
-  const tens = count % 100;
-  const unit = count % 10;
-  if (tens >= 11 && tens <= 14) return many;
-  if (unit === 1) return one;
-  if (unit >= 2 && unit <= 4) return few;
-  return many;
+const { plural, isoDate } = require("./format-utils");
+
+/**
+ * Расширения, где упоминание пакета — использование, а не проза.
+ *
+ * Markdown и прочие текстовые документы сюда не входят: имя пакета в
+ * `AGENTS.md` или README — не доказательство, что его зовёт код. Без этого
+ * фильтра проверка оставляла мёртвый пакет живым, потому что о нём кто-то
+ * написал в документации.
+ */
+const CODE_EXT =
+  /\.(?:[cm]?[jt]sx?|json|ya?ml|toml|css|scss|sass|html|sh|bash|ps1|py|sql|cfg|ini|conf)$/i;
+const CODE_BASENAMES = /^(?:Dockerfile|Makefile|Procfile)$/i;
+
+/** Файл, в котором упоминание имени пакета считается использованием. */
+function isCodeFile(file) {
+  const base = String(file).split(/[\\/]/).pop() || "";
+  return CODE_BASENAMES.test(base) || CODE_EXT.test(base);
+}
+
+/**
+ * Код без комментариев: имя пакета в комментарии — объяснение, а не вызов.
+ *
+ * Нужно только корневому скану: во фронтенде есть магические комментарии
+ * вроде `// @vitest-environment jsdom`, и они как раз являются использованием.
+ * Убираются целые строки-комментарии и блочные комментарии, чтобы не ломать
+ * `https://` и `#` внутри строк.
+ */
+function withoutComments(text, file) {
+  if (!/\.(?:[cm]?[jt]sx?|py|sh|bash|ps1)$/i.test(String(file))) return text;
+  return text
+    .replace(/\/\*[\s\S]*?\*\//g, "")
+    .replace(/^\s*\/\/.*$/gm, "")
+    .replace(/^\s*#.*$/gm, "");
 }
 
 /**
@@ -78,11 +104,6 @@ function withoutDependencyDeclarations(text) {
   return JSON.stringify(copy, null, 2);
 }
 
-/** Дата сегодня в форме ISO — сравнение исключений по строкам корректно для ISO. */
-function isoDate() {
-  return new Date().toISOString().slice(0, 10);
-}
-
 /**
  * Находки по списку пакетов и содержимому файлов.
  *
@@ -94,6 +115,7 @@ function isoDate() {
  */
 function inspectDevDependencies({ packages, files, allowlist, now = isoDate() }) {
   const findings = [];
+  const sourceOf = (pkg) => (pkg.source ? `${pkg.source}: ` : "");
   const scope = `проверено ${files.length} ${plural(files.length, "файл", "файла", "файлов")}`;
   const exempt = allowlist.exempt ?? {};
 
@@ -137,9 +159,10 @@ function inspectDevDependencies({ packages, files, allowlist, now = isoDate() })
       findings.push({
         code: "unused",
         name: pkg.name,
+        source: pkg.source,
         message:
           `ни имя пакета, ни его бинарники (${names.join(", ")}) не названы ` +
-          `ни в одном отслеживаемом файле (${scope})`,
+          `ни в одном отслеживаемом файле (${sourceOf(pkg)}${scope})`,
       });
     }
   }
@@ -161,6 +184,8 @@ function inspectDevDependencies({ packages, files, allowlist, now = isoDate() })
 module.exports = {
   inspectDevDependencies,
   mentions,
+  isCodeFile,
+  withoutComments,
   plural,
   isoDate,
   withoutDependencyDeclarations,

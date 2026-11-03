@@ -37,4 +37,7 @@ pre-commit:
 pre-push:
   commands:
     gate-fast:
-      run: npm run gate:fast
+      # Слот машинного семафора: на занятой машине push подождёт, но хук не
+      # валит — `--on-timeout run` запускает проверку без слота. Хук остаётся
+      # удобством, поэтому отказ ждать (код 75) здесь был бы неправдой.
+      run: node scripts/heavy.mjs --timeout 300 --on-timeout run -- npm run gate:fast

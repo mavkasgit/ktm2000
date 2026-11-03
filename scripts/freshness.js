@@ -23,6 +23,7 @@
 
 const { spawnSync } = require("node:child_process");
 const { existsSync, readFileSync } = require("node:fs");
+const { isoDate } = require("./format-utils");
 const { join } = require("node:path");
 const { inspectFreshness, distNameFromPin, DEFAULT_THRESHOLDS } = require("./freshness-core.js");
 
@@ -164,7 +165,7 @@ async function main() {
     }
   }
 
-  const findings = inspectFreshness(entries, DEFAULT_THRESHOLDS, new Date().toISOString().slice(0, 10));
+  const findings = inspectFreshness(entries, DEFAULT_THRESHOLDS, isoDate());
   const counts = findings.reduce(
     (acc, f) => ({ ...acc, [f.level]: (acc[f.level] || 0) + 1 }),
     { fail: 0, warn: 0, info: 0 },

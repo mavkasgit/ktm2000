@@ -44,46 +44,18 @@ from app.services.shopfloor.operations_meta import create_attachment, create_com
 from app.stock import Reason, StockCommand, StockCommandService
 from app.transfers.services import transfer_send
 from httpx import ASGITransport, AsyncClient
-from sqlalchemy import event, select, text
+from sqlalchemy import select
 from sqlalchemy.exc import IntegrityError
-from sqlalchemy.ext.asyncio import AsyncEngine, AsyncSession, async_sessionmaker
+from sqlalchemy.ext.asyncio import AsyncSession
 
+from tests import dbcleaner
 from tests.stock.test_stock_command import _make_location, _make_product, _make_user
 
-pytestmark = [pytest.mark.asyncio, pytest.mark.usefixtures("_pin_search_path")]
+# Гонки идут на своих соединениях -> изоляция коммитами + TRUNCATE после теста.
+DB_STRATEGY = dbcleaner.STRATEGY_TRUNCATION
+pytestmark = pytest.mark.asyncio
 
 RACE_KEY = "race-key-135"
-
-
-@pytest_asyncio.fixture(scope="module", loop_scope="module")
-async def _pin_search_path(engine: AsyncEngine, module_schema_name: str):
-    """Каждое новое соединение движка сразу получает search_path модуля
-    (engine на NullPool — см. tests/stock/test_ledger_idempotency.py)."""
-
-    def _set_path(dbapi_conn, _record):
-        cur = dbapi_conn.cursor()
-        cur.execute(f'SET search_path TO "{module_schema_name}"')
-        cur.close()
-
-    event.listen(engine.sync_engine, "connect", _set_path)
-    yield
-    event.remove(engine.sync_engine, "connect", _set_path)
-
-
-def _schema_sql(module_schema_name: str) -> str:
-    return f'SET search_path TO "{module_schema_name}"'
-
-
-async def _bump_user_sequence(session: AsyncSession) -> None:
-    """Поднимает users-последовательность выше постоянного пола (900k)."""
-    await session.execute(text(
-        "SELECT setval(pg_get_serial_sequence('users', 'id'), "
-        "GREATEST((SELECT COALESCE(MAX(id), 0) FROM users), 900000) + 1, false)"
-    ))
-
-
-def _factory(engine: AsyncEngine) -> async_sessionmaker:
-    return async_sessionmaker(bind=engine, expire_on_commit=False)
 
 
 def _make_defect(session: AsyncSession, *, product_id: int, section_id: int,
@@ -95,15 +67,14 @@ def _make_defect(session: AsyncSession, *, product_id: int, section_id: int,
     )
 
 
-async def _race_setup(factory: async_sessionmaker, schema: str, tag: str) -> dict:
+async def _race_setup(cleaner: dbcleaner.Cleaner, tag: str) -> dict:
     """Закоммиченный базовый сетап: пользователь, продукт, участок.
 
-    ``tag`` уникален на тест: строки коммятся мимо savepoint-изоляции и
-    живут весь модуль (как в test_ledger_idempotency).
+    ``tag`` уникален на тест: строки коммитятся мимо savepoint-изоляции и
+    живут до конца теста — autouse-фикстура `cleaner_reset` вычищает их
+    после каждого теста (`TRUNCATE … RESTART IDENTITY CASCADE`).
     """
-    async with factory() as s:
-        await s.execute(text(schema))
-        await _bump_user_sequence(s)
+    async with cleaner.session() as s:
         user = await _make_user(s, f"idem135-{tag}")
         product = await _make_product(s, f"IDEM135-{tag}")
         section = await _make_location(
@@ -117,18 +88,15 @@ async def _race_setup(factory: async_sessionmaker, schema: str, tag: str) -> dic
 
 
 async def test_unique_backstop_rejects_duplicate_keys(
-    engine: AsyncEngine, module_schema_name: str,
+    cleaner: dbcleaner.Cleaner,
 ):
     """Partial unique на лёгких таблицах: дубль ключа → IntegrityError,
     NULL-ключи не конфликтуют. transfers/rework_tasks покрыты race-тестами
     и полными топологиями ниже (их минимальные строки требуют задачи)."""
-    factory = _factory(engine)
-    schema = _schema_sql(module_schema_name)
-    fx = await _race_setup(factory, schema, "backstop")
+    fx = await _race_setup(cleaner, "backstop")
     user, product, section = fx["user"], fx["product"], fx["section"]
 
-    async with factory() as s:
-        await s.execute(text(schema))
+    async with cleaner.session() as s:
         await s.commit()
 
         async def expect_unique_violation(add_row) -> None:
@@ -189,22 +157,18 @@ async def test_unique_backstop_rejects_duplicate_keys(
 
 
 async def test_create_defect_race_loser_gets_conflict(
-    engine: AsyncEngine, module_schema_name: str,
+    cleaner: dbcleaner.Cleaner,
 ):
-    factory = _factory(engine)
-    schema = _schema_sql(module_schema_name)
-    fx = await _race_setup(factory, schema, "defect")
+    fx = await _race_setup(cleaner, "defect")
 
     kwargs = {
         "product_id": fx["product"].id, "section_id": fx["section"].id,
         "quantity": Decimal(3), "actor_id": fx["user"].id, "idempotency_key": RACE_KEY,
     }
-    async with factory() as winner:
-        await winner.execute(text(schema))
+    async with cleaner.session() as winner:
         first = await create_defect(winner, **kwargs)
 
-        async with factory() as loser:
-            await loser.execute(text(schema))
+        async with cleaner.session() as loser:
             task = asyncio.create_task(create_defect(loser, **kwargs))
             # Проигравший проходит replay-SELECT (INSERT победителя ещё не
             # закоммичен) и зависает на flush unique-индекса.
@@ -215,8 +179,7 @@ async def test_create_defect_race_loser_gets_conflict(
             assert exc_info.value.error_code == "defect_idempotency_conflict"
             await loser.rollback()
 
-    async with factory() as check:
-        await check.execute(text(schema))
+    async with cleaner.session() as check:
         rows = (await check.execute(
             select(Defect).where(Defect.idempotency_key == RACE_KEY)
         )).scalars().all()
@@ -228,16 +191,13 @@ async def test_create_defect_race_loser_gets_conflict(
 
 
 async def test_defect_decide_race_loser_gets_conflict(
-    engine: AsyncEngine, module_schema_name: str,
+    cleaner: dbcleaner.Cleaner,
 ):
     """accept_with_deviation без task: решения не пишут ledger — чистая
     гонка на defect_decisions."""
-    factory = _factory(engine)
-    schema = _schema_sql(module_schema_name)
-    fx = await _race_setup(factory, schema, "decide")
+    fx = await _race_setup(cleaner, "decide")
 
-    async with factory() as s:
-        await s.execute(text(schema))
+    async with cleaner.session() as s:
         s.add(_make_defect(
             s, product_id=fx["product"].id, section_id=fx["section"].id,
             user_id=fx["user"].id, key=None,
@@ -253,12 +213,10 @@ async def test_defect_decide_race_loser_gets_conflict(
         "decision_type": DefectDecisionType.accept_with_deviation,
         "quantity": Decimal(1), "actor_id": fx["user"].id, "idempotency_key": RACE_KEY,
     }
-    async with factory() as winner:
-        await winner.execute(text(schema))
+    async with cleaner.session() as winner:
         first = await defect_decide(winner, **kwargs)
 
-        async with factory() as loser:
-            await loser.execute(text(schema))
+        async with cleaner.session() as loser:
             task = asyncio.create_task(defect_decide(loser, **kwargs))
             await asyncio.sleep(0.5)
             await winner.commit()
@@ -267,8 +225,7 @@ async def test_defect_decide_race_loser_gets_conflict(
             assert exc_info.value.error_code == "defect_decision_idempotency_conflict"
             await loser.rollback()
 
-    async with factory() as check:
-        await check.execute(text(schema))
+    async with cleaner.session() as check:
         rows = (await check.execute(
             select(DefectDecision).where(DefectDecision.idempotency_key == RACE_KEY)
         )).scalars().all()
@@ -283,22 +240,18 @@ async def test_defect_decide_race_loser_gets_conflict(
 
 
 async def test_create_attachment_race_and_replay(
-    engine: AsyncEngine, module_schema_name: str,
+    cleaner: dbcleaner.Cleaner,
 ):
-    factory = _factory(engine)
-    schema = _schema_sql(module_schema_name)
-    fx = await _race_setup(factory, schema, "attach")
+    fx = await _race_setup(cleaner, "attach")
 
     kwargs = {
         "original_filename": "x.txt", "stored_path": "/tmp/x.txt",
         "size_bytes": 2, "actor_id": fx["user"].id, "idempotency_key": RACE_KEY,
     }
-    async with factory() as winner:
-        await winner.execute(text(schema))
+    async with cleaner.session() as winner:
         first = await create_attachment(winner, **kwargs)
 
-        async with factory() as loser:
-            await loser.execute(text(schema))
+        async with cleaner.session() as loser:
             task = asyncio.create_task(create_attachment(loser, **kwargs))
             await asyncio.sleep(0.5)
             await winner.commit()
@@ -307,8 +260,7 @@ async def test_create_attachment_race_and_replay(
             assert exc_info.value.error_code == "attachment_idempotency_conflict"
             await loser.rollback()
 
-    async with factory() as check:
-        await check.execute(text(schema))
+    async with cleaner.session() as check:
         rows = (await check.execute(
             select(Attachment).where(Attachment.idempotency_key == RACE_KEY)
         )).scalars().all()
@@ -319,22 +271,18 @@ async def test_create_attachment_race_and_replay(
 
 
 async def test_create_comment_race_and_replay(
-    engine: AsyncEngine, module_schema_name: str,
+    cleaner: dbcleaner.Cleaner,
 ):
-    factory = _factory(engine)
-    schema = _schema_sql(module_schema_name)
-    fx = await _race_setup(factory, schema, "comment")
+    fx = await _race_setup(cleaner, "comment")
 
     kwargs = {
         "entity_type": EntityType.work_task, "entity_id": 1, "body": "note",
         "actor_id": fx["user"].id, "idempotency_key": RACE_KEY,
     }
-    async with factory() as winner:
-        await winner.execute(text(schema))
+    async with cleaner.session() as winner:
         first = await create_comment(winner, **kwargs)
 
-        async with factory() as loser:
-            await loser.execute(text(schema))
+        async with cleaner.session() as loser:
             task = asyncio.create_task(create_comment(loser, **kwargs))
             await asyncio.sleep(0.5)
             await winner.commit()
@@ -343,8 +291,7 @@ async def test_create_comment_race_and_replay(
             assert exc_info.value.error_code == "entity_comment_idempotency_conflict"
             await loser.rollback()
 
-    async with factory() as check:
-        await check.execute(text(schema))
+    async with cleaner.session() as check:
         rows = (await check.execute(
             select(EntityComment).where(EntityComment.idempotency_key == RACE_KEY)
         )).scalars().all()
@@ -357,15 +304,13 @@ async def test_create_comment_race_and_replay(
 # ─── transfer_send: гонка + replay ──────────────────────────────────────────
 
 
-async def _make_two_stage_setup(factory: async_sessionmaker, schema: str, sku: str) -> dict:
+async def _make_two_stage_setup(cleaner: dbcleaner.Cleaner, sku: str) -> dict:
     """Топология из двух этапов с transferable-материалом на первом.
 
     Прямая ORM-расстановка (без API take-to-work): полностью закоммиченный
     сетап для гонки на двух соединениях движка.
     """
-    async with factory() as s:
-        await s.execute(text(schema))
-        await _bump_user_sequence(s)
+    async with cleaner.session() as s:
         user = await _make_user(s, f"{sku}@local")
         product = await _make_product(s, sku)
         stock = await _make_location(s, code=f"{sku}-STK", name="Stock", loc_type="raw_stock")
@@ -463,11 +408,9 @@ async def _make_two_stage_setup(factory: async_sessionmaker, schema: str, sku: s
 
 
 async def test_transfer_send_race_loser_gets_conflict(
-    engine: AsyncEngine, module_schema_name: str,
+    cleaner: dbcleaner.Cleaner,
 ):
-    factory = _factory(engine)
-    schema = _schema_sql(module_schema_name)
-    setup = await _make_two_stage_setup(factory, schema, "IDEMTR135")
+    setup = await _make_two_stage_setup(cleaner, "IDEMTR135")
 
     kwargs = {
         "from_task_id": setup["from_task_id"], "to_task_id": setup["to_task_id"],
@@ -477,19 +420,16 @@ async def test_transfer_send_race_loser_gets_conflict(
     # actor_id нужен числом, а объект user не сохранили — читаем по email.
     from app.models.user import User
 
-    async with factory() as s:
-        await s.execute(text(schema))
+    async with cleaner.session() as s:
         actor_id = (await s.execute(
             select(User.id).where(User.email == setup["user_email"])
         )).scalar_one()
     kwargs["actor_id"] = actor_id
 
-    async with factory() as winner:
-        await winner.execute(text(schema))
+    async with cleaner.session() as winner:
         first = await transfer_send(winner, **kwargs)
 
-        async with factory() as loser:
-            await loser.execute(text(schema))
+        async with cleaner.session() as loser:
             task = asyncio.create_task(transfer_send(loser, **kwargs))
             # Проигравший проходит replay-SELECT и встаёт на FOR UPDATE
             # исходной задачи; после коммита победителя доходит до INSERT
@@ -501,8 +441,7 @@ async def test_transfer_send_race_loser_gets_conflict(
             assert exc_info.value.error_code == "transfer_idempotency_conflict"
             await loser.rollback()
 
-    async with factory() as check:
-        await check.execute(text(schema))
+    async with cleaner.session() as check:
         rows = (await check.execute(
             select(Transfer).where(Transfer.idempotency_key == RACE_KEY)
         )).scalars().all()
@@ -519,14 +458,12 @@ async def test_transfer_send_race_loser_gets_conflict(
 
 @pytest_asyncio.fixture
 async def isolated_client(
-    engine: AsyncEngine, module_schema_name: str,
+    cleaner: dbcleaner.Cleaner,
 ) -> AsyncIterator[AsyncClient]:
-    """API-клиент, где каждый запрос получает СВОЁ соединение из engine."""
-    factory = _factory(engine)
+    """API-клиент, где каждый запрос получает СВОЁ соединение от Cleaner'а."""
 
     async def override_get_db() -> AsyncIterator[AsyncSession]:
-        async with factory() as db:
-            await db.execute(text(_schema_sql(module_schema_name)))
+        async with cleaner.session() as db:
             try:
                 yield db
                 await db.commit()
@@ -542,13 +479,11 @@ async def isolated_client(
 
 
 async def test_api_double_click_comment_single_row(
-    isolated_client: AsyncClient, engine: AsyncEngine, module_schema_name: str,
+    isolated_client: AsyncClient, cleaner: dbcleaner.Cleaner,
 ):
     """Два параллельных POST /comments с одним ключом дают 201 победителя и
     допустимый 409 конфликта (или оба 201 при replay), оставляя одну запись."""
-    factory = _factory(engine)
-    schema = _schema_sql(module_schema_name)
-    fx = await _race_setup(factory, schema, "apicomment")
+    fx = await _race_setup(cleaner, "apicomment")
     headers = {"Authorization": f"Bearer {create_access_token(subject=fx['user'].email)}"}
 
     payload = {
@@ -567,8 +502,7 @@ async def test_api_double_click_comment_single_row(
         ), resp.text
     assert 201 in (r1.status_code, r2.status_code), "хотя бы одна подача проходит"
 
-    async with factory() as check:
-        await check.execute(text(schema))
+    async with cleaner.session() as check:
         rows = (await check.execute(
             select(EntityComment).where(EntityComment.idempotency_key == RACE_KEY)
         )).scalars().all()

@@ -66,12 +66,8 @@ import fs from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 
-import {
-  acquireSlot,
-  defaultSlotsDir,
-  releaseSlot,
-  resolveMaxRuns,
-} from "./run-slots.mjs";
+import { acquireSlot, defaultSlotsDir, resolveMaxRuns } from "./run-slots.mjs";
+import { releaseSlot } from "../../scripts/heavy-core.mjs";
 import { cleanupAbandonedRuns } from "./reap-runs.mjs";
 import {
   DEFAULT_LOCK_STALE_MS,

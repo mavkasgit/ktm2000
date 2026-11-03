@@ -31,7 +31,6 @@
 | `alembic` | Alembic (sqlalchemy-org/alembic) | `backend/requirements.txt` | `>=1.13.0` | ci, manual | да | 2026-11-03 |
 | `concurrently` | concurrently (open-cli-tools/concurrently) | `package.json` | `^9.1.2` | manual | нет | 2026-11-03 |
 | `coverage` | coverage.py (coveragepy/coveragepy) | `backend/requirements-dev.txt` | `7.16.2` | ci | да | 2026-11-03 |
-| `cross-env` | cross-env (kentcdodds/cross-env) | `package.json` | `^7.0.3` | manual | нет | 2026-11-03 |
 | `eslint` | ESLint (eslint/eslint) | `frontend/package.json` | `^9.39.5` | gate, ci | да | 2026-11-03 |
 | `lefthook` | Lefthook (evilmartians/lefthook) | `package.json` | `2.2.2` | commit, push | да | 2026-11-03 |
 | `mise` | mise-en-place (jdx/mise) | `mise.toml` | `2026.10.12` | manual | нет | 2026-11-03 |

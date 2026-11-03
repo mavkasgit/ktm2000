@@ -8,15 +8,15 @@
 выполняется ПОСЛЕ отправки ответа. Тогда `apply` не находит план и отдаёт 404
 «Production plan not found» — ровно тот флейк, что заведён тикетом #287.
 
-Харнесс тот же, что у `test_bulk_approve_commit.py`: зависимость подменяется
-такой, чей teardown делает **rollback**, поэтому выживает ровно то, что
-обработчик закоммитил сам. Отложенный коммит `get_db` тут не подменяет
-проверку, а убирается из неё намеренно.
+Пакет объявляет `Truncation`: код под тестом ходит в базу своим соединением,
+и данные обязаны быть реально закоммичены, чтобы отдельная сессия-читатель их
+увидела (в транзакции dbcleaner они были бы невидимы по MVCC). Зависимость
+подменяется такой, чей teardown делает **rollback**, поэтому выживает ровно
+то, что обработчик закоммитил сам.
 """
 from __future__ import annotations
 
 from collections.abc import AsyncIterator
-from contextlib import asynccontextmanager
 
 import pytest
 from app.core.database import get_db
@@ -27,35 +27,21 @@ from app.models.route import ProductionRoute, RouteOperation, RouteStage
 from app.models.section import Section
 from app.models.user import User, UserRole
 from httpx import ASGITransport, AsyncClient
-from sqlalchemy import select, text
-from sqlalchemy.ext.asyncio import AsyncEngine, AsyncSession, async_sessionmaker
+from sqlalchemy import select
+from sqlalchemy.ext.asyncio import AsyncSession
+
+from tests import dbcleaner
 
 SIMULATE_URL = "/api/imports/excel/simulate"
 SKU = "ЮП-COMMIT-287"
 
-
-@asynccontextmanager
-async def _durable_session(engine: AsyncEngine, schema: str) -> AsyncIterator[AsyncSession]:
-    """Сессия на собственном соединении, коммиты которой НАСТОЯЩИЕ.
-
-    `SET search_path` выполняется первым и коммитится: в Postgres SET без
-    LOCAL переживает коммит транзакции, поэтому последующие `session.commit()`
-    фиксируют данные по-настоящему.
-    """
-    async with engine.connect() as conn:
-        await conn.execute(text(f'SET search_path TO "{schema}"'))
-        await conn.commit()
-        factory = async_sessionmaker(bind=conn, class_=AsyncSession, expire_on_commit=False)
-        async with factory() as db:
-            try:
-                yield db
-            finally:
-                await db.rollback()
+# Своё соединение у кода под тестом -> изоляция коммитами + TRUNCATE после теста.
+DB_STRATEGY = dbcleaner.STRATEGY_TRUNCATION
 
 
-async def _seed(engine: AsyncEngine, schema: str) -> str:
+async def _seed(cleaner: dbcleaner.Cleaner) -> str:
     """Пользователь-админ + продукт с маршрутом: позиция после импорта валидна."""
-    async with _durable_session(engine, schema) as db:
+    async with cleaner.session() as db:
         sections: list[Section] = []
         for code, name in (("CUT", "Cut"), ("PACKING", "Pack")):
             section = await db.scalar(select(Section).where(Section.code == code))
@@ -112,11 +98,11 @@ async def _seed(engine: AsyncEngine, schema: str) -> str:
         return email
 
 
-async def _call_simulate(engine: AsyncEngine, schema: str, *, headers: dict[str, str]) -> object:
+async def _call_simulate(cleaner: dbcleaner.Cleaner, *, headers: dict[str, str]) -> object:
     """Вызывает импорт с зависимостью, которая НИЧЕГО не коммитит на выходе."""
 
     async def override_get_db() -> AsyncIterator[AsyncSession]:
-        async with _durable_session(engine, schema) as db:
+        async with cleaner.session() as db:
             yield db
 
     app.dependency_overrides[get_db] = override_get_db
@@ -145,10 +131,10 @@ async def _call_simulate(engine: AsyncEngine, schema: str, *, headers: dict[str,
 
 
 async def _read_committed(
-    engine: AsyncEngine, schema: str, *, plan_id: int, change_set_id: int
+    cleaner: dbcleaner.Cleaner, *, plan_id: int, change_set_id: int
 ) -> tuple[bool, bool]:
     """Читает с соединения, которое видит только закоммиченное."""
-    async with _durable_session(engine, schema) as reader:
+    async with cleaner.session() as reader:
         plan = await reader.get(ProductionPlan, plan_id)
         change_set = await reader.get(PlanChangeSet, change_set_id)
     return plan is not None, change_set is not None
@@ -156,7 +142,7 @@ async def _read_committed(
 
 @pytest.mark.asyncio
 async def test_simulated_import_is_durable_before_response(
-    engine: AsyncEngine, module_schema_name: str
+    cleaner: dbcleaner.Cleaner,
 ) -> None:
     """Импорт плана обязан быть закоммичен ДО ответа.
 
@@ -165,18 +151,17 @@ async def test_simulated_import_is_durable_before_response(
     """
     from app.core.security import create_access_token
 
-    email = await _seed(engine, module_schema_name)
+    email = await _seed(cleaner)
     headers = {"Authorization": f"Bearer {create_access_token(subject=email)}"}
 
-    response = await _call_simulate(engine, module_schema_name, headers=headers)
+    response = await _call_simulate(cleaner, headers=headers)
     assert response.status_code == 201, response.text
     payload = response.json()
     plan_id = payload["production_plan_id"]
     change_set_id = payload["change_set_id"]
 
     plan_visible, change_set_visible = await _read_committed(
-        engine,
-        module_schema_name,
+        cleaner,
         plan_id=plan_id,
         change_set_id=change_set_id,
     )

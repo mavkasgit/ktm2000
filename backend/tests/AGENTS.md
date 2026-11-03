@@ -41,10 +41,51 @@
    per-module `DROP SCHEMA CASCADE` ≈ 0.25s × модуль — чистые расходы).
    В ручном режиме на статичной `ktm2000_test` схема дропается в teardown,
    чтобы не копилась.
-2. **Транзакция на тест** (`function scope`): каждый тест в SAVEPOINT;
-   по завершении — `rollback`.
-3. **Сброс sequence users**: перед каждым тестом
-   `ALTER TABLE users ALTER COLUMN id RESTART WITH 1` — `system_user` всегда `id = 1`.
+2. **Стратегия — на тест.** По умолчанию `Transaction`: тест идёт в одной
+   транзакции, `commit()` кода под тестом становится SAVEPOINT, по завершении —
+   `rollback`. У коммитящих пакетов (`TRUNCATION`/`DELETION`) данные
+   действительно коммитятся, поэтому после **каждого** теста пакета
+   autouse-фикстура `cleaner_reset` возвращает базовую линию:
+   `TRUNCATE … RESTART IDENTITY CASCADE` (или `DELETE` + сброс
+   последовательностей). Маркер `usefixtures` не нужен и не является
+   способом включить уборку.
+3. **`system_user` с `id = 1` — только у `Transaction`.** Перед каждым таким
+   тестом сбрасывается sequence пользователей и создаётся `system_user`.
+   Коммитящие пакеты не получают ни SAVEPOINT, ни `system_user`: они создают
+   нужных им пользователей сами.
+
+### Cleaner: один на пакет, `cleaner.session()` вместо ручных транзакций
+
+Изоляцию владеет [`dbcleaner.py`](dbcleaner.py) — порт
+[mokevnin/dbcleaner](https://github.com/mokevnin/dbcleaner). Один `Cleaner`
+на модуль строит базовую линию (`setup` = схема, enum-типы, `create_all`,
+триггеры) и выдаёт сессии.
+
+- **Тест, который трогает базу, берёт сессию у Cleaner'а** —
+  `async with cleaner.session() as db` (или фикстуры `session`/`client`,
+  которые уже это делают). Свою транзакцию `await conn.begin()` для изоляции
+  не открывать: это работа Cleaner'а, и вторая транзакция ломает вложенные
+  `commit()` приложения.
+- Стратегия по умолчанию — `Transaction` (откат всего теста). Пакет
+  объявляет другую строкой `DB_STRATEGY = dbcleaner.STRATEGY_…` на уровне
+  модуля, и только если код под тестом ходит в базу **своим соединением**
+  (второй пул, отдельный процесс, `LISTEN/NOTIFY`), — тогда `TRUNCATION`
+  (или `DELETION`, если `TRUNCATE` недоступен). `STRATEGY_NULL` — для
+  среза, закоммиченного один раз на модуль (демо-сидер).
+- После теста коммитящую стратегию откатывает **autouse**-фикстура
+  `cleaner_reset`: объявить `DB_STRATEGY` достаточно, отдельный
+  `pytest.mark.usefixtures("cleaner_reset")` не нужен. Ручные
+  `_cleanup()`-простыни с `DELETE` по списку таблиц больше не нужны:
+  `TRUNCATE … RESTART IDENTITY CASCADE` возвращает и данные, и
+  последовательности, а `Deletion` (там, где `TRUNCATE` недоступен) после
+  `DELETE` сбрасывает последовательности удалённых таблиц.
+- **Guard на имя базы** сравнивает маркер как токен, а не подстроку:
+  `ktm2000_test`, `app_e2e`, `scratch_pad` проходят, а `latest`, `contest`
+  и `attest` — нет. Ослаблять его нельзя: промах DSN иначе вычистит чужую
+  базу.
+- Контракт самого Cleaner'а (guard, `Truncation`, `Deletion`, `Null`) покрыт
+  [`test_dbcleaner.py`](test_dbcleaner.py); `Transaction` — ещё и
+  [`test_hybrid_db_isolation.py`](test_hybrid_db_isolation.py).
 
 Режим: `PYTEST_DB_MODE=hybrid` (единственный поддерживаемый).
 
@@ -111,7 +152,8 @@ ktm_mig_<10 hex>` работает **без** `--force`. Сам `--force` ост
 ## Правила написания тестов
 
 - **Динамические ID** — не полагайтесь на `id = 1, 2, 3`; читайте `product.id`, `task.id` из объекта.
-- **Изоляция транзакций** — `session.commit()` в тесте фиксирует только savepoint, не основную транзакцию.
+- **Изоляция базы** — сессию берём у Cleaner'а (`async with cleaner.session() as db`); руками транзакцию для изоляции теста не открываем. `session.commit()` в тесте фиксирует только savepoint, не основную транзакцию (стратегия `Transaction`).
+- **Исключение — миграционные пакеты** (`test_migrations.py`, `test_hanger_norm_key_migration_218.py`): они гоняют alembic на своей базе `ktm_mig_*` и открывают транзакции сами. Это роль `ScratchDatabase` (своя база на проверку), а не изоляция теста.
 - **Не мутируйте module-scope данные** — общие фикстуры `scope="module"` только для чтения.
 - **Integrity helper** — после Transfer/StockTransaction:
   ```python

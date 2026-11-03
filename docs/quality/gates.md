@@ -33,7 +33,7 @@
 | `backend-tests` | full | pytest backend (создаёт свою БД) | CI backend-tests.yml | да | prove-checks --heavy 2026-11-03 |
 | `frontend-unit` | full | vitest с покрытием | CI frontend-tests.yml | да | prove-checks --heavy 2026-11-03 |
 | `frontend-test-count` | full | vitest-набор не меньше записанного в baseline | CI frontend-tests.yml | да | prove-checks --heavy 2026-11-03 |
-| `dev-deps` | full | dev-пакет, не названный ни в одном файле ни именем, ни бинарником | CI frontend-tests.yml | в strict (в CI он strict всегда) | prove-checks 2026-11-03 |
+| `dev-deps` | full | dev-пакет фронтенда или корня, не названный ни в одном файле кода/конфига ни именем, ни бинарником (Markdown — не использование); report-only с 2026-11-03 до пересмотра 2027-05-01, в гейте — strict | CI frontend-tests.yml (report-only) | в strict локально; в CI — нет до пересмотра | prove-checks 2026-11-03 |
 | `alembic-drift` | нет локально | дрейф миграций против heads | CI migrations.yml | в CI | exempt: локально не запускается |
 | `e2e-smoke` | e2e | Playwright smoke на своём клоне базы | CI e2e-smoke.yml | в CI | exempt: отдельный ярус |
 <!-- gates-steps:end -->
@@ -49,6 +49,21 @@
 С `--strict` шаг, недоступный локально, краснеет, а не печатается строкой
 missing. Локально missing — честная пометка, а не зелёный итог: без этих
 проверок зелёный гейт не означает «всё как в CI».
+
+Тесты, типы, линтеры и сборки (`backend-tests`, `frontend-unit`,
+`frontend-types`, `frontend-types-e2e`, `frontend-lint`, `scripts-tests`,
+`ruff`) идут через задачи, а задачи берут слот машинного семафора `heavy`
+(корневой `AGENTS.md`, «Тяжёлые команды»): два агента на одной машине не
+запускают pytest, `tsc`, линтер и сборку одновременно. Порядок шагов внутри
+одного гейта не меняется — слот берётся на каждый шаг.
+
+Обёртки проверены прогоном каждой задачи (2026-11-03): `npm run gate` —
+все локальные шаги, `npm --prefix frontend run build` — 18.8 с,
+`npm run test:scripts` — 94 теста, `npm run test:pytest -- -k dbcleaner` — 28
+тестов. Единственный шаг, который сначала покраснел, — `frontend-test-count`:
+из `run-slots.test.ts` убраны дубли `tryAcquireSlot`/`releaseSlot` (их теперь
+проверяет `scripts/heavy-core.test.js`), поэтому baseline явно обновлён на
+1531 и шаг позеленел.
 
 Пока это цель, а не факт: в CI гейт целиком не запускается ни одним workflow —
 проверки разобраны по отдельным джобам (`ruff.yml`, `backend-tests.yml`, …), а
