@@ -44,10 +44,16 @@ def _count_sql(session):
 pytestmark = pytest.mark.asyncio
 
 
-async def _seed_product_stock(session, *, sku: str, stock_qty: Decimal) -> tuple[Product, Section]:
-    product = Product(sku=sku, name=sku, type=ProductType.finished_good, unit="pcs", is_active=True)
-    stock = Section(code=f"{sku}-STK", name="Склад", type="raw_stock", is_active=True, sort_order=0)
-    session.add_all([product, stock])
+async def _add_stock(
+    session,
+    *,
+    product: Product,
+    stock_qty: Decimal,
+    code: str,
+) -> Section:
+    """Положить остаток продукта на новый склад-хранилище."""
+    stock = Section(code=code, name="Склад", type="raw_stock", is_active=True, sort_order=0)
+    session.add(stock)
     await session.flush()
 
     svc = StockCommandService()
@@ -62,6 +68,19 @@ async def _seed_product_stock(session, *, sku: str, stock_qty: Decimal) -> tuple
         ),
     )
     await session.commit()
+    return stock
+
+
+async def _seed_product_stock(session, *, sku: str, stock_qty: Decimal) -> tuple[Product, Section]:
+    product = Product(sku=sku, name=sku, type=ProductType.finished_good, unit="pcs", is_active=True)
+    session.add(product)
+    await session.flush()
+    stock = await _add_stock(
+        session,
+        product=product,
+        stock_qty=stock_qty,
+        code=f"{sku}-STK",
+    )
     return product, stock
 
 
@@ -73,8 +92,13 @@ async def _seed_released_position(
     stock_section: Section,
     prod_section: Section,
     quantity: Decimal,
+    suffix: str = "",
 ) -> PlanPosition:
-    plan = ProductionPlan(plan_no="P-REM", name="Remainder plan", status=ProductionPlanStatus.draft)
+    plan = ProductionPlan(
+        plan_no=f"P-REM{suffix}",
+        name="Remainder plan",
+        status=ProductionPlanStatus.draft,
+    )
     session.add(plan)
     await session.flush()
 
@@ -101,7 +125,7 @@ async def _seed_released_position(
 
     batch = ReleaseBatch(
         production_plan_id=plan.id,
-        batch_no="RB-1",
+        batch_no=f"RB-1{suffix}",
         name="Batch 1",
         batch_type=ReleaseBatchType.manual,
         status=ReleaseBatchStatus.released,
@@ -431,4 +455,193 @@ async def test_pair_demand_sql_does_not_grow_with_distinct_pairs(session) -> Non
     # Первый замер сделан, когда позиция была только у первой пары, поэтому
     # `one` содержит лишь её артикулы — равенство с `many` здесь неверно.
     assert one == {pairs[0][0].id: 100.0, pairs[0][1].id: 100.0}
+
+
+async def _new_production_route(session, suffix: str) -> tuple[Section, ProductionRoute]:
+    """Свой участок и маршрут — две позиции одного теста не делят stage."""
+    prod_section = Section(
+        code=f"REM-{suffix}-PROD",
+        name="Цех",
+        type="production",
+        is_active=True,
+        sort_order=1,
+    )
+    route = ProductionRoute(name=f"R-REM-{suffix}", is_active=True)
+    session.add_all([prod_section, route])
+    await session.flush()
+    return prod_section, route
+
+
+async def test_alias_group_pool_adds_equivalent_stock_and_foreign_demand(
+    session,
+) -> None:
+    """Остаток эквивалента входит в пул, чужая позиция любого члена его занимает.
+
+    Позиция на A видит остаток B; чужая открытая позиция на B уменьшает
+    «доступно», а собственная позиция себя не вычитает.
+    """
+    product_a, stock_a = await _seed_product_stock(
+        session, sku="REM-POOL-A", stock_qty=Decimal(100)
+    )
+    product_b, stock_b = await _seed_product_stock(
+        session, sku="REM-POOL-B", stock_qty=Decimal(250)
+    )
+    product_a.aliases = [product_b.sku]
+    await session.commit()
+
+    prod_a, route_a = await _new_production_route(session, "POOL-OWN")
+    prod_b, route_b = await _new_production_route(session, "POOL-FOREIGN")
+    own = await _seed_released_position(
+        session,
+        product=product_a,
+        route=route_a,
+        stock_section=stock_a,
+        prod_section=prod_a,
+        quantity=Decimal(50),
+        suffix="-POOL-OWN",
+    )
+    await _seed_released_position(
+        session,
+        product=product_b,
+        route=route_b,
+        stock_section=stock_b,
+        prod_section=prod_b,
+        quantity=Decimal(120),
+        suffix="-POOL-FOREIGN",
+    )
+
+    figures = await compute_position_stock_figures(
+        session, [(own.id, [product_a.id], 50.0)]
+    )
+
+    # 100 + 250 — одна куча; 50 своей позиции не вычитаются, 120 чужой — да.
+    assert figures[own.id].free_stock == 350.0
+    assert figures[own.id].available_for_position == 230.0
+    assert figures[own.id].deficit == 0.0
+
+
+async def test_free_stock_breakdown_lists_group_skus_and_sums_to_free(
+    session,
+) -> None:
+    product_a, _ = await _seed_product_stock(
+        session, sku="REM-BD-A", stock_qty=Decimal(100)
+    )
+    product_b, _ = await _seed_product_stock(
+        session, sku="REM-BD-B", stock_qty=Decimal(250)
+    )
+    product_a.aliases = [product_b.sku]
+    await session.commit()
+
+    figures = await compute_position_stock_figures(
+        session, [(1, [product_a.id], 0.0)]
+    )
+    fields = figures[1].as_fields()
+
+    assert fields["free_stock_quantity"] == 350.0
+    assert fields["free_stock_breakdown"] == [
+        {"product_id": product_a.id, "sku": "REM-BD-A", "quantity": 100.0},
+        {"product_id": product_b.id, "sku": "REM-BD-B", "quantity": 250.0},
+    ]
+    assert sum(
+        row["quantity"] for row in fields["free_stock_breakdown"]
+    ) == fields["free_stock_quantity"]
+
+
+async def test_no_group_is_none_but_group_without_balance_is_zero(session) -> None:
+    """«Нет данных» и «действительно ноль» остаются разными ответами."""
+    product = Product(
+        sku="REM-ZERO",
+        name="REM-ZERO",
+        type=ProductType.finished_good,
+        unit="pcs",
+        is_active=True,
+    )
+    session.add(product)
+    await session.commit()
+
+    zero = await compute_position_stock_figures(
+        session, [(1, [product.id], 10.0)]
+    )
+    assert zero[1].free_stock == 0.0
+    assert zero[1].available_for_position == 0.0
+    assert zero[1].deficit == 10.0
+    assert zero[1].as_fields()["free_stock_breakdown"] == []
+
+    missing = await compute_position_stock_figures(
+        session, [(2, [2_000_000_000], 10.0)]
+    )
+    assert missing[2].free_stock is None
+    assert missing[2].available_for_position is None
+    assert missing[2].deficit is None
+    assert missing[2].as_fields()["free_stock_breakdown"] == []
+
+
+async def test_pair_in_one_group_needs_two_quantities(session) -> None:
+    """Пара внутри одной группы занимает ``2Q`` этой группы, а не ``Q``."""
+    product_a, product_b = (await _pair_setup(session))[0]
+    product_a.aliases = [product_b.sku]
+    await session.commit()
+    await _add_stock(
+        session,
+        product=product_a,
+        stock_qty=Decimal(400),
+        code="REM-SAME-GROUP-A-STK",
+    )
+    positions = await _seed_released_pair_positions(
+        session,
+        product_a=product_a,
+        product_b=product_b,
+        quantity=Decimal(300),
+        count=1,
+        suffix="same-group",
+    )
+
+    figures = await compute_position_stock_figures(
+        session,
+        [(positions[0].id, [product_a.id, product_b.id], 300.0)],
+    )
+
+    assert figures[positions[0].id].free_stock == 400.0
+    assert figures[positions[0].id].available_for_position == 400.0
+    assert figures[positions[0].id].deficit == 200.0
+
+
+async def test_pair_in_different_groups_binds_to_weakest_group(session) -> None:
+    """Пара в разных группах связывает минимум, дефицит — максимум по группам."""
+    product_a, product_b = (await _pair_setup(session))[0]
+    await _add_stock(
+        session,
+        product=product_a,
+        stock_qty=Decimal(500),
+        code="REM-DIFF-GROUP-A-STK",
+    )
+    await _add_stock(
+        session,
+        product=product_b,
+        stock_qty=Decimal(100),
+        code="REM-DIFF-GROUP-B-STK",
+    )
+    positions = await _seed_released_pair_positions(
+        session,
+        product_a=product_a,
+        product_b=product_b,
+        quantity=Decimal(200),
+        count=1,
+        suffix="diff-group",
+    )
+
+    figures = await compute_position_stock_figures(
+        session,
+        [(positions[0].id, [product_a.id, product_b.id], 200.0)],
+    )
+    position = figures[positions[0].id]
+
+    # A: 500 свободно, нужно 200 — не связывает. B: 100 — связывает и по
+    # свободному, и по доступному; дефицит B — 200 − 100.
+    assert position.free_stock == 100.0
+    assert position.available_for_position == 100.0
+    assert position.deficit == 100.0
+    assert position.as_fields()["free_stock_breakdown"] == [
+        {"product_id": product_b.id, "sku": product_b.sku, "quantity": 100.0}
+    ]
 

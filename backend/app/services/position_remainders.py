@@ -32,6 +32,11 @@
 Оперативный баланс цеховых секций в остаток не входит: материал,
 выданный открытой задаче, лежит на участке как баланс участка, но
 свободным сырьём для планирования он не является.
+
+С #394 (эквивалентные артикулы, ADR-0073) те же три числа считаются по
+группе: остаток и спрос суммируются по всем её членам, «свой» спрос
+вычитается по группе, а раскладка ``free_stock_breakdown`` показывает
+SKU, из которых сложился пул.
 """
 
 from __future__ import annotations
@@ -46,6 +51,11 @@ from app.models.internal_plan import SectionPlanLine
 from app.models.production_plan import PlanPosition, PlanPositionStatus
 from app.models.section import Section
 from app.models.work_task import CLOSED_WORK_TASK_STATUSES, WorkTask
+from app.services.product_alias_groups import (
+    AliasGroup,
+    AliasGroups,
+    load_alias_groups,
+)
 from app.services.route_storage_classifier import STOCK_TYPES
 from app.stock.models import QualityState, StockBalance
 
@@ -59,31 +69,65 @@ class ProductStockFigures:
 
 
 @dataclass(frozen=True)
-class PositionStockFigures:
-    """Три числа индикатора позиции.
+class StockBreakdownLine:
+    """Строка раскладки свободного остатка группы по фактическому SKU."""
 
-    Любое из них ``None`` означает «данных о наличии нет» — индикатор не
-    показывается. Ноль — это ноль, а не неизвестно.
+    product_id: int
+    sku: str | None
+    quantity: float
+
+
+@dataclass(frozen=True)
+class PositionStockFigures:
+    """Три числа индикатора позиции и раскладка группы по SKU.
+
+    Любое из чисел ``None`` означает «данных о наличии нет» — индикатор не
+    показывается. Ноль — это ноль, а не неизвестно. ``breakdown`` — та
+    группа, которая дала ``free_stock`` (при паре в нескольких группах —
+    связывающая, с минимальным ``free_g``); для ``None`` список пуст.
     """
 
     free_stock: float | None
     available_for_position: float | None
     deficit: float | None
+    breakdown: tuple[StockBreakdownLine, ...] = ()
 
-    def as_fields(self) -> dict[str, float | None]:
-        """Три числа в форме ответа API.
+    def as_fields(self) -> dict[str, object]:
+        """Числа индикатора в форме ответа API.
 
         Форму держит сам доменный тип: раскладка «три поля + округление»
         повторялась в семи местах, и правка четвёртого числа индикатора
         требовала бы семи одинаковых правок. Округление здесь же, и
         ``None`` («нет данных о наличии») переживает его нетронутым.
+
+        ``free_stock_breakdown`` — расшифровка группы по SKU (§3 спеки).
+        Последняя строка подправляется на копейки округления, чтобы сумма
+        раскладки сходилась с уже округлённым ``free_stock_quantity``.
         """
+        rounded_free = _rounded_or_none(self.free_stock)
+        breakdown = [
+            {
+                "product_id": line.product_id,
+                "sku": line.sku,
+                "quantity": round(line.quantity, 3),
+            }
+            for line in self.breakdown
+        ]
+        if breakdown and rounded_free is not None:
+            delta = round(
+                rounded_free - sum(row["quantity"] for row in breakdown), 3
+            )
+            if delta:
+                breakdown[-1]["quantity"] = round(
+                    breakdown[-1]["quantity"] + delta, 3
+                )
         return {
-            "free_stock_quantity": _rounded_or_none(self.free_stock),
+            "free_stock_quantity": rounded_free,
             "available_remainder_quantity": _rounded_or_none(
                 self.available_for_position
             ),
             "deficit_quantity": _rounded_or_none(self.deficit),
+            "free_stock_breakdown": breakdown,
         }
 
 
@@ -95,7 +139,11 @@ async def free_stock_by_product_ids(
     db: AsyncSession,
     product_ids: set[int],
 ) -> dict[int, float]:
-    """«Свободно на складах»: годный остаток по складам-хранилищам."""
+    """«Свободно на складах»: годный остаток по складам-хранилищам.
+
+    Результат — разбивка по ``product_id``, поэтому он же служит
+    ``free_stock_breakdown`` группы: отдельного запроса за раскладкой нет.
+    """
     if not product_ids:
         return {}
 
@@ -261,38 +309,112 @@ def position_stock_figures(
     )
 
 
+def _position_group_figures(
+    *,
+    aliases: AliasGroups,
+    effective_ids: Sequence[int],
+    required_quantity: float,
+    free_by_product: dict[int, float],
+    total_demand: dict[int, float],
+) -> PositionStockFigures:
+    """Свести пул групп позиции в три числа и раскладку (#394, спека §3).
+
+    ``free_g`` — сумма остатка всех членов группы; ``demand_g`` — спрос
+    открытых позиций на любом члене; ``own_g`` — потребность самой позиции
+    в этой группе (``Q`` на каждый её компонент, для пары в одной группе —
+    ``2Q``). ``available_g = max(0, free_g − max(0, demand_g − own_g))``;
+    позиция не вычитает сама себя.
+
+    Пара в нескольких группах связывает минимум: ``free``/``available`` —
+    минимум по группам, ``deficit`` — максимум недостачи по группе.
+    """
+    unique_ids = tuple(dict.fromkeys(int(product_id) for product_id in effective_ids))
+    if not unique_ids:
+        return PositionStockFigures(None, None, None)
+
+    groups: dict[int, AliasGroup] = {}
+    for product_id in unique_ids:
+        group = aliases.group_for(product_id)
+        if group is None:
+            # Продукт не резолвится в группу — данных о наличии нет.
+            return PositionStockFigures(None, None, None)
+        groups[group.key] = group
+
+    own_by_product = dict.fromkeys(unique_ids, float(required_quantity))
+    metrics: list[tuple[AliasGroup, float, float, float]] = []
+    for group in groups.values():
+        free_g = sum(free_by_product.get(pid, 0.0) for pid in group.product_ids)
+        demand_g = sum(total_demand.get(pid, 0.0) for pid in group.product_ids)
+        own_g = sum(own_by_product.get(pid, 0.0) for pid in group.product_ids)
+        available_g = max(0.0, free_g - max(0.0, demand_g - own_g))
+        metrics.append((group, free_g, available_g, own_g))
+
+    free_stock = min(free_g for _group, free_g, _available, _own in metrics)
+    available = min(available_g for _group, _free, available_g, _own in metrics)
+    deficit = max(
+        max(0.0, own_g - available_g)
+        for _group, _free, available_g, own_g in metrics
+    )
+
+    # Раскладка — связывающая группа: минимальный free_g, при равенстве —
+    # меньший group_key (детерминированно).
+    binding_group = min(metrics, key=lambda item: (item[1], item[0].key))[0]
+    breakdown = tuple(
+        StockBreakdownLine(
+            product_id=product_id,
+            sku=sku,
+            quantity=free_by_product[product_id],
+        )
+        for product_id, sku in zip(
+            binding_group.product_ids, binding_group.skus, strict=True
+        )
+        if free_by_product.get(product_id, 0.0) > 0
+    )
+    return PositionStockFigures(
+        free_stock=free_stock,
+        available_for_position=available,
+        deficit=deficit,
+        breakdown=breakdown,
+    )
+
+
 async def compute_position_stock_figures(
     db: AsyncSession,
     positions: Sequence[tuple[int, list[int], float]],
 ) -> dict[int, PositionStockFigures]:
-    """Индикатор сразу для нескольких позиций — два запроса, не N+1.
+    """Индикатор сразу для нескольких позиций — три запроса, не N+1.
 
     ``positions`` — тройки ``(plan_position_id, эффективные product_id,
     плановое количество)``. Позиции без артикулов или без данных о наличии
     получают три ``None``.
+
+    Расчёт — по группе эквивалентов (#394): остатки и спрос читаются сразу
+    по всем членам групп позиций, поэтому число SQL не растёт с числом
+    позиций. Справочник продуктов — один SELECT на вызов (или на кэш).
     """
     product_ids: set[int] = set()
     for _position_id, effective_ids, _quantity in positions:
         product_ids.update(effective_ids)
 
-    free_by_product, total_demand = await free_stock_by_product_ids(
-        db, product_ids
-    ), await committed_demand_by_product_ids(db, product_ids)
+    if not product_ids:
+        return {
+            position_id: PositionStockFigures(None, None, None)
+            for position_id, _effective_ids, _quantity in positions
+        }
+
+    aliases = await load_alias_groups(db, product_ids)
+    expanded_ids = aliases.expand(product_ids)
+    free_by_product = await free_stock_by_product_ids(db, expanded_ids)
+    total_demand = await committed_demand_by_product_ids(db, expanded_ids)
 
     result: dict[int, PositionStockFigures] = {}
     for position_id, effective_ids, required_quantity in positions:
-        own_demand = dict.fromkeys(effective_ids, required_quantity)
-        per_product = {
-            product_id: product_stock_figures(
-                product_id=product_id,
-                free_by_product=free_by_product,
-                total_demand=total_demand,
-                own_demand=own_demand,
-            )
-            for product_id in effective_ids
-        }
-        result[position_id] = position_stock_figures(
-            per_product, effective_ids, required_quantity=required_quantity
+        result[position_id] = _position_group_figures(
+            aliases=aliases,
+            effective_ids=effective_ids,
+            required_quantity=required_quantity,
+            free_by_product=free_by_product,
+            total_demand=total_demand,
         )
     return result
 
