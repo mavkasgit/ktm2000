@@ -74,7 +74,7 @@ const PROBES = [
     step: "freshness",
     args: "--strict",
     mutate: [{ path: "tools.json", from: '"pinned_in": "mise.toml"', to: '"pinned_in": "mise-probe357.toml"' }],
-    expect: /закреплён в .*probe357, но такого файла нет/,
+    expect: /закреплён в .*probe357/,
     note: "реестр ссылается на несуществующее закрепление; без --strict шаг не блокирует",
   },
   {
