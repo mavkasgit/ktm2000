@@ -19,8 +19,8 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
-from app.core.database import async_session  # noqa: E402
-from app.services.import_storage import sweep_orphan_import_files  # noqa: E402
+from app.core.database import async_session
+from app.services.import_storage import sweep_orphan_import_files
 
 
 async def main() -> int:

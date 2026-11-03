@@ -145,7 +145,7 @@ e2e и backend-тесты агент запускает сам: `npm --prefix fr
 4. Коммиты — conventional commits на русском (`feat: …`, `fix: …`).
 5. Stock ledger — `StockTransaction` единый источник правды; детали → `docs/project-overview.md`.
 6. Transfer ↔ StockTransaction integrity — `assert_no_invariants_violations` в тестах.
-7. Тесты, которые трогают БД, берут сессию у Cleaner'а пакета (`async with cleaner.session() as db` либо фикстуры `session`/`client`) и **не открывают транзакцию руками** для изоляции: стратегии и guard → [`backend/tests/AGENTS.md`](backend/tests/AGENTS.md), решение → [ADR-0071](docs/adr/0071-izolyaciyu-testovoy-bd-derzhit-cleaner.md). Исключение — миграционные пакеты (`test_migrations.py`, `test_hanger_norm_key_migration_218.py`): они гоняют alembic на своей базе `ktm_mig_*` и открывают транзакции сами, это роль `ScratchDatabase`, а не изоляция теста.
+7. Тесты, которые трогают БД, берут сессию у Cleaner'а пакета (`async with cleaner.session() as db` либо фикстуры `session`/`client`) и **не открывают транзакцию руками** для изоляции: стратегии и guard → [`backend/tests/AGENTS.md`](backend/tests/AGENTS.md), решение → [ADR-0072](docs/adr/0072-izolyaciyu-testovoy-bd-derzhit-cleaner.md). Исключение — миграционные пакеты (`test_migrations.py`, `test_hanger_norm_key_migration_218.py`): они гоняют alembic на своей базе `ktm_mig_*` и открывают транзакции сами, это роль `ScratchDatabase`, а не изоляция теста.
 
 ## Документация (указатели)
 

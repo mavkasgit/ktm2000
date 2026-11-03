@@ -310,7 +310,10 @@ async def restore_pinned_import_records(
     # Ленивый импорт: excel_import — парсер, он не нужен на пути обычной
     # уборки/purge, и так избегаем любого порядка импорта при регистрации
     # слушателей в main.lifespan.
-    from app.services.excel_import import detect_workbook_format, validate_excel_extension
+    from app.services.excel_import import (
+        detect_workbook_format,
+        validate_excel_extension,
+    )
 
     storage_dir = Path(settings.IMPORT_STORAGE_DIR)
     created: list[ImportFile] = []
@@ -322,10 +325,12 @@ async def restore_pinned_import_records(
         ).scalars().first()
         if existing is not None:
             continue
-        if not storage_dir.is_dir():
+        if not await asyncio.to_thread(storage_dir.is_dir):
             continue
-        match = next(
-            (p for p in storage_dir.glob(f"{prefix}*") if p.is_file()), None
+        match = await asyncio.to_thread(
+            lambda: next(
+                (p for p in storage_dir.glob(f"{prefix}*") if p.is_file()), None
+            )
         )
         if match is None:
             # Файла на этой машине нет — нечего и возвращать.

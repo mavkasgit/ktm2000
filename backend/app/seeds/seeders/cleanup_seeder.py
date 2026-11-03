@@ -21,9 +21,9 @@ from app.models.release_batch import ReleaseBatch, ReleaseBatchPosition
 from app.models.rework_task import ReworkTask
 from app.models.transfer import Transfer, TransferDiscrepancy
 from app.models.work_task import WorkTask
+from app.services.import_storage import pinned_rows_clause, schedule_import_file_purge
 from app.stock.import_models import StockImportBatch
 from app.stock.models import StockBalance, StockTransaction
-from app.services.import_storage import pinned_rows_clause, schedule_import_file_purge
 
 
 async def clear_generated_production_data(db: AsyncSession) -> dict[str, int]:

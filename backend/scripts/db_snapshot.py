@@ -25,7 +25,7 @@ from pathlib import Path
 # app.services.import_pinned — лист-константа без зависимостей от settings/ORM
 # (см. файл), поэтому импорт лёгкий и не тянет конфигурацию приложения.
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
-from app.services.import_pinned import is_pinned_stored_path  # noqa: E402
+from app.services.import_pinned import is_pinned_stored_path
 
 ROOT = Path(__file__).resolve().parents[2]
 ENV_FILE = ROOT / ".env.dev"

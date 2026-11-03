@@ -116,3 +116,9 @@ extend-immutable-calls = [
 # планировать, а xdist разносит тесты по процессам. `asyncio.to_thread` ничего не
 # разблокирует и только усложнит чтение.
 "backend/tests/test_migrations.py" = ["ASYNC221"]
+# `ASYNC240` — `path.exists()`/`IMPORTS_DIR.glob()` внутри async-тестов
+# жизненного цикла импортов (#288): синхронное обращение к файлу и есть предмет
+# проверки («байты удалены или нет»), обёртка в `asyncio.to_thread` сделала бы
+# утверждение нечитаемым, ничего не разблокировав: pytest-asyncio даёт каждой
+# корутине свой loop, а xdist разносит модули по процессам.
+"backend/tests/test_import_file_lifecycle_288.py" = ["ASYNC240"]

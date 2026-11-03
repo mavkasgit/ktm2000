@@ -73,7 +73,9 @@ async def lifespan(app: FastAPI):
     # Импорт модуля регистрирует session-слушателя «запись удалена — файл
     # удалён» на все коммиты; без него purge работал бы только в процессах,
     # импортировавших сервис случайно.
-    from app.services import import_storage  # noqa: F401 — side-effect: слушатели событий
+    from app.services import (
+        import_storage,  # noqa: F401 — side-effect: слушатели событий
+    )
     from app.services.import_orphan_scheduler import start_import_orphan_scheduler
 
     if settings.IMPORT_ORPHAN_SWEEP_ENABLED:

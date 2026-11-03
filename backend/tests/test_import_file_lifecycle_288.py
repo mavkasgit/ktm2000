@@ -156,9 +156,9 @@ async def test_hide_keeps_record_and_file_and_downloads(session: AsyncSession, a
 
 async def test_sweep_removes_old_orphan_keeps_young_and_recorded(session: AsyncSession) -> None:
     # (a) сирота без записи старше суток — удаляется
-    old_sha, old_path = _write_bytes("old-orphan", age_hours=48)
+    _old_sha, old_path = _write_bytes("old-orphan", age_hours=48)
     # (b) сирота моложе порога — не трогается (гонка: байты раньше строки)
-    fresh_sha, fresh_path = _write_bytes("fresh-orphan", age_hours=0)
+    _fresh_sha, fresh_path = _write_bytes("fresh-orphan", age_hours=0)
     # (c) живой импорт под записью, сколько бы ни лежал — не трогается (п.4)
     rec_sha, rec_path = _write_bytes("recorded", age_hours=1000)
     await _add_record(session, sha=rec_sha, path=rec_path)
