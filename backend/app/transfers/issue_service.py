@@ -21,10 +21,12 @@ ops-ось, а «передавать» пришлось бы через лим�
 
 Что делает ``execute_issue``:
 
-1. подбирает план (``source_selection.build_issue_plan``) и **блокирует
-   строки баланса-кандидатов** ``SELECT … FOR UPDATE`` по id, после чего
-   пересчитывает план под блокировкой — иначе две одновременные выдачи
-   одного склада вычерпали бы его дважды (#282, решение 5);
+1. **блокирует FOR UPDATE все строки баланса этого артикула на складах**
+   (ключ ``артикул × склад`` — шире, чем любой возможный план подбора) и
+   только после этого подбирает план ровно один раз — иначе две
+   одновременные выдачи одного склада вычерпали бы его дважды, а
+   предвыборка-пересчёт в той же сессии вернула бы устаревшие copies
+   из identity map;
 2. пишет N передач в одной сессии: непредвиденная техническая ошибка на
    середине откатывает операцию целиком, а «собрано меньше» — исход, а не
    ошибка (стратегии ``shortage_strategy``);
@@ -55,7 +57,7 @@ from app.models.section import Section
 from app.models.transfer import Transfer, TransferStatus
 from app.models.work_task import CLOSED_WORK_TASK_STATUSES, WorkTask, WorkTaskStatus
 from app.services.action_journal_service import action_journal_service
-from app.services.route_storage_classifier import SECTION_TYPE_PRODUCTION
+from app.services.route_storage_classifier import SECTION_TYPE_PRODUCTION, STOCK_TYPES
 from app.services.shopfloor.cache import _refresh_section_plan_line_cache
 from app.services.shopfloor.common import (
     _check_idempotency,
@@ -540,25 +542,39 @@ async def execute_issue(
             "skipped_stages": [],
         }
 
-    # 1. Подбор без блокировки — только чтобы узнатьCandidates-строки баланса.
-    preview_plan = await build_issue_plan(
-        db,
-        position=position,
-        product_id=product_id,
-        required=required,
-        excluded_balance_ids=excluded,
-    )
-    candidate_ids = [c.balance_id for c in preview_plan.candidates]
-
-    # 2. Блокировка кандидатов по id (порядок фиксирован → нет взаимных
-    # блокировок), пересчёт плана под блокировкой (#282, решение 5): без неё
-    # две одновременные выдачи вычерпали бы один склад дважды.
-    if candidate_ids:
+    # 1. Замок — ВСЕ строки баланса этого артикула на складах в системном
+    # порядке, план считается ровно один раз и только ПОСЛЕ лока.
+    # Замок шире кандидатов: подбор отсекает строки в SQL по `balance_qty > 0`,
+    # а размер/признак операций фильтрует на python-стороне, поэтому строка,
+    # пустая или ушедшая в минус на момент подбора (минус легален после
+    # `negative_remainder`/`allow_negative`), может быть наполнена параллельной
+    # операцией и войти в план. Залоченным должен быть весь ключ, по которому
+    # план вообще способен ходить (артикул × складские секции), а не только
+    # предыдущая выборка кандидатов — иначе такая строка вычерпывается без
+    # лока. Размер/признак в замок не уточняем: их python-канонизация живёт в
+    # source_selection, и повторять её в SQL означало бы разъезд фильтров замка
+    # и плана. Порядок — по id: детерминирован для обеих сторон гонки,
+    # взаимных блокировок не допускает.
+    # План — один раз, под замком: повторный SELECT через ту же сессию не
+    # перезаписывает атрибуты строк, уже лежащих в identity map, и «пересчёт
+    # плана» посчитал бы количества первого прохода — двойное вычерпывание
+    # вернулось бы незамеченным. `populate_existing` на запросе замка доносит
+    # фактические `balance_qty` в сессию (в том числе для строк, прочитанных
+    # вызывающим кодом до выдачи), поэтому и подбор, и последующее чтение
+    # вычерпываемых балансов работают на свежих строках.
+    stock_location_ids = (
+        await db.execute(select(Section.id).where(Section.type.in_(STOCK_TYPES)))
+    ).scalars().all()
+    if stock_location_ids:
         await db.execute(
             select(StockBalance)
-            .where(StockBalance.id.in_(candidate_ids))
+            .where(
+                StockBalance.product_id == product_id,
+                StockBalance.location_id.in_(stock_location_ids),
+            )
             .order_by(StockBalance.id)
             .with_for_update()
+            .execution_options(populate_existing=True)
         )
     plan = await build_issue_plan(
         db,
@@ -584,7 +600,7 @@ async def execute_issue(
     issue_no = issue_no_now()
     now = datetime.now(UTC)
 
-    # 3. Передачи по порядку подбора. Нехватку при ``negative_remainder``
+    # 2. Передачи по порядку подбора. Нехватку при ``negative_remainder``
     # добираем последней передачей: проводка с allow_negative уходит в минус
     # склада до закрытия последующей выдачей (#133).
     taken = [c for c in sorted(plan.candidates, key=lambda c: c.order) if c.take > 0]
@@ -621,7 +637,7 @@ async def execute_issue(
         )
         created.append(result)
 
-    # 4. Прыгнутые этапы — «Пропущено» с нашим номером выдачи.
+    # 3. Прыгнутые этапы — «Пропущено» с нашим номером выдачи.
     skipped: list[dict[str, Any]] = []
     if created:
         min_intake = min(t["target_sequence"] for t in created)
