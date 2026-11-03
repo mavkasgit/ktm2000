@@ -1,0 +1,14 @@
+{
+  "_comment": "Датированное исключение из шаблона ADR (правило — docs/night/PLAYBOOK.md: бывшее верным помечается датой, а не стирается). Восемь решений написаны до единого шаблона заголовка/меты; новый ADR сюда не добавляется без объяснения в ревью. Проверка — scripts/check-adr.js, шаг гейта adr-index.",
+  "adopted": "2026-11-03",
+  "files": [
+    "docs/adr/0015-user-notification-state.md",
+    "docs/adr/0016-izolyaciya-testovyh-bd-per-run-launcher.md",
+    "docs/adr/0018-ledger-netto-po-prichine.md",
+    "docs/adr/0021-edinaia-politika-rezolva-uzla-dejstviya.md",
+    "docs/adr/0023-uprazdnenie-tehkart-produkt-edinyy-spravochnik.md",
+    "docs/adr/0038-semantika-kolonki-i-parametry-zaprosa.md",
+    "docs/adr/0039-stranica-razdela-prishodit-svoim-chankom.md",
+    "docs/adr/0041-reestr-sbrosa-kesa-i-stale-time.md"
+  ]
+}
