@@ -1,0 +1,172 @@
+{
+  "generated_at": "2026-11-03T03:03:23.654Z",
+  "sha": "28859516884fec2bc8d3b920ae66462a519c53c8",
+  "branch": "night/2026-11-03",
+  "node": "v24.11.1",
+  "tier": "full",
+  "strict": false,
+  "steps": [
+    {
+      "status": "ok",
+      "seconds": 0.086,
+      "reason": "node 24.11.1 (.nvmrc = 24), python 3.12.10 (.python-version = 3.12)",
+      "name": "pins",
+      "what": "фактические версии языков против pin-файлов",
+      "ci": null
+    },
+    {
+      "status": "ok",
+      "seconds": 0.256,
+      "name": "registry",
+      "what": "реестр инструментов против схем и закреплений",
+      "ci": null
+    },
+    {
+      "status": "ok",
+      "seconds": 0.116,
+      "name": "codegraph-age",
+      "what": "возраст codegraph-индекса против HEAD",
+      "ci": null
+    },
+    {
+      "status": "ok",
+      "seconds": 0.605,
+      "name": "docs-links",
+      "what": "битые ссылки и карды документации",
+      "ci": "есть в CI: docs.yml"
+    },
+    {
+      "status": "ok",
+      "seconds": 0.529,
+      "name": "adr-index",
+      "what": "номера ADR уникальны, у каждого — Дата и Статус",
+      "ci": "есть в CI: docs.yml"
+    },
+    {
+      "status": "ok",
+      "seconds": 2.368,
+      "name": "scripts-tests",
+      "what": "юнит-тесты node-скриптов корня",
+      "ci": "есть в CI: docs.yml"
+    },
+    {
+      "status": "ok",
+      "seconds": 1.798,
+      "name": "labels-check",
+      "what": "сгенерированные подписи фронта сверены с бэкендом",
+      "ci": "есть в CI: migrations.yml"
+    },
+    {
+      "status": "ok",
+      "seconds": 1.326,
+      "name": "seeds-validate",
+      "what": "сиды справочников внутренне непротиворечивы",
+      "ci": "есть в CI: migrations.yml"
+    },
+    {
+      "status": "ok",
+      "seconds": 0.123,
+      "name": "profile-settings-manifest",
+      "what": "манифест профилей настроек совпадает с кодом",
+      "ci": "есть в CI: migrations.yml"
+    },
+    {
+      "status": "ok",
+      "seconds": 0.184,
+      "name": "compose-audit",
+      "what": "потолки логов, healthcheck и restart-политика во всех compose-файлах",
+      "ci": null
+    },
+    {
+      "status": "ok",
+      "seconds": 2.48,
+      "name": "test-hygiene",
+      "what": "в тестах нет мёртвых импортов",
+      "ci": "есть в CI: backend-tests.yml"
+    },
+    {
+      "status": "ok",
+      "seconds": 5.478,
+      "name": "backend-test-count",
+      "what": "pytest-набор не меньше записанного (тесты нельзя удалять молча)",
+      "ci": "есть в CI: backend-tests.yml"
+    },
+    {
+      "status": "ok",
+      "seconds": 0.058,
+      "name": "ruff",
+      "what": "линтер backend",
+      "ci": "есть в CI: ruff.yml"
+    },
+    {
+      "status": "ok",
+      "seconds": 14.588,
+      "name": "frontend-types",
+      "what": "типы продакшн-кода фронта",
+      "ci": "есть в CI: frontend-tests.yml"
+    },
+    {
+      "status": "ok",
+      "seconds": 3.73,
+      "name": "frontend-types-e2e",
+      "what": "типы e2e-спек (без этого шага спеки проверяются только прогоном)",
+      "ci": "есть в CI: frontend-tests.yml"
+    },
+    {
+      "status": "ok",
+      "seconds": 9.78,
+      "name": "frontend-lint",
+      "what": "ESLint: архитектурные границы FSD",
+      "ci": "есть в CI: frontend-tests.yml"
+    },
+    {
+      "status": "ok",
+      "seconds": 254.502,
+      "name": "backend-tests",
+      "what": "pytest backend (создаёт свою БД)",
+      "ci": "есть в CI: backend-tests.yml"
+    },
+    {
+      "status": "ok",
+      "seconds": 81.826,
+      "name": "frontend-unit",
+      "what": "vitest с покрытием",
+      "ci": "есть в CI: frontend-tests.yml"
+    },
+    {
+      "status": "ok",
+      "seconds": 66.118,
+      "name": "frontend-test-count",
+      "what": "vitest-набор не меньше записанного (минута на сбор, поэтому не в fast)",
+      "ci": "есть в CI: frontend-tests.yml"
+    }
+  ],
+  "not_run": [
+    {
+      "name": "alembic-drift",
+      "ci": "есть в CI: migrations.yml",
+      "reason": "накатывает миграции на dev-БД живого стенда; локально — после #379 (клон стенда)"
+    },
+    {
+      "name": "e2e-smoke",
+      "ci": "есть в CI: e2e-smoke.yml",
+      "reason": "берёт слот машинного семафора и свой стенд; отдельный ярус `npm run gate:e2e`"
+    }
+  ],
+  "reconcile": {
+    "status": "ok",
+    "detail": "21 шагов сверены с docs/quality/gates.md"
+  },
+  "proof_coverage": {
+    "status": "ok",
+    "detail": "18/21 шагов с доказанным красным ходом, 3 в исключениях"
+  },
+  "totals": {
+    "ok": 19,
+    "fail": 0,
+    "missing": 0,
+    "steps": 19,
+    "seconds": 445.95
+  },
+  "local_coverage": "19/19 шагов реально проверено локально"
+}
