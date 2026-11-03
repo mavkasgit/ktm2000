@@ -357,7 +357,7 @@ PACKING_PLAN_ROWS: tuple[dict[str, object], ...] = (
         "input_length_m": 2.7,
         "input_quantity": 150,
         "output_length_m": 0.9,
-        "output_quantity": 350,
+        "output_quantity": 450,
         "operation": "",
         "packing": "поф, красная этикетка РП 23*150 на каждый профиль и белая этикетка 58*",
         "kind": "ГП",
@@ -453,7 +453,7 @@ PACKING_PLAN_ROWS: tuple[dict[str, object], ...] = (
         "input_length_m": 2.7,
         "input_quantity": 200,
         "output_length_m": 0.9,
-        "output_quantity": 200,
+        "output_quantity": 600,
         "operation": "сверло",
         "packing": "поф, красная этикетка РП 23*150 на каждый профиль и белая этикетка 58*",
         "kind": "ГП",
@@ -537,7 +537,7 @@ PACKING_PLAN_ROWS: tuple[dict[str, object], ...] = (
         "input_length_m": 2.7,
         "input_quantity": 150,
         "output_length_m": 0.9,
-        "output_quantity": 150,
+        "output_quantity": 450,
         "operation": "сверло",
         "packing": "поф, красная этикетка РП 23*150 на каждый профиль и белая этикетка 58*",
         "kind": "ГП",
@@ -549,7 +549,7 @@ PACKING_PLAN_ROWS: tuple[dict[str, object], ...] = (
         "input_length_m": 2.7,
         "input_quantity": 150,
         "output_length_m": 0.9,
-        "output_quantity": 150,
+        "output_quantity": 450,
         "operation": "сверло",
         "packing": "поф, красная этикетка РП 23*150 на каждый профиль и белая этикетка 58*",
         "kind": "ГП",
@@ -573,7 +573,7 @@ PACKING_PLAN_ROWS: tuple[dict[str, object], ...] = (
         "input_length_m": 2.7,
         "input_quantity": 200,
         "output_length_m": 0.9,
-        "output_quantity": 300,
+        "output_quantity": 600,
         "operation": "сверло",
         "packing": "поф, красная этикетка РП 23*150 на каждый профиль и белая этикетка 58*",
         "kind": "ГП",
@@ -627,7 +627,7 @@ PACKING_PLAN_ROWS: tuple[dict[str, object], ...] = (
         "kind": "П/ф",
     },
     {
-        "sku": "ALS1360",
+        "sku": "ALS-1360",
         "name": "Плинтус алюм под светодиодную ленту JD 22-60мм led 2,5м анод черный матовый в компл рассеив 1шт.",
         "color": "черный",
         "input_length_m": 2.5,
@@ -765,7 +765,7 @@ PACKING_PLAN_ROWS: tuple[dict[str, object], ...] = (
         "input_length_m": 2.7,
         "input_quantity": 150,
         "output_length_m": 0.9,
-        "output_quantity": 250,
+        "output_quantity": 450,
         "operation": "сверло",
         "packing": "поф, красная этикетка РП 23*150 на каждый профиль и белая этикетка 58*",
         "kind": "ГП",
@@ -795,7 +795,7 @@ PACKING_PLAN_ROWS: tuple[dict[str, object], ...] = (
         "kind": "ГП",
     },
     {
-        "sku": "ALS798",
+        "sku": "ALS-798",
         "name": "Плинтус алюминиевый 17 мм 2,5м анод.серебро матовый",
         "color": "серебро",
         "input_length_m": 2.5,
@@ -807,7 +807,7 @@ PACKING_PLAN_ROWS: tuple[dict[str, object], ...] = (
         "kind": "ГП",
     },
     {
-        "sku": "ALS1103",
+        "sku": "ALS-1103",
         "name": "Плинтус алюминиевый 40 мм 2,5м анод. серебро матовый",
         "color": "серебро",
         "input_length_m": 2.5,
@@ -819,7 +819,7 @@ PACKING_PLAN_ROWS: tuple[dict[str, object], ...] = (
         "kind": "П/Ф",
     },
     {
-        "sku": "ALS1320",
+        "sku": "ALS-1320",
         "name": "Плинтус алюм под светодиодную ленту JD 21-60мм led 2,5м анод черный матовый",
         "color": "черный",
         "input_length_m": 2.5,
@@ -843,7 +843,7 @@ PACKING_PLAN_ROWS: tuple[dict[str, object], ...] = (
         "kind": "П/Ф",
     },
     {
-        "sku": "ALS917",
+        "sku": "ALS-917",
         "name": "Алюминиевая декоративная вставка 5,3*6 ZU2.0-5.5 T1.8L 2,7м анодированный черный матовый",
         "color": "черный",
         "input_length_m": 2.7,
@@ -879,7 +879,7 @@ PACKING_PLAN_ROWS: tuple[dict[str, object], ...] = (
 # но с SHOT_BLAST (дробеструй есть у всех демо-артикулов).
 _PREP_DRILL_ROWS: tuple[dict[str, object], ...] = (
     {
-        "sku": "ALS1288",
+        "sku": "ALS-1288",
         "name": "Профиль торцевой",
         "color": "серебро",
         "input_length_m": 1.8,
@@ -891,7 +891,7 @@ _PREP_DRILL_ROWS: tuple[dict[str, object], ...] = (
         "kind": "П/ф",
     },
     {
-        "sku": "ALS1288",
+        "sku": "ALS-1288",
         "name": "Профиль торцевой",
         "color": "серебро",
         "input_length_m": 1.8,
@@ -903,7 +903,7 @@ _PREP_DRILL_ROWS: tuple[dict[str, object], ...] = (
         "kind": "П/ф",
     },
     {
-        "sku": "ALS1288",
+        "sku": "ALS-1288",
         "name": "Профиль торцевой",
         "color": "серебро",
         "input_length_m": 1.8,
@@ -915,7 +915,7 @@ _PREP_DRILL_ROWS: tuple[dict[str, object], ...] = (
         "kind": "П/ф",
     },
     {
-        "sku": "ALS1288",
+        "sku": "ALS-1288",
         "name": "Профиль торцевой",
         "color": "серебро",
         "input_length_m": 1.8,
@@ -957,7 +957,7 @@ _PREP_DRILL_ROWS: tuple[dict[str, object], ...] = (
         "input_length_m": 1.8,
         "input_quantity": 260,
         "output_length_m": 1.35,
-        "output_quantity": 350,
+        "output_quantity": 260,
         "operation": "сверло",
         "packing": "смотка спанбондом поштучно в пачке 10 штук",
         "kind": "П/ф",
@@ -993,7 +993,7 @@ _PREP_DRILL_ROWS: tuple[dict[str, object], ...] = (
         "input_length_m": 1.35,
         "input_quantity": 220,
         "output_length_m": 0.9,
-        "output_quantity": 330,
+        "output_quantity": 220,
         "operation": "сверло",
         "packing": "смотка спанбондом поштучно в пачке 10 штук",
         "kind": "П/ф",
@@ -1032,7 +1032,7 @@ _PREP_PRESS_ROWS: tuple[dict[str, object], ...] = (
         "input_length_m": 2.7,
         "input_quantity": 600,
         "output_length_m": 1.8,
-        "output_quantity": 900,
+        "output_quantity": 600,
         "operation": "окно",
         "packing": "поф, красная этикетка РП 23*150 на каждый профиль и белая этикетка 58*",
         "kind": "П/ф",
@@ -1068,7 +1068,7 @@ _PREP_PRESS_ROWS: tuple[dict[str, object], ...] = (
         "input_length_m": 3.0,
         "input_quantity": 900,
         "output_length_m": 2.7,
-        "output_quantity": 1000,
+        "output_quantity": 900,
         "operation": "гребенка",
         "packing": "смотка спанбондом поштучно в пачке 10 штук",
         "kind": "П/ф",
@@ -1092,7 +1092,7 @@ _PREP_PRESS_ROWS: tuple[dict[str, object], ...] = (
         "input_length_m": 3.0,
         "input_quantity": 160,
         "output_length_m": 0.9,
-        "output_quantity": 530,
+        "output_quantity": 480,
         "operation": "гребенка",
         "packing": "смотка спанбондом поштучно в пачке 10 штук",
         "kind": "П/ф",
@@ -1104,7 +1104,7 @@ _PREP_PRESS_ROWS: tuple[dict[str, object], ...] = (
         "input_length_m": 3.0,
         "input_quantity": 300,
         "output_length_m": 1.8,
-        "output_quantity": 500,
+        "output_quantity": 300,
         "operation": "окно",
         "packing": "поф, красная этикетка РП 23*150 на каждый профиль и белая этикетка 58*",
         "kind": "П/ф",
@@ -1125,7 +1125,7 @@ _PREP_PRESS_ROWS: tuple[dict[str, object], ...] = (
 
 _PREP_SHOT_ROWS: tuple[dict[str, object], ...] = (
     {
-        "sku": "ALS1290",
+        "sku": "ALS-1290",
         "name": "Профиль угловой",
         "color": "золото",
         "input_length_m": 0.9,
@@ -1137,7 +1137,7 @@ _PREP_SHOT_ROWS: tuple[dict[str, object], ...] = (
         "kind": "П/ф",
     },
     {
-        "sku": "ALS1290",
+        "sku": "ALS-1290",
         "name": "Профиль угловой",
         "color": "золото",
         "input_length_m": 0.9,
@@ -1149,7 +1149,7 @@ _PREP_SHOT_ROWS: tuple[dict[str, object], ...] = (
         "kind": "П/ф",
     },
     {
-        "sku": "ALS1290",
+        "sku": "ALS-1290",
         "name": "Профиль угловой",
         "color": "золото",
         "input_length_m": 0.9,
@@ -1161,7 +1161,7 @@ _PREP_SHOT_ROWS: tuple[dict[str, object], ...] = (
         "kind": "П/ф",
     },
     {
-        "sku": "ALS1290",
+        "sku": "ALS-1290",
         "name": "Профиль угловой",
         "color": "золото",
         "input_length_m": 0.9,
@@ -1173,7 +1173,7 @@ _PREP_SHOT_ROWS: tuple[dict[str, object], ...] = (
         "kind": "П/ф",
     },
     {
-        "sku": "ALS1290",
+        "sku": "ALS-1290",
         "name": "Профиль угловой",
         "color": "золото",
         "input_length_m": 0.9,
@@ -1415,7 +1415,7 @@ PAIR_ARTICLE_ROWS: tuple[dict[str, object], ...] = (
         "input_length_m": 2.7,
         "input_quantity": 240,
         "output_length_m": 0.9,
-        "output_quantity": 240,
+        "output_quantity": 720,
         "operation": "сверло",
         "packing": "поф, красная этикетка РП 23*150 на каждый профиль и белая этикетка 58*",
         "kind": "ГП",
@@ -1427,7 +1427,7 @@ PAIR_ARTICLE_ROWS: tuple[dict[str, object], ...] = (
         "input_length_m": 2.7,
         "input_quantity": 240,
         "output_length_m": 0.9,
-        "output_quantity": 240,
+        "output_quantity": 720,
         "operation": "сверло",
         "packing": "поф, красная этикетка РП 23*150 на каждый профиль и белая этикетка 58*",
         "kind": "ГП",
@@ -1528,7 +1528,7 @@ PENDING_PLAN_ROWS: tuple[dict[str, object], ...] = (
         "input_length_m": 2.7,
         "input_quantity": 240,
         "output_length_m": 0.9,
-        "output_quantity": 480,
+        "output_quantity": 720,
         "operation": "",
         "packing": "смотка спанбондом поштучно в пачке 10 штук",
         "kind": "ГП",
@@ -1733,7 +1733,7 @@ _PREP_STAGE_HEADERS = [
 # это те же профисы, просто план ведётся другим листом и до отгрузки не идёт.
 PREP_STAGE_PLAN_ROWS: tuple[dict[str, object], ...] = (
     {
-        "sku": "ALS1288",
+        "sku": "ALS-1288",
         "name": "Профиль торцевой",
         "color": "серебро",
         "operation": "сверло",
@@ -1771,7 +1771,7 @@ PREP_STAGE_PLAN_ROWS: tuple[dict[str, object], ...] = (
     {
         # Пустая операция — вариант «только дробеструй»: маршрут без сверловки
         # и без пресса. Позиция остаётся неутверждённой, как свежий импорт.
-        "sku": "ALS1290",
+        "sku": "ALS-1290",
         "name": "Профиль угловой",
         "color": "золото",
         "operation": "",

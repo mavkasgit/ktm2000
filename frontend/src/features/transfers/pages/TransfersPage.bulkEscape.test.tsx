@@ -10,7 +10,7 @@
  */
 
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
-import { fireEvent, render, screen, waitFor } from "@testing-library/react";
+import { fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
 vi.mock("@/shared/api/transfers", async (importOriginal) => ({
@@ -96,7 +96,11 @@ function rowButtons(): HTMLButtonElement[] {
 }
 
 function bulkFooter(): HTMLElement | null {
-  return screen.queryByRole("button", { name: /^Передать все/ });
+  // Футер узнаётся по своей главной кнопке; проверка его содержимого идёт по
+  // контейнеру, потому что «Сбросить» живёт ещё и в ряду фильтров (#341, п. 3)
+  // и на всю страницу нашёлся бы не тот элемент.
+  const runAll = screen.queryByRole("button", { name: /^Передать все/ });
+  return (runAll?.closest("div.fixed") ?? null) as HTMLElement | null;
 }
 
 function enterBulkMode(): void {
@@ -192,9 +196,13 @@ describe("TransfersPage: массовый режим", () => {
     enterBulkMode();
     await waitFor(() => expect(bulkFooter()).not.toBeNull());
 
-    expect(screen.queryByRole("button", { name: "Сбросить", hidden: true })).toBeNull();
-    expect(screen.queryByRole("button", { name: "Выйти", hidden: true })).toBeNull();
-    expect(screen.getByRole("button", { name: "Отмена", hidden: true })).toBeTruthy();
+    // Проверка обёрнута в `within`: мерит ровно футер. «Сбросить» живёт и в
+    // ряду фильтров (#341, п. 3) — на всю страницу кнопка была бы найдена там
+    // и тест доказывал бы не то, что заявлено.
+    const footer = bulkFooter() as HTMLElement;
+    expect(within(footer).queryByRole("button", { name: "Сбросить", hidden: true })).toBeNull();
+    expect(within(footer).queryByRole("button", { name: "Выйти", hidden: true })).toBeNull();
+    expect(within(footer).getByRole("button", { name: "Отмена", hidden: true })).toBeTruthy();
   });
 
   it("Escape выходит из массового режима, как кнопка «Выйти»", async () => {

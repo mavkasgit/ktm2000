@@ -5,6 +5,7 @@ import {
   Inbox,
   RefreshCw,
   AlertCircle,
+  ArrowRight,
   ChevronRight,
   ChevronDown,
   Search,
@@ -49,6 +50,10 @@ import {
   FiltersPanel,
   PrintButton,
   buildActiveFilterSummary,
+  MobileScrollTable,
+  MOBILE_TABLE_MIN_WIDTH_CLASS,
+  STICKY_CELL_FILLS,
+  stickyCell,
   type FiltersPanelField,
 } from "@/shared/ui";
 import { useFilterableTable } from "@/shared/hooks/useFilterableTable";
@@ -87,6 +92,7 @@ import {
   type RowTone,
 } from "@/shared/lib/rowTones";
 import { cn } from "@/shared/utils/cn";
+import { DIALOG_SIZES } from "@/shared/lib/dialogSizes";
 import {
   useBulkSelection,
   BulkResultsDialog,
@@ -102,10 +108,13 @@ import { ReadyTransferPrintDialog } from "../components/ReadyTransferPrintDialog
 import {
   dimensionsKey,
   groupReadyTransfers,
+  groupReadyTransfersBySpg,
   isFinalReadyRow,
-  nextStepLabel,
   readyRowIdentity,
+  stagePointLabel,
   type ReadyTransferGroup,
+  type ReadyTransferRowItem,
+  type ReadyTransferSpg,
 } from "../lib/groupReadyTransfers";
 import { makeIdempotencyKey, runTransferBatch } from "../lib/runTransferBatch";
 import {
@@ -127,6 +136,7 @@ import {
 } from "../lib/transferSortParams";
 import { fmtQty } from "@/shared/lib/quantityFormat";
 import { actionReasonText, type ActionReasonCode } from "@/shared/lib/actionReasons";
+import { zeroQuantityReason } from "../lib/transferReasons";
 
 /**
  * Плотность строки «Передачи» — общий уточнённый набор 32px (ADR-0033), тот
@@ -163,7 +173,91 @@ const BULK_ROW_ACTION_TITLE = "В массовом режиме отправля
  */
 const BULK_FINAL_ACTION_TITLE = "Финальный выпуск в массовую передачу не берётся: выйдите из режима";
 
+/**
+ * Закреплённые колонки «Готово к передаче» на телефоне (#343, ADR-0067).
+ *
+ * «Профиль» строки — артикул — стоит слева, «Действия» справа: количество и
+ * кнопка обязаны быть на экране без свайпа, а строку надо узнавать, не уводя
+ * таблицу вбок. Всё, что между ними (размер, количества, адреса), уезжает под
+ * горизонтальный скролл; служебный «#ID» на телефоне скрыт — иначе артикул
+ * оказывается вторым, и при `scrollLeft = 0` его накрывают «Действия».
+ *
+ * Механика — `stickyCell` из `shared/ui`: здесь только имена колонок и
+ * телефонная ширина. Ширины объявлены явно, потому что «липкая» ячейка
+ * фиксируется краем, а не содержимым: без ширины длинный артикул растянул бы
+ * левую колонку на пол-экрана и вытеснил «Действия».
+ */
+const PROFILE_STICKY = stickyCell({
+  name: "profile",
+  side: "left",
+  className: "max-md:w-[104px] max-md:min-w-[104px] max-md:max-w-[104px]",
+});
+const PROFILE_HEADER_STICKY = stickyCell({
+  name: "profile",
+  side: "left",
+  header: true,
+  className: "max-md:w-[104px] max-md:min-w-[104px] max-md:max-w-[104px]",
+});
+const ACTIONS_STICKY = stickyCell({
+  name: "actions",
+  side: "right",
+  // `w-px` — приём auto-раскладки: явная крошечная ширина не растягивает
+  // колонку, а заставляет её сжаться до содержимого (остальное забирают
+  // прокручиваемые колонки). Без него таблица раздавала «Действиям» лишние
+  // ~60px, и закреплённые ячейки наезжали друг на друга при `scrollLeft = 0`.
+  className: "max-md:w-px max-md:px-1",
+});
+const ACTIONS_HEADER_STICKY = stickyCell({
+  name: "actions",
+  side: "right",
+  header: true,
+  className: "max-md:w-px max-md:px-1",
+});
+
+/**
+ * Подпись закреплённого действия на телефоне — пиктограмма (#341, п. 2, то же
+ * правило, что у доски участка в #345 и в ADR-0067).
+ *
+ * Замер в кадре 390px: «Действия» с написанной подписью «Передать» и текстом
+ * причины — 284,8px против 104px закреплённого «Артикул». Пиктограмма снимает у
+ * кнопки ~46px (оставшиеся 247,2px — это поле количества 64px, отметка
+ * «передано/план» 22,1px, сама кнопка 32px и причина 103,1px). Одной
+ * пиктограммы мало: полосе свайпа нужно 16px, а карточка с отступами оставляла
+ * 322px области прокрутки — поэтому таблица на телефоне ещё и идёт от края до
+ * края (см. `Card` ниже, ADR-0067).
+ *
+ * Сворачивается только подпись кнопки. Текст причины недоступности остаётся
+ * напечатанным и не обрезается: #193 запрещает прятать причину в подсказку, а
+ * «Укажите…» с многоточием — ровно то же самое.
+ */
+const ROW_ACTION_LABEL_CLASS = "max-md:hidden";
+const ROW_ACTION_ICON_CLASS = "h-4 w-4 shrink-0 md:hidden";
+
+/**
+ * Непрозрачная подложка закреплённых ячеек на телефоне — общий набор тонов
+ * (`STICKY_CELL_FILLS`, ADR-0067): под липкую ячейку уезжает остальная таблица,
+ * и полупрозрачный тон строки (`bg-slate-100/70`, `bg-blue-100/90`) просвечивал
+ * бы чужими числами. Здесь только выбор тона; на десктопе классов нет вовсе.
+ */
+
 type StatusBadgeVariant = "default" | "destructive" | "outline" | "secondary";
+
+/**
+ * Запасные цвета шапки ГХП: у ГХП из справочника цвет берётся из `icon_color`,
+ * а это — только когда цвет не задан. Позиция в палитре стабильна (индекс
+ * ГХП в справочнике), поэтому блок не меняет цвет между страницами.
+ */
+const SPG_HEADER_FALLBACK_COLORS = [
+  "#0284C7",
+  "#D97706",
+  "#059669",
+  "#7C3AED",
+  "#E11D48",
+  "#0D9488",
+] as const;
+
+/** «Без ГХП» — нейтральный цвет: это не группа справочника, а остаток. */
+const SPG_HEADER_UNKNOWN_COLOR = "#64748B";
 
 /** Строка таблицы «Готово к передаче»: задание либо заголовок группы заданий. */
 type ReadyTableRow =
@@ -174,7 +268,8 @@ type ReadyTableRow =
       /** Строка закрывает блок группы — на ней 3px-граница. */
       isLastInGroup: boolean;
     }
-  | { kind: "group"; group: ReadyTransferGroup };
+  | { kind: "group"; group: ReadyTransferGroup }
+  | { kind: "spg"; key: string; name: string; color: string };
 
 function statusBadgeLabel(status: string): string {
   // Under the explicit-transfer model, transfer_send auto-accepts the
@@ -388,7 +483,16 @@ function ReadyTransferRow({
   const overLimit = qtyNum > maxQty;
   const isOverPlan = qtyNum > parseFloat(task.planned_quantity);
   /** Количество не введено или обнулено — передавать нечего (#193). */
-  const quantityReason: ActionReasonCode | null = qtyNum > 0 ? null : "zero_quantity";
+  const quantityReason = zeroQuantityReason(qtyNum);
+  /** Пункт выдачи и пункт назначения: оператор несёт материал по адресу, а не по коду этапа. */
+  const sourcePoint = stagePointLabel(task.section_name, task.operation_name);
+  const nextPoint = stagePointLabel(task.next_section_name, task.next_operation_name);
+  /** Непрозрачная подложка закреплённых ячеек — в тон строки (телефон). */
+  const stickyFill = isSelected
+    ? STICKY_CELL_FILLS.selected
+    : isInGroup
+      ? STICKY_CELL_FILLS.group
+      : STICKY_CELL_FILLS.row;
 
   return (
     <TableRow
@@ -415,13 +519,17 @@ function ReadyTransferRow({
       )}
       onClick={bulkMode ? onSelect : undefined}
     >
-      <TableCell className={cn(cellClass, TABLE_ROW_STYLES.blockRail, "font-mono text-xs text-muted-foreground")}>#{task.plan_position_id}</TableCell>
-      <TableCell className={cellClass}>{task.product_sku ?? "—"}</TableCell>
+      <TableCell className={cn(cellClass, TABLE_ROW_STYLES.blockRail, "font-mono text-xs text-muted-foreground max-md:hidden")}>#{task.plan_position_id}</TableCell>
+      {/* «Профиль» строки: на телефоне закреплён слева (ADR-0067). */}
+      <TableCell
+        {...PROFILE_STICKY}
+        className={cn(cellClass, PROFILE_STICKY.className, stickyFill)}
+        title={task.product_sku ?? undefined}
+      >
+        <div className="max-md:truncate">{task.product_sku ?? "—"}</div>
+      </TableCell>
       <TableCell className={`${cellClass} text-xs text-muted-foreground whitespace-nowrap`}>
         {formatDimensionsLabel(task.dimensions, task.dimensions_label)}
-      </TableCell>
-      <TableCell className={`${cellClass} text-xs whitespace-nowrap`}>
-        {task.operation_name ?? "—"}
       </TableCell>
       <TableCell className={`${cellClass} text-right tabular-nums`}>
         <div className="whitespace-nowrap">
@@ -433,12 +541,15 @@ function ReadyTransferRow({
           )}
         </div>
       </TableCell>
+      <TableCell className={`${cellClass} text-xs whitespace-nowrap`} title={sourcePoint}>
+        {sourcePoint}
+      </TableCell>
       <TableCell
         className={`${cellClass} text-xs whitespace-nowrap`}
-        title={task.has_next_step ? nextStepLabel(task.next_operation_name, task.next_section_name) : undefined}
+        title={task.has_next_step ? nextPoint : undefined}
       >
         {task.has_next_step ? (
-          nextStepLabel(task.next_operation_name, task.next_section_name)
+          nextPoint
         ) : (
           <div>
             <Badge variant="outline">Финальный</Badge>
@@ -450,7 +561,11 @@ function ReadyTransferRow({
           </div>
         )}
       </TableCell>
-      <TableCell className={cellClass} onClick={(e) => e.stopPropagation()}>
+      <TableCell
+        {...ACTIONS_STICKY}
+        className={cn(cellClass, ACTIONS_STICKY.className, stickyFill)}
+        onClick={(e) => e.stopPropagation()}
+      >
         <div className="flex items-center justify-end gap-2">
           {/* Количество и кнопка живут в строке всегда — в массовом режиме
               кнопка видна, но погашена: отправляет один футер. Прятать её
@@ -475,7 +590,7 @@ function ReadyTransferRow({
                 step="1"
                 min="0"
                 value={quantity}
-                className={`w-20 ${TRANSFERS_ROW.quantityInput} text-right px-2 ${
+                className={`w-20 max-md:w-16 ${TRANSFERS_ROW.quantityInput} text-right px-2 ${
                   overLimit ? "border-amber-400 focus-visible:ring-amber-400" : ""
                 }`}
                 title={overLimit ? `Превышает доступное (${fmtQty(task.transferable_quantity)} шт.)` : undefined}
@@ -503,6 +618,9 @@ function ReadyTransferRow({
                       ? actionReasonText(quantityReason)
                       : "Финальный выпуск готовой продукции"
                 }
+                aria-label={
+                  releaseMutation.isPending || isSubmitting ? "Отправка..." : "Отправить"
+                }
                 onClick={() => {
                   if (submittingRef.current || isSubmitting || releaseMutation.isPending) return;
                     if (!tryAcquire()) return;
@@ -516,7 +634,13 @@ function ReadyTransferRow({
                     });
                   }}
                 >
-                  {releaseMutation.isPending || isSubmitting ? "Отправка..." : "Отправить"}
+                  {/* На телефоне подпись свёрнута в пиктограмму (#341, п. 2,
+                      ADR-0067): с текстом причины колонка «Действия» не
+                      оставляет полосы прокрутки. Слово живёт в `aria-label`. */}
+                  <Send className={ROW_ACTION_ICON_CLASS} aria-hidden />
+                  <span className={ROW_ACTION_LABEL_CLASS}>
+                    {releaseMutation.isPending || isSubmitting ? "Отправка..." : "Отправить"}
+                  </span>
                 </Button>
               ) : (
                 <Button
@@ -529,6 +653,9 @@ function ReadyTransferRow({
                       : quantityReason
                         ? actionReasonText(quantityReason)
                         : "Передать на следующий этап"
+                  }
+                  aria-label={
+                    mutation.isPending || isSubmitting ? "Отправка..." : "Передать"
                   }
                   onClick={() => {
                     if (submittingRef.current || isSubmitting || mutation.isPending) return;
@@ -543,14 +670,55 @@ function ReadyTransferRow({
                     });
                   }}
                 >
-                  {mutation.isPending || isSubmitting ? "Отправка..." : "Передать"}
+                  <ArrowRight className={ROW_ACTION_ICON_CLASS} aria-hidden />
+                  <span className={ROW_ACTION_LABEL_CLASS}>
+                    {mutation.isPending || isSubmitting ? "Отправка..." : "Передать"}
+                  </span>
                 </Button>
               )}
             </ActionWithReason>
         </div>
       </TableCell>
-      <TableCornerResetCell className={TABLE_ROW_STYLES.groupHeaderCell} />
+      <TableCornerResetCell className={cn(TABLE_ROW_STYLES.groupHeaderCell, "max-md:hidden")} />
     </TableRow>
+  );
+}
+
+/**
+ * Шеврон раскрытия группы. На телефоне он живёт в закреплённом профиле (#341,
+ * п. 4): колонка-рельс слева от профиля на телефоне скрыта, и без шеврона
+ * единственным способом раскрыть группу оставался тап по всей шапке — жест,
+ * который ничего не обещает и не именуется. Тот же порядок, что у доски
+ * участка (#345).
+ */
+function groupChevron(
+  isCollapsed: boolean,
+  bulkMode: boolean,
+  onToggleCollapse: () => void,
+  tone: "desktop" | "mobile",
+) {
+  const label = bulkMode ? "Группа раскрыта для ручного выбора" : isCollapsed ? "Раскрыть" : "Скрыть";
+  return (
+    <button
+      type="button"
+      className={cn(
+        "p-1 hover:bg-muted rounded transition-colors text-muted-foreground",
+        tone === "mobile" && "md:hidden",
+      )}
+      title={label}
+      aria-label={label}
+      disabled={bulkMode}
+      onClick={(event) => {
+        event.stopPropagation();
+        onToggleCollapse();
+      }}
+    >
+      {isCollapsed ? (
+        <ChevronRight className="h-4 w-4 shrink-0" />
+      ) : (
+        <ChevronDown className="h-4 w-4 shrink-0" />
+      )}
+    </button>
   );
 }
 
@@ -608,6 +776,10 @@ function ReadyTransferGroupRow({
   const groupHeaderCellClass = cn(TRANSFERS_ROW.cell, TABLE_ROW_STYLES.groupHeaderCell);
 
   const { common } = group;
+  const sourcePoint = stagePointLabel(common.sectionName, common.operationName);
+  const nextPoint = stagePointLabel(common.nextSectionName, common.nextOperationName);
+  /** Непрозрачная подложка закреплённых ячеек — в тон шапки группы (телефон). */
+  const groupStickyFill = isAllSelected ? STICKY_CELL_FILLS.selected : STICKY_CELL_FILLS.group;
   const qtyNum = parseFloat(quantity || "0");
   const overLimit = Math.round(qtyNum * 1000) > Math.round(group.totalTransferable * 1000);
   /**
@@ -617,9 +789,13 @@ function ReadyTransferGroupRow({
    */
   const groupBlockReason: ActionReasonCode | null = hasInFlightRow
     ? "row_in_flight"
-    : qtyNum > 0
-      ? null
-      : "zero_quantity";
+    : zeroQuantityReason(qtyNum);
+  /**
+   * Имя и подпись кнопки группы — одно слово на обеих ширинах: на телефоне
+   * подпись сворачивается в пиктограмму, и слово обязано остаться в
+   * `aria-label` (#341, п. 2).
+   */
+  const groupActionLabel = isSubmitting ? "Отправка..." : group.allFinal ? "Отправить" : "Передать";
 
   return (
     <TableRow
@@ -645,36 +821,30 @@ function ReadyTransferGroupRow({
         onSelectGroup();
       }}
     >
-      <TableCell className={cn(groupHeaderCellClass, TABLE_ROW_STYLES.blockRail, "text-center")}>
-        <button
-          className="p-1 hover:bg-muted rounded transition-colors text-muted-foreground"
-          title={bulkMode ? "Группа раскрыта для ручного выбора" : isCollapsed ? "Раскрыть" : "Скрыть"}
-          disabled={bulkMode}
-          onClick={(e) => {
-            e.stopPropagation();
-            onToggleCollapse();
-          }}
-        >
-          {isCollapsed ? (
-            <ChevronRight className="h-4 w-4 shrink-0" />
-          ) : (
-            <ChevronDown className="h-4 w-4 shrink-0" />
-          )}
-        </button>
+      <TableCell className={cn(groupHeaderCellClass, TABLE_ROW_STYLES.blockRail, "text-center max-md:hidden")}>
+        {groupChevron(isCollapsed, bulkMode, onToggleCollapse, "desktop")}
       </TableCell>
-      <TableCell className={groupHeaderCellClass}>
-        <div className="flex items-center gap-2">
-          <span>{group.productSku ?? "—"}</span>
-          <Badge variant="secondary" className="font-bold">
+      {/* «Профиль» и «Действия» закреплены на телефоне так же, как у строк
+          (ADR-0067): шапка группы несёт общее количество и кнопку, и они
+          обязаны быть видны без свайпа. */}
+      <TableCell
+        {...PROFILE_STICKY}
+        className={cn(groupHeaderCellClass, PROFILE_STICKY.className, groupStickyFill)}
+        title={group.productSku ?? undefined}
+      >
+        <div className="flex items-center gap-2 max-md:truncate">
+          {/* На телефоне шеврон — здесь, в закреплённой ячейке: тап по шапке
+              сворачивает группу, но именованной кнопки без колонки-рельса не
+              было бы (#341, п. 4). */}
+          {groupChevron(isCollapsed, bulkMode, onToggleCollapse, "mobile")}
+          <span className="max-md:truncate">{group.productSku ?? "—"}</span>
+          <Badge variant="secondary" className="font-bold max-md:shrink-0">
             &times;{group.rows.length}
           </Badge>
         </div>
       </TableCell>
       <TableCell className={cn(groupHeaderCellClass, "text-xs text-muted-foreground whitespace-nowrap")}>
         {common.dimensionsLabel ?? "—"}
-      </TableCell>
-      <TableCell className={cn(groupHeaderCellClass, "text-xs whitespace-nowrap")}>
-        {common.operationName ?? "—"}
       </TableCell>
       <TableCell className={cn(groupHeaderCellClass, "text-right tabular-nums")}>
         {/* Как у одиночной строки: в «К передаче» — текст, редактируемое поле —
@@ -686,12 +856,15 @@ function ReadyTransferGroupRow({
           </span>
         </div>
       </TableCell>
+      <TableCell className={cn(groupHeaderCellClass, "text-xs whitespace-nowrap")} title={sourcePoint}>
+        {sourcePoint}
+      </TableCell>
       <TableCell
         className={cn(groupHeaderCellClass, "text-xs whitespace-nowrap")}
-        title={group.hasNextStep ? nextStepLabel(common.nextOperationName, common.nextSectionName) : undefined}
+        title={group.hasNextStep ? nextPoint : undefined}
       >
         {group.hasNextStep ? (
-          nextStepLabel(common.nextOperationName, common.nextSectionName)
+          nextPoint
         ) : (
           <Badge variant="outline">Финальный</Badge>
         )}
@@ -699,7 +872,11 @@ function ReadyTransferGroupRow({
       {/* Ячейка «Действия» есть всегда. В массовом режиме это поле общего
           количества группы (без кнопки: отправляет футер), в обычном — поле и
           кнопка передачи группы. */}
-      <TableCell className={groupHeaderCellClass} onClick={(e) => e.stopPropagation()}>
+      <TableCell
+        {...ACTIONS_STICKY}
+        className={cn(groupHeaderCellClass, ACTIONS_STICKY.className, groupStickyFill)}
+        onClick={(e) => e.stopPropagation()}
+      >
         <div className="flex items-center justify-end gap-2">
           <div className="flex items-center gap-1">
             {/* Как у строки: «передано/план» перед полем, только суммами по
@@ -716,7 +893,7 @@ function ReadyTransferGroupRow({
               min="0"
               value={quantity}
               disabled={isSubmitting}
-              className={`w-20 ${TRANSFERS_ROW.quantityInput} text-right px-2 ${
+              className={`w-20 max-md:w-16 ${TRANSFERS_ROW.quantityInput} text-right px-2 ${
                 overLimit ? "border-amber-400 focus-visible:ring-amber-400" : ""
               }`}
               title={
@@ -743,14 +920,20 @@ function ReadyTransferGroupRow({
                       ? "Финальный выпуск всех заданий группы"
                       : "Передать на следующий этап все задания группы"
               }
+              aria-label={groupActionLabel}
               onClick={() => onTransferGroup(group, quantity)}
             >
-              {isSubmitting ? "Отправка..." : group.allFinal ? "Отправить" : "Передать"}
+              {group.allFinal ? (
+                <Send className={ROW_ACTION_ICON_CLASS} aria-hidden />
+              ) : (
+                <ArrowRight className={ROW_ACTION_ICON_CLASS} aria-hidden />
+              )}
+              <span className={ROW_ACTION_LABEL_CLASS}>{groupActionLabel}</span>
             </Button>
           </ActionWithReason>
         </div>
       </TableCell>
-      <TableCornerResetCell />
+      <TableCornerResetCell className="max-md:hidden" />
     </TableRow>
   );
 }
@@ -974,7 +1157,24 @@ export function TransfersPage() {
   const readyItems = readyData?.items ?? [];
   const readyTotal = readyData?.total ?? 0;
 
-  const readyGroupItems = useMemo(() => groupReadyTransfers(readyItems), [readyItems]);
+  /** Участок → его ГХП. Справочник упорядочен сервером (`sort_order`, id). */
+  const spgBySectionId = useMemo(() => {
+    const bySection = new Map<number, ReadyTransferSpg>();
+    spgs?.forEach((spg, index) => {
+      const scope: ReadyTransferSpg = {
+        key: `spg:${spg.id}`,
+        name: spg.name,
+        sortOrder: index,
+        color: spg.icon_color,
+      };
+      for (const section of spg.sections) {
+        // Участок в нескольких ГХП — берём первое членство: порядок справочника
+        // стабилен, и блок не перескакивает между запросами.
+        if (!bySection.has(section.section_id)) bySection.set(section.section_id, scope);
+      }
+    });
+    return bySection;
+  }, [spgs]);
 
   // Свёрнутая группа и сортировка по колонке несовместимы: в шапке группы
   // печатается общий этап и СУММА «К передаче», а порядок групп — порядок
@@ -983,6 +1183,25 @@ export function TransfersPage() {
   // свёрнутыми. Как только оператор выбрал колонку, рисуем строки заданий
   // как есть: тогда порядок строк совпадает с тем, что напечатано в ячейке.
   const readySortingActive = readySortConfigs.length > 0;
+
+  // «Все ГХП»: строки разных ГХП перемешаны этапом маршрута, поэтому
+  // раскладываем их блоками по ГХП. При выбранной ГХП и при сортировке по
+  // колонке порядок задаёт сервер — раскладка не нужна.
+  const readySpgSections = useMemo(() => {
+    if (readySortingActive || !showAllSpgs || spgs === undefined) return null;
+    return groupReadyTransfersBySpg(
+      readyItems,
+      (task) => spgBySectionId.get(task.section_id) ?? null,
+    );
+  }, [readySortingActive, showAllSpgs, spgs, readyItems, spgBySectionId]);
+
+  const readyGroupItems = useMemo<ReadyTransferRowItem[]>(
+    () =>
+      readySpgSections
+        ? readySpgSections.flatMap((section) => section.items)
+        : groupReadyTransfers(readyItems),
+    [readySpgSections, readyItems],
+  );
 
   // Строки таблицы «Готово к передаче» = свёрнутые группы (только заголовки) +
   // дети раскрытых + одиночные строки. В чекбокс-режиме группы раскрыты
@@ -1000,25 +1219,53 @@ export function TransfersPage() {
       }));
     }
     const rows: ReadyTableRow[] = [];
-    for (const item of readyGroupItems) {
-      if (item.kind === "single") {
-        rows.push({ kind: "task", task: item.row, groupKey: null, isLastInGroup: false });
-        continue;
-      }
-      rows.push({ kind: "group", group: item });
-      if (bulkMode || expandedGroupKeys.has(item.key)) {
-        item.rows.forEach((task, index) => {
-          rows.push({
-            kind: "task",
-            task,
-            groupKey: item.key,
-            isLastInGroup: index === item.rows.length - 1,
+    const pushItems = (items: ReadyTransferRowItem[]) => {
+      for (const item of items) {
+        if (item.kind === "single") {
+          rows.push({ kind: "task", task: item.row, groupKey: null, isLastInGroup: false });
+          continue;
+        }
+        rows.push({ kind: "group", group: item });
+        if (bulkMode || expandedGroupKeys.has(item.key)) {
+          item.rows.forEach((task, index) => {
+            rows.push({
+              kind: "task",
+              task,
+              groupKey: item.key,
+              isLastInGroup: index === item.rows.length - 1,
+            });
           });
-        });
+        }
       }
+    };
+
+    // Шапка ГХП нужна только смешанному списку: у единственной группы она
+    // повторяла бы выбор селектора и занимала строку без пользы.
+    if (readySpgSections && readySpgSections.length > 1) {
+      for (const section of readySpgSections) {
+        rows.push({
+          kind: "spg",
+          key: section.spg.key,
+          name: section.spg.name,
+          // Справочный цвет важнее палитры: «Анодирование» светло-голубое и
+          // должно остаться таким. Запасной цвет выбирается по позиции в
+          // справочнике, а не в выборке, — иначе одна и та же ГХП красилась бы
+          // по-разному на соседних страницах.
+          color:
+            section.spg.color ??
+            (Number.isFinite(section.spg.sortOrder)
+              ? SPG_HEADER_FALLBACK_COLORS[
+                  section.spg.sortOrder % SPG_HEADER_FALLBACK_COLORS.length
+                ]
+              : SPG_HEADER_UNKNOWN_COLOR),
+        });
+        pushItems(section.items);
+      }
+    } else {
+      pushItems(readyGroupItems);
     }
     return rows;
-  }, [bulkMode, readyGroupItems, readyItems, expandedGroupKeys, readySortingActive]);
+  }, [bulkMode, readyGroupItems, readyItems, expandedGroupKeys, readySortingActive, readySpgSections]);
 
   const historyItems = historyData?.transfers ?? [];
   const historyTotal = historyData?.total ?? 0;
@@ -1397,7 +1644,10 @@ export function TransfersPage() {
             фактически выполненное количество, ожидающее отправки.
           </p>
         </div>
-        <div className="flex items-center gap-2">
+        {/* Телефон: селект ГХП занимает свою строку, «Журнал» и «Обновить»
+            переносятся под него. Ряд без `flex-wrap` и `w-[260px]` у селекта
+            обрезались `overflow-x-hidden` у `.main-area` (#343). */}
+        <div className="flex flex-wrap items-center gap-2 max-md:w-full">
           <SpgSelect
             spgs={spgs ?? []}
             value={showAllSpgs ? null : spgId}
@@ -1417,7 +1667,7 @@ export function TransfersPage() {
               setEditTransferRecord(null);
               exitBulkMode();
             }}
-            className="w-[260px] bg-background h-10 border text-sm"
+            className="w-[260px] max-md:w-full bg-background h-10 border text-sm"
           />
           <Button
             variant="outline"
@@ -1433,7 +1683,15 @@ export function TransfersPage() {
         </div>
       </header>
 
-      <Card>
+      {/* Телефон: карточка «Готово к передаче» идёт от края до края (#341, п. 2).
+          Закреплённые колонки с полем количества, пиктограммой действия и
+          напечатанной причиной занимают 104 + 247px, а область прокрутки внутри
+          обычной карточки — 322px: полосе свайпа не остаётся места вовсе, и
+          колонки наезжают друг на друга. Отступ страницы (`p-6` у `.main-area`)
+          и поля карточки съедают 68px кадра, а на телефоне таблица и так
+          листается горизонтально. Ряд фильтров остаётся с внутренним отступом
+          карточки: ему край экрана не нужен. */}
+      <Card className="max-md:-mx-6 max-md:rounded-none">
         <CardHeader className="space-y-3 pb-3">
           <CardTitle className="flex items-center gap-2">
             <Send className="h-4 w-4" />
@@ -1444,6 +1702,8 @@ export function TransfersPage() {
             compact
             fields={readyToolbarFields}
             activeSummary={readyActiveFilterSummary}
+            onReset={resetReadyFilters}
+            hasActiveFilters={hasReadyFiltersActive}
             onSelectAll={() => {
               setBulkMode(true);
               bulkSelection.selectAll(readySelectableIds);
@@ -1451,7 +1711,7 @@ export function TransfersPage() {
             totalRowCount={readySelectableIds.length}
           />
         </CardHeader>
-        <CardContent>
+        <CardContent className="max-md:px-0">
           {!spgScopeSelected ? (
             <div className="text-sm text-muted-foreground py-6 text-center">
               Выберите ГХП, чтобы увидеть задания, готовые к передаче.
@@ -1465,36 +1725,55 @@ export function TransfersPage() {
             </div>
           ) : (
             <>
-            <div
-              ref={readyScrollRef}
+            <MobileScrollTable
+              scrollRef={readyScrollRef}
               className={DATA_TABLE_STYLES.container}
               style={{ maxHeight: "70vh", overflow: "auto" }}
             >
-            <table className="w-full caption-bottom text-sm">
+            {/* Телефон: таблица не сжимается в 320px — иначе колонки squeeze,
+                а свайпу нечего прокручивать. Ширина из общего примитива. */}
+            <table className={cn("w-full caption-bottom text-sm", MOBILE_TABLE_MIN_WIDTH_CLASS)}>
               <TableHeader>
                 <TableRow>
-                  {readyColumns.map((column) => (
-                    <TableHead
-                      key={column.id}
-                      className={`${groupHeaderCellClass} p-0${column.id === "transferableQty" ? " text-right" : ""}`}
-                      aria-sort={column.sortField ? getAriaSort(readySortConfigs, column.sortField) : undefined}
-                    >
-                      <DataTableColumnHeader
-                        column={column}
-                        bindColumn={bindReadyColumn}
-                        values={readyUniqueValues[column.filterField] ?? []}
-                        currentSorts={readySortConfigs}
-                        onSortChange={handleReadySort}
-                      />
-                    </TableHead>
-                  ))}
-                  <TableHead className={groupHeaderCellClass}>
+                  {readyColumns.map((column) => {
+                    // «Профиль» (артикул) закреплён и в шапке: заголовок обязан
+                    // ехать вместе со своей колонкой (ADR-0067).
+                    const sticky = column.id === "sku" ? PROFILE_HEADER_STICKY : null;
+                    // Служебный «ID» на телефоне скрыт: иначе закреплённый
+                    // «Артикул» начинается не от левого края, и «Действия»
+                    // наезжают на него. Строка узнаётся по артикулу (ADR-0067).
+                    return (
+                      <TableHead
+                        key={column.id}
+                        {...sticky}
+                        className={cn(
+                          `${groupHeaderCellClass} p-0${column.id === "transferableQty" ? " text-right" : ""}`,
+                          column.id === "positionId" && "max-md:hidden",
+                          sticky?.className,
+                        )}
+                        aria-sort={column.sortField ? getAriaSort(readySortConfigs, column.sortField) : undefined}
+                      >
+                        <DataTableColumnHeader
+                          column={column}
+                          bindColumn={bindReadyColumn}
+                          values={readyUniqueValues[column.filterField] ?? []}
+                          currentSorts={readySortConfigs}
+                          onSortChange={handleReadySort}
+                        />
+                      </TableHead>
+                    );
+                  })}
+                  <TableHead {...ACTIONS_HEADER_STICKY} className={cn(groupHeaderCellClass, ACTIONS_HEADER_STICKY.className)}>
                     Действия
                   </TableHead>
+                  {/* Столбец сброса фильтров на телефоне скрыт: он оказался бы
+                      под закреплёнными «Действиями» и не попадал бы под палец.
+                      Сброс там же, где поиск, — в ряду фильтров (ADR-0067). */}
                   <TableCornerResetHeader
                     hasActiveFilters={hasReadyFiltersActive}
                     onReset={resetReadyFilters}
                     dataTableHeader
+                    className="max-md:hidden"
                   />
                 </TableRow>
               </TableHeader>
@@ -1516,7 +1795,27 @@ export function TransfersPage() {
                   colSpan={8}
                   scrollContainerRef={readyScrollRef}
                   renderRow={(row) =>
-                    row.kind === "group" ? (
+                    row.kind === "spg" ? (
+                      <TableRow
+                        key={row.key}
+                        data-row-kind="ready-spg"
+                        style={{
+                          height: TRANSFERS_ROW.rowHeightPx,
+                          // Тот же цвет, что у ГХП в справочнике: подложка —
+                          // его светлый тон (alpha `1F`), рельс — сам цвет.
+                          backgroundColor: `${row.color}1F`,
+                        }}
+                        className="font-semibold"
+                      >
+                        <TableCell
+                          colSpan={readyColumns.length + 2}
+                          style={{ borderLeft: `4px solid ${row.color}` }}
+                          className={cn(TRANSFERS_ROW.cell, "text-xs")}
+                        >
+                          {row.name}
+                        </TableCell>
+                      </TableRow>
+                    ) : row.kind === "group" ? (
                       <ReadyTransferGroupRow
                         key={row.group.key}
                         group={row.group}
@@ -1591,7 +1890,7 @@ export function TransfersPage() {
                 />
               )}
             </table>
-            </div>
+            </MobileScrollTable>
             <TablePaginationFooter
               page={readyPage}
               totalPages={readyTotalPages}
@@ -1889,7 +2188,7 @@ function EditTransferDialog({
 
   return (
     <Dialog open onOpenChange={(open) => !open && onClose()}>
-      <DialogContent className="max-w-md">
+      <DialogContent className={cn(DIALOG_SIZES.sm.width, DIALOG_SIZES.sm.height)}>
         <DialogHeader>
           <DialogTitle>
             {isCancelled ? "Детали передачи" : "Управление передачей"}
@@ -1984,7 +2283,10 @@ function EditTransferDialog({
                 </div>
               )}
 
-              <div className="flex justify-between items-center pt-2 gap-2">
+              {/* Кнопки переносятся по строкам: на телефоне три штуки в ряд не
+                  умещаются и уводили содержимое окна вбок (#344). На широком
+                  экране всё влезает в одну строку, раскладка не меняется. */}
+              <div className="flex flex-wrap justify-between items-center pt-2 gap-2">
                 <div>
                   {!isCancelled && (
                     <Button
@@ -1995,7 +2297,7 @@ function EditTransferDialog({
                     </Button>
                   )}
                 </div>
-                <div className="flex gap-2">
+                <div className="flex flex-wrap gap-2">
                   <Button variant="outline" onClick={onClose}>
                     {isCancelled ? "Закрыть" : "Отмена"}
                   </Button>

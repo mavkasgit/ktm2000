@@ -2,9 +2,11 @@ import { describe, expect, it } from "vitest";
 import type { ReadyToTransferTask } from "@/shared/api/transfers";
 import {
   groupReadyTransfers,
-  nextStepLabel,
+  groupReadyTransfersBySpg,
+  stagePointLabel,
   type ReadyTransferGroup,
   type ReadyTransferRowItem,
+  type ReadyTransferSpg,
 } from "./groupReadyTransfers";
 
 function makeTask(overrides: Partial<ReadyToTransferTask> = {}): ReadyToTransferTask {
@@ -252,7 +254,7 @@ describe("groupReadyTransfers", () => {
   });
 
   it("отдаёт в common название следующего участка, а при расхождении строк — null", () => {
-    // Название участка в подписи колонки «Следующий» — единственный адресат
+    // Название участка в подписи колонки «Куда» — единственный адресат
     // складского этапа, где операций нет. Общее значение расходится, значит
     // подписи у строк группы разные, и свёрнутая строка не имеет права
     // показывать участок ни одной из них.
@@ -270,24 +272,92 @@ describe("groupReadyTransfers", () => {
   });
 });
 
-/**
- * Подпись адресата передачи: операция приоритетнее названия участка, а когда
- * нет ни того, ни другого — прочерк. Складские этапы (`next_operation_name`
- * === null) обязаны печатать название участка, иначе адресат пропадал бы.
- */
-describe("nextStepLabel", () => {
-  it("печатает операцию, не добавляя к ней код участка и номер этапа", () => {
-    expect(nextStepLabel("Хранение: Склад готовой продукции", "Склад готовой продукции")).toBe(
+describe("groupReadyTransfersBySpg", () => {
+  const spg1: ReadyTransferSpg = { key: "spg:1", name: "ГХП №1", sortOrder: 0, color: null };
+  const spg2: ReadyTransferSpg = { key: "spg:2", name: "ГХП №2", sortOrder: 1, color: null };
+  const spgBySection = new Map<number, ReadyTransferSpg>([
+    [1, spg1],
+    [5, spg2],
+  ]);
+  const spgOf = (task: Parameters<typeof groupReadyTransfersBySpg>[0][number]) =>
+    spgBySection.get(task.section_id) ?? null;
+
+  function flatTaskIds(items: ReadyTransferRowItem[]): number[] {
+    return items.flatMap((item) =>
+      item.kind === "group" ? item.rows.map((row) => row.task_id) : [item.row.task_id],
+    );
+  }
+
+  it("раскладывает строки по ГХП в порядке справочника, сохраняя порядок внутри блока", () => {
+    const sections = groupReadyTransfersBySpg(
+      [
+        makeTask({ task_id: 1, section_id: 5 }),
+        makeTask({ task_id: 2, section_id: 1 }),
+        makeTask({ task_id: 3, section_id: 5 }),
+        makeTask({ task_id: 4, section_id: 1 }),
+      ],
+      spgOf,
+    );
+
+    expect(sections.map((section) => section.spg.key)).toEqual([spg1.key, spg2.key]);
+    expect(flatTaskIds(sections[0].items)).toEqual([2, 4]);
+    expect(flatTaskIds(sections[1].items)).toEqual([1, 3]);
+  });
+
+  it("не смешивает одинаковые артикулы разных ГХП и группирует строки внутри своего ГХП", () => {
+    const sections = groupReadyTransfersBySpg(
+      [
+        makeTask({ task_id: 1, section_id: 5, product_sku: "АА-1", operation_name: "Окно" }),
+        makeTask({ task_id: 2, section_id: 5, product_sku: "АА-1", operation_name: "Окно" }),
+        makeTask({ task_id: 3, section_id: 1, product_sku: "АА-1", operation_name: "Окно" }),
+        makeTask({ task_id: 4, section_id: 1, product_sku: "АА-1", operation_name: "Окно" }),
+      ],
+      spgOf,
+    );
+
+    expect(sections).toHaveLength(2);
+    expect(sections.map((section) => section.items[0].kind)).toEqual(["group", "group"]);
+    // Один артикул дал по группе на ГХП: строки разных ГХП не склеились.
+    expect(sections.map((section) => flatTaskIds(section.items))).toEqual([
+      [3, 4],
+      [1, 2],
+    ]);
+  });
+
+  it("участок без ГХП уходит в конец отдельным блоком", () => {
+    const sections = groupReadyTransfersBySpg(
+      [
+        makeTask({ task_id: 1, section_id: 99 }),
+        makeTask({ task_id: 2, section_id: 5 }),
+        makeTask({ task_id: 3, section_id: 1 }),
+      ],
+      spgOf,
+    );
+
+    expect(sections.map((section) => section.spg.name)).toEqual(["ГХП №1", "ГХП №2", "Без ГХП"]);
+    expect(flatTaskIds(sections[2].items)).toEqual([1]);
+  });
+});
+
+describe("stagePointLabel", () => {
+  it("печатает пункт и уточняющую операцию без кода участка и номера этапа", () => {
+    expect(stagePointLabel("Пила", "Пиление")).toBe("Пила · Пиление");
+  });
+
+  it("не повторяет участок, если операция уже называет его", () => {
+    expect(stagePointLabel("Склад готовой продукции", "Хранение: Склад готовой продукции")).toBe(
       "Хранение: Склад готовой продукции",
     );
+    expect(stagePointLabel("Дробеструй", "Дробеструй")).toBe("Дробеструй");
   });
 
   it("без операции печатает название участка — так у складских этапов", () => {
-    expect(nextStepLabel(null, "Склад полуфабриката")).toBe("Склад полуфабриката");
+    expect(stagePointLabel("Склад полуфабриката", null)).toBe("Склад полуфабриката");
+    expect(stagePointLabel("Склад полуфабриката", "")).toBe("Склад полуфабриката");
   });
 
   it("без операции и без участка печатает прочерк, а не пустую ячейку", () => {
-    expect(nextStepLabel(null, null)).toBe("—");
-    expect(nextStepLabel("", "")).toBe("—");
+    expect(stagePointLabel(null, null)).toBe("—");
+    expect(stagePointLabel("", "")).toBe("—");
   });
 });

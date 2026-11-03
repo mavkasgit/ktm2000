@@ -738,7 +738,31 @@ export async function apiAddRouteStep(
   return res.json();
 }
 
-/** @smoke — прогнать позицию по роуту до состояния «задачи завершены, не выпущены». */
+/**
+ * `stage_preset` демо-ручки (`backend/app/api/routes/demo.py::StagePreset`) —
+ * на какой стадии остановить тестовый прогон:
+ *  * `before_approve` / `after_approve` — до/после утверждения;
+ *  * `after_release` — позиция запущена: задания на участках есть, движений
+ *    материала ещё нет (в «Готово к передаче» — складская строка);
+ *  * `to_step_ready` — всё до указанного этапа, сам этап ждёт факта;
+ *  * `full_route` — все стадии пройдены, задачи завершены, последняя не
+ *    выпущена.
+ */
+export type DemoStagePreset =
+  | "before_approve"
+  | "after_approve"
+  | "after_release"
+  | "to_step_ready"
+  | "full_route";
+
+/**
+ * @smoke — прогнать позицию по роуту до состояния «задачи завершены, не выпущены».
+ *
+ * `stage_preset` по умолчанию `full_route`: поведение прежних спек не меняется.
+ * Другая стадия нужна, когда проверке важно промежуточное состояние — например,
+ * складская строка «Готово к передаче» существует только до движений
+ * материала (`after_release`).
+ */
 export async function apiRunDemoFullRoute(
   token: string,
   payload: {
@@ -746,6 +770,8 @@ export async function apiRunDemoFullRoute(
     route_id: number;
     product_id: number;
     run_id: string;
+    stage_preset?: DemoStagePreset;
+    target_route_stage_id?: number | null;
   },
 ) {
   const res = await fetch(`${BACKEND_URL}/api/demo/test-runs/full-route`, {
@@ -759,7 +785,8 @@ export async function apiRunDemoFullRoute(
       route_id: payload.route_id,
       product_id: payload.product_id,
       run_id: payload.run_id,
-      stage_preset: "full_route",
+      stage_preset: payload.stage_preset ?? "full_route",
+      target_route_stage_id: payload.target_route_stage_id ?? null,
     }),
   });
   if (!res.ok) {

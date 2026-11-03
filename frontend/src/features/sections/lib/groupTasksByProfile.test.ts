@@ -2,7 +2,7 @@ import { describe, expect, it } from "vitest";
 import type { SectionBoardTask } from "@/shared/api/shopfloor";
 import {
   groupTasksByProfile,
-  sortGroupsByQuantityAndSize,
+  sortGroupsByRemaining,
   taskGroupingDimensions,
   taskGroupingDimensionsKey,
 } from "./groupTasksByProfile";
@@ -205,30 +205,53 @@ describe("groupTasksByProfile", () => {
 });
 
 // ---------------------------------------------------------------------------
-// sortGroupsByQuantityAndSize
+// sortGroupsByRemaining
 // ---------------------------------------------------------------------------
 
-describe("sortGroupsByQuantityAndSize", () => {
-  it("по количеству убыв.; при равных — размер убыв. (3 м → 1 м)", () => {
+function taskWithRemaining(
+  id: number,
+  remaining: string,
+  dimensions: Record<string, unknown> | null = null,
+  sku = "ЮП-460",
+): SectionBoardTask {
+  const base = makeTask();
+  return makeTask({
+    id,
+    product_sku: sku,
+    dimensions,
+    cache: { ...base.cache, remaining_quantity: remaining },
+  });
+}
+
+describe("sortGroupsByRemaining", () => {
+  it("по остатку убыв.; при равных — подпись группы по алфавиту", () => {
     const groups = [
-      groupTasksByProfile([makeTask({ id: 1, planned_quantity: "100", dimensions: { length_mm: 3000 } })], SKU_PROFILE)[0],
-      groupTasksByProfile([makeTask({ id: 2, planned_quantity: "100", dimensions: { length_mm: 2700 } })], SKU_PROFILE)[0],
-      groupTasksByProfile([makeTask({ id: 3, planned_quantity: "200", dimensions: { length_mm: 1000 } })], SKU_PROFILE)[0],
+      groupTasksByProfile([taskWithRemaining(1, "50", { length_mm: 3000 })], SKU_PROFILE)[0],
+      groupTasksByProfile([taskWithRemaining(2, "200", { length_mm: 2700 })], SKU_PROFILE)[0],
+      groupTasksByProfile([taskWithRemaining(3, "50", { length_mm: 1000 })], SKU_PROFILE)[0],
     ];
-    const sorted = sortGroupsByQuantityAndSize(groups);
+    const sorted = sortGroupsByRemaining(groups);
     expect(sorted.map((g) => g.label)).toEqual([
-      "ЮП-460 · 1 м",  // количество 200 — первым
-      "ЮП-460 · 3 м",  // равное количество 100 — размер убыв.
-      "ЮП-460 · 2,7 м",
+      "ЮП-460 · 2,7 м", // остаток 200 — первым
+      "ЮП-460 · 1 м",   // равный остаток 50 — подпись по алфавиту
+      "ЮП-460 · 3 м",
     ]);
   });
 
-  it("безразмерные — в конец", () => {
+  it("при равном остатке — артикул по алфавиту", () => {
     const groups = [
-      groupTasksByProfile([makeTask({ id: 1, planned_quantity: "100", dimensions: { length_mm: 3000 } })], SKU_PROFILE)[0],
-      groupTasksByProfile([makeTask({ id: 2, planned_quantity: "100", dimensions: null })], SKU_PROFILE)[0],
+      groupTasksByProfile([taskWithRemaining(1, "100", null, "ЯП-900")], SKU_PROFILE)[0],
+      groupTasksByProfile([taskWithRemaining(2, "100", null, "АП-100")], SKU_PROFILE)[0],
     ];
-    const sorted = sortGroupsByQuantityAndSize(groups);
-    expect(sorted[sorted.length - 1].label).toBe("ЮП-460 · —");
+    const sorted = sortGroupsByRemaining(groups);
+    expect(sorted.map((g) => g.tasks[0].product_sku)).toEqual(["АП-100", "ЯП-900"]);
+  });
+
+  it("суммирует остаток заданий группы", () => {
+    const group = groupTasksByProfile(
+      [taskWithRemaining(1, "30"), taskWithRemaining(2, "20")],
+      SKU_PROFILE,
+    )[0];
+    expect(group.totalRemaining).toBe(50);
   });
 });

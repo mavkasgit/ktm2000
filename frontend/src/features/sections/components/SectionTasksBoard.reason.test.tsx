@@ -2,9 +2,10 @@
  * Причина недоступности «Завершить» напечатана рядом с кнопкой (#193).
  *
  * Контракт, который защищают тесты: оператор видит, почему кнопка не
- * нажимается, не наводя мышь, — на обоих экранах доски (строка таблицы и
- * мобильная карточка). У доступного задания, наоборот, рядом с работающей
- * кнопкой не должно быть ни текста, ни подсказки: лишних слов быть не должно.
+ * нажимается, не наводя мышь, — на обоих экранах доски (десктопная строка
+ * таблицы и та же строка на телефоне, #345). У доступного задания, наоборот,
+ * рядом с работающей кнопкой не должно быть ни текста, ни подсказки: лишних
+ * слов быть не должно.
  *
  * Формулировку не пиню: ожидаемый текст берётся из словаря по коду, который
  * вернул `getCompletionBlockReason` для конкретного задания.
@@ -124,11 +125,12 @@ function tableRow(container: HTMLElement): HTMLElement {
   return rows[0] as HTMLElement;
 }
 
-/** Блок мобильных карточек — второй экран того же задания. */
-function mobileBlock(container: HTMLElement): HTMLElement {
-  const block = container.querySelector('div[class*="md:hidden"]');
-  if (!block) throw new Error("доска не отрисовала мобильный блок");
-  return block as HTMLElement;
+/** Строка задания на телефоне — та же таблица (#345): карточек больше нет,
+ *  носитель строки везде `<tr>`; на узкой ширине меняется только набор колонок. */
+function mobileRow(container: HTMLElement): HTMLElement {
+  const row = container.querySelector('tr[data-row-kind="board-task"]');
+  if (!row) throw new Error("доска не отрисовала строку задания на телефоне");
+  return row as HTMLElement;
 }
 
 function completeButton(scope: HTMLElement): HTMLElement {
@@ -170,13 +172,13 @@ describe("SectionTasksBoard: причина недоступности «Зав�
     expect((button as HTMLButtonElement).disabled).toBe(true);
   });
 
-  it("та же причина видна и на мобильной карточке", () => {
+  it("та же причина видна в строке на телефоне", () => {
     stubViewportWidth(375);
     const task = makeTask({ status: "waiting_previous" });
     const expected = actionReasonText(getCompletionBlockReason(task));
     if (!expected) throw new Error("у заблокированного задания должен быть код причины");
 
-    const button = completeButton(mobileBlock(renderBoard([task])));
+    const button = completeButton(mobileRow(renderBoard([task])));
 
     expect(reasonTextsBeside(button)).toEqual([expected]);
     expect((button as HTMLButtonElement).disabled).toBe(true);
@@ -186,8 +188,8 @@ describe("SectionTasksBoard: причина недоступности «Зав�
     const task = makeTask({ status: "in_progress" });
     expect(getCompletionBlockReason(task)).toBeNull();
 
-    // Гейт доски рисует экран по отдельности: контракт проверяем двумя
-    // рендерами — десктопная строка и мобильная карточка.
+    // Таблица одна на оба экрана (#345), но набор колонок и подложки
+    // различаются: контракт проверяем двумя рендерами — десктоп и телефон.
     const container = renderBoard([task]);
     const row = tableRow(container);
     const button = completeButton(row);
@@ -200,9 +202,9 @@ describe("SectionTasksBoard: причина недоступности «Зав�
       expect(row.textContent).not.toContain(reasonText);
     }
 
-    // Тот же контракт на втором экране доски.
+    // Тот же контракт на телефоне.
     stubViewportWidth(375);
-    const mobileButton = completeButton(mobileBlock(renderBoard([task])));
+    const mobileButton = completeButton(mobileRow(renderBoard([task])));
     expect(reasonTextsBeside(mobileButton)).toEqual([]);
     expect((mobileButton as HTMLButtonElement).disabled).toBe(false);
   });

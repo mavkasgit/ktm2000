@@ -1,7 +1,7 @@
 /**
  * Тональная раскладка строки data-таблицы: фон, полоса у левого края, цвет
- * текста, карточка узкого экрана и рельс шапки блока — один словарь на все
- * таблицы, которые красят строку состоянием.
+ * текста и рельс шапки блока — один словарь на все таблицы, которые красят
+ * строку состоянием.
  *
  * Размеры, выделение и подложка блока живут в `dataTableStyles.ts` /
  * `tableRowStyles.ts`; здесь только цвет по состоянию. До выноса словарь знала
@@ -62,18 +62,6 @@ export const ROW_TONE_TEXT: Record<RowTone, string> = {
     "text-emerald-700/80 dark:text-emerald-300/70 line-through decoration-slate-300 opacity-60",
   scrap: "text-red-700 dark:text-red-300",
   plain: "",
-};
-
-/** Карточка узкого экрана: тот же тон, что и у строки. */
-export const ROW_TONE_CARD: Record<RowTone, string> = {
-  waiting: "border border-slate-200 bg-background text-slate-800 rounded-lg border-l-4 border-l-yellow-400",
-  activeRunning: "border border-amber-200 bg-amber-50/30 text-slate-900 rounded-lg border-l-4 border-l-amber-400",
-  active: "border border-blue-200 bg-blue-50/20 text-slate-900 rounded-lg border-l-4 border-l-blue-400",
-  ok: "border border-emerald-200 bg-emerald-50/20 text-slate-900 rounded-lg border-l-4 border-l-emerald-400",
-  completed:
-    "border border-emerald-100 bg-emerald-50/10 text-slate-400 opacity-60 rounded-lg border-l-4 border-l-emerald-300 line-through decoration-slate-300",
-  scrap: "border border-red-200 bg-red-50/30 text-red-700 rounded-lg border-l-4 border-l-red-400",
-  plain: "border border-slate-200 rounded-lg bg-card text-card-foreground",
 };
 
 /**

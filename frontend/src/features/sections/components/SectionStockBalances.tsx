@@ -40,6 +40,7 @@ export function SectionStockBalances({ sectionId, sectionName }: SectionStockBal
         onShowHistory={(id, sku) => setHistoryProduct({ id, sku: sku ?? null })}
         hideLocationColumn
         title={title}
+        defaultSort="quantity:desc"
         enabled={sectionId > 0}
       />
 

@@ -8,9 +8,9 @@
  */
 
 import { useMemo, useState, useCallback, useEffect, useRef, type ReactNode } from "react";
-import { ChevronDown, ChevronRight } from "lucide-react";
+import { Check, CheckCheck, ChevronDown, ChevronRight } from "lucide-react";
 import type { SectionBoardQueryParams, SectionBoardTask, TaskGroup } from "@/shared/api/shopfloor";
-import { formatDimensionsFilterValue, formatDimensionsLabel } from "@/shared/api/stock";
+import { formatDimensionsLabel } from "@/shared/api/stock";
 import {
   Badge,
   ActionWithReason,
@@ -18,13 +18,17 @@ import {
   CutLayoutCell,
   DataTableColumnHeader,
   FiltersPanel,
+  MobileScrollTable,
+  MOBILE_TABLE_MIN_WIDTH_CLASS,
   TableCornerResetCell,
   TableCornerResetHeader,
   TablePaginationFooter,
   VirtualizedTableBody,
   DATA_TABLE_STYLES,
   buildActiveFilterSummary,
+  stickyCell,
   type FiltersPanelField,
+  type StickyCellTone,
 } from "@/shared/ui";
 import type { ColumnSortDef } from "@/shared/hooks/useTableQueryEngine";
 import type { PageLimitOption } from "@/shared/hooks/usePaginatedTableQuery";
@@ -34,7 +38,7 @@ import {
   buildColumnFilterValues,
 } from "@/shared/lib/columnSpecs";
 import { useDebouncedValue } from "@/shared/lib/useDebouncedValue";
-import { useMediaQuery } from "@/shared/lib/useMediaQuery";
+import { DESKTOP_VIEWPORT_QUERY, useMediaQuery } from "@/shared/lib/useMediaQuery";
 import { getAriaSort } from "@/shared/lib/multiSort";
 import { isFirstRowsLoad } from "@/shared/lib/tableQueryPlaceholder";
 import {
@@ -42,7 +46,8 @@ import {
   isServerSortField,
   type TaskSortField,
 } from "../lib/boardQueryParams";
-import { groupTasksByProfile, sortGroupsByQuantityAndSize, taskGroupingDimensions } from "../lib/groupTasksByProfile";
+import { toggleSelectionOnRowKey } from "../lib/boardRowKeydown";
+import { groupTasksByProfile, sortGroupsByRemaining, taskGroupingDimensions } from "../lib/groupTasksByProfile";
 import { clusterByArticle } from "@/shared/lib/clusterByArticle";
 import type { GroupingProfile } from "../lib/groupingProfiles";
 import {
@@ -54,7 +59,6 @@ import {
   EMPTY_DRAFT_QTY,
   groupDraftValue as groupDraftValueOf,
   recordedFact,
-  groupRecordedFact,
   resolveGroupFact,
   draftQtyFor,
   isTransformTask,
@@ -66,17 +70,16 @@ import {
 } from "../lib/bulkDraft";
 import { DraftQtyInput } from "./DraftQtyInput";
 import {
-  getTaskGroupHeaderState,
   packagingBreakdownLabel,
   taskOperations,
 } from "../lib/taskView";
 import {
   TaskStatusDot,
   buildTaskViewFields,
-  getTaskCardClass,
   getTaskGroupRailClass,
   getTaskRowClass,
   getTaskStripeClass,
+  type TaskViewFieldKey,
 } from "./TaskView";
 import { TABLE_ROW_STYLES } from "@/shared/lib/tableRowStyles";
 import { TABLE_ROW_COMPACT, TABLE_ROW_DENSE } from "@/shared/lib/dataTableStyles";
@@ -84,7 +87,8 @@ import { actionReasonText } from "@/shared/lib/actionReasons";
 import { factPortion, resolveFactQuantity } from "../lib/factQuantity";
 import { cn } from "@/shared/utils/cn";
 import { fmtQty, toQtyInteger } from "@/shared/lib/quantityFormat";
-import { boardColumns, visibleBoardColumns } from "../lib/boardColumns";
+import { boardColumns, mobileBoardColumns, visibleBoardColumns, type BoardColumn } from "../lib/boardColumns";
+import { buildTaskGroupView, type TaskGroupView } from "../lib/boardGroupView";
 
 // ---------------------------------------------------------------------------
 // Экспорты для обратной совместимости
@@ -164,6 +168,18 @@ const ROW_BADGE_CLASS = TABLE_ROW_DENSE.badge;
 const ROW_HEIGHT_PX = TABLE_ROW_DENSE.rowHeightPx;
 
 /**
+ * Действие в закреплённой колонке на телефоне — пиктограмма, подпись уходит в
+ * `aria-label` (#345). Колонка «Действия» делит кадр 390px с закреплённой
+ * колонкой «Артикул» и напечатанной причиной недоступности (её нельзя ни
+ * перенести, ни обрезать: #193, а высота строки фиксирована ADR-0030), и
+ * текстовая подпись выталкивала кнопку за кадр — на шапке группы действия
+ * наезжали на «Артикул». Слово не теряется: оно остаётся в доступном имени
+ * и в `title`.
+ */
+const ROW_ACTION_LABEL_CLASS = "max-md:hidden";
+const ROW_ACTION_ICON_CLASS = "h-4 w-4 shrink-0 md:hidden";
+
+/**
  * Ячейка строки доски. Вертикальный отступ — ноль, а не 4px общего набора:
  * самое высокое содержимое строки — кнопка действия 24px, и с отступом 4+4px
  * это давало 32px контента; с границей ячейки (1px, у последней строки блока
@@ -178,13 +194,15 @@ const ROW_CELL_CLASS = cn(TABLE_ROW_DENSE.cell, "py-0 align-middle");
 /**
  * Ячейка черновика у выделенной строки: «Годные» и «Брак» становятся полями
  * ввода (#283). Потолок — доступное на задачу; введённое сверх него помечается
- * без наведения: в плотной строке — знаком, в карточке — словом.
+ * без наведения знаком со подсказкой — в плотной строке места на слова нет.
+ *
+ * Раскладка одна: телефонная таблица (#345) — та же строка доски, а не
+ * карточка со своим набором подписей.
  */
 function renderDraftCell(
   task: SectionBoardTask,
   cell: "completed" | "rejected",
   draft: RowDraftContext,
-  variant: "row" | "card",
 ) {
   const field: DraftField = cell === "completed" ? "good" : "defect";
   const recorded = cell === "completed" ? task.cache.completed_quantity : task.cache.rejected_quantity;
@@ -201,7 +219,7 @@ function renderDraftCell(
       : "брак";
   const overPlan = draft.overPlan[field];
   return (
-    <span className={variant === "card" ? "flex flex-col items-start gap-0.5" : "flex items-center gap-1"}>
+    <span className="flex items-center gap-1">
       <DraftQtyInput
         value={draft.value[field]}
         onChange={(next) => draft.onChange(field, next)}
@@ -210,30 +228,19 @@ function renderDraftCell(
         issueText={draft.issue[field]}
         overPlan={overPlan}
       />
-      {overPlan &&
-        (variant === "card" ? (
-          <span className="text-[11px] font-medium leading-none text-amber-700">
-            сверх плана: доступно {fmtQty(taskFactCeiling(task))} шт.
-          </span>
-        ) : (
-          <span
-            aria-hidden
-            className="text-[10px] leading-none text-amber-600"
-            title={`Сверх плана: доступно на задачу ${fmtQty(taskFactCeiling(task))} шт.`}
-          >
-            ▲
-          </span>
-        ))}
+      {overPlan && (
+        <span
+          aria-hidden
+          className="text-[10px] leading-none text-amber-600"
+          title={`Сверх плана: доступно на задачу ${fmtQty(taskFactCeiling(task))} шт.`}
+        >
+          ▲
+        </span>
+      )}
     </span>
   );
 }
 
-/**
- * Контекст массового ввода для строки или карточки. `undefined` — строка не
- * выделена, и ячейки показывают записанный факт как обычно: клиентские фильтр
- * и сортировка по этим колонкам продолжают работать по записанной величине, а
- * черновик их не двигает (#283, п. 1).
- */
 /**
  * Убирает набранное в поле группы из состояния: поле снова выводится из строк.
  */
@@ -247,6 +254,12 @@ function forgetGroupInput(
   return next;
 }
 
+/**
+ * Контекст массового ввода для выделенной строки. `undefined` — строка не
+ * выделена, и ячейки показывают записанный факт как обычно: клиентские фильтр
+ * и сортировка по этим колонкам продолжают работать по записанной величине, а
+ * черновик их не двигает (#283, п. 1).
+ */
 type RowDraftContext = {
   value: DraftQty;
   overPlan: { good: boolean; defect: boolean };
@@ -265,8 +278,120 @@ function draftFieldIssue(task: SectionBoardTask, value: string, field: DraftFiel
   return resolution.kind === "invalid" ? actionReasonText(resolution.reason) : null;
 }
 
+// ---------------------------------------------------------------------------
+// Раскладки строки: десктоп и телефон — одна таблица, разный порядок колонок
+// ---------------------------------------------------------------------------
+
+/**
+ * Телефонная раскладка строки (#345, ADR-0067). Механика закрепления и свайпа
+ * живёт в `shared/ui/MobileScrollTable`; здесь — только имена колонок, ширины
+ * и подложка.
+ *
+ * Ширины объявлены явно: «липкая» ячейка фиксируется краем, а не содержимым, и
+ * длинный артикул растянул бы профиль на пол-экрана, вытеснив «Действия».
+ * `w-px` у действия — приём auto-раскладки: явная крошечная ширина не
+ * растягивает колонку, остальное забирают прокручиваемые.
+ */
+type BoardTableVariant = "desktop" | "mobile";
+
+/**
+ * Колонка доски → поле представления задания. Имена колонок несут суффикс
+ * `Qty` («plannedQty»), а поля задания — нет («planned»): до #345 строку
+ * собирал ручной перечень, и это несоответствие жило только в нём. Табличная
+ * раскладка берёт значение по колонке, поэтому соответствие объявлено здесь
+ * один раз.
+ */
+const FIELD_KEY_BY_COLUMN: Record<string, TaskViewFieldKey> = {
+  plannedQty: "planned",
+  issuedQty: "issued",
+  completedQty: "completed",
+  rejectedQty: "rejected",
+  transferredQty: "transferred",
+  remainingQty: "remaining",
+};
+
+function fieldKeyOf(columnId: string): TaskViewFieldKey {
+  return FIELD_KEY_BY_COLUMN[columnId] ?? (columnId as TaskViewFieldKey);
+}
+
+const MOBILE_PROFILE_WIDTH_CLASS =
+  "max-md:w-[112px] max-md:min-w-[112px] max-md:max-w-[112px] max-md:overflow-hidden";
+const MOBILE_ACTIONS_WIDTH_CLASS = "max-md:w-px max-md:px-1";
+
+/**
+ * Закрепление колонки: только на телефоне — на десктопе раскладка прежняя.
+ *
+ * Подложка берётся из общего набора тонов (`stickyCell({ fill })`):
+ * полупрозрачный тон строки (`bg-blue-50/20`, `bg-amber-50/30`) под липкую
+ * ячейку просвечивал бы чужими числами, а набор тонов на проект один (#341,
+ * ревью 9). Здесь — только выбор тона и ширина колонки.
+ */
+function mobileStickyProps(
+  columnId: string,
+  variant: BoardTableVariant,
+  header: boolean,
+  fill: StickyCellTone,
+) {
+  if (variant !== "mobile") return undefined;
+  if (columnId === "productSku") {
+    return stickyCell({
+      name: "profile",
+      side: "left",
+      header,
+      fill,
+      className: MOBILE_PROFILE_WIDTH_CLASS,
+    });
+  }
+  if (columnId === "actions") {
+    return stickyCell({
+      name: "actions",
+      side: "right",
+      header,
+      fill,
+      className: MOBILE_ACTIONS_WIDTH_CLASS,
+    });
+  }
+  return undefined;
+}
+
+/** Шеврон раскрытия группы. На телефоне живёт в закреплённом профиле. */
+function groupChevron(
+  view: TaskGroupView,
+  onToggleCollapse: () => void,
+  tone: "desktop" | "mobile",
+) {
+  return (
+    <button
+      type="button"
+      className={
+        tone === "mobile"
+          ? "p-0.5 hover:bg-muted/50 rounded transition-colors cursor-pointer"
+          : "p-0.5 hover:bg-slate-200 rounded transition-colors text-slate-500 hover:text-slate-800 dark:text-slate-400 dark:hover:bg-slate-700 dark:hover:text-slate-100"
+      }
+      onClick={(event) => {
+        event.stopPropagation();
+        onToggleCollapse();
+      }}
+      title={view.collapseTitle}
+      aria-label={view.collapseTitle}
+    >
+      {view.isCollapsed ? (
+        <ChevronRight
+          className={tone === "mobile" ? "h-4 w-4 text-muted-foreground" : "h-4 w-4 shrink-0"}
+        />
+      ) : (
+        <ChevronDown
+          className={tone === "mobile" ? "h-4 w-4 text-muted-foreground" : "h-4 w-4 shrink-0"}
+        />
+      )}
+    </button>
+  );
+}
+
 function renderTaskRow(
   task: SectionBoardTask,
+  columns: BoardColumn[],
+  variant: BoardTableVariant,
   isSelected: boolean | undefined,
   bulkMode: boolean | undefined,
   bulkSelection: BulkSelectionController | undefined,
@@ -280,8 +405,8 @@ function renderTaskRow(
   draft?: RowDraftContext,
 ) {
   const fields = buildTaskViewFields(task, hasPackaging);
-  const blockReason = getCompletionBlockReason(task);
-  // Рёбра блока живут на ячейках, а не на `<tr>`: таблица объявлена
+  const fieldByKey = new Map(fields.map((field) => [field.key, field] as const));
+  const blockReason = getCompletionBlockReason(task);  // Рёбра блока живут на ячейках, а не на `<tr>`: таблица объявлена
   // `border-separate`, и границы строк браузер в ней не рисует вовсе (проверено
   // пиксельно) — `border-b` на `<tr>` был невидим, как и прежняя граница
   // `border-b-2 border-blue-300`. Одиночные строки (не группа) остаются без
@@ -293,15 +418,97 @@ function renderTaskRow(
     : "";
   const cellClass = edgeClass ? cn(ROW_CELL_CLASS, edgeClass) : ROW_CELL_CLASS;
   const rowState = getTaskRowState(task);
+  const stickyFill: StickyCellTone =
+    bulkMode && isSelected ? "selected" : isInGroup ? "group" : "row";
 
   const handleAction = (type: TaskActionDialogType) => {
     onAction(type, task);
   };
+
+  const cellContent = (columnId: string, isLead: boolean): ReactNode => {
+    switch (columnId) {
+      case "statusDot":
+        return (
+          <>
+            {/* Направляющая блока: строка связана с шевроном группы и с
+                соседями. У последней строки она обрывается на своей точке —
+                блок имеет конец, а не продолжается в следующую группу. На
+                телефоне шеврон живёт в профиле, и направляющей здесь нет. */}
+            {variant === "desktop" && isInGroup && (
+              <span
+                aria-hidden
+                className={cn(
+                  "pointer-events-none absolute left-1/2 w-0.5 -translate-x-1/2",
+                  TABLE_ROW_STYLES.groupConnector,
+                  isLastInGroup ? "top-0 h-1/2" : "inset-y-0",
+                )}
+              />
+            )}
+            <span className="relative z-10 inline-flex">
+              <TaskStatusDot task={task} />
+            </span>
+          </>
+        );
+      case "productSku":
+        return <span className="font-medium max-md:block max-md:truncate">{task.product_sku}</span>;
+      case "status":
+        return (
+          <Badge variant="secondary" className={cn(rowState.badgeClass, ROW_BADGE_CLASS)}>
+            {rowState.label}
+          </Badge>
+        );
+      case "actions":
+        return onRevokeItem ? (
+          <Button
+            variant={isSelected ? "default" : "outline"}
+            className={ROW_ACTION_BUTTON_CLASS}
+            aria-pressed={isSelected}
+            disabled={isRevoking}
+            onClick={(event) => {
+              event.stopPropagation();
+              onRevokeItem(task.id);
+            }}
+            title="Выбрать задание для отзыва из дневного плана"
+          >
+            <span>Отозвать</span>
+          </Button>
+        ) : readOnly ? (
+          <span className="text-xs text-muted-foreground">Просмотр</span>
+        ) : (
+          <ActionWithReason reason={blockReason}>
+            <Button
+              variant="outline"
+              className={ROW_ACTION_BUTTON_CLASS}
+              // Доступное имя — на всех ширинах: на телефоне подпись свёрнута в
+              // пиктограмму, но кнопка обязана называться тем же словом.
+              aria-label="Завершить"
+              onClick={() => handleAction("complete")}
+              disabled={blockReason !== null}
+              title={blockReason ? actionReasonText(blockReason) : "Завершить задачу"}
+            >
+              <Check className={ROW_ACTION_ICON_CLASS} aria-hidden />
+              <span className={ROW_ACTION_LABEL_CLASS}>Завершить</span>
+            </Button>
+          </ActionWithReason>
+        );
+      default: {
+        const field = fieldByKey.get(fieldKeyOf(columnId));
+        if (!field) return null;
+        const key = fieldKeyOf(columnId);
+        if (draft && (key === "completed" || key === "rejected")) {
+          return renderDraftCell(task, key, draft);
+        }
+        return field.node;
+      }
+    }
+  };
+
   return (
     <tr
       data-row-kind="board-task"
       // id задачи — адрес строки для e2e массового ввода (#283): строки одного
-      // артикула неразличимы по тексту.
+      // артикула неразличимы по тексту. Атрибут один на обе раскладки: строка
+      // и на телефоне — `<tr>`.
       data-task-id={task.id}
       key={task.id}
       // Высота задана явно: в readOnly («План») кнопки в строке нет, и без
@@ -326,213 +533,71 @@ function renderTaskRow(
       }}
       onKeyDown={(event) => {
         if (!bulkMode || !bulkSelection) return;
-        // Клавиши строки не перехватывают то, что нажато в её кнопке или поле:
-        // Enter на кнопке «Завершить» обязан открыть диалог, а не переключить
-        // выделение.
-        if (event.target !== event.currentTarget) return;
-        if (event.key !== "Enter" && event.key !== " ") return;
-        event.preventDefault();
-        bulkSelection.selectOne(task.id);
+        toggleSelectionOnRowKey(event, () => bulkSelection.selectOne(task.id));
       }}
     >
-      <td className={cn(cellClass, getTaskStripeClass(task), "relative text-center")}>
-        {/* Направляющая блока: строка связана с шевроном группы и с соседями.
-            У последней строки она обрывается на своей точке — блок имеет конец,
-            а не продолжается в следующую группу. */}
-        {isInGroup && (
-          <span
-            aria-hidden
+      {columns.map((column, index) => {
+        const isLead = index === 0;
+        const field = fieldByKey.get(fieldKeyOf(column.id));
+        const sticky = mobileStickyProps(column.id, variant, false, stickyFill);
+        return (
+          <td
+            key={column.id}
+            data-column={column.id}
+            {...sticky}
             className={cn(
-              "pointer-events-none absolute left-1/2 w-0.5 -translate-x-1/2",
-              TABLE_ROW_STYLES.groupConnector,
-              isLastInGroup ? "top-0 h-1/2" : "inset-y-0",
+              cellClass,
+              isLead && getTaskStripeClass(task),
+              isLead && "relative",
+              column.id === "statusDot" && "text-center",
+              field?.cellClass,
+              column.id === "statusDot" && "max-md:max-w-[28px]",
+              sticky?.className,
             )}
-          />
-        )}
-        <span className="relative z-10 inline-flex">
-          <TaskStatusDot task={task} />
-        </span>
-      </td>
-      <td className={cn(cellClass, "font-medium")}>{task.product_sku}</td>
-      {fields.map((field) => (
-        <td key={field.key} className={cn(cellClass, field.cellClass)}>
-          {draft && (field.key === "completed" || field.key === "rejected")
-            ? renderDraftCell(task, field.key, draft, "row")
-            : field.node}
-        </td>
-      ))}
-      <td className={cellClass}>
-        <Badge variant="secondary" className={cn(rowState.badgeClass, ROW_BADGE_CLASS)}>
-          {rowState.label}
-        </Badge>
-      </td>
-      <td className={cellClass}>
-        {onRevokeItem ? (
-          <Button
-            variant={isSelected ? "default" : "outline"}
-            className={ROW_ACTION_BUTTON_CLASS}
-            aria-pressed={isSelected}
-            disabled={isRevoking}
-            onClick={(event) => {
-              event.stopPropagation();
-              onRevokeItem(task.id);
-            }}
-            title="Выбрать задание для отзыва из дневного плана"
           >
-            <span>Отозвать</span>
-          </Button>
-        ) : readOnly ? (
-          <span className="text-xs text-muted-foreground">Просмотр</span>
-        ) : (
-          <ActionWithReason reason={blockReason}>
-            <Button
-              variant="outline"
-              className={ROW_ACTION_BUTTON_CLASS}
-              onClick={() => handleAction("complete")}
-              disabled={blockReason !== null}
-              title={blockReason ? actionReasonText(blockReason) : "Завершить задачу"}
-            >
-              <span>Завершить</span>
-            </Button>
-          </ActionWithReason>
-        )}
-      </td>
-      <TableCornerResetCell className={edgeClass || undefined} />
+            {cellContent(column.id, isLead)}
+          </td>
+        );
+      })}
+      {variant === "desktop" && <TableCornerResetCell className={edgeClass || undefined} />}
     </tr>
   );
 }
 
-function renderMobileCard(
-  task: SectionBoardTask,
-  isSelected: boolean | undefined,
-  bulkMode: boolean | undefined,
-  bulkSelection: BulkSelectionController | undefined,
-  onAction: (type: TaskActionDialogType, task: SectionBoardTask) => void,
-  onRevokeItem: ((taskId: number) => void) | undefined,
-  isRevoking: boolean,
-  isLastInGroup = false,
-  readOnly: boolean,
-  hasPackaging?: boolean,
-  draft?: RowDraftContext,
-) {
-  const buttonBase = `flex-1 ${TABLE_ROW_COMPACT.actionButton}`;
-  const fields = buildTaskViewFields(task, hasPackaging);
-  const blockReason = getCompletionBlockReason(task);
-  const rowState = getTaskRowState(task);
-  const buttonDefault = "hover:bg-accent/50";
-
-  const handleAction = (type: TaskActionDialogType) => {
-    onAction(type, task);
-  };
-  return (
-    <div
-      key={task.id}
-      data-task-id={task.id}
-      tabIndex={bulkMode ? 0 : undefined}
-      className={`p-4 space-y-3 cursor-pointer transition-colors ${getTaskCardClass(task, !!isSelected)} ${isLastInGroup ? "border-b-2 border-blue-300 mb-3" : "mb-0"}`}
-      onClick={() => {
-        // Статус отбор не ограничивает: «ожидает предыдущего участка» —
-        // допустимый кандидат дневного плана (в плане запрещены только
-        // терминальные задания), и шапка группы такие строки уже выделяет.
-        // Незавершаемые строки массовый ввод пропускает сам — их отсеивает
-        // `isTaskCompletable` в черновике.
-        if (bulkMode && bulkSelection) {
-          bulkSelection.selectOne(task.id);
-        }
-      }}
-      onKeyDown={(event) => {
-        if (!bulkMode || !bulkSelection) return;
-        // Клавиши строки не перехватывают то, что нажато в её кнопке или поле:
-        // Enter на кнопке «Завершить» обязан открыть диалог, а не переключить
-        // выделение.
-        if (event.target !== event.currentTarget) return;
-        if (event.key !== "Enter" && event.key !== " ") return;
-        event.preventDefault();
-        bulkSelection.selectOne(task.id);
-      }}
-    >
-      <div className="flex items-center justify-between gap-2">
-        <div className="flex items-center gap-2 font-semibold">
-          <TaskStatusDot task={task} />
-          <span className="text-sm font-medium">{task.product_sku}</span>
-        </div>
-        <Badge variant="secondary" className={cn(rowState.badgeClass, TABLE_ROW_COMPACT.badge)}>
-          {rowState.label}
-        </Badge>
-      </div>
-
-      <div className="grid grid-cols-2 gap-2 text-sm">
-        {fields.map((field) => (
-          <div key={field.key}>
-            <span className="text-muted-foreground">{field.label}:</span>{" "}
-            {draft && (field.key === "completed" || field.key === "rejected")
-              ? renderDraftCell(task, field.key, draft, "card")
-              : field.node}
-          </div>
-        ))}
-      </div>
-
-        {onRevokeItem ? (
-          <Button
-            size="sm"
-            variant={isSelected ? "default" : "outline"}
-            className={`${buttonBase} transition-all hover:bg-accent/50`}
-            aria-pressed={isSelected}
-            disabled={isRevoking}
-            onClick={(event) => {
-              event.stopPropagation();
-              onRevokeItem(task.id);
-            }}
-            title="Выбрать задание для отзыва из дневного плана"
-          >
-            <span>Отозвать</span>
-          </Button>
-        ) : readOnly ? (
-          <span className="text-xs text-muted-foreground">Режим просмотра</span>
-        ) : (
-          <ActionWithReason reason={blockReason} layout="column">
-            <Button
-              size="sm"
-              variant="outline"
-              className={`${buttonBase} transition-all hover:bg-accent/50`}
-              onClick={() => handleAction("complete")}
-              disabled={blockReason !== null}
-              title={blockReason ? actionReasonText(blockReason) : "Завершить задачу"}
-            >
-              <span>Завершить</span>
-            </Button>
-          </ActionWithReason>
-        )}
-    </div>
-  );
-}
-
 // ---------------------------------------------------------------------------
-// TaskGroupRow для таблицы (адаптер)
+// Шапка группы: одна на обе раскладки
 // ---------------------------------------------------------------------------
 
-function TableTaskGroupRow({
+/**
+ * Шапка группы. Суммы, выделение, свёрнутость и причина недоступности
+ * завершения приходят готовыми из `buildTaskGroupView`: разметка ничего не
+ * складывает и не решает (ревью #283 п. 2 — суммы считались дважды, в шапке
+ * таблицы и в шапке карточки, и расходились на разборе `parseFloat`).
+ *
+ * Раскладка — те же колонки, что у строки задания: на телефоне профиль
+ * закреплён слева, «Действия» справа, остальное едет под свайпом (#345).
+ */
+function BoardTaskGroupRow({
   group,
-  isCollapsed,
+  view,
+  columns,
+  variant,
   isBulkMode,
-  bulkSelection,
   onToggleCollapse,
   onSelectGroup,
-  hasPackaging,
+  onCompleteGroup,
   groupQty,
   groupIssue,
   groupOverPlan,
   onGroupQtyChange,
-  onCompleteGroup,
 }: {
   group: TaskGroup;
-  isCollapsed: boolean;
+  view: TaskGroupView;
+  columns: BoardColumn[];
+  variant: BoardTableVariant;
   isBulkMode: boolean;
-  bulkSelection?: BulkSelectionController;
   onToggleCollapse: () => void;
   onSelectGroup: () => void;
-  /** Участок без упаковочных операций — ячейки «Упаковка» в шапке группы нет. */
-  hasPackaging?: boolean;
   /**
    * Групповой ввод (#283): в массовом режиме ячейки «Годные»/«Брак» шапки —
    * поля, и введённое раскладывается по строкам группы. Сумм в шапке тогда нет:
@@ -549,171 +614,186 @@ function TableTaskGroupRow({
    */
   onCompleteGroup?: (group: TaskGroup) => void;
 }) {
-  const taskIds = group.tasks.map((t) => t.id);
-  const allSelected = bulkSelection?.isAllSelected(taskIds) ?? false;
-  const firstTask = group.tasks[0];
-  const header = getTaskGroupHeaderState(group, { isCollapsed, isBulkMode, allSelected });
+  const { firstTask } = view;
   const groupInput = Boolean(isBulkMode && onGroupQtyChange);
-  const recordedGood = groupRecordedFact(group.tasks, "good");
-  const recordedDefect = groupRecordedFact(group.tasks, "defect");
   const overPlan = groupOverPlan ?? { good: false, defect: false };
-  // «Завершить группу» доступна, пока в группе есть хоть одно завершаемое
-  // задание: остальные уйдут в пропущенные, и диалог их перечислит.
-  const completableCount = group.tasks.filter((task) => getCompletionBlockReason(task) === null).length;
-  const groupCompleteReason = completableCount > 0 ? null : getCompletionBlockReason(group.tasks[0]);
   // Рёбра блока — на ячейках: границы `<tr>` в таблице доски (`border-separate`)
   // браузер не рисует, и `border-y` на строке был невидим.
   const headerCellClass = cn(ROW_CELL_CLASS, TABLE_ROW_STYLES.groupHeaderCell);
+  const stickyFill: StickyCellTone = isBulkMode && view.allSelected ? "selected" : "group";
   const railClass = getTaskGroupRailClass(group.tasks);
+  const captionClass = "text-xs font-medium text-slate-500 dark:text-slate-400";
+
+  /** Поле группового ввода: введённое раскладывается по строкам группы. */
+  const groupInputCell = (field: DraftField) => {
+    const label = field === "good" ? "годные группы" : "брак группы";
+    const issue = field === "good" ? groupIssue?.good : groupIssue?.defect;
+    const marked = overPlan[field];
+    return (
+      <span className="flex items-center gap-1">
+        <DraftQtyInput
+          value={groupQty?.[field] ?? ""}
+          onChange={(value) => onGroupQtyChange?.(field, value)}
+          recorded={fmtQty(String(field === "good" ? view.goodQty : view.defectQty))}
+          ariaLabel={`${firstTask.product_sku}: ${label}`}
+          issueText={issue ?? null}
+          overPlan={marked}
+        />
+        {marked && (
+          <span aria-hidden className="text-[10px] leading-none text-amber-600" title="Сверх плана">
+            ▲
+          </span>
+        )}
+      </span>
+    );
+  };
+
+  const cellContent = (columnId: string): ReactNode => {
+    switch (columnId) {
+      case "statusDot":
+        // Шеврон группы на десктопе — в первой колонке, как и раньше. На
+        // телефоне он живёт в закреплённом профиле: точка статуса уезжает
+        // вправо вместе с вторичными колонками и шеврон там был бы недоступен.
+        if (variant !== "desktop") return null;
+        return (
+          <>
+            {/* Спуск от шеврона к строкам: без него направляющая блока
+                начинается ниоткуда и читается как случайная линия. У свёрнутой
+                группы строк нет — нет и спуска. */}
+            {!view.isCollapsed && (
+              <span
+                aria-hidden
+                className={cn(
+                  "pointer-events-none absolute bottom-0 left-1/2 h-2 w-0.5 -translate-x-1/2",
+                  TABLE_ROW_STYLES.groupConnector,
+                )}
+              />
+            )}
+            <div className="relative z-10 flex items-center justify-center">
+              {groupChevron(view, onToggleCollapse, "desktop")}
+            </div>
+          </>
+        );
+      case "productSku":
+        return (
+          <span className="flex min-w-0 items-center gap-1">
+            {variant === "mobile" && groupChevron(view, onToggleCollapse, "mobile")}
+            <span className="truncate">{firstTask.product_sku}</span>
+            <Badge variant="secondary" className={cn(ROW_BADGE_CLASS, "shrink-0 font-bold")}>
+              &times;{view.taskCount}
+            </Badge>
+            {isBulkMode && view.allSelected && (
+              <span className={cn("hidden text-xs sm:inline", TABLE_ROW_STYLES.selectedLabel)}>
+                выбрано
+              </span>
+            )}
+          </span>
+        );
+      case "dimensions":
+        return (
+          <span className={captionClass}>
+            {formatDimensionsLabel(taskGroupingDimensions(firstTask))}
+          </span>
+        );
+      case "operation":
+        return (
+          <span className={captionClass}>
+            {firstTask.transforms_dimensions ? (
+              <CutLayoutCell
+                layout={firstTask.cut_layout}
+                fallback={formatDimensionsLabel(taskGroupingDimensions(firstTask))}
+              />
+            ) : (
+              taskOperations(firstTask).join(" · ") || "—"
+            )}
+          </span>
+        );
+      case "packaging":
+        return (
+          <span className={captionClass}>{packagingBreakdownLabel(group.tasks, fmtQty)}</span>
+        );
+      case "plannedQty":
+        return fmtQty(String(view.planQty));
+      case "issuedQty":
+        return fmtQty(String(view.issuedQty));
+      case "completedQty":
+        return groupInput ? groupInputCell("good") : fmtQty(String(view.goodQty));
+      case "rejectedQty":
+        return groupInput ? groupInputCell("defect") : fmtQty(String(view.defectQty));
+      case "transferredQty":
+        return fmtQty(String(view.transferredQty));
+      case "remainingQty":
+        return fmtQty(String(view.remainingQty));
+      case "actions":
+        if (!onCompleteGroup) return null;
+        return (
+          <ActionWithReason reason={view.completeReason} layout="row">
+            <Button
+              variant="outline"
+              className={ROW_ACTION_BUTTON_CLASS}
+              aria-label="Завершить группу"
+              onClick={(event) => {
+                event.stopPropagation();
+                onCompleteGroup(group);
+              }}
+              disabled={view.completableCount === 0}
+              title={
+                view.completeReason
+                  ? actionReasonText(view.completeReason)
+                  : "Завершить все задания группы: факт и брак раскладываются по строкам"
+              }
+            >
+              <CheckCheck className={ROW_ACTION_ICON_CLASS} aria-hidden />
+              <span className={ROW_ACTION_LABEL_CLASS}>Завершить группу</span>
+            </Button>
+          </ActionWithReason>
+        );
+      default:
+        // «Статус» у группы не нужен: состояние блока несут рельс и тон строк.
+        return null;
+    }
+  };
 
   return (
     <tr
+      data-row-kind="board-group"
       style={{ height: ROW_HEIGHT_PX }}
       tabIndex={isBulkMode ? 0 : undefined}
-      aria-selected={isBulkMode ? allSelected : undefined}
-      className={`cursor-pointer transition-colors font-semibold ${isBulkMode && allSelected ? TABLE_ROW_STYLES.selectedGroupHeader : TABLE_ROW_STYLES.defaultGroupHeader}`}
+      aria-selected={isBulkMode ? view.allSelected : undefined}
+      className={`cursor-pointer transition-colors font-semibold ${isBulkMode && view.allSelected ? TABLE_ROW_STYLES.selectedGroupHeader : TABLE_ROW_STYLES.defaultGroupHeader}`}
       onClick={() => {
         if (isBulkMode) onSelectGroup();
         else onToggleCollapse();
       }}
       onKeyDown={(event) => {
         if (!isBulkMode) return;
-        if (event.target !== event.currentTarget) return;
-        if (event.key !== "Enter" && event.key !== " ") return;
-        event.preventDefault();
-        onSelectGroup();
+        toggleSelectionOnRowKey(event, onSelectGroup);
       }}
     >
-      <td className={cn(headerCellClass, railClass, "relative text-center")}>
-        {/* Спуск от шеврона к строкам: без него направляющая блока начинается
-            ниоткуда и читается как случайная линия. У свёрнутой группы строк
-            нет — нет и спуска. */}
-        {!isCollapsed && (
-          <span
-            aria-hidden
+      {columns.map((column, index) => {
+        const sticky = mobileStickyProps(column.id, variant, false, stickyFill);
+        const isLead = index === 0;
+        return (
+          <td
+            key={column.id}
+            data-column={column.id}
+            {...sticky}
             className={cn(
-              "pointer-events-none absolute bottom-0 left-1/2 h-2 w-0.5 -translate-x-1/2",
-              TABLE_ROW_STYLES.groupConnector,
+              headerCellClass,
+              "text-slate-700 dark:text-slate-200",
+              column.id === "statusDot" && "relative text-center",
+              isLead && "relative",
+              isLead && railClass,
+              sticky?.className,
             )}
-          />
-        )}
-        <div className="relative z-10 flex items-center justify-center">
-          <button
-            className="p-0.5 hover:bg-slate-200 rounded transition-colors text-slate-500 hover:text-slate-800 dark:text-slate-400 dark:hover:bg-slate-700 dark:hover:text-slate-100"
-            onClick={(e) => {
-              e.stopPropagation();
-              onToggleCollapse();
-            }}
-            title={header.collapseTitle}
           >
-            {header.isCollapsed ? (
-              <ChevronRight className="h-4 w-4 shrink-0" />
-            ) : (
-              <ChevronDown className="h-4 w-4 shrink-0" />
-            )}
-          </button>
-        </div>
-      </td>
-      <td className={`${headerCellClass} text-slate-900 dark:text-slate-100`}>
-        {firstTask.product_sku}
-      </td>
-      <td className={`${headerCellClass} text-xs text-slate-500 font-medium dark:text-slate-400`}>
-        {formatDimensionsLabel(taskGroupingDimensions(firstTask))}
-      </td>
-      <td className={`${headerCellClass} text-xs text-slate-500 font-medium dark:text-slate-400`}>
-        {firstTask.transforms_dimensions ? (
-          <CutLayoutCell
-            layout={firstTask.cut_layout}
-            fallback={formatDimensionsLabel(taskGroupingDimensions(firstTask))}
-          />
-        ) : (
-          taskOperations(firstTask).join(" · ") || "—"
-        )}
-      </td>
-      {hasPackaging !== false && (
-        <td className={`${headerCellClass} text-xs text-slate-500 font-medium dark:text-slate-400`}>
-          {packagingBreakdownLabel(group.tasks, fmtQty)}
-        </td>
+            {cellContent(column.id)}
+          </td>
+        );
+      })}
+      {variant === "desktop" && (
+        <TableCornerResetCell className={TABLE_ROW_STYLES.groupHeaderCell} />
       )}
-      <td className={`${headerCellClass} text-slate-700 dark:text-slate-200`}>{fmtQty(String(group.totalQtyPlan))}</td>
-      <td className={`${headerCellClass} text-slate-700 dark:text-slate-200`}>{fmtQty(String(group.tasks.reduce((s, t) => s + parseFloat(t.cache.issued_quantity), 0)))}</td>
-      <td className={`${headerCellClass} text-slate-700 dark:text-slate-200`}>
-        {groupInput ? (
-          <span className="flex items-center gap-1">
-            <DraftQtyInput
-              value={groupQty?.good ?? ""}
-              onChange={(value) => onGroupQtyChange?.("good", value)}
-              recorded={fmtQty(String(recordedGood))}
-              ariaLabel={`${firstTask.product_sku}: годные группы`}
-              issueText={groupIssue?.good ?? null}
-              overPlan={overPlan.good}
-            />
-            {overPlan.good && (
-              <span aria-hidden className="text-[10px] leading-none text-amber-600" title="Сверх плана">
-                ▲
-              </span>
-            )}
-          </span>
-        ) : (
-          fmtQty(String(group.totalQtyDone))
-        )}
-      </td>
-      <td className={`${headerCellClass} text-slate-700 dark:text-slate-200`}>
-        {groupInput ? (
-          <span className="flex items-center gap-1">
-            <DraftQtyInput
-              value={groupQty?.defect ?? ""}
-              onChange={(value) => onGroupQtyChange?.("defect", value)}
-              recorded={fmtQty(String(recordedDefect))}
-              ariaLabel={`${firstTask.product_sku}: брак группы`}
-              issueText={groupIssue?.defect ?? null}
-              overPlan={overPlan.defect}
-            />
-            {overPlan.defect && (
-              <span aria-hidden className="text-[10px] leading-none text-amber-600" title="Сверх плана">
-                ▲
-              </span>
-            )}
-          </span>
-        ) : (
-          fmtQty(String(recordedDefect))
-        )}
-      </td>
-      <td className={`${headerCellClass} text-slate-700 dark:text-slate-200`}>{fmtQty(String(group.tasks.reduce((s, t) => s + parseFloat(t.cache.transferred_quantity), 0)))}</td>
-      <td className={`${headerCellClass} text-slate-700 dark:text-slate-200`}>{fmtQty(String(group.tasks.reduce((s, t) => s + parseFloat(t.cache.remaining_quantity), 0)))}</td>
-      <td className={headerCellClass}>
-        <div className="flex items-center gap-1">
-          <Badge variant="secondary" className={`${ROW_BADGE_CLASS} font-bold`}>
-            &times;{group.tasks.length}
-          </Badge>
-          {isBulkMode && header.allSelected && (
-            <span className={`text-xs ${TABLE_ROW_STYLES.selectedLabel}`}>выбрано</span>
-          )}
-        </div>
-      </td>
-      <td className={cn(headerCellClass, isBulkMode && allSelected ? TABLE_ROW_STYLES.selectedGroupHeader : TABLE_ROW_STYLES.defaultGroupRow)}>
-        {onCompleteGroup && (
-          <ActionWithReason reason={groupCompleteReason} layout="row">
-            <Button
-              variant="outline"
-              className={ROW_ACTION_BUTTON_CLASS}
-              onClick={(event) => {
-                event.stopPropagation();
-                onCompleteGroup(group);
-              }}
-              disabled={completableCount === 0}
-              title={
-                groupCompleteReason
-                  ? actionReasonText(groupCompleteReason)
-                  : "Завершить все задания группы: факт и брак раскладываются по строкам"
-              }
-            >
-              Завершить группу
-            </Button>
-          </ActionWithReason>
-        )}
-      </td>
-      <TableCornerResetCell className={TABLE_ROW_STYLES.groupHeaderCell} />
     </tr>
   );
 }
@@ -763,8 +843,8 @@ type SectionTasksBoardProps = {
   onVisibleTaskIdsChange?: (ids: number[]) => void;
   /**
    * Есть ли у участка упаковочные операции (`Section.has_packaging`). На
-   * участке без них колонки «Упаковка» нет ни в шапке, ни в строке, ни в
-   * карточке — иначе пустая колонка читается как «данные не пришли».
+   * участке без них колонки «Упаковка» нет ни в шапке, ни в строке — иначе
+   * пустая колонка читается как «данные не пришли».
    */
   hasPackaging?: boolean;
   /**
@@ -866,13 +946,27 @@ export function SectionTasksBoard({
   onServerQueryChange,
 }: SectionTasksBoardProps) {
   const tableScrollRef = useRef<HTMLDivElement>(null);
-  // Колонки участка: «Упаковка» есть только там, где у участка есть
-  // упаковочные операции. Число колонок служебных строк («В ожидании», пустое
-  // состояние, распорки виртуализации) выводится из них же, а не константой:
-  // забытое число оставляло служебную строку уже шапки, и полоса обрывалась,
-  // не закрывая угол сброса фильтров. `+ 1` — этот угол.
-  const visibleColumns = useMemo(() => visibleBoardColumns(hasPackaging), [hasPackaging]);
-  const boardColspan = visibleColumns.length + 1;
+  /**
+   * Один экран за раз. Порог совпадает с Tailwind `md` — ровно то, что решают
+   * мобильные классы `max-md:`. До #345 ветки (таблица и карточки) строились
+   * одновременно и прятались классами: двойная работа на каждом кадре и дубли
+   * в дереве (одно задание рисовалось дважды).
+   */
+  const isDesktopViewport = useMediaQuery(DESKTOP_VIEWPORT_QUERY);
+  const variant: BoardTableVariant = isDesktopViewport ? "desktop" : "mobile";
+  /**
+   * Колонки участка: «Упаковка» есть только там, где у неё есть упаковочные
+   * операции, а на телефоне тот же набор идёт в порядке оператора (#345).
+   * Число колонок служебных строк («В ожидании», пустое состояние, распорки
+   * виртуализации) выводится из них же, а не константой: забытое число
+   * оставляло служебную строку уже шапки. На десктопе `+ 1` — угол сброса
+   * фильтров; на телефоне его нет — сброс живёт в ряду фильтров.
+   */
+  const columns = useMemo(
+    () => (isDesktopViewport ? visibleBoardColumns(hasPackaging) : mobileBoardColumns(hasPackaging)),
+    [isDesktopViewport, hasPackaging],
+  );
+  const boardColspan = columns.length + (isDesktopViewport ? 1 : 0);
   // Правило заглушки — общее для всех таблиц (ADR-0044), поэтому берётся из
   // shared, а не пишется здесь выражением: тринадцать копий однажды разъедутся.
   const showLoadingPlaceholder = isFirstRowsLoad(isLoading, tasks);
@@ -965,8 +1059,8 @@ export function SectionTasksBoard({
   // Порядок строк доски. Колонки серверной сортировки (sequence/productSku/
   // status/dimensions) уже пришли в нужном порядке с сервера, остальные
   // клиент упорядочивает здесь, поверх ответа и до группировки. Без сортировки
-  // действует дефолт «количество убыв., размер убыв.», а внутри группы —
-  // «статус, затем sequence» (GLOSSARY.md, раздел «Сортировка строк по размеру»).
+  // действует дефолт «остаток убыв.» (GLOSSARY.md, раздел «Сортировка строк
+  // по остатку»).
   const hasActiveSort = sortConfigs.length > 0;
   const clientSortConfigs = useMemo(
     () => sortConfigs.filter((config) => !isServerSortField(config.field)),
@@ -999,17 +1093,19 @@ export function SectionTasksBoard({
     const grouped = groupTasksByProfile(sortedTasks, profile);
     if (hasActiveSort) return grouped;
 
-    const ordered = clusterByArticle(sortGroupsByQuantityAndSize(grouped), {
+    const ordered = clusterByArticle(sortGroupsByRemaining(grouped), {
       articleOf: (group) => group.tasks[0]?.product_sku ?? "—",
-      quantityOf: (group) => group.totalQtyPlan,
+      quantityOf: (group) => group.totalRemaining,
+      compareArticles: (a, b) => a.localeCompare(b, "ru"),
     });
     for (const g of ordered) {
-      g.tasks.sort((a, b) => {
-        const pA = getStatusPriority(a);
-        const pB = getStatusPriority(b);
-        if (pA !== pB) return pA - pB;
-        return a.sequence - b.sequence;
-      });
+      // Остаток убыв.; при равенстве сохраняется порядок сервера — сортировка
+      // устойчива.
+      g.tasks.sort(
+        (a, b) =>
+          (parseFloat(b.cache.remaining_quantity) || 0) -
+          (parseFloat(a.cache.remaining_quantity) || 0),
+      );
     }
 
     return ordered;
@@ -1129,12 +1225,6 @@ export function SectionTasksBoard({
     }
   };
 
-  /**
-   * Значение группового поля выводится из строк, а не хранится отдельно: так
-   * набранное и разложенное не расходятся, и правка отдельной строки видна в
-   * шапке. Пусто во всех строках — поле показывает плейсхолдер с записанным
-   * фактом.
-   */
   /** Значение поля группы: набранное, пока оно не разложено, иначе — из строк. */
   const groupFieldValue = (
     tasks: SectionBoardTask[],
@@ -1336,30 +1426,29 @@ export function SectionTasksBoard({
     </tr>
   ), [boardColspan]);
 
-  /** Заголовок блока «В ожидании» для мобильных карточек. */
-  const renderWaitingDividerMobile = useCallback((key: string, count: number) => (
-    <div key={key} className="flex items-center gap-2 px-1">
-      <span className="text-[11px] font-semibold uppercase tracking-wide text-amber-800">
-        В ожидании
-      </span>
-      <span className="text-[11px] tabular-nums text-amber-800/70">{count}</span>
-      <span className="h-px flex-1 bg-amber-200" />
-    </div>
-  ), []);
-
+  /** Строка виртуализированного тела: разделитель, шапка группы или задание. */
   const renderVirtualRow = useCallback(
     (row: VirtualBoardRow) => {
       if (row.kind === "divider") return renderWaitingDivider(row);
       if (row.kind === "group") {
+        // Состояние группы считается один раз и уходит в разметку готовым:
+        // суммы, свёрнутость и причина завершения не складываются в JSX.
+        const view = buildTaskGroupView(row.group, {
+          isCollapsed: row.isCollapsed,
+          isBulkMode: Boolean(bulkMode),
+          allSelected: Boolean(
+            bulkMode && bulkSelection?.isAllSelected(row.group.tasks.map((t) => t.id)),
+          ),
+        });
         return (
-          <TableTaskGroupRow
+          <BoardTaskGroupRow
             key={row.key}
             group={row.group}
-            isCollapsed={row.isCollapsed}
+            view={view}
+            columns={columns}
+            variant={variant}
             isBulkMode={!!bulkMode}
-            bulkSelection={bulkSelection}
             onToggleCollapse={() => toggleGroup(row.entryKey)}
-            hasPackaging={hasPackaging}
             groupQty={{
               good: groupFieldValue(row.group.tasks, "good", row.entryKey),
               defect: groupFieldValue(row.group.tasks, "defect", row.entryKey),
@@ -1399,6 +1488,8 @@ export function SectionTasksBoard({
         : bulkMode && bulkSelection?.isSelected(row.task.id);
       return renderTaskRow(
         row.task,
+        columns,
+        variant,
         isSelected,
         bulkMode,
         bulkSelection,
@@ -1416,15 +1507,17 @@ export function SectionTasksBoard({
       bulkMode,
       bulkSelection,
       bulkDraft,
+      columns,
       hasPackaging,
       handleGroupQtyChange,
       onAction,
       onBulkDraftChange,
-          onRevokeItem,
+      onRevokeItem,
       readOnly,
       renderWaitingDivider,
       revokeSelection,
       toggleGroup,
+      variant,
     ],
   );
 
@@ -1446,21 +1539,14 @@ export function SectionTasksBoard({
     [searchQuery, sortConfigs.length, columnFilters, columnSearchQueries],
   );
 
-  /**
-   * Один экран за раз. Обе ветки (десктопная таблица и мобильные карточки)
-   * строились одновременно и прятались только классами — двойная работа на
-   * каждом кадре и дубли в дереве (одно и то же задание рисовалось дважды).
-   * Порог совпадает с Tailwind `md`: ровно то, что решают классы
-   * `hidden md:block` / `md:hidden`.
-   */
-  const isDesktopViewport = useMediaQuery("(min-width: 768px)");
-
   return (
     <div className="space-y-3">
       <FiltersPanel
         compact
         fields={modeFields}
         activeSummary={activeFilterSummary}
+        onReset={handleResetAllFilters}
+        hasActiveFilters={hasTableFiltersActive}
         onSelectAll={onSelectAllVisible ? () => {
           onBulkModeChange?.(true);
           onSelectAllVisible(selectableTaskIds);
@@ -1501,21 +1587,35 @@ export function SectionTasksBoard({
 
       {!showLoadingPlaceholder && total > 0 && (
         <>
-          {/* Десктопная таблица — только на ширине md и выше. */}
-          {isDesktopViewport && (
-            <div className={`hidden md:block ${DATA_TABLE_STYLES.container}`}>
-              <div
-                ref={tableScrollRef}
-                className="overflow-auto"
-                style={{ maxHeight: "70vh" }}
-              >
-              <table className="w-full border-separate border-spacing-0 text-sm">
-                <thead>
-                  <tr>
-                    {visibleColumns.map((column) => (
+          {/* Одна таблица на оба экрана (#345): на телефоне — порядок
+              оператора, «SKU/профиль» закреплён слева, «Действия» справа,
+              между ними свайп; на десктопе — прежняя раскладка. Карточек
+              задания больше нет: строка — это `<tr>` на любой ширине. */}
+          <MobileScrollTable
+            scrollRef={tableScrollRef}
+            className={DATA_TABLE_STYLES.container}
+            style={{ maxHeight: "70vh", overflow: "auto" }}
+          >
+            <table
+              className={cn(
+                "w-full border-separate border-spacing-0 text-sm",
+                MOBILE_TABLE_MIN_WIDTH_CLASS,
+              )}
+            >
+              <thead>
+                <tr>
+                  {columns.map((column) => {
+                    const sticky = mobileStickyProps(column.id, variant, true, "header");
+                    return (
                       <th
                         key={column.id}
-                        className={`${headerCellClass} ${column.className ?? "text-left"}`}
+                        data-column={column.id}
+                        {...sticky}
+                        className={cn(
+                          headerCellClass,
+                          column.className ?? "text-left",
+                          sticky?.className,
+                        )}
                         aria-sort={column.sortField ? getAriaSort(sortConfigs, column.sortField) : undefined}
                       >
                         <DataTableColumnHeader
@@ -1530,155 +1630,39 @@ export function SectionTasksBoard({
                           onSortChange={handleSortChange}
                         />
                       </th>
-                    ))}
+                    );
+                  })}
+                  {/* Угол сброса фильтров — только десктоп: на телефоне он
+                      оказался бы под закреплёнными «Действиями». Сброс там
+                      живёт в ряду фильтров, рядом с поиском (ADR-0067). */}
+                  {isDesktopViewport && (
                     <TableCornerResetHeader
                       hasActiveFilters={hasTableFiltersActive}
                       onReset={handleResetAllFilters}
                       dataTableHeader
                     />
-                  </tr>
-                </thead>
-                {sortedTasks.length === 0 ? (
-                  <tbody>
-                    <tr>
-                      <td colSpan={boardColspan} className="p-8 text-center text-sm text-muted-foreground">
-                        Нет задач, соответствующих фильтру
-                      </td>
-                    </tr>
-                  </tbody>
-                ) : (
-                  <VirtualizedTableBody
-                    rows={virtualRows}
-                    rowHeight={ROW_HEIGHT_PX}
-                    colSpan={boardColspan}
-                    scrollContainerRef={tableScrollRef}
-                    renderRow={(row) => renderVirtualRow(row)}
-                  />
-                )}
-              </table>
-              </div>
-            </div>
-          )}
-
-          {/* Мобильные карточки — только на узкой ширине. */}
-          {!isDesktopViewport && (
-            <div className="md:hidden space-y-3">
+                  )}
+                </tr>
+              </thead>
               {sortedTasks.length === 0 ? (
-                <div className="rounded-lg border p-4 text-sm text-muted-foreground text-center">
-                  Нет задач, соответствующих фильтру
-                </div>
-              ) : boardEntries.map((entry) => {
-                if (entry.kind === "divider") return renderWaitingDividerMobile(entry.key, entry.count);
-                const group = entry.group;
-                const isCollapsed = bulkMode ? false : collapsedGroups.has(entry.key);
-                const isSingleTask = group.tasks.length === 1;
-
-                // Одна задача — рендерим напрямую без шапки группы
-                if (isSingleTask) {
-                  const task = group.tasks[0];
-                  const isSelected = revokeSelection
-                    ? revokeSelection.isSelected(task.id)
-                    : bulkMode && bulkSelection?.isSelected(task.id);
-                  return renderMobileCard(task, isSelected, bulkMode, bulkSelection, onAction, onRevokeItem, isRevoking, true, readOnly, hasPackaging, draftContextFor(task));
-                }
-
-                const mobileHeader = getTaskGroupHeaderState(group, {
-                  isCollapsed,
-                  isBulkMode: Boolean(bulkMode),
-                  allSelected: Boolean(bulkMode && bulkSelection?.isAllSelected(group.tasks.map((t) => t.id))),
-                });
-                return (
-                  <div key={entry.key} className={`rounded-lg overflow-hidden transition-colors ${bulkMode && bulkSelection?.isAllSelected(group.tasks.map(t => t.id)) ? TABLE_ROW_STYLES.selectedGroupContainer : TABLE_ROW_STYLES.defaultGroupContainer}`}>
-                    <div
-                      className="p-3 flex items-center justify-between gap-2 border-b border-muted cursor-pointer"
-                      onClick={() => {
-                        if (bulkMode && bulkSelection) {
-                          const taskIds = group.tasks.map((t) => t.id);
-                          const allSelected = bulkSelection.isAllSelected(taskIds);
-                          const someSelected = bulkSelection.isIndeterminate(taskIds);
-                          if (allSelected || someSelected) {
-                            for (const id of taskIds) {
-                              bulkSelection.selectOne(id, false);
-                            }
-                          } else {
-                            for (const id of taskIds) {
-                              bulkSelection.selectOne(id, true);
-                            }
-                          }
-                        } else {
-                          toggleGroup(entry.key);
-                        }
-                      }}
-                    >
-                      <div className="flex items-center gap-2 min-w-0">
-                        <button
-                          className="p-0.5 hover:bg-muted/50 rounded transition-colors cursor-pointer"
-                          onClick={(e) => {
-                            e.stopPropagation();
-                            toggleGroup(entry.key);
-                          }}
-                          title={mobileHeader.collapseTitle}
-                        >
-                          {mobileHeader.isCollapsed ? (
-                            <ChevronRight className="h-4 w-4 text-muted-foreground" />
-                          ) : (
-                            <ChevronDown className="h-4 w-4 text-muted-foreground" />
-                          )}
-                        </button>
-                        <span className="font-semibold text-sm truncate">
-                          {group.label}
-                        </span>
-                        {bulkMode && mobileHeader.allSelected && (
-                          <span className={`text-xs ${TABLE_ROW_STYLES.selectedLabel} ml-1`}>выбрано</span>
-                        )}
-                      </div>
-                      <div className="flex items-center gap-2 shrink-0">
-                        <Badge variant="secondary" className={`bg-blue-100 text-blue-700 ${TABLE_ROW_COMPACT.badge}`}>
-                          &times;{group.tasks.length}
-                        </Badge>
-                      </div>
-                    </div>
-                    {/* Групповой ввод на узком экране — те же два поля, что и в
-                        шапке таблицы: отдельной мобильной модели нет (#283, п. 7). */}
-                    {bulkMode && onBulkDraftChange && !readOnly && (
-                      <div
-                        className="flex flex-wrap items-end gap-3 border-b border-muted px-3 py-2"
-                        onClick={(event) => event.stopPropagation()}
-                      >
-                        {([
-                          ["good", "Годные группы"],
-                          ["defect", "Брак группы"],
-                        ] as const).map(([field, label]) => {
-                          const value = groupFieldValue(group.tasks, field, entry.key);
-                          const recorded = groupRecordedFact(group.tasks, field);
-                          return (
-                            <label key={field} className="flex flex-col gap-0.5 text-[11px] text-muted-foreground">
-                              {label}
-                              <DraftQtyInput
-                                value={value}
-                                onChange={(next) => handleGroupQtyChange(group.tasks, field, next, entry.key)}
-                                recorded={fmtQty(String(recorded))}
-                                ariaLabel={`${group.label}: ${label}`}
-                                issueText={groupFieldIssue(group.tasks, field, entry.key)}
-                                overPlan={groupOverPlan(group.tasks)[field]}
-                              />
-                            </label>
-                          );
-                        })}
-                      </div>
-                    )}
-                    {!isCollapsed && <div className="divide-y divide-muted">{group.tasks.map((task, idx) => {
-                      const isLast = idx === group.tasks.length - 1;
-                      const isSelected = revokeSelection
-                        ? revokeSelection.isSelected(task.id)
-                        : bulkMode && bulkSelection?.isSelected(task.id);
-                      return renderMobileCard(task, isSelected, bulkMode, bulkSelection, onAction, onRevokeItem, isRevoking, isLast, readOnly, hasPackaging, draftContextFor(task, entry.key));
-                    })}</div>}
-                  </div>
-                );
-              })}
-            </div>
-          )}
+                <tbody>
+                  <tr>
+                    <td colSpan={boardColspan} className="p-8 text-center text-sm text-muted-foreground">
+                      Нет задач, соответствующих фильтру
+                    </td>
+                  </tr>
+                </tbody>
+              ) : (
+                <VirtualizedTableBody
+                  rows={virtualRows}
+                  rowHeight={ROW_HEIGHT_PX}
+                  colSpan={boardColspan}
+                  scrollContainerRef={tableScrollRef}
+                  renderRow={(row) => renderVirtualRow(row)}
+                />
+              )}
+            </table>
+          </MobileScrollTable>
 
           <TablePaginationFooter
             page={page}

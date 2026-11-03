@@ -47,6 +47,7 @@ import {
   draftShortage,
   draftTotals,
   isDraftEmpty,
+  resolveBulkConfirmReason,
   withoutDraftIds,
   type BulkDraft,
 } from "../lib/bulkDraft";
@@ -623,12 +624,11 @@ export function SectionsTasksPage() {
         }
       } else if (bulkMode) {
         // Escape снимает выделение, а с непустым черновиком — спрашивает, потому
-        // что снятое выделение уносит и набранное количество (#283).
+        // что снятое выделение уносит и набранное количество (#283). Режим при
+        // этом остаётся: оператор просил «снять выделение», а не «выйти из
+        // массового режима» — черновик уносит `withoutDraftIds` в эффекте выше.
         if (!isDraftEmpty(bulkDraft)) {
           setDraftExitAction(() => () => {
-            setBulkMode(false);
-            setBulkDraft({});
-            setBulkShortageStrategy(null);
             bulkSelection.clear();
           });
         } else if (bulkSelection.selectedCount > 0) {
@@ -965,22 +965,25 @@ export function SectionsTasksPage() {
   /**
    * Итог черновика и причина недоступности подтверждения (#283). Причины — из
    * общего словаря (#193): «нет заданий для завершения» (введено, но завершать
-   * нечего), «введите количество» (черновик пуст) и «выберите, что делать с
-   * излишком» (дефицит без выбранной стратегии). Панель массовых операций
-   * молчала о третьей и не отправляла стратегию вовсе.
+   * нечего), «введите количество» (черновик пуст), «введите количество больше
+   * записанного» (набрано «+0» или цель совпала с записанным) и «выберите, что
+   * делать с излишком» (дефицит без выбранной стратегии). Панель массовых
+   * операций молчала о третьей и не отправляла стратегию вовсе.
    */
   const bulkDraftShortage = useMemo(
     () => draftShortage(selectedTasks, bulkDraft),
     [selectedTasks, bulkDraft],
   );
-  const bulkConfirmBlockReason: ActionReasonCode | null = useMemo(() => {
-    const { entries, skipped } = draftEntries(selectedTasks, bulkDraft);
-    if (entries.length === 0) {
-      return skipped.length > 0 ? "bulk_nothing_to_complete" : "bulk_no_quantity";
-    }
-    if (bulkDraftShortage && !bulkShortageStrategy) return "no_shortage_strategy";
-    return null;
-  }, [selectedTasks, bulkDraft, bulkDraftShortage, bulkShortageStrategy]);
+  const bulkConfirmBlockReason: ActionReasonCode | null = useMemo(
+    () =>
+      resolveBulkConfirmReason({
+        tasks: selectedTasks,
+        draft: bulkDraft,
+        shortage: bulkDraftShortage,
+        hasShortageStrategy: bulkShortageStrategy !== null,
+      }),
+    [selectedTasks, bulkDraft, bulkDraftShortage, bulkShortageStrategy],
+  );
 
   const clearBulkDraft = useCallback(() => {
     setBulkDraft({});

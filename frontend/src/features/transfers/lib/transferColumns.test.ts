@@ -68,7 +68,7 @@ describe("параметры готовых к передаче", () => {
     expect(buildReady({ positionId: new Set(["abc"]) })).toEqual({});
   });
 
-  it("«Следующий» раскладывается на операцию и участок", () => {
+  it("«Куда» раскладывается на операцию и участок", () => {
     expect(buildReady({ next: new Set(["Пиление / Упаковка"]) })).toEqual({
       next_operation_name: "Пиление",
       next_section_name: "Упаковка",

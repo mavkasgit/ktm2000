@@ -52,14 +52,6 @@ export function taskGroupingDimensionsKey(task: SectionBoardTask): string {
   return dimensionsKey(taskGroupingDimensions(task));
 }
 
-/** Числовой размер задачи (`length_mm`) для сортировки; безразмерные — -Infinity. */
-export function taskSizeMm(task: SectionBoardTask): number {
-  const dims = taskGroupingDimensions(task);
-  const mm = dims?.length_mm;
-  return typeof mm === "number" && Number.isFinite(mm) ? mm : -Infinity;
-}
-
-
 // ---------------------------------------------------------------------------
 // Построение ключа группы
 // ---------------------------------------------------------------------------
@@ -225,7 +217,7 @@ function buildGroupLabel(
  * появления задания, задания внутри группы — во входном порядке.
  *
  * Порядок строк — дело вызывающего (доска применяет сортировку колонки
- * либо дефолт «количество убыв., размер убыв.»); группировка его не затирает.
+ * либо дефолт «остаток убыв.»); группировка его не затирает.
  */
 export function groupTasksByProfile(
   tasks: SectionBoardTask[],
@@ -243,6 +235,7 @@ export function groupTasksByProfile(
         tasks: [],
         totalQtyPlan: 0,
         totalQtyDone: 0,
+        totalRemaining: 0,
       });
     }
 
@@ -251,8 +244,10 @@ export function groupTasksByProfile(
 
     const completedQty = parseFloat(task.cache.completed_quantity);
     const plannedQty = parseFloat(task.planned_quantity);
+    const remainingQty = parseFloat(task.cache.remaining_quantity) || 0;
     group.totalQtyPlan += plannedQty;
     group.totalQtyDone += completedQty;
+    group.totalRemaining += remainingQty;
   }
 
   return Array.from(map.values());
@@ -263,21 +258,22 @@ export function groupTasksByProfile(
 // Утилиты для работы с группами
 // ---------------------------------------------------------------------------
 
-/** Числовой размер группы (`length_mm`) для сортировки; безразмерные — -Infinity. */
-function groupSizeMm(group: TaskGroup): number {
-  return taskSizeMm(group.tasks[0]);
+/** Артикул группы — первая строка всегда несёт артикул профиля. */
+function groupArticle(group: TaskGroup): string {
+  return group.tasks[0]?.product_sku ?? "—";
 }
 
 /**
- * Сортировка групп/строк по количеству убыв.; при равных — размер убыв.
- * (3 м → 1 м), где размер — `length_mm` габарита (для пар и 2D-габаритов
- * без `length_mm` — безразмерные, в конец).
+ * Сортировка групп/строк по остатку убыв.; при равных — артикул по алфавиту,
+ * затем подпись группы (артикул · размер) по алфавиту.
  */
-export function sortGroupsByQuantityAndSize(groups: TaskGroup[]): TaskGroup[] {
+export function sortGroupsByRemaining(groups: TaskGroup[]): TaskGroup[] {
   return [...groups].sort((a, b) => {
-    const qtyDiff = b.totalQtyPlan - a.totalQtyPlan;
-    if (qtyDiff !== 0) return qtyDiff;
-    return groupSizeMm(b) - groupSizeMm(a);
+    const remainingDiff = b.totalRemaining - a.totalRemaining;
+    if (remainingDiff !== 0) return remainingDiff;
+    const articleDiff = groupArticle(a).localeCompare(groupArticle(b), "ru");
+    if (articleDiff !== 0) return articleDiff;
+    return a.label.localeCompare(b.label, "ru");
   });
 }
 

@@ -23,7 +23,7 @@ from app.models.route import (
     SectionOperation,
 )
 from app.models.section import Section
-from app.services.plan_import_service import _make_change_items
+from app.services.plan_import_service import SkuIndex, _make_change_items
 from sqlalchemy import select
 
 DEFAULT_SECTIONS = [
@@ -223,14 +223,14 @@ async def test_dynamic_route_creates_real_production_route(session) -> None:
         ),
     ]
 
-    products_by_sku = {product.sku.lower(): product}
+    sku_index = SkuIndex.from_products([product])
 
     # change_set_id=1 simulates real import (not preview)
     items, _diagnostics = await _make_change_items(
         session,
         change_set_id=1,
         parsed_rows=parsed_rows,
-        products_by_sku=products_by_sku,
+        sku_index=sku_index,
         mode=None,
         existing_positions=[],
         rule_profile_id=profile_id,
@@ -289,13 +289,13 @@ async def test_dynamic_route_reuses_same_route_within_import(session) -> None:
         ),
     ]
 
-    products_by_sku = {product.sku.lower(): product}
+    sku_index = SkuIndex.from_products([product])
 
     items, _diagnostics = await _make_change_items(
         session,
         change_set_id=2,
         parsed_rows=parsed_rows,
-        products_by_sku=products_by_sku,
+        sku_index=sku_index,
         mode=None,
         existing_positions=[],
         rule_profile_id=profile_id,
@@ -340,13 +340,13 @@ async def test_different_routes_created_for_different_signatures(session) -> Non
         ),
     ]
 
-    products_by_sku = {product.sku.lower(): product}
+    sku_index = SkuIndex.from_products([product])
 
     items, _diagnostics = await _make_change_items(
         session,
         change_set_id=3,
         parsed_rows=parsed_rows,
-        products_by_sku=products_by_sku,
+        sku_index=sku_index,
         mode=None,
         existing_positions=[],
         rule_profile_id=profile_id,
@@ -385,14 +385,14 @@ async def test_preview_does_not_create_routes(session) -> None:
         ),
     ]
 
-    products_by_sku = {product.sku.lower(): product}
+    sku_index = SkuIndex.from_products([product])
 
     # change_set_id=0 means preview
     items, _diagnostics = await _make_change_items(
         session,
         change_set_id=0,
         parsed_rows=parsed_rows,
-        products_by_sku=products_by_sku,
+        sku_index=sku_index,
         mode=None,
         existing_positions=[],
         rule_profile_id=profile_id,

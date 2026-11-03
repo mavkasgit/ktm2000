@@ -74,6 +74,7 @@ from app.seeds.seeders.packing_plan_demo_seeder import (
     PREP_STAGE_PLAN_ROWS,
     UNPAIRED_PAIR_ROWS,
     _daily_plan_specs,
+    _fold_row_groups,
     _lifecycle_of,
     _plan_workbook,
     _prep_stage_workbook,
@@ -429,10 +430,10 @@ def _expected_stage_tasks_by_section(rows: Sequence[Mapping[str, object]]) -> di
 #: расходится по участкам круговым разбором, а повторный артикул встаёт
 #: четвёртым и снова попадает на сверловку — отдельным заданием.
 DEMO_SLICE_ROWS: tuple[dict[str, object], ...] = (
-    PREP_PLAN_ROWS[0],  # ALS1288, «сверло» → DRILLING
+    PREP_PLAN_ROWS[0],  # ALS-1288, «сверло» → DRILLING
     PREP_PLAN_ROWS[4],  # АТ-6324, «гребенка» → PRESSING / PRESS_COMB
-    PREP_PLAN_ROWS[2],  # ALS1290, пустая операция → SHOT_BLAST
-    PREP_PLAN_ROWS[3],  # повторный ALS1288 → отдельное задание DRILLING
+    PREP_PLAN_ROWS[2],  # ALS-1290, пустая операция → SHOT_BLAST
+    PREP_PLAN_ROWS[3],  # повторный ALS-1288 → отдельное задание DRILLING
     PACKING_PLAN_ROWS[1],  # базовая упаковочная группа (ГП) → SAWING
     PACKING_PLAN_ROWS[0],  # одинокая строка артикула пары (2616, 300) → своя норма
     ANOD_PAIR_ROWS[2],  # ЮП-2974 «П/ф» → ANODIZING, бакет «закрыто»
@@ -614,7 +615,7 @@ def test_anod_pair_fixture_is_built_for_merging() -> None:
 
 
 def test_fixture_blocks_use_real_skus_and_stay_recognizable() -> None:
-    """Артикулы блоков — реальные каталожные (``ЮП-…``/``АТ-…``/``ALS…`` с живым
+    """Артикулы блоков — реальные каталожные (``ЮП-…``/``АТ-…``/``ALS-…`` с живым
     именем товара), а не выдуманные коды: демо показывает заводскую номенклатур
     и не плодит фейковые карточки товара.
 
@@ -641,7 +642,9 @@ def test_fixture_blocks_use_real_skus_and_stay_recognizable() -> None:
     ):
         for row in block:
             sku = str(row["sku"])
-            assert re.match(r"^(ЮП|АТ|ALS)-?\d", sku), f"{sku}: не каталожный формат артикула"
+            # Дефис обязателен: слитная форма (``ALS1290``) — легаси, от которого
+            # прод ушёл вместе с миграцией 083.
+            assert re.match(r"^(ЮП|АТ|ALS)-\d", sku), f"{sku}: не каталожный формат артикула"
             assert len(str(row["name"])) >= 5, f"{sku}: пустое имя товара"
     invented = sorted(
         str(row["sku"])
@@ -1008,16 +1011,38 @@ def test_fixture_cutting_rows_keep_output_not_longer_than_input() -> None:
     assert not impossible, f"выход длиннее входа: {impossible}"
 
 
-def test_fixture_cutting_rows_do_not_shrink_piece_count() -> None:
-    """Раскрой 2,7 → 0,9 даёт больше кусков, а не меньше: просадка количества на
-    режущей позиции обрушила бы выдачу следующей стадии."""
-    shrunk = [
-        (row["sku"], row["input_quantity"], row["output_quantity"])
-        for row in DEMO_PLAN_ROWS
-        if float(row["output_length_m"]) < float(row["input_length_m"])
-        and float(row["output_quantity"]) < float(row["input_quantity"])
-    ]
-    assert not shrunk, f"раскрой уменьшает количество: {shrunk}"
+def test_fixture_cutting_rows_match_whole_bar_yield() -> None:
+    """Целый прут режется на целое число деталей, а не на доли.
+
+    ``2,7 → 1,8`` даёт одну деталь и обрезок 0,9 м, поэтому из 600 заготовок
+    выходит 600 деталей, а не 900: 900 получилось делением метров, и на доске
+    такая строка рисует deficit, которого в физике нет. Одиночная режущая строка
+    обязана использовать прут целиком (``выход = вход × целых деталей из прута``);
+    группа распила на несколько длин — съесть метры без остатка.
+    """
+    for group in _fold_row_groups(DEMO_PLAN_ROWS):
+        head = group[0]
+        input_length = float(head["input_length_m"])
+        input_quantity = int(head["input_quantity"])
+        outputs = [
+            (float(row["output_length_m"]), int(row["output_quantity"])) for row in group
+        ]
+        if len(outputs) > 1:
+            produced = sum(length * quantity for length, quantity in outputs)
+            assert produced == input_length * input_quantity, (
+                f"{head['sku']}: группа распил {outputs} съедает {input_length * input_quantity} м"
+                f" заготовки, а даёт {produced} м"
+            )
+            continue
+        output_length, output_quantity = outputs[0]
+        if output_length == input_length:
+            continue
+        pieces_per_bar = int(input_length // output_length)
+        assert output_quantity == input_quantity * pieces_per_bar, (
+            f"{head['sku']}: {input_length} м × {input_quantity} режется на "
+            f"{pieces_per_bar} шт по {output_length} м — должно быть "
+            f"{input_quantity * pieces_per_bar}, в фикстуре {output_quantity}"
+        )
 
 
 # ─── 2. Сборка xlsx для импорта ─────────────────────────────────────────────
@@ -1358,7 +1383,7 @@ async def test_slice_seed_walks_the_domain_path(demo_seed: dict, demo_db: AsyncS
             demo_db, WorkTask, WorkTask.section_id == section.id
         ) == expected_by_section[code]
 
-    # Нормативная длина — вход последней строки артикула (у ALS1288 их две,
+    # Нормативная длина — вход последней строки артикула (у ALS-1288 их две,
     # и у пары ЮП-2256 тоже).
     assert await _demo_product_lengths(demo_db, DEMO_SLICE_ROWS) == _expected_primary_lengths(
         DEMO_SLICE_ROWS
@@ -1463,7 +1488,7 @@ async def test_slice_sections_carry_their_own_operations(demo_db: AsyncSession, 
     drill_tasks = [
         await _target_task(demo_db, position.id, sections["DRILLING"].id)
         for position in positions
-        if position.source_sku == "ALS1288"
+        if position.source_sku == "ALS-1288"
     ]
     assert len({task.id for task in drill_tasks}) == 2, "повтор артикула не дал двух заданий"
 

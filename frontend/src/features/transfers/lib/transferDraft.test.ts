@@ -69,6 +69,7 @@ function makeGroup(rows: ReadyToTransferTask[]): ReadyTransferGroup {
     hasNextStep: true,
     common: {
       dimensionsLabel: null,
+      sectionName: null,
       operationName: null,
       nextOperationName: null,
       nextSectionName: null,

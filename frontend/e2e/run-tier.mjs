@@ -30,6 +30,7 @@
  *   node e2e/run-tier.mjs smoke
  *   node e2e/run-tier.mjs ui-e2e
  *   node e2e/run-tier.mjs ui-narrow
+ *   node e2e/run-tier.mjs mobile
  *
  * Опции (через env):
  *   E2E_LOCK_TIMEOUT_MS     сколько ждать свободный лок репозитория (30 мин)
@@ -80,6 +81,7 @@ import {
   tryAcquireLock,
 } from "./run-lock.mjs";
 import { parseWorkersArg } from "./run-workers.mjs";
+import { MOBILE_PROJECT, formatMobileReport, selectMobileSpecs } from "./mobile-project.mjs";
 
 const E2E_DIR = path.dirname(fileURLToPath(import.meta.url));
 const FRONTEND_DIR = path.resolve(E2E_DIR, "..");
@@ -96,7 +98,9 @@ const SLOT_TIMEOUT_MS = Number(process.env.E2E_SEMAPHORE_TIMEOUT_MS ?? 30 * 60_0
 const TIER = process.argv[2];
 // `all` — полный прогон: Playwright сам проходит проекты по `dependencies`
 // (smoke → ui-e2e → ui-narrow) одним вызовом, стенд поднимается один раз.
-const VALID_TIERS = ["all", "smoke", "ui-e2e", "ui-narrow"];
+// `mobile` — отдельный проект-окно (390×844, `isMobile`, `hasTouch`), вне
+// этой цепочки: мобильная раскладка не предусловие десктопных сценариев.
+const VALID_TIERS = ["all", "smoke", "ui-e2e", "ui-narrow", MOBILE_PROJECT];
 if (!VALID_TIERS.includes(TIER)) {
   console.error(`Usage: node e2e/run-tier.mjs <${VALID_TIERS.join("|")}>`);
   process.exit(2);
@@ -107,6 +111,20 @@ const projectArgs = TIER === "all" ? [] : ["--project", TIER];
 // именно так — `npm run test:e2e:ui-mode`. Они идут ПОСЛЕ наших дефолтов,
 // чтобы пользовательский флаг перебил дефолтный, а не наоборот.
 const extraArgs = process.argv.slice(3);
+
+/**
+ * Спеки мобильного яруса — из самого каталога `e2e/`, а не из списка в коде:
+ * список отстал бы от набора файлов, и отчёт прогона называл бы одни спеки,
+ * пока Playwright гоняет другие.
+ */
+function mobileSpecs() {
+  return selectMobileSpecs(
+    fs
+      .readdirSync(E2E_DIR)
+      .filter((file) => file.endsWith(".spec.ts"))
+      .map((file) => ({ file, content: fs.readFileSync(path.join(E2E_DIR, file), "utf8") })),
+  );
+}
 
 // Сколько воркеров Playwright в прогоне (#289). `--workers` (или его короткая
 // форма `-j`) — единственный способ задать их: значение уходит и в
@@ -276,6 +294,12 @@ console.log(
 );
 const startedAt = Date.now();
 console.log(`[e2e:run] === ярус ${TIER}: стек мой, запускаю прогон ===`);
+if (TIER === MOBILE_PROJECT) {
+  // Итоговая строка «=== ярус mobile: Ns, код N ===» одинакова для любого
+  // окна, поэтому мобильный прогон называет окно, тач и свой набор спеков
+  // сам — иначе по отчёту не видно, что вообще проверялось.
+  for (const line of formatMobileReport(mobileSpecs())) console.log(line);
+}
 
 // БД готовим ПОД локом и слотом: `e2e:prep` поднимает Docker, ждёт его, собирает
 // шаблонную БД при расхождении с репозиторием и клонирует её под этот прогон.

@@ -70,7 +70,7 @@ export type ColumnSpec<
   mapValue?: (value: string) => ColumnParamValue | undefined;
   /**
    * Колонка, дающая сразу несколько параметров. Случай редкий, но
-   * настоящий: «Следующий» на передачах — это и операция, и участок.
+   * настоящий: «Куда» на передачах — это и операция, и участок.
    */
   toParams?: (value: string) => Record<string, ColumnParamValue>;
   /**
