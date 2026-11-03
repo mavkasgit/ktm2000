@@ -9,9 +9,10 @@
 """
 from decimal import Decimal
 
+from app.models.product import Product, ProductType
 from app.models.user import User
 from app.models.work_task import WorkTask
-from app.stock.models import StockBalance, StockTransaction
+from app.stock.models import Reason, StockBalance, StockTransaction
 from sqlalchemy import select
 
 from tests.helpers.transfers import _make_dim_route_fixture, _seed_balance
@@ -280,7 +281,7 @@ async def test_source_caps_at_available_balance(client, session) -> None:
 
 
 async def test_source_of_another_product_is_rejected(client, session) -> None:
-    """Остаток чужого товара — отказ с причиной, а не тихая выдача."""
+    """Остаток чужого товара (вне группы эквивалентов) — отказ с причиной."""
     fx = await _make_dim_route_fixture(session, sku="SRC5", qty=Decimal(100))
     other = await _make_dim_route_fixture(session, sku="SRC5X", qty=Decimal(50))
     balance = await _balance(
@@ -300,8 +301,73 @@ async def test_source_of_another_product_is_rejected(client, session) -> None:
     )
 
     assert result["status"] == "failed", result
-    assert "другого артикула" in (result["reason"] or "")
+    assert "не из группы эквивалентов" in (result["reason"] or "")
     assert await _sends(session) == []
+
+
+async def test_source_of_equivalent_product_is_accepted(client, session) -> None:
+    """Эквивалент — законный источник: send несёт source SKU, receive — target.
+
+    Материал списывается с фактической строки B, а на задание приходит
+    артикулом задания A (ADR-0073 п.5).
+    """
+    fx = await _make_dim_route_fixture(session, sku="SRC11", qty=Decimal(100))
+    raw = fx["sections"][0]
+    equivalent = Product(
+        sku="SRC11-EQ",
+        name="SRC11-EQ",
+        type=ProductType.component,
+        unit="pcs",
+        is_active=True,
+    )
+    session.add(equivalent)
+    await session.flush()
+    fx["product"].aliases = [equivalent.sku]
+    await session.commit()
+
+    balance = await _balance(
+        session,
+        product_id=equivalent.id,
+        location_id=raw.id,
+        qty=Decimal(50),
+        ops=RAW_OPS,
+    )
+
+    user = await _make_user(session, "op11@local")
+    result = await _take(
+        client,
+        fx["position"].id,
+        user,
+        [{"balance_id": balance.id, "quantity": "20"}],
+    )
+
+    assert result["status"] == "success", result
+    sends = await _sends(session)
+    assert len(sends) == 1
+    send = sends[0]
+    assert send.product_id == equivalent.id, "send — фактический SKU источника"
+    assert send.from_location_id == raw.id
+    assert send.to_location_id == fx["sections"][1].id
+
+    receive = (
+        await session.execute(
+            select(StockTransaction).where(
+                StockTransaction.reason == Reason.TRANSFER_RECEIVE
+            )
+        )
+    ).scalars().one()
+    assert receive.product_id == fx["product"].id, "receive — артикул задания"
+    assert receive.task_id is not None
+
+    task = (
+        await session.execute(select(WorkTask).where(WorkTask.section_id == fx["sections"][1].id))
+    ).scalar_one()
+    assert task.product_id == fx["product"].id
+
+    await session.refresh(balance)
+    assert balance.balance_qty == Decimal(30), "списан источник, а не артикул задания"
+    await assert_no_invariants_violations(session)
+    await assert_no_stock_ledger_invariants_violations(session)
 
 
 async def test_source_operations_outside_route_is_rejected(client, session) -> None:
