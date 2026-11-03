@@ -67,3 +67,22 @@ test("неизвестный аргумент — красное usage и код
   assert.equal(r.status, 2);
   assert.match(r.stderr, /неизвестный аргумент/);
 });
+
+test("чужой KTM_WORKTREE — красной строкой именно «своё дерево» (#354 в доке)", () => {
+  const root = scratchRoot([".env.dev", ".env.test", ".env.e2e"]);
+  const foreign = scratchRoot([".env.dev"]);
+  try {
+    const r = spawnSync(process.execPath, [DOCTOR, `--root=${root}`, "--json"], {
+      encoding: "utf8",
+      env: { ...process.env, KTM_WORKTREE: foreign },
+    });
+    const out = JSON.parse(r.stdout);
+    const line = out.checks.find((c) => c.name.includes("KTM_WORKTREE"));
+    assert.ok(line, `строки про дерево нет: ${out.checks.map((c) => c.name).join(", ")}`);
+    assert.equal(line.state, "нет");
+    assert.match(line.detail, /не совпадает с объявленным/);
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+    rmSync(foreign, { recursive: true, force: true });
+  }
+});

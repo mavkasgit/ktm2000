@@ -1,0 +1,85 @@
+{
+  "steps": {
+    "codegraph-age": {
+      "proven_at": "2026-11-02",
+      "note": "индекс отброшен в 2000-й год; без --strict шаг только предупреждает",
+      "how": "prove-checks codegraph-age"
+    },
+    "labels-check": {
+      "proven_at": "2026-11-02",
+      "note": "сгенерированный файл правится руками — сверка обязана покраснеть",
+      "how": "prove-checks labels-check"
+    },
+    "seeds-validate": {
+      "proven_at": "2026-11-02",
+      "note": "маршрутный профиль ссылается на участок, которого нет в справочнике",
+      "how": "prove-checks seeds-validate"
+    },
+    "compose-audit": {
+      "proven_at": "2026-11-02",
+      "note": "потолок лога задран с 20m до 500m — аудит обязан это увидеть",
+      "how": "prove-checks compose-audit"
+    },
+    "profile-settings-manifest": {
+      "proven_at": "2026-11-02",
+      "note": "хеш одного файла в манифесте подменён — сверка обязана его назвать",
+      "how": "prove-checks profile-settings-manifest"
+    },
+    "frontend-types": {
+      "proven_at": "2026-11-02",
+      "note": "присваивание строки числу",
+      "how": "prove-checks frontend-types"
+    },
+    "frontend-types-e2e": {
+      "proven_at": "2026-11-02",
+      "note": "страница присвоена числу в e2e-спеке",
+      "how": "prove-checks frontend-types-e2e"
+    },
+    "frontend-lint": {
+      "proven_at": "2026-11-02",
+      "note": "незакрытый JSX — линтер обязан упасть, а не промолчать (гейт отдаёт хвост вывода, поэтому сверяем итоговую строку с числом ошибок)",
+      "how": "prove-checks frontend-lint"
+    },
+    "pins": {
+      "proven_at": "2026-11-02",
+      "note": "приписанный Node, которого нет на машине",
+      "how": "prove-checks pins"
+    },
+    "registry": {
+      "proven_at": "2026-11-03",
+      "note": "сгенерированный тулчейн поправили руками — сверка с реестром обязана покраснеть",
+      "how": "npm run prove-checks -- --only=registry"
+    },
+    "docs-links": {
+      "proven_at": "2026-11-02",
+      "note": "битая относительная ссылка в документе волны",
+      "how": "prove-checks docs-links"
+    },
+    "scripts-tests": {
+      "proven_at": "2026-11-02",
+      "note": "тест с ровно неверным ожиданием",
+      "how": "prove-checks scripts-tests"
+    },
+    "ruff": {
+      "proven_at": "2026-11-02",
+      "note": "ссылка на несуществующее имя",
+      "how": "prove-checks ruff"
+    },
+    "backend-tests": {
+      "proven_at": "2026-11-02",
+      "note": "assert False в обычном pytest-файле (полный прогон — минуты)",
+      "how": "prove-checks backend-tests"
+    },
+    "frontend-unit": {
+      "proven_at": "2026-11-02",
+      "note": "vitest с неверным ожиданием (весь набор — минута-две)",
+      "how": "prove-checks frontend-unit"
+    }
+  },
+  "exempt": {
+    "alembic-drift": "локально не запускается (накатывает миграции на dev-БД живого стенда); способность падать показана в CI migrations.yml",
+    "e2e-smoke": "берёт слот семафора и свой стенд; отдельный ярус gate:e2e, красные ходы — в истории прогонов frontend/e2e",
+    "test-hygiene": "сам шаг возвращает 0 при находках (report-only, T-0012) — краснеть не на чем; блокирует ruff F401, см. пробник шага ruff"
+  },
+  "updated": "2026-11-03"
+}

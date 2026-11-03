@@ -9,7 +9,7 @@
 // docs/toolchain.md — производная от реестра (срез D, #383). Пока документа нет,
 // это «не сгенерирован», а не красное: проверка не требует того, чего ещё не существует.
 
-import { existsSync, readFileSync, readdirSync, statSync } from "node:fs";
+import { existsSync, readFileSync, readdirSync, statSync, writeFileSync } from "node:fs";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 
@@ -20,15 +20,47 @@ const REGISTRY = "tools.json";
 const SCHEMA = "tools.schema.json";
 const DOC = "docs/toolchain.md";
 const DOC_BLOCK = /<!-- tools:start -->([\s\S]*?)<!-- tools:end -->/;
+/**
+ * Каркас генерируемого документа: текст вне маркеров живёт руками, таблица
+ * между ними — нет. Версии в таблице обязаны совпадать с pin-файлами (#355) и с
+ * записями реестра; расхождение красное на `npm run check:registry`.
+ */
+const DOC_HEADER = `# Тулчейн: чем проверяется и где закреплено
+
+Сводка «какими инструментами и где мы проверяем» — одно место вместо разбросанных
+строк в \`AGENTS.md\`, \`docs/testing-guide.md\` и телах workflow.
+
+Таблица между маркерами **генерируется из \`tools.json\`**:
+
+- пересобрать — \`npm run toolchain:write\`;
+- проверить расхождение — \`npm run check:registry\` (краснеет, если документ
+  отстал от реестра либо если строку внутри маркеров поправили руками).
+
+Что значат колонки: «чем» и «закреплено где» — название инструмента и файл, где
+стоит его версия; «где исполняется» — стадии (commit, push, gate, ci, test);
+«блокирует» — ненулевой ли у проверки выход; «последний обзор» — дата, когда
+запись сверяли с действительностью (порог актуальности — пункт 3 в
+\`docs/quality/criteria.md\`).
+
+Чего этот список не говорит: умеет ли проверка падать (см.
+\`docs/quality/gates.md\`), почему отвергнуты другие инструменты
+(\`docs/quality/not-adopted.md\`) и то, что наличие инструмента в списке ещё не
+значит, что он ловит нужную вам ошибку.
+
+<!-- tools:start -->
+<%= TABLE %>
+<!-- tools:end -->
+`;
 /** Пути в реестре записываются прямыми слешами; на Windows join() даёт обратные. */
 const norm = (p) => p.replaceAll("\\", "/");
 
 const args = process.argv.slice(2);
 const jsonOut = args.includes("--json");
 const emitTable = args.includes("--emit-table");
+const writeDoc = args.includes("--write-doc");
 for (const flag of args) {
-  if (!["--json", "--emit-table"].includes(flag)) {
-    console.error(`check-registry: неизвестный флаг ${flag} (есть --json, --emit-table)`);
+  if (!["--json", "--emit-table", "--write-doc"].includes(flag)) {
+    console.error(`check-registry: неизвестный флаг ${flag} (есть --json, --emit-table, --write-doc)`);
     process.exit(2);
   }
 }
@@ -205,6 +237,37 @@ if (registry && !problems.length) {
       }
     }
   }
+}
+
+if (writeDoc) {
+  if (!registry) {
+    console.error("check-registry: реестр не загружен — генерировать не из чего");
+    process.exit(1);
+  }
+  if (problems.length) {
+    console.error(
+      `check-registry: реестр красный (${problems.length}) — сначала чиним ${REGISTRY}, потом генерим ${DOC}:\n` +
+        problems.map((p) => `  ✗ ${p}`).join("\n"),
+    );
+    process.exit(1);
+  }
+  const docPath = join(ROOT, DOC);
+  const body = renderTable();
+  let text;
+  if (existsSync(docPath)) {
+    const current = readFileSync(docPath, "utf8");
+    const block = DOC_BLOCK.exec(current);
+    if (!block) {
+      console.error(`check-registry: в ${DOC} нет маркеров — нечего обновлять, файл не генерировали мы`);
+      process.exit(1);
+    }
+    text = current.replace(DOC_BLOCK, `<!-- tools:start -->\n${body}\n<!-- tools:end -->`);
+  } else {
+    text = DOC_HEADER.replace("<%= TABLE %>", body);
+  }
+  writeFileSync(docPath, text);
+  console.log(`${DOC}: ${registry.tools.length} записей перенесено из ${REGISTRY}`);
+  process.exit(0);
 }
 
 if (emitTable) {

@@ -145,9 +145,35 @@ add(
     : `в ${hooksDir} только *.sample — до коммита не запускается ничего (установка: npm run hooks:install; сам по себе это не поломка, гейт полный и без хуков)`,
 );
 
+// 7. Страж чужого дерева (#354): тот же вопрос, что задаёт pre-commit-хук, но
+// без коммита. Без KTM_WORKTREE страж — явный no-op, и это информационная
+// строка, а не поломка: одинокий клон репозитория не обязан ничего объявлять.
+const guard = spawnSync(process.execPath, [join(SELF, "scripts/guard-tree.mjs"), "--json"], {
+  cwd: ROOT,
+  encoding: "utf8",
+});
+let guardState = "неясно";
+let guardDetail = "страж дерева не ответил";
+try {
+  const parsed = JSON.parse(guard.stdout || "{}");
+  if (parsed.verdict === "GO") {
+    guardState = "ок";
+    guardDetail = `объявленное дерево совпадает с тем, куда смотрит git (${parsed.facts.toplevel})`;
+  } else if (parsed.verdict === "NO-GO") {
+    guardState = "нет";
+    guardDetail = parsed.problems.join("; ");
+  } else {
+    guardDetail = parsed.reason || "KTM_WORKTREE не задан — сверки нет";
+  }
+} catch {
+  if (guard.stdout) guardDetail = guard.stdout.trim().slice(0, 200);
+}
+add("своё дерево (KTM_WORKTREE)", guardState, guardDetail);
+
 const blockers = checks.filter((c) => ["нет", "грязно"].includes(c.state));
-// Живой dev-стек, незаполненный каталог хуков и устаревший индекс — не нехватки:
-// первое хорошо, второе лечится установкой (#353), третье — командой sync.
+// Живой dev-стек, пустой каталог хуков и страж без объявленного дерева — не
+// нехватки: первое хорошо, второе лечится `npm run hooks:install` (#353), третье
+// означает «проверка неприменима», а не «проверка провалена».
 const info = checks.filter((c) => ["занят", "неясно", "пусто"].includes(c.state));
 const warnings = checks.filter((c) => c.state === "старый");
 const go = blockers.length === 0;

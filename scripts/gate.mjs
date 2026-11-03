@@ -17,6 +17,7 @@ import { fileURLToPath } from "node:url";
 
 const ROOT = dirname(dirname(fileURLToPath(import.meta.url)));
 const GATES_SHEET = "docs/quality/gates.md";
+const PROVEN_SHEET = "docs/quality/proven-checks.json";
 const GATES_BLOCK = /<!-- gates-steps:start -->([\s\S]*?)<!-- gates-steps:end -->/;
 
 /** Поле `ci` — workflow, в котором шаг уже есть; `null` — нет ни в CI, ни локально. */
@@ -81,6 +82,14 @@ const STEPS = [
     tool: "python",
     ci: "migrations.yml",
     what: " манифест профилей настроек совпадает с кодом",
+  },
+  {
+    name: "compose-audit",
+    tier: "fast",
+    command: "python backend/scripts/audit_compose.py --strict",
+    tool: "python",
+    ci: null,
+    what: " потолки логов, healthcheck и restart-политика во всех compose-файлах",
   },
   {
     name: "test-hygiene",
@@ -301,8 +310,37 @@ function reconcile(names) {
   return { status: "ok", detail: `${listed.size} шагов сверены с ${GATES_SHEET}` };
 }
 
-function runStep(step, infraUp, strict) {
-  if (step.check) {
+/**
+ * У каждого локального шага обязан быть доказанный красный ход (#357): проверка,
+ * которую никогда не видели падающей, может молчать годами и выглядеть защитой.
+ * Покрытие ведёт `npm run prove-checks` в docs/quality/proven-checks.json; шаги, которые локально
+ * не запускаются или намеренно report-only, — там же в `exempt` с причиной.
+ * Вне `--strict` строка информационная: локальному гейту нечем ответить за CI.
+ */
+function proofCoverage(names, strict) {
+  const path = join(ROOT, PROVEN_SHEET);
+  if (!existsSync(path)) {
+    return {
+      status: strict ? "fail" : "not-checked",
+      detail: `${PROVEN_SHEET} не найден — красным не доказан ни один шаг; прогнать npm run prove-checks`,
+    };
+  }
+  const rec = JSON.parse(readFileSync(path, "utf8"));
+  const uncovered = names.filter((n) => !rec.steps?.[n] && !rec.exempt?.[n]);
+  const exemptCount = Object.keys(rec.exempt || {}).length;
+  if (uncovered.length) {
+    return {
+      status: strict ? "fail" : "warn",
+      detail: `${uncovered.length} шагов ни разу не были красными: ${uncovered.join(", ")}`,
+    };
+  }
+  return {
+    status: "ok",
+    detail: `${names.length - exemptCount}/${names.length} шагов с доказанным красным ходом, ${exemptCount} в исключениях`,
+  };
+}
+
+function runStep(step, infraUp, strict) {  if (step.check) {
     const started = Date.now();
     const { ok, detail } = step.check();
     const seconds = (Date.now() - started) / 1000;
@@ -371,8 +409,16 @@ function main() {
     results.push({ ...r, name: step.name, what: step.what.trim(), ci: step.ci ? ciPresence(step) : null });
     if (r.status === "fail" && !args.keepGoing) break;
   }
-  const names = steps.map((s) => s.name);
-  const reconciliation = reconcile(names);
+  // Карта гейтов — полный набор проверок, а не набор выбранного яруса: иначе
+  // `gate:fast` краснел бы на том, что в full-ярусе, и vice versa. Выборочный
+  // прогон --only не сверяется: он по построению не полный.
+  const allNames = [...new Set([...STEPS.map((s) => s.name), ...NOT_RUN.map((s) => s.name)])];
+  const skipped = {
+    status: "not-checked",
+    detail: `--only=${args.only ? args.only.join(",") : "?"} — карта и покрытие сверяются только на полном прогоне`,
+  };
+  const reconciliation = args.only ? skipped : reconcile(allNames);
+  const coverage = args.only ? skipped : proofCoverage(allNames, args.strict);
   const notRun = NOT_RUN.map((s) => ({ ...s, ci: ciPresence(s) }));
   const seconds = results.reduce((sum, r) => sum + r.seconds, 0);
   const counts = {
@@ -381,6 +427,7 @@ function main() {
     missing: results.filter((r) => r.status === "missing").length,
   };
   if (reconciliation.status === "fail") counts.fail += 1;
+  if (coverage.status === "fail") counts.fail += 1;
   const notCovered = results.filter((r) => r.status === "missing").length;
 
   if (args.json) {
@@ -396,6 +443,7 @@ function main() {
           steps: results,
           not_run: notRun,
           reconcile: reconciliation,
+          proof_coverage: coverage,
           totals: { ...counts, steps: results.length, seconds: Number(seconds.toFixed(2)) },
           local_coverage: `${results.length - notCovered}/${results.length} шагов реально проверено локально`,
         },
@@ -415,6 +463,9 @@ function main() {
     }
     const rec = `${"reconcile".padEnd(28)} ${"      "}  ${reconciliation.status} — ${reconciliation.detail}`;
     console.log(rec);
+    console.log(
+      `${"prove-coverage".padEnd(28)} ${"      "}  ${coverage.status} — ${coverage.detail}`,
+    );
     console.log(
       `итог: ${results.length} шагов, ${counts.ok} ok, ${counts.fail} fail, ${counts.missing} missing — ${seconds.toFixed(1)} с`,
     );
