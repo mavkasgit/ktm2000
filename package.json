@@ -2,8 +2,23 @@
   "name": "ktm-2000",
   "private": true,
   "version": "1.0.0",
+  "engines": {
+    "node": ">=24",
+    "npm": ">=10"
+  },
   "scripts": {
     "setup": "npm install && npm install --prefix frontend && echo 'Не забудьте установить зависимости Python!'",
+    "gate": "node scripts/gate.mjs",
+    "gate:fast": "node scripts/gate.mjs --fast",
+    "gate:e2e": "node scripts/gate.mjs --e2e",
+    "check:registry": "node scripts/check-registry.mjs",
+    "toolchain:write": "node scripts/check-registry.mjs --write-doc",
+    "prove-checks": "node scripts/prove-checks.mjs",
+    "test-count": "node scripts/test-count.js",
+    "hooks:install": "lefthook install",
+    "hooks:check": "node scripts/check-hooks.mjs",
+    "guard:tree": "node scripts/guard-tree.mjs",
+    "doctor": "node scripts/doctor.mjs",
     "verify:sync": "node scripts/verify-sync.mjs --other ../hrms",
     "predev": "node scripts/verify-sync.mjs --other ../hrms --if-enabled && node scripts/ensure-dev-ports.js --kill && npm run db:up && npm run db:wait && npm run db:migrate",
     "prebuild": "node scripts/verify-sync.mjs --other ../hrms --if-enabled",
@@ -48,6 +63,9 @@
     "test:pytest:lf": "powershell -ExecutionPolicy Bypass -File scripts/test-run.ps1 --lf",
     "test:scripts": "node --test \"scripts/**/*.test.js\"",
     "check:docs": "node scripts/check-doc-links.js",
+    "check:adr": "node scripts/check-adr.js",
+    "check:dev-deps": "node scripts/check-dev-deps.js",
+    "check:freshness": "node scripts/freshness.js",
     "test:hygiene": "python scripts/check-test-imports.py",
     "test:e2e": "npm --prefix frontend run test:e2e",
     "test:e2e:ui": "npm --prefix frontend run test:e2e:ui",
@@ -60,7 +78,9 @@
     "prod:tunnel:up": "docker compose --env-file .env.prod -f infra/compose/docker-compose.prod.yml --profile tunnel up -d --build"
   },
   "devDependencies": {
+    "ajv": "^8.20.0",
     "concurrently": "^9.1.2",
-    "cross-env": "^7.0.3"
+    "cross-env": "^7.0.3",
+    "lefthook": "^2.2.2"
   }
 }

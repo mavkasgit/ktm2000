@@ -236,7 +236,7 @@ async def test_transfer_send_wrong_dimension_raises_insufficient_stock(client, s
 
     fake_task_id = await _stock_ready_task(client, user, raw_sec.id)
 
-    with pytest.raises(StockValidationError, match="Insufficient stock"):
+    with pytest.raises(StockValidationError, match="Недостаточный остаток"):
         await transfer_send(
             session,
             from_task_id=fake_task_id,
@@ -509,7 +509,7 @@ async def test_multiple_transfers_same_dimension_allowed_within_transferable(cli
     assert r2["status"] == "accepted"
 
     # Третья 31 → превышение (сумма была бы 101 > 100).
-    with pytest.raises(ValueError, match="exceeds transferable"):
+    with pytest.raises(ValueError, match="передавать нельзя"):
         await transfer_send(
             session,
             from_task_id=fake_task_id,
@@ -603,7 +603,7 @@ async def test_transforming_task_multi_transfer_within_output_quantity(client, s
     assert r2["status"] == "accepted"
 
     # Третья 31 → сумма 101 > выхода 100 → отказ (кап по outputs, D2).
-    with pytest.raises(ValueError, match="exceeds transferable"):
+    with pytest.raises(ValueError, match="передавать нельзя"):
         await transfer_send(
             session,
             from_task_id=saw_task.id,
@@ -693,7 +693,7 @@ async def test_transforming_task_cancel_isolation_between_sizes(client, session)
     )
     await session.commit()
     assert r2["status"] == "accepted"
-    with pytest.raises(ValueError, match="exceeds transferable"):
+    with pytest.raises(ValueError, match="передавать нельзя"):
         await transfer_send(
             session,
             from_task_id=saw_task.id,
@@ -757,7 +757,7 @@ async def test_transforming_task_correct_isolation_between_sizes(client, session
     )
     await session.commit()
     assert r["status"] == "accepted"
-    with pytest.raises(ValueError, match="exceeds transferable"):
+    with pytest.raises(ValueError, match="передавать нельзя"):
         await transfer_send(
             session,
             from_task_id=saw_task.id,

@@ -129,8 +129,41 @@ async def list_actions(
         .scalars()
         .all()
     )
-    return ActionsListOut(
-        items=[
+
+    # #282: передача в журнале отмен без количества и номера выдачи —
+    # «Отменить что?» по строке «Передача» не ответ. Одной пакетной
+    # выборкой на страницу (N+1 сюда не тащим).
+    from app.models.transfer import Transfer
+    from app.transfers.queries import _fmt_qty
+
+    transfer_ref_ids = [
+        row.ref_id for row in rows if row.action_type == "transfer_send" and row.ref_id
+    ]
+    transfers_by_id: dict[int, tuple] = {}
+    if transfer_ref_ids:
+        transfers_by_id = {
+            t_id: (t_no, t_qty, t_issue)
+            for t_id, t_no, t_qty, t_issue in (
+                await db.execute(
+                    select(
+                        Transfer.id, Transfer.transfer_no, Transfer.sent_quantity, Transfer.issue_no
+                    ).where(Transfer.id.in_(transfer_ref_ids))
+                )
+            ).all()
+        }
+
+    items = []
+    for row in rows:
+        extra: dict[str, str | None] = {}
+        tinfo = transfers_by_id.get(row.ref_id) if row.action_type == "transfer_send" else None
+        if tinfo is not None:
+            transfer_no, sent_quantity, issue_no = tinfo
+            extra = {
+                "quantity": _fmt_qty(sent_quantity),
+                "transfer_no": transfer_no,
+                "issue_no": issue_no,
+            }
+        items.append(
             ActionOut(
                 id=row.id,
                 action_type=row.action_type,
@@ -139,9 +172,11 @@ async def list_actions(
                 status=row.status.value if hasattr(row.status, "value") else str(row.status),
                 depends_on=list(row.depends_on or []),
                 created_at=row.created_at.isoformat() if row.created_at else None,
+                **extra,
             )
-            for row in rows
-        ],
+        )
+    return ActionsListOut(
+        items=items,
         total=total,
         page=page,
         page_size=page_size,

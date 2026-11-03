@@ -48,11 +48,17 @@ async def skip_stage(
     *,
     section_plan_line_id: int,
     reason: str = SKIP_REASON_MATERIAL_READY,
+    skipped_by_issue_no: str | None = None,
 ) -> WorkTask:
     """Пометить этап позиции пропущенным и вернуть его задание.
 
     Задание создаётся, если его ещё нет: пропущенный этап обязан быть
     виден в прогрессе позиции, а не отсутствовать в нём.
+
+    ``skipped_by_issue_no`` — чей это пропуск (#282): выдача, прыгнувшая
+    через этапы, помечает их своим номером выдачи, и отмена выдачи снимает
+    ``skipped`` только со своих строк. Пропуск, проставленный вручную
+    (#207) или другой выдачей, при отмене остаётся нетронутым.
 
     Проводок ledger не создаётся — по skipped-этапу материала нет.
     """
@@ -77,6 +83,7 @@ async def skip_stage(
             planned_quantity=line.planned_quantity,
             status=WorkTaskStatus.skipped,
             skip_reason=reason.strip(),
+            skipped_by_issue_no=skipped_by_issue_no,
         )
         db.add(task)
     else:
@@ -90,6 +97,7 @@ async def skip_stage(
             )
         task.status = WorkTaskStatus.skipped
         task.skip_reason = reason.strip()
+        task.skipped_by_issue_no = skipped_by_issue_no
 
     # ``_refresh_section_plan_line_cache`` пересчитывает кэш СТРОКИ участка;
     # статус задания синхронизировать не нужно: ``skipped`` терминален для

@@ -66,11 +66,23 @@ class Transfer(Base):
         Index("ix_transfers_to_section_id_created_at", "to_section_id", "created_at"),
         # Журнал передач (#290): ORDER BY created_at DESC и фильтры дат.
         Index("ix_transfers_created_at", "created_at"),
+        # Группа автоподбора источника выдачи (#282): «отменить выдачу
+        # целиком» и групповые строки журнала/«Отмены действий» ищут передачи
+        # по общему номеру. Partial — у ручной передачи номера нет, и в
+        # индекс он попадать не должен.
+        Index(
+            "ix_transfers_issue_no",
+            "issue_no",
+            postgresql_where=text("issue_no IS NOT NULL"),
+        ),
     )
 
     id: Mapped[int] = mapped_column(BigInteger, Identity(always=True), primary_key=True)
     transfer_no: Mapped[str] = mapped_column(String(100), unique=True, nullable=False)
-    from_task_id: Mapped[int] = mapped_column(ForeignKey("work_tasks.id"), nullable=False)
+    # Задание-источник. NULL — у передачи, порождённой автоподбором источника
+    # выдачи со склада вне маршрута позиции (#282): склада-источника касается
+    # только ``from_section_id``, задания-источника у такой выдачи нет.
+    from_task_id: Mapped[int | None] = mapped_column(ForeignKey("work_tasks.id"), nullable=True)
     to_task_id: Mapped[int] = mapped_column(ForeignKey("work_tasks.id"), nullable=False)
     from_section_id: Mapped[int] = mapped_column(ForeignKey("sections.id"), nullable=False)
     to_section_id: Mapped[int] = mapped_column(ForeignKey("sections.id"), nullable=False)
@@ -99,6 +111,9 @@ class Transfer(Base):
         nullable=False, server_default=text("false"), default=False
     )
     physical_handover_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    # Общий номер выдачи (#282): одна выдача = N передач (по числу складов),
+    # все они несут один issue_no. У обычной передачи — NULL.
+    issue_no: Mapped[str | None] = mapped_column(String(100), nullable=True)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False, server_default=func.now())
 
 

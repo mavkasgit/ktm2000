@@ -1,0 +1,78 @@
+name: Freshness
+
+# Статус: ИНФОРМАЦИОННЫЙ, и он здесь не декорация — у джоба нет шансов
+# заблокировать merge: его нет в required contexts (`gh api
+# repos/mavkasgit/ktm2000/branches/main/protection` = migrations, backend tests,
+# frontend tests, ruff), а сам шаг красный только по флагам уровня fail и только
+# с `continue-on-error: true`. Смысл прогона — не гейт, а еженедельная память о
+# том, что пины имеют свойство стареть незаметно (#368).
+#
+# Почему cron, а не push: вопрос «не устарело ли закрепление» не меняется от
+# коммита в код. Он зреет месяцами, и отвечать на него надо по календарю, а не
+# на каждое `git push` (это ещё и сетевые запросы к npm/PyPI — их не будет в
+# local-гейте без явного `--online`).
+#
+# `fetch-depth: 0` обязателен и это не перестраховка. Шаг считает возраст
+# закреплений по `git log -1 -- <путь>`; на shallow-клоне (умолчание checkout —
+# история в один коммит) любой пин-файл выглядит изменённым сегодня, и отчёт
+# выдаёт «всё свежее» ровно тогда, когда пора бить тревогу. Проверка, которая
+# зеленеет из-за отсутствия данных, хуже отсутствия проверки.
+#
+# Чего здесь сознательно нет (подробности — docs/quality/not-adopted.md):
+#   * `permissions: issues: write` и обновляемого tracking issue — вместо него
+#     отчёт ложится в $GITHUB_STEP_SUMMARY каждого прогона: история Actions за
+#     недели и есть журнал, без написания в репозиторий токеном CI;
+#   * статуса `archived`/`renamed` по GitHub API — без токена это 60 запросов в
+#     час на машину, а молчаливый отказ выглядел бы как «репозитории живы».
+#     Тот же код `inspectFreshness` их умеет, если появится источник.
+
+on:
+  schedule:
+    # Понедельник 06:17 — не круглая минута: cron в это время загружен
+    # чужими «0 * * * *», а сдвиг ничего не меняет по смыслу.
+    - cron: "17 6 * * 1"
+  workflow_dispatch:
+
+concurrency:
+  group: ci-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+jobs:
+  freshness:
+    name: freshness
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+        with:
+          persist-credentials: false
+          # См. шапку: без полной истории возраст закреплений стал бы выдумкой.
+          fetch-depth: 0
+
+      - name: Setup Node
+        uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4.4.0
+        with:
+          node-version-file: .nvmrc
+
+      # Тот же вызов, что локально (`npm run check:freshness -- --online`), но с
+      # опросом реестров: здесь сеть есть по умолчанию. Флаги — за `--`, иначе
+      # npm съест их сам и шаг пройдёт без strict.
+      - name: Freshness of pinned tools
+        continue-on-error: true
+        shell: bash
+        run: |
+          set -uo pipefail
+          npm run check:freshness -- --online --strict > report.txt
+          code=$?
+          {
+            printf '### Свежесть закреплений (#368)\n\n```\n'
+            cat report.txt
+            printf '```\n\nКод выхода шага: %s (report-only, не блокирует merge).\n' "$code"
+          } >> "$GITHUB_STEP_SUMMARY"
+          cat report.txt
+          exit "$code"

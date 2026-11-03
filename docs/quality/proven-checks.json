@@ -1,0 +1,110 @@
+{
+  "steps": {
+    "codegraph-age": {
+      "proven_at": "2026-11-03",
+      "note": "индекс отброшен в 2000-й год; без --strict шаг только предупреждает",
+      "how": "npm run prove-checks -- --heavy (полный прогон)"
+    },
+    "labels-check": {
+      "proven_at": "2026-11-03",
+      "note": "сгенерированный файл правится руками — сверка обязана покраснеть",
+      "how": "npm run prove-checks -- --heavy (полный прогон)"
+    },
+    "seeds-validate": {
+      "proven_at": "2026-11-03",
+      "note": "маршрутный профиль ссылается на участок, которого нет в справочнике",
+      "how": "npm run prove-checks -- --heavy (полный прогон)"
+    },
+    "compose-audit": {
+      "proven_at": "2026-11-03",
+      "note": "потолок лога задран с 20m до 500m — аудит обязан это увидеть",
+      "how": "npm run prove-checks -- --heavy (полный прогон)"
+    },
+    "profile-settings-manifest": {
+      "proven_at": "2026-11-03",
+      "note": "хеш одного файла в манифесте подменён — сверка обязана его назвать",
+      "how": "npm run prove-checks -- --heavy (полный прогон)"
+    },
+    "frontend-types": {
+      "proven_at": "2026-11-03",
+      "note": "присваивание строки числу",
+      "how": "npm run prove-checks -- --heavy (полный прогон)"
+    },
+    "frontend-types-e2e": {
+      "proven_at": "2026-11-03",
+      "note": "страница присвоена числу в e2e-спеке",
+      "how": "npm run prove-checks -- --heavy (полный прогон)"
+    },
+    "frontend-lint": {
+      "proven_at": "2026-11-03",
+      "note": "незакрытый JSX — линтер обязан упасть, а не промолчать (гейт отдаёт хвост вывода, поэтому сверяем итоговую строку с числом ошибок)",
+      "how": "npm run prove-checks -- --heavy (полный прогон)"
+    },
+    "pins": {
+      "proven_at": "2026-11-03",
+      "note": "приписанный Node, которого нет на машине",
+      "how": "npm run prove-checks -- --heavy (полный прогон)"
+    },
+    "registry": {
+      "proven_at": "2026-11-03",
+      "note": "сгенерированный тулчейн поправили руками — сверка с реестром обязана покраснеть",
+      "how": "npm run prove-checks -- --heavy (полный прогон)"
+    },
+    "docs-links": {
+      "proven_at": "2026-11-03",
+      "note": "битая относительная ссылка в документе волны",
+      "how": "npm run prove-checks -- --heavy (полный прогон)"
+    },
+    "scripts-tests": {
+      "proven_at": "2026-11-03",
+      "note": "тест с ровно неверным ожиданием",
+      "how": "npm run prove-checks -- --heavy (полный прогон)"
+    },
+    "ruff": {
+      "proven_at": "2026-11-03",
+      "note": "ссылка на несуществующее имя",
+      "how": "npm run prove-checks -- --heavy (полный прогон)"
+    },
+    "backend-tests": {
+      "proven_at": "2026-11-03",
+      "note": "assert False в обычном pytest-файле (полный прогон — минуты)",
+      "how": "npm run prove-checks -- --heavy (полный прогон)"
+    },
+    "frontend-unit": {
+      "proven_at": "2026-11-03",
+      "note": "vitest с неверным ожиданием (весь набор — минута-две)",
+      "how": "npm run prove-checks -- --heavy (полный прогон)"
+    },
+    "backend-test-count": {
+      "proven_at": "2026-11-03",
+      "note": "в baseline записано тестов больше, чем собрано — рэтчет обязан покраснеть (заниженный минимум зелёный — это критерий (в), он покрыт npm run test:scripts)",
+      "how": "npm run prove-checks -- --heavy (полный прогон)"
+    },
+    "frontend-test-count": {
+      "proven_at": "2026-11-03",
+      "note": "минимум vitest-набора завышен — рэтчет красный (сбор списка занимает минуту)",
+      "how": "npm run prove-checks -- --heavy (полный прогон)"
+    },
+    "adr-index": {
+      "proven_at": "2026-11-03",
+      "note": "второй файл с занятым номером — проверка обязана назвать оба",
+      "how": "npm run prove-checks -- --only=adr-index"
+    },
+    "freshness": {
+      "proven_at": "2026-11-03",
+      "note": "реестр ссылается на несуществующее закрепление; без --strict шаг не блокирует",
+      "how": "npm run prove-checks -- --only=freshness"
+    },
+    "dev-deps": {
+      "proven_at": "2026-11-03",
+      "note": "в devDependencies появляется пакет, который никто не зовёт: проверка обязана назвать его и показать охват просмотра",
+      "how": "npm run prove-checks -- --only=dev-deps"
+    }
+  },
+  "exempt": {
+    "alembic-drift": "локально не запускается (накатывает миграции на dev-БД живого стенда); способность падать показана в CI migrations.yml",
+    "e2e-smoke": "берёт слот семафора и свой стенд; отдельный ярус gate:e2e, красные ходы — в истории прогонов frontend/e2e",
+    "test-hygiene": "сам шаг возвращает 0 при находках (report-only, T-0012) — краснеть не на чем; блокирует ruff F401, см. пробник шага ruff"
+  },
+  "updated": "2026-11-03"
+}

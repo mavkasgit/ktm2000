@@ -19,6 +19,19 @@ services:
       - "[::1]:5441:5432"
     tmpfs:
       - /var/lib/postgresql/data
+    # Потолок лога и политика restart (#380) — правило из AGENTS.md («Логи
+    # контейнеров») действует и для тестового стенда: без блока json-лог
+    # неограничен, а на этой машине нет хостового logrotate.
+    # Оба сервиса этого файла пересоздаются при `up`, и он пересоздаст их при
+    # следующем `db:up`: данные тестовой БД на tmpfs, терять при пересоздании
+    # нечего, но окно лучше выбирать без живых pytest-прогонов (run-DB соседей
+    # живут на этом же сервере).
+    logging:
+      driver: json-file
+      options:
+        max-size: "20m"
+        max-file: "3"
+    restart: unless-stopped
     healthcheck:
       test: ["CMD-SHELL", "pg_isready -U $${POSTGRES_USER} -d $${POSTGRES_DB}"]
       interval: 10s
@@ -48,6 +61,23 @@ services:
       postgres:
         condition: service_healthy
     restart: unless-stopped
+    logging:
+      driver: json-file
+      options:
+        max-size: "20m"
+        max-file: "3"
+    # Проба через urllib, а не curl: базовый образ python:3.12-slim-bookworm
+    # (backend/Dockerfile) curl не содержит, а python в нём есть всегда.
+    healthcheck:
+      test:
+        [
+          "CMD-SHELL",
+          "python -c \"import urllib.request; urllib.request.urlopen('http://localhost:8000/api/health', timeout=5)\"",
+        ]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 20s
 
   frontend:
     build:
@@ -60,6 +90,20 @@ services:
       - "${EXTERNAL_PORT:-8100}:80"
     depends_on:
       - backend
+    logging:
+      driver: json-file
+      options:
+        max-size: "20m"
+        max-file: "3"
+    restart: unless-stopped
+    # curl есть в образе: frontend/Dockerfile — FROM nginx:alpine, последний
+    # слой базового образа `apk add --no-cache curl ca-certificates`.
+    healthcheck:
+      test: ["CMD-SHELL", "curl -fsS --max-time 5 http://127.0.0.1:80/"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 10s
 
 volumes:
   postgres_test_data:

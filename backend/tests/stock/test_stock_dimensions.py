@@ -272,7 +272,7 @@ async def test_writeoff_over_specific_length_rejected(session: AsyncSession) -> 
     await _manual_in(session, svc, product_id=product.id, location_id=stock.id,
                      qty="100", dims=DIMS_30, user_id=user.id)
 
-    with pytest.raises(StockValidationError, match="Insufficient stock"):
+    with pytest.raises(StockValidationError, match="Недостаточный остаток"):
         await svc.record(session, StockCommand(
             product_id=product.id,
             from_location_id=stock.id,
@@ -305,7 +305,7 @@ async def test_writeoff_with_dims_from_legacy_only_stock_rejected(session: Async
     await _manual_in(session, svc, product_id=product.id, location_id=stock.id,
                      qty="40", dims=None, user_id=user.id)
 
-    with pytest.raises(StockValidationError, match="Insufficient stock"):
+    with pytest.raises(StockValidationError, match="Недостаточный остаток"):
         await svc.record(session, StockCommand(
             product_id=product.id,
             from_location_id=stock.id,
@@ -503,7 +503,7 @@ async def test_transfer_send_over_dims_group_balance_rejected(
     setup = await _make_two_ghp_setup(session, sku="DIMTX", qty=Decimal(10))
     ctx = await _make_tasks_transferable_with_dims(session, client, setup, dims=None)
 
-    with pytest.raises(StockValidationError, match="Insufficient stock"):
+    with pytest.raises(StockValidationError, match="Недостаточный остаток"):
         await transfer_send(
             session,
             from_task_id=ctx["from_task_id"],
@@ -591,4 +591,4 @@ async def test_adjustment_api_invalid_dimensions_422(
         "dimensions": {"length_mm": 2700},
     })
     assert resp.status_code == 422, resp.text
-    assert "Insufficient stock" in resp.json()["detail"]
+    assert "Недостаточный остаток" in resp.json()["detail"]

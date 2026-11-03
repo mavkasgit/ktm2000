@@ -60,7 +60,12 @@ async def log_action(
 ) -> AuditLog:
     task_ids_str = None
     if task_ids:
-        task_ids_str = ",".join(map(str, task_ids))
+        # None в списке — нормальное дело для передачи без задания-источника
+        # (автоподбор источника выдачи, #282): в строку аудита должно попадать
+        # существующее задание, а не литерал «None».
+        known_ids = [task_id for task_id in task_ids if task_id is not None]
+        if known_ids:
+            task_ids_str = ",".join(map(str, known_ids))
 
     # Единственная точка атрибуции audit_logs: FK принимает только положительный
     # persisted user id, а отображаемое имя сохраняется при его отсутствии.

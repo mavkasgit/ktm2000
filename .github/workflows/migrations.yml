@@ -1,5 +1,17 @@
 name: Migrations
 
+# Статус для merge: БЛОКИРУЕТ. Required check называется `migrations` — ровно
+# `name:` джоба ниже, а не `name:` workflow. Состав блокирующих проверок живёт вне
+# этого файла: сверять чтением `gh api repos/mavkasgit/ktm2000/branches/main/protection`
+# и таблицей `docs/testing-guide.md` (§CI). #370.
+
+# #361 concurrency + path scope. Требуемый required check `migrations`
+# (gh api branches/main/protection → contexts), поэтому скоуп считается шагом
+# внутри джоба, а не фильтром `paths` уровня workflow: по документации GitHub
+# workflow, отфильтрованный по путям, оставляет required check в состоянии
+# "Pending" и блокирует merge. Пропущенные шаги внутри запущенного джоба дают
+# skipped/success — branch protection не виснет.
+# На push в main cancel-in-progress выключен: каждый коммит main проверяется до конца.
 on:
   push:
     branches:
@@ -10,6 +22,15 @@ on:
       - main
       - master
 
+concurrency:
+  group: ci-${{ github.workflow }}-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' || github.ref != 'refs/heads/main' }}
+
+# #363 [missing-permissions]: по умолчанию GITHUB_TOKEN получает запись во все скоупы
+# репозитория. Здесь читаем — поэтому верхний уровень только `contents: read`.
+permissions:
+  contents: read
+
 jobs:
   migrations:
     name: migrations
@@ -18,7 +39,10 @@ jobs:
 
     services:
       postgres:
-        image: postgres:15
+        # #363 [unpinned-images]: тег `postgres:15` mutable — раннер может получить
+        # другой патч-релиз между прогонами. Дайджест индекса манифестов (multi-arch),
+        # получен локально: `docker buildx imagetools inspect postgres:15` -> 15.19.
+        image: postgres:15@sha256:40e8c839f86c404f9bd1c456bb83f11b205f2cd95d753b34c2d074e89ecee786 # postgres 15.19
         env:
           POSTGRES_USER: ktm2000_user
           POSTGRES_PASSWORD: ktm2000_pass_test
@@ -44,31 +68,125 @@ jobs:
 
     steps:
       - name: Checkout
-        uses: actions/checkout@v4
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+        with:
+          # #363 [artipacked]: checkout иначе пишет GITHUB_TOKEN в .git/config workspace,
+          # откуда его может увести любой последующий шаг (upload-artifact и т. п.).
+          # Ни один шаг этих джобов не пушит: push — действие человека/оркестратора.
+          persist-credentials: false
+
+      # #361: дешёвый определитель «есть ли в PR изменения в зоне миграций».
+      # Любая невозможность получить список изменений → relevant=true (fail-open).
+      - name: Path scope (зона миграций)
+        id: scope
+        shell: bash
+        env:
+          KTM_BASE: ${{ github.event.pull_request.base.sha }}
+          KTM_HEAD: ${{ github.event.pull_request.head.sha }}
+          KTM_EVENT: ${{ github.event_name }}
+        run: |
+          set -euo pipefail
+          PATTERN='^(backend|scripts|infra)/|^package(-lock)?\.json$|^ports\.json$|^\.github/workflows/migrations\.yml$'
+          say() {
+            echo "relevant=$1" >> "$GITHUB_OUTPUT"
+          }
+          if [ "$KTM_EVENT" != "pull_request" ]; then
+            echo "event=$KTM_EVENT — скоуп не применяется, прогон полный"
+            say true; exit 0
+          fi
+          # Список файлов берём из compare API, а не из `git diff`: checkout с
+          # `persist-credentials: false` (#363) не даёт ходовой учётных данных для
+          # дозапроса base-объекта в shallow-checkout, а API работает штатным
+          # GITHUB_TOKEN с permissions contents: read.
+          # `--jq` встроен в gh (gojq) — отдельный jq на раннере не нужен.
+          if ! CHANGED=$(gh api "repos/$GITHUB_REPOSITORY/compare/$KTM_BASE...$KTM_HEAD" --jq '.files[]?.filename' 2>/dev/null); then
+            echo "compare API недоступен — прогон полный (fail-open)"
+            say true; exit 0
+          fi
+          NFILES=$(printf '%s' "$CHANGED" | grep -c . || true)
+          if [ "$NFILES" -ge 300 ]; then
+            echo "compare API обрезал список на 300 файлах — прогон полный (fail-open)"
+            say true; exit 0
+          fi
+          printf 'Изменённые файлы PR (%s):\n%s\n' "$NFILES" "$CHANGED"
+          if [ -z "$CHANGED" ] || printf '%s\n' "$CHANGED" | grep -qE "$PATTERN"; then
+            echo "Зона миграций затронута — прогон полный"
+            say true
+          else
+            echo "Ни одного файла зоны миграций не изменено — дорогие шаги пропускаем"
+            say false
+          fi
+
+      # #362: версии языка берутся из pin-файлов репозитория (#355 оркестратора:
+      # `.nvmrc`, `.python-version`). Файла нет — шаг материализует временный
+      # `.ci-*-version` в workspace прогона (в git не попадает) со значением, которое
+      # стояло в этом workflow до волны, и печатает WARNING. Прогон зелёный уже
+      # сегодня; когда pin-файлы появятся, правки в workflow не нужны — тот же путь,
+      # другое содержимое.
+      - name: Toolchain pin (#362)
+        id: toolchain
+        if: steps.scope.outputs.relevant == 'true'
+        shell: bash
+        env:
+          KTM_NODE_FALLBACK: '20'
+          KTM_PY_FALLBACK: '3.12'
+          KTM_USE_NODE: 'yes'
+          KTM_USE_PY: 'yes'
+        run: |
+          set -euo pipefail
+          pick() {
+            local src="$1" fb="$2" dst="$3" raw
+            if [ -f "$src" ]; then
+              raw=$(tr -d ' \t\r\n' < "$src")
+              echo "$src -> $raw (pin-файл репозитория)"
+            else
+              raw="$fb"
+              echo "WARNING: pin-файла $src нет (#355 не влит) — беру литерал workflow $raw"
+            fi
+            if [ -z "$raw" ]; then
+              echo "Пустая версия языка ($src/$fb) — падаю, а не ставлю тихий дефолт" >&2
+              exit 1
+            fi
+            printf '%s\n' "${raw#v}" > "$dst"
+            echo "$dst: $(cat "$dst")"
+          }
+          if [ "$KTM_USE_NODE" = yes ]; then
+            pick .nvmrc "$KTM_NODE_FALLBACK" .ci-node-version
+            echo "node_file=.ci-node-version" >> "$GITHUB_OUTPUT"
+          fi
+          if [ "$KTM_USE_PY" = yes ]; then
+            pick .python-version "$KTM_PY_FALLBACK" .ci-python-version
+            echo "python_file=.ci-python-version" >> "$GITHUB_OUTPUT"
+          fi
 
       - name: Setup Node.js
-        uses: actions/setup-node@v4
+        if: steps.scope.outputs.relevant == 'true'
+        uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4.4.0
         with:
-          node-version: "20"
+          node-version-file: ${{ steps.toolchain.outputs.node_file }}
           cache: npm
-
       - name: Setup Python
-        uses: actions/setup-python@v5
+        if: steps.scope.outputs.relevant == 'true'
+        uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065 # v5.6.0
         with:
-          python-version: "3.12"
+          python-version-file: ${{ steps.toolchain.outputs.python_file }}
           cache: pip
           cache-dependency-path: backend/requirements.txt
 
       - name: Install npm dependencies
+        if: steps.scope.outputs.relevant == 'true'
         run: npm ci
 
       - name: Install backend dependencies
+        if: steps.scope.outputs.relevant == 'true'
         run: pip install -r backend/requirements.txt
 
       - name: Run Alembic migrate and drift check
+        if: steps.scope.outputs.relevant == 'true'
         run: cd backend && alembic upgrade head && alembic check
 
       - name: Run migration tests
+        if: steps.scope.outputs.relevant == 'true'
         env:
           TEST_DB_PORT: 5212
         run: |
@@ -80,8 +198,10 @@ jobs:
           TEST_DATABASE_URL="postgresql+asyncpg://ktm2000_user:ktm2000_pass_test@localhost:5212/${DB_NAME}" pytest tests/test_migrations.py -v
 
       - name: Validate seeds and generated labels
+        if: steps.scope.outputs.relevant == 'true'
         run: cd backend && python scripts/validate_seeds.py && python scripts/generate_frontend_labels.py --check
 
       - name: Verify profile-settings manifest (strict)
+        if: steps.scope.outputs.relevant == 'true'
         working-directory: .
         run: python scripts/verify-profile-settings.py verify --strict

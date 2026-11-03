@@ -9,6 +9,7 @@ from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import selectinload
 
+from app.domain.dimensions import format_dimensions
 from app.models.internal_plan import InternalPlan, SectionPlanLine
 from app.models.production_plan import (
     PlanPosition,
@@ -162,6 +163,20 @@ class SourceIssue:
     quantity: Decimal
 
 
+async def _source_balance_label(db: AsyncSession, balance: StockBalance) -> str:
+    """Как показать остаток оператору: название склада + размер (#282).
+
+    Числовые id склада/артикула в отказах выдачи не показываются — вместо
+    ``«остаток #412»`` оператор читает ``«на Хранилище Б, 3,00 м»``.
+    """
+    from app.services.shopfloor.common import get_section_name
+
+    location = await get_section_name(db, balance.location_id)
+    if balance.dimensions is not None:
+        return f"«{location}», {format_dimensions(balance.dimensions)}"
+    return f"«{location}»"
+
+
 async def resolve_source_issues(
     db: AsyncSession,
     *,
@@ -218,29 +233,29 @@ async def resolve_source_issues(
     for balance_id, requested in allocation.items():
         balance = by_id.get(balance_id)
         if balance is None:
-            raise ValueError(f"Источник выдачи: остаток #{balance_id} не найден")
+            raise ValueError("Источник выдачи: выбранный складской остаток не найден")
+        label = await _source_balance_label(db, balance)
         if balance.product_id != product_id:
-            raise ValueError(
-                f"Источник выдачи: остаток #{balance_id} — другого товара"
-            )
+            raise ValueError(f"Источник выдачи: материал на {label} — другого артикула")
         if balance.completed_operations is None:
             raise ValueError(
-                f"Источник выдачи: у остатка #{balance_id} состояние операций "
-                "не зафиксировано — списать его на этот маршрут нельзя"
+                f"Источник выдачи: на {label} состояние операций не зафиксировано — "
+                "списать этот материал на данный маршрут нельзя"
             )
         available = Decimal(balance.balance_qty)
         if available <= 0:
-            raise ValueError(f"Источник выдачи: остаток #{balance_id} пуст")
+            raise ValueError(f"Источник выдачи: на {label} материал закончился")
         match = next(
             (step for _seq, step, inputs in targets
              if sorted(balance.completed_operations) == inputs),
             None,
         )
         if match is None:
-            labels = sorted(balance.completed_operations)
+            ops = sorted(balance.completed_operations)
             raise ValueError(
-                f"Источник выдачи: остаток #{balance_id} (операции: "
-                f"{', '.join(labels) if labels else 'нет'}) не подходит маршруту позиции"
+                f"Источник выдачи: материал на {label} "
+                f"(пройдено: {', '.join(ops) if ops else 'ничего'}) "
+                "не подходит маршруту позиции"
             )
         issues.append(SourceIssue(
             balance=balance,

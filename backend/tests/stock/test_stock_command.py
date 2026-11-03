@@ -254,7 +254,7 @@ async def test_validation_rejects_zero_quantity(session: AsyncSession):
     laser = await _make_location(session, code="LASER5", name="Laser5", loc_type="laser")
 
     svc = StockCommandService()
-    with pytest.raises(StockValidationError, match="quantity"):
+    with pytest.raises(StockValidationError, match="Количество должно быть больше нуля"):
         await svc.record(session, StockCommand(
             product_id=product.id, from_location_id=raw.id, to_location_id=laser.id,
             quantity=Decimal(0), reason=Reason.TRANSFER_SEND, created_by=user.id,

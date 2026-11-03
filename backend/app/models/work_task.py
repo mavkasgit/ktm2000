@@ -67,6 +67,14 @@ class WorkTask(Base):
         # пары из индекса, левый префикс покрывает все lookup'ы «задачи
         # участка». FK на sections без индекса был — отсюда seq scan.
         Index("ix_work_tasks_section_id_status", "section_id", "status"),
+        # «Снять Пропущено только со своих этапов» (#282): отмена выдачи
+        # ищет пропуски по номеру выдачи. Partial — у большинства задач
+        # колонки NULL, и в индексе им не место.
+        Index(
+            "ix_work_tasks_skipped_by_issue_no",
+            "skipped_by_issue_no",
+            postgresql_where=text("skipped_by_issue_no IS NOT NULL"),
+        ),
     )
 
     id: Mapped[int] = mapped_column(BigInteger, Identity(always=True), primary_key=True)
@@ -89,6 +97,10 @@ class WorkTask(Base):
     # Причина пропуска этапа (#207): «материал подан в готовом виде».
     # Заполняется только для статуса skipped; для остальных — NULL.
     skip_reason: Mapped[str | None] = mapped_column(String(255), nullable=True)
+    # Какой выдачей этап помечен «Пропущено» (#282): отмена выдачи снимает
+    # знак только со своих пропусков. NULL — пропуск не автоподбором
+    # (ручной сквозной проход, будущая ручная кнопка).
+    skipped_by_issue_no: Mapped[str | None] = mapped_column(String(100), nullable=True)
     due_date: Mapped[date | None] = mapped_column(Date, nullable=True)
     assigned_to: Mapped[int | None] = mapped_column(ForeignKey("users.id"), nullable=True)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False, server_default=func.now())

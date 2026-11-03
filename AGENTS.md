@@ -23,6 +23,10 @@ npm run test:pytest:mon        # Только изменённые тесты
 npm run test:pytest:lf         # Только упавшие тесты
 npm run test:e2e              # Playwright на ОТДЕЛЬНОМ стенде: БД — клон шаблона ktm2000_e2e_template (Postgres :5441), порты — свободные, каждый прогон свои
 npm run test:db:cleanup        # Уборка осиротевших тестовых БД (TTL 24h)
+npm run doctor                 # Предпроверка дерева: GO/NO-GO (ветка, env, .venv, порты, индекс, хуки)
+npm run gate:fast              # Быстрые шаги гейта (в CI зовут `npm run gate -- --strict`)
+npm run gate                   # gate:fast + тесты backend и frontend
+npm run prove-checks           # Показать, что каждый шаг гейта умеет падать (красный ход, #357)
 ```
 
 Порты dev: Postgres `5440`, backend `8012`, frontend `5172`.
@@ -144,6 +148,8 @@ e2e и backend-тесты агент запускает сам: `npm --prefix fr
 | [`frontend/AGENTS.md`](frontend/AGENTS.md) | FSD, Vitest |
 | [`frontend/e2e/AGENTS.md`](frontend/e2e/AGENTS.md) | **Канон E2E** (Playwright) |
 | [`docs/agent-registry.md`](docs/agent-registry.md) | Порты, MCP-матрица |
+| [`docs/quality/gates.md`](docs/quality/gates.md) | **Карта гейтов**: шаг → что ловит → чем доказан красный ход |
+| [`docs/toolchain.md`](docs/toolchain.md) | Тулчейн: генерируется из `tools.json`, дрейф ловит `check:registry` |
 
 ## Логи контейнеров
 

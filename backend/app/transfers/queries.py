@@ -141,6 +141,9 @@ async def get_transfer_details(db: AsyncSession, transfer_id: int) -> dict:
     return {
         "id": transfer.id,
         "transfer_no": transfer.transfer_no,
+        # Номер выдачи (#282): одна выдача = N передач, все они несут один
+        # issue_no; у обычной ручной передачи — None.
+        "issue_no": transfer.issue_no,
         "status": transfer.status.value,
         "from_task_id": transfer.from_task_id,
         "to_task_id": transfer.to_task_id,
@@ -164,6 +167,9 @@ async def get_section_incoming_transfers(
     from_stage = aliased(RouteStage)
     to_stage = aliased(RouteStage)
     from_line = aliased(SectionPlanLine)
+    # Позиция принимающей стороны — запасной plan_position_id для выдач
+    # со склада (#282).
+    to_line = aliased(SectionPlanLine)
 
     # Имена операций этапов нужны только строкой ответа: ORM-коллекции
     # `RouteStage.operations` здесь не читаются вовсе. Два агрегата в самой
@@ -181,17 +187,22 @@ async def get_section_incoming_transfers(
                 to_task,
                 from_line,
                 Product.sku,
+                to_line.plan_position_id.label("to_plan_position_id"),
                 from_op_names_sq.c.operation_names.label("from_operation_names"),
                 to_op_names_sq.c.operation_names.label("to_operation_names"),
             )
             .join(from_section, from_section.id == Transfer.from_section_id)
             .join(to_section, to_section.id == Transfer.to_section_id)
-            .join(from_task, from_task.id == Transfer.from_task_id)
+            # #282: выдача со склада идёт без задания-источника
+            # (``from_task_id IS NULL``), поэтому src_* — outer join,
+            # иначе автоподборные передачи исчезали бы из журнала.
+            .outerjoin(from_task, from_task.id == Transfer.from_task_id)
             .join(to_task, to_task.id == Transfer.to_task_id)
-            .join(from_stage, from_stage.id == from_task.route_stage_id)
+            .outerjoin(from_stage, from_stage.id == from_task.route_stage_id)
             .join(to_stage, to_stage.id == to_task.route_stage_id)
-            .join(from_line, from_line.id == from_task.section_plan_line_id)
-            .join(Product, Product.id == from_task.product_id)
+            .outerjoin(from_line, from_line.id == from_task.section_plan_line_id)
+            .join(Product, Product.id == Transfer.product_id)
+            .outerjoin(to_line, to_line.id == to_task.section_plan_line_id)
             .outerjoin(from_op_names_sq, from_op_names_sq.c.route_stage_id == from_stage.id)
             .outerjoin(to_op_names_sq, to_op_names_sq.c.route_stage_id == to_stage.id)
             .where(
@@ -212,6 +223,7 @@ async def get_section_incoming_transfers(
         dst_task,
         src_line,
         product_sku,
+        to_plan_position_id,
         from_op_names,
         to_op_names,
     ) in rows:
@@ -229,6 +241,8 @@ async def get_section_incoming_transfers(
             {
                 "transfer_id": transfer.id,
                 "transfer_no": transfer.transfer_no,
+                # #282: одна выдача = N передач с общим issue_no.
+                "issue_no": transfer.issue_no,
                 "status": transfer.status.value,
                 "from_task_id": transfer.from_task_id,
                 "to_task_id": transfer.to_task_id,
@@ -249,12 +263,16 @@ async def get_section_incoming_transfers(
                 "created_at": transfer.created_at.isoformat() if transfer.created_at else None,
                 "is_post_factum": transfer.is_post_factum,
                 "physical_handover_at": transfer.physical_handover_at.isoformat() if transfer.physical_handover_at else None,
-                "from_task_status": src_task.status.value,
+                "from_task_status": src_task.status.value if src_task else None,
                 "to_task_status": dst_task.status.value,
                 "product_sku": product_sku,
-                "from_line_id": src_line.id,
-                "from_line_sequence": src_line.sequence,
-                "plan_position_id": src_line.plan_position_id,
+                "from_line_id": src_line.id if src_line else None,
+                "from_line_sequence": src_line.sequence if src_line else None,
+                # У выдачи со склада источника-позиции нет — позиция
+                # берётся со стороны приёмки (#282).
+                "plan_position_id": (
+                    src_line.plan_position_id if src_line else to_plan_position_id
+                ),
                 # Габарит переданного (тикет #95): колонка «Размер» в UI.
                 "dimensions": transfer.dimensions,
             }
@@ -1427,6 +1445,9 @@ async def get_section_transfer_history(
     from_stage = aliased(RouteStage)
     to_stage = aliased(RouteStage)
     from_line = aliased(SectionPlanLine)
+    # Позиция принимающей стороны — запасной plan_position_id для выдач
+    # со склада (#282), где источника-позиции нет.
+    to_line = aliased(SectionPlanLine)
 
     # 400 на неизвестное поле — до раннего выхода по пустому СПГ: кликнул
     # колонку, которой сервер не умеет сортировать, и получил пустой журнал.
@@ -1444,15 +1465,20 @@ async def get_section_transfer_history(
             to_task,
             from_line,
             Product.sku,
+            to_line.plan_position_id.label("to_plan_position_id"),
         )
         .join(from_section, from_section.id == Transfer.from_section_id)
         .join(to_section, to_section.id == Transfer.to_section_id)
-        .join(from_task, from_task.id == Transfer.from_task_id)
+        # #282: выдача со склада не имеет задания-источника — строку
+        # источника читаем outer join'ом, иначе «Журнал передач» молча
+        # терял бы автоподборные передачи.
+        .outerjoin(from_task, from_task.id == Transfer.from_task_id)
         .join(to_task, to_task.id == Transfer.to_task_id)
-        .join(from_stage, from_stage.id == from_task.route_stage_id)
+        .outerjoin(from_stage, from_stage.id == from_task.route_stage_id)
         .join(to_stage, to_stage.id == to_task.route_stage_id)
-        .join(from_line, from_line.id == from_task.section_plan_line_id)
-        .join(Product, Product.id == from_task.product_id)
+        .outerjoin(from_line, from_line.id == from_task.section_plan_line_id)
+        .join(Product, Product.id == Transfer.product_id)
+        .outerjoin(to_line, to_line.id == to_task.section_plan_line_id)
     )
 
     if spg_id is not None:
@@ -1507,6 +1533,9 @@ async def get_section_transfer_history(
                 from_section.name.ilike(search_like),
                 to_section.name.ilike(search_like),
                 Transfer.transfer_no.ilike(search_like),
+                # Поиск по номеру выдачи (#282): «ISS-…» собирает все
+                # передачи одной выдачи в одном экране журнала.
+                Transfer.issue_no.ilike(search_like),
                 Transfer.comment.ilike(search_like),
                 cast(from_line.plan_position_id, String).ilike(search_like),
             )
@@ -1548,6 +1577,7 @@ async def get_section_transfer_history(
         dst_task,
         src_line,
         row_sku,
+        to_plan_position_id,
         from_op_name,
         to_op_name,
     ) in rows:
@@ -1565,6 +1595,9 @@ async def get_section_transfer_history(
             {
                 "transfer_id": transfer.id,
                 "transfer_no": transfer.transfer_no,
+                # #282: одна выдача = N передач с общим issue_no; у обычной
+                # ручной передачи — None.
+                "issue_no": transfer.issue_no,
                 "status": transfer.status.value,
                 "from_task_id": transfer.from_task_id,
                 "to_task_id": transfer.to_task_id,
@@ -1585,12 +1618,17 @@ async def get_section_transfer_history(
                 "created_at": transfer.created_at.isoformat() if transfer.created_at else None,
                 "is_post_factum": transfer.is_post_factum,
                 "physical_handover_at": transfer.physical_handover_at.isoformat() if transfer.physical_handover_at else None,
-                "from_task_status": src_task.status.value,
+                "from_task_status": src_task.status.value if src_task else None,
                 "to_task_status": dst_task.status.value,
                 "product_sku": row_sku,
-                "from_line_id": src_line.id,
-                "from_line_sequence": src_line.sequence,
-                "plan_position_id": src_line.plan_position_id,
+                "from_line_id": src_line.id if src_line else None,
+                "from_line_sequence": src_line.sequence if src_line else None,
+                # У выдачи со склада источника-позиции нет: позиция
+                # определяется по принимающей стороне (то же плановое
+                # место, что и у обычной передачи внутри маршрута).
+                "plan_position_id": (
+                    src_line.plan_position_id if src_line else to_plan_position_id
+                ),
                 # Габарит переданного (тикет #95): колонка «Размер» в UI.
                 "dimensions": transfer.dimensions,
             }

@@ -84,7 +84,7 @@ async def test_spg_with_requires_lot_blocks_negative_remainder(client, session):
     from app.stock import StockValidationError
 
     # Осознанный минус на участке с requires_lot блокируется даже с флагом.
-    with pytest.raises(StockValidationError, match="requires_lot"):
+    with pytest.raises(StockValidationError, match="Минус на складе запрещён"):
         await svc.record(session, StockCommand(
             product_id=product.id,
             from_location_id=section.id,

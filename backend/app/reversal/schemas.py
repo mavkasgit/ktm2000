@@ -81,6 +81,12 @@ class ActionOut(BaseModel):
     status: str
     depends_on: list[int] = Field(default_factory=list)
     created_at: str | None = None
+    # #282: для transfer_send дополнительно отдаём количество, номер
+    # передачи и номер выдачи — без них «Отмены действий» показывали
+    # строку «Передача» без цифр и без группировки выдач.
+    quantity: str | None = None
+    transfer_no: str | None = None
+    issue_no: str | None = None
 
 
 class ActionsListOut(BaseModel):

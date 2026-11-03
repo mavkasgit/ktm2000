@@ -1,12 +1,23 @@
 name: Frontend tests
 
+# Статус для merge: БЛОКИРУЕТ. Required check называется `frontend tests` — ровно
+# `name:` джоба ниже, а не `name:` workflow. Состав блокирующих проверок живёт вне
+# этого файла: сверять чтением `gh api repos/mavkasgit/ktm2000/branches/main/protection`
+# и таблицей `docs/testing-guide.md` (§CI). #370.
+
 # tsc + ESLint + vitest с покрытием на push/PR. Решения грилла #245: Q14=1
 # (набор в CI), Q4=1 (покрытие меряем), Q22 (typecheck отдельным шагом, vite
-# build не дублируем), Q13 (без порога: первое число frontend-покрытия ещё не
-# снято, гейт — отдельным решением позже). ESLint добавлен в набор ради
-# архитектурных границ FSD (#333): tsc их не видит.
-# Имя джоба `frontend tests` — оно же имя required check (настройка #254).
-# paths-фильтров нет намеренно: required check не должен висеть, не запустившись.
+# build не дублируем). ESLint добавлен в набор ради архитектурных границ FSD
+# (#333): tsc их не видит.
+# Пороги покрытия включены (решение #245, Q5=1) по первому замеру 2026-10-01:
+# statements/lines 43, branches 72; `functions` 49 добавлен в #373. Сами числа —
+# `frontend/vitest.config.ts`, не этот комментарий.
+# #361: скоуп по путям считается шагом внутри джоба (не фильтром `paths` уровня
+# workflow) — required check от workflow-фильтра повис бы в "Pending" и
+# заблокировал merge (документация GitHub, `on.<push|pull_request>`). Поэтому
+# первоначальная договорённость «фильтров нет намеренно» сохранена по смыслу:
+# джоб запускается всегда, а дорогой набор пропускается только когда в PR нет
+# ни одного файла зоны frontend.
 on:
   push:
     branches:
@@ -17,6 +28,15 @@ on:
       - main
       - master
   workflow_dispatch:
+
+concurrency:
+  group: ci-${{ github.workflow }}-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' || github.ref != 'refs/heads/main' }}
+
+# #363 [missing-permissions]: по умолчанию GITHUB_TOKEN получает запись во все скоупы
+# репозитория. Здесь читаем — поэтому верхний уровень только `contents: read`.
+permissions:
+  contents: read
 
 jobs:
   frontend-tests:
@@ -29,23 +49,137 @@ jobs:
 
     steps:
       - name: Checkout
-        uses: actions/checkout@v4
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+        with:
+          # #363 [artipacked]: checkout иначе пишет GITHUB_TOKEN в .git/config workspace,
+          # откуда его может увести любой последующий шаг (upload-artifact и т. п.).
+          # Ни один шаг этих джобов не пушит: push — действие человека/оркестратора.
+          persist-credentials: false
+
+      # #361: зона фронта = frontend/** + корневые npm-файлы + сам workflow.
+      # Невозможность получить список изменений → relevant=true (fail-open).
+      - name: Path scope (зона frontend)
+        id: scope
+        shell: bash
+        env:
+          KTM_BASE: ${{ github.event.pull_request.base.sha }}
+          KTM_HEAD: ${{ github.event.pull_request.head.sha }}
+          KTM_EVENT: ${{ github.event_name }}
+        run: |
+          set -euo pipefail
+          PATTERN='^frontend/|^package(-lock)?\.json$|^\.github/workflows/frontend-tests\.yml$'
+          say() {
+            echo "relevant=$1" >> "$GITHUB_OUTPUT"
+          }
+          if [ "$KTM_EVENT" != "pull_request" ]; then
+            echo "event=$KTM_EVENT — скоуп не применяется, прогон полный"
+            say true; exit 0
+          fi
+          # Список файлов берём из compare API, а не из `git diff`: checkout с
+          # `persist-credentials: false` (#363) не даёт ходовой учётных данных для
+          # дозапроса base-объекта в shallow-checkout, а API работает штатным
+          # GITHUB_TOKEN с permissions contents: read.
+          # `--jq` встроен в gh (gojq) — отдельный jq на раннере не нужен.
+          if ! CHANGED=$(gh api "repos/$GITHUB_REPOSITORY/compare/$KTM_BASE...$KTM_HEAD" --jq '.files[]?.filename' 2>/dev/null); then
+            echo "compare API недоступен — прогон полный (fail-open)"
+            say true; exit 0
+          fi
+          NFILES=$(printf '%s' "$CHANGED" | grep -c . || true)
+          if [ "$NFILES" -ge 300 ]; then
+            echo "compare API обрезал список на 300 файлах — прогон полный (fail-open)"
+            say true; exit 0
+          fi
+          printf 'Изменённые файлы PR (%s):\n%s\n' "$NFILES" "$CHANGED"
+          if [ -z "$CHANGED" ] || printf '%s\n' "$CHANGED" | grep -qE "$PATTERN"; then
+            echo "Зона frontend затронута — прогон полный"
+            say true
+          else
+            echo "Ни одного файла зоны frontend не изменено — tsc/eslint/vitest пропускаем"
+            say false
+          fi
+
+      # #362: версии языка берутся из pin-файлов репозитория (#355 оркестратора:
+      # `.nvmrc`, `.python-version`). Файла нет — шаг материализует временный
+      # `.ci-*-version` в workspace прогона (в git не попадает) со значением, которое
+      # стояло в этом workflow до волны, и печатает WARNING. Прогон зелёный уже
+      # сегодня; когда pin-файлы появятся, правки в workflow не нужны — тот же путь,
+      # другое содержимое.
+      - name: Toolchain pin (#362)
+        id: toolchain
+        if: steps.scope.outputs.relevant == 'true'
+        shell: bash
+        # `working-directory` обязателен: шаг-`uses` (setup-node) не наследует
+        # defaults.run.working-directory джобы и ищет файл от корня workspace, а
+        # `run`-шаг без него пишет `.ci-node-version` в frontend/ — setup-node тогда
+        # падает на «specified node version file … does not exist».
+        working-directory: ${{ github.workspace }}
+        env:
+          KTM_NODE_FALLBACK: '20'
+          KTM_USE_NODE: 'yes'
+          KTM_USE_PY: 'no'
+        run: |
+          set -euo pipefail
+          pick() {
+            local src="$1" fb="$2" dst="$3" raw
+            if [ -f "$src" ]; then
+              raw=$(tr -d ' \t\r\n' < "$src")
+              echo "$src -> $raw (pin-файл репозитория)"
+            else
+              raw="$fb"
+              echo "WARNING: pin-файла $src нет (#355 не влит) — беру литерал workflow $raw"
+            fi
+            if [ -z "$raw" ]; then
+              echo "Пустая версия языка ($src/$fb) — падаю, а не ставлю тихий дефолт" >&2
+              exit 1
+            fi
+            printf '%s\n' "${raw#v}" > "$dst"
+            echo "$dst: $(cat "$dst")"
+          }
+          if [ "$KTM_USE_NODE" = yes ]; then
+            pick .nvmrc "$KTM_NODE_FALLBACK" .ci-node-version
+            echo "node_file=.ci-node-version" >> "$GITHUB_OUTPUT"
+          fi
+          if [ "$KTM_USE_PY" = yes ]; then
+            pick .python-version "$KTM_PY_FALLBACK" .ci-python-version
+            echo "python_file=.ci-python-version" >> "$GITHUB_OUTPUT"
+          fi
 
       - name: Setup Node
-        uses: actions/setup-node@v4
+        if: steps.scope.outputs.relevant == 'true'
+        uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4.4.0
         with:
-          node-version: "20"
+          node-version-file: ${{ steps.toolchain.outputs.node_file }}
           cache: npm
           cache-dependency-path: frontend/package-lock.json
 
       - name: Install frontend dependencies
+        if: steps.scope.outputs.relevant == 'true'
         run: npm ci
 
       - name: Typecheck (tsc -b)
+        if: steps.scope.outputs.relevant == 'true'
         run: npx tsc -b
 
       - name: ESLint (архитектурные границы FSD)
+        if: steps.scope.outputs.relevant == 'true'
         run: npm run lint
 
-      - name: Vitest with coverage (report-only, no threshold yet)
+      - name: Vitest with coverage (пороги statements/lines 43, branches 72, functions 49)
+        if: steps.scope.outputs.relevant == 'true'
         run: npm test -- --coverage
+
+      # Рэтчет числа тестов (#358): собрано не меньше записанного. Отдельный шаг,
+      # потому что зелёный прогон с молча исчезнувшим файлом спеков выглядит как
+      # «тестов стало меньше, но они проходят».
+      - name: Test-count ratchet (vitest)
+        if: steps.scope.outputs.relevant == 'true'
+        run: node ../scripts/test-count.js --only=frontend
+
+      # Мёртвые dev-зависимости (#374): пакет, который не назван ни в одном
+      # отслеживаемом файле и ни одним своим бинарником, — кандидат на удаление.
+      # Здесь `--strict`, потому что в отличие от локального гейта CI не мешает
+      # быстрый ход: находка обязана либо удалить пакет, либо объяснить его в
+      # датированном исключении docs/quality/dev-deps-allowlist.json.
+      - name: Dead devDependencies check
+        if: steps.scope.outputs.relevant == 'true'
+        run: node ../scripts/check-dev-deps.js --strict

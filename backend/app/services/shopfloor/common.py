@@ -27,6 +27,30 @@ def _ensure_positive(value: Decimal, field_name: str) -> None:
     if value <= 0:
         raise ValueError(f"{field_name} must be > 0")
 
+
+def format_quantity(value: Decimal | float | str) -> str:
+    """Количество для человекочитаемого отказа: без хвостов ``.000``.
+
+    ``3.000 → «3»``, ``2.500 → «2,5»`` (запятая — как operator видит в UI).
+    Числовые id склада/артикула в отказах выдачи не показываются (#282), а
+    вот количество показать обязаны — иначе «нужно 60, осталось …» теряет
+    смысл.
+    """
+    normalized = Decimal(str(value)).normalize()
+    if normalized == normalized.to_integral_value():
+        return str(int(normalized))
+    return format(normalized, "f").replace(".", ",")
+
+
+async def get_section_name(db: AsyncSession, section_id: int | None) -> str:
+    """Название участка для текстов отказов; ``None``/нет строки → «неизвестный участок»."""
+    if section_id is None:
+        return "неизвестный участок"
+    from app.models.section import Section
+
+    section = await db.get(Section, section_id)
+    return section.name if section is not None else f"участок {section_id}"
+
 async def _get_task(db: AsyncSession, task_id: int) -> WorkTask:
     task = await db.get(WorkTask, task_id)
     if task is None:

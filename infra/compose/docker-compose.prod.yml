@@ -100,6 +100,19 @@ services:
     depends_on:
       - backend
     restart: always
+    # Объявление #380 (запуск `docker compose -f infra/compose/docker-compose.prod.yml
+    # config -q` и аудит `backend/scripts/audit_compose.py`; прод-контейнеры этой
+    # машиной НЕ перезапускались — блок вступит в силу на следующем плановом `up`).
+    # Проба локальная: nginx отдаёт SPA с этого же контейнера, зависимостей от
+    # backend в healthcheck нет (иначе он падал бы заодно с бэкендом).
+    # `curl` есть в образе: frontend/Dockerfile — `FROM nginx:alpine`, а в истории
+    # базового образа последний слой `apk add --no-cache curl ca-certificates`.
+    healthcheck:
+      test: ["CMD-SHELL", "curl -fsS --max-time 5 http://127.0.0.1:80/"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 10s
 
   nginx:
     image: nginx:alpine
@@ -120,10 +133,24 @@ services:
       - frontend
       - backend
     restart: always
+    # Объявление #380: edge-nginx проверяется сквозной пробой `/api/health` —
+    # это одновременно «nginx отвечает», «прокси жив» и «backend отдаёт health»
+    # (backend сам по себе уже имеет healthcheck на :8000). Дыра без этой пробы:
+    # nginx healthy даже когда весь upstream мёртв, потому что слушает он всегда.
+    healthcheck:
+      test: ["CMD-SHELL", "curl -fsS --max-time 5 http://127.0.0.1:80/api/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 15s
 
   cloudflared:
     profiles: ["tunnel"]
-    image: cloudflare/cloudflared:latest
+    image: cloudflare/cloudflared:2026.10.7
+    # Тег закреплён (#380/#367): `:latest` означал развёртывание, которое нельзя
+    # повторить. 2026.10.7 — стабильный тег, на который указывал `latest` на момент
+    # правки (Docker Hub API, тег обновлён 2026-10-30T17:22:44Z); обновления ведёт
+    # dependabot с экосистемой docker (#367, срез A).
     container_name: ktm2000-cloudflared-prod
     logging:
       driver: json-file

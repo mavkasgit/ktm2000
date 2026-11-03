@@ -24,6 +24,13 @@
 | [`plan-import-spec.md`](plan-import-spec.md) | **Импорт плана** | Спека ускорения/стабилизации импорта, коды строк, apply/rollback |
 | [`stock-import-history-spec.md`](stock-import-history-spec.md) | **Импорт остатков** | Реестр батчей, просмотр, откат, удаление из списка (#232) |
 | [`../GLOSSARY.md`](../GLOSSARY.md) | **Глоссарий домена** | Термины: батч импорта, строка импорта, импорт остатков, действие |
+| [`quality/gates.md`](quality/gates.md) | **Карта гейтов** | Шаг → что ловит → где выполняется → чем доказан красный ход |
+| [`quality/criteria.md`](quality/criteria.md) | Приём инструментов | Восемь критериев; «новый инструмент не принимается потому, что он хороший» |
+| [`quality/not-adopted.md`](quality/not-adopted.md) | Отказы и незакрытые дыры | Почему не приняли, что изменит ответ, чего у нас нет вообще |
+| [`quality/hooks.md`](quality/hooks.md) | Хуки до коммита | lefthook: установка, скоупы, политика пропуска, запрет автоправок |
+| [`quality/adr-legacy.json`](quality/adr-legacy.json) | Датированное исключение ADR | Восемь решений до единого шаблона; новый файл туда не добавляется молча |
+| [`quality/proven-checks.json`](quality/proven-checks.json) | Доказанные красные ходы | Шаг → дата → чем сломано; `prove-coverage` требует запись на каждый шаг |
+| [`toolchain.md`](toolchain.md) | **Тулчейн (генерируемый)** | Инструменты из `tools.json`; расхождение ловит `npm run check:registry` |
 | [`agents/domain.md`](agents/domain.md) | Доменные документы | Конвенция `GLOSSARY.md` + `docs/adr/` |
 | [`adr/`](adr/) | ADR (решения) | Архитектурные решения: инварианты, откаты, миграции |
 | [`research/`](research/) | Research | Исследования внешних систем (SAP, Odoo MRP/BOM) |

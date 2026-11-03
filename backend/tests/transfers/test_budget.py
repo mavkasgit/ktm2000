@@ -180,7 +180,7 @@ async def test_plain_transfer_budget_excludes_received(client, session) -> None:
 
     # Вторая передача 6 — превышение: бюджет исчерпан (5 − 5 = 0), несмотря
     # на неиспользованный received 5.
-    with pytest.raises(ValueError, match="exceeds transferable"):
+    with pytest.raises(ValueError, match="передавать нельзя"):
         await transfer_send(
             session,
             from_task_id=ctx["from_task_id"],
@@ -237,7 +237,7 @@ async def test_correct_transfer_returns_old_quantity_once(client, session) -> No
     await session.commit()
 
     # Бюджет исчерпан: ещё передача невозможна.
-    with pytest.raises(ValueError, match="exceeds transferable"):
+    with pytest.raises(ValueError, match="передавать нельзя"):
         await transfer_send(
             session,
             from_task_id=ctx["from_task_id"],
@@ -248,7 +248,7 @@ async def test_correct_transfer_returns_old_quantity_once(client, session) -> No
 
     # Коррекция 5 → 6: доступно = 0 + 5 old = 5 < 6 → отказ.
     # Двойное кредитование old_quantity дало бы 10 и пропустило бы это.
-    with pytest.raises(ValueError, match="exceeds transferable"):
+    with pytest.raises(ValueError, match="корректировать передачу нельзя"):
         await correct_transfer(
             session,
             transfer_id=r2["transfer_id"],

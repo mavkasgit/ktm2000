@@ -7,6 +7,7 @@
     "dev": "vite",
     "build": "tsc -b && vite build",
     "lint": "eslint .",
+    "typecheck:e2e": "tsc -p tsconfig.e2e.json --noEmit",
     "prebuild": "node ../scripts/verify-sync.mjs --other ../hrms --if-enabled",
     "preview": "vite preview",
     "test": "vitest run",

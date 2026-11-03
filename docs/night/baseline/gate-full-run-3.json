@@ -1,0 +1,119 @@
+{
+  "generated_at": "2026-11-02T22:20:12.290Z",
+  "sha": "aef815e7781bf8edc2af89c42ae43cf97bd880c9",
+  "branch": "night/2026-11-03",
+  "node": "v24.11.1",
+  "tier": "full",
+  "strict": false,
+  "steps": [
+    {
+      "status": "ok",
+      "seconds": 1.171,
+      "name": "docs-links",
+      "what": "битые ссылки и карды документации",
+      "ci": "есть в CI: docs.yml"
+    },
+    {
+      "status": "ok",
+      "seconds": 1.028,
+      "name": "scripts-tests",
+      "what": "юнит-тесты node-скриптов корня",
+      "ci": "есть в CI: docs.yml"
+    },
+    {
+      "status": "ok",
+      "seconds": 3.192,
+      "name": "labels-check",
+      "what": "сгенерированные подписи фронта сверены с бэкендом",
+      "ci": "есть в CI: migrations.yml"
+    },
+    {
+      "status": "ok",
+      "seconds": 2.193,
+      "name": "seeds-validate",
+      "what": "сиды справочников внутренне непротиворечивы",
+      "ci": "есть в CI: migrations.yml"
+    },
+    {
+      "status": "ok",
+      "seconds": 0.202,
+      "name": "profile-settings-manifest",
+      "what": "манифест профилей настроек совпадает с кодом",
+      "ci": "есть в CI: migrations.yml"
+    },
+    {
+      "status": "ok",
+      "seconds": 4.512,
+      "name": "test-hygiene",
+      "what": "в тестах нет мёртвых импортов",
+      "ci": "есть в CI: backend-tests.yml"
+    },
+    {
+      "status": "ok",
+      "seconds": 0.09,
+      "name": "ruff",
+      "what": "линтер backend",
+      "ci": "есть в CI: ruff.yml"
+    },
+    {
+      "status": "ok",
+      "seconds": 28.368,
+      "name": "frontend-types",
+      "what": "типы продакшн-кода фронта",
+      "ci": "есть в CI: frontend-tests.yml"
+    },
+    {
+      "status": "missing",
+      "seconds": 0,
+      "reason": "нет frontend/tsconfig.e2e.json",
+      "name": "frontend-types-e2e",
+      "what": "типы e2e-спек (без этого шага спеки проверяются только прогоном)",
+      "ci": "есть в CI: frontend-tests.yml"
+    },
+    {
+      "status": "ok",
+      "seconds": 14.772,
+      "name": "frontend-lint",
+      "what": "ESLint: архитектурные границы FSD",
+      "ci": "есть в CI: frontend-tests.yml"
+    },
+    {
+      "status": "ok",
+      "seconds": 348.529,
+      "name": "backend-tests",
+      "what": "pytest backend (создаёт свою БД)",
+      "ci": "есть в CI: backend-tests.yml"
+    },
+    {
+      "status": "ok",
+      "seconds": 147.677,
+      "name": "frontend-unit",
+      "what": "vitest с покрытием",
+      "ci": "есть в CI: frontend-tests.yml"
+    }
+  ],
+  "not_run": [
+    {
+      "name": "alembic-drift",
+      "ci": "есть в CI: migrations.yml",
+      "reason": "накатывает миграции на dev-БД живого стенда; локально — после #379 (клон стенда)"
+    },
+    {
+      "name": "e2e-smoke",
+      "ci": "есть в CI: e2e-smoke.yml",
+      "reason": "берёт слот машинного семафора и свой стенд; отдельный ярус `npm run gate:e2e`"
+    }
+  ],
+  "reconcile": {
+    "status": "not-checked",
+    "detail": "docs/quality/gates.md не найден — сверять не с чем"
+  },
+  "totals": {
+    "ok": 11,
+    "fail": 0,
+    "missing": 1,
+    "steps": 12,
+    "seconds": 551.73
+  },
+  "local_coverage": "11/12 шагов реально проверено локально"
+}
