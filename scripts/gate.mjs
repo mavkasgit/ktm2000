@@ -99,6 +99,13 @@ const STEPS = [
     what: " в тестах нет мёртвых импортов",
   },
   {
+    name: "backend-test-count",
+    tier: "fast",
+    command: "node scripts/test-count.js --only=backend",
+    ci: "backend-tests.yml",
+    what: " pytest-набор не меньше записанного (тесты нельзя удалять молча)",
+  },
+  {
     name: "ruff",
     tier: "fast",
     command: "ruff check backend",
@@ -145,6 +152,13 @@ const STEPS = [
     cwd: "frontend",
     ci: "frontend-tests.yml",
     what: " vitest с покрытием",
+  },
+  {
+    name: "frontend-test-count",
+    tier: "full",
+    command: "node scripts/test-count.js --only=frontend",
+    ci: "frontend-tests.yml",
+    what: " vitest-набор не меньше записанного (минута на сбор, поэтому не в fast)",
   },
 ];
 

@@ -74,6 +74,16 @@
       "proven_at": "2026-11-02",
       "note": "vitest с неверным ожиданием (весь набор — минута-две)",
       "how": "prove-checks frontend-unit"
+    },
+    "backend-test-count": {
+      "proven_at": "2026-11-03",
+      "note": "в baseline записано тестов больше, чем собрано — рэтчет обязан покраснеть (заниженный минимум зелёный — это критерий (в), он покрыт npm run test:scripts)",
+      "how": "npm run prove-checks -- --only=backend-test-count"
+    },
+    "frontend-test-count": {
+      "proven_at": "2026-11-03",
+      "note": "минимум vitest-набора завышен — рэтчет красный (сбор списка занимает минуту)",
+      "how": "npm run prove-checks -- --only=frontend-test-count"
     }
   },
   "exempt": {

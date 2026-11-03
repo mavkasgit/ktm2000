@@ -191,6 +191,12 @@ jobs:
           pip install -r backend/requirements.txt
           pip install coverage==7.16.2
 
+      # Рэтчет числа тестов (#358) — до прогона: если набор стал меньше
+      # записанного, падать должен именно этот шаг, а не «pytest прошёл быстрее».
+      - name: Test-count ratchet (pytest)
+        if: steps.scope.outputs.relevant == 'true'
+        run: node scripts/test-count.js --only=backend
+
       # run-DB создаётся и удаляется тем же скриптом, что и на dev-машине:
       # изоляция прогона остаётся той же, без отдельной CI-обвязки.
       - name: Run backend test suite with coverage

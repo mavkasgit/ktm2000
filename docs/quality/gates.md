@@ -23,12 +23,14 @@
 | `profile-settings-manifest` | fast | манифест профилей настроек совпадает с кодом | CI migrations.yml | да | prove-checks 2026-11-03 |
 | `compose-audit` | fast | потолки логов, healthcheck и restart-политика в compose | локальный гейт | да | prove-checks 2026-11-03 |
 | `test-hygiene` | fast | мёртвые импорты в тестах | CI backend-tests.yml | нет, report-only | exempt: ловит ruff F401 |
+| `backend-test-count` | fast | pytest-набор не меньше записанного в baseline | CI backend-tests.yml | да | prove-checks 2026-11-03 |
 | `ruff` | fast | линтер backend | pre-commit, CI ruff.yml | да | prove-checks 2026-11-03 |
 | `frontend-types` | fast | типы продакшн-кода фронта | CI frontend-tests.yml | да | prove-checks 2026-11-03 |
 | `frontend-types-e2e` | fast | типы e2e-спек | CI frontend-tests.yml | да | prove-checks 2026-11-03 |
 | `frontend-lint` | fast | ESLint: архитектурные границы FSD | pre-commit, CI frontend-tests.yml | да | prove-checks 2026-11-03 |
 | `backend-tests` | full | pytest backend (создаёт свою БД) | CI backend-tests.yml | да | prove-checks --heavy 2026-11-03 |
 | `frontend-unit` | full | vitest с покрытием | CI frontend-tests.yml | да | prove-checks --heavy 2026-11-03 |
+| `frontend-test-count` | full | vitest-набор не меньше записанного в baseline | CI frontend-tests.yml | да | prove-checks --heavy 2026-11-03 |
 | `alembic-drift` | нет локально | дрейф миграций против heads | CI migrations.yml | в CI | exempt: локально не запускается |
 | `e2e-smoke` | e2e | Playwright smoke на своём клоне базы | CI e2e-smoke.yml | в CI | exempt: отдельный ярус |
 <!-- gates-steps:end -->

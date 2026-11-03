@@ -156,6 +156,29 @@ const PROBES = [
     note: "незакрытый JSX — линтер обязан упасть, а не промолчать (гейт отдаёт хвост вывода, поэтому сверяем итоговую строку с числом ошибок)",
   },
   {
+    step: "backend-test-count",
+    mutate: [
+      {
+        path: "scripts/test-count-baseline.json",
+        to: '{\n  "sources": {\n    "backend": {\n      "collector": "pytest --collect-only -q",\n      "total": 999999,\n      "by_file": {\n        "tests/_probe358_нет_такого_файла.py": 999999\n      }\n    }\n  },\n  "updated": "2026-11-03"\n}\n',
+      },
+    ],
+    expect: /собрано меньше минимума/,
+    note: "в baseline записано тестов больше, чем собрано — рэтчет обязан покраснеть (заниженный минимум зелёный — это критерий (в), он покрыт npm run test:scripts)",
+  },
+  {
+    step: "frontend-test-count",
+    heavy: true,
+    mutate: [
+      {
+        path: "scripts/test-count-baseline.json",
+        to: '{\n  "sources": {\n    "frontend": {\n      "collector": "vitest list",\n      "total": 999999,\n      "by_file": {\n        "src/_probe358_нет_такого_файла.test.ts": 999999\n      }\n    }\n  },\n  "updated": "2026-11-03"\n}\n',
+      },
+    ],
+    expect: /собрано меньше минимума/,
+    note: "минимум vitest-набора завышен — рэтчет красный (сбор списка занимает минуту)",
+  },
+  {
     step: "backend-tests",
     heavy: true,
     write: [

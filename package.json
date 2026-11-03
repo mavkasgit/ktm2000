@@ -14,6 +14,7 @@
     "check:registry": "node scripts/check-registry.mjs",
     "toolchain:write": "node scripts/check-registry.mjs --write-doc",
     "prove-checks": "node scripts/prove-checks.mjs",
+    "test-count": "node scripts/test-count.js",
     "hooks:install": "lefthook install",
     "hooks:check": "node scripts/check-hooks.mjs",
     "guard:tree": "node scripts/guard-tree.mjs",
