@@ -1,0 +1,35 @@
+{
+  // Типы спек Playwright (#371). Отдельный конфиг, а не `include` в основном:
+  // `tsconfig.json` остаётся `["src"]`, потому что иначе `tsc -p tsconfig.json`
+  // (и CI-шаг `npx tsc -b`) тянет e2e в проект приложения, а раннеры у них
+  // разные: vitest исключает `e2e/**/*.spec.ts`, Playwright — `*.test.ts`.
+  //
+  // Проверка: `npx tsc -p tsconfig.e2e.json --noEmit` (скрипт `typecheck:e2e`).
+  "extends": "./tsconfig.json",
+  "compilerOptions": {
+    // e2e-код исполняется на Node (#20 в CI), а не в браузере: `lib` и `target`
+    // шире приложения, иначе `.at()`/`structuredClone` в хелперах не сходятся
+    // с браузерным ES2020 из основного конфига.
+    "target": "ES2022",
+    "lib": ["ES2022", "DOM", "DOM.Iterable"],
+    // Хелперам нужны `node:fs`/`node:path` (`pass-cache.ts`, `global-teardown.ts`),
+    // юнит-тестам прогона — глобалы vitest (`globals: true` в vitest.config.ts).
+    "types": ["node", "vitest/globals"],
+    // `playwright.config.ts` импортирует `e2e/mobile-project.mjs`, а
+    // `*.test.ts` — `run-lock.mjs`/`run-slots.mjs`/`run-workers.mjs`. Без
+    // `allowJs` резолв таких импортов — TS2307, и проверка падала бы не на
+    // типах, а на отсутствии модуля. Сами `.mjs` не проверяются (`checkJs:
+    // false`): они читаются как есть, типы выводятся из кода.
+    "allowJs": true,
+    "checkJs": false,
+    // Приложение из e2e не импортируется (алиасы `@/` в `e2e/**` не
+    // используются — проверено grep'ом), поэтому `baseUrl`/`paths` основного
+    // конфига здесь наследуются без вреда, но и не нужны.
+    "noEmit": true
+  },
+  "include": [
+    "e2e/**/*.ts",
+    "e2e/**/*.mjs",
+    "playwright.config.ts"
+  ]
+}

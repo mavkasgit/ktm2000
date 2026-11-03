@@ -34,7 +34,9 @@
  *
  * Опции (через env):
  *   E2E_LOCK_TIMEOUT_MS     сколько ждать свободный лок репозитория (30 мин)
- *   E2E_LOCK_STALE_MS       после какого возраста лок считается брошенным (40 мин)
+ *   E2E_LOCK_STALE_MS       с какого возраста ЖИВОГО держателя заподозрить
+ *                           зависание (40 мин); ни лок, ни слот по нему не
+ *                           отбираются (#375)
  *   E2E_MAX_PARALLEL_RUNS   сколько прогонов пускать на машине (2)
  *   E2E_SEMAPHORE_DIR       каталог слотов семафора (вне репозитория)
  *   E2E_SEMAPHORE_TIMEOUT_MS  сколько ждать слот (30 мин)
@@ -78,6 +80,7 @@ import {
   readLock,
   reclaimReason,
   releaseLock,
+  stallNotice,
   tryAcquireLock,
 } from "./run-lock.mjs";
 import { parseWorkersArg } from "./run-workers.mjs";
@@ -159,40 +162,54 @@ let abandonedRunId = null;
  * Ждёт свободный лок дерева, показывая, кто держит прошлый.
  *
  * Мёртвого держателя (`taskkill`, отмена задачи, падение ОС) снимаем сразу:
- * иначе убитый прогон держит дерево до `STALE_MS` (40 мин), а следующий
- * прогон всё это время ждёт «стек занят» и в итоге падает по таймауту (#281).
- * Его клон БД запоминаем — снести его можно только у мёртвого держателя.
+ * иначе убитый прогон держит дерево, а следующий прогон всё это время ждёт
+ * «стек занят» и в итоге падает по таймауту (#281). Его клон БД запоминаем —
+ * снести его можно только у мёртвого держателя.
+ *
+ * Живого не трогаем ни при каком возрасте (#375): `STALE_MS` превратился в
+ * порог подозрения, который называется в логе один раз на ожидание. Отнять лок
+ * у живого прогона — значит получить два стенда в одном дереве.
  */
 async function acquire() {
   const started = Date.now();
   let announced = false;
+  let warnedStall = false;
   for (;;) {
     const holder = readLock(LOCK_FILE);
-    const age = holder ? Date.now() - (holder.at ?? Date.now()) : Infinity;
-    const reason = reclaimReason(holder, { staleMs: STALE_MS });
+    // Лок мог освободиться или сменить владельца между чтением и попыткой
+    // занять: без держателя возраст не число, и в тексте его быть не должно.
+    const holderDesc = holder
+      ? `прогоном яруса ${holder.tier ?? "?"} (pid ${holder.pid ?? "?"}, ` +
+        `держит ${Math.round((Date.now() - (holder.at ?? Date.now())) / 60_000)} мин)`
+      : "чужим прогоном, занявшим лок между проверкой и попыткой";
+    const reason = reclaimReason(holder);
     if (reason) {
       console.log(`[e2e:run] лок прогона: ${reason.message}`);
-      // Клон сносим только у мёртвого держателя: живой долгий прогон потеряет
-      // лок, но свои данные не отдаст.
-      if (reason.dead) abandonedRunId = holder?.runId ?? null;
-      // Лок снимаем принудительно: он отобран по `reason`, и сверять
-      // принадлежность нельзя — следующая итерация цикла всё равно займёт
-      // файл заново.
+      // Клон сносим только у мёртвого держателя: у живого прогона данные ещё
+      // могут понадобиться ему самому.
+      abandonedRunId = holder?.runId ?? null;
+      // Лок снимаем принудительно: он снят по `reason`, и сверять
+      // принадлежность нельзя — следующая итерация цикла займёт файл заново.
       releaseLock(LOCK_FILE);
       continue;
     }
     if (tryAcquireLock(LOCK_FILE, { tier: TIER, pid: process.pid, at: Date.now(), runId })) return;
     if (!announced) {
-      console.log(
-        `[e2e:run] ярус ${TIER} ждёт: стек занят прогоном яруса ${holder?.tier ?? "?"} ` +
-          `(pid ${holder?.pid ?? "?"}, ${Math.round(age / 60_000)} мин назад)`,
-      );
+      console.log(`[e2e:run] ярус ${TIER} ждёт: стек занят ${holderDesc}`);
       announced = true;
+    }
+    if (!warnedStall) {
+      const notice = stallNotice(holder, { staleMs: STALE_MS });
+      if (notice) {
+        warnedStall = true;
+        console.log(`[e2e:run] лок прогона: ${notice.message}`);
+      }
     }
     if (Date.now() - started > WAIT_TIMEOUT_MS) {
       throw new Error(
         `[e2e:run] не дождался свободного стека за ${Math.round(WAIT_TIMEOUT_MS / 60_000)} мин. ` +
-          `Держит: ${JSON.stringify(holder)}`,
+          `Держит: ${holderDesc}. Живой держатель лок по возрасту не уступает — ` +
+          "если прогон завис, решать надо по pid",
       );
     }
     await sleep(POLL_MS);
@@ -200,8 +217,8 @@ async function acquire() {
 }
 
 function release() {
-  // С `runId`: лок, отобранный соседу по возрасту, нам не принадлежит —
-  // сносить его нельзя (`run-lock.mjs`, `releaseLock`).
+  // С `runId`: лок, занятый соседом, нам не принадлежит — сносить его нельзя
+  // (`run-lock.mjs`, `releaseLock`).
   releaseLock(LOCK_FILE, runId);
 }
 

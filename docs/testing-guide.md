@@ -21,23 +21,46 @@ npm run test:e2e             # Playwright, отдельный стенд (сво
 
 ## CI
 
-Автоматические workflow (решения грилла #245):
+Автоматические workflow (решения грилла #245).
 
-| Workflow | Триггер | Что делает |
-|----------|---------|------------|
-| `migrations.yml` | push, PR | alembic + миграционные тесты + проверки сидов/лейблов |
-| `backend-tests.yml` | push, PR | полный pytest-набор под `coverage` (serial, `-p no:xdist -p no:testmon`) + **гейт `--fail-under=73`** |
-| `frontend-tests.yml` | push, PR | `tsc -b` + vitest с покрытием и **гейтом** `statements/lines ≥ 43`, `branches ≥ 72` (решение Q5=1, замер в `BASELINE.md`) |
-| `ruff.yml` | push, PR | `ruff check backend` — **блокирующая** проверка (pyflakes-ядро `F`, находок 0); стилевые и сигнальные семейства в скоуп не входят |
-| `e2e-smoke.yml` | push, PR | ярус `@smoke` на своей БД-сервисе в джобе, `--retries=0`, трасса артефактом; **информационный**, не гейтит merge (перевод в required — после 10 зелёных прогонов на `main`, #276) |
+Проверяют код шесть файлов; что из них **блокирует merge**, а что нет — отдельный
+факт, живущий вне репозитория. Имя required check — это `name:` **джоба**, а не
+`name:` workflow: они различаются (`Backend tests` ↔ `backend tests`), и по имени
+workflow проверку ни включить, ни найти в защите ветки нельзя.
+
+| Workflow | Джоб (имя required check) | Статус для merge | Триггер | Что делает |
+|----------|---------------------------|------------------|---------|------------|
+| `migrations.yml` | `migrations` | **блокирует** | push, PR | alembic + миграционные тесты + проверки сидов/лейблов |
+| `backend-tests.yml` | `backend tests` | **блокирует** | push, PR, `workflow_dispatch` | рэтчёт pytest-набора + полный pytest под `coverage` (serial, `-p no:xdist -p no:testmon`) + **гейт `--fail-under=73`** |
+| `frontend-tests.yml` | `frontend tests` | **блокирует** | push, PR, `workflow_dispatch` | `tsc -b` + ESLint (границы FSD) + vitest с **гейтом** `statements/lines ≥ 43`, `branches ≥ 72`, `functions ≥ 49` + рэтчёт vitest-набора |
+| `ruff.yml` | `ruff` | **блокирует** | push, PR, `workflow_dispatch` | `ruff check backend` — находок 0 (pyflakes-ядро `F`); стилевые и сигнальные семейства в скоуп не входят |
+| `docs.yml` | `docs` | информационный | push, PR по `paths` (`**.md`, `docs/**`, `scripts/**`, `package*.json`, сам файл), `workflow_dispatch` | каждая относительная ссылка в `.md` резолвится в файл из `git ls-files` + `npm run test:scripts` |
+| `e2e-smoke.yml` | `e2e smoke` | информационный | push, PR (кроме `docs/**` и `**.md`), `workflow_dispatch` | ярус `@smoke` на своей БД-сервисе в джобе, `--retries=0`, трасса артефактом |
+
+Состав блокирующих — замер только чтения, `gh api
+repos/mavkasgit/ktm2000/branches/main/protection` (2026-11-03): contexts =
+`migrations`, `backend tests`, `frontend tests`, `ruff`; `strict: false` (merge не
+требует актуального `main`); `enforce_admins: false` (владелец может обойти).
+Защита уже включена и живёт в настройках репозитория: ни один PR её не меняет,
+смена состава — решение владельца, не агента (`docs/night/PLAN-2026-11-03.md`, #370).
+Расхождение этого списка с таблицей выше — дефект документа, а не настройки: сначала
+переснять замер, потом править строку «Статус для merge».
+
+`paths`-фильтры уровня workflow допустимы **только** у информационных джобов.
+Если отфильтровать скоуп там, где check required, правка вне скоупа оставит
+проверку в «Pending» и merge станет невозможен (#361). Поэтому фильтр есть у
+`docs.yml` и `e2e-smoke.yml`, и его нет у четырёх блокирующих.
+
+Условия промоушена smoke-яруса (`e2e-smoke.yml`, шапка; тикет #276): `e2e smoke`
+переводится в required после **10 зелёных прогонов подряд на push в `main`**.
+Серию смотреть историю джоба на `main`:
+`gh run list --repo mavkasgit/ktm2000 --branch main --workflow e2e-smoke.yml`
+(красный обрывает серию, пропущенный/отменённый прогон — не зелёный и не красный).
+Локальный `@smoke`-ярус к серии отношения не имеет: считается только CI.
 
 Гейт покрытия: `coverage==7.16.2` (пин под бейзлайн из `docs/night/BASELINE.md`);
 расхождение CI ↔ локального замера — сначала разбирать, порог не подгонять.
 Прогон серийный: под xdist воркеры остаются вне замера coverage.
-
-Branch protection (required checks `migrations`, `backend tests`,
-`frontend tests`, `enforce_admins: false`) включается **после** первого пуша
-workflows и первого зелёного прогона — тикет #254.
 
 ## Стенд E2E
 

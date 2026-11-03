@@ -1,5 +1,11 @@
 name: E2E smoke
 
+# Статус для merge: ИНФОРМАЦИОННЫЙ. Имя джоба — `e2e smoke`; в required checks его
+# нет (замер: `gh api repos/mavkasgit/ktm2000/branches/main/protection`).
+# Перевод в required — после 10 зелёных прогонов подряд на push в `main` (#276);
+# серию смотреть `gh run list --branch main --workflow e2e-smoke.yml`. Таблица
+# всех CI-проверок и их статусов — `docs/testing-guide.md` (§CI). #370.
+
 # Информационный джоб: ярус `@smoke` на изолированной БД прямо в CI.
 #
 # НЕ required: пока не набрана серия зелёных на main, красный здесь не блокирует
@@ -19,28 +25,63 @@ name: E2E smoke
 # `--retries=0` передан явно: в CI `playwright.config.ts` ставит `retries: 2`, и
 # флейк спрятался бы за ретраем. Трасса пишется всегда (`--trace=on`) и уходит
 # артефактом: без ретраев «падение на первом прогоне» и есть предмет разбора.
+#
+# #361 concurrency. Отменять прошлый прогон здесь безопасно именно в CI:
+# джоб поднимает СВОЙ контейнер postgres (services.postgres, публикация :5441
+# внутри runner'а), а не работает с общим шаблоном/клоном `ktm2000_e2e_template`,
+# как локальный стенд через счётный семафор. Убийства чужого прогона на чужом
+# клоне БД поэтому нет. На push в main отмена выключена: красное/зелёное здесь
+# — материал для критерия промоушена «10 подряд зелёных на main», обрывать
+# уже идущий прогон mean терять измерение серии.
+# #361 paths-ignore: джоб не required (см. gh api branches/main/protection),
+# поэтому фильтр уровня workflow безопасен. Правки только документации не
+# могут сломать Playwright-набор, а прогоны на main от них не нужны.
 on:
   push:
     branches:
       - main
       - master
+    paths-ignore:
+      - 'docs/**'
+      - '**.md'
   pull_request:
     branches:
       - main
       - master
+    paths-ignore:
+      - 'docs/**'
+      - '**.md'
   workflow_dispatch:
+
+concurrency:
+  group: ci-${{ github.workflow }}-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' || github.ref != 'refs/heads/main' }}
+
+# #363 [missing-permissions]: по умолчанию GITHUB_TOKEN получает запись во все скоупы
+# репозитория. Здесь читаем — поэтому верхний уровень только `contents: read`.
+permissions:
+  contents: read
 
 jobs:
   e2e-smoke:
     name: e2e smoke
     runs-on: ubuntu-latest
     timeout-minutes: 30
+    # #363 [insufficient-permissions/excessive-permissions]: шагам нужен доступ к
+    # API артефактов (upload-artifact при падении) и чтение кода; записи в репо
+    # не нужно ни в одном скоупе кроме actions.
+    permissions:
+      contents: read
+      actions: write
 
     # Свой сервис БД в джобе (#269): `ktm2000_test` — служебная БД контейнера,
     # `ktm2000_e2e` создаёт `scripts/e2e-db.py ensure` из `.env.e2e`.
     services:
       postgres:
-        image: postgres:15
+        # #363 [unpinned-images]: тег `postgres:15` mutable — раннер может получить
+        # другой патч-релиз между прогонами. Дайджест индекса манифестов (multi-arch),
+        # получен локально: `docker buildx imagetools inspect postgres:15` -> 15.19.
+        image: postgres:15@sha256:40e8c839f86c404f9bd1c456bb83f11b205f2cd95d753b34c2d074e89ecee786 # postgres 15.19
         env:
           POSTGRES_USER: ktm2000_user
           POSTGRES_PASSWORD: ktm2000_pass_test
@@ -59,19 +100,65 @@ jobs:
 
     steps:
       - name: Checkout
-        uses: actions/checkout@v4
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+        with:
+          # #363 [artipacked]: checkout иначе пишет GITHUB_TOKEN в .git/config workspace,
+          # откуда его может увести любой последующий шаг (upload-artifact и т. п.).
+          # Ни один шаг этих джобов не пушит: push — действие человека/оркестратора.
+          persist-credentials: false
+
+      # #362: версии языка берутся из pin-файлов репозитория (#355 оркестратора:
+      # `.nvmrc`, `.python-version`). Файла нет — шаг материализует временный
+      # `.ci-*-version` в workspace прогона (в git не попадает) со значением, которое
+      # стояло в этом workflow до волны, и печатает WARNING. Прогон зелёный уже
+      # сегодня; когда pin-файлы появятся, правки в workflow не нужны — тот же путь,
+      # другое содержимое.
+      - name: Toolchain pin (#362)
+        id: toolchain
+        shell: bash
+        env:
+          KTM_NODE_FALLBACK: '20'
+          KTM_PY_FALLBACK: '3.12'
+          KTM_USE_NODE: 'yes'
+          KTM_USE_PY: 'yes'
+        run: |
+          set -euo pipefail
+          pick() {
+            local src="$1" fb="$2" dst="$3" raw
+            if [ -f "$src" ]; then
+              raw=$(tr -d ' \t\r\n' < "$src")
+              echo "$src -> $raw (pin-файл репозитория)"
+            else
+              raw="$fb"
+              echo "WARNING: pin-файла $src нет (#355 не влит) — беру литерал workflow $raw"
+            fi
+            if [ -z "$raw" ]; then
+              echo "Пустая версия языка ($src/$fb) — падаю, а не ставлю тихий дефолт" >&2
+              exit 1
+            fi
+            printf '%s\n' "${raw#v}" > "$dst"
+            echo "$dst: $(cat "$dst")"
+          }
+          if [ "$KTM_USE_NODE" = yes ]; then
+            pick .nvmrc "$KTM_NODE_FALLBACK" .ci-node-version
+            echo "node_file=.ci-node-version" >> "$GITHUB_OUTPUT"
+          fi
+          if [ "$KTM_USE_PY" = yes ]; then
+            pick .python-version "$KTM_PY_FALLBACK" .ci-python-version
+            echo "python_file=.ci-python-version" >> "$GITHUB_OUTPUT"
+          fi
 
       - name: Setup Node
-        uses: actions/setup-node@v4
+        uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4.4.0
         with:
-          node-version: "20"
+          node-version-file: ${{ steps.toolchain.outputs.node_file }}
           cache: npm
           cache-dependency-path: frontend/package-lock.json
 
       - name: Setup Python
-        uses: actions/setup-python@v5
+        uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065 # v5.6.0
         with:
-          python-version: "3.12"
+          python-version-file: ${{ steps.toolchain.outputs.python_file }}
           cache: pip
           cache-dependency-path: backend/requirements.txt
 
@@ -103,7 +190,7 @@ jobs:
 
       - name: Upload failure artifacts (trace, screenshot, video, report)
         if: failure()
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
         with:
           name: e2e-smoke-artifacts
           path: |
