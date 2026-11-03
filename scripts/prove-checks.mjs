@@ -71,6 +71,13 @@ const PROBES = [
     note: "сгенерированный тулчейн поправили руками — сверка с реестром обязана покраснеть",
   },
   {
+    step: "freshness",
+    args: "--strict",
+    mutate: [{ path: "tools.json", from: '"pinned_in": ".nvmrc"', to: '"pinned_in": ".nvmrc-probe357"' }],
+    expect: /закреплён в .*nvmrc-probe357, но такого файла нет/,
+    note: "реестр ссылается на несуществующее закрепление; без --strict шаг не блокирует",
+  },
+  {
     step: "codegraph-age",
     args: "--strict",
     touch: [{ path: ".codegraph/codegraph.db", mtime: new Date("2000-01-01T00:00:00Z") }],

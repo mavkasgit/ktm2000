@@ -14,6 +14,7 @@ import { spawnSync } from "node:child_process";
 import { existsSync, readFileSync } from "node:fs";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
+import { buildStepCommand } from "./gate-command-core.js";
 
 const ROOT = dirname(dirname(fileURLToPath(import.meta.url)));
 const GATES_SHEET = "docs/quality/gates.md";
@@ -35,6 +36,14 @@ const STEPS = [
     command: "node scripts/check-registry.mjs",
     ci: null,
     what: " реестр инструментов против схем и закреплений",
+  },
+  {
+    name: "freshness",
+    tier: "fast",
+    command: "node scripts/freshness.js",
+    honorsStrict: true,
+    ci: "freshness.yml",
+    what: " как давно смотрели в пины реестра (локально; версии апстрима — только с --online)",
   },
   {
     name: "codegraph-age",
@@ -383,7 +392,7 @@ function runStep(step, infraUp, strict) {  if (step.check) {
     return { status: "missing", seconds: 0, reason: `${step.tool} не установлен локально` };
   }
   const started = Date.now();
-  const command = step.command + (strict && step.honorsStrict ? " --strict" : "");
+  const command = buildStepCommand(step, strict);
   const { code, out, error } = shell(command, step.cwd, step.env || {});
   const seconds = (Date.now() - started) / 1000;
   if (error) return { status: "fail", seconds, reason: String(error.message), output: tail(out) };
