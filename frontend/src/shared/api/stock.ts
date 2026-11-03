@@ -9,6 +9,17 @@ export function toApiQualityState(state: QualityState = "GOOD"): string {
   return state.toLowerCase();
 }
 
+/**
+ * Фактическая SKU-строка внутри группы эквивалентов — раскрытие строки кучи.
+ * ``quantity`` — строка Decimal, как и ``balance_qty``: точность не теряется.
+ */
+export type StockBalanceItem = {
+  balance_id: number;
+  product_id: number;
+  sku: string | null;
+  quantity: string;
+};
+
 export type StockBalanceEntry = {
   id: number;
   product_id: number;
@@ -30,7 +41,40 @@ export type StockBalanceEntry = {
    */
   completed_operations?: string[] | null;
   refreshed_at: string | null;
+  /**
+   * Группа эквивалентов на осях (участок, качество, размер, операции) —
+   * приходит из списка `GET /stock/balance` (спека §8, ADR-0073). В ответе
+   * `by-product` этих полей нет: детализация остаётся SKU-уровнем, поэтому
+   * они необязательны.
+   *
+   * `balance_qty` строки списка — уже сумма группы, `items` — её фактические
+   * SKU-строки.
+   */
+  alias_group_key?: number;
+  /** SKU группы по возрастанию `product_id` (как отдал сервер). */
+  alias_group_skus?: string[];
+  items?: StockBalanceItem[];
 };
+
+/** SKU группы: подпись сервера, а для ответа SKU-уровня — сам артикул. */
+export function balanceGroupSkus(balance: StockBalanceEntry): string[] {
+  if (balance.alias_group_skus?.length) return balance.alias_group_skus;
+  return balance.product_sku ? [balance.product_sku] : [];
+}
+
+/**
+ * Подпись группы эквивалентов: «A, B (эквиваленты)».
+ *
+ * Список SKU — серверный и по возрастанию `product_id`: канонического
+ * артикула нет, и клиент не выбирает «главный». Один SKU подписи-пометки не
+ * получает — это обычная строка артикула.
+ */
+export function formatBalanceGroupLabel(balance: StockBalanceEntry): string {
+  const skus = balanceGroupSkus(balance);
+  if (skus.length === 0) return `#${balance.product_id}`;
+  if (skus.length === 1) return skus[0];
+  return `${skus.join(", ")} (эквиваленты)`;
+}
 
 export function formatQualityStateLabel(state: string): string {
   return qualityStateLabels[state] ?? state;

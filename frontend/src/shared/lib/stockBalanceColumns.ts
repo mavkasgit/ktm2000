@@ -8,7 +8,7 @@
  * вызовах, колонка знала своё имя, а что именно уедет — знал вызов рядом.
  *
  * Колонка «Размеры» объявлена без фильтра и без сортировки намеренно: бэкенд
- * `GET /stock/balance` не принимает параметра габарита, а `_BALANCE_SORT_COLUMNS`
+ * `GET /stock/balance` не принимает параметра габарита, а `BALANCE_SORT_FIELDS`
  * в `backend/app/stock/api.py` его не содержит. Разные длины одного артикула —
  * разные строки (ADR-0001), и это свойство строки, а не колонки, по которой
  * можно отфильтровать.
@@ -16,7 +16,9 @@
 import type { ColumnSpec } from "@/shared/lib/columnSpecs";
 import type { BalanceSortField } from "@/shared/lib/stockSortParams";
 import {
+  balanceGroupSkus,
   completedOperationsServerLabel,
+  formatBalanceGroupLabel,
   formatQualityStateLabel,
   type StockBalanceEntry,
 } from "@/shared/api/stock";
@@ -68,7 +70,12 @@ export const stockBalanceColumns: StockBalanceColumn[] = [
     filterField: "sku",
     sortField: "sku",
     mapValue: dropNumericPlaceholder,
-    cellValue: (balance) => balance.product_sku || `#${balance.product_id}`,
+    // Ячейка группы — её подпись «A, B (эквиваленты)», а не одна SKU-строка:
+    // сервер уже сложил кучу, и колонка читает поля группы.
+    cellValue: (balance) => formatBalanceGroupLabel(balance),
+    // Список фильтра — отдельные SKU группы: сервер ищет `?sku=` по строкам
+    // кучи, и значение «A, B» он бы не нашёл.
+    filterValuesFrom: (balance) => balanceGroupSkus(balance),
     sortValues: (a, b) => a.localeCompare(b, "ru"),
   },
   {

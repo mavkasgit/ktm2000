@@ -6,9 +6,10 @@ UI-перехода (Этап 6). Старый ``/api/spg/*`` остаётся l
 
 Endpoints:
 
-  * ``GET /stock/balance``             — список строк StockBalance
-    с фильтрами ``product_id`` / ``location_id`` / ``quality_state``,
-    поиском, сортировкой и пагинацией ``limit`` / ``offset``.
+  * ``GET /stock/balance``             — список групп эквивалентных
+    артикулов на осях ``(участок, качество, размер, операции)``
+    с фильтрами, поиском, сортировкой и пагинацией ``limit`` / ``offset``;
+    строка несёт сумму и раскрытие ``items`` по фактическим SKU (ADR-0073).
   * ``GET /stock/balance/by-product/{product_id}`` — все балансы
     конкретного продукта по локациям.
   * ``GET /stock/transactions``        — лента StockTransaction с
@@ -24,7 +25,9 @@ from __future__ import annotations
 
 import hashlib
 import json
+from dataclasses import dataclass
 from datetime import date, datetime, time
+from decimal import Decimal
 from io import BytesIO
 from pathlib import Path
 from typing import Literal
@@ -40,7 +43,7 @@ from sqlalchemy.types import String
 
 from app.api.deps import READER_ROLES, WRITER_ROLES, get_current_user, require_role
 from app.core.database import get_db
-from app.core.sorting import SortClause, apply_sort, parse_sort
+from app.core.sorting import SortClause, apply_sort, parse_sort, sort_items
 from app.domain.dimensions import format_dimensions
 from app.models.import_template import ImportTemplate
 from app.models.product import Product
@@ -54,6 +57,11 @@ from app.services.material_operations import (
     completed_operation_stages,
 )
 from app.services.plan_import_service import _get_or_create_import_file
+from app.services.product_alias_groups import (
+    AliasGroupCache,
+    AliasGroups,
+    load_alias_groups,
+)
 from app.stock.import_service import (
     ImportResult,
     RemainderItem,
@@ -166,8 +174,40 @@ class StockBalanceOut(BaseModel):
     model_config = ConfigDict(from_attributes=True)
 
 
+class StockBalanceItemOut(BaseModel):
+    """Фактическая SKU-строка внутри группы эквивалентов.
+
+    Раскрытие строки «одной кучи»: оператор видит, из каких артикулов она
+    сложилась и сколько лежит по каждому. ``quantity`` — строка Decimal, как и
+    ``balance_qty`` строки: фронт не должен ловить потерю точности на float.
+    """
+
+    balance_id: int
+    product_id: int
+    sku: str | None = None
+    quantity: str
+
+
+class StockBalanceGroupOut(StockBalanceOut):
+    """Строка остатков = группа эквивалентов на оси ключа (спека §7–§8).
+
+    Оси группы — ``(alias_group_key, участок, качество, размер, пройденные
+    операции)``. ``balance_qty`` и ``items`` — вся куча на этих осях, даже если
+    фильтр задел только одного её члена: склад — одна куча.
+
+    Поля базовой строки сохранены для обратной совместимости: ``id`` —
+    минимальный ``balance_id`` группы, ``product_id``/``product_sku`` —
+    артикул-представитель (SKU с минимальным ``product_id``, канонического
+    артикула нет).
+    """
+
+    alias_group_key: int
+    alias_group_skus: list[str] = Field(default_factory=list)
+    items: list[StockBalanceItemOut] = Field(default_factory=list)
+
+
 class StockBalancesListResponse(BaseModel):
-    balances: list[StockBalanceOut]
+    balances: list[StockBalanceGroupOut]
     total: int
     limit: int
     offset: int
@@ -251,28 +291,20 @@ class StockAdjustmentOut(BaseModel):
 # ─── Balance ──────────────────────────────────────────────────────────────────
 
 # ─── Сортировка остатков (единый контракт ?sort=field:order,...) ─────────────
-# Единая таблица «поле ?sort= → выражение SQL». Она же — источник истины для
-# валидации: apply_sort отвечает 400 на поле, которого здесь нет, поэтому
-# набор допустимых полей выводится из таблицы, а не живёт отдельно.
-#
-# Значение — выражение SQLAlchemy для прямой колонки либо callable для поля,
-# чьё выражение строится на каждый запрос (подпись оси операций — агрегат
-# по справочнику операций).
-_BALANCE_SORT_COLUMNS: dict[str, object] = {
-    "sku": Product.sku,
-    "quantity": StockBalance.balance_qty,
-    "operations": lambda: _balance_operations_label_expr(),
-    "quality": StockBalance.quality_state,
-    "location": Section.name,
-    "product_id": StockBalance.product_id,
-}
+# Поля те же, что у контракта экрана: набор — источник истины для валидации,
+# поэтому ?sort= незнакомого поля отвечает 400 (sort_items), а не молча
+# откатывается на дефолт. Значения читаются из группы (см. _BalanceGroupView),
+# а не из колонки StockBalance: строка ответа — группа эквивалентов, и
+# сортировать её по одной случайной SKU-строке значило бы показывать не тот
+# порядок, который видит оператор.
+BALANCE_SORT_FIELDS = frozenset(
+    {"sku", "quantity", "operations", "quality", "location", "product_id"}
+)
 
-BALANCE_SORT_FIELDS = frozenset(_BALANCE_SORT_COLUMNS)
-
-# Пустые значения уходят в конец в ЛЮБОМ направлении: sku и location приходят
-# из outerjoin, operations — скалярный подзапрос, у которого может не быть
-# строки. Раньше primary-колонка всегда сортировалась с NULLS LAST.
-BALANCE_SORT_NULLS_LAST_FIELDS = tuple(_BALANCE_SORT_COLUMNS)
+# Пустые значения уходят в конец в ЛЮБОМ направлении: у группы может не быть
+# подписи SKU (артикул без SKU) или подписи операций (NULL/[] — оба пустых
+# состояния, ADR-0055), а участок приходит из outerjoin и может отсутствовать.
+BALANCE_SORT_NULLS_LAST_FIELDS = tuple(BALANCE_SORT_FIELDS)
 
 # Без параметра сортировки порядок прежний: артикул по возрастанию.
 _BALANCE_SORT_DEFAULT = SortClause("sku", "asc")
@@ -360,9 +392,15 @@ def _balance_operations_filter(operations: str):
     return _balance_operations_label_expr().ilike(f"%{operations}%")
 
 
-def _balance_base_stmt():
+def _balance_rows_stmt():
+    """Строки баланса с участком (имя и код) и SKU — вход группировки.
+
+    ``Section.code`` нужен поиску: ``?search=`` ищет и по коду участка, а
+    фильтр по члену группы теперь считается в Python (см.
+    :func:`_balance_group_matches`), поэтому код обязан прийти из запроса.
+    """
     return (
-        select(StockBalance, Section.name, Product.sku)
+        select(StockBalance, Section.name, Section.code, Product.sku)
         .outerjoin(Section, Section.id == StockBalance.location_id)
         .outerjoin(Product, Product.id == StockBalance.product_id)
     )
@@ -419,29 +457,261 @@ def _apply_balance_filters(
     return stmt
 
 
-def _apply_balance_sort(stmt, *, clauses):
-    """ORDER BY остатков: приоритеты ``?sort=`` и три уровня группировки.
+# ─── Группа эквивалентов: read-time агрегат строк баланса ─────────────────────
+#
+# Почему группировка в Python, а не в SQL. Группа — транзитивное замыкание
+# Product.aliases, которое строится на чтение (app/services/product_alias_groups,
+# ADR-0073). Выразить его в GROUP BY значило бы либо материализовать замыкание
+# (миграция — спека §8 её запрещает), либо тянуть рекурсивный CTE на каждый
+# запрос экрана. Поэтому справочник читается один раз за запрос
+# (AliasGroupCache), строки остатка — одним SELECT, а агрегация, фильтрация по
+# члену группы, сортировка и пагинация считаются здесь, на сервере. Граница
+# страниц от этого не страдает: страница режется по группам, а не по строкам
+# баланса, и одна куча не может разъехаться по двум страницам.
 
-    Уровни ``product_id → location_id → id`` нужны для группировки: строки
-    одного товара по разным локациям не должны разъезжаться, когда значения
-    колонки сортировки совпали. Общий хелпер принимает ОДИН tiebreaker,
-    поэтому уровни вынесены в отдельный фиксированный ``order_by``,
-    дописанный ПОСЛЕ приоритетов (``Select.order_by`` дополняет список, а не
-    заменяет его — иначе уровни встали бы перед колонкой сортировки).
-    Первый уровень отдан хелперу, остальные два дописываются здесь.
 
-    Направление уровней всегда возрастающее (контракт хелпера): строки
-    товара по-прежнему идут подряд, но внутри товара при ``desc`` порядок
-    по возрастанию — как и tiebreaker в остальных переведённых эндпоинтах.
+@dataclass(slots=True)
+class _BalanceSourceRow:
+    """Строка StockBalance с подписанными участком и артикулом."""
+
+    balance: StockBalance
+    location_name: str | None
+    location_code: str | None
+    product_sku: str | None
+
+
+@dataclass(slots=True)
+class _BalanceGroup:
+    """Сырая группа: ключ эквивалентов плюс строки одной кучи."""
+
+    key: int
+    skus: tuple[str, ...]
+    rows: list[_BalanceSourceRow]
+
+
+@dataclass(slots=True)
+class _BalanceGroupView:
+    """Группа с производными значениями — их читают фильтр, сортировка и ответ."""
+
+    group: _BalanceGroup
+    representative: _BalanceSourceRow
+    total_qty: Decimal
+    dimensions_key: str | None
+    operations_key: tuple[str, ...] | None
+    quality: str
+    operations_label: str | None
+    completed_stages: list[StockBalanceCompletedStageOut]
+    refreshed_at: str | None
+
+
+def _quality_value(value) -> str:
+    """Значение качества строкой: у ``str``-enum это ``.value``, а не ``repr``."""
+    return value.value if isinstance(value, QualityState) else str(value)
+
+
+def _canonical_dimensions_key(dimensions: dict | None) -> str | None:
+    """Канонический ключ размера: ``None`` — отдельная группа, ключи сортируются.
+
+    Сравнение идёт по JSONB-значению строки: Postgres уже нормализовал порядок
+    ключей и числовую форму, ``sort_keys`` нужен лишь для повторяемости ключа
+    между строками, пришедшими из разных запросов.
     """
-    stmt = apply_sort(
-        stmt,
-        clauses,
-        _BALANCE_SORT_COLUMNS,
-        tiebreaker=StockBalance.product_id,
-        nulls_last=BALANCE_SORT_NULLS_LAST_FIELDS,
+    if dimensions is None:
+        return None
+    return json.dumps(dimensions, sort_keys=True, ensure_ascii=False, default=str)
+
+
+def _canonical_operations_key(operations: list[str] | None) -> tuple[str, ...] | None:
+    """Канонический ключ операций: ``None`` и ``[]`` — РАЗНЫЕ группы (ADR-0055)."""
+    if operations is None:
+        return None
+    return tuple(sorted(str(code) for code in operations))
+
+
+def _alias_identity(
+    alias_groups: AliasGroups, product_id: int,
+) -> tuple[int, tuple[str, ...]]:
+    """Ключ эквивалентов и SKU группы для продукта строки."""
+    group = alias_groups.group_for(product_id)
+    if group is not None:
+        return group.key, group.skus
+    # Артикул без SKU в замыкание не попадает (product_alias_groups §2): его
+    # остаток всё равно существует, и терять строку нельзя. Группа — он сам,
+    # подписи SKU у неё нет.
+    return int(product_id), ()
+
+
+def _group_balance_rows(
+    rows, alias_groups: AliasGroups,
+) -> list[_BalanceGroup]:
+    """Сложить строки в группы по ``(alias_group_key, участок, качество, размер, операции)``."""
+    groups: dict[tuple, _BalanceGroup] = {}
+    for balance, location_name, location_code, product_sku in rows:
+        source = _BalanceSourceRow(balance, location_name, location_code, product_sku)
+        group_key, skus = _alias_identity(alias_groups, balance.product_id)
+        key = (
+            group_key,
+            balance.location_id,
+            _quality_value(balance.quality_state),
+            _canonical_dimensions_key(balance.dimensions),
+            _canonical_operations_key(balance.completed_operations),
+        )
+        existing = groups.get(key)
+        if existing is None:
+            groups[key] = _BalanceGroup(key=group_key, skus=skus, rows=[source])
+        else:
+            existing.rows.append(source)
+    return list(groups.values())
+
+
+def _balance_group_matches(
+    group: _BalanceGroup,
+    *,
+    product_id: int | None,
+    sku: str | None,
+    quantity: str | None,
+    search: str | None,
+) -> bool:
+    """Видимость группы по фильтрам уровня члена: совпал один — видна вся куча.
+
+    Участок, качество, размер и операции — оси ключа, их фильтры применены в
+    SQL (:func:`_apply_balance_filters`): они не могут зацепить одну строку
+    кучи и оставить соседнюю. ``product_id``, ``sku``, ``quantity`` и
+    ``search`` — свойства отдельного артикула или строки, поэтому здесь
+    действует правило спеки §7: группа видна, если совпал хотя бы один её
+    член, но ``balance_qty`` и ``items`` показывают всю кучу.
+    """
+    if product_id is not None and not any(
+        row.balance.product_id == product_id for row in group.rows
+    ):
+        return False
+    if sku is not None:
+        needle = sku.lower()
+        if not any(needle in (row.product_sku or "").lower() for row in group.rows):
+            return False
+    if quantity is not None:
+        needle = quantity.lower()
+        if not any(
+            needle in str(row.balance.balance_qty).lower() for row in group.rows
+        ):
+            return False
+    if search:
+        needle = search.lower()
+        matched = False
+        for row in group.rows:
+            if (
+                needle in (row.product_sku or "").lower()
+                or needle in str(row.balance.product_id)
+                or needle in (row.location_name or "").lower()
+                or needle in (row.location_code or "").lower()
+            ):
+                matched = True
+                break
+        if not matched:
+            return False
+    return True
+
+
+def _build_balance_group_view(
+    group: _BalanceGroup, ops_dict: dict,
+) -> _BalanceGroupView:
+    """Производные значения группы: сумма, подписи, этапы, самая свежая строка."""
+    representative = min(
+        group.rows, key=lambda row: (row.balance.product_id, row.balance.id)
     )
-    return stmt.order_by(StockBalance.location_id.asc(), StockBalance.id.asc())
+    balance = representative.balance
+    stages = [
+        StockBalanceCompletedStageOut(**stage)
+        for stage in completed_operation_stages(balance.completed_operations, ops_dict)
+    ]
+    # Подпись оси — имена операций в порядке справочника (тот же порядок, что
+    # у completed_stages и SQL-подписи колонки). Пустое состояние (NULL или [])
+    # подписи не имеет и в сортировке уходит в конец.
+    operations_label = ", ".join(stage.operation_name for stage in stages) or None
+    refreshed = [
+        row.balance.refreshed_at for row in group.rows if row.balance.refreshed_at
+    ]
+    return _BalanceGroupView(
+        group=group,
+        representative=representative,
+        total_qty=sum(
+            (Decimal(row.balance.balance_qty) for row in group.rows), Decimal(0)
+        ),
+        dimensions_key=_canonical_dimensions_key(balance.dimensions),
+        operations_key=_canonical_operations_key(balance.completed_operations),
+        quality=_quality_value(balance.quality_state),
+        operations_label=operations_label,
+        completed_stages=stages,
+        refreshed_at=max(refreshed).isoformat() if refreshed else None,
+    )
+
+
+# Поле ``?sort=`` → значение группы. Сортировка идёт по тому, что видит
+# оператор: подпись SKU, сумма, подпись операций, качество, участок и
+# артикул-представитель группы.
+_BALANCE_GROUP_SORT_KEYS = {
+    "sku": lambda view: ", ".join(view.group.skus) if view.group.skus else None,
+    "quantity": lambda view: view.total_qty,
+    "operations": lambda view: view.operations_label,
+    "quality": lambda view: view.quality,
+    "location": lambda view: view.representative.location_name,
+    "product_id": lambda view: view.representative.balance.product_id,
+}
+
+
+def _balance_group_tiebreaker(view: _BalanceGroupView):
+    """Полный ключ группы — стабильность порядка между страницами.
+
+    Уровни повторяют оси ключа: артикул-представитель, участок, качество,
+    размер, операции. ``None`` и ``[]`` операций не сливаются: у первого
+    ключ ``("~",)``, у второго — ``("=",)``.
+    """
+    operations = view.operations_key
+    return (
+        view.representative.balance.product_id,
+        view.representative.balance.location_id,
+        view.quality,
+        view.dimensions_key or "",
+        ("~",) if operations is None else ("=", *operations),
+    )
+
+
+def _serialize_balance_group(view: _BalanceGroupView) -> StockBalanceGroupOut:
+    """Группа → строка ответа: сумма, поля-представители и раскрытие ``items``."""
+    group = view.group
+    balance = view.representative.balance
+    items = [
+        StockBalanceItemOut(
+            balance_id=row.balance.id,
+            product_id=row.balance.product_id,
+            sku=row.product_sku,
+            quantity=str(row.balance.balance_qty),
+        )
+        for row in sorted(
+            group.rows, key=lambda row: (row.balance.product_id, row.balance.id)
+        )
+    ]
+    return StockBalanceGroupOut(
+        # ``id`` строки — минимальный balance_id группы: стабильный ключ для
+        # раскрытия на клиенте и обратная совместимость прежнего контракта.
+        id=min(item.balance_id for item in items),
+        product_id=balance.product_id,
+        product_sku=view.representative.product_sku,
+        location_id=balance.location_id,
+        location_name=view.representative.location_name,
+        quality_state=balance.quality_state,
+        balance_qty=str(view.total_qty),
+        dimensions=balance.dimensions,
+        dimensions_label=format_dimensions(balance.dimensions),
+        completed_operations=(
+            list(view.operations_key) if view.operations_key is not None else None
+        ),
+        completed_stages=view.completed_stages,
+        refreshed_at=view.refreshed_at,
+        alias_group_key=group.key,
+        alias_group_skus=list(group.skus),
+        items=items,
+    )
 
 
 def _serialize_balance(
@@ -546,37 +816,90 @@ async def list_balances(
     db: AsyncSession = Depends(get_db),
     _user: User = Depends(require_role(READER_ROLES)),
 ) -> StockBalancesListResponse:
-    """Список строк баланса (projection из StockTransaction).
+    """Список остатков, сгруппированных по эквивалентным артикулам.
 
-    Без фильтров возвращает все ненулевые строки. Баланс = SUM(in) - SUM(out)
-    по ключу ``(product, location, quality_state)``; нулевые строки не
-    хранятся (см. ``StockProjectionManager.refresh_balance``).
+    Строка ответа — группа ``(alias_group_key, участок, качество, размер,
+    пройденные операции)``, а не отдельная ``StockBalance`` (спека §7–§8,
+    ADR-0073): склад, где A и B — один профиль, показывает одну кучу.
+    ``balance_qty`` — сумма по группе, ``items`` — фактические SKU-строки.
+
+    Группировка, фильтрация по члену группы, сортировка и пагинация считаются
+    в Python на сервере: замыкание ``Product.aliases`` живёт на чтение, и
+    выразить его в SQL можно только миграцией (запрещена) или рекурсивным
+    CTE на каждый запрос. Справочник групп читается один раз за запрос
+    (``AliasGroupCache``), строки остатка — одним SELECT. ``total``, ``limit``
+    и ``offset`` считают группы, поэтому одна куча не разъезжается по
+    страницам. ``GET /balance/by-product/{id}`` остаётся SKU-уровнем.
+
+    Нулевые строки не появляются: их не хранит проекция баланса
+    (``StockProjectionManager.refresh_balance``).
     """
-    stmt = _balance_base_stmt()
+    sort_clauses = parse_sort(sort, default=_BALANCE_SORT_DEFAULT)
+    # Незнакомое поле — 400 до похода в базу: отказ не должен зависеть от того,
+    # есть ли сейчас строки остатка.
+    unknown_field = next(
+        (
+            clause.field
+            for clause in sort_clauses
+            if clause.field not in BALANCE_SORT_FIELDS
+        ),
+        None,
+    )
+    if unknown_field is not None:
+        raise HTTPException(
+            status_code=400, detail=f"Invalid sort field: {unknown_field}"
+        )
+
+    stmt = _balance_rows_stmt()
+    # Оси ключа группы (участок, качество, размер, операции) можно резать в
+    # SQL: они не «задевают» одну строку кучи, оставляя соседнюю. Фильтры
+    # уровня члена (product_id, sku, quantity, search) — ниже, в Python.
     stmt = _apply_balance_filters(
         stmt,
-        product_id=product_id,
+        product_id=None,
         location_id=location_id,
         location_ids=location_ids,
         quality_state=quality_state,
-        search=search,
-        sku=sku,
-        quantity=quantity,
+        search=None,
+        sku=None,
+        quantity=None,
         quality=quality,
         location=location,
         operations=operations,
     )
+    rows = (await db.execute(stmt)).all()
 
-    count_stmt = select(func.count()).select_from(stmt.subquery())
-    total = (await db.execute(count_stmt)).scalar() or 0
+    alias_groups = await load_alias_groups(db, cache=AliasGroupCache())
+    groups = _group_balance_rows(rows, alias_groups)
+    visible = [
+        group
+        for group in groups
+        if _balance_group_matches(
+            group,
+            product_id=product_id,
+            sku=sku,
+            quantity=quantity,
+            search=search,
+        )
+    ]
+    if not visible:
+        return StockBalancesListResponse(
+            balances=[], total=0, limit=limit, offset=offset,
+        )
 
-    sort_clauses = parse_sort(sort, default=_BALANCE_SORT_DEFAULT)
-    stmt = _apply_balance_sort(stmt, clauses=sort_clauses)
-    stmt = stmt.limit(limit).offset(offset)
-    result = await db.execute(stmt)
-    balances = await _serialize_balances_with_operations(db, list(result.all()))
+    ops_dict = await resolve_operations_dictionary(db)
+    views = [_build_balance_group_view(group, ops_dict) for group in visible]
+    ordered = sort_items(
+        views,
+        sort_clauses,
+        _BALANCE_GROUP_SORT_KEYS,
+        nulls_last=BALANCE_SORT_NULLS_LAST_FIELDS,
+        tiebreaker=_balance_group_tiebreaker,
+    )
+    total = len(ordered)
+    page = ordered[offset : offset + limit]
     return StockBalancesListResponse(
-        balances=balances,
+        balances=[_serialize_balance_group(view) for view in page],
         total=total,
         limit=limit,
         offset=offset,
