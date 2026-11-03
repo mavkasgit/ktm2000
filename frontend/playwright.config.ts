@@ -10,6 +10,7 @@ import {
   MOBILE_USE,
   tagRe,
 } from "./e2e/mobile-project.mjs";
+import { DEFAULT_WORKERS } from "./e2e/run-workers.mjs";
 
 // Стенд E2E — отдельная БД и отдельные порты (#220). Источник правды для
 // них — `.env.e2e` в корне репозитория (та же БД, что поднимает `e2e:prep`),
@@ -151,7 +152,15 @@ export default defineConfig({
   fullyParallel: false,
   forbidOnly: !!process.env.CI,
   retries: process.env.CI ? 2 : 0,
-  workers: 1,
+  // Два воркера — по клону БД и по backend'у на каждого (#289): `e2e:prep`
+  // нарезает столько клонов, `run-e2e.mjs` поднимает столько backend'ов, а
+  // `x-e2e-worker` уводит запрос в свой. Число — одно на всё дерево:
+  // `DEFAULT_WORKERS` из `e2e/run-workers.mjs`, оттуда же его берут разбор
+  // `--workers` и `run-tier.mjs`. Второй источник цифры разъехался бы молча.
+  // `fullyParallel: false` оставляет последовательность внутри файла: спека
+  // по-прежнему видит только свои шаги, а файлы Playwright разводит по
+  // воркерам с их собственными клонами.
+  workers: DEFAULT_WORKERS,
   // `list` идёт первым, чтобы сводка репортера о зелёных не с первой попытки
   // печаталась в конце вывода, а не пряталась среди строк тестов.
   reporter: [

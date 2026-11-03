@@ -26,6 +26,17 @@
 const SHORT = "-j";
 const LONG = "--workers";
 
+/**
+ * Сколько воркеров у прогона, если `--workers` не передан.
+ *
+ * Это ровно `workers` из `playwright.config.ts` (оттуда и импортируется): два
+ * источника одного числа разъехались бы молча — Playwright взял бы дефолт
+ * конфига, а `e2e:prep` нарезал бы клонов по своей цифре. При `2` и одном
+ * клоне воркеры снова делили бы БД, то есть именно тот дефект, ради которого
+ * #289 и существует.
+ */
+export const DEFAULT_WORKERS = 2;
+
 const HINT =
   "Клонов БД и backend'ов должно быть столько же, сколько воркеров (#289), " +
   "поэтому запускать прогон с нераспознанной формой нельзя: получился бы один клон " +
@@ -63,15 +74,32 @@ function readWorkersValue(extraArgs) {
 }
 
 /**
+ * Задан ли `--workers`/`-j` в аргументах (в любой распознанной форме).
+ *
+ * Нужен вызывающему, чтобы передать Playwright своё `--workers=N`, когда
+ * человек его не передал, и не дублировать флаг, когда передал.
+ */
+export function hasWorkersArg(extraArgs) {
+  return extraArgs.some(
+    (arg) =>
+      arg === LONG ||
+      arg === SHORT ||
+      arg.startsWith(`${LONG}=`) ||
+      arg.startsWith(`${SHORT}=`),
+  );
+}
+
+/**
  * Число воркеров прогона из аргументов после яруса.
  *
- * Без `--workers`/`-j` — 1 (дефолт конфига `playwright.config.ts`, и он же
- * дефолт `WORKERS` в `scripts/run-e2e.mjs`). Любая форма, из которой нельзя
- * получить точный счёт, — ошибка, а не единица.
+ * Без `--workers`/`-j` — `defaultWorkers` (дефолт конфига: `DEFAULT_WORKERS`,
+ * у ручного стенда `PW_REUSE_STACK=1` — 1, потому что backends и клоны под
+ * него не выдаются вовсе). Любая форма, из которой нельзя получить точный
+ * счёт, — ошибка, а не дефолт.
  */
-export function parseWorkersArg(extraArgs) {
+export function parseWorkersArg(extraArgs, defaultWorkers = DEFAULT_WORKERS) {
   const raw = readWorkersValue(extraArgs);
-  if (raw === null) return 1;
+  if (raw === null) return defaultWorkers;
 
   if (!/^\d+$/.test(raw)) {
     const reason = raw.endsWith("%")
