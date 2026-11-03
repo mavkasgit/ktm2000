@@ -21,6 +21,7 @@ from app.models.release_batch import ReleaseBatchPosition
 from app.models.route import ProductionRoute, RouteOperation, RouteStage
 from app.models.section import Section
 from app.models.work_task import WorkTask, WorkTaskStatus
+from app.stock.models import StockBalance, StockTransaction
 from sqlalchemy import select
 
 
@@ -617,4 +618,198 @@ async def test_route_check_endpoint(client, session) -> None:
     assert len(data["active_route_snapshot"]["steps"]) == len(sections)
 
 
+# ─── Явный выбор источника из группы эквивалентов (#393/#395) ──────────────
+
+
+async def _stock_section(session, code: str) -> Section:
+    section = Section(
+        code=code,
+        name=code,
+        type="raw_stock",
+        is_active=True,
+        sort_order=10,
+    )
+    session.add(section)
+    await session.flush()
+    return section
+
+
+async def _seed_stock(session, *, product: Product, location: Section, qty: Decimal) -> StockBalance:
+    """Приход в ledger: остаток появляется вместе со своей проводкой (S1)."""
+    from app.services.material_operations import (
+        completed_operations_through_stage,
+    )
+    from app.services.route_storage_classifier import SECTION_TYPE_PRODUCTION
+    from app.stock import Reason, StockCommand, StockCommandService
+
+    from tests.helpers.completed_operations import register_section_operations
+
+    # Признак материала со склада — вход первого производственного этапа.
+    # Маршрут фикстуры целиком производственный: операция ISSUE_RAW лежит на
+    # этапе 1, значит вход этапа 2 — ["ISSUE_RAW"].
+
+    stage = await session.scalar(
+        select(RouteStage)
+        .join(Section, Section.id == RouteStage.section_id)
+        .where(Section.type == SECTION_TYPE_PRODUCTION)
+        .order_by(RouteStage.sequence)
+        .limit(1)
+    )
+    assert stage is not None
+    ops = await completed_operations_through_stage(
+        session, route_id=stage.route_id, through_sequence=stage.sequence
+    )
+    await register_section_operations(session, location.id, ops)
+    await StockCommandService().record(
+        session,
+        StockCommand(
+            product_id=product.id,
+            to_location_id=location.id,
+            quantity=qty,
+            reason=Reason.MANUAL_IN,
+            completed_operations=ops,
+            created_by=1,
+        ),
+    )
+    await session.flush()
+    balance = await session.scalar(
+        select(StockBalance)
+        .where(
+            StockBalance.product_id == product.id,
+            StockBalance.location_id == location.id,
+        )
+        .order_by(StockBalance.id.desc())
+        .limit(1)
+    )
+    assert balance is not None
+    return balance
+
+
+async def _released_issue_rows(session) -> tuple[list[StockTransaction], list[StockTransaction]]:
+    from app.stock import Reason
+
+    sends = list(
+        (
+            await session.execute(
+                select(StockTransaction)
+                .where(StockTransaction.reason == Reason.TRANSFER_SEND)
+                .order_by(StockTransaction.id)
+            )
+        ).scalars().all()
+    )
+    receives = list(
+        (
+            await session.execute(
+                select(StockTransaction)
+                .where(StockTransaction.reason == Reason.TRANSFER_RECEIVE)
+                .order_by(StockTransaction.id)
+            )
+        ).scalars().all()
+    )
+    return sends, receives
+
+
+@pytest.mark.asyncio
+async def test_release_batch_explicit_equivalent_source_lands_under_task_product(
+    client, session
+) -> None:
+    """Явный выбор эквивалента: send — source SKU, receive — артикул задания."""
+    from app.services.plan_generation import create_release_batch, release_batch
+
+    product_a, _sections, route = await _make_ready_product(session, "REL-EQ-A")
+    product_b = Product(
+        sku="REL-EQ-B",
+        name="REL-EQ-B",
+        type=ProductType.component,
+        unit="pcs",
+        is_active=True,
+    )
+    session.add(product_b)
+    await session.flush()
+    product_a.aliases = [product_b.sku]
+    stock = await _stock_section(session, "REL-EQ-RAW")
+    plan, position = await _make_plan_position(session, product_a, route_id=route.id)
+    await session.commit()
+
+    balance = await _seed_stock(
+        session, product=product_b, location=stock, qty=Decimal(50)
+    )
+    await session.commit()
+
+    batch = await create_release_batch(
+        session,
+        production_plan_id=plan.id,
+        positions=[{"plan_position_id": position.id, "release_quantity": "100"}],
+    )
+    await release_batch(
+        session,
+        batch["id"],
+        remainder_allocation={balance.id: Decimal(30)},
+    )
+    await session.commit()
+
+    sends, receives = await _released_issue_rows(session)
+    assert len(sends) == 1 and len(receives) == 1
+    send, receive = sends[0], receives[0]
+    assert send.product_id == product_b.id, "send несёт фактический SKU источника"
+    assert send.from_location_id == stock.id
+    assert receive.product_id == product_a.id, "receive несёт артикул задания"
+    assert receive.task_id is not None
+    assert "источник: REL-EQ-B" in (send.comment or "")
+    assert "источник: REL-EQ-B" in (receive.comment or "")
+
+    tasks = (
+        await session.execute(
+            select(WorkTask)
+            .join(SectionPlanLine, WorkTask.section_plan_line_id == SectionPlanLine.id)
+            .where(SectionPlanLine.plan_position_id == position.id)
+        )
+    ).scalars().all()
+    assert tasks and all(task.product_id == product_a.id for task in tasks)
+
+    from tests.test_integrity_invariants import assert_no_invariants_violations
+
+    await assert_no_invariants_violations(session, context="release equivalent source")
+
+
+@pytest.mark.asyncio
+async def test_release_batch_rejects_source_outside_equivalent_group(
+    client, session
+) -> None:
+    """Чужой артикул (вне группы) — отказ, ровно как у ручного выбора остатка."""
+    from app.services.plan_generation import create_release_batch, release_batch
+
+    product_a, _sections, route = await _make_ready_product(session, "REL-FOR-A")
+    foreign = Product(
+        sku="REL-FOR-X",
+        name="REL-FOR-X",
+        type=ProductType.component,
+        unit="pcs",
+        is_active=True,
+    )
+    session.add(foreign)
+    stock = await _stock_section(session, "REL-FOR-RAW")
+    plan, position = await _make_plan_position(session, product_a, route_id=route.id)
+    await session.commit()
+
+    balance = await _seed_stock(
+        session, product=foreign, location=stock, qty=Decimal(50)
+    )
+    await session.commit()
+
+    batch = await create_release_batch(
+        session,
+        production_plan_id=plan.id,
+        positions=[{"plan_position_id": position.id, "release_quantity": "100"}],
+    )
+
+    with pytest.raises(ValueError, match="не из группы эквивалентов"):
+        await release_batch(
+            session,
+            batch["id"],
+            remainder_allocation={balance.id: Decimal(10)},
+        )
+
+    sends, _receives = await _released_issue_rows(session)
+    assert sends == [], "отказ не должен списать чужой остаток"
 

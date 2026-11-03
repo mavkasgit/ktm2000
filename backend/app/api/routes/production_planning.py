@@ -134,6 +134,12 @@ class IssuePreviewCandidate(BaseModel):
     balance_id: int
     location_id: int
     location_name: str
+    #: ключ группы эквивалентов: клиент агрегирует строки по нему, не меняя
+    #: серверный порядок и количества (ADR-0073 §7)
+    group_key: int
+    #: фактический артикул строки остатка и его SKU (эквивалент — не ошибка)
+    product_id: int
+    sku: str | None = None
     dimensions: dict | None = None
     completed_operations: list[str] | None = None
     ops_count: int
@@ -160,6 +166,10 @@ class IssuePreviewOut(BaseModel):
 
     position_id: int
     product_id: int
+    #: группа эквивалентов позиции: подпись «A, B (эквиваленты)»; для
+    #: неразрешённой группы — сам артикул задания (группа из одного)
+    group_key: int | None = None
+    group_skus: list[str] = []
     required: str
     required_dimensions: dict | None = None
     required_dimensions_label: str | None = None
