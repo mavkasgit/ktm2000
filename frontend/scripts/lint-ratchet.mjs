@@ -11,10 +11,12 @@
  * ## Как работает
  * 1. Запускает локальный ESLint с `--format=json` (тот же конфиг и та же
  *    область, что у `npm run lint`).
- * 2. Считает предупреждения — всего и по каждому правилу.
+ * 2. Считает предупреждения — всего, по каждому правилу и по каждому файлу.
  * 3. Сверяет с `frontend/eslint-warnings-baseline.json`:
  *    — превышение по правилу → красный (ловит и «перераспределение», когда
  *      одно исправили, другое добавили, а итог не изменился);
+ *    — превышение по файлу → красный (ловит переток: файл починили, соседний
+ *      сломали, суммы и правила при этом те же);
  *    — превышение общего числа → красный (отдельное сообщение);
  *    — уменьшение → зелёный плюс подсказка подтянуть потолок.
  * 4. Ошибки (`errorCount > 0`) и падение самого ESLint (код 2 — фатальная
@@ -55,13 +57,15 @@ const ESLINT_BIN = path.join(FRONTEND, "node_modules", "eslint", "bin", "eslint.
  * @property {string} [eslintVersion] версия ESLint на момент замера
  * @property {number} total потолок предупреждений всего
  * @property {Record<string, number>} byRule потолок по правилу
+ * @property {Record<string, number>} byFile потолок по файлу (путь от `frontend/`)
  */
 
 /**
  * @typedef {object} Counts
  * @property {number} total предупреждений
  * @property {Record<string, number>} byRule предупреждений по правилу
- * @property {number} errors ошибок (их трещотка не «потолком» не лечит)
+ * @property {Record<string, number>} byFile предупреждений по файлу
+ * @property {number} errors ошибок (трещотка их не «потолком» не лечит)
  */
 
 /**
@@ -72,9 +76,28 @@ const ESLINT_BIN = path.join(FRONTEND, "node_modules", "eslint", "bin", "eslint.
  */
 
 /**
+ * Путь файла в отчёте ESLint — абсолютный (`C:\…\frontend\src\x.tsx`,
+ * `/home/runner/work/…/frontend/src/x.tsx`) или уже относительный. В базовом
+ * файле он хранится от `frontend/` и с прямыми слэшами, иначе потолок не
+ * совпал бы между машиной разработчика и CI.
+ *
+ * @param {string|undefined} filePath
+ * @returns {string}
+ */
+export function relativeFile(filePath) {
+  if (!filePath) return "(без файла)";
+  const posix = String(filePath).replace(/\\/g, "/");
+  const marker = "/frontend/";
+  const at = posix.lastIndexOf(marker);
+  if (at !== -1) return posix.slice(at + marker.length);
+  if (posix.startsWith("frontend/")) return posix.slice("frontend/".length);
+  return posix.replace(/^\.\//, "");
+}
+
+/**
  * Считает предупреждения по JSON-результату ESLint.
  *
- * @param {Array<{errorCount?: number, warningCount?: number, messages?: Array<{severity?: number, ruleId?: string|null}>}>} results
+ * @param {Array<{filePath?: string, errorCount?: number, warningCount?: number, messages?: Array<{severity?: number, ruleId?: string|null}>}>} results
  * @returns {Counts}
  */
 export function countWarnings(results) {
@@ -82,16 +105,24 @@ export function countWarnings(results) {
   let errors = 0;
   /** @type {Record<string, number>} */
   const byRule = {};
+  /** @type {Record<string, number>} */
+  const byFile = {};
   for (const file of results) {
     errors += file.errorCount ?? 0;
     total += file.warningCount ?? 0;
+    let inFile = 0;
     for (const message of file.messages ?? []) {
       if (message.severity !== 1) continue;
       const rule = message.ruleId ?? "(без правила)";
       byRule[rule] = (byRule[rule] ?? 0) + 1;
+      inFile += 1;
+    }
+    if (inFile > 0) {
+      const name = relativeFile(file.filePath);
+      byFile[name] = (byFile[name] ?? 0) + inFile;
     }
   }
-  return { total, byRule, errors };
+  return { total, byRule, byFile, errors };
 }
 
 /**
@@ -101,6 +132,10 @@ export function countWarnings(results) {
  * превысило свой потолок, то и сумма не может его превысить. Проверка суммы
  * оставлена ради понятного сообщения и на случай неполного `byRule` в
  * базовом файле.
+ *
+ * Проверка по файлам нужна отдельно: правило и сумма не видят перетока, когда
+ * один файл починили, а другой сломали. Потолок файла, которого в базовом
+ * файле нет, — ноль, поэтому «новое предупреждение в новом файле» красное.
  *
  * @param {Baseline} baseline
  * @param {Counts} current
@@ -137,6 +172,25 @@ export function compare(baseline, current) {
     }
   }
 
+  const baselineFiles = baseline.byFile ?? {};
+  const currentFiles = current.byFile ?? {};
+  const files = [
+    ...new Set([...Object.keys(baselineFiles), ...Object.keys(currentFiles)]),
+  ].sort();
+  for (const file of files) {
+    const cap = baselineFiles[file] ?? 0;
+    const now = currentFiles[file] ?? 0;
+    if (now > cap) {
+      problems.push(
+        cap === 0
+          ? `${file}: ${now} предупреждений при потолке 0 — файл новый (или в нём не было предупреждений)`
+          : `${file}: было ${cap}, стало ${now} (+${now - cap})`,
+      );
+    } else if (now < cap) {
+      improvements.push(`${file}: ${cap} → ${now} (${now - cap})`);
+    }
+  }
+
   if (current.total > capTotal) {
     problems.push(`всего предупреждений ${current.total} > потолка ${capTotal}`);
   } else if (current.total < capTotal) {
@@ -166,6 +220,9 @@ export function renderReport(baseline, current, diff, meta) {
       `  ${rule}: ${current.byRule[rule]} (потолок ${baseline.byRule?.[rule] ?? 0})`,
     );
   }
+  lines.push(
+    `файлов с предупреждениями ${Object.keys(current.byFile ?? {}).length} (потолок ${Object.keys(baseline.byFile ?? {}).length})`,
+  );
   for (const problem of diff.problems) lines.push(`  ✗ ${problem}`);
   for (const improvement of diff.improvements) lines.push(`  ✓ ${improvement}`);
   if (diff.ok && diff.improvements.length > 0) {
@@ -282,14 +339,18 @@ export async function main(argv, deps = {}) {
   if (update) {
     const capTotal = baseline.total ?? 0;
     const capRules = baseline.byRule ?? {};
+    const capFiles = baseline.byFile ?? {};
     const grows =
       current.total > capTotal ||
       Object.entries(current.byRule).some(
         ([rule, now]) => now > (capRules[rule] ?? 0),
+      ) ||
+      Object.entries(current.byFile ?? {}).some(
+        ([file, now]) => now > (capFiles[file] ?? 0),
       );
     if (grows && !force) {
       fail(
-        `--update отказался: сейчас ${current.total}, потолок ${capTotal} — это регресс, а не новая норма. Сначала исправь код; если рост осознанный — \`--update --force\`.`,
+        `--update отказался: рост относительно потолка (всего ${current.total} против ${capTotal}; правила и файлы сверяются отдельно) — это регресс, а не новая норма. Сначала исправь код; если рост осознанный — \`--update --force\`.`,
       );
       return 1;
     }
@@ -309,6 +370,11 @@ export async function main(argv, deps = {}) {
         Object.keys(current.byRule)
           .sort()
           .map((rule) => [rule, current.byRule[rule]]),
+      ),
+      byFile: Object.fromEntries(
+        Object.keys(current.byFile ?? {})
+          .sort()
+          .map((file) => [file, current.byFile[file]]),
       ),
     };
     writeFileSync(

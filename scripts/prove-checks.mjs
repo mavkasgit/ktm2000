@@ -170,8 +170,20 @@ const PROBES = [
   {
     step: "frontend-lint",
     write: [{ path: "frontend/src/_probe357.tsx", content: 'export const Bad = () => {\n  return <div>{\n};\n' }],
-    expect: /\(([1-9]\d*) error\b/i,
-    note: "незакрытый JSX — линтер обязан упасть, а не промолчать (гейт отдаёт хвост вывода, поэтому сверяем итоговую строку с числом ошибок)",
+    expect: /ошибок ESLint: [1-9]|упал фатально/i,
+    note: "незакрытый JSX — ошибка ESLint (тот же класс, что нарушения boundaries) обязана покраснеть, а не утонуть в рэтчете; гейт отдаёт хвост вывода, поэтому сверяем строку с числом ошибок",
+  },
+  {
+    step: "frontend-lint",
+    write: [
+      {
+        path: "frontend/src/_probe372_useeffect_dep.tsx",
+        content:
+          'import { useEffect, useState } from "react";\n\nexport function Probe372() {\n  const [value] = useState(0);\n  useEffect(() => {\n    void value;\n  }, []);\n  return null;\n}\n',
+      },
+    ],
+    expect: /при потолке 0|файл новый/i,
+    note: "новый файл с предупреждением exhaustive-deps — рэтчет обязан назвать файл и потолок 0, а не пропустить рост (#372); тот же шаг краснеет на ошибках (границы FSD)",
   },
   {
     step: "backend-test-count",
