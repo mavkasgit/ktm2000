@@ -347,7 +347,9 @@ async def test_source_of_equivalent_product_is_accepted(client, session) -> None
     send = sends[0]
     assert send.product_id == equivalent.id, "send — фактический SKU источника"
     assert send.from_location_id == raw.id
-    assert send.to_location_id == fx["sections"][1].id
+    # Эквивалент: расход склада — у send, приход участка — у receive
+    # (ADR-0073 п.5), иначе на участке остался бы SKU источника B.
+    assert send.to_location_id is None
 
     receive = (
         await session.execute(
@@ -358,6 +360,9 @@ async def test_source_of_equivalent_product_is_accepted(client, session) -> None
     ).scalars().one()
     assert receive.product_id == fx["product"].id, "receive — артикул задания"
     assert receive.task_id is not None
+    assert receive.to_location_id == fx["sections"][1].id, (
+        "receive приходит на участок под артикулом задания"
+    )
 
     task = (
         await session.execute(select(WorkTask).where(WorkTask.section_id == fx["sections"][1].id))
@@ -366,6 +371,20 @@ async def test_source_of_equivalent_product_is_accepted(client, session) -> None
 
     await session.refresh(balance)
     assert balance.balance_qty == Decimal(30), "списан источник, а не артикул задания"
+    section_a = await session.scalar(
+        select(StockBalance.balance_qty).where(
+            StockBalance.product_id == fx["product"].id,
+            StockBalance.location_id == fx["sections"][1].id,
+        )
+    )
+    section_b = await session.scalar(
+        select(StockBalance.balance_qty).where(
+            StockBalance.product_id == equivalent.id,
+            StockBalance.location_id == fx["sections"][1].id,
+        )
+    )
+    assert section_a == Decimal(20), "на участке материал под артикулом задания"
+    assert section_b is None, "на участке не должно быть SKU источника B"
     await assert_no_invariants_violations(session)
     await assert_no_stock_ledger_invariants_violations(session)
 

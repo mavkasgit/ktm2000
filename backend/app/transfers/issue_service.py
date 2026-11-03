@@ -371,6 +371,15 @@ async def _record_issue_transfer(
         task.status = WorkTaskStatus.ready
         await db.flush()
 
+    # Канонизация на участке (ADR-0073 п.5): когда источник — эквивалент,
+    # физический остаток участка обязан быть под артикулом задания. Иначе
+    # send с `to_location` положил бы на участок SKU источника (B), а приём
+    # остался бы только учётным (`task_id` без локаций), и следующая выдача
+    # или завершение искали бы материал не под тем артикулом. Поэтому при
+    # source != target send двигает только расход склада, а receive — приход
+    # на участок под target. Для группы из одного продукта форма прежняя:
+    # send «склад → участок», receive — учёт задания (S1/S6 не меняются).
+    canonicalize_on_section = source_product_id != target_product_id
     await _stock_command_service.record(
         db,
         StockCommand(
@@ -378,7 +387,7 @@ async def _record_issue_transfer(
             quantity=quantity,
             reason=Reason.TRANSFER_SEND,
             from_location_id=balance.location_id,
-            to_location_id=task.section_id,
+            to_location_id=None if canonicalize_on_section else task.section_id,
             dimensions=dimensions,
             quality_state=quality,
             to_quality_state=quality,
@@ -407,7 +416,9 @@ async def _record_issue_transfer(
             quantity=quantity,
             reason=Reason.TRANSFER_RECEIVE,
             from_location_id=None,
-            to_location_id=None,
+            # Приход на участок несёт артикул задания, если источник —
+            # эквивалент; иначе приём остаётся учётным (без локаций).
+            to_location_id=task.section_id if canonicalize_on_section else None,
             dimensions=dimensions,
             quality_state=quality,
             to_quality_state=quality,

@@ -212,6 +212,33 @@ describe("IssueSourceDialog: группа эквивалентов одной с
     expect(within(row).getByRole("checkbox").getAttribute("aria-checked")).toBe("mixed");
   });
 
+  it("строка только из эквивалента помечена «эквивалент»", async () => {
+    // На складе лежит только B, артикул задания — A: строка законна, но
+    // оператор должен видеть, что материал другого SKU группы (ADR-0073 п.5).
+    vi.mocked(issuePreview).mockResolvedValue(
+      preview({
+        product_id: 100,
+        group_key: 5,
+        group_skus: ["A", "B"],
+        candidates: [
+          candidate({
+            balance_id: 2,
+            location_id: 10,
+            group_key: 5,
+            product_id: 200,
+            sku: "B",
+          }),
+        ],
+      }),
+    );
+
+    mountDialog();
+    const row = await screen.findByTestId("issue-candidate-group-5-10-0");
+
+    expect(row.textContent).toContain("эквивалент");
+    expect(row.textContent).not.toContain("артикул задания");
+  });
+
   it("одиночная строка группы не требует раскрытия", async () => {
     vi.mocked(issuePreview).mockResolvedValue(
       preview({

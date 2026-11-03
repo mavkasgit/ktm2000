@@ -178,6 +178,10 @@ describe("StockBalancesPanel: группы эквивалентов приход
   it("рисует группу одной строкой-итогом, а одиночный SKU — обычной строкой", async () => {
     renderPanel([1]);
     const summary = await screen.findByText("SKU-A, SKU-B (эквиваленты)");
+    // E2E читает показания по data-testid (#398), а не по тексту строки.
+    const groupRow = screen.getByTestId("stock-balance-group-1");
+    expect(groupRow).toBe(summary.closest("tr"));
+    expect(within(groupRow).getByTestId("stock-balance-group-qty").textContent).toBe("1555");
 
     // Итог: серверная сумма кучи и число фактических SKU.
     expect(summary.closest("tr")?.textContent).toContain("1555");

@@ -385,7 +385,9 @@ fail-fast остановит прогон на первом красном яр�
 - Ярус 3 (`@ui-narrow`): `sawing-four-lengths-cycle.spec.ts` (пила в полном
   цикле: раскрой 2,75 м на четыре длины), `sawing-multi-length-split.spec.ts`
   (распил задачи на разные длины), `yup460-shared-raw-pile.spec.ts` (три
-  варианта ЮП-460 делят одну кучу сырья).
+  варианта ЮП-460 делят одну кучу сырья), `equivalents-pool.spec.ts` (общий
+  пул эквивалентов: A видит и выдаёт остаток B, две позиции не выдают больше
+  кучи, экран остатков показывает группу одной строкой — ADR-0073).
 - Хелперы: [`ui-helpers.ts`](ui-helpers.ts) — seed через `/settings/dev`, approve,
   take-to-work, чтение журнала передач; [`api-helpers.ts`](api-helpers.ts) — бесфайловый сетап.
 - **Строку адресуем по `data-row-key="<position_id>"`**, а не поиском по видимому

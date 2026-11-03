@@ -767,6 +767,30 @@ async def test_release_batch_explicit_equivalent_source_lands_under_task_product
     ).scalars().all()
     assert tasks and all(task.product_id == product_a.id for task in tasks)
 
+    # Канонизация на участке (ADR-0073 п.5): эквивалент списывается со склада
+    # (send без прихода), а на участок приходит под артикулом задания (receive
+    # с локацией). Иначе физический остаток участка остался бы под SKU B.
+    target_task = await session.get(WorkTask, receive.task_id)
+    assert target_task is not None
+    assert send.to_location_id is None, "send эквивалента не кладёт B на участок"
+    assert receive.to_location_id == target_task.section_id, (
+        "receive приходит на участок под артикулом задания"
+    )
+    section_a = await session.scalar(
+        select(StockBalance.balance_qty).where(
+            StockBalance.product_id == product_a.id,
+            StockBalance.location_id == target_task.section_id,
+        )
+    )
+    section_b = await session.scalar(
+        select(StockBalance.balance_qty).where(
+            StockBalance.product_id == product_b.id,
+            StockBalance.location_id == target_task.section_id,
+        )
+    )
+    assert section_a == Decimal(30), "на участке материал под артикулом задания"
+    assert section_b is None, "на участке не должно быть SKU источника B"
+
     from tests.test_integrity_invariants import assert_no_invariants_violations
 
     await assert_no_invariants_violations(session, context="release equivalent source")

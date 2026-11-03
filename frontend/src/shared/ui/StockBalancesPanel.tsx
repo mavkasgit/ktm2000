@@ -219,6 +219,9 @@ function BalanceGroupRow({
   const itemsCount = balanceItems(group).length;
   return (
     <tr
+      // Стабильный ключ строки для E2E: `id` группы — минимальный
+      // `balance_id` кучи, он же ключ раскрытия (#398).
+      data-testid={`stock-balance-group-${group.id}`}
       style={{ height: TABLE_ROW_DENSE.rowHeightPx }}
       aria-expanded={!isCollapsed}
       className={`cursor-pointer font-semibold ${TABLE_ROW_STYLES.defaultGroupHeader}`}
@@ -249,7 +252,11 @@ function BalanceGroupRow({
       </td>
       {/* Сумма — серверная: группа уже не разрезана страницей, и складывать
           клиенту нечего. */}
-      <td className={cn(cellClass, "font-mono")} title="Сумма по группе эквивалентов">
+      <td
+        className={cn(cellClass, "font-mono")}
+        title="Сумма по группе эквивалентов"
+        data-testid="stock-balance-group-qty"
+      >
         {fmtQty(group.balance_qty)}
       </td>
       <td className={cn(cellClass, "max-w-[120px] text-xs font-normal")}>
@@ -303,6 +310,9 @@ function BalanceItemRow({
   const cellClass = cn(BALANCE_CELL_CLASS, isLastInGroup && TABLE_ROW_STYLES.groupBlockBoundary);
   return (
     <tr
+      // Фактическая SKU-строка адресуется по `balance_id`: у группы может быть
+      // несколько строк одного артикула, и `product_id` их не различит (#398).
+      data-testid={`stock-balance-item-${item.balance_id}`}
       // Высота закреплена, как на доске: содержимое «Операций» (RouteStepsDisplay)
       // само задаёт 24px, а строки без операций схлопывались бы до высоты текста.
       // Ровно 32px — та же плотность, что на «Заданиях» и «Передачах».
@@ -319,7 +329,12 @@ function BalanceItemRow({
           {item.sku || `#${item.product_id}`}
         </button>
       </td>
-      <td className={cn(cellClass, "font-semibold font-mono")}>{fmtQty(item.quantity)}</td>
+      <td
+        className={cn(cellClass, "font-semibold font-mono")}
+        data-testid="stock-balance-item-qty"
+      >
+        {fmtQty(item.quantity)}
+      </td>
       <td className={cn(cellClass, "text-xs whitespace-nowrap")}>
         {formatDimensionsLabel(group.dimensions, group.dimensions_label)}
       </td>
