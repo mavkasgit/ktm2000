@@ -185,6 +185,19 @@ const PROBES = [
     note: "в baseline записано тестов больше, чем собрано — рэтчет обязан покраснеть (заниженный минимум зелёный — это критерий (в), он покрыт npm run test:scripts)",
   },
   {
+    step: "dev-deps",
+    args: "--strict",
+    mutate: [
+      {
+        path: "frontend/package.json",
+        from: '"@playwright/test": "^1.60.0",',
+        to: '"@playwright/test": "^1.60.0",\n    "_probe374_mertvyj_paket": "^1.0.0",',
+      },
+    ],
+    expect: /_probe374_mertvyj_paket.*не названы/s,
+    note: "в devDependencies появляется пакет, который никто не зовёт: проверка обязана назвать его и показать охват просмотра",
+  },
+  {
     step: "frontend-test-count",
     heavy: true,
     mutate: [

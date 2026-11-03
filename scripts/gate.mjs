@@ -176,6 +176,14 @@ const STEPS = [
     ci: "frontend-tests.yml",
     what: " vitest-набор не меньше записанного (минута на сбор, поэтому не в fast)",
   },
+  {
+    name: "dev-deps",
+    tier: "full",
+    command: "node scripts/check-dev-deps.js",
+    honorsStrict: true,
+    ci: "frontend-tests.yml",
+    what: " мёртвые dev-зависимости фронтенда (зовёт git ls-files и node_modules, поэтому не в fast)",
+  },
 ];
 
 /**

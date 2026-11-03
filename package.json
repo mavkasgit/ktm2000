@@ -63,6 +63,7 @@
     "test:scripts": "node --test \"scripts/**/*.test.js\"",
     "check:docs": "node scripts/check-doc-links.js",
     "check:adr": "node scripts/check-adr.js",
+    "check:dev-deps": "node scripts/check-dev-deps.js",
     "check:freshness": "node scripts/freshness.js",
     "test:hygiene": "python scripts/check-test-imports.py",
     "test:e2e": "npm --prefix frontend run test:e2e",

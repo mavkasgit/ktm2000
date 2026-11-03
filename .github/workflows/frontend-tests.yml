@@ -174,3 +174,12 @@ jobs:
       - name: Test-count ratchet (vitest)
         if: steps.scope.outputs.relevant == 'true'
         run: node ../scripts/test-count.js --only=frontend
+
+      # Мёртвые dev-зависимости (#374): пакет, который не назван ни в одном
+      # отслеживаемом файле и ни одним своим бинарником, — кандидат на удаление.
+      # Здесь `--strict`, потому что в отличие от локального гейта CI не мешает
+      # быстрый ход: находка обязана либо удалить пакет, либо объяснить его в
+      # датированном исключении docs/quality/dev-deps-allowlist.json.
+      - name: Dead devDependencies check
+        if: steps.scope.outputs.relevant == 'true'
+        run: node ../scripts/check-dev-deps.js --strict
