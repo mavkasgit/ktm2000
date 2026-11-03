@@ -59,7 +59,12 @@ from app.services.excel_import import (
     validate_excel_extension,
 )
 from app.services.hanger_quantity import adjust_quantity_to_hanger
-from app.services.import_normalization import SkuEntry, match_sku_parts, sku_entry
+from app.services.import_normalization import (
+    SkuEntry,
+    match_sku_parts,
+    sku_compound_parts,
+    sku_entry,
+)
 from app.services.import_normalization import normalize_sku as _normalize_sku
 from app.services.plan_position_hanger import (
     PositionHangerValue,
@@ -676,13 +681,23 @@ def _name_tokens(value: str | None) -> set[str]:
     return {token for token in re.split(r"[^0-9a-zа-яё]+", (value or "").lower()) if len(token) > 1}
 
 
-def _pick_alias_duplicate(candidates: list[Product], row_name: str | None) -> Product | None:
+def _pick_alias_duplicate(
+    candidates: list[Product],
+    row_name: str | None,
+    source_sku: str | None = None,
+) -> Product | None:
     """Канонический продукт среди дубликатов-алиасов.
 
     Возвращает ``None``, если кандидаты не связаны алиасами: тогда сохраняется
-    прежнее правило «неоднозначная часть — product_not_found». Среди связанных
-    предпочитается активный, с содержательным именем (не равным SKU) и с
-    наибольшим пересечением слов с наименованием строки.
+    прежнее правило «неоднозначная часть — product_not_found».
+
+    Среди связанных побеждает **первая часть ячейки** — это заказной артикул
+    («ЮП-3485/АТ-4893» → «ЮП-3485»), но только если её карточка заполнена:
+    активна и с настоящим именем. Пустая или выключенная карточка первого
+    артикула не перебивает рабочий алиас — иначе строка уехала бы в
+    ``product_inactive``/``normal_length_not_found``. Если первую часть
+    выбрать нельзя, остаётся прежнее правило: активный, с содержательным
+    именем и наибольшим пересечением слов с наименованием строки.
     """
     if not candidates:
         return None
@@ -697,6 +712,14 @@ def _pick_alias_duplicate(candidates: list[Product], row_name: str | None) -> Pr
         if _normalize_sku(product.name) != _normalize_sku(product.sku)
     ]
     pool = meaningful or pool
+
+    parts = sku_compound_parts(source_sku or "")
+    if parts:
+        first_part = parts[0]
+        for product in pool:
+            if _normalize_sku(product.sku) == first_part:
+                return product
+
     row_tokens = _name_tokens(row_name)
     return max(pool, key=lambda product: (len(_name_tokens(product.name) & row_tokens), -product.id))
 
@@ -858,6 +881,7 @@ async def _make_change_items(
                 alias_product = _pick_alias_duplicate(
                     [sku_index.products[index] for index in match.ambiguous_indexes],
                     row.source_name,
+                    row.source_sku,
                 )
                 if alias_product is not None:
                     product = alias_product
