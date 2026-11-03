@@ -16,11 +16,11 @@ from __future__ import annotations
 from decimal import Decimal
 
 import pytest
-from sqlalchemy.ext.asyncio import AsyncSession
-
 from app.models.section import Section
 from app.stock.models import QualityState, StockBalance
 from app.transfers.source_selection import build_issue_plan
+from sqlalchemy.ext.asyncio import AsyncSession
+
 from tests.helpers.completed_operations import build_operation_route
 
 DIM = {"length_mm": 2750}

@@ -22,16 +22,16 @@ from decimal import Decimal
 
 import pytest
 import pytest_asyncio
-from sqlalchemy import event, select, text
-from sqlalchemy.exc import DBAPIError
-from sqlalchemy.ext.asyncio import AsyncEngine, AsyncSession, async_sessionmaker
-
 from app.domain.shortage import ShortageStrategy
 from app.models.production_plan import PlanPosition
 from app.models.section import Section
 from app.stock.models import QualityState, Reason, StockBalance
 from app.stock.services import StockCommand, StockCommandService
 from app.transfers.issue_service import execute_issue
+from sqlalchemy import event, select, text
+from sqlalchemy.exc import DBAPIError
+from sqlalchemy.ext.asyncio import AsyncEngine, AsyncSession, async_sessionmaker
+
 from tests.helpers.completed_operations import build_operation_route
 from tests.test_integrity_invariants import assert_no_stock_ledger_invariants_violations
 

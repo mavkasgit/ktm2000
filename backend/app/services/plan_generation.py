@@ -9,6 +9,7 @@ from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import selectinload
 
+from app.domain.dimensions import format_dimensions
 from app.models.internal_plan import InternalPlan, SectionPlanLine
 from app.models.production_plan import (
     PlanPosition,
@@ -32,7 +33,6 @@ from app.models.route import (
 )
 from app.models.section import Section
 from app.models.work_task import RESOLVED_WORK_TASK_STATUSES, WorkTask, WorkTaskStatus
-from app.domain.dimensions import format_dimensions
 from app.services import product_pair_resolver
 from app.services.action_journal_service import action_journal_service
 from app.services.plan_position_hanger import position_dimensions_for_task

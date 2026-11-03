@@ -28,7 +28,7 @@ def _ensure_positive(value: Decimal, field_name: str) -> None:
         raise ValueError(f"{field_name} must be > 0")
 
 
-def format_quantity(value: Decimal | float | str | int) -> str:
+def format_quantity(value: Decimal | float | str) -> str:
     """Количество для человекочитаемого отказа: без хвостов ``.000``.
 
     ``3.000 → «3»``, ``2.500 → «2,5»`` (запятая — как operator видит в UI).

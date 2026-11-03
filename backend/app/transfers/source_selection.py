@@ -30,7 +30,11 @@ from decimal import Decimal
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.domain.dimensions import canonicalize_dimensions, dimensions_equal, format_dimensions
+from app.domain.dimensions import (
+    canonicalize_dimensions,
+    dimensions_equal,
+    format_dimensions,
+)
 from app.models.production_plan import PlanPosition
 from app.models.route import RouteStage
 from app.models.section import Section
@@ -295,10 +299,7 @@ async def build_issue_plan(
             collected += take
         # «Остаток после»: 0 — склад вычерпан целиком; None — прочерк
         # (галочка снята или очередь до склада не дошла).
-        if included and take > 0:
-            remaining_after = available - take
-        else:
-            remaining_after = None
+        remaining_after = available - take if included and take > 0 else None
         candidates.append(
             IssueCandidate(
                 balance_id=balance_id,

@@ -49,7 +49,6 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.domain.dimensions import format_dimensions
 from app.domain.shortage import ShortageStrategy
-from app.models.action_journal import Action
 from app.models.internal_plan import SectionPlanLine
 from app.models.production_plan import PlanPosition
 from app.models.route import RouteStage
