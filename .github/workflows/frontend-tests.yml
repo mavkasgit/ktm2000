@@ -102,6 +102,11 @@ jobs:
         id: toolchain
         if: steps.scope.outputs.relevant == 'true'
         shell: bash
+        # `working-directory` обязателен: шаг-`uses` (setup-node) не наследует
+        # defaults.run.working-directory джобы и ищет файл от корня workspace, а
+        # `run`-шаг без него пишет `.ci-node-version` в frontend/ — setup-node тогда
+        # падает на «specified node version file … does not exist».
+        working-directory: ${{ github.workspace }}
         env:
           KTM_NODE_FALLBACK: '20'
           KTM_USE_NODE: 'yes'
