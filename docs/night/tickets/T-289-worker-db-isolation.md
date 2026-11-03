@@ -564,15 +564,18 @@ E2E_ENV_FILE="$PWD/.env.e2e.impl289.local" CI= \
 
 | Что | Значение |
 |---|---|
-| SHA | `f7a5bbf7` (плюс этот docs-коммит) |
+| SHA | `d060c264` (слитый tip ветки; слот-фикс — `f7a5bbf7`, docs — `1fd78752`) |
 | `CI` | пуст |
 | `retries` | 0 (явно) |
-| воркеров / клонов | 2 / 2 (`…_run_20261103…af974909_w0`, `_w1`), 2 backend'а + роутер |
+| воркеров / клонов | 2 / 2 (`…_run_…_3a5bc439_w0`, `_w1`), 2 backend'а + роутер |
 | Результат | **3 passed**, код 0 |
-| Wall | **277 s** (строка `=== ярус ui-narrow: 277s, код 0 ===`, включает `e2e:prep`) |
-| Слоты в логе | `[e2e:worker] слот=0 parallelIndex=0 workerIndex=0 pid=47828`, `слот=1 parallelIndex=1 workerIndex=1 pid=39816` — по строке на процесс |
+| Wall | **288 s** (строка `=== ярус ui-narrow: 288s, код 0 ===`, включает `e2e:prep`) |
+| Слоты в логе | `[e2e:worker] слот=0 parallelIndex=0 workerIndex=0 pid=43408`, `слот=1 parallelIndex=1 workerIndex=1 pid=44432` — по строке на процесс |
 
-Лог: `logs/e2e-289-impl/slot-proof-ui-narrow-w2.log` (каталог в `.gitignore`).
+Лог: `logs/e2e-289-impl/slot-proof-merged-tip.log` (каталог в `.gitignore`).
+До влития обновлённого `integration/372-289` тот же прогон дал 277 s и те же
+слоты (`slot-proof-ui-narrow-w2.log`) — слияние добавок импорта слотов не
+касается.
 
 Повторного использования слота в этом коротком прогоне не было: три спеки
 разошлись по двум процессам, и обошлось без перезапусков. Оно видно в полном
