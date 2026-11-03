@@ -46,7 +46,7 @@ ast-grep = "0.51.1"
 typos = "1.52.0"
 lychee = "0.24.2"
 rumdl = "0.3.2"
-shellcheck = "0.11.0"
+shellcheck = "0.11.0" # канал готов, шага гейта ещё нет — пин заранее, как hk
 
 [tasks.check]
 run = "npm run gate -- --strict"

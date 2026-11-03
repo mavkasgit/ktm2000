@@ -28,16 +28,20 @@ mise (mise-en-place) — один CLI, который по файлу `mise.toml
 
 ## Принято (шаг 1, коммит `3d1db39c`)
 
-- **`mise.toml` — единственный источник версий всех инструментов.** 17
+- **`mise.toml` — единственный источник версий всех инструментов.** 18
   инструментов с точными пинами: node 24, python 3.12, hk 2.11.0, ruff
   0.16.9, oxlint 1.90.0, oxfmt 0.75.0, knip 6.44.1, dependency-cruiser
   18.7.1, betterleaks 1.9.0, osv-scanner 2.7.0, hadolint 2.15.1,
   jactionlint 2.4.0, ast-grep 0.51.1, agnix 0.60.2, typos 1.52.0,
-  lychee 0.24.2, rumdl 0.3.2.
+  lychee 0.24.2, rumdl 0.3.2, shellcheck 0.11.0.
+  shellcheck (добавлен в `7ee220e0`) и hadolint закреплены **заранее**, как hk:
+  канал доставки готов, шага гейта у них ещё нет — решение по каждому
+  принимает тикет, который их включает (строка `shellcheck, hadolint` в
+  [`not-adopted.md`](not-adopted.md) остаётся в силе).
 - **`mise.lock` (lockfile v3 + `.mise/locks/`)** фиксирует точные версии:
-  28 платформенных записей (windows-x64 + linux-x64) с чексуммами и URL,
-  для npm-инструментов (oxfmt, knip, dependency-cruiser) — граф
-  зависимостей. `mise lock --dry-run` — дрейфа нет.
+  30 платформенных записей (windows-x64 и linux-x64 на каждый инструмент) с
+  чексуммами и URL, для npm-инструментов (oxfmt, knip, dependency-cruiser) —
+  граф зависимостей. `mise lock --dry-run` — дрейфа нет.
 - **`[env] _.python.venv = "backend/.venv"`** — mise-директива привязки
   интерпретатора к venv проекта. Файлы `.env*` остаются источником правды
   для `DATABASE_URL` и секретов — mise их не дублирует.
@@ -52,7 +56,11 @@ mise (mise-en-place) — один CLI, который по файлу `mise.toml
   чтобы шаг 2 не зависел от канала.
 
 Проверено на шаге 1: `mise run gate-fast` — 17 шагов, 17 ok; `mise run check`
-(ярус full) — 21 шаг; у 17 бинарей `--version` совпадает с пином.
+(ярус full) — 21 шаг; у 18 бинарей `--version` совпадает с пином (`mise exec --`).
+Повторно сверено 2026-11-03 перед закрытием #391: `npm run check:registry` —
+25 записей, дрейфа `docs/toolchain.md` нет; `mise run gate-fast` — 17/17 ok,
+0 fail (73.5–90.7 с); `mise lock --dry-run` — 18 инструментов, 30 записей,
+расхождений нет.
 
 ## Что mise сознательно не объявляет в `[tools]`
 
@@ -108,6 +116,15 @@ mise (mise-en-place) — один CLI, который по файлу `mise.toml
   «3.12», lock — точную версию. Реальный интерпретатор пока 3.12.10;
   byte-for-byte match требует переустановки venv — отдельный шаг, не
   молчаливая подмена окружения.
+- **Без `mise activate` задачи видят PATH машины, а не только `mise.toml`.**
+  Измерено 2026-11-03 на dev-машине: `mise run gate-fast` исполнил гейт на
+  системном node 24.11.1, хотя lock держит 24.22.2 — в PATH агента
+  `C:\Program Files\nodejs` и устаревший shim-каталог стоят раньше
+  `mise installs`. Пин «24» при этом соблюдён (шаг `pins` зелёный), а
+  `mise exec -- node` и чистый PATH дают 24.22.2. Вывод: шаг 1 доказывает
+  «версия берётся из файла», но не «PATH очищен»; точную привязку даёт
+  активация mise (шаг 3), а до неё `mise run` и `mise exec --` не
+  эквивалентны по порядку PATH.
 - **CI на старом mise.** lockfile v3 не старше mise 2026.10.12 — любой
   workflow обязан ставить mise не ниже этой версии (шаг 3).
 
