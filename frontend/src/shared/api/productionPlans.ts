@@ -1,6 +1,7 @@
 import { apiClient } from "./client";
 import type { CutLayout } from "./cutLayout";
 import type { ImportOperationStep } from "./stock";
+import type { ShortageStrategy } from "./shopfloor";
 
 export type PlanStatus = "draft" | "validated" | "approved" | "partially_released" | "released" | "cancelled";
 export type PlanPositionStatus = "draft" | "invalid" | "valid" | "approved" | "released" | "cancelled";
@@ -785,11 +786,133 @@ export type TakeToWorkResult = {
   release_batch_id: number | null;
   internal_plan_id: number | null;
   tasks_created: number | null;
+  /** Итог выдачи этой позиции (#282); `null` — подбор не запрашивался. */
+  issue?: IssueSummary | null;
 };
 
 export type TakeToWorkResponse = {
   results: TakeToWorkResult[];
+  /** Один общий итог группового запуска (#282): `issue_no === null`. */
+  issue_summary?: IssueSummary | null;
 };
+
+// --- Автоподбор источника выдачи (#282) ------------------------------------
+
+/**
+ * Одна строка списка «откуда брать». Порядок и `take` считает сервер: UI
+ * печатает строки в присланном порядке (у него нет своего сравнения) и не
+ * даёт ввести количество или «добавить» склад.
+ *
+ * `remaining_after`: `null` — прочерк («не доходила очередь» или галочка
+ * снята), `"0"` — склад вычерпан целиком. Это разные состояния.
+ */
+export type IssuePreviewCandidate = {
+  balance_id: number;
+  location_id: number;
+  location_name: string;
+  dimensions: Record<string, unknown> | null;
+  completed_operations: string[] | null;
+  ops_count: number;
+  available: string;
+  take: string;
+  remaining_after: string | null;
+  included: boolean;
+  target_sequence: number;
+  order: number;
+};
+
+/** Подсказка по включённым складам: «брак» / «есть другой размер». */
+export type IssuePreviewHint = {
+  kind: "defect" | "other_size" | string;
+  location_id: number;
+  location_name: string;
+  quantity: string;
+  text: string;
+};
+
+export type IssuePreviewOut = {
+  position_id: number;
+  product_id: number;
+  required: string;
+  required_dimensions: Record<string, unknown> | null;
+  required_dimensions_label: string | null;
+  collected: string;
+  deficit: string;
+  candidates: IssuePreviewCandidate[];
+  hints: IssuePreviewHint[];
+};
+
+/** Тело `issue-preview`: схема сервера с `extra="forbid"` — лишнего поля нет. */
+export type IssuePreviewRequest = {
+  excluded_balance_ids: number[];
+  release_quantity: number | string | null;
+  product_id: number | null;
+};
+
+/**
+ * Выбор оператора в «Взять в работу» одной позиции: только снятые галочки и
+ * стратегия. Все ключи на сервере опциональны (`IssueSelection` в
+ * `production_planning.py`), но для ручной выдачи они объявлены — иначе окно
+ * отправляло бы «пустой» выбор вместо намерения.
+ */
+export type IssueManualSelection = {
+  excluded_balance_ids: number[];
+  shortage_strategy: ShortageStrategy;
+  auto: false;
+  idempotency_key?: string | null;
+};
+
+/**
+ * Групповой запуск: галочек нет, подбор сам, итог один общий. `excluded_balance_ids`
+ * в payload отсутствует вовсе — сервер всё равно обнуляет его при `auto`.
+ */
+export type IssueAutoSelection = {
+  auto: true;
+  idempotency_key?: string | null;
+};
+
+export type IssueSelection = IssueManualSelection | IssueAutoSelection;
+
+export type IssueTransferSummary = {
+  transfer_id: number;
+  transfer_no: string;
+  from_location_name: string | null;
+  to_location_name: string | null;
+  target_sequence: number | null;
+  quantity: string;
+};
+
+export type IssueSkippedStageSummary = {
+  task_id: number;
+  sequence: number;
+  stage_name: string | null;
+};
+
+/**
+ * Итог выдачи одного запуска. `issue_no === null` — общий итог группового
+ * запуска, где выдач несколько и номер у каждой свой.
+ */
+export type IssueSummary = {
+  issue_no: string | null;
+  required: string | null;
+  collected: string | null;
+  deficit: string | null;
+  transfers: IssueTransferSummary[];
+  skipped_stages: IssueSkippedStageSummary[];
+};
+
+/**
+ * Предпросмотр подбора источника (#282). Вызов не мутирует БД, поэтому его
+ * можно дёргать при каждом изменении галочек — пересчитаются «остаток после»
+ * и итог.
+ */
+export async function issuePreview(positionId: number, payload: IssuePreviewRequest) {
+  const { data } = await apiClient.post<IssuePreviewOut>(
+    `/production-planning/rows/${positionId}/issue-preview`,
+    payload,
+  );
+  return data;
+}
 
 export type BatchActionStatus = "success" | "failed" | "skipped";
 
@@ -842,6 +965,12 @@ export async function takeToWork(
    */
   remainderAllocation?: Array<{ balance_id: number; quantity: number }>,
   releaseQuantity?: number,
+  /**
+   * Автоподбор источника выдачи (#282): снятые галочки и стратегия недостачи.
+   * Для нескольких позиций разрешён только `auto: true` — галочки
+   * принадлежат конкретной позиции.
+   */
+  issue?: IssueSelection,
 ) {
   // Источник — решение одной позиции: массовый путь его не выбирает
   // (`ExecutionDialogs` объясняет это оператору). Бэкенд отвечает 422, но
@@ -849,16 +978,33 @@ export async function takeToWork(
   if (remainderAllocation && remainderAllocation.length > 0 && positionIds.length !== 1) {
     throw new Error("Источник выдачи выбирается только для одной позиции");
   }
+  if (issue && remainderAllocation && remainderAllocation.length > 0) {
+    // Сервер отвечает 422 той же формулировкой: источник выбирается один раз.
+    throw new Error(
+      "Источник выдачи выбирается один раз: либо автоподбор (#282), либо явный выбор остатка (remainder_allocation)",
+    );
+  }
+  // Снятые галочки и стратегия живут у одной позиции: групповой запуск умеет
+  // только подбор без галочек (`auto`) с одним общим итогом (#282).
+  if (issue && !issue.auto && positionIds.length !== 1) {
+    throw new Error(
+      "Автоподбор источника выдачи с снятыми галочками доступен для одной позиции; для группового запуска подбор идёт без галочек (auto)",
+    );
+  }
   const payload: {
     position_ids: number[];
     remainder_allocation?: Array<{ balance_id: number; quantity: number }>;
     release_quantity?: number;
+    issue?: IssueSelection;
   } = {
     position_ids: positionIds,
     remainder_allocation: remainderAllocation,
   };
   if (releaseQuantity !== undefined) {
     payload.release_quantity = releaseQuantity;
+  }
+  if (issue !== undefined) {
+    payload.issue = issue;
   }
   const { data } = await apiClient.post<TakeToWorkResponse>("/production-planning/rows/take-to-work", payload);
   return data;

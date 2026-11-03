@@ -54,8 +54,8 @@ const CACHE_DOMAIN_KEYS = {
     ["shopfloor-incoming-transfers"],
     ["shopfloor-daily-plans"],
   ],
-  /** Передачи между участками: готовое к передаче и журнал. */
-  transfers: [["transfers-ready"], ["transfers-history"]],
+  /** Передачи между участками: готовое к передаче, журнал и превью отмены выдачи (#282). */
+  transfers: [["transfers-ready"], ["transfers-history"], ["transfers-issue-cancel-preview"]],
   /** ГХП: снимки и дефекты. */
   spg: [["spg"], ["spgs"], ["spg-snapshot"], ["spg-defects"]],
   /** Склад: остатки и транзакции. */

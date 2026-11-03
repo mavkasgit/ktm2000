@@ -49,13 +49,43 @@ export function fmtQty(value: number | string | null | undefined): string {
 }
 
 /**
- * Количество с живой дробью: `2.5` → «2,5», `2.5004` → «2,5» (точность
- * `QTY_PRECISION`), `2` → «2». Хвостовые нули не печатаются: «2,000» и
- * «2» — одно и то же количество, а разные подписи читаются как разные числа.
+ * Серверная подпись количества: `issue_service._fmt_qty` (#282) отдаёт уже
+ * человеческий русский формат — «40» без хвоста `.000` и «2,5» с запятой.
+ *
+ * Строгий числовой разбор этого модуля читает такую строку как не-число, и
+ * прогонять её через `fmtQty`/`fmtQtyPrecise` нельзя: дробная выдача
+ * печаталась бы прочерком, а прочерк в окне подбора источника означает
+ * «не доходила очередь» (#282). Запятая здесь — не пользовательский ввод
+ * (правило ADR-0032 живёт на вводе оператора), а тот же формат, который этот
+ * модуль сам ставит на выводе, поэтому на входе он и принимается.
+ */
+export function parseServerQty(value: number | string | null | undefined): number | null {
+  if (typeof value === "number") return Number.isFinite(value) ? value : null;
+  if (typeof value !== "string") return null;
+  const trimmed = value.trim();
+  if (trimmed === "") return null;
+  const parsed = Number(trimmed.replace(",", "."));
+  return Number.isFinite(parsed) ? parsed : null;
+}
+
+/** Серверная подпись количества → печать с живой дробью: «2,5» → «2,5». */
+export function fmtServerQty(value: number | string | null | undefined): string {
+  const quantity = parseServerQty(value);
+  if (quantity === null) return QTY_EMPTY;
+  return formatDecimal(quantity);
+}
+
+/** Количество с живой дробью: `2.5` → «2,5», `2.5004` → «2,5» (точность
+ *  `QTY_PRECISION`), `2` → «2». Хвостовые нули не печатаются: «2,000» и
+ *  «2» — одно и то же количество, а разные подписи читаются как разные числа.
  */
 export function fmtQtyPrecise(value: number | string | null | undefined): string {
   const quantity = toQuantityNumber(value);
   if (quantity === null) return QTY_EMPTY;
+  return formatDecimal(quantity);
+}
+
+function formatDecimal(quantity: number): string {
   return String(Number(quantity.toFixed(QTY_PRECISION))).replace(".", ",");
 }
 

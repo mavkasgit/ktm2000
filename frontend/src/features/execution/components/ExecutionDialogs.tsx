@@ -55,6 +55,8 @@ interface ExecutionDialogsProps {
   onBulkResultsChange: (open: boolean) => void;
   bulkSummary: BulkActionSummary | null;
   bulkResults: BulkActionResultItem<number>[];
+  /** Общий итог выдачи группового запуска (#282), одна строка над позициями. */
+  bulkOverallNote?: string | null;
 
   // Bulk delete confirm
   bulkDeleteConfirmOpen: boolean;
@@ -101,6 +103,7 @@ export function ExecutionDialogs({
   onBulkResultsChange,
   bulkSummary,
   bulkResults,
+  bulkOverallNote,
   bulkDeleteConfirmOpen,
   onBulkDeleteConfirmChange,
   bulkSoftDeleting,
@@ -365,6 +368,7 @@ export function ExecutionDialogs({
         title="Результат массового действия"
         summary={bulkSummary}
         results={bulkResults}
+        overallNote={bulkOverallNote}
       />
 
       <AlertDialog open={bulkDeleteConfirmOpen} onOpenChange={onBulkDeleteConfirmChange}>

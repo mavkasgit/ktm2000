@@ -108,6 +108,11 @@ export type IncomingTransfer = {
   plan_position_id: number;
   /** Габарит переданного (тикет #95): колонка «Размер» в UI. */
   dimensions?: Record<string, unknown> | null;
+  /**
+   * Номер выдачи (#282): одна выдача — N передач с общим `issue_no`. У обычной
+   * ручной передачи — `null`, и тогда «отменить выдачу целиком» нечего.
+   */
+  issue_no?: string | null;
 };
 
 export type IncomingTransfersResponse = {
@@ -335,6 +340,69 @@ export async function listTransferHistory(
   const { data } = await apiClient.get<TransferHistoryResponse>(
     `/transfers/history${qs ? `?${qs}` : ""}`,
     makeRequestConfig(options),
+  );
+  return data;
+}
+
+// ---------------------------------------------------------------------------
+// Отмена выдачи целиком (#282). `GET /transfers/issues/{issue_no}/cancel-preview`
+// — только чтение: что вернётся, какие этапы снова пойдут в работу и можно ли
+// отменять. `POST …/cancel` — сама отмена; отказ — HTTP 400 с русским текстом
+// в `detail`, своего формулирования причин на фронте нет.
+// ---------------------------------------------------------------------------
+
+export type IssueCancelReturnRow = {
+  transfer_id: number;
+  transfer_no: string;
+  location_id: number;
+  location_name: string;
+  quantity: string;
+};
+
+export type IssueCancelStageRow = {
+  task_id: number;
+  sequence: number;
+  stage_name: string | null;
+};
+
+export type IssueCancelPreview = {
+  issue_no: string;
+  returns: IssueCancelReturnRow[];
+  stages: IssueCancelStageRow[];
+  can_cancel: boolean;
+  /** Причина отказа — русским текстом; `null`, когда отменять можно. */
+  reason: string | null;
+  /** Готовая human-строка: числовых id склада в ней нет, только имена. */
+  summary: string;
+};
+
+export type IssueCancelResult = {
+  issue_no: string;
+  cancelled_transfers: Array<{ transfer_id: number; transfer_no: string; status: string | null }>;
+  restored_stages: IssueCancelStageRow[];
+};
+
+export async function previewIssueCancellation(
+  issueNo: string,
+): Promise<IssueCancelPreview> {
+  const { data } = await apiClient.get<IssueCancelPreview>(
+    `/transfers/issues/${encodeURIComponent(issueNo)}/cancel-preview`,
+  );
+  return data;
+}
+
+export async function cancelIssue(
+  issueNo: string,
+  comment?: string,
+  options?: ShopfloorRequestOptions,
+): Promise<IssueCancelResult> {
+  const { data } = await apiClient.post<IssueCancelResult>(
+    `/transfers/issues/${encodeURIComponent(issueNo)}/cancel`,
+    {},
+    {
+      params: comment ? { comment } : undefined,
+      ...makeRequestConfig(options),
+    },
   );
   return data;
 }

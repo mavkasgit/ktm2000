@@ -13,11 +13,16 @@ import {
   softDeletePositionsExecutionBatch,
   manualPassPositionsExecutionBatch,
   type ListProductionPlanningRowsParams,
+  type IssueManualSelection,
+  type IssueSelection,
+  type IssueSummary,
   type ProductionPlanningRow,
   type ProductionPlanningRowDetail,
 } from "@/shared/api/productionPlans";
+import { IssueSourceDialog } from "../components/IssueSourceDialog";
 import { RemainderAllocationDialog } from "../components/RemainderAllocationDialog";
 import type { SourceAllocation } from "../components/RemainderAllocationDialog";
+import { buildAutoIssueSelection, summaryCollectLine } from "../lib/issueSource";
 import { listSections } from "@/shared/api/sections";
 import { useFilterableTable } from "@/shared/hooks/useFilterableTable";
 import type { SortConfig } from "@/shared/hooks/useTableQueryEngine";
@@ -112,6 +117,17 @@ const EXECUTION_COLUMN_LABELS: Record<string, string> = Object.fromEntries(
   ),
 );
 
+
+/**
+ * Строка итога выдачи для оператора (#282): номер выдачи и «собрано X из Y шт.,
+ * дефицит Z». `issue_no === null` — общий итог группового запуска, где выдач
+ * несколько и номер у каждой свой, поэтому в текст он не попадает.
+ */
+function issueToastLine(summary: IssueSummary | null | undefined): string | null {
+  if (!summary) return null;
+  const collect = summaryCollectLine(summary);
+  return summary.issue_no ? `Выдача ${summary.issue_no}: ${collect}` : collect;
+}
 
 export function ExecutionPage() {
   const [selectedPositionId, setSelectedPositionId] = useState<number | null>(null);
@@ -262,6 +278,23 @@ export function ExecutionPage() {
     comment: "",
     positionIds: [],
   });
+  // Окно подбора источника (#282) — основной путь «Взять в работу» одной
+  // позиции. `remainderDialog` остаётся alternate путём «выбрать один остаток».
+  const [issueDialog, setIssueDialog] = useState<{
+    open: boolean;
+    positionId: number | null;
+    sku: string;
+    name: string;
+    quantity: number;
+  }>({
+    open: false,
+    positionId: null,
+    sku: "",
+    name: "",
+    quantity: 0,
+  });
+  /** Общий итог группового запуска: печатается в окне результатов одной строкой. */
+  const [bulkIssueNote, setBulkIssueNote] = useState<string | null>(null);
 
   const { data: manualPassDetail, isLoading: manualPassDetailLoading } = useQuery<ProductionPlanningRowDetail>({
     queryKey: queryKeys.execution.rowDetail(manualPassDialog.positionId as number),
@@ -273,33 +306,44 @@ export function ExecutionPage() {
     mutationFn: ({
       positionIds,
       remainderAllocation,
+      issue,
     }: {
       positionIds: number[];
       remainderAllocation?: Array<{ balance_id: number; quantity: number }>;
-    }) => takeToWork(positionIds, remainderAllocation),
+      /** Подбор источника (#282): галочки одной позиции или `auto` без галочек. */
+      issue?: IssueSelection;
+    }) => takeToWork(positionIds, remainderAllocation, undefined, issue),
     onSuccess: (data) => {
       const results = data.results.map<BulkActionResultItem<number>>((result) => ({
         id: result.position_id,
         status: result.status === "already_started" ? "skipped" : result.status,
         reason: result.reason,
-        meta: { tasks_created: result.tasks_created },
+        // Итог выдачи по позиции печатается в окне результатов массового
+        // действия (#282) — оператор видит, сколько реально взяли.
+        meta: {
+          tasks_created: result.tasks_created,
+          issue_line: result.issue ? summaryCollectLine(result.issue) : null,
+        },
       }));
       const summary = summarizeBulkResults(results);
       setBulkResults(results);
       setBulkSummary(summary);
+      setBulkIssueNote(issueToastLine(data.issue_summary));
       if (summary.failed > 0 || summary.skipped > 0) setBulkResultsOpen(true);
       const successCount = summary.success;
       const failCount = summary.failed;
       const alreadyCount = summary.skipped;
+      const issueLine = issueToastLine(data.issue_summary);
       if (failCount > 0) {
         toast({ title: "Частичный успех", description: `${successCount} успешно, ${failCount} ошибок, ${alreadyCount} уже запущено`, variant: "destructive" });
       } else {
-        toast({ title: "Запуск завершён", description: `${successCount} запущено, ${alreadyCount} уже было запущено`, variant: "success" });
+        toast({ title: "Запуск завершён", description: [`${successCount} запущено, ${alreadyCount} уже было запущено`, issueLine].filter(Boolean).join(". "), variant: "success" });
       }
       void invalidateAfter(queryClient, "executionChanged");
       bulkSelection.clear();
       setSelectionOrder([]);
       setRemainderDialog((prev) => ({ ...prev, open: false }));
+      setIssueDialog((prev) => ({ ...prev, open: false }));
       setLaunchDialog({ open: false, mode: "single", positionIds: [] });
     },
     onError: (err) => toast({ title: "Ошибка запуска", description: getErrorMessage(err), variant: "destructive" }),
@@ -389,7 +433,9 @@ export function ExecutionPage() {
       toast({ title: "Невозможно запустить", description: reason, variant: "destructive" });
       return;
     }
-    setRemainderDialog({
+    // Основной путь — подбор источника (#282): сервер считает порядок и
+    // количества, оператор снимает галочки склада и выбирает стратегию.
+    setIssueDialog({
       open: true,
       positionId: row.plan_position_id,
       sku: row.source_sku,
@@ -397,6 +443,18 @@ export function ExecutionPage() {
       quantity: row.quantity,
     });
   }, []);
+
+  /** Alternate путь #314: один конкретный остаток, без подбора по складам. */
+  const handleExplicitSourcePick = useCallback(() => {
+    setIssueDialog((prev) => ({ ...prev, open: false }));
+    setRemainderDialog({
+      open: true,
+      positionId: issueDialog.positionId,
+      sku: issueDialog.sku,
+      name: issueDialog.name,
+      quantity: issueDialog.quantity,
+    });
+  }, [issueDialog]);
 
   const handleManualPass = useCallback((row: ProductionPlanningRow) => {
     if (!row.route_id || !["approved", "released"].includes(row.position_status)) {
@@ -428,6 +486,21 @@ export function ExecutionPage() {
       setRemainderDialog((prev) => ({ ...prev, open: false }));
     },
     [remainderDialog.positionId, takeToWorkMutation],
+  );
+
+  /**
+   * Подтверждение подбора источника (#282): снятые галочки и стратегия уезжают
+   * в `issue`, количество по складам не передаётся вовсе — его считает сервер.
+   */
+  const confirmIssueLaunch = useCallback(
+    (selection: IssueManualSelection) => {
+      if (!issueDialog.positionId) return;
+      takeToWorkMutation.mutate({
+        positionIds: [issueDialog.positionId],
+        issue: selection,
+      });
+    },
+    [issueDialog.positionId, takeToWorkMutation],
   );
 
   const confirmManualPass = useCallback(() => {
@@ -735,12 +808,24 @@ export function ExecutionPage() {
         return row ? getLaunchBlockReason(row) : "Строка не найдена";
       },
       run: async (ids) => {
-        const data = await takeToWork(ids);
+        // Групповой запуск (#282): подбор без галочек — `auto: true`, снятых
+        // id в payload нет вовсе, итог один общий (`issue_no === null`).
+        setBulkIssueNote(null);
+        const data = await takeToWork(
+          ids,
+          undefined,
+          undefined,
+          buildAutoIssueSelection(`take-to-work:bulk:${ids.join(",")}:${Date.now()}`),
+        );
+        setBulkIssueNote(issueToastLine(data.issue_summary));
         return data.results.map((result) => ({
           id: result.position_id,
           status: result.status === "already_started" ? "skipped" : result.status,
           reason: result.reason,
-          meta: { tasks_created: result.tasks_created },
+          meta: {
+            tasks_created: result.tasks_created,
+            issue_line: result.issue ? summaryCollectLine(result.issue) : null,
+          },
         }));
       },
     },
@@ -1015,11 +1100,23 @@ export function ExecutionPage() {
         onBulkResultsChange={setBulkResultsOpen}
         bulkSummary={bulkSummary}
         bulkResults={bulkResults}
+        bulkOverallNote={bulkIssueNote}
         bulkDeleteConfirmOpen={bulkDeleteConfirmOpen}
         onBulkDeleteConfirmChange={setBulkDeleteConfirmOpen}
         bulkSoftDeleting={bulkSoftDeleting}
         bulkSelectedCount={bulkSelection.selectedCount}
         onConfirmBulkSoftDelete={handleBulkSoftDelete}
+      />
+
+      <IssueSourceDialog
+        open={issueDialog.open}
+        onOpenChange={(open) => setIssueDialog((prev) => ({ ...prev, open }))}
+        positionId={issueDialog.positionId}
+        positionSku={issueDialog.sku}
+        positionName={issueDialog.name}
+        pending={takeToWorkMutation.isPending}
+        onConfirm={confirmIssueLaunch}
+        onPickExplicitSource={handleExplicitSourcePick}
       />
 
       <RemainderAllocationDialog
