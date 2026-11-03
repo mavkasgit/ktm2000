@@ -23,7 +23,8 @@ import { workerSlot } from "./worker-slot";
  * У каждого воркера Playwright своя БД и свой backend, а `/api` стенда —
  * общий адрес: роутер `scripts/e2e-api-router.mjs` выбирает backend по
  * заголовку `x-e2e-worker`. Его и ставит фикстура `extraHTTPHeaders` — по
- * `workerInfo.workerIndex`, то есть по тому воркеру, который исполняет тест.
+ * `workerInfo.parallelIndex`, то есть по слоту того воркера, который исполняет
+ * тест (`parallelIndex` уникален среди живых, см. `worker-slot.ts`).
  * Без него запросы ушли бы в backend 0, и `apiResetAll()` одного воркера
  * по-прежнему сносил бы данные другого.
  */
@@ -213,7 +214,11 @@ const testWithWorkerStand = testWithPassCache.extend<{
   extraHTTPHeaders: Record<string, string>;
 }>({
   extraHTTPHeaders: async ({}, use, workerInfo) => {
-    await use({ "x-e2e-worker": String(workerSlot(workerInfo.workerIndex)) });
+    // `parallelIndex`, а не `workerIndex`: первый уникален среди **живых**
+    // воркеров (документация Playwright), второй — сквозной счётчик
+    // процессов. На паре {0, 2} остаток по модулю давал один слот, и два
+    // воркера сеяли одну БД (#289).
+    await use({ "x-e2e-worker": String(workerSlot(workerInfo.parallelIndex)) });
   },
 });
 

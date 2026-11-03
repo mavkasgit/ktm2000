@@ -7,6 +7,8 @@
     "dev": "vite",
     "build": "node ../scripts/heavy.mjs -- tsc -b && node ../scripts/heavy.mjs -- vite build",
     "lint": "node ../scripts/heavy.mjs -- eslint .",
+    "lint:ratchet": "node ../scripts/heavy.mjs -- node scripts/lint-ratchet.mjs",
+    "lint:strict": "node ../scripts/heavy.mjs -- eslint . --max-warnings=0",
     "typecheck": "node ../scripts/heavy.mjs -- tsc -b",
     "typecheck:e2e": "node ../scripts/heavy.mjs -- tsc -p tsconfig.e2e.json --noEmit",
     "prebuild": "node ../scripts/verify-sync.mjs --other ../hrms --if-enabled",

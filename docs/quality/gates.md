@@ -29,7 +29,7 @@
 | `ruff` | fast | линтер backend | pre-commit, CI ruff.yml | да | prove-checks 2026-11-03 |
 | `frontend-types` | fast | типы продакшн-кода фронта | CI frontend-tests.yml | да | prove-checks 2026-11-03 |
 | `frontend-types-e2e` | fast | типы e2e-спек | CI frontend-tests.yml | да | prove-checks 2026-11-03 |
-| `frontend-lint` | fast | ESLint: архитектурные границы FSD | pre-commit, CI frontend-tests.yml | да | prove-checks 2026-11-03 |
+| `frontend-lint` | fast | ESLint: архитектурные границы FSD (ошибки) и потолок предупреждений по правилам и файлам — `npm run lint:ratchet` | pre-commit, CI frontend-tests.yml | да | prove-checks 2026-11-03: ошибки и рост предупреждений |
 | `backend-tests` | full | pytest backend (создаёт свою БД) | CI backend-tests.yml | да | prove-checks --heavy 2026-11-03 |
 | `frontend-unit` | full | vitest с покрытием | CI frontend-tests.yml | да | prove-checks --heavy 2026-11-03 |
 | `frontend-test-count` | full | vitest-набор не меньше записанного в baseline | CI frontend-tests.yml | да | prove-checks --heavy 2026-11-03 |
@@ -70,6 +70,28 @@ missing. Локально missing — честная пометка, а не з�
 `--strict` сегодня передают только сами шаги. Общий прогон `npm run gate --
 --strict` в CI — #364; до него фраза «в CI зовите с --strict» читается как
 описание намерения.
+
+## Рэтчет предупреждений ESLint (#372)
+
+`frontend-lint` запускает не голый `eslint`, а `npm run lint:ratchet`
+([`frontend/scripts/lint-ratchet.mjs`](../../frontend/scripts/lint-ratchet.mjs)).
+Он считает предупреждения по правилам **и по файлам** и сверяет с
+[`frontend/eslint-warnings-baseline.json`](../../frontend/eslint-warnings-baseline.json):
+
+- рост числа (всего, по правилу или по файлу) — красный: накопить
+  предупреждения незаметно нельзя, и переток «один файл починили, другой
+  сломали» при неизменной сумме тоже виден;
+- уменьшение — зелёный, потолок подтягивается той же правкой:
+  `npm run lint:ratchet -- --update`; рост потолка — только явно
+  `--update --force` и попадает в diff и в ревью;
+- ошибки ESLint (`errorCount > 0`) и фатальный отказ линтера — красные:
+  архитектурные границы FSD этим шагом не ослаблены, их проверяет тот же
+  прогон (пробник `npm run prove-checks -- --only=frontend-lint`).
+
+`npm run lint` остаётся ручным прогоном без потолка (быстрый взгляд),
+`npm run lint:strict` (`eslint . --max-warnings=0`) — цель, а не гейт: он
+станет обычным шагом, когда потолок дойдёт до нуля. Замер 2026-11-03:
+48 предупреждений `react-hooks/exhaustive-deps` в 25 файлах при 0 ошибок.
 
 ## Чем доказана способность падать
 

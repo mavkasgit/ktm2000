@@ -149,9 +149,9 @@ const STEPS = [
   {
     name: "frontend-lint",
     tier: "fast",
-    command: "npm run lint",
+    command: "npm run lint:ratchet",
     ci: "frontend-tests.yml",
-    what: " ESLint: архитектурные границы FSD",
+    what: " ESLint: архитектурные границы FSD (ошибки) и потолок предупреждений (рэтчет)",
   },
   {
     name: "backend-tests",

@@ -523,7 +523,10 @@ export function RouteFlowBuilder({ open, onOpenChange, route, onSave, readOnly =
 
     window.addEventListener('keydown', handleKeyDown);
     return () => window.removeEventListener('keydown', handleKeyDown);
-  }, [open, selectedEdgeId, selectedNodeId, deleteNode]);
+    // `readOnly` — не только первая проверка при подписке: маршрут может
+    // перейти в «только чтение», пока окно открыто, и обработчик без этой
+    // зависимости продолжал бы удалять узлы.
+  }, [open, readOnly, selectedEdgeId, selectedNodeId, deleteNode, setEdges]);
 
   // Load section usage across all routes
   useEffect(() => {

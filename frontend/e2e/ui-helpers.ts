@@ -2,6 +2,8 @@ import { expect, type Locator, type Page } from "@playwright/test";
 import path from "path";
 import { fileURLToPath } from "url";
 
+import { ARRIVAL_BUDGET_MS, gotoRoute } from "./route-arrival.mjs";
+
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 
 /**
@@ -68,14 +70,41 @@ export async function fetchBoardViaUI(page: Page, sectionId: number) {
     tasks: Array<Record<string, unknown>>;
   };
 }
-/** Подтвердить диалог «Запуск в производство» после «Взять в работу». */
+/**
+ * Подтвердить запуск после «Взять в работу» — в том окне, которое открылось.
+ *
+ * Продукт с #282 ведёт основной путь через окно подбора источника
+ * (`IssueSourceDialog`, заголовок «Взять в работу <SKU>»): сервер сам считает,
+ * с каких складов брать материал, а запуск подтверждает кнопка «Взять в работу»
+ * в этом окне. Прежнее окно «Запуск в производство»
+ * (`RemainderAllocationDialog`) осталось alternate-путём #314 — в него ведёт
+ * кнопка «Выбрать один остаток». Хелпер ждёт **любое из двух** и подтверждает в
+ * открывшемся; проверка результата не ослаблена: `takeToWorkViaUI` после этого
+ * требует, чтобы строка стала «Запущен».
+ *
+ * Почему не только «Запуск в производство», как было: на базе с UI #282
+ * (`c2107f4f`) это окно не открывается вовсе, и `sawing-four-lengths-cycle`
+ * падал детерминированно (не флейк изоляции #289).
+ */
 export async function confirmProductionLaunchViaUI(page: Page) {
-  const launchDialog = page.getByRole("dialog").filter({ hasText: "Запуск в производство" });
-  await expect(launchDialog).toBeVisible({ timeout: 10_000 });
-  const launchBtn = launchDialog.getByRole("button", { name: "Запустить в работу" });
+  const issueDialog = page.getByRole("dialog").filter({ hasText: "Взять в работу" });
+  const allocationDialog = page.getByRole("dialog").filter({ hasText: "Запуск в производство" });
+  await expect(issueDialog.or(allocationDialog)).toBeVisible({ timeout: 10_000 });
+
+  if (await issueDialog.isVisible().catch(() => false)) {
+    // Кнопка задизейблена, пока не пришёл предпросмотр подбора: ждём именно
+    // «включилась», иначе клик уйдёт в no-op и следующий шаг повиснет.
+    const confirmIssue = issueDialog.getByTestId("issue-confirm-launch");
+    await expect(confirmIssue).toBeEnabled({ timeout: 20_000 });
+    await confirmIssue.click();
+    await expect(issueDialog).not.toBeVisible({ timeout: 15_000 });
+    return;
+  }
+
+  const launchBtn = allocationDialog.getByRole("button", { name: "Запустить в работу" });
   await expect(launchBtn).toBeEnabled({ timeout: 10_000 });
   await launchBtn.click();
-  await expect(launchDialog).not.toBeVisible({ timeout: 15_000 });
+  await expect(allocationDialog).not.toBeVisible({ timeout: 15_000 });
 }
 
 /** Открыть диалог создания артикула и дождаться его формы. */
@@ -542,10 +571,7 @@ async function clickFirstRowAndWaitGone(
  * выпуски) — вызывающий читает `0` как «на маршруте больше нечего делать».
  */
 export async function sendReadyTransfersViaUI(page: Page, sku: string): Promise<number> {
-  await gotoWithTransientRetry(page, "/transfers");
-  await expect(page.getByRole("heading", { name: "Передачи между ГХП" })).toBeVisible({
-    timeout: 10_000,
-  });
+  await arriveAtRoute(page, "/transfers");
 
   // Ready-строки — в таблице «Готово к передаче»:
   //  • «Передать» — обычная передача на следующий участок;
@@ -637,10 +663,7 @@ export async function transferRouteChainViaUI(
   positionId: number,
   maxSteps = 100,
 ): Promise<string[]> {
-  await gotoWithTransientRetry(page, "/transfers");
-  await expect(page.getByRole("heading", { name: "Передачи между ГХП" })).toBeVisible({
-    timeout: 10_000,
-  });
+  await arriveAtRoute(page, "/transfers");
 
   // «Журнал передач» — боковая панель: без неё таблицы истории нет в DOM.
   const journalOpener = page.locator('button[title="Открыть журнал передач"]');
@@ -846,19 +869,44 @@ export async function completeBoardTasksViaBulkUI(page: Page, sku: string): Prom
   return filled;
 }
 
-/** Переход с одной повторной попыткой только для временного обрыва dev-сервера. */
-async function gotoWithTransientRetry(page: Page, url: string): Promise<void> {
-  for (let attempt = 0; attempt < 2; attempt++) {
-    try {
-      await page.goto(url, { waitUntil: "domcontentloaded", timeout: 60_000 });
-      return;
-    } catch (error) {
-      const message = error instanceof Error ? error.message : String(error);
-      const transient = /ERR_CONNECTION_(?:TIMED_OUT|RESET|REFUSED)|ERR_NETWORK_CHANGED/.test(message);
-      if (!transient || attempt === 1) throw error;
-      await page.waitForTimeout(1_000);
-    }
-  }
+/** Заголовок, по которому видно, что маршрут смонтировался. */
+type RouteUrl = "/transfers" | "/section-tasks";
+
+const ROUTE_HEADINGS: Record<RouteUrl, string> = {
+  "/transfers": "Передачи между ГХП",
+  "/section-tasks": "Участки",
+};
+
+/**
+ * Переход на маршрут: ждёт монтирование заголовка и повторяет переход, если
+ * документ не сменился (#289).
+ *
+ * Что было: `page.goto(url, { waitUntil: "domcontentloaded" })` с повтором только
+ * на временный обрыв dev-сервера. В серии прогонов это дало падение, где после
+ * `goto("/section-tasks")` заголовок не появился за 10 с, а на скриншоте остался
+ * прежний маршрут с открытым модальным окном, то есть состояние **прежнего**
+ * документа: в нём нового маршрута не будет никогда, и ожидание 10 с ничего не
+ * доказывало.
+ *
+ * Что стало: `gotoRoute` (`route-arrival.mjs`) сверяет идентичность документа до
+ * и после перехода, повторяет переход, если документ тот же, и даёт повторному
+ * заходу свой бюджет. Ассерт внизу остаётся прежним и с прежним бюджетом — он и
+ * выносит вердикт, поэтому падение по-прежнему читается как «заголовок не
+ * виден», а не как «хелпер не доехал».
+ */
+async function arriveAtRoute(page: Page, url: RouteUrl): Promise<void> {
+  const heading = page.getByRole("heading", { name: ROUTE_HEADINGS[url] });
+  await gotoRoute(page, url, {
+    waitForRoute: (budgetMs) =>
+      expect(heading)
+        .toBeVisible({ timeout: budgetMs })
+        .then(
+          () => true,
+          () => false,
+        ),
+    log: (line) => console.log(line),
+  });
+  await expect(heading).toBeVisible({ timeout: ARRIVAL_BUDGET_MS });
 }
 
 /** Завершить завершаемые задачи SKU на производственных участках.
@@ -872,7 +920,7 @@ export async function completeAllSectionTasksViaUI(
   sku: string,
   sections?: string[],
 ): Promise<number> {
-  await gotoWithTransientRetry(page, "/section-tasks");
+  await arriveAtRoute(page, "/section-tasks");
 
   // Плитки производственных участков (SectionSwitcherTiles) — кнопки с бейджами
   // «ОЖ: N» / «ВР: N». Порядок обхода — с ненулевым бейджем вперёд, но САМ
@@ -933,8 +981,7 @@ export async function completeAllSectionTasksViaUI(
       await page.waitForTimeout(500);
     }
 
-    await gotoWithTransientRetry(page, "/section-tasks");
-    await expect(page.getByRole("heading", { name: "Участки" })).toBeVisible({ timeout: 10_000 });
+    await arriveAtRoute(page, "/section-tasks");
     await expect(tiles.first()).toBeVisible({ timeout: 20_000 });
   }
 
@@ -953,10 +1000,7 @@ export async function completeAllSectionTasksViaUI(
  * зеленел бы на данных прошлых прогонов в общей БД стенда.
  */
 export async function expectShippedViaUI(page: Page, sku: string, positionIds: number[]) {
-  await gotoWithTransientRetry(page, "/transfers");
-  await expect(page.getByRole("heading", { name: "Передачи между ГХП" })).toBeVisible({
-    timeout: 10_000,
-  });
+  await arriveAtRoute(page, "/transfers");
 
   // «Журнал передач» — боковая панель: открываем её, иначе таблицы в DOM нет.
   const journalOpener = page.locator('button[title="Открыть журнал передач"]');
