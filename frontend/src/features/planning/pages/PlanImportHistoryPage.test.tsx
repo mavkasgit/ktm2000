@@ -195,7 +195,9 @@ describe("PlanImportHistoryPage", () => {
     expect(await screen.findByText("сентябрь.xlsx")).toBeTruthy();
     expect(screen.queryByText("июль.xlsx")).toBeNull();
 
-    fireEvent.click(screen.getByLabelText("Показывать убранные из списка"));
+    fireEvent.click(
+      screen.getByRole("button", { name: "Показывать убранные из списка" }),
+    );
 
     expect(await screen.findByText("июль.xlsx")).toBeTruthy();
     expect(screen.getByText("Убрана из списка")).toBeTruthy();

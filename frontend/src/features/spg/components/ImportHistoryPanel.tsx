@@ -9,7 +9,7 @@
  * импорта зеркальными компенсациями; «удалить» — убрать запись из списка, не
  * трогая ledger.
  */
-import { useState } from "react";
+import { useMemo, useState } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import {
   AlertDialog,
@@ -26,8 +26,10 @@ import {
   DialogHeader,
   DialogTitle,
   DATA_TABLE_STYLES,
+  FiltersPanel,
   TABLE_ROW_DENSE,
   toast,
+  type FiltersPanelField,
 } from "@/shared/ui";
 import { Loader2, Undo2 } from "lucide-react";
 import { getErrorMessage } from "@/shared/api/client";
@@ -52,6 +54,7 @@ import {
   type ImportOperationStep,
 } from "@/shared/api/stock";
 import { cn } from "@/shared/utils/cn";
+import { ROW_TONE_TEXT, rowToneFill, type RowTone } from "@/shared/lib/rowTones";
 
 /** Заглушка этапа для кода вне справочника: подписывать его надо, рисуя — нечем. */
 const EMPTY_STEP = {
@@ -112,9 +115,16 @@ const HIDE_REASON = "Убрано из списка оператором";
  * `py-1.5`) выглядела на экране мельче соседних страниц и разъезжалась с ними
  * при любой правке плотности там.
  */
-const HEADER_CELL = cn(DATA_TABLE_STYLES.headerCell, TABLE_ROW_DENSE.headerCell);
+const HEADER_CELL = cn(
+  DATA_TABLE_STYLES.headerRow,
+  DATA_TABLE_STYLES.headerCell,
+  TABLE_ROW_DENSE.headerCell,
+);
 const CELL = cn(TABLE_ROW_DENSE.cell, "align-middle");
 const ROW_ACTION = TABLE_ROW_DENSE.actionButton;
+
+/** Колонок в списке батчей: шесть, включая колонку действий без подписи. */
+const COLUMN_COUNT = 6;
 
 export function ImportHistoryPanel() {
   const queryClient = useQueryClient();
@@ -123,6 +133,9 @@ export function ImportHistoryPanel() {
   const [detailId, setDetailId] = useState<number | null>(null);
   const [rollbackTarget, setRollbackTarget] = useState<StockImportBatch | null>(null);
   const [hideTarget, setHideTarget] = useState<StockImportBatch | null>(null);
+  // Поиск клиентский: список батчей отдаётся целиком (страниц у него нет),
+  // поэтому фильтр живёт на уже загруженных строках и в запрос не уходит.
+  const [search, setSearch] = useState("");
 
   const { data: batches, isLoading, error } = useQuery({
     queryKey: queryKeys.stock.importBatches(),
@@ -158,26 +171,49 @@ export function ImportHistoryPanel() {
     },
   });
 
+  /**
+   * Отбор — по тому, что оператор видит в строке: файл, склад, состояние.
+   * Серверных фильтров у истории импорта нет, а строк в ней десятки, не тысячи.
+   */
+  const visibleBatches = useMemo(() => {
+    const query = search.trim().toLowerCase();
+    const rows = batches ?? [];
+    if (!query) return rows;
+    return rows.filter((batch) =>
+      [batch.filename ?? "", batch.location_name ?? "", statusLabel(batch)].some((value) =>
+        value.toLowerCase().includes(query),
+      ),
+    );
+  }, [batches, search]);
+
+  const filterFields: FiltersPanelField[] = [
+    {
+      kind: "search",
+      key: "search",
+      value: search,
+      onChange: setSearch,
+      placeholder: "Поиск по файлу, складу, состоянию…",
+      layoutSpan: "min-w-[260px] flex-shrink-0",
+    },
+  ];
+
   return (
     <div className="space-y-1.5">
-      {isLoading ? (
-        <div className="flex items-center gap-2 py-3 text-sm text-muted-foreground">
-          <Loader2 className="h-3.5 w-3.5 animate-spin" />
-          Загрузка истории…
-        </div>
-      ) : error ? (
+      <FiltersPanel
+        compact
+        fields={filterFields}
+        onReset={() => setSearch("")}
+        hasActiveFilters={search.trim().length > 0}
+      />
+      {error ? (
         <p className="text-sm text-destructive">
           Не удалось загрузить историю: {getErrorMessage(error)}
         </p>
-      ) : !batches || batches.length === 0 ? (
-        <p className="text-sm text-muted-foreground py-2">
-          Импортов пока не было.
-        </p>
       ) : (
         <div className={DATA_TABLE_STYLES.container}>
-          <table className="w-full caption-bottom text-sm">
+          <table className="w-full border-separate border-spacing-0 text-sm">
             <thead>
-              <tr className={DATA_TABLE_STYLES.headerRow}>
+              <tr>
                 <th className={HEADER_CELL}>Файл</th>
                 <th className={HEADER_CELL}>Склад</th>
                 <th className={HEADER_CELL}>Когда</th>
@@ -187,78 +223,107 @@ export function ImportHistoryPanel() {
               </tr>
             </thead>
             <tbody>
-              {batches.map((batch) => {
-                const blockedLabel = importRollbackBlockerLabel(
-                  batch.rollback_blocked_reason,
-                );
-                const rollbackEnabled = canRollback && batch.can_rollback;
-                return (
-                  <tr key={batch.batch_id} className="border-b border-border last:border-0">
-                    <td className={cn(CELL, "font-medium")}>
-                      {batch.filename ?? (
-                        <span className="text-muted-foreground font-normal">
-                          {batch.legacy ? "файл не сохранился" : "из буфера"}
-                        </span>
-                      )}
-                    </td>
-                    <td className={CELL}>{batch.location_name ?? "—"}</td>
-                    <td className={cn(CELL, "text-muted-foreground whitespace-nowrap")}>
-                      {fmtDate(batch.created_at)}
-                    </td>
-                    <td className={cn(CELL, "tabular-nums whitespace-nowrap")}>
-                      {batch.imported_rows}
-                      {batch.skipped_rows > 0 ? ` / ${batch.skipped_rows} проп.` : ""}
-                    </td>
-                    <td className={cn(CELL, "whitespace-nowrap")}>{statusLabel(batch)}</td>
-                    <td className={CELL}>
-                      <div className="flex items-center justify-end gap-1">
-                        <Button
-                          variant="ghost"
-                          size="sm"
-                          className={ROW_ACTION}
-                          onClick={() => setDetailId(batch.batch_id)}
-                        >
-                          Посмотреть
-                        </Button>
-                        {batch.file_id != null && (
+              {isLoading ? (
+                <tr>
+                  <td
+                    colSpan={COLUMN_COUNT}
+                    className={cn(CELL, "py-6 text-center text-sm text-muted-foreground")}
+                  >
+                    Загрузка истории…
+                  </td>
+                </tr>
+              ) : visibleBatches.length === 0 ? (
+                <tr>
+                  <td
+                    colSpan={COLUMN_COUNT}
+                    className={cn(CELL, "py-6 text-center text-sm text-muted-foreground")}
+                  >
+                    {batches && batches.length > 0
+                      ? "Ничего не найдено по поиску"
+                      : "Импортов пока не было."}
+                  </td>
+                </tr>
+              ) : (
+                visibleBatches.map((batch) => {
+                  const blockedLabel = importRollbackBlockerLabel(
+                    batch.rollback_blocked_reason,
+                  );
+                  const rollbackEnabled = canRollback && batch.can_rollback;
+                  // Отменённый батч читается как закрытый (общий тон `completed`):
+                  // остатки уже вернулись, строка живёт только как запись истории.
+                  const tone: RowTone = batch.status === "rolled_back" ? "completed" : "plain";
+                  return (
+                    <tr
+                      key={batch.batch_id}
+                      style={{ height: TABLE_ROW_DENSE.rowHeightPx }}
+                      className={cn(rowToneFill(tone), ROW_TONE_TEXT[tone], "transition-colors")}
+                    >
+                      <td className={cn(CELL, "font-medium")}>
+                        {batch.filename ?? (
+                          <span className="text-muted-foreground font-normal">
+                            {batch.legacy ? "файл не сохранился" : "из буфера"}
+                          </span>
+                        )}
+                      </td>
+                      <td className={CELL}>{batch.location_name ?? "—"}</td>
+                      <td className={cn(CELL, "text-muted-foreground whitespace-nowrap")}>
+                        {fmtDate(batch.created_at)}
+                      </td>
+                      <td className={cn(CELL, "tabular-nums whitespace-nowrap")}>
+                        {batch.imported_rows}
+                        {batch.skipped_rows > 0 ? ` / ${batch.skipped_rows} проп.` : ""}
+                      </td>
+                      <td className={cn(CELL, "whitespace-nowrap")}>{statusLabel(batch)}</td>
+                      <td className={CELL}>
+                        <div className="flex items-center justify-end gap-1">
                           <Button
                             variant="ghost"
                             size="sm"
                             className={ROW_ACTION}
-                            disabled={
-                              downloadMutation.isPending &&
-                              downloadMutation.variables?.batch_id === batch.batch_id
-                            }
-                            onClick={() => downloadMutation.mutate(batch)}
+                            onClick={() => setDetailId(batch.batch_id)}
                           >
-                            Скачать
+                            Посмотреть
                           </Button>
-                        )}
-                        <Button
-                          variant="ghost"
-                          size="sm"
-                          className={ROW_ACTION}
-                          disabled={!rollbackEnabled}
-                          title={blockedLabel ?? undefined}
-                          onClick={() => setRollbackTarget(batch)}
-                        >
-                          <Undo2 className="h-3.5 w-3.5 mr-1" />
-                          Откатить
-                        </Button>
-                        <Button
-                          variant="ghost"
-                          size="sm"
-                          className={cn(ROW_ACTION, "text-destructive")}
-                          disabled={!canRollback}
-                          onClick={() => setHideTarget(batch)}
-                        >
-                          Удалить
-                        </Button>
-                      </div>
-                    </td>
-                  </tr>
-                );
-              })}
+                          {batch.file_id != null && (
+                            <Button
+                              variant="ghost"
+                              size="sm"
+                              className={ROW_ACTION}
+                              disabled={
+                                downloadMutation.isPending &&
+                                downloadMutation.variables?.batch_id === batch.batch_id
+                              }
+                              onClick={() => downloadMutation.mutate(batch)}
+                            >
+                              Скачать
+                            </Button>
+                          )}
+                          <Button
+                            variant="ghost"
+                            size="sm"
+                            className={ROW_ACTION}
+                            disabled={!rollbackEnabled}
+                            title={blockedLabel ?? undefined}
+                            onClick={() => setRollbackTarget(batch)}
+                          >
+                            <Undo2 className="h-3.5 w-3.5 mr-1" />
+                            Откатить
+                          </Button>
+                          <Button
+                            variant="ghost"
+                            size="sm"
+                            className={cn(ROW_ACTION, "text-destructive")}
+                            disabled={!canRollback}
+                            onClick={() => setHideTarget(batch)}
+                          >
+                            Удалить
+                          </Button>
+                        </div>
+                      </td>
+                    </tr>
+                  );
+                })
+              )}
             </tbody>
           </table>
         </div>
@@ -395,9 +460,9 @@ function ImportBatchDetailDialog({
                 дубль. Оба пустых состояния (`null` и `[]`) печатают прочерк:
                 различаются строки, а не их подписи. */}
             <div className="max-h-[50vh] overflow-y-auto border border-border rounded-lg">
-              <table className="w-full caption-bottom text-sm">
+              <table className="w-full border-separate border-spacing-0 text-sm">
                 <thead>
-                  <tr className={DATA_TABLE_STYLES.headerRow}>
+                  <tr>
                     <th className={HEADER_CELL}>Строка</th>
                     <th className={HEADER_CELL}>Артикул</th>
                     <th className={HEADER_CELL}>Кол-во</th>
@@ -412,7 +477,8 @@ function ImportBatchDetailDialog({
                   {data.rows.map((row) => (
                     <tr
                       key={row.row_id}
-                      className="border-b border-border last:border-0"
+                      style={{ height: TABLE_ROW_DENSE.rowHeightPx }}
+                      className="transition-colors hover:bg-muted/40"
                     >
                       <td className={cn(CELL, "text-muted-foreground tabular-nums")}>
                         {row.source_row_number}

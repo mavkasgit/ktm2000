@@ -215,9 +215,11 @@ test.describe("@ui История импортов плана", () => {
     await expect(hideDialog.getByText("Убрать импорт из списка?")).toBeVisible({ timeout: 10_000 });
     await hideDialog.getByRole("button", { name: "Убрать из списка" }).click();
     await expect(hideDialog).toBeHidden({ timeout: 15_000 });
-    await expect(page.locator("tbody tr")).toHaveCount(0, { timeout: 15_000 });
+    // Пустой список печатает строку-заглушку внутри таблицы (единый стиль
+    // журналов), поэтому «строк нет» проверяется заглушкой, а не нулём `tbody tr`.
+    await expect(page.getByText("Импортов плана пока нет.")).toBeVisible({ timeout: 15_000 });
 
-    await page.getByLabel("Показывать убранные из списка").check();
+    await page.getByRole("button", { name: "Показывать убранные из списка" }).click();
     const hiddenRow = page.locator("tbody tr").filter({ hasText: "Убрана из списка" });
     await expect(hiddenRow).toHaveCount(1, { timeout: 15_000 });
     // Статус у скрытого прежний: скрытость ортогональна статусу (ADR-0056).

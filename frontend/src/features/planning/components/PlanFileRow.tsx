@@ -1,7 +1,9 @@
 import { Fragment, useMemo, useState } from "react"
 import { Download, Eye, EyeOff, FileSpreadsheet, Play, Trash2, Undo2 } from "lucide-react"
 import { useQuery, useQueryClient } from "@tanstack/react-query"
-import { Button, Badge, Dialog, DialogContent, DialogDescription, DialogHeader, DialogTitle, AlertDialog, AlertDialogContent, AlertDialogHeader, AlertDialogTitle, AlertDialogDescription, AlertDialogFooter, AlertDialogAction, AlertDialogCancel, toast } from "@/shared/ui"
+import { Button, Badge, DATA_TABLE_STYLES, Dialog, DialogContent, DialogDescription, DialogHeader, DialogTitle, AlertDialog, AlertDialogContent, AlertDialogHeader, AlertDialogTitle, AlertDialogDescription, AlertDialogFooter, AlertDialogAction, AlertDialogCancel, TABLE_ROW_DENSE, toast } from "@/shared/ui"
+import { ROW_TONE_TEXT, rowToneFill, type RowTone } from "@/shared/lib/rowTones"
+import { cn } from "@/shared/utils/cn"
 import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from "@/shared/ui/tooltip"
 import { PlanFileInfo } from "@/shared/api/productionPlans"
 import { getErrorMessage } from "@/shared/api/client"
@@ -20,6 +22,13 @@ import { queryKeys } from "@/shared/api/queryKeys"
 import { applyChangeSet, rollbackChangeSet } from "../api"
 import { usePermission } from "@/entities/auth"
 import { ApplyImportConfirmDialog } from "./ApplyImportConfirmDialog"
+
+/** Шапка таблицы предпросмотра — тот же общий набор, что и у списка батчей. */
+const headerCellClass = cn(
+  DATA_TABLE_STYLES.headerRow,
+  DATA_TABLE_STYLES.headerCell,
+  TABLE_ROW_DENSE.headerCell,
+)
 
 /**
  * Строка батча импорта плана: файл, подпись плана и действия над батчем.
@@ -71,6 +80,15 @@ export function FileRow({
   const changeSetId = file.change_set_id
   const canApply = (file.status === "parsed" || file.status === "cancelled") && changeSetId != null
   const canRollback = file.status === "applied" && changeSetId != null
+
+  /**
+   * Тон строки — из общего словаря: отменённый батч читается как закрытый
+   * (зачёркнут и приглушён), скрытый — как «убранный из списка», остальные
+   * живут обычным тоном. Своей палитры у строки нет.
+   */
+  const tone: RowTone = file.status === "cancelled" ? "completed" : "plain"
+  const cellClass = TABLE_ROW_DENSE.cell
+  const actionClass = TABLE_ROW_DENSE.actionButton
 
   const { data: lightRows, isLoading: rowsLoading } = useQuery({
     queryKey: [...queryKeys.plan.batchPreview(file.batch_id), "light"],
@@ -127,50 +145,62 @@ export function FileRow({
           выглядел бы живым импортом, а он всего лишь скрыт (ADR-0056). */}
       <tr
         data-testid={`plan-import-row-${file.batch_id}`}
-        className={file.hidden ? "border-b bg-muted/40 text-muted-foreground" : "border-b"}
+        style={{ height: TABLE_ROW_DENSE.rowHeightPx }}
+        className={cn(
+          rowToneFill(tone),
+          ROW_TONE_TEXT[tone],
+          file.hidden && "text-muted-foreground",
+          "transition-colors",
+        )}
       >
-        <td className="p-3 text-sm text-muted-foreground">
+        <td className={cn(cellClass, "text-muted-foreground")}>
           <span className="block max-w-[220px] truncate" title={planLabel}>{planLabel}</span>
         </td>
-        <td className="p-3">
+        <td className={cellClass}>
           <div className="flex items-center gap-2">
             <FileSpreadsheet className="h-4 w-4 text-muted-foreground" />
-            <span className="font-medium text-sm">{file.filename}</span>
+            <span className="font-medium">{file.filename}</span>
             {file.hidden && (
-              <Badge variant="outline" className="text-muted-foreground">Убрана из списка</Badge>
+              <Badge
+                variant="outline"
+                className={cn(TABLE_ROW_DENSE.badge, "text-muted-foreground")}
+              >
+                Убрана из списка
+              </Badge>
             )}
           </div>
         </td>
-        <td className="p-3 text-sm text-muted-foreground">
+        <td className={cn(cellClass, "text-muted-foreground")}>
           {new Date(file.created_at).toLocaleString("ru-RU", { day: "2-digit", month: "2-digit", year: "numeric", hour: "2-digit", minute: "2-digit" })}
         </td>
-        <td className="p-3 text-sm text-muted-foreground">{file.sheet_name}</td>
-        <td className="p-3 text-sm">{file.total_rows}</td>
-        <td className="p-3 text-sm">
+        <td className={cn(cellClass, "text-muted-foreground")}>{file.sheet_name}</td>
+        <td className={cn(cellClass, "tabular-nums")}>{file.total_rows}</td>
+        <td className={cn(cellClass, "tabular-nums whitespace-nowrap")}>
           {(file.size_bytes / 1024).toFixed(1)} KB
         </td>
-        <td className="p-3">
-          <Badge variant={statusVariant[file.status] ?? "secondary"}>
+        <td className={cellClass}>
+          <Badge className={TABLE_ROW_DENSE.badge} variant={statusVariant[file.status] ?? "secondary"}>
             {statusLabels[file.status] || file.status}
           </Badge>
         </td>
-        <td className="p-3">
+        <td className={cellClass}>
           <div className="flex gap-1">
-            <Button variant="ghost" size="sm" className="h-7 text-xs" onClick={() => { setSelectedItemId(null); setPreviewOpen(true) }}>
+            <Button variant="ghost" size="sm" className={actionClass} onClick={() => { setSelectedItemId(null); setPreviewOpen(true) }}>
               <Eye className="h-3 w-3 mr-1" /> Просмотр
             </Button>
-            <Button variant="ghost" size="sm" className="h-7 text-xs" asChild>
+            <Button variant="ghost" size="sm" className={actionClass} asChild>
               <a href={downloadUrl} download={file.filename}>
                 <Download className="h-3 w-3 mr-1" /> Скачать
               </a>
             </Button>
             {canApply && (
-              <Button variant="ghost" size="sm" className="h-7 text-xs" onClick={() => setApplyDialogOpen(true)}>
+              <Button variant="ghost" size="sm" className={actionClass} onClick={() => setApplyDialogOpen(true)}>
                 <Play className="h-3 w-3 mr-1" /> Применить
               </Button>
             )}
             {canRollback && (
               <RollbackButton
+                className={actionClass}
                 disabled={!isLastApplied}
                 loading={rollingBack}
                 onRollback={() => setRollbackDialogOpen(true)}
@@ -179,11 +209,11 @@ export function FileRow({
             {/* У скрытого батча кнопки скрытия нет: восстановления из скрытых
                 не существует (ADR-0056 п.6), повторное скрытие было бы враньём. */}
             {canHide && !file.hidden && (
-              <Button variant="ghost" size="sm" className="h-7 text-xs" onClick={() => setHideDialogOpen(true)}>
+              <Button variant="ghost" size="sm" className={actionClass} onClick={() => setHideDialogOpen(true)}>
                 <EyeOff className="h-3 w-3 mr-1" /> Убрать из списка
               </Button>
             )}
-            <Button variant="ghost" size="sm" className="h-7 text-xs text-red-600 hover:text-red-700" onClick={() => setDeleteDialogOpen(true)}>
+            <Button variant="ghost" size="sm" className={cn(actionClass, "text-red-600 hover:text-red-700")} onClick={() => setDeleteDialogOpen(true)}>
               <Trash2 className="h-3 w-3 mr-1" /> Удалить
             </Button>
           </div>
@@ -238,39 +268,40 @@ export function FileRow({
           )}
           {previewItems.length > 0 && (
             <div className="flex-1 overflow-auto border rounded-lg">
-              <table className="w-full text-sm">
-                <thead className="border-b bg-muted/50">
+              <table className="w-full border-separate border-spacing-0 text-sm">
+                <thead>
                   <tr>
-                    <th className="text-left p-2">Строки</th>
-                    <th className="text-left p-2">Артикул</th>
-                    <th className="text-left p-2">Наименование</th>
-                    <th className="text-left p-2 whitespace-nowrap">Кол-во</th>
-                    <th className="text-left p-2 whitespace-nowrap">Статус</th>
-                    <th className="text-left p-2 whitespace-nowrap">Действие</th>
+                    <th className={headerCellClass}>Строки</th>
+                    <th className={headerCellClass}>Артикул</th>
+                    <th className={headerCellClass}>Наименование</th>
+                    <th className={cn(headerCellClass, "whitespace-nowrap")}>Кол-во</th>
+                    <th className={cn(headerCellClass, "whitespace-nowrap")}>Статус</th>
+                    <th className={cn(headerCellClass, "whitespace-nowrap")}>Действие</th>
                   </tr>
                 </thead>
                 <tbody>
                   {previewItems.map((row) => (
                     <Fragment key={row.item_id}>
                       <tr
-                        className="border-b cursor-pointer hover:bg-muted/40"
+                        style={{ height: TABLE_ROW_DENSE.rowHeightPx }}
+                        className="cursor-pointer transition-colors hover:bg-muted/40"
                         onClick={() => setSelectedItemId((prev) => (prev === row.item_id ? null : row.item_id))}
                       >
-                        <td className="p-2">{row.source_row_numbers.join(", ") || "—"}</td>
-                        <td className="p-2">{row.source_sku ?? "—"}</td>
-                        <td className="p-2">{row.source_name ?? "—"}</td>
-                        <td className="p-2 whitespace-nowrap tabular-nums">{fmtQtyPrecise(row.quantity)}</td>
-                        <td className="p-2 whitespace-nowrap">
+                        <td className={TABLE_ROW_DENSE.cell}>{row.source_row_numbers.join(", ") || "—"}</td>
+                        <td className={TABLE_ROW_DENSE.cell}>{row.source_sku ?? "—"}</td>
+                        <td className={TABLE_ROW_DENSE.cell}>{row.source_name ?? "—"}</td>
+                        <td className={cn(TABLE_ROW_DENSE.cell, "whitespace-nowrap tabular-nums")}>{fmtQtyPrecise(row.quantity)}</td>
+                        <td className={cn(TABLE_ROW_DENSE.cell, "whitespace-nowrap")}>
                           <span className="mr-1">{statusLabels[row.status] ?? row.status}</span>
                           {isDuplicateRow(row) && (
                             <Badge variant="outline" className="text-violet-700 border-violet-200 bg-violet-50">Дубль</Badge>
                           )}
                         </td>
-                        <td className="p-2 whitespace-nowrap">{actionLabels[row.change_action] ?? row.change_action}</td>
+                        <td className={cn(TABLE_ROW_DENSE.cell, "whitespace-nowrap")}>{actionLabels[row.change_action] ?? row.change_action}</td>
                       </tr>
                       {selectedItemId === row.item_id && (
                         <tr key={`${row.item_id}-detail`} className="border-b bg-muted/30">
-                          <td className="p-2" colSpan={6}>
+                          <td className={TABLE_ROW_DENSE.cell} colSpan={6}>
                             {fullLoading && <span className="text-xs text-muted-foreground">Загрузка деталей…</span>}
                             {!fullLoading && fullItem && <ItemDetail item={fullItem} />}
                           </td>
@@ -335,16 +366,18 @@ export function FileRow({
 
 /** Откат — LIFO: у не-последнего батча кнопка disabled с объяснением. */
 function RollbackButton({
+  className,
   disabled,
   loading,
   onRollback,
 }: {
+  className: string
   disabled: boolean
   loading: boolean
   onRollback: () => void
 }) {
   const button = (
-    <Button variant="ghost" size="sm" className="h-7 text-xs" disabled={disabled || loading} onClick={onRollback}>
+    <Button variant="ghost" size="sm" className={className} disabled={disabled || loading} onClick={onRollback}>
       <Undo2 className="h-3 w-3 mr-1" /> Откатить
     </Button>
   )
