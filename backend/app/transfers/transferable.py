@@ -248,13 +248,21 @@ async def compute_stock_section_transferable(
     return result.line.budget, result.plan_remaining, result.line.produced, result.line.used
 
 
-async def _stock_planned_qty(db: AsyncSession, task: WorkTask) -> Decimal:
-    """План складской задачи: план строки плана, при его отсутствии — план задания."""
-    planned_qty = _dec(task.planned_quantity)
+async def _stock_plan(
+    db: AsyncSession, task: WorkTask
+) -> tuple[Decimal, SectionPlanLine | None]:
+    """План складской задачи и его строка плана: план строки, иначе план задания.
+
+    Возвращает саму строку плана не для красоты: держатель ссылки обязан
+    передать её дальше подсказкой ``line=`` в :func:`stock_line`. Без этого
+    объект умирает вместе с локальной переменной, identity-map его отпускает,
+    и :func:`stock_line_bulk` читает ту же строку вторым запросом (#299, п. 3).
+    """
     line = await db.get(SectionPlanLine, task.section_plan_line_id)
+    planned_qty = _dec(task.planned_quantity)
     if line is not None and line.planned_quantity:
         planned_qty = _dec(line.planned_quantity)
-    return planned_qty
+    return planned_qty, line
 
 
 @dataclass(frozen=True)
@@ -489,22 +497,26 @@ async def stock_line(
     section: Section,
     dims: dict | None = None,
     planned_qty: Decimal | None = None,
+    line: SectionPlanLine | None = None,
 ) -> TransferableLine:
     """Строка бюджета складской задачи — единственная сборка stock-ветки.
 
     ``dims`` — явный размер передачи (``None`` → габарит задания);
     ``planned_qty`` — явный план (``None`` → план строки плана, затем
-    задания). И write-guard, и ready-страница со склада получают числа
-    отсюда — второй сборки нет ни в services, ни в queries.
+    задания). ``line`` — подсказка «строка плана уже прочитана»: передаётся
+    в :func:`stock_line_bulk`, чтобы он не читал её повторно (#299, п. 2–3).
+    И write-guard, и ready-страница со склада получают числа отсюда — второй
+    сборки нет ни в services, ни в queries.
 
     Тонкая делегация к :func:`stock_line_bulk` (#290): одиночный запрос —
     это частный случай bulk-прохода.
     """
     if planned_qty is None:
-        planned_qty = await _stock_planned_qty(db, task)
+        planned_qty, line = await _stock_plan(db, task)
     results = await stock_line_bulk(
         db,
         [StockLineRequest(task=task, section=section, planned_qty=planned_qty, dims=dims)],
+        lines={line.id: line} if line is not None else None,
     )
     return results[0].line
 
@@ -858,12 +870,17 @@ async def task_transferable(
     kind, sec = await resolve_budget_kind(db, task)
 
     if kind is BudgetKind.STOCK:
+        # Строка плана читается один раз и передаётся подсказкой: иначе
+        # `stock_line_bulk` читает её повторно (identity-map отпускает объект,
+        # как только умирает локальная ссылка) — #299, п. 3.
+        planned_qty, plan_line = await _stock_plan(db, task)
         line = await stock_line(
             db,
             task=task,
             section=sec,
             dims=dimensions,
-            planned_qty=await _stock_planned_qty(db, task),
+            planned_qty=planned_qty,
+            line=plan_line,
         )
         return line.budget
 

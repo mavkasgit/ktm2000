@@ -23,6 +23,7 @@ from sqlalchemy import event, select
 from tests.helpers.transfers import (
     _make_dim_route_fixture,
     _make_two_ghp_setup,
+    _section_route_operations,
     _seed_balance,
 )
 from tests.test_integrity_invariants import _make_user, _release_via_take_to_work
@@ -153,6 +154,39 @@ async def _seed_many_ready_tasks(session, client, count: int) -> dict:
     return {"setup": setup, "task_ids": task_ids}
 
 
+async def _seed_stock_ready_row(session, client, *, user_id: int, sku: str) -> dict:
+    """Одна готовая складская строка (FG → SHIPMENT) с остатком под план."""
+    fx = await _make_finished_stock_to_shipment_fixture(
+        session, sku=sku, qty=Decimal(40)
+    )
+    await _seed_stock_balance(
+        session,
+        user_id=user_id,
+        location_id=fx["sections"][0].id,
+        product_id=fx["product"].id,
+        qty=Decimal(100),
+    )
+    await _release_via_take_to_work(client, fx["position"].id)
+    return fx
+
+
+async def _ready_sql(session) -> tuple[dict, list[str]]:
+    """Один проход ``list_ready_to_transfer`` на холодной карте + его SQL."""
+    statements: list[str] = []
+    engine = session.bind.sync_engine
+
+    def _count(conn, cursor, statement, parameters, context, executemany):
+        statements.append(" ".join(statement.split()))
+
+    session.expunge_all()
+    event.listen(engine, "before_cursor_execute", _count)
+    try:
+        result = await list_ready_to_transfer(session, limit=50, offset=0)
+    finally:
+        event.remove(engine, "before_cursor_execute", _count)
+    return result, statements
+
+
 @pytest.mark.asyncio
 async def test_ready_empty_total_zero(client, session) -> None:
     response = await client.get("/api/transfers/ready")
@@ -238,6 +272,74 @@ async def test_ready_sql_query_count_bounded(client, session) -> None:
         for item in result["items"]
     ), "складская строка FG → SHIPMENT отсутствует"
     assert count <= 15, f"list_ready_to_transfer выполнил {count} SQL-запросов (лимит 15)"
+
+
+@pytest.mark.asyncio
+async def test_ready_stock_branch_scales_flat(client, session) -> None:
+    """Складская ветка ready не растёт по числу строк (#299, пп. 1–2).
+
+    Один и тот же проход с 1 и с 4 складскими строками обязан дать одинаковое
+    число SQL: строки плана, позиции плана, бюджеты и остатки читаются пачкой.
+    Отдельных ``SELECT ... FROM plan_positions`` быть не должно вовсе —
+    габариты берутся из позиций, которые основной join уже принёс.
+    """
+    seeded = await _seed_many_ready_tasks(session, client, count=2)
+    user_id = seeded["setup"]["user"].id
+
+    first = await _seed_stock_ready_row(session, client, user_id=user_id, sku="RFLAT-1")
+    await session.commit()
+    one_page, one_sql = await _ready_sql(session)
+
+    for i in range(2, 5):
+        await _seed_stock_ready_row(session, client, user_id=user_id, sku=f"RFLAT-{i}")
+    await session.commit()
+    four_page, four_sql = await _ready_sql(session)
+
+    assert one_page["total"] + 3 == four_page["total"]
+    assert len(four_sql) == len(one_sql), (
+        f"1 складская строка — {len(one_sql)} SQL, 4 строки — {len(four_sql)}: "
+        "ветка читает по строке"
+    )
+    assert not [
+        s for s in four_sql if "FROM plan_positions" in s
+    ], "ready читает позиции плана поштучно, хотя они уже пришли join'ом"
+    assert any(item["plan_position_id"] == first["position"].id for item in four_page["items"])
+
+
+@pytest.mark.asyncio
+async def test_ready_stock_dimensions_come_from_joined_position(client, session) -> None:
+    """Габарит складской ready-строки — из позиции плана, без отдельного чтения (#299, п. 1)."""
+    seeded = await _seed_many_ready_tasks(session, client, count=1)
+    user_id = seeded["setup"]["user"].id
+    fx = await _make_finished_stock_to_shipment_fixture(
+        session, sku="RDIM-1", qty=Decimal(40)
+    )
+    stock_section = fx["sections"][0]
+    # Позиция уже отработана take-to-work; габарит читается живым из позиции,
+    # которую готовый запрос приносит тем же join'ом.
+    fx["position"].input_dimensions = {"length_mm": 1234}
+    await session.commit()
+    ops = await _section_route_operations(session, stock_section.id)
+    await StockCommandService().record(
+        session,
+        StockCommand(
+            product_id=fx["product"].id,
+            to_location_id=stock_section.id,
+            quantity=Decimal(100),
+            reason=Reason.MANUAL_IN,
+            dimensions={"length_mm": 1234},
+            completed_operations=ops,
+            created_by=user_id,
+        ),
+    )
+    await session.commit()
+    await _release_via_take_to_work(client, fx["position"].id)
+
+    page, statements = await _ready_sql(session)
+
+    row = next(item for item in page["items"] if item["product_sku"] == "RDIM-1")
+    assert row["dimensions"] == {"length_mm": 1234.0}
+    assert not [s for s in statements if "FROM plan_positions" in s]
 
 
 @pytest.mark.asyncio
