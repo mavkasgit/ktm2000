@@ -3,6 +3,7 @@ from __future__ import annotations
 import asyncio
 import logging
 import math
+import re
 from collections import Counter
 from datetime import UTC, datetime
 from decimal import Decimal
@@ -58,7 +59,12 @@ from app.services.excel_import import (
     validate_excel_extension,
 )
 from app.services.hanger_quantity import adjust_quantity_to_hanger
-from app.services.import_normalization import SkuEntry, match_sku_parts, sku_entry
+from app.services.import_normalization import (
+    SkuEntry,
+    match_sku_parts,
+    sku_compound_parts,
+    sku_entry,
+)
 from app.services.import_normalization import normalize_sku as _normalize_sku
 from app.services.plan_position_hanger import (
     PositionHangerValue,
@@ -145,6 +151,10 @@ PLAN_IMPORT_WARNING_PREFIXES: tuple[str, ...] = (
     #: по «/» — «ЮП-3658/1875» при SKU «ЮП-1875» в справочнике.
     #: Параметр — сама часть.
     "sku_matched_by_part",
+    #: Дубли-алиасы (#347): части составного артикула указывают на один
+    #: задвоенный артикул; параметр — SKU канонического продукта, который
+    #: использован вместо несовпавшей ячейки.
+    "sku_matched_by_alias",
 #: Баланс группы вход×длина = Σ(выход×длина) (excel_import._check_group_balances):
 #: фактический row-warning вне списка спеки §3, зафиксирован здесь же,
 #: чтобы сторож ловил действительно новые коды, а не этот известный.
@@ -606,11 +616,19 @@ class SkuIndex(NamedTuple):
         return cls(by_sku=by_sku, products=products)
 
     def entries(self) -> list[SkuEntry]:
-        """Записи каскада по частям — по каждому продукту, без потерь."""
+        """Записи каскада по частям — по каждому продукту, без потерь.
+
+        В ключи входят не только написания SKU, но и ``Product.aliases``:
+        дубли-алиасы («ЮП-3485» ↔ «АТ-4893») должны находиться на шаге
+        составного артикула, иначе выбирается первый попавшийся дубль.
+        """
         entries: list[SkuEntry] = []
         for product in self.products:
             sku = product.sku or ""
-            entries.append(sku_entry(sku, _sku_lookup_keys(sku)))
+            keys = set(_sku_lookup_keys(sku))
+            for alias in product.aliases or []:
+                keys.update(_sku_lookup_keys(alias))
+            entries.append(sku_entry(sku, keys))
         return entries
 
 
@@ -640,6 +658,70 @@ def _sku_lookup_keys(sku: str) -> set[str]:
         # Строка содержит символы вне Latin-1 — восстановление невозможно.
         pass
     return {k for k in keys if k}
+
+
+def _alias_keys(product: Product) -> set[str]:
+    """Нормализованные alias-написания продукта."""
+    return {_normalize_sku(alias) for alias in (product.aliases or []) if alias}
+
+
+def _products_are_alias_duplicates(left: Product, right: Product) -> bool:
+    """Один из продуктов объявляет SKU другого своим alias.
+
+    Составной артикул из двух таких SKU — не комплект, а дубль одного
+    артикула: деталь каталога задвоена, и списывать оба компонента нельзя.
+    """
+    left_sku = _normalize_sku(left.sku)
+    right_sku = _normalize_sku(right.sku)
+    return left_sku in _alias_keys(right) or right_sku in _alias_keys(left)
+
+
+def _name_tokens(value: str | None) -> set[str]:
+    """Слова наименования для выбора канонического дубля (без пунктуации)."""
+    return {token for token in re.split(r"[^0-9a-zа-яё]+", (value or "").lower()) if len(token) > 1}
+
+
+def _pick_alias_duplicate(
+    candidates: list[Product],
+    row_name: str | None,
+    source_sku: str | None = None,
+) -> Product | None:
+    """Канонический продукт среди дубликатов-алиасов.
+
+    Возвращает ``None``, если кандидаты не связаны алиасами: тогда сохраняется
+    прежнее правило «неоднозначная часть — product_not_found».
+
+    Среди связанных побеждает **первая часть ячейки** — это заказной артикул
+    («ЮП-3485/АТ-4893» → «ЮП-3485»), но только если её карточка заполнена:
+    активна и с настоящим именем. Пустая или выключенная карточка первого
+    артикула не перебивает рабочий алиас — иначе строка уехала бы в
+    ``product_inactive``/``normal_length_not_found``. Если первую часть
+    выбрать нельзя, остаётся прежнее правило: активный, с содержательным
+    именем и наибольшим пересечением слов с наименованием строки.
+    """
+    if not candidates:
+        return None
+    if not all(_products_are_alias_duplicates(candidates[0], other) for other in candidates[1:]):
+        return None
+
+    active = [product for product in candidates if product.is_active]
+    pool = active or candidates
+    meaningful = [
+        product
+        for product in pool
+        if _normalize_sku(product.name) != _normalize_sku(product.sku)
+    ]
+    pool = meaningful or pool
+
+    parts = sku_compound_parts(source_sku or "")
+    if parts:
+        first_part = parts[0]
+        for product in pool:
+            if _normalize_sku(product.sku) == first_part:
+                return product
+
+    row_tokens = _name_tokens(row_name)
+    return max(pool, key=lambda product: (len(_name_tokens(product.name) & row_tokens), -product.id))
 
 
 async def _make_change_items(
@@ -792,6 +874,18 @@ async def _make_change_items(
             if match.found:
                 product = sku_index.products[match.index]
                 warnings.append(f"sku_matched_by_part:{match.part}")
+            elif match.rejected:
+                # Части указывают на дубликаты-алиасы («ЮП-3485» ↔ «АТ-4893»):
+                # это не комплект, а один артикул. Берём канонический дубль и
+                # явно показываем оператору, какой артикул использован.
+                alias_product = _pick_alias_duplicate(
+                    [sku_index.products[index] for index in match.ambiguous_indexes],
+                    row.source_name,
+                    row.source_sku,
+                )
+                if alias_product is not None:
+                    product = alias_product
+                    warnings.append(f"sku_matched_by_alias:{alias_product.sku}")
 
         resolved_pair: ResolvedPair | None = None
         pair_n: PairHangerValue | None = None

@@ -2175,6 +2175,86 @@ async def test_preview_compound_sku_prefers_first_part(client, session, tmp_path
 
 
 @pytest.mark.asyncio
+async def test_preview_compound_sku_alias_duplicates_prefer_first_part(
+    client, session, tmp_path, monkeypatch
+) -> None:
+    """Части — взаимные алиасы, обе карточки заполнены: берётся первая.
+
+    «ЮП-3485/АТ-4893» — не комплект: в справочнике это один и тот же артикул,
+    задвоенный двумя карточками. Первая часть ячейки — заказной артикул, и
+    если её карточка заполнена так же, как алиас, импорт привязывает строку
+    к ней и предупреждает, что целой ячейки не было.
+    """
+    monkeypatch.setattr(settings, "IMPORT_STORAGE_DIR", str(tmp_path))
+
+    first, alias = await _seed_products(session, "ЮП-3485", "АТ-4893")
+    first.name = "РП-АКП-11,12"
+    first.aliases = ["АТ-4893"]
+    alias.name = "РП-АКП-11,12"
+    alias.aliases = ["ЮП-3485"]
+    await session.flush()
+
+    items = await _preview_compound_rows(
+        client, session, code="compound-alias-duplicates", cells=["ЮП-3485/АТ-4893"]
+    )
+
+    item = items[0]
+    assert item["after_data"]["product_id"] == first.id
+    assert "sku_matched_by_alias:ЮП-3485" in item["warnings"]
+    assert "product_not_found" not in item["errors"]
+    assert "product_inactive" not in item["errors"]
+
+
+@pytest.mark.asyncio
+async def test_preview_compound_sku_alias_duplicate_skips_unfilled_first_part(
+    client, session, tmp_path, monkeypatch
+) -> None:
+    """Пустая карточка первого артикула не перебивает заполненный алиас."""
+    monkeypatch.setattr(settings, "IMPORT_STORAGE_DIR", str(tmp_path))
+
+    stub, canonical = await _seed_products(session, "ЮП-3485", "АТ-4893")
+    stub.name = "ЮП-3485"  # имя равно SKU — карточка не заполнена
+    stub.aliases = ["АТ-4893"]
+    canonical.name = "РП-АКП-11,12"
+    canonical.aliases = ["ЮП-3485"]
+    await session.flush()
+
+    items = await _preview_compound_rows(
+        client, session, code="compound-alias-unfilled", cells=["ЮП-3485/АТ-4893"]
+    )
+
+    item = items[0]
+    assert item["after_data"]["product_id"] == canonical.id
+    assert "sku_matched_by_alias:АТ-4893" in item["warnings"]
+    assert "product_not_found" not in item["errors"]
+
+
+@pytest.mark.asyncio
+async def test_preview_compound_sku_alias_duplicate_skips_inactive_stub(
+    client, session, tmp_path, monkeypatch
+) -> None:
+    """Неактивный дубль с точным SKU не перебивает активный алиас."""
+    monkeypatch.setattr(settings, "IMPORT_STORAGE_DIR", str(tmp_path))
+
+    stub, canonical = await _seed_products(session, "ЮП-3658", "ЮП-1875")
+    stub.name = "ЮП-3658"
+    stub.is_active = False
+    canonical.name = "Плинтус 60 мм"
+    canonical.aliases = ["ЮП-3658"]
+    await session.flush()
+
+    items = await _preview_compound_rows(
+        client, session, code="compound-alias-stub", cells=["ЮП-3658/1875"]
+    )
+
+    item = items[0]
+    assert item["after_data"]["product_id"] == canonical.id
+    assert "sku_matched_by_alias:ЮП-1875" in item["warnings"]
+    assert "product_inactive" not in item["errors"]
+    assert "product_not_found" not in item["errors"]
+
+
+@pytest.mark.asyncio
 async def test_preview_compound_sku_ambiguous_part_is_not_bound(
     client, session, tmp_path, monkeypatch
 ) -> None:

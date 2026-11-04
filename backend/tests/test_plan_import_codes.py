@@ -67,6 +67,7 @@ SPEC_WARNING_BASES = frozenset(
         "row_selection_auto_included",
         "paired_profile_product_unmapped",
         "sku_matched_by_part",  # #347: привязка по части составного артикула
+        "sku_matched_by_alias",  # #347: части — дубли-алиасы одного артикула
     }
 )
 
@@ -121,6 +122,7 @@ def test_classify_warnings_with_params():
         "row_selection_auto_included:4,5",
         "plan_group_balance_mismatch:in=2700mm,out=2600mm",
         "sku_matched_by_part:1875",
+        "sku_matched_by_alias:ЮП-3485",
     ]
     for code in samples:
         assert classify_plan_import_code(code) == "warning", code
