@@ -1,6 +1,6 @@
 import { Fragment, useMemo, useState } from "react"
 import { Download, Eye, EyeOff, FileSpreadsheet, Play, Trash2, Undo2 } from "lucide-react"
-import { useQuery, useQueryClient } from "@tanstack/react-query"
+import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query"
 import { Button, Badge, DATA_TABLE_STYLES, Dialog, DialogContent, DialogDescription, DialogHeader, DialogTitle, AlertDialog, AlertDialogContent, AlertDialogHeader, AlertDialogTitle, AlertDialogDescription, AlertDialogFooter, AlertDialogAction, AlertDialogCancel, TABLE_ROW_DENSE, toast } from "@/shared/ui"
 import { ROW_TONE_TEXT, rowToneFill, type RowTone } from "@/shared/lib/rowTones"
 import { cn } from "@/shared/utils/cn"
@@ -8,11 +8,12 @@ import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from "@/shar
 import { PlanFileInfo } from "@/shared/api/productionPlans"
 import { getErrorMessage } from "@/shared/api/client"
 import {
+  downloadImportFile,
   fetchAllImportBatchItems,
   fetchImportItem,
-  getImportFileDownloadUrl,
   type ImportFullItem,
 } from "@/shared/api/imports"
+import { saveBlobAsFile } from "@/shared/lib/downloadFile"
 import { actionLabels, errorLabels, statusLabels, statusVariant, warningLabels } from "../lib/plan-labels"
 import { isDuplicateRow } from "../lib/duplicateRows"
 import { buildImportRowStats } from "../lib/importRowStats"
@@ -76,7 +77,6 @@ export function FileRow({
   const [applying, setApplying] = useState(false)
   const [rollingBack, setRollingBack] = useState(false)
   const [selectedItemId, setSelectedItemId] = useState<number | null>(null)
-  const downloadUrl = getImportFileDownloadUrl(file.file_id)
   const changeSetId = file.change_set_id
   const canApply = (file.status === "parsed" || file.status === "cancelled") && changeSetId != null
   const canRollback = file.status === "applied" && changeSetId != null
@@ -103,6 +103,24 @@ export function FileRow({
     queryKey: [...queryKeys.plan.batchPreview(file.batch_id), "item", selectedItemId],
     queryFn: () => fetchImportItem(selectedItemId as number, true) as Promise<ImportFullItem>,
     enabled: previewOpen && selectedItemId != null,
+  })
+
+  /**
+   * Скачивание — через API-клиент с заголовком авторизации, а не ссылкой
+   * `href`: иначе истёкшая сессия открывала вместо файла JSON `401` на весь
+   * экран. Тот же путь, что у истории импорта остатков (#290/#304).
+   */
+  const downloadMutation = useMutation({
+    mutationFn: async () => {
+      const blob = await downloadImportFile(file.file_id)
+      saveBlobAsFile(blob, file.filename)
+    },
+    onError: (e: unknown) => {
+      toast({
+        title: `Не удалось скачать файл: ${getErrorMessage(e)}`,
+        variant: "destructive",
+      })
+    },
   })
 
   async function handleApply(skipInvalid: boolean) {
@@ -188,10 +206,14 @@ export function FileRow({
             <Button variant="ghost" size="sm" className={actionClass} onClick={() => { setSelectedItemId(null); setPreviewOpen(true) }}>
               <Eye className="h-3 w-3 mr-1" /> Просмотр
             </Button>
-            <Button variant="ghost" size="sm" className={actionClass} asChild>
-              <a href={downloadUrl} download={file.filename}>
-                <Download className="h-3 w-3 mr-1" /> Скачать
-              </a>
+            <Button
+              variant="ghost"
+              size="sm"
+              className={actionClass}
+              disabled={downloadMutation.isPending}
+              onClick={() => downloadMutation.mutate()}
+            >
+              <Download className="h-3 w-3 mr-1" /> Скачать
             </Button>
             {canApply && (
               <Button variant="ghost" size="sm" className={actionClass} onClick={() => setApplyDialogOpen(true)}>

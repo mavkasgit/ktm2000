@@ -242,6 +242,23 @@ export async function listRecentImports(limit: number = 10) {
   return data;
 }
 
+/**
+ * Скачивание файла импорта плана.
+ *
+ * Идёт через `apiClient`, а не ссылкой: авторизация живёт в заголовке
+ * `Authorization`, а голая `<a href>` уводит браузер в навигацию без него —
+ * при истёкшей сессии оператор получает JSON `401` на весь экран вместо файла.
+ * Тот же путь, что у истории остатков
+ * (`downloadStockImportBatchFile`).
+ */
+export async function downloadImportFile(fileId: number): Promise<Blob> {
+  const { data } = await apiClient.get<Blob>(`/imports/files/${fileId}/download`, {
+    responseType: "blob",
+  });
+  return data;
+}
+
+/** Адрес файла. Оставлен для проверки существования; скачивание — `downloadImportFile`. */
 export function getImportFileDownloadUrl(fileId: number) {
   return `/api/imports/files/${fileId}/download`;
 }
