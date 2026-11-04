@@ -14,10 +14,13 @@ const ZERO_TOTAL_REASON = "Итог 0: пара не помещается по �
  * Парная строка A+B: одна на пару, внутри — подстроки по длинам пары
  * (ADR-0050). Правило то же, что у одиночной строки: разбивка печатается
  * по каждой длине, потому что считается от сырьевой длины этой подстроки.
+ *
+ * `rowSpan` здесь запрещён по той же причине, что и в `HangerCalcRowView`:
+ * подстроки лежат стопкой в одной ячейке (`HangerLineCell`), `<tr>` у пары
+ * одна, и `rowSpan` сдвинул бы вправо строку следующего артикула (#402).
  */
 export function PairedHangerRowView({ row }: { row: PairedHangerCalcRow }) {
   const rowInvalid = row.incompatibleReason != null;
-  const span = row.lines.length;
 
   const totalCell = (line: HangerLengthLine) => {
     if (line.total === 0) return <DashCell reason={ZERO_TOTAL_REASON} danger />;
@@ -37,17 +40,17 @@ export function PairedHangerRowView({ row }: { row: PairedHangerCalcRow }) {
 
   return (
     <tr className={cn("hover:bg-muted/50", rowInvalid && "bg-red-50 hover:bg-red-100/60")}>
-      <td rowSpan={span} className="px-4 py-1 align-top">
+      <td className="px-4 py-1 align-top">
         <div className="flex items-center gap-1.5 flex-wrap">
           <span className="font-medium">{row.label}</span>
           {row.auto ? <Badge variant="secondary" className="text-xs bg-emerald-100">авто</Badge> : <Badge variant="secondary" className="text-xs">ручное</Badge>}
           <Badge variant="secondary" className="text-xs bg-purple-100">Парная</Badge>
         </div>
       </td>
-      <td rowSpan={span} className="px-4 py-1 align-top">
+      <td className="px-4 py-1 align-top">
         {row.perimeterSum != null ? <span className="text-muted-foreground">{row.perimeterSum}</span> : <DashCell reason={row.incompatibleReason} danger={rowInvalid} />}
       </td>
-      <td rowSpan={span} className="px-4 py-1 align-top">
+      <td className="px-4 py-1 align-top">
         {row.widthSum != null ? <span className="text-muted-foreground">{row.widthSum}</span> : <DashCell reason={row.incompatibleReason} danger={rowInvalid} />}
       </td>
       <HangerLineCell
