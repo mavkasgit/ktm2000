@@ -305,7 +305,9 @@ async def stock_line_bulk(
 
     - net ``TRANSFER_SEND`` сгруппирован по
       ``(section_plan_line_id, dimensions)``; ``dims=None`` у запроса —
-      сумма всех групп ключа, как в ``net_by_reason(dims=None)``;
+      сумма всех групп ключа (в отличие от скалярного
+      ``net_by_reason(dims=None)``, где ``None`` значит безразмерную
+      NULL-группу, — семантика ``dims`` описана в ``app.stock.ledger``);
     - ``StockBalance`` по (локации, изделию) сгруппирован по
       (габарит, пройденные операции); совпадение с ключом строки
       проверяется в Python теми же hash-ключами, которыми группирует
