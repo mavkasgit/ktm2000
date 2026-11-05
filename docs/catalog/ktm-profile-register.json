@@ -1,5 +1,5 @@
 {
-  "generated_at": "2026-11-05T10:49:21+00:00",
+  "generated_at": "2026-11-05T11:00:15+00:00",
   "db_fingerprint": "747ed3644c0f217f",
   "db": {
     "container": "ktm2000-postgres-prod",
@@ -718,27 +718,12 @@
       "ЮП-2396",
       "ЮП-2077",
       "ЮП-2910",
-      "ЮП-3473"
+      "ЮП-3473",
+      "033",
+      "035",
+      "324"
     ],
     "photo_origin": {
-      "033": {
-        "origin": "alias",
-        "from": "ЮП-2630",
-        "scope": "full+thumb",
-        "note": "В storage лежит фото ЮП-2630; своего оригинала 033 нет."
-      },
-      "035": {
-        "origin": "alias",
-        "from": "АТ-7121",
-        "scope": "full+thumb",
-        "note": "В storage лежит фото АТ-7121; своего оригинала 035 нет."
-      },
-      "324": {
-        "origin": "alias",
-        "from": "ЮП-081",
-        "scope": "full+thumb",
-        "note": "Full — скан чертежа ЮП-081; своего оригинала 324 нет."
-      },
       "ALS-915": {
         "origin": "alias",
         "from": "ЮП-048",
@@ -3574,8 +3559,6 @@
         "confidence:92",
         "status:probable",
         "alias:035",
-        "shared_photo_full:035",
-        "shared_photo_thumb:035",
         "open"
       ],
       "relations": [
@@ -3586,22 +3569,6 @@
           "status": "confirmed",
           "source": "db:aliases",
           "note": "DB-алиас: тот же товар под другим кодом"
-        },
-        {
-          "from_sku": "АТ-7121",
-          "relation": "shared_photo_full",
-          "to_sku": "035",
-          "status": "confirmed",
-          "source": "storage:sha256",
-          "note": "957e37489c2b"
-        },
-        {
-          "from_sku": "АТ-7121",
-          "relation": "shared_photo_thumb",
-          "to_sku": "035",
-          "status": "confirmed",
-          "source": "storage:sha256",
-          "note": "e440e617a6bf"
         }
       ],
       "relation_text": "alias_of→035",
@@ -8745,8 +8712,6 @@
         "confidence:81",
         "status:needs_review",
         "alias:033",
-        "shared_photo_full:033",
-        "shared_photo_thumb:033",
         "refuted",
         "open"
       ],
@@ -8758,22 +8723,6 @@
           "status": "confirmed",
           "source": "db:aliases",
           "note": "DB-алиас: тот же товар под другим кодом"
-        },
-        {
-          "from_sku": "ЮП-2630",
-          "relation": "shared_photo_full",
-          "to_sku": "033",
-          "status": "confirmed",
-          "source": "storage:sha256",
-          "note": "9f919486a9ac"
-        },
-        {
-          "from_sku": "ЮП-2630",
-          "relation": "shared_photo_thumb",
-          "to_sku": "033",
-          "status": "confirmed",
-          "source": "storage:sha256",
-          "note": "0f645bd85860"
         }
       ],
       "relation_text": "alias_of→033",
@@ -15729,8 +15678,6 @@
         "confidence:92",
         "status:probable",
         "alias:324",
-        "shared_photo_full:324",
-        "shared_photo_thumb:324",
         "open"
       ],
       "relations": [
@@ -15741,22 +15688,6 @@
           "status": "confirmed",
           "source": "db:aliases",
           "note": "DB-алиас: тот же товар под другим кодом"
-        },
-        {
-          "from_sku": "ЮП-081",
-          "relation": "shared_photo_full",
-          "to_sku": "324",
-          "status": "confirmed",
-          "source": "storage:sha256",
-          "note": "49d34589adf0"
-        },
-        {
-          "from_sku": "ЮП-081",
-          "relation": "shared_photo_thumb",
-          "to_sku": "324",
-          "status": "confirmed",
-          "source": "storage:sha256",
-          "note": "282dc535c4cd"
         }
       ],
       "relation_text": "alias_of→324",
@@ -28103,12 +28034,12 @@
       "photo_thumb": "products/324_197_thumb.jpg",
       "photo_full_exists": true,
       "photo_thumb_exists": true,
-      "photo_full_px": "625x883",
-      "photo_thumb_px": "43x31",
-      "photo_full_bytes": 121543,
-      "photo_thumb_bytes": 660,
-      "photo_full_sha12": "49d34589adf0",
-      "photo_thumb_sha12": "282dc535c4cd",
+      "photo_full_px": "420x315",
+      "photo_thumb_px": "120x106",
+      "photo_full_bytes": 31423,
+      "photo_thumb_bytes": 1961,
+      "photo_full_sha12": "baa30ad36b95",
+      "photo_thumb_sha12": "4b926d3c6db0",
       "attributes_json": {
         "hanger_mode": "auto",
         "perimeter_mm": 43.8,
@@ -28134,15 +28065,15 @@
       "audit_group": "03-tile",
       "audit_verdict": "upgrade_both",
       "audit_confidence": "high",
-      "audit_note": "Full — скан чертежа ЮП-081; в 2024 фото того же стыка 13×6, thumb 43×31 пересобран.",
+      "audit_note": "Оригинал найден в плакате КТМ: карточка 324 (13×6,8). Full и thumb заменены на оригинал; раньше стоял чужой чертёж ЮП-081.",
       "audit_evidence": "candidates/324_full.jpg; candidates/324_thumb.jpg; sheets/_sheet-5.jpg; чертёж КТМ/324.pdf",
       "photo_status": "full+thumb",
-      "photo_label": "full+thumb · алиас ЮП-081",
-      "photo_origin": "alias",
-      "photo_from": "ЮП-081",
-      "photo_origin_scope": "full+thumb",
-      "photo_origin_note": "Full — скан чертежа ЮП-081; своего оригинала 324 нет.",
-      "photo_verdict": "upgrade_available",
+      "photo_label": "full+thumb",
+      "photo_origin": "own",
+      "photo_from": "",
+      "photo_origin_scope": "",
+      "photo_origin_note": "",
+      "photo_verdict": "upgrade_applied",
       "perimeter_archive": "43.8",
       "perimeter_poster": "—",
       "perimeter_best": "43.8",
@@ -28163,9 +28094,9 @@
       "material": "—",
       "identity_confidence": 100,
       "dimension_confidence": 100,
-      "photo_confidence": 90,
+      "photo_confidence": 95,
       "classification_confidence": 100,
-      "overall_confidence": 98,
+      "overall_confidence": 99,
       "overall_status": "confirmed",
       "tags": [
         "group:03-tile",
@@ -28175,15 +28106,12 @@
         "family:tile_324_325",
         "size:13×8",
         "photo:full+thumb",
-        "photo-origin:alias",
-        "photo-from:ЮП-081",
-        "photo-verdict:upgrade_available",
+        "photo-origin:own",
+        "photo-verdict:upgrade_applied",
         "perimeter:чертёж",
-        "confidence:98",
+        "confidence:99",
         "status:confirmed",
-        "alias:ЮП-081",
-        "shared_photo_full:ЮП-081",
-        "shared_photo_thumb:ЮП-081"
+        "alias:ЮП-081"
       ],
       "relations": [
         {
@@ -28209,22 +28137,6 @@
           "status": "confirmed",
           "source": "poster2024",
           "note": "ячейка 2024 632,2665,904,3033"
-        },
-        {
-          "from_sku": "324",
-          "relation": "shared_photo_full",
-          "to_sku": "ЮП-081",
-          "status": "confirmed",
-          "source": "storage:sha256",
-          "note": "49d34589adf0"
-        },
-        {
-          "from_sku": "324",
-          "relation": "shared_photo_thumb",
-          "to_sku": "ЮП-081",
-          "status": "confirmed",
-          "source": "storage:sha256",
-          "note": "282dc535c4cd"
         }
       ],
       "relation_text": "alias_of→ЮП-081",
@@ -28954,12 +28866,12 @@
       "photo_thumb": "products/033_205_thumb.jpg",
       "photo_full_exists": true,
       "photo_thumb_exists": true,
-      "photo_full_px": "604x846",
-      "photo_thumb_px": "112x32",
-      "photo_full_bytes": 105862,
-      "photo_thumb_bytes": 1285,
-      "photo_full_sha12": "9f919486a9ac",
-      "photo_thumb_sha12": "0f645bd85860",
+      "photo_full_px": "415x290",
+      "photo_thumb_px": "167x67",
+      "photo_full_bytes": 26780,
+      "photo_thumb_bytes": 2802,
+      "photo_full_sha12": "fab4ec387db1",
+      "photo_thumb_sha12": "6fd0b4abf7ef",
       "attributes_json": {
         "hanger_mode": "auto",
         "perimeter_mm": 97.6,
@@ -28983,17 +28895,17 @@
       "processing_flags": [],
       "composition": [],
       "audit_group": "01-thresholds",
-      "audit_verdict": "decision",
-      "audit_confidence": "medium",
-      "audit_note": "Чертёж 033 (ЮП-2379): 40,6x5,4, 97,6. 2024 фото серебристое, 2025 — коричневый декор; в storage лежит чужой ЮП-2630.",
+      "audit_verdict": "upgrade_both",
+      "audit_confidence": "high",
+      "audit_note": "Оригинал найден в плакате КТМ 2025: карточка 033 (41×5,4, самоклейка). Full и thumb заменены на оригинал; раньше стоял чужой чертёж ЮП-2630.",
       "audit_evidence": "candidates/033_full.jpg; candidates/033_thumb.jpg; \\\\ktm-disk\\Общая папка\\Чертежи\\КТМ/033 (ЮП-2379).pdf; sheets/_sheet-6.jpg",
       "photo_status": "full+thumb",
-      "photo_label": "full+thumb · алиас ЮП-2630",
-      "photo_origin": "alias",
-      "photo_from": "ЮП-2630",
-      "photo_origin_scope": "full+thumb",
-      "photo_origin_note": "В storage лежит фото ЮП-2630; своего оригинала 033 нет.",
-      "photo_verdict": "needs_decision",
+      "photo_label": "full+thumb",
+      "photo_origin": "own",
+      "photo_from": "",
+      "photo_origin_scope": "",
+      "photo_origin_note": "",
+      "photo_verdict": "upgrade_applied",
       "perimeter_archive": "97.6",
       "perimeter_poster": "100.1",
       "perimeter_best": "97.6",
@@ -29014,9 +28926,9 @@
       "material": "—",
       "identity_confidence": 100,
       "dimension_confidence": 100,
-      "photo_confidence": 75,
+      "photo_confidence": 95,
       "classification_confidence": 90,
-      "overall_confidence": 93,
+      "overall_confidence": 98,
       "overall_status": "confirmed",
       "tags": [
         "group:01-thresholds",
@@ -29026,16 +28938,12 @@
         "family:threshold_033_035",
         "size:40.6×5.4",
         "photo:full+thumb",
-        "photo-origin:alias",
-        "photo-from:ЮП-2630",
-        "photo-verdict:needs_decision",
+        "photo-origin:own",
+        "photo-verdict:upgrade_applied",
         "perimeter:чертёж",
-        "confidence:93",
+        "confidence:98",
         "status:confirmed",
-        "alias:ЮП-2630",
-        "shared_photo_full:ЮП-2630",
-        "shared_photo_thumb:ЮП-2630",
-        "open"
+        "alias:ЮП-2630"
       ],
       "relations": [
         {
@@ -29053,22 +28961,6 @@
           "status": "confirmed",
           "source": "poster2024",
           "note": "ячейка 2024 309,2665,581,3033"
-        },
-        {
-          "from_sku": "033",
-          "relation": "shared_photo_full",
-          "to_sku": "ЮП-2630",
-          "status": "confirmed",
-          "source": "storage:sha256",
-          "note": "9f919486a9ac"
-        },
-        {
-          "from_sku": "033",
-          "relation": "shared_photo_thumb",
-          "to_sku": "ЮП-2630",
-          "status": "confirmed",
-          "source": "storage:sha256",
-          "note": "0f645bd85860"
         }
       ],
       "relation_text": "alias_of→ЮП-2630",
@@ -29085,13 +28977,7 @@
         }
       ],
       "refuted": [],
-      "open_claims": [
-        {
-          "claim": "Фото/размер требуют решения",
-          "verdict": "open",
-          "evidence": "Чертёж 033 (ЮП-2379): 40,6x5,4, 97,6. 2024 фото серебристое, 2025 — коричневый декор; в storage лежит чужой ЮП-2630."
-        }
-      ]
+      "open_claims": []
     },
     {
       "id": 206,
@@ -29132,12 +29018,12 @@
       "photo_thumb": "products/035_206_thumb.jpg",
       "photo_full_exists": true,
       "photo_thumb_exists": true,
-      "photo_full_px": "615x878",
-      "photo_thumb_px": "92x30",
-      "photo_full_bytes": 102616,
-      "photo_thumb_bytes": 1419,
-      "photo_full_sha12": "957e37489c2b",
-      "photo_thumb_sha12": "e440e617a6bf",
+      "photo_full_px": "415x290",
+      "photo_thumb_px": "152x67",
+      "photo_full_bytes": 29264,
+      "photo_thumb_bytes": 3165,
+      "photo_full_sha12": "9f84f8cd6537",
+      "photo_thumb_sha12": "0a70c4c4d44f",
       "attributes_json": {
         "hanger_mode": "auto",
         "perimeter_mm": 75.2,
@@ -29161,17 +29047,17 @@
       "processing_flags": [],
       "composition": [],
       "audit_group": "01-thresholds",
-      "audit_verdict": "decision",
-      "audit_confidence": "medium",
-      "audit_note": "Чертёж 035 (ЮП-2375): 30x4,75, 75,2. 2024 фото золотое, 2025 — серое; в storage лежит АТ-7121.",
+      "audit_verdict": "upgrade_both",
+      "audit_confidence": "high",
+      "audit_note": "Оригинал найден в плакате КТМ 2025: карточка 035 (30×4,75, самоклейка). Full и thumb заменены на оригинал; раньше стоял чужой чертёж АТ-7121.",
       "audit_evidence": "candidates/035_full.jpg; candidates/035_thumb.jpg; \\\\ktm-disk\\Общая папка\\Чертежи\\КТМ/035 (ЮП-2375).pdf; sheets/_sheet-6.jpg",
       "photo_status": "full+thumb",
-      "photo_label": "full+thumb · алиас АТ-7121",
-      "photo_origin": "alias",
-      "photo_from": "АТ-7121",
-      "photo_origin_scope": "full+thumb",
-      "photo_origin_note": "В storage лежит фото АТ-7121; своего оригинала 035 нет.",
-      "photo_verdict": "needs_decision",
+      "photo_label": "full+thumb",
+      "photo_origin": "own",
+      "photo_from": "",
+      "photo_origin_scope": "",
+      "photo_origin_note": "",
+      "photo_verdict": "upgrade_applied",
       "perimeter_archive": "75.2",
       "perimeter_poster": "76",
       "perimeter_best": "75.2",
@@ -29192,9 +29078,9 @@
       "material": "—",
       "identity_confidence": 100,
       "dimension_confidence": 100,
-      "photo_confidence": 75,
+      "photo_confidence": 95,
       "classification_confidence": 90,
-      "overall_confidence": 93,
+      "overall_confidence": 98,
       "overall_status": "confirmed",
       "tags": [
         "group:01-thresholds",
@@ -29204,16 +29090,12 @@
         "family:threshold_033_035",
         "size:30×4.75",
         "photo:full+thumb",
-        "photo-origin:alias",
-        "photo-from:АТ-7121",
-        "photo-verdict:needs_decision",
+        "photo-origin:own",
+        "photo-verdict:upgrade_applied",
         "perimeter:чертёж",
-        "confidence:93",
+        "confidence:98",
         "status:confirmed",
-        "alias:АТ-7121",
-        "shared_photo_full:АТ-7121",
-        "shared_photo_thumb:АТ-7121",
-        "open"
+        "alias:АТ-7121"
       ],
       "relations": [
         {
@@ -29231,22 +29113,6 @@
           "status": "confirmed",
           "source": "poster2024",
           "note": "ячейка 2024 309,2665,581,3033"
-        },
-        {
-          "from_sku": "035",
-          "relation": "shared_photo_full",
-          "to_sku": "АТ-7121",
-          "status": "confirmed",
-          "source": "storage:sha256",
-          "note": "957e37489c2b"
-        },
-        {
-          "from_sku": "035",
-          "relation": "shared_photo_thumb",
-          "to_sku": "АТ-7121",
-          "status": "confirmed",
-          "source": "storage:sha256",
-          "note": "e440e617a6bf"
         }
       ],
       "relation_text": "alias_of→АТ-7121",
@@ -29263,13 +29129,7 @@
         }
       ],
       "refuted": [],
-      "open_claims": [
-        {
-          "claim": "Фото/размер требуют решения",
-          "verdict": "open",
-          "evidence": "Чертёж 035 (ЮП-2375): 30x4,75, 75,2. 2024 фото золотое, 2025 — серое; в storage лежит АТ-7121."
-        }
-      ]
+      "open_claims": []
     },
     {
       "id": 207,
@@ -32038,22 +31898,6 @@
       "note": "7a38ca01fcfa"
     },
     {
-      "from_sku": "035",
-      "relation": "shared_photo_full",
-      "to_sku": "АТ-7121",
-      "status": "confirmed",
-      "source": "storage:sha256",
-      "note": "957e37489c2b"
-    },
-    {
-      "from_sku": "АТ-7121",
-      "relation": "shared_photo_full",
-      "to_sku": "035",
-      "status": "confirmed",
-      "source": "storage:sha256",
-      "note": "957e37489c2b"
-    },
-    {
       "from_sku": "ЮП-009",
       "relation": "shared_photo_full",
       "to_sku": "ЮП-011",
@@ -32198,22 +32042,6 @@
       "note": "f6ea04a48a17"
     },
     {
-      "from_sku": "033",
-      "relation": "shared_photo_full",
-      "to_sku": "ЮП-2630",
-      "status": "confirmed",
-      "source": "storage:sha256",
-      "note": "9f919486a9ac"
-    },
-    {
-      "from_sku": "ЮП-2630",
-      "relation": "shared_photo_full",
-      "to_sku": "033",
-      "status": "confirmed",
-      "source": "storage:sha256",
-      "note": "9f919486a9ac"
-    },
-    {
       "from_sku": "ЮП-2910",
       "relation": "shared_photo_full",
       "to_sku": "ЮП-3473",
@@ -32260,22 +32088,6 @@
       "status": "confirmed",
       "source": "storage:sha256",
       "note": "f2591994fa73"
-    },
-    {
-      "from_sku": "324",
-      "relation": "shared_photo_full",
-      "to_sku": "ЮП-081",
-      "status": "confirmed",
-      "source": "storage:sha256",
-      "note": "49d34589adf0"
-    },
-    {
-      "from_sku": "ЮП-081",
-      "relation": "shared_photo_full",
-      "to_sku": "324",
-      "status": "confirmed",
-      "source": "storage:sha256",
-      "note": "49d34589adf0"
     },
     {
       "from_sku": "1010",
@@ -32710,22 +32522,6 @@
       "note": "2800522983fa"
     },
     {
-      "from_sku": "035",
-      "relation": "shared_photo_thumb",
-      "to_sku": "АТ-7121",
-      "status": "confirmed",
-      "source": "storage:sha256",
-      "note": "e440e617a6bf"
-    },
-    {
-      "from_sku": "АТ-7121",
-      "relation": "shared_photo_thumb",
-      "to_sku": "035",
-      "status": "confirmed",
-      "source": "storage:sha256",
-      "note": "e440e617a6bf"
-    },
-    {
       "from_sku": "10",
       "relation": "shared_photo_thumb",
       "to_sku": "ЮП-1767",
@@ -32772,22 +32568,6 @@
       "status": "confirmed",
       "source": "storage:sha256",
       "note": "86eb2d24d8cd"
-    },
-    {
-      "from_sku": "033",
-      "relation": "shared_photo_thumb",
-      "to_sku": "ЮП-2630",
-      "status": "confirmed",
-      "source": "storage:sha256",
-      "note": "0f645bd85860"
-    },
-    {
-      "from_sku": "ЮП-2630",
-      "relation": "shared_photo_thumb",
-      "to_sku": "033",
-      "status": "confirmed",
-      "source": "storage:sha256",
-      "note": "0f645bd85860"
     },
     {
       "from_sku": "100",
@@ -32852,22 +32632,6 @@
       "status": "confirmed",
       "source": "storage:sha256",
       "note": "2143749a571d"
-    },
-    {
-      "from_sku": "324",
-      "relation": "shared_photo_thumb",
-      "to_sku": "ЮП-081",
-      "status": "confirmed",
-      "source": "storage:sha256",
-      "note": "282dc535c4cd"
-    },
-    {
-      "from_sku": "ЮП-081",
-      "relation": "shared_photo_thumb",
-      "to_sku": "324",
-      "status": "confirmed",
-      "source": "storage:sha256",
-      "note": "282dc535c4cd"
     },
     {
       "from_sku": "У4020",

@@ -2,12 +2,8 @@
 031,alias_of,80,confirmed,db:aliases,"Один профиль 80×3,9, P=188,5. Монтируются одинаково; различие — самоклеящийся слой: 031 — самоклейка, 80 — без самоклейки."
 033,alias_of,ЮП-2630,confirmed,db:aliases,DB-алиас: тот же товар под другим кодом
 033,shared_cell_2024,035,confirmed,poster2024,"ячейка 2024 309,2665,581,3033"
-033,shared_photo_full,ЮП-2630,confirmed,storage:sha256,9f919486a9ac
-033,shared_photo_thumb,ЮП-2630,confirmed,storage:sha256,0f645bd85860
 035,alias_of,АТ-7121,confirmed,db:aliases,DB-алиас: тот же товар под другим кодом
 035,shared_cell_2024,033,confirmed,poster2024,"ячейка 2024 309,2665,581,3033"
-035,shared_photo_full,АТ-7121,confirmed,storage:sha256,957e37489c2b
-035,shared_photo_thumb,АТ-7121,confirmed,storage:sha256,e440e617a6bf
 10,alias_of,ЮП-1767,confirmed,db:aliases,DB-алиас: тот же товар под другим кодом
 10,shared_photo_full,ЮП-1767,confirmed,storage:sha256,4704f728304f
 10,shared_photo_thumb,ЮП-1767,confirmed,storage:sha256,00f406f678ac
@@ -52,8 +48,6 @@
 324,alias_of,ЮП-081,confirmed,db:aliases,DB-алиас: тот же товар под другим кодом
 324,shared_cell_2024,318,confirmed,poster2024,"ячейка 2024 632,2665,904,3033"
 324,shared_cell_2024,325,confirmed,poster2024,"ячейка 2024 632,2665,904,3033"
-324,shared_photo_full,ЮП-081,confirmed,storage:sha256,49d34589adf0
-324,shared_photo_thumb,ЮП-081,confirmed,storage:sha256,282dc535c4cd
 325,alias_of,ЮП-2910,confirmed,db:aliases,"Одна позиция: 325 — 26×8/P=69,3 (2018), 2910 — 23,2×8,5/P=64,1 (2021, устарело)."
 325,alias_of,ЮП-3473,confirmed,db:aliases,DB-алиас: тот же товар под другим кодом
 325,shared_cell_2024,318,confirmed,poster2024,"ячейка 2024 632,2665,904,3033"
@@ -104,8 +98,6 @@ ALS-917,alias_of,335,confirmed,db:aliases,DB-алиас: тот же товар 
 АТ-4893,shared_photo_full,ЮП-3485,confirmed,storage:sha256,7a38ca01fcfa
 АТ-4893,shared_photo_thumb,ЮП-3485,confirmed,storage:sha256,2800522983fa
 АТ-7121,alias_of,035,confirmed,db:aliases,DB-алиас: тот же товар под другим кодом
-АТ-7121,shared_photo_full,035,confirmed,storage:sha256,957e37489c2b
-АТ-7121,shared_photo_thumb,035,confirmed,storage:sha256,e440e617a6bf
 Кр.труба 16мм,alias_of,ЮП-2972,confirmed,db:aliases,DB-алиас: тот же товар под другим кодом
 Кр.труба 16мм,shared_photo_full,Кр.труба 25мм,confirmed,storage:sha256,4e25e6debfc2
 Кр.труба 16мм,shared_photo_full,Кр.труба 28мм,confirmed,storage:sha256,4e25e6debfc2
@@ -181,8 +173,6 @@ ALS-917,alias_of,335,confirmed,db:aliases,DB-алиас: тот же товар 
 ЮП-048,shared_photo_full,ALS-915,confirmed,storage:sha256,f2591994fa73
 ЮП-048,shared_photo_thumb,ALS-915,confirmed,storage:sha256,2143749a571d
 ЮП-081,alias_of,324,confirmed,db:aliases,DB-алиас: тот же товар под другим кодом
-ЮП-081,shared_photo_full,324,confirmed,storage:sha256,49d34589adf0
-ЮП-081,shared_photo_thumb,324,confirmed,storage:sha256,282dc535c4cd
 ЮП-1053,alias_of,Кр.труба 25мм,confirmed,db:aliases,DB-алиас: тот же товар под другим кодом
 ЮП-137,alias_of,480,confirmed,db:aliases,DB-алиас: тот же товар под другим кодом
 ЮП-1401,alias_of,У1010,confirmed,db:aliases,DB-алиас: тот же товар под другим кодом
@@ -221,8 +211,6 @@ ALS-917,alias_of,335,confirmed,db:aliases,DB-алиас: тот же товар 
 ЮП-2616,pair_with,ЮП-3098,confirmed,db:product_pairs,"пара для фасовки, N={'2700': {'manual': 35}}"
 ЮП-2616,pair_with,ЮП-3158,confirmed,db:product_pairs,"пара для фасовки, N={'2700': {'manual': 32}}"
 ЮП-2630,alias_of,033,confirmed,db:aliases,DB-алиас: тот же товар под другим кодом
-ЮП-2630,shared_photo_full,033,confirmed,storage:sha256,9f919486a9ac
-ЮП-2630,shared_photo_thumb,033,confirmed,storage:sha256,0f645bd85860
 ЮП-2695,pair_with,ЮП-2878,confirmed,db:product_pairs,"пара для фасовки, N={'2700': {'manual': 24}}"
 ЮП-2878,pair_with,ЮП-2695,confirmed,db:product_pairs,"пара для фасовки, N={'2700': {'manual': 24}}"
 ЮП-2900,alias_of,381,confirmed,db:aliases,DB-алиас: тот же товар под другим кодом
