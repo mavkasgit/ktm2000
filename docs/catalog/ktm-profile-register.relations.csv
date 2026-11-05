@@ -1,5 +1,5 @@
 ﻿from_sku,relation,to_sku,status,source,note
-031,alias_of,80,confirmed,db:aliases,"Один профиль 80×3,9, P=188,5. 031 — серебро, 80 — бронза. Не конфликт, а вариант отделки."
+031,alias_of,80,confirmed,db:aliases,"Один профиль 80×3,9, P=188,5. Монтируются одинаково; различие — самоклеящийся слой: 031 — самоклейка, 80 — без самоклейки."
 033,alias_of,ЮП-2630,confirmed,db:aliases,DB-алиас: тот же товар под другим кодом
 033,shared_cell_2024,035,confirmed,poster2024,"ячейка 2024 309,2665,581,3033"
 033,shared_photo_full,ЮП-2630,confirmed,storage:sha256,9f919486a9ac
@@ -89,7 +89,7 @@
 518,shared_cell_2024,517,confirmed,poster2024,"ячейка 2024 1499,1826,1771,2198"
 518,shared_photo_full,517,confirmed,storage:sha256,5040e307e967
 60,shared_cell_2024,3584,confirmed,poster2024,"ячейка 2024 2094,140,2366,515"
-80,alias_of,031,confirmed,db:aliases,"Один профиль 80×3,9, P=188,5. 031 — серебро, 80 — бронза. Не конфликт, а вариант отделки."
+80,alias_of,031,confirmed,db:aliases,"Один профиль 80×3,9, P=188,5. Монтируются одинаково; различие — самоклеящийся слой: 031 — самоклейка, 80 — без самоклейки."
 84,visual_similar,ЮП-045,confirmed,manual:audit,"Похожи визуально, но разные: 84 — 28,5×5,7/P=63,7; 045 — 31,5×7/P=68,6."
 973,alias_of,ЮП-2012,confirmed,db:aliases,DB-алиас: тот же товар под другим кодом
 ALS-1103,alias_of,ПТ40,confirmed,db:aliases,"ALS-1103 — 94,71/39,65 по ALS1103.pdf; ПТ40 — 98,8."
