@@ -375,6 +375,7 @@ def build():
     dims = {row["sku"]: row for row in read_csv(AUDIT / "dimensions" / "dimensions-reconciled.csv")}
     decisions = {row["sku"]: row for row in read_csv(AUDIT / "decisions-applied.csv")}
     applied_photo = set(meta.get("photo_applied", []))
+    photo_origin_map = meta.get("photo_origin", {})
 
     # fingerprint of DB data (not audit)
     canonical = json.dumps(products, ensure_ascii=False, sort_keys=True, separators=(",", ":"))
@@ -601,6 +602,19 @@ def build():
         else:
             photo_status = "файл отсутствует"
 
+        origin_entry = photo_origin_map.get(sku, {})
+        photo_origin = origin_entry.get("origin") or ("none" if photo_status == "нет" else "own")
+        photo_from = origin_entry.get("from") or ""
+        photo_origin_scope = origin_entry.get("scope") or ""
+        photo_origin_note = origin_entry.get("note") or ""
+        if photo_origin == "alias" and photo_from:
+            if photo_origin_scope in {"", "full+thumb"}:
+                photo_label = f"{photo_status} · алиас {photo_from}"
+            else:
+                photo_label = f"{photo_status} · {photo_origin_scope} от {photo_from}"
+        else:
+            photo_label = photo_status
+
         verdict = group_row.get("verdict") or ""
         if sku in applied_photo:
             photo_verdict = "upgrade_applied"
@@ -785,6 +799,9 @@ def build():
         if size_text:
             tags.append("size:" + size_text.replace(" ", ""))
         tags.append(f"photo:{photo_status.replace(' ', '_')}")
+        tags.append(f"photo-origin:{photo_origin}")
+        if photo_from:
+            tags.append(f"photo-from:{photo_from}")
         tags.append(f"photo-verdict:{photo_verdict}")
         tags.append(f"perimeter:{p_source.lower() if p_source else 'missing'}")
         tags.append(f"confidence:{overall_pct}")
@@ -857,6 +874,11 @@ def build():
             "audit_note": group_row.get("note") or "",
             "audit_evidence": group_row.get("evidence") or "",
             "photo_status": photo_status,
+            "photo_label": photo_label,
+            "photo_origin": photo_origin,
+            "photo_from": photo_from,
+            "photo_origin_scope": photo_origin_scope,
+            "photo_origin_note": photo_origin_note,
             "photo_verdict": photo_verdict,
             "perimeter_archive": archive_p,
             "perimeter_poster": poster_p,
@@ -932,6 +954,7 @@ def render_markdown(data: dict) -> str:
     statuses = Counter(item["overall_status"] for item in products)
     with_photo = sum(1 for item in products if item["photo_status"] != "нет")
     without_photo = total - with_photo
+    alias_photos = [item for item in products if item["photo_origin"] == "alias"]
     refuted_products = [item for item in products if item["refuted"]]
     open_products = [item for item in products if item["open_claims"]]
     confirmed_100 = [item for item in products if item["overall_confidence"] >= 100]
@@ -964,6 +987,7 @@ def render_markdown(data: dict) -> str:
         "## Сводка",
         "",
         f"- Всего профилей: **{total}**; с фото: **{with_photo}**; без фото: **{without_photo}**.",
+        f"- Фото от алиаса (своего оригинала нет): **{len(alias_photos)}**.",
         f"- Подтверждено: **{statuses.get('confirmed', 0)}**; вероятно: **{statuses.get('probable', 0)}**; "
         f"требует проверки: **{statuses.get('needs_review', 0)}**; неизвестно: **{statuses.get('unknown', 0)}**.",
         f"- 100% уверенность: **{len(confirmed_100)}**; есть опровергнутые утверждения: **{len(refuted_products)}**; "
@@ -988,7 +1012,7 @@ def render_markdown(data: dict) -> str:
         for item in sorted(confirmed_100, key=lambda row: row["sku"]):
             lines.append(
                 f"| `{item['sku']}` | {md_escape(item['name'])} | {md_escape(item['linear_best'] or '—')} | "
-                f"{fmt_p(item['perimeter_mm'], item['perimeter_source'])} | {item['photo_status']} |"
+                f"{fmt_p(item['perimeter_mm'], item['perimeter_source'])} | {item['photo_label']} |"
             )
     else:
         lines.append("Строгого 100% нет: у части карточек нет чертежа или фото. Ниже — 90–99%.")
@@ -999,6 +1023,9 @@ def render_markdown(data: dict) -> str:
         "",
         "Каждая строка — один профиль. Полные поля (включая JSON `attributes`, длины, флаги, состав) — "
         "в `ktm-profile-register.csv` и `.json`.",
+        "",
+        "В колонке «Фото»: `алиас X` — своего оригинала нет, стоит фото/чертёж алиаса X; "
+        "`full от X` / `thumb от X` — заимствована только эта часть.",
         "",
     ]
     order = sorted(by_group, key=lambda key: list(GROUPS).index(key) if key in GROUPS else 99)
@@ -1035,7 +1062,7 @@ def render_markdown(data: dict) -> str:
                 f"{fmt_value(item['mount_width_mm'])} | "
                 f"{fmt_value(item['length_primary_mm'])} | "
                 f"{fmt_value(item['n_per_hanger'])} | "
-                f"{item['photo_status']} | {md_escape(rel)} | "
+                f"{md_escape(item['photo_label'])} | {md_escape(rel)} | "
                 f"**{item['overall_confidence']}%** | {item['overall_status']} | {md_escape(comment)} |"
             )
         lines.append("")
@@ -1139,6 +1166,31 @@ def render_markdown(data: dict) -> str:
     lines.append("")
 
     lines += [
+        "## Фото от алиаса",
+        "",
+        "У этих артикулов своего оригинала нет: в карточке стоит фото/чертёж алиаса. "
+        "В колонке «Фото» это помечено как `алиас X`.",
+        "",
+        "| SKU | Что используется | Откуда | Комментарий |",
+        "|---|---|---|---|",
+    ]
+    if alias_photos:
+        for item in sorted(alias_photos, key=lambda row: row["sku"]):
+            scope = item["photo_origin_scope"] or "full+thumb"
+            scope_label = {
+                "full": "full",
+                "thumb": "thumb",
+                "full+thumb": "full + thumb",
+            }.get(scope, scope)
+            lines.append(
+                f"| `{item['sku']}` | {md_escape(scope_label)} | `{md_escape(item['photo_from'])}` | "
+                f"{md_escape(item['photo_origin_note'])} |"
+            )
+    else:
+        lines.append("| — | — | — | — |")
+    lines.append("")
+
+    lines += [
         "## Удалённые артикулы",
         "",
         "| SKU | Почему удалён |",
@@ -1156,7 +1208,7 @@ def render_markdown(data: dict) -> str:
         "npm run docs:profiles:check    # упасть, если реестр отстал от БД",
         "```",
         "",
-        "Ручные решения (семейства, алиасы, визуальные пары, опровержения) правятся в "
+        "Ручные решения (семейства, алиасы, визуальные пары, опровержения, источник фото) правятся в "
         "`ktm-profile-register.meta.json`; данные БД — только из прод-БД.",
         "",
         "## Файлы",
@@ -1181,7 +1233,8 @@ def write_csv(data: dict) -> None:
         "hanger_mode", "quantity_per_hanger", "n_per_hanger",
         "photo_full", "photo_thumb", "photo_full_exists", "photo_thumb_exists",
         "photo_full_px", "photo_thumb_px", "photo_full_bytes", "photo_thumb_bytes",
-        "photo_full_sha12", "photo_thumb_sha12", "photo_status", "photo_verdict",
+        "photo_full_sha12", "photo_thumb_sha12", "photo_status", "photo_label",
+        "photo_origin", "photo_from", "photo_origin_scope", "photo_origin_note", "photo_verdict",
         "attributes_json", "dimensions", "notes", "source", "processing_flags", "composition",
         "audit_group", "audit_verdict", "audit_confidence", "audit_note", "audit_evidence",
         "perimeter_archive", "perimeter_poster", "perimeter_best", "perimeter_source",
