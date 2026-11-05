@@ -1,0 +1,267 @@
+﻿from_sku,relation,to_sku,status,source,note
+031,alias_of,80,confirmed,db:aliases,"Один профиль 80×3,9, P=188,5. 031 — серебро, 80 — бронза. Не конфликт, а вариант отделки."
+033,alias_of,ЮП-2630,confirmed,db:aliases,DB-алиас: тот же товар под другим кодом
+033,shared_cell_2024,035,confirmed,poster2024,"ячейка 2024 309,2665,581,3033"
+033,shared_photo_full,ЮП-2630,confirmed,storage:sha256,9f919486a9ac
+033,shared_photo_thumb,ЮП-2630,confirmed,storage:sha256,0f645bd85860
+035,alias_of,АТ-7121,confirmed,db:aliases,DB-алиас: тот же товар под другим кодом
+035,shared_cell_2024,033,confirmed,poster2024,"ячейка 2024 309,2665,581,3033"
+035,shared_photo_full,АТ-7121,confirmed,storage:sha256,957e37489c2b
+035,shared_photo_thumb,АТ-7121,confirmed,storage:sha256,e440e617a6bf
+10,alias_of,ЮП-1767,confirmed,db:aliases,DB-алиас: тот же товар под другим кодом
+10,shared_photo_full,ЮП-1767,confirmed,storage:sha256,4704f728304f
+10,shared_photo_thumb,ЮП-1767,confirmed,storage:sha256,00f406f678ac
+100,alias_of,ЮП-2901,confirmed,db:aliases,DB-алиас: тот же товар под другим кодом
+100,shared_cell_2024,110,confirmed,poster2024,"ячейка 2024 36,2665,308,3033"
+100,shared_photo_thumb,ЮП-2901,confirmed,storage:sha256,d6fcaff589d4
+1010,shared_cell_2024,1515,confirmed,poster2024,"ячейка 2024 1226,2196,1498,2638"
+1010,shared_cell_2024,2525,confirmed,poster2024,"ячейка 2024 1226,2196,1498,2638"
+1010,shared_cell_2024,4040,confirmed,poster2024,"ячейка 2024 1226,2196,1498,2638"
+1010,shared_photo_full,1515,confirmed,storage:sha256,f763d9089ce9
+1010,shared_photo_full,2525,confirmed,storage:sha256,f763d9089ce9
+1010,shared_photo_full,4040,confirmed,storage:sha256,f763d9089ce9
+110,shared_cell_2024,100,confirmed,poster2024,"ячейка 2024 36,2665,308,3033"
+1212,shared_photo_full,У1010,confirmed,storage:sha256,d44909619876
+1212,shared_photo_full,У4040,confirmed,storage:sha256,d44909619876
+1212,shared_photo_full,У5050,confirmed,storage:sha256,d44909619876
+130,visual_similar,ЮП-2396,confirmed,manual:audit,"Похожи визуально, но разные: 130 — 44×4,1/P=106,3; 2396 — 40×4,2 с резиновой вставкой/P=99,9."
+150,alias_of,ЮП-3168,confirmed,db:aliases,DB-алиас: тот же товар под другим кодом
+150,shared_photo_thumb,ЮП-3168,confirmed,storage:sha256,abd107daeaf0
+1515,alias_of,ЮП-3263,confirmed,db:aliases,DB-алиас: тот же товар под другим кодом
+1515,shared_cell_2024,1010,confirmed,poster2024,"ячейка 2024 1226,2196,1498,2638"
+1515,shared_cell_2024,2525,confirmed,poster2024,"ячейка 2024 1226,2196,1498,2638"
+1515,shared_cell_2024,4040,confirmed,poster2024,"ячейка 2024 1226,2196,1498,2638"
+1515,shared_photo_full,1010,confirmed,storage:sha256,f763d9089ce9
+1515,shared_photo_full,2525,confirmed,storage:sha256,f763d9089ce9
+1515,shared_photo_full,4040,confirmed,storage:sha256,f763d9089ce9
+2020,alias_of,ЮП-3242,confirmed,db:aliases,DB-алиас: тот же товар под другим кодом
+228,shared_cell_2024,229,confirmed,poster2024,"ячейка 2024 1499,2665,1771,3033"
+228,shared_photo_full,229,confirmed,storage:sha256,9a0a8fc9984c
+229,shared_cell_2024,228,confirmed,poster2024,"ячейка 2024 1499,2665,1771,3033"
+229,shared_photo_full,228,confirmed,storage:sha256,9a0a8fc9984c
+2525,shared_cell_2024,1010,confirmed,poster2024,"ячейка 2024 1226,2196,1498,2638"
+2525,shared_cell_2024,1515,confirmed,poster2024,"ячейка 2024 1226,2196,1498,2638"
+2525,shared_cell_2024,4040,confirmed,poster2024,"ячейка 2024 1226,2196,1498,2638"
+2525,shared_photo_full,1010,confirmed,storage:sha256,f763d9089ce9
+2525,shared_photo_full,1515,confirmed,storage:sha256,f763d9089ce9
+2525,shared_photo_full,4040,confirmed,storage:sha256,f763d9089ce9
+318,alias_of,ЮП-3123,confirmed,db:aliases,DB-алиас: тот же товар под другим кодом
+318,shared_cell_2024,324,confirmed,poster2024,"ячейка 2024 632,2665,904,3033"
+318,shared_cell_2024,325,confirmed,poster2024,"ячейка 2024 632,2665,904,3033"
+320,alias_of,ЮП-2902,confirmed,db:aliases,DB-алиас: тот же товар под другим кодом
+324,alias_of,ЮП-081,confirmed,db:aliases,DB-алиас: тот же товар под другим кодом
+324,shared_cell_2024,318,confirmed,poster2024,"ячейка 2024 632,2665,904,3033"
+324,shared_cell_2024,325,confirmed,poster2024,"ячейка 2024 632,2665,904,3033"
+324,shared_photo_full,ЮП-081,confirmed,storage:sha256,49d34589adf0
+324,shared_photo_thumb,ЮП-081,confirmed,storage:sha256,282dc535c4cd
+325,alias_of,ЮП-2910,confirmed,db:aliases,"Одна позиция: 325 — 26×8/P=69,3 (2018), 2910 — 23,2×8,5/P=64,1 (2021, устарело)."
+325,alias_of,ЮП-3473,confirmed,db:aliases,DB-алиас: тот же товар под другим кодом
+325,shared_cell_2024,318,confirmed,poster2024,"ячейка 2024 632,2665,904,3033"
+325,shared_cell_2024,324,confirmed,poster2024,"ячейка 2024 632,2665,904,3033"
+3328,alias_of,ЮП-2083,confirmed,db:aliases,DB-алиас: тот же товар под другим кодом
+3328,shared_cell_2024,3586,confirmed,poster2024,"ячейка 2024 1822,140,2094,515"
+335,alias_of,ALS-917,confirmed,db:aliases,DB-алиас: тот же товар под другим кодом
+337,alias_of,ЮП-2077,confirmed,db:aliases,"Оба Y-профиля: 337 — 20,18×20/P=73,8 (2019), 2077 — 23,1×23,1/P=79,2 (2022). Алиас сохранён, размеры разные (издания)."
+3418,alias_of,ЮП-3019,confirmed,db:aliases,"Один угол 24×10; у 3418 нет оригинального чертежа, размеры приняты по 3019."
+347,visual_similar,ЮП-2183,confirmed,manual:audit,"Похожи визуально, но разные: 347 — 18,5×8/P=53,4; 2183 — 20×10/P=61,7."
+3584,shared_cell_2024,60,confirmed,poster2024,"ячейка 2024 2094,140,2366,515"
+3586,shared_cell_2024,3328,confirmed,poster2024,"ячейка 2024 1822,140,2094,515"
+361,shared_cell_2024,362,confirmed,poster2024,"ячейка 2024 309,2196,581,2638"
+361,shared_photo_full,362,confirmed,storage:sha256,2bf7effe26b0
+362,shared_cell_2024,361,confirmed,poster2024,"ячейка 2024 309,2196,581,2638"
+362,shared_photo_full,361,confirmed,storage:sha256,2bf7effe26b0
+371,alias_of,ЮП-2256,confirmed,db:aliases,"Один профиль; P=96,7 по KTM-013, в БД было 75,0."
+381,alias_of,ЮП-2900,confirmed,db:aliases,DB-алиас: тот же товар под другим кодом
+381,shared_cell_2024,382,confirmed,poster2024,"ячейка 2024 1226,3036,1498,3350"
+382,alias_of,ЮП-2976,confirmed,db:aliases,DB-алиас: тот же товар под другим кодом
+382,shared_cell_2024,381,confirmed,poster2024,"ячейка 2024 1226,3036,1498,3350"
+4040,alias_of,ЮП-2384,confirmed,db:aliases,DB-алиас: тот же товар под другим кодом
+4040,shared_cell_2024,1010,confirmed,poster2024,"ячейка 2024 1226,2196,1498,2638"
+4040,shared_cell_2024,1515,confirmed,poster2024,"ячейка 2024 1226,2196,1498,2638"
+4040,shared_cell_2024,2525,confirmed,poster2024,"ячейка 2024 1226,2196,1498,2638"
+4040,shared_photo_full,1010,confirmed,storage:sha256,f763d9089ce9
+4040,shared_photo_full,1515,confirmed,storage:sha256,f763d9089ce9
+4040,shared_photo_full,2525,confirmed,storage:sha256,f763d9089ce9
+480,alias_of,ЮП-137,confirmed,db:aliases,DB-алиас: тот же товар под другим кодом
+481,alias_of,ЮП-2974,confirmed,db:aliases,DB-алиас: тот же товар под другим кодом
+517,shared_cell_2024,518,confirmed,poster2024,"ячейка 2024 1499,1826,1771,2198"
+517,shared_photo_full,518,confirmed,storage:sha256,5040e307e967
+518,shared_cell_2024,517,confirmed,poster2024,"ячейка 2024 1499,1826,1771,2198"
+518,shared_photo_full,517,confirmed,storage:sha256,5040e307e967
+60,shared_cell_2024,3584,confirmed,poster2024,"ячейка 2024 2094,140,2366,515"
+80,alias_of,031,confirmed,db:aliases,"Один профиль 80×3,9, P=188,5. 031 — серебро, 80 — бронза. Не конфликт, а вариант отделки."
+84,visual_similar,ЮП-045,confirmed,manual:audit,"Похожи визуально, но разные: 84 — 28,5×5,7/P=63,7; 045 — 31,5×7/P=68,6."
+973,alias_of,ЮП-2012,confirmed,db:aliases,DB-алиас: тот же товар под другим кодом
+ALS-1103,alias_of,ПТ40,confirmed,db:aliases,"ALS-1103 — 94,71/39,65 по ALS1103.pdf; ПТ40 — 98,8."
+ALS-1103,alias_of,ЮП-3035,confirmed,db:aliases,"ALS-1103 — 94,71/39,65 по ALS1103.pdf; ЮП-3035 — 98,8."
+ALS-915,alias_of,ЮП-048,confirmed,db:aliases,DB-алиас: тот же товар под другим кодом
+ALS-915,shared_photo_full,ЮП-048,confirmed,storage:sha256,f2591994fa73
+ALS-915,shared_photo_thumb,ЮП-048,confirmed,storage:sha256,2143749a571d
+ALS-917,alias_of,335,confirmed,db:aliases,DB-алиас: тот же товар под другим кодом
+АТ-4888,alias_of,ЮП-3094,confirmed,db:aliases,DB-алиас: тот же товар под другим кодом
+АТ-4892,alias_of,ЮП-3077,confirmed,db:aliases,DB-алиас: тот же товар под другим кодом
+АТ-4893,alias_of,ЮП-3485,confirmed,db:aliases,DB-алиас: тот же товар под другим кодом
+АТ-4893,shared_photo_full,ЮП-3485,confirmed,storage:sha256,7a38ca01fcfa
+АТ-4893,shared_photo_thumb,ЮП-3485,confirmed,storage:sha256,2800522983fa
+АТ-7121,alias_of,035,confirmed,db:aliases,DB-алиас: тот же товар под другим кодом
+АТ-7121,shared_photo_full,035,confirmed,storage:sha256,957e37489c2b
+АТ-7121,shared_photo_thumb,035,confirmed,storage:sha256,e440e617a6bf
+Кр.труба 16мм,alias_of,ЮП-2972,confirmed,db:aliases,DB-алиас: тот же товар под другим кодом
+Кр.труба 16мм,shared_photo_full,Кр.труба 25мм,confirmed,storage:sha256,4e25e6debfc2
+Кр.труба 16мм,shared_photo_full,Кр.труба 28мм,confirmed,storage:sha256,4e25e6debfc2
+Кр.труба 16мм,shared_photo_full,ПС20,confirmed,storage:sha256,4e25e6debfc2
+Кр.труба 25мм,alias_of,ЮП-1053,confirmed,db:aliases,DB-алиас: тот же товар под другим кодом
+Кр.труба 25мм,shared_photo_full,Кр.труба 16мм,confirmed,storage:sha256,4e25e6debfc2
+Кр.труба 25мм,shared_photo_full,Кр.труба 28мм,confirmed,storage:sha256,4e25e6debfc2
+Кр.труба 25мм,shared_photo_full,ПС20,confirmed,storage:sha256,4e25e6debfc2
+Кр.труба 28мм,shared_photo_full,Кр.труба 16мм,confirmed,storage:sha256,4e25e6debfc2
+Кр.труба 28мм,shared_photo_full,Кр.труба 25мм,confirmed,storage:sha256,4e25e6debfc2
+Кр.труба 28мм,shared_photo_full,ПС20,confirmed,storage:sha256,4e25e6debfc2
+МС16-20,alias_of,ЮП-3270,confirmed,db:aliases,DB-алиас: тот же товар под другим кодом
+МС16-25,alias_of,ЮП-3271,confirmed,db:aliases,DB-алиас: тот же товар под другим кодом
+МС18,alias_of,ЮП-3233,confirmed,db:aliases,DB-алиас: тот же товар под другим кодом
+П101010,alias_of,ЮП-2397,confirmed,db:aliases,DB-алиас: тот же товар под другим кодом
+П101010,shared_photo_full,П151515,confirmed,storage:sha256,c968cead27a3
+П101010,shared_photo_full,П202020,confirmed,storage:sha256,c968cead27a3
+П151515,shared_photo_full,П101010,confirmed,storage:sha256,c968cead27a3
+П151515,shared_photo_full,П202020,confirmed,storage:sha256,c968cead27a3
+П202020,shared_photo_full,П101010,confirmed,storage:sha256,c968cead27a3
+П202020,shared_photo_full,П151515,confirmed,storage:sha256,c968cead27a3
+ПП37,alias_of,ПП47,confirmed,db:aliases,DB-алиас: тот же товар под другим кодом
+ПП37,alias_of,ЮП-2413,confirmed,db:aliases,DB-алиас: тот же товар под другим кодом
+ПП37,shared_photo_full,ЮП-2413,confirmed,storage:sha256,f6ea04a48a17
+ПП37,shared_photo_thumb,ЮП-2413,confirmed,storage:sha256,86eb2d24d8cd
+ПП47,alias_of,ПП37,confirmed,db:aliases,DB-алиас: тот же товар под другим кодом
+ПП47,alias_of,ЮП-2413,confirmed,db:aliases,DB-алиас: тот же товар под другим кодом
+ПП50,alias_of,ЮП-2464-1,confirmed,db:aliases,DB-алиас: тот же товар под другим кодом
+ПП79,alias_of,ЮП-2975,confirmed,db:aliases,DB-алиас: тот же товар под другим кодом
+ПП95,alias_of,ЮП-2076,confirmed,db:aliases,DB-алиас: тот же товар под другим кодом
+ПС20,alias_of,ЮП-003,confirmed,db:aliases,DB-алиас: тот же товар под другим кодом
+ПС20,shared_photo_full,Кр.труба 16мм,confirmed,storage:sha256,4e25e6debfc2
+ПС20,shared_photo_full,Кр.труба 25мм,confirmed,storage:sha256,4e25e6debfc2
+ПС20,shared_photo_full,Кр.труба 28мм,confirmed,storage:sha256,4e25e6debfc2
+ПТ40,alias_of,ALS-1103,confirmed,db:aliases,"ALS-1103 — 94,71/39,65 по ALS1103.pdf; ПТ40 — 98,8."
+ПТ40,alias_of,ЮП-3035,confirmed,db:aliases,DB-алиас: тот же товар под другим кодом
+ПТ60,alias_of,ЮП-1875,confirmed,db:aliases,DB-алиас: тот же товар под другим кодом
+ПТ60,alias_of,ЮП-3658,confirmed,db:aliases,DB-алиас: тот же товар под другим кодом
+ПТ80,alias_of,ЮП-1880,confirmed,db:aliases,DB-алиас: тот же товар под другим кодом
+У1010,alias_of,ЮП-1401,confirmed,db:aliases,DB-алиас: тот же товар под другим кодом
+У1010,shared_photo_full,1212,confirmed,storage:sha256,d44909619876
+У1010,shared_photo_full,У4040,confirmed,storage:sha256,d44909619876
+У1010,shared_photo_full,У5050,confirmed,storage:sha256,d44909619876
+У1515,alias_of,ЮП-009,confirmed,db:aliases,DB-алиас: тот же товар под другим кодом
+У2020,alias_of,ЮП-011,confirmed,db:aliases,DB-алиас: тот же товар под другим кодом
+У2525,alias_of,ЮП-2004,confirmed,db:aliases,DB-алиас: тот же товар под другим кодом
+У2525,shared_photo_full,У3030,confirmed,storage:sha256,d47c89cc4eb5
+У3030,alias_of,ЮП-1629,confirmed,db:aliases,DB-алиас: тот же товар под другим кодом
+У3030,shared_photo_full,У2525,confirmed,storage:sha256,d47c89cc4eb5
+У4020,shared_photo_full,У5030,confirmed,storage:sha256,7e816ebd5430
+У4020,shared_photo_thumb,У5030,confirmed,storage:sha256,0bd80322fee2
+У4040,shared_photo_full,1212,confirmed,storage:sha256,d44909619876
+У4040,shared_photo_full,У1010,confirmed,storage:sha256,d44909619876
+У4040,shared_photo_full,У5050,confirmed,storage:sha256,d44909619876
+У5030,shared_photo_full,У4020,confirmed,storage:sha256,7e816ebd5430
+У5030,shared_photo_thumb,У4020,confirmed,storage:sha256,0bd80322fee2
+У5050,shared_photo_full,1212,confirmed,storage:sha256,d44909619876
+У5050,shared_photo_full,У1010,confirmed,storage:sha256,d44909619876
+У5050,shared_photo_full,У4040,confirmed,storage:sha256,d44909619876
+ЮП-003,alias_of,ПС20,confirmed,db:aliases,DB-алиас: тот же товар под другим кодом
+ЮП-004,shared_photo_full,ЮП-005,confirmed,storage:sha256,e96ad063c7a5
+ЮП-005,shared_photo_full,ЮП-004,confirmed,storage:sha256,e96ad063c7a5
+ЮП-009,alias_of,У1515,confirmed,db:aliases,DB-алиас: тот же товар под другим кодом
+ЮП-009,shared_photo_full,ЮП-011,confirmed,storage:sha256,4a1f93831b88
+ЮП-009,shared_photo_full,ЮП-1401,confirmed,storage:sha256,4a1f93831b88
+ЮП-009,shared_photo_full,ЮП-1629,confirmed,storage:sha256,4a1f93831b88
+ЮП-011,alias_of,У2020,confirmed,db:aliases,DB-алиас: тот же товар под другим кодом
+ЮП-011,shared_photo_full,ЮП-009,confirmed,storage:sha256,4a1f93831b88
+ЮП-011,shared_photo_full,ЮП-1401,confirmed,storage:sha256,4a1f93831b88
+ЮП-011,shared_photo_full,ЮП-1629,confirmed,storage:sha256,4a1f93831b88
+ЮП-045,visual_similar,84,confirmed,manual:audit,"Похожи визуально, но разные: 84 — 28,5×5,7/P=63,7; 045 — 31,5×7/P=68,6."
+ЮП-048,alias_of,ALS-915,confirmed,db:aliases,DB-алиас: тот же товар под другим кодом
+ЮП-048,shared_photo_full,ALS-915,confirmed,storage:sha256,f2591994fa73
+ЮП-048,shared_photo_thumb,ALS-915,confirmed,storage:sha256,2143749a571d
+ЮП-081,alias_of,324,confirmed,db:aliases,DB-алиас: тот же товар под другим кодом
+ЮП-081,shared_photo_full,324,confirmed,storage:sha256,49d34589adf0
+ЮП-081,shared_photo_thumb,324,confirmed,storage:sha256,282dc535c4cd
+ЮП-1053,alias_of,Кр.труба 25мм,confirmed,db:aliases,DB-алиас: тот же товар под другим кодом
+ЮП-137,alias_of,480,confirmed,db:aliases,DB-алиас: тот же товар под другим кодом
+ЮП-1401,alias_of,У1010,confirmed,db:aliases,DB-алиас: тот же товар под другим кодом
+ЮП-1401,shared_photo_full,ЮП-009,confirmed,storage:sha256,4a1f93831b88
+ЮП-1401,shared_photo_full,ЮП-011,confirmed,storage:sha256,4a1f93831b88
+ЮП-1401,shared_photo_full,ЮП-1629,confirmed,storage:sha256,4a1f93831b88
+ЮП-1629,alias_of,У3030,confirmed,db:aliases,DB-алиас: тот же товар под другим кодом
+ЮП-1629,shared_photo_full,ЮП-009,confirmed,storage:sha256,4a1f93831b88
+ЮП-1629,shared_photo_full,ЮП-011,confirmed,storage:sha256,4a1f93831b88
+ЮП-1629,shared_photo_full,ЮП-1401,confirmed,storage:sha256,4a1f93831b88
+ЮП-1767,alias_of,10,confirmed,db:aliases,DB-алиас: тот же товар под другим кодом
+ЮП-1767,shared_photo_full,10,confirmed,storage:sha256,4704f728304f
+ЮП-1767,shared_photo_thumb,10,confirmed,storage:sha256,00f406f678ac
+ЮП-1875,alias_of,ПТ60,confirmed,db:aliases,DB-алиас: тот же товар под другим кодом
+ЮП-1875,alias_of,ЮП-3658,confirmed,db:aliases,DB-алиас: тот же товар под другим кодом
+ЮП-1875,shared_photo_full,ЮП-3658,confirmed,storage:sha256,4ba180681a84
+ЮП-1875,shared_photo_thumb,ЮП-3658,confirmed,storage:sha256,47bf4e2dabed
+ЮП-1880,alias_of,ПТ80,confirmed,db:aliases,DB-алиас: тот же товар под другим кодом
+ЮП-2004,alias_of,У2525,confirmed,db:aliases,DB-алиас: тот же товар под другим кодом
+ЮП-2012,alias_of,973,confirmed,db:aliases,DB-алиас: тот же товар под другим кодом
+ЮП-2076,alias_of,ПП95,confirmed,db:aliases,DB-алиас: тот же товар под другим кодом
+ЮП-2077,alias_of,337,confirmed,db:aliases,"Оба Y-профиля: 337 — 20,18×20/P=73,8 (2019), 2077 — 23,1×23,1/P=79,2 (2022). Алиас сохранён, размеры разные (издания)."
+ЮП-2083,alias_of,3328,confirmed,db:aliases,DB-алиас: тот же товар под другим кодом
+ЮП-2183,visual_similar,347,confirmed,manual:audit,"Похожи визуально, но разные: 347 — 18,5×8/P=53,4; 2183 — 20×10/P=61,7."
+ЮП-2256,alias_of,371,confirmed,db:aliases,"Один профиль; P=96,7 по KTM-013, в БД было 75,0."
+ЮП-2384,alias_of,4040,confirmed,db:aliases,DB-алиас: тот же товар под другим кодом
+ЮП-2396,visual_similar,130,confirmed,manual:audit,"Похожи визуально, но разные: 130 — 44×4,1/P=106,3; 2396 — 40×4,2 с резиновой вставкой/P=99,9."
+ЮП-2397,alias_of,П101010,confirmed,db:aliases,DB-алиас: тот же товар под другим кодом
+ЮП-2413,alias_of,ПП37,confirmed,db:aliases,DB-алиас: тот же товар под другим кодом
+ЮП-2413,alias_of,ПП47,confirmed,db:aliases,DB-алиас: тот же товар под другим кодом
+ЮП-2413,shared_photo_full,ПП37,confirmed,storage:sha256,f6ea04a48a17
+ЮП-2413,shared_photo_thumb,ПП37,confirmed,storage:sha256,86eb2d24d8cd
+ЮП-2464-1,alias_of,ПП50,confirmed,db:aliases,DB-алиас: тот же товар под другим кодом
+ЮП-2604,pair_with,ЮП-2616,confirmed,db:product_pairs,"пара для фасовки, N={'2700': {'manual': 30}}"
+ЮП-2616,pair_with,ЮП-2604,confirmed,db:product_pairs,"пара для фасовки, N={'2700': {'manual': 30}}"
+ЮП-2616,pair_with,ЮП-3098,confirmed,db:product_pairs,"пара для фасовки, N={'2700': {'manual': 35}}"
+ЮП-2616,pair_with,ЮП-3158,confirmed,db:product_pairs,"пара для фасовки, N={'2700': {'manual': 32}}"
+ЮП-2630,alias_of,033,confirmed,db:aliases,DB-алиас: тот же товар под другим кодом
+ЮП-2630,shared_photo_full,033,confirmed,storage:sha256,9f919486a9ac
+ЮП-2630,shared_photo_thumb,033,confirmed,storage:sha256,0f645bd85860
+ЮП-2695,pair_with,ЮП-2878,confirmed,db:product_pairs,"пара для фасовки, N={'2700': {'manual': 24}}"
+ЮП-2878,pair_with,ЮП-2695,confirmed,db:product_pairs,"пара для фасовки, N={'2700': {'manual': 24}}"
+ЮП-2900,alias_of,381,confirmed,db:aliases,DB-алиас: тот же товар под другим кодом
+ЮП-2901,alias_of,100,confirmed,db:aliases,DB-алиас: тот же товар под другим кодом
+ЮП-2901,shared_photo_thumb,100,confirmed,storage:sha256,d6fcaff589d4
+ЮП-2902,alias_of,320,confirmed,db:aliases,DB-алиас: тот же товар под другим кодом
+ЮП-2910,alias_of,325,confirmed,db:aliases,"Одна позиция: 325 — 26×8/P=69,3 (2018), 2910 — 23,2×8,5/P=64,1 (2021, устарело)."
+ЮП-2910,alias_of,ЮП-3473,confirmed,db:aliases,"Одна позиция: 3473 — 26×9/P=70,6 (2025), 2910 — старое 23,2/64,1."
+ЮП-2910,shared_photo_full,ЮП-3473,confirmed,storage:sha256,014dd7bfc3a0
+ЮП-2910,shared_photo_thumb,ЮП-3473,confirmed,storage:sha256,d3d259269b7e
+ЮП-2972,alias_of,Кр.труба 16мм,confirmed,db:aliases,DB-алиас: тот же товар под другим кодом
+ЮП-2974,alias_of,481,confirmed,db:aliases,DB-алиас: тот же товар под другим кодом
+ЮП-2975,alias_of,ПП79,confirmed,db:aliases,DB-алиас: тот же товар под другим кодом
+ЮП-2976,alias_of,382,confirmed,db:aliases,DB-алиас: тот же товар под другим кодом
+ЮП-3019,alias_of,3418,confirmed,db:aliases,"Один угол 24×10; у 3418 нет оригинального чертежа, размеры приняты по 3019."
+ЮП-3035,alias_of,ALS-1103,confirmed,db:aliases,"ALS-1103 — 94,71/39,65 по ALS1103.pdf; ЮП-3035 — 98,8."
+ЮП-3035,alias_of,ПТ40,confirmed,db:aliases,DB-алиас: тот же товар под другим кодом
+ЮП-3077,alias_of,АТ-4892,confirmed,db:aliases,DB-алиас: тот же товар под другим кодом
+ЮП-3094,alias_of,АТ-4888,confirmed,db:aliases,DB-алиас: тот же товар под другим кодом
+ЮП-3098,pair_with,ЮП-2616,confirmed,db:product_pairs,"пара для фасовки, N={'2700': {'manual': 35}}"
+ЮП-3123,alias_of,318,confirmed,db:aliases,DB-алиас: тот же товар под другим кодом
+ЮП-3158,pair_with,ЮП-2616,confirmed,db:product_pairs,"пара для фасовки, N={'2700': {'manual': 32}}"
+ЮП-3168,alias_of,150,confirmed,db:aliases,DB-алиас: тот же товар под другим кодом
+ЮП-3168,shared_photo_thumb,150,confirmed,storage:sha256,abd107daeaf0
+ЮП-3233,alias_of,МС18,confirmed,db:aliases,DB-алиас: тот же товар под другим кодом
+ЮП-3242,alias_of,2020,confirmed,db:aliases,DB-алиас: тот же товар под другим кодом
+ЮП-3263,alias_of,1515,confirmed,db:aliases,DB-алиас: тот же товар под другим кодом
+ЮП-3270,alias_of,МС16-20,confirmed,db:aliases,DB-алиас: тот же товар под другим кодом
+ЮП-3271,alias_of,МС16-25,confirmed,db:aliases,DB-алиас: тот же товар под другим кодом
+ЮП-3452,pair_with,ЮП-3453,confirmed,db:product_pairs,"пара для фасовки, N={'2700': {'manual': 26}}"
+ЮП-3453,pair_with,ЮП-3452,confirmed,db:product_pairs,"пара для фасовки, N={'2700': {'manual': 26}}"
+ЮП-3473,alias_of,325,confirmed,db:aliases,DB-алиас: тот же товар под другим кодом
+ЮП-3473,alias_of,ЮП-2910,confirmed,db:aliases,"Одна позиция: 3473 — 26×9/P=70,6 (2025), 2910 — старое 23,2/64,1."
+ЮП-3473,shared_photo_full,ЮП-2910,confirmed,storage:sha256,014dd7bfc3a0
+ЮП-3473,shared_photo_thumb,ЮП-2910,confirmed,storage:sha256,d3d259269b7e
+ЮП-3485,alias_of,АТ-4893,confirmed,db:aliases,DB-алиас: тот же товар под другим кодом
+ЮП-3485,shared_photo_full,АТ-4893,confirmed,storage:sha256,7a38ca01fcfa
+ЮП-3485,shared_photo_thumb,АТ-4893,confirmed,storage:sha256,2800522983fa
+ЮП-3658,alias_of,ПТ60,confirmed,db:aliases,DB-алиас: тот же товар под другим кодом
+ЮП-3658,alias_of,ЮП-1875,confirmed,db:aliases,DB-алиас: тот же товар под другим кодом
+ЮП-3658,shared_photo_full,ЮП-1875,confirmed,storage:sha256,4ba180681a84
+ЮП-3658,shared_photo_thumb,ЮП-1875,confirmed,storage:sha256,47bf4e2dabed

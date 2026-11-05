@@ -163,6 +163,7 @@ e2e и backend-тесты агент запускает сам: `npm --prefix fr
 | [`docs/quality/gates.md`](docs/quality/gates.md) | **Карта гейтов**: шаг → что ловит → чем доказан красный ход |
 | [`docs/toolchain.md`](docs/toolchain.md) | Тулчейн: генерируется из `tools.json`, дрейф ловит `check:registry` |
 | [`docs/ekranchik-catalog-sync.md`](docs/ekranchik-catalog-sync.md) | Синк каталога из прода: «Экранчик» и dev-БД + storage (`npm run verify:ekranchik` / `sync:ekranchik`) |
+| [`docs/catalog/ktm-profile-register.md`](docs/catalog/ktm-profile-register.md) | **Реестр профилей**: строка на артикул, данные прод-БД, фото, связи, уверенность; `npm run docs:profiles` |
 
 ## Логи контейнеров
 

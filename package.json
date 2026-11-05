@@ -22,6 +22,8 @@
     "verify:sync": "node scripts/verify-sync.mjs --other ../hrms",
     "verify:ekranchik": "python scripts/sync-ekranchik.py --check",
     "sync:ekranchik": "python scripts/sync-ekranchik.py --apply",
+    "docs:profiles": "python scripts/build-profile-register.py",
+    "docs:profiles:check": "python scripts/build-profile-register.py --check",
     "predev": "node scripts/verify-sync.mjs --other ../hrms --if-enabled && node scripts/ensure-dev-ports.js --kill && npm run db:up && npm run db:wait && npm run db:migrate",
     "prebuild": "node scripts/verify-sync.mjs --other ../hrms --if-enabled",
     "dev": "concurrently --names \"DB,BACKEND,FRONTEND\" -c \"blue,green,yellow\" \"npm run db:logs\" \"npm run backend\" \"npm run frontend\"",
