@@ -1,5 +1,5 @@
 {
-  "generated_at": "2026-11-05T11:00:15+00:00",
+  "generated_at": "2026-11-05T12:22:08+00:00",
   "db_fingerprint": "747ed3644c0f217f",
   "db": {
     "container": "ktm2000-postgres-prod",
@@ -742,18 +742,6 @@
         "scope": "full+thumb",
         "note": "Файл 1:1 с ЮП-1875; один кадр на оба SKU."
       },
-      "ЮП-2256": {
-        "origin": "alias",
-        "from": "371",
-        "scope": "full+thumb",
-        "note": "Full и thumb — карточка 371; своего оригинала нет."
-      },
-      "ЮП-2900": {
-        "origin": "alias",
-        "from": "381",
-        "scope": "full+thumb",
-        "note": "Full и thumb — карточка 381; своего оригинала нет."
-      },
       "ЮП-2901": {
         "origin": "alias",
         "from": "100",
@@ -772,23 +760,11 @@
         "scope": "full",
         "note": "Full — фото 3418 (дубль); thumb — своё сечение 3019."
       },
-      "ЮП-3123": {
-        "origin": "alias",
-        "from": "318",
-        "scope": "full",
-        "note": "Full — ячейка 318; thumb — своё сечение 3123."
-      },
       "ЮП-3168": {
         "origin": "alias",
         "from": "150",
         "scope": "full+thumb",
         "note": "Тот же постер 150; своего оригинала нет."
-      },
-      "ЮП-3263": {
-        "origin": "alias",
-        "from": "1515",
-        "scope": "full",
-        "note": "Full — фото семейства 1515; thumb — своё сечение 3263."
       },
       "ЮП-3473": {
         "origin": "alias",
@@ -801,12 +777,6 @@
         "from": "АТ-4893",
         "scope": "full+thumb",
         "note": "Full и thumb — архивный чертёж АТ-4893 (общий файл); своего оригинала нет."
-      },
-      "ЮП-2083": {
-        "origin": "alias",
-        "from": "3328",
-        "scope": "full",
-        "note": "Full — ячейка 3328; thumb — своё сечение 2083."
       }
     }
   },
@@ -6470,14 +6440,14 @@
       "audit_group": "06-joints-kants",
       "audit_verdict": "decision",
       "audit_confidence": "high",
-      "audit_note": "Алиас 3328: оранжевое сечение 37×3,3 в общей ячейке A/7 вырезано отдельно; full — решение чертёж→фото (в storage уже есть та же ячейка 3328_215_full.jpg)",
+      "audit_note": "Full — собственный чертёж ЮП-2083 (38×3,7); thumb — своё сечение. 3328 — другой профиль, фото не подходит.",
       "audit_evidence": "candidates/ЮП-2083_full.jpg; candidates/ЮП-2083_thumb.jpg; 2024:1822,140,2094,515; drawing:РП/ЮП-2083.jpg; sheets/_sheet-3.jpg",
       "photo_status": "full+thumb",
-      "photo_label": "full+thumb · full от 3328",
-      "photo_origin": "alias",
-      "photo_from": "3328",
-      "photo_origin_scope": "full",
-      "photo_origin_note": "Full — ячейка 3328; thumb — своё сечение 2083.",
+      "photo_label": "full+thumb",
+      "photo_origin": "own",
+      "photo_from": "",
+      "photo_origin_scope": "",
+      "photo_origin_note": "",
       "photo_verdict": "needs_decision",
       "perimeter_archive": "81.5",
       "perimeter_poster": "81.8",
@@ -6510,8 +6480,7 @@
         "series:ЮП",
         "size:38×3.7,t1.05",
         "photo:full+thumb",
-        "photo-origin:alias",
-        "photo-from:3328",
+        "photo-origin:own",
         "photo-verdict:needs_decision",
         "perimeter:чертёж",
         "confidence:92",
@@ -6547,7 +6516,7 @@
         {
           "claim": "Фото/размер требуют решения",
           "verdict": "open",
-          "evidence": "Алиас 3328: оранжевое сечение 37×3,3 в общей ячейке A/7 вырезано отдельно; full — решение чертёж→фото (в storage уже есть та же ячейка 3328_215_full.jpg)"
+          "evidence": "Full — собственный чертёж ЮП-2083 (38×3,7); thumb — своё сечение. 3328 — другой профиль, фото не подходит."
         }
       ]
     },
@@ -6796,14 +6765,14 @@
       "audit_group": "05-wall-panels",
       "audit_verdict": "upgrade_both",
       "audit_confidence": "high",
-      "audit_note": "Full и thumb — алиас 371 (карточка); в архиве есть тот же чертёж 3306×4676 как мастер. Периметр в БД 75.0 неверен: 97.",
+      "audit_note": "Full — собственный чертёж ЮП-2256; thumb — своё сечение. 371 — другая карточка, фото не подходит.",
       "audit_evidence": "drawings/РП/ЮП-2256.pdf; candidates/ЮП-2256_thumb.jpg; candidates/ЮП-2256_full.jpg; sheets/_sheet-4.jpg",
       "photo_status": "full+thumb",
-      "photo_label": "full+thumb · алиас 371",
-      "photo_origin": "alias",
-      "photo_from": "371",
-      "photo_origin_scope": "full+thumb",
-      "photo_origin_note": "Full и thumb — карточка 371; своего оригинала нет.",
+      "photo_label": "full+thumb",
+      "photo_origin": "own",
+      "photo_from": "",
+      "photo_origin_scope": "",
+      "photo_origin_note": "",
       "photo_verdict": "upgrade_available",
       "perimeter_archive": "97",
       "perimeter_poster": "—",
@@ -6837,8 +6806,7 @@
         "family:wall_panel_rp_akp",
         "size:30×12",
         "photo:full+thumb",
-        "photo-origin:alias",
-        "photo-from:371",
+        "photo-origin:own",
         "photo-verdict:upgrade_available",
         "perimeter:бд",
         "confidence:85",
@@ -10024,14 +9992,14 @@
       "audit_group": "05-wall-panels",
       "audit_verdict": "upgrade_both",
       "audit_confidence": "high",
-      "audit_note": "Full и thumb — алиас 381 (карточка); в архиве есть тот же чертёж 3306×4678 как мастер.",
+      "audit_note": "Full — собственный чертёж ЮП-2900; thumb — своё сечение. 381 — другой профиль, фото не подходит.",
       "audit_evidence": "drawings/РП/ЮП-2900.pdf; candidates/ЮП-2900_thumb.jpg; candidates/ЮП-2900_full.jpg; sheets/_sheet-5.jpg",
       "photo_status": "full+thumb",
-      "photo_label": "full+thumb · алиас 381",
-      "photo_origin": "alias",
-      "photo_from": "381",
-      "photo_origin_scope": "full+thumb",
-      "photo_origin_note": "Full и thumb — карточка 381; своего оригинала нет.",
+      "photo_label": "full+thumb",
+      "photo_origin": "own",
+      "photo_from": "",
+      "photo_origin_scope": "",
+      "photo_origin_note": "",
       "photo_verdict": "upgrade_available",
       "perimeter_archive": "98.4",
       "perimeter_poster": "—",
@@ -10065,8 +10033,7 @@
         "family:wall_panel_rp_akp",
         "size:28×11.3",
         "photo:full+thumb",
-        "photo-origin:alias",
-        "photo-from:381",
+        "photo-origin:own",
         "photo-verdict:upgrade_available",
         "perimeter:чертёж",
         "confidence:96",
@@ -11664,14 +11631,14 @@
       "audit_group": "06-joints-kants",
       "audit_verdict": "decision",
       "audit_confidence": "medium",
-      "audit_note": "Алиас 318: Т-стык 18 мм, сечение 2024 крупнее в 6 раз; full — решение чертёж→фото (высота 5,5 против 6,8); в storage уже есть 318_207_full.jpg с той же ячейкой",
+      "audit_note": "Full — собственный чертёж ЮП-3123 (18×5,5); thumb — своё сечение. 318 — другой профиль/высота.",
       "audit_evidence": "candidates/ЮП-3123_full.jpg; candidates/ЮП-3123_thumb.jpg; 2024:309,1826,581,2198; drawing:РП/ЮП-3123.pdf; sheets/_sheet-6.jpg",
       "photo_status": "full+thumb",
-      "photo_label": "full+thumb · full от 318",
-      "photo_origin": "alias",
-      "photo_from": "318",
-      "photo_origin_scope": "full",
-      "photo_origin_note": "Full — ячейка 318; thumb — своё сечение 3123.",
+      "photo_label": "full+thumb",
+      "photo_origin": "own",
+      "photo_from": "",
+      "photo_origin_scope": "",
+      "photo_origin_note": "",
       "photo_verdict": "needs_decision",
       "perimeter_archive": "47.8",
       "perimeter_poster": "—",
@@ -11705,8 +11672,7 @@
         "family:joint_t",
         "size:18×5.5,t1.2",
         "photo:full+thumb",
-        "photo-origin:alias",
-        "photo-from:318",
+        "photo-origin:own",
         "photo-verdict:needs_decision",
         "perimeter:бд",
         "confidence:81",
@@ -11744,7 +11710,7 @@
         {
           "claim": "Фото/размер требуют решения",
           "verdict": "open",
-          "evidence": "Алиас 318: Т-стык 18 мм, сечение 2024 крупнее в 6 раз; full — решение чертёж→фото (высота 5,5 против 6,8); в storage уже есть 318_207_full.jpg с той же ячейкой"
+          "evidence": "Full — собственный чертёж ЮП-3123 (18×5,5); thumb — своё сечение. 318 — другой профиль/высота."
         }
       ]
     },
@@ -12645,14 +12611,14 @@
       "audit_group": "02-corners",
       "audit_verdict": "decision",
       "audit_confidence": "medium",
-      "audit_note": "full — фото семейства 1515 (нужен выбор), thumb — чистое сечение архивного ЮП-3263",
+      "audit_note": "Full — собственный чертёж ЮП-3263 (15×15); thumb — своё сечение. 1515 — семейная карточка, фото не подходит.",
       "audit_evidence": "archive:РП/ЮП-3263.pdf; candidates/ЮП-3263_full.jpg; candidates/ЮП-3263_thumb.jpg; sheets/_sheet-3.jpg",
       "photo_status": "full+thumb",
-      "photo_label": "full+thumb · full от 1515",
-      "photo_origin": "alias",
-      "photo_from": "1515",
-      "photo_origin_scope": "full",
-      "photo_origin_note": "Full — фото семейства 1515; thumb — своё сечение 3263.",
+      "photo_label": "full+thumb",
+      "photo_origin": "own",
+      "photo_from": "",
+      "photo_origin_scope": "",
+      "photo_origin_note": "",
       "photo_verdict": "needs_decision",
       "perimeter_archive": "59.8",
       "perimeter_poster": "—",
@@ -12685,8 +12651,7 @@
         "series:ЮП",
         "size:15×15",
         "photo:full+thumb",
-        "photo-origin:alias",
-        "photo-from:1515",
+        "photo-origin:own",
         "photo-verdict:needs_decision",
         "perimeter:чертёж",
         "confidence:92",
@@ -12722,7 +12687,7 @@
         {
           "claim": "Фото/размер требуют решения",
           "verdict": "open",
-          "evidence": "full — фото семейства 1515 (нужен выбор), thumb — чистое сечение архивного ЮП-3263"
+          "evidence": "Full — собственный чертёж ЮП-3263 (15×15); thumb — своё сечение. 1515 — семейная карточка, фото не подходит."
         }
       ]
     },

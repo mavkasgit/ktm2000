@@ -734,18 +734,6 @@
       "scope": "full+thumb",
       "note": "Файл 1:1 с ЮП-1875; один кадр на оба SKU."
     },
-    "ЮП-2256": {
-      "origin": "alias",
-      "from": "371",
-      "scope": "full+thumb",
-      "note": "Full и thumb — карточка 371; своего оригинала нет."
-    },
-    "ЮП-2900": {
-      "origin": "alias",
-      "from": "381",
-      "scope": "full+thumb",
-      "note": "Full и thumb — карточка 381; своего оригинала нет."
-    },
     "ЮП-2901": {
       "origin": "alias",
       "from": "100",
@@ -764,23 +752,11 @@
       "scope": "full",
       "note": "Full — фото 3418 (дубль); thumb — своё сечение 3019."
     },
-    "ЮП-3123": {
-      "origin": "alias",
-      "from": "318",
-      "scope": "full",
-      "note": "Full — ячейка 318; thumb — своё сечение 3123."
-    },
     "ЮП-3168": {
       "origin": "alias",
       "from": "150",
       "scope": "full+thumb",
       "note": "Тот же постер 150; своего оригинала нет."
-    },
-    "ЮП-3263": {
-      "origin": "alias",
-      "from": "1515",
-      "scope": "full",
-      "note": "Full — фото семейства 1515; thumb — своё сечение 3263."
     },
     "ЮП-3473": {
       "origin": "alias",
@@ -793,12 +769,6 @@
       "from": "АТ-4893",
       "scope": "full+thumb",
       "note": "Full и thumb — архивный чертёж АТ-4893 (общий файл); своего оригинала нет."
-    },
-    "ЮП-2083": {
-      "origin": "alias",
-      "from": "3328",
-      "scope": "full",
-      "note": "Full — ячейка 3328; thumb — своё сечение 2083."
     }
   }
 }
