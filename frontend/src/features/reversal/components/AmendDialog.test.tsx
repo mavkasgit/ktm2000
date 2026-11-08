@@ -94,6 +94,19 @@ describe("AmendDialog — количество", () => {
     await waitFor(() => expect(previewAmend).not.toHaveBeenCalled());
   });
 
+  it("причина не исчезает при уходе фокуса: недопустимое значение не уходит молча", async () => {
+    renderDialog();
+    const field = quantityField();
+    fireEvent.change(field, { target: { value: "абв" } });
+    await screen.findByTestId("amend-quantity-issue");
+
+    fireEvent.blur(field);
+    expect(screen.queryByTestId("amend-quantity-issue")).not.toBeNull();
+
+    fireEvent.click(previewButton());
+    await waitFor(() => expect(previewAmend).not.toHaveBeenCalled());
+  });
+
   it("причина снимается, когда ввод снова допустим", async () => {
     renderDialog();
     const field = quantityField();

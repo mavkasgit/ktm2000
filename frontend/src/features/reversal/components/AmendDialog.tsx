@@ -175,7 +175,6 @@ export function AmendDialog({
                 setQuantityIssue(result.issue);
                 setPreview(null);
               }}
-              onBlur={() => setQuantityIssue(null)}
               aria-invalid={quantityBlocked}
               placeholder="напр. 5 или 0,5"
             />
