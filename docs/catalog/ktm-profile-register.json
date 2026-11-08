@@ -1,6 +1,6 @@
 {
-  "generated_at": "2026-11-08T15:43:12+00:00",
-  "db_fingerprint": "f1a78bba7320d218",
+  "generated_at": "2026-11-08T20:28:44+00:00",
+  "db_fingerprint": "d8ef75d5ebb7c860",
   "review_fingerprint": "45a1bfcd976aaf46",
   "db": {
     "container": "ktm2000-postgres-prod",
@@ -136,6 +136,41 @@
       }
     },
     "claims": {
+      "КП-5813": [
+        {
+          "claim": "Норма 22 на длину 2500",
+          "verdict": "open",
+          "evidence": "Перенесена из «Экранчика» при синке 2026-11-08; в KTM не проверена — расчёта/чертежа нет."
+        }
+      ],
+      "ЮП-1807": [
+        {
+          "claim": "Норма 64 на длину 2700",
+          "verdict": "open",
+          "evidence": "Перенесена из «Экранчика» при синке 2026-11-08; в KTM не проверена — расчёта/чертежа нет."
+        }
+      ],
+      "ЮП-3472": [
+        {
+          "claim": "Норма 44 на длину 2700",
+          "verdict": "open",
+          "evidence": "Перенесена из «Экранчика» при синке 2026-11-08; в KTM не проверена — расчёта/чертежа нет."
+        }
+      ],
+      "ЮП-3640": [
+        {
+          "claim": "Норма 34 на длину 2700",
+          "verdict": "open",
+          "evidence": "Перенесена из «Экранчика» при синке 2026-11-08; в KTM не проверена — расчёта/чертежа нет."
+        }
+      ],
+      "ЮП-3773": [
+        {
+          "claim": "Норма 48 на длину 2500",
+          "verdict": "open",
+          "evidence": "Перенесена из «Экранчика» при синке 2026-11-08; в KTM не проверена — расчёта/чертежа нет."
+        }
+      ],
       "371": [
         {
           "claim": "Периметр 75,0 из БД",
@@ -4453,9 +4488,14 @@
       "perimeter_mm": null,
       "mount_width_mm": null,
       "hanger_mode": "manual",
-      "quantity_per_hanger": {},
-      "n_per_hanger": null,
-      "n_per_hanger_manual": null,
+      "quantity_per_hanger": {
+        "2500": {
+          "auto": null,
+          "manual": 22
+        }
+      },
+      "n_per_hanger": 22,
+      "n_per_hanger_manual": 22,
       "n_per_hanger_auto": null,
       "n_mismatch": false,
       "photo_full": "",
@@ -4469,10 +4509,16 @@
       "photo_full_sha12": "",
       "photo_thumb_sha12": "",
       "attributes_json": {
-        "hanger_mode": "manual"
+        "hanger_mode": "manual",
+        "quantity_per_hanger": {
+          "2500": {
+            "auto": null,
+            "manual": 22
+          }
+        }
       },
       "dimensions": [],
-      "notes": "Новый профиль из КПЗ; длина под вопросом; новый префикс КП",
+      "notes": "Новый профиль из КПЗ; длина под вопросом; новый префикс КП; норма на подвес — из «Экранчика», не проверена",
       "source": "excel_catalog_import",
       "processing_flags": [],
       "composition": [],
@@ -4540,6 +4586,11 @@
       "confirmed": [],
       "refuted": [],
       "open_claims": [
+        {
+          "claim": "Норма 22 на длину 2500",
+          "verdict": "open",
+          "evidence": "Перенесена из «Экранчика» при синке 2026-11-08; в KTM не проверена — расчёта/чертежа нет."
+        },
         {
           "claim": "Есть фото товара",
           "verdict": "open",
@@ -5555,9 +5606,14 @@
       "perimeter_mm": null,
       "mount_width_mm": null,
       "hanger_mode": "manual",
-      "quantity_per_hanger": {},
-      "n_per_hanger": null,
-      "n_per_hanger_manual": null,
+      "quantity_per_hanger": {
+        "2700": {
+          "auto": null,
+          "manual": 64
+        }
+      },
+      "n_per_hanger": 64,
+      "n_per_hanger_manual": 64,
       "n_per_hanger_auto": null,
       "n_mismatch": false,
       "photo_full": "",
@@ -5571,10 +5627,16 @@
       "photo_full_sha12": "",
       "photo_thumb_sha12": "",
       "attributes_json": {
-        "hanger_mode": "manual"
+        "hanger_mode": "manual",
+        "quantity_per_hanger": {
+          "2700": {
+            "auto": null,
+            "manual": 64
+          }
+        }
       },
       "dimensions": [],
-      "notes": "Новый профиль из КПЗ; длина под вопросом",
+      "notes": "Новый профиль из КПЗ; длина под вопросом; норма на подвес — из «Экранчика», не проверена",
       "source": "excel_catalog_import",
       "processing_flags": [],
       "composition": [],
@@ -5642,6 +5704,11 @@
       "confirmed": [],
       "refuted": [],
       "open_claims": [
+        {
+          "claim": "Норма 64 на длину 2700",
+          "verdict": "open",
+          "evidence": "Перенесена из «Экранчика» при синке 2026-11-08; в KTM не проверена — расчёта/чертежа нет."
+        },
         {
           "claim": "Есть фото товара",
           "verdict": "open",
@@ -14206,7 +14273,7 @@
       "name": "РП-АКП-03,04-12,5",
       "type": "component",
       "unit": "шт",
-      "is_active": false,
+      "is_active": true,
       "is_catalog_item": true,
       "profile_type_db": "",
       "alloy": "",
@@ -14756,7 +14823,7 @@
       "name": "ЮП-3457",
       "type": "component",
       "unit": "шт",
-      "is_active": false,
+      "is_active": true,
       "is_catalog_item": true,
       "profile_type_db": "",
       "alloy": "",
@@ -14893,9 +14960,14 @@
       "perimeter_mm": null,
       "mount_width_mm": null,
       "hanger_mode": "manual",
-      "quantity_per_hanger": {},
-      "n_per_hanger": null,
-      "n_per_hanger_manual": null,
+      "quantity_per_hanger": {
+        "2700": {
+          "auto": null,
+          "manual": 44
+        }
+      },
+      "n_per_hanger": 44,
+      "n_per_hanger_manual": 44,
       "n_per_hanger_auto": null,
       "n_mismatch": false,
       "photo_full": "",
@@ -14909,10 +14981,16 @@
       "photo_full_sha12": "",
       "photo_thumb_sha12": "",
       "attributes_json": {
-        "hanger_mode": "manual"
+        "hanger_mode": "manual",
+        "quantity_per_hanger": {
+          "2700": {
+            "auto": null,
+            "manual": 44
+          }
+        }
       },
       "dimensions": [],
-      "notes": "Новый профиль из КПЗ; длина под вопросом",
+      "notes": "Новый профиль из КПЗ; длина под вопросом; норма на подвес — из «Экранчика», не проверена",
       "source": "excel_catalog_import",
       "processing_flags": [],
       "composition": [],
@@ -14979,6 +15057,11 @@
       "confirmed": [],
       "refuted": [],
       "open_claims": [
+        {
+          "claim": "Норма 44 на длину 2700",
+          "verdict": "open",
+          "evidence": "Перенесена из «Экранчика» при синке 2026-11-08; в KTM не проверена — расчёта/чертежа нет."
+        },
         {
           "claim": "Есть фото товара",
           "verdict": "open",
@@ -15187,9 +15270,14 @@
       "perimeter_mm": null,
       "mount_width_mm": null,
       "hanger_mode": "manual",
-      "quantity_per_hanger": {},
-      "n_per_hanger": null,
-      "n_per_hanger_manual": null,
+      "quantity_per_hanger": {
+        "2700": {
+          "auto": null,
+          "manual": 34
+        }
+      },
+      "n_per_hanger": 34,
+      "n_per_hanger_manual": 34,
       "n_per_hanger_auto": null,
       "n_mismatch": false,
       "photo_full": "",
@@ -15203,10 +15291,16 @@
       "photo_full_sha12": "",
       "photo_thumb_sha12": "",
       "attributes_json": {
-        "hanger_mode": "manual"
+        "hanger_mode": "manual",
+        "quantity_per_hanger": {
+          "2700": {
+            "auto": null,
+            "manual": 34
+          }
+        }
       },
       "dimensions": [],
-      "notes": "Новый профиль из КПЗ; длина под вопросом",
+      "notes": "Новый профиль из КПЗ; длина под вопросом; норма на подвес — из «Экранчика», не проверена",
       "source": "excel_catalog_import",
       "processing_flags": [],
       "composition": [],
@@ -15274,6 +15368,11 @@
       "confirmed": [],
       "refuted": [],
       "open_claims": [
+        {
+          "claim": "Норма 34 на длину 2700",
+          "verdict": "open",
+          "evidence": "Перенесена из «Экранчика» при синке 2026-11-08; в KTM не проверена — расчёта/чертежа нет."
+        },
         {
           "claim": "Есть фото товара",
           "verdict": "open",
@@ -16043,9 +16142,14 @@
       "perimeter_mm": null,
       "mount_width_mm": null,
       "hanger_mode": "manual",
-      "quantity_per_hanger": {},
-      "n_per_hanger": null,
-      "n_per_hanger_manual": null,
+      "quantity_per_hanger": {
+        "2500": {
+          "auto": null,
+          "manual": 48
+        }
+      },
+      "n_per_hanger": 48,
+      "n_per_hanger_manual": 48,
       "n_per_hanger_auto": null,
       "n_mismatch": false,
       "photo_full": "",
@@ -16059,10 +16163,16 @@
       "photo_full_sha12": "",
       "photo_thumb_sha12": "",
       "attributes_json": {
-        "hanger_mode": "manual"
+        "hanger_mode": "manual",
+        "quantity_per_hanger": {
+          "2500": {
+            "auto": null,
+            "manual": 48
+          }
+        }
       },
       "dimensions": [],
-      "notes": "Новый профиль из КПЗ; длина под вопросом",
+      "notes": "Новый профиль из КПЗ; длина под вопросом; норма на подвес — из «Экранчика», не проверена",
       "source": "excel_catalog_import",
       "processing_flags": [],
       "composition": [],
@@ -16130,6 +16240,11 @@
       "confirmed": [],
       "refuted": [],
       "open_claims": [
+        {
+          "claim": "Норма 48 на длину 2500",
+          "verdict": "open",
+          "evidence": "Перенесена из «Экранчика» при синке 2026-11-08; в KTM не проверена — расчёта/чертежа нет."
+        },
         {
           "claim": "Есть фото товара",
           "verdict": "open",
