@@ -9,7 +9,7 @@ from pydantic import BaseModel
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.api.deps import READER_ROLES, get_db, require_role
+from app.api.deps import REFERENCES_WRITER_ROLES, get_db, require_role
 from app.models.route import SectionOperation
 from app.models.section import Section
 
@@ -61,7 +61,7 @@ async def create_section_operation(
     section_id: int,
     payload: CreateOperationSchema,
     db: AsyncSession = Depends(get_db),
-    _user=Depends(require_role(list(READER_ROLES))),
+    _user=Depends(require_role(list(REFERENCES_WRITER_ROLES))),
 ) -> dict:
     """Создать новую операцию для участка."""
     section = await db.get(Section, section_id)
@@ -107,7 +107,7 @@ async def delete_section_operation(
     section_id: int,
     op_id: int,
     db: AsyncSession = Depends(get_db),
-    _user=Depends(require_role(list(READER_ROLES))),
+    _user=Depends(require_role(list(REFERENCES_WRITER_ROLES))),
 ) -> dict:
     """Удалить операцию участка."""
     op = await db.get(SectionOperation, op_id)
@@ -125,7 +125,7 @@ async def update_section_operation(
     op_id: int,
     payload: dict,
     db: AsyncSession = Depends(get_db),
-    _user=Depends(require_role(list(READER_ROLES))),
+    _user=Depends(require_role(list(REFERENCES_WRITER_ROLES))),
 ) -> dict:
     """Обновить is_significant для операции участка."""
     op = await db.get(SectionOperation, op_id)

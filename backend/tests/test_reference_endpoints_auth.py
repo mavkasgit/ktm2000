@@ -12,7 +12,7 @@ section_manager), зеркало `deps.REFERENCES_WRITER_ROLES`: роль, ко�
 
 Охваченные роутеры: products (в т.ч. пары), dimensions (типы и связи
 продукта), sections, import-templates, spg, route-selection-rules,
-route-rule-profiles.
+route-rule-profiles, операции участка (`/shopfloor/sections/.../operations`).
 """
 from __future__ import annotations
 
@@ -59,6 +59,7 @@ _MUTATING_KEYS = [
     "product_dimensions",
     "route_selection_rules",
     "route_rule_profiles",
+    "shopfloor_section_operations",
 ]
 
 
@@ -94,6 +95,18 @@ def _build_request(key: str, seeded: dict[str, int]) -> tuple[str, str, Any]:
                 "POST",
                 "/api/route-rule-profiles",
                 {"code": "AUTH-ANON", "name": "Anon profile", "route_sections": []},
+            )
+        case "shopfloor_section_operations":
+            # Гвард роли срабатывает до чтения участка, поэтому id может быть
+            # несуществующим: для planner ручка вернёт «section not found», но
+            # 401/403 не даст — это и проверяет контракт.
+            return (
+                "POST",
+                "/api/shopfloor/sections/999999/operations",
+                {
+                    "operation_code": "AUTH_ANON",
+                    "operation_name": "Anon operation",
+                },
             )
     raise AssertionError(f"unknown key {key}")
 
