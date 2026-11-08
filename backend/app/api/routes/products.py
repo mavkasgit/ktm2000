@@ -56,6 +56,7 @@ from app.services.hanger_quantity_calc import (
     compute_hanger_quantity,
     compute_sheet_hanger_quantity,
 )
+from app.services.product_photo_version import photo_file_version
 from app.services.route_selection import select_route_for_payload
 
 router = APIRouter(prefix="/products", tags=["products"])
@@ -201,6 +202,9 @@ class ProductOut(BaseModel):
     cross_section: str | None
     photo_thumb: str | None
     photo_full: str | None
+    # #404: версия конкретного файла для `?v=` в URL — full и thumb независимо.
+    photo_thumb_version: str | None
+    photo_full_version: str | None
     source: str | None
     is_catalog_item: bool
     is_paired_profile: bool
@@ -705,6 +709,8 @@ def _to_product_out(
         cross_section=product.cross_section,
         photo_thumb=product.photo_thumb,
         photo_full=product.photo_full,
+        photo_thumb_version=photo_file_version(product.photo_thumb),
+        photo_full_version=photo_file_version(product.photo_full),
         source=product.source,
         is_catalog_item=product.is_catalog_item,
         is_paired_profile=product.is_paired_profile,

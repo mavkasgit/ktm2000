@@ -693,7 +693,11 @@ export function RawMaterialsPage() {
                   <td className="px-4 py-2">
                     <div className="w-10 h-10 bg-muted rounded flex items-center justify-center overflow-hidden">
                       {product.photo_thumb ? (
-                        <img src={getPhotoUrl(product.photo_thumb)!} alt="" className="w-full h-full object-contain" />
+                        <img
+                          src={getPhotoUrl(product.photo_thumb, product.photo_thumb_version)!}
+                          alt=""
+                          className="w-full h-full object-contain"
+                        />
                       ) : (
                         <Image className="w-5 h-5 text-muted-foreground" />
                       )}
