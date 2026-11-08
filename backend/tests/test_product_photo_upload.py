@@ -157,3 +157,33 @@ async def test_product_list_exposes_photo_versions(
     assert response.status_code == 200, response.text
     row = next(item for item in response.json()["items"] if item["id"] == product.id)
     assert row["photo_full_version"]
+
+
+async def test_list_version_changes_only_for_replaced_photo(
+    session: AsyncSession, client
+) -> None:
+    """Замена файла в storage видна в списке; соседний товар не сбрасывает кэш."""
+    first = await _make_product(session, "PHOTO-LIST-A")
+    second = await _make_product(session, "PHOTO-LIST-B")
+    first_name = f"{first.sku}_{first.id}_full.png"
+    second_name = f"{second.sku}_{second.id}_full.png"
+    first_path = _photo_path(first_name)
+    _write_photo(first_path, b"first-old", 1_700_000_000_000_000_000)
+    _write_photo(_photo_path(second_name), b"second", 1_700_000_000_000_000_000)
+    first.photo_full = _storage_relative(first_name)
+    second.photo_full = _storage_relative(second_name)
+    await session.flush()
+
+    def versions_by_id(payload: dict) -> dict[int, str | None]:
+        return {item["id"]: item["photo_full_version"] for item in payload["items"]}
+
+    before = versions_by_id(
+        (await client.get("/api/products", params={"q": "PHOTO-LIST-"})).json()
+    )
+    _write_photo(first_path, b"first-new", 1_700_000_001_000_000_000)
+    after = versions_by_id(
+        (await client.get("/api/products", params={"q": "PHOTO-LIST-"})).json()
+    )
+
+    assert after[first.id] != before[first.id]
+    assert after[second.id] == before[second.id]
