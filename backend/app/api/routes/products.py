@@ -1400,7 +1400,6 @@ async def upload_product_photo(
     kind: str = Query("full", pattern="^(full|thumb)$"),
     db: AsyncSession = Depends(get_db),
 ) -> ProductOut:
-    print(f"[DEBUG] upload_product_photo: product_id={product_id}, kind={kind}, filename={file.filename}")
     item = await db.get(Product, product_id)
     if item is None:
         raise HTTPException(status_code=404, detail="Артикул не найден")
