@@ -294,6 +294,36 @@ async def test_complete_creates_auto_transfer_to_next_group(session) -> None:
 
 
 @pytest.mark.asyncio
+async def test_partial_completion_keeps_receiving_task_plan(session) -> None:
+    """Частичная авто-передача не занижает план приёмного задания.
+
+    План P2 — 100 шт; завершили 50 на P1 и передали их. Передача расширяет
+    план только при перевыпуске, а не заменяет его количеством куска.
+    """
+    from app.services.shopfloor.operations_tasks import complete_task
+
+    _fx, user, p1_task, p2_section = await _prepare(session, sku="T300PLAN")
+    receiving = await session.scalar(
+        select(WorkTask).where(WorkTask.section_id == p2_section.id)
+    )
+    assert receiving is not None
+    assert receiving.planned_quantity == Decimal(100)
+
+    await complete_task(
+        session,
+        task_id=p1_task.id,
+        good_quantity=Decimal(50),
+        defect_quantity=Decimal(0),
+        actor_id=user.id,
+        comment="частичное завершение",
+        auto_transfer_next=True,
+    )
+
+    await session.refresh(receiving)
+    assert receiving.planned_quantity == Decimal(100)
+
+
+@pytest.mark.asyncio
 async def test_completed_task_does_not_double_transfer_on_replay(session) -> None:
     """Повторное завершение не создаёт вторую передачу на тот же факт.
 
