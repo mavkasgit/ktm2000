@@ -504,21 +504,28 @@ export function SectionsPage() {
     }
   }, [moveOpDialog, opGroups, invalidateSections, patchOpGroups]);
 
-  const commitReorder = useCallback(async () => {
+  const commitReorder = useCallback(async (currentId: number, targetId: number) => {
     try {
-      const ids = items.map((item) => Number(item.id)).filter(Boolean);
-      if (ids.length > 0) {
+      // Порядок меняется в полном справочнике, а не в текущей выдаче: при
+      // активном поиске `items` — только совпавшие строки, и отправка их
+      // одних переставила бы совпавшие в начало всего справочника.
+      const all = await fetchAllSections({ sort: "sort_order:asc" });
+      const ids = all.map((item) => Number(item.id)).filter(Number.isInteger);
+      const from = ids.indexOf(currentId);
+      const to = ids.indexOf(targetId);
+      if (from !== -1 && to !== -1) {
+        [ids[from], ids[to]] = [ids[to], ids[from]];
         await SectionsAPI.reorderSections(ids);
-        // Порядок на сервере стал каноническим: справочник перечитывается,
-        // иначе после чужой правки экран держал бы свой локальный порядок.
-        await invalidateSections();
       }
+      // Порядок на сервере стал каноническим: справочник перечитывается,
+      // иначе после чужой правки экран держал бы свой локальный порядок.
+      await invalidateSections();
     } catch (e) {
       toast({ title: "Ошибка сортировки", description: API.getErrorMessage(e), variant: "destructive" });
       // Несохранённый локальный обмен строк откатывается перечитыванием.
       await invalidateSections();
     }
-  }, [items, invalidateSections]);
+  }, [invalidateSections]);
 
 
   const openAddSpg = () => {
@@ -790,9 +797,11 @@ export function SectionsPage() {
 
     reorderItemsLocally(currentItem.id, targetItem.id);
 
-    setTimeout(() => {
-      void commitReorder();
-    }, 0);
+    const currentId = Number(currentItem.id);
+    const targetId = Number(targetItem.id);
+    if (Number.isInteger(currentId) && Number.isInteger(targetId)) {
+      void commitReorder(currentId, targetId);
+    }
   }, [commitReorder, reorderItemsLocally]);
 
   const renderSectionTable = (sectionList: Section[], group: Group, isStock: boolean) => {
