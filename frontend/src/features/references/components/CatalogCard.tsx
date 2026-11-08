@@ -4,7 +4,7 @@ import { Badge } from "@/shared/ui/badge";
 
 import { productTypeLabels } from "@/shared/lib/generated-labels";
 import type { Product, ProductLength } from "@/shared/api/products";
-import { getPhotoUrl } from "./getPhotoUrl";
+import { productPhotoUrl } from "./productPhotoUrl";
 
 function getProductLengths(product: Product): ProductLength[] {
   return product.lengths ?? [];
@@ -20,7 +20,8 @@ export function CatalogCard({
   /** Если передан — артикул кликабелен (сводная информация), клик по карточке не срабатывает. */
   onSkuClick?: (sku: string) => void;
 }) {
-  const photoUrl = getPhotoUrl(product.photo_thumb);
+  // Превью есть только при наличии thumb: full как заглушка в плитке не нужен.
+  const photoUrl = product.photo_thumb ? productPhotoUrl(product, "thumb") : null;
 
   return (
     <Card className="cursor-pointer hover:shadow-md transition-shadow group overflow-hidden" onClick={onClick}>
