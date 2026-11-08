@@ -30,7 +30,7 @@
 - **transform** — задание с выходами спецификации (ADR-0002): строка на
   каждый выход; produced закаплен ``min(output_quantity, produced_by_group)``
   на уровне ``build_output_rows`` (инвариант D2);
-- **plain** — обычное задание: gross COMPLETE минус net переданное.
+- **plain** — обычное задание: net COMPLETE минус net переданное.
 
 Выбор формулы — один раз в :meth:`TransferableLine.budget`, по ветке и
 финальности участка: финальный этап — отправка (``budget.remaining_send``,
@@ -51,7 +51,7 @@ write-guard в transform/plain-ветках вычитает net передан�
   финального участка) не тронуты — они остались самостоятельным владельцем
   своего понятия;
 - кэш StockProjectionManager (третий adapter) из бюджетной арифметики
-  ИСКЛЮЧЁН, а не отложен: plain-produced читается напрямую из ledger (gross
+  ИСКЛЮЧЁН, а не отложен: plain-produced читается напрямую из ledger (net
   COMPLETE тем же примитивом :func:`completed_qty_sq`, что и read-SQL), так
   что у write- и read-путей не остаётся разных источников одного числа.
 """
@@ -165,16 +165,17 @@ class TransferableLine:
 
 
 def completed_qty_sq():
-    """Gross COMPLETE по задачам — «произведено/завершено» в SQL-форме.
+    """Net COMPLETE по задачам — «произведено/завершено» в SQL-форме.
 
-    Публичный примитив модуля (до #131 — приватный ``queries._completed_qty_subquery``):
-    ready-запрос и оракул консистентности подключают его подзапросом вместо
-    собственных копий агрегата.
+    Компенсация отката завершения вычитается: иначе переданное после отката
+    считалось бы произведённым дважды. Публичный примитив модуля (до #131 —
+    приватный ``queries._completed_qty_subquery``): ready-запрос и оракул
+    консистентности подключают его подзапросом вместо собственных копий.
     """
     return (
         select(
             StockTransaction.task_id,
-            func.coalesce(func.sum(StockTransaction.quantity), 0).label("completed_qty"),
+            func.coalesce(func.sum(net_quantity_expr()), 0).label("completed_qty"),
         )
         .where(StockTransaction.reason == Reason.COMPLETE)
         .group_by(StockTransaction.task_id)
@@ -183,12 +184,12 @@ def completed_qty_sq():
 
 
 async def plain_produced(db: AsyncSession, task: WorkTask) -> Decimal:
-    """«Произведено» обычной задачи: gross COMPLETE по задаче (всё, без размеров).
+    """«Произведено» обычной задачи: net COMPLETE по задаче (всё, без размеров).
 
     Читает write-guard (:func:`task_transferable`). Read-путь берёт то же
     число групповым ``WHERE IN``-проходом внутри
     :func:`task_transferable_lines_bulk` — это и есть «шов»: обе стороны
-    считают gross COMPLETE одним примитивом, просто разной формы выбора.
+    считают net COMPLETE одним примитивом, просто разной формы выбора.
     """
     sq = completed_qty_sq()
     return _dec(await db.scalar(select(sq.c.completed_qty).where(sq.c.task_id == task.id)))

@@ -210,6 +210,35 @@ async def test_task_complete_reverse_mirrors_entries(session: AsyncSession) -> N
     )
     assert await _balance(session, scrap_loc, product_id) == Decimal(0)
 
+async def test_task_complete_reverse_nets_task_cache(session: AsyncSession) -> None:
+    """Откат завершения возвращает проекцию задания к состоянию до операции."""
+    from app.models.work_task import WorkTask
+    from app.stock.services import StockProjectionManager
+
+    fx = await _setup_minimal_route(session)
+    await _issue_material(session, fx)
+    task = await session.get(WorkTask, fx["task"].id)
+    status_before = task.status
+    cache_before = await StockProjectionManager().get_task_cache(session, task.id)
+
+    action = await _complete_task(session, fx, good=Decimal(7), scrap=Decimal(3))
+    preview = await reversal_service.preview_reverse(session, action.id)
+    await reversal_service.reverse(
+        session, action.id, plan_token=preview.plan_token, actor="tester"
+    )
+    await session.commit()
+
+    await session.refresh(task)
+    cache_after = await StockProjectionManager().get_task_cache(session, task.id)
+    assert cache_after["completed_quantity"] == cache_before["completed_quantity"]
+    assert cache_after["rejected_quantity"] == cache_before["rejected_quantity"]
+    # Терминальный `completed` после отката недопустим: задание снова можно
+    # завершать. Точный lower-переход статуса — отдельный вопрос, но не
+    # «осталось выполненным».
+    assert task.status.value != "completed"
+    assert status_before.value != "completed"
+
+
 async def test_reverse_restores_each_ops_group_separately(
     session: AsyncSession,
 ) -> None:

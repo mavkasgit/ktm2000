@@ -126,7 +126,7 @@ async def get_transform_progress_bulk(
             StockTransaction.task_id,
             StockTransaction.reason,
             StockTransaction.dimensions,
-            func.sum(StockTransaction.quantity).label("qty"),
+            func.sum(net_quantity_expr()).label("qty"),
         )
         .where(
             StockTransaction.task_id.in_(task_ids),

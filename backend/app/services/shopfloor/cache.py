@@ -61,11 +61,13 @@ async def _refresh_section_plan_line_cache(db: AsyncSession, section_plan_line_i
         line.cached_remaining_quantity = Decimal(0)
         return
 
-    # Прямой SELECT из StockTransaction: sum(quantity) GROUP BY reason для всех task_ids
+    # Прямой SELECT из StockTransaction: net(quantity) GROUP BY reason для всех
+    # task_ids. Компенсация отката снимает и COMPLETE/SCRAP, иначе проекция
+    # удваивала бы завершённое количество.
     tx_rows = await db.execute(
         select(
             StockTransaction.reason,
-            func.sum(StockTransaction.quantity).label("qty"),
+            func.sum(net_quantity_expr()).label("qty"),
         )
         .where(StockTransaction.task_id.in_(task_ids))
         .group_by(StockTransaction.reason)

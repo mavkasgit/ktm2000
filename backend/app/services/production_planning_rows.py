@@ -1018,12 +1018,14 @@ async def get_production_planning_row_detail(db: AsyncSession, position_id: int)
         )).all()
         spl_to_stage = {r.id: r.route_stage_id for r in spl_rows}
 
-        # StockTransaction sums GROUP BY task_id, reason
+        # StockTransaction net sums GROUP BY task_id, reason. Компенсация
+        # отката вычитается и для COMPLETE/SCRAP: иначе карточка показывала
+        # удвоенный факт, а кэш задания — уже нетто.
         tx_rows = (await db.execute(
             select(
                 StockTransaction.task_id,
                 StockTransaction.reason,
-                func.sum(StockTransaction.quantity).label("qty"),
+                func.sum(net_quantity_expr()).label("qty"),
             )
             .where(StockTransaction.task_id.in_([r.id for r in task_in_pos]))
             .group_by(StockTransaction.task_id, StockTransaction.reason)
@@ -1102,7 +1104,11 @@ async def get_production_planning_row_detail(db: AsyncSession, position_id: int)
                 continue
 
             reason_val = tx.reason.value if hasattr(tx.reason, "value") else str(tx.reason)
+            # Компенсация (reverses_id) — отрицательное движение в ленте:
+            # она снимает факт исходной проводки, а не добавляет новый.
             quantity = _to_float(tx.quantity)
+            if tx.reverses_id is not None:
+                quantity = -quantity
             event_sort_dt = tx.created_at
             event_at_iso = tx.created_at.isoformat() if tx.created_at else None
 
