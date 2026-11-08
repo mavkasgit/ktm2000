@@ -24,8 +24,13 @@ function PrimaryMark({ isPrimary }: { isPrimary: boolean }) {
 /**
  * Строка таблицы «Расчёт подвесов»: одна на артикул, внутри — подстроки по
  * длинам (ADR-0050). Ячейки артикула, периметра и габарита принадлежат
- * артикулу и занимают всю строку, поэтому у них `rowSpan`; колонки длины и
- * разбивки печатают по подстроке, и своя разбивка у своей длины.
+ * артикулу и стоят по одной на строку; колонки длины и разбивки печатают по
+ * подстроке, и своя разбивка у своей длины.
+ *
+ * `rowSpan` здесь запрещён: подстроки печатаются стопкой внутри одной ячейки
+ * (`HangerLineCell`), `<tr>` у артикула одна, и `rowSpan` растянулся бы на
+ * строку следующего артикула — его ячейки браузер поставил бы после занятых
+ * колонок, и вся строка уехала бы вправо на три колонки (#402).
  */
 export function HangerCalcRowView({
   row,
@@ -42,7 +47,6 @@ export function HangerCalcRowView({
 }) {
   const { product } = row;
   const rowInvalid = row.incompatibleReason != null;
-  const span = row.lines.length;
 
   const totalCell = (line: HangerLengthLine) => {
     if (line.total === 0) return <DashCell reason={ZERO_TOTAL_REASON} danger />;
@@ -64,7 +68,7 @@ export function HangerCalcRowView({
 
   return (
     <tr className={cn("hover:bg-muted/50", rowInvalid && "bg-red-50 hover:bg-red-100/60")}>
-      <td rowSpan={span} className="px-4 py-1 align-top">
+      <td className="px-4 py-1 align-top">
         <div className="flex items-center gap-1.5 flex-wrap">
           <button
             type="button"
@@ -96,7 +100,7 @@ export function HangerCalcRowView({
           </span>
         )}
       </td>
-      <td rowSpan={span} className="px-4 py-1 align-top">
+      <td className="px-4 py-1 align-top">
         <HangerFieldCell
           value={product.perimeter_mm}
           disabled={readOnly}
@@ -106,7 +110,7 @@ export function HangerCalcRowView({
           ariaLabel={`Периметр для ${product.sku}`}
         />
       </td>
-      <td rowSpan={span} className="px-4 py-1 align-top">
+      <td className="px-4 py-1 align-top">
         <HangerFieldCell
           value={product.mount_width_mm}
           disabled={readOnly}

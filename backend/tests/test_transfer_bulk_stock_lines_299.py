@@ -177,3 +177,66 @@ async def test_bulk_and_single_stock_paths_agree(client, session) -> None:
     assert len(bulk[task.id]) == len(single) == 1
     assert bulk[task.id][0].budget == single[0].budget
     assert bulk[task.id][0].planned == single[0].planned
+
+
+@pytest.mark.asyncio
+async def test_stock_guard_reads_plan_line_once(client, session) -> None:
+    """Write-guard складской задачи читает строку плана ОДИН раз (#299, п. 3).
+
+    `_stock_planned_qty` уже достаёт строку плана, но отдаёт только число:
+    ссылка на объект умирает, identity-map её отпускает — и `stock_line_bulk`
+    внутри `stock_line` читает ту же строку вторым запросом. На холодной карте
+    это видно счётчиком; подсказка `line` (как `lines=` у bulk-ветки) убирает
+    второй поход в БД, ответ не меняется.
+    """
+    from app.transfers.transferable import task_transferable
+
+    task, _section = await _one_stock_task(client, session, sku="T299GUARD")
+    task_id = task.id
+    session.expunge_all()
+    task = await session.get(WorkTask, task_id)
+
+    counter, remove = _count_sql(session)
+    try:
+        guarded = await task_transferable(session, task)
+    finally:
+        remove()
+
+    plan_line_reads = [s for s in counter["sql"] if "FROM section_plan_lines" in s]
+    assert len(plan_line_reads) == 1, (
+        f"строка плана прочитана {len(plan_line_reads)} раз(а), ожидался один "
+        f"(SQL: {counter['n']})"
+    )
+    # Ответ — бюджет guard'а, а не «любое число»: строка плана пришла, план учтён.
+    assert guarded == Decimal(100)
+
+
+@pytest.mark.asyncio
+async def test_plain_guard_reads_produced_from_completed_sq(client, session) -> None:
+    """Write-guard обычной задачи берёт «произведено» тем же SQ, что read-ветка.
+
+    #299, п. 4: отдельного scalar-запроса «на задачу» в списке нет — обе
+    стороны читают gross COMPLETE через ``completed_qty_sq``. Здесь это
+    зафиксировано на одиночном guard'е: produced приходит подзапросом
+    ``completed_qty_sq``, а бюджет равен плану (COMPLETE = 1, передач нет).
+    """
+    from app.transfers.transferable import task_transferable
+
+    from tests.test_transfers_ready import _seed_many_ready_tasks
+
+    seeded = await _seed_many_ready_tasks(session, client, count=1)
+    task_id = seeded["task_ids"][0]
+    session.expunge_all()
+    task = await session.get(WorkTask, task_id)
+
+    counter, remove = _count_sql(session)
+    try:
+        guarded = await task_transferable(session, task)
+    finally:
+        remove()
+
+    produced_reads = [s for s in counter["sql"] if "completed_qty_sq" in s]
+    assert len(produced_reads) == 1, (
+        f"produced прочитан не через completed_qty_sq: {counter['sql']}"
+    )
+    assert guarded == Decimal(1)

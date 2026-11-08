@@ -1,17 +1,19 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { useQuery } from "@tanstack/react-query";
-import { Loader2, Search, X } from "lucide-react";
+import { X } from "lucide-react";
 
 import {
   Button,
   DataTableColumnHeader,
   DateRangePicker,
-  Input,
+  FiltersPanel,
   TableCornerResetCell,
   TableCornerResetHeader,
   TablePaginationFooter,
   DATA_TABLE_STYLES,
+  TABLE_ROW_DENSE,
   type DateRangeValue,
+  type FiltersPanelField,
 } from "@/shared/ui";
 import { useFilterableTable } from "@/shared/hooks/useFilterableTable";
 import type { SortConfig } from "@/shared/hooks/useTableQueryEngine";
@@ -20,7 +22,13 @@ import {
   getStockTransactions,
   formatDimensionsLabel,
 } from "@/shared/api/stock";
-import type { StockTransactionsListResponse, StockTransactionsParams } from "@/shared/api/stock";
+import type {
+  StockTransactionEntry,
+  StockTransactionsListResponse,
+  StockTransactionsParams,
+} from "@/shared/api/stock";
+import { ROW_TONE_STRIPE, ROW_TONE_TEXT, rowToneFill, type RowTone } from "@/shared/lib/rowTones";
+import { cn } from "@/shared/utils/cn";
 import { queryKeys } from "@/shared/api/queryKeys";
 import { buildColumnApiParams, buildColumnFilterValues } from "@/shared/lib/columnSpecs";
 import { useDebouncedValue } from "@/shared/lib/useDebouncedValue";
@@ -60,7 +68,25 @@ function buildTxColumnApiParams(
   return buildColumnApiParams(columnFilters, columnSearchQueries, transactionColumns);
 }
 
-const headerCellClass = `${DATA_TABLE_STYLES.headerRow} ${DATA_TABLE_STYLES.headerCell}`;
+const headerCellClass = cn(
+  DATA_TABLE_STYLES.headerRow,
+  DATA_TABLE_STYLES.headerCell,
+  TABLE_ROW_DENSE.headerCell,
+);
+
+/**
+ * Тон строки движения — из общего словаря: брак читается тем же красным, что
+ * и в остальных таблицах, остальные движения живут обычным тоном. Своей
+ * палитры у ящика нет.
+ */
+function txRowTone(tx: StockTransactionEntry): RowTone {
+  return tx.to_quality_state === "SCRAP" || tx.to_quality_state === "FINAL_SCRAP"
+    ? "scrap"
+    : "plain";
+}
+
+/** Колонок в таблице движений: семь плюс угол сброса фильтров. */
+const COLUMN_COUNT = transactionColumns.length + 1;
 
 /**
  * Свежие движения сверху. Тот же порядок, что и дефолт эндпоинта
@@ -220,6 +246,37 @@ export function StockTransactionsHistoryDrawer({
     [transactions],
   );
 
+  /**
+   * Ряд фильтров — общий `FiltersPanel` (`compact`): поиск → период, в том же
+   * порядке и с той же высотой, что на доске и в «Передачах». Своя вёрстка
+   * ряда с `Input` и иконкой поиска давала третий вариант одного тулбара.
+   */
+  const filterFields: FiltersPanelField[] = [
+    {
+      kind: "search",
+      key: "search",
+      value: search,
+      onChange: setSearch,
+      placeholder: "Поиск по комментарию, причине, локациям…",
+      layoutSpan: "min-w-[240px] flex-1 max-w-md",
+    },
+    {
+      kind: "custom",
+      key: "period",
+      layoutSpan: "w-full sm:w-auto sm:min-w-[280px] max-w-md flex-shrink-0",
+      node: (
+        <DateRangePicker
+          from={dateRange.from}
+          to={dateRange.to}
+          onChange={setDateRange}
+          className="w-full"
+          placeholder="Период"
+          align="start"
+        />
+      ),
+    },
+  ];
+
   if (!open) return null;
 
   return (
@@ -238,124 +295,135 @@ export function StockTransactionsHistoryDrawer({
         </div>
 
         <div className="p-4 space-y-4">
-          <div className="flex flex-col sm:flex-row gap-2">
-            <div className="relative flex-1 max-w-md">
-              <Search className="absolute left-3 top-1/2 -translate-y-1/2 h-4 w-4 text-muted-foreground" />
-              <Input
-                placeholder="Поиск по комментарию, причине, локациям…"
-                value={search}
-                onChange={(e) => setSearch(e.target.value)}
-                className="pl-9"
-              />
-              {search && (
-                <button
-                  type="button"
-                  onClick={() => setSearch("")}
-                  className="absolute right-3 top-1/2 -translate-y-1/2"
-                  aria-label="Очистить поиск"
-                >
-                  <X className="h-4 w-4 text-muted-foreground" />
-                </button>
-              )}
+          <FiltersPanel
+            compact
+            fields={filterFields}
+            onReset={handleResetFilters}
+            hasActiveFilters={hasActiveFilters}
+          />
+
+          <div className={DATA_TABLE_STYLES.container}>
+            <div
+              ref={tableScrollRef}
+              className="overflow-auto"
+              style={{ maxHeight: "70vh" }}
+            >
+              <table className="w-full border-separate border-spacing-0 text-sm">
+                <thead>
+                  <tr>
+                    {transactionColumns.map((column) => (
+                      <th
+                        key={column.id}
+                        className={cn(headerCellClass, column.headerClassName ?? "text-left")}
+                        aria-sort={column.sortField ? getAriaSort(sortConfigs, column.sortField) : undefined}
+                      >
+                        <DataTableColumnHeader
+                          column={column}
+                          bindColumn={bindColumn}
+                          values={column.filterField ? uniqueValues[column.filterField] : undefined}
+                          currentSorts={sortConfigs}
+                          onSortChange={handleSortChange}
+                        />
+                      </th>
+                    ))}
+                    <TableCornerResetHeader
+                      hasActiveFilters={hasActiveFilters}
+                      onReset={handleResetFilters}
+                      dataTableHeader
+                    />
+                  </tr>
+                </thead>
+                <tbody>
+                  {isFirstRowsLoad(isPending, transactions) ? (
+                    <tr>
+                      <td
+                        colSpan={COLUMN_COUNT}
+                        className={cn(TABLE_ROW_DENSE.cell, "py-6 text-center text-sm text-muted-foreground")}
+                      >
+                        Загрузка…
+                      </td>
+                    </tr>
+                  ) : transactions.length === 0 ? (
+                    <tr>
+                      <td
+                        colSpan={COLUMN_COUNT}
+                        className={cn(TABLE_ROW_DENSE.cell, "py-6 text-center text-sm text-muted-foreground")}
+                      >
+                        {hasActiveFilters
+                          ? "Ничего не найдено по выбранным фильтрам"
+                          : "Транзакции не найдены"}
+                      </td>
+                    </tr>
+                  ) : (
+                    transactions.map((tx) => {
+                      const tone = txRowTone(tx);
+                      return (
+                        <tr
+                          key={tx.id}
+                          style={{ height: TABLE_ROW_DENSE.rowHeightPx }}
+                          className={cn(rowToneFill(tone), ROW_TONE_TEXT[tone], "transition-colors")}
+                        >
+                          <td
+                            className={cn(
+                              TABLE_ROW_DENSE.cell,
+                              ROW_TONE_STRIPE[tone],
+                              "text-xs whitespace-nowrap",
+                            )}
+                          >
+                            {getTxCellValue(tx, "date")}
+                          </td>
+                          <td className={cn(TABLE_ROW_DENSE.cell, "text-xs font-medium")}>
+                            {getTxCellValue(tx, "reason")}
+                          </td>
+                          <td className={cn(TABLE_ROW_DENSE.cell, "text-xs")}>
+                            {getTxCellValue(tx, "from")}
+                          </td>
+                          <td className={cn(TABLE_ROW_DENSE.cell, "text-xs")}>
+                            {getTxCellValue(tx, "to")}
+                          </td>
+                          <td
+                            className={cn(
+                              TABLE_ROW_DENSE.cell,
+                              "text-right font-mono text-xs whitespace-nowrap",
+                            )}
+                          >
+                            {getTxCellValue(tx, "quantity")}
+                            {formatDimensionsLabel(tx.dimensions, tx.dimensions_label) !== "—" && (
+                              <span className="ml-1 text-muted-foreground">
+                                × {formatDimensionsLabel(tx.dimensions, tx.dimensions_label)}
+                              </span>
+                            )}
+                          </td>
+                          <td className={cn(TABLE_ROW_DENSE.cell, "text-xs")}>
+                            {getTxCellValue(tx, "quality")}
+                          </td>
+                          <td
+                            className={cn(
+                              TABLE_ROW_DENSE.cell,
+                              "text-xs text-muted-foreground max-w-[150px] truncate",
+                            )}
+                          >
+                            {getTxCellValue(tx, "comment")}
+                          </td>
+                          <TableCornerResetCell />
+                        </tr>
+                      );
+                    })
+                  )}
+                </tbody>
+              </table>
             </div>
-            <DateRangePicker
-              from={dateRange.from}
-              to={dateRange.to}
-              onChange={setDateRange}
-              className="w-full sm:w-auto sm:min-w-[280px] max-w-md"
-              placeholder="Период"
-              align="start"
+            <TablePaginationFooter
+              page={page}
+              totalPages={totalPages}
+              total={total}
+              shownCount={transactions.length}
+              limit={limit}
+              onPageChange={setPage}
+              onLimitChange={setLimit}
+              rangeLabel={getRangeLabel(transactions.length, total)}
             />
           </div>
-
-          {isFirstRowsLoad(isPending, transactions) ? (
-            <div className="flex items-center justify-center py-12">
-              <Loader2 className="h-6 w-6 animate-spin text-muted-foreground" />
-            </div>
-          ) : total === 0 ? (
-            <div className="text-center py-12 text-sm text-muted-foreground border rounded-lg border-dashed">
-              Транзакции не найдены
-            </div>
-          ) : (
-            <div className={DATA_TABLE_STYLES.container}>
-              <div
-                ref={tableScrollRef}
-                className="overflow-auto"
-                style={{ maxHeight: "70vh" }}
-              >
-                <table className="w-full text-sm">
-                  <thead>
-                    <tr>
-                      {transactionColumns.map((column) => (
-                        <th
-                          key={column.id}
-                          className={`${headerCellClass} ${column.headerClassName ?? "text-left"}`}
-                          aria-sort={column.sortField ? getAriaSort(sortConfigs, column.sortField) : undefined}
-                        >
-                          <DataTableColumnHeader
-                            column={column}
-                            bindColumn={bindColumn}
-                            values={column.filterField ? uniqueValues[column.filterField] : undefined}
-                            currentSorts={sortConfigs}
-                            onSortChange={handleSortChange}
-                          />
-                        </th>
-                      ))}
-                      <TableCornerResetHeader
-                        hasActiveFilters={hasActiveFilters}
-                        onReset={handleResetFilters}
-                        dataTableHeader
-                      />
-                    </tr>
-                  </thead>
-                  <tbody>
-                    {transactions.length === 0 ? (
-                      <tr>
-                        <td colSpan={8} className="p-8 text-center text-sm text-muted-foreground">
-                          Ничего не найдено по выбранным фильтрам
-                        </td>
-                      </tr>
-                    ) : (
-                    transactions.map((tx) => (
-                      <tr key={tx.id} className="border-b hover:bg-muted/30">
-                        <td className="p-2 text-xs whitespace-nowrap">
-                          {getTxCellValue(tx, "date")}
-                        </td>
-                        <td className="p-2 text-xs font-medium">
-                          {getTxCellValue(tx, "reason")}
-                        </td>
-                        <td className="p-2 text-xs">{getTxCellValue(tx, "from")}</td>
-                        <td className="p-2 text-xs">{getTxCellValue(tx, "to")}</td>
-                        <td className="p-2 text-right font-mono text-xs whitespace-nowrap">
-                          {getTxCellValue(tx, "quantity")}
-                          {formatDimensionsLabel(tx.dimensions, tx.dimensions_label) !== "—" && (
-                            <span className="ml-1 text-muted-foreground">
-                              × {formatDimensionsLabel(tx.dimensions, tx.dimensions_label)}
-                            </span>
-                          )}
-                        </td>
-                        <td className="p-2 text-xs">{getTxCellValue(tx, "quality")}</td>
-                        <td className="p-2 text-xs text-muted-foreground max-w-[150px] truncate">
-                          {getTxCellValue(tx, "comment")}
-                        </td>
-                        <TableCornerResetCell />
-                      </tr>
-                    )))}
-                  </tbody>
-                </table>
-              </div>
-              <TablePaginationFooter
-                page={page}
-                totalPages={totalPages}
-                total={total}
-                shownCount={transactions.length}
-                limit={limit}
-                onPageChange={setPage}
-                onLimitChange={setLimit}
-                rangeLabel={getRangeLabel(transactions.length, total)}
-              />
-            </div>
-          )}
         </div>
       </div>
     </div>

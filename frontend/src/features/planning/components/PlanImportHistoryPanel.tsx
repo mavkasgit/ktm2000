@@ -24,7 +24,14 @@
 import { useMemo, useState } from "react";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 
-import { toast } from "@/shared/ui";
+import {
+  DATA_TABLE_STYLES,
+  FiltersPanel,
+  TABLE_ROW_DENSE,
+  toast,
+  type FiltersPanelField,
+} from "@/shared/ui";
+import { cn } from "@/shared/utils/cn";
 import { getErrorMessage } from "@/shared/api/client";
 import { queryKeys } from "@/shared/api/queryKeys";
 import { invalidateAfter } from "@/shared/api/cacheInvalidation";
@@ -46,6 +53,30 @@ type PendingDelete = {
   filename: string;
   conflict: BatchDeleteConflict;
 };
+
+/**
+ * Шапка и тело таблицы — общий набор токенов (`DATA_TABLE_STYLES` /
+ * `TABLE_ROW_DENSE`), а не свои `p-3`: тот же набор берут «Журнал действий»,
+ * «Передачи» и история остатков, и правка плотности там доезжает сюда.
+ */
+const HEADER_CELL = cn(
+  DATA_TABLE_STYLES.headerRow,
+  DATA_TABLE_STYLES.headerCell,
+  TABLE_ROW_DENSE.headerCell,
+);
+
+/** Порядок подписей совпадает с порядком колонок в строке (`FileRow`). */
+const HEADERS = [
+  "План",
+  "Файл",
+  "Дата загрузки",
+  "Лист",
+  "Строк",
+  "Размер",
+  "Статус",
+  "Действия",
+] as const;
+
 
 export function PlanImportHistoryPanel() {
   const queryClient = useQueryClient();
@@ -157,63 +188,79 @@ export function PlanImportHistoryPanel() {
 
   return (
     <>
-      {/* Тумблер живёт у таблицы, а не в шапке страницы: он меняет состав
-          списка, то есть это фильтр данных, а не кнопка обновления. */}
-      <div className="flex items-center gap-2 pb-2">
-        <input
-          id="plan-history-include-hidden"
-          type="checkbox"
-          checked={includeHidden}
-          onChange={(event) => setIncludeHidden(event.target.checked)}
-        />
-        <label htmlFor="plan-history-include-hidden" className="text-sm text-muted-foreground">
-          Показывать убранные из списка
-        </label>
-      </div>
-      {isLoading && <p className="p-4 text-sm text-muted-foreground">Загрузка...</p>}
+      {/* Тумблер живёт в общем ряду фильтров, а не отдельным чекбоксом над
+          таблицей: он меняет состав списка, то есть это фильтр данных, и
+          «Сбросить» рядом гасит его вместе с остальными фильтрами экрана. */}
+      <FiltersPanel
+        compact
+        fields={
+          [
+            {
+              kind: "toggle",
+              key: "hidden",
+              label: "Показывать убранные из списка",
+              checked: includeHidden,
+              onChange: setIncludeHidden,
+              hideIcon: true,
+            },
+          ] satisfies FiltersPanelField[]
+        }
+        onReset={() => setIncludeHidden(false)}
+        hasActiveFilters={includeHidden}
+      />
       {error != null && (
         <p className="p-4 text-sm text-destructive">
           Не удалось загрузить список импортов: {getErrorMessage(error)}
         </p>
       )}
-      {files && files.length === 0 && (
-        <div className="rounded-lg border border-dashed p-12 text-center">
-          <p className="text-sm text-muted-foreground">
-            Импортов плана пока нет. Файл загружается на странице «План».
-          </p>
-        </div>
-      )}
-      {files && files.length > 0 && (
-        <div className="overflow-auto rounded-lg border">
-          <table className="w-full">
-            <thead className="border-b bg-muted/50">
+      {error == null && (
+        <div className={DATA_TABLE_STYLES.container}>
+          <table className="w-full border-separate border-spacing-0 text-sm">
+            <thead>
               <tr>
-                <th className="text-left p-3 text-xs font-medium text-muted-foreground">План</th>
-                <th className="text-left p-3 text-xs font-medium text-muted-foreground">Файл</th>
-                <th className="text-left p-3 text-xs font-medium text-muted-foreground">Дата загрузки</th>
-                <th className="text-left p-3 text-xs font-medium text-muted-foreground">Лист</th>
-                <th className="text-left p-3 text-xs font-medium text-muted-foreground">Строк</th>
-                <th className="text-left p-3 text-xs font-medium text-muted-foreground">Размер</th>
-                <th className="text-left p-3 text-xs font-medium text-muted-foreground">Статус</th>
-                <th className="text-left p-3 text-xs font-medium text-muted-foreground">Действия</th>
+                {HEADERS.map((header) => (
+                  <th key={header} className={HEADER_CELL}>
+                    {header}
+                  </th>
+                ))}
               </tr>
             </thead>
             <tbody>
-              {/* Порядок — серверный (`ImportBatch.created_at DESC`): свежие
-                  сверху. Своей сортировки здесь нет намеренно — иначе их две. */}
-              {files.map((file) => (
-                <FileRow
-                  key={file.batch_id}
-                  file={file}
-                  planId={file.production_plan_id}
-                  planLabel={planLabel(file.production_plan_id)}
-                  isLastApplied={
-                    lastAppliedBatchIdByPlanId.get(file.production_plan_id) === file.batch_id
-                  }
-                  onDelete={handleDeleteFile}
-                  onHide={handleHideFile}
-                />
-              ))}
+              {isLoading ? (
+                <tr>
+                  <td
+                    colSpan={HEADERS.length}
+                    className={cn(TABLE_ROW_DENSE.cell, "py-6 text-center text-sm text-muted-foreground")}
+                  >
+                    Загрузка…
+                  </td>
+                </tr>
+              ) : !files || files.length === 0 ? (
+                <tr>
+                  <td
+                    colSpan={HEADERS.length}
+                    className={cn(TABLE_ROW_DENSE.cell, "py-6 text-center text-sm text-muted-foreground")}
+                  >
+                    Импортов плана пока нет. Файл загружается на странице «План».
+                  </td>
+                </tr>
+              ) : (
+                /* Порядок — серверный (`ImportBatch.created_at DESC`): свежие
+                   сверху. Своей сортировки здесь нет намеренно — иначе их две. */
+                files.map((file) => (
+                  <FileRow
+                    key={file.batch_id}
+                    file={file}
+                    planId={file.production_plan_id}
+                    planLabel={planLabel(file.production_plan_id)}
+                    isLastApplied={
+                      lastAppliedBatchIdByPlanId.get(file.production_plan_id) === file.batch_id
+                    }
+                    onDelete={handleDeleteFile}
+                    onHide={handleHideFile}
+                  />
+                ))
+              )}
             </tbody>
           </table>
         </div>

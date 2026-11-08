@@ -20,6 +20,7 @@
 | [`bulk-operations-core-v1.md`](bulk-operations-core-v1.md) | Пакетные операции | Bulk approve/delete |
 | [`excel-import-10-unique-scenarios.md`](excel-import-10-unique-scenarios.md) | Импорт Excel | Сценарии и валидация |
 | [`catalog-excel-format.md`](catalog-excel-format.md) | **Справочник сырья (Excel)** | Формат импорта/выгрузки, round-trip, нормы, «Фото» |
+| [`catalog/ktm-profile-register.md`](catalog/ktm-profile-register.md) | **Реестр профилей KTM** | Одна строка на артикул: все данные прод-БД, фото, связи, уверенность, подтверждено/опровергнуто. Обновление: `npm run docs:profiles` |
 | [`excel-import-route-passport.md`](excel-import-route-passport.md) | Импорт плана | Парсинг маршрутов из Excel |
 | [`plan-import-spec.md`](plan-import-spec.md) | **Импорт плана** | Спека ускорения/стабилизации импорта, коды строк, apply/rollback |
 | [`stock-import-history-spec.md`](stock-import-history-spec.md) | **Импорт остатков** | Реестр батчей, просмотр, откат, удаление из списка (#232) |
