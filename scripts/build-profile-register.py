@@ -20,6 +20,7 @@ import argparse
 import csv
 import hashlib
 import json
+import math
 import os
 import re
 import struct
@@ -34,6 +35,7 @@ DOCS = ROOT / "docs" / "catalog"
 AUDIT = ROOT / "data" / "tmp" / "poster-photos" / "audit"
 STORAGE_ROOT = ROOT / "data" / "storage-prod"
 META_PATH = DOCS / "ktm-profile-register.meta.json"
+REVIEW_PATH = DOCS / "ktm-profile-register.review.json"
 MD_PATH = DOCS / "ktm-profile-register.md"
 CSV_PATH = DOCS / "ktm-profile-register.csv"
 JSON_PATH = DOCS / "ktm-profile-register.json"
@@ -53,6 +55,7 @@ GROUPS = {
     "06-joints-kants": "Стыки, канты, накладки, вставки, швеллер, полоса",
     "07-tubes-variants": "Трубы и варианты П/У/ПТ/Ш",
     "08-unknown-missing": "Неопознанные и без фото",
+    "09-discrepancies": "Требуют разбора (есть расхождение)",
 }
 
 GROUP_PROFILE = {
@@ -352,6 +355,36 @@ def fmt_p(value, source: str) -> str:
     return f"{fmt_value(value)} ({source})" if source else fmt_value(value)
 
 
+# Дефолты backend `compute_hanger_quantity` (hanger_quantity_calc.py): 13/1450/20/2.
+HANGER_AREA_LIMIT_M2 = 13.0
+HANGER_ROD_LENGTH_MM = 1450.0
+HANGER_GAP_MM = 20.0
+HANGER_ROD_COUNT = 2
+
+
+def auto_hanger_n(perimeter, width, length) -> int | None:
+    """Авто-расчёт количества на подвес — та же формула, что в backend."""
+    values = (perimeter, width, length)
+    if any(value is None or value <= 0 for value in values):
+        return None
+    if width + HANGER_GAP_MM > HANGER_ROD_LENGTH_MM:
+        return None
+    area_m2 = perimeter * length / 1_000_000
+    if area_m2 <= 0:
+        return None
+    by_area = math.floor(HANGER_AREA_LIMIT_M2 / area_m2)
+    by_size = math.floor(HANGER_ROD_LENGTH_MM / (width + HANGER_GAP_MM)) * HANGER_ROD_COUNT
+    return min(by_area, by_size)
+
+
+def fmt_n(item: dict) -> str:
+    """N в реестре; при расхождении с авто — `ручной ⚠ авто`."""
+    value = fmt_value(item["n_per_hanger"])
+    if not item["n_mismatch"]:
+        return value
+    return f"{value} ⚠ {fmt_value(item['n_per_hanger_auto'])}"
+
+
 def relation_key(left: str, right: str) -> str:
     return "|".join(sorted([left, right]))
 
@@ -360,12 +393,25 @@ def build():
     products, pairs = load_db()
     by_sku = {item["sku"]: item for item in products}
     meta = json.loads(META_PATH.read_text(encoding="utf-8")) if META_PATH.exists() else {}
+    review_map = json.loads(REVIEW_PATH.read_text(encoding="utf-8")) if REVIEW_PATH.exists() else {}
     overrides = meta.get("classification", {})
     fam_defs = meta.get("families", [])
     alias_notes = meta.get("alias_notes", {})
     visual_similar = meta.get("visual_similar", [])
     deleted = meta.get("deleted", [])
     manual_claims = meta.get("claims", {})
+    manual_dims = meta.get("dimensions", {})
+    alias_overrides = meta.get("alias_overrides", {})
+
+    def effective_aliases(sku: str, raw_aliases) -> list[str]:
+        raw = parse_aliases(raw_aliases)
+        override = alias_overrides.get(sku, {})
+        removed = set(override.get("remove", []))
+        result = [alias for alias in raw if alias not in removed]
+        for alias in override.get("add", []):
+            if alias not in result:
+                result.append(alias)
+        return result
 
     group_rows: dict[str, dict] = {}
     for path in sorted((AUDIT / "groups").glob("*/results.csv")):
@@ -380,6 +426,8 @@ def build():
     # fingerprint of DB data (not audit)
     canonical = json.dumps(products, ensure_ascii=False, sort_keys=True, separators=(",", ":"))
     fingerprint = hashlib.sha256(canonical.encode("utf-8")).hexdigest()[:16]
+    review_canonical = json.dumps(review_map, ensure_ascii=False, sort_keys=True, separators=(",", ":"))
+    review_fingerprint = hashlib.sha256(review_canonical.encode("utf-8")).hexdigest()[:16]
 
     # families
     family_rows = []
@@ -400,7 +448,7 @@ def build():
     # alias groups
     graph = defaultdict(set)
     for item in products:
-        for alias in parse_aliases(item.get("aliases")):
+        for alias in effective_aliases(item["sku"], item.get("aliases")):
             if alias in by_sku:
                 graph[item["sku"]].add(alias)
                 graph[alias].add(item["sku"])
@@ -443,13 +491,19 @@ def build():
         for i, left in enumerate(members):
             for right in members[i + 1:]:
                 alias_pairs.add((left, right))
+    manual_alias_pairs = set()
+    for sku, override in alias_overrides.items():
+        for alias in override.get("add", []):
+            if alias in by_sku:
+                manual_alias_pairs.add(tuple(sorted((sku, alias))))
     for left, right in sorted(alias_pairs):
         note = alias_notes.get(relation_key(left, right), "DB-алиас: тот же товар под другим кодом")
         status = "confirmed"
         if any(key in alias_notes for key in (f"{left}|{right}", f"{right}|{left}")):
             status = "confirmed"
-        add_relation(left, right, "alias_of", status, "db:aliases", note)
-        add_relation(right, left, "alias_of", status, "db:aliases", note)
+        source = "manual:meta" if tuple(sorted((left, right))) in manual_alias_pairs else "db:aliases"
+        add_relation(left, right, "alias_of", status, source, note)
+        add_relation(right, left, "alias_of", status, source, note)
 
     for pair in visual_similar:
         left, right = pair["a"], pair["b"]
@@ -540,14 +594,19 @@ def build():
         group_row = group_rows.get(sku, {})
         dim = dims.get(sku, {})
         decision = decisions.get(sku, {})
+        mdim = manual_dims.get(sku, {})
         attrs = item.get("attributes") or {}
         perimeter = attrs.get("perimeter_mm")
-        if perimeter is None and dim.get("perimeter_db"):
+        if mdim.get("perimeter_mm") is not None:
+            perimeter = mdim["perimeter_mm"]
+        elif perimeter is None and dim.get("perimeter_db"):
             try:
                 perimeter = float(dim["perimeter_db"])
             except ValueError:
                 perimeter = None
         width = attrs.get("mount_width_mm")
+        if mdim.get("mount_width_mm") is not None:
+            width = mdim["mount_width_mm"]
         hanger_mode = attrs.get("hanger_mode") or "auto"
         qph = attrs.get("quantity_per_hanger") or {}
         lengths = item.get("lengths") or []
@@ -558,16 +617,33 @@ def build():
         if primary_length is not None:
             entry = qph.get(str(int(primary_length))) or {}
             n_value = entry.get(hanger_mode) or entry.get("manual") or entry.get("auto")
+        manual_n = None
+        if primary_length is not None:
+            manual_n = (qph.get(str(int(primary_length))) or {}).get("manual")
+        raw_length = None
+        primary_row = next(
+            (row for row in lengths if row.get("is_primary")),
+            lengths[0] if lengths else None,
+        )
+        if primary_row is not None:
+            raw_length = primary_row.get("raw_length_mm")
+        auto_length = raw_length if raw_length is not None else primary_length
+        auto_n = auto_hanger_n(perimeter, width, auto_length)
+        n_mismatch = n_value is not None and auto_n is not None and n_value != auto_n
 
-        group = group_row.get("_group") or "08-unknown-missing"
+        base_group = group_row.get("_group") or "08-unknown-missing"
+        review = review_map.get(sku, {})
+        review_status = review.get("status") or ""
+        review_open = review_status == "open"
+        group = "09-discrepancies" if review_open else base_group
         name = item.get("name") or sku
-        profile_type = profile_type_of(sku, name, group, overrides)
+        profile_type = profile_type_of(sku, name, base_group, overrides)
         shape = shape_of(profile_type, name, overrides, sku)
         series = series_of(sku)
         material = material_of(name, item.get("alloy"))
         family = primary_family.get(sku)
-        size_text = dim.get("linear_best") or ""
-        size_source = dim.get("source_best") or ""
+        size_text = mdim.get("size") or dim.get("linear_best") or ""
+        size_source = "чертёж" if mdim.get("size") else (dim.get("source_best") or "")
         if not size_text:
             size_text = parse_size_from_name(sku, name)
             size_source = "name"
@@ -632,14 +708,20 @@ def build():
             photo_verdict = "unverified"
 
         # dimension status
-        dim_status = dim.get("status") or ""
+        dim_status = "manual" if mdim else (dim.get("status") or "")
         if sku in decisions:
             dim_status = "applied"
-        if not perimeter and not dim.get("perimeter_archive") and not dim.get("perimeter_poster"):
+        if (
+            not mdim
+            and not perimeter
+            and not dim.get("perimeter_archive")
+            and not dim.get("perimeter_poster")
+        ):
             dim_status = "no_data"
-        archive_p = dim.get("perimeter_archive") or ""
+        archive_p = mdim.get("perimeter_mm") or dim.get("perimeter_archive") or ""
         poster_p = dim.get("perimeter_poster") or ""
-        best_p = dim.get("perimeter_best") or ""
+        best_p = mdim.get("perimeter_mm") or dim.get("perimeter_best") or ""
+        archive_file = mdim.get("source") or dim.get("archive_file") or ""
 
         def _num(value):
             try:
@@ -665,12 +747,14 @@ def build():
         # confidence
         if sku in identity_conf:
             identity_pct = identity_conf[sku]
-        elif group == "08-unknown-missing":
+        elif base_group == "08-unknown-missing":
             identity_pct = 80
         else:
             identity_pct = 100
 
-        if sku in dimension_conf:
+        if mdim:
+            dimension_pct = int(mdim.get("confidence", 100))
+        elif sku in dimension_conf:
             dimension_pct = dimension_conf[sku]
         elif dim_status == "match":
             dimension_pct = 100
@@ -717,7 +801,7 @@ def build():
             classification_pct = 90
         elif family_status == "inferred":
             classification_pct = 80
-        elif group == "08-unknown-missing":
+        elif base_group == "08-unknown-missing":
             classification_pct = 60
         else:
             classification_pct = 85
@@ -736,13 +820,13 @@ def build():
 
         # claims
         claims = list(manual_claims.get(sku, []))
-        if dim.get("perimeter_archive") and dim.get("perimeter_archive") not in {"—", "-"}:
+        if archive_p and archive_p not in {"—", "-"}:
             claims.append({
-                "claim": f"Периметр {fmt_value(dim.get('perimeter_archive'))} по чертежу",
+                "claim": mdim.get("claim") or f"Периметр {fmt_value(archive_p)} по чертежу",
                 "verdict": "confirmed",
-                "evidence": dim.get("archive_file") or "архив",
+                "evidence": archive_file or "архив",
             })
-        if dim_status == "match" and perimeter is not None:
+        if dim_status == "match" and perimeter is not None and not mdim:
             claims.append({
                 "claim": f"Периметр {fmt_value(perimeter)} в БД",
                 "verdict": "confirmed",
@@ -804,9 +888,15 @@ def build():
             tags.append(f"photo-from:{photo_from}")
         tags.append(f"photo-verdict:{photo_verdict}")
         tags.append(f"perimeter:{p_source.lower() if p_source else 'missing'}")
+        if n_mismatch:
+            tags.append("n-mismatch")
         tags.append(f"confidence:{overall_pct}")
         tags.append(f"status:{overall_status}")
-        for alias in parse_aliases(item.get("aliases")):
+        if review:
+            tags.append(f"review:{review_status or 'open'}")
+            if review.get("drawing"):
+                tags.append(f"review-drawing:{review['drawing']}")
+        for alias in effective_aliases(sku, item.get("aliases")):
             tags.append(f"alias:{alias}")
         for relation in relations_by_sku.get(sku, []):
             if relation["relation"] in {"visual_similar", "pair_with", "shared_photo_full", "shared_photo_thumb"}:
@@ -821,6 +911,9 @@ def build():
             for rel in relations_by_sku.get(sku, [])
             if rel["relation"] in {"alias_of", "visual_similar", "pair_with"}
         )
+        alias_text = alias_overrides.get(sku, {}).get("text")
+        if alias_text:
+            relation_text = "; ".join(part for part in (relation_text, alias_text) if part)
         family_text = family or ""
         if family:
             family_name = next((row["name"] for row in family_rows if row["id"] == family), family)
@@ -840,7 +933,7 @@ def build():
             "color": item.get("color") or "",
             "anod_type": item.get("anod_type") or "",
             "dimension_state": item.get("dimension_state") or "",
-            "aliases": parse_aliases(item.get("aliases")),
+            "aliases": effective_aliases(sku, item.get("aliases")),
             "lengths": lengths,
             "length_primary_mm": primary_length,
             "perimeter_mm": perimeter,
@@ -848,6 +941,9 @@ def build():
             "hanger_mode": hanger_mode,
             "quantity_per_hanger": qph,
             "n_per_hanger": n_value,
+            "n_per_hanger_manual": manual_n,
+            "n_per_hanger_auto": auto_n,
+            "n_mismatch": n_mismatch,
             "photo_full": item.get("photo_full") or "",
             "photo_thumb": item.get("photo_thumb") or "",
             "photo_full_exists": full_exists,
@@ -869,6 +965,15 @@ def build():
             "processing_flags": item.get("processing_flags") or [],
             "composition": item.get("composition") or [],
             "audit_group": group,
+            "base_audit_group": base_group,
+            "review_status": review_status,
+            "review_drawing": review.get("drawing") or "",
+            "review_cause": review.get("cause") or "",
+            "review_note": review.get("note") or "",
+            "review_resolution": review.get("resolution") or "",
+            "review_kpz_n": review.get("kpz_n"),
+            "review_register_n": review.get("register_n"),
+            "review_observations": review.get("observations"),
             "audit_verdict": verdict,
             "audit_confidence": group_row.get("confidence") or "",
             "audit_note": group_row.get("note") or "",
@@ -886,12 +991,15 @@ def build():
             "perimeter_source": p_source,
             "dimension_status": dim_status,
             "dimension_note": (
-                decision.get("decision")
-                if sku in decisions and decision.get("decision")
-                else (dim.get("conflict_note") or dim.get("status") or "")
+                mdim.get("note")
+                or (
+                    decision.get("decision")
+                    if sku in decisions and decision.get("decision")
+                    else (dim.get("conflict_note") or dim.get("status") or "")
+                )
             ),
             "applied_decision": decision.get("decision") or "",
-            "archive_file": dim.get("archive_file") or "",
+            "archive_file": archive_file,
             "poster_source": dim.get("poster_source") or "",
             "linear_best": size_text,
             "linear_source": size_source,
@@ -919,6 +1027,7 @@ def build():
     return {
         "generated_at": datetime.now(UTC).isoformat(timespec="seconds"),
         "db_fingerprint": fingerprint,
+        "review_fingerprint": review_fingerprint,
         "db": {"container": CONTAINER, "database": DB_NAME, "products": len(products)},
         "meta": meta,
         "products": records,
@@ -957,6 +1066,11 @@ def render_markdown(data: dict) -> str:
     alias_photos = [item for item in products if item["photo_origin"] == "alias"]
     refuted_products = [item for item in products if item["refuted"]]
     open_products = [item for item in products if item["open_claims"]]
+    n_mismatch_count = sum(1 for item in products if item["n_mismatch"])
+    review_open = [item for item in products if item.get("review_status") == "open"]
+    review_resolved = [item for item in products if item.get("review_status") == "resolved"]
+    review_no_drawing = [item for item in review_open if item.get("review_drawing") == "нет"]
+    review_with_drawing = [item for item in review_open if item.get("review_drawing") != "нет"]
     confirmed_100 = [item for item in products if item["overall_confidence"] >= 100]
 
     lines = [
@@ -992,6 +1106,9 @@ def render_markdown(data: dict) -> str:
         f"требует проверки: **{statuses.get('needs_review', 0)}**; неизвестно: **{statuses.get('unknown', 0)}**.",
         f"- 100% уверенность: **{len(confirmed_100)}**; есть опровергнутые утверждения: **{len(refuted_products)}**; "
         f"есть открытые вопросы: **{len(open_products)}**.",
+        f"- N в реестре не совпадает с авто-расчётом: **{n_mismatch_count}** (помечены `⚠`).",
+        f"- Требуют разбора: **{len(review_open)}** (есть чертёж: **{len(review_with_drawing)}**, "
+        f"нет чертежа: **{len(review_no_drawing)}**); разобрано: **{len(review_resolved)}**.",
         "",
         "| Уверенность | Кол-во |",
         "|---|---:|",
@@ -1019,6 +1136,58 @@ def render_markdown(data: dict) -> str:
     lines.append("")
 
     lines += [
+        "## Требуют разбора",
+        "",
+        "Профили, у которых норма КПЗ расходится с реестром и разбор ещё не закрыт. "
+        "`⚠` — открыто; при закрытии строка возвращается в свою группу, а здесь появляется в «Разобранных».",
+        "",
+        f"- Открыто: **{len(review_open)}**; с чертежом: **{len(review_with_drawing)}**; без чертежа: **{len(review_no_drawing)}**.",
+        "",
+    ]
+    if review_open:
+        lines.append("| SKU | Название | P, мм | N реестра | N КПЗ | Δ | Записей | Чертёж | Причина | Что проверить |")
+        lines.append("|---|---|---|---:|---:|---:|---:|---|---|---|")
+        for item in sorted(
+            review_open,
+            key=lambda row: (
+                row.get("review_drawing") != "нет",
+                -abs((row.get("review_kpz_n") or 0) - (row.get("review_register_n") or 0)),
+                row["sku"],
+            ),
+        ):
+            kpz = item.get("review_kpz_n")
+            reg = item.get("review_register_n") or item.get("n_per_hanger")
+            delta = "" if kpz is None or reg is None else f"{kpz - reg:+d}"
+            lines.append(
+                f"| ⚠ `{item['sku']}` | {md_escape(item['name'])} | "
+                f"{fmt_p(item['perimeter_mm'], item['perimeter_source'])} | "
+                f"{fmt_value(reg)} | {fmt_value(kpz)} | {delta} | "
+                f"{fmt_value(item.get('review_observations'))} | "
+                f"{md_escape(item.get('review_drawing') or '—')} | "
+                f"{md_escape(item.get('review_cause') or '—')} | "
+                f"{md_escape(item.get('review_note') or '—')} |"
+            )
+    else:
+        lines.append("Открытых расхождений нет.")
+    lines.append("")
+    if review_resolved:
+        lines += [
+            "### Разобранные расхождения",
+            "",
+            "Эти профили уже выведены из группы разбора и остались в своих группах.",
+            "",
+            "| SKU | Чертёж | Причина | Вывод |",
+            "|---|---|---|---|",
+        ]
+        for item in sorted(review_resolved, key=lambda row: row["sku"]):
+            lines.append(
+                f"| `{item['sku']}` | {md_escape(item.get('review_drawing') or '—')} | "
+                f"{md_escape(item.get('review_cause') or '—')} | "
+                f"{md_escape(item.get('review_resolution') or item.get('review_note') or '—')} |"
+            )
+        lines.append("")
+
+    lines += [
         "## Таблица по группам",
         "",
         "Каждая строка — один профиль. Полные поля (включая JSON `attributes`, длины, флаги, состав) — "
@@ -1027,8 +1196,15 @@ def render_markdown(data: dict) -> str:
         "В колонке «Фото»: `алиас X` — своего оригинала нет, стоит фото/чертёж алиаса X; "
         "`full от X` / `thumb от X` — заимствована только эта часть.",
         "",
+        "В колонке «N»: `27 ⚠ 29` — N в реестре (27) не совпадает с авто-расчётом (29); пометка для решения.",
+        "",
+        f"Профили с открытым расхождением (**{len(review_open)}**) вынесены в раздел «Требуют разбора» и здесь не дублируются.",
+        "",
     ]
-    order = sorted(by_group, key=lambda key: list(GROUPS).index(key) if key in GROUPS else 99)
+    order = sorted(
+        [key for key in by_group if key != "09-discrepancies"],
+        key=lambda key: list(GROUPS).index(key) if key in GROUPS else 99,
+    )
     for group in order:
         rows = sorted(by_group[group], key=lambda row: (row["sku"]))
         lines.append(f"### {group} — {GROUPS.get(group, group)}")
@@ -1040,7 +1216,15 @@ def render_markdown(data: dict) -> str:
         for item in rows:
             rel = item["relation_text"] or "—"
             comment_parts = []
-            if item.get("applied_decision"):
+            if item.get("review_status") == "resolved":
+                comment_parts.append(
+                    "✓ разобрано: " + (item.get("review_cause") or "расхождение снято")
+                )
+            elif item.get("review_status") == "open":
+                comment_parts.append(
+                    "⚠ на разборе: " + (item.get("review_cause") or "есть расхождение")
+                )
+            if item.get("dimension_status") == "manual" or item.get("applied_decision"):
                 if item["dimension_note"]:
                     comment_parts.append(item["dimension_note"])
             else:
@@ -1061,7 +1245,7 @@ def render_markdown(data: dict) -> str:
                 f"{fmt_p(item['perimeter_mm'], item['perimeter_source'])} | "
                 f"{fmt_value(item['mount_width_mm'])} | "
                 f"{fmt_value(item['length_primary_mm'])} | "
-                f"{fmt_value(item['n_per_hanger'])} | "
+                f"{fmt_n(item)} | "
                 f"{md_escape(item['photo_label'])} | {md_escape(rel)} | "
                 f"**{item['overall_confidence']}%** | {item['overall_status']} | {md_escape(comment)} |"
             )
@@ -1211,6 +1395,11 @@ def render_markdown(data: dict) -> str:
         "Ручные решения (семейства, алиасы, визуальные пары, опровержения, источник фото) правятся в "
         "`ktm-profile-register.meta.json`; данные БД — только из прод-БД.",
         "",
+        "Разбор расхождений ведётся в `ktm-profile-register.review.json`: `status: open` держит профиль "
+        "в группе `09-discrepancies`, `status: resolved` возвращает его в исходную группу и добавляет "
+        "в «Разобранные». Поле `drawing` — `есть`/`нет`, `cause` — причина, `note` — что проверить, "
+        "`resolution` — вывод после разбора.",
+        "",
         "## Файлы",
         "",
         "- `ktm-profile-register.md` — этот документ.",
@@ -1219,6 +1408,7 @@ def render_markdown(data: dict) -> str:
         "- `ktm-profile-register.relations.csv` — связи (алиасы, визуальные, общие фото/ячейки, пары).",
         "- `ktm-profile-register.families.csv` — семейства.",
         "- `ktm-profile-register.meta.json` — ручные решения и пояснения.",
+        "- `ktm-profile-register.review.json` — очередь разбора расхождений (открытые/разобранные).",
         "",
     ]
     return "\n".join(lines)
@@ -1237,6 +1427,8 @@ def write_csv(data: dict) -> None:
         "photo_origin", "photo_from", "photo_origin_scope", "photo_origin_note", "photo_verdict",
         "attributes_json", "dimensions", "notes", "source", "processing_flags", "composition",
         "audit_group", "audit_verdict", "audit_confidence", "audit_note", "audit_evidence",
+        "base_audit_group", "review_status", "review_drawing", "review_cause", "review_note",
+        "review_resolution", "review_kpz_n", "review_register_n", "review_observations",
         "perimeter_archive", "perimeter_poster", "perimeter_best", "perimeter_source",
         "dimension_status", "dimension_note", "applied_decision", "archive_file", "poster_source",
         "linear_best", "linear_source",
@@ -1302,6 +1494,13 @@ def main() -> int:
             print(
                 "реестр устарел: отпечаток БД изменился "
                 f"({previous.get('db_fingerprint')} → {data['db_fingerprint']}). "
+                "Запустите `npm run docs:profiles`.",
+                file=sys.stderr,
+            )
+            return 1
+        if previous.get("review_fingerprint") != data["review_fingerprint"]:
+            print(
+                "реестр устарел: изменился `ktm-profile-register.review.json`. "
                 "Запустите `npm run docs:profiles`.",
                 file=sys.stderr,
             )

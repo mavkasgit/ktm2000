@@ -16,8 +16,8 @@
 1010,shared_photo_full,1515,confirmed,storage:sha256,f763d9089ce9
 1010,shared_photo_full,2525,confirmed,storage:sha256,f763d9089ce9
 1010,shared_photo_full,4040,confirmed,storage:sha256,f763d9089ce9
+110,alias_of,ЮП-272,confirmed,manual:meta,"Подтверждено: тот же товар, что 110; P≈62,8–62,9, qty 58, монтаж 30."
 110,shared_cell_2024,100,confirmed,poster2024,"ячейка 2024 36,2665,308,3033"
-1212,shared_photo_full,У1010,confirmed,storage:sha256,d44909619876
 1212,shared_photo_full,У4040,confirmed,storage:sha256,d44909619876
 1212,shared_photo_full,У5050,confirmed,storage:sha256,d44909619876
 130,visual_similar,ЮП-2396,confirmed,manual:audit,"Похожи визуально, но разные: 130 — 44×4,1/P=106,3; 2396 — 40×4,2 с резиновой вставкой/P=99,9."
@@ -41,9 +41,11 @@
 2525,shared_photo_full,1010,confirmed,storage:sha256,f763d9089ce9
 2525,shared_photo_full,1515,confirmed,storage:sha256,f763d9089ce9
 2525,shared_photo_full,4040,confirmed,storage:sha256,f763d9089ce9
-318,alias_of,ЮП-3123,confirmed,db:aliases,DB-алиас: тот же товар под другим кодом
+318,alias_of,ЮП-2387,confirmed,db:aliases,"Один товар: 318 — КТМ-нумерация, ЮП-2387 — техкод чертежа (18×8, P=53,6). Оба SKU заведены в БД."
 318,shared_cell_2024,324,confirmed,poster2024,"ячейка 2024 632,2665,904,3033"
 318,shared_cell_2024,325,confirmed,poster2024,"ячейка 2024 632,2665,904,3033"
+318,shared_photo_full,ЮП-2387,confirmed,storage:sha256,48af44ac3942
+318,shared_photo_thumb,ЮП-2387,confirmed,storage:sha256,c0e40439ca15
 320,alias_of,ЮП-2902,confirmed,db:aliases,DB-алиас: тот же товар под другим кодом
 324,alias_of,ЮП-081,confirmed,db:aliases,DB-алиас: тот же товар под другим кодом
 324,shared_cell_2024,318,confirmed,poster2024,"ячейка 2024 632,2665,904,3033"
@@ -56,7 +58,7 @@
 3328,shared_cell_2024,3586,confirmed,poster2024,"ячейка 2024 1822,140,2094,515"
 335,alias_of,ALS-917,confirmed,db:aliases,DB-алиас: тот же товар под другим кодом
 337,alias_of,ЮП-2077,confirmed,db:aliases,"Оба Y-профиля: 337 — 20,18×20/P=73,8 (2019), 2077 — 23,1×23,1/P=79,2 (2022). Алиас сохранён, размеры разные (издания)."
-3418,alias_of,ЮП-3019,confirmed,db:aliases,"Один угол 24×10; у 3418 нет оригинального чертежа, размеры приняты по 3019."
+3418,alias_of,ЮП-3019,confirmed,db:aliases,"Один угол 24×10; у 3418 нет оригинального чертежа — размеры и P=69,3 взяты из чертежа ЮП-3019 (24×9,8)."
 347,visual_similar,ЮП-2183,confirmed,manual:audit,"Похожи визуально, но разные: 347 — 18,5×8/P=53,4; 2183 — 20×10/P=61,7."
 3584,shared_cell_2024,60,confirmed,poster2024,"ячейка 2024 2094,140,2366,515"
 3586,shared_cell_2024,3328,confirmed,poster2024,"ячейка 2024 1822,140,2094,515"
@@ -64,7 +66,7 @@
 361,shared_photo_full,362,confirmed,storage:sha256,2bf7effe26b0
 362,shared_cell_2024,361,confirmed,poster2024,"ячейка 2024 309,2196,581,2638"
 362,shared_photo_full,361,confirmed,storage:sha256,2bf7effe26b0
-371,alias_of,ЮП-2256,confirmed,db:aliases,"Один профиль; P=96,7 по KTM-013, в БД было 75,0."
+371,alias_of,ЮП-2256,confirmed,db:aliases,"Один профиль; P=97,0 по KTM-013, в БД было 75,0."
 381,alias_of,ЮП-2900,confirmed,db:aliases,DB-алиас: тот же товар под другим кодом
 381,shared_cell_2024,382,confirmed,poster2024,"ячейка 2024 1226,3036,1498,3350"
 382,alias_of,ЮП-2976,confirmed,db:aliases,DB-алиас: тот же товар под другим кодом
@@ -137,37 +139,38 @@ ALS-917,alias_of,335,confirmed,db:aliases,DB-алиас: тот же товар 
 ПТ60,alias_of,ЮП-1875,confirmed,db:aliases,DB-алиас: тот же товар под другим кодом
 ПТ60,alias_of,ЮП-3658,confirmed,db:aliases,DB-алиас: тот же товар под другим кодом
 ПТ80,alias_of,ЮП-1880,confirmed,db:aliases,DB-алиас: тот же товар под другим кодом
-У1010,alias_of,ЮП-1401,confirmed,db:aliases,DB-алиас: тот же товар под другим кодом
-У1010,shared_photo_full,1212,confirmed,storage:sha256,d44909619876
-У1010,shared_photo_full,У4040,confirmed,storage:sha256,d44909619876
-У1010,shared_photo_full,У5050,confirmed,storage:sha256,d44909619876
-У1515,alias_of,ЮП-009,confirmed,db:aliases,DB-алиас: тот же товар под другим кодом
-У2020,alias_of,ЮП-011,confirmed,db:aliases,DB-алиас: тот же товар под другим кодом
-У2525,alias_of,ЮП-2004,confirmed,db:aliases,DB-алиас: тот же товар под другим кодом
-У2525,shared_photo_full,У3030,confirmed,storage:sha256,d47c89cc4eb5
-У3030,alias_of,ЮП-1629,confirmed,db:aliases,DB-алиас: тот же товар под другим кодом
-У3030,shared_photo_full,У2525,confirmed,storage:sha256,d47c89cc4eb5
+У1010,alias_of,ЮП-1401,confirmed,db:aliases,"Один товар — уголок ГОСТ 10×10, P=40. ЮП-1401 — дубль-алиас У1010."
+У1010,shared_photo_full,ЮП-1401,confirmed,storage:sha256,79bec28efead
+У1010,shared_photo_thumb,ЮП-1401,confirmed,storage:sha256,8eec565b9332
+У1515,alias_of,ЮП-009,confirmed,db:aliases,"Один товар — уголок ГОСТ 15×15, P=60. ЮП-009 — дубль-алиас У1515."
+У1515,shared_photo_full,ЮП-009,confirmed,storage:sha256,802ed9c37292
+У1515,shared_photo_thumb,ЮП-009,confirmed,storage:sha256,cf3d32b11f2e
+У2020,alias_of,ЮП-011,confirmed,db:aliases,"Один товар — уголок ГОСТ 20×20, P=80. ЮП-011 — дубль-алиас У2020."
+У2020,shared_photo_full,ЮП-011,confirmed,storage:sha256,7f251ebeb942
+У2020,shared_photo_thumb,ЮП-011,confirmed,storage:sha256,82ab0a05cb9d
+У2525,alias_of,ЮП-2004,confirmed,db:aliases,"Один товар — уголок ГОСТ 25×25, P=99. ЮП-2004 — дубль-алиас У2525."
+У2525,shared_photo_full,ЮП-2004,confirmed,storage:sha256,8191a1f887ae
+У2525,shared_photo_thumb,ЮП-2004,confirmed,storage:sha256,7431ad0e2eb3
+У3030,alias_of,ЮП-1629,confirmed,db:aliases,"Один товар — уголок ГОСТ 30×30, P=119. ЮП-1629 — дубль-алиас У3030."
+У3030,shared_photo_full,ЮП-1629,confirmed,storage:sha256,ecc8f310a2db
+У3030,shared_photo_thumb,ЮП-1629,confirmed,storage:sha256,ef2d382f80eb
 У4020,shared_photo_full,У5030,confirmed,storage:sha256,7e816ebd5430
 У4020,shared_photo_thumb,У5030,confirmed,storage:sha256,0bd80322fee2
 У4040,shared_photo_full,1212,confirmed,storage:sha256,d44909619876
-У4040,shared_photo_full,У1010,confirmed,storage:sha256,d44909619876
 У4040,shared_photo_full,У5050,confirmed,storage:sha256,d44909619876
 У5030,shared_photo_full,У4020,confirmed,storage:sha256,7e816ebd5430
 У5030,shared_photo_thumb,У4020,confirmed,storage:sha256,0bd80322fee2
 У5050,shared_photo_full,1212,confirmed,storage:sha256,d44909619876
-У5050,shared_photo_full,У1010,confirmed,storage:sha256,d44909619876
 У5050,shared_photo_full,У4040,confirmed,storage:sha256,d44909619876
 ЮП-003,alias_of,ПС20,confirmed,db:aliases,DB-алиас: тот же товар под другим кодом
 ЮП-004,shared_photo_full,ЮП-005,confirmed,storage:sha256,e96ad063c7a5
 ЮП-005,shared_photo_full,ЮП-004,confirmed,storage:sha256,e96ad063c7a5
-ЮП-009,alias_of,У1515,confirmed,db:aliases,DB-алиас: тот же товар под другим кодом
-ЮП-009,shared_photo_full,ЮП-011,confirmed,storage:sha256,4a1f93831b88
-ЮП-009,shared_photo_full,ЮП-1401,confirmed,storage:sha256,4a1f93831b88
-ЮП-009,shared_photo_full,ЮП-1629,confirmed,storage:sha256,4a1f93831b88
-ЮП-011,alias_of,У2020,confirmed,db:aliases,DB-алиас: тот же товар под другим кодом
-ЮП-011,shared_photo_full,ЮП-009,confirmed,storage:sha256,4a1f93831b88
-ЮП-011,shared_photo_full,ЮП-1401,confirmed,storage:sha256,4a1f93831b88
-ЮП-011,shared_photo_full,ЮП-1629,confirmed,storage:sha256,4a1f93831b88
+ЮП-009,alias_of,У1515,confirmed,db:aliases,"Один товар — уголок ГОСТ 15×15, P=60. ЮП-009 — дубль-алиас У1515."
+ЮП-009,shared_photo_full,У1515,confirmed,storage:sha256,802ed9c37292
+ЮП-009,shared_photo_thumb,У1515,confirmed,storage:sha256,cf3d32b11f2e
+ЮП-011,alias_of,У2020,confirmed,db:aliases,"Один товар — уголок ГОСТ 20×20, P=80. ЮП-011 — дубль-алиас У2020."
+ЮП-011,shared_photo_full,У2020,confirmed,storage:sha256,7f251ebeb942
+ЮП-011,shared_photo_thumb,У2020,confirmed,storage:sha256,82ab0a05cb9d
 ЮП-045,visual_similar,84,confirmed,manual:audit,"Похожи визуально, но разные: 84 — 28,5×5,7/P=63,7; 045 — 31,5×7/P=68,6."
 ЮП-048,alias_of,ALS-915,confirmed,db:aliases,DB-алиас: тот же товар под другим кодом
 ЮП-048,shared_photo_full,ALS-915,confirmed,storage:sha256,f2591994fa73
@@ -175,14 +178,12 @@ ALS-917,alias_of,335,confirmed,db:aliases,DB-алиас: тот же товар 
 ЮП-081,alias_of,324,confirmed,db:aliases,DB-алиас: тот же товар под другим кодом
 ЮП-1053,alias_of,Кр.труба 25мм,confirmed,db:aliases,DB-алиас: тот же товар под другим кодом
 ЮП-137,alias_of,480,confirmed,db:aliases,DB-алиас: тот же товар под другим кодом
-ЮП-1401,alias_of,У1010,confirmed,db:aliases,DB-алиас: тот же товар под другим кодом
-ЮП-1401,shared_photo_full,ЮП-009,confirmed,storage:sha256,4a1f93831b88
-ЮП-1401,shared_photo_full,ЮП-011,confirmed,storage:sha256,4a1f93831b88
-ЮП-1401,shared_photo_full,ЮП-1629,confirmed,storage:sha256,4a1f93831b88
-ЮП-1629,alias_of,У3030,confirmed,db:aliases,DB-алиас: тот же товар под другим кодом
-ЮП-1629,shared_photo_full,ЮП-009,confirmed,storage:sha256,4a1f93831b88
-ЮП-1629,shared_photo_full,ЮП-011,confirmed,storage:sha256,4a1f93831b88
-ЮП-1629,shared_photo_full,ЮП-1401,confirmed,storage:sha256,4a1f93831b88
+ЮП-1401,alias_of,У1010,confirmed,db:aliases,"Один товар — уголок ГОСТ 10×10, P=40. ЮП-1401 — дубль-алиас У1010."
+ЮП-1401,shared_photo_full,У1010,confirmed,storage:sha256,79bec28efead
+ЮП-1401,shared_photo_thumb,У1010,confirmed,storage:sha256,8eec565b9332
+ЮП-1629,alias_of,У3030,confirmed,db:aliases,"Один товар — уголок ГОСТ 30×30, P=119. ЮП-1629 — дубль-алиас У3030."
+ЮП-1629,shared_photo_full,У3030,confirmed,storage:sha256,ecc8f310a2db
+ЮП-1629,shared_photo_thumb,У3030,confirmed,storage:sha256,ef2d382f80eb
 ЮП-1767,alias_of,10,confirmed,db:aliases,DB-алиас: тот же товар под другим кодом
 ЮП-1767,shared_photo_full,10,confirmed,storage:sha256,4704f728304f
 ЮП-1767,shared_photo_thumb,10,confirmed,storage:sha256,00f406f678ac
@@ -191,14 +192,19 @@ ALS-917,alias_of,335,confirmed,db:aliases,DB-алиас: тот же товар 
 ЮП-1875,shared_photo_full,ЮП-3658,confirmed,storage:sha256,4ba180681a84
 ЮП-1875,shared_photo_thumb,ЮП-3658,confirmed,storage:sha256,47bf4e2dabed
 ЮП-1880,alias_of,ПТ80,confirmed,db:aliases,DB-алиас: тот же товар под другим кодом
-ЮП-2004,alias_of,У2525,confirmed,db:aliases,DB-алиас: тот же товар под другим кодом
+ЮП-2004,alias_of,У2525,confirmed,db:aliases,"Один товар — уголок ГОСТ 25×25, P=99. ЮП-2004 — дубль-алиас У2525."
+ЮП-2004,shared_photo_full,У2525,confirmed,storage:sha256,8191a1f887ae
+ЮП-2004,shared_photo_thumb,У2525,confirmed,storage:sha256,7431ad0e2eb3
 ЮП-2012,alias_of,973,confirmed,db:aliases,DB-алиас: тот же товар под другим кодом
 ЮП-2076,alias_of,ПП95,confirmed,db:aliases,DB-алиас: тот же товар под другим кодом
 ЮП-2077,alias_of,337,confirmed,db:aliases,"Оба Y-профиля: 337 — 20,18×20/P=73,8 (2019), 2077 — 23,1×23,1/P=79,2 (2022). Алиас сохранён, размеры разные (издания)."
 ЮП-2083,alias_of,3328,confirmed,db:aliases,DB-алиас: тот же товар под другим кодом
 ЮП-2183,visual_similar,347,confirmed,manual:audit,"Похожи визуально, но разные: 347 — 18,5×8/P=53,4; 2183 — 20×10/P=61,7."
-ЮП-2256,alias_of,371,confirmed,db:aliases,"Один профиль; P=96,7 по KTM-013, в БД было 75,0."
+ЮП-2256,alias_of,371,confirmed,db:aliases,"Один профиль; P=97,0 по KTM-013, в БД было 75,0."
 ЮП-2384,alias_of,4040,confirmed,db:aliases,DB-алиас: тот же товар под другим кодом
+ЮП-2387,alias_of,318,confirmed,db:aliases,"Один товар: 318 — КТМ-нумерация, ЮП-2387 — техкод чертежа (18×8, P=53,6). Оба SKU заведены в БД."
+ЮП-2387,shared_photo_full,318,confirmed,storage:sha256,48af44ac3942
+ЮП-2387,shared_photo_thumb,318,confirmed,storage:sha256,c0e40439ca15
 ЮП-2396,visual_similar,130,confirmed,manual:audit,"Похожи визуально, но разные: 130 — 44×4,1/P=106,3; 2396 — 40×4,2 с резиновой вставкой/P=99,9."
 ЮП-2397,alias_of,П101010,confirmed,db:aliases,DB-алиас: тот же товар под другим кодом
 ЮП-2413,alias_of,ПП37,confirmed,db:aliases,DB-алиас: тот же товар под другим кодом
@@ -212,6 +218,7 @@ ALS-917,alias_of,335,confirmed,db:aliases,DB-алиас: тот же товар 
 ЮП-2616,pair_with,ЮП-3158,confirmed,db:product_pairs,"пара для фасовки, N={'2700': {'manual': 32}}"
 ЮП-2630,alias_of,033,confirmed,db:aliases,DB-алиас: тот же товар под другим кодом
 ЮП-2695,pair_with,ЮП-2878,confirmed,db:product_pairs,"пара для фасовки, N={'2700': {'manual': 24}}"
+ЮП-272,alias_of,110,confirmed,manual:meta,"Подтверждено: тот же товар, что 110; P≈62,8–62,9, qty 58, монтаж 30."
 ЮП-2878,pair_with,ЮП-2695,confirmed,db:product_pairs,"пара для фасовки, N={'2700': {'manual': 24}}"
 ЮП-2900,alias_of,381,confirmed,db:aliases,DB-алиас: тот же товар под другим кодом
 ЮП-2901,alias_of,100,confirmed,db:aliases,DB-алиас: тот же товар под другим кодом
@@ -225,13 +232,12 @@ ALS-917,alias_of,335,confirmed,db:aliases,DB-алиас: тот же товар 
 ЮП-2974,alias_of,481,confirmed,db:aliases,DB-алиас: тот же товар под другим кодом
 ЮП-2975,alias_of,ПП79,confirmed,db:aliases,DB-алиас: тот же товар под другим кодом
 ЮП-2976,alias_of,382,confirmed,db:aliases,DB-алиас: тот же товар под другим кодом
-ЮП-3019,alias_of,3418,confirmed,db:aliases,"Один угол 24×10; у 3418 нет оригинального чертежа, размеры приняты по 3019."
+ЮП-3019,alias_of,3418,confirmed,db:aliases,"Один угол 24×10; у 3418 нет оригинального чертежа — размеры и P=69,3 взяты из чертежа ЮП-3019 (24×9,8)."
 ЮП-3035,alias_of,ALS-1103,confirmed,db:aliases,"ALS-1103 — 94,71/39,65 по ALS1103.pdf; ЮП-3035 — 98,8."
 ЮП-3035,alias_of,ПТ40,confirmed,db:aliases,DB-алиас: тот же товар под другим кодом
 ЮП-3077,alias_of,АТ-4892,confirmed,db:aliases,DB-алиас: тот же товар под другим кодом
 ЮП-3094,alias_of,АТ-4888,confirmed,db:aliases,DB-алиас: тот же товар под другим кодом
 ЮП-3098,pair_with,ЮП-2616,confirmed,db:product_pairs,"пара для фасовки, N={'2700': {'manual': 35}}"
-ЮП-3123,alias_of,318,confirmed,db:aliases,DB-алиас: тот же товар под другим кодом
 ЮП-3158,pair_with,ЮП-2616,confirmed,db:product_pairs,"пара для фасовки, N={'2700': {'manual': 32}}"
 ЮП-3168,alias_of,150,confirmed,db:aliases,DB-алиас: тот же товар под другим кодом
 ЮП-3168,shared_photo_thumb,150,confirmed,storage:sha256,abd107daeaf0
