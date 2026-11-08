@@ -20,22 +20,27 @@ import re
 import stat as stat_module
 from collections.abc import Iterable
 from pathlib import Path
+from typing import NamedTuple
 
 from app.core.config import settings
 
 logger = logging.getLogger(__name__)
 
-_STATIC_PREFIXES = ("/static/", "static/")
 _WINDOWS_ABSOLUTE = re.compile(r"^[A-Za-z]:/")
+
+
+class PhotoVersions(NamedTuple):
+    """Версии пары фото одного артикула: превью и основной файл."""
+
+    thumb: str | None
+    full: str | None
 
 
 def _resolve_storage_path(path: str) -> Path | None:
     """Путь файла внутри ``STORAGE_ROOT`` или ``None`` для недопустимого пути.
 
     Канон ADR-0026 — путь **относительно** корня storage
-    (``products/<файл>``). Дополнительно принимаются URL-пути
-    ``/static/products/<файл>`` (так фото приходит из API/старых записей) и
-    ``\\``-разделители Windows.
+    (``products/<файл>``); ``\\``-разделители Windows нормализуются.
 
     Абсолютный путь (``C:\\...``, ``/app/storage/...``) не резолвится: он
     зависит от машины/контейнера и может указать мимо корня. Такой путь
@@ -45,11 +50,6 @@ def _resolve_storage_path(path: str) -> Path | None:
     if not raw or "://" in raw:
         # Внешний URL — не файл storage. Его версию источник не отдаёт.
         return None
-
-    for prefix in _STATIC_PREFIXES:
-        if raw.startswith(prefix):
-            raw = raw[len(prefix):]
-            break
 
     if raw.startswith("/") or _WINDOWS_ABSOLUTE.match(raw):
         logger.warning(
@@ -70,8 +70,8 @@ def photo_file_version(path: str | None) -> str | None:
     """Версия файла фото или ``None``, если пути нет или файл недоступен.
 
     ``path`` — путь от ``STORAGE_ROOT`` (``products/<файл>``, ADR-0026);
-    ``/static/products/<файл>`` и ``\\``-разделители нормализуются. Версия —
-    ``mtime_ns-size`` в hex, чтобы URL оставался коротким.
+    ``\\``-разделители нормализуются. Версия — ``mtime_ns-size`` в hex, чтобы
+    URL оставался коротким.
     """
     if not path:
         return None
@@ -84,25 +84,31 @@ def photo_file_version(path: str | None) -> str | None:
         file_stat = candidate.stat()
     except OSError as exc:
         # Отдельного 500 из-за отсутствующей картинки быть не должно: фронт
-        # просто не добавит `?v=`. Но и молчать нельзя — битая ссылка в БД
-        # должна быть видна в логах.
-        logger.warning("photo file is unavailable: path=%r (%s)", path, exc)
+        # просто не добавит `?v=`. Это штатная ситуация (фото ещё не
+        # загружено/удалено), поэтому только debug: предупреждение на каждый
+        # файл в каждом списке — шум.
+        logger.debug("photo file is unavailable: path=%r (%s)", path, exc)
         return None
 
     if not stat_module.S_ISREG(file_stat.st_mode):
-        logger.warning("photo path is not a regular file: path=%r", path)
+        logger.debug("photo path is not a regular file: path=%r", path)
         return None
 
     return f"{file_stat.st_mtime_ns:x}-{file_stat.st_size:x}"
 
 
+def photo_versions_for(thumb: str | None, full: str | None) -> PhotoVersions:
+    """Версии пары ``(thumb, full)`` одного артикула."""
+    return PhotoVersions(photo_file_version(thumb), photo_file_version(full))
+
+
 def photo_file_versions(
     pairs: Iterable[tuple[str | None, str | None]],
-) -> list[tuple[str | None, str | None]]:
+) -> list[PhotoVersions]:
     """Версии для пар ``(thumb_path, full_path)`` одним вызовом.
 
     Синхронная функция: route-слой зовёт её через ``asyncio.to_thread``, чтобы
     ``stat`` не блокировал event loop. Для списка это один переход в поток на
     весь ответ, а не по два ``stat`` на каждый товар в цикле.
     """
-    return [(photo_file_version(thumb), photo_file_version(full)) for thumb, full in pairs]
+    return [photo_versions_for(thumb, full) for thumb, full in pairs]

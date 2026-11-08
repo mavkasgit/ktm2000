@@ -148,15 +148,20 @@ async def test_product_list_exposes_photo_versions(
     session: AsyncSession, client
 ) -> None:
     product = await _make_product(session, "PHOTO-LIST")
-    filename = f"{product.sku}_{product.id}_full.png"
-    _write_photo(_photo_path(filename), b"list", 1_700_000_000_000_000_000)
-    product.photo_full = _storage_relative(filename)
+    full_name = f"{product.sku}_{product.id}_full.png"
+    thumb_name = f"{product.sku}_{product.id}_thumb.png"
+    _write_photo(_photo_path(full_name), b"list-full", 1_700_000_000_000_000_000)
+    _write_photo(_photo_path(thumb_name), b"list-thumb", 1_700_000_000_000_000_000)
+    product.photo_full = _storage_relative(full_name)
+    product.photo_thumb = _storage_relative(thumb_name)
     await session.flush()
 
     response = await client.get("/api/products", params={"sku": product.sku})
     assert response.status_code == 200, response.text
     row = next(item for item in response.json()["items"] if item["id"] == product.id)
     assert row["photo_full_version"]
+    assert row["photo_thumb_version"]
+    assert row["photo_full_version"] != row["photo_thumb_version"]
 
 
 async def test_list_version_changes_only_for_replaced_photo(
@@ -165,25 +170,50 @@ async def test_list_version_changes_only_for_replaced_photo(
     """Замена файла в storage видна в списке; соседний товар не сбрасывает кэш."""
     first = await _make_product(session, "PHOTO-LIST-A")
     second = await _make_product(session, "PHOTO-LIST-B")
-    first_name = f"{first.sku}_{first.id}_full.png"
-    second_name = f"{second.sku}_{second.id}_full.png"
-    first_path = _photo_path(first_name)
-    _write_photo(first_path, b"first-old", 1_700_000_000_000_000_000)
-    _write_photo(_photo_path(second_name), b"second", 1_700_000_000_000_000_000)
-    first.photo_full = _storage_relative(first_name)
-    second.photo_full = _storage_relative(second_name)
+    first_full_name = f"{first.sku}_{first.id}_full.png"
+    first_thumb_name = f"{first.sku}_{first.id}_thumb.png"
+    second_full_name = f"{second.sku}_{second.id}_full.png"
+    second_thumb_name = f"{second.sku}_{second.id}_thumb.png"
+    first_full_path = _photo_path(first_full_name)
+    _write_photo(first_full_path, b"first-old", 1_700_000_000_000_000_000)
+    _write_photo(
+        _photo_path(first_thumb_name),
+        b"first-thumb-old",
+        1_700_000_000_000_000_000,
+    )
+    _write_photo(
+        _photo_path(second_full_name),
+        b"second",
+        1_700_000_000_000_000_000,
+    )
+    _write_photo(
+        _photo_path(second_thumb_name),
+        b"second-thumb",
+        1_700_000_000_000_000_000,
+    )
+    first.photo_full = _storage_relative(first_full_name)
+    first.photo_thumb = _storage_relative(first_thumb_name)
+    second.photo_full = _storage_relative(second_full_name)
+    second.photo_thumb = _storage_relative(second_thumb_name)
     await session.flush()
 
-    def versions_by_id(payload: dict) -> dict[int, str | None]:
-        return {item["id"]: item["photo_full_version"] for item in payload["items"]}
+    def versions_by_id(
+        payload: dict,
+    ) -> dict[int, tuple[str | None, str | None]]:
+        return {
+            item["id"]: (item["photo_thumb_version"], item["photo_full_version"])
+            for item in payload["items"]
+        }
 
     before = versions_by_id(
         (await client.get("/api/products", params={"q": "PHOTO-LIST-"})).json()
     )
-    _write_photo(first_path, b"first-new", 1_700_000_001_000_000_000)
+    _write_photo(first_full_path, b"first-new", 1_700_000_001_000_000_000)
     after = versions_by_id(
         (await client.get("/api/products", params={"q": "PHOTO-LIST-"})).json()
     )
 
-    assert after[first.id] != before[first.id]
+    assert after[first.id][1] != before[first.id][1]
+    assert after[first.id][0] == before[first.id][0]
     assert after[second.id] == before[second.id]
+

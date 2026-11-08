@@ -40,41 +40,16 @@ const productLength = (
 const productLengths = (...values: number[]): ProductLength[] =>
   values.map((value) => productLength(value));
 
+import { makeProduct as makeProductFixture } from "./productFixture";
+
 function makeProduct(overrides: Partial<Product>): Product {
-  return {
-    id: 1,
+  return makeProductFixture({
     sku: "ЮП-100",
-    code: null,
     name: "Профиль",
     type: "component",
     unit: "шт",
-    is_active: true,
-    notes: null,
-    profile_type: null,
-    alloy: null,
-    color: null,
-    anod_type: null,
-    weight_per_meter: null,
-    perimeter_mm: null,
-    mount_width_mm: null,
-    quantity_per_hanger: null,
-    hanger_mode: "auto",
-    cross_section: null,
-    photo_thumb: null,
-    photo_full: null,
-    photo_thumb_version: null,
-    photo_full_version: null,
-    source: null,
-    is_catalog_item: false,
-    is_paired_profile: false,
-    skip_shot_blast: false,
-    dimension_state: "length",
-    aliases: [],
-    lengths: [],
-    processing_flags: [],
-    is_laminated: false,
     ...overrides,
-  };
+  });
 }
 
 function makeResult(overrides: Partial<HangerCalcResult>): HangerCalcResult {

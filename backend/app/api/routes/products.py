@@ -56,7 +56,11 @@ from app.services.hanger_quantity_calc import (
     compute_hanger_quantity,
     compute_sheet_hanger_quantity,
 )
-from app.services.product_photo_version import photo_file_version, photo_file_versions
+from app.services.product_photo_version import (
+    PhotoVersions,
+    photo_file_versions,
+    photo_versions_for,
+)
 from app.services.route_selection import select_route_for_payload
 
 router = APIRouter(prefix="/products", tags=["products"])
@@ -664,20 +668,17 @@ def _to_product_out(
     product: Product,
     dimensions: dict[str, float] | None = None,
     composition: list[CompositionItemOut] | None = None,
-    photo_versions: tuple[str | None, str | None] | None = None,
+    *,
+    photo_versions: PhotoVersions,
 ) -> ProductOut:
-    """Сериализовать товар. ``photo_versions`` — ``(thumb, full)`` из batch-helper'а.
+    """Сериализовать товар. ``photo_versions`` — версии пары фото.
 
-    Если версии не переданы (внутренние/тестовые вызовы), считается локальный
-    синхронный fallback. Route-эндпоинты обязаны передавать версии, посчитанные
-    через ``asyncio.to_thread``: ``stat`` не должен блокировать event loop.
+    Параметр обязателен и keyword-only: ``stat`` файлов не должен выполняться
+    в event loop, поэтому route-эндпоинты считают версии через
+    ``asyncio.to_thread`` и передают результат сюда явно.
     """
-    if photo_versions is None:
-        photo_versions = (
-            photo_file_version(product.photo_thumb),
-            photo_file_version(product.photo_full),
-        )
-    thumb_version, full_version = photo_versions
+    thumb_version = photo_versions.thumb
+    full_version = photo_versions.full
     lengths = [
         ProductLengthOut(
             length_mm=float(row.length_mm),
@@ -736,14 +737,6 @@ def _to_product_out(
         dimensions=dimensions,
         composition=composition,
     )
-
-
-async def _photo_versions_for(product: Product) -> tuple[str | None, str | None]:
-    """Версии ``(thumb, full)`` одного товара без блокировки event loop."""
-    versions = await asyncio.to_thread(
-        photo_file_versions, [(product.photo_thumb, product.photo_full)]
-    )
-    return versions[0]
 
 
 async def _enforce_bidirectional_aliases(
@@ -1068,7 +1061,10 @@ async def create_product(
     # созданного артикула — пустой список до F5.
     await db.commit()
     await db.refresh(item, attribute_names=["lengths", "processing_flags", "is_paired_profile"])
-    return _to_product_out(item, photo_versions=await _photo_versions_for(item))
+    photo_versions = await asyncio.to_thread(
+        photo_versions_for, item.photo_thumb, item.photo_full
+    )
+    return _to_product_out(item, photo_versions=photo_versions)
 
 
 @router.get("/processing-flags", response_model=list[ProcessingFlagOut])
@@ -1099,7 +1095,10 @@ async def get_product(product_id: int, db: AsyncSession = Depends(get_db)) -> Pr
     dimensions = None
     if item.dimension_state in (DimensionState.area, DimensionState.volume):
         dimensions = await _sheet_dimension_values(db, product_id) or None
-    return _to_product_out(item, dimensions, photo_versions=await _photo_versions_for(item))
+    photo_versions = await asyncio.to_thread(
+        photo_versions_for, item.photo_thumb, item.photo_full
+    )
+    return _to_product_out(item, dimensions, photo_versions=photo_versions)
 
 
 @router.patch(
@@ -1226,7 +1225,10 @@ async def patch_product(
     # Коммит ДО ответа — см. пояснение в create_product.
     await db.commit()
     await db.refresh(item, attribute_names=["lengths", "processing_flags", "is_paired_profile"])
-    return _to_product_out(item, sheet_dims, photo_versions=await _photo_versions_for(item))
+    photo_versions = await asyncio.to_thread(
+        photo_versions_for, item.photo_thumb, item.photo_full
+    )
+    return _to_product_out(item, sheet_dims, photo_versions=photo_versions)
 
 
 @router.delete(
@@ -1428,7 +1430,10 @@ async def upload_product_photo(
     # Коммит ДО ответа — см. пояснение в create_product.
     await db.commit()
     await db.refresh(item, attribute_names=["lengths", "processing_flags", "is_paired_profile"])
-    return _to_product_out(item, photo_versions=await _photo_versions_for(item))
+    photo_versions = await asyncio.to_thread(
+        photo_versions_for, item.photo_thumb, item.photo_full
+    )
+    return _to_product_out(item, photo_versions=photo_versions)
 
 
 class RouteOperationOut(BaseModel):

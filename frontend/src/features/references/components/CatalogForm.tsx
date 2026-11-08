@@ -10,7 +10,7 @@ import { ImageUploadModal } from "./ImageUploadModal";
 import { ProductSearchMulti } from "./ProductSearchMulti";
 import { ProductDimensionsSection, type ProductDimensionsSectionHandle } from "./ProductDimensionsSection";
 import { ProductPairsSection } from "./ProductPairsSection";
-import { productPhotoUrl } from "./getPhotoUrl";
+import { productPhotoUrl } from "./productPhotoUrl";
 import { uploadProductPhoto, getErrorMessage } from "@/shared/api/products";
 import { listDimensionTypes } from "../api";
 import { queryKeys } from "@/shared/api/queryKeys";

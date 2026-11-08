@@ -180,7 +180,10 @@ async def import_catalog_from_zip(
                         dst_thumb = photo_dir / f"{sku}_thumb.jpg"
                         # #404: неизменённое фото не перезаписываем — его
                         # mtime/версия остаются прежними, кэш не сбрасывается.
-                        copy_photo_if_changed(src_thumb, dst_thumb)
+                        # filecmp/copy2 читают файлы — уводим из event loop.
+                        await asyncio.to_thread(
+                            copy_photo_if_changed, src_thumb, dst_thumb
+                        )
                         new_thumb = _normalize_photo_path(
                             str(dst_thumb.relative_to(Path(settings.PRODUCT_PHOTO_DIR).parent))
                         )
@@ -188,7 +191,9 @@ async def import_catalog_from_zip(
                     src_full = images_dir / Path(photo_full).name
                     if src_full.exists():
                         dst_full = photo_dir / f"{sku}_full.jpg"
-                        copy_photo_if_changed(src_full, dst_full)
+                        await asyncio.to_thread(
+                            copy_photo_if_changed, src_full, dst_full
+                        )
                         new_full = _normalize_photo_path(
                             str(dst_full.relative_to(Path(settings.PRODUCT_PHOTO_DIR).parent))
                         )

@@ -1,6 +1,6 @@
 // Фото-плашка артикула: миниатюра или иконка-заглушка (общая для списка и карточки #152).
 import { Image } from "lucide-react";
-import { productPhotoUrl } from "./getPhotoUrl";
+import { productPhotoUrl } from "./productPhotoUrl";
 import { cn } from "@/shared/utils/cn";
 import type { Product } from "@/shared/api/products";
 

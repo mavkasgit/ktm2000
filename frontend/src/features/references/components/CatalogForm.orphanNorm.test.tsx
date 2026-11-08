@@ -23,42 +23,20 @@ vi.mock("@/shared/api/hangerCalc", () => ({
 
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import type { Product, QuantityPerHangerDict } from "@/shared/api/products";
+import { makeProduct as makeProductFixture } from "../lib/productFixture";
 import { CatalogForm } from "./CatalogForm";
 
-const makeProduct = (overrides: Partial<Product> = {}): Product => ({
-  id: 190,
-  sku: "ЮП-3473",
-  code: null,
-  name: "Перила",
-  type: "component",
-  unit: "pcs",
-  is_active: true,
-  notes: null,
-  profile_type: null,
-  alloy: null,
-  color: null,
-  anod_type: null,
-  weight_per_meter: null,
-  perimeter_mm: null,
-  mount_width_mm: null,
-  quantity_per_hanger: null,
-  hanger_mode: "manual",
-  cross_section: null,
-  photo_thumb: null,
-  photo_full: null,
-  photo_thumb_version: null,
-  photo_full_version: null,
-  source: null,
-  is_catalog_item: false,
-  is_paired_profile: false,
-  dimension_state: "length",
-  skip_shot_blast: false,
-  aliases: [],
-  lengths: [{ length_mm: 2700, raw_length_mm: 2750, is_primary: true }],
-  processing_flags: [],
-  is_laminated: false,
-  ...overrides,
-});
+const makeProduct = (overrides: Partial<Product> = {}): Product =>
+  makeProductFixture({
+    id: 190,
+    sku: "ЮП-3473",
+    name: "Перила",
+    type: "component",
+    unit: "pcs",
+    hanger_mode: "manual",
+    lengths: [{ length_mm: 2700, raw_length_mm: 2750, is_primary: true }],
+    ...overrides,
+  });
 
 const orphanNorms: QuantityPerHangerDict = {
   "2750": { auto: null, manual: 62 },
