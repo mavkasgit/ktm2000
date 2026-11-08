@@ -1,4 +1,4 @@
-import { useEffect, useState, useCallback, forwardRef, useImperativeHandle } from "react";
+import { useEffect, useState, useCallback, useRef, forwardRef, useImperativeHandle } from "react";
 import * as API from "@/shared/api/routes";
 import { listSections, type Section } from "@/shared/api/sections";
 import { Badge } from "@/shared/ui/badge";
@@ -23,17 +23,29 @@ export const RouteTreeOverview = forwardRef<RouteTreeOverviewRef, RouteTreeOverv
   const [sections, setSections] = useState<Section[]>([]);
   const [loading, setLoading] = useState(true);
   const [search, setSearch] = useState("");
-  const [draggedIndex, setDraggedIndex] = useState<number | null>(null);
+  const [draggedRouteId, setDraggedRouteId] = useState<number | null>(null);
+  // Актуальный список для жестов: drag-over может прийти несколько раз подряд,
+  // до того как React успеет перерисовать состояние.
+  const routesRef = useRef<API.RouteDetail[]>([]);
+  // Куда курсор уже переставлял строку: повторный drag-over над той же карточкой
+  // не должен менять порядок обратно.
+  const lastDragOverRef = useRef<number | null>(null);
 
-  const moveRoute = useCallback((fromIndex: number, toIndex: number) => {
-    setRoutes((prev) => {
-      if (toIndex < 0 || toIndex >= prev.length) return prev;
-      const next = [...prev];
-      const [moved] = next.splice(fromIndex, 1);
-      next.splice(toIndex, 0, moved);
-      return next;
-    });
+  const applyRoutes = useCallback((next: API.RouteDetail[]) => {
+    routesRef.current = next;
+    setRoutes(next);
   }, []);
+
+  const swapRoutes = useCallback((leftId: number, rightId: number) => {
+    const current = routesRef.current;
+    const from = current.findIndex((route) => route.id === leftId);
+    const to = current.findIndex((route) => route.id === rightId);
+    if (from === -1 || to === -1 || from === to) return;
+    const next = [...current];
+    const [moved] = next.splice(from, 1);
+    next.splice(to, 0, moved);
+    applyRoutes(next);
+  }, [applyRoutes]);
 
   const loadData = useCallback(async () => {
     setLoading(true);
@@ -44,17 +56,17 @@ export const RouteTreeOverview = forwardRef<RouteTreeOverviewRef, RouteTreeOverv
       ]);
 
       setSections(sectionsList);
-      setRoutes(routesList as API.RouteDetail[]);
+      applyRoutes(routesList as API.RouteDetail[]);
     } catch (e) {
       console.error("Failed to load route trees:", e);
     } finally {
       setLoading(false);
     }
-  }, []);
+  }, [applyRoutes]);
 
-  const commitRouteReorder = useCallback(async () => {
+  const commitRouteReorder = useCallback(async (ordered: API.RouteDetail[]) => {
     try {
-      const ids = routes.map((r) => r.id).filter(Boolean);
+      const ids = ordered.map((r) => r.id).filter(Boolean);
       if (ids.length > 0) {
         await API.reorderRoutes(ids);
       }
@@ -62,37 +74,48 @@ export const RouteTreeOverview = forwardRef<RouteTreeOverviewRef, RouteTreeOverv
       toast({ title: "Ошибка сортировки", description: getErrorMessage(e), variant: "destructive" });
       await loadData();
     }
-  }, [routes, loadData]);
+  }, [loadData]);
 
-  const moveRouteUp = useCallback((index: number) => {
-    moveRoute(index, index - 1);
-    setTimeout(() => commitRouteReorder(), 0);
-  }, [moveRoute, commitRouteReorder]);
+  // Стрелки двигают строку относительно соседней видимой (при поиске
+  // скрытые маршруты не должны менять ответ на нажатие), а на сервер уходит
+  // полный список — иначе фильтр переставил бы совпавшие в начало.
+  const moveRouteBy = useCallback((routeId: number, direction: -1 | 1) => {
+    const query = search.trim().toLowerCase();
+    const visible = routesRef.current.filter(
+      (route) =>
+        route.name.toLowerCase().includes(query) ||
+        (route.description || "").toLowerCase().includes(query),
+    );
+    const index = visible.findIndex((route) => route.id === routeId);
+    const neighbour = visible[index + direction];
+    if (!neighbour) return;
+    swapRoutes(routeId, neighbour.id);
+    void commitRouteReorder(routesRef.current);
+  }, [search, swapRoutes, commitRouteReorder]);
 
-  const moveRouteDown = useCallback((index: number) => {
-    moveRoute(index, index + 1);
-    setTimeout(() => commitRouteReorder(), 0);
-  }, [moveRoute, commitRouteReorder]);
-
-  const handleDragStart = useCallback((index: number) => {
-    setDraggedIndex(index);
+  const handleDragStart = useCallback((routeId: number) => {
+    setDraggedRouteId(routeId);
+    lastDragOverRef.current = null;
   }, []);
 
-  const handleDragOver = useCallback((e: React.DragEvent, index: number) => {
+  const handleDragOver = useCallback((e: React.DragEvent, routeId: number) => {
     e.preventDefault();
-    if (draggedIndex === null || draggedIndex === index) return;
-    moveRoute(draggedIndex, index);
-    setDraggedIndex(index);
-  }, [draggedIndex, moveRoute]);
+    if (draggedRouteId === null || draggedRouteId === routeId) return;
+    if (lastDragOverRef.current === routeId) return;
+    lastDragOverRef.current = routeId;
+    swapRoutes(draggedRouteId, routeId);
+  }, [draggedRouteId, swapRoutes]);
 
   const handleDrop = useCallback((e: React.DragEvent) => {
     e.preventDefault();
-    setDraggedIndex(null);
-    void commitRouteReorder();
+    setDraggedRouteId(null);
+    lastDragOverRef.current = null;
+    void commitRouteReorder(routesRef.current);
   }, [commitRouteReorder]);
 
   const handleDragEnd = useCallback(() => {
-    setDraggedIndex(null);
+    setDraggedRouteId(null);
+    lastDragOverRef.current = null;
   }, []);
 
   useImperativeHandle(ref, () => ({ reload: loadData }));
@@ -144,9 +167,9 @@ export const RouteTreeOverview = forwardRef<RouteTreeOverviewRef, RouteTreeOverv
               draggable={!readOnly}
               onDragStart={readOnly ? undefined : (e) => {
                 (e.currentTarget as HTMLDivElement).style.opacity = "0.4";
-                handleDragStart(routeIndex);
+                handleDragStart(route.id);
               }}
-              onDragOver={readOnly ? undefined : (e) => handleDragOver(e, routeIndex)}
+              onDragOver={readOnly ? undefined : (e) => handleDragOver(e, route.id)}
               onDrop={readOnly ? undefined : (e) => {
                 (e.currentTarget as HTMLDivElement).style.opacity = "1";
                 handleDrop(e);
@@ -171,7 +194,7 @@ export const RouteTreeOverview = forwardRef<RouteTreeOverviewRef, RouteTreeOverv
                       type="button"
                       className="p-0.5 rounded hover:bg-accent text-muted-foreground hover:text-foreground disabled:opacity-30 disabled:cursor-default cursor-pointer"
                       disabled={routeIndex === 0}
-                      onClick={() => moveRouteUp(routeIndex)}
+                      onClick={() => moveRouteBy(route.id, -1)}
                       title="Переместить вверх"
                     >
                       <ArrowUp className="h-3.5 w-3.5" />
@@ -180,7 +203,7 @@ export const RouteTreeOverview = forwardRef<RouteTreeOverviewRef, RouteTreeOverv
                       type="button"
                       className="p-0.5 rounded hover:bg-accent text-muted-foreground hover:text-foreground disabled:opacity-30 disabled:cursor-default cursor-pointer"
                       disabled={routeIndex === filteredRoutes.length - 1}
-                      onClick={() => moveRouteDown(routeIndex)}
+                      onClick={() => moveRouteBy(route.id, 1)}
                       title="Переместить вниз"
                     >
                       <ArrowDown className="h-3.5 w-3.5" />
