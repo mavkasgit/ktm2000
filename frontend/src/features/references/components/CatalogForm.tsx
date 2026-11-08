@@ -10,7 +10,7 @@ import { ImageUploadModal } from "./ImageUploadModal";
 import { ProductSearchMulti } from "./ProductSearchMulti";
 import { ProductDimensionsSection, type ProductDimensionsSectionHandle } from "./ProductDimensionsSection";
 import { ProductPairsSection } from "./ProductPairsSection";
-import { getPhotoUrl } from "./getPhotoUrl";
+import { productPhotoUrl } from "./getPhotoUrl";
 import { uploadProductPhoto, getErrorMessage } from "@/shared/api/products";
 import { listDimensionTypes } from "../api";
 import { queryKeys } from "@/shared/api/queryKeys";
@@ -555,10 +555,10 @@ export const CatalogForm = forwardRef<CatalogFormRef, {
       const updated = await uploadProductPhoto(product.id, file, target);
       if (target === "full") {
         if (localPhotoFull?.startsWith("blob:")) URL.revokeObjectURL(localPhotoFull);
-        setLocalPhotoFull(getPhotoUrl(updated.photo_full, updated.photo_full_version));
+        setLocalPhotoFull(productPhotoUrl(updated, "full"));
       } else {
         if (localPhotoThumb?.startsWith("blob:")) URL.revokeObjectURL(localPhotoThumb);
-        setLocalPhotoThumb(getPhotoUrl(updated.photo_thumb, updated.photo_thumb_version));
+        setLocalPhotoThumb(productPhotoUrl(updated, "thumb"));
       }
     } catch {
     } finally {
@@ -573,14 +573,8 @@ export const CatalogForm = forwardRef<CatalogFormRef, {
 
   // #404: версия идёт в URL каждого фото отдельно. Локальная после загрузки
   // уже содержит `?v=`, сохранённые в товаре — получают свою версию здесь.
-  const fullPhotoUrl =
-    localPhotoFull ??
-    getPhotoUrl(product?.photo_full ?? null, product?.photo_full_version) ??
-    getPhotoUrl(product?.photo_thumb ?? null, product?.photo_thumb_version);
-  const thumbPhotoUrl =
-    localPhotoThumb ??
-    getPhotoUrl(product?.photo_thumb ?? null, product?.photo_thumb_version) ??
-    getPhotoUrl(product?.photo_full ?? null, product?.photo_full_version);
+  const fullPhotoUrl = localPhotoFull ?? productPhotoUrl(product, "full");
+  const thumbPhotoUrl = localPhotoThumb ?? productPhotoUrl(product, "thumb");
 
   return (
     <form onSubmit={handleSubmit} className="space-y-4 mt-4">

@@ -19,7 +19,7 @@ import { ImportPreviewDialog } from "../ImportPreviewDialog";
 import { ImportWizardDialog } from "../components/ImportWizardDialog";
 import { CatalogForm, type CatalogFormRef, type FieldChange } from "../components/CatalogForm";
 import { CatalogCard } from "../components/CatalogCard";
-import { getPhotoUrl } from "../components/getPhotoUrl";
+import { productPhotoUrl } from "../components/getPhotoUrl";
 import type { Product, CreateProductInput, PatchProductInput, CatalogPreview } from "@/shared/api/products";
 import { usePermission } from "@/entities/auth";
 import { TableCornerResetCell, TableCornerResetHeader, DATA_TABLE_STYLES, PositionSkuCell, DropdownMenu, DropdownMenuTrigger, DropdownMenuContent, DropdownMenuItem, DataTableColumnHeader } from "@/shared/ui";
@@ -694,7 +694,7 @@ export function RawMaterialsPage() {
                     <div className="w-10 h-10 bg-muted rounded flex items-center justify-center overflow-hidden">
                       {product.photo_thumb ? (
                         <img
-                          src={getPhotoUrl(product.photo_thumb, product.photo_thumb_version)!}
+                          src={productPhotoUrl(product, "thumb")!}
                           alt=""
                           className="w-full h-full object-contain"
                         />
