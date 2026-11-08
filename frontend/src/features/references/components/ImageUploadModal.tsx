@@ -20,15 +20,27 @@ export function ImageUploadModal({
   const [dragOver, setDragOver] = useState(false);
   const fileInputRef = useRef<HTMLInputElement>(null);
   const dropZoneRef = useRef<HTMLDivElement>(null);
+  // Единственная точка смены превью: старый blob-URL освобождается, иначе
+  // каждая замена/подтверждение оставляли бы картинку в памяти вкладки.
+  const previewUrlRef = useRef<string | null>(null);
+
+  const replacePreviewUrl = useCallback((url: string | null) => {
+    if (previewUrlRef.current) URL.revokeObjectURL(previewUrlRef.current);
+    previewUrlRef.current = url;
+    setPreviewUrl(url);
+  }, []);
+
+  useEffect(() => () => {
+    if (previewUrlRef.current) URL.revokeObjectURL(previewUrlRef.current);
+  }, []);
 
   const handleFile = useCallback((file: File) => {
     if (!file.type.startsWith("image/")) return;
-    const url = URL.createObjectURL(file);
-    setPreviewUrl(url);
+    replacePreviewUrl(URL.createObjectURL(file));
 
     // Store the file on the element so we can access it on confirm
     (dropZoneRef.current as any)._selectedFile = file;
-  }, []);
+  }, [replacePreviewUrl]);
 
   const handleDrop = useCallback(
     (e: React.DragEvent) => {
@@ -89,13 +101,12 @@ export function ImageUploadModal({
     if (file) {
       onFileSelected(file);
     }
-    setPreviewUrl(null);
+    replacePreviewUrl(null);
     onOpenChange(false);
   };
 
   const handleClose = () => {
-    if (previewUrl) URL.revokeObjectURL(previewUrl);
-    setPreviewUrl(null);
+    replacePreviewUrl(null);
     onOpenChange(false);
   };
 
@@ -158,10 +169,7 @@ export function ImageUploadModal({
               <button
                 type="button"
                 className="text-destructive hover:underline"
-                onClick={() => {
-                  URL.revokeObjectURL(previewUrl);
-                  setPreviewUrl(null);
-                }}
+                onClick={() => replacePreviewUrl(null)}
               >
                 Удалить превью
               </button>
