@@ -25,6 +25,7 @@ import type { SourceAllocation } from "../components/RemainderAllocationDialog";
 import { buildAutoIssueSelection, summaryCollectLine } from "../lib/issueSource";
 import { listSections } from "@/shared/api/sections";
 import { useFilterableTable } from "@/shared/hooks/useFilterableTable";
+import { isAnyDialogOpen } from "@/shared/lib/dialogOpen";
 import type { SortConfig } from "@/shared/hooks/useTableQueryEngine";
 import { usePaginatedTableQuery } from "@/shared/hooks/usePaginatedTableQuery";
 
@@ -639,7 +640,9 @@ export function ExecutionPage() {
   useEffect(() => {
     if (!bulkMode) return;
     const handler = (e: KeyboardEvent) => {
-      if (e.key === "Escape") exitBulkMode();
+      // Escape внутри модального окна закрывает окно, а не выходит из
+      // массового режима: Radix не останавливает всплытие клавиши.
+      if (e.key === "Escape" && !isAnyDialogOpen()) exitBulkMode();
     };
     window.addEventListener("keydown", handler);
     return () => window.removeEventListener("keydown", handler);
