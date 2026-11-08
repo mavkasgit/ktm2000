@@ -1,0 +1,59 @@
+import { render } from "@testing-library/react";
+import { describe, expect, it } from "vitest";
+
+import type { Product } from "@/shared/api/products";
+import { ProductPhoto } from "./ProductPhoto";
+
+function makeProduct(overrides: Partial<Product> = {}): Product {
+  return {
+    id: 1,
+    sku: "033",
+    code: null,
+    name: "Профиль 033",
+    type: "finished_good",
+    unit: "шт",
+    is_active: true,
+    notes: null,
+    profile_type: null,
+    alloy: null,
+    color: null,
+    anod_type: null,
+    weight_per_meter: null,
+    perimeter_mm: null,
+    mount_width_mm: null,
+    quantity_per_hanger: null,
+    hanger_mode: "auto",
+    cross_section: null,
+    photo_thumb: "products/033_thumb.jpg",
+    photo_thumb_version: "1a2b-3c4d",
+    photo_full: "products/033_full.jpg",
+    photo_full_version: "5e6f-7a8b",
+    source: null,
+    is_catalog_item: false,
+    is_paired_profile: false,
+    dimension_state: "length",
+    skip_shot_blast: false,
+    aliases: [],
+    lengths: [],
+    processing_flags: [],
+    is_laminated: false,
+    ...overrides,
+  };
+}
+
+describe("ProductPhoto", () => {
+  it("uses the thumb version in the image URL", () => {
+    const { container } = render(<ProductPhoto product={makeProduct()} />);
+
+    const image = container.querySelector("img");
+    expect(image?.getAttribute("src")).toBe("/static/products/033_thumb.jpg?v=1a2b-3c4d");
+  });
+
+  it("renders the placeholder when the product has no thumb", () => {
+    const { container } = render(
+      <ProductPhoto product={makeProduct({ photo_thumb: null, photo_thumb_version: null })} />,
+    );
+
+    expect(container.querySelector("img")).toBeNull();
+  });
+});

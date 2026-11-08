@@ -20,7 +20,7 @@ export function CatalogCard({
   /** Если передан — артикул кликабелен (сводная информация), клик по карточке не срабатывает. */
   onSkuClick?: (sku: string) => void;
 }) {
-  const photoUrl = getPhotoUrl(product.photo_thumb);
+  const photoUrl = getPhotoUrl(product.photo_thumb, product.photo_thumb_version);
 
   return (
     <Card className="cursor-pointer hover:shadow-md transition-shadow group overflow-hidden" onClick={onClick}>

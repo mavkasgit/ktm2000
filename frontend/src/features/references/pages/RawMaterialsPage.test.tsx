@@ -84,6 +84,8 @@ const product = (overrides: Partial<Product> = {}): Product => ({
   cross_section: null,
   photo_thumb: null,
   photo_full: null,
+  photo_thumb_version: null,
+  photo_full_version: null,
   source: null,
   is_catalog_item: false,
   is_paired_profile: false,
