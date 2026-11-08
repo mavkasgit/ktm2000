@@ -52,6 +52,9 @@ export type Product = {
   cross_section: string | null;
   photo_thumb: string | null;
   photo_full: string | null;
+  /** Версии файлов для `?v=` (#404): меняются только у изменённого фото. */
+  photo_thumb_version: string | null;
+  photo_full_version: string | null;
   source: string | null;
   is_catalog_item: boolean;
   is_paired_profile: boolean;

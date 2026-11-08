@@ -30,43 +30,23 @@ import {
 import { usePermission } from "@/entities/auth";
 import { toast } from "@/shared/ui/use-toast";
 import { ProductsPage } from "./ProductsPage";
+import { makeProduct as makeProductFixture } from "../lib/productFixture";
 
-const makeProduct = (overrides: Partial<Product> = {}): Product => ({
-  id: 1,
-  sku: "FG-001",
-  code: null,
-  name: "Ручка двери",
-  type: "finished_good",
-  unit: "pcs",
-  is_active: true,
-  notes: null,
-  profile_type: null,
-  alloy: null,
-  color: "Чёрный",
-  anod_type: null,
-  weight_per_meter: null,
-  perimeter_mm: null,
-  mount_width_mm: null,
-  quantity_per_hanger: null,
-  hanger_mode: "auto",
-  cross_section: null,
-  photo_thumb: null,
-  photo_full: null,
-  source: null,
-  is_catalog_item: true,
-  is_paired_profile: false,
-  dimension_state: "length",
-  skip_shot_blast: false,
-  aliases: [],
-  lengths: [
-    { length_mm: 800, raw_length_mm: null, is_primary: false },
-    { length_mm: 1200, raw_length_mm: null, is_primary: true },
-  ],
-  processing_flags: [],
-  is_laminated: false,
-  composition: [],
-  ...overrides,
-});
+const makeProduct = (overrides: Partial<Product> = {}): Product =>
+  makeProductFixture({
+    sku: "FG-001",
+    name: "Ручка двери",
+    type: "finished_good",
+    unit: "pcs",
+    color: "Чёрный",
+    is_catalog_item: true,
+    lengths: [
+      { length_mm: 800, raw_length_mm: null, is_primary: false },
+      { length_mm: 1200, raw_length_mm: null, is_primary: true },
+    ],
+    composition: [],
+    ...overrides,
+  });
 
 const makeComposition = (overrides: Partial<CompositionItem> = {}): CompositionItem => ({
   component_product_id: 10,

@@ -1,5 +1,4 @@
 import asyncio
-import shutil
 import sqlite3
 import zipfile
 from dataclasses import dataclass
@@ -55,6 +54,7 @@ from app.services.hanger_quantity_calc import (
     HangerConfigError,
     compute_hanger_quantity,
 )
+from app.services.photo_copy import copy_photo_if_changed
 
 router = APIRouter(prefix="/catalog-import", tags=["catalog-import"])
 
@@ -178,7 +178,12 @@ async def import_catalog_from_zip(
                     src_thumb = images_dir / Path(photo_thumb).name
                     if src_thumb.exists():
                         dst_thumb = photo_dir / f"{sku}_thumb.jpg"
-                        shutil.copy2(str(src_thumb), str(dst_thumb))
+                        # #404: неизменённое фото не перезаписываем — его
+                        # mtime/версия остаются прежними, кэш не сбрасывается.
+                        # filecmp/copy2 читают файлы — уводим из event loop.
+                        await asyncio.to_thread(
+                            copy_photo_if_changed, src_thumb, dst_thumb
+                        )
                         new_thumb = _normalize_photo_path(
                             str(dst_thumb.relative_to(Path(settings.PRODUCT_PHOTO_DIR).parent))
                         )
@@ -186,13 +191,15 @@ async def import_catalog_from_zip(
                     src_full = images_dir / Path(photo_full).name
                     if src_full.exists():
                         dst_full = photo_dir / f"{sku}_full.jpg"
-                        shutil.copy2(str(src_full), str(dst_full))
+                        await asyncio.to_thread(
+                            copy_photo_if_changed, src_full, dst_full
+                        )
                         new_full = _normalize_photo_path(
                             str(dst_full.relative_to(Path(settings.PRODUCT_PHOTO_DIR).parent))
                         )
             except (OSError, ValueError) as e:
-                # Копирование фото — best-effort: `shutil.copy2` бросает
-                # `OSError` (нет файла/прав, SameFileError), `relative_to` —
+                # Копирование фото — best-effort: `copy_photo_if_changed`
+                # бросает `OSError` (нет файла/прав), `relative_to` —
                 # `ValueError`. Строка импорта не должна падать из-за фото.
                 errors.append(f"{sku}: photo copy failed - {e}")
 

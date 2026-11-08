@@ -10,7 +10,7 @@ import { ImageUploadModal } from "./ImageUploadModal";
 import { ProductSearchMulti } from "./ProductSearchMulti";
 import { ProductDimensionsSection, type ProductDimensionsSectionHandle } from "./ProductDimensionsSection";
 import { ProductPairsSection } from "./ProductPairsSection";
-import { getPhotoUrl } from "./getPhotoUrl";
+import { productPhotoUrl } from "./productPhotoUrl";
 import { uploadProductPhoto, getErrorMessage } from "@/shared/api/products";
 import { listDimensionTypes } from "../api";
 import { queryKeys } from "@/shared/api/queryKeys";
@@ -248,7 +248,6 @@ export const CatalogForm = forwardRef<CatalogFormRef, {
   const [uploadFullModal, setUploadFullModal] = useState(false);
   const [uploadThumbModal, setUploadThumbModal] = useState(false);
   const [uploading, setUploading] = useState(false);
-  const [photoVersion, setPhotoVersion] = useState(0);
   const [newLength, setNewLength] = useState("");
   const [form, setForm] = useState<CreateProductInput>(() => buildInitialForm(product, mode));
   const [hangerPreview, setHangerPreview] = useState<HangerPreviewState>({ status: "idle" });
@@ -277,7 +276,6 @@ export const CatalogForm = forwardRef<CatalogFormRef, {
     setForm(buildInitialForm(product, mode));
     setLocalPhotoFull(null);
     setLocalPhotoThumb(null);
-    setPhotoVersion(0);
     setNewLength("");
     setHangerPreview({ status: "idle" });
     setSheetPreview({ status: "idle" });
@@ -557,12 +555,11 @@ export const CatalogForm = forwardRef<CatalogFormRef, {
       const updated = await uploadProductPhoto(product.id, file, target);
       if (target === "full") {
         if (localPhotoFull?.startsWith("blob:")) URL.revokeObjectURL(localPhotoFull);
-        setLocalPhotoFull(getPhotoUrl(updated.photo_full));
+        setLocalPhotoFull(productPhotoUrl(updated, "full"));
       } else {
         if (localPhotoThumb?.startsWith("blob:")) URL.revokeObjectURL(localPhotoThumb);
-        setLocalPhotoThumb(getPhotoUrl(updated.photo_thumb));
+        setLocalPhotoThumb(productPhotoUrl(updated, "thumb"));
       }
-      setPhotoVersion((v) => v + 1);
     } catch {
     } finally {
       setUploading(false);
@@ -573,6 +570,11 @@ export const CatalogForm = forwardRef<CatalogFormRef, {
     if (isCreate) return;
     handlePhotoUpload(file, target);
   };
+
+  // #404: версия идёт в URL каждого фото отдельно. Локальная после загрузки
+  // уже содержит `?v=`, сохранённые в товаре — получают свою версию здесь.
+  const fullPhotoUrl = localPhotoFull ?? productPhotoUrl(product, "full");
+  const thumbPhotoUrl = localPhotoThumb ?? productPhotoUrl(product, "thumb");
 
   return (
     <form onSubmit={handleSubmit} className="space-y-4 mt-4">
@@ -590,15 +592,13 @@ export const CatalogForm = forwardRef<CatalogFormRef, {
           <div
             className="relative w-full h-96 md:h-[420px] bg-muted rounded-lg flex items-center justify-center overflow-hidden group/photo cursor-pointer hover:ring-2 ring-primary transition-all"
             onClick={() => {
-              const full = localPhotoFull || product?.photo_full || product?.photo_thumb;
-              if (full) setFullscreenPhoto(getPhotoUrl(full)!);
+              if (fullPhotoUrl) setFullscreenPhoto(fullPhotoUrl);
             }}
           >
-            {localPhotoFull || product?.photo_full || product?.photo_thumb ? (
+            {fullPhotoUrl ? (
               <>
                 <img
-                  key={`full-${photoVersion}`}
-                  src={`${getPhotoUrl(localPhotoFull || product?.photo_full || product?.photo_thumb || "")}${photoVersion > 0 ? `?v=${photoVersion}` : ""}`}
+                  src={fullPhotoUrl}
                   alt={product?.name || ""}
                   className="w-full h-full object-contain pointer-events-none"
                 />
@@ -628,15 +628,13 @@ export const CatalogForm = forwardRef<CatalogFormRef, {
             <div
               className="relative w-20 h-20 shrink-0 bg-muted rounded-lg flex items-center justify-center overflow-hidden cursor-pointer hover:ring-2 ring-primary transition-all"
               onClick={() => {
-                const thumb = localPhotoThumb || product?.photo_thumb || product?.photo_full;
-                if (thumb) setFullscreenPhoto(getPhotoUrl(thumb)!);
+                if (thumbPhotoUrl) setFullscreenPhoto(thumbPhotoUrl);
               }}
             >
-              {localPhotoThumb || product?.photo_thumb || product?.photo_full ? (
+              {thumbPhotoUrl ? (
                 <>
                   <img
-                    key={`thumb-${photoVersion}`}
-                    src={`${getPhotoUrl(localPhotoThumb || product?.photo_thumb || product?.photo_full || "")}${photoVersion > 0 ? `?v=${photoVersion}` : ""}`}
+                    src={thumbPhotoUrl}
                     alt="Preview"
                     className="w-full h-full object-contain pointer-events-none"
                   />

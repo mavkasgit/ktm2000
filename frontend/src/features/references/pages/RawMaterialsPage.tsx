@@ -19,7 +19,7 @@ import { ImportPreviewDialog } from "../ImportPreviewDialog";
 import { ImportWizardDialog } from "../components/ImportWizardDialog";
 import { CatalogForm, type CatalogFormRef, type FieldChange } from "../components/CatalogForm";
 import { CatalogCard } from "../components/CatalogCard";
-import { getPhotoUrl } from "../components/getPhotoUrl";
+import { ProductPhoto } from "../components/ProductPhoto";
 import type { Product, CreateProductInput, PatchProductInput, CatalogPreview } from "@/shared/api/products";
 import { usePermission } from "@/entities/auth";
 import { TableCornerResetCell, TableCornerResetHeader, DATA_TABLE_STYLES, PositionSkuCell, DropdownMenu, DropdownMenuTrigger, DropdownMenuContent, DropdownMenuItem, DataTableColumnHeader } from "@/shared/ui";
@@ -691,13 +691,7 @@ export function RawMaterialsPage() {
                 items.map((product) => (
                 <tr key={product.id} className="hover:bg-muted/50 cursor-pointer" onClick={() => openEdit(product)}>
                   <td className="px-4 py-2">
-                    <div className="w-10 h-10 bg-muted rounded flex items-center justify-center overflow-hidden">
-                      {product.photo_thumb ? (
-                        <img src={getPhotoUrl(product.photo_thumb)!} alt="" className="w-full h-full object-contain" />
-                      ) : (
-                        <Image className="w-5 h-5 text-muted-foreground" />
-                      )}
-                    </div>
+                    <ProductPhoto product={product} />
                   </td>
                   <td className="px-4 py-2">
                     <div className="flex flex-col gap-1">
