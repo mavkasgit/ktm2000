@@ -25,6 +25,7 @@ import {
   buildPairedHangerCalcRows,
   type PairedPair,
 } from "../lib/hangerCalcRows";
+import { makeProduct as makeProductBase } from "../lib/productFixture";
 import { hangerCalcColumns } from "../lib/hangerCalcColumns";
 import { HangerCalcRowView } from "./HangerCalcRowView";
 import { PairedHangerRowView } from "./PairedHangerRowView";
@@ -36,38 +37,7 @@ const productLength = (
 ): ProductLength => ({ length_mm, raw_length_mm, is_primary });
 
 function makeProduct(overrides: Partial<Product>): Product {
-  return {
-    id: 1,
-    sku: "ЮП-100",
-    code: null,
-    name: "Профиль",
-    type: "component",
-    unit: "шт",
-    is_active: true,
-    notes: null,
-    profile_type: null,
-    alloy: null,
-    color: null,
-    anod_type: null,
-    weight_per_meter: null,
-    perimeter_mm: null,
-    mount_width_mm: null,
-    quantity_per_hanger: null,
-    hanger_mode: "auto",
-    cross_section: null,
-    photo_thumb: null,
-    photo_full: null,
-    source: null,
-    is_catalog_item: false,
-    is_paired_profile: false,
-    skip_shot_blast: false,
-    dimension_state: "length",
-    aliases: [],
-    lengths: [],
-    processing_flags: [],
-    is_laminated: false,
-    ...overrides,
-  };
+  return makeProductBase({ name: "Профиль", type: "component", ...overrides });
 }
 
 /** Артикул с двумя длинами — тот, что давал `rowSpan={2}`. */
