@@ -1468,10 +1468,9 @@ async def take_rows_to_work(
             import logging
             logger = logging.getLogger(__name__)
             logger.exception(f"take-to-work failed for position {position_id}")
-            # Исключение из-за пределов savepoint'а (например откат самой
-            # вложенной транзакции): позицию фиксируем неудачной, остальные
-            # уже выпущенные позиции сохраняются.
-            await db.rollback()
+            # `begin_nested` уже откатил savepoint этой позиции. Откат всей
+            # сессии здесь стёр бы и ранее выпущенные позиции батча, оставив
+            # в ответе ложный `success` с несуществующим release_batch_id.
             results.append(TakeToWorkResult(
                 position_id=position_id,
                 status="failed",
