@@ -70,6 +70,28 @@ async def _add_processing_flag(session: AsyncSession, product: Product, code: st
 
 
 @pytest.mark.asyncio
+async def test_length_range_filter_requires_one_length_inside(
+    client, session: AsyncSession
+) -> None:
+    """Диапазон длин проверяется по одной строке, а не по двум EXISTS (#127)."""
+    outside = await _make_product(
+        session, sku="RM-RANGE-OUT", name="Range outside", lengths_mm=[1000, 5000]
+    )
+    inside = await _make_product(
+        session, sku="RM-RANGE-IN", name="Range inside", lengths_mm=[2500]
+    )
+    await session.commit()
+
+    response = await client.get(
+        "/api/products?length_from=2000&length_to=3000&limit=50"
+    )
+    assert response.status_code == 200, response.text
+    skus = {item["sku"] for item in response.json()["items"]}
+    assert inside.sku in skus
+    assert outside.sku not in skus
+
+
+@pytest.mark.asyncio
 async def test_products_filter_sku_param(client, session: AsyncSession) -> None:
     target = await _make_product(session, sku="RM-UNIQUE-777", name="Target Product")
     for i in range(55):
