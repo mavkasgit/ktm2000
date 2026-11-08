@@ -309,6 +309,27 @@ def _get_current_preview(db_name: str | None = None) -> dict:
     }
 
 
+def _backup_file_path(filename: str) -> Path:
+    """Путь к файлу бэкапа по имени из запроса — строго внутри ``BACKUPS_DIR``.
+
+    Имя приходит из URL. Роутер не пропускает ``/`` в path-параметре, но на
+    Windows разделителем работает и ``\\``: ``..\\..\\secret`` доезжает до
+    ``Path`` одной компонентой и выводит за каталог бэкапов (чтение, запись,
+    удаление). Отсекаем имена с разделителями и «..», отвечая 404 — как на
+    отсутствующий бэкап, чтобы не подсказывать, что файл существует.
+    """
+    if (
+        not filename
+        or filename in {".", ".."}
+        or "/" in filename
+        or "\\" in filename
+        or "\x00" in filename
+        or Path(filename).name != filename
+    ):
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Бэкап не найден")
+    return BACKUPS_DIR / filename
+
+
 def _write_backup_meta(filename: str, meta: dict) -> None:
     """Сохраняет JSON-метаданные рядом с бэкапом."""
     meta_path = BACKUPS_DIR / f"{filename}.json"
@@ -1122,7 +1143,7 @@ async def list_backups(
 async def download_backup(filename: str) -> FileResponse:
     """Скачать файл бэкапа."""
     _validate_admin()
-    filepath = BACKUPS_DIR / filename
+    filepath = _backup_file_path(filename)
     if not filepath.exists() or not filepath.is_file():
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Бэкап не найден")
 
@@ -1141,7 +1162,7 @@ async def download_backup(filename: str) -> FileResponse:
 async def update_backup_comment(filename: str, comment: str = Body(..., embed=True)) -> dict:
     """Обновить комментарий к бэкапу."""
     _validate_admin()
-    filepath = BACKUPS_DIR / filename
+    filepath = _backup_file_path(filename)
     if not filepath.exists():
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Бэкап не найден")
 
@@ -1155,7 +1176,7 @@ async def update_backup_comment(filename: str, comment: str = Body(..., embed=Tr
 async def delete_backup(filename: str) -> dict:
     """Удалить бэкап + JSON-метаданные."""
     _validate_admin()
-    filepath = BACKUPS_DIR / filename
+    filepath = _backup_file_path(filename)
     if not filepath.exists():
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Бэкап не найден")
 
@@ -1174,7 +1195,7 @@ async def bulk_delete(body: dict) -> dict:
     deleted = []
     not_found = []
     for filename in filenames:
-        filepath = BACKUPS_DIR / filename
+        filepath = _backup_file_path(filename)
         if filepath.exists():
             _delete_backup_file(filename)
             deleted.append(filename)
@@ -1211,7 +1232,7 @@ async def preview_backup(filename: str) -> dict:
     """Получить статистику (превью) из существующего бэкапа.
     Сначала ищет JSON-кэш/manifest, если нет — делает restore во временную БД."""
     _validate_admin()
-    filepath = BACKUPS_DIR / filename
+    filepath = _backup_file_path(filename)
     if not filepath.exists():
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Бэкап не найден")
 
@@ -1302,7 +1323,7 @@ async def restore_backup(filename: str, body: dict) -> dict:
             detail=f"Для подтверждения введите точное имя базы данных: {db_name}"
         )
 
-    filepath = BACKUPS_DIR / filename
+    filepath = _backup_file_path(filename)
     if not filepath.exists():
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Бэкап не найден")
 
