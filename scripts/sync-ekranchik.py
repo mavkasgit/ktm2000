@@ -355,16 +355,22 @@ def compute_drift(
                 })
 
         if not product["lengths"]:
-            skipped.append({"name": profile["name"], "ktm_sku": product["sku"],
-                            "reason": "у артикула KTM нет длин"})
+            # Длины в KTM нет — норму привязать не к чему, но это не повод
+            # считать профиль ошибкой: фото уже синкаются выше, а пустые
+            # length/n остаются как есть и заполняются вручную (#403 follow-up).
             continue
 
         item, _basis = match_length(product, profile["length"])
         if item is None:
             target = main_length(product)
+            reason = (
+                "длина не задана в Экранчике"
+                if profile["length"] is None
+                else "нет такой длины в KTM"
+            )
             drift.append({"id": profile["id"], "name": profile["name"], "ktm_sku": product["sku"],
                           "field": "length", "old": profile["length"],
-                          "new": target["length"], "reason": "нет такой длины в KTM"})
+                          "new": target["length"], "reason": reason})
             item = target
 
         target_n = effective_n(product, item["length"])
@@ -393,9 +399,17 @@ def compute_drift(
                             "reason": "артикул неактивен в KTM"})
             continue
         if not product["lengths"]:
-            skipped.append({"name": product["sku"], "ktm_sku": product["sku"],
-                            "reason": "у артикула KTM нет длин"})
+            # Создаём профиль и без длины: в Экранчике length/n nullable, а
+            # пустая карточка полезнее отсутствующей — оператор заполнит её
+            # вручную. Фото, если есть, кладём рядом.
+            creations.append({
+                "name": product["sku"],
+                "length": None,
+                "n": None,
+                "photos": photo_plan(product, product["sku"], targets),
+            })
             continue
+
         target = main_length(product)
         creations.append({
             "name": product["sku"],
