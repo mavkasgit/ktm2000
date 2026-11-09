@@ -638,9 +638,12 @@ export function SectionsTasksPage() {
         }
       }
     };
-    window.addEventListener("keydown", handler);
+    // Capture-фаза, как на «Плане» и «Контроле выполнения»: Radix закрывает
+    // окно своим слушателем на document, и в bubble-фазе `data-state="open"`
+    // уже снят — страница сняла бы массовый режим вместе с закрытием окна.
+    window.addEventListener("keydown", handler, true);
     return () => {
-      window.removeEventListener("keydown", handler);
+      window.removeEventListener("keydown", handler, true);
       if (resetTimer) clearTimeout(resetTimer);
     };
   }, [

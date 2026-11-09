@@ -35,6 +35,27 @@ describe("isAnyDialogOpen", () => {
     expect(isAnyDialogOpen(root)).toBe(true);
   });
 
+  it("меню и Select забирают Escape, пока открыты", () => {
+    for (const role of ["menu", "listbox"]) {
+      const root = document.createElement("div");
+      root.innerHTML = `<div role="${role}" data-state="open"></div>`;
+      expect(isAnyDialogOpen(root), role).toBe(true);
+    }
+  });
+
+  it("Popover в портале Radix тоже считается открытым слоем", () => {
+    const root = document.createElement("div");
+    root.innerHTML =
+      '<div data-radix-popper-content-wrapper><div data-state="open"></div></div>';
+    expect(isAnyDialogOpen(root)).toBe(true);
+  });
+
+  it("закрытое меню не мешает странице обработать Escape", () => {
+    const root = document.createElement("div");
+    root.innerHTML = '<div role="menu" data-state="closed"></div>';
+    expect(isAnyDialogOpen(root)).toBe(false);
+  });
+
   it("одно открытое окно среди закрытых даёт true", () => {
     const root = document.createElement("div");
     root.innerHTML = `${dialog("closed")}${dialog("open")}${dialog("closed")}`;
