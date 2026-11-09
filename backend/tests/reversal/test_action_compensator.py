@@ -239,6 +239,44 @@ async def test_task_complete_reverse_nets_task_cache(session: AsyncSession) -> N
     assert status_before.value != "completed"
 
 
+async def test_cache_audit_finds_and_refreshes_gross_line_cache(
+    session: AsyncSession,
+) -> None:
+    """Аудит находит persisted gross-кэш после отката и чинит его production-кодом."""
+    from app.models.internal_plan import SectionPlanLine
+    from scripts.audit_section_plan_line_caches import (
+        find_stale_caches,
+        refresh_stale_caches,
+    )
+
+    fx = await _setup_minimal_route(session)
+    await _issue_material(session, fx)
+    action = await _complete_task(session, fx, good=Decimal(7), scrap=Decimal(3))
+    preview = await reversal_service.preview_reverse(session, action.id)
+    await reversal_service.reverse(
+        session, action.id, plan_token=preview.plan_token, actor="tester"
+    )
+    await session.commit()
+
+    line = await session.get(SectionPlanLine, fx["task"].section_plan_line_id)
+    assert line is not None
+    # Имитируем строку, посчитанную до перехода на net: gross COMPLETE/SCRAP.
+    line.cached_completed_quantity = Decimal(14)
+    line.cached_rejected_quantity = Decimal(6)
+    await session.commit()
+
+    stale = await find_stale_caches(session)
+    [item] = [row for row in stale if row.line_id == line.id]
+    assert item.net_completed == Decimal(0)
+    assert item.net_rejected == Decimal(0)
+
+    await refresh_stale_caches(session, stale)
+    await session.refresh(line)
+    assert line.cached_completed_quantity == Decimal(0)
+    assert line.cached_rejected_quantity == Decimal(0)
+    assert await find_stale_caches(session) == []
+
+
 async def test_reverse_restores_each_ops_group_separately(
     session: AsyncSession,
 ) -> None:
