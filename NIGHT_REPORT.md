@@ -31,7 +31,7 @@ blob-URL, ввод количества, чип алиаса). Бэкенд пр
 
 | Проверка | Команда | Результат |
 |---|---|---|
-| Быстрый гейт | `npm run gate:fast` | **зелёный**: 17/17 шагов, 47.9 с на финальном коде |
+| Быстрый гейт | `npm run gate:fast` | **зелёный**: 17/17 шагов, 42.6 с на финальном коде |
 | Backend-тесты | `npm run test:pytest` (`PYTEST_NUM_WORKERS=4`) | **зелёный**: 2437 passed, 1 skipped, 427 с |
 | Frontend-тесты + coverage | `npm --prefix frontend test -- --coverage` | **зелёный**: 1658 passed, 1 skipped, 197 файлов; statements **60.06%**, branches **75.20%**, functions **50.55%**, lines **60.06%** (пороги 43/72/49/43) |
 | Frontend build | `npm --prefix frontend run build` | **успешно** (только прежнее предупреждение Vite о размере чанков) |
@@ -108,8 +108,8 @@ capture-фазу. Полный `--coverage` и e2e-смоук — в финал�
 ### A6. Path traversal в бэкапах
 
 К проверке разделителей добавлен `resolve()` + `relative_to(BACKUPS_DIR)`
-(симлинки/junction). Кейсы: `..\..\x`, `C:\x`, `\\server\share`, `%2e%2e`,
-абсолютный путь, `\x00`, symlink. Матрица вызывает каждую ручку с
+(симлинки/junction). Кейсы: `..\..\x`, `C:\x`, `\\server\share`,
+`%2e%2e%2f` (декодируется роутером), абсолютный путь, `\x00`, symlink. Матрица вызывает каждую ручку с
 `{filename}` и `bulk-delete`; все проходят через `_backup_file_path`.
 Symlink-кейс скипается на хосте без прав на symlink.
 
@@ -171,6 +171,7 @@ unique-индекс `uq_transfers_transfer_no`, поэтому коллизия 
 | `41336e9c` | **test(фронт):** перестановки, blob-URL, даты, чип алиаса | 10 файлов, 56 тестов (изолированный прогон) |
 | `2d3c7276` | **test(доступ):** изменяющие ручки не открыты `viewer` | `test_mutating_routes_roles.py` |
 | `40b4fa60` | **fix(тесты):** форма участка в тесте перестановки | `tsc -b` зелёный |
+| `5b433f16` | **test(backups):** кодированный `%2e%2e%2f` в матрице ручек | `test_backups_path_traversal.py` — 23 passed, symlink skip |
 
 Блокер деплоя по авторизации `/api/backups` вынесен в отдельный тикет:
 [#409](https://github.com/mavkasgit/ktm2000/issues/409).
