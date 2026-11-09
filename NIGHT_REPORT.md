@@ -32,7 +32,7 @@ blob-URL, ввод количества, чип алиаса). Бэкенд пр
 | Проверка | Команда | Результат |
 |---|---|---|
 | Быстрый гейт | `npm run gate:fast` | **зелёный**: 17/17 шагов на финальном коде |
-| Backend-тесты | `npm run test:pytest` (`PYTEST_NUM_WORKERS=4`) | **зелёный**: 2437 passed, 1 skipped, 427 с |
+| Backend-тесты | `npm run test:pytest` (`PYTEST_NUM_WORKERS=4`) | **зелёный**: 2438 passed, 1 skipped, 251.6 с |
 | Frontend-тесты + coverage | `npm --prefix frontend test -- --coverage` | **зелёный**: 1658 passed, 1 skipped, 197 файлов; statements **60.06%**, branches **75.20%**, functions **50.55%**, lines **60.06%** (пороги 43/72/49/43) |
 | Frontend build | `npm --prefix frontend run build` | **успешно** (только прежнее предупреждение Vite о размере чанков) |
 | Полный gate + e2e | `npm run gate:e2e` | **зелёный**: 22/22 шага, 542.5 с; внутри `backend-tests` 261 с, `frontend-unit` 91.9 с, `e2e-smoke` 65.9 с |
@@ -77,7 +77,8 @@ COMPLETE/SCRAP влияют `cached_completed_quantity` и
 по умолчанию dry-run (exit 1 при расхождениях), `--apply` пересчитывает
 найденные строки тем же production-кодом `_refresh_section_plan_line_cache`.
 Миграции не трогаются. План: прогнать dry-run на копии рабочей БД, после
-подтверждения владельцем — `--apply`; на чистой БД расхождений нет.
+подтверждения владельцем — `--apply`. Тест на временной БД подтверждает,
+что после `--apply` расхождений не остаётся.
 
 `grep` оставшихся gross-сумм: `stock/services._recompute_balance` (две
 стороны баланса — это не проекция факта) и
