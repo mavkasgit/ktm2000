@@ -39,7 +39,7 @@ blob-URL, ввод количества, чип алиаса). Бэкенд пр
 | Backend lint | `ruff check app` (шаг гейта) | зелёный |
 | Frontend types | `tsc -b` (шаг гейта) | зелёный |
 | Frontend lint | `lint:ratchet` | 0 ошибок, 47 предупреждений при потолке 47 |
-| CodeGraph | `npx @colbymchenry/codegraph sync` | 17 изменённых файлов, 541 узел |
+| CodeGraph | `codegraph init -y` + `sync` | 1235 файлов, 24077 узлов; `sync` — up to date, `codegraph-age` ok |
 | Devstack | `npm run devrestart` в Orca-терминале + `GET /api/health` на `:8012` и через прокси `:5172` | оба `{"status":"ok"}`; процессы перезапущены в 09:40 |
 
 ## Проверка по ревью 2026-11-09
