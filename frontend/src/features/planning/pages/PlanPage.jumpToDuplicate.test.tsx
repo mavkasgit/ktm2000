@@ -9,7 +9,7 @@
  */
 
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
-import { fireEvent, render, screen, waitFor } from "@testing-library/react";
+import { fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import { MemoryRouter } from "react-router-dom";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
@@ -166,6 +166,33 @@ describe("PlanPage: переход к позиции по дублю", () => {
       ),
     );
     expect(screen.queryByText(/Позиция плана #2/)).toBeNull();
+  });
+
+  it("Escape в открытом окне закрывает окно, но не выходит из массового режима", async () => {
+    vi.mocked(allPlanPositions).mockResolvedValue(
+      page([position({ id: 1 }), position({ id: 2, source_sku: "SECOND" })]),
+    );
+
+    renderPage();
+    await screen.findByText("Сводная таблица позиций");
+
+    fireEvent.click(screen.getByRole("button", { name: /Групповые операции/ }));
+    fireEvent.click(screen.getByRole("button", { name: /Выделить все/ }));
+    await waitFor(() => expect(screen.getAllByText("Выбрано: 2")).toHaveLength(2));
+
+    const selectedInActions = screen
+      .getAllByText("Выбрано: 2")
+      .find((el) => el.className.includes("font-medium"))!;
+    const bulkActions = selectedInActions.parentElement!;
+    fireEvent.click(within(bulkActions).getByRole("button", { name: "Удалить" }));
+    await screen.findByText("Подтвердить удаление");
+
+    fireEvent.keyDown(document, { key: "Escape" });
+
+    await waitFor(() => expect(screen.queryByText("Подтвердить удаление")).toBeNull());
+    // Массовый режим и выбор пережили закрытие окна.
+    expect(screen.getByRole("button", { name: "Выйти" })).toBeTruthy();
+    expect(screen.getAllByText("Выбрано: 2")).toHaveLength(2);
   });
 
   it("когда строка цели на текущей странице — прокручивает к ней", async () => {

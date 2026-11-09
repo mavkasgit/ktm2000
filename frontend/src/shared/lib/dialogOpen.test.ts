@@ -29,6 +29,12 @@ describe("isAnyDialogOpen", () => {
     expect(isAnyDialogOpen(root)).toBe(false);
   });
 
+  it("AlertDialog — тоже модальное окно", () => {
+    const root = document.createElement("div");
+    root.innerHTML = '<div role="alertdialog" data-state="open"></div>';
+    expect(isAnyDialogOpen(root)).toBe(true);
+  });
+
   it("одно открытое окно среди закрытых даёт true", () => {
     const root = document.createElement("div");
     root.innerHTML = `${dialog("closed")}${dialog("open")}${dialog("closed")}`;

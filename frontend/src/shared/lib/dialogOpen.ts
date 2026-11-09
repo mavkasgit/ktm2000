@@ -13,5 +13,11 @@
 
 /** Открыто ли сейчас хотя бы одно модальное окно. */
 export function isAnyDialogOpen(root: ParentNode = document): boolean {
-  return root.querySelector('[role="dialog"][data-state="open"]') !== null;
+  // AlertDialog — отдельная роль Radix; без неё Escape в подтверждении
+  // удаления/перекрытия снимал массовый режим страницы.
+  return (
+    root.querySelector(
+      '[role="dialog"][data-state="open"], [role="alertdialog"][data-state="open"]',
+    ) !== null
+  );
 }

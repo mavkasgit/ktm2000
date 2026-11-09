@@ -644,8 +644,10 @@ export function ExecutionPage() {
       // массового режима: Radix не останавливает всплытие клавиши.
       if (e.key === "Escape" && !isAnyDialogOpen()) exitBulkMode();
     };
-    window.addEventListener("keydown", handler);
-    return () => window.removeEventListener("keydown", handler);
+    // Capture-фаза: окно Radix закрывается своим обработчиком на document,
+    // и в bubble-фазе DOM уже мог не содержать `data-state="open"`.
+    window.addEventListener("keydown", handler, true);
+    return () => window.removeEventListener("keydown", handler, true);
   }, [bulkMode, exitBulkMode]);
 
   const requestBulkSoftDelete = useCallback(() => {
