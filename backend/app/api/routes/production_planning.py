@@ -1471,6 +1471,11 @@ async def take_rows_to_work(
             # `begin_nested` уже откатил savepoint этой позиции. Откат всей
             # сессии здесь стёр бы и ранее выпущенные позиции батча, оставив
             # в ответе ложный `success` с несуществующим release_batch_id.
+            # Но исключение могло возникнуть ВНЕ savepoint — например, на
+            # autoflush при входе в `begin_nested`. Тогда сессия неактивна и
+            # без отката следующие позиции упадут `PendingRollbackError`.
+            if not db.is_active:
+                await _rollback_batch_after_session_error(db, results)
             results.append(TakeToWorkResult(
                 position_id=position_id,
                 status="failed",
@@ -1482,6 +1487,31 @@ async def take_rows_to_work(
     # перечитывает строки контроля и видит позицию ещё не запущенной.
     await db.commit()
     return TakeToWorkResponse(results=results, issue_summary=_group_issue_summary(results))
+
+
+async def _rollback_batch_after_session_error(
+    db: AsyncSession, results: list[TakeToWorkResult]
+) -> None:
+    """Откатить батч, если сессия сломалась вне savepoint'а позиции.
+
+    В этом случае откат неизбежен (иначе сессия не примет следующие
+    операции), но он стирает и уже выпущенные позиции. Ответ обязан это
+    отразить: помечаем их ``failed``, а не оставляем ложный ``success``.
+    Позиция, на которой возникло исключение, добавляется вызывающим.
+    """
+    await db.rollback()
+    for index, item in enumerate(results):
+        if item.status == "success":
+            results[index] = item.model_copy(
+                update={
+                    "status": "failed",
+                    "reason": "Batch rolled back after session-level error",
+                    "release_batch_id": None,
+                    "internal_plan_id": None,
+                    "tasks_created": None,
+                    "issue": None,
+                }
+            )
 
 
 def _group_issue_summary(results: list[TakeToWorkResult]) -> IssueSummary | None:
