@@ -24,7 +24,7 @@ vi.mock("shared/ui/use-toast", async (importOriginal) => ({
   toast: vi.fn(),
 }));
 
-import { fetchAllSections, reorderSections, type Section } from "shared/api/sections";
+import { fetchAllSections, reorderSections } from "shared/api/sections";
 import { getSpgList } from "shared/api/spg";
 import { SectionsPage } from "./SectionsPage";
 
@@ -40,16 +40,20 @@ const SPG = {
   sections: [],
 };
 
-function section(id: number, name: string): Section {
+function section(id: number, name: string) {
   return {
     id,
     code: name.toUpperCase(),
     name,
-    type: "production",
+    description: null,
+    type: "production" as const,
     sort_order: id,
+    is_active: true,
+    icon: null,
+    icon_color: null,
     spg_links: [{ id: SPG.id, code: SPG.code, name: SPG.name }],
     operations_count: 0,
-  } as Section;
+  };
 }
 
 const ALL = [section(1, "Alpha"), section(2, "Bravo"), section(3, "Charlie")];
