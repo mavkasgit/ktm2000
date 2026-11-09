@@ -31,7 +31,7 @@ blob-URL, ввод количества, чип алиаса). Бэкенд пр
 
 | Проверка | Команда | Результат |
 |---|---|---|
-| Быстрый гейт | `npm run gate:fast` | **зелёный**: 17/17 шагов, 42.6 с на финальном коде |
+| Быстрый гейт | `npm run gate:fast` | **зелёный**: 17/17 шагов на финальном коде |
 | Backend-тесты | `npm run test:pytest` (`PYTEST_NUM_WORKERS=4`) | **зелёный**: 2437 passed, 1 skipped, 427 с |
 | Frontend-тесты + coverage | `npm --prefix frontend test -- --coverage` | **зелёный**: 1658 passed, 1 skipped, 197 файлов; statements **60.06%**, branches **75.20%**, functions **50.55%**, lines **60.06%** (пороги 43/72/49/43) |
 | Frontend build | `npm --prefix frontend run build` | **успешно** (только прежнее предупреждение Vite о размере чанков) |
