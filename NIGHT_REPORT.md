@@ -5,9 +5,10 @@
 force-push, деплой, правки main/master, миграции, `.env` и прод-конфиги не
 трогались.
 
-**Коротко:** 17 атомарных правок ночи (две правки авто-передачи склеены в
-`62d977b0`) плюс правки по ревью 2026-11-09: path traversal в бэкапах, дыра
-в правах операций участка, откат батча «взять в работу», нетто-учёт после
+**Коротко:** 18 коммитов ночи (17 атомарных правок, две правки авто-передачи
+склеены в `62d977b0`, плюс доклад) и 20 коммитов по ревью 2026-11-09 (первый и
+второй круг, включая этот отчёт); всего от `ed0b0597` — 38 коммитов. Правки: path traversal в бэкапах,
+дыра в правах операций участка, откат батча «взять в работу», нетто-учёт после
 отката завершения, занижение плана частичной авто-передачей, неверный фильтр
 диапазона длин и 9 фронтовых дефектов (перестановки, Escape, выделение, даты,
 blob-URL, ввод количества, чип алиаса). Бэкенд проверен точечными тестами и
@@ -32,15 +33,15 @@ blob-URL, ввод количества, чип алиаса). Бэкенд пр
 | Проверка | Команда | Результат |
 |---|---|---|
 | Быстрый гейт | `npm run gate:fast` | **зелёный**: 17/17 шагов на финальном коде |
-| Backend-тесты | `npm run test:pytest` (`PYTEST_NUM_WORKERS=4`) | **зелёный**: 2438 passed, 1 skipped, 251.6 с |
-| Frontend-тесты + coverage | `npm --prefix frontend test -- --coverage` | **зелёный**: 1658 passed, 1 skipped, 197 файлов; statements **60.06%**, branches **75.20%**, functions **50.55%**, lines **60.06%** (пороги 43/72/49/43) |
+| Backend-тесты | `npm run test:pytest` (`PYTEST_NUM_WORKERS=4`) | **зелёный**: 2441 passed, 1 xfailed, 0 skipped, 422.16 с |
+| Frontend-тесты + coverage | `npm --prefix frontend test -- --coverage` | **зелёный**: 1662 passed, 1 skipped, 198 файлов (199); statements **60.22%**, branches **75.19%**, functions **50.46%**, lines **60.22%** (пороги 43/72/49/43) |
 | Frontend build | `npm --prefix frontend run build` | **успешно** (только прежнее предупреждение Vite о размере чанков) |
-| Полный gate + e2e | `npm run gate:e2e` | **зелёный**: 22/22 шага, 542.5 с; внутри `backend-tests` 261 с, `frontend-unit` 91.9 с, `e2e-smoke` 65.9 с |
+| Полный gate + e2e | `npm run gate:e2e` | **зелёный**: 22/22 шага, 0 fail, 616.7 с; внутри `backend-tests` 316.6 с, `frontend-unit` 93.3 с, `e2e-smoke` 64.8 с |
 | Backend lint | `ruff check app` (шаг гейта) | зелёный |
 | Frontend types | `tsc -b` (шаг гейта) | зелёный |
 | Frontend lint | `lint:ratchet` | 0 ошибок, 47 предупреждений при потолке 47 |
-| CodeGraph | `codegraph init -y` + `sync` | 1235 файлов, 24077 узлов; `sync` — up to date, `codegraph-age` ok |
-| Devstack | `npm run devrestart` в Orca-терминале + `GET /api/health` на `:8012` и через прокси `:5172` | оба `{"status":"ok"}`; процессы перезапущены в 09:40 |
+| CodeGraph | `npx @colbymchenry/codegraph sync` | 11 изменённых файлов, 216 узлов; `codegraph-age` в финальном гейте — ok |
+| Devstack | `npm run devrestart` в Orca-терминале + `GET /api/health` на `:8012` и через прокси `:5172` | оба `{"status":"ok"}`; процессы перезапущены в 11:13 |
 
 ## Проверка по ревью 2026-11-09
 
@@ -55,7 +56,8 @@ Backend-коммиты дополнительно проверены pytest по
 зелёные**, 69–95 с). Vitest в отдельном worktree падал на junction
 `node_modules` (ошибка окружения, не кода), поэтому фронтовые прогоны
 повторены в основном дереве. Коммиты с правками по ревью проверены
-финальными прогонами.
+финальными прогонами. Фактический итог: `git rev-list --count
+ed0b0597..HEAD` = **38** (18 ночных + 20 по ревью, включая этот отчёт).
 
 ### A2. База ветки и `perf/307`
 
@@ -83,8 +85,10 @@ COMPLETE/SCRAP влияют `cached_completed_quantity` и
 `grep` оставшихся gross-сумм: `stock/services._recompute_balance` (две
 стороны баланса — это не проекция факта) и
 `shopfloor/queries_sections.get_section_daily_stats` (историческая
-статистика дня). Обе оставлены осознанно. ADR-0018 помечает gross-часть
-COMPLETE/SCRAP заменённой ADR-0019.
+статистика дня: исходные операции, без компенсаций — добавлен фильтр
+`reverses_id IS NULL`, иначе откат SCRAP попадал в приход как «забраковано»).
+Обе оставлены осознанно. ADR-0018 помечает gross-часть COMPLETE/SCRAP
+заменённой ADR-0019.
 
 ### A4. Сбой батча вне savepoint
 
@@ -103,16 +107,23 @@ revoke при замене/удалении/unmount и в StrictMode; DatePicker
 ввод, 29.02.2024/2025; чип алиаса вне видимой выдачи даёт тост.
 
 Тест вскрыл настоящий дефект: `isAnyDialogOpen()` не видел
-`role="alertdialog"`. Гвард расширен, страничные обработчики переведены в
-capture-фазу. Полный `--coverage` и e2e-смоук — в финальной таблице.
+`role="alertdialog"`. Гвард расширен на все слои Radix, которые забирают
+Escape: `dialog`, `alertdialog`, `menu`, `listbox` (Select) и Popover
+(`data-radix-popper-content-wrapper`). Обработчики `PlanPage`,
+`ExecutionPage`, `TransfersPage` и `SectionsTasksPage` переведены в
+capture-фазу (у `SectionsTasksPage` был bubble — та же гонка с Radix), ни
+один из них не вызывает `stopPropagation`. Полный `--coverage`, RTL и
+e2e-смоук — в финальной таблице.
 
 ### A6. Path traversal в бэкапах
 
 К проверке разделителей добавлен `resolve()` + `relative_to(BACKUPS_DIR)`
 (симлинки/junction). Кейсы: `..\..\x`, `C:\x`, `\\server\share`,
-`%2e%2e%2f` (декодируется роутером), абсолютный путь, `\x00`, symlink. Матрица вызывает каждую ручку с
-`{filename}` и `bulk-delete`; все проходят через `_backup_file_path`.
-Symlink-кейс скипается на хосте без прав на symlink.
+`%2e%2e%2f` (декодируется роутером), абсолютный путь, `\x00`, ссылка наружу.
+Матрица вызывает каждую ручку с `{filename}` и `bulk-delete`; все проходят
+через `_backup_file_path`. Кейс ссылки больше не скипается: на POSIX это
+symlink, на Windows без Developer Mode — junction (`mklink /J`), который
+`resolve()` разрешает так же. Прогон файла — **24 passed, 0 skipped**.
 
 ### B1. Права операций участка
 
@@ -138,6 +149,143 @@ viewer/transporter могли менять операции через API.
 id берётся из того же списка `nodes` (безопасно). `_transfer_no` имеет
 unique-индекс `uq_transfers_transfer_no`, поэтому коллизия даст ошибку, а
 не дубль; оставлено как мелкое предложение.
+
+## Проверка по ревью 2026-11-09 (второй круг)
+
+Четыре проверки до мержа выполнены с выводом команд.
+
+### 1. Откуда `1 skipped` в backend
+
+Причина — symlink-кейс в `test_backups_path_traversal.py`: на Windows без
+Developer Mode создание symlink запрещено, и тест честно скипался. Skip
+убран: на POSIX создаётся symlink, на Windows — junction (`mklink /J`) на
+каталог вне `BACKUPS_DIR`; `Path.resolve()` разрешает его так же. Отдельный
+кейс на `os.symlink` во `tmp_path` уже был — теперь он выполняется и на этой
+машине.
+
+```text
+> npm run test:pytest -- tests/test_backups_path_traversal.py -rs -q
+24 passed in 7.17s
+```
+
+`-rs` не напечатал ни одной строки skip. В полном backend-прогоне skip тоже
+нет: единственный «не зелёный» — ожидаемый `xfail` сторожа #409 (см. п. 7
+ниже), а фикстура заказчика `test_plan_import_real_february_sheet.py` в этом
+прогоне не скипалась.
+
+### 2. Escape: capture-фаза, меню/Select/Popover, `stopPropagation`
+
+`grep -rn "isAnyDialogOpen" frontend/src` — гвард используют четыре экрана:
+`PlanPage`, `ExecutionPage`, `TransfersPage`, `SectionsTasksPage`; плюс сам
+`shared/lib/dialogOpen.ts` и тесты. Все четыре обработчика слушают
+`window` в capture-фазе (`addEventListener("keydown", handler, true)`);
+`SectionsTasksPage` был единственным на bubble — переведён, иначе Radix
+успевал закрыть окно до проверки.
+
+`stopPropagation` в этих обработчиках нет (`grep` по файлам экранов): окно
+получает Escape и закрывается. Гвард расширен с `dialog`/`alertdialog` на
+слои, которые тоже забирают Escape: `role="menu"`, `role="listbox"` (Select)
+и Popover (`[data-radix-popper-content-wrapper] [data-state="open"]`).
+Закрытое меню страницу не блокирует.
+
+Проверки:
+
+```text
+> npm --prefix frontend run test -- src/shared/lib/dialogOpen.test.ts
+9 passed
+
+> npm --prefix frontend run test -- dialogOpen + PlanPage.jumpToDuplicate
+  + TransfersPage.bulkEscape + SectionsTasksPage.bulkEscape
+18 passed
+
+> npm --prefix frontend run test:e2e:smoke -- e2e/bulk-escape.spec.ts --retries=0
+1 passed (20.6s)
+```
+
+Новый `@smoke`-сценарий: выделить строку в массовом режиме плана → открыть
+«Импорт производственного плана» → Escape закрывает окно, «Выбрано: 1»
+остаётся → второй Escape снимает выделение. Это ровно ручная проверка,
+которой не хватало; jsdom-порядок слушателей больше не единственное
+доказательство.
+
+### 3. Актуальность отчёта после squash
+
+`git rev-list --count ed0b0597..HEAD` = **38** (18 ночных + 20 по ревью,
+включая этот отчёт); числа в шапке и A1 приведены к этому. В таблице правок и в «Как откатить»
+фигурирует только `62d977b0` — старые `012963f9`/`92059a90` остались
+только в пояснении о склейке. Зависимости отката перечислены ниже:
+`50f97e0e` → `ca3fddcd`, `4e62bd65` → `ca3fddcd`, `7861b766` →
+`9a8278b0`; остальные коммиты независимы.
+
+### 4. Оставшиеся gross-суммы COMPLETE/SCRAP
+
+`grep` по `func.sum(...quantity...)` в `backend/app`, не проходящим через
+`net_quantity_expr()`:
+
+| Место | Что суммируется | Почему gross верен |
+|---|---|---|
+| `stock/services.py:310,321` (`_recompute_balance`) | `StockTransaction.quantity` по сторонам `to_location` / `from_location` | Это не проекция факта, а две стороны баланса. Компенсация пишется с обратными `from/to` (и тем же `reason`), поэтому входит в противоположную сторону и сокращается сама. |
+| `services/shopfloor/queries_sections.py:528` (`get_section_daily_stats`) | `StockTransaction.quantity` по `reason`, фильтр `to_location_id == section` + `reverses_id IS NULL` | Историческая статистика дня: «сколько операций пришло на участок в этот день». Считаются только исходные проводки; компенсация отката зеркалит запись на противоположную сторону и без фильтра попадала бы в приход как новая операция (SCRAP после отката — как «забраковано»). Это закрыто тестом `test_daily_stats_ignores_reversal_compensation`. |
+
+Все остальные `func.sum` — либо `net_quantity_expr()`, либо не ledger:
+`StockBalance.balance_qty` (уже свёрнутый остаток), количества строк плана,
+`ReleaseBatchPosition.release_quantity`, счётчики `WorkTask`. Python-суммы
+(`stock/api.py`, `production_planning.py`) складывают DTO/остатки, а не
+проводки COMPLETE/SCRAP.
+
+## До деплоя (пункты 5–7 ревью)
+
+### 5. Аудит persisted-кэшей: свойства скрипта
+
+Проверено тестом `test_cache_audit_finds_and_refreshes_gross_line_cache`
+(`backend/tests/reversal/test_action_compensator.py`):
+
+- **dry-run read-only**: после `find_stale_caches()` строки в БД не меняются
+  (`cached_completed_quantity`/`cached_rejected_quantity` остались 14/6);
+- **diff «было → стало»** печатается свойством `StaleLineCache.fields`
+  (`completed 14 -> 0, rejected 6 -> 0`);
+- **`--apply` одной транзакцией**: `refresh_stale_caches` пересчитывает все
+  найденные строки production-кодом и делает один `commit()` в конце;
+  падение до него не оставляет частичных изменений;
+- **идемпотентность**: повторный `--apply` на чистых данных ничего не
+  меняет, `find_stale_caches()` возвращает `[]`;
+- **бэкап**: скрипт сам `/api/backups` не вызывает и не создаёт — бэкап
+  делается вручную до `--apply`.
+
+Порядок запуска (не менялся): dry-run на копии рабочей БД → вывод сохранить
+в #409 или отдельный тикет → подтверждение владельца → `--apply` на копии →
+повторный dry-run (ожидаем 0) → только потом прод. На рабочей БД скрипт
+по-прежнему не запускался.
+
+### 6. B1: сужение прав и UI
+
+Backend: `REFERENCES_WRITER_ROLES` = admin/planner/section_manager; viewer и
+transporter не входят. Общий страж
+`test_mutating_routes_are_not_open_to_viewer` перечисляет read-only POST
+явно и с комментарием; добавлен точечный тест
+`test_section_operations_are_not_open_to_transporter` — он проверяет ровно
+три ручки операций участка, а не все роутеры, потому что передачи и «взять
+в работу» transporter открыты намеренно.
+
+Frontend: новый RTL-тест `SectionsPage.readOnly.test.tsx` под
+`canEditReferences: false` (viewer/transporter) — на странице нет
+«Добавить участок», «Добавить ГХП», перестановки строк, «Добавить
+группу/операцию», правки и удаления групп/операций; чекбокс значимости
+`disabled`. То есть 403 не приходит вместо скрытого действия.
+
+### 7. #409 как блокер деплоя
+
+Добавлен `backend/tests/test_backups_auth.py`:
+
+```python
+@pytest.mark.xfail(strict=True, reason="[#409] /api/backups: _validate_admin — заглушка")
+async def test_anonymous_cannot_list_backups(client): ...
+```
+
+Сейчас тест ожидаемо `xfail` (аноним получает 200). Когда заглушку починят,
+он станет зелёным и **уронит прогон** — маркер придётся снять вместе с
+закрытием #409. Это и есть «красный тест, который начнёт падать, когда
+починят», без отдельного релизного чек-листа.
 
 ## Сделано (17 атомарных правок ночи; две склеены в одну)
 
@@ -172,7 +320,13 @@ unique-индекс `uq_transfers_transfer_no`, поэтому коллизия 
 | `41336e9c` | **test(фронт):** перестановки, blob-URL, даты, чип алиаса | 10 файлов, 56 тестов (изолированный прогон) |
 | `2d3c7276` | **test(доступ):** изменяющие ручки не открыты `viewer` | `test_mutating_routes_roles.py` |
 | `40b4fa60` | **fix(тесты):** форма участка в тесте перестановки | `tsc -b` зелёный |
-| `5b433f16` | **test(backups):** кодированный `%2e%2e%2f` в матрице ручек | `test_backups_path_traversal.py` — 23 passed, symlink skip |
+| `5b433f16` | **test(backups):** кодированный `%2e%2e%2f` в матрице ручек | `test_backups_path_traversal.py` — 23 passed |
+| `7c843e34` | **test(backups):** ссылка наружу на Windows через junction вместо skip | 24 passed, 0 skipped |
+| `7d331fe4` | **test(ui):** гвард Escape на меню/Select/Popover, capture у `SectionsTasksPage`, `@smoke`-сценарий | `dialogOpen.test.ts` 9; RTL 18; e2e 1 passed |
+| `d0c08857` | **test(доступ):** read-only UI участков и точечный запрет transporter на операциях | RTL 1; `test_mutating_routes_roles.py` 3 |
+| `ccb2f630` | **test(бэкапы):** `xfail(strict=True)` на анонимный `GET /api/backups` (#409) | 1 xfailed |
+| `ea036bfe` | **test(ledger):** dry-run аудита кэшей read-only, `--apply` идемпотентен, diff «было → стало» | `test_cache_audit_finds_and_refreshes_gross_line_cache` |
+| `92604a43` | **fix(статистика):** компенсация отката не считается операцией дня (`reverses_id IS NULL`) | `test_daily_stats_ignores_reversal_compensation` |
 
 Блокер деплоя по авторизации `/api/backups` вынесен в отдельный тикет:
 [#409](https://github.com/mavkasgit/ktm2000/issues/409).
@@ -343,9 +497,11 @@ None`; парная позиция хранит продукт в `source_payloa
   правильная семантика (ADR-0019: все чтения `reverses_id` переходят на
   нетто). ADR-0018 («COMPLETE/SCRAP остаются gross») писался до появления
   компенсатора `task_complete` и теперь помечен как заменённый.
-- Ручная браузерная проверка Escape не выполнялась: поведение закрыто
-  RTL-тестом на `document`/`window` и e2e-смоуком; capture-фаза убирает
-  гонку с Radix, но визуальный прогон остаётся за владельцем.
+- Ручная браузерная проверка Escape не выполнялась: вместо неё в ярус
+  `@smoke` добавлен Playwright-сценарий (`bulk-escape.spec.ts`) — окно
+  закрывается, выделение остаётся, второй Escape снимает выделение. Это
+  реальный браузер, а не jsdom, поэтому порядок слушателей Radix проверен
+  на нём.
 
 ## Как откатить всё разом
 
@@ -367,13 +523,21 @@ git revert --no-commit ed0b0597..night/2026-11-08
 - `50f97e0e` (лента строк плана) — продолжение `ca3fddcd` (нетто-чтения);
   откатывать `50f97e0e` раньше `ca3fddcd` нельзя.
 - `62d977b0` содержит и частичную авто-передачу, и уточнение после
-  трансформации (бывшие `012963f9` + `92059a90`) — откатывается одним
-  коммитом.
+  трансформации (склейка двух ночных правок) — откатывается одним коммитом.
 - `4e62bd65` (аудит persisted-кэшей) опирается на `ca3fddcd`: без него
   скрипт сверяет уже неверную формулу.
 - `7861b766` (Escape/AlertDialog) включает расширение `isAnyDialogOpen`
   и capture-фазу; откат возвращает снятие массового режима при Escape
-  внутри подтверждения.
+  внутри подтверждения. Новый `e2e/bulk-escape.spec.ts` и расширение гварда
+  на меню/Select/Popover (`7d331fe4`) откатываются вместе с ним.
+- `ea036bfe` (тест свойств аудита) проверяет скрипт из `4e62bd65`; без него
+  тест нечего проверять.
+- `ccb2f630` — временный сторож #409: после закрытия тикета его надо снять,
+  иначе `xfail(strict=True)` уронит прогон (это и задумано).
+- `92604a43`, `7c843e34`, `d0c08857` независимы: точечный `git revert`
+  любого из них не требует соседних.
+- Остальные коммиты диапазона независимы: точечный `git revert` любого из
+  них не требует соседних.
 
 Новые коммиты по ревью (после доклада) откатываются тем же диапазоном:
 `git revert --no-commit 2d3c7276..HEAD` (или в обратном порядке по одному).
