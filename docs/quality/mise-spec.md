@@ -29,7 +29,7 @@ mise (mise-en-place) — один CLI, который по файлу `mise.toml
 ## Принято (шаг 1, коммит `3d1db39c`)
 
 - **`mise.toml` — единственный источник версий всех инструментов.** 18
-  инструментов с точными пинами: node 24, python 3.12, hk 2.11.0, ruff
+  инструментов с точными пинами: node 26.13.0, python 3.14.10, hk 2.11.0, ruff
   0.16.9, oxlint 1.90.0, oxfmt 0.75.0, knip 6.44.1, dependency-cruiser
   18.7.1, betterleaks 1.9.0, osv-scanner 2.7.0, hadolint 2.15.1,
   jactionlint 2.4.0, ast-grep 0.51.1, agnix 0.60.2, typos 1.52.0,

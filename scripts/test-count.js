@@ -14,13 +14,17 @@
  */
 
 const { spawnSync } = require("node:child_process");
-const { existsSync, readFileSync, writeFileSync } = require("node:fs");
+const { existsSync, readFileSync, writeFileSync, rmSync } = require("node:fs");
+const { tmpdir } = require("node:os");
 const { dirname, join } = require("node:path");
-const { parsePytestCollect, parseVitestList, formatReductions, evaluateStored } = require("./test-count-core.js");
+const { parsePytestCollect, parseVitestJson, formatReductions, evaluateStored } = require("./test-count-core.js");
 
 const ROOT = dirname(__dirname);
 const BASELINE_REL = "scripts/test-count-baseline.json";
 const BASELINE = join(ROOT, "scripts", "test-count-baseline.json");
+// Отчёт vitest кладём вне дерева: `--reporter=json` без --outputFile пишет
+// в `.vitest/`, а временный файл не должен попасть в git и в git status.
+const VITEST_REPORT = join(tmpdir(), `ktm-test-count-${process.pid}.json`);
 
 const USAGE = `test-count — рэтчет числа тестов против baseline ${BASELINE_REL}
 
@@ -38,9 +42,25 @@ const SOURCES = {
   },
   frontend: {
     dir: "frontend",
-    collector: "vitest list",
-    run: () => ["npx", ["vitest", "list"]],
-    parse: parseVitestList,
+    collector: "vitest run --reporter=json",
+    run: () => {
+      rmSync(VITEST_REPORT, { force: true });
+      return [
+        "node",
+        [
+          "../scripts/heavy.mjs",
+          "--",
+          "npx",
+          "vitest",
+          "run",
+          "--reporter=json",
+          `--outputFile=${VITEST_REPORT}`,
+          "--silent=passed-only",
+        ],
+      ];
+    },
+    artifact: () => (existsSync(VITEST_REPORT) ? readFileSync(VITEST_REPORT, "utf8") : ""),
+    parse: (raw) => parseVitestJson(raw, join(ROOT, "frontend")),
   },
 };
 
@@ -82,9 +102,15 @@ function collect(source) {
   if (r.error) return { ok: false, reason: `не удалось запустить «${bin}»: ${r.error.message}` };
   if (r.status !== 0) {
     const tail = (r.stdout + (r.stderr || "")).trim().split(/\r?\n/).slice(-3).join(" / ");
+    if (source.artifact) rmSync(VITEST_REPORT, { force: true });
     return { ok: false, reason: `сборщик упал (код ${r.status}): ${tail}` };
   }
-  return source.parse(r.stdout);
+  const payload = source.artifact ? source.artifact() : r.stdout;
+  if (source.artifact) rmSync(VITEST_REPORT, { force: true });
+  if (!payload) {
+    return { ok: false, reason: `сборщик не оставил отчёта (${source.collector})` };
+  }
+  return source.parse(payload);
 }
 
 function readBaseline() {

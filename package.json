@@ -3,8 +3,8 @@
   "private": true,
   "version": "1.0.0",
   "engines": {
-    "node": ">=24",
-    "npm": ">=10"
+    "node": ">=26",
+    "npm": ">=11"
   },
   "scripts": {
     "setup": "npm install && npm install --prefix frontend && echo 'Не забудьте установить зависимости Python!'",
@@ -87,7 +87,7 @@
   },
   "devDependencies": {
     "ajv": "^8.20.0",
-    "concurrently": "^9.1.2",
+    "concurrently": "^10.0.7",
     "lefthook": "^2.2.2"
   }
 }

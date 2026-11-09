@@ -114,7 +114,7 @@ jobs:
         # падает на «specified node version file … does not exist».
         working-directory: ${{ github.workspace }}
         env:
-          KTM_NODE_FALLBACK: '20'
+          KTM_NODE_FALLBACK: '26.13.0'
           KTM_USE_NODE: 'yes'
           KTM_USE_PY: 'no'
         run: |

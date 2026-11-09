@@ -19,7 +19,7 @@ export default defineConfig({
     environment: "happy-dom",
     // Матчеры @testing-library/jest-dom (toBeInTheDocument и др.) — пакет в
     // devDependencies с самого начала, подключён решением #245 (Q12).
-    setupFiles: ["@testing-library/jest-dom/vitest"],
+    setupFiles: ["@testing-library/jest-dom/vitest", "./vitest.setup.ts"],
     // `e2e/` целиком исключать нельзя: там живёт логика прогона (`pass-cache`),
     // которую нужно тестировать vitest'ом. Исключаем сами спеки Playwright —
     // их имена кончаются на `.spec.ts` и vitest'у они не его.
@@ -41,7 +41,14 @@ export default defineConfig({
     coverage: {
       // `functions` добавлен в #373: порог был единственный, кто отсутствовал
       // (замер 49.72% — то есть цифра давно есть, а гейта не было).
-      thresholds: { statements: 43, lines: 43, branches: 72, functions: 49 },
+      //
+      // `branches` пересобран при переходе на Vitest 5 (#410): provider v8
+      // теперь считает ветки по AST (Istanbul-совместимо) и на той же кодовой
+      // базе даёт 52.94% вместо 75.36% старого block-coverage. Это смена
+      // метрики, а не потеря тестов: 1645 тестов против 1531 в старом baseline
+      // (`scripts/test-count-baseline.json`). Порог 52 сохраняет рэтчет
+      // (факт 52.94). Пересмотр — при следующем мажоре coverage или 2027-05-09.
+      thresholds: { statements: 43, lines: 43, branches: 52, functions: 49 },
     },
   },
 })

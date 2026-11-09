@@ -1,5 +1,5 @@
 {
-  "updated": "2026-11-03",
+  "updated": "2026-11-09",
   "tools": [
     {
       "id": "mise",
@@ -20,14 +20,14 @@
       "name": "Node.js",
       "repo": "nodejs/node",
       "category": "language",
-      "version": "24",
+      "version": "26.13.0",
       "pinned_in": "mise.toml",
       "runs_at": [
         "gate",
         "ci"
       ],
       "blocking": true,
-      "last_reviewed": "2026-11-03",
+      "last_reviewed": "2026-11-09",
       "rationale": "Источником версии стал mise.toml/mise.lock (#391). Поток: шаг 3 переводит CI на mise, шаг 5 удаляет .nvmrc — до сих пор .nvmrc остаётся совместимым дублем."
     },
     {
@@ -35,14 +35,14 @@
       "name": "Python",
       "repo": "python/cpython",
       "category": "language",
-      "version": "3.12",
+      "version": "3.14.10",
       "pinned_in": "mise.toml",
       "runs_at": [
         "gate",
         "ci"
       ],
       "blocking": true,
-      "last_reviewed": "2026-11-03",
+      "last_reviewed": "2026-11-09",
       "rationale": "Источником версии стал mise.toml/mise.lock (#391); venv привязан через [env] _.python.venv. Поток: шаг 3 переводит CI на mise, шаг 5 удаляет .python-version — до сих пор он остаётся совместимым дублем."
     },
     {
@@ -50,14 +50,14 @@
       "name": "npm",
       "repo": "npm/cli",
       "category": "dev-tool",
-      "version": ">=10",
+      "version": ">=11",
       "pinned_in": "package.json",
       "runs_at": [
         "gate",
         "ci"
       ],
       "blocking": true,
-      "last_reviewed": "2026-11-03",
+      "last_reviewed": "2026-11-09",
       "rationale": "Все точки входа — npm-скрипты; минимальную версию задаёт engines в корневом package.json."
     },
     {
@@ -80,13 +80,13 @@
       "name": "coverage.py",
       "repo": "coveragepy/coveragepy",
       "category": "coverage",
-      "version": "7.16.2",
+      "version": "7.17.2",
       "pinned_in": "backend/requirements-dev.txt",
       "runs_at": [
         "ci"
       ],
       "blocking": true,
-      "last_reviewed": "2026-11-03",
+      "last_reviewed": "2026-11-09",
       "rationale": "Порог coverage --fail-under=73 краснеет только в CI, но версия часть замера: бейзлайн снят именно на 7.16.2."
     },
     {
@@ -94,7 +94,7 @@
       "name": "TypeScript",
       "repo": "microsoft/TypeScript",
       "category": "typechecker",
-      "version": "^5.7.2",
+      "version": "^5.9.3",
       "pinned_in": "frontend/package.json",
       "runs_at": [
         "commit",
@@ -102,7 +102,7 @@
         "ci"
       ],
       "blocking": true,
-      "last_reviewed": "2026-11-03",
+      "last_reviewed": "2026-11-09",
       "rationale": "tsc -b — самая дорогая часть gate:fast, и именно он краснеет после сломанных типов.",
       "npm_package": "typescript"
     },
@@ -127,14 +127,14 @@
       "name": "Vitest",
       "repo": "vitest-dev/vitest",
       "category": "test-runner",
-      "version": "^3.2.7",
+      "version": "^5.1.0",
       "pinned_in": "frontend/package.json",
       "runs_at": [
         "gate",
         "ci"
       ],
       "blocking": true,
-      "last_reviewed": "2026-11-03",
+      "last_reviewed": "2026-11-09",
       "rationale": "Юниты frontend; в gate входит ярусом full.",
       "npm_package": "vitest"
     },
@@ -143,13 +143,13 @@
       "name": "@vitest/coverage-v8",
       "repo": "vitest-dev/vitest",
       "category": "coverage",
-      "version": "^3.2.7",
+      "version": "^5.1.0",
       "pinned_in": "frontend/package.json",
       "runs_at": [
         "ci"
       ],
       "blocking": false,
-      "last_reviewed": "2026-11-03",
+      "last_reviewed": "2026-11-09",
       "rationale": "report-only: порога coverage у frontend пока нет — блокировать нечего.",
       "npm_package": "@vitest/coverage-v8"
     },
@@ -158,14 +158,14 @@
       "name": "Playwright",
       "repo": "microsoft/playwright",
       "category": "e2e",
-      "version": "^1.60.0",
+      "version": "^1.65.0",
       "pinned_in": "frontend/package.json",
       "runs_at": [
         "gate",
         "ci"
       ],
       "blocking": true,
-      "last_reviewed": "2026-11-03",
+      "last_reviewed": "2026-11-09",
       "rationale": "E2E-канон; отдельный ярус gate:e2e, потому что прогон берёт слот семафора и свой клон БД.",
       "npm_package": "@playwright/test"
     },
@@ -174,14 +174,14 @@
       "name": "pytest",
       "repo": "pytest-dev/pytest",
       "category": "test-runner",
-      "version": "9.1.1",
+      "version": "9.2.0",
       "pinned_in": "backend/requirements-dev.txt",
       "runs_at": [
         "gate",
         "ci"
       ],
       "blocking": true,
-      "last_reviewed": "2026-11-03",
+      "last_reviewed": "2026-11-09",
       "rationale": "Канон backend-тестов; в requirements.txt остаётся нижняя граница, точный пин — в dev-слое (#377)."
     },
     {
@@ -204,14 +204,14 @@
       "name": "pytest-asyncio",
       "repo": "pytest-dev/pytest-asyncio",
       "category": "test-runner",
-      "version": "1.4.0",
+      "version": "1.4.1.post1",
       "pinned_in": "backend/requirements-dev.txt",
       "runs_at": [
         "gate",
         "ci"
       ],
       "blocking": true,
-      "last_reviewed": "2026-11-03",
+      "last_reviewed": "2026-11-09",
       "rationale": "Все async-тесты backend идут через него; версия закреплена в dev-слое."
     },
     {
@@ -219,13 +219,13 @@
       "name": "pytest-testmon",
       "repo": "tarpas/pytest-testmon",
       "category": "test-runner",
-      "version": "2.2.0",
+      "version": "2.3.0",
       "pinned_in": "backend/requirements-dev.txt",
       "runs_at": [
         "manual"
       ],
       "blocking": false,
-      "last_reviewed": "2026-11-03",
+      "last_reviewed": "2026-11-09",
       "rationale": "Только test:pytest:mon (--testmon); в гейте и CI не участвует."
     },
     {
@@ -264,13 +264,13 @@
       "name": "concurrently",
       "repo": "open-cli-tools/concurrently",
       "category": "dev-tool",
-      "version": "^9.1.2",
+      "version": "^10.0.7",
       "pinned_in": "package.json",
       "runs_at": [
         "manual"
       ],
       "blocking": false,
-      "last_reviewed": "2026-11-03",
+      "last_reviewed": "2026-11-09",
       "rationale": "npm run dev поднимает стек тремя процессами; к проверкам отношения не имеет.",
       "npm_package": "concurrently"
     },

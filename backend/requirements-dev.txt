@@ -2,7 +2,7 @@
 #
 # Почему отдельный файл. До #377 версии инструментов жили только в телах
 # workflow: `pip install ruff==0.16.9` — `.github/workflows/ruff.yml:45`,
-# `pip install coverage==7.16.2` — `.github/workflows/backend-tests.yml:73`
+# `pip install coverage==7.17.2` — `.github/workflows/backend-tests.yml:73`
 # (решение #245 Q21: «отдельным pip install, requirements/Docker не трогаем»).
 # Локально у этих версий не было источника: `ruff` из PATH и `ruff` из CI могли
 # разойтись, а «какой версией снят ноль находок» был видно только из CI. Теперь
@@ -45,13 +45,13 @@ ruff==0.16.9
 # `coverage report --fail-under=73`). Пин = решётка #245 Q21: бейзлайн 73%
 # снят именно на 7.16.2 (docs/night/BASELINE.md), поэтому версия — часть
 # замера, а не деталь окружения.
-coverage==7.16.2
+coverage==7.17.2
 
 # Тестовый раннер и плагины. В `requirements.txt` они объявлены нижними
 # границами; здесь закреплены те версии, на которых снят канон pytest
 # (`backend/tests/AGENTS.md`), потому что от них зависит и дефолт `--dist
 # loadfile`, и `-p no:pytest-testmon` в CI.
-pytest==9.1.1
-pytest-asyncio==1.4.0
+pytest==9.2.0
+pytest-asyncio==1.4.1.post1
 pytest-xdist==3.8.0
-pytest-testmon==2.2.0
+pytest-testmon==2.3.0

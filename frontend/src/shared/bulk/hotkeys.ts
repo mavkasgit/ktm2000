@@ -3,7 +3,7 @@ import type React from "react";
 import type { BulkId } from "./selection";
 
 export interface BulkHotkeyConfig<TId extends BulkId> {
-  scopeRef: React.RefObject<HTMLElement>;
+  scopeRef: React.RefObject<HTMLElement | null>;
   filteredIds: TId[];
   hasSelection: boolean;
   disabled?: boolean;
