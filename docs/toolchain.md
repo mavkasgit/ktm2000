@@ -29,7 +29,7 @@
 | `action-upload-artifact` | actions/upload-artifact (actions/upload-artifact) | `.github/workflows` | `@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2` | ci | нет | 2026-11-03 |
 | `ajv` | Ajv (ajv-validator/ajv) | `package.json` | `^8.20.0` | gate, ci | да | 2026-11-03 |
 | `alembic` | Alembic (sqlalchemy-org/alembic) | `backend/requirements.txt` | `>=1.13.0` | ci, manual | да | 2026-11-03 |
-| `concurrently` | concurrently (open-cli-tools/concurrently) | `package.json` | `^9.1.2` | manual | нет | 2026-11-03 |
+| `concurrently` | concurrently (open-cli-tools/concurrently) | `package.json` | `^10.0.7` | manual | нет | 2026-11-09 |
 | `coverage` | coverage.py (coveragepy/coveragepy) | `backend/requirements-dev.txt` | `7.16.2` | ci | да | 2026-11-03 |
 | `eslint` | ESLint (eslint/eslint) | `frontend/package.json` | `^9.39.5` | gate, ci | да | 2026-11-03 |
 | `lefthook` | Lefthook (evilmartians/lefthook) | `package.json` | `2.2.2` | commit, push | да | 2026-11-03 |
@@ -44,7 +44,7 @@
 | `pytest-xdist` | pytest-xdist (pytest-dev/pytest-xdist) | `backend/requirements-dev.txt` | `3.8.0` | gate, ci | да | 2026-11-03 |
 | `python` | Python (python/cpython) | `mise.toml` | `3.14.10` | gate, ci | да | 2026-11-09 |
 | `ruff` | Ruff (astral-sh/ruff) | `backend/requirements-dev.txt` | `0.16.9` | gate, ci | да | 2026-11-03 |
-| `typescript` | TypeScript (microsoft/TypeScript) | `frontend/package.json` | `^5.7.2` | commit, gate, ci | да | 2026-11-03 |
-| `vitest` | Vitest (vitest-dev/vitest) | `frontend/package.json` | `^3.2.7` | gate, ci | да | 2026-11-03 |
-| `vitest-coverage-v8` | @vitest/coverage-v8 (vitest-dev/vitest) | `frontend/package.json` | `^3.2.7` | ci | нет | 2026-11-03 |
+| `typescript` | TypeScript (microsoft/TypeScript) | `frontend/package.json` | `^5.9.3` | commit, gate, ci | да | 2026-11-09 |
+| `vitest` | Vitest (vitest-dev/vitest) | `frontend/package.json` | `^5.1.0` | gate, ci | да | 2026-11-09 |
+| `vitest-coverage-v8` | @vitest/coverage-v8 (vitest-dev/vitest) | `frontend/package.json` | `^5.1.0` | ci | нет | 2026-11-09 |
 <!-- tools:end -->

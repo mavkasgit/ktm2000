@@ -18,6 +18,7 @@ const assert = require("node:assert/strict");
 const {
   parsePytestCollect,
   parseVitestList,
+  parseVitestJson,
   findReductions,
   evaluateStored,
 } = require("./test-count-core.js");
@@ -80,6 +81,36 @@ test("vitest: пустая выдача — красный, это сломан�
   const out = parseVitestList("\n\n");
   assert.equal(out.ok, false);
   assert.match(out.reason, /ни одного теста/);
+});
+
+test("vitest JSON: считает развёрнутые each-кейсы и нормализует пути", () => {
+  const report = JSON.stringify({
+    numTotalTests: 3,
+    testResults: [
+      { name: "C:/repo/frontend/src/a.test.ts", assertionResults: [{}, {}] },
+      { name: "C:/repo/frontend/scripts/b.test.mjs", assertionResults: [{}] },
+    ],
+  });
+  const out = parseVitestJson(report, "C:/repo/frontend");
+  assert.equal(out.ok, true);
+  assert.equal(out.total, 3);
+  assert.deepEqual(out.by_file, { "src/a.test.ts": 2, "scripts/b.test.mjs": 1 });
+});
+
+test("vitest JSON: итог не сходится с assertionResults — красный", () => {
+  const report = JSON.stringify({
+    numTotalTests: 9,
+    testResults: [{ name: "C:/repo/frontend/src/a.test.ts", assertionResults: [{}] }],
+  });
+  const out = parseVitestJson(report, "C:/repo/frontend");
+  assert.equal(out.ok, false);
+  assert.match(out.reason, /итог говорит 9, assertionResults 1/);
+});
+
+test("vitest JSON: битый JSON — красный", () => {
+  const out = parseVitestJson("{not json", "C:/repo/frontend");
+  assert.equal(out.ok, false);
+  assert.match(out.reason, /JSON vitest не разобран/);
 });
 
 test("vitest: строка без разделителя сютов — красный (вывод меняется, парсер обязан это увидеть)", () => {

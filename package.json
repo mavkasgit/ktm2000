@@ -87,7 +87,7 @@
   },
   "devDependencies": {
     "ajv": "^8.20.0",
-    "concurrently": "^9.1.2",
+    "concurrently": "^10.0.7",
     "lefthook": "^2.2.2"
   }
 }

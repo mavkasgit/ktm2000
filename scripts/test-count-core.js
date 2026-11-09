@@ -17,6 +17,7 @@ const PYTEST_ID = /^(.*\.py)::(.+)$/;
 const PYTEST_SUMMARY = /^(\d+) tests? collected in [\d.]+s$/;
 const PYTEST_BOILERPLATE = [/^=+ .* =+$/, /^\d+ (?:warnings?|errors?) in [\d.]+s$/];
 const VITEST_ID = /^(.*\.(?:test|spec)\.(?:[cm]?js|tsx?)) > .+$/;
+const path = require("node:path");
 
 function byFile(ids) {
   const counts = {};
@@ -91,6 +92,44 @@ function parseVitestList(raw) {
   return { ok: true, total: files.length, by_file: byFile(files) };
 }
 
+/**
+ * Отчёт `vitest run --reporter=json`.
+ *
+ * `vitest list` в v5 печатает `it.each` одной строкой с неразвёрнутым `%s`
+ * и склеивает одинаковые заголовки, поэтому число тестов по файлу занижается
+ * (в `taskStatus.test.ts` 34 вместо 59). JSON-репорт запуска содержит
+ * `assertionResults` на каждый развёрнутый кейс — по нему счётчик совпадает
+ * с фактическим прогоном. Цена — тесты реально выполняются, зато рэтчет
+ * видит каждый тест, а не первый из таблицы.
+ */
+function parseVitestJson(raw, cwd = process.cwd()) {
+  let report;
+  try {
+    report = JSON.parse(raw);
+  } catch (error) {
+    return { ok: false, reason: `JSON vitest не разобран: ${error.message}`, anomalies: [] };
+  }
+  if (!report || !Array.isArray(report.testResults) || typeof report.numTotalTests !== "number") {
+    return { ok: false, reason: "JSON vitest без testResults/numTotalTests — формат не тот", anomalies: [] };
+  }
+  const files = [];
+  for (const suite of report.testResults) {
+    const rel = path.relative(cwd, suite.name).split(path.sep).join("/");
+    for (const _ of suite.assertionResults || []) files.push(rel);
+  }
+  if (files.length !== report.numTotalTests) {
+    return {
+      ok: false,
+      reason: `итог говорит ${report.numTotalTests}, assertionResults ${files.length}`,
+      anomalies: [],
+    };
+  }
+  if (!files.length) {
+    return { ok: false, reason: "vitest не выдал ни одного теста — это не «ноль тестов», а сломанный сбор", anomalies: [] };
+  }
+  return { ok: true, total: files.length, by_file: byFile(files) };
+}
+
 /** Только уменьшения: файл стал короче или исчез совсем. Рост — не находка. */
 function findReductions(baseline, current) {
   const lost = [];
@@ -129,4 +168,4 @@ function evaluateStored(stored, current) {
   };
 }
 
-module.exports = { parsePytestCollect, parseVitestList, findReductions, formatReductions, evaluateStored };
+module.exports = { parsePytestCollect, parseVitestList, parseVitestJson, findReductions, formatReductions, evaluateStored };
