@@ -327,6 +327,15 @@ def _backup_file_path(filename: str) -> Path:
         or Path(filename).name != filename
     ):
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Бэкап не найден")
+    # Второй рубеж — уже разрешённый путь: имя без разделителей может быть
+    # симлинком (или junction) на файл вне каталога бэкапов.
+    root = BACKUPS_DIR.resolve()
+    try:
+        (root / filename).resolve().relative_to(root)
+    except ValueError:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND, detail="Бэкап не найден"
+        ) from None
     return BACKUPS_DIR / filename
 
 

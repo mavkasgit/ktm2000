@@ -30,9 +30,15 @@ def backups_dir(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Path:
         "",
         "../secret.txt",
         "..\\secret.txt",
+        "..\\..\\secret.txt",
         "sub/backup.zip",
         "sub\\backup.zip",
         "backup\x00.zip",
+        "C:\\Windows\\win.ini",
+        "C:/Windows/win.ini",
+        "\\\\server\\share\\secret.txt",
+        "%2e%2e/secret.txt",
+        "/etc/passwd",
     ],
 )
 def test_backup_file_path_rejects_escape(name: str) -> None:
@@ -57,3 +63,48 @@ async def test_download_does_not_read_outside_backups_dir(
 
     assert response.status_code == 404
     assert "top-secret" not in response.text
+
+
+def test_backup_file_path_rejects_symlink_escape(
+    backups_dir: Path, tmp_path: Path
+) -> None:
+    """Имя без разделителей, но симлинк внутри каталога ведёт наружу."""
+    outside = tmp_path / "outside-secret.txt"
+    outside.write_text("top-secret", encoding="utf-8")
+    link = backups_dir / "backup_link.zip"
+    try:
+        link.symlink_to(outside)
+    except (OSError, NotImplementedError):
+        pytest.skip("symlink creation is not permitted on this host")
+
+    with pytest.raises(HTTPException) as exc_info:
+        backups_api._backup_file_path(link.name)
+    assert exc_info.value.status_code == 404
+
+
+@pytest.mark.parametrize(
+    ("method", "path", "payload"),
+    [
+        ("GET", "/api/backups/..%5C..%5Csecret.txt/download", None),
+        ("PATCH", "/api/backups/..%5C..%5Csecret.txt/comment", {"comment": "x"}),
+        ("DELETE", "/api/backups/..%5C..%5Csecret.txt", None),
+        ("POST", "/api/backups/..%5C..%5Csecret.txt/preview", None),
+        ("POST", "/api/backups/..%5C..%5Csecret.txt/restore", {"db_name": "x"}),
+    ],
+)
+async def test_every_filename_endpoint_rejects_traversal(
+    client, backups_dir: Path, monkeypatch: pytest.MonkeyPatch,
+    method: str, path: str, payload: dict | None,
+) -> None:
+    """Ни одна ручка с ``{filename}`` не строит путь мимо helper'а."""
+    monkeypatch.setattr(backups_api, "_get_db_name", lambda: "x")
+    response = await client.request(method, path, json=payload)
+    assert response.status_code == 404, response.text
+
+
+async def test_bulk_delete_rejects_traversal(client, backups_dir: Path) -> None:
+    response = await client.post(
+        "/api/backups/bulk-delete",
+        json={"filenames": ["..\\..\\secret.txt"]},
+    )
+    assert response.status_code == 404, response.text
