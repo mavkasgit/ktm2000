@@ -152,7 +152,7 @@ jobs:
         if: steps.scope.outputs.relevant == 'true'
         shell: bash
         env:
-          KTM_PY_FALLBACK: '3.12'
+          KTM_PY_FALLBACK: '3.14.10'
           KTM_USE_NODE: 'no'
           KTM_USE_PY: 'yes'
         run: |

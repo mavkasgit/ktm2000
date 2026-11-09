@@ -95,7 +95,7 @@ jobs:
         id: toolchain
         shell: bash
         env:
-          KTM_NODE_FALLBACK: '22'
+          KTM_NODE_FALLBACK: '26.13.0'
           KTM_USE_NODE: 'yes'
           KTM_USE_PY: 'no'
         run: |

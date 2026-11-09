@@ -66,7 +66,7 @@ services:
       options:
         max-size: "20m"
         max-file: "3"
-    # Проба через urllib, а не curl: базовый образ python:3.12-slim-bookworm
+    # Проба через urllib, а не curl: базовый образ python:3.14-slim-bookworm
     # (backend/Dockerfile) curl не содержит, а python в нём есть всегда.
     healthcheck:
       test:

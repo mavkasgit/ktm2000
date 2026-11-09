@@ -5,7 +5,7 @@ Bootstrap-инструкции для AI-агентов. Детали — в `do
 ## Проект
 
 Локальная MES-система: планирование, shopfloor, stock ledger, импорт Excel.
-Стек: Python 3.12 / FastAPI / SQLAlchemy async / React 18.3 / PostgreSQL 15 (Docker).
+Стек: Python 3.14 / FastAPI / SQLAlchemy async / React 18.3 / PostgreSQL 15 (Docker).
 
 ## Команды (из корня)
 

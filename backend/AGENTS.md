@@ -1,6 +1,6 @@
 # Backend — KTM-2000
 
-FastAPI + SQLAlchemy async + Alembic. Python 3.12+.
+FastAPI + SQLAlchemy async + Alembic. Python 3.14+.
 
 ## Структура
 

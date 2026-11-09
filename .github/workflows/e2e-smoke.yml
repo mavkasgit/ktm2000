@@ -123,8 +123,8 @@ jobs:
         id: toolchain
         shell: bash
         env:
-          KTM_NODE_FALLBACK: '20'
-          KTM_PY_FALLBACK: '3.12'
+          KTM_NODE_FALLBACK: '26.13.0'
+          KTM_PY_FALLBACK: '3.14.10'
           KTM_USE_NODE: 'yes'
           KTM_USE_PY: 'yes'
         run: |

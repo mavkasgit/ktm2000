@@ -20,14 +20,14 @@
       "name": "Node.js",
       "repo": "nodejs/node",
       "category": "language",
-      "version": "24",
+      "version": "26.13.0",
       "pinned_in": "mise.toml",
       "runs_at": [
         "gate",
         "ci"
       ],
       "blocking": true,
-      "last_reviewed": "2026-11-03",
+      "last_reviewed": "2026-11-09",
       "rationale": "Источником версии стал mise.toml/mise.lock (#391). Поток: шаг 3 переводит CI на mise, шаг 5 удаляет .nvmrc — до сих пор .nvmrc остаётся совместимым дублем."
     },
     {
@@ -35,14 +35,14 @@
       "name": "Python",
       "repo": "python/cpython",
       "category": "language",
-      "version": "3.12",
+      "version": "3.14.10",
       "pinned_in": "mise.toml",
       "runs_at": [
         "gate",
         "ci"
       ],
       "blocking": true,
-      "last_reviewed": "2026-11-03",
+      "last_reviewed": "2026-11-09",
       "rationale": "Источником версии стал mise.toml/mise.lock (#391); venv привязан через [env] _.python.venv. Поток: шаг 3 переводит CI на mise, шаг 5 удаляет .python-version — до сих пор он остаётся совместимым дублем."
     },
     {
@@ -50,14 +50,14 @@
       "name": "npm",
       "repo": "npm/cli",
       "category": "dev-tool",
-      "version": ">=10",
+      "version": ">=11",
       "pinned_in": "package.json",
       "runs_at": [
         "gate",
         "ci"
       ],
       "blocking": true,
-      "last_reviewed": "2026-11-03",
+      "last_reviewed": "2026-11-09",
       "rationale": "Все точки входа — npm-скрипты; минимальную версию задаёт engines в корневом package.json."
     },
     {
