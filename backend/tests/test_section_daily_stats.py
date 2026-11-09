@@ -141,3 +141,68 @@ async def test_daily_stats_treats_naive_client_input_as_utc(auth_client, monkeyp
     assert captured["date_from"].utcoffset() == timedelta(hours=5)
     assert captured["date_from"].hour == 10
     assert captured["date_to"].utcoffset() == timedelta(hours=5)
+
+
+@pytest.mark.asyncio
+async def test_daily_stats_ignores_reversal_compensation(session) -> None:
+    """Компенсация отката — не новая операция дня.
+
+    SCRAP идёт из участка в SCRAP-секцию; компенсация зеркалит проводку и
+    приходит обратно на участок. Без фильтра `reverses_id IS NULL` она
+    попадала бы в приход дня как «забраковано». Историческая статистика
+    считает только исходные операции.
+    """
+    product = Product(sku="DST-REV-1", name="Daily stats reverse", type=ProductType.finished_good)
+    production = Section(code="DST-REV-PROD", name="Производство")
+    scrap = Section(code="DST-REV-SCRAP", name="Брак")
+    session.add_all([product, production, scrap])
+    await session.flush()
+
+    user_id = await session.scalar(select(User.id).where(User.username == "system"))
+    now = datetime.now(UTC)
+    original = StockTransaction(
+        product_id=product.id,
+        from_location_id=production.id,
+        to_location_id=scrap.id,
+        quantity=Decimal(3),
+        reason=Reason.SCRAP,
+        created_at=now,
+        created_by=user_id,
+    )
+    session.add(original)
+    await session.flush()
+    session.add(
+        StockTransaction(
+            product_id=product.id,
+            from_location_id=scrap.id,
+            to_location_id=production.id,
+            quantity=Decimal(3),
+            reason=Reason.SCRAP,
+            created_at=now,
+            created_by=user_id,
+            reverses_id=original.id,
+        )
+    )
+    await session.commit()
+
+    async def stats_for(section_id: int) -> dict:
+        data = await get_section_daily_stats(
+            session,
+            section_id=section_id,
+            date_from=now - timedelta(days=1),
+            date_to=now + timedelta(days=1),
+        )
+        # Участок без исходных операций строки не получает — это не ошибка.
+        return next(
+            iter(data["daily_stats"]),
+            {"op_count": 0, "rejected_quantity": "0"},
+        )
+
+    production_day = await stats_for(production.id)
+    assert production_day["op_count"] == 0, "компенсация посчитана операцией дня"
+    assert Decimal(production_day["rejected_quantity"]) == Decimal(0)
+
+    # Исходный SCRAP остаётся историческим фактом дня для SCRAP-секции.
+    scrap_day = await stats_for(scrap.id)
+    assert scrap_day["op_count"] == 1
+    assert Decimal(scrap_day["rejected_quantity"]) == Decimal(3)
