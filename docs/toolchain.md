@@ -36,7 +36,7 @@
 | `mise` | mise-en-place (jdx/mise) | `mise.toml` | `2026.10.12` | manual | нет | 2026-11-03 |
 | `node` | Node.js (nodejs/node) | `mise.toml` | `24` | gate, ci | да | 2026-11-03 |
 | `npm` | npm (npm/cli) | `package.json` | `>=10` | gate, ci | да | 2026-11-03 |
-| `playwright` | Playwright (microsoft/playwright) | `frontend/package.json` | `^1.60.0` | gate, ci | да | 2026-11-03 |
+| `playwright` | Playwright (microsoft/playwright) | `frontend/package.json` | `^1.65.0` | gate, ci | да | 2026-11-09 |
 | `postgres` | PostgreSQL (postgres/postgres) | `infra/compose` | `15-alpine` | gate, ci, manual | да | 2026-11-03 |
 | `pytest` | pytest (pytest-dev/pytest) | `backend/requirements-dev.txt` | `9.1.1` | gate, ci | да | 2026-11-03 |
 | `pytest-asyncio` | pytest-asyncio (pytest-dev/pytest-asyncio) | `backend/requirements-dev.txt` | `1.4.0` | gate, ci | да | 2026-11-03 |

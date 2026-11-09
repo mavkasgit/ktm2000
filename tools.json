@@ -1,5 +1,5 @@
 {
-  "updated": "2026-11-03",
+  "updated": "2026-11-09",
   "tools": [
     {
       "id": "mise",
@@ -158,14 +158,14 @@
       "name": "Playwright",
       "repo": "microsoft/playwright",
       "category": "e2e",
-      "version": "^1.60.0",
+      "version": "^1.65.0",
       "pinned_in": "frontend/package.json",
       "runs_at": [
         "gate",
         "ci"
       ],
       "blocking": true,
-      "last_reviewed": "2026-11-03",
+      "last_reviewed": "2026-11-09",
       "rationale": "E2E-канон; отдельный ярус gate:e2e, потому что прогон берёт слот семафора и свой клон БД.",
       "npm_package": "@playwright/test"
     },
