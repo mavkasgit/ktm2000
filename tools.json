@@ -80,13 +80,13 @@
       "name": "coverage.py",
       "repo": "coveragepy/coveragepy",
       "category": "coverage",
-      "version": "7.16.2",
+      "version": "7.17.2",
       "pinned_in": "backend/requirements-dev.txt",
       "runs_at": [
         "ci"
       ],
       "blocking": true,
-      "last_reviewed": "2026-11-03",
+      "last_reviewed": "2026-11-09",
       "rationale": "Порог coverage --fail-under=73 краснеет только в CI, но версия часть замера: бейзлайн снят именно на 7.16.2."
     },
     {
@@ -174,14 +174,14 @@
       "name": "pytest",
       "repo": "pytest-dev/pytest",
       "category": "test-runner",
-      "version": "9.1.1",
+      "version": "9.2.0",
       "pinned_in": "backend/requirements-dev.txt",
       "runs_at": [
         "gate",
         "ci"
       ],
       "blocking": true,
-      "last_reviewed": "2026-11-03",
+      "last_reviewed": "2026-11-09",
       "rationale": "Канон backend-тестов; в requirements.txt остаётся нижняя граница, точный пин — в dev-слое (#377)."
     },
     {
@@ -204,14 +204,14 @@
       "name": "pytest-asyncio",
       "repo": "pytest-dev/pytest-asyncio",
       "category": "test-runner",
-      "version": "1.4.0",
+      "version": "1.4.1.post1",
       "pinned_in": "backend/requirements-dev.txt",
       "runs_at": [
         "gate",
         "ci"
       ],
       "blocking": true,
-      "last_reviewed": "2026-11-03",
+      "last_reviewed": "2026-11-09",
       "rationale": "Все async-тесты backend идут через него; версия закреплена в dev-слое."
     },
     {
@@ -219,13 +219,13 @@
       "name": "pytest-testmon",
       "repo": "tarpas/pytest-testmon",
       "category": "test-runner",
-      "version": "2.2.0",
+      "version": "2.3.0",
       "pinned_in": "backend/requirements-dev.txt",
       "runs_at": [
         "manual"
       ],
       "blocking": false,
-      "last_reviewed": "2026-11-03",
+      "last_reviewed": "2026-11-09",
       "rationale": "Только test:pytest:mon (--testmon); в гейте и CI не участвует."
     },
     {

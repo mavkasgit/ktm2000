@@ -30,7 +30,7 @@
 | `ajv` | Ajv (ajv-validator/ajv) | `package.json` | `^8.20.0` | gate, ci | да | 2026-11-03 |
 | `alembic` | Alembic (sqlalchemy-org/alembic) | `backend/requirements.txt` | `>=1.13.0` | ci, manual | да | 2026-11-03 |
 | `concurrently` | concurrently (open-cli-tools/concurrently) | `package.json` | `^10.0.7` | manual | нет | 2026-11-09 |
-| `coverage` | coverage.py (coveragepy/coveragepy) | `backend/requirements-dev.txt` | `7.16.2` | ci | да | 2026-11-03 |
+| `coverage` | coverage.py (coveragepy/coveragepy) | `backend/requirements-dev.txt` | `7.17.2` | ci | да | 2026-11-09 |
 | `eslint` | ESLint (eslint/eslint) | `frontend/package.json` | `^9.39.5` | gate, ci | да | 2026-11-03 |
 | `lefthook` | Lefthook (evilmartians/lefthook) | `package.json` | `2.2.2` | commit, push | да | 2026-11-03 |
 | `mise` | mise-en-place (jdx/mise) | `mise.toml` | `2026.10.12` | manual | нет | 2026-11-03 |
@@ -38,9 +38,9 @@
 | `npm` | npm (npm/cli) | `package.json` | `>=11` | gate, ci | да | 2026-11-09 |
 | `playwright` | Playwright (microsoft/playwright) | `frontend/package.json` | `^1.65.0` | gate, ci | да | 2026-11-09 |
 | `postgres` | PostgreSQL (postgres/postgres) | `infra/compose` | `15-alpine` | gate, ci, manual | да | 2026-11-03 |
-| `pytest` | pytest (pytest-dev/pytest) | `backend/requirements-dev.txt` | `9.1.1` | gate, ci | да | 2026-11-03 |
-| `pytest-asyncio` | pytest-asyncio (pytest-dev/pytest-asyncio) | `backend/requirements-dev.txt` | `1.4.0` | gate, ci | да | 2026-11-03 |
-| `pytest-testmon` | pytest-testmon (tarpas/pytest-testmon) | `backend/requirements-dev.txt` | `2.2.0` | manual | нет | 2026-11-03 |
+| `pytest` | pytest (pytest-dev/pytest) | `backend/requirements-dev.txt` | `9.2.0` | gate, ci | да | 2026-11-09 |
+| `pytest-asyncio` | pytest-asyncio (pytest-dev/pytest-asyncio) | `backend/requirements-dev.txt` | `1.4.1.post1` | gate, ci | да | 2026-11-09 |
+| `pytest-testmon` | pytest-testmon (tarpas/pytest-testmon) | `backend/requirements-dev.txt` | `2.3.0` | manual | нет | 2026-11-09 |
 | `pytest-xdist` | pytest-xdist (pytest-dev/pytest-xdist) | `backend/requirements-dev.txt` | `3.8.0` | gate, ci | да | 2026-11-03 |
 | `python` | Python (python/cpython) | `mise.toml` | `3.14.10` | gate, ci | да | 2026-11-09 |
 | `ruff` | Ruff (astral-sh/ruff) | `backend/requirements-dev.txt` | `0.16.9` | gate, ci | да | 2026-11-03 |

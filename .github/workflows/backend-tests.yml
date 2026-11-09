@@ -7,14 +7,14 @@ name: Backend tests
 
 # Полный pytest-набор backend с coverage-гейтом на push/PR.
 # Решения грилла #245: Q1=2 (блокирует PR), Q13=а (гейт backend на 73%),
-# Q21 (coverage==7.16.2 отдельным pip install, requirements/Docker не трогаем),
+# Q21 (coverage==7.17.2 отдельным pip install, requirements/Docker не трогаем),
 # Q23=а (один джоб вместо двух).
 #
 # Прогон серийный, без xdist: под -n воркеры остаются вне замера coverage
 # (controller меряет только главный процесс) и гейт упал бы на ровном месте.
 # -p no:pytest-testmon — testmon не должен пропускать тесты в CI; блокируется
 # по имени entry point (pytest-testmon), а не по имени модуля testmon.
-# Пин 7.16.2 — на нём снят бейзлайн 73% (docs/night/BASELINE.md). Если цифра
+# Пин 7.17.2 — patch-обновление к бейзлайну 73% (docs/night/BASELINE.md). Если цифра
 # в CI разойдётся с локальной — сначала разобраться почему, порог не подгонять.
 # Гейт: coverage сравнивает round(total, 0) < fail_under (precision=0 — дефолт,
 # --precision не задан), поэтому реально проходит любой итог >72.5% (72.6
@@ -194,7 +194,7 @@ jobs:
         if: steps.scope.outputs.relevant == 'true'
         run: |
           pip install -r backend/requirements.txt
-          pip install coverage==7.16.2
+          pip install coverage==7.17.2
 
       # Рэтчет числа тестов (#358) — до прогона: если набор стал меньше
       # записанного, падать должен именно этот шаг, а не «pytest прошёл быстрее».
