@@ -61,3 +61,21 @@ def test_read_only_post_allowlist_keeps_reader_roles() -> None:
     guards = _mutating_guards()
     for key in READ_ONLY_POSTS:
         assert guards[key] == frozenset(READER_ROLES), key
+
+
+# Точечное исключение из общего правила: эти ручки закрыты не только для
+# viewer, но и для transporter. Передачи и «взять в работу» transporter
+# открыты намеренно, поэтому общий тест выше проверяет только viewer.
+SECTION_OPERATION_ROUTES = {
+    ("POST", "/api/shopfloor/sections/{section_id}/operations"),
+    ("PATCH", "/api/shopfloor/sections/{section_id}/operations/{op_id}"),
+    ("DELETE", "/api/shopfloor/sections/{section_id}/operations/{op_id}"),
+}
+
+
+def test_section_operations_are_not_open_to_transporter() -> None:
+    guards = _mutating_guards()
+
+    for key in SECTION_OPERATION_ROUTES:
+        assert key in guards, f"ручка исчезла или переименована: {key}"
+        assert "transporter" not in {role.value for role in guards[key]}, key
