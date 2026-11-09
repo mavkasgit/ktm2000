@@ -7,11 +7,42 @@
 
 from __future__ import annotations
 
+import subprocess
+import sys
 from pathlib import Path
 
 import pytest
 from app.api import backups as backups_api
 from fastapi import HTTPException
+
+
+def _make_escape_link(link: Path, target: Path) -> None:
+    """Создаёт ссылку с ``link`` на каталог ``target`` (вне ``BACKUPS_DIR``).
+
+    На POSIX — обычный symlink. На Windows symlink требует Developer Mode или
+    права администратора, поэтому используется junction: он создаётся без
+    привилегий и так же разрешается ``Path.resolve()`` — проверяется тот же
+    второй рубеж хелпера, без платформенного skip.
+    """
+    try:
+        link.symlink_to(target, target_is_directory=True)
+        return
+    except OSError as exc:
+        if sys.platform != "win32":
+            pytest.skip(f"symlink creation is not permitted on this host: {exc}")
+        symlink_error = exc
+
+    completed = subprocess.run(
+        ["cmd", "/c", "mklink", "/J", str(link), str(target)],
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+    if completed.returncode != 0:
+        pytest.skip(
+            "neither symlink nor junction creation is permitted on this host: "
+            f"symlink={symlink_error}; junction={completed.stderr or completed.stdout}"
+        )
 
 
 @pytest.fixture
@@ -68,14 +99,16 @@ async def test_download_does_not_read_outside_backups_dir(
 def test_backup_file_path_rejects_symlink_escape(
     backups_dir: Path, tmp_path: Path
 ) -> None:
-    """Имя без разделителей, но симлинк внутри каталога ведёт наружу."""
-    outside = tmp_path / "outside-secret.txt"
-    outside.write_text("top-secret", encoding="utf-8")
+    """Имя без разделителей, но ссылка внутри каталога ведёт наружу.
+
+    Windows без Developer Mode не даёт создать symlink — там ссылка строится
+    junction'ом (``_make_escape_link``), и кейс всё равно выполняется.
+    """
+    outside = tmp_path / "outside"
+    outside.mkdir()
+    (outside / "secret.txt").write_text("top-secret", encoding="utf-8")
     link = backups_dir / "backup_link.zip"
-    try:
-        link.symlink_to(outside)
-    except (OSError, NotImplementedError):
-        pytest.skip("symlink creation is not permitted on this host")
+    _make_escape_link(link, outside)
 
     with pytest.raises(HTTPException) as exc_info:
         backups_api._backup_file_path(link.name)
