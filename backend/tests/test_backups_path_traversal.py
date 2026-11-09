@@ -86,6 +86,7 @@ def test_backup_file_path_rejects_symlink_escape(
     ("method", "path", "payload"),
     [
         ("GET", "/api/backups/..%5C..%5Csecret.txt/download", None),
+        ("GET", "/api/backups/%2e%2e%2fsecret.txt/download", None),
         ("PATCH", "/api/backups/..%5C..%5Csecret.txt/comment", {"comment": "x"}),
         ("DELETE", "/api/backups/..%5C..%5Csecret.txt", None),
         ("POST", "/api/backups/..%5C..%5Csecret.txt/preview", None),
