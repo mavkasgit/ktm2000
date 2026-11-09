@@ -417,11 +417,17 @@ export function BackupsPage() {
 
   const toggleAll = () => {
     if (!displayedBackups) return
-    if (selectedFilenames.size === displayedBackups.length) {
-      setSelectedFilenames(new Set())
+    // Выбор живёт между страницами и фильтрами, а «все» — это все строки
+    // текущей страницы. Иначе при двух полных страницах чекбокс второй
+    // страницы выглядел отмеченным и снимал чужой выбор вместо своего.
+    const pageFilenames = displayedBackups.map((b) => b.filename)
+    const next = new Set(selectedFilenames)
+    if (pageFilenames.every((filename) => next.has(filename))) {
+      pageFilenames.forEach((filename) => next.delete(filename))
     } else {
-      setSelectedFilenames(new Set(displayedBackups.map((b) => b.filename)))
+      pageFilenames.forEach((filename) => next.add(filename))
     }
+    setSelectedFilenames(next)
   }
 
   const startDelete = (filename: string) => {
@@ -523,7 +529,10 @@ export function BackupsPage() {
     }
   }
 
-  const allSelected = Boolean(displayedBackups.length > 0 && selectedFilenames.size === displayedBackups.length)
+  const allSelected = Boolean(
+    displayedBackups.length > 0 &&
+      displayedBackups.every((backup) => selectedFilenames.has(backup.filename)),
+  )
 
   return (
     <div className="space-y-6">

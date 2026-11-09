@@ -81,6 +81,7 @@ from app.stock.models import QualityState, Reason, StockTransaction
 from app.stock.services import (
     StockCommand,
     StockCommandService,
+    StockProjectionManager,
     dimensions_match_clause,
 )
 from app.transfers.transferable import task_transferable
@@ -977,6 +978,19 @@ async def auto_create_transfer_after_complete(
         else {}
     )
 
+    # Первый трансформирующий этап маршрута. После него количества живут по
+    # размерам выходов, а не по плану этапа: план приёмного задания там равен
+    # фактически принятому, а не агрегату release_quantity.
+    first_transform_sequence = min(
+        (
+            line.sequence
+            for line in position_lines
+            if (stage := stages_by_id.get(line.route_stage_id)) is not None
+            and stage.transforms_dimensions
+        ),
+        default=None,
+    )
+
     # Секция шага: у транзитного хопа материал лежит на складе хопа, а не на
     # секции этапа (у транзита section_id пуст).
     section_ids = {
@@ -1102,8 +1116,25 @@ async def auto_create_transfer_after_complete(
             if result.get("to_task_id") is not None:
                 receiving_task = await db.get(WorkTask, int(result["to_task_id"]))
                 if receiving_task is not None:
-                    receiving_task.planned_quantity = qty
-                    await db.flush()
+                    # После трансформирующего этапа план приёмного задания —
+                    # это фактически принятое по размеру, а не агрегат
+                    # release_quantity, с которым его создал план: иначе
+                    # задача на выход 2700 несла бы план всего входа (100)
+                    # вместо своих 20. До трансформации план не трогаем —
+                    # `transfer_send` уже расширяет его при перевыпуске, а
+                    # замена на количество куска занижала бы план при
+                    # завершении частями (50 из 100).
+                    if (
+                        first_transform_sequence is not None
+                        and next_line.sequence > first_transform_sequence
+                    ):
+                        received = (
+                            await StockProjectionManager().get_task_cache(
+                                db, receiving_task.id
+                            )
+                        )["received_quantity"]
+                        receiving_task.planned_quantity = received
+                        await db.flush()
                     # Приёмная задача видна следующим парам/шагам так же, как
                     # её увидел бы точечный SELECT: задача, созданная текущей
                     # передачей, в снимок не попадала.

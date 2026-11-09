@@ -26,7 +26,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.models.work_task import WorkTask
 from app.stock import Reason
-from app.stock.ledger import net_by_reason
+from app.stock.ledger import net_by_reason, net_quantity_expr
 from app.stock.models import StockTransaction
 from app.stock.services import _dimensions_hash_key, dimensions_match_clause
 from app.transfers import budget as transfer_budget
@@ -46,7 +46,7 @@ async def remaining_send(
     (задача, размер); ``produced`` — фактически произведённое по размеру:
     для трансформации — прогресс выходов (закаплен на уровне
     ``build_outputs_progress``), для обычного задания (габарит по умолчанию —
-    ``task.dimensions``) — gross COMPLETE.
+    ``task.dimensions``) — net COMPLETE.
     """
     stage = await _get_route_stage(db, task.route_stage_id)
     spec = resolve_transform_spec(task, stage)
@@ -62,7 +62,7 @@ async def remaining_send(
         eff_dims = eff_dims if eff_dims is not None else task.dimensions
         produced = (
             await db.scalar(
-                select(func.coalesce(func.sum(StockTransaction.quantity), 0))
+                select(func.coalesce(func.sum(net_quantity_expr()), 0))
                 .where(
                     StockTransaction.task_id == task.id,
                     StockTransaction.reason == Reason.COMPLETE,

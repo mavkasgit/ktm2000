@@ -7,6 +7,7 @@ import { Button, Select, SelectContent, SelectItem, SelectTrigger, SelectValue, 
 import { buildActiveFilterSummary } from "@/shared/ui/buildActiveFilterSummary"
 import { usePaginatedTableQuery } from "@/shared/hooks/usePaginatedTableQuery"
 import { useFilterableTable } from "@/shared/hooks/useFilterableTable"
+import { isAnyDialogOpen } from "@/shared/lib/dialogOpen"
 import { buildColumnFilterPredicate, buildColumnFilterValues } from "@/shared/lib/columnSpecs"
 import { getAriaSort } from "@/shared/lib/multiSort"
 import { toast } from "@/shared/ui"
@@ -236,10 +237,14 @@ export function PlanPage() {
   useEffect(() => {
     if (!bulkMode) return
     const handler = (e: KeyboardEvent) => {
-      if (e.key === "Escape") exitBulkMode()
+      // Escape внутри модального окна закрывает окно, а не выходит из
+      // массового режима: Radix не останавливает всплытие клавиши.
+      if (e.key === "Escape" && !isAnyDialogOpen()) exitBulkMode()
     }
-    window.addEventListener("keydown", handler)
-    return () => window.removeEventListener("keydown", handler)
+    // Capture-фаза: окно Radix закрывается своим обработчиком на document,
+    // и в bubble-фазе DOM уже мог не содержать `data-state="open"`.
+    window.addEventListener("keydown", handler, true)
+    return () => window.removeEventListener("keydown", handler, true)
   }, [bulkMode, exitBulkMode])
 
   const canApprovePosition = (pos: PlanPositionOut) =>

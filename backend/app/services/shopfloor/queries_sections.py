@@ -531,6 +531,12 @@ async def get_section_daily_stats(
                 StockTransaction.to_location_id == section_id,
                 StockTransaction.created_at >= date_from,
                 StockTransaction.created_at <= date_to,
+                # Дневная статистика — историческая: считаем выполненные
+                # операции, а не текущий ledger. Компенсация отката зеркалит
+                # исходную проводку на противоположную сторону и без этого
+                # фильтра попадала бы в приход дня как новая операция
+                # (SCRAP после отката завершения — как «забраковано»).
+                StockTransaction.reverses_id.is_(None),
             )
             .group_by(
                 stat_date,

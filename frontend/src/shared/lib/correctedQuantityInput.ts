@@ -81,9 +81,17 @@ export function normalizeCorrectedQuantityInput(raw: string): NormalizedCorrecte
   if (value === "") return { value: "", number: null, issue: null };
 
   // Здесь value уже проверен findIssue: только цифры и не более одного
-  // разделителя, поэтому Number() даёт число, а не NaN.
+  // разделителя. Но одинокий разделитель («.»/«,») проходит проверку и даёт
+  // Number() === NaN — это не число, а недопустимый ввод.
   const normalized = value.replace(",", ".");
   const number = Number(normalized);
+  if (!Number.isFinite(number)) {
+    return {
+      value,
+      number: null,
+      issue: { kind: "non-numeric", text: CORRECTED_QUANTITY_ISSUE_TEXT["non-numeric"] },
+    };
+  }
   if (number === 0) {
     return { value, number: null, issue: { kind: "zero", text: CORRECTED_QUANTITY_ISSUE_TEXT.zero } };
   }

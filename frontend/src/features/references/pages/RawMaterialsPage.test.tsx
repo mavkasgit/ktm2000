@@ -7,6 +7,7 @@ vi.mock("@/shared/api/products", async (importOriginal) => ({
   ...(await importOriginal<typeof import("@/shared/api/products")>()),
   fetchAllProducts: vi.fn(),
   exportCatalogExcel: vi.fn(),
+  getProduct: vi.fn(),
   patchProduct: vi.fn(),
   listProductsPaginated: vi.fn(),
   listProductPairCatalog: vi.fn(),
@@ -43,6 +44,7 @@ import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import {
   exportCatalogExcel,
   fetchAllProducts,
+  getProduct,
   listProductPairCatalog,
   listProductPairs,
   listProductsPaginated,
@@ -226,6 +228,28 @@ describe("RawMaterialsPage: меню «Операции»", () => {
     // Страница отрисовалась (панель фильтров есть), но меню операций скрыто
     await screen.findByRole("button", { name: /Фильтры/ });
     expect(screen.queryByRole("button", { name: OPERATIONS })).toBeNull();
+  });
+});
+
+describe("RawMaterialsPage: чип алиаса", () => {
+  it("алиас вне видимой выдачи не открывает пустую форму, а сообщает об этом", async () => {
+    const current = product({ aliases: ["MISSING-SKU"] });
+    vi.mocked(fetchAllProducts).mockResolvedValue([current]);
+    vi.mocked(getProduct).mockResolvedValue(
+      product({ id: 99, sku: "MISSING-SKU" }),
+    );
+    renderPage();
+
+    await screen.findByRole("button", { name: "RAW-2700" });
+    fireEvent.click(screen.getByText("MISSING-SKU"));
+
+    await waitFor(() =>
+      expect(toast).toHaveBeenCalledWith(
+        expect.objectContaining({ title: "Артикул не найден: MISSING-SKU" }),
+      ),
+    );
+    // Регресс: `items.find(...)!` давал undefined и открывал пустую форму.
+    expect(getProduct).not.toHaveBeenCalled();
   });
 });
 

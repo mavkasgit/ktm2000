@@ -210,6 +210,87 @@ async def test_task_complete_reverse_mirrors_entries(session: AsyncSession) -> N
     )
     assert await _balance(session, scrap_loc, product_id) == Decimal(0)
 
+async def test_task_complete_reverse_nets_task_cache(session: AsyncSession) -> None:
+    """Откат завершения возвращает проекцию задания к состоянию до операции."""
+    from app.models.work_task import WorkTask
+    from app.stock.services import StockProjectionManager
+
+    fx = await _setup_minimal_route(session)
+    await _issue_material(session, fx)
+    task = await session.get(WorkTask, fx["task"].id)
+    status_before = task.status
+    cache_before = await StockProjectionManager().get_task_cache(session, task.id)
+
+    action = await _complete_task(session, fx, good=Decimal(7), scrap=Decimal(3))
+    preview = await reversal_service.preview_reverse(session, action.id)
+    await reversal_service.reverse(
+        session, action.id, plan_token=preview.plan_token, actor="tester"
+    )
+    await session.commit()
+
+    await session.refresh(task)
+    cache_after = await StockProjectionManager().get_task_cache(session, task.id)
+    assert cache_after["completed_quantity"] == cache_before["completed_quantity"]
+    assert cache_after["rejected_quantity"] == cache_before["rejected_quantity"]
+    # Терминальный `completed` после отката недопустим: задание снова можно
+    # завершать. Точный lower-переход статуса — отдельный вопрос, но не
+    # «осталось выполненным».
+    assert task.status.value != "completed"
+    assert status_before.value != "completed"
+
+
+async def test_cache_audit_finds_and_refreshes_gross_line_cache(
+    session: AsyncSession,
+) -> None:
+    """Аудит находит persisted gross-кэш после отката и чинит его production-кодом."""
+    from app.models.internal_plan import SectionPlanLine
+    from scripts.audit_section_plan_line_caches import (
+        find_stale_caches,
+        refresh_stale_caches,
+    )
+
+    fx = await _setup_minimal_route(session)
+    await _issue_material(session, fx)
+    action = await _complete_task(session, fx, good=Decimal(7), scrap=Decimal(3))
+    preview = await reversal_service.preview_reverse(session, action.id)
+    await reversal_service.reverse(
+        session, action.id, plan_token=preview.plan_token, actor="tester"
+    )
+    await session.commit()
+
+    line = await session.get(SectionPlanLine, fx["task"].section_plan_line_id)
+    assert line is not None
+    # Имитируем строку, посчитанную до перехода на net: gross COMPLETE/SCRAP.
+    line.cached_completed_quantity = Decimal(14)
+    line.cached_rejected_quantity = Decimal(6)
+    await session.commit()
+
+    stale = await find_stale_caches(session)
+    [item] = [row for row in stale if row.line_id == line.id]
+    assert item.net_completed == Decimal(0)
+    assert item.net_rejected == Decimal(0)
+    assert item.fields == "completed 14 -> 0, rejected 6 -> 0"
+
+    # Dry-run: поиск ничего не меняет. Без `--apply` скрипт останавливается
+    # здесь, поэтому это и есть проверка «read-only».
+    await session.refresh(line)
+    assert line.cached_completed_quantity == Decimal(14)
+    assert line.cached_rejected_quantity == Decimal(6)
+
+    await refresh_stale_caches(session, stale)
+    await session.refresh(line)
+    assert line.cached_completed_quantity == Decimal(0)
+    assert line.cached_rejected_quantity == Decimal(0)
+    assert await find_stale_caches(session) == []
+
+    # Идемпотентность: второй `--apply` на уже чистых данных ничего не делает.
+    await refresh_stale_caches(session, [])
+    await session.refresh(line)
+    assert line.cached_completed_quantity == Decimal(0)
+    assert line.cached_rejected_quantity == Decimal(0)
+    assert await find_stale_caches(session) == []
+
+
 async def test_reverse_restores_each_ops_group_separately(
     session: AsyncSession,
 ) -> None:

@@ -40,7 +40,7 @@ from app.domain.dimensions import (
 from app.models import Product, Section
 from app.models.work_task import WorkTask
 from app.services.route_storage_classifier import TERMINAL_TYPES
-from app.stock.ledger import net_by_reason_sq
+from app.stock.ledger import net_by_reason_sq, net_quantity_expr
 from app.stock.models import (
     QualityState,
     Reason,
@@ -487,11 +487,12 @@ class StockProjectionManager:
         line = await session.get(SectionPlanLine, task.section_plan_line_id)
         is_first_stage = (line is not None and line.sequence == 1)
 
-        # Один GROUP BY запрос
+        # Один GROUP BY запрос. Нетто: откат действия (компенсация с
+        # reverses_id) обязан снимать и COMPLETE/SCRAP, а не удваивать факт.
         rows = await session.execute(
             select(
                 StockTransaction.reason,
-                func.sum(StockTransaction.quantity).label("qty"),
+                func.sum(net_quantity_expr()).label("qty"),
             )
             .where(StockTransaction.task_id == task_id)
             .group_by(StockTransaction.reason)
@@ -625,12 +626,12 @@ class StockProjectionManager:
             )).scalars().all():
                 line_map[line.id] = line
 
-        # GROUP BY reason, task_id
+        # GROUP BY reason, task_id. Нетто — как в `_compute_task_cache`.
         rows = await session.execute(
             select(
                 StockTransaction.task_id,
                 StockTransaction.reason,
-                func.sum(StockTransaction.quantity).label("qty"),
+                func.sum(net_quantity_expr()).label("qty"),
             )
             .where(StockTransaction.task_id.in_(task_ids))
             .group_by(StockTransaction.task_id, StockTransaction.reason)

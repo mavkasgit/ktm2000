@@ -1018,12 +1018,14 @@ async def get_production_planning_row_detail(db: AsyncSession, position_id: int)
         )).all()
         spl_to_stage = {r.id: r.route_stage_id for r in spl_rows}
 
-        # StockTransaction sums GROUP BY task_id, reason
+        # StockTransaction net sums GROUP BY task_id, reason. Компенсация
+        # отката вычитается и для COMPLETE/SCRAP: иначе карточка показывала
+        # удвоенный факт, а кэш задания — уже нетто.
         tx_rows = (await db.execute(
             select(
                 StockTransaction.task_id,
                 StockTransaction.reason,
-                func.sum(StockTransaction.quantity).label("qty"),
+                func.sum(net_quantity_expr()).label("qty"),
             )
             .where(StockTransaction.task_id.in_([r.id for r in task_in_pos]))
             .group_by(StockTransaction.task_id, StockTransaction.reason)
@@ -1086,13 +1088,14 @@ async def get_production_planning_row_detail(db: AsyncSession, position_id: int)
             await db.execute(
                 select(
                     StockTransaction,
+                    net_quantity_expr().label("net_qty"),
                 )
                 .where(StockTransaction.task_id.in_(task_ids_in_pos))
                 .order_by(StockTransaction.created_at, StockTransaction.id)
             )
-        ).scalars().all()
+        ).all()
 
-        for tx in tx_rows:
+        for tx, net_qty in tx_rows:
             # Get stage_id from the task's section_plan_line_id
             spl_id = task_id_to_spl.get(tx.task_id)
             if spl_id is None:
@@ -1102,7 +1105,9 @@ async def get_production_planning_row_detail(db: AsyncSession, position_id: int)
                 continue
 
             reason_val = tx.reason.value if hasattr(tx.reason, "value") else str(tx.reason)
-            quantity = _to_float(tx.quantity)
+            # Нетто-количество строки из ledger-примитива: компенсация снимает
+            # факт исходной проводки, а не добавляет новый.
+            quantity = _to_float(net_qty)
             event_sort_dt = tx.created_at
             event_at_iso = tx.created_at.isoformat() if tx.created_at else None
 

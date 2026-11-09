@@ -849,20 +849,16 @@ async def list_products(
         stmt = stmt.where(Product.sku.ilike(f"%{sku}%"))
     if name:
         stmt = stmt.where(Product.name.ilike(f"%{name}%"))
-    if length_from is not None:
-        stmt = stmt.where(
-            exists().where(
-                ProductLength.product_id == Product.id,
-                ProductLength.length_mm >= length_from,
-            )
-        )
-    if length_to is not None:
-        stmt = stmt.where(
-            exists().where(
-                ProductLength.product_id == Product.id,
-                ProductLength.length_mm <= length_to,
-            )
-        )
+    if length_from is not None or length_to is not None:
+        # Одна строка длины должна попадать в диапазон целиком: два отдельных
+        # EXISTS могли выполниться на разных длинах артикула, и «есть длина
+        # 2000, есть 3000» отвечало на фильтр 2500±500.
+        length_conditions = [ProductLength.product_id == Product.id]
+        if length_from is not None:
+            length_conditions.append(ProductLength.length_mm >= length_from)
+        if length_to is not None:
+            length_conditions.append(ProductLength.length_mm <= length_to)
+        stmt = stmt.where(exists().where(*length_conditions))
     if qty_from is not None or qty_to is not None:
         qty_exists = _any_quantity_in_range(qty_from, qty_to)
         if qty_exists is not None:
@@ -1404,7 +1400,6 @@ async def upload_product_photo(
     kind: str = Query("full", pattern="^(full|thumb)$"),
     db: AsyncSession = Depends(get_db),
 ) -> ProductOut:
-    print(f"[DEBUG] upload_product_photo: product_id={product_id}, kind={kind}, filename={file.filename}")
     item = await db.get(Product, product_id)
     if item is None:
         raise HTTPException(status_code=404, detail="Артикул не найден")

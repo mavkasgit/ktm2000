@@ -704,7 +704,7 @@ export function RawMaterialsPage() {
                             <span
                               key={i}
                               className="inline-flex px-1.5 py-0.5 rounded border border-transparent text-xs cursor-pointer transition-colors hover:border-primary hover:bg-secondary"
-                              onClick={(e) => { e.stopPropagation(); openEdit(items.find(p => p.sku === alias)!); }}
+                              onClick={(e) => { e.stopPropagation(); void navigateToAlias(alias); }}
                               title="Перейти к профилю"
                             >
                               {alias}

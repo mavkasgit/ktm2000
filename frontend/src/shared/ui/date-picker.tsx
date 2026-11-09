@@ -2,6 +2,7 @@ import { useState, useEffect, useId } from "react"
 import { Calendar } from "lucide-react"
 import { Button } from "./button"
 import { Popover, PopoverTrigger, PopoverContent } from "./popover"
+import { parseRuDate } from "./date-range-presets"
 import { cn } from "@/shared/utils/cn"
 
 export interface DatePickerProps {
@@ -26,15 +27,6 @@ function formatDateForDisplay(isoDate: string): string {
   if (!isoDate) return ""
   const [year, month, day] = isoDate.split("-")
   return `${day}.${month}.${year}`
-}
-
-function formatDateForStorage(displayDate: string): string {
-  if (!displayDate) return ""
-  const parts = displayDate.split(".")
-  if (parts.length !== 3) return ""
-  const [day, month, year] = parts
-  if (day.length !== 2 || month.length !== 2 || year.length !== 4) return ""
-  return `${year}-${month}-${day}`
 }
 
 export function DatePicker({ value, onChange, label, placeholder, required = false, className, disabled = false, autoFocus = false }: DatePickerProps) {
@@ -75,7 +67,9 @@ export function DatePicker({ value, onChange, label, placeholder, required = fal
   const handleInputChange = (raw: string) => {
     const formatted = formatDisplayDate(raw)
     setInputValue(formatted)
-    const isoDate = formatDateForStorage(formatted)
+    // Та же проверка календарной даты, что у DateRangePicker: 31.02.2026 не
+    // должно уезжать на сервер как валидный ISO.
+    const isoDate = parseRuDate(formatted)
     if (isoDate) {
       onChange(isoDate)
     }

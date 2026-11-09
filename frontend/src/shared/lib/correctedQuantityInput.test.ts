@@ -66,6 +66,14 @@ describe("normalizeCorrectedQuantityInput", () => {
     expect(normalizeCorrectedQuantityInput("1,2,3").issue?.kind).toBe("decimal");
   });
 
+  it("одинокий разделитель — не число, а не NaN", () => {
+    for (const raw of [".", ",", " . "]) {
+      const result = normalizeCorrectedQuantityInput(raw);
+      expect(result.number).toBeNull();
+      expect(result.issue?.kind).toBe("non-numeric");
+    }
+  });
+
   it("более трёх знаков после запятой отклоняются: иначе Numeric(14,3) округлит молча", () => {
     expect(normalizeCorrectedQuantityInput("1.2345").issue?.kind).toBe("precision");
     expect(normalizeCorrectedQuantityInput("1.234").number).toBe(1.234);
