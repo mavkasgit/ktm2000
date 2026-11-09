@@ -269,8 +269,22 @@ async def test_cache_audit_finds_and_refreshes_gross_line_cache(
     [item] = [row for row in stale if row.line_id == line.id]
     assert item.net_completed == Decimal(0)
     assert item.net_rejected == Decimal(0)
+    assert item.fields == "completed 14 -> 0, rejected 6 -> 0"
+
+    # Dry-run: поиск ничего не меняет. Без `--apply` скрипт останавливается
+    # здесь, поэтому это и есть проверка «read-only».
+    await session.refresh(line)
+    assert line.cached_completed_quantity == Decimal(14)
+    assert line.cached_rejected_quantity == Decimal(6)
 
     await refresh_stale_caches(session, stale)
+    await session.refresh(line)
+    assert line.cached_completed_quantity == Decimal(0)
+    assert line.cached_rejected_quantity == Decimal(0)
+    assert await find_stale_caches(session) == []
+
+    # Идемпотентность: второй `--apply` на уже чистых данных ничего не делает.
+    await refresh_stale_caches(session, [])
     await session.refresh(line)
     assert line.cached_completed_quantity == Decimal(0)
     assert line.cached_rejected_quantity == Decimal(0)
