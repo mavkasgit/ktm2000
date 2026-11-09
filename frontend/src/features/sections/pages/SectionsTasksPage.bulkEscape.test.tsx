@@ -162,7 +162,7 @@ function renderPage() {
   );
   return render(
     <QueryClientProvider client={client}>
-      <RouterProvider router={router} future={{ v7_startTransition: true }} />
+      <RouterProvider router={router} />
     </QueryClientProvider>,
   );
 }

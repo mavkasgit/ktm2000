@@ -286,7 +286,7 @@ export interface MobileScrollTableProps extends React.HTMLAttributes<HTMLDivElem
    * Ref на скролл-контейнер. Тот же узел нужен виртуализации
    * (`VirtualizedTableBody`), поэтому ref приходит снаружи, а не живёт внутри.
    */
-  scrollRef?: React.RefObject<HTMLDivElement>;
+  scrollRef?: React.RefObject<HTMLDivElement | null>;
 }
 
 /**
