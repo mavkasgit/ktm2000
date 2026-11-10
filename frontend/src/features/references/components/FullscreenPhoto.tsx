@@ -1,5 +1,6 @@
 import React, { useEffect, useRef, useState } from "react";
-import { Plus, Minus, X, Maximize2 } from "lucide-react";
+import { Plus, Minus, X, Maximize2, Download, Copy, Check } from "lucide-react";
+import { copyPhoto, downloadPhoto } from "../lib/photoTransfer";
 
 export function FullscreenPhoto({
   src,
@@ -19,6 +20,42 @@ export function FullscreenPhoto({
   const translateStart = useRef({ x: 0, y: 0 });
   const clickStart = useRef({ x: 0, y: 0 });
   const hasDragged = useRef(false);
+  const [notice, setNotice] = useState<{ text: string; tone: "success" | "error" } | null>(null);
+  const [copied, setCopied] = useState(false);
+  const noticeTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const copiedTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
+
+  useEffect(() => () => {
+    if (noticeTimer.current) clearTimeout(noticeTimer.current);
+    if (copiedTimer.current) clearTimeout(copiedTimer.current);
+  }, []);
+
+  const showNotice = (text: string, tone: "success" | "error") => {
+    setNotice({ text, tone });
+    if (noticeTimer.current) clearTimeout(noticeTimer.current);
+    noticeTimer.current = setTimeout(() => setNotice(null), 4000);
+  };
+
+  const handleCopy = async () => {
+    try {
+      await copyPhoto(src, imageRef.current);
+      setCopied(true);
+      showNotice("Фото скопировано в буфер обмена", "success");
+      if (copiedTimer.current) clearTimeout(copiedTimer.current);
+      copiedTimer.current = setTimeout(() => setCopied(false), 2000);
+    } catch {
+      showNotice("Не удалось скопировать — скачайте файл", "error");
+    }
+  };
+
+  const handleDownload = async () => {
+    try {
+      const fileName = await downloadPhoto(src);
+      showNotice(`Файл ${fileName} сохранён`, "success");
+    } catch {
+      showNotice("Не удалось скачать фото", "error");
+    }
+  };
 
   useEffect(() => {
     const el = containerRef.current;
@@ -127,6 +164,24 @@ export function FullscreenPhoto({
         onDoubleClick={(e) => e.stopPropagation()}
       >
         <button
+          onClick={() => void handleCopy()}
+          className="p-2.5 bg-zinc-900/90 hover:bg-zinc-800 text-zinc-200 hover:text-white rounded-full border border-zinc-700/60 shadow-lg backdrop-blur-sm transition-all active:scale-95 duration-150"
+          type="button"
+          title="Копировать фото"
+          aria-label="Копировать фото"
+        >
+          {copied ? <Check className="w-5 h-5 text-green-400" /> : <Copy className="w-5 h-5" />}
+        </button>
+        <button
+          onClick={() => void handleDownload()}
+          className="p-2.5 bg-zinc-900/90 hover:bg-zinc-800 text-zinc-200 hover:text-white rounded-full border border-zinc-700/60 shadow-lg backdrop-blur-sm transition-all active:scale-95 duration-150"
+          type="button"
+          title="Скачать фото"
+          aria-label="Скачать фото"
+        >
+          <Download className="w-5 h-5" />
+        </button>
+        <button
           onClick={() => {
             const newScale = Math.min(10, scale * 1.5);
             const rect = containerRef.current?.getBoundingClientRect();
@@ -170,6 +225,17 @@ export function FullscreenPhoto({
           <X className="w-5 h-5" />
         </button>
       </div>
+
+      {notice && (
+        <div
+          role="status"
+          className={`absolute bottom-16 left-1/2 -translate-x-1/2 z-10 rounded-full px-4 py-2 text-sm text-white shadow-lg backdrop-blur-sm ${
+            notice.tone === "error" ? "bg-red-600/90" : "bg-green-600/90"
+          }`}
+        >
+          {notice.text}
+        </div>
+      )}
 
       <div className="absolute bottom-4 left-4 text-white/60 text-sm z-10 pointer-events-none">
         {Math.round(scale * 100)}% • ЛКМ: приблизить/перетащить • Колесико: зум • ПКМ: отдалить • Двойной клик: сброс
