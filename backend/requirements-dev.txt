@@ -41,6 +41,11 @@
 # «красный/зелёный» может разойтись с CI.
 ruff==0.16.9
 
+# Pillow — перекодирование фото в `scripts/sync-ekranchik.py`: в «Экранчике»
+# имена всегда `*.jpg`, а прод-хранилище KTM отдаёт и PNG. Без Pillow синк
+# останавливается до записи и просит поставить этот файл.
+pillow==13.0.0
+
 # Coverage-гейт CI (`backend tests`: `coverage run --source=app -m pytest`,
 # `coverage report --fail-under=73`). Пин = решётка #245 Q21: бейзлайн 73%
 # снят именно на 7.16.2 (docs/night/BASELINE.md), поэтому версия — часть
