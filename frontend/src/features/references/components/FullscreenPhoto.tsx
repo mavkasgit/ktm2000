@@ -65,9 +65,17 @@ export function FullscreenPhoto({
     const handleFullscreenChange = () => {
       if (!document.fullscreenElement) onClose();
     };
+    // Esc закрывает оверлей и без Fullscreen API: в киоске браузер может
+    // отказать в requestFullscreen, а выход из полноэкранного режима сам по
+    // себе приходит сюда же событием fullscreenchange.
+    const handleKeyDown = (event: KeyboardEvent) => {
+      if (event.key === "Escape") onClose();
+    };
     document.addEventListener("fullscreenchange", handleFullscreenChange);
+    window.addEventListener("keydown", handleKeyDown);
     return () => {
       document.removeEventListener("fullscreenchange", handleFullscreenChange);
+      window.removeEventListener("keydown", handleKeyDown);
       if (document.fullscreenElement) document.exitFullscreen().catch(() => {});
     };
   }, [onClose]);
@@ -209,7 +217,7 @@ export function FullscreenPhoto({
           onClick={handleDoubleClick}
           className="p-2.5 bg-zinc-900/90 hover:bg-zinc-800 text-zinc-200 hover:text-white rounded-full border border-zinc-700/60 shadow-lg backdrop-blur-sm transition-all active:scale-95 duration-150"
           type="button"
-          title="Сбросить (1:1)"
+          title="Сбросить масштаб"
         >
           <Maximize2 className="w-5 h-5" />
         </button>
@@ -246,7 +254,7 @@ export function FullscreenPhoto({
         src={src}
         alt={alt}
         draggable={false}
-        className="max-w-none transition-transform duration-75 ease-out"
+        className="max-h-full max-w-full object-contain transition-transform duration-75 ease-out"
         style={{
           transform: `translate(${translate.x}px, ${translate.y}px) scale(${scale})`,
           cursor: isDragging.current ? "grabbing" : scale > 1 ? "grab" : "zoom-in",

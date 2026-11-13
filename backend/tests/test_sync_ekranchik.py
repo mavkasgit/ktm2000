@@ -12,6 +12,7 @@ import sqlite3
 import sys
 from pathlib import Path
 
+import pytest
 from PIL import Image
 
 SCRIPT = Path(__file__).resolve().parents[2] / "scripts" / "sync-ekranchik.py"
@@ -35,16 +36,18 @@ def make_jpeg(path: Path, color: str = "blue") -> None:
         image.convert("RGB").save(path, format="JPEG")
 
 
-def make_db(path: Path) -> sqlite3.Connection:
+def make_db(path: Path, *, with_description: bool = True) -> sqlite3.Connection:
     conn = sqlite3.connect(path)
+    description = "description varchar(500)," if with_description else ""
     conn.executescript(
-        """
+        f"""
         create table profiles (
             id integer primary key,
             name varchar(255) unique not null,
             quantity_per_hanger integer,
             length float,
             notes text,
+            {description}
             photo_thumb varchar(500),
             photo_full varchar(500),
             usage_count integer default 0 not null,
@@ -56,25 +59,36 @@ def make_db(path: Path) -> sqlite3.Connection:
     return conn
 
 
-def product(photo_thumb: str = "", photo_full: str = "") -> dict:
+def product(
+    photo_thumb: str = "",
+    photo_full: str = "",
+    name: str = "Шланг X",
+    is_active: bool = True,
+) -> dict:
     return {
         "sku": "X",
+        "name": name,
         "mode": "auto",
         "qph": {"2000": {"auto": 10}},
         "aliases": [],
         "lengths": [{"length": 2000.0, "primary": True, "raw": None, "eff_raw": 2000.0}],
-        "is_active": True,
+        "is_active": is_active,
         "photo_thumb": photo_thumb,
         "photo_full": photo_full,
     }
 
 
-def profile(photo_thumb: str | None = None, photo_full: str | None = None) -> dict:
+def profile(
+    photo_thumb: str | None = None,
+    photo_full: str | None = None,
+    description: str | None = None,
+) -> dict:
     return {
         "id": 1,
         "name": "X",
         "n": 10,
         "length": 2000.0,
+        "description": description,
         "photo_thumb": photo_thumb,
         "photo_full": photo_full,
     }
@@ -263,3 +277,96 @@ def test_seed_manifest_records_existing_photos_without_rewriting(tmp_path: Path)
     assert target.read_bytes() == before
     saved = json.loads((tmp_path / sync.PHOTO_MANIFEST_NAME).read_text(encoding="utf-8"))
     assert saved["X|photo_full"]["sha256"] == sync.photo_source_version(source)["sha256"]
+
+
+def drift_fields(drift: list[dict]) -> list[str]:
+    return [item["field"] for item in drift]
+
+
+def test_plan_reports_description_drift_for_empty_and_changed(tmp_path: Path) -> None:
+    targets = sync.PhotoTargets(images_dir=tmp_path / "images", prod_storage=tmp_path / "storage")
+    products = [product(name="Шланг 2,7 м")]
+
+    empty, _skipped, creations = sync.compute_drift(products, [profile()], targets)
+    assert not creations
+    description = [item for item in empty if item["field"] == "description"]
+    assert len(description) == 1
+    assert description[0]["old"] is None
+    assert description[0]["new"] == "Шланг 2,7 м"
+    assert description[0]["reason"] == "наименование KTM изменилось"
+
+    changed, _skipped, _creations = sync.compute_drift(
+        products, [profile(description="Старое имя")], targets
+    )
+    description = [item for item in changed if item["field"] == "description"]
+    assert len(description) == 1
+    assert description[0]["old"] == "Старое имя"
+    assert description[0]["new"] == "Шланг 2,7 м"
+
+    same, _skipped, _creations = sync.compute_drift(
+        products, [profile(description="Шланг 2,7 м")], targets
+    )
+    assert "description" not in drift_fields(same)
+
+
+def test_apply_writes_description_and_keeps_notes_and_name(tmp_path: Path) -> None:
+    db_path = tmp_path / "ekranchik.db"
+    conn = make_db(db_path)
+    with conn:
+        conn.execute(
+            "insert into profiles (id, name, quantity_per_hanger, length, notes, description) "
+            "values (1, 'X', 10, 2000, 'Аналог-X', null)"
+        )
+    conn.close()
+    targets = sync.PhotoTargets(images_dir=tmp_path / "images", prod_storage=tmp_path / "storage")
+
+    drift, _skipped, _creations = sync.compute_drift([product(name="Шланг 2,7 м")], [profile()], targets)
+    result = sync.apply_drift(db_path, drift, [], targets)
+
+    assert result is not None
+    assert result["updated"] == 1
+    conn = sqlite3.connect(db_path)
+    try:
+        row = conn.execute("select description, notes, name from profiles where id = 1").fetchone()
+    finally:
+        conn.close()
+    assert row == ("Шланг 2,7 м", "Аналог-X", "X")
+
+
+def test_inactive_product_is_created_with_description(tmp_path: Path) -> None:
+    db_path = tmp_path / "ekranchik.db"
+    make_db(db_path).close()
+    targets = sync.PhotoTargets(images_dir=tmp_path / "images", prod_storage=tmp_path / "storage")
+
+    drift, skipped, creations = sync.compute_drift(
+        [product(name="Шланг 2,7 м", is_active=False)], [], targets
+    )
+
+    assert not drift
+    assert [item["name"] for item in skipped] == []
+    assert len(creations) == 1
+    assert creations[0]["description"] == "Шланг 2,7 м"
+
+    result = sync.apply_drift(db_path, drift, creations, targets)
+
+    assert result is not None
+    assert result["created"] == 1
+    conn = sqlite3.connect(db_path)
+    try:
+        row = conn.execute("select name, description from profiles").fetchone()
+    finally:
+        conn.close()
+    assert row == ("X", "Шланг 2,7 м")
+
+
+def test_missing_description_column_is_a_clear_error(tmp_path: Path) -> None:
+    db_path = tmp_path / "ekranchik.db"
+    make_db(db_path, with_description=False).close()
+
+    with pytest.raises(RuntimeError, match="description"):
+        sync.read_ekr(db_path)
+
+    targets = sync.PhotoTargets(images_dir=tmp_path / "images", prod_storage=tmp_path / "storage")
+    with pytest.raises(RuntimeError, match="description"):
+        sync.apply_drift(db_path, [], [], targets)
+

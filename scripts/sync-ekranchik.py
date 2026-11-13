@@ -4,11 +4,13 @@
 Прод — источник правды. Скрипт доводит до него два адресата:
 
 * **«Экранчик»** (``ekranchik.db``, таблица ``profiles``) — весь каталог:
-  ``length`` (совпала с любой нормальной или сырьевой длиной KTM ±1 мм;
-  иначе — основная длина KTM) и ``quantity_per_hanger`` (норма этой длины по
-  ``hanger_mode``: manual → ``manual``, auto → ``auto``). Артикула нет в
-  Экранчике — профиль **создаётся**: имя — код артикула KTM, длина — основная,
-  норма — по режиму подвеса.
+  ``description`` (наименование артикула из KTM), ``length`` (совпала с любой
+  нормальной или сырьевой длиной KTM ±1 мм; иначе — основная длина KTM) и
+  ``quantity_per_hanger`` (норма этой длины по ``hanger_mode``: manual →
+  ``manual``, auto → ``auto``). Артикула нет в Экранчике — профиль
+  **создаётся**: имя — код артикула KTM, наименование — ``products.name``,
+  длина — основная, норма — по режиму подвеса. Каталог «Экранчика» — витрина:
+  активность KTM не фильтр, профиль создаётся для любого артикула.
 * **Фото «Экранчика»** лежат в ``static/images``. Прод — источник правды,
   поэтому фото не только заполняются в пустых полях, но и **обновляются**,
   когда меняется исходный файл KTM. Признак «фото уже это» — манифест
@@ -21,7 +23,7 @@
 * **Удаление профилей** по умолчанию не делается: карточка, которой нет в
   KTM, печатается как расхождение ``product``. Явный ``--prune-orphans``
   вместе с ``--apply`` удаляет такие профили и их файлы фото (после бэкапа).
-  Пометки («Аналог-…») и имена существующих профилей не трогаются.
+  Примечания («Аналог-…») и имена существующих профилей не трогаются.
 
 * **dev-стенд** — БД целиком и storage (``products`` + ``imports``). Dev по
   определению копия прода, поэтому переносится всё, а не только каталог:
@@ -96,6 +98,7 @@ HOMO = str.maketrans({
 
 KTM_SQL = """
 select p.sku,
+       p.name,
        coalesce(p.attributes->>'hanger_mode', 'auto'),
        coalesce(p.attributes->'quantity_per_hanger', '{}'::jsonb)::text,
        coalesce(to_jsonb(p.aliases)::text, '[]'),
@@ -159,6 +162,24 @@ class DevSyncError(RuntimeError):
 
 class PhotoSyncError(RuntimeError):
     """Фото нельзя привести к JPEG-контракту ЭК (нет Pillow, битый файл)."""
+
+
+class EkranchikSchemaError(RuntimeError):
+    """Схема Экранчика не готова: нет ``profiles.description`` (миграция 002)."""
+
+
+def require_description_column(conn: sqlite3.Connection) -> None:
+    """Проверить, что в ``profiles`` есть ``description`` — до чтения и записи.
+
+    Иначе SQLite ответит ``no such column`` из середины записи: к этому моменту
+    бэкап уже снят, а картинки перезаписаны.
+    """
+    columns = {row[1] for row in conn.execute("pragma table_info(profiles)")}
+    if "description" not in columns:
+        raise EkranchikSchemaError(
+            "в profiles Экранчика нет колонки description — сначала миграции "
+            "Экранчика (alembic upgrade head, миграция 002_add_profile_description)"
+        )
 
 
 @dataclass(frozen=True)
@@ -331,9 +352,9 @@ def read_ktm_catalog() -> list[dict]:
     products = []
     for line in proc.stdout.decode("utf-8").splitlines():
         fields = line.split("\t")
-        if len(fields) < 8:
+        if len(fields) < 9:
             continue
-        sku, mode, qjson, aliases, lengths, active, photo_thumb, photo_full = fields[:8]
+        sku, name, mode, qjson, aliases, lengths, active, photo_thumb, photo_full = fields[:9]
         qph = json.loads(qjson) if qjson.strip() else {}
         lens = []
         for chunk in lengths.split(","):
@@ -346,6 +367,7 @@ def read_ktm_catalog() -> list[dict]:
             lens.append(item)
         products.append({
             "sku": sku,
+            "name": name,
             "mode": mode,
             "qph": qph,
             "aliases": json.loads(aliases or "[]"),
@@ -402,18 +424,24 @@ def build_index(products: list[dict]) -> tuple[dict[str, dict], dict[str, dict]]
 
 def read_ekr(db_path: Path) -> tuple[sqlite3.Connection, list[dict]]:
     conn = sqlite3.connect(f"file:{db_path}?mode=ro", uri=True, timeout=15)
-    rows = conn.execute(
-        "select id, name, quantity_per_hanger, length, photo_thumb, photo_full "
-        "from profiles order by name"
-    ).fetchall()
+    try:
+        require_description_column(conn)
+        rows = conn.execute(
+            "select id, name, quantity_per_hanger, length, description, photo_thumb, photo_full "
+            "from profiles order by name"
+        ).fetchall()
+    except Exception:
+        conn.close()
+        raise
     return conn, [
         {
             "id": row[0],
             "name": row[1],
             "n": row[2],
             "length": row[3],
-            "photo_thumb": row[4],
-            "photo_full": row[5],
+            "description": row[4],
+            "photo_thumb": row[5],
+            "photo_full": row[6],
         }
         for row in rows
     ]
@@ -471,6 +499,14 @@ def compute_drift(
                           "old": None, "new": None, "reason": "нет в каталоге KTM"})
             continue
         matched_ids.add(canon(product["sku"]))
+
+        # Наименование — поле KTM: в витрине оно только читается. Пустое или
+        # устаревшее значение доводим до KTM; имя профиля (код) не трогаем.
+        ktm_name = product["name"] or ""
+        if ktm_name and profile["description"] != ktm_name:
+            drift.append({"id": profile["id"], "name": profile["name"], "ktm_sku": product["sku"],
+                          "field": "description", "old": profile["description"],
+                          "new": ktm_name, "reason": "наименование KTM изменилось"})
 
         # Фото синкаются независимо от длин: профиль может быть без нормы, но
         # с фото. Заполняем пустые поля и обновляем занятые, если исходник KTM
@@ -545,16 +581,16 @@ def compute_drift(
             skipped.append({"name": product["sku"], "ktm_sku": product["sku"],
                             "reason": "код уже занят профилем Экранчика"})
             continue
-        if not product["is_active"]:
-            skipped.append({"name": product["sku"], "ktm_sku": product["sku"],
-                            "reason": "артикул неактивен в KTM"})
-            continue
+        # Активность — поле KTM, а не фильтр витрины: каталог «Экранчика» не
+        # знает понятия «неактивный», поэтому создаём профиль для любого
+        # артикула (``is_active`` остаётся только в отпечатке dev-сверки).
         if not product["lengths"]:
             # Создаём профиль и без длины: в Экранчике length/n nullable, а
             # пустая карточка полезнее отсутствующей — оператор заполнит её
             # вручную. Фото, если есть, кладём рядом.
             creations.append({
                 "name": product["sku"],
+                "description": product["name"] or None,
                 "length": None,
                 "n": None,
                 "photos": photo_plan(product, product["sku"], targets),
@@ -564,6 +600,7 @@ def compute_drift(
         target = main_length(product)
         creations.append({
             "name": product["sku"],
+            "description": product["name"] or None,
             "length": target["length"],
             "n": effective_n(product, target["length"]),
             "photos": photo_plan(product, product["sku"], targets),
@@ -616,7 +653,19 @@ def apply_drift(
     dry_run: bool = False,
 ) -> dict | None:
     """Записать расхождения в SQLite Экранчика (с бэкапом) и вернуть счётчики."""
-    columns = {"length": "length", "quantity_per_hanger": "quantity_per_hanger"}
+    # Схему проверяем до бэкапа и картинок: иначе запись description упадёт
+    # посреди применения, когда часть файлов уже перезаписана.
+    guard = sqlite3.connect(f"file:{db_path}?mode=ro", uri=True, timeout=15)
+    try:
+        require_description_column(guard)
+    finally:
+        guard.close()
+
+    columns = {
+        "length": "length",
+        "quantity_per_hanger": "quantity_per_hanger",
+        "description": "description",
+    }
     updates = [item for item in drift if item["field"] in columns]
     photos = [item for item in drift if item["field"] == "photo"]
     orphans = [item for item in drift if item["field"] == "product"] if prune_orphans else []
@@ -701,12 +750,13 @@ def apply_drift(
                 }
                 conn.execute(
                     "insert into profiles "
-                    "(name, quantity_per_hanger, length, photo_thumb, photo_full) "
-                    "values (?, ?, ?, ?, ?)",
+                    "(name, quantity_per_hanger, length, description, photo_thumb, photo_full) "
+                    "values (?, ?, ?, ?, ?, ?)",
                     (
                         item["name"],
                         item["n"],
                         item["length"],
+                        item["description"],
                         paths.get("photo_thumb"),
                         paths.get("photo_full"),
                     ),
@@ -1151,7 +1201,11 @@ def main(argv: list[str]) -> int:
             print(f"Не удалось прочитать каталог KTM: {error}", file=sys.stderr)
             return 2
 
-        conn, profiles = read_ekr(db_path)
+        try:
+            conn, profiles = read_ekr(db_path)
+        except EkranchikSchemaError as error:
+            print(f"[Экранчик] {error}", file=sys.stderr)
+            return 2
         manifest = load_photo_manifest(db_path)
         if args.seed_manifest:
             seeded = seed_manifest(db_path, products, profiles, targets)
@@ -1170,6 +1224,9 @@ def main(argv: list[str]) -> int:
                     prune_orphans=args.prune_orphans,
                 )
             except PhotoSyncError as error:
+                print(f"[Экранчик] {error}", file=sys.stderr)
+                return 2
+            except EkranchikSchemaError as error:
                 print(f"[Экранчик] {error}", file=sys.stderr)
                 return 2
             manifest = load_photo_manifest(db_path)
