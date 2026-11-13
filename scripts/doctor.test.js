@@ -20,6 +20,23 @@ const { join } = require("node:path");
 const DOCTOR = join(__dirname, "doctor.mjs");
 
 /**
+ * Хуки (lefthook) экспортируют GIT_DIR/GIT_WORK_TREE на реальное дерево, а у
+ * linked worktree GIT_DIR указывает в `<общий>/.git/worktrees/<id>`. Если такой
+ * env унаследует `git init` временного репозитория, git правит чужой `.git` и
+ * ставит основному дереву `core.bare = true` — после этого и IDE, и любой
+ * git-вызов в дереве падают с «this operation must be run in a work tree».
+ * Тот же приём, что в `guard-tree.test.js`: каждый запуск получает чистое
+ * окружение, тест сам решает, какой GIT_DIR подложить.
+ */
+function cleanGitEnv(extra = {}) {
+  const env = { ...process.env };
+  for (const key of Object.keys(env)) {
+    if (key.startsWith("GIT_")) delete env[key];
+  }
+  return { ...env, ...extra };
+}
+
+/**
  * В чистом scratch-репозитории красных строк больше одной (нет коммитов, нет
  * node_modules) — поэтому verdict всегда NO-GO и код выхода 1. Значимая часть
  * пробника — какие именно строки красные: проверяем только их.
@@ -27,6 +44,7 @@ const DOCTOR = join(__dirname, "doctor.mjs");
 function run(root) {
   const r = spawnSync(process.execPath, [DOCTOR, `--root=${root}`, "--json"], {
     encoding: "utf8",
+    env: cleanGitEnv(),
   });
   assert.equal(r.status, 1, `доктор обязан покраснеть, а он вернул ${r.status}: ${r.stdout}${r.stderr}`);
   return JSON.parse(r.stdout);
@@ -35,7 +53,7 @@ function run(root) {
 /** Свежий worktree-подобное дерево: env-файлов нет ни одного. */
 function scratchRoot(envFiles) {
   const root = mkdtempSync(join(tmpdir(), "doctor-probe-"));
-  spawnSync("git", ["init", "-q", root], { encoding: "utf8" });
+  spawnSync("git", ["init", "-q", root], { encoding: "utf8", env: cleanGitEnv() });
   for (const f of envFiles) writeFileSync(join(root, f), "PROBE=1\n");
   return root;
 }
@@ -74,7 +92,7 @@ test("чужой KTM_WORKTREE — красной строкой именно «�
   try {
     const r = spawnSync(process.execPath, [DOCTOR, `--root=${root}`, "--json"], {
       encoding: "utf8",
-      env: { ...process.env, KTM_WORKTREE: foreign },
+      env: cleanGitEnv({ KTM_WORKTREE: foreign }),
     });
     const out = JSON.parse(r.stdout);
     const line = out.checks.find((c) => c.name.includes("KTM_WORKTREE"));
@@ -84,5 +102,30 @@ test("чужой KTM_WORKTREE — красной строкой именно «�
   } finally {
     rmSync(root, { recursive: true, force: true });
     rmSync(foreign, { recursive: true, force: true });
+  }
+});
+
+test("GIT_DIR из-под хука не помечает чужое дерево bare (регрессия pre-push)", () => {
+  const victim = scratchRoot([".env.test"]);
+  const saved = { GIT_DIR: process.env.GIT_DIR, GIT_WORK_TREE: process.env.GIT_WORK_TREE };
+  process.env.GIT_DIR = join(victim, ".git");
+  delete process.env.GIT_WORK_TREE;
+  let probe = null;
+  try {
+    probe = scratchRoot([".env.test"]);
+    const bare = (root) =>
+      spawnSync("git", ["-C", root, "config", "--get", "core.bare"], {
+        encoding: "utf8",
+        env: cleanGitEnv(),
+      }).stdout.trim();
+    assert.equal(bare(victim), "false", "чужое дерево получило core.bare=true от пробника");
+    assert.equal(bare(probe), "false", "временный репозиторий обязан быть обычным work tree");
+  } finally {
+    if (saved.GIT_DIR === undefined) delete process.env.GIT_DIR;
+    else process.env.GIT_DIR = saved.GIT_DIR;
+    if (saved.GIT_WORK_TREE === undefined) delete process.env.GIT_WORK_TREE;
+    else process.env.GIT_WORK_TREE = saved.GIT_WORK_TREE;
+    if (probe) rmSync(probe, { recursive: true, force: true });
+    rmSync(victim, { recursive: true, force: true });
   }
 });
