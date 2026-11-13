@@ -7,7 +7,7 @@
 from __future__ import annotations
 
 import importlib.util
-import json
+import shutil
 import sqlite3
 import sys
 from pathlib import Path
@@ -101,50 +101,44 @@ def test_normalize_photo_rel_strips_static_prefix() -> None:
     assert sync.normalize_photo_rel("A.jpg") == "images/A.jpg"
 
 
-def test_photo_refresh_detects_source_change(tmp_path: Path) -> None:
+def test_photo_refresh_compares_local_and_source_sizes(tmp_path: Path) -> None:
     storage = tmp_path / "storage"
-    source = storage / "products" / "X_1_full.png"
-    make_image(source)
-    targets = sync.PhotoTargets(images_dir=tmp_path / "images", prod_storage=storage)
+    source = storage / "products" / "X_1_full.jpg"
+    make_image(source, "red", size=(40, 20))
+    images = tmp_path / "images"
+    target = images / "X.jpg"
+    make_image(target, "blue", size=(20, 10))
+    targets = sync.PhotoTargets(images_dir=images, prod_storage=storage)
 
-    manifest: dict = {}
     drift, _skipped, _creations = sync.compute_drift(
-        [product(photo_full="products/X_1_full.png")],
+        [product(photo_full="products/X_1_full.jpg")],
         [profile(photo_full="images/X.jpg")],
         targets,
-        manifest,
     )
     photo = [item for item in drift if item["field"] == "photo"]
     assert len(photo) == 1
-    assert photo[0]["reason"] == "фото обновлено: нет записи в манифесте"
+    assert photo[0]["reason"].startswith("размер файла отличается")
     assert photo[0]["target"] == "images/X.jpg"
 
-    version = sync.photo_source_version(source)
-    manifest = {
-        "X|photo_full": {
-            "source": "products/X_1_full.png",
-            "sha256": version["sha256"],
-            "size": version["size"],
-        }
-    }
+    # Размеры совпали — файл считается тем же и не перезаписывается.
+    shutil.copy2(source, target)
     drift, _skipped, _creations = sync.compute_drift(
-        [product(photo_full="products/X_1_full.png")],
+        [product(photo_full="products/X_1_full.jpg")],
         [profile(photo_full="images/X.jpg")],
         targets,
-        manifest,
     )
     assert not [item for item in drift if item["field"] == "photo"]
 
-    manifest["X|photo_full"]["sha256"] = "0" * 64
+    # Файла нет на месте — это тоже расхождение, даже если поле заполнено.
+    target.unlink()
     drift, _skipped, _creations = sync.compute_drift(
-        [product(photo_full="products/X_1_full.png")],
+        [product(photo_full="products/X_1_full.jpg")],
         [profile(photo_full="images/X.jpg")],
         targets,
-        manifest,
     )
     photo = [item for item in drift if item["field"] == "photo"]
     assert len(photo) == 1
-    assert photo[0]["reason"] == "фото KTM изменилось"
+    assert photo[0]["reason"] == "файла фото нет в Экранчике"
 
 
 def test_write_photo_converts_png_to_jpeg(tmp_path: Path) -> None:
@@ -157,9 +151,28 @@ def test_write_photo_converts_png_to_jpeg(tmp_path: Path) -> None:
     assert target.read_bytes().startswith(JPEG_MAGIC)
     with Image.open(target) as image:
         assert image.size == (1600, 67)
+    assert sync.photo_file_size(source) == target.stat().st_size
 
 
-def test_apply_refreshes_only_changed_photo_and_keeps_path(tmp_path: Path) -> None:
+def test_png_source_is_compared_by_rendered_size(tmp_path: Path) -> None:
+    storage = tmp_path / "storage"
+    source = storage / "products" / "X_1_full.png"
+    make_image(source, "red", size=(40, 20))
+    images = tmp_path / "images"
+    target = images / "X.jpg"
+    sync.write_photo(source, target)
+    targets = sync.PhotoTargets(images_dir=images, prod_storage=storage)
+
+    drift, _skipped, _creations = sync.compute_drift(
+        [product(photo_full="products/X_1_full.png")],
+        [profile(photo_full="images/X.jpg")],
+        targets,
+    )
+
+    assert not [item for item in drift if item["field"] == "photo"]
+
+
+def test_apply_refreshes_photo_and_keeps_path(tmp_path: Path) -> None:
     db_path = tmp_path / "ekranchik.db"
     conn = make_db(db_path)
     with conn:
@@ -172,38 +185,36 @@ def test_apply_refreshes_only_changed_photo_and_keeps_path(tmp_path: Path) -> No
     images = tmp_path / "images"
     make_jpeg(images / "X.jpg", "blue")
     storage = tmp_path / "storage"
-    source = storage / "products" / "X_1_full.png"
-    make_image(source, "red")
+    source = storage / "products" / "X_1_full.jpg"
+    make_image(source, "red", size=(40, 20))
     targets = sync.PhotoTargets(images_dir=images, prod_storage=storage)
 
-    manifest = {
-        "X|photo_full": {
-            "source": "products/X_1_full.png",
-            "sha256": "0" * 64,
-            "size": 1,
-        }
-    }
     drift, _skipped, _creations = sync.compute_drift(
-        [product(photo_full="products/X_1_full.png")],
+        [product(photo_full="products/X_1_full.jpg")],
         [profile(photo_full="images/X.jpg")],
         targets,
-        manifest,
     )
 
-    result = sync.apply_drift(db_path, drift, [], targets, manifest=manifest)
+    result = sync.apply_drift(db_path, drift, [], targets)
 
     assert result is not None
     assert result["photos"] == 1
-    assert (images / "X.jpg").read_bytes().startswith(JPEG_MAGIC)
+    assert (images / "X.jpg").read_bytes() == source.read_bytes()
     assert result["images_backup"] is not None
     assert (result["images_backup"] / "X.jpg").is_file()
-    saved = json.loads((tmp_path / sync.PHOTO_MANIFEST_NAME).read_text(encoding="utf-8"))
-    assert saved["X|photo_full"]["sha256"] == sync.photo_source_version(source)["sha256"]
     conn = sqlite3.connect(db_path)
     try:
         assert conn.execute("select photo_full from profiles where id = 1").fetchone()[0] == "images/X.jpg"
     finally:
         conn.close()
+
+    # После копии размеры совпадают — повторный синк фото не трогает.
+    drift, _skipped, _creations = sync.compute_drift(
+        [product(photo_full="products/X_1_full.jpg")],
+        [profile(photo_full="images/X.jpg")],
+        targets,
+    )
+    assert not [item for item in drift if item["field"] == "photo"]
 
 
 def test_prune_orphans_removes_profile_and_images(tmp_path: Path) -> None:
@@ -227,13 +238,11 @@ def test_prune_orphans_removes_profile_and_images(tmp_path: Path) -> None:
     make_jpeg(images / "KEEP-thumb.jpg")
     targets = sync.PhotoTargets(images_dir=images, prod_storage=tmp_path / "storage")
 
-    manifest = {"ORPHAN|photo_full": {"source": "products/ORPHAN_full.jpg", "sha256": "x", "size": 1}}
     result = sync.apply_drift(
         db_path,
         [{"id": 2, "name": "ORPHAN", "field": "product", "reason": "нет в каталоге KTM"}],
         [],
         targets,
-        manifest=manifest,
         prune_orphans=True,
     )
 
@@ -250,33 +259,6 @@ def test_prune_orphans_removes_profile_and_images(tmp_path: Path) -> None:
         assert conn.execute("select count(*) from profiles where id = 1").fetchone()[0] == 1
     finally:
         conn.close()
-    saved = json.loads((tmp_path / sync.PHOTO_MANIFEST_NAME).read_text(encoding="utf-8"))
-    assert "ORPHAN|photo_full" not in saved
-
-
-def test_seed_manifest_records_existing_photos_without_rewriting(tmp_path: Path) -> None:
-    db_path = tmp_path / "ekranchik.db"
-    make_db(db_path).close()
-    images = tmp_path / "images"
-    target = images / "X.jpg"
-    make_jpeg(target, "green")
-    before = target.read_bytes()
-    storage = tmp_path / "storage"
-    source = storage / "products" / "X_1_full.png"
-    make_image(source, "red")
-    targets = sync.PhotoTargets(images_dir=images, prod_storage=storage)
-
-    count = sync.seed_manifest(
-        db_path,
-        [product(photo_full="products/X_1_full.png")],
-        [profile(photo_full="images/X.jpg")],
-        targets,
-    )
-
-    assert count == 1
-    assert target.read_bytes() == before
-    saved = json.loads((tmp_path / sync.PHOTO_MANIFEST_NAME).read_text(encoding="utf-8"))
-    assert saved["X|photo_full"]["sha256"] == sync.photo_source_version(source)["sha256"]
 
 
 def drift_fields(drift: list[dict]) -> list[str]:

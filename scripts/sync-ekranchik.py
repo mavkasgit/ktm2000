@@ -12,14 +12,12 @@
   длина — основная, норма — по режиму подвеса. Каталог «Экранчика» — витрина:
   активность KTM не фильтр, профиль создаётся для любого артикула.
 * **Фото «Экранчика»** лежат в ``static/images``. Прод — источник правды,
-  поэтому фото не только заполняются в пустых полях, но и **обновляются**,
-  когда меняется исходный файл KTM. Признак «фото уже это» — манифест
-  ``images-sync.json`` рядом с БД: имя профиля + поле → путь и SHA-256 файла
-  KTM. Пока хэш совпадает, картинка не перезаписывается (её в ЭК могли
-  ужать/перекодировать); изменился файл в KTM — картинка обновляется.
-  Если манифеста нет (первый запуск после обновления скрипта), занятые фото
-  обновляются один раз целиком. Перед записью снимается резервная копия и
-  БД, и перезаписываемых картинок.
+  поэтому фото не только заполняются в пустых полях, но и **обновляются**:
+  файл профиля перезаписывается, когда его нет на месте или его размер
+  отличается от размера исходника KTM. Сравнение по размеру намеренно
+  простое: локально пережатая картинка почти всегда отличается от исходника
+  и получает свежую копию при ближайшем ``--apply``. Перед записью снимается
+  резервная копия и БД, и перезаписываемых картинок.
 * **Удаление профилей** по умолчанию не делается: карточка, которой нет в
   KTM, печатается как расхождение ``product``. Явный ``--prune-orphans``
   вместе с ``--apply`` удаляет такие профили и их файлы фото (после бэкапа).
@@ -41,9 +39,7 @@
 
 Флаги: ``--db PATH`` (SQLite Экранчика), ``--json``, ``--if-enabled``
 (проверка только при ``KTM_EKRANCHIK_SYNCGATE=1|true|yes|on``),
-``--prune-orphans`` (удалять профили, которых нет в KTM; только с ``--apply``),
-``--seed-manifest`` (записать текущие фото KTM в манифест, не перезаписывая
-картинки; только с ``--apply``).
+``--prune-orphans`` (удалять профили, которых нет в KTM; только с ``--apply``).
 
 Окружение:
     ``EKRANCHIK_DB``       — путь к SQLite Экранчика;
@@ -63,7 +59,7 @@ Dev читается из ``.env.dev``: ``POSTGRES_CONTAINER_NAME``, ``POSTGRES_
 from __future__ import annotations
 
 import argparse
-import hashlib
+import io
 import json
 import os
 import re
@@ -75,7 +71,7 @@ from dataclasses import dataclass
 from datetime import UTC, datetime
 from pathlib import Path
 
-try:  # Pillow нужен только для перекодирования PNG/WebP в JPEG.
+try:  # Pillow нужен для PNG/WebP: проверка размера и перекодирование в JPEG.
     from PIL import Image
 except ImportError:  # pragma: no cover - окружение без Pillow
     Image = None  # type: ignore[assignment]
@@ -218,10 +214,6 @@ class PhotoTargets:
 #: ``ALS-…`` без дефиса (их не переименовываем — файлы уже на месте).
 PHOTO_FIELDS = (("photo_thumb", "-thumb.jpg"), ("photo_full", ".jpg"))
 
-#: Манифест синка фото рядом с SQLite: имя профиля + поле → версия файла KTM.
-#: Он и есть признак «картинка в ЭК соответствует этому фото KTM». Без него
-#: (первый запуск) занятые фото обновляются один раз целиком.
-PHOTO_MANIFEST_NAME = "images-sync.json"
 PHOTO_MAX_SIDE = 1600
 PHOTO_JPEG_QUALITY = 85
 IMAGE_BACKUP_PREFIX = "images.bak-"
@@ -246,11 +238,6 @@ def fmt_num(value: float | None) -> str:
     return str(int(value)) if float(value).is_integer() else str(value)
 
 
-def photo_key(profile_name: str, field: str) -> str:
-    """Ключ манифеста: имя профиля в ЭК + поле фото."""
-    return f"{profile_name}|{field}"
-
-
 def normalize_photo_rel(value: str) -> str:
     """Путь профиля → путь относительно ``static`` (``images/x.jpg``)."""
     text = value.strip().replace("\\", "/").lstrip("/")
@@ -260,39 +247,32 @@ def normalize_photo_rel(value: str) -> str:
     return text
 
 
-def manifest_path(db_path: Path) -> Path:
-    return db_path.parent / PHOTO_MANIFEST_NAME
+def render_photo_jpeg(source: Path) -> bytes:
+    """Перекодировать PNG/WebP в JPEG по правилам Экранчика."""
+    if Image is None:
+        raise PhotoSyncError(
+            "для PNG/WebP нужен Pillow: python -m pip install -r backend/requirements-dev.txt"
+        )
+    with Image.open(source) as raw:
+        image = raw.convert("RGB")
+        width, height = image.size
+        long_side = max(width, height)
+        if long_side > PHOTO_MAX_SIDE:
+            scale = PHOTO_MAX_SIDE / long_side
+            image = image.resize(
+                (max(1, round(width * scale)), max(1, round(height * scale))),
+                Image.Resampling.LANCZOS,
+            )
+        buffer = io.BytesIO()
+        image.save(buffer, format="JPEG", quality=PHOTO_JPEG_QUALITY, optimize=True)
+        return buffer.getvalue()
 
 
-def load_photo_manifest(db_path: Path) -> dict[str, dict]:
-    path = manifest_path(db_path)
-    if not path.is_file():
-        return {}
-    try:
-        data = json.loads(path.read_text(encoding="utf-8"))
-    except (OSError, json.JSONDecodeError):
-        return {}
-    return data if isinstance(data, dict) else {}
-
-
-def save_photo_manifest(db_path: Path, data: dict[str, dict]) -> None:
-    path = manifest_path(db_path)
-    tmp = path.with_suffix(path.suffix + ".tmp")
-    tmp.write_text(json.dumps(data, ensure_ascii=False, indent=1, sort_keys=True), encoding="utf-8")
-    tmp.replace(path)
-
-
-def sha256_file(path: Path) -> str:
-    digest = hashlib.sha256()
-    with path.open("rb") as handle:
-        for chunk in iter(lambda: handle.read(1 << 20), b""):
-            digest.update(chunk)
-    return digest.hexdigest()
-
-
-def photo_source_version(source: Path) -> dict:
-    """Версия исходника KTM: хэш содержимого и размер."""
-    return {"sha256": sha256_file(source), "size": source.stat().st_size}
+def photo_file_size(source: Path) -> int:
+    """Размер файла, который синк положит в Экранчик для этого исходника."""
+    if source.suffix.lower() in JPEG_SUFFIXES:
+        return source.stat().st_size
+    return len(render_photo_jpeg(source))
 
 
 def write_photo(source: Path, target: Path) -> None:
@@ -306,21 +286,7 @@ def write_photo(source: Path, target: Path) -> None:
     if source.suffix.lower() in JPEG_SUFFIXES:
         shutil.copy2(source, target)
         return
-    if Image is None:
-        raise RuntimeError(
-            "для PNG/WebP нужен Pillow: python -m pip install -r backend/requirements-dev.txt"
-        )
-    with Image.open(source) as raw:
-        image = raw.convert("RGB")
-        width, height = image.size
-        long_side = max(width, height)
-        if long_side > PHOTO_MAX_SIDE:
-            scale = PHOTO_MAX_SIDE / long_side
-            image = image.resize(
-                (max(1, round(width * scale)), max(1, round(height * scale))),
-                Image.Resampling.LANCZOS,
-            )
-        image.save(target, format="JPEG", quality=PHOTO_JPEG_QUALITY, optimize=True)
+    target.write_bytes(render_photo_jpeg(source))
 
 
 def backup_images(files: list[Path], db_path: Path, stamp: str) -> Path | None:
@@ -461,7 +427,6 @@ def photo_plan(product: dict, name: str, targets: PhotoTargets) -> list[dict]:
             "field": field,
             "path": f"{targets.image_prefix}/{name}{suffix}",
             "source": str(source_path),
-            "source_rel": source.replace("\\", "/"),
         })
     return plan
 
@@ -483,7 +448,6 @@ def compute_drift(
     products: list[dict],
     profiles: list[dict],
     targets: PhotoTargets,
-    manifest: dict[str, dict] | None = None,
 ) -> tuple[list[dict], list[dict], list[dict]]:
     """Расхождения с продом: правки существующих, фото и профили на создание."""
     by_sku, by_alias = build_index(products)
@@ -509,8 +473,8 @@ def compute_drift(
                           "new": ktm_name, "reason": "наименование KTM изменилось"})
 
         # Фото синкаются независимо от длин: профиль может быть без нормы, но
-        # с фото. Заполняем пустые поля и обновляем занятые, если исходник KTM
-        # изменился с прошлого синка (манифест).
+        # с фото. Пустое поле заполняем, занятое обновляем, когда файла нет на
+        # месте или его размер отличается от исходника KTM.
         for item in photo_plan(product, profile["name"], targets):
             current = profile[item["field"]]
             if current and current.strip().lower().startswith(("http://", "https://")):
@@ -519,16 +483,18 @@ def compute_drift(
                     "reason": "фото задано внешним URL — не трогаем",
                 })
                 continue
-            source_path = Path(item["source"])
-            version = photo_source_version(source_path)
             target = item["path"] if not current else normalize_photo_rel(current)
-            entry = (manifest or {}).get(photo_key(profile["name"], item["field"]))
+            local_path = targets.images_dir / Path(target).name
+            expected_size = photo_file_size(Path(item["source"]))
             if not current:
                 reason = "фото нет в Экранчике"
-            elif entry is None:
-                reason = "фото обновлено: нет записи в манифесте"
-            elif entry.get("source") != item["source_rel"] or entry.get("sha256") != version["sha256"]:
-                reason = "фото KTM изменилось"
+            elif not local_path.is_file():
+                reason = "файла фото нет в Экранчике"
+            elif local_path.stat().st_size != expected_size:
+                reason = (
+                    f"размер файла отличается: "
+                    f"{local_path.stat().st_size} → {expected_size} байт"
+                )
             else:
                 continue
             drift.append({
@@ -536,8 +502,7 @@ def compute_drift(
                 "field": "photo", "photo_field": item["field"],
                 "old": current or None, "new": target, "path": target,
                 "target": target, "source": item["source"],
-                "source_rel": item["source_rel"],
-                "source_sha256": version["sha256"], "source_size": version["size"],
+                "source_size": expected_size,
                 "reason": reason,
             })
 
@@ -609,46 +574,11 @@ def compute_drift(
     return drift, skipped, creations
 
 
-def seed_manifest(
-    db_path: Path,
-    products: list[dict],
-    profiles: list[dict],
-    targets: PhotoTargets,
-) -> int:
-    """Записать в манифест текущие фото KTM, не перезаписывая картинки.
-
-    Нужен при переходе на манифест: в ЭК уже лежат актуальные (после ручного
-    обновления) файлы, и полный перезалив всех фото не нужен. Дальше синк
-    обновляет только те фото, чей исходник в KTM изменился.
-    """
-    by_sku, by_alias = build_index(products)
-    now = datetime.now(UTC).strftime("%Y-%m-%d %H:%M:%S")
-    manifest: dict[str, dict] = {}
-    for profile in profiles:
-        product = by_sku.get(canon(profile["name"])) or by_alias.get(canon(profile["name"]))
-        if product is None:
-            continue
-        for item in photo_plan(product, profile["name"], targets):
-            if not profile[item["field"]]:
-                continue
-            source = Path(item["source"])
-            version = photo_source_version(source)
-            manifest[photo_key(profile["name"], item["field"])] = {
-                "source": item["source_rel"],
-                "sha256": version["sha256"],
-                "size": version["size"],
-                "updated_at": now,
-            }
-    save_photo_manifest(db_path, manifest)
-    return len(manifest)
-
-
 def apply_drift(
     db_path: Path,
     drift: list[dict],
     creations: list[dict],
     targets: PhotoTargets,
-    manifest: dict[str, dict] | None = None,
     prune_orphans: bool = False,
     dry_run: bool = False,
 ) -> dict | None:
@@ -785,33 +715,6 @@ def apply_drift(
                         path.unlink()
     finally:
         conn.close()
-
-    if manifest is not None:
-        for item in applied_photos:
-            manifest[photo_key(item["name"], item["photo_field"])] = {
-                "source": item["source_rel"],
-                "sha256": item["source_sha256"],
-                "size": item["source_size"],
-                "updated_at": now,
-            }
-        for item in creations:
-            for photo in item["photos"]:
-                target = targets.images_dir / Path(photo["path"]).name
-                if not target.is_file():
-                    continue
-                source = Path(photo["source"])
-                manifest[photo_key(item["name"], photo["field"])] = {
-                    "source": photo["source_rel"],
-                    "sha256": sha256_file(source),
-                    "size": source.stat().st_size,
-                    "updated_at": now,
-                }
-        if prune_orphans:
-            for item in orphans:
-                prefix = f"{item['name']}|"
-                for key in [key for key in manifest if key.startswith(prefix)]:
-                    del manifest[key]
-        save_photo_manifest(db_path, manifest)
 
     return {
         "backup": backup,
@@ -1153,8 +1056,6 @@ def parse_args(argv: list[str]) -> argparse.Namespace:
                         help="работать только при KTM_EKRANCHIK_SYNCGATE=1|true|yes|on")
     parser.add_argument("--prune-orphans", action="store_true",
                         help="удалять профили, которых нет в KTM (только с --apply)")
-    parser.add_argument("--seed-manifest", action="store_true",
-                        help="записать текущие фото KTM в манифест, не перезаписывая картинки")
     return parser.parse_args(argv)
 
 
@@ -1172,14 +1073,6 @@ def main(argv: list[str]) -> int:
 
     want_ekr = args.scope in ("all", "ekranchik")
     want_dev = args.scope in ("all", "dev")
-
-    if args.seed_manifest and not args.apply:
-        print("--seed-manifest пишет файл: добавьте --apply", file=sys.stderr)
-        return 2
-    if args.seed_manifest and not want_ekr:
-        print("--seed-manifest работает только для Экранчика (--scope all|ekranchik)",
-              file=sys.stderr)
-        return 2
 
     products: list[dict] = []
     profiles: list[dict] = []
@@ -1206,13 +1099,11 @@ def main(argv: list[str]) -> int:
         except EkranchikSchemaError as error:
             print(f"[Экранчик] {error}", file=sys.stderr)
             return 2
-        manifest = load_photo_manifest(db_path)
-        if args.seed_manifest:
-            seeded = seed_manifest(db_path, products, profiles, targets)
-            manifest = load_photo_manifest(db_path)
-            print(f"Манифест фото: {seeded} записей ({manifest_path(db_path)})")
         try:
-            drift, skipped, creations = compute_drift(products, profiles, targets, manifest)
+            drift, skipped, creations = compute_drift(products, profiles, targets)
+        except PhotoSyncError as error:
+            print(f"[Экранчик] {error}", file=sys.stderr)
+            return 2
         finally:
             conn.close()
 
@@ -1220,7 +1111,6 @@ def main(argv: list[str]) -> int:
             try:
                 apply_result = apply_drift(
                     db_path, drift, creations, targets,
-                    manifest=manifest,
                     prune_orphans=args.prune_orphans,
                 )
             except PhotoSyncError as error:
@@ -1229,10 +1119,12 @@ def main(argv: list[str]) -> int:
             except EkranchikSchemaError as error:
                 print(f"[Экранчик] {error}", file=sys.stderr)
                 return 2
-            manifest = load_photo_manifest(db_path)
             conn, profiles = read_ekr(db_path)
             try:
-                drift, skipped, creations = compute_drift(products, profiles, targets, manifest)
+                drift, skipped, creations = compute_drift(products, profiles, targets)
+            except PhotoSyncError as error:
+                print(f"[Экранчик] {error}", file=sys.stderr)
+                return 2
             finally:
                 conn.close()
 
