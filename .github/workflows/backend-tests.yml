@@ -7,8 +7,9 @@ name: Backend tests
 
 # Полный pytest-набор backend с coverage-гейтом на push/PR.
 # Решения грилла #245: Q1=2 (блокирует PR), Q13=а (гейт backend на 73%),
-# Q21 (coverage==7.17.2 отдельным pip install, requirements/Docker не трогаем),
-# Q23=а (один джоб вместо двух).
+# Q23=а (один джоб вместо двух). Q21 (coverage отдельным pip install) отменён
+# #377: coverage приходит пином из `backend/requirements-dev.txt`, вместе с
+# pytest и ruff, — литералов версий в теле workflow нет.
 #
 # Прогон серийный, без xdist: под -n воркеры остаются вне замера coverage
 # (controller меряет только главный процесс) и гейт упал бы на ровном месте.
@@ -188,13 +189,20 @@ jobs:
         with:
           python-version-file: ${{ steps.toolchain.outputs.python_file }}
           cache: pip
-          cache-dependency-path: backend/requirements.txt
+          # Кеш зависит от обоих файлов: джоб ставит requirements-dev.txt, а он
+          # подтягивает runtime через `-r requirements.txt` (#377).
+          cache-dependency-path: |
+            backend/requirements.txt
+            backend/requirements-dev.txt
 
+      # Один install, ровно как на dev-машине (#377): requirements-dev.txt
+      # подтягивает `-r requirements.txt` и держит пины coverage/pytest/ruff.
+      # Литerals в теле workflow не дублируются — иначе джоб ставит не тот
+      # набор, что venv, и падает только в CI (пример: Pillow из dev-файла,
+      # без которого `tests/test_sync_ekranchik.py` не собирается).
       - name: Install backend dependencies
         if: steps.scope.outputs.relevant == 'true'
-        run: |
-          pip install -r backend/requirements.txt
-          pip install coverage==7.17.2
+        run: pip install -r backend/requirements-dev.txt
 
       # Рэтчет числа тестов (#358) — до прогона: если набор стал меньше
       # записанного, падать должен именно этот шаг, а не «pytest прошёл быстрее».
