@@ -1,0 +1,88 @@
+name: CI lint
+
+# Статус для merge: ИНФОРМАЦИОННЫЙ (новый джоб, в required contexts не входит).
+# Состав блокирующих живёт вне этого файла — `gh api
+# repos/mavkasgit/ktm2000/branches/main/protection` и `docs/testing-guide.md` (§CI).
+#
+# Зачем (#365): workflow и `dependabot.yml` правятся руками, а опечатка в `needs:`,
+# `if:`, имени action или в экосистеме Dependabot вскрывается только запуском.
+# jactionlint читает репозиторий целиком: workflow, composite actions, lock-файл
+# actions и `dependabot.yml` — и падает на схемах, выражениях и пинах.
+#
+# Версия — пин в теле (2.4.0), как `pip install ruff==0.16.9` в ruff.yml: общий
+# установщик в этой волне не заводится, источники версий сверяет `registry`.
+# Скачивание идёт через curl с проверкой sha256: бинарь запускается на раннере,
+# и «скачалось что-то по редиректу» — это исполнение чужого кода.
+#
+# Локально тот же вызов: `npm run gate -- --only=ci-lint`.
+on:
+  push:
+    branches:
+      - main
+      - master
+    paths:
+      - '.github/**'
+      - 'mise.toml'
+      - 'tools.json'
+      - 'scripts/gate.mjs'
+      - 'package.json'
+  pull_request:
+    branches:
+      - main
+      - master
+    paths:
+      - '.github/**'
+      - 'mise.toml'
+      - 'tools.json'
+      - 'scripts/gate.mjs'
+      - 'package.json'
+  workflow_dispatch:
+
+concurrency:
+  group: ci-${{ github.workflow }}-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' || github.ref != 'refs/heads/main' }}
+
+# #363 [missing-permissions]: только чтение репозитория — джобу больше ничего не нужно.
+permissions:
+  contents: read
+
+jobs:
+  ci-lint:
+    name: ci-lint
+    runs-on: ubuntu-latest
+    # Замер локально (Windows, jactionlint 2.4.0): 0.2 с на весь репозиторий.
+    # 5 минут — запас на скачивание бинаря и холодный npm-кеш.
+    timeout-minutes: 5
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          # #363 [artipacked]: checkout иначе пишет GITHUB_TOKEN в .git/config
+          # workspace, откуда его может увести любой последующий шаг.
+          persist-credentials: false
+
+      # Версия языка: `.nvmrc` — материализованный пин (его сверяет шаг гейта
+      # `pins`), источник — `mise.toml`. Скрипт гейта нужен только node.
+      - name: Setup Node
+        uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+        with:
+          node-version-file: .nvmrc
+
+      - name: Install jactionlint (pinned 2.4.0)
+        run: |
+          set -euo pipefail
+          VERSION=2.4.0
+          SHA256=26ddba81db28fffc51163175c070ee1a9d1150260de4b5232f01d9b749f32d8e
+          ARCHIVE="jactionlint_${VERSION}_linux_amd64.tar.gz"
+          curl -fsSL -o "/tmp/${ARCHIVE}" \
+            "https://github.com/jdx/jactionlint/releases/download/v${VERSION}/${ARCHIVE}"
+          echo "${SHA256}  /tmp/${ARCHIVE}" | sha256sum --check --strict
+          tar -xzf "/tmp/${ARCHIVE}" -C /tmp jactionlint
+          sudo install -m 0755 /tmp/jactionlint /usr/local/bin/jactionlint
+          jactionlint --version
+
+      # Тот же шаг, что локально: `--only` берёт команду из `scripts/gate.mjs`,
+      # второго списка проверок здесь нет.
+      - name: jactionlint (шаг гейта ci-lint)
+        run: npm run gate -- --only=ci-lint

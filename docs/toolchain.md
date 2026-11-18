@@ -32,10 +32,12 @@
 | `concurrently` | concurrently (open-cli-tools/concurrently) | `package.json` | `^10.0.7` | manual | нет | 2026-11-09 |
 | `coverage` | coverage.py (coveragepy/coveragepy) | `backend/requirements-dev.txt` | `7.17.2` | ci | да | 2026-11-09 |
 | `eslint` | ESLint (eslint/eslint) | `frontend/package.json` | `^9.39.5` | gate, ci | да | 2026-11-03 |
+| `jactionlint` | jactionlint (jdx/jactionlint) | `mise.toml` | `2.4.0` | gate, ci | да | 2026-11-18 |
 | `lefthook` | Lefthook (evilmartians/lefthook) | `package.json` | `2.2.2` | commit, push | да | 2026-11-03 |
 | `mise` | mise-en-place (jdx/mise) | `mise.toml` | `2026.10.12` | manual | нет | 2026-11-03 |
 | `node` | Node.js (nodejs/node) | `mise.toml` | `26.13.0` | gate, ci | да | 2026-11-09 |
 | `npm` | npm (npm/cli) | `package.json` | `>=11` | gate, ci | да | 2026-11-09 |
+| `osv-scanner` | osv-scanner (google/osv-scanner) | `mise.toml` | `2.7.0` | ci | нет | 2026-11-18 |
 | `playwright` | Playwright (microsoft/playwright) | `frontend/package.json` | `^1.65.0` | gate, ci | да | 2026-11-09 |
 | `postgres` | PostgreSQL (postgres/postgres) | `infra/compose` | `15-alpine` | gate, ci, manual | да | 2026-11-03 |
 | `pytest` | pytest (pytest-dev/pytest) | `backend/requirements-dev.txt` | `9.2.0` | gate, ci | да | 2026-11-09 |

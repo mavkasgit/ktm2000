@@ -10,6 +10,9 @@
  * Групповое состояние (суммы, свёрнутость, выделение) — одно на обе раскладки:
  * шапка группы считает его через `buildTaskGroupView`, а не складывает
  * количества в разметке.
+ *
+ * Второй якорь — десктоп: там та же таблица обязана остаться прежней
+ * (общий порядок колонок, угол сброса фильтров, ни одной закреплённой ячейки).
  */
 
 import { useState } from "react";
@@ -21,6 +24,7 @@ import { useBulkSelection } from "@/shared/bulk";
 import type { PageLimitOption } from "@/shared/hooks/usePaginatedTableQuery";
 import { stubViewportWidth } from "@/shared/lib/testViewport";
 import type { BulkDraft } from "../lib/bulkDraft";
+import { visibleBoardColumns } from "../lib/boardColumns";
 import type { GroupingProfile } from "../lib/groupingProfiles";
 import { SectionTasksBoard } from "./SectionTasksBoard";
 
@@ -119,8 +123,14 @@ function Harness({
 }
 
 /** Отрисовка «как на телефоне»: порог телефона в проекте — 768px. */
-function renderMobile(tasks: SectionBoardTask[], initialBulkMode = true) {
-  stubViewportWidth(375);
+function renderMobile(tasks: SectionBoardTask[], initialBulkMode = true, width = 375) {
+  stubViewportWidth(width);
+  return render(<Harness tasks={tasks} initialBulkMode={initialBulkMode} />);
+}
+
+/** Отрисовка «как на десктопе»: раскладка прежняя, мобильные классы не действуют. */
+function renderDesktop(tasks: SectionBoardTask[], initialBulkMode = false) {
+  stubViewportWidth(1280);
   return render(<Harness tasks={tasks} initialBulkMode={initialBulkMode} />);
 }
 
@@ -179,6 +189,24 @@ describe("SectionTasksBoard на телефоне: таблица с закре�
     expect(order).toContain("issuedQty");
     expect(order.indexOf("issuedQty")).toBeGreaterThan(order.indexOf("actions"));
   });
+
+  it.each([360, 430])(
+    "на %ipx раскладка остаётся телефонной: строка-<tr> и закреплённые края",
+    (width) => {
+      const { container } = renderMobile([makeTask({ id: 1, product_sku: "SKU-A" })], true, width);
+      const row = container.querySelector('tr[data-task-id="1"]') as HTMLElement;
+
+      // Порог 768px не задет: это те же телефонные колонки и та же строка.
+      expect(row).toBeTruthy();
+      expect(row.querySelector('[data-sticky="profile"]')).toBeTruthy();
+      expect(row.querySelector('[data-sticky="actions"]')).toBeTruthy();
+      expect(columnOrder(row).slice(0, 3)).toEqual([
+        "productSku",
+        "dimensions",
+        "remainingQty",
+      ]);
+    },
+  );
 });
 
 describe("SectionTasksBoard на телефоне: выделение и ввод в строке", () => {
@@ -286,6 +314,37 @@ describe("SectionTasksBoard на телефоне: группа заданий",
     expect(container.querySelectorAll("tr[data-task-id]")).toHaveLength(2);
     fireEvent.click(within(profile).getByRole("button"));
     expect(container.querySelectorAll("tr[data-task-id]")).toHaveLength(0);
+  });
+});
+
+describe("SectionTasksBoard на десктопе: прежняя таблица (#345)", () => {
+  it("колонки идут прежним порядком, закрепления и мобильного сброса нет", () => {
+    const { container } = renderDesktop([makeTask({ id: 1, product_sku: "SKU-A" })]);
+    const row = container.querySelector('tr[data-task-id="1"]') as HTMLElement;
+
+    // Порядок колонок — общий десктопный список, а не телефонный: первая
+    // колонка даёт точку статуса, последняя — действия. Угол сброса фильтров
+    // идёт следом служебной ячейкой без `data-column`.
+    expect(columnOrder(row).filter(Boolean)).toEqual(
+      visibleBoardColumns(undefined).map((column) => column.id),
+    );
+    expect(columnOrder(row).filter((id) => !id), "служебная ячейка угла").toHaveLength(1);
+
+    // Мобильные классы `max-md:` на десктопе не применяются, а закрепление
+    // решает хук: ни одной sticky-ячейки в дереве нет.
+    expect(row.querySelector("[data-sticky]")).toBeNull();
+
+    // Угол сброса фильтров — на десктопе, как и раньше; на телефоне он скрыт.
+    expect(
+      container.querySelector('thead button[aria-label="Сбросить фильтры"]'),
+      "угол сброса фильтров в шапке",
+    ).toBeTruthy();
+
+    // Подпись действия видна словом, а не только пиктограммой.
+    const actions = row.querySelector('td[data-column="actions"]') as HTMLElement;
+    expect(within(actions).getByRole("button", { name: "Завершить" }).textContent).toContain(
+      "Завершить",
+    );
   });
 });
 

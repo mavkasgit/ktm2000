@@ -18,6 +18,7 @@ import anyio
 from fastapi import (
     APIRouter,
     Body,
+    Depends,
     File,
     Form,
     HTTPException,
@@ -29,13 +30,24 @@ from fastapi.responses import FileResponse
 from openpyxl import Workbook
 from pydantic import BaseModel
 
+from app.api.deps import require_role
 from app.core.config import settings
 from app.core.database import engine
 from app.core.sorting import SortClause, parse_sort, sort_items
+from app.models.user import UserRole
 
 logger = logging.getLogger("app.backups")
 
-router = APIRouter(prefix="/backups", tags=["backups"])
+# Политика — admin-only (issue #409): бэкап читает и перезаписывает весь диск
+# приложения, поэтому гейт висит на роутере, а не на каждой ручке — новая
+# ручка бэкапов получает проверку по умолчанию. Dev/e2e-стенд работает через
+# общий `DEV_BYPASS_AUTH` в `get_current_user`, отдельного флага нет.
+# Тест-матрица: `tests/test_backups_auth.py`.
+router = APIRouter(
+    prefix="/backups",
+    tags=["backups"],
+    dependencies=[Depends(require_role([UserRole.admin]))],
+)
 
 BACKUPS_DIR = Path(settings.BACKUPS_PATH)
 BACKUPS_DIR.mkdir(parents=True, exist_ok=True)
@@ -1002,30 +1014,21 @@ def _run_backup_job(job_id: str) -> None:
         _set_job_progress(job_id, 100, "failed", "Ошибка создания бэкапа", status="failed", error=detail)
 
 
-def _validate_admin(current_user: str = "admin") -> None:
-    """Заглушка проверки прав администратора."""
-    if current_user != "admin":
-        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Недостаточно прав")
-
-
 @router.get("/current-preview")
 async def current_preview() -> dict:
     """Мгновенный анализ текущей БД (без restore)."""
-    _validate_admin()
     return _get_current_preview()
 
 
 @router.post("", status_code=status.HTTP_201_CREATED)
 async def create_backup() -> dict:
     """Создать архивный бэкап текущей БД и файловых storage."""
-    _validate_admin()
     return _create_backup_archive()
 
 
 @router.post("/jobs", status_code=status.HTTP_202_ACCEPTED)
 async def start_backup_job() -> dict:
     """Запустить создание бэкапа в фоне и вернуть job_id для polling."""
-    _validate_admin()
     job_id = uuid.uuid4().hex
     now = datetime.now(UTC).isoformat()
     with BACKUP_JOBS_LOCK:
@@ -1047,7 +1050,6 @@ async def start_backup_job() -> dict:
 
 @router.get("/jobs/{job_id}")
 async def get_backup_job(job_id: str) -> dict:
-    _validate_admin()
     with BACKUP_JOBS_LOCK:
         job = BACKUP_JOBS.get(job_id)
         if not job:
@@ -1082,7 +1084,6 @@ def _write_config_json(config: dict) -> None:
 @router.get("/config")
 async def get_backup_config() -> dict:
     """Получить текущие настройки автоматического бэкапа и имя БД."""
-    _validate_admin()
     config = _read_config_json()
     return {
         "db_name": _get_db_name(),
@@ -1099,7 +1100,6 @@ class BackupConfigUpdate(BaseModel):
 @router.patch("/config")
 async def update_backup_config(payload: BackupConfigUpdate) -> dict:
     """Обновить настройки автоматического бэкапа."""
-    _validate_admin()
     parts = payload.time_of_day.split(":")
     if len(parts) != 2 or not all(p.isdigit() for p in parts) or not (0 <= int(parts[0]) <= 23) or not (0 <= int(parts[1]) <= 59):
         raise HTTPException(
@@ -1132,7 +1132,6 @@ async def list_backups(
     created_at: str | None = Query(default=None),
 ) -> BackupsListResponse:
     """Список бэкапов с метаданными из JSON (пагинация после сортировки FS-списка)."""
-    _validate_admin()
     items, total = _list_backups_paginated(
         limit=limit,
         offset=offset,
@@ -1151,7 +1150,6 @@ async def list_backups(
 @router.get("/{filename}/download")
 async def download_backup(filename: str) -> FileResponse:
     """Скачать файл бэкапа."""
-    _validate_admin()
     filepath = _backup_file_path(filename)
     if not filepath.exists() or not filepath.is_file():
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Бэкап не найден")
@@ -1170,7 +1168,6 @@ async def download_backup(filename: str) -> FileResponse:
 @router.patch("/{filename}/comment")
 async def update_backup_comment(filename: str, comment: str = Body(..., embed=True)) -> dict:
     """Обновить комментарий к бэкапу."""
-    _validate_admin()
     filepath = _backup_file_path(filename)
     if not filepath.exists():
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Бэкап не найден")
@@ -1184,7 +1181,6 @@ async def update_backup_comment(filename: str, comment: str = Body(..., embed=Tr
 @router.delete("/{filename}")
 async def delete_backup(filename: str) -> dict:
     """Удалить бэкап + JSON-метаданные."""
-    _validate_admin()
     filepath = _backup_file_path(filename)
     if not filepath.exists():
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Бэкап не найден")
@@ -1196,7 +1192,6 @@ async def delete_backup(filename: str) -> dict:
 @router.post("/bulk-delete")
 async def bulk_delete(body: dict) -> dict:
     """Массовое удаление выбранных бэкапов."""
-    _validate_admin()
     filenames = body.get("filenames", [])
     if not filenames:
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Не выбрано ни одного файла")
@@ -1217,7 +1212,6 @@ async def bulk_delete(body: dict) -> dict:
 @router.post("/delete-older-than")
 async def delete_older_than(body: dict) -> dict:
     """Удалить бэкапы старше указанного количества дней."""
-    _validate_admin()
     days = body.get("days")
     if days is None or not isinstance(days, int) or days < 0:
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Некорректное количество дней")
@@ -1240,7 +1234,6 @@ async def delete_older_than(body: dict) -> dict:
 async def preview_backup(filename: str) -> dict:
     """Получить статистику (превью) из существующего бэкапа.
     Сначала ищет JSON-кэш/manifest, если нет — делает restore во временную БД."""
-    _validate_admin()
     filepath = _backup_file_path(filename)
     if not filepath.exists():
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Бэкап не найден")
@@ -1279,7 +1272,6 @@ async def preview_backup(filename: str) -> dict:
 @router.post("/upload-preview")
 async def upload_preview(file: UploadFile = File(...)) -> dict:
     """Загрузить .dump/.zip файл и получить превью статистики."""
-    _validate_admin()
     if not file.filename or not file.filename.lower().endswith((".dump", ".zip")):
         raise HTTPException(
             status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
@@ -1323,7 +1315,6 @@ async def upload_preview(file: UploadFile = File(...)) -> dict:
 @router.post("/{filename}/restore")
 async def restore_backup(filename: str, body: dict) -> dict:
     """Восстановить текущую БД и файлы из выбранного бэкапа."""
-    _validate_admin()
     db_name = _get_db_name()
 
     if body.get("db_name") != db_name:
@@ -1361,7 +1352,6 @@ async def restore_backup(filename: str, body: dict) -> dict:
 @router.post("/upload-restore")
 async def upload_restore(file: UploadFile = File(...), confirmed_db_name: str = Form(...)) -> dict:
     """Загрузить .dump/.zip файл и восстановить текущую БД и файлы из него."""
-    _validate_admin()
     db_name = _get_db_name()
 
     if confirmed_db_name != db_name:

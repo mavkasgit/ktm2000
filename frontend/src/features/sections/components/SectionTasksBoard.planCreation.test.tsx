@@ -98,7 +98,7 @@ function Harness({ tasks }: { tasks: SectionBoardTask[] }) {
   );
 }
 
-/** Таблица доски на десктопе: рядом рисуются и мобильные карточки. */
+/** Таблица доски: с #345 она единственная на обеих ширинах. */
 function desktop(): HTMLElement {
   const table = document.querySelector("table");
   if (!table) throw new Error("таблица доски не найдена");

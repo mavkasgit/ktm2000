@@ -91,7 +91,9 @@ export const router = createBrowserRouter([
       },
       {
         path: "settings/backups",
-        element: <BackupsPage />,
+        // Зеркало admin-гейта `/api/backups` (#409): ручки бэкапов admin-only,
+        // и роль без доступа к разделу не должна видеть страницу с 403.
+        element: <ProtectedRoute allowedRoles={["admin"]}><BackupsPage /></ProtectedRoute>,
         errorElement: routeErrorElement,
       },
       {

@@ -11,7 +11,7 @@ from __future__ import annotations
 from app.api.deps import READER_ROLES
 from app.main import app
 
-from tests.test_plan_endpoints_auth import _declared_roles, _iter_api_routes
+from tests.helpers.routes import declared_roles, iter_api_routes
 
 MUTATING_METHODS = {"POST", "PUT", "PATCH", "DELETE"}
 
@@ -25,11 +25,11 @@ READ_ONLY_POSTS = {
 
 def _mutating_guards() -> dict[tuple[str, str], frozenset]:
     guards: dict[tuple[str, str], frozenset] = {}
-    for path, route in _iter_api_routes(app.routes, "/api"):
+    for path, route in iter_api_routes(app.routes, "/api"):
         methods = route.methods & MUTATING_METHODS
         if not methods:
             continue
-        roles = _declared_roles(route.dependant)
+        roles = declared_roles(route.dependant)
         if roles is None:
             continue
         for method in sorted(methods):

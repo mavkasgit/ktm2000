@@ -11,8 +11,11 @@ name: Backend tests
 # #377: coverage приходит пином из `backend/requirements-dev.txt`, вместе с
 # pytest и ruff, — литералов версий в теле workflow нет.
 #
-# Прогон серийный, без xdist: под -n воркеры остаются вне замера coverage
-# (controller меряет только главный процесс) и гейт упал бы на ровном месте.
+# Прогон параллельный: `-n 4 --dist loadfile` (#378). Под xdist воркеры — отдельные
+# процессы, поэтому coverage стартует в каждом из них (`COVERAGE_PROCESS_START`
+# + `sitecustomize.py`, штатный механизм для subprocess-ов) и сводится
+# `coverage combine` до порога; иначе гейт мерил бы только диспетчер тестов.
+# Цифры решения — в шаге прогона (serial против `-n 4` на одной ревизии).
 # -p no:pytest-testmon — testmon не должен пропускать тесты в CI; блокируется
 # по имени entry point (pytest-testmon), а не по имени модуля testmon.
 # Пин 7.17.2 — patch-обновление к бейзлайну 73% (docs/night/BASELINE.md). Если цифра
@@ -90,7 +93,7 @@ jobs:
 
     steps:
       - name: Checkout
-        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           # #363 [artipacked]: checkout иначе пишет GITHUB_TOKEN в .git/config workspace,
           # откуда его может увести любой последующий шаг (upload-artifact и т. п.).
@@ -185,7 +188,7 @@ jobs:
 
       - name: Setup Python
         if: steps.scope.outputs.relevant == 'true'
-        uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065 # v5.6.0
+        uses: actions/setup-python@6d4fd22b20465ccc0f7354476588e8df7c9ca0e0 # v7.1.0
         with:
           python-version-file: ${{ steps.toolchain.outputs.python_file }}
           cache: pip
@@ -206,24 +209,54 @@ jobs:
 
       # Рэтчет числа тестов (#358) — до прогона: если набор стал меньше
       # записанного, падать должен именно этот шаг, а не «pytest прошёл быстрее».
+      # #364: команда — шаг гейта `backend-test-count`, а не своя копия.
       - name: Test-count ratchet (pytest)
         if: steps.scope.outputs.relevant == 'true'
-        run: node scripts/test-count.js --only=backend
+        run: npm run gate -- --only=backend-test-count
 
       # run-DB создаётся и удаляется тем же скриптом, что и на dev-машине:
       # изоляция прогона остаётся той же, без отдельной CI-обвязки.
+      #
+      # #378: прогон параллельный (`-n 4 --dist loadfile`, замеры ниже), и под
+      # xdist coverage нельзя запускать через `coverage run` в controller:
+      # воркеры — отдельные процессы (execnet), controller их не инструментирует,
+      # и гейт мерил бы только код диспетчера. Штатный механизм coverage для
+      # subprocess-ов: `COVERAGE_PROCESS_START` + `coverage.process_startup()`
+      # на старте каждого интерпретатора (`sitecustomize.py` на `PYTHONPATH`;
+      # PYTHONPATH и переменная наследуются воркерами). Каждый процесс пишет
+      # свой `.coverage.*`, `coverage combine` складывает их до порога.
+      # Механика проверена отдельно: два процесса, две функции, общая сводка
+      # 100% — ни одна из них не покрыта одним процессом целиком.
+      #
+      # Замер на одной ревизии (0bd84c00, 2026-11-18, весь набор включая slow;
+      # в обоих прогонах 2464 passed / 2 skipped):
+      #   serial              — 983.9 с (wall), pytest 968.43 с;
+      #   -n 4 --dist loadfile — 290.1 с (wall), pytest 283.16 с, −70.5%.
+      # Флаки не растили: прогоны по одному разу, `--retries` не включались.
+      # Чередование 2+2 через workflow_dispatch — после merge (dispatch берёт
+      # workflow только с default-ветки).
       - name: Run backend test suite with coverage
         if: steps.scope.outputs.relevant == 'true'
         run: |
+          set -euo pipefail
           RUN_ID=$(python -c "import uuid; print(uuid.uuid4().hex[:12])")
           DB_NAME="ktm2000_test_${RUN_ID}"
           python "$GITHUB_WORKSPACE/scripts/test-db.py" create "$DB_NAME"
           trap 'python "$GITHUB_WORKSPACE/scripts/test-db.py" drop "$DB_NAME" >/dev/null 2>&1 || true' EXIT
+
+          # coverage для каждого процесса, включая execnet-воркеры xdist
+          mkdir -p .ci-coverage
+          printf 'import coverage\ncoverage.process_startup()\n' > .ci-coverage/sitecustomize.py
+          printf '[run]\nsource = app\nparallel = true\n' > .coveragerc.ci
+          export PYTHONPATH="$GITHUB_WORKSPACE/.ci-coverage${PYTHONPATH:+:$PYTHONPATH}"
+          export COVERAGE_PROCESS_START="$GITHUB_WORKSPACE/.coveragerc.ci"
+
           cd backend
           TEST_RUN_ID="$RUN_ID" \
           TEST_DB_NAME="$DB_NAME" \
           TEST_DATABASE_URL="postgresql+asyncpg://ktm2000_user:ktm2000_pass_test@localhost:5212/${DB_NAME}" \
-          python -m coverage run --source=app -m pytest -q -p no:xdist -p no:pytest-testmon
+          python -m pytest -q -n 4 --dist loadfile -p no:pytest-testmon
+          python -m coverage combine
 
       - name: Coverage gate (>= 73%)
         if: steps.scope.outputs.relevant == 'true'

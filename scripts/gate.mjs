@@ -108,6 +108,26 @@ const STEPS = [
     what: " потолки логов, healthcheck и restart-политика во всех compose-файлах",
   },
   {
+    name: "ci-lint",
+    tier: "fast",
+    // `--strict-exit`: политика «ноль находок», а не «ноль ошибок» — предупреждение
+    // тоже красное (критерии #365, принцип датированных исключений).
+    command: "jactionlint --strict-exit",
+    tool: "jactionlint",
+    ci: "ci-lint.yml",
+    what: " workflow GitHub Actions и dependabot.yml: схемы, выражения, пины, политики",
+  },
+  {
+    name: "osv-allowlist",
+    tier: "fast",
+    // Сам скан зависимостей — advisory в CI (#369): находить новую CVE может
+    // любой день, и блокировать merge этим сейчас нельзя. Блокирует решение:
+    // исключение без причины или с прошедшей датой пересмотра.
+    command: "node scripts/osv-allowlist.mjs --check",
+    ci: "deps-audit.yml",
+    what: " датированные исключения аудита зависимостей (.github/osv-allowlist.json)",
+  },
+  {
     name: "test-hygiene",
     tier: "fast",
     command: "npm run test:hygiene",
@@ -189,6 +209,16 @@ const STEPS = [
     command: "node scripts/test-count.js --only=frontend",
     ci: "frontend-tests.yml",
     what: " vitest-набор не меньше записанного (минута на сбор, поэтому не в fast)",
+  },
+  {
+    name: "frontend-build",
+    tier: "full",
+    // Сборка + порог в одном шаге: порог читает dist/, и без свежей сборки он
+    // мерил бы вчерашний пакет. `bundle:update` — отдельная команда человека:
+    // гейт порог не двигает (#364).
+    command: "npm --prefix frontend run build && node scripts/bundle-size.mjs",
+    ci: "frontend-tests.yml",
+    what: " сборка фронта и порог начального пакета (raw + gzip из dist/index.html)",
   },
   {
     name: "dev-deps",

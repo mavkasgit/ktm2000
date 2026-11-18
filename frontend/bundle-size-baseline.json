@@ -1,0 +1,10 @@
+{
+  "updated": "2026-11-18",
+  "metric": "начальный пакет: script + modulepreload + stylesheet из dist/index.html",
+  "tolerance_percent": 1,
+  "initial": {
+    "assets": 10,
+    "raw_bytes": 1871125,
+    "gzip_bytes": 522780
+  }
+}

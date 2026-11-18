@@ -78,7 +78,7 @@ jobs:
 
     steps:
       - name: Checkout
-        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           # #363 [artipacked]: checkout иначе пишет GITHUB_TOKEN в .git/config workspace,
           # откуда его может увести любой последующий шаг (upload-artifact и т. п.).
@@ -126,16 +126,18 @@ jobs:
           fi
 
       - name: Setup Node
-        uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4.4.0
+        uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
         with:
           node-version-file: ${{ steps.toolchain.outputs.node_file }}
+      # #364: команды шагов — из `scripts/gate.mjs` (`--only=<шаг>`), а не свои
+      # копии в теле workflow: иначе локальный гейт и CI снова разъедутся.
       - name: Doc links
-        run: npm run check:docs
+        run: npm run gate -- --only=docs-links
 
       # Коллизия номеров ADR не видна ни в одной другой проверке: оба файла
       # существуют, ссылка резолвится. Ловит только этот шаг (#390).
       - name: ADR index
-        run: npm run check:adr
+        run: npm run gate -- --only=adr-index
 
       - name: Script tests
-        run: npm run test:scripts
+        run: npm run gate -- --only=scripts-tests

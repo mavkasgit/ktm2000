@@ -26,20 +26,22 @@ export function SettingsPage() {
       </header>
 
       <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-3">
-        <div className="rounded-lg border bg-card p-6 space-y-4">
-          <div className="flex items-center gap-3">
-            <div className="rounded-lg bg-primary/10 p-2">
-              <Database className="h-5 w-5 text-primary" />
+        {canEditSettings && (
+          <div className="rounded-lg border bg-card p-6 space-y-4">
+            <div className="flex items-center gap-3">
+              <div className="rounded-lg bg-primary/10 p-2">
+                <Database className="h-5 w-5 text-primary" />
+              </div>
+              <div>
+                <h3 className="font-medium">Бэкапы</h3>
+                <p className="text-sm text-muted-foreground">Резервное копирование и восстановление</p>
+              </div>
             </div>
-            <div>
-              <h3 className="font-medium">Бэкапы</h3>
-              <p className="text-sm text-muted-foreground">Резервное копирование и восстановление</p>
-            </div>
+            <Button onClick={() => navigate("/settings/backups")} className="w-full">
+              Открыть
+            </Button>
           </div>
-          <Button onClick={() => navigate("/settings/backups")} className="w-full">
-            Открыть
-          </Button>
-        </div>
+        )}
 
         {canEditSettings && (
           <div className="rounded-lg border bg-card p-6 space-y-4">

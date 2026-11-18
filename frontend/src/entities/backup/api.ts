@@ -1,4 +1,6 @@
 import { apiClient } from "@/shared/api/client";
+import { saveBlobAsFile } from "@/shared/lib/downloadFile";
+
 import type { BackupInfo, BackupJob, BackupPreview, BackupRestoreRequest } from "./types";
 
 export async function fetchBackupConfig(): Promise<{ db_name: string; auto_enabled: boolean; time_of_day: string }> {
@@ -57,8 +59,18 @@ export async function fetchCurrentPreview(): Promise<BackupPreview> {
   return data;
 }
 
-export function downloadBackupUrl(filename: string): string {
-  return `${import.meta.env.VITE_API_URL || "/api"}/backups/${filename}/download`;
+/**
+ * Скачать файл бэкапа через API-клиент, а не ссылкой.
+ *
+ * Ручка admin-only (#409), и голая ссылка `<a href>`/`window.open` уводит
+ * браузер в навигацию без заголовка `Authorization` — пользователь видит JSON
+ * `401` (ADR-0052 п.9). Ответ приходит blob'ом и сохраняется как файл.
+ */
+export async function downloadBackup(filename: string): Promise<void> {
+  const { data } = await apiClient.get<Blob>(`/backups/${filename}/download`, {
+    responseType: "blob",
+  });
+  saveBlobAsFile(data, filename);
 }
 
 export async function previewBackup(filename: string): Promise<BackupPreview> {
