@@ -5,8 +5,10 @@ import path from "node:path"
 import { spawnSync } from "node:child_process"
 import { fileURLToPath } from "node:url"
 import {
+  NO_LOCAL_HASH,
   SYNC_VERSION,
   extractVersions,
+  hashContent,
   normalize,
   parseArgs,
   run,
@@ -68,13 +70,15 @@ describe("verify-sync.mjs", () => {
     expect(normalize("a\r\nb\rc\n")).toBe("a\nb\nc\n")
   })
 
-  it("parseArgs извлекает --other, --root, --if-enabled, --baseline и --strict", () => {
+  it("parseArgs извлекает --other, --root, --if-enabled, --baseline, --strict, --optional и --update-baseline", () => {
+    const defaults = { optional: false, updateBaseline: false }
     expect(parseArgs(["node", "x", "--other", "../hrms"])).toEqual({
       other: "../hrms",
       root: null,
       ifEnabled: false,
       baseline: null,
       strict: false,
+      ...defaults,
     })
     expect(parseArgs(["node", "x", "--root", "/tmp/a", "--other", "../hrms", "--if-enabled"])).toEqual({
       other: "../hrms",
@@ -82,6 +86,7 @@ describe("verify-sync.mjs", () => {
       ifEnabled: true,
       baseline: null,
       strict: false,
+      ...defaults,
     })
     expect(
       parseArgs([
@@ -99,6 +104,22 @@ describe("verify-sync.mjs", () => {
       ifEnabled: false,
       baseline: "scripts/sync-baseline.json",
       strict: true,
+      ...defaults,
+    })
+    expect(parseArgs(["node", "x", "--other", "../hrms", "--optional"])).toEqual({
+      other: "../hrms",
+      root: null,
+      ifEnabled: false,
+      baseline: null,
+      strict: false,
+      optional: true,
+      updateBaseline: false,
+    })
+    expect(parseArgs(["node", "x", "--other", "../hrms", "--skip-if-missing"])).toMatchObject({
+      optional: true,
+    })
+    expect(parseArgs(["node", "x", "--other", "../hrms", "--update-baseline"])).toMatchObject({
+      updateBaseline: true,
     })
     expect(parseArgs([])).toEqual({
       other: null,
@@ -106,6 +127,7 @@ describe("verify-sync.mjs", () => {
       ifEnabled: false,
       baseline: null,
       strict: false,
+      ...defaults,
     })
   })
 
@@ -334,11 +356,35 @@ describe("verify-sync.mjs", () => {
 })
 
 const BASELINE = "scripts/sync-baseline.json"
+const VALID_HASH = "a".repeat(64)
 
 function writeBaseline(root, entries) {
   const abs = path.join(root, BASELINE)
   fs.mkdirSync(path.dirname(abs), { recursive: true })
-  fs.writeFileSync(abs, typeof entries === "string" ? entries : JSON.stringify({ entries }, null, 2))
+  fs.writeFileSync(
+    abs,
+    typeof entries === "string" ? entries : JSON.stringify({ version: 2, entries }, null, 2),
+  )
+}
+
+/**
+ * Запись снимка с фактами: kind + hash локального файла на момент снимка.
+ * hash можно передать руками (например, для записи, которой файла уже нет).
+ */
+function baselineEntry(
+  root,
+  rel,
+  { kind = "content", hash, reason = "auth/OIDC debt (ADR/spec: retro 2026-11-18)" } = {},
+) {
+  const abs = path.join(root, rel)
+  let resolved = hash
+  if (resolved === undefined) {
+    resolved =
+      fs.existsSync(abs) && fs.statSync(abs).isFile()
+        ? hashContent(fs.readFileSync(abs, "utf8"))
+        : NO_LOCAL_HASH
+  }
+  return { path: rel, kind, hash: resolved, reason, reviewed: "2026-11-18", expires: "2027-06-30" }
 }
 
 function runCli(root, other, extra = []) {
@@ -355,19 +401,18 @@ describe("verify-sync.mjs: baseline", () => {
     const otherTree = baseTree()
     otherTree["shared/file.txt"] = "изменено без поднятия версии\n"
     const other = makeTree(otherTree)
-    writeBaseline(root, [
-      { path: "shared/file.txt", reason: "auth/OIDC debt (ADR/spec: retro 2026-11-18)" },
-    ])
+    writeBaseline(root, [baselineEntry(root, "shared/file.txt")])
 
     const result = run({ root, otherRoot: other, baselinePath: path.join(root, BASELINE) })
     expect(result.ok).toBe(true)
     expect(result.errors).toEqual([])
     expect(result.known.map((k) => k.path)).toEqual(["shared/file.txt"])
+    expect(result.known[0].kind).toBe("content")
 
     const spawned = runCli(root, other)
     expect(spawned.status).toBe(0)
     expect(spawned.stdout).toContain("known")
-    expect(spawned.stdout).toContain("shared/file.txt")
+    expect(spawned.stdout).toContain("shared/file.txt [content]")
     expect(spawned.stdout).toContain("Синк-гейт пройден")
   })
 
@@ -377,9 +422,7 @@ describe("verify-sync.mjs: baseline", () => {
     otherTree["shared/file.txt"] = "изменено без поднятия версии\n"
     otherTree["mod/index.ts"] = `export const DEMO_VERSION = "9.9.9"\n`
     const other = makeTree(otherTree)
-    writeBaseline(root, [
-      { path: "shared/file.txt", reason: "auth/OIDC debt (ADR/spec: retro 2026-11-18)" },
-    ])
+    writeBaseline(root, [baselineEntry(root, "shared/file.txt")])
 
     const result = run({ root, otherRoot: other, baselinePath: path.join(root, BASELINE) })
     expect(result.ok).toBe(false)
@@ -392,14 +435,54 @@ describe("verify-sync.mjs: baseline", () => {
     expect(spawned.stderr).toContain("mod/index.ts")
   })
 
+  it("новое ухудшение на известном пути (локальный файл изменился) → fail", () => {
+    const root = makeTree(baseTree())
+    const otherTree = baseTree()
+    otherTree["shared/file.txt"] = "изменено без поднятия версии\n"
+    const other = makeTree(otherTree)
+    writeBaseline(root, [baselineEntry(root, "shared/file.txt")])
+    // Снимок сделан на текущем содержимом; дальше локальный файл правится —
+    // ровно сценарий ревью: правка useAuth.tsx не должна проходить зелёной.
+    fs.writeFileSync(path.join(root, "shared/file.txt"), "локальная правка поверх долга\n")
+
+    const result = run({ root, otherRoot: other, baselinePath: path.join(root, BASELINE) })
+    expect(result.ok).toBe(false)
+    expect(result.errors.join("\n")).toContain("shared/file.txt")
+    expect(result.errors.join("\n")).toContain("изменился с момента снимка baseline")
+    // Это не stale: запись с тем же path+kind есть, изменился только снимок.
+    expect(result.stale).toEqual([])
+
+    const spawned = runCli(root, other)
+    expect(spawned.status).toBe(1)
+    expect(spawned.stderr).toContain("--update-baseline")
+  })
+
+  it("missing-there: запись с hash ловит правку локального файла (useAuth-сценарий) → fail", () => {
+    const root = makeTree(baseTree())
+    const otherTree = baseTree()
+    delete otherTree["mod/index.ts"]
+    const other = makeTree(otherTree)
+    writeBaseline(root, [
+      baselineEntry(root, "mod/index.ts", { kind: "missing-there" }),
+    ])
+
+    const before = run({ root, otherRoot: other, baselinePath: path.join(root, BASELINE) })
+    expect(before.ok).toBe(true)
+    expect(before.known[0].kind).toBe("missing-there")
+
+    fs.appendFileSync(path.join(root, "mod/index.ts"), "// правка\n")
+    const after = run({ root, otherRoot: other, baselinePath: path.join(root, BASELINE) })
+    expect(after.ok).toBe(false)
+    expect(after.errors.join("\n")).toContain("mod/index.ts")
+    expect(after.errors.join("\n")).toContain("изменился с момента снимка baseline")
+  })
+
   it("--strict игнорирует baseline → fail (exit 1)", () => {
     const root = makeTree(baseTree())
     const otherTree = baseTree()
     otherTree["shared/file.txt"] = "изменено без поднятия версии\n"
     const other = makeTree(otherTree)
-    writeBaseline(root, [
-      { path: "shared/file.txt", reason: "auth/OIDC debt (ADR/spec: retro 2026-11-18)" },
-    ])
+    writeBaseline(root, [baselineEntry(root, "shared/file.txt")])
 
     const result = run({
       root,
@@ -417,12 +500,42 @@ describe("verify-sync.mjs: baseline", () => {
   it("неиспользованная запись baseline печатается как stale и не валит (exit 0)", () => {
     const root = makeTree(baseTree())
     const other = makeTree(baseTree())
-    writeBaseline(root, [{ path: "shared/file.txt", reason: "долг закрыт" }])
+    writeBaseline(root, [{ ...baselineEntry(root, "shared/file.txt"), reason: "долг закрыт" }])
 
     const spawned = runCli(root, other)
     expect(spawned.status).toBe(0)
     expect(spawned.stdout).toContain("stale")
-    expect(spawned.stdout).toContain("shared/file.txt")
+    expect(spawned.stdout).toContain("shared/file.txt [content]")
+  })
+
+  it("--update-baseline пересобирает снимок с kind/hash/датами и сохраняет reason", () => {
+    const root = makeTree(baseTree())
+    const otherTree = baseTree()
+    otherTree["shared/file.txt"] = "изменено без поднятия версии\n"
+    const other = makeTree(otherTree)
+    // Снимок прежнего формата: причина должна пережить пересборку.
+    writeBaseline(root, [
+      { path: "shared/file.txt", reason: "auth/OIDC debt (ADR/spec: retro 2026-11-18)" },
+    ])
+
+    const updated = runCli(root, other, ["--update-baseline"])
+    expect(updated.status).toBe(0)
+
+    const saved = JSON.parse(fs.readFileSync(path.join(root, BASELINE), "utf8"))
+    expect(saved.version).toBe(2)
+    expect(saved.entries).toHaveLength(1)
+    expect(saved.entries[0]).toMatchObject({
+      path: "shared/file.txt",
+      kind: "content",
+      hash: hashContent("общий файл\n"),
+      reason: "auth/OIDC debt (ADR/spec: retro 2026-11-18)",
+      reviewed: expect.stringMatching(/^\d{4}-\d{2}-\d{2}$/),
+      expires: "2027-06-30",
+    })
+
+    const after = runCli(root, other)
+    expect(after.status).toBe(0)
+    expect(after.stdout).toContain("known")
   })
 
   it.each([
@@ -431,6 +544,116 @@ describe("verify-sync.mjs: baseline", () => {
     ["нет entries", JSON.stringify({ files: [] })],
     ["entries не массив", JSON.stringify({ entries: {} })],
     ["запись без path", JSON.stringify({ entries: [{ reason: "нет пути" }] })],
+    [
+      "запись без kind",
+      JSON.stringify({
+        entries: [
+          {
+            path: "shared/file.txt",
+            hash: VALID_HASH,
+            reason: "долг",
+            reviewed: "2026-11-18",
+            expires: "2027-06-30",
+          },
+        ],
+      }),
+    ],
+    [
+      "неизвестный kind",
+      JSON.stringify({
+        entries: [
+          {
+            path: "shared/file.txt",
+            kind: "checksum",
+            hash: VALID_HASH,
+            reason: "долг",
+            reviewed: "2026-11-18",
+            expires: "2027-06-30",
+          },
+        ],
+      }),
+    ],
+    [
+      "hash не sha256",
+      JSON.stringify({
+        entries: [
+          {
+            path: "shared/file.txt",
+            kind: "content",
+            hash: "не-hash",
+            reason: "долг",
+            reviewed: "2026-11-18",
+            expires: "2027-06-30",
+          },
+        ],
+      }),
+    ],
+    [
+      "нет reviewed",
+      JSON.stringify({
+        entries: [
+          {
+            path: "shared/file.txt",
+            kind: "content",
+            hash: VALID_HASH,
+            reason: "долг",
+            expires: "2027-06-30",
+          },
+        ],
+      }),
+    ],
+    [
+      "нет expires",
+      JSON.stringify({
+        entries: [
+          {
+            path: "shared/file.txt",
+            kind: "content",
+            hash: VALID_HASH,
+            reason: "долг",
+            reviewed: "2026-11-18",
+          },
+        ],
+      }),
+    ],
+    [
+      "expires раньше reviewed",
+      JSON.stringify({
+        entries: [
+          {
+            path: "shared/file.txt",
+            kind: "content",
+            hash: VALID_HASH,
+            reason: "долг",
+            reviewed: "2027-01-01",
+            expires: "2026-01-01",
+          },
+        ],
+      }),
+    ],
+    [
+      "дубль path+kind+hash",
+      JSON.stringify({
+        entries: [
+          {
+            path: "shared/file.txt",
+            kind: "content",
+            hash: VALID_HASH,
+            reason: "долг",
+            reviewed: "2026-11-18",
+            expires: "2027-06-30",
+          },
+          {
+            path: "shared/file.txt",
+            kind: "content",
+            hash: VALID_HASH,
+            reason: "долг",
+            reviewed: "2026-11-18",
+            expires: "2027-06-30",
+          },
+        ],
+      }),
+    ],
   ])("битый baseline (%s) → exit 2", (_label, content) => {
     const root = makeTree(baseTree())
     const other = makeTree(baseTree())
@@ -453,7 +676,7 @@ describe("verify-sync.mjs: baseline", () => {
     expect(spawned.status).toBe(0)
   })
 
-  it("отсутствующий sibling-проект → exit 2 с внятной причиной", () => {
+  it("отсутствующий sibling-проект → exit 2 с внятной причиной (ручной режим строгий)", () => {
     const root = makeTree(baseTree())
     const missing = path.join(root, "нет-такого-соседа")
 
@@ -464,4 +687,22 @@ describe("verify-sync.mjs: baseline", () => {
     expect(spawned.status).toBe(2)
     expect(spawned.stderr).toContain("sibling-проект не найден")
   })
+
+  it.each(["--optional", "--skip-if-missing"])(
+    "отсутствующий sibling-проект с %s → exit 0 и сообщение (pre-push без соседа)",
+    (flag) => {
+      const root = makeTree(baseTree())
+      const missing = path.join(root, "нет-такого-соседа")
+
+      const spawned = spawnSync(
+        process.execPath,
+        [SCRIPT, "--root", root, "--other", missing, "--baseline", BASELINE, flag],
+        { cwd: root, encoding: "utf8" },
+      )
+      expect(spawned.status).toBe(0)
+      expect(spawned.stdout).toContain("Синк-гейт пропущен")
+      expect(spawned.stdout).toContain("sibling-проект не найден")
+      expect(spawned.stderr).toBe("")
+    },
+  )
 })

@@ -11,7 +11,13 @@ describe.skipIf(!syncGateEnabled)("verify-sync integration", () => {
   it("реальный запуск --other ../hrms из репозитория → exit 0", () => {
     const spawned = spawnSync(
       process.execPath,
-      ["scripts/verify-sync.mjs", "--other", "../hrms"],
+      [
+        "scripts/verify-sync.mjs",
+        "--other",
+        "../hrms",
+        "--baseline",
+        "scripts/sync-baseline.json",
+      ],
       { cwd: REPO_ROOT, encoding: "utf8" },
     )
     expect(spawned.status).toBe(0)
