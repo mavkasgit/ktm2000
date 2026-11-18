@@ -17,19 +17,8 @@ export interface UseFullscreenElementReturn {
   toggle: () => Promise<void>;
 }
 
-/** Safari до 16.4 отдаёт Fullscreen API только с префиксом. */
-interface WebkitElement extends Element {
-  webkitRequestFullscreen?: () => Promise<void> | void;
-}
-
-interface WebkitDocument extends Document {
-  webkitFullscreenElement?: Element | null;
-  webkitExitFullscreen?: () => Promise<void> | void;
-}
-
 /**
- * Полноэкранный режим для конкретного элемента: промисы, webkit-префиксы,
- * ошибка наружу.
+ * Полноэкранный режим для конкретного элемента: промисы, ошибка наружу.
  *
  * `exit()` закрывает только свой элемент: если на странице открыт чужой
  * fullscreen, хук его не трогает.
@@ -103,10 +92,8 @@ export function useFullscreenElement<T extends Element>(
     };
 
     document.addEventListener("fullscreenchange", sync);
-    document.addEventListener("webkitfullscreenchange", sync);
     return () => {
       document.removeEventListener("fullscreenchange", sync);
-      document.removeEventListener("webkitfullscreenchange", sync);
     };
   }, [ref]);
 
@@ -114,26 +101,19 @@ export function useFullscreenElement<T extends Element>(
 }
 
 function fullscreenElement(): Element | null {
-  const legacy = document as WebkitDocument;
-  return legacy.webkitFullscreenElement ?? document.fullscreenElement ?? null;
+  return document.fullscreenElement ?? null;
 }
 
-function requestFullscreen(element: Element): Promise<void> | void {
-  if (typeof element.requestFullscreen === "function") {
-    return element.requestFullscreen(); // reactuse-ok: обёртка Fullscreen API — enter() ReactUse не возвращает промис (upstream #516)
+function requestFullscreen(element: Element): Promise<void> {
+  if (typeof element.requestFullscreen !== "function") {
+    throw new Error("Fullscreen API недоступен в этом браузере");
   }
-  const legacy = element as WebkitElement;
-  const request = legacy.webkitRequestFullscreen;
-  if (typeof request === "function") return request.call(element);
-  throw new Error("Fullscreen API недоступен в этом браузере");
+  return element.requestFullscreen(); // reactuse-ok: обёртка Fullscreen API — enter() ReactUse не возвращает промис (upstream #516)
 }
 
-function exitFullscreen(): Promise<void> | void {
-  if (typeof document.exitFullscreen === "function") {
-    return document.exitFullscreen(); // reactuse-ok: обёртка Fullscreen API — exit() ReactUse не возвращает промис (upstream #516)
+function exitFullscreen(): Promise<void> {
+  if (typeof document.exitFullscreen !== "function") {
+    throw new Error("Fullscreen API недоступен в этом браузере");
   }
-  const legacy = document as WebkitDocument;
-  const exit = legacy.webkitExitFullscreen;
-  if (typeof exit === "function") return exit.call(document);
-  throw new Error("Fullscreen API недоступен в этом браузере");
+  return document.exitFullscreen(); // reactuse-ok: обёртка Fullscreen API — exit() ReactUse не возвращает промис (upstream #516)
 }

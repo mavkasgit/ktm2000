@@ -101,19 +101,12 @@ describe("useFullscreenElement", () => {
     expect(result.current.value).toBe(false);
   });
 
-  it("использует webkitRequestFullscreen, если обычного нет", async () => {
-    const webkitRequestFullscreen = vi.fn().mockResolvedValue(undefined);
-    Object.defineProperty(target, "webkitRequestFullscreen", {
-      configurable: true,
-      value: webkitRequestFullscreen,
-    });
+  it("enter() отклоняется, если Fullscreen API недоступен", async () => {
+    const onError = vi.fn();
     const ref = { current: target };
-    const { result } = renderHook(() => useFullscreenElement(ref));
+    const { result } = renderHook(() => useFullscreenElement(ref, { onError }));
 
-    await act(async () => {
-      await result.current.enter();
-    });
-
-    expect(webkitRequestFullscreen).toHaveBeenCalledTimes(1);
+    await expect(result.current.enter()).rejects.toThrow("Fullscreen API недоступен");
+    expect(onError).toHaveBeenCalledTimes(1);
   });
 });
