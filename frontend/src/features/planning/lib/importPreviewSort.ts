@@ -103,7 +103,7 @@ export function sortImportPreviewRows<T extends ImportPreviewRow>(
 ): T[] {
   if (!sortConfig) return [...rows];
   const { key, dir } = sortConfig;
-  return [...rows].sort((a, b) => {
+  return rows.toSorted((a, b) => {
     const aValue = sortValue(a, key);
     const bValue = sortValue(b, key);
     if (aValue == null && bValue == null) return 0;

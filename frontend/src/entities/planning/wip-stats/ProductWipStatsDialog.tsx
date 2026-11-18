@@ -31,7 +31,7 @@ function sortRowsByConfigs<T, Field extends string>(
   getSortValue: (row: T, field: Field) => string | number,
 ): T[] {
   if (sortConfigs.length === 0) return rows;
-  return [...rows].sort((a, b) => {
+  return rows.toSorted((a, b) => {
     for (const sort of sortConfigs) {
       const valueA = getSortValue(a, sort.field);
       const valueB = getSortValue(b, sort.field);

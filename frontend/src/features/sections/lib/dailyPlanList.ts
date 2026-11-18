@@ -69,7 +69,7 @@ function parseQueryParts(query: string): number[] | null {
 export function buildPlanEntries(plans: DailyPlanSummary[]): DailyPlanListEntry[] {
   const numbersById = new Map<number, number>();
   const countersByDate = new Map<string, number>();
-  const ordered = [...plans].sort((left, right) => {
+  const ordered = plans.toSorted((left, right) => {
     if (left.plan_date !== right.plan_date) return left.plan_date < right.plan_date ? 1 : -1;
     return left.created_at.localeCompare(right.created_at);
   });

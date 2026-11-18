@@ -90,7 +90,7 @@ export function IssueSourceDialog({
 
   // Порядок id в ключе кэша не должен плодить копии одного и того же набора.
   const excludedForKey = useMemo(
-    () => [...excludedBalanceIds].sort((a, b) => a - b),
+    () => excludedBalanceIds.toSorted((a, b) => a - b),
     [excludedBalanceIds],
   );
 

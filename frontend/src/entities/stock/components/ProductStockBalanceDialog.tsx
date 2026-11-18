@@ -45,7 +45,7 @@ export function ProductStockBalanceDialog({
   // ADR-0055: операции — часть идентичности остатка, поэтому вторичные ключи
   // сортировки обязаны включать операции, иначе две разные строки одного
   // участка сортировались бы как равные и читались как дубль.
-  const sortedBalances = [...balances].sort(
+  const sortedBalances = balances.toSorted(
     (a, b) =>
       (a.location_name || "").localeCompare(b.location_name || "") ||
       (a.quality_state || "").localeCompare(b.quality_state || "") ||

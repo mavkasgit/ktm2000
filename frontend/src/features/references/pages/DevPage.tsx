@@ -34,7 +34,7 @@ function SectionsReferenceTable() {
     );
   }
 
-  const sorted = [...(sections ?? [])].sort((a, b) => a.sort_order - b.sort_order || a.id - b.id);
+  const sorted = (sections ?? []).toSorted((a, b) => a.sort_order - b.sort_order || a.id - b.id);
 
   if (sorted.length === 0) {
     return <p className="py-6 text-sm text-muted-foreground">Справочник участков пуст.</p>;

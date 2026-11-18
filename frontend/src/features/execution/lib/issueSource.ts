@@ -87,7 +87,7 @@ function candidateGroupKey(candidate: IssuePreviewCandidate): string {
   const operations =
     candidate.completed_operations === null
       ? "null"
-      : JSON.stringify([...candidate.completed_operations].sort());
+      : JSON.stringify(candidate.completed_operations.toSorted());
   return [
     candidate.group_key,
     candidate.location_id,
@@ -119,7 +119,7 @@ export function groupRemainingAfter(
 function groupSkuLabel(candidates: readonly IssuePreviewCandidate[]): string {
   const seen = new Set<string>();
   const skus: string[] = [];
-  for (const candidate of [...candidates].sort((left, right) => left.product_id - right.product_id)) {
+  for (const candidate of candidates.toSorted((left, right) => left.product_id - right.product_id)) {
     if (candidate.sku && !seen.has(candidate.sku)) {
       seen.add(candidate.sku);
       skus.push(candidate.sku);
@@ -167,7 +167,7 @@ export function buildIssueCandidateGroups(
 
   return [...groups.values()]
     .map((group) => {
-      const sorted = [...group.candidates].sort((left, right) => left.order - right.order);
+      const sorted = group.candidates.toSorted((left, right) => left.order - right.order);
       return {
         ...group,
         candidates: sorted,

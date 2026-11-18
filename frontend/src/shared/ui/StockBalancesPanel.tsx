@@ -402,7 +402,7 @@ export function StockBalancesPanel({
 
   const sort = buildBalanceSortParam(sortConfigs, defaultSort);
   const normalizedLocationIds = useMemo(
-    () => (locationIds?.length ? [...locationIds].sort((a, b) => a - b) : undefined),
+    () => (locationIds?.length ? locationIds.toSorted((a, b) => a - b) : undefined),
     [locationIds],
   );
   // В `resetPageDeps` уходит строка, а не массив: сравнение там по идентичности,

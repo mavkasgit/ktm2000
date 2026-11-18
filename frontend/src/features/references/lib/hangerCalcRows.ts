@@ -595,7 +595,7 @@ export function sortHangerCalcRows<T extends HangerCalcRow | PairedHangerCalcRow
   sortConfigs: readonly SortConfig<HangerCalcSortField>[],
 ): T[] {
   if (sortConfigs.length === 0) return [...rows];
-  return [...rows].sort((a, b) => {
+  return rows.toSorted((a, b) => {
     for (const cfg of sortConfigs) {
       const aValue = sortValue(a, cfg.field);
       const bValue = sortValue(b, cfg.field);

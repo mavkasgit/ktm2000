@@ -268,7 +268,7 @@ function groupArticle(group: TaskGroup): string {
  * затем подпись группы (артикул · размер) по алфавиту.
  */
 export function sortGroupsByRemaining(groups: TaskGroup[]): TaskGroup[] {
-  return [...groups].sort((a, b) => {
+  return groups.toSorted((a, b) => {
     const remainingDiff = b.totalRemaining - a.totalRemaining;
     if (remainingDiff !== 0) return remainingDiff;
     const articleDiff = groupArticle(a).localeCompare(groupArticle(b), "ru");
@@ -299,7 +299,7 @@ export function groupStatus(
 
 export function sortGroupsByPriority(groups: TaskGroup[]): TaskGroup[] {
   const ORDER = { in_work: 0, partially: 1, pending: 2, done: 3, blocked: 4 };
-  return [...groups].sort((a, b) => {
+  return groups.toSorted((a, b) => {
     const sa = groupStatus(a);
     const sb = groupStatus(b);
     return (ORDER[sa] ?? 9) - (ORDER[sb] ?? 9);

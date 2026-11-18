@@ -110,8 +110,7 @@ export function PreviewZones({
         {will_replay.length > 0 ? (
           <ul className="mt-1 space-y-0.5">
             {will_replay
-              .slice()
-              .sort((a, b) => a.order - b.order)
+              .toSorted((a, b) => a.order - b.order)
               .map((r) => (
                 <li
                   key={r.action_id}

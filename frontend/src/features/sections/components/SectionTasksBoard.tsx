@@ -1075,7 +1075,7 @@ export function SectionTasksBoard({
       return def ? [{ def, order: config.order }] : [];
     });
     if (clientSorts.length === 0) return visibleTasks;
-    return [...visibleTasks].sort((a, b) => {
+    return visibleTasks.toSorted((a, b) => {
       for (const { def, order } of clientSorts) {
         const left = def.getSortValue(a);
         const right = def.getSortValue(b);

@@ -212,7 +212,7 @@ if (registry) {
 
 // docs/toolchain.md между маркерами — генерация от реестра, не второй источник.
 function renderTable() {
-  const rows = [...registry.tools].sort((a, b) => a.id.localeCompare(b.id));
+  const rows = registry.tools.toSorted((a, b) => a.id.localeCompare(b.id));
   const head =
     "| id | чем | закреплено где | версия | где исполняется | блокирует | последний обзор |\n| --- | --- | --- | --- | --- | --- | --- |";
   const body = rows.map(

@@ -52,7 +52,7 @@ type StockEffect = BatchForceDeletePreview["stock_effects"][number];
  */
 export function stockEffectRowKey(effect: StockEffect): string {
   const ops = effect.completed_operations;
-  const opsAxis = ops === null ? "<null>" : `<${[...ops].sort().join(",")}>`;
+  const opsAxis = ops === null ? "<null>" : `<${ops.toSorted().join(",")}>`;
   const dimsAxis =
     effect.dimensions == null ? "<null>" : JSON.stringify(effect.dimensions);
   return `${effect.product_sku}|${effect.location_id}|${dimsAxis}|${opsAxis}`;

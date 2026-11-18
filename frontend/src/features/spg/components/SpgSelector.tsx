@@ -84,8 +84,7 @@ export function SpgSelector({ spgs, selectedIds, onToggle, onSelect, onClear }: 
                   )}
                 >
                   {spg.sections
-                    .slice()
-                    .sort((a, b) => a.sort_order - b.sort_order)
+                    .toSorted((a, b) => a.sort_order - b.sort_order)
                     .slice(0, 4)
                     .map((sec) => {
                       const SecIcon = pickIcon(sec.icon);
