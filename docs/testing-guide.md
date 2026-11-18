@@ -72,6 +72,10 @@ repos/mavkasgit/ktm2000/branches/main/protection` (2026-11-03): contexts =
 Прогон параллельный (`-n 4 --dist loadfile`, #378): coverage в каждом воркере
 стартует сам (`COVERAGE_PROCESS_START` + `sitecustomize.py`) и сводится
 `coverage combine` до гейта, иначе под xdist мерился бы только диспетчер.
+Замер на одной ревизии (0bd84c00, 2026-11-18, весь набор включая `slow`):
+serial 983.9 с против 290.1 с на `-n 4 --dist loadfile` (−70.5%), в обоих
+2464 passed / 2 skipped. Чередование 2+2 через `workflow_dispatch` — после
+merge: dispatch берёт workflow только с default-ветки.
 
 ## Стенд E2E
 

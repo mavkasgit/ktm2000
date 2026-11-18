@@ -56,8 +56,9 @@ missing. Локально missing — честная пометка, а не з�
 проверок зелёный гейт не означает «всё как в CI».
 
 Тесты, типы, линтеры и сборки (`backend-tests`, `frontend-unit`,
-`frontend-types`, `frontend-types-e2e`, `frontend-lint`, `scripts-tests`,
-`ruff`) идут через задачи, а задачи берут слот машинного семафора `heavy`
+`frontend-types`, `frontend-types-e2e`, `frontend-lint`, `frontend-build`,
+`scripts-tests`, `ruff`) идут через задачи, а задачи берут слот машинного
+семафора `heavy`
 (корневой `AGENTS.md`, «Тяжёлые команды»): два агента на одной машине не
 запускают pytest, `tsc`, линтер и сборку одновременно. Порядок шагов внутри
 одного гейта не меняется — слот берётся на каждый шаг.

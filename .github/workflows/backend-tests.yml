@@ -227,6 +227,14 @@ jobs:
       # свой `.coverage.*`, `coverage combine` складывает их до порога.
       # Механика проверена отдельно: два процесса, две функции, общая сводка
       # 100% — ни одна из них не покрыта одним процессом целиком.
+      #
+      # Замер на одной ревизии (0bd84c00, 2026-11-18, весь набор включая slow;
+      # в обоих прогонах 2464 passed / 2 skipped):
+      #   serial              — 983.9 с (wall), pytest 968.43 с;
+      #   -n 4 --dist loadfile — 290.1 с (wall), pytest 283.16 с, −70.5%.
+      # Флаки не растили: прогоны по одному разу, `--retries` не включались.
+      # Чередование 2+2 через workflow_dispatch — после merge (dispatch берёт
+      # workflow только с default-ветки).
       - name: Run backend test suite with coverage
         if: steps.scope.outputs.relevant == 'true'
         run: |
