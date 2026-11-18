@@ -10,7 +10,7 @@ import { usePaginatedTableQuery } from "@/shared/hooks/usePaginatedTableQuery"
 import { buildColumnApiParams, buildColumnFilterValues } from "@/shared/lib/columnSpecs"
 import { buildSortParam } from "@/shared/lib/sortQueryParam"
 import { getAriaSort } from "@/shared/lib/multiSort"
-import { fetchBackups } from "@/entities/backup/api"
+import { downloadBackup, fetchBackups } from "@/entities/backup/api"
 import type { ListBackupsParams } from "@/entities/backup/api"
 import {
   Dialog,
@@ -341,6 +341,14 @@ export function BackupsPage() {
       setPreviewOpen(false)
     } finally {
       setPreviewLoading(false)
+    }
+  }
+
+  const handleDownload = async (filename: string) => {
+    try {
+      await downloadBackup(filename)
+    } catch (e: any) {
+      toast({ variant: "destructive", title: "Ошибка скачивания бэкапа", description: getErrorMessage(e) })
     }
   }
 
@@ -883,7 +891,7 @@ export function BackupsPage() {
                         variant="ghost"
                         size="icon"
                         className="h-7 w-7"
-                        onClick={() => window.open(`/api/backups/${b.filename}/download`)}
+                        onClick={() => handleDownload(b.filename)}
                         title="Скачать"
                       >
                         <Download className="h-4 w-4" />
