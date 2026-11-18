@@ -170,10 +170,13 @@ async function cancelIssueViaUI(page: Page, transferId: number) {
 
   const cancelDialog = page.getByTestId("issue-cancel-dialog");
   await expect(cancelDialog).toBeVisible({ timeout: 10_000 });
-  // Предпросмотр считает сервер: до его ответа кнопка задизейблена.
-  await expect(cancelDialog.getByTestId("issue-cancel-summary")).toBeVisible({
+  // Предпросмотр считает сервер: до его ответа режим не выбрать.
+  await expect(cancelDialog.getByTestId("issue-cancel-remainder-summary")).toBeVisible({
     timeout: 20_000,
   });
+  // #349: режим выбирается явно. Остаток — путь без согласия на откат
+  // уже принятого, поэтому сценарий возврата B на склад выбирает его.
+  await cancelDialog.getByTestId("issue-cancel-mode-remainder").click();
   const confirm = cancelDialog.getByTestId("issue-cancel-confirm");
   await expect(confirm).toBeEnabled({ timeout: 20_000 });
   await confirm.click();
