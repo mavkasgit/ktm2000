@@ -1,5 +1,19 @@
+import { realpathSync } from "node:fs"
 import { defineConfig } from "vitest/config"
 import { fileURLToPath, URL } from "node:url"
+
+const projectRoot = fileURLToPath(new URL("..", import.meta.url))
+// `node_modules` в git-worktree часто junction на основной клон: realpath
+// пакета оказывается вне `projectRoot`, и Vite отказывает в чтении setup-
+// файлов (`/@fs/...`). Разрешаем реальный каталог зависимостей — в обычном
+// клоне он и так лежит внутри projectRoot.
+const nodeModules = (() => {
+  try {
+    return realpathSync(fileURLToPath(new URL("./node_modules", import.meta.url)))
+  } catch {
+    return null
+  }
+})()
 
 export default defineConfig({
   resolve: {
@@ -11,7 +25,7 @@ export default defineConfig({
   server: {
     fs: {
       // Сквозная проверка иконок читает backend-сиды (../../backend/...) — разрешаем.
-      allow: [fileURLToPath(new URL("..", import.meta.url))],
+      allow: [projectRoot, ...(nodeModules ? [nodeModules] : [])],
     },
   },
   test: {
