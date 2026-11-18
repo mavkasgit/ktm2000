@@ -256,6 +256,17 @@ const PROBES = [
     expect: /новых находок/i,
     note: "Enter-обработчик без isComposing — новая находка сверх базлайна",
   },
+  {
+    step: "reactuse-diff",
+    write: [
+      {
+        path: "frontend/src/_probe_reactuse.ts",
+        content: "export const probe = window.matchMedia('(max-width: 1px)')\n",
+      },
+    ],
+    expect: /ручных примитивов/i,
+    note: "новый локальный matchMedia вместо useMediaQuery из ReactUse",
+  },
 ];
 
 function parseArgs(argv) {

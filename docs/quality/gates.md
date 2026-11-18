@@ -31,6 +31,7 @@
 | `frontend-types-e2e` | fast | типы e2e-спек | CI frontend-tests.yml | да | prove-checks 2026-11-03 |
 | `frontend-lint` | fast | ESLint: архитектурные границы FSD (ошибки) и потолок предупреждений по правилам и файлам — `npm run lint:ratchet` | pre-commit, CI frontend-tests.yml | да | prove-checks 2026-11-03: ошибки и рост предупреждений |
 | `modern-web` | full | новые legacy-паттерны веб-платформы сверх базлайна `docs/quality/modern-web-baseline.json` | локальный гейт | да | prove-checks 2026-11-18 |
+| `reactuse-diff` | fast | новые ручные `matchMedia`/clipboard/observers вместо ReactUse | локальный гейт | да | prove-checks 2026-11-18 |
 | `backend-tests` | full | pytest backend (создаёт свою БД) | CI backend-tests.yml | да | prove-checks --heavy 2026-11-03 |
 | `frontend-unit` | full | vitest с покрытием | CI frontend-tests.yml | да | prove-checks --heavy 2026-11-03 |
 | `frontend-test-count` | full | vitest-набор не меньше записанного в baseline | CI frontend-tests.yml | да | prove-checks --heavy 2026-11-03 |

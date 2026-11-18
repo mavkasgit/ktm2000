@@ -161,6 +161,13 @@ const STEPS = [
     what: " новые legacy-паттерны веб-платформы сверх базлайна docs/quality/modern-web-baseline.json",
   },
   {
+    name: "reactuse-diff",
+    tier: "fast",
+    command: "node scripts/reactuse-diff.mjs",
+    ci: null,
+    what: " новые ручные примитивы (matchMedia, clipboard, observers) вместо @siberiacancode/reactuse",
+  },
+  {
     name: "backend-tests",
     tier: "full",
     command: "npm run test:pytest",
