@@ -1,5 +1,3 @@
-import { useEffect, useState } from "react";
-
 /**
  * Граница телефона в проекте: `md` из Tailwind (768px).
  *
@@ -18,39 +16,12 @@ export const DESKTOP_VIEWPORT_QUERY = "(min-width: 768px)";
  * мобильные карточки, платя за каждую строку дважды. Хук отдаёт, какой экран
  * активен, и компонент выбирает одну ветку, сохраняя обе кодовые ветки.
  *
- * Значение читается синхронно на первом рендере (без лишнего кадра с пустым
- * экраном) и обновляется по `change` — поворот планшета не требует
- * перезагрузки. Если `matchMedia` в окружении нет, возвращается `false`:
- * компонент обязан рисовать осмысленное состояние и без хука.
+ * Реализация — `useMediaQuery` из `@siberiacancode/reactuse` (issue #415):
+ * значение читается синхронно на первом рендере (`useSyncExternalStore` +
+ * `window.matchMedia(...).matches`), обновляется по `change`, при отсутствии
+ * `window` (SSR) отдаёт `false`. Своя копия повторяла это, но дополнительно
+ * держала устаревший `addListener` для Safari < 14 — в проекте таких браузеров
+ * нет. Экспорт остаётся своим, чтобы не менять тридцать с лишним импортов и
+ * чтобы порог `DESKTOP_VIEWPORT_QUERY` жил рядом с хуком.
  */
-export function useMediaQuery(query: string): boolean {
-  const [matches, setMatches] = useState(() => readMediaQuery(query));
-
-  useEffect(() => {
-    if (typeof window === "undefined" || typeof window.matchMedia !== "function") return;
-    const mediaQueryList = window.matchMedia(query);
-    const handleChange = (event: MediaQueryListEvent) => setMatches(event.matches);
-    // Синхронизация на случай, если запрос уже изменился между рендером и
-    // подпиской (быстрая смена ширины окна).
-    setMatches(mediaQueryList.matches);
-
-    if (typeof mediaQueryList.addEventListener === "function") {
-      mediaQueryList.addEventListener("change", handleChange);
-      return () => mediaQueryList.removeEventListener("change", handleChange);
-    }
-    // Safari < 14 и старые WebKit знают только устаревший API.
-    const legacyList = mediaQueryList as unknown as {
-      addListener: (listener: (event: MediaQueryListEvent) => void) => void;
-      removeListener: (listener: (event: MediaQueryListEvent) => void) => void;
-    };
-    legacyList.addListener(handleChange);
-    return () => legacyList.removeListener(handleChange);
-  }, [query]);
-
-  return matches;
-}
-
-function readMediaQuery(query: string): boolean {
-  if (typeof window === "undefined" || typeof window.matchMedia !== "function") return false;
-  return window.matchMedia(query).matches;
-}
+export { useMediaQuery } from "@siberiacancode/reactuse";
