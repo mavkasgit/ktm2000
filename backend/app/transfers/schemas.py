@@ -4,8 +4,9 @@ from __future__ import annotations
 
 from datetime import datetime
 from decimal import Decimal
+from typing import Literal
 
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
 
 
 class CreateTransferPayload(BaseModel):
@@ -34,4 +35,17 @@ class CreateTransferPayload(BaseModel):
 class CorrectTransferPayload(BaseModel):
     quantity: Decimal
     comment: str | None = None
+
+
+class CancelIssuePayload(BaseModel):
+    """Body for ``POST /transfers/issues/{issue_no}/cancel`` (#349).
+
+    Режим обязателен: «остаток» и «полный откат» по-разному обходятся с
+    уже принятой частью, и выбирать за оператора нельзя. Повтор с тем же
+    ``idempotency_key`` возвращает записанный исход и не двигает склад.
+    """
+
+    mode: Literal["remainder", "full"]
+    comment: str | None = None
+    idempotency_key: str | None = Field(default=None, max_length=128)
 

@@ -615,7 +615,7 @@ async def test_cancel_issue_restores_only_its_own_skipped_stages(client, session
 
     resp = await client.post(
         f"/api/transfers/issues/{issue_no}/cancel",
-        params={"comment": "подбор нужно пересобрать"},
+        json={"mode": "full", "comment": "подбор нужно пересобрать"},
         headers=ctx["headers"],
     )
     assert resp.status_code == 200, resp.text
@@ -660,12 +660,13 @@ async def test_issue_cancel_preview_reports_names_not_ids(client, session) -> No
     assert resp.status_code == 200, resp.text
     preview = resp.json()
     assert preview["issue_no"] == issue_no
-    assert preview["can_cancel"] is True and preview["reason"] is None
-    assert len(preview["returns"]) == len(transfer_ids) == 2
-    assert {r["location_name"] for r in preview["returns"]} == {"Хранилище Б", ctx["raw_name"]}
-    assert {Decimal(r["quantity"]) for r in preview["returns"]} == {Decimal(40), Decimal(20)}
+    assert preview["remainder"]["can_cancel"] is True and preview["remainder"]["reason"] is None
+    assert preview["full"]["can_cancel"] is True and preview["full"]["reason"] is None
+    assert len(preview["remainder"]["returns"]) == len(transfer_ids) == 2
+    assert {r["location_name"] for r in preview["remainder"]["returns"]} == {"Хранилище Б", ctx["raw_name"]}
+    assert {Decimal(r["quantity"]) for r in preview["remainder"]["returns"]} == {Decimal(40), Decimal(20)}
 
-    summary = preview["summary"]
+    summary = preview["full"]["summary"]
     assert "вернём" in summary and "Хранилище Б" in summary, summary
     _assert_no_ids_in(
         summary,
@@ -680,12 +681,13 @@ async def test_issue_cancel_preview_reports_names_not_ids(client, session) -> No
     assert "не найдена" in unknown.json()["detail"]
 
 
-async def test_cancel_issue_reverses_ledger_and_refuses_repetition(client, session) -> None:
+async def test_cancel_issue_reverses_ledger_and_is_idempotent_on_repetition(client, session) -> None:
     """Отмена выдачи: компенсирующие проводки, возврат балансов, журнал действий.
 
     Каждая передача откатывается своим ``transfer_send`` Action (ADR-0019),
     поэтому у компенсации есть ``reverses_id`` и собственный ``action_id``.
-    Повторная отмена обязана отказаться, а не вернуть склад второй раз.
+    Повтор (#349) идемпотентен: возвращает тот же исход и не двигает склад
+    второй раз — материал не возвращается дважды.
     """
     ctx = await _two_warehouse_setup(session, "ISSCANC")
     body = await _take(
@@ -700,7 +702,7 @@ async def test_cancel_issue_reverses_ledger_and_refuses_repetition(client, sessi
 
     resp = await client.post(
         f"/api/transfers/issues/{issue_no}/cancel",
-        params={"comment": "артикул не тот"},
+        json={"mode": "full", "comment": "артикул не тот"},
         headers=ctx["headers"],
     )
     assert resp.status_code == 200, resp.text
@@ -734,11 +736,11 @@ async def test_cancel_issue_reverses_ledger_and_refuses_repetition(client, sessi
 
     again = await client.post(
         f"/api/transfers/issues/{issue_no}/cancel",
-        params={"comment": "ещё раз"},
+        json={"mode": "full", "comment": "ещё раз"},
         headers=ctx["headers"],
     )
-    assert again.status_code == 400, again.text
-    assert "уже отменена" in again.json()["detail"]
+    assert again.status_code == 200, again.text
+    assert again.json()["idempotent_replay"] is True
     assert (await _snapshot(session, product_id))["txs"] == after_cancel["txs"], (
         "повторная отмена не добавляет ни одной проводки"
     )
@@ -767,11 +769,13 @@ async def test_issue_cancel_without_executed_work_is_allowed_despite_auto_accept
         f"/api/transfers/issues/{issue_no}/cancel-preview", headers=ctx["headers"]
     )
     assert preview.status_code == 200, preview.text
-    assert preview.json()["can_cancel"] is True, (
+    assert preview.json()["remainder"]["can_cancel"] is True, (
         "авто-приёмка без фактического действия получателя — не основание отказа"
     )
     cancel = await client.post(
-        f"/api/transfers/issues/{issue_no}/cancel", headers=ctx["headers"]
+        f"/api/transfers/issues/{issue_no}/cancel",
+        json={"mode": "full"},
+        headers=ctx["headers"],
     )
     assert cancel.status_code == 200, cancel.text
     assert await _balance_qty(session, ctx["product_id"], ctx["whb_id"]) == Decimal(40)

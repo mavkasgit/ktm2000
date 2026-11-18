@@ -739,6 +739,10 @@ async def cancel_transfer(
     transfer_id: int,
     actor_id: int,
     comment: str | None = None,
+    allow_accepted: bool = False,
+    mode: str | None = None,
+    issue_no: str | None = None,
+    operation_key: str | None = None,
 ) -> dict:
     """Отмена передачи через ``ReversalService.reverse`` (тикет #124).
 
@@ -747,6 +751,16 @@ async def cancel_transfer(
     ``apply`` — caller здесь их не пишет. Domain-guard ``in_work``
     (приёмная сторона уже завершила часть) — предварительная проверка
     до вызова reverse.
+
+    ``allow_accepted`` — режим «полный откат» выдачи (#349): принятая
+    получателем часть тоже возвращается, поэтому task-level guard
+    ``in_work`` снимается. Покрытие приёмного участка всё равно проверяет
+    ``ReversalService``: если материал уже израсходован и вернуть его нечем,
+    откат отказывает — минус на участке не создаётся.
+
+    ``mode``/``issue_no``/``operation_key`` попадают в аудит одной операции
+    выдачи (#349): кто, когда, какая передача, какой режим и что откатили
+    (``reversed_tx_ids``).
     """
     from app.reversal.errors import (
         AlreadyReversed,
@@ -761,13 +775,24 @@ async def cancel_transfer(
         return {
             "transfer_id": transfer.id,
             "status": transfer.status.value,
+            "reversed_tx_ids": [],
         }
+    before_status = transfer.status
+    before_accepted = transfer.accepted_quantity
     if transfer.status == TransferStatus.amended:
         raise ValueError(
             "This transfer was superseded by an amend; cancel the new transfer instead"
         )
     if transfer.status != TransferStatus.accepted:
-        raise ValueError("Only accepted transfers can be cancelled")
+        # #349: полный откат выдачи отменяет и частично принятую передачу —
+        # принятая часть возвращается с участка обратной проводкой.
+        allowed_for_full = transfer.status in {
+            TransferStatus.partially_accepted,
+            TransferStatus.sent,
+            TransferStatus.draft,
+        }
+        if not (allow_accepted and allowed_for_full):
+            raise ValueError("Only accepted transfers can be cancelled")
 
     from_task = (
         await _get_task(db, transfer.from_task_id)
@@ -788,7 +813,7 @@ async def cancel_transfer(
         - to_cache["completed_quantity"]
         - to_cache["rejected_quantity"]
     )
-    if in_work < transfer.sent_quantity:
+    if in_work < transfer.sent_quantity and not allow_accepted:
         raise ValueError(
             f"Target task has already completed or rejected parts. "
             f"Cannot cancel transfer as target task only has {in_work} in work"
@@ -813,8 +838,9 @@ async def cancel_transfer(
         detail = "; ".join(b.detail for b in preview.blockers)
         raise ValueError(f"Отменить передачу нельзя: {detail}")
     assert preview.plan_token is not None
+    reversed_tx_ids: list[int] = []
     try:
-        await svc.reverse(
+        reverse_result = await svc.reverse(
             db,
             send_action.id,
             plan_token=preview.plan_token,
@@ -822,6 +848,7 @@ async def cancel_transfer(
             actor=actor_name,
             actor_id=actor_id,
         )
+        reversed_tx_ids = list(reverse_result.compensated_tx_ids or [])
     except AlreadyReversed:
         # Идемпотентность: другой транзакцией уже отменено.
         pass
@@ -849,6 +876,24 @@ async def cancel_transfer(
     from_section = await db.get(Section, transfer.from_section_id)
     await db.get(Section, transfer.to_section_id)
     product = await db.get(Product, transfer.product_id)
+    # #349: режим и номер выдачи — часть аудита одной операции. Пустые
+    # значения не пишем, чтобы обычная отмена одной передачи осталась
+    # прежней по форме.
+    audit_changes: dict = {
+        "before": {
+            "status": before_status.value,
+            "accepted_quantity": None if before_accepted is None else str(before_accepted),
+        },
+        "after": {"status": "cancelled", "accepted_quantity": "0"},
+        "reversed_tx_ids": reversed_tx_ids,
+    }
+    if mode is not None:
+        audit_changes["mode"] = mode
+    if issue_no is not None:
+        audit_changes["issue_no"] = issue_no
+    if operation_key is not None:
+        audit_changes["operation_key"] = operation_key
+
     await log_action(
         db,
         status="success",
@@ -865,12 +910,13 @@ async def cancel_transfer(
         action=AuditAction.CANCEL,
         entity_type=AuditEntityType.TRANSFER,
         entity_id=transfer.id,
-        changes={"before": {"status": "accepted"}, "after": {"status": "cancelled"}},
+        changes=audit_changes,
     )
 
     return {
         "transfer_id": transfer.id,
         "status": transfer.status.value,
+        "reversed_tx_ids": reversed_tx_ids,
     }
 
 

@@ -362,9 +362,17 @@ class StockCompensator(MirrorLedgerMixin):
         # Полная компенсация проводок передачи эквивалентна доменной отмене:
         # Transfer уходит в cancelled, иначе S6 (accepted ⇔ net == sent)
         # нарушается, а повторный preview честно блокируется по п.2.
+        # #349: полный откат выдачи отменяет и частично принятую передачу —
+        # её проводки скомпенсированы ровно так же, поэтому статус тоже
+        # обязан стать cancelled (иначе S6 краснеет на оставшемся статусе).
         if plan.ref_id is not None:
             transfer = await db.get(Transfer, plan.ref_id)
-            if transfer is not None and transfer.status == TransferStatus.accepted:
+            if transfer is not None and transfer.status in {
+                TransferStatus.accepted,
+                TransferStatus.partially_accepted,
+                TransferStatus.sent,
+                TransferStatus.draft,
+            }:
                 transfer.status = TransferStatus.cancelled
                 transfer.accepted_quantity = Decimal(0)
         return ReversalResult(
