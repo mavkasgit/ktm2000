@@ -104,6 +104,11 @@
       "proven_at": "2026-11-18",
       "note": "Enter-обработчик без isComposing — новая находка сверх базлайна",
       "how": "npm run prove-checks -- --only=modern-web"
+    },
+    "reactuse-diff": {
+      "proven_at": "2026-11-18",
+      "note": "новый локальный matchMedia вместо useMediaQuery из ReactUse",
+      "how": "npm run prove-checks -- --only=reactuse-diff"
     }
   },
   "exempt": {
