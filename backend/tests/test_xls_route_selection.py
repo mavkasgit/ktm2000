@@ -21,12 +21,22 @@ import pytest
 from app.models.product import Product, ProductType
 from app.models.route import RouteRuleProfile, RouteSelectionRule
 from app.models.section import Section
+from app.seeds.selection_rules import SELECTION_RULES
 from app.services.excel_import import parse_factory_plan_workbook
 from app.services.route_selection import select_route_for_payload
 from sqlalchemy import select
 
 from tests.plan_sample import build_sample_plan_workbook
 from tests.test_routes_seed import _seed_default_sections
+
+
+def _declared_rule(code: str) -> dict:
+    """Правило из продакшн-сида, а не копия в фикстуре.
+
+    Копия проверяла бы сама себя: расхождение справочника с кодом (T-379)
+    такой тест не заметил бы.
+    """
+    return next(rule for rule in SELECTION_RULES if rule["code"] == code)
 
 
 def _load_test_rows() -> list[dict]:
@@ -197,41 +207,6 @@ async def _seed_full_environment(session) -> int:
             ],
         },
         {
-            "code": "anod_colors",
-            "name": "Анод: определение цвета",
-            "priority": 100,
-            "phase": "resolve_operations",
-            "conditions": [
-                {"source": "payload", "field_path": "color", "operator": "not_empty", "value": None},
-            ],
-            "actions": [
-                {
-                    "action": "set_operation_by_mapping",
-                    "section_code": "ANODIZING",
-                    "group_code": "ANOD",
-                    "lookup_field": "color",
-                    "mapping": [
-                        {"keyword": "анодсеребро", "operation_code": "ANOD_01"},
-                        {"keyword": "анодтитан", "operation_code": "ANOD_08"},
-                        {"keyword": "анодчерный", "operation_code": "ANOD_05"},
-                        {"keyword": "анодчёрный", "operation_code": "ANOD_05"},
-                        {"keyword": "анодшампань", "operation_code": "ANOD_06"},
-                        {"keyword": "анодзолото", "operation_code": "ANOD_02"},
-                        {"keyword": "анодбронза", "operation_code": "ANOD_03"},
-                        {"keyword": "анодмедь", "operation_code": "ANOD_07"},
-                        {"keyword": "серебр", "operation_code": "ANOD_01"},
-                        {"keyword": "золот", "operation_code": "ANOD_02"},
-                        {"keyword": "бронз", "operation_code": "ANOD_03"},
-                        {"keyword": "чёрн", "operation_code": "ANOD_05"},
-                        {"keyword": "черн", "operation_code": "ANOD_05"},
-                        {"keyword": "шампань", "operation_code": "ANOD_06"},
-                        {"keyword": "мед", "operation_code": "ANOD_07"},
-                        {"keyword": "титан", "operation_code": "ANOD_08"},
-                    ],
-                },
-            ],
-        },
-        {
             "code": "pack_types",
             "name": "Упаковка: определение типа",
             "priority": 100,
@@ -253,6 +228,10 @@ async def _seed_full_environment(session) -> int:
             ],
         },
     ]
+
+    # Цвет анодирования — правило из продакшн-сида (T-379): коды веера и
+    # старые названия объявлены там, а не в копии фикстуры.
+    rules_data.append(_declared_rule("anod_colors"))
 
     for rd in rules_data:
         rule = RouteSelectionRule(
@@ -374,7 +353,7 @@ async def test_test_xls_rows_produce_diverse_routes(client, session) -> None:
     silver_rows = [r for r in results if "серебр" in r["color"].lower()]
     assert len(silver_rows) > 0, "Should have rows with color=серебро"
     for r in silver_rows:
-        assert r["signature"]["resolved_operations"].get("ANODIZING/ANOD") == "ANOD_01", (
+        assert r["signature"]["resolved_operations"].get("ANODIZING/ANODIZING") == "ANOD_01", (
             f"ANOD_01 resolved for серебро row {r['rows']}"
         )
 
@@ -382,7 +361,7 @@ async def test_test_xls_rows_produce_diverse_routes(client, session) -> None:
     black_rows = [r for r in results if "черн" in r["color"].lower()]
     assert len(black_rows) > 0, "Should have rows with color=черный"
     for r in black_rows:
-        assert r["signature"]["resolved_operations"].get("ANODIZING/ANOD") == "ANOD_05", (
+        assert r["signature"]["resolved_operations"].get("ANODIZING/ANODIZING") == "ANOD_05", (
             f"ANOD_05 resolved for черный row {r['rows']}"
         )
 
@@ -390,7 +369,7 @@ async def test_test_xls_rows_produce_diverse_routes(client, session) -> None:
     gold_rows = [r for r in results if "золот" in r["color"].lower()]
     assert len(gold_rows) > 0, "Should have rows with color=золото"
     for r in gold_rows:
-        assert r["signature"]["resolved_operations"].get("ANODIZING/ANOD") == "ANOD_02", (
+        assert r["signature"]["resolved_operations"].get("ANODIZING/ANODIZING") == "ANOD_02", (
             f"ANOD_02 resolved for золото row {r['rows']}"
         )
 
@@ -398,7 +377,7 @@ async def test_test_xls_rows_produce_diverse_routes(client, session) -> None:
     champagne_rows = [r for r in results if "шампань" in r["color"].lower()]
     assert len(champagne_rows) > 0, "Should have rows with color=шампань"
     for r in champagne_rows:
-        assert r["signature"]["resolved_operations"].get("ANODIZING/ANOD") == "ANOD_06", (
+        assert r["signature"]["resolved_operations"].get("ANODIZING/ANODIZING") == "ANOD_06", (
             f"ANOD_06 resolved for шампань row {r['rows']}"
         )
 
@@ -406,7 +385,7 @@ async def test_test_xls_rows_produce_diverse_routes(client, session) -> None:
     copper_rows = [r for r in results if "мед" in r["color"].lower()]
     assert len(copper_rows) > 0, "Should have rows with color=медь"
     for r in copper_rows:
-        assert r["signature"]["resolved_operations"].get("ANODIZING/ANOD") == "ANOD_07", (
+        assert r["signature"]["resolved_operations"].get("ANODIZING/ANODIZING") == "ANOD_07", (
             f"ANOD_07 resolved for медь row {r['rows']}"
         )
 
@@ -414,7 +393,7 @@ async def test_test_xls_rows_produce_diverse_routes(client, session) -> None:
     titan_rows = [r for r in results if "титан" in r["color"].lower()]
     assert len(titan_rows) > 0, "Should have rows with color=титан"
     for r in titan_rows:
-        assert r["signature"]["resolved_operations"].get("ANODIZING/ANOD") == "ANOD_08", (
+        assert r["signature"]["resolved_operations"].get("ANODIZING/ANODIZING") == "ANOD_08", (
             f"ANOD_08 resolved for титан row {r['rows']}"
         )
 
@@ -532,7 +511,7 @@ async def test_test_xls_row_2256_with_skip_shot_blast_excludes_shot(client, sess
     assert "PACKING" in required_codes
 
     # Operations should resolve correctly
-    assert result.resolved_operations.get(("ANODIZING", "ANOD")) == "ANOD_05", "черный → ANOD_05"
+    assert result.resolved_operations.get(("ANODIZING", "ANODIZING")) == "ANOD_05", "черный → ANOD_05"
     assert result.resolved_operations.get(("ANODIZING", "PACK")) == "PACK_STRETCH", "ГП → PACK_STRETCH"
 
     # No PRESS/DRILL since operation is empty
@@ -571,4 +550,65 @@ async def test_import_row_without_color_extracts_black_from_name(client, session
         profile_id=profile_id,
     )
 
-    assert result.resolved_operations.get(("ANODIZING", "ANOD")) == "ANOD_05"
+    assert result.resolved_operations.get(("ANODIZING", "ANODIZING")) == "ANOD_05"
+
+
+#: Код веера или название цвета из книги → операция участка ANODIZING (T-379).
+#: В книге код пишут кириллицей (`С31`), канон — латиница (`C31`).
+ANOD_COLOR_CASES: list[tuple[str, str]] = [
+    ("C0", "C0"),
+    ("c0", "C0"),
+    ("С0", "C0"),
+    ("с0", "C0"),
+    ("C35", "C35"),
+    ("C31", "C31"),
+    ("c31", "C31"),
+    ("С31", "C31"),
+    ("C32", "C32"),
+    ("С32", "C32"),
+    ("C33", "C33"),
+    ("C34", "C34"),
+    ("C41", "C41"),
+    ("C44", "C44"),
+    ("C51", "C51"),
+    ("C54", "C54"),
+    ("S120-0", "S120-0"),
+    ("S120-2", "S120-2"),
+    ("s120-0", "S120-0"),
+    ("светлая шампань", "C31"),
+    ("Светлая шампань", "C31"),
+    ("тёмная шампань", "C32"),
+    ("темная шампань", "C32"),
+    ("светлая бронза", "C33"),
+    ("тёмная бронза", "C34"),
+    ("тёмная медь", "C44"),
+    ("нержавеющая сталь", "C51"),
+    ("тёмный титан", "C54"),
+    ("старое золото", "S120-2"),
+    # Старые названия остаются за старыми операциями: «шампань» ≠ C31.
+    ("серебро", "ANOD_01"),
+    ("шампань", "ANOD_06"),
+    ("золото", "ANOD_02"),
+    ("бронза", "ANOD_03"),
+    ("медь", "ANOD_07"),
+    ("титан", "ANOD_08"),
+    ("черный", "ANOD_05"),
+]
+
+
+@pytest.mark.parametrize(("color", "expected_operation"), ANOD_COLOR_CASES)
+@pytest.mark.asyncio
+async def test_anod_color_resolves_its_operation(
+    client, session, color: str, expected_operation: str
+) -> None:
+    """Цвет кодом или названием находит свою операцию участка ANODIZING."""
+    profile_id = await _seed_full_environment(session)
+
+    result = await select_route_for_payload(
+        session,
+        {"operation": "", "output_kind": "ГП", "color": color},
+        product=None,
+        profile_id=profile_id,
+    )
+
+    assert result.resolved_operations.get(("ANODIZING", "ANODIZING")) == expected_operation
