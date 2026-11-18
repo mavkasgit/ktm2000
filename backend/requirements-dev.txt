@@ -1,7 +1,7 @@
 # Dev-инструменты backend (#377): чем проверяем, а не на чём крутится приложение.
 #
 # Почему отдельный файл. До #377 версии инструментов жили только в телах
-# workflow: `pip install ruff==0.16.9` — `.github/workflows/ruff.yml:45`,
+# workflow: `pip install ruff==0.17.4` — `.github/workflows/ruff.yml:45`,
 # `pip install coverage==7.17.2` — `.github/workflows/backend-tests.yml:73`
 # (решение #245 Q21: «отдельным pip install, requirements/Docker не трогаем»).
 # Локально у этих версий не было источника: `ruff` из PATH и `ruff` из CI могли
@@ -36,10 +36,10 @@
 
 -r requirements.txt
 
-# Линтер backend. Пин совпадает с `ruff.yml` (`pip install ruff==0.16.9`):
+# Линтер backend. Пин совпадает с `ruff.yml` (`pip install ruff==0.17.4`):
 # на 0.16.9 снят ноль находок и посчитан скоуп `ruff.toml`, на другой версии
 # «красный/зелёный» может разойтись с CI.
-ruff==0.16.9
+ruff==0.17.4
 
 # Pillow — перекодирование фото в `scripts/sync-ekranchik.py`: в «Экранчике»
 # имена всегда `*.jpg`, а прод-хранилище KTM отдаёт и PNG. Без Pillow синк
