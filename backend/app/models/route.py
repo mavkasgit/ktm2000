@@ -186,6 +186,16 @@ class SectionOperation(Base):
         default="production",
         server_default=text("'production'"),
     )
+    # Время последней правки операции. Нужно синку справочника цветов
+    # (Экранчик): при расхождении с локальной копией выигрывает более свежая
+    # правка, и без этой метки сравнивать нечего. Часовой пояс — UTC в
+    # timestamptz: метка уходит наружу как ISO 8601 и сравнивается по времени.
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True),
+        nullable=False,
+        server_default=func.now(),
+        onupdate=func.now(),
+    )
 
     section: Mapped["Section"] = relationship("Section")
 

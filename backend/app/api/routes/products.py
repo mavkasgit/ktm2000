@@ -14,7 +14,7 @@ from fastapi import (
     UploadFile,
     status,
 )
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, ConfigDict, Field
 from sqlalchemy import Float, Integer, case, cast, delete, exists, func, or_, select
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import selectinload
@@ -28,6 +28,7 @@ from app.models.defect import Defect
 from app.models.dimension import ProductDimension
 from app.models.internal_plan import SectionPlanLine
 from app.models.product import (
+    DEFAULT_HANGER_KEY,
     DimensionState,
     ProcessingFlag,
     Product,
@@ -97,6 +98,18 @@ class ProductLengthOut(BaseModel):
     is_primary: bool
 
 
+class PackSpec(BaseModel):
+    """Состав комплекта стороннего заказа: например, 4 комплекта по 2 предмета.
+
+    Ключи фиксированы: опечатка в ``attributes.pack`` не должна тихо менять
+    смысл нормы. Значения — положительные штуки.
+    """
+
+    sets_per_hanger: int = Field(gt=0, description="Комплектов на подвес")
+    pieces_per_set: int = Field(gt=0, description="Предметов в комплекте")
+    model_config = ConfigDict(extra="forbid")
+
+
 class ProductIn(BaseModel):
     sku: str
     code: str | None = None
@@ -121,6 +134,10 @@ class ProductIn(BaseModel):
     is_catalog_item: bool = False
     skip_shot_blast: bool = False
     dimension_state: DimensionState = DimensionState.length
+    # Сторонний заказ (T-380, спека 0003): attributes.third_party/customer/pack.
+    third_party: bool = False
+    customer: str | None = None
+    pack: PackSpec | None = None
     lengths: list[ProductLengthIn] = []
     aliases: list[str] = []
     processing_flag_codes: list[str] = []
@@ -151,6 +168,9 @@ class ProductPatch(BaseModel):
     is_catalog_item: bool | None = None
     skip_shot_blast: bool | None = None
     dimension_state: DimensionState | None = None
+    third_party: bool | None = None
+    customer: str | None = None
+    pack: PackSpec | None = None
     lengths: list[ProductLengthIn] | None = None
     aliases: list[str] | None = None
     processing_flag_codes: list[str] | None = None
@@ -214,6 +234,9 @@ class ProductOut(BaseModel):
     is_paired_profile: bool
     skip_shot_blast: bool
     dimension_state: DimensionState
+    third_party: bool = False
+    customer: str | None = None
+    pack: dict[str, int] | None = None
     lengths: list[ProductLengthOut]
     aliases: list[str]
     processing_flags: list[ProcessingFlagInfo]
@@ -568,6 +591,8 @@ def _build_sheet_hanger_quantity_dict(
     state: DimensionState,
     manual_by_length: dict[str, int | None] | None,
     existing: dict[str, dict[str, int | None]] | None = None,
+    manual_default: int | None = None,
+    default_provided: bool = False,
 ) -> dict[str, dict[str, int | None]]:
     """Словарь «кол-во на подвес» листа (#126): ровно одна запись по длине полотна.
 
@@ -575,15 +600,26 @@ def _build_sheet_hanger_quantity_dict(
     считается формулой листов (недостающие ширина/высота → ``auto=None``).
     Ручное значение сохраняется по тому же ключу; при смене длины полотна
     подхватывается из единственной прежней записи, чтобы не терять его.
-    Без длины — пустой словарь (запись появится после заведения осей).
+    Без длины — запись ``default`` ручной нормы (T-380, volume без осей);
+    без ручной нормы словарь пуст.
     """
     dims = dims or {}
     existing = existing or {}
     length = dims.get("length_mm")
     if length is None:
-        return {}
+        if not default_provided:
+            prev = existing.get(DEFAULT_HANGER_KEY)
+            if isinstance(prev, dict):
+                manual_default = prev.get("manual")
+        if manual_default is None:
+            return {}
+        return {DEFAULT_HANGER_KEY: {"auto": None, "manual": manual_default}}
     key = _length_key(length)
     manual = manual_by_length.get(key) if manual_by_length else None
+    if manual is None and manual_default is not None:
+        # Ручная норма без длины ложится на единственную длину полотна:
+        # у листа запись одна по определению (#126).
+        manual = manual_default
     if manual is None:
         prev = existing.get(key)
         if isinstance(prev, dict):
@@ -622,14 +658,61 @@ def _sheet_hanger_quantity_out(
 def _manual_by_length_from_payload(
     quantity_per_hanger: dict[str, HangerQuantityValue] | None,
 ) -> dict[str, int | None] | None:
-    """Извлечь manual per length из payload (auto игнорируется — считается сервером)."""
+    """Извлечь manual per length из payload (auto игнорируется — считается сервером).
+
+    Ключ ``default`` — не длина, а ручная норма безразмерного изделия (T-380);
+    он разбирается отдельно :func:`_manual_default_from_payload`.
+    """
     if quantity_per_hanger is None:
         return None
     return {
         _length_key(float(k)): v.manual
         for k, v in quantity_per_hanger.items()
-        if isinstance(v, HangerQuantityValue)
+        if isinstance(v, HangerQuantityValue) and k != DEFAULT_HANGER_KEY
     }
+
+
+def _manual_default_from_payload(
+    quantity_per_hanger: dict[str, HangerQuantityValue] | None,
+) -> tuple[bool, int | None]:
+    """Ручная норма ``default`` (T-380): (ключ пришёл в payload, значение)."""
+    if quantity_per_hanger is None:
+        return False, None
+    entry = quantity_per_hanger.get(DEFAULT_HANGER_KEY)
+    if not isinstance(entry, HangerQuantityValue):
+        return False, None
+    return True, entry.manual
+
+
+def _validate_manual_default_key(
+    provided: bool,
+    *,
+    dimension_state: DimensionState,
+    hanger_mode: str,
+    manual_default: int | None,
+) -> None:
+    """Ключ ``default`` применим только к объёмным изделиям (T-380).
+
+    У ``length`` норма по длине, у ``area`` — формула листа по полотну;
+    ручная норма без длины для них не определена. Ручное значение имеет
+    смысл только при ``hanger_mode=manual``: при ``auto`` она молча стала бы
+    ``None``, и карточка потеряла бы норму 8.
+    """
+    if not provided:
+        return
+    if dimension_state != DimensionState.volume:
+        raise HTTPException(
+            status_code=422,
+            detail=(
+                "Ручная норма с ключом default применима только к объёмным "
+                "изделиям (dimension_state=volume)"
+            ),
+        )
+    if manual_default is not None and hanger_mode != "manual":
+        raise HTTPException(
+            status_code=422,
+            detail="Ручная норма default.manual требует hanger_mode=manual",
+        )
 
 
 async def _sync_boolean_flag(db: AsyncSession, product_id: int, code: str, value: bool) -> None:
@@ -693,15 +776,28 @@ def _to_product_out(
     ]
     flag_codes = {f.code for f in product.processing_flags}
     quantity_per_hanger = None
-    if product.dimension_state in (DimensionState.area, DimensionState.volume) and dimensions:
+    has_sheet_length = (
+        product.dimension_state in (DimensionState.area, DimensionState.volume)
+        and bool(dimensions)
+        and dimensions.get("length_mm") is not None
+    )
+    if has_sheet_length:
         quantity_per_hanger = _sheet_hanger_quantity_out(product, dimensions)
     else:
-        by_length = product.quantity_per_hanger_by_length
-        if by_length:
-            quantity_per_hanger = {
-                length: HangerQuantityValue(auto=entry.get("auto"), manual=entry.get("manual"))
-                for length, entry in by_length.items()
-            }
+        if product.dimension_state == DimensionState.volume:
+            # Без осей у volume остаётся ручная норма default (T-380).
+            default_entry = product.hanger_default_entry()
+            if default_entry is not None:
+                quantity_per_hanger = {
+                    DEFAULT_HANGER_KEY: HangerQuantityValue(**default_entry)
+                }
+        if quantity_per_hanger is None:
+            by_length = product.quantity_per_hanger_by_length
+            if by_length:
+                quantity_per_hanger = {
+                    length: HangerQuantityValue(auto=entry.get("auto"), manual=entry.get("manual"))
+                    for length, entry in by_length.items()
+                }
     return ProductOut(
         id=product.id,
         sku=product.sku,
@@ -730,6 +826,9 @@ def _to_product_out(
         is_paired_profile=product.is_paired_profile,
         skip_shot_blast="skip_shot_blast" in flag_codes,
         dimension_state=product.dimension_state,
+        third_party=product.third_party,
+        customer=product.customer,
+        pack=product.pack,
         lengths=lengths,
         aliases=product.aliases or [],
         processing_flags=flags,
@@ -1004,10 +1103,33 @@ async def create_product(
         if existing_code:
             raise HTTPException(status_code=409, detail="Артикул с таким кодом уже существует")
 
+    # Валидацию нормы делаем до db.add/flush: 422 не должен оставлять
+    # полузаписанный артикул.
+    manual_by_length = _manual_by_length_from_payload(payload.quantity_per_hanger)
+    default_provided, manual_default = _manual_default_from_payload(payload.quantity_per_hanger)
+    _validate_manual_default_key(
+        default_provided,
+        dimension_state=payload.dimension_state,
+        hanger_mode=payload.hanger_mode or "auto",
+        manual_default=manual_default,
+    )
+
     product_data = payload.model_dump(
-        exclude={"lengths", "processing_flag_codes", "skip_shot_blast", "is_laminated", "quantity_per_hanger"}
+        exclude={
+            "lengths",
+            "processing_flag_codes",
+            "skip_shot_blast",
+            "is_laminated",
+            "quantity_per_hanger",
+            "third_party",
+            "customer",
+            "pack",
+        }
     )
     item = Product(**product_data)
+    item.third_party = payload.third_party
+    item.customer = payload.customer
+    item.pack = payload.pack.model_dump() if payload.pack else None
     db.add(item)
     await db.flush()
 
@@ -1032,10 +1154,13 @@ async def create_product(
     if flag_codes:
         await _sync_processing_flags(db, item.id, list(set(flag_codes)))
 
-    manual_by_length = _manual_by_length_from_payload(payload.quantity_per_hanger)
     if payload.dimension_state in (DimensionState.area, DimensionState.volume):
         item.quantity_per_hanger = _build_sheet_hanger_quantity_dict(
-            {}, payload.dimension_state, manual_by_length
+            {},
+            payload.dimension_state,
+            manual_by_length,
+            manual_default=manual_default,
+            default_provided=default_provided,
         )
     else:
         item.quantity_per_hanger = _build_hanger_quantity_dict(
@@ -1124,9 +1249,27 @@ async def patch_product(
 
     old_aliases = item.aliases if payload.aliases is not None else None
 
+    manual_by_length = _manual_by_length_from_payload(payload.quantity_per_hanger)
+    default_provided, manual_default = _manual_default_from_payload(payload.quantity_per_hanger)
+    _validate_manual_default_key(
+        default_provided,
+        dimension_state=payload.dimension_state or item.dimension_state,
+        hanger_mode=payload.hanger_mode or item.hanger_mode,
+        manual_default=manual_default,
+    )
+
     patch_data = payload.model_dump(
         exclude_unset=True,
-        exclude={"lengths", "processing_flag_codes", "skip_shot_blast", "is_laminated", "quantity_per_hanger"},
+        exclude={
+            "lengths",
+            "processing_flag_codes",
+            "skip_shot_blast",
+            "is_laminated",
+            "quantity_per_hanger",
+            "third_party",
+            "customer",
+            "pack",
+        },
     )
     new_code = patch_data.get("code")
     if new_code:
@@ -1158,6 +1301,13 @@ async def patch_product(
     for key, value in patch_data.items():
         setattr(item, key, value)
 
+    if "third_party" in payload.model_fields_set:
+        item.third_party = payload.third_party
+    if "customer" in payload.model_fields_set:
+        item.customer = payload.customer
+    if "pack" in payload.model_fields_set:
+        item.pack = payload.pack.model_dump() if payload.pack else None
+
     if payload.dimension_state is not None:
         await migrate_dimensions_for_state(db, product_id, payload.dimension_state)
 
@@ -1179,13 +1329,21 @@ async def patch_product(
     if payload.is_laminated is not None:
         await _sync_boolean_flag(db, product_id, "is_laminated", payload.is_laminated)
 
-    manual_by_length = _manual_by_length_from_payload(payload.quantity_per_hanger)
     existing = item.quantity_per_hanger_by_length or {}
     sheet_dims: dict[str, float] | None = None
     if item.dimension_state in (DimensionState.area, DimensionState.volume):
         sheet_dims = await _sheet_dimension_values(db, product_id) or None
+        existing_sheet = dict(existing)
+        default_entry = item.hanger_default_entry()
+        if default_entry is not None:
+            existing_sheet[DEFAULT_HANGER_KEY] = default_entry
         item.quantity_per_hanger = _build_sheet_hanger_quantity_dict(
-            sheet_dims, item.dimension_state, manual_by_length, existing
+            sheet_dims,
+            item.dimension_state,
+            manual_by_length,
+            existing_sheet,
+            manual_default=manual_default,
+            default_provided=default_provided,
         )
     else:
         current_lengths = (

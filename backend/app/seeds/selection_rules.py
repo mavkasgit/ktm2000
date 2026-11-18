@@ -250,6 +250,49 @@ SELECTION_RULES = [
                 "group_code": "ANODIZING",
                 "lookup_field": "color",
                 "mapping": [
+                    # Составные названия веера ClassicELOX (T-379) — раньше
+                    # общих «шампань», «бронза», «медь», «титан», «золото»
+                    # ниже: сопоставление подстрочное, и общее правило иначе
+                    # перехватило бы «светлую шампань» первым.
+                    {"keyword": "светлая шампань", "operation_code": "C31"},
+                    {"keyword": "тёмная шампань", "operation_code": "C32"},
+                    {"keyword": "темная шампань", "operation_code": "C32"},
+                    {"keyword": "светлая бронза", "operation_code": "C33"},
+                    {"keyword": "тёмная бронза", "operation_code": "C34"},
+                    {"keyword": "темная бронза", "operation_code": "C34"},
+                    {"keyword": "тёмная медь", "operation_code": "C44"},
+                    {"keyword": "темная медь", "operation_code": "C44"},
+                    {"keyword": "нержавеющая сталь", "operation_code": "C51"},
+                    {"keyword": "тёмный титан", "operation_code": "C54"},
+                    {"keyword": "темный титан", "operation_code": "C54"},
+                    {"keyword": "старое золото", "operation_code": "S120-2"},
+                    # Коды веера: канон — латиница, кириллица — как пишет
+                    # книга учёта. Код в колонке «Цвет» разбирает это правило,
+                    # а не COLOR_TOKENS.
+                    {"keyword": "s120-0", "operation_code": "S120-0"},
+                    {"keyword": "s120-2", "operation_code": "S120-2"},
+                    {"keyword": "c0", "operation_code": "C0"},
+                    {"keyword": "с0", "operation_code": "C0"},
+                    {"keyword": "c35", "operation_code": "C35"},
+                    {"keyword": "с35", "operation_code": "C35"},
+                    {"keyword": "c31", "operation_code": "C31"},
+                    {"keyword": "с31", "operation_code": "C31"},
+                    {"keyword": "c32", "operation_code": "C32"},
+                    {"keyword": "с32", "operation_code": "C32"},
+                    {"keyword": "c33", "operation_code": "C33"},
+                    {"keyword": "с33", "operation_code": "C33"},
+                    {"keyword": "c34", "operation_code": "C34"},
+                    {"keyword": "с34", "operation_code": "C34"},
+                    {"keyword": "c41", "operation_code": "C41"},
+                    {"keyword": "с41", "operation_code": "C41"},
+                    {"keyword": "c44", "operation_code": "C44"},
+                    {"keyword": "с44", "operation_code": "C44"},
+                    {"keyword": "c51", "operation_code": "C51"},
+                    {"keyword": "с51", "operation_code": "C51"},
+                    {"keyword": "c54", "operation_code": "C54"},
+                    {"keyword": "с54", "operation_code": "C54"},
+                    # Старые названия остаются за старыми ANOD_0x: маршруты и
+                    # правила с ними уже работают, переписывать их нельзя.
                     {"keyword": "анодсеребро", "operation_code": "ANOD_01"},
                     {"keyword": "анодтитан", "operation_code": "ANOD_08"},
                     {"keyword": "анодчерный", "operation_code": "ANOD_05"},
