@@ -2,7 +2,7 @@
 
 Спека: `ekranchik-modern/docs/specs/0003-color-dictionary-and-third-party.md`.
 Связанные: T-380 (данные и API), T-381 (синк в «Экранчик»),
-[ADR-0074](../../adr/0074-default-norma-dlya-obemnogo-artikula.md).
+[ADR-0075](../../adr/0075-default-norma-dlya-obemnogo-artikula.md).
 
 ## Задача
 

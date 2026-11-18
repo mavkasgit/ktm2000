@@ -1,4 +1,4 @@
-# ADR-0074: `default` — ручная норма для объёмного артикула
+# ADR-0075: `default` — ручная норма для объёмного артикула
 
 Дата: 2026-11-18. Статус: принято.
 Спека: `ekranchik-modern/docs/specs/0003-color-dictionary-and-third-party.md`.

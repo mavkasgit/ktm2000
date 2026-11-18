@@ -3,7 +3,7 @@
 Основание: спека Экранчика
 `ekranchik-modern/docs/specs/0003-color-dictionary-and-third-party.md`,
 ADR 0013 `ekranchik-modern/docs/adr/0013-color-dictionary-owner.md` и
-[ADR-0074](adr/0074-default-norma-dlya-obemnogo-artikula.md).
+[ADR-0075](adr/0075-default-norma-dlya-obemnogo-artikula.md).
 
 Прод-каталог KTM — источник правды. Скрипт
 [`scripts/sync-ekranchik.py`](../scripts/sync-ekranchik.py) доводит до него двух
