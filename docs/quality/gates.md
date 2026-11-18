@@ -24,7 +24,7 @@
 | `seeds-validate` | fast | сиды справочников внутренне непротиворечивы | CI migrations.yml | да | prove-checks 2026-11-03 |
 | `profile-settings-manifest` | fast | манифест профилей настроек совпадает с кодом | CI migrations.yml | да | prove-checks 2026-11-03 |
 | `compose-audit` | fast | потолки логов, healthcheck и restart-политика в compose | локальный гейт | да | prove-checks 2026-11-03 |
-| `ci-lint` | fast | workflow GitHub Actions и `dependabot.yml`: схемы, выражения, пины, политики (jactionlint, `--strict-exit`) | CI ci-lint.yml | да | prove-checks 2026-11-18 |
+| `ci-lint` | fast | workflow GitHub Actions и `dependabot.yml`: схемы, выражения, пины, политики (jactionlint, флаг --strict-exit) | CI ci-lint.yml | да | prove-checks 2026-11-18 |
 | `osv-allowlist` | fast | датированные исключения аудита зависимостей: запись без причины или с прошедшей датой пересмотра (сам скан — advisory в CI) | CI deps-audit.yml | да | prove-checks 2026-11-18 |
 | `test-hygiene` | fast | мёртвые импорты в тестах | CI backend-tests.yml | нет, report-only | exempt: ловит ruff F401 |
 | `backend-test-count` | fast | pytest-набор не меньше записанного в baseline | CI backend-tests.yml | да | prove-checks 2026-11-03 |
