@@ -62,18 +62,25 @@ npm run dev
 | `npm run db:seed` | Демо-данные |
 | `npm run test:pytest` | Тесты backend (рекомендуется; slow пропускаются) |
 | `npm run prod:up` | Production в Docker |
-| `npm run verify:sync` | Принудительно проверить совпадение с `../hrms` |
+| `npm run verify:sync` | Сверить shared-файлы с `../hrms` (строго: без соседа — ошибка) |
 
-Syncgate автоматически выключен и не блокирует `npm run dev` или сборку.
-Включить его для одной команды:
+Сверка общих файлов с `../hrms` (`scripts/verify-sync.mjs`) запускается в
+pre-push безусловно: расхождение shared-файла не должно уезжать в удалённый
+репозиторий. Известный долг лежит в `scripts/sync-baseline.json` и подавляет
+не путь целиком, а конкретное расхождение — `path` + `kind` + `hash` локального
+файла на момент снимка. Правка файла на известном пути меняет `hash` и роняет
+прогон: снимок обновляют осознанно, с датой пересмотра (`reviewed`, `expires:
+2027-06-30`). Пересобрать снимок:
 
-```powershell
-$env:KTM_SYNCGATE = "1"; npm run dev
+```bash
+node scripts/verify-sync.mjs --other ../hrms --baseline scripts/sync-baseline.json --update-baseline
 ```
 
-Допустимы `1`, `true`, `yes`, `on`. `npm run verify:sync` запускает проверку
-принудительно независимо от переключателя. Решение действует до возврата
-двухпроектной синхронизации; подробности — [ADR-0029](docs/adr/0029-vremennaya-priostanovka-syncgate-hrms-ktm.md).
+Ручной `npm run verify:sync` строгий: без соседнего `../hrms` — exit 2. Хук
+pre-push вызывает ту же проверку с `--optional`: в клоне без соседа она
+пропускается с сообщением, а не блокирует любой push. Переключатель
+`KTM_SYNCGATE` остался только для `predev`/`prebuild`; решение и его поправка —
+[ADR-0029](docs/adr/0029-vremennaya-priostanovka-syncgate-hrms-ktm.md).
 
 Тестирование → [docs/testing-guide.md](docs/testing-guide.md). Production → [docs/deployment.md](docs/deployment.md).
 
