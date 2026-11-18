@@ -65,6 +65,15 @@ PLAN_WRITER_ROLES: frozenset[UserRole] = frozenset(
 )
 
 
+# Ручной пропуск этапа (#348). Пропуск — не выполнение и не отмена: он
+# закрывает этап без работы, поэтому это решение старшего на участке, а не
+# оператора. `operator` пишет настоящие факты, а не знак «Пропущено»;
+# `viewer` и `transporter` не работают с этапами вовсе.
+SKIP_STAGE_ROLES: frozenset[UserRole] = frozenset(
+    {UserRole.admin, UserRole.section_manager}
+)
+
+
 # Справочники /references (спека #145) — зеркало
 # frontend/src/features/auth/policies.ts. Раздел прикрыт во фронте
 # `canEditReferences`, и бэк держит ту же политику: писать в справочник

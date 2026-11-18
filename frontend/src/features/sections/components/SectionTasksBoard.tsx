@@ -8,7 +8,7 @@
  */
 
 import { useMemo, useState, useCallback, useEffect, useRef, type ReactNode } from "react";
-import { Check, CheckCheck, ChevronDown, ChevronRight } from "lucide-react";
+import { Check, CheckCheck, ChevronDown, ChevronRight, SkipForward } from "lucide-react";
 import type { SectionBoardQueryParams, SectionBoardTask, TaskGroup } from "@/shared/api/shopfloor";
 import { formatDimensionsLabel } from "@/shared/api/stock";
 import {
@@ -52,6 +52,7 @@ import { clusterByArticle } from "@/shared/lib/clusterByArticle";
 import type { GroupingProfile } from "../lib/groupingProfiles";
 import {
   getCompletionBlockReason,
+  getSkipBlockReason,
   getTaskRowState,
 } from "../lib/taskStatus";
 import {
@@ -396,6 +397,7 @@ function renderTaskRow(
   bulkMode: boolean | undefined,
   bulkSelection: BulkSelectionController | undefined,
   onAction: (type: TaskActionDialogType, task: SectionBoardTask) => void,
+  onSkipStage: ((task: SectionBoardTask) => void) | undefined,
   onRevokeItem: ((taskId: number) => void) | undefined,
   isRevoking: boolean,
   readOnly: boolean,
@@ -475,21 +477,52 @@ function renderTaskRow(
         ) : readOnly ? (
           <span className="text-xs text-muted-foreground">Просмотр</span>
         ) : (
-          <ActionWithReason reason={blockReason}>
-            <Button
-              variant="outline"
-              className={ROW_ACTION_BUTTON_CLASS}
-              // Доступное имя — на всех ширинах: на телефоне подпись свёрнута в
-              // пиктограмму, но кнопка обязана называться тем же словом.
-              aria-label="Завершить"
-              onClick={() => handleAction("complete")}
-              disabled={blockReason !== null}
-              title={blockReason ? actionReasonText(blockReason) : "Завершить задачу"}
-            >
-              <Check className={ROW_ACTION_ICON_CLASS} aria-hidden />
-              <span className={ROW_ACTION_LABEL_CLASS}>Завершить</span>
-            </Button>
-          </ActionWithReason>
+          (() => {
+            const completeButton = (
+              <ActionWithReason reason={blockReason}>
+                <Button
+                  variant="outline"
+                  className={ROW_ACTION_BUTTON_CLASS}
+                  // Доступное имя — на всех ширинах: на телефоне подпись свёрнута в
+                  // пиктограмму, но кнопка обязана называться тем же словом.
+                  aria-label="Завершить"
+                  onClick={() => handleAction("complete")}
+                  disabled={blockReason !== null}
+                  title={blockReason ? actionReasonText(blockReason) : "Завершить задачу"}
+                >
+                  <Check className={ROW_ACTION_ICON_CLASS} aria-hidden />
+                  <span className={ROW_ACTION_LABEL_CLASS}>Завершить</span>
+                </Button>
+              </ActionWithReason>
+            );
+            // Без права пропуска разметка прежняя: лишняя обёртка меняла бы
+            // соседей кнопки и раскладку строки.
+            if (!onSkipStage) return completeButton;
+
+            const skipBlockReason = getSkipBlockReason(task);
+            return (
+              <div className="flex items-center gap-1">
+                {completeButton}
+                <ActionWithReason reason={skipBlockReason}>
+                  <Button
+                    variant="ghost"
+                    className={ROW_ACTION_BUTTON_CLASS}
+                    aria-label="Пропустить этап"
+                    onClick={() => onSkipStage(task)}
+                    disabled={skipBlockReason !== null}
+                    title={
+                      skipBlockReason
+                        ? actionReasonText(skipBlockReason)
+                        : "Пропустить этап: закрыть без работы и движений склада"
+                    }
+                  >
+                    <SkipForward className={ROW_ACTION_ICON_CLASS} aria-hidden />
+                    <span className={ROW_ACTION_LABEL_CLASS}>Пропустить</span>
+                  </Button>
+                </ActionWithReason>
+              </div>
+            );
+          })()
         );
       default: {
         const field = fieldByKey.get(fieldKeyOf(columnId));
@@ -809,6 +842,13 @@ type SectionTasksBoardProps = {
   mode: TaskBoardViewMode;
   onModeChange: (next: TaskBoardViewMode) => void;
   onAction: (type: TaskActionDialogType, task: SectionBoardTask) => void;
+  /**
+   * Ручной пропуск этапа (#348). Право проверяет страница
+   * (`POLICIES.skipStage`), доска только рисует кнопку: без `onSkipStage`
+   * её нет вовсе, а `canSkipStages` отделяет право от обработчика.
+   */
+  canSkipStages?: boolean;
+  onSkipStage?: (task: SectionBoardTask) => void;
   readOnly?: boolean;
   showStatusFilters?: boolean;
   showCompletedStatus?: boolean;
@@ -918,6 +958,8 @@ export function SectionTasksBoard({
   mode,
   onModeChange,
   onAction,
+  canSkipStages,
+  onSkipStage,
   readOnly = false,
   showStatusFilters = true,
   showCompletedStatus = false,
@@ -1494,6 +1536,7 @@ export function SectionTasksBoard({
         bulkMode,
         bulkSelection,
         onAction,
+        canSkipStages && onSkipStage ? onSkipStage : undefined,
         onRevokeItem,
         isRevoking,
         readOnly,
@@ -1507,12 +1550,14 @@ export function SectionTasksBoard({
       bulkMode,
       bulkSelection,
       bulkDraft,
+      canSkipStages,
       columns,
       hasPackaging,
       handleGroupQtyChange,
       onAction,
       onBulkDraftChange,
       onRevokeItem,
+      onSkipStage,
       readOnly,
       renderWaitingDivider,
       revokeSelection,

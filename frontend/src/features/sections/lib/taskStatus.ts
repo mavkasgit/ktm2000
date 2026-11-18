@@ -180,6 +180,22 @@ export function isTaskCompletable(task: SectionBoardTask): boolean {
 }
 
 /**
+ * Причина, по которой этап нельзя пометить «Пропущено» (#348), — код из
+ * общего словаря причин. `null` — пропускать можно.
+ *
+ * Пропуск не переигрывает работу: выполненный и отменённый этап остаются
+ * собой, а уже пропущенный второй раз не закрывается. Ожидание сырья
+ * (`waiting_previous`) и непоступившая передача — наоборот, допустимые
+ * случаи: именно так пропускают этап, которого физически не было.
+ */
+export function getSkipBlockReason(task: SectionBoardTask): ActionReasonCode | null {
+  if (["completed", "done"].includes(task.status)) return "already_completed";
+  if (task.status === "cancelled") return "cancelled";
+  if (task.status === "skipped") return "stage_skipped";
+  return null;
+}
+
+/**
  * Незавершаемые задания, сгруппированные по причине: футер массового ввода
  * говорит ими, что часть введённого количества записано не будет. Раньше
  * список собирали вручную и делили надвое («Не передано» / «Прочие — ожидают

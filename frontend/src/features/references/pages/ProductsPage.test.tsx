@@ -79,6 +79,7 @@ beforeEach(() => {
     canForceDeleteImport: false,
     canRollbackImport: false,
     canEditPlan: false,
+    canSkipStage: false,
     canCreatePlanImport: false,
     canManagePlanImport: false,
   });
@@ -158,6 +159,7 @@ describe("ProductsPage", () => {
       canForceDeleteImport: false,
       canRollbackImport: false,
       canEditPlan: false,
+      canSkipStage: false,
       canCreatePlanImport: false,
       canManagePlanImport: false,
     });

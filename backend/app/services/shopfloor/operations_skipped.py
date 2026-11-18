@@ -49,6 +49,7 @@ async def skip_stage(
     section_plan_line_id: int,
     reason: str = SKIP_REASON_MATERIAL_READY,
     skipped_by_issue_no: str | None = None,
+    task_id: int | None = None,
 ) -> WorkTask:
     """Пометить этап позиции пропущенным и вернуть его задание.
 
@@ -60,6 +61,11 @@ async def skip_stage(
     ``skipped`` только со своих строк. Пропуск, проставленный вручную
     (#207) или другой выдачей, при отмене остаётся нетронутым.
 
+    ``task_id`` — пропустить конкретное задание строки (#348). У строки
+    может быть несколько заданий одного этапа, и пропуск «первого по id»
+    подменял бы выбор оператора: кнопка в строке доски относится к ней, а не
+    к соседней. Без параметра поведение прежнее (первое задание строки).
+
     Проводок ledger не создаётся — по skipped-этапу материала нет.
     """
     line = await db.get(SectionPlanLine, section_plan_line_id)
@@ -68,12 +74,17 @@ async def skip_stage(
     if not reason or not reason.strip():
         raise ValueError("Пропуск этапа требует причины")
 
-    task = await db.scalar(
-        select(WorkTask)
-        .where(WorkTask.section_plan_line_id == line.id)
-        .order_by(WorkTask.id.asc())
-        .limit(1)
-    )
+    if task_id is None:
+        task = await db.scalar(
+            select(WorkTask)
+            .where(WorkTask.section_plan_line_id == line.id)
+            .order_by(WorkTask.id.asc())
+            .limit(1)
+        )
+    else:
+        task = await db.get(WorkTask, task_id)
+        if task is None or task.section_plan_line_id != line.id:
+            raise ValueError(f"WorkTask {task_id} not found on line {line.id}")
     if task is None:
         task = WorkTask(
             section_plan_line_id=line.id,

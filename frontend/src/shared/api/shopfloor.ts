@@ -451,6 +451,31 @@ export async function completeTask(
   return data;
 }
 
+export type SkipStageResponse = {
+  task_id: number;
+  status: string;
+  skip_reason: string | null;
+};
+
+/**
+ * Пометить этап «Пропущено» с обязательной причиной (#348).
+ *
+ * Сервер держит право (admin/section_manager) и пишет аудит; интерфейс лишь
+ * проверяет, что причина непустая.
+ */
+export async function skipStage(
+  taskId: number,
+  payload: { reason: string },
+  options?: ShopfloorRequestOptions,
+): Promise<SkipStageResponse> {
+  const { data } = await apiClient.post<SkipStageResponse>(
+    `/shopfloor/tasks/${taskId}/skip`,
+    payload,
+    makeRequestConfig(options),
+  );
+  return data;
+}
+
 // ---------------------------------------------------------------------------
 // Утилиты для работы с задачами
 // ---------------------------------------------------------------------------
