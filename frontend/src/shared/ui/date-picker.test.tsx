@@ -35,4 +35,26 @@ describe("DatePicker — календарная дата", () => {
     expect(onChange).not.toHaveBeenCalled();
     expect(input.value).toBe("29.02.2025");
   });
+
+  it("Enter во время IME-композиции не уводит фокус из поля", () => {
+    // Enter, которым оператор подтверждает иероглиф в IME, — не команда полю:
+    // blur посреди композиции обрывает набор.
+    render(<DatePicker value="" onChange={vi.fn()} />);
+    const input = screen.getByLabelText("ДД.ММ.ГГГГ");
+    const blur = vi.spyOn(input, "blur");
+
+    const composing = new KeyboardEvent("keydown", { key: "Enter", bubbles: true, cancelable: true });
+    Object.defineProperty(composing, "isComposing", { value: true });
+    fireEvent(input, composing);
+
+    const imeKeyCode = new KeyboardEvent("keydown", { key: "Enter", bubbles: true, cancelable: true });
+    Object.defineProperty(imeKeyCode, "keyCode", { value: 229 });
+    fireEvent(input, imeKeyCode);
+
+    expect(blur).not.toHaveBeenCalled();
+
+    fireEvent.keyDown(input, { key: "Enter" });
+
+    expect(blur).toHaveBeenCalled();
+  });
 });

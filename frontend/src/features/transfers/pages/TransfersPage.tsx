@@ -1935,6 +1935,8 @@ export function TransfersPage() {
                 value={historySearch}
                 onChange={(e) => setHistorySearch(e.target.value)}
                 onKeyDown={(e) => {
+                  // Enter при наборе через IME закрывает композицию.
+                  if (e.nativeEvent.isComposing || e.keyCode === 229) return;
                   if (e.key === "Enter") {
                     flushHistorySearch();
                     resetHistoryPage();

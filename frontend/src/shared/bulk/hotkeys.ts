@@ -40,6 +40,9 @@ export function useBulkHotkeys<TId extends BulkId>({
     const handleKeyDown = (event: KeyboardEvent) => {
       if (disabled || isEditableTarget(event.target)) return;
       if (!isHotkeyInScope(scopeRef.current, event.target)) return;
+      // Enter (и остальные горячие клавиши) во время набора через IME — часть
+      // композиции, а не команда над выборкой.
+      if (event.isComposing || event.keyCode === 229) return;
 
       const mod = event.ctrlKey || event.metaKey;
       if (mod && event.key.toLowerCase() === "a") {

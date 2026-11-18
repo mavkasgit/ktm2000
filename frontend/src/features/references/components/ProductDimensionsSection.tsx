@@ -195,6 +195,8 @@ export const ProductDimensionsSection = forwardRef<
                   onChange={(e) => handleMultiChange(field.code, e.target.value)}
                   onBlur={() => handleMultiSave(field.code)}
                   onKeyDown={(e) => {
+                    // Enter при наборе через IME закрывает композицию, а не сохраняет поле.
+                    if (e.nativeEvent.isComposing || e.keyCode === 229) return;
                     if (e.key === "Enter") {
                       e.preventDefault();
                       handleMultiSave(field.code);

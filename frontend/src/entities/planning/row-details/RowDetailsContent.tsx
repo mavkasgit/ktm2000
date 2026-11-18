@@ -114,6 +114,8 @@ export function RowDetailsContent({
   }
 
   const handleKeyDown = (e: React.KeyboardEvent) => {
+    // Enter при наборе через IME закрывает композицию, а не сохраняет строку.
+    if (e.nativeEvent.isComposing || e.keyCode === 229) return
     if (e.key === "Enter") {
       e.preventDefault()
       handleSave()

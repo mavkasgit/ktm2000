@@ -132,6 +132,8 @@ function ComponentPicker({
           value={query}
           onChange={(e) => setQuery(e.target.value)}
           onKeyDown={(e) => {
+            // Enter при наборе через IME закрывает композицию, а не запускает поиск.
+            if (e.nativeEvent.isComposing || e.keyCode === 229) return;
             if (e.key === "Enter" && canSearch) {
               e.preventDefault();
               void runSearch(query.trim());

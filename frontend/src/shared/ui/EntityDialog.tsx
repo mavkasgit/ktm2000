@@ -479,6 +479,9 @@ export function EntityDialog({
   }
 
   const handleKeyDown = (e: React.KeyboardEvent) => {
+    // Enter во время набора через IME — подтверждение композиции, а не
+    // отправка формы: без выхода диалог сохранялся на каждом иероглифе.
+    if (e.nativeEvent.isComposing || e.keyCode === 229) return
     if (e.key === "Enter" && !e.shiftKey) {
       e.preventDefault()
       if (!isSaving && !readOnly) handleSave()

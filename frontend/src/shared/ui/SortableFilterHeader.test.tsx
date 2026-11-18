@@ -329,6 +329,28 @@ describe("текст в поповере фильтра", () => {
     expect(screen.queryByPlaceholderText("Поиск...")).toBeNull();
   });
 
+  it("Enter во время IME-композиции не применяет текст и не закрывает поповер", () => {
+    // Enter подтверждает иероглиф в IME. Применить им фильтр — значит закрыть
+    // поповер посреди набора и отправить в запрос недописанный текст.
+    const { appliedQueries } = mountFilterPopover();
+    fireEvent.change(searchInput(), { target: { value: "460" } });
+
+    const composing = new KeyboardEvent("keydown", { key: "Enter", bubbles: true, cancelable: true });
+    Object.defineProperty(composing, "isComposing", { value: true });
+    fireEvent(searchInput(), composing);
+
+    const imeKeyCode = new KeyboardEvent("keydown", { key: "Enter", bubbles: true, cancelable: true });
+    Object.defineProperty(imeKeyCode, "keyCode", { value: 229 });
+    fireEvent(searchInput(), imeKeyCode);
+
+    expect(appliedQueries).toEqual([]);
+    expect(screen.getByPlaceholderText("Поиск...")).toBeTruthy();
+
+    fireEvent.keyDown(searchInput(), { key: "Enter" });
+
+    expect(appliedQueries).toEqual(["460"]);
+  });
+
   it("кнопка «Готово» применяет набранный текст и закрывает поповер", () => {
     const { appliedQueries } = mountFilterPopover();
     fireEvent.change(searchInput(), { target: { value: "ЮП" } });

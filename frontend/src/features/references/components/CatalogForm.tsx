@@ -767,6 +767,8 @@ export const CatalogForm = forwardRef<CatalogFormRef, {
                       onChange={(e) => setNewLength(e.target.value)}
                       disabled={readOnly}
                       onKeyDown={(e) => {
+                        // Enter при наборе через IME закрывает композицию.
+                        if (e.nativeEvent.isComposing || e.keyCode === 229) return;
                         if (e.key === "Enter") {
                           e.preventDefault();
                           commitLength();

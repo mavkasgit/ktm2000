@@ -238,6 +238,8 @@ export function SortableFilterHeader<Field extends string, SortField extends str
               value={searchQuery}
               onChange={(e) => setSearchQuery(e.target.value)}
               onKeyDown={(e) => {
+                // Enter при наборе через IME закрывает композицию, а не фильтр.
+                if (e.nativeEvent.isComposing || e.keyCode === 229) return;
                 if (e.key === "Enter") {
                   e.preventDefault();
                   applyAndClose();
