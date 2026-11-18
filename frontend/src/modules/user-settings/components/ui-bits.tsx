@@ -1,4 +1,5 @@
-import { useEffect, useRef, useState, type ReactNode } from "react"
+import type { ReactNode } from "react"
+import { useCopy } from "@siberiacancode/reactuse"
 import { Check, CheckCircle2, Copy, Loader2, type LucideIcon } from "lucide-react"
 import { Button, cn, Tooltip, TooltipContent, TooltipTrigger } from "../ui"
 
@@ -193,10 +194,10 @@ export function CopyButton({
   label: string
   copiedLabel: string
 }) {
-  const [copied, setCopied] = useState(false)
-  const timer = useRef<number | undefined>(undefined)
-
-  useEffect(() => () => window.clearTimeout(timer.current), [])
+  // Галочка живёт 1600 мс — как и раньше; сам `copy` сначала пробует
+  // `navigator.clipboard`, а на HTTP по LAN-IP (прод KTM) уходит в
+  // `execCommand` — прежний `navigator.clipboard?.writeText` там молчал.
+  const { copied, copy } = useCopy(1600)
 
   return (
     <Tooltip>
@@ -205,10 +206,9 @@ export function CopyButton({
           type="button"
           aria-label={label}
           onClick={() => {
-            void navigator.clipboard?.writeText(value)
-            setCopied(true)
-            window.clearTimeout(timer.current)
-            timer.current = window.setTimeout(() => setCopied(false), 1600)
+            // Копирование — best-effort: сбой не гасит диалог и не рисует
+            // галочку (`copied` встаёт только после успеха).
+            void copy(value).catch(() => {})
           }}
           className="shrink-0 text-muted-foreground transition-colors hover:text-foreground"
         >

@@ -1,7 +1,7 @@
 import * as ToastPrimitives from "@radix-ui/react-toast";
+import { useCopy } from "@siberiacancode/reactuse";
 import { CheckCircle, AlertCircle, X, Copy, ClipboardCheck } from "lucide-react";
 import { useToast, type ToastData } from "./use-toast";
-import * as React from "react";
 
 function ToastIcon({ variant }: { variant: ToastData["variant"] }) {
   if (variant === "success") return <CheckCircle className="h-5 w-5 text-green-600" />;
@@ -18,7 +18,10 @@ function toastClasses(variant: ToastData["variant"]) {
 }
 
 function CopyButtonInline({ t }: { t: ToastData }) {
-  const [copied, setCopied] = React.useState(false);
+  // Копирование текста тоста: `useCopy` пробует `navigator.clipboard`, а без
+  // него (прод по HTTP на LAN-IP) уходит в `execCommand` — тем самым textarea,
+  // который раньше собирался здесь руками. Галочка живёт 2000 мс.
+  const { copied, copy } = useCopy(2000);
 
   if (copied) {
     return (
@@ -34,21 +37,8 @@ function CopyButtonInline({ t }: { t: ToastData }) {
         e.stopPropagation();
         e.preventDefault();
         const text = t.title + (t.description ? `: ${t.description}` : "");
-        const textarea = document.createElement("textarea");
-        textarea.value = text;
-        textarea.style.position = "fixed";
-        textarea.style.left = "-9999px";
-        document.body.appendChild(textarea);
-        textarea.focus();
-        textarea.select();
-        try {
-          document.execCommand("copy");
-          setCopied(true);
-          setTimeout(() => setCopied(false), 2000);
-        } catch {
-        } finally {
-          document.body.removeChild(textarea);
-        }
+        // Best-effort: на сбое галочка не появится, тост останется как был.
+        void copy(text).catch(() => {});
       }}
       className="flex-shrink-0 p-1.5 rounded-md hover:bg-red-100 transition-colors cursor-pointer"
       title="Копировать ошибку"

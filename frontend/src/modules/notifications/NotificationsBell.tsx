@@ -1,4 +1,5 @@
 import { useCallback, useEffect, useRef, useState } from "react"
+import { useDocumentVisibility } from "@siberiacancode/reactuse"
 import { Bell, X } from "lucide-react"
 import type { NotificationsApi } from "./api/adapter"
 import type { Notification } from "./types"
@@ -34,9 +35,9 @@ export function NotificationsBell({
 
   // Свёрнутая вкладка не должна ходить на сервер: оператор всё равно не видит
   // бейдж, а 30-секундный тик на каждую открытую вкладку — это трафик впустую.
-  const [isHidden, setIsHidden] = useState(
-    () => typeof document !== "undefined" && document.visibilityState === "hidden",
-  )
+  // Состояние отдаёт `useDocumentVisibility`: он читает его синхронно на
+  // первом рендере и подписывается на `visibilitychange`.
+  const isHidden = useDocumentVisibility() === "hidden"
 
   const load = useCallback(async () => {
     if (inFlightRef.current) return
@@ -52,13 +53,6 @@ export function NotificationsBell({
       setLoading(false)
     }
   }, [api])
-
-  useEffect(() => {
-    const handleVisibilityChange = () =>
-      setIsHidden(document.visibilityState === "hidden")
-    document.addEventListener("visibilitychange", handleVisibilityChange)
-    return () => document.removeEventListener("visibilitychange", handleVisibilityChange)
-  }, [])
 
   // Возврат на вкладку перезапускает эффект, а тот сначала дозагружает список
   // и только потом ставит тикер — бейдж на месте сразу после возврата, без
