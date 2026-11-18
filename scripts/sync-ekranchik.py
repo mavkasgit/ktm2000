@@ -11,6 +11,17 @@
   **создаётся**: имя — код артикула KTM, наименование — ``products.name``,
   длина — основная, норма — по режиму подвеса. Каталог «Экранчика» — витрина:
   активность KTM не фильтр, профиль создаётся для любого артикула.
+* **Цвета «Экранчика»** (``colors``, миграция 003) — операции участка
+  ``ANODIZING`` группы ``ANODIZING``: старые ``ANOD_01…08`` и новые коды
+  ``C0…C54``. Строка сопоставляется по ``operation_code``, затем по коду
+  веера и нормализованному названию; поля ``name``/``hex``/``code``
+  перекрываются, только когда метка KTM строго новее. Аббревиатура новой
+  строки — код, иначе первые три буквы названия; при обновлении её не
+  трогаем: это локальная подпись. Строки без пары в KTM не удаляются и не
+  помечаются.
+* **Безразмерный артикул** (``урны``) — продукт без длин: норма читается из
+  ``attributes.quantity_per_hanger.default``, профиль создаётся с
+  ``length = NULL`` и этой нормой.
 * **Фото «Экранчика»** лежат в ``static/images``. Прод — источник правды,
   поэтому фото не только заполняются в пустых полях, но и **обновляются**:
   файл профиля перезаписывается, когда его нет на месте или его размер
@@ -109,6 +120,23 @@ from products p
 order by p.sku;
 """
 
+#: Цвета анодирования: операции участка ``ANODIZING`` группы ``ANODIZING``.
+#: ``PACK_STRETCH``/``PACK_SPUNBOND`` лежат в том же участке, но в группе
+#: ``PACK``, — в справочник цветов они не попадают. Метка ``updated_at``
+#: приходит из T-378 и решает, чья правка новее.
+COLORS_SQL = """
+select so.operation_code,
+       so.operation_name,
+       coalesce(so.icon_color, ''),
+       coalesce(to_char(so.updated_at at time zone 'UTC', 'YYYY-MM-DD"T"HH24:MI:SS.US'), '')
+from section_operations so
+join sections s on s.id = so.section_id
+where s.code = 'ANODIZING'
+  and so.group_code = 'ANODIZING'
+  and so.operation_type = 'production'
+order by so.operation_code;
+"""
+
 #: Отпечаток артикула для сверки dev с продом. Всё, что оператор видит в
 #: карточке и что влияет на расчёт: идентичность, габариты и режим подвеса
 #: (в ``attributes``), алиасы, длины, фото, активность. Правится каталог —
@@ -161,7 +189,7 @@ class PhotoSyncError(RuntimeError):
 
 
 class EkranchikSchemaError(RuntimeError):
-    """Схема Экранчика не готова: нет ``profiles.description`` (миграция 002)."""
+    """Схема Экранчика не готова: нет ``profiles.description`` (002) или ``colors`` (003)."""
 
 
 def require_description_column(conn: sqlite3.Connection) -> None:
@@ -175,6 +203,22 @@ def require_description_column(conn: sqlite3.Connection) -> None:
         raise EkranchikSchemaError(
             "в profiles Экранчика нет колонки description — сначала миграции "
             "Экранчика (alembic upgrade head, миграция 002_add_profile_description)"
+        )
+
+
+def require_colors_table(conn: sqlite3.Connection) -> None:
+    """Проверить, что справочник цветов есть, — до бэкапа и записи.
+
+    Цвета — миграция 003 Экранчика. Без таблицы запись упала бы уже после
+    бэкапа, поэтому проверяем схему заранее и говорим, что делать.
+    """
+    exists = conn.execute(
+        "select 1 from sqlite_master where type = 'table' and name = 'colors'"
+    ).fetchone()
+    if exists is None:
+        raise EkranchikSchemaError(
+            "в Экранчике нет таблицы colors — сначала миграции Экранчика "
+            "(alembic upgrade head, миграция 003_colors)"
         )
 
 
@@ -236,6 +280,37 @@ def fmt_num(value: float | None) -> str:
     if value is None:
         return "—"
     return str(int(value)) if float(value).is_integer() else str(value)
+
+
+def parse_time(value: str | datetime | None) -> datetime | None:
+    """``updated_at`` из psql или SQLite → aware UTC; неразборчивое — ``None``.
+
+    В SQLite приложение пишет время без смещения, psql отдаёт ISO с ``T``;
+    сравнение идёт по моменту, а не по строке (спека 0003).
+    """
+    if value is None:
+        return None
+    if isinstance(value, datetime):
+        moment = value
+    else:
+        text = str(value).strip()
+        if not text:
+            return None
+        if text.endswith("Z"):
+            text = f"{text[:-1]}+00:00"
+        try:
+            moment = datetime.fromisoformat(text)
+        except ValueError:
+            return None
+    return moment.replace(tzinfo=UTC) if moment.tzinfo is None else moment.astimezone(UTC)
+
+
+def format_time(value: str | datetime | None) -> str | None:
+    """Время для записи в ``colors.updated_at`` — UTC без смещения, как в SQLite."""
+    moment = parse_time(value)
+    if moment is None:
+        return None
+    return moment.replace(tzinfo=None).isoformat(sep=" ", timespec="microseconds")
 
 
 def normalize_photo_rel(value: str) -> str:
@@ -345,13 +420,53 @@ def read_ktm_catalog() -> list[dict]:
     return products
 
 
+def read_ktm_colors() -> list[dict]:
+    """Операции анодирования KTM — источник справочника цветов Экранчика."""
+    container = os.environ.get("KTM_PG_CONTAINER", "ktm2000-postgres-prod")
+    user = os.environ.get("KTM_PG_USER", "ktm2000_user")
+    db = os.environ.get("KTM_PG_DB", "ktm2000_prod")
+    proc = subprocess.run(
+        ["docker", "exec", container, "psql", "-U", user, "-d", db,
+         "-A", "-F", "\t", "--no-align", "-t", "-c", COLORS_SQL],
+        capture_output=True,
+        check=False,
+    )
+    if proc.returncode != 0:
+        raise RuntimeError(proc.stderr.decode("utf-8", "replace").strip() or "psql failed")
+
+    colors = []
+    for line in proc.stdout.decode("utf-8").splitlines():
+        fields = line.split("\t")
+        if len(fields) < 4:
+            continue
+        operation_code, name, icon_color, updated_at = fields[:4]
+        if not operation_code.strip():
+            continue
+        colors.append({
+            "operation_code": operation_code.strip(),
+            "name": name.strip(),
+            "hex": icon_color.strip() or None,
+            "updated_at": updated_at.strip() or None,
+        })
+    return colors
+
+
+def _norm_from(qph_entry: dict, mode: str) -> int | None:
+    """Норма из записи ``quantity_per_hanger``: режим подвеса, затем фолбэк."""
+    value = qph_entry.get("manual") if mode == "manual" else qph_entry.get("auto")
+    if value is None:
+        value = qph_entry.get("auto" if mode == "manual" else "manual")
+    return int(value) if value is not None else None
+
+
 def effective_n(product: dict, length: float) -> int | None:
     key = str(int(length)) if float(length).is_integer() else str(length)
-    entry = product["qph"].get(key) or {}
-    value = entry.get("manual") if product["mode"] == "manual" else entry.get("auto")
-    if value is None:
-        value = entry.get("auto" if product["mode"] == "manual" else "manual")
-    return int(value) if value is not None else None
+    return _norm_from(product["qph"].get(key) or {}, product["mode"])
+
+
+def default_n(product: dict) -> int | None:
+    """Норма безразмерного продукта (``урны``): ключ ``default``, не длина."""
+    return _norm_from(product["qph"].get("default") or {}, product["mode"])
 
 
 def main_length(product: dict) -> dict | None:
@@ -408,6 +523,27 @@ def read_ekr(db_path: Path) -> tuple[sqlite3.Connection, list[dict]]:
             "description": row[4],
             "photo_thumb": row[5],
             "photo_full": row[6],
+        }
+        for row in rows
+    ]
+
+
+def read_ekr_colors(conn: sqlite3.Connection) -> list[dict]:
+    """Локальный справочник цветов; нет таблицы — понятная ошибка до записи."""
+    require_colors_table(conn)
+    rows = conn.execute(
+        "select id, code, name, hex, operation_code, source, updated_at "
+        "from colors order by id"
+    ).fetchall()
+    return [
+        {
+            "id": row[0],
+            "code": row[1],
+            "name": row[2],
+            "hex": row[3],
+            "operation_code": row[4],
+            "source": row[5],
+            "updated_at": row[6],
         }
         for row in rows
     ]
@@ -507,9 +643,16 @@ def compute_drift(
             })
 
         if not product["lengths"]:
-            # Длины в KTM нет — норму привязать не к чему, но это не повод
-            # считать профиль ошибкой: фото уже синкаются выше, а пустые
-            # length/n остаются как есть и заполняются вручную (#403 follow-up).
+            # Длины в KTM нет — норму привязывать не к чему, но у безразмерного
+            # артикула (``урны``) она лежит под ключом ``default``. Есть ключ —
+            # доводим норму профиля; нет — оставляем карточку как есть, как и
+            # раньше: фото уже синкаются выше.
+            target_n = default_n(product)
+            if target_n is not None and int(profile["n"] or -1) != target_n:
+                drift.append({"id": profile["id"], "name": profile["name"],
+                              "ktm_sku": product["sku"],
+                              "field": "quantity_per_hanger", "old": profile["n"],
+                              "new": target_n, "reason": "норма без длины (default)"})
             continue
 
         item, _basis = match_length(product, profile["length"])
@@ -552,12 +695,13 @@ def compute_drift(
         if not product["lengths"]:
             # Создаём профиль и без длины: в Экранчике length/n nullable, а
             # пустая карточка полезнее отсутствующей — оператор заполнит её
-            # вручную. Фото, если есть, кладём рядом.
+            # вручную. Норму безразмерного артикула берём из ``default``.
+            # Фото, если есть, кладём рядом.
             creations.append({
                 "name": product["sku"],
                 "description": product["name"] or None,
                 "length": None,
-                "n": None,
+                "n": default_n(product),
                 "photos": photo_plan(product, product["sku"], targets),
             })
             continue
@@ -574,6 +718,165 @@ def compute_drift(
     return drift, skipped, creations
 
 
+# ─── Цвета: справочник Экранчика по операциям анодирования ───────────────────
+
+#: Старые операции анодирования: отображаемого кода у них нет (0022).
+LEGACY_COLOR_PREFIX = "ANOD"
+
+
+def is_legacy_color_code(operation_code: str) -> bool:
+    """Старая операция ``ANOD_01…08`` — код цвета у неё пустой.
+
+    ``canon`` переводит латиницу в кириллицу, поэтому префикс проверяем по
+    исходной записи операции, а не по канону.
+    """
+    return operation_code.strip().upper().startswith(LEGACY_COLOR_PREFIX)
+
+
+def color_code(operation_code: str) -> str | None:
+    """Код цвета для операции: у ``ANOD_*`` пусто, у веера — сам код."""
+    return None if is_legacy_color_code(operation_code) else operation_code
+
+
+def color_abbreviation(code: str | None, name: str) -> str:
+    """Подпись ячейки для новой строки: код, иначе первые 3 буквы названия.
+
+    Аббревиатура — локальная подпись (0023 её правит); синк заполняет её
+    только при создании строки и никогда не перезаписывает.
+    """
+    return code or name.strip()[:3].lower() or "—"
+
+
+def match_local_color(
+    color: dict,
+    local_colors: list[dict],
+    used: set[int],
+) -> dict | None:
+    """Локальная строка справочника для операции KTM.
+
+    Засев 0022 держит старые названия (``серебро``, ``code IS NULL``) и коды
+    веера (``C0`` «Серебро») разными строками, поэтому точный
+    ``operation_code`` сильнее названия: старая операция ищет строку без кода,
+    код веера — сначала свою строку с кодом, и только потом безымянную.
+    """
+    operation_code = color["operation_code"]
+    for row in local_colors:
+        if row["id"] not in used and row["operation_code"] == operation_code:
+            return row
+
+    name_key = canon(color["name"])
+    if is_legacy_color_code(operation_code):
+        for row in local_colors:
+            if (row["id"] not in used and row["code"] is None
+                    and canon(row["name"]) == name_key):
+                return row
+        return None
+
+    code_key = canon(operation_code)
+    for row in local_colors:
+        if row["id"] not in used and row["code"] and canon(row["code"]) == code_key:
+            return row
+    for row in local_colors:
+        if (row["id"] not in used and row["code"] is None
+                and canon(row["name"]) == name_key):
+            return row
+    for row in local_colors:
+        if row["id"] not in used and canon(row["name"]) == name_key:
+            return row
+    return None
+
+
+def compute_color_drift(
+    ktm_colors: list[dict],
+    local_colors: list[dict],
+) -> tuple[list[dict], list[dict]]:
+    """Расхождения справочника цветов по правилу «новее — правильнее».
+
+    ``ktm_colors`` — строки ``read_ktm_colors``, ``local_colors`` —
+    ``read_ekr_colors``. В ``drift`` попадают и создания (``id`` пустой), и
+    обновления: ``name``/``hex``/``code`` перекрываются, только когда метка
+    KTM строго новее. Локальные строки без пары в KTM не удаляются и не
+    помечаются.
+    """
+    # Старые операции разбираем первыми: за ними закреплены безымянные строки
+    # «серебро», «черный», а коды веера уже имеют свои строки с кодом.
+    ordered = sorted(
+        ktm_colors,
+        key=lambda color: (
+            not is_legacy_color_code(color["operation_code"]),
+            color["operation_code"],
+        ),
+    )
+    used: set[int] = set()
+    drift: list[dict] = []
+    skipped: list[dict] = []
+
+    for color in ordered:
+        operation_code = color["operation_code"]
+        local = match_local_color(color, local_colors, used)
+        new_code = color_code(operation_code)
+        if local is None:
+            # Ключа нет — время KTM за отсутствием метки не выдумываем, но
+            # созданной строке нужна метка: берём текущее UTC.
+            updated_at = format_time(color["updated_at"]) or format_time(datetime.now(UTC))
+            drift.append({
+                "field": "color", "id": None, "name": operation_code,
+                "operation_code": operation_code, "updated_at": updated_at,
+                "old": None,
+                "new": {"code": new_code, "name": color["name"],
+                        "hex": color["hex"], "source": "ktm"},
+                "reason": "цвета нет в Экранчике",
+            })
+            continue
+
+        used.add(local["id"])
+        # Пустой ``icon_color`` значит «цвет не задан», а не приказ стереть
+        # локальный hex: справочные значения веера живут только в Экранчике.
+        new_hex = color["hex"] or local["hex"]
+        new_name = color["name"] or local["name"]
+        already_synced = (
+            new_code == local["code"]
+            and new_name == local["name"]
+            and new_hex == local["hex"]
+            and local["operation_code"] == operation_code
+            and local["source"] == "ktm"
+        )
+        if already_synced:
+            # Повторный --check не должен называть пропуском каждую уже
+            # сведённую строку: сравнивать нечего, метки совпали не случайно.
+            continue
+
+        ktm_time = parse_time(color["updated_at"])
+        local_time = parse_time(local["updated_at"])
+        if ktm_time is None:
+            # Без метки KTM нельзя доказать, что правка новее: локальную не
+            # перекрываем, а пропуск называем — иначе он выглядит как тишина.
+            skipped.append({"name": local["name"], "operation_code": operation_code,
+                            "reason": "у операции KTM нет updated_at"})
+            continue
+        if local_time is not None and ktm_time <= local_time:
+            reason = (
+                "локальная правка новее KTM"
+                if ktm_time < local_time
+                else "метки времени совпали — остаётся локальная строка"
+            )
+            skipped.append({"name": local["name"], "operation_code": operation_code,
+                            "reason": reason})
+            continue
+
+        drift.append({
+            "field": "color", "id": local["id"], "name": local["name"],
+            "operation_code": operation_code,
+            "updated_at": format_time(ktm_time),
+            "old": {"code": local["code"], "name": local["name"],
+                    "hex": local["hex"], "source": local["source"]},
+            "new": {"code": new_code, "name": new_name,
+                    "hex": new_hex, "source": "ktm"},
+            "reason": "цвет KTM новее локального",
+        })
+    return drift, skipped
+
+
 def apply_drift(
     db_path: Path,
     drift: list[dict],
@@ -581,13 +884,23 @@ def apply_drift(
     targets: PhotoTargets,
     prune_orphans: bool = False,
     dry_run: bool = False,
+    color_updates: list[dict] | tuple = (),
 ) -> dict | None:
-    """Записать расхождения в SQLite Экранчика (с бэкапом) и вернуть счётчики."""
+    """Записать расхождения в SQLite Экранчика (с бэкапом) и вернуть счётчики.
+
+    ``color_updates`` — план ``compute_color_drift`` (создания и обновления):
+    цвета пишутся в той же транзакции, что и профили, до них.
+    """
+    color_changes = list(color_updates)
     # Схему проверяем до бэкапа и картинок: иначе запись description упадёт
-    # посреди применения, когда часть файлов уже перезаписана.
+    # посреди применения, когда часть файлов уже перезаписана. Таблицу colors
+    # требуем, только если цвета действительно будут писаться: старый Экранчик
+    # без миграции 003 не должен терять синк артикулов.
     guard = sqlite3.connect(f"file:{db_path}?mode=ro", uri=True, timeout=15)
     try:
         require_description_column(guard)
+        if color_changes:
+            require_colors_table(guard)
     finally:
         guard.close()
 
@@ -600,7 +913,8 @@ def apply_drift(
     photos = [item for item in drift if item["field"] == "photo"]
     orphans = [item for item in drift if item["field"] == "product"] if prune_orphans else []
     creation_photos = [photo for item in creations for photo in item["photos"]]
-    if dry_run or (not updates and not photos and not creations and not orphans):
+    if dry_run or (not updates and not photos and not creations and not orphans
+                   and not color_changes):
         return None
 
     # Конвертацию проверяем до любых записей: иначе PNG упадёт на середине
@@ -628,6 +942,8 @@ def apply_drift(
     now = datetime.now(UTC).strftime("%Y-%m-%d %H:%M:%S")
     created = 0
     pruned = 0
+    colors_updated = 0
+    colors_created = 0
     applied_photos: list[dict] = []
     images_backup: Path | None = None
 
@@ -662,6 +978,42 @@ def apply_drift(
         applied_photos = [item for item in photos if ensure_image(item, targets, overwrite=True)]
 
         with conn:
+            # Цвета — до профилей, в той же транзакции: упавшая запись
+            # артикула не оставит справочник наполовину обновлённым.
+            for item in color_changes:
+                if item["id"] is None:
+                    conn.execute(
+                        "insert into colors "
+                        "(code, name, abbreviation, hex, operation_code, source, "
+                        "updated_at, created_at) "
+                        "values (?, ?, ?, ?, ?, 'ktm', ?, ?)",
+                        (
+                            item["new"]["code"],
+                            item["new"]["name"],
+                            color_abbreviation(item["new"]["code"], item["new"]["name"]),
+                            item["new"]["hex"],
+                            item["operation_code"],
+                            item["updated_at"],
+                            now,
+                        ),
+                    )
+                    colors_created += 1
+                else:
+                    # abbreviation — локальная подпись (0023): при LWW-обновлении
+                    # её не трогаем, даже если название в KTM изменилось.
+                    conn.execute(
+                        "update colors set code = ?, name = ?, hex = ?, "
+                        "operation_code = ?, source = 'ktm', updated_at = ? where id = ?",
+                        (
+                            item["new"]["code"],
+                            item["new"]["name"],
+                            item["new"]["hex"],
+                            item["operation_code"],
+                            item["updated_at"],
+                            item["id"],
+                        ),
+                    )
+                    colors_updated += 1
             for item in updates:
                 conn.execute(
                     f"update profiles set {columns[item['field']]} = ?, updated_at = ? where id = ?",
@@ -723,6 +1075,7 @@ def apply_drift(
         "created": created,
         "photos": len(applied_photos),
         "pruned": pruned,
+        "colors": {"updated": colors_updated, "created": colors_created},
     }
 
 
@@ -1075,10 +1428,14 @@ def main(argv: list[str]) -> int:
     want_dev = args.scope in ("all", "dev")
 
     products: list[dict] = []
+    ktm_colors: list[dict] = []
     profiles: list[dict] = []
+    local_colors: list[dict] = []
     drift: list[dict] = []
     skipped: list[dict] = []
     creations: list[dict] = []
+    color_drift: list[dict] = []
+    color_skipped: list[dict] = []
     apply_result: dict | None = None
 
     if want_ekr:
@@ -1095,12 +1452,23 @@ def main(argv: list[str]) -> int:
             return 2
 
         try:
+            ktm_colors = read_ktm_colors()
+        except (RuntimeError, FileNotFoundError) as error:
+            print(f"Не удалось прочитать цвета KTM: {error}", file=sys.stderr)
+            return 2
+
+        try:
             conn, profiles = read_ekr(db_path)
         except EkranchikSchemaError as error:
             print(f"[Экранчик] {error}", file=sys.stderr)
             return 2
         try:
+            local_colors = read_ekr_colors(conn)
             drift, skipped, creations = compute_drift(products, profiles, targets)
+            color_drift, color_skipped = compute_color_drift(ktm_colors, local_colors)
+        except EkranchikSchemaError as error:
+            print(f"[Экранчик] {error}", file=sys.stderr)
+            return 2
         except PhotoSyncError as error:
             print(f"[Экранчик] {error}", file=sys.stderr)
             return 2
@@ -1112,6 +1480,7 @@ def main(argv: list[str]) -> int:
                 apply_result = apply_drift(
                     db_path, drift, creations, targets,
                     prune_orphans=args.prune_orphans,
+                    color_updates=color_drift,
                 )
             except PhotoSyncError as error:
                 print(f"[Экранчик] {error}", file=sys.stderr)
@@ -1121,7 +1490,12 @@ def main(argv: list[str]) -> int:
                 return 2
             conn, profiles = read_ekr(db_path)
             try:
+                local_colors = read_ekr_colors(conn)
                 drift, skipped, creations = compute_drift(products, profiles, targets)
+                color_drift, color_skipped = compute_color_drift(ktm_colors, local_colors)
+            except EkranchikSchemaError as error:
+                print(f"[Экранчик] {error}", file=sys.stderr)
+                return 2
             except PhotoSyncError as error:
                 print(f"[Экранчик] {error}", file=sys.stderr)
                 return 2
@@ -1143,16 +1517,23 @@ def main(argv: list[str]) -> int:
 
     if args.json:
         print(json.dumps({
-            "ok": not drift and not creations and dev_drift_total(dev_report) == 0,
+            "ok": (not drift and not creations and not color_drift
+                   and dev_drift_total(dev_report) == 0),
             "scope": args.scope,
             "checked": len(profiles),
             "drift": drift,
             "creations": creations,
+            "colors": {
+                "checked": len(local_colors),
+                "drift": color_drift,
+                "skipped": color_skipped,
+            },
             "applied": None if apply_result is None else {
                 "updated": apply_result["updated"],
                 "created": apply_result["created"],
                 "photos": apply_result["photos"],
                 "pruned": apply_result["pruned"],
+                "colors": apply_result["colors"],
                 "backup": str(apply_result["backup"]),
                 "images_backup": None if apply_result["images_backup"] is None
                 else str(apply_result["images_backup"]),
@@ -1164,14 +1545,43 @@ def main(argv: list[str]) -> int:
         if want_ekr:
             if apply_result:
                 images_backup = apply_result["images_backup"]
+                colors_done = apply_result["colors"]
                 print(
                     f"Обновлено полей: {apply_result['updated']}, "
                     f"создано профилей: {apply_result['created']}, "
                     f"фото: {apply_result['photos']}, "
-                    f"удалено профилей: {apply_result['pruned']}. "
+                    f"удалено профилей: {apply_result['pruned']}, "
+                    f"цвета: обновлено {colors_done['updated']}, "
+                    f"создано {colors_done['created']}. "
                     f"Бэкап БД: {apply_result['backup']}"
                     + (f"; бэкап фото: {images_backup}" if images_backup else "")
                 )
+            if color_drift:
+                print(f"Расхождения цветов: {len(color_drift)} "
+                      f"(проверено {len(local_colors)} цветов)")
+                for item in color_drift:
+                    if item["id"] is None:
+                        print(
+                            f"  {item['name']}: {item['reason']}, "
+                            f"код {item['new']['code'] or '—'}, "
+                            f"название {item['new']['name']}, "
+                            f"hex {item['new']['hex'] or '—'}"
+                        )
+                    else:
+                        print(
+                            f"  {item['name']}: {item['reason']}, "
+                            f"код {item['old']['code'] or '—'} -> "
+                            f"{item['new']['code'] or '—'}, "
+                            f"название {item['old']['name']} -> {item['new']['name']}, "
+                            f"hex {item['old']['hex'] or '—'} -> "
+                            f"{item['new']['hex'] or '—'}"
+                        )
+            else:
+                print(f"Цвета: {len(local_colors)} проверено, расхождений нет.")
+            if color_skipped:
+                print(f"Пропущено цветов: {len(color_skipped)}")
+                for item in color_skipped:
+                    print(f"  {item['name']} ({item['operation_code']}): {item['reason']}")
             if drift:
                 print(f"Расхождения: {len(drift)} (проверено {len(profiles)} профилей)")
                 for item in drift:
@@ -1196,7 +1606,8 @@ def main(argv: list[str]) -> int:
         if dev_report is not None:
             print_dev_report(dev_report)
 
-    has_drift = bool(drift) or bool(creations) or dev_drift_total(dev_report) > 0
+    has_drift = (bool(drift) or bool(creations) or bool(color_drift)
+                 or dev_drift_total(dev_report) > 0)
     return 0 if not has_drift else 1
 
 

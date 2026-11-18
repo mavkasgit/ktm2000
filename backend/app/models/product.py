@@ -38,6 +38,10 @@ HANGER_MODE_AUTO = "auto"
 HANGER_MODE_MANUAL = "manual"
 HANGER_MODES = (HANGER_MODE_AUTO, HANGER_MODE_MANUAL)
 
+# Ключ ручной нормы безразмерного изделия (T-380, спека 0003): у volume
+# норму нельзя вывести формулой, её задают вручную — ``{"default": {"manual": 8}}``.
+DEFAULT_HANGER_KEY = "default"
+
 
 def _length_key(length_mm: float) -> str:
     """Canonical JSONB dict key for a length in mm (whole numbers without .0)."""
@@ -198,6 +202,29 @@ class Product(Base):
         d = (self.attributes or {}).get("quantity_per_hanger")
         return d if isinstance(d, dict) else None
 
+    def hanger_default_entry(self) -> dict[str, int | None] | None:
+        """Запись ручной нормы безразмерного изделия (T-380), или None.
+
+        Ключ ``default`` не является длиной: у ``volume`` без реестра длин
+        норма задаётся человеком (``hanger_mode=manual``). Значение
+        нормализуется к тому же виду, что и per-length записи.
+        """
+        d = self._hanger_dict()
+        if not d:
+            return None
+        entry = d.get(DEFAULT_HANGER_KEY)
+        if not isinstance(entry, dict):
+            return None
+        return _normalize_entry(entry)
+
+    @property
+    def quantity_per_hanger_default(self) -> int | None:
+        """Эффективная норма ``default`` по hanger_mode (T-380)."""
+        entry = self.hanger_default_entry()
+        if entry is None:
+            return None
+        return self._value_for_mode(entry)
+
     def _primary_hanger_length_key(self) -> str | None:
         """Key длины для основной длины per-length dict, или None для bare dicts.
 
@@ -262,6 +289,10 @@ class Product(Base):
             return raw if isinstance(raw, int) else None
         key = self._primary_hanger_length_key()
         if key is None:
+            default_entry = self.hanger_default_entry()
+            if default_entry is not None:
+                # Безразмерное изделие (T-380): норма с ключом default.
+                return self._value_for_mode(default_entry)
             # Bare dict {auto, manual} (legacy-скаляр) — всегда manual.
             manual = d.get("manual")
             return int(manual) if manual is not None else None
@@ -282,7 +313,7 @@ class Product(Base):
             attrs.pop("quantity_per_hanger", None)
         elif isinstance(value, dict):
             attrs["quantity_per_hanger"] = {
-                _length_key(float(k)): _normalize_entry(v)
+                self._hanger_entry_key(k): _normalize_entry(v)
                 for k, v in value.items()
                 if isinstance(v, dict)
             }
@@ -291,6 +322,13 @@ class Product(Base):
             # normalizes to per-length once lengths are known.
             attrs["quantity_per_hanger"] = {"auto": None, "manual": int(value)}
         self.attributes = attrs
+
+    @staticmethod
+    def _hanger_entry_key(key: str) -> str:
+        """Ключ записи нормы: длина ``length_mm`` либо ``default`` (T-380)."""
+        if str(key) == DEFAULT_HANGER_KEY:
+            return DEFAULT_HANGER_KEY
+        return _length_key(float(key))
 
     @property
     def quantity_per_hanger_by_length(self) -> dict[str, dict[str, int | None]] | None:
@@ -308,7 +346,7 @@ class Product(Base):
         normalized = {
             _length_key(float(k)): _normalize_entry(v)
             for k, v in d.items()
-            if isinstance(v, dict)
+            if isinstance(v, dict) and _is_numeric_key(k)
         }
         return normalized or None
 
@@ -338,6 +376,54 @@ class Product(Base):
             attrs.pop("cross_section", None)
         else:
             attrs["cross_section"] = value
+        self.attributes = attrs
+
+    # ─── Сторонний заказ (T-380, спека 0003) ─────────────────────────────────
+    # Сырьё заказчика: завод его не производит, только обрабатывает. Живёт в
+    # attributes, как и прочие необязательные свойства артикула.
+
+    @property
+    def third_party(self) -> bool:
+        """Отметка «сторонний заказ» (``attributes.third_party``)."""
+        return bool((self.attributes or {}).get("third_party"))
+
+    @third_party.setter
+    def third_party(self, value: bool | None) -> None:
+        attrs = dict(self.attributes or {})
+        if value:
+            attrs["third_party"] = True
+        else:
+            attrs.pop("third_party", None)
+        self.attributes = attrs
+
+    @property
+    def customer(self) -> str | None:
+        """Заказчик стороннего заказа (``attributes.customer``)."""
+        value = (self.attributes or {}).get("customer")
+        return value if isinstance(value, str) and value else None
+
+    @customer.setter
+    def customer(self, value: str | None) -> None:
+        attrs = dict(self.attributes or {})
+        if value is None or not str(value).strip():
+            attrs.pop("customer", None)
+        else:
+            attrs["customer"] = str(value)
+        self.attributes = attrs
+
+    @property
+    def pack(self) -> dict[str, int] | None:
+        """Состав комплекта (``attributes.pack``): комплектов и предметов."""
+        value = (self.attributes or {}).get("pack")
+        return value if isinstance(value, dict) else None
+
+    @pack.setter
+    def pack(self, value: dict[str, int] | None) -> None:
+        attrs = dict(self.attributes or {})
+        if value is None:
+            attrs.pop("pack", None)
+        else:
+            attrs["pack"] = {str(key): int(amount) for key, amount in value.items()}
         self.attributes = attrs
 
     # Equivalent SKU aliases
