@@ -129,13 +129,15 @@ jobs:
         uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4.4.0
         with:
           node-version-file: ${{ steps.toolchain.outputs.node_file }}
+      # #364: команды шагов — из `scripts/gate.mjs` (`--only=<шаг>`), а не свои
+      # копии в теле workflow: иначе локальный гейт и CI снова разъедутся.
       - name: Doc links
-        run: npm run check:docs
+        run: npm run gate -- --only=docs-links
 
       # Коллизия номеров ADR не видна ни в одной другой проверке: оба файла
       # существуют, ссылка резолвится. Ловит только этот шаг (#390).
       - name: ADR index
-        run: npm run check:adr
+        run: npm run gate -- --only=adr-index
 
       - name: Script tests
-        run: npm run test:scripts
+        run: npm run gate -- --only=scripts-tests

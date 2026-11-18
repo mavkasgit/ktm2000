@@ -1,0 +1,109 @@
+# Обновления зависимостей — Dependabot (#367).
+#
+# Почему файла не было: обновления делались руками «волнами», и по `package-lock.json`
+# невозможно было увидеть, что обновление вообще предлагалось. Теперь версии
+# двигает бот, а человек решает.
+#
+# Правила:
+# - `weekly` и `cooldown.default-days: 7` — свежий релиз ждёт неделю: зеркала и
+#   апстримы успевают отозвать сломанную версию, а «обновись в день релиза» не
+#   превращается в гонку с чужой ошибкой (донор: тот же cooldown);
+# - `open-pull-requests-limit: 5` — потолок PR на экосистему: больше пяти
+#   одновременных апдейтов ревью не проходит, а очередь растёт молча;
+# - minor + patch собираются в один PR группой, мажоры идут отдельно: мажор
+#   требует чтения changelog, его нельзя прятать в кучу;
+# - workflows держат actions по SHA (см. tools.json, `action-*`): Dependabot
+#   обновляет SHA и комментарий с тегом, тег-ссылка не появляется;
+# - директории сверены с наличием файлов: `npm` — `package-lock.json` в корне и
+#   `frontend/`, `pip` — `backend/requirements*.txt` (lock-файла у pip нет и
+#   никогда не было: ставим по requirements-dev.txt), `docker` — `Dockerfile` в
+#   `backend/` и `frontend/` плюс три compose-файла в `infra/compose/`.
+#
+# Ручной запуск и проверка конфига: `npm run gate -- --only=ci-lint`
+# (jactionlint читает этот файл наравне с workflow).
+version: 2
+updates:
+  # ─── npm: корень репозитория (скрипты гейта и хуки) ───
+  - package-ecosystem: npm
+    directory: /
+    schedule:
+      interval: weekly
+    cooldown:
+      default-days: 7
+    open-pull-requests-limit: 5
+    groups:
+      npm-root-minor-patch:
+        applies-to: version-updates
+        update-types:
+          - minor
+          - patch
+
+  # ─── npm: фронтенд (lock-файл отдельный, поэтому отдельная запись) ───
+  - package-ecosystem: npm
+    directory: /frontend
+    schedule:
+      interval: weekly
+    cooldown:
+      default-days: 7
+    open-pull-requests-limit: 5
+    groups:
+      npm-frontend-minor-patch:
+        applies-to: version-updates
+        update-types:
+          - minor
+          - patch
+
+  # ─── pip: backend (requirements.txt + requirements-dev.txt) ───
+  - package-ecosystem: pip
+    directory: /backend
+    schedule:
+      interval: weekly
+    cooldown:
+      default-days: 7
+    open-pull-requests-limit: 5
+    groups:
+      pip-minor-patch:
+        applies-to: version-updates
+        update-types:
+          - minor
+          - patch
+
+  # ─── github-actions: все workflow в .github/workflows ───
+  - package-ecosystem: github-actions
+    directory: /
+    schedule:
+      interval: weekly
+    cooldown:
+      default-days: 7
+    open-pull-requests-limit: 5
+    groups:
+      actions-minor-patch:
+        applies-to: version-updates
+        update-types:
+          - minor
+          - patch
+
+  # ─── docker: образы в Dockerfile и compose ───
+  - package-ecosystem: docker
+    directory: /backend
+    schedule:
+      interval: weekly
+    cooldown:
+      default-days: 7
+    open-pull-requests-limit: 3
+
+  - package-ecosystem: docker
+    directory: /frontend
+    schedule:
+      interval: weekly
+    cooldown:
+      default-days: 7
+    open-pull-requests-limit: 3
+
+  - package-ecosystem: docker
+    directory: /infra/compose
+    schedule:
+      interval: weekly
+    cooldown:
+      default-days: 7
+    open-pull-requests-limit: 3

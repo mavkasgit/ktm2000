@@ -24,6 +24,8 @@
 | `seeds-validate` | fast | сиды справочников внутренне непротиворечивы | CI migrations.yml | да | prove-checks 2026-11-03 |
 | `profile-settings-manifest` | fast | манифест профилей настроек совпадает с кодом | CI migrations.yml | да | prove-checks 2026-11-03 |
 | `compose-audit` | fast | потолки логов, healthcheck и restart-политика в compose | локальный гейт | да | prove-checks 2026-11-03 |
+| `ci-lint` | fast | workflow GitHub Actions и `dependabot.yml`: схемы, выражения, пины, политики (jactionlint, `--strict-exit`) | CI ci-lint.yml | да | prove-checks 2026-11-18 |
+| `osv-allowlist` | fast | датированные исключения аудита зависимостей: запись без причины или с прошедшей датой пересмотра (сам скан — advisory в CI) | CI deps-audit.yml | да | prove-checks 2026-11-18 |
 | `test-hygiene` | fast | мёртвые импорты в тестах | CI backend-tests.yml | нет, report-only | exempt: ловит ruff F401 |
 | `backend-test-count` | fast | pytest-набор не меньше записанного в baseline | CI backend-tests.yml | да | prove-checks 2026-11-03 |
 | `ruff` | fast | линтер backend | pre-commit, CI ruff.yml | да | prove-checks 2026-11-03 |
@@ -35,6 +37,7 @@
 | `backend-tests` | full | pytest backend (создаёт свою БД) | CI backend-tests.yml | да | prove-checks --heavy 2026-11-03 |
 | `frontend-unit` | full | vitest с покрытием | CI frontend-tests.yml | да | prove-checks --heavy 2026-11-03 |
 | `frontend-test-count` | full | vitest-набор не меньше записанного в baseline | CI frontend-tests.yml | да | prove-checks --heavy 2026-11-03 |
+| `frontend-build` | full | сборка фронта и порог начального пакета (raw + gzip из `dist/index.html`, `frontend/bundle-size-baseline.json`) | CI frontend-tests.yml | да | prove-checks 2026-11-18: статический импорт страницы |
 | `dev-deps` | full | dev-пакет фронтенда или корня, не названный ни в одном файле кода/конфига ни именем, ни бинарником (Markdown — не использование); report-only с 2026-11-03 до пересмотра 2027-05-01, в гейте — strict | CI frontend-tests.yml (report-only) | в strict локально; в CI — нет до пересмотра | prove-checks 2026-11-03 |
 | `alembic-drift` | нет локально | дрейф миграций против heads | CI migrations.yml | в CI | exempt: локально не запускается |
 | `e2e-smoke` | e2e | Playwright smoke на своём клоне базы | CI e2e-smoke.yml | в CI | exempt: отдельный ярус |
@@ -44,8 +47,8 @@
 
 | Команда | Состав | Ориентир по времени | Когда |
 |---------|--------|---------------------|-------|
-| `npm run gate:fast` | 17 шагов яруса fast | бюджет 60 с | перед push (он и есть хук pre-push) |
-| `npm run gate` | fast + backend-tests + frontend-unit | минуты | перед коммитом значимой правки, и так же в CI |
+| `npm run gate:fast` | 20 шагов яруса fast | бюджет 60 с | перед push (он и есть хук pre-push) |
+| `npm run gate` | fast + backend-tests + frontend-unit + frontend-build | минуты | перед коммитом значимой правки, и так же в CI |
 | `npm run gate:e2e` | полный + Playwright smoke | минуты плюс слот семафора | отдельно: поднимает свой стенд |
 
 С `--strict` шаг, недоступный локально, краснеет, а не печатается строкой
@@ -67,11 +70,12 @@ missing. Локально missing — честная пометка, а не з�
 проверяет `scripts/heavy-core.test.js`), поэтому baseline явно обновлён на
 1531 и шаг позеленел.
 
-Пока это цель, а не факт: в CI гейт целиком не запускается ни одним workflow —
-проверки разобраны по отдельным джобам (`ruff.yml`, `backend-tests.yml`, …), а
-`--strict` сегодня передают только сами шаги. Общий прогон `npm run gate --
---strict` в CI — #364; до него фраза «в CI зовите с --strict» читается как
-описание намерения.
+Пока это цель, а не факт: полный `npm run gate -- --strict` в CI не
+запускается — шаг `backend-tests` идёт через PowerShell-лаунчер с собственной
+БД, которого на ubuntu-раннере нет. Но свой перечень проверок workflow больше
+не хранят: каждый CI-шаг зовёт команду из `scripts/gate.mjs` через
+`npm run gate -- --only=<шаг>` (#364), поэтому правка команды или порога живёт
+в одном месте. Полный прогон `--strict` в CI — отдельный тикет.
 
 ## Рэтчет предупреждений ESLint (#372)
 

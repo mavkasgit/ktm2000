@@ -1,0 +1,91 @@
+name: Dependency audit
+
+# Статус для merge: ИНФОРМАЦИОННЫЙ (#369). Джоб — advisory: уязвимости зависимостей
+# сейчас есть, и блокировать ими merge нельзя, пока версии не приведены в порядок.
+# Состав блокирующих живёт вне этого файла (`gh api
+# repos/mavkasgit/ktm2000/branches/main/protection`, `docs/testing-guide.md` §CI).
+#
+# Что проверяется: известные уязвимости в npm-локах, pip-требованиях и образах —
+# через osv-scanner (выбор инструмента: он читает `package-lock.json`,
+# requirements, Dockerfile и SBOM, есть Windows-сборка; Trivy/Gitleaks/pip-audit
+# отвергнуты — `docs/quality/not-adopted.md`).
+#
+# Почему скан не блокирует, а allowlist блокирует: сам скан — про состояние мира
+# (новая CVE появляется без нашего коммита), а исключение «мы это видели и
+# осознанно не чиним» — про наше решение. Просроченный срок пересмотра обязан
+# краснеть, иначе список превращается в свалку (`scripts/osv-allowlist.mjs`,
+# шаг гейта `osv-allowlist` — он же локально и в pre-push по желанию).
+#
+# Порог по severity зафиксирован числом: `--severity-threshold` у osv-scanner
+# 2.7.0 нет, поэтому порог задан данными — все находки попадают в отчёт, а
+# исключения перечисляются явно. Отчёт — SARIF-артефакт и таблица в логе.
+#
+# Версия пинается в теле (2.7.0) со сверкой sha256: бинарь исполняется на
+# раннере, редирект без проверки — это исполнение чужого кода.
+on:
+  schedule:
+    # Понедельник, 03:17 UTC — вне пиков и до начала рабочего дня.
+    - cron: '17 3 * * 1'
+  workflow_dispatch:
+
+concurrency:
+  group: ci-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: ${{ github.ref != 'refs/heads/main' }}
+
+permissions:
+  contents: read
+
+jobs:
+  deps-audit:
+    name: deps audit
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+        with:
+          persist-credentials: false
+
+      - name: Setup Node
+        uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4.4.0
+        with:
+          node-version-file: .nvmrc
+
+      # Блокирующая часть: датированные исключения. Сеть не нужна, поэтому шаг
+      # падает по существу, а не «нет доступа к базе».
+      - name: Allowlist review dates (шаг гейта osv-allowlist)
+        run: npm run gate -- --only=osv-allowlist
+
+      - name: Install osv-scanner (pinned 2.7.0)
+        run: |
+          set -euo pipefail
+          VERSION=2.7.0
+          SHA256=160c6253e2922e9e0a6a9771c5c4c40a4b3c6090b34a3cdd5e80c96cc2e4218b
+          curl -fsSL -o /tmp/osv-scanner \
+            "https://github.com/google/osv-scanner/releases/download/v${VERSION}/osv-scanner_linux_amd64"
+          echo "${SHA256}  /tmp/osv-scanner" | sha256sum --check --strict
+          sudo install -m 0755 /tmp/osv-scanner /usr/local/bin/osv-scanner
+          osv-scanner --version
+
+      # Конфиг исключений генерируется из allowlist: причина и дата живут в JSON,
+      # чтобы их проверяла машина, а не комментарий TOML.
+      - name: Build osv config from allowlist
+        run: node scripts/osv-allowlist.mjs --write /tmp/osv-scanner.toml
+
+      # Report-only: находки видны в логе, но merge не блокируют (см. шапку).
+      - name: Scan dependencies (report-only)
+        continue-on-error: true
+        run: |
+          set -o pipefail
+          osv-scanner scan source --recursive --config /tmp/osv-scanner.toml . \
+            | tee /tmp/osv-report.txt
+
+      - name: Upload audit report
+        if: always()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: osv-report
+          path: /tmp/osv-report.txt
+          retention-days: 30
+          if-no-files-found: warn
