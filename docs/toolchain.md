@@ -23,10 +23,10 @@
 <!-- tools:start -->
 | id | чем | закреплено где | версия | где исполняется | блокирует | последний обзор |
 | --- | --- | --- | --- | --- | --- | --- |
-| `action-checkout` | actions/checkout (actions/checkout) | `.github/workflows` | `@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0` | ci | да | 2026-11-03 |
-| `action-setup-node` | actions/setup-node (actions/setup-node) | `.github/workflows` | `@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4.4.0` | ci | да | 2026-11-03 |
-| `action-setup-python` | actions/setup-python (actions/setup-python) | `.github/workflows` | `@a26af69be951a213d495a4c3e4e4022e16d87065 # v5.6.0` | ci | да | 2026-11-03 |
-| `action-upload-artifact` | actions/upload-artifact (actions/upload-artifact) | `.github/workflows` | `@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2` | ci | нет | 2026-11-03 |
+| `action-checkout` | actions/checkout (actions/checkout) | `.github/workflows` | `@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1` | ci | да | 2026-11-18 |
+| `action-setup-node` | actions/setup-node (actions/setup-node) | `.github/workflows` | `@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0` | ci | да | 2026-11-18 |
+| `action-setup-python` | actions/setup-python (actions/setup-python) | `.github/workflows` | `@6d4fd22b20465ccc0f7354476588e8df7c9ca0e0 # v7.1.0` | ci | да | 2026-11-18 |
+| `action-upload-artifact` | actions/upload-artifact (actions/upload-artifact) | `.github/workflows` | `@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2` | ci | нет | 2026-11-18 |
 | `ajv` | Ajv (ajv-validator/ajv) | `package.json` | `^8.20.0` | gate, ci | да | 2026-11-03 |
 | `alembic` | Alembic (sqlalchemy-org/alembic) | `backend/requirements.txt` | `>=1.13.0` | ci, manual | да | 2026-11-03 |
 | `concurrently` | concurrently (open-cli-tools/concurrently) | `package.json` | `^10.0.7` | manual | нет | 2026-11-09 |
