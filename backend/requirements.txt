@@ -8,7 +8,7 @@ pydantic-settings>=2.1.0
 structlog>=26.0.0
 python-jose[cryptography]>=3.3.0
 python-multipart>=0.0.6
-httpx>=0.25.0
+httpx>=0.28.1
 # Прямой импорт в app/api/backups.py (anyio.open_file) — объявляем явно:
 # транзитивно приходит из FastAPI/Starlette, но прямой импорт не должен на это опираться.
 anyio>=4.0
