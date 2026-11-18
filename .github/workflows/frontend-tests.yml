@@ -6,11 +6,14 @@ name: Frontend tests
 # и таблицей `docs/testing-guide.md` (§CI). #370.
 
 # tsc + ESLint + vitest с покрытием на push/PR. Решения грилла #245: Q14=1
-# (набор в CI), Q4=1 (покрытие меряем), Q22 (typecheck отдельным шагом, vite
-# build не дублируем). ESLint добавлен в набор ради архитектурных границ FSD
-# (#333): tsc их не видит.
+# (набор в CI), Q4=1 (покрытие меряем), Q22 (typecheck отдельным шагом).
+# Сборка (`vite build`) — отдельный джоб `frontend build` с порогом начального
+# пакета (#364): Q22 запрещал дублировать сборку в тестовом джобе, а не заводить
+# её как проверку.
+# ESLint добавлен в набор ради архитектурных границ FSD (#333): tsc их не видит.
 # Пороги покрытия включены (решение #245, Q5=1) по первому замеру 2026-10-01:
-# statements/lines 43, branches 72; `functions` 49 добавлен в #373. Сами числа —
+# statements/lines 43, `functions` 49 (#373), `branches` 52 после перехода на
+# Vitest 5 (#410: v8 считает ветки по AST). Сами числа —
 # `frontend/vitest.config.ts`, не этот комментарий.
 # #361: скоуп по путям считается шагом внутри джоба (не фильтром `paths` уровня
 # workflow) — required check от workflow-фильтра повис бы в "Pending" и
@@ -156,9 +159,14 @@ jobs:
         if: steps.scope.outputs.relevant == 'true'
         run: npm ci
 
+      # #364: команды шагов берутся из `scripts/gate.mjs`, а не пишутся здесь
+      # заново. Список проверок в двух местах расходился: этот файл обещал
+      # «report-only, no threshold yet», хотя порог в `vitest.config.ts` уже был.
+      # `--only` берёт шаг целиком (команда, cwd, обёртка heavy), поэтому правка
+      # порога или команды живёт в одном месте.
       - name: Typecheck (tsc -b)
         if: steps.scope.outputs.relevant == 'true'
-        run: npx tsc -b
+        run: npm --prefix .. run gate -- --only=frontend-types
 
       # #372: `npm run lint` без `--max-warnings` оставался зелёным при
       # накоплении предупреждений, а `--max-warnings=0` недостижим (48
@@ -168,18 +176,18 @@ jobs:
       # (шаг `frontend-lint` гейта зовёт ту же задачу).
       - name: ESLint (границы FSD + рэтчет предупреждений)
         if: steps.scope.outputs.relevant == 'true'
-        run: npm run lint:ratchet
+        run: npm --prefix .. run gate -- --only=frontend-lint
 
-      - name: Vitest with coverage (пороги statements/lines 43, branches 72, functions 49)
+      - name: Vitest with coverage (пороги statements/lines 43, branches 52, functions 49)
         if: steps.scope.outputs.relevant == 'true'
-        run: npm test -- --coverage
+        run: npm --prefix .. run gate -- --only=frontend-unit
 
       # Рэтчет числа тестов (#358): собрано не меньше записанного. Отдельный шаг,
       # потому что зелёный прогон с молча исчезнувшим файлом спеков выглядит как
       # «тестов стало меньше, но они проходят».
       - name: Test-count ratchet (vitest)
         if: steps.scope.outputs.relevant == 'true'
-        run: node ../scripts/test-count.js --only=frontend
+        run: npm --prefix .. run gate -- --only=frontend-test-count
 
       # Мёртвые dev-зависимости (#374): пакет, который не назван ни в одном
       # отслеживаемом файле и ни одним своим бинарником, — кандидат на удаление.
@@ -189,4 +197,42 @@ jobs:
       # отдельное решение после пересмотра.
       - name: Dead devDependencies check
         if: steps.scope.outputs.relevant == 'true'
-        run: node ../scripts/check-dev-deps.js
+        run: npm --prefix .. run gate -- --only=dev-deps
+
+  # Сборка фронта и порог начального пакета (#364). До этого джоба `vite build`
+  # в CI не запускался никто, хотя `frontend/AGENTS.md` нормирует стартовый вес
+  # числом: статический импорт страницы в `Router.tsx` никем не ловился.
+  #
+  # Джоб всегда запускается (без path scope): сборка занимает ~30 с, а scope-шаг
+  # здесь пришлось бы копировать четвёртый раз — расхождение списков и есть
+  # предмет тикета. Порог — `frontend/bundle-size-baseline.json`, поднимается
+  # только `npm run bundle:update` (гейт порог не двигает).
+  frontend-build:
+    name: frontend build
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+
+    defaults:
+      run:
+        working-directory: frontend
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+        with:
+          persist-credentials: false
+
+      - name: Setup Node
+        uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4.4.0
+        with:
+          node-version-file: .nvmrc
+          cache: npm
+          cache-dependency-path: frontend/package-lock.json
+
+      - name: Install frontend dependencies
+        run: npm ci
+
+      # Один шаг: сборка и сверка веса с порогом. Числа (raw и gzip) печатаются
+      # всегда — по ним видно, что рост вообще измерялся.
+      - name: Build and bundle-size threshold (шаг гейта frontend-build)
+        run: npm --prefix .. run gate -- --only=frontend-build

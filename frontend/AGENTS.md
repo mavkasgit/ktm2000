@@ -17,8 +17,12 @@ React 18.3 + TypeScript + Vite + Tailwind CSS + shadcn/ui + TanStack Query/Virtu
 - Страница раздела подключается **только** через `lazyPage`
   ([`src/app/lazyRoute.tsx`](src/app/lazyRoute.tsx)). Статический импорт
   страницы в [`src/app/Router.tsx`](src/app/Router.tsx) возвращает все
-  разделы в начальный пакет: до #199 он весил 2 538 КБ (653 КБ gzip), сейчас —
-  654 КБ (213 КБ gzip).
+  разделы в начальный пакет: до #199 он весил 2 538 КБ (653 КБ gzip), а
+  порог держит шаг гейта `frontend-build` — замер 2026-11-18: 1 827 КБ
+  (511 КБ gzip) при пороге в
+  [`bundle-size-baseline.json`](bundle-size-baseline.json) с допуском 1%.
+  Начальный пакет — это `<script src>` + `modulepreload` + `stylesheet` из
+  `dist/index.html`; ленивые чанки разделов в него не входят.
 - Ссылка на модуль страницы — **по файлу страницы**
   (`import("../features/references/pages/ProductsPage")`). Барелы
   `features/references`, `features/planning` и `features/admin` удалены

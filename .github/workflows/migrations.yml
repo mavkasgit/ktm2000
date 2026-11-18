@@ -197,11 +197,15 @@ jobs:
           cd backend
           TEST_DATABASE_URL="postgresql+asyncpg://ktm2000_user:ktm2000_pass_test@localhost:5212/${DB_NAME}" pytest tests/test_migrations.py -v
 
+      # #364: обе проверки — шаги гейта (`labels-check`, `seeds-validate`), а не
+      # свои команды: списки файлов и валидаторы живут в одном месте.
       - name: Validate seeds and generated labels
         if: steps.scope.outputs.relevant == 'true'
-        run: cd backend && python scripts/validate_seeds.py && python scripts/generate_frontend_labels.py --check
+        run: |
+          npm run gate -- --only=labels-check
+          npm run gate -- --only=seeds-validate
 
       - name: Verify profile-settings manifest (strict)
         if: steps.scope.outputs.relevant == 'true'
         working-directory: .
-        run: python scripts/verify-profile-settings.py verify --strict
+        run: npm run gate -- --only=profile-settings-manifest

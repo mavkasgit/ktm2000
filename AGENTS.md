@@ -26,6 +26,7 @@ npm run test:db:cleanup        # Уборка осиротевших тесто�
 npm run doctor                 # Предпроверка дерева: GO/NO-GO (ветка, env, .venv, порты, индекс, хуки)
 npm run gate:fast              # Быстрые шаги гейта (в CI зовут `npm run gate -- --strict`)
 npm run gate                   # gate:fast + тесты backend и frontend
+npm run bundle:update          # Осознанно поднять порог начального пакета (шаг frontend-build)
 npm run prove-checks           # Показать, что каждый шаг гейта умеет падать (красный ход, #357)
 npm run verify:sync            # Сверка shared-файлов из scripts/sync-manifest.json с ../hrms (baseline + known)
 ```

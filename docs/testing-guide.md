@@ -23,18 +23,25 @@ npm run test:e2e             # Playwright, отдельный стенд (сво
 
 Автоматические workflow (решения грилла #245).
 
-Проверяют код шесть файлов; что из них **блокирует merge**, а что нет — отдельный
+Проверяют код восемь файлов; что из них **блокирует merge**, а что нет — отдельный
 факт, живущий вне репозитория. Имя required check — это `name:` **джоба**, а не
 `name:` workflow: они различаются (`Backend tests` ↔ `backend tests`), и по имени
 workflow проверку ни включить, ни найти в защите ветки нельзя.
 
+Команды шагов здесь не перечислены заново: CI зовёт `npm run gate -- --only=<шаг>`,
+то есть ту же команду, что и локально (#364). Единственное исключение — шаги,
+которым нужен стенд CI (сервис Postgres и pip install в джобе).
+
 | Workflow | Джоб (имя required check) | Статус для merge | Триггер | Что делает |
 |----------|---------------------------|------------------|---------|------------|
-| `migrations.yml` | `migrations` | **блокирует** | push, PR | alembic + миграционные тесты + проверки сидов/лейблов |
-| `backend-tests.yml` | `backend tests` | **блокирует** | push, PR, `workflow_dispatch` | рэтчёт pytest-набора + полный pytest под `coverage` (serial, `-p no:xdist -p no:testmon`) + **гейт `--fail-under=73`** |
-| `frontend-tests.yml` | `frontend tests` | **блокирует** | push, PR, `workflow_dispatch` | `tsc -b` + ESLint (границы FSD) + vitest с **гейтом** `statements/lines ≥ 43`, `branches ≥ 72`, `functions ≥ 49` + рэтчёт vitest-набора |
-| `ruff.yml` | `ruff` | **блокирует** | push, PR, `workflow_dispatch` | `ruff check backend` — находок 0 (pyflakes-ядро `F`); стилевые и сигнальные семейства в скоуп не входят |
-| `docs.yml` | `docs` | информационный | push, PR по `paths` (`**.md`, `docs/**`, `scripts/**`, `package*.json`, сам файл), `workflow_dispatch` | каждая относительная ссылка в `.md` резолвится в файл из `git ls-files` + `npm run test:scripts` |
+| `migrations.yml` | `migrations` | **блокирует** | push, PR | alembic + миграционные тесты + шаги гейта `labels-check`, `seeds-validate`, `profile-settings-manifest` |
+| `backend-tests.yml` | `backend tests` | **блокирует** | push, PR, `workflow_dispatch` | шаг гейта `backend-test-count` + полный pytest под `coverage` + **гейт `--fail-under=73`** |
+| `frontend-tests.yml` | `frontend tests` | **блокирует** | push, PR, `workflow_dispatch` | шаги гейта `frontend-types`, `frontend-lint`, `frontend-unit` (пороги `statements/lines ≥ 43`, `branches ≥ 52`, `functions ≥ 49`), `frontend-test-count`, `dev-deps` |
+| `frontend-tests.yml` | `frontend build` | информационный | push, PR, `workflow_dispatch` | шаг гейта `frontend-build`: `vite build` + порог начального пакета по `frontend/bundle-size-baseline.json` (raw и gzip), рост — красный |
+| `ruff.yml` | `ruff` | **блокирует** | push, PR, `workflow_dispatch` | шаг гейта `ruff` — находок 0 (pyflakes-ядро `F`); стилевые и сигнальные семейства в скоуп не входят |
+| `ci-lint.yml` | `ci-lint` | информационный | push, PR по `paths` (`.github/**`, `mise.toml`, `tools.json`, `scripts/gate.mjs`, `package.json`), `workflow_dispatch` | шаг гейта `ci-lint`: jactionlint по workflow, composite actions и `dependabot.yml`, политика «ноль находок» |
+| `deps-audit.yml` | `deps audit` | информационный | расписание (пн 03:17 UTC), `workflow_dispatch` | шаг гейта `osv-allowlist` (датированные исключения — блокирует) + osv-scanner по всем локам (advisory: находки печатаются и уходят артефактом, merge не блокируют) |
+| `docs.yml` | `docs` | информационный | push, PR по `paths` (`**.md`, `docs/**`, `scripts/**`, `package*.json`, сам файл), `workflow_dispatch` | шаги гейта `docs-links`, `adr-index`, `scripts-tests` |
 | `e2e-smoke.yml` | `e2e smoke` | информационный | push, PR (кроме `docs/**` и `**.md`), `workflow_dispatch` | ярус `@smoke` на своей БД-сервисе в джобе, `--retries=0`, трасса артефактом |
 
 Состав блокирующих — замер только чтения, `gh api
@@ -49,7 +56,7 @@ repos/mavkasgit/ktm2000/branches/main/protection` (2026-11-03): contexts =
 `paths`-фильтры уровня workflow допустимы **только** у информационных джобов.
 Если отфильтровать скоуп там, где check required, правка вне скоупа оставит
 проверку в «Pending» и merge станет невозможен (#361). Поэтому фильтр есть у
-`docs.yml` и `e2e-smoke.yml`, и его нет у четырёх блокирующих.
+`docs.yml`, `ci-lint.yml` и `e2e-smoke.yml`, и его нет у четырёх блокирующих.
 
 Условия промоушена smoke-яруса (`e2e-smoke.yml`, шапка; тикет #276): `e2e smoke`
 переводится в required после **10 зелёных прогонов подряд на push в `main`**.
@@ -62,7 +69,13 @@ repos/mavkasgit/ktm2000/branches/main/protection` (2026-11-03): contexts =
 из `backend/requirements-dev.txt` (#377), литерала в workflow нет; актуальное
 значение — колонка `coverage` в [`docs/toolchain.md`](toolchain.md).
 Расхождение CI ↔ локального замера — сначала разбирать, порог не подгонять.
-Прогон серийный: под xdist воркеры остаются вне замера coverage.
+Прогон параллельный (`-n 4 --dist loadfile`, #378): coverage в каждом воркере
+стартует сам (`COVERAGE_PROCESS_START` + `sitecustomize.py`) и сводится
+`coverage combine` до гейта, иначе под xdist мерился бы только диспетчер.
+Замер на одной ревизии (0bd84c00, 2026-11-18, весь набор включая `slow`):
+serial 983.9 с против 290.1 с на `-n 4 --dist loadfile` (−70.5%), в обоих
+2464 passed / 2 skipped. Чередование 2+2 через `workflow_dispatch` — после
+merge: dispatch берёт workflow только с default-ветки.
 
 ## Стенд E2E
 

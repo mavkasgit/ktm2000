@@ -145,6 +145,48 @@ const PROBES = [
     note: "потолок лога задран с 20m до 500m — аудит обязан это увидеть",
   },
   {
+    step: "ci-lint",
+    mutate: [
+      {
+        path: ".github/workflows/ci-lint.yml",
+        from: "    timeout-minutes: 5",
+        to: "    timeout-minutes: 5\n    needs: [no-such-job-364]",
+      },
+    ],
+    expect: /no-such-job-364|needs/i,
+    note: "сослаться на несуществующий job в needs — схема workflow обязана покраснеть (#365)",
+  },
+  {
+    step: "osv-allowlist",
+    mutate: [
+      {
+        path: ".github/osv-allowlist.json",
+        to: '{\n  "entries": [\n    {\n      "id": "GHSA-probe-3640",\n      "package": "probe@1.0.0",\n      "reason": "пробник",\n      "review_by": "2020-01-01"\n    }\n  ]\n}\n',
+      },
+    ],
+    expect: /просрочено/i,
+    note: "исключение аудита с прошедшей датой пересмотра — шаг обязан назвать id и срок (#369)",
+  },
+  {
+    step: "frontend-build",
+    mutate: [
+      {
+        // Псевдоним обязателен: страница уже объявлена в Router через lazyPage,
+        // и импорт без псевдонима — не «рост пакета», а конфликт объявлений.
+        path: "frontend/src/app/Router.tsx",
+        from: "const BackupsPage = lazyPage(",
+        to: 'import { RawMaterialsPage as _Probe364Page } from "../features/references/pages/RawMaterialsPage"\nconst BackupsPage = lazyPage(',
+      },
+      {
+        path: "frontend/src/app/Router.tsx",
+        from: 'element: <ProtectedRoute allowedRoles={["admin"]}><BackupsPage /></ProtectedRoute>,',
+        to: 'element: <ProtectedRoute allowedRoles={["admin"]}><_Probe364Page /></ProtectedRoute>,',
+      },
+    ],
+    expect: /начальный пакет вырос/i,
+    note: "статический импорт страницы и её элемент в роутере возвращают раздел в начальный пакет — порог обязан покраснеть (#364)",
+  },
+  {
     step: "ruff",
     write: [{ path: "backend/_probe357.py", content: 'def broken():\n    return undefined_name_357 + 1\n' }],
     expect: /F821|undefined_name_357/i,
@@ -332,7 +374,10 @@ function apply(probe) {
   for (const m of probe.mutate || []) {
     const path = join(ROOT, m.path);
     const original = readFileSync(path, "utf8");
-    backups.set(path, original);
+    // Первая копия — исходная. Вторая мутация того же файла (обычный случай:
+    // импорт + его использование в одном шаблоне) иначе перезаписывала backup
+    // промежуточным состоянием, и откат оставлял в дереве след.
+    if (!backups.has(path)) backups.set(path, original);
     const next = m.from === undefined ? m.to : original.replace(m.from, m.to);
     if (next === original) throw new Error(`мутация не применилась: в ${m.path} нет куска «${m.from}»`);
     writeFileSync(path, next);

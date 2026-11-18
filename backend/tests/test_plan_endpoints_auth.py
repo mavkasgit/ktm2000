@@ -20,12 +20,12 @@ from app.core.config import settings
 from app.main import app
 from app.models.production_plan import PlanPositionStatus
 from app.models.user import UserRole
-from fastapi.routing import APIRoute
 from httpx import AsyncClient
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from tests.helpers.auth import user_headers
 from tests.helpers.plan import make_plan_with_positions
+from tests.helpers.routes import collect_guards
 
 # Асинхронные тесты помечает pytest-asyncio сам (`asyncio_mode = auto` в
 # backend/pytest.ini). Модульный `pytestmark = pytest.mark.asyncio` вешал маркер
@@ -89,55 +89,9 @@ def _strict_auth(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setattr(settings, "DEV_BYPASS_AUTH", False)
 
 
-def _iter_api_routes(routes, prefix: str) -> list[tuple[str, APIRoute]]:
-    """Плоский список (полный путь, маршрут): включённые роутеры лежат вложенно.
-
-    FastAPI 0.142 отдаёт результат `include_router` обёрткой `_IncludedRouter`
-    с полем `original_router` — публичного обхода с готовыми путями нет. При
-    обновлении FastAPI это место проверяется первым: тест упадёт на
-    расхождении таблицы со списком, а не промолчит.
-    """
-    out: list[tuple[str, APIRoute]] = []
-    for route in routes:
-        included = getattr(route, "original_router", None)
-        if included is not None:
-            out.extend(_iter_api_routes(included.routes, prefix + (getattr(route, "prefix", "") or "")))
-        elif isinstance(route, APIRoute):
-            out.append((prefix + route.path, route))
-        elif hasattr(route, "routes"):
-            out.extend(_iter_api_routes(route.routes, prefix + (getattr(route, "prefix", "") or "")))
-    return out
-
-
-def _declared_roles(dependant) -> frozenset[UserRole] | None:
-    """Пересечение наборов всех ролевых зависимостей маршрута (или None)."""
-    found: list[frozenset[UserRole]] = []
-    stack = [dependant]
-    seen: set[int] = set()
-    while stack:
-        dep = stack.pop()
-        call = getattr(dep, "call", None)
-        allowed = getattr(call, "allowed_roles", None)
-        if allowed is not None and id(call) not in seen:
-            seen.add(id(call))
-            found.append(frozenset(allowed))
-        stack.extend(getattr(dep, "dependencies", []))
-    if not found:
-        return None
-    result = found[0]
-    for roles in found[1:]:
-        result &= roles
-    return result
-
-
 def _collect_guards() -> dict[tuple[str, str], frozenset[UserRole] | None]:
-    guards: dict[tuple[str, str], frozenset[UserRole] | None] = {}
-    for path, route in _iter_api_routes(app.routes, "/api"):
-        if not path.startswith(("/api/production-plans", "/api/imports")):
-            continue
-        for method in sorted(route.methods - {"HEAD", "OPTIONS"}):
-            guards[(method, path)] = _declared_roles(route.dependant)
-    return guards
+    """Гейты план-импортных путей: обход маршрутов — `tests.helpers.routes`."""
+    return collect_guards(app, path_prefixes=("/api/production-plans", "/api/imports"))
 
 
 def _assert_gate_passed(response) -> None:

@@ -156,6 +156,9 @@ jobs:
         if: steps.scope.outputs.relevant == 'true'
         run: pip install ruff==0.16.9
 
+      # #364: команда шага — из `scripts/gate.mjs` (`--only=ruff`), чтобы
+      # локальный гейт и CI не хранили два списка. Установка версии остаётся
+      # здесь: бинарь приходит из PyPI-пина, как и раньше.
       - name: Ruff check backend
         if: steps.scope.outputs.relevant == 'true'
-        run: ruff check backend
+        run: npm run gate -- --only=ruff

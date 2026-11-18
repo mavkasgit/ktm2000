@@ -1,5 +1,5 @@
 {
-  "updated": "2026-11-09",
+  "updated": "2026-11-18",
   "tools": [
     {
       "id": "mise",
@@ -74,6 +74,35 @@
       "blocking": true,
       "last_reviewed": "2026-11-03",
       "rationale": "Единственный линтер backend; после #377 пин живёт в requirements-dev.txt, workflow лишь устанавливает его."
+    },
+    {
+      "id": "jactionlint",
+      "name": "jactionlint",
+      "repo": "jdx/jactionlint",
+      "category": "linter",
+      "version": "2.4.0",
+      "pinned_in": "mise.toml",
+      "runs_at": [
+        "gate",
+        "ci"
+      ],
+      "blocking": true,
+      "last_reviewed": "2026-11-18",
+      "rationale": "Линтер workflow и dependabot.yml (#365): опечатка в needs/if/uses и в зависимостях проявлялась только запуском. --strict-exit держит политику «ноль находок», а не «ноль ошибок»."
+    },
+    {
+      "id": "osv-scanner",
+      "name": "osv-scanner",
+      "repo": "google/osv-scanner",
+      "category": "linter",
+      "version": "2.7.0",
+      "pinned_in": "mise.toml",
+      "runs_at": [
+        "ci"
+      ],
+      "blocking": false,
+      "last_reviewed": "2026-11-18",
+      "rationale": "Аудит зависимостей (#369) — advisory до пересмотра 2027-05-01: находки есть, и блокировать ими merge нельзя. Блокирует только просроченное исключение (шаг гейта osv-allowlist)."
     },
     {
       "id": "coverage",
