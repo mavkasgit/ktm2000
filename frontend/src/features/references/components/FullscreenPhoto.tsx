@@ -1,5 +1,6 @@
 import React, { useEffect, useRef, useState } from "react";
 import { Plus, Minus, X, Maximize2, Download, Copy, Check } from "lucide-react";
+import { useFullscreenElement } from "@/shared/lib/useFullscreenElement";
 import { copyPhoto, downloadPhoto } from "../lib/photoTransfer";
 
 export function FullscreenPhoto({
@@ -57,28 +58,29 @@ export function FullscreenPhoto({
     }
   };
 
-  useEffect(() => {
-    const el = containerRef.current;
-    if (!el) return;
-    el.requestFullscreen().catch(() => {});
+  const { enter, exit } = useFullscreenElement(containerRef, {
+    onExit: onClose,
+    // Отказ в полном экране не должен ломать оверлей: в киоске браузер может
+    // не дать жест, но фото всё равно открыто и закрывается по Esc.
+    onError: () => {},
+  });
 
-    const handleFullscreenChange = () => {
-      if (!document.fullscreenElement) onClose();
-    };
+  useEffect(() => {
+    // Вход без жеста: браузер вправе отказать, тогда onError промолчит.
+    void enter().catch(() => {});
+
     // Esc закрывает оверлей и без Fullscreen API: в киоске браузер может
     // отказать в requestFullscreen, а выход из полноэкранного режима сам по
-    // себе приходит сюда же событием fullscreenchange.
+    // себе приходит сюда же — через onExit хука (событие fullscreenchange).
     const handleKeyDown = (event: KeyboardEvent) => {
       if (event.key === "Escape") onClose();
     };
-    document.addEventListener("fullscreenchange", handleFullscreenChange);
     window.addEventListener("keydown", handleKeyDown);
     return () => {
-      document.removeEventListener("fullscreenchange", handleFullscreenChange);
       window.removeEventListener("keydown", handleKeyDown);
-      if (document.fullscreenElement) document.exitFullscreen().catch(() => {});
+      void exit().catch(() => {});
     };
-  }, [onClose]);
+  }, [enter, exit, onClose]);
 
   const zoomToPoint = (clientX: number, clientY: number, newScale: number) => {
     const container = containerRef.current;
@@ -224,7 +226,10 @@ export function FullscreenPhoto({
         <button
           onClick={(e) => {
             e.stopPropagation();
-            document.exitFullscreen().catch(() => {});
+            // exit() закроет свой fullscreen; если его не было — оверлей всё
+            // равно закрывается, чтобы кнопка не оказалась мёртвой.
+            void exit().catch(() => {});
+            onClose();
           }}
           className="p-2.5 bg-zinc-900/90 hover:bg-zinc-800 text-zinc-200 hover:text-white rounded-full border border-zinc-700/60 shadow-lg backdrop-blur-sm transition-all active:scale-95 duration-150"
           type="button"
