@@ -212,3 +212,34 @@ async def test_default_norm_key_rejected_for_length_product(client) -> None:
 
     assert resp.status_code == 422, resp.text
     assert "default" in resp.json()["detail"]
+
+
+@pytest.mark.asyncio
+async def test_default_manual_requires_manual_hanger_mode(client) -> None:
+    """default.manual при auto молча стал бы None — это 422, а не пустая норма."""
+    resp = await client.post("/api/products", json=urn_payload(hanger_mode="auto"))
+
+    assert resp.status_code == 422, resp.text
+    assert "hanger_mode=manual" in resp.json()["detail"]
+
+
+@pytest.mark.asyncio
+async def test_pack_rejects_unknown_key(client) -> None:
+    """Опечатка в ключе pack не должна тихо менять смысл комплекта."""
+    resp = await client.post(
+        "/api/products",
+        json=urn_payload(pack={"sets_per_hanger": 4, "pieces_per_set": 2, "sets": 4}),
+    )
+
+    assert resp.status_code == 422, resp.text
+
+
+@pytest.mark.asyncio
+async def test_pack_rejects_non_positive(client) -> None:
+    """Комплектов и предметов не бывает ноль или минус."""
+    resp = await client.post(
+        "/api/products",
+        json=urn_payload(pack={"sets_per_hanger": 0, "pieces_per_set": 2}),
+    )
+
+    assert resp.status_code == 422, resp.text

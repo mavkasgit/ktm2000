@@ -89,14 +89,14 @@ async def test_updated_at_is_filled_and_refreshes_on_edit(client, session) -> No
     await session.commit()
     await session.refresh(operation)
 
-    created_at = operation.updated_at
-    assert created_at is not None
+    created_stamp = operation.updated_at
+    assert created_stamp is not None
 
     # Чтение метку не двигает.
     read_back = await session.scalar(
         select(SectionOperation.updated_at).where(SectionOperation.id == operation.id)
     )
-    assert read_back == created_at
+    assert read_back == created_stamp
 
     # Старая метка — как будто операцию правили давно; правка обязана её обновить.
     stale = datetime(2000, 1, 1, tzinfo=UTC)
