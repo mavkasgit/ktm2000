@@ -1,27 +1,5 @@
-import { realpathSync } from "node:fs"
 import { defineConfig } from "vitest/config"
 import { fileURLToPath, URL } from "node:url"
-
-const projectRoot = fileURLToPath(new URL("..", import.meta.url))
-
-/**
- * Реальный путь `frontend/node_modules`.
- *
- * В worktree он часто junction на общий каталог основного дерева. Vite
- * отдаёт модуль по РЕАЛЬНОМУ пути (`/@fs/C:/…/ktm2000/frontend/node_modules/…`),
- * и без него в `server.fs.allow` setup-файл `@testing-library/jest-dom`
- * падает с «Cannot find module», а не с внятным запретом: vitest в таком
- * дереве не стартует вовсе.
- */
-function nodeModulesRealPath(): string | null {
-  try {
-    return realpathSync(fileURLToPath(new URL("./node_modules", import.meta.url)))
-  } catch {
-    return null
-  }
-}
-
-const nodeModulesPath = nodeModulesRealPath()
 
 export default defineConfig({
   resolve: {
@@ -33,7 +11,7 @@ export default defineConfig({
   server: {
     fs: {
       // Сквозная проверка иконок читает backend-сиды (../../backend/...) — разрешаем.
-      allow: nodeModulesPath ? [projectRoot, nodeModulesPath] : [projectRoot],
+      allow: [fileURLToPath(new URL("..", import.meta.url))],
     },
   },
   test: {
