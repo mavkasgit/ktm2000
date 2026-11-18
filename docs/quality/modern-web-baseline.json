@@ -1,0 +1,13 @@
+{
+  "reviewed": "2026-11-18",
+  "scanner": "modern-web-guidance",
+  "target": "frontend",
+  "total": 1,
+  "findings": [
+    {
+      "rule": "js/js/copying-array-methods",
+      "file": "frontend/src/features/sections/pages/SectionsTasksPage.tsx",
+      "count": 1
+    }
+  ]
+}

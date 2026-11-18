@@ -154,6 +154,13 @@ const STEPS = [
     what: " ESLint: архитектурные границы FSD (ошибки) и потолок предупреждений (рэтчет)",
   },
   {
+    name: "modern-web",
+    tier: "full",
+    command: "node scripts/modern-web.mjs",
+    ci: null,
+    what: " новые legacy-паттерны веб-платформы сверх базлайна docs/quality/modern-web-baseline.json",
+  },
+  {
     name: "backend-tests",
     tier: "full",
     command: "npm run test:pytest",

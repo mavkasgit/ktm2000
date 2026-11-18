@@ -245,6 +245,17 @@ const PROBES = [
     expect: /_probe357|1 failed|FAIL/i,
     note: "vitest с неверным ожиданием (весь набор — минута-две)",
   },
+  {
+    step: "modern-web",
+    write: [
+      {
+        path: "frontend/src/_probe_mwg.tsx",
+        content: 'export function ProbeMwg() {\n  return <input onKeyDown={(e) => { if (e.key === "Enter") save() }} />\n}\n',
+      },
+    ],
+    expect: /новых находок/i,
+    note: "Enter-обработчик без isComposing — новая находка сверх базлайна",
+  },
 ];
 
 function parseArgs(argv) {
