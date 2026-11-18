@@ -22,7 +22,7 @@
 - `attributes.third_party = true`, `attributes.customer = "ГорКомплекс"`;
 - `attributes.pack = { "sets_per_hanger": 4, "pieces_per_set": 2 }`;
 - `attributes.hanger_mode = "manual"`,
-  `attributes.quantity_per_hanger = { "default": { "manual": 8 } }`;
+  `attributes.quantity_per_hanger = { "default": { "auto": null, "manual": 8 } }`;
 - `source = manual`, `is_catalog_item = true`;
 - цвет на продукте не задаётся: цвет — операция анодирования, а не свойство
   сырья.
