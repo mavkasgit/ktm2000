@@ -109,6 +109,21 @@
       "proven_at": "2026-11-18",
       "note": "новый локальный matchMedia вместо useMediaQuery из ReactUse",
       "how": "npm run prove-checks -- --only=reactuse-diff"
+    },
+    "ci-lint": {
+      "proven_at": "2026-11-18",
+      "note": "сослаться на несуществующий job в needs — схема workflow обязана покраснеть (#365)",
+      "how": "npm run prove-checks -- --only=ci-lint,osv-allowlist,frontend-build"
+    },
+    "osv-allowlist": {
+      "proven_at": "2026-11-18",
+      "note": "исключение аудита с прошедшей датой пересмотра — шаг обязан назвать id и срок (#369)",
+      "how": "npm run prove-checks -- --only=ci-lint,osv-allowlist,frontend-build"
+    },
+    "frontend-build": {
+      "proven_at": "2026-11-18",
+      "note": "статический импорт страницы и её элемент в роутере возвращают раздел в начальный пакет — порог обязан покраснеть (#364)",
+      "how": "npm run prove-checks -- --only=ci-lint,osv-allowlist,frontend-build"
     }
   },
   "exempt": {

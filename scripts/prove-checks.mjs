@@ -374,7 +374,10 @@ function apply(probe) {
   for (const m of probe.mutate || []) {
     const path = join(ROOT, m.path);
     const original = readFileSync(path, "utf8");
-    backups.set(path, original);
+    // Первая копия — исходная. Вторая мутация того же файла (обычный случай:
+    // импорт + его использование в одном шаблоне) иначе перезаписывала backup
+    // промежуточным состоянием, и откат оставлял в дереве след.
+    if (!backups.has(path)) backups.set(path, original);
     const next = m.from === undefined ? m.to : original.replace(m.from, m.to);
     if (next === original) throw new Error(`мутация не применилась: в ${m.path} нет куска «${m.from}»`);
     writeFileSync(path, next);
