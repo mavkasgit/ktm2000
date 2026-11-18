@@ -323,6 +323,33 @@ export type StockTransactionsListResponse = {
   offset: number;
 };
 
+/**
+ * Занятость одного склада в штуках (#350).
+ *
+ * `in_work + free === total`: «всего» — физический годный остаток склада,
+ * «ёмкости» в модели нет (формула — `app/services/warehouse_occupancy.py`).
+ * Строка — склад, а не продукт: занятость не агрегируется по артикулу.
+ */
+export type WarehouseOccupancyRow = {
+  warehouse_id: number;
+  warehouse: string;
+  warehouse_code: string;
+  in_work: number;
+  free: number;
+  total: number;
+};
+
+export type WarehouseOccupancyResponse = {
+  warehouses: WarehouseOccupancyRow[];
+  totals: Pick<WarehouseOccupancyRow, "in_work" | "free" | "total">;
+};
+
+/** Занятость по каждому складу и общий итог (#350). */
+export async function getWarehouseOccupancy(): Promise<WarehouseOccupancyResponse> {
+  const { data } = await apiClient.get<WarehouseOccupancyResponse>("/stock/occupancy");
+  return data;
+}
+
 export async function getStockBalances(
   params?: StockBalancesParams,
 ): Promise<StockBalancesListResponse> {

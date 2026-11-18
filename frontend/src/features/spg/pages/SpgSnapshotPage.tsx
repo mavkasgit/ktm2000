@@ -12,7 +12,7 @@ import { ProductStockBalanceDialog } from "@/entities/stock";
 import { StockTransactionsHistoryDrawer } from "@/entities/stock";
 import { invalidateAfter } from "@/shared/api/cacheInvalidation";
 import { queryKeys } from "@/shared/api/queryKeys";
-import { Input, Button, StockBalancesPanel } from "@/shared/ui";
+import { Input, Button, StockBalancesPanel, WarehouseOccupancyPanel } from "@/shared/ui";
 
 export function SpgSnapshotPage() {
   const [selectedSpgIds, setSelectedSpgIds] = useState<number[]>([]);
@@ -180,6 +180,9 @@ export function SpgSnapshotPage() {
 
       {spgs.length > 0 && (
         <div className="space-y-8">
+          {/* Занятость в штуках по каждому складу (#350): «в работе» /
+              «свободно» / «всего» и общий итог — над списком остатков. */}
+          <WarehouseOccupancyPanel />
           <StockBalancesPanel
             locationIds={activeSectionIds}
             searchQuery={searchQuery}

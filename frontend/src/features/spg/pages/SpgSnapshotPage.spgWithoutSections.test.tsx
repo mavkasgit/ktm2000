@@ -20,10 +20,11 @@ vi.mock("@/shared/api/spg", async (importOriginal) => ({
 vi.mock("@/shared/api/stock", async (importOriginal) => ({
   ...(await importOriginal<typeof import("@/shared/api/stock")>()),
   getStockBalances: vi.fn(),
+  getWarehouseOccupancy: vi.fn(),
 }));
 
 import { getSpgList, type SpgOut } from "@/shared/api/spg";
-import { getStockBalances } from "@/shared/api/stock";
+import { getStockBalances, getWarehouseOccupancy } from "@/shared/api/stock";
 import { SpgSnapshotPage } from "./SpgSnapshotPage";
 
 const spgWithoutSections: SpgOut = {
@@ -53,6 +54,10 @@ beforeEach(() => {
   vi.clearAllMocks();
   vi.mocked(getSpgList).mockResolvedValue([spgWithoutSections]);
   vi.mocked(getStockBalances).mockResolvedValue({ balances: [], total: 0, limit: 50, offset: 0 });
+  vi.mocked(getWarehouseOccupancy).mockResolvedValue({
+    warehouses: [],
+    totals: { in_work: 0, free: 0, total: 0 },
+  });
 });
 
 describe("SpgSnapshotPage: ГХП без участков", () => {

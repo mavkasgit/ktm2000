@@ -183,6 +183,8 @@ export const queryKeys = {
     transactions: (params?: StockTransactionsQueryKeyParams) =>
       ["stock-transactions", params ?? {}] as const,
     productBalance: (productId: number) => ["stock-product-balance", productId] as const,
+    /** Занятость складов (#350): меняется вместе со всеми остатками. */
+    occupancy: () => ["stock-occupancy"] as const,
     remainderImportOperations: () => ["stock-remainder-import-operations"] as const,
     importBatches: () => ["stock-import-batches"] as const,
     importBatch: (batchId: number | null) =>
