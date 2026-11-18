@@ -99,6 +99,11 @@
       "proven_at": "2026-11-03",
       "note": "в devDependencies появляется пакет, который никто не зовёт: проверка обязана назвать его и показать охват просмотра",
       "how": "npm run prove-checks -- --only=dev-deps"
+    },
+    "modern-web": {
+      "proven_at": "2026-11-18",
+      "note": "Enter-обработчик без isComposing — новая находка сверх базлайна",
+      "how": "npm run prove-checks -- --only=modern-web"
     }
   },
   "exempt": {
@@ -106,5 +111,5 @@
     "e2e-smoke": "берёт слот семафора и свой стенд; отдельный ярус gate:e2e, красные ходы — в истории прогонов frontend/e2e",
     "test-hygiene": "сам шаг возвращает 0 при находках (report-only, T-0012) — краснеть не на чем; блокирует ruff F401, см. пробник шага ruff"
   },
-  "updated": "2026-11-03"
+  "updated": "2026-11-18"
 }
