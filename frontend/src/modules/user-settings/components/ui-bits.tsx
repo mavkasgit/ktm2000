@@ -1,7 +1,13 @@
 import type { ReactNode } from "react"
-import { useCopy } from "@siberiacancode/reactuse"
 import { Check, CheckCircle2, Copy, Loader2, type LucideIcon } from "lucide-react"
-import { Button, cn, Tooltip, TooltipContent, TooltipTrigger } from "../ui"
+import {
+  Button,
+  cn,
+  Tooltip,
+  TooltipContent,
+  TooltipTrigger,
+  useCopyWithReset,
+} from "../ui"
 
 /** Карточка-секция внутри панели. */
 export function Card({
@@ -194,10 +200,12 @@ export function CopyButton({
   label: string
   copiedLabel: string
 }) {
-  // Галочка живёт 1600 мс — как и раньше; сам `copy` сначала пробует
-  // `navigator.clipboard`, а на HTTP по LAN-IP (прод KTM) уходит в
-  // `execCommand` — прежний `navigator.clipboard?.writeText` там молчал.
-  const { copied, copy } = useCopy(1600)
+  // Галочка живёт 1600 мс — как и раньше; `useCopyWithReset` (локальная
+  // обёртка над `useCopy`) сначала пробует `navigator.clipboard`, а на HTTP
+  // по LAN-IP (прод KTM) уходит в `execCommand` — прежний
+  // `navigator.clipboard?.writeText` там молчал. В отличие от пакетного
+  // `useCopy`, повторный клик снимает старый таймер и не гасит галочку раньше.
+  const { copied, copy } = useCopyWithReset(1600)
 
   return (
     <Tooltip>

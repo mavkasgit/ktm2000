@@ -1,5 +1,5 @@
 import * as ToastPrimitives from "@radix-ui/react-toast";
-import { useCopy } from "@siberiacancode/reactuse";
+import { useCopyWithReset } from "@/shared/lib/useCopyWithReset";
 import { CheckCircle, AlertCircle, X, Copy, ClipboardCheck } from "lucide-react";
 import { useToast, type ToastData } from "./use-toast";
 
@@ -18,10 +18,11 @@ function toastClasses(variant: ToastData["variant"]) {
 }
 
 function CopyButtonInline({ t }: { t: ToastData }) {
-  // Копирование текста тоста: `useCopy` пробует `navigator.clipboard`, а без
-  // него (прод по HTTP на LAN-IP) уходит в `execCommand` — тем самым textarea,
-  // который раньше собирался здесь руками. Галочка живёт 2000 мс.
-  const { copied, copy } = useCopy(2000);
+  // Копирование текста тоста: `useCopyWithReset` пробует `navigator.clipboard`,
+  // а без него (прод по HTTP на LAN-IP) уходит в `execCommand` — тем самым
+  // textarea, который раньше собирался здесь руками. Галочка живёт 2000 мс;
+  // повторный клик снимает предыдущий таймер, а не ждёт его.
+  const { copied, copy } = useCopyWithReset(2000);
 
   if (copied) {
     return (
