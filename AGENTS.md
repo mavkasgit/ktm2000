@@ -27,6 +27,7 @@ npm run doctor                 # Предпроверка дерева: GO/NO-GO
 npm run gate:fast              # Быстрые шаги гейта (в CI зовут `npm run gate -- --strict`)
 npm run gate                   # gate:fast + тесты backend и frontend
 npm run prove-checks           # Показать, что каждый шаг гейта умеет падать (красный ход, #357)
+npm run verify:sync            # Сверка shared-файлов из scripts/sync-manifest.json с ../hrms (baseline + known)
 ```
 
 Порты dev: Postgres `5440`, backend `8012`, frontend `5172`.
@@ -84,6 +85,35 @@ e2e и backend-тесты агент запускает сам: `npm --prefix fr
 | Весь стек умер после правки `.py` | — | Не должен: `npm run backend` ведёт `backend/scripts/dev_server.py` (рестарт только рабочего процесса, скоуп `app/`, битый синтаксис не роняет API). Если упало — пришлите лог |
 
 Детали реализации → [`backend/AGENTS.md`](backend/AGENTS.md) («Dev-режим») и [`docs/agent-registry.md`](docs/agent-registry.md) («Порты»).
+
+## Синхронизация shared-файлов с HRMS
+
+[`scripts/sync-manifest.json`](scripts/sync-manifest.json) — список файлов,
+которые обязаны совпадать с соседним `../hrms`: модули
+`frontend/src/modules/user-settings/` и `notifications/`, auth/OIDC, общий
+backend-профиль и скрипты профилей. Сверка — `npm run verify:sync`
+(`scripts/verify-sync.mjs`), она же в pre-push (lefthook) и в CI
+(`.github/workflows/sync.yml`).
+
+- **Правка файла из манифеста — правка в обоих репозиториях.** Перенеси копию
+  в hrms тем же изменением и подними версию, иначе сверка не отличит перенос
+  от «забыли»: режим `version` сверяет `USER_SETTINGS_MODULE_VERSION` /
+  `NOTIFICATIONS_MODULE_VERSION` в `index.ts` модуля, у auth/OIDC-файлов —
+  их константу `*_VERSION` (режим `content` вместе с `version`). Без бампа
+  `verify:sync` краснеет на `hash mismatch`.
+- Режимы: `content` — байт-эквивалент (CRLF/LF не различаются), `version` —
+  только совпадение `*_VERSION`, `presence` — файл обязан существовать в обоих
+  проектах, содержимое своё (хост-файлы модулей, напр. `ui.ts`).
+- **Известный долг** живёт в [`scripts/sync-baseline.json`](scripts/sync-baseline.json):
+  запись `{ path, reason }` подавляет расхождение и печатается как `known`.
+  Новое расхождение роняет прогон. Долг закрыт — убери запись (висящая
+  печатается как `stale`) и проверь `npm run verify:sync -- --strict`:
+  `--strict` baseline игнорирует.
+- Битый или отсутствующий baseline — exit 2: это ошибка конфигурации, а не
+  «всё совпало». Записи baseline не ослабляют проверку — они лишь фиксируют
+  уже известные авторизационные расхождения.
+- `predev`/`prebuild` гоняют сверку только при `KTM_SYNCGATE=1` (лёгкий путь),
+  pre-push — безусловно; CI сверяет оба репозитория отдельным checkout.
 
 ## Тесты
 

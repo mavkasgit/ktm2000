@@ -68,18 +68,45 @@ describe("verify-sync.mjs", () => {
     expect(normalize("a\r\nb\rc\n")).toBe("a\nb\nc\n")
   })
 
-  it("parseArgs извлекает --other, --root и --if-enabled", () => {
+  it("parseArgs извлекает --other, --root, --if-enabled, --baseline и --strict", () => {
     expect(parseArgs(["node", "x", "--other", "../hrms"])).toEqual({
       other: "../hrms",
       root: null,
       ifEnabled: false,
+      baseline: null,
+      strict: false,
     })
     expect(parseArgs(["node", "x", "--root", "/tmp/a", "--other", "../hrms", "--if-enabled"])).toEqual({
       other: "../hrms",
       root: "/tmp/a",
       ifEnabled: true,
+      baseline: null,
+      strict: false,
     })
-    expect(parseArgs([])).toEqual({ other: null, root: null, ifEnabled: false })
+    expect(
+      parseArgs([
+        "node",
+        "x",
+        "--other",
+        "../hrms",
+        "--baseline",
+        "scripts/sync-baseline.json",
+        "--strict",
+      ]),
+    ).toEqual({
+      other: "../hrms",
+      root: null,
+      ifEnabled: false,
+      baseline: "scripts/sync-baseline.json",
+      strict: true,
+    })
+    expect(parseArgs([])).toEqual({
+      other: null,
+      root: null,
+      ifEnabled: false,
+      baseline: null,
+      strict: false,
+    })
   })
 
   it("--if-enabled без KTM_SYNCGATE пропускает проверку", () => {
@@ -303,5 +330,138 @@ describe("verify-sync.mjs", () => {
     const result = run({ root, otherRoot: other })
     expect(result.ok).toBe(false)
     expect(result.errors.join("\n")).toContain("файл есть у соседа, но отсутствует здесь")
+  })
+})
+
+const BASELINE = "scripts/sync-baseline.json"
+
+function writeBaseline(root, entries) {
+  const abs = path.join(root, BASELINE)
+  fs.mkdirSync(path.dirname(abs), { recursive: true })
+  fs.writeFileSync(abs, typeof entries === "string" ? entries : JSON.stringify({ entries }, null, 2))
+}
+
+function runCli(root, other, extra = []) {
+  return spawnSync(
+    process.execPath,
+    [SCRIPT, "--root", root, "--other", other, "--baseline", BASELINE, ...extra],
+    { cwd: root, encoding: "utf8" },
+  )
+}
+
+describe("verify-sync.mjs: baseline", () => {
+  it("известное расхождение подавляется и печатается как known (exit 0)", () => {
+    const root = makeTree(baseTree())
+    const otherTree = baseTree()
+    otherTree["shared/file.txt"] = "изменено без поднятия версии\n"
+    const other = makeTree(otherTree)
+    writeBaseline(root, [
+      { path: "shared/file.txt", reason: "auth/OIDC debt (ADR/spec: retro 2026-11-18)" },
+    ])
+
+    const result = run({ root, otherRoot: other, baselinePath: path.join(root, BASELINE) })
+    expect(result.ok).toBe(true)
+    expect(result.errors).toEqual([])
+    expect(result.known.map((k) => k.path)).toEqual(["shared/file.txt"])
+
+    const spawned = runCli(root, other)
+    expect(spawned.status).toBe(0)
+    expect(spawned.stdout).toContain("known")
+    expect(spawned.stdout).toContain("shared/file.txt")
+    expect(spawned.stdout).toContain("Синк-гейт пройден")
+  })
+
+  it("новое расхождение вне baseline → fail, подавленное не мешает", () => {
+    const root = makeTree(baseTree())
+    const otherTree = baseTree()
+    otherTree["shared/file.txt"] = "изменено без поднятия версии\n"
+    otherTree["mod/index.ts"] = `export const DEMO_VERSION = "9.9.9"\n`
+    const other = makeTree(otherTree)
+    writeBaseline(root, [
+      { path: "shared/file.txt", reason: "auth/OIDC debt (ADR/spec: retro 2026-11-18)" },
+    ])
+
+    const result = run({ root, otherRoot: other, baselinePath: path.join(root, BASELINE) })
+    expect(result.ok).toBe(false)
+    expect(result.known.map((k) => k.path)).toEqual(["shared/file.txt"])
+    expect(result.errors.join("\n")).toContain("mod/index.ts")
+    expect(result.errors.join("\n")).not.toContain("shared/file.txt")
+
+    const spawned = runCli(root, other)
+    expect(spawned.status).toBe(1)
+    expect(spawned.stderr).toContain("mod/index.ts")
+  })
+
+  it("--strict игнорирует baseline → fail (exit 1)", () => {
+    const root = makeTree(baseTree())
+    const otherTree = baseTree()
+    otherTree["shared/file.txt"] = "изменено без поднятия версии\n"
+    const other = makeTree(otherTree)
+    writeBaseline(root, [
+      { path: "shared/file.txt", reason: "auth/OIDC debt (ADR/spec: retro 2026-11-18)" },
+    ])
+
+    const result = run({
+      root,
+      otherRoot: other,
+      baselinePath: path.join(root, BASELINE),
+      strict: true,
+    })
+    expect(result.ok).toBe(false)
+    expect(result.errors.join("\n")).toContain("shared/file.txt")
+
+    const spawned = runCli(root, other, ["--strict"])
+    expect(spawned.status).toBe(1)
+  })
+
+  it("неиспользованная запись baseline печатается как stale и не валит (exit 0)", () => {
+    const root = makeTree(baseTree())
+    const other = makeTree(baseTree())
+    writeBaseline(root, [{ path: "shared/file.txt", reason: "долг закрыт" }])
+
+    const spawned = runCli(root, other)
+    expect(spawned.status).toBe(0)
+    expect(spawned.stdout).toContain("stale")
+    expect(spawned.stdout).toContain("shared/file.txt")
+  })
+
+  it.each([
+    ["отсутствует", null],
+    ["не JSON", "{ это не json"],
+    ["нет entries", JSON.stringify({ files: [] })],
+    ["entries не массив", JSON.stringify({ entries: {} })],
+    ["запись без path", JSON.stringify({ entries: [{ reason: "нет пути" }] })],
+  ])("битый baseline (%s) → exit 2", (_label, content) => {
+    const root = makeTree(baseTree())
+    const other = makeTree(baseTree())
+    if (content !== null) writeBaseline(root, content)
+
+    const result = run({ root, otherRoot: other, baselinePath: path.join(root, BASELINE) })
+    expect(result.ok).toBe(false)
+    expect(result.exitCode).toBe(2)
+
+    const spawned = runCli(root, other)
+    expect(spawned.status).toBe(2)
+    expect(spawned.stderr).toContain("baseline")
+  })
+
+  it("--strict не читает baseline: отсутствующий файл не мешает", () => {
+    const root = makeTree(baseTree())
+    const other = makeTree(baseTree())
+
+    const spawned = runCli(root, other, ["--strict"])
+    expect(spawned.status).toBe(0)
+  })
+
+  it("отсутствующий sibling-проект → exit 2 с внятной причиной", () => {
+    const root = makeTree(baseTree())
+    const missing = path.join(root, "нет-такого-соседа")
+
+    const spawned = spawnSync(process.execPath, [SCRIPT, "--root", root, "--other", missing], {
+      cwd: root,
+      encoding: "utf8",
+    })
+    expect(spawned.status).toBe(2)
+    expect(spawned.stderr).toContain("sibling-проект не найден")
   })
 })

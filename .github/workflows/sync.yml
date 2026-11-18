@@ -1,0 +1,73 @@
+name: Sync
+
+# Статус для merge: ИНФОРМАЦИОННЫЙ. Джоб `sync` не входит в required checks
+# (`gh api repos/mavkasgit/ktm2000/branches/main/protection`), поэтому красное
+# здесь merge не блокирует — состав блокирующих живёт вне этого файла.
+#
+# Зачем отдельный workflow: дрейф shared-файлов не видит ни один другой джоб.
+# `scripts/verify-sync.mjs` сверяет файлы из `scripts/sync-manifest.json` с
+# `mavkasgit/hrms`; без этого джоба расхождение ловилось только на машине
+# разработчика (pre-push) или не ловилось вовсе (#417).
+#
+# Известный долг подавляется `scripts/sync-baseline.json` (печатается как
+# `known`); всё, чего в baseline нет, — красный прогон. Baseline, который
+# больше не нужен, печатается как `stale` и не валит джоб.
+#
+# Фильтра `paths` нет намеренно: дрейф появляется от правки в ЛЮБОМ из двух
+# репозиториев, а прогон дешёвый — только node builtins, без npm install.
+#
+# Два checkout кладут репозитории соседями в workspace прогона, чтобы
+# `--other ../hrms` означал то же, что на машине разработчика. hrms публичный,
+# поэтому его читает default GITHUB_TOKEN со скоупом `contents: read` —
+# отдельный секрет не нужен.
+on:
+  push:
+    branches:
+      - main
+      - master
+  pull_request:
+    branches:
+      - main
+      - master
+  workflow_dispatch:
+
+concurrency:
+  group: ci-${{ github.workflow }}-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' || github.ref != 'refs/heads/main' }}
+
+# #363 [missing-permissions]: по умолчанию GITHUB_TOKEN получает запись во все
+# скоупы репозитория. Здесь читаем — поэтому верхний уровень только `contents: read`.
+permissions:
+  contents: read
+
+jobs:
+  sync:
+    name: sync
+    runs-on: ubuntu-latest
+    # Замера не было: джоб новый. Два checkout и запуск скрипта на builtins —
+    # минута с большим запасом; 10 минут покрывают очередь раннера.
+    timeout-minutes: 10
+    steps:
+      - name: Checkout ktm2000
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+        with:
+          path: ktm2000
+          # #363 [artipacked]: checkout иначе пишет GITHUB_TOKEN в .git/config
+          # workspace. Здесь токен — только на чтение публичного hrms.
+          persist-credentials: false
+
+      - name: Checkout hrms
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+        with:
+          repository: mavkasgit/hrms
+          path: hrms
+          persist-credentials: false
+
+      - name: Setup Node
+        uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4.4.0
+        with:
+          node-version-file: ktm2000/.nvmrc
+
+      - name: Verify sync
+        working-directory: ktm2000
+        run: node scripts/verify-sync.mjs --other ../hrms --baseline scripts/sync-baseline.json

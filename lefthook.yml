@@ -36,6 +36,12 @@ pre-commit:
 
 pre-push:
   commands:
+    verify-sync:
+      # Безусловно, без `--if-enabled`: переменная KTM_SYNCGATE — это «удобно
+      # выключить», а push — момент, когда расхождение shared-файлов уже нельзя
+      # оставлять незамеченным. Известный долг подавляет baseline, а не флаг.
+      # Sibling `../hrms` обязателен локально; в CI тот же прогон делает sync.yml.
+      run: node scripts/verify-sync.mjs --other ../hrms --baseline scripts/sync-baseline.json
     gate-fast:
       # Слот машинного семафора: на занятой машине push подождёт, но хук не
       # валит — `--on-timeout run` запускает проверку без слота. Хук остаётся
