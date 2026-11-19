@@ -33,6 +33,11 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parents[1]
 DOCS = ROOT / "docs" / "catalog"
 AUDIT = ROOT / "data" / "tmp" / "poster-photos" / "audit"
+AUDIT_INPUTS = (
+    AUDIT / "dimensions" / "dimensions-reconciled.csv",
+    AUDIT / "decisions-applied.csv",
+)
+AUDIT_GROUPS_GLOB = "groups/*/results.csv"
 STORAGE_ROOT = ROOT / "data" / "storage-prod"
 META_PATH = DOCS / "ktm-profile-register.meta.json"
 REVIEW_PATH = DOCS / "ktm-profile-register.review.json"
@@ -117,6 +122,19 @@ def read_csv(path: Path) -> list[dict]:
         return []
     with path.open(encoding="utf-8-sig", newline="") as fh:
         return list(csv.DictReader(fh))
+
+
+def missing_audit_inputs() -> list[str]:
+    """Пути аудита, без которых реестр собирается без доказательств.
+
+    Аудит живёт в `data/` (gitignore) и на чистом клоне отсутствует. Скрипт
+    без него не падает, а молча считает размеры/фото/классификацию пустыми —
+    и реестр теряет уверенность (100% → 0). Поэтому проверяем входы до сборки.
+    """
+    missing = [path.relative_to(ROOT).as_posix() for path in AUDIT_INPUTS if not path.is_file()]
+    if not any(AUDIT.glob(AUDIT_GROUPS_GLOB)):
+        missing.append(f"{AUDIT.relative_to(ROOT).as_posix()}/{AUDIT_GROUPS_GLOB}")
+    return missing
 
 
 def psql_json(sql: str):
@@ -1481,6 +1499,18 @@ def main() -> int:
 
     if not META_PATH.exists():
         print(f"нет {META_PATH}; сначала создайте meta-файл", file=sys.stderr)
+        return 2
+
+    missing_audit = missing_audit_inputs()
+    if missing_audit:
+        print(
+            "Аудит фото/чертежей не найден — без него реестр теряет уверенность "
+            "(размеры, фото и классификация остаются без доказательств).\n"
+            "  нет: " + ", ".join(missing_audit) + "\n"
+            "  каталог data/tmp/poster-photos/audit не в git: восстановите его "
+            "и повторите сборку.",
+            file=sys.stderr,
+        )
         return 2
 
     data = build()
