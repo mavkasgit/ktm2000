@@ -17,10 +17,6 @@
     "eslint-import-resolver-typescript": {
       "reason": "Вызывается коротким ключом `typescript` в `settings[\"import/resolver\"]` eslint.config.js — по нему eslint-plugin-boundaries разбирает алиасы `@/` и `shared/`. Без него правило границ молчит (ADR про границы FSD, #333).",
       "reviewBy": "2027-05-01"
-    },
-    "postcss": {
-      "reason": "Vite сам зависит от postcss и применяет его, когда видит frontend/postcss.config.js. Наша строка — зафиксированная версия поверх транзитивной: удаление не сломает сборку, но снимет пин, поэтому решение за человеком.",
-      "reviewBy": "2027-05-01"
     }
   }
 }
