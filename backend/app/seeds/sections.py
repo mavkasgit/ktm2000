@@ -43,30 +43,38 @@ SECTION_OPS: dict[str, list[tuple[str | None, str | None, int, str | None, str, 
         ("PREP_STOCK", "Передача на склад подготовки", 10, "MOVE_TO_PREP_STOCK", "Передача на склад подготовки", False, "Truck", "#7C3AED", None, {}, "transport"),
     ],
     "ANODIZING": [
-        ("ANODIZING", "Анодирование", 10, "ANOD_01", "Серебро", True, None, "#C0C0C0", None, {}, "production"),
+        # Финальная палитра 19.11.2026 (сверена с «Экранчиком», 14 строк):
+        # семьи, которые книга не различает, носят один hex; светлая шампань
+        # желтее холодной стали, светлая бронза — тёмно-коричневая и светлее
+        # чистой бронзы, C44 на шаг глубже C41, старая медь — красное золото.
+        ("ANODIZING", "Анодирование", 10, "ANOD_01", "Серебро", True, None, "#E7EBEE", None, {}, "production"),
         ("ANODIZING", "Анодирование", 10, "ANOD_02", "Золото", True, None, "#FFD700", None, {}, "production"),
         ("ANODIZING", "Анодирование", 10, "ANOD_03", "Бронза", True, None, "#8B5A2B", None, {}, "production"),
         ("ANODIZING", "Анодирование", 10, "ANOD_05", "Чёрный", True, None, "#1C1C1C", None, {}, "production"),
-        ("ANODIZING", "Анодирование", 10, "ANOD_06", "Шампань", True, None, "#F7E7CE", None, {}, "production"),
-        ("ANODIZING", "Анодирование", 10, "ANOD_07", "Медь", True, None, "#CD5C5C", None, {}, "production"),
+        ("ANODIZING", "Анодирование", 10, "ANOD_06", "Шампань", True, None, "#AEA895", None, {}, "production"),
+        ("ANODIZING", "Анодирование", 10, "ANOD_07", "Медь", True, None, "#AE5128", None, {}, "production"),
         ("ANODIZING", "Анодирование", 10, "ANOD_08", "Титан", True, None, "#878681", None, {}, "production"),
         # Веер ClassicELOX (T-378, спека 0003): код цвета — это и есть код
-        # операции, порядковых ANOD_09… нет. Старые ANOD_0x выше остаются как
-        # были: они уже стоят в маршрутах и правилах, переименование сломало бы
-        # их. `ANOD_04` не существует и не добавляется. Hex снят с бумажного
-        # веера и справочный: зависит от сплава и освещения.
-        ("ANODIZING", "Анодирование", 10, "C0", "Серебро", True, None, "#C2CAD3", None, {}, "production"),
-        ("ANODIZING", "Анодирование", 10, "C35", "Чёрный", True, None, "#4E4E52", None, {}, "production"),
-        ("ANODIZING", "Анодирование", 10, "S120-0", "Золото", True, None, "#E1DDB0", None, {}, "production"),
-        ("ANODIZING", "Анодирование", 10, "S120-2", "Старое золото", True, None, "#AD9E77", None, {}, "production"),
-        ("ANODIZING", "Анодирование", 10, "C31", "Светлая шампань", True, None, "#CFD4D5", None, {}, "production"),
+        # операции, порядковых ANOD_09… нет. Старые ANOD_0x выше остаются на
+        # месте (код и название не меняются): они уже стоят в маршрутах и
+        # правилах, переименование сломало бы их. `ANOD_04` не существует и не
+        # добавляется. Hex снят с бумажного веера и справочный: зависит от
+        # сплава и освещения.
+        ("ANODIZING", "Анодирование", 10, "C0", "Серебро", True, None, "#E7EBEE", None, {}, "production"),
+        ("ANODIZING", "Анодирование", 10, "C35", "Чёрный", True, None, "#1C1C1C", None, {}, "production"),
+        ("ANODIZING", "Анодирование", 10, "S120-0", "Золото", True, None, "#FFD700", None, {}, "production"),
+        ("ANODIZING", "Анодирование", 10, "S120-2", "Старое золото", True, None, "#D7C04B", None, {}, "production"),
+        ("ANODIZING", "Анодирование", 10, "C31", "Светлая шампань", True, None, "#DCD6BC", None, {}, "production"),
         ("ANODIZING", "Анодирование", 10, "C32", "Тёмная шампань", True, None, "#AEA895", None, {}, "production"),
-        ("ANODIZING", "Анодирование", 10, "C33", "Светлая бронза", True, None, "#716C62", None, {}, "production"),
-        ("ANODIZING", "Анодирование", 10, "C34", "Тёмная бронза", True, None, "#595655", None, {}, "production"),
-        ("ANODIZING", "Анодирование", 10, "C41", "Медь", True, None, "#A0837E", None, {}, "production"),
-        ("ANODIZING", "Анодирование", 10, "C44", "Тёмная медь", True, None, "#715C5F", None, {}, "production"),
-        ("ANODIZING", "Анодирование", 10, "C51", "Нержавеющая сталь", True, None, "#A9968E", None, {}, "production"),
+        ("ANODIZING", "Анодирование", 10, "C33", "Светлая бронза", True, None, "#8F6F4A", None, {}, "production"),
+        ("ANODIZING", "Анодирование", 10, "C34", "Тёмная бронза", True, None, "#8B5A2B", None, {}, "production"),
+        ("ANODIZING", "Анодирование", 10, "C41", "Медь", True, None, "#7F1D1D", None, {}, "production"),
+        ("ANODIZING", "Анодирование", 10, "C44", "Тёмная медь", True, None, "#6E1616", None, {}, "production"),
+        ("ANODIZING", "Анодирование", 10, "C51", "Нержавеющая сталь", True, None, "#A3B3C4", None, {}, "production"),
         ("ANODIZING", "Анодирование", 10, "C54", "Тёмный титан", True, None, "#766D6D", None, {}, "production"),
+        # Растрав — операция участка, а не только локальная строка Экранчика:
+        # справочник цветов должен совпадать с KTM целиком, включая `RST`.
+        ("ANODIZING", "Анодирование", 10, "RST", "растрав", True, None, "#B8B8B8", None, {}, "production"),
 
         ("PACK", "Упаковка", 20, "PACK_STRETCH", "Стрейч", True, None, "#0891B2", None, {}, "production"),
         ("PACK", "Упаковка", 20, "PACK_SPUNBOND", "Спанбонд", True, None, "#06B6D4", None, {}, "production"),

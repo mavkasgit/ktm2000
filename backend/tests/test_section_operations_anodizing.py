@@ -19,17 +19,17 @@ from tests.test_routes_seed import _seed_default_sections
 
 #: Двенадцать цветов веера: код операции, название, hex (T-378).
 FAN_COLORS: list[tuple[str, str, str]] = [
-    ("C0", "Серебро", "#C2CAD3"),
-    ("C35", "Чёрный", "#4E4E52"),
-    ("S120-0", "Золото", "#E1DDB0"),
-    ("S120-2", "Старое золото", "#AD9E77"),
-    ("C31", "Светлая шампань", "#CFD4D5"),
+    ("C0", "Серебро", "#E7EBEE"),
+    ("C35", "Чёрный", "#1C1C1C"),
+    ("S120-0", "Золото", "#FFD700"),
+    ("S120-2", "Старое золото", "#D7C04B"),
+    ("C31", "Светлая шампань", "#DCD6BC"),
     ("C32", "Тёмная шампань", "#AEA895"),
-    ("C33", "Светлая бронза", "#716C62"),
-    ("C34", "Тёмная бронза", "#595655"),
-    ("C41", "Медь", "#A0837E"),
-    ("C44", "Тёмная медь", "#715C5F"),
-    ("C51", "Нержавеющая сталь", "#A9968E"),
+    ("C33", "Светлая бронза", "#8F6F4A"),
+    ("C34", "Тёмная бронза", "#8B5A2B"),
+    ("C41", "Медь", "#7F1D1D"),
+    ("C44", "Тёмная медь", "#6E1616"),
+    ("C51", "Нержавеющая сталь", "#A3B3C4"),
     ("C54", "Тёмный титан", "#766D6D"),
 ]
 
@@ -83,7 +83,7 @@ async def test_updated_at_is_filled_and_refreshes_on_edit(client, session) -> No
         operation_name="Светлая шампань",
         group_code="ANODIZING",
         group_name="Анодирование",
-        icon_color="#CFD4D5",
+        icon_color="#DCD6BC",
     )
     session.add(operation)
     await session.commit()
@@ -138,6 +138,17 @@ async def test_seed_creates_the_fan_codes_and_keeps_legacy_ones(
     assert operations["ANOD_01"].operation_name == "Серебро"
     assert operations["ANOD_06"].operation_name == "Шампань"
     assert "ANOD_04" not in operations
+
+    # Старые операции носят те же финальные hex, что и веер: справочник
+    # Экранчика сопоставляет их по operation_code, и расхождения быть не должно.
+    assert operations["ANOD_01"].icon_color == "#E7EBEE"
+    assert operations["ANOD_06"].icon_color == "#AEA895"
+    assert operations["ANOD_07"].icon_color == "#AE5128"
+
+    # Растрав — тоже операция участка (локальный код Экранчика `RST`):
+    # отдельная строка справочника не должна оставаться без KTM.
+    assert operations["RST"].operation_name == "растрав"
+    assert operations["RST"].icon_color == "#B8B8B8"
 
     # (section_id, operation_code) уникален: повторный сид не плодит дублей.
     await _seed_operations(client)
