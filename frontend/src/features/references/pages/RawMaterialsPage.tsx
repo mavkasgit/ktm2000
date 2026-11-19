@@ -697,6 +697,14 @@ export function RawMaterialsPage() {
                     <div className="flex flex-col gap-1">
                       <div className="flex items-center gap-1.5">
                         <PositionSkuCell sku={product.sku} onClick={setStatsSku} />
+                        {product.third_party && (
+                          <Badge variant="secondary" className="text-xs bg-amber-100 text-amber-900">
+                            Сторонний
+                          </Badge>
+                        )}
+                        {product.third_party && product.customer && (
+                          <span className="text-xs text-amber-700">{product.customer}</span>
+                        )}
                       </div>
                       {product.aliases?.length > 0 && (
                         <div className="flex flex-wrap gap-1">
@@ -767,7 +775,7 @@ export function RawMaterialsPage() {
         }
         setDialogOpen(open);
       }}>
-        <DialogContent className="max-w-6xl max-h-[90vh] overflow-y-auto">
+        <DialogContent className="w-full max-w-6xl max-h-[90vh] overflow-y-auto">
           <CatalogForm
             key={`${dialogMode}-${selectedProduct?.id ?? "new"}`}
             ref={formRef}

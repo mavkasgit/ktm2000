@@ -128,6 +128,24 @@ const renderPage = () => {
 };
 
 describe("ProductsPage", () => {
+  it("помечает сторонний заказ в списке и показывает заказчика", async () => {
+    vi.mocked(fetchAllProducts).mockResolvedValue([
+      makeProduct({
+        id: 224,
+        sku: "урны",
+        name: "Урны, комплект 2 шт (корпус + крышка)",
+        third_party: true,
+        customer: "ГорКомплекс",
+        pack: { sets_per_hanger: 4, pieces_per_set: 2 },
+      }),
+    ]);
+    renderPage();
+
+    await screen.findByTestId("product-row-урны");
+    expect(screen.getByText("Сторонний")).toBeTruthy();
+    expect(screen.getByText(/ГорКомплекс/)).toBeTruthy();
+  });
+
   it("загружает только ГП с составом и рисует чипы «SKU ×N»", async () => {
     renderPage();
 
