@@ -34,4 +34,25 @@ describe("CatalogCard", () => {
 
     expect(container.querySelector("img")).toBeNull();
   });
+
+  it("помечает сторонний заказ и показывает заказчика с комплектом", () => {
+    const product = makeProduct({
+      sku: "урны",
+      name: "Урны, комплект 2 шт (корпус + крышка)",
+      third_party: true,
+      customer: "ГорКомплекс",
+      pack: { sets_per_hanger: 4, pieces_per_set: 2 },
+    });
+
+    const { getByText } = render(<CatalogCard product={product} onClick={vi.fn()} />);
+
+    expect(getByText("Сторонний")).toBeTruthy();
+    expect(getByText(/ГорКомплекс · 4 × 2 = 8 шт/)).toBeTruthy();
+  });
+
+  it("не помечает обычный артикул", () => {
+    const { queryByText } = render(<CatalogCard product={makeProduct()} onClick={vi.fn()} />);
+
+    expect(queryByText("Сторонний")).toBeNull();
+  });
 });

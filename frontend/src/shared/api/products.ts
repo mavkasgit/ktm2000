@@ -25,6 +25,12 @@ export type QuantityPerHangerDict = Record<string, HangerQuantityValue>;
 /** Режим подвеса (#126): 'auto' — считается сервером, 'manual' — ручное значение. */
 export type HangerMode = "auto" | "manual";
 
+/** Комплект стороннего заказа: сколько комплектов на подвес и предметов в комплекте. */
+export type ThirdPartyPack = {
+  sets_per_hanger: number;
+  pieces_per_set: number;
+};
+
 export type ProductLength = {
   length_mm: number;
   raw_length_mm: number | null;
@@ -58,6 +64,10 @@ export type Product = {
   source: string | null;
   is_catalog_item: boolean;
   is_paired_profile: boolean;
+  /** Сторонний заказ: материал заказчика, завод только обрабатывает. */
+  third_party?: boolean;
+  customer?: string | null;
+  pack?: ThirdPartyPack | null;
   dimension_state: DimensionState;
   skip_shot_blast: boolean;
   aliases: string[];
@@ -104,6 +114,9 @@ export type CreateProductInput = {
   cross_section?: string | null;
   source?: string | null;
   is_catalog_item?: boolean;
+  third_party?: boolean;
+  customer?: string | null;
+  pack?: ThirdPartyPack | null;
   skip_shot_blast?: boolean;
   dimension_state?: DimensionState;
   aliases?: string[];

@@ -66,9 +66,26 @@ export function CatalogCard({
             </Badge>
           ))}
           {product.is_catalog_item && <Badge variant="secondary" className="text-xs bg-blue-100">Сырье (каталог)</Badge>}
+          {product.third_party && (
+            <Badge
+              variant="secondary"
+              className="text-xs bg-amber-100 text-amber-900"
+              title={product.customer ?? "Сторонний заказ"}
+            >
+              Сторонний
+            </Badge>
+          )}
           {product.is_paired_profile && <Badge variant="secondary" className="text-xs bg-purple-100">Парный</Badge>}
           {product.skip_shot_blast && <Badge variant="secondary" className="text-xs bg-amber-100">Без дробеструйки</Badge>}
         </div>
+        {product.third_party && (
+          <div className="mt-1 truncate text-xs text-amber-700">
+            {product.customer ?? "Заказчик не указан"}
+            {product.pack
+              ? ` · ${product.pack.sets_per_hanger} × ${product.pack.pieces_per_set} = ${product.pack.sets_per_hanger * product.pack.pieces_per_set} шт`
+              : ""}
+          </div>
+        )}
       </CardContent>
     </Card>
   );
