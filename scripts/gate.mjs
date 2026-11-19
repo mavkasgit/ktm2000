@@ -15,8 +15,16 @@ import { existsSync, readFileSync } from "node:fs";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { buildStepCommand } from "./gate-command-core.js";
+import { resolvePython } from "./python-core.js";
 
 const ROOT = dirname(dirname(fileURLToPath(import.meta.url)));
+/**
+ * Шаги `pins`, `seeds-validate`, `profile-settings-manifest` и `compose-audit`
+ * зовут `python`. В смешанной сессии первым в PATH оказывается интерпретатор
+ * соседнего проекта, и гейт краснел на зелёном дереве (T-384) — поэтому здесь
+ * один раз резолвится `backend/.venv` проекта, а PATH остаётся запасным путём.
+ */
+const PYTHON = resolvePython({ root: ROOT });
 const GATES_SHEET = "docs/quality/gates.md";
 const PROVEN_SHEET = "docs/quality/proven-checks.json";
 const GATES_BLOCK = /<!-- gates-steps:start -->([\s\S]*?)<!-- gates-steps:end -->/;
@@ -295,6 +303,26 @@ function shell(command, cwd, env) {
   return { code: result.status ?? 1, out, error: result.error };
 }
 
+/** Путь в командной строке: кавычки только там, где в пути есть пробел. */
+function quotePath(path) {
+  return /\s/.test(path) ? `"${path}"` : path;
+}
+
+/**
+ * Команда шага, начинающаяся с `python`, идёт через интерпретатор проекта.
+ * Подстановка префиксная: `npm run …` и `node …` шаги не затрагиваются, а для
+ * шагов, где python зовётся внутри npm-скрипта, он резолвится там же, где
+ * объявлен (например, `backend-test-count` — в `scripts/test-count.js`).
+ */
+function withProjectPython(command) {
+  return command.replace(/^python(?=\s|$)/, quotePath(PYTHON.exe));
+}
+
+/** Чем гейт запускает python — видно в шапке, а не догадкой о PATH. */
+function pythonLabel() {
+  return PYTHON.source === "venv" ? "backend/.venv" : `${PYTHON.exe} (PATH)`;
+}
+
 function tail(text, lines = 15) {
   const all = text.split(/\r?\n/).filter((l) => l.trim() !== "");
   return all.slice(-lines).join("\n");
@@ -317,13 +345,14 @@ function probeInfra() {
 
 function probeTool(step) {
   if (!step.tool) return true;
-  return shell(`${step.tool} --version`, ".", {}).code === 0;
+  const tool = step.tool === "python" ? quotePath(PYTHON.exe) : step.tool;
+  return shell(`${tool} --version`, ".", {}).code === 0;
 }
 
 /** Версия языка живёт в pin-файле; `engines` в package.json обязан с ним совпадать. */
 const PINNED = [
   { label: "node", file: ".nvmrc", command: "node -v" },
-  { label: "python", file: ".python-version", command: "python -V" },
+  { label: "python", file: ".python-version", command: `${quotePath(PYTHON.exe)} -V` },
 ];
 
 function checkPins() {
@@ -444,7 +473,7 @@ function runStep(step, infraUp, strict) {  if (step.check) {
     return { status: "missing", seconds: 0, reason: `${step.tool} не установлен локально` };
   }
   const started = Date.now();
-  const command = buildStepCommand(step, strict);
+  const command = withProjectPython(buildStepCommand(step, strict));
   const { code, out, error } = shell(command, step.cwd, step.env || {});
   const seconds = (Date.now() - started) / 1000;
   if (error) return { status: "fail", seconds, reason: String(error.message), output: tail(out) };
@@ -534,7 +563,9 @@ function main() {
       ),
     );
   } else {
-    console.log(`gate — ярус ${tier} — ${git("rev-parse", "--short", "HEAD")} — node ${process.version}`);
+    console.log(
+      `gate — ярус ${tier} — ${git("rev-parse", "--short", "HEAD")} — node ${process.version} — python ${pythonLabel()}`,
+    );
     for (const r of results) {
       const line = `${r.name.padEnd(28)} ${(r.seconds ?? 0).toFixed(1).padStart(6)}  ${r.status}`;
       console.log(r.reason ? `${line} — ${r.reason}` : line);
