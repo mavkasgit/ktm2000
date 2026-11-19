@@ -39,15 +39,16 @@ workflow проверку ни включить, ни найти в защите
 | `frontend-tests.yml` | `frontend tests` | **блокирует** | push, PR, `workflow_dispatch` | шаги гейта `frontend-types`, `frontend-lint`, `frontend-unit` (пороги `statements/lines ≥ 43`, `branches ≥ 52`, `functions ≥ 49`), `frontend-test-count`, `dev-deps` |
 | `frontend-tests.yml` | `frontend build` | информационный | push, PR, `workflow_dispatch` | шаг гейта `frontend-build`: `vite build` + порог начального пакета по `frontend/bundle-size-baseline.json` (raw и gzip), рост — красный |
 | `ruff.yml` | `ruff` | **блокирует** | push, PR, `workflow_dispatch` | шаг гейта `ruff` — находок 0 (pyflakes-ядро `F`); стилевые и сигнальные семейства в скоуп не входят |
-| `ci-lint.yml` | `ci-lint` | информационный | push, PR по `paths` (`.github/**`, `mise.toml`, `tools.json`, `tools.schema.json`, `scripts/gate.mjs`, `package.json`, `package-lock.json`), `workflow_dispatch` | шаги гейта `ci-lint`: jactionlint по workflow, composite actions и `dependabot.yml`, политика «ноль находок»; и `registry`: каждое использование action в `.github/workflows/**` сверяется по SHA с `tools.json` (обновлённый SHA без записи в реестре — красный, T-384) |
+| `ci-lint.yml` | `ci-lint` | **блокирует** | push, PR, `workflow_dispatch` | шаги гейта `ci-lint`: jactionlint по workflow, composite actions и `dependabot.yml`, политика «ноль находок»; и `registry`: каждое использование action в `.github/workflows/**` сверяется по SHA с `tools.json` (обновлённый SHA без записи в реестре — красный, T-384) |
 | `deps-audit.yml` | `deps audit` | информационный | расписание (пн 03:17 UTC), `workflow_dispatch` | шаг гейта `osv-allowlist` (датированные исключения — блокирует) + osv-scanner по всем локам (advisory: находки печатаются и уходят артефактом, merge не блокируют) |
 | `docs.yml` | `docs` | информационный | push, PR по `paths` (`**.md`, `docs/**`, `scripts/**`, `package*.json`, сам файл), `workflow_dispatch` | шаги гейта `docs-links`, `adr-index`, `scripts-tests` |
 | `e2e-smoke.yml` | `e2e smoke` | информационный | push, PR (кроме `docs/**` и `**.md`), `workflow_dispatch` | ярус `@smoke` на своей БД-сервисе в джобе, `--retries=0`, трасса артефактом |
 
 Состав блокирующих — замер только чтения, `gh api
-repos/mavkasgit/ktm2000/branches/main/protection` (2026-11-03): contexts =
-`migrations`, `backend tests`, `frontend tests`, `ruff`; `strict: false` (merge не
-требует актуального `main`); `enforce_admins: false` (владелец может обойти).
+repos/mavkasgit/ktm2000/branches/main/protection` (2026-11-19): contexts =
+`migrations`, `backend tests`, `frontend tests`, `ruff`, `ci-lint`; `strict: false`
+(merge не требует актуального `main`); `enforce_admins: false` (владелец может
+обойти).
 Защита уже включена и живёт в настройках репозитория: ни один PR её не меняет,
 смена состава — решение владельца, не агента (`docs/night/PLAN-2026-11-03.md`, #370).
 Расхождение этого списка с таблицей выше — дефект документа, а не настройки: сначала
@@ -56,7 +57,8 @@ repos/mavkasgit/ktm2000/branches/main/protection` (2026-11-03): contexts =
 `paths`-фильтры уровня workflow допустимы **только** у информационных джобов.
 Если отфильтровать скоуп там, где check required, правка вне скоупа оставит
 проверку в «Pending» и merge станет невозможен (#361). Поэтому фильтр есть у
-`docs.yml`, `ci-lint.yml` и `e2e-smoke.yml`, и его нет у четырёх блокирующих.
+`docs.yml` и `e2e-smoke.yml`, и его нет у пяти блокирующих — `ci-lint.yml`
+потерял фильтр вместе с переходом в required (T-384).
 
 Условия промоушена smoke-яруса (`e2e-smoke.yml`, шапка; тикет #276): `e2e smoke`
 переводится в required после **10 зелёных прогонов подряд на push в `main`**.
