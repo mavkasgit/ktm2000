@@ -43,6 +43,14 @@ frontend стенд **не имеет** — [`frontend/scripts/run-e2e.mjs`](fro
 стека — `PW_REUSE_STACK=1` вместе с `E2E_API_URL`/`PLAYWRIGHT_TEST_BASE_URL`
 (тогда обёртка их не трогает).
 
+### Симлинкованные node_modules
+
+Worktree с `node_modules`-junction (и pnpm) Vitest резолвит по реальному пути
+вне корня работы. `realpathSync` для этого уже включён в
+[`frontend/vitest.config.ts`](frontend/vitest.config.ts) — локальные шимы в PR
+не добавлять: если frontend-тесты не стартуют, проверь конфиг, а не копируй
+патч из другого worktree.
+
 ### Стенды: e2e агент запускает сам, devstack — в открытом терминале через Orca
 
 **e2e агент запускает сам.** Стенд изолирован: клон своей базы-шаблона из
@@ -128,6 +136,7 @@ backend-профиль и скрипты профилей. Сверка — `npm
 
 - Каждый прогон идёт через launcher `scripts/test-run.ps1`: он создаёт свою БД `ktm2000_test_<runid>` и в `finally` дропает только её. Параллельные прогоны не видят и не удаляют чужие БД.
 - При нескольких параллельных агентах задавайте `PYTEST_NUM_WORKERS` (например `4`): иначе каждый `-n auto` захватит все ядра и машина перестанет отвечать. Слот heavy сериализует целые прогоны, но не воркеры внутри прогона.
+- Тестовый Postgres поднят с `max_locks_per_transaction=256` (`infra/compose/docker-compose.test.yml`). Если прогон всё равно падает с `out of shared memory` — это соседние агенты: повторите с `PYTEST_NUM_WORKERS=2`, не отключая тесты.
 - Отдельный тест — через launcher (изолированная БД): `npm run test:pytest -- -k shopflow`.
 - Отладка без изоляции (serial, общая статичная БД, только отладка): `cd backend && python -m pytest tests/test_shopfloor_api.py::test_name -v`.
 - `test:db:down` из тестовых launcher'ов не использовать.
@@ -183,6 +192,8 @@ backend-профиль и скрипты профилей. Сверка — `npm
 5. Stock ledger — `StockTransaction` единый источник правды; детали → `docs/project-overview.md`.
 6. Transfer ↔ StockTransaction integrity — `assert_no_invariants_violations` в тестах.
 7. Тесты, которые трогают БД, берут сессию у Cleaner'а пакета (`async with cleaner.session() as db` либо фикстуры `session`/`client`) и **не открывают транзакцию руками** для изоляции: стратегии и guard → [`backend/tests/AGENTS.md`](backend/tests/AGENTS.md), решение → [ADR-0072](docs/adr/0072-izolyaciyu-testovoy-bd-derzhit-cleaner.md). Исключение — миграционные пакеты (`test_migrations.py`, `test_hanger_norm_key_migration_218.py`): они гоняют alembic на своей базе `ktm_mig_*` и открывают транзакции сами, это роль `ScratchDatabase`, а не изоляция теста.
+8. PR закрывает issue только английским `Closes #N` / `Fixes #N`; русское «Закрывает» GitHub не распознаёт.
+9. Проверки PR — `gh pr checks <n> --watch` или `gh run watch`, а не ручной опрос.
 
 ## Документация (указатели)
 

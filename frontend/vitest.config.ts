@@ -1,3 +1,5 @@
+import { realpathSync } from "node:fs"
+
 import { defineConfig } from "vitest/config"
 import { fileURLToPath, URL } from "node:url"
 
@@ -11,7 +13,14 @@ export default defineConfig({
   server: {
     fs: {
       // Сквозная проверка иконок читает backend-сиды (../../backend/...) — разрешаем.
-      allow: [fileURLToPath(new URL("..", import.meta.url))],
+      // Симлинкованные зависимости (pnpm, junction-worktree) Vite резолвит по
+      // реальному пути вне корня работы; без этой строки setupFiles падает с
+      // `Cannot find module '/@fs/.../node_modules/@testing-library/...'`.
+      // В обычном клоне realpath совпадает с путём выше — поведение не меняется.
+      allow: [
+        fileURLToPath(new URL("..", import.meta.url)),
+        realpathSync(fileURLToPath(new URL("./node_modules", import.meta.url))),
+      ],
     },
   },
   test: {
