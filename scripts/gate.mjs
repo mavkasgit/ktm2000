@@ -42,7 +42,7 @@ const STEPS = [
     name: "registry",
     tier: "fast",
     command: "node scripts/check-registry.mjs",
-    ci: null,
+    ci: "ci-lint.yml",
     what: " реестр инструментов против схем и закреплений",
   },
   {

@@ -24,8 +24,10 @@ on:
       - '.github/**'
       - 'mise.toml'
       - 'tools.json'
+      - 'tools.schema.json'
       - 'scripts/gate.mjs'
       - 'package.json'
+      - 'package-lock.json'
   pull_request:
     branches:
       - main
@@ -34,8 +36,10 @@ on:
       - '.github/**'
       - 'mise.toml'
       - 'tools.json'
+      - 'tools.schema.json'
       - 'scripts/gate.mjs'
       - 'package.json'
+      - 'package-lock.json'
   workflow_dispatch:
 
 concurrency:
@@ -50,9 +54,10 @@ jobs:
   ci-lint:
     name: ci-lint
     runs-on: ubuntu-latest
-    # Замер локально (Windows, jactionlint 2.4.0): 0.2 с на весь репозиторий.
-    # 5 минут — запас на скачивание бинаря и холодный npm-кеш.
-    timeout-minutes: 5
+    # Замер локально (Windows, jactionlint 2.4.0): 0.2 с на весь репозиторий;
+    # `registry` добавляет root `npm ci` и секунды сверки. 10 минут — запас на
+    # скачивание бинаря и холодный npm-кеш.
+    timeout-minutes: 10
 
     steps:
       - name: Checkout
@@ -68,6 +73,21 @@ jobs:
         uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
         with:
           node-version-file: .nvmrc
+
+      # Шаг `registry` сверяет `tools.json` с файлами закреплений, в том числе с
+      # SHA действий в `.github/workflows/**` (T-384). В CI его не было вовсе:
+      # dependabot обновил SHA, `tools.json` остался со старым, и main краснел
+      # уже после merge. Триггеры этого workflow (`'.github/**'`, `tools.json`) —
+      # ровно зона такого изменения, поэтому шаг живёт здесь, а не отдельным
+      # workflow; команда — тот же шаг гейта, второго списка проверок нет.
+      #
+      # `npm ci` нужен только `registry`: схема `tools.schema.json` исполняется
+      # Ajv из корневых devDependencies.
+      - name: Install root dependencies (Ajv для registry)
+        run: npm ci
+
+      - name: Registry (tools.json против SHA действий)
+        run: npm run gate -- --only=registry
 
       - name: Install jactionlint (pinned 2.4.0)
         run: |

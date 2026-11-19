@@ -14,7 +14,7 @@
 | Шаг | Ярус | Что ловит | Где ещё | Блокирует | Красный ход |
 |-----|------|-----------|---------|-----------|-------------|
 | `pins` | fast | фактические версии языков против pin-файлов и engines | pre-push, локальный гейт | да | prove-checks 2026-11-03 |
-| `registry` | fast | реестр инструментов против схем и закреплений | pre-push, локальный гейт | да | prove-checks 2026-11-03 |
+| `registry` | fast | реестр инструментов против схем и закреплений, включая SHA действий в `.github/workflows/**` | pre-push, локальный гейт, CI ci-lint.yml | да | prove-checks 2026-11-03 |
 | `freshness` | fast | возраст закреплений реестра: пин-файла нет — fail, пин не смотрели >180 дн. — warn | pre-push, cron freshness.yml (report-only) | только в strict и только по fail | prove-checks 2026-11-03 |
 | `codegraph-age` | fast | возраст codegraph-индекса против HEAD | локальный гейт | только в strict | prove-checks 2026-11-03 |
 | `docs-links` | fast | битые ссылки и карды документации | pre-commit, CI docs.yml | да | prove-checks 2026-11-03 |
