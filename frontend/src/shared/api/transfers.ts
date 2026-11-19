@@ -345,11 +345,15 @@ export async function listTransferHistory(
 }
 
 // ---------------------------------------------------------------------------
-// Отмена выдачи целиком (#282). `GET /transfers/issues/{issue_no}/cancel-preview`
-// — только чтение: что вернётся, какие этапы снова пойдут в работу и можно ли
-// отменять. `POST …/cancel` — сама отмена; отказ — HTTP 400 с русским текстом
-// в `detail`, своего формулирования причин на фронте нет.
+// Отмена выдачи (#282, #349). `GET /transfers/issues/{issue_no}/cancel-preview`
+// — только чтение: два сценария (остаток и полный откат), что вернётся,
+// какие этапы снова пойдут в работу и что блокирует.
+// `POST …/cancel` принимает явный режим: `remainder` — только непринятая
+// часть, `full` — вся выдача включая принятую. Отказ — HTTP 400 с русским
+// текстом в `detail`; своего формулирования причин на фронте нет.
 // ---------------------------------------------------------------------------
+
+export type IssueCancelMode = "remainder" | "full";
 
 export type IssueCancelReturnRow = {
   transfer_id: number;
@@ -365,8 +369,20 @@ export type IssueCancelStageRow = {
   stage_name: string | null;
 };
 
-export type IssueCancelPreview = {
-  issue_no: string;
+export type IssueCancelKeptRow = {
+  transfer_id: number;
+  transfer_no: string;
+  reason: string | null;
+};
+
+export type IssueCancelTransferRow = IssueCancelReturnRow & {
+  /** Сколько из передачи уже принято получателем (факты исполнения). */
+  accepted_quantity: string;
+  cancellable: boolean;
+  block_reason: string | null;
+};
+
+export type IssueCancelScenario = {
   returns: IssueCancelReturnRow[];
   stages: IssueCancelStageRow[];
   can_cancel: boolean;
@@ -376,10 +392,33 @@ export type IssueCancelPreview = {
   summary: string;
 };
 
+export type IssueCancelPreview = {
+  issue_no: string;
+  transfers: IssueCancelTransferRow[];
+  remainder: IssueCancelScenario & { kept: IssueCancelKeptRow[] };
+  full: IssueCancelScenario & { accepted_quantity: string };
+};
+
 export type IssueCancelResult = {
   issue_no: string;
-  cancelled_transfers: Array<{ transfer_id: number; transfer_no: string; status: string | null }>;
+  mode: IssueCancelMode;
+  /** `true` — повтор с тем же ключом операции; склад не двигался. */
+  idempotent_replay: boolean;
+  cancelled_transfers: Array<{
+    transfer_id: number;
+    transfer_no: string;
+    status: string | null;
+    quantity: string;
+  }>;
+  kept_transfers: IssueCancelKeptRow[];
   restored_stages: IssueCancelStageRow[];
+  reversed_tx_ids: number[];
+};
+
+export type IssueCancelPayload = {
+  mode: IssueCancelMode;
+  comment?: string;
+  idempotencyKey?: string;
 };
 
 export async function previewIssueCancellation(
@@ -393,18 +432,20 @@ export async function previewIssueCancellation(
 
 export async function cancelIssue(
   issueNo: string,
-  comment?: string,
+  payload: IssueCancelPayload,
   options?: ShopfloorRequestOptions,
 ): Promise<IssueCancelResult> {
   const { data } = await apiClient.post<IssueCancelResult>(
     `/transfers/issues/${encodeURIComponent(issueNo)}/cancel`,
-    {},
     {
-      params: comment ? { comment } : undefined,
-      ...makeRequestConfig(options),
+      mode: payload.mode,
+      comment: payload.comment,
+      idempotency_key: payload.idempotencyKey,
     },
+    makeRequestConfig(options),
   );
   return data;
 }
+
 
 

@@ -142,7 +142,7 @@ async def test_issue_from_equivalent_pool_and_cancel_restores_source(
 
     cancel = await client.post(
         f"/api/transfers/issues/{issue_no}/cancel",
-        params={"comment": "вернуть эквивалент"},
+        json={"mode": "full", "comment": "вернуть эквивалент"},
         headers=_auth_headers(user),
     )
     assert cancel.status_code == 200, cancel.text

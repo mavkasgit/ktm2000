@@ -8,9 +8,10 @@ Mounted at ``/transfers``.  Provides:
   * ``GET  /transfers/sections/{id}/incoming``   — incoming open transfers for a section
   * ``PUT  /transfers/{id}``                     — correct an accepted transfer
   * ``POST /transfers/{id}/cancel``               — cancel an accepted transfer
-  * ``GET  /transfers/issues/{issue_no}/cancel-preview`` — что вернёт отмена
-    выдачи целиком (#282)
-  * ``POST /transfers/issues/{issue_no}/cancel``   — отмена выдачи целиком
+  * ``GET  /transfers/issues/{issue_no}/cancel-preview`` — что вернёт каждый
+    режим отмены выдачи (#282, #349)
+  * ``POST /transfers/issues/{issue_no}/cancel``   — отмена выдачи в режиме
+    ``remainder`` (только остаток) или ``full`` (полный откат)
 
 Under the explicit-transfer model, ``POST /transfers`` is the single
 write path. The auto-accept (receive) is part of the service itself,
@@ -55,6 +56,7 @@ from app.transfers.queries import (
     list_ready_to_transfer,
 )
 from app.transfers.schemas import (
+    CancelIssuePayload,
     CorrectTransferPayload,
     CreateTransferPayload,
 )
@@ -275,14 +277,16 @@ async def cancel_transfer_qty(
     dependencies=[Depends(require_role(list(READER_ROLES)))],
 )
 async def issue_cancel_preview(issue_no: str, db: AsyncSession = Depends(get_db)) -> dict:
-    """Что вернёт отмена выдачи целиком (#282, п.8) — только чтение.
+    """Что вернёт каждый режим отмены выдачи (#349) — только чтение.
 
-    Ответ: ``returns`` (что и куда вернётся), ``stages`` (какие пропущенные
-    этапы снова пойдут в работу), ``can_cancel`` + ``reason`` (почему нельзя,
-    если хоть одна передача уже принята в смысле фактов исполнения) и
-    ``summary`` — готовая human-readable строка «вернём 40 на „Хранилище Б“,
-    12 на „В“, этапы 2–4 снова в работу». Числовых id склада в тексте нет:
-    только имена.
+    Ответ: ``transfers`` (передачи выдачи с признаком «можно отменить»),
+    ``remainder`` и ``full`` — два независимых сценария. В каждом —
+    ``returns`` (что и куда вернётся), ``stages`` (какие пропущенные этапы
+    снова пойдут в работу), ``can_cancel`` + ``reason`` и ``summary`` —
+    готовая human-readable строка. У ``full`` дополнительно
+    ``accepted_quantity`` — сколько уже принято получателем: это число
+    показывает, что полный откат вернёт с участка, а не со склада. Числовых
+    id склада в текстах нет: только имена.
     """
     try:
         return await preview_issue_cancellation(db, issue_no=issue_no)
@@ -296,16 +300,22 @@ async def issue_cancel_preview(issue_no: str, db: AsyncSession = Depends(get_db)
 )
 async def issue_cancel(
     issue_no: str,
-    comment: str | None = Query(default=None),
+    payload: CancelIssuePayload,
     db: AsyncSession = Depends(get_db),
     current_user: User = Depends(get_current_user),
 ) -> dict:
-    """Отмена выдачи целиком: все передачи одного ``issue_no`` + свои пропуски.
+    """Отмена выдачи в явно выбранном режиме (#349).
 
-    Каждая передача откатывается через собственный ``transfer_send`` Action
-    (ADR-0019), поэтому штучная отмена в «Отмене действий» остаётся
-    возможной. Снимаются только пропуски с ``skipped_by_issue_no`` этого
-    номера — чужие пропуски не трогаются (#282, п.6 и п.8).
+    ``remainder`` — отменяется только непринятая часть, принятое остаётся
+    как есть и возвращается в ``kept_transfers`` с причиной.
+    ``full`` — полный откат всей выдачи, включая принятую часть: обратные
+    проводки пишет тот же ``ReversalService``, что и приёмка, поэтому
+    остатки складов сходятся. Запрещающие статусы и нехватка покрытия
+    отказывают до первой проводки.
+
+    Повтор с тем же ``idempotency_key`` идемпотентен: возвращается
+    записанный исход, движения склада не задваиваются. Аудит пишется в
+    обоих режимах — на каждую передачу и на операцию целиком.
     """
     exists = await db.scalar(
         select(Transfer.id).where(Transfer.issue_no == issue_no).limit(1)
@@ -314,10 +324,15 @@ async def issue_cancel(
         raise HTTPException(status_code=404, detail="Выдача с таким номером не найдена")
     try:
         result = await cancel_issue(
-            db, issue_no=issue_no, actor_id=current_user.id, comment=comment
+            db,
+            issue_no=issue_no,
+            mode=payload.mode,
+            actor_id=current_user.id,
+            comment=payload.comment,
+            idempotency_key=payload.idempotency_key,
         )
     except ValueError as exc:
-        # Блокировка (часть уже принята или отработана) — отказ русским текстом.
+        # Блокировка (запрещающий статус или покрытие) — отказ русским текстом.
         await db.rollback()
         raise HTTPException(status_code=400, detail=str(exc)) from exc
     # Коммит ДО ответа: `get_db` коммитит только после выхода зависимости.

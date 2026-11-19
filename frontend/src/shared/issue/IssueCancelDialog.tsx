@@ -2,6 +2,7 @@ import { useEffect, useState } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { Loader2 } from "lucide-react";
 import { Button, Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle, Input } from "@/shared/ui";
+import { RadioGroup, RadioGroupItem } from "@/shared/ui/radio-group";
 import {
   DIALOG_SIZES,
 } from "@/shared/lib/dialogSizes";
@@ -10,19 +11,27 @@ import { fmtServerQty } from "@/shared/lib/quantityFormat";
 import { getErrorMessage } from "@/shared/api/client";
 import { invalidateAfter } from "@/shared/api/cacheInvalidation";
 import { queryKeys } from "@/shared/api/queryKeys";
-import { cancelIssue, previewIssueCancellation } from "@/shared/api/transfers";
+import {
+  cancelIssue,
+  previewIssueCancellation,
+  type IssueCancelMode,
+  type IssueCancelScenario,
+} from "@/shared/api/transfers";
 import { toast } from "@/shared/ui/use-toast";
 
 /**
- * Отмена выдачи целиком (#282, п.8).
+ * Отмена выдачи: оператор явно выбирает режим (#282, #349).
  *
- * Окно живёт в `shared`, а не в фиче: entry point у него два — журнал передач
- * (`features/transfers`) и журнал отмен (`features/reversal`), а соседние
- * фичи по границам FSD друг друга не видят.
+ * * «Отменить остаток» — возвращаются только передачи, которые получатель
+ *   ещё не взял в работу; принятое остаётся как есть.
+ * * «Полный откат» — отменяется вся выдача, включая принятую часть:
+ *   обратные проводки возвращают материал на склады, остатки сходятся.
  *
- * Причина отказа — только серверная: `reason` из `cancel-preview` и текст
- * `detail` при 400. Своих формулировок здесь нет, потому что оператор должен
- * читать то же, что записано в журнале.
+ * Режим не выбирается за оператора: последствия для уже принятого материала
+ * разные, и предупреждение о количестве принятого показывается до нажатия.
+ * Причина отказа — только серверная (`reason` из `cancel-preview` и текст
+ * `detail` при 400): своих формулировок здесь нет, оператор должен читать то
+ * же, что записано в журнале.
  */
 const ROW = { ...TABLE_ROW_COMPACT };
 
@@ -34,15 +43,35 @@ interface IssueCancelDialogProps {
   onCancelled?: () => void;
 }
 
+/** Ключ операции живёт один показ окна: повтор запроса не задвоит возврат. */
+function newOperationKey(): string {
+  if (typeof crypto !== "undefined" && "randomUUID" in crypto) {
+    return `issue-cancel-${crypto.randomUUID()}`;
+  }
+  return `issue-cancel-${Date.now()}-${Math.random().toString(16).slice(2)}`;
+}
+
+const MODE_LABELS: Record<IssueCancelMode, string> = {
+  remainder: "Отменить остаток",
+  full: "Полный откат",
+};
+
 export function IssueCancelDialog({ open, onOpenChange, issueNo, onCancelled }: IssueCancelDialogProps) {
   const queryClient = useQueryClient();
   const [commentValue, setCommentValue] = useState("");
+  const [mode, setMode] = useState<IssueCancelMode | null>(null);
+  const [operationKey, setOperationKey] = useState(newOperationKey);
 
-  // Комментарий относится к этой выдаче и к этому просмотру: при закрытии он
-  // не должен переехать на следующую отмену.
+  // Состояние относится к этой выдаче и этому показу: при закрытии оно не
+  // должно переехать на следующую отмену.
   useEffect(() => {
-    if (!open) setCommentValue("");
-  }, [open]);
+    if (!open) {
+      setCommentValue("");
+      setMode(null);
+      return;
+    }
+    setOperationKey(newOperationKey());
+  }, [open, issueNo]);
 
   const previewQuery = useQuery({
     queryKey: queryKeys.transfers.issueCancelPreview(issueNo as string),
@@ -51,13 +80,21 @@ export function IssueCancelDialog({ open, onOpenChange, issueNo, onCancelled }: 
   });
 
   const cancelMutation = useMutation({
-    mutationFn: (comment: string | null) => cancelIssue(issueNo as string, comment ?? undefined),
+    mutationFn: (args: { mode: IssueCancelMode; comment: string | null; operationKey: string }) =>
+      cancelIssue(issueNo as string, {
+        mode: args.mode,
+        comment: args.comment ?? undefined,
+        idempotencyKey: args.operationKey,
+      }),
     onSuccess: (data) => {
       void invalidateAfter(queryClient, "actionReversed");
       toast({
         variant: "success",
-        title: "Выдача отменена",
-        description: `Отменено передач: ${data.cancelled_transfers.length}, этапов возвращено в работу: ${data.restored_stages.length}`,
+        title: data.idempotent_replay ? "Выдача уже отменена" : "Выдача отменена",
+        description:
+          `Режим: ${MODE_LABELS[data.mode]}. Отменено передач: ${data.cancelled_transfers.length}` +
+          `, оставлено без изменений: ${data.kept_transfers.length}` +
+          `, этапов возвращено в работу: ${data.restored_stages.length}`,
       });
       onOpenChange(false);
       onCancelled?.();
@@ -70,6 +107,8 @@ export function IssueCancelDialog({ open, onOpenChange, issueNo, onCancelled }: 
 
   const preview = previewQuery.data ?? null;
   const loading = previewQuery.isPending && open && Boolean(issueNo);
+  const scenario: IssueCancelScenario | null = preview && mode ? preview[mode] : null;
+  const acceptedQuantity = preview ? Number(preview.full.accepted_quantity.replace(",", ".")) : 0;
   // Кнопка дизейблится, только когда причина показана текстом под ней: по
   // ADR-0032 недоступность обязана быть видна без наведения.
   const blockReason = !issueNo
@@ -78,11 +117,15 @@ export function IssueCancelDialog({ open, onOpenChange, issueNo, onCancelled }: 
       ? "Считаем, что вернёт отмена…"
       : previewQuery.error
         ? getErrorMessage(previewQuery.error)
-        : preview && !preview.can_cancel
-          ? preview.reason ?? "Выдачу нельзя отменить целиком"
-          : preview && preview.returns.length === 0
-            ? "Все передачи выдачи уже отменены"
-            : null;
+        : !preview
+          ? null
+          : !mode
+            ? "Выберите режим: отменить остаток или выполнить полный откат"
+            : !scenario?.can_cancel
+              ? scenario?.reason ?? "Выдачу нельзя отменить в этом режиме"
+              : scenario.returns.length === 0
+                ? "Все передачи выдачи уже отменены"
+                : null;
 
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>
@@ -91,10 +134,9 @@ export function IssueCancelDialog({ open, onOpenChange, issueNo, onCancelled }: 
         data-testid="issue-cancel-dialog"
       >
         <DialogHeader>
-          <DialogTitle>Отменить выдачу целиком</DialogTitle>
+          <DialogTitle>Отменить выдачу</DialogTitle>
           <DialogDescription>
-            Выдача {issueNo ?? "—"}: откатываются все её передачи и только те
-            пропущенные этапы, которые поставила эта выдача.
+            Выдача {issueNo ?? "—"}: выберите, что делать с уже принятой частью.
           </DialogDescription>
         </DialogHeader>
 
@@ -109,12 +151,64 @@ export function IssueCancelDialog({ open, onOpenChange, issueNo, onCancelled }: 
           </p>
         ) : preview ? (
           <div className="space-y-3 text-sm">
-            {/* Готовая строка от сервера: «вернём 40 на „Хранилище Б“, …». */}
-            <p className="font-medium" data-testid="issue-cancel-summary">
-              {preview.summary}
-            </p>
+            <RadioGroup
+              value={mode ?? ""}
+              onValueChange={(value) => setMode(value as IssueCancelMode)}
+              aria-label="Режим отмены выдачи"
+            >
+              <div
+                className="flex cursor-pointer items-start gap-3 rounded-md border p-3"
+                onClick={() => setMode("remainder")}
+                data-testid="issue-cancel-mode-remainder"
+              >
+                <RadioGroupItem value="remainder" className="mt-0.5" aria-label="Отменить остаток" />
+                <div className="space-y-1">
+                  <div className="font-medium">Отменить остаток</div>
+                  <p className="text-xs text-muted-foreground">
+                    Вернётся только то, что получатель ещё не взял в работу.
+                    Принятое останется как есть.
+                  </p>
+                  <p className="text-xs" data-testid="issue-cancel-remainder-summary">
+                    {preview.remainder.summary}
+                  </p>
+                  {!preview.remainder.can_cancel && preview.remainder.reason ? (
+                    <p className="text-xs text-destructive">{preview.remainder.reason}</p>
+                  ) : null}
+                </div>
+              </div>
 
-            {preview.returns.length > 0 ? (
+              <div
+                className="flex cursor-pointer items-start gap-3 rounded-md border p-3"
+                onClick={() => setMode("full")}
+                data-testid="issue-cancel-mode-full"
+              >
+                <RadioGroupItem value="full" className="mt-0.5" aria-label="Полный откат" />
+                <div className="space-y-1">
+                  <div className="font-medium">Полный откат</div>
+                  <p className="text-xs text-muted-foreground">
+                    Откатится вся выдача, включая принятую часть: остатки
+                    складов восстановятся обратными проводками.
+                  </p>
+                  <p className="text-xs" data-testid="issue-cancel-full-summary">
+                    {preview.full.summary}
+                  </p>
+                  {acceptedQuantity > 0 ? (
+                    <p
+                      className="rounded-md bg-amber-50 px-2 py-1 text-xs text-amber-800"
+                      data-testid="issue-cancel-full-warning"
+                    >
+                      Уже принято получателем: {fmtServerQty(preview.full.accepted_quantity)} шт.
+                      Этот материал вернётся на склады, а участок освободится.
+                    </p>
+                  ) : null}
+                  {!preview.full.can_cancel && preview.full.reason ? (
+                    <p className="text-xs text-destructive">{preview.full.reason}</p>
+                  ) : null}
+                </div>
+              </div>
+            </RadioGroup>
+
+            {scenario && scenario.returns.length > 0 ? (
               <table className="w-full text-xs">
                 <caption className="text-left text-xs font-medium uppercase tracking-wide text-muted-foreground">
                   Вернётся на склады
@@ -127,7 +221,7 @@ export function IssueCancelDialog({ open, onOpenChange, issueNo, onCancelled }: 
                   </tr>
                 </thead>
                 <tbody>
-                  {preview.returns.map((row) => (
+                  {scenario.returns.map((row) => (
                     <tr
                       key={row.transfer_id}
                       className="border-b border-border/50 last:border-0"
@@ -144,10 +238,10 @@ export function IssueCancelDialog({ open, onOpenChange, issueNo, onCancelled }: 
               </table>
             ) : null}
 
-            {preview.stages.length > 0 ? (
+            {scenario && scenario.stages.length > 0 ? (
               <div className="text-xs text-muted-foreground" data-testid="issue-cancel-stages">
                 Снова в работу:{" "}
-                {preview.stages
+                {scenario.stages
                   .map((stage) => `${stage.sequence} · ${stage.stage_name ?? "этап"}`)
                   .join("; ")}
               </div>
@@ -179,10 +273,21 @@ export function IssueCancelDialog({ open, onOpenChange, issueNo, onCancelled }: 
           <Button
             variant="destructive"
             data-testid="issue-cancel-confirm"
-            disabled={Boolean(blockReason) || cancelMutation.isPending}
-            onClick={() => cancelMutation.mutate(commentValue.trim() || null)}
+            disabled={Boolean(blockReason) || !mode || cancelMutation.isPending}
+            onClick={() => {
+              if (!mode) return;
+              cancelMutation.mutate({
+                mode,
+                comment: commentValue.trim() || null,
+                operationKey,
+              });
+            }}
           >
-            {cancelMutation.isPending ? "Отмена…" : "Отменить выдачу целиком"}
+            {cancelMutation.isPending
+              ? "Отмена…"
+              : mode
+                ? MODE_LABELS[mode]
+                : "Отменить выдачу"}
           </Button>
         </DialogFooter>
       </DialogContent>
