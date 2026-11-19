@@ -6,7 +6,7 @@
       "kind": "content",
       "hash": "7983fa94cdeba27130fbaf2327f5d4d2b3feda54947bad3439657c5f5db9326d",
       "reason": "auth/OIDC debt (ADR/spec: retro 2026-11-18)",
-      "reviewed": "2026-11-18",
+      "reviewed": "2026-11-19",
       "expires": "2027-06-30"
     },
     {
@@ -14,7 +14,7 @@
       "kind": "content",
       "hash": "f1bbbf0e7a81de4d00ab3a1ec16f3c2c853e75541432f50dae7f9d5933ba49a9",
       "reason": "auth/OIDC debt (ADR/spec: retro 2026-11-18)",
-      "reviewed": "2026-11-18",
+      "reviewed": "2026-11-19",
       "expires": "2027-06-30"
     },
     {
@@ -22,7 +22,7 @@
       "kind": "content",
       "hash": "522135cdad5ac98f039fa8a65839c1ed9452ce82781629e29f0f7a9fc23e4231",
       "reason": "auth/OIDC debt (ADR/spec: retro 2026-11-18)",
-      "reviewed": "2026-11-18",
+      "reviewed": "2026-11-19",
       "expires": "2027-06-30"
     },
     {
@@ -30,7 +30,7 @@
       "kind": "missing-there",
       "hash": "28d9225198f9654816d549d09dd2d9078b817ed3b0070e30c5dcd8055cd3f9b8",
       "reason": "auth/OIDC debt (ADR/spec: retro 2026-11-18)",
-      "reviewed": "2026-11-18",
+      "reviewed": "2026-11-19",
       "expires": "2027-06-30"
     },
     {
@@ -38,31 +38,31 @@
       "kind": "missing-there",
       "hash": "9943248818a239928fa2dda1fc0c99a3596669a915ea7cb8d597d7ff49679d0a",
       "reason": "auth/OIDC debt (ADR/spec: retro 2026-11-18)",
-      "reviewed": "2026-11-18",
+      "reviewed": "2026-11-19",
       "expires": "2027-06-30"
     },
     {
       "path": "frontend/src/features/auth/pages/LoginPage.tsx",
       "kind": "content",
-      "hash": "5f97622db8ec1dacda90f383e1dc62d6b58d9d7080245a2051b6e494c2bb6925",
+      "hash": "a4529d73bc3f60bc5dad7b5fa5fc811fcebbc558b7952622a4ac2e6bd2c7d814",
       "reason": "auth/OIDC debt (ADR/spec: retro 2026-11-18)",
-      "reviewed": "2026-11-18",
+      "reviewed": "2026-11-19",
       "expires": "2027-06-30"
     },
     {
       "path": "frontend/src/features/auth/pages/OidcCallbackPage.tsx",
       "kind": "content",
-      "hash": "59b4499b0634691b030b4b88a4ff45fa17407a72433aa8e95582e786bea4279b",
+      "hash": "aba570d5c2d249e19de98e1795092ea69cf437627ce22dd65d2cac6289e0f4b4",
       "reason": "auth/OIDC debt (ADR/spec: retro 2026-11-18)",
-      "reviewed": "2026-11-18",
+      "reviewed": "2026-11-19",
       "expires": "2027-06-30"
     },
     {
       "path": "scripts/profile-settings-manifest.json",
       "kind": "content",
-      "hash": "8cfd1f081613e3b7c725f2e738842d9f0acce0c7989031fe1b93f5b8ae2eeeb8",
+      "hash": "b96a9a0f7091b20a70688cd2e6e2ce45cb2903c71bcc894d7af7b07d71d77b97",
       "reason": "auth/OIDC debt (ADR/spec: retro 2026-11-18)",
-      "reviewed": "2026-11-18",
+      "reviewed": "2026-11-19",
       "expires": "2027-06-30"
     }
   ]
