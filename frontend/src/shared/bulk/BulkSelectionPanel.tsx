@@ -37,7 +37,7 @@ export function BulkSelectionPanel<TId extends BulkId>({
   const running = Boolean(progress?.running);
 
   return (
-    <div className={cn("sticky top-0 z-30 border-b bg-background/95 backdrop-blur shadow-sm", className)}>
+    <div className={cn("sticky top-0 z-30 border-b bg-background/95 backdrop-blur-sm shadow-xs", className)}>
       <div className="flex items-center gap-2 p-2">
         <span className="shrink-0 text-sm font-medium">Выбрано: {selectedCount}</span>
 

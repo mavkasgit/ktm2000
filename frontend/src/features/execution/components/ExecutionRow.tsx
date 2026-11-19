@@ -137,7 +137,7 @@ export function ExecutionRow({
             <StatusBadge status={row.position_status} isCompleted={row.is_completed} />
             {row.current_stage_sequence !== null && (
               <span
-                className="hidden shrink-0 rounded bg-muted px-1 text-[10px] text-muted-foreground max-[699px]:inline"
+                className="hidden shrink-0 rounded-sm bg-muted px-1 text-[10px] text-muted-foreground max-[699px]:inline"
                 title={row.current_stage_section_name || undefined}
               >
                 Э{row.current_stage_sequence}

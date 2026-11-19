@@ -185,7 +185,7 @@ export function ReversePreviewDialog({
         ) : null}
 
       <input
-          className="mt-3 w-full rounded border border-slate-200 px-2 py-1.5 text-sm"
+          className="mt-3 w-full rounded-sm border border-slate-200 px-2 py-1.5 text-sm"
           placeholder="Причина отмены (необязательно)"
           value={reason}
           onChange={(e) => setReason(e.target.value)}

@@ -11,7 +11,7 @@ function ToastIcon({ variant }: { variant: ToastData["variant"] }) {
 
 function toastClasses(variant: ToastData["variant"]) {
   const base =
-    "group pointer-events-auto relative flex w-full items-center gap-3 overflow-hidden rounded-md border p-4 pr-8 shadow-sm transition-all data-[state=open]:animate-in data-[state=open]:slide-in-from-right-full data-[state=closed]:animate-out data-[state=closed]:fade-out data-[swipe=cancel]:translate-x-0 data-[swipe=end]:translate-x-[var(--radix-toast-swipe-end-x)] data-[swipe=move]:translate-x-[var(--radix-toast-swipe-move-x)] data-[state=open]:duration-300 data-[state=closed]:duration-200 md:max-w-sm";
+    "group pointer-events-auto relative flex w-full items-center gap-3 overflow-hidden rounded-md border p-4 pr-8 shadow-xs transition-all data-[state=open]:animate-in data-[state=open]:slide-in-from-right-full data-[state=closed]:animate-out data-[state=closed]:fade-out data-[swipe=cancel]:translate-x-0 data-[swipe=end]:translate-x-[var(--radix-toast-swipe-end-x)] data-[swipe=move]:translate-x-[var(--radix-toast-swipe-move-x)] data-[state=open]:duration-300 data-[state=closed]:duration-200 md:max-w-sm";
   if (variant === "success") return `${base} border-green-200 bg-green-50 text-green-900`;
   if (variant === "destructive") return `${base} border-red-200 bg-red-50 text-red-900`;
   return `${base} border bg-background text-foreground`;
@@ -26,7 +26,7 @@ function CopyButtonInline({ t }: { t: ToastData }) {
 
   if (copied) {
     return (
-      <div className="flex-shrink-0 p-1.5" title="Скопировано">
+      <div className="shrink-0 p-1.5" title="Скопировано">
         <ClipboardCheck className="h-4 w-4 text-green-600" />
       </div>
     );
@@ -41,7 +41,7 @@ function CopyButtonInline({ t }: { t: ToastData }) {
         // Best-effort: на сбое галочка не появится, тост останется как был.
         void copy(text).catch(() => {});
       }}
-      className="flex-shrink-0 p-1.5 rounded-md hover:bg-red-100 transition-colors cursor-pointer"
+      className="shrink-0 p-1.5 rounded-md hover:bg-red-100 transition-colors cursor-pointer"
       title="Копировать ошибку"
       type="button"
     >
@@ -60,7 +60,7 @@ export function Toaster() {
         {activeToasts.length > 1 && (
           <button
             onClick={() => dismissToast()}
-            className="self-end text-xs font-medium text-muted-foreground hover:text-foreground bg-background/90 backdrop-blur-sm border px-2.5 py-1.5 rounded-md shadow-sm transition-all hover:shadow cursor-pointer flex items-center gap-1.5 animate-in fade-in slide-in-from-top-2 duration-200 pointer-events-auto"
+            className="self-end text-xs font-medium text-muted-foreground hover:text-foreground bg-background/90 backdrop-blur-xs border px-2.5 py-1.5 rounded-md shadow-xs transition-all hover:shadow-sm cursor-pointer flex items-center gap-1.5 animate-in fade-in slide-in-from-top-2 duration-200 pointer-events-auto"
             type="button"
           >
             <X className="h-3 w-3" />
@@ -117,7 +117,7 @@ export function Toaster() {
             )}
           </div>
           {t.variant === "destructive" && <CopyButtonInline t={t} />}
-          <ToastPrimitives.Close className="absolute right-2 top-2 rounded-md p-1.5 opacity-60 transition-all hover:opacity-100 hover:bg-black/5 dark:hover:bg-white/10 focus:outline-none z-50 cursor-pointer pointer-events-auto">
+          <ToastPrimitives.Close className="absolute right-2 top-2 rounded-md p-1.5 opacity-60 transition-all hover:opacity-100 hover:bg-black/5 dark:hover:bg-white/10 focus:outline-hidden z-50 cursor-pointer pointer-events-auto">
             <X className="h-4 w-4" />
           </ToastPrimitives.Close>
         </ToastPrimitives.Root>

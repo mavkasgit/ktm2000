@@ -250,7 +250,7 @@ export const PositionRow = memo(function PositionRow({ pos, onApprove, onDelete,
     <tr
       id={`plan-position-${pos.id}`}
       tabIndex={-1}
-      className={`border-b ${hasErrors || hasDuplicateConflict ? "bg-red-50" : hasWarnings ? "bg-amber-50" : ""} ${selected ? TABLE_ROW_STYLES.selectedRow : ""} cursor-pointer hover:bg-accent hover:ring-1 hover:ring-ring/20 transition-colors focus:outline-none`}
+      className={`border-b ${hasErrors || hasDuplicateConflict ? "bg-red-50" : hasWarnings ? "bg-amber-50" : ""} ${selected ? TABLE_ROW_STYLES.selectedRow : ""} cursor-pointer hover:bg-accent hover:ring-1 hover:ring-ring/20 transition-colors focus:outline-hidden`}
       onClick={(e) => {
         if (onSelect) {
           e.stopPropagation()
@@ -272,7 +272,7 @@ export const PositionRow = memo(function PositionRow({ pos, onApprove, onDelete,
               data-pair-link
               title={rowLink.title}
               aria-label={`${rowLink.title}, позиция ${rowLink.ordinal} из ${rowLink.total} — перейти к парной строке`}
-              className="inline-flex items-center rounded bg-muted px-1 text-[10px] leading-tight text-muted-foreground hover:bg-accent hover:text-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
+              className="inline-flex items-center rounded-sm bg-muted px-1 text-[10px] leading-tight text-muted-foreground hover:bg-accent hover:text-foreground focus-visible:outline-hidden focus-visible:ring-2 focus-visible:ring-ring"
               onClick={(e) => {
                 // Бейдж не выбирает строку и не открывает карточку: только переход.
                 e.stopPropagation()

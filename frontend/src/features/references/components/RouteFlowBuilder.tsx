@@ -85,7 +85,7 @@ function SectionIconBadge({
   const accentColor = iconColor || "#6B7280";
   return (
     <div
-      className={`flex ${boxClass} shrink-0 items-center justify-center rounded`}
+      className={`flex ${boxClass} shrink-0 items-center justify-center rounded-sm`}
       style={{ backgroundColor: `${accentColor}20` }}
     >
       <span style={{ color: accentColor }}>{renderIcon(icon, size)}</span>
@@ -313,7 +313,7 @@ function FlowCanvas({
           <EdgeLabelRenderer>
             <button
               type="button"
-              className="absolute h-5 w-5 rounded-full border bg-background text-muted-foreground hover:text-foreground hover:border-primary shadow-sm text-xs leading-none cursor-pointer"
+              className="absolute h-5 w-5 rounded-full border bg-background text-muted-foreground hover:text-foreground hover:border-primary shadow-xs text-xs leading-none cursor-pointer"
               style={{
                 transform: `translate(-50%, -50%) translate(${labelX}px, ${labelY + labelYOffset}px)`,
                 pointerEvents: "all",

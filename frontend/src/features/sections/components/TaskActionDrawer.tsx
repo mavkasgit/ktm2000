@@ -251,7 +251,7 @@ export function TaskActionDrawer({
                         {fmtQty(row.produced_quantity)} / {fmtQty(row.quantity)}
                       </span>
                     </div>
-                    <div className="h-1.5 rounded bg-muted overflow-hidden">
+                    <div className="h-1.5 rounded-sm bg-muted overflow-hidden">
                       <div className="h-full bg-primary" style={{ width: `${pct}%` }} />
                     </div>
                   </div>
@@ -376,9 +376,9 @@ export function TaskActionDrawer({
                   type="button"
                   onClick={() => setPerformedShift("1")}
                   className={cn(
-                    "px-3 h-7 text-sm font-medium rounded transition-all flex items-center justify-center",
+                    "px-3 h-7 text-sm font-medium rounded-sm transition-all flex items-center justify-center",
                     performedShift === "1"
-                      ? "bg-background text-foreground shadow-sm"
+                      ? "bg-background text-foreground shadow-xs"
                       : "text-muted-foreground hover:text-foreground"
                   )}
                 >
@@ -388,9 +388,9 @@ export function TaskActionDrawer({
                   type="button"
                   onClick={() => setPerformedShift("2")}
                   className={cn(
-                    "px-3 h-7 text-sm font-medium rounded transition-all flex items-center justify-center",
+                    "px-3 h-7 text-sm font-medium rounded-sm transition-all flex items-center justify-center",
                     performedShift === "2"
-                      ? "bg-background text-foreground shadow-sm"
+                      ? "bg-background text-foreground shadow-xs"
                       : "text-muted-foreground hover:text-foreground"
                   )}
                 >
@@ -419,7 +419,7 @@ export function TaskActionDrawer({
                   className={cn(
                     "flex flex-col text-left p-3 rounded-lg border text-xs font-medium transition-all hover:bg-muted/50",
                     shortageStrategy === "negative_remainder"
-                      ? "bg-background border-amber-500 shadow-sm ring-1 ring-amber-500"
+                      ? "bg-background border-amber-500 shadow-xs ring-1 ring-amber-500"
                       : "bg-background/50 border-slate-200"
                   )}
                 >
@@ -432,7 +432,7 @@ export function TaskActionDrawer({
                   className={cn(
                     "flex flex-col text-left p-3 rounded-lg border text-xs font-medium transition-all hover:bg-muted/50",
                     shortageStrategy === "partial"
-                      ? "bg-background border-amber-500 shadow-sm ring-1 ring-amber-500"
+                      ? "bg-background border-amber-500 shadow-xs ring-1 ring-amber-500"
                       : "bg-background/50 border-slate-200"
                   )}
                 >
@@ -445,7 +445,7 @@ export function TaskActionDrawer({
                   className={cn(
                     "flex flex-col text-left p-3 rounded-lg border text-xs font-medium transition-all hover:bg-muted/50",
                     shortageStrategy === "fail"
-                      ? "bg-background border-amber-500 shadow-sm ring-1 ring-amber-500"
+                      ? "bg-background border-amber-500 shadow-xs ring-1 ring-amber-500"
                       : "bg-background/50 border-slate-200"
                   )}
                 >

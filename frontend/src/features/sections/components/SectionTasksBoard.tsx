@@ -366,8 +366,8 @@ function groupChevron(
       type="button"
       className={
         tone === "mobile"
-          ? "p-0.5 hover:bg-muted/50 rounded transition-colors cursor-pointer"
-          : "p-0.5 hover:bg-slate-200 rounded transition-colors text-slate-500 hover:text-slate-800 dark:text-slate-400 dark:hover:bg-slate-700 dark:hover:text-slate-100"
+          ? "p-0.5 hover:bg-muted/50 rounded-sm transition-colors cursor-pointer"
+          : "p-0.5 hover:bg-slate-200 rounded-sm transition-colors text-slate-500 hover:text-slate-800 dark:text-slate-400 dark:hover:bg-slate-700 dark:hover:text-slate-100"
       }
       onClick={(event) => {
         event.stopPropagation();
@@ -1343,7 +1343,7 @@ export function SectionTasksBoard({
         placeholder: "Поиск",
         layoutSpan: "min-w-[250px]",
       },
-      ...(toolbar ? [{ kind: "custom" as const, key: "toolbar", node: toolbar, layoutSpan: "flex-shrink-0" }] : []),
+      ...(toolbar ? [{ kind: "custom" as const, key: "toolbar", node: toolbar, layoutSpan: "shrink-0" }] : []),
       ...(readOnly ? [] : [{
         kind: "bulk" as const,
         key: "bulk-mode",

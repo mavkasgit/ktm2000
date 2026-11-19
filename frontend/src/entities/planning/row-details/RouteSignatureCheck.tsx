@@ -160,7 +160,7 @@ export function RouteSignatureCheckCard({
             <li key={index} className="flex min-w-0 flex-1 flex-col">
               <div
                 className={cn(
-                  "h-1.5 rounded-sm",
+                  "h-1.5 rounded-xs",
                   isTransit(step) ? "bg-muted" : "bg-slate-700",
                   index === lastIndex && "bg-emerald-600",
                   inDivergence && (wasExpected ? "bg-amber-400" : "bg-amber-600"),

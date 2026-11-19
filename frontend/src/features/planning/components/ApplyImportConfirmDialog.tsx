@@ -88,7 +88,7 @@ export function ApplyImportConfirmDialog(props: {
                 </div>
               )}
             </dl>
-            <div className="rounded border p-2">
+            <div className="rounded-sm border p-2">
               <div className="text-muted-foreground">Файл</div>
               <div className="font-medium break-all">{filename || "—"}</div>
               <div className="mt-1 text-xs text-muted-foreground">
@@ -97,13 +97,13 @@ export function ApplyImportConfirmDialog(props: {
               </div>
             </div>
             {newerBatch && (
-              <div className="rounded border border-amber-200 bg-amber-50 p-3 text-amber-900">
+              <div className="rounded-sm border border-amber-200 bg-amber-50 p-3 text-amber-900">
                 После распознавания этого файла применялся другой импорт плана «{newerBatch.filename}». Строки
                 распознаны по состоянию плана на тот момент — проверьте дубликаты и конфликты перед загрузкой.
               </div>
             )}
             {stats.invalid > 0 && (
-              <div className="rounded border border-red-200 bg-red-50 p-3">
+              <div className="rounded-sm border border-red-200 bg-red-50 p-3">
                 <div className="font-medium text-red-900 mb-2">Ошибки в {stats.invalid} строках:</div>
                 <div className="space-y-1 max-h-40 overflow-y-auto text-xs">
                   {errorBreakdownEntries.map(([error, count]) => (

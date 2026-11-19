@@ -751,7 +751,7 @@ export function ImportRemaindersDialog({
                 Одна таблица для всех остатков: годный, брак или окончательный брак — статус указывается в колонке{" "}
                 <strong className="text-foreground">«Статус качества»</strong>. Заголовки необязательны: без них
                 столбцы читаются в порядке шаблона. Загрузите Excel или нажмите{" "}
-                <kbd className="px-1 py-0.5 rounded border border-border bg-muted text-[10px] font-mono">Ctrl+V</kbd>{" "}
+                <kbd className="px-1 py-0.5 rounded-sm border border-border bg-muted text-[10px] font-mono">Ctrl+V</kbd>{" "}
                 — данные из буфера подхватятся сразу.
               </p>
 
@@ -865,7 +865,7 @@ export function ImportRemaindersDialog({
                       {IMPORT_QUALITY_OPTIONS.map((option) => (
                         <span
                           key={option.value}
-                          className={`inline-flex items-center px-1.5 py-0.5 rounded text-[10px] font-medium border ${qualityBadgeClass(option.value)}`}
+                          className={`inline-flex items-center px-1.5 py-0.5 rounded-sm text-[10px] font-medium border ${qualityBadgeClass(option.value)}`}
                         >
                           {option.label}
                         </span>
@@ -887,7 +887,7 @@ export function ImportRemaindersDialog({
                           return (
                             <span
                               key={`${op.section_code}-${op.operation_code ?? op.operation_name}`}
-                              className={`inline-flex items-center gap-1 px-1.5 py-0.5 rounded text-[10px] font-medium leading-5 ${
+                              className={`inline-flex items-center gap-1 px-1.5 py-0.5 rounded-sm text-[10px] font-medium leading-5 ${
                                 accentColor ? "" : "bg-muted text-foreground border border-border/80"
                               }`}
                               style={
@@ -959,7 +959,7 @@ export function ImportRemaindersDialog({
                         checked={clearExisting}
                         disabled={Object.keys(targetSectionOverrides).length > 0}
                         onChange={(e) => setClearExisting(e.target.checked)}
-                        className="h-3 w-3 rounded border-input text-primary focus:ring-primary"
+                        className="h-3 w-3 rounded-sm border-input text-primary focus:ring-primary"
                       />
                       <span className="text-destructive font-semibold">Очистить перед импортом</span>
                     </label>

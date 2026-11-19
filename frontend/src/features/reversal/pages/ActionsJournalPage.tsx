@@ -139,7 +139,7 @@ export function ActionsJournalPage() {
       // их держат тесты: узел собственного `Select` в общем ряду панели.
       kind: "custom",
       key: "type",
-      layoutSpan: "min-w-[200px] flex-shrink-0",
+      layoutSpan: "min-w-[200px] shrink-0",
       node: (
         <Select value={typeFilterValue} onValueChange={setSingleFilter("actionType")}>
           <SelectTrigger className="h-9 w-full" data-testid="filter-type">
@@ -159,7 +159,7 @@ export function ActionsJournalPage() {
     {
       kind: "custom",
       key: "status",
-      layoutSpan: "min-w-[180px] flex-shrink-0",
+      layoutSpan: "min-w-[180px] shrink-0",
       node: (
         <Select value={statusFilterValue} onValueChange={setSingleFilter("status")}>
           <SelectTrigger className="h-9 w-full" data-testid="filter-status">

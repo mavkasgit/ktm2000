@@ -706,7 +706,7 @@ function groupChevron(
     <button
       type="button"
       className={cn(
-        "p-1 hover:bg-muted rounded transition-colors text-muted-foreground",
+        "p-1 hover:bg-muted rounded-sm transition-colors text-muted-foreground",
         tone === "mobile" && "md:hidden",
       )}
       title={label}
@@ -1527,7 +1527,7 @@ export function TransfersPage() {
             onClick={() => setReadyPrintOpen(true)}
           />
         ),
-        layoutSpan: "flex-shrink-0",
+        layoutSpan: "shrink-0",
       },
       {
         kind: "bulk",
@@ -2286,7 +2286,7 @@ function EditTransferDialog({
           {showCancelConfirm ? (
             <div className="space-y-3 rounded-lg border border-destructive bg-destructive/5 p-3.5 mt-2">
               <div className="flex items-start gap-2 text-destructive">
-                <AlertCircle className="h-5 w-5 flex-shrink-0 mt-0.5" />
+                <AlertCircle className="h-5 w-5 shrink-0 mt-0.5" />
                 <div>
                   <h4 className="font-semibold text-sm">Аннулировать передачу?</h4>
                   <p className="text-xs text-muted-foreground mt-0.5">

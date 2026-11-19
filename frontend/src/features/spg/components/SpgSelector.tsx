@@ -54,7 +54,7 @@ export function SpgSelector({ spgs, selectedIds, onToggle, onSelect, onClear }: 
             className={cn(
               "flex items-center rounded-lg border text-sm font-medium transition-colors overflow-hidden",
               active
-                ? "border-primary bg-primary text-primary-foreground shadow-sm"
+                ? "border-primary bg-primary text-primary-foreground shadow-xs"
                 : "border-border bg-card hover:border-muted-foreground/30",
             )}
           >

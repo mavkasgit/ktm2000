@@ -115,11 +115,11 @@ export function DailyPlansPanel({
   }, [extraVisible, plans, search, selectedPlanIds]);
 
   return (
-    <aside className="flex flex-col space-y-3 rounded-lg border border-slate-200 bg-white p-3 shadow-sm lg:h-[calc(100vh-2rem)]">
+    <aside className="flex flex-col space-y-3 rounded-lg border border-slate-200 bg-white p-3 shadow-xs lg:h-[calc(100vh-2rem)]">
       <div className="flex items-center justify-between gap-2">
         <button
           type="button"
-          className="group min-w-0 flex-1 justify-center rounded-md px-1 py-0.5 text-center transition-colors hover:bg-blue-50 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-blue-500"
+          className="group min-w-0 flex-1 justify-center rounded-md px-1 py-0.5 text-center transition-colors hover:bg-blue-50 focus-visible:outline-hidden focus-visible:ring-2 focus-visible:ring-blue-500"
           onClick={onOpenPlans}
           disabled={!onOpenPlans || creating}
           aria-label={opensPlans ? "Открыть дневные планы" : "Вернуться к заданиям"}
@@ -338,7 +338,7 @@ function PlanCard({ entry, selected, onlySelected, onSelectPlan, onTogglePlan }:
         aria-checked={selected}
         onClick={() => onTogglePlan(plan.id)}
         title={selected ? "Убрать план из выбранных" : "Добавить план к выбранным"}
-        className="flex shrink-0 items-center px-2.5 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-blue-500"
+        className="flex shrink-0 items-center px-2.5 focus-visible:outline-hidden focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-blue-500"
       >
         <span
           aria-hidden="true"
@@ -355,7 +355,7 @@ function PlanCard({ entry, selected, onlySelected, onSelectPlan, onTogglePlan }:
         aria-pressed={onlySelected}
         onClick={() => onSelectPlan(plan.id)}
         title="Показать только этот план"
-        className="min-w-0 flex-1 py-2 pr-2.5 text-left focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-blue-500"
+        className="min-w-0 flex-1 py-2 pr-2.5 text-left focus-visible:outline-hidden focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-blue-500"
       >
         <div className="flex items-center justify-between gap-2">
           <span className="truncate text-sm font-medium">

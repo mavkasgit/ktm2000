@@ -62,7 +62,7 @@ function RouteFlowNodeComponent({ data, selected }: NodeProps<Node<RouteFlowNode
   return (
     <div
       className={`
-        relative w-[300px] rounded-lg border-2 bg-card p-3 shadow-sm transition-all
+        relative w-[300px] rounded-lg border-2 bg-card p-3 shadow-xs transition-all
         ${selected ? "border-primary ring-2 ring-primary/20" : "border-border"}
         ${nodeData.is_final ? "border-green-500 bg-green-50/50" : ""}
       `}
@@ -95,7 +95,7 @@ function RouteFlowNodeComponent({ data, selected }: NodeProps<Node<RouteFlowNode
       </div>
 
       {nodeData.operation_name && (
-        <div className="mb-2 rounded bg-muted px-2 py-1 text-xs">
+        <div className="mb-2 rounded-sm bg-muted px-2 py-1 text-xs">
           {nodeData.operation_name}
         </div>
       )}
@@ -137,7 +137,7 @@ function RouteFlowNodeComponent({ data, selected }: NodeProps<Node<RouteFlowNode
             e.stopPropagation();
             nodeData.onInsertAtStart?.();
           }}
-          className="absolute left-[-22px] top-1/2 -translate-y-1/2 h-6 w-6 rounded-full border bg-background text-muted-foreground hover:text-foreground hover:border-primary shadow-sm text-sm leading-none z-20 cursor-pointer"
+          className="absolute left-[-22px] top-1/2 -translate-y-1/2 h-6 w-6 rounded-full border bg-background text-muted-foreground hover:text-foreground hover:border-primary shadow-xs text-sm leading-none z-20 cursor-pointer"
           title="Добавить в начало"
         >
           +
@@ -150,7 +150,7 @@ function RouteFlowNodeComponent({ data, selected }: NodeProps<Node<RouteFlowNode
             e.stopPropagation();
             nodeData.onInsertAtEnd?.();
           }}
-          className="absolute right-[-22px] top-1/2 -translate-y-1/2 h-6 w-6 rounded-full border bg-background text-muted-foreground hover:text-foreground hover:border-primary shadow-sm text-sm leading-none z-20 cursor-pointer"
+          className="absolute right-[-22px] top-1/2 -translate-y-1/2 h-6 w-6 rounded-full border bg-background text-muted-foreground hover:text-foreground hover:border-primary shadow-xs text-sm leading-none z-20 cursor-pointer"
           title="Добавить в конец"
         >
           +

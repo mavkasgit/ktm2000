@@ -192,7 +192,7 @@ export const RouteTreeOverview = forwardRef<RouteTreeOverviewRef, RouteTreeOverv
                     </span>
                     <button
                       type="button"
-                      className="p-0.5 rounded hover:bg-accent text-muted-foreground hover:text-foreground disabled:opacity-30 disabled:cursor-default cursor-pointer"
+                      className="p-0.5 rounded-sm hover:bg-accent text-muted-foreground hover:text-foreground disabled:opacity-30 disabled:cursor-default cursor-pointer"
                       disabled={routeIndex === 0}
                       onClick={() => moveRouteBy(route.id, -1)}
                       title="Переместить вверх"
@@ -201,7 +201,7 @@ export const RouteTreeOverview = forwardRef<RouteTreeOverviewRef, RouteTreeOverv
                     </button>
                     <button
                       type="button"
-                      className="p-0.5 rounded hover:bg-accent text-muted-foreground hover:text-foreground disabled:opacity-30 disabled:cursor-default cursor-pointer"
+                      className="p-0.5 rounded-sm hover:bg-accent text-muted-foreground hover:text-foreground disabled:opacity-30 disabled:cursor-default cursor-pointer"
                       disabled={routeIndex === filteredRoutes.length - 1}
                       onClick={() => moveRouteBy(route.id, 1)}
                       title="Переместить вниз"

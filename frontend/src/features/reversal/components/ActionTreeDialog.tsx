@@ -28,7 +28,7 @@ function TreeRow({
         type="button"
         data-testid={`tree-node-${node.id}`}
         onClick={() => onSelect?.(node)}
-        className={`flex w-full items-center gap-2 rounded px-2 py-1 text-left text-sm hover:bg-slate-100 ${
+        className={`flex w-full items-center gap-2 rounded-sm px-2 py-1 text-left text-sm hover:bg-slate-100 ${
           selected ? "bg-slate-200 font-medium" : ""
         }`}
         style={{ paddingLeft: `${depth * 20 + 8}px` }}
@@ -87,7 +87,7 @@ export function ActionTreeDialog({
       <p className="text-xs text-slate-500">
         Узлов в цепочке: {tree.total_nodes}
       </p>
-      <div className="max-h-[50vh] overflow-auto rounded border border-slate-200 bg-slate-50/60 p-1">
+      <div className="max-h-[50vh] overflow-auto rounded-sm border border-slate-200 bg-slate-50/60 p-1">
         <TreeRow
           node={tree.root}
           depth={0}

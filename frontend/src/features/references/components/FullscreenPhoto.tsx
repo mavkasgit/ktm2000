@@ -175,7 +175,7 @@ export function FullscreenPhoto({
       >
         <button
           onClick={() => void handleCopy()}
-          className="p-2.5 bg-zinc-900/90 hover:bg-zinc-800 text-zinc-200 hover:text-white rounded-full border border-zinc-700/60 shadow-lg backdrop-blur-sm transition-all active:scale-95 duration-150"
+          className="p-2.5 bg-zinc-900/90 hover:bg-zinc-800 text-zinc-200 hover:text-white rounded-full border border-zinc-700/60 shadow-lg backdrop-blur-xs transition-all active:scale-95 duration-150"
           type="button"
           title="Копировать фото"
           aria-label="Копировать фото"
@@ -184,7 +184,7 @@ export function FullscreenPhoto({
         </button>
         <button
           onClick={() => void handleDownload()}
-          className="p-2.5 bg-zinc-900/90 hover:bg-zinc-800 text-zinc-200 hover:text-white rounded-full border border-zinc-700/60 shadow-lg backdrop-blur-sm transition-all active:scale-95 duration-150"
+          className="p-2.5 bg-zinc-900/90 hover:bg-zinc-800 text-zinc-200 hover:text-white rounded-full border border-zinc-700/60 shadow-lg backdrop-blur-xs transition-all active:scale-95 duration-150"
           type="button"
           title="Скачать фото"
           aria-label="Скачать фото"
@@ -197,7 +197,7 @@ export function FullscreenPhoto({
             const rect = containerRef.current?.getBoundingClientRect();
             if (rect) zoomToPoint(rect.left + rect.width / 2, rect.top + rect.height / 2, newScale);
           }}
-          className="p-2.5 bg-zinc-900/90 hover:bg-zinc-800 text-zinc-200 hover:text-white rounded-full border border-zinc-700/60 shadow-lg backdrop-blur-sm transition-all active:scale-95 duration-150"
+          className="p-2.5 bg-zinc-900/90 hover:bg-zinc-800 text-zinc-200 hover:text-white rounded-full border border-zinc-700/60 shadow-lg backdrop-blur-xs transition-all active:scale-95 duration-150"
           type="button"
           title="Приблизить (+)"
         >
@@ -209,7 +209,7 @@ export function FullscreenPhoto({
             const rect = containerRef.current?.getBoundingClientRect();
             if (rect) zoomToPoint(rect.left + rect.width / 2, rect.top + rect.height / 2, newScale);
           }}
-          className="p-2.5 bg-zinc-900/90 hover:bg-zinc-800 text-zinc-200 hover:text-white rounded-full border border-zinc-700/60 shadow-lg backdrop-blur-sm transition-all active:scale-95 duration-150"
+          className="p-2.5 bg-zinc-900/90 hover:bg-zinc-800 text-zinc-200 hover:text-white rounded-full border border-zinc-700/60 shadow-lg backdrop-blur-xs transition-all active:scale-95 duration-150"
           type="button"
           title="Отдалить (-)"
         >
@@ -217,7 +217,7 @@ export function FullscreenPhoto({
         </button>
         <button
           onClick={handleDoubleClick}
-          className="p-2.5 bg-zinc-900/90 hover:bg-zinc-800 text-zinc-200 hover:text-white rounded-full border border-zinc-700/60 shadow-lg backdrop-blur-sm transition-all active:scale-95 duration-150"
+          className="p-2.5 bg-zinc-900/90 hover:bg-zinc-800 text-zinc-200 hover:text-white rounded-full border border-zinc-700/60 shadow-lg backdrop-blur-xs transition-all active:scale-95 duration-150"
           type="button"
           title="Сбросить масштаб"
         >
@@ -231,7 +231,7 @@ export function FullscreenPhoto({
             void exit().catch(() => {});
             onClose();
           }}
-          className="p-2.5 bg-zinc-900/90 hover:bg-zinc-800 text-zinc-200 hover:text-white rounded-full border border-zinc-700/60 shadow-lg backdrop-blur-sm transition-all active:scale-95 duration-150"
+          className="p-2.5 bg-zinc-900/90 hover:bg-zinc-800 text-zinc-200 hover:text-white rounded-full border border-zinc-700/60 shadow-lg backdrop-blur-xs transition-all active:scale-95 duration-150"
           type="button"
           title="Закрыть"
         >
@@ -242,7 +242,7 @@ export function FullscreenPhoto({
       {notice && (
         <div
           role="status"
-          className={`absolute bottom-16 left-1/2 -translate-x-1/2 z-10 rounded-full px-4 py-2 text-sm text-white shadow-lg backdrop-blur-sm ${
+          className={`absolute bottom-16 left-1/2 -translate-x-1/2 z-10 rounded-full px-4 py-2 text-sm text-white shadow-lg backdrop-blur-xs ${
             notice.tone === "error" ? "bg-red-600/90" : "bg-green-600/90"
           }`}
         >

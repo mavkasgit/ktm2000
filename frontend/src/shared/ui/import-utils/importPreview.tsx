@@ -57,7 +57,7 @@ export function ImportPreviewSheetTabs({
 }: ImportPreviewSheetTabsProps) {
   const btnClass =
     size === "sm"
-      ? "px-2 py-0.5 text-xs rounded border transition-colors"
+      ? "px-2 py-0.5 text-xs rounded-sm border transition-colors"
       : "px-3 py-1.5 text-xs rounded-md border transition-colors";
 
   return (

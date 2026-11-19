@@ -18,7 +18,7 @@ const ZERO_TOTAL_REASON = "Итог 0: профиль не помещается 
 /** Пометка основной длины: её выбирает пользователь (ADR-0013). */
 function PrimaryMark({ isPrimary }: { isPrimary: boolean }) {
   if (!isPrimary) return null;
-  return <span className="ml-1.5 rounded bg-primary px-1 py-0.5 text-[10px] font-semibold text-primary-foreground">основная</span>;
+  return <span className="ml-1.5 rounded-sm bg-primary px-1 py-0.5 text-[10px] font-semibold text-primary-foreground">основная</span>;
 }
 
 /**

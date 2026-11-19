@@ -790,7 +790,7 @@ export function PlanPage() {
                 </Button>
               </div>
               <p className="text-sm text-muted-foreground mt-1">
-                Выбирайте позиции кликом по строке, используйте фильтры для отбора. Примените действие — «Утвердить» или «Удалить». <kbd className="px-1 py-0.5 text-xs rounded bg-muted font-mono">Esc</kbd> — выход.
+                Выбирайте позиции кликом по строке, используйте фильтры для отбора. Примените действие — «Утвердить» или «Удалить». <kbd className="px-1 py-0.5 text-xs rounded-sm bg-muted font-mono">Esc</kbd> — выход.
               </p>
             </div>
           )}

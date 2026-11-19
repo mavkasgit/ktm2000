@@ -231,7 +231,7 @@ function BalanceGroupRow({
         <div className="flex items-center gap-1">
           <button
             type="button"
-            className="p-0.5 rounded text-muted-foreground transition-colors hover:bg-slate-200 hover:text-slate-800 dark:hover:bg-slate-700 dark:hover:text-slate-100"
+            className="p-0.5 rounded-sm text-muted-foreground transition-colors hover:bg-slate-200 hover:text-slate-800 dark:hover:bg-slate-700 dark:hover:text-slate-100"
             onClick={(event) => {
               event.stopPropagation();
               onToggle();

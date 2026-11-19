@@ -72,7 +72,7 @@ export function BulkPowerBar<TId extends BulkId, TContext>({
   };
 
   return (
-    <div className={cn("sticky top-2 z-30 mb-3 rounded-md border bg-background/95 p-2 shadow-sm backdrop-blur", className)}>
+    <div className={cn("sticky top-2 z-30 mb-3 rounded-md border bg-background/95 p-2 shadow-xs backdrop-blur-sm", className)}>
       <div className="flex flex-col gap-2 md:flex-row md:items-center">
         <div className="shrink-0 text-sm font-medium">Выбрано: {selectedCount}</div>
         <div className="flex flex-wrap gap-1.5">

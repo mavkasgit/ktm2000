@@ -430,7 +430,7 @@ export function AuditLogsPage() {
                               return (
                                 <span
                                   key={id}
-                                  className={`px-1.5 py-0.5 rounded text-[10.5px] border font-mono ${
+                                  className={`px-1.5 py-0.5 rounded-sm text-[10.5px] border font-mono ${
                                     isDeleted
                                       ? "bg-red-50 border-red-200 text-red-600 line-through font-normal opacity-85"
                                       : "bg-slate-50 border-slate-200 text-slate-600"
@@ -455,7 +455,7 @@ export function AuditLogsPage() {
                       {/* Действие (action) */}
                       <td className={cn(TABLE_ROW_DENSE.cell, "align-middle truncate")}>
                         {entry.action ? (
-                          <span className="px-1.5 py-0.5 rounded bg-indigo-50 border border-indigo-100 text-indigo-700 text-[10px] uppercase truncate inline-block max-w-full align-middle">
+                          <span className="px-1.5 py-0.5 rounded-sm bg-indigo-50 border border-indigo-100 text-indigo-700 text-[10px] uppercase truncate inline-block max-w-full align-middle">
                             {entry.action}
                           </span>
                         ) : (
@@ -511,12 +511,12 @@ export function AuditLogsPage() {
                               <div className="space-y-3">
                                 <div>
                                   <p className="text-slate-400 uppercase font-bold text-[9px] tracking-wider">Полное сообщение</p>
-                                  <p className="whitespace-pre-wrap leading-relaxed text-slate-700 bg-muted/30 p-2.5 rounded border border-slate-100">{entry.message}</p>
+                                  <p className="whitespace-pre-wrap leading-relaxed text-slate-700 bg-muted/30 p-2.5 rounded-sm border border-slate-100">{entry.message}</p>
                                 </div>
                                 {entry.changes && (
                                   <div>
                                     <p className="text-slate-400 uppercase font-bold text-[9px] tracking-wider mb-1">Изменения полей (дифф)</p>
-                                    <div className="bg-muted/30 border border-slate-100 rounded p-2.5 space-y-1.5 font-mono text-[11px] text-slate-700">
+                                    <div className="bg-muted/30 border border-slate-100 rounded-sm p-2.5 space-y-1.5 font-mono text-[11px] text-slate-700">
                                       <div className="grid grid-cols-3 font-bold border-b border-slate-200/60 pb-1 text-[9px] uppercase tracking-wider text-slate-400">
                                         <span>Поле</span>
                                         <span>Было</span>
@@ -528,8 +528,8 @@ export function AuditLogsPage() {
                                         return (
                                           <div key={key} className="grid grid-cols-3 py-0.5 border-b border-slate-100/60 last:border-0 items-center">
                                             <span className="text-slate-600 truncate pr-1" title={key}>{key}</span>
-                                            <span className="text-red-600 bg-red-50 px-1 rounded truncate mr-1" title={valBefore}>{valBefore}</span>
-                                            <span className="text-emerald-700 bg-emerald-50 px-1 rounded truncate" title={valAfter}>{valAfter}</span>
+                                            <span className="text-red-600 bg-red-50 px-1 rounded-sm truncate mr-1" title={valBefore}>{valBefore}</span>
+                                            <span className="text-emerald-700 bg-emerald-50 px-1 rounded-sm truncate" title={valAfter}>{valAfter}</span>
                                           </div>
                                         );
                                       })}
@@ -541,31 +541,31 @@ export function AuditLogsPage() {
                                 <div className="grid grid-cols-2 gap-2">
                                   <div>
                                     <p className="text-slate-400 uppercase font-bold text-[9px] tracking-wider">Сущность</p>
-                                    <p className="text-slate-700 bg-muted/30 p-2 rounded border border-slate-100 mt-1">
+                                    <p className="text-slate-700 bg-muted/30 p-2 rounded-sm border border-slate-100 mt-1">
                                       {entityLabel(entry.entity_type, entry.entity_id)}
                                     </p>
                                   </div>
                                   <div>
                                     <p className="text-slate-400 uppercase font-bold text-[9px] tracking-wider">Действие</p>
-                                    <p className="text-slate-700 bg-muted/30 p-2 rounded border border-slate-100 mt-1">
+                                    <p className="text-slate-700 bg-muted/30 p-2 rounded-sm border border-slate-100 mt-1">
                                       {entry.action || "—"}
                                     </p>
                                   </div>
                                 </div>
                                 <div>
                                   <p className="text-slate-400 uppercase font-bold text-[9px] tracking-wider">Пользователь</p>
-                                  <p className="text-slate-700 bg-muted/30 p-2 rounded border border-slate-100 mt-1">👤 {entry.user_name || "—"}</p>
+                                  <p className="text-slate-700 bg-muted/30 p-2 rounded-sm border border-slate-100 mt-1">👤 {entry.user_name || "—"}</p>
                                 </div>
                                 {entry.comment && (
                                   <div>
                                     <p className="text-slate-400 uppercase font-bold text-[9px] tracking-wider">Комментарий исполнителя</p>
-                                    <p className="text-slate-700 italic bg-muted/30 p-2.5 rounded border border-slate-100 mt-1">💬 {entry.comment}</p>
+                                    <p className="text-slate-700 italic bg-muted/30 p-2.5 rounded-sm border border-slate-100 mt-1">💬 {entry.comment}</p>
                                   </div>
                                 )}
                                 {entry.error_details && (
                                   <div>
                                     <p className="text-slate-400 uppercase font-bold text-[9px] tracking-wider">Сведения об ошибке</p>
-                                    <p className="text-red-600 bg-red-50/40 p-2.5 rounded border border-red-100 mt-1">⚠️ {entry.error_details}</p>
+                                    <p className="text-red-600 bg-red-50/40 p-2.5 rounded-sm border border-red-100 mt-1">⚠️ {entry.error_details}</p>
                                   </div>
                                 )}
                               </div>

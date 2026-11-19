@@ -59,7 +59,7 @@ export function PairedHangerRowView({ row }: { row: PairedHangerCalcRow }) {
           <span className="whitespace-nowrap">
             {line.lengthLabel}
             {line.isPrimary && (
-              <span className="ml-1.5 rounded bg-primary px-1 py-0.5 text-[10px] font-semibold text-primary-foreground">основная</span>
+              <span className="ml-1.5 rounded-sm bg-primary px-1 py-0.5 text-[10px] font-semibold text-primary-foreground">основная</span>
             )}
           </span>
         )}

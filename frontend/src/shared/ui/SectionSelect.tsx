@@ -37,7 +37,7 @@ export function SectionSelect({
         {selectedSection && selectedSection.icon ? (
           <div className="flex items-center gap-1.5">
             <span
-              className="inline-flex h-5 w-5 shrink-0 items-center justify-center rounded"
+              className="inline-flex h-5 w-5 shrink-0 items-center justify-center rounded-sm"
               style={{ backgroundColor: `${iconColor}20`, color: iconColor }}
             >
               {renderIcon(selectedSection.icon, "h-3 w-3")}
@@ -63,7 +63,7 @@ export function SectionSelect({
               <div className="flex items-center gap-1.5">
                 {section.icon && (
                   <span
-                    className="inline-flex h-5 w-5 shrink-0 items-center justify-center rounded"
+                    className="inline-flex h-5 w-5 shrink-0 items-center justify-center rounded-sm"
                     style={{ backgroundColor: `${color}20`, color: color }}
                   >
                     {renderIcon(section.icon, "h-3 w-3")}

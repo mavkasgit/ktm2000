@@ -505,7 +505,7 @@ function ConditionRow({
                   key={`${presetKey}:${presetIndex}`}
                   type="button"
                   onClick={() => onApplyValuePreset(index, preset.value)}
-                  className="rounded border px-1.5 py-0.5 text-[10px] hover:bg-accent cursor-pointer"
+                  className="rounded-sm border px-1.5 py-0.5 text-[10px] hover:bg-accent cursor-pointer"
                 >
                   {preset.label}
                 </button>
@@ -1102,7 +1102,7 @@ export function RouteSelectionRulesSection({ refreshKey }: Props) {
               </button>
               <button
                 onClick={(event) => { event.stopPropagation(); openProfileEdit(profile); }}
-                className="p-0.5 rounded hover:bg-black/10 transition-colors"
+                className="p-0.5 rounded-sm hover:bg-black/10 transition-colors"
                 title={isReadOnly ? "Просмотр группы" : "Редактировать группу"}
               >
                 {isReadOnly ? <Eye className="h-3 w-3" /> : <Pencil className="h-3 w-3" />}

@@ -201,7 +201,7 @@ export function ExecutionDialogs({
                   />
                 </div>
                 {manualPassDialog.targetRouteStepId && manualPassDetail && (
-                  <div className="rounded border bg-muted/40 p-3 text-sm text-muted-foreground">
+                  <div className="rounded-sm border bg-muted/40 p-3 text-sm text-muted-foreground">
                     {manualPassDialog.targetRouteStepId === "complete"
                       ? "Будут вручную закрыты все этапы маршрута. Все созданные факты получат текущее время выполнения и учёта."
                       : "Будут вручную закрыты этапы до выбранного. Все созданные факты получат текущее время выполнения и учёта."}

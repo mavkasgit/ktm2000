@@ -26,7 +26,7 @@ export function TablePanelHeader({
         <button
           type="button"
           onClick={onToggleExpanded}
-          className="flex items-center gap-2 hover:opacity-80 transition-opacity focus:outline-none min-w-0"
+          className="flex items-center gap-2 hover:opacity-80 transition-opacity focus:outline-hidden min-w-0"
         >
           {expanded ? (
             <ChevronDown className="h-4 w-4 text-muted-foreground shrink-0" />

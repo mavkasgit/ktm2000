@@ -35,7 +35,7 @@ export function SectionLocationBadge({
   return (
     <span
       className={cn(
-        "inline-flex max-w-full items-center gap-1 rounded px-1.5 py-0.5 font-semibold leading-5 whitespace-nowrap",
+        "inline-flex max-w-full items-center gap-1 rounded-sm px-1.5 py-0.5 font-semibold leading-5 whitespace-nowrap",
         textSize,
         className,
       )}

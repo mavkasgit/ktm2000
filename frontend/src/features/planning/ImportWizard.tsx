@@ -728,7 +728,7 @@ export function ImportWizard(props: {
                       type="checkbox"
                       checked={normalizeHangerQuantity}
                       onChange={(e) => setNormalizeHangerQuantity(e.target.checked)}
-                      className="h-3.5 w-3.5 rounded border-gray-300 text-blue-600 focus:ring-blue-500"
+                      className="h-3.5 w-3.5 rounded-sm border-gray-300 text-blue-600 focus:ring-blue-500"
                     />
                     <span className="text-muted-foreground font-medium">Округлять до кратности подвеса</span>
                   </label>
@@ -741,7 +741,7 @@ export function ImportWizard(props: {
                   ) : activeTemplates.length > 0 ? (
                     <>
                       <span className="text-xs text-muted-foreground font-medium">Шаблон:</span>
-                      <div className="w-[300px] flex-shrink-0">
+                      <div className="w-[300px] shrink-0">
                         <Select value={activeTemplateId != null ? String(activeTemplateId) : "none"} onValueChange={(v) => setActiveTemplateId(v === "none" ? null : Number(v))}>
                           <SelectTrigger className="h-7 text-xs">
                             <SelectValue placeholder="Без шаблона" />
@@ -813,7 +813,7 @@ export function ImportWizard(props: {
                 {Object.keys(errorBreakdown).length > 0 && (
                   <div className="flex flex-wrap items-center gap-2 text-xs shrink-0">
                     {Object.entries(errorBreakdown).map(([code, count]) => (
-                      <span key={code} className="bg-red-50 text-red-700 px-2 py-0.5 rounded border border-red-100">
+                      <span key={code} className="bg-red-50 text-red-700 px-2 py-0.5 rounded-sm border border-red-100">
                         {PLAN_IMPORT_ERROR_LABELS[code] ?? code}: {count}
                       </span>
                     ))}
@@ -843,15 +843,15 @@ export function ImportWizard(props: {
                     <div className="p-4 space-y-3">
                       {Array.from({ length: 8 }).map((_, i) => (
                         <div key={i} className="flex items-center gap-3 animate-pulse">
-                          <div className="w-6 h-4 bg-muted rounded" />
-                          <div className="w-12 h-4 bg-muted rounded" />
-                          <div className="w-8 h-4 bg-muted rounded" />
-                          <div className="w-20 h-4 bg-muted rounded" />
-                          <div className="w-10 h-4 bg-muted rounded" />
-                          <div className="flex-1 h-4 bg-muted rounded" style={{ maxWidth: "300px" }} />
-                          <div className="flex-1 h-4 bg-muted rounded" style={{ maxWidth: "250px" }} />
-                          <div className="flex-1 h-4 bg-muted rounded" style={{ maxWidth: "120px" }} />
-                          <div className="flex-1 h-4 bg-muted rounded" style={{ maxWidth: "180px" }} />
+                          <div className="w-6 h-4 bg-muted rounded-sm" />
+                          <div className="w-12 h-4 bg-muted rounded-sm" />
+                          <div className="w-8 h-4 bg-muted rounded-sm" />
+                          <div className="w-20 h-4 bg-muted rounded-sm" />
+                          <div className="w-10 h-4 bg-muted rounded-sm" />
+                          <div className="flex-1 h-4 bg-muted rounded-sm" style={{ maxWidth: "300px" }} />
+                          <div className="flex-1 h-4 bg-muted rounded-sm" style={{ maxWidth: "250px" }} />
+                          <div className="flex-1 h-4 bg-muted rounded-sm" style={{ maxWidth: "120px" }} />
+                          <div className="flex-1 h-4 bg-muted rounded-sm" style={{ maxWidth: "180px" }} />
                         </div>
                       ))}
                     </div>
