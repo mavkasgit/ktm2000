@@ -111,7 +111,7 @@ function ColorPicker({
               type="button"
               disabled={disabled}
               className={cn(
-                "size-10 shrink-0 rounded-md border shadow-sm transition-transform",
+                "size-10 shrink-0 rounded-md border shadow-xs transition-transform",
                 disabled ? "cursor-not-allowed opacity-60" : "cursor-pointer hover:scale-105 active:scale-95"
               )}
               style={{ backgroundColor: value }}
@@ -171,7 +171,7 @@ function ColorPicker({
               type="button"
               disabled={disabled}
               className={cn(
-                "size-8 shrink-0 rounded-md border shadow-sm transition-transform",
+                "size-8 shrink-0 rounded-md border shadow-xs transition-transform",
                 disabled ? "cursor-not-allowed opacity-60" : "cursor-pointer hover:scale-105 active:scale-95"
               )}
               style={{ backgroundColor: value }}
@@ -281,7 +281,7 @@ function IconColorPicker({
               {!disabled && (
                 <button
                   type="button"
-                  className="p-0.5 rounded hover:bg-destructive/20 text-muted-foreground hover:text-destructive transition-colors"
+                  className="p-0.5 rounded-sm hover:bg-destructive/20 text-muted-foreground hover:text-destructive transition-colors"
                   onClick={() => onIconChange("")}
                   title="Убрать иконку"
                 >

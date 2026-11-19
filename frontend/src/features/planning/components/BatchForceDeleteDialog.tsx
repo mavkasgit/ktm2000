@@ -188,7 +188,7 @@ export function BatchForceDeleteDialog({
                 {preview.stock_effects.length === 0 ? (
                   <p className="text-muted-foreground">Проводок по этому импорту нет — склад не меняется.</p>
                 ) : (
-                  <div className="max-h-48 overflow-y-auto rounded border">
+                  <div className="max-h-48 overflow-y-auto rounded-sm border">
                     <table className="w-full text-xs">
                       <thead className="border-b bg-muted/50 sticky top-0">
                         <tr>
@@ -270,7 +270,7 @@ export function BatchForceDeleteDialog({
 
 function Count({ label, value }: { label: string; value: number }) {
   return (
-    <div className="rounded border px-2 py-1.5">
+    <div className="rounded-sm border px-2 py-1.5">
       <dt className="text-xs text-muted-foreground">{label}</dt>
       <dd className="text-base font-semibold tabular-nums">{value}</dd>
     </div>

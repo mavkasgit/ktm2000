@@ -2,6 +2,7 @@ import { writeFileSync } from "node:fs"
 import { resolve } from "node:path"
 import { fileURLToPath, URL } from "node:url"
 import react from "@vitejs/plugin-react"
+import tailwindcss from "@tailwindcss/vite"
 import { defineConfig, type Plugin } from "vite"
 
 const proxyTarget = process.env.VITE_PROXY_TARGET || "http://127.0.0.1:8012"
@@ -27,7 +28,7 @@ function appVersionPlugin(): Plugin {
 }
 
 export default defineConfig({
-  plugins: [react(), appVersionPlugin()],
+  plugins: [react(), tailwindcss(), appVersionPlugin()],
   resolve: {
     alias: {
       shared: fileURLToPath(new URL("./src/shared", import.meta.url)),

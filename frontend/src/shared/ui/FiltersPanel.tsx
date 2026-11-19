@@ -215,7 +215,7 @@ export function FiltersPanel({
       {compact ? (
         <div className="flex items-center gap-2 flex-wrap">
           {fields.map((field) => (
-            <div key={field.key} className={field.layoutSpan ?? "min-w-[160px] flex-shrink-0"}>
+            <div key={field.key} className={field.layoutSpan ?? "min-w-[160px] shrink-0"}>
               {field.kind === "custom" ? (
                 field.node
               ) : field.kind === "toggle" ? (
@@ -253,7 +253,7 @@ export function FiltersPanel({
             <Button
               variant={hasActiveFilters ? "default" : "ghost"}
               size="sm"
-              className="h-8 text-sm flex-shrink-0"
+              className="h-8 text-sm shrink-0"
               onClick={onReset}
             >
               <X className="mr-1 h-3.5 w-3.5" />
@@ -266,11 +266,11 @@ export function FiltersPanel({
           </div>
 
           {summaryCount > 0 && (
-            <div className="flex items-center gap-1.5 flex-nowrap flex-shrink-0">
+            <div className="flex items-center gap-1.5 flex-nowrap shrink-0">
               <span className="text-sm text-muted-foreground whitespace-nowrap">Активных фильтров: {summaryCount}</span>
               {summaryLabels.length > 0 &&
                 summaryLabels.map((label, i) => (
-                  <span key={i} className="px-2 py-0.5 bg-background border rounded text-xs whitespace-nowrap">
+                  <span key={i} className="px-2 py-0.5 bg-background border rounded-sm text-xs whitespace-nowrap">
                     {label}
                   </span>
                 ))}
@@ -325,7 +325,7 @@ export function FiltersPanel({
                   {summaryLabels.length > 0 && (
                     <div className="flex items-center gap-1.5 flex-wrap">
                       {summaryLabels.map((label, i) => (
-                        <span key={i} className="px-2 py-0.5 bg-background border rounded text-xs">
+                        <span key={i} className="px-2 py-0.5 bg-background border rounded-sm text-xs">
                           {label}
                         </span>
                       ))}

@@ -20,7 +20,7 @@ const TABS = [
   { to: "/reversal", label: "Отмена действий" },
 ] as const;
 
-const ACTIVE_CLASS = "rounded-md bg-white px-3 py-1.5 text-sm font-medium text-slate-800 shadow-sm";
+const ACTIVE_CLASS = "rounded-md bg-white px-3 py-1.5 text-sm font-medium text-slate-800 shadow-xs";
 const IDLE_CLASS = "rounded-md px-3 py-1.5 text-sm font-medium text-slate-500 transition-colors hover:text-slate-700";
 
 export function JournalTabs() {

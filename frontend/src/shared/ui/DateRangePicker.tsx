@@ -268,7 +268,7 @@ export function DateRangePicker({
             className={cn(
               "flex h-9 items-center gap-2 rounded-md border border-input bg-background text-sm",
               compact ? "px-2" : "w-full min-w-[180px] px-3",
-              "transition-colors hover:bg-accent/40 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2",
+              "transition-colors hover:bg-accent/40 focus-visible:outline-hidden focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2",
               disabled && "opacity-50 pointer-events-none",
               hasValue && "border-primary/40"
             )}
@@ -283,7 +283,7 @@ export function DateRangePicker({
               <span
                 role="button"
                 aria-label="Очистить период"
-                className="flex h-5 w-5 shrink-0 items-center justify-center rounded-sm text-muted-foreground hover:bg-accent hover:text-foreground cursor-pointer"
+                className="flex h-5 w-5 shrink-0 items-center justify-center rounded-xs text-muted-foreground hover:bg-accent hover:text-foreground cursor-pointer"
                 onClick={(e) => clearAll(e)}
               >
                 <X className="h-3.5 w-3.5" />
@@ -311,7 +311,7 @@ export function DateRangePicker({
                       type="button"
                       onClick={() => applyPreset(preset)}
                       className={cn(
-                        "flex items-center justify-between gap-2 rounded-sm px-2 py-1.5 text-left text-sm transition-colors",
+                        "flex items-center justify-between gap-2 rounded-xs px-2 py-1.5 text-left text-sm transition-colors",
                         "hover:bg-accent hover:text-accent-foreground",
                         isActive && "bg-primary/10 text-primary font-medium hover:bg-primary/15"
                       )}
@@ -350,7 +350,7 @@ export function DateRangePicker({
                     value={fromInput}
                     onChange={(e) => handleFromInputChange(e.target.value)}
                     placeholder="ДД.ММ.ГГГГ"
-                    className="mt-0.5 flex h-8 w-full rounded-md border border-input bg-background px-2 text-sm focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-1"
+                    className="mt-0.5 flex h-8 w-full rounded-md border border-input bg-background px-2 text-sm focus-visible:outline-hidden focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-1"
                     maxLength={10}
                   />
                 </div>
@@ -365,7 +365,7 @@ export function DateRangePicker({
                     value={toInput}
                     onChange={(e) => handleToInputChange(e.target.value)}
                     placeholder="ДД.ММ.ГГГГ"
-                    className="mt-0.5 flex h-8 w-full rounded-md border border-input bg-background px-2 text-sm focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-1"
+                    className="mt-0.5 flex h-8 w-full rounded-md border border-input bg-background px-2 text-sm focus-visible:outline-hidden focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-1"
                     maxLength={10}
                   />
                 </div>
@@ -566,7 +566,7 @@ function MonthCalendar({
               onMouseLeave={onDayLeave}
               className={cn(
                 "relative aspect-square flex items-center justify-center text-xs transition-colors",
-                "hover:bg-accent focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring",
+                "hover:bg-accent focus-visible:outline-hidden focus-visible:ring-2 focus-visible:ring-ring",
                 disabled && "opacity-30 cursor-not-allowed hover:bg-transparent",
                 inRange && "bg-primary/15 text-primary",
                 inPreview && "bg-primary/10",

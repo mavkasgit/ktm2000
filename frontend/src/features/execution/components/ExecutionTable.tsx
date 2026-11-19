@@ -252,7 +252,7 @@ export function ExecutionTable({
               </Button>
             </div>
             <p className="text-sm text-muted-foreground mt-1">
-              Выбирайте позиции кликом по строке, <kbd className="px-1 py-0.5 text-xs rounded bg-muted font-mono">Shift+Click</kbd> — диапазон. Примените действие через кнопки выше. <kbd className="px-1 py-0.5 text-xs rounded bg-muted font-mono">Esc</kbd> — выход.
+              Выбирайте позиции кликом по строке, <kbd className="px-1 py-0.5 text-xs rounded-sm bg-muted font-mono">Shift+Click</kbd> — диапазон. Примените действие через кнопки выше. <kbd className="px-1 py-0.5 text-xs rounded-sm bg-muted font-mono">Esc</kbd> — выход.
             </p>
           </div>
         )}

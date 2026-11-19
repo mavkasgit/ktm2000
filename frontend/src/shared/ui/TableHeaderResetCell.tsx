@@ -24,7 +24,7 @@ function ResetIconButton({
       type="button"
       className={cn(
         "inline-flex h-6 w-6 shrink-0 items-center justify-center rounded-md transition-colors",
-        "focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2",
+        "focus-visible:outline-hidden focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2",
         hasActiveFilters
           ? "bg-black text-white hover:bg-black/90 hover:text-white dark:bg-foreground dark:text-background dark:hover:bg-foreground/90 dark:hover:text-background"
           : "text-muted-foreground/45 hover:bg-black/[0.04] hover:text-muted-foreground dark:hover:bg-white/[0.06]",

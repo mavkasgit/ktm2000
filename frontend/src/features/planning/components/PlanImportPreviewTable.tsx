@@ -248,7 +248,7 @@ export function PlanImportPreviewTable({
                 <td className="p-2 font-semibold whitespace-nowrap">{rowNumDisplay}</td>
                 <td className="p-2">
                   {hangerTone ? (
-                    <span className={`inline-block rounded border px-1 font-semibold ${hangerTone}`}>{displaySku}</span>
+                    <span className={`inline-block rounded-sm border px-1 font-semibold ${hangerTone}`}>{displaySku}</span>
                   ) : (
                     displaySku
                   )}

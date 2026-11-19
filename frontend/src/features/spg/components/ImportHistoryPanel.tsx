@@ -193,7 +193,7 @@ export function ImportHistoryPanel() {
       value: search,
       onChange: setSearch,
       placeholder: "Поиск по файлу, складу, состоянию…",
-      layoutSpan: "min-w-[260px] flex-shrink-0",
+      layoutSpan: "min-w-[260px] shrink-0",
     },
   ];
 

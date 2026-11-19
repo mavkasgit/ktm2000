@@ -136,7 +136,7 @@ export function BulkCompleteFooter({
             {outsideFilter.length > 0 && (
               <button
                 type="button"
-                className="rounded border px-1.5 py-0.5 text-xs text-slate-700 hover:bg-muted"
+                className="rounded-sm border px-1.5 py-0.5 text-xs text-slate-700 hover:bg-muted"
                 onClick={() => setShowOutside((prev) => !prev)}
               >
                 вне текущего фильтра: {outsideFilter.length} {showOutside ? "▾" : "▸"}
@@ -211,9 +211,9 @@ export function BulkCompleteFooter({
               disabled={pending}
               onClick={() => onPerformedShiftChange(shift)}
               className={cn(
-                "flex h-8 items-center justify-center rounded px-3 text-sm font-medium transition-all",
+                "flex h-8 items-center justify-center rounded-sm px-3 text-sm font-medium transition-all",
                 performedShift === shift
-                  ? "bg-background text-foreground shadow-sm"
+                  ? "bg-background text-foreground shadow-xs"
                   : "text-muted-foreground hover:text-foreground",
               )}
             >

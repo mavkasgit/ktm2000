@@ -138,7 +138,7 @@ export function ImportPreviewContent({ preview }: { preview: CatalogPreview }) {
                   </td>
                   <td className="px-4 py-2">
                     {cfg && (
-                      <span className={`inline-flex items-center gap-1 px-2 py-0.5 rounded text-xs font-medium ${cfg.color}`}>
+                      <span className={`inline-flex items-center gap-1 px-2 py-0.5 rounded-sm text-xs font-medium ${cfg.color}`}>
                         {cfg.icon} {cfg.label}
                       </span>
                     )}

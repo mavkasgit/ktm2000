@@ -176,7 +176,7 @@ function StepDot({
       </div>
       {/* Tooltip */}
       <div className="pointer-events-none absolute bottom-full left-1/2 -translate-x-1/2 mb-2 hidden group-hover:block z-10">
-        <div className="bg-gray-900 text-white text-xs rounded px-2 py-1 whitespace-nowrap">
+        <div className="bg-gray-900 text-white text-xs rounded-sm px-2 py-1 whitespace-nowrap">
           Этап #{step.sequence}
         </div>
         <div className="w-2 h-2 bg-gray-900 transform rotate-45 -translate-y-1 mx-auto"></div>

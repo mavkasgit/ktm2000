@@ -79,7 +79,7 @@ function SectionsReferenceTable() {
                 {s.icon_color ? (
                   <>
                     <span
-                      className="inline-block w-6 h-6 rounded border align-middle"
+                      className="inline-block w-6 h-6 rounded-sm border align-middle"
                       style={{ backgroundColor: s.icon_color }}
                     />
                     <span className="ml-2 font-mono text-sm">{s.icon_color}</span>
@@ -118,7 +118,7 @@ function FaviconCandidates() {
               {c.icon ? (
                 <c.icon size={40} stroke={1.5} color={c.color} />
               ) : (
-                <div className="w-10 h-10 rounded" style={{ backgroundColor: c.color }} />
+                <div className="w-10 h-10 rounded-sm" style={{ backgroundColor: c.color }} />
               )}
             </div>
             {/* Real-size favicon previews */}
@@ -130,8 +130,8 @@ function FaviconCandidates() {
                 </>
               ) : (
                 <>
-                  <div className="w-4 h-4 rounded-sm" style={{ backgroundColor: c.color }} />
-                  <div className="w-8 h-8 rounded-sm" style={{ backgroundColor: c.color }} />
+                  <div className="w-4 h-4 rounded-xs" style={{ backgroundColor: c.color }} />
+                  <div className="w-8 h-8 rounded-xs" style={{ backgroundColor: c.color }} />
                 </>
               )}
             </div>

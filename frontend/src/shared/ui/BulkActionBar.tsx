@@ -32,7 +32,7 @@ export function BulkActionBar({ summary, children, actions, className }: BulkAct
   return (
     <div
       className={cn(
-        "fixed inset-x-0 bottom-0 z-40 border-t bg-background/95 backdrop-blur shadow-[0_-4px_24px_rgba(0,0,0,0.08)]",
+        "fixed inset-x-0 bottom-0 z-40 border-t bg-background/95 backdrop-blur-sm shadow-[0_-4px_24px_rgba(0,0,0,0.08)]",
         className,
       )}
     >

@@ -263,7 +263,7 @@ export function StockTransactionsHistoryDrawer({
     {
       kind: "custom",
       key: "period",
-      layoutSpan: "w-full sm:w-auto sm:min-w-[280px] max-w-md flex-shrink-0",
+      layoutSpan: "w-full sm:w-auto sm:min-w-[280px] max-w-md shrink-0",
       node: (
         <DateRangePicker
           from={dateRange.from}

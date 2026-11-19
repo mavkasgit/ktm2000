@@ -38,7 +38,7 @@ export function CatalogCard({
           {onSkuClick ? (
             <button
               type="button"
-              className="font-medium truncate text-sm text-blue-700 hover:underline focus:outline-none"
+              className="font-medium truncate text-sm text-blue-700 hover:underline focus:outline-hidden"
               title="Показать сводную информацию по артикулу"
               onClick={(e) => {
                 e.stopPropagation();
@@ -51,7 +51,7 @@ export function CatalogCard({
             <h3 className="font-medium truncate text-sm">{product.sku}</h3>
           )}
           {product.code && (
-            <span className="text-xs text-muted-foreground bg-muted rounded px-1.5 py-0.5 shrink-0" title="Уникальный код">
+            <span className="text-xs text-muted-foreground bg-muted rounded-sm px-1.5 py-0.5 shrink-0" title="Уникальный код">
               {product.code}
             </span>
           )}

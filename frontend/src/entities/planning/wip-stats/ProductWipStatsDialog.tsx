@@ -163,7 +163,7 @@ function RemainderRow({ rem, withResetCell = false }: { rem: ProductWipRemainder
         <div className="flex items-center gap-3">
           {rem.spg_icon && rem.spg_icon_color ? (
             <div
-              className="flex h-8 w-8 shrink-0 items-center justify-center rounded"
+              className="flex h-8 w-8 shrink-0 items-center justify-center rounded-sm"
               style={{ backgroundColor: rem.spg_icon_color + "20" }}
             >
               <span style={{ color: rem.spg_icon_color }}>
@@ -171,7 +171,7 @@ function RemainderRow({ rem, withResetCell = false }: { rem: ProductWipRemainder
               </span>
             </div>
           ) : (
-            <div className="flex h-8 w-8 shrink-0 items-center justify-center rounded bg-emerald-100 text-emerald-800">
+            <div className="flex h-8 w-8 shrink-0 items-center justify-center rounded-sm bg-emerald-100 text-emerald-800">
               <Package className="h-4 w-4" />
             </div>
           )}
@@ -215,7 +215,7 @@ function InWorkTaskRow({ task, withResetCell = false }: { task: ProductWipTask; 
         <div className="flex items-center gap-3">
           {task.section_icon && task.section_icon_color ? (
             <div
-              className="flex h-8 w-8 shrink-0 items-center justify-center rounded"
+              className="flex h-8 w-8 shrink-0 items-center justify-center rounded-sm"
               style={{ backgroundColor: task.section_icon_color + "20" }}
             >
               <span style={{ color: task.section_icon_color }}>
@@ -223,7 +223,7 @@ function InWorkTaskRow({ task, withResetCell = false }: { task: ProductWipTask; 
               </span>
             </div>
           ) : (
-            <div className="flex h-8 w-8 shrink-0 items-center justify-center rounded bg-blue-100 text-blue-800">
+            <div className="flex h-8 w-8 shrink-0 items-center justify-center rounded-sm bg-blue-100 text-blue-800">
               <ClipboardList className="h-4 w-4" />
             </div>
           )}

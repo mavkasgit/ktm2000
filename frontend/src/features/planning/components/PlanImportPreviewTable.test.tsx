@@ -77,7 +77,7 @@ describe("PlanImportPreviewTable", () => {
       expect(spanClass, label).toContain(`text-${tone}-700`);
       expect(spanClass, label).toContain(`border-${tone}-300`);
       expect(spanClass, label).toContain("inline-block");
-      expect(spanClass, label).toContain("rounded border ");
+      expect(spanClass, label).toContain("rounded-sm border ");
       expect(spanClass, label).toContain("px-1");
       expect(spanClass, label).toContain("font-semibold");
 

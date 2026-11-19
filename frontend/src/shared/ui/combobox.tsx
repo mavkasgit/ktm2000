@@ -69,7 +69,7 @@ export function Combobox({
               key={option.value}
               type="button"
               className={cn(
-                "w-full text-left px-2 py-1.5 text-sm rounded-sm hover:bg-accent flex items-center gap-2",
+                "w-full text-left px-2 py-1.5 text-sm rounded-xs hover:bg-accent flex items-center gap-2",
                 value === option.value && "bg-accent"
               )}
               onClick={() => {

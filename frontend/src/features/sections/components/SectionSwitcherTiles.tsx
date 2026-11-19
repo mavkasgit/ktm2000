@@ -70,7 +70,7 @@ export function SectionSwitcherTiles({
       <button
         key={section.id}
         type="button"
-        className={`rounded-lg border text-left transition hover:bg-accent/30 focus:outline-none focus:ring-2 focus:ring-ring ${
+        className={`rounded-lg border text-left transition hover:bg-accent/30 focus:outline-hidden focus:ring-2 focus:ring-ring ${
           isActive ? "border-primary bg-primary/5" : "border-border bg-card"
         } ${variant === "popover" ? "p-2" : "min-h-[96px] p-3"}`}
         onClick={() => onSelectCb ? onSelectCb(section.id) : onSelect(section.id)}

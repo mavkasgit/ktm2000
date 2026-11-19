@@ -91,7 +91,7 @@ function OperationStepPill({
   return (
     <span
       className={cn(
-        "inline-flex max-w-full items-center gap-1 rounded px-1.5 py-0.5 font-medium leading-5 whitespace-nowrap",
+        "inline-flex max-w-full items-center gap-1 rounded-sm px-1.5 py-0.5 font-medium leading-5 whitespace-nowrap",
         textSize,
         !accentColor && "border border-border/60 bg-muted/30 text-foreground",
       )}
@@ -192,7 +192,7 @@ export function RouteStepsDisplay({
           <div key={group[0].sequence} className="flex items-start gap-2 text-sm leading-tight">
             {group[0].section_icon && sectionColor ? (
               <div
-                className="flex h-6 w-6 shrink-0 items-center justify-center rounded"
+                className="flex h-6 w-6 shrink-0 items-center justify-center rounded-sm"
                 style={{ backgroundColor: `${sectionColor}20` }}
               >
                 <span style={{ color: sectionColor }}>
@@ -200,7 +200,7 @@ export function RouteStepsDisplay({
                 </span>
               </div>
             ) : (
-              <div className="flex-shrink-0 w-6 h-6 rounded-full bg-primary/10 text-primary text-xs font-bold flex items-center justify-center">
+              <div className="shrink-0 w-6 h-6 rounded-full bg-primary/10 text-primary text-xs font-bold flex items-center justify-center">
                 {group[0].sequence}
               </div>
             )}

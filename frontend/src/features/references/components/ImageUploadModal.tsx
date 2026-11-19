@@ -136,7 +136,7 @@ export function ImageUploadModal({
                 <img
                   src={previewUrl}
                   alt="Preview"
-                  className="max-h-64 mx-auto object-contain rounded"
+                  className="max-h-64 mx-auto object-contain rounded-sm"
                 />
                 <p className="text-sm text-muted-foreground">
                   Нажмите для замены

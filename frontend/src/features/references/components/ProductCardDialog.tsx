@@ -124,7 +124,7 @@ function ComponentPicker({
   const visible = results.filter((r) => !excludeIds.includes(r.id));
 
   return (
-    <div className="rounded border p-2 space-y-2" data-testid="component-picker">
+    <div className="rounded-sm border p-2 space-y-2" data-testid="component-picker">
       <div className="relative">
         <Search className="absolute left-3 top-1/2 -translate-y-1/2 h-4 w-4 text-muted-foreground" />
         <Input
@@ -148,7 +148,7 @@ function ComponentPicker({
         </Button>
       )}
       {visible.length > 0 && (
-        <div className="max-h-48 overflow-y-auto divide-y rounded border">
+        <div className="max-h-48 overflow-y-auto divide-y rounded-sm border">
           {visible.map((item) => (
             <button
               key={item.id}
@@ -347,7 +347,7 @@ export function ProductCardDialog({
                 ) : (
                   <div className="space-y-1.5">
                     {composition.map((item) => (
-                      <div key={item.component_product_id} className="flex items-center gap-2 rounded border p-2">
+                      <div key={item.component_product_id} className="flex items-center gap-2 rounded-sm border p-2">
                         <div className="min-w-0 flex-1">
                           <div className="text-sm font-medium flex items-center gap-2">
                             {item.sku}
@@ -367,7 +367,7 @@ export function ProductCardDialog({
               ) : (
                 <div className="space-y-2">
                   {draft.map((item, index) => (
-                    <div key={item.component_product_id} className="flex items-center gap-2 rounded border p-2">
+                    <div key={item.component_product_id} className="flex items-center gap-2 rounded-sm border p-2">
                       <div className="min-w-0 flex-1">
                         <div className="text-sm font-medium">{item.sku}</div>
                         <div className="text-xs text-muted-foreground truncate">{item.name}</div>

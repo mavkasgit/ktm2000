@@ -69,7 +69,7 @@ export function PositionSkuCell({
   const skuElement = onClick ? (
     <button
       type="button"
-      className="font-mono text-left text-blue-700 hover:underline focus:outline-none shrink-0"
+      className="font-mono text-left text-blue-700 hover:underline focus:outline-hidden shrink-0"
       onClick={(e) => {
         e.stopPropagation();
         onClick(sku);

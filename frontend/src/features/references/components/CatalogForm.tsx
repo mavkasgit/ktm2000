@@ -909,7 +909,7 @@ export const CatalogForm = forwardRef<CatalogFormRef, {
                 <span className="text-sm font-medium leading-none">Парный профиль:</span>
                 <span
                   className={cn(
-                    "text-xs px-1.5 py-0.5 rounded",
+                    "text-xs px-1.5 py-0.5 rounded-sm",
                     (product?.is_paired_profile ?? false)
                       ? "bg-purple-100 text-purple-800 font-medium"
                       : "bg-muted text-muted-foreground",
@@ -1250,7 +1250,7 @@ export const CatalogForm = forwardRef<CatalogFormRef, {
                       sheetPreview.result.is_calculable ? (
                         <>
                           <span className="text-sm font-medium">{sheetPreview.result.total} шт</span>
-                          <span className="rounded bg-emerald-100 px-1 text-[10px] font-semibold text-emerald-800">авто</span>
+                          <span className="rounded-sm bg-emerald-100 px-1 text-[10px] font-semibold text-emerald-800">авто</span>
                         </>
                       ) : (
                         <span className="text-xs text-destructive">{sheetPreview.result.reason ?? "Расчёт невозможен"}</span>

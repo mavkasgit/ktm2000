@@ -135,7 +135,7 @@ export function ImportClipboardBanner({
           </Badge>
         ) : null}
       </div>
-      <pre className="text-[10px] font-mono whitespace-pre-wrap max-h-28 overflow-y-auto rounded border border-amber-200/60 bg-background/80 p-2 leading-relaxed text-foreground">
+      <pre className="text-[10px] font-mono whitespace-pre-wrap max-h-28 overflow-y-auto rounded-sm border border-amber-200/60 bg-background/80 p-2 leading-relaxed text-foreground">
         {text}
       </pre>
       {hints ??

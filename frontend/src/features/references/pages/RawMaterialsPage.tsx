@@ -105,14 +105,14 @@ function QuantityPerHangerCell({ product }: { product: Product }) {
     if (eff.value == null) return <span className="text-muted-foreground">—</span>;
     return (
       <span
-        className="inline-flex items-center gap-1 rounded px-1.5 py-0.5 text-xs font-medium ring-1 ring-primary/40 bg-primary/10 text-secondary-foreground"
+        className="inline-flex items-center gap-1 rounded-sm px-1.5 py-0.5 text-xs font-medium ring-1 ring-primary/40 bg-primary/10 text-secondary-foreground"
         title={`${fmtQtyPrecise(eff.value)} шт (${eff.source === "auto" ? "авто" : "ручное"})`}
       >
         {fmtQtyPrecise(eff.value)} шт
         {eff.source === "auto" ? (
-          <span className="rounded bg-emerald-100 px-1 text-[10px] font-semibold text-emerald-800">авто</span>
+          <span className="rounded-sm bg-emerald-100 px-1 text-[10px] font-semibold text-emerald-800">авто</span>
         ) : (
-          <span className="rounded bg-amber-100 px-1 text-[10px] font-semibold text-amber-800">ручное</span>
+          <span className="rounded-sm bg-amber-100 px-1 text-[10px] font-semibold text-amber-800">ручное</span>
         )}
       </span>
     );
@@ -146,14 +146,14 @@ function QuantityPerHangerCell({ product }: { product: Product }) {
 
   return (
     <span
-      className="inline-flex items-center gap-1 rounded px-1.5 py-0.5 text-xs font-medium ring-1 ring-primary/40 bg-primary/10 text-secondary-foreground"
+      className="inline-flex items-center gap-1 rounded-sm px-1.5 py-0.5 text-xs font-medium ring-1 ring-primary/40 bg-primary/10 text-secondary-foreground"
       title={[describe(primaryLengthMm, primary), ...others.map(({ lengthMm, eff }) => describe(lengthMm, eff))].join("\n")}
     >
       {fmtQtyPrecise(primary.value)} шт при {primaryLengthMm} мм
       {primary.source === "auto" ? (
-        <span className="rounded bg-emerald-100 px-1 text-[10px] font-semibold text-emerald-800">авто</span>
+        <span className="rounded-sm bg-emerald-100 px-1 text-[10px] font-semibold text-emerald-800">авто</span>
       ) : (
-        <span className="rounded bg-amber-100 px-1 text-[10px] font-semibold text-amber-800">ручное</span>
+        <span className="rounded-sm bg-amber-100 px-1 text-[10px] font-semibold text-amber-800">ручное</span>
       )}
     </span>
   );
@@ -711,7 +711,7 @@ export function RawMaterialsPage() {
                           {product.aliases.map((alias, i) => (
                             <span
                               key={i}
-                              className="inline-flex px-1.5 py-0.5 rounded border border-transparent text-xs cursor-pointer transition-colors hover:border-primary hover:bg-secondary"
+                              className="inline-flex px-1.5 py-0.5 rounded-sm border border-transparent text-xs cursor-pointer transition-colors hover:border-primary hover:bg-secondary"
                               onClick={(e) => { e.stopPropagation(); void navigateToAlias(alias); }}
                               title="Перейти к профилю"
                             >

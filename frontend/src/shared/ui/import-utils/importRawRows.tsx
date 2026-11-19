@@ -120,7 +120,7 @@ export function ImportRawCellsPanel({
         <Badge
           key={cellIdx}
           variant="secondary"
-          className="px-1 py-0 h-4 text-[9px] rounded font-mono border"
+          className="px-1 py-0 h-4 text-[9px] rounded-sm font-mono border"
         >
           {val || "пусто"}
         </Badge>

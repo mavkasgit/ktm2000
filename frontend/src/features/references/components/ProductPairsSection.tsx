@@ -165,7 +165,7 @@ export function ProductPairsSection({
                       {pair.partner.name}
                     </span>
                     {pair.lengths.length === 0 && (
-                      <span className="rounded bg-amber-100 px-1.5 py-0.5 text-[10px] font-semibold text-amber-800 shrink-0">
+                      <span className="rounded-sm bg-amber-100 px-1.5 py-0.5 text-[10px] font-semibold text-amber-800 shrink-0">
                         нет общих длин
                       </span>
                     )}
@@ -215,7 +215,7 @@ export function ProductPairsSection({
                                 {auto != null ? (
                                   <span className="flex items-center gap-1">
                                     {auto}
-                                    <span className="rounded bg-emerald-100 px-1 text-[10px] font-semibold text-emerald-800">
+                                    <span className="rounded-sm bg-emerald-100 px-1 text-[10px] font-semibold text-emerald-800">
                                       авто
                                     </span>
                                   </span>
@@ -230,7 +230,7 @@ export function ProductPairsSection({
                     </table>
                   )}
                   {pair.lengths.length === 0 && (
-                    <p className="rounded bg-amber-50 border border-amber-200 px-2 py-1.5 text-xs text-amber-800">
+                    <p className="rounded-sm bg-amber-50 border border-amber-200 px-2 py-1.5 text-xs text-amber-800">
                       Нет общих длин — пара создана, но не действует: добавьте общие длины обоим артикулам,
                       и пара заработает сама.
                     </p>

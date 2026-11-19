@@ -62,7 +62,7 @@ export function SpgSelect({
         {isAllSelected && allLabel ? (
           <div className="flex items-center gap-1.5">
             <span
-              className="inline-flex h-5 w-5 shrink-0 items-center justify-center rounded"
+              className="inline-flex h-5 w-5 shrink-0 items-center justify-center rounded-sm"
               style={{ backgroundColor: "#3B82F620", color: "#3B82F6" }}
             >
               <Layers className="h-3 w-3" />
@@ -72,7 +72,7 @@ export function SpgSelect({
         ) : selectedSpg && selectedSpg.icon ? (
           <div className="flex items-center gap-1.5">
             <span
-              className="inline-flex h-5 w-5 shrink-0 items-center justify-center rounded"
+              className="inline-flex h-5 w-5 shrink-0 items-center justify-center rounded-sm"
               style={{ backgroundColor: `${iconColor}20`, color: iconColor }}
             >
               {renderIcon(selectedSpg.icon, "h-3 w-3")}
@@ -90,7 +90,7 @@ export function SpgSelect({
           <SelectItem value="__all__">
             <div className="flex items-center gap-1.5">
               <span
-                className="inline-flex h-5 w-5 shrink-0 items-center justify-center rounded"
+                className="inline-flex h-5 w-5 shrink-0 items-center justify-center rounded-sm"
                 style={{ backgroundColor: "#3B82F620", color: "#3B82F6" }}
               >
                 <Layers className="h-3 w-3" />
@@ -111,7 +111,7 @@ export function SpgSelect({
               <div className="flex items-center gap-1.5">
                 {spg.icon && (
                   <span
-                    className="inline-flex h-5 w-5 shrink-0 items-center justify-center rounded"
+                    className="inline-flex h-5 w-5 shrink-0 items-center justify-center rounded-sm"
                     style={{ backgroundColor: `${color}20`, color: color }}
                   >
                     {renderIcon(spg.icon, "h-3 w-3")}

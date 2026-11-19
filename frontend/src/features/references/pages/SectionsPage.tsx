@@ -839,7 +839,7 @@ export function SectionsPage() {
                         <>
                           <button
                             type="button"
-                            className="p-0.5 rounded hover:bg-accent text-muted-foreground hover:text-foreground disabled:opacity-30 disabled:cursor-default"
+                            className="p-0.5 rounded-sm hover:bg-accent text-muted-foreground hover:text-foreground disabled:opacity-30 disabled:cursor-default"
                             disabled={idx === 0}
                             onClick={(e) => { e.stopPropagation(); moveSectionInSubsection(Number(item.id), "up", group, isStock); }}
                             title="Переместить вверх"
@@ -848,7 +848,7 @@ export function SectionsPage() {
                           </button>
                           <button
                             type="button"
-                            className="p-0.5 rounded hover:bg-accent text-muted-foreground hover:text-foreground disabled:opacity-30 disabled:cursor-default"
+                            className="p-0.5 rounded-sm hover:bg-accent text-muted-foreground hover:text-foreground disabled:opacity-30 disabled:cursor-default"
                             disabled={idx === sectionList.length - 1}
                             onClick={(e) => { e.stopPropagation(); moveSectionInSubsection(Number(item.id), "down", group, isStock); }}
                             title="Переместить вниз"
@@ -900,7 +900,7 @@ export function SectionsPage() {
                   <tr key={`ops-${item.id}`}>
                     <td colSpan={isStock ? 7 : 8} className="p-0 border-b bg-muted/10">
                       <div className="max-w-2xl">
-                        <div className="bg-muted/30 border-l-4 border-blue-400 p-2 m-1 rounded">
+                        <div className="bg-muted/30 border-l-4 border-blue-400 p-2 m-1 rounded-sm">
                           <div className="flex items-center gap-2 mb-2">
                             <Settings className="h-3.5 w-3.5 text-blue-600" />
                             <span className="font-semibold text-xs">Операции участка &laquo;{expandedSectionName}&raquo;</span>
@@ -937,7 +937,7 @@ export function SectionsPage() {
                                         <button
                                           type="button"
                                           onClick={() => openEditGroup(Number(item.id), groupOp)}
-                                          className="p-1 rounded hover:bg-accent text-muted-foreground hover:text-foreground"
+                                          className="p-1 rounded-sm hover:bg-accent text-muted-foreground hover:text-foreground"
                                           title="Редактировать группу"
                                         >
                                           <Pencil className="h-3 w-3" />
@@ -953,7 +953,7 @@ export function SectionsPage() {
                                         <button
                                           type="button"
                                           onClick={() => setDeleteGroupDialog({ sectionId: Number(item.id), groupCode: groupOp.group_code!, groupName: groupOp.group_name || groupOp.group_code! })}
-                                          className="p-1 rounded hover:bg-destructive/20 text-muted-foreground hover:text-destructive"
+                                          className="p-1 rounded-sm hover:bg-destructive/20 text-muted-foreground hover:text-destructive"
                                           title="Удалить группу"
                                         >
                                           <Trash2 className="h-3 w-3" />
@@ -971,7 +971,7 @@ export function SectionsPage() {
                                         .map((op) => (
                                           <div
                                             key={op.id}
-                                            className="flex items-center gap-1 px-1.5 h-6 rounded border bg-card hover:bg-accent/50 transition-colors text-xs group/op cursor-pointer"
+                                            className="flex items-center gap-1 px-1.5 h-6 rounded-sm border bg-card hover:bg-accent/50 transition-colors text-xs group/op cursor-pointer"
                                             onClick={() => openEditOp(Number(item.id), op)}
                                           >
                                             <input
@@ -979,7 +979,7 @@ export function SectionsPage() {
                                               checked={op.is_significant}
                                               onChange={() => toggleOpSignificant(Number(item.id), op.id, op.is_significant)}
                                               disabled={isReadOnly}
-                                              className="rounded border-gray-300 cursor-pointer h-3 w-3"
+                                              className="rounded-sm border-gray-300 cursor-pointer h-3 w-3"
                                             />
                                             {op.icon ? (
                                               <span style={{ color: op.icon_color || undefined }} className="shrink-0">
@@ -997,7 +997,7 @@ export function SectionsPage() {
                                                   <button
                                                     type="button"
                                                     onClick={(e) => { e.stopPropagation(); openMoveOp(Number(item.id), op); }}
-                                                    className="p-0.5 rounded hover:bg-accent text-muted-foreground hover:text-foreground"
+                                                    className="p-0.5 rounded-sm hover:bg-accent text-muted-foreground hover:text-foreground"
                                                     title="Переместить в другую группу"
                                                   >
                                                     <Move className="h-2.5 w-2.5" />
@@ -1006,7 +1006,7 @@ export function SectionsPage() {
                                                 <button
                                                   type="button"
                                                   onClick={(e) => { e.stopPropagation(); deleteOp(Number(item.id), op.id, op.operation_name); }}
-                                                  className="p-0.5 rounded hover:bg-destructive/20 text-muted-foreground hover:text-destructive"
+                                                  className="p-0.5 rounded-sm hover:bg-destructive/20 text-muted-foreground hover:text-destructive"
                                                   title="Удалить"
                                                 >
                                                   <X className="h-2.5 w-2.5" />
@@ -1159,7 +1159,7 @@ export function SectionsPage() {
               >
                 <details
                   open
-                  className="border rounded-xl bg-card overflow-hidden shadow-sm transition-all"
+                  className="border rounded-xl bg-card overflow-hidden shadow-xs transition-all"
                 >
                   <summary className="cursor-pointer select-none px-3 py-2 flex items-center gap-2 bg-muted/30 hover:bg-muted/50 border-b transition-colors font-medium">
                     {group.spgIcon ? (
@@ -1210,7 +1210,7 @@ export function SectionsPage() {
           })}
         </div>
 
-        <details open className="border rounded-lg bg-card overflow-hidden self-start sticky top-2 shadow-sm">
+        <details open className="border rounded-lg bg-card overflow-hidden self-start sticky top-2 shadow-xs">
           <summary className="cursor-pointer select-none px-3 py-2 flex items-center gap-2 text-sm font-medium hover:bg-accent/40 transition-colors border-b">
             <Layers className="h-4 w-4 text-muted-foreground" />
             <span className="flex-1">Навигация по ГХП</span>
@@ -1264,7 +1264,7 @@ export function SectionsPage() {
                             <button
                               type="button"
                               onClick={() => openEditSpg(spg)}
-                              className="p-1 rounded hover:bg-accent text-muted-foreground hover:text-foreground"
+                              className="p-1 rounded-sm hover:bg-accent text-muted-foreground hover:text-foreground"
                               title="Редактировать ГХП"
                             >
                               <Pencil className="h-3 w-3" />

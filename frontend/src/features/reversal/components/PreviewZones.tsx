@@ -73,7 +73,7 @@ export function PreviewZones({
             {blockers.map((b, i) => (
               <li
                 key={`${b.kind}-${b.node_id ?? i}`}
-                className="flex items-start gap-1.5 rounded border border-red-100 bg-red-50/60 p-2 text-sm text-red-800"
+                className="flex items-start gap-1.5 rounded-sm border border-red-100 bg-red-50/60 p-2 text-sm text-red-800"
               >
                 {b.chain ? (
                   <CircleSlash className="mt-0.5 h-4 w-4 shrink-0" />

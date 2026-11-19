@@ -223,7 +223,7 @@ export function IssueSourceDialog({
                                     <button
                                       type="button"
                                       data-testid={`issue-candidate-expand-${group.groupKey}-${group.locationId}-${group.order}`}
-                                      className="rounded p-0.5 text-muted-foreground transition-colors hover:bg-slate-200 hover:text-slate-800 dark:hover:bg-slate-700 dark:hover:text-slate-100"
+                                      className="rounded-sm p-0.5 text-muted-foreground transition-colors hover:bg-slate-200 hover:text-slate-800 dark:hover:bg-slate-700 dark:hover:text-slate-100"
                                       onClick={() => toggleGroupExpanded(group.key)}
                                       title={expanded ? "Скрыть артикулы" : "Показать артикулы"}
                                       aria-label={expanded ? "Скрыть артикулы" : "Показать артикулы"}

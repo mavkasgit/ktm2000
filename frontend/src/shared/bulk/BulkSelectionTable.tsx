@@ -82,7 +82,7 @@ export function BulkSelectionTable({
 
       <div className="max-h-[200px] overflow-auto">
         <table className="w-full text-sm">
-          <thead className="[&_th]:sticky [&_th]:top-0 [&_th]:z-20 [&_th]:bg-muted/50 [&_th]:backdrop-blur [&_th]:border-b">
+          <thead className="[&_th]:sticky [&_th]:top-0 [&_th]:z-20 [&_th]:bg-muted/50 [&_th]:backdrop-blur-sm [&_th]:border-b">
             <tr>
               {columns.map((col) => (
                 <th key={col.key} className="text-left p-2 text-xs font-medium text-muted-foreground">

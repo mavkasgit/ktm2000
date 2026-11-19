@@ -81,7 +81,7 @@ export function ProductSkuSearchInput({
   return (
     <div ref={ref} className="relative">
       <input
-        className="w-full h-9 rounded-md border border-input bg-background px-3 text-sm outline-none placeholder:text-muted-foreground"
+        className="w-full h-9 rounded-md border border-input bg-background px-3 text-sm outline-hidden placeholder:text-muted-foreground"
         placeholder={placeholder}
         value={search}
         disabled={disabled}
@@ -124,7 +124,7 @@ export function ProductSkuSearchInput({
                   {s.name}
                 </span>
                 {showPairedStatus && !s.is_paired_profile && (
-                  <span className="text-[10px] bg-amber-100 text-amber-800 px-1.5 py-0.5 rounded font-normal shrink-0">
+                  <span className="text-[10px] bg-amber-100 text-amber-800 px-1.5 py-0.5 rounded-sm font-normal shrink-0">
                     непарный
                   </span>
                 )}

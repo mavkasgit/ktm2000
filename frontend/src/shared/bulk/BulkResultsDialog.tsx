@@ -45,7 +45,7 @@ export function BulkResultsDialog<TId extends BulkId>({
         </DialogHeader>
         <div className="max-h-[320px] space-y-2 overflow-auto">
           {results.map((result) => (
-            <div key={String(result.id)} className="rounded border p-2 text-sm">
+            <div key={String(result.id)} className="rounded-sm border p-2 text-sm">
               <div className="flex items-center justify-between gap-3">
                 <span className="font-medium">{result.label ?? `Позиция #${result.id}`}</span>
                 <Badge variant={result.status === "success" ? "default" : result.status === "skipped" ? "secondary" : "destructive"}>

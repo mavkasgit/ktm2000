@@ -9,7 +9,7 @@ export function ProductPhoto({ product, className }: { product: Product; classNa
   const photoUrl = product.photo_thumb ? productPhotoUrl(product, "thumb") : null;
 
   return (
-    <div className={cn("bg-muted rounded flex items-center justify-center overflow-hidden shrink-0", className ?? "w-10 h-10")}>
+    <div className={cn("bg-muted rounded-sm flex items-center justify-center overflow-hidden shrink-0", className ?? "w-10 h-10")}>
       {photoUrl ? (
         <img src={photoUrl} alt="" className="w-full h-full object-contain" />
       ) : (

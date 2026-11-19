@@ -258,7 +258,7 @@ export function ExecutionStagesTable({
                   <div className="flex items-center gap-2 min-w-0">
                     {stageIcon && (
                       <span
-                        className="inline-flex h-6 w-6 shrink-0 items-center justify-center rounded"
+                        className="inline-flex h-6 w-6 shrink-0 items-center justify-center rounded-sm"
                         style={{ backgroundColor: `${iconColor}18`, color: iconColor }}
                       >
                         {renderIcon(stageIcon, "h-4 w-4")}
