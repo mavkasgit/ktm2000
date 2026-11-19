@@ -1,8 +1,12 @@
 name: CI lint
 
-# Статус для merge: ИНФОРМАЦИОННЫЙ (новый джоб, в required contexts не входит).
-# Состав блокирующих живёт вне этого файла — `gh api
+# Статус для merge: БЛОКИРУЮЩИЙ (`ci-lint` входит в required contexts с
+# 2026-11-19, T-384). Состав блокирующих живёт вне этого файла — `gh api
 # repos/mavkasgit/ktm2000/branches/main/protection` и `docs/testing-guide.md` (§CI).
+#
+# Поэтому `paths`-фильтров здесь нет: required check, не запустившийся из-за
+# фильтра, висит в «Pending» и блокирует merge на любой правке вне скоупа
+# (#361). Джоб дешёвый — дешевле, чем зависший мерж.
 #
 # Зачем (#365): workflow и `dependabot.yml` правятся руками, а опечатка в `needs:`,
 # `if:`, имени action или в экосистеме Dependabot вскрывается только запуском.
@@ -20,26 +24,10 @@ on:
     branches:
       - main
       - master
-    paths:
-      - '.github/**'
-      - 'mise.toml'
-      - 'tools.json'
-      - 'tools.schema.json'
-      - 'scripts/gate.mjs'
-      - 'package.json'
-      - 'package-lock.json'
   pull_request:
     branches:
       - main
       - master
-    paths:
-      - '.github/**'
-      - 'mise.toml'
-      - 'tools.json'
-      - 'tools.schema.json'
-      - 'scripts/gate.mjs'
-      - 'package.json'
-      - 'package-lock.json'
   workflow_dispatch:
 
 concurrency:
