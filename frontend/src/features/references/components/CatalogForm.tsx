@@ -20,7 +20,10 @@ import { parseNumericInput } from "@/shared/lib/parseNumericInput";
 import { isLengthState } from "@/shared/lib/dimensionState";
 import { RadioGroup, RadioGroupItem } from "@/shared/ui/radio-group";
 import { cn } from "@/shared/utils/cn";
-import type { Product, ProductLength, CreateProductInput, PatchProductInput, QuantityPerHangerDict, DimensionState, HangerMode } from "@/shared/api/products";
+import type { Product, ProductLength, CreateProductInput, PatchProductInput, QuantityPerHangerDict, DimensionState, HangerMode, ThirdPartyPack } from "@/shared/api/products";
+
+/** Ключ ручной нормы объёмного артикула без длины (ADR-0075). */
+const DEFAULT_HANGER_KEY = "default";
 
 export type DialogMode = "create" | "edit";
 
@@ -68,8 +71,9 @@ function manualChangeTexts(
     .sort((a, b) => Number(a) - Number(b));
   const changed = keys.filter((k) => (productManuals[k] ?? null) !== (merged[k] ?? null));
   if (changed.length === 0) return null;
+  const keyLabel = (key: string) => (key === DEFAULT_HANGER_KEY ? "по умолчанию" : `${key} мм`);
   const fmt = (m: Record<string, number | null>) =>
-    changed.map((k) => `${k} мм: ${m[k] ?? "—"}`).join("; ");
+    changed.map((k) => `${keyLabel(k)}: ${m[k] ?? "—"}`).join("; ");
   return { from: fmt(productManuals), to: fmt(merged) };
 }
 
@@ -148,7 +152,22 @@ function buildInitialForm(product: Product | null, mode: DialogMode): CreateProd
     aliases: product?.aliases ?? [],
     lengths: lengthsFromProduct(product),
     is_laminated: product?.is_laminated ?? false,
+    third_party: product?.third_party ?? false,
+    customer: product?.customer ?? null,
+    pack: product?.pack ?? null,
   };
+}
+
+/** Норма комплекта: 4 × 2 = 8 шт; null, если числа неположительные. */
+function packNorm(pack: ThirdPartyPack | null | undefined): number | null {
+  if (!pack || pack.sets_per_hanger <= 0 || pack.pieces_per_set <= 0) return null;
+  return pack.sets_per_hanger * pack.pieces_per_set;
+}
+
+/** Комплект для списка изменений: «4 × 2 = 8 шт». */
+function packText(pack: ThirdPartyPack | null | undefined): string {
+  if (!pack) return "—";
+  return `${pack.sets_per_hanger} × ${pack.pieces_per_set} = ${pack.sets_per_hanger * pack.pieces_per_set} шт`;
 }
 
 function getChanges(form: CreateProductInput, product: Product | null, isCreate: boolean): FieldChange[] {
@@ -197,6 +216,9 @@ function getChanges(form: CreateProductInput, product: Product | null, isCreate:
   }
   if (!eq(form.is_laminated ?? false, product.is_laminated)) changes.push({ field: "is_laminated", label: "Ламинируется", from: product.is_laminated ? "Да" : "Нет", to: form.is_laminated ? "Да" : "Нет" });
   if (!eq(form.dimension_state ?? "length", product.dimension_state ?? "length")) changes.push({ field: "dimension_state", label: "Размерность", from: product.dimension_state ?? "length", to: form.dimension_state ?? "length" });
+  if (!eq(form.third_party ?? false, product.third_party ?? false)) changes.push({ field: "third_party", label: "Сторонний заказ", from: product.third_party ? "Да" : "Нет", to: form.third_party ? "Да" : "Нет" });
+  if (!eq(form.customer ?? null, product.customer ?? null)) changes.push({ field: "customer", label: "Заказчик", from: product.customer ?? "—", to: form.customer ?? "—" });
+  if (!eq(form.pack ?? null, product.pack ?? null)) changes.push({ field: "pack", label: "Комплект", from: packText(product.pack), to: packText(form.pack) });
   return changes;
 }
 
@@ -298,6 +320,12 @@ export const CatalogForm = forwardRef<CatalogFormRef, {
   const autoMode = (form.hanger_mode ?? "auto") === "auto";
   const sheetMode: HangerMode = form.hanger_mode ?? "auto";
   const isSheet = isSheetState(form.dimension_state);
+  // Сторонний заказ — односторонняя отметка: «Свой» не показываем, это
+  // состояние по умолчанию. Норма объёмного артикула без длины живёт под
+  // ключом `default` (ADR-0075), а не под длиной полотна.
+  const isThirdParty = form.third_party === true;
+  const isThirdPartyVolume = isThirdParty && form.dimension_state === "volume";
+  const defaultManual = form.quantity_per_hanger?.[DEFAULT_HANGER_KEY]?.manual ?? null;
   const canUseAuto = !isLengthState(form.dimension_state) || Boolean(
     typeof form.perimeter_mm === "number" && form.perimeter_mm > 0 &&
     typeof form.mount_width_mm === "number" && form.mount_width_mm > 0
@@ -414,6 +442,50 @@ export const CatalogForm = forwardRef<CatalogFormRef, {
     }));
   };
 
+  /** Ручная норма объёмного артикула без длины — ключ `default` (ADR-0075). */
+  const updateDefaultManual = (value: number | null) => {
+    setForm((f) => ({
+      ...f,
+      quantity_per_hanger: {
+        ...(f.quantity_per_hanger ?? {}),
+        [DEFAULT_HANGER_KEY]: { auto: null, manual: value },
+      },
+    }));
+  };
+
+  /** Комплект меняет норму: 4 × 2 = 8 шт на подвес. */
+  const applyPack = (pack: ThirdPartyPack) => {
+    const norm = packNorm(pack);
+    setForm((f) => ({
+      ...f,
+      pack,
+      quantity_per_hanger: (f.dimension_state ?? "length") === "volume"
+        ? { ...(f.quantity_per_hanger ?? {}), [DEFAULT_HANGER_KEY]: { auto: null, manual: norm } }
+        : f.quantity_per_hanger,
+    }));
+  };
+
+  const toggleThirdParty = (checked: boolean) => {
+    setForm((f) => {
+      if (!checked) {
+        return { ...f, third_party: false, customer: null, pack: null };
+      }
+      const isVolume = (f.dimension_state ?? "length") === "volume";
+      const pack = f.pack ?? { sets_per_hanger: 1, pieces_per_set: 1 };
+      const norm = packNorm(pack);
+      return {
+        ...f,
+        third_party: true,
+        pack,
+        // Ручная норма default допустима только в manual-режиме (ADR-0075).
+        hanger_mode: isVolume ? "manual" : f.hanger_mode,
+        quantity_per_hanger: isVolume
+          ? { ...(f.quantity_per_hanger ?? {}), [DEFAULT_HANGER_KEY]: { auto: null, manual: norm } }
+          : f.quantity_per_hanger,
+      };
+    });
+  };
+
   /** Явная очистка нормы-сироты: null по ключу уходит в PATCH (ADR-0047). */
   const clearOrphanNorm = useCallback((key: string) => {
     setForm((f) => ({
@@ -479,11 +551,21 @@ export const CatalogForm = forwardRef<CatalogFormRef, {
     const merged = mergedManuals(form.quantity_per_hanger ?? null, product.quantity_per_hanger ?? null);
     if (!eq(merged, manualByLength(product.quantity_per_hanger ?? null))) {
       // Лист (#126): ключ словаря — длина полотна из осей, не список длин профиля.
-      const payloadLengths = !isSheet && formLengths.length > 0 ? formLengths : sheetLen != null ? [sheetLen] : [];
+      // Сторонний объёмный заказ нормируется ключом `default`, а не длиной.
+      const payloadLengths = isThirdPartyVolume
+        ? []
+        : !isSheet && formLengths.length > 0
+          ? formLengths
+          : sheetLen != null
+            ? [sheetLen]
+            : [];
       // Ключи вне реестра (норма-сирота, снятая длина) едут в payload иначе:
       // сервер не отличит их снятие от молчаливой правки карточки (ADR-0047).
       const extraKeys = Object.keys(form.quantity_per_hanger ?? {}).filter(
-        (key) => !payloadLengths.some((length) => lengthKey(length) === key),
+        (key) =>
+          !payloadLengths.some((length) => lengthKey(length) === key) &&
+          // `default` — только для объёмного артикула (ADR-0075).
+          (key !== DEFAULT_HANGER_KEY || form.dimension_state === "volume"),
       );
       patch.quantity_per_hanger = buildManualPayloadDict(payloadLengths, merged, extraKeys);
     }
@@ -495,8 +577,11 @@ export const CatalogForm = forwardRef<CatalogFormRef, {
     if (!eq(form.is_laminated ?? false, product.is_laminated)) patch.is_laminated = form.is_laminated;
     if (!eq(form.dimension_state ?? "length", product.dimension_state ?? "length")) patch.dimension_state = form.dimension_state;
     if (!eq(form.hanger_mode ?? "auto", product.hanger_mode ?? "auto")) patch.hanger_mode = form.hanger_mode ?? "auto";
+    if (!eq(form.third_party ?? false, product.third_party ?? false)) patch.third_party = form.third_party ?? false;
+    if (!eq(form.customer ?? null, product.customer ?? null)) patch.customer = form.customer ?? null;
+    if (!eq(form.pack ?? null, product.pack ?? null)) patch.pack = form.pack ?? null;
     return patch;
-  }, [form, product, isSheet, sheetLen]);
+  }, [form, product, isSheet, sheetLen, isThirdPartyVolume]);
 
   const doSave = async () => {
     await dimsRef.current?.flushPending();
@@ -531,9 +616,28 @@ export const CatalogForm = forwardRef<CatalogFormRef, {
       return m != null && !(m > 0);
     });
   // Лист (#126): в ручном режиме значение должно быть положительным.
-  const sheetManual = sheetLen != null ? manualForLength(sheetLen) : null;
+  // У стороннего объёмного заказа норма — `default`, длины полотна может не быть.
+  const sheetManual = isThirdPartyVolume
+    ? defaultManual
+    : sheetLen != null
+      ? manualForLength(sheetLen)
+      : null;
   const sheetManualInvalid = isSheet && sheetMode === "manual" && sheetManual != null && !(sheetManual > 0);
-  const hasValidationErrors = (autoMode && autoUnavailable) || perimeterInvalid || mountWidthInvalid || quantityInvalid || sheetManualInvalid;
+  const defaultInvalid = isThirdPartyVolume && defaultManual != null && !(defaultManual > 0);
+  const packInvalid =
+    isThirdParty &&
+    (form.pack == null ||
+      form.pack.sets_per_hanger <= 0 ||
+      form.pack.pieces_per_set <= 0);
+  const hasValidationErrors =
+    (autoMode && autoUnavailable) ||
+    perimeterInvalid ||
+    mountWidthInvalid ||
+    quantityInvalid ||
+    sheetManualInvalid ||
+    defaultInvalid ||
+    packInvalid ||
+    (isThirdPartyVolume && sheetMode !== "manual");
 
   useEffect(() => {
     onDirtyChange?.(isDirty);
@@ -667,6 +771,100 @@ export const CatalogForm = forwardRef<CatalogFormRef, {
         </div>
 
         <div className="space-y-3">
+          {/* Сторонний заказ (T-383): отметка односторонняя — «Свой» не
+              показываем, это состояние по умолчанию. Поля заказчика и
+              комплекта живут рядом, норма считается из комплекта. */}
+          <label
+            className={cn(
+              "flex items-start gap-2 rounded-lg border px-3 py-2 cursor-pointer transition-colors",
+              isThirdParty
+                ? "border-amber-300 bg-amber-50"
+                : "border-border bg-muted/20 hover:bg-muted/40",
+              readOnly && "cursor-default",
+            )}
+          >
+            <Checkbox
+              id="third_party"
+              className="mt-0.5"
+              checked={isThirdParty}
+              onCheckedChange={(checked) => toggleThirdParty(checked === true)}
+              disabled={readOnly}
+            />
+            <span className="min-w-0">
+              <span className={cn("block text-sm font-medium", isThirdParty && "text-amber-900")}>
+                Сторонний
+              </span>
+              <span className="block text-xs text-muted-foreground">
+                материал заказчика — завод только обрабатывает. Обычный артикул — состояние по умолчанию.
+              </span>
+            </span>
+          </label>
+
+          {isThirdParty && (
+            <div className="grid grid-cols-1 sm:grid-cols-3 gap-3 rounded-lg border border-amber-200 bg-amber-50/60 p-3">
+              <div className="space-y-1">
+                <label className="text-xs font-medium text-amber-900" htmlFor="third-party-customer">
+                  Заказчик
+                </label>
+                <Input
+                  id="third-party-customer"
+                  value={form.customer ?? ""}
+                  onChange={(e) => update("customer", e.target.value || null)}
+                  placeholder="ГорКомплекс"
+                  disabled={readOnly}
+                />
+              </div>
+              <div className="space-y-1">
+                <label className="text-xs font-medium text-amber-900" htmlFor="third-party-sets">
+                  Комплектов на подвес
+                </label>
+                <Input
+                  id="third-party-sets"
+                  type="number"
+                  min={1}
+                  className="h-9"
+                  value={form.pack?.sets_per_hanger || ""}
+                  onChange={(e) =>
+                    applyPack({
+                      sets_per_hanger: parseNumericInput(e.target.value) ?? 0,
+                      pieces_per_set: form.pack?.pieces_per_set ?? 0,
+                    })
+                  }
+                  disabled={readOnly}
+                />
+              </div>
+              <div className="space-y-1">
+                <label className="text-xs font-medium text-amber-900" htmlFor="third-party-pieces">
+                  Предметов в комплекте
+                </label>
+                <Input
+                  id="third-party-pieces"
+                  type="number"
+                  min={1}
+                  className="h-9"
+                  value={form.pack?.pieces_per_set || ""}
+                  onChange={(e) =>
+                    applyPack({
+                      sets_per_hanger: form.pack?.sets_per_hanger ?? 0,
+                      pieces_per_set: parseNumericInput(e.target.value) ?? 0,
+                    })
+                  }
+                  disabled={readOnly}
+                />
+              </div>
+              <p className="sm:col-span-3 text-xs text-amber-800">
+                {packNorm(form.pack) != null
+                  ? `Норма: ${packNorm(form.pack)} шт на подвес (${packText(form.pack)})`
+                  : "Укажите комплекты и предметы — норма посчитается сама."}
+              </p>
+              {packInvalid && (
+                <p className="sm:col-span-3 text-xs text-destructive">
+                  Комплектов и предметов должно быть больше нуля.
+                </p>
+              )}
+            </div>
+          )}
+
           <div className="grid grid-cols-1 sm:grid-cols-3 gap-3">
             <div className="space-y-1">
               <label className="text-sm font-medium">Артикул</label>
@@ -1019,8 +1217,17 @@ export const CatalogForm = forwardRef<CatalogFormRef, {
                     className="flex items-center gap-4"
                   >
                     <div className="flex items-center gap-1.5">
-                      <RadioGroupItem value="auto" id="hanger-mode-auto" />
-                      <label htmlFor="hanger-mode-auto" className={cn("text-sm cursor-pointer", sheetMode === "auto" && "font-semibold")}>Авто</label>
+                      <RadioGroupItem value="auto" id="hanger-mode-auto" disabled={isThirdPartyVolume} />
+                      <label
+                        htmlFor="hanger-mode-auto"
+                        className={cn(
+                          "text-sm cursor-pointer",
+                          sheetMode === "auto" && "font-semibold",
+                          isThirdPartyVolume && "text-muted-foreground/60 cursor-not-allowed",
+                        )}
+                      >
+                        Авто
+                      </label>
                     </div>
                     <div className="flex items-center gap-1.5">
                       <RadioGroupItem value="manual" id="hanger-mode-manual" />
@@ -1028,6 +1235,11 @@ export const CatalogForm = forwardRef<CatalogFormRef, {
                     </div>
                   </RadioGroup>
                 </div>
+                {isThirdPartyVolume && (
+                  <p className="text-xs text-muted-foreground">
+                    Для стороннего заказа норма задаётся вручную — из комплекта или числом.
+                  </p>
+                )}
 
                 {sheetMode === "auto" ? (
                   <div className="flex flex-wrap items-center gap-2">
@@ -1060,19 +1272,24 @@ export const CatalogForm = forwardRef<CatalogFormRef, {
                         sheetManualInvalid && "border-destructive focus-visible:ring-destructive",
                         !sheetManualInvalid && "bg-amber-50 border-amber-300",
                       )}
-                      value={sheetLen != null ? manualForLength(sheetLen) ?? "" : ""}
+                      value={sheetManual ?? ""}
                       onChange={(e) => {
                         const parsed = parseNumericInput(e.target.value);
-                        if (sheetLen != null) updateManualForLength(sheetLen, parsed == null ? null : Math.trunc(parsed));
+                        const value = parsed == null ? null : Math.trunc(parsed);
+                        if (isThirdPartyVolume) {
+                          updateDefaultManual(value);
+                        } else if (sheetLen != null) {
+                          updateManualForLength(sheetLen, value);
+                        }
                       }}
-                      disabled={readOnly || isCreate || sheetLen == null}
+                      disabled={readOnly || (isCreate && !isThirdPartyVolume) || (!isThirdPartyVolume && sheetLen == null)}
                     />
-                    {isCreate && (
+                    {isCreate && !isThirdPartyVolume && (
                       <span className="text-xs text-muted-foreground">
                         Ручное значение вводится после создания артикула и заведения измерений.
                       </span>
                     )}
-                    {!isCreate && sheetLen == null && (
+                    {!isCreate && !isThirdPartyVolume && sheetLen == null && (
                       <span className="text-xs text-muted-foreground">Сначала укажите длину полотна в измерениях выше.</span>
                     )}
                     {sheetManualInvalid && (

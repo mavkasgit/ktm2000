@@ -140,6 +140,17 @@ describe("реестр сброса кэша", () => {
     }
   });
 
+  it("занятость складов сбрасывается вместе с остатками", async () => {
+    // Ключ живёт под префиксом домена `stock`, иначе экран склада показывал
+    // бы вчерашние числа после любой выдачи/передачи (#350).
+    const occupancy = queryKeys.stock.occupancy();
+    const queryClient = clientWithKeys([occupancy]);
+
+    await invalidateAfter(queryClient, "stockChanged");
+
+    expect(invalidated(queryClient, occupancy)).toBe(true);
+  });
+
   it("синхронизация сотрудников сбрасывает список при любых параметрах", async () => {
     // Регрессия: у `EmployeesPage` не было домена в реестре, и он сбрасывал
     // ключ литералом `["employees"]` — мимо фабрики, а значит мимо любой

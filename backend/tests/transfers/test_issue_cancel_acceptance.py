@@ -1,22 +1,26 @@
-"""Отмена выдачи целиком против приёмки: двустороннее покрытие ADR-0071.
+"""Отмена выдачи против приёмки: двустороннее покрытие ADR-0071 и #349.
 
 Правило (#282, продуктовое решение от 2026-11-03 → ADR-0071): «передача
-принята» в контексте запрета отмены — это **фактическое действие
-получателя / факт исполнения**, а не технический статус, выставленный
-системой. Выдача порождает передачи уже `accepted` (авто-приём), поэтому
-буквальная проверка `status == accepted` запрещала бы полную отмену почти
-всегда.
+принята» в контексте отмены — это **фактическое действие получателя / факт
+исполнения**, а не технический статус, выставленный системой. Выдача
+порождает передачи уже `accepted` (авто-приём), поэтому буквальная проверка
+`status == accepted` запрещала бы отмену почти всегда.
+
+#349 добавляет вторую половину правила: «принято получателем» больше не
+запрещает отмену вообще, а выбирает режим. В режиме «остаток» такие
+передачи остаются как есть (причина — русским текстом, без цифровых id);
+полный откат возвращает и их, потому что материал можно забрать с участка
+обратной проводкой.
 
 Покрытие обязательно в обе стороны:
 
-(а) выдача с авто-приёмкой и без действия получателя → отмена **разрешена**.
+(а) выдача с авто-приёмкой и без действия получателя → отмена разрешена.
     Этот тест краснеет, если ``_acceptance_blocker`` свести к «status ==
     ACCEPTED»: передачи выдачи как раз все в статусе `accepted`.
-(б) частичная приёмка одной передачи / завершённая работа на этапе-адресате
-    → отмена **запрещена** с русским `reason` без цифровых id, и склад не
-    возвращается.
+(б) частичная приёмка / завершённая работа на этапе-адресате → передача
+    не попадает в «остаток» и печатается причиной, но полный откат её
+    забирает (проверяется в ``test_issue_cancel_modes``).
 
-Поведение ``_acceptance_blocker`` здесь только фиксируется — оно не меняется.
 Сетап и хелперы унаследованы от ``test_issue_flow_http``: те же два склада и
 правило «все плоские id захватываются до запросов».
 """
@@ -27,7 +31,7 @@ from decimal import Decimal
 from app.models.section import Section
 from app.models.transfer import Transfer, TransferStatus
 from app.models.work_task import WorkTask
-from app.stock.models import Reason
+from app.stock.models import Reason, StockTransaction
 from app.stock.services import StockCommand, StockCommandService
 from sqlalchemy import func, select
 
@@ -36,7 +40,6 @@ from tests.transfers.test_issue_flow_http import (
     PREP_OPS,
     _assert_no_ids_in,
     _balance_qty,
-    _sends,
     _take,
     _transfers,
     _two_warehouse_setup,
@@ -81,14 +84,19 @@ async def test_auto_acceptance_alone_does_not_block_full_cancellation(client, se
     )
 
     payload = await _cancel_preview(client, ctx, issue_no)
-    assert payload["can_cancel"] is True, (
+    assert payload["remainder"]["can_cancel"] is True, (
         "авто-приёмка без фактического действия получателя — не основание отказа"
     )
-    assert payload["reason"] is None
-    assert len(payload["returns"]) == 2
-    assert "Отменить нельзя" not in payload["summary"], payload["summary"]
+    assert payload["full"]["can_cancel"] is True
+    assert payload["remainder"]["reason"] is None
+    assert len(payload["remainder"]["returns"]) == 2
+    assert "Отменить нельзя" not in payload["remainder"]["summary"], payload["remainder"]["summary"]
 
-    cancel = await client.post(CANCEL.format(issue_no=issue_no), headers=ctx["headers"])
+    cancel = await client.post(
+        CANCEL.format(issue_no=issue_no),
+        json={"mode": "full"},
+        headers=ctx["headers"],
+    )
     assert cancel.status_code == 200, cancel.text
     assert len(cancel.json()["cancelled_transfers"]) == 2
     assert await _balance_qty(session, ctx["product_id"], ctx["whb_id"]) == Decimal(40)
@@ -96,61 +104,16 @@ async def test_auto_acceptance_alone_does_not_block_full_cancellation(client, se
     await assert_no_invariants_violations(session, context="auto-accept is not a blocker")
 
 
-async def test_partially_accepted_transfer_blocks_full_cancellation(client, session) -> None:
-    """Частичная приёмка одной передачи — основание отказать всей выдаче.
+async def test_executed_work_is_kept_by_remainder_with_readable_reason(client, session) -> None:
+    """Завершённая работа на этапе-адресате — причина остатка, без цифровых id.
 
-    Отказ обязан быть текстом-причиной (в `reason` и в ответе 400) и не
-    должен трогать склад: «запретили» не значит «отменили половину».
-    """
-    ctx = await _two_warehouse_setup(session, "ACCPART")
-    issue_no = await _issue(client, session, ctx, key="acc-part")
-    rows = await _transfers(session, issue_no)
-    half = rows[0]
-    transfer_no = half.transfer_no  # захватываем до commit: коммит экспайрит объекты
-    row_ids = [t.id for t in rows]
-    # Фактическое действие получателя: материал приняли не целиком.
-    half.status = TransferStatus.partially_accepted
-    half.accepted_quantity = Decimal(10)
-    await session.commit()
-
-    payload = await _cancel_preview(client, ctx, issue_no)
-    assert payload["can_cancel"] is False
-    assert "принята частично" in payload["reason"], payload["reason"]
-    assert transfer_no in payload["reason"]
-    assert "Отменить нельзя" in payload["summary"], payload["summary"]
-    _assert_no_ids_in(
-        payload["summary"],
-        [ctx["product_id"], ctx["raw_id"], ctx["whb_id"], *row_ids],
-        allow=[1, 2, 3, 10, 20, 40, 60, 80, 100],
-    )
-
-    cancel = await client.post(CANCEL.format(issue_no=issue_no), headers=ctx["headers"])
-    assert cancel.status_code == 400, cancel.text
-    assert "принята частично" in cancel.json()["detail"]
-    assert await _balance_qty(session, ctx["product_id"], ctx["whb_id"]) == Decimal(0), (
-        "отказ не должен возвращать склад"
-    )
-    assert await _balance_qty(session, ctx["product_id"], ctx["raw_id"]) == Decimal(80)
-    # Отказ не должен отменить ни одну передачу: считаем плоским запросом,
-    # чтобы не упираться в экспаеринг общей сессии после rollback роута.
-    cancelled = await session.scalar(
-        select(func.count(Transfer.id)).where(
-            Transfer.issue_no == issue_no, Transfer.status == TransferStatus.cancelled
-        )
-    )
-    assert cancelled == 0, "отказ не должен отменять передачи"
-
-
-async def test_executed_work_on_intake_stage_blocks_full_cancellation(client, session) -> None:
-    """Отработанная работа на этапе-адресате — возврат породил бы минус.
-
-    Второй блокатор из ADR-0071: на приёмном этапе есть `completed_quantity`.
-    Причина — имя этапа и количество, без цифровых id задания или участка.
+    Режим «остаток» не трогает такую передачу: её материал остаётся на
+    участке, склад-источник возврата не получает. Причина — имя этапа и
+    количество, без id задания или участка.
     """
     ctx = await _two_warehouse_setup(session, "ACCEXEC")
     issue_no = await _issue(client, session, ctx, key="acc-exec")
     rows = await _transfers(session, issue_no)
-    # Порядок вычерпывания: первая передача идёт на этап 3 (приёмка подготовки).
     intake = rows[0]
     task = await session.get(WorkTask, intake.to_task_id)
     section_id = task.section_id
@@ -175,27 +138,96 @@ async def test_executed_work_on_intake_stage_blocks_full_cancellation(client, se
     await session.commit()
 
     payload = await _cancel_preview(client, ctx, issue_no)
-    assert payload["can_cancel"] is False, "завершённая работа — основание отказа"
-    assert "уже есть завершённая или бракованная работа" in payload["reason"], payload["reason"]
-    assert stage_name in payload["reason"] and "5" in payload["reason"], payload["reason"]
+    remainder = payload["remainder"]
+    assert remainder["can_cancel"] is True, "вторая передача остатка отменяема"
+    assert [row["transfer_id"] for row in remainder["returns"]] == [rows[1].id]
+    reason = remainder["kept"][0]["reason"]
+    assert "уже есть завершённая или бракованная работа" in reason, reason
+    assert stage_name in reason and "5" in reason, reason
     _assert_no_ids_in(
-        payload["reason"],
+        reason,
         [ctx["product_id"], section_id, task_id, transfer_id],
         allow=[1, 2, 3, 5, 20, 40, 60, 100],
     )
 
-    cancel = await client.post(CANCEL.format(issue_no=issue_no), headers=ctx["headers"])
-    assert cancel.status_code == 400, cancel.text
-    assert "не отменить" in cancel.json()["detail"], cancel.text
-    assert len(await _sends(session)) == 2, "отказ не дописывает проводки"
+    cancel = await client.post(
+        CANCEL.format(issue_no=issue_no),
+        json={"mode": "remainder"},
+        headers=ctx["headers"],
+    )
+    assert cancel.status_code == 200, cancel.text
+    assert [row["transfer_id"] for row in cancel.json()["cancelled_transfers"]] == [rows[1].id]
+    assert await _balance_qty(session, ctx["product_id"], ctx["whb_id"]) == Decimal(0), (
+        "принятая передача не вернулась на склад"
+    )
+    assert await _balance_qty(session, ctx["product_id"], section_id) == Decimal(40), (
+        "материал принятой передачи остался на участке"
+    )
+    # На принятую передачу обратных проводок нет — вернулась только вторая.
+    kept_reversals = await session.scalar(
+        select(func.count(StockTransaction.id)).where(
+            StockTransaction.transfer_id == transfer_id,
+            StockTransaction.reverses_id.is_not(None),
+        )
+    )
+    assert kept_reversals == 0
 
 
-async def test_blocker_counts_only_live_transfers(client, session) -> None:
-    """Блокатор и возврат идут по живым передачам: отменённая не блокирует.
+async def test_partially_accepted_transfer_is_kept_by_remainder(client, session) -> None:
+    """Частичная приёмка — тоже действие получателя, а не авто-приёмка.
 
-    Если бы ``preview_issue_cancellation`` смотрел все передачи выдачи подряд,
-    уже отменённая передача (`cancelled`, а не `accepted`) молча прошла бы как
-    «не принята», а возврат живого упал бы на готовую компенсацию (#282).
+    Причина обязана быть текстом-объяснением и не трогать склад: «запретили»
+    в режиме «остаток» значит «оставили как есть», а не «отменили половину».
+    """
+    ctx = await _two_warehouse_setup(session, "ACCPART")
+    issue_no = await _issue(client, session, ctx, key="acc-part")
+    rows = await _transfers(session, issue_no)
+    half = rows[0]
+    transfer_no = half.transfer_no  # захватываем до commit: коммит экспайрит объекты
+    row_ids = [t.id for t in rows]
+    # Фактическое действие получателя: материал приняли не целиком.
+    half.status = TransferStatus.partially_accepted
+    half.accepted_quantity = Decimal(10)
+    await session.commit()
+
+    payload = await _cancel_preview(client, ctx, issue_no)
+    remainder = payload["remainder"]
+    assert [row["transfer_id"] for row in remainder["returns"]] == [row_ids[1]]
+    assert remainder["kept"][0]["transfer_id"] == row_ids[0]
+    reason = remainder["kept"][0]["reason"]
+    assert "принята частично" in reason, reason
+    assert transfer_no in reason
+    assert "оставим как есть" in remainder["summary"], remainder["summary"]
+    _assert_no_ids_in(
+        remainder["summary"],
+        [ctx["product_id"], ctx["raw_id"], ctx["whb_id"], *row_ids],
+        allow=[1, 2, 3, 10, 20, 40, 60, 80, 100],
+    )
+
+    cancel = await client.post(
+        CANCEL.format(issue_no=issue_no),
+        json={"mode": "remainder"},
+        headers=ctx["headers"],
+    )
+    assert cancel.status_code == 200, cancel.text
+    # Отказ от принятой части не должен её отменить и вернуть её склад.
+    cancelled = await session.scalar(
+        select(func.count(Transfer.id)).where(
+            Transfer.issue_no == issue_no, Transfer.status == TransferStatus.cancelled
+        )
+    )
+    assert cancelled == 1, "отменена только вторая передача"
+    kept = await session.get(Transfer, row_ids[0])
+    assert kept.status == TransferStatus.partially_accepted
+    assert await _balance_qty(session, ctx["product_id"], ctx["whb_id"]) == Decimal(0)
+    assert await _balance_qty(session, ctx["product_id"], ctx["raw_id"]) == Decimal(100)
+
+
+async def test_remainder_returns_only_live_transfers(client, session) -> None:
+    """Отменённая передача не попадает в остаток: её уже вернули.
+
+    Если бы предпросмотр считал все передачи подряд, уже отменённая строка
+    выглядела бы «не принятой» и обещала второй возврат.
     """
     ctx = await _two_warehouse_setup(session, "ACCMIX")
     issue_no = await _issue(client, session, ctx, key="acc-mix")
@@ -208,7 +240,7 @@ async def test_blocker_counts_only_live_transfers(client, session) -> None:
     await session.commit()
 
     payload = await _cancel_preview(client, ctx, issue_no)
-    assert len(payload["returns"]) == 1, "в возврат идут только живые передачи"
-    assert payload["returns"][0]["transfer_no"] == live_no
-    assert payload["can_cancel"] is False, "живая частично принятая передача блокирует"
-    assert live_no in payload["reason"], payload["reason"]
+    remainder = payload["remainder"]
+    assert remainder["returns"] == [], "в возврат идут только живые отменяемые передачи"
+    assert remainder["can_cancel"] is False, "живая частично принятая передача блокирует остаток"
+    assert live_no in remainder["kept"][0]["reason"], remainder["kept"][0]["reason"]

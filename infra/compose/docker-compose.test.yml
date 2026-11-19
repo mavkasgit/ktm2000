@@ -4,6 +4,10 @@ services:
   postgres:
     image: postgres:15-alpine
     container_name: ktm2000-postgres-test
+    # Параллельные pytest-прогоны соседних worktree делят этот сервер: при
+    # дефолтном max_locks_per_transaction=64 они падают с `out of shared memory`.
+    # 256 держит 3–4 одновременных набора; при нехватке — `PYTEST_NUM_WORKERS=2`.
+    command: ["postgres", "-c", "max_locks_per_transaction=256"]
     # Значения захардкожены: conftest ожидает фиксированный контракт
     # localhost:5441/ktm2000_test, env-переменные окружения не должны его менять.
     environment:

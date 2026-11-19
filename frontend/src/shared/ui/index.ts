@@ -84,6 +84,8 @@ export { SectionLocationBadge } from "./SectionLocationBadge";
 export type { SectionLocationBadgeProps } from "./SectionLocationBadge";
 export { StockBalancesPanel } from "./StockBalancesPanel";
 export type { StockBalancesPanelProps } from "./StockBalancesPanel";
+export { WarehouseOccupancyPanel } from "./WarehouseOccupancyPanel";
+export type { WarehouseOccupancyPanelProps } from "./WarehouseOccupancyPanel";
 export * from "./import-utils";
 export { PositionSkuCell } from "./PositionSkuCell";
 export type { PositionSkuCellProps } from "./PositionSkuCell";

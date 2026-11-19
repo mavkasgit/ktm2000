@@ -10,6 +10,7 @@ export function usePermission() {
     canForceDeleteImport: POLICIES.forceDeleteImport(user?.role),
     canRollbackImport: POLICIES.rollbackImport(user?.role),
     canEditPlan: POLICIES.editPlan(user?.role),
+    canSkipStage: POLICIES.skipStage(user?.role),
     canCreatePlanImport: POLICIES.createPlanImport(user?.role),
     canManagePlanImport: POLICIES.managePlanImport(user?.role),
   };

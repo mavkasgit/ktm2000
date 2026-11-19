@@ -35,13 +35,16 @@ ops-ось, а «передавать» пришлось бы через лим�
 
 ``cancel_issue`` отменяет передачи по одной существующим
 ``cancel_transfer`` (свой ``transfer_send`` Action + ``ReversalService``) и
-снимает пропуски, поставленные этим ``issue_no``.
+снимает пропуски, поставленные этим ``issue_no``. С #349 у отмены два явных
+режима: ``remainder`` трогает только непринятую часть, ``full`` откатывает
+всю выдачу, включая принятую (см. ADR-0074).
 """
 from __future__ import annotations
 
 from dataclasses import replace
 from datetime import UTC, datetime
 from decimal import Decimal
+from enum import Enum
 from typing import Any
 
 from sqlalchemy import select
@@ -77,6 +80,7 @@ from app.stock.services import (
 from app.transfers.source_selection import IssuePlan, build_issue_plan
 
 __all__ = [
+    "IssueCancelMode",
     "build_issue_preview_payload",
     "cancel_issue",
     "execute_issue",
@@ -724,7 +728,22 @@ def issue_summary_payload(result: dict[str, Any]) -> dict[str, Any]:
     }
 
 
-# ─── Отмена выдачи целиком ─────────────────────────────────────────────────
+# ─── Отмена выдачи: два режима (#349) ──────────────────────────────────────
+
+
+class IssueCancelMode(str, Enum):
+    """Режим отмены выдачи — выбирает оператор, по умолчанию нет (#349).
+
+    ``remainder`` — отменить только непринятую часть: передачи, по которым
+    получатель ещё ничего не сделал, возвращаются на склады, принятые
+    остаются как есть.
+    ``full`` — полный откат: отменяется вся выдача, включая принятую
+    получателем часть. Обратные проводки пишет тот же ``ReversalService``,
+    что и приёмка (ADR-0019), поэтому остатки складов сходятся.
+    """
+
+    remainder = "remainder"
+    full = "full"
 
 
 async def _issue_transfers(db: AsyncSession, issue_no: str) -> list[Transfer]:
@@ -757,16 +776,19 @@ async def _stage_label(db: AsyncSession, task: WorkTask) -> tuple[int, str]:
 
 
 async def _acceptance_blocker(db: AsyncSession, transfer: Transfer) -> str | None:
-    """Причина отказа отменять выдачу целиком — по одной передаче.
+    """Почему передачу нельзя отменить в режиме «остаток» (#349, ADR-0071).
 
     «Принята» в явном смысле (``partially_accepted``/отклонена/скорректирована)
     или на приёмном этапе уже есть факты исполнения (завершено/отклонено
-    хоть что-то) — вернуть материал нельзя, не породив минус.
+    хоть что-то). В режиме «остаток» такая передача остаётся как есть —
+    принятое не трогаем. Полный откат (#349) снимает это ограничение: он
+    возвращает и принятую часть, а покрытие приёмного участка проверяет
+    ``ReversalService``.
     """
     if transfer.status in {TransferStatus.partially_accepted, TransferStatus.rejected, TransferStatus.amended}:
         return (
             f"Передача {transfer.transfer_no} принята частично или отклонена — "
-            "выдачу целиком не отменить"
+            "в режиме «остаток» её не трогаем"
         )
     task = await db.get(WorkTask, transfer.to_task_id)
     if task is None:
@@ -779,70 +801,219 @@ async def _acceptance_blocker(db: AsyncSession, transfer: Transfer) -> str | Non
         _seq, name = await _stage_label(db, task)
         return (
             f"На этапе «{name}» уже есть завершённая или бракованная работа "
-            f"({_fmt_qty(consumed)} шт.) — выдачу целиком не отменить"
+            f"({_fmt_qty(consumed)} шт.) — в режиме «остаток» её не трогаем"
         )
     return None
 
 
-async def preview_issue_cancellation(db: AsyncSession, *, issue_no: str) -> dict[str, Any]:
-    """Что вернёт отмена: «вернём 40 на Хранилище Б, 12 на В, этапы 2–4 снова в работу».
+async def _recipient_accepted_quantity(
+    db: AsyncSession, transfer: Transfer, blocker: str | None
+) -> Decimal:
+    """Сколько из передачи уже принято получателем — для предупреждения.
 
-    Блокировка — текстом причины (#282): если хоть одна передача уже принята
-    в смысле фактов исполнения, целиком выдача не отменяется.
+    Число в окне полного отката говорит, какая часть вернётся не со склада,
+    а с участка: это и есть «уже принято» из тикета #349.
+    """
+    if transfer.status in {TransferStatus.partially_accepted, TransferStatus.rejected}:
+        return Decimal(str(transfer.accepted_quantity or 0))
+    if blocker is None:
+        return ZERO
+    task = await db.get(WorkTask, transfer.to_task_id)
+    if task is None:
+        return ZERO
+    from app.stock.services import StockProjectionManager
+
+    cache = await StockProjectionManager().get_task_cache(db, task.id)
+    consumed = Decimal(str(cache["completed_quantity"])) + Decimal(str(cache["rejected_quantity"]))
+    return min(consumed, Decimal(transfer.sent_quantity))
+
+
+async def _transfer_cancel_fact(db: AsyncSession, transfer: Transfer) -> dict[str, Any]:
+    """Одна передача в предпросмотре: что вернётся, можно ли её трогать."""
+    location = await db.get(Section, transfer.from_section_id)
+    blocker = await _acceptance_blocker(db, transfer)
+    accepted = await _recipient_accepted_quantity(db, transfer, blocker)
+    return {
+        "transfer_id": transfer.id,
+        "transfer_no": transfer.transfer_no,
+        "location_id": transfer.from_section_id,
+        "location_name": location.name if location else "",
+        "quantity": _fmt_qty(transfer.sent_quantity),
+        "accepted_quantity": _fmt_qty(accepted),
+        "cancellable": blocker is None,
+        "block_reason": blocker,
+        "_accepted": accepted,
+    }
+
+
+def _return_row(fact: dict[str, Any]) -> dict[str, Any]:
+    return {
+        "transfer_id": fact["transfer_id"],
+        "transfer_no": fact["transfer_no"],
+        "location_id": fact["location_id"],
+        "location_name": fact["location_name"],
+        "quantity": fact["quantity"],
+    }
+
+
+async def _skipped_stage_payload(db: AsyncSession, issue_no: str) -> list[dict[str, Any]]:
+    stages: list[dict[str, Any]] = []
+    for task in await _issue_skipped_tasks(db, issue_no):
+        sequence, name = await _stage_label(db, task)
+        stages.append({"task_id": task.id, "sequence": sequence, "stage_name": name})
+    stages.sort(key=lambda item: item["sequence"])
+    return stages
+
+
+async def _full_rollback_blockers(db: AsyncSession, live: list[Transfer]) -> list[str]:
+    """Запрещающие статусы и покрытие полного отката (#349).
+
+    ``amended`` — запись уже заменена новой, откатывать её значит задвоить
+    компенсацию. ``rejected`` — получатель отказался, материал уже вернулся.
+    Отсутствие активного ``transfer_send`` — legacy-запись или гонка.
+    Остальное (включая частичную приёмку и отработанную часть) полный откат
+    допускает, но покрытие приёмного участка проверяет ``ReversalService``:
+    если материал израсходован и вернуть его нечем — отказ с дефицитом.
+    """
+    from app.reversal.service import ReversalService
+    from app.transfers.services import _find_transfer_send_action
+
+    svc = ReversalService()
+    blockers: list[str] = []
+    for transfer in live:
+        if transfer.status == TransferStatus.amended:
+            blockers.append(
+                f"Передача {transfer.transfer_no} скорректирована (заменена новой) — "
+                "полный откат невозможен"
+            )
+            continue
+        if transfer.status == TransferStatus.rejected:
+            blockers.append(
+                f"Передача {transfer.transfer_no} отклонена получателем — материал уже "
+                "вернулся, полный откат задвоил бы возврат"
+            )
+            continue
+        send_action = await _find_transfer_send_action(db, transfer.id)
+        if send_action is None:
+            blockers.append(
+                f"Передача {transfer.transfer_no}: исходное действие отправки не найдено "
+                "(уже отменено или запись до внедрения журнала действий)"
+            )
+            continue
+        preview = await svc.preview_reverse(db, send_action.id, cascade=True)
+        for blocker in preview.blockers:
+            blockers.append(f"Передача {transfer.transfer_no}: {blocker.detail}")
+    return blockers
+
+
+async def preview_issue_cancellation(db: AsyncSession, *, issue_no: str) -> dict[str, Any]:
+    """Что вернёт каждый режим отмены (#349) — только чтение.
+
+    Ответ содержит общий список передач и два независимых сценария:
+    ``remainder`` (только непринятая часть, принятое остаётся) и ``full``
+    (вся выдача, включая принятую часть). UI показывает оба и требует
+    явного выбора: у режимов разные последствия для уже принятого материала.
     """
     transfers = await _issue_transfers(db, issue_no)
     if not transfers:
         raise ValueError("Выдача с таким номером не найдена")
     live = [t for t in transfers if t.status != TransferStatus.cancelled]
 
-    returns: list[dict[str, Any]] = []
-    blockers: list[str] = []
-    for transfer in live:
-        location = await db.get(Section, transfer.from_section_id)
-        returns.append(
-            {
-                "transfer_id": transfer.id,
-                "transfer_no": transfer.transfer_no,
-                "location_id": transfer.from_section_id,
-                "location_name": location.name if location else "",
-                "quantity": _fmt_qty(transfer.sent_quantity),
-            }
-        )
-        blocker = await _acceptance_blocker(db, transfer)
-        if blocker is not None:
-            blockers.append(blocker)
+    facts = [await _transfer_cancel_fact(db, t) for t in live]
+    stages = await _skipped_stage_payload(db, issue_no)
 
-    stages: list[dict[str, Any]] = []
-    for task in await _issue_skipped_tasks(db, issue_no):
-        sequence, name = await _stage_label(db, task)
-        stages.append({"task_id": task.id, "sequence": sequence, "stage_name": name})
-    stages.sort(key=lambda item: item["sequence"])
+    remainder_returns = [_return_row(f) for f in facts if f["cancellable"]]
+    kept = [
+        {
+            "transfer_id": f["transfer_id"],
+            "transfer_no": f["transfer_no"],
+            "reason": f["block_reason"],
+        }
+        for f in facts
+        if not f["cancellable"]
+    ]
+    # Пропуски снимаются только когда выдача отменена целиком: если хоть
+    # одна передача осталась живой, материал всё равно пришёл дальше по
+    # маршруту, и ранние этапы остаются «Пропущено» (#349).
+    remainder_stages = [] if kept else stages
+    remainder_can = bool(remainder_returns)
+    remainder_reason = None if remainder_can else _remainder_block_reason(facts)
+
+    full_blockers = await _full_rollback_blockers(db, live)
+    full_returns = [_return_row(f) for f in facts]
+    accepted_quantity = sum((f["_accepted"] for f in facts), ZERO)
+    full_can = bool(full_returns) and not full_blockers
+    if full_blockers:
+        full_reason: str | None = "; ".join(full_blockers)
+    elif not full_returns:
+        full_reason = "Все передачи выдачи уже отменены"
+    else:
+        full_reason = None
 
     return {
         "issue_no": issue_no,
-        "returns": returns,
-        "stages": stages,
-        "can_cancel": not blockers,
-        "reason": None if not blockers else "; ".join(blockers),
-        "summary": _cancellation_summary(returns, stages, blockers),
+        "transfers": [
+            {key: value for key, value in fact.items() if not key.startswith("_")}
+            for fact in facts
+        ],
+        "remainder": {
+            "returns": remainder_returns,
+            "stages": remainder_stages,
+            "kept": kept,
+            "can_cancel": remainder_can,
+            "reason": remainder_reason,
+            "summary": _cancellation_summary(remainder_returns, remainder_stages, [], kept),
+        },
+        "full": {
+            "returns": full_returns,
+            "stages": stages,
+            "can_cancel": full_can,
+            "reason": full_reason,
+            "summary": _full_cancellation_summary(
+                full_returns, stages, full_blockers, accepted_quantity
+            ),
+            "accepted_quantity": _fmt_qty(accepted_quantity),
+        },
     }
+
+
+def _remainder_block_reason(facts: list[dict[str, Any]]) -> str:
+    if not facts:
+        return "Все передачи выдачи уже отменены"
+    return (
+        "Остатка нет: всем передачам выдачи уже нашлось применение — "
+        "доступен только полный откат"
+    )
+
+
+def _quantity_span(stages: list[dict[str, Any]]) -> str | None:
+    sequences = sorted({int(item["sequence"]) for item in stages})
+    if not sequences:
+        return None
+    return str(sequences[0]) if len(sequences) == 1 else f"{sequences[0]}–{sequences[-1]}"
 
 
 def _cancellation_summary(
     returns: list[dict[str, Any]],
     stages: list[dict[str, Any]],
     blockers: list[str],
+    kept: list[dict[str, Any]] | None = None,
 ) -> str:
-    """Текст предпросмотра: «вернём 40 на Хранилище Б, 12 на В, этапы 2–4 снова в работу»."""
+    """Текст режима «остаток»: «вернём 40 на Хранилище Б, 12 на В».
+
+    Принятые передачи не прячутся: они перечислены как «оставим как есть»,
+    иначе оператор не поймёт, почему возврат меньше выдачи.
+    """
     parts: list[str] = []
     if returns:
         tail = ", ".join(
             f"{item['quantity']} на «{item['location_name']}»" for item in returns
         )
         parts.append(f"вернём {tail}")
-    sequences = sorted({int(item["sequence"]) for item in stages})
-    if sequences:
-        span = str(sequences[0]) if len(sequences) == 1 else f"{sequences[0]}–{sequences[-1]}"
+    if kept:
+        parts.append("оставим как есть: " + ", ".join(item["transfer_no"] for item in kept))
+    span = _quantity_span(stages)
+    if span:
         parts.append(f"этапы {span} снова в работу")
     head = ", ".join(parts)
     if blockers:
@@ -851,69 +1022,294 @@ def _cancellation_summary(
     return head
 
 
+def _full_cancellation_summary(
+    returns: list[dict[str, Any]],
+    stages: list[dict[str, Any]],
+    blockers: list[str],
+    accepted_quantity: Decimal,
+) -> str:
+    parts: list[str] = []
+    if returns:
+        tail = ", ".join(
+            f"{item['quantity']} на «{item['location_name']}»" for item in returns
+        )
+        parts.append(f"вернём {tail}")
+    if accepted_quantity > ZERO:
+        parts.append(f"включая принятое получателем: {_fmt_qty(accepted_quantity)} шт.")
+    span = _quantity_span(stages)
+    if span:
+        parts.append(f"этапы {span} снова в работу")
+    head = ", ".join(parts)
+    if blockers:
+        reason = "; ".join(blockers)
+        return (
+            f"{head}. Полный откат невозможен: {reason}"
+            if head
+            else f"Полный откат невозможен: {reason}"
+        )
+    return f"Полный откат: {head}" if head else "Полный откат: отменять нечего"
+
+
 async def cancel_issue(
     db: AsyncSession,
     *,
     issue_no: str,
+    mode: IssueCancelMode | str,
     actor_id: int,
     comment: str | None = None,
+    idempotency_key: str | None = None,
 ) -> dict[str, Any]:
-    """Отмена выдачи целиком: передачи по одной + снятие СВОИХ пропусков.
+    """Отмена выдачи в выбранном режиме (#349).
 
-    ``cancel_transfer`` откатывает каждую передачу через её собственный
-    ``transfer_send`` Action (ADR-0019), поэтому частичная отмена остаётся
-    возможной и в «Отмене действий» поштучно. Пропуски снимаются только те,
-    где ``skipped_by_issue_no`` равен этому номеру (#282).
+    ``remainder`` — отменяет только передачи, по которым получатель ещё
+    ничего не сделал; принятые остаются как есть и перечисляются в
+    ``kept_transfers`` с причиной.
+    ``full`` — откатывает всю выдачу, включая принятую часть: каждая
+    передача проходит тот же ``cancel_transfer`` → ``ReversalService``
+    (ADR-0019), поэтому обратные проводки зеркальны приёмке, а остатки
+    складов сходятся. Запрещающие статусы (``amended``/``rejected``) и
+    нехватка покрытия отказывают заранее — выдача отменяется целиком или
+    никак, половины не бывает.
+
+    Идемпотентность — по ключу операции: повтор с тем же
+    ``idempotency_key`` возвращает записанный исход (``idempotent_replay``)
+    и не пишет ни одной проводки. Без ключа повтор, когда живых передач уже
+    нет, тоже честно отвечает исходом, а не ошибкой.
+
+    Аудит: ``cancel_transfer`` пишет запись на каждую передачу (режим, номер
+    выдачи, ключ операции, ``reversed_tx_ids``), а здесь добавляется одна
+    запись операции с полным итогом — по ней и воспроизводится повтор.
     """
     from app.transfers.services import cancel_transfer
 
+    cancel_mode = IssueCancelMode(mode)
     transfers = await _issue_transfers(db, issue_no)
     if not transfers:
         raise ValueError("Выдача с таким номером не найдена")
+
+    if idempotency_key is not None:
+        replay = await _replay_issue_cancel(db, idempotency_key)
+        if replay is not None:
+            return replay
+
     live = [t for t in transfers if t.status != TransferStatus.cancelled]
     if not live:
-        # Явный отказ вместо тихого no-op: «отменить ещё раз» не должно
-        # выглядеть как успех, даже когда удвоенного возврата уже нет (#282).
-        raise ValueError(f"Выдача {issue_no} уже отменена — повторная отмена невозможна")
+        # #349: повторный вызов — не ошибка и не второй возврат материала.
+        return {
+            "issue_no": issue_no,
+            "mode": cancel_mode.value,
+            "idempotent_replay": True,
+            "cancelled_transfers": [
+                {
+                    "transfer_id": t.id,
+                    "transfer_no": t.transfer_no,
+                    "status": t.status.value,
+                    "quantity": _fmt_qty(t.sent_quantity),
+                }
+                for t in transfers
+            ],
+            "kept_transfers": [],
+            "restored_stages": [],
+            "reversed_tx_ids": [],
+        }
 
-    blockers: list[str] = []
-    for transfer in live:
-        blocker = await _acceptance_blocker(db, transfer)
-        if blocker is not None:
-            blockers.append(blocker)
-    if blockers:
-        raise ValueError("Выдачу целиком не отменить: " + "; ".join(blockers))
+    kept: list[tuple[Transfer, str]] = []
+    if cancel_mode is IssueCancelMode.remainder:
+        scope: list[Transfer] = []
+        for transfer in live:
+            reason = await _acceptance_blocker(db, transfer)
+            if reason is None:
+                scope.append(transfer)
+            else:
+                kept.append((transfer, reason))
+        if not scope:
+            raise ValueError(
+                "Отменять нечего: всем передачам выдачи уже нашлось применение — "
+                "доступен только полный откат"
+            )
+    else:
+        blockers = await _full_rollback_blockers(db, live)
+        if blockers:
+            raise ValueError("Полный откат невозможен: " + "; ".join(blockers))
+        scope = live
 
     cancelled: list[dict[str, Any]] = []
-    for transfer in live:
+    reversed_tx_ids: list[int] = []
+    for transfer in scope:
         result = await cancel_transfer(
-            db, transfer_id=transfer.id, actor_id=actor_id, comment=comment
+            db,
+            transfer_id=transfer.id,
+            actor_id=actor_id,
+            comment=comment,
+            allow_accepted=cancel_mode is IssueCancelMode.full,
+            mode=cancel_mode.value,
+            issue_no=issue_no,
+            operation_key=idempotency_key,
         )
         cancelled.append(
             {
-                "transfer_id": transfer.id,
+                "transfer_id": result["transfer_id"],
                 "transfer_no": transfer.transfer_no,
                 "status": result.get("status"),
+                "quantity": _fmt_qty(transfer.sent_quantity),
             }
         )
+        reversed_tx_ids.extend(result.get("reversed_tx_ids") or [])
 
+    # Пропуски снимаем только когда в выдаче не осталось живых передач:
+    # принятая передача означает, что материал всё равно пришёл дальше по
+    # маршруту, и ранние этапы обязаны остаться «Пропущено» (#349).
     restored: list[dict[str, Any]] = []
-    for task in await _issue_skipped_tasks(db, issue_no):
-        sequence, name = await _stage_label(db, task)
-        await _restore_skipped_task(db, task)
-        restored.append(
-            {
-                "task_id": task.id,
-                "sequence": sequence,
-                "stage_name": name,
-            }
-        )
+    if not kept:
+        for task in await _issue_skipped_tasks(db, issue_no):
+            sequence, name = await _stage_label(db, task)
+            await _restore_skipped_task(db, task)
+            restored.append({"task_id": task.id, "sequence": sequence, "stage_name": name})
 
     await db.flush()
-    return {
+
+    payload: dict[str, Any] = {
         "issue_no": issue_no,
+        "mode": cancel_mode.value,
+        "idempotent_replay": False,
         "cancelled_transfers": cancelled,
+        "kept_transfers": [
+            {
+                "transfer_id": transfer.id,
+                "transfer_no": transfer.transfer_no,
+                "reason": reason,
+            }
+            for transfer, reason in kept
+        ],
         "restored_stages": restored,
+        "reversed_tx_ids": reversed_tx_ids,
+    }
+    await _log_issue_cancel(
+        db,
+        issue_no=issue_no,
+        mode=cancel_mode,
+        actor_id=actor_id,
+        comment=comment,
+        payload=payload,
+        transfers_by_id={transfer.id: transfer for transfer in transfers},
+        operation_key=idempotency_key,
+    )
+    return payload
+
+
+async def _log_issue_cancel(
+    db: AsyncSession,
+    *,
+    issue_no: str,
+    mode: IssueCancelMode,
+    actor_id: int,
+    comment: str | None,
+    payload: dict[str, Any],
+    transfers_by_id: dict[int, Transfer],
+    operation_key: str | None,
+) -> None:
+    """Одна запись аудита на операцию отмены — с полным итогом (#349).
+
+    ``cancel_transfer`` уже пишет запись на каждую передачу; здесь — операция
+    целиком: кто, когда, выдача, режим, что откатили и какой ключ делает
+    повтор идемпотентным.
+    """
+    from app.models.audit_log import AuditAction, AuditEntityType
+    from app.models.product import Product
+    from app.services.audit_log_service import log_action
+
+    first_transfer = None
+    if payload["cancelled_transfers"]:
+        first_transfer = transfers_by_id.get(payload["cancelled_transfers"][0]["transfer_id"])
+    section = await db.get(Section, first_transfer.from_section_id) if first_transfer else None
+    product = await db.get(Product, first_transfer.product_id) if first_transfer else None
+
+    title = (
+        "Отмена выдачи: полный откат"
+        if mode is IssueCancelMode.full
+        else "Отмена выдачи: остаток"
+    )
+    if mode is IssueCancelMode.full:
+        message = (
+            f"Выдача {issue_no}: полный откат — отменено передач "
+            f"{len(payload['cancelled_transfers'])}, включая принятую часть."
+        )
+    else:
+        message = (
+            f"Выдача {issue_no}: отменён остаток — передач "
+            f"{len(payload['cancelled_transfers'])}, оставлено без изменений "
+            f"{len(payload['kept_transfers'])}."
+        )
+
+    changes: dict[str, Any] = {
+        "operation": "issue_cancel",
+        "issue_no": issue_no,
+        "mode": mode.value,
+        "cancelled_transfers": payload["cancelled_transfers"],
+        "kept_transfers": payload["kept_transfers"],
+        "restored_stages": payload["restored_stages"],
+        "reversed_tx_ids": payload["reversed_tx_ids"],
+    }
+    if operation_key is not None:
+        changes["operation_key"] = operation_key
+
+    await log_action(
+        db,
+        status="success",
+        title=title,
+        message=message,
+        user_id=actor_id,
+        section_id=first_transfer.from_section_id if first_transfer else None,
+        section_name=section.name if section else None,
+        section_code=section.code if section else None,
+        product_sku=product.sku if product else None,
+        qty_text=", ".join(
+            f"{item['transfer_no']} — {item['quantity']} шт."
+            for item in payload["cancelled_transfers"]
+        )
+        or None,
+        comment=comment,
+        action=AuditAction.CANCEL,
+        entity_type=AuditEntityType.TRANSFER,
+        entity_id=(
+            payload["cancelled_transfers"][0]["transfer_id"]
+            if payload["cancelled_transfers"]
+            else None
+        ),
+        changes=changes,
+    )
+
+
+async def _replay_issue_cancel(db: AsyncSession, operation_key: str) -> dict[str, Any] | None:
+    """Записанный исход операции с этим ключом — для идемпотентного повтора.
+
+    Ключ уникален на операцию выдачи: найдена запись — значит операция уже
+    применена, и повтор обязан вернуть её итог, а не создать второй возврат.
+    """
+    from app.models.audit_log import AuditAction, AuditEntityType, AuditLog
+
+    row = await db.scalar(
+        select(AuditLog)
+        .where(
+            AuditLog.action == AuditAction.CANCEL.value,
+            AuditLog.entity_type == AuditEntityType.TRANSFER.value,
+            AuditLog.changes.op("->>")("operation") == "issue_cancel",
+            AuditLog.changes.op("->>")("operation_key") == operation_key,
+        )
+        .order_by(AuditLog.id.desc())
+        .limit(1)
+    )
+    if row is None:
+        return None
+    changes = dict(row.changes or {})
+    return {
+        "issue_no": changes.get("issue_no"),
+        "mode": changes.get("mode"),
+        "idempotent_replay": True,
+        "cancelled_transfers": changes.get("cancelled_transfers", []),
+        "kept_transfers": changes.get("kept_transfers", []),
+        "restored_stages": changes.get("restored_stages", []),
+        "reversed_tx_ids": changes.get("reversed_tx_ids", []),
     }
 
 

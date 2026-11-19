@@ -17,6 +17,7 @@ import {
   getSectionsSummary,
   listDailyPlans,
   revokeDailyPlanItem,
+  skipStage,
   type CreateDailyPlanInput,
   type DailyStatsRow,
   type SectionBoardTask,
@@ -40,6 +41,7 @@ import { SectionSwitcherTiles } from "../components/SectionSwitcherTiles";
 import { SectionTasksBoard, type TaskActionDialogType, type TaskBoardViewMode } from "../components/SectionTasksBoard";
 import { TaskActionDrawer } from "../components/TaskActionDrawer";
 import { BulkCompleteFooter } from "../components/BulkCompleteFooter";
+import { SkipStageDialog } from "../components/SkipStageDialog";
 import { BulkDraftExitDialog } from "../components/BulkDraftExitDialog";
 import { resolveFactQuantity } from "../lib/factQuantity";
 import {
@@ -82,7 +84,7 @@ import {
 import { actionReasonText, type ActionReasonCode } from "@/shared/lib/actionReasons";
 import { createAuditLog, getAuditLogs, type AuditLogEntry } from "@/shared/api/auditLogs";
 import { isAnyDialogOpen } from "@/shared/lib/dialogOpen";
-import { useAuth } from "@/entities/auth";
+import { useAuth, usePermission } from "@/entities/auth";
 import { cn } from "@/shared/utils/cn";
 import { fmtQty, toQtyInteger } from "@/shared/lib/quantityFormat";
 
@@ -162,6 +164,17 @@ export function SectionsTasksPage() {
   // в AuthProvider, а не на каждом монтировании доски, как старый
   // per-mount запрос `/auth/me`.
   const { user: me } = useAuth();
+  const { canSkipStage } = usePermission();
+
+  /**
+   * Ручной пропуск этапа (#348): право — у admin/section_manager, причина
+   * обязательна. Сервер пишет аудит сам; страница после успеха перечитывает
+   * доску, чтобы строка сразу стала «Пропущено».
+   */
+  const [skipDialog, setSkipDialog] = useState<{
+    open: boolean;
+    task: SectionBoardTask | null;
+  }>({ open: false, task: null });
 
 
   const [actionDialog, setActionDialog] = useState<{
@@ -772,6 +785,44 @@ export function SectionsTasksPage() {
 
   const pendingMutation = completeMutation.isPending;
 
+  const skipStageMutation = useMutation({
+    mutationFn: ({ taskId, reason }: { taskId: number; reason: string }) =>
+      skipStage(taskId, { reason }, requestOptions),
+    onSuccess: async (data) => {
+      toast({
+        title: "Этап пропущен",
+        description: data.skip_reason
+          ? `Причина: ${data.skip_reason}`
+          : "Этап закрыт без работы",
+        variant: "success",
+      });
+      setSkipDialog({ open: false, task: null });
+      await invalidateAfter(queryClient, "sectionTaskChanged");
+    },
+    onError: (error) => {
+      // Диалог остаётся открытым: причина уже набрана, повтор не должен
+      // требовать её заново.
+      toast({
+        title: "Не удалось пропустить этап",
+        description: getErrorMessage(error),
+        variant: "destructive",
+      });
+    },
+  });
+
+  const openSkipDialog = useCallback((task: SectionBoardTask) => {
+    setSkipDialog({ open: true, task });
+  }, []);
+
+  const submitSkipStage = useCallback(
+    (reason: string) => {
+      const task = skipDialog.task;
+      if (!task) return;
+      skipStageMutation.mutate({ taskId: task.id, reason });
+    },
+    [skipDialog.task, skipStageMutation],
+  );
+
   /**
    * Одиночное завершение из строки доски (#283) и групповое из шапки блока:
    * у группы «Факт/Брак» — цель по всей группе, и раскладывается по строкам тем
@@ -1234,6 +1285,8 @@ export function SectionsTasksPage() {
                     mode={viewMode}
                     onModeChange={setViewMode}
                     onAction={openActionDialog}
+                    canSkipStages={canSkipStage}
+                    onSkipStage={openSkipDialog}
                     hasPackaging={selectedSection?.has_packaging}
                     showStatusFilters
                     bulkMode={bulkMode || creatingDailyPlan}
@@ -1445,6 +1498,14 @@ export function SectionsTasksPage() {
         pending={pendingMutation}
         conflictHint={conflictHint}
         onSubmit={submitAction}
+      />
+
+      <SkipStageDialog
+        open={skipDialog.open}
+        onOpenChange={(open) => setSkipDialog((prev) => ({ ...prev, open }))}
+        task={skipDialog.task}
+        pending={skipStageMutation.isPending}
+        onSubmit={submitSkipStage}
       />
 
       {/* Bulk results dialog */}

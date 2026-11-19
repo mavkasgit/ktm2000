@@ -17,6 +17,29 @@ const PLAN_POLICIES = {
 
 const ROLES = ["admin", "planner", "section_manager", "operator", "viewer", "transporter"] as const;
 
+/**
+ * Ручной пропуск этапа (#348) — зеркало `SKIP_STAGE_ROLES` backend:
+ * admin и section_manager. Оператор пишет факты, а не знак «Пропущено».
+ */
+const STAGE_POLICIES = {
+  skipStage: ["admin", "section_manager"],
+} as const;
+
+describe("stage policies", () => {
+  for (const [policy, allowed] of Object.entries(STAGE_POLICIES)) {
+    it(`${policy} пускает ровно ${allowed.join(", ")}`, () => {
+      const check = POLICIES[policy as keyof typeof STAGE_POLICIES];
+      for (const role of ROLES) {
+        expect(check(role), `${policy}: ${role}`).toBe((allowed as readonly string[]).includes(role));
+      }
+    });
+
+    it(`${policy} без роли (не залогинен) запрещает`, () => {
+      expect(POLICIES[policy as keyof typeof STAGE_POLICIES](undefined)).toBe(false);
+    });
+  }
+});
+
 describe("plan policies", () => {
   for (const [policy, allowed] of Object.entries(PLAN_POLICIES)) {
     it(`${policy} пускает ровно ${allowed.join(", ")}`, () => {

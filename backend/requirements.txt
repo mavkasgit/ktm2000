@@ -1,14 +1,14 @@
 fastapi>=0.104.0
-uvicorn[standard]>=0.24.0
+uvicorn[standard]>=0.54.0
 sqlalchemy[asyncio]>=2.0.23
 asyncpg>=0.29.0
 alembic>=1.13.0
 pydantic>=2.5.0
-pydantic-settings>=2.1.0
+pydantic-settings>=2.16.2
 structlog>=26.0.0
-python-jose[cryptography]>=3.3.0
+python-jose[cryptography]>=3.5.0
 python-multipart>=0.0.6
-httpx>=0.25.0
+httpx>=0.28.1
 # Прямой импорт в app/api/backups.py (anyio.open_file) — объявляем явно:
 # транзитивно приходит из FastAPI/Starlette, но прямой импорт не должен на это опираться.
 anyio>=4.0

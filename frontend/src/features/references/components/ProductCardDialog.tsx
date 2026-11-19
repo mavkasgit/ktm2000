@@ -299,8 +299,21 @@ export function ProductCardDialog({
                 {!product.is_active && (
                   <Badge variant="outline" className="text-[10px]">неактивен</Badge>
                 )}
+                {product.third_party && (
+                  <Badge variant="secondary" className="text-[10px] bg-amber-100 text-amber-900">
+                    Сторонний
+                  </Badge>
+                )}
               </div>
               <div className="text-sm font-normal text-muted-foreground">{product.name}</div>
+              {product.third_party && (
+                <div className="text-xs text-amber-700">
+                  {product.customer ?? "Заказчик не указан"}
+                  {product.pack
+                    ? ` · ${product.pack.sets_per_hanger} × ${product.pack.pieces_per_set} = ${product.pack.sets_per_hanger * product.pack.pieces_per_set} шт`
+                    : ""}
+                </div>
+              )}
             </div>
             {product.color && <Badge variant="secondary">{product.color}</Badge>}
           </DialogTitle>

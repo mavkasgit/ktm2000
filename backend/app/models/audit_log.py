@@ -21,6 +21,10 @@ class AuditAction(str, Enum):
     RECEIVE = "receive"
     CORRECT = "correct"
     RELEASE = "release"
+    # Этап закрыт без работы (#348): «Пропущено» с обязательной причиной.
+    # Отдельное значение, а не UPDATE: по журналу видно, что факта не было,
+    # и пропуск не путается с обычным завершением.
+    SKIP = "skip"
 
 
 class AuditEntityType(str, Enum):

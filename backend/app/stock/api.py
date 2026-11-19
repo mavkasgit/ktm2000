@@ -15,6 +15,8 @@ Endpoints:
   * ``GET /stock/transactions``        — лента StockTransaction с
     фильтрами ``product_id`` / ``transfer_id`` / ``task_id`` / ``reason``
     и пагинацией ``limit`` / ``offset``.
+  * ``GET /stock/occupancy``           — занятость по каждому складу:
+    ``in_work`` / ``free`` / ``total`` в штуках и общий итог (#350).
 
 Все эндпоинты требуют только reader-роль: это аудит/сверка, не мутация.
 Запись идёт исключительно через сервисы доменов (transfer_send и т.д.),
@@ -980,6 +982,83 @@ async def list_balances_by_product(
         )
     result = await db.execute(stmt)
     return await _serialize_balances_with_operations(db, list(result.all()))
+
+
+# ─── Occupancy (#350) ────────────────────────────────────────────────────────
+
+
+class WarehouseOccupancyRowOut(BaseModel):
+    """Занятость одного склада в штуках.
+
+    ``in_work + free == total``: «всего» — физический годный остаток склада,
+    «ёмкости» в модели нет (см. ``app.services.warehouse_occupancy``).
+    """
+
+    warehouse_id: int
+    warehouse: str
+    warehouse_code: str
+    in_work: float
+    free: float
+    total: float
+
+
+class WarehouseOccupancyTotalsOut(BaseModel):
+    """Общий итог по всем складам — сумма строк."""
+
+    in_work: float
+    free: float
+    total: float
+
+
+class WarehouseOccupancyOut(BaseModel):
+    warehouses: list[WarehouseOccupancyRowOut]
+    totals: WarehouseOccupancyTotalsOut
+
+
+@router.get(
+    "/occupancy",
+    response_model=WarehouseOccupancyOut,
+    dependencies=[Depends(require_role(list(READER_ROLES)))],
+)
+async def get_warehouse_occupancy(
+    db: AsyncSession = Depends(get_db),
+) -> WarehouseOccupancyOut:
+    """Занятость по каждому складу: в работе / свободно / всего, в штуках (#350).
+
+    Ответ — строки по складам, а не по продуктам: занятость больше не
+    агрегируется по артикулу. Формула и источник чисел (физический остаток
+    + спрос открытых позиций #207, разрез в системном порядке участков) —
+    в докстринге ``app.services.warehouse_occupancy``.
+
+    Пустой склад остаётся в списке нулевой строкой: это факт, а не
+    отсутствие данных. Существующие ответы не меняются — эндпоинт новый.
+    """
+    from app.services.warehouse_occupancy import warehouse_occupancy
+
+    occupancy = await warehouse_occupancy(db)
+    return WarehouseOccupancyOut(
+        warehouses=[
+            WarehouseOccupancyRowOut(
+                warehouse_id=row.warehouse_id,
+                warehouse=row.warehouse,
+                warehouse_code=row.warehouse_code,
+                in_work=_round_qty(row.in_work),
+                free=_round_qty(row.free),
+                total=_round_qty(row.total),
+            )
+            for row in occupancy.warehouses
+        ],
+        totals=WarehouseOccupancyTotalsOut(
+            in_work=_round_qty(occupancy.in_work),
+            free=_round_qty(occupancy.free),
+            total=_round_qty(occupancy.total),
+        ),
+    )
+
+
+def _round_qty(value: Decimal) -> float:
+    """Штуки в JSON: три знака, как у ``free_stock_quantity`` индикатора #207."""
+    return round(float(value), 3)
 
 
 # ─── Transactions ─────────────────────────────────────────────────────────────
