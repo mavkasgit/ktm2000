@@ -18,8 +18,14 @@ const { existsSync, readFileSync, writeFileSync, rmSync } = require("node:fs");
 const { tmpdir } = require("node:os");
 const { dirname, join } = require("node:path");
 const { parsePytestCollect, parseVitestJson, formatReductions, evaluateStored } = require("./test-count-core.js");
+const { resolvePython } = require("./python-core.js");
 
 const ROOT = dirname(__dirname);
+/**
+ * Сборщик pytest идёт интерпретатором проекта (`backend/.venv`), а не первым
+ * `python` из PATH: в смешанной сессии это чужой venv с чужой версией (T-384).
+ */
+const PYTHON = resolvePython({ root: ROOT });
 const BASELINE_REL = "scripts/test-count-baseline.json";
 const BASELINE = join(ROOT, "scripts", "test-count-baseline.json");
 // Отчёт vitest кладём вне дерева: `--reporter=json` без --outputFile пишет
@@ -37,7 +43,7 @@ const SOURCES = {
   backend: {
     dir: "backend",
     collector: "pytest --collect-only -q",
-    run: () => [process.env.KTM_PYTHON || "python", ["-m", "pytest", "--collect-only", "-q", "-p", "no:cacheprovider"]],
+    run: () => [PYTHON.exe, ["-m", "pytest", "--collect-only", "-q", "-p", "no:cacheprovider"]],
     parse: parsePytestCollect,
   },
   frontend: {

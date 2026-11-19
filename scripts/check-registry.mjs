@@ -4,7 +4,9 @@
 // Схема (tools.schema.json) исполняется через Ajv, а не предлагается «на веру»:
 // запись без полей или с лишним полем красная. `pinned_in` читается из файла —
 // заявить закрепление там, где его нет, нельзя. Дубликаты id/repo ловятся
-// независимо от регистра.
+// независимо от регистра. Использования actions в `.github/workflows/**`
+// сверяются поштучно, включая SHA: частичный дрейф не прячется за другим файлом
+// с прежним пином (T-384).
 //
 // docs/toolchain.md — производная от реестра (срез D, #383). Пока документа нет,
 // это «не сгенерирован», а не красное: проверка не требует того, чего ещё не существует.
@@ -205,6 +207,51 @@ if (registry) {
     if (!declared.includes(tool.npm_package)) {
       fail(`${tool.id}: пакет ${tool.npm_package} не объявлен в ${tool.pinned_in}`);
     }
+  }
+
+  // (е) каждое использование action сверяется поштучно: проверка «строка есть
+  // где-то в каталоге» пропускала частичный дрейф — один workflow с новым SHA
+  // проходил, пока в пяти других оставался старый. PR, меняющий action-SHA и не
+  // трогающий `tools.json`, обязан краснеть (T-384).
+  const actionTools = tools.filter(
+    (t) =>
+      norm(t.pinned_in) === ".github/workflows" &&
+      typeof t.version === "string" &&
+      t.version.startsWith("@"),
+  );
+  const workflowsDir = join(ROOT, ".github", "workflows");
+  if (actionTools.length && existsSync(workflowsDir)) {
+    const known = new Map(actionTools.map((t) => [t.repo.toLowerCase(), t]));
+    let usages = 0;
+    for (const name of readdirSync(workflowsDir).filter((n) => /\.ya?ml$/.test(n))) {
+      const rel = `.github/workflows/${name}`;
+      const text = withoutCommentLines(readFileSync(join(workflowsDir, name), "utf8"));
+      for (const line of text.split(/\r?\n/)) {
+        const m = /^\s*(?:-\s*)?uses:\s*(\S+)/.exec(line);
+        if (!m) continue;
+        const ref = m[1];
+        // Локальный composite action и docker-образ живут не в реестре actions.
+        if (ref.startsWith("./") || ref.startsWith("docker://")) continue;
+        const at = ref.lastIndexOf("@");
+        if (at < 1) {
+          fail(`${rel}: uses «${ref}» без @ref — action не закреплён`);
+          continue;
+        }
+        const repo = ref.slice(0, at);
+        const pinned = ref.slice(at + 1);
+        usages += 1;
+        const tool = known.get(repo.toLowerCase());
+        if (!tool) {
+          fail(`${rel}: action ${repo} не в реестре ${REGISTRY} — добавьте запись с SHA`);
+          continue;
+        }
+        const expected = tool.version.split(/\s+/)[0];
+        if (`@${pinned}` !== expected) {
+          fail(`${rel}: ${repo} закреплён @${pinned}, в реестре ${expected} — обновите ${REGISTRY}`);
+        }
+      }
+    }
+    notes.push(`${usages} использований actions сверены поштучно`);
   }
 
   notes.push(`${tools.length} записей, блокирующих ${tools.filter((t) => t.blocking).length}`);

@@ -5,6 +5,9 @@ import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 vi.mock("@/shared/api/actions", async (importOriginal) => ({
   ...(await importOriginal<typeof import("@/shared/api/actions")>()),
   getActions: vi.fn(),
+  // Дерево цепочки спрашивает открытый диалог строки; без мока запрос уходит
+  // в реальный `/api/actions/1/tree` и прогон печатает `ECONNREFUSED :3000`.
+  getActionTree: vi.fn(),
 }));
 
 // `JournalRowOperations` читает роль: откат импорта остатков показывается
@@ -12,7 +15,7 @@ vi.mock("@/shared/api/actions", async (importOriginal) => ({
 // кнопок остальных типов шли не про роль.
 vi.mock("@/entities/auth/hooks/useAuth", () => ({ useAuth: vi.fn() }));
 
-import { getActions, type JournalAction } from "@/shared/api/actions";
+import { getActions, getActionTree, type JournalAction } from "@/shared/api/actions";
 import { useAuth, type AuthShellUser } from "@/entities/auth";
 import { ActionsJournalPage } from "./ActionsJournalPage";
 
@@ -66,7 +69,17 @@ beforeEach(() => {
     page: 1,
     page_size: 50,
   });
-
+  vi.mocked(getActionTree).mockResolvedValue({
+    root: {
+      id: 1,
+      action_type: "transfer_send",
+      ref_id: 42,
+      status: "active",
+      depends_on: [],
+      children: [],
+    },
+    total_nodes: 1,
+  });
 });
 
 describe("ActionsJournalPage", () => {

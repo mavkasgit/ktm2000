@@ -12,6 +12,15 @@
 import { fireEvent, render, screen, within } from "@testing-library/react";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
+// Справочник пар PlanModal спрашивает при открытии, чтобы свести пару в один
+// подвес (#312). Без мока запрос уходит в реальный `/api/product-pairs`, и
+// прогон печатает `ECONNREFUSED :3000`: тест проверяет колонки печати, а не
+// доступность стенда.
+vi.mock("@/shared/api/products", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("@/shared/api/products")>()),
+  listProductPairCatalog: vi.fn().mockResolvedValue([]),
+}));
+
 import type { SectionBoardTask } from "@/shared/api/shopfloor";
 import { PlanModal } from "./PlanModal";
 
