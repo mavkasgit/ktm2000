@@ -63,6 +63,7 @@ const CACHE_DOMAIN_KEYS = {
     ["stock-balances"],
     ["stock-transactions"],
     ["stock-product-balance"],
+    ["stock-occupancy"],
     ["stock-remainder-import-operations"],
     ["stock-import-batches"],
     ["stock-import-batch"],
