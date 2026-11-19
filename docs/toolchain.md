@@ -45,7 +45,7 @@
 | `pytest-testmon` | pytest-testmon (tarpas/pytest-testmon) | `backend/requirements-dev.txt` | `2.3.0` | manual | нет | 2026-11-09 |
 | `pytest-xdist` | pytest-xdist (pytest-dev/pytest-xdist) | `backend/requirements-dev.txt` | `3.8.0` | gate, ci | да | 2026-11-03 |
 | `python` | Python (python/cpython) | `mise.toml` | `3.14.10` | gate, ci | да | 2026-11-09 |
-| `ruff` | Ruff (astral-sh/ruff) | `backend/requirements-dev.txt` | `0.16.9` | gate, ci | да | 2026-11-03 |
+| `ruff` | Ruff (astral-sh/ruff) | `backend/requirements-dev.txt` | `0.17.4` | gate, ci | да | 2026-11-19 |
 | `typescript` | TypeScript (microsoft/TypeScript) | `frontend/package.json` | `^5.9.3` | commit, gate, ci | да | 2026-11-09 |
 | `vitest` | Vitest (vitest-dev/vitest) | `frontend/package.json` | `^5.1.0` | gate, ci | да | 2026-11-09 |
 | `vitest-coverage-v8` | @vitest/coverage-v8 (vitest-dev/vitest) | `frontend/package.json` | `^5.1.0` | ci | нет | 2026-11-09 |

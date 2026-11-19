@@ -65,14 +65,14 @@
       "name": "Ruff",
       "repo": "astral-sh/ruff",
       "category": "linter",
-      "version": "0.16.9",
+      "version": "0.17.4",
       "pinned_in": "backend/requirements-dev.txt",
       "runs_at": [
         "gate",
         "ci"
       ],
       "blocking": true,
-      "last_reviewed": "2026-11-03",
+      "last_reviewed": "2026-11-19",
       "rationale": "Единственный линтер backend; после #377 пин живёт в requirements-dev.txt, workflow лишь устанавливает его."
     },
     {
