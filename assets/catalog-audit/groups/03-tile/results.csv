@@ -1,0 +1,25 @@
+sku,verdict,confidence,note,evidence,cells_2024
+1010,ideal,high,"Общая ячейка 1010/1515/2525/4040 уже в 300 dpi, 2025 даёт тот же кадр мельче.",sheets/_sheet-1.jpg,"1226,2196,1498,2638"
+228,decision,high,"Текущий full — латунная пара 228/229 (побайтово равен 229); 2025 даёт отдельное фото 228, но нержавейка.",candidates/228_full.jpg; candidates/228_thumb.jpg; sheets/_sheet-1.jpg; чертёж КТМ/228 (ЮП-2381).jpg,"1499,2665,1771,3033"
+229,decision,high,"Текущий full — та же латунная пара 228/229 (совпадает с 228); 2025 даёт отдельное фото 229, нержавейка.",candidates/229_full.jpg; candidates/229_thumb.jpg; sheets/_sheet-1.jpg; чертёж КТМ/229 (ЮП-2382).jpg,"1499,2665,1771,3033"
+2525,ideal,high,"Семейная ячейка 2024 в 300 dpi, thumb 836 px — менять нечего.",sheets/_sheet-2.jpg; чертёж КТМ/2525 (ЮП-2383).jpg,"1226,2196,1498,2638"
+314,decision,high,"Чертёж КТМ-27 (10×28.3, P=93.2) не совпадает с фото 14×9 на плакате — нужен выбор варианта.",work/dr/314_src.jpg; sheets/_sheet-2.jpg; чертёж КТМ/314 (KTM-027).jpg,
+352,upgrade_both,high,Текущий full 285×343 — мелкий кроп; ячейка 2024 в 300 dpi и сечение 14/10 крупнее.,candidates/352_full.jpg; candidates/352_thumb.jpg; sheets/_sheet-2.jpg; чертёж КТМ/352.pdf,
+357,upgrade_both,high,Текущий full 297×399; ячейка 2024 в 300 dpi и сечение 9/10 в 600 dpi резче.,candidates/357_full.jpg; candidates/357_thumb.jpg; sheets/_sheet-2.jpg; чертёж КТМ/357.pdf,
+361,upgrade_both,high,Текущий full — латунная ячейка H1 в малом размере; тот же материал в 300 dpi + сечение 10.,candidates/361_full.jpg; candidates/361_thumb.jpg; sheets/_sheet-3.jpg; чертёж КТМ/361 (ЮП-2385).jpg,"309,2196,581,2638"
+362,upgrade_both,high,Текущий full — латунная ячейка H1 в малом размере; тот же материал в 300 dpi + сечение 12.5.,candidates/362_full.jpg; candidates/362_thumb.jpg; sheets/_sheet-3.jpg; чертёж КТМ/362 (ЮП-2386).jpg,"309,2196,581,2638"
+517,ideal,high,Единственная ячейка 2024 E5 (517/518) уже в 300 dpi; 2025 аналога нет.,sheets/_sheet-3.jpg; чертёж КТМ/517_ktm_s56x24-altn-izm3.pdf,"1499,1826,1771,2198"
+518,ideal,high,Единственная ячейка 2024 E5 (517/518) уже в 300 dpi; 2025 аналога нет.,sheets/_sheet-3.jpg; чертёж КТМ/518 (KTM-041).pdf,"1499,1826,1771,2198"
+335,decision,medium,"Full — чертёж ALUSET ALS917 (сплав 1300/Al), в 2024 фото того же 335, но латунь — смена материала.",candidates/335_full.jpg; candidates/335_thumb.jpg; sheets/_sheet-4.jpg; чертёж РП/ALS917.pdf,
+382,upgrade_thumb,medium,Чертёж ЮП-2976 подтверждает текущее фото 25×11.1; 8×12.5 в каталоге — другой вариант. Thumb — сечение с чертежа.,candidates/382_thumb.jpg; sheets/_sheet-4.jpg; чертёж РП/ЮП-2976.pdf,"1226,3036,1498,3350"
+481,upgrade_both,high,На 2024 артикула нет; ячейка 2025 в 300 dpi резче текущего кропа 292×337 + чистое сечение.,candidates/481_full.jpg; candidates/481_thumb.jpg; sheets/_sheet-4.jpg; чертёж РП/ЮП-2974.pdf,
+1515,ideal,high,"Семейная ячейка 2024 в 300 dpi, thumb 575 px — резче 2025 нет.",sheets/_sheet-4.jpg; чертёж КТМ/1515 (KTM-025).jpg,"1226,2196,1498,2638"
+324,upgrade_both,high,"Оригинал найден в плакате КТМ: карточка 324 (13×6,8). Full и thumb заменены на оригинал; раньше стоял чужой чертёж ЮП-081.",candidates/324_full.jpg; candidates/324_thumb.jpg; sheets/_sheet-5.jpg; чертёж КТМ/324.pdf,"632,2665,904,3033"
+4040,ideal,high,"Семейная ячейка 2024 в 300 dpi, thumb 1250 px — оставлено.",sheets/_sheet-5.jpg; чертёж КТМ/4040 (ЮП-2384).jpg,"1226,2196,1498,2638"
+318,no_better,high,Full — общая ячейка 318 в 300 dpi; в 2025 фото общее на 318/323/324/325.,sheets/_sheet-5.jpg; чертёж КТМ/318 (ЮП-2387).jpg,"632,2665,904,3033"
+325,ideal,high,"Full 2024 E3 в 300 dpi, thumb 767 px; размер в 2025 расходится — фото не меняю.",sheets/_sheet-5.jpg; чертёж КТМ/325.pdf,"632,2665,904,3033"
+337,ideal,high,Full 2024 F6 в 300 dpi; в 2025 тот же кадр мельче.,sheets/_sheet-6.jpg; чертёж КТМ/337.pdf,
+347,ideal,high,"Full 2024 F2 в 300 dpi, thumb 734 px — источник тот же, крупнее нет.",sheets/_sheet-6.jpg; чертёж КТМ/347 (ЮП-089).jpg,
+371,ideal,high,"Фото и thumb лучшие (2024), но периметр в БД 75.0 не совпадает со штампом 96.7 — проверить атрибут.",sheets/_sheet-6.jpg; чертёж КТМ/371 (KTM-013).pdf,
+381,ideal,high,"Full 2024 E7 в 300 dpi, thumb 1034 px — менять нечего.",sheets/_sheet-6.jpg; чертёж КТМ/381 (ЮП-2900).pdf,"1226,3036,1498,3350"
+480,no_better,high,"Full 2024 F5 в 300 dpi; 2025 тот же кадр, но размер 11 против 10 — не меняю без решения.",sheets/_sheet-7.jpg; чертёж КТМ/480 (KTM-042).pdf,

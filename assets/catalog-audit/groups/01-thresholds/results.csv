@@ -1,0 +1,26 @@
+sku,verdict,confidence,note,evidence,cells_2024
+110,no_better,high,"Архив подтверждает 30x4 (2025), текущая 2024-ячейка 28x5 устарела; отдельной фото 110 в 2025 нет, общая ячейка 100/110/120 не годится.",\\ktm-disk\Общая папка\Чертежи\КТМ/110 (ЮП-2378).jpg; sheets/_sheet-1.jpg,"36,2665,308,3033"
+120,no_better,high,"2025 общая ячейка 100/110/120 бронзовая, текущий 120 серебристый; чертёж 40x5,3 совпадает с текущим.",\\ktm-disk\Общая папка\Чертежи\КТМ/120 (ЮП-2377).pdf; sheets/_sheet-1.jpg,
+140,no_better,high,"2025 ячейка 140 того же сечения; чертёж 38x3,5, постер даёт 38x2,5 — фото выигрыша нет.",\\ktm-disk\Общая папка\Чертежи\КТМ/140.pdf; sheets/_sheet-1.jpg,
+2212,decision,medium,"Чертёж ЮП-2480 подтверждает 22,5x12,6; 2025 — дерево, текущий 2024 — золото.",candidates/2212_full.jpg; candidates/2212_thumb.jpg; \\ktm-disk\Общая папка\Чертежи\КТМ/2212 (ЮП-2480).jpg; sheets/_sheet-1.jpg,
+258,ideal,high,"Чертёж RP-38794: 38x25, периметр 119,4; текущий full 1134px.",\\ktm-disk\Общая папка\Чертежи\КТМ/258_RP-38794 Okap mini.pdf; sheets/_sheet-2.jpg,
+259,upgrade_full,medium,"Чертёж ОКАР-1: общий периметр 257,5; текущий full 295px, ячейка 2024 даёт 1587px.",candidates/259_full.jpg; \\ktm-disk\Общая папка\Чертежи\КТМ/259_ОКАР-1.pdf; sheets/_sheet-2.jpg,
+260,ideal,high,"2024 монтаж Drip 260; текущий full уже 1134px, thumb 1001px.",sheets/_sheet-2.jpg,
+2626,decision,medium,"Чертёж CB14.00: 26,3x26,3, 101,6; 2025 — чёрный, текущий 2024 — белый.",candidates/2626_full.jpg; \\ktm-disk\Общая папка\Чертежи\КТМ/2626 (CB14.00).jpg; sheets/_sheet-2.jpg,
+3326,upgrade_full,high,Текущий full 350px; ячейка 2024 того же золотого 3326 даёт 1587px.,candidates/3326_full.jpg; sheets/_sheet-3.jpg,
+3329,upgrade_full,high,Текущий full 293px; ячейка 2024 того же серебристого 3329 даёт 1588px.,candidates/3329_full.jpg; sheets/_sheet-3.jpg,
+3584,upgrade_full,high,"2025 отдельная тёмная ячейка 3584; чертёж 49,5x4, 104,8.",candidates/3584_full.jpg; \\ktm-disk\Общая папка\Чертежи\КТМ/3584 (ЮП-2481).jpg; sheets/_sheet-3.jpg,"2094,140,2366,515"
+3586,upgrade_full,high,"2025 отдельная золотая ячейка 3586; чертёж 29,6x2,6, 65,9.",candidates/3586_full.jpg; \\ktm-disk\Общая папка\Чертежи\КТМ/3586 (ЮП-2492).jpg; sheets/_sheet-3.jpg,"1822,140,2094,515"
+60,upgrade_full,high,"Текущий 60 уже из 2025, но 293px; рендер 500 dpi даёт 1321px.",candidates/60_full.jpg; sheets/_sheet-4.jpg,"2094,140,2366,515"
+80,wrong_photo,high,Текущие 80_full и 80_thumb байт-в-байт равны 031; собственная ячейка 2024 «Артикул 80» бронзовая.,candidates/80_full.jpg; candidates/80_thumb.jpg; sheets/_sheet-4.jpg,
+87,upgrade_thumb,high,"Full 1080px хорош; текущий thumb обрезан, новый — полное L 30x30.",candidates/87_thumb.jpg; \\ktm-disk\Общая папка\Чертежи\КТМ/87 (ЮП-2493).jpg; sheets/_sheet-4.jpg,
+130,upgrade_full,high,"Только 2025; чертёж 44x4,1, 106,3; текущий 290px, рендер 500 dpi даёт 1321px.",candidates/130_full.jpg; \\ktm-disk\Общая папка\Чертежи\КТМ/130.pdf; sheets/_sheet-4.jpg,
+150,upgrade_full,high,"Только 2025; текущий 294px, рендер 500 dpi даёт 1320px.",candidates/150_full.jpg; sheets/_sheet-5.jpg,
+031,upgrade_full,high,"Чертёж ЮП-2380: 80x3,9, 188,5; текущий 286px.",candidates/031_full.jpg; \\ktm-disk\Общая папка\Чертежи\КТМ/31 (ЮП-2380).pdf; sheets/_sheet-5.jpg,
+10,upgrade_full,high,"Текущий full — техчертёж с периметром 229,9; ячейка 2024 «10/15» даёт фото 1587px.",candidates/10_full.jpg; sheets/_sheet-5.jpg,
+100,no_better,high,"Чертёж 20x3,5, 43,6; 2025 общая ячейка 100/110/120 бронзовая, текущий 2024 золотой.",\\ktm-disk\Общая папка\Чертежи\КТМ/100.pdf; sheets/_sheet-5.jpg,"36,2665,308,3033"
+84,upgrade_both,high,"Чертёж 84: 28,5x5,7, 63,7 — это 2024-ячейка; 2025 32x6,8 уже другой профиль. Текущий full — чужой техчертёж 31,5.",candidates/84_full.jpg; candidates/84_thumb.jpg; \\ktm-disk\Общая папка\Чертежи\КТМ/84.pdf; sheets/_sheet-6.jpg,
+033,upgrade_both,high,"Оригинал найден в плакате КТМ 2025: карточка 033 (41×5,4, самоклейка). Full и thumb заменены на оригинал; раньше стоял чужой чертёж ЮП-2630.",candidates/033_full.jpg; candidates/033_thumb.jpg; \\ktm-disk\Общая папка\Чертежи\КТМ/033 (ЮП-2379).pdf; sheets/_sheet-6.jpg,"309,2665,581,3033"
+035,upgrade_both,high,"Оригинал найден в плакате КТМ 2025: карточка 035 (30×4,75, самоклейка). Full и thumb заменены на оригинал; раньше стоял чужой чертёж АТ-7121.",candidates/035_full.jpg; candidates/035_thumb.jpg; \\ktm-disk\Общая папка\Чертежи\КТМ/035 (ЮП-2375).pdf; sheets/_sheet-6.jpg,"309,2665,581,3033"
+973,ideal,high,"Текущий full — 2024 ячейка 1109px; 2025 даёт другой размер 40,5x19.",sheets/_sheet-6.jpg,
+3328,upgrade_full,high,"Чертёж 36,9x3,3, 81,5; 2025 отдельная ячейка 3328, текущая — общая 3586/3328.",candidates/3328_full.jpg; \\ktm-disk\Общая папка\Чертежи\КТМ/3328.pdf; sheets/_sheet-7.jpg,"1822,140,2094,515"

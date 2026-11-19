@@ -1,0 +1,215 @@
+sku,perimeter_db,perimeter_archive,perimeter_poster,perimeter_best,archive_file,poster_source,linear_best,source_best,status,conflict_note
+ALS-1103,94.71,94.71,—,94.71,РП/ALS1103.pdf,—,"39,65×12",чертёж/решение,,
+ALS-1288,39.34,39.34,—,39.34,РП/ALS1288.pdf,,"11×4.6, t0.8",archive,match,db 39.34 / archive 39.34
+ALS-1289,35.14,35.14,—,35.14,РП/ALS1289.pdf,,"9×4.6, t1.0",archive,match,db 35.14 / archive 35.14
+ALS-1290,56.92,56.92,—,56.92,РП/ALS1290.pdf,,"9×9, t1.0",archive,match,db 56.92 / archive 56.92
+ALS-1291,57.32,57.32,—,57.32,РП/ALS1291.pdf,,"22×4.85, t0.9",archive,match,db 57.32 / archive 57.32
+ALS-1320,171.37,171.37,—,171.37,"storage: products/ALS1320_full.jpg (GraS, черт. 2224-1 от 10.01.2025)",,60×12,чертёж,,
+ALS-1359,,—,—,—,,,,name,no_data,no archive / db empty
+ALS-1360,188.35,188.35,—,188.35,"storage: products/ALS1360_full.jpg (GraS, черт. 120225-3 от 14.02.2025)",,"63,96×14,2",чертёж,,
+ALS-798,71.34,71.34,—,71.34,РП/ALS798.pdf,,23.85×8.05,archive,match,db 71.34 / archive 71.34
+ALS-917,31.1,31.1,—,31.1,РП/ALS917.pdf,"2024:904,2665,1176,3033 plakat_production.pdf","5.3×6, t0.2",archive,match,db 31.1 / archive 31.1
+АТ-4863,90.53,90.53,—,90.53,РП/АТ-4863.jpg,,26.8×11.1,archive,match,db 90.53 / archive 90.53
+АТ-4888,99.5,99.5,—,99.5,РП/АТ-4888.pdf,,29.3×13,archive,match,db 99.5 / archive 99.5
+АТ-4892,93.5,93.5,—,93.5,РП/АТ-4892.jpg,,27.5×15.3,archive,match,db 93.5 / archive 93.5
+АТ-4893,83.4,83.4,—,83.4,РП/АТ-4893.jpg,,27.5×13.3,archive,match,db 83.4 / archive 83.4
+АТ-5928,79.2,79.2,—,79.2,РП/АТ-5928.pdf,,15.6×8.8,archive,match,db 79.2 / archive 79.2
+АТ-6323,48.8,48.8,—,48.8,РП/АТ-6323.pdf,,13×5.6,archive,match,db 48.8 / archive 48.8
+АТ-6324,,—,—,—,storage: products/АТ-6324_full.jpg (фрагмент без штампа),,"13×5,6",чертёж,,
+АТ-6466,,—,—,—,,,,name,no_data,no archive / db empty
+АТ-6467,65.27,65.27,—,65.27,РП/АТ-6467.jpg,,22×7.8,archive,match,db 65.27 / archive 65.27
+АТ-6844,90.95,90.95,—,90.95,РП/АТ-6844.jpg,,22×15.3,archive,match,db 90.95 / archive 90.95
+АТ-7121,75.2,75,76,75,РП/АТ-7121.pdf,"2025:1360.5,1676,1455.5,1724 dimensions/types/70-035.png","29×5.2, t1.0",archive,match,db 75.2 / archive 75 / poster 76
+АТ-7262,83.49,83.49,—,83.49,РП/АТ-7262.pdf,,24×11.9,archive,match,db 83.49 / archive 83.49
+АТ-7314,75.0,75,—,75,РП/АТ-7314.jpg,,21.4×13.5,archive,match,db 75 / archive 75
+АТ-8037,108.1,108.1,—,108.1,РП/АТ-8037.pdf,,"42.2×13, t1.7",archive,match,db 108.1 / archive 108.1
+КП-5813,,—,—,—,,,100,name,no_data,no archive / db empty
+ЮП-1053,78.5,78.5,—,78.5,РП/ЮП-1053 круг труба 25.docx,—,Ø25 (стенка 1.2),archive,match,db 78.5 / archive 78.5
+ЮП-011,80.0,—,—,80,,—,20×20,name,no_archive,no archive / db 80
+ЮП-137,100.5,100.5,—,100.5,КТМ/480 (KTM-042).pdf,"2025:1244.5,1805,1305.5,1868 dimensions/types/480.png",19×26,archive,match,db 100.5 / archive 100.5 / archive by alias 480
+ЮП-1401,40.0,—,—,40,,—,10×10,name,no_archive,no archive / db 40
+ЮП-1629,119.0,—,—,119,,—,30×30,name,no_archive,no archive / db 119
+ЮП-1767,229.9,229.9,—,229.9,КТМ/ЮП-1767.jpg,"2024:1499,515,1771,960 plakat_production.pdf","100×6, t0.9",archive,match,db 229.9 / archive 229.9
+ЮП-1807,,—,—,—,,,25,name,no_data,no archive / db empty
+ЮП-1875,141.3,141.3,—,141.3,РП/ЮП-1875.pdf,—,60×11.48,archive,match,db 141.3 / archive 141.3
+ЮП-1880,181.2,—,—,181.2,,—,80,name,no_archive,no archive / db 181.2
+ЮП-2004,99.0,—,—,99,,—,25×25,name,no_archive,no archive / db 99
+ЮП-2011,82.4,82.4,—,82.4,РП/ЮП-2011.jpg,,24×16.2,archive,match,db 82.4 / archive 82.4
+ЮП-2012,133.4,—,132.7,132.7,,"2025:1458.5,1725,1546,1799 dimensions/types/973.png",40.5×19,poster,no_archive,no archive / db 133.4 / poster 132.7
+ЮП-2076,225.6,225.6,231.5,225.6,РП/ЮП-2076.pdf,"2025:1203,1953,1259,2040 dimensions/types/PP95.png",95×14.9 (10.4),archive,match,db 225.6 / archive 225.6 / poster 231.5
+ЮП-2077,79.2,79.2,—,79.2,РП/ЮП-2077.pdf,"2025:1609,1805,1664.5,1868 dimensions/types/337.png","23,1×23,1",чертёж/решение,,
+ЮП-2081,,—,—,—,,,,name,no_data,no archive / db empty
+ЮП-2082,102.3,102.3,—,102.3,РП/ЮП-2082.jpg,—,25×25.6,archive,match,db 102.3 / archive 102.3
+ЮП-2083,81.5,81.5,81.8,81.5,РП/ЮП-2083.jpg,"2025:1114.5,1629,1211.5,1667 dimensions/types/3328.png","38×3.7, t1.05",archive,match,db 81.5 / archive 81.5 / poster 81.8
+ЮП-2183,61.7,61.7,53.2,61.7,РП/ЮП-2183.jpg,"2025:1305.5,1805,1357.5,1868 dimensions/types/347.png",20×10,чертёж/решение,,
+ЮП-2256,97.0,97.0,—,97.0,"чертёж KTM-013 (алиас 371), штамп 97,0","2025:1664.5,1805,1790,1868 dimensions/types/371.png",30×12,чертёж,,
+ЮП-2384,162.1,162.1,—,162.1,КТМ/4040 (ЮП-2384).jpg,"2025:1001,1725,1066,1799 dimensions/types/1515-2525-4040.png",40×40,archive,match,db 162.1 / archive 162.1 / archive by alias 4040
+ЮП-2396,99.9,99.9,—,99.9,РП/ЮП-2396.pdf,,"40×4,2",чертёж/решение,,
+ЮП-2397,57.6,57.6,—,57.6,РП/ЮП-2397.pdf,—,10×10×1.2,archive,match,db 57.6 / archive 57.6
+ЮП-2413,126.9,126.9,—,126.9,РП/ЮП-2413.pdf,,36.7×14,archive,match,db 126.9 / archive 126.9
+ЮП-2414,167.5,167.5,—,167.5,РП/ЮП-2414.pdf,,50×15 (13.8),archive,match,db 167.5 / archive 167.5
+ЮП-2464-1,168.6,—,—,168.6,,"2025:1137.5,1953,1203,2040 dimensions/types/PP50.png",15/20/50,poster,no_archive,no archive / db 168.6
+ЮП-254,125.17,125.17,—,125.17,РП/ЮП-254.jpg,,36×11.8,archive,match,db 125.17 / archive 125.17
+ЮП-2603,67.0,67,—,67,РП/ЮП-2603.pdf,,"26.05×4.6, t1.3",archive,match,db 67 / archive 67
+ЮП-2604,79.3,79.3,—,79.3,РП/ЮП-2604.pdf,,"29×8.2, t1.3",archive,match,db 79.3 / archive 79.3
+ЮП-2616,67.2,67.2,—,67.2,РП/ЮП-2616.pdf,,"26.15×4.6, t1.3",archive,match,db 67.2 / archive 67.2
+ЮП-2627,87.6,87.6,—,87.6,РП/ЮП-2627.pdf,—,21×21,archive,match,db 87.6 / archive 87.6
+ЮП-2628,,—,—,—,,,60,name,no_data,no archive / db empty
+ЮП-2630,96.1,96.1,100.1,96.1,"чертёж РП/ЮП-2630.pdf, штамп 96,1","2025:1455.5,1676,1564,1724 dimensions/types/72-033.png","39×5,95, t1.1",чертёж,,
+ЮП-2651,,—,—,—,,,,name,no_data,no archive / db empty
+ЮП-2652,120.2,120.2,—,120.2,РП/ЮП-2652.pdf,,47.1×7.7,archive,match,db 120.2 / archive 120.2
+ЮП-2695,69.2,69.2,—,69.2,РП/ЮП-2695.pdf,,"27.3×2.0, t0.4",archive,match,db 69.2 / archive 69.2
+ЮП-2696,64.0,64,—,64,РП/ЮП-2696.pdf,,"27.3×2.1, t0.4",archive,match,db 64 / archive 64
+ЮП-272,62.8,62.8,—,62.8,РП/ЮП-272.jpg,,30×4.4,archive,match,db 62.8 / archive 62.8
+ЮП-2815,92.3,92.3,—,92.3,РП/ЮП-2815.jpg,,16.5×16.5,archive,match,db 92.3 / archive 92.3
+ЮП-2816,96.5,96.5,—,96.5,РП/ЮП-2816.jpg,,18×18,archive,match,db 96.5 / archive 96.5
+ЮП-2878,128.5,128.5,—,128.5,РП/ЮП-2878.pdf,,41×22.3,archive,match,db 128.5 / archive 128.5
+ЮП-2879,68.4,68.4,—,68.4,РП/ЮП-2879.pdf,,26.9×2,archive,match,db 68.4 / archive 68.4
+ЮП-2900,98.4,98.4,—,98.4,РП/ЮП-2900.pdf,"2025:1005.5,1805,1066.5,1868 dimensions/types/381.png",28×11.3,archive,match,db 98.4 / archive 98.4
+ЮП-2901,43.6,43.6,—,43.6,КТМ/100.pdf,"2025:1026.5,1629,1114.5,1667 dimensions/types/100-110.png",20×3.5,archive,match,db 43.6 / archive 43.6 / archive by alias 100
+ЮП-2902,55.7,—,—,55.7,,,20,name,no_archive,no archive / db 55.7
+ЮП-2910,69.3,64.1,—,64.1,РП/ЮП-2910.pdf,"2025:1665.5,1676,1790,1724 dimensions/types/324-325.png",26×8,чертёж/решение,,
+ЮП-2972,50.3,50.3,—,50.3,РП/ЮП-2972.pdf,—,Ø16 (стенка 1),archive,match,db 50.3 / archive 50.3
+ЮП-2974,104.9,104.9,105.3,104.9,РП/ЮП-2974.pdf,"2025:1689.5,1874,1790,1949 dimensions/types/481.png",31.5×11.1,archive,match,db 104.9 / archive 104.9 / poster 105.3
+ЮП-2975,228.5,228.5,217.9,228.5,РП/ЮП-2975.pdf,"2025:1694,1953,1790,2040 dimensions/types/PP79.png",84×14.5 (79),archive,match,db 228.5 / archive 228.5 / poster 217.9
+ЮП-2976,98.2,98.2,98.6,98.2,РП/ЮП-2976.pdf,"2025:1586,1874,1637,1949 dimensions/types/382.png",25×11.1,archive,match,db 98.2 / archive 98.2 / poster 98.6
+ЮП-003,44.0,—,—,44,,—,20×2,name,no_archive,no archive / db 44
+ЮП-3019,69.3,69.3,66.4,69.3,РП/ЮП-3019.pdf,"2025:1066,1725,1139,1799 dimensions/types/3418.png","24×9,8",чертёж/решение,,
+ЮП-3098,55.2,55.2,—,55.2,РП/ЮП-3098.pdf,,"19.9×6.4, t1.2",archive,match,db 55.2 / archive 55.2
+ЮП-3123,47.8,47.8,—,47.8,"чертёж РП/ЮП-3123.pdf, штамп 47,8","2025:1276.5,1676,1360.5,1724 dimensions/types/318-323.png","18×5,5, t1.2",чертёж,,
+ЮП-3158,70.1,70.1,—,70.1,РП/ЮП-3158.pdf,,"19.9×10.9, t1.2",archive,match,db 70.1 / archive 70.1
+ЮП-3167,73.4,73.4,—,73.4,РП/ЮП-3167.pdf,,"36×1.7, t1.5",archive,match,db 73.4 / archive 73.4
+ЮП-3168,67.4,—,67.5,67.5,,"2025:1411.5,1629,1506.5,1667 dimensions/types/150.png",33×1.7,poster,no_archive,no archive / db 67.4 / poster 67.5
+ЮП-3177,39.8,39.8,—,39.8,РП/ЮП-3177.pdf,,"14×5.5, t1.2",archive,match,db 39.8 / archive 39.8
+ЮП-3233,54.0,54,54.1,54,РП/ЮП-3233.pdf,"2025:1008,1953,1070,2040 dimensions/types/MC18.png",18×6.2,archive,match,db 54 / archive 54 / poster 54.1
+ЮП-3242,,—,—,—,,—,20×20,name,no_archive,no archive / db empty
+ЮП-3263,59.8,59.8,—,59.8,РП/ЮП-3263.pdf,"2025:1001,1725,1066,1799 dimensions/types/1515-2525-4040.png",15×15,archive,match,db 59.8 / archive 59.8
+ЮП-3270,87.8,87.8,88.2,87.8,РП/ЮП-3270.pdf,"2025:900,1953,1008,2040 dimensions/types/MC16-20.png",25.2×20 (16×3),archive,match,db 87.8 / archive 87.8 / poster 88.2
+ЮП-3271,114.2,114.2,114.6,114.2,РП/ЮП-3271.pdf,"2025:1070,1953,1137.5,2040 dimensions/types/MC16-25.png",30.2×16 (25),archive,match,db 114.2 / archive 114.2 / poster 114.6
+ЮП-3284,,—,—,—,,,,name,no_data,no archive / db empty
+ЮП-3361,,193.6,—,193.6,РП/ЮП-3361.pdf,,79.9×11,archive,db_empty,"db empty / archive 193.6 | archive: SSZ-80, 79.9×11 = 193.6; в БД периметра не было"
+ЮП-3452,,—,—,—,,,38,name,no_data,no archive / db empty
+ЮП-3453,,—,—,—,,,38,name,no_data,no archive / db empty
+ЮП-3457,,—,—,—,,,,name,no_data,no archive / db empty
+ЮП-3472,,—,—,—,,,,name,no_data,no archive / db empty
+ЮП-3485,83.4,83.4,—,83.4,РП/АТ-4893.jpg,,27.5×13.3,archive,match,db 83.4 / archive 83.4 / archive by alias АТ-4893
+ЮП-3640,,—,—,—,,,40×22,name,no_data,no archive / db empty
+ЮП-3658,141.3,141.3,—,141.3,РП/ЮП-1875.pdf,—,60×11.48,archive,match,db 141.3 / archive 141.3 / archive by alias ЮП-1875
+ЮП-3688,137.4,137.4,—,137.4,"storage: products/ЮП-3688_full.jpg (КПК, изд. 1, июнь 2025)",,"50×12,2",чертёж,,
+ЮП-3690,150.7,150.7,—,150.7,"storage: products/ЮП-3690_full.jpg (КПК, изд. 1, июнь 2025)",,"61,5×9,6",чертёж,,
+ЮП-3755,,—,—,—,,,13,name,no_data,no archive / db empty
+ЮП-3756,,—,—,—,,,26,name,no_data,no archive / db empty
+ЮП-3773,,—,—,—,,,40,name,no_data,no archive / db empty
+ЮП-004,54.0,—,—,54,,,,name,no_archive,no archive / db 54
+ЮП-045,68.6,68.6,—,68.6,РП/ЮП-045.jpg,"2025:1179,1676,1276.5,1724 dimensions/types/84.png","31,5×7",чертёж/решение,,
+ЮП-460,64.2,64.2,—,64.2,РП/ЮП-460.jpg,,19.35×10.8,archive,match,db 64.2 / archive 64.2
+ЮП-048,83.7,83.7,—,83.7,РП/ЮП-048.pdf,—,24×18,archive,match,db 83.7 / archive 83.7
+ЮП-005,84.0,—,—,84,,,,name,no_archive,no archive / db 84
+ЮП-6466,,—,—,—,,,,name,no_data,no archive / db empty
+ЮП-081,43.8,44.8,—,44.8,РП/ЮП-081.jpg,"2025:1665.5,1676,1790,1724 dimensions/types/324-325.png","13×9, t1.3",archive,match,db 43.8 / archive 44.8
+ЮП-009,60.0,—,—,60,,—,15×15,name,no_archive,no archive / db 60
+1010,40.0,40.0,—,40.0,оценка по контуру 10×10,"2024:1226,2196,1498,2638 plakat_production.pdf",10×10,чертёж/решение,,
+110,62.9,62.9,63.8,62.9,КТМ/110 (ЮП-2378).jpg,"2025:1026.5,1629,1114.5,1667 dimensions/types/100-110.png",30×4,archive,match,db 62.9 / archive 62.9 / poster 63.8
+120,84.0,84,82.8,84,КТМ/120 (ЮП-2377).pdf,"2025:1211.5,1629,1315.5,1667 dimensions/types/120.png",40×5.3,archive,match,db 84 / archive 84 / poster 82.8
+1212,,—,—,—,,—,12×12,name,no_archive,no archive / db empty
+140,78.9,78.9,78.3,78.9,КТМ/140.pdf,"2025:1506.5,1629,1615.5,1667 dimensions/types/140.png",38×3.5,archive,match,db 78.9 / archive 78.9 / poster 78.3
+220,117.9,117.9,128.3,117.9,КТМ/220.pdf,"2025:900,2048,1085.5,2122 dimensions/types/220-1,220-2.png",36.9×20.7,archive,match,"db 117.9 / archive 117.9 / poster 128.3 | resolved: архив 36.9×20.7 = 117.9, БД верна; постер 128.3 — вариант 220/1 (41×22.3)"
+2212,71.9,71.9,69.7,71.9,КТМ/2212 (ЮП-2480).jpg,"2025:1212.5,1725,1288,1799 dimensions/types/2212.png",22.5×12.6,archive,match,db 71.9 / archive 71.9 / poster 69.7
+228,63.3,63.3,—,63.3,КТМ/228 (ЮП-2381).jpg,"2025:1551.5,1805,1609,1868 dimensions/types/228.png",11×20,archive,match,db 63.3 / archive 63.3 | confirmed: ЮП-2381 11×20 = 63.3
+229,69.7,69.7,—,69.7,КТМ/229 (ЮП-2382).jpg,"2025:1066.5,1805,1121,1868 dimensions/types/229.png",13.7×20,archive,match,db 69.7 / archive 69.7 | confirmed: ЮП-2382 13.7×20 = 69.7
+230,66.08,66.08,—,66.08,КТМ/230_Ukonc L 8 - cortizo.pdf,,23×9.2,archive,match,db 66.08 / archive 66.08
+231,70.08,70.08,—,70.08,КТМ/231_L  10 mm cortizo.pdf,,23×11.2,archive,match,db 70.08 / archive 70.08
+2525,100.8,100.8,—,100.8,КТМ/2525 (ЮП-2383).jpg,"2025:1001,1725,1066,1799 dimensions/types/1515-2525-4040.png",25×25,archive,match,db 100.8 / archive 100.8
+258,119.4,119.4,—,119.4,КТМ/258_RP-38794 Okap mini.pdf,"2024:1226,990,1498,1354 plakat_production.pdf",38×25,archive,match,db 119.4 / archive 119.4
+259,257.0,257.5,—,257.5,КТМ/259_ОКАР-1.pdf,"2025:1641,1725,1790,1799 dimensions/types/259.png",40+60+40,archive,match,db 257 / archive 257.5
+260,337.2,—,—,337.2,,"2024:1226,1354,1498,1800 plakat_production.pdf",41+70 / 20 / 6.4,poster,no_archive,no archive / db 337.2
+2626,101.6,101.6,100.6,101.6,КТМ/2626 (CB14.00).jpg,"2025:1288,1725,1371,1799 dimensions/types/2626.png",26.3×26.3,archive,match,db 101.6 / archive 101.6 / poster 100.6
+314,93.2,93.2,—,93.2,КТМ/314 (KTM-027).jpg,"2024:36,1826,308,2198 plakat_production.pdf",10×28.3,archive,match,db 93.2 / archive 93.2
+3326,88.6,—,87.3,87.3,,"2025:1564,1676,1665.5,1724 dimensions/types/3326.png",39×7,poster,no_archive,no archive / db 88.6 / poster 87.3
+3329,52.3,—,52.3,52.3,,"2025:900,1629,1026.5,1667 dimensions/types/3329.png",25×3,чертёж/решение,,
+34,82.6,82.6,—,82.6,КТМ/034.pdf,,35×4.1,archive,match,db 82.6 / archive 82.6
+3413,124.7,124.7,—,124.7,КТМ/3413.pdf,,38.5×19.5,archive,match,db 124.7 / archive 124.7
+3414,88.6,88.6,85.9,88.6,КТМ/3414 (ЮП-2376).pdf,"2025:1139,1725,1212.5,1799 dimensions/types/3414.png",24.4×20,archive,match,db 88.6 / archive 88.6 / poster 85.9
+3416,46.5,46.5,—,46.5,КТМ/3416.pdf,,19.9×3.9,archive,match,db 46.5 / archive 46.5
+352,112.0,112,106.7,112,КТМ/352.pdf,"2025:1418,1805,1486.5,1868 dimensions/types/352.png",37.5×12.7,archive,match,db 112 / archive 112 / poster 106.7 | resolved: архив 37.5×12.7 (видимая 14×10) = 112.0
+353,115.5,115.5,—,115.5,КТМ/353_RP-38795 Schodiskovy hranaty 10mm.pdf,,35.9×12,archive,match,db 115.5 / archive 115.5
+357,95.2,95.2,—,95.2,КТМ/357.pdf,"2025:1486.5,1805,1551.5,1868 dimensions/types/357.png",28.5×8.8,archive,match,db 95.2 / archive 95.2 | resolved: архив 28.5×8.8 = 95.2
+3584,104.8,104.8,106.4,104.8,КТМ/3584 (ЮП-2481).jpg,"2025:900,1676,1061.5,1724 dimensions/types/3584.png",49.5×4,archive,match,db 104.8 / archive 104.8 / poster 106.4
+3586,65.9,65.9,65.4,65.9,КТМ/3586 (ЮП-2492).jpg,"2025:1315.5,1629,1411.5,1667 dimensions/types/3586.png",29.6×2.6,archive,match,db 65.9 / archive 65.9 / poster 65.4
+361,78.1,78.1,—,78.1,КТМ/361 (ЮП-2385).jpg,"2025:1357.5,1805,1418,1868 dimensions/types/361-362.png",25×12,archive,match,db 78.1 / archive 78.1
+362,88.7,88.7,—,88.7,КТМ/362 (ЮП-2386).jpg,"2025:1357.5,1805,1418,1868 dimensions/types/361-362.png",26.8×14.7,archive,match,db 88.7 / archive 88.7
+517,202.1,202.1,—,202.1,КТМ/517_ktm_s56x24-altn-izm3.pdf,"2024:1499,1826,1771,2198 plakat_production.pdf",56×24,archive,match,db 202.1 / archive 202.1
+518,223.6,223.6,—,223.6,КТМ/518 (KTM-041).pdf,"2024:1499,1826,1771,2198 plakat_production.pdf",56×24,archive,match,db 223.6 / archive 223.6
+60,129.2,—,127.4,127.4,,"2025:1615.5,1629,1790,1667 dimensions/types/60.png",60×5.8,poster,no_archive,no archive / db 129.2 / poster 127.4
+664,134.6,134.6,136.1,134.6,КТМ/664 (ЮП-2479).jpg,"2025:1546,1725,1641,1799 dimensions/types/664-664CK.png","40×25 (высота 40, ширина 25)",archive,match,db 134.6 / archive 134.6 / poster 136.1
+80,188.5,188.5,186.2,188.5,КТМ/31 (ЮП-2380).pdf,"2025:1061.5,1676,1179,1724 dimensions/types/80-031.png","80×3,9",чертёж/решение,,
+87,124.9,124.9,122.2,124.9,КТМ/87 (ЮП-2493).jpg,"2025:1371,1725,1458.5,1799 dimensions/types/87.png",30×30,archive,match,db 124.9 / archive 124.9 / poster 122.2
+Кр.труба 10мм,,—,—,—,,—,Ø10.0,name,no_archive,no archive / db empty
+Кр.труба 12мм,,—,—,—,,—,Ø12.0,name,no_archive,no archive / db empty
+Кр.труба 20мм,,—,—,—,,—,Ø20.0,name,no_archive,no archive / db empty
+Кр.труба 28мм,,—,—,—,,—,Ø28.0,name,no_archive,no archive / db empty
+Кр.труба 8мм,,—,—,—,,—,Ø8.0,name,no_archive,no archive / db empty
+П151515,,—,—,—,,—,15×15×15,name,no_archive,no archive / db empty
+П202020,,—,—,—,,—,20×20×20,name,no_archive,no archive / db empty
+П303030,,—,—,—,,—,30×30×30,name,no_archive,no archive / db empty
+ПТ100,,—,—,—,,—,100,name,no_archive,no archive / db empty
+У1212,,—,—,—,,—,12×12,name,no_archive,no archive / db empty
+У4020,,—,—,—,,—,40×20,name,no_archive,no archive / db empty
+У4040,,—,—,—,,—,40×40,name,no_archive,no archive / db empty
+У5030,,—,—,—,,—,50×30,name,no_archive,no archive / db empty
+У5050,,—,—,—,,—,50×50,name,no_archive,no archive / db empty
+130,106.3,106.3,—,106.3,КТМ/130.pdf,,"44×4,1",чертёж/решение,,
+150,67.4,—,67.5,67.5,,"2025:1411.5,1629,1506.5,1667 dimensions/types/150.png",33×1.7,poster,no_archive,no archive / db 67.4 / poster 67.5
+335,31.1,31.1,—,31.1,РП/ALS917.pdf,"2024:904,2665,1176,3033 plakat_production.pdf","5.3×6, t0.2",archive,match,db 31.1 / archive 31.1 / archive by alias ALS-917 | ok: ALS917 6×5.3 = 31.1
+382,98.2,98.2,98.6,98.2,РП/ЮП-2976.pdf,"2025:1586,1874,1637,1949 dimensions/types/382.png",25×11.1,archive,match,db 98.2 / archive 98.2 / poster 98.6 / archive by alias ЮП-2976
+481,104.9,104.9,105.3,104.9,РП/ЮП-2974.pdf,"2025:1689.5,1874,1790,1949 dimensions/types/481.png",31.5×11.1,archive,match,"db 104.9 / archive 104.9 / poster 105.3 / archive by alias ЮП-2974 | confirmed: 31.5×11.1, штамп 104.9"
+Кр.труба 16мм,50.3,50.3,—,50.3,РП/ЮП-2972.pdf,—,Ø16 (стенка 1),archive,match,db 50.3 / archive 50.3 / archive by alias ЮП-2972
+Кр.труба 25мм,78.5,78.5,—,78.5,РП/ЮП-1053 круг труба 25.docx,—,Ø25 (стенка 1.2),archive,match,db 78.5 / archive 78.5 / archive by alias ЮП-1053
+МС16-20,87.8,87.8,88.2,87.8,РП/ЮП-3270.pdf,"2025:900,1953,1008,2040 dimensions/types/MC16-20.png",25.2×20 (16×3),archive,match,db 87.8 / archive 87.8 / poster 88.2 / archive by alias ЮП-3270
+МС16-25,114.2,114.2,114.6,114.2,РП/ЮП-3271.pdf,"2025:1070,1953,1137.5,2040 dimensions/types/MC16-25.png",30.2×16 (25),archive,match,db 114.2 / archive 114.2 / poster 114.6 / archive by alias ЮП-3271
+МС18,54.0,54,54.1,54,РП/ЮП-3233.pdf,"2025:1008,1953,1070,2040 dimensions/types/MC18.png",18×6.2,archive,match,db 54 / archive 54 / poster 54.1 / archive by alias ЮП-3233
+П101010,57.6,57.6,—,57.6,РП/ЮП-2397.pdf,—,10×10×1.2,archive,match,db 57.6 / archive 57.6 / archive by alias ЮП-2397
+ПП47,126.9,126.9,—,126.9,РП/ЮП-2413.pdf,,36.7×14,archive,match,db 126.9 / archive 126.9 / archive by alias ЮП-2413
+ПП50,168.6,—,—,168.6,,"2025:1137.5,1953,1203,2040 dimensions/types/PP50.png",15/20/50,poster,no_archive,no archive / db 168.6
+ПП79,228.5,228.5,217.9,228.5,РП/ЮП-2975.pdf,"2025:1694,1953,1790,2040 dimensions/types/PP79.png",84×14.5 (79),archive,match,db 228.5 / archive 228.5 / poster 217.9 / archive by alias ЮП-2975
+ПП95,225.6,225.6,231.5,225.6,РП/ЮП-2076.pdf,"2025:1203,1953,1259,2040 dimensions/types/PP95.png",95×14.9 (10.4),archive,match,db 225.6 / archive 225.6 / poster 231.5 / archive by alias ЮП-2076
+ПС20,44.0,—,—,44,,—,20×2,name,no_archive,no archive / db 44
+ПТ40,98.8,98.8,—,98.8,РП/ЮП-3035.pdf,—,40 (высота) × 11.48,archive,match,db 98.8 / archive 98.8 / archive by alias ЮП-3035 | alias ALS-1103: archive 94.71
+ПТ60,141.3,141.3,—,141.3,РП/ЮП-1875.pdf,—,60×11.48,archive,match,db 141.3 / archive 141.3 / archive by alias ЮП-1875
+ПТ80,181.2,—,—,181.2,,—,80,name,no_archive,no archive / db 181.2
+У1010,40.0,—,—,40,,—,10×10,name,no_archive,no archive / db 40
+У1515,60.0,—,—,60,,—,15×15,name,no_archive,no archive / db 60
+У2020,80.0,—,—,80,,—,20×20,name,no_archive,no archive / db 80
+У2525,99.0,—,—,99,,—,25×25,name,no_archive,no archive / db 99
+У3030,119.0,—,—,119,,—,30×30,name,no_archive,no archive / db 119
+"Ш-15,6_8,8",79.2,—,—,79.2,,,,name,no_archive,no archive / db 79.2
+ЮП-3035,98.8,98.8,—,98.8,РП/ЮП-3035.pdf,—,40 (высота) × 11.48,archive,match,db 98.8 / archive 98.8 | alias ALS-1103: archive 94.71
+ЮП-3077,93.5,93,—,93,РП/ЮП-3077.pdf,,27.5×15.3,archive,match,db 93.5 / archive 93 | resolved: штамп 93 (Ø28.9); в БД 93.5
+ЮП-3094,99.5,99.5,—,99.5,РП/ЮП-3094.pdf,,29.3×13,archive,match,db 99.5 / archive 99.5
+ЮП-3473,69.3,64.1,—,64.1,РП/ЮП-2910.pdf,"2025:1665.5,1676,1790,1724 dimensions/types/324-325.png",26×9,чертёж/решение,,
+031,188.5,188.5,186.2,188.5,КТМ/31 (ЮП-2380).pdf,"2025:1061.5,1676,1179,1724 dimensions/types/80-031.png","80×3,9",чертёж/решение,,
+10,229.9,229.9,—,229.9,КТМ/ЮП-1767.jpg,"2024:1499,515,1771,960 plakat_production.pdf","100×6, t0.9",archive,match,db 229.9 / archive 229.9 / archive by alias ЮП-1767
+100,43.6,43.6,—,43.6,КТМ/100.pdf,"2025:1026.5,1629,1114.5,1667 dimensions/types/100-110.png",20×3.5,archive,match,db 43.6 / archive 43.6
+1515,59.8,59.8,—,59.8,КТМ/1515 (KTM-025).jpg,"2025:1001,1725,1066,1799 dimensions/types/1515-2525-4040.png",15×15,archive,match,db 59.8 / archive 59.8 | confirmed: штамп 15×15 = 59.8
+2020,,—,—,—,,—,20×20,name,no_archive,no archive / db empty
+320,55.7,—,—,55.7,,,,name,no_archive,no archive / db 55.7
+324,43.8,43.8,—,43.8,КТМ/324.pdf,"2025:1665.5,1676,1790,1724 dimensions/types/324-325.png",13×8,archive,match,db 43.8 / archive 43.8
+4040,162.1,162.1,—,162.1,КТМ/4040 (ЮП-2384).jpg,"2025:1001,1725,1066,1799 dimensions/types/1515-2525-4040.png",40×40,archive,match,db 162.1 / archive 162.1 | confirmed: ЮП-2384 40×40 = 162.1
+84,63.7,63.7,—,63.7,КТМ/84.pdf,"2025:1179,1676,1276.5,1724 dimensions/types/84.png","28,5×5,7",чертёж/решение,,
+ALS-915,83.7,83.7,—,83.7,РП/ЮП-048.pdf,,24×18,archive,match,db 83.7 / archive 83.7 / archive by alias ЮП-048
+ПП37,126.9,126.9,—,126.9,РП/ЮП-2413.pdf,,36.7×14,archive,match,db 126.9 / archive 126.9 / archive by alias ЮП-2413
+033,97.6,97.6,100.1,97.6,КТМ/033 (ЮП-2379).pdf,"2025:1455.5,1676,1564,1724 dimensions/types/72-033.png",40.6×5.4,archive,match,db 97.6 / archive 97.6 / poster 100.1 | alias ЮП-2630: archive 96.1
+035,75.2,75.2,76,75.2,КТМ/035 (ЮП-2375).pdf,"2025:1360.5,1676,1455.5,1724 dimensions/types/70-035.png",30×4.75,archive,match,db 75.2 / archive 75.2 / poster 76
+318,53.6,53.6,—,53.6,"чертёж ЮП-2387 (318), штамп 53,6","2025:1276.5,1676,1360.5,1724 dimensions/types/318-323.png",18×8,чертёж,,
+325,69.3,69.3,—,69.3,КТМ/325.pdf,"2025:1665.5,1676,1790,1724 dimensions/types/324-325.png",26×8,чертёж/решение,,
+337,73.8,73.8,—,73.8,КТМ/337.pdf,"2025:1609,1805,1664.5,1868 dimensions/types/337.png","20,18×20",чертёж/решение,,
+347,53.4,53.4,53.2,53.4,КТМ/347 (ЮП-089).jpg,"2025:1305.5,1805,1357.5,1868 dimensions/types/347.png","18,5×8",чертёж/решение,,
+371,97.0,97.0,—,97.0,"чертёж KTM-013 (30×12), штамп 97,0","2025:1664.5,1805,1790,1868 dimensions/types/371.png",30×12,чертёж/решение,,
+381,98.4,98.4,—,98.4,КТМ/381 (ЮП-2900).pdf,"2025:1005.5,1805,1066.5,1868 dimensions/types/381.png","10×11.3, полка 28",archive,match,db 98.4 / archive 98.4
+480,100.5,100.5,—,100.5,КТМ/480 (KTM-042).pdf,"2025:1244.5,1805,1305.5,1868 dimensions/types/480.png",19×26,archive,match,db 100.5 / archive 100.5
+973,133.4,—,132.7,132.7,,"2025:1458.5,1725,1546,1799 dimensions/types/973.png",40.5×19,poster,no_archive,no archive / db 133.4 / poster 132.7
+3328,81.5,81.5,81.8,81.5,КТМ/3328.pdf,"2025:1114.5,1629,1211.5,1667 dimensions/types/3328.png",36.9×3.3,archive,match,db 81.5 / archive 81.5 / poster 81.8
+3418,69.3,69.3,66.4,69.3,"чертёж ЮП-3019 (24×9,8; P=69,3)","2025:1066,1725,1139,1799 dimensions/types/3418.png","24×9,8",чертёж/решение,,
+ЮП-2387,53.6,53.6,,53.6,"чертёж ЮП-2387 (18×8), штамп 53,6",,18×8,чертёж,,
+ЮП-2080,,,,,,,20×20,name,,
+ЮП-3178,,,,,,,14,name,,

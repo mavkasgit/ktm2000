@@ -1,11 +1,11 @@
 {
-  "generated_at": "2026-11-08T20:28:44+00:00",
-  "db_fingerprint": "d8ef75d5ebb7c860",
+  "generated_at": "2026-11-19T11:43:55+00:00",
+  "db_fingerprint": "3aa8e9a0d4388eb9",
   "review_fingerprint": "45a1bfcd976aaf46",
   "db": {
     "container": "ktm2000-postgres-prod",
     "database": "ktm2000_prod",
-    "products": 214
+    "products": 216
   },
   "meta": {
     "version": 1,
@@ -1006,15 +1006,15 @@
       "n_per_hanger_auto": 48,
       "n_mismatch": false,
       "photo_full": "products/ALS1103_full.jpg",
-      "photo_thumb": "products/ALS1103_thumb.jpg",
+      "photo_thumb": "products/ALS-1103_1_thumb.png",
       "photo_full_exists": true,
       "photo_thumb_exists": true,
       "photo_full_px": "1653x2339",
-      "photo_thumb_px": "600x391",
+      "photo_thumb_px": "1339x437",
       "photo_full_bytes": 354971,
-      "photo_thumb_bytes": 29916,
+      "photo_thumb_bytes": 30217,
       "photo_full_sha12": "2d648218e4eb",
-      "photo_thumb_sha12": "ee0e78d793f6",
+      "photo_thumb_sha12": "0e1470a96330",
       "attributes_json": {
         "hanger_mode": "auto",
         "perimeter_mm": 94.71,
@@ -1891,7 +1891,13 @@
       "attributes_json": {
         "hanger_mode": "manual"
       },
-      "dimensions": [],
+      "dimensions": [
+        {
+          "dimension_type_id": 1,
+          "is_required": true,
+          "default_value": 3000
+        }
+      ],
       "notes": "",
       "source": "excel_catalog_import",
       "processing_flags": [],
@@ -3502,7 +3508,13 @@
       "attributes_json": {
         "hanger_mode": "manual"
       },
-      "dimensions": [],
+      "dimensions": [
+        {
+          "dimension_type_id": 1,
+          "is_required": true,
+          "default_value": 2000
+        }
+      ],
       "notes": "",
       "source": "excel_catalog_import",
       "processing_flags": [],
@@ -4517,7 +4529,13 @@
           }
         }
       },
-      "dimensions": [],
+      "dimensions": [
+        {
+          "dimension_type_id": 1,
+          "is_required": true,
+          "default_value": 2500
+        }
+      ],
       "notes": "Новый профиль из КПЗ; длина под вопросом; новый префикс КП; норма на подвес — из «Экранчика», не проверена",
       "source": "excel_catalog_import",
       "processing_flags": [],
@@ -4794,16 +4812,16 @@
       "n_per_hanger_manual": 52,
       "n_per_hanger_auto": 52,
       "n_mismatch": false,
-      "photo_full": "products/ЮП-011_full.jpg",
-      "photo_thumb": "products/ЮП-011_thumb.jpg",
+      "photo_full": "products/ЮП-011_27_full.png",
+      "photo_thumb": "products/ЮП-011_27_thumb.png",
       "photo_full_exists": true,
       "photo_thumb_exists": true,
-      "photo_full_px": "2000x2000",
-      "photo_thumb_px": "600x600",
-      "photo_full_bytes": 46140,
-      "photo_thumb_bytes": 7346,
-      "photo_full_sha12": "7f251ebeb942",
-      "photo_thumb_sha12": "82ab0a05cb9d",
+      "photo_full_px": "1860x1046",
+      "photo_thumb_px": "574x332",
+      "photo_full_bytes": 177903,
+      "photo_thumb_bytes": 10719,
+      "photo_full_sha12": "ae595c82f9a4",
+      "photo_thumb_sha12": "97b1edaa78ef",
       "attributes_json": {
         "hanger_mode": "auto",
         "perimeter_mm": 80.0,
@@ -4884,8 +4902,10 @@
         "confidence:90",
         "status:probable",
         "alias:У2020",
-        "shared_photo_full:У2020",
-        "shared_photo_thumb:У2020"
+        "shared_photo_full:ЮП-009",
+        "shared_photo_full:ЮП-1401",
+        "shared_photo_full:ЮП-1629",
+        "shared_photo_full:ЮП-2004"
       ],
       "relations": [
         {
@@ -4899,18 +4919,34 @@
         {
           "from_sku": "ЮП-011",
           "relation": "shared_photo_full",
-          "to_sku": "У2020",
+          "to_sku": "ЮП-009",
           "status": "confirmed",
           "source": "storage:sha256",
-          "note": "7f251ebeb942"
+          "note": "ae595c82f9a4"
         },
         {
           "from_sku": "ЮП-011",
-          "relation": "shared_photo_thumb",
-          "to_sku": "У2020",
+          "relation": "shared_photo_full",
+          "to_sku": "ЮП-1401",
           "status": "confirmed",
           "source": "storage:sha256",
-          "note": "82ab0a05cb9d"
+          "note": "ae595c82f9a4"
+        },
+        {
+          "from_sku": "ЮП-011",
+          "relation": "shared_photo_full",
+          "to_sku": "ЮП-1629",
+          "status": "confirmed",
+          "source": "storage:sha256",
+          "note": "ae595c82f9a4"
+        },
+        {
+          "from_sku": "ЮП-011",
+          "relation": "shared_photo_full",
+          "to_sku": "ЮП-2004",
+          "status": "confirmed",
+          "source": "storage:sha256",
+          "note": "ae595c82f9a4"
         }
       ],
       "relation_text": "alias_of→У2020",
@@ -4957,15 +4993,15 @@
       "n_per_hanger_auto": 47,
       "n_mismatch": false,
       "photo_full": "products/ЮП-137_full.jpg",
-      "photo_thumb": "products/ЮП-137_thumb.jpg",
+      "photo_thumb": "products/ЮП-137_28_thumb.png",
       "photo_full_exists": true,
       "photo_thumb_exists": true,
       "photo_full_px": "295x343",
-      "photo_thumb_px": "122x80",
+      "photo_thumb_px": "889x524",
       "photo_full_bytes": 75650,
-      "photo_thumb_bytes": 1276,
+      "photo_thumb_bytes": 8152,
       "photo_full_sha12": "6ac05993e823",
-      "photo_thumb_sha12": "e092195f06d4",
+      "photo_thumb_sha12": "8e1bde1758a3",
       "attributes_json": {
         "hanger_mode": "auto",
         "perimeter_mm": 100.5,
@@ -5049,6 +5085,7 @@
         "review:open",
         "review-drawing:нет",
         "alias:480",
+        "shared_photo_thumb:480",
         "open"
       ],
       "relations": [
@@ -5059,6 +5096,14 @@
           "status": "confirmed",
           "source": "db:aliases",
           "note": "DB-алиас: тот же товар под другим кодом"
+        },
+        {
+          "from_sku": "ЮП-137",
+          "relation": "shared_photo_thumb",
+          "to_sku": "480",
+          "status": "confirmed",
+          "source": "storage:sha256",
+          "note": "8e1bde1758a3"
         }
       ],
       "relation_text": "alias_of→480",
@@ -5121,16 +5166,16 @@
       "n_per_hanger_manual": 96,
       "n_per_hanger_auto": 96,
       "n_mismatch": false,
-      "photo_full": "products/ЮП-1401_full.jpg",
-      "photo_thumb": "products/ЮП-1401_thumb.jpg",
+      "photo_full": "products/ЮП-1401_29_full.png",
+      "photo_thumb": "products/ЮП-1401_29_thumb.png",
       "photo_full_exists": true,
       "photo_thumb_exists": true,
-      "photo_full_px": "2000x2000",
-      "photo_thumb_px": "600x600",
-      "photo_full_bytes": 45193,
-      "photo_thumb_bytes": 7148,
-      "photo_full_sha12": "79bec28efead",
-      "photo_thumb_sha12": "8eec565b9332",
+      "photo_full_px": "1860x1046",
+      "photo_thumb_px": "571x330",
+      "photo_full_bytes": 177903,
+      "photo_thumb_bytes": 9081,
+      "photo_full_sha12": "ae595c82f9a4",
+      "photo_thumb_sha12": "af58e4deb2c1",
       "attributes_json": {
         "hanger_mode": "auto",
         "perimeter_mm": 40.0,
@@ -5211,8 +5256,10 @@
         "confidence:90",
         "status:probable",
         "alias:У1010",
-        "shared_photo_full:У1010",
-        "shared_photo_thumb:У1010"
+        "shared_photo_full:ЮП-009",
+        "shared_photo_full:ЮП-011",
+        "shared_photo_full:ЮП-1629",
+        "shared_photo_full:ЮП-2004"
       ],
       "relations": [
         {
@@ -5226,18 +5273,34 @@
         {
           "from_sku": "ЮП-1401",
           "relation": "shared_photo_full",
-          "to_sku": "У1010",
+          "to_sku": "ЮП-009",
           "status": "confirmed",
           "source": "storage:sha256",
-          "note": "79bec28efead"
+          "note": "ae595c82f9a4"
         },
         {
           "from_sku": "ЮП-1401",
-          "relation": "shared_photo_thumb",
-          "to_sku": "У1010",
+          "relation": "shared_photo_full",
+          "to_sku": "ЮП-011",
           "status": "confirmed",
           "source": "storage:sha256",
-          "note": "8eec565b9332"
+          "note": "ae595c82f9a4"
+        },
+        {
+          "from_sku": "ЮП-1401",
+          "relation": "shared_photo_full",
+          "to_sku": "ЮП-1629",
+          "status": "confirmed",
+          "source": "storage:sha256",
+          "note": "ae595c82f9a4"
+        },
+        {
+          "from_sku": "ЮП-1401",
+          "relation": "shared_photo_full",
+          "to_sku": "ЮП-2004",
+          "status": "confirmed",
+          "source": "storage:sha256",
+          "note": "ae595c82f9a4"
         }
       ],
       "relation_text": "alias_of→У1010",
@@ -5283,16 +5346,16 @@
       "n_per_hanger_manual": 35,
       "n_per_hanger_auto": 35,
       "n_mismatch": false,
-      "photo_full": "products/ЮП-1629_full.jpg",
-      "photo_thumb": "products/ЮП-1629_thumb.jpg",
+      "photo_full": "products/ЮП-1629_30_full.png",
+      "photo_thumb": "products/ЮП-1629_30_thumb.png",
       "photo_full_exists": true,
       "photo_thumb_exists": true,
-      "photo_full_px": "2000x2000",
-      "photo_thumb_px": "600x600",
-      "photo_full_bytes": 46542,
-      "photo_thumb_bytes": 7306,
-      "photo_full_sha12": "ecc8f310a2db",
-      "photo_thumb_sha12": "ef2d382f80eb",
+      "photo_full_px": "1860x1046",
+      "photo_thumb_px": "580x331",
+      "photo_full_bytes": 177903,
+      "photo_thumb_bytes": 11289,
+      "photo_full_sha12": "ae595c82f9a4",
+      "photo_thumb_sha12": "6425019ab983",
       "attributes_json": {
         "hanger_mode": "auto",
         "perimeter_mm": 119.0,
@@ -5373,8 +5436,10 @@
         "confidence:90",
         "status:probable",
         "alias:У3030",
-        "shared_photo_full:У3030",
-        "shared_photo_thumb:У3030"
+        "shared_photo_full:ЮП-009",
+        "shared_photo_full:ЮП-011",
+        "shared_photo_full:ЮП-1401",
+        "shared_photo_full:ЮП-2004"
       ],
       "relations": [
         {
@@ -5388,18 +5453,34 @@
         {
           "from_sku": "ЮП-1629",
           "relation": "shared_photo_full",
-          "to_sku": "У3030",
+          "to_sku": "ЮП-009",
           "status": "confirmed",
           "source": "storage:sha256",
-          "note": "ecc8f310a2db"
+          "note": "ae595c82f9a4"
         },
         {
           "from_sku": "ЮП-1629",
-          "relation": "shared_photo_thumb",
-          "to_sku": "У3030",
+          "relation": "shared_photo_full",
+          "to_sku": "ЮП-011",
           "status": "confirmed",
           "source": "storage:sha256",
-          "note": "ef2d382f80eb"
+          "note": "ae595c82f9a4"
+        },
+        {
+          "from_sku": "ЮП-1629",
+          "relation": "shared_photo_full",
+          "to_sku": "ЮП-1401",
+          "status": "confirmed",
+          "source": "storage:sha256",
+          "note": "ae595c82f9a4"
+        },
+        {
+          "from_sku": "ЮП-1629",
+          "relation": "shared_photo_full",
+          "to_sku": "ЮП-2004",
+          "status": "confirmed",
+          "source": "storage:sha256",
+          "note": "ae595c82f9a4"
         }
       ],
       "relation_text": "alias_of→У3030",
@@ -5534,9 +5615,7 @@
         "perimeter:чертёж",
         "confidence:96",
         "status:confirmed",
-        "alias:10",
-        "shared_photo_full:10",
-        "shared_photo_thumb:10"
+        "alias:10"
       ],
       "relations": [
         {
@@ -5546,22 +5625,6 @@
           "status": "confirmed",
           "source": "db:aliases",
           "note": "DB-алиас: тот же товар под другим кодом"
-        },
-        {
-          "from_sku": "ЮП-1767",
-          "relation": "shared_photo_full",
-          "to_sku": "10",
-          "status": "confirmed",
-          "source": "storage:sha256",
-          "note": "4704f728304f"
-        },
-        {
-          "from_sku": "ЮП-1767",
-          "relation": "shared_photo_thumb",
-          "to_sku": "10",
-          "status": "confirmed",
-          "source": "storage:sha256",
-          "note": "00f406f678ac"
         }
       ],
       "relation_text": "alias_of→10",
@@ -5635,7 +5698,13 @@
           }
         }
       },
-      "dimensions": [],
+      "dimensions": [
+        {
+          "dimension_type_id": 1,
+          "is_required": true,
+          "default_value": 2700
+        }
+      ],
       "notes": "Новый профиль из КПЗ; длина под вопросом; норма на подвес — из «Экранчика», не проверена",
       "source": "excel_catalog_import",
       "processing_flags": [],
@@ -6081,16 +6150,16 @@
       "n_per_hanger_manual": 42,
       "n_per_hanger_auto": 42,
       "n_mismatch": false,
-      "photo_full": "products/ЮП-2004_full.jpg",
-      "photo_thumb": "products/ЮП-2004_thumb.jpg",
+      "photo_full": "products/ЮП-2004_35_full.png",
+      "photo_thumb": "products/ЮП-2004_35_thumb.png",
       "photo_full_exists": true,
       "photo_thumb_exists": true,
-      "photo_full_px": "2000x2000",
-      "photo_thumb_px": "600x600",
-      "photo_full_bytes": 45820,
-      "photo_thumb_bytes": 7296,
-      "photo_full_sha12": "8191a1f887ae",
-      "photo_thumb_sha12": "7431ad0e2eb3",
+      "photo_full_px": "1860x1046",
+      "photo_thumb_px": "573x334",
+      "photo_full_bytes": 177903,
+      "photo_thumb_bytes": 10556,
+      "photo_full_sha12": "ae595c82f9a4",
+      "photo_thumb_sha12": "71740128af53",
       "attributes_json": {
         "hanger_mode": "auto",
         "perimeter_mm": 99.0,
@@ -6171,8 +6240,10 @@
         "confidence:90",
         "status:probable",
         "alias:У2525",
-        "shared_photo_full:У2525",
-        "shared_photo_thumb:У2525"
+        "shared_photo_full:ЮП-009",
+        "shared_photo_full:ЮП-011",
+        "shared_photo_full:ЮП-1401",
+        "shared_photo_full:ЮП-1629"
       ],
       "relations": [
         {
@@ -6186,18 +6257,34 @@
         {
           "from_sku": "ЮП-2004",
           "relation": "shared_photo_full",
-          "to_sku": "У2525",
+          "to_sku": "ЮП-009",
           "status": "confirmed",
           "source": "storage:sha256",
-          "note": "8191a1f887ae"
+          "note": "ae595c82f9a4"
         },
         {
           "from_sku": "ЮП-2004",
-          "relation": "shared_photo_thumb",
-          "to_sku": "У2525",
+          "relation": "shared_photo_full",
+          "to_sku": "ЮП-011",
           "status": "confirmed",
           "source": "storage:sha256",
-          "note": "7431ad0e2eb3"
+          "note": "ae595c82f9a4"
+        },
+        {
+          "from_sku": "ЮП-2004",
+          "relation": "shared_photo_full",
+          "to_sku": "ЮП-1401",
+          "status": "confirmed",
+          "source": "storage:sha256",
+          "note": "ae595c82f9a4"
+        },
+        {
+          "from_sku": "ЮП-2004",
+          "relation": "shared_photo_full",
+          "to_sku": "ЮП-1629",
+          "status": "confirmed",
+          "source": "storage:sha256",
+          "note": "ae595c82f9a4"
         }
       ],
       "relation_text": "alias_of→У2525",
@@ -6388,15 +6475,15 @@
       "n_per_hanger_auto": 35,
       "n_mismatch": false,
       "photo_full": "products/ЮП-2012_full.jpg",
-      "photo_thumb": "products/ЮП-2012_thumb.jpg",
+      "photo_thumb": "products/ЮП-2012_37_thumb.png",
       "photo_full_exists": true,
       "photo_thumb_exists": true,
       "photo_full_px": "296x358",
-      "photo_thumb_px": "147x106",
+      "photo_thumb_px": "1117x818",
       "photo_full_bytes": 56262,
-      "photo_thumb_bytes": 2233,
+      "photo_thumb_bytes": 75714,
       "photo_full_sha12": "220126fd0a23",
-      "photo_thumb_sha12": "7a32256dc821",
+      "photo_thumb_sha12": "6600f49067f3",
       "attributes_json": {
         "hanger_mode": "auto",
         "perimeter_mm": 133.4,
@@ -6689,15 +6776,15 @@
       "n_per_hanger_auto": 59,
       "n_mismatch": false,
       "photo_full": "products/ЮП-2077_full.jpg",
-      "photo_thumb": "products/ЮП-2077_thumb.jpg",
+      "photo_thumb": "products/ЮП-2077_39_thumb.png",
       "photo_full_exists": true,
       "photo_thumb_exists": true,
       "photo_full_px": "3306x4678",
-      "photo_thumb_px": "1000x530",
+      "photo_thumb_px": "1049x1026",
       "photo_full_bytes": 1096748,
-      "photo_thumb_bytes": 47244,
+      "photo_thumb_bytes": 110882,
       "photo_full_sha12": "3904ac9a0fa0",
-      "photo_thumb_sha12": "d715a7697fa7",
+      "photo_thumb_sha12": "1286eb40503c",
       "attributes_json": {
         "hanger_mode": "auto",
         "perimeter_mm": 79.2,
@@ -7796,15 +7883,15 @@
       "n_per_hanger_auto": 47,
       "n_mismatch": false,
       "photo_full": "products/ЮП-2396_full.jpg",
-      "photo_thumb": "products/ЮП-2396_thumb.jpg",
+      "photo_thumb": "products/ЮП-2396_46_thumb.png",
       "photo_full_exists": true,
       "photo_thumb_exists": true,
       "photo_full_px": "2480x3509",
-      "photo_thumb_px": "1000x557",
+      "photo_thumb_px": "1959x358",
       "photo_full_bytes": 748936,
-      "photo_thumb_bytes": 80749,
+      "photo_thumb_bytes": 190309,
       "photo_full_sha12": "76b0f229129e",
-      "photo_thumb_sha12": "7516890864f0",
+      "photo_thumb_sha12": "1dd73187a038",
       "attributes_json": {
         "hanger_mode": "auto",
         "perimeter_mm": 99.9,
@@ -11252,8 +11339,7 @@
         "perimeter:чертёж",
         "confidence:86",
         "status:probable",
-        "alias:100",
-        "shared_photo_thumb:100"
+        "alias:100"
       ],
       "relations": [
         {
@@ -11263,14 +11349,6 @@
           "status": "confirmed",
           "source": "db:aliases",
           "note": "DB-алиас: тот же товар под другим кодом"
-        },
-        {
-          "from_sku": "ЮП-2901",
-          "relation": "shared_photo_thumb",
-          "to_sku": "100",
-          "status": "confirmed",
-          "source": "storage:sha256",
-          "note": "d6fcaff589d4"
         }
       ],
       "relation_text": "alias_of→100",
@@ -12471,6 +12549,10 @@
       "mount_width_mm": 25.0,
       "hanger_mode": "auto",
       "quantity_per_hanger": {
+        "1800": {
+          "auto": 64,
+          "manual": null
+        },
         "2700": {
           "auto": 64,
           "manual": 64
@@ -12481,20 +12563,24 @@
       "n_per_hanger_auto": 64,
       "n_mismatch": false,
       "photo_full": "products/ЮП-3019_full.jpg",
-      "photo_thumb": "products/ЮП-3019_thumb.jpg",
+      "photo_thumb": "products/ЮП-3019_76_thumb.png",
       "photo_full_exists": true,
       "photo_thumb_exists": true,
       "photo_full_px": "2480x3507",
-      "photo_thumb_px": "1400x1082",
+      "photo_thumb_px": "1277x550",
       "photo_full_bytes": 790902,
-      "photo_thumb_bytes": 145299,
+      "photo_thumb_bytes": 122518,
       "photo_full_sha12": "2865ed47a49d",
-      "photo_thumb_sha12": "5d10378773f3",
+      "photo_thumb_sha12": "85826d08858f",
       "attributes_json": {
         "hanger_mode": "auto",
         "perimeter_mm": 69.3,
         "mount_width_mm": 25.0,
         "quantity_per_hanger": {
+          "1800": {
+            "auto": 64,
+            "manual": null
+          },
           "2700": {
             "auto": 64,
             "manual": 64
@@ -13318,8 +13404,7 @@
         "perimeter:плакат",
         "confidence:88",
         "status:probable",
-        "alias:150",
-        "shared_photo_thumb:150"
+        "alias:150"
       ],
       "relations": [
         {
@@ -13329,14 +13414,6 @@
           "status": "confirmed",
           "source": "db:aliases",
           "note": "DB-алиас: тот же товар под другим кодом"
-        },
-        {
-          "from_sku": "ЮП-3168",
-          "relation": "shared_photo_thumb",
-          "to_sku": "150",
-          "status": "confirmed",
-          "source": "storage:sha256",
-          "note": "abd107daeaf0"
         }
       ],
       "relation_text": "alias_of→150",
@@ -14989,7 +15066,13 @@
           }
         }
       },
-      "dimensions": [],
+      "dimensions": [
+        {
+          "dimension_type_id": 1,
+          "is_required": true,
+          "default_value": 2700
+        }
+      ],
       "notes": "Новый профиль из КПЗ; длина под вопросом; норма на подвес — из «Экранчика», не проверена",
       "source": "excel_catalog_import",
       "processing_flags": [],
@@ -15299,7 +15382,13 @@
           }
         }
       },
-      "dimensions": [],
+      "dimensions": [
+        {
+          "dimension_type_id": 1,
+          "is_required": true,
+          "default_value": 2700
+        }
+      ],
       "notes": "Новый профиль из КПЗ; длина под вопросом; норма на подвес — из «Экранчика», не проверена",
       "source": "excel_catalog_import",
       "processing_flags": [],
@@ -16011,15 +16100,15 @@
       "n_per_hanger_auto": null,
       "n_mismatch": false,
       "photo_full": "",
-      "photo_thumb": "",
+      "photo_thumb": "products/ЮП-3756_100_thumb.png",
       "photo_full_exists": false,
-      "photo_thumb_exists": false,
+      "photo_thumb_exists": true,
       "photo_full_px": "",
-      "photo_thumb_px": "",
+      "photo_thumb_px": "774x436",
       "photo_full_bytes": 0,
-      "photo_thumb_bytes": 0,
+      "photo_thumb_bytes": 23732,
       "photo_full_sha12": "",
-      "photo_thumb_sha12": "",
+      "photo_thumb_sha12": "83dc4fb356da",
       "attributes_json": {
         "hanger_mode": "manual",
         "quantity_per_hanger": {
@@ -16171,7 +16260,13 @@
           }
         }
       },
-      "dimensions": [],
+      "dimensions": [
+        {
+          "dimension_type_id": 1,
+          "is_required": true,
+          "default_value": 2500
+        }
+      ],
       "notes": "Новый профиль из КПЗ; длина под вопросом; норма на подвес — из «Экранчика», не проверена",
       "source": "excel_catalog_import",
       "processing_flags": [],
@@ -17353,16 +17448,16 @@
       "n_per_hanger_manual": 82,
       "n_per_hanger_auto": 82,
       "n_mismatch": false,
-      "photo_full": "products/ЮП-009_full.jpg",
-      "photo_thumb": "products/ЮП-009_thumb.jpg",
+      "photo_full": "products/ЮП-009_109_full.png",
+      "photo_thumb": "products/ЮП-009_109_thumb.png",
       "photo_full_exists": true,
       "photo_thumb_exists": true,
-      "photo_full_px": "2000x2000",
-      "photo_thumb_px": "600x600",
-      "photo_full_bytes": 44680,
-      "photo_thumb_bytes": 7052,
-      "photo_full_sha12": "802ed9c37292",
-      "photo_thumb_sha12": "cf3d32b11f2e",
+      "photo_full_px": "1860x1046",
+      "photo_thumb_px": "578x341",
+      "photo_full_bytes": 177903,
+      "photo_thumb_bytes": 9146,
+      "photo_full_sha12": "ae595c82f9a4",
+      "photo_thumb_sha12": "b1f44ca4e387",
       "attributes_json": {
         "hanger_mode": "auto",
         "perimeter_mm": 60.0,
@@ -17449,8 +17544,10 @@
         "review:resolved",
         "review-drawing:есть",
         "alias:У1515",
-        "shared_photo_full:У1515",
-        "shared_photo_thumb:У1515"
+        "shared_photo_full:ЮП-011",
+        "shared_photo_full:ЮП-1401",
+        "shared_photo_full:ЮП-1629",
+        "shared_photo_full:ЮП-2004"
       ],
       "relations": [
         {
@@ -17464,18 +17561,34 @@
         {
           "from_sku": "ЮП-009",
           "relation": "shared_photo_full",
-          "to_sku": "У1515",
+          "to_sku": "ЮП-011",
           "status": "confirmed",
           "source": "storage:sha256",
-          "note": "802ed9c37292"
+          "note": "ae595c82f9a4"
         },
         {
           "from_sku": "ЮП-009",
-          "relation": "shared_photo_thumb",
-          "to_sku": "У1515",
+          "relation": "shared_photo_full",
+          "to_sku": "ЮП-1401",
           "status": "confirmed",
           "source": "storage:sha256",
-          "note": "cf3d32b11f2e"
+          "note": "ae595c82f9a4"
+        },
+        {
+          "from_sku": "ЮП-009",
+          "relation": "shared_photo_full",
+          "to_sku": "ЮП-1629",
+          "status": "confirmed",
+          "source": "storage:sha256",
+          "note": "ae595c82f9a4"
+        },
+        {
+          "from_sku": "ЮП-009",
+          "relation": "shared_photo_full",
+          "to_sku": "ЮП-2004",
+          "status": "confirmed",
+          "source": "storage:sha256",
+          "note": "ae595c82f9a4"
         }
       ],
       "relation_text": "alias_of→У1515",
@@ -17720,15 +17833,15 @@
       "n_per_hanger_auto": 58,
       "n_mismatch": false,
       "photo_full": "products/110_full.jpg",
-      "photo_thumb": "products/110_thumb.jpg",
+      "photo_thumb": "products/110_111_thumb.png",
       "photo_full_exists": true,
       "photo_thumb_exists": true,
       "photo_full_px": "1081x1484",
-      "photo_thumb_px": "121x42",
+      "photo_thumb_px": "1522x498",
       "photo_full_bytes": 171335,
-      "photo_thumb_bytes": 1610,
+      "photo_thumb_bytes": 39188,
       "photo_full_sha12": "22552f835e97",
-      "photo_thumb_sha12": "03b348ec2358",
+      "photo_thumb_sha12": "c6885926dd7a",
       "attributes_json": {
         "hanger_mode": "auto",
         "perimeter_mm": 62.9,
@@ -17882,15 +17995,15 @@
       "n_per_hanger_auto": 48,
       "n_mismatch": false,
       "photo_full": "products/120_full.jpg",
-      "photo_thumb": "products/120_thumb.jpg",
+      "photo_thumb": "products/120_112_thumb.png",
       "photo_full_exists": true,
       "photo_thumb_exists": true,
       "photo_full_px": "1080x1479",
-      "photo_thumb_px": "144x40",
+      "photo_thumb_px": "1845x461",
       "photo_full_bytes": 166921,
-      "photo_thumb_bytes": 1811,
+      "photo_thumb_bytes": 39749,
       "photo_full_sha12": "bc3c27a9cf52",
-      "photo_thumb_sha12": "74916db7a324",
+      "photo_thumb_sha12": "c863d38bcba9",
       "attributes_json": {
         "hanger_mode": "auto",
         "perimeter_mm": 84.0,
@@ -17990,155 +18103,6 @@
       "open_claims": []
     },
     {
-      "id": 113,
-      "sku": "1212",
-      "code": "",
-      "name": "1212",
-      "type": "component",
-      "unit": "шт",
-      "is_active": true,
-      "is_catalog_item": true,
-      "profile_type_db": "",
-      "alloy": "",
-      "color": "",
-      "anod_type": "",
-      "dimension_state": "length",
-      "aliases": [],
-      "lengths": [
-        {
-          "length_mm": 2500,
-          "raw_length_mm": null,
-          "is_primary": false
-        }
-      ],
-      "length_primary_mm": 2500,
-      "perimeter_mm": null,
-      "mount_width_mm": null,
-      "hanger_mode": "manual",
-      "quantity_per_hanger": {
-        "2500": {
-          "auto": null,
-          "manual": 88
-        }
-      },
-      "n_per_hanger": 88,
-      "n_per_hanger_manual": 88,
-      "n_per_hanger_auto": null,
-      "n_mismatch": false,
-      "photo_full": "products/1212_full.jpg",
-      "photo_thumb": "products/1212_thumb.jpg",
-      "photo_full_exists": true,
-      "photo_thumb_exists": true,
-      "photo_full_px": "687x459",
-      "photo_thumb_px": "92x77",
-      "photo_full_bytes": 78264,
-      "photo_thumb_bytes": 1456,
-      "photo_full_sha12": "d44909619876",
-      "photo_thumb_sha12": "ee32c49f083c",
-      "attributes_json": {
-        "hanger_mode": "manual",
-        "quantity_per_hanger": {
-          "2500": {
-            "auto": null,
-            "manual": 88
-          }
-        }
-      },
-      "dimensions": [
-        {
-          "dimension_type_id": 1,
-          "is_required": true,
-          "default_value": 2500
-        }
-      ],
-      "notes": "Уголок",
-      "source": "excel_catalog_import",
-      "processing_flags": [],
-      "composition": [],
-      "audit_group": "07-tubes-variants",
-      "base_audit_group": "07-tubes-variants",
-      "review_status": "",
-      "review_drawing": "",
-      "review_cause": "",
-      "review_note": "",
-      "review_resolution": "",
-      "review_kpz_n": null,
-      "review_register_n": null,
-      "review_observations": null,
-      "audit_verdict": "upgrade_full",
-      "audit_confidence": "high",
-      "audit_note": "Та же ГОСТ-ячейка 2025, рендер 896x530 вместо 687x459; thumb L12 верный.",
-      "audit_evidence": "candidates/1212_full.jpg; sheets/_sheet-1.jpg",
-      "photo_status": "full+thumb",
-      "photo_label": "full+thumb",
-      "photo_origin": "own",
-      "photo_from": "",
-      "photo_origin_scope": "",
-      "photo_origin_note": "",
-      "photo_verdict": "upgrade_available",
-      "perimeter_archive": "—",
-      "perimeter_poster": "—",
-      "perimeter_best": "—",
-      "perimeter_source": "—",
-      "dimension_status": "no_archive",
-      "dimension_note": "no archive / db empty",
-      "applied_decision": "",
-      "archive_file": "",
-      "poster_source": "—",
-      "linear_best": "12×12",
-      "linear_source": "name",
-      "classification_profile": "unknown",
-      "classification_profile_label": "не определено",
-      "classification_shape": "unknown",
-      "classification_series": "KTM",
-      "classification_family": "",
-      "classification_family_name": "",
-      "material": "—",
-      "identity_confidence": 100,
-      "dimension_confidence": 55,
-      "photo_confidence": 90,
-      "classification_confidence": 55,
-      "overall_confidence": 80,
-      "overall_status": "needs_review",
-      "tags": [
-        "group:07-tubes-variants",
-        "profile:unknown",
-        "shape:unknown",
-        "series:KTM",
-        "size:12×12",
-        "photo:full+thumb",
-        "photo-origin:own",
-        "photo-verdict:upgrade_available",
-        "perimeter:—",
-        "confidence:80",
-        "status:needs_review",
-        "shared_photo_full:У4040",
-        "shared_photo_full:У5050"
-      ],
-      "relations": [
-        {
-          "from_sku": "1212",
-          "relation": "shared_photo_full",
-          "to_sku": "У4040",
-          "status": "confirmed",
-          "source": "storage:sha256",
-          "note": "d44909619876"
-        },
-        {
-          "from_sku": "1212",
-          "relation": "shared_photo_full",
-          "to_sku": "У5050",
-          "status": "confirmed",
-          "source": "storage:sha256",
-          "note": "d44909619876"
-        }
-      ],
-      "relation_text": "",
-      "confirmed": [],
-      "refuted": [],
-      "open_claims": []
-    },
-    {
       "id": 114,
       "sku": "140",
       "code": "",
@@ -18175,15 +18139,15 @@
       "n_per_hanger_auto": 50,
       "n_mismatch": false,
       "photo_full": "products/140_full.jpg",
-      "photo_thumb": "products/140_thumb.jpg",
+      "photo_thumb": "products/140_114_thumb.png",
       "photo_full_exists": true,
       "photo_thumb_exists": true,
       "photo_full_px": "1080x1549",
-      "photo_thumb_px": "138x36",
+      "photo_thumb_px": "1754x424",
       "photo_full_bytes": 164731,
-      "photo_thumb_bytes": 1571,
+      "photo_thumb_bytes": 31851,
       "photo_full_sha12": "30b268be940a",
-      "photo_thumb_sha12": "0e2f7caf87a7",
+      "photo_thumb_sha12": "e246fb266805",
       "attributes_json": {
         "hanger_mode": "auto",
         "perimeter_mm": 78.9,
@@ -18318,16 +18282,16 @@
       "n_per_hanger_manual": 40,
       "n_per_hanger_auto": 40,
       "n_mismatch": false,
-      "photo_full": "",
-      "photo_thumb": "",
-      "photo_full_exists": false,
-      "photo_thumb_exists": false,
-      "photo_full_px": "",
-      "photo_thumb_px": "",
-      "photo_full_bytes": 0,
-      "photo_thumb_bytes": 0,
-      "photo_full_sha12": "",
-      "photo_thumb_sha12": "",
+      "photo_full": "products/220_115_full.png",
+      "photo_thumb": "products/220_115_thumb.png",
+      "photo_full_exists": true,
+      "photo_thumb_exists": true,
+      "photo_full_px": "2194x1549",
+      "photo_thumb_px": "842x506",
+      "photo_full_bytes": 675656,
+      "photo_thumb_bytes": 28528,
+      "photo_full_sha12": "af925c75258f",
+      "photo_thumb_sha12": "b3a0f45bb523",
       "attributes_json": {
         "hanger_mode": "auto",
         "perimeter_mm": 117.9,
@@ -18364,9 +18328,9 @@
       "audit_confidence": "high",
       "audit_note": "текущего нет; архивный чертёж 220 (36,9×20,7); 2025 ячейка 220/1 — другой вариант",
       "audit_evidence": "archive:КТМ/220.pdf; candidates/220_full.jpg; candidates/220_thumb.jpg; sheets/_sheet-4.jpg",
-      "photo_status": "нет",
-      "photo_label": "нет",
-      "photo_origin": "none",
+      "photo_status": "full+thumb",
+      "photo_label": "full+thumb",
+      "photo_origin": "own",
       "photo_from": "",
       "photo_origin_scope": "",
       "photo_origin_note": "",
@@ -18391,23 +18355,22 @@
       "material": "—",
       "identity_confidence": 100,
       "dimension_confidence": 100,
-      "photo_confidence": 0,
+      "photo_confidence": 90,
       "classification_confidence": 85,
-      "overall_confidence": 74,
-      "overall_status": "needs_review",
+      "overall_confidence": 96,
+      "overall_status": "confirmed",
       "tags": [
         "group:02-corners",
         "profile:corner",
         "shape:L",
         "series:KTM",
         "size:36.9×20.7",
-        "photo:нет",
-        "photo-origin:none",
+        "photo:full+thumb",
+        "photo-origin:own",
         "photo-verdict:upgrade_available",
         "perimeter:чертёж",
-        "confidence:74",
-        "status:needs_review",
-        "open"
+        "confidence:96",
+        "status:confirmed"
       ],
       "relations": [],
       "relation_text": "",
@@ -18424,13 +18387,7 @@
         }
       ],
       "refuted": [],
-      "open_claims": [
-        {
-          "claim": "Есть фото товара",
-          "verdict": "open",
-          "evidence": "файл отсутствует"
-        }
-      ]
+      "open_claims": []
     },
     {
       "id": 116,
@@ -18469,15 +18426,15 @@
       "n_per_hanger_auto": 65,
       "n_mismatch": false,
       "photo_full": "products/2212_full.jpg",
-      "photo_thumb": "products/2212_thumb.jpg",
+      "photo_thumb": "products/2212_116_thumb.png",
       "photo_full_exists": true,
       "photo_thumb_exists": true,
       "photo_full_px": "286x395",
-      "photo_thumb_px": "90x55",
+      "photo_thumb_px": "887x560",
       "photo_full_bytes": 24101,
-      "photo_thumb_bytes": 1424,
+      "photo_thumb_bytes": 15636,
       "photo_full_sha12": "f6c74bebd90d",
-      "photo_thumb_sha12": "c575dd894649",
+      "photo_thumb_sha12": "b0404a979bc5",
       "attributes_json": {
         "hanger_mode": "auto",
         "perimeter_mm": 71.9,
@@ -18619,16 +18576,16 @@
       "n_per_hanger_manual": 72,
       "n_per_hanger_auto": 72,
       "n_mismatch": false,
-      "photo_full": "products/228_full.jpg",
-      "photo_thumb": "products/228_thumb.jpg",
+      "photo_full": "products/228_118_full.png",
+      "photo_thumb": "products/228_118_thumb.png",
       "photo_full_exists": true,
       "photo_thumb_exists": true,
-      "photo_full_px": "294x403",
-      "photo_thumb_px": "82x51",
-      "photo_full_bytes": 30473,
-      "photo_thumb_bytes": 1067,
-      "photo_full_sha12": "9a0a8fc9984c",
-      "photo_thumb_sha12": "3fb90b519f3e",
+      "photo_full_px": "868x1224",
+      "photo_thumb_px": "662x365",
+      "photo_full_bytes": 192532,
+      "photo_thumb_bytes": 6881,
+      "photo_full_sha12": "4c939e7edf77",
+      "photo_thumb_sha12": "ccdbc08b84cc",
       "attributes_json": {
         "hanger_mode": "auto",
         "perimeter_mm": 63.3,
@@ -18727,7 +18684,7 @@
           "to_sku": "229",
           "status": "confirmed",
           "source": "storage:sha256",
-          "note": "9a0a8fc9984c"
+          "note": "4c939e7edf77"
         }
       ],
       "relation_text": "",
@@ -18788,16 +18745,16 @@
       "n_per_hanger_manual": 67,
       "n_per_hanger_auto": 67,
       "n_mismatch": false,
-      "photo_full": "products/229_full.jpg",
-      "photo_thumb": "products/229_thumb.jpg",
+      "photo_full": "products/229_119_full.png",
+      "photo_thumb": "products/229_119_thumb.png",
       "photo_full_exists": true,
       "photo_thumb_exists": true,
-      "photo_full_px": "294x403",
-      "photo_thumb_px": "75x60",
-      "photo_full_bytes": 30473,
-      "photo_thumb_bytes": 1144,
-      "photo_full_sha12": "9a0a8fc9984c",
-      "photo_thumb_sha12": "5b31b5135c30",
+      "photo_full_px": "868x1224",
+      "photo_thumb_px": "669x450",
+      "photo_full_bytes": 192532,
+      "photo_thumb_bytes": 7502,
+      "photo_full_sha12": "4c939e7edf77",
+      "photo_thumb_sha12": "1bbe3318886c",
       "attributes_json": {
         "hanger_mode": "auto",
         "perimeter_mm": 69.7,
@@ -18898,7 +18855,7 @@
           "to_sku": "228",
           "status": "confirmed",
           "source": "storage:sha256",
-          "note": "9a0a8fc9984c"
+          "note": "4c939e7edf77"
         }
       ],
       "relation_text": "",
@@ -18959,16 +18916,16 @@
       "n_per_hanger_manual": 66,
       "n_per_hanger_auto": 66,
       "n_mismatch": false,
-      "photo_full": "",
-      "photo_thumb": "",
-      "photo_full_exists": false,
-      "photo_thumb_exists": false,
-      "photo_full_px": "",
-      "photo_thumb_px": "",
-      "photo_full_bytes": 0,
-      "photo_thumb_bytes": 0,
-      "photo_full_sha12": "",
-      "photo_thumb_sha12": "",
+      "photo_full": "products/230_120_full.png",
+      "photo_thumb": "products/230_120_thumb.png",
+      "photo_full_exists": true,
+      "photo_thumb_exists": true,
+      "photo_full_px": "1088x1627",
+      "photo_thumb_px": "1049x477",
+      "photo_full_bytes": 235801,
+      "photo_thumb_bytes": 4535,
+      "photo_full_sha12": "86b630d5b6ed",
+      "photo_thumb_sha12": "bf3bcc2df466",
       "attributes_json": {
         "hanger_mode": "auto",
         "perimeter_mm": 66.08,
@@ -19005,9 +18962,9 @@
       "audit_confidence": "high",
       "audit_note": "текущего нет; архивный чертёж Cortizo (23,0×9,2)",
       "audit_evidence": "archive:КТМ/230_Ukonc L 8 - cortizo.pdf; candidates/230_full.jpg; candidates/230_thumb.jpg; sheets/_sheet-4.jpg",
-      "photo_status": "нет",
-      "photo_label": "нет",
-      "photo_origin": "none",
+      "photo_status": "full+thumb",
+      "photo_label": "full+thumb",
+      "photo_origin": "own",
       "photo_from": "",
       "photo_origin_scope": "",
       "photo_origin_note": "",
@@ -19032,23 +18989,22 @@
       "material": "—",
       "identity_confidence": 100,
       "dimension_confidence": 100,
-      "photo_confidence": 0,
+      "photo_confidence": 90,
       "classification_confidence": 85,
-      "overall_confidence": 74,
-      "overall_status": "needs_review",
+      "overall_confidence": 96,
+      "overall_status": "confirmed",
       "tags": [
         "group:02-corners",
         "profile:corner",
         "shape:L",
         "series:KTM",
         "size:23×9.2",
-        "photo:нет",
-        "photo-origin:none",
+        "photo:full+thumb",
+        "photo-origin:own",
         "photo-verdict:upgrade_available",
         "perimeter:чертёж",
-        "confidence:74",
-        "status:needs_review",
-        "open"
+        "confidence:96",
+        "status:confirmed"
       ],
       "relations": [],
       "relation_text": "",
@@ -19065,13 +19021,7 @@
         }
       ],
       "refuted": [],
-      "open_claims": [
-        {
-          "claim": "Есть фото товара",
-          "verdict": "open",
-          "evidence": "файл отсутствует"
-        }
-      ]
+      "open_claims": []
     },
     {
       "id": 121,
@@ -19109,16 +19059,16 @@
       "n_per_hanger_manual": 66,
       "n_per_hanger_auto": 66,
       "n_mismatch": false,
-      "photo_full": "",
-      "photo_thumb": "",
-      "photo_full_exists": false,
-      "photo_thumb_exists": false,
-      "photo_full_px": "",
-      "photo_thumb_px": "",
-      "photo_full_bytes": 0,
-      "photo_thumb_bytes": 0,
-      "photo_full_sha12": "",
-      "photo_thumb_sha12": "",
+      "photo_full": "products/231_121_full.png",
+      "photo_thumb": "products/231_121_thumb.png",
+      "photo_full_exists": true,
+      "photo_thumb_exists": true,
+      "photo_full_px": "1126x1677",
+      "photo_thumb_px": "1077x581",
+      "photo_full_bytes": 249810,
+      "photo_thumb_bytes": 5314,
+      "photo_full_sha12": "3593006b7e15",
+      "photo_thumb_sha12": "1b6e5a8253f3",
       "attributes_json": {
         "hanger_mode": "auto",
         "perimeter_mm": 70.08,
@@ -19155,9 +19105,9 @@
       "audit_confidence": "high",
       "audit_note": "текущего нет; архивный чертёж Cortizo (23,0×11,2)",
       "audit_evidence": "archive:КТМ/231_L  10 mm cortizo.pdf; candidates/231_full.jpg; candidates/231_thumb.jpg; sheets/_sheet-5.jpg",
-      "photo_status": "нет",
-      "photo_label": "нет",
-      "photo_origin": "none",
+      "photo_status": "full+thumb",
+      "photo_label": "full+thumb",
+      "photo_origin": "own",
       "photo_from": "",
       "photo_origin_scope": "",
       "photo_origin_note": "",
@@ -19182,23 +19132,22 @@
       "material": "—",
       "identity_confidence": 100,
       "dimension_confidence": 100,
-      "photo_confidence": 0,
+      "photo_confidence": 90,
       "classification_confidence": 85,
-      "overall_confidence": 74,
-      "overall_status": "needs_review",
+      "overall_confidence": 96,
+      "overall_status": "confirmed",
       "tags": [
         "group:02-corners",
         "profile:corner",
         "shape:L",
         "series:KTM",
         "size:23×11.2",
-        "photo:нет",
-        "photo-origin:none",
+        "photo:full+thumb",
+        "photo-origin:own",
         "photo-verdict:upgrade_available",
         "perimeter:чертёж",
-        "confidence:74",
-        "status:needs_review",
-        "open"
+        "confidence:96",
+        "status:confirmed"
       ],
       "relations": [],
       "relation_text": "",
@@ -19215,13 +19164,7 @@
         }
       ],
       "refuted": [],
-      "open_claims": [
-        {
-          "claim": "Есть фото товара",
-          "verdict": "open",
-          "evidence": "файл отсутствует"
-        }
-      ]
+      "open_claims": []
     },
     {
       "id": 122,
@@ -19598,16 +19541,16 @@
       "n_per_hanger_manual": 20,
       "n_per_hanger_auto": 20,
       "n_mismatch": false,
-      "photo_full": "products/259_full.jpg",
-      "photo_thumb": "products/259_thumb.jpg",
+      "photo_full": "products/259_124_full.png",
+      "photo_thumb": "products/259_124_thumb.png",
       "photo_full_exists": true,
       "photo_thumb_exists": true,
-      "photo_full_px": "295x332",
-      "photo_thumb_px": "177x73",
-      "photo_full_bytes": 19422,
-      "photo_thumb_bytes": 2751,
-      "photo_full_sha12": "c046f3cea5d6",
-      "photo_thumb_sha12": "e6b42b06a040",
+      "photo_full_px": "761x874",
+      "photo_thumb_px": "1046x435",
+      "photo_full_bytes": 105312,
+      "photo_thumb_bytes": 23043,
+      "photo_full_sha12": "cee859f65c00",
+      "photo_thumb_sha12": "93223878fe9f",
       "attributes_json": {
         "hanger_mode": "auto",
         "perimeter_mm": 257.0,
@@ -19874,15 +19817,15 @@
       "n_per_hanger_auto": 46,
       "n_mismatch": false,
       "photo_full": "products/2626_full.jpg",
-      "photo_thumb": "products/2626_thumb.jpg",
+      "photo_thumb": "products/2626_126_thumb.png",
       "photo_full_exists": true,
       "photo_thumb_exists": true,
       "photo_full_px": "293x397",
-      "photo_thumb_px": "98x66",
+      "photo_thumb_px": "851x662",
       "photo_full_bytes": 23713,
-      "photo_thumb_bytes": 1271,
+      "photo_thumb_bytes": 11597,
       "photo_full_sha12": "08a00d840d59",
-      "photo_thumb_sha12": "655c5b72d474",
+      "photo_thumb_sha12": "5322498599f4",
       "attributes_json": {
         "hanger_mode": "auto",
         "perimeter_mm": 101.6,
@@ -20024,16 +19967,16 @@
       "n_per_hanger_manual": 51,
       "n_per_hanger_auto": 51,
       "n_mismatch": false,
-      "photo_full": "products/314_full.jpg",
-      "photo_thumb": "products/314_thumb.jpg",
+      "photo_full": "products/314_127_full.png",
+      "photo_thumb": "products/314_127_thumb.png",
       "photo_full_exists": true,
       "photo_thumb_exists": true,
-      "photo_full_px": "1083x1501",
-      "photo_thumb_px": "110x80",
-      "photo_full_bytes": 147405,
-      "photo_thumb_bytes": 1645,
-      "photo_full_sha12": "2e0eaa25ad22",
-      "photo_thumb_sha12": "60cc2ccdbca3",
+      "photo_full_px": "887x1220",
+      "photo_thumb_px": "770x570",
+      "photo_full_bytes": 163877,
+      "photo_thumb_bytes": 14677,
+      "photo_full_sha12": "92988ee3c514",
+      "photo_thumb_sha12": "6ebd8973bd0b",
       "attributes_json": {
         "hanger_mode": "auto",
         "perimeter_mm": 93.2,
@@ -20175,15 +20118,15 @@
       "n_per_hanger_auto": 48,
       "n_mismatch": false,
       "photo_full": "products/3326_full.jpg",
-      "photo_thumb": "products/3326_thumb.jpg",
+      "photo_thumb": "products/3326_128_thumb.png",
       "photo_full_exists": true,
       "photo_thumb_exists": true,
       "photo_full_px": "350x399",
-      "photo_thumb_px": "151x49",
+      "photo_thumb_px": "1766x569",
       "photo_full_bytes": 105558,
-      "photo_thumb_bytes": 2001,
+      "photo_thumb_bytes": 47252,
       "photo_full_sha12": "a8bc282f4b7c",
-      "photo_thumb_sha12": "d711373bbeae",
+      "photo_thumb_sha12": "e688e2c27c45",
       "attributes_json": {
         "hanger_mode": "auto",
         "perimeter_mm": 88.6,
@@ -20307,15 +20250,15 @@
       "n_per_hanger_auto": 64,
       "n_mismatch": false,
       "photo_full": "products/3329_full.jpg",
-      "photo_thumb": "products/3329_thumb.jpg",
+      "photo_thumb": "products/3329_129_thumb.png",
       "photo_full_exists": true,
       "photo_thumb_exists": true,
       "photo_full_px": "1588x2189",
-      "photo_thumb_px": "134x58",
+      "photo_thumb_px": "1546x494",
       "photo_full_bytes": 341780,
-      "photo_thumb_bytes": 1617,
+      "photo_thumb_bytes": 32252,
       "photo_full_sha12": "3ee64cf03832",
-      "photo_thumb_sha12": "ce8f912fae7f",
+      "photo_thumb_sha12": "1620a935b90b",
       "attributes_json": {
         "hanger_mode": "auto",
         "perimeter_mm": 52.3,
@@ -20746,15 +20689,15 @@
       "n_per_hanger_auto": 53,
       "n_mismatch": false,
       "photo_full": "products/3414_full.jpg",
-      "photo_thumb": "products/3414_thumb.jpg",
+      "photo_thumb": "products/3414_132_thumb.png",
       "photo_full_exists": true,
       "photo_thumb_exists": true,
       "photo_full_px": "1082x1488",
-      "photo_thumb_px": "111x94",
+      "photo_thumb_px": "682x565",
       "photo_full_bytes": 175602,
-      "photo_thumb_bytes": 1554,
+      "photo_thumb_bytes": 10809,
       "photo_full_sha12": "00164c4a91fa",
-      "photo_thumb_sha12": "fdf7740d8f41",
+      "photo_thumb_sha12": "ffc6f731a1d1",
       "attributes_json": {
         "hanger_mode": "auto",
         "perimeter_mm": 88.6,
@@ -21039,16 +20982,16 @@
       "n_per_hanger_manual": 42,
       "n_per_hanger_auto": 42,
       "n_mismatch": false,
-      "photo_full": "products/352_full.jpg",
-      "photo_thumb": "products/352_thumb.jpg",
+      "photo_full": "products/352_134_full.png",
+      "photo_thumb": "products/352_134_thumb.png",
       "photo_full_exists": true,
       "photo_thumb_exists": true,
-      "photo_full_px": "285x343",
-      "photo_thumb_px": "134x45",
-      "photo_full_bytes": 48853,
-      "photo_thumb_bytes": 1741,
-      "photo_full_sha12": "a73d705e6103",
-      "photo_thumb_sha12": "e3551e8f22a5",
+      "photo_full_px": "700x852",
+      "photo_thumb_px": "928x329",
+      "photo_full_bytes": 131215,
+      "photo_thumb_bytes": 12349,
+      "photo_full_sha12": "c8f241aff4cd",
+      "photo_thumb_sha12": "85f6f6014db1",
       "attributes_json": {
         "hanger_mode": "auto",
         "perimeter_mm": 112.0,
@@ -21333,16 +21276,16 @@
       "n_per_hanger_manual": 50,
       "n_per_hanger_auto": 50,
       "n_mismatch": false,
-      "photo_full": "products/357_full.jpg",
-      "photo_thumb": "products/357_thumb.jpg",
+      "photo_full": "products/357_136_full.png",
+      "photo_thumb": "products/357_136_thumb.png",
       "photo_full_exists": true,
       "photo_thumb_exists": true,
-      "photo_full_px": "297x399",
-      "photo_thumb_px": "83x52",
-      "photo_full_bytes": 29400,
-      "photo_thumb_bytes": 1193,
-      "photo_full_sha12": "6b24fa05b187",
-      "photo_thumb_sha12": "62f61b08cb57",
+      "photo_full_px": "657x774",
+      "photo_thumb_px": "607x427",
+      "photo_full_bytes": 145305,
+      "photo_thumb_bytes": 11360,
+      "photo_full_sha12": "425121434be2",
+      "photo_thumb_sha12": "6707930ccc5a",
       "attributes_json": {
         "hanger_mode": "auto",
         "perimeter_mm": 95.2,
@@ -21476,16 +21419,16 @@
       "n_per_hanger_manual": 40,
       "n_per_hanger_auto": 40,
       "n_mismatch": false,
-      "photo_full": "products/3584_full.jpg",
-      "photo_thumb": "products/3584_thumb.jpg",
+      "photo_full": "products/3584_137_full.png",
+      "photo_thumb": "products/3584_137_thumb.png",
       "photo_full_exists": true,
       "photo_thumb_exists": true,
-      "photo_full_px": "338x382",
-      "photo_thumb_px": "143x52",
-      "photo_full_bytes": 76169,
-      "photo_thumb_bytes": 1800,
-      "photo_full_sha12": "adfea3d0615e",
-      "photo_thumb_sha12": "eecda1cb669b",
+      "photo_full_px": "1020x1376",
+      "photo_thumb_px": "2015x441",
+      "photo_full_bytes": 335094,
+      "photo_thumb_bytes": 40321,
+      "photo_full_sha12": "59ee34327053",
+      "photo_thumb_sha12": "7ffbda7e0793",
       "attributes_json": {
         "hanger_mode": "auto",
         "perimeter_mm": 104.8,
@@ -21629,16 +21572,16 @@
       "n_per_hanger_manual": 58,
       "n_per_hanger_auto": 58,
       "n_mismatch": false,
-      "photo_full": "products/3586_full.jpg",
-      "photo_thumb": "products/3586_thumb.jpg",
+      "photo_full": "products/3586_138_full.png",
+      "photo_thumb": "products/3586_138_thumb.png",
       "photo_full_exists": true,
       "photo_thumb_exists": true,
-      "photo_full_px": "325x369",
-      "photo_thumb_px": "136x40",
-      "photo_full_bytes": 90467,
-      "photo_thumb_bytes": 2204,
-      "photo_full_sha12": "709ace08d439",
-      "photo_thumb_sha12": "9b2d27e054c3",
+      "photo_full_px": "1007x1379",
+      "photo_thumb_px": "1516x388",
+      "photo_full_bytes": 367181,
+      "photo_thumb_bytes": 49920,
+      "photo_full_sha12": "e213524efe41",
+      "photo_thumb_sha12": "df582ecec4e6",
       "attributes_json": {
         "hanger_mode": "auto",
         "perimeter_mm": 65.9,
@@ -21782,16 +21725,16 @@
       "n_per_hanger_manual": 60,
       "n_per_hanger_auto": 60,
       "n_mismatch": false,
-      "photo_full": "products/361_full.jpg",
-      "photo_thumb": "products/361_thumb.jpg",
+      "photo_full": "products/361_139_full.png",
+      "photo_thumb": "products/361_139_thumb.png",
       "photo_full_exists": true,
       "photo_thumb_exists": true,
-      "photo_full_px": "298x403",
-      "photo_thumb_px": "84x42",
-      "photo_full_bytes": 31263,
-      "photo_thumb_bytes": 1129,
-      "photo_full_sha12": "2bf7effe26b0",
-      "photo_thumb_sha12": "c03924edd75e",
+      "photo_full_px": "991x1371",
+      "photo_thumb_px": "738x345",
+      "photo_full_bytes": 190257,
+      "photo_thumb_bytes": 9434,
+      "photo_full_sha12": "8bc8fdc1288a",
+      "photo_thumb_sha12": "6354ebec3325",
       "attributes_json": {
         "hanger_mode": "auto",
         "perimeter_mm": 78.1,
@@ -21891,7 +21834,7 @@
           "to_sku": "362",
           "status": "confirmed",
           "source": "storage:sha256",
-          "note": "2bf7effe26b0"
+          "note": "8bc8fdc1288a"
         }
       ],
       "relation_text": "",
@@ -21946,16 +21889,16 @@
       "n_per_hanger_manual": 53,
       "n_per_hanger_auto": 53,
       "n_mismatch": false,
-      "photo_full": "products/362_full.jpg",
-      "photo_thumb": "products/362_thumb.jpg",
+      "photo_full": "products/362_140_full.png",
+      "photo_thumb": "products/362_140_thumb.png",
       "photo_full_exists": true,
       "photo_thumb_exists": true,
-      "photo_full_px": "298x403",
-      "photo_thumb_px": "91x49",
-      "photo_full_bytes": 31263,
-      "photo_thumb_bytes": 1382,
-      "photo_full_sha12": "2bf7effe26b0",
-      "photo_thumb_sha12": "64cebc3e0638",
+      "photo_full_px": "991x1371",
+      "photo_thumb_px": "791x435",
+      "photo_full_bytes": 190257,
+      "photo_thumb_bytes": 13396,
+      "photo_full_sha12": "8bc8fdc1288a",
+      "photo_thumb_sha12": "7e36cdad9462",
       "attributes_json": {
         "hanger_mode": "auto",
         "perimeter_mm": 88.7,
@@ -22055,7 +21998,7 @@
           "to_sku": "361",
           "status": "confirmed",
           "source": "storage:sha256",
-          "note": "2bf7effe26b0"
+          "note": "8bc8fdc1288a"
         }
       ],
       "relation_text": "",
@@ -22434,16 +22377,16 @@
       "n_per_hanger_manual": 36,
       "n_per_hanger_auto": 36,
       "n_mismatch": false,
-      "photo_full": "products/60_full.jpg",
-      "photo_thumb": "products/60_thumb.jpg",
+      "photo_full": "products/60_143_full.png",
+      "photo_thumb": "products/60_143_thumb.png",
       "photo_full_exists": true,
       "photo_thumb_exists": true,
-      "photo_full_px": "293x340",
-      "photo_thumb_px": "170x41",
-      "photo_full_bytes": 25678,
-      "photo_thumb_bytes": 1990,
-      "photo_full_sha12": "ff160edaf780",
-      "photo_thumb_sha12": "eb8e72435a4f",
+      "photo_full_px": "700x958",
+      "photo_thumb_px": "1084x205",
+      "photo_full_bytes": 168531,
+      "photo_thumb_bytes": 10786,
+      "photo_full_sha12": "22b4738cfb8e",
+      "photo_thumb_sha12": "05e1add1e58e",
       "attributes_json": {
         "hanger_mode": "auto",
         "perimeter_mm": 129.2,
@@ -22577,15 +22520,15 @@
       "n_per_hanger_auto": 35,
       "n_mismatch": false,
       "photo_full": "products/664_full.jpg",
-      "photo_thumb": "products/664_thumb.jpg",
+      "photo_thumb": "products/664_144_thumb.png",
       "photo_full_exists": true,
       "photo_thumb_exists": true,
       "photo_full_px": "296x405",
-      "photo_thumb_px": "141x103",
+      "photo_thumb_px": "927x637",
       "photo_full_bytes": 37996,
-      "photo_thumb_bytes": 2040,
+      "photo_thumb_bytes": 15178,
       "photo_full_sha12": "5dfeff480c4a",
-      "photo_thumb_sha12": "0bcdb7617650",
+      "photo_thumb_sha12": "52244315b929",
       "attributes_json": {
         "hanger_mode": "auto",
         "perimeter_mm": 134.6,
@@ -22722,15 +22665,15 @@
       "n_per_hanger_auto": 25,
       "n_mismatch": false,
       "photo_full": "products/80_full_v2.jpg",
-      "photo_thumb": "products/80_thumb.jpg",
+      "photo_thumb": "products/80_145_thumb.png",
       "photo_full_exists": true,
       "photo_thumb_exists": true,
       "photo_full_px": "1587x2392",
-      "photo_thumb_px": "843x197",
+      "photo_thumb_px": "1737x252",
       "photo_full_bytes": 323837,
-      "photo_thumb_bytes": 15161,
+      "photo_thumb_bytes": 23779,
       "photo_full_sha12": "54feda204acc",
-      "photo_thumb_sha12": "000cfa82f605",
+      "photo_thumb_sha12": "f93870a718b4",
       "attributes_json": {
         "hanger_mode": "auto",
         "perimeter_mm": 188.5,
@@ -22811,7 +22754,8 @@
         "perimeter:чертёж",
         "confidence:99",
         "status:confirmed",
-        "alias:031"
+        "alias:031",
+        "shared_photo_thumb:031"
       ],
       "relations": [
         {
@@ -22821,6 +22765,14 @@
           "status": "confirmed",
           "source": "db:aliases",
           "note": "Один профиль 80×3,9, P=188,5. Монтируются одинаково; различие — самоклеящийся слой: 031 — самоклейка, 80 — без самоклейки."
+        },
+        {
+          "from_sku": "80",
+          "relation": "shared_photo_thumb",
+          "to_sku": "031",
+          "status": "confirmed",
+          "source": "storage:sha256",
+          "note": "f93870a718b4"
         }
       ],
       "relation_text": "alias_of→031",
@@ -22871,15 +22823,15 @@
       "n_per_hanger_auto": 37,
       "n_mismatch": false,
       "photo_full": "products/87_full.jpg",
-      "photo_thumb": "products/87_thumb.jpg",
+      "photo_thumb": "products/87_146_thumb.png",
       "photo_full_exists": true,
       "photo_thumb_exists": true,
       "photo_full_px": "1080x1488",
-      "photo_thumb_px": "113x86",
+      "photo_thumb_px": "774x590",
       "photo_full_bytes": 233330,
-      "photo_thumb_bytes": 1672,
+      "photo_thumb_bytes": 16682,
       "photo_full_sha12": "636c98c57df8",
-      "photo_thumb_sha12": "9a4181a93c88",
+      "photo_thumb_sha12": "42415fdae1a9",
       "attributes_json": {
         "hanger_mode": "auto",
         "perimeter_mm": 124.9,
@@ -23014,15 +22966,15 @@
       "n_per_hanger_auto": null,
       "n_mismatch": false,
       "photo_full": "products/Кр.труба 10мм_full.jpg",
-      "photo_thumb": "products/Кр.труба 10мм_thumb.jpg",
+      "photo_thumb": "products/Кр.труба 10мм_147_thumb.png",
       "photo_full_exists": true,
       "photo_thumb_exists": true,
       "photo_full_px": "433x249",
-      "photo_thumb_px": "95x36",
+      "photo_thumb_px": "398x453",
       "photo_full_bytes": 40404,
-      "photo_thumb_bytes": 1505,
+      "photo_thumb_bytes": 17796,
       "photo_full_sha12": "e5426c6d13b7",
-      "photo_thumb_sha12": "7dab37bb4b58",
+      "photo_thumb_sha12": "b013658f61e3",
       "attributes_json": {
         "hanger_mode": "manual",
         "quantity_per_hanger": {
@@ -23145,15 +23097,15 @@
       "n_per_hanger_auto": null,
       "n_mismatch": false,
       "photo_full": "products/Кр.труба 12мм_full.jpg",
-      "photo_thumb": "products/Кр.труба 12мм_thumb.jpg",
+      "photo_thumb": "products/Кр.труба 12мм_148_thumb.png",
       "photo_full_exists": true,
       "photo_thumb_exists": true,
       "photo_full_px": "304x177",
-      "photo_thumb_px": "53x75",
+      "photo_thumb_px": "411x458",
       "photo_full_bytes": 21208,
-      "photo_thumb_bytes": 1561,
+      "photo_thumb_bytes": 17640,
       "photo_full_sha12": "1991ca9bf4fc",
-      "photo_thumb_sha12": "c578fa44c694",
+      "photo_thumb_sha12": "9f01f6db359f",
       "attributes_json": {
         "hanger_mode": "manual",
         "quantity_per_hanger": {
@@ -23275,16 +23227,16 @@
       "n_per_hanger_manual": 67,
       "n_per_hanger_auto": null,
       "n_mismatch": false,
-      "photo_full": "products/Кр.труба 20мм_full.jpg",
-      "photo_thumb": "products/Кр.труба 20мм_thumb.jpg",
+      "photo_full": "products/Кр.труба 20мм_149_full.png",
+      "photo_thumb": "products/Кр.труба 20мм_149_thumb.png",
       "photo_full_exists": true,
       "photo_thumb_exists": true,
-      "photo_full_px": "301x172",
-      "photo_thumb_px": "78x39",
-      "photo_full_bytes": 12397,
-      "photo_thumb_bytes": 1189,
-      "photo_full_sha12": "815b35f095fe",
-      "photo_thumb_sha12": "518b871271b1",
+      "photo_full_px": "433x249",
+      "photo_thumb_px": "406x463",
+      "photo_full_bytes": 43894,
+      "photo_thumb_bytes": 19036,
+      "photo_full_sha12": "99ea12d43c25",
+      "photo_thumb_sha12": "dc2ddd7a511d",
       "attributes_json": {
         "hanger_mode": "manual",
         "quantity_per_hanger": {
@@ -23407,15 +23359,15 @@
       "n_per_hanger_auto": null,
       "n_mismatch": false,
       "photo_full": "products/Кр.труба 28мм_full.jpg",
-      "photo_thumb": "products/Кр.труба 28мм_thumb.jpg",
+      "photo_thumb": "products/Кр.труба 28мм_150_thumb.png",
       "photo_full_exists": true,
       "photo_thumb_exists": true,
       "photo_full_px": "308x178",
-      "photo_thumb_px": "54x76",
+      "photo_thumb_px": "407x445",
       "photo_full_bytes": 21248,
-      "photo_thumb_bytes": 1592,
+      "photo_thumb_bytes": 19523,
       "photo_full_sha12": "4e25e6debfc2",
-      "photo_thumb_sha12": "1e8003eb4855",
+      "photo_thumb_sha12": "26cbe7c2d943",
       "attributes_json": {
         "hanger_mode": "manual",
         "quantity_per_hanger": {
@@ -23566,15 +23518,15 @@
       "n_per_hanger_auto": null,
       "n_mismatch": false,
       "photo_full": "products/Кр.труба 8мм_full.jpg",
-      "photo_thumb": "products/Кр.труба 8мм_thumb.jpg",
+      "photo_thumb": "products/Кр.труба 8мм_151_thumb.png",
       "photo_full_exists": true,
       "photo_thumb_exists": true,
       "photo_full_px": "432x247",
-      "photo_thumb_px": "53x73",
+      "photo_thumb_px": "410x457",
       "photo_full_bytes": 40374,
-      "photo_thumb_bytes": 1470,
+      "photo_thumb_bytes": 18054,
       "photo_full_sha12": "7b3aa49a7d3b",
-      "photo_thumb_sha12": "036cf92076ae",
+      "photo_thumb_sha12": "9c96b618754a",
       "attributes_json": {
         "hanger_mode": "manual",
         "quantity_per_hanger": {
@@ -24109,8 +24061,8 @@
       "lengths": [
         {
           "length_mm": 2700,
-          "raw_length_mm": null,
-          "is_primary": false
+          "raw_length_mm": 2750,
+          "is_primary": true
         }
       ],
       "length_primary_mm": 2700,
@@ -24127,16 +24079,16 @@
       "n_per_hanger_manual": 22,
       "n_per_hanger_auto": null,
       "n_mismatch": false,
-      "photo_full": "",
-      "photo_thumb": "",
-      "photo_full_exists": false,
-      "photo_thumb_exists": false,
-      "photo_full_px": "",
-      "photo_thumb_px": "",
-      "photo_full_bytes": 0,
-      "photo_thumb_bytes": 0,
-      "photo_full_sha12": "",
-      "photo_thumb_sha12": "",
+      "photo_full": "products/ПТ100_155_full.png",
+      "photo_thumb": "products/ПТ100_155_thumb.png",
+      "photo_full_exists": true,
+      "photo_thumb_exists": true,
+      "photo_full_px": "663x808",
+      "photo_thumb_px": "795x236",
+      "photo_full_bytes": 114949,
+      "photo_thumb_bytes": 9082,
+      "photo_full_sha12": "579342d05c4b",
+      "photo_thumb_sha12": "4eb198353f6e",
       "attributes_json": {
         "hanger_mode": "manual",
         "quantity_per_hanger": {
@@ -24171,9 +24123,9 @@
       "audit_confidence": "low",
       "audit_note": "Фото нет; ячейка H80/H100 (100 — второй размер) — вероятный источник, нужен ответ технолога.",
       "audit_evidence": "candidates/ПТ100_full.jpg; candidates/ПТ100_thumb.jpg; sheets/_sheet-3.jpg",
-      "photo_status": "нет",
-      "photo_label": "нет",
-      "photo_origin": "none",
+      "photo_status": "full+thumb",
+      "photo_label": "full+thumb",
+      "photo_origin": "own",
       "photo_from": "",
       "photo_origin_scope": "",
       "photo_origin_note": "",
@@ -24198,10 +24150,10 @@
       "material": "—",
       "identity_confidence": 100,
       "dimension_confidence": 55,
-      "photo_confidence": 0,
+      "photo_confidence": 75,
       "classification_confidence": 55,
-      "overall_confidence": 57,
-      "overall_status": "unknown",
+      "overall_confidence": 76,
+      "overall_status": "needs_review",
       "tags": [
         "group:07-tubes-variants",
         "profile:unknown",
@@ -24209,12 +24161,12 @@
         "series:ПТ",
         "family:plinth_pt",
         "size:100",
-        "photo:нет",
-        "photo-origin:none",
+        "photo:full+thumb",
+        "photo-origin:own",
         "photo-verdict:needs_decision",
         "perimeter:—",
-        "confidence:57",
-        "status:unknown",
+        "confidence:76",
+        "status:needs_review",
         "open"
       ],
       "relations": [],
@@ -24222,11 +24174,6 @@
       "confirmed": [],
       "refuted": [],
       "open_claims": [
-        {
-          "claim": "Есть фото товара",
-          "verdict": "open",
-          "evidence": "файл отсутствует"
-        },
         {
           "claim": "Фото/размер требуют решения",
           "verdict": "open",
@@ -24270,16 +24217,16 @@
       "n_per_hanger_manual": 88,
       "n_per_hanger_auto": null,
       "n_mismatch": false,
-      "photo_full": "products/У1212_full.jpg",
-      "photo_thumb": "products/У1212_thumb.jpg",
+      "photo_full": "products/У1212_156_full.png",
+      "photo_thumb": "products/У1212_156_thumb.png",
       "photo_full_exists": true,
       "photo_thumb_exists": true,
-      "photo_full_px": "350x204",
-      "photo_thumb_px": "89x56",
-      "photo_full_bytes": 25086,
-      "photo_thumb_bytes": 1060,
-      "photo_full_sha12": "6e21319f8c61",
-      "photo_thumb_sha12": "a0c38aa36626",
+      "photo_full_px": "1860x1046",
+      "photo_thumb_px": "579x333",
+      "photo_full_bytes": 164426,
+      "photo_thumb_bytes": 6554,
+      "photo_full_sha12": "77807d4bdc94",
+      "photo_thumb_sha12": "b4a7d43598fb",
       "attributes_json": {
         "hanger_mode": "manual",
         "quantity_per_hanger": {
@@ -24359,9 +24306,91 @@
         "confidence:80",
         "status:needs_review",
         "review:open",
-        "review-drawing:нет"
+        "review-drawing:нет",
+        "shared_photo_full:У1010",
+        "shared_photo_full:У1515",
+        "shared_photo_full:У2020",
+        "shared_photo_full:У2525",
+        "shared_photo_full:У3030",
+        "shared_photo_full:У4020",
+        "shared_photo_full:У4040",
+        "shared_photo_full:У5030",
+        "shared_photo_full:У5050"
       ],
-      "relations": [],
+      "relations": [
+        {
+          "from_sku": "У1212",
+          "relation": "shared_photo_full",
+          "to_sku": "У1010",
+          "status": "confirmed",
+          "source": "storage:sha256",
+          "note": "77807d4bdc94"
+        },
+        {
+          "from_sku": "У1212",
+          "relation": "shared_photo_full",
+          "to_sku": "У1515",
+          "status": "confirmed",
+          "source": "storage:sha256",
+          "note": "77807d4bdc94"
+        },
+        {
+          "from_sku": "У1212",
+          "relation": "shared_photo_full",
+          "to_sku": "У2020",
+          "status": "confirmed",
+          "source": "storage:sha256",
+          "note": "77807d4bdc94"
+        },
+        {
+          "from_sku": "У1212",
+          "relation": "shared_photo_full",
+          "to_sku": "У2525",
+          "status": "confirmed",
+          "source": "storage:sha256",
+          "note": "77807d4bdc94"
+        },
+        {
+          "from_sku": "У1212",
+          "relation": "shared_photo_full",
+          "to_sku": "У3030",
+          "status": "confirmed",
+          "source": "storage:sha256",
+          "note": "77807d4bdc94"
+        },
+        {
+          "from_sku": "У1212",
+          "relation": "shared_photo_full",
+          "to_sku": "У4020",
+          "status": "confirmed",
+          "source": "storage:sha256",
+          "note": "77807d4bdc94"
+        },
+        {
+          "from_sku": "У1212",
+          "relation": "shared_photo_full",
+          "to_sku": "У4040",
+          "status": "confirmed",
+          "source": "storage:sha256",
+          "note": "77807d4bdc94"
+        },
+        {
+          "from_sku": "У1212",
+          "relation": "shared_photo_full",
+          "to_sku": "У5030",
+          "status": "confirmed",
+          "source": "storage:sha256",
+          "note": "77807d4bdc94"
+        },
+        {
+          "from_sku": "У1212",
+          "relation": "shared_photo_full",
+          "to_sku": "У5050",
+          "status": "confirmed",
+          "source": "storage:sha256",
+          "note": "77807d4bdc94"
+        }
+      ],
       "relation_text": "",
       "confirmed": [],
       "refuted": [],
@@ -24403,16 +24432,16 @@
       "n_per_hanger_manual": 35,
       "n_per_hanger_auto": null,
       "n_mismatch": false,
-      "photo_full": "products/У4020_full.jpg",
-      "photo_thumb": "products/У4020_thumb.jpg",
+      "photo_full": "products/У4020_157_full.png",
+      "photo_thumb": "products/У4020_157_thumb.png",
       "photo_full_exists": true,
       "photo_thumb_exists": true,
-      "photo_full_px": "687x453",
-      "photo_thumb_px": "200x132",
-      "photo_full_bytes": 78144,
-      "photo_thumb_bytes": 6119,
-      "photo_full_sha12": "7e816ebd5430",
-      "photo_thumb_sha12": "0bd80322fee2",
+      "photo_full_px": "1860x1046",
+      "photo_thumb_px": "839x575",
+      "photo_full_bytes": 164426,
+      "photo_thumb_bytes": 14731,
+      "photo_full_sha12": "77807d4bdc94",
+      "photo_thumb_sha12": "4937127ff190",
       "attributes_json": {
         "hanger_mode": "manual",
         "quantity_per_hanger": {
@@ -24491,25 +24520,88 @@
         "perimeter:—",
         "confidence:80",
         "status:needs_review",
+        "shared_photo_full:У1010",
+        "shared_photo_full:У1212",
+        "shared_photo_full:У1515",
+        "shared_photo_full:У2020",
+        "shared_photo_full:У2525",
+        "shared_photo_full:У3030",
+        "shared_photo_full:У4040",
         "shared_photo_full:У5030",
-        "shared_photo_thumb:У5030"
+        "shared_photo_full:У5050"
       ],
       "relations": [
+        {
+          "from_sku": "У4020",
+          "relation": "shared_photo_full",
+          "to_sku": "У1010",
+          "status": "confirmed",
+          "source": "storage:sha256",
+          "note": "77807d4bdc94"
+        },
+        {
+          "from_sku": "У4020",
+          "relation": "shared_photo_full",
+          "to_sku": "У1212",
+          "status": "confirmed",
+          "source": "storage:sha256",
+          "note": "77807d4bdc94"
+        },
+        {
+          "from_sku": "У4020",
+          "relation": "shared_photo_full",
+          "to_sku": "У1515",
+          "status": "confirmed",
+          "source": "storage:sha256",
+          "note": "77807d4bdc94"
+        },
+        {
+          "from_sku": "У4020",
+          "relation": "shared_photo_full",
+          "to_sku": "У2020",
+          "status": "confirmed",
+          "source": "storage:sha256",
+          "note": "77807d4bdc94"
+        },
+        {
+          "from_sku": "У4020",
+          "relation": "shared_photo_full",
+          "to_sku": "У2525",
+          "status": "confirmed",
+          "source": "storage:sha256",
+          "note": "77807d4bdc94"
+        },
+        {
+          "from_sku": "У4020",
+          "relation": "shared_photo_full",
+          "to_sku": "У3030",
+          "status": "confirmed",
+          "source": "storage:sha256",
+          "note": "77807d4bdc94"
+        },
+        {
+          "from_sku": "У4020",
+          "relation": "shared_photo_full",
+          "to_sku": "У4040",
+          "status": "confirmed",
+          "source": "storage:sha256",
+          "note": "77807d4bdc94"
+        },
         {
           "from_sku": "У4020",
           "relation": "shared_photo_full",
           "to_sku": "У5030",
           "status": "confirmed",
           "source": "storage:sha256",
-          "note": "7e816ebd5430"
+          "note": "77807d4bdc94"
         },
         {
           "from_sku": "У4020",
-          "relation": "shared_photo_thumb",
-          "to_sku": "У5030",
+          "relation": "shared_photo_full",
+          "to_sku": "У5050",
           "status": "confirmed",
           "source": "storage:sha256",
-          "note": "0bd80322fee2"
+          "note": "77807d4bdc94"
         }
       ],
       "relation_text": "",
@@ -24553,16 +24645,16 @@
       "n_per_hanger_manual": 26,
       "n_per_hanger_auto": null,
       "n_mismatch": false,
-      "photo_full": "products/У4040_full.jpg",
-      "photo_thumb": "products/У4040_thumb.jpg",
+      "photo_full": "products/У4040_158_full.png",
+      "photo_thumb": "products/У4040_158_thumb.png",
       "photo_full_exists": true,
       "photo_thumb_exists": true,
-      "photo_full_px": "687x459",
-      "photo_thumb_px": "90x58",
-      "photo_full_bytes": 78264,
-      "photo_thumb_bytes": 1314,
-      "photo_full_sha12": "d44909619876",
-      "photo_thumb_sha12": "73b93f821ffc",
+      "photo_full_px": "1860x1046",
+      "photo_thumb_px": "571x328",
+      "photo_full_bytes": 164426,
+      "photo_thumb_bytes": 7446,
+      "photo_full_sha12": "77807d4bdc94",
+      "photo_thumb_sha12": "a4184f94ecc1",
       "attributes_json": {
         "hanger_mode": "manual",
         "quantity_per_hanger": {
@@ -24641,17 +24733,80 @@
         "perimeter:—",
         "confidence:80",
         "status:needs_review",
-        "shared_photo_full:1212",
+        "shared_photo_full:У1010",
+        "shared_photo_full:У1212",
+        "shared_photo_full:У1515",
+        "shared_photo_full:У2020",
+        "shared_photo_full:У2525",
+        "shared_photo_full:У3030",
+        "shared_photo_full:У4020",
+        "shared_photo_full:У5030",
         "shared_photo_full:У5050"
       ],
       "relations": [
         {
           "from_sku": "У4040",
           "relation": "shared_photo_full",
-          "to_sku": "1212",
+          "to_sku": "У1010",
           "status": "confirmed",
           "source": "storage:sha256",
-          "note": "d44909619876"
+          "note": "77807d4bdc94"
+        },
+        {
+          "from_sku": "У4040",
+          "relation": "shared_photo_full",
+          "to_sku": "У1212",
+          "status": "confirmed",
+          "source": "storage:sha256",
+          "note": "77807d4bdc94"
+        },
+        {
+          "from_sku": "У4040",
+          "relation": "shared_photo_full",
+          "to_sku": "У1515",
+          "status": "confirmed",
+          "source": "storage:sha256",
+          "note": "77807d4bdc94"
+        },
+        {
+          "from_sku": "У4040",
+          "relation": "shared_photo_full",
+          "to_sku": "У2020",
+          "status": "confirmed",
+          "source": "storage:sha256",
+          "note": "77807d4bdc94"
+        },
+        {
+          "from_sku": "У4040",
+          "relation": "shared_photo_full",
+          "to_sku": "У2525",
+          "status": "confirmed",
+          "source": "storage:sha256",
+          "note": "77807d4bdc94"
+        },
+        {
+          "from_sku": "У4040",
+          "relation": "shared_photo_full",
+          "to_sku": "У3030",
+          "status": "confirmed",
+          "source": "storage:sha256",
+          "note": "77807d4bdc94"
+        },
+        {
+          "from_sku": "У4040",
+          "relation": "shared_photo_full",
+          "to_sku": "У4020",
+          "status": "confirmed",
+          "source": "storage:sha256",
+          "note": "77807d4bdc94"
+        },
+        {
+          "from_sku": "У4040",
+          "relation": "shared_photo_full",
+          "to_sku": "У5030",
+          "status": "confirmed",
+          "source": "storage:sha256",
+          "note": "77807d4bdc94"
         },
         {
           "from_sku": "У4040",
@@ -24659,7 +24814,7 @@
           "to_sku": "У5050",
           "status": "confirmed",
           "source": "storage:sha256",
-          "note": "d44909619876"
+          "note": "77807d4bdc94"
         }
       ],
       "relation_text": "",
@@ -24703,16 +24858,16 @@
       "n_per_hanger_manual": 26,
       "n_per_hanger_auto": null,
       "n_mismatch": false,
-      "photo_full": "products/У5030_full.jpg",
-      "photo_thumb": "products/У5030_thumb.jpg",
+      "photo_full": "products/У5030_159_full.png",
+      "photo_thumb": "products/У5030_159_thumb.png",
       "photo_full_exists": true,
       "photo_thumb_exists": true,
-      "photo_full_px": "687x453",
-      "photo_thumb_px": "200x132",
-      "photo_full_bytes": 78144,
-      "photo_thumb_bytes": 6119,
-      "photo_full_sha12": "7e816ebd5430",
-      "photo_thumb_sha12": "0bd80322fee2",
+      "photo_full_px": "1860x1046",
+      "photo_thumb_px": "840x567",
+      "photo_full_bytes": 164426,
+      "photo_thumb_bytes": 16481,
+      "photo_full_sha12": "77807d4bdc94",
+      "photo_thumb_sha12": "46dca6839120",
       "attributes_json": {
         "hanger_mode": "manual",
         "quantity_per_hanger": {
@@ -24791,25 +24946,88 @@
         "perimeter:—",
         "confidence:80",
         "status:needs_review",
+        "shared_photo_full:У1010",
+        "shared_photo_full:У1212",
+        "shared_photo_full:У1515",
+        "shared_photo_full:У2020",
+        "shared_photo_full:У2525",
+        "shared_photo_full:У3030",
         "shared_photo_full:У4020",
-        "shared_photo_thumb:У4020"
+        "shared_photo_full:У4040",
+        "shared_photo_full:У5050"
       ],
       "relations": [
+        {
+          "from_sku": "У5030",
+          "relation": "shared_photo_full",
+          "to_sku": "У1010",
+          "status": "confirmed",
+          "source": "storage:sha256",
+          "note": "77807d4bdc94"
+        },
+        {
+          "from_sku": "У5030",
+          "relation": "shared_photo_full",
+          "to_sku": "У1212",
+          "status": "confirmed",
+          "source": "storage:sha256",
+          "note": "77807d4bdc94"
+        },
+        {
+          "from_sku": "У5030",
+          "relation": "shared_photo_full",
+          "to_sku": "У1515",
+          "status": "confirmed",
+          "source": "storage:sha256",
+          "note": "77807d4bdc94"
+        },
+        {
+          "from_sku": "У5030",
+          "relation": "shared_photo_full",
+          "to_sku": "У2020",
+          "status": "confirmed",
+          "source": "storage:sha256",
+          "note": "77807d4bdc94"
+        },
+        {
+          "from_sku": "У5030",
+          "relation": "shared_photo_full",
+          "to_sku": "У2525",
+          "status": "confirmed",
+          "source": "storage:sha256",
+          "note": "77807d4bdc94"
+        },
+        {
+          "from_sku": "У5030",
+          "relation": "shared_photo_full",
+          "to_sku": "У3030",
+          "status": "confirmed",
+          "source": "storage:sha256",
+          "note": "77807d4bdc94"
+        },
         {
           "from_sku": "У5030",
           "relation": "shared_photo_full",
           "to_sku": "У4020",
           "status": "confirmed",
           "source": "storage:sha256",
-          "note": "7e816ebd5430"
+          "note": "77807d4bdc94"
         },
         {
           "from_sku": "У5030",
-          "relation": "shared_photo_thumb",
-          "to_sku": "У4020",
+          "relation": "shared_photo_full",
+          "to_sku": "У4040",
           "status": "confirmed",
           "source": "storage:sha256",
-          "note": "0bd80322fee2"
+          "note": "77807d4bdc94"
+        },
+        {
+          "from_sku": "У5030",
+          "relation": "shared_photo_full",
+          "to_sku": "У5050",
+          "status": "confirmed",
+          "source": "storage:sha256",
+          "note": "77807d4bdc94"
         }
       ],
       "relation_text": "",
@@ -24853,16 +25071,16 @@
       "n_per_hanger_manual": 21,
       "n_per_hanger_auto": null,
       "n_mismatch": false,
-      "photo_full": "products/У5050_full.jpg",
-      "photo_thumb": "products/У5050_thumb.jpg",
+      "photo_full": "products/У5050_160_full.png",
+      "photo_thumb": "products/У5050_160_thumb.png",
       "photo_full_exists": true,
       "photo_thumb_exists": true,
-      "photo_full_px": "687x459",
-      "photo_thumb_px": "94x58",
-      "photo_full_bytes": 78264,
-      "photo_thumb_bytes": 1205,
-      "photo_full_sha12": "d44909619876",
-      "photo_thumb_sha12": "1857a0c880b0",
+      "photo_full_px": "1860x1046",
+      "photo_thumb_px": "561x337",
+      "photo_full_bytes": 164426,
+      "photo_thumb_bytes": 8610,
+      "photo_full_sha12": "77807d4bdc94",
+      "photo_thumb_sha12": "1f8b0b40cda9",
       "attributes_json": {
         "hanger_mode": "manual",
         "quantity_per_hanger": {
@@ -24941,17 +25159,72 @@
         "perimeter:—",
         "confidence:80",
         "status:needs_review",
-        "shared_photo_full:1212",
-        "shared_photo_full:У4040"
+        "shared_photo_full:У1010",
+        "shared_photo_full:У1212",
+        "shared_photo_full:У1515",
+        "shared_photo_full:У2020",
+        "shared_photo_full:У2525",
+        "shared_photo_full:У3030",
+        "shared_photo_full:У4020",
+        "shared_photo_full:У4040",
+        "shared_photo_full:У5030"
       ],
       "relations": [
         {
           "from_sku": "У5050",
           "relation": "shared_photo_full",
-          "to_sku": "1212",
+          "to_sku": "У1010",
           "status": "confirmed",
           "source": "storage:sha256",
-          "note": "d44909619876"
+          "note": "77807d4bdc94"
+        },
+        {
+          "from_sku": "У5050",
+          "relation": "shared_photo_full",
+          "to_sku": "У1212",
+          "status": "confirmed",
+          "source": "storage:sha256",
+          "note": "77807d4bdc94"
+        },
+        {
+          "from_sku": "У5050",
+          "relation": "shared_photo_full",
+          "to_sku": "У1515",
+          "status": "confirmed",
+          "source": "storage:sha256",
+          "note": "77807d4bdc94"
+        },
+        {
+          "from_sku": "У5050",
+          "relation": "shared_photo_full",
+          "to_sku": "У2020",
+          "status": "confirmed",
+          "source": "storage:sha256",
+          "note": "77807d4bdc94"
+        },
+        {
+          "from_sku": "У5050",
+          "relation": "shared_photo_full",
+          "to_sku": "У2525",
+          "status": "confirmed",
+          "source": "storage:sha256",
+          "note": "77807d4bdc94"
+        },
+        {
+          "from_sku": "У5050",
+          "relation": "shared_photo_full",
+          "to_sku": "У3030",
+          "status": "confirmed",
+          "source": "storage:sha256",
+          "note": "77807d4bdc94"
+        },
+        {
+          "from_sku": "У5050",
+          "relation": "shared_photo_full",
+          "to_sku": "У4020",
+          "status": "confirmed",
+          "source": "storage:sha256",
+          "note": "77807d4bdc94"
         },
         {
           "from_sku": "У5050",
@@ -24959,7 +25232,15 @@
           "to_sku": "У4040",
           "status": "confirmed",
           "source": "storage:sha256",
-          "note": "d44909619876"
+          "note": "77807d4bdc94"
+        },
+        {
+          "from_sku": "У5050",
+          "relation": "shared_photo_full",
+          "to_sku": "У5030",
+          "status": "confirmed",
+          "source": "storage:sha256",
+          "note": "77807d4bdc94"
         }
       ],
       "relation_text": "",
@@ -25003,16 +25284,16 @@
       "n_per_hanger_manual": 44,
       "n_per_hanger_auto": 44,
       "n_mismatch": false,
-      "photo_full": "products/130_full.jpg",
-      "photo_thumb": "products/130_thumb.jpg",
+      "photo_full": "products/130_161_full.png",
+      "photo_thumb": "products/130_161_thumb.png",
       "photo_full_exists": true,
       "photo_thumb_exists": true,
-      "photo_full_px": "2000x2000",
-      "photo_thumb_px": "600x600",
-      "photo_full_bytes": 56756,
-      "photo_thumb_bytes": 9941,
-      "photo_full_sha12": "ec03af3d6d63",
-      "photo_thumb_sha12": "42703f7afe5c",
+      "photo_full_px": "2203x1556",
+      "photo_thumb_px": "948x161",
+      "photo_full_bytes": 555735,
+      "photo_thumb_bytes": 25243,
+      "photo_full_sha12": "e6ef1e010f8a",
+      "photo_thumb_sha12": "6b028b65036c",
       "attributes_json": {
         "hanger_mode": "manual",
         "perimeter_mm": 106.3,
@@ -25168,16 +25449,16 @@
       "n_per_hanger_manual": 54,
       "n_per_hanger_auto": 54,
       "n_mismatch": false,
-      "photo_full": "products/150_full.jpg",
-      "photo_thumb": "products/150_thumb.jpg",
+      "photo_full": "products/150_162_full.png",
+      "photo_thumb": "products/150_162_thumb.png",
       "photo_full_exists": true,
       "photo_thumb_exists": true,
-      "photo_full_px": "294x334",
-      "photo_thumb_px": "142x39",
-      "photo_full_bytes": 59176,
-      "photo_thumb_bytes": 1856,
-      "photo_full_sha12": "5814cdc779ef",
-      "photo_thumb_sha12": "abd107daeaf0",
+      "photo_full_px": "904x1010",
+      "photo_thumb_px": "1133x325",
+      "photo_full_bytes": 149532,
+      "photo_thumb_bytes": 11263,
+      "photo_full_sha12": "a825cfd9a2a0",
+      "photo_thumb_sha12": "0ddc770f8b4f",
       "attributes_json": {
         "hanger_mode": "manual",
         "perimeter_mm": 67.4,
@@ -25257,8 +25538,7 @@
         "perimeter:плакат",
         "confidence:88",
         "status:probable",
-        "alias:ЮП-3168",
-        "shared_photo_thumb:ЮП-3168"
+        "alias:ЮП-3168"
       ],
       "relations": [
         {
@@ -25268,14 +25548,6 @@
           "status": "confirmed",
           "source": "db:aliases",
           "note": "DB-алиас: тот же товар под другим кодом"
-        },
-        {
-          "from_sku": "150",
-          "relation": "shared_photo_thumb",
-          "to_sku": "ЮП-3168",
-          "status": "confirmed",
-          "source": "storage:sha256",
-          "note": "abd107daeaf0"
         }
       ],
       "relation_text": "alias_of→ЮП-3168",
@@ -25475,7 +25747,7 @@
       "hanger_mode": "manual",
       "quantity_per_hanger": {
         "2550": {
-          "auto": null,
+          "auto": 51,
           "manual": 51
         }
       },
@@ -25483,23 +25755,23 @@
       "n_per_hanger_manual": 51,
       "n_per_hanger_auto": 51,
       "n_mismatch": false,
-      "photo_full": "products/382_full.jpg",
-      "photo_thumb": "products/382_thumb.jpg",
+      "photo_full": "products/382_165_full.png",
+      "photo_thumb": "products/382_165_thumb.png",
       "photo_full_exists": true,
       "photo_thumb_exists": true,
-      "photo_full_px": "297x317",
-      "photo_thumb_px": "110x61",
-      "photo_full_bytes": 45153,
-      "photo_thumb_bytes": 1807,
-      "photo_full_sha12": "83d356112f22",
-      "photo_thumb_sha12": "64a68a6d46ae",
+      "photo_full_px": "878x944",
+      "photo_thumb_px": "809x475",
+      "photo_full_bytes": 148175,
+      "photo_thumb_bytes": 16846,
+      "photo_full_sha12": "796eff0f40b5",
+      "photo_thumb_sha12": "ecd2953a8117",
       "attributes_json": {
         "hanger_mode": "manual",
         "perimeter_mm": 98.2,
         "mount_width_mm": 25.0,
         "quantity_per_hanger": {
           "2550": {
-            "auto": null,
+            "auto": 51,
             "manual": 51
           }
         }
@@ -25795,7 +26067,7 @@
       "hanger_mode": "manual",
       "quantity_per_hanger": {
         "3050": {
-          "auto": null,
+          "auto": 80,
           "manual": 80
         }
       },
@@ -25804,22 +26076,22 @@
       "n_per_hanger_auto": 80,
       "n_mismatch": false,
       "photo_full": "products/Кр.труба 16мм_full.jpg",
-      "photo_thumb": "products/Кр.труба 16мм_thumb.jpg",
+      "photo_thumb": "products/Кр.труба 16мм_167_thumb.png",
       "photo_full_exists": true,
       "photo_thumb_exists": true,
       "photo_full_px": "308x178",
-      "photo_thumb_px": "55x79",
+      "photo_thumb_px": "397x449",
       "photo_full_bytes": 21248,
-      "photo_thumb_bytes": 1594,
+      "photo_thumb_bytes": 18233,
       "photo_full_sha12": "4e25e6debfc2",
-      "photo_thumb_sha12": "4cdda8af0b9c",
+      "photo_thumb_sha12": "8e9987f20887",
       "attributes_json": {
         "hanger_mode": "manual",
         "perimeter_mm": 50.3,
         "mount_width_mm": 16.0,
         "quantity_per_hanger": {
           "3050": {
-            "auto": null,
+            "auto": 80,
             "manual": 80
           }
         }
@@ -25978,7 +26250,7 @@
       "hanger_mode": "manual",
       "quantity_per_hanger": {
         "3050": {
-          "auto": null,
+          "auto": 54,
           "manual": 54
         }
       },
@@ -25987,22 +26259,22 @@
       "n_per_hanger_auto": 54,
       "n_mismatch": false,
       "photo_full": "products/Кр.труба 25мм_full.jpg",
-      "photo_thumb": "products/Кр.труба 25мм_thumb.jpg",
+      "photo_thumb": "products/Кр.труба 25мм_168_thumb.png",
       "photo_full_exists": true,
       "photo_thumb_exists": true,
       "photo_full_px": "308x178",
-      "photo_thumb_px": "53x73",
+      "photo_thumb_px": "396x459",
       "photo_full_bytes": 21248,
-      "photo_thumb_bytes": 1557,
+      "photo_thumb_bytes": 19179,
       "photo_full_sha12": "4e25e6debfc2",
-      "photo_thumb_sha12": "ae9180fb5049",
+      "photo_thumb_sha12": "0c3c6d7df629",
       "attributes_json": {
         "hanger_mode": "manual",
         "perimeter_mm": 78.5,
         "mount_width_mm": 25.0,
         "quantity_per_hanger": {
           "3050": {
-            "auto": null,
+            "auto": 54,
             "manual": 54
           }
         }
@@ -26161,7 +26433,7 @@
       "hanger_mode": "manual",
       "quantity_per_hanger": {
         "2450": {
-          "auto": null,
+          "auto": 60,
           "manual": 60
         }
       },
@@ -26169,23 +26441,23 @@
       "n_per_hanger_manual": 60,
       "n_per_hanger_auto": 60,
       "n_mismatch": false,
-      "photo_full": "products/МС16-20_full.jpg",
-      "photo_thumb": "products/МС16-20_thumb.jpg",
+      "photo_full": "products/МС16-20_169_full.png",
+      "photo_thumb": "products/МС16-20_169_thumb.png",
       "photo_full_exists": true,
       "photo_thumb_exists": true,
-      "photo_full_px": "291x338",
-      "photo_thumb_px": "96x113",
-      "photo_full_bytes": 20853,
-      "photo_thumb_bytes": 2337,
-      "photo_full_sha12": "9eaa5dda86de",
-      "photo_thumb_sha12": "2023737cab72",
+      "photo_full_px": "782x900",
+      "photo_thumb_px": "508x672",
+      "photo_full_bytes": 123682,
+      "photo_thumb_bytes": 13861,
+      "photo_full_sha12": "ad00fc57fe8b",
+      "photo_thumb_sha12": "0b13ec40ad6e",
       "attributes_json": {
         "hanger_mode": "manual",
         "perimeter_mm": 87.8,
         "mount_width_mm": 25.2,
         "quantity_per_hanger": {
           "2450": {
-            "auto": null,
+            "auto": 60,
             "manual": 60
           }
         }
@@ -26317,7 +26589,7 @@
       "hanger_mode": "manual",
       "quantity_per_hanger": {
         "2450": {
-          "auto": null,
+          "auto": 46,
           "manual": 46
         }
       },
@@ -26325,23 +26597,23 @@
       "n_per_hanger_manual": 46,
       "n_per_hanger_auto": 46,
       "n_mismatch": false,
-      "photo_full": "products/МС16-25_full.jpg",
-      "photo_thumb": "products/МС16-25_thumb.jpg",
+      "photo_full": "products/МС16-25_170_full.png",
+      "photo_thumb": "products/МС16-25_170_thumb.png",
       "photo_full_exists": true,
       "photo_thumb_exists": true,
-      "photo_full_px": "289x343",
-      "photo_thumb_px": "127x128",
-      "photo_full_bytes": 25305,
-      "photo_thumb_bytes": 3033,
-      "photo_full_sha12": "f44601b783b3",
-      "photo_thumb_sha12": "76131e6703b9",
+      "photo_full_px": "784x941",
+      "photo_thumb_px": "475x751",
+      "photo_full_bytes": 134286,
+      "photo_thumb_bytes": 17508,
+      "photo_full_sha12": "8304fe80605c",
+      "photo_thumb_sha12": "da4839fea4d1",
       "attributes_json": {
         "hanger_mode": "manual",
         "perimeter_mm": 114.2,
         "mount_width_mm": 30.2,
         "quantity_per_hanger": {
           "2450": {
-            "auto": null,
+            "auto": 46,
             "manual": 46
           }
         }
@@ -26473,7 +26745,7 @@
       "hanger_mode": "manual",
       "quantity_per_hanger": {
         "2450": {
-          "auto": null,
+          "auto": 76,
           "manual": 76
         }
       },
@@ -26481,23 +26753,23 @@
       "n_per_hanger_manual": 76,
       "n_per_hanger_auto": 76,
       "n_mismatch": false,
-      "photo_full": "products/МС18_full.jpg",
-      "photo_thumb": "products/МС18_thumb.jpg",
+      "photo_full": "products/МС18_171_full.png",
+      "photo_thumb": "products/МС18_171_thumb.png",
       "photo_full_exists": true,
       "photo_thumb_exists": true,
-      "photo_full_px": "290x347",
-      "photo_thumb_px": "103x62",
-      "photo_full_bytes": 23276,
-      "photo_thumb_bytes": 1475,
-      "photo_full_sha12": "dd18d7c17b79",
-      "photo_thumb_sha12": "bbc81bfd9603",
+      "photo_full_px": "772x926",
+      "photo_thumb_px": "758x438",
+      "photo_full_bytes": 151896,
+      "photo_thumb_bytes": 13629,
+      "photo_full_sha12": "7ca293bb40d9",
+      "photo_thumb_sha12": "4c1149ac57ba",
       "attributes_json": {
         "hanger_mode": "manual",
         "perimeter_mm": 54.0,
         "mount_width_mm": 18.0,
         "quantity_per_hanger": {
           "2450": {
-            "auto": null,
+            "auto": 76,
             "manual": 76
           }
         }
@@ -27588,8 +27860,8 @@
       "lengths": [
         {
           "length_mm": 2700,
-          "raw_length_mm": null,
-          "is_primary": false
+          "raw_length_mm": 2750,
+          "is_primary": true
         }
       ],
       "length_primary_mm": 2700,
@@ -27598,31 +27870,31 @@
       "hanger_mode": "manual",
       "quantity_per_hanger": {
         "2700": {
-          "auto": null,
+          "auto": 47,
           "manual": 48
         }
       },
       "n_per_hanger": 48,
       "n_per_hanger_manual": 48,
-      "n_per_hanger_auto": 48,
-      "n_mismatch": false,
-      "photo_full": "products/ПТ40_full.jpg",
-      "photo_thumb": "products/ПТ40_thumb.jpg",
+      "n_per_hanger_auto": 47,
+      "n_mismatch": true,
+      "photo_full": "products/ПТ40_178_full.png",
+      "photo_thumb": "products/ПТ40_178_thumb.png",
       "photo_full_exists": true,
       "photo_thumb_exists": true,
-      "photo_full_px": "421x510",
-      "photo_thumb_px": "74x43",
-      "photo_full_bytes": 81646,
-      "photo_thumb_bytes": 1152,
-      "photo_full_sha12": "ae63529ce4ca",
-      "photo_thumb_sha12": "be441937d65b",
+      "photo_full_px": "873x1055",
+      "photo_thumb_px": "783x181",
+      "photo_full_bytes": 135023,
+      "photo_thumb_bytes": 7758,
+      "photo_full_sha12": "3eca25d3c716",
+      "photo_thumb_sha12": "f0fbf6e6d5dd",
       "attributes_json": {
         "hanger_mode": "manual",
         "perimeter_mm": 98.8,
         "mount_width_mm": 40.0,
         "quantity_per_hanger": {
           "2700": {
-            "auto": null,
+            "auto": 47,
             "manual": 48
           }
         }
@@ -27694,10 +27966,12 @@
         "photo-origin:own",
         "photo-verdict:upgrade_available",
         "perimeter:чертёж",
+        "n-mismatch",
         "confidence:93",
         "status:confirmed",
         "alias:ЮП-3035",
-        "alias:ALS-1103"
+        "alias:ALS-1103",
+        "shared_photo_full:ПТ60"
       ],
       "relations": [
         {
@@ -27715,6 +27989,14 @@
           "status": "confirmed",
           "source": "db:aliases",
           "note": "DB-алиас: тот же товар под другим кодом"
+        },
+        {
+          "from_sku": "ПТ40",
+          "relation": "shared_photo_full",
+          "to_sku": "ПТ60",
+          "status": "confirmed",
+          "source": "storage:sha256",
+          "note": "3eca25d3c716"
         }
       ],
       "relation_text": "alias_of→ALS-1103; alias_of→ЮП-3035",
@@ -27763,7 +28045,7 @@
       "hanger_mode": "manual",
       "quantity_per_hanger": {
         "2700": {
-          "auto": null,
+          "auto": 33,
           "manual": 36
         }
       },
@@ -27771,23 +28053,23 @@
       "n_per_hanger_manual": 36,
       "n_per_hanger_auto": 33,
       "n_mismatch": true,
-      "photo_full": "products/ПТ60_full.jpg",
-      "photo_thumb": "products/ПТ60_thumb.jpg",
+      "photo_full": "products/ПТ60_179_full.png",
+      "photo_thumb": "products/ПТ60_179_thumb.png",
       "photo_full_exists": true,
       "photo_thumb_exists": true,
-      "photo_full_px": "422x510",
-      "photo_thumb_px": "75x42",
-      "photo_full_bytes": 81656,
-      "photo_thumb_bytes": 989,
-      "photo_full_sha12": "e2d2017e7b6b",
-      "photo_thumb_sha12": "43e6f43dd09c",
+      "photo_full_px": "873x1055",
+      "photo_thumb_px": "780x199",
+      "photo_full_bytes": 135023,
+      "photo_thumb_bytes": 9404,
+      "photo_full_sha12": "3eca25d3c716",
+      "photo_thumb_sha12": "2e1cd84cc7ce",
       "attributes_json": {
         "hanger_mode": "manual",
         "perimeter_mm": 141.3,
         "mount_width_mm": 60.0,
         "quantity_per_hanger": {
           "2700": {
-            "auto": null,
+            "auto": 33,
             "manual": 36
           }
         }
@@ -27862,7 +28144,8 @@
         "n-mismatch",
         "confidence:93",
         "status:confirmed",
-        "alias:ЮП-1875"
+        "alias:ЮП-1875",
+        "shared_photo_full:ПТ40"
       ],
       "relations": [
         {
@@ -27880,6 +28163,14 @@
           "status": "confirmed",
           "source": "db:aliases",
           "note": "DB-алиас: тот же товар под другим кодом"
+        },
+        {
+          "from_sku": "ПТ60",
+          "relation": "shared_photo_full",
+          "to_sku": "ПТ40",
+          "status": "confirmed",
+          "source": "storage:sha256",
+          "note": "3eca25d3c716"
         }
       ],
       "relation_text": "alias_of→ЮП-1875; alias_of→ЮП-3658",
@@ -27928,7 +28219,7 @@
       "hanger_mode": "manual",
       "quantity_per_hanger": {
         "2700": {
-          "auto": null,
+          "auto": 26,
           "manual": 26
         }
       },
@@ -27936,23 +28227,23 @@
       "n_per_hanger_manual": 26,
       "n_per_hanger_auto": 26,
       "n_mismatch": false,
-      "photo_full": "products/ПТ80_full_v2.jpg",
-      "photo_thumb": "products/ПТ80_thumb.jpg",
+      "photo_full": "products/ПТ80_180_full.png",
+      "photo_thumb": "products/ПТ80_180_thumb.png",
       "photo_full_exists": true,
       "photo_thumb_exists": true,
-      "photo_full_px": "342x413",
-      "photo_thumb_px": "94x41",
-      "photo_full_bytes": 54536,
-      "photo_thumb_bytes": 1042,
-      "photo_full_sha12": "d5942811a35a",
-      "photo_thumb_sha12": "54c0c24ded57",
+      "photo_full_px": "663x808",
+      "photo_thumb_px": "778x197",
+      "photo_full_bytes": 129667,
+      "photo_thumb_bytes": 9559,
+      "photo_full_sha12": "8aa6c84ab550",
+      "photo_thumb_sha12": "94190f52db90",
       "attributes_json": {
         "hanger_mode": "manual",
         "perimeter_mm": 181.2,
         "mount_width_mm": 79.9,
         "quantity_per_hanger": {
           "2700": {
-            "auto": null,
+            "auto": 26,
             "manual": 26
           }
         }
@@ -28073,7 +28364,7 @@
       "hanger_mode": "manual",
       "quantity_per_hanger": {
         "3050": {
-          "auto": null,
+          "auto": 96,
           "manual": 96
         }
       },
@@ -28081,23 +28372,23 @@
       "n_per_hanger_manual": 96,
       "n_per_hanger_auto": 96,
       "n_mismatch": false,
-      "photo_full": "products/У1010_full.jpg",
-      "photo_thumb": "products/У1010_thumb.jpg",
+      "photo_full": "products/У1010_181_full.png",
+      "photo_thumb": "products/У1010_181_thumb.png",
       "photo_full_exists": true,
       "photo_thumb_exists": true,
-      "photo_full_px": "2000x2000",
-      "photo_thumb_px": "600x600",
-      "photo_full_bytes": 45193,
-      "photo_thumb_bytes": 7148,
-      "photo_full_sha12": "79bec28efead",
-      "photo_thumb_sha12": "8eec565b9332",
+      "photo_full_px": "1860x1046",
+      "photo_thumb_px": "571x330",
+      "photo_full_bytes": 164426,
+      "photo_thumb_bytes": 6865,
+      "photo_full_sha12": "77807d4bdc94",
+      "photo_thumb_sha12": "08fb38f57726",
       "attributes_json": {
         "hanger_mode": "manual",
         "perimeter_mm": 40.0,
         "mount_width_mm": 10.0,
         "quantity_per_hanger": {
           "3050": {
-            "auto": null,
+            "auto": 96,
             "manual": 96
           }
         }
@@ -28172,8 +28463,15 @@
         "confidence:87",
         "status:probable",
         "alias:ЮП-1401",
-        "shared_photo_full:ЮП-1401",
-        "shared_photo_thumb:ЮП-1401"
+        "shared_photo_full:У1212",
+        "shared_photo_full:У1515",
+        "shared_photo_full:У2020",
+        "shared_photo_full:У2525",
+        "shared_photo_full:У3030",
+        "shared_photo_full:У4020",
+        "shared_photo_full:У4040",
+        "shared_photo_full:У5030",
+        "shared_photo_full:У5050"
       ],
       "relations": [
         {
@@ -28187,18 +28485,74 @@
         {
           "from_sku": "У1010",
           "relation": "shared_photo_full",
-          "to_sku": "ЮП-1401",
+          "to_sku": "У1212",
           "status": "confirmed",
           "source": "storage:sha256",
-          "note": "79bec28efead"
+          "note": "77807d4bdc94"
         },
         {
           "from_sku": "У1010",
-          "relation": "shared_photo_thumb",
-          "to_sku": "ЮП-1401",
+          "relation": "shared_photo_full",
+          "to_sku": "У1515",
           "status": "confirmed",
           "source": "storage:sha256",
-          "note": "8eec565b9332"
+          "note": "77807d4bdc94"
+        },
+        {
+          "from_sku": "У1010",
+          "relation": "shared_photo_full",
+          "to_sku": "У2020",
+          "status": "confirmed",
+          "source": "storage:sha256",
+          "note": "77807d4bdc94"
+        },
+        {
+          "from_sku": "У1010",
+          "relation": "shared_photo_full",
+          "to_sku": "У2525",
+          "status": "confirmed",
+          "source": "storage:sha256",
+          "note": "77807d4bdc94"
+        },
+        {
+          "from_sku": "У1010",
+          "relation": "shared_photo_full",
+          "to_sku": "У3030",
+          "status": "confirmed",
+          "source": "storage:sha256",
+          "note": "77807d4bdc94"
+        },
+        {
+          "from_sku": "У1010",
+          "relation": "shared_photo_full",
+          "to_sku": "У4020",
+          "status": "confirmed",
+          "source": "storage:sha256",
+          "note": "77807d4bdc94"
+        },
+        {
+          "from_sku": "У1010",
+          "relation": "shared_photo_full",
+          "to_sku": "У4040",
+          "status": "confirmed",
+          "source": "storage:sha256",
+          "note": "77807d4bdc94"
+        },
+        {
+          "from_sku": "У1010",
+          "relation": "shared_photo_full",
+          "to_sku": "У5030",
+          "status": "confirmed",
+          "source": "storage:sha256",
+          "note": "77807d4bdc94"
+        },
+        {
+          "from_sku": "У1010",
+          "relation": "shared_photo_full",
+          "to_sku": "У5050",
+          "status": "confirmed",
+          "source": "storage:sha256",
+          "note": "77807d4bdc94"
         }
       ],
       "relation_text": "alias_of→ЮП-1401",
@@ -28236,7 +28590,7 @@
       "hanger_mode": "manual",
       "quantity_per_hanger": {
         "3050": {
-          "auto": null,
+          "auto": 71,
           "manual": 71
         }
       },
@@ -28244,23 +28598,23 @@
       "n_per_hanger_manual": 71,
       "n_per_hanger_auto": 71,
       "n_mismatch": false,
-      "photo_full": "products/У1515_full.jpg",
-      "photo_thumb": "products/У1515_thumb.jpg",
+      "photo_full": "products/У1515_182_full.png",
+      "photo_thumb": "products/У1515_182_thumb.png",
       "photo_full_exists": true,
       "photo_thumb_exists": true,
-      "photo_full_px": "2000x2000",
-      "photo_thumb_px": "600x600",
-      "photo_full_bytes": 44680,
-      "photo_thumb_bytes": 7052,
-      "photo_full_sha12": "802ed9c37292",
-      "photo_thumb_sha12": "cf3d32b11f2e",
+      "photo_full_px": "1860x1046",
+      "photo_thumb_px": "578x341",
+      "photo_full_bytes": 164426,
+      "photo_thumb_bytes": 6852,
+      "photo_full_sha12": "77807d4bdc94",
+      "photo_thumb_sha12": "6ae009d5311d",
       "attributes_json": {
         "hanger_mode": "manual",
         "perimeter_mm": 60.0,
         "mount_width_mm": 15.0,
         "quantity_per_hanger": {
           "3050": {
-            "auto": null,
+            "auto": 71,
             "manual": 71
           }
         }
@@ -28335,8 +28689,15 @@
         "confidence:87",
         "status:probable",
         "alias:ЮП-009",
-        "shared_photo_full:ЮП-009",
-        "shared_photo_thumb:ЮП-009"
+        "shared_photo_full:У1010",
+        "shared_photo_full:У1212",
+        "shared_photo_full:У2020",
+        "shared_photo_full:У2525",
+        "shared_photo_full:У3030",
+        "shared_photo_full:У4020",
+        "shared_photo_full:У4040",
+        "shared_photo_full:У5030",
+        "shared_photo_full:У5050"
       ],
       "relations": [
         {
@@ -28350,18 +28711,74 @@
         {
           "from_sku": "У1515",
           "relation": "shared_photo_full",
-          "to_sku": "ЮП-009",
+          "to_sku": "У1010",
           "status": "confirmed",
           "source": "storage:sha256",
-          "note": "802ed9c37292"
+          "note": "77807d4bdc94"
         },
         {
           "from_sku": "У1515",
-          "relation": "shared_photo_thumb",
-          "to_sku": "ЮП-009",
+          "relation": "shared_photo_full",
+          "to_sku": "У1212",
           "status": "confirmed",
           "source": "storage:sha256",
-          "note": "cf3d32b11f2e"
+          "note": "77807d4bdc94"
+        },
+        {
+          "from_sku": "У1515",
+          "relation": "shared_photo_full",
+          "to_sku": "У2020",
+          "status": "confirmed",
+          "source": "storage:sha256",
+          "note": "77807d4bdc94"
+        },
+        {
+          "from_sku": "У1515",
+          "relation": "shared_photo_full",
+          "to_sku": "У2525",
+          "status": "confirmed",
+          "source": "storage:sha256",
+          "note": "77807d4bdc94"
+        },
+        {
+          "from_sku": "У1515",
+          "relation": "shared_photo_full",
+          "to_sku": "У3030",
+          "status": "confirmed",
+          "source": "storage:sha256",
+          "note": "77807d4bdc94"
+        },
+        {
+          "from_sku": "У1515",
+          "relation": "shared_photo_full",
+          "to_sku": "У4020",
+          "status": "confirmed",
+          "source": "storage:sha256",
+          "note": "77807d4bdc94"
+        },
+        {
+          "from_sku": "У1515",
+          "relation": "shared_photo_full",
+          "to_sku": "У4040",
+          "status": "confirmed",
+          "source": "storage:sha256",
+          "note": "77807d4bdc94"
+        },
+        {
+          "from_sku": "У1515",
+          "relation": "shared_photo_full",
+          "to_sku": "У5030",
+          "status": "confirmed",
+          "source": "storage:sha256",
+          "note": "77807d4bdc94"
+        },
+        {
+          "from_sku": "У1515",
+          "relation": "shared_photo_full",
+          "to_sku": "У5050",
+          "status": "confirmed",
+          "source": "storage:sha256",
+          "note": "77807d4bdc94"
         }
       ],
       "relation_text": "alias_of→ЮП-009",
@@ -28399,7 +28816,7 @@
       "hanger_mode": "manual",
       "quantity_per_hanger": {
         "3050": {
-          "auto": null,
+          "auto": 53,
           "manual": 53
         }
       },
@@ -28407,23 +28824,23 @@
       "n_per_hanger_manual": 53,
       "n_per_hanger_auto": 53,
       "n_mismatch": false,
-      "photo_full": "products/У2020_full.jpg",
-      "photo_thumb": "products/У2020_thumb.jpg",
+      "photo_full": "products/У2020_183_full.png",
+      "photo_thumb": "products/У2020_183_thumb.png",
       "photo_full_exists": true,
       "photo_thumb_exists": true,
-      "photo_full_px": "2000x2000",
-      "photo_thumb_px": "600x600",
-      "photo_full_bytes": 46140,
-      "photo_thumb_bytes": 7346,
-      "photo_full_sha12": "7f251ebeb942",
-      "photo_thumb_sha12": "82ab0a05cb9d",
+      "photo_full_px": "1860x1046",
+      "photo_thumb_px": "574x332",
+      "photo_full_bytes": 164426,
+      "photo_thumb_bytes": 8376,
+      "photo_full_sha12": "77807d4bdc94",
+      "photo_thumb_sha12": "649707dece20",
       "attributes_json": {
         "hanger_mode": "manual",
         "perimeter_mm": 80.0,
         "mount_width_mm": 20.0,
         "quantity_per_hanger": {
           "3050": {
-            "auto": null,
+            "auto": 53,
             "manual": 53
           }
         }
@@ -28498,8 +28915,15 @@
         "confidence:87",
         "status:probable",
         "alias:ЮП-011",
-        "shared_photo_full:ЮП-011",
-        "shared_photo_thumb:ЮП-011"
+        "shared_photo_full:У1010",
+        "shared_photo_full:У1212",
+        "shared_photo_full:У1515",
+        "shared_photo_full:У2525",
+        "shared_photo_full:У3030",
+        "shared_photo_full:У4020",
+        "shared_photo_full:У4040",
+        "shared_photo_full:У5030",
+        "shared_photo_full:У5050"
       ],
       "relations": [
         {
@@ -28513,18 +28937,74 @@
         {
           "from_sku": "У2020",
           "relation": "shared_photo_full",
-          "to_sku": "ЮП-011",
+          "to_sku": "У1010",
           "status": "confirmed",
           "source": "storage:sha256",
-          "note": "7f251ebeb942"
+          "note": "77807d4bdc94"
         },
         {
           "from_sku": "У2020",
-          "relation": "shared_photo_thumb",
-          "to_sku": "ЮП-011",
+          "relation": "shared_photo_full",
+          "to_sku": "У1212",
           "status": "confirmed",
           "source": "storage:sha256",
-          "note": "82ab0a05cb9d"
+          "note": "77807d4bdc94"
+        },
+        {
+          "from_sku": "У2020",
+          "relation": "shared_photo_full",
+          "to_sku": "У1515",
+          "status": "confirmed",
+          "source": "storage:sha256",
+          "note": "77807d4bdc94"
+        },
+        {
+          "from_sku": "У2020",
+          "relation": "shared_photo_full",
+          "to_sku": "У2525",
+          "status": "confirmed",
+          "source": "storage:sha256",
+          "note": "77807d4bdc94"
+        },
+        {
+          "from_sku": "У2020",
+          "relation": "shared_photo_full",
+          "to_sku": "У3030",
+          "status": "confirmed",
+          "source": "storage:sha256",
+          "note": "77807d4bdc94"
+        },
+        {
+          "from_sku": "У2020",
+          "relation": "shared_photo_full",
+          "to_sku": "У4020",
+          "status": "confirmed",
+          "source": "storage:sha256",
+          "note": "77807d4bdc94"
+        },
+        {
+          "from_sku": "У2020",
+          "relation": "shared_photo_full",
+          "to_sku": "У4040",
+          "status": "confirmed",
+          "source": "storage:sha256",
+          "note": "77807d4bdc94"
+        },
+        {
+          "from_sku": "У2020",
+          "relation": "shared_photo_full",
+          "to_sku": "У5030",
+          "status": "confirmed",
+          "source": "storage:sha256",
+          "note": "77807d4bdc94"
+        },
+        {
+          "from_sku": "У2020",
+          "relation": "shared_photo_full",
+          "to_sku": "У5050",
+          "status": "confirmed",
+          "source": "storage:sha256",
+          "note": "77807d4bdc94"
         }
       ],
       "relation_text": "alias_of→ЮП-011",
@@ -28570,16 +29050,16 @@
       "n_per_hanger_manual": 43,
       "n_per_hanger_auto": 43,
       "n_mismatch": false,
-      "photo_full": "products/У2525_full.jpg",
-      "photo_thumb": "products/У2525_thumb.jpg",
+      "photo_full": "products/У2525_184_full.png",
+      "photo_thumb": "products/У2525_184_thumb.png",
       "photo_full_exists": true,
       "photo_thumb_exists": true,
-      "photo_full_px": "2000x2000",
-      "photo_thumb_px": "600x600",
-      "photo_full_bytes": 45820,
-      "photo_thumb_bytes": 7296,
-      "photo_full_sha12": "8191a1f887ae",
-      "photo_thumb_sha12": "7431ad0e2eb3",
+      "photo_full_px": "1860x1046",
+      "photo_thumb_px": "573x334",
+      "photo_full_bytes": 164426,
+      "photo_thumb_bytes": 8367,
+      "photo_full_sha12": "77807d4bdc94",
+      "photo_thumb_sha12": "6de0c9547892",
       "attributes_json": {
         "hanger_mode": "manual",
         "perimeter_mm": 99.0,
@@ -28663,8 +29143,15 @@
         "review:resolved",
         "review-drawing:есть",
         "alias:ЮП-2004",
-        "shared_photo_full:ЮП-2004",
-        "shared_photo_thumb:ЮП-2004"
+        "shared_photo_full:У1010",
+        "shared_photo_full:У1212",
+        "shared_photo_full:У1515",
+        "shared_photo_full:У2020",
+        "shared_photo_full:У3030",
+        "shared_photo_full:У4020",
+        "shared_photo_full:У4040",
+        "shared_photo_full:У5030",
+        "shared_photo_full:У5050"
       ],
       "relations": [
         {
@@ -28678,18 +29165,74 @@
         {
           "from_sku": "У2525",
           "relation": "shared_photo_full",
-          "to_sku": "ЮП-2004",
+          "to_sku": "У1010",
           "status": "confirmed",
           "source": "storage:sha256",
-          "note": "8191a1f887ae"
+          "note": "77807d4bdc94"
         },
         {
           "from_sku": "У2525",
-          "relation": "shared_photo_thumb",
-          "to_sku": "ЮП-2004",
+          "relation": "shared_photo_full",
+          "to_sku": "У1212",
           "status": "confirmed",
           "source": "storage:sha256",
-          "note": "7431ad0e2eb3"
+          "note": "77807d4bdc94"
+        },
+        {
+          "from_sku": "У2525",
+          "relation": "shared_photo_full",
+          "to_sku": "У1515",
+          "status": "confirmed",
+          "source": "storage:sha256",
+          "note": "77807d4bdc94"
+        },
+        {
+          "from_sku": "У2525",
+          "relation": "shared_photo_full",
+          "to_sku": "У2020",
+          "status": "confirmed",
+          "source": "storage:sha256",
+          "note": "77807d4bdc94"
+        },
+        {
+          "from_sku": "У2525",
+          "relation": "shared_photo_full",
+          "to_sku": "У3030",
+          "status": "confirmed",
+          "source": "storage:sha256",
+          "note": "77807d4bdc94"
+        },
+        {
+          "from_sku": "У2525",
+          "relation": "shared_photo_full",
+          "to_sku": "У4020",
+          "status": "confirmed",
+          "source": "storage:sha256",
+          "note": "77807d4bdc94"
+        },
+        {
+          "from_sku": "У2525",
+          "relation": "shared_photo_full",
+          "to_sku": "У4040",
+          "status": "confirmed",
+          "source": "storage:sha256",
+          "note": "77807d4bdc94"
+        },
+        {
+          "from_sku": "У2525",
+          "relation": "shared_photo_full",
+          "to_sku": "У5030",
+          "status": "confirmed",
+          "source": "storage:sha256",
+          "note": "77807d4bdc94"
+        },
+        {
+          "from_sku": "У2525",
+          "relation": "shared_photo_full",
+          "to_sku": "У5050",
+          "status": "confirmed",
+          "source": "storage:sha256",
+          "note": "77807d4bdc94"
         }
       ],
       "relation_text": "alias_of→ЮП-2004",
@@ -28727,7 +29270,7 @@
       "hanger_mode": "manual",
       "quantity_per_hanger": {
         "3050": {
-          "auto": null,
+          "auto": 35,
           "manual": 35
         }
       },
@@ -28735,23 +29278,23 @@
       "n_per_hanger_manual": 35,
       "n_per_hanger_auto": 35,
       "n_mismatch": false,
-      "photo_full": "products/У3030_full.jpg",
-      "photo_thumb": "products/У3030_thumb.jpg",
+      "photo_full": "products/У3030_185_full.png",
+      "photo_thumb": "products/У3030_185_thumb.png",
       "photo_full_exists": true,
       "photo_thumb_exists": true,
-      "photo_full_px": "2000x2000",
-      "photo_thumb_px": "600x600",
-      "photo_full_bytes": 46542,
-      "photo_thumb_bytes": 7306,
-      "photo_full_sha12": "ecc8f310a2db",
-      "photo_thumb_sha12": "ef2d382f80eb",
+      "photo_full_px": "1860x1046",
+      "photo_thumb_px": "580x331",
+      "photo_full_bytes": 164426,
+      "photo_thumb_bytes": 9024,
+      "photo_full_sha12": "77807d4bdc94",
+      "photo_thumb_sha12": "e484f2627335",
       "attributes_json": {
         "hanger_mode": "manual",
         "perimeter_mm": 119.0,
         "mount_width_mm": 30.0,
         "quantity_per_hanger": {
           "3050": {
-            "auto": null,
+            "auto": 35,
             "manual": 35
           }
         }
@@ -28826,8 +29369,15 @@
         "confidence:87",
         "status:probable",
         "alias:ЮП-1629",
-        "shared_photo_full:ЮП-1629",
-        "shared_photo_thumb:ЮП-1629"
+        "shared_photo_full:У1010",
+        "shared_photo_full:У1212",
+        "shared_photo_full:У1515",
+        "shared_photo_full:У2020",
+        "shared_photo_full:У2525",
+        "shared_photo_full:У4020",
+        "shared_photo_full:У4040",
+        "shared_photo_full:У5030",
+        "shared_photo_full:У5050"
       ],
       "relations": [
         {
@@ -28841,18 +29391,74 @@
         {
           "from_sku": "У3030",
           "relation": "shared_photo_full",
-          "to_sku": "ЮП-1629",
+          "to_sku": "У1010",
           "status": "confirmed",
           "source": "storage:sha256",
-          "note": "ecc8f310a2db"
+          "note": "77807d4bdc94"
         },
         {
           "from_sku": "У3030",
-          "relation": "shared_photo_thumb",
-          "to_sku": "ЮП-1629",
+          "relation": "shared_photo_full",
+          "to_sku": "У1212",
           "status": "confirmed",
           "source": "storage:sha256",
-          "note": "ef2d382f80eb"
+          "note": "77807d4bdc94"
+        },
+        {
+          "from_sku": "У3030",
+          "relation": "shared_photo_full",
+          "to_sku": "У1515",
+          "status": "confirmed",
+          "source": "storage:sha256",
+          "note": "77807d4bdc94"
+        },
+        {
+          "from_sku": "У3030",
+          "relation": "shared_photo_full",
+          "to_sku": "У2020",
+          "status": "confirmed",
+          "source": "storage:sha256",
+          "note": "77807d4bdc94"
+        },
+        {
+          "from_sku": "У3030",
+          "relation": "shared_photo_full",
+          "to_sku": "У2525",
+          "status": "confirmed",
+          "source": "storage:sha256",
+          "note": "77807d4bdc94"
+        },
+        {
+          "from_sku": "У3030",
+          "relation": "shared_photo_full",
+          "to_sku": "У4020",
+          "status": "confirmed",
+          "source": "storage:sha256",
+          "note": "77807d4bdc94"
+        },
+        {
+          "from_sku": "У3030",
+          "relation": "shared_photo_full",
+          "to_sku": "У4040",
+          "status": "confirmed",
+          "source": "storage:sha256",
+          "note": "77807d4bdc94"
+        },
+        {
+          "from_sku": "У3030",
+          "relation": "shared_photo_full",
+          "to_sku": "У5030",
+          "status": "confirmed",
+          "source": "storage:sha256",
+          "note": "77807d4bdc94"
+        },
+        {
+          "from_sku": "У3030",
+          "relation": "shared_photo_full",
+          "to_sku": "У5050",
+          "status": "confirmed",
+          "source": "storage:sha256",
+          "note": "77807d4bdc94"
         }
       ],
       "relation_text": "alias_of→ЮП-1629",
@@ -29692,15 +30298,15 @@
       "n_per_hanger_auto": 25,
       "n_mismatch": false,
       "photo_full": "products/031_191_full_v2.jpg",
-      "photo_thumb": "products/031_191_thumb.jpg",
+      "photo_thumb": "products/031_191_thumb.png",
       "photo_full_exists": true,
       "photo_thumb_exists": true,
       "photo_full_px": "1587x2392",
-      "photo_thumb_px": "180x51",
+      "photo_thumb_px": "1737x252",
       "photo_full_bytes": 329060,
-      "photo_thumb_bytes": 1823,
+      "photo_thumb_bytes": 23779,
       "photo_full_sha12": "bc17d5d9035e",
-      "photo_thumb_sha12": "74e755dddc6d",
+      "photo_thumb_sha12": "f93870a718b4",
       "attributes_json": {
         "hanger_mode": "auto",
         "perimeter_mm": 188.5,
@@ -29784,7 +30390,8 @@
         "review:resolved",
         "review-drawing:есть",
         "alias:31",
-        "alias:80"
+        "alias:80",
+        "shared_photo_thumb:80"
       ],
       "relations": [
         {
@@ -29794,6 +30401,14 @@
           "status": "confirmed",
           "source": "db:aliases",
           "note": "Один профиль 80×3,9, P=188,5. Монтируются одинаково; различие — самоклеящийся слой: 031 — самоклейка, 80 — без самоклейки."
+        },
+        {
+          "from_sku": "031",
+          "relation": "shared_photo_thumb",
+          "to_sku": "80",
+          "status": "confirmed",
+          "source": "storage:sha256",
+          "note": "f93870a718b4"
         }
       ],
       "relation_text": "alias_of→80",
@@ -29845,16 +30460,16 @@
       "n_per_hanger_manual": 20,
       "n_per_hanger_auto": 20,
       "n_mismatch": false,
-      "photo_full": "products/10_192_full.jpg",
-      "photo_thumb": "products/10_192_thumb.jpg",
+      "photo_full": "products/10_192_full.png",
+      "photo_thumb": "products/10_192_thumb.png",
       "photo_full_exists": true,
       "photo_thumb_exists": true,
-      "photo_full_px": "535x625",
-      "photo_thumb_px": "95x36",
-      "photo_full_bytes": 77264,
-      "photo_thumb_bytes": 1473,
-      "photo_full_sha12": "4704f728304f",
-      "photo_thumb_sha12": "00f406f678ac",
+      "photo_full_px": "893x1229",
+      "photo_thumb_px": "3443x393",
+      "photo_full_bytes": 173873,
+      "photo_thumb_bytes": 64086,
+      "photo_full_sha12": "cd17b3cd0c9f",
+      "photo_thumb_sha12": "6735a80b7594",
       "attributes_json": {
         "hanger_mode": "auto",
         "perimeter_mm": 229.9,
@@ -29934,9 +30549,7 @@
         "perimeter:чертёж",
         "confidence:96",
         "status:confirmed",
-        "alias:ЮП-1767",
-        "shared_photo_full:ЮП-1767",
-        "shared_photo_thumb:ЮП-1767"
+        "alias:ЮП-1767"
       ],
       "relations": [
         {
@@ -29946,22 +30559,6 @@
           "status": "confirmed",
           "source": "db:aliases",
           "note": "DB-алиас: тот же товар под другим кодом"
-        },
-        {
-          "from_sku": "10",
-          "relation": "shared_photo_full",
-          "to_sku": "ЮП-1767",
-          "status": "confirmed",
-          "source": "storage:sha256",
-          "note": "4704f728304f"
-        },
-        {
-          "from_sku": "10",
-          "relation": "shared_photo_thumb",
-          "to_sku": "ЮП-1767",
-          "status": "confirmed",
-          "source": "storage:sha256",
-          "note": "00f406f678ac"
         }
       ],
       "relation_text": "alias_of→ЮП-1767",
@@ -30019,15 +30616,15 @@
       "n_per_hanger_auto": 72,
       "n_mismatch": false,
       "photo_full": "products/100_193_full.jpg",
-      "photo_thumb": "products/100_193_thumb.jpg",
+      "photo_thumb": "products/100_193_thumb.png",
       "photo_full_exists": true,
       "photo_thumb_exists": true,
       "photo_full_px": "1080x1479",
-      "photo_thumb_px": "97x36",
+      "photo_thumb_px": "1220x453",
       "photo_full_bytes": 173137,
-      "photo_thumb_bytes": 1562,
+      "photo_thumb_bytes": 33471,
       "photo_full_sha12": "8e7689ae99e6",
-      "photo_thumb_sha12": "d6fcaff589d4",
+      "photo_thumb_sha12": "93e14ae3e364",
       "attributes_json": {
         "hanger_mode": "auto",
         "perimeter_mm": 43.6,
@@ -30108,8 +30705,7 @@
         "perimeter:чертёж",
         "confidence:99",
         "status:confirmed",
-        "alias:ЮП-2901",
-        "shared_photo_thumb:ЮП-2901"
+        "alias:ЮП-2901"
       ],
       "relations": [
         {
@@ -30127,14 +30723,6 @@
           "status": "confirmed",
           "source": "poster2024",
           "note": "ячейка 2024 36,2665,308,3033"
-        },
-        {
-          "from_sku": "100",
-          "relation": "shared_photo_thumb",
-          "to_sku": "ЮП-2901",
-          "status": "confirmed",
-          "source": "storage:sha256",
-          "note": "d6fcaff589d4"
         }
       ],
       "relation_text": "alias_of→ЮП-2901",
@@ -30700,16 +31288,16 @@
       "n_per_hanger_manual": 86,
       "n_per_hanger_auto": 86,
       "n_mismatch": false,
-      "photo_full": "products/324_197_full.jpg",
-      "photo_thumb": "products/324_197_thumb.jpg",
+      "photo_full": "products/324_197_full.png",
+      "photo_thumb": "products/324_197_thumb.png",
       "photo_full_exists": true,
       "photo_thumb_exists": true,
-      "photo_full_px": "420x315",
-      "photo_thumb_px": "120x106",
-      "photo_full_bytes": 31423,
-      "photo_thumb_bytes": 1961,
-      "photo_full_sha12": "baa30ad36b95",
-      "photo_thumb_sha12": "4b926d3c6db0",
+      "photo_full_px": "549x732",
+      "photo_thumb_px": "585x478",
+      "photo_full_bytes": 175497,
+      "photo_thumb_bytes": 15404,
+      "photo_full_sha12": "6bc3fb58b291",
+      "photo_thumb_sha12": "133b56446db1",
       "attributes_json": {
         "hanger_mode": "auto",
         "perimeter_mm": 43.8,
@@ -30790,7 +31378,9 @@
         "perimeter:чертёж",
         "confidence:99",
         "status:confirmed",
-        "alias:ЮП-081"
+        "alias:ЮП-081",
+        "shared_photo_full:318",
+        "shared_photo_full:325"
       ],
       "relations": [
         {
@@ -30816,6 +31406,22 @@
           "status": "confirmed",
           "source": "poster2024",
           "note": "ячейка 2024 632,2665,904,3033"
+        },
+        {
+          "from_sku": "324",
+          "relation": "shared_photo_full",
+          "to_sku": "318",
+          "status": "confirmed",
+          "source": "storage:sha256",
+          "note": "6bc3fb58b291"
+        },
+        {
+          "from_sku": "324",
+          "relation": "shared_photo_full",
+          "to_sku": "325",
+          "status": "confirmed",
+          "source": "storage:sha256",
+          "note": "6bc3fb58b291"
         }
       ],
       "relation_text": "alias_of→ЮП-081",
@@ -31593,15 +32199,15 @@
       "n_per_hanger_auto": 46,
       "n_mismatch": false,
       "photo_full": "products/033_205_full.jpg",
-      "photo_thumb": "products/033_205_thumb.jpg",
+      "photo_thumb": "products/033_205_thumb.png",
       "photo_full_exists": true,
       "photo_thumb_exists": true,
       "photo_full_px": "1634x1420",
-      "photo_thumb_px": "600x521",
+      "photo_thumb_px": "1844x546",
       "photo_full_bytes": 409493,
-      "photo_thumb_bytes": 70541,
+      "photo_thumb_bytes": 47874,
       "photo_full_sha12": "31d9aca9ca63",
-      "photo_thumb_sha12": "f678ca1b44d8",
+      "photo_thumb_sha12": "631c9d88d108",
       "attributes_json": {
         "hanger_mode": "auto",
         "perimeter_mm": 97.6,
@@ -31756,16 +32362,16 @@
       "n_per_hanger_manual": 58,
       "n_per_hanger_auto": 58,
       "n_mismatch": false,
-      "photo_full": "products/035_206_full.jpg",
-      "photo_thumb": "products/035_206_thumb.jpg",
+      "photo_full": "products/035_206_full.png",
+      "photo_thumb": "products/035_206_thumb.png",
       "photo_full_exists": true,
       "photo_thumb_exists": true,
-      "photo_full_px": "415x290",
-      "photo_thumb_px": "152x67",
-      "photo_full_bytes": 29264,
-      "photo_thumb_bytes": 3165,
-      "photo_full_sha12": "9f84f8cd6537",
-      "photo_thumb_sha12": "0a70c4c4d44f",
+      "photo_full_px": "1062x1460",
+      "photo_thumb_px": "1662x490",
+      "photo_full_bytes": 234562,
+      "photo_thumb_bytes": 48712,
+      "photo_full_sha12": "90ba9f844881",
+      "photo_thumb_sha12": "6c16c9209346",
       "attributes_json": {
         "hanger_mode": "auto",
         "perimeter_mm": 75.2,
@@ -31920,16 +32526,16 @@
       "n_per_hanger_manual": 76,
       "n_per_hanger_auto": 76,
       "n_mismatch": false,
-      "photo_full": "products/318_207_full.jpg",
-      "photo_thumb": "products/318_207_thumb.jpg",
+      "photo_full": "products/318_207_full.png",
+      "photo_thumb": "products/318_207_thumb.png",
       "photo_full_exists": true,
       "photo_thumb_exists": true,
-      "photo_full_px": "1109x1551",
-      "photo_thumb_px": "968x517",
-      "photo_full_bytes": 181598,
-      "photo_thumb_bytes": 20595,
-      "photo_full_sha12": "48af44ac3942",
-      "photo_thumb_sha12": "c0e40439ca15",
+      "photo_full_px": "549x732",
+      "photo_thumb_px": "724x474",
+      "photo_full_bytes": 175497,
+      "photo_thumb_bytes": 17081,
+      "photo_full_sha12": "6bc3fb58b291",
+      "photo_thumb_sha12": "f69302076f51",
       "attributes_json": {
         "hanger_mode": "auto",
         "perimeter_mm": 53.6,
@@ -32011,8 +32617,8 @@
         "confidence:100",
         "status:confirmed",
         "alias:ЮП-2387",
-        "shared_photo_full:ЮП-2387",
-        "shared_photo_thumb:ЮП-2387"
+        "shared_photo_full:324",
+        "shared_photo_full:325"
       ],
       "relations": [
         {
@@ -32042,18 +32648,18 @@
         {
           "from_sku": "318",
           "relation": "shared_photo_full",
-          "to_sku": "ЮП-2387",
+          "to_sku": "324",
           "status": "confirmed",
           "source": "storage:sha256",
-          "note": "48af44ac3942"
+          "note": "6bc3fb58b291"
         },
         {
           "from_sku": "318",
-          "relation": "shared_photo_thumb",
-          "to_sku": "ЮП-2387",
+          "relation": "shared_photo_full",
+          "to_sku": "325",
           "status": "confirmed",
           "source": "storage:sha256",
-          "note": "c0e40439ca15"
+          "note": "6bc3fb58b291"
         }
       ],
       "relation_text": "alias_of→ЮП-2387; техкод чертежа ЮП-2387",
@@ -32105,16 +32711,16 @@
       "n_per_hanger_manual": 62,
       "n_per_hanger_auto": 62,
       "n_mismatch": false,
-      "photo_full": "products/325_208_full.jpg",
-      "photo_thumb": "products/325_208_thumb.jpg",
+      "photo_full": "products/325_208_full.png",
+      "photo_thumb": "products/325_208_thumb.png",
       "photo_full_exists": true,
       "photo_thumb_exists": true,
-      "photo_full_px": "1134x1551",
-      "photo_thumb_px": "767x500",
-      "photo_full_bytes": 165242,
-      "photo_thumb_bytes": 20939,
-      "photo_full_sha12": "8976db06d599",
-      "photo_thumb_sha12": "130309bdc618",
+      "photo_full_px": "549x732",
+      "photo_thumb_px": "774x436",
+      "photo_full_bytes": 175497,
+      "photo_thumb_bytes": 18794,
+      "photo_full_sha12": "6bc3fb58b291",
+      "photo_thumb_sha12": "a1ec96b5a106",
       "attributes_json": {
         "hanger_mode": "auto",
         "perimeter_mm": 69.3,
@@ -32195,7 +32801,9 @@
         "perimeter:чертёж",
         "confidence:95",
         "status:confirmed",
-        "alias:ЮП-2910"
+        "alias:ЮП-2910",
+        "shared_photo_full:318",
+        "shared_photo_full:324"
       ],
       "relations": [
         {
@@ -32229,6 +32837,22 @@
           "status": "confirmed",
           "source": "poster2024",
           "note": "ячейка 2024 632,2665,904,3033"
+        },
+        {
+          "from_sku": "325",
+          "relation": "shared_photo_full",
+          "to_sku": "318",
+          "status": "confirmed",
+          "source": "storage:sha256",
+          "note": "6bc3fb58b291"
+        },
+        {
+          "from_sku": "325",
+          "relation": "shared_photo_full",
+          "to_sku": "324",
+          "status": "confirmed",
+          "source": "storage:sha256",
+          "note": "6bc3fb58b291"
         }
       ],
       "relation_text": "alias_of→ЮП-2910; alias_of→ЮП-3473",
@@ -32753,16 +33377,16 @@
       "n_per_hanger_manual": 48,
       "n_per_hanger_auto": 48,
       "n_mismatch": false,
-      "photo_full": "products/381_212_full.jpg",
-      "photo_thumb": "products/381_212_thumb.jpg",
+      "photo_full": "products/381_212_full.png",
+      "photo_thumb": "products/381_212_thumb.png",
       "photo_full_exists": true,
       "photo_thumb_exists": true,
-      "photo_full_px": "1114x1567",
-      "photo_thumb_px": "1034x784",
-      "photo_full_bytes": 161847,
-      "photo_thumb_bytes": 28534,
-      "photo_full_sha12": "169ce5c958e9",
-      "photo_thumb_sha12": "cfaf462b200c",
+      "photo_full_px": "751x911",
+      "photo_thumb_px": "1017x564",
+      "photo_full_bytes": 121030,
+      "photo_thumb_bytes": 14282,
+      "photo_full_sha12": "d0784953763b",
+      "photo_thumb_sha12": "41f66f2c193e",
       "attributes_json": {
         "hanger_mode": "auto",
         "perimeter_mm": 98.4,
@@ -32917,16 +33541,16 @@
       "n_per_hanger_manual": 47,
       "n_per_hanger_auto": 47,
       "n_mismatch": false,
-      "photo_full": "products/480_213_full.jpg",
-      "photo_thumb": "products/480_213_thumb.jpg",
+      "photo_full": "products/480_213_full.png",
+      "photo_thumb": "products/480_213_thumb.png",
       "photo_full_exists": true,
       "photo_thumb_exists": true,
-      "photo_full_px": "1134x1613",
-      "photo_thumb_px": "951x517",
-      "photo_full_bytes": 145337,
-      "photo_thumb_bytes": 13243,
-      "photo_full_sha12": "a86452aba985",
-      "photo_thumb_sha12": "ad00f8014c33",
+      "photo_full_px": "900x1076",
+      "photo_thumb_px": "889x524",
+      "photo_full_bytes": 147575,
+      "photo_thumb_bytes": 8152,
+      "photo_full_sha12": "c7bf7b583cff",
+      "photo_thumb_sha12": "8e1bde1758a3",
       "attributes_json": {
         "hanger_mode": "auto",
         "perimeter_mm": 100.5,
@@ -33007,7 +33631,8 @@
         "perimeter:чертёж",
         "confidence:99",
         "status:confirmed",
-        "alias:ЮП-137"
+        "alias:ЮП-137",
+        "shared_photo_thumb:ЮП-137"
       ],
       "relations": [
         {
@@ -33017,6 +33642,14 @@
           "status": "confirmed",
           "source": "db:aliases",
           "note": "DB-алиас: тот же товар под другим кодом"
+        },
+        {
+          "from_sku": "480",
+          "relation": "shared_photo_thumb",
+          "to_sku": "ЮП-137",
+          "status": "confirmed",
+          "source": "storage:sha256",
+          "note": "8e1bde1758a3"
         }
       ],
       "relation_text": "alias_of→ЮП-137",
@@ -33382,15 +34015,15 @@
       "n_per_hanger_auto": 64,
       "n_mismatch": false,
       "photo_full": "products/3418_216_full.jpg",
-      "photo_thumb": "products/3418_216_thumb.jpg",
+      "photo_thumb": "products/3418_216_thumb.png",
       "photo_full_exists": true,
       "photo_thumb_exists": true,
       "photo_full_px": "1134x1517",
-      "photo_thumb_px": "1034x751",
+      "photo_thumb_px": "778x446",
       "photo_full_bytes": 205493,
-      "photo_thumb_bytes": 20050,
+      "photo_thumb_bytes": 11395,
       "photo_full_sha12": "e560314977f6",
-      "photo_thumb_sha12": "26ce1465bc11",
+      "photo_thumb_sha12": "47ff6d87d6d0",
       "attributes_json": {
         "hanger_mode": "auto",
         "perimeter_mm": 69.3,
@@ -33629,9 +34262,7 @@
         "perimeter:чертёж",
         "confidence:84",
         "status:needs_review",
-        "alias:318",
-        "shared_photo_full:318",
-        "shared_photo_thumb:318"
+        "alias:318"
       ],
       "relations": [
         {
@@ -33641,22 +34272,6 @@
           "status": "confirmed",
           "source": "db:aliases",
           "note": "Один товар: 318 — КТМ-нумерация, ЮП-2387 — техкод чертежа (18×8, P=53,6). Оба SKU заведены в БД."
-        },
-        {
-          "from_sku": "ЮП-2387",
-          "relation": "shared_photo_full",
-          "to_sku": "318",
-          "status": "confirmed",
-          "source": "storage:sha256",
-          "note": "48af44ac3942"
-        },
-        {
-          "from_sku": "ЮП-2387",
-          "relation": "shared_photo_thumb",
-          "to_sku": "318",
-          "status": "confirmed",
-          "source": "storage:sha256",
-          "note": "c0e40439ca15"
         }
       ],
       "relation_text": "alias_of→318",
@@ -33714,7 +34329,13 @@
       "attributes_json": {
         "hanger_mode": "manual"
       },
-      "dimensions": [],
+      "dimensions": [
+        {
+          "dimension_type_id": 1,
+          "is_required": true,
+          "default_value": 2700
+        }
+      ],
       "notes": "",
       "source": "manual",
       "processing_flags": [],
@@ -33903,6 +34524,403 @@
           "evidence": "файл отсутствует; источник не найден"
         }
       ]
+    },
+    {
+      "id": 222,
+      "sku": "389",
+      "code": "",
+      "name": "389",
+      "type": "component",
+      "unit": "шт",
+      "is_active": true,
+      "is_catalog_item": false,
+      "profile_type_db": "",
+      "alloy": "",
+      "color": "",
+      "anod_type": "",
+      "dimension_state": "length",
+      "aliases": [],
+      "lengths": [
+        {
+          "length_mm": 2700,
+          "raw_length_mm": 2750,
+          "is_primary": true
+        }
+      ],
+      "length_primary_mm": 2700,
+      "perimeter_mm": null,
+      "mount_width_mm": null,
+      "hanger_mode": "manual",
+      "quantity_per_hanger": {
+        "2700": {
+          "auto": null,
+          "manual": null
+        }
+      },
+      "n_per_hanger": null,
+      "n_per_hanger_manual": null,
+      "n_per_hanger_auto": null,
+      "n_mismatch": false,
+      "photo_full": "products/389_222_full.png",
+      "photo_thumb": "products/389_222_thumb.png",
+      "photo_full_exists": true,
+      "photo_thumb_exists": true,
+      "photo_full_px": "846x1025",
+      "photo_thumb_px": "613x342",
+      "photo_full_bytes": 140142,
+      "photo_thumb_bytes": 6618,
+      "photo_full_sha12": "163223f55b19",
+      "photo_thumb_sha12": "c271aacf6605",
+      "attributes_json": {
+        "hanger_mode": "manual",
+        "quantity_per_hanger": {
+          "2700": {
+            "auto": null,
+            "manual": null
+          }
+        }
+      },
+      "dimensions": [
+        {
+          "dimension_type_id": 1,
+          "is_required": true,
+          "default_value": 2700
+        }
+      ],
+      "notes": "",
+      "source": "",
+      "processing_flags": [],
+      "composition": [],
+      "audit_group": "08-unknown-missing",
+      "base_audit_group": "08-unknown-missing",
+      "review_status": "",
+      "review_drawing": "",
+      "review_cause": "",
+      "review_note": "",
+      "review_resolution": "",
+      "review_kpz_n": null,
+      "review_register_n": null,
+      "review_observations": null,
+      "audit_verdict": "",
+      "audit_confidence": "",
+      "audit_note": "",
+      "audit_evidence": "",
+      "photo_status": "full+thumb",
+      "photo_label": "full+thumb",
+      "photo_origin": "own",
+      "photo_from": "",
+      "photo_origin_scope": "",
+      "photo_origin_note": "",
+      "photo_verdict": "unverified",
+      "perimeter_archive": "",
+      "perimeter_poster": "",
+      "perimeter_best": "",
+      "perimeter_source": "—",
+      "dimension_status": "no_data",
+      "dimension_note": "",
+      "applied_decision": "",
+      "archive_file": "",
+      "poster_source": "",
+      "linear_best": "",
+      "linear_source": "name",
+      "classification_profile": "unknown",
+      "classification_profile_label": "не определено",
+      "classification_shape": "unknown",
+      "classification_series": "KTM",
+      "classification_family": "",
+      "classification_family_name": "",
+      "material": "—",
+      "identity_confidence": 80,
+      "dimension_confidence": 40,
+      "photo_confidence": 80,
+      "classification_confidence": 55,
+      "overall_confidence": 66,
+      "overall_status": "unknown",
+      "tags": [
+        "group:08-unknown-missing",
+        "profile:unknown",
+        "shape:unknown",
+        "series:KTM",
+        "photo:full+thumb",
+        "photo-origin:own",
+        "photo-verdict:unverified",
+        "perimeter:—",
+        "confidence:66",
+        "status:unknown"
+      ],
+      "relations": [],
+      "relation_text": "",
+      "confirmed": [],
+      "refuted": [],
+      "open_claims": []
+    },
+    {
+      "id": 223,
+      "sku": "367",
+      "code": "",
+      "name": "367",
+      "type": "component",
+      "unit": "шт",
+      "is_active": true,
+      "is_catalog_item": false,
+      "profile_type_db": "",
+      "alloy": "",
+      "color": "",
+      "anod_type": "",
+      "dimension_state": "length",
+      "aliases": [],
+      "lengths": [
+        {
+          "length_mm": 2700,
+          "raw_length_mm": 2750,
+          "is_primary": true
+        }
+      ],
+      "length_primary_mm": 2700,
+      "perimeter_mm": null,
+      "mount_width_mm": null,
+      "hanger_mode": "manual",
+      "quantity_per_hanger": {
+        "2700": {
+          "auto": null,
+          "manual": null
+        }
+      },
+      "n_per_hanger": null,
+      "n_per_hanger_manual": null,
+      "n_per_hanger_auto": null,
+      "n_mismatch": false,
+      "photo_full": "products/367_223_full.png",
+      "photo_thumb": "products/367_223_thumb.png",
+      "photo_full_exists": true,
+      "photo_thumb_exists": true,
+      "photo_full_px": "841x916",
+      "photo_thumb_px": "586x402",
+      "photo_full_bytes": 159886,
+      "photo_thumb_bytes": 13627,
+      "photo_full_sha12": "0b16937e190d",
+      "photo_thumb_sha12": "5860a8a06598",
+      "attributes_json": {
+        "hanger_mode": "manual",
+        "quantity_per_hanger": {
+          "2700": {
+            "auto": null,
+            "manual": null
+          }
+        }
+      },
+      "dimensions": [
+        {
+          "dimension_type_id": 1,
+          "is_required": true,
+          "default_value": 2700
+        }
+      ],
+      "notes": "",
+      "source": "",
+      "processing_flags": [],
+      "composition": [],
+      "audit_group": "08-unknown-missing",
+      "base_audit_group": "08-unknown-missing",
+      "review_status": "",
+      "review_drawing": "",
+      "review_cause": "",
+      "review_note": "",
+      "review_resolution": "",
+      "review_kpz_n": null,
+      "review_register_n": null,
+      "review_observations": null,
+      "audit_verdict": "",
+      "audit_confidence": "",
+      "audit_note": "",
+      "audit_evidence": "",
+      "photo_status": "full+thumb",
+      "photo_label": "full+thumb",
+      "photo_origin": "own",
+      "photo_from": "",
+      "photo_origin_scope": "",
+      "photo_origin_note": "",
+      "photo_verdict": "unverified",
+      "perimeter_archive": "",
+      "perimeter_poster": "",
+      "perimeter_best": "",
+      "perimeter_source": "—",
+      "dimension_status": "no_data",
+      "dimension_note": "",
+      "applied_decision": "",
+      "archive_file": "",
+      "poster_source": "",
+      "linear_best": "",
+      "linear_source": "name",
+      "classification_profile": "unknown",
+      "classification_profile_label": "не определено",
+      "classification_shape": "unknown",
+      "classification_series": "KTM",
+      "classification_family": "",
+      "classification_family_name": "",
+      "material": "—",
+      "identity_confidence": 80,
+      "dimension_confidence": 40,
+      "photo_confidence": 80,
+      "classification_confidence": 55,
+      "overall_confidence": 66,
+      "overall_status": "unknown",
+      "tags": [
+        "group:08-unknown-missing",
+        "profile:unknown",
+        "shape:unknown",
+        "series:KTM",
+        "photo:full+thumb",
+        "photo-origin:own",
+        "photo-verdict:unverified",
+        "perimeter:—",
+        "confidence:66",
+        "status:unknown"
+      ],
+      "relations": [],
+      "relation_text": "",
+      "confirmed": [],
+      "refuted": [],
+      "open_claims": []
+    },
+    {
+      "id": 224,
+      "sku": "урны",
+      "code": "",
+      "name": "Урны, комплект 2 шт (корпус + крышка)",
+      "type": "component",
+      "unit": "шт",
+      "is_active": true,
+      "is_catalog_item": true,
+      "profile_type_db": "",
+      "alloy": "",
+      "color": "",
+      "anod_type": "",
+      "dimension_state": "volume",
+      "aliases": [],
+      "lengths": [],
+      "length_primary_mm": null,
+      "perimeter_mm": null,
+      "mount_width_mm": null,
+      "hanger_mode": "manual",
+      "quantity_per_hanger": {
+        "default": {
+          "auto": null,
+          "manual": 8
+        }
+      },
+      "n_per_hanger": null,
+      "n_per_hanger_manual": null,
+      "n_per_hanger_auto": null,
+      "n_mismatch": false,
+      "photo_full": "products/урны_224_full.jpg",
+      "photo_thumb": "products/урны_224_thumb.png",
+      "photo_full_exists": true,
+      "photo_thumb_exists": true,
+      "photo_full_px": "960x1280",
+      "photo_thumb_px": "444x667",
+      "photo_full_bytes": 90951,
+      "photo_thumb_bytes": 215528,
+      "photo_full_sha12": "f7ae6edbcace",
+      "photo_thumb_sha12": "a0fd4e3675d6",
+      "attributes_json": {
+        "pack": {
+          "pieces_per_set": 2,
+          "sets_per_hanger": 4
+        },
+        "customer": "ГорКомплекс",
+        "hanger_mode": "manual",
+        "third_party": true,
+        "quantity_per_hanger": {
+          "default": {
+            "auto": null,
+            "manual": 8
+          }
+        }
+      },
+      "dimensions": [
+        {
+          "dimension_type_id": 1,
+          "is_required": false,
+          "default_value": null
+        },
+        {
+          "dimension_type_id": 2,
+          "is_required": false,
+          "default_value": null
+        },
+        {
+          "dimension_type_id": 4,
+          "is_required": false,
+          "default_value": null
+        }
+      ],
+      "notes": "",
+      "source": "manual",
+      "processing_flags": [],
+      "composition": [],
+      "audit_group": "08-unknown-missing",
+      "base_audit_group": "08-unknown-missing",
+      "review_status": "",
+      "review_drawing": "",
+      "review_cause": "",
+      "review_note": "",
+      "review_resolution": "",
+      "review_kpz_n": null,
+      "review_register_n": null,
+      "review_observations": null,
+      "audit_verdict": "",
+      "audit_confidence": "",
+      "audit_note": "",
+      "audit_evidence": "",
+      "photo_status": "full+thumb",
+      "photo_label": "full+thumb",
+      "photo_origin": "own",
+      "photo_from": "",
+      "photo_origin_scope": "",
+      "photo_origin_note": "",
+      "photo_verdict": "unverified",
+      "perimeter_archive": "",
+      "perimeter_poster": "",
+      "perimeter_best": "",
+      "perimeter_source": "—",
+      "dimension_status": "no_data",
+      "dimension_note": "",
+      "applied_decision": "",
+      "archive_file": "",
+      "poster_source": "",
+      "linear_best": "",
+      "linear_source": "name",
+      "classification_profile": "unknown",
+      "classification_profile_label": "не определено",
+      "classification_shape": "unknown",
+      "classification_series": "other",
+      "classification_family": "",
+      "classification_family_name": "",
+      "material": "—",
+      "identity_confidence": 80,
+      "dimension_confidence": 40,
+      "photo_confidence": 80,
+      "classification_confidence": 55,
+      "overall_confidence": 66,
+      "overall_status": "unknown",
+      "tags": [
+        "group:08-unknown-missing",
+        "profile:unknown",
+        "shape:unknown",
+        "series:other",
+        "photo:full+thumb",
+        "photo-origin:own",
+        "photo-verdict:unverified",
+        "perimeter:—",
+        "confidence:66",
+        "status:unknown"
+      ],
+      "relations": [],
+      "relation_text": "",
+      "confirmed": [],
+      "refuted": [],
+      "open_claims": []
     }
   ],
   "relations": [
@@ -35203,68 +36221,164 @@
       "note": "7a38ca01fcfa"
     },
     {
-      "from_sku": "У2020",
+      "from_sku": "ЮП-009",
       "relation": "shared_photo_full",
       "to_sku": "ЮП-011",
       "status": "confirmed",
       "source": "storage:sha256",
-      "note": "7f251ebeb942"
+      "note": "ae595c82f9a4"
     },
     {
       "from_sku": "ЮП-011",
       "relation": "shared_photo_full",
-      "to_sku": "У2020",
+      "to_sku": "ЮП-009",
       "status": "confirmed",
       "source": "storage:sha256",
-      "note": "7f251ebeb942"
+      "note": "ae595c82f9a4"
     },
     {
-      "from_sku": "У1010",
+      "from_sku": "ЮП-009",
       "relation": "shared_photo_full",
       "to_sku": "ЮП-1401",
       "status": "confirmed",
       "source": "storage:sha256",
-      "note": "79bec28efead"
+      "note": "ae595c82f9a4"
     },
     {
       "from_sku": "ЮП-1401",
       "relation": "shared_photo_full",
-      "to_sku": "У1010",
+      "to_sku": "ЮП-009",
       "status": "confirmed",
       "source": "storage:sha256",
-      "note": "79bec28efead"
+      "note": "ae595c82f9a4"
     },
     {
-      "from_sku": "У3030",
+      "from_sku": "ЮП-009",
       "relation": "shared_photo_full",
       "to_sku": "ЮП-1629",
       "status": "confirmed",
       "source": "storage:sha256",
-      "note": "ecc8f310a2db"
+      "note": "ae595c82f9a4"
     },
     {
       "from_sku": "ЮП-1629",
       "relation": "shared_photo_full",
-      "to_sku": "У3030",
+      "to_sku": "ЮП-009",
       "status": "confirmed",
       "source": "storage:sha256",
-      "note": "ecc8f310a2db"
+      "note": "ae595c82f9a4"
     },
     {
-      "from_sku": "10",
+      "from_sku": "ЮП-009",
       "relation": "shared_photo_full",
-      "to_sku": "ЮП-1767",
+      "to_sku": "ЮП-2004",
       "status": "confirmed",
       "source": "storage:sha256",
-      "note": "4704f728304f"
+      "note": "ae595c82f9a4"
     },
     {
-      "from_sku": "ЮП-1767",
+      "from_sku": "ЮП-2004",
       "relation": "shared_photo_full",
-      "to_sku": "10",
+      "to_sku": "ЮП-009",
       "status": "confirmed",
       "source": "storage:sha256",
-      "note": "4704f728304f"
+      "note": "ae595c82f9a4"
+    },
+    {
+      "from_sku": "ЮП-011",
+      "relation": "shared_photo_full",
+      "to_sku": "ЮП-1401",
+      "status": "confirmed",
+      "source": "storage:sha256",
+      "note": "ae595c82f9a4"
+    },
+    {
+      "from_sku": "ЮП-1401",
+      "relation": "shared_photo_full",
+      "to_sku": "ЮП-011",
+      "status": "confirmed",
+      "source": "storage:sha256",
+      "note": "ae595c82f9a4"
+    },
+    {
+      "from_sku": "ЮП-011",
+      "relation": "shared_photo_full",
+      "to_sku": "ЮП-1629",
+      "status": "confirmed",
+      "source": "storage:sha256",
+      "note": "ae595c82f9a4"
+    },
+    {
+      "from_sku": "ЮП-1629",
+      "relation": "shared_photo_full",
+      "to_sku": "ЮП-011",
+      "status": "confirmed",
+      "source": "storage:sha256",
+      "note": "ae595c82f9a4"
+    },
+    {
+      "from_sku": "ЮП-011",
+      "relation": "shared_photo_full",
+      "to_sku": "ЮП-2004",
+      "status": "confirmed",
+      "source": "storage:sha256",
+      "note": "ae595c82f9a4"
+    },
+    {
+      "from_sku": "ЮП-2004",
+      "relation": "shared_photo_full",
+      "to_sku": "ЮП-011",
+      "status": "confirmed",
+      "source": "storage:sha256",
+      "note": "ae595c82f9a4"
+    },
+    {
+      "from_sku": "ЮП-1401",
+      "relation": "shared_photo_full",
+      "to_sku": "ЮП-1629",
+      "status": "confirmed",
+      "source": "storage:sha256",
+      "note": "ae595c82f9a4"
+    },
+    {
+      "from_sku": "ЮП-1629",
+      "relation": "shared_photo_full",
+      "to_sku": "ЮП-1401",
+      "status": "confirmed",
+      "source": "storage:sha256",
+      "note": "ae595c82f9a4"
+    },
+    {
+      "from_sku": "ЮП-1401",
+      "relation": "shared_photo_full",
+      "to_sku": "ЮП-2004",
+      "status": "confirmed",
+      "source": "storage:sha256",
+      "note": "ae595c82f9a4"
+    },
+    {
+      "from_sku": "ЮП-2004",
+      "relation": "shared_photo_full",
+      "to_sku": "ЮП-1401",
+      "status": "confirmed",
+      "source": "storage:sha256",
+      "note": "ae595c82f9a4"
+    },
+    {
+      "from_sku": "ЮП-1629",
+      "relation": "shared_photo_full",
+      "to_sku": "ЮП-2004",
+      "status": "confirmed",
+      "source": "storage:sha256",
+      "note": "ae595c82f9a4"
+    },
+    {
+      "from_sku": "ЮП-2004",
+      "relation": "shared_photo_full",
+      "to_sku": "ЮП-1629",
+      "status": "confirmed",
+      "source": "storage:sha256",
+      "note": "ae595c82f9a4"
     },
     {
       "from_sku": "ЮП-1875",
@@ -35281,22 +36395,6 @@
       "status": "confirmed",
       "source": "storage:sha256",
       "note": "4ba180681a84"
-    },
-    {
-      "from_sku": "У2525",
-      "relation": "shared_photo_full",
-      "to_sku": "ЮП-2004",
-      "status": "confirmed",
-      "source": "storage:sha256",
-      "note": "8191a1f887ae"
-    },
-    {
-      "from_sku": "ЮП-2004",
-      "relation": "shared_photo_full",
-      "to_sku": "У2525",
-      "status": "confirmed",
-      "source": "storage:sha256",
-      "note": "8191a1f887ae"
     },
     {
       "from_sku": "ПП37",
@@ -35363,22 +36461,6 @@
       "note": "f2591994fa73"
     },
     {
-      "from_sku": "У1515",
-      "relation": "shared_photo_full",
-      "to_sku": "ЮП-009",
-      "status": "confirmed",
-      "source": "storage:sha256",
-      "note": "802ed9c37292"
-    },
-    {
-      "from_sku": "ЮП-009",
-      "relation": "shared_photo_full",
-      "to_sku": "У1515",
-      "status": "confirmed",
-      "source": "storage:sha256",
-      "note": "802ed9c37292"
-    },
-    {
       "from_sku": "1010",
       "relation": "shared_photo_full",
       "to_sku": "1515",
@@ -35473,54 +36555,6 @@
       "status": "confirmed",
       "source": "storage:sha256",
       "note": "f763d9089ce9"
-    },
-    {
-      "from_sku": "1212",
-      "relation": "shared_photo_full",
-      "to_sku": "У4040",
-      "status": "confirmed",
-      "source": "storage:sha256",
-      "note": "d44909619876"
-    },
-    {
-      "from_sku": "У4040",
-      "relation": "shared_photo_full",
-      "to_sku": "1212",
-      "status": "confirmed",
-      "source": "storage:sha256",
-      "note": "d44909619876"
-    },
-    {
-      "from_sku": "1212",
-      "relation": "shared_photo_full",
-      "to_sku": "У5050",
-      "status": "confirmed",
-      "source": "storage:sha256",
-      "note": "d44909619876"
-    },
-    {
-      "from_sku": "У5050",
-      "relation": "shared_photo_full",
-      "to_sku": "1212",
-      "status": "confirmed",
-      "source": "storage:sha256",
-      "note": "d44909619876"
-    },
-    {
-      "from_sku": "У4040",
-      "relation": "shared_photo_full",
-      "to_sku": "У5050",
-      "status": "confirmed",
-      "source": "storage:sha256",
-      "note": "d44909619876"
-    },
-    {
-      "from_sku": "У5050",
-      "relation": "shared_photo_full",
-      "to_sku": "У4040",
-      "status": "confirmed",
-      "source": "storage:sha256",
-      "note": "d44909619876"
     },
     {
       "from_sku": "228",
@@ -35528,7 +36562,7 @@
       "to_sku": "229",
       "status": "confirmed",
       "source": "storage:sha256",
-      "note": "9a0a8fc9984c"
+      "note": "4c939e7edf77"
     },
     {
       "from_sku": "229",
@@ -35536,7 +36570,7 @@
       "to_sku": "228",
       "status": "confirmed",
       "source": "storage:sha256",
-      "note": "9a0a8fc9984c"
+      "note": "4c939e7edf77"
     },
     {
       "from_sku": "361",
@@ -35544,7 +36578,7 @@
       "to_sku": "362",
       "status": "confirmed",
       "source": "storage:sha256",
-      "note": "2bf7effe26b0"
+      "note": "8bc8fdc1288a"
     },
     {
       "from_sku": "362",
@@ -35552,7 +36586,7 @@
       "to_sku": "361",
       "status": "confirmed",
       "source": "storage:sha256",
-      "note": "2bf7effe26b0"
+      "note": "8bc8fdc1288a"
     },
     {
       "from_sku": "517",
@@ -35715,12 +36749,652 @@
       "note": "c968cead27a3"
     },
     {
+      "from_sku": "У1010",
+      "relation": "shared_photo_full",
+      "to_sku": "У1212",
+      "status": "confirmed",
+      "source": "storage:sha256",
+      "note": "77807d4bdc94"
+    },
+    {
+      "from_sku": "У1212",
+      "relation": "shared_photo_full",
+      "to_sku": "У1010",
+      "status": "confirmed",
+      "source": "storage:sha256",
+      "note": "77807d4bdc94"
+    },
+    {
+      "from_sku": "У1010",
+      "relation": "shared_photo_full",
+      "to_sku": "У1515",
+      "status": "confirmed",
+      "source": "storage:sha256",
+      "note": "77807d4bdc94"
+    },
+    {
+      "from_sku": "У1515",
+      "relation": "shared_photo_full",
+      "to_sku": "У1010",
+      "status": "confirmed",
+      "source": "storage:sha256",
+      "note": "77807d4bdc94"
+    },
+    {
+      "from_sku": "У1010",
+      "relation": "shared_photo_full",
+      "to_sku": "У2020",
+      "status": "confirmed",
+      "source": "storage:sha256",
+      "note": "77807d4bdc94"
+    },
+    {
+      "from_sku": "У2020",
+      "relation": "shared_photo_full",
+      "to_sku": "У1010",
+      "status": "confirmed",
+      "source": "storage:sha256",
+      "note": "77807d4bdc94"
+    },
+    {
+      "from_sku": "У1010",
+      "relation": "shared_photo_full",
+      "to_sku": "У2525",
+      "status": "confirmed",
+      "source": "storage:sha256",
+      "note": "77807d4bdc94"
+    },
+    {
+      "from_sku": "У2525",
+      "relation": "shared_photo_full",
+      "to_sku": "У1010",
+      "status": "confirmed",
+      "source": "storage:sha256",
+      "note": "77807d4bdc94"
+    },
+    {
+      "from_sku": "У1010",
+      "relation": "shared_photo_full",
+      "to_sku": "У3030",
+      "status": "confirmed",
+      "source": "storage:sha256",
+      "note": "77807d4bdc94"
+    },
+    {
+      "from_sku": "У3030",
+      "relation": "shared_photo_full",
+      "to_sku": "У1010",
+      "status": "confirmed",
+      "source": "storage:sha256",
+      "note": "77807d4bdc94"
+    },
+    {
+      "from_sku": "У1010",
+      "relation": "shared_photo_full",
+      "to_sku": "У4020",
+      "status": "confirmed",
+      "source": "storage:sha256",
+      "note": "77807d4bdc94"
+    },
+    {
+      "from_sku": "У4020",
+      "relation": "shared_photo_full",
+      "to_sku": "У1010",
+      "status": "confirmed",
+      "source": "storage:sha256",
+      "note": "77807d4bdc94"
+    },
+    {
+      "from_sku": "У1010",
+      "relation": "shared_photo_full",
+      "to_sku": "У4040",
+      "status": "confirmed",
+      "source": "storage:sha256",
+      "note": "77807d4bdc94"
+    },
+    {
+      "from_sku": "У4040",
+      "relation": "shared_photo_full",
+      "to_sku": "У1010",
+      "status": "confirmed",
+      "source": "storage:sha256",
+      "note": "77807d4bdc94"
+    },
+    {
+      "from_sku": "У1010",
+      "relation": "shared_photo_full",
+      "to_sku": "У5030",
+      "status": "confirmed",
+      "source": "storage:sha256",
+      "note": "77807d4bdc94"
+    },
+    {
+      "from_sku": "У5030",
+      "relation": "shared_photo_full",
+      "to_sku": "У1010",
+      "status": "confirmed",
+      "source": "storage:sha256",
+      "note": "77807d4bdc94"
+    },
+    {
+      "from_sku": "У1010",
+      "relation": "shared_photo_full",
+      "to_sku": "У5050",
+      "status": "confirmed",
+      "source": "storage:sha256",
+      "note": "77807d4bdc94"
+    },
+    {
+      "from_sku": "У5050",
+      "relation": "shared_photo_full",
+      "to_sku": "У1010",
+      "status": "confirmed",
+      "source": "storage:sha256",
+      "note": "77807d4bdc94"
+    },
+    {
+      "from_sku": "У1212",
+      "relation": "shared_photo_full",
+      "to_sku": "У1515",
+      "status": "confirmed",
+      "source": "storage:sha256",
+      "note": "77807d4bdc94"
+    },
+    {
+      "from_sku": "У1515",
+      "relation": "shared_photo_full",
+      "to_sku": "У1212",
+      "status": "confirmed",
+      "source": "storage:sha256",
+      "note": "77807d4bdc94"
+    },
+    {
+      "from_sku": "У1212",
+      "relation": "shared_photo_full",
+      "to_sku": "У2020",
+      "status": "confirmed",
+      "source": "storage:sha256",
+      "note": "77807d4bdc94"
+    },
+    {
+      "from_sku": "У2020",
+      "relation": "shared_photo_full",
+      "to_sku": "У1212",
+      "status": "confirmed",
+      "source": "storage:sha256",
+      "note": "77807d4bdc94"
+    },
+    {
+      "from_sku": "У1212",
+      "relation": "shared_photo_full",
+      "to_sku": "У2525",
+      "status": "confirmed",
+      "source": "storage:sha256",
+      "note": "77807d4bdc94"
+    },
+    {
+      "from_sku": "У2525",
+      "relation": "shared_photo_full",
+      "to_sku": "У1212",
+      "status": "confirmed",
+      "source": "storage:sha256",
+      "note": "77807d4bdc94"
+    },
+    {
+      "from_sku": "У1212",
+      "relation": "shared_photo_full",
+      "to_sku": "У3030",
+      "status": "confirmed",
+      "source": "storage:sha256",
+      "note": "77807d4bdc94"
+    },
+    {
+      "from_sku": "У3030",
+      "relation": "shared_photo_full",
+      "to_sku": "У1212",
+      "status": "confirmed",
+      "source": "storage:sha256",
+      "note": "77807d4bdc94"
+    },
+    {
+      "from_sku": "У1212",
+      "relation": "shared_photo_full",
+      "to_sku": "У4020",
+      "status": "confirmed",
+      "source": "storage:sha256",
+      "note": "77807d4bdc94"
+    },
+    {
+      "from_sku": "У4020",
+      "relation": "shared_photo_full",
+      "to_sku": "У1212",
+      "status": "confirmed",
+      "source": "storage:sha256",
+      "note": "77807d4bdc94"
+    },
+    {
+      "from_sku": "У1212",
+      "relation": "shared_photo_full",
+      "to_sku": "У4040",
+      "status": "confirmed",
+      "source": "storage:sha256",
+      "note": "77807d4bdc94"
+    },
+    {
+      "from_sku": "У4040",
+      "relation": "shared_photo_full",
+      "to_sku": "У1212",
+      "status": "confirmed",
+      "source": "storage:sha256",
+      "note": "77807d4bdc94"
+    },
+    {
+      "from_sku": "У1212",
+      "relation": "shared_photo_full",
+      "to_sku": "У5030",
+      "status": "confirmed",
+      "source": "storage:sha256",
+      "note": "77807d4bdc94"
+    },
+    {
+      "from_sku": "У5030",
+      "relation": "shared_photo_full",
+      "to_sku": "У1212",
+      "status": "confirmed",
+      "source": "storage:sha256",
+      "note": "77807d4bdc94"
+    },
+    {
+      "from_sku": "У1212",
+      "relation": "shared_photo_full",
+      "to_sku": "У5050",
+      "status": "confirmed",
+      "source": "storage:sha256",
+      "note": "77807d4bdc94"
+    },
+    {
+      "from_sku": "У5050",
+      "relation": "shared_photo_full",
+      "to_sku": "У1212",
+      "status": "confirmed",
+      "source": "storage:sha256",
+      "note": "77807d4bdc94"
+    },
+    {
+      "from_sku": "У1515",
+      "relation": "shared_photo_full",
+      "to_sku": "У2020",
+      "status": "confirmed",
+      "source": "storage:sha256",
+      "note": "77807d4bdc94"
+    },
+    {
+      "from_sku": "У2020",
+      "relation": "shared_photo_full",
+      "to_sku": "У1515",
+      "status": "confirmed",
+      "source": "storage:sha256",
+      "note": "77807d4bdc94"
+    },
+    {
+      "from_sku": "У1515",
+      "relation": "shared_photo_full",
+      "to_sku": "У2525",
+      "status": "confirmed",
+      "source": "storage:sha256",
+      "note": "77807d4bdc94"
+    },
+    {
+      "from_sku": "У2525",
+      "relation": "shared_photo_full",
+      "to_sku": "У1515",
+      "status": "confirmed",
+      "source": "storage:sha256",
+      "note": "77807d4bdc94"
+    },
+    {
+      "from_sku": "У1515",
+      "relation": "shared_photo_full",
+      "to_sku": "У3030",
+      "status": "confirmed",
+      "source": "storage:sha256",
+      "note": "77807d4bdc94"
+    },
+    {
+      "from_sku": "У3030",
+      "relation": "shared_photo_full",
+      "to_sku": "У1515",
+      "status": "confirmed",
+      "source": "storage:sha256",
+      "note": "77807d4bdc94"
+    },
+    {
+      "from_sku": "У1515",
+      "relation": "shared_photo_full",
+      "to_sku": "У4020",
+      "status": "confirmed",
+      "source": "storage:sha256",
+      "note": "77807d4bdc94"
+    },
+    {
+      "from_sku": "У4020",
+      "relation": "shared_photo_full",
+      "to_sku": "У1515",
+      "status": "confirmed",
+      "source": "storage:sha256",
+      "note": "77807d4bdc94"
+    },
+    {
+      "from_sku": "У1515",
+      "relation": "shared_photo_full",
+      "to_sku": "У4040",
+      "status": "confirmed",
+      "source": "storage:sha256",
+      "note": "77807d4bdc94"
+    },
+    {
+      "from_sku": "У4040",
+      "relation": "shared_photo_full",
+      "to_sku": "У1515",
+      "status": "confirmed",
+      "source": "storage:sha256",
+      "note": "77807d4bdc94"
+    },
+    {
+      "from_sku": "У1515",
+      "relation": "shared_photo_full",
+      "to_sku": "У5030",
+      "status": "confirmed",
+      "source": "storage:sha256",
+      "note": "77807d4bdc94"
+    },
+    {
+      "from_sku": "У5030",
+      "relation": "shared_photo_full",
+      "to_sku": "У1515",
+      "status": "confirmed",
+      "source": "storage:sha256",
+      "note": "77807d4bdc94"
+    },
+    {
+      "from_sku": "У1515",
+      "relation": "shared_photo_full",
+      "to_sku": "У5050",
+      "status": "confirmed",
+      "source": "storage:sha256",
+      "note": "77807d4bdc94"
+    },
+    {
+      "from_sku": "У5050",
+      "relation": "shared_photo_full",
+      "to_sku": "У1515",
+      "status": "confirmed",
+      "source": "storage:sha256",
+      "note": "77807d4bdc94"
+    },
+    {
+      "from_sku": "У2020",
+      "relation": "shared_photo_full",
+      "to_sku": "У2525",
+      "status": "confirmed",
+      "source": "storage:sha256",
+      "note": "77807d4bdc94"
+    },
+    {
+      "from_sku": "У2525",
+      "relation": "shared_photo_full",
+      "to_sku": "У2020",
+      "status": "confirmed",
+      "source": "storage:sha256",
+      "note": "77807d4bdc94"
+    },
+    {
+      "from_sku": "У2020",
+      "relation": "shared_photo_full",
+      "to_sku": "У3030",
+      "status": "confirmed",
+      "source": "storage:sha256",
+      "note": "77807d4bdc94"
+    },
+    {
+      "from_sku": "У3030",
+      "relation": "shared_photo_full",
+      "to_sku": "У2020",
+      "status": "confirmed",
+      "source": "storage:sha256",
+      "note": "77807d4bdc94"
+    },
+    {
+      "from_sku": "У2020",
+      "relation": "shared_photo_full",
+      "to_sku": "У4020",
+      "status": "confirmed",
+      "source": "storage:sha256",
+      "note": "77807d4bdc94"
+    },
+    {
+      "from_sku": "У4020",
+      "relation": "shared_photo_full",
+      "to_sku": "У2020",
+      "status": "confirmed",
+      "source": "storage:sha256",
+      "note": "77807d4bdc94"
+    },
+    {
+      "from_sku": "У2020",
+      "relation": "shared_photo_full",
+      "to_sku": "У4040",
+      "status": "confirmed",
+      "source": "storage:sha256",
+      "note": "77807d4bdc94"
+    },
+    {
+      "from_sku": "У4040",
+      "relation": "shared_photo_full",
+      "to_sku": "У2020",
+      "status": "confirmed",
+      "source": "storage:sha256",
+      "note": "77807d4bdc94"
+    },
+    {
+      "from_sku": "У2020",
+      "relation": "shared_photo_full",
+      "to_sku": "У5030",
+      "status": "confirmed",
+      "source": "storage:sha256",
+      "note": "77807d4bdc94"
+    },
+    {
+      "from_sku": "У5030",
+      "relation": "shared_photo_full",
+      "to_sku": "У2020",
+      "status": "confirmed",
+      "source": "storage:sha256",
+      "note": "77807d4bdc94"
+    },
+    {
+      "from_sku": "У2020",
+      "relation": "shared_photo_full",
+      "to_sku": "У5050",
+      "status": "confirmed",
+      "source": "storage:sha256",
+      "note": "77807d4bdc94"
+    },
+    {
+      "from_sku": "У5050",
+      "relation": "shared_photo_full",
+      "to_sku": "У2020",
+      "status": "confirmed",
+      "source": "storage:sha256",
+      "note": "77807d4bdc94"
+    },
+    {
+      "from_sku": "У2525",
+      "relation": "shared_photo_full",
+      "to_sku": "У3030",
+      "status": "confirmed",
+      "source": "storage:sha256",
+      "note": "77807d4bdc94"
+    },
+    {
+      "from_sku": "У3030",
+      "relation": "shared_photo_full",
+      "to_sku": "У2525",
+      "status": "confirmed",
+      "source": "storage:sha256",
+      "note": "77807d4bdc94"
+    },
+    {
+      "from_sku": "У2525",
+      "relation": "shared_photo_full",
+      "to_sku": "У4020",
+      "status": "confirmed",
+      "source": "storage:sha256",
+      "note": "77807d4bdc94"
+    },
+    {
+      "from_sku": "У4020",
+      "relation": "shared_photo_full",
+      "to_sku": "У2525",
+      "status": "confirmed",
+      "source": "storage:sha256",
+      "note": "77807d4bdc94"
+    },
+    {
+      "from_sku": "У2525",
+      "relation": "shared_photo_full",
+      "to_sku": "У4040",
+      "status": "confirmed",
+      "source": "storage:sha256",
+      "note": "77807d4bdc94"
+    },
+    {
+      "from_sku": "У4040",
+      "relation": "shared_photo_full",
+      "to_sku": "У2525",
+      "status": "confirmed",
+      "source": "storage:sha256",
+      "note": "77807d4bdc94"
+    },
+    {
+      "from_sku": "У2525",
+      "relation": "shared_photo_full",
+      "to_sku": "У5030",
+      "status": "confirmed",
+      "source": "storage:sha256",
+      "note": "77807d4bdc94"
+    },
+    {
+      "from_sku": "У5030",
+      "relation": "shared_photo_full",
+      "to_sku": "У2525",
+      "status": "confirmed",
+      "source": "storage:sha256",
+      "note": "77807d4bdc94"
+    },
+    {
+      "from_sku": "У2525",
+      "relation": "shared_photo_full",
+      "to_sku": "У5050",
+      "status": "confirmed",
+      "source": "storage:sha256",
+      "note": "77807d4bdc94"
+    },
+    {
+      "from_sku": "У5050",
+      "relation": "shared_photo_full",
+      "to_sku": "У2525",
+      "status": "confirmed",
+      "source": "storage:sha256",
+      "note": "77807d4bdc94"
+    },
+    {
+      "from_sku": "У3030",
+      "relation": "shared_photo_full",
+      "to_sku": "У4020",
+      "status": "confirmed",
+      "source": "storage:sha256",
+      "note": "77807d4bdc94"
+    },
+    {
+      "from_sku": "У4020",
+      "relation": "shared_photo_full",
+      "to_sku": "У3030",
+      "status": "confirmed",
+      "source": "storage:sha256",
+      "note": "77807d4bdc94"
+    },
+    {
+      "from_sku": "У3030",
+      "relation": "shared_photo_full",
+      "to_sku": "У4040",
+      "status": "confirmed",
+      "source": "storage:sha256",
+      "note": "77807d4bdc94"
+    },
+    {
+      "from_sku": "У4040",
+      "relation": "shared_photo_full",
+      "to_sku": "У3030",
+      "status": "confirmed",
+      "source": "storage:sha256",
+      "note": "77807d4bdc94"
+    },
+    {
+      "from_sku": "У3030",
+      "relation": "shared_photo_full",
+      "to_sku": "У5030",
+      "status": "confirmed",
+      "source": "storage:sha256",
+      "note": "77807d4bdc94"
+    },
+    {
+      "from_sku": "У5030",
+      "relation": "shared_photo_full",
+      "to_sku": "У3030",
+      "status": "confirmed",
+      "source": "storage:sha256",
+      "note": "77807d4bdc94"
+    },
+    {
+      "from_sku": "У3030",
+      "relation": "shared_photo_full",
+      "to_sku": "У5050",
+      "status": "confirmed",
+      "source": "storage:sha256",
+      "note": "77807d4bdc94"
+    },
+    {
+      "from_sku": "У5050",
+      "relation": "shared_photo_full",
+      "to_sku": "У3030",
+      "status": "confirmed",
+      "source": "storage:sha256",
+      "note": "77807d4bdc94"
+    },
+    {
+      "from_sku": "У4020",
+      "relation": "shared_photo_full",
+      "to_sku": "У4040",
+      "status": "confirmed",
+      "source": "storage:sha256",
+      "note": "77807d4bdc94"
+    },
+    {
+      "from_sku": "У4040",
+      "relation": "shared_photo_full",
+      "to_sku": "У4020",
+      "status": "confirmed",
+      "source": "storage:sha256",
+      "note": "77807d4bdc94"
+    },
+    {
       "from_sku": "У4020",
       "relation": "shared_photo_full",
       "to_sku": "У5030",
       "status": "confirmed",
       "source": "storage:sha256",
-      "note": "7e816ebd5430"
+      "note": "77807d4bdc94"
     },
     {
       "from_sku": "У5030",
@@ -35728,23 +37402,135 @@
       "to_sku": "У4020",
       "status": "confirmed",
       "source": "storage:sha256",
-      "note": "7e816ebd5430"
+      "note": "77807d4bdc94"
+    },
+    {
+      "from_sku": "У4020",
+      "relation": "shared_photo_full",
+      "to_sku": "У5050",
+      "status": "confirmed",
+      "source": "storage:sha256",
+      "note": "77807d4bdc94"
+    },
+    {
+      "from_sku": "У5050",
+      "relation": "shared_photo_full",
+      "to_sku": "У4020",
+      "status": "confirmed",
+      "source": "storage:sha256",
+      "note": "77807d4bdc94"
+    },
+    {
+      "from_sku": "У4040",
+      "relation": "shared_photo_full",
+      "to_sku": "У5030",
+      "status": "confirmed",
+      "source": "storage:sha256",
+      "note": "77807d4bdc94"
+    },
+    {
+      "from_sku": "У5030",
+      "relation": "shared_photo_full",
+      "to_sku": "У4040",
+      "status": "confirmed",
+      "source": "storage:sha256",
+      "note": "77807d4bdc94"
+    },
+    {
+      "from_sku": "У4040",
+      "relation": "shared_photo_full",
+      "to_sku": "У5050",
+      "status": "confirmed",
+      "source": "storage:sha256",
+      "note": "77807d4bdc94"
+    },
+    {
+      "from_sku": "У5050",
+      "relation": "shared_photo_full",
+      "to_sku": "У4040",
+      "status": "confirmed",
+      "source": "storage:sha256",
+      "note": "77807d4bdc94"
+    },
+    {
+      "from_sku": "У5030",
+      "relation": "shared_photo_full",
+      "to_sku": "У5050",
+      "status": "confirmed",
+      "source": "storage:sha256",
+      "note": "77807d4bdc94"
+    },
+    {
+      "from_sku": "У5050",
+      "relation": "shared_photo_full",
+      "to_sku": "У5030",
+      "status": "confirmed",
+      "source": "storage:sha256",
+      "note": "77807d4bdc94"
+    },
+    {
+      "from_sku": "ПТ40",
+      "relation": "shared_photo_full",
+      "to_sku": "ПТ60",
+      "status": "confirmed",
+      "source": "storage:sha256",
+      "note": "3eca25d3c716"
+    },
+    {
+      "from_sku": "ПТ60",
+      "relation": "shared_photo_full",
+      "to_sku": "ПТ40",
+      "status": "confirmed",
+      "source": "storage:sha256",
+      "note": "3eca25d3c716"
     },
     {
       "from_sku": "318",
       "relation": "shared_photo_full",
-      "to_sku": "ЮП-2387",
+      "to_sku": "324",
       "status": "confirmed",
       "source": "storage:sha256",
-      "note": "48af44ac3942"
+      "note": "6bc3fb58b291"
     },
     {
-      "from_sku": "ЮП-2387",
+      "from_sku": "324",
       "relation": "shared_photo_full",
       "to_sku": "318",
       "status": "confirmed",
       "source": "storage:sha256",
-      "note": "48af44ac3942"
+      "note": "6bc3fb58b291"
+    },
+    {
+      "from_sku": "318",
+      "relation": "shared_photo_full",
+      "to_sku": "325",
+      "status": "confirmed",
+      "source": "storage:sha256",
+      "note": "6bc3fb58b291"
+    },
+    {
+      "from_sku": "325",
+      "relation": "shared_photo_full",
+      "to_sku": "318",
+      "status": "confirmed",
+      "source": "storage:sha256",
+      "note": "6bc3fb58b291"
+    },
+    {
+      "from_sku": "324",
+      "relation": "shared_photo_full",
+      "to_sku": "325",
+      "status": "confirmed",
+      "source": "storage:sha256",
+      "note": "6bc3fb58b291"
+    },
+    {
+      "from_sku": "325",
+      "relation": "shared_photo_full",
+      "to_sku": "324",
+      "status": "confirmed",
+      "source": "storage:sha256",
+      "note": "6bc3fb58b291"
     },
     {
       "from_sku": "АТ-4893",
@@ -35763,68 +37549,20 @@
       "note": "2800522983fa"
     },
     {
-      "from_sku": "У2020",
+      "from_sku": "480",
       "relation": "shared_photo_thumb",
-      "to_sku": "ЮП-011",
+      "to_sku": "ЮП-137",
       "status": "confirmed",
       "source": "storage:sha256",
-      "note": "82ab0a05cb9d"
+      "note": "8e1bde1758a3"
     },
     {
-      "from_sku": "ЮП-011",
+      "from_sku": "ЮП-137",
       "relation": "shared_photo_thumb",
-      "to_sku": "У2020",
+      "to_sku": "480",
       "status": "confirmed",
       "source": "storage:sha256",
-      "note": "82ab0a05cb9d"
-    },
-    {
-      "from_sku": "У1010",
-      "relation": "shared_photo_thumb",
-      "to_sku": "ЮП-1401",
-      "status": "confirmed",
-      "source": "storage:sha256",
-      "note": "8eec565b9332"
-    },
-    {
-      "from_sku": "ЮП-1401",
-      "relation": "shared_photo_thumb",
-      "to_sku": "У1010",
-      "status": "confirmed",
-      "source": "storage:sha256",
-      "note": "8eec565b9332"
-    },
-    {
-      "from_sku": "У3030",
-      "relation": "shared_photo_thumb",
-      "to_sku": "ЮП-1629",
-      "status": "confirmed",
-      "source": "storage:sha256",
-      "note": "ef2d382f80eb"
-    },
-    {
-      "from_sku": "ЮП-1629",
-      "relation": "shared_photo_thumb",
-      "to_sku": "У3030",
-      "status": "confirmed",
-      "source": "storage:sha256",
-      "note": "ef2d382f80eb"
-    },
-    {
-      "from_sku": "10",
-      "relation": "shared_photo_thumb",
-      "to_sku": "ЮП-1767",
-      "status": "confirmed",
-      "source": "storage:sha256",
-      "note": "00f406f678ac"
-    },
-    {
-      "from_sku": "ЮП-1767",
-      "relation": "shared_photo_thumb",
-      "to_sku": "10",
-      "status": "confirmed",
-      "source": "storage:sha256",
-      "note": "00f406f678ac"
+      "note": "8e1bde1758a3"
     },
     {
       "from_sku": "ЮП-1875",
@@ -35843,22 +37581,6 @@
       "note": "47bf4e2dabed"
     },
     {
-      "from_sku": "У2525",
-      "relation": "shared_photo_thumb",
-      "to_sku": "ЮП-2004",
-      "status": "confirmed",
-      "source": "storage:sha256",
-      "note": "7431ad0e2eb3"
-    },
-    {
-      "from_sku": "ЮП-2004",
-      "relation": "shared_photo_thumb",
-      "to_sku": "У2525",
-      "status": "confirmed",
-      "source": "storage:sha256",
-      "note": "7431ad0e2eb3"
-    },
-    {
       "from_sku": "ПП37",
       "relation": "shared_photo_thumb",
       "to_sku": "ЮП-2413",
@@ -35873,22 +37595,6 @@
       "status": "confirmed",
       "source": "storage:sha256",
       "note": "86eb2d24d8cd"
-    },
-    {
-      "from_sku": "100",
-      "relation": "shared_photo_thumb",
-      "to_sku": "ЮП-2901",
-      "status": "confirmed",
-      "source": "storage:sha256",
-      "note": "d6fcaff589d4"
-    },
-    {
-      "from_sku": "ЮП-2901",
-      "relation": "shared_photo_thumb",
-      "to_sku": "100",
-      "status": "confirmed",
-      "source": "storage:sha256",
-      "note": "d6fcaff589d4"
     },
     {
       "from_sku": "ЮП-2910",
@@ -35907,22 +37613,6 @@
       "note": "d3d259269b7e"
     },
     {
-      "from_sku": "150",
-      "relation": "shared_photo_thumb",
-      "to_sku": "ЮП-3168",
-      "status": "confirmed",
-      "source": "storage:sha256",
-      "note": "abd107daeaf0"
-    },
-    {
-      "from_sku": "ЮП-3168",
-      "relation": "shared_photo_thumb",
-      "to_sku": "150",
-      "status": "confirmed",
-      "source": "storage:sha256",
-      "note": "abd107daeaf0"
-    },
-    {
       "from_sku": "ALS-915",
       "relation": "shared_photo_thumb",
       "to_sku": "ЮП-048",
@@ -35939,52 +37629,20 @@
       "note": "2143749a571d"
     },
     {
-      "from_sku": "У1515",
+      "from_sku": "031",
       "relation": "shared_photo_thumb",
-      "to_sku": "ЮП-009",
+      "to_sku": "80",
       "status": "confirmed",
       "source": "storage:sha256",
-      "note": "cf3d32b11f2e"
+      "note": "f93870a718b4"
     },
     {
-      "from_sku": "ЮП-009",
+      "from_sku": "80",
       "relation": "shared_photo_thumb",
-      "to_sku": "У1515",
+      "to_sku": "031",
       "status": "confirmed",
       "source": "storage:sha256",
-      "note": "cf3d32b11f2e"
-    },
-    {
-      "from_sku": "У4020",
-      "relation": "shared_photo_thumb",
-      "to_sku": "У5030",
-      "status": "confirmed",
-      "source": "storage:sha256",
-      "note": "0bd80322fee2"
-    },
-    {
-      "from_sku": "У5030",
-      "relation": "shared_photo_thumb",
-      "to_sku": "У4020",
-      "status": "confirmed",
-      "source": "storage:sha256",
-      "note": "0bd80322fee2"
-    },
-    {
-      "from_sku": "318",
-      "relation": "shared_photo_thumb",
-      "to_sku": "ЮП-2387",
-      "status": "confirmed",
-      "source": "storage:sha256",
-      "note": "c0e40439ca15"
-    },
-    {
-      "from_sku": "ЮП-2387",
-      "relation": "shared_photo_thumb",
-      "to_sku": "318",
-      "status": "confirmed",
-      "source": "storage:sha256",
-      "note": "c0e40439ca15"
+      "note": "f93870a718b4"
     }
   ],
   "families": [

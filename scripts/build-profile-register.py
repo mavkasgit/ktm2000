@@ -32,7 +32,7 @@ from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[1]
 DOCS = ROOT / "docs" / "catalog"
-AUDIT = ROOT / "data" / "tmp" / "poster-photos" / "audit"
+AUDIT = ROOT / "assets" / "catalog-audit"
 AUDIT_INPUTS = (
     AUDIT / "dimensions" / "dimensions-reconciled.csv",
     AUDIT / "decisions-applied.csv",
@@ -127,9 +127,10 @@ def read_csv(path: Path) -> list[dict]:
 def missing_audit_inputs() -> list[str]:
     """Пути аудита, без которых реестр собирается без доказательств.
 
-    Аудит живёт в `data/` (gitignore) и на чистом клоне отсутствует. Скрипт
-    без него не падает, а молча считает размеры/фото/классификацию пустыми —
-    и реестр теряет уверенность (100% → 0). Поэтому проверяем входы до сборки.
+    Аудит — единственный источник уверенности в размерах и фото, он лежит в
+    git (`assets/catalog-audit`, см. README). Без него скрипт не падает, а молча
+    считает размеры/фото/классификацию пустыми — и реестр теряет уверенность
+    (100% → 0). Поэтому проверяем входы до сборки.
     """
     missing = [path.relative_to(ROOT).as_posix() for path in AUDIT_INPUTS if not path.is_file()]
     if not any(AUDIT.glob(AUDIT_GROUPS_GLOB)):
@@ -1507,8 +1508,8 @@ def main() -> int:
             "Аудит фото/чертежей не найден — без него реестр теряет уверенность "
             "(размеры, фото и классификация остаются без доказательств).\n"
             "  нет: " + ", ".join(missing_audit) + "\n"
-            "  каталог data/tmp/poster-photos/audit не в git: восстановите его "
-            "и повторите сборку.",
+            "  входы аудита живут в assets/catalog-audit (см. README): восстановите "
+            "их и повторите сборку.",
             file=sys.stderr,
         )
         return 2
