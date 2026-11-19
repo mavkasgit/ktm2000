@@ -10,6 +10,7 @@ from sqlalchemy.orm import selectinload
 
 from app.api.deps import (
     READER_ROLES,
+    SKIP_STAGE_ROLES,
     TRANSFER_WRITER_ROLES,
     WRITER_ROLES,
     _ensure_section_lock,
@@ -23,15 +24,19 @@ from app.core.database import get_db
 # Единый словарь стратегий недостачи (#134) — канон в домене, route-enum
 # удалён; FastAPI декодирует wire-строку прямо в ShortageStrategy.
 from app.domain.shortage import DEFAULT_SHORTAGE_STRATEGY, ShortageStrategy
+from app.models.audit_log import AuditAction, AuditEntityType
 from app.models.defect import DefectDecisionType
 from app.models.entity_comment import EntityType
-from app.models.route import SectionOperation
+from app.models.product import Product
+from app.models.route import RouteStage, SectionOperation
+from app.models.section import Section
 from app.models.user import User
 from app.models.work_task import WorkTask
 from app.seeds.canon.dependencies import get_plant_config
 from app.seeds.canon.models import PlantConfig
 from app.services.audit_log_service import log_action
 from app.services.shopfloor.common import _require_mutable_task
+from app.services.shopfloor.operations_skipped import skip_stage
 from app.services.shopfloor.operations_tasks import return_remainder_to_stock
 from app.services.shopfloor_service import (
     BOARD_COLUMN_VALUE_FIELDS,
@@ -283,6 +288,109 @@ async def complete_task_endpoint(
         return res
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+
+class SkipStagePayload(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    reason: str
+
+
+@router.post(
+    "/tasks/{task_id}/skip",
+    dependencies=[Depends(require_role(list(SKIP_STAGE_ROLES)))],
+)
+async def skip_task_endpoint(
+    task_id: int,
+    payload: SkipStagePayload,
+    db: AsyncSession = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+    locked_section_id: int | None = Depends(get_single_window_locked_section_id),
+) -> dict:
+    """Закрыть этап знаком «Пропущено» с обязательной причиной (#348).
+
+    Механика — существующий ``skip_stage`` (#207): статус ``skipped`` с
+    причиной и без проводок ledger, поэтому отчёты видят пропуск как
+    пропуск, а не как обычное завершение. Ручка добавляет то, чего у
+    сервиса не было: право (admin и section_manager), обязательную причину
+    и запись в журнал аудита — кто, какое задание/этап, когда и зачем.
+
+    ``operator`` не может пропустить этап: его кнопка «Завершить» пишет
+    настоящие факты, а пропуск — решение старшего участка.
+    """
+    await _ensure_task_lock(db, task_id, locked_section_id, current_user)
+    task = await db.get(WorkTask, task_id)
+    if task is None:
+        raise HTTPException(status_code=404, detail="Задача не найдена")
+
+    reason = payload.reason.strip()
+    if not reason:
+        raise HTTPException(status_code=400, detail="Пропуск этапа требует причины")
+
+    before_status = task.status.value
+    try:
+        skipped = await skip_stage(
+            db,
+            section_plan_line_id=task.section_plan_line_id,
+            reason=reason,
+            task_id=task.id,
+        )
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+    section = await db.get(Section, task.section_id)
+    product = await db.get(Product, task.product_id)
+    # Явный `selectinload`: у `RouteStage.operations` ленивый селект не должен
+    # случиться в async-контексте, где `db.get` отдаёт просроченный объект.
+    route_stage = await db.scalar(
+        select(RouteStage)
+        .where(RouteStage.id == task.route_stage_id)
+        .options(selectinload(RouteStage.operations))
+    )
+    op_name = (
+        ", ".join(op.operation_name for op in route_stage.operations)
+        if route_stage and route_stage.operations
+        else "Операция"
+    )
+    section_info = f'на участке "{section.name}" ({section.code})' if section else ""
+    task_info = (
+        f'для операции "{op_name}" (арт. {product.sku})'
+        if product
+        else f"#{task.id}"
+    )
+
+    await log_action(
+        db,
+        status="success",
+        title="Этап пропущен",
+        message=(
+            f"Этап {task_info} {section_info} помечен «Пропущено». "
+            f'Причина: "{reason}"'
+        ),
+        user=current_user,
+        section_id=task.section_id,
+        section_name=section.name if section else None,
+        section_code=section.code if section else None,
+        task_ids=[task.id],
+        product_sku=product.sku if product else None,
+        operation_name=op_name if route_stage else None,
+        comment=reason,
+        action=AuditAction.SKIP,
+        entity_type=AuditEntityType.WORK_TASK,
+        entity_id=task.id,
+        changes={
+            "before": {"status": before_status},
+            "after": {"status": skipped.status.value, "skip_reason": reason},
+        },
+    )
+    # Коммит до ответа: клиент сразу перечитывает доску (#348), а коммит
+    # зависимости `get_db` случается уже после отправки ответа.
+    await db.commit()
+
+    return {
+        "task_id": skipped.id,
+        "status": skipped.status.value,
+        "skip_reason": skipped.skip_reason,
+    }
 
 
 # --- Bulk action endpoints (savepoint-isolated) -----------------------------

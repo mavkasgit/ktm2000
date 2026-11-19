@@ -9,6 +9,12 @@ export const POLICIES = {
    * поэтому это подсказка интерфейса, а не единственная защита.
    */
   rollbackImport: (role?: string) => role === "admin",
+  /**
+   * Ручной пропуск этапа — зеркало `SKIP_STAGE_ROLES` (backend, #348).
+   * Оператор пишет настоящие факты, а знак «Пропущено» — решение старшего
+   * участка; viewer и transporter этапами не занимаются вовсе.
+   */
+  skipStage: (role?: string) => role === "admin" || role === "section_manager",
   editSettings: (role?: string) => role === "admin",
   /**
    * Мутации плана — зеркало `PLAN_WRITER_ROLES` (backend, ADR-0057): разделы
