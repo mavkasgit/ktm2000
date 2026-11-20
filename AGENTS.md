@@ -147,13 +147,39 @@ backend-профиль и скрипты профилей. Сверка — `npm
 - Отладка без изоляции (serial, общая статичная БД, только отладка): `cd backend && python -m pytest tests/test_shopfloor_api.py::test_name -v`.
 - `test:db:down` из тестовых launcher'ов не использовать.
 
+## Локальный гейт — источник правды
+
+GitHub Actions — фоновый второй взгляд. Готовность изменения определяет локальный
+гейт: `pre-commit` по staged-файлам и умный `pre-push`
+([`scripts/ci/pre-push-gate.mjs`](scripts/ci/pre-push-gate.mjs)). Branch protection
+`main` больше не требует PR и required checks — только запрет force-push и удаления.
+
+- `pre-commit`: ruff, eslint, docs-links, guard-tree по staged-файлам.
+- `pre-push`: `git diff origin/main...HEAD` → скоуп `docs` / `backend` / `frontend` /
+  `full`; запускаются только шаги этого скоупа через
+  `npm run gate -- --only=… --strict`. Неизвестный путь, конфиги, обе зоны и
+  отсутствие базы — полный `npm run gate`.
+- **Мелкий фикс:** коммит в `main`, `git push` — pre-push прогоняет затронутый
+  скоуп. Ветка и PR не нужны.
+- **Глубокая работа:** локальная ветка или отдельный worktree; перед merge в
+  `main` — полный `npm run gate -- --strict`, затем merge и push.
+- **Агенту запрещены** `git commit --no-verify`, `git push --no-verify`,
+  `LEFTHOOK=0` и любой обход хуков. Задача не готова, пока exit code гейта не `0`.
+  Красный хук — задача, а не помеха; отключать правило или ослаблять порог нельзя.
+- `e2e` в pre-push не входит: отдельный стенд и слот, запускается
+  `npm run gate:e2e` перед релизом.
+
+Детали, замеры времени и таблица скоупов →
+[`docs/quality/gates.md`](docs/quality/gates.md); хуки и политика пропуска →
+[`docs/quality/hooks.md`](docs/quality/hooks.md).
+
 ## Тяжёлые команды — через семафор `heavy`
 
 `scripts/heavy.mjs` — машинный счётный семафор (контракт [mokevnin/heavy](https://github.com/mokevnin/heavy), реализация на Node: у heavy нет сборок под Windows, и `mise install` на windows-x64 падает). N слотов общие для всех worktree и агентов: команда, которой не досталось слота, ждёт, а не отбирает CPU у соседа.
 
 - Тесты, типы, линтеры и сборки запускать **только через задачи**: `npm run gate`, `npm run test:pytest`, `npm run test:scripts`, `npm run --prefix frontend run typecheck|lint|test|build`. Они уже обёрнуты (включая шаг `ruff` гейта), отдельно `heavy` звать не нужно.
 - Голая тяжёлая команда без задачи — только `node scripts/heavy.mjs -- <команда>` (так же в скриптах и хуках).
-- Хук `pre-push` берёт слот с `--timeout 300 --on-timeout run`: занятая машина замедляет хук, но не валит его. `pre-commit` слот не берёт — там быстрые проверки по staged-файлам.
+- Хук `pre-push` зовёт `scripts/ci/pre-push-gate.mjs`; тяжёлые шаги берут слот `heavy` по отдельности, поэтому на занятой машине push ждёт слот. `pre-commit` слот не берёт — там быстрые проверки по staged-файлам.
 - Кто держит слоты: `node scripts/heavy.mjs --status`. Пул `default` — тесты, типы, линтеры, сборки; стенды Playwright считаются тем же ядром отдельно (`frontend/e2e/run-slots.mjs`, каталог `E2E_SEMAPHORE_DIR`, лимит `E2E_MAX_PARALLEL_RUNS`).
 - Настройки: `HEAVY_SLOTS` (по умолчанию четверть ядер), `HEAVY_DIR`, `HEAVY_POOL` (по умолчанию `default`), `HEAVY_TIMEOUT` (секунды), `HEAVY_ON_TIMEOUT` (`fail`/`run`), `HEAVY_LOG` (JSON-строка на ожидание). Вложенный вызов того же пула видит `HEAVY_HELD` и очередь не берёт; занятый слот называет `HEAVY_SLOT`.
 - В CI (`CI` задан и не равен `0`/`false`; пустая строка — тоже «локальная машина») очередь пропускается.

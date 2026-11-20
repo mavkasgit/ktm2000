@@ -43,8 +43,13 @@ pre-push:
       # а не флаг. `--optional`: в клоне без соседнего `../hrms` проверка
       # пропускается с сообщением, иначе хук блокировал бы любой push.
       run: node scripts/verify-sync.mjs --other ../hrms --baseline scripts/sync-baseline.json --optional
-    gate-fast:
-      # Слот машинного семафора: на занятой машине push подождёт, но хук не
-      # валит — `--on-timeout run` запускает проверку без слота. Хук остаётся
-      # удобством, поэтому отказ ждать (код 75) здесь был бы неправдой.
-      run: node scripts/heavy.mjs --timeout 300 --on-timeout run -- npm run gate:fast
+    local-gate:
+      # Основной гейт KTM. Смотрит `git diff origin/main...HEAD` и запускает
+      # только шаги затронутой зоны: docs -> документация, backend -> pytest,
+      # frontend -> vitest/build, конфиги/обе зоны -> полный `npm run gate`.
+      # Слоты `heavy` берёт сам gate на тяжёлых шагах.
+      #
+      # stdin нужен, чтобы отличить push ветки от push тега/удаления.
+      # Обход (`--no-verify`, `LEFTHOOK=0`) агенту запрещён — AGENTS.md.
+      run: node scripts/ci/pre-push-gate.mjs
+      use_stdin: true
