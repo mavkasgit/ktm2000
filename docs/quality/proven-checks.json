@@ -46,9 +46,9 @@
       "how": "npm run prove-checks -- --heavy (полный прогон)"
     },
     "registry": {
-      "proven_at": "2026-11-03",
+      "proven_at": "2026-11-20",
       "note": "сгенерированный тулчейн поправили руками — сверка с реестром обязана покраснеть",
-      "how": "npm run prove-checks -- --heavy (полный прогон)"
+      "how": "npm run prove-checks -- --only=docs-lint,registry"
     },
     "docs-links": {
       "proven_at": "2026-11-03",
@@ -124,6 +124,11 @@
       "proven_at": "2026-11-18",
       "note": "статический импорт страницы и её элемент в роутере возвращают раздел в начальный пакет — порог обязан покраснеть (#364)",
       "how": "npm run prove-checks -- --only=ci-lint,osv-allowlist,frontend-build"
+    },
+    "docs-lint": {
+      "proven_at": "2026-11-20",
+      "note": "новый Markdown с fence без языка: rumdl отдаёт MD040 и exit 1",
+      "how": "npm run prove-checks -- --only=docs-lint,registry"
     }
   },
   "exempt": {
@@ -131,5 +136,5 @@
     "e2e-smoke": "берёт слот семафора и свой стенд; отдельный ярус gate:e2e, красные ходы — в истории прогонов frontend/e2e",
     "test-hygiene": "сам шаг возвращает 0 при находках (report-only, T-0012) — краснеть не на чем; блокирует ruff F401, см. пробник шага ruff"
   },
-  "updated": "2026-11-18"
+  "updated": "2026-11-20"
 }
