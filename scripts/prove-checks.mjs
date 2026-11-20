@@ -55,6 +55,14 @@ function readRecord() {
 }
 
 /**
+ * Имя мёртвого пакета собирается из кусков сознательно: `check-dev-deps`
+ * сканирует и `scripts/**` (файлы всех источников лежат в одном массиве),
+ * поэтому литерал в этом файле считался бы «использованием», и пробник был бы
+ * зелёным всегда. Проверено 2026-11-20: с литералом шаг возвращал exit 0.
+ */
+const DEAD_PACKAGE = ["_probe374", "mertvyj", "paket"].join("_");
+
+/**
  * `via` — команду шага не выбираем: всегда `gate --only=<шаг>`, чтобы краснел
  * именно гейт. Исключение — шаги, которым нужен strict (warn-only по умолчанию).
  */
@@ -287,11 +295,11 @@ const PROBES = [
       {
         path: "frontend/package.json",
         apply: (doc) => {
-          doc.devDependencies._probe374_mertvyj_paket = "^1.0.0";
+          doc.devDependencies[DEAD_PACKAGE] = "^1.0.0";
         },
       },
     ],
-    expect: /_probe374_mertvyj_paket.*не названы/s,
+    expect: new RegExp(`${DEAD_PACKAGE}.*не названы`, "s"),
     note: "в devDependencies появляется пакет, который никто не зовёт: проверка обязана назвать его и показать охват просмотра",
   },
   {
