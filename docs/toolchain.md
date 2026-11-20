@@ -29,6 +29,7 @@
 | `action-upload-artifact` | actions/upload-artifact (actions/upload-artifact) | `.github/workflows` | `@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2` | ci | нет | 2026-11-18 |
 | `ajv` | Ajv (ajv-validator/ajv) | `package.json` | `^8.20.0` | gate, ci | да | 2026-11-03 |
 | `alembic` | Alembic (sqlalchemy-org/alembic) | `backend/requirements.txt` | `>=1.13.0` | ci, manual | да | 2026-11-03 |
+| `commitlint` | commitlint (conventional-changelog/commitlint) | `mise.toml` | `21.2.4` | commit | да | 2026-11-20 |
 | `concurrently` | concurrently (open-cli-tools/concurrently) | `package.json` | `^10.0.7` | manual | нет | 2026-11-09 |
 | `coverage` | coverage.py (coveragepy/coveragepy) | `backend/requirements-dev.txt` | `7.17.2` | ci | да | 2026-11-09 |
 | `eslint` | ESLint (eslint/eslint) | `frontend/package.json` | `^9.39.5` | gate, ci | да | 2026-11-03 |

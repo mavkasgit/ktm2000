@@ -28,12 +28,12 @@ mise (mise-en-place) — один CLI, который по файлу `mise.toml
 
 ## Принято (шаг 1, коммит `3d1db39c`)
 
-- **`mise.toml` — единственный источник версий всех инструментов.** 18
-  инструментов с точными пинами: node 26.13.0, python 3.14.10, hk 2.11.0, ruff
-  0.16.9, oxlint 1.90.0, oxfmt 0.75.0, knip 6.44.1, dependency-cruiser
-  18.7.1, betterleaks 1.9.0, osv-scanner 2.7.0, hadolint 2.15.1,
-  jactionlint 2.4.0, ast-grep 0.51.1, agnix 0.60.2, typos 1.52.0,
-  lychee 0.24.2, rumdl 0.3.2, shellcheck 0.11.0.
+- **`mise.toml` — единственный источник версий всех инструментов.** 19
+  инструментов с точными пинами: node 26.13.0, python 3.14.10, hk 2.11.0,
+  `npm:@commitlint/cli` 21.2.4, ruff 0.16.9, oxlint 1.90.0, oxfmt 0.75.0, knip
+  6.44.1, dependency-cruiser 18.7.1, betterleaks 1.9.0, osv-scanner 2.7.0,
+  hadolint 2.15.1, jactionlint 2.4.0, ast-grep 0.51.1, agnix 0.60.2, typos
+  1.52.0, lychee 0.24.2, rumdl 0.3.2, shellcheck 0.11.0.
   shellcheck (добавлен в `7ee220e0`) и hadolint закреплены **заранее**, как hk:
   канал доставки готов, шага гейта у них ещё нет — решение по каждому
   принимает тикет, который их включает (строка `shellcheck, hadolint` в
@@ -84,6 +84,7 @@ mise (mise-en-place) — один CLI, который по файлу `mise.toml
 | Зависимости пакетов | npm/pip | не зона mise |
 | Переменные окружения | `.env*` | не зона mise |
 | Git-хуки | lefthook | не зона mise |
+| Правила сообщения коммита | `commitlint.config.mjs`, пин в `mise.toml` (`npm:@commitlint/cli`) | хук `commit-msg` с 2026-11-20 |
 
 ## Шаги переезда
 

@@ -130,6 +130,12 @@ url = "https://nodejs.org/dist/v26.13.0/node-v26.13.0-linux-x64.tar.gz"
 checksum = "sha256:dcc60d59a0746999f99064a01c020445d54d84228c691cdbf25b49ac3b59150a"
 url = "https://nodejs.org/dist/v26.13.0/node-v26.13.0-win-x64.zip"
 
+[[tools."npm:@commitlint/cli"]]
+version = "21.2.4"
+aube = { path = ".mise/locks/npm-commitlint-cli/21.2.4", digest = "sha256:ddf2b1c71b28573a48264663b6c1a50b2d5885c6500158b0220c697cbeb8e4f4" }
+backend = "npm:@commitlint/cli"
+specifiers = ["21.2.4"]
+
 [[tools."npm:dependency-cruiser"]]
 version = "18.7.1"
 aube = { path = ".mise/locks/npm-dependency-cruiser/18.7.1", digest = "sha256:dc3ff2475d233a8dd5f7e55475444e99bc1afc16a244099384cde4ff99bda369" }
