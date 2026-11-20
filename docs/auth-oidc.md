@@ -14,7 +14,7 @@
 
 ## Flow (bridge)
 
-```
+```text
 GET /api/auth/oidc/config → PKCE S256 → Authentik authorize
   → FE /auth/callback?code&state
   → POST /api/auth/oidc/callback {code, code_verifier, redirect_uri}

@@ -4,7 +4,7 @@ FastAPI + SQLAlchemy async + Alembic. Python 3.14+.
 
 ## Структура
 
-```
+```text
 backend/app/
 ├── api/routes/     # Эндпоинты FastAPI
 ├── core/           # Config, database, deps

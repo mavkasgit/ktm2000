@@ -129,7 +129,6 @@
 `073`, прецедент `defects.route_stage_id`). Правкой применённой миграции
 `072` dev- и e2e-БД бы не обновились, поэтому это отдельная ревизия.
 
-
 ## Побочно исправлено
 
 `IMPORT_REMAINDERS_SOURCE_REF = "import_remainders_excel"` во фронте не

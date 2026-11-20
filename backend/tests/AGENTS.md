@@ -156,6 +156,7 @@ ktm_mig_<10 hex>` работает **без** `--force`. Сам `--force` ост
 - **Исключение — миграционные пакеты** (`test_migrations.py`, `test_hanger_norm_key_migration_218.py`): они гоняют alembic на своей базе `ktm_mig_*` и открывают транзакции сами. Это роль `ScratchDatabase` (своя база на проверку), а не изоляция теста.
 - **Не мутируйте module-scope данные** — общие фикстуры `scope="module"` только для чтения.
 - **Integrity helper** — после Transfer/StockTransaction:
+
   ```python
   from tests.test_integrity_invariants import assert_no_invariants_violations
   await assert_no_invariants_violations(session, context="your-context")
