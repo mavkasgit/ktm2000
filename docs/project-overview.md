@@ -40,7 +40,7 @@
 
 ## Дерево каталогов
 
-```
+```text
 ktm2000/
 ├── AGENTS.md              # Bootstrap для AI-агентов
 ├── backend/
@@ -76,6 +76,7 @@ ktm2000/
 | `Defect` | `defects` | Обоснование брака; `stock_transaction_id` FK |
 
 Принципы:
+
 1. Ядро хранит факты, UI — политики.
 2. Баланс = projection из `StockTransaction`.
 3. Append-only: отмена = компенсационная транзакция.

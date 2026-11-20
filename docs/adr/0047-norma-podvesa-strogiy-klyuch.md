@@ -10,7 +10,7 @@ ADR-0024 (заменён ADR-0028), ADR-0046 (дрейф канона)
 В плане у позиции ЮП-3473 (id 190) не показано число подвесов, тогда у
 соседних строк показано. Разбор тем же резолвером, что и на странице плана:
 
-```
+```text
 111 ЮП-2910 len=2700 -> N=62   src=auto
 112 ЮП-3473 len=2700 -> N=None src=None
 113 ALS1103 len=2500 -> N=48   src=auto
@@ -18,7 +18,7 @@ ADR-0024 (заменён ADR-0028), ADR-0046 (дрейф канона)
 
 Данные справочника:
 
-```
+```text
 products.id=190 attributes = {"hanger_mode":"manual",
   "quantity_per_hanger": {"2750": {"auto": null, "manual": 62}}}
 product_lengths: 190 → length_mm=2700, raw_length_mm=2750

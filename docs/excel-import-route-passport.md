@@ -77,11 +77,12 @@
 
 ### 3.3.1 Базовая последовательность (скелет)
 
-```
+```text
 WH → [PRIMARY_OP] → SHOT → ANOD → BRANCH → FG_WH → SHIPMENT → SENT
 ```
 
 Где:
+
 - `[PRIMARY_OP]` — опционально: `DRILL` или `PRESS` (зависит от `operation_code` из Excel)
 - `BRANCH` — зависит от `output_kind`: П/ф → сразу FG_WH, ГП → WIP_WH → SAW → PACK → FG_WH
 
@@ -91,13 +92,13 @@ WH → [PRIMARY_OP] → SHOT → ANOD → BRANCH → FG_WH → SHIPMENT → SENT
 
 **Вариант A: `output_kind=semi_finished_shipment` (П/ф)**
 
-```
+```text
 WH → [PRIMARY_OP] → SHOT → ANOD → FG_WH → SHIPMENT → SENT
 ```
 
 **Вариант B: `output_kind=finished_good` (ГП)**
 
-```
+```text
 WH → [PRIMARY_OP] → SHOT → ANOD → WIP_WH → SAW → PACK → FG_WH → SHIPMENT → SENT
 ```
 

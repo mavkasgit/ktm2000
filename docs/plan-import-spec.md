@@ -65,6 +65,7 @@ Warnings (не блокируют): `paired_hanger_adjusted`,
 ## 4. Изменения pipeline
 
 ### 4.1. Подбор маршрута — межстрочный кэш (ядро, ~1200–2000 SQL → единицы)
+
 - `select_route_for_payload` (`route_selection.py:226`): вынести из построчного цикла
   загрузку правил профиля, таблицы активных маршрутов, join этапов, `_section_id_by_code`,
   `_sections_by_id` — кэш по `profile_id` на время батча. `select_route_cache` оставить как есть.
@@ -74,6 +75,7 @@ Warnings (не блокируют): `paired_hanger_adjusted`,
 - Семантика подбора не меняется; только чтение, один коммит в конце как раньше.
 
 ### 4.2. Apply — bulk (ядро, ~289 flush → 1)
+
 - `apply_change_set` (`production_plan_service.py:95-219`): один flush в конце вместо
   `flush()` на позицию (`:168`, `:215`); закэшировать `db.get(Product)`
   (`plan_validation.py:63`) и `db.get(ProductionRoute)` (`route_matcher.py:213`) по id.
@@ -84,6 +86,7 @@ Warnings (не блокируют): `paired_hanger_adjusted`,
   Дефолтов не менять: UI всегда шлёт явный `skipInvalid` (две кнопки диалога).
 
 ### 4.3. Ответ create — лёгкие строки (вместо пагинации; пагинация отклонена)
+
 - `POST /imports/excel` → 201:
   `summary { total, valid, warning, invalid, duplicates, errors: {код: n} }` (считает сервер),
   `items[]` — лёгкие строки `{ item_id, source_row_numbers, source_sku, source_name, quantity, status, change_action, codes[] }`,
@@ -102,6 +105,7 @@ Warnings (не блокируют): `paired_hanger_adjusted`,
 - Объём цели: ≤ 300 КБ на эталоне.
 
 ### 4.4. Удаление батча — 409 + выбор (§5 контракта #159 Q3)
+
 - `DELETE /production-plans/{p}/batches/{b}`: при живых downstream-данных —
   `409 { code: batch_has_released_positions | downstream_transfers_exist,
   blockers: [{position_id, reason: released | transfer №…}], safe_action: delete_drafts_only, drafts: n }`.
@@ -113,6 +117,7 @@ Warnings (не блокируют): `paired_hanger_adjusted`,
 - Прототип экрана: вариант B.
 
 ### 4.4.1. Принудительное удаление батча — force (#231)
+
 - Задача: оператор видит блокеры §4.4 и хочет убрать импорт из актуальных
   данных, зная о последствиях. Откат не помогает — `DELETE /{p}` (архивирование
   плана) даёт 409 `kind="coverage"`, потому что откату надо вернуть материал на
@@ -143,6 +148,7 @@ Warnings (не блокируют): `paired_hanger_adjusted`,
   отдельной странице истории импортов, [ADR-0054](adr/0054-istoriya-importov-plana-otdelnaya-stranitsa.md).
 
 ### 4.4.2. «Убрать из списка» — скрытие батча (#233, ADR-0056)
+
 - `POST /production-plans/{p}/batches/{b}/hide` — отдельное действие, не режим
   `DELETE`. Пишет `import_batches.deleted_at/deleted_by/delete_reason`;
   позиции, задачи, ledger, `action_journal` и `AuditLog` не трогаются, статус не
@@ -159,6 +165,7 @@ Warnings (не блокируют): `paired_hanger_adjusted`,
   ADR-0057).
 
 ### 4.5. Применение и откат батча из списка файлов (#172)
+
 - Список файлов живёт на отдельной странице «История импортов плана»
   (`/planning/import-history`), а не на странице плана: список кросс-плановый,
   вход — кнопка «История импортов» в шапке плана
