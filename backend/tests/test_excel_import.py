@@ -2376,3 +2376,63 @@ async def test_preview_compound_sku_does_not_add_queries_per_row(
         "число SELECT к products растёт с числом строк листа: "
         f"{product_selects_per_run}"
     )
+
+
+# ─── Числовой SKU без ведущих нулей (#444) ───────────────────────────────────
+
+
+@pytest.mark.asyncio
+async def test_preview_numeric_sku_binds_product_with_leading_zeros(
+    client, session, tmp_path, monkeypatch
+) -> None:
+    """Строка плана `33` привязывается к продукту `033` (#444)."""
+    monkeypatch.setattr(settings, "IMPORT_STORAGE_DIR", str(tmp_path))
+
+    (product,) = await _seed_products(session, "033")
+    items = await _preview_compound_rows(
+        client, session, code="numeric-leading-zero", cells=["33"]
+    )
+
+    item = items[0]
+    assert item["after_data"]["product_id"] == product.id
+    assert "product_not_found" not in item["errors"]
+    assert [w for w in item["warnings"] if w.startswith("sku_ambiguous_numeric")] == []
+
+
+@pytest.mark.asyncio
+async def test_preview_numeric_sku_ambiguity_is_not_resolved(
+    client, session, tmp_path, monkeypatch
+) -> None:
+    """В справочнике и `33`, и `033`: числовой ключ ячейки не выбирает молча (#444)."""
+    monkeypatch.setattr(settings, "IMPORT_STORAGE_DIR", str(tmp_path))
+
+    await _seed_products(session, "33", "033")
+    items = await _preview_compound_rows(
+        client, session, code="numeric-ambiguous", cells=["0033"]
+    )
+
+    item = items[0]
+    assert item["after_data"]["product_id"] is None
+    assert "product_not_found" in item["errors"]
+    ambiguous = [w for w in item["warnings"] if w.startswith("sku_ambiguous_numeric:")]
+    assert len(ambiguous) == 1
+    assert "33" in ambiguous[0] and "033" in ambiguous[0]
+
+
+@pytest.mark.asyncio
+async def test_preview_exact_numeric_sku_wins_over_ambiguity(
+    client, session, tmp_path, monkeypatch
+) -> None:
+    """Точное написание побеждает числовой шаг, даже когда есть второй код (#444)."""
+    monkeypatch.setattr(settings, "IMPORT_STORAGE_DIR", str(tmp_path))
+
+    exact, zeroed = await _seed_products(session, "33", "033")
+    items = await _preview_compound_rows(
+        client, session, code="numeric-exact", cells=["33", "033"]
+    )
+
+    assert items[0]["after_data"]["product_id"] == exact.id
+    assert items[1]["after_data"]["product_id"] == zeroed.id
+    for item in items:
+        assert "product_not_found" not in item["errors"]
+        assert [w for w in item["warnings"] if w.startswith("sku_ambiguous_numeric")] == []

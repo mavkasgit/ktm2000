@@ -10,7 +10,9 @@ from __future__ import annotations
 from app.services.import_normalization import (
     SkuEntry,
     match_sku_cell,
+    match_sku_numeric,
     match_sku_parts,
+    numeric_sku_key,
     sku_compound_parts,
     sku_entry,
     sku_tail,
@@ -126,3 +128,66 @@ def test_whole_cell_compares_normalized_spellings():
 def test_plain_sku_never_reaches_part_cascade():
     match = match_sku_cell("ЮП-3658", _catalog("ЮП-1875"))
     assert not match.found and not match.rejected
+
+
+# ─── Числовой ключ без ведущих нулей (#444) ──────────────────────────────────
+
+
+def test_numeric_key_ignores_leading_zeros_only_for_digits():
+    assert numeric_sku_key("033") == "33"
+    assert numeric_sku_key(" 33 ") == "33"
+    assert numeric_sku_key("0033") == "33"
+    assert numeric_sku_key("0") == "0"
+    assert numeric_sku_key("000") == "0"
+    # Буквы, дефис и слэш — не числовой артикул: префикс значим.
+    assert numeric_sku_key("ЮП-033") is None
+    assert numeric_sku_key("ALS1359") is None
+    assert numeric_sku_key("33/033") is None
+    assert numeric_sku_key("") is None
+
+
+def test_entry_numeric_key_is_derived_from_own_sku_only():
+    assert sku_entry("033").numeric_key == "33"
+    assert sku_entry("ЮП-033").numeric_key is None
+    # Алиас чужого артикула не превращает «ЮП-033» в числовой «33».
+    assert sku_entry("ЮП-033", {"33"}).numeric_key is None
+
+
+def test_numeric_key_finds_product_with_leading_zeros():
+    product = sku_entry("033")
+    match = match_sku_cell("33", _catalog("033", "ЮП-1875"))
+    assert (match.index, match.numeric_key, match.part) == (0, "33", None)
+    assert match_sku_numeric("33", [product]).index == 0
+
+
+def test_numeric_key_matches_when_cell_has_leading_zeros():
+    assert match_sku_cell("031", _catalog("31")).index == 0
+    assert match_sku_cell("033", _catalog("33")).index == 0
+
+
+def test_prefixed_sku_is_not_numeric():
+    # «ЮП-033» и «033» — разные артикулы: ведущие нули значимы при префиксе.
+    assert not match_sku_cell("ЮП-033", _catalog("033")).found
+    assert not match_sku_cell("033", _catalog("ЮП-033")).found
+    assert not match_sku_cell("ЮП-33", _catalog("ЮП-033")).found
+
+
+def test_two_numeric_spellings_are_ambiguous_not_chosen():
+    # Ни одна запись не совпала точно: числовой ключ общий, выбирать нельзя.
+    match = match_sku_cell("0033", _catalog("33", "033"))
+    assert match.rejected and not match.found
+    assert match.ambiguous_indexes == (0, 1)
+    assert match.numeric_key == "33"
+
+
+def test_exact_spelling_wins_over_numeric_key():
+    entries = _catalog("33", "033")
+    assert match_sku_cell("33", entries).index == 0
+    assert match_sku_cell("033", entries).index == 1
+
+
+def test_numeric_key_does_not_touch_non_numeric_skus():
+    assert not match_sku_cell("ALS33", _catalog("ALS-033")).found
+    assert not match_sku_cell("ALS-33", _catalog("ALS-033")).found
+    # Нормализованное совпадение нечислового артикула работает как раньше.
+    assert match_sku_cell("als–33", _catalog("ALS-33")).index == 0

@@ -618,6 +618,41 @@ async def test_trailing_slash_is_not_a_compound_sku(
     assert not any("по части" in warning for warning in item["warnings"])
 
 
+# ─── Tests: числовой SKU без ведущих нулей (#444) ──────────────────────────────
+
+
+async def test_numeric_sku_binds_product_with_leading_zeros(
+    client: AsyncClient,
+    session: AsyncSession,
+) -> None:
+    """Ячейка `33` находит продукт `033`: SQL-предфильтр не прячет кандидата (#444)."""
+    product = await _make_product(session, "033")
+    await session.commit()
+
+    item = await _preview_single_sku(client, "33")
+
+    assert item["status"] == "valid"
+    assert item["product_id"] == product.id
+    assert item["matched_sku"] == "033"
+    assert any("по числовому коду" in warning for warning in item["warnings"])
+
+
+async def test_numeric_sku_ambiguity_blocks_row(
+    client: AsyncClient,
+    session: AsyncSession,
+) -> None:
+    """В справочнике и `33`, и `033`: числовой код не разрешается молча (#444)."""
+    await _make_product(session, "33")
+    await _make_product(session, "033")
+    await session.commit()
+
+    item = await _preview_single_sku(client, "0033")
+
+    assert item["status"] == "invalid"
+    assert item["product_id"] is None
+    assert any("числовой код «33»" in error for error in item["errors"])
+
+
 # ─── Tests: Import ─────────────────────────────────────────────────────────────
 
 

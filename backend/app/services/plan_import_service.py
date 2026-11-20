@@ -61,6 +61,7 @@ from app.services.excel_import import (
 from app.services.hanger_quantity import adjust_quantity_to_hanger
 from app.services.import_normalization import (
     SkuEntry,
+    match_sku_numeric,
     match_sku_parts,
     sku_compound_parts,
     sku_entry,
@@ -155,6 +156,10 @@ PLAN_IMPORT_WARNING_PREFIXES: tuple[str, ...] = (
     #: задвоенный артикул; параметр — SKU канонического продукта, который
     #: использован вместо несовпавшей ячейки.
     "sku_matched_by_alias",
+    #: #444: числовой код без ведущих нулей нашёл несколько продуктов
+    #: (``33`` и ``033``). Привязки нет — выбор по порядку справочника был бы
+    #: подменой артикула; параметр — SKU всех кандидатов.
+    "sku_ambiguous_numeric",
 #: Баланс группы вход×длина = Σ(выход×длина) (excel_import._check_group_balances):
 #: фактический row-warning вне списка спеки §3, зафиксирован здесь же,
 #: чтобы сторож ловил действительно новые коды, а не этот известный.
@@ -621,6 +626,8 @@ class SkuIndex(NamedTuple):
         В ключи входят не только написания SKU, но и ``Product.aliases``:
         дубли-алиасы («ЮП-3485» ↔ «АТ-4893») должны находиться на шаге
         составного артикула, иначе выбирается первый попавшийся дубль.
+        Числовой ключ (#444) считается только по SKU продукта: алиас
+        не должен превращать нечисловой артикул в числовой.
         """
         entries: list[SkuEntry] = []
         for product in self.products:
@@ -643,6 +650,12 @@ async def _load_products_by_sku(db: AsyncSession) -> SkuIndex:
 
 
 def _sku_lookup_keys(sku: str) -> set[str]:
+    """Точные написания SKU для словаря ``by_sku`` (#347).
+
+    Числовой ключ (#444) сюда намеренно не входит: ``by_sku`` — словарь, и
+    ``33`` с ``033`` перекрыли бы друг друга молча. Числовой шаг идёт отдельно
+    (``match_sku_numeric``) и требует единственного кандидата в справочнике.
+    """
     raw = (sku or "").strip()
     if not raw:
         return set()
@@ -862,14 +875,31 @@ async def _make_change_items(
         warnings = list(row.warnings)
         errors = list(row.errors)
         product = None
+        numeric_ambiguous = False
         for key in _sku_lookup_keys(row.source_sku):
             product = sku_index.by_sku.get(key)
             if product is not None:
                 break
 
         if product is None:
-            # Целой ячейки в справочнике нет: составной артикул вида
-            # «ЮП-3658/1875» привязывается по её части (#347).
+            # Целой ячейки в справочнике нет. Числовой код без ведущих нулей
+            # (#444) — «33» в книге находит «033». Неоднозначность (в
+            # справочнике есть и «33», и «033») останавливает каскад, как и
+            # неоднозначная часть: молча выбранный артикул дороже отказа.
+            numeric_match = match_sku_numeric(row.source_sku, sku_entries)
+            if numeric_match.found:
+                product = sku_index.products[numeric_match.index]
+            elif numeric_match.rejected:
+                numeric_ambiguous = True
+                candidates = ", ".join(
+                    str(sku_index.products[index].sku)
+                    for index in numeric_match.ambiguous_indexes
+                )
+                warnings.append(f"sku_ambiguous_numeric:{candidates}")
+
+        if product is None and not numeric_ambiguous:
+            # Составной артикул вида «ЮП-3658/1875» привязывается по её части
+            # (#347).
             match = match_sku_parts(row.source_sku, sku_entries)
             if match.found:
                 product = sku_index.products[match.index]

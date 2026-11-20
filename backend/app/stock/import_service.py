@@ -45,6 +45,7 @@ from app.services.import_normalization import (
     SkuEntry,
     match_sku_cell,
     normalize_sku,
+    numeric_sku_key,
     sku_compound_parts,
     sku_entry,
 )
@@ -627,7 +628,7 @@ def _normalized_catalog_sku() -> object:
 
 
 def _sku_candidate_conditions(sku: str) -> list[object]:
-    """Условия выборки кандидатов справочника для одной ячейки (#347).
+    """Условия выборки кандидатов справочника для одной ячейки (#347, #444).
 
     Вхождения SKU в текст строки недостаточно дважды. Во-первых, целая ячейка
     может отличаться от справочника только написанием («ЮП–3098» против
@@ -635,6 +636,11 @@ def _sku_candidate_conditions(sku: str) -> list[object]:
     недостижимым — кандидат просто не приехал бы. Во-вторых, «ЮП-1875» не является
     подстрокой ячейки «ЮП-3658/1875», а привязывается именно её хвостом. Это
     предфильтр: окончательное решение принимает ``match_sku_cell``.
+
+    Числовой код (#444) — надстройка того же рода: ячейка ``33`` и SKU ``033``
+    не совпадают ни подстрокой, ни нормализованным равенством. Без условия
+    справочник прислал бы только половину пары, и неоднозначность двух
+    числовых кодов превратилась бы в молчаливый выбор того, что нашёл SQL.
     """
     normalized_sku = _normalized_catalog_sku()
     conditions = [
@@ -644,6 +650,13 @@ def _sku_candidate_conditions(sku: str) -> list[object]:
     for part in sku_compound_parts(sku):
         conditions.append(normalized_sku == part)
         conditions.append(normalized_sku.like(f"%-{_like_escape(part)}", escape="\\"))
+    numeric_key = numeric_sku_key(sku)
+    if numeric_key is not None:
+        # ltrim срезает только ведущие нули: равенство цифровому ключу
+        # оставляет в кандидатах чистые ``33``/``033``/``0033``. «0000» после
+        # среза даёт пустую строку — это числовой ноль, а не отсутствие ключа.
+        stripped = func.nullif(func.ltrim(normalized_sku, "0"), "")
+        conditions.append(func.coalesce(stripped, "0") == numeric_key)
     return conditions
 
 
@@ -701,12 +714,13 @@ def _attach_contained_product(item: RemainderItem, products: list[Product]) -> N
 
 
 async def _lookup_products(db: AsyncSession, items: list[RemainderItem]) -> None:
-    """Привязать строку листа к артикулу справочника (#347, ADR-0067).
+    """Привязать строку листа к артикулу справочника (#347, #444, ADR-0068).
 
-    Порядок: целая ячейка → части составного артикула по «/» → вхождение SKU в
-    текст строки. Точное совпадение выигрывает всегда; привязка по части или по
-    вхождению остаётся валидной строкой, но с видимым предупреждением, а
-    неоднозначная часть строку блокирует.
+    Порядок: целая ячейка → числовой код без ведущих нулей → части составного
+    артикула по «/» → вхождение SKU в текст строки. Точное совпадение
+    выигрывает всегда; привязка по числовому коду или по части остаётся
+    валидной строкой, но с видимым предупреждением, а неоднозначный код или
+    часть строку блокирует.
     """
     skus = list(dict.fromkeys(
         it.sku for it in items if it.status == "valid" and it.sku
@@ -737,24 +751,33 @@ async def _lookup_products(db: AsyncSession, items: list[RemainderItem]) -> None
             ambiguous = ", ".join(
                 str(rows[index].product.sku) for index in match.ambiguous_indexes
             )
+            # Числовой код (#444) и часть составного артикула неоднозначны
+            # по-разному: «часть «None»» оператору ничего не объясняет.
+            reason = (
+                f"числовой код «{match.numeric_key}»"
+                if match.numeric_key is not None
+                else f"часть «{match.part}»"
+            )
             item.status = "invalid"
             item.errors.append(
-                f"SKU '{item.sku}' неоднозначен: часть «{match.part}» "
+                f"SKU '{item.sku}' неоднозначен: {reason} "
                 f"подходит к {ambiguous} — уточните артикул в файле"
             )
             continue
         if match.found:
             product = rows[match.index].product
-            _attach_remainder_product(
-                item,
-                product,
-                warning=None
-                if match.part is None
-                else (
+            warning = None
+            if match.part is not None:
+                warning = (
                     "Артикул сопоставлен по части: "
                     f"в строке '{item.sku}' найден SKU '{product.sku}'"
-                ),
-            )
+                )
+            elif match.numeric_key is not None:
+                warning = (
+                    "Артикул сопоставлен по числовому коду: "
+                    f"в строке '{item.sku}' найден SKU '{product.sku}'"
+                )
+            _attach_remainder_product(item, product, warning=warning)
             continue
 
         _attach_contained_product(item, [row.product for row in rows])
