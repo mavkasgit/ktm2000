@@ -15,6 +15,7 @@ import { existsSync, readFileSync } from "node:fs";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { buildStepCommand } from "./gate-command-core.js";
+import { checkProofCoverage, summarize } from "./proof-coverage-core.mjs";
 import { resolvePython } from "./python-core.js";
 
 const ROOT = dirname(dirname(fileURLToPath(import.meta.url)));
@@ -436,9 +437,14 @@ function reconcile(names) {
 /**
  * У каждого локального шага обязан быть доказанный красный ход (#357): проверка,
  * которую никогда не видели падающей, может молчать годами и выглядеть защитой.
- * Покрытие ведёт `npm run prove-checks` в docs/quality/proven-checks.json; шаги, которые локально
- * не запускаются или намеренно report-only, — там же в `exempt` с причиной.
- * Вне `--strict` строка информационная: локальному гейту нечем ответить за CI.
+ * Покрытие ведёт `npm run prove-checks` в docs/quality/proven-checks.json; шаги,
+ * которые локально не запускаются или намеренно report-only, — там же в `exempt`
+ * с причиной, датой обзора и сроком.
+ *
+ * Исключение без срока — это «нет проверки», только записанное словами: поэтому
+ * у каждой записи `reviewed`/`expires`, и просроченный `expires` краснеет при
+ * любом флаге (не только в strict). Возраст обзора — warn: запись не становится
+ * ложью от того, что её год не перечитывали.
  */
 function proofCoverage(names, strict) {
   const path = join(ROOT, PROVEN_SHEET);
@@ -448,19 +454,18 @@ function proofCoverage(names, strict) {
       detail: `${PROVEN_SHEET} не найден — красным не доказан ни один шаг; прогнать npm run prove-checks`,
     };
   }
-  const rec = JSON.parse(readFileSync(path, "utf8"));
-  const uncovered = names.filter((n) => !rec.steps?.[n] && !rec.exempt?.[n]);
-  const exemptCount = Object.keys(rec.exempt || {}).length;
-  if (uncovered.length) {
-    return {
-      status: strict ? "fail" : "warn",
-      detail: `${uncovered.length} шагов ни разу не были красными: ${uncovered.join(", ")}`,
-    };
-  }
-  return {
-    status: "ok",
-    detail: `${names.length - exemptCount}/${names.length} шагов с доказанным красным ходом, ${exemptCount} в исключениях`,
-  };
+  const record = JSON.parse(readFileSync(path, "utf8"));
+  const result = checkProofCoverage(record, { steps: names });
+  const lines = [...result.problems, ...result.warnings.map((w) => `warn: ${w}`)];
+  const detail = [summarize(result), ...(result.uncovered.length ? [`нет доказательства и нет исключения: ${result.uncovered.join(", ")}`] : []), ...lines].join("; ");
+
+  // Сломанный журнал (формат даты, истёкший срок, исключение без причины или
+  // без условия) — красное, потому что иначе бессрочное исключение снова
+  // станет невидимым. Отсутствие покрытия — по флагу, как и раньше.
+  if (result.problems.length) return { status: "fail", detail };
+  if (result.uncovered.length) return { status: strict ? "fail" : "warn", detail };
+  if (result.warnings.length) return { status: "warn", detail };
+  return { status: "ok", detail };
 }
 
 function runStep(step, infraUp, strict) {  if (step.check) {
