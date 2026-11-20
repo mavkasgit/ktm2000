@@ -46,6 +46,7 @@
 | `pytest-xdist` | pytest-xdist (pytest-dev/pytest-xdist) | `backend/requirements-dev.txt` | `3.8.0` | gate, ci | да | 2026-11-03 |
 | `python` | Python (python/cpython) | `mise.toml` | `3.14.10` | gate, ci | да | 2026-11-09 |
 | `ruff` | Ruff (astral-sh/ruff) | `backend/requirements-dev.txt` | `0.17.4` | gate, ci | да | 2026-11-19 |
+| `rumdl` | rumdl (rvben/rumdl) | `mise.toml` | `0.3.2` | gate | да | 2026-11-20 |
 | `typescript` | TypeScript (microsoft/TypeScript) | `frontend/package.json` | `^5.9.3` | commit, gate, ci | да | 2026-11-09 |
 | `vitest` | Vitest (vitest-dev/vitest) | `frontend/package.json` | `^5.1.0` | gate, ci | да | 2026-11-09 |
 | `vitest-coverage-v8` | @vitest/coverage-v8 (vitest-dev/vitest) | `frontend/package.json` | `^5.1.0` | ci | нет | 2026-11-09 |
