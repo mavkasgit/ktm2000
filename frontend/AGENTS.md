@@ -76,7 +76,6 @@ React 18.3 + TypeScript + Vite + Tailwind CSS + shadcn/ui + TanStack Query/Virtu
   Свои `p-2`, `size="sm"` и `rowHeight={…}` рядом с таблицей — нельзя.
   Термин и правило — [ADR-0030](../docs/adr/0030-komaktnaya-stroka-i-utochneniya-tablits.md)
   и [GLOSSARY.md](../GLOSSARY.md).
-
 - **Экран не в общем стиле не заводит отдельную задачу (#311):** экран, который
   ещё живёт на своих `p-3`, `border-b` и собственном ряде фильтров, приводят к
   общему набору в той же правке, где его и так трогают. Перечень экранов с
@@ -84,7 +83,6 @@ React 18.3 + TypeScript + Vite + Tailwind CSS + shadcn/ui + TanStack Query/Virtu
   [`docs/night/tickets/R-13.md`](../docs/night/tickets/R-13.md) §6.1. Радар без
   срока и AC превращался в вечного последнего в очереди, поэтому тикета на это
   нет.
-
 - **Кнопка возврата** — `BackButton` из
   [`src/shared/ui/BackButton.tsx`](src/shared/ui/BackButton.tsx): безымянная
   иконка слева от заголовка, в `page-header`. Своя стрелка с текстом
@@ -94,7 +92,6 @@ React 18.3 + TypeScript + Vite + Tailwind CSS + shadcn/ui + TanStack Query/Virtu
   единственным выходом. Имя кнопки — в `aria-label`, название раздела — в
   `title` (на тач-экране подсказку не видно). Не путать с «Назад» внутри
   мастеров: там возврат на шаг, а не на маршрут.
-
 - **Описание колонки** — семантика колонки объявляется один раз в
   [`src/shared/lib/columnSpecs.ts`](src/shared/lib/columnSpecs.ts)
   (`ColumnSpec`): `filterField`, `sortField`, `valueLabel`, `exactMatch`,

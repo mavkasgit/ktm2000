@@ -18,6 +18,12 @@
 //         npm run prove-checks -- --heavy — добавить backend-tests/frontend-unit
 //         npm run prove-checks -- --only=ruff,docs-links
 //         npm run prove-checks -- --list
+//         npm run prove-checks -- --record — обновить даты в журнале (по умолчанию read-only)
+//
+// Read-only по умолчанию: журнал `docs/quality/proven-checks.json` — это запись о
+// том, когда доказательство смотрели люди, а не лог последнего прогона. Прогон,
+// который сам себя датирует, делает `git status` грязным после любой проверки и
+// стирает разницу между «прогнал сейчас» и «пересмотрел».
 
 import { spawnSync } from "node:child_process";
 import {
@@ -37,15 +43,24 @@ import { fileURLToPath } from "node:url";
 const ROOT = dirname(dirname(fileURLToPath(import.meta.url)));
 const RECORD = join(ROOT, "docs", "quality", "proven-checks.json");
 
-/** Шаг, который локально не запускается, доказать пробником нельзя — он exempt. */
-const EXEMPT = {
-  "alembic-drift": "локально не запускается (накатывает миграции на dev-БД живого стенда); способность падать показана в CI migrations.yml",
-  "e2e-smoke": "берёт слот семафора и свой стенд; отдельный ярус gate:e2e, красные ходы — в истории прогонов frontend/e2e",
-  // Report-only по решению владельца (T-0012, сноска в #386): шаг не может
-  // покраснеть намеренно. Блокирующую часть ловит ruff F401, а ruff пробником
-  // доказан — значит «мёртвый импорт» в гейте всё равно красный, просто другим шагом.
-  "test-hygiene": "сам шаг возвращает 0 при находках (report-only, T-0012) — краснеть не на чем; блокирует ruff F401, см. пробник шага ruff",
-};
+/**
+ * Исключения живут в журнале, а не здесь: у записи есть reason, условие
+ * (`becomes_possible`) и срок (`reviewed`/`expires`), которые проверяет шаг
+ * `prove-coverage` (scripts/proof-coverage-core.mjs). Скрипт их только читает —
+ * иначе правка в JSON молча затиралась бы прогоном.
+ */
+function readRecord() {
+  if (!existsSync(RECORD)) return { steps: {}, exempt: {} };
+  return JSON.parse(readFileSync(RECORD, "utf8"));
+}
+
+/**
+ * Имя мёртвого пакета собирается из кусков сознательно: `check-dev-deps`
+ * сканирует и `scripts/**` (файлы всех источников лежат в одном массиве),
+ * поэтому литерал в этом файле считался бы «использованием», и пробник был бы
+ * зелёным всегда. Проверено 2026-11-20: с литералом шаг возвращал exit 0.
+ */
+const DEAD_PACKAGE = ["_probe374", "mertvyj", "paket"].join("_");
 
 /**
  * `via` — команду шага не выбираем: всегда `gate --only=<шаг>`, чтобы краснел
@@ -60,13 +75,31 @@ const PROBES = [
   },
   {
     step: "registry",
-    mutate: [{ path: "tools.json", from: '"version": "0.16.9"', to: '"version": "0.0.0"' }],
-    expect: /не найдено|реестр/i,
-    note: "версия в реестре расходится с requirements-dev.txt",
+    // Версию берём по id, а не строкой `"version": "0.16.9"`: литерал версии в
+    // пробнике устаревает вместе с пином, и пробник молча перестаёт применяться
+    // (ровно это случилось после подъёма ruff до 0.17.4 — мутация не находилась).
+    mutateJson: [
+      {
+        path: "tools.json",
+        apply: (doc) => {
+          doc.tools.find((tool) => tool.id === "rumdl").version = "0.0.0";
+        },
+      },
+    ],
+    expect: /rumdl: «0\.0\.0» не найдено|«0\.0\.0» не найдено/,
+    note: "версия rumdl в реестре расходится с пином mise.toml — гейт запускал бы не тот линтер, что записан",
   },
   {
     step: "registry",
-    mutate: [{ path: "docs/toolchain.md", from: "| `0.16.9` |", to: "| `0.0.1` |" }],
+    // Правка внутри маркеров, а не в колонке версии: любая ручная правка
+    // сгенерированной таблицы обязана покраснеть, а строка с id стабильна.
+    mutate: [
+      {
+        path: "docs/toolchain.md",
+        from: "| Ruff (astral-sh/ruff) |",
+        to: "| Ruff (astral-sh/ruff), поправлено руками |",
+      },
+    ],
     expect: /отстал от|пересобрать/i,
     note: "сгенерированный тулчейн поправили руками — сверка с реестром обязана покраснеть",
   },
@@ -91,6 +124,17 @@ const PROBES = [
     mutate: [{ path: "docs/quality/hooks.md", from: "## Установка и проверка", to: "## Установка и проверка\n\n[ушедший документ](../no/such/doc.md)\n" }],
     expect: /бит[ыю]/i,
     note: "битая относительная ссылка в документе волны",
+  },
+  {
+    step: "docs-lint",
+    write: [
+      {
+        path: "_probe357_docs_lint.md",
+        content: "# Пробник #357\n\nТекст.\n\n```\nбез языка\n```\n",
+      },
+    ],
+    expect: /MD040/i,
+    note: "новый Markdown с fence без языка: rumdl отдаёт MD040 и exit 1",
   },
   {
     step: "adr-index",
@@ -146,11 +190,14 @@ const PROBES = [
   },
   {
     step: "ci-lint",
-    mutate: [
+    // Опечатка в `needs` дописывается новым job'ом, а не правкой конкретной
+    // строки: литерал `timeout-minutes: 5` уехал при переделке workflow, и
+    // пробник молча перестал применяться. Хвост файла — стабильный якорь.
+    append: [
       {
         path: ".github/workflows/ci-lint.yml",
-        from: "    timeout-minutes: 5",
-        to: "    timeout-minutes: 5\n    needs: [no-such-job-364]",
+        content:
+          "\n  probe364:\n    name: probe-364\n    runs-on: ubuntu-latest\n    needs: [no-such-job-364]\n    steps:\n      - run: echo probe\n",
       },
     ],
     expect: /no-such-job-364|needs/i,
@@ -241,14 +288,18 @@ const PROBES = [
   {
     step: "dev-deps",
     args: "--strict",
-    mutate: [
+    // Пакет дописывается в devDependencies по структуре: литерал
+    // `"@playwright/test": "^1.60.0"` уехал вместе с обновлением версии, и
+    // пробник перестал применяться.
+    mutateJson: [
       {
         path: "frontend/package.json",
-        from: '"@playwright/test": "^1.60.0",',
-        to: '"@playwright/test": "^1.60.0",\n    "_probe374_mertvyj_paket": "^1.0.0",',
+        apply: (doc) => {
+          doc.devDependencies[DEAD_PACKAGE] = "^1.0.0";
+        },
       },
     ],
-    expect: /_probe374_mertvyj_paket.*не названы/s,
+    expect: new RegExp(`${DEAD_PACKAGE}.*не названы`, "s"),
     note: "в devDependencies появляется пакет, который никто не зовёт: проверка обязана назвать его и показать охват просмотра",
   },
   {
@@ -312,14 +363,17 @@ const PROBES = [
 ];
 
 function parseArgs(argv) {
-  const a = { heavy: false, only: null, list: false, json: false };
+  const a = { heavy: false, only: null, list: false, json: false, record: false };
   for (const raw of argv) {
     if (raw === "--heavy") a.heavy = true;
     else if (raw === "--list") a.list = true;
     else if (raw === "--json") a.json = true;
+    else if (raw === "--record") a.record = true;
     else if (raw.startsWith("--only=")) a.only = raw.slice(7).split(",").filter(Boolean);
     else {
-      console.error(`prove-checks: неизвестный аргумент ${raw} (есть --heavy, --only=…, --list, --json)`);
+      console.error(
+        `prove-checks: неизвестный аргумент ${raw} (есть --heavy, --only=…, --list, --json, --record)`,
+      );
       process.exit(2);
     }
   }
@@ -356,7 +410,12 @@ if (baseline.length && !process.env.PROVE_ALLOW_DIRTY) {
 
 if (args.list) {
   for (const p of PROBES) console.log(`${p.step.padEnd(28)} ${p.heavy ? "heavy " : "      "}${p.note}`);
-  for (const [name, why] of Object.entries(EXEMPT)) console.log(`${name.padEnd(28)} exempt ${why}`);
+  const { exempt } = readRecord();
+  for (const [name, entry] of Object.entries(exempt || {})) {
+    const why = typeof entry === "string" ? entry : entry.reason;
+    const term = typeof entry === "string" ? "без срока" : `до ${entry.expires}`;
+    console.log(`${name.padEnd(28)} exempt ${term} — ${why}`);
+  }
   process.exit(0);
 }
 
@@ -371,6 +430,14 @@ function apply(probe) {
     writeFileSync(path, w.content);
     created.push(path);
   }
+  // Дописать в конец файла: стабильный якорь там, где конкретная строка уже
+  // уезжала (workflow переделывали — литерал `timeout-minutes: 5` исчез).
+  for (const a of probe.append || []) {
+    const path = join(ROOT, a.path);
+    const original = readFileSync(path, "utf8");
+    if (!backups.has(path)) backups.set(path, original);
+    writeFileSync(path, original + a.content);
+  }
   for (const m of probe.mutate || []) {
     const path = join(ROOT, m.path);
     const original = readFileSync(path, "utf8");
@@ -381,6 +448,18 @@ function apply(probe) {
     const next = m.from === undefined ? m.to : original.replace(m.from, m.to);
     if (next === original) throw new Error(`мутация не применилась: в ${m.path} нет куска «${m.from}»`);
     writeFileSync(path, next);
+  }
+  // Мутация JSON — по структуре, а не по литералу версии: пробник, который
+  // ищет `"version": "0.16.9"`, устаревает вместе с пином и перестаёт
+  // применяться молча. Формат записи тот же, что у файла (2 пробела + \n),
+  // поэтому откат возвращает байт-в-байт исходник из backups.
+  for (const m of probe.mutateJson || []) {
+    const path = join(ROOT, m.path);
+    const original = readFileSync(path, "utf8");
+    if (!backups.has(path)) backups.set(path, original);
+    const doc = JSON.parse(original);
+    m.apply(doc);
+    writeFileSync(path, `${JSON.stringify(doc, null, 2)}\n`);
   }
   for (const t of probe.touch || []) {
     const path = join(ROOT, t.path);
@@ -455,27 +534,34 @@ const failed = results.filter((r) => r.status !== "ok");
 // запись «2026-11-02» для прогона в 02:47 выглядела бы как вчерашняя.
 const today = new Date().toLocaleDateString("sv-SE");
 
-// Журнал доказанности — отслеживаемый файл: `gate --strict` сверяет с ним, что
-// у каждого локального шага есть подтверждённый красный ход (критерий г #357).
-// Запись дополняется, а не перезаписывается: частичные прогоны --only=… не
-// должны стирать уже доказанное.
-const record = existsSync(RECORD) ? JSON.parse(readFileSync(RECORD, "utf8")) : { steps: {}, exempt: {} };
-record.exempt = EXEMPT;
-// Команда прогона входит в запись: «prove-checks backend-tests» без --only/--heavy
-// не воспроизводит то, что реально выполнялось (тяжёлые шаги идут отдельным
-// вызовом, и это видно только из команды).
-const runCommand = args.only
-  ? `npm run prove-checks -- --only=${args.only.join(",")}${args.heavy ? " --heavy" : ""}`
-  : `npm run prove-checks${args.heavy ? " -- --heavy" : ""} (полный прогон)`;
-for (const r of results) {
-  if (r.status !== "ok") continue;
-  record.steps[r.step] = { proven_at: today, note: r.note, how: runCommand };
+// Журнал доказанности — отслеживаемый файл: `gate` сверяет с ним, что у каждого
+// локального шага есть подтверждённый красный ход (критерий г #357).
+//
+// По умолчанию прогон ничего не пишет: журнал — запись о пересмотре, а не лог
+// последнего запуска. `--record` обновляет даты осознанно, и только у шагов,
+// которые в этом прогоне действительно упали как надо; частичный `--only=…`
+// остальные записи не стирает. Исключения скрипт не трогает вовсе — они живут
+// в журнале с причиной, условием и сроком.
+const record = readRecord();
+if (args.record) {
+  // Команда прогона входит в запись: «prove-checks backend-tests» без
+  // --only/--heavy не воспроизводит то, что реально выполнялось (тяжёлые шаги
+  // идут отдельным вызовом, и это видно только из команды).
+  const runCommand = args.only
+    ? `npm run prove-checks -- --only=${args.only.join(",")}${args.heavy ? " --heavy" : ""} --record`
+    : `npm run prove-checks${args.heavy ? " -- --heavy" : ""} --record (полный прогон)`;
+  for (const r of results) {
+    if (r.status !== "ok") continue;
+    record.steps[r.step] = { proven_at: today, note: r.note, how: runCommand };
+  }
+  record.updated = today;
+  writeFileSync(RECORD, JSON.stringify(record, null, 2) + "\n");
 }
-record.updated = today;
-writeFileSync(RECORD, JSON.stringify(record, null, 2) + "\n");
 
 if (args.json) {
-  console.log(JSON.stringify({ proven_at: today, results, exempt: EXEMPT }, null, 2));
+  console.log(
+    JSON.stringify({ proven_at: today, recorded: args.record, results, exempt: record.exempt || {} }, null, 2),
+  );
 } else {
   for (const r of results) {
     console.log(`  ${{ ok: "✓", skip: "·", error: "✗", "red-не-доказан": "✗", "red-чужой": "⚠", следы: "✗" }[r.status] || "?"} ${r.step.padEnd(26)} ${r.status} — ${r.detail}`);
@@ -484,6 +570,11 @@ if (args.json) {
     failed.length
       ? `итог: ${failed.length} из ${results.length} пробников не доказали красный ход — см. строки выше`
       : `итог: ${results.length} пробников прошли (красный ход каждого подтверждён)`,
+  );
+  console.log(
+    args.record
+      ? `журнал обновлён: ${RECORD}`
+      : "журнал не тронут (read-only по умолчанию; обновить даты — npm run prove-checks -- --record)",
   );
 }
 

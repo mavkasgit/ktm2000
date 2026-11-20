@@ -94,7 +94,7 @@ ADR-0023 (продукт как единый справочник)
 ## Последствия
 
 - Точки кода к правке: `plan_import_service.py` (подбор + `input_dimensions`
-  + warning/ошибка), `product_pair_resolver.py` (пересечение как множество
+  - warning/ошибка), `product_pair_resolver.py` (пересечение как множество
   кандидатов), `plan_position_hanger.py` (без изменений — читает вход),
   `excel_import.py` (сброс `inferred` при подстановке).
 - Каталог: карточка ГП-артикула (`type=finished_good`) получает список длин

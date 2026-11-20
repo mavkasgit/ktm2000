@@ -16,7 +16,7 @@
 доступа. Первый же write-эндпоинт (`POST /api/stock/import/remainders`)
 упал с 500:
 
-```
+```text
 api.py:1143 import_remainders_excel → import_service.py:966 apply_remainders_import
 → services.py:639 record → ForeignKeyViolationError:
 Key (created_by)=(0) is not present in table "users"

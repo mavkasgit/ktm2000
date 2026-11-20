@@ -459,9 +459,11 @@ change-set); каталог/остатки — прямые вызовы API (`a
 - Проекта `tmp` нет, пока не задан `E2E_TMP` → `test:e2e`, `test:e2e:ui`,
   `test:e2e:smoke` такие спеки не трогают.
 - Запуск разово:
+
   ```bash
   cd frontend && E2E_TMP=1 npx playwright test --project=tmp e2e/<file>.tmp.spec.ts
   ```
+
 - Задача закрыта → спека и её фикстуры удаляются (одноразовый артефакт).
 
 ## Guard изоляции от прод-хостов
@@ -819,6 +821,7 @@ set E2E_SKIP_PASSED=1
 ## Конфигурация
 
 [`playwright.config.ts`](../playwright.config.ts):
+
 - `testDir: ./e2e`
 - `workers: DEFAULT_WORKERS` (`2`, значение — в
   [`run-workers.mjs`](run-workers.mjs); `PW_REUSE_STACK=1` — 1), `fullyParallel: false`
@@ -852,6 +855,7 @@ set E2E_SKIP_PASSED=1
 ## Фикстуры
 
 [`fixtures.ts`](fixtures.ts):
+
 - `authenticatedPage`, `loginAsAdmin`
 - `seedTestData` — legacy; в `@ui` используйте `seedReferenceDataViaUI`
 - `_passCache` — автофикстура кеша «уже проходил на этой версии» (флаг
@@ -914,9 +918,11 @@ set E2E_SKIP_PASSED=1
    из действия (`positionApproved: ["execution"]` вместо `["plan", "execution"]`).
 2. Прогоните регресс тем же ярусом, каким он пойдёт в общий прогон, и убедитесь,
    что он красный именно на сломанном инварианте:
+
    ```bash
    npm --prefix frontend run test:e2e:ui -- e2e/approve-freshness.spec.ts --retries=0
    ```
+
    `--retries=0` здесь обязателен: с ретраями красная попытка маскируется
    зелёным ретраем, и прогон снова выглядит доказательством. Попытка с
    ретраем теперь печатается в конце прогона («Зелёный не с первой
@@ -978,10 +984,12 @@ npm --prefix frontend run test:e2e:ui-mode   # UI mode целиком
 1. Воспроизведи по одному тесту, без ретраев и на одном воркере
    (`--workers=1` — флаг этого разбора, а не дефолт прогона: без него конфиг
    даст два воркера и две БД):
+
    ```bash
    npm --prefix frontend run test:e2e:ui -- e2e/<файл>.spec.ts \
      --retries=0 --workers=1 -g "<имя теста>"
    ```
+
    Для разбора в браузере добавь `--trace=on` (след останется в
    `test-results/`).
 2. Собери доказательства, а не догадки: шаг падения из `error-context.md`
@@ -1032,7 +1040,7 @@ worktree его не видит, и потому ограничение прог
 
 Отчёт: `frontend/playwright-report/` после прогона с failures.
 
-## Регресс обязан уметь падать
+## Регресс обязан уметь падать: правило всего гейта
 
 Проверка, которую никогда не видели красной, — не проверка. Правило волны
 night-2026-11-03 распространено на весь гейт: `npm run prove-checks` вносит по

@@ -27,7 +27,8 @@ npm run doctor                 # Предпроверка дерева: GO/NO-GO
 npm run gate:fast              # Быстрые шаги гейта (в CI зовут `npm run gate -- --strict`)
 npm run gate                   # gate:fast + тесты backend и frontend
 npm run bundle:update          # Осознанно поднять порог начального пакета (шаг frontend-build)
-npm run prove-checks           # Показать, что каждый шаг гейта умеет падать (красный ход, #357)
+npm run prove-checks           # Показать, что каждый шаг гейта умеет падать (красный ход, #357); read-only
+npm run prove-checks -- --record  # То же + обновить даты в журнале доказательств (осознанно)
 npm run verify:sync            # Сверка shared-файлов из scripts/sync-manifest.json с ../hrms (baseline + known)
 ```
 
@@ -155,6 +156,8 @@ GitHub Actions — фоновый второй взгляд. Готовност�
 `main` больше не требует PR и required checks — только запрет force-push и удаления.
 
 - `pre-commit`: ruff, eslint, docs-links, guard-tree по staged-файлам.
+- `commit-msg`: `commitlint` — Conventional Commits до появления коммита;
+  merge-коммиты пропускаются.
 - `pre-push`: `git diff origin/main...HEAD` → скоуп `docs` / `backend` / `frontend` /
   `full`; запускаются только шаги этого скоупа через
   `npm run gate -- --only=… --strict`. Неизвестный путь, конфиги, обе зоны и

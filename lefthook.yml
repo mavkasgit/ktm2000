@@ -34,6 +34,21 @@ pre-commit:
       glob: "*.md"
       run: npm run check:docs
 
+commit-msg:
+  commands:
+    conventional:
+      # Conventional Commits проверяются до появления коммита: формат — правило
+      # AGENTS.md («Конвенции»), здесь ускоритель обратной связи, а не источник
+      # правды. Правила — commitlint.config.mjs, инструмент — пин в mise.toml.
+      #
+      # Merge-коммиты пропускаются: локальный `git merge` пишет «Merge branch …»,
+      # а авто-мерж GitHub не должен упираться в формат сообщения. `skip` смотрит
+      # на MERGE_HEAD, ручной `--no-verify` остаётся аварийным выходом человека.
+      skip:
+        - merge
+        - rebase
+      run: mise exec -- commitlint --edit {1}
+
 pre-push:
   commands:
     verify-sync:

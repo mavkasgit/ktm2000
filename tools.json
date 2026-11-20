@@ -1,5 +1,5 @@
 {
-  "updated": "2026-11-18",
+  "updated": "2026-11-20",
   "tools": [
     {
       "id": "mise",
@@ -89,6 +89,20 @@
       "blocking": true,
       "last_reviewed": "2026-11-18",
       "rationale": "Линтер workflow и dependabot.yml (#365): опечатка в needs/if/uses и в зависимостях проявлялась только запуском. --strict-exit держит политику «ноль находок», а не «ноль ошибок»."
+    },
+    {
+      "id": "rumdl",
+      "name": "rumdl",
+      "repo": "rvben/rumdl",
+      "category": "linter",
+      "version": "0.3.2",
+      "pinned_in": "mise.toml",
+      "runs_at": [
+        "gate"
+      ],
+      "blocking": true,
+      "last_reviewed": "2026-11-20",
+      "rationale": "Markdown-линтер шага docs-lint (паритет с hrms): fence без языка, списки, заголовки и битые относительные ссылки. MD013 выключен осознанно, исторические артефакты исключены узко — .rumdl.toml."
     },
     {
       "id": "osv-scanner",
@@ -318,6 +332,20 @@
       "last_reviewed": "2026-11-03",
       "rationale": "Исполняет tools.schema.json: реестр без валидации схемы — просто текст.",
       "npm_package": "ajv"
+    },
+    {
+      "id": "commitlint",
+      "name": "commitlint",
+      "repo": "conventional-changelog/commitlint",
+      "category": "hook",
+      "version": "21.2.4",
+      "pinned_in": "mise.toml",
+      "runs_at": [
+        "commit"
+      ],
+      "blocking": true,
+      "last_reviewed": "2026-11-20",
+      "rationale": "Conventional Commits в хуке commit-msg: формат сообщения проверяется до появления коммита. Ставится изолированно через mise (npm:@commitlint/cli), правила — commitlint.config.mjs без extends; merge-коммиты пропускаются."
     },
     {
       "id": "lefthook",

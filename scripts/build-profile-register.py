@@ -1096,8 +1096,8 @@ def render_markdown(data: dict) -> str:
         "# Реестр профилей KTM",
         "",
         f"> Синхронизировано с прод-БД **{data['db']['database']}** "
-        f"(`{data['db']['container']}`), артикулов: **{total}**.<br>",
-        f"> Отпечаток БД: `{data['db_fingerprint']}`. Сгенерировано: {data['generated_at']}.<br>",
+        f"(`{data['db']['container']}`), артикулов: **{total}**.\\",
+        f"> Отпечаток БД: `{data['db_fingerprint']}`. Сгенерировано: {data['generated_at']}.\\",
         "> Аудит фото/чертежей: 2026-11-05. Ручные решения — "
         "`docs/catalog/ktm-profile-register.meta.json`.",
         "",
