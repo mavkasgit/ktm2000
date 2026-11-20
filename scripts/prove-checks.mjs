@@ -182,11 +182,14 @@ const PROBES = [
   },
   {
     step: "ci-lint",
-    mutate: [
+    // Опечатка в `needs` дописывается новым job'ом, а не правкой конкретной
+    // строки: литерал `timeout-minutes: 5` уехал при переделке workflow, и
+    // пробник молча перестал применяться. Хвост файла — стабильный якорь.
+    append: [
       {
         path: ".github/workflows/ci-lint.yml",
-        from: "    timeout-minutes: 5",
-        to: "    timeout-minutes: 5\n    needs: [no-such-job-364]",
+        content:
+          "\n  probe364:\n    name: probe-364\n    runs-on: ubuntu-latest\n    needs: [no-such-job-364]\n    steps:\n      - run: echo probe\n",
       },
     ],
     expect: /no-such-job-364|needs/i,
@@ -277,11 +280,15 @@ const PROBES = [
   {
     step: "dev-deps",
     args: "--strict",
-    mutate: [
+    // Пакет дописывается в devDependencies по структуре: литерал
+    // `"@playwright/test": "^1.60.0"` уехал вместе с обновлением версии, и
+    // пробник перестал применяться.
+    mutateJson: [
       {
         path: "frontend/package.json",
-        from: '"@playwright/test": "^1.60.0",',
-        to: '"@playwright/test": "^1.60.0",\n    "_probe374_mertvyj_paket": "^1.0.0",',
+        apply: (doc) => {
+          doc.devDependencies._probe374_mertvyj_paket = "^1.0.0";
+        },
       },
     ],
     expect: /_probe374_mertvyj_paket.*не названы/s,
@@ -414,6 +421,14 @@ function apply(probe) {
     mkdirSync(dirname(path), { recursive: true });
     writeFileSync(path, w.content);
     created.push(path);
+  }
+  // Дописать в конец файла: стабильный якорь там, где конкретная строка уже
+  // уезжала (workflow переделывали — литерал `timeout-minutes: 5` исчез).
+  for (const a of probe.append || []) {
+    const path = join(ROOT, a.path);
+    const original = readFileSync(path, "utf8");
+    if (!backups.has(path)) backups.set(path, original);
+    writeFileSync(path, original + a.content);
   }
   for (const m of probe.mutate || []) {
     const path = join(ROOT, m.path);
