@@ -17,7 +17,8 @@
 | `registry` | fast | реестр инструментов против схем и закреплений, включая SHA действий в `.github/workflows/**` | pre-push, локальный гейт, CI ci-lint.yml | да | prove-checks 2026-11-03 |
 | `freshness` | fast | возраст закреплений реестра: пин-файла нет — fail, пин не смотрели >180 дн. — warn | pre-push, cron freshness.yml (report-only) | только в strict и только по fail | prove-checks 2026-11-03 |
 | `codegraph-age` | fast | возраст codegraph-индекса против HEAD | локальный гейт | только в strict | prove-checks 2026-11-03 |
-| `docs-links` | fast | битые ссылки и карды документации | pre-commit, CI docs.yml | да | prove-checks 2026-11-03 |
+| `docs-links` | fast | битые ссылки и карды документации | pre-commit, pre-push (docs), CI docs.yml | да | prove-checks 2026-11-03 |
+| `docs-lint` | fast | структурные дефекты Markdown: fence без языка, списки, заголовки, битые относительные ссылки (rumdl, правила — `.rumdl.toml`) | pre-push (docs), локальный гейт | да | prove-checks 2026-11-20 |
 | `adr-index` | fast | уникальность номеров ADR, шаблон заголовка, Дата/Статус | CI docs.yml | да | prove-checks 2026-11-03 |
 | `scripts-tests` | fast | юнит-тесты node-скриптов корня | CI docs.yml | да | prove-checks 2026-11-03 |
 | `labels-check` | fast | сгенерированные подписи фронта сверены с бэкендом | CI migrations.yml | да | prove-checks 2026-11-03 |
@@ -47,7 +48,7 @@
 
 | Команда | Состав | Ориентир по времени | Когда |
 |---------|--------|---------------------|-------|
-| `npm run gate:fast` | 20 шагов яруса fast | бюджет 60 с | `pre-commit` по staged-файлам; шаги fast — внутри `pre-push` по скоупу |
+| `npm run gate:fast` | 21 шаг яруса fast | бюджет 60 с | `pre-commit` по staged-файлам; шаги fast — внутри `pre-push` по скоупу |
 | `npm run gate` | fast + backend-tests + frontend-unit + frontend-build | минуты | перед merge глубокой работы; CI — фоновый второй взгляд |
 | `npm run gate:e2e` | полный + Playwright smoke | минуты плюс слот семафора | отдельно: поднимает свой стенд |
 
@@ -82,7 +83,7 @@ docs-links, guard-tree). `pre-push`
 
 | Diff | Скоуп | Что бежит | Замер |
 |------|-------|-----------|-------|
-| `docs/**`, `**.md` | `docs` | `docs-links`, `adr-index`, `ci-lint` | ~2 с |
+| `docs/**`, `**.md` | `docs` | `docs-links`, `docs-lint`, `adr-index`, `ci-lint` | ~2 с |
 | `backend/**` | `backend` | `pins`, `ruff`, `backend-tests`, `backend-test-count`, `test-hygiene`, `labels-check`, `seeds-validate`, `profile-settings-manifest` | ~4,5 мин |
 | `frontend/**` | `frontend` | `pins`, `frontend-types`, `frontend-types-e2e`, `frontend-lint`, `frontend-unit`, `frontend-test-count`, `frontend-build`, `reactuse-diff`, `modern-web`, `dev-deps` | ~3 мин |
 | обе зоны, `.github/**`, `scripts/**`, зависимости, неизвестный путь, нет базы | `full` | полный `npm run gate -- --strict` | ~7,6 мин |
@@ -158,6 +159,17 @@ docs-links, guard-tree). `pre-push`
 узнаваемого текста, затем откатывает и требует чистого `git status`. Результат
 пишется в `docs/quality/proven-checks.json`, а `gate --strict` сверяет покрытие:
 шаг без доказанного красного хода — красный строкой prove-coverage.
+
+Схема журнала здесь — вариант контракта `harness/rules/quality-gates.md`, и это
+названо, а не подразумевается: вместо `checks[]` с `kind` — карта `steps{}`
+(шаг → `proven_at`/`note`/`how`) плюс `exempt{}`. Причина: пробники живут в
+`scripts/prove-checks.mjs`, а не в JSON, поэтому «патч» записи выражается кодом
+пробника, а не полем `apply`; журнал остаётся результатом прогона, который
+скрипт перезаписывает сам. Пробел варианта известен и не спрятан: у `exempt{}`
+нет `reviewed`/`expires`, поэтому просрочка исключения машинно пока не ловится —
+это отдельная работа по `exempt`, а не «отложенная автоматизация»: условие
+появления — формат `exempt` с датами и шаг-хранитель, который краснеет на
+прошедшей дате.
 
 Состояние на 2026-11-18: 25 шагов из 28 показали красный ход (22 лёгким
 набором, backend-tests, frontend-unit и frontend-test-count — тяжёлым),

@@ -66,6 +66,12 @@ const PROBES = [
   },
   {
     step: "registry",
+    mutate: [{ path: "tools.json", from: '"version": "0.3.2"', to: '"version": "0.0.0"' }],
+    expect: /rumdl: «0\.0\.0» не найдено|«0\.0\.0» не найдено/,
+    note: "версия rumdl в реестре расходится с пином mise.toml — гейт запускал бы не тот линтер, что записан",
+  },
+  {
+    step: "registry",
     mutate: [{ path: "docs/toolchain.md", from: "| `0.16.9` |", to: "| `0.0.1` |" }],
     expect: /отстал от|пересобрать/i,
     note: "сгенерированный тулчейн поправили руками — сверка с реестром обязана покраснеть",
@@ -91,6 +97,17 @@ const PROBES = [
     mutate: [{ path: "docs/quality/hooks.md", from: "## Установка и проверка", to: "## Установка и проверка\n\n[ушедший документ](../no/such/doc.md)\n" }],
     expect: /бит[ыю]/i,
     note: "битая относительная ссылка в документе волны",
+  },
+  {
+    step: "docs-lint",
+    write: [
+      {
+        path: "_probe357_docs_lint.md",
+        content: "# Пробник #357\n\nТекст.\n\n```\nбез языка\n```\n",
+      },
+    ],
+    expect: /MD040/i,
+    note: "новый Markdown с fence без языка: rumdl отдаёт MD040 и exit 1",
   },
   {
     step: "adr-index",

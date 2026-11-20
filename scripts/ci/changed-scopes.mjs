@@ -16,7 +16,7 @@ const BACKEND = /^backend\//;
 const FRONTEND = /^frontend\//;
 
 /** Шаги для docs-only правки: ~2 с. */
-export const DOCS_STEPS = ["docs-links", "adr-index", "ci-lint"];
+export const DOCS_STEPS = ["docs-links", "docs-lint", "adr-index", "ci-lint"];
 
 /** Шаги для backend: миграционные быстрые проверки + тесты. */
 export const BACKEND_STEPS = [
