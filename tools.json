@@ -334,6 +334,20 @@
       "npm_package": "ajv"
     },
     {
+      "id": "commitlint",
+      "name": "commitlint",
+      "repo": "conventional-changelog/commitlint",
+      "category": "hook",
+      "version": "21.2.4",
+      "pinned_in": "mise.toml",
+      "runs_at": [
+        "commit"
+      ],
+      "blocking": true,
+      "last_reviewed": "2026-11-20",
+      "rationale": "Conventional Commits в хуке commit-msg: формат сообщения проверяется до появления коммита. Ставится изолированно через mise (npm:@commitlint/cli), правила — commitlint.config.mjs без extends; merge-коммиты пропускаются."
+    },
+    {
       "id": "lefthook",
       "name": "Lefthook",
       "repo": "evilmartians/lefthook",

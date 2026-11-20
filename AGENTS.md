@@ -155,6 +155,8 @@ GitHub Actions — фоновый второй взгляд. Готовност�
 `main` больше не требует PR и required checks — только запрет force-push и удаления.
 
 - `pre-commit`: ruff, eslint, docs-links, guard-tree по staged-файлам.
+- `commit-msg`: `commitlint` — Conventional Commits до появления коммита;
+  merge-коммиты пропускаются.
 - `pre-push`: `git diff origin/main...HEAD` → скоуп `docs` / `backend` / `frontend` /
   `full`; запускаются только шаги этого скоупа через
   `npm run gate -- --only=… --strict`. Неизвестный путь, конфиги, обе зоны и

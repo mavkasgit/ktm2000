@@ -33,6 +33,12 @@ node = "26.13.0"
 python = "3.14.10"
 hk = "2.11.0"
 
+# Хук commit-msg: Conventional Commits проверяются до появления коммита.
+# Ставится изолированно через mise; конфиг — commitlint.config.mjs в корне
+# (без extends: общий конфиг лежал бы вне node_modules и стал бы лишней точкой
+# отказа). Пин — здесь, реестр — tools.json.
+"npm:@commitlint/cli" = "21.2.4"
+
 # линтеры и форматтеры
 ruff = "0.16.9"
 oxlint = "1.90.0"

@@ -193,7 +193,8 @@ docs-links, guard-tree). `pre-push`
 ## Хуки — основной гейт, CI — зеркало
 
 `lefthook.yml` навешивает на pre-commit ruff, eslint, docs-links и guard-tree по
-staged-файлам, на pre-push — `scripts/ci/pre-push-gate.mjs` (скоуп по diff) плюс
+staged-файлам, на commit-msg — `commitlint` (Conventional Commits, merge-коммиты
+пропускаются), на pre-push — `scripts/ci/pre-push-gate.mjs` (скоуп по diff) плюс
 `verify:sync`. Это не «удобство»: именно этот прогон решает, готово ли изменение,
 а GitHub Actions — фоновый второй взгляд.
 
