@@ -60,19 +60,31 @@ const PROBES = [
   },
   {
     step: "registry",
-    mutate: [{ path: "tools.json", from: '"version": "0.16.9"', to: '"version": "0.0.0"' }],
-    expect: /не найдено|реестр/i,
-    note: "версия в реестре расходится с requirements-dev.txt",
-  },
-  {
-    step: "registry",
-    mutate: [{ path: "tools.json", from: '"version": "0.3.2"', to: '"version": "0.0.0"' }],
+    // Версию берём по id, а не строкой `"version": "0.16.9"`: литерал версии в
+    // пробнике устаревает вместе с пином, и пробник молча перестаёт применяться
+    // (ровно это случилось после подъёма ruff до 0.17.4 — мутация не находилась).
+    mutateJson: [
+      {
+        path: "tools.json",
+        apply: (doc) => {
+          doc.tools.find((tool) => tool.id === "rumdl").version = "0.0.0";
+        },
+      },
+    ],
     expect: /rumdl: «0\.0\.0» не найдено|«0\.0\.0» не найдено/,
     note: "версия rumdl в реестре расходится с пином mise.toml — гейт запускал бы не тот линтер, что записан",
   },
   {
     step: "registry",
-    mutate: [{ path: "docs/toolchain.md", from: "| `0.16.9` |", to: "| `0.0.1` |" }],
+    // Правка внутри маркеров, а не в колонке версии: любая ручная правка
+    // сгенерированной таблицы обязана покраснеть, а строка с id стабильна.
+    mutate: [
+      {
+        path: "docs/toolchain.md",
+        from: "| Ruff (astral-sh/ruff) |",
+        to: "| Ruff (astral-sh/ruff), поправлено руками |",
+      },
+    ],
     expect: /отстал от|пересобрать/i,
     note: "сгенерированный тулчейн поправили руками — сверка с реестром обязана покраснеть",
   },
@@ -398,6 +410,18 @@ function apply(probe) {
     const next = m.from === undefined ? m.to : original.replace(m.from, m.to);
     if (next === original) throw new Error(`мутация не применилась: в ${m.path} нет куска «${m.from}»`);
     writeFileSync(path, next);
+  }
+  // Мутация JSON — по структуре, а не по литералу версии: пробник, который
+  // ищет `"version": "0.16.9"`, устаревает вместе с пином и перестаёт
+  // применяться молча. Формат записи тот же, что у файла (2 пробела + \n),
+  // поэтому откат возвращает байт-в-байт исходник из backups.
+  for (const m of probe.mutateJson || []) {
+    const path = join(ROOT, m.path);
+    const original = readFileSync(path, "utf8");
+    if (!backups.has(path)) backups.set(path, original);
+    const doc = JSON.parse(original);
+    m.apply(doc);
+    writeFileSync(path, `${JSON.stringify(doc, null, 2)}\n`);
   }
   for (const t of probe.touch || []) {
     const path = join(ROOT, t.path);
