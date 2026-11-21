@@ -30,12 +30,15 @@ const GATES_SHEET = "docs/quality/gates.md";
 const PROVEN_SHEET = "docs/quality/proven-checks.json";
 const GATES_BLOCK = /<!-- gates-steps:start -->([\s\S]*?)<!-- gates-steps:end -->/;
 
-/** Поле `ci` — workflow, в котором шаг уже есть; `null` — нет ни в CI, ни локально. */
+/** Поле `ci` — workflow, в котором шаг уже есть; `null` — в CI шага нет, причина записана комментарием рядом со шагом. */
 const STEPS = [
   {
     name: "pins",
     tier: "fast",
     check: checkPins,
+    // `ci: null`: в CI версия ставится из тех же pin-файлов (`node-version-file`
+    // из `.nvmrc`, `.python-version`), поэтому шаг сравнивал бы файл с самим
+    // собой. Смысл — поймать локальную машину, где PATH разошёлся с пином.
     ci: null,
     what: " фактические версии языков против pin-файлов",
   },
@@ -59,6 +62,8 @@ const STEPS = [
     tier: "fast",
     command: "node scripts/codegraph-age.mjs",
     honorsStrict: true,
+    // `ci: null`: индекс `.codegraph` — локальный артефакт (codegraph из mise),
+    // в CI его не строят; возраст индекса важен только на машине агента.
     ci: null,
     what: " возраст codegraph-индекса против HEAD",
   },
@@ -125,6 +130,8 @@ const STEPS = [
     tier: "fast",
     command: "python backend/scripts/audit_compose.py --strict",
     tool: "python",
+    // `ci: null`: compose — локальный стенд; e2e в CI поднимается сервис-контейнерами
+    // GitHub, поэтому этих файлов там никто не запускает.
     ci: null,
     what: " потолки логов, healthcheck и restart-политика во всех compose-файлах",
   },
@@ -198,6 +205,8 @@ const STEPS = [
     name: "modern-web",
     tier: "full",
     command: "node scripts/modern-web.mjs",
+    // `ci: null`: baseline-ратчет живёт в pre-push (фронтовый скоуп) и локальном
+    // гейте; CI совещательный (harness rules §1), прогон в PR ничего не блокирует.
     ci: null,
     what: " новые legacy-паттерны веб-платформы сверх базлайна docs/quality/modern-web-baseline.json",
   },
@@ -205,6 +214,8 @@ const STEPS = [
     name: "reactuse-diff",
     tier: "fast",
     command: "node scripts/reactuse-diff.mjs",
+    // `ci: null`: ловит новые примитивы в диффе ветки, пока агент ещё может всё
+    // поправить, — это шаг pre-push; в совещательном CI он ничего не останавливает.
     ci: null,
     what: " новые ручные примитивы (matchMedia, clipboard, observers) вместо @siberiacancode/reactuse",
   },
