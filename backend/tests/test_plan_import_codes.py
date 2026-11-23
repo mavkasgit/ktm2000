@@ -65,7 +65,6 @@ SPEC_WARNING_BASES = frozenset(
         "plan_group_balance_mismatch",  # фактический row-warning вне спеки §3 (баланс группы)
         "row_selection_applied",
         "row_selection_auto_included",
-        "paired_profile_product_unmapped",
         "sku_matched_by_part",  # #347: привязка по части составного артикула
         "sku_matched_by_alias",  # #347: части — дубли-алиасы одного артикула
         "sku_ambiguous_numeric",  # #444: числовой код подходит нескольким продуктам
@@ -114,7 +113,6 @@ def test_classify_warnings_with_params():
     samples = [
         "product_name_missing",
         "input_dimensions_unresolved",
-        "paired_profile_product_unmapped",
         "hanger_quantity_not_set:SKU1",
         "invalid_input_length:row=3",
         "invalid_output_length:row=5",

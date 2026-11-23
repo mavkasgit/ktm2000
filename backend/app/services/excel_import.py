@@ -400,8 +400,6 @@ def _is_merged_continuation(
     merged_anchors: dict[tuple[int, int], int],
 ) -> bool:
     """Строка накрыта merged-диапазоном входа/артикула, якорь которого — в группе."""
-    if group.payload.get("paired_profile"):
-        return False
     if _has_own_input(raw):
         return False
     row0 = row_number - 1
@@ -431,8 +429,6 @@ def _is_adjacent_continuation(
       группы, выходы 0,9 и 1,8 — #279). Мусор в длине продолжением не делает:
       строка станет своей позицией с warning, как раньше.
     """
-    if group.payload.get("paired_profile"):
-        return False
     if not sku or sku != group.source_sku:
         return False
     if row_number != group.source_row_numbers[-1] + 1:
