@@ -275,17 +275,17 @@ jobs:
           PYTEST_MODE="${{ github.event.inputs.pytest_mode }}"
           if [ -z "$PYTEST_MODE" ]; then PYTEST_MODE="parallel"; fi
           case "$PYTEST_MODE" in
-            parallel) PYTEST_SCHEDULER="-n 4 --dist loadfile" ;;
-            serial)   PYTEST_SCHEDULER="-p no:xdist" ;;
+            parallel) PYTEST_SCHEDULER=(-n 4 --dist loadfile) ;;
+            serial)   PYTEST_SCHEDULER=(-p no:xdist) ;;
             *) echo "Неизвестный pytest_mode=$PYTEST_MODE" >&2; exit 1 ;;
           esac
-          echo "pytest_mode=$PYTEST_MODE; scheduler=$PYTEST_SCHEDULER"
+          echo "pytest_mode=$PYTEST_MODE; scheduler=${PYTEST_SCHEDULER[*]}"
 
           cd backend
           TEST_RUN_ID="$RUN_ID" \
           TEST_DB_NAME="$DB_NAME" \
           TEST_DATABASE_URL="postgresql+asyncpg://ktm2000_user:ktm2000_pass_test@localhost:5212/${DB_NAME}" \
-          python -m pytest -q $PYTEST_SCHEDULER -p no:pytest-testmon
+          python -m pytest -q "${PYTEST_SCHEDULER[@]}" -p no:pytest-testmon
           python -m coverage combine
 
       - name: Coverage gate (>= 73%)
