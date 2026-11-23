@@ -592,7 +592,9 @@ async def list_import_positions(batch_id: int, db: AsyncSession = Depends(get_db
     # на каждую позицию. Ключ локального кэша включает source_payload, поэтому
     # у реальных строк батча он уникален и мемоизация не помогала — на батче
     # в 900 строк это десятки тысяч запросов.
-    route_info_by_id = await resolve_position_routes_batch(db, positions)
+    route_info_by_id = await resolve_position_routes_batch(
+        db, positions, import_batches_by_id={batch.id: batch}
+    )
 
     # Имена продуктов — одним запросом по колонке. Ответу нужно только
     # product.name, поэтому ORM-объекты Product не грузятся: у них есть
