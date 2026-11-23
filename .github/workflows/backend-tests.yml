@@ -16,6 +16,9 @@ name: Backend tests
 # + `sitecustomize.py`, штатный механизм для subprocess-ов) и сводится
 # `coverage combine` до порога; иначе гейт мерил бы только диспетчер тестов.
 # Цифры решения — в шаге прогона (serial против `-n 4` на одной ревизии).
+# #378: для ручного чередования 2+2 служит input workflow_dispatch.pytest_mode
+# (serial|parallel); локальный A/B и честная оговорка про CI — в
+# docs/night/tickets/T-20261123-C-378.md. Локальные цифры НЕ являются CI-результатом.
 # -p no:pytest-testmon — testmon не должен пропускать тесты в CI; блокируется
 # по имени entry point (pytest-testmon), а не по имени модуля testmon.
 # Пин 7.17.2 — patch-обновление к бейзлайну 73% (docs/night/BASELINE.md). Если цифра
@@ -52,6 +55,20 @@ on:
       - main
       - master
   workflow_dispatch:
+    # #378: ручной A/B-замер стены. Боевой режим — parallel (как на push/PR);
+    # serial существует ТОЛЬКО чтобы человек с правами администратора репозитория
+    # мог прогнать чередование 2+2 (serial/parallel/serial/parallel) через
+    # workflow_dispatch и приложить `gh run view --json jobs` к тикету.
+    # Агент эти прогоны не запускает: dispatch требует прав репозитория.
+    inputs:
+      pytest_mode:
+        description: "Режим pytest: parallel = -n 4 --dist loadfile, serial = без xdist"
+        required: true
+        default: parallel
+        type: choice
+        options:
+          - parallel
+          - serial
 
 concurrency:
   group: ci-${{ github.workflow }}-${{ github.event.pull_request.number || github.ref }}
@@ -251,11 +268,24 @@ jobs:
           export PYTHONPATH="$GITHUB_WORKSPACE/.ci-coverage${PYTHONPATH:+:$PYTHONPATH}"
           export COVERAGE_PROCESS_START="$GITHUB_WORKSPACE/.coveragerc.ci"
 
+          # #378: режим выбирается только в workflow_dispatch. На push/PR input
+          # отсутствует — боевой parallel; serial нужен человеку для чередования
+          # 2+2 и замера стены CI. Оба режима гоняют ОДИН и тот же набор тестов
+          # и один и тот же coverage-гейт (sitecustomize стартует и в serial).
+          PYTEST_MODE="${{ github.event.inputs.pytest_mode }}"
+          if [ -z "$PYTEST_MODE" ]; then PYTEST_MODE="parallel"; fi
+          case "$PYTEST_MODE" in
+            parallel) PYTEST_SCHEDULER="-n 4 --dist loadfile" ;;
+            serial)   PYTEST_SCHEDULER="-p no:xdist" ;;
+            *) echo "Неизвестный pytest_mode=$PYTEST_MODE" >&2; exit 1 ;;
+          esac
+          echo "pytest_mode=$PYTEST_MODE; scheduler=$PYTEST_SCHEDULER"
+
           cd backend
           TEST_RUN_ID="$RUN_ID" \
           TEST_DB_NAME="$DB_NAME" \
           TEST_DATABASE_URL="postgresql+asyncpg://ktm2000_user:ktm2000_pass_test@localhost:5212/${DB_NAME}" \
-          python -m pytest -q -n 4 --dist loadfile -p no:pytest-testmon
+          python -m pytest -q $PYTEST_SCHEDULER -p no:pytest-testmon
           python -m coverage combine
 
       - name: Coverage gate (>= 73%)
