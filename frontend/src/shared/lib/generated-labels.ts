@@ -58,7 +58,6 @@ export const errorLabels: Record<string, string> = {
 export const warningLabels: Record<string, string> = {
   "hanger_quantity_not_set": "Не задано количество на подвес — количество не округлено",
   "paired_hanger_adjusted": "Округлено до кратности подвеса",
-  "paired_profile_product_unmapped": "Парный профиль не сопоставлен",
   "paired_row_auto_included": "Автодобавлена парная строка",
   "period_not_detected": "не определен",
   "product_name_missing": "Отсутствует наименование",

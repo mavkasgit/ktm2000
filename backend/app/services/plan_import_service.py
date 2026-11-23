@@ -72,7 +72,6 @@ from app.services.plan_position_hanger import (
     position_length_mm,
     resolve_position_hanger,
 )
-from app.services.product_pair_resolver import PairHangerValue, ResolvedPair
 from app.services.route_builder import (
     BuiltRoute,
     build_route_from_profile,
@@ -137,7 +136,6 @@ PLAN_IMPORT_WARNING_CODES: frozenset[str] = frozenset(
     {
         "product_name_missing",
         "input_dimensions_unresolved",
-        "paired_profile_product_unmapped",
     }
 )
 #: Warning-коды с параметрами после «:» (префикс до первого «:»).
@@ -749,7 +747,6 @@ async def _make_change_items(
     template_column_mapping: dict | None = None,
     normalize_hanger_quantity: bool = True,
 ) -> tuple[list[PlanChangeItem], dict]:
-    available_by_sku = _build_available_inputs_by_sku(parsed_rows)
     by_fingerprint: dict[str, PlanPosition] = {}
     by_row_hash: dict[str, PlanPosition] = {}
     for pos in existing_positions:
@@ -787,8 +784,6 @@ async def _make_change_items(
     route_cache: dict[str, int] = {}
 
     # Локальные кэши для устранения N+1 запросов при сопоставлении маршрутов и пар
-    pair_cache = {}                   # tuple(component_skus) -> ResolvedPair | None
-    pair_n_cache = {}                 # (pair.id, length_key) -> PairHangerValue
     pair_candidates_cache: dict[int, list[product_pair_resolver.PairLengthCandidate]] = {}
     # Позиция-компонент пары (#312): справочник пар по product_id читается
     # один раз на импорт, а не по SELECT на каждую строку.
@@ -917,105 +912,17 @@ async def _make_change_items(
                     product = alias_product
                     warnings.append(f"sku_matched_by_alias:{alias_product.sku}")
 
-        resolved_pair: ResolvedPair | None = None
-        pair_n: PairHangerValue | None = None
-
         if product is None:
-            if not row.payload.get("paired_profile"):
-                # Неоднозначная часть (хвост подходит нескольким артикулам)
-                # попадает сюда же: новый error-код не вводится, но и молча
-                # выбрать первый артикул нельзя.
-                errors.append("product_not_found")
+            # Неоднозначная часть (хвост подходит нескольким артикулам)
+            # попадает сюда же: новый error-код не вводится, но и молча
+            # выбрать первый артикул нельзя.
+            errors.append("product_not_found")
         else:
             # Use cached value to avoid triggering autoflush
             is_active = product_is_active_cache.get(product.id, False)
             if not is_active:
                 errors.append("product_inactive")
 
-        if row.payload.get("paired_profile"):
-            # Пара резолвится из product_pairs (#148, ADR-0023) через
-            # единственный модуль-владелец: точное неупорядоченное
-            # совпадение двух SKU-компонентов.
-            components = row.payload.get("components") or []
-            component_skus = [c.get("sku", "") for c in components if c.get("sku")]
-            # Ключ кэша по нормализованным SKU — вариантам с пробелами/NBSP
-            # не нужен отдельный запрос резолва.
-            component_skus_key = tuple(sorted(_normalize_sku(sku) for sku in component_skus))
-            if component_skus_key in pair_cache:
-                resolved_pair = pair_cache[component_skus_key]
-            else:
-                resolved_pair = await product_pair_resolver.resolve_pair_by_component_skus(db, component_skus)
-                pair_cache[component_skus_key] = resolved_pair
-
-            if resolved_pair is None:
-                errors.append("product_pair_not_found")
-                row.payload["product_pair"] = {
-                    "resolved": False,
-                    "reason": "product_pair_not_found",
-                    "inputs": [],
-                    "quantity_per_hanger": None,
-                    "source": None,
-                }
-                if "paired_profile_product_unmapped" not in warnings:
-                    warnings.append("paired_profile_product_unmapped")
-            else:
-                # Пара существует только на пересечении нормальных длин.
-                # Вход из Excel остаётся нормальным; сырьевая длина нужна
-                # исключительно для снимка N и не материализуется в план.
-                pair_id = resolved_pair.pair.id
-                if pair_id not in pair_candidates_cache:
-                    pair_candidates_cache[pair_id] = (
-                        await product_pair_resolver.pair_length_candidates(db, resolved_pair)
-                    )
-                length_mm = position_length_mm(row)
-                length_key = _length_key(length_mm) if length_mm is not None else None
-                normal_registered = length_key is None or any(
-                    _length_key(candidate.length_mm) == length_key
-                    for candidate in pair_candidates_cache[pair_id]
-                )
-                if not normal_registered:
-                    errors.append("normal_length_not_found")
-                    pair_n = PairHangerValue(None, None)
-                else:
-                    n_cache_key = (pair_id, length_key)
-                    if n_cache_key in pair_n_cache:
-                        pair_n = pair_n_cache[n_cache_key]
-                    else:
-                        pair_n = await product_pair_resolver.resolve_pair_n(
-                            db,
-                            resolved_pair,
-                            length_mm=length_mm,
-                            length_candidates=pair_candidates_cache[pair_id],
-                        )
-                        pair_n_cache[n_cache_key] = pair_n
-                    if pair_n.calc_error:
-                        errors.append("hanger_calc_zero")
-
-                inputs = []
-                for comp_product in (resolved_pair.product_a, resolved_pair.product_b):
-                    sku_key = comp_product.sku.lower()
-                    available = available_by_sku.get(sku_key, Decimal(0))
-                    inputs.append({
-                        "product_id": comp_product.id,
-                        "sku": comp_product.sku,
-                        "quantity_per_hanger": (
-                            str(pair_n.quantity_per_hanger) if pair_n.quantity_per_hanger is not None else "0"
-                        ),
-                        "available_quantity": str(available),
-                        "unit": comp_product.unit,
-                    })
-                # Снапшот пары (payload-ключ product_pair, структура сохранена —
-                # читатель PlanHangerDisplay читает его же).
-                row.payload["product_pair"] = {
-                    "resolved": True,
-                    "reason": None,
-                    "pair_id": resolved_pair.pair.id,
-                    "pair_name": f"{resolved_pair.product_a.sku}+{resolved_pair.product_b.sku}",
-                    "quantity_per_hanger": pair_n.quantity_per_hanger,
-                    "source": pair_n.source,
-                    "inputs": inputs,
-                }
-                warnings = [w for w in warnings if w != "paired_profile_product_unmapped"]
 
         payload_has_pack_ops = bool(row.payload.get("additional_pack_operations"))
 
@@ -1087,7 +994,7 @@ async def _make_change_items(
         # Сырьевая длина не материализуется. Для линейного артикула длина
         # входа из Excel должна точно совпадать с нормальной длиной реестра;
         # неизвестное значение блокирует только эту позицию.
-        if not row.payload.get("paired_profile") and product is not None:
+        if product is not None:
             length_mm = position_length_mm(row)
             dimension_state = getattr(product.dimension_state, "value", product.dimension_state)
             if dimension_state == "length" and length_mm is not None:
@@ -1106,135 +1013,107 @@ async def _make_change_items(
         # none — артикул есть, количества нет.
         hanger_source: str | None = None
 
-        if row.payload.get("paired_profile"):
-            # N пары (#148): единая механика с одиночными — ручная из
-            # словаря пары / авто-расчёт. Инвариант равенства N (#67):
-            # пара — единая загрузка N×A + N×B, поэтому quantity_a == quantity_b
-            # и количество позиции — то же число: округляем его, как у
-            # одиночных, молча (отдельного warning на пару не заводим).
-            per_hanger = pair_n.quantity_per_hanger if pair_n is not None else None
-            quantity_per_hanger = per_hanger
-
-            if resolved_pair is None:
-                hanger_source = "missing_product"
-            elif per_hanger and per_hanger > 0 and pair_n is not None and pair_n.source:
-                hanger_source = pair_n.source
-            else:
-                hanger_source = "none"
-
-            if per_hanger and per_hanger > 0:
-                if normalize_hanger_quantity:
-                    adjusted = adjust_quantity_to_hanger(row.quantity, per_hanger)
-                    if adjusted is not None:
-                        effective_quantity = adjusted
-                hanger_count = (
-                    math.ceil(effective_quantity / per_hanger)
-                    if normalize_hanger_quantity
-                    else float(effective_quantity / per_hanger)
+        # N вычисляется по нормальной длине позиции; effective raw внутри
+        # резолвера влияет только на формулу и не меняет dimensions.
+        length_mm = (row.input_dimensions or {}).get(LENGTH_MM)
+        # Артикул может входить в пару: после снятия склейки (#312) пара —
+        # это две отдельные позиции, но на подвесе они едут вместе, поэтому
+        # норму пары берёт та позиция, которая пришла в паре (см.
+        # ``_pair_partner_row_is_adjacent``). Одинокая строка артикула пары
+        # («нет парного задания») считается обычной позицией по своей норме,
+        # и решение импорта уезжает в payload ключом ``product_pair`` —
+        # планировщик, доска и печать читают его, а не справочник пар.
+        hanger_value = PositionHangerValue(None, None)
+        if product is not None:
+            resolved_pair = await pair_resolver_cache.resolve_pair_by_product(db, product.id)
+            pair_partner_adjacent = False
+            if resolved_pair is not None:
+                partner_sku = (
+                    resolved_pair.product_b.sku
+                    if resolved_pair.product_a.id == product.id
+                    else resolved_pair.product_a.sku
                 )
-        else:
-            # N вычисляется по нормальной длине позиции; effective raw внутри
-            # резолвера влияет только на формулу и не меняет dimensions.
-            length_mm = (row.input_dimensions or {}).get(LENGTH_MM)
-            # Артикул может входить в пару: после снятия склейки (#312) пара —
-            # это две отдельные позиции, но на подвесе они едут вместе, поэтому
-            # норму пары берёт та позиция, которая пришла в паре (см.
-            # ``_pair_partner_row_is_adjacent``). Одинокая строка артикула пары
-            # («нет парного задания») считается обычной позицией по своей норме,
-            # и решение импорта уезжает в payload ключом ``product_pair`` —
-            # планировщик, доска и печать читают его, а не справочник пар.
-            hanger_value = PositionHangerValue(None, None)
-            if product is not None:
-                resolved_pair = await pair_resolver_cache.resolve_pair_by_product(db, product.id)
-                pair_partner_adjacent = False
-                if resolved_pair is not None:
-                    partner_sku = (
-                        resolved_pair.product_b.sku
-                        if resolved_pair.product_a.id == product.id
-                        else resolved_pair.product_a.sku
+                pair_partner_adjacent = _pair_partner_row_is_adjacent(
+                    row, partner_sku, sheet_rows_by_sku_length
+                )
+            if resolved_pair is not None and pair_partner_adjacent:
+                pair_id = resolved_pair.pair.id
+                if pair_id not in pair_candidates_cache:
+                    pair_candidates_cache[pair_id] = (
+                        await product_pair_resolver.pair_length_candidates(db, resolved_pair)
                     )
-                    pair_partner_adjacent = _pair_partner_row_is_adjacent(
-                        row, partner_sku, sheet_rows_by_sku_length
-                    )
-                if resolved_pair is not None and pair_partner_adjacent:
-                    pair_id = resolved_pair.pair.id
-                    if pair_id not in pair_candidates_cache:
-                        pair_candidates_cache[pair_id] = (
-                            await product_pair_resolver.pair_length_candidates(db, resolved_pair)
-                        )
-                    pair_value = await product_pair_resolver.resolve_pair_n(
-                        db,
-                        resolved_pair,
-                        length_mm=length_mm,
-                        length_candidates=pair_candidates_cache[pair_id],
-                    )
-                else:
-                    pair_value = None
-                if pair_value is not None and not pair_value.calc_error:
-                    hanger_value = PositionHangerValue(
-                        pair_value.quantity_per_hanger, pair_value.source
-                    )
-                    row.payload["product_pair"] = {
-                        "resolved": True,
-                        "reason": None,
-                        "pair_id": pair_id,
-                        "pair_name": f"{resolved_pair.product_a.sku}+{resolved_pair.product_b.sku}",
-                        "quantity_per_hanger": pair_value.quantity_per_hanger,
-                        "source": pair_value.source,
-                    }
-                else:
-                    hanger_value = resolve_position_hanger(
-                        product, length_mm=length_mm, payload_quantity_per_hanger=None
-                    )
-                    if resolved_pair is not None:
-                        # Артикул в паре, но пары строк (или её нормы на этой
-                        # длине) в плане нет — позиция одиночная.
-                        row.payload["product_pair"] = {
-                            "resolved": False,
-                            "reason": (
-                                "no_paired_row"
-                                if not pair_partner_adjacent
-                                else "pair_hanger_not_found"
-                            ),
-                            "pair_id": resolved_pair.pair.id,
-                            "pair_name": f"{resolved_pair.product_a.sku}+{resolved_pair.product_b.sku}",
-                            "quantity_per_hanger": None,
-                            "source": None,
-                        }
-            product_hanger_qty = hanger_value.quantity_per_hanger
-
-            # Источник для подсветки артикула в предпросмотре: значение и его
-            # источник приходят из одного резолвера — того же, что в плане.
-            if product is None:
-                hanger_source = "missing_product"
-            elif product_hanger_qty is not None and product_hanger_qty > 0:
-                hanger_source = hanger_value.source or "none"
+                pair_value = await product_pair_resolver.resolve_pair_n(
+                    db,
+                    resolved_pair,
+                    length_mm=length_mm,
+                    length_candidates=pair_candidates_cache[pair_id],
+                )
             else:
-                hanger_source = "none"
-            if product_hanger_qty is not None and product_hanger_qty > 0:
-                quantity_per_hanger = product_hanger_qty
+                pair_value = None
+            if pair_value is not None and not pair_value.calc_error:
+                hanger_value = PositionHangerValue(
+                    pair_value.quantity_per_hanger, pair_value.source
+                )
+                row.payload["product_pair"] = {
+                    "resolved": True,
+                    "reason": None,
+                    "pair_id": pair_id,
+                    "pair_name": f"{resolved_pair.product_a.sku}+{resolved_pair.product_b.sku}",
+                    "quantity_per_hanger": pair_value.quantity_per_hanger,
+                    "source": pair_value.source,
+                }
+            else:
+                hanger_value = resolve_position_hanger(
+                    product, length_mm=length_mm, payload_quantity_per_hanger=None
+                )
+                if resolved_pair is not None:
+                    # Артикул в паре, но пары строк (или её нормы на этой
+                    # длине) в плане нет — позиция одиночная.
+                    row.payload["product_pair"] = {
+                        "resolved": False,
+                        "reason": (
+                            "no_paired_row"
+                            if not pair_partner_adjacent
+                            else "pair_hanger_not_found"
+                        ),
+                        "pair_id": resolved_pair.pair.id,
+                        "pair_name": f"{resolved_pair.product_a.sku}+{resolved_pair.product_b.sku}",
+                        "quantity_per_hanger": None,
+                        "source": None,
+                    }
+        product_hanger_qty = hanger_value.quantity_per_hanger
 
-                if normalize_hanger_quantity:
-                    adjusted = adjust_quantity_to_hanger(row.quantity, product_hanger_qty)
-                    if adjusted is not None:
-                        effective_quantity = adjusted
-                        hanger_count = math.ceil(effective_quantity / product_hanger_qty)
-                    else:
-                        hanger_count = math.ceil(effective_quantity / product_hanger_qty)
-                else:
-                    # Округление отключено — считаем подвесы как дробное число
-                    hanger_count = float(effective_quantity / product_hanger_qty)
-            elif normalize_hanger_quantity:
-                # Нормы для сырьевой длины позиции нет — не округляем (Q2=а).
-                if product is None:
-                    warnings.append("hanger_quantity_not_set:продукт не найден")
-                elif length_mm is not None:
-                    warnings.append(f"hanger_quantity_not_set:{_mm_as_meters(length_mm)}")
-                else:
-                    warnings.append(
-                        f"hanger_quantity_not_set:quantity_per_hanger не задан для {product.sku}"
-                    )
+        # Источник для подсветки артикула в предпросмотре: значение и его
+        # источник приходят из одного резолвера — того же, что в плане.
+        if product is None:
+            hanger_source = "missing_product"
+        elif product_hanger_qty is not None and product_hanger_qty > 0:
+            hanger_source = hanger_value.source or "none"
+        else:
+            hanger_source = "none"
+        if product_hanger_qty is not None and product_hanger_qty > 0:
+            quantity_per_hanger = product_hanger_qty
 
+            if normalize_hanger_quantity:
+                adjusted = adjust_quantity_to_hanger(row.quantity, product_hanger_qty)
+                if adjusted is not None:
+                    effective_quantity = adjusted
+                    hanger_count = math.ceil(effective_quantity / product_hanger_qty)
+                else:
+                    hanger_count = math.ceil(effective_quantity / product_hanger_qty)
+            else:
+                # Округление отключено — считаем подвесы как дробное число
+                hanger_count = float(effective_quantity / product_hanger_qty)
+        elif normalize_hanger_quantity:
+            # Нормы для сырьевой длины позиции нет — не округляем (Q2=а).
+            if product is None:
+                warnings.append("hanger_quantity_not_set:продукт не найден")
+            elif length_mm is not None:
+                warnings.append(f"hanger_quantity_not_set:{_mm_as_meters(length_mm)}")
+            else:
+                warnings.append(
+                    f"hanger_quantity_not_set:quantity_per_hanger не задан для {product.sku}"
+                )
         # Габариты операции (ADR-0003): вход без длины при габаритных выходах —
         # подставляем типовой размер продукта из справочника измерений.
         # Не разрешилось — warning, импорт не падает.
@@ -1853,26 +1732,6 @@ def _summary(
         summary["selected_row_numbers"] = parsed_workbook.selected_row_numbers
         summary["auto_included_row_numbers"] = parsed_workbook.auto_included_row_numbers
     return summary
-
-
-def _build_available_inputs_by_sku(rows: list[ParsedPlanRow]) -> dict[str, Decimal]:
-    totals: dict[str, Decimal] = {}
-    for row in rows:
-        components = row.payload.get("components") or []
-        if isinstance(components, list) and components:
-            for component in components:
-                sku = str(component.get("sku") or "").strip()
-                if not sku:
-                    continue
-                key = sku.lower()
-                current = totals.get(key, Decimal(0))
-                totals[key] = current + row.quantity
-            continue
-
-        key = row.source_sku.lower()
-        current = totals.get(key, Decimal(0))
-        totals[key] = current + row.quantity
-    return totals
 
 
 def _sheet_rows_by_sku_length(rows: list[ParsedPlanRow]) -> dict[tuple[str, str | None], list[int]]:

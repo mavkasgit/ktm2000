@@ -33,7 +33,6 @@ OUTPUT_KIND_LABELS = {
 }
 
 WARNING_LABELS = {
-    "paired_profile_product_unmapped": "Парный профиль не сопоставлен",
     "product_name_missing": "Отсутствует наименование",
     "period_not_detected": "не определен",
     "route_auto_fallback": "Маршрут скорректирован автоматически — проверьте корректность",

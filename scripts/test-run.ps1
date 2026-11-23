@@ -24,8 +24,20 @@ $ErrorActionPreference = "Stop"
 # ------------------------------------------------------------
 $PostgresHost = if ($env:TEST_DB_HOST)     { $env:TEST_DB_HOST }     else { "localhost" }
 $PostgresPort = if ($env:TEST_DB_PORT)     { $env:TEST_DB_PORT }     else { "5441" }
-$PostgresUser = if ($env:TEST_DB_USER)     { $env:TEST_DB_USER }     else { "ktm2000_user" }
-$PostgresPassword = if ($env:TEST_DB_PASSWORD) { $env:TEST_DB_PASSWORD } else { "ktm2000_pass_test" }
+# Admin credentials are shared with scripts/test-db.py, which owns create/verify/drop.
+# Canonical names are TEST_DB_ADMIN_USER / TEST_DB_ADMIN_PASSWORD (read by the CLI);
+# TEST_DB_USER / TEST_DB_PASSWORD stay as legacy aliases. Without propagation a
+# caller setting only the legacy pair got a DSN with that login while test-db.py
+# connected with the default one (NIGHT_REPORT.md, P7). Canonical wins; the legacy
+# value is exported so the child process sees exactly the same credentials.
+if ($env:TEST_DB_USER -and -not $env:TEST_DB_ADMIN_USER) {
+    $env:TEST_DB_ADMIN_USER = $env:TEST_DB_USER
+}
+if ($env:TEST_DB_PASSWORD -and -not $env:TEST_DB_ADMIN_PASSWORD) {
+    $env:TEST_DB_ADMIN_PASSWORD = $env:TEST_DB_PASSWORD
+}
+$PostgresUser = if ($env:TEST_DB_ADMIN_USER) { $env:TEST_DB_ADMIN_USER } else { "ktm2000_user" }
+$PostgresPassword = if ($env:TEST_DB_ADMIN_PASSWORD) { $env:TEST_DB_ADMIN_PASSWORD } else { "ktm2000_pass_test" }
 # xdist worker cap for the parallel run. Default: -n auto (= all cores).
 # When several agents run tests concurrently, set PYTEST_NUM_WORKERS (e.g. 4),
 # otherwise every run grabs all cores and the machine becomes unresponsive.
