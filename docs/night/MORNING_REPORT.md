@@ -131,3 +131,64 @@ mise/hk/typos/lychee как бинарники (на Windows без cargo не �
 - Метрики M1/M2 сняты **в тишине** (разброс 0.2 с) и отдельно — под нагрузкой (38.2–97.2 с); сравнивать прогоны между собой можно только внутри одного режима.
 - Красные ходы 19 шагов доказаны прогоном `prove-checks` на временных мутациях (`6b56b239` — полный красный прогон); три исключения датированы в `proven-checks.json`, а не молчат.
 - `e2e` этой ночью проверялся ярусом `smoke` на живом стенде; `ui-e2e`/`mobile` — за мержем.
+
+---
+
+# Дополнение 2026-11-23 — внеочередной дневной цикл
+
+> Команда пользователя: «прогнать по всей системе, ночи не ждать, работать автономно,
+> запускать агентов, оркестрировать». Регламент `PLAYBOOK.md` соблюдён, кроме времени старта.
+> Push не делается (нет прямой команды).
+
+## Preflight и база
+
+| Факт | Значение |
+|------|----------|
+| `main` / `origin/main` на старте | `1c1bad50`, `git status --short` пуст |
+| Слепок dev-БД | `data/backups/snapshots/pre-fastanything-20261123-20261123-155646.sql` (2954 КБ) |
+| Доп. инструмент | `fast-anything` 0.8.0 из npm, проверен на вредоносность (сеть, обфускация, install-хуки, промпты — чисто) |
+| Toolchain | Rust 1.100 (GNU host: MSVC-линкера и прав администратора нет) + портативный MinGW 16.2 |
+| Worktree | `night/2026-11-23-{a,b,c,d}` от `1c1bad50` |
+| Dev-стек | health 8012 → 200, 5172 → 200 |
+
+## Baseline (машина под нагрузкой: 4 агента + живой dev/прод)
+
+| Проверка | Результат |
+|----------|-----------|
+| `PYTEST_NUM_WORKERS=4 npm run test:pytest` | **2554 passed, 4 warnings, 490.39 s** (8:10), `loadfile`, Run ID `ee9b9ef3d899` |
+| `npm --prefix frontend run typecheck` | exit 0 |
+| `npm --prefix frontend run lint` | exit 0, 47 warnings (`react-hooks/exhaustive-deps`), 0 errors |
+| `npm --prefix frontend test` | 1746 passed / 1 skipped, 111.99 s |
+| `npm --prefix frontend run build` | exit 0, 41.45 s; `ui-*.js` 1174.93 kB (313.82 kB gzip) |
+
+## fast-anything: что дал профиль
+
+- Демо-пример: `port → verify` прошёл полностью (33/33 сравнения: 1 запись + 7 edge + 25 derived),
+  per-call 8053 мс Python → 6 мс Rust (**1341×**). Инструмент работоспособен.
+- Реальный бэкенд: `scan` на representative CPU-наборе доменных функций
+  (`canonicalize_dimensions`, `dimensions_equal`, `format_dimensions`, `format_cut_layout`,
+  `parse_length_m_to_mm`, 30k итераций) показал как «портируемый» только цикл бенчмарка
+  (99.4% времени), а не функции модуля. Вывод: узкое место KTM-2000 — SQL/БД, а не CPU;
+  Rust-порты здесь не дадут выигрыша. Ускорение идёт по METHOD счётчика SQL.
+
+## Срезы
+
+| Срез | Статус | Результат |
+|------|--------|-----------|
+| D — предупреждения тестов | **DONE** | `3aa4e2ca`: `UnicodeDecodeError` при чтении вывода `mklink` устранён (1 warning → 0, тот же `1 passed`). `SAWarning` (2 теста) — BLOCKED_NEEDS_HUMAN, корни локализованы до строки |
+| A — двойная загрузка маршрутов | в работе | — |
+| B — техдолг | в работе | — |
+| C — xdist в CI (#378) | в работе | локальный A/B-прогон идёт |
+
+## Открытые находки
+
+- `T-20261123-ORCH-001` — 47 eslint-varningов и 1.17 MB initial chunk (нужно решение о приоритете).
+- `SAWarning: fully NULL primary key identity` — `app/reversal/stock_compensator.py:308`
+  (`db.get(Transfer, ref_id=None)`) и `tests/test_e2e_route_import.py:243`
+  (`session.get(Section, section_id=None)`). Правка продуктового кода — отдельный тикет.
+
+## Что не делалось намеренно
+
+- Push в `origin` и удаление веток — нет прямой команды.
+- Слияние в `main` — после зелёного гейта, в конце цикла.
+- Массовые автофиксы, `git add .`, `commit -a` — запрещены регламентом.
