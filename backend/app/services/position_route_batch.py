@@ -180,12 +180,16 @@ def _reaches_selection(position: PlanPosition, cache: PositionRouteBatchCache) -
 async def load_position_route_batch_cache(
     db: AsyncSession,
     positions: list[PlanPosition],
+    *,
+    import_batches_by_id: dict[int, ImportBatch] | None = None,
 ) -> PositionRouteBatchCache:
     """Собрать снимок справочников для резолва списка позиций.
 
     Число запросов не зависит от числа позиций: маршруты, профили,
     продукты, батчи импорта и по одному кэшу подбора на каждый профиль,
-    упомянутый позициями.
+    упомянутый позициями. ``import_batches_by_id`` — батчи, уже прочитанные
+    вызывающим (например, ручкой списка позиций импорта); отсутствующие в
+    нём id догружаются одним запросом.
     """
     cache = PositionRouteBatchCache()
 
@@ -243,13 +247,20 @@ async def load_position_route_batch_cache(
         if position.import_batch_id is not None
     }
     if import_batch_ids:
-        import_batches = (
-            await db.execute(
-                select(ImportBatch).where(ImportBatch.id.in_(import_batch_ids))
-            )
-        ).scalars().all()
-        for import_batch in import_batches:
-            cache.import_batches_by_id[import_batch.id] = import_batch
+        preloaded = import_batches_by_id or {}
+        missing_ids = import_batch_ids - preloaded.keys()
+        for import_batch_id in import_batch_ids:
+            import_batch = preloaded.get(import_batch_id)
+            if import_batch is not None:
+                cache.import_batches_by_id[import_batch_id] = import_batch
+        if missing_ids:
+            import_batches = (
+                await db.execute(
+                    select(ImportBatch).where(ImportBatch.id.in_(sorted(missing_ids)))
+                )
+            ).scalars().all()
+            for import_batch in import_batches:
+                cache.import_batches_by_id[import_batch.id] = import_batch
 
     # Профили, чьи правила нужны хоть одной позиции: подбору — напрямую,
     # сборке — через общий снимок (правила и участки не грузятся дважды).
@@ -263,10 +274,12 @@ async def load_position_route_batch_cache(
             rule_profile_ids.add(_rule_profile_id(position, cache))
     for profile_id in sorted(pid for pid in rule_profile_ids if pid is not None):
         cache.selection_caches[profile_id] = await load_route_selection_batch_cache(
-            db, profile_id
+            db, profile_id, routes=routes
         )
     if None in rule_profile_ids:
-        cache.selection_caches[None] = await load_route_selection_batch_cache(db, None)
+        cache.selection_caches[None] = await load_route_selection_batch_cache(
+            db, None, routes=routes
+        )
 
     for profile_id in sorted(
         {p.route_profile_id for p in positions if _needs_dynamic_build(p, cache)}
@@ -427,6 +440,7 @@ async def resolve_position_routes_batch(
     positions: list[PlanPosition],
     *,
     cache: PositionRouteBatchCache | None = None,
+    import_batches_by_id: dict[int, ImportBatch] | None = None,
 ) -> dict[int, ResolvedRouteInfo]:
     """Разрешить маршруты списка позиций — по одному проходу, не по N+1.
 
@@ -449,7 +463,9 @@ async def resolve_position_routes_batch(
     if not position_list:
         return {}
     if cache is None:
-        cache = await load_position_route_batch_cache(db, position_list)
+        cache = await load_position_route_batch_cache(
+            db, position_list, import_batches_by_id=import_batches_by_id
+        )
 
     built_by_position = await _prefetch_built_routes(db, cache, position_list)
     await _prefetch_route_signatures(db, cache, list(built_by_position.values()))
