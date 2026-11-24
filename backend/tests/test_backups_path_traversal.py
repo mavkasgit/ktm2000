@@ -35,11 +35,11 @@ def _make_escape_link(link: Path, target: Path) -> None:
     completed = subprocess.run(
         ["cmd", "/c", "mklink", "/J", str(link), str(target)],
         capture_output=True,
-        # Вывод cmd.exe на русской Windows идёт в консольной кодировке
-        # (cp866/cp1252), а не в UTF-8. Жёсткий text=True рвал поток в
-        # _readerthread с UnicodeDecodeError -> PytestUnhandledThreadExceptionWarning.
-        # errors="replace" сохраняет смысл skip-сообщения и не роняет тест.
-        encoding="utf-8",
+        # cmd.exe пишет вывод в консольной кодировке ОС (cp866/cp1252), не в
+        # UTF-8. text=True берёт кодировку локали, а errors="replace" не даёт
+        # _readerthread упасть на недекодируемых байтах: сообщение skip'а
+        # остаётся читаемым, тест не роняется.
+        text=True,
         errors="replace",
         check=False,
     )

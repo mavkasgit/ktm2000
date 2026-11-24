@@ -540,6 +540,11 @@ async def _section_id_by_code(
     return section.id if section else None
 
 
+def _route_order_key(route: ProductionRoute) -> tuple[int, int]:
+    """Порядок маршрутов подбора — тот же, что раньше давал SQL ORDER BY."""
+    return (route.sort_order, route.id)
+
+
 async def load_route_selection_batch_cache(
     db: AsyncSession,
     profile_id: int | None,
@@ -550,26 +555,17 @@ async def load_route_selection_batch_cache(
     правила, активные маршруты, join этапов, все участки. 4 запроса вместо
     ~4 на каждую из N строк (3, когда маршруты уже переданы вызывающим).
 
-    ``routes`` — уже прочитанный вызывающим снимок ВСЕХ маршрутов (в том
-    числе неактивных, как в ``load_position_route_batch_cache``). Переиспользование
-    убирает повторный ``SELECT production_routes`` вместе с двумя запросами
-    ``selectin`` по этапам и операциям; активные маршруты и их порядок
-    (``sort_order, id``) при этом сохраняются.
+    ``routes`` — уже прочитанный вызывающим снимок маршрутов (в том числе
+    неактивных, как в ``load_position_route_batch_cache``); ``None`` —
+    загрузить все маршруты одним запросом. Отбор ``is_active`` и порядок
+    ``sort_order, id`` задаются здесь один раз для обоих путей.
     """
     rules = await load_selection_rules_for_profile(db, profile_id=profile_id)
     if routes is None:
-        routes = (
-            await db.execute(
-                select(ProductionRoute)
-                .where(ProductionRoute.is_active.is_(True))
-                .order_by(ProductionRoute.sort_order, ProductionRoute.id)
-            )
-        ).scalars().all()
-    else:
-        routes = sorted(
-            (route for route in routes if route.is_active),
-            key=lambda route: (route.sort_order, route.id),
-        )
+        routes = (await db.execute(select(ProductionRoute))).scalars().all()
+    routes = sorted(
+        (route for route in routes if route.is_active), key=_route_order_key
+    )
     route_sections = await load_route_sections(db, [route.id for route in routes])
     sections_by_id = await load_section_refs(db)
     controlled = {

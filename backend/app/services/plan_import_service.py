@@ -991,14 +991,17 @@ async def _make_change_items(
             route_match_quality = selection.route_match_quality or PlanPositionRouteMatchQuality.exact.value
             route_match_reason = PlanPositionRouteMatchReason.selection_rules.value
 
+        # Нормальная длина позиции: входная, иначе единственный выходной
+        # габарит (ADR-0001/0002). По ней проверяется реестр длин и считается
+        # норма на подвес — это отдельное значение, не сырая длина входа.
+        normal_length_mm = position_length_mm(row)
         # Сырьевая длина не материализуется. Для линейного артикула длина
         # входа из Excel должна точно совпадать с нормальной длиной реестра;
         # неизвестное значение блокирует только эту позицию.
         if product is not None:
-            length_mm = position_length_mm(row)
             dimension_state = getattr(product.dimension_state, "value", product.dimension_state)
-            if dimension_state == "length" and length_mm is not None:
-                length_key = _length_key(length_mm)
+            if dimension_state == "length" and normal_length_mm is not None:
+                length_key = _length_key(normal_length_mm)
                 if not any(_length_key(length.length_mm) == length_key for length in product.lengths):
                     errors.append("normal_length_not_found")
 
@@ -1013,9 +1016,9 @@ async def _make_change_items(
         # none — артикул есть, количества нет.
         hanger_source: str | None = None
 
-        # N вычисляется по нормальной длине позиции; effective raw внутри
-        # резолвера влияет только на формулу и не меняет dimensions.
-        length_mm = (row.input_dimensions or {}).get(LENGTH_MM)
+        # Входная длина нужна только для текста warning'а ниже; N считается
+        # по нормальной длине позиции (normal_length_mm), а не по сырой.
+        input_length_mm = (row.input_dimensions or {}).get(LENGTH_MM)
         # Артикул может входить в пару: после снятия склейки (#312) пара —
         # это две отдельные позиции, но на подвесе они едут вместе, поэтому
         # норму пары берёт та позиция, которая пришла в паре (см.
@@ -1024,6 +1027,7 @@ async def _make_change_items(
         # и решение импорта уезжает в payload ключом ``product_pair`` —
         # планировщик, доска и печать читают его, а не справочник пар.
         hanger_value = PositionHangerValue(None, None)
+        pair_id: int | None = None
         if product is not None:
             resolved_pair = await pair_resolver_cache.resolve_pair_by_product(db, product.id)
             pair_partner_adjacent = False
@@ -1045,7 +1049,7 @@ async def _make_change_items(
                 pair_value = await product_pair_resolver.resolve_pair_n(
                     db,
                     resolved_pair,
-                    length_mm=length_mm,
+                    length_mm=normal_length_mm,
                     length_candidates=pair_candidates_cache[pair_id],
                 )
             else:
@@ -1064,7 +1068,7 @@ async def _make_change_items(
                 }
             else:
                 hanger_value = resolve_position_hanger(
-                    product, length_mm=length_mm, payload_quantity_per_hanger=None
+                    product, length_mm=normal_length_mm, payload_quantity_per_hanger=None
                 )
                 if resolved_pair is not None:
                     # Артикул в паре, но пары строк (или её нормы на этой
@@ -1087,8 +1091,8 @@ async def _make_change_items(
         # источник приходят из одного резолвера — того же, что в плане.
         if product is None:
             hanger_source = "missing_product"
-        elif product_hanger_qty is not None and product_hanger_qty > 0:
-            hanger_source = hanger_value.source or "none"
+        elif product_hanger_qty is not None and product_hanger_qty > 0 and hanger_value.source:
+            hanger_source = hanger_value.source
         else:
             hanger_source = "none"
         if product_hanger_qty is not None and product_hanger_qty > 0:
@@ -1108,8 +1112,8 @@ async def _make_change_items(
             # Нормы для сырьевой длины позиции нет — не округляем (Q2=а).
             if product is None:
                 warnings.append("hanger_quantity_not_set:продукт не найден")
-            elif length_mm is not None:
-                warnings.append(f"hanger_quantity_not_set:{_mm_as_meters(length_mm)}")
+            elif input_length_mm is not None:
+                warnings.append(f"hanger_quantity_not_set:{_mm_as_meters(input_length_mm)}")
             else:
                 warnings.append(
                     f"hanger_quantity_not_set:quantity_per_hanger не задан для {product.sku}"

@@ -248,19 +248,21 @@ async def load_position_route_batch_cache(
     }
     if import_batch_ids:
         preloaded = import_batches_by_id or {}
+        cache.import_batches_by_id.update(
+            {
+                batch_id: preloaded[batch_id]
+                for batch_id in import_batch_ids
+                if batch_id in preloaded
+            }
+        )
         missing_ids = import_batch_ids - preloaded.keys()
-        for import_batch_id in import_batch_ids:
-            import_batch = preloaded.get(import_batch_id)
-            if import_batch is not None:
-                cache.import_batches_by_id[import_batch_id] = import_batch
         if missing_ids:
             import_batches = (
                 await db.execute(
                     select(ImportBatch).where(ImportBatch.id.in_(sorted(missing_ids)))
                 )
             ).scalars().all()
-            for import_batch in import_batches:
-                cache.import_batches_by_id[import_batch.id] = import_batch
+            cache.import_batches_by_id.update({b.id: b for b in import_batches})
 
     # Профили, чьи правила нужны хоть одной позиции: подбору — напрямую,
     # сборке — через общий снимок (правила и участки не грузятся дважды).
@@ -458,6 +460,10 @@ async def resolve_position_routes_batch(
     ``ResolvedRouteInfo`` — по контракту разделяемых строк снимка (как в
     ``RouteSelectionBatchCache``). Его читают, не мутируют; кому нужна своя
     копия, делает ``dataclasses.replace``.
+
+    ``import_batches_by_id`` — батчи, уже прочитанные вызывающим; они
+    используются только при построении снимка. Если ``cache`` передан
+    готовым, параметр игнорируется: снимок считается полным.
     """
     position_list = list(positions)
     if not position_list:
