@@ -244,6 +244,7 @@ GitHub Actions — фоновый второй взгляд. Готовност�
 | [`frontend/e2e/AGENTS.md`](frontend/e2e/AGENTS.md) | **Канон E2E** (Playwright) |
 | [`docs/agent-registry.md`](docs/agent-registry.md) | Порты, MCP-матрица |
 | [`docs/quality/gates.md`](docs/quality/gates.md) | **Карта гейтов**: шаг → что ловит → чем доказан красный ход |
+| [`docs/deployment.md`](docs/deployment.md#изменения-прод-данных-версии-допосле) | **Версии до/после** для правок прод-данных и каталога: `<label>`, `meta.json`, порядок, откат; чек-лист — [`docs/quality/changesets.md`](docs/quality/changesets.md) |
 | [`docs/toolchain.md`](docs/toolchain.md) | Тулчейн: генерируется из `tools.json`, дрейф ловит `check:registry` |
 | [`docs/ekranchik-catalog-sync.md`](docs/ekranchik-catalog-sync.md) | Синк каталога из прода: «Экранчик» и dev-БД + storage (`npm run verify:ekranchik` / `sync:ekranchik`) |
 | [`docs/catalog/ktm-profile-register.md`](docs/catalog/ktm-profile-register.md) | **Реестр профилей**: строка на артикул, данные прод-БД, фото, связи, уверенность; `npm run docs:profiles` |

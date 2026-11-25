@@ -15,7 +15,7 @@
 | [`auth-oidc.md`](auth-oidc.md) | **Auth / OIDC** | Authentik bridge, link order, dual-run, logout, env |
 | [`GETTING_STARTED.md`](GETTING_STARTED.md) | Установка | Развёртывание с нуля, seed, troubleshooting |
 | [`testing-guide.md`](testing-guide.md) | Тестирование | Маршрутизатор → AGENTS.md в backend/frontend |
-| [`deployment.md`](deployment.md) | Деплой | Production, .env-файлы, бэкапы, хранение файлов и уборка сирот `imports/` (#288) |
+| [`deployment.md`](deployment.md) | Деплой | Production, .env-файлы, бэкапы, хранение файлов и уборка сирот `imports/` (#288); **версии до/после** для правок прод-данных и каталога (#462) |
 | [`agent-registry.md`](agent-registry.md) | ИИ-агенты | Порты и MCP-матрица скаутов |
 | [`bulk-operations-core-v1.md`](bulk-operations-core-v1.md) | Пакетные операции | Bulk approve/delete |
 | [`excel-import-10-unique-scenarios.md`](excel-import-10-unique-scenarios.md) | Импорт Excel | Сценарии и валидация |
@@ -31,6 +31,7 @@
 | [`quality/criteria.md`](quality/criteria.md) | Приём инструментов | Восемь критериев; «новый инструмент не принимается потому, что он хороший» |
 | [`quality/not-adopted.md`](quality/not-adopted.md) | Отказы и незакрытые дыры | Почему не приняли, что изменит ответ, чего у нас нет вообще |
 | [`quality/hooks.md`](quality/hooks.md) | Хуки до коммита | lefthook: установка, скоупы, политика пропуска, запрет автоправок |
+| [`quality/changesets.md`](quality/changesets.md) | **До/после правок прод-данных** | Чек-лист приёмки и шаблон `meta.json`: label, артефакты, откат (#462) |
 | [`quality/adr-legacy.json`](quality/adr-legacy.json) | Датированное исключение ADR | Восемь решений до единого шаблона; новый файл туда не добавляется молча |
 | [`quality/proven-checks.json`](quality/proven-checks.json) | Доказанные красные ходы | Шаг → дата → чем сломано; `prove-coverage` требует запись на каждый шаг |
 | [`toolchain.md`](toolchain.md) | **Тулчейн (генерируемый)** | Инструменты из `tools.json`; расхождение ловит `npm run check:registry` |
