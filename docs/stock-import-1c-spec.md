@@ -293,7 +293,7 @@ Multipart `file`. Определяет листы и их тип без полн
 
 ### 8.3. Штуки
 
-```
+```text
 pieces = floor(source_quantity_m / (length_mm / 1000))
 ```
 
