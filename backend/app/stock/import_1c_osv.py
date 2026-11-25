@@ -332,7 +332,9 @@ _MILLIMETRE_SIZE_RE = re.compile(
 )
 _EXPLICIT_LENGTH_RE = re.compile(r"l\s*=\s*(\d+(?:[.,]\d+)?)", re.IGNORECASE)
 # Одиночное число с дробной частью без единицы: «10*10 3,0 алюминий».
-_BARE_METERS_RE = re.compile(r"(?<![\d.,*x×])(\d+[.,]\d+)(?![\d.,*x×])")
+# Число не должно примыкать к буквам, цифрам, дефису или слэшу: иначе дробь
+# внутри кода изделия («РП-АКП-09,10», «03,04-15») читается как длина.
+_BARE_METERS_RE = re.compile(r"(?<![\w.,*x×/-])(\d+[.,]\d+)(?![\w.,*x×/-])")
 
 
 def _meters_to_mm(raw: str) -> int | None:

@@ -350,6 +350,9 @@ async def test_parse_remainders_excel_autodetects_osv() -> None:
         ("Кант L=3,61 м", 3610),
         ("Профиль алюминиевый L=3000", 3000),
         ("Кв. труба 10*10 3,0 алюминий", 3000),
+        ("Кант 3,0", 3000),
+        ("Кант 2,7", 2700),
+        ("2,7", 2700),
         ("Круглая труба 16 мм 2,75", 2750),
         ("Кабель-канал 0,18мм", None),
         ("Уголок 60*32,4", None),
@@ -358,6 +361,21 @@ async def test_parse_remainders_excel_autodetects_osv() -> None:
     ],
 )
 def test_parse_length_from_name(name: str, expected_mm: int | None) -> None:
+    assert parse_length_from_name(name) == expected_mm
+
+
+@pytest.mark.parametrize(
+    ("name", "expected_mm"),
+    [
+        # Дефисные коды изделий: дробное число внутри кода («09,10») — не длина.
+        ("РП-АКП-09,10 (КП5772/АТ-4892/ЮП-3077) 2,7", 2700),
+        ("РП-АКП-11,12 (КП5772/АТ-4892/ЮП-3077) 2,7", 2700),
+        ("РП-АКП-03,04-15 (ЮП-2011) 2,70", 2700),
+    ],
+)
+def test_parse_length_from_name_ignores_number_inside_hyphenated_code(
+    name: str, expected_mm: int | None
+) -> None:
     assert parse_length_from_name(name) == expected_mm
 
 
